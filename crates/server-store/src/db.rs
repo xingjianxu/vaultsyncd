@@ -74,7 +74,10 @@ pub fn migration_backup_path(database: &Path, from_version: i64, to_version: i64
 }
 
 /// 已通过种类/版本门禁并完成迁移的服务端数据库句柄。
-#[derive(Debug)]
+///
+/// `Clone` 共享同一个连接池（SQLx 的池本身是引用计数句柄）：HTTP 状态与进程装配需要同时持有它。
+/// 关闭仍是 [`Database::close`] 的一次性动作，克隆体不各自关池。
+#[derive(Clone, Debug)]
 pub struct Database {
     pool: SqlitePool,
     path: PathBuf,

@@ -1983,6 +1983,7 @@ name = "vaultsyncd-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "rand_core",
  "serde",
  "sqlx",
  "tokio",

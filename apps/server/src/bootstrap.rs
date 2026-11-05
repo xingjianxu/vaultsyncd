@@ -24,6 +24,7 @@ use tracing::{error, info, warn};
 use vaultsyncd_server_store::db::{Database, DbError};
 use vaultsyncd_server_store::state_lock::{StateLock, StateLockError};
 
+use crate::auth;
 use crate::config::Config;
 use crate::http;
 use crate::lifecycle::{Lifecycle, Phase};
@@ -156,7 +157,10 @@ impl Service {
             );
         }
 
-        let router = http::router(Arc::clone(&lifecycle));
+        let router = http::router(
+            Arc::clone(&lifecycle),
+            Arc::new(auth::AuthContext::new(database.clone())),
+        );
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
             shutdown.await;
