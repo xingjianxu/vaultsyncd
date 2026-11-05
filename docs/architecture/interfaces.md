@@ -1533,6 +1533,30 @@ python3 tools/context.py --help
 | `ports::upload_session::UploadSessionStore` | `load`/`existing_part`/`record_part`：全部限定 owner scope，`load` 对“不存在/别人的 Root/别人的上传”统一 `UnknownUpload` |
 | `ports::upload_session::PartStaging` | `store_part(upload,index,bytes) -> String`（返回前必须写全并 fsync；失败不得留下可登记路径） |
 
+## crates/server-core — 上传 finalize 与固定版本下载（S046）
+
+状态：S046 实现（核心规则与端口）。**契约与 HTTP 端点尚未接入**，见本文件 §上传端点末的已知缺口与
+`agent/tasks/S046.md` §4。
+
+| 接口 | 契约 |
+| --- | --- |
+| `api::content::finalize_upload(store, publisher, objects, upload, staging_name, now)` | 读会话 → 读块行 → `AssembledParts::verify`（块数/索引连续/长度等于几何）→ `open` 时 `mark_complete` → `publish_parts` → 核对总长度与总 SHA-256 → `record_published` → `mark_finalized`；返回 `FinalizedContent{upload, root, content: ContentReference{digest,size,storage_path}, part_count, reuse, replayed}`。**不写 entries/versions/changes/operations** |
+| `api::content::ContentFailure` | `Upload(UploadFailure)`/`IncompleteUpload{expected,present}`/`ContentMismatch{expected,actual,expected_size,actual_size}`（并使会话转 `aborted`）/`Publish(PublishFailure)`/`VersionGone`/`EntryUnavailable`/`RangeNotSatisfiable{size,requested}`/`InvalidRange{requested,detail}`/`Read{detail,no_space}`/`Lease(ContentLeaseError)`/`Storage{detail}` |
+| `api::content::parse_range(header, size) -> Result<ByteSlice, _>` | `bytes=start-end`/`bytes=start-`/`bytes=-suffix`；终点超出收敛到末字节、后缀长于对象等于整份；多区间/非 `bytes=`/反向/非规范十进制 → `InvalidRange`；起点越界、`-0`、空对象 → `RangeNotSatisfiable`。`ByteSlice::content_range(size)` 给 `bytes start-end/total` |
+| `api::content::open_download(store, leases, root, &DownloadRequest{entry,version,range}, lease_expires_at)` | 解析 `(root, entry, version)` 固定内容地址 → 收敛 Range → `acquire(Download)` 租约；返回 `DownloadHandle{content,slice,lease}`。版本不存在/已清理 → `VersionGone`，事实与本请求不符 → `EntryUnavailable` |
+| `api::content::read_download(port, layout, &handle)` | `read_object_range` 读 `slice`；短读 → `ContentMismatch`；覆盖整个对象时核对整份 SHA-256（部分切片由客户端按 design §13.2 校整文件） |
+| `api::content::finish_download(leases, handle)` | 解除下载租约；解除失败只报告，不改判已读出的字节 |
+| `ports::content_publish::ContentPublisher::publish_parts(upload, staging_name, parts)` | 按索引升序拼装进对象区暂存副本、边写边算摘要、不覆盖发布；返回 `PublishedContent{digest,size,storage_path,reuse}`（实测事实）。`PublishFailure` 含 `PartUnreadable`/`PartLength`/`PartMissing`/`Storage{stage,no_space,detail}`/`Verification`/`ObjectConflict`/`StorageLayer` |
+| `ports::content_publish::ContentObjectStore::record_published(root, &content, verified_at)` | 登记 `objects` 行；同一 `(root,hash)` 相同登记幂等，不同长度/路径 → `ObjectConflict` |
+| `ports::version_content::VersionContentStore::version_content(root, entry, version)` | 返回 `VersionContent{root,entry,version,digest,size}`；`OutOfScope`/`EntryNotFound`/`NotAFile`/`VersionGone`/`ObjectUnavailable`，owner scope 由适配器保证（I15） |
+| `ports::upload_session::UploadSessionStore` 增量 | `parts(upload)`（索引升序）、`mark_complete`（适配器须先确认无缺失块）、`mark_finalized`、`abort` |
+| `ports::object_store::ObjectBlobPort::read_object_range(object, offset, length)` | 返回 `StoredSlice{data,bytes}`；短读是错误，不补零；`offset+length` 越界为错误 |
+
+适配器落地情况：`apps/server::uploads::DbUploads` 已实现四个新增会话方法（`parts_of`/
+`mark_upload_complete`/`mark_upload_finalized`/`abort_upload`，各自独立写事务）；
+`crates/platform-linux-server/examples/object-capture.rs` 的 `LinuxObjectPort` 已实现区间读；
+`ContentPublisher`/`ContentObjectStore`/`VersionContentStore` 的适配器尚未实现（随契约卡一起做）。
+
 ## apps/server — 上传端点（S045）
 
 | 端点 | 语义 |
@@ -1549,4 +1573,4 @@ python3 tools/context.py --help
 507 `INSUFFICIENT_STORAGE`。暂存落在 `state_dir/uploads/<upload_id>/<index>`（临时文件 → fsync →
 rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 都在写盘之前返回，不留暂存文件。
 **已知缺口**：`x-part-sha256` 仍未进 `api/openapi.yaml`（生成器只支持 `in: path`，header 参数
-支持待 S046）；`INVALID_REQUEST`/`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行。
+支持仍待做，S045-b 已写清步骤）；`INVALID_REQUEST`/`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行。
