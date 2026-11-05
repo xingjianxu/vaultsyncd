@@ -65,7 +65,7 @@ python3 tools/context.py --help
 | --- | --- |
 | 输入 | `github:NixOS/nixpkgs/nixos-unstable`，rev 由 `flake.lock` 固定（当前 `1d060086d60cb76a40cf37109f979d88a5bd6396`）；无 overlay、无其他 input |
 | 导出 | `devShells.x86_64-linux.default`，derivation 名 `vaultsyncd-dev`；`nix develop` 即默认入口。 `devShells.default` 不是 flake schema 的合法顶层属性，按系统的 `devShells.<system>.default` 是规范写法 |
-| 覆盖范围 | 仅 Linux `x86_64-linux`；Windows 工具链由 S009 用 rustup+MSVC 固定，不做交叉编译 |
+| 覆盖范围 | 当前仅 Linux `x86_64-linux` 本机构建；按 2026-11-05 用户决定，S009 将补齐宿主 Windows x64 交叉编译工具链，客体仅承担原生运行与验收，尚未验证；分工见实施手册 §2.6 |
 | 非交互调用 | `nix develop --command bash -c '<cmd>'`；`shellHook` 只导出 `VAULTSYNCD_DEV_SHELL=1` |
 | 跟踪要求 | `flake.nix`/`flake.lock` 必须先被 Git 跟踪，否则 `nix flake lock`/`nix develop` 退出码 1 |
 

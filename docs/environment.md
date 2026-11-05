@@ -279,7 +279,7 @@ env -i HOME="$HOME" TERM=xterm PATH=/run/current-system/sw/bin:/usr/bin:/bin /ru
 
 ### 10.7 限制与未核验项
 
-- devShell 只覆盖 Linux（`x86_64-linux`）；不含 rustup、不含 Windows 交叉编译与 MSVC。Windows 客户端工具链由 S009 固定。
+- S003 实测的 devShell 仅提供 Linux（`x86_64-linux`）本机构建能力，不含 rustup、Windows 交叉编译工具链与 MSVC。2026-11-05 用户决定 Windows 客户端在本 NixOS 开发环境交叉编译、前端在宿主构建，以节省 VM 资源；S009 负责补齐并锁定工具链，Windows 客体负责原生运行与验收。此决定尚未实现或验证，不能将现有 devShell 记为已支持交叉编译；操作分工见实施手册 §2.6。
 - 未加入 `rust-analyzer`、`openssl.dev` 等当前卡未要求的包；S004/S005 若需要再按证据补充。
 - 本卡的版本结论仅对本机本次实测成立；Ubuntu 24.04、Linux ARM64、Windows 原生环境仍未核验。
 - 用户 `~/.npmrc` 由 home-manager 管理，registry 指向 `https://registry.npmmirror.com`；这只影响下载源，不影响 pnpm 版本与 store 布局。

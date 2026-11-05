@@ -2,6 +2,7 @@
 
 当前阶段：S007 已完成，独立 btrfs 测试位置就绪——lab 根在源码外的 `/data/vaultsyncd-lab/`，`tools/test-volume/test-volume.sh` 提供 `create`/`verify`/`cleanup`/`status`（专用子卷 + 512MiB btrfs loop 镜像，供满盘故障独立容量测试），安全断言与负控、清理核验均实测通过；S001—S007 这一批基础卡全部完成，本轮批次收尾。
 最早 ready：**S008**（准备 Windows 客体与连接说明，前置 S001+S007 已满足；受 Quickemu/ISO 与 KVM 资源限制，可能标 blocked）；S009 依赖 S008，Windows 卡依赖 S008/S009。
+文档决定（2026-11-05）：用户要求 Windows 客户端改为在本 NixOS 开发环境交叉编译，以节省虚拟机资源；宿主承担构建，客体承担原生运行验收。已同步 design ADR-013、实施手册 §2.6/S009、环境与入口文档；工具链尚未实施，任务状态不变。S009 文档准备交接见 `agent/tasks/S009.md`。
 平台资源核验结论（S001，2026-11-05）：开发/服务验证主机为 NixOS 26.11 x86_64、Nix 2.34.9；`/`、`/home`、`/nix`、`/var/log`、`/wrd`、`/data` 均为本地 btrfs；`/wrd` 可用 197G、`/data` 可用 22T；KVM 可用且用户在 `kvm` 组，但 QEMU/Quickemu 未安装、无现成 Windows 客体；尚无本项目独立 btrfs 测试卷。Ubuntu 24.04、Linux ARM64、Windows 原生 CFAPI、reflink 与验收规模均未核验。证据见 `docs/environment.md`。
 
 状态图例：`todo` 未开始；`in_progress` 执行中；`blocked` 缺资源/前置；`done` 验收完成。下表共 108 行（S001—S108），编号、结果、环境、前置取自实施手册 §4 任务索引；产出/验证/阻塞列随执行更新。
@@ -16,7 +17,7 @@
 | S006 | 建立任务编排入口与基础 CI | L | S004、S005 | done | 本卡单次本地提交（父提交 c7df404；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | `tools/xtask`（无第三方依赖，members 非 default-members）+ `.cargo/config.toml` 别名；`env`/`check` 退出 0（check 实跑 fmt/clippy/test/typecheck 四步）；`generate`/`package` 退出 3、未知子命令`check bogus`/无子命令退出 2；负控 fmt 与 TS 类型错误均退出 1 并定位阶段，`cmp` 复原后回 0；`cargo check/metadata --locked` 0 且 default-members 仅 domain；actionlint 1.7.12 校验 `checks.yml` 通过（无远端，未真实运行 CI） | 无（CI 未在远端执行，见交接） | agent/tasks/S006.md |
 | S007 | 准备独立 btrfs 测试位置 | L | S001、S003 | done | 本卡单次本地提交（父提交 fa5dca2；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | 候选核查选中 `/data`（sdc1 btrfs，可用 22T），拒绝 `/data/llm`、`/data/.snapshots`、`/wrd`、`/tmp`、`/boot`；新增 `tools/test-volume/test-volume.sh`（create/verify/cleanup/status，安全断言与 sudo -n 非交互）；完整循环 create 0→verify 0（FSTYPE=btrfs、子卷 subvolid 2506、loop `/dev/loop0` FSUUID 与主卷不同、两目录空）→cleanup 0→verify 1（明确报已清理）；负控 12 项全部非零且无副作用；清理后 `losetup -a` 空、lab 目录不存在、挂载表 42 条逐条一致、`/data/llm` 未变 | 无（NOCOW 缺 `lsattr`，用只读 FS_IOC_GETFLAGS 探针；dev/test/正式实例目录仅规划，见交接） | agent/tasks/S007.md |
 | S008 | 准备 Windows 客体与连接说明 | L | S001、S007 | todo | — | 未执行（前置已满足，下一 ready；Quickemu/QEMU 未安装、无客体，可能标 blocked） | — | agent/tasks/S008.md（执行时创建） |
-| S009 | 固定 Windows 构建工具链 | W | S008、S004、S005 | todo | — | 未执行 | — | agent/tasks/S009.md（执行时创建） |
+| S009 | 固定 Windows 交叉编译与客体验证工具链 | X | S008、S004、S005 | todo | — | 已更新构建分工与验收要求；交叉编译和客体运行尚未执行 | 待 S008 与交叉工具链落实 | agent/tasks/S009.md（文档准备） |
 | S010 | CFAPI 注册与占位创建原型 | W | S009 | todo | — | 未执行 | — | agent/tasks/S010.md（执行时创建） |
 | S011 | CFAPI 读取、取消与离线原型 | W | S010 | todo | — | 未执行 | — | agent/tasks/S011.md（执行时创建） |
 | S012 | CFAPI 释放与写入保护原型 | W | S011 | todo | — | 未执行 | — | agent/tasks/S012.md（执行时创建） |
