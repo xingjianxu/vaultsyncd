@@ -5,6 +5,7 @@
 
 pub mod conflict_store;
 pub mod content_lease;
+pub mod content_publish;
 pub mod intent_log;
 pub mod namespace;
 pub mod namespace_store;
@@ -15,3 +16,4 @@ pub mod restore_store;
 pub mod target;
 pub mod trash_store;
 pub mod upload_session;
+pub mod version_content;
