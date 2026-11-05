@@ -1,0 +1,19 @@
+# 任务隔离工作树（不进版本库，见 AGENTS.md）
+/.worktrees/
+
+# Rust 构建产物
+/target/
+**/target/
+
+# 前端依赖与构建产物
+node_modules/
+**/node_modules/
+dist/
+
+# 本地运行数据、测试卷与生成代码
+/artifacts/
+/var/
+
+# 环境与凭据
+.env
+.env.local
