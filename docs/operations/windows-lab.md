@@ -149,7 +149,7 @@ setsid nohup quickemu --vm windows-11.conf \
 
 - 客体网卡：`virtio-net-pci`，QEMU user 网络（slirp）。客体地址 `10.0.2.15/24`，网关/DNS `10.0.2.3`，宿主在客体看来是 **`10.0.2.2`**。客体 `localhost` 不是宿主。
 - 宿主 → 客体：唯一通道是 `hostfwd`（当前 `2222→22`，SPICE `127.0.0.1:5930`）。
-- **暴露面**：quickemu 4.9.9 只能生成 `tcp::<port>` 形式的转发，即绑定 `0.0.0.0:2222`；宿主自身在 `ens5f0` 上有公网地址且主机防火墙放行全部 TCP/UDP，因此该端口在客体运行期间可从宿主所在网络访问。收敛手段只能是客体侧认证（密钥登录 + 随机口令）与及时关机；启动/关闭用 `bootstrap-host.sh start/stop`，不使用客体时保持关机。
+- **暴露面**：quickemu 4.9.9 只能生成 `tcp::<port>` 形式的转发，即绑定 `0.0.0.0:2222`；宿主自身在 `ens5f0` 上有公网地址且主机防火墙放行全部 TCP/UDP，因此该端口在客体运行期间可从宿主所在网络访问。收敛手段只能是客体侧认证（密钥登录 + 随机口令）。自 2026-11-06 起客体按用户决定**保持运行**（见 §19.1），因此“用完即关机”不再是收敛手段；改为依赖密钥独占认证与随机口令，需要临时下线时用 `bootstrap-host.sh stop`。
 - 客体访问外网：slirp NAT 正常（实测与 Microsoft 更新端点建立连接）；`Delivery Optimization` 的 P2P 已由 `DODownloadMode=0` 策略关闭，避免与内网其他主机建 7680 连接。
 - 客体网卡的网络类别实测是 `Public`（`Get-NetConnectionProfile`）。入站 22 的防火墙规则必须是任意 profile，否则宿主看到的是 `SYN_SENT`/banner 超时；这一点在 §6 与 §14 都有记录。
 
@@ -160,6 +160,8 @@ nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh stop
 ```
 
 内部顺序：`ssh ... 'cmd /c shutdown /s /t 0'` → 轮询 `windows-11/windows-11.pid` 直到 qemu 进程消失（默认 180 s）→ 检查 `ss -ltn` 不再有 `2222`/`5930`。`shutdown` 命令返回非零也可能是连接先断开，判断以 qemu 是否退出为准。**不要留下孤儿 qemu/swtpm**；若 qemu 未退出，先查 `windows-11/windows-11.log`，不要 `kill -9`。
+
+> **运行态保持（2026-11-06 用户决定）**：测试轮次结束、卡验收完成**也不关闭客体**，保持 qemu 与 SSH 在线，供后续卡直接复用（见 §19.1）。`stop` 只在用户明确要求、需要恢复基线或主机维护时使用；不再把“结束后干净关机”当作默认收尾。启动/停止前仍建议先确认真实运行状态（`bootstrap-host.sh status`），不要重复 `start`。
 
 ## 11. 基线备份与恢复
 
@@ -546,3 +548,11 @@ cfapi-prototype release --name <entry> [--root <path>] [--expect released|refuse
 - S011（2026-11-05）在客体上实现了真正的按需内容供给：`read` 读到的字节与 SHA-256 与宿主固定内容版本一致（12,345 B / 1 MiB / 16 MiB 三个条目，含 1 MiB 范围水合），离线读未水合条目以 `ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE`(388) 在 1 ms 内明确失败、已水合条目离线可读且不再请求内容，慢源超时有界失败，传输中断开同步根后回填循环在 3/16 段停下并有界返回；`run-cfapi-hydration.sh` 退出 0（46 项 `check=pass`、0 fail，两端 4 项哈希 `MATCH`），S010 的 `run-cfapi-prototype.sh` 仍退出 0（21 项 pass）。`CANCEL_FETCH_DATA` 在该 build 上未观察到（见 §17.4）。结束后已清理探针目录、注销同步根并干净关机。
 - `provision.ps1` 在已安装客体上整份重跑过一次（10:29:21Z—10:29:35Z）：所有步骤 `BEGIN/END` 成对、无 `FAILED`，依赖介质的四步输出 `SKIP: ... (expected after installation)`；控制台代码页首登实测为 437（`Active codepage: 437`），因此脚本内的错误文本统一用英文，避免转写日志出现乱码。
 - S012（2026-11-05）在客体上实现了释放与写保护判定：干净样本 `CfSetInSyncState`+`CfDehydratePlaceholder` 全 0x0、`on_disk_after=0`，新进程复核仍脱水、再读哈希不变（`fetch_requests=1`）；原地写、映射写（关闭后与仍打开）、独占句柄、共享锁五类场景都以 `dirty`/`busy` 拒绝释放并保留内容与哈希，句柄消失后同一内容可正常释放；`run-cfapi-release.sh` 退出 0（74 项 `check=pass`、0 fail、1 `blocked_item`），S010/S011 的脚本仍退出 0（21/46 项 pass）。**rename-over 保存列为阻塞**：同步根内建不了临时文件，同步根外改名后目标名字无法按路径打开（`0x801F0005`），见 §18.6。结束后已清理两个同步根与探针目录并干净关机。
+
+## 19.1 运行态保持约定（2026-11-06 用户决定）
+
+- **规则**：卡验收完成、甚至整批任务结束后，测试用 Windows 客体**不关闭**，qemu/swtpm 与 SSH(`127.0.0.1:2222`)、SPICE(`127.0.0.1:5930`) 保持在线，供下一张 Windows 卡直接复用，避免重复启动与状态重建。
+- **允许关闭的唯一场景**：用户明确要求关机；需要恢复到 §11 的基线归档；主机维护/重建；或客体不可恢复。上述场景都要在 `agent/tasks/Sxxx.md` 记录关闭原因与再次启动方法。
+- **收尾检查从“已关机”改为“在线且可用”**：轮次结束前用 `bootstrap-host.sh status` 与 `ssh ... 'cmd /c ver'` 确认客体运行可连；探针目录与同步根仍要按各卡要求清理/注销，不留测试残留。
+- **安全收敛**：因为长期在线，`2222` 的 `0.0.0.0` 绑定（见 §9）不能靠关机收敛，必须依赖客体侧密钥独占认证（`PasswordAuthentication no`）与随机口令；不要在客体上开放其他入站端口，也不要为此关闭防火墙。
+- **当前状态**：S013—S050 是 Linux 侧任务，不使用客体，因此本次没有启动它；客体仍为 2026-11-05 收尾时的干净关机状态。一旦后续 Windows 卡（S065 起）启动客体，就按本节保持运行，不再在卡结束时执行 `stop`。
