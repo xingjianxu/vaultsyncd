@@ -137,9 +137,9 @@ export function decodeErrorBody(value: unknown): ErrorBody {
  * 错误码（LOCAL_CHANGED、FILE_BUSY、MODE_REQUIRES_LOCAL_COPY、PLACEHOLDER_OFFLINE）
  * 属于 packages/local-ipc-types，不在远端契约内。
  */
-export type ErrorCode = "AUTH_EXPIRED" | "ACCESS_DENIED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" | "OP_ID_REUSED" | "RECONCILE_REQUIRED" | "CURSOR_EXPIRED" | "EPOCH_CHANGED" | "VERSION_GONE" | "INVALID_NAME" | "UNSUPPORTED_ENTRY" | "HASH_MISMATCH" | "UNSUPPORTED_STORAGE_BACKEND" | "SERVER_PLACEHOLDER_UNSUPPORTED" | "RATE_LIMITED" | "ROOT_UNAVAILABLE" | "NEEDS_RECOVERY" | "INSUFFICIENT_STORAGE";
+export type ErrorCode = "AUTH_EXPIRED" | "ACCESS_DENIED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" | "OP_ID_REUSED" | "RECONCILE_REQUIRED" | "CURSOR_EXPIRED" | "EPOCH_CHANGED" | "VERSION_GONE" | "INVALID_NAME" | "INVALID_REQUEST" | "UNSUPPORTED_ENTRY" | "HASH_MISMATCH" | "PART_CONFLICT" | "UNSUPPORTED_STORAGE_BACKEND" | "SERVER_PLACEHOLDER_UNSUPPORTED" | "RATE_LIMITED" | "ROOT_UNAVAILABLE" | "NEEDS_RECOVERY" | "INSUFFICIENT_STORAGE";
 
-export const ERROR_CODE_VALUES = ["AUTH_EXPIRED", "ACCESS_DENIED", "BASE_MISMATCH", "SUBTREE_CHANGED", "OP_ID_REUSED", "RECONCILE_REQUIRED", "CURSOR_EXPIRED", "EPOCH_CHANGED", "VERSION_GONE", "INVALID_NAME", "UNSUPPORTED_ENTRY", "HASH_MISMATCH", "UNSUPPORTED_STORAGE_BACKEND", "SERVER_PLACEHOLDER_UNSUPPORTED", "RATE_LIMITED", "ROOT_UNAVAILABLE", "NEEDS_RECOVERY", "INSUFFICIENT_STORAGE"] as const;
+export const ERROR_CODE_VALUES = ["AUTH_EXPIRED", "ACCESS_DENIED", "BASE_MISMATCH", "SUBTREE_CHANGED", "OP_ID_REUSED", "RECONCILE_REQUIRED", "CURSOR_EXPIRED", "EPOCH_CHANGED", "VERSION_GONE", "INVALID_NAME", "INVALID_REQUEST", "UNSUPPORTED_ENTRY", "HASH_MISMATCH", "PART_CONFLICT", "UNSUPPORTED_STORAGE_BACKEND", "SERVER_PLACEHOLDER_UNSUPPORTED", "RATE_LIMITED", "ROOT_UNAVAILABLE", "NEEDS_RECOVERY", "INSUFFICIENT_STORAGE"] as const;
 
 export function decodeErrorCode(value: unknown): ErrorCode {
   if (typeof value !== "string" || !(ERROR_CODE_VALUES as readonly string[]).includes(value)) {
@@ -205,6 +205,22 @@ export function decodeLoginRequest(value: unknown): LoginRequest {
   };
 }
 
+/** 一段连续缺失的块索引。 */
+export interface MissingRange {
+  /** 区间内的块数，至少为 1。 */
+  count: string;
+  /** 区间起点（含），十进制文本。 */
+  first_index: string;
+}
+
+export function decodeMissingRange(value: unknown): MissingRange {
+  const object = expect_object(value, "MissingRange");
+  return {
+    count: expect_decimal(object.count, "MissingRange.count"),
+    first_index: expect_decimal(object.first_index, "MissingRange.first_index"),
+  };
+}
+
 /** 协议主次版本；主版本不同必须拒绝通信。 */
 export interface ProtocolVersion {
   /** 主版本；与服务端不同即拒绝通信。（取值范围 0..=65535） */
@@ -218,6 +234,25 @@ export function decodeProtocolVersion(value: unknown): ProtocolVersion {
   return {
     major: expect_number(object.major, "ProtocolVersion.major"),
     minor: expect_number(object.minor, "ProtocolVersion.minor"),
+  };
+}
+
+/** 服务端已持久化的一个块。 */
+export interface ReceivedPart {
+  /** 块内容的 SHA-256，64 位小写十六进制。 */
+  hash: string;
+  /** 块索引（从 0 起，十进制文本）。 */
+  index: string;
+  /** 块长度（十进制文本），与块几何一致。 */
+  length: string;
+}
+
+export function decodeReceivedPart(value: unknown): ReceivedPart {
+  const object = expect_object(value, "ReceivedPart");
+  return {
+    hash: expect_string(object.hash, "ReceivedPart.hash"),
+    index: expect_decimal(object.index, "ReceivedPart.index"),
+    length: expect_decimal(object.length, "ReceivedPart.length"),
   };
 }
 
@@ -272,5 +307,126 @@ export function decodeSessionRevoked(value: unknown): SessionRevoked {
   return {
     revoked_at: expect_decimal(object.revoked_at, "SessionRevoked.revoked_at"),
     session_id: expect_string(object.session_id, "SessionRevoked.session_id"),
+  };
+}
+
+/** 块登记结果。 */
+export interface UploadPartAck {
+  /** 是否为幂等重传（同一索引、同一字节已经登记过）。 */
+  already_present: boolean;
+  /** 块内容的 SHA-256，64 位小写十六进制。 */
+  hash: string;
+  /** 块索引（十进制文本）。 */
+  index: string;
+  /** 块长度（十进制文本）。 */
+  length: string;
+  /** 登记后的会话状态（块齐之前保持 `open`）。 */
+  state: UploadState;
+  /** 上传会话身份，32 位小写十六进制。 */
+  upload_id: string;
+}
+
+export function decodeUploadPartAck(value: unknown): UploadPartAck {
+  const object = expect_object(value, "UploadPartAck");
+  return {
+    already_present: expect_boolean(object.already_present, "UploadPartAck.already_present"),
+    hash: expect_string(object.hash, "UploadPartAck.hash"),
+    index: expect_decimal(object.index, "UploadPartAck.index"),
+    length: expect_decimal(object.length, "UploadPartAck.length"),
+    state: decodeUploadState(object.state),
+    upload_id: expect_string(object.upload_id, "UploadPartAck.upload_id"),
+  };
+}
+
+/** 创建上传会话的输入（design §15.2 `POST /v1/roots/{root}/uploads`）。 */
+export interface UploadRequest {
+  /**
+   * 客户端希望的块大小（十进制文本）。0 表示由服务端按能力选择；服务端可以把它调到
+   * 自己的上限以内，实际值随会话返回。
+   */
+  chunk_size: string;
+  /** 整份内容的 SHA-256，64 位小写十六进制。 */
+  hash: string;
+  /** 不可变本地快照的总字节数（十进制文本）。 */
+  total_size: string;
+}
+
+export function decodeUploadRequest(value: unknown): UploadRequest {
+  const object = expect_object(value, "UploadRequest");
+  return {
+    chunk_size: expect_decimal(object.chunk_size, "UploadRequest.chunk_size"),
+    hash: expect_string(object.hash, "UploadRequest.hash"),
+    total_size: expect_decimal(object.total_size, "UploadRequest.total_size"),
+  };
+}
+
+/** 上传会话（design §13.1：绑定总大小、总哈希与块几何）。 */
+export interface UploadSession {
+  /** 本会话实际使用的块大小（十进制文本）。 */
+  chunk_size: string;
+  /** 会话到期时间（UTC Unix 秒的十进制文本）。 */
+  expires_at: string;
+  /** 整份内容的 SHA-256，64 位小写十六进制。 */
+  hash: string;
+  /** 块数（空内容为 0）。 */
+  part_count: string;
+  /** 所属 Root 身份，32 位小写十六进制。 */
+  root_id: string;
+  /** 会话状态；客户端据此决定继续传块、查询结果还是放弃。 */
+  state: UploadState;
+  /** 快照总字节数（十进制文本）。 */
+  total_size: string;
+  /** 上传会话身份，32 位小写十六进制。 */
+  upload_id: string;
+}
+
+export function decodeUploadSession(value: unknown): UploadSession {
+  const object = expect_object(value, "UploadSession");
+  return {
+    chunk_size: expect_decimal(object.chunk_size, "UploadSession.chunk_size"),
+    expires_at: expect_decimal(object.expires_at, "UploadSession.expires_at"),
+    hash: expect_string(object.hash, "UploadSession.hash"),
+    part_count: expect_decimal(object.part_count, "UploadSession.part_count"),
+    root_id: expect_string(object.root_id, "UploadSession.root_id"),
+    state: decodeUploadState(object.state),
+    total_size: expect_decimal(object.total_size, "UploadSession.total_size"),
+    upload_id: expect_string(object.upload_id, "UploadSession.upload_id"),
+  };
+}
+
+/**
+ * 上传会话状态闭集。未知取值按协议错误处理；`open` 接收块，`complete` 只等待
+ * finalize（S046），`finalized`/`aborted` 是终态。
+ */
+export type UploadState = "open" | "complete" | "finalized" | "aborted";
+
+export const UPLOAD_STATE_VALUES = ["open", "complete", "finalized", "aborted"] as const;
+
+export function decodeUploadState(value: unknown): UploadState {
+  if (typeof value !== "string" || !(UPLOAD_STATE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 UploadState 取值：${JSON.stringify(value)}`);
+  }
+  return value as UploadState;
+}
+
+/** 续传依据：会话状态加**服务端真实已收块**（design §13.2）。 */
+export interface UploadStatus {
+  /**
+   * 仍缺失的块区间，按索引升序；空表示块已齐。区间而不是逐块列表，因此长度最多是
+   * “已收块数 + 1”，不随文件大小增长。
+   */
+  missing: Array<MissingRange>;
+  /** 已收到的块，按索引升序。 */
+  received: Array<ReceivedPart>;
+  /** 会话状态与块几何。 */
+  upload: UploadSession;
+}
+
+export function decodeUploadStatus(value: unknown): UploadStatus {
+  const object = expect_object(value, "UploadStatus");
+  return {
+    missing: expect_array(object.missing, "UploadStatus.missing").map((item) => decodeMissingRange(item)),
+    received: expect_array(object.received, "UploadStatus.received").map((item) => decodeReceivedPart(item)),
+    upload: decodeUploadSession(object.upload),
   };
 }

@@ -315,22 +315,53 @@ struct Operation {
     /// 补充说明（进生成代码文档）。
     #[serde(default)]
     description: Option<String>,
+    /// 路径参数（S045 起支持）；只接受 `in: path` 的必填参数。
+    #[serde(default)]
+    parameters: Vec<Parameter>,
     /// 状态码 → 响应；`default` 之类非数字状态码被拒绝。
     responses: BTreeMap<String, Response>,
-    /// 请求体；只在带请求体的端点出现（S043 起支持）。
+    /// 请求体；只在带请求体的端点出现（S043 起支持 JSON，S045 起支持二进制块）。
     #[serde(rename = "requestBody", default)]
     request_body: Option<RequestBody>,
 }
 
-/// 一个请求体：只支持 `application/json`，且必须引用具名 schema（不生成内联结构）。
+/// 一个端点参数；只支持路径参数（查询/头参数走请求体，不生成两种拼写）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Parameter {
+    /// 参数名，必须与路径里的 `{name}` 占位符一致。
+    name: String,
+    /// 参数位置；只接受 `path`。
+    #[serde(rename = "in")]
+    location: String,
+    /// 是否必填；路径参数必须显式 `required: true`。
+    #[serde(default)]
+    required: Option<bool>,
+    /// 参数说明（进生成代码文档）。
+    #[serde(default)]
+    description: Option<String>,
+    /// 参数值的 schema。
+    schema: RawSchema,
+}
+
+/// 一个请求体：`application/json`（必须引用具名 schema）或 `application/octet-stream`（原始字节）。
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RequestBody {
     /// 是否必填；缺省视为必填（`false` 表示请求体可以没有，当前契约不使用）。
     #[serde(default)]
     required: Option<bool>,
-    /// 媒体类型 → schema；只接受 `application/json`。
-    content: BTreeMap<String, MediaType>,
+    /// 媒体类型 → 请求体内容。
+    content: BTreeMap<String, RequestMedia>,
+}
+
+/// 请求体的一个媒体类型。
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestMedia {
+    /// JSON 请求体的 schema；二进制请求体不声明 schema。
+    #[serde(default)]
+    schema: Option<RawSchema>,
 }
 
 /// 一个响应。
@@ -479,8 +510,38 @@ pub(crate) struct ApiOperation {
     pub(crate) doc: Vec<String>,
     /// 2xx 响应的 schema 名。
     pub(crate) success_type: String,
-    /// 请求体的 schema 名；`None` 表示无请求体。
-    pub(crate) request_type: Option<String>,
+    /// 路径参数，按路径中的出现顺序。
+    pub(crate) path_params: Vec<PathParam>,
+    /// 请求体；`None` 表示无请求体。
+    pub(crate) request: Option<RequestBodyKind>,
+}
+
+/// 路径参数：名字与值的 wire 类型（两者在 TypeScript 里都是 `string`）。
+#[derive(Debug)]
+pub(crate) struct PathParam {
+    /// 参数名，与路径里的 `{name}` 一致。
+    pub(crate) name: String,
+    /// 值的 wire 类型（`string` 或 `decimal_u64`）。
+    pub(crate) ty: FieldType,
+}
+
+/// 请求体类型。
+#[derive(Debug)]
+pub(crate) enum RequestBodyKind {
+    /// `application/json` + 具名 schema：TypeScript 侧序列化对象。
+    Json(String),
+    /// `application/octet-stream`：TypeScript 侧直接发送字节。
+    Binary,
+}
+
+impl RequestBodyKind {
+    /// JSON 请求体的 schema 名；二进制请求体没有 schema。
+    pub(crate) fn json_schema(&self) -> Option<&String> {
+        match self {
+            Self::Json(name) => Some(name),
+            Self::Binary => None,
+        }
+    }
 }
 
 impl Model {
@@ -532,7 +593,7 @@ impl Model {
                     operation.operation_id, operation.success_type, operation.success_type
                 ));
             }
-            if let Some(request_type) = &operation.request_type {
+            if let Some(request_type) = operation.request.as_ref().and_then(RequestBodyKind::json_schema) {
                 if !self.schemas.contains_key(request_type) {
                     return Err(format!(
                         "端点 {} 的请求体引用了未定义的 schema `{request_type}`（{REF_PREFIX}…）",
@@ -861,6 +922,13 @@ fn build_operation(
     }
     doc.push(String::new());
 
+    let path_params = build_path_params(path, &operation.parameters)?;
+    let param_docs = describe_path_params(path, &operation.parameters, &path_params);
+    if !param_docs.is_empty() {
+        doc.extend(param_docs);
+        doc.push(String::new());
+    }
+
     let mut success_type = None;
     for (status, response) in &operation.responses {
         let code: u16 = status.parse().map_err(|_| {
@@ -911,16 +979,140 @@ fn build_operation(
     Ok(ApiOperation {
         method: method_upper.to_string(),
         path: path.to_string(),
+        path_params: build_path_params(path, &operation.parameters)?,
         operation_id: operation.operation_id.clone(),
         doc,
         success_type: success_type
             .ok_or_else(|| format!("端点 {} 没有 2xx 响应", operation.operation_id))?,
-        request_type: build_request_type(operation)?,
+        request: build_request_body(operation)?,
     })
 }
 
-/// 解析请求体：只接受 `application/json` + 具名 schema 引用。
-fn build_request_type(operation: &Operation) -> Result<Option<String>, String> {
+/// 把路径参数的说明追加进端点文档行（生成的 TS 函数因此能说明每个参数是什么）。
+fn describe_path_params(
+    path: &str,
+    parameters: &[Parameter],
+    params: &[PathParam],
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for param in params {
+        let Some(raw) = parameters.iter().find(|raw| raw.name == param.name) else {
+            continue;
+        };
+        let description = raw
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .unwrap_or("路径参数");
+        lines.push(format!("参数 `{}`（{}）：{description}", param.name, path));
+    }
+    lines
+}
+
+/// 解析路径参数，并要求它与路径里的 `{name}` 占位符一一对应。
+///
+/// 只接受 `in: path` 的必填参数，且值的 wire 类型必须是 `string` 或 `format: decimal_u64`：
+/// 两者在 TypeScript 侧都是 `string`，因此不会发明“数字参数”的第三种拼写。内联对象、
+/// 其他位置（query/header）、可选参数、重复参数、未声明的占位符一律报错。
+fn build_path_params(path: &str, parameters: &[Parameter]) -> Result<Vec<PathParam>, String> {
+    let mut placeholders = Vec::new();
+    let mut rest = path;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after
+            .find('}')
+            .ok_or_else(|| format!("路径 {path} 的占位符没有闭合的 `}}`"))?;
+        let name = &after[..close];
+        if name.is_empty() || name.contains('/') || name.contains('{') {
+            return Err(format!("路径 {path} 的占位符 `{{{name}}}` 不是合法参数名"));
+        }
+        if placeholders.iter().any(|seen: &String| seen == name) {
+            return Err(format!("路径 {path} 重复使用了占位符 `{name}`"));
+        }
+        placeholders.push(name.to_owned());
+        rest = &after[close + 1..];
+    }
+
+    let mut params = Vec::new();
+    for parameter in parameters {
+        if parameter.location != "path" {
+            return Err(format!(
+                "路径 {path} 的参数 `{}` 在 `{}` 位置；生成器只支持 `in: path`",
+                parameter.name, parameter.location
+            ));
+        }
+        if parameter.required != Some(true) {
+            return Err(format!(
+                "路径 {path} 的参数 `{}` 必须显式 `required: true`",
+                parameter.name
+            ));
+        }
+        let ty = parameter_type(path, parameter)?;
+        if !placeholders.iter().any(|name| name == &parameter.name) {
+            return Err(format!(
+                "路径 {path} 声明了参数 `{}`，但路径里没有 `{{{}}}` 占位符",
+                parameter.name, parameter.name
+            ));
+        }
+        if params.iter().any(|seen: &PathParam| seen.name == parameter.name) {
+            return Err(format!(
+                "路径 {path} 重复声明了参数 `{}`",
+                parameter.name
+            ));
+        }
+        params.push(PathParam {
+            name: parameter.name.clone(),
+            ty,
+        });
+    }
+
+    // 按路径中的出现顺序输出，生成函数的参数顺序因此稳定。
+    let mut ordered = Vec::with_capacity(placeholders.len());
+    for name in &placeholders {
+        let param = params
+            .iter()
+            .find(|param| &param.name == name)
+            .ok_or_else(|| format!("路径 {path} 的占位符 `{{{name}}}` 缺少 `parameters` 声明"))?;
+        ordered.push(PathParam {
+            name: param.name.clone(),
+            ty: match &param.ty {
+                FieldType::Decimal => FieldType::Decimal,
+                _ => FieldType::Text,
+            },
+        });
+    }
+    Ok(ordered)
+}
+
+/// 路径参数的值类型：`string` 或 `format: decimal_u64`。
+fn parameter_type(path: &str, parameter: &Parameter) -> Result<FieldType, String> {
+    let schema = &parameter.schema;
+    if schema.reference.is_some()
+        || schema.enum_values.is_some()
+        || schema.properties.is_some()
+        || schema.items.is_some()
+        || schema.additional_properties.is_some()
+    {
+        return Err(format!(
+            "路径 {path} 的参数 `{}` 只支持标量 schema（`type: string` 或 `format: decimal_u64`）",
+            parameter.name
+        ));
+    }
+    match (schema.ty.as_deref(), schema.format.as_deref()) {
+        (Some("string"), None | Some("decimal_u64")) => Ok(match schema.format.as_deref() {
+            Some("decimal_u64") => FieldType::Decimal,
+            _ => FieldType::Text,
+        }),
+        _ => Err(format!(
+            "路径 {path} 的参数 `{}` 只支持 `type: string`（可带 `format: decimal_u64`）",
+            parameter.name
+        )),
+    }
+}
+
+/// 解析请求体：`application/json`（具名 schema 引用）或 `application/octet-stream`（无 schema）。
+fn build_request_body(operation: &Operation) -> Result<Option<RequestBodyKind>, String> {
     let Some(body) = &operation.request_body else {
         return Ok(None);
     };
@@ -930,27 +1122,54 @@ fn build_request_type(operation: &Operation) -> Result<Option<String>, String> {
             operation.operation_id
         ));
     }
-    if body.content.len() != 1 || !body.content.contains_key("application/json") {
+    if body.content.len() != 1 {
         return Err(format!(
-            "端点 {} 的 requestBody 只支持 application/json（实有：{}）",
+            "端点 {} 的 requestBody 必须恰好声明一种媒体类型（实有：{}）",
             operation.operation_id,
             body.content.keys().cloned().collect::<Vec<_>>().join("、")
         ));
     }
-    let media = &body.content["application/json"];
-    let reference = media.schema.reference.as_deref().ok_or_else(|| {
-        format!(
-            "端点 {} 的请求体必须引用具名 schema（$ref: {REF_PREFIX}…），不要写内联对象",
+    let (media_type, media) = body
+        .content
+        .iter()
+        .next()
+        .expect("上面刚检查过只有一个媒体类型");
+    match media_type.as_str() {
+        "application/json" => {
+            let schema = media.schema.as_ref().ok_or_else(|| {
+                format!(
+                    "端点 {} 的 JSON 请求体必须有 schema",
+                    operation.operation_id
+                )
+            })?;
+            let reference = schema.reference.as_deref().ok_or_else(|| {
+                format!(
+                    "端点 {} 的请求体必须引用具名 schema（$ref: {REF_PREFIX}…），不要写内联对象",
+                    operation.operation_id
+                )
+            })?;
+            let name = reference.strip_prefix(REF_PREFIX).ok_or_else(|| {
+                format!(
+                    "端点 {} 的请求体 `$ref` 只支持 {REF_PREFIX}…",
+                    operation.operation_id
+                )
+            })?;
+            Ok(Some(RequestBodyKind::Json(name.to_string())))
+        }
+        "application/octet-stream" => {
+            if media.schema.is_some() {
+                return Err(format!(
+                    "端点 {} 的二进制请求体不声明 schema（内容语义由端点文档说明）",
+                    operation.operation_id
+                ));
+            }
+            Ok(Some(RequestBodyKind::Binary))
+        }
+        other => Err(format!(
+            "端点 {} 的 requestBody 媒体类型 `{other}` 未支持；只支持 application/json 与 application/octet-stream",
             operation.operation_id
-        )
-    })?;
-    let name = reference.strip_prefix(REF_PREFIX).ok_or_else(|| {
-        format!(
-            "端点 {} 的请求体 `$ref` 只支持 {REF_PREFIX}…",
-            operation.operation_id
-        )
-    })?;
-    Ok(Some(name.to_string()))
+        )),
+    }
 }
 
 /// 端点标识会变成 TypeScript 函数名，必须是 lowerCamelCase。

@@ -91,12 +91,18 @@ pub enum ErrorCode {
     /// 取值 `INVALID_NAME`。
     #[serde(rename = "INVALID_NAME")]
     InvalidName,
+    /// 取值 `INVALID_REQUEST`。
+    #[serde(rename = "INVALID_REQUEST")]
+    InvalidRequest,
     /// 取值 `UNSUPPORTED_ENTRY`。
     #[serde(rename = "UNSUPPORTED_ENTRY")]
     UnsupportedEntry,
     /// 取值 `HASH_MISMATCH`。
     #[serde(rename = "HASH_MISMATCH")]
     HashMismatch,
+    /// 取值 `PART_CONFLICT`。
+    #[serde(rename = "PART_CONFLICT")]
+    PartConflict,
     /// 取值 `UNSUPPORTED_STORAGE_BACKEND`。
     #[serde(rename = "UNSUPPORTED_STORAGE_BACKEND")]
     UnsupportedStorageBackend,
@@ -156,6 +162,17 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+/// 一段连续缺失的块索引。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct MissingRange {
+    /// 区间内的块数，至少为 1。
+    #[serde(with = "crate::decimal")]
+    pub count: String,
+    /// 区间起点（含），十进制文本。
+    #[serde(with = "crate::decimal")]
+    pub first_index: String,
+}
+
 /// 协议主次版本；主版本不同必须拒绝通信。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ProtocolVersion {
@@ -163,6 +180,19 @@ pub struct ProtocolVersion {
     pub major: u32,
     /// 次版本；服务端可以更大，客户端按自己认识的功能使用。（取值范围 0..=65535）
     pub minor: u32,
+}
+
+/// 服务端已持久化的一个块。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ReceivedPart {
+    /// 块内容的 SHA-256，64 位小写十六进制。
+    pub hash: String,
+    /// 块索引（从 0 起，十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub index: String,
+    /// 块长度（十进制文本），与块几何一致。
+    #[serde(with = "crate::decimal")]
+    pub length: String,
 }
 
 /// 刷新请求（design §15.2 `POST /v1/auth/refresh` 的输入）。
@@ -197,4 +227,92 @@ pub struct SessionRevoked {
     pub revoked_at: String,
     /// 被失效的会话身份，32 个小写十六进制字符。
     pub session_id: String,
+}
+
+/// 块登记结果。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct UploadPartAck {
+    /// 是否为幂等重传（同一索引、同一字节已经登记过）。
+    pub already_present: bool,
+    /// 块内容的 SHA-256，64 位小写十六进制。
+    pub hash: String,
+    /// 块索引（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub index: String,
+    /// 块长度（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub length: String,
+    /// 登记后的会话状态（块齐之前保持 `open`）。
+    pub state: UploadState,
+    /// 上传会话身份，32 位小写十六进制。
+    pub upload_id: String,
+}
+
+/// 创建上传会话的输入（design §15.2 `POST /v1/roots/{root}/uploads`）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct UploadRequest {
+    /// 客户端希望的块大小（十进制文本）。0 表示由服务端按能力选择；服务端可以把它调到
+    /// 自己的上限以内，实际值随会话返回。
+    #[serde(with = "crate::decimal")]
+    pub chunk_size: String,
+    /// 整份内容的 SHA-256，64 位小写十六进制。
+    pub hash: String,
+    /// 不可变本地快照的总字节数（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub total_size: String,
+}
+
+/// 上传会话（design §13.1：绑定总大小、总哈希与块几何）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct UploadSession {
+    /// 本会话实际使用的块大小（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub chunk_size: String,
+    /// 会话到期时间（UTC Unix 秒的十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub expires_at: String,
+    /// 整份内容的 SHA-256，64 位小写十六进制。
+    pub hash: String,
+    /// 块数（空内容为 0）。
+    #[serde(with = "crate::decimal")]
+    pub part_count: String,
+    /// 所属 Root 身份，32 位小写十六进制。
+    pub root_id: String,
+    /// 会话状态；客户端据此决定继续传块、查询结果还是放弃。
+    pub state: UploadState,
+    /// 快照总字节数（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub total_size: String,
+    /// 上传会话身份，32 位小写十六进制。
+    pub upload_id: String,
+}
+
+/// 上传会话状态闭集。未知取值按协议错误处理；`open` 接收块，`complete` 只等待
+/// finalize（S046），`finalized`/`aborted` 是终态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum UploadState {
+    /// 取值 `open`。
+    #[serde(rename = "open")]
+    Open,
+    /// 取值 `complete`。
+    #[serde(rename = "complete")]
+    Complete,
+    /// 取值 `finalized`。
+    #[serde(rename = "finalized")]
+    Finalized,
+    /// 取值 `aborted`。
+    #[serde(rename = "aborted")]
+    Aborted,
+}
+
+/// 续传依据：会话状态加**服务端真实已收块**（design §13.2）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct UploadStatus {
+    /// 仍缺失的块区间，按索引升序；空表示块已齐。区间而不是逐块列表，因此长度最多是
+    /// “已收块数 + 1”，不随文件大小增长。
+    pub missing: Vec<MissingRange>,
+    /// 已收到的块，按索引升序。
+    pub received: Vec<ReceivedPart>,
+    /// 会话状态与块几何。
+    pub upload: UploadSession,
 }
