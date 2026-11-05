@@ -1098,3 +1098,30 @@ python3 tools/context.py --help
 - **未做**：`received_changes` 没有保留期/GC（design §9.4 的事件保留期属拉取卡），`transfers` 只记入站内容（上传进度以服务端 `upload_parts` 为准），`local_intents` 不执行文件系统动作，通知不决定何时弹窗。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-client-store`、`cargo clippy --locked -p vaultsyncd-client-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-client-store`、`sqlite3 :memory: < crates/client-store/migrations/0002_events_transfers_intents.sql`。
+
+## crates/server-core — 不可变内容对象与对象端口（S033）
+
+状态：S033 实现 `objects/` 与 `ports/`；后续卡的提交意图（S034）、CAS 复核（S035）、固定版本下载（S057）与 GC（S085/S086）在此之上编排。包名 `vaultsyncd-server-core`，无第三方依赖，属于 `members` 与 `default-members`（便携规则检查）。
+
+### 端口与模块
+
+| 项目 | 契约 |
+| --- | --- |
+| `ports::object_store::ObjectBlobPort` | 对象字节层端口，由平台适配器实现：`stage_working_copy(source, staging)`、`publish_staged(staged, object)`、`discard_staged(staging)`、`verify_object(object)`、`read_object(object)`。核心只依赖这些签名，不做平台 I/O（design §5.5） |
+| 端口报告的实测事实 | `StagedBlob { staging, source: FileKey, staged: FileKey, digest, method, fallback }`、`PublishedBlob { object, already_present }`、`StoredFacts { bytes, digest }`、`StoredBytes { data, bytes, digest }`。`FileKey { device, inode, links, bytes }` 是“同 inode/有别名”的唯一判据；`CopyMethod = reflink \| verified_copy`，`CopyFallback = exdev \| unsupported` 必须如实暴露 |
+| 端口错误 | `BlobError::{SourceUnreadable, Storage{stage, failure, detail}, Verification, ObjectMissing, InvalidRequest}`；`StorageFailure::{NoSpace, QuotaExceeded, Io, PermissionDenied, ReadOnly, Other}`，`code()` 给出稳定短名（`no_space` 等）。`EIO`/`ENOSPC`/权限错误不得报成“不支持 reflink”或成功（design §11.5） |
+| `objects::ContentDigest` | SHA-256 原始 32 字节；`from_hex` 只接受 64 位小写十六进制，`to_hex`/`fanout`（前 2 位）与 `objects.hash` 同形 |
+| `objects::ObjectLayout` | 对象区布局：暂存 `<root>/staging/<名字>`，已发布对象 `<root>/objects/<aa>/<64 位 hex>`；`relative_object_path` 是写进 `objects.storage_path` 的规范相对路径。暂存名必须是单个文件名（空、`.`/`..`、含 `/`/`\`/NUL 一律拒绝），核心在调用端口前就失败 |
+| `objects::capture_object(port, layout, CaptureRequest{source, staging_name, ExpectedContent{digest, bytes}})` | 顺序固定：建立私有副本 → 判据检查 → 按内容地址发布（不覆盖）→ 发布后复核。成功返回 `CapturedObject{digest, bytes, storage_path, method, fallback, reuse, staging}`，`ReuseOutcome = freshly_published \| existing_verified` |
+| 采集判据（顺序即错误优先级） | 1) 副本与源不同 inode（否则 `shared_writable_inode`）；2) 副本无额外硬链接（`staging_alias`）；3) 长度等于期望（`length_mismatch`）；4) SHA-256 等于期望（`digest_mismatch`）；5) 内容地址已有对象时复核既有内容（`existing_object_mismatch`）；6) 发布后复核（`post_publish_mismatch`）。任一不成立都不返回对象 |
+| 失败模型 | `CaptureFailure { reason: CaptureFailureReason, staging: DiscardOutcome }`，`staging ∈ {not_needed, discarded, failed}`；`is_committable()` 恒为 `false`。端口报错时核心不重复丢弃（端口契约要求自己清理未验证的暂存文件）；发布失败与复用路径由核心丢弃并报告结果 |
+| `objects::read_object(port, layout, digest, expected_bytes)` | 按内容地址读取并核对元数据长度与 SHA-256，返回 `ObjectBytes{digest, data}`；失败为 `ReadFailure`（`invalid_digest`/`object_missing`/`length_mismatch`/`digest_mismatch`），不把截断或改写后的字节当成这个版本（I12） |
+| 依赖边界 | `server-core` 不依赖 `platform-linux-server`；Linux 适配层库也不依赖 `server-core`，只有入口（当前是 `crates/platform-linux-server/examples/object-capture.rs`，S033 的本地组装 wrapper）用 `dev-dependencies` 把 `files::clone`/`files::restricted` 包装成端口 |
+
+### Linux 适配与验收入口（S033）
+
+| 项目 | 契约 |
+| --- | --- |
+| `examples/object-capture.rs` | 子命令 `capture --objects <dir> --source <file> --staging <name> --digest <hex> --bytes <n>` 与 `read --objects <dir> --digest <hex> --bytes <n>`；输出稳定 `key=value` 行（`decision=`、`digest=`、`method=`、`fallback=`、`reuse=`、`staging_cleanup=`、`code=`、`observed=`），成功退出 0、被拒绝 1、用法错误 2 |
+| 适配器行为 | 暂存与发布都在对象区（`<objects>/staging` → `<objects>/objects/<aa>/<hex>`），发布用 `RENAME_NOREPLACE` 且不覆盖既有对象、成功后刷目录；对象权限 `0444`；`FICLONE` 优先，`EXDEV`/不支持退回 `stage_copy` 的校验复制并暴露原因 |
+| 验收脚本 | `VAULTSYNCD_RUN_ID=s033-… bash tests/platform/linux/run-objects.sh`：同卷 reflink 采集、改写/截断/删除工作文件后对象不变、错误摘要与长度不产生对象、跨卷 `exdev` 校验复制、小 tmpfs 满盘 `no_space`、缺失对象明确失败；结束清理样本目录并核对 |

@@ -1,0 +1,15 @@
+[package]
+name = "vaultsyncd-server-core"
+description = "服务端用例核心：不可变内容对象的写入/读取规则与服务端端口契约（docs/design.md §5.4、§11.1—11.2、I12）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 本 crate 只做规则与顺序编排，不直接访问文件系统（design §5.5）：字节操作全部由
+# `crate::ports::object_store::ObjectBlobPort` 的适配器实现。因此这里没有第三方依赖，
+# 也不依赖平台适配层，任何宿主目标都能编译与测试。
+[lints]
+workspace = true
+
+[dependencies]

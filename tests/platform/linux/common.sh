@@ -15,6 +15,7 @@ LAB_ROOT=${VAULTSYNCD_LAB_ROOT:-/data/vaultsyncd-lab}
 ADMISSION_BIN="$repo_root/target/debug/examples/storage-admission"
 FILE_PUBLISH_BIN="$repo_root/target/debug/examples/file-publish"
 PATH_ACCESS_BIN="$repo_root/target/debug/examples/path-access"
+OBJECT_CAPTURE_BIN="$repo_root/target/debug/examples/object-capture"
 
 CASE_TOTAL=0
 CASE_FAILED=0
@@ -100,6 +101,16 @@ build_path_access_bin() {
 	log "产物：$PATH_ACCESS_BIN"
 }
 
+build_object_capture_bin() {
+	step "构建 S033 对象写入/读取命令（cargo build --locked --example object-capture）"
+	(
+		cd "$repo_root"
+		cargo build --locked -p vaultsyncd-platform-linux-server --example object-capture
+	)
+	[ -x "$OBJECT_CAPTURE_BIN" ] || die "缺少产物 $OBJECT_CAPTURE_BIN"
+	log "产物：$OBJECT_CAPTURE_BIN"
+}
+
 # run_admission <子命令与参数...>：结果写入 CMD_OUT / CMD_STATUS。
 # 同时保留 ADMISSION_OUT / ADMISSION_STATUS 别名，供 S013 脚本里的直接引用继续工作。
 run_admission() {
@@ -123,6 +134,14 @@ run_file_publish() {
 run_path_access() {
 	set +e
 	CMD_OUT=$("${PATH_ACCESS_BIN:?先运行 build_path_access_bin}" "$@" 2>&1)
+	CMD_STATUS=$?
+	set -e
+}
+
+# run_object_capture <子命令与参数...>：结果写入 CMD_OUT / CMD_STATUS。
+run_object_capture() {
+	set +e
+	CMD_OUT=$("${OBJECT_CAPTURE_BIN:?先运行 build_object_capture_bin}" "$@" 2>&1)
 	CMD_STATUS=$?
 	set -e
 }

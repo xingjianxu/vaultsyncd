@@ -14,6 +14,7 @@ members = [
     "crates/planner",
     "crates/platform-linux-server",
     "crates/protocol",
+    "crates/server-core",
     "crates/server-store",
     "crates/platform-windows",
     "tests/windows-integration",
@@ -33,6 +34,10 @@ members = [
 # 没有任何平台 API，任何宿主目标都能编译与测试，因此进 default-members，让迁移框架的回归进入
 # 便携检查（`cargo xtask check`/CI 的 `cargo test --locked`）。它不引入前端或客体依赖。
 #
+# crates/server-core 是服务端用例核心（S033）：不可变内容对象的写入/读取规则与服务端端口
+# 契约，不做平台 I/O，也没有第三方依赖；任何宿主目标都能编译与测试，因此同样进
+# default-members，让“独立 inode/长度/摘要/发布后复核”的规则回归进入便携检查。
+#
 # crates/client-store 是客户端 SQLite 存储层（S030）：同样只有 SQLx + domain，没有任何平台 API，
 # 因此也进 default-members；客户端库的种类与 schema 门禁、三张条目表并存的组合都能在便携检查里
 # 回归。它与 server-store 之间没有依赖：两套 schema、两个数据库文件（design §7.3）。
@@ -47,6 +52,7 @@ default-members = [
     "crates/local-ipc",
     "crates/planner",
     "crates/protocol",
+    "crates/server-core",
     "crates/server-store",
 ]
 
