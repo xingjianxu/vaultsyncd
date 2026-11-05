@@ -1,0 +1,29 @@
+[package]
+name = "vaultsyncd-client-store"
+description = "客户端 SQLite 存储：客户端库种类与 schema 门禁、迁移与备份、绑定/基线/远端/本地/队列表（docs/design.md §5.4、§7.3、§8.4）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 依赖只落在客户端持久化这一层：SQLite 访问与迁移用 SQLx（design §4.1「SQLite，SQLx
+# migrations」）。`sqlite` feature 通过 libsqlite3-sys 的 bundled 源编译 SQLite，因此不用
+# 系统 libsqlite3、也不依赖 devShell 的 nixpkgs sqlite 版本；`macros` 只为 `sqlx::migrate!`
+# 编译期内嵌 migrations/ 目录，不使用 `query!`（因此不需要 DATABASE_URL 或 SQLX_OFFLINE）。
+# 状态维度（Dirty/Residency）与身份、计数只用 crates/domain 的类型，不另造一套表示。
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "migrate",
+    "macros",
+    "derive",
+] }
+vaultsyncd-domain = { path = "../domain" }
+
+[dev-dependencies]
+# 迁移与读写测试是真实 SQLite 文件的异步测试：`#[tokio::test]` 与多线程 runtime 由测试侧提供。
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
