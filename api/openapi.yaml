@@ -363,6 +363,13 @@ paths:
           schema:
             type: string
             format: decimal_u64
+        - name: x-part-sha256
+          in: header
+          required: true
+          description: |
+            该块原始字节的 SHA-256（64 位小写十六进制），与该块字节分开传：服务端先核对再登记。
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -423,8 +430,213 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /v1/roots/{root}/uploads/{upload}/finalize:
+    post:
+      operationId: finalizeUpload
+      summary: 完成上传并发布内容
+      description: |
+        按块几何核对收齐后拼装并发布内容对象（design §13.1—13.2、§15.2）。顺序固定为
+        “核对块齐 → 标 complete → 拼装并发布对象 → 核对总长度与总 SHA-256 → 登记对象 →
+        标 finalized”。
+
+        本端点**不提交条目**：它只返回可提交内容引用（`hash`/`size`/`storage_path`），条目的
+        head 由后续 put/create 操作按 CAS 提交（I01：finalize 成功不等于同步完成）。
+
+        块未收齐时不改会话状态，直接 400；拼装内容与快照声明不符时放弃会话
+        （`aborted`）并返回 422，不登记对象（I05）。已 `finalized` 的会话重复调用是幂等重放：
+        返回同一内容引用与 `replayed=true`，不重新发布。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: upload
+          in: path
+          required: true
+          description: 上传会话身份（32 位小写十六进制）。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 内容已发布（首次或幂等重放），返回可提交内容引用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinalizedContent"
+        "400":
+          description: 身份/形状不合法，或块还没有收齐（不改会话状态）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: 会话不存在、不属于该 Root 或不属于该登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: 会话已被放弃（不再接收块，也不能 finalize）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 拼装内容与声明的总长度或总 SHA-256 不符（会话被放弃）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端不可用（存储失败或需要恢复）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "507":
+          description: 对象区空间不足，对象未发布
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/roots/{root}/entries/{entry}/versions/{version}/content:
+    get:
+      operationId: downloadVersionContent
+      summary: 下载固定版本的内容
+      description: |
+        按 `(root, entry, version)` 取该版本的**固定**内容字节（design §15.2、I12、I15）：内容地址
+        只来自那条版本行，路径上后来出现的新 head 与本请求无关。
+
+        整份请求返回 **200**，带 `Content-Length` 与整份内容的 `x-content-sha256`。请求头
+        `Range: bytes=start-end` / `bytes=start-` / `bytes=-suffix` 请求部分内容时返回 **206**
+        与 `Content-Range: bytes start-end/total`。多区间、非 `bytes=` 形式、反向区间与越界
+        区间一律 400；空对象上的任何区间不可满足。部分切片无法在服务端核对整份摘要
+        （design §13.2 的整文件校验在客户端）。
+
+        版本已过期或已清理时返回 410 VERSION_GONE，绝不回退成“同路径的当前内容”。每次读取
+        前建立内容租约，读取结束才解除，因此历史对象不会在读取期间被 GC 回收。
+
+        Range 是可选请求头，由调用方经 `init.headers` 传入（可选头不生成函数参数）。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: entry
+          in: path
+          required: true
+          description: 条目身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          description: 版本身份（32 位小写十六进制）。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 整份内容字节（`application/octet-stream`）
+          content:
+            application/octet-stream: {}
+        "206":
+          description: 请求区间的字节，`Content-Range` 给出实际区间
+          content:
+            application/octet-stream: {}
+        "400":
+          description: Range 头语法不合法，或区间落在对象之外
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "410":
+          description: 版本已过期、已清理，或不属于该条目/Root（不泄露是否存在）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端不可用（对象读取或租约失败、需要恢复）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   schemas:
+    ObjectReuse:
+      description: |
+        内容对象的发布方式闭集（design §11.2 步骤 7）。`freshly_published` 本次新建，
+        `existing_verified` 内容地址上已有同内容对象、未覆盖并复核通过后复用。
+      type: string
+      enum:
+        - freshly_published
+        - existing_verified
+
+    FinalizedContent:
+      description: |
+        finalize 的结果：可提交内容引用（design §15.2 上传 finalize「只生成可提交内容引用，
+        不修改条目 head」）。它还不是版本：条目 head 由后续操作按 CAS 提交。
+      type: object
+      required:
+        [upload_id, root_id, hash, size, storage_path, part_count, reuse, replayed]
+      properties:
+        upload_id:
+          type: string
+          description: 上传会话身份，32 位小写十六进制。
+        root_id:
+          type: string
+          description: 内容所属 Root 身份，32 位小写十六进制。
+        hash:
+          type: string
+          description: 内容的 SHA-256，64 位小写十六进制；提交时用它引用这份内容。
+        size:
+          type: string
+          format: decimal_u64
+          description: 内容字节数（十进制文本）。
+        storage_path:
+          type: string
+          description: |
+            对象区内的规范相对路径（服务端内部路径）。客户端只原样回传，不拼接、不解释它。
+        part_count:
+          type: string
+          format: decimal_u64
+          description: 块数（十进制文本）。
+        reuse:
+          $ref: "#/components/schemas/ObjectReuse"
+          description: 本次新建还是复用既有对象。
+        replayed:
+          type: boolean
+          description: 是否为幂等重放（会话本来就已经 `finalized`）。
     UploadRequest:
       description: 创建上传会话的输入（design §15.2 `POST /v1/roots/{root}/uploads`）。
       type: object

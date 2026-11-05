@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeErrorEnvelope, decodeHealthResponse, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
-import type { Capabilities, ErrorBody, HealthResponse, LoginRequest, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
+import { decodeCapabilities, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
+import type { Capabilities, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -55,9 +55,10 @@ function request_headers(
   options: ClientOptions,
   init: RequestInit | undefined,
   content_type: string | null,
+  accept = "application/json",
 ): Headers {
   const headers = new Headers(init?.headers);
-  headers.set("accept", "application/json");
+  headers.set("accept", accept);
   if (content_type !== null) {
     headers.set("content-type", content_type);
   }
@@ -71,6 +72,10 @@ async function read_json(response: Response): Promise<unknown> {
   } catch {
     throw new ProtocolError(`响应不是 JSON（HTTP ${response.status}）`);
   }
+}
+
+async function read_bytes(response: Response): Promise<Uint8Array> {
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 function api_error(status: number, body: unknown): ApiError {
@@ -95,7 +100,7 @@ export async function registerRoot(options: ClientOptions, body: RootRegisterReq
   const response = await options.fetch(join_url(options.base_url, "/v1/admin/roots"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, "application/json"),
+    headers: request_headers(options, init, "application/json", "application/json"),
     body: JSON.stringify(body),
   });
   const payload = await read_json(response);
@@ -122,7 +127,7 @@ export async function login(options: ClientOptions, body: LoginRequest, init?: R
   const response = await options.fetch(join_url(options.base_url, "/v1/auth/login"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, "application/json"),
+    headers: request_headers(options, init, "application/json", "application/json"),
     body: JSON.stringify(body),
   });
   const payload = await read_json(response);
@@ -145,7 +150,7 @@ export async function logout(options: ClientOptions, init?: RequestInit): Promis
   const response = await options.fetch(join_url(options.base_url, "/v1/auth/logout"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, null),
+    headers: request_headers(options, init, null, "application/json"),
   });
   const payload = await read_json(response);
   if (!response.ok) {
@@ -167,7 +172,7 @@ export async function refresh(options: ClientOptions, body: RefreshRequest, init
   const response = await options.fetch(join_url(options.base_url, "/v1/auth/refresh"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, "application/json"),
+    headers: request_headers(options, init, "application/json", "application/json"),
     body: JSON.stringify(body),
   });
   const payload = await read_json(response);
@@ -190,7 +195,7 @@ export async function getCapabilities(options: ClientOptions, init?: RequestInit
   const response = await options.fetch(join_url(options.base_url, "/v1/capabilities"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init, null),
+    headers: request_headers(options, init, null, "application/json"),
   });
   const payload = await read_json(response);
   if (!response.ok) {
@@ -212,7 +217,7 @@ export async function getHealth(options: ClientOptions, init?: RequestInit): Pro
   const response = await options.fetch(join_url(options.base_url, "/v1/health"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init, null),
+    headers: request_headers(options, init, null, "application/json"),
   });
   const payload = await read_json(response);
   if (!response.ok) {
@@ -235,13 +240,55 @@ export async function listRoots(options: ClientOptions, init?: RequestInit): Pro
   const response = await options.fetch(join_url(options.base_url, "/v1/roots"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init, null),
+    headers: request_headers(options, init, null, "application/json"),
   });
   const payload = await read_json(response);
   if (!response.ok) {
     throw api_error(response.status, payload);
   }
   return decodeRootList(payload);
+}
+
+/**
+ * 下载固定版本的内容
+ *
+ * 按 `(root, entry, version)` 取该版本的**固定**内容字节（design §15.2、I12、I15）：内容地址
+ * 只来自那条版本行，路径上后来出现的新 head 与本请求无关。
+ *
+ * 整份请求返回 **200**，带 `Content-Length` 与整份内容的 `x-content-sha256`。请求头
+ * `Range: bytes=start-end` / `bytes=start-` / `bytes=-suffix` 请求部分内容时返回 **206**
+ * 与 `Content-Range: bytes start-end/total`。多区间、非 `bytes=` 形式、反向区间与越界
+ * 区间一律 400；空对象上的任何区间不可满足。部分切片无法在服务端核对整份摘要
+ * （design §13.2 的整文件校验在客户端）。
+ *
+ * 版本已过期或已清理时返回 410 VERSION_GONE，绝不回退成“同路径的当前内容”。每次读取
+ * 前建立内容租约，读取结束才解除，因此历史对象不会在读取期间被 GC 回收。
+ *
+ * Range 是可选请求头，由调用方经 `init.headers` 传入（可选头不生成函数参数）。
+ *
+ * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/content）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/content）：条目身份（32 位小写十六进制）。
+ * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/content）：版本身份（32 位小写十六进制）。
+ *
+ * 200：整份内容字节（`application/octet-stream`）
+ * 206：请求区间的字节，`Content-Range` 给出实际区间
+ * 400：Range 头语法不合法，或区间落在对象之外
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 410：版本已过期、已清理，或不属于该条目/Root（不泄露是否存在）
+ * 503：服务端不可用（对象读取或租约失败、需要恢复）
+ */
+export async function downloadVersionContent(options: ClientOptions, root: string, entry: string, version: string, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/content`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/octet-stream"),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return await read_bytes(response);
 }
 
 /**
@@ -265,7 +312,7 @@ export async function beginUpload(options: ClientOptions, root: string, body: Up
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, "application/json"),
+    headers: request_headers(options, init, "application/json", "application/json"),
     body: JSON.stringify(body),
   });
   const payload = await read_json(response);
@@ -295,13 +342,54 @@ export async function getUpload(options: ClientOptions, root: string, upload: st
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init, null),
+    headers: request_headers(options, init, null, "application/json"),
   });
   const payload = await read_json(response);
   if (!response.ok) {
     throw api_error(response.status, payload);
   }
   return decodeUploadStatus(payload);
+}
+
+/**
+ * 完成上传并发布内容
+ *
+ * 按块几何核对收齐后拼装并发布内容对象（design §13.1—13.2、§15.2）。顺序固定为
+ * “核对块齐 → 标 complete → 拼装并发布对象 → 核对总长度与总 SHA-256 → 登记对象 →
+ * 标 finalized”。
+ *
+ * 本端点**不提交条目**：它只返回可提交内容引用（`hash`/`size`/`storage_path`），条目的
+ * head 由后续 put/create 操作按 CAS 提交（I01：finalize 成功不等于同步完成）。
+ *
+ * 块未收齐时不改会话状态，直接 400；拼装内容与快照声明不符时放弃会话
+ * （`aborted`）并返回 422，不登记对象（I05）。已 `finalized` 的会话重复调用是幂等重放：
+ * 返回同一内容引用与 `replayed=true`，不重新发布。
+ *
+ * 参数 `root`（/v1/roots/{root}/uploads/{upload}/finalize）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `upload`（/v1/roots/{root}/uploads/{upload}/finalize）：上传会话身份（32 位小写十六进制）。
+ *
+ * 200：内容已发布（首次或幂等重放），返回可提交内容引用
+ * 400：身份/形状不合法，或块还没有收齐（不改会话状态）
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 404：会话不存在、不属于该 Root 或不属于该登录会话
+ * 409：会话已被放弃（不再接收块，也不能 finalize）
+ * 422：拼装内容与声明的总长度或总 SHA-256 不符（会话被放弃）
+ * 503：服务端不可用（存储失败或需要恢复）
+ * 507：对象区空间不足，对象未发布
+ */
+export async function finalizeUpload(options: ClientOptions, root: string, upload: string, init?: RequestInit): Promise<FinalizedContent> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/uploads/${encodeURIComponent(upload)}/finalize`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeFinalizedContent(payload);
 }
 
 /**
@@ -316,6 +404,7 @@ export async function getUpload(options: ClientOptions, root: string, upload: st
  * 参数 `root`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：授权 Root 的身份（32 位小写十六进制）。
  * 参数 `upload`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：上传会话身份（32 位小写十六进制）。
  * 参数 `index`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：块索引（从 0 起的十进制文本）。
+ * 请求头 `x-part-sha256`：该块原始字节的 SHA-256（64 位小写十六进制），与该块字节分开传：服务端先核对再登记。
  *
  * 200：块已登记（首次或幂等重传）
  * 400：块索引越界、长度与几何不符或载荷超过上限
@@ -327,12 +416,14 @@ export async function getUpload(options: ClientOptions, root: string, upload: st
  * 503：服务端不可用（例如需要恢复）
  * 507：暂存空间不足
  */
-export async function putUploadPart(options: ClientOptions, root: string, upload: string, index: string, body: Uint8Array, init?: RequestInit): Promise<UploadPartAck> {
+export async function putUploadPart(options: ClientOptions, root: string, upload: string, index: string, x_part_sha256: string, body: Uint8Array, init?: RequestInit): Promise<UploadPartAck> {
   const path = `/v1/roots/${encodeURIComponent(root)}/uploads/${encodeURIComponent(upload)}/parts/${encodeURIComponent(index)}`;
+  const headers = request_headers(options, init, "application/octet-stream", "application/json");
+  headers.set("x-part-sha256", x_part_sha256);
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "PUT",
-    headers: request_headers(options, init, "application/octet-stream"),
+    headers,
     body: body as BodyInit,
   });
   const payload = await read_json(response);

@@ -130,6 +130,30 @@ pub struct ErrorEnvelope {
     pub error: ErrorBody,
 }
 
+/// finalize 的结果：可提交内容引用（design §15.2 上传 finalize「只生成可提交内容引用，
+/// 不修改条目 head」）。它还不是版本：条目 head 由后续操作按 CAS 提交。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct FinalizedContent {
+    /// 内容的 SHA-256，64 位小写十六进制；提交时用它引用这份内容。
+    pub hash: String,
+    /// 块数（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub part_count: String,
+    /// 是否为幂等重放（会话本来就已经 `finalized`）。
+    pub replayed: bool,
+    /// 本次新建还是复用既有对象。
+    pub reuse: ObjectReuse,
+    /// 内容所属 Root 身份，32 位小写十六进制。
+    pub root_id: String,
+    /// 内容字节数（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub size: String,
+    /// 对象区内的规范相对路径（服务端内部路径）。客户端只原样回传，不拼接、不解释它。
+    pub storage_path: String,
+    /// 上传会话身份，32 位小写十六进制。
+    pub upload_id: String,
+}
+
 /// 健康探测结果。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct HealthResponse {
@@ -171,6 +195,18 @@ pub struct MissingRange {
     /// 区间起点（含），十进制文本。
     #[serde(with = "crate::decimal")]
     pub first_index: String,
+}
+
+/// 内容对象的发布方式闭集（design §11.2 步骤 7）。`freshly_published` 本次新建，
+/// `existing_verified` 内容地址上已有同内容对象、未覆盖并复核通过后复用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum ObjectReuse {
+    /// 取值 `freshly_published`。
+    #[serde(rename = "freshly_published")]
+    FreshlyPublished,
+    /// 取值 `existing_verified`。
+    #[serde(rename = "existing_verified")]
+    ExistingVerified,
 }
 
 /// 协议主次版本；主版本不同必须拒绝通信。
