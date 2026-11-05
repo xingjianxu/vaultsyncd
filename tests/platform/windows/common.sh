@@ -19,6 +19,19 @@ CFAPI_PROTOTYPE_BINARY="cfapi-prototype"
 CFAPI_GUEST_DIR="${CFAPI_GUEST_DIR:-C:/vaultsyncd-lab/s010}"
 CFAPI_ROOT="${CFAPI_ROOT:-C:/vaultsyncd-test}"
 
+# S011：水合验证用独立的客体工作目录与范围参数（与 S010 的原型脚本互不影响）。
+CFAPI_HYDRATION_GUEST_DIR="${CFAPI_HYDRATION_GUEST_DIR:-C:/vaultsyncd-lab/s011}"
+# 范围水合的条目与区间：16 MiB 条目上取 1 MiB，足以让平台按范围（而非整份）请求。
+CFAPI_HYDRATION_RANGE_ENTRY="${CFAPI_HYDRATION_RANGE_ENTRY:-huge-16mib.bin}"
+CFAPI_HYDRATION_RANGE_OFFSET="${CFAPI_HYDRATION_RANGE_OFFSET:-4000000}"
+CFAPI_HYDRATION_RANGE_LENGTH="${CFAPI_HYDRATION_RANGE_LENGTH:-1048576}"
+
+# S012：释放/写保护验证用独立的客体工作目录、主同步根与 rename 专用同步根。rename-over 会
+# 把目标名字留在无法按路径打开的状态，因此单独用一个根，避免污染主根的后续检查。
+CFAPI_RELEASE_GUEST_DIR="${CFAPI_RELEASE_GUEST_DIR:-C:/vaultsyncd-lab/s012}"
+CFAPI_RELEASE_ROOT="${CFAPI_RELEASE_ROOT:-C:/vaultsyncd-test}"
+CFAPI_RELEASE_RENAME_ROOT="${CFAPI_RELEASE_RENAME_ROOT:-C:/vaultsyncd-test-rename}"
+
 # 客体（S008 交付的 Windows 11 实验室）默认连接参数，可用环境变量覆盖。
 GUEST_HOST="${GUEST_HOST:-127.0.0.1}"
 GUEST_PORT="${GUEST_PORT:-2222}"

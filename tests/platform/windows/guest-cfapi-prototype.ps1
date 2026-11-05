@@ -110,19 +110,18 @@ foreach ($name in $placeholderFiles) {
     & fsutil sparse queryflag $path | ForEach-Object { Write-Output "  $_" }
 }
 
-Stage 'read_attempt'
-# 内容水合属 S011：未实现时读取必须是明确错误，不能返回 0 字节成功。
+Stage 'read_hydration'
+# S011 起内容水合已实现：用 `read` 子命令（自己连接提供方）读取小条目，必须成功且长度正确。
+# 逐字节/哈希、范围请求、离线、超时与中断的完整证据在 `guest-cfapi-hydration.ps1`（S011）。
 $readTarget = Join-Path $prototypeDir $placeholderFiles[0]
-try {
-    $bytes = [System.IO.File]::ReadAllBytes($readTarget)
-    Write-Output "evidence_read path=$prototypeDirName/$($placeholderFiles[0]) outcome=unexpected_success bytes=$($bytes.Length)"
-    Check 'read_refused' $false "read returned $($bytes.Length) bytes instead of failing"
-}
-catch {
-    $readHr = '0x{0:X8}' -f $_.Exception.HResult
-    Write-Output "evidence_read path=$prototypeDirName/$($placeholderFiles[0]) outcome=error hresult=$readHr message=$($_.Exception.Message)"
-    Check 'read_refused' $true "hresult=$readHr"
-}
+& $exePath read --root $Root --name $placeholderFiles[0]
+$readExit = $LASTEXITCODE
+Write-Output "read_exit=$readExit"
+Check 'read_hydrated_exit' ($readExit -eq 0) "exit=$readExit"
+$readLength = (Get-Item -LiteralPath $readTarget).Length
+$readHash = (Get-FileHash -Algorithm SHA256 -Path $readTarget).Hash.ToLower()
+Write-Output "evidence_read path=$prototypeDirName/$($placeholderFiles[0]) outcome=hydrated length=$readLength sha256=$readHash"
+Check 'read_hydrated_length' ($readLength -eq $expectedSizes[$placeholderFiles[0]]) "length=$readLength expected=$($expectedSizes[$placeholderFiles[0]])"
 
 Stage 'cleanup'
 & $exePath cleanup --root $Root

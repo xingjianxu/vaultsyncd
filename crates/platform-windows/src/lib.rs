@@ -1,9 +1,9 @@
 //! vaultsyncd 的 Windows 平台适配层（`docs/design.md` §5.3 的 `cfapi/`、`shell/`、`files/`、
 //! `watcher/`、`ipc/`）。
 //!
-//! 本卡（S010）只落地 `cfapi/` 中 CFAPI 同步根注册、连接、占位创建、状态查询、清理与
-//! `FileIdentity` 编码所需的部分；`shell/`、`files/`、`watcher/`、`ipc/` 与内容水合
-//! （S011）、释放与写保护（S012）仍属后续卡，这里没有占位实现。
+//! 已落地 `cfapi/` 的同步根注册、连接、占位创建、状态查询、`FileIdentity` 编码（S010）
+//! 与内容水合读取、范围供给、取消、超时/离线失败语义（S011）；`shell/`、`files/`、
+//! `watcher/`、`ipc/` 与释放/写保护（S012）仍属后续卡，这里没有占位实现。
 //!
 //! 边界（design §14.2）：
 //!

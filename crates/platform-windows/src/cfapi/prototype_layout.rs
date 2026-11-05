@@ -23,8 +23,14 @@ pub const PROTOTYPE_ROOT_ID: RootId = RootId::from_bytes([
 pub const PROBE_DIRECTORY: &str = "vaultsyncd-proto";
 
 /// 原型固定文件集合：名称与逻辑大小（字节）。名称用 ASCII，避免客体控制台代码页干扰。
-pub const PROBE_FILES: [(&str, u64); 2] =
-    [("small-12345.bin", 12_345), ("large-1mib.bin", 1_048_576)];
+///
+/// S011 增加 16 MiB 条目：1 MiB 及以下会被平台按“整份”请求（S011 实测 `open` 即请求
+/// 1,048,576 B），只有更大的条目才会出现真正的范围请求，从而能验证按 Offset/Length 供给。
+pub const PROBE_FILES: [(&str, u64); 3] = [
+    ("small-12345.bin", 12_345),
+    ("large-1mib.bin", 1_048_576),
+    ("huge-16mib.bin", 16_777_216),
+];
 
 /// 原型条目的固定版本提示。真实版本提示随远端版本推进，这里固定以便复现比较。
 pub const PROTOTYPE_VERSION_HINT: VersionHint = VersionHint::new(1);
@@ -71,10 +77,12 @@ mod tests {
     #[test]
     fn probe_layout_has_a_directory_and_two_distinct_sized_files() {
         assert_eq!(PROBE_DIRECTORY, "vaultsyncd-proto");
-        assert_eq!(PROBE_FILES.len(), 2);
+        assert_eq!(PROBE_FILES.len(), 3);
         assert_eq!(PROBE_FILES[0], ("small-12345.bin", 12_345));
         assert_eq!(PROBE_FILES[1], ("large-1mib.bin", 1_048_576));
         assert_eq!(PROBE_FILES[1].1, 1024 * 1024);
+        assert_eq!(PROBE_FILES[2], ("huge-16mib.bin", 16_777_216));
+        assert_eq!(PROBE_FILES[2].1, 16 * 1024 * 1024);
         // 两个文件大小必须不同，否则无法证明 Length 是逐条目设置的。
         assert_ne!(PROBE_FILES[0].1, PROBE_FILES[1].1);
     }
@@ -84,6 +92,7 @@ mod tests {
         let first = entry_id_for("small-12345.bin");
         assert_eq!(first, entry_id_for("small-12345.bin"));
         assert_ne!(first, entry_id_for("large-1mib.bin"));
+        assert_ne!(first, entry_id_for("huge-16mib.bin"));
         assert_ne!(first, entry_id_for(PROBE_DIRECTORY));
     }
 
