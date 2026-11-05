@@ -1574,3 +1574,25 @@ python3 tools/context.py --help
 rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 都在写盘之前返回，不留暂存文件。
 **已知缺口**：`x-part-sha256` 仍未进 `api/openapi.yaml`（生成器只支持 `in: path`，header 参数
 支持仍待做，S045-b 已写清步骤）；`INVALID_REQUEST`/`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行。
+
+## crates/server-core + apps/server — 外部目录初始稳定采集（S049）
+
+### 核心（`vaultsyncd_server_core::observer`）
+
+- **端口**：`ports::work_tree::WorkTreePort`（`list_dir`/`observe`，指纹 `FileStamp` = 设备/inode/链接数/大小 + btime/mtime/ctime；读不到是 `WorkTreeError::{Unreadable,RootUnavailable,InvalidPath}`，确认并发消失才是 `Gone`/`Absent`，**不得**把故障报告成不存在）；`ports::external_store::ExternalAdoptStore`（`lookup_path` + 一个事务 `apply_external`：登记对象/写版本/推进 revision/追加 `changes` 批次；`Update` 用比较并写，**不触碰工作目录**）。候选与对象沿用 `ObjectBlobPort`，新增 `objects::capture_observed_object`（期望内容取自候选读回值，且要求候选长度等于建副本前的源长度）。
+- **`scan::scan_tree(port, ScanLimits, ScanCursor)`**：BFS、目录内按名称字节序；预算按目录项计、可在目录中途停下并精确续扫。结论 `ScanCompletion::{Complete, Inconclusive{resume, reasons}}`：预算耗尽、目录/项读不了、Root 不可用都是 `Inconclusive`，已枚举部分**不是**完整快照；枚举不产生任何删除结论。符号链接/特殊文件/非 UTF-8 名进入 `skipped`，不静默消失。
+- **`scan::StabilityTracker`**：窗口默认 1000 ms（设计 500—1000 ms）；首次看到总等待完整窗口；指纹任一字段变化（含只有 ctime 变化的保留 mtime 改写）重新计时。只降低读到中间态的概率，不证明写入结束（C33）。
+- **`capture::capture_external`**：稳定指纹 → 观察前核对 → 私有候选（reflink/校验复制）+ 读回校验 → 观察后要求与观察前指纹**完全相同** → `ExternalProposal`。变化 → `Requeue(RequeueReason)`；路径消失/非普通文件单列，不是删除。
+- **`capture::adopt_external(gate, store, work, proposal, at)`**：与 put 共用 `RootCommitGate`（忙则 `RootBusy`，不阻塞）→ 采纳前再次核对指纹 → 路径查询（库里内容相同则 `UnchangedContent`，不产生版本；目录冲突 `Blocked`）→ `apply_external` → 核对证据（摘要/长度/条目/revision 推进，不符是 `StoreContract`，不当成已采纳）。
+- **`import::ExternalObserver::run_pass`**：一轮 = 续扫（有游标则继续，否则从起点）→ 对仍待处理但本轮未扫到的文件逐个复查 → 稳定判断 → 每轮最多 `max_captures` 个采集+采纳。`history_protected(path)` 仅在采纳成功（或库里已有相同内容）后为真；`initial_import_complete` 需要“一轮完整扫描 + 当时无待处理”，一旦为真保持。账本只是进程内报告视图，重启后靠库查询避免重复版本。
+- **采纳后的现场**：事务提交后现场仍可能再被改写，不阻止也不宣称阻止；新内容下一轮成为下一版本。放弃采纳时已发布的候选对象只是无引用的内容地址文件，由对象 GC 回收。
+
+### Linux 适配（`vaultsyncd_server::observer`，`vaultsyncd_platform_linux_server::files`）
+
+- `LinuxWorkTree`（`RootHandle` 上的受限枚举/`identity_at`；每列一个目录先 `RootHandle::verify`，漂移 = `RootUnavailable`）与 `LinuxObjectPort`（源经 Root 句柄读取，候选建在对象区 staging，复制期间源变化映射为 `SourceUnreadable`）。
+- 平台修复：`RestrictedDir::list_entries` 现在先 `lseek` 倒回目录句柄起点；此前重复列举同一句柄（Root 句柄每轮扫描都列一次）第二次起得到空列表。新增 `RootHandle::identity_at`。
+
+### 未接入（后续卡）
+
+- `ExternalAdoptStore`/`PutCommitStore` 的真实 SQLx 适配（含补建父目录条目、`changes` 事件内容）；`roots.pending_import` 仍是注册时的常量，初始导入完成标志尚未落库（需要 `roots` 迁移，与存储适配一起做）；
+- 后台调度（周期轮次、`apps/server` 里按 Root 启动观察器）与 inotify/溢出补扫（S050）；已采纳文件被外部删除/改名的事件管线。

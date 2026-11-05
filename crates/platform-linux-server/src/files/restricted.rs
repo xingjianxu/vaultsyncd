@@ -683,6 +683,11 @@ impl RestrictedDir {
     ///
     /// 见 [`RestrictError::ReadDir`]、[`RestrictError::PermissionDenied`]。
     pub fn list_entries(&self) -> Result<Vec<DirEntry>, RestrictError> {
+        // 同一个句柄可能被重复列举（Root 句柄每轮扫描都列一次）：先倒回起点，否则第二次起得到空列表。
+        raw::rewind_dir(self.handle.as_raw_fd()).map_err(|source| RestrictError::ReadDir {
+            path: self.path.clone(),
+            source,
+        })?;
         let mut buffer = vec![0u8; DIRENT_BUFFER_BYTES];
         let mut entries = Vec::new();
         loop {
@@ -993,5 +998,25 @@ mod tests {
             EntryKind::Unknown
         );
         assert_eq!(EntryKind::from_dtype(6), EntryKind::Other);
+    }
+
+    #[test]
+    fn listing_the_same_handle_twice_returns_the_same_entries() {
+        // 回归（S049）：目录句柄的读取位置属于打开文件描述，不倒回会让第二次列举得到空列表。
+        let base =
+            std::env::temp_dir().join(format!("vaultsyncd-s049-relist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("建目录");
+        std::fs::write(base.join("a.txt"), b"a").expect("写文件");
+        std::fs::write(base.join("b.txt"), b"b").expect("写文件");
+        let dir = RestrictedDir::open(&base, ResolveMode::Auto).expect("打开目录句柄");
+        let first = dir.list_entries().expect("第一次列举");
+        let second = dir.list_entries().expect("第二次列举");
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first, second,
+            "重复列举同一句柄必须得到相同结果，而不是空列表"
+        );
     }
 }
