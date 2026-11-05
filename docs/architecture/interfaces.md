@@ -590,7 +590,7 @@ python3 tools/context.py --help
 
 ## crates/planner — 三方比较与基本计划（S019）
 
-状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。首次合并、冲突副本、移动/删除矩阵由后续卡补齐，本卡遇到这些输入只输出延期裁决。
+状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。冲突副本、移动/删除矩阵由后续卡补齐，本卡遇到这些输入只输出延期裁决。没有基线的输入转交首次合并入口（见下一节）。
 
 ### 模块与契约
 
@@ -601,12 +601,13 @@ python3 tools/context.py --help
 | `reconcile::ServerFact` | 服务器侧事实（B 或 R）：`path`、`kind`、`entry_id`、`revision`、`version: Option<VersionId>`（文件由 `file()` 保证为 `Some`，目录为 `None`）、`observed_mtime`；构造 `file(path, content, entry_id, revision, version)` / `directory(path, entry_id, revision)` / `with_observed_mtime(mtime)` |
 | `reconcile::LocalFact` | 本地事实 L：`path`、`kind`、`generation`、`observed_mtime`；构造 `file(path, content, generation)` / `directory(path, generation)` / `with_observed_mtime(mtime)` |
 | `reconcile::Plan` | `path`（优先基线位置，其次本地，再其次远端）、`action`、`prerequisites: Vec<Prerequisite>`、`dependencies: Vec<Dependency>`、`local_protection: LocalProtection`；纯值，不承诺执行成功 |
-| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`Defer(DeferReason)` |
-| `reconcile::DeferReason` | `FirstSync`（无基线，design §9.2）、`MissingEntry`（某一侧缺失，design §10.3）、`IdentityReplaced`（远端身份已非基线身份，I03）、`LocationOrKindChanged`（移动/类型互换，design §9.5、§10.1）、`ContentConflict`（双方都变且结果不同，design §10）、`IncompleteFacts`（自称内容变化却给不出文件版本） |
-| `reconcile::Prerequisite` | `BaseRevisionCurrent { expected }`（服务器修订仍等于计划基线）、`GenerationUnchanged { expected }`（本地代际未变）、`UsagePermitsChange`（无写入句柄）、`TargetPathUsable`（父目录已同步、名称可表示、无同名另一类型条目） |
+| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`Defer(DeferReason)`；首次合并另有 `UploadNewEntry`、`CreateFromRemote`、`BindRemoteEntry`、`PreserveBoth`（S020，见下一节） |
+| `reconcile::DeferReason` | `FirstSync`（无基线，转交 design §9.2 的首次合并入口）、`MissingEntry`（某一侧缺失，design §10.3）、`IdentityReplaced`（远端身份已非基线身份，I03）、`LocationOrKindChanged`（移动/类型互换，design §9.5、§10.1）、`ContentConflict`（双方都变且结果不同，design §10）、`IncompleteFacts`（自称内容变化却给不出文件版本） |
+| `reconcile::Prerequisite` | `BaseRevisionCurrent { expected }`（服务器修订仍等于计划基线）、`GenerationUnchanged { expected }`（本地代际未变）、`UsagePermitsChange`（无写入句柄）、`TargetPathUsable`（父目录已同步、名称可表示、无同名另一类型条目）、`ServerPathVacant`（服务器该路径仍无条目，首次合并的创建 CAS）、`LocalPathVacant`（本地该路径仍无条目，避免覆盖扫描后新建的本地内容） |
 | `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }` |
 | `reconcile::LocalProtection` | `NotNeeded`（无操作）、`KeepLocalContent`（字节不动，只在基线写入后推进状态）、`SnapshotBeforeReplace { generation }`、`UploadSnapshot { generation }` |
 | `reconcile::reconcile(base, local, remote)` | 三项 `Option<&…>`，`None` 表示该侧没有该条目（删除事实）；返回 `Result<Plan, PlanError>`，三项都缺失返回 `PlanError::NoFacts` |
+| `reconcile::PlanError` | `NoFacts`（没有可比对的条目）、`PathMismatch`（首次合并两侧事实路径不同，调用方没有按规范路径配对） |
 
 ### 判定规则
 
@@ -620,6 +621,30 @@ python3 tools/context.py --help
 - 同一三方输入重复计算得到完全相同的 `Plan`（含前提与依赖顺序：按 `Prerequisite`/`Dependency` 声明顺序）。
 - 只输出计划、不执行：不覆盖文件、不删除文件、不推导删除、不做 I/O。
 - 缺少必需事实（如内容变化却无 `VersionId`）不降级成“只推进元数据”，而是延期裁决。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/planner — 首次合并计划（S020）
+
+状态：S020 在 `crates/planner/src/first_sync.rs` 落地 design §9.2 第 4—7 步（C22、I07）。与 `reconcile` 的区分是结构性的：本入口**不接受基线参数**，因此不会把“另一端没有”当成删除；已经同步过、只是游标过期的设备必须带旧基线走 `reconcile`（design §9.2 末段），不得调用本入口。纯规则、无 I/O；`reconcile` 的 `Action`/`Prerequisite`/`PlanError` 随之扩充但没有改变已有分支的行为。
+
+| 模块 | 契约 |
+| --- | --- |
+| `first_sync::BindingMode` | `Full`（远端独有的文件先下载完整内容再呈现）、`OnDemand`（先建占位，内容按需下载）；客户端 Binding 配置映射到此枚举，不保留第二套拼写 |
+| `first_sync::PreserveReason` | `ContentDiffers`（同类型不同内容：服务器条目保留名称，本地另成冲突条目）、`KindDiffers`（文件与目录同名：保留双方类型，本地一方另名并告知用户） |
+| `first_sync::plan_first_sync(local, remote, mode)` | 两侧 `Option<&…>` 是**同一规范路径**上的事实；返回 `Result<Plan, PlanError>`。两侧都缺失 → `PlanError::NoFacts`；两侧路径不同 → `PlanError::PathMismatch` |
+| `reconcile::Action::UploadNewEntry { generation }` | 仅本地存在：服务器新建条目；前提 `GenerationUnchanged`、`TargetPathUsable`、`ServerPathVacant`；依赖 `ParentDirectoryReady` +（文件）`SnapshotLocalContent`；保护 `UploadSnapshot`（目录为 `KeepLocalContent`） |
+| `reconcile::Action::CreateFromRemote { entry_id, revision, version, mode }` | 仅远端存在：本地建立条目；前提 `BaseRevisionCurrent`（快照修订）、`TargetPathUsable`、`LocalPathVacant`；依赖 `ParentDirectoryReady` +（`Full` 模式的文件）`DownloadVersion`；保护 `NotNeeded` |
+| `reconcile::Action::BindRemoteEntry { entry_id, revision, version }` | 同路径、同类型、同内容：只绑定远端 `EntryId` 与基线，无依赖，保护 `KeepLocalContent` |
+| `reconcile::Action::PreserveBoth(PreserveReason)` | 同路径无法证明同一结果：双方都保留，无依赖（副本身份与名称归冲突规则），保护 `KeepLocalContent` |
+
+判定规则与不变量：
+
+- 内容相同只按长度 + SHA-256（`EntryKind` 相等）判定，不看名称相似度或 `mtime`；目录之间按名称合并（`BindRemoteEntry`，`version: None`）。
+- 任何输入组合都不产生删除或覆盖：允许的动作只有 `UploadNewEntry`、`CreateFromRemote`、`BindRemoteEntry`、`PreserveBoth` 与 `Defer`；本地存在时 `local_protection` 永不为 `NotNeeded`（I02）。
+- `Full` 模式下远端文件给不出 `VersionId` 时输出 `Defer(IncompleteFacts)`，不降级成“只建占位”；`OnDemand` 模式仍可占位。
+- 同一输入多次计算得到完全相同的 `Plan`（含前提与依赖顺序）。
+- 未做（后续卡/上层）：服务器一致性元数据快照（`snapshot_id + epoch + high_water_seq`）与本地导入清单归扫描/会话层；快照期间事件的接续与上传前 CAS 的执行归执行器；冲突副本名称、`OpId` 身份与长度预算归 S021。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
 
