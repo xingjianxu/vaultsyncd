@@ -1,0 +1,56 @@
+# 规划器操作重排样本（S023，docs/design.md §6 的 I02/I03/I04/I06/I07、§21.1 的 T02/T04/T09—T11）。
+#
+# 每行一个场景：<种子> <场景名> <操作>...
+#
+#   种子：十进制或 0x 前缀十六进制，固定值。测试用它挑选重排次序；失败报告会打印种子与最短
+#         操作轨迹，把种子给 VAULTSYNCD_PLANNER_REPLAY 就能只重放这个场景（见
+#         crates/planner/tests/op_reorder.rs 的模块文档）。
+#   场景名：只用于报告，不含语义。
+#   操作：<槽位>.<动作>[.<参数>]，空格分隔。
+#
+# 槽位：report、notes 是文件；docs 是目录（目录没有文件内容，因此只能移动、删除与重试）。
+# 动作：
+#   local-edit.<摘要>   设备把该条目保存成新内容（本地代际 +1）
+#   remote-edit.<摘要>  另一设备已提交的新内容（服务器修订与内容版本 +1）
+#   local-move.<目标>   本地把该条目挪到另一个路径（身份不变）
+#   remote-move.<目标>  已提交的移动（服务器修订 +1）
+#   local-delete        本地删除该条目
+#   remote-delete       已提交的删除
+#   recreate.<摘要>     原路径上重新新建条目：新身份（I03）
+#   retry               同一逻辑操作重试：事实不变，只多加一个检查点（I06）
+# 摘要取 0—3，测试把它展开成固定长度与 SHA-256；目标取 0—2，对应各槽位的候选路径。
+#
+# 场景挑得少而短：每行不超过 4 个操作，这样重排后仍能人工看懂最短轨迹。
+
+# 编辑后另一端也编辑：内容冲突要有稳定身份的副本，重试不造第二份（I02/I04/I06）。
+0x23001 content-conflict      report.local-edit.2 report.remote-edit.3 report.retry
+
+# 本地移动 + 远端改内容：移动+修改的保守双副本，本地内容与意图位置都有保留去处（I02/I04）。
+0x23002 move-then-edit        report.local-move.1 report.remote-edit.3
+
+# 本地改内容 + 远端已提交删除：删除不能吞掉修改，先提交恢复条目（I02/I04、T11）。
+0x23003 delete-then-modify    notes.local-edit.2 notes.remote-delete
+
+# 本地移动 + 远端只前进修订：单侧移动提交，身份不变（I03、T09）。
+0x23004 both-move             notes.local-move.1 notes.remote-move.0
+
+# 删除后原路径重建：新身份不得接管旧身份的本地内容（I03）。
+0x23005 recreate-at-path      report.remote-delete report.recreate.3 report.local-edit.1
+
+# 两端都删除：同一身份幂等成功，不再次清理（I06）。
+0x23006 delete-both           report.local-delete report.remote-delete
+
+# 目录移动 + 远端删除：目录子树保留需要目录级计划，只能重规划（I02）。
+0x23007 dir-move-delete       docs.local-move.1 docs.remote-delete
+
+# 编辑、重试、另一端编辑、再重试：重排后仍要收敛到同一份冲突计划（I06）。
+0x23008 retry-chain           report.local-edit.1 report.retry report.remote-edit.2 report.retry
+
+# 本地移动+改内容，远端改内容：双方意图都保留（I02/I04）。
+0x23009 moved-and-modified    notes.local-edit.3 notes.local-move.1 notes.remote-edit.2
+
+# 本地移动后远端删除：本地内容另存为恢复条目，保留用户选的位置（I02、T11）。
+0x2300a moved-then-deleted    notes.local-move.1 notes.remote-delete
+
+# 双方把同一身份移到不同位置：主条目留已提交位置，迟到分支保留本地意图位置（I03/I04）。
+0x2300b both-move-different   notes.local-move.2 notes.remote-move.1
