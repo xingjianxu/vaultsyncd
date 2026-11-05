@@ -259,14 +259,22 @@ pub trait ObjectBlobPort {
     /// # Errors
     ///
     /// 见 [`BlobError`]：源不可读、存储失败（含分类）、读回校验失败。
-    fn stage_working_copy(&mut self, source: &Path, staging: &Path) -> Result<StagedBlob, BlobError>;
+    fn stage_working_copy(
+        &mut self,
+        source: &Path,
+        staging: &Path,
+    ) -> Result<StagedBlob, BlobError>;
 
     /// 把已校验的暂存副本发布到内容地址路径（不覆盖既有对象，成功后刷文件与目录）。
     ///
     /// # Errors
     ///
     /// 见 [`BlobError`]；目标存在时**不是**错误，返回 `already_present = true`。
-    fn publish_staged(&mut self, staged: &StagedBlob, object: &Path) -> Result<PublishedBlob, BlobError>;
+    fn publish_staged(
+        &mut self,
+        staged: &StagedBlob,
+        object: &Path,
+    ) -> Result<PublishedBlob, BlobError>;
 
     /// 丢弃未发布的暂存副本。
     ///

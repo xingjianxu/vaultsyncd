@@ -20,7 +20,9 @@ pub mod error;
 pub mod read;
 
 pub use capture::{CaptureRequest, CapturedObject, ExpectedContent, ReuseOutcome, capture_object};
-pub use error::{CaptureFailure, CaptureFailureReason, DiscardOutcome, ReadFailure, ReadFailureReason};
+pub use error::{
+    CaptureFailure, CaptureFailureReason, DiscardOutcome, ReadFailure, ReadFailureReason,
+};
 pub use read::{ObjectBytes, read_object};
 
 /// 内容地址长度（SHA-256 原始 32 字节）。
@@ -211,7 +213,12 @@ impl ObjectLayout {
         if name.is_empty() {
             return Err(InvalidStagingName::Empty);
         }
-        if name == "." || name == ".." || name.contains('/') || name.contains('\0') || name.contains('\\') {
+        if name == "."
+            || name == ".."
+            || name.contains('/')
+            || name.contains('\0')
+            || name.contains('\\')
+        {
             return Err(InvalidStagingName::NotASingleName);
         }
         Ok(())
@@ -264,7 +271,10 @@ mod tests {
             layout.staging_path("../escape"),
             Err(InvalidStagingName::NotASingleName)
         );
-        assert_eq!(layout.staging_path("."), Err(InvalidStagingName::NotASingleName));
+        assert_eq!(
+            layout.staging_path("."),
+            Err(InvalidStagingName::NotASingleName)
+        );
         assert_eq!(layout.staging_path(""), Err(InvalidStagingName::Empty));
         assert_eq!(
             ObjectLayout::validate_staging_name("a/b"),

@@ -94,17 +94,18 @@ pub fn capture_object(
     layout: &ObjectLayout,
     request: &CaptureRequest,
 ) -> Result<CapturedObject, CaptureFailure> {
-    let staging = layout.staging_path(&request.staging_name).map_err(|error| {
-        CaptureFailure::new(
-            CaptureFailureReason::from(error),
-            DiscardOutcome::NotNeeded,
-        )
-    })?;
+    let staging = layout
+        .staging_path(&request.staging_name)
+        .map_err(|error| {
+            CaptureFailure::new(CaptureFailureReason::from(error), DiscardOutcome::NotNeeded)
+        })?;
 
     // 端口在报错时已删除未验证的暂存文件，因此这里不重复丢弃。
     let staged = port
         .stage_working_copy(&request.source, &staging)
-        .map_err(|error| CaptureFailure::new(CaptureFailureReason::Port(error), DiscardOutcome::NotNeeded))?;
+        .map_err(|error| {
+            CaptureFailure::new(CaptureFailureReason::Port(error), DiscardOutcome::NotNeeded)
+        })?;
 
     if let Some(reason) = check_staged(&staged, request.expected) {
         return Err(fail_after_staging(port, &staged, reason));
@@ -252,7 +253,9 @@ mod tests {
     use super::*;
     use crate::objects::error::ReadFailureReason;
     use crate::objects::read::read_object;
-    use crate::ports::object_store::{FileKey, PublishedBlob, StoredBytes, StoredFacts, StorageFailure};
+    use crate::ports::object_store::{
+        FileKey, PublishedBlob, StorageFailure, StoredBytes, StoredFacts,
+    };
     use std::path::{Path, PathBuf};
 
     const HEX_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -320,9 +323,7 @@ mod tests {
         ) -> Result<StagedBlob, BlobError> {
             self.staged_calls
                 .push((source.to_path_buf(), staging.to_path_buf()));
-            self.stage
-                .take()
-                .expect("测试必须预设 stage 结果")
+            self.stage.take().expect("测试必须预设 stage 结果")
         }
 
         fn publish_staged(
@@ -350,16 +351,12 @@ mod tests {
 
         fn verify_object(&mut self, object: &Path) -> Result<StoredFacts, BlobError> {
             self.verified.push(object.to_path_buf());
-            self.verify
-                .take()
-                .expect("测试必须预设 verify 结果")
+            self.verify.take().expect("测试必须预设 verify 结果")
         }
 
         fn read_object(&mut self, object: &Path) -> Result<StoredBytes, BlobError> {
             self.verified.push(object.to_path_buf());
-            self.read
-                .take()
-                .expect("测试必须预设 read 结果")
+            self.read.take().expect("测试必须预设 read 结果")
         }
     }
 
@@ -414,7 +411,8 @@ mod tests {
         let wanted = digest(HEX_A);
         let mut port = FakePort::new().with_staged(staged(digest(HEX_B), 5));
         let layout = ObjectLayout::new("/obj");
-        let failure = capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("摘要不符");
+        let failure =
+            capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("摘要不符");
         assert_eq!(failure.code(), "digest_mismatch");
         assert!(!failure.is_committable());
         assert_eq!(failure.staging, DiscardOutcome::Discarded);
@@ -466,7 +464,8 @@ mod tests {
         aliased.staged = aliased.source;
         let mut port = FakePort::new().with_staged(aliased);
         let layout = ObjectLayout::new("/obj");
-        let failure = capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("共享 inode");
+        let failure =
+            capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("共享 inode");
         assert_eq!(failure.code(), "shared_writable_inode");
         assert!(port.published.is_empty());
         assert_eq!(failure.staging, DiscardOutcome::Discarded);
@@ -479,7 +478,8 @@ mod tests {
         aliased.staged = key(11, 2, 5);
         let mut port = FakePort::new().with_staged(aliased);
         let layout = ObjectLayout::new("/obj");
-        let failure = capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("硬链接别名");
+        let failure =
+            capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("硬链接别名");
         assert_eq!(failure.code(), "staging_alias");
         assert!(port.published.is_empty());
     }
@@ -495,7 +495,8 @@ mod tests {
             });
         port.publish_present = true;
         let layout = ObjectLayout::new("/obj");
-        let captured = capture_object(&mut port, &layout, &request(wanted, 5)).expect("复用既有对象");
+        let captured =
+            capture_object(&mut port, &layout, &request(wanted, 5)).expect("复用既有对象");
         assert_eq!(captured.reuse, ReuseOutcome::ExistingVerified);
         assert_eq!(captured.staging, DiscardOutcome::Discarded);
 
@@ -522,7 +523,8 @@ mod tests {
                 digest: wanted,
             });
         let layout = ObjectLayout::new("/obj");
-        let failure = capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("发布后不符");
+        let failure =
+            capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("发布后不符");
         assert_eq!(failure.code(), "post_publish_mismatch");
         assert!(!failure.is_committable());
         assert_eq!(port.published.len(), 1);
