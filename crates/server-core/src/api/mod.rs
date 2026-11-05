@@ -13,8 +13,13 @@
 //! - [`operations`] 是操作命令端点：put/create/move/delete/restore 的形状与前置、`(root, device,
 //!   op_id)` 的幂等重放/协议错误判定、`pending` 不判已同步，以及 design §15.4 的错误码与状态码映射
 //!   （design §15.2—15.4、I06）。
+//! - [`events`] 与 [`snapshots`] 是一致性快照、`changes` 拉取与 SSE 提示：游标是否可服务（过期/超前
+//!   一律 410 `CURSOR_EXPIRED`，不返回假空集）、事件保留窗口、分页上限，以及 SSE 只在头变化时提示
+//!   （design §9.3—9.4、I09）。
 
 pub mod content;
+pub mod events;
 pub mod operations;
 pub mod roots;
+pub mod snapshots;
 pub mod uploads;
