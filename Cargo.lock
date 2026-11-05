@@ -1480,6 +1480,14 @@ name = "vaultsyncd-fs-common"
 version = "0.1.0"
 
 [[package]]
+name = "vaultsyncd-planner"
+version = "0.1.0"
+dependencies = [
+ "vaultsyncd-domain",
+ "vaultsyncd-fs-common",
+]
+
+[[package]]
 name = "vaultsyncd-platform-linux-server"
 version = "0.1.0"
 

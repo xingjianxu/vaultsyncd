@@ -535,6 +535,41 @@ python3 tools/context.py --help
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
 
+## crates/planner — 三方比较与基本计划（S019）
+
+状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。首次合并、冲突副本、移动/删除矩阵由后续卡补齐，本卡遇到这些输入只输出延期裁决。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `reconcile::ContentFingerprint` | 内容等价判定值：`new(size: u64, sha256: [u8; 32])`、`size()`、`sha256()`；相等要求长度与摘要同时相同。摘要由调用方（传输/平台层）计算后以值传入，planner 不读字节 |
+| `reconcile::EntryKind` | `File(ContentFingerprint)` / `Directory`（目录没有文件内容版本，design I12） |
+| `reconcile::ServerFact` | 服务器侧事实（B 或 R）：`path`、`kind`、`entry_id`、`revision`、`version: Option<VersionId>`（文件由 `file()` 保证为 `Some`，目录为 `None`）、`observed_mtime`；构造 `file(path, content, entry_id, revision, version)` / `directory(path, entry_id, revision)` / `with_observed_mtime(mtime)` |
+| `reconcile::LocalFact` | 本地事实 L：`path`、`kind`、`generation`、`observed_mtime`；构造 `file(path, content, generation)` / `directory(path, generation)` / `with_observed_mtime(mtime)` |
+| `reconcile::Plan` | `path`（优先基线位置，其次本地，再其次远端）、`action`、`prerequisites: Vec<Prerequisite>`、`dependencies: Vec<Dependency>`、`local_protection: LocalProtection`；纯值，不承诺执行成功 |
+| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`Defer(DeferReason)` |
+| `reconcile::DeferReason` | `FirstSync`（无基线，design §9.2）、`MissingEntry`（某一侧缺失，design §10.3）、`IdentityReplaced`（远端身份已非基线身份，I03）、`LocationOrKindChanged`（移动/类型互换，design §9.5、§10.1）、`ContentConflict`（双方都变且结果不同，design §10）、`IncompleteFacts`（自称内容变化却给不出文件版本） |
+| `reconcile::Prerequisite` | `BaseRevisionCurrent { expected }`（服务器修订仍等于计划基线）、`GenerationUnchanged { expected }`（本地代际未变）、`UsagePermitsChange`（无写入句柄）、`TargetPathUsable`（父目录已同步、名称可表示、无同名另一类型条目） |
+| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }` |
+| `reconcile::LocalProtection` | `NotNeeded`（无操作）、`KeepLocalContent`（字节不动，只在基线写入后推进状态）、`SnapshotBeforeReplace { generation }`、`UploadSnapshot { generation }` |
+| `reconcile::reconcile(base, local, remote)` | 三项 `Option<&…>`，`None` 表示该侧没有该条目（删除事实）；返回 `Result<Plan, PlanError>`，三项都缺失返回 `PlanError::NoFacts` |
+
+### 判定规则
+
+- **比较对象**：内容（长度 + SHA-256）、位置（名称/父目录）、类型与“该侧是否存在”；`mtime` 只随事实记录，任何分支都不参与判定（I04）。长度与摘要相同、仅 `mtime` 相同或位置相同都不足以归并。
+- **“R=B”按 `Revision`**：远端修订与基线相同且形状相同才算无变化；“L=B”只能按本地观察到的位置、类型与内容判定。任一证据显示变化即按“有变化”处理。
+- **四条基本分支**：`L=B、R=B` → `NoOp`；`L=B、R≠B` → `ApplyRemote`（前提 `BaseRevisionCurrent`、`GenerationUnchanged`、`UsagePermitsChange`、`TargetPathUsable`；内容变化时有 `DownloadVersion` 依赖并要求替换前快照，仅元数据变化时不需要下载、本地字节不动）；`L≠B、R=B` → `UploadLocal`（携带基线 `Revision`，依赖父目录就绪与本地快照，保护说明为上传快照）；`L≠B、R≠B` 且位置/类型/内容都相同 → `MergeSameResult`（不传输内容、不造副本，只在基线写入后推进状态）。
+- **延期裁决**：无基线、某一侧缺失、远端身份被替换、位置或类型变化、双方结果不同、事实不完整都输出 `Action::Defer`；这类计划没有前提与依赖，`local_protection` 固定为 `KeepLocalContent`，不允许执行器删除或覆盖本地内容（I02、I04、I07）。
+
+### 不变量
+
+- 同一三方输入重复计算得到完全相同的 `Plan`（含前提与依赖顺序：按 `Prerequisite`/`Dependency` 声明顺序）。
+- 只输出计划、不执行：不覆盖文件、不删除文件、不推导删除、不做 I/O。
+- 缺少必需事实（如内容变化却无 `VersionId`）不降级成“只推进元数据”，而是延期裁决。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
+
 ## api/ — 远端协议契约源与生成配置（S024）
 
 状态：S024 建立最小契约与生成通路。`api/` 是远端 HTTP 协议的唯一编辑源（design §5.6、§15.1—15.4），生成代码提交入库，`cargo xtask check` 用逐字节比对守住“契约与代码同步”。业务语义（状态机、不变量）仍以 design 为准，这里只记录契约文件的形状与生成器边界。

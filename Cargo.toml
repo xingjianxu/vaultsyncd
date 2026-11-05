@@ -9,6 +9,7 @@ resolver = "3"
 members = [
     "crates/domain",
     "crates/fs-common",
+    "crates/planner",
     "crates/platform-linux-server",
     "crates/protocol",
     "crates/server-store",
@@ -19,6 +20,8 @@ members = [
 # crates/protocol 是 api/openapi.yaml 生成的 wire 契约与 domain→wire 显式映射（S024），只依赖
 # serde 与 domain，Windows 客户端与 Linux 服务端共用，因此同样进 default-members：两侧编译与
 # 契约测试都在便携检查里跑。
+# crates/planner 是纯规则的三方比较与计划核心（S019），只依赖 domain 与 fs-common，不做任何
+# I/O，因此同样进 default-members。
 #
 # crates/server-store 是服务端 SQLite 存储层（S026）：依赖 SQLx/Tokio 与 bundled SQLite，
 # 没有任何平台 API，任何宿主目标都能编译与测试，因此进 default-members，让迁移框架的回归进入
@@ -30,6 +33,7 @@ members = [
 default-members = [
     "crates/domain",
     "crates/fs-common",
+    "crates/planner",
     "crates/protocol",
     "crates/server-store",
 ]
