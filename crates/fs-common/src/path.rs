@@ -73,6 +73,17 @@ impl RelativePath {
     pub fn components(&self) -> &[String] {
         &self.components
     }
+
+    /// 前 `len` 个分量构成的祖先/自身路径。
+    ///
+    /// 调用方保证 `1 <= len <= components().len()`；`0`（Root 自身）不是 `RelativePath`，
+    /// 越界是调用方 bug。排除规则用它报告“命中的是哪个祖先目录”（`ignore::decide`）。
+    pub(crate) fn prefix(&self, len: usize) -> RelativePath {
+        debug_assert!(len > 0 && len <= self.components.len(), "前缀长度越界");
+        RelativePath {
+            components: self.components[..len].to_vec(),
+        }
+    }
 }
 
 impl fmt::Display for RelativePath {
@@ -327,6 +338,14 @@ mod tests {
                 issue: NameIssue::TooLong { .. },
             }
         ));
+    }
+
+    #[test]
+    fn prefix_returns_the_leading_components() {
+        let path = path("a/b/c");
+        assert_eq!(path.prefix(1).to_string(), "a");
+        assert_eq!(path.prefix(2).to_string(), "a/b");
+        assert_eq!(path.prefix(3), path);
     }
 
     #[test]
