@@ -9,7 +9,9 @@
 //! - S014：`files/` 的普通文件发布原型——受限目录句柄访问（`openat2` 或逐段 `O_NOFOLLOW`）、
 //!   目标文件系统内暂存、`FICLONE`/校验复制、文件与目录刷盘、受控替换与前提核对。
 //!
-//! `watcher/`、`ipc/` 尚未实现，这里没有占位实现。
+//! - S050：`watcher/` 的 inotify 目录监视——递归登记、变化线索、队列溢出重建与登记缺口上报。
+//!
+//! `ipc/` 尚未实现，这里没有占位实现。
 //!
 //! 边界（design §11.4—11.5、§12.2、§16.1）：
 //!
@@ -30,3 +32,5 @@
 pub mod files;
 #[cfg(target_os = "linux")]
 pub mod mounts;
+#[cfg(target_os = "linux")]
+pub mod watcher;
