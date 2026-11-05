@@ -105,6 +105,25 @@ impl BackendKind {
             BackendKind::Other => "other",
         }
     }
+    /// 按短名解析（与 [`BackendKind::as_str`] 互为逆运算，用于读回已记录的规格）。
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let kind = match value {
+            "btrfs" => BackendKind::Btrfs,
+            "fuse" => BackendKind::Fuse,
+            "fuseblk" => BackendKind::Fuseblk,
+            "nfs" => BackendKind::Nfs,
+            "cifs" => BackendKind::Cifs,
+            "overlay" => BackendKind::Overlay,
+            "tmpfs" => BackendKind::Tmpfs,
+            "ext4" => BackendKind::Ext4,
+            "xfs" => BackendKind::Xfs,
+            "zfs" => BackendKind::Zfs,
+            "other" => BackendKind::Other,
+            _ => return None,
+        };
+        Some(kind)
+    }
 }
 
 /// 按 `fstatfs` 幻数分类后端，幻数不认识时退回 fstype 名。
@@ -824,6 +843,26 @@ mod tests {
         assert_eq!(classify_backend(0, "nfs"), BackendKind::Nfs);
         assert_eq!(classify_backend(0, "smb3"), BackendKind::Cifs);
         assert_eq!(classify_backend(0, "vfat"), BackendKind::Other);
+    }
+
+    #[test]
+    fn backend_short_names_round_trip_through_parse() {
+        for kind in [
+            BackendKind::Btrfs,
+            BackendKind::Fuse,
+            BackendKind::Fuseblk,
+            BackendKind::Nfs,
+            BackendKind::Cifs,
+            BackendKind::Overlay,
+            BackendKind::Tmpfs,
+            BackendKind::Ext4,
+            BackendKind::Xfs,
+            BackendKind::Zfs,
+            BackendKind::Other,
+        ] {
+            assert_eq!(BackendKind::parse(kind.as_str()), Some(kind));
+        }
+        assert_eq!(BackendKind::parse("teleporter"), None);
     }
 
     #[test]

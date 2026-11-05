@@ -14,6 +14,7 @@ TEST_VOLUME="$repo_root/tools/test-volume/test-volume.sh"
 LAB_ROOT=${VAULTSYNCD_LAB_ROOT:-/data/vaultsyncd-lab}
 ADMISSION_BIN="$repo_root/target/debug/examples/storage-admission"
 FILE_PUBLISH_BIN="$repo_root/target/debug/examples/file-publish"
+PATH_ACCESS_BIN="$repo_root/target/debug/examples/path-access"
 
 CASE_TOTAL=0
 CASE_FAILED=0
@@ -89,6 +90,16 @@ build_file_publish_bin() {
 	log "产物：$FILE_PUBLISH_BIN"
 }
 
+build_path_access_bin() {
+	step "构建 S032 诊断命令（cargo build --locked --example path-access）"
+	(
+		cd "$repo_root"
+		cargo build --locked -p vaultsyncd-platform-linux-server --example path-access
+	)
+	[ -x "$PATH_ACCESS_BIN" ] || die "缺少产物 $PATH_ACCESS_BIN"
+	log "产物：$PATH_ACCESS_BIN"
+}
+
 # run_admission <子命令与参数...>：结果写入 CMD_OUT / CMD_STATUS。
 # 同时保留 ADMISSION_OUT / ADMISSION_STATUS 别名，供 S013 脚本里的直接引用继续工作。
 run_admission() {
@@ -104,6 +115,14 @@ run_admission() {
 run_file_publish() {
 	set +e
 	CMD_OUT=$("${FILE_PUBLISH_BIN:?先运行 build_file_publish_bin}" "$@" 2>&1)
+	CMD_STATUS=$?
+	set -e
+}
+
+# run_path_access <子命令与参数...>：结果写入 CMD_OUT / CMD_STATUS。
+run_path_access() {
+	set +e
+	CMD_OUT=$("${PATH_ACCESS_BIN:?先运行 build_path_access_bin}" "$@" 2>&1)
 	CMD_STATUS=$?
 	set -e
 }
