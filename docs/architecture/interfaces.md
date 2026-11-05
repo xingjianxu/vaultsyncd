@@ -791,3 +791,49 @@ python3 tools/context.py --help
 - **写事务**：写接口要求调用方已开 `BEGIN IMMEDIATE` 事务，检查与写入在同一次持锁事务内；只读接口不抢写锁。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
+
+## crates/client-store — 客户端数据库与状态表（S030）
+
+状态：S030 实现。包名 `vaultsyncd-client-store`，依赖 `sqlx 0.8`（`runtime-tokio` + `sqlite`（bundled）+ `migrate` + `macros`）与 `vaultsyncd-domain`，dev 依赖 `tokio`；在 `members` 与 `default-members` 内（无平台 API，便携检查覆盖）。与 `crates/server-store` **没有依赖关系**：两套 schema、两个数据库文件（design §5.4、§7.3）。不做文件系统 I/O、不规划、不传输、不生成身份/指纹/generation。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `db::CLIENT_APPLICATION_ID` | `0x434C4E54`（ASCII `CLNT`），写入 `PRAGMA application_id`；与 `server_store::SERVER_APPLICATION_ID`（`VSN1`）互相拒绝 |
+| `db::MIGRATOR` | `sqlx::migrate!("./migrations")` 编译期内嵌 `crates/client-store/migrations/*.sql`（当前只有 `0001_initial.sql`）；已发布文件不得改写（校验和不符即拒绝启动） |
+| `db::target_schema_version()` | 内嵌迁移最大版本号（当前 `1`），即 `PRAGMA user_version` 的目标值 |
+| `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`，客户端升级不清库（design §19.3），回退走整套备份 |
+| `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非客户端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；失败返回 `DbError` 且不给可写句柄。父目录须已存在 |
+| `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
+| `db::Database::begin_write()` | `BEGIN IMMEDIATE` 短写事务（`sqlx::Transaction<'static, Sqlite>`），等锁上限 10 s；只允许数据库语句 |
+| `db::DbError` | `Io` / `NonUtf8Path` / `Sqlite` / `NotADatabase` / `ForeignDatabase{application_id}` / `SchemaTooNew{found,supported}` / `Backup{path,source}` / `BackupUnverified{path,detail}` / `WalUnavailable{journal_mode}` / `Migration{backup,source}`；取值与门禁规则同 S026 的服务端框架（方向相反） |
+| `bindings::SyncMode` | `Full` / `OnDemand`（数据库文本 `full` / `on_demand`，design C34；不含单向模式） |
+| `bindings::NewBinding` / `BindingRecord` | 绑定输入与读回记录：`id`(`BindingId`)、`server`(`ServerId`)、`device`(`DeviceId`)、`root`(`RootId`)、`local_path`、`cache_path`、`mode`、`rules_version`、`server_epoch` |
+| `bindings::insert_binding(tx, &NewBinding)` / `binding(conn, id)` | 写入（`local_path`/`cache_path` 非空无 NUL、`rules_version` 非空、`id` 唯一）与按身份读取 |
+| `bindings::BindingError` | `Db` / `InvalidField{field,reason}` / `DuplicateId{id}` / `MalformedRow{column}` |
+| `entries::EntryKind` | `File` / `Directory`（数据库文本 `file` / `directory`） |
+| `entries::{BaselineEntry, RemoteEntry}` | 同一组字段：`entry`、`parent: Option<EntryId>`、`name`、`kind`、`revision: Revision`、`content_version: Option<VersionId>`、`deleted: bool` |
+| `entries::LocalEntry` | `entry`、`generation: Generation`、`dirty: Dirty`、`residency: Residency`、`fingerprint: Option<Vec<u8>>`、`file_identity: Option<Vec<u8>>` |
+| `entries::{put_baseline,put_remote,put_local}` | 按 `(binding_id, entry_id)` upsert；写库前检查根条目形状与空字节 |
+| `entries::{baseline_entry,remote_entry,local_entry}` | 只读查询（`&mut SqliteConnection`，可直接用连接池）；不存在返回 `None` |
+| `entries::{remove_baseline,remove_remote,remove_local}` | 删除单行，返回是否命中；不影响另外两张表 |
+| `entries::EntryError` | `Db` / `RootEntryShape{reason}` / `EmptyBytes{field}` / `MalformedRow{column}` |
+| `queue::NewPendingOp` / `PendingOp` | 入队输入与读回记录：`op`(`OpId`)、`binding`、`kind`、`entry: Option<EntryId>`、`baseline_revision`、`baseline_version`、`depends_on: Option<OpId>`、`pinned_version: Option<VersionId>`、`attempts: u32`、`last_error: Option<ErrorCode>` |
+| `queue::enqueue(tx, &NewPendingOp)` / `pending_op(conn, op)` / `pending_ops_for_binding(conn, binding)` | 入队（类型非空、禁止自依赖、依赖必须已在队列中）、按身份读取、按插入顺序（`rowid`）列队列 |
+| `queue::record_attempt_failure(tx, op, code)` / `complete(tx, op)` | `attempts+1` 且写最近错误码（其余字段不变）/ 成功后出队（仍有依赖方时因 `ON DELETE RESTRICT` 失败） |
+| `queue::QueueError` | `Db` / `EmptyKind` / `DuplicateOp{op}` / `SelfDependency{op}` / `UnknownDependency{op}` / `MalformedRow{column}` |
+
+### 表与不变量
+
+- **三张条目表互相独立**：`baseline_entries`、`remote_entries`、`local_entries` 之间没有外键，三张表各自只依赖 `bindings(id)`（`ON DELETE CASCADE` 只随绑定解绑）。因此同一条目能同时保存“旧基线（revision 3）+ 新远端（revision 5）+ 本地 dirty（generation 7）”，任一张表的写入或删除都不约束另外两张（design §7.3、§8.1、§8.4）。
+- **无基线也能有远端/本地行**：首次同步（I07）与本地新建文件在提交前都没有共同基线，两张表都不引用 `baseline_entries`。
+- **位置用身份表达**：`parent_entry_id` + `name`；根条目（`parent_entry_id IS NULL`）名称必须为空且只能是目录，与 `CHECK` 一致。
+- **目录没有内容版本**：`CHECK (kind <> 'directory' OR content_version_id IS NULL)`（design §7.1、I12）。
+- **`dirty`/`residency` 文本与 design §8.1 拼写一致**（`clean`/`dirty`/`snapshotting`/`awaiting_commit`、`metadata_only`/`partial`/`materialized`），由 `CHECK` 限定；`clean` 只是上次观察，不是“文件未变”的证明（design §8.4）。
+- **`generation` 只由调用方推进**：本层不改写它，写入方按观察到的本地修改推进；旧上传确认不得清除新 generation 的规则属执行器。
+- **队列顺序 = 插入顺序**：取队列用 `ORDER BY rowid`，不使用客户端时钟；`kind` 的取值集合留给执行器卡（S055），本层只要求非空；`depends_on` 自引用受 `CHECK (depends_on <> op_id)` 与 `ON DELETE RESTRICT` 约束。
+- **种类门禁双向**：客户端拒绝 `VSN1` 服务端库（测试断言拒绝后 `application_id`、`user_version`、表结构与 `journal_mode` 均未改动，且没有建出任何客户端表）；服务端拒绝 `CLNT` 客户端库由 S026 的门禁与测试覆盖（同一 `application_id` 取值）。
+- **迁移/备份/连接默认项**：与 S026 同一套规则——迁移号与 SQLx 记账同事务、迁移前 `VACUUM INTO` + `quick_check` 备份（仅非空库且确有待执行迁移）、`user_version` 与 `_sqlx_migrations` 取大拒绝旧二进制、`WAL`+`foreign_keys`+`busy_timeout=10 s` 每连接默认、池上限 4。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-client-store`、`cargo clippy --locked -p vaultsyncd-client-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-client-store`、`sqlite3 :memory: < crates/client-store/migrations/0001_initial.sql`。
