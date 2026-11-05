@@ -182,7 +182,16 @@ impl Service {
             ScanPolicy::default(),
         ));
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
-        let router = http::router(Arc::clone(&lifecycle), auth, uploads, roots, content);
+        // 操作命令端点（S047）：命令执行链路属 S052，本版新命令显式 503 SERVICE_NOT_READY。
+        let operations = Arc::new(crate::operations::OperationsContext::new(Arc::clone(&auth)));
+        let router = http::router(
+            Arc::clone(&lifecycle),
+            auth,
+            uploads,
+            roots,
+            content,
+            operations,
+        );
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
             shutdown.await;

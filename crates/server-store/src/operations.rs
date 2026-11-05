@@ -482,6 +482,44 @@ pub async fn operation_in_scope(
     row.map(OperationRow::into_record).transpose()
 }
 
+/// 按 OpId 读一条操作记录（跨设备查询用）：同一 Root 的同一 OpId 必须唯一。
+///
+/// 客户端的结果查询只知道自己的 `OpId`（`GET /v1/roots/{root}/operations/{op}`，design §15.2），
+/// 幂等键里的设备由记录本身给出。`OpId` 是 128 位随机值，同一 Root 内跨设备撞值意味着坏数据；
+/// 发现多行时不猜哪一个，报 [`OperationError::DuplicateOperation`]。
+pub async fn operation_of_root_in_scope(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+    root: RootId,
+    op: OpId,
+) -> Result<Option<OperationRecord>, OperationError> {
+    let rows = sqlx::query_as::<_, OperationRow>(&format!(
+        "SELECT {OPERATION_COLUMNS} FROM operations o JOIN roots r ON r.id = o.root_id \
+         WHERE o.root_id = ?1 AND o.op_id = ?2 AND r.owner_id = ?3"
+    ))
+    .bind(root.as_bytes().as_slice())
+    .bind(op.as_bytes().as_slice())
+    .bind(owner.as_bytes().as_slice())
+    .fetch_all(conn)
+    .await
+    .map_err(OperationError::Db)?;
+    let mut records = rows
+        .into_iter()
+        .map(OperationRow::into_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    match records.len() {
+        0 => Ok(None),
+        1 => Ok(records.pop()),
+        _ => Err(OperationError::DuplicateOperation {
+            key: OperationKey {
+                root,
+                device: records[0].key.device,
+                op,
+            },
+        }),
+    }
+}
+
 /// 删除某设备在某 Root 下的终态操作记录，返回删除行数。
 ///
 /// 调用时机由设备代际/会话生命周期决定（design §7.2、§9.4：保留紧凑结果直到相应设备代际失效）。

@@ -29,10 +29,12 @@ use vaultsyncd_protocol::generated::{
 use crate::auth::AuthContext;
 use crate::content::ContentContext;
 use crate::lifecycle::{Lifecycle, Phase};
+use crate::operations::OperationsContext;
 use crate::roots::RootContext;
 use crate::uploads::UploadsContext;
 
-/// 全部路由：健康探测（无认证）、认证端点（S043）与 Root 注册/清单（S044）。
+/// 全部路由：健康探测（无认证）、认证端点（S043）、Root 注册/清单（S044）、上传与内容（S045/S046）
+/// 与操作命令（S047）。
 ///
 /// 状态直接就是进程级状态对象，业务端点由后续功能卡加入同一个 router 并从它取数据库与授权检查。
 pub fn router(
@@ -41,6 +43,7 @@ pub fn router(
     uploads: Arc<UploadsContext>,
     roots: Arc<RootContext>,
     content: Arc<ContentContext>,
+    operations: Arc<OperationsContext>,
 ) -> Router {
     let public = Router::new()
         .route("/v1/health", get(health))
@@ -82,11 +85,23 @@ pub fn router(
             get(super::content::download),
         )
         .with_state(content);
+    // 操作命令与结果查询（S047）：幂等键与结果都来自 `operations` 表，`pending` 用 202。
+    let operations_router = Router::new()
+        .route(
+            "/v1/roots/{root}/operations",
+            post(super::operations::submit),
+        )
+        .route(
+            "/v1/roots/{root}/operations/{op}",
+            get(super::operations::status),
+        )
+        .with_state(operations);
     public
         .merge(authenticated)
         .merge(roots_router)
         .merge(uploads_router)
         .merge(content_router)
+        .merge(operations_router)
 }
 
 async fn health(State(lifecycle): State<Arc<Lifecycle>>) -> Response {
@@ -168,7 +183,8 @@ mod tests {
             Arc::clone(&auth),
             &std::env::temp_dir(),
         ));
-        router(lifecycle, auth, uploads, roots, content)
+        let operations = Arc::new(OperationsContext::new(Arc::clone(&auth)));
+        router(lifecycle, auth, uploads, roots, content, operations)
     }
 
     async fn get_health(lifecycle: Arc<Lifecycle>) -> (StatusCode, String) {
