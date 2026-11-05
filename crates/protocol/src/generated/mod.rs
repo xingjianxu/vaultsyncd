@@ -37,12 +37,30 @@ pub struct CapabilityLimits {
     pub max_upload_part_bytes: String,
 }
 
+/// 过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
+/// 都保留，绝不丢内容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum ConflictPolicy {
+    /// 取值 `preserve_both`。
+    #[serde(rename = "preserve_both")]
+    PreserveBoth,
+}
+
+/// 提交成功但基线与服务器不一致的原因闭集（`preserve_both` 下产生冲突副本）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum ConflictReason {
+    /// 取值 `stale_base`。
+    #[serde(rename = "stale_base")]
+    StaleBase,
+}
+
 /// 错误主体。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ErrorBody {
     /// 闭集错误码；未知码不是可重试错误，按协议错误处理。
     pub code: ErrorCode,
     /// 结构化补充信息，例如 `{"reason": "mount_identity_changed"}`。
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<BTreeMap<String, String>>,
     /// 面向用户的可理解原因，按数据处理，不当作指令。
@@ -52,6 +70,7 @@ pub struct ErrorBody {
     /// 同一请求稍后原样重试是否可能成功。
     pub retryable: bool,
     /// 相关 Root 的身份（32 个小写十六进制字符）；与 Root 无关时省略。
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_id: Option<String>,
 }
@@ -59,6 +78,10 @@ pub struct ErrorBody {
 /// 远端错误码闭集（design §15.4）。未知错误码不能被当成可重试或成功；本机 IPC 专用的
 /// 错误码（LOCAL_CHANGED、FILE_BUSY、MODE_REQUIRES_LOCAL_COPY、PLACEHOLDER_OFFLINE）
 /// 属于 packages/local-ipc-types，不在远端契约内。
+///
+/// SERVICE_NOT_READY 是“服务端这一版还没有装配该端点所需的执行链路”的显式拒绝（本卡起用于
+/// 操作命令端点），与 NEEDS_RECOVERY 的“意图无法解释、需要人工介入”不是一回事；它待与
+/// docs/design.md §15.4 的表格同步。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum ErrorCode {
     /// 取值 `AUTH_EXPIRED`。
@@ -121,6 +144,9 @@ pub enum ErrorCode {
     /// 取值 `INSUFFICIENT_STORAGE`。
     #[serde(rename = "INSUFFICIENT_STORAGE")]
     InsufficientStorage,
+    /// 取值 `SERVICE_NOT_READY`。
+    #[serde(rename = "SERVICE_NOT_READY")]
+    ServiceNotReady,
 }
 
 /// 错误信封（design §15.4）：所有非 2xx 响应都用它，客户端据此决定重试与暂停。
@@ -207,6 +233,173 @@ pub enum ObjectReuse {
     /// 取值 `existing_verified`。
     #[serde(rename = "existing_verified")]
     ExistingVerified,
+}
+
+/// 已提交操作附带的冲突信息（design §15.3）：服务器主条目、新建的冲突副本与原因。内容都在
+/// 服务器上，客户端据此把本地迟到修改对到副本身份上。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OperationConflict {
+    /// 冲突副本的条目身份，32 位小写十六进制。
+    pub conflict_entry_id: String,
+    /// 服务器主条目的身份，32 位小写十六进制。
+    pub entry_id: String,
+    /// 产生副本的原因。
+    pub reason: ConflictReason,
+}
+
+/// 操作命令闭集（design §15.2）。未知取值按协议错误处理，不能当作任一命令执行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum OperationKind {
+    /// 取值 `put_content`。
+    #[serde(rename = "put_content")]
+    PutContent,
+    /// 取值 `create`。
+    #[serde(rename = "create")]
+    Create,
+    /// 取值 `move`。
+    #[serde(rename = "move")]
+    Move,
+    /// 取值 `delete`。
+    #[serde(rename = "delete")]
+    Delete,
+    /// 取值 `restore`。
+    #[serde(rename = "restore")]
+    Restore,
+}
+
+/// 一次修改命令的输入（design §15.3）。`op_id` 与 `device_id` 一起构成幂等键
+/// `(root, device_id, op_id)`；不同命令用不同字段（put 用 `entry_id`/`base_revision`/
+/// `upload_id`，create 用 `parent_id`/`name`/`expected_absent`，move 用源
+/// `entry_id`/`base_revision` 与目标 `parent_id`/`name`，delete 用
+/// `entry_id`/`base_revision`（目录另带 `subtree_token`），restore 用
+/// `entry_id`/`base_revision`（`version_id` 表示恢复指定历史版本））。带错字段一律 400，
+/// 同一请求里不允许两套命令语义。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OperationRequest {
+    /// 客户端计划时的条目 revision（十进制文本）；过期基线不会被当作最新事实接受。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<String>,
+    /// 客户端计划时看到的版本身份（可选，32 位小写十六进制）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_version_id: Option<String>,
+    /// 过期基线的冲突策略；缺省按 `preserve_both` 处理。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict_policy: Option<ConflictPolicy>,
+    /// 发起操作的设备身份，32 位小写十六进制。首发没有设备注册表，它是客户端安装实例自报的
+    /// 稳定身份，只用来划定幂等键的范围（design §7.2），不作为授权依据。
+    pub device_id: String,
+    /// 被操作或被覆盖的条目身份（put/delete 的目标、move 的源、restore 的条目），32 位小写十六进制。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 新建时声明“目标原本不存在”；create 必须为 true（design §15.3）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_absent: Option<bool>,
+    /// 命令种类。
+    pub kind: OperationKind,
+    /// 客户端本地内容代际（十进制文本）。服务器只原样回显供客户端核对，**不**把它当作
+    /// “客户端确实没有后续修改”的证明（design §15.3）。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_generation: Option<String>,
+    /// 目标名称（create 必填、move 的目标名称）；不含路径分隔符。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 客户端生成的逻辑操作身份，32 位小写十六进制；重试必须复用同一个值。
+    pub op_id: String,
+    /// 目标父目录的条目身份（create 必填、move 的目标父目录），32 位小写十六进制。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// 客户端事实基础所属的服务器 epoch（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub server_epoch: String,
+    /// 目录删除的服务端子树 token（32 位小写十六进制）。它由上一条快照/changes 结果给出；
+    /// 子树在之后任何变化都让删除返回 409 `SUBTREE_CHANGED`。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtree_token: Option<String>,
+    /// 已 finalize 的上传会话身份（put 必填），32 位小写十六进制；内容只通过它引用。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_id: Option<String>,
+    /// 恢复指定的历史版本（可选，32 位小写十六进制）；省略表示恢复回收站里的当前形态。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
+}
+
+/// 一次操作的状态与业务结果（design §15.3）。`pending` 时只有 `op_id`/`state`（可能带
+/// `echo_local_generation`）：不出现 `revision`/`root_seq`/`version_id`/`entry_id` 一类
+/// “已完成”字段。`replayed` 由端点按本次请求填写（是否命中了已记录的结果）；`request_id`
+/// 在错误信封里给出，成功响应只带操作身份。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OperationResult {
+    /// committed 且基线与服务器不一致时给出的冲突副本信息。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<OperationConflict>,
+    /// 原样回显请求里的本地代际（十进制文本），供客户端核对 ACK 属于哪一代。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub echo_local_generation: Option<String>,
+    /// 业务结果涉及的条目身份（committed 时的目标条目），32 位小写十六进制。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 稳定拒绝时的错误码（只有 rejected 有）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<ErrorCode>,
+    /// 稳定拒绝的可理解原因（只有 rejected 有，按数据处理）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    /// 逻辑操作身份，32 位小写十六进制。
+    pub op_id: String,
+    /// 本次响应是否直接来自已记录的结果（响应丢失后的重试为 true）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replayed: Option<bool>,
+    /// 提交后的条目 revision（只有 committed 有，十进制文本）。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// 该批次占用的 RootSeq（只有 committed 有，十进制文本）。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_seq: Option<String>,
+    /// 操作状态；`pending` 不代表已同步。
+    pub state: OperationState,
+    /// 提交产生的新版本身份（只有 put/restore 的 committed 有），32 位小写十六进制。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
+}
+
+/// 操作状态闭集（`operations.state`）。`pending` 只表示已受理，不占 RootSeq、不判已同步；
+/// `committed` 与 `rejected` 是终态，同一 OpId 的结果不再改变。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum OperationState {
+    /// 取值 `pending`。
+    #[serde(rename = "pending")]
+    Pending,
+    /// 取值 `committed`。
+    #[serde(rename = "committed")]
+    Committed,
+    /// 取值 `rejected`。
+    #[serde(rename = "rejected")]
+    Rejected,
 }
 
 /// 协议主次版本；主版本不同必须拒绝通信。

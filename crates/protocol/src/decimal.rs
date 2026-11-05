@@ -94,6 +94,40 @@ where
     }
 }
 
+/// 可选的十进制文本字段的 serde 适配（契约里的非必填 `decimal_u64`）。
+///
+/// 缺省表示“字段不出现”，与 `null` 不是同一个意思：`null` 仍然不是合法的十进制文本，两侧解码器都不
+/// 接受它。校验规则与必填字段完全相同，避免可选字段变成“什么都能进”的口子。
+pub mod option {
+    use super::{Deserialize, Deserializer, Serializer, de, validate};
+
+    /// 反序列化：字段不出现 → `None`；出现则必须是规范十进制文本。
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let text = Option::<String>::deserialize(deserializer)?;
+        match text {
+            None => Ok(None),
+            Some(text) => {
+                validate(&text).map_err(de::Error::custom)?;
+                Ok(Some(text))
+            }
+        }
+    }
+
+    /// 序列化：`None` 写 `null`（调用方用 `skip_serializing_if` 把它变成“字段不出现”）。
+    pub fn serialize<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            None => serializer.serialize_none(),
+            Some(text) => super::serialize(text.as_str(), serializer),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DB_INTEGER_MAX, DecimalTextError, validate};

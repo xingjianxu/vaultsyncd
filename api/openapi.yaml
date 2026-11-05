@@ -591,6 +591,168 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /v1/roots/{root}/operations:
+    post:
+      operationId: submitOperation
+      summary: 提交一次修改操作
+      description: |
+        提交 Put/Create/Move/Delete/Restore 命令之一（design §15.2、§15.3）。命令只引用已上传并
+        校验的内容（`upload_id`），不携带字节；服务端按 `(root, device_id, op_id)` 做幂等
+        （I06）：
+
+        - 首次出现的 OpId 被登记为 `pending`，命令体随后执行；
+        - 同一 OpId 与同一语义再次出现是**重放**：返回记录里的同一结果（`replayed=true`），不重做；
+        - 同一 OpId 用于不同语义是协议错误 `OP_ID_REUSED`（409），绝不用旧结果回答新请求；
+        - `server_epoch` 不是 Root 当前 epoch 时 410 `EPOCH_CHANGED`，客户端进入保留基线的重建流程；
+        - 过期基线的 CAS/子树冲突按 design §15.4 返回 409（`BASE_MISMATCH`/`SUBTREE_CHANGED`/
+          `RECONCILE_REQUIRED`）；`preserve_both` 下能提交的过期修改返回 committed 并带 `conflict`。
+
+        响应是本次操作的状态：`committed`/`rejected` 用 200（终态结果稳定），**`pending` 用 202**，
+        且 `pending` 不携带 `revision`/`root_seq`/`version_id`/`entry_id`——已受理不等于已同步
+        （I01）。响应丢失后的重试必须得到同一份结果。
+
+        本服务端的命令执行链路尚未装配时（见 503 `SERVICE_NOT_READY`），请求不被受理：不登记
+        `operations` 行、不追加事件批次、不返回 202。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperationRequest"
+      responses:
+        "200":
+          description: 操作已有终态结果（committed 或 rejected）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "202":
+          description: 操作已受理但还没有业务结果（pending，不判已同步）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "400":
+          description: 请求形状不成立（缺少该命令的前提字段、混用两套命令语义、身份文本非法）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: |
+            同一 OpId 不同请求（`OP_ID_REUSED`），或条目基线/子树已过期（`BASE_MISMATCH`、
+            `SUBTREE_CHANGED`、`RECONCILE_REQUIRED`）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "410":
+          description: 请求的服务器 epoch 已过期（`EPOCH_CHANGED`）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 名称不可用（`INVALID_NAME`）或条目种类不支持该命令（`UNSUPPORTED_ENTRY`）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: |
+            Root 当前不可写（`ROOT_UNAVAILABLE`）、存储需要恢复（`NEEDS_RECOVERY`），或本服务端尚未
+            装配命令执行器（`SERVICE_NOT_READY`，请求未被受理）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "507":
+          description: 服务端空间不足（`INSUFFICIENT_STORAGE`），事务未提交
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/roots/{root}/operations/{op}:
+    get:
+      operationId: getOperation
+      summary: 查询一次操作的结果
+      description: |
+        按 OpId 取操作结果，用于响应丢失与重启后的恢复（design §15.2）。同一记录的回答与提交端点
+        一致：`committed`/`rejected` 用 200 带终态结果，**`pending` 用 202** 且不含修订与序号。
+
+        查询不要求 `server_epoch`：客户端要先知道结果才可能决定是否重建，因此 epoch 变化不影响
+        读取既有记录。记录不存在、不属于该 Root 或不属于该登录会话都按同一 404 回答，不泄露是否存在。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: op
+          in: path
+          required: true
+          description: 客户端生成的逻辑操作身份（32 位小写十六进制）。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 操作已有终态结果（committed 或 rejected）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "202":
+          description: 操作仍是 pending（已受理、没有业务结果，不判已同步）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: 操作记录不存在、不属于该 Root 或不属于该登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端存储不可用或需要恢复
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   schemas:
     ObjectReuse:
@@ -779,6 +941,172 @@ components:
         already_present:
           type: boolean
           description: 是否为幂等重传（同一索引、同一字节已经登记过）。
+
+    OperationKind:
+      description: |
+        操作命令闭集（design §15.2）。未知取值按协议错误处理，不能当作任一命令执行。
+      type: string
+      enum:
+        - put_content
+        - create
+        - move
+        - delete
+        - restore
+
+    ConflictPolicy:
+      description: |
+        过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
+        都保留，绝不丢内容。
+      type: string
+      enum:
+        - preserve_both
+
+    OperationState:
+      description: |
+        操作状态闭集（`operations.state`）。`pending` 只表示已受理，不占 RootSeq、不判已同步；
+        `committed` 与 `rejected` 是终态，同一 OpId 的结果不再改变。
+      type: string
+      enum:
+        - pending
+        - committed
+        - rejected
+
+    ConflictReason:
+      description: |
+        提交成功但基线与服务器不一致的原因闭集（`preserve_both` 下产生冲突副本）。
+      type: string
+      enum:
+        - stale_base
+
+    OperationConflict:
+      description: |
+        已提交操作附带的冲突信息（design §15.3）：服务器主条目、新建的冲突副本与原因。内容都在
+        服务器上，客户端据此把本地迟到修改对到副本身份上。
+      type: object
+      required: [entry_id, conflict_entry_id, reason]
+      properties:
+        entry_id:
+          type: string
+          description: 服务器主条目的身份，32 位小写十六进制。
+        conflict_entry_id:
+          type: string
+          description: 冲突副本的条目身份，32 位小写十六进制。
+        reason:
+          $ref: "#/components/schemas/ConflictReason"
+          description: 产生副本的原因。
+
+    OperationRequest:
+      description: |
+        一次修改命令的输入（design §15.3）。`op_id` 与 `device_id` 一起构成幂等键
+        `(root, device_id, op_id)`；不同命令用不同字段（put 用 `entry_id`/`base_revision`/
+        `upload_id`，create 用 `parent_id`/`name`/`expected_absent`，move 用源
+        `entry_id`/`base_revision` 与目标 `parent_id`/`name`，delete 用
+        `entry_id`/`base_revision`（目录另带 `subtree_token`），restore 用
+        `entry_id`/`base_revision`（`version_id` 表示恢复指定历史版本））。带错字段一律 400，
+        同一请求里不允许两套命令语义。
+      type: object
+      required: [op_id, device_id, server_epoch, kind]
+      properties:
+        op_id:
+          type: string
+          description: 客户端生成的逻辑操作身份，32 位小写十六进制；重试必须复用同一个值。
+        device_id:
+          type: string
+          description: |
+            发起操作的设备身份，32 位小写十六进制。首发没有设备注册表，它是客户端安装实例自报的
+            稳定身份，只用来划定幂等键的范围（design §7.2），不作为授权依据。
+        server_epoch:
+          type: string
+          format: decimal_u64
+          description: 客户端事实基础所属的服务器 epoch（十进制文本）。
+        kind:
+          $ref: "#/components/schemas/OperationKind"
+          description: 命令种类。
+        entry_id:
+          type: string
+          description: 被操作或被覆盖的条目身份（put/delete 的目标、move 的源、restore 的条目），32 位小写十六进制。
+        base_revision:
+          type: string
+          format: decimal_u64
+          description: 客户端计划时的条目 revision（十进制文本）；过期基线不会被当作最新事实接受。
+        base_version_id:
+          type: string
+          description: 客户端计划时看到的版本身份（可选，32 位小写十六进制）。
+        upload_id:
+          type: string
+          description: 已 finalize 的上传会话身份（put 必填），32 位小写十六进制；内容只通过它引用。
+        local_generation:
+          type: string
+          format: decimal_u64
+          description: |
+            客户端本地内容代际（十进制文本）。服务器只原样回显供客户端核对，**不**把它当作
+            “客户端确实没有后续修改”的证明（design §15.3）。
+        conflict_policy:
+          $ref: "#/components/schemas/ConflictPolicy"
+          description: 过期基线的冲突策略；缺省按 `preserve_both` 处理。
+        parent_id:
+          type: string
+          description: 目标父目录的条目身份（create 必填、move 的目标父目录），32 位小写十六进制。
+        name:
+          type: string
+          description: 目标名称（create 必填、move 的目标名称）；不含路径分隔符。
+        expected_absent:
+          type: boolean
+          description: 新建时声明“目标原本不存在”；create 必须为 true（design §15.3）。
+        subtree_token:
+          type: string
+          description: |
+            目录删除的服务端子树 token（32 位小写十六进制）。它由上一条快照/changes 结果给出；
+            子树在之后任何变化都让删除返回 409 `SUBTREE_CHANGED`。
+        version_id:
+          type: string
+          description: 恢复指定的历史版本（可选，32 位小写十六进制）；省略表示恢复回收站里的当前形态。
+
+    OperationResult:
+      description: |
+        一次操作的状态与业务结果（design §15.3）。`pending` 时只有 `op_id`/`state`（可能带
+        `echo_local_generation`）：不出现 `revision`/`root_seq`/`version_id`/`entry_id` 一类
+        “已完成”字段。`replayed` 由端点按本次请求填写（是否命中了已记录的结果）；`request_id`
+        在错误信封里给出，成功响应只带操作身份。
+      type: object
+      required: [op_id, state]
+      properties:
+        op_id:
+          type: string
+          description: 逻辑操作身份，32 位小写十六进制。
+        state:
+          $ref: "#/components/schemas/OperationState"
+          description: 操作状态；`pending` 不代表已同步。
+        root_seq:
+          type: string
+          format: decimal_u64
+          description: 该批次占用的 RootSeq（只有 committed 有，十进制文本）。
+        entry_id:
+          type: string
+          description: 业务结果涉及的条目身份（committed 时的目标条目），32 位小写十六进制。
+        revision:
+          type: string
+          format: decimal_u64
+          description: 提交后的条目 revision（只有 committed 有，十进制文本）。
+        version_id:
+          type: string
+          description: 提交产生的新版本身份（只有 put/restore 的 committed 有），32 位小写十六进制。
+        echo_local_generation:
+          type: string
+          format: decimal_u64
+          description: 原样回显请求里的本地代际（十进制文本），供客户端核对 ACK 属于哪一代。
+        conflict:
+          $ref: "#/components/schemas/OperationConflict"
+          description: committed 且基线与服务器不一致时给出的冲突副本信息。
+        replayed:
+          type: boolean
+          description: 本次响应是否直接来自已记录的结果（响应丢失后的重试为 true）。
+        error_code:
+          $ref: "#/components/schemas/ErrorCode"
+          description: 稳定拒绝时的错误码（只有 rejected 有）。
+        error_message:
+          type: string
+          description: 稳定拒绝的可理解原因（只有 rejected 有，按数据处理）。
 
     RootHealth:
       description: |
@@ -1017,6 +1345,10 @@ components:
         远端错误码闭集（design §15.4）。未知错误码不能被当成可重试或成功；本机 IPC 专用的
         错误码（LOCAL_CHANGED、FILE_BUSY、MODE_REQUIRES_LOCAL_COPY、PLACEHOLDER_OFFLINE）
         属于 packages/local-ipc-types，不在远端契约内。
+
+        SERVICE_NOT_READY 是“服务端这一版还没有装配该端点所需的执行链路”的显式拒绝（本卡起用于
+        操作命令端点），与 NEEDS_RECOVERY 的“意图无法解释、需要人工介入”不是一回事；它待与
+        docs/design.md §15.4 的表格同步。
       type: string
       enum:
         - AUTH_EXPIRED
@@ -1039,3 +1371,4 @@ components:
         - ROOT_UNAVAILABLE
         - NEEDS_RECOVERY
         - INSUFFICIENT_STORAGE
+        - SERVICE_NOT_READY

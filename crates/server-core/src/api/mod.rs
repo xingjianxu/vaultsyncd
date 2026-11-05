@@ -10,7 +10,11 @@
 //!   同索引重传语义（design §13.1—13.2、I05）；
 //! - [`content`] 是上传 finalize 与固定版本下载：拼装发布只产出可提交引用，下载按
 //!   `(root, entry, version)` 与 Range 取字节并在读取期间持有下载租约（design §13.2、I01、I12）。
+//! - [`operations`] 是操作命令端点：put/create/move/delete/restore 的形状与前置、`(root, device,
+//!   op_id)` 的幂等重放/协议错误判定、`pending` 不判已同步，以及 design §15.4 的错误码与状态码映射
+//!   （design §15.2—15.4、I06）。
 
 pub mod content;
+pub mod operations;
 pub mod roots;
 pub mod uploads;

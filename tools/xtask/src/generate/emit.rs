@@ -161,12 +161,22 @@ fn push_rust_schemas(out: &mut String, types: &TargetTypes, schemas: &BTreeMap<S
                 for field in fields {
                     push_rust_doc(out, "    ", &field.doc);
                     if matches!(field.ty, FieldType::Decimal) {
-                        out.push_str("    #[serde(with = \"crate::decimal\")]\n");
+                        // 可选字段用 `decimal::option`：`with` 只对整体字段生效，而可选的十进制字段
+                        // 是 `Option<String>`，不能直接交给 `String` 的读写实现。
+                        let module = if field.optional {
+                            "crate::decimal::option"
+                        } else {
+                            "crate::decimal"
+                        };
+                        out.push_str(&format!("    #[serde(with = \"{module}\")]\n"));
                     }
                     let mut ty = rust_type(types, &field.ty);
                     if field.optional {
                         ty = format!("Option<{ty}>");
                         // 可选字段缺省时不出现在 JSON 里：`null` 是第三种状态，两侧解码器都不接受。
+                        // `default` 让字段缺失解成 `None`：带 `with` 的自定义读写实现不会自动套用
+                        // serde 对 `Option` 的缺省规则，不写它会让可选十进制字段变成必填。
+                        out.push_str("    #[serde(default)]\n");
                         out.push_str("    #[serde(skip_serializing_if = \"Option::is_none\")]\n");
                     }
                     out.push_str(&format!("    pub {}: {ty},\n", field.wire));

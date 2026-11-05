@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
-import type { Capabilities, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
+import { decodeCapabilities, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
+import type { Capabilities, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -289,6 +289,90 @@ export async function downloadVersionContent(options: ClientOptions, root: strin
     throw api_error(response.status, await read_json(response));
   }
   return await read_bytes(response);
+}
+
+/**
+ * 提交一次修改操作
+ *
+ * 提交 Put/Create/Move/Delete/Restore 命令之一（design §15.2、§15.3）。命令只引用已上传并
+ * 校验的内容（`upload_id`），不携带字节；服务端按 `(root, device_id, op_id)` 做幂等
+ * （I06）：
+ *
+ * - 首次出现的 OpId 被登记为 `pending`，命令体随后执行；
+ * - 同一 OpId 与同一语义再次出现是**重放**：返回记录里的同一结果（`replayed=true`），不重做；
+ * - 同一 OpId 用于不同语义是协议错误 `OP_ID_REUSED`（409），绝不用旧结果回答新请求；
+ * - `server_epoch` 不是 Root 当前 epoch 时 410 `EPOCH_CHANGED`，客户端进入保留基线的重建流程；
+ * - 过期基线的 CAS/子树冲突按 design §15.4 返回 409（`BASE_MISMATCH`/`SUBTREE_CHANGED`/
+ *   `RECONCILE_REQUIRED`）；`preserve_both` 下能提交的过期修改返回 committed 并带 `conflict`。
+ *
+ * 响应是本次操作的状态：`committed`/`rejected` 用 200（终态结果稳定），**`pending` 用 202**，
+ * 且 `pending` 不携带 `revision`/`root_seq`/`version_id`/`entry_id`——已受理不等于已同步
+ * （I01）。响应丢失后的重试必须得到同一份结果。
+ *
+ * 本服务端的命令执行链路尚未装配时（见 503 `SERVICE_NOT_READY`），请求不被受理：不登记
+ * `operations` 行、不追加事件批次、不返回 202。
+ *
+ * 参数 `root`（/v1/roots/{root}/operations）：授权 Root 的身份（32 位小写十六进制）。
+ *
+ * 200：操作已有终态结果（committed 或 rejected）
+ * 202：操作已受理但还没有业务结果（pending，不判已同步）
+ * 400：请求形状不成立（缺少该命令的前提字段、混用两套命令语义、身份文本非法）
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 409：同一 OpId 不同请求（`OP_ID_REUSED`），或条目基线/子树已过期（`BASE_MISMATCH`、
+`SUBTREE_CHANGED`、`RECONCILE_REQUIRED`）
+ * 410：请求的服务器 epoch 已过期（`EPOCH_CHANGED`）
+ * 422：名称不可用（`INVALID_NAME`）或条目种类不支持该命令（`UNSUPPORTED_ENTRY`）
+ * 503：Root 当前不可写（`ROOT_UNAVAILABLE`）、存储需要恢复（`NEEDS_RECOVERY`），或本服务端尚未
+装配命令执行器（`SERVICE_NOT_READY`，请求未被受理）
+ * 507：服务端空间不足（`INSUFFICIENT_STORAGE`），事务未提交
+ */
+export async function submitOperation(options: ClientOptions, root: string, body: OperationRequest, init?: RequestInit): Promise<OperationResult> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/operations`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeOperationResult(payload);
+}
+
+/**
+ * 查询一次操作的结果
+ *
+ * 按 OpId 取操作结果，用于响应丢失与重启后的恢复（design §15.2）。同一记录的回答与提交端点
+ * 一致：`committed`/`rejected` 用 200 带终态结果，**`pending` 用 202** 且不含修订与序号。
+ *
+ * 查询不要求 `server_epoch`：客户端要先知道结果才可能决定是否重建，因此 epoch 变化不影响
+ * 读取既有记录。记录不存在、不属于该 Root 或不属于该登录会话都按同一 404 回答，不泄露是否存在。
+ *
+ * 参数 `root`（/v1/roots/{root}/operations/{op}）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `op`（/v1/roots/{root}/operations/{op}）：客户端生成的逻辑操作身份（32 位小写十六进制）。
+ *
+ * 200：操作已有终态结果（committed 或 rejected）
+ * 202：操作仍是 pending（已受理、没有业务结果，不判已同步）
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 404：操作记录不存在、不属于该 Root 或不属于该登录会话
+ * 503：服务端存储不可用或需要恢复
+ */
+export async function getOperation(options: ClientOptions, root: string, op: string, init?: RequestInit): Promise<OperationResult> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/operations/${encodeURIComponent(op)}`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeOperationResult(payload);
 }
 
 /**

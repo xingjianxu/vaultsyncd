@@ -1597,6 +1597,61 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 （同一端点可同时声明 200 与 206，形状必须一致），字节响应的 TS 函数返回 `Uint8Array` 并走
 `read_bytes`（非 2xx 仍按错误信封 `read_json`）。
 
+## crates/server-core + apps/server — 操作命令端点（S047）
+
+### 核心（`vaultsyncd_server_core::api::operations`）
+
+- **`OperationRequest`**：put/create/move/delete/restore 的强类型形状（`op`/`device`/`kind`/
+  `expected_epoch` + 各命令自己的 `entry`/`base_revision`/`base_version`/`upload`/
+  `local_generation`/`conflict_policy`/`parent`/`name`/`expected_absent`/`subtree_token`/`version`）。
+  `validate()` 按命令固定前提（put 要 entry+base_revision+upload；create 要 parent+name 且
+  `expected_absent=true`、不得自带 entry；move 要 entry+base_revision+目标 parent/name；delete 要
+  entry+base_revision；restore 要 entry+base_revision），混用两套命令语义一律 `INVALID_REQUEST`。
+- **`admit(RootFacts, &OperationRequest)`** 的固定顺序：Root 可写性 → epoch → 命令形状。因此不可写
+  Root 先得到 503 `ROOT_UNAVAILABLE`，旧 epoch 得到 410 `EPOCH_CHANGED`，都不会先去看操作日志。
+- **`digest_fields()`** 只给语义字段（种类/身份/基线/上传/本地代际/冲突策略/命名空间目标）；
+  `op_id`、`device_id`（幂等键本身）与 `server_epoch`（客户端事实基础）**不参与**摘要，避免“重试时
+  带来新 epoch”被误判成 `OP_ID_REUSED`。摘要编码仍由 `server-store::operations::request_digest`
+  唯一实现。
+- **`decide_replay(RecordedOperation, digest)`**：同摘要 → 已记录结果；不同摘要 → 409
+  `OP_ID_REUSED`。**`RecordedOutcome::{Committed, Pending, Rejected}`** 的 `http_status()`：200/202/200，
+  `is_synced()` 只对 committed 为真（I01）。
+- **`OperationFailure`** 自带 `design_error_code()`/`http_status()`/`is_retryable()`：
+  `ROOT_UNAVAILABLE` 503(可重试)、`EPOCH_CHANGED` 410、`OP_ID_REUSED`/`BASE_MISMATCH`/`SUBTREE_CHANGED`/
+  `RECONCILE_REQUIRED` 409、`INVALID_REQUEST` 400、`INVALID_NAME`/`UNSUPPORTED_ENTRY` 422、
+  `UNKNOWN_OPERATION` 404、`NEEDS_RECOVERY` 503、`INSUFFICIENT_STORAGE` 507。
+
+### 端点（`apps/server::operations`，契约 `api/openapi.yaml`）
+
+`POST /v1/roots/{root}/operations`（JSON）与 `GET /v1/roots/{root}/operations/{op}` 都先
+`auth::principal_from` 再 `auth::authorize_root`。幂等键是 `(root, device_id, op_id)`，请求里的
+`device_id` 由客户端安装实例自报（首发没有设备注册表，不作为授权依据）。结果查询只带 OpId：
+记录里的设备由库给出（`server-store::operations::operation_of_root_in_scope`，同 Root 同 OpId 多行
+视为坏数据）。
+
+| 情况 | 实际返回 |
+| --- | --- |
+| 首次见到该键（**本版**） | 503 `SERVICE_NOT_READY`（`retryable=true`），**不写** `operations` 行、不追加事件批次 |
+| 同键同摘要、记录 committed | 200 `OperationResult{state=committed, root_seq, revision, entry_id, version_id, echo_local_generation, replayed=true}` |
+| 同键同摘要、记录 pending | 202 `OperationResult{state=pending, replayed=true}`，**不带** `revision`/`root_seq`/`version_id`/`entry_id` |
+| 同键不同摘要 | 409 `OP_ID_REUSED`（`retryable=false`） |
+| `server_epoch` 不是 Root 当前 epoch | 410 `EPOCH_CHANGED` |
+| Root health 不是 healthy | 503 `ROOT_UNAVAILABLE`（可重试） |
+| 记录 rejected | 409 + 记录里的 `error_code`/`error_message`（终态结论稳定） |
+| 查询不存在/不属于该 Root/不属于该会话 | 404 `UNSUPPORTED_ENTRY`（三者不区分） |
+| 形状/身份文本不合法 | 400 `INVALID_REQUEST`；名称不可用 422 `INVALID_NAME` |
+
+`SERVICE_NOT_READY` 是本卡新加的 wire 错误码（design §15.4 闭集里没有“执行器未装配”，`NEEDS_RECOVERY`
+另有“意图无法解释、需人工介入”的专义），**待与 design §15.4 同步**。
+
+### 未接入（属 S052 服务端整合闭环）
+
+- 命令执行适配器：`PutCommitStore`/`TargetPort`/`NamespaceStore`/`RemovalPort`/`RestoreStore`/
+  `ConflictCommitStore` 的真实 SQLx + 文件系统实现、`begin_operation` → 执行 → `commit_operation`/
+  `reject_operation` 的接线；装上后“首次见到该键”才应改回 202/200。
+- 生成器（S047 顺带补齐）：可选 `decimal_u64` 字段用 `crate::decimal::option`，可选字段一律加
+  `#[serde(default)]`（否则带自定义读写实现的可选字段在缺失时会变成必填）。
+
 ## crates/server-core + apps/server — 外部目录初始稳定采集（S049）
 
 ### 核心（`vaultsyncd_server_core::observer`）
