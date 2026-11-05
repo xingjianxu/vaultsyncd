@@ -15,7 +15,7 @@
 
 - 开发中凡涉及代码改动（含测试、脚本、schema、构建配置），必须先按下文“Git worktree”约定进入隔离工作树，再编辑、构建和验证。纯文档维护可在当前工作区进行。
 - 项目 devShell 由根 `flake.nix` 提供，工具链来自 `flake.lock` 锁定的 nixpkgs：进入用 `nix develop`，非交互校验用 `nix develop --command bash -c 'rustc --version; cargo --version; node --version; pnpm --version; python3 --version; sqlite3 --version'`。不为项目安装全局依赖；实测版本与限制见 `docs/environment.md` §10。
-- 首发仅 Windows 11 x64 客户端、Linux 服务端。NixOS 为开发及同机服务验证环境；Quickemu Windows NTFS 客体用于原生测试，具体步骤仅维护在实施手册 §2.6。
+- 首发仅 Windows 11 x64 客户端、Linux 服务端。Windows 客户端在本 NixOS 开发环境交叉编译，前端构建也在宿主完成，以节省虚拟机资源；Quickemu Windows NTFS 客体用于原生运行与验收，不默认安装完整编译工具链。交叉工具链由 S009 落实，具体分工与步骤仅维护在实施手册 §2.6。
 - 用户已授权本项目所需 NixOS 配置与 rebuild。先检查实际主机配置入口，保存 diff/旧 generation，build/test/健康检查后 switch。test 会激活配置且不自动定时回滚；保留 SSH 和恢复路径。不要把项目 flake 误当主机配置，不扩大到无关系统升级。
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。
 - 纯核心与规划器不做平台 I/O；应用入口组装适配器。GUI/CLI 通过 agent IPC，Web 通过服务端 API；不直接修改在线数据库。
@@ -38,6 +38,7 @@
 4. 保留主工作区及其他任务的未提交修改，不自动 stash、丢弃或搬运到新 worktree。进入任务 worktree 后确认所需文档、源码和 skill 可用，按实际项目工具链准备依赖并运行相关基线检查；前端使用根 pnpm 工作区。后续编辑、构建、测试和提交均在该任务 worktree 中执行。
 5. 无法创建或复用隔离 worktree、skill 缺失或读取失败时，记录阻塞与恢复条件，可继续无依赖的只读检查或文档工作；不得因权限或工具故障退回主工作区改代码。此要求优先于 skill 的原地开发回退建议。
 6. 任务交接记录 worktree 绝对路径、分支（或 detached HEAD）、基线提交、基线检查和产出提交。保留未合并或含未提交修改的 worktree，不擅自合并、删除分支或强制清理；续接先定位原任务 worktree 并检查 diff。
+7. 任务分支合并到目标分支并确认目标已包含全部任务提交后，自动清理对应的本地 worktree 和分支：先确认该 worktree 无未提交修改且不是当前工作树，执行 `git worktree remove <path>`，再执行 `git branch -d <branch>`。若存在未提交修改、未合并提交或状态不明，不得强制删除；保留现场并在交接中记录阻塞。只清理本地任务 worktree/分支，不删除目标分支或远程分支。
 
 ## Git 提交（必须遵守）
 

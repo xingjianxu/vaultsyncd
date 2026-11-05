@@ -325,10 +325,10 @@ flowchart TB
 | --- | --- | --- |
 | Windows 与 Linux | `cargo test --locked` | 运行便携 default-members 测试 |
 | Linux | `cargo build --locked --release -p vaultsyncd-server -p vaultsyncd-admin` | Linux 服务端与管理命令 |
-| Windows | `cargo build --locked --release -p vaultsyncd-agent -p vaultsyncd-cli` | Windows 后台进程与 CLI |
-| Windows | `pnpm --filter @vaultsyncd/desktop tauri build` | Tauri 安装包；依赖该包定义相应 script 并配置 agent/CLI 打包 |
+| NixOS 宿主 → Windows x64 | S009 验证并固定的交叉编译入口，显式选择目标与 agent/CLI 包 | Windows 后台进程与 CLI；产物在 Windows 原生运行验证 |
+| NixOS 宿主构建；Windows 客体验证 | 桌面前端与 Tauri 壳交叉构建入口由对应任务实测记录 | Tauri 安装包在打包卡验证宿主支持与所需步骤；客体执行安装、升级与运行验收 |
 | 前端构建环境 | `pnpm --filter @vaultsyncd/web build` | Web 静态管理资源 |
-| Linux / Windows 对应任务 | `cargo test --locked -p vaultsyncd-server-tests` / `cargo test --locked -p vaultsyncd-windows-tests` | 原生平台集成测试 |
+| Linux / Windows 对应任务 | Linux 执行 `cargo test --locked -p vaultsyncd-server-tests`；Windows 测试程序在宿主交叉编译、传入客体执行 | 原生平台集成测试；Windows 测试运行证据必须来自客体或实机 |
 
 ### 5.7.1 独立开发与联合发布
 
@@ -403,7 +403,7 @@ flowchart TB
 | 服务端 SQLite 变更 | `crates/server-store/migrations/` | server 升级、备份恢复与旧数据库 fixture |
 | 同步状态页面 | `apps/desktop/src/features/` | `packages/ui/`、local-ipc 类型，不能改写同步状态事实 |
 
-工程约束：单 monorepo、根 Cargo/pnpm 双工作区；按应用/职责组织，不设顶层 rust/web 双项目。Tauri 的 src-tauri 属于根 Cargo workspace；仅保留根 Cargo.lock/pnpm-lock.yaml，成员随真实包创建加入。Rust 纯核心/服务端编译不依赖前端工具链；产品打包才装配 Web 资源。Linux 不全量构建 Windows 包；default-members 只选可移植核心，平台依赖另用目标条件隔离。
+工程约束：单 monorepo、根 Cargo/pnpm 双工作区；按应用/职责组织，不设顶层 rust/web 双项目。Tauri 的 src-tauri 属于根 Cargo workspace；仅保留根 Cargo.lock/pnpm-lock.yaml，成员随真实包创建加入。Rust 纯核心/服务端编译不依赖前端工具链；产品打包才装配 Web 资源。Linux 默认检查不全量构建 Windows 包；Windows 客户端通过显式目标与包选择在 NixOS 宿主交叉编译，default-members 只选可移植核心，平台依赖另用目标条件隔离。
 
 协议以 api/ 为唯一编辑源，生成代码提交并在 CI 重生成检查；domain 显式映射到 wire DTO。纯核心不依赖 I/O，应用入口组装平台与存储；用本地 newtype 实现核心端口，避免循环依赖/孤儿规则。GUI/CLI 仅经 IPC 控制 agent；GUI 退出不停止同步。Web 静态资源随服务端交付，生产无需 Node.js。
 
@@ -411,7 +411,7 @@ Rust/前端各自验证，协议变更同时验证双方与消费者。发布统
 
 服务端对象元数据由 server-store 管理，实际字节由 server-core 的 objects 通过 Linux 文件端口发布；两端数据库迁移分别归属各自 store。根 tests 下 Rust 文件必须有对应 Cargo 测试包或 runner，不会自动发现。源码、运行数据、故障测试卷互相隔离。
 
-开发基线：NixOS 同机开发和服务，项目 flake 固定开发依赖；Windows 11 x64 原生测试优先使用 Quickemu/QEMU-KVM 客体及其 NTFS 卷。原有合规 Windows VM/实机可复用。镜像、虚拟磁盘、TPM/EFI 状态存源码仓库外；宿主服务使用独立 btrfs 测试目录。Quickemu 创建、远程 SPICE、基线备份和客体工具链的操作说明统一见实施手册 §2.6。Ubuntu 24.04 与 Linux ARM64 另做发布兼容验证。
+开发基线：NixOS 同机开发和服务，项目 flake 固定开发依赖；Windows 客户端在本 NixOS 开发环境交叉编译，前端在宿主构建，以节省 VM 资源。Windows 11 x64 原生测试优先使用 Quickemu/QEMU-KVM 客体及其 NTFS 卷，客体不默认安装完整编译工具链。原有合规 Windows VM/实机可复用。镜像、虚拟磁盘、TPM/EFI 状态存源码仓库外；宿主服务使用独立 btrfs 测试目录。Quickemu 创建、远程 SPICE、基线备份、构建产物交付与客体运行时的操作说明统一见实施手册 §2.6。Ubuntu 24.04 与 Linux ARM64 另做发布兼容验证。
 
 ## 6. 全系统不变量
 
@@ -1164,8 +1164,11 @@ P1 的 P2P 仅优化内容来源，必须验证 Root 授权和服务器确认的
 | ADR-010 | 事件保留、过期重建、恢复 epoch | 工程建议，需要长期离线测试 |
 | ADR-011 | 备份逻辑快照与 GC 租约 | 提供接口已确认；具体机制为建议 |
 | ADR-012 | 强制 btrfs 与 CoW 优化 | 2026-11-05 用户授权更新 C39；详见下方决定记录及 §11.5/§19.1；原生验收待执行 |
+| ADR-013 | Windows 客户端宿主交叉编译 | 2026-11-05 用户确认：NixOS 宿主构建、Windows 客体原生运行验收；S009 落实，尚未验证 |
 
 ADR-012 决定记录：原 C39 仅允许 ext4/XFS，reflink 可选。用户本轮提出在 btrfs 能简化实现时强制采用；据 FICLONE 的写隔离能力与只读快照的固定视图能力，改为强制 btrfs，默认克隆采集/发布及备份准备。收益是减少重复数据复制、简化固定候选读取；应用一致性状态机仍保留。影响是部署卷必须迁移到 btrfs，ext4/XFS/ZFS/overlay 不再接受；现有数据须离线备份、复制、校验后切换，不自动格式化或原地转换。本仓库尚无实现，无已发布协议/数据库迁移。替代方案为保留 ext4/XFS 并完整复制，部署更宽但无法把 CoW 能力作为基线；本轮按用户方向采用 btrfs，性能不作为已证明结论。
+
+ADR-013 决定记录：用户要求 Windows 客户端在本开发环境交叉编译，以节省虚拟机资源；替代原先在客体安装整套工具链并编译的工作流。影响为 S009 在 NixOS devShell 补齐并锁定交叉目标与依赖，前端构建留在宿主，客体接收可追溯产物做原生验收；安装包与签名的具体支持仍需实测。首发平台、数据语义与 CFAPI 验收标准不变；当前 flake 尚未实现该能力，本次文档决定不构成构建成功或资源节省幅度的证据。
 
 任何修改 C 项或 P0/P1 范围的建议必须向用户说明原决定、修改原因、影响与替代选项。D 项可以在实现中改进，但涉及数据安全、兼容性和用户体验的改变需先更新 ADR。已经冻结的产品选择不得重复提问；新发现的技术限制应报告证据，而不是擅自降低要求。
 

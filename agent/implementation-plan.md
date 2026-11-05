@@ -77,19 +77,21 @@
 - 需要虚拟化、测试挂载或服务部署时，可以在已获授权范围内 rebuild，无需再次为普通 rebuild 请求许可。先保存配置 diff 和旧 generation，按实际入口执行 build、test、健康检查，再 switch。`test` 会激活配置，但不设置下次启动默认项；其本身不提供定时自动回滚。
 - 远程操作需保留 SSH 与回滚能力；不得顺手升级全系统、关闭防火墙或清理回滚 generation。失败先恢复已知配置/旧 generation。具体主机入口、选项和命令必须来自现场检查，不猜 hostname 或 flake 路径。
 - 不把密码写入 Nix 表达式或 Nix store；使用有权限控制的运行时文件、凭据输入或经验证的 systemd credentials。
-- 首发只做 Windows 桌面，NixOS 上不为运行 Tauri Linux 桌面而引入 GTK/WebKit/FUSE 产品依赖。Linux 可以运行前端测试和开发网页，原生壳在 Windows 环境构建验证。
+- 首发只做 Windows 桌面，NixOS 上不为运行 Tauri Linux 桌面而引入 GTK/WebKit/FUSE 产品依赖。Windows 客户端（含原生壳）在本 NixOS 开发环境交叉编译，前端构建与测试也在宿主完成；产物交给 Windows 客体做原生运行验证，具体分工见 §2.6。
 
 ### 2.6 Windows 验证资源：优先 Quickemu
 
 优先复用既有合规 Windows 11 x64 环境；没有时在 x86_64 NixOS + KVM 上用 Quickemu 快速准备客体。ARM 主机不能直接以 x86 KVM 方案执行，应记录所需 x86 Windows runner。镜像/许可或 KVM/容量缺失时标 blocked，继续无依赖任务。
 
+2026-11-05 用户决定：Windows 客户端在本 NixOS 开发环境交叉编译，以节省虚拟机的 CPU、内存和磁盘资源。宿主承担 Rust 客户端、Windows 测试可执行文件、Tauri 壳及前端的构建；S009 在项目 devShell 中补齐并锁定目标、Rust 标准库、链接器及所需 SDK/库，实测后记录命令。客体承担运行、调试、安装/升级与 CFAPI、Explorer、GUI 原生验收。安装包生成与签名的宿主支持需在对应打包卡实测；如确有只能在 Windows 完成的步骤，记录证据与最小范围，不能据此把日常编译整体移回 VM。
+
 1. 检查 `uname -m`、`/dev/kvm` 和当前用户读写权限；必要时在现有 NixOS 配置加入 kvm 组并 rebuild/重新登录。通过项目 devShell 或 `nix-shell -p quickemu` 提供 Quickemu，记录并锁定实际版本。
 2. 在源码外的专用 VM 目录执行 `quickget windows 11`。下载接口不可用时从微软官方取得 ISO，并按安装版本文档配置；不得使用不明修改镜像。保留生成的 VirtIO、TPM、EFI 设置。
 3. 首次启动前将配置中的 `cpu_cores="4"`、`ram="8G"`、`disk_size="100G"` 作为小样本起点，按宿主余量调整；修改 disk_size 不等于扩容已有分区。执行 `quickemu --vm windows-11.conf` 完成安装，修改自动安装账号默认密码。
 4. 无桌面服务器可用 `--display spice --viewer none --access local --spice-port 5930` 启动，从操作电脑建立 `ssh -N -L 5930:127.0.0.1:5930 用户@服务器`，再用 SPICE 客户端连接 `spice://127.0.0.1:5930`。端口按占用调整，先核对安装版本的 help，不将 SPICE 直接暴露公网。
-5. 客体安装匹配 Rust MSVC、C++ Build Tools/SDK、Node/pnpm、WebView2、Git；配置受限网络上的 OpenSSH 供 PowerShell 自动测试。GUI、资源管理器与托盘测试使用已登录桌面会话。源码同步同一提交，不复制 Linux target/node_modules。
+5. 客体按实际依赖准备 WebView2 等运行时，配置受限网络上的 OpenSSH 供 PowerShell 自动测试；不默认安装 Rust、C++ Build Tools/SDK、Node/pnpm 等完整构建工具链。宿主交付同一提交构建的 Windows 可执行文件、测试程序及运行所需资源，记录目标、工具链版本与 SHA-256，传输后校验哈希；不复制整个 target/node_modules。GUI、资源管理器与托盘测试使用已登录桌面会话。
 6. CFAPI 根置于客体 NTFS，例如 `C:\vaultsyncd-test`，不用共享文件夹。默认 QEMU user 网络通常通过 `10.0.2.2` 到宿主，其他网络以实测为准；用 TCP/HTTPS 检查宿主端口，证书名称/信任必须匹配，不能禁用验证。客体 localhost 不是宿主。
-7. 工具链就绪后正常关机，备份完整 VM 配置、磁盘、EFI 与 TPM 状态，作为未注册客户端身份的基线；不能只恢复磁盘却忽略其他状态。第二台从基线独立初始化 DeviceId。每次测试用独立服务端实例/Root；测试回滚与服务器状态配对，刻意陈旧客户端场景另记录。
+7. 客体运行时与测试连接就绪后正常关机，备份完整 VM 配置、磁盘、EFI 与 TPM 状态，作为未注册客户端身份的基线；不能只恢复磁盘却忽略其他状态。第二台从基线独立初始化 DeviceId。每次测试用独立服务端实例/Root；测试回滚与服务器状态配对，刻意陈旧客户端场景另记录。
 8. 首台立即执行 S010—S012；第二台用于并发，正式规模按 S107。Wine、交叉编译、Linux fake 不能替代原生 CFAPI 结果。若已有 libvirt 环境可继续使用，不强制迁移。
 
 依据：[Quickemu Windows](https://github.com/quickemu-project/quickemu/wiki/04-Create-Windows-virtual-machines)、[配置](https://github.com/quickemu-project/quickemu/blob/master/docs/quickemu_conf.5.md)、[QEMU 网络](https://www.qemu.org/docs/master/system/devices/net.html)。
@@ -139,7 +141,7 @@
 | S006 | 建立任务编排入口与基础 CI | L | S004、S005 |
 | S007 | 准备独立 btrfs 测试位置 | L | S001、S003 |
 | S008 | 准备 Windows 客体与连接说明 | L | S001、S007 |
-| S009 | 固定 Windows 构建工具链 | W | S008、S004、S005 |
+| S009 | 固定 Windows 交叉编译与客体验证工具链 | X | S008、S004、S005 |
 | S010 | CFAPI 注册与占位创建原型 | W | S009 |
 | S011 | CFAPI 读取、取消与离线原型 | W | S010 |
 | S012 | CFAPI 释放与写入保护原型 | W | S011 |
@@ -316,13 +318,13 @@
 - **本步验收**：Windows 版本、NTFS、宿主可达地址有证据；尚无客体不得 done，不以 Wine 代替。
 - **交接**：`agent/tasks/S008.md`，记录实际接口、验证与下一个 ready 任务。
 
-### S009 — 固定 Windows 构建工具链
+### S009 — 固定 Windows 交叉编译与客体验证工具链
 
-- **环境与前置**：W；S008、S004、S005。
+- **环境与前置**：X（NixOS 宿主构建 + Windows 11 客体运行）；S008、S004、S005。
 - **只读设计范围**：`docs/design.md` §5.7、§14.2；加直接前置交接及相关源文件。
-- **主要落点**：docs/operations/windows-lab.md；tests/platform/windows/。
-- **实现要点**：安装匹配 Rust MSVC、C++ Build Tools/SDK、Node/pnpm/WebView2。同步同一 Git 提交到客体；避免共享 target/node_modules。写最小 Rust/TS 验证命令。
-- **本步验收**：Windows 原生编译运行 Rust 示例，pnpm 类型检查通过；记录所有工具版本。
+- **主要落点**：flake.nix/flake.lock；docs/operations/windows-lab.md；tests/platform/windows/。
+- **实现要点**：按 §2.6 在 NixOS devShell 固定 Windows x64 交叉目标、Rust 标准库、链接器及所需 SDK/库，验证后记录具体方案与版本；Node/pnpm 留在宿主。客体只准备实际运行时与自动测试入口，不默认安装完整编译工具链。交付同一提交的 Windows 产物与测试资源并核对哈希，避免共享 target/node_modules；写最小宿主构建、传输和客体执行命令。
+- **本步验收**：在宿主交叉编译最小 Rust 示例，传入 Windows 原生运行成功并核对产物 SHA-256；在宿主执行 pnpm 类型检查通过；记录宿主构建工具、目标和客体运行时版本。交叉编译成功不能替代客体执行证据，CFAPI 仍由 S010—S012 原生验收；尚未创建的完整客户端与安装包在对应卡继续验证。
 - **交接**：`agent/tasks/S009.md`，记录实际接口、验证与下一个 ready 任务。
 
 ### S010 — CFAPI 注册与占位创建原型
