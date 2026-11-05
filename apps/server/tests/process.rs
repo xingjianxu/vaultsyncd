@@ -229,6 +229,42 @@ fn unfinished_phases(state_dir: &Path, user: UserId, root: RootId) -> Vec<FsInte
 }
 
 #[test]
+fn second_server_on_the_same_state_dir_is_refused_by_the_state_lock() {
+    let dir = TestDir::new("state-lock");
+    let port = free_port();
+    let config = dir.config("server", &format!("127.0.0.1:{port}"));
+
+    let mut child = spawn(&config);
+    let (status, body) = wait_health(port, Duration::from_secs(20));
+    assert_eq!(status, 200, "第一个服务端应正常就绪：{body}");
+
+    // 第二个进程指向同一状态目录：必须在打开数据库之前被状态目录锁挡住（不是“先跑起来再报端口占用”）。
+    let mut second = spawn(&config);
+    let status = wait_exit(&mut second, Duration::from_secs(20));
+    let stderr = read_stderr(&mut second);
+    assert_ne!(status.code(), Some(0), "第二个服务端不得成功启动：{stderr}");
+    assert!(
+        stderr.contains("state_locked") || stderr.contains("已被另一个 vaultsyncd 进程占用"),
+        "拒绝原因必须是状态目录锁：{stderr}"
+    );
+    // 第一个服务端不受影响。
+    let (status, _) = wait_health(port, Duration::from_secs(5));
+    assert_eq!(status, 200, "第二个进程被拒后第一个应继续服务");
+
+    send_sigterm(&child);
+    let status = wait_exit(&mut child, Duration::from_secs(20));
+    assert_eq!(status.code(), Some(0), "第一个服务端应正常退出");
+
+    // 停止后锁释放：同一状态目录可以再次启动。
+    let mut restarted = spawn(&config);
+    let (status, body) = wait_health(port, Duration::from_secs(20));
+    assert_eq!(status, 200, "锁随进程退出释放：{body}");
+    send_sigterm(&restarted);
+    let status = wait_exit(&mut restarted, Duration::from_secs(20));
+    assert_eq!(status.code(), Some(0));
+}
+
+#[test]
 fn start_serves_health_then_sigterm_stops_and_restart_works() {
     let dir = TestDir::new("start-stop-restart");
     let port = free_port();

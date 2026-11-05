@@ -22,6 +22,7 @@ use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
 use vaultsyncd_server_store::db::{Database, DbError};
+use vaultsyncd_server_store::state_lock::{StateLock, StateLockError};
 
 use crate::config::Config;
 use crate::http;
@@ -31,6 +32,8 @@ use crate::recovery::{self, RecoveryAssessment, RecoveryAssessmentError};
 /// 启动失败：进程必须以非零退出码结束，且从未开放写入。
 #[derive(Debug)]
 pub enum StartupError {
+    /// 状态目录已被另一个进程占用（另一个服务端，或正在执行的离线 init）。
+    StateLock(StateLockError),
     /// 数据库打开/迁移失败（含种类与版本门禁）。
     Database(DbError),
     /// 启动恢复无法给出结论。
@@ -47,6 +50,7 @@ pub enum StartupError {
 impl fmt::Display for StartupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StartupError::StateLock(error) => write!(f, "{error}"),
             StartupError::Database(error) => write!(f, "打开服务端数据库失败：{error}"),
             StartupError::Recovery(error) => write!(f, "{error}"),
             StartupError::Bind { addr, source } => {
@@ -85,6 +89,8 @@ impl From<io::Error> for RunError {
 pub struct Service {
     config: Config,
     database: Database,
+    /// 状态目录锁：活到进程停止为止，让离线 init 与第二个服务端都无法同时进入同一状态目录。
+    _state_lock: StateLock,
     lifecycle: Arc<Lifecycle>,
     listener: TcpListener,
     assessment: RecoveryAssessment,
@@ -127,6 +133,7 @@ impl Service {
         let Service {
             config,
             database,
+            _state_lock,
             lifecycle,
             listener,
             assessment,
@@ -188,6 +195,16 @@ impl Service {
 /// 见 [`StartupError`]：数据库打不开、恢复读不出结论或监听地址绑不上时返回错误，调用方必须以
 /// 非零退出码结束，不能降级成“没恢复也先接写入”。
 pub async fn prepare(config: Config) -> Result<Service, StartupError> {
+    // 先抢状态目录锁，再开数据库：顺序反了就会出现“两个进程都已经打开数据库、再去争锁”的窗口，
+    // 而 init 也正好会在这个窗口里看到“没有锁”就动手改账号表。
+    let state_lock = StateLock::try_acquire_exclusive(&config.state_dir).map_err(|error| {
+        error!(error = %error, state_dir = %config.state_dir.display(), "状态目录不可独占，拒绝启动");
+        StartupError::StateLock(error)
+    })?;
+    info!(
+        lock = %state_lock.path().display(),
+        "已独占状态目录"
+    );
     info!(
         config_database = %config.database.display(),
         "打开服务端数据库"
@@ -221,6 +238,7 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
     Ok(Service {
         config,
         database,
+        _state_lock: state_lock,
         lifecycle,
         listener,
         assessment,
