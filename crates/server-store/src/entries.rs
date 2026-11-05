@@ -1382,9 +1382,10 @@ mod tests {
             .expect("写 schema 版本");
         conn.close().await.expect("关闭旧库连接");
 
-        // 本二进制打开它：0002 建命名空间表、0003 建对象/版本/批次/操作表，旧数据保留，迁移前备份落在同目录。
+        // 本二进制打开它：0002 建命名空间表、0003 建对象/版本/批次/操作表、0004 建上传/意图/租约表，
+        // 旧数据保留，迁移前备份落在同目录。
         let database = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(database.schema_version(), 3);
+        assert_eq!(database.schema_version(), 4);
         let mut conn = database.pool().acquire().await.expect("取连接");
         let value: String =
             sqlx::query_scalar("SELECT value FROM store_metadata WHERE key = 'server_id'")
@@ -1394,7 +1395,8 @@ mod tests {
         assert_eq!(value, "fixture");
         let tables: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('users', 'roots', 'entries', 'objects', 'versions', 'changes', 'operations') \
+             AND name IN ('users', 'roots', 'entries', 'objects', 'versions', 'changes', 'operations', \
+                          'uploads', 'upload_parts', 'fs_intents', 'backup_leases', 'object_leases') \
              ORDER BY name",
         )
         .fetch_all(&mut *conn)
@@ -1403,18 +1405,23 @@ mod tests {
         assert_eq!(
             tables,
             vec![
+                "backup_leases",
                 "changes",
                 "entries",
+                "fs_intents",
+                "object_leases",
                 "objects",
                 "operations",
                 "roots",
+                "upload_parts",
+                "uploads",
                 "users",
                 "versions"
             ]
         );
         drop(conn);
         assert!(
-            crate::db::migration_backup_path(&path, 1, 3).exists(),
+            crate::db::migration_backup_path(&path, 1, 4).exists(),
             "非空库升级前应有备份"
         );
 

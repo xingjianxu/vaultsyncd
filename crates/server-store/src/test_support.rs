@@ -8,12 +8,16 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use sqlx::{Sqlite, Transaction};
-use vaultsyncd_domain::ids::{DeviceId, EntryId, ID_LEN, OpId, RootId, TxId, UserId};
-use vaultsyncd_domain::version::ServerEpoch;
+use vaultsyncd_domain::ids::{
+    BackupLeaseId, DeviceId, EntryId, ID_LEN, IntentId, ObjectLeaseId, OpId, RootId, SessionId,
+    TxId, UploadId, UserId,
+};
+use vaultsyncd_domain::version::{ServerEpoch, UtcTimestamp};
 
 use crate::db::Database;
 use crate::entries::{self, EntryKind, NewEntry};
 use crate::roots::{self, NewRoot};
+use crate::versions::{self, NewObject, ObjectHash};
 
 /// 测试独占的临时目录；`Drop` 时整个删除。
 pub(crate) struct TestDir {
@@ -83,6 +87,36 @@ pub(crate) fn op(marker: u8) -> OpId {
     OpId::from_bytes([marker; ID_LEN])
 }
 
+pub(crate) fn session(marker: u8) -> SessionId {
+    SessionId::from_bytes([marker; ID_LEN])
+}
+
+pub(crate) fn upload(marker: u8) -> UploadId {
+    UploadId::from_bytes([marker; ID_LEN])
+}
+
+pub(crate) fn intent(marker: u8) -> IntentId {
+    IntentId::from_bytes([marker; ID_LEN])
+}
+
+pub(crate) fn object_lease(marker: u8) -> ObjectLeaseId {
+    ObjectLeaseId::from_bytes([marker; ID_LEN])
+}
+
+pub(crate) fn backup_lease(marker: u8) -> BackupLeaseId {
+    BackupLeaseId::from_bytes([marker; ID_LEN])
+}
+
+/// 固定字节的内容哈希：便于在断言里看出是哪一个对象/块。
+pub(crate) fn content_hash(marker: u8) -> ObjectHash {
+    [marker; 32]
+}
+
+/// 固定 UTC 时间戳（秒）。
+pub(crate) fn at(seconds: i64) -> UtcTimestamp {
+    UtcTimestamp::from_unix_seconds(seconds).expect("固定时间戳必须合法")
+}
+
 /// 写一个测试账号；`login` 用身份文本保证唯一。
 pub(crate) async fn insert_user(tx: &mut Transaction<'_, Sqlite>, id: UserId) {
     sqlx::query(
@@ -130,6 +164,35 @@ pub(crate) async fn register_root(
     .expect("注册测试 Root");
     tx.commit().await.expect("提交测试 Root");
     (root, root_entry)
+}
+
+/// 登记一个内容对象并提交，返回它的内容哈希。
+///
+/// 走 [`versions::record_object`]，不绕过被测代码：租约与版本都必须引用**已登记**的对象。
+pub(crate) async fn seed_object(
+    database: &Database,
+    owner: UserId,
+    root: RootId,
+    marker: u8,
+    size: u64,
+) -> ObjectHash {
+    let hash = content_hash(marker);
+    let mut tx = database.begin_write().await.expect("开始写事务");
+    versions::record_object(
+        &mut tx,
+        owner,
+        &NewObject {
+            root,
+            hash,
+            size,
+            storage_path: format!("/srv/objects/{marker:02x}"),
+            verified_at: at(1_700_000_000),
+        },
+    )
+    .await
+    .expect("登记测试对象");
+    tx.commit().await.expect("提交测试对象");
+    hash
 }
 
 /// 在给定父目录下写一个文件条目并提交，返回其身份。
