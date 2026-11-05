@@ -22,7 +22,7 @@
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
 use vaultsyncd_domain::ids::{RootId, TxId, UserId};
-use vaultsyncd_domain::version::{RootSeq, UtcTimestamp};
+use vaultsyncd_domain::version::{RootSeq, ServerEpoch, UtcTimestamp};
 
 /// 一次拉取的批次数上限（design §15.2：所有清单分页有上限）。
 pub const MAX_CHANGE_PAGE: u32 = 500;
@@ -189,6 +189,93 @@ pub async fn changes_after(
     .await
     .map_err(ChangeError::Db)?;
     rows.into_iter().map(ChangeRow::into_batch).collect()
+}
+
+/// 拉取 `after` 之后的批次，**不把同一个事务切到两页之间**。
+///
+/// 与 [`changes_after`] 相同，但 `limit` 只是页的最小批次数：如果第 `limit` 行与紧随其后的行属于
+/// 同一个 `tx_id` 的连续 seq，页会延伸到把这个事务的批次取完。分页因此只决定“在哪个事务边界停”，
+/// 不会让客户端看到半个事务（design §9.3：目录级事务不能被分页拆成一半）。
+pub async fn changes_after_whole_transactions(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+    root: RootId,
+    after: RootSeq,
+    limit: u32,
+) -> Result<Vec<ChangeBatch>, ChangeError> {
+    let mut batches = changes_after(conn, owner, root, after, limit).await?;
+    if batches.len() < usize::try_from(limit).unwrap_or(usize::MAX) {
+        return Ok(batches);
+    }
+    loop {
+        let Some(last) = batches.last() else {
+            return Ok(batches);
+        };
+        let next_seq = last.seq.next().map_err(|_| ChangeError::SeqExhausted)?;
+        let row = sqlx::query_as::<_, ChangeRow>(&format!(
+            "SELECT {CHANGE_COLUMNS} FROM changes c \
+             WHERE c.root_id = ?1 AND c.seq = ?2 AND c.tx_id = ?3"
+        ))
+        .bind(root.as_bytes().as_slice())
+        .bind(next_seq.to_db_integer())
+        .bind(last.tx.as_bytes().as_slice())
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(ChangeError::Db)?;
+        match row {
+            Some(row) => batches.push(row.into_batch()?),
+            None => return Ok(batches),
+        }
+    }
+}
+
+/// 一个 Root 的事件窗口事实：当前头、epoch 与已出保留窗口的下沿。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChangeWindow {
+    /// Root 当前 `RootSeq`（最后一个已提交批次；没有批次为 0）。
+    pub head: RootSeq,
+    /// Root 当前 epoch。
+    pub epoch: ServerEpoch,
+    /// 已出保留窗口的最大 seq：`<= expired_through` 的批次不再保证可拉取，游标早于它必须失效。
+    pub expired_through: RootSeq,
+}
+
+/// 读取事件窗口事实。`retention_cutoff` 之前创建的批次视为已出窗口（design §9.4）。
+///
+/// 下沿取“创建时间早于截止的最新批次”的 seq：一次索引寻址。它与 `head` 在同一条语句里读出，
+/// 所以两者互相一致；调用方应在同一个读事务里接着读批次。
+pub async fn change_window(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+    root: RootId,
+    retention_cutoff: UtcTimestamp,
+) -> Result<ChangeWindow, ChangeError> {
+    let row: Option<(i64, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT r.seq, r.epoch, \
+                (SELECT c.seq FROM changes c WHERE c.root_id = r.id AND c.created_at < ?3 \
+                 ORDER BY c.created_at DESC, c.seq DESC LIMIT 1) \
+         FROM roots r WHERE r.id = ?1 AND r.owner_id = ?2",
+    )
+    .bind(root.as_bytes().as_slice())
+    .bind(owner.as_bytes().as_slice())
+    .bind(retention_cutoff.to_db_integer())
+    .fetch_optional(conn)
+    .await
+    .map_err(ChangeError::Db)?;
+    let Some((head, epoch, expired)) = row else {
+        return Err(ChangeError::OutOfScope);
+    };
+    Ok(ChangeWindow {
+        head: RootSeq::from_db_integer(head)
+            .map_err(|_| ChangeError::MalformedRow { column: "seq" })?,
+        epoch: ServerEpoch::from_db_integer(epoch)
+            .map_err(|_| ChangeError::MalformedRow { column: "epoch" })?,
+        expired_through: match expired {
+            Some(seq) => RootSeq::from_db_integer(seq)
+                .map_err(|_| ChangeError::MalformedRow { column: "seq" })?,
+            None => RootSeq::ZERO,
+        },
+    })
 }
 
 /// 确认 Root 属于调用方的 owner scope；不区分“不存在”与“别人的”。
@@ -451,5 +538,91 @@ mod tests {
         );
         drop(conn);
         database.close().await;
+    }
+
+    #[tokio::test]
+    async fn pages_never_split_a_transaction_that_spans_consecutive_batches() {
+        let dir = TestDir::new("changes-whole-tx");
+        let database = open_database(&dir).await;
+        let owner = seed_owner(&database, 0x11).await;
+        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+
+        // seq 1：独立事务；seq 2、3、4：同一个事务 0x32 的三个连续批次；seq 5：另一个事务。
+        let mut tx = database.begin_write().await.expect("开始写事务");
+        for (marker, seconds) in [(0x31, 10), (0x32, 11), (0x32, 11), (0x32, 11), (0x33, 12)] {
+            append_change(&mut tx, owner, root, tx_id(marker), EVENTS_TWO, at(seconds))
+                .await
+                .expect("追加批次");
+        }
+        tx.commit().await.expect("提交");
+
+        let mut conn = database.pool().acquire().await.expect("取连接");
+        let seqs = |batches: &[ChangeBatch]| -> Vec<u64> {
+            batches.iter().map(|batch| batch.seq.get()).collect()
+        };
+        // limit=2 的朴素切法会停在 seq 2，把事务 0x32 切成两半；整事务切法要延伸到 seq 4。
+        let page = changes_after_whole_transactions(&mut conn, owner, root, RootSeq::ZERO, 2)
+            .await
+            .expect("取页");
+        assert_eq!(seqs(&page), vec![1, 2, 3, 4], "事务 0x32 的三批同在一页");
+        let rest = changes_after_whole_transactions(&mut conn, owner, root, page[3].seq, 2)
+            .await
+            .expect("取余下");
+        assert_eq!(seqs(&rest), vec![5]);
+        // 限额正好落在事务边界上：不多取。
+        let exact = changes_after_whole_transactions(&mut conn, owner, root, RootSeq::ZERO, 1)
+            .await
+            .expect("取页");
+        assert_eq!(seqs(&exact), vec![1]);
+        // 每页拼起来恰好是全部批次，没有丢也没有重。
+        let mut cursor = RootSeq::ZERO;
+        let mut all = Vec::new();
+        loop {
+            let page = changes_after_whole_transactions(&mut conn, owner, root, cursor, 1)
+                .await
+                .expect("逐页取");
+            let Some(last) = page.last() else { break };
+            cursor = last.seq;
+            all.extend(seqs(&page));
+        }
+        assert_eq!(all, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[tokio::test]
+    async fn window_reports_head_epoch_and_retention_floor() {
+        let dir = TestDir::new("changes-window");
+        let database = open_database(&dir).await;
+        let owner = seed_owner(&database, 0x11).await;
+        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let mut conn = database.pool().acquire().await.expect("取连接");
+
+        let empty = change_window(&mut conn, owner, root, at(1_000))
+            .await
+            .expect("空窗口");
+        assert_eq!(empty.head, RootSeq::ZERO);
+        assert_eq!(empty.expired_through, RootSeq::ZERO);
+        drop(conn);
+
+        let mut tx = database.begin_write().await.expect("开始写事务");
+        for (marker, seconds) in [(0x31, 10), (0x32, 20), (0x33, 30)] {
+            append_change(&mut tx, owner, root, tx_id(marker), EVENTS_TWO, at(seconds))
+                .await
+                .expect("追加批次");
+        }
+        tx.commit().await.expect("提交");
+
+        let mut conn = database.pool().acquire().await.expect("取连接");
+        let cases = [(5, 0), (10, 0), (11, 1), (25, 2), (31, 3), (1_000, 3)];
+        for (cutoff, expired) in cases {
+            let window = change_window(&mut conn, owner, root, at(cutoff))
+                .await
+                .expect("窗口");
+            assert_eq!(window.head.get(), 3, "cutoff={cutoff}");
+            assert_eq!(window.expired_through.get(), expired, "cutoff={cutoff}");
+        }
+        let error = change_window(&mut conn, user(0x12), root, at(0))
+            .await
+            .expect_err("别人的账号不得读窗口");
+        assert!(matches!(error, ChangeError::OutOfScope), "{error:?}");
     }
 }

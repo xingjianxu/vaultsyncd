@@ -1386,7 +1386,7 @@ mod tests {
         // 0005 建回收站清单与墓碑，
         // 旧数据保留，迁移前备份落在同目录。
         let database = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(database.schema_version(), 6);
+        assert_eq!(database.schema_version(), 7);
         let mut conn = database.pool().acquire().await.expect("取连接");
         let value: String =
             sqlx::query_scalar("SELECT value FROM store_metadata WHERE key = 'server_id'")
@@ -1425,7 +1425,7 @@ mod tests {
         );
         drop(conn);
         assert!(
-            crate::db::migration_backup_path(&path, 1, 6).exists(),
+            crate::db::migration_backup_path(&path, 1, 7).exists(),
             "非空库升级前应有备份"
         );
 
