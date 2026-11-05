@@ -71,6 +71,7 @@ python3 tools/context.py --help
 | `quickemu` shell（S008） | `devShells.x86_64-linux.quickemu`，derivation `vaultsyncd-quickemu`：quickemu 4.9.9、qemu 11.1.2、xorriso 1.5.8.pl02、wimlib 1.14.5、p7zip、openssh、curl，全部来自同一 `flake.lock`。与 `default` 分开，避免日常开发环境引入虚拟化依赖；`shellHook` 只导出 `VAULTSYNCD_QUICKEMU_SHELL=1`，调用方式 `nix develop .#quickemu --command <cmd>` |
 | `windows` shell（S009） | `devShells.x86_64-linux.windows`，derivation `vaultsyncd-windows`：rustup 1.29.2、cargo-xwin 0.23.1、clang/clang-cl 21.1.8、lld-link 21.1.8、llvm-lib 21.1.8、openssh、git，全部来自同一 `flake.lock`。交叉目标固定 `x86_64-pc-windows-msvc`（理由见 `docs/environment.md` §13.2）。`shellHook` 导出 `VAULTSYNCD_WINDOWS_SHELL=1`，把 `RUSTUP_HOME`/`CARGO_HOME`/`XWIN_CACHE_DIR` 指向工作树根 `.cache/windows/`（被 `.gitignore` 忽略），并用 `rustup which cargo` 把 `rust-toolchain.toml` 指定的工具链放进 PATH；缺失时只提示 `tests/platform/windows/setup-toolchain.sh`，不隐式下载。调用方式 `nix develop .#windows --command <cmd>` |
 | 缓存与清理 | `.cache/windows/{rustup,cargo,xwin}` 全部可再生，`rm -rf .cache/windows` 即清理；不写用户全局 `~/.rustup`、`~/.cargo`，也不进 Git |
+| 默认 shell 的测试工具（S013） | 默认 shell 增加 `pkgs.e2fsprogs`：`mkfs.ext4`（拒绝样本）、`chattr`/`lsattr`（NOCOW 样本）、`filefrag`（reflink 共享 extent 证据）。只被 `tests/platform/linux/` 的验收脚本使用，不构成产品运行依赖；之前主机缺 `lsattr`/`chattr` 的限制（`docs/environment.md` §11.8）由此解除 |
 
 ## Cargo workspace 与 Rust 工具链
 
@@ -78,10 +79,10 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| 根清单 | `Cargo.toml` 为虚拟 workspace（无 `[package]`）；`resolver = "3"`；`members`/`default-members` 只列真实存在的包。当前 `members = ["crates/domain", "crates/platform-windows", "tests/windows-integration", "tools/xtask"]`，`default-members = ["crates/domain"]`：Windows 平台适配层、只能在 Windows 上运行的测试包与仅用于编排的工具都不进默认集合 |
+| 根清单 | `Cargo.toml` 为虚拟 workspace（无 `[package]`）；`resolver = "3"`；`members`/`default-members` 只列真实存在的包。当前 `members = ["crates/domain", "crates/platform-linux-server", "crates/platform-windows", "tests/windows-integration", "tools/xtask"]`，`default-members = ["crates/domain"]`：两个平台适配层、只能在 Windows 上运行的测试包与仅用于编排的工具都不进默认集合 |
 | 包命名 | `crates/<目录>/` 的包名为 `vaultsyncd-<目录>`（如 `vaultsyncd-domain`）；`apps/` 入口按 design §5.7 的 `vaultsyncd-server`/`-admin`/`-agent`/`-cli` |
 | 共享包字段 | `[workspace.package]`：`edition = "2024"`、`rust-version = "1.85.0"`、`version = "0.1.0"`、`publish = false`；成员用 `<字段>.workspace = true` 继承，不重复字面量 |
-| lint 接线 | 成员默认写 `[lints] workspace = true`。`[workspace.lints.rust]`：`unsafe_code`、`missing_docs`、`unused` = deny；`[workspace.lints.clippy]`：`all = { level = "deny", priority = -1 }`。crate 内的 `#![forbid(unsafe_code)]` 是更硬的内层约束。**包级放行 `unsafe_code` 的唯一可行写法**（S010 实测）：省略 `[lints] workspace` 键（写 `workspace = false` 会报错“`workspace` cannot be false”，与 `workspace = true` 并存会被拒“cannot override `workspace.lints` in `lints`”），然后在包内手抄 workspace 的其余 lint（`missing_docs`/`unused` deny、`clippy::all` deny）并在 `Cargo.toml` 注释说明理由；实测 `crates/platform-windows` 的 `missing_docs` 与 `unsafe_code` 行为都符合预期。也可以不改 lint 表，改用各 target 源码里的 crate 级 `#![allow(unsafe_code)]`（`tests/windows-integration` 的做法） |
+| lint 接线 | 成员默认写 `[lints] workspace = true`。`[workspace.lints.rust]`：`unsafe_code`、`missing_docs`、`unused` = deny；`[workspace.lints.clippy]`：`all = { level = "deny", priority = -1 }`。crate 内的 `#![forbid(unsafe_code)]` 是更硬的内层约束。**包级放行 `unsafe_code` 的唯一可行写法**（S010 实测）：省略 `[lints] workspace` 键（写 `workspace = false` 会报错“`workspace` cannot be false”，与 `workspace = true` 并存会被拒“cannot override `workspace.lints` in `lints`”），然后在包内手抄 workspace 的其余 lint（`missing_docs`/`unused` deny、`clippy::all` deny）并在 `Cargo.toml` 注释说明理由；实测 `crates/platform-windows` 的 `missing_docs` 与 `unsafe_code` 行为都符合预期。也可以不改 lint 表，改用各 target 源码里的 crate 级 `#![allow(unsafe_code)]`（`tests/windows-integration` 的做法）。S013 的 `crates/platform-linux-server` 用同一写法（包级 `unsafe_code = "allow"` + 手抄其余 lint），理由同样是必须直接调用内核 ABI |
 | 工具链固定 | `rust-toolchain.toml`：`channel = "1.99.0"`、`targets = ["x86_64-pc-windows-msvc"]`（S009 起）。Linux 日常构建的 rustc/cargo/rustfmt/clippy 来自锁定 nixpkgs，不读该文件；`nix develop .#windows` 内的 rustup 按本文件安装同一 channel 与 Windows 标准库，两端版本以 `docs/environment.md` §13 为唯一基准 |
 | 格式 | `rustfmt.toml` 只固定 `style_edition = "2024"`，其余用默认值；`cargo fmt --check` 为格式门禁 |
 | 锁文件 | 仓库根唯一 `Cargo.lock`（生成产物，提交入库），不得忽略；新增依赖后先 `cargo generate-lockfile`，验证用 `--locked` |
@@ -272,3 +273,88 @@ python3 tools/context.py --help
 - 只传产物与执行脚本，不复制 `target/`、`node_modules/`、缓存或源码树；客体不安装任何编译工具链。
 - 交叉编译成功不是验收证据：`run-on-guest.sh` 必须在客体原生执行并通过两端哈希比对。
 - 退出码用于判定，不把“构建通过”“SCP 成功”当作运行成功。
+
+## crates/platform-linux-server — Linux 服务端挂载准入（S013）
+
+状态：S013 实现 `mounts/`（挂载准入、文件系统身份、NOCOW 检查、根目录遍历）；`files/`（S014 起）、`watcher/`、`ipc/` 尚未实现。包名 `vaultsyncd-platform-linux-server`，**无第三方依赖**（内核 ABI 在 `mounts/raw.rs` 最小声明并带 `const` 布局断言），属于 workspace `members` 但**不在** `default-members`（只在 Linux 上编译）。宿主/服务端的可移植检查不会构建它，验证用 `cargo test --locked -p vaultsyncd-platform-linux-server` 与 `tests/platform/linux/` 的脚本。实测证据见 `docs/environment.md` §15。
+
+### 模块与边界
+
+| 项目 | 契约 |
+| --- | --- |
+| `mounts::raw`（私有） | `fstatfs(2)`、`statx(2)`、`ioctl(2)` 与三个**只读**请求：`FS_IOC_GETFLAGS`、`BTRFS_IOC_FS_INFO`、`BTRFS_IOC_INO_LOOKUP`。`struct statfs`/`struct statx`/两个 btrfs 结构的 LP64 布局有 `size_of`/`offset_of` `const` 断言（编译期自检）。未声明任何设置标志、清理 NOCOW、改挂载的调用 |
+| `mounts::probe` | `probe_path`：`canonicalize` → `O_PATH|O_DIRECTORY|O_NOFOLLOW` 句柄 → `fstatfs`+`statx`（`STATX_INO`/`STATX_BTIME`/`STATX_MNT_ID`/`STATX_SUBVOL`）→ 第二个 `O_RDONLY` 句柄做 `ioctl` 并核对 inode 未变 → 按挂载 ID 关联本进程 `/proc/self/mountinfo` → btrfs 上取 FSID 与子卷 ID。`scan_root`：遍历目录找嵌套子卷与 NOCOW 目录。`inode_flags_of_path`：单文件/目录的 `FS_IOC_GETFLAGS` |
+| `mounts::mountinfo` | `/proc/self/mountinfo` 解析：挂载 ID、父 ID、`major:minor`、`root`、挂载点、每挂载选项、可选字段、fstype、源、超级块选项；还原 `\040`/`\011`/`\012`/`\134` 转义。坏行报错而不是跳过 |
+| `mounts::paths` | 按路径分量判 `Same`/`Ancestor`/`Descendant`/`Unrelated`；`/data/a` 与 `/data/abc` 无关（design §16.1 禁止字符串前缀判断） |
+| `mounts::admission` | 纯逻辑：后端分类、判定顺序、拒绝原因、身份比较、子挂载检测 |
+| `mounts::content` | 纯逻辑：`Empty`/`Sparse`/`FullyAllocated` 内容形态；**稀疏不是占位证据** |
+| 非 Linux 目标 | `mounts` 用 `cfg(target_os = "linux")` 排除；在其它平台该 crate 是空库，不假装提供能力 |
+
+### 判定顺序与原因码（`storage-admission inspect`）
+
+顺序固定，只报第一个命中的原因：
+
+| # | 检查 | `reason`（`code()`） | 设计错误码 |
+| --- | --- | --- | --- |
+| 1 | `fstatfs` 幻数/fstype 必须是 btrfs；拒绝 FUSE（含 `fuse.*`、`fuseblk`）、NFS、CIFS/SMB、overlay、tmpfs、ext4/xfs/zfs 及其它后端 | `unsupported_backend` | `UNSUPPORTED_STORAGE_BACKEND` |
+| 2 | btrfs 上必须取得 FSID 与子卷 ID | `subvolume_identity_unavailable` | 同上 |
+| 3 | Root 目录自身 `FS_IOC_GETFLAGS` 必须可读且不含 `FS_NOCOW_FL`（`0x00800000`） | `nocow_inode_flags` / `inode_flags_unavailable` | 同上 |
+| 4 | 挂载/超级块选项不得含 `nodatacow`/`nodatasum` | `nocow_mount_option` | 同上 |
+| 5 | 目录遍历必须完整（未触发上限），否则结论是“未完成”而不是通过 | `scan_depth_limit_reached` / `scan_entry_limit_reached`（`decision=inconclusive`，退出码 4） | — |
+| 6 | Root 内不得有嵌套子卷（子卷根 inode 恒为 256，再用 subvol ID 确认） | `nested_subvolume` | `UNSUPPORTED_STORAGE_BACKEND` |
+| 7 | 遍历到的目录不得带 NOCOW | `nocow_inode_flags`（带相对路径） | 同上 |
+| 8 | Root 内不得有任何子挂载（bind mount、tmpfs、其它 fs 都算） | `nested_mount` | 同上 |
+| 9 | 内部状态目录必须与 Root 不重叠、本身是 btrfs；与 Root 不在同一 btrfs 文件系统则拒绝 | `internal_state_overlap` / `internal_state_unsupported_backend` / `internal_state_other_filesystem` | 同上 |
+| 10 | 已注册 Root：同一目录（别名）拒绝；路径重叠拒绝 | `duplicate_root` / `overlapping_root` | 同上 |
+
+判定通过时输出 `note=` 行记录事实（`fsid`、`subvol_id`、`mount_id`、`mount_id_source`、`scan_entries`，以及内部状态目录在不同子卷/不同挂载时的 `internal_state_separate_subvolume=`/`internal_state_separate_mount=`）。运行期复核用 `admission::verify_unchanged(recorded, current)`：漂移返回 `filesystem_changed`/`subvolume_changed`/`directory_changed`，对应 `ROOT_UNAVAILABLE`；本卡只提供判定函数，重验时机属后续卡。
+
+### 身份与别名规则
+
+| 项目 | 契约 |
+| --- | --- |
+| 存储单元 | `(FSID, 子卷 ID)`。同子卷的不同路径（bind mount、`..`、符号链接）相等；`same_storage` 据此判定。`fsid` 取自 `BTRFS_IOC_FS_INFO`（无需特权），与 `btrfs filesystem show` 的 UUID 文本一致 |
+| 目录身份 | `(FSID, 子卷 ID, inode)`；inode 只在所属子卷内解释（`same_directory`、`verify_unchanged`） |
+| 子卷 ID 来源优先级 | ① `statx` 的 `STATX_SUBVOL`/`stx_subvol`（内核 6.7 起，**无需特权**）；② `BTRFS_IOC_INO_LOOKUP`（需要 `CAP_SYS_ADMIN`）；③ mountinfo 超级块选项 `subvolid=`（仅当该目录本身就是挂载点）。全部不可用时拒绝，并在输出里保留原始错误 |
+| 挂载 ID 来源 | `statx` 的 `STATX_MNT_ID` 直接对应 mountinfo 的挂载 ID；内核不提供时退化为“覆盖该路径的最长挂载点”，并在 `mount_id_source=` 里标明，不假装是内核给出的 |
+| 设备号 | btrfs 每个子卷有独立匿名设备号，`statx` 的 `stx_dev` 与 mountinfo 的 `major:minor` 本来就不同（实测 `statx_device=0:121` vs `mount_device=0:54`）；因此**不用设备号做身份或一致性校验**，只在输出里分别记录 |
+| 符号链接 | `probe_path` 先 `canonicalize` 再以 `O_NOFOLLOW` 打开；别名得到同一身份。运行时以根句柄为边界，注册期 `canonicalize` 不消除之后的 TOCTOU（design §16.1） |
+
+### 稀疏、占位与第三方 stub 边界
+
+- `content::classify_content_shape` 只描述“逻辑大小 vs 已分配字节”。btrfs 上空洞、预分配、压缩与 CoW 共享 extent 都会让分配小于逻辑大小，这些是普通本地文件；**不能**因此判为占位/按需回源文件。
+- 反向边界无法自动识别：第三方 daemon 把本地目录当占位或回源视图时，Linux 没有可依赖的统一判定方式（design §11.4）。S013 因此只用“允许的后端 + 已知标志 + 部署契约”约束；`SERVER_PLACEHOLDER_UNSUPPORTED` 不出现在本卡的自动判定结果里，留给显式部署契约。
+- 是否“能读到完整字节”由内容版本确认流程验证（design §11.4），不在挂载准入里推断。
+
+### 原型命令 `storage-admission`（example 目标）
+
+`crates/platform-linux-server/examples/storage-admission.rs`，`cargo build --locked -p vaultsyncd-platform-linux-server --example storage-admission`。它是原型诊断入口，不是产品 CLI。输出为稳定的 `key=value` 行。
+
+| 子命令 | 输入 | 行为 | 退出码 |
+| --- | --- | --- | --- |
+| `inspect PATH [--internal-state-dir PATH]… [--registered-root PATH]… [--max-scan-entries N] [--max-scan-depth N]` | 候选 Root 与可选上下文 | 打印探测事实（`backend`/`fstype`/`fs_magic`/`statfs_fsid`/`mount_id(_source)`/`mount_point`/`mount_root`/`statx_device`/`mount_device`/`inode`/`btime`/`fsid`/`subvol_id(_source)`/`inode_flags`/`nocow`、`scan*`、`submounts`）+ `decision`/`reason`/`error_code`/`detail`/`note` | 0 接受；3 拒绝；4 未完成；1 探测错误；2 用法错误 |
+| `identity PATH` | 路径 | 只打印身份字段（挂载 ID、设备、inode、FSID、子卷 ID） | 0；1 探测错误 |
+| `same-storage PATH_A PATH_B` | 两个路径 | 打印 `same_storage=`、`same_directory=` 与两侧 mount id | 0 同一存储；3 不同；1 探测错误 |
+| `content PATH` | 文件或目录 | 打印 `logical_size`、`allocated_bytes`、`content_shape`、`inode_flags`、`nocow`、`placeholder_evidence=none` | 0；1 读元数据失败 |
+| 扫描上限默认值 | — | `max_scan_entries=20000`、`max_scan_depth=32`；超出即 `decision=inconclusive`，不当作通过 | — |
+
+### `tests/platform/linux/` 验收入口（S013）
+
+| 脚本 | 行为 | 退出码 |
+| --- | --- | --- |
+| `common.sh` | 被两个脚本 source：`repo_root`、`require_dev_shell`（缺 cargo/btrfs/findmnt/losetup 即失败）、`require_sudo_noninteractive`（`sudo -n`）、`build_admission_bin`、`run_admission`、`expect_decision`/`expect_field`/`expect_line`/`expect_status`、`snapshot_mounts`/`snapshot_loops`、`umount_checked`/`umount_tolerant`。失败累加并继续，末尾 `summary` 非零 | — |
+| `run-storage-admission.sh` | 用 `tools/test-volume/test-volume.sh create <run_id>` 建立 run 目录，再在**该 run 目录内**做真实样本：btrfs 子卷与 loop 卷接受；bind mount/符号链接/`..` 别名同存储；`/tmp`、`/dev/shm`、`/run`（tmpfs）、`/proc`、自建 overlay、64 MiB 稀疏镜像上的 ext4 拒绝；嵌套子卷、子挂载、NOCOW 目录（`chattr +C`）与 NOCOW 文件拒绝；内部状态目录重叠/跨文件系统拒绝、同卷另一子卷接受并记录备注；已注册 Root 的别名与重叠拒绝；8 MiB 稀疏文件与 1 MiB 随机文件的内容形态；用法/探测错误退出码 | 0 全部通过；1 有用例失败或清理失败 |
+| `run-reflink.sh` | 在 `/data` 卷上建两个兄弟子卷，`cp --reflink=always`（FICLONE）同卷跨子卷与同子卷克隆必须成功、`filefrag -v` 必须报告共享 extent；跨文件系统克隆必须失败（EXDEV）且不留目标文件；源改写后副本保持旧字节 | 同上 |
+
+清理与隔离要求（两个脚本共同）：
+
+- 所有副本、loop、挂载、子卷只在 `runs/<run_id>/` 内；`create` 之后脚本把自己要写的目录 `chown` 给当前用户，子卷/挂载仍只用 `sudo -n`。
+- `trap cleanup EXIT` 逆序卸载挂载、detach 自建 loop、删除自建子卷与样本路径，最后调用 `test-volume.sh cleanup`（其条目白名单会拒绝任何未预期残留）。
+- 结束时核对 `losetup -a` 与 `findmnt` 快照与开始时一致，并报告 run 目录已删除。
+
+### 不变量
+
+- 只读：不设置/清除 inode 标志、不改挂载参数、不做任何“自动修复”。
+- 不把“取不到事实”当作通过：无法确认 FSID/子卷 ID、扫描被上限截断、`FS_IOC_GETFLAGS` 失败都返回拒绝或未完成，并保留原始错误。
+- 后端检查发生在服务进程自己的 mount namespace；容器内路径字符串不是后端类型证明。
+- 同一子卷的多个别名不重复计数；inode 与设备号都不单独作为身份。

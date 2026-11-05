@@ -659,3 +659,87 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - 未验证：Explorer 中占位符的图标/状态显示、多个提供方同时连接、注册在进程崩溃后残留的恢复路径（原型只提供 `cleanup` 收尾）。
 - 目录占位符的 `CfGetPlaceholderStateFromFindData` 在直接查路径时返回 `NO_STATES`（`FindFirstFileW` 不带 reparse tag），原型因此以 `CfGetPlaceholderInfo` 作为占位判定来源；该行为只在 build 26300 上实测。
 - 产物不逐字节可复现（见 §14.1）；`.cache/windows` 仍是交叉构建的唯一缓存，未做 CI 复用。
+
+## 15. S013 Linux 存储准入实测（2026-11-05）
+
+环境：开发/服务验证主机 `wks-lab`，内核 `7.3.0`；默认 devShell 新增 `e2fsprogs`（`mke2fs 1.47.4`、`filefrag 1.47.4`、`chattr`/`lsattr`）。测试卷全部由 `tools/test-volume/test-volume.sh` 在 `/data/vaultsyncd-lab/runs/<run_id>/` 内建立，结束时清理并核对（§15.5）。
+
+### 15.1 内核能力实测（决定实现取舍）
+
+| 项目 | 实测结果 |
+| --- | --- |
+| `statx(STATX_MNT_ID)` | 可用：`mount_id_source=statx_mnt_id`，取值与 `/proc/self/mountinfo` 的挂载 ID 一致 |
+| `statx(STATX_BTIME)` | 可用：`btime=1793881188.822826519`（`/data` 子卷） |
+| `statx(STATX_SUBVOL)` | 可用（内核 6.7+）：`subvol_id_source=statx_subvol`，`/data` 上的专用子卷 `subvol_id` 与 `test-volume.sh` 记录的 `volume_subvol_id` 一致，**且无需特权** |
+| `BTRFS_IOC_FS_INFO` | 非 root 可用，返回的 `fsid` 与 `sudo btrfs filesystem show /data` 的 UUID 完全一致（`13eeae80-1b59-4e17-ae93-172183243973`） |
+| `BTRFS_IOC_INO_LOOKUP` / btrfs 子卷 ioctl | **需要 `CAP_SYS_ADMIN`**：非 root 调用返回 `EPERM`；同一路径的非 root `btrfs subvolume show` 报 `ERROR: Could not search B-tree: Operation not permitted`，加 `sudo` 才给出 `Subvolume ID: 2538`。因此实现优先用 `statx` 的 `STATX_SUBVOL`，旧内核（无该字段）才退回需要特权的 ioctl，最后由 mountinfo 的 `subvolid=`（仅当目录本身是挂载点）兜底 |
+| btrfs 的 `stx_dev` vs mountinfo 设备 | **不同**：子卷挂载点上 `statx_device=0:121`，而 mountinfo 的 `major:minor` 是 `0:54`（btrfs 每个子卷使用独立匿名设备号）。因此设备号不能用于身份或一致性校验，身份改用 `(FSID, 子卷 ID)`，两者都分别打印在输出里 |
+| `FS_IOC_GETFLAGS` | 目录与文件均可读（无特权）；`chattr +C` 的目录返回 `0x00800000`（`FS_NOCOW_FL`），普通目录/文件返回 `0x00000000`。内核 7.3 的 `linux/fs.h` 没有独立的 `FS_NODATASUM_FL`，btrfs 的 nodatasum 与 nodatacow 绑定出现，因此检查项为 `FS_NOCOW_FL` + 挂载/超级块选项里的 `nodatacow`/`nodatasum` |
+| reflink（FICLONE） | 同卷跨子卷 `cp --reflink=always` 成功，`filefrag -v` 报告共享 extent；同子卷克隆同样成功；跨文件系统（`/data` → loop btrfs 镜像）失败为 `Invalid cross-device link`，未留下目标文件 |
+
+### 15.2 准入矩阵实测（`run-storage-admission.sh`，run `s013-adm-final`）
+
+| 样本 | 结论 | 证据 |
+| --- | --- | --- |
+| `/data` 上的专用子卷（`volume/`） | 接受 | `backend=btrfs`、`subvol_id` 与 `run.env` 记录一致、`fsid` 与 `btrfs filesystem show` 一致、`nocow=false`、`scan=complete` |
+| 专用子卷的 bind mount（run 目录内） | 接受且同一存储 | `same_storage=true`、`same_directory=true`、`subvol_id`/`fsid` 与源相同，而 mount id 不同（634 vs 68）——证明身份比较没有只看路径或挂载 ID |
+| 符号链接别名、`volume/../volume` | 同一存储 | `same_storage=true`（退出码 0） |
+| loop btrfs 镜像根（`mnt/`，512 MiB 稀疏镜像） | 接受 | `fsid=898d00fc-c64c-4e40-84ac-21f96dc5e008`，与 `/data` 的 `13eeae80-…` 不同，容量独立 |
+| `/tmp`、`/dev/shm`、`/run` | 拒绝 | `reason=unsupported_backend`、`backend=tmpfs`、`error_code=UNSUPPORTED_STORAGE_BACKEND`、退出码 3 |
+| `/proc` | 拒绝 | `backend=other`、`fs_magic=0x9fa0` |
+| run 目录内自建 overlay（`lowerdir`/`upperdir`/`workdir` 都在 run 目录） | 拒绝 | `backend=overlay`、`fs_magic=0x794c7630` |
+| run 目录内 64 MiB 稀疏镜像 + `mkfs.ext4` | 拒绝 | `backend=ext4`、`fs_magic=0xef53` |
+| 子卷内嵌套子卷（`btrfs subvolume create volume/inner`） | 拒绝 Root；`inner` 本身作为 Root 接受 | `reason=nested_subvolume`、`nested_subvolume=inner subvol_id=…` |
+| 子卷内 tmpfs 子挂载 | 拒绝 | `reason=nested_mount`、`submount=… fstype=tmpfs` |
+| `chattr +C` 目录作为 Root | 拒绝 | `reason=nocow_inode_flags`、`inode_flags=0x00800000` |
+| 子卷内 `chattr +C` 子目录 | 拒绝 Root | `nocow_directory=nocow flags=0x00800000` |
+| 内部状态目录在 Root 内 | 拒绝 | `reason=internal_state_overlap` |
+| 内部状态目录在同一 `/data` 卷的另一子卷 | 接受并记录 | `note=internal_state_separate_subvolume=…`（同 FSID、不同子卷/挂载，reflink 仍可用） |
+| 内部状态目录在 loop 镜像卷（另一文件系统） | 拒绝 | `reason=internal_state_other_filesystem`（双方 FSID 都写进 detail） |
+| 已注册 Root 的 bind 别名 | 拒绝 | `reason=duplicate_root` |
+| 与已注册 Root 路径重叠（父/子目录） | 拒绝 | `reason=overlapping_root` |
+| 8 MiB 稀疏文件、写入 4 KiB 后、1 MiB 随机文件 | `content_shape=sparse`/`sparse`/`fully_allocated` | 三种都输出 `placeholder_evidence=none`：稀疏不作为占位证据 |
+| 缺路径 / 不存在路径 | 退出码 2 / 1 | 用法错误与探测错误都不静默成功 |
+
+汇总：`用例：60 项，失败 0 项`，脚本退出码 0。
+
+### 15.3 reflink 实测（`run-reflink.sh`，run `s013-ref-final`）
+
+| 步骤 | 结果 |
+| --- | --- |
+| `/data` 上两个兄弟子卷（`reflink-a`/`reflink-b`） | 子卷 ID 不同 |
+| 4 MiB 随机内容 → 跨子卷 `cp --reflink=always` | 退出码 0；`cmp` 逐字节一致；`filefrag -v` 有共享 extent 行 |
+| 同子卷克隆 | 退出码 0 |
+| 跨文件系统克隆（→ loop 镜像卷） | 退出码 1，`Invalid cross-device link`，目标文件未创建 |
+| 源文件原地改写 4 KiB | 副本保持旧字节（CoW 隔离） |
+
+汇总：`用例：7 项，失败 0 项`，脚本退出码 0。注意 btrfs 的 `st_blocks` 在克隆文件上仍等于源（共享 extent 也计入分配），因此“分配字节数”不能证明 reflink，必须看 `filefrag` 的共享标记。
+
+### 15.4 与 design/实施手册的核对
+
+- design §11.4 的“`fstatfs` 类型 + mountinfo 记录、区分挂载 ID/设备身份/目录身份、不只看路径前缀”：已按 §15.1 实现并用真实样本证明（bind 别名同存储但 mount ID 不同；`/data/a` 与 `/data/abc` 无关）。
+- design §11.5 的“准入核对 btrfs 类型、FSID、子卷 ID、mount ID 和目录身份”：`probe` 给出全部五项；FSID 与子卷 ID 都有独立来源与来源标注。
+- design §11.5 允许 Root 位于另一块合规 btrfs 卷但要求显式记录复制成本：原型对**内部状态目录**与 Root 跨文件系统时保守拒绝（`internal_state_other_filesystem`），同文件系统跨挂载/跨子卷则接受并记录 `note=`。
+- design §11.4 的“普通稀疏文件不自动等于占位”：`mounts::content` 与 `content` 子命令只输出形态与 `placeholder_evidence=none`。
+- T35 的 FUSE/NFS/SMB 拒绝：本机没有可用 FUSE 服务、NFS/SMB 服务器与客户端权限，**未建真实样本**；分类逻辑（含 `fuse.*` 子类型、`fuseblk`、`nfs`/`nfs4`、`cifs`/`smb3`/`smbfs`）由 `mounts::admission` 的单测覆盖，这一点作为限制记录在 §15.6。
+
+### 15.5 清理核对
+
+两次验收脚本结束时均输出：
+
+- `run 目录已删除：/data/vaultsyncd-lab/runs/<run_id>`（`test-volume.sh cleanup` 的条目白名单没有发现残留）；
+- `losetup -a 与开始时一致`；
+- `findmnt 与开始时一致`（脚本自己建立/卸载的 overlay、bind、tmpfs、ext4 挂载全部回收）；
+- `cleanup status=0`。
+
+人工复核：`losetup -a` 为空、`findmnt` 中无 `vaultsyncd-lab` 挂载、`/data/vaultsyncd-lab/runs` 不存在、`btrfs subvolume list /data | grep vaultsyncd` 为 0 条；`/data/vaultsyncd-lab` 下只剩其他 lane 的 `win-lab/`、`cache/` 与基线 tar（未触碰）。
+
+### 15.6 限制与未核验项
+
+- **FUSE/NFS/SMB 无真实挂载样本**：需要 FUSE daemon、NFS server（或客户端可挂载的导出）与 SMB 服务；本轮只由纯逻辑单测覆盖分类，未做真实拒绝样本。恢复条件：提供本地 `sshfs`/`rclone` 之类的 FUSE 挂载点或本机 NFS/SMB 导出后，把路径加进 `run-storage-admission.sh`。
+- **扫描上限**：默认 20000 条目 / 32 层；更大的 Root 得到 `decision=inconclusive`（退出码 4），不当作通过。真实大目录（例如整个 `/wrd` 源码树）未做规模测试。
+- **文件级 NOCOW**：遍历阶段只对**目录**读 `FS_IOC_GETFLAGS`；目录内单个文件的 NOCOW 由 `content` 子命令/后续扫描器报告，准入不逐文件检查（成本原因）。
+- **btrfs 设备号语义**：`statx` 的 `stx_dev` 是每子卷匿名设备号，与 mountinfo 后端设备不同；任何后续卡不能用设备号做卷身份或“同卷”判断。
+- **旧内核**：没有 `STATX_SUBVOL` 的内核（如 Ubuntu 24.04 的 6.8）上，非 root 进程无法通过 `BTRFS_IOC_INO_LOOKUP` 取子卷 ID，会得到 `subvolume_identity_unavailable`；此时需要给服务进程 `CAP_SYS_ADMIN`，或让 Root 本身就是挂载点以便用 mountinfo 的 `subvolid=` 兜底。Ubuntu 24.04 未实测（首发兼容环境仍是待验证项，见 §8.2）。
+- **第三方 stub/占位**：Linux 上没有可依赖的统一判定；本轮只验证“稀疏文件不是占位证据”，没有也不能声称识别第三方 daemon 的占位/回源视图。
+- **可移植检查不覆盖本 crate**：`crates/platform-linux-server` 不在 `default-members`，`cargo xtask check`/CI 不构建它；必须显式 `cargo test --locked -p vaultsyncd-platform-linux-server` 或跑 `tests/platform/linux/` 脚本（与 `crates/platform-windows` 的分工一致）。

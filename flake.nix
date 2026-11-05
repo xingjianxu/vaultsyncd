@@ -39,6 +39,11 @@
             pkgs.pnpm
             pkgs.python3
 
+            # S013：存储准入验收需要 mkfs.ext4（拒绝样本）、chattr/lsattr（NOCOW 标志样本）
+            # 与 filefrag（reflink 共享 extent 证据）。只用于 tests/platform/linux/ 下的脚本，
+            # 不引入任何产品运行依赖。
+            pkgs.e2fsprogs
+
             # 版本控制与数据库
             pkgs.git
             pkgs.sqlite

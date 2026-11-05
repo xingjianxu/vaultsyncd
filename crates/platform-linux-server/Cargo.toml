@@ -1,0 +1,26 @@
+[package]
+name = "vaultsyncd-platform-linux-server"
+description = "Linux 服务端平台适配层：挂载准入、文件身份与普通文件 I/O（docs/design.md §5.4、§11.4—11.5）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 挂载准入必须直接调用 fstatfs(2)/statx(2)/ioctl(2)（O_PATH 目录句柄 + FS_IOC_GETFLAGS +
+# BTRFS_IOC_FS_INFO/INO_LOOKUP），而根 `[workspace.lints.rust]` 的 `unsafe_code = deny`
+# 无法在继承 workspace lint 的包内单独放行（两种写法都被 Cargo 拒绝，见
+# docs/architecture/interfaces.md 的“lint 接线”）。这里按 S010 在 crates/platform-windows
+# 已验证的同一写法处理：省略 `[lints] workspace` 键，手抄 workspace 的其余 lint，只放行
+# `unsafe_code`。修改根 `[workspace.lints]` 时必须同步本表。
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "deny"
+unused = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+# 无第三方依赖：内核 ABI 只用到三个只读 ioctl 与两个查询系统调用，全部在
+# `src/mounts/raw.rs` 里最小声明并用 const 断言自检布局；不引入 libc（理由见
+# agent/tasks/S013.md）。
+[dependencies]
