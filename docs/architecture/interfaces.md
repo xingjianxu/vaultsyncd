@@ -757,6 +757,44 @@ python3 tools/context.py --help
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
 
+## 认证与账号（S042）
+
+状态：S042 实现核心用例、账号表 typed API、状态目录互斥锁与离线 `init` 命令。登录 HTTP 端点与会话/刷新凭据属 S043（`POST /v1/auth/login` 的响应是会话，本卡没有会话表）。
+
+### `crates/server-store`：`users` 与 `state_lock`
+
+| 项 | 契约 |
+| --- | --- |
+| `users::UserStatus` / `STATUS_ACTIVE` | 闭集，当前只有 `active`；读到未知状态文本报 `UserError::MalformedRow{column:status}`，不猜默认值 |
+| `users::{insert_user,find_by_login,find_by_id,count_users,login_exists,user_exists}` | 事务内/连接上的读写。登录名唯一且**原样比较**（不做大小写折叠或 Unicode 规范化）；空登录名与空散列在写库前被拒；`NewUser{id,login,password_hash}` → `UserRecord{id,login,password_hash,status}` |
+| `UserError` | 稳定码 `empty_login`/`empty_password_hash`/`duplicate_login`/`duplicate_user_id`/`malformed_user_row`/`user_storage_failed` |
+| `state_lock::{StateLock,LOCK_FILE_NAME}` | `StateLock::try_acquire_exclusive(state_dir)` 独占 `<state_dir>/server.lock`（`fs2` 的 flock/LockFileEx，非阻塞）。`StateLockError::{Io,Busy}`（码 `state_lock_io`/`state_locked`）；锁随句柄关闭或进程退出释放，不用 pid 文件 |
+
+### `crates/server-core`：`auth`
+
+| 项 | 契约 |
+| --- | --- |
+| `auth::password::PasswordHasher` | `production()` 用 Argon2id v19、`m=19456 KiB, t=2, p=1`（常量 `M_COST_KIB`/`T_COST`/`P_COST`，RFC 9106 方向的工程基线，实测与 ADR 未做）；`hash(&str) -> PHC 文本`（每次独立随机盐）；`verify(stored,&str) -> PasswordVerdict{Matched,Mismatched,Malformed}`，只接受 `argon2id`（白名单），校验按散列自带参数；`dummy_verify` 用于不存在账号的等代价计算 |
+| `auth::account::OwnerAccounts` | 端口：`count` / `find_by_login` / `insert`（均 `&mut self`，适配器可持一次写事务）；`StoredAccount{id,login,password_hash,active}`、`NewAccount`、`AccountError{Storage,DuplicateLogin,Malformed}` |
+| `auth::init::prepare_owner(accounts, hasher, ids, NewOwnerRequest{login,password})` | 顺序固定：账号数为 0（否则 `AlreadyInitialized{existing}`）→ 登录名/密码形态（`MIN_PASSWORD_CHARS=12`、`MAX_PASSWORD_BYTES=1024`、登录名 ≤64 字符且无控制字符）→ Argon2id 散列 → 返回 `PreparedOwner{id,login,password_hash}`。**不写库**：写入由调用方在与 `count` 同一事务里完成 |
+| `auth::login::authenticate(accounts, hasher, throttle, LoginAttempt{login,password,now})` | 先限流、再查账号、再比密码；账号不存在/密码错/账号未启用一律 `InvalidCredentials`（不存在账号也做等值代价计算）；`RateLimited{retry_after_seconds}`；`AccountBroken` 只用于已存散列损坏。成功返回 `AuthenticatedAccount{id,login}`，不发放凭据 |
+| `auth::throttle::{LoginThrottle,ThrottlePolicy}` | 进程内、按登录名、按服务端时间：默认 5 次失败/300 秒窗口/锁定 300 秒；不存在的登录名同样计数；`MAX_TRACKED_LOGINS=1024` 上限（超出先清理过期条目，再淘汰最久未出现的一条） |
+
+### `apps/server-admin`（包 `vaultsyncd-admin`）
+
+| 项 | 契约 |
+| --- | --- |
+| 入口 | `vaultsyncd-admin init --state-dir <目录> [--login <登录名>]`，默认登录名 `owner`；无 `--password`（密码只从 stdin 读：终端下两遍且不回显，管道下一行） |
+| 退出码 | `0` 成功；`1` 执行失败（状态目录不可用、数据库打不开、散列/写入失败）；`2` 用法或输入不合规（含两次密码不一致、弱密码、非法登录名）；`3` 状态目录被占用（服务端在运行或另一个 init）；`4` 已初始化过 |
+| 输出 | 只打印 `login`、账号身份（32 位十六进制）、数据库路径与“Argon2id”这一事实；不打印密码，也不打印散列 |
+| 流程 | 校验状态目录（绝对路径、已存在）→ 抢 `state_lock` → `Database::open(dir/server.sqlite)` → 一个写事务里 `prepare_owner` + 账号端口 `insert` → 提交 |
+
+### 不变量与未接入
+
+- **没有默认密码、没有公开注册**：写账号的唯一路径是离线 `init`；重复 init 被拒且旧散列原样保留（进程级用例断言）。
+- **运行中不能 init**：服务端启动即独占 `<state_dir>/server.lock`（`StartupError::StateLock`），离线 init 抢不到锁时退出码 3；位置在打开数据库之前，因此不存在“两边都开着库再争锁”的窗口。
+- 未接入（后续卡）：`POST /v1/auth/login` 的 HTTP 处理与会话/刷新凭据（S043，含 401 `AUTH_EXPIRED`/429 `RATE_LIMITED` 映射与按来源地址限流）；Argon2id 参数的实测与 ADR；`apps/server` 尚未依赖 `apps/server-admin`（后者不需要）。
+
 ## api/ — 远端协议契约源与生成配置（S024）
 
 状态：S024 建立最小契约与生成通路。`api/` 是远端 HTTP 协议的唯一编辑源（design §5.6、§15.1—15.4），生成代码提交入库，`cargo xtask check` 用逐字节比对守住“契约与代码同步”。业务语义（状态机、不变量）仍以 design 为准，这里只记录契约文件的形状与生成器边界。
@@ -787,6 +825,7 @@ python3 tools/context.py --help
 - 可选字段在 Rust 侧带 `#[serde(skip_serializing_if = "Option::is_none")]`（S025 起）：缺省的可选字段不出现在 JSON 里，与 TypeScript 解码器“只接受缺省（`undefined`）”一致，写入方不写 `null`。已知宽容：serde 的 `Option<T>` 对显式 `null` 与缺省都解出 `None`，而 TS 解码器把 `null` 当畸形；正常链路（两侧都由生成代码写出）不会产生 `null`，样本里也没有。
 - 闭合枚举与十进制校验的语义由两侧测试共同锁定：`cargo test --locked -p vaultsyncd-protocol`（13 个契约用例）+ `pnpm --filter @vaultsyncd/api-client test`（9 项运行时断言）。
 - 生成文件表头标注“禁止手改”，不含时间戳或随机顺序，因此重新生成逐字节一致。
+- **请求体尚不支持**：生成器只读 `responses`，`Operation` 的 `deny_unknown_fields` 会把 `requestBody` 当未支持构造拒绝。因此带请求体的 `POST /v1/auth/login` 不能在 S042 进契约；登录端点与其请求/响应 schema 由 S043（会话发放）连同生成器扩展一起落地。
 
 ## crates/protocol — 远端 wire 契约（S024）
 
@@ -1307,4 +1346,4 @@ python3 tools/context.py --help
 - **停止不丢任务**：`Draining` 先于 HTTP 收尾；停止流程不删除意图行/暂存/已发布内容，只打印保留条数并关闭数据库。
 - **配置不猜默认**：未知键、非法地址、缺失/相对状态目录一律退出码 2，且不创建数据库。
 
-未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Root 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥仍靠部署约定（同 S037 限制）。
+未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Root 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥由 S042 的状态目录锁提供（见「认证与账号（S042）」），两个进程不再能同时占用同一状态目录。
