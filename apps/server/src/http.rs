@@ -31,10 +31,11 @@ use crate::content::ContentContext;
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::operations::OperationsContext;
 use crate::roots::RootContext;
+use crate::sync::SyncContext;
 use crate::uploads::UploadsContext;
 
-/// 全部路由：健康探测（无认证）、认证端点（S043）、Root 注册/清单（S044）、上传与内容（S045/S046）
-/// 与操作命令（S047）。
+/// 全部路由：健康探测（无认证）、认证端点（S043）、Root 注册/清单（S044）、上传与内容（S045/S046）、
+/// 操作命令（S047）与快照/changes/SSE（S048）。
 ///
 /// 状态直接就是进程级状态对象，业务端点由后续功能卡加入同一个 router 并从它取数据库与授权检查。
 pub fn router(
@@ -44,6 +45,7 @@ pub fn router(
     roots: Arc<RootContext>,
     content: Arc<ContentContext>,
     operations: Arc<OperationsContext>,
+    sync: Arc<SyncContext>,
 ) -> Router {
     let public = Router::new()
         .route("/v1/health", get(health))
@@ -96,12 +98,26 @@ pub fn router(
             get(super::operations::status),
         )
         .with_state(operations);
+    // 一致性快照、changes 与 SSE 提示（S048）：分页只读清单，游标失效明确 410，SSE 只作提示。
+    let sync_router = Router::new()
+        .route(
+            "/v1/roots/{root}/snapshots",
+            post(super::sync::create_snapshot),
+        )
+        .route(
+            "/v1/roots/{root}/snapshots/{snapshot}/entries",
+            get(super::sync::list_snapshot_entries),
+        )
+        .route("/v1/roots/{root}/changes", get(super::sync::list_changes))
+        .route("/v1/roots/{root}/events", get(super::sync::subscribe))
+        .with_state(sync);
     public
         .merge(authenticated)
         .merge(roots_router)
         .merge(uploads_router)
         .merge(content_router)
         .merge(operations_router)
+        .merge(sync_router)
 }
 
 async fn health(State(lifecycle): State<Arc<Lifecycle>>) -> Response {
@@ -184,7 +200,8 @@ mod tests {
             &std::env::temp_dir(),
         ));
         let operations = Arc::new(OperationsContext::new(Arc::clone(&auth)));
-        router(lifecycle, auth, uploads, roots, content, operations)
+        let sync = Arc::new(SyncContext::new(Arc::clone(&auth), Arc::clone(&lifecycle)));
+        router(lifecycle, auth, uploads, roots, content, operations, sync)
     }
 
     async fn get_health(lifecycle: Arc<Lifecycle>) -> (StatusCode, String) {

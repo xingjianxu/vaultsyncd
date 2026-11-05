@@ -184,6 +184,11 @@ impl Service {
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
         // 操作命令端点（S047）：命令执行链路属 S052，本版新命令显式 503 SERVICE_NOT_READY。
         let operations = Arc::new(crate::operations::OperationsContext::new(Arc::clone(&auth)));
+        // 快照、changes 与 SSE（S048）：SSE 在 draining 时主动结束，不拖住优雅停止。
+        let sync = Arc::new(crate::sync::SyncContext::new(
+            Arc::clone(&auth),
+            Arc::clone(&lifecycle),
+        ));
         let router = http::router(
             Arc::clone(&lifecycle),
             auth,
@@ -191,6 +196,7 @@ impl Service {
             roots,
             content,
             operations,
+            sync,
         );
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {

@@ -25,6 +25,7 @@ pub mod observer;
 pub mod operations;
 pub mod recovery;
 pub mod roots;
+pub mod sync;
 pub mod uploads;
 
 /// 退出码：正常停止。
