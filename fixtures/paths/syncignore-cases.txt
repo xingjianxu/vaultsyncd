@@ -1,0 +1,48 @@
+# 排除规则用例表（S018）：与 syncignore-binding.syncignore 配套，由
+# crates/fs-common/tests/ignore_rules.rs 逐行验证。
+#
+# 注释行以 `# `（井号加空格）开头或整行只有 `#`；其余每行都是一条用例。因此 `#notes#`
+# 这种以 `#` 开头的路径可以出现在用例的第一列。
+# 每行一条用例，六列以 `|` 分隔：
+#
+#   路径 | 类型 | 期望 | 命中的规则 | 命中位置 | 被阻断的否定规则
+#
+#   路径：Root 相对路径（`/` 分隔，不含空格）。
+#   类型：file 或 dir；目录规则只匹配 dir。
+#   期望：include（参与同步）或 exclude（不参与同步，**不是删除**）。
+#   规则：include 时为命中路径的否定规则，exclude 时为命中的排除规则；`-` 表示没有。
+#   命中位置：self（查询路径自身）、ancestor:<路径>（某个祖先目录）、`-`（没有规则命中）。
+#   被阻断的否定规则：路径自身命中的 `!` 规则，因祖先目录被排除而不能生效；`-` 表示没有。
+#
+# 覆盖：注释/空行、通配、根锚定、目录规则、否定规则、父目录排除后的子项否定边界。
+
+# 目录规则：只匹配目录，同名文件参与同步；未锚定的目录名在任意深度都匹配。
+build                                  | dir      | exclude | build/             | self              | -
+build                                  | file     | include | -                  | -                 | -
+src/build                              | dir      | exclude | build/             | self              | -
+build/x.txt                            | file     | exclude | build/             | ancestor:build    | -
+build/a/b.txt                          | file     | exclude | build/             | ancestor:build    | -
+
+# 父目录排除 / 子项否定：`!secrets/public.txt` 命中但被父目录规则阻断（Git 限制）。
+secrets                                | dir      | exclude | secrets/           | self              | -
+secrets/public.txt                     | file     | exclude | secrets/           | ancestor:secrets  | !secrets/public.txt
+
+# 通配与否定：`*` 在任意深度匹配单个分量，`!keep.log` 让该名字重新参与同步。
+app.log                                | file     | exclude | *.log              | self              | -
+a/b/app.log                            | file     | exclude | *.log              | self              | -
+keep.log                               | file     | include | !keep.log          | self              | -
+
+# 根锚定：`/cache/` 只匹配 Root 下的目录。
+cache                                  | dir      | exclude | /cache/            | self              | -
+src/cache                              | dir      | include | -                  | -                 | -
+
+# 双星通配：`docs/**/draft.md` 匹配零层或多层中间目录。
+docs/draft.md                          | file     | exclude | docs/**/draft.md   | self              | -
+docs/a/b/draft.md                      | file     | exclude | docs/**/draft.md   | self              | -
+docs/other.md                          | file     | include | -                  | -                 | -
+
+# 注释不生效，转义后的 `#` 才是文件名；默认清单不参与本样本（notes.tmp 照常同步）。
+ignored-by-comment.txt                 | file     | include | -                  | -                 | -
+#notes#                                | file     | exclude | \#notes#           | self              | -
+notes.tmp                              | file     | include | -                  | -                 | -
+readme.md                              | file     | include | -                  | -                 | -

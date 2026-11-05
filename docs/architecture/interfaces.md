@@ -87,7 +87,7 @@ python3 tools/context.py --help
 | 格式 | `rustfmt.toml` 只固定 `style_edition = "2024"`，其余用默认值；`cargo fmt --check` 为格式门禁 |
 | 锁文件 | 仓库根唯一 `Cargo.lock`（生成产物，提交入库），不得忽略；新增依赖后先 `cargo generate-lockfile`，验证用 `--locked` |
 | 验收命令 | `cargo metadata --locked --no-deps`、`cargo check --locked`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` |
-| MSRV 状态 | `rust-version = "1.85.0"` 依据 edition 2024 稳定版本声明；实测只在 1.99.0 上编译（Linux 与 Windows 交叉目标），devShell 内无 1.85.0 工具链，1.85.0 真编译复核仍未执行 |
+| MSRV 状态 | `rust-version = "1.85.0"` 依据 edition 2024 稳定版本声明；实测只在 1.99.0 上编译（Linux 与 Windows 交叉目标），devShell 内无 1.85.0 工具链，1.85.0 真编译复核仍未执行。resolver 3 会按 `rust-version` 做 MSRV 感知解析：S018 的 `ignore = "0.4"` 因此锁定 `ignore 0.4.30`（0.4.31 起要求 Rust 1.88），`globset` 同样停在 0.4.19 而不是 0.4.21 |
 
 ## 前端 pnpm workspace 与 UI 包
 
@@ -558,7 +558,7 @@ python3 tools/context.py --help
 
 ## crates/fs-common — 相对路径与跨平台名称规则（S017）
 
-状态：S017 在 `crates/fs-common/src/path.rs`、`name.rs` 落地纯规则；无第三方依赖、无 I/O、无平台 API，已加入根 workspace 的 `members` 与 `default-members`（可移植核心，`cargo test/clippy --locked` 直接覆盖）。排除规则（`ignore.rs`）、文件事实类型（`fingerprint.rs`）留给后续卡，本卡不预置占位 API。
+状态：S017 在 `crates/fs-common/src/path.rs`、`name.rs` 落地纯规则；无 I/O、无平台 API，已加入根 workspace 的 `members` 与 `default-members`（可移植核心，`cargo test/clippy --locked` 直接覆盖）。S018 增加排除规则模块 `ignore.rs` 与唯一第三方依赖 `ignore`（ripgrep 的 gitignore 实现，见下一节）；文件事实类型（`fingerprint.rs`）留给后续卡，本卡不预置占位 API。
 
 ### 模块与契约
 
@@ -591,6 +591,40 @@ python3 tools/context.py --help
 - 碰撞只报告不消解：接入原生等价端口只会扩大检测范围，不会产生改名或覆盖行为。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/fs-common — 排除规则与解释（S018）
+
+状态：S018 在 `crates/fs-common/src/ignore.rs` 落地 `.syncignore` 的解析与解释（design §10.4、C13、T27），样本与用例表在 `fixtures/paths/`。glob 匹配交给 `ignore` crate 的 `gitignore` 实现（design §4.1“经验证的 gitignore 风格匹配库，不自行拼写 glob 正则”），这是本 crate 唯一的第三方依赖；本模块只接收文本、不读文件（`Gitignore::new`、`GitignoreBuilder::add` 不使用），因此仍属可移植纯规则。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `ignore::DEFAULT_RULES` | 内置默认排除清单文本，**可直接编辑**。只列编辑器交换/锁文件（`*~`、`*.swp`、`.*#`…、`~$*`、`*.tmp`、`*.temp`）、下载中间文件（`*.part`、`*.partial`、`*.crdownload`）与桌面缓存元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）。不排除整个 `.git`、不排除任意隐藏文件、不排除 `.syncignore` 自身 |
+| `IgnoreRules::parse_with_defaults(&str)` | 默认清单在前、调用方文本在后（后者优先，可用 `!` 覆盖默认排除）；返回 `Result<IgnoreRules, RuleIssue>` |
+| `IgnoreRules::parse(&str)` | 只用给定文本，内置默认清单不参与（绑定提供完整清单时用） |
+| `IgnoreRules::decide(&RelativePath, is_dir) -> Decision` | 给出裁决与解释；祖先目录按从浅到深检查 |
+| `IgnoreRules::is_excluded(&RelativePath, is_dir) -> bool` | 只要布尔结果时的入口，与 `decide` 判定一致 |
+| `ignore::Decision` | `Included { reinclude: Option<Hit> }` / `Excluded(Exclusion)`；实现 `Display`（中文解释，供“为什么被排除”查询） |
+| `ignore::Exclusion` | `hit: Hit`（命中的规则）+ `blocked_reinclude: Option<Hit>`（路径自身命中的 `!` 规则因祖先目录被排除而不能生效） |
+| `ignore::Hit` | `rule`（规则原文，保留 `!` 与目录尾 `/`）、`source: RuleSource`（`Defaults` / `Binding`）、`at: MatchedAt`（`Path` / `Ancestor(RelativePath)`） |
+| `ignore::RuleIssue` | `Line { source, line, text, reason }`（行号相对各自来源文本）、`Build { reason }`；实现 `Display` 与 `std::error::Error` |
+
+### 规则与边界
+
+- **语义等同 Git gitignore**：`#` 整行注释、空行、`!` 否定、`*`/`?`/`**`/字符类、前导 `/` 根锚定、尾部 `/` 只匹配目录；首行 UTF-8 BOM 与 CRLF 按 Git 习惯处理。
+- **父目录排除后不能重新包含子项**：`secrets/` 排除后 `!secrets/public.txt` 不生效，解释里给出被阻断的规则；`ignore` crate 的 `matched_path_or_any_parents` 是叶子优先（ripgrep 遍历视角），与 Git 的限制相反，因此本模块自己按祖先自浅到深遍历、只借用该库的 glob 匹配。
+- **规则顺序决定结果**：同一路径的多条规则取最后的匹配；目录被 `!` 重新包含后子项可正常参与同步（`Included.reinclude` 记录命中的否定规则，可能位于祖先目录）。
+- **默认清单可编辑、可替换**：改 `DEFAULT_RULES` 即改所有绑定默认；绑定可用 `parse_with_defaults` 追加或在 `parse` 里给完整清单。默认规则文件本身不能落到“被自己排除而无法更新”的循环（design §10.4）。
+- 行号按来源分别计数：叠加默认清单后，绑定文本的解析错误仍报绑定文本自己的行号。
+
+### 不变量
+
+- **排除不是删除**：本模块只有“参与/不参与”两种裁决，不产生也无法产生 Delete 事件；排除的路径保留已下载的本地内容与服务器内容（design §5/§10.4、C05/C13）。
+- **相同规则结果确定**：裁决只依赖规则文本、路径分量与 `is_dir`，不含哈希顺序、平台比较表或目录遍历状态；重复解析与重复查询给出同一结论。
+- **默认规则不吞掉最终文件**：编辑器先写 `x.docx.tmp` 再 rename-over 成 `x.docx` 时，最终文件参与同步（T27）。
+
+样本与验证：`fixtures/paths/syncignore-binding.syncignore`（绑定级规则样本）+ `fixtures/paths/syncignore-cases.txt`（用例表：路径 | 类型 | 期望 | 规则 | 命中位置 | 被阻断的否定规则），由 `crates/fs-common/tests/ignore_rules.rs` 逐行验证；默认清单的临时文件/最终文件边界在 `src/ignore.rs` 单测里。验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
 
 ## crates/planner — 三方比较与基本计划（S019、S021）
 

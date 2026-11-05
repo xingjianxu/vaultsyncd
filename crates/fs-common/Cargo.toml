@@ -1,10 +1,15 @@
 [package]
 name = "vaultsyncd-fs-common"
-description = "vaultsyncd 与平台无关的路径与名称规则：相对路径校验、跨平台名称分类、名称等价端口"
+description = "vaultsyncd 与平台无关的路径、名称与排除规则：相对路径校验、跨平台名称分类、名称等价端口、.syncignore 匹配与解释"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+
+[dependencies]
+# 排除规则的匹配交给经验证的 gitignore 实现（design §4.1）：不自行拼写 glob 正则，
+# 并由 `tests` 覆盖 Git 文档里的父目录/否定边界差异。
+ignore = "0.4"
 
 [lints]
 workspace = true

@@ -1,0 +1,28 @@
+# 绑定级 .syncignore 样本（S018；design §10.4、C13、T27；Git gitignore 官方规则）。
+#
+# crates/fs-common/tests/ignore_rules.rs 把本文件与 syncignore-cases.txt 一起加载：改这里的
+# 规则必须同时改用例表，否则两边不一致会直接失败。内置默认清单不参与本样本（只用
+# `IgnoreRules::parse`），因此 notes.tmp 这类文件在用例表里仍是“参与同步”。
+
+# 1. 目录规则只匹配目录：尾部 `/` 让同名文件照常同步。
+build/
+
+# 2. 父目录被排除后，子项不能用否定规则重新包含（Git 的限制，design §10.4 要求明确测试）。
+secrets/
+!secrets/public.txt
+
+# 3. 否定规则可以重新包含被通配排除的路径；规则顺序决定结果。
+*.log
+!keep.log
+
+# 4. 前导 `/` 根锚定：只匹配 Root 下的 cache，不匹配 src/cache。
+/cache/
+
+# 5. `**` 匹配零层或多层目录。
+docs/**/draft.md
+
+# 6. 整行注释不生效；行首 `#` 用 `\#` 转义才是文件名。
+# ignored-by-comment.txt
+\#notes#
+
+# 7. 空行无意义。
