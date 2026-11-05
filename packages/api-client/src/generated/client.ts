@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeErrorEnvelope, decodeHealthResponse, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
-import type { Capabilities, ErrorBody, HealthResponse, LoginRequest, RefreshRequest, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
+import { decodeCapabilities, decodeErrorEnvelope, decodeHealthResponse, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
+import type { Capabilities, ErrorBody, HealthResponse, LoginRequest, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -75,6 +75,34 @@ async function read_json(response: Response): Promise<unknown> {
 
 function api_error(status: number, body: unknown): ApiError {
   return new ApiError(status, decodeErrorEnvelope(body).error);
+}
+
+/**
+ * 注册 Root
+ *
+ * 注册一个服务端工作目录（design §11.4、§15.2）。只接受部署配置里预置的允许基目录内的
+ * 普通目录；后端不是本地 btrfs（FUSE、占位/按需回源视图等）、路径与已注册 Root 或内部
+ * 状态目录重叠、以及扫描内无法证明合规的目录一律拒绝。注册只读探测，不改写、不清空、
+ * 不导入既有文件；初始采集是后续步骤，因此响应报告“待导入”。
+ *
+ * 200：已注册（既有文件未被改动）
+ * 401：没有可用凭据
+ * 403：路径不在允许基目录内，或没有管理权限
+ * 422：目录不是可注册的普通存储（配置阶段拒绝）
+ * 503：服务端存储不可用
+ */
+export async function registerRoot(options: ClientOptions, body: RootRegisterRequest, init?: RequestInit): Promise<RootRegistered> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/admin/roots"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeRootRegistered(payload);
 }
 
 /**
@@ -191,6 +219,29 @@ export async function getHealth(options: ClientOptions, init?: RequestInit): Pro
     throw api_error(response.status, payload);
   }
   return decodeHealthResponse(payload);
+}
+
+/**
+ * 授权 Root 清单
+ *
+ * 列出当前调用者可见的 Root 及其健康状态（design §15.2）。响应只有身份与状态：
+ * 普通客户端不获得服务器绝对路径，管理面要用路径时走本机或管理员通道。
+ *
+ * 200：当前调用者的 Root 清单
+ * 401：没有可用凭据
+ * 503：服务端存储不可用
+ */
+export async function listRoots(options: ClientOptions, init?: RequestInit): Promise<RootList> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/roots"), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeRootList(payload);
 }
 
 /**

@@ -24,11 +24,14 @@ use tracing::{error, info, warn};
 use vaultsyncd_server_store::db::{Database, DbError};
 use vaultsyncd_server_store::state_lock::{StateLock, StateLockError};
 
+use vaultsyncd_platform_linux_server::mounts::probe::ScanPolicy;
+
 use crate::auth;
 use crate::config::Config;
 use crate::http;
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::recovery::{self, RecoveryAssessment, RecoveryAssessmentError};
+use crate::roots::RootContext;
 
 /// 启动失败：进程必须以非零退出码结束，且从未开放写入。
 #[derive(Debug)]
@@ -162,7 +165,22 @@ impl Service {
             Arc::clone(&auth),
             &config.state_dir,
         ));
-        let router = http::router(Arc::clone(&lifecycle), auth, uploads);
+        // 允许基目录来自配置；没有配置时注册端点一律拒绝（不是“不限制”）。
+        let allowed_root_bases = config.allowed_root_bases.clone();
+        info!(
+            allowed_root_bases = allowed_root_bases.as_ref().map_or(0, |bases| bases.len()),
+            "Root 注册的允许基目录"
+        );
+        if allowed_root_bases.is_none() {
+            warn!("没有配置 [roots].allowed_bases：Root 注册端点会拒绝一切路径");
+        }
+        let roots = Arc::new(RootContext::new(
+            Arc::clone(&auth),
+            allowed_root_bases,
+            config.state_dir.clone(),
+            ScanPolicy::default(),
+        ));
+        let router = http::router(Arc::clone(&lifecycle), auth, uploads, roots);
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
             shutdown.await;

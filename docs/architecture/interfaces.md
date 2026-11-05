@@ -1429,6 +1429,40 @@ python3 tools/context.py --help
 
 未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Root 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥由 S042 的状态目录锁提供（见「认证与账号（S042）」），两个进程不再能同时占用同一状态目录。
 
+## crates/server-core + apps/server — Root 注册与清单（S044）
+
+状态：S044 实现。核心侧 `vaultsyncd_server_core::api::roots`（纯规则，无 I/O），应用侧 `vaultsyncd_server::roots`（HTTP + 平台探测 + 写库装配），契约在 `api/openapi.yaml`。
+
+### 核心规则（`vaultsyncd_server_core::api::roots`）
+
+| 项 | 契约 |
+| --- | --- |
+| `AllowedBases::new(iter)` | 允许基目录必须非空、绝对、不含 `..`（`AllowedBaseError::{Empty,NotAbsolute,NotNormalized}`）；重复项去重。空集合是配置错误，不是“不限制” |
+| `AllowedBases::{contains,len,is_empty}` | `contains` 按**路径分量**判断“在基目录内或就是基目录”，不用字符串前缀（`/data/root` 不含 `/data/rootx`）；相对路径、含 `..` 的路径一律不在范围内（本层不折叠路径） |
+| `CandidateFacts` | 平台层探测结论：`Accepted{volume_identity,root_identity}` / `NotADirectory{reason,detail}` / `UnsupportedStorage{reason,detail}` / `Inconclusive{reason,detail}`；核心不重复做挂载判定 |
+| `evaluate_registration(&bases, resolved, facts)` | 先判规范路径仍在允许基目录内，再按事实给出 `RegistrationVerdict::{Accepted,Rejected}` |
+| `RegistrationRejection` | `design_error_code()`：越界 `ACCESS_DENIED`，其余（不是目录、存储准入拒绝、扫描不完整）`UNSUPPORTED_STORAGE_BACKEND`（design §11.4 的配置阶段拒绝）；`http_status()` 403/422；`reason()` 进错误信封 `details.reason`（越界为 `outside_allowed_bases`，**不回显允许目录**）；`retryable()` 恒 false |
+
+### 端点与配置（`vaultsyncd_server::{roots,config,http,bootstrap}`）
+
+| 项 | 契约 |
+| --- | --- |
+| `POST /v1/admin/roots` | 需要有效会话（首发只有一位 owner，没有账号注册接口，因此“仅 owner 管理”＝必须有会话）。请求 `RootRegisterRequest{path}`；成功 200 `RootRegistered{root_id,health,pending_import}`，不回显路径。顺序：允许基目录（按请求文本，越界直接 403 且**不探测**，避免成为任意路径探针）→ `RootHandle::open` + `scan_root` + `admission::evaluate`（候选 vs 内部状态目录、已注册 Root、本进程挂载表）→ 按规范路径再判一次允许基目录 → `roots::insert_root` 写行与合成根条目 |
+| 拒绝映射 | 403 `ACCESS_DENIED`（越界/未配置基目录）；422 `UNSUPPORTED_STORAGE_BACKEND`（FUSE/占位视图、非 btrfs、NOCOW、嵌套子卷/子挂载、内部目录重叠、已注册父子/别名重叠、扫描不完整、不是目录）。存储失败 503 `NEEDS_RECOVERY` |
+| `GET /v1/roots` | 需要有效会话。`RootList{roots:[RootSummary{root_id,health}]}`，只含身份与健康状态（`healthy`/`unavailable`），**不含绝对路径**；按 `root_id` 排序（库内 `ORDER BY absolute_path` 只用于运维） |
+| `[roots] allowed_bases` | 配置项（`Option<AllowedBases>`）：缺省为 `None` ＝ 所有注册 403；出现非法项时启动前报 `config_invalid_value` / `roots.allowed_bases` |
+| `RootContext` | `vaultsyncd_server::roots::RootContext{auth, bases, state_dir, scan, ids}`；内部状态目录当前取 `[state] dir`（SQLite 与后续对象/历史/暂存/备份都将在其下），挂载探测在 `spawn_blocking` 里做（`statfs`/`statx`/`getdents64` 是阻塞调用） |
+| 身份字节 | `volume_identity` = btrfs FSID 的 UUID 文本字节；`root_file_identity` = `RootSnapshot::of_facts(facts).to_spec()` 字节。两者都是平台层编码，存储层只存不解释 |
+
+### 不变量与未接入
+
+- **注册不改写目录内容**：流程只做只读探测（句柄打开、目录遍历、挂载表读取）与 SQLite 写入；既有文件不导入、不清空、不改名（端点用例断言样本字节不变）。
+- **启动不以空库覆盖既有文件**：注册是显式管理动作；启动恢复（S037）只处理未完成意图，不扫描、不写入 Root 内容。
+- **两段允许基目录检查**：符号链接不能把 Root 带出允许范围；越界路径连“是否存在”都不回答。
+- **普通客户端看不到绝对路径**：清单与注册响应都不含服务器路径；日志里才有 `path=`（服务端日志属运维面）。
+
+未接入（后续卡）：`pending_import` 目前恒为 `true` 且**没有持久化列**——初始采集（S049）完成时如何把“待导入”推进为“已导入”需要 `roots` 追加迁移（design §7.2 的 roots 列不含该状态，SQLite 改 CHECK 需重建表，故留给采集卡一次做对）；Root 健康状态只在注册时写入，运行期挂载漂移复核（`RootHandle::verify` + `RootSnapshot::compare` → `ROOT_UNAVAILABLE` 暂停）尚未接到后台巡检；`epoch` 写 `ServerEpoch::ZERO`（进程还没有独立的 epoch 来源，`GET /v1/capabilities` 属后续卡）；多账号角色区分（admin 与普通成员）需要账号卡先加角色列。
+
 ## crates/server-core — 历史版本与回收站恢复（S040，子树恢复 S040-b）
 
 主要落点 `crates/server-core/src/history/`（`version`、`trash`），端口在 `ports/restore_store.rs` 与

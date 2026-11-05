@@ -80,6 +80,8 @@ struct Caller {
 }
 
 impl Caller {
+    // 失败类型是 axum 的 Response（处理器直接把它当返回值用）：与 `auth::principal_from` 同一约定。
+    #[allow(clippy::result_large_err)]
     async fn resolve(
         context: &UploadsContext,
         headers: &HeaderMap,

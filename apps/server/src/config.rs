@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use vaultsyncd_server_core::api::roots::AllowedBases;
 
 /// 开发默认监听地址：只监听回环地址，端口与常见开发服务分开。
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8721";
@@ -62,6 +63,8 @@ pub struct Config {
     pub state_dir: PathBuf,
     /// 服务端数据库文件的绝对路径（`state_dir/server.sqlite`）。
     pub database: PathBuf,
+    /// 允许注册 Root 的基目录（design §11.4）；`None` 表示没有配置，任何注册都拒绝。
+    pub allowed_root_bases: Option<AllowedBases>,
     /// 日志配置。
     pub log: LogConfig,
 }
@@ -133,7 +136,18 @@ struct RawConfig {
     server: RawServer,
     state: RawState,
     #[serde(default)]
+    roots: RawRoots,
+    #[serde(default)]
     log: RawLog,
+}
+
+/// `[roots]` 段：Root 注册的部署契约。
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RawRoots {
+    /// 允许注册的基目录（服务器绝对路径，规整形式）。缺省即“没有配置”。
+    #[serde(default)]
+    allowed_bases: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,6 +243,19 @@ impl Config {
         }
         let database = state_dir.join(DATABASE_FILE_NAME);
 
+        // 允许基目录是部署契约：写错就拒绝启动，而不是把“空集合”解释成“不限制”。
+        let allowed_root_bases = match raw.roots.allowed_bases {
+            None => None,
+            Some(list) => Some(
+                AllowedBases::new(list.into_iter().map(PathBuf::from)).map_err(|error| {
+                    ConfigError::InvalidValue {
+                        field: "roots.allowed_bases",
+                        detail: error.to_string(),
+                    }
+                })?,
+            ),
+        };
+
         let level = match raw.log.level.as_deref() {
             None => tracing::Level::INFO,
             Some(text) => {
@@ -254,6 +281,7 @@ impl Config {
             listen,
             state_dir,
             database,
+            allowed_root_bases,
             log: LogConfig { level, format },
         })
     }
@@ -288,6 +316,34 @@ mod tests {
         assert_eq!(config.database, dir.join(DATABASE_FILE_NAME));
         assert_eq!(config.log.level, tracing::Level::DEBUG);
         assert_eq!(config.log.format, LogFormat::Json);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn allowed_root_bases_are_optional_but_validated_when_present() {
+        let dir = temp_dir("roots");
+        let text = format!(
+            "[state]\ndir = \"{}\"\n\n[roots]\nallowed_bases = [\"/data/roots\"]\n",
+            dir.display()
+        );
+        let config = Config::parse(&text, "test.toml").expect("解析配置");
+        let bases = config.allowed_root_bases.as_ref().expect("允许基目录");
+        assert_eq!(bases.len(), 1);
+        assert!(bases.contains(Path::new("/data/roots/project")));
+
+        // 没有配置就是 `None`：注册端点拒绝一切路径，而不是“不限制”。
+        let without = format!("[state]\ndir = \"{}\"\n", dir.display());
+        let config = Config::parse(&without, "test.toml").expect("解析配置");
+        assert!(config.allowed_root_bases.is_none());
+
+        for bad in ["[]", "[\"relative\"]", "[\"/data/../roots\"]"] {
+            let text = format!(
+                "[state]\ndir = \"{}\"\n\n[roots]\nallowed_bases = {bad}\n",
+                dir.display()
+            );
+            let error = Config::parse(&text, "test.toml").expect_err("非法允许基目录必须拒绝");
+            assert_eq!(error.code(), "config_invalid_value", "{error}");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

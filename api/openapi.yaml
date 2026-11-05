@@ -148,6 +148,80 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /v1/roots:
+    get:
+      operationId: listRoots
+      summary: 授权 Root 清单
+      description: |
+        列出当前调用者可见的 Root 及其健康状态（design §15.2）。响应只有身份与状态：
+        普通客户端不获得服务器绝对路径，管理面要用路径时走本机或管理员通道。
+      responses:
+        "200":
+          description: 当前调用者的 Root 清单
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RootList"
+        "401":
+          description: 没有可用凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端存储不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/admin/roots:
+    post:
+      operationId: registerRoot
+      summary: 注册 Root
+      description: |
+        注册一个服务端工作目录（design §11.4、§15.2）。只接受部署配置里预置的允许基目录内的
+        普通目录；后端不是本地 btrfs（FUSE、占位/按需回源视图等）、路径与已注册 Root 或内部
+        状态目录重叠、以及扫描内无法证明合规的目录一律拒绝。注册只读探测，不改写、不清空、
+        不导入既有文件；初始采集是后续步骤，因此响应报告“待导入”。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RootRegisterRequest"
+      responses:
+        "200":
+          description: 已注册（既有文件未被改动）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RootRegistered"
+        "401":
+          description: 没有可用凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: 路径不在允许基目录内，或没有管理权限
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 目录不是可注册的普通存储（配置阶段拒绝）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端存储不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
   /v1/roots/{root}/uploads:
     post:
       operationId: beginUpload
@@ -493,6 +567,66 @@ components:
         already_present:
           type: boolean
           description: 是否为幂等重传（同一索引、同一字节已经登记过）。
+
+    RootHealth:
+      description: |
+        Root 健康状态闭集（design §7.2 `roots.health`）。`unavailable` 表示挂载、身份或权限
+        核对失败，该 Root 暂停同步但绝不据此推导删除。
+      type: string
+      enum:
+        - healthy
+        - unavailable
+
+    RootSummary:
+      description: 一条授权 Root 的对外摘要；不含服务器绝对路径。
+      type: object
+      required: [root_id, health]
+      properties:
+        root_id:
+          type: string
+          description: Root 身份，32 个小写十六进制字符。
+        health:
+          $ref: "#/components/schemas/RootHealth"
+          description: 当前健康状态。
+
+    RootList:
+      description: 授权 Root 清单（design §15.2 `GET /v1/roots`）。
+      type: object
+      required: [roots]
+      properties:
+        roots:
+          type: array
+          description: 当前调用者可见的 Root，按身份顺序稳定排列。
+          items:
+            $ref: "#/components/schemas/RootSummary"
+
+    RootRegisterRequest:
+      description: |
+        注册 Root 的输入（design §15.2 `POST /v1/admin/roots`）。这是少数接受服务器绝对路径
+        的网络接口之一，因此必须同时受允许基目录与存储准入约束。
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: 服务端绝对路径；必须在部署配置的允许基目录内。
+
+    RootRegistered:
+      description: 注册结果（design §15.2）。
+      type: object
+      required: [root_id, health, pending_import]
+      properties:
+        root_id:
+          type: string
+          description: 新 Root 的身份，32 个小写十六进制字符。
+        health:
+          $ref: "#/components/schemas/RootHealth"
+          description: 注册时的健康状态。
+        pending_import:
+          type: boolean
+          description: |
+            该 Root 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Root 恒为
+            true；采集完成后由后续的初始采集步骤推进。
 
     LoginRequest:
       description: 登录请求（design §15.2 `POST /v1/auth/login` 的输入）。
