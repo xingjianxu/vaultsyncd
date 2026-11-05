@@ -31,6 +31,10 @@ vaultsyncd-fs-common = { path = "../fs-common" }
 [dev-dependencies]
 # 迁移测试是真实 SQLite 文件的异步测试：`#[tokio::test]` 与多线程 runtime 由测试侧提供。
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# 提交意图证据的编码属 `vaultsyncd-server-core`（S034）：本 crate 的测试要证明核心写出的
+# `expected_before`/`desired_after` 能穿过 `fs_intents` 的 CHECK 并按同一编码还原，因此只在
+# dev-dependencies 里接核心，生产依赖方向仍是“适配器依赖核心的端口”，反向依赖不存在。
+vaultsyncd-server-core = { path = "../server-core" }
 
 [lints]
 workspace = true
