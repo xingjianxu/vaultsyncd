@@ -24,6 +24,9 @@ argon2 = { version = "0.5", features = ["password-hash", "rand"] }
 # feature（Cargo 的 feature 是并集），代码仍从 `argon2::password_hash::rand_core` 取 `OsRng`，
 # 避免项目里出现两个 rand 类型。
 rand_core = { version = "0.6", features = ["getrandom"] }
+# 会话凭据只存摘要（design §17.1）：摘要用 SHA-256，与内容哈希、存储层的请求摘要同一算法，
+# 避免项目里出现两套摘要惯例。
+sha2 = "0.10"
 
 [dev-dependencies]
 # 意图状态机是异步端口（服务端存储层是异步 SQLx）：测试用 `#[tokio::test]` 驱动内存假端口。

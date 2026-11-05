@@ -59,8 +59,157 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /v1/auth/login:
+    post:
+      operationId: login
+      summary: 登录
+      description: |
+        用登录名与密码换一对凭据（design §15.2、§17.1）。失败一律 401，不区分“账号不存在”
+        与“密码不对”；触发限流时 429。浏览器走同源 HttpOnly cookie，agent 把响应里的凭据
+        存入 OS 凭据库或权限受限的凭据文件（见 docs/adr/0001-auth-credential-carriers.md）。
+        响应不带服务器绝对路径。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: 登录成功，返回一对凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionIssued"
+        "401":
+          description: 凭据无效（不区分账号不存在与密码不对）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: 跨源 cookie 写请求被拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          description: 登录尝试过于频繁
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/auth/refresh:
+    post:
+      operationId: refresh
+      summary: 刷新会话凭据
+      description: |
+        用刷新凭据换新的一对凭据（design §15.2）。轮换是原子的：旧会话随即失效，同一个刷新
+        凭据不能再用。被用过或已撤销的刷新凭据一律 401，不回放后继凭据。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: 轮换成功，返回新的凭据对
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionIssued"
+        "401":
+          description: 刷新凭据无效、过期、已撤销或已被使用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      summary: 注销当前会话
+      description: |
+        失效当前会话的凭据（design §15.2）。只动服务端会话，不清理任何本地文件；重复注销是
+        幂等的。
+      responses:
+        "200":
+          description: 会话已失效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionRevoked"
+        "401":
+          description: 没有可用凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   schemas:
+    LoginRequest:
+      description: 登录请求（design §15.2 `POST /v1/auth/login` 的输入）。
+      type: object
+      required: [login, password, device_label]
+      properties:
+        login:
+          type: string
+          description: 登录名（原样比较，不做大小写折叠）。
+        password:
+          type: string
+          description: 明文密码；只在本次请求内存在，服务端不记录。
+        device_label:
+          type: string
+          description: 设备的人类可读标签（不是设备身份，首发没有设备注册表）。
+
+    RefreshRequest:
+      description: 刷新请求（design §15.2 `POST /v1/auth/refresh` 的输入）。
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          description: 上一次签发的刷新凭据；用一次即失效。
+
+    SessionIssued:
+      description: 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。
+      type: object
+      required: [session_id, access_token, refresh_token, access_expires_at, refresh_expires_at]
+      properties:
+        session_id:
+          type: string
+          description: 会话身份，32 个小写十六进制字符。
+        access_token:
+          type: string
+          description: 访问凭据，放在 Authorization 头的 Bearer 方案里，短期有效。
+        refresh_token:
+          type: string
+          description: 刷新凭据，只能用于 `/v1/auth/refresh` 且用一次即失效。
+        access_expires_at:
+          type: string
+          format: decimal_u64
+          description: 访问凭据到期时间（UTC Unix 秒的十进制文本）。
+        refresh_expires_at:
+          type: string
+          format: decimal_u64
+          description: 刷新凭据到期时间（UTC Unix 秒的十进制文本）。
+
+    SessionRevoked:
+      description: 注销结果。
+      type: object
+      required: [session_id, revoked_at]
+      properties:
+        session_id:
+          type: string
+          description: 被失效的会话身份，32 个小写十六进制字符。
+        revoked_at:
+          type: string
+          format: decimal_u64
+          description: 失效时间（UTC Unix 秒的十进制文本）。
+
     Capabilities:
       description: 协议版本、服务器身份、epoch、功能集合与限额（design §15.2）。
       type: object

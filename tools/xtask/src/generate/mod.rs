@@ -20,7 +20,9 @@ mod emit;
 mod local_ipc;
 
 /// 生成配置格式版本；与 `api/generation.toml` 的 `format_version` 核对。
-const FORMAT_VERSION: u32 = 2;
+///
+/// v3：端点可有 `requestBody`（只接受 `application/json` 且引用具名 schema）。
+const FORMAT_VERSION: u32 = 3;
 /// 生成器名；与 `api/generation.toml` 的 `generator` 核对。
 const GENERATOR: &str = "vaultsyncd-xtask";
 /// 生成配置文件（相对 workspace 根）。
@@ -315,6 +317,20 @@ struct Operation {
     description: Option<String>,
     /// 状态码 → 响应；`default` 之类非数字状态码被拒绝。
     responses: BTreeMap<String, Response>,
+    /// 请求体；只在带请求体的端点出现（S043 起支持）。
+    #[serde(rename = "requestBody", default)]
+    request_body: Option<RequestBody>,
+}
+
+/// 一个请求体：只支持 `application/json`，且必须引用具名 schema（不生成内联结构）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestBody {
+    /// 是否必填；缺省视为必填（`false` 表示请求体可以没有，当前契约不使用）。
+    #[serde(default)]
+    required: Option<bool>,
+    /// 媒体类型 → schema；只接受 `application/json`。
+    content: BTreeMap<String, MediaType>,
 }
 
 /// 一个响应。
@@ -463,6 +479,8 @@ pub(crate) struct ApiOperation {
     pub(crate) doc: Vec<String>,
     /// 2xx 响应的 schema 名。
     pub(crate) success_type: String,
+    /// 请求体的 schema 名；`None` 表示无请求体。
+    pub(crate) request_type: Option<String>,
 }
 
 impl Model {
@@ -513,6 +531,14 @@ impl Model {
                     "端点 {} 引用了未定义的 schema `{}`（{REF_PREFIX}{}）",
                     operation.operation_id, operation.success_type, operation.success_type
                 ));
+            }
+            if let Some(request_type) = &operation.request_type {
+                if !self.schemas.contains_key(request_type) {
+                    return Err(format!(
+                        "端点 {} 的请求体引用了未定义的 schema `{request_type}`（{REF_PREFIX}…）",
+                        operation.operation_id
+                    ));
+                }
             }
         }
         Ok(())
@@ -889,7 +915,42 @@ fn build_operation(
         doc,
         success_type: success_type
             .ok_or_else(|| format!("端点 {} 没有 2xx 响应", operation.operation_id))?,
+        request_type: build_request_type(operation)?,
     })
+}
+
+/// 解析请求体：只接受 `application/json` + 具名 schema 引用。
+fn build_request_type(operation: &Operation) -> Result<Option<String>, String> {
+    let Some(body) = &operation.request_body else {
+        return Ok(None);
+    };
+    if body.required == Some(false) {
+        return Err(format!(
+            "端点 {} 的 requestBody 声明为可选；生成器只支持必填请求体",
+            operation.operation_id
+        ));
+    }
+    if body.content.len() != 1 || !body.content.contains_key("application/json") {
+        return Err(format!(
+            "端点 {} 的 requestBody 只支持 application/json（实有：{}）",
+            operation.operation_id,
+            body.content.keys().cloned().collect::<Vec<_>>().join("、")
+        ));
+    }
+    let media = &body.content["application/json"];
+    let reference = media.schema.reference.as_deref().ok_or_else(|| {
+        format!(
+            "端点 {} 的请求体必须引用具名 schema（$ref: {REF_PREFIX}…），不要写内联对象",
+            operation.operation_id
+        )
+    })?;
+    let name = reference.strip_prefix(REF_PREFIX).ok_or_else(|| {
+        format!(
+            "端点 {} 的请求体 `$ref` 只支持 {REF_PREFIX}…",
+            operation.operation_id
+        )
+    })?;
+    Ok(Some(name.to_string()))
 }
 
 /// 端点标识会变成 TypeScript 函数名，必须是 lowerCamelCase。

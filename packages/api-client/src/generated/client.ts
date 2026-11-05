@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeErrorEnvelope, decodeHealthResponse } from "./types";
-import type { Capabilities, ErrorBody, HealthResponse } from "./types";
+import { decodeCapabilities, decodeErrorEnvelope, decodeHealthResponse, decodeSessionIssued, decodeSessionRevoked } from "./types";
+import type { Capabilities, ErrorBody, HealthResponse, LoginRequest, RefreshRequest, SessionIssued, SessionRevoked } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -51,9 +51,16 @@ function join_url(base_url: string, path: string): string {
   return `${base_url.replace(/\/$/, "")}${path}`;
 }
 
-function request_headers(options: ClientOptions, init?: RequestInit): Headers {
+function request_headers(
+  options: ClientOptions,
+  init: RequestInit | undefined,
+  has_body: boolean,
+): Headers {
   const headers = new Headers(init?.headers);
   headers.set("accept", "application/json");
+  if (has_body) {
+    headers.set("content-type", "application/json");
+  }
   headers.set("x-request-id", options.request_id());
   return headers;
 }
@@ -71,6 +78,78 @@ function api_error(status: number, body: unknown): ApiError {
 }
 
 /**
+ * 登录
+ *
+ * 用登录名与密码换一对凭据（design §15.2、§17.1）。失败一律 401，不区分“账号不存在”
+ * 与“密码不对”；触发限流时 429。浏览器走同源 HttpOnly cookie，agent 把响应里的凭据
+ * 存入 OS 凭据库或权限受限的凭据文件（见 docs/adr/0001-auth-credential-carriers.md）。
+ * 响应不带服务器绝对路径。
+ *
+ * 200：登录成功，返回一对凭据
+ * 401：凭据无效（不区分账号不存在与密码不对）
+ * 403：跨源 cookie 写请求被拒绝
+ * 429：登录尝试过于频繁
+ */
+export async function login(options: ClientOptions, body: LoginRequest, init?: RequestInit): Promise<SessionIssued> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/login"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, true),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeSessionIssued(payload);
+}
+
+/**
+ * 注销当前会话
+ *
+ * 失效当前会话的凭据（design §15.2）。只动服务端会话，不清理任何本地文件；重复注销是
+ * 幂等的。
+ *
+ * 200：会话已失效
+ * 401：没有可用凭据
+ */
+export async function logout(options: ClientOptions, init?: RequestInit): Promise<SessionRevoked> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/logout"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, false),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeSessionRevoked(payload);
+}
+
+/**
+ * 刷新会话凭据
+ *
+ * 用刷新凭据换新的一对凭据（design §15.2）。轮换是原子的：旧会话随即失效，同一个刷新
+ * 凭据不能再用。被用过或已撤销的刷新凭据一律 401，不回放后继凭据。
+ *
+ * 200：轮换成功，返回新的凭据对
+ * 401：刷新凭据无效、过期、已撤销或已被使用
+ */
+export async function refresh(options: ClientOptions, body: RefreshRequest, init?: RequestInit): Promise<SessionIssued> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/refresh"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, true),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeSessionIssued(payload);
+}
+
+/**
  * 能力协商
  *
  * 返回协议版本、服务器身份、epoch、功能集合与限额，供客户端显式协商。不泄露任何
@@ -83,13 +162,13 @@ export async function getCapabilities(options: ClientOptions, init?: RequestInit
   const response = await options.fetch(join_url(options.base_url, "/v1/capabilities"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init),
+    headers: request_headers(options, init, false),
   });
-  const body = await read_json(response);
+  const payload = await read_json(response);
   if (!response.ok) {
-    throw api_error(response.status, body);
+    throw api_error(response.status, payload);
   }
-  return decodeCapabilities(body);
+  return decodeCapabilities(payload);
 }
 
 /**
@@ -105,11 +184,11 @@ export async function getHealth(options: ClientOptions, init?: RequestInit): Pro
   const response = await options.fetch(join_url(options.base_url, "/v1/health"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init),
+    headers: request_headers(options, init, false),
   });
-  const body = await read_json(response);
+  const payload = await read_json(response);
   if (!response.ok) {
-    throw api_error(response.status, body);
+    throw api_error(response.status, payload);
   }
-  return decodeHealthResponse(body);
+  return decodeHealthResponse(payload);
 }

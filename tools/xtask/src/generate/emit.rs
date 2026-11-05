@@ -319,6 +319,9 @@ fn render_typescript_client(config: &GenerationConfig, model: &Model) -> String 
     for operation in &model.operations {
         decoders.push(format!("decode{}", operation.success_type));
         types.push(operation.success_type.clone());
+        if let Some(request_type) = &operation.request_type {
+            types.push(request_type.clone());
+        }
     }
     decoders.sort();
     decoders.dedup();
@@ -398,9 +401,16 @@ function join_url(base_url: string, path: string): string {
   return `${base_url.replace(/\\/$/, \"\")}${path}`;
 }
 
-function request_headers(options: ClientOptions, init?: RequestInit): Headers {
+function request_headers(
+  options: ClientOptions,
+  init: RequestInit | undefined,
+  has_body: boolean,
+): Headers {
   const headers = new Headers(init?.headers);
   headers.set(\"accept\", \"application/json\");
+  if (has_body) {
+    headers.set(\"content-type\", \"application/json\");
+  }
   headers.set(\"x-request-id\", options.request_id());
   return headers;
 }
@@ -430,18 +440,32 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
         }
     }
     out.push_str(" */\n");
+    match &operation.request_type {
+        Some(request_type) => {
+            out.push_str(&format!(
+                "export async function {}(options: ClientOptions, body: {}, init?: RequestInit): Promise<{}> {{\n",
+                operation.operation_id, request_type, operation.success_type
+            ));
+            out.push_str(&format!(
+                "  const response = await options.fetch(join_url(options.base_url, \"{}\"), {{\n    ...init,\n    method: \"{}\",\n    headers: request_headers(options, init, true),\n    body: JSON.stringify(body),\n  }});\n",
+                operation.path, operation.method
+            ));
+        }
+        None => {
+            out.push_str(&format!(
+                "export async function {}(options: ClientOptions, init?: RequestInit): Promise<{}> {{\n",
+                operation.operation_id, operation.success_type
+            ));
+            out.push_str(&format!(
+                "  const response = await options.fetch(join_url(options.base_url, \"{}\"), {{\n    ...init,\n    method: \"{}\",\n    headers: request_headers(options, init, false),\n  }});\n",
+                operation.path, operation.method
+            ));
+        }
+    }
+    out.push_str("  const payload = await read_json(response);\n");
+    out.push_str("  if (!response.ok) {\n    throw api_error(response.status, payload);\n  }\n");
     out.push_str(&format!(
-        "export async function {}(options: ClientOptions, init?: RequestInit): Promise<{}> {{\n",
-        operation.operation_id, operation.success_type
-    ));
-    out.push_str(&format!(
-        "  const response = await options.fetch(join_url(options.base_url, \"{}\"), {{\n    ...init,\n    method: \"{}\",\n    headers: request_headers(options, init),\n  }});\n",
-        operation.path, operation.method
-    ));
-    out.push_str("  const body = await read_json(response);\n");
-    out.push_str("  if (!response.ok) {\n    throw api_error(response.status, body);\n  }\n");
-    out.push_str(&format!(
-        "  return decode{}(body);\n}}\n\n",
+        "  return decode{}(payload);\n}}\n\n",
         operation.success_type
     ));
 }

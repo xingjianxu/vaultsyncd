@@ -20,19 +20,28 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use tracing::warn;
 use vaultsyncd_protocol::generated::{
     ErrorBody, ErrorCode, ErrorEnvelope, HealthResponse, HealthStatus,
 };
 
+use crate::auth::AuthContext;
 use crate::lifecycle::{Lifecycle, Phase};
 
-/// 健康探测与其他无需认证端点的 router。
-pub fn router(lifecycle: Arc<Lifecycle>) -> Router {
-    Router::new()
+/// 全部路由：健康探测（无认证）与认证端点（S043）。
+///
+/// 状态直接就是进程级状态对象，业务端点由后续功能卡加入同一个 router 并从它取数据库与授权检查。
+pub fn router(lifecycle: Arc<Lifecycle>, auth: Arc<AuthContext>) -> Router {
+    let public = Router::new()
         .route("/v1/health", get(health))
-        .with_state(lifecycle)
+        .with_state(lifecycle);
+    let authenticated = Router::new()
+        .route("/v1/auth/login", post(super::auth::login))
+        .route("/v1/auth/refresh", post(super::auth::refresh))
+        .route("/v1/auth/logout", post(super::auth::logout))
+        .with_state(auth);
+    public.merge(authenticated)
 }
 
 async fn health(State(lifecycle): State<Arc<Lifecycle>>) -> Response {
@@ -90,12 +99,21 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
-    fn service(lifecycle: Arc<Lifecycle>) -> Router {
-        router(lifecycle)
+    async fn service(lifecycle: Arc<Lifecycle>) -> Router {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "vaultsyncd-s043-http-{}-{sequence}.sqlite",
+            std::process::id()
+        ));
+        let database = crate::auth::test_database(&path).await;
+        router(lifecycle, Arc::new(crate::auth::AuthContext::new(database)))
     }
 
     async fn get_health(lifecycle: Arc<Lifecycle>) -> (StatusCode, String) {
         let response = service(lifecycle)
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/v1/health")
