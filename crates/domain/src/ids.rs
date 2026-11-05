@@ -234,6 +234,11 @@ opaque_id! {
     BackupLeaseId
 }
 
+opaque_id! {
+    /// 一致性快照清单身份（design §9.3 的 `snapshot_id`）：同一份清单的所有分页引用同一个值。
+    SnapshotId
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +283,7 @@ mod tests {
         check_identity_type!(IntentId);
         check_identity_type!(ObjectLeaseId);
         check_identity_type!(BackupLeaseId);
+        check_identity_type!(SnapshotId);
     }
 
     #[test]

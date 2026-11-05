@@ -20,7 +20,7 @@
 //!   不是空清单。
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, SnapshotId, UserId, VersionId};
 use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
 
 use crate::entries::EntryKind;
@@ -35,7 +35,7 @@ pub const MAX_LIVE_SNAPSHOTS_PER_ROOT: i64 = 8;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotRecord {
     /// 快照身份（128 位随机值，由调用方经 `IdSource` 生成）。
-    pub id: [u8; ID_LEN],
+    pub id: SnapshotId,
     /// 所属 Root。
     pub root: RootId,
     /// 创建快照时 Root 的 `RootSeq`。
@@ -141,7 +141,7 @@ pub async fn create_snapshot(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
     root: RootId,
-    id: [u8; ID_LEN],
+    id: SnapshotId,
     now: UtcTimestamp,
     expires_at: UtcTimestamp,
 ) -> Result<SnapshotRecord, SnapshotError> {
@@ -198,7 +198,7 @@ pub async fn create_snapshot(
          (id, root_id, owner_id, high_water_seq, epoch, entry_count, created_at, expires_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
-    .bind(id.as_slice())
+    .bind(id.as_bytes().as_slice())
     .bind(root.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .bind(high_water_seq.to_db_integer())
@@ -218,7 +218,7 @@ pub async fn create_snapshot(
          FROM entries e LEFT JOIN versions v ON v.id = e.content_version_id \
          WHERE e.root_id = ?2 AND e.deleted_at IS NULL",
     )
-    .bind(id.as_slice())
+    .bind(id.as_bytes().as_slice())
     .bind(root.as_bytes().as_slice())
     .execute(&mut **tx)
     .await?;
@@ -247,7 +247,7 @@ pub async fn snapshot_page(
     conn: &mut SqliteConnection,
     owner: UserId,
     root: RootId,
-    snapshot: [u8; ID_LEN],
+    snapshot: SnapshotId,
     cursor: u64,
     limit: u32,
     now: UtcTimestamp,
@@ -263,7 +263,7 @@ pub async fn snapshot_page(
         "SELECT id, root_id, high_water_seq, epoch, entry_count, created_at, expires_at \
          FROM snapshots WHERE id = ?1 AND root_id = ?2 AND owner_id = ?3 AND expires_at > ?4",
     )
-    .bind(snapshot.as_slice())
+    .bind(snapshot.as_bytes().as_slice())
     .bind(root.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .bind(now.to_db_integer())
@@ -283,7 +283,7 @@ pub async fn snapshot_page(
          FROM snapshot_entries WHERE snapshot_id = ?1 AND ordinal >= ?2 \
          ORDER BY ordinal LIMIT ?3",
     )
-    .bind(snapshot.as_slice())
+    .bind(snapshot.as_bytes().as_slice())
     .bind(cursor)
     .bind(i64::from(limit))
     .fetch_all(&mut *read)
@@ -317,7 +317,7 @@ struct SnapshotRow {
 impl SnapshotRow {
     fn into_record(self) -> Result<SnapshotRecord, SnapshotError> {
         Ok(SnapshotRecord {
-            id: identity_bytes(self.id, "id")?,
+            id: SnapshotId::from_bytes(identity_bytes(self.id, "id")?),
             root: RootId::from_bytes(identity_bytes(self.root_id, "root_id")?),
             high_water_seq: RootSeq::from_db_integer(self.high_water_seq).map_err(|_| {
                 SnapshotError::MalformedRow {
@@ -412,13 +412,17 @@ mod tests {
     };
     use crate::{changes, versions};
 
-    const SNAPSHOT: [u8; ID_LEN] = [0x5a; ID_LEN];
+    const SNAPSHOT: SnapshotId = SnapshotId::from_bytes([0x5a; ID_LEN]);
+
+    fn sid(marker: u8) -> SnapshotId {
+        SnapshotId::from_bytes([marker; ID_LEN])
+    }
 
     async fn create(
         database: &crate::db::Database,
         owner: UserId,
         root: RootId,
-        id: [u8; ID_LEN],
+        id: SnapshotId,
         now: i64,
         ttl: i64,
     ) -> SnapshotRecord {
@@ -434,7 +438,7 @@ mod tests {
         database: &crate::db::Database,
         owner: UserId,
         root: RootId,
-        id: [u8; ID_LEN],
+        id: SnapshotId,
         cursor: u64,
         limit: u32,
         now: i64,
@@ -527,7 +531,7 @@ mod tests {
         );
         for (label, who, id, now) in [
             ("到期", owner, SNAPSHOT, 160),
-            ("未知", owner, [0x01; ID_LEN], 120),
+            ("未知", owner, sid(0x01), 120),
             ("别人的账号", stranger, SNAPSHOT, 120),
         ] {
             let error = page(&database, who, root, id, 0, 10, now)
@@ -556,9 +560,9 @@ mod tests {
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
         let (root, _) = register_root(&database, owner, 0x21).await;
-        create(&database, owner, root, [0x01; ID_LEN], 100, 10).await;
+        create(&database, owner, root, sid(0x01), 100, 10).await;
         // 第一份已过期（now=200 > 110），创建新快照时被回收。
-        create(&database, owner, root, [0x02; ID_LEN], 200, 1000).await;
+        create(&database, owner, root, sid(0x02), 200, 1000).await;
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM snapshots")
             .fetch_one(database.pool())
             .await
@@ -577,7 +581,7 @@ mod tests {
                 &database,
                 owner,
                 root,
-                [0x10 + index; ID_LEN],
+                sid(0x10 + index),
                 300 + i64::from(index),
                 1000,
             )
@@ -593,7 +597,7 @@ mod tests {
             "每个 Root 的快照数有上界"
         );
         assert!(matches!(
-            page(&database, owner, root, [0x10; ID_LEN], 0, 10, 400).await,
+            page(&database, owner, root, sid(0x10), 0, 10, 400).await,
             Err(SnapshotError::Expired)
         ));
     }
