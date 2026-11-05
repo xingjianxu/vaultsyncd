@@ -280,7 +280,7 @@ where
 
     // 8. 单一事务：整棵子树清软删除、改位置、推进 revision、删清单行、事件批次、结果、意图收尾。
     let write = TrashRestoreWrite {
-        intents: intents.clone(),
+        intents,
         key: request.op,
         digest: request.digest,
         entry: request.entry,
