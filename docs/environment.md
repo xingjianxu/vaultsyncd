@@ -283,6 +283,7 @@ env -i HOME="$HOME" TERM=xterm PATH=/run/current-system/sw/bin:/usr/bin:/bin /ru
 - 未加入 `rust-analyzer`、`openssl.dev` 等当前卡未要求的包；S004/S005 若需要再按证据补充。
 - 本卡的版本结论仅对本机本次实测成立；Ubuntu 24.04、Linux ARM64、Windows 原生环境仍未核验。
 - 用户 `~/.npmrc` 由 home-manager 管理，registry 指向 `https://registry.npmmirror.com`；这只影响下载源，不影响 pnpm 版本与 store 布局。
+- Node 24.21.0 默认剥离 TypeScript 类型：`.mjs` 直接 `import "../src/generated/types.ts"` 即可运行（S024 实测 `pnpm --filter @vaultsyncd/api-client test` 9 项通过，无额外构建步骤）。前提是被导入文件只用可擦除语法（`interface`/`type`/`as const`），`enum`、`namespace`、参数属性等不可用。
 - 主机 `/etc/nixos` 与系统 generation 未做任何改动。
 
 ## 11. S007 独立 btrfs 测试位置（2026-11-05 实测）

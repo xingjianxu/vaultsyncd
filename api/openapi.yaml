@@ -1,0 +1,200 @@
+# vaultsyncd 远端 HTTP API 的唯一编辑源（docs/design.md §5.6、§15.1—15.4）。
+#
+# 本文件只描述 wire 契约：改名、改类型、加字段都从这里开始，再运行 `cargo xtask generate`
+# 更新 Rust DTO（crates/protocol）与 TypeScript 客户端（packages/api-client）。生成代码不手改。
+#
+# 本卡（S024）只冻结最小契约：健康探测、能力协商、错误信封与十进制长整数字符串。其余端点按
+# design §15.2 的清单在各自功能卡中逐个加入；生成器对本文件未支持的构造明确报错，不会静默
+# 跳过，因此不会出现“写了但没生成”的端点。
+openapi: "3.1.0"
+
+info:
+  title: vaultsyncd remote API
+  version: "0.1.0"
+  description: |
+    服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
+    不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
+    在对应功能卡加入。
+
+paths:
+  /v1/health:
+    get:
+      operationId: getHealth
+      summary: 健康探测
+      description: |
+        无需认证的存活与健康状态探测。服务端仍可用 503 报告需要恢复等不可用状态，
+        此时响应体是标准错误信封。
+      responses:
+        "200":
+          description: 服务端可接受请求
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: 服务端暂不可用（例如需要恢复）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: 能力协商
+      description: |
+        返回协议版本、服务器身份、epoch、功能集合与限额，供客户端显式协商。不泄露任何
+        服务器目录路径。
+      responses:
+        "200":
+          description: 当前协议版本与能力
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+        "503":
+          description: 服务端暂不可用（例如需要恢复）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+components:
+  schemas:
+    Capabilities:
+      description: 协议版本、服务器身份、epoch、功能集合与限额（design §15.2）。
+      type: object
+      required: [protocol, server_id, epoch, features, limits]
+      properties:
+        protocol:
+          $ref: "#/components/schemas/ProtocolVersion"
+          description: 协议主次版本。
+        server_id:
+          type: string
+          description: 服务器身份，32 个小写十六进制字符（design §7.1）。
+        epoch:
+          type: string
+          format: decimal_u64
+          description: |
+            服务器 epoch 的十进制文本。恢复后更换，客户端据此丢弃旧 epoch 的响应。
+        features:
+          type: array
+          description: |
+            服务端支持的功能标记。客户端只使用自己认识的值，未识别的标记按“该功能不可用”
+            处理；这里是可扩展标记集合，不是闭集枚举，因此不套用“未知枚举即失败”。
+          items:
+            type: string
+        limits:
+          $ref: "#/components/schemas/CapabilityLimits"
+          description: 客户端必须遵守的服务端限额。
+
+    ProtocolVersion:
+      description: 协议主次版本；主版本不同必须拒绝通信。
+      type: object
+      required: [major, minor]
+      properties:
+        major:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: 主版本；与服务端不同即拒绝通信。
+        minor:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: 次版本；服务端可以更大，客户端按自己认识的功能使用。
+
+    CapabilityLimits:
+      description: 客户端必须遵守的服务端限额。
+      type: object
+      required: [max_page_size, max_upload_part_bytes]
+      properties:
+        max_page_size:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          description: 清单分页的每页上限。
+        max_upload_part_bytes:
+          type: string
+          format: decimal_u64
+          description: 单个上传块的最大字节数（十进制文本）。
+
+    HealthResponse:
+      description: 健康探测结果。
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/HealthStatus"
+          description: 服务端当前健康状态。
+
+    HealthStatus:
+      description: |
+        健康状态闭集。客户端遇到未列出的值必须按协议错误处理，不能当作可用。
+      type: string
+      enum:
+        - ok
+        - degraded
+        - needs_recovery
+
+    ErrorEnvelope:
+      description: 错误信封（design §15.4）：所有非 2xx 响应都用它，客户端据此决定重试与暂停。
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+          description: 错误主体。
+
+    ErrorBody:
+      description: 错误主体。
+      type: object
+      required: [code, message, retryable, request_id]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+          description: 闭集错误码；未知码不是可重试错误，按协议错误处理。
+        message:
+          type: string
+          description: 面向用户的可理解原因，按数据处理，不当作指令。
+        retryable:
+          type: boolean
+          description: 同一请求稍后原样重试是否可能成功。
+        request_id:
+          type: string
+          description: 服务端记录的请求标识，供日志关联。
+        root_id:
+          type: string
+          description: 相关 Root 的身份（32 个小写十六进制字符）；与 Root 无关时省略。
+        details:
+          type: object
+          description: |
+            结构化补充信息，例如 `{"reason": "mount_identity_changed"}`。
+          additionalProperties:
+            type: string
+
+    ErrorCode:
+      description: |
+        远端错误码闭集（design §15.4）。未知错误码不能被当成可重试或成功；本机 IPC 专用的
+        错误码（LOCAL_CHANGED、FILE_BUSY、MODE_REQUIRES_LOCAL_COPY、PLACEHOLDER_OFFLINE）
+        属于 packages/local-ipc-types，不在远端契约内。
+      type: string
+      enum:
+        - AUTH_EXPIRED
+        - ACCESS_DENIED
+        - BASE_MISMATCH
+        - SUBTREE_CHANGED
+        - OP_ID_REUSED
+        - RECONCILE_REQUIRED
+        - CURSOR_EXPIRED
+        - EPOCH_CHANGED
+        - VERSION_GONE
+        - INVALID_NAME
+        - UNSUPPORTED_ENTRY
+        - HASH_MISMATCH
+        - UNSUPPORTED_STORAGE_BACKEND
+        - SERVER_PLACEHOLDER_UNSUPPORTED
+        - RATE_LIMITED
+        - ROOT_UNAVAILABLE
+        - NEEDS_RECOVERY
+        - INSUFFICIENT_STORAGE

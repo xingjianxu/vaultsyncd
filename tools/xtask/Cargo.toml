@@ -11,5 +11,12 @@ publish.workspace = true
 name = "xtask"
 path = "src/main.rs"
 
+# 协议生成需要解析 YAML 契约与 TOML 生成配置（S024）。这里只引入解析器，不用模板引擎：
+# 生成逻辑留在本包内，输出形状由 api/generation.toml 的版本、映射与路径声明约束。
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+toml = "0.9"
+
 [lints]
 workspace = true

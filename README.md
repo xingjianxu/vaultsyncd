@@ -34,7 +34,8 @@ python3 tools/context.py --help
 CI（[`.github/workflows/checks.yml`](.github/workflows/checks.yml)）与本地用同一条命令；检查逻辑在 `tools/xtask`，YAML 不重复写一遍：
 
 ```bash
-nix develop -c cargo xtask check    # fmt + clippy + test + 前端 typecheck，任一步失败即非零退出
+nix develop -c cargo xtask check    # 生成代码比对 + fmt + clippy + test + 前端 typecheck，任一步失败即非零退出
+nix develop -c cargo xtask generate # 从 api/openapi.yaml 重新生成 Rust DTO 与 TS 客户端
 nix develop -c cargo xtask env      # rustc/cargo/node/pnpm 版本、workspace 成员与关键路径
 nix develop -c cargo xtask help     # 子命令与退出码
 ```
@@ -42,6 +43,7 @@ nix develop -c cargo xtask help     # 子命令与退出码
 `cargo xtask check` 实际执行的分步命令（可单独运行，顺序与输出一致）：
 
 ```bash
+nix develop -c cargo xtask generate --check     # 生成代码与 api/openapi.yaml 不同步即失败
 nix develop -c cargo fmt --check
 nix develop -c cargo clippy --locked --all-targets -- -D warnings
 nix develop -c cargo test --locked
@@ -49,11 +51,11 @@ nix develop -c pnpm install --frozen-lockfile   # 首次检出或 pnpm-lock.yaml
 nix develop -c pnpm --recursive run typecheck
 ```
 
-退出码：`0` 全部通过；`1` 检查失败或前置条件不满足（例如缺少 `node_modules`，此时不跳过前端检查，而是报错并提示上面的安装命令）；`2` 用法错误；`3` 子命令尚未实现（`generate`、`package`）。命令契约见 [`docs/architecture/interfaces.md`](docs/architecture/interfaces.md)。
+退出码：`0` 全部通过；`1` 检查失败或前置条件不满足（例如缺少 `node_modules`，此时不跳过前端检查，而是报错并提示上面的安装命令）；`2` 用法错误；`3` 子命令尚未实现（`package`）。命令契约见 [`docs/architecture/interfaces.md`](docs/architecture/interfaces.md)。
 
 ## 最小验证
 
-现阶段可编译的产物只有 `crates/domain`（领域内核骨架）、`tools/xtask`（编排工具）与 `packages/ui`（展示组件）。开发 shell 通过 `flake.nix` + `flake.lock` 提供锁定的 Rust、Node/pnpm、Python、SQLite 与 C 工具链：
+现阶段可编译的产物只有 `crates/domain`（领域内核骨架）、`crates/protocol`（`api/openapi.yaml` 生成的 wire 契约）、`tools/xtask`（编排工具）、`packages/ui`（展示组件）与 `packages/api-client`（生成的 HTTP 客户端）。开发 shell 通过 `flake.nix` + `flake.lock` 提供锁定的 Rust、Node/pnpm、Python、SQLite 与 C 工具链：
 
 ```bash
 nix develop                      # 进入 devShell
