@@ -16,7 +16,9 @@
 //! “同一结果”指位置、类型与内容（长度 + SHA-256）都相同；仅 `mtime` 相同不算。其余输入不在本卡
 //! 猜测：缺少基线（design §9.2）、某一侧缺失（design §10.3）、位置或类型变化（design §9.5、§10.1）
 //! 与已被替换的远端身份（I03）都输出 [`Action::Defer`]，把决定权留给对应规则，同时说明本地内容
-//! 必须原样保留（I02、I04）。
+//! 必须原样保留（I02、I04）。其中没有共同基线的输入输出 [`DeferReason::FirstSync`]：它只表示“转交
+//! 首次合并入口”，真正的计划由 [`crate::first_sync::plan_first_sync`] 给出（design §9.2）；已经同步
+//! 过、只是游标过期的设备不得走那条入口，它必须带着旧基线回到本模块重建。
 //!
 //! 两侧“是否有变化”的判定方式不同，因为可用证据不同：
 //!
@@ -29,6 +31,8 @@
 use vaultsyncd_domain::ids::{EntryId, OpId, VersionId};
 use vaultsyncd_domain::version::{Generation, Revision, UtcTimestamp};
 use vaultsyncd_fs_common::path::RelativePath;
+
+use crate::first_sync::{BindingMode, PreserveReason};
 
 use core::fmt;
 use core::mem::discriminant;
@@ -218,6 +222,11 @@ pub enum Prerequisite {
     /// 目标位置可用：父目录已同步存在、名称可表示、且没有同名的另一种类型条目（design §9.1
     /// “路径条件”、§7.4）。
     TargetPathUsable,
+    /// 服务器在该路径仍没有条目：首次合并的创建 CAS，避免用旧快照覆盖快照之后在服务器新建的条目
+    /// （design §9.2 第 8 步）。
+    ServerPathVacant,
+    /// 本地在该路径仍没有条目：避免远端占位或下载覆盖扫描之后新建的本地内容（I02）。
+    LocalPathVacant,
 }
 
 /// 必须先完成的任务或操作（顺序固定，按声明顺序出现在 [`Plan::dependencies`] 中）。
@@ -313,6 +322,36 @@ pub enum Action {
         /// 作为副本内容的本地代际。
         generation: Generation,
     },
+    /// 首次合并时本地独有：在服务器新建条目（design §9.2 第 5 步）。没有基线修订可携带，创建条件是
+    /// 该路径在服务器仍为空。
+    UploadNewEntry {
+        /// 要上传的本地代际。
+        generation: Generation,
+    },
+    /// 首次合并时远端独有：在本地建立该条目（design §9.2 第 5 步）。
+    CreateFromRemote {
+        /// 要绑定的远端条目身份。
+        entry_id: EntryId,
+        /// 快照观察到的远端修订。
+        revision: Revision,
+        /// 远端文件版本；占位与目录可以没有内容版本。
+        version: Option<VersionId>,
+        /// 决定建占位还是下载完整内容的 Binding 模式（[`BindingMode`]，定义在
+        /// [`crate::first_sync`]）。
+        mode: BindingMode,
+    },
+    /// 首次合并时同路径、同类型且内容相同：绑定远端身份并写入基线，不传输内容（design §9.2 第 4 步）。
+    BindRemoteEntry {
+        /// 要绑定的远端条目身份。
+        entry_id: EntryId,
+        /// 快照观察到的远端修订。
+        revision: Revision,
+        /// 远端文件版本；目录归并没有内容版本。
+        version: Option<VersionId>,
+    },
+    /// 首次合并时同路径无法证明同一结果：双方都保留，服务器条目保留名称（design §9.2 第 6—7 步）。
+    /// 本地副本身份与名称归冲突规则（design §10.1—10.2）。
+    PreserveBoth(PreserveReason),
     /// 本卡不裁决：把输入交给后续规则，且不执行任何删除或覆盖。
     Defer(DeferReason),
 }
@@ -341,12 +380,15 @@ pub struct Plan {
 pub enum PlanError {
     /// 基线、本地、远端三项都缺失：没有可比对的条目，不编造计划。
     NoFacts,
+    /// 首次合并按规范路径配对两侧事实；两侧路径不同说明调用方没有按路径配对。
+    PathMismatch,
 }
 
 impl fmt::Display for PlanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoFacts => f.write_str("基线、本地与远端事实都缺失，无法规划"),
+            Self::PathMismatch => f.write_str("两侧事实的路径不同，无法按同一路径规划"),
         }
     }
 }
@@ -417,8 +459,8 @@ fn no_op(path: RelativePath) -> Plan {
     }
 }
 
-/// 本卡不裁决的输入：不生成动作，也不允许执行器改动本地内容。
-fn deferred(path: RelativePath, reason: DeferReason) -> Plan {
+/// 本卡不裁决的输入（或缺少必需事实）：不生成动作，也不允许执行器改动本地内容。
+pub(crate) fn deferred(path: RelativePath, reason: DeferReason) -> Plan {
     Plan {
         path,
         action: Action::Defer(reason),
