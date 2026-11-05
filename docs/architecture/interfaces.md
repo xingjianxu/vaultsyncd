@@ -793,7 +793,56 @@ python3 tools/context.py --help
 
 - **没有默认密码、没有公开注册**：写账号的唯一路径是离线 `init`；重复 init 被拒且旧散列原样保留（进程级用例断言）。
 - **运行中不能 init**：服务端启动即独占 `<state_dir>/server.lock`（`StartupError::StateLock`），离线 init 抢不到锁时退出码 3；位置在打开数据库之前，因此不存在“两边都开着库再争锁”的窗口。
-- 未接入（后续卡）：`POST /v1/auth/login` 的 HTTP 处理与会话/刷新凭据（S043，含 401 `AUTH_EXPIRED`/429 `RATE_LIMITED` 映射与按来源地址限流）；Argon2id 参数的实测与 ADR；`apps/server` 尚未依赖 `apps/server-admin`（后者不需要）。
+- 未接入（后续卡）：按来源地址限流（需要 HTTP 层与代理头策略）；Argon2id 参数的实测与 ADR；`apps/server` 尚未依赖 `apps/server-admin`（后者不需要）。会话与认证端点见下一节（S043）。
+
+## 认证与会话（S043）
+
+状态：S043 落地 `sessions` 表、会话用例、三个认证端点与凭据载体边界。设计依据 design §7.2、§15.2、§17.1、§17.2、I15、T31；载体边界见 `docs/adr/0001-auth-credential-carriers.md`。
+
+### `crates/server-store`：`sessions`（迁移 0006）
+
+| 项 | 契约 |
+| --- | --- |
+| 列 | `id`(16B) / `user_id` → `users` / `device_label`(非空) / `access_digest`(32B) / `refresh_digest`(32B) / `created_at` / `access_expires_at` / `refresh_expires_at` / `revoked_at` / `replaced_by` → `sessions` |
+| 约束 | 两个摘要各带唯一索引；`created_at ≤ access_expires_at ≤ refresh_expires_at`；`replaced_by` 自引用后继会话 |
+| `insert_session(tx,&NewSession)` | 设备标签空、有效期不自洽、身份/摘要重复都在写入前拒绝 |
+| `find_by_access_digest` / `find_by_refresh_digest` / `find_session` | 按摘要或身份读回 `SessionRecord`（含 `revoked_at`、`replaced_by`） |
+| `revoke_session(tx,id,at) -> bool` | 幂等：重复撤销返回 `false` 且不覆盖原撤销时间 |
+| `rotate_refresh(tx,current,&successor,at) -> RotationOutcome` | 同一写事务内“抢占旧行（`revoked_at IS NULL` 条件 UPDATE）→ 插入后继 → 回填 `replaced_by`”；抢占失败返回 `Consumed`，无行返回 `Missing` |
+
+与 design 字段清单的差异（有意）：`device_label` 代替 `device_id`（首发无设备注册表）；一行保存两个摘要（访问与刷新必须一起轮换）。
+
+### `crates/server-core/src/auth/session.rs`
+
+| 项 | 契约 |
+| --- | --- |
+| `SessionPolicy` | `standard()` = 访问 900 s / 刷新 30 天；`new(access,refresh)` 要求正且 access ≤ refresh |
+| `SecretToken` | 32 字节随机数的 64 位十六进制文本；`parse`、`expose`、`digest()`（SHA-256）；`Debug`/`Display` 隐去内容 |
+| `SessionStore` 端口 | `insert` / `find_by_access` / `find_by_refresh` / `rotate` / `revoke`，全部 `async` + `&mut self`（适配器可自持事务） |
+| `issue(store,ids,now,user,label,policy)` | 校验设备标签（非空、≤128 字符、无控制字符）后签发；返回 `IssuedSession`（含明文凭据） |
+| `authenticate(store,access,now) -> Principal` | 先判撤销、再判到期；`Expired` 在到期时刻即触发（`<=`） |
+| `refresh(store,ids,now,refresh,policy)` | 已轮换的刷新凭据返回 `RefreshReused{replaced_by}`；不回放后继凭据；`rotate` 返回 `Consumed` 同样按重用拒绝 |
+| `logout(store,access,now)` | 撤销当前会话；重复注销 `Ok` |
+| 错误码 | `credential_invalid` / `credential_expired` / `session_revoked` / `refresh_reused` / `invalid_device_label` / `invalid_session_policy` / `session_storage_failed` |
+
+### `crates/server-core/src/auth/scope.rs`
+
+`RootGrant{root_id, owner_id}` + `require_root_scope(&Principal,&RootGrant) -> Result<(),ScopeError::AccessDenied>`（纯规则）。适配器必须先 `roots::root_in_scope(conn, owner, root)` 取行，因此“别人的 Root”与“不存在的 Root”都得到同一个 403 `ACCESS_DENIED`（错误码 `access_denied`），结论与日志不含绝对路径。
+
+### `apps/server/src/auth.rs`：端点与载体
+
+| 项 | 契约 |
+| --- | --- |
+| `POST /v1/auth/login` | 同源检查 → 限流 → 校验凭据 → 签发会话；返回 `SessionIssued` 并下发 `vaultsyncd_session`(`Path=/`) 与 `vaultsyncd_refresh`(`Path=/v1/auth`)，均为 `HttpOnly; Secure; SameSite=Strict` |
+| `POST /v1/auth/refresh` | 凭据来自请求体 `refresh_token`（agent）或 `vaultsyncd_refresh` cookie（浏览器，可省略请求体）；成功即轮换 |
+| `POST /v1/auth/logout` | Bearer 或 cookie 认证 → 撤销会话 → 清两个 cookie（`Max-Age=0`）；不碰本地文件 |
+| 认证载体 | `Authorization: Bearer <token>` 或 cookie；两者共用同一套会话与摘要 |
+| CSRF | cookie 写请求要求 `Origin` 主机 == `Host`，或 `Sec-Fetch-Site ∈ {same-origin, none}`；都没有才按非浏览器客户端放行；失败 403 `ACCESS_DENIED` |
+| 失败映射 | 凭据问题 401 `AUTH_EXPIRED`、越权 403 `ACCESS_DENIED`、限流 429 `RATE_LIMITED`（带 `Retry-After`）、存储失败 503 `NEEDS_RECOVERY`（记日志，不伪装成凭据过期） |
+| 复用入口 | `principal_from(&AuthContext,&HeaderMap)`（认证 + 同源）、`authorize_root(&Database,&Principal,RootId)`（I15 的每次请求授权） |
+| `AuthContext::new(Database)` | Argon2id 生产参数、默认限流与 `SessionPolicy::standard()`、OS 随机源；限流与随机源是进程内状态（重启清零） |
+
+未接入（后续卡）：按来源地址限流、会话/账号的运维管理端点（重置密码后失效全部会话）与 `users.status` 的其他取值；Root 级业务端点（后续卡用 `principal_from` + `authorize_root` 接入）；客户端侧凭据保管（OS 凭据库 / 受限权限文件）。
 
 ## api/ — 远端协议契约源与生成配置（S024）
 
@@ -825,7 +874,7 @@ python3 tools/context.py --help
 - 可选字段在 Rust 侧带 `#[serde(skip_serializing_if = "Option::is_none")]`（S025 起）：缺省的可选字段不出现在 JSON 里，与 TypeScript 解码器“只接受缺省（`undefined`）”一致，写入方不写 `null`。已知宽容：serde 的 `Option<T>` 对显式 `null` 与缺省都解出 `None`，而 TS 解码器把 `null` 当畸形；正常链路（两侧都由生成代码写出）不会产生 `null`，样本里也没有。
 - 闭合枚举与十进制校验的语义由两侧测试共同锁定：`cargo test --locked -p vaultsyncd-protocol`（13 个契约用例）+ `pnpm --filter @vaultsyncd/api-client test`（9 项运行时断言）。
 - 生成文件表头标注“禁止手改”，不含时间戳或随机顺序，因此重新生成逐字节一致。
-- **请求体尚不支持**：生成器只读 `responses`，`Operation` 的 `deny_unknown_fields` 会把 `requestBody` 当未支持构造拒绝。因此带请求体的 `POST /v1/auth/login` 不能在 S042 进契约；登录端点与其请求/响应 schema 由 S043（会话发放）连同生成器扩展一起落地。
+- **请求体（S043 起支持）**：`format_version = 3`。端点可有 `requestBody`，只接受 `application/json` 且必须引用具名 schema；可选请求体（`required: false`）与内联对象仍然报错。TypeScript 客户端为带请求体的端点生成 `body` 参数并设置 `content-type`，响应变量名改为 `payload` 以免与 `body` 参数重名。
 
 ## crates/protocol — 远端 wire 契约（S024）
 

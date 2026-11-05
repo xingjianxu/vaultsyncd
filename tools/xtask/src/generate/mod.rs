@@ -944,9 +944,12 @@ fn build_request_type(operation: &Operation) -> Result<Option<String>, String> {
             operation.operation_id
         )
     })?;
-    let name = reference
-        .strip_prefix(REF_PREFIX)
-        .ok_or_else(|| format!("端点 {} 的请求体 `$ref` 只支持 {REF_PREFIX}…", operation.operation_id))?;
+    let name = reference.strip_prefix(REF_PREFIX).ok_or_else(|| {
+        format!(
+            "端点 {} 的请求体 `$ref` 只支持 {REF_PREFIX}…",
+            operation.operation_id
+        )
+    })?;
     Ok(Some(name.to_string()))
 }
 
