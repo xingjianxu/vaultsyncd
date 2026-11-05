@@ -12,12 +12,17 @@ use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
 
 use crate::commit::conflict::CommittedConflict;
 use crate::commit::intent::{NewPutIntent, PutIntent, PutPhase, TargetSnapshot};
+use crate::commit::namespace::{NamespaceIntent, NewNamespaceIntent};
 use crate::objects::ContentDigest;
 use crate::ports::conflict_store::{
     ConflictBegin, ConflictCommitStore, ConflictHead, ConflictRecord, ConflictStoreError,
     ConflictWrite, HeadSource, OperationKey, RecordedOperation, RequestDigest,
 };
-use crate::ports::intent_log::{IntentLog, IntentLogError};
+use crate::ports::intent_log::{IntentLog, IntentLogError, NamespaceIntentLog};
+use crate::ports::namespace::{NamespaceError, NamespacePort, PathState};
+use crate::ports::namespace_store::{
+    NamespaceCommitStore, NamespaceRecord, NamespaceStoreError, NamespaceWrite,
+};
 use crate::ports::object_store::FileKey;
 use crate::ports::put_store::{
     EntryBaseline, EntryKind, ObjectState, PutCommitStore, PutRecord, PutStoreError, PutWrite,
@@ -127,9 +132,13 @@ pub(crate) fn target_snapshot(hex: &str, size: u64) -> TargetSnapshot {
 #[derive(Default)]
 pub(crate) struct FakeIntentLog {
     pub(crate) intents: Vec<PutIntent>,
+    /// 命名空间意图与 put 意图分开存：两者证据形态不同，混在一起会让断言失去意义。
+    pub(crate) namespace_intents: Vec<NamespaceIntent>,
     pub(crate) trace: Trace,
     pub(crate) begin_error: Option<IntentLogError>,
     pub(crate) advance_error: Option<IntentLogError>,
+    pub(crate) namespace_begin_error: Option<IntentLogError>,
+    pub(crate) namespace_advance_error: Option<IntentLogError>,
 }
 
 impl IntentLog for FakeIntentLog {
@@ -184,6 +193,71 @@ impl IntentLog for FakeIntentLog {
     async fn unfinished_puts(&mut self, root: RootId) -> Result<Vec<PutIntent>, IntentLogError> {
         Ok(self
             .intents
+            .iter()
+            .filter(|intent| intent.root == root && intent.phase.is_open())
+            .cloned()
+            .collect())
+    }
+}
+
+impl NamespaceIntentLog for FakeIntentLog {
+    async fn begin_namespace(
+        &mut self,
+        new: &NewNamespaceIntent,
+        _at: UtcTimestamp,
+    ) -> Result<NamespaceIntent, IntentLogError> {
+        self.trace.record("intent begin namespace prepared");
+        if let Some(error) = self.namespace_begin_error.take() {
+            return Err(error);
+        }
+        let intent = new.prepared();
+        self.namespace_intents.push(intent.clone());
+        Ok(intent)
+    }
+
+    async fn advance_namespace(
+        &mut self,
+        id: IntentId,
+        next: PutPhase,
+        _at: UtcTimestamp,
+    ) -> Result<NamespaceIntent, IntentLogError> {
+        if let Some(error) = self.namespace_advance_error.take() {
+            return Err(error);
+        }
+        let found = self
+            .namespace_intents
+            .iter_mut()
+            .find(|intent| intent.intent_id == id)
+            .ok_or(IntentLogError::UnknownIntent { id })?;
+        if !found.phase.allows_transition_to(next) {
+            return Err(IntentLogError::IllegalTransition {
+                from: found.phase,
+                to: next,
+            });
+        }
+        found.phase = next;
+        self.trace
+            .record(format!("intent advance {}", next.as_text()));
+        Ok(found.clone())
+    }
+
+    async fn load_namespace(
+        &mut self,
+        id: IntentId,
+    ) -> Result<Option<NamespaceIntent>, IntentLogError> {
+        Ok(self
+            .namespace_intents
+            .iter()
+            .find(|intent| intent.intent_id == id)
+            .cloned())
+    }
+
+    async fn unfinished_namespaces(
+        &mut self,
+        root: RootId,
+    ) -> Result<Vec<NamespaceIntent>, IntentLogError> {
+        Ok(self
+            .namespace_intents
             .iter()
             .filter(|intent| intent.root == root && intent.phase.is_open())
             .cloned()
@@ -556,6 +630,275 @@ impl ConflictCommitStore for FakeConflictStore {
             None => self.recorded.push(entry),
         }
         Ok(record)
+    }
+}
+
+/// 内存命名空间端口：一条条路径的目录/文件表，外加可脚本化的观察与动作错误。
+///
+/// 只模拟 `mkdir`、`rename` 与观察：没有任何内容操作可用，因此“移动不搬内容”在假端口上不是靠计数，
+/// 而是**没有那样的方法可调**（轨迹里也不会出现发布/对象调用）。
+pub(crate) struct FakeNamespace {
+    pub(crate) trace: Trace,
+    /// 路径 → (种类, 身份)。
+    pub(crate) paths: std::collections::BTreeMap<String, (EntryKind, FileKey)>,
+    /// 这些路径的祖先被认为不存在。
+    pub(crate) ancestor_missing: Vec<String>,
+    pub(crate) inspect_error: Option<NamespaceError>,
+    pub(crate) create_error: Option<NamespaceError>,
+    pub(crate) rename_error: Option<NamespaceError>,
+    /// 脚本化 `rename` 的返回（模拟适配器报告错误现场）。
+    pub(crate) rename_reports: Option<PathState>,
+    /// 报告成功但把源留在原处（模拟被实现成复制的适配器）。
+    pub(crate) rename_keeps_source: bool,
+    pub(crate) renames: Vec<(String, String)>,
+    next_inode: u64,
+}
+
+impl Default for FakeNamespace {
+    fn default() -> Self {
+        FakeNamespace {
+            trace: Trace::default(),
+            paths: std::collections::BTreeMap::new(),
+            ancestor_missing: Vec::new(),
+            inspect_error: None,
+            create_error: None,
+            rename_error: None,
+            rename_reports: None,
+            rename_keeps_source: false,
+            renames: Vec::new(),
+            next_inode: 100,
+        }
+    }
+}
+
+impl FakeNamespace {
+    pub(crate) fn new() -> Self {
+        FakeNamespace::default()
+    }
+
+    pub(crate) fn with_trace(mut self, trace: Trace) -> Self {
+        self.trace = trace;
+        self
+    }
+
+    /// 放一个已存在的目录（inode 由 `next_inode` 递增分配）。
+    pub(crate) fn with_directory(mut self, path: &str) -> Self {
+        self.next_inode += 1;
+        let identity = FileKey {
+            device: 7,
+            inode: self.next_inode,
+            links: 2,
+            bytes: 64,
+        };
+        self.paths
+            .insert(path.to_owned(), (EntryKind::Directory, identity));
+        self
+    }
+
+    /// 放一个已存在的普通文件。
+    pub(crate) fn with_file(mut self, path: &str) -> Self {
+        self.next_inode += 1;
+        let identity = FileKey {
+            device: 7,
+            inode: self.next_inode,
+            links: 1,
+            bytes: 5,
+        };
+        self.paths.insert(path.to_owned(), (EntryKind::File, identity));
+        self
+    }
+
+    /// 某路径现在的现场（测试断言用）。
+    pub(crate) fn state_of(&self, path: &str) -> PathState {
+        match self.paths.get(path) {
+            Some((EntryKind::Directory, identity)) => PathState::Directory {
+                identity: *identity,
+            },
+            Some((EntryKind::File, identity)) => PathState::File {
+                identity: *identity,
+            },
+            None => PathState::Absent,
+        }
+    }
+
+    fn state(&self, path: &str) -> PathState {
+        if self.paths.contains_key(path) {
+            return self.state_of(path);
+        }
+        let missing = self
+            .ancestor_missing
+            .iter()
+            .any(|ancestor| path == ancestor || path.starts_with(&format!("{ancestor}/")));
+        if missing {
+            PathState::AncestorMissing
+        } else {
+            PathState::Absent
+        }
+    }
+}
+
+impl NamespacePort for FakeNamespace {
+    fn inspect(&mut self, path: &str) -> Result<PathState, NamespaceError> {
+        self.trace.record(format!("namespace inspect {path}"));
+        if let Some(error) = self.inspect_error.take() {
+            return Err(error);
+        }
+        Ok(self.state(path))
+    }
+
+    fn create_directory(&mut self, path: &str) -> Result<PathState, NamespaceError> {
+        self.trace.record(format!("namespace mkdir {path}"));
+        if let Some(error) = self.create_error.take() {
+            return Err(error);
+        }
+        if !matches!(self.state(path), PathState::Absent) {
+            return Err(NamespaceError::Storage {
+                stage: "mkdir",
+                failure: crate::ports::object_store::StorageFailure::Other,
+                detail: "目标已存在".to_owned(),
+            });
+        }
+        self.next_inode += 1;
+        let identity = FileKey {
+            device: 7,
+            inode: self.next_inode,
+            links: 2,
+            bytes: 64,
+        };
+        self.paths
+            .insert(path.to_owned(), (EntryKind::Directory, identity));
+        Ok(PathState::Directory { identity })
+    }
+
+    fn rename(&mut self, from: &str, to: &str) -> Result<PathState, NamespaceError> {
+        self.trace
+            .record(format!("namespace rename {from} {to}"));
+        self.renames.push((from.to_owned(), to.to_owned()));
+        if let Some(error) = self.rename_error.take() {
+            return Err(error);
+        }
+        match self.paths.remove(from) {
+            Some(entry) => {
+                let state = match entry {
+                    (EntryKind::Directory, identity) => PathState::Directory { identity },
+                    (EntryKind::File, identity) => PathState::File { identity },
+                };
+                self.paths.insert(to.to_owned(), entry);
+                if self.rename_keeps_source {
+                    self.paths.insert(from.to_owned(), entry);
+                }
+                Ok(self.rename_reports.take().unwrap_or(state))
+            }
+            None => Err(NamespaceError::Storage {
+                stage: "rename",
+                failure: crate::ports::object_store::StorageFailure::Other,
+                detail: format!("源位置 {from} 不存在"),
+            }),
+        }
+    }
+}
+
+/// 内存命名空间存储：按条目应答基线，记录事务输入，成功的 `apply_namespace` 只推进条目 revision。
+///
+/// 假实现刻意**没有**内容版本写入路径：移动“不写版本、不改内容引用”在假端口上同样由类型保证，
+/// 测试只需断言内容引用表在提交前后一致。
+pub(crate) struct FakeNamespaceStore {
+    pub(crate) trace: Trace,
+    pub(crate) facts: RootFacts,
+    pub(crate) baselines: std::collections::BTreeMap<EntryId, EntryBaseline>,
+    pub(crate) content_versions: std::collections::BTreeMap<EntryId, VersionId>,
+    pub(crate) root_facts_error: Option<NamespaceStoreError>,
+    pub(crate) baseline_error: Option<NamespaceStoreError>,
+    pub(crate) apply_error: Option<NamespaceStoreError>,
+    pub(crate) writes: Vec<NamespaceWrite>,
+    pub(crate) record: Option<NamespaceRecord>,
+}
+
+impl Default for FakeNamespaceStore {
+    fn default() -> Self {
+        FakeNamespaceStore {
+            trace: Trace::default(),
+            facts: RootFacts { epoch: epoch(3) },
+            baselines: std::collections::BTreeMap::new(),
+            content_versions: std::collections::BTreeMap::new(),
+            root_facts_error: None,
+            baseline_error: None,
+            apply_error: None,
+            writes: Vec::new(),
+            record: None,
+        }
+    }
+}
+
+impl FakeNamespaceStore {
+    pub(crate) fn new() -> Self {
+        FakeNamespaceStore::default()
+    }
+
+    /// 加入一条条目基线；普通文件预置一个内容版本以观察“移动后引用不变”。
+    pub(crate) fn with_baseline(mut self, baseline: EntryBaseline) -> Self {
+        if baseline.kind == EntryKind::File {
+            self.content_versions
+                .insert(baseline.entry, version_id(0x91));
+        }
+        self.baselines.insert(baseline.entry, baseline);
+        self
+    }
+
+    /// 新建目录默认证据：revision 0。
+    fn default_record(write: &NamespaceWrite) -> NamespaceRecord {
+        NamespaceRecord {
+            intent_id: write.intent_id,
+            phase: PutPhase::Finalized,
+            entry: write.entry,
+            revision: match write.expected_revision {
+                Some(revision) => revision.next().expect("测试用 revision 可推进"),
+                None => revision(0),
+            },
+            seq: root_seq(11),
+            tx: tx_id(0x71),
+        }
+    }
+}
+
+impl NamespaceCommitStore for FakeNamespaceStore {
+    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, NamespaceStoreError> {
+        self.trace.record(format!("store root_facts {root}"));
+        match self.root_facts_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.facts),
+        }
+    }
+
+    async fn entry_baseline(
+        &mut self,
+        root: RootId,
+        entry: EntryId,
+    ) -> Result<EntryBaseline, NamespaceStoreError> {
+        self.trace
+            .record(format!("store entry_baseline {root} {entry}"));
+        if let Some(error) = self.baseline_error.take() {
+            return Err(error);
+        }
+        self.baselines
+            .get(&entry)
+            .cloned()
+            .ok_or(NamespaceStoreError::EntryMissing { entry })
+    }
+
+    async fn apply_namespace(
+        &mut self,
+        write: &NamespaceWrite,
+    ) -> Result<NamespaceRecord, NamespaceStoreError> {
+        self.trace.record("store apply_namespace".to_owned());
+        self.writes.push(write.clone());
+        if let Some(error) = self.apply_error.take() {
+            return Err(error);
+        }
+        Ok(self
+            .record
+            .clone()
+            .unwrap_or_else(|| Self::default_record(write)))
     }
 }
 

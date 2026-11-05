@@ -29,12 +29,22 @@ impl EntryKind {
         matches!(self, EntryKind::File)
     }
 
-    /// 稳定短名（日志与错误文本用）。
+    /// 稳定短名（日志、意图证据与错误文本用）。
     #[must_use]
     pub const fn as_text(self) -> &'static str {
         match self {
             EntryKind::File => "file",
             EntryKind::Directory => "directory",
+        }
+    }
+
+    /// 解析 [`EntryKind::as_text`] 的文本；未知文本返回 `None`，由调用方按坏行处理，不猜种类。
+    #[must_use]
+    pub fn from_text(text: &str) -> Option<Self> {
+        match text {
+            "file" => Some(EntryKind::File),
+            "directory" => Some(EntryKind::Directory),
+            _ => None,
         }
     }
 }
