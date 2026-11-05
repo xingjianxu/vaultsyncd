@@ -1641,6 +1641,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaultsyncd-server-tests"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "vaultsyncd-domain",
+ "vaultsyncd-server-core",
+]
+
+[[package]]
 name = "vaultsyncd-windows-tests"
 version = "0.1.0"
 

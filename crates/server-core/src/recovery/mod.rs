@@ -18,7 +18,9 @@
 //! - **判定不产生提交**：本模块只给结论，不写数据库、不动工作文件；`Complete` 也必须由提交路径在
 //!   一次事务里收尾，失败即回滚（S035/S037）。
 //!
-//! 本卡只覆盖 put 的未完成意图；全 Root 的启动顺序、强杀注入与恢复报告属 S037。
+//! [`startup`] 在这套判定之上执行恢复：按未完成意图重做或补完元数据事务、把无法解释的现场落盘为
+//! `needs_recovery`，并由 [`startup::WriteAdmission`] 保证“先恢复再开放写入口”。本模块只覆盖 put
+//! 的未完成意图；create/move/delete 的意图日志由后续卡接入同一条启动顺序。
 
 use std::fmt;
 
@@ -26,6 +28,8 @@ use vaultsyncd_domain::ids::IntentId;
 
 use crate::commit::intent::{PutIntent, PutPhase};
 use crate::ports::target::{TargetError, TargetObservation};
+
+pub mod startup;
 
 /// 现场是第三种状态时，需要协调的具体情形。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
