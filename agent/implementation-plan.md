@@ -1,0 +1,1334 @@
+# vaultsyncd 逐步实施手册
+
+版本：1.3 · 日期：2026-11-05 · 状态：执行计划，尚未执行任何项目代码或目标主机配置。
+
+## 1. 文件放置与使用方式
+
+用户在已有的 `vaultsyncd/` 项目目录中预置三份文件。下列路径及全文路径均相对于仓库根目录，不相对于当前 Markdown 文件：
+
+| 仓库内路径 | 内容 |
+| --- | --- |
+| `AGENTS.md` | agent 的全局入口与提交约定 |
+| `docs/design.md` | 已确认产品和技术设计基线 |
+| `agent/implementation-plan.md` | 本文件，按 S001—S108 执行 |
+| `agent/progress.md` | S001 创建的状态表 |
+| `agent/tasks/Sxxx.md` | 执行对应卡时创建的交接记录 |
+| `agent/context/` | 按需创建的简短索引，不预建重复规格 |
+
+设计、架构、ADR、环境与操作资料归 `docs/`；执行计划和会话交接归 `agent/`。同一规则只在一处维护；上下文摘要注明来源小节和对应提交，源变化后更新或删除过时摘要。S001 仅初始化进度，不一次创建 108 个空交接文件。现有项目如有旧路径文件，应迁移并更新引用，不保留两份可编辑副本。
+
+本文细化 design 的 DEV-001—014；C/I/T 编号仍为唯一需求、不变量和验收编号。Git 记录版本，业务语义以 design 指定小节为准。
+
+当前环境由用户明确为：开发主机是 NixOS，开发端和服务端位于同一服务器；执行 agent 已获为本项目配置环境和执行系统 rebuild 的授权。本文不会假定本次写文档的沙盒就是那台主机；所有机器事实在 S001 实测。
+
+**本次新增的环境决定：NixOS 为主要开发与本机服务验证环境。** design v1.4 已纳入这一点；S001 核对 C35/平台矩阵和构建部署章节；Ubuntu 24.04 LTS 保留为通用 Linux 发布兼容测试环境，Linux x86_64/ARM64 与 Windows 11 x86_64 的首发范围仍需验收。开发机的发行版不会改变服务端 ext4/XFS 存储准入条件。
+
+首发含 Linux 服务端、管理 CLI、基础 Web，以及 Windows agent、CLI、Tauri 桌面和 CFAPI。Linux 客户端/FUSE、macOS、Android、P2P、跨版本增量均不在本文执行任务内。
+
+## 2. 给每个 agent 的工作约定
+
+### 2.1 一次只执行一张任务卡
+
+默认一个新会话、一个 agent、一张 Sxxx 卡。按照编号选择最早的 ready 任务；前置未完成则不能实现依赖它的行为。状态包括 `todo / in_progress / blocked / done`。`blocked` 写清缺失条件，不伪造成功；可继续最早的无依赖任务。例如没有 Windows 环境时，S010—S012 阻塞，但可推进 Linux、纯核心和前端任务。
+
+每张卡限定一个主要结果。通常修改一个主要模块和直接相关测试；新增跨模块接口先写出输入、输出、错误和不变量，再实现。若预计超过约 6 个手写源码文件、涉及第二个独立状态机，或上下文超过预算，将卡拆为 Sxxx-a、Sxxx-b 等，写到 `agent/tasks/Sxxx-*.md`。拆卡只细化本卡范围，不减少验收；父卡需所有子卡完成才标 done。测试、生成代码和进度文件不计入这个文件数建议。
+
+所有最终包名与目录按 design §5；首次引入包才创建 Cargo.toml/package.json，并加入对应根 workspace。临时接口尚未实现时返回明确 Unsupported/NotReady，不以空数组、默认成功或丢弃参数使测试通过。
+
+### 2.2 上下文预算
+
+每轮只读取：根 `AGENTS.md`（若已建立）、本手册 §1—2、本张卡、design 指定章节、直接前置步骤的短交接以及本轮真正涉及的源文件。不要读取全文任务卡、所有历史日志或整个仓库。
+
+建议首次输入控制在 6,000—10,000 tokens，业务代码按需分段读；长任务在约 70% 上下文使用量前保存检查点。直接依赖的交接总量尽量不超过 1,000 中文字，每张最终交接建议 300—600 中文字。Token 为预算建议，以实际模型限制为准。
+
+若章节过长，只读相关小节和不变量。所有 agent 都需知道：不丢未确认本地内容；冲突保留双方；首次同步不推导删除；挂载/权限/扫描故障不等于删除；完整缓存不自动驱逐；上传完成不等于 committed；SSE 只作提示；服务端不使用 FUSE/占位存储。
+
+初次可用 `rg -n '^#{1,4} ' docs/design.md` 定位标题，再读取必要行段。S002 建立 `tools/context.py`，按标题精确提取本卡和设计小节，输出给下一次会话；避免依赖会变化的固定行号。
+
+### 2.3 每步统一完成条件
+
+1. 实现本卡结果与必要错误分支，保持平台/依赖边界。
+2. 执行本卡最小验证，记录命令、环境、退出码及实际观察；已有相关测试必须通过。文档/脚手架任务只需结构与命令检查，不增加无意义单测。
+3. 记录 `agent/tasks/Sxxx.md`：状态、关联需求/测试、接口决定、改动路径、验证证据、限制、下一步；涉及代码时同时记录 §2.7 的 worktree 续接信息。大日志放 `artifacts/`，交接只保留摘要和可重现命令。
+4. 更新 `agent/progress.md` 的对应行和当前可用入口；新接口摘要写到 `docs/architecture/interfaces.md` 对应小节。不得每次追加整份设计副本。
+5. 检查 diff，确保无真实密码、用户文件、数据库或测试卷进入 Git。按根 AGENTS.md 的 Git 规则，使用已安装且适用的 commit skill 做单独本地提交，summary 与 body 使用中文；身份或 skill 缺失则记录提交阻塞，不虚构作者、不自行绕过、不推送远端。
+
+`done` 意味着卡中要求的验证已完成。Windows 未实测、资源不足、CI runner 不存在等情况必须标 blocked，不能用 Linux fake 或交叉编译替代。每轮回复只说明结果、验证、剩余阻塞和下一个 ready 编号。
+
+### 2.4 环境、状态与数据隔离
+
+| 用途 | 约定 |
+| --- | --- |
+| 项目源码 | 用户创建的 `vaultsyncd/`；实际绝对路径在 S001 记录，代码开发使用 §2.7 的任务 worktree |
+| 临时开发状态 | 外部目录示例 `/var/lib/vaultsyncd-dev/`，独立账号/端口/配置 |
+| 集成与故障测试 | 外部测试卷下按 run_id 分目录；每轮独立 DB、Root、对象与进程 |
+| 正式试用实例 | 示例 `/var/lib/vaultsyncd/`，只在部署阶段启用，先用可丢弃样本 |
+| 用户工作目录 | 从允许基目录显式选择，与所有内部状态目录互不重叠 |
+| Windows 样本目录 | Windows 客体的独立 NTFS 目录，不使用共享文件夹模拟 NTFS |
+
+所有位置为示例，agent 先检查占用、权限和实际挂载。源码可以在主机其他文件系统上；**服务端工作树、状态、对象、暂存必须符合 ext4/XFS 约束**。NixOS 常见的 Btrfs/ZFS/overlay 不能因开发方便加入服务端白名单。没有合规测试卷时，可在空间充足且已确认属于本任务的普通文件上建立小型 ext4 loop 测试卷；不得格式化既有块设备，不把测试镜像当生产布局。
+
+故障注入只能作用于带 run_id 的测试实例。满盘实验填充小型专用测试卷，强杀用该测试进程的已记录 PID，卸载只操作本任务挂载点。不得用主机根分区满盘或随意停止全部同名进程来测试。压力测试从小数据开始，先估算工作文件、不可变对象、历史、临时内容和余量的总空间。
+
+### 2.5 NixOS 的工程规则
+
+- 项目依赖由根 `flake.nix`、`flake.lock` 和 `nix develop` 管理。先适配主机现有 Nix/flake 配置，不为了项目重写整套系统配置；若 features 未启用，按实际版本配置最小所需选项。
+- 项目 flake 导出 devShell、后续 packages 和 NixOS module；主机自己的 flake/configuration.nix 仍拥有主机配置。不得把项目 flake 当成主机 flake 执行 rebuild，除非已明确配置了对应 `nixosConfigurations`。
+- 需要虚拟化、测试挂载或服务部署时，可以在已获授权范围内 rebuild，无需再次为普通 rebuild 请求许可。先保存配置 diff 和旧 generation，按实际入口执行 build、test、健康检查，再 switch。`test` 会激活配置，但不设置下次启动默认项；其本身不提供定时自动回滚。
+- 远程操作需保留 SSH 与回滚能力；不得顺手升级全系统、关闭防火墙或清理回滚 generation。失败先恢复已知配置/旧 generation。具体主机入口、选项和命令必须来自现场检查，不猜 hostname 或 flake 路径。
+- 不把密码写入 Nix 表达式或 Nix store；使用有权限控制的运行时文件、凭据输入或经验证的 systemd credentials。
+- 首发只做 Windows 桌面，NixOS 上不为运行 Tauri Linux 桌面而引入 GTK/WebKit/FUSE 产品依赖。Linux 可以运行前端测试和开发网页，原生壳在 Windows 环境构建验证。
+
+### 2.6 Windows 验证资源：优先 Quickemu
+
+优先复用既有合规 Windows 11 x64 环境；没有时在 x86_64 NixOS + KVM 上用 Quickemu 快速准备客体。ARM 主机不能直接以 x86 KVM 方案执行，应记录所需 x86 Windows runner。镜像/许可或 KVM/容量缺失时标 blocked，继续无依赖任务。
+
+1. 检查 `uname -m`、`/dev/kvm` 和当前用户读写权限；必要时在现有 NixOS 配置加入 kvm 组并 rebuild/重新登录。通过项目 devShell 或 `nix-shell -p quickemu` 提供 Quickemu，记录并锁定实际版本。
+2. 在源码外的专用 VM 目录执行 `quickget windows 11`。下载接口不可用时从微软官方取得 ISO，并按安装版本文档配置；不得使用不明修改镜像。保留生成的 VirtIO、TPM、EFI 设置。
+3. 首次启动前将配置中的 `cpu_cores="4"`、`ram="8G"`、`disk_size="100G"` 作为小样本起点，按宿主余量调整；修改 disk_size 不等于扩容已有分区。执行 `quickemu --vm windows-11.conf` 完成安装，修改自动安装账号默认密码。
+4. 无桌面服务器可用 `--display spice --viewer none --access local --spice-port 5930` 启动，从操作电脑建立 `ssh -N -L 5930:127.0.0.1:5930 用户@服务器`，再用 SPICE 客户端连接 `spice://127.0.0.1:5930`。端口按占用调整，先核对安装版本的 help，不将 SPICE 直接暴露公网。
+5. 客体安装匹配 Rust MSVC、C++ Build Tools/SDK、Node/pnpm、WebView2、Git；配置受限网络上的 OpenSSH 供 PowerShell 自动测试。GUI、资源管理器与托盘测试使用已登录桌面会话。源码同步同一提交，不复制 Linux target/node_modules。
+6. CFAPI 根置于客体 NTFS，例如 `C:\vaultsyncd-test`，不用共享文件夹。默认 QEMU user 网络通常通过 `10.0.2.2` 到宿主，其他网络以实测为准；用 TCP/HTTPS 检查宿主端口，证书名称/信任必须匹配，不能禁用验证。客体 localhost 不是宿主。
+7. 工具链就绪后正常关机，备份完整 VM 配置、磁盘、EFI 与 TPM 状态，作为未注册客户端身份的基线；不能只恢复磁盘却忽略其他状态。第二台从基线独立初始化 DeviceId。每次测试用独立服务端实例/Root；测试回滚与服务器状态配对，刻意陈旧客户端场景另记录。
+8. 首台立即执行 S010—S012；第二台用于并发，正式规模按 S107。Wine、交叉编译、Linux fake 不能替代原生 CFAPI 结果。若已有 libvirt 环境可继续使用，不强制迁移。
+
+依据：[Quickemu Windows](https://github.com/quickemu-project/quickemu/wiki/04-Create-Windows-virtual-machines)、[配置](https://github.com/quickemu-project/quickemu/blob/master/docs/quickemu_conf.5.md)、[QEMU 网络](https://www.qemu.org/docs/master/system/devices/net.html)。
+
+### 2.7 代码开发使用 Git worktree
+
+涉及代码改动时，执行根 `AGENTS.md` 的“Git worktree”约定，该处为规则的唯一维护入口；用户已授权此模式，无需再次确认。当前已安装 `using-git-worktrees`，入口为 `.agents/skills/using-git-worktrees/SKILL.md`。先读取 skill 并检查已有隔离，再准备任务工作树与基线；不要等到 S002 才开始遵守。
+
+纯文档维护可留在当前工作区；一旦任务扩展到代码，先完成 worktree 准备。源码 worktree 不替代 §2.4 的服务状态与故障测试隔离，也不改变服务端工作目录的文件系统准入条件。交接按 §7.2 记录路径、分支、基线和提交；后续会话从该 worktree 续接。
+
+## 3. 可直接复用的启动提示词
+
+首次执行：
+
+```text
+你在 vaultsyncd 仓库根目录工作。本次只执行 agent/implementation-plan.md 的 S001。
+先读取该文件 §1—2 和 S001，再按卡片读取 docs/design.md 指定章节。
+如需改动代码，先按 AGENTS.md 使用已安装的 using-git-worktrees skill 准备隔离工作树。
+用户已授权本项目所需 NixOS 配置与 rebuild。当前只完成这一张卡，
+记录事实、验证、进度和交接，不实现后续卡，也不访问真实业务数据。
+```
+
+后续执行：
+
+```text
+在 vaultsyncd 仓库执行最早的 ready 任务，一次仅一张卡。
+先读 AGENTS.md、implementation-plan.md §1—2、progress.md 的未完成状态，
+再读本卡及直接依赖交接、design.md 指定小节和相关代码。
+涉及代码改动时，先按 AGENTS.md 使用 using-git-worktrees skill，复用或创建任务 worktree，
+检查基线后在其中编辑、验证和提交；用户已授权此模式，不重复询问。
+若卡片过大，按 §2.1 拆分；若资源缺失，写明阻塞并选择无依赖任务。
+实现后执行最小验证，更新任务记录、接口摘要与进度。
+不要用“编译成功”代替平台验收，不要将 planned 命令报告为已执行。
+```
+
+## 4. 任务索引
+
+编号顺序是推荐执行顺序，依赖列决定可执行性。表中的 L=NixOS/Linux，W=Windows 11，B=浏览器/前端（工具链可在 NixOS），X=跨平台组合。`+` 表示列出的前置任务均完成；单纯章节引用不是执行依赖。
+
+| 步骤 | 结果 | 环境 | 前置 |
+| --- | --- | --- | --- |
+| S001 | 确认主机与同步环境基线 | L | 无 |
+| S002 | 建立 agent 入口与上下文提取工具 | L | S001 |
+| S003 | 建立 Nix 开发 shell | L | S001、S002 |
+| S004 | 建立最小 Cargo workspace | L | S003 |
+| S005 | 建立 pnpm workspace 与工具版本 | L | S003 |
+| S006 | 建立任务编排入口与基础 CI | L | S004、S005 |
+| S007 | 准备独立 ext4/XFS 测试位置 | L | S001、S003 |
+| S008 | 准备 Windows 客体与连接说明 | L | S001、S007 |
+| S009 | 固定 Windows 构建工具链 | W | S008、S004、S005 |
+| S010 | CFAPI 注册与占位创建原型 | W | S009 |
+| S011 | CFAPI 读取、取消与离线原型 | W | S010 |
+| S012 | CFAPI 释放与写入保护原型 | W | S011 |
+| S013 | Linux 存储准入原型 | L | S007、S004 |
+| S014 | Linux 普通文件发布原型 | L | S013 |
+| S015 | 定义身份与有界计数类型 | L | S004 |
+| S016 | 定义状态维度与错误分类 | L | S015 |
+| S017 | 路径与名称纯规则 | L | S015 |
+| S018 | 排除规则与解释 | L | S017 |
+| S019 | 三方规划基本分支 | L | S015、S016、S017 |
+| S020 | 首次合并规划 | L | S019 |
+| S021 | 内容冲突及稳定副本身份 | L | S019 |
+| S022 | 移动与删除冲突规划 | L | S020、S021 |
+| S023 | 规划器操作重排验证 | L | S022 |
+| S024 | 远端协议最小契约与生成通路 | L | S015、S006 |
+| S025 | 本机 IPC 最小契约与生成通路 | L | S016、S024 |
+| S026 | 服务端数据库迁移框架 | L | S015、S007 |
+| S027 | 服务端命名空间表与约束 | L | S026 |
+| S028 | 版本、事件与幂等表 | L | S027 |
+| S029 | 上传、意图与租约表 | L | S028 |
+| S030 | 客户端数据库与状态表 | L | S015、S016、S026 |
+| S031 | 客户端事件、传输与意图持久化 | L | S030 |
+| S032 | Linux 安全路径访问正式接口 | L | S014、S017 |
+| S033 | 不可变对象写入与读取 | L | S029、S032 |
+| S034 | 持久提交意图状态机 | L | S033 |
+| S035 | 内容 CAS 与现场复核 | L | S034、S028 |
+| S036 | 幂等重试与冲突内容提交 | L | S035、S021 |
+| S037 | 启动恢复与崩溃注入 | L | S036 |
+| S038 | 目录创建与同 Root 移动 | L | S037、S022 |
+| S039 | 可恢复删除与回收站 | L | S038 |
+| S040 | 历史与回收站恢复操作 | L | S039 |
+| S041 | 服务端进程与配置生命周期 | L | S037、S024 |
+| S042 | 首次 owner 初始化与密码认证 | L | S041、S026 |
+| S043 | 会话、刷新与 Root 授权 | L | S042 |
+| S044 | 管理 Root 注册与健康 API | L | S043、S032、S027 |
+| S045 | 上传会话和固定块接收 | L | S043、S029、S033 |
+| S046 | 上传 finalize 与固定版本下载 | L | S045 |
+| S047 | 操作 HTTP 接口与错误映射 | L | S036、S038、S039、S040、S043、S046 |
+| S048 | 一致性快照、changes 与 SSE | L | S044、S047 |
+| S049 | 外部目录初始稳定采集 | L | S044、S035 |
+| S050 | inotify 与溢出补扫 | L | S049 |
+| S051 | 外部移动、删除与挂载失效 | L | S050、S038、S039 |
+| S052 | 服务端整合小型 HTTP 闭环 | L | S048、S051 |
+| S053 | Rust HTTPS 客户端与认证刷新 | L | S043、S048 |
+| S054 | 上传下载续传客户端 | L | S053、S045、S046、S031 |
+| S055 | agent 核心端口与确定性执行器 | L | S023、S031、S054 |
+| S056 | 本地 generation 与上传快照 | L | S055 |
+| S057 | 接收事件与应用进度 | L | S055、S048 |
+| S058 | 首次绑定与可恢复合并执行 | L | S056、S057、S020 |
+| S059 | 本地受控应用与重启核对 | L | S058 |
+| S060 | 旧游标与 epoch 重建 | L | S059 |
+| S061 | 暂停、模式切换与解除绑定 | L | S059、S018 |
+| S062 | 下载优先级与重试调度 | L | S054、S059 |
+| S063 | 手动释放的核心安全条件 | L | S059、S061 |
+| S064 | agent 状态、问题与恢复导出 | L | S060、S062、S063 |
+| S065 | Windows 安全文件与本地扫描 | W | S012、S017、S059 |
+| S066 | CFAPI 正式注册与元数据更新 | W | S065、S010 |
+| S067 | CFAPI hydration 接入传输执行器 | W | S066、S054、S062 |
+| S068 | Windows 写入检测与使用保护 | W | S066、S056、S059 |
+| S069 | Windows 手动释放与恢复 | W | S067、S068、S063 |
+| S070 | Windows agent 进程与单实例 | W | S067、S068、S069、S064 |
+| S071 | Windows named pipe 传输与身份 | W | S070、S025 |
+| S072 | 本机管理命令完整接入 | W | S071、S061、S064 |
+| S073 | Windows CLI 最小管理入口 | W | S072 |
+| S074 | 三台客户端基础互通 | X | S073、S052 |
+| S075 | Linux 在线管理 socket 与 CLI | L | S043、S044、S047、S048 |
+| S076 | 前端公共组件与两应用壳 | B | S005、S024、S025 |
+| S077 | Web 登录与会话管理 | B | S076、S043 |
+| S078 | Web Root 与服务健康页面 | B | S077、S044、S051 |
+| S079 | Web 历史、冲突与回收站 | B | S078、S040、S047 |
+| S080 | Tauri Windows 壳与最小 IPC 桥 | W | S076、S072 |
+| S081 | 桌面连接与 Binding 页面 | W | S080 |
+| S082 | 桌面文件状态与手动操作 | W | S081、S069、S073 |
+| S083 | 桌面历史与系统通知 | W | S082、S079、S064 |
+| S084 | 客户端未上传数据恢复演练 | W | S083、S064 |
+| S085 | 历史保留与对象引用标记 | L | S040、S029 |
+| S086 | GC 删除协调与临时清理 | L | S085、S037 |
+| S087 | 一致性备份快照与租约 | L | S086、S048 |
+| S088 | 备份导出、校验与释放接口 | L | S087、S075 |
+| S089 | 离线恢复到空目录 | L | S088、S037 |
+| S090 | Web 备份管理入口 | B | S079、S088 |
+| S091 | 协议与数据库升级演练 | X | S089、S074 |
+| S092 | 构建依赖与协议边界检查 | L | S024、S025、S080 |
+| S093 | 发布版本与产物清单 | L | S052、S076、S092 |
+| S094 | Linux 服务端 Nix 构建包 | L | S093、S090 |
+| S095 | NixOS 服务模块 | L | S094、S007 |
+| S096 | 在本机启用隔离服务实例 | L | S095、S042 |
+| S097 | HTTPS 与同源 Web 部署 | L | S096、S077 |
+| S098 | 通用 Linux 包与容器配置 | L | S094、S097 |
+| S099 | Windows 安装包与后台启动 | W | S083、S084、S093 |
+| S100 | Windows 升级与卸载保护 | W | S099、S091 |
+| S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 |
+| S102 | 事件异常与旧设备集成验收 | X | S074、S089、S091 |
+| S103 | 文件与挂载故障集成验收 | X | S074、S051、S068 |
+| S104 | GC、备份与崩溃联合验收 | X | S086、S089、S102 |
+| S105 | 安全与操作可达性验收 | X | S083、S090、S097、S100 |
+| S106 | 小文件时延与常规规模基准 | X | S101、S102、S103、S104、S105 |
+| S107 | 正式容量与大文件续传验证 | X | S106 |
+| S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 |
+
+## 5. 逐步任务卡
+
+每张卡的验收加上 §2.3 的统一完成条件。文中的示例路径内部文件可随已存在接口调整；变更接口要更新短摘要与消费者，不能自行扩大产品范围。
+
+### S001 — 确认主机与同步环境基线
+
+- **环境与前置**：L；无。
+- **只读设计范围**：`docs/design.md` §0—3、§5.10、C35/C39；加直接前置交接及相关源文件。
+- **主要落点**：docs/environment.md；docs/design.md；agent/progress.md。
+- **实现要点**：只读检查 pwd、Git 状态、NixOS/Nix 版本、架构、磁盘/挂载、空闲空间、现有服务端口和系统配置入口。记录可用权限与 Windows/KVM 资源，不输出秘密。将 NixOS 主要开发验证环境写入 design，保留 Ubuntu 发布兼容验证；建立所有任务的 todo 索引。
+- **本步验收**：记录均有实际命令证据；没有把当前开发系统架构误写成已支持全部架构。
+- **交接**：`agent/tasks/S001.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S002 — 建立 agent 入口与上下文提取工具
+
+- **环境与前置**：L；S001。
+- **只读设计范围**：`docs/design.md` §5、§23；加直接前置交接及相关源文件。
+- **主要落点**：AGENTS.md；README.md；tools/context.py；docs/architecture/interfaces.md。
+- **实现要点**：核对用户预置 AGENTS.md，按本仓库实际工具补充入口，不覆盖其中 worktree、commit skill/中文提交规则；探测并记录已安装 worktree 与 commit skill 的真实名称和位置。修改 context.py 前按 §2.7 准备任务 worktree。context.py 按完整标题提取本卡和指定设计小节，到同级/更高级标题结束；未知或歧义标题报错，代码围栏内的 # 不当标题。README 链接两份文档。
+- **本步验收**：提取 S001 和 design §11.2，确认边界正确且不带其他卡；无关章节未自动全部注入；交接包含实际 worktree 路径、分支或 detached HEAD、基线提交与检查结果，并可从该路径续接。
+- **交接**：`agent/tasks/S002.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S003 — 建立 Nix 开发 shell
+
+- **环境与前置**：L；S001、S002。
+- **只读设计范围**：`docs/design.md` §4.1、§5.7；加直接前置交接及相关源文件。
+- **主要落点**：flake.nix；flake.lock；docs/environment.md。
+- **实现要点**：锁定 nixpkgs，devShell 提供 Rust/Cargo/rustfmt/clippy、C 编译工具、pkg-config、Node/pnpm、Python、Git、SQLite 与基本诊断工具。优先使用锁定 nixpkgs 工具链，实际记录版本；仅在明确缺能力时引入额外 overlay。
+- **本步验收**：nix develop 内输出工具版本，编译临时 Rust 程序并运行前端包管理器；新终端可复现，不依赖临时全局安装。
+- **交接**：`agent/tasks/S003.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S004 — 建立最小 Cargo workspace
+
+- **环境与前置**：L；S003。
+- **只读设计范围**：`docs/design.md` §5.4、§5.7；加直接前置交接及相关源文件。
+- **主要落点**：Cargo.toml；Cargo.lock；crates/domain/；rust-toolchain.toml；.gitignore。
+- **实现要点**：根为虚拟 workspace，只加入真实存在的 domain 包；edition/MSRV/resolver 组合实际验证。rust-toolchain 与 Nix 提供版本保持一致，说明 Nix 与 Windows 如何取同版本。配置格式/lint，忽略 target、artifacts、运行数据。
+- **本步验收**：cargo metadata、cargo check --locked、cargo fmt --check 成功；只有一个 Cargo.lock。
+- **交接**：`agent/tasks/S004.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S005 — 建立 pnpm workspace 与工具版本
+
+- **环境与前置**：L；S003。
+- **只读设计范围**：`docs/design.md` §5.6—5.7；加直接前置交接及相关源文件。
+- **主要落点**：package.json；pnpm-workspace.yaml；pnpm-lock.yaml；packages/ui/。
+- **实现要点**：创建最小有实际导出的 TS UI 包及类型检查入口；仅加入已创建成员。锁定 packageManager，建立 React/TS 基础配置，应用后续加入。
+- **本步验收**：pnpm install --frozen-lockfile 和包 typecheck 可运行；无嵌套锁文件。
+- **交接**：`agent/tasks/S005.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S006 — 建立任务编排入口与基础 CI
+
+- **环境与前置**：L；S004、S005。
+- **只读设计范围**：`docs/design.md` §5.7—5.8；加直接前置交接及相关源文件。
+- **主要落点**：tools/xtask/；.cargo/config.toml；.github/workflows/。
+- **实现要点**：xtask 先提供环境信息与已有检查编排；不存在的 generate/package 命令明确报未实现。CI 先执行便携 Rust 与 TS 检查，平台测试以后接入；本地等价命令写 README。
+- **本步验收**：错误子命令非零退出；故意引入格式错误能使检查失败；未配置远端 CI 时只记录本地证据。
+- **交接**：`agent/tasks/S006.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S007 — 准备独立 ext4/XFS 测试位置
+
+- **环境与前置**：L；S001、S003。
+- **只读设计范围**：`docs/design.md` §11.4、§16.1；加直接前置交接及相关源文件。
+- **主要落点**：docs/environment.md；tools/test-volume/。
+- **实现要点**：检查候选目录及底层挂载；优先现有合规测试卷。必要时用小型新建普通镜像文件建立 ext4 loop，校验路径/设备归属并记录清理命令。规划 dev/test/正式实例状态与 root 的互斥路径。
+- **本步验收**：findmnt/statfs 证据证明实际后端；测试目录为空且与源码/用户数据无重叠；清理不触碰其他挂载。
+- **交接**：`agent/tasks/S007.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S008 — 准备 Windows 客体与连接说明
+
+- **环境与前置**：L；S001、S007。
+- **只读设计范围**：`docs/design.md` §2.1、§14.2、§21.1；加直接前置交接及相关源文件。
+- **主要落点**：docs/environment.md；docs/operations/windows-lab.md。
+- **实现要点**：检查既有 Windows；否则按 §2.6 在已具备镜像和资源时用 Quickemu 配置 KVM VM，并记录启动/关闭/恢复/网络访问方式。必要系统修改先 build/test 后 switch，保留 SSH；客体 NTFS 和测试网络独立。缺镜像/许可/虚拟化条件则 blocked，并记录继续 Linux 任务的路径。
+- **本步验收**：Windows 版本、NTFS、宿主可达地址有证据；尚无客体不得 done，不以 Wine 代替。
+- **交接**：`agent/tasks/S008.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S009 — 固定 Windows 构建工具链
+
+- **环境与前置**：W；S008、S004、S005。
+- **只读设计范围**：`docs/design.md` §5.7、§14.2；加直接前置交接及相关源文件。
+- **主要落点**：docs/operations/windows-lab.md；tests/platform/windows/。
+- **实现要点**：安装匹配 Rust MSVC、C++ Build Tools/SDK、Node/pnpm/WebView2。同步同一 Git 提交到客体；避免共享 target/node_modules。写最小 Rust/TS 验证命令。
+- **本步验收**：Windows 原生编译运行 Rust 示例，pnpm 类型检查通过；记录所有工具版本。
+- **交接**：`agent/tasks/S009.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S010 — CFAPI 注册与占位创建原型
+
+- **环境与前置**：W；S009。
+- **只读设计范围**：`docs/design.md` §14.1—14.2、I03/I05；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/examples/；tests/platform/windows/。
+- **实现要点**：在专用 NTFS 目录注册测试 sync root，建立目录/文件真实 placeholder，将不透明 EntryId/VersionId 编码进受限 identity。实现注销与保留用户数据的清理；FFI 记录生命周期。
+- **本步验收**：系统可识别占位、文件逻辑大小正确；不是普通零字节文件；清理不删除测试内容。
+- **交接**：`agent/tasks/S010.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S011 — CFAPI 读取、取消与离线原型
+
+- **环境与前置**：W；S010。
+- **只读设计范围**：`docs/design.md` §13、§14.2、T06/T22；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/examples/；tests/platform/windows/。
+- **实现要点**：用固定测试内容源实现读取回调与范围请求，固定版本；处理取消、重复请求和超时。源不可用时回报明确失败；回调生命周期不能访问已释放状态。
+- **本步验收**：实际文件读取字节/哈希正确；断开源后未下载内容失败；取消后句柄可关闭，无永久卡住。
+- **交接**：`agent/tasks/S011.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S012 — CFAPI 释放与写入保护原型
+
+- **环境与前置**：W；S011。
+- **只读设计范围**：`docs/design.md` §8.3—8.4、§14.4、T07/T27/T28；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/examples/；tests/platform/windows/。
+- **实现要点**：测试编辑器原地写、rename-over、共享锁、映射写与释放。建立已观察 generation 与使用保护的边界记录；不能证明安全时返回 Busy/Unknown。记录原生能力实际限制。
+- **本步验收**：dirty/使用中内容不可释放；已确认干净样本可释放再读；每类编辑器保存有哈希证据，失败列为阻塞。
+- **交接**：`agent/tasks/S012.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S013 — Linux 存储准入原型
+
+- **环境与前置**：L；S007、S004。
+- **只读设计范围**：`docs/design.md` §11.4、§16.1、T35；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-linux-server/src/mounts/；tests/platform/linux/。
+- **实现要点**：创建 Linux 适配包，通过目录句柄 fstatfs 与 mountinfo 检查类型/挂载身份。拒绝 FUSE/NFS/SMB/不支持后端；检查内部状态目录与子挂载。普通稀疏文件不等同 placeholder。
+- **本步验收**：ext4/XFS 和合规 bind mount 接受，其他后端拒绝；记录无法普遍识别第三方 stub 的边界。
+- **交接**：`agent/tasks/S013.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S014 — Linux 普通文件发布原型
+
+- **环境与前置**：L；S013。
+- **只读设计范围**：`docs/design.md` §11.1—11.3、C33；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-linux-server/src/files/；tests/platform/linux/。
+- **实现要点**：通过受限目录句柄读写，建立目标文件系统内暂存、文件和目录刷盘、受控替换原型。跨文件系统先复制到目标 staging；验证旧独立快照不随工作文件写入改变。
+- **本步验收**：工作文件外部改写后对象旧字节仍在；EXDEV 不被忽略；外部竞争不能保证原子时暂停并报告。
+- **交接**：`agent/tasks/S014.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S015 — 定义身份与有界计数类型
+
+- **环境与前置**：L；S004。
+- **只读设计范围**：`docs/design.md` §7.1、§6；加直接前置交接及相关源文件。
+- **主要落点**：crates/domain/src/ids.rs；version.rs。
+- **实现要点**：实现不透明 ID newtype、Revision/RootSeq/Generation/Epoch；数据库 i64 上限检查，wire 大整数为十进制字符串；注入 ID/时间来源供确定性测试。
+- **本步验收**：超过 JS 精度边界可往返；负数、溢出、格式不合法被拒绝。
+- **交接**：`agent/tasks/S015.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S016 — 定义状态维度与错误分类
+
+- **环境与前置**：L；S015。
+- **只读设计范围**：`docs/design.md` §8.1—8.3、§15.4、§18.2；加直接前置交接及相关源文件。
+- **主要落点**：crates/domain/src/state.rs；error.rs。
+- **实现要点**：驻留、dirty、remote_apply、transfer、usage、availability 分开建模；区分可重试/需用户处理/损坏。实现纯状态投影函数，不写文件。
+- **本步验收**：同时 dirty+offline+materialized 可表达；pending 不能投影成已同步。
+- **交接**：`agent/tasks/S016.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S017 — 路径与名称纯规则
+
+- **环境与前置**：L；S015。
+- **只读设计范围**：`docs/design.md` §16.1—16.2、§7.4；加直接前置交接及相关源文件。
+- **主要落点**：crates/fs-common/src/path.rs；name.rs。
+- **实现要点**：建立相对路径分量校验、Windows 保留名/尾部字符和长度问题分类；不做自动小写或静默 Unicode 改名。给原生名称等价检查留端口。
+- **本步验收**：穿越、绝对路径、NUL、文件目录同名与碰撞 fixture 得到明确错误；不把字符串前缀当目录重叠判断。
+- **交接**：`agent/tasks/S017.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S018 — 排除规则与解释
+
+- **环境与前置**：L；S017。
+- **只读设计范围**：`docs/design.md` §10.4、C13；加直接前置交接及相关源文件。
+- **主要落点**：crates/fs-common/src/ignore.rs；fixtures/paths/。
+- **实现要点**：实现 .syncignore 的注释、通配、根锚定、目录和否定规则，返回命中的规则与原因；默认清单可编辑。排除表示不同步，绝不转换成 Delete。
+- **本步验收**：父目录排除/子项否定、临时文件 rename-over 最终文件均有案例；相同规则结果确定。
+- **交接**：`agent/tasks/S018.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S019 — 三方规划基本分支
+
+- **环境与前置**：L；S015、S016、S017。
+- **只读设计范围**：`docs/design.md` §9.1、I02/I04；加直接前置交接及相关源文件。
+- **主要落点**：crates/planner/src/reconcile.rs。
+- **实现要点**：定义 B/L/R 事实与 Plan，不访问 I/O；实现双方无变、仅本地变、仅远端变、同结果归并。输出动作前提、依赖和需要保护本地内容的说明。
+- **本步验收**：表驱动输入得确定计划；mtime 相同但内容不同不被归并。
+- **交接**：`agent/tasks/S019.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S020 — 首次合并规划
+
+- **环境与前置**：L；S019。
+- **只读设计范围**：`docs/design.md` §9.2、T01；加直接前置交接及相关源文件。
+- **主要落点**：crates/planner/src/first_sync.rs。
+- **实现要点**：无基线时本地独有/远端独有均保留；同路径同内容关联远端 ID；异内容与文件目录同名输出保留双方计划。首次合并与旧设备重建用不同入口。
+- **本步验收**：任意缺项不输出删除；多次计算同一输入计划稳定。
+- **交接**：`agent/tasks/S020.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S021 — 内容冲突及稳定副本身份
+
+- **环境与前置**：L；S019。
+- **只读设计范围**：`docs/design.md` §10.1—10.2、T02/T03；加直接前置交接及相关源文件。
+- **主要落点**：crates/planner/src/conflict.rs。
+- **实现要点**：输出服务器主条目保留与迟到分支新条目计划；冲突身份关联 OpId，名称受长度预算约束。同内容归并必须比较长度与 hash，不凭名字去重。
+- **本步验收**：重试不会不断新增副本；交换设备时钟不改变版本判定。
+- **交接**：`agent/tasks/S021.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S022 — 移动与删除冲突规划
+
+- **环境与前置**：L；S020、S021。
+- **只读设计范围**：`docs/design.md` §9.5、§10.1—10.3、T09—T13；加直接前置交接及相关源文件。
+- **主要落点**：crates/planner/src/rename.rs；delete.rs。
+- **实现要点**：实现移动+修改、双移动、删改和删除目录并发子项的矩阵；EntryId 不随路径变。目录环/目标冲突/旧 subtree_token 给重规划结果；跨 Root 拆目标创建确认再源删除。
+- **本步验收**：矩阵各分支有小 fixture；跨 Root 目标失败不得计划完成源删除。
+- **交接**：`agent/tasks/S022.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S023 — 规划器操作重排验证
+
+- **环境与前置**：L；S022。
+- **只读设计范围**：`docs/design.md` §6、§21.1；加直接前置交接及相关源文件。
+- **主要落点**：crates/planner/tests/；fixtures/。
+- **实现要点**：用固定种子枚举少量设备编辑/移动/删改/重试次序；检查唯一未确认内容总有保留去处。故障保存最短操作轨迹，不一次引入大型模型检查框架。
+- **本步验收**：覆盖 I02/I03/I04/I06/I07；失败能按种子单独重放。
+- **交接**：`agent/tasks/S023.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S024 — 远端协议最小契约与生成通路
+
+- **环境与前置**：L；S015、S006。
+- **只读设计范围**：`docs/design.md` §15.1—15.4、§5.6；加直接前置交接及相关源文件。
+- **主要落点**：api/openapi.yaml；api/generation.toml；crates/protocol/；packages/api-client/。
+- **实现要点**：先定义 capabilities、错误信封、长整数字符串与健康接口。小样本验证生成器能同时产 Rust DTO 与 TS client，锁版本并实现 xtask generate。业务 domain 到 wire 显式转换。
+- **本步验收**：同源生成双方编译；重新生成无 diff；未知枚举不默认成功；此后按功能逐步扩展契约。
+- **交接**：`agent/tasks/S024.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S025 — 本机 IPC 最小契约与生成通路
+
+- **环境与前置**：L；S016、S024。
+- **只读设计范围**：`docs/design.md` §15.5、§5.6；加直接前置交接及相关源文件。
+- **主要落点**：api/local-ipc.schema.json；crates/local-ipc/；packages/local-ipc-types/。
+- **实现要点**：定义 request_id、版本、命令/结果/错误、长度限制；先实现 GetStatus。生成 Rust/TS 类型，framing 有上限和部分读取处理；不把 Windows 传输实现放 DTO 包。
+- **本步验收**：截断/超长/未知命令拒绝，Rust 与 TS 样本一致；本机 IPC 与服务器管理 API 分开。
+- **交接**：`agent/tasks/S025.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S026 — 服务端数据库迁移框架
+
+- **环境与前置**：L；S015、S007。
+- **只读设计范围**：`docs/design.md` §7.2、§19.3；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-store/src/db.rs；migrations/。
+- **实现要点**：独立 server 数据库种类标识、schema 版本、外键、WAL 与短事务接口。迁移前一致性备份；失败禁止写服务启动；旧二进制读到过新 schema 拒绝写。
+- **本步验收**：从空库与旧 fixture 升级；中断迁移不产生可写半成品；客户端库误传被拒绝。
+- **交接**：`agent/tasks/S026.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S027 — 服务端命名空间表与约束
+
+- **环境与前置**：L；S026。
+- **只读设计范围**：`docs/design.md` §7.2—7.4；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-store/src/entries.rs；roots.rs；migrations/。
+- **实现要点**：建 roots/entries 及 owner scope，活跃同父名称唯一、父子同 Root、目录环检查；提供事务内读写接口，网络代码不能随意 raw SQL。
+- **本步验收**：非法跨 Root 父项、重复名称和目录环失败，原数据保持。
+- **交接**：`agent/tasks/S027.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S028 — 版本、事件与幂等表
+
+- **环境与前置**：L；S027。
+- **只读设计范围**：`docs/design.md` §7.2、I06/I09；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-store/src/versions.rs；operations.rs；changes.rs。
+- **实现要点**：建 versions/objects/changes/operations，统一事务更新 seq 与操作结果；digest 基于规范化请求语义。相同 OpId 不同 digest 拒绝，紧凑结果保留规则明确。
+- **本步验收**：回滚不暴露事件；重复操作返回同结果；RootSeq 单调且事务批次不拆分。
+- **交接**：`agent/tasks/S028.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S029 — 上传、意图与租约表
+
+- **环境与前置**：L；S028。
+- **只读设计范围**：`docs/design.md` §7.2、§11.3、§19.4；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-store/src/intents.rs；uploads.rs；leases.rs。
+- **实现要点**：增加 uploads/parts/fs_intents/backup_leases 以及下载/提交对象保护所需租约模型；phase 有明确转换与恢复字段。持久化 phase 不靠普通日志推断。
+- **本步验收**：重启能列出未完成意图、缺块与有效租约；重复 part 索引不产生两条记录。
+- **交接**：`agent/tasks/S029.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S030 — 客户端数据库与状态表
+
+- **环境与前置**：L；S015、S016、S026。
+- **只读设计范围**：`docs/design.md` §7.3、§8.4；加直接前置交接及相关源文件。
+- **主要落点**：crates/client-store/src/；migrations/。
+- **实现要点**：建立独立 client schema 和迁移路径，先包含 bindings、baseline、remote、local、pending_ops；generation 与基线独立。不得复用 server schema 或数据库文件。
+- **本步验收**：同条目能同时保存旧 baseline、新 remote 和本地 dirty；库种类错误拒绝。
+- **交接**：`agent/tasks/S030.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S031 — 客户端事件、传输与意图持久化
+
+- **环境与前置**：L；S030。
+- **只读设计范围**：`docs/design.md` §7.3、§9.3、I09；加直接前置交接及相关源文件。
+- **主要落点**：crates/client-store/src/events.rs；transfers.rs；intents.rs。
+- **实现要点**：补 received_changes、transfers、local_intents、notifications；事件与接收游标同事务，应用游标单独。队列依赖可恢复，不能先推进游标再写任务。
+- **本步验收**：任意事务失败后游标与任务一致；重启保留未应用事件和下载位图。
+- **交接**：`agent/tasks/S031.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S032 — Linux 安全路径访问正式接口
+
+- **环境与前置**：L；S014、S017。
+- **只读设计范围**：`docs/design.md` §11.4、§16.1、T25；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-linux-server/src/files/；mounts/。
+- **实现要点**：封装根句柄下无符号链接逃逸的遍历/打开/创建，复核文件和挂载身份；检查 Root 及内部目录的父子/别名/bind 重叠。真实 syscall 错误分类保留原因。
+- **本步验收**：符号链接换目标与目录别名攻击不访问外部样本；权限失败不返回空目录。
+- **交接**：`agent/tasks/S032.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S033 — 不可变对象写入与读取
+
+- **环境与前置**：L；S029、S032。
+- **只读设计范围**：`docs/design.md` §11.1—11.2、I12；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/objects/；ports/。
+- **实现要点**：创建 server-core，流式 hash/长度校验、独立对象暂存和持久发布；对象与可变工作文件不能共享可写 inode。端口定义在核心，入口用本地 wrapper 组装避免循环依赖。
+- **本步验收**：改写工作文件不影响已保存对象；错 hash、短写、ENOSPC 不产生可提交引用。
+- **交接**：`agent/tasks/S033.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S034 — 持久提交意图状态机
+
+- **环境与前置**：L；S033。
+- **只读设计范围**：`docs/design.md` §11.2—11.3；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/commit/intent.rs；recovery/。
+- **实现要点**：为 put 定义 prepared/published/finalized 等明确 phase，记录 before/after、对象和目标身份。先持久意图再发布；只实现单文件 happy path 与可恢复状态，不扩展所有操作。
+- **本步验收**：每个 phase 的数据库/磁盘证据可重建；错误不得变成 committed。
+- **交接**：`agent/tasks/S034.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S035 — 内容 CAS 与现场复核
+
+- **环境与前置**：L；S034、S028。
+- **只读设计范围**：`docs/design.md` §11.2、§12.2、I01/I04；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/commit/put.rs。
+- **实现要点**：Root 内序列化提交，检查 epoch、revision、父目录、名称和现场指纹；现场不同返回 RECONCILE_REQUIRED。对象持久→意图→目标 staging 发布→元数据/changes/结果事务→ACK。
+- **本步验收**：正常内容提交字节一致；过期 revision/外部现场变化不能覆盖；发布失败保持 pending/failed。
+- **交接**：`agent/tasks/S035.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S036 — 幂等重试与冲突内容提交
+
+- **环境与前置**：L；S035、S021。
+- **只读设计范围**：`docs/design.md` §10.1—10.2、T02/T03；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/commit/conflict.rs。
+- **实现要点**：接入稳定 OpId/digest 查询；过期不同内容生成一次冲突条目和映射，重复请求返回原结果。明确相同 OpId 不同请求错误；冲突也是正常受恢复保护的提交。
+- **本步验收**：丢失响应后重试不多造副本；多设备不同内容均可按 hash 找到。
+- **交接**：`agent/tasks/S036.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S037 — 启动恢复与崩溃注入
+
+- **环境与前置**：L；S036。
+- **只读设计范围**：`docs/design.md` §11.3、T23；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/recovery/；tests/server-integration/。
+- **实现要点**：先恢复再开放写入口；按前/后 hash 区分未发布、已发布、已又被外部改写、无法解释。无法解释置 NEEDS_RECOVERY。注入每一持久化边界强杀测试子进程。
+- **本步验收**：重启得到可证明旧/新结果或明确暂停；无“假成功”；旧对象与冲突候选保留。
+- **交接**：`agent/tasks/S037.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S038 — 目录创建与同 Root 移动
+
+- **环境与前置**：L；S037、S022。
+- **只读设计范围**：`docs/design.md` §9.5、§10.1、T09/T10；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/commit/namespace.rs。
+- **实现要点**：创建目录与 move 使用同一意图/恢复机制；保持 EntryId，检查目标、目录环、父目录状态和基线。目录移动只变父关系，不重新上传子内容。
+- **本步验收**：移动后对象引用不变，内容流量为零；移动中崩溃可恢复，目标冲突不覆盖。
+- **交接**：`agent/tasks/S038.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S039 — 可恢复删除与回收站
+
+- **环境与前置**：L；S038。
+- **只读设计范围**：`docs/design.md` §10.3、T11/T12；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/commit/delete.rs；crates/server-store/src/trash.rs。
+- **实现要点**：建立 subtree token、墓碑、trash 清单；大目录删除作为有界批次任务，受影响子树写入明确 busy，最终逻辑批次完整公布。工作目录移除失败不能成功 ACK。
+- **本步验收**：并发新增使前提失败；中断可继续；删改保留修改内容，历史可读。
+- **交接**：`agent/tasks/S039.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S040 — 历史与回收站恢复操作
+
+- **环境与前置**：L；S039。
+- **只读设计范围**：`docs/design.md` §10.3、I12、T13；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/history/。
+- **实现要点**：按旧不可变版本创建新当前版本；回收站恢复文件/目录清单，目标占用则另名并返回实际 ID/路径。恢复使用内容租约与提交协调。
+- **本步验收**：旧版本 hash 不变；同名目标未被覆盖；重复恢复 OpId 结果稳定。
+- **交接**：`agent/tasks/S040.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S041 — 服务端进程与配置生命周期
+
+- **环境与前置**：L；S037、S024。
+- **只读设计范围**：`docs/design.md` §4.2、§17.2；加直接前置交接及相关源文件。
+- **主要落点**：apps/server/src/；deploy/examples/vaultsyncd.toml。
+- **实现要点**：建立 Linux-only 入口，加载配置、日志和依赖；恢复完成后 readiness 才为真。优雅停止停止新提交、保留任务证据。开发默认回环地址和独立端口。
+- **本步验收**：启动/停止/重启样本正常；无 Windows/FUSE 依赖；损坏配置或恢复未完成不开放写入。
+- **交接**：`agent/tasks/S041.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S042 — 首次 owner 初始化与密码认证
+
+- **环境与前置**：L；S041、S026。
+- **只读设计范围**：`docs/design.md` §17.1、C27；加直接前置交接及相关源文件。
+- **主要落点**：apps/server-admin/；crates/server-core/src/auth/；api/openapi.yaml。
+- **实现要点**：实现一次性离线 init：空状态、独占锁、交互/stdin 读密码、Argon2id；没有默认密码。登录与统一错误/限流契约；离线 init 复用 core 用例，不直接散落修改表。
+- **本步验收**：重复 init 拒绝覆盖；错误密码失败；argv/日志/Nix store 无密码；运行中 init 被锁拒绝。
+- **交接**：`agent/tasks/S042.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S043 — 会话、刷新与 Root 授权
+
+- **环境与前置**：L；S042。
+- **只读设计范围**：`docs/design.md` §17.1、§15.2、T31；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/auth/；crates/server-store/src/sessions.rs。
+- **实现要点**：令牌只存摘要；实现到期、注销、刷新轮换和并发刷新语义；每次资源请求按 owner/root scope 检查。浏览器采用同源 HttpOnly cookie 会话并防 CSRF，agent 使用安全保管的凭据；ADR 说明两者边界。
+- **本步验收**：跨 Root、到期、撤销和旧刷新凭据拒绝；cookie 写请求校验 Origin/CSRF；响应不泄露绝对路径。
+- **交接**：`agent/tasks/S043.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S044 — 管理 Root 注册与健康 API
+
+- **环境与前置**：L；S043、S032、S027。
+- **只读设计范围**：`docs/design.md` §11.4、§15.2；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/api/roots.rs；api/openapi.yaml。
+- **实现要点**：只接受预配置允许基目录中的普通目录；身份与重叠检查通过后注册。启动不自动以空库覆盖既有文件；返回待导入/健康状态，普通客户端看不到绝对路径。
+- **本步验收**：合规目录注册；父子/别名/FUSE/不合规内部目录拒绝；实际数据未改写。
+- **交接**：`agent/tasks/S044.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S045 — 上传会话和固定块接收
+
+- **环境与前置**：L；S043、S029、S033。
+- **只读设计范围**：`docs/design.md` §13.1—13.2、§15.2；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/api/uploads.rs；crates/transfer/src/。
+- **实现要点**：按授权 Root 建 upload，流式接收指定索引/长度/hash 的块，写完持久化再记完成；总大小/并发有界。重复块字节不一致拒绝，状态由服务器给出。
+- **本步验收**：断开重连可获取真实已收块；越界索引/超大载荷/错块/跨会话访问拒绝。
+- **交接**：`agent/tasks/S045.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S046 — 上传 finalize 与固定版本下载
+
+- **环境与前置**：L；S045。
+- **只读设计范围**：`docs/design.md` §13.2、I01/I05/I15；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/api/content.rs；api/openapi.yaml。
+- **实现要点**：完整拼装流式校验后发布对象，finalize 只返回可提交引用；下载按 root/entry/version 与 Range 返回固定字节，下载租约防 GC，不能按路径替换成新 head。
+- **本步验收**：finalize 后尚无条目提交；下载中 head 改变仍为旧版；过期版本明确 VERSION_GONE。
+- **交接**：`agent/tasks/S046.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S047 — 操作 HTTP 接口与错误映射
+
+- **环境与前置**：L；S036、S038、S039、S040、S043、S046。
+- **只读设计范围**：`docs/design.md` §15.2—15.4；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/api/operations.rs；api/openapi.yaml。
+- **实现要点**：暴露 put/create/move/delete/restore 和按 OpId 查询；扩展 schema 然后生成双方 DTO。pending 用 202，CAS/子树冲突按契约返回，完整错误保留 request_id。
+- **本步验收**：HTTP 级重试、旧 epoch、相同 OpId 不同 digest 与响应丢失可验证；无提前已同步。
+- **交接**：`agent/tasks/S047.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S048 — 一致性快照、changes 与 SSE
+
+- **环境与前置**：L；S044、S047。
+- **只读设计范围**：`docs/design.md` §9.3—9.4；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/api/snapshots.rs；events.rs。
+- **实现要点**：生成固定 snapshot_id/high_water_seq 的短期元数据清单；分页只读该清单。changes 有序事务批次，限额不能拆事务；SSE 只通知有新 seq，游标过期明确 410。
+- **本步验收**：边写边翻页仍是一致快照；SSE 丢/重/乱序后 changes 可修复；过期游标不返回假空集。
+- **交接**：`agent/tasks/S048.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S049 — 外部目录初始稳定采集
+
+- **环境与前置**：L；S044、S035。
+- **只读设计范围**：`docs/design.md` §12.1—12.2、C33；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/observer/scan.rs。
+- **实现要点**：枚举普通已有文件，稳定读前后核对身份/指纹，形成不可变候选对象；通过同一提交事件管线采纳外部内容。首次未采集成功的条目不标历史已保护。
+- **本步验收**：SSH 建文件/改内容产生版本和事件；持续写入重排队；测试不声称保留未观察瞬态。
+- **交接**：`agent/tasks/S049.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S050 — inotify 与溢出补扫
+
+- **环境与前置**：L；S049。
+- **只读设计范围**：`docs/design.md` §12.1、T20/T27；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-linux-server/src/watcher/；crates/server-core/src/observer/。
+- **实现要点**：实现监视、去抖和有界队列，事件只是变化线索；溢出/重启立即补扫，周期元数据扫描与分批内容复核补漏。忽略本服务写入要按身份/意图核对，不能按时间窗口全部忽略。
+- **本步验收**：rename-over 最终内容被采集；注入溢出和保留 mtime 改写最终发现；权限失败不推删除。
+- **交接**：`agent/tasks/S050.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S051 — 外部移动、删除与挂载失效
+
+- **环境与前置**：L；S050、S038、S039。
+- **只读设计范围**：`docs/design.md` §9.5、§12.3、T17/T19/T35；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/observer/；crates/platform-linux-server/src/mounts/。
+- **实现要点**：rename 优先 inode/配对事件证据，同 hash 不猜唯一身份；完整健康扫描才推断删除。每次挂载变化检查身份和子挂载，异常批量删除按设计暂停核对。
+- **本步验收**：卸载后露出空目录置 unavailable，零删除事件；多个同内容文件移动不串 ID。
+- **交接**：`agent/tasks/S051.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S052 — 服务端整合小型 HTTP 闭环
+
+- **环境与前置**：L；S048、S051。
+- **只读设计范围**：`docs/design.md` §21、T03/T17/T21/T22/T23；加直接前置交接及相关源文件。
+- **主要落点**：tests/server-integration/；api/examples/。
+- **实现要点**：实际启动隔离 server，经登录、Root、上传、提交、快照、下载、外部修改形成闭环；补齐剩余契约示例，故障分别作用工作盘与状态盘。
+- **本步验收**：重启后版本/hash/事件一致；两种满盘均不提前 committed；测试无需 Windows。
+- **交接**：`agent/tasks/S052.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S053 — Rust HTTPS 客户端与认证刷新
+
+- **环境与前置**：L；S043、S048。
+- **只读设计范围**：`docs/design.md` §13、§17.3；加直接前置交接及相关源文件。
+- **主要落点**：crates/http-client/src/。
+- **实现要点**：按生成 DTO 包装认证、超时、取消和错误分类；TLS 正常校验，开发 CA 显式信任；同会话刷新合并，失败保留本地队列。提供 transport 测试替身。
+- **本步验收**：401 刷新一次后重试；无无限刷新；证书错误明确，不能全局禁用证书校验。
+- **交接**：`agent/tasks/S053.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S054 — 上传下载续传客户端
+
+- **环境与前置**：L；S053、S045、S046、S031。
+- **只读设计范围**：`docs/design.md` §13.1—13.3；加直接前置交接及相关源文件。
+- **主要落点**：crates/transfer/src/；crates/http-client/src/。
+- **实现要点**：客户端固定上传快照/下载 VersionId，服务端缺块清单驱动续传；持久位图、长度/hash，有限并发与取消恢复。整文件 hash 流式计算，不读全文件入内存。
+- **本步验收**：断线只补缺块；错块重传；混版本不发布；不是跨版本块增量。
+- **交接**：`agent/tasks/S054.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S055 — agent 核心端口与确定性执行器
+
+- **环境与前置**：L；S023、S031、S054。
+- **只读设计范围**：`docs/design.md` §5.5、§14.1；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/ports/；executor/。
+- **实现要点**：建立文件/平台、时钟、远端和状态端口；动作先写意图再执行，定义依赖调度和暂停。测试用 fake 端口仅在测试构建中启用，不生成 Linux 同步客户端产品。
+- **本步验收**：失败动作及依赖保留；重试次数有界；端口之间无循环依赖。
+- **交接**：`agent/tasks/S055.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S056 — 本地 generation 与上传快照
+
+- **环境与前置**：L；S055。
+- **只读设计范围**：`docs/design.md` §8.3—8.4、T04；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/executor/upload.rs。
+- **实现要点**：本地变更提升 generation；快照读取前后复核，固定内容到服务器 committed 且 baseline 落库才允许清理。ACK 只清对应 generation，冲突保存 ID 映射。
+- **本步验收**：上传时二次保存仍 dirty；旧 ACK 不清新版本；响应丢失用原 OpId 查询。
+- **交接**：`agent/tasks/S056.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S057 — 接收事件与应用进度
+
+- **环境与前置**：L；S055、S048。
+- **只读设计范围**：`docs/design.md` §9.3、I09；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/engine/events.rs。
+- **实现要点**：接收批次事务写 remote/任务/received_cursor，应用完成后更新 baseline/applied_cursor。SSE 唤醒加周期 pull；关联任务失败不阻塞无依赖条目。
+- **本步验收**：进程各持久化点中断不丢事件；重复/乱序提示不重复应用。
+- **交接**：`agent/tasks/S057.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S058 — 首次绑定与可恢复合并执行
+
+- **环境与前置**：L；S056、S057、S020。
+- **只读设计范围**：`docs/design.md` §9.2、T01；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/bindings/import.rs。
+- **实现要点**：验证本地根/模式，固定远端快照，保存本地导入清单，执行规划并映射临时 ID；后续 changes 从 high_water 接续。上传仍带 CAS。
+- **本步验收**：两端非空目录中断后继续；同名异内容两份保留；无基线不会删除。
+- **交接**：`agent/tasks/S058.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S059 — 本地受控应用与重启核对
+
+- **环境与前置**：L；S058。
+- **只读设计范围**：`docs/design.md` §8.4、T05/T23；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/executor/apply.rs；recovery/。
+- **实现要点**：下载到暂存并校验，持久意图后调用平台替换，成功后 baseline。崩溃重启对不能证明 clean 的真实内容重新核对，unknown 禁止破坏操作。
+- **本步验收**：文件已换/DB 未更新可恢复；本地再次修改导致停止替换；旧 clean 记录不能覆盖新字节。
+- **交接**：`agent/tasks/S059.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S060 — 旧游标与 epoch 重建
+
+- **环境与前置**：L；S059。
+- **只读设计范围**：`docs/design.md` §9.4、T15/T16；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/recovery/resync.rs。
+- **实现要点**：保留旧 baseline、脏内容和队列；旧 clean 远端缺失不重新上传，脏缺失生成恢复候选。epoch 改变隔离旧操作、拉新快照，不盲目重放旧 Delete。
+- **本步验收**：日志/历史过期与恢复旧备份两种场景结果不同且可解释；无自动复活历史删除。
+- **交接**：`agent/tasks/S060.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S061 — 暂停、模式切换与解除绑定
+
+- **环境与前置**：L；S059、S018。
+- **只读设计范围**：`docs/design.md` §10.4、T30；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/bindings/。
+- **实现要点**：full/on_demand 切换形成可恢复任务；full 必须下载所需完整内容后才完成。排除变更保留现有内容并记录 excluded，解除绑定按驻留/dirty 提示恢复选择。
+- **本步验收**：模式切换不清脏文件；排除/解绑不生成全局 Delete；操作中断可恢复。
+- **交接**：`agent/tasks/S061.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S062 — 下载优先级与重试调度
+
+- **环境与前置**：L；S054、S059。
+- **只读设计范围**：`docs/design.md` §13.3、§18.2；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/engine/scheduler.rs。
+- **实现要点**：用户打开优先、后台传输有限并发；退避带 jitter，上限和取消持久化；断网状态可见且静默。磁盘满不自动驱逐完整缓存/历史。
+- **本步验收**：持续失败不忙循环；用户读取不会被大文件队列无限饿死；重启仍保留队列。
+- **交接**：`agent/tasks/S062.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S063 — 手动释放的核心安全条件
+
+- **环境与前置**：L；S059、S061。
+- **只读设计范围**：`docs/design.md` §8.4、T07/T08；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/executor/release.rs。
+- **实现要点**：释放前确认无 dirty/冲突候选、generation 未变、平台可保护，服务器版本仍可读并持有短租约。full 模式按设计拒绝释放；平台成功后才改驻留状态。
+- **本步验收**：条件任一变化拒绝；检查后 GC 竞争仍保全版本；没有自动 LRU。
+- **交接**：`agent/tasks/S063.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S064 — agent 状态、问题与恢复导出
+
+- **环境与前置**：L；S060、S062、S063。
+- **只读设计范围**：`docs/design.md` §18、§19.2；加直接前置交接及相关源文件。
+- **主要落点**：crates/agent-core/src/status/；recovery/export.rs。
+- **实现要点**：汇总多维状态和子任务，问题按 root/原因去重；ExportRecovery 导出脏内容、基线和清单至指定目录，路径安全且不覆盖。日志脱敏有大小上限。
+- **本步验收**：pending 不显示同步完成；断网无弹窗风暴；恢复包包含未上传字节且可校验。
+- **交接**：`agent/tasks/S064.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S065 — Windows 安全文件与本地扫描
+
+- **环境与前置**：W；S012、S017、S059。
+- **只读设计范围**：`docs/design.md` §14.2、§16、T25/T26；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/src/files/；watcher/。
+- **实现要点**：实现 Windows 文件身份、reparse/symlink 边界、卷身份/重叠检查、监视与补扫；枚举 placeholder 元数据不意外 hydration。原生名称等价验证落实。
+- **本步验收**：保留名/大小写/长路径给明确错误；扫描不下载全盘；权限/监视溢出不是删除。
+- **交接**：`agent/tasks/S065.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S066 — CFAPI 正式注册与元数据更新
+
+- **环境与前置**：W；S065、S010。
+- **只读设计范围**：`docs/design.md` §14.1—14.2、T09；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/src/cfapi/；shell/。
+- **实现要点**：把原型整理为 adapter：注册生命周期、稳定 identity、占位枚举/更新/移动；每回调绑定正确 Binding/Entry/Version。注销不删除文件。
+- **本步验收**：跨重启 ID 稳定；占位 rename 不传内容；陈旧/损坏 identity 明确拒绝。
+- **交接**：`agent/tasks/S066.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S067 — CFAPI hydration 接入传输执行器
+
+- **环境与前置**：W；S066、S054、S062。
+- **只读设计范围**：`docs/design.md` §13、§14.2、T06/T22；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/src/cfapi/；apps/agent/src/bootstrap.rs。
+- **实现要点**：将实际回调请求映射到固定版本下载和取消，线程边界不阻塞 UI/不持数据库事务；部分下载维持 partial 状态，离线明确错误。
+- **本步验收**：打开真实占位获得准确内容；取消后可重读；中途 head 更新不混版。
+- **交接**：`agent/tasks/S067.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S068 — Windows 写入检测与使用保护
+
+- **环境与前置**：W；S066、S056、S059。
+- **只读设计范围**：`docs/design.md` §8.4、§14.4、T04/T27/T28；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/src/files/；watcher/。
+- **实现要点**：正式实现原型验证过的保存/替换路径；unknown/busy 保留本地内容，监视事件是线索，替换前重新核对 generation 与现场。不可证明绝对互斥的情况记录真实边界。
+- **本步验收**：编辑器原地/原子保存、共享锁、映射写同时远端更新不静默丢数据；失败保留版本。
+- **交接**：`agent/tasks/S068.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S069 — Windows 手动释放与恢复
+
+- **环境与前置**：W；S067、S068、S063。
+- **只读设计范围**：`docs/design.md` §14.2、T07/T08/T30；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/src/cfapi/release.rs。
+- **实现要点**：核心校验后调用正式 dehydration，平台错误还原/保持状态；释放中崩溃用 local_intent 核对。缓存过期服务器不可读时保留唯一旧内容。
+- **本步验收**：真实占用/dirty 拒绝；成功释放后元数据保留；网络/磁盘故障不误报成功。
+- **交接**：`agent/tasks/S069.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S070 — Windows agent 进程与单实例
+
+- **环境与前置**：W；S067、S068、S069、S064。
+- **只读设计范围**：`docs/design.md` §4.2、§5.3；加直接前置交接及相关源文件。
+- **主要落点**：apps/agent/src/。
+- **实现要点**：组装 core/store/Windows/HTTP，用户会话内单实例，启动恢复先于同步；实现信号/退出、日志和最小运行配置，凭据放 Windows 凭据库。
+- **本步验收**：重启自动恢复队列；启动第二实例不抢同一数据库；GUI 尚不存在也能同步。
+- **交接**：`agent/tasks/S070.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S071 — Windows named pipe 传输与身份
+
+- **环境与前置**：W；S070、S025。
+- **只读设计范围**：`docs/design.md` §15.5、I15；加直接前置交接及相关源文件。
+- **主要落点**：crates/platform-windows/src/ipc/。
+- **实现要点**：受限 named pipe ACL，检查本机用户和消息长度；部分帧、并发请求、连接关闭处理有界。GUI/CLI 仅消费 IPC 模块，不启用 CFAPI 回调。
+- **本步验收**：其他用户/畸形消息拒绝；同一用户可查询状态；断连不终止 agent。
+- **交接**：`agent/tasks/S071.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S072 — 本机管理命令完整接入
+
+- **环境与前置**：W；S071、S061、S064。
+- **只读设计范围**：`docs/design.md` §15.5、§18.1；加直接前置交接及相关源文件。
+- **主要落点**：api/local-ipc.schema.json；crates/agent-core/src/；apps/agent/。
+- **实现要点**：逐项扩展 Get/List/Create/Pause/Resume/Download/Release/Problems/Retry/Detach/ExportRecovery；补连接登录、模式设置和历史操作所需命令。生成 DTO，执行器复核参数，状态推送带版本和全量恢复。
+- **本步验收**：每项 P0 操作有处理器/错误/样本；省略命令不能靠 UI 隐藏；丢推送可重新查询。
+- **交接**：`agent/tasks/S072.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S073 — Windows CLI 最小管理入口
+
+- **环境与前置**：W；S072。
+- **只读设计范围**：`docs/design.md` §5.1、§18.1；加直接前置交接及相关源文件。
+- **主要落点**：apps/cli/src/。
+- **实现要点**：建立 vaultsyncd-cli，命令映射 IPC，提供机器可读输出和稳定退出码；密码从安全输入传给 agent，不写命令历史。加入下载/释放/恢复导出等入口。
+- **本步验收**：真实 agent 上查询/暂停/恢复/释放失败说明准确；CLI 不直接开 client.sqlite。
+- **交接**：`agent/tasks/S073.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S074 — 三台客户端基础互通
+
+- **环境与前置**：X；S073、S052。
+- **只读设计范围**：`docs/design.md` §21、T01—T05/T09—T14；加直接前置交接及相关源文件。
+- **主要落点**：tests/e2e/；tests/scenarios/。
+- **实现要点**：建立真实跨进程 runner，经网络和 IPC 驱动三个 Windows 测试身份/环境；分别非空导入、离线编辑、重命名、删改、响应丢失。记录拓扑，不把多个进程冒充独立实机。
+- **本步验收**：每份输入内容都能在当前/冲突/历史找到；各端最终收敛；结果有提交和系统版本。
+- **交接**：`agent/tasks/S074.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S075 — Linux 在线管理 socket 与 CLI
+
+- **环境与前置**：L；S043、S044、S047、S048。
+- **只读设计范围**：`docs/design.md` §5.3、§15、§17.2；加直接前置交接及相关源文件。
+- **主要落点**：apps/server-admin/src/；crates/platform-linux-server/src/ipc/。
+- **实现要点**：受限 Unix socket 复用管理用例，校验 socket 权限和调用者身份。提供 roots/status/problems/history/trash 等命令；远程管理走已认证 HTTPS，不直接改在线 DB。
+- **本步验收**：SSH 下 CLI 管理真实隔离服务；无权限用户失败；JSON 输出不含长期凭据。
+- **交接**：`agent/tasks/S075.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S076 — 前端公共组件与两应用壳
+
+- **环境与前置**：B；S005、S024、S025。
+- **只读设计范围**：`docs/design.md` §5.3、§5.6、§18.1；加直接前置交接及相关源文件。
+- **主要落点**：packages/ui/；apps/web/；apps/desktop/。
+- **实现要点**：创建 React/TS 应用和路由，复用按钮/表格/状态组件；Vite 构建并固定版本。desktop 暂用明确的 IPC 测试替身，web 用 API 客户端；不把 Tauri 依赖放共享 UI。
+- **本步验收**：两个应用可独立类型检查/构建；未连接显示未连接，不展示假同步成功。
+- **交接**：`agent/tasks/S076.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S077 — Web 登录与会话管理
+
+- **环境与前置**：B；S076、S043。
+- **只读设计范围**：`docs/design.md` §17、§18.1；加直接前置交接及相关源文件。
+- **主要落点**：apps/web/src/features/auth/；services/。
+- **实现要点**：同源 cookie 会话、登录/退出/过期处理、CSRF；限制开发代理 origin。账号基础管理至少包含 owner 改密和会话撤销，契约先补齐并复用 auth 用例。
+- **本步验收**：浏览器登录/改密/注销后受保护请求行为正确；token 不进入 localStorage 或页面日志。
+- **交接**：`agent/tasks/S077.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S078 — Web Root 与服务健康页面
+
+- **环境与前置**：B；S077、S044、S051。
+- **只读设计范围**：`docs/design.md` §18.1；加直接前置交接及相关源文件。
+- **主要落点**：apps/web/src/features/roots/。
+- **实现要点**：显示允许基目录范围、注册校验结果、Root 状态/采集进度/错误原因；路径管理仅 owner。不能将暂未扫描显示为空目录已同步。
+- **本步验收**：普通目录可注册；重叠/不支持后端/挂载失效页面给可执行原因。
+- **交接**：`agent/tasks/S078.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S079 — Web 历史、冲突与回收站
+
+- **环境与前置**：B；S078、S040、S047。
+- **只读设计范围**：`docs/design.md` §18.1、§10.3；加直接前置交接及相关源文件。
+- **主要落点**：apps/web/src/features/history/；trash/；problems/。
+- **实现要点**：分页列出版本/冲突副本/到期时间，调用 Restore 并显示实际恢复位置。关闭通知不删除副本；恢复 pending 单独显示，失败可重试同一操作。
+- **本步验收**：同名恢复保留目标；页面和服务器结果一致；客户端断网重试不产生重复恢复。
+- **交接**：`agent/tasks/S079.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S080 — Tauri Windows 壳与最小 IPC 桥
+
+- **环境与前置**：W；S076、S072。
+- **只读设计范围**：`docs/design.md` §5.3、§17.3；加直接前置交接及相关源文件。
+- **主要落点**：apps/desktop/src-tauri/。
+- **实现要点**：src-tauri 加入根 Cargo workspace，最小 capabilities/CSP、托盘和 typed commands。桥接 named pipe，前端不拿令牌/DB 句柄，拒绝任意 shell/path 命令。
+- **本步验收**：Windows 真壳读取 agent 状态；恶意 command 被拒；只有根 Cargo.lock。
+- **交接**：`agent/tasks/S080.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S081 — 桌面连接与 Binding 页面
+
+- **环境与前置**：W；S080。
+- **只读设计范围**：`docs/design.md` §18.1、§15.5；加直接前置交接及相关源文件。
+- **主要落点**：apps/desktop/src/features/connections/；bindings/。
+- **实现要点**：通过桥实现登录、选 Root/本地目录/模式、导入进度、暂停恢复。登录凭据由 agent 存储；页面关闭不销毁 agent。
+- **本步验收**：创建绑定实际启动合并；错误路径/证书错误可见；关闭 GUI 后文件仍同步。
+- **交接**：`agent/tasks/S081.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S082 — 桌面文件状态与手动操作
+
+- **环境与前置**：W；S081、S069、S073。
+- **只读设计范围**：`docs/design.md` §18.1、§8.2；加直接前置交接及相关源文件。
+- **主要落点**：apps/desktop/src/features/files/；problems/。
+- **实现要点**：提供下载、释放、重试、模式设置、解绑和恢复导出；多维状态投影与执行器统一。释放提示本地内容/离线影响，UI 和后端双重检查。
+- **本步验收**：dirty/忙文件按钮解释原因且后端拒绝；pending 不显示已同步；解绑不全局删除。
+- **交接**：`agent/tasks/S082.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S083 — 桌面历史与系统通知
+
+- **环境与前置**：W；S082、S079、S064。
+- **只读设计范围**：`docs/design.md` §18、T31；加直接前置交接及相关源文件。
+- **主要落点**：apps/desktop/src/features/history/；src-tauri/src/。
+- **实现要点**：通过 agent 管理历史/回收站恢复，后端仍验证权限；关键故障去重系统通知，普通断网仅状态。通知关闭时问题页仍完整，恢复后更新状态。
+- **本步验收**：磁盘满/冲突/挂载变化进入问题页；无重复通知风暴；恢复结果正确。
+- **交接**：`agent/tasks/S083.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S084 — 客户端未上传数据恢复演练
+
+- **环境与前置**：W；S083、S064。
+- **只读设计范围**：`docs/design.md` §19.2、T05/T07/T28；加直接前置交接及相关源文件。
+- **主要落点**：tests/windows-integration/；docs/operations/recovery.md。
+- **实现要点**：构造 agent 异常、dirty 文件、未完成 intent，先做 ExportRecovery；校验导出内容和基线，验证从恢复包人工取回路径。安装卸载尚未实现时不伪造该验证。
+- **本步验收**：每份未确认数据都有可读导出和 hash；导出失败不删除源。
+- **交接**：`agent/tasks/S084.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S085 — 历史保留与对象引用标记
+
+- **环境与前置**：L；S040、S029。
+- **只读设计范围**：`docs/design.md` §19.4、C07；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/gc/mark.rs。
+- **实现要点**：实现当前/历史30天/回收站/未完成操作/上传下载和备份租约的引用枚举，时间注入；过期依据 superseded/delete 时间，不按对象文件 mtime。
+- **本步验收**：当前老文件永不因年龄过期；删除前的保留窗口正确；active lease 被标记保护。
+- **交接**：`agent/tasks/S085.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S086 — GC 删除协调与临时清理
+
+- **环境与前置**：L；S085、S037。
+- **只读设计范围**：`docs/design.md` §19.4、T24；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/gc/sweep.rs。
+- **实现要点**：标记后宽限、重新核对引用、与发布协调再删；过期未完成上传独立清理。只清可重建临时内容，不清客户端 dirty/完整缓存；磁盘不足不缩短历史。
+- **本步验收**：提交和 GC 交错不删新引用对象；崩溃重启可继续；满盘状态不触发越界回收。
+- **交接**：`agent/tasks/S086.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S087 — 一致性备份快照与租约
+
+- **环境与前置**：L；S086、S048。
+- **只读设计范围**：`docs/design.md` §19.1、T24；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/backup/prepare.rs。
+- **实现要点**：暂停本服务新提交/GC并收敛意图，选择每 Root seq，Online Backup API 导出 DB、建立完整对象清单和租约；随后按受保护快照导出。声明外部未采集写入不在快照保证内。
+- **本步验收**：持续外部写入时仍得到已确认一致快照；租约期间对象不被 GC；失败不会标 complete。
+- **交接**：`agent/tasks/S087.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S088 — 备份导出、校验与释放接口
+
+- **环境与前置**：L；S087、S075。
+- **只读设计范围**：`docs/design.md` §19.1、§15.2；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/backup/export.rs；apps/server-admin/；api/openapi.yaml。
+- **实现要点**：实现 manifest/对象授权读取、流式导出、verify/release；包含配置/schema/Root 映射/历史回收站，认证材料受限且会话默认失效。CLI 按 prepare/export/verify/release 分步调用。
+- **本步验收**：缺对象/错 hash 标 incomplete；完整导出可逐项校验；不内置定时备份。
+- **交接**：`agent/tasks/S088.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S089 — 离线恢复到空目录
+
+- **环境与前置**：L；S088、S037。
+- **只读设计范围**：`docs/design.md` §19.2、T16/T32；加直接前置交接及相关源文件。
+- **主要落点**：crates/server-core/src/backup/restore.rs；apps/server-admin/。
+- **实现要点**：restore validate 检查清单、空间、兼容和新 Root 映射；停止服务并持同一独占锁才可恢复。重建 DB/普通工作文件后校验，沿用 ServerId、更换 epoch、会话失效；复用 core 而非直接任意 SQL。
+- **本步验收**：恢复空测试实例字节/历史/回收站一致；非空目标和在线实例拒绝；旧客户端操作被隔离。
+- **交接**：`agent/tasks/S089.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S090 — Web 备份管理入口
+
+- **环境与前置**：B；S079、S088。
+- **只读设计范围**：`docs/design.md` §18.1、§19.1；加直接前置交接及相关源文件。
+- **主要落点**：apps/web/src/features/backup/。
+- **实现要点**：呈现 prepare/进度/清单/完整性/释放，支持安全导出入口。离线 restore 由 CLI 执行，页面说明停止服务与 restore validate 流程，不在运行中调用恢复写库。
+- **本步验收**：页面可完成一致备份并验证；下载缺失可重试；不会显示未完成包为有效备份。
+- **交接**：`agent/tasks/S090.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S091 — 协议与数据库升级演练
+
+- **环境与前置**：X；S089、S074。
+- **只读设计范围**：`docs/design.md` §19.3、T33；加直接前置交接及相关源文件。
+- **主要落点**：tests/contract/；tests/server-integration/；tests/windows-integration/。
+- **实现要点**：固定已知旧 schema/协议 fixture，验证 major 拒绝、minor/capabilities、两端迁移备份和失败暂停；旧程序看到新 schema 拒绝写。回退使用完整一致备份。
+- **本步验收**：失败后原数据可恢复；升级后历史和队列不丢；没有可用旧正式客户端时注明 fixture 覆盖范围。
+- **交接**：`agent/tasks/S091.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S092 — 构建依赖与协议边界检查
+
+- **环境与前置**：L；S024、S025、S080。
+- **只读设计范围**：`docs/design.md` §5.5—5.8；加直接前置交接及相关源文件。
+- **主要落点**：tools/xtask/src/；tests/contract/。
+- **实现要点**：实现 check-boundaries：server 无客户端/FUSE/Tauri依赖，GUI/CLI 不直写 DB，生成代码可重现。按 target 检查 Cargo metadata，pnpm 消费者也参加契约检查。
+- **本步验收**：故意引入违规依赖或手改 generated 能检查失败；Linux 不盲跑全 workspace all-features。
+- **交接**：`agent/tasks/S092.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S093 — 发布版本与产物清单
+
+- **环境与前置**：L；S052、S076、S092。
+- **只读设计范围**：`docs/design.md` §5.7.1；加直接前置交接及相关源文件。
+- **主要落点**：tools/xtask/src/；packaging/。
+- **实现要点**：统一产品版本来源并同步 package manifests，协议/schema 独立；记录提交、目标、工具链、锁文件摘要、hash。仅使用同一提交或明确验证过的组合，拒绝陈旧前端资源。
+- **本步验收**：组装清单能追溯所有输入；修改版本/资源后旧产物不能静默被复用。
+- **交接**：`agent/tasks/S093.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S094 — Linux 服务端 Nix 构建包
+
+- **环境与前置**：L；S093、S090。
+- **只读设计范围**：`docs/design.md` §5.9、§17.2；加直接前置交接及相关源文件。
+- **主要落点**：nix/package.nix；flake.nix；packaging/linux/。
+- **实现要点**：分别构建 Rust server/admin 与 Web 静态资源，再组装发布目录；Nix derivation 使用固定依赖输入/哈希和离线构建，不以 fake hash 当最终值。Web 路径显式配置，缺资源报错。
+- **本步验收**：干净 nix build 得到可运行 server/admin/web；运行时无需 Node；源码构建单测仍不依赖前端构建。
+- **交接**：`agent/tasks/S094.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S095 — NixOS 服务模块
+
+- **环境与前置**：L；S094、S007。
+- **只读设计范围**：`docs/design.md` §17.2、§5.10；加直接前置交接及相关源文件。
+- **主要落点**：nix/modules/vaultsyncd.nix；deploy/nixos/。
+- **实现要点**：导出 services.vaultsyncd 的 enable/package/stateDir/settings 等选项；专用非 root 用户、工作目录访问白名单、StateDirectory 和必要写路径。外部 Root 目录权限显式授予，不递归改用户现有权限。
+- **本步验收**：nixos 配置 evaluation/build 成功；服务用户能访问样本 root，无法任意写系统目录；凭据不进入 store。
+- **交接**：`agent/tasks/S095.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S096 — 在本机启用隔离服务实例
+
+- **环境与前置**：L；S095、S042。
+- **只读设计范围**：`docs/design.md` §17.2、本文§2.5；加直接前置交接及相关源文件。
+- **主要落点**：主机既有 NixOS 配置；docs/operations/nixos.md。
+- **实现要点**：接入模块与开发/试用独立端口/状态，保存系统配置 diff 和旧 generation；按现场入口 build/test/健康检查/switch。使用 CLI 安全初始化 owner，试用样本不指向真实文档。
+- **本步验收**：重启服务后样本闭环成功；SSH/既有服务正常；记录回滚命令和配置来源，无需再次询问 rebuild 权限。
+- **交接**：`agent/tasks/S096.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S097 — HTTPS 与同源 Web 部署
+
+- **环境与前置**：L；S096、S077。
+- **只读设计范围**：`docs/design.md` §17.2、C28/C29；加直接前置交接及相关源文件。
+- **主要落点**：deploy/reverse-proxy/；docs/operations/nixos.md。
+- **实现要点**：使用已有或新最小反向代理，TLS 入口与后端回环绑定；Web 与 API 同源，SSE/上传限制正确。开发可用显式信任的私有 CA，公网域名/证书缺失则记录所缺信息。
+- **本步验收**：浏览器与 Windows 经 HTTPS 登录/上传/SSE；错误证书失败；代理不意外暴露管理 socket 或任意路径。
+- **交接**：`agent/tasks/S097.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S098 — 通用 Linux 包与容器配置
+
+- **环境与前置**：L；S094、S097。
+- **只读设计范围**：`docs/design.md` §5.9、C35/C39；加直接前置交接及相关源文件。
+- **主要落点**：packaging/linux/systemd/；packaging/linux/container/；deploy/compose/。
+- **实现要点**：提供普通 Linux systemd 和容器构建，运行状态/Root bind mount 到合规后端；Nix 构建产物不可未经处理直接当 Ubuntu 可运行包，使用经验证的通用构建/依赖封装。无 /dev/fuse。
+- **本步验收**：Ubuntu 环境实际运行 server/admin/web；容器默认 overlay 状态被拒绝或用合规 bind 挂载；仅完成交叉构建不算运行通过。
+- **交接**：`agent/tasks/S098.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S099 — Windows 安装包与后台启动
+
+- **环境与前置**：W；S083、S084、S093。
+- **只读设计范围**：`docs/design.md` §5.9、§19.3；加直接前置交接及相关源文件。
+- **主要落点**：packaging/windows/；apps/desktop/src-tauri/。
+- **实现要点**：安装包包含 GUI/agent/CLI 和 WebView2 条件；用户会话启动 agent，GUI 关闭不停止它。程序目录与 LocalAppData 状态分离，路径带空格/中文可用。签名资料不存在时标为未签名测试产物。
+- **本步验收**：干净 Windows 安装、登录后 agent 启动、CLI/GUI 同实例；重启后同步继续。
+- **交接**：`agent/tasks/S099.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S100 — Windows 升级与卸载保护
+
+- **环境与前置**：W；S099、S091。
+- **只读设计范围**：`docs/design.md` §19.3、T30/T33；加直接前置交接及相关源文件。
+- **主要落点**：packaging/windows/；tests/windows-integration/。
+- **实现要点**：升级先停新任务保全内容，再迁移/替换程序；卸载区分程序、完整内容、仅云端条目，默认不删用户数据/dirty。确保卸载 provider 后文件处置与 UI 提示一致。
+- **本步验收**：带 dirty/占位/已下载样本升级/卸载演练有 hash；失败可恢复，不因卸载留下被误称为完整文件的假内容。
+- **交接**：`agent/tasks/S100.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S101 — CI 平台矩阵与安装验证
+
+- **环境与前置**：X；S092、S098、S100。
+- **只读设计范围**：`docs/design.md` §5.8、T36；加直接前置交接及相关源文件。
+- **主要落点**：.github/workflows/；tools/xtask/。
+- **实现要点**：接通 Linux core/server、Windows 原生、前端、契约、e2e/release job；路径过滤包含消费者。Linux ARM64 运行用真实或合适虚拟 runner，记录 emulation；缺 runner 则门禁 blocked。
+- **本步验收**：同一提交两端构建安装；ARM64 至少启动/存储/恢复实测；Windows CFAPI 非 fake；NixOS 与 Ubuntu 证据分列。
+- **交接**：`agent/tasks/S101.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S102 — 事件异常与旧设备集成验收
+
+- **环境与前置**：X；S074、S089、S091。
+- **只读设计范围**：`docs/design.md` T14/T15/T16；加直接前置交接及相关源文件。
+- **主要落点**：tests/e2e/；tests/faults/。
+- **实现要点**：分别注入 SSE 丢重乱、游标过期、历史过期、恢复旧服务器备份；保留旧 baseline/脏内容验证重建流程。通过可控时钟/小保留配置缩短测试，不改产品默认要求。
+- **本步验收**：无清洁旧文件复活、无脏内容丢失、无旧 epoch Delete 自动重放；报告逐场景判据。
+- **交接**：`agent/tasks/S102.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S103 — 文件与挂载故障集成验收
+
+- **环境与前置**：X；S074、S051、S068。
+- **只读设计范围**：`docs/design.md` T17—T21/T25—T28/T35；加直接前置交接及相关源文件。
+- **主要落点**：tests/server-integration/；tests/windows-integration/。
+- **实现要点**：在专用卷/客体分开运行外部写竞争、卸载、溢出、工作盘/状态盘满、symlink/reparse 和编辑器保存矩阵。一个会话只执行一类故障，必要时拆子卡。
+- **本步验收**：每类结果保留内容和明确错误；外部瞬态保证不夸大；真实用户目录未参与故障注入。
+- **交接**：`agent/tasks/S103.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S104 — GC、备份与崩溃联合验收
+
+- **环境与前置**：X；S086、S089、S102。
+- **只读设计范围**：`docs/design.md` T22/T23/T24/T32/T33；加直接前置交接及相关源文件。
+- **主要落点**：tests/e2e/；tests/faults/。
+- **实现要点**：组合活跃下载、提交、备份租约与 GC，逐个提交持久化点强杀；恢复到空实例再比对所有引用对象。保存最小失败轨迹，避免一次运行所有排列。
+- **本步验收**：无仍被引用对象缺失；backup complete 可实际恢复；中断结果可解释且幂等。
+- **交接**：`agent/tasks/S104.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S105 — 安全与操作可达性验收
+
+- **环境与前置**：X；S083、S090、S097、S100。
+- **只读设计范围**：`docs/design.md` T06—T08/T30/T31；加直接前置交接及相关源文件。
+- **主要落点**：tests/contract/；tests/e2e/。
+- **实现要点**：检查每项 P0 操作的 GUI/CLI/Web 入口；越权版本/备份访问、恶意 IPC/WebView、会话撤销、CSRF、日志脱敏。覆盖释放与解绑的最后时刻状态变化。
+- **本步验收**：接口实际拒绝非法行为；所有必需操作能通过真实入口完成，UI 禁用不代替后端校验。
+- **交接**：`agent/tasks/S105.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S106 — 小文件时延与常规规模基准
+
+- **环境与前置**：X；S101、S102、S103、S104、S105。
+- **只读设计范围**：`docs/design.md` §20、T34；加直接前置交接及相关源文件。
+- **主要落点**：tools/bench/；docs/reports/performance.md。
+- **实现要点**：先小样本测稳定保存→服务端确认→另一客户端可见各阶段；再1万文件/约10GiB/3客户端。记录硬件/网络/配置、p95、RSS/CPU/队列，调参每次只改一个变量。
+- **本步验收**：给出真实数据与瓶颈；满足定义条件才判断1—3秒目标；无误报已同步。
+- **交接**：`agent/tasks/S106.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S107 — 正式容量与大文件续传验证
+
+- **环境与前置**：X；S106。
+- **只读设计范围**：`docs/design.md` C36、§20、T34；加直接前置交接及相关源文件。
+- **主要落点**：tools/bench/；docs/reports/performance.md。
+- **实现要点**：先估算完整副本+对象+历史+staging容量，资源够才运行10万文件/1TiB/50GiB/5 Windows设备验收。用确定性流式生成内容，不以稀疏空洞或元数据伪装真实传输。
+- **本步验收**：实际规模与断点重传字节被记录；不足则 blocked 并报告差距，不能下调目标后标通过。
+- **交接**：`agent/tasks/S107.md`，记录实际接口、验证与下一个 ready 任务。
+
+### S108 — 发布清单与最终交接
+
+- **环境与前置**：X；S101、S102、S103、S104、S105、S106、S107。
+- **只读设计范围**：`docs/design.md` §21、§25、附录B；加直接前置交接及相关源文件。
+- **主要落点**：agent/progress.md；docs/operations/；docs/known-limitations.md；README.md。
+- **实现要点**：汇总 T01—T36 中35项P0，T29明确P1；逐项关联真实证据和候选提交。整理NixOS部署、Windows安装、备份恢复、升级、故障排查与限制；版本产物带hash，留给用户可复核。
+- **本步验收**：无 blocked P0 才声明首发验收完成；未签名/未测平台/容量欠缺如实列出；不自动发布公网或推送远端。
+- **交接**：`agent/tasks/S108.md`，记录实际接口、验证与下一个 ready 任务。
+
+## 6. 里程碑与覆盖关系
+
+下列范围是交付分组，不改变任务卡依赖；Windows 原型早期缺失时可以推进 Linux 工作，但 Windows 正式适配与发布不得绕过原型验证。
+
+| 阶段 | 任务 | 可观察结果 |
+| --- | --- | --- |
+| 环境和平台可行性 | S001—S014 | 可复现 Nix 工具链、隔离测试卷、Windows 原生原型 |
+| 纯模型和持久化 | S015—S031 | 确定性规划、两套数据库、可生成契约 |
+| Linux 同步服务 | S032—S052 | 普通文件、不可变版本、可恢复提交及外部采集的 HTTP 闭环 |
+| 客户端通用核心 | S053—S064 | 可恢复队列、三方同步、模式/释放/状态逻辑 |
+| Windows 客户端 | S065—S074 | 真实 CFAPI 与多客户端同步 |
+| 管理与交互 | S075—S084 | Linux 管理 CLI/Web 与 Windows GUI/CLI |
+| 生命周期与数据保护 | S085—S091 | GC、完整备份恢复、迁移与兼容证据 |
+| 部署发布构建 | S092—S101 | NixOS 本机服务、通用 Linux 包、Windows 安装/升级 |
+| 综合验收 | S102—S108 | 故障、容量与完整发布证据 |
+
+### 6.1 与 design 中 DEV 任务的对应
+
+| 设计任务 | 本手册主要步骤 |
+| --- | --- |
+| DEV-001 | S001—S009、S024—S025、S092 |
+| DEV-002 | S010—S011 |
+| DEV-003 | S012、S056、S059、S068 |
+| DEV-004 | S007、S013—S014、S032 |
+| DEV-005 | S015—S023 |
+| DEV-006 | S024—S031；契约随后随功能补全 |
+| DEV-007 | S033—S040 |
+| DEV-008 | S042—S048、S053—S054 |
+| DEV-009 | S055—S064 |
+| DEV-010 | S038—S039、S049—S051、S060 |
+| DEV-011 | S040、S085—S091 |
+| DEV-012 | S065—S070 |
+| DEV-013 | S071—S083、S090 |
+| DEV-014 | S084、S092—S108 |
+
+### 6.2 验收编号的最小证据归属
+
+任务卡中的测试是局部证明；下面的归属要求最终存在真实集成证据，不能用规划器测试替代 Windows/磁盘恢复实测。
+
+| 设计验收 | 主要实现/验收步骤 |
+| --- | --- |
+| T01 | S020、S058、S074 |
+| T02 | S021、S036、S074 |
+| T03 | S036、S047、S052、S074 |
+| T04 | S056、S068、S074 |
+| T05 | S059、S074、S084 |
+| T06 | S011、S067、S105 |
+| T07 | S063、S069、S084、S105 |
+| T08 | S062、S069、S105 |
+| T09 | S038、S066、S074 |
+| T10 | S022、S038、S074 |
+| T11 | S039、S074 |
+| T12 | S039、S074 |
+| T13 | S040、S079、S074 |
+| T14 | S048、S057、S102 |
+| T15 | S060、S102 |
+| T16 | S060、S089、S102 |
+| T17 | S049—S051、S103 |
+| T18 | S014、S049、S103 |
+| T19 | S051、S103 |
+| T20 | S050、S103 |
+| T21 | S052、S103 |
+| T22 | S046、S054、S067、S104 |
+| T23 | S037、S059、S104 |
+| T24 | S086—S088、S104 |
+| T25 | S032、S065、S103 |
+| T26 | S017、S065、S103 |
+| T27 | S012、S050、S068、S103 |
+| T28 | S012、S068、S084、S103 |
+| T29 | P1，不执行、不计入首发已通过项 |
+| T30 | S061、S069、S082、S100、S105 |
+| T31 | S043、S071、S080、S105 |
+| T32 | S089、S104 |
+| T33 | S026、S091、S100、S104 |
+| T34 | S106—S107 |
+| T35 | S013、S051、S103 |
+| T36 | S098—S101、S108 |
+
+## 7. 记录模板与续接规则
+
+### 7.1 agent/progress.md
+
+保持一个紧凑状态表：`任务 | 状态 | 产出提交或工作树 | 验证摘要 | 阻塞原因 | 交接路径`。顶部只放当前里程碑、最早 ready 任务、平台资源状态和最近一次集成结果。初始所有步骤为 todo，不能因创建了目录就完成业务卡。
+
+S001 初始化完整编号；S002 以后工具可以仅输出未完成行及直接依赖，避免后期每次读取整份表。遇到产品规格冲突记录在对应卡并按 design 规则处理；普通实现选择自行解决并简短记录。
+
+### 7.2 agent/tasks/Sxxx.md
+
+```markdown
+# Sxxx — 任务标题
+状态：todo / in_progress / blocked / done
+依据：design 的具体小节、C/I/T 编号
+前置：编号与实际可用接口
+结果：本轮实际完成的行为
+接口：新增/修改的函数、DTO、错误、迁移或命令
+文件：主要改动路径
+工作树：绝对路径、分支或 detached HEAD、基线提交；纯文档原地维护注明不适用
+基线：准备与检查命令、退出码、已有失败或缺失条件
+提交：实际 hash；未提交则注明原因及保留位置
+验证：环境、命令、退出码、实际观察、报告路径
+限制：尚未验证/失败项，禁止写成已通过
+续接：下一张 ready 卡；或本卡剩余最小动作
+```
+
+检查点另写当前正在修改的文件/函数、编译错误和重现命令。下一 agent 先按交接定位任务 worktree，再读检查点和 Git diff，不重建已有骨架、不覆盖未提交工作。无法访问前次大日志时按记录命令复现，不能猜结果。
+
+## 8. 本手册采用的官方环境依据
+
+下列链接用于工具和平台实现查阅；执行时按已锁定版本核对，不把页面上的最新版本自动当项目版本。产品需求与验收语义已在 design 和本文说明。
+
+- NixOS 手册：系统配置、服务与 rebuild：https://nixos.org/manual/nixos/stable/
+- Nix `develop`：项目 devShell：https://nix.dev/manual/nix/2.35/command-ref/new-cli/nix3-develop
+- Tauri 2 Windows 前置条件：https://v2.tauri.app/start/prerequisites/
+- Tauri 2 Windows 打包：https://v2.tauri.app/distribute/windows-installer/
+
+开始时只执行 S001。之后每轮按依赖选择一张 ready 卡；直到 S108 满足全部首发门禁，才将项目状态改为“首发验收完成”。
