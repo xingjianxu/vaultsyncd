@@ -1125,3 +1125,32 @@ python3 tools/context.py --help
 | `examples/object-capture.rs` | 子命令 `capture --objects <dir> --source <file> --staging <name> --digest <hex> --bytes <n>` 与 `read --objects <dir> --digest <hex> --bytes <n>`；输出稳定 `key=value` 行（`decision=`、`digest=`、`method=`、`fallback=`、`reuse=`、`staging_cleanup=`、`code=`、`observed=`），成功退出 0、被拒绝 1、用法错误 2 |
 | 适配器行为 | 暂存与发布都在对象区（`<objects>/staging` → `<objects>/objects/<aa>/<hex>`），发布用 `RENAME_NOREPLACE` 且不覆盖既有对象、成功后刷目录；对象权限 `0444`；`FICLONE` 优先，`EXDEV`/不支持退回 `stage_copy` 的校验复制并暴露原因 |
 | 验收脚本 | `VAULTSYNCD_RUN_ID=s033-… bash tests/platform/linux/run-objects.sh`：同卷 reflink 采集、改写/截断/删除工作文件后对象不变、错误摘要与长度不产生对象、跨卷 `exdev` 校验复制、小 tmpfs 满盘 `no_space`、缺失对象明确失败；结束清理样本目录并核对 |
+
+## crates/server-core — 提交意图状态机与恢复判定（S034）
+
+状态：S034 实现 `commit/`、`recovery/` 与 `ports::{intent_log, target}`；完整内容 CAS（S035）、幂等/冲突（S036）、create/move/delete（S038/S039）与全 Root 启动恢复（S037）在其上扩展。包名 `vaultsyncd-server-core`，依赖只有 `vaultsyncd-domain`（身份与时间戳的唯一来源），仍属 `members`/`default-members`。
+
+### 端口与模块
+
+| 项目 | 契约 |
+| --- | --- |
+| `ports::target::TargetPort` | Root 工作目录字节层端口，由平台适配器实现：`observe(target_path) -> TargetObservation`、`publish(&PublishRequest) -> PublishedTarget`。`TargetObservation::{Absent, Present{identity: FileKey, digest}}` 把“确认不存在”与“读不到”分开：读不到（权限/挂载/IO）必须报 `TargetError::Unreadable`，不得返回 `Absent`。`PublishRequest{target_path, staging_path, digest, size}` 要求先建目标子卷内暂存文件再受控替换，失败必须清理自己的暂存文件 |
+| `ports::target::{TargetError, PublishedTarget}` | `TargetError::{Unreadable{detail}, Storage{stage, failure: StorageFailure, detail}, InvalidRequest{detail}}`，`code()` 给稳定短名（`target_unreadable`、`no_space` 等）；`PublishedTarget{identity, digest}` 是发布后实测事实，短写不得报成功 |
+| `ports::intent_log::IntentLog` | 异步意图日志端口（`async fn`，泛型使用、不做 dyn 对象）：`begin_put(&NewPutIntent, at) -> PutIntent`、`advance_put(id, PutPhase, at) -> PutIntent`、`load_put(id) -> Option<PutIntent>`、`unfinished_puts(root) -> Vec<PutIntent>`（写入顺序，恢复入口）。实现方是服务端存储层的 `fs_intents` 适配（S035 落地），越权必须报错而不是返回空列表 |
+| `ports::intent_log::IntentLogError` | `Storage{detail}` / `OutOfScope` / `UnknownIntent{id}` / `DuplicateIntent{id}` / `IllegalTransition{from,to}` / `Rejected{code,detail}` / `MalformedIntent{detail}`，`code()` 给稳定短名 |
+| `commit::intent::PutPhase` | `Prepared` / `Published` / `Finalized` / `NeedsRecovery`，文本与 `fs_intents.phase` 同一套取值；`allows_transition_to` 只允许 `prepared→published`、`published→finalized`、两个开放阶段→`needs_recovery`、`needs_recovery→finalized` |
+| `commit::intent::{TargetBefore, TargetAfter}` | 意图前提与目标：`TargetBefore::{Absent, Present(TargetSnapshot{entry, revision, digest, identity: FileKey})}`、`TargetAfter{digest, size}`。`to_json()` 是写库的唯一编码，`from_json()` 是恢复的唯一解码；键顺序固定，计数与字节一律十进制**字符串**（不用 JSON number），未知键、缺字段、类型不符、`null`、转义与非 object 顶层一律 `StateJsonError`（`state_not_object`/`state_unknown_field`/`state_missing_field`/`state_type_mismatch`/`state_invalid_value`） |
+| `commit::intent::{NewPutIntent, PutIntent}` | 意图身份、Root、`target_path`（Root 内相对路径）、`staging_path`（单文件名，核心在 I/O 前用 `ObjectLayout::validate_staging_name` 校验）、before/after；`PutIntent` 另带 `phase`，`NewPutIntent::prepared()` 给出刚写库的形态 |
+| `commit::intent::publish_put(log, target, at, &NewPutIntent)` | 顺序固定：现场复核（前提不符 → `before_mismatch`，不写意图不动磁盘）→ 写 prepared 意图（失败不发布）→ 发布工作文件 → 发布后复核实测摘要与字节数 → 记 `published`。返回 `PublishedPut{intent, target}` |
+| `commit::intent::finalize_put(log, id, at)` | 把已发布意图推进到 `finalized`；S035 在写 entries/versions/changes 的同一事务里调用，未发布就收尾被阶段规则拒绝（`illegal_intent_transition`） |
+| `commit::intent::PutFailure` | `reason: PutFailureReason`、`intent_id`、`phase`；`is_committed()` 恒为 `false`，已写入的意图行不删除也不回退。`PutFailureReason::{InvalidRequest, TargetUnreadable, BeforeMismatch{expected, observed}, Intent(IntentLogError), Publish(TargetError), PublishedTargetMismatch{expected, observed}}`，`code()` 给稳定短名；编排函数返回 `Box<PutFailure>` |
+| `recovery::classify_put(intent, observation)` | 按持久阶段与现场给出 `RecoveryDecision::{AlreadyFinished, Redo, Complete, Reconcile{reason}, NeedsRecovery{reason}}`：`prepared`+满足前提 → `redo`；现场已是目标内容 → `complete`；第三种现场 → `prepared_target_changed`/`published_target_changed`/`published_target_reverted`（保留双方、等协调）；目标不可读或意图已标 `needs_recovery` → `needs_recovery`（`pauses_writes()` 为真） |
+| `recovery::plan_root(intents, observe)` | 按意图写入顺序产出 `RootRecovery{intents: Vec<ClassifiedIntent{intent_id, target_path, phase, decision}>, pauses_writes}`；任一意图拿不到可证明现场即 `pauses_writes = true`（写入必须保持关闭） |
+
+### 表与不变量
+
+- **先持久意图再动磁盘**：`publish_put` 的任何写文件动作都在 `begin_put` 成功之后；意图写不进去就没有发布。
+- **阶段推进必须有证据**：发布后实测摘要/长度不等于 `desired_after` 时不记 `published`；元数据事务未提交不得 `finalized`。
+- **错误不是 committed**：所有失败返回 `PutFailure`，`is_committed()` 恒 `false`，且不删除已持久化的意图行（它是恢复证据）。
+- **故障不是删除**：目标不可读只走向 `needs_recovery` 与暂停写入，不解释为“目标不存在”后重做。
+- **证据自描述**：`expected_before`/`desired_after` 的编码与解码在核心一处维护；存储层的 `fs_intents.expected_before/desired_after` 只用这段文本，不另造一套形态（真实 SQLite 迁移与 CHECK 约束下的往返见 `crates/server-store/src/intents.rs` 的 S034 测试）。
