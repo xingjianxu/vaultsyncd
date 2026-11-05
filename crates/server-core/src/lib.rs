@@ -16,11 +16,15 @@
 //! - [`recovery`] 按持久阶段与工作目录现场给出恢复结论，并在启动时先执行恢复、再开放写入口
 //!   （design §11.3、I13）。
 //!
+//! - [`auth`] 是账号与认证用例：Argon2id 密码散列（design §17.1、C27）、首次 owner 初始化的空状态与
+//!   输入规则、登录凭据比对与统一失败、登录失败限流；会话与刷新凭据属 S043，不在本模块。
+//!
 //! 平台实现（例如 Linux 服务端的 `vaultsyncd-platform-linux-server`、服务端存储层的意图日志）只
 //! 实现端口，不决定上述规则；进程入口负责组装，避免核心与平台层互相依赖。
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod commit;
 pub mod history;
 pub mod objects;

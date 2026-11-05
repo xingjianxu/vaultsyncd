@@ -16,6 +16,14 @@ workspace = true
 
 [dependencies]
 vaultsyncd-domain = { path = "../domain" }
+# 密码散列用 Argon2id（design §17.1、[R12] RFC 9106）：这是本项目允许自行引入密码学库的唯一位置。
+# `password-hash` 提供 PHC 文本与盐生成，`rand` 把操作系统的随机源接进来（盐必须是真随机）。
+argon2 = { version = "0.5", features = ["password-hash", "rand"] }
+# `argon2` 只能生成“确定性的”盐，真随机盐要 `OsRng`；`password-hash` 再导出的 `OsRng` 属于
+# `rand_core` 的 `getrandom` feature，而 `argon2` 自己不开它。这里直接依赖在同一 0.6 线上只为了启用
+# feature（Cargo 的 feature 是并集），代码仍从 `argon2::password_hash::rand_core` 取 `OsRng`，
+# 避免项目里出现两个 rand 类型。
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 # 意图状态机是异步端口（服务端存储层是异步 SQLx）：测试用 `#[tokio::test]` 驱动内存假端口。

@@ -13,6 +13,7 @@ resolver = "3"
 # 默认目标）不会构建服务端应用。
 members = [
     "apps/server",
+    "apps/server-admin",
     "crates/client-store",
     "crates/domain",
     "crates/fs-common",
