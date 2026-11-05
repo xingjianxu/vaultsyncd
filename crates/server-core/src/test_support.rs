@@ -287,14 +287,22 @@ impl NamespaceIntentLog for FakeIntentLog {
 }
 
 /// 内存目标端口：可脚本化观察错误、发布错误与“名义成功但内容不符”。
+///
+/// 现场按 **target_path** 分别记录：一次恢复会陆续发布多个文件，每个文件的目标各有自己的现场；
+/// `set_default` 设定“从未被具体观察过的路径”的现场，`current` 只是最近一次观察/发布的结果（断言用）。
 pub(crate) struct FakeTarget {
+    default_state: TargetObservation,
     pub(crate) current: TargetObservation,
+    /// 路径 → 最近一次实测/发布后的现场。
+    pub(crate) states: std::collections::BTreeMap<String, TargetObservation>,
     pub(crate) trace: Trace,
     pub(crate) publishes: Vec<PublishRequest>,
     pub(crate) observe_error: Option<TargetError>,
     /// 依次替换后两次及以后 observe 的返回值，用来模拟“预检查之后、发布之前”的外部写入。
     pub(crate) observe_script: std::collections::VecDeque<TargetObservation>,
     pub(crate) publish_error: Option<TargetError>,
+    /// 指定目标路径的下一次发布失败（模拟批量恢复中途的发布故障）。
+    pub(crate) fail_publish_at: Option<(String, TargetError)>,
     pub(crate) publish_reports: Option<PublishedTarget>,
     next_inode: u64,
 }
@@ -302,12 +310,15 @@ pub(crate) struct FakeTarget {
 impl FakeTarget {
     pub(crate) fn absent() -> Self {
         FakeTarget {
+            default_state: TargetObservation::Absent,
             current: TargetObservation::Absent,
+            states: std::collections::BTreeMap::new(),
             trace: Trace::default(),
             publishes: Vec::new(),
             observe_error: None,
             observe_script: std::collections::VecDeque::new(),
             publish_error: None,
+            fail_publish_at: None,
             publish_reports: None,
             next_inode: 90,
         }
@@ -322,12 +333,17 @@ impl FakeTarget {
     /// 目标当前是一个已存在文件（现场快照 `snapshot`）。
     pub(crate) fn present(snapshot: &TargetSnapshot) -> Self {
         let mut target = FakeTarget::absent();
-        target.current = TargetObservation::Present {
+        target.set_default(TargetObservation::Present {
             identity: snapshot.identity,
             digest: snapshot.digest,
-        };
+        });
         target.next_inode = snapshot.identity.inode + 1;
         target
+    }
+
+    /// 改变“从未被具体观察过的路径”的现场（模拟外部程序把目标改成了这个状态）。
+    pub(crate) fn set_default(&mut self, state: TargetObservation) {
+        self.default_state = state;
     }
 }
 
@@ -338,9 +354,15 @@ impl TargetPort for FakeTarget {
             return Err(error);
         }
         if let Some(next) = self.observe_script.pop_front() {
-            self.current = next;
+            self.states.insert(target_path.to_owned(), next);
         }
-        Ok(self.current.clone())
+        let observed = self
+            .states
+            .get(target_path)
+            .cloned()
+            .unwrap_or_else(|| self.default_state.clone());
+        self.current = observed.clone();
+        Ok(observed)
     }
 
     fn publish(&mut self, request: &PublishRequest) -> Result<PublishedTarget, TargetError> {
@@ -349,6 +371,12 @@ impl TargetPort for FakeTarget {
         self.publishes.push(request.clone());
         if let Some(error) = self.publish_error.take() {
             return Err(error);
+        }
+        if let Some((path, error)) = self.fail_publish_at.take() {
+            if path == request.target_path {
+                return Err(error);
+            }
+            self.fail_publish_at = Some((path, error));
         }
         let published = match self.publish_reports.take() {
             Some(reported) => reported,
@@ -365,10 +393,13 @@ impl TargetPort for FakeTarget {
                 }
             }
         };
-        self.current = TargetObservation::Present {
+        let state = TargetObservation::Present {
             identity: published.identity,
             digest: published.digest,
         };
+        self.states
+            .insert(request.target_path.clone(), state.clone());
+        self.current = state;
         Ok(published)
     }
 }
@@ -1492,23 +1523,35 @@ impl FakeTrashRestoreStore {
     }
 
     /// 放入一个回收站条目（`parent` 同时登记为已存在目录）。
-    pub(crate) fn with_trashed(mut self, facts: TrashEntryFacts, parent: EntryId) -> Self {
+    pub(crate) fn with_trashed(self, facts: TrashEntryFacts, parent: EntryId) -> Self {
+        self.with_subtree(vec![facts], parent)
+    }
+
+    /// 放入一个多行回收站子树（根在第一位）；每行文件的内容版本先登记成 `digest(0x0d)`/11 字节，
+    /// 需要区分多个文件时用 [`with_content`](Self::with_content) 覆盖。
+    pub(crate) fn with_subtree(mut self, entries: Vec<TrashEntryFacts>, parent: EntryId) -> Self {
         self.parents.insert(parent, EntryKind::Directory);
-        let subtree = TrashSubtree {
-            entries: vec![facts.clone()],
-        };
-        if let Some(version) = facts.content_version {
-            self.contents
-                .insert(version, ExpectedContent::new(digest(0x0d), 11));
+        let root = entries.first().cloned().expect("清单至少要有根这一行");
+        for facts in &entries {
+            if let Some(version) = facts.content_version {
+                self.contents
+                    .entry(version)
+                    .or_insert(ExpectedContent::new(digest(0x0d), 11));
+            }
         }
-        self.subtrees.insert(facts.entry, subtree);
+        self.subtrees.insert(root.entry, TrashSubtree { entries });
+        self
+    }
+
+    /// 指定某个内容版本的实际内容（不同文件不同摘要时用）。
+    pub(crate) fn with_content(mut self, version: VersionId, content: ExpectedContent) -> Self {
+        self.contents.insert(version, content);
         self
     }
 
     /// 让某个（父目录, 名称）被另一个活跃条目占用。
-    pub(crate) fn occupying(mut self, parent: EntryId, name: &str, occupant: EntryId) -> Self {
+    pub(crate) fn occupy(&mut self, parent: EntryId, name: &str, occupant: EntryId) {
         self.occupants.insert((parent, name.to_owned()), occupant);
-        self
     }
 
     fn default_record(write: &TrashRestoreWrite) -> TrashRestoreRecord {
