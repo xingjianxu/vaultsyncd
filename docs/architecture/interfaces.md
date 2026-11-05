@@ -495,7 +495,7 @@ python3 tools/context.py --help
 
 | 模块 | 契约 |
 | --- | --- |
-| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`UserId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId`、`TxId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
+| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`UserId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId`、`TxId`、`SessionId`、`UploadId`、`IntentId`、`ObjectLeaseId`、`BackupLeaseId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
 | `ids::IdParseError` | `Empty` / `Length(实际字节数)` / `NonHexDigit(0 基字节位置)`；长度不符时不继续逐字符检查，故 `0x…` 与带连字符 UUID 文本报 `Length` |
 | `ids::IdSource` | 随机字节端口 `fn next_id_bytes(&mut self) -> [u8; ID_LEN]`；领域层不取随机数，生产端在应用层接线，测试端可注入计数器 |
 | `version` | `DB_INTEGER_MAX = i64::MAX`；计数类型 `Revision`、`RootSeq`、`Generation`（`local_generation`）、`ServerEpoch` 各为 `u64` newtype，取值 `0..=DB_INTEGER_MAX`；接口 `ZERO`、`new`、`from_db_integer`、`to_db_integer`、`get`、`next`、`from_decimal`、`to_decimal`（`Display`/`FromStr` 同形式） |
@@ -518,6 +518,8 @@ python3 tools/context.py --help
 `UserId` 由 S027 追加：服务端 `users.id` 与 `roots.owner_id` 的账号身份（design §7.2、§17.1），与其它身份同为 16 字节 newtype，不与 `ServerId`/`RootId` 互换。
 
 `TxId` 由 S028 追加：一次服务端提交产生的事件批次所带的身份（design §7.2 `changes.tx_id`、§9.3），只用于把同一提交的批次与日志关联；幂等键是 (`RootId`, `DeviceId`, `OpId`)，不是 `TxId`。
+
+`SessionId`、`UploadId`、`IntentId`、`ObjectLeaseId`、`BackupLeaseId` 由 S029 追加：分别是登录会话（design §7.2 `sessions.id`、`uploads.session_id`）、上传会话（§7.2 `uploads.id`）、工作目录发布意图（§7.2 `fs_intents.intent_id`）、下载/提交对象租约（§19.4）与备份租约（§7.2 `backup_leases.id`）。`sessions` 表由会话卡（S043）建立，本卡只按长度校验 `uploads.session_id`。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
 
@@ -920,7 +922,7 @@ python3 tools/context.py --help
 
 ## crates/server-store — 版本、事件与幂等表（S028）
 
-状态：S028 实现。表定义在 `crates/server-store/migrations/0003_versions_events.sql`（`objects`/`versions`/`changes`/`operations`），读写接口在 `src/versions.rs`、`src/changes.rs`、`src/operations.rs`，schema 目标版本随之为 `3`。不写 HTTP/SSE、不算哈希、不做文件系统 I/O：哈希与对象落盘由平台层完成后再交给本层（design §11.2）。
+状态：S028 实现。表定义在 `crates/server-store/migrations/0003_versions_events.sql`（`objects`/`versions`/`changes`/`operations`），读写接口在 `src/versions.rs`、`src/changes.rs`、`src/operations.rs`，schema 目标版本随之为 `3`（S029 再追加 0004 后为 `4`）。不写 HTTP/SSE、不算哈希、不做文件系统 I/O：哈希与对象落盘由平台层完成后再交给本层（design §11.2）。
 
 ### 模块与契约
 
@@ -963,6 +965,45 @@ python3 tools/context.py --help
 - **pending 不是 committed**：`operations` 的 CHECK 保证 `pending` 不带结果、不占 `root_seq`；`committed` 必须有 `root_seq` 与结果；`rejected` 有结果但无 `root_seq`。
 - **紧凑结果保留规则**：只有终态保存 `result_json`，必须是 JSON object 且 ≤ 4096 字节；记录与结果保留到相应设备代际失效（design §7.2、§9.4），届时用 `discard_finished_operations` 删除终态记录；`pending` 不删，否则同一 `op_id` 会被当成新命令重新执行。
 - **owner scope**：所有接口都带 `UserId`，经 `roots.owner_id` 判定；`changes_after` 与 `version_history` 对越权 Root 报错而不是返回空列表，避免把权限失败误当成“已追平”。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
+
+## crates/server-store — 上传、意图与租约表（S029）
+
+状态：S029 实现。表定义在 `crates/server-store/migrations/0004_uploads_intents_leases.sql`（`uploads`/`upload_parts`/`fs_intents`/`backup_leases`/`object_leases`），读写接口在 `src/uploads.rs`、`src/intents.rs`、`src/leases.rs`，schema 目标版本随之为 `4`。不接收字节、不算哈希、不碰暂存文件、不发布对象、不执行 GC：流式接收与对象落盘分别属 S045 与 S033，GC 只把未过期租约当额外引用。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `uploads::ChunkGeometry` | 会话块几何：`new(total_size, chunk_size)`（块大小 0 报 `InvalidChunkSize`）、`part_count()`（`ceil(total/chunk)`，空内容 0 块）、`part_length(index)`（越界 `None`） |
+| `uploads::UploadState` | `Open` / `Complete` / `Finalized` / `Aborted`（数据库文本 `open`/`complete`/`finalized`/`aborted`）；转换 `open→complete|aborted`、`complete→finalized|aborted`，后两者为终态 |
+| `uploads::NewUpload` / `UploadRecord` | 会话输入与读回：`id`(`UploadId`)、`root`、`session`(`SessionId`)、`expected_size`、`hash`(32 B)、`chunk_size`、`expires_at`、`state`；记录另有 `geometry()` |
+| `uploads::begin_upload(tx, owner, &NewUpload)` | 核对 owner scope 与块几何后写 `open` 会话；重复身份 `DuplicateId`，越界长度 `SizeAboveDbLimit` |
+| `uploads::NewUploadPart` / `UploadPart` / `PartOutcome` | 块输入（`index`、`length`、`hash`、`path`）与读回；结果 `Recorded`（首次）或 `AlreadyPresent`（同索引同内容重传，幂等） |
+| `uploads::record_part(tx, owner, upload, &NewUploadPart)` | 索引越界 `PartOutOfRange`、长度不符 `PartLengthMismatch`、同索引不同内容 `PartConflict`（不覆盖旧行）、空路径 `EmptyPartPath`、终态会话 `PartsClosed` |
+| `uploads::upload_progress` / `parts_of` / `unfinished_uploads` | 续传依据：会话 + 已收块（按索引升序）+ 缺失块区间 `MissingRange{first_index,count}`（因此列表长度 ≤ 已收块数 + 1）；未结束上传按过期时间与身份排序 |
+| `uploads::mark_upload_complete` / `mark_upload_finalized` / `abort_upload` | 缺块时 `IncompleteUpload{missing_parts}`；只能 `complete→finalized`；放弃保留已收块行作为清理证据；终态不再变化 |
+| `intents::FsIntentKind` | `PutContent` / `Create` / `Move` / `Delete`（文本 `put_content`/`create`/`move`/`delete`） |
+| `intents::FsIntentPhase` | `Prepared` / `Published` / `Finalized` / `NeedsRecovery`；转换 `prepared→published|needs_recovery`、`published→finalized|needs_recovery`、`needs_recovery→finalized`（唯一人工出口） |
+| `intents::NewFsIntent` / `FsIntent` | 意图输入与读回：`intent_id`(`IntentId`)、`root`、`kind`、`target_path`（Root 内相对路径）、`staging_path`（可空）、`expected_before`/`desired_after`（JSON object）、`phase`、`created_at`/`updated_at` |
+| `intents::begin_intent(tx, owner, &NewFsIntent, at)` | 校验路径形式与两个 JSON object 后写 `prepared`；路径逃出 Root、空/含 NUL 的暂存路径、非 object 状态、重复身份均拒绝且不写入 |
+| `intents::advance_intent_phase(tx, owner, id, next, at)` | 只按上表转换；时间倒退 `TimeWentBackwards`；比较并写发现绕过写入 `PhaseConflict` |
+| `intents::unfinished_intents` / `intent_in_scope` | 按 Root 列出 `phase <> 'finalized'`（含 `needs_recovery`）的意图，按 `created_at, intent_id` 升序；越权 Root 报 `OutOfScope`，不返回空列表 |
+| `leases::ObjectLeasePurpose` / `NewObjectLease` / `ObjectLease` | 对象保护租约：用途 `Download` / `Commit`，字段 `id`(`ObjectLeaseId`)、`root`、`object_hash`、`expires_at` |
+| `leases::lease_object` / `object_lease_in_scope` / `active_object_leases` / `release_object_lease` / `prune_expired_object_leases` | 只能保护已登记对象（`UnknownObject`），`expires_at <= now` 拒绝写入（`AlreadyExpired`）；“有效”等于 `expires_at > now`；释放幂等（第二次 `false`） |
+| `leases::SnapshotSeqMap` | 备份快照映射：按 Root 身份升序的 `(RootId, RootSeq)`，`new` 拒绝空映射与重复 Root；`to_json` 产出 `{"<root hex>":"<decimal seq>"}`，`from_json(conn, text)` 用 `json_each` 解析并要求值是文本类型 |
+| `leases::NewBackupLease` / `BackupLease` | `id`(`BackupLeaseId`)、`snapshot_seq_map`、`expires_at`、`manifest_ref`；跨 Root，无 `root_id`/owner 列 |
+| `leases::insert_backup_lease` / `backup_lease` / `active_backup_leases` / `release_backup_lease` / `prune_expired_backup_leases` | 空清单/过期/未注册 Root/重复身份均拒绝；按 `expires_at` 过滤有效租约；释放幂等 |
+
+### 表与不变量
+
+- **索引唯一、重复内容才幂等**：`upload_parts` 主键 `(upload_id, part_index)`，内容（长度、哈希、路径）全同才算幂等重传；`path` 全库唯一，避免按会话清理误删别人的字节。
+- **会话绑定不可变快照**：`uploads` 的 `expected_size`/`hash` 与 `chunk_size` 在创建时确定，块几何决定块数与每块期望长度；`state` 的 CHECK 只允许四个取值，块未齐不可能进入 `complete`（`mark_upload_complete` 核对）。`session_id` 只校验长度：`sessions` 表属 S043，追加外键需重建表，由该卡决定。
+- **意图 phase 是持久化判据**：`fs_intents.phase` 的取值由迁移 CHECK 限定，转换由 `FsIntentPhase::allows_transition_to` 唯一决定；启动恢复读 `phase` 而不是重放普通日志（design §11.3）。
+- **“当时不存在”不是 NULL**：`expected_before`/`desired_after` 都是 `NOT NULL` 的 JSON object（`json_valid` + `json_type='object'`），不存在必须写成对象字段，避免把“未知”与“不存在”混为一谈。
+- **租约只保护已登记对象**：`object_leases(root_id, object_hash) → objects(root_id, hash)`，`ON DELETE RESTRICT` 让删除仍被租约保护的对象行失败；`expires_at > now` 是唯一有效期判据。
+- **owner scope**：`uploads`/`fs_intents`/`object_leases` 的接口都带 `UserId`，经 `roots.owner_id` 判定；`backup_leases` 跨 Root（design §7.2），读接口不带 owner scope，管理 API 鉴权属 S087。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
 

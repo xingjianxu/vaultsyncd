@@ -206,6 +206,34 @@ opaque_id! {
     TxId
 }
 
+opaque_id! {
+    /// 登录会话身份（design §7.2 `sessions.id`、`uploads.session_id`）。
+    ///
+    /// 上传会话绑定到签发它的登录会话：会话失效后不允许接着续传（design §13.2「重新鉴权 →
+    /// 校验会话仍有效」）。它不承担令牌职责，令牌摘要只在 `sessions` 表里。
+    SessionId
+}
+
+opaque_id! {
+    /// 上传会话身份（design §7.2 `uploads.id`、§13.1）。
+    UploadId
+}
+
+opaque_id! {
+    /// 工作目录发布意图身份（design §7.2 `fs_intents.intent_id`、§11.2 步骤 5）。
+    IntentId
+}
+
+opaque_id! {
+    /// 下载/提交期间保护已登记内容对象的短期租约身份（design §19.4 的上传/下载租约）。
+    ObjectLeaseId
+}
+
+opaque_id! {
+    /// 备份租约身份（design §7.2 `backup_leases.id`、§19.1）。
+    BackupLeaseId
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +273,11 @@ mod tests {
         check_identity_type!(DeviceId);
         check_identity_type!(OpId);
         check_identity_type!(TxId);
+        check_identity_type!(SessionId);
+        check_identity_type!(UploadId);
+        check_identity_type!(IntentId);
+        check_identity_type!(ObjectLeaseId);
+        check_identity_type!(BackupLeaseId);
     }
 
     #[test]
