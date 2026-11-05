@@ -18,7 +18,7 @@ use crate::ports::external_store::{
 };
 use crate::ports::object_store::{
     BlobError, CopyFallback, CopyMethod, FileKey, ObjectBlobPort, PublishedBlob, StagedBlob,
-    StorageFailure, StoredBytes, StoredFacts,
+    StorageFailure, StoredBytes, StoredFacts, StoredSlice,
 };
 use crate::ports::put_store::EntryKind;
 use crate::ports::work_tree::{
@@ -384,6 +384,31 @@ impl ObjectBlobPort for FakeBlobs {
             bytes: data.len() as u64,
             digest: digest_of(&data),
             data,
+        })
+    }
+
+    fn read_object_range(
+        &mut self,
+        object: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<StoredSlice, BlobError> {
+        let data = self
+            .objects
+            .get(object.to_str().expect("UTF-8"))
+            .ok_or_else(|| BlobError::ObjectMissing {
+                detail: object.display().to_string(),
+            })?;
+        let start = usize::try_from(offset).unwrap_or(usize::MAX);
+        let end = start.saturating_add(usize::try_from(length).unwrap_or(usize::MAX));
+        if end > data.len() {
+            return Err(BlobError::InvalidRequest {
+                detail: "范围越界".to_owned(),
+            });
+        }
+        Ok(StoredSlice {
+            bytes: length,
+            data: data[start..end].to_vec(),
         })
     }
 }
