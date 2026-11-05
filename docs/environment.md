@@ -875,3 +875,15 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - 干净判定需要读整份内容，因此“已脱水→判定→释放”会先水合再脱水；真实实现依赖已记录的内容哈希/代际与短期内容租约。
 - 释放进程内紧跟 dehydrate 的 find-data 状态位滞后（`dehydrated_after=false`），首次进入时数据已为 0，复核用新进程。
 - 共享模式探测看不到“完全共享”的读写者；只在 `C:` NTFS、build 26300 上实测，ReFS/非系统卷、Explorer 展示、真实编辑器（Word/VS Code）保存路径未验证。
+
+## 19. S026 服务端 SQLite 依赖与引擎版本（2026-11-06 实测）
+
+| 项 | 实测结果 |
+| --- | --- |
+| SQLx | `sqlx 0.8.6`，feature `runtime-tokio` + `sqlite` + `migrate` + `macros`；版本记录在根 `Cargo.lock` |
+| SQLite 引擎（产品） | `sqlx` 的 `sqlite` feature 走 `libsqlite3-sys 0.30.1` 的 **bundled** 源，其 `sqlite3.h` 报 `SQLITE_VERSION "3.46.0"`；产品不链接 devShell 的 `pkgs.sqlite` |
+| SQLite CLI（devShell） | `sqlite3 3.53.3`，只用于人工调试与核对；`crates/server-store/migrations/0001_initial.sql` 在该 CLI 上直接执行退出 0（`STRICT` 表语法可用），说明迁移文件是普通 SQL、不依赖 SQLx 专有语法 |
+| Tokio | `tokio 1.54.1`（由 `sqlx` 的 `runtime-tokio` 引入；`crates/server-store` 的 dev 依赖另需 `macros`/`rt-multi-thread` 跑异步测试） |
+| 构建依赖 | bundled SQLite 用 devShell 的 `gcc` 编译，不需要系统 `libsqlite3`/`sqlite3.pc`；`cargo fetch` 可在当前网络下完成（锁定版本见 `Cargo.lock`） |
+
+结论：产品数据库引擎版本由 `Cargo.lock` 决定（3.46.0），不随宿主 NixOS 的 `pkgs.sqlite` 变化；迁移文件只能使用 3.46 已支持的特性（`STRICT` 表要求 ≥3.37，已满足）。

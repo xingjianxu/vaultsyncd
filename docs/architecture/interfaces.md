@@ -588,6 +588,41 @@ python3 tools/context.py --help
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
 
+## crates/planner — 三方比较与基本计划（S019）
+
+状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。首次合并、冲突副本、移动/删除矩阵由后续卡补齐，本卡遇到这些输入只输出延期裁决。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `reconcile::ContentFingerprint` | 内容等价判定值：`new(size: u64, sha256: [u8; 32])`、`size()`、`sha256()`；相等要求长度与摘要同时相同。摘要由调用方（传输/平台层）计算后以值传入，planner 不读字节 |
+| `reconcile::EntryKind` | `File(ContentFingerprint)` / `Directory`（目录没有文件内容版本，design I12） |
+| `reconcile::ServerFact` | 服务器侧事实（B 或 R）：`path`、`kind`、`entry_id`、`revision`、`version: Option<VersionId>`（文件由 `file()` 保证为 `Some`，目录为 `None`）、`observed_mtime`；构造 `file(path, content, entry_id, revision, version)` / `directory(path, entry_id, revision)` / `with_observed_mtime(mtime)` |
+| `reconcile::LocalFact` | 本地事实 L：`path`、`kind`、`generation`、`observed_mtime`；构造 `file(path, content, generation)` / `directory(path, generation)` / `with_observed_mtime(mtime)` |
+| `reconcile::Plan` | `path`（优先基线位置，其次本地，再其次远端）、`action`、`prerequisites: Vec<Prerequisite>`、`dependencies: Vec<Dependency>`、`local_protection: LocalProtection`；纯值，不承诺执行成功 |
+| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`Defer(DeferReason)` |
+| `reconcile::DeferReason` | `FirstSync`（无基线，design §9.2）、`MissingEntry`（某一侧缺失，design §10.3）、`IdentityReplaced`（远端身份已非基线身份，I03）、`LocationOrKindChanged`（移动/类型互换，design §9.5、§10.1）、`ContentConflict`（双方都变且结果不同，design §10）、`IncompleteFacts`（自称内容变化却给不出文件版本） |
+| `reconcile::Prerequisite` | `BaseRevisionCurrent { expected }`（服务器修订仍等于计划基线）、`GenerationUnchanged { expected }`（本地代际未变）、`UsagePermitsChange`（无写入句柄）、`TargetPathUsable`（父目录已同步、名称可表示、无同名另一类型条目） |
+| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }` |
+| `reconcile::LocalProtection` | `NotNeeded`（无操作）、`KeepLocalContent`（字节不动，只在基线写入后推进状态）、`SnapshotBeforeReplace { generation }`、`UploadSnapshot { generation }` |
+| `reconcile::reconcile(base, local, remote)` | 三项 `Option<&…>`，`None` 表示该侧没有该条目（删除事实）；返回 `Result<Plan, PlanError>`，三项都缺失返回 `PlanError::NoFacts` |
+
+### 判定规则
+
+- **比较对象**：内容（长度 + SHA-256）、位置（名称/父目录）、类型与“该侧是否存在”；`mtime` 只随事实记录，任何分支都不参与判定（I04）。长度与摘要相同、仅 `mtime` 相同或位置相同都不足以归并。
+- **“R=B”按 `Revision`**：远端修订与基线相同且形状相同才算无变化；“L=B”只能按本地观察到的位置、类型与内容判定。任一证据显示变化即按“有变化”处理。
+- **四条基本分支**：`L=B、R=B` → `NoOp`；`L=B、R≠B` → `ApplyRemote`（前提 `BaseRevisionCurrent`、`GenerationUnchanged`、`UsagePermitsChange`、`TargetPathUsable`；内容变化时有 `DownloadVersion` 依赖并要求替换前快照，仅元数据变化时不需要下载、本地字节不动）；`L≠B、R=B` → `UploadLocal`（携带基线 `Revision`，依赖父目录就绪与本地快照，保护说明为上传快照）；`L≠B、R≠B` 且位置/类型/内容都相同 → `MergeSameResult`（不传输内容、不造副本，只在基线写入后推进状态）。
+- **延期裁决**：无基线、某一侧缺失、远端身份被替换、位置或类型变化、双方结果不同、事实不完整都输出 `Action::Defer`；这类计划没有前提与依赖，`local_protection` 固定为 `KeepLocalContent`，不允许执行器删除或覆盖本地内容（I02、I04、I07）。
+
+### 不变量
+
+- 同一三方输入重复计算得到完全相同的 `Plan`（含前提与依赖顺序：按 `Prerequisite`/`Dependency` 声明顺序）。
+- 只输出计划、不执行：不覆盖文件、不删除文件、不推导删除、不做 I/O。
+- 缺少必需事实（如内容变化却无 `VersionId`）不降级成“只推进元数据”，而是延期裁决。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
+
 ## api/ — 远端协议契约源与生成配置（S024）
 
 状态：S024 建立最小契约与生成通路。`api/` 是远端 HTTP 协议的唯一编辑源（design §5.6、§15.1—15.4），生成代码提交入库，`cargo xtask check` 用逐字节比对守住“契约与代码同步”。业务语义（状态机、不变量）仍以 design 为准，这里只记录契约文件的形状与生成器边界。
@@ -644,3 +679,31 @@ python3 tools/context.py --help
 | `tests/schema-decoders.mjs` | 运行时断言（9 项），直接以 `.mjs` 导入 `../src/generated/types.ts`（Node 24 原生剥离类型，无需构建步骤），并读取 `api/examples/` |
 
 脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。客户端不读全局 `fetch`/时钟：传输与 `x-request-id` 生成都由调用方注入，因此可在无浏览器的测试里替换。
+
+## crates/server-store — 服务端数据库迁移框架（S026）
+
+状态：S026 实现。包名 `vaultsyncd-server-store`，依赖 `sqlx 0.8`（`runtime-tokio` + `sqlite`（bundled）+ `migrate` + `macros`），dev 依赖 `tokio`（`macros`/`rt-multi-thread`）；在 `members` 与 `default-members` 内（无平台 API，便携检查覆盖）。只做服务端 SQLite 的打开、门禁、迁移与事务，不含 HTTP、工作目录与对象 I/O。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `db::SERVER_APPLICATION_ID` | `0x56534E31`（ASCII `VSN1`），写入 `PRAGMA application_id`，是“这个文件是服务端库”的唯一标识；客户端库用另一个标识（由 `crates/client-store` 自己的卡定义） |
+| `db::MIGRATOR` | `sqlx::migrate!("./migrations")`，编译期内嵌 `crates/server-store/migrations/*.sql`；文件名 `<版本>_<描述>.sql`，版本单调递增，已发布文件不得改写（校验和不符即拒绝启动） |
+| `db::target_schema_version()` | 内嵌迁移的最大版本号（当前 `1`），即 `PRAGMA user_version` 的目标值；全部已知迁移成功后才写入 |
+| `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`：迁移前一致性备份的位置，留给管理员整套恢复 |
+| `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非服务端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；任一步失败返回 `DbError` 且不给出可写句柄。父目录须已存在 |
+| `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
+| `db::Database::begin_write()` | `BEGIN IMMEDIATE` 的短写事务（`sqlx::Transaction<'static, Sqlite>`），等锁上限 10 s；只允许数据库语句 |
+| `db::DbError` | `Io` / `NonUtf8Path` / `Sqlite` / `NotADatabase` / `ForeignDatabase{application_id}` / `SchemaTooNew{found,supported}` / `Backup{path,source}` / `BackupUnverified{path,detail}` / `WalUnavailable{journal_mode}` / `Migration{backup,source}` |
+
+### 门禁与不变量
+
+- **种类**：`application_id` 等于服务端标识放行；`0` 且库里没有任何对象（新文件/空库）允许被初始化为服务端库；`0` 但非空、或其它任何标识一律 `ForeignDatabase`。拒绝路径用独立只读探测连接（不设 journal_mode/外键、不创建文件），因此不会改动对方文件。
+- **版本**：取 `user_version` 与 `_sqlx_migrations` 最大版本的较大者，超过 `target_schema_version()` 即 `SchemaTooNew`。两个来源都看，是因为“迁移已提交、标记未写”之间中断的库只有迁移记账记得新版本；这类半完成库不会被旧二进制当成可写库。
+- **迁移**：每条迁移与 SQLx 记账在同一事务内（单条失败整体回滚）；多条迁移中途失败时库停在最后一个成功版本，错误携带迁移前备份路径，恢复走整套备份，不做自动 down。
+- **备份**：仅在“确实有待执行迁移且库非空”时做，用 `VACUUM INTO`（读事务快照，含 `-wal` 里已提交的数据）+ `PRAGMA quick_check` 自检；同名备份已存在则保留不覆盖（更接近迁移前原始状态）。
+- **连接默认项**：`journal_mode=WAL`（打开后读回实际值校验，切换不到 WAL 就拒绝启动，覆盖 SMB/NFS/只读存储）、`foreign_keys=ON`、`busy_timeout=10 s`、池上限 4（只服务并发读；写由 `BEGIN IMMEDIATE` 串行化）。
+- **事务只包数据库**：文件系统 I/O、网络与等待不得放进写事务（design §6）。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
