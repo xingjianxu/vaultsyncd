@@ -435,7 +435,7 @@ python3 tools/context.py --help
 
 ## crates/domain — 身份与有界计数（S015）
 
-状态：S015 在 `crates/domain/src/ids.rs`、`version.rs` 落地不透明身份与有界计数/UTC 时间端口。纯数据与纯规则，无第三方依赖、无 I/O；`crates/domain` 仍是身份的唯一定义处，平台层只承载字节。状态维度与错误分类归 S016。
+状态：S015 在 `crates/domain/src/ids.rs`、`version.rs` 落地不透明身份与有界计数/UTC 时间端口。纯数据与纯规则，无第三方依赖、无 I/O；`crates/domain` 仍是身份的唯一定义处，平台层只承载字节。状态维度与错误分类见下节 S016。
 
 ### 模块与契约
 
@@ -460,5 +460,40 @@ python3 tools/context.py --help
 - 上限在构造、解析与递增三处都检查，不依赖调用方自觉；类型内部因此不可能持有超出 SQLite `INTEGER` 的值。
 - 生成身份必须经 `IdSource` 注入，领域层不含随机源或时钟，同一注入序列得到同一结果。
 - 拒绝即报错：空文本、正负号、前导零、非十六进制字符、超界数值都返回明确变体，不静默取默认值或截断。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/domain — 状态维度与错误分类（S016）
+
+状态：S016 在 `crates/domain/src/state.rs`、`error.rs` 落地六个正交状态维度、界面主状态投影、“已同步”判断与 design §15.4 错误码分类。纯数据与纯函数：不读写文件、不查数据库、不读时钟、不做重试调度，也不生成状态（执行器负责更新维度值）。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `state::Residency` | `MetadataOnly`（默认）/ `Partial` / `Materialized`；`Partial` 是下载中间态，不代表完整离线可用 |
+| `state::Dirty` | `Clean`（默认）/ `Dirty` / `Snapshotting` / `AwaitingCommit`；`Clean` 只是上次观察，不是“文件未变”的证明 |
+| `state::RemoteApply` | `Current`（默认）/ `Pending` / `BlockedByLocal` / `Conflicted` |
+| `state::Transfer` | `Idle`（默认）/ `Queued` / `Running` / `RetryWait(ErrorCode)` / `Failed(ErrorCode)`；`error_code()` 给出重试/失败原因，其余状态返回 `None` |
+| `state::Usage` | `Idle`（默认）/ `ReadHandles` / `WriteHandles` / `Unknown`；只供破坏性操作（释放、替换）准入使用，不改变主状态 |
+| `state::Availability` | `Online`（默认）/ `Offline` / `MountFailed` / `RootUnavailable` |
+| `state::EntryState` | 六个公开维度字段 + `Default`（仅云端、clean、current、idle、idle、online）；方法与无 I/O 投影：`project() -> EntryStatus`、`is_synced() -> bool` |
+| `state::EntryStatus` | design §8.2 优先级（声明顺序）：`Unavailable` > `Failed` > `Conflict` > `LocalChanges` > `Syncing` > `Downloaded` > `CloudOnly` |
+| `error::ErrorClass` | `Retryable` / `NeedsUserAction` / `Corrupt`；`is_severe()` 仅对后两者为真（design §8.2 严重失败、§18.2 问题页） |
+| `error::ErrorCode` | design §15.4 的 23 个错误码（18 服务端 + 4 首发 Windows 本机 + `MOUNT_FAILED`）；`ALL`、`as_str()`（wire 规范文本）、`from_code()`、`class()`、`Display` |
+
+### 投影与分类规则
+
+- **主状态**：挂载失败/Root 不可用 → `Unavailable`；已停止自动推进的任务或重试队列里出现严重类别 → `Failed`；`Conflicted` → `Conflict`；任一非 `Clean` 的本地变更 → `LocalChanges`；其余 `remote_apply != Current` 或任务非 `Idle` → `Syncing`；最后按 `Residency` 给 `Downloaded`/`CloudOnly`。详情可同时显示多个维度，主状态只有一个。
+- **已同步**：`is_synced()` 的成立条件是 `dirty = Clean`、`remote_apply = Current`，且任务不是 `RetryWait`/`Failed`。`Pending`/`BlockedByLocal`/`Conflicted` 与任一待上传修改都为假；`Queued`/`Running` 的下载或哈希任务不改变“基线一致”。`Residency`、`Availability` 不参与判断，界面另读维度显示“仅云端/当前离线”。
+- **错误类别只由错误码决定**：`Retryable` 允许自动重新规划或退避重试；`NeedsUserAction` 停止相关操作、保留本地内容并进入问题页；`Corrupt` 不发布未通过校验的内容。一次性的前置动作由调用方在分类前完成（例如 `AUTH_EXPIRED` 先受控刷新一次）。`from_code` 对未知代码返回 `None`，不默认归入可重试。
+- **wire `retryable` 与本分类不冲突**：`ROOT_UNAVAILABLE` 在 wire 上可为 `retryable: true`（允许低频复查），分类仍是 `NeedsUserAction`（只能由用户/管理员恢复挂载）。
+
+### 不变量
+
+- 维度可任意组合：`dirty + offline + materialized` 必须能表达，不被压成单一“冲突”标签。
+- 投影与 `is_synced()` 是纯函数，对不一致组合保守处理：不在 `Current` 的远端事实、失败/重试任务与非 `Clean` 状态一律不判为已同步；`RetryWait` 携带严重类别时按失败显示。
+- `Transfer::Failed` 表示已停止自动推进的失败，界面按 `Failed` 显示；可重试错误在退避期间保持 `RetryWait`，不进入问题页。
+- 领域层不生成状态值、不做 I/O 或调度：重试次数、退避与 `Retry-After` 属调度器（design §13.3）。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
