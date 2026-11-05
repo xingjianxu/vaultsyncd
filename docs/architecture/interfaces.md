@@ -1228,4 +1228,56 @@ python3 tools/context.py --help
 - **事务声称成功也要核对证据**：`apply_put` 返回的 `phase` 不是 `finalized`、内容不等于 `desired_after` 或 revision 没推进，都按 `store_contract_violation` 停写。
 - **保留旧对象与冲突候选**：`Preserved`/`NeedsRecovery` 不删除对象、不改工作文件；`Redone`/`Completed` 只新增一个版本，旧内容对象仍被旧版本引用。
 
-未接入（后续卡）：create/move/delete 的意图日志（S038/S039）要接进同一条启动顺序；`expected_before` 为 `Absent` 的意图（新建条目）当前返回 `Unresolved{code: "missing_entry_baseline"}` 并保持 Root 关闭，因为意图里没有条目身份可收尾；真实存储适配与 `apps/server` 的 readiness 组装（S041）仍待落地；装置里的摘要不是 SHA-256（假端口），仅用于区分前后内容。
+未接入（后续卡）：create/move/delete 的意图日志（S038/S039）要接进同一条启动顺序；`expected_before` 为 `Absent` 的意图（新建条目）当前返回 `Unresolved{code: "missing_entry_baseline"}` 并保持 Root 关闭，因为意图里没有条目身份可收尾；真实存储适配仍待落地（`apps/server` 的 readiness 组装已由 S041 落地，见下一节）；装置里的摘要不是 SHA-256（假端口），仅用于区分前后内容。
+
+## apps/server — 服务端进程与配置生命周期（S041）
+
+状态：S041 实现。包名 `vaultsyncd-server`（`apps/server/`），属于 workspace `members` 但**不在** `default-members`：非 Linux 目标直接 `compile_error!`，便携检查不构建它。依赖 `axum 0.8`（HTTP/1 + JSON）、`tokio`、`tracing`/`tracing-subscriber`、`serde`/`toml`，以及 `vaultsyncd-{domain,protocol,server-core,server-store}`；不含 FUSE/CFAPI/Windows 依赖（`cargo tree -p vaultsyncd-server` 无相关 crate）。示例配置在 `deploy/examples/vaultsyncd.toml`。
+
+### 进程契约
+
+| 项 | 契约 |
+| --- | --- |
+| 入口 | `vaultsyncd-server [--config <路径>]`；路径优先级 `--config` > 环境变量 `VAULTSYNCD_CONFIG` > `/etc/vaultsyncd/vaultsyncd.toml`。未知参数、`--config` 重复或缺值都是用法错误 |
+| 退出码 | `0` 正常停止（SIGTERM/SIGINT 完成优雅停止）；`1` 启动/运行失败（数据库、恢复读不出结论、监听绑定）；`2` 用法或配置错误。常量在 `vaultsyncd_server::{EXIT_OK,EXIT_FAILURE,EXIT_CONFIG}` |
+| 信号 | 只注册 SIGTERM/SIGINT；注册失败则拒绝启动（没有优雅停止能力就不接请求）。注册在组装依赖之前完成 |
+| 日志 | `tracing` 到 stderr；级别与格式来自 `[log]`（`trace/debug/info/warn/error`、`text/json`），管道/文件不写 ANSI 转义 |
+
+### 配置（`vaultsyncd_server::config`）
+
+| 项 | 契约 |
+| --- | --- |
+| `Config::load(path)` / `Config::parse(text, path)` | 严格 TOML：`deny_unknown_fields`（拼错的键必须报错，不能被默认值掩盖）。返回校验后的 `Config{listen, state_dir, database, log}` |
+| `[server] listen` | IP:端口；缺省 `127.0.0.1:8721`（`DEFAULT_LISTEN`，只监听回环地址；对外由同机反向代理以 HTTPS 进入，design §17.2） |
+| `[state] dir` | 必填、绝对、**启动时必须已存在且是目录**（服务不替运维决定内部目录落在哪个文件系统；内部目录准入属后续存储卡）。数据库固定为 `dir/server.sqlite`（`DATABASE_FILE_NAME`） |
+| `[log] level/format` | 闭集；`level` 缺省 `info`，`format` 缺省 `text` |
+| `ConfigError` | 稳定码 `config_unreadable` / `config_invalid` / `config_invalid_value`；`Display` 中文，含字段名与路径 |
+
+### 生命周期与 readiness（`vaultsyncd_server::lifecycle`）
+
+| 项 | 契约 |
+| --- | --- |
+| `Phase` | `Starting` / `Ready` / `NeedsRecovery` / `Draining`；`as_str()`、`is_ready()`（只有 `Ready` 为真） |
+| `Lifecycle` | `new()` 起于 `Starting`，所有 Root 的写入默认关闭；`record_recovery(RecoveryReport)` 是唯一的开放入口（转调核心 `WriteAdmission`）；`mark_ready()` 只在 `Starting` 时生效；`mark_needs_recovery(detail)` 之后 `mark_ready()` 不再生效；`begin_shutdown()` 进入 `Draining` 且不复位 |
+| `Lifecycle::admit_write(root)` | 先看是否 `Draining`（`SubmissionRefusal::ShuttingDown`，码 `shutting_down`），再转调核心 `WriteAdmission::admit_write`（`recovery_pending` / `needs_recovery`） |
+| `root_state(root)` / `recovery_detail()` | 诊断与健康探测输出；`recovery_detail` 只含 Root 身份与意图条数，不含服务器绝对路径 |
+
+### 启动恢复编排与 HTTP（`vaultsyncd_server::{recovery,http,bootstrap}`）
+
+| 项 | 契约 |
+| --- | --- |
+| `recovery::assess_registered_roots(db, &lifecycle)` | 用 `server_store::roots::all_roots` 取全部已注册 Root（系统级查询，不依赖 owner scope），逐 Root 调 `server_store::intents::unfinished_intents`：空清单 → 记一份空 `RecoveryReport`（开放写入）；非空 → 记入 `RecoveryAssessment::blocked_roots` 并保持关闭。返回 `RecoveryAssessment{open_roots, blocked_roots, is_complete(), detail()}` |
+| `recovery::count_unfinished_intents(db)` | 全部 Root 下未收尾意图条数；停止流程用它打印 `unfinished_intents=N` 作为“证据仍保留”的账目 |
+| `RecoveryAssessmentError` | `Roots(RootError)` / `Intents{root, source}`：读不出清单就**不启动**（`IntentLog` 契约：不能假设没有未完成意图） |
+| `bootstrap::prepare(config)` | 打开数据库（种类/版本/WAL 门禁在 `server-store`）→ 评估恢复 → 全部完成才 `mark_ready` → 绑定监听。错误为 `StartupError::{Database,Recovery,Bind}` |
+| `bootstrap::Service::{local_addr,lifecycle,assessment,serve}` | `serve(shutdown)`：打印 `listen/state_dir/schema_version/phase/open_roots/blocked_roots` → `axum::serve(...).with_graceful_shutdown(...)`；收到停止信号先 `begin_shutdown()`，服务循环结束后统计并打印未完成意图条数，再 `database.close()` |
+| `GET /v1/health` | 用 `vaultsyncd_protocol::generated::{HealthResponse,ErrorEnvelope}` 的 DTO，不手写 JSON：`Ready` → 200 `{"status":"ok"}`；`Draining` → 200 `{"status":"degraded"}`（读可用、新提交已拒绝）；`Starting` → 503 `NEEDS_RECOVERY` + `retryable=true`；`NeedsRecovery` → 503 `NEEDS_RECOVERY` + `retryable=false`。错误信封的 `request_id` 为 `srv-<pid>-<序号>` |
+
+### 不变量与未接入
+
+- **恢复没完成就不开放写入**：`app` 里没有任何直接打开写门的入口；未完成意图只被报告，不被当成已完成。
+- **重启不是恢复证据**：证据仍留在 `fs_intents` 时，重启后的 readiness 依旧为假（进程级用例断言）。
+- **停止不丢任务**：`Draining` 先于 HTTP 收尾；停止流程不删除意图行/暂存/已发布内容，只打印保留条数并关闭数据库。
+- **配置不猜默认**：未知键、非法地址、缺失/相对状态目录一律退出码 2，且不创建数据库。
+
+未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Root 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥仍靠部署约定（同 S037 限制）。

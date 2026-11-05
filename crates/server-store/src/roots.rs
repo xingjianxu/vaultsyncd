@@ -253,6 +253,20 @@ pub async fn roots_of_owner(
     rows.into_iter().map(RootRow::into_record).collect()
 }
 
+/// 列出全部已注册 Root，按路径文本排序（启动恢复用）。
+///
+/// 启动恢复是系统级操作，不属于某个 owner scope：进程必须恢复每一个已注册 Root，不能因为
+/// “还没有请求上下文”就漏掉某个 Root 的未完成意图（design §11.3）。
+pub async fn all_roots(conn: &mut SqliteConnection) -> Result<Vec<RootRecord>, RootError> {
+    let rows = sqlx::query_as::<_, RootRow>(&format!(
+        "SELECT {ROOT_COLUMNS} FROM roots ORDER BY absolute_path"
+    ))
+    .fetch_all(conn)
+    .await
+    .map_err(RootError::Db)?;
+    rows.into_iter().map(RootRow::into_record).collect()
+}
+
 /// 更新 Root 的健康状态；不属于调用方的 Root（或不存在）返回 [`RootError::OutOfScope`]。
 pub async fn set_health(
     tx: &mut Transaction<'_, Sqlite>,
