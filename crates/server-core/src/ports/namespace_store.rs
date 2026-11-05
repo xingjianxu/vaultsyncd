@@ -167,7 +167,9 @@ impl fmt::Display for NamespaceStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NamespaceStoreError::Storage { detail } => write!(f, "命名空间存储失败：{detail}"),
-            NamespaceStoreError::OutOfScope => f.write_str("Root 或条目不在调用方的 owner scope 内"),
+            NamespaceStoreError::OutOfScope => {
+                f.write_str("Root 或条目不在调用方的 owner scope 内")
+            }
             NamespaceStoreError::UnknownRoot { root } => write!(f, "Root {root} 不存在"),
             NamespaceStoreError::EntryMissing { entry } => write!(f, "条目 {entry} 不存在"),
             NamespaceStoreError::RevisionChanged { expected, actual } => {

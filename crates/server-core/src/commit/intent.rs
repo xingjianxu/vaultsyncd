@@ -1079,7 +1079,10 @@ pub(crate) fn take_entry(
 }
 
 /// 所有已知键都取完后，剩下的键就是本模块不认识的证据：拒绝，而不是忽略。
-pub(crate) fn finish_object<T>(fields: &BTreeMap<String, JsonValue>, value: T) -> Result<T, StateJsonError> {
+pub(crate) fn finish_object<T>(
+    fields: &BTreeMap<String, JsonValue>,
+    value: T,
+) -> Result<T, StateJsonError> {
     match fields.keys().next() {
         Some(field) => Err(StateJsonError::UnknownField {
             field: field.clone(),

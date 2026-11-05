@@ -704,7 +704,8 @@ impl FakeNamespace {
             links: 1,
             bytes: 5,
         };
-        self.paths.insert(path.to_owned(), (EntryKind::File, identity));
+        self.paths
+            .insert(path.to_owned(), (EntryKind::File, identity));
         self
     }
 
@@ -771,8 +772,7 @@ impl NamespacePort for FakeNamespace {
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<PathState, NamespaceError> {
-        self.trace
-            .record(format!("namespace rename {from} {to}"));
+        self.trace.record(format!("namespace rename {from} {to}"));
         self.renames.push((from.to_owned(), to.to_owned()));
         if let Some(error) = self.rename_error.take() {
             return Err(error);
