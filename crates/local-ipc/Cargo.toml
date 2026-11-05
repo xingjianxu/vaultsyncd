@@ -1,0 +1,16 @@
+[package]
+name = "vaultsyncd-local-ipc"
+description = "本机 IPC wire 契约（api/local-ipc.schema.json 生成）、协议版本判定与消息帧"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
