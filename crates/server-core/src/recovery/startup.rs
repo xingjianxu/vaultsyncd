@@ -295,8 +295,21 @@ where
             },
             Err((code, detail)) => unresolved(code, detail),
         },
-        // 已发布：工作文件已经是目标内容，只需补完同一次操作的元数据事务。
-        RecoveryDecision::Complete => finish_metadata(store, at, intent).await,
+        // 已发布：工作文件已经是目标内容。阶段还停在 `prepared` 说明发布完成、阶段没记下来
+        // （§11.3 第 4 行），先按现场证据记 `published`，再补完同一次操作的元数据事务。
+        RecoveryDecision::Complete => {
+            if intent.phase == PutPhase::Prepared {
+                match log
+                    .advance_put(intent.intent_id, PutPhase::Published, at)
+                    .await
+                {
+                    Ok(_) => finish_metadata(store, at, intent).await,
+                    Err(error) => unresolved(error.code(), error.to_string()),
+                }
+            } else {
+                finish_metadata(store, at, intent).await
+            }
+        }
         // 现场被外部改成第三种内容：保留双方可读版本，不覆盖、不提交。
         RecoveryDecision::Reconcile { reason } => RecoveryOutcome::Preserved { reason },
         // 读不到现场 / 已被标 needs_recovery / 证据矛盾：落盘暂停，交给人核对。
@@ -736,10 +749,44 @@ mod tests {
                 "现场已是目标内容时不得再发布一次（阶段 {phase}）"
             );
             assert_eq!(store.writes.len(), 1);
-            // 补完的事务就是 put 的元数据事务：输入是发布后的 published 意图，收尾由适配器事务完成。
+            // 补完的事务就是 put 的元数据事务：输入是发布后的意图，收尾由适配器事务完成。
             assert_eq!(store.writes[0].intent_id, intent_id(0x41));
-            assert_eq!(log.intents[0].phase, phase);
+            assert_eq!(log.intents[0].phase, PutPhase::Published);
         }
+    }
+
+    #[tokio::test]
+    async fn published_target_with_unrecorded_phase_is_recorded_before_the_transaction() {
+        // 崩溃点在“发布完成、`published` 还没写”：现场已是后 hash，阶段仍是 `prepared`。
+        let mut log = FakeIntentLog {
+            intents: vec![intent(PutPhase::Prepared)],
+            ..FakeIntentLog::default()
+        };
+        let mut target = FakeTarget::present(&snapshot(HEX_A, 5));
+        let mut store = FakePutStore::for_entry(file_baseline(root_id(0x21)));
+        let report = recover_root(
+            &mut log,
+            &mut target,
+            &mut store,
+            user_time(200),
+            root_id(0x21),
+        )
+        .await
+        .expect("恢复完成");
+        assert_eq!(report.intents[0].decision, RecoveryDecision::Complete);
+        assert_eq!(
+            report.intents[0].outcome,
+            RecoveryOutcome::Completed {
+                version: version_id(0x81)
+            }
+        );
+        assert_eq!(
+            log.intents[0].phase,
+            PutPhase::Published,
+            "按现场证据补记 published，收尾由元数据事务完成"
+        );
+        assert!(target.publishes.is_empty(), "不得再发布一次");
+        assert_eq!(store.writes.len(), 1);
     }
 
     #[tokio::test]

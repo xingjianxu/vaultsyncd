@@ -4,6 +4,8 @@
 resolver = "3"
 # tests/windows-integration 是 design §5.8 指定的 Windows 原生测试包（S009 起）：
 # 只在宿主用 `nix develop .#windows` + `cargo xwin build` 交叉编译，因此不进 default-members。
+# tests/server-integration 是服务端集成测试包（S037 起，design §5.8）：用真实文件的 inode/替换
+# 语义模拟工作目录发布，并在每个持久化边界强杀提交子进程，因此同样不进 default-members。
 # crates/platform-linux-server 是服务端 Linux 平台适配层（S013 起），只在 Linux 上编译；
 # 它的挂载准入需要直接调用 fstatfs/statx/ioctl，因此同样不进 default-members。
 members = [
@@ -17,6 +19,7 @@ members = [
     "crates/server-core",
     "crates/server-store",
     "crates/platform-windows",
+    "tests/server-integration",
     "tests/windows-integration",
     "tools/xtask",
 ]
