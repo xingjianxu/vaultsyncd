@@ -14,3 +14,4 @@ pub mod removal;
 pub mod restore_store;
 pub mod target;
 pub mod trash_store;
+pub mod upload_session;

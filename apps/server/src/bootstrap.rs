@@ -157,10 +157,12 @@ impl Service {
             );
         }
 
-        let router = http::router(
-            Arc::clone(&lifecycle),
-            Arc::new(auth::AuthContext::new(database.clone())),
-        );
+        let auth = Arc::new(auth::AuthContext::new(database.clone()));
+        let uploads = Arc::new(crate::uploads::UploadsContext::new(
+            Arc::clone(&auth),
+            &config.state_dir,
+        ));
+        let router = http::router(Arc::clone(&lifecycle), auth, uploads);
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
             shutdown.await;

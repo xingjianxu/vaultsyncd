@@ -21,6 +21,7 @@ pub mod http;
 pub mod lifecycle;
 pub mod logging;
 pub mod recovery;
+pub mod uploads;
 
 /// 退出码：正常停止。
 pub const EXIT_OK: u8 = 0;

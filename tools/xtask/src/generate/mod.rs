@@ -593,7 +593,11 @@ impl Model {
                     operation.operation_id, operation.success_type, operation.success_type
                 ));
             }
-            if let Some(request_type) = operation.request.as_ref().and_then(RequestBodyKind::json_schema) {
+            if let Some(request_type) = operation
+                .request
+                .as_ref()
+                .and_then(RequestBodyKind::json_schema)
+            {
                 if !self.schemas.contains_key(request_type) {
                     return Err(format!(
                         "端点 {} 的请求体引用了未定义的 schema `{request_type}`（{REF_PREFIX}…）",
@@ -989,11 +993,7 @@ fn build_operation(
 }
 
 /// 把路径参数的说明追加进端点文档行（生成的 TS 函数因此能说明每个参数是什么）。
-fn describe_path_params(
-    path: &str,
-    parameters: &[Parameter],
-    params: &[PathParam],
-) -> Vec<String> {
+fn describe_path_params(path: &str, parameters: &[Parameter], params: &[PathParam]) -> Vec<String> {
     let mut lines = Vec::new();
     for param in params {
         let Some(raw) = parameters.iter().find(|raw| raw.name == param.name) else {
@@ -1055,11 +1055,11 @@ fn build_path_params(path: &str, parameters: &[Parameter]) -> Result<Vec<PathPar
                 parameter.name, parameter.name
             ));
         }
-        if params.iter().any(|seen: &PathParam| seen.name == parameter.name) {
-            return Err(format!(
-                "路径 {path} 重复声明了参数 `{}`",
-                parameter.name
-            ));
+        if params
+            .iter()
+            .any(|seen: &PathParam| seen.name == parameter.name)
+        {
+            return Err(format!("路径 {path} 重复声明了参数 `{}`", parameter.name));
         }
         params.push(PathParam {
             name: parameter.name.clone(),

@@ -20,7 +20,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use tracing::warn;
 use vaultsyncd_protocol::generated::{
     ErrorBody, ErrorCode, ErrorEnvelope, HealthResponse, HealthStatus,
@@ -28,11 +28,16 @@ use vaultsyncd_protocol::generated::{
 
 use crate::auth::AuthContext;
 use crate::lifecycle::{Lifecycle, Phase};
+use crate::uploads::UploadsContext;
 
 /// 全部路由：健康探测（无认证）与认证端点（S043）。
 ///
 /// 状态直接就是进程级状态对象，业务端点由后续功能卡加入同一个 router 并从它取数据库与授权检查。
-pub fn router(lifecycle: Arc<Lifecycle>, auth: Arc<AuthContext>) -> Router {
+pub fn router(
+    lifecycle: Arc<Lifecycle>,
+    auth: Arc<AuthContext>,
+    uploads: Arc<UploadsContext>,
+) -> Router {
     let public = Router::new()
         .route("/v1/health", get(health))
         .with_state(lifecycle);
@@ -41,7 +46,18 @@ pub fn router(lifecycle: Arc<Lifecycle>, auth: Arc<AuthContext>) -> Router {
         .route("/v1/auth/refresh", post(super::auth::refresh))
         .route("/v1/auth/logout", post(super::auth::logout))
         .with_state(auth);
-    public.merge(authenticated)
+    let uploads_router = Router::new()
+        .route("/v1/roots/{root}/uploads", post(super::uploads::begin))
+        .route(
+            "/v1/roots/{root}/uploads/{upload}",
+            get(super::uploads::status),
+        )
+        .route(
+            "/v1/roots/{root}/uploads/{upload}/parts/{index}",
+            put(super::uploads::put_part),
+        )
+        .with_state(uploads);
+    public.merge(authenticated).merge(uploads_router)
 }
 
 async fn health(State(lifecycle): State<Arc<Lifecycle>>) -> Response {
@@ -108,7 +124,12 @@ mod tests {
             std::process::id()
         ));
         let database = crate::auth::test_database(&path).await;
-        router(lifecycle, Arc::new(crate::auth::AuthContext::new(database)))
+        let auth = Arc::new(crate::auth::AuthContext::new(database));
+        let uploads = Arc::new(crate::uploads::UploadsContext::new(
+            Arc::clone(&auth),
+            &std::env::temp_dir(),
+        ));
+        router(lifecycle, auth, uploads)
     }
 
     async fn get_health(lifecycle: Arc<Lifecycle>) -> (StatusCode, String) {

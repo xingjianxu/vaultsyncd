@@ -45,9 +45,11 @@ use vaultsyncd_server_core::auth::login::{LoginAttempt, LoginError, authenticate
 use vaultsyncd_server_core::auth::password::PasswordHasher;
 use vaultsyncd_server_core::auth::scope::{RootGrant, ScopeError, require_root_scope};
 use vaultsyncd_server_core::auth::session::{
-    self, IssuedSession, NewSessionRecord, Principal, RotationOutcome, SecretToken, SessionError,
+    self, IssuedSession, NewSessionRecord, RotationOutcome, SecretToken, SessionError,
     SessionPolicy, SessionRow, SessionStore, TokenDigest,
 };
+// 资源端点（上传等）需要把“已认证调用者”当作公开类型使用：身份类型由核心定义，这里只做再导出。
+pub use vaultsyncd_server_core::auth::session::Principal;
 use vaultsyncd_server_core::auth::throttle::{LoginThrottle, ThrottlePolicy};
 use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::sessions::{self as store_sessions, DIGEST_LEN};

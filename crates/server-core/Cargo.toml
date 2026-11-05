@@ -27,6 +27,9 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 # 会话凭据只存摘要（design §17.1）：摘要用 SHA-256，与内容哈希、存储层的请求摘要同一算法，
 # 避免项目里出现两套摘要惯例。
 sha2 = "0.10"
+# 块几何（块数/每块长度）与流式 SHA-256 只在传输层定义一份（design §5.4 `crates/transfer`）：
+# 客户端上传快照与服务端接收固定块必须按同一份定义切块、算摘要。
+vaultsyncd-transfer = { path = "../transfer" }
 
 [dev-dependencies]
 # 意图状态机是异步端口（服务端存储层是异步 SQLx）：测试用 `#[tokio::test]` 驱动内存假端口。

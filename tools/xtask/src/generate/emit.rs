@@ -320,7 +320,11 @@ fn render_typescript_client(config: &GenerationConfig, model: &Model) -> String 
     for operation in &model.operations {
         decoders.push(format!("decode{}", operation.success_type));
         types.push(operation.success_type.clone());
-        if let Some(request_type) = operation.request.as_ref().and_then(RequestBodyKind::json_schema) {
+        if let Some(request_type) = operation
+            .request
+            .as_ref()
+            .and_then(RequestBodyKind::json_schema)
+        {
             types.push(request_type.clone());
         }
     }

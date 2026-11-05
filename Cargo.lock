@@ -2006,6 +2006,7 @@ dependencies = [
  "sha2",
  "tokio",
  "vaultsyncd-domain",
+ "vaultsyncd-transfer",
 ]
 
 [[package]]
