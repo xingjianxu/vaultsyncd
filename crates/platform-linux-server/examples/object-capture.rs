@@ -31,7 +31,7 @@ use vaultsyncd_server_core::objects::{
 };
 use vaultsyncd_server_core::ports::object_store::{
     BlobError, CopyFallback, CopyMethod, FileKey, ObjectBlobPort, PublishedBlob, StagedBlob,
-    StorageFailure, StoredBytes, StoredFacts,
+    StorageFailure, StoredBytes, StoredFacts, StoredSlice,
 };
 
 fn main() -> ExitCode {
@@ -368,6 +368,32 @@ impl ObjectBlobPort for LinuxObjectPort {
         Ok(StoredBytes {
             bytes: data.len() as u64,
             digest: ContentDigest::from_bytes(files::hash::digest(&data)),
+            data,
+        })
+    }
+
+    fn read_object_range(
+        &mut self,
+        object: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<StoredSlice, BlobError> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = fs::File::open(object).map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound => BlobError::ObjectMissing {
+                detail: object.display().to_string(),
+            },
+            _ => map_io("open_object", &error),
+        })?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| map_io("seek_object", &error))?;
+        let mut data = Vec::new();
+        let read = file
+            .take(length)
+            .read_to_end(&mut data)
+            .map_err(|error| map_io("read_object_range", &error))?;
+        Ok(StoredSlice {
+            bytes: read as u64,
             data,
         })
     }

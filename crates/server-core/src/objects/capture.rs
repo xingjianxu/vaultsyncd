@@ -296,7 +296,7 @@ mod tests {
     use crate::objects::error::ReadFailureReason;
     use crate::objects::read::read_object;
     use crate::ports::object_store::{
-        FileKey, PublishedBlob, StorageFailure, StoredBytes, StoredFacts,
+        FileKey, PublishedBlob, StorageFailure, StoredBytes, StoredFacts, StoredSlice,
     };
     use std::path::{Path, PathBuf};
 
@@ -399,6 +399,18 @@ mod tests {
         fn read_object(&mut self, object: &Path) -> Result<StoredBytes, BlobError> {
             self.verified.push(object.to_path_buf());
             self.read.take().expect("测试必须预设 read 结果")
+        }
+
+        fn read_object_range(
+            &mut self,
+            object: &Path,
+            _offset: u64,
+            _length: u64,
+        ) -> Result<StoredSlice, BlobError> {
+            self.verified.push(object.to_path_buf());
+            Err(BlobError::InvalidRequest {
+                detail: "本用例不读区间".to_owned(),
+            })
         }
     }
 

@@ -11,7 +11,6 @@
 use vaultsyncd_domain::ids::UploadId;
 
 use crate::api::uploads::{PartWrite, StoredPart, UploadFailure, UploadSession};
-
 /// 读写上传会话与已收块的端口。
 ///
 /// 不变量（由适配器保证）：所有读写都限定在调用方的 owner scope 内；`record_part` 在同一索引
@@ -35,6 +34,20 @@ pub trait UploadSessionStore {
         upload: UploadId,
         part: &StoredPart,
     ) -> Result<PartWrite, UploadFailure>;
+
+    /// 读会话已登记的块，按索引升序（finalize 的拼装输入）。
+    async fn parts(&mut self, upload: UploadId) -> Result<Vec<StoredPart>, UploadFailure>;
+
+    /// 标记“块已齐，等待 finalize”（`open → complete`）。
+    ///
+    /// 适配器必须在落库前确认没有缺失块：不完整的会话不得进入 `complete`（design I05）。
+    async fn mark_complete(&mut self, upload: UploadId) -> Result<(), UploadFailure>;
+
+    /// 标记已发布为内容对象（`complete → finalized`，终态）。
+    async fn mark_finalized(&mut self, upload: UploadId) -> Result<(), UploadFailure>;
+
+    /// 放弃会话（终态）：finalize 校验失败或客户端取消。
+    async fn abort(&mut self, upload: UploadId) -> Result<(), UploadFailure>;
 }
 
 /// 把一块字节落到私有暂存的端口。
