@@ -26,15 +26,15 @@
 | S013 | Linux 存储准入原型 | L | S007、S004 | done | 产出提交 `6f05033`（父提交 `a6aed74`；worktree `/wrd/prj/vaultsyncd/.worktrees/s013-s014`，分支 `feat/S013-S014-linux-storage`） | 新增 `crates/platform-linux-server` 的 `mounts/` 准入：真实 btrfs 卷上 `run-storage-admission.sh` 60/100 项通过、`run-reflink.sh` 7 项 0 失败，宿主 19 单测、clippy/fmt/metadata 全 0；拒绝 tmpfs/overlay/loop ext4/嵌套子卷/子挂载/NOCOW | 无（FUSE/NFS/SMB 仅单测分类） | agent/tasks/S013.md |
 | S014 | Linux 普通文件发布原型 | L | S013 | done | 产出提交 `61a218b`（父提交 `6f05033`；worktree `.worktrees/s013-s014`，分支 `feat/S013-S014-linux-storage`） | `files/` 受限句柄发布：`run-file-publish.sh` 100/100 项通过（openat2 拒绝符号链接/`..`/绝对路径、FICLONE 同卷与跨文件系统 EXDEV 回退、两步受控替换与外部竞争保留候选、对象隔离），宿主 36 单测、clippy/fmt 0 | 无 | agent/tasks/S014.md |
 | S015 | 定义身份与有界计数类型 | L | S004 | done | 产出提交 `b83d258`（父提交 `455786c`；worktree `.worktrees/s015`，分支 `feat/S015-domain-identity-counters`；master 合并 `55e2252`） | 新增 `crates/domain/src/{ids,version}.rs`：7 类不透明身份（规范文本/Debug/`FromStr` 往返、大写解析、8 条非法文本拒绝）+ `Revision`/`RootSeq`/`Generation`/`ServerEpoch` 有界计数（`i64::MAX` 与 2^53 边界往返、12 条非法文本、`next` 不回绕）；`IdSource`/`Clock` 注入确定。`cargo test -p vaultsyncd-domain` 14 passed、clippy/fmt/doc/metadata/check/test 全 0 | 无（OS 随机源与 Windows identity 统一留给适配层卡） | agent/tasks/S015.md |
-| S016 | 定义状态维度与错误分类 | L | S015 | todo | — | 未执行 | — | agent/tasks/S016.md（执行时创建） |
-| S017 | 路径与名称纯规则 | L | S015 | todo | — | 未执行 | — | agent/tasks/S017.md（执行时创建） |
+| S016 | 定义状态维度与错误分类 | L | S015 | done | 产出提交 `01e36a6` + 冲突合并 `a03a3d5`（父提交 `4d69f77`；worktree `.worktrees/s016`；master 合并 `4db6927`） | `crates/domain/src/state.rs`：六维正交状态 + `project`/`is_synced`（`dirty+offline+materialized` 可共存，`Pending`/`BlockedByLocal`/`Conflicted` 均不判已同步）；`error.rs`：`ErrorClass` + 23 个 `ErrorCode` 往返。`cargo test -p vaultsyncd-domain` 32 passed（新增 18）、clippy/fmt/doc/workspace 四步全 0 | 无 | agent/tasks/S016.md |
+| S017 | 路径与名称纯规则 | L | S015 | done | 产出提交 `a67e61a`（父提交 `4d69f77`；worktree `.worktrees/s017`；master 合并 `29b402e`） | 新增 `crates/fs-common`：`RelativePath::parse` 只接受规范相对分量（拒绝绝对/UNC/盘符/NUL/空分量/`.`/`..`，不自动小写不改名）；`validate_name` 按固定顺序分类 Windows 保留名/尾部点空格/控制字符/255 字节+255 码元双上限；`relation`/`is_within` 按分量判重叠；`NameEquivalence` 端口留给平台层。`cargo test -p vaultsyncd-fs-common` 19 passed、clippy/fmt/doc 全 0 | 无（原生等价语义待 S065） | agent/tasks/S017.md |
 | S018 | 排除规则与解释 | L | S017 | todo | — | 未执行 | — | agent/tasks/S018.md（执行时创建） |
 | S019 | 三方规划基本分支 | L | S015、S016、S017 | todo | — | 未执行 | — | agent/tasks/S019.md（执行时创建） |
 | S020 | 首次合并规划 | L | S019 | todo | — | 未执行 | — | agent/tasks/S020.md（执行时创建） |
 | S021 | 内容冲突及稳定副本身份 | L | S019 | todo | — | 未执行 | — | agent/tasks/S021.md（执行时创建） |
 | S022 | 移动与删除冲突规划 | L | S020、S021 | todo | — | 未执行 | — | agent/tasks/S022.md（执行时创建） |
 | S023 | 规划器操作重排验证 | L | S022 | todo | — | 未执行 | — | agent/tasks/S023.md（执行时创建） |
-| S024 | 远端协议最小契约与生成通路 | L | S015、S006 | todo | — | 未执行 | — | agent/tasks/S024.md（执行时创建） |
+| S024 | 远端协议最小契约与生成通路 | L | S015、S006 | done | 产出提交 `fc0d551` + 冲突合并 `47bf26c`（父提交 `4d69f77`；worktree `.worktrees/s024`；master 合并 `8c22892`） | `api/{openapi.yaml,generation.toml}` + `crates/protocol` + `packages/api-client` + `cargo xtask generate`/`--check`：同源生成 Rust DTO 与 TS client 双方编译、重生成无 diff；`cargo xtask check` 5/5、契约测试 13 项、`pnpm --filter @vaultsyncd/api-client test` 9 项 pass；负控：手改生成文件→check 退 1，删 `RATE_LIMITED`→契约测试失败 | 无 | agent/tasks/S024.md |
 | S025 | 本机 IPC 最小契约与生成通路 | L | S016、S024 | todo | — | 未执行 | — | agent/tasks/S025.md（执行时创建） |
 | S026 | 服务端数据库迁移框架 | L | S015、S007 | todo | — | 未执行 | — | agent/tasks/S026.md（执行时创建） |
 | S027 | 服务端命名空间表与约束 | L | S026 | todo | — | 未执行 | — | agent/tasks/S027.md（执行时创建） |
