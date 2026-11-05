@@ -44,6 +44,8 @@ pub(crate) struct FsState {
     pub(crate) dirs: BTreeSet<String>,
     pub(crate) symlinks: BTreeSet<String>,
     pub(crate) unreadable_dirs: BTreeSet<String>,
+    /// 目录项仍被列出，但进入时已确认不存在（并发删除）。
+    pub(crate) gone_dirs: BTreeSet<String>,
     pub(crate) unreadable_files: BTreeSet<String>,
     pub(crate) root_unavailable: bool,
     pub(crate) unrepresentable_in: BTreeMap<String, usize>,
@@ -159,6 +161,11 @@ impl WorkTreePort for FakeWorkTree {
         if fs.root_unavailable {
             return Err(WorkTreeError::RootUnavailable {
                 detail: "挂载身份漂移".to_owned(),
+            });
+        }
+        if fs.gone_dirs.contains(dir) {
+            return Err(WorkTreeError::Gone {
+                path: dir.to_owned(),
             });
         }
         if fs.unreadable_dirs.contains(dir) {

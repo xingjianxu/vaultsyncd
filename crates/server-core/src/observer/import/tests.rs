@@ -118,10 +118,17 @@ async fn ssh_created_file_becomes_a_version_and_event_after_the_stable_window() 
 
     // 窗口满：采集并采纳，版本与事件同时出现。
     let adopted = harness.pass(1).await;
-    let FileState::Adopted { record, created } = state_of(&adopted, "notes/a.txt") else {
+    let FileState::Adopted {
+        record,
+        created,
+        copy_method,
+        ..
+    } = state_of(&adopted, "notes/a.txt")
+    else {
         panic!("窗口满应当被采纳：{:?}", adopted.outcomes);
     };
     assert!(*created);
+    assert_eq!(*copy_method, CopyMethod::Reflink);
     assert_eq!(record.digest, digest_of(b"hello"));
     assert_eq!(record.size, 5);
     assert_eq!(harness.store.versions.len(), 1);
@@ -162,7 +169,10 @@ async fn ssh_edited_file_produces_a_new_version_with_advanced_revision() {
         PendingReason::Waiting { quiet_ms: 0 }
     ));
     let adopted = harness.pass(WINDOW_MS).await;
-    let FileState::Adopted { record, created } = state_of(&adopted, "a.txt") else {
+    let FileState::Adopted {
+        record, created, ..
+    } = state_of(&adopted, "a.txt")
+    else {
         panic!("改内容应产生新版本：{:?}", adopted.outcomes);
     };
     assert!(!created);
@@ -641,4 +651,25 @@ fn staging_prefix_and_capture_budget_are_validated() {
         PassLimits::new(ScanLimits::new(1).expect("合法"), 0),
         Err(ObserverConfigError::NoCaptureBudget)
     );
+}
+
+#[tokio::test]
+async fn permanently_unreadable_directory_does_not_starve_other_files() {
+    let mut harness = Harness::new();
+    {
+        let mut fs = harness.fs.borrow_mut();
+        fs.write("ok/one.txt", b"1");
+        fs.write("locked/two.txt", b"2");
+        fs.unreadable_dirs.insert("locked".to_owned());
+    }
+    harness.pass(0).await;
+    // 续扫游标只剩读不了的目录，其余文件靠复查推进稳定窗口。
+    let report = harness.pass(WINDOW_MS).await;
+    assert!(matches!(
+        state_of(&report, "ok/one.txt"),
+        FileState::Adopted { .. }
+    ));
+    assert!(!report.scan_complete);
+    assert!(!report.initial_import_complete);
+    assert!(!harness.observer.history_protected("locked/two.txt"));
 }

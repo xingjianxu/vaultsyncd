@@ -178,6 +178,22 @@ fn root_unavailable_stops_the_scan_without_any_file_or_deletion_conclusion() {
     );
 }
 
+#[test]
+fn directory_deleted_after_listing_is_gone_not_unreadable() {
+    let fs = shared_fs();
+    {
+        let mut state = fs.borrow_mut();
+        state.write("keep.txt", b"k");
+        state.write("racy/inner.txt", b"i");
+        state.gone_dirs.insert("racy".to_owned());
+    }
+    let mut work = FakeWorkTree::new(&fs);
+    let report = scan_tree(&mut work, limits(100), ScanCursor::from_root());
+    // 已确认不存在的目录不会让扫描永远无法完成，也不会产生任何删除结论。
+    assert!(report.completion.is_complete());
+    assert_eq!(paths(&report), ["keep.txt"]);
+}
+
 fn stamp(ctime: i64, mtime: i64, bytes: u64) -> FileStamp {
     use crate::ports::object_store::FileKey;
     FileStamp {

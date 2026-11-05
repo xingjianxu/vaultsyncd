@@ -31,12 +31,12 @@ use crate::observer::capture::{
     capture_external,
 };
 use crate::observer::scan::{
-    InconclusiveReason, ScanCompletion, ScanCursor, ScanLimits, SkippedEntry, Stability,
-    StabilityTracker, StabilityWindow, scan_tree,
+    InconclusiveReason, ScanCompletion, ScanCursor, ScanLimits, ScannedFile, SkippedEntry,
+    Stability, StabilityTracker, StabilityWindow, scan_tree,
 };
 use crate::ports::external_store::{ExternalAdoptStore, ExternalRecord};
-use crate::ports::object_store::ObjectBlobPort;
-use crate::ports::work_tree::{FileStamp, WorkTreePort};
+use crate::ports::object_store::{CopyFallback, CopyMethod, ObjectBlobPort};
+use crate::ports::work_tree::{FileStamp, WorkObservation, WorkTreeError, WorkTreePort};
 
 /// 一轮的预算。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +111,10 @@ pub enum FileState {
         record: ExternalRecord,
         /// 是否新建条目。
         created: bool,
+        /// 候选副本的来源方式（reflink 或校验复制）。
+        copy_method: CopyMethod,
+        /// 没走克隆的原因（跨卷或文件系统不支持时非空）。
+        copy_fallback: Option<CopyFallback>,
     },
     /// 库里已有相同内容，没有新版本。
     UnchangedContent,
@@ -288,8 +292,15 @@ impl ExternalObserver {
 
         let mut outcomes = Vec::new();
         let mut candidates: Vec<(String, FileStamp)> = Vec::new();
+        let mut files = scan.files;
+        let mut aborted = root_unavailable;
         if !root_unavailable {
-            for file in scan.files {
+            // 续扫只覆盖游标里的目录；之前已见过、仍待处理的文件要在这一轮单独复查，否则一个一直读不了
+            // 的目录或一次被截断的扫描会让其他文件的稳定窗口永远不推进。
+            aborted |= self.recheck_pending(&mut *ports.work, limits, &mut files);
+        }
+        if !aborted {
+            for file in files {
                 self.cycle_seen.insert(file.path.clone());
                 if self.adopted.get(&file.path) == Some(&file.stamp) {
                     self.pending.remove(&file.path);
@@ -310,7 +321,6 @@ impl ExternalObserver {
         }
 
         let mut captures = 0usize;
-        let mut aborted = root_unavailable;
         for (path, stamp) in candidates {
             if aborted {
                 break;
@@ -348,6 +358,37 @@ impl ExternalObserver {
             root_unavailable: aborted,
             initial_import_complete: self.initial_import_complete,
         }
+    }
+
+    /// 复查本轮扫描没有覆盖到的待处理文件，把仍是普通文件的并入 `files`；返回 Root 是否不可用。
+    ///
+    /// 复查读不到（权限等）的文件保持待处理，不当成消失；只有确认路径不存在才移出待处理——它从未
+    /// 被采纳，没有历史可保护，也没有可传播的删除。
+    fn recheck_pending(
+        &mut self,
+        work: &mut dyn WorkTreePort,
+        limits: PassLimits,
+        files: &mut Vec<ScannedFile>,
+    ) -> bool {
+        let scanned: BTreeSet<&str> = files.iter().map(|file| file.path.as_str()).collect();
+        let wanted: Vec<String> = self
+            .pending
+            .keys()
+            .filter(|path| !scanned.contains(path.as_str()))
+            .take(limits.scan.max_entries())
+            .cloned()
+            .collect();
+        for path in wanted {
+            match work.observe(&path) {
+                Ok(WorkObservation::File(stamp)) => files.push(ScannedFile { path, stamp }),
+                Ok(WorkObservation::Absent | WorkObservation::NotRegular(_)) => {
+                    self.settle(&path);
+                }
+                Err(WorkTreeError::RootUnavailable { .. }) => return true,
+                Err(_) => {}
+            }
+        }
+        false
     }
 
     /// 处理一个稳定文件；返回结局与“Root 是否不可用”。
@@ -402,7 +443,13 @@ impl ExternalObserver {
             Ok(AdoptOutcome::Adopted { record, created }) => {
                 self.adopted.insert(path.to_owned(), proposal.stamp);
                 self.settle(path);
-                (FileState::Adopted { record, created }, false)
+                let state = FileState::Adopted {
+                    record,
+                    created,
+                    copy_method: proposal.object.method,
+                    copy_fallback: proposal.object.fallback,
+                };
+                (state, false)
             }
             Ok(AdoptOutcome::UnchangedContent { .. }) => {
                 self.adopted.insert(path.to_owned(), proposal.stamp);

@@ -144,6 +144,11 @@ pub enum WorkTreeError {
         /// 原始错误文本。
         detail: String,
     },
+    /// 目录或文件已确认不存在（父目录可访问且没有该名字）：枚举与检查之间被并发删除/改名。
+    Gone {
+        /// 相对路径。
+        path: String,
+    },
     /// Root 本身不可用（挂载漂移、根句柄身份变化、跨越挂载边界）：整个 Root 暂停，不推导删除。
     RootUnavailable {
         /// 原因文本。
@@ -162,6 +167,7 @@ impl WorkTreeError {
     pub fn code(&self) -> &'static str {
         match self {
             WorkTreeError::Unreadable { .. } => "work_tree_unreadable",
+            WorkTreeError::Gone { .. } => "work_tree_gone",
             WorkTreeError::RootUnavailable { .. } => "root_unavailable",
             WorkTreeError::InvalidPath { .. } => "invalid_path",
         }
@@ -174,6 +180,7 @@ impl fmt::Display for WorkTreeError {
             WorkTreeError::Unreadable { path, detail } => {
                 write!(f, "工作目录路径 {path} 不可读：{detail}")
             }
+            WorkTreeError::Gone { path } => write!(f, "工作目录路径 {path} 已不存在"),
             WorkTreeError::RootUnavailable { detail } => write!(f, "Root 不可用：{detail}"),
             WorkTreeError::InvalidPath { detail } => write!(f, "路径不成立：{detail}"),
         }
@@ -191,7 +198,8 @@ impl std::error::Error for WorkTreeError {}
 /// 2. [`list_dir`](WorkTreePort::list_dir) 返回按名称字节序排序的列表；读不全就返回错误，
 ///    不返回截断的列表；
 /// 3. [`observe`](WorkTreePort::observe) 只有确认父目录可访问且没有该名字时才返回
-///    [`WorkObservation::Absent`]；
+///    [`WorkObservation::Absent`]；[`list_dir`](WorkTreePort::list_dir) 同理只有确认目录不存在才返回
+///    [`WorkTreeError::Gone`]；
 /// 4. 每次调用前核对 Root 身份，漂移时返回 [`WorkTreeError::RootUnavailable`]。
 pub trait WorkTreePort {
     /// 列出目录下的项。

@@ -271,6 +271,9 @@ pub fn scan_tree(
                 reasons.push(InconclusiveReason::RootUnavailable { detail });
                 break;
             }
+            // 目录在入队之后被并发删除/改名：确认不存在，没有什么可续扫的；若又出现，下一轮
+            // 从 Root 起点重扫会发现。
+            Err(WorkTreeError::Gone { .. }) => continue,
             Err(error) => {
                 reasons.push(InconclusiveReason::DirectoryUnreadable {
                     path: pending.path.clone(),
@@ -324,6 +327,7 @@ pub fn scan_tree(
                         reasons.push(InconclusiveReason::RootUnavailable { detail });
                         break 'dirs;
                     }
+                    Err(WorkTreeError::Gone { .. }) => {}
                     Err(error) => {
                         reasons.push(InconclusiveReason::EntryUnreadable {
                             path,
