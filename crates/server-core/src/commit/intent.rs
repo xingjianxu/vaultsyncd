@@ -30,11 +30,12 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use vaultsyncd_domain::error::ErrorCode;
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId};
-use vaultsyncd_domain::version::{ServerEpoch, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, IntentId, OpId, RootId};
+use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 
 use crate::commit::put::CommitGateError;
 use crate::objects::{ContentDigest, DigestParseError, ObjectLayout};
+use crate::ports::conflict_store::{ConflictStoreError, RequestDigest};
 use crate::ports::intent_log::{IntentLog, IntentLogError};
 use crate::ports::object_store::FileKey;
 use crate::ports::put_store::PutStoreError;
@@ -449,6 +450,34 @@ pub enum PutFailureReason {
     Gate(CommitGateError),
     /// 存储层失败（基线读取、对象查询或元数据事务）。
     Store(PutStoreError),
+    /// 同一 `OpId` 已用不同请求摘要登记过：协议错误，停止并交给人排查（I06）。
+    OpIdReused {
+        /// 被重复使用的操作身份。
+        op: OpId,
+        /// 首次登记时记录的请求摘要。
+        recorded: RequestDigest,
+        /// 本次请求的摘要。
+        requested: RequestDigest,
+    },
+    /// 该 `OpId` 已登记但尚未产生结果：`pending` 不是 committed，不得重做（I01、design §9.4）。
+    OperationPending {
+        /// 尚未收尾的操作身份。
+        op: OpId,
+    },
+    /// head revision 仍是请求基线：本次提交没有过期，不构成冲突副本。
+    ConflictNotStale {
+        /// 请求基线。
+        expected: Revision,
+        /// 库里的当前值。
+        actual: Revision,
+    },
+    /// head 内容已经等于请求内容：同结果只归并，不额外造副本（design §10.1 第二行）。
+    ContentAlreadyCommitted {
+        /// 已提交的内容摘要。
+        digest: ContentDigest,
+    },
+    /// 冲突提交的存储层失败（源条目现状、幂等记录或冲突事务）。
+    ConflictStore(ConflictStoreError),
     /// 存储层报告事务成功，但返回的证据与请求不一致：适配器缺陷，必须停写人工核对。
     StoreContract {
         /// 原因文本。
@@ -477,6 +506,11 @@ impl PutFailureReason {
             PutFailureReason::Gate(error) => error.code(),
             PutFailureReason::Store(error) => error.code(),
             PutFailureReason::StoreContract { .. } => "store_contract_violation",
+            PutFailureReason::OpIdReused { .. } => "op_id_reused",
+            PutFailureReason::OperationPending { .. } => "operation_pending",
+            PutFailureReason::ConflictNotStale { .. } => "conflict_not_stale",
+            PutFailureReason::ContentAlreadyCommitted { .. } => "content_already_committed",
+            PutFailureReason::ConflictStore(error) => error.code(),
         }
     }
 
@@ -494,6 +528,10 @@ impl PutFailureReason {
             PutFailureReason::Reconcile { .. } => Some(ErrorCode::ReconcileRequired),
             PutFailureReason::UnsupportedEntry { .. } => Some(ErrorCode::UnsupportedEntry),
             PutFailureReason::StoreContract { .. } => Some(ErrorCode::NeedsRecovery),
+            PutFailureReason::OpIdReused { .. } => Some(ErrorCode::OpIdReused),
+            PutFailureReason::OperationPending { .. } => Some(ErrorCode::NeedsRecovery),
+            PutFailureReason::ConflictNotStale { .. } => Some(ErrorCode::ReconcileRequired),
+            PutFailureReason::ContentAlreadyCommitted { .. } => Some(ErrorCode::ReconcileRequired),
             PutFailureReason::InvalidRequest { .. }
             | PutFailureReason::TargetUnreadable(_)
             | PutFailureReason::BeforeMismatch { .. }
@@ -503,7 +541,8 @@ impl PutFailureReason {
             | PutFailureReason::ObjectNotPersisted { .. }
             | PutFailureReason::ObjectSizeMismatch { .. }
             | PutFailureReason::Gate(_)
-            | PutFailureReason::Store(_) => None,
+            | PutFailureReason::Store(_)
+            | PutFailureReason::ConflictStore(_) => None,
         }
     }
 }
@@ -557,6 +596,28 @@ impl fmt::Display for PutFailureReason {
                 f,
                 "存储层报告提交成功但证据不一致：{detail}（必须停写人工核对）"
             ),
+            PutFailureReason::OpIdReused {
+                op,
+                recorded,
+                requested,
+            } => write!(
+                f,
+                "操作 {op} 已用请求摘要 {} 登记过，本次是 {}：同一 OpId 不同请求",
+                recorded.to_hex(),
+                requested.to_hex()
+            ),
+            PutFailureReason::OperationPending { op } => write!(
+                f,
+                "操作 {op} 已登记但尚未产生结果，不得重做，等恢复流程收尾"
+            ),
+            PutFailureReason::ConflictNotStale { expected, actual } => write!(
+                f,
+                "条目 revision 仍是请求基线 {expected}（当前 {actual}）：本次提交没有过期，不是冲突副本"
+            ),
+            PutFailureReason::ContentAlreadyCommitted { digest } => {
+                write!(f, "head 内容已经是 {digest}：同结果归并，不再造副本")
+            }
+            PutFailureReason::ConflictStore(error) => write!(f, "{error}"),
         }
     }
 }

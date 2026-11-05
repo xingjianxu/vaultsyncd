@@ -4,13 +4,19 @@
 //! [`Trace`] 里，用来断言“先持久意图再发布”这类顺序不变量。
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, IntentId, RootId, TxId, VersionId};
+use vaultsyncd_domain::ids::{DeviceId, EntryId, ID_LEN, IntentId, OpId, RootId, TxId, VersionId};
 use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
 
+use crate::commit::conflict::CommittedConflict;
 use crate::commit::intent::{NewPutIntent, PutIntent, PutPhase, TargetSnapshot};
 use crate::objects::ContentDigest;
+use crate::ports::conflict_store::{
+    ConflictBegin, ConflictCommitStore, ConflictHead, ConflictRecord, ConflictStoreError,
+    ConflictWrite, HeadSource, OperationKey, RecordedOperation, RequestDigest,
+};
 use crate::ports::intent_log::{IntentLog, IntentLogError};
 use crate::ports::object_store::FileKey;
 use crate::ports::put_store::{
@@ -64,6 +70,18 @@ pub(crate) fn root_id(marker: u8) -> RootId {
 
 pub(crate) fn entry_id(marker: u8) -> EntryId {
     EntryId::from_bytes(identity(marker))
+}
+
+pub(crate) fn device_id(marker: u8) -> DeviceId {
+    DeviceId::from_bytes(identity(marker))
+}
+
+pub(crate) fn op_id(marker: u8) -> OpId {
+    OpId::from_bytes(identity(marker))
+}
+
+pub(crate) fn request_digest(marker: u8) -> RequestDigest {
+    RequestDigest::from_bytes([marker; 32])
 }
 
 pub(crate) fn user_time(seconds: i64) -> UtcTimestamp {
@@ -366,5 +384,195 @@ pub(crate) fn file_baseline(root: RootId) -> EntryBaseline {
         name: "note.txt".to_owned(),
         revision: revision(7),
         kind: EntryKind::File,
+    }
+}
+
+/// 测试用服务器 head 内容摘要（与请求内容不同）。
+pub(crate) const HEAD_HEX: &str =
+    "3333333333333333333333333333333333333333333333333333333333333333";
+
+/// 内存冲突提交存储：脚本化每个读方法的错误、`begin_conflict` 的并发剧本与事务结果，并记录被写入的
+/// 事务输入。成功的 `apply_conflict` 会把结果记进“已提交记录”，因此“先提交、再重试”在假端口上也
+/// 走真实的重放路径。
+pub(crate) struct FakeConflictStore {
+    pub(crate) trace: Trace,
+    pub(crate) head: ConflictHead,
+    pub(crate) recorded: Vec<(OperationKey, RecordedOperation)>,
+    pub(crate) head_error: Option<ConflictStoreError>,
+    pub(crate) operation_error: Option<ConflictStoreError>,
+    pub(crate) begin_error: Option<ConflictStoreError>,
+    /// 依次替换 `begin_conflict` 的返回，用来模拟并发进程先一步登记或提交。
+    pub(crate) begin_script: VecDeque<ConflictBegin>,
+    pub(crate) apply_error: Option<ConflictStoreError>,
+    pub(crate) writes: Vec<ConflictWrite>,
+    pub(crate) record: Option<ConflictRecord>,
+}
+
+impl FakeConflictStore {
+    /// 源条目 revision 已到 9（请求基线 7 已过期）、内容是 `HEAD_HEX` 的普通文件。
+    pub(crate) fn for_source() -> Self {
+        FakeConflictStore {
+            trace: Trace::default(),
+            head: ConflictHead {
+                epoch: epoch(3),
+                source: Some(HeadSource {
+                    entry: entry_id(0x51),
+                    revision: revision(9),
+                    kind: EntryKind::File,
+                    content: Some(ContentDigest::from_hex(HEAD_HEX).expect("测试用摘要合法")),
+                }),
+            },
+            recorded: Vec::new(),
+            head_error: None,
+            operation_error: None,
+            begin_error: None,
+            begin_script: VecDeque::new(),
+            apply_error: None,
+            writes: Vec::new(),
+            record: None,
+        }
+    }
+
+    /// 让下一次 `operation` 返回一条已提交记录（同一 OpId、同一摘要）。
+    pub(crate) fn record_result(
+        &mut self,
+        key: OperationKey,
+        digest: RequestDigest,
+        result: CommittedConflict,
+    ) {
+        self.recorded.push((
+            key,
+            RecordedOperation {
+                digest,
+                result: Some(result),
+            },
+        ));
+    }
+
+    fn lookup(&self, key: OperationKey) -> Option<RecordedOperation> {
+        self.recorded
+            .iter()
+            .find(|(recorded, _)| *recorded == key)
+            .map(|(_, record)| record.clone())
+    }
+
+    /// 默认的“成功事务”证据：由事务输入派生（副本身份/路径/内容一致、阶段 finalized）。
+    fn default_record(write: &ConflictWrite) -> ConflictRecord {
+        ConflictRecord {
+            intent_id: write.intent_id,
+            phase: PutPhase::Finalized,
+            conflict: CommittedConflict {
+                op: write.key.op,
+                source: write.source,
+                sibling: write.sibling,
+                path: write.path.clone(),
+                content: write.content,
+                revision: revision(1),
+                seq: root_seq(21),
+            },
+            tx: tx_id(0x72),
+        }
+    }
+}
+
+impl ConflictCommitStore for FakeConflictStore {
+    async fn conflict_head(
+        &mut self,
+        root: RootId,
+        source: EntryId,
+    ) -> Result<ConflictHead, ConflictStoreError> {
+        self.trace
+            .record(format!("store conflict_head {root} {source}"));
+        match self.head_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.head.clone()),
+        }
+    }
+
+    async fn operation(
+        &mut self,
+        key: OperationKey,
+    ) -> Result<Option<RecordedOperation>, ConflictStoreError> {
+        self.trace.record(format!("store operation {}", key.op));
+        match self.operation_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.lookup(key)),
+        }
+    }
+
+    async fn begin_conflict(
+        &mut self,
+        key: OperationKey,
+        digest: RequestDigest,
+    ) -> Result<ConflictBegin, ConflictStoreError> {
+        self.trace
+            .record(format!("store begin_conflict {} {:?}", key.op, digest));
+        if let Some(error) = self.begin_error.take() {
+            return Err(error);
+        }
+        if let Some(scripted) = self.begin_script.pop_front() {
+            return Ok(scripted);
+        }
+        if let Some(record) = self.lookup(key) {
+            return Ok(ConflictBegin::Recorded(record));
+        }
+        self.recorded.push((
+            key,
+            RecordedOperation {
+                digest,
+                result: None,
+            },
+        ));
+        Ok(ConflictBegin::Started)
+    }
+
+    async fn apply_conflict(
+        &mut self,
+        write: &ConflictWrite,
+    ) -> Result<ConflictRecord, ConflictStoreError> {
+        self.trace.record("store apply_conflict".to_owned());
+        self.writes.push(write.clone());
+        if let Some(error) = self.apply_error.take() {
+            return Err(error);
+        }
+        let record = self
+            .record
+            .clone()
+            .unwrap_or_else(|| Self::default_record(write));
+        // 事务提交后的记录：pending 行原地变成终态，重试走重放而不是再造一份副本。
+        let entry = (
+            write.key,
+            RecordedOperation {
+                digest: write.digest,
+                result: Some(record.conflict.clone()),
+            },
+        );
+        match self
+            .recorded
+            .iter_mut()
+            .find(|(recorded, _)| *recorded == write.key)
+        {
+            Some(slot) => *slot = entry,
+            None => self.recorded.push(entry),
+        }
+        Ok(record)
+    }
+}
+
+/// 计数式身份来源：从给定的字节开始逐个递增，让冲突条目身份在测试里可复现。
+pub(crate) struct CountingIds {
+    next: u8,
+}
+
+impl CountingIds {
+    pub(crate) fn new(start: u8) -> Self {
+        CountingIds { next: start }
+    }
+}
+
+impl vaultsyncd_domain::ids::IdSource for CountingIds {
+    fn next_id_bytes(&mut self) -> [u8; ID_LEN] {
+        self.next += 1;
+        [self.next; ID_LEN]
     }
 }
