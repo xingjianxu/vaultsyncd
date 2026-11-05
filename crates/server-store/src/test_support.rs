@@ -8,10 +8,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use sqlx::{Sqlite, Transaction};
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, UserId};
+use vaultsyncd_domain::ids::{DeviceId, EntryId, ID_LEN, OpId, RootId, TxId, UserId};
 use vaultsyncd_domain::version::ServerEpoch;
 
 use crate::db::Database;
+use crate::entries::{self, EntryKind, NewEntry};
 use crate::roots::{self, NewRoot};
 
 /// 测试独占的临时目录；`Drop` 时整个删除。
@@ -70,6 +71,18 @@ pub(crate) fn entry(marker: u8) -> EntryId {
     EntryId::from_bytes([marker; ID_LEN])
 }
 
+pub(crate) fn tx(marker: u8) -> TxId {
+    TxId::from_bytes([marker; ID_LEN])
+}
+
+pub(crate) fn device(marker: u8) -> DeviceId {
+    DeviceId::from_bytes([marker; ID_LEN])
+}
+
+pub(crate) fn op(marker: u8) -> OpId {
+    OpId::from_bytes([marker; ID_LEN])
+}
+
 /// 写一个测试账号；`login` 用身份文本保证唯一。
 pub(crate) async fn insert_user(tx: &mut Transaction<'_, Sqlite>, id: UserId) {
     sqlx::query(
@@ -117,4 +130,38 @@ pub(crate) async fn register_root(
     .expect("注册测试 Root");
     tx.commit().await.expect("提交测试 Root");
     (root, root_entry)
+}
+
+/// 在给定父目录下写一个文件条目并提交，返回其身份。
+///
+/// 内容版本不在新建时指定：版本必须由 `versions::record_version` 在条目存在后写入
+/// （`NewEntry::content_version` 只接受已记录到该条目的版本）。
+pub(crate) async fn seed_file(
+    database: &Database,
+    owner: UserId,
+    root: RootId,
+    parent: EntryId,
+    marker: u8,
+    name: &str,
+) -> EntryId {
+    let id = entry(marker);
+    let mut tx = database.begin_write().await.expect("开始写事务");
+    entries::insert_entry(
+        &mut tx,
+        owner,
+        &NewEntry {
+            id,
+            root,
+            parent,
+            name: name.to_owned(),
+            name_key: name.to_owned(),
+            kind: EntryKind::File,
+            revision: vaultsyncd_domain::version::Revision::new(1).expect("修订号"),
+            content_version: None,
+        },
+    )
+    .await
+    .expect("写测试文件条目");
+    tx.commit().await.expect("提交测试文件条目");
+    id
 }

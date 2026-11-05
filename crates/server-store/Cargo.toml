@@ -22,6 +22,9 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
     "derive",
 ] }
+# 请求摘要用 SHA-256：与内容哈希（design §7.1 `ContentHash`）同一算法，避免项目里出现两套摘要惯例。
+# 该版本已由 sqlx 传递引入（Cargo.lock 已有 `sha2 0.10.9`），这里只是增加一条直接依赖边。
+sha2 = "0.10"
 vaultsyncd-domain = { path = "../domain" }
 vaultsyncd-fs-common = { path = "../fs-common" }
 
