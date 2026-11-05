@@ -1,0 +1,30 @@
+[package]
+name = "vaultsyncd-platform-windows"
+description = "Windows 平台适配层：CFAPI 同步根注册、占位创建与 FileIdentity 编码原型（docs/design.md §5.3、§14.2）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 本包直接声明并调用 Win32/Cloud Files API，必须放行 unsafe_code，而根
+# `[workspace.lints.rust]` 是 deny。S010 实测两种写法都不可行：
+#   1) `[lints] workspace = true` 加包级 `[lints.rust] unsafe_code = "allow"` →
+#      "cannot override `workspace.lints` in `lints`"；
+#   2) `[lints] workspace = false` → "`workspace` cannot be false"。
+# 因此这里省略 `workspace` 键（等价于不继承），改成显式复制 workspace 的其余 lint：
+# 实测 missing_docs、unused 与 clippy::all 仍然生效（负控见 agent/tasks/S010.md）。
+# 修改根 `[workspace.lints]` 时必须同步本表，否则本包会静默偏离项目 lint 基线。
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "deny"
+unused = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+# 原型命令：create / inspect / cleanup 三个子命令，参数里带同步根路径。
+# 用 example 而非 bin，是因为它只在 Windows 客体上做实验，不属于产品入口；
+# `cargo xwin build --examples` 就能交叉构建，且不会混进 `cargo build` 的默认产物。
+[[example]]
+name = "cfapi-prototype"
+path = "examples/cfapi_prototype.rs"

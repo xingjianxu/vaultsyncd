@@ -7,6 +7,10 @@ name = "vaultsyncd-domain"
 version = "0.1.0"
 
 [[package]]
+name = "vaultsyncd-platform-windows"
+version = "0.1.0"
+
+[[package]]
 name = "vaultsyncd-windows-tests"
 version = "0.1.0"
 

@@ -12,6 +12,13 @@ SMOKE_BINARIES=("platform-smoke" "cfapi-link-smoke")
 # 产物落在仓库内被 .gitignore 忽略的 artifacts/ 下，按目标三元组分目录。
 ARTIFACT_SUBDIR="windows/${TARGET_TRIPLE}"
 
+# S010：CFAPI 原型包与 example 二进制。独立于上面的模拟冒烟入口，S009 的用法保持不变。
+PLATFORM_PACKAGE="vaultsyncd-platform-windows"
+CFAPI_PROTOTYPE_BINARY="cfapi-prototype"
+# 原型在客体上的工作目录与专用同步根（客体本地 NTFS，不用共享文件夹）。
+CFAPI_GUEST_DIR="${CFAPI_GUEST_DIR:-C:/vaultsyncd-lab/s010}"
+CFAPI_ROOT="${CFAPI_ROOT:-C:/vaultsyncd-test}"
+
 # 客体（S008 交付的 Windows 11 实验室）默认连接参数，可用环境变量覆盖。
 GUEST_HOST="${GUEST_HOST:-127.0.0.1}"
 GUEST_PORT="${GUEST_PORT:-2222}"
@@ -37,9 +44,11 @@ guest_ssh() {
         -o LogLevel=ERROR "$GUEST_USER@$GUEST_HOST" "$@"
 }
 
-# 把文件复制到客体工作目录。
+# 把文件复制到客体工作目录。目标目录默认 GUEST_DIR；S010 的原型脚本用
+# GUEST_TARGET_DIR 指向自己的目录，从而不改动 S009 的默认路径。
 guest_scp() {
+    local target_dir="${GUEST_TARGET_DIR:-$GUEST_DIR}"
     scp -P "$GUEST_PORT" -i "$GUEST_SSH_KEY" \
         -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o BatchMode=yes \
-        -o LogLevel=ERROR "$@" "$GUEST_USER@$GUEST_HOST:$GUEST_DIR/"
+        -o LogLevel=ERROR "$@" "$GUEST_USER@$GUEST_HOST:$target_dir/"
 }

@@ -612,3 +612,50 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - 静态 CRT 只是本卡为冒烟产物选择的方案；产品客户端 CRT 部署方式（静态、动态 + VC++ 运行库、app-local DLL）仍需在打包卡决定并验证。
 - `platform-smoke` 的 `GetSystemInfo`/`RtlGetVersion`/`version.dll` 与 `cfapi-link-smoke` 的 `CfGetPlatformInfo` 都是 FFI 直声明（无第三方 crate）；`crates/platform-windows` 的正式适配层仍属 S010—S012。
 - 未验证：CFAPI 注册/占位/回调（S010—S012）、GUI/Explorer 集成、大文件传输耗时、`.cache/windows` 在 CI 上的缓存策略。
+
+## 14. S010 CFAPI 注册与占位原型（2026-11-05 实测）
+
+采集位置：`/wrd/prj/vaultsyncd/.worktrees/s008-s010`（分支 `feat/S008-S010-windows-lab`，基线 `f815f1f`）。操作步骤的唯一入口是 `docs/operations/windows-lab.md` §16；接口契约见 `docs/architecture/interfaces.md`。主机与工具链同 §13，客体同 §12。
+
+### 14.1 新增代码与构建入口
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 新包 | `crates/platform-windows`（包名 `vaultsyncd-platform-windows`，无第三方依赖），加入 `members`、**不在** `default-members`；`Cargo.lock` 已更新，`--locked` 通过 |
+| 跨平台形状 | 纯逻辑模块（`cfapi::identity`、`cfapi::prototype_layout`、`cfapi::lifecycle`）在 Linux 上编译并测试；`cfapi::raw`、`cfapi::prototype` 只在 `cfg(windows)` 下存在，非 Windows 目标的 example 只打印提示并退出 1 |
+| 宿主单测 | `cargo test --locked -p vaultsyncd-platform-windows` → 17 passed（identity 编解码/CRC/错误变体/金样本、原型固定布局、生命周期记录格式） |
+| Windows 目标 lint | `cargo xwin clippy --target x86_64-pc-windows-msvc -p vaultsyncd-platform-windows --all-targets` → 退出 0，0 warning（默认 shell 的 `cargo clippy --all-targets` 同样退出 0） |
+| 交叉构建 | `build-cross.sh` 退出 0，新增产物 `cfapi-prototype.exe`（example 目标，`PE32+ executable for MS Windows 6.00 (console), x86-64`），与 S009 两个冒烟 exe 同一目标三元组与静态 CRT |
+| 产物可复现性 | 同一源码两次构建的 exe 哈希不同（MSVC 链接阶段写入调试信息签名），因此验收用当次宿主/客体 SHA-256 比对，不维护固定金样哈希 |
+
+### 14.2 `FileIdentity` 编码（纯逻辑，宿主实测）
+
+- 固定 48 字节：magic `b"VS"`(2) + schema_version(1) + 保留字节(1) + RootId(16) + EntryId(16) + 版本提示 u64(8) + CRC-32/IEEE(4)；`const` 断言 `ENCODED_LEN <= CFAPI_MAX_FILE_IDENTITY_LEN`(4096) 且 `< 64`。
+- 解码校验长度、magic、schema_version、保留字节与 CRC-32，失败返回 `IdentityDecodeError` 的明确变体（`BadLength`/`BadMagic`/`UnsupportedSchemaVersion`/`ReservedByteSet`/`ChecksumMismatch`），不做“尽量解析”。
+- blob 内只有定长字节数组与整数，结构上不可能装入路径、令牌或服务器地址；原型身份来自固定 `RootId` 与按条目名派生的 `EntryId`（真实身份由服务端/客户端数据库负责）。
+
+### 14.3 FFI 布局核对（宿主侧，clang-cl `_Static_assert`）
+
+用 `nix develop .#windows` 内的 `clang-cl --target=x86_64-pc-windows-msvc` + `cargo xwin` 缓存的 Windows SDK 10.0.26100 头文件编译一个只含 `_Static_assert` 的探针，得到 C 侧尺寸/偏移，再在 Rust 侧用 `const` 断言同名数值（`crates/platform-windows/src/cfapi/raw.rs`）：`CF_SYNC_REGISTRATION`=72、`CF_SYNC_POLICIES`=24、`CF_CALLBACK_REGISTRATION`=16、`CF_OPERATION_INFO`=48、`CF_OPERATION_PARAMETERS`=48、`CF_PLACEHOLDER_CREATE_INFO`=88、`CF_PLACEHOLDER_STANDARD_INFO`=64（`FileIdentity` 偏移 60）、`CF_SYNC_ROOT_PROVIDER_INFO`=1028、`CF_CALLBACK_INFO`=152（`TransferKey` 偏移 112、`RequestKey` 偏移 144）、`CF_FS_METADATA`=48、`FILE_BASIC_INFO`=40、`WIN32_FIND_DATAW`=592。这些断言让结构体偏离 C 布局时在编译期失败。
+
+### 14.4 客体原生结果（同一提交产物）
+
+| 证据 | 实测结果 |
+| --- | --- |
+| 客体与卷 | `Microsoft Windows 11 Enterprise Evaluation` 10.0.26300 build 26300、`AMD64`；`C:` 卷 `FileSystem=NTFS` |
+| 注册/连接 | `CfRegisterSyncRoot` `0x00000000`（provider `vaultsyncd-prototype` 0.1.0，hydration=full、in-sync=none）；`CfConnectSyncRoot` `0x00000000`（回调表 `fetch_data,cancel_fetch_data`、`require_full_file_path`） |
+| 占位创建 | 目录 1 条 + 文件 2 条 `Result` 均 `0x00000000`（`entries_processed` 1/2，`CreateUsn` 非 0） |
+| 水合读取探测 | 读取未水合占位触发 `FETCH_DATA` 两次；回调 `CfExecute(TRANSFER_DATA)` 回执 `0x00000000`，`CompletionStatus=STATUS_NOT_SUPPORTED`；读取以 `ERROR_CLOUD_FILE_UNSUCCESSFUL`（389）失败，没有返回 0 字节 |
+| 占位识别 | `CfGetPlaceholderInfo(CF_PLACEHOLDER_INFO_STANDARD)` 成功（identity 48 B、`OnDiskDataSize=0`、`InSyncState=0`）；`Get-Item` 属性 `4199968`；`fsutil reparsepoint query` 报 `0x9000001a`、`Reparse Data Length: 0xa8`（内含 48 B identity）；`fsutil sparse queryflag` 报 “set as sparse” |
+| 逻辑大小 | `Get-Item` `Length` 12,345 与 1,048,576，与设定值一致；`inspect` 逐条校验通过并报告 `dehydrated=true` |
+| 清理 | 3 个占位 `status=removed`；`CfDisconnectSyncRoot`/`CfUnregisterSyncRoot` 均 `0x00000000`；随后 `CfGetSyncRootInfoByPath` 返回 `0x80070186`（`ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT`），`inspect` 退出码 3；用户文件 `user-keep.txt`（50 B）与 `user-dir\keep-note.txt`（40 B）SHA-256 前后一致 |
+| 幂等 | 清空后再次 `cleanup` 退出码 0（`connect`/`unregister` 各自记录 `0x80070186` 并以后置查询确认）；再次 `inspect` 仍为 3 |
+| 两端哈希 | `cfapi-prototype.exe` 当次宿主与客体 SHA-256 一致（`MATCH`），客体确认 `guest_root_volume filesystem=NTFS` |
+
+### 14.5 限制与未核验项
+
+- 只在 `C:` 卷 NTFS 上验证；ReFS、非系统卷、用户目录与同步根位于同一卷之外的组合未验证。
+- 未实现内容水合（S011）与释放/写保护（S012）：`FETCH_DATA` 只返回明确错误，占位始终脱水；因此本卡不声称“按需读取”可用。
+- 未验证：Explorer 中占位符的图标/状态显示、多个提供方同时连接、注册在进程崩溃后残留的恢复路径（原型只提供 `cleanup` 收尾）。
+- 目录占位符的 `CfGetPlaceholderStateFromFindData` 在直接查路径时返回 `NO_STATES`（`FindFirstFileW` 不带 reparse tag），原型因此以 `CfGetPlaceholderInfo` 作为占位判定来源；该行为只在 build 26300 上实测。
+- 产物不逐字节可复现（见 §14.1）；`.cache/windows` 仍是交叉构建的唯一缓存，未做 CI 复用。

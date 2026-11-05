@@ -227,7 +227,8 @@ nix develop .#windows --command bash tests/platform/windows/run-on-guest.sh
 
 - `build-cross.sh` 用 `-C target-feature=+crt-static` 静态链接 MSVC CRT。原因：客体只有 CLR 版 `vcruntime140_clr0400.dll`，没有 `VCRUNTIME140.dll`，动态 CRT 产物在客体以 `0xC0000135`（`STATUS_DLL_NOT_FOUND`）退出（S009 实测）。静态链接后导入表只剩 `KERNEL32.dll`、`ntdll.dll`、`VERSION.dll`、`cldapi.dll`、`api-ms-win-core-synch-l1-2-0.dll`。
 - 产品客户端最终用动态还是静态 CRT、是否随安装包分发 VC++ 运行库，属打包卡决定；本卡只为冒烟与测试产物选择无需客体改动的方案。
-- 产物当前为 `platform-smoke.exe`（Win32 版本/架构/`version.dll` 探测）与 `cfapi-link-smoke.exe`（`CfGetPlatformInfo` 链接与运行时解析冒烟），源码在 `tests/windows-integration/`（包 `vaultsyncd-windows-tests`，不在 workspace `default-members`）。
+- S009 产物为 `platform-smoke.exe`（Win32 版本/架构/`version.dll` 探测）与 `cfapi-link-smoke.exe`（`CfGetPlatformInfo` 链接与运行时解析冒烟），源码在 `tests/windows-integration/`（包 `vaultsyncd-windows-tests`，不在 workspace `default-members`）。
+- S010 起 `build-cross.sh` 额外构建 `cfapi-prototype.exe`（example 目标，源码 `crates/platform-windows/examples/`）。该步单独加 `-C link-arg=/ignore:4099` 抑制静态 CRT 预编译库缺 PDB 的 `LNK4099` 噪音，冒烟产物的编译参数保持 S009 原样。产物不是逐字节可复现（MSVC 链接写入调试信息签名），每次 run 以当次两端 SHA-256 比对为准。
 
 ### 12.5 首次实测证据（2026-11-05）
 
@@ -294,11 +295,67 @@ PYTHONPATH=$P/lib/python3.14/site-packages $P/bin/python3 your-script.py
 
 注意：`hostfwd_add` 只对本次运行生效（重启即丢失），并且绑定 `127.0.0.1` 不会造成额外暴露。WinRM 只用于 SSH 不可用时的排障，不作为常规自动化通道；SSH 一旦可用就以 SSH 为准。qemu-guest-agent 服务在客体是 Running，但宿主 `windows-11-agent.sock` 上 `guest-ping` 无响应，暂不作为通道。
 
-## 16. 当前状态（2026-11-05 本轮结束）
+## 16. CFAPI 注册与占位创建原型（S010）
+
+S010 在客体本地 NTFS 上注册测试同步根、创建真实占位符、把不透明身份写进 `FileIdentity`，并实现“保留用户数据”的清理。代码在 `crates/platform-windows/src/cfapi/`，命令是 `crates/platform-windows/examples/` 下的 example；宿主交叉编译与客体执行入口是 `tests/platform/windows/{build-cross,run-cfapi-prototype}.sh`。契约摘要见 `docs/architecture/interfaces.md`，实测环境事实见 `docs/environment.md` §14。
+
+### 16.1 两条命令（宿主侧，客体需先启动）
+
+```bash
+# 1) 交叉构建：同时产出 S009 的两个冒烟 exe 与 cfapi-prototype.exe（artifacts/windows/x86_64-pc-windows-msvc/）
+nix develop .#windows --command bash tests/platform/windows/build-cross.sh
+
+# 2) 传输 + 客体执行完整验收（create → inspect → 第三方证据 → read 探测 → cleanup → 保留内容核对）
+nix develop .#windows --command bash tests/platform/windows/run-cfapi-prototype.sh
+```
+
+`run-cfapi-prototype.sh` 把 exe 与 `guest-cfapi-prototype.ps1` 传到 `C:aultsyncd-lab\s010\`（`CFAPI_GUEST_DIR` 可覆盖），同步根默认 `C:aultsyncd-test`（`CFAPI_ROOT` 可覆盖）。脚本先做一次幂等 `cleanup` 清场，再放入用户内容 `user-keep.txt` 与 `user-dir\keep-note.txt`，然后逐步执行并逐项打印 `check=pass|fail`；退出码 0 才代表全部检查通过。S009 的 `run-on-guest.sh` 用法不变。
+
+### 16.2 原型命令
+
+```text
+cfapi-prototype create  [--root C:\vaultsyncd-test]   # 注册 → 连接 → 建占位 → 水合读取探测 → 断开
+cfapi-prototype inspect [--root C:\vaultsyncd-test]   # 只读：注册状态 + 每个条目的占位/大小/身份
+cfapi-prototype cleanup [--root C:\vaultsyncd-test]   # 只删本工具占位 → 断开 → 注销 → 列出保留内容
+```
+
+退出码：0 成功；1 失败（输出 `stage=`/`hresult=` 与原因）；2 用法错误；3 `inspect` 发现同步根未注册（cleanup 之后的预期状态）。固定条目集合在 `cfapi::prototype_layout`：目录 `vaultsyncd-proto` 先建，其下 `small-12345.bin`（12,345 B）与 `large-1mib.bin`（1,048,576 B）；EntryId 由条目名确定性派生，便于三个命令互相核对。
+
+### 16.3 实测证据（2026-11-05，客体原生运行，退出码 0）
+
+| 验收点 | 证据 |
+| --- | --- |
+| 系统识别为占位 | `inspect`：三个条目 `placeholder=true placeholder_source=placeholder_info`；`Get-Item` 属性 `4199968`（`REPARSE_POINT`+`RECALL_ON_DATA_ACCESS`+`SPARSE_FILE`+`OFFLINE`+`ARCHIVE`）；`fsutil reparsepoint query` 显示 `Reparse Tag Value : 0x9000001a`、`Reparse Data Length: 0xa8` |
+| identity 写入系统 | reparse data 里可见 `56 53 01 00`（`b"VS"`+schema 1+保留 0）+ RootId + EntryId + 版本提示 + CRC-32，共 48 B；`inspect` 解码出的 RootId/EntryId/版本提示与 `create` 日志一致，`identity_length=48` |
+| 逻辑大小正确 | `Get-Item`：`small-12345.bin` `Length=12345`、`large-1mib.bin` `Length=1048576`；`inspect` 的 `logical_size` 与设定值逐条相等 |
+| 不是普通零字节文件 | `inspect`：`on_disk_data_size=0`、`dehydrated=true`、`in_sync_state=0`；`fsutil sparse queryflag` 报 “set as sparse”；提供方不在线时读取占位返回 `0x80131501`（provider not running），在线时 `FETCH_DATA` 回调被调用两次并以 `CfExecute` 回执 `0x0` + `STATUS_NOT_SUPPORTED` 结束，读取失败 `ERROR_CLOUD_FILE_UNSUCCESSFUL`（389），**没有返回空数据** |
+| 清理不删除测试内容 | `cleanup` 逐条删除 3 个占位（`status=removed`），`user-keep.txt` 与 `user-dir\keep-note.txt` 的 SHA-256 前后一致（`7c1b69d9…e054`、`98b12897…134c`），`cleanup.preserved` 逐条列出保留内容 |
+| 注销生效 | `CfUnregisterSyncRoot` `0x0`，随后 `CfGetSyncRootInfoByPath` 返回 `0x80070186`（`ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT`）；再次 `inspect` 退出码 3；再次 `cleanup` 退出码 0（幂等） |
+| 生命周期日志 | 每步一行 `stage=… key=value … hresult=0x…`：`register`/`connect`/`create.placeholders`/`create.placeholder`/`hydration.probe`/`disconnect`/`cleanup.remove`/`unregister`/`sync_root.query`/`cleanup.preserved`，失败时命令以非零退出并打印 `stage` 与原始码 |
+
+### 16.4 实测现象与故障处理
+
+| 现象 | 判断与处理 |
+| --- | --- |
+| `CfExecute` 回执返回 `0x8007017C`（`ERROR_CLOUD_FILE_INVALID_REQUEST`），读取最终超时为 426 | `ParamSize` 必须是 `sizeof(CF_OPERATION_PARAMETERS)`=48（不是 `TransferData` 分支的 40），并且回执的 `Offset`/`Length` 必须与 `CF_CALLBACK_PARAMETERS::FetchData` 的请求范围一致。修正后回执 `0x0`，读取立即以 389 失败 |
+| 目录占位符的 `CfGetPlaceholderStateFromFindData` 返回 `0x00000000`、`reparse_tag=0` | `FindFirstFileW` 直接查路径时读不到云占位符的 reparse tag（`Get-Item`/`fsutil` 都能看到 `0x9000001a`）。占位判定改用 `CfGetPlaceholderInfo`（非占位符返回 `ERROR_NOT_A_CLOUD_FILE`），日志里用 `placeholder_source` 标明来源 |
+| `attrib <占位符>` 报 `Path not found` | 客体上 `attrib` 不能处理云占位符；证据改用 `Get-Item` 属性、`fsutil reparsepoint query`/`sparse queryflag` 与 CFAPI 查询 |
+| 提供方进程退出后再枚举占位目录报 “The cloud file provider is not running.” | 这是 `CF_POPULATION_POLICY_FULL` 的预期行为：占位目录的枚举要提供方在线。原型只按绝对路径操作自己的条目，不依赖枚举 |
+| 注册残留（进程中途被杀） | 用 `cfapi-prototype cleanup --root C:\vaultsyncd-test` 收尾；若连清理也失败，`Remove-Item -Recurse -Force C:\vaultsyncd-test` 前先确认 `inspect` 不再报告已注册 |
+| 两端 exe 哈希与历史记录不同 | 交叉构建产物不是逐字节可复现（MSVC 链接阶段写入调试信息签名）；每个 run 都以当次宿主/客体哈希比对为准，不使用固定金样哈希 |
+
+### 16.5 清理与边界
+
+- 结束前必须让 `cleanup` 返回 0、`inspect` 返回 3，再删除 `C:\vaultsyncd-test`；本轮结束时客体已干净关机，无注册残留。
+- 本卡不实现内容水合（S011）、释放/写保护（S012）；`FETCH_DATA` 只返回明确错误，占位始终保持脱水。
+- 未标记 in-sync：`CF_INSYNC_POLICY_NONE` + `CF_PLACEHOLDER_CREATE_FLAG_NONE`，`inspect` 报告 `in_sync_state=0`，并在非 0 时失败。
+
+## 17. 当前状态（2026-11-05 本轮结束）
 
 - 客体**已干净关机**（`shutdown /s /t 0` 后 qemu 与 swtpm 退出，`2222`/`5930` 已关闭，无孤儿进程）。下次使用：`nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh start`，再 `wait-ssh`（实测从启动到 SSH 可用约 20 秒）。
 - 系统：Windows 11 Enterprise Evaluation 26H2 / build 26300.9457，`C:` 为 NTFS（98.6 GiB，可用约 78.7 GiB），8 vCPU / 8 GiB / 100 GiB VirtIO GPT。
 - 通道：SSH 密钥登录（`Quickemu@127.0.0.1:2222`，密钥独占认证）+ SPICE `127.0.0.1:5930` + WinRM 5985（按 §15 临时转发）。
 - 基线归档：`/data/vaultsyncd-lab/win-lab-baseline-20261105.tar`（含 conf/qcow2/OVMF_VARS/TPM 状态/unattended.iso）。
-- 客体未安装任何编译工具链。S009（2026-11-05）用 `nix develop .#windows` 交叉编译 `platform-smoke.exe` / `cfapi-link-smoke.exe`，传输后客体原生执行退出码均 0、两端 SHA-256 一致（见 §12.5），因此“宿主构建 → 客体运行”通道已可用；CFAPI 行为仍未验证（S010—S012）。
+- 客体未安装任何编译工具链。S009 用 `nix develop .#windows` 交叉编译 `platform-smoke.exe` / `cfapi-link-smoke.exe`，传输后客体原生执行退出码均 0、两端 SHA-256 一致（见 §12.5），因此“宿主构建 → 客体运行”通道已可用。
+- S010（2026-11-05）在客体上注册了测试同步根、创建了目录 + 12,345 B + 1 MiB 三个真实占位符、把 48 B 的 `FileIdentity` 交给系统保存，并按“只删自己的占位”完成清理与注销；`run-cfapi-prototype.sh` 退出 0、两端 SHA-256 一致（见 §16.3）。结束后已清理 `C:\vaultsyncd-test` 里的占位、注销同步根（`inspect` 退出码 3）并干净关机，没有注册残留。内容水合（S011）与释放/写保护（S012）仍未实现。
 - `provision.ps1` 在已安装客体上整份重跑过一次（10:29:21Z—10:29:35Z）：所有步骤 `BEGIN/END` 成对、无 `FAILED`，依赖介质的四步输出 `SKIP: ... (expected after installation)`；控制台代码页首登实测为 437（`Active codepage: 437`），因此脚本内的错误文本统一用英文，避免转写日志出现乱码。

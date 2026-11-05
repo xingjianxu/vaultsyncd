@@ -36,10 +36,26 @@ for binary in "${SMOKE_BINARIES[@]}"; do
     install -m 0644 "$built" "$artifact_dir/$binary.exe"
 done
 
+# S010：CFAPI 原型命令（example 目标）。与冒烟二进制同一目标三元组与静态 CRT 设置，
+# 产物放在同一个按目标分目录的 artifacts 下，由 run-cfapi-prototype.sh 传输执行。
+# 静态 CRT 的预编译库不带 PDB，lld-link 会对若干 obj 报 LNK4099（"Cannot use debug info"）。
+# 这与产物行为无关，但会以 `1 warning` 混进构建日志、掩盖真实警告，因此只对本步显式忽略该
+# 诊断；冒烟产物的编译参数保持 S009 原样，不改动其已记录的产物哈希。
+echo "== cargo xwin build --release --locked --target $TARGET_TRIPLE -p $PLATFORM_PACKAGE --examples"
+RUSTFLAGS="$RUSTFLAGS -C link-arg=/ignore:4099" \
+    cargo xwin build --release --locked --target "$TARGET_TRIPLE" -p "$PLATFORM_PACKAGE" --examples
+
+prototype_built="target/$TARGET_TRIPLE/release/examples/$CFAPI_PROTOTYPE_BINARY.exe"
+if [ ! -f "$prototype_built" ]; then
+    echo "build-cross: 缺少原型产物 $prototype_built" >&2
+    exit 1
+fi
+install -m 0644 "$prototype_built" "$artifact_dir/$CFAPI_PROTOTYPE_BINARY.exe"
+
 echo "== 产物与 SHA-256（$artifact_dir）"
 (
     cd "$artifact_dir"
-    for binary in "${SMOKE_BINARIES[@]}"; do
+    for binary in "${SMOKE_BINARIES[@]}" "$CFAPI_PROTOTYPE_BINARY"; do
         file "$binary.exe"
     done
     sha256sum -- *.exe | tee SHA256SUMS
