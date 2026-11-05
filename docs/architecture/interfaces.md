@@ -434,6 +434,59 @@ python3 tools/context.py --help
 - 前提核对只覆盖“已观察到的身份/指纹”，不宣称消除与外部非协作写入之间的竞态（design §12.2 / C33）；检测到不一致就暂停并报告，不硬覆盖。
 - 受限访问 fail-closed：`openat2` 的 `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS` 或逐段 `O_NOFOLLOW`，逃逸/符号链接/`.`/`..` 都拒绝，且输出标明实际机制。
 
+## crates/platform-linux-server — 安全路径访问正式接口（S032）
+
+状态：S032 把 S014 的受限句柄原型升级为 Root 级正式接口 `files::root`，补目录列举、挂载边界复核、Root 身份漂移复核与 `mounts::overlap` 重叠判定。`ServerStorage` 的完整方法集（读完整版本、对象/历史/扫描）仍属后续卡（S033、S038、S049）；本卡不含占位实现。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `files::root` | `RootHandle::open(path, ResolveMode)`：`probe_path` 读内核事实 → `O_DIRECTORY\|O_NOFOLLOW` 打开规范路径 → 核对句柄身份与探测事实是同一目录（否则 `root_changed_during_open`）→ 要求 `STATX_MNT_ID`（缺失即 `mount_id_unavailable`，fail-closed）。方法：`list_dir(REL)`、`open_read(REL)`、`create_exclusive(REL, mode)`、`identity()`、`verify()`、`path()`、`facts()`、`snapshot()`、`mechanism()`。空 `REL` 表示 Root 自身 |
+| `files::root` 的挂载边界 | 每次列举/打开/创建都要求对象的 `STATX_MNT_ID` 等于 Root 的挂载 ID：不同 → `mount_boundary_crossed`（bind mount/子挂载），缺失 → `mount_boundary_unverified`。创建时**先打开并核对父目录**再用该句柄建文件，不在“先按路径建、事后发现跨挂载”的情况下往外部样本写入 |
+| `files::root` 的身份复核 | `RootSnapshot{resolved_path, backend, fs_magic, fsid, subvolume_id, mount_id, dev_major, dev_minor, inode, btime}` 有 `to_spec`/`parse_spec`（缺字段、重复字段、非法值都报错）。`snapshot.compare(facts)` 按“后端 → FSID → 子卷 → 挂载 → 目录身份”返回首个 `RootDrift{backend_changed, filesystem_changed, subvolume_changed, mount_changed, directory_changed}`，`design_error_code()` 恒为 `ROOT_UNAVAILABLE`（运行期漂移暂停 Root，不推导删除）。`RootHandle::verify()` 同时复核“句柄自身仍是那个目录”和“路径仍指向同一存储单元与挂载” |
+| `files::restricted`（S032 扩展） | `list_entries()` 用已打开目录句柄的 `getdents64(2)`（不用 `read_dir(路径)`），丢弃 `.`/`..`、按名称字节序排序、符号链接只报 `EntryKind::Symlink`；`DirEntry{name, kind, inode}`、`EntryKind{file, dir, symlink, other, unknown}`。新增错误码 `permission_denied`（`EACCES`/`EPERM`）、`read_dir_failed`、`mount_boundary_crossed`、`mount_boundary_unverified`，全部保留原始 `io::Error`。权限失败**不返回空列表** |
+| `files::raw`（S032 扩展） | `getdents64(2)`（`__NR_getdents64` 按 `x86_64=217`/`aarch64=61` 声明；其它架构返回 `Unsupported`，不静默空目录）与 `linux_dirent64` 纯解析器（长度越界、名称未 NUL 结尾都报错），`d_type` 常量与头部长度 19 有自检 |
+| `mounts::overlap` | `DirectoryRecord{role: root\|internal, facts}` + `find_overlaps(&[..])`：同一规范路径 → `same_path`；同一目录对象（设备+inode+btime）经不同路径 → `alias`（bind mount/别名，挂载 ID 不同也要报）；内部目录落在 Root 内 → `internal_inside_root`；Root 落在内部目录内 → `root_inside_internal`；其余父子关系 → `parent_child`。父子关系按路径分量（`/data/root` 与 `/data/rootx` 无关），只判定不决定是否允许 |
+| `mounts::admission`（S032 扩展） | `BackendKind::parse(&str)` 与 `as_str()` 互逆，供 Root 快照规格读回；分类规则不变 |
+
+### 诊断命令 `path-access`（example 目标）
+
+`crates/platform-linux-server/examples/path-access.rs`，`cargo build --locked -p vaultsyncd-platform-linux-server --example path-access`。退出码：`0` 成功；`1` 探测/I/O 错误；`2` 用法错误；`3` 拒绝（逃逸、符号链接、跨挂载、权限不足、身份漂移、重叠）。
+
+| 子命令 | 输出 |
+| --- | --- |
+| `list ROOT REL` | `decision=listed`、`root=`、`relative=`、`resolve=`、`root_mount_id=`、`entries=`、每条 `entry=NAME kind=KIND inode=N` |
+| `open ROOT REL` | `decision=opened`、`resolve=`、`root_mount_id=` + `FileIdentity::to_spec()` |
+| `create ROOT REL [--mode OCTAL]` | `decision=created`、`mount_id=`、`root_mount_id=`、`inode=`、`mode=`、`fsynced=true` |
+| `snapshot ROOT` | `decision=snapshot` + `RootSnapshot::to_spec()`（交给 `verify --expect-from`） |
+| `verify --expect-from FILE ROOT` | `decision=verified`、`verify=unchanged`；漂移时 `decision=refused`、`reason=<drift>`、`design_error=ROOT_UNAVAILABLE`，退出码 3 |
+| `overlap (--root DIR \| --internal DIR)...` | `records=`、`record=N role= path= resolved= mount_id= dev= inode=`、`overlap=`、每对 `pair=I,J kind=KIND left=ROLE:PATH right=ROLE:PATH mount_ids=A:B`、`decision=clean\|overlapping`；有重叠时退出码 3 |
+
+### `tests/platform/linux/run-path-access.sh`（S032）
+
+真实样本（`tools/test-volume/test-volume.sh create <run_id>`）：`volume/root` 作为 Root、`volume/rootx` 作为同名前缀的兄弟目录、`external` 作为 Root 之外的外部样本（内容含标记串）、`state` 作为另一个 btrfs 子卷。
+
+1. 列举：`openat2` 与 `--resolve walk` 条目数一致，`entry=... kind=... inode=...` 稳定。
+2. 符号链接（目录、文件、中间段）一律 `symlink_rejected`，输出没有外部样本的目录项与内容，外部样本哈希不变；按外部目录列举同样拒绝。
+3. 换目标竞态：后台持续在“Root 内真实目录（含 inside.txt）”与“指向外部样本的符号链接”之间切换，前台 40 次列举全部只能是 Root 内文件或明确拒绝（实测 26 次成功、14 次拒绝、0 次泄漏）。
+4. 目录别名：`mount --bind external root/alias` 后列举 → `mount_boundary_crossed` 且无目录项；打开别名里的文件 → 同码且不读内容；在别名里创建 → 同码且外部目录没有新文件。
+5. 权限失败：root 属主 `0700` 子目录对当前用户不可读 → `permission_denied` + 保留原始 `Permission denied`，且**没有** `entries=` 行；打开其中文件同样拒绝；Root 其余部分仍可列举。
+6. 创建：Root 内新建 `mount_id == root_mount_id`、`mode=0644`、`fsynced=true`；重复创建 `already_exists`；父目录无权限时 `permission_denied` 且不落盘。
+7. 身份复核：未变化 `verify=unchanged`；同目录 bind 覆盖 → `mount_changed`；换成另一个子卷 → `subvolume_changed`；换成 tmpfs → `backend_changed`；重命名后新建同名目录 → `directory_changed`；换回原目录再次 `unchanged`。
+8. 重叠：兄弟目录 `overlap=0`；同名前缀兄弟不是父子；内部目录在 Root 内 → `internal_inside_root`；两个 Root 父子 → `parent_child`；同一路径 → `same_path`；`mount --bind` 同一目录到无关路径 → `alias` 且两条路径挂载 ID 不同。
+9. 用法错误退出码 2；不存在的 Root 退出码 1 且 `decision=failed`。
+
+清理与隔离同 S013/S014 脚本的共同要求（`trap cleanup`、`losetup -a` 与 `findmnt` 快照核对、`test-volume.sh cleanup` 条目白名单；`root` 属主的 `locked` 目录用非交互 sudo 删除）。
+
+### 不变量
+
+- 所有访问都以 Root 句柄为边界按相对名称进行；`canonicalize` 只用于注册期打开路径，运行期不重新解析路径，也不提供“改工作目录再按绝对路径访问”的入口。
+- 挂载边界是最外层拒绝条件：`STATX_MNT_ID` 不等于 Root 的挂载 ID、或内核不提供挂载 ID，都 fail-closed；创建文件前先核对父目录，避免写入 bind mount 后的外部样本。
+- 目录列举不返回空目录来掩盖故障：无权限、非目录、句柄失效都上报原始错误（design §11.4：权限/扫描故障不等于删除）。
+- 身份漂移一律映射 `ROOT_UNAVAILABLE` 并暂停 Root，不改写、不推导删除、不自动修复；`compare` 的顺序固定（后端 → FSID → 子卷 → 挂载 → 目录），同一输入结果稳定。
+- 重叠判定同时看规范路径分量、目录对象身份与角色，不只比路径或 inode；btrfs 上不同子卷的同号 inode 不算同一目录。
+
 ## crates/domain — 身份与有界计数（S015）
 
 状态：S015 在 `crates/domain/src/ids.rs`、`version.rs` 落地不透明身份与有界计数/UTC 时间端口。纯数据与纯规则，无第三方依赖、无 I/O；`crates/domain` 仍是身份的唯一定义处，平台层只承载字节。状态维度与错误分类见下节 S016。

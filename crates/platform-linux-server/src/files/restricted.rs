@@ -9,17 +9,19 @@
 //! - 内核早于 5.6（`openat2` 返回 `ENOSYS`）时回退到逐段 `openat(2)` + `O_NOFOLLOW`，并在结果里
 //!   标明实际使用的机制。其它错误（例如被 seccomp 拦截的 `EPERM`）一律原样上报，不用回退掩盖；
 //! - 提供 `stat`（`O_PATH` 句柄 + `statx`）、创建独占新文件、`renameat2`、`unlinkat`、`fsync`，
-//!   不提供“改当前工作目录再按绝对路径访问”的入口。
+//!   不提供“改当前工作目录再按绝对路径访问”的入口；
+//! - 目录列举也走已打开目录句柄的 `getdents64(2)`，不用 `read_dir(路径)`：路径在列举瞬间被换掉
+//!   也带不到别处，且权限失败必须报错而不是返回空目录。
 
 use crate::files::identity::FileIdentity;
 use crate::files::raw::{self, errno};
 use crate::mounts::raw::{O_DIRECTORY, O_NOFOLLOW, O_PATH};
-use std::ffi::{CString, OsStr};
+use std::ffi::{CString, OsStr, OsString};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -27,6 +29,8 @@ use std::path::{Path, PathBuf};
 const NAME_MAX_BYTES: usize = 255;
 /// 相对路径整体字节上限（`PATH_MAX` 留一字节给 NUL）。
 const PATH_MAX_BYTES: usize = 4096;
+/// `getdents64(2)` 每次读取的缓冲区（内核不会拆开单条记录）。
+const DIRENT_BUFFER_BYTES: usize = 32 * 1024;
 
 /// 使用哪种解析机制。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +148,59 @@ fn to_c_string(path: &Path) -> Result<CString, InvalidRelativePath> {
     })
 }
 
+/// 目录项的类型（来自 `getdents64` 的 `d_type`，不需要额外 `statx`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    /// 普通文件。
+    File,
+    /// 目录。
+    Directory,
+    /// 符号链接（按契约不跟随，只上报）。
+    Symlink,
+    /// 其它类型（设备、FIFO、套接字等）。
+    Other,
+    /// 文件系统未提供类型（`DT_UNKNOWN`）：调用方需自行 `statx` 才能分类。
+    Unknown,
+}
+
+impl EntryKind {
+    fn from_dtype(kind: u8) -> Self {
+        match kind {
+            raw::dtype::REG => EntryKind::File,
+            raw::dtype::DIR => EntryKind::Directory,
+            raw::dtype::LNK => EntryKind::Symlink,
+            raw::dtype::UNKNOWN => EntryKind::Unknown,
+            _ => EntryKind::Other,
+        }
+    }
+
+    /// 稳定短名（给输出与测试断言用）。
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EntryKind::File => "file",
+            EntryKind::Directory => "dir",
+            EntryKind::Symlink => "symlink",
+            EntryKind::Other => "other",
+            EntryKind::Unknown => "unknown",
+        }
+    }
+}
+
+/// 一个目录项：名称、类型、inode（`d_ino`）。
+///
+/// inode 只用于报告与快速比对，不能单独当身份（跨子卷会重复，也可能被复用）；身份判定
+/// 一律用 [`FileIdentity::same_object`]。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirEntry {
+    /// 入口名称（不含 `.` 与 `..`）。
+    pub name: OsString,
+    /// 类型。
+    pub kind: EntryKind,
+    /// `d_ino`
+    pub inode: u64,
+}
+
 /// 文件操作的错误：全部保留路径与原始 `io::Error`，不吞错。
 #[derive(Debug)]
 pub enum RestrictError {
@@ -246,6 +303,36 @@ pub enum RestrictError {
         /// 原始错误。
         source: io::Error,
     },
+    /// 权限不足（`EACCES`/`EPERM`）：不是“空目录”，也不当不存在。
+    PermissionDenied {
+        /// 路径。
+        path: PathBuf,
+        /// 原始错误。
+        source: io::Error,
+    },
+    /// 读目录项失败（`getdents64(2)`）。
+    ReadDir {
+        /// 被列举的目录。
+        path: PathBuf,
+        /// 原始错误。
+        source: io::Error,
+    },
+    /// 解析结果进入了另一个挂载（bind mount、子挂载）：超出 Root 的存储边界。
+    MountBoundaryCrossed {
+        /// 相对路径。
+        path: PathBuf,
+        /// Root 句柄所在的挂载 ID。
+        root_mount_id: u64,
+        /// 实际观察到的挂载 ID。
+        observed_mount_id: u64,
+    },
+    /// 内核未提供挂载 ID，无法确认这是否仍在 Root 的挂载内。
+    MountBoundaryUnverified {
+        /// 相对路径。
+        path: PathBuf,
+        /// 原因。
+        detail: &'static str,
+    },
 }
 
 impl RestrictError {
@@ -267,6 +354,10 @@ impl RestrictError {
             RestrictError::Unlink { .. } => "unlink_failed",
             RestrictError::Fsync { .. } => "fsync_failed",
             RestrictError::Stat { .. } => "stat_failed",
+            RestrictError::PermissionDenied { .. } => "permission_denied",
+            RestrictError::ReadDir { .. } => "read_dir_failed",
+            RestrictError::MountBoundaryCrossed { .. } => "mount_boundary_crossed",
+            RestrictError::MountBoundaryUnverified { .. } => "mount_boundary_unverified",
         }
     }
 }
@@ -326,6 +417,26 @@ impl fmt::Display for RestrictError {
             RestrictError::Stat { path, source } => {
                 write!(f, "读取 {} 的身份失败：{source}", path.display())
             }
+            RestrictError::PermissionDenied { path, source } => {
+                write!(f, "没有权限访问 {}：{source}", path.display())
+            }
+            RestrictError::ReadDir { path, source } => {
+                write!(f, "读取目录项 {} 失败：{source}", path.display())
+            }
+            RestrictError::MountBoundaryCrossed {
+                path,
+                root_mount_id,
+                observed_mount_id,
+            } => write!(
+                f,
+                "{} 进入了另一个挂载（Root 挂载 {root_mount_id}，实际 {observed_mount_id}），拒绝继续",
+                path.display()
+            ),
+            RestrictError::MountBoundaryUnverified { path, detail } => write!(
+                f,
+                "无法确认 {} 是否仍在 Root 的挂载内（{detail}），拒绝继续",
+                path.display()
+            ),
         }
     }
 }
@@ -344,8 +455,13 @@ impl std::error::Error for RestrictError {
             | RestrictError::Rename { source, .. }
             | RestrictError::Unlink { source, .. }
             | RestrictError::Fsync { source, .. }
-            | RestrictError::Stat { source, .. } => Some(source),
-            RestrictError::NotDirectory { .. } | RestrictError::NotRegularFile { .. } => None,
+            | RestrictError::Stat { source, .. }
+            | RestrictError::PermissionDenied { source, .. }
+            | RestrictError::ReadDir { source, .. } => Some(source),
+            RestrictError::NotDirectory { .. }
+            | RestrictError::NotRegularFile { .. }
+            | RestrictError::MountBoundaryCrossed { .. }
+            | RestrictError::MountBoundaryUnverified { .. } => None,
         }
     }
 }
@@ -393,9 +509,15 @@ impl RestrictedDir {
             .read(true)
             .custom_flags(O_DIRECTORY | O_NOFOLLOW | raw::O_CLOEXEC)
             .open(path)
-            .map_err(|source| RestrictError::OpenRoot {
-                path: path.to_path_buf(),
-                source,
+            .map_err(|source| match source.raw_os_error() {
+                Some(errno::EACCES | errno::EPERM) => RestrictError::PermissionDenied {
+                    path: path.to_path_buf(),
+                    source,
+                },
+                _ => RestrictError::OpenRoot {
+                    path: path.to_path_buf(),
+                    source,
+                },
             })?;
         let identity =
             FileIdentity::of_fd(file.as_raw_fd()).map_err(|source| RestrictError::Stat {
@@ -549,6 +671,56 @@ impl RestrictedDir {
         })
     }
 
+    /// 列举本目录句柄的目录项（`getdents64(2)`），按名称字节序排序。
+    ///
+    /// 列举的是**这个句柄**指向的目录，不重新解析任何路径；`.b` 与 `..` 丢弃，符号链接只
+    /// 报告为 [`EntryKind::Symlink`]，不跟随。无权限、句柄失效与内核报错都返回错误——
+    /// **永远不会用空列表代替失败**（design §11.4：权限/扫描故障不等于删除）。
+    ///
+    /// 条目数不设上限：需要上限的递归扫描由上层根据自己的策略限制。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RestrictError::ReadDir`]、[`RestrictError::PermissionDenied`]。
+    pub fn list_entries(&self) -> Result<Vec<DirEntry>, RestrictError> {
+        let mut buffer = vec![0u8; DIRENT_BUFFER_BYTES];
+        let mut entries = Vec::new();
+        loop {
+            let filled = raw::getdents64(self.handle.as_raw_fd(), &mut buffer).map_err(
+                |source| match source.raw_os_error() {
+                    Some(errno::EACCES | errno::EPERM) => RestrictError::PermissionDenied {
+                        path: self.path.clone(),
+                        source,
+                    },
+                    _ => RestrictError::ReadDir {
+                        path: self.path.clone(),
+                        source,
+                    },
+                },
+            )?;
+            if filled == 0 {
+                break;
+            }
+            let parsed =
+                raw::parse_dirents(&buffer, filled).map_err(|error| RestrictError::ReadDir {
+                    path: self.path.clone(),
+                    source: io::Error::new(io::ErrorKind::InvalidData, error),
+                })?;
+            for entry in parsed {
+                if entry.name == b"." || entry.name == b".." {
+                    continue;
+                }
+                entries.push(DirEntry {
+                    name: OsString::from_vec(entry.name),
+                    kind: EntryKind::from_dtype(entry.kind),
+                    inode: entry.inode,
+                });
+            }
+        }
+        entries.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
+        Ok(entries)
+    }
+
     /// 在目录句柄之间重命名。`noreplace` 为真时目标必须不存在（`RENAME_NOREPLACE`）。
     ///
     /// # Errors
@@ -677,6 +849,10 @@ impl RestrictedDir {
                 path: relative.to_path_buf(),
                 source,
             },
+            Some(errno::EACCES | errno::EPERM) => RestrictError::PermissionDenied {
+                path: relative.to_path_buf(),
+                source,
+            },
             _ => RestrictError::Resolve {
                 path: relative.to_path_buf(),
                 mechanism: self.mechanism,
@@ -760,5 +936,62 @@ mod tests {
         });
         assert_eq!(invalid.code(), "invalid_relative_path");
         assert!(invalid.to_string().contains("dotdot_component"));
+    }
+
+    #[test]
+    fn permission_errors_keep_their_own_code() {
+        let denied = RestrictError::PermissionDenied {
+            path: PathBuf::from("locked"),
+            source: io::Error::from_raw_os_error(errno::EACCES),
+        };
+        assert_eq!(denied.code(), "permission_denied");
+        assert!(
+            std::error::Error::source(&denied)
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .is_some_and(|source| source.raw_os_error() == Some(errno::EACCES)),
+            "权限错误必须保留原始 io::Error"
+        );
+        assert_eq!(
+            RestrictError::ReadDir {
+                path: PathBuf::from("locked"),
+                source: io::Error::from_raw_os_error(errno::EACCES),
+            }
+            .code(),
+            "read_dir_failed"
+        );
+        assert_eq!(
+            RestrictError::MountBoundaryCrossed {
+                path: PathBuf::from("alias"),
+                root_mount_id: 40,
+                observed_mount_id: 41,
+            }
+            .code(),
+            "mount_boundary_crossed"
+        );
+        assert_eq!(
+            RestrictError::MountBoundaryUnverified {
+                path: PathBuf::from("x"),
+                detail: "STATX_MNT_ID 不可用",
+            }
+            .code(),
+            "mount_boundary_unverified"
+        );
+    }
+
+    #[test]
+    fn entry_kinds_map_from_dtype() {
+        assert_eq!(EntryKind::File.as_str(), "file");
+        assert_eq!(EntryKind::Directory.as_str(), "dir");
+        assert_eq!(EntryKind::Symlink.as_str(), "symlink");
+        assert_eq!(EntryKind::Other.as_str(), "other");
+        assert_eq!(EntryKind::Unknown.as_str(), "unknown");
+        assert_eq!(EntryKind::from_dtype(raw::dtype::REG), EntryKind::File);
+        assert_eq!(EntryKind::from_dtype(raw::dtype::DIR), EntryKind::Directory);
+        assert_eq!(EntryKind::from_dtype(raw::dtype::LNK), EntryKind::Symlink);
+        assert_eq!(
+            EntryKind::from_dtype(raw::dtype::UNKNOWN),
+            EntryKind::Unknown
+        );
+        assert_eq!(EntryKind::from_dtype(6), EntryKind::Other);
     }
 }
