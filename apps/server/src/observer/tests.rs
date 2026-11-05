@@ -24,9 +24,9 @@ use vaultsyncd_server_core::ports::put_store::EntryKind;
 
 use super::{LinuxObjectPort, LinuxWorkTree};
 
-const WINDOW_MS: u64 = 500;
+pub(super) const WINDOW_MS: u64 = 500;
 
-fn marker_id(marker: u64) -> [u8; ID_LEN] {
+pub(super) fn marker_id(marker: u64) -> [u8; ID_LEN] {
     let mut bytes = [0u8; ID_LEN];
     bytes[..8].copy_from_slice(&marker.to_be_bytes());
     bytes
@@ -40,10 +40,10 @@ struct StoredEntry {
 
 /// 内存采纳存储：版本与事件按事务一起追加。
 #[derive(Default)]
-struct MemStore {
+pub(super) struct MemStore {
     entries: BTreeMap<String, StoredEntry>,
-    versions: Vec<(String, ContentDigest, String)>,
-    events: Vec<String>,
+    pub(super) versions: Vec<(String, ContentDigest, String)>,
+    pub(super) events: Vec<String>,
     counter: u64,
 }
 
@@ -103,14 +103,14 @@ impl ExternalAdoptStore for MemStore {
 }
 
 /// 真实目录夹具：`VAULTSYNCD_TEST_DIR` 指向（btrfs 测试卷上的）基目录时用它，否则用系统临时目录。
-struct Lab {
+pub(super) struct Lab {
     base: PathBuf,
-    root_dir: PathBuf,
-    objects: PathBuf,
+    pub(super) root_dir: PathBuf,
+    pub(super) objects: PathBuf,
 }
 
 impl Lab {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let parent =
             std::env::var_os("VAULTSYNCD_TEST_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
         let base = parent.join(format!("vaultsyncd-s049-{}-{name}", std::process::id()));
@@ -126,7 +126,7 @@ impl Lab {
         }
     }
 
-    fn write(&self, relative: &str, data: &[u8]) {
+    pub(super) fn write(&self, relative: &str, data: &[u8]) {
         let path = self.root_dir.join(relative);
         fs::create_dir_all(path.parent().expect("有父目录")).expect("建父目录");
         let mut file = File::create(path).expect("写文件");
@@ -144,7 +144,7 @@ impl Drop for Lab {
     }
 }
 
-fn restore_permissions(path: &Path) {
+pub(super) fn restore_permissions(path: &Path) {
     if let Ok(metadata) = fs::symlink_metadata(path) {
         if metadata.is_dir() {
             let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
@@ -158,7 +158,7 @@ fn restore_permissions(path: &Path) {
 }
 
 /// 内核时间戳粒度是粗的（数毫秒）：两次写入之间留出间隔，避免相邻写入得到相同的 ctime。
-fn settle_clock() {
+pub(super) fn settle_clock() {
     std::thread::sleep(Duration::from_millis(25));
 }
 
@@ -219,7 +219,7 @@ impl Env {
     }
 }
 
-fn sha(data: &[u8]) -> ContentDigest {
+pub(super) fn sha(data: &[u8]) -> ContentDigest {
     ContentDigest::from_bytes(files::hash::digest(data))
 }
 

@@ -12,6 +12,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 use vaultsyncd_platform_linux_server::files::clone::{StageRequest, stage_copy};
 use vaultsyncd_platform_linux_server::files::{
@@ -19,7 +20,9 @@ use vaultsyncd_platform_linux_server::files::{
     FileIdentity, OBJECT_FILE_MODE, ResolveMode, RestrictError, RestrictedDir, RootHandle,
     StageError, StageFailure,
 };
+use vaultsyncd_platform_linux_server::watcher::{DirWatcher, WatchConfig, WatchError, WatchSignal};
 use vaultsyncd_server_core::objects::ContentDigest;
+use vaultsyncd_server_core::observer::{FollowDriver, WatchHint};
 use vaultsyncd_server_core::ports::object_store::{
     BlobError, CopyFallback, CopyMethod, FileKey, ObjectBlobPort, PublishedBlob, StagedBlob,
     StorageFailure, StoredBytes, StoredFacts, StoredSlice,
@@ -131,6 +134,74 @@ impl WorkTreePort for LinuxWorkTree {
             }
             Err(error) => Err(map_restrict(path, &error)),
         }
+    }
+}
+
+/// 平台监视信号转成核心的变化线索（一一对应，不增删语义）。
+#[must_use]
+pub fn hint_of(signal: WatchSignal) -> WatchHint {
+    match signal {
+        WatchSignal::Changed { path } => WatchHint::Changed(path),
+        WatchSignal::Subtree { path } => WatchHint::Subtree(path),
+        WatchSignal::Overflow => WatchHint::Overflow,
+        WatchSignal::Gap {
+            path,
+            reason,
+            detail,
+        } => WatchHint::Gap {
+            path,
+            detail: format!("{}：{detail}", reason.as_str()),
+        },
+    }
+}
+
+/// 一个 Root 的 inotify 监视（Linux）：把内核事件转成线索交给 [`FollowDriver`]。
+///
+/// 使用顺序：**先** [`open`](RootWatcher::open) 建立监视，**再**让驱动器做启动补扫——监视建立之前的变化
+/// 没有事件，只能靠那次补扫发现。
+pub struct RootWatcher {
+    root: Rc<RootHandle>,
+    watcher: DirWatcher,
+}
+
+impl RootWatcher {
+    /// 递归登记 Root 内全部目录；登记不了的目录以 [`WatchHint::Gap`] 形式返回（只能靠周期扫描覆盖）。
+    ///
+    /// # Errors
+    ///
+    /// 创建 inotify 实例失败。
+    pub fn open(
+        root: Rc<RootHandle>,
+        config: WatchConfig,
+    ) -> Result<(Self, Vec<WatchHint>), WatchError> {
+        let (watcher, gaps) = DirWatcher::open(&root, config)?;
+        let hints = gaps.into_iter().map(hint_of).collect();
+        Ok((RootWatcher { root, watcher }, hints))
+    }
+
+    /// 等待最多 `timeout` 读取事件，把线索记入驱动器；返回收到的线索数。
+    ///
+    /// # Errors
+    ///
+    /// 等待/读取失败或事件无法解析。出错后监视状态不可信，调用方应重建监视并做一次全量补扫。
+    pub fn pump(
+        &mut self,
+        driver: &mut FollowDriver,
+        now_ms: u64,
+        timeout: Duration,
+    ) -> Result<usize, WatchError> {
+        let signals = self.watcher.poll(&self.root, timeout)?;
+        let count = signals.len();
+        for signal in signals {
+            driver.push_hint(hint_of(signal), now_ms);
+        }
+        Ok(count)
+    }
+
+    /// 当前登记的目录监视数。
+    #[must_use]
+    pub fn watch_count(&self) -> usize {
+        self.watcher.watch_count()
     }
 }
 
@@ -433,5 +504,7 @@ fn storage_failure_of_io(error: &io::Error) -> StorageFailure {
     }
 }
 
+#[cfg(test)]
+mod follow_tests;
 #[cfg(test)]
 mod tests;
