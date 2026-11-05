@@ -1,0 +1,27 @@
+[package]
+name = "vaultsyncd-server-store"
+description = "服务端 SQLite 存储：数据库种类与 schema 版本门禁、迁移执行与短事务接口（docs/design.md §5.4、§7.2、§19.3）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 依赖只落在服务端持久化这一层：SQLite 访问与迁移用 SQLx（design §4.1「元数据 | SQLite，
+# SQLx migrations」），运行时用 Tokio（design §4.1「异步与服务端 | Tokio、Axum、Serde」）。
+# `sqlite` feature 通过 libsqlite3-sys 的 bundled 源编译 SQLite，因此不用系统 libsqlite3、
+# 也不依赖 devShell 里的 nixpkgs sqlite 版本；`macros` 只为 `sqlx::migrate!` 编译期内嵌
+# migrations/ 目录，不使用 `query!`（因此不需要 DATABASE_URL 或 SQLX_OFFLINE）。
+[dependencies]
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "migrate",
+    "macros",
+] }
+
+[dev-dependencies]
+# 迁移测试是真实 SQLite 文件的异步测试：`#[tokio::test]` 与多线程 runtime 由测试侧提供。
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

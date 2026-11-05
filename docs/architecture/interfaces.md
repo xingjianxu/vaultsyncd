@@ -626,3 +626,31 @@ python3 tools/context.py --help
 | `tests/schema-decoders.mjs` | 运行时断言（9 项），直接以 `.mjs` 导入 `../src/generated/types.ts`（Node 24 原生剥离类型，无需构建步骤），并读取 `api/examples/` |
 
 脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。客户端不读全局 `fetch`/时钟：传输与 `x-request-id` 生成都由调用方注入，因此可在无浏览器的测试里替换。
+
+## crates/server-store — 服务端数据库迁移框架（S026）
+
+状态：S026 实现。包名 `vaultsyncd-server-store`，依赖 `sqlx 0.8`（`runtime-tokio` + `sqlite`（bundled）+ `migrate` + `macros`），dev 依赖 `tokio`（`macros`/`rt-multi-thread`）；在 `members` 与 `default-members` 内（无平台 API，便携检查覆盖）。只做服务端 SQLite 的打开、门禁、迁移与事务，不含 HTTP、工作目录与对象 I/O。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `db::SERVER_APPLICATION_ID` | `0x56534E31`（ASCII `VSN1`），写入 `PRAGMA application_id`，是“这个文件是服务端库”的唯一标识；客户端库用另一个标识（由 `crates/client-store` 自己的卡定义） |
+| `db::MIGRATOR` | `sqlx::migrate!("./migrations")`，编译期内嵌 `crates/server-store/migrations/*.sql`；文件名 `<版本>_<描述>.sql`，版本单调递增，已发布文件不得改写（校验和不符即拒绝启动） |
+| `db::target_schema_version()` | 内嵌迁移的最大版本号（当前 `1`），即 `PRAGMA user_version` 的目标值；全部已知迁移成功后才写入 |
+| `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`：迁移前一致性备份的位置，留给管理员整套恢复 |
+| `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非服务端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；任一步失败返回 `DbError` 且不给出可写句柄。父目录须已存在 |
+| `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
+| `db::Database::begin_write()` | `BEGIN IMMEDIATE` 的短写事务（`sqlx::Transaction<'static, Sqlite>`），等锁上限 10 s；只允许数据库语句 |
+| `db::DbError` | `Io` / `NonUtf8Path` / `Sqlite` / `NotADatabase` / `ForeignDatabase{application_id}` / `SchemaTooNew{found,supported}` / `Backup{path,source}` / `BackupUnverified{path,detail}` / `WalUnavailable{journal_mode}` / `Migration{backup,source}` |
+
+### 门禁与不变量
+
+- **种类**：`application_id` 等于服务端标识放行；`0` 且库里没有任何对象（新文件/空库）允许被初始化为服务端库；`0` 但非空、或其它任何标识一律 `ForeignDatabase`。拒绝路径用独立只读探测连接（不设 journal_mode/外键、不创建文件），因此不会改动对方文件。
+- **版本**：取 `user_version` 与 `_sqlx_migrations` 最大版本的较大者，超过 `target_schema_version()` 即 `SchemaTooNew`。两个来源都看，是因为“迁移已提交、标记未写”之间中断的库只有迁移记账记得新版本；这类半完成库不会被旧二进制当成可写库。
+- **迁移**：每条迁移与 SQLx 记账在同一事务内（单条失败整体回滚）；多条迁移中途失败时库停在最后一个成功版本，错误携带迁移前备份路径，恢复走整套备份，不做自动 down。
+- **备份**：仅在“确实有待执行迁移且库非空”时做，用 `VACUUM INTO`（读事务快照，含 `-wal` 里已提交的数据）+ `PRAGMA quick_check` 自检；同名备份已存在则保留不覆盖（更接近迁移前原始状态）。
+- **连接默认项**：`journal_mode=WAL`（打开后读回实际值校验，切换不到 WAL 就拒绝启动，覆盖 SMB/NFS/只读存储）、`foreign_keys=ON`、`busy_timeout=10 s`、池上限 4（只服务并发读；写由 `BEGIN IMMEDIATE` 串行化）。
+- **事务只包数据库**：文件系统 I/O、网络与等待不得放进写事务（design §6）。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
