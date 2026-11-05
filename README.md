@@ -2,7 +2,7 @@
 
 Windows 11 与 Linux 之间的个人文件同步工具：Linux 服务端（含管理 CLI 与 Web 管理页）与 Windows 客户端（后台 agent、CLI、桌面与 CFAPI 占位）。首发范围、不变量与数据契约见 [`docs/design.md`](docs/design.md) §2—3、§6。
 
-当前状态：工程实施从 S001 开始。S001（主机与同步环境基线）与 S002（agent 入口与上下文提取工具）已完成，尚无产品代码；下一 ready 卡为 S003（Nix 开发 shell）。逐步状态见 [`agent/progress.md`](agent/progress.md)。
+当前状态：工程实施从 S001 开始。S001（主机与同步环境基线）、S002（agent 入口与上下文提取工具）、S003（Nix 开发 shell）已完成，尚无产品代码；下一 ready 卡为 S004（Cargo workspace）与 S005（pnpm workspace）。逐步状态见 [`agent/progress.md`](agent/progress.md)。
 
 ## 文档入口
 
@@ -31,14 +31,17 @@ python3 tools/context.py --help
 
 ## 最小验证
 
-现阶段没有编译产物，验证只需要 `python3` 与 Git：
+现阶段没有编译产物。开发 shell 通过 `flake.nix` + `flake.lock` 提供锁定的 Rust、Node/pnpm、Python、SQLite 与 C 工具链：
 
 ```bash
+nix develop                      # 进入 devShell
+nix develop --command bash -c 'rustc --version; cargo --version; node --version; pnpm --version; python3 --version; sqlite3 --version'
 python3 tools/context.py card S001
 python3 tools/context.py design 11.2
 python3 tools/context.py design 99.9; echo $?   # 预期退出码 2，并列出候选
 python3 -c 'import ast,pathlib; ast.parse(pathlib.Path("tools/context.py").read_text())'
+nix flake check
 git diff --check
 ```
 
-开发 shell（Rust、Node/pnpm、Python 等锁定工具链）由 S003 的 `flake.nix` 提供；在此之前直接使用主机自带 `python3`（S002 实测 3.14.8）。
+实测工具版本、nixpkgs rev 与实测限制见 [`docs/environment.md`](docs/environment.md) §10。Windows 侧工具链（rustup 与 MSVC）由 S009 固定，本 flake 不涵盖 Windows 交叉编译。

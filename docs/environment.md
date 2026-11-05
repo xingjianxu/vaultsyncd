@@ -196,4 +196,91 @@
 | 验收规模（10 万文件、1 TiB、50 GiB 单文件、5 客户端） | 未实测 | S106/S107 |
 | 服务端口与部署地址 | 尚未选型；本机多个端口已占用 | S041/S096/S097 |
 
-本文件只记录 S001 的只读基线；不替代实施手册 §2.4 的环境/状态隔离规则，也不把设计目标当作已达成事实。
+§1—9 为 S001 的只读基线，§10 记录 S003 建立的 Nix 开发 shell 实测结果。本文件不替代实施手册 §2.4 的环境/状态隔离规则，也不把设计目标当作已达成事实。
+
+## 10. S003 Nix 开发 shell（2026-11-05 实测）
+
+### 10.1 锁定与通道选择
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 入口 | 仓库根 `flake.nix`；锁文件 `flake.lock` |
+| nixpkgs 输入 | `github:NixOS/nixpkgs/nixos-unstable` |
+| 锁定 rev | `1d060086d60cb76a40cf37109f979d88a5bd6396`（2026-11-03，narHash `sha256-jQp1wKvbwWdLBASTXkSi/VYmDJ5AbBi1WvcMt9HWJC8=`） |
+| 导出接口 | `devShells.x86_64-linux.default`（`nix develop` 的默认入口），derivation 名 `vaultsyncd-dev` |
+| 系统列表 | 仅 `x86_64-linux` |
+
+通道选择理由：本机系统为 `26.11.20261102`（NixOS 26.11 稳定通道尚未发布，实测 `git ls-remote` 只有 `nixos-26.05` 与 `nixos-unstable`），稳定通道 26.05 比主机旧一个大版本，Rust/Node 更旧；`nixos-unstable` 与主机同源 master，cache.nixos.org 命中率最高。可复现性由 `flake.lock` 固定 rev 保证，与主机 flake 无关（`/etc/nixos` 未改动）。
+
+`nix flake lock` 实测：退出码 0，耗时 27.9s（含一次 nixpkgs 解包），输出 `Added input 'nixpkgs': 'github:NixOS/nixpkgs/1d060086.../?narHash=...'`。`nix develop` 首次调用只替换 4 个 store 路径并构建 dev-env，实测 6.3s。注意：`flake.nix`/`flake.lock` 必须先被 Git 跟踪，否则 `nix flake lock`/`nix develop` 报 `Path 'flake.nix' ... is not tracked by Git`（退出码 1）。
+
+### 10.2 devShell 包集合与理由
+
+| 类别 | 包 | 理由 |
+| --- | --- | --- |
+| Rust | `rustc`、`cargo`、`rustfmt`、`clippy` | 全部来自锁定 nixpkgs，版本天然一致；不引入 rustup |
+| C 工具链 | `gcc`、`binutils`、`pkg-config` | 编译链接依赖 C 的 crate 与本地库 |
+| 前端/脚本 | `nodejs`、`pnpm`、`python3` | 前端工作区（S005）与 `tools/context.py` |
+| 版本控制 | `git` | 与主机 Git 同源版本，避免混用 |
+| 数据库 | `sqlite`（CLI）、`sqlite.dev`（`sqlite3.h`、`libsqlite3.so`） | 服务端 SQLite 开发与迁移调试 |
+| 诊断 | `curl`、`jq`、`strace`、`lsof`、`tree` | HTTP/JSON 调试、进程与文件诊断 |
+
+未引入任何 overlay：锁定 nixpkgs 已提供上述全部能力，无需额外输入或 `overlays`。
+
+### 10.3 工具版本实测
+
+命令（在仓库根执行，退出码 0）：
+
+```bash
+nix develop --command bash -c 'rustc --version; cargo --version; rustfmt --version; cargo-clippy --version; node --version; pnpm --version; python3 --version; sqlite3 --version; cc --version | head -1; git --version'
+```
+
+| 工具 | 实测版本 | store 来源（`command -v`） |
+| --- | --- | --- |
+| rustc | `rustc 1.99.0 (b940084d7 2026-09-28) (built from a source tarball)` | `/nix/store/…-rustc-wrapper-1.99.0/bin/rustc` |
+| cargo | `cargo 1.99.0 (5f94df478 2026-08-27)` | `/nix/store/…-cargo-1.99.0/bin/cargo` |
+| rustfmt | `rustfmt 1.10.0` | `/nix/store/…-rustfmt-1.99.0/bin/rustfmt` |
+| clippy | `clippy 0.1.99`（`cargo-clippy`、`clippy-driver` 同在） | `/nix/store/…-clippy-1.99.0/bin/cargo-clippy` |
+| node | `v24.21.0` | `/nix/store/…-nodejs-24.21.0/bin/node` |
+| pnpm | `12.9.0` | `/nix/store/…-pnpm-12.9.0/bin/pnpm` |
+| python3 | `Python 3.14.8`（与主机自带版本相同） | `/nix/store/…-python3-3.14.8/bin/python3` |
+| sqlite3 | `3.53.3`（`pkg-config --modversion sqlite3` 同为 3.53.3） | `/nix/store/…-sqlite-3.53.3-bin/bin/sqlite3` |
+| cc / gcc | `gcc (GCC) 16.2.0` | `/nix/store/…-gcc-wrapper-16.2.0/bin/cc` |
+| binutils `ld` | `GNU ld (GNU Binutils) 2.46` | — |
+| pkg-config | `0.29.2` | `/nix/store/…-pkg-config-wrapper-0.29.2/bin/pkg-config` |
+| git | `git version 2.56.0` | `/nix/store/…-git-2.56.0/bin/git` |
+| 诊断工具 | curl 8.22.0、jq 1.8.2、strace 7.3、lsof 4.99.7、tree 2.3.2 | 均在 devShell PATH 内 |
+
+### 10.4 Rust 版本、edition 与 MSRV 依据（供 S004 写 `rust-toolchain.toml`）
+
+- `rustc -vV` 实测：`release: 1.99.0`，`commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4`，`commit-date: 2026-09-28`，`host: x86_64-unknown-linux-gnu`，`LLVM version: 21.1.8`。
+- edition 支持矩阵（`rustc --edition <e> --emit=metadata`）：`2015`、`2018`、`2021`、`2024` 全部退出码 0；`--edition 2027` 退出码 1，报错列出可选值 `<2015|2018|2021|2024|future>`。即本工具链支持 edition 2024，尚无更高稳定 edition。
+- MSRV 判断依据：edition 2024 在 Rust 1.85.0 稳定，因此若项目选择 edition 2024，MSRV 的单向下界是 1.85.0；项目实际 MSRV 由 S004 在 `rust-toolchain.toml` 与 workspace manifest 中明确并测量，本卡不预先确定。
+- 建议的两端一致性：`rust-toolchain.toml` 固定 `channel = "1.99.0"`（与锁定 nixpkgs 相同），Windows 侧用 rustup 取同一 stable 版本 `rustup toolchain install 1.99.0-x86_64-pc-windows-msvc`；Linux 端不使用 rustup，由 `nix develop` 提供 1.99.0，避免两端 rustc 版本漂移。Windows 侧安装的最终形式与证据由 S009 记录。
+
+### 10.5 运行时与编译验证（临时目录，已清理）
+
+- 直接编译：`rustc --edition 2024 -o hello2024 hello.rs && ./hello2024` 退出码 0，输出 `hello from rustc probe edition 2024`。
+- Cargo 工程（`cargo new --edition 2024`）：`cargo build`、`cargo test`（`test result: ok. 1 passed`）、`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 均退出码 0。
+- clippy 负控：写入 `pub fn len(v: &Vec<i32>)` 后 `cargo clippy -- -D warnings` 退出码 101 且报 `clippy::ptr_arg`，说明 clippy 真实生效而非空跑。
+- C 与 SQLite 链接：`cc -o csql csql.c $(pkg-config --cflags --libs sqlite3) && ./csql` 退出码 0，输出 `sqlite_lib=3.53.3`；`pkg-config` 无需额外 `PKG_CONFIG_PATH`。
+- 前端包管理器：`pnpm --version` 输出 `12.9.0`；`pnpm store path` 输出 `/wrd/.pnpm-store/v11`（按项目所在文件系统计算的默认 store 位置，实测该目录未被本卡创建），pnpm 可执行文件来自 `/nix/store`，不依赖全局安装。
+- 临时产物全部位于 `mktemp -d /tmp/vaultsyncd-s003.XXXXXX` 并已删除，仓库内无构建产物。
+
+### 10.6 新终端可复现性
+
+在清空环境的独立调用中复核（`nix` 可取到系统配置，`HOME` 保留以读取 registry）：
+
+```bash
+env -i HOME="$HOME" TERM=xterm PATH=/run/current-system/sw/bin:/usr/bin:/bin /run/current-system/sw/bin/nix develop -c bash -c '<工具版本命令>'
+```
+
+退出码 0，耗时 0.38s；10 个工具版本逐项与 10.3 表一致，`command -v` 全部指向 `/nix/store`，`VAULTSYNCD_DEV_SHELL=1` 生效。另 `nix flake show`（退出码 0）显示 `devShells.x86_64-linux.default: development environment 'vaultsyncd-dev'`；`nix flake check`（退出码 0）输出 `all checks passed!`；`nix eval --raw .#devShells.x86_64-linux.default.name` 为 `vaultsyncd-dev`（退出码 0）。
+
+### 10.7 限制与未核验项
+
+- devShell 只覆盖 Linux（`x86_64-linux`）；不含 rustup、不含 Windows 交叉编译与 MSVC。Windows 客户端工具链由 S009 固定。
+- 未加入 `rust-analyzer`、`openssl.dev` 等当前卡未要求的包；S004/S005 若需要再按证据补充。
+- 本卡的版本结论仅对本机本次实测成立；Ubuntu 24.04、Linux ARM64、Windows 原生环境仍未核验。
+- 用户 `~/.npmrc` 由 home-manager 管理，registry 指向 `https://registry.npmmirror.com`；这只影响下载源，不影响 pnpm 版本与 store 布局。
+- 主机 `/etc/nixos` 与系统 generation 未做任何改动。

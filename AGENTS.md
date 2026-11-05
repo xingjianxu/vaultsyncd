@@ -5,7 +5,7 @@
 - 仓库为单 monorepo，Rust Cargo 与前端 pnpm 各一个根工作区。产品规格在 `docs/design.md`，执行顺序在 `agent/implementation-plan.md`，实际状态在 `agent/progress.md`。
 - 每轮只执行一张 ready 的 Sxxx 卡。首次从 S001 开始；先检查现有文件与 Git diff，保留用户及其他任务的未提交修改。
 - 读取本文件、实施手册 §1—2、当前卡、design 指定小节、直接依赖的短交接及相关源码。用 `tools/context.py` 按标题定位，禁止默认全读两份长文档或整个仓库。
-- 上下文提取：`python3 tools/context.py card S002`、`python3 tools/context.py design 11.2`（可给多个参数）。未知/歧义标题会列出候选；接口与围栏、编号边界规则见 `docs/architecture/interfaces.md`。S003 之前用主机自带 `python3`，之后用项目 devShell。
+- 上下文提取：`python3 tools/context.py card S002`、`python3 tools/context.py design 11.2`（可给多个参数）。未知/歧义标题会列出候选；接口与围栏、编号边界规则见 `docs/architecture/interfaces.md`。S003 起项目命令在 devShell 内运行（`nix develop`），`python3` 来自锁定 nixpkgs。
 - 首次上下文建议 6,000—10,000 tokens；超预算分段读取或拆成 Sxxx-a/b。检查点写 `agent/tasks/Sxxx.md`，换会话后从记录和 diff 接续。
 - 用户最新明确决定优先；规格冲突需记录证据和影响。已确认决定不重复询问。普通工程细化自行完成；涉及范围/数据语义变化按 design §24 处理。
 
@@ -14,7 +14,7 @@
 ## 实现与环境
 
 - 开发中凡涉及代码改动（含测试、脚本、schema、构建配置），必须先按下文“Git worktree”约定进入隔离工作树，再编辑、构建和验证。纯文档维护可在当前工作区进行。
-- 项目 devShell 入口由 S003 的 `flake.nix` 建立；在此之前不为项目安装全局依赖，`tools/context.py` 用主机 `python3` 运行。
+- 项目 devShell 由根 `flake.nix` 提供，工具链来自 `flake.lock` 锁定的 nixpkgs：进入用 `nix develop`，非交互校验用 `nix develop --command bash -c 'rustc --version; cargo --version; node --version; pnpm --version; python3 --version; sqlite3 --version'`。不为项目安装全局依赖；实测版本与限制见 `docs/environment.md` §10。
 - 首发仅 Windows 11 x64 客户端、Linux 服务端。NixOS 为开发及同机服务验证环境；Quickemu Windows NTFS 客体用于原生测试，具体步骤仅维护在实施手册 §2.6。
 - 用户已授权本项目所需 NixOS 配置与 rebuild。先检查实际主机配置入口，保存 diff/旧 generation，build/test/健康检查后 switch。test 会激活配置且不自动定时回滚；保留 SSH 和恢复路径。不要把项目 flake 误当主机配置，不扩大到无关系统升级。
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。

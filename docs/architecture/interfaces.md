@@ -4,7 +4,7 @@
 
 ## tools/context.py — 规格上下文提取
 
-状态：S002 实现。Python 3 标准库，无第三方依赖；S003 devShell 建立前使用主机 `python3`（S002 实测 3.14.8）。
+状态：S002 实现。Python 3 标准库，无第三方依赖；S003 后由 devShell 提供 `python3`（与主机同为 3.14.8）。
 
 来源文件（相对仓库根；路径由脚本自身位置推导，可从任意工作目录调用）：
 
@@ -56,3 +56,15 @@ python3 tools/context.py --help
 | 1 | 来源文件缺失或不可读 |
 
 多参数时先解析全部查询；任一失败即整体失败并列出所有错误，stdout 保持为空。未知查询附最多 8 条接近候选；多解按来源路径、行号与标题列出候选（超过 20 条时注明剩余数量）。
+
+## flake.nix — 开发 shell
+
+状态：S003 实现。唯一 devShell 入口，后续卡（S004/S005/S006）在此内构建与验证；实测版本与限制见 `docs/environment.md` §10。
+
+| 项目 | 契约 |
+| --- | --- |
+| 输入 | `github:NixOS/nixpkgs/nixos-unstable`，rev 由 `flake.lock` 固定（当前 `1d060086d60cb76a40cf37109f979d88a5bd6396`）；无 overlay、无其他 input |
+| 导出 | `devShells.x86_64-linux.default`，derivation 名 `vaultsyncd-dev`；`nix develop` 即默认入口。 `devShells.default` 不是 flake schema 的合法顶层属性，按系统的 `devShells.<system>.default` 是规范写法 |
+| 覆盖范围 | 仅 Linux `x86_64-linux`；Windows 工具链由 S009 用 rustup+MSVC 固定，不做交叉编译 |
+| 非交互调用 | `nix develop --command bash -c '<cmd>'`；`shellHook` 只导出 `VAULTSYNCD_DEV_SHELL=1` |
+| 跟踪要求 | `flake.nix`/`flake.lock` 必须先被 Git 跟踪，否则 `nix flake lock`/`nix develop` 退出码 1 |
