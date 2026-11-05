@@ -8,6 +8,7 @@ resolver = "3"
 # 它的挂载准入需要直接调用 fstatfs/statx/ioctl，因此同样不进 default-members。
 members = [
     "crates/domain",
+    "crates/fs-common",
     "crates/platform-linux-server",
     "crates/platform-windows",
     "tests/windows-integration",
@@ -16,7 +17,7 @@ members = [
 # default-members 只选可移植核心：`cargo test --locked`/`cargo clippy` 不构建 xtask 等编排工具，
 # 也不构建只能在 Windows 上运行的测试包与平台适配层（crates/platform-windows 的 Windows 目标
 # 代码只有交叉构建 + 客体运行才能验证），保证便携检查（含 Windows 与 CI 的默认目标）不受影响。
-default-members = ["crates/domain"]
+default-members = ["crates/domain", "crates/fs-common"]
 
 [workspace.package]
 # edition 2024 在 Rust 1.85.0 稳定，据此把 rust-version 定为 1.85.0（实测见 agent/tasks/S004.md）。
