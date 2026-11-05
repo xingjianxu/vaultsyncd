@@ -523,6 +523,27 @@ impl RootHandle {
         self.with_verified_dir(relative, RestrictedDir::list_entries)
     }
 
+    /// Root 句柄自身的 `/proc/self/fd/N` 路径（见 [`RestrictedDir::proc_fd_path`]）。
+    #[must_use]
+    pub fn proc_fd_path(&self) -> std::path::PathBuf {
+        self.dir.proc_fd_path()
+    }
+
+    /// 打开 Root 内的子目录句柄（相对路径不能为空），并核对它仍在 Root 的挂载内。
+    ///
+    /// 句柄供 watcher 取 `/proc/self/fd/N` 之类的稳定引用；权限不足、逃逸、符号链接、跨挂载都是
+    /// 错误，不会被当成“目录不存在”。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RestrictError`]。
+    pub fn open_dir(&self, relative: &Path) -> Result<RestrictedDir, RestrictError> {
+        let child = self.dir.child_dir(relative)?;
+        let identity = child.identity()?;
+        self.check_mount(relative, identity.mount_id)?;
+        Ok(child)
+    }
+
     /// 只读打开 Root 内的普通文件，并核对它仍在 Root 的挂载内。
     ///
     /// # Errors

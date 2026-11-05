@@ -98,6 +98,14 @@ impl ScanCursor {
         }
     }
 
+    /// 只扫描某个子目录子树的新游标（事件线索指向新目录时补扫它）。
+    #[must_use]
+    pub fn from_dir(path: &str) -> Self {
+        ScanCursor {
+            dirs: VecDeque::from([PendingDir::fresh(path.to_owned())]),
+        }
+    }
+
     /// 还要处理的目录数。
     #[must_use]
     pub fn pending_dirs(&self) -> usize {

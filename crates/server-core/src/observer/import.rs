@@ -25,11 +25,12 @@ use vaultsyncd_domain::ids::RootId;
 use vaultsyncd_domain::version::UtcTimestamp;
 
 use crate::commit::put::RootCommitGate;
-use crate::objects::{InvalidStagingName, ObjectLayout};
+use crate::objects::{ExpectedContent, InvalidStagingName, ObjectLayout};
 use crate::observer::capture::{
-    AdoptFailure, AdoptOutcome, BlockReason, CaptureOutcome, RequeueReason, adopt_external,
-    capture_external,
+    AdoptFailure, AdoptOutcome, BlockReason, CaptureOutcome, ExternalProposal, RequeueReason,
+    adopt_external, capture_external,
 };
+use crate::observer::intents::{IntentError, IntentVerdict, OwnWriteIntent, OwnWriteLedger};
 use crate::observer::scan::{
     InconclusiveReason, ScanCompletion, ScanCursor, ScanLimits, ScannedFile, SkippedEntry,
     Stability, StabilityTracker, StabilityWindow, scan_tree,
@@ -118,6 +119,8 @@ pub enum FileState {
     },
     /// 库里已有相同内容，没有新版本。
     UnchangedContent,
+    /// 本服务自己的写入（inode 与内容都与登记的意图一致）：不当作外部变化采纳。
+    OwnWrite,
     /// 本轮没有被采纳，附原因。
     Pending(PendingReason),
     /// 采集前后消失：从未采纳，没有历史需要保护。
@@ -188,18 +191,28 @@ impl PassLimits {
     }
 }
 
-/// 某个 Root 的外部内容观察器（初始稳定采集）。
+/// 已采纳路径的基线：采纳时的指纹与内容。指纹未变不再采集；内容复核拿它比对重新读到的内容。
+#[derive(Clone, Copy, Debug)]
+struct AdoptedBaseline {
+    stamp: FileStamp,
+    content: ExpectedContent,
+}
+
+/// 某个 Root 的外部内容观察器（初始稳定采集，以及事件线索驱动下的持续观察）。
 pub struct ExternalObserver {
     root: RootId,
     tracker: StabilityTracker,
-    /// 已采纳（或库里已有相同内容）的路径 → 采纳时的指纹；指纹未变则不再采集。
-    adopted: BTreeMap<String, FileStamp>,
+    /// 已采纳（或库里已有相同内容）的路径 → 采纳时的基线；指纹未变则不再采集。
+    adopted: BTreeMap<String, AdoptedBaseline>,
     pending: BTreeMap<String, PendingReason>,
     resume: Option<ScanCursor>,
     cycle_seen: BTreeSet<String>,
     staging_prefix: String,
     staging_counter: u64,
     initial_import_complete: bool,
+    intents: OwnWriteLedger,
+    /// 内容复核的游标：下一批从这个路径之后开始。
+    review_after: Option<String>,
 }
 
 impl ExternalObserver {
@@ -225,7 +238,40 @@ impl ExternalObserver {
             staging_prefix: staging_prefix.to_owned(),
             staging_counter: 0,
             initial_import_complete: false,
+            intents: OwnWriteLedger::new(OwnWriteLedger::DEFAULT_LIMIT),
+            review_after: None,
         })
+    }
+
+    /// 登记本服务即将发布到 `path` 的文件（服务写入之前调用）。观察器只在 inode 与内容都与意图一致时
+    /// 才忽略它；任何时间窗口都不参与判定。提交完成或放弃后必须 [`release_own_write`](Self::release_own_write)。
+    ///
+    /// # Errors
+    ///
+    /// 账本已满（服务应暂缓该写入）或该路径已有未释放的意图。
+    pub fn expect_own_write(
+        &mut self,
+        path: &str,
+        intent: OwnWriteIntent,
+    ) -> Result<(), IntentError> {
+        self.intents.expect(path, intent)
+    }
+
+    /// 释放自写意图。之后路径上的文件按普通外部内容处理：库里已有相同内容时不产生版本。
+    pub fn release_own_write(&mut self, path: &str) -> bool {
+        self.intents.release(path)
+    }
+
+    /// 未释放的自写意图数。
+    #[must_use]
+    pub fn own_write_intents(&self) -> usize {
+        self.intents.len()
+    }
+
+    /// 已采纳（或库里已有相同内容）的路径数。
+    #[must_use]
+    pub fn adopted_count(&self) -> usize {
+        self.adopted.len()
     }
 
     /// 路径是否已有历史保护：只有采纳成功（或库里已有相同内容）才为真，未采集成功的条目一律为假。
@@ -290,8 +336,6 @@ impl ExternalObserver {
             }
         };
 
-        let mut outcomes = Vec::new();
-        let mut candidates: Vec<(String, FileStamp)> = Vec::new();
         let mut files = scan.files;
         let mut aborted = root_unavailable;
         if !root_unavailable {
@@ -300,10 +344,59 @@ impl ExternalObserver {
             aborted |= self.recheck_pending(&mut *ports.work, limits, &mut files);
         }
         if !aborted {
-            for file in files {
+            for file in &files {
                 self.cycle_seen.insert(file.path.clone());
-                if self.adopted.get(&file.path) == Some(&file.stamp) {
+            }
+        }
+        let (outcomes, aborted) = self
+            .handle_files(ports, files, limits, clock, aborted)
+            .await;
+
+        if scan_complete && !aborted {
+            let seen = std::mem::take(&mut self.cycle_seen);
+            self.pending.retain(|path, _| seen.contains(path));
+            self.tracker.retain(|path| seen.contains(path));
+            if self.pending.is_empty() {
+                self.initial_import_complete = true;
+            }
+        }
+
+        PassReport {
+            scan_complete,
+            inconclusive,
+            entries_examined: scan.entries_examined,
+            skipped: scan.skipped,
+            outcomes,
+            root_unavailable: aborted,
+            initial_import_complete: self.initial_import_complete,
+        }
+    }
+
+    /// 对一批已枚举的文件做稳定性判断、采集与采纳。`aborted` 为真（Root 不可用）时什么都不做；
+    /// 返回逐文件结局与“Root 是否不可用”。
+    async fn handle_files<S: ExternalAdoptStore>(
+        &mut self,
+        ports: &mut ObserverPorts<'_, S>,
+        files: Vec<ScannedFile>,
+        limits: PassLimits,
+        clock: PassClock,
+        mut aborted: bool,
+    ) -> (Vec<FileOutcome>, bool) {
+        let mut outcomes = Vec::new();
+        let mut candidates: Vec<(String, FileStamp)> = Vec::new();
+        if !aborted {
+            for file in files {
+                if self
+                    .adopted
+                    .get(&file.path)
+                    .is_some_and(|baseline| baseline.stamp == file.stamp)
+                {
                     self.pending.remove(&file.path);
+                    continue;
+                }
+                // 已核对为本服务写入、指纹未变：不必再等待与采集。任何指纹变化都会重新核对。
+                if self.intents.is_verified(&file.path, &file.stamp) {
+                    self.settle(&file.path);
                     continue;
                 }
                 match self.tracker.observe(&file.path, file.stamp, clock.now_ms) {
@@ -339,25 +432,7 @@ impl ExternalObserver {
             aborted |= root_gone;
             outcomes.push(FileOutcome { path, state });
         }
-
-        if scan_complete && !aborted {
-            let seen = std::mem::take(&mut self.cycle_seen);
-            self.pending.retain(|path, _| seen.contains(path));
-            self.tracker.retain(|path| seen.contains(path));
-            if self.pending.is_empty() {
-                self.initial_import_complete = true;
-            }
-        }
-
-        PassReport {
-            scan_complete,
-            inconclusive,
-            entries_examined: scan.entries_examined,
-            skipped: scan.skipped,
-            outcomes,
-            root_unavailable: aborted,
-            initial_import_complete: self.initial_import_complete,
-        }
+        (outcomes, aborted)
     }
 
     /// 复查本轮扫描没有覆盖到的待处理文件，把仍是普通文件的并入 `files`；返回 Root 是否不可用。
@@ -431,6 +506,15 @@ impl ExternalObserver {
             }
         };
 
+        match self.intents.judge(path, &proposal.stamp, &proposal.content) {
+            IntentVerdict::Ours => {
+                self.settle(path);
+                return (FileState::OwnWrite, false);
+            }
+            // 同一个 inode 被外部改了内容：意图已作废，按外部修改继续采纳。
+            IntentVerdict::Modified | IntentVerdict::NotOurs => {}
+        }
+
         let adopted = adopt_external(
             &mut *ports.gate,
             &mut *ports.store,
@@ -441,7 +525,7 @@ impl ExternalObserver {
         .await;
         match adopted {
             Ok(AdoptOutcome::Adopted { record, created }) => {
-                self.adopted.insert(path.to_owned(), proposal.stamp);
+                self.record_baseline(path, &proposal);
                 self.settle(path);
                 let state = FileState::Adopted {
                     record,
@@ -452,7 +536,7 @@ impl ExternalObserver {
                 (state, false)
             }
             Ok(AdoptOutcome::UnchangedContent { .. }) => {
-                self.adopted.insert(path.to_owned(), proposal.stamp);
+                self.record_baseline(path, &proposal);
                 self.settle(path);
                 (FileState::UnchangedContent, false)
             }
@@ -492,6 +576,16 @@ impl ExternalObserver {
         }
     }
 
+    fn record_baseline(&mut self, path: &str, proposal: &ExternalProposal) {
+        self.adopted.insert(
+            path.to_owned(),
+            AdoptedBaseline {
+                stamp: proposal.stamp,
+                content: proposal.content,
+            },
+        );
+    }
+
     /// 重排队：忘记指纹，重新等待一个完整窗口。
     fn requeue(&mut self, path: &str, reason: RequeueReason) -> FileState {
         self.tracker.forget(path);
@@ -501,5 +595,8 @@ impl ExternalObserver {
     }
 }
 
+mod hinted;
 #[cfg(test)]
 mod tests;
+
+pub use hinted::{HintedReport, ReviewReport};

@@ -611,6 +611,15 @@ impl RestrictedDir {
         })
     }
 
+    /// 本进程 `/proc/self/fd/N` 形式的路径：指向这个**已打开**的目录句柄（不是按名称重新解析）。
+    ///
+    /// 给只接受路径的内核接口（`inotify_add_watch(2)`）使用：监视的是句柄指向的目录，路径在
+    /// 之后被换成别的目录也带不到别处。句柄关闭后该路径失效。
+    #[must_use]
+    pub fn proc_fd_path(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.handle.as_raw_fd()))
+    }
+
     /// 用 `O_PATH` 打开（只读元数据，不需要读权限）。
     ///
     /// # Errors

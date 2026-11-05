@@ -1672,4 +1672,31 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 ### 未接入（后续卡）
 
 - `ExternalAdoptStore`/`PutCommitStore` 的真实 SQLx 适配（含补建父目录条目、`changes` 事件内容）；`roots.pending_import` 仍是注册时的常量，初始导入完成标志尚未落库（需要 `roots` 迁移，与存储适配一起做）；
-- 后台调度（周期轮次、`apps/server` 里按 Root 启动观察器）与 inotify/溢出补扫（S050）；已采纳文件被外部删除/改名的事件管线。
+- 后台调度（周期轮次、`apps/server` 里按 Root 启动观察器）已由 S050 提供可驱动的 `FollowDriver`，进程入口按 Root 起后台任务仍未做；已采纳文件被外部删除/改名的事件管线。
+
+## crates/platform-linux-server::watcher + server-core::observer — inotify 与溢出补扫（S050）
+
+### 平台（`vaultsyncd_platform_linux_server::watcher`）
+
+- **`DirWatcher::open(&RootHandle, WatchConfig) -> (DirWatcher, Vec<WatchSignal>)`**：递归登记每个目录一个 inotify watch（先登记后列目录，不留缺口）；监视对象是已打开的目录句柄（`/proc/self/fd/N`，`RootHandle::open_dir`/`proc_fd_path`），不按路径字符串重新解析。`poll(&RootHandle, timeout)`/`drain(&RootHandle)` 读取事件并整理成 `WatchSignal`：
+  - `Changed{path}`：该路径（文件或目录）上发生过事件，只是“值得再看一眼”的线索，**不**表示删除/写完；同一次读取内同路径合并，一次读取最多 `max_signals_per_poll` 条；
+  - `Subtree{path}`：新出现（或权限恢复后第一次可监视）的目录，监视已登记，必须补扫整个子树；
+  - `Overflow`：内核队列溢出（`IN_Q_OVERFLOW`），已丢弃整张监视表并重建；消费者必须立即全量补扫；
+  - `Gap{path, reason, detail}`：该目录没有被监视（`PermissionDenied`/`WatchLimit`/`Vanished`/`Other`），只能靠周期扫描覆盖；不是删除。
+- 目录被移走/删除时按路径前缀移除其整棵监视，不再以旧路径上报；非 UTF-8 名只上报所在目录。不识别“谁写的”，也不做改名配对（cookie 未用）。
+
+### 核心（`vaultsyncd_server_core::observer`）
+
+- **`hints::{WatchHint, HintQueue, HintLimits}`**：线索（`Changed/Subtree/Overflow/Gap`）的有界去抖队列。同路径合并，静默满 `debounce_ms` 才由 `take_due(now_ms)` 交出；子树线索吸收其内的路径线索；容量满则整体退化为一次全量补扫（`FullScanCause::HintQueueFull`），不丢线索也不无限增长；**`Overflow` 不经去抖，下一次取用立即要求全量补扫**并丢弃已排队的路径线索。
+- **`intents::{OwnWriteIntent, OwnWriteLedger}`**（经 `ExternalObserver::expect_own_write/release_own_write`）：本服务写入 Root 之前登记（设备+inode+内容长度/摘要）。观察到该路径文件时 **inode 相同且内容摘要相同才忽略**（`FileState::OwnWrite`，不采纳）；inode 不同 = 不是它（意图保留，服务发布可能尚未发生）；同 inode 但内容不同 = 外部原地修改（意图作废并正常采纳）。无任何时间窗口；账本有容量上限，满了拒绝登记（`IntentError::LedgerFull`，调用方暂缓该写入），不淘汰旧意图。服务提交完成/放弃后调用方必须 `release_own_write`。
+- **`ExternalObserver::run_hinted_pass(ports, paths, subtrees, limits, clock)`**：只观察线索指向的路径/子树，并推进所有待处理文件（窗口要靠重新观察才推进）；观察到不存在只记入 `HintedReport.absent`，**不产生删除结论**；读不了进 `unreadable` 保持原状；子树扫描被预算截断置 `subtree_truncated`。与全量扫描共用稳定窗口、采集与采纳，不另开写入通道。
+- **`ExternalObserver::run_content_review(ports, batch, limits, clock)`**：对已采纳路径按路径顺序分批重读内容（采纳基线现含内容摘要），与基线摘要比对；不同 = 指纹没发现的改写，撤下基线按首次看到重新等待窗口（`ReviewReport.content_changed`）；读不了/不存在不动基线。`wrapped` 表示一圈走完。
+- **`follow::{FollowDriver, FollowConfig}`**：`push_hint` 记线索，`step(ports, limits, clock)` 一步 = 全量补扫（若需要）→ 线索观察（若需要）→ 内容复核（若到期）。全量补扫原因 `FullScanCause`：`Startup`（第一次 step 必做）、`QueueOverflow`、`HintQueueFull`、`SubtreeTruncated`、`Continuation`（上次预算耗尽，立即续扫）、`Retry`（上次有读不了的项/Root 不可用，`retry_interval_ms` 后）、`Periodic`（`metadata_interval_ms`）。`FollowConfig::recommended()` = 去抖 300 ms、周期元数据补扫 60 s、重试 5 s、每 10 s 复核 64 个文件（design §23）。
+
+### Linux 适配（`vaultsyncd_server::observer`）
+
+- `hint_of(WatchSignal) -> WatchHint`（一一对应）；`RootWatcher::open(Rc<RootHandle>, WatchConfig) -> (RootWatcher, Vec<WatchHint>)` 与 `pump(&mut FollowDriver, now_ms, timeout)`：**先**建立监视、**再**让驱动器做启动补扫。进程入口按 Root 起后台任务、监视出错后的重建尚未做。
+
+### 限制（后续卡）
+
+- 已采纳文件的外部删除/改名管线（rename 配对、回收站）不在本卡：观察到不存在只记录、不推导；自写意图尚无调用方（服务端写入发布路径接入时登记/释放）；内容复核用候选采集（reflink/复制 + 哈希 + 发布同内容对象）实现，开销较大，后续可在端口上增加只读哈希；挂载变化后需重建监视（`RootUnavailable` 之后）由进程入口负责。

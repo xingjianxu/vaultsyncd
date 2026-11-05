@@ -7,17 +7,23 @@
 pub mod capture;
 #[cfg(test)]
 pub(crate) mod fixtures;
+pub mod follow;
+pub mod hints;
 pub mod import;
+pub mod intents;
 pub mod scan;
 
 pub use capture::{
     AdoptFailure, AdoptOutcome, BlockReason, CaptureOutcome, ExternalCaptureError,
     ExternalProposal, RequeueReason, adopt_external, capture_external,
 };
+pub use follow::{FollowConfig, FollowConfigError, FollowDriver, FullScanRun, StepReport};
+pub use hints::{DueHints, FullScanCause, HintLimits, HintQueue, InvalidHintLimits, WatchHint};
 pub use import::{
-    DeferReason, ExternalObserver, FileOutcome, FileState, ObserverConfigError, ObserverPorts,
-    PassClock, PassLimits, PassReport, PendingReason,
+    DeferReason, ExternalObserver, FileOutcome, FileState, HintedReport, ObserverConfigError,
+    ObserverPorts, PassClock, PassLimits, PassReport, PendingReason, ReviewReport,
 };
+pub use intents::{IntentError, IntentVerdict, OwnWriteIntent, OwnWriteLedger};
 pub use scan::{
     InconclusiveReason, ScanCompletion, ScanCursor, ScanLimits, ScanReport, ScannedFile,
     SkipReason, SkippedEntry, Stability, StabilityTracker, StabilityWindow, scan_tree,
