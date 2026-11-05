@@ -897,7 +897,7 @@ python3 tools/context.py --help
 | 文件 | 内容 |
 | --- | --- |
 | `src/generated/types.ts` | 生成：类型 + 解码器 + 按需生成的 `expect_*` 辅助函数；未知枚举、缺字段、非法十进制文本都抛错 |
-| `src/generated/client.ts` | 生成：`FetchLike`、`ClientOptions`（`base_url`/`fetch`/`request_id`）、`ApiError`（`status` + 已解码 `body`）、`ProtocolError`（畸形响应/未知错误码）与每个端点的 `getCapabilities`/`getHealth`；非 2xx 按 `ErrorEnvelope` 解码成 `ApiError` |
+| `src/generated/client.ts` | 生成：`FetchLike`、`ClientOptions`（`base_url`/`fetch`/`request_id`）、`ApiError`（`status` + 已解码 `body`）、`ProtocolError`（畸形响应/未知错误码）与每个端点的调用函数；非 2xx 按 `ErrorEnvelope` 解码成 `ApiError`。S046-b 起字节端点（`downloadVersionContent`）返回 `Uint8Array` 并走 `read_bytes`，`request_headers(options, init, content_type, accept)` 按响应体声明 `accept`；契约里的必填请求头参数（`x-part-sha256`）生成成函数参数并在 `request_headers(...)` 之后 `headers.set(...)`；可选请求头（`Range`）由调用方经 `init.headers` 传 |
 | `src/index.ts` | 手写的稳定导出面（design §5.6）：只从这里导出类型、解码器、错误类与调用函数 |
 | `tests/schema-decoders.mjs` | 运行时断言（9 项），直接以 `.mjs` 导入 `../src/generated/types.ts`（Node 24 原生剥离类型，无需构建步骤），并读取 `api/examples/` |
 
@@ -1535,8 +1535,7 @@ python3 tools/context.py --help
 
 ## crates/server-core — 上传 finalize 与固定版本下载（S046）
 
-状态：S046 实现（核心规则与端口）。**契约与 HTTP 端点尚未接入**，见本文件 §上传端点末的已知缺口与
-`agent/tasks/S046.md` §4。
+状态：S046 实现核心规则与端口，S046-b 接上契约与 HTTP 端点（见下文「apps/server — 内容端点」）。
 
 | 接口 | 契约 |
 | --- | --- |
@@ -1552,10 +1551,13 @@ python3 tools/context.py --help
 | `ports::upload_session::UploadSessionStore` 增量 | `parts(upload)`（索引升序）、`mark_complete`（适配器须先确认无缺失块）、`mark_finalized`、`abort` |
 | `ports::object_store::ObjectBlobPort::read_object_range(object, offset, length)` | 返回 `StoredSlice{data,bytes}`；短读是错误，不补零；`offset+length` 越界为错误 |
 
-适配器落地情况：`apps/server::uploads::DbUploads` 已实现四个新增会话方法（`parts_of`/
+适配器落地情况（S046-b）：`apps/server::uploads::DbUploads` 已实现四个新增会话方法（`parts_of`/
 `mark_upload_complete`/`mark_upload_finalized`/`abort_upload`，各自独立写事务）；
-`crates/platform-linux-server/examples/object-capture.rs` 的 `LinuxObjectPort` 已实现区间读；
-`ContentPublisher`/`ContentObjectStore`/`VersionContentStore` 的适配器尚未实现（随契约卡一起做）。
+`apps/server::content` 实现 `FsAssembler`（块拼装 + `objects::capture_object` 发布语义）、
+`DbObjects`（`versions::record_object`）、`DbVersionContent`（`versions::current_version` +
+`versions::version_history`）、`DbLeases`（`object_leases` 的 download 租约）与 `FsObjectPort`
+（对象区整份/区间读）；`crates/platform-linux-server/examples/object-capture.rs` 的
+`LinuxObjectPort` 同样已实现区间读。
 
 ## apps/server — 上传端点（S045）
 
@@ -1572,5 +1574,25 @@ python3 tools/context.py --help
 413（请求体超过策略上限，由路由层在处理器之前返回，无错误信封）、503 `NEEDS_RECOVERY`、
 507 `INSUFFICIENT_STORAGE`。暂存落在 `state_dir/uploads/<upload_id>/<index>`（临时文件 → fsync →
 rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 都在写盘之前返回，不留暂存文件。
-**已知缺口**：`x-part-sha256` 仍未进 `api/openapi.yaml`（生成器只支持 `in: path`，header 参数
-支持仍待做，S045-b 已写清步骤）；`INVALID_REQUEST`/`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行。
+`x-part-sha256` 自 S046-b 起是契约里的真实请求头参数（生成器 `format_version 4` 支持 `in: header`）；
+契约里它是 `putUploadPart` 的必填参数，生成的 TS 客户端把它作为 `x_part_sha256` 参数并在
+`request_headers(...)` 之后 `headers.set("x-part-sha256", …)`。
+**已知缺口**：`INVALID_REQUEST`/`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行（等用户确认措辞）。
+
+## apps/server — 内容端点（S046-b）
+
+`POST /v1/roots/{root}/uploads/{upload}/finalize`（JSON）与
+`GET /v1/roots/{root}/entries/{entry}/versions/{version}/content`（二进制/区间）都先
+`auth::principal_from` 再 `auth::authorize_root`，然后才动存储。
+
+| 端点 | 语义与实测返回码 |
+| --- | --- |
+| `POST …/uploads/{upload}/finalize` | 200 `FinalizedContent{upload_id, root_id, hash, size, storage_path, part_count, reuse, replayed}`（可提交内容引用，**不改条目 head**）；块未收齐 400 `INVALID_REQUEST`（不改会话状态）；拼装内容与声明的总长度/总哈希不符 422 `HASH_MISMATCH`（会话转 `aborted`、不登记对象）；会话已放弃 409 `PART_CONFLICT`；重复调用 200 且 `replayed=true`（不重新发布）；缺凭据 401 `AUTH_EXPIRED`、跨 Root 403 `ACCESS_DENIED`、会话不存在/不属于该登录会话 404 `UNSUPPORTED_ENTRY`、满盘 507 `INSUFFICIENT_STORAGE`、其余存储失败 503 `NEEDS_RECOVERY` |
+| `GET …/entries/{entry}/versions/{version}/content` | 整份 200 `application/octet-stream` + `Content-Length` + `x-content-sha256`（该版本的整份内容地址）+ `Accept-Ranges: bytes`；带 `Range: bytes=start-end`/`bytes=start-`/`bytes=-suffix` 时 206 + `Content-Range: bytes start-end/total`；区间语法非法/越界/多区间 400 `INVALID_REQUEST`；版本不存在、已清理、不属于该条目或该 Root 410 `VERSION_GONE`（不回退成当前内容）；缺凭据 401、跨 Root 403、读取或租约失败 503 |
+
+对象区布局：`state_dir/objects/objects/<前 2 位十六进制>/<64 位十六进制>`（已发布）与
+`state_dir/objects/staging/<名字>`（未发布）；块暂存仍是 `state_dir/uploads/<upload_id>/<index>`。
+下载读取前建立 `object_leases` 的 `download` 租约（`ttl 900 s`），读完解除；解除失败只记录日志，
+不改判已读出的字节。生成侧：`MediaType.schema` 可选、成功响应折叠成 `SuccessBody::{Json,Bytes}`
+（同一端点可同时声明 200 与 206，形状必须一致），字节响应的 TS 函数返回 `Uint8Array` 并走
+`read_bytes`（非 2xx 仍按错误信封 `read_json`）。
