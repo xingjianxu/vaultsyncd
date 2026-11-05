@@ -2,7 +2,9 @@
 # 每张卡只加入真实存在的成员，避免为空目录预建 crate 占位。
 [workspace]
 resolver = "3"
-members = ["crates/domain"]
+members = ["crates/domain", "tools/xtask"]
+# default-members 只选可移植核心：`cargo test --locked`/`cargo clippy` 不构建 xtask 等编排工具，
+# 保证便携检查（含 Windows 与 CI 的默认目标）不受开发工具影响。
 default-members = ["crates/domain"]
 
 [workspace.package]

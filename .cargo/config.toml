@@ -1,0 +1,4 @@
+# Cargo 别名：把 `cargo xtask <子命令>` 映射到 tools/xtask 的二进制（docs/design.md §5.2）。
+# 这里只加别名，不设置构建目标、镜像、链接器或网络行为。
+[alias]
+xtask = "run --package vaultsyncd-xtask --"

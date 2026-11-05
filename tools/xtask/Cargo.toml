@@ -1,0 +1,15 @@
+[package]
+name = "vaultsyncd-xtask"
+description = "vaultsyncd 的构建、生成、检查与发布编排入口（docs/design.md §5.2）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 二进制名固定为 xtask，与根 .cargo/config.toml 的 alias 对应：`cargo xtask <子命令>`。
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[lints]
+workspace = true
