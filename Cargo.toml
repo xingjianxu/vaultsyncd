@@ -7,6 +7,7 @@ resolver = "3"
 # crates/platform-linux-server 是服务端 Linux 平台适配层（S013 起），只在 Linux 上编译；
 # 它的挂载准入需要直接调用 fstatfs/statx/ioctl，因此同样不进 default-members。
 members = [
+    "crates/client-store",
     "crates/domain",
     "crates/fs-common",
     "crates/planner",
@@ -27,10 +28,15 @@ members = [
 # 没有任何平台 API，任何宿主目标都能编译与测试，因此进 default-members，让迁移框架的回归进入
 # 便携检查（`cargo xtask check`/CI 的 `cargo test --locked`）。它不引入前端或客体依赖。
 #
+# crates/client-store 是客户端 SQLite 存储层（S030）：同样只有 SQLx + domain，没有任何平台 API，
+# 因此也进 default-members；客户端库的种类与 schema 门禁、三张条目表并存的组合都能在便携检查里
+# 回归。它与 server-store 之间没有依赖：两套 schema、两个数据库文件（design §7.3）。
+#
 # default-members 只选可移植核心：`cargo test --locked`/`cargo clippy` 不构建 xtask 等编排工具，
 # 也不构建只能在 Windows 上运行的测试包与平台适配层（crates/platform-windows 的 Windows 目标
 # 代码只有交叉构建 + 客体运行才能验证），保证便携检查（含 Windows 与 CI 的默认目标）不受影响。
 default-members = [
+    "crates/client-store",
     "crates/domain",
     "crates/fs-common",
     "crates/planner",

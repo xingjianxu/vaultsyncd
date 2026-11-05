@@ -511,7 +511,7 @@ pub fn plan_content_conflict(
                 conflict_entry_path(&local.path, &naming).map_err(ConflictPlanError::Name)?;
             ConflictCopy::Create(create_copy_plan(
                 path,
-                remote,
+                Some(remote),
                 local,
                 conflict_entry_id,
                 naming.op_id,
@@ -539,13 +539,34 @@ fn retain_server_head(
 }
 
 /// 迟到分支内容的新条目计划：上传该代际的本地快照，不覆盖主路径。
-fn create_copy_plan(
+///
+/// `head` 是本次提交所依据的服务端 head：同父目录下的冲突副本把它的修订当作 CAS 前提；目标位置与主条目
+/// 不同的新建条目（移动的迟到分支、删除的恢复条目）传 `None`，前提改为“该位置仍为空”。
+pub(crate) fn create_copy_plan(
     path: RelativePath,
-    remote: &ServerFact,
+    head: Option<&ServerFact>,
     local: &LocalFact,
     entry_id: EntryId,
     op_id: OpId,
 ) -> Plan {
+    let prerequisites = match head {
+        Some(head) => vec![
+            Prerequisite::BaseRevisionCurrent {
+                expected: head.revision,
+            },
+            Prerequisite::GenerationUnchanged {
+                expected: local.generation,
+            },
+            Prerequisite::TargetPathUsable,
+        ],
+        None => vec![
+            Prerequisite::GenerationUnchanged {
+                expected: local.generation,
+            },
+            Prerequisite::TargetPathUsable,
+            Prerequisite::ServerPathVacant,
+        ],
+    };
     Plan {
         path,
         action: Action::CreateConflictCopy {
@@ -553,15 +574,7 @@ fn create_copy_plan(
             op_id,
             generation: local.generation,
         },
-        prerequisites: vec![
-            Prerequisite::BaseRevisionCurrent {
-                expected: remote.revision,
-            },
-            Prerequisite::GenerationUnchanged {
-                expected: local.generation,
-            },
-            Prerequisite::TargetPathUsable,
-        ],
+        prerequisites,
         dependencies: vec![
             Dependency::ParentDirectoryReady,
             Dependency::SnapshotLocalContent {

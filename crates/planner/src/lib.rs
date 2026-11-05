@@ -12,11 +12,20 @@
 //! - [`first_sync::plan_first_sync`]：没有基线的首次合并，落 design §9.2 第 4—7 步；它不接受基线
 //!   参数，因此不会把“另一端没有”当成删除（I07）。
 //!
-//! 内容冲突副本由 [`conflict`] 落 design §10.1—10.2（服务器 head 保留主路径 + 迟到分支的稳定身份冲突
-//! 副本、按名称预算截断的冲突名）。移动/删除矩阵（`rename.rs`/`delete.rs`）由后续卡补齐；在此之前这些
-//! 输入只给出明确的延期裁决或“保留双方”计划，不生成删除或覆盖动作。
+//! 冲突与结构变化各有专门入口，彼此不重叠：
+//!
+//! - [`conflict`]：design §10.1—10.2 的内容冲突（服务器 head 保留主路径 + 迟到分支的稳定身份冲突副本、
+//!   按名称预算截断的冲突名）。
+//! - [`rename`]：design §9.5、§10.1 移动行的同 Root 移动（移动+修改、双移动、移动+修改的保守双副本）
+//!   与跨 Root 的“目标创建确认 + 源删除”两段任务。
+//! - [`delete`]：design §10.1 删除行、§10.3 的删除与恢复冲突（删除与修改/移动并发、目录子树 token）。
+//!
+//! [`reconcile`] 遇到这些输入仍然只给 [`reconcile::DeferReason`] 转交信号（`MissingEntry`、
+//! `LocationOrKindChanged`），由上层按缺失方向改调上面某个入口；规划器自身从不生成未经裁决的删除或覆盖。
 #![forbid(unsafe_code)]
 
 pub mod conflict;
+pub mod delete;
 pub mod first_sync;
 pub mod reconcile;
+pub mod rename;
