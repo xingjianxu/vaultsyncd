@@ -1340,3 +1340,38 @@ python3 tools/context.py --help
 - **配置不猜默认**：未知键、非法地址、缺失/相对状态目录一律退出码 2，且不创建数据库。
 
 未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Root 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥仍靠部署约定（同 S037 限制）。
+
+## crates/server-core — 历史版本与回收站恢复（S040）
+
+主要落点 `crates/server-core/src/history/`（`version`、`trash`），端口在 `ports/restore_store.rs` 与
+`ports/content_lease.rs`。设计依据 design §10.3、I12、T13。
+
+### 端口与模块
+
+| 项 | 契约 |
+| --- | --- |
+| `history::version::VersionRestoreRequest` | `intent_id`（重试复用）、`op: OperationKey`、`digest: RequestDigest`（覆盖条目/基线/版本/路径）、`entry`、`version`（被恢复的旧版本）、`expected_epoch`、`expected_revision`、`target_path`、`staging_path`、`before: TargetBefore` |
+| `history::version::restore_version(gate, store, log, target, leases, at, &request)` | 顺序：请求形状 → Root 票据 → epoch → `OpId` 记录 → 版本事实（归属/保留期/种类/基线/名称）→ 内容租约 → 现场指纹 → `publish_put` → `RestoreStore::apply_version_restore` → 核对证据 → 解除租约。返回 `RestoredVersion{ result, lease }` |
+| `history::version::CommittedVersionRestore` | `op`、`root`、`entry`、`version`（**新**当前版本）、`restored_from`（旧版本）、`content`、`revision`、`seq`、`path`；`version != restored_from`、`revision > 基线` 是核心核对项（I12） |
+| `history::trash::TrashRestoreRequest` | `intent_id`、`op`、`digest`、`entry`、`expected_epoch`、`expected_revision`（清单里删除时的 revision）、`staging_path` |
+| `history::trash::restore_trash(gate, &mut TrashRestorePorts{store,log,target,namespace,leases}, at, &request)` | 顺序：epoch → `OpId` 记录 → 清单（存在/未过期/revison 一致）→ 父目录是活目录 → 实际名称（占用则另名）→ 登记 pending → `mkdir` 或 租约 + 意图 + 发布 → `apply_trash_restore` → 核对证据。返回 `RestoredTrash{ result, lease }` |
+| `history::trash::CommittedTrashRestore` | `op`、`root`、`entry`（身份不变）、`path`、`name`（可能另名）、`renamed`、`revision`、`seq`、`entries` |
+| `history::trash::alternate_name` | `名称（恢复）.ext`、`名称（恢复 2）.ext`…扩展名保留；`.gitignore` 这类名称整段算原干；上限 `MAX_RESTORE_NAME_ATTEMPTS = 32` |
+| `history::RestoreFailure` / `RestoreFailureReason` | 稳定码 + `error_code()`（design §15.4）+ `intent_id`/`phase`（意图证据）+ `lease_expires_at`（遗留租约）；`is_committed()` 恒为 `false` |
+| `ports::content_lease::ContentLeasePort` | `acquire(&ContentLeaseRequest{root,digest,purpose,expires_at}) -> ContentLease{id,purpose,expires_at}`、`release(&lease)`；`purpose` 与 `object_leases.purpose`（`download`/`commit`）同一套取值；只保护已登记对象 |
+| `ports::restore_store::RestoreStore` | `root_facts`、`operation`、`begin_restore`、`version_facts -> VersionFacts{entry,content,retained_until}`、`apply_version_restore(&VersionRestoreWrite) -> VersionRestoreRecord` |
+| `ports::restore_store::TrashRestoreStore` | `root_facts`、`operation`、`begin_restore`、`trash_subtree -> Option<TrashSubtree>`、`parent_kind`、`name_occupant`（只算活跃条目）、`content_facts(root, version)`、`apply_trash_restore(&TrashRestoreWrite) -> TrashRestoreRecord` |
+| 幂等 | `RestoreBegin::{Started, Recorded}`；同一 `OpId` 同摘要 → 重放首次结果（不再建租约、不再写事务），不同摘要 → `op_id_reused`，登记未收尾 → `operation_pending`（wire `NEEDS_RECOVERY`） |
+
+### 不变量与未接入
+
+- **历史不可变（I12）**：恢复只追加新版本行并引用旧版本的同一内容对象；端口契约禁止修改旧版本行，
+  核心核对 `result.version != restored_from` 与 `result.content == 旧版本内容`。
+- **不覆盖现有内容（T13）**：原名称被活跃条目占用时另名并回报实际 `path`/`name`；现场必须空缺才能发布，
+  事务内再核一次占用（`NameOccupied`）。
+- **失败不是 committed**：任何失败都返回 `RestoreFailure`（`is_committed()==false`），已写意图停在
+  `prepared`/`published`，`pending` 记录保留；租约解除失败只记 `lease_expires_at`，不改判结果。
+- **带后代的目录子树恢复尚未接入**：清单多于一行时返回 `restore_subtree_unsupported`（wire
+  `UNSUPPORTED_ENTRY`），不做部分恢复。批量编排（按深度 `mkdir` + 逐文件发布 + 多意图单一事务）属后续卡。
+- **真实适配器未落地**：`RestoreStore`/`TrashRestoreStore`/`ContentLeasePort` 的 SQLx 实现与进程内装配
+  仍未写（与 S035/S039 的同类缺口一致），本卡证明的是核心编排、端口契约与证据核对。

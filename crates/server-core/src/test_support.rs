@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use vaultsyncd_domain::ids::{DeviceId, EntryId, ID_LEN, IntentId, OpId, RootId, TxId, VersionId};
+use vaultsyncd_domain::ids::{
+    DeviceId, EntryId, ID_LEN, IntentId, ObjectLeaseId, OpId, RootId, TxId, VersionId,
+};
 use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
 
 use crate::commit::conflict::CommittedConflict;
@@ -16,10 +18,15 @@ use crate::commit::delete::{
 };
 use crate::commit::intent::{NewPutIntent, PutIntent, PutPhase, TargetSnapshot};
 use crate::commit::namespace::{NamespaceIntent, NewNamespaceIntent};
-use crate::objects::ContentDigest;
+use crate::history::trash::CommittedTrashRestore;
+use crate::history::version::CommittedVersionRestore;
+use crate::objects::{ContentDigest, ExpectedContent};
 use crate::ports::conflict_store::{
     ConflictBegin, ConflictCommitStore, ConflictHead, ConflictRecord, ConflictStoreError,
     ConflictWrite, HeadSource, OperationKey, RecordedOperation, RequestDigest,
+};
+use crate::ports::content_lease::{
+    ContentLease, ContentLeaseError, ContentLeasePort, ContentLeaseRequest,
 };
 use crate::ports::intent_log::{DeleteIntentLog, IntentLog, IntentLogError, NamespaceIntentLog};
 use crate::ports::namespace::{NamespaceError, NamespacePort, PathState};
@@ -32,6 +39,11 @@ use crate::ports::put_store::{
     RootFacts,
 };
 use crate::ports::removal::{RemovalError, RemovalPort, RemovalProgress};
+use crate::ports::restore_store::{
+    RecordedTrashRestore, RecordedVersionRestore, RestoreBegin, RestoreStore, RestoreStoreError,
+    TrashEntryFacts, TrashRestoreRecord, TrashRestoreStore, TrashRestoreWrite, TrashSubtree,
+    VersionFacts, VersionRestoreRecord, VersionRestoreWrite,
+};
 use crate::ports::target::{
     PublishRequest, PublishedTarget, TargetError, TargetObservation, TargetPort,
 };
@@ -1247,4 +1259,398 @@ pub(crate) fn batch_entries(batches: &[DeleteBatch]) -> Vec<EntryId> {
         .iter()
         .flat_map(|batch| batch.entries.iter().map(|item| item.entry))
         .collect()
+}
+
+/// 内存内容租约：记录请求与解除，可脚本化错误。
+#[derive(Default)]
+pub(crate) struct FakeContentLease {
+    pub(crate) trace: Trace,
+    pub(crate) acquired: Vec<ContentLeaseRequest>,
+    pub(crate) released: Vec<ObjectLeaseId>,
+    pub(crate) acquire_error: Option<ContentLeaseError>,
+    pub(crate) release_error: Option<ContentLeaseError>,
+    next: u64,
+}
+
+impl FakeContentLease {
+    pub(crate) fn new() -> Self {
+        FakeContentLease::default()
+    }
+
+    pub(crate) fn with_trace(mut self, trace: Trace) -> Self {
+        self.trace = trace;
+        self
+    }
+}
+
+impl ContentLeasePort for FakeContentLease {
+    async fn acquire(
+        &mut self,
+        request: &ContentLeaseRequest,
+    ) -> Result<ContentLease, ContentLeaseError> {
+        self.trace.record("lease acquire".to_owned());
+        if let Some(error) = self.acquire_error.take() {
+            return Err(error);
+        }
+        self.acquired.push(*request);
+        self.next += 1;
+        Ok(ContentLease {
+            id: ObjectLeaseId::from_bytes([self.next as u8; ID_LEN]),
+            purpose: request.purpose,
+            expires_at: request.expires_at,
+        })
+    }
+
+    async fn release(&mut self, lease: &ContentLease) -> Result<(), ContentLeaseError> {
+        self.trace.record("lease release".to_owned());
+        if let Some(error) = self.release_error.take() {
+            return Err(error);
+        }
+        self.released.push(lease.id);
+        Ok(())
+    }
+}
+
+/// 历史版本恢复的内存存储：可脚本化事实与错误，并记录事务输入。
+pub(crate) struct FakeRestoreStore {
+    pub(crate) trace: Trace,
+    pub(crate) facts: RootFacts,
+    pub(crate) version: Option<VersionFacts>,
+    pub(crate) recorded: Vec<(OperationKey, RecordedVersionRestore)>,
+    pub(crate) root_facts_error: Option<RestoreStoreError>,
+    pub(crate) version_error: Option<RestoreStoreError>,
+    pub(crate) apply_error: Option<RestoreStoreError>,
+    pub(crate) writes: Vec<VersionRestoreWrite>,
+    pub(crate) record: Option<VersionRestoreRecord>,
+}
+
+impl FakeRestoreStore {
+    pub(crate) fn new(version: VersionFacts) -> Self {
+        FakeRestoreStore {
+            trace: Trace::default(),
+            facts: RootFacts { epoch: epoch(3) },
+            version: Some(version),
+            recorded: Vec::new(),
+            root_facts_error: None,
+            version_error: None,
+            apply_error: None,
+            writes: Vec::new(),
+            record: None,
+        }
+    }
+
+    pub(crate) fn default_record(write: &VersionRestoreWrite) -> VersionRestoreRecord {
+        VersionRestoreRecord {
+            intent_id: write.intent_id,
+            phase: PutPhase::Finalized,
+            tx: tx_id(0x73),
+            result: CommittedVersionRestore {
+                op: write.key.op,
+                root: write.key.root,
+                entry: write.entry,
+                version: version_id(0x82),
+                restored_from: write.restored_from,
+                content: write.content,
+                revision: write
+                    .expected_revision
+                    .next()
+                    .expect("测试用 revision 可推进"),
+                seq: root_seq(13),
+                path: write.path.clone(),
+            },
+        }
+    }
+}
+
+impl RestoreStore for FakeRestoreStore {
+    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError> {
+        self.trace.record(format!("store root_facts {root}"));
+        match self.root_facts_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.facts),
+        }
+    }
+
+    async fn operation(
+        &mut self,
+        key: OperationKey,
+    ) -> Result<Option<RecordedVersionRestore>, RestoreStoreError> {
+        self.trace.record("store operation".to_owned());
+        Ok(self
+            .recorded
+            .iter()
+            .find(|(recorded, _)| *recorded == key)
+            .map(|(_, record)| record.clone()))
+    }
+
+    async fn begin_restore(
+        &mut self,
+        key: OperationKey,
+        digest: RequestDigest,
+    ) -> Result<RestoreBegin, RestoreStoreError> {
+        self.trace.record("store begin_restore".to_owned());
+        if self.recorded.iter().any(|(recorded, _)| *recorded == key) {
+            return Ok(RestoreBegin::Recorded);
+        }
+        self.recorded.push((
+            key,
+            RecordedVersionRestore {
+                digest,
+                result: None,
+            },
+        ));
+        Ok(RestoreBegin::Started)
+    }
+
+    async fn version_facts(
+        &mut self,
+        root: RootId,
+        entry: EntryId,
+        version: VersionId,
+    ) -> Result<VersionFacts, RestoreStoreError> {
+        self.trace
+            .record(format!("store version_facts {root} {entry} {version}"));
+        if let Some(error) = self.version_error.take() {
+            return Err(error);
+        }
+        self.version
+            .clone()
+            .ok_or(RestoreStoreError::VersionMissing { version })
+    }
+
+    async fn apply_version_restore(
+        &mut self,
+        write: &VersionRestoreWrite,
+    ) -> Result<VersionRestoreRecord, RestoreStoreError> {
+        self.trace.record("store apply_version_restore".to_owned());
+        self.writes.push(write.clone());
+        if let Some(error) = self.apply_error.take() {
+            return Err(error);
+        }
+        let record = self
+            .record
+            .clone()
+            .unwrap_or_else(|| Self::default_record(write));
+        let entry = (
+            write.key,
+            RecordedVersionRestore {
+                digest: write.digest,
+                result: Some(record.result.clone()),
+            },
+        );
+        match self
+            .recorded
+            .iter_mut()
+            .find(|(recorded, _)| *recorded == write.key)
+        {
+            Some(slot) => *slot = entry,
+            None => self.recorded.push(entry),
+        }
+        Ok(record)
+    }
+}
+
+/// 回收站恢复的内存存储：清单、占用、内容事实与事务输入。
+pub(crate) struct FakeTrashRestoreStore {
+    pub(crate) trace: Trace,
+    pub(crate) facts: RootFacts,
+    pub(crate) subtrees: std::collections::BTreeMap<EntryId, TrashSubtree>,
+    pub(crate) parents: std::collections::BTreeMap<EntryId, EntryKind>,
+    /// 名称 → 占用者；按（父目录, 名称）唯一。
+    pub(crate) occupants: std::collections::BTreeMap<(EntryId, String), EntryId>,
+    pub(crate) contents: std::collections::BTreeMap<VersionId, ExpectedContent>,
+    pub(crate) recorded: Vec<(OperationKey, RecordedTrashRestore)>,
+    pub(crate) root_facts_error: Option<RestoreStoreError>,
+    pub(crate) subtree_error: Option<RestoreStoreError>,
+    pub(crate) apply_error: Option<RestoreStoreError>,
+    pub(crate) writes: Vec<TrashRestoreWrite>,
+    pub(crate) record: Option<TrashRestoreRecord>,
+}
+
+impl Default for FakeTrashRestoreStore {
+    fn default() -> Self {
+        FakeTrashRestoreStore {
+            trace: Trace::default(),
+            facts: RootFacts { epoch: epoch(3) },
+            subtrees: std::collections::BTreeMap::new(),
+            parents: std::collections::BTreeMap::new(),
+            occupants: std::collections::BTreeMap::new(),
+            contents: std::collections::BTreeMap::new(),
+            recorded: Vec::new(),
+            root_facts_error: None,
+            subtree_error: None,
+            apply_error: None,
+            writes: Vec::new(),
+            record: None,
+        }
+    }
+}
+
+impl FakeTrashRestoreStore {
+    pub(crate) fn new() -> Self {
+        FakeTrashRestoreStore::default()
+    }
+
+    /// 放入一个回收站条目（`parent` 同时登记为已存在目录）。
+    pub(crate) fn with_trashed(mut self, facts: TrashEntryFacts, parent: EntryId) -> Self {
+        self.parents.insert(parent, EntryKind::Directory);
+        let subtree = TrashSubtree {
+            entries: vec![facts.clone()],
+        };
+        if let Some(version) = facts.content_version {
+            self.contents
+                .insert(version, ExpectedContent::new(digest(0x0d), 11));
+        }
+        self.subtrees.insert(facts.entry, subtree);
+        self
+    }
+
+    /// 让某个（父目录, 名称）被另一个活跃条目占用。
+    pub(crate) fn occupying(mut self, parent: EntryId, name: &str, occupant: EntryId) -> Self {
+        self.occupants.insert((parent, name.to_owned()), occupant);
+        self
+    }
+
+    fn default_record(write: &TrashRestoreWrite) -> TrashRestoreRecord {
+        TrashRestoreRecord {
+            intents: write.intents.clone(),
+            phase: PutPhase::Finalized,
+            tx: tx_id(0x74),
+            result: CommittedTrashRestore {
+                op: write.key.op,
+                root: write.key.root,
+                entry: write.entry,
+                path: write.path.clone(),
+                name: write.name.clone(),
+                renamed: write.renamed,
+                revision: write
+                    .expected_revision
+                    .next()
+                    .expect("测试用 revision 可推进"),
+                seq: root_seq(14),
+                entries: write.entries.len() as u64,
+            },
+        }
+    }
+}
+
+impl TrashRestoreStore for FakeTrashRestoreStore {
+    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError> {
+        self.trace.record(format!("store root_facts {root}"));
+        match self.root_facts_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.facts),
+        }
+    }
+
+    async fn operation(
+        &mut self,
+        key: OperationKey,
+    ) -> Result<Option<RecordedTrashRestore>, RestoreStoreError> {
+        self.trace.record("store operation".to_owned());
+        Ok(self
+            .recorded
+            .iter()
+            .find(|(recorded, _)| *recorded == key)
+            .map(|(_, record)| record.clone()))
+    }
+
+    async fn begin_restore(
+        &mut self,
+        key: OperationKey,
+        digest: RequestDigest,
+    ) -> Result<RestoreBegin, RestoreStoreError> {
+        self.trace.record("store begin_restore".to_owned());
+        if self.recorded.iter().any(|(recorded, _)| *recorded == key) {
+            return Ok(RestoreBegin::Recorded);
+        }
+        self.recorded.push((
+            key,
+            RecordedTrashRestore {
+                digest,
+                result: None,
+            },
+        ));
+        Ok(RestoreBegin::Started)
+    }
+
+    async fn trash_subtree(
+        &mut self,
+        root: RootId,
+        entry: EntryId,
+    ) -> Result<Option<TrashSubtree>, RestoreStoreError> {
+        self.trace
+            .record(format!("store trash_subtree {root} {entry}"));
+        if let Some(error) = self.subtree_error.take() {
+            return Err(error);
+        }
+        Ok(self.subtrees.get(&entry).cloned())
+    }
+
+    async fn parent_kind(
+        &mut self,
+        root: RootId,
+        parent: EntryId,
+    ) -> Result<Option<EntryKind>, RestoreStoreError> {
+        self.trace
+            .record(format!("store parent_kind {root} {parent}"));
+        Ok(self.parents.get(&parent).copied())
+    }
+
+    async fn name_occupant(
+        &mut self,
+        root: RootId,
+        parent: EntryId,
+        name: &str,
+    ) -> Result<Option<EntryId>, RestoreStoreError> {
+        self.trace
+            .record(format!("store name_occupant {root} {parent} {name}"));
+        Ok(self.occupants.get(&(parent, name.to_owned())).copied())
+    }
+
+    async fn content_facts(
+        &mut self,
+        root: RootId,
+        version: VersionId,
+    ) -> Result<Option<ExpectedContent>, RestoreStoreError> {
+        self.trace
+            .record(format!("store content_facts {root} {version}"));
+        Ok(self.contents.get(&version).copied())
+    }
+
+    async fn apply_trash_restore(
+        &mut self,
+        write: &TrashRestoreWrite,
+    ) -> Result<TrashRestoreRecord, RestoreStoreError> {
+        self.trace.record("store apply_trash_restore".to_owned());
+        self.writes.push(write.clone());
+        if let Some(error) = self.apply_error.take() {
+            return Err(error);
+        }
+        let record = self
+            .record
+            .clone()
+            .unwrap_or_else(|| Self::default_record(write));
+        let entry = (
+            write.key,
+            RecordedTrashRestore {
+                digest: write.digest,
+                result: Some(record.result.clone()),
+            },
+        );
+        match self
+            .recorded
+            .iter_mut()
+            .find(|(recorded, _)| *recorded == write.key)
+        {
+            Some(slot) => *slot = entry,
+            None => self.recorded.push(entry),
+        }
+        Ok(record)
+    }
+}
+
+/// 测试用内容摘要：`marker` 字节填满 32 字节。
+pub(crate) fn digest(marker: u8) -> ContentDigest {
+    ContentDigest::from_bytes([marker; 32])
 }
