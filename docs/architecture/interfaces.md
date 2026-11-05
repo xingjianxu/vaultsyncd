@@ -79,7 +79,7 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| 根清单 | `Cargo.toml` 为虚拟 workspace（无 `[package]`）；`resolver = "3"`；`members`/`default-members` 只列真实存在的包。当前 `members = ["crates/domain", "crates/platform-linux-server", "crates/platform-windows", "tests/windows-integration", "tools/xtask"]`，`default-members = ["crates/domain"]`：两个平台适配层、只能在 Windows 上运行的测试包与仅用于编排的工具都不进默认集合 |
+| 根清单 | `Cargo.toml` 为虚拟 workspace（无 `[package]`）；`resolver = "3"`；`members`/`default-members` 只列真实存在的包。当前 `members = ["crates/domain", "crates/platform-linux-server", "crates/platform-windows", "crates/protocol", "tests/windows-integration", "tools/xtask"]`，`default-members = ["crates/domain", "crates/protocol"]`：两个平台适配层、只能在 Windows 上运行的测试包与仅用于编排的工具都不进默认集合；`crates/protocol` 只依赖 serde 与 domain，两端共用，因此进默认集合（S024） |
 | 包命名 | `crates/<目录>/` 的包名为 `vaultsyncd-<目录>`（如 `vaultsyncd-domain`）；`apps/` 入口按 design §5.7 的 `vaultsyncd-server`/`-admin`/`-agent`/`-cli` |
 | 共享包字段 | `[workspace.package]`：`edition = "2024"`、`rust-version = "1.85.0"`、`version = "0.1.0"`、`publish = false`；成员用 `<字段>.workspace = true` 继承，不重复字面量 |
 | lint 接线 | 成员默认写 `[lints] workspace = true`。`[workspace.lints.rust]`：`unsafe_code`、`missing_docs`、`unused` = deny；`[workspace.lints.clippy]`：`all = { level = "deny", priority = -1 }`。crate 内的 `#![forbid(unsafe_code)]` 是更硬的内层约束。**包级放行 `unsafe_code` 的唯一可行写法**（S010 实测）：省略 `[lints] workspace` 键（写 `workspace = false` 会报错“`workspace` cannot be false”，与 `workspace = true` 并存会被拒“cannot override `workspace.lints` in `lints`”），然后在包内手抄 workspace 的其余 lint（`missing_docs`/`unused` deny、`clippy::all` deny）并在 `Cargo.toml` 注释说明理由；实测 `crates/platform-windows` 的 `missing_docs` 与 `unsafe_code` 行为都符合预期。也可以不改 lint 表，改用各 target 源码里的 crate 级 `#![allow(unsafe_code)]`（`tests/windows-integration` 的做法）。S013 的 `crates/platform-linux-server` 用同一写法（包级 `unsafe_code = "allow"` + 手抄其余 lint），理由同样是必须直接调用内核 ABI |
@@ -91,13 +91,13 @@ python3 tools/context.py --help
 
 ## 前端 pnpm workspace 与 UI 包
 
-状态：S005 实现。当前唯一成员 `packages/ui`；`apps/web`、`apps/desktop`、`packages/api-client`、`packages/local-ipc-types` 按各自卡创建后再加入成员列表。所有 node/pnpm 命令在 `nix develop -c` 内执行（版本见 `docs/environment.md` §10）。
+状态：S005 建立 workspace，S024 增加 `packages/api-client`（远端 HTTP 客户端）。当前成员 `packages/api-client`、`packages/ui`；`apps/web`、`apps/desktop`、`packages/local-ipc-types` 按各自卡创建后再加入成员列表。所有 node/pnpm 命令在 `nix develop -c` 内执行（版本见 `docs/environment.md` §10）。
 
 | 项目 | 契约 |
 | --- | --- |
 | 根清单 | `package.json`：`private: true`；`packageManager: "pnpm@12.9.0"`；`engines.node = "24.21.0"`、`engines.pnpm = "12.9.0"` 全部写死 devShell 实测值，版本源是 `flake.lock` 固定的 nixpkgs，不追“最新”；换版本必须先改 flake 输入 |
 | 根脚本 | `typecheck` = `pnpm --recursive run typecheck`，覆盖全部成员；新成员只需提供同名 script，无需改根脚本 |
-| 成员登记 | `pnpm-workspace.yaml` 只列已经真实存在的目录（当前 `packages/ui`），不为未创建的 apps 预留占位 |
+| 成员登记 | `pnpm-workspace.yaml` 只列已经真实存在的目录（当前 `packages/api-client`、`packages/ui`），不为未创建的 apps 预留占位 |
 | 包命名 | `packages/<目录>/` 的包名为 `@vaultsyncd/<目录>`（`@vaultsyncd/ui`），`private: true`，version 与 Rust workspace 同为 `0.1.0` |
 | 共享 TS 配置 | 仓库根 `tsconfig.base.json`：`strict`、ES2022 + DOM、`module: ESNext`、`moduleResolution: bundler`、`jsx: react-jsx`、`esModuleInterop`、`isolatedModules`、`skipLibCheck`；成员 `tsconfig.json` 只写 `extends: "../../tsconfig.base.json"` 与 `include` |
 | UI 包边界 | `packages/ui/src/` 只放无平台 I/O 的展示组件与类型（design §5.6、§6）：不 fetch、不读文件、不走 IPC、不持有同步状态；状态语义由 Rust 纯核心定义，应用层映射后传文案 |
@@ -175,15 +175,15 @@ python3 tools/context.py --help
 
 ## tools/xtask — 任务编排入口
 
-状态：S006 实现（`env`、`check` 可用；`generate`/`package` 明确未实现）。包名 `vaultsyncd-xtask`，二进制名 `xtask`，edition 2024，无第三方依赖。它属于 workspace `members` 但**不在 `default-members`**：便携的 `cargo check --locked`/`cargo test --locked`/`cargo clippy` 只构建 `crates/domain` 等核心成员，不构建编排工具。
+状态：S006 实现 `env`/`check`，S024 实现 `generate`（`package` 仍明确未实现）。包名 `vaultsyncd-xtask`，二进制名 `xtask`，edition 2024。S024 起允许第三方解析器依赖：`serde`（derive）、`serde_yaml_ng` 0.10、`toml` 0.9，全部由根 `Cargo.lock` 锁定；不引入模板引擎，生成逻辑在本包内。它属于 workspace `members` 但**不在 `default-members`**：便携的 `cargo check --locked`/`cargo test --locked`/`cargo clippy` 只构建核心成员，不构建编排工具。
 
 调用入口是根 `.cargo/config.toml` 的唯一别名 `xtask = "run --package vaultsyncd-xtask --"`；该文件不设置目标、镜像、链接器或网络行为。所有子命令都在 `cargo locate-project --workspace` 找到的根目录执行，因此可从任意子目录调用（构建信息由 cargo 写到 stderr）。
 
 | 子命令 | 行为 | 退出码 |
 | --- | --- | --- |
 | `env` | 只读诊断：定位 workspace 根；探测 `rustc/cargo/node/pnpm --version` 的实际输出（工具缺失时标「不可用」，不写死版本）；用 `cargo tree --locked --workspace --depth 0 --prefix none` 列出成员；列出 `Cargo.toml`、`Cargo.lock`、`package.json`、`pnpm-lock.yaml`、`rust-toolchain.toml`、`node_modules` 是否存在 | 0；无法定位 workspace 时 1 |
-| `check` | 先确认 `<root>/node_modules` 存在：缺失立即报错并提示 `pnpm install --frozen-lockfile`，不跳过前端检查。随后按固定顺序执行下表四步，逐步打印命令与退出码，末尾汇总失败步骤；子进程继承终端，诊断即时可见 | 全部通过 0；任一步失败 1 |
-| `generate` | 协议/代码生成：尚未实现，打印「未实现（Unsupported）」且不执行任何动作 | 3 |
+| `check` | 先确认 `<root>/node_modules` 存在：缺失立即报错并提示 `pnpm install --frozen-lockfile`，不跳过前端检查。随后按固定顺序执行下表五步，逐步打印命令与退出码，末尾汇总失败步骤；子进程继承终端，诊断即时可见 | 全部通过 0；任一步失败 1 |
+| `generate` | 从 `api/openapi.yaml` 生成 `crates/protocol/src/generated/mod.rs` 与 `packages/api-client/src/generated/*`；只写有变化的文件并打印路径。`--check` 不写盘，只逐字节比对，不一致时列出文件并退出 1。配置、契约与生成器的校验规则见下文「api/ — 远端协议契约源」 | 无 diff/写入成功 0；配置漂移、未支持构造、`--check` 有 diff 1；多余参数 2 |
 | `package` | 产品打包：尚未实现，同上 | 3 |
 | `help`、`--help`、`-h` | 打印子命令与退出码说明 | 0 |
 | 其他 / 缺少子命令 / 多余参数 | 打印未知名或参数错误并附帮助 | 2 |
@@ -192,12 +192,13 @@ python3 tools/context.py --help
 
 | 步骤名 | 命令 |
 | --- | --- |
+| `protocol-regenerate` | 进程内比对契约与生成代码（等价 `cargo xtask generate --check`），排在最前，失败即说明生成代码与 `api/openapi.yaml` 不同步 |
 | `rust-fmt` | `cargo fmt --check` |
 | `rust-clippy` | `cargo clippy --locked --all-targets -- -D warnings` |
 | `rust-test` | `cargo test --locked` |
 | `frontend-typecheck` | `pnpm --recursive run typecheck` |
 
-覆盖面：`cargo fmt --check` 覆盖全部成员（含 `tools/xtask`）；clippy 与 test 按 Cargo 语义只作用于 `default-members`（当前 `crates/domain`），xtask 自身需单独 `cargo clippy -p vaultsyncd-xtask --locked --all-targets -- -D warnings` 验证，扩展名成员后是否改为 `--workspace` 由后续卡按 §5.7/§5.8 决定。
+覆盖面：`cargo fmt --check` 覆盖全部成员（含 `tools/xtask` 与生成的 Rust 文件）；clippy 与 test 按 Cargo 语义只作用于 `default-members`（当前 `crates/domain`、`crates/protocol`），xtask 自身需单独 `cargo clippy -p vaultsyncd-xtask --locked --all-targets -- -D warnings` 验证，扩展名成员后是否改为 `--workspace` 由后续卡按 §5.7/§5.8 决定。`protocol-regenerate` 的失败是非零退出，因此 CI 的单步 `cargo xtask check` 已经包含“重新生成无 diff”检查。`pnpm --filter @vaultsyncd/api-client test` 的运行时断言不在 `check` 内（`check` 只跑 typecheck），需要在协议相关卡手动执行。
 
 约束：`env` 不硬编码会漂移的版本与成员清单；`check` 不吞输出、失败不报成功；未实现子命令不产生副作用。
 
@@ -462,3 +463,60 @@ python3 tools/context.py --help
 - 拒绝即报错：空文本、正负号、前导零、非十六进制字符、超界数值都返回明确变体，不静默取默认值或截断。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## api/ — 远端协议契约源与生成配置（S024）
+
+状态：S024 建立最小契约与生成通路。`api/` 是远端 HTTP 协议的唯一编辑源（design §5.6、§15.1—15.4），生成代码提交入库，`cargo xtask check` 用逐字节比对守住“契约与代码同步”。业务语义（状态机、不变量）仍以 design 为准，这里只记录契约文件的形状与生成器边界。
+
+| 文件 | 契约 |
+| --- | --- |
+| `api/openapi.yaml` | OpenAPI `3.1.0`。当前端点：`GET /v1/health`（无需认证、`HealthResponse`、503 用错误信封）、`GET /v1/capabilities`（`Capabilities`、503 用错误信封）。`info.description` 会原样进生成文件表头 |
+| `api/generation.toml` | 生成配置：`format_version = 1`、`generator = "vaultsyncd-xtask"`、`generator_version`（= 包版本）、`source`、`openapi_version`、`[outputs]` 三个路径、`[types.rust]`/`[types.typescript]` 映射表 |
+| `api/examples/*.response.json` | 合法响应样本（capabilities/health/error），被 `crates/protocol/tests/contract.rs` 与 `packages/api-client/tests/schema-decoders.mjs` 直接读取；改契约时同步更新 |
+
+### schema 子集与生成规则
+
+| 契约写法 | Rust | TypeScript |
+| --- | --- | --- |
+| 具名 `type: object` + `properties` + `required` | `pub struct`（`Debug`/`Clone`/`PartialEq`/`Eq`/`serde`），字段按名字排序，非必填为 `Option<T>` | `interface` + `decode<Name>()`，缺必填字段抛错 |
+| 具名 `type: string` + `enum` | `pub enum` + `#[serde(rename = "...")]`，无 catch-all | 字符串字面量联合 + `<NAME>_VALUES` + `decode<Name>()` 抛未知取值 |
+| `$ref: "#/components/schemas/X"` | `X` | `X` + `decodeX()` |
+| `type: string` / `boolean` / `integer` | `String` / `bool` / `u32`（`minimum`/`maximum` 只进文档） | `string` / `boolean` / `number`（整数校验） |
+| `type: string, format: decimal_u64` | `String` + `#[serde(with = "crate::decimal")]`：只接受规范十进制文本 | `string` + `expect_decimal()`：正则 `^(0|[1-9][0-9]*)$` |
+| `type: array` + `items` | `Vec<T>` | `Array<T>` + 逐元素解码 |
+| `type: object` + `additionalProperties: {type: string}` | `BTreeMap<String, String>` | `Record<string, string>` |
+
+### 生成器边界（失败优于猜测）
+
+- 未知/未实现构造一律报错退出：内联 `enum`、内联对象、`oneOf`/`anyOf`/`allOf`、`default` 状态码、非 `#/components/schemas/…` 的 `$ref`、映射值不是 string、`format` 不是 `decimal_u64`、根文档与 schema 的未知键（`serde(deny_unknown_fields)`）。
+- 契约卫生由生成器强制：每个具名 schema 与每个属性都必须有 `description`（生成的公开类型/字段要满足 `missing_docs`，TS 侧对应 JSDoc）；schema 名必须是 PascalCase ASCII 标识符；字段名必须是 snake_case 且不与 Rust 关键字冲突；`required` 不能列出未定义属性；每个端点必须有 `operationId`（lowerCamelCase，也是生成的函数名）、恰好一个 2xx 响应、所有非 2xx 响应引用 `ErrorEnvelope`。
+- 运行前核对 `api/generation.toml`：`format_version`、`generator`、`generator_version`（与 `env!("CARGO_PKG_VERSION")` 比）、`openapi_version`（与文档 `openapi` 字段比）任一不符即报错，避免配置与实现漂移。
+- 闭合枚举与十进制校验的语义由两侧测试共同锁定：`cargo test --locked -p vaultsyncd-protocol`（13 个契约用例）+ `pnpm --filter @vaultsyncd/api-client test`（9 项运行时断言）。
+- 生成文件表头标注“禁止手改”，不含时间戳或随机顺序，因此重新生成逐字节一致。
+
+## crates/protocol — 远端 wire 契约（S024）
+
+状态：S024 实现。包名 `vaultsyncd-protocol`，依赖 `serde`（derive）与 `vaultsyncd-domain`，dev 依赖 `serde_json`；在 `default-members` 内，Windows 与 Linux 共用。
+
+| 模块 | 契约 |
+| --- | --- |
+| `generated` | 生成代码（`api/openapi.yaml` → `crates/protocol/src/generated/mod.rs`）：`Capabilities`、`ProtocolVersion`、`CapabilityLimits`、`HealthResponse`、`HealthStatus`、`ErrorEnvelope`、`ErrorBody`、`ErrorCode`。闭合枚举无 catch-all，未知取值反序列化失败；未知字段被忽略（前向兼容） |
+| `decimal` | `DB_INTEGER_MAX = i64::MAX`、`DecimalTextError`（`Empty`/`Negative`/`LeadingZero`/`InvalidDigit`/`AboveDbLimit`）、`validate(&str) -> Result<u64, DecimalTextError>`，以及给 `#[serde(with = "crate::decimal")]` 用的 `deserialize`/`serialize`（JSON number、`"01"`、`"-1"`、超界文本都拒绝） |
+| `domain_map` | `server_epoch_to_wire`/`server_epoch_from_wire`（`ServerEpoch` ↔ 十进制文本）、`server_id_to_wire`/`server_id_from_wire`（`ServerId` ↔ 32 位十六进制）；只做显式转换，不实现 `From`/`Into` |
+
+不变量：wire DTO 不依赖 domain 类型（转换集中在 `domain_map`）；本 crate 不做 I/O、不读时钟、不取随机数；`decimal` 的规则与 `vaultsyncd_domain::version` 的规范十进制一致，`tests/contract.rs` 用同一份取值矩阵比对两处结论。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-protocol`、`cargo clippy --locked -p vaultsyncd-protocol --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-protocol`。
+
+## packages/api-client — 远端 HTTP 客户端（S024）
+
+状态：S024 实现。包名 `@vaultsyncd/api-client`，`private: true`，无运行时依赖，`exports` 指向 `./src/index.ts`；已加入 `pnpm-workspace.yaml` 与根 `typecheck`。
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/generated/types.ts` | 生成：类型 + 解码器 + 按需生成的 `expect_*` 辅助函数；未知枚举、缺字段、非法十进制文本都抛错 |
+| `src/generated/client.ts` | 生成：`FetchLike`、`ClientOptions`（`base_url`/`fetch`/`request_id`）、`ApiError`（`status` + 已解码 `body`）、`ProtocolError`（畸形响应/未知错误码）与每个端点的 `getCapabilities`/`getHealth`；非 2xx 按 `ErrorEnvelope` 解码成 `ApiError` |
+| `src/index.ts` | 手写的稳定导出面（design §5.6）：只从这里导出类型、解码器、错误类与调用函数 |
+| `tests/schema-decoders.mjs` | 运行时断言（9 项），直接以 `.mjs` 导入 `../src/generated/types.ts`（Node 24 原生剥离类型，无需构建步骤），并读取 `api/examples/` |
+
+脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。客户端不读全局 `fetch`/时钟：传输与 `x-request-id` 生成都由调用方注入，因此可在无浏览器的测试里替换。

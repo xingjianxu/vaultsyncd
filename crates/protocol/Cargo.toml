@@ -1,0 +1,17 @@
+[package]
+name = "vaultsyncd-protocol"
+description = "远端 HTTP wire 契约（api/openapi.yaml 生成）与 domain→wire 显式映射"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+vaultsyncd-domain = { path = "../domain" }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -4,18 +4,20 @@
 //! `cargo xtask <子命令>`，不各自复制一套命令。子命令契约与退出码见
 //! `docs/architecture/interfaces.md`。
 //!
-//! 本步只实现环境信息与既有检查的编排；协议生成与产品打包尚未实现，对应子命令
-//! 明确报未实现并以非零退出，不做假动作。
+//! 已实现环境信息、既有检查与协议生成（S024）；产品打包尚未实现，对应子命令明确报
+//! 未实现并以非零退出，不做假动作。
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output};
 
+mod generate;
+
 /// 子命令成功。
-const EXIT_OK: u8 = 0;
+pub(crate) const EXIT_OK: u8 = 0;
 /// 检查失败、工具缺失或运行环境不满足前置条件。
-const EXIT_FAILURE: u8 = 1;
+pub(crate) const EXIT_FAILURE: u8 = 1;
 /// 用法错误：未知子命令或多余参数。
-const EXIT_USAGE: u8 = 2;
+pub(crate) const EXIT_USAGE: u8 = 2;
 /// 子命令已规划但本步尚未实现。
 const EXIT_UNIMPLEMENTED: u8 = 3;
 
@@ -25,10 +27,12 @@ vaultsyncd 任务编排（xtask）。用法：cargo xtask <子命令>
 
 子命令：
   env       打印工具链、workspace 成员与关键路径（只读诊断，退出码 0）
-  check     依次运行 cargo fmt --check、
+  check     先比对协议生成结果与 api/openapi.yaml，再依次运行
+            cargo fmt --check、
             cargo clippy --locked --all-targets -- -D warnings、
             cargo test --locked、pnpm --recursive run typecheck
-  generate  协议与代码生成（尚未实现）
+  generate  从 api/openapi.yaml 生成 Rust DTO 与 TypeScript 客户端；
+            `--check` 只比对不写入，用于 CI 与“重新生成无 diff”验收
   package   产品打包（尚未实现）
   help      显示本帮助
 
@@ -89,7 +93,7 @@ fn main() -> ExitCode {
     let code = match command.as_str() {
         "env" => run_env(&rest),
         "check" => run_check(&rest),
-        "generate" => run_unimplemented("generate", &rest),
+        "generate" => generate::run(&rest),
         "package" => run_unimplemented("package", &rest),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -168,12 +172,23 @@ fn run_check(rest: &[String]) -> u8 {
         return EXIT_FAILURE;
     }
 
-    let total = CHECK_STEPS.len();
+    // 协议生成检查排在最前：它只读契约与生成文件，失败说明生成代码与 api/openapi.yaml 不同步，
+    // 此时继续跑编译没有意义（编译的是旧类型）。CI 因此不需要额外的“重新生成”步骤。
+    let total = CHECK_STEPS.len() + 1;
     let mut failures: Vec<String> = Vec::new();
+    println!("[1/{total}] protocol-regenerate: 比对 api/openapi.yaml 与生成代码");
+    match generate::verify() {
+        Ok(()) => println!("      -> 退出码 0"),
+        Err(message) => {
+            println!("      -> 失败：{message}");
+            failures.push("protocol-regenerate（生成代码与契约不同步）".to_string());
+        }
+    }
+
     for (index, step) in CHECK_STEPS.iter().enumerate() {
         println!(
             "[{}/{total}] {}: {} {}",
-            index + 1,
+            index + 2,
             step.name,
             step.program,
             step.args.join(" ")
@@ -214,13 +229,13 @@ fn run_check(rest: &[String]) -> u8 {
     }
 }
 
-/// `generate`/`package` 的显式未实现路径：打印说明并以非零退出。
+/// `package` 的显式未实现路径：打印说明并以非零退出。
 fn run_unimplemented(command: &str, rest: &[String]) -> u8 {
     if let Some(code) = reject_arguments(command, rest) {
         return code;
     }
     eprintln!(
-        "xtask: `{command}` 未实现（Unsupported）：协议生成（api/）与产品打包通路尚未落地，\
+        "xtask: `{command}` 未实现（Unsupported）：产品打包通路尚未落地，\
          本命令不执行任何动作。"
     );
     eprintln!("实现后由本子命令承担设计文档 §5.2 的生成与打包编排；当前进度见 agent/progress.md。");
@@ -236,7 +251,7 @@ fn reject_arguments(command: &str, rest: &[String]) -> Option<u8> {
 }
 
 /// 由 `cargo locate-project` 定位 workspace 根目录，使子命令可从任意子目录调用。
-fn workspace_root() -> Result<PathBuf, String> {
+pub(crate) fn workspace_root() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|error| format!("无法读取当前目录：{error}"))?;
     let output = capture(
         "cargo",

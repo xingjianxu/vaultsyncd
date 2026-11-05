@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "ROOT_UNAVAILABLE",
+    "message": "服务器目录当前不可用，已暂停该目录同步。",
+    "retryable": true,
+    "request_id": "req_example",
+    "root_id": "fedcba9876543210fedcba9876543210",
+    "details": { "reason": "mount_identity_changed" }
+  }
+}
