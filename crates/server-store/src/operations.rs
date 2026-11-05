@@ -1123,6 +1123,62 @@ mod tests {
         database.close().await;
     }
 
+    #[tokio::test]
+    async fn reading_by_op_id_alone_matches_the_device_scoped_lookup() {
+        let dir = TestDir::new("operations-by-op");
+        let database = open_database(&dir).await;
+        let owner = seed_owner(&database, 0x11).await;
+        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let (other_root, _other_entry) = register_root(&database, owner, 0x22).await;
+        let key = key(root, 0x81);
+
+        let mut tx = database.begin_write().await.expect("开始写事务");
+        begin_operation(
+            &mut tx,
+            owner,
+            &NewOperation {
+                key,
+                digest: digest_of("a.txt"),
+            },
+        )
+        .await
+        .expect("开始操作");
+        commit_operation(&mut tx, owner, &key, tx_id(0x31), EVENTS, RESULT, at(10))
+            .await
+            .expect("提交操作");
+        tx.commit().await.expect("提交");
+
+        let mut conn = database.pool().acquire().await.expect("取连接");
+        let by_op = operation_of_root_in_scope(&mut conn, owner, root, key.op)
+            .await
+            .expect("按 OpId 读操作")
+            .expect("记录必须存在");
+        assert_eq!(by_op, {
+            operation_in_scope(&mut conn, owner, &key)
+                .await
+                .expect("读操作")
+                .expect("记录必须存在")
+        });
+        assert_eq!(by_op.state, OperationState::Committed);
+        assert_eq!(by_op.root_seq, Some(RootSeq::new(1).expect("seq")));
+
+        // 同一个 OpId 在别的 Root、或对别的 owner 不可见。
+        assert_eq!(
+            operation_of_root_in_scope(&mut conn, owner, other_root, key.op)
+                .await
+                .expect("读操作"),
+            None
+        );
+        assert_eq!(
+            operation_of_root_in_scope(&mut conn, user(0x12), root, key.op)
+                .await
+                .expect("读操作"),
+            None
+        );
+        drop(conn);
+        database.close().await;
+    }
+
     #[test]
     fn the_digest_is_order_independent_and_covers_the_semantics() {
         let ordered = request_digest(&[
