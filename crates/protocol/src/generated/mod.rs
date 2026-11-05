@@ -145,6 +145,17 @@ pub enum HealthStatus {
     NeedsRecovery,
 }
 
+/// 登录请求（design §15.2 `POST /v1/auth/login` 的输入）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct LoginRequest {
+    /// 设备的人类可读标签（不是设备身份，首发没有设备注册表）。
+    pub device_label: String,
+    /// 登录名（原样比较，不做大小写折叠）。
+    pub login: String,
+    /// 明文密码；只在本次请求内存在，服务端不记录。
+    pub password: String,
+}
+
 /// 协议主次版本；主版本不同必须拒绝通信。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ProtocolVersion {
@@ -152,4 +163,38 @@ pub struct ProtocolVersion {
     pub major: u32,
     /// 次版本；服务端可以更大，客户端按自己认识的功能使用。（取值范围 0..=65535）
     pub minor: u32,
+}
+
+/// 刷新请求（design §15.2 `POST /v1/auth/refresh` 的输入）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RefreshRequest {
+    /// 上一次签发的刷新凭据；用一次即失效。
+    pub refresh_token: String,
+}
+
+/// 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SessionIssued {
+    /// 访问凭据到期时间（UTC Unix 秒的十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub access_expires_at: String,
+    /// 访问凭据，放在 Authorization 头的 Bearer 方案里，短期有效。
+    pub access_token: String,
+    /// 刷新凭据到期时间（UTC Unix 秒的十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub refresh_expires_at: String,
+    /// 刷新凭据，只能用于 `/v1/auth/refresh` 且用一次即失效。
+    pub refresh_token: String,
+    /// 会话身份，32 个小写十六进制字符。
+    pub session_id: String,
+}
+
+/// 注销结果。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SessionRevoked {
+    /// 失效时间（UTC Unix 秒的十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub revoked_at: String,
+    /// 被失效的会话身份，32 个小写十六进制字符。
+    pub session_id: String,
 }

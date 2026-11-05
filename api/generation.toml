@@ -7,7 +7,8 @@
 #
 # 两份契约分开：`source` 是远端 HTTP/OpenAPI 契约，`local_ipc_source` 是本机 IPC 的 JSON
 # Schema；它们各有唯一编辑源，互不引用（服务器管理 API 不控制客户端本地路径）。
-format_version = 2
+# v3：端点可有 `requestBody`（只接受 `application/json` 且引用具名 schema）。
+format_version = 3
 generator = "vaultsyncd-xtask"
 generator_version = "0.1.0"
 

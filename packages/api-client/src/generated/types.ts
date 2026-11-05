@@ -186,6 +186,25 @@ export function decodeHealthStatus(value: unknown): HealthStatus {
   return value as HealthStatus;
 }
 
+/** 登录请求（design §15.2 `POST /v1/auth/login` 的输入）。 */
+export interface LoginRequest {
+  /** 设备的人类可读标签（不是设备身份，首发没有设备注册表）。 */
+  device_label: string;
+  /** 登录名（原样比较，不做大小写折叠）。 */
+  login: string;
+  /** 明文密码；只在本次请求内存在，服务端不记录。 */
+  password: string;
+}
+
+export function decodeLoginRequest(value: unknown): LoginRequest {
+  const object = expect_object(value, "LoginRequest");
+  return {
+    device_label: expect_string(object.device_label, "LoginRequest.device_label"),
+    login: expect_string(object.login, "LoginRequest.login"),
+    password: expect_string(object.password, "LoginRequest.password"),
+  };
+}
+
 /** 协议主次版本；主版本不同必须拒绝通信。 */
 export interface ProtocolVersion {
   /** 主版本；与服务端不同即拒绝通信。（取值范围 0..=65535） */
@@ -199,5 +218,59 @@ export function decodeProtocolVersion(value: unknown): ProtocolVersion {
   return {
     major: expect_number(object.major, "ProtocolVersion.major"),
     minor: expect_number(object.minor, "ProtocolVersion.minor"),
+  };
+}
+
+/** 刷新请求（design §15.2 `POST /v1/auth/refresh` 的输入）。 */
+export interface RefreshRequest {
+  /** 上一次签发的刷新凭据；用一次即失效。 */
+  refresh_token: string;
+}
+
+export function decodeRefreshRequest(value: unknown): RefreshRequest {
+  const object = expect_object(value, "RefreshRequest");
+  return {
+    refresh_token: expect_string(object.refresh_token, "RefreshRequest.refresh_token"),
+  };
+}
+
+/** 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。 */
+export interface SessionIssued {
+  /** 访问凭据到期时间（UTC Unix 秒的十进制文本）。 */
+  access_expires_at: string;
+  /** 访问凭据，放在 Authorization 头的 Bearer 方案里，短期有效。 */
+  access_token: string;
+  /** 刷新凭据到期时间（UTC Unix 秒的十进制文本）。 */
+  refresh_expires_at: string;
+  /** 刷新凭据，只能用于 `/v1/auth/refresh` 且用一次即失效。 */
+  refresh_token: string;
+  /** 会话身份，32 个小写十六进制字符。 */
+  session_id: string;
+}
+
+export function decodeSessionIssued(value: unknown): SessionIssued {
+  const object = expect_object(value, "SessionIssued");
+  return {
+    access_expires_at: expect_decimal(object.access_expires_at, "SessionIssued.access_expires_at"),
+    access_token: expect_string(object.access_token, "SessionIssued.access_token"),
+    refresh_expires_at: expect_decimal(object.refresh_expires_at, "SessionIssued.refresh_expires_at"),
+    refresh_token: expect_string(object.refresh_token, "SessionIssued.refresh_token"),
+    session_id: expect_string(object.session_id, "SessionIssued.session_id"),
+  };
+}
+
+/** 注销结果。 */
+export interface SessionRevoked {
+  /** 失效时间（UTC Unix 秒的十进制文本）。 */
+  revoked_at: string;
+  /** 被失效的会话身份，32 个小写十六进制字符。 */
+  session_id: string;
+}
+
+export function decodeSessionRevoked(value: unknown): SessionRevoked {
+  const object = expect_object(value, "SessionRevoked");
+  return {
+    revoked_at: expect_decimal(object.revoked_at, "SessionRevoked.revoked_at"),
+    session_id: expect_string(object.session_id, "SessionRevoked.session_id"),
   };
 }
