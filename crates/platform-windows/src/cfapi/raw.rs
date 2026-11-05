@@ -464,6 +464,10 @@ pub const CF_SYNC_ROOT_INFO_PROVIDER: u32 = 2;
 
 /// `CF_IN_SYNC_STATE_IN_SYNC`
 pub const CF_IN_SYNC_STATE_IN_SYNC: u32 = 1;
+/// `CF_IN_SYNC_STATE_NOT_IN_SYNC`
+pub const CF_IN_SYNC_STATE_NOT_IN_SYNC: u32 = 0;
+/// `CF_SET_IN_SYNC_FLAG_NONE`
+pub const CF_SET_IN_SYNC_FLAG_NONE: u32 = 0;
 
 /// `FILE_ATTRIBUTE_DIRECTORY`
 pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
@@ -474,7 +478,16 @@ pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
 pub const CF_MAX_PROVIDER_TEXT: usize = 256;
 
 const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
-const FILE_SHARE_ALL: u32 = 0x0000_0007;
+/// `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`
+pub const FILE_SHARE_ALL: u32 = 0x0000_0007;
+/// `GENERIC_READ`
+pub const GENERIC_READ: u32 = 0x8000_0000;
+/// `GENERIC_WRITE`
+pub const GENERIC_WRITE: u32 = 0x4000_0000;
+/// `ERROR_ACCESS_DENIED`（`winerror.h`）：权限或共享/属性冲突都可能返回它。
+pub const ERROR_ACCESS_DENIED: u32 = 5;
+/// `ERROR_DIR_NOT_EMPTY`（`winerror.h`）：目录里还有条目。
+pub const ERROR_DIR_NOT_EMPTY: u32 = 145;
 const OPEN_EXISTING: u32 = 3;
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 
@@ -570,6 +583,27 @@ unsafe extern "system" {
         hydrate_flags: u32,
         hydrate_params: *mut c_void,
     ) -> i32;
+    /// `CfDehydratePlaceholder(HANDLE, LARGE_INTEGER, LARGE_INTEGER, CF_DEHYDRATE_FLAGS, CF_OPERATION_PARAMETERS *)`
+    ///
+    /// 第 5 个参数在文档里是“保留，必须为 NULL”（与 `CfHydratePlaceholder` 相同，S011 已按
+    /// NULL 实测可用）。
+    pub fn CfDehydratePlaceholder(
+        file_handle: Handle,
+        starting_offset: i64,
+        length: i64,
+        dehydrate_flags: u32,
+        dehydrate_params: *mut c_void,
+    ) -> i32;
+    /// `CfSetInSyncState(HANDLE, CF_IN_SYNC_STATE, CF_SET_IN_SYNC_FLAGS, USN *)`
+    ///
+    /// `USN` 是 `LONGLONG`；提供方据此声明“本地内容等于已确认版本”，这也是
+    /// `CfDehydratePlaceholder` 的前置条件（S012 实测，见 `agent/tasks/S012.md`）。
+    pub fn CfSetInSyncState(
+        file_handle: Handle,
+        in_sync_state: u32,
+        set_in_sync_flags: u32,
+        in_sync_usn: *mut i64,
+    ) -> i32;
     /// `CfExecute(const CF_OPERATION_INFO *, CF_OPERATION_PARAMETERS *)`
     pub fn CfExecute(op_info: *const CfOperationInfo, op_params: *mut c_void) -> i32;
 }
@@ -629,6 +663,29 @@ pub unsafe fn open_attributes(path: &[WideChar]) -> Handle {
             std::ptr::null(),
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    }
+}
+
+/// 以指定访问权限与共享模式打开现有文件，用于**使用保护探测**；返回的句柄必须交给
+/// [`close_handle`]。
+///
+/// 故意不加 `FILE_FLAG_OPEN_REPARSE_POINT`：探测要在与普通应用相同的路径语义下做共享检查
+/// （绕过重解析点会看不到真实的文件对象共享状态）。
+///
+/// # Safety
+///
+/// `path` 必须是以 NUL 结尾的有效 UTF-16 缓冲区，且在调用期间保持有效。
+pub unsafe fn open_with_share(path: &[WideChar], desired_access: u32, share_mode: u32) -> Handle {
+    unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            desired_access,
+            share_mode,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
             std::ptr::null_mut(),
         )
     }

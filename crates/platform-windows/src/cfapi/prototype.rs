@@ -116,6 +116,22 @@ impl EntryObservation {
             .unwrap_or(0)
     }
 
+    /// `CF_PIN_STATE_*`（非占位符按 `UNSPECIFIED`=0 处理）。
+    pub fn pin_state(&self) -> u32 {
+        self.placeholder
+            .as_ref()
+            .map(|info| info.pin_state)
+            .unwrap_or(0)
+    }
+
+    /// `CF_PLACEHOLDER_STANDARD_INFO::ModifiedDataSize`（非占位符为 0）。
+    pub fn modified_data_size(&self) -> i64 {
+        self.placeholder
+            .as_ref()
+            .map(|info| info.modified_data_size)
+            .unwrap_or(0)
+    }
+
     /// 占位判定的来源，写进日志以免把 `0x00000000` 的 find-data 状态误读成“不是占位符”。
     pub fn placeholder_source(&self) -> &'static str {
         match (
@@ -158,6 +174,8 @@ pub struct PlaceholderInfo {
     pub validated_data_size: i64,
     /// 已修改但未提交的数据字节数；S010 不写入内容，应为 0。
     pub modified_data_size: i64,
+    /// `CF_PIN_STATE_*`（见 [`super::guard`] 的常量）。
+    pub pin_state: u32,
     /// `CF_IN_SYNC_STATE_*`
     pub in_sync_state: u32,
     /// 系统保存的 `FileIdentity` 原始字节。
@@ -191,7 +209,7 @@ pub(crate) fn hresult_from_win32(code: u32) -> HResult {
 }
 
 /// 把 `std::io::Error` 的 Win32 错误码转成 HRESULT。
-fn hresult_from_io(error: &std::io::Error) -> HResult {
+pub(crate) fn hresult_from_io(error: &std::io::Error) -> HResult {
     match error.raw_os_error() {
         Some(code) => hresult_from_win32(code as u32),
         None => HResult::new(0x8000_4005u32 as i32), // E_FAIL
@@ -382,6 +400,7 @@ fn read_placeholder_info(
         on_disk_data_size: buffer.info.on_disk_data_size,
         validated_data_size: buffer.info.validated_data_size,
         modified_data_size: buffer.info.modified_data_size,
+        pin_state: buffer.info.pin_state,
         in_sync_state: buffer.info.in_sync_state,
         identity,
     }))
@@ -876,6 +895,7 @@ fn inspect_directory(root: &Path) -> Result<(), StageError> {
             observation.on_disk_data_size().to_string(),
         ),
         ("in_sync_state", observation.in_sync_state().to_string()),
+        ("pin_state", observation.pin_state().to_string()),
         ("identity_length", observation.identity().len().to_string()),
     ];
     fields.extend(identity_fields(observation.identity(), &expected)?);
@@ -941,6 +961,7 @@ fn inspect_file(
             (observation.on_disk_data_size() >= expected_size_i64).to_string(),
         ),
         ("in_sync_state", observation.in_sync_state().to_string()),
+        ("pin_state", observation.pin_state().to_string()),
         ("identity_length", observation.identity().len().to_string()),
     ];
     fields.extend(identity_fields(observation.identity(), &expected)?);
@@ -957,12 +978,12 @@ fn inspect_file(
             ),
         ));
     }
-    if observation.in_sync_state() != 0 {
+    if observation.in_sync_state() != 0 && !dehydrated {
         return Err(StageError::new(
             "inspect.entry",
             HResult::S_OK,
             format!(
-                "{relative} 报告 in_sync_state={}，但本原型从不让系统自动标记 in-sync",
+                "{relative} 已水合却报告 in_sync_state={}（只有释放前的 CfSetInSyncState 会置位）",
                 observation.in_sync_state()
             ),
         ));
@@ -1109,6 +1130,28 @@ fn remove_probe_placeholder(root: &Path, relative: &str) -> Result<(), StageErro
                             ("logical_size", observation.logical_size.to_string()),
                         ],
                         HResult::S_OK,
+                    );
+                    Ok(())
+                }
+                // 探针目录里仍有非占位残留（用户内容，或 S012 的 rename-over 留下的无效
+                // 名字）：保留它们并继续注销，否则同步根连注销都做不成。残留由
+                // `report_preserved` 逐条列出，不在这里静默删除。
+                Err(error)
+                    if observation.directory
+                        && error.raw_os_error() == Some(ERROR_DIR_NOT_EMPTY as i32) =>
+                {
+                    record(
+                        "cleanup.remove",
+                        &[
+                            ("path", relative.to_string()),
+                            ("status", "kept_not_empty".to_string()),
+                            (
+                                "placeholder_state",
+                                format!("0x{:08X}", observation.placeholder_state),
+                            ),
+                            ("error", error.to_string()),
+                        ],
+                        hresult_from_io(&error),
                     );
                     Ok(())
                 }

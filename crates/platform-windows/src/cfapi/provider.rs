@@ -794,11 +794,13 @@ impl ReadMode {
     }
 }
 
-fn entry_path(root: &Path, name: &str) -> PathBuf {
+/// 原型条目的绝对路径（`release`/`guard` 复用）。
+pub(crate) fn entry_path(root: &Path, name: &str) -> PathBuf {
     root.join(PROBE_DIRECTORY).join(name)
 }
 
-fn require_entry(name: &str) -> Result<u64, StageError> {
+/// 原型条目的逻辑大小；未知名目报错（`release`/`guard` 复用）。
+pub(crate) fn require_entry(name: &str) -> Result<u64, StageError> {
     content::entry_size(name).ok_or_else(|| {
         StageError::new(
             "read.preflight",

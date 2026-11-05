@@ -426,7 +426,116 @@ cfapi-prototype expect  [--name <entry> --offset N --length M]
 - S011 仍未实现：释放/写保护（S012，`CfDehydratePlaceholder`/`CfSetInSyncState`/写保护）、Explorer 展示、崩溃后注册残留恢复。
 - 内容源是确定性的固定版本（`CONTENT_SEED`），不是服务端对象存储，也不做块级哈希校验；真实实现按 `entry_id + version_id` 取不可变对象并逐块校验。
 
-## 18. 当前状态（2026-11-05 本轮结束）
+## 18. CFAPI 释放与写入保护（S012）
+
+S012 让原型能做释放（dehydrate）并先做写入保护（protect）：先取“已观察 generation + 使用保护”
+的复合并给出 `clean`/`dirty`/`busy`/`unknown`，只有 `clean` 才按系统认可的流程
+`CfSetInSyncState(IN_SYNC)` → `CfDehydratePlaceholder(0, 逻辑大小)` 释放；其余判定一律拒绝
+并保留本地内容。代码在 `crates/platform-windows/src/cfapi/{guard,release}.rs`，命令仍是
+`crates/platform-windows/examples/` 下的 example；宿主入口是
+`tests/platform/windows/run-cfapi-release.sh`。契约摘要见 `docs/architecture/interfaces.md`，
+环境事实见 `docs/environment.md` §16。
+
+### 18.1 两条命令（宿主侧，客体需先启动）
+
+```bash
+# 1) 交叉构建（与 S010/S011 相同的脚本，产物含 cfapi-prototype.exe）
+nix develop .#windows --command bash tests/platform/windows/build-cross.sh
+
+# 2) 传输 + 客体执行 S012 验收（protect/release + 四类编辑器保存 + 两端哈希比对）
+nix develop .#windows --command bash tests/platform/windows/run-cfapi-release.sh
+```
+
+`run-cfapi-release.sh` 把 exe 与 `guest-cfapi-release.ps1` 传到 `C:\vaultsyncd-lab\s012\`
+（`CFAPI_RELEASE_GUEST_DIR` 可覆盖），主同步根 `C:\vaultsyncd-test`（`CFAPI_RELEASE_ROOT`），
+rename-over 专用根 `C:\vaultsyncd-test-rename`（`CFAPI_RELEASE_RENAME_ROOT`）。rename-over 会把
+目标名字留在“无法按路径打开”的状态（见 §18.6），因此单独用一个根，不污染主根后续检查。
+
+### 18.2 原型命令（S012 追加）
+
+```text
+cfapi-prototype protect --name <entry> [--root <path>]
+                        # 只判定、不改状态（不释放、不写 in-sync）
+cfapi-prototype release --name <entry> [--root <path>] [--expect released|refused]
+                        # 判定 clean 才释放；其余拒绝并保留本地内容
+```
+
+`protect`/`release` 都会打印 `stage=guard.observe` / `guard.probe` / `guard.content` /
+`guard.decision`；`release` 追加 `release.in_sync` / `release.dehydrate` / `release.result`
+（`outcome=released|already_dehydrated|refused|dehydrate_failed`）。`--expect` 只判断
+“内容是否已经不在本地”：`released` 接受 `released`/`already_dehydrated`，`refused` 接受
+`refused`/`dehydrate_failed`；`dehydrate_failed` 表示判定为 `clean` 但平台拒绝释放，
+原始 `HRESULT` 必须出现在日志里，不能当成功。
+
+### 18.3 判定规则（只有 `clean` 允许释放）
+
+顺序即保守程度顺序，任一条无法证明就立刻返回，`release` 不调用任何平台写操作。
+
+| 判定 | 条件（按检查顺序） | `release` 处置 |
+| --- | --- | --- |
+| `unknown` | 不是占位符 | 拒绝（不碰文件） |
+| `unknown` | `on_disk_data_size=0`（已脱水）→ 也直接跳过三个探测与内容核对，避免“为了判断而先水合” | 报告 `already_dehydrated`（无本地内容可丢） |
+| `unknown` | `CF_PIN_STATE_PINNED`/`PINNED_RECURSIVE`（不替用户解除 pin） | 拒绝 |
+| `busy` | 独占探测失败且错误码为 `ERROR_SHARING_VIOLATION`(32)/`ERROR_LOCK_VIOLATION`(33)：有人持有不允许读/写共享的句柄 | 拒绝，`dehydrate_hresult=-` |
+| `unknown` | 探测因其它错误码失败，或三个探测有任一项没执行 | 拒绝 |
+| `unknown` | 本地数据少于逻辑大小（只有部分区间在本地） | 拒绝 |
+| `dirty` | 本地内容 SHA-256 ≠ 固定内容版本的期望值（有未上传的本地修改） | 拒绝，`dehydrate_hresult=-` |
+| `unknown` | 内容无法核对（读取失败、非原型条目） | 拒绝 |
+| `busy` | 两次内容哈希不一致（观察窗口内内容被改动） | 拒绝 |
+| `clean` | 以上全部通过 | `CfSetInSyncState(IN_SYNC)` + `CfDehydratePlaceholder(0, size)`，复核 `on_disk_data_size=0` 后才报 `released` |
+
+三个探测都是“只开句柄、立即关闭”（`GENERIC_READ`+`dwShareMode=0`、`GENERIC_WRITE`+
+`dwShareMode=0`、`GENERIC_READ`+全共享），不读不写内容。
+
+### 18.4 实测证据（2026-11-05，客体原生运行，`run-cfapi-release.sh` 退出 0）
+
+`cfapi-prototype.exe` SHA-256 `5219ad5b…502a6`（两端一致）；**74 项 `check=pass`、0 fail、
+1 blocked**（rename-over，见 §18.6）。逐项日志在 `artifacts/s012/s012-release-final.log`
+（`artifacts/` 不入 Git）。
+
+| 验收点 | 证据 |
+| --- | --- |
+| 干净样本可释放 | 先 `read small-12345.bin`（`on_disk_data_size=12345`，哈希 = 宿主 `expect` = `a82033db…bcd`）→ `protect`：`verdict=clean reason=content_matches_committed_version content=matched content_stable=true probes=opened/opened/opened` → `release`：`outcome=released in_sync_hresult=0x00000000 dehydrate_hresult=0x00000000 on_disk_after=0` |
+| 释放后再读字节仍正确 | 新进程 `inspect` 退出 0（仍是占位、逻辑大小 12345、身份不变、`dehydrated=true`）；`protect` 报 `in_sync_state=1 reason=already_dehydrated`（`CfSetInSyncState` 的确生效）；`read` 重新触发 `FETCH_DATA`（`fetch_requests=1`）、`digest_match=true`，客体 `Get-FileHash` 与释放前完全一致 |
+| 原地写（同 inode 覆盖写）不可释放 | PowerShell 以 `FileShare.None` 覆盖前 100 B → 哈希 `e01501b7…497ce` → `protect`：`verdict=dirty reason=content_mismatch modified_data_size=4096` → `release --expect refused`：`outcome=refused dehydrate_hresult=-`，释放后哈希不变、`on_disk_after=12345`（仍水合） |
+| 映射写（`MemoryMappedFile` 写后关闭）不可释放 | 映射写入 64 B → 哈希 `5e81b022…302224e` → `verdict=dirty content=mismatched modified_data_size=12345` → `outcome=refused`，哈希与大小不变 |
+| 映射仍打开时不可释放 | 另一进程建可写映射并写 32 B 后保持 6 s → `verdict=busy reason=handle_held_read`（三个探测 `error:32`）→ `outcome=refused dehydrate_hresult=- on_disk_after=12345`；持有者退出后哈希变成 `ea0d7e1a…`（映射写入确实落地），文件仍在 |
+| 独占句柄（`FileShare.None`）不可释放 | 另一进程持有读写独占句柄 → 三个探测全部 `error:32` → `verdict=busy` → `outcome=refused`、`dehydrate_hresult=-`、哈希不变；**持有者退出后同一内容 `verdict=clean` 且 `outcome=released`**（证明拒绝来自使用保护而非别的原因） |
+| 共享锁（`FileAccess.Read`+`FileShare.Read`）不可释放 | 探测 `probe_read_exclusive=error:32`（其它两项 `opened`）→ `verdict=busy reason=handle_held_read` → `outcome=refused`，哈希不变 |
+| 已脱水条目不被“判定”打扰 | 对刚 `create` 的条目直接 `protect`：`verdict=unknown reason=already_dehydrated`，三个探测都是 `skipped`、内容 `unverified`（不为判定而水合） |
+| 用户内容与注销不受影响 | 收尾 `cleanup` 删探针子树、`user-keep.txt` SHA-256 前后一致、`inspect` 退出 3（未注册）、再次 `cleanup` 退出 0 |
+
+### 18.5 边界表：已观察 generation 与使用保护
+
+“本地是 clean”只是**上次观察**（design §8.4），因此原型把“能观察到什么”和“能证明什么”分开记录：
+
+| 证据 | 来源 | 能证明 | 不能证明 |
+| --- | --- | --- | --- |
+| 内容 SHA-256（两次） | 读本地文件 + 固定内容版本期望值 | 本地字节等于已确认版本；两次一致说明观察窗口内没变 | 之后是否被再次改写；未落到文件系统的编辑器内存 |
+| `on_disk_data_size`/`logical_size` | `CfGetPlaceholderInfo(CF_PLACEHOLDER_INFO_STANDARD)` | 是否整份在本地（部分水合不能代表整份内容） | —— |
+| `in_sync_state` | 同上 | `1` 表示本提供方在释放前用 `CfSetInSyncState` 声明过“内容已确认”；写入后系统把它清回 0 | `0` 不等于 dirty（本原型从不自动置位，只能作为“未被确认”的弱信号） |
+| `pin_state` | 同上 | `PINNED`/`PINNED_RECURSIVE` 时必须拒绝（不替用户解 pin） | —— |
+| `modified_data_size` | 同上 | 原地写后为 4096（页粒度）、映射写后为 12345，是有修改的**旁证** | 不能替代内容哈希（判定仍以哈希为准） |
+| `FileIdentity.version_hint` | `CfGetPlaceholderInfo` 的 blob | 条目身份与版本提示在释放前后不变 | 提示是原型固定值，不代表真实版本推进 |
+| 共享模式探测（3 组） | `CreateFileW` + `GetLastError` | 有人持有不允许读/写共享的句柄（实测 `FileShare.None` 与 `FileShare.Read` 都是 `error:32`） | **完全共享**的读写者看不到；句柄之间没有持有者时也可能有内存映射/延迟写 |
+| 平台 dehydration 门 | `CfSetInSyncState`/`CfDehydratePlaceholder` 返回值 | 系统在拒绝时给出明确 `HRESULT`，最终以 `on_disk_data_size=0` 复核 | —— |
+
+### 18.6 实测限制与阻塞
+
+| 项 | 现象（本 build 26300 / `C:` NTFS） | 结论与恢复条件 |
+| --- | --- | --- |
+| **rename-over 保存**（T27/T28） | ① 同步根**内**新建临时文件失败：占位目录下返回 `0x801F0005`（“An invalid name request…”），同步根顶层返回 `0x8007016A`（“The cloud file provider is not running.”），即使另一进程正持有连接也一样；② 改在同步根外用同卷临时文件 `Move-Item -Force` 覆盖目标：命令报告成功（`rename_over_move=ok`），但目标名字随后**无法按路径打开**（`0x801F0005`），`protect` 因此以 `stage=query.placeholder` 失败（退出 1），内容与身份都无法核对 | **阻塞**：本原型无法证明 rename-over 保存安全，也未观察“新内容落到目标名下”。恢复条件：提供方需要在被保存进程可见的范围内在线（打通 S011 记录的跨进程唤醒）并处理平台的重命名/删除通知，再重跑本项断言 |
+| rename-over 后的残留 | 目标名字出现在 `FindFirstFileW` 里但 `open_attributes` 失败，目录枚举也报错；`del`/`rd /s /q` 在**注册状态**下分别返回 “provider exited unexpectedly”/“目录不是空的” | 恢复步骤（已实测）：先 `cleanup`（S012 起对“探针目录非空”记 `status=kept_not_empty` 并继续注销）→ `inspect` 退出 3 → `rd /s /q` 成功。因此 `cleanup` 的“必须能注销”优先于“必须删掉探针目录” |
+| `dehydrated_after=false` 但 `on_disk_after=0` | 释放进程内紧跟 dehydrate 的 `FindFirstFileW` 仍带 `PARTIALLY_ON_DISK` 位（同进程 find-data 缓存），新进程 `inspect` 报 `dehydrated=true` | 复核用**新进程** `inspect`（脚本已如此），不用释放进程内的状态位 |
+| 释放前的干净判定需要读内容 | 内容哈希必须读整份本地内容，因此一个已脱水条目在“判定→释放”过程中会被先水合再脱水 | 原型限制（真实实现要靠已记录的内容哈希/代际与短期内容租约，design §8.4）；已脱水条目直接短路，不再读内容 |
+| 完全共享的写者不可见 | share 模式允许读写删除的第三方句柄三个探测都通过 | 这是 design §14.4 说“锁/共享标志只是证据的一部分”；原型靠内容哈希 + 平台的 dehydrate 门兜底，真实实现仍需补稳定窗口/批处理 |
+
+### 18.7 清理与边界
+
+- 结束前必须让 `run-cfapi-release.sh` 返回 0 且 `blocked_item=` 只列出已知项，再清理 `C:\vaultsyncd-test`、`C:\vaultsyncd-test-rename`、`C:\vaultsyncd-lab\s012` 探针目录并干净关机。
+- 未实现：真实内容租约与版本绑定（内容源仍是固定版本）、Explorer 展示、崩溃后注册残留恢复、真实编辑器（Word/VS Code）保存路径。
+
+## 19. 当前状态（2026-11-05 本轮结束）
 
 - 客体**已干净关机**（`shutdown /s /t 0` 后 qemu 与 swtpm 退出，`2222`/`5930` 已关闭，无孤儿进程）。下次使用：`nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh start`，再 `wait-ssh`（实测从启动到 SSH 可用约 20 秒）。
 - 系统：Windows 11 Enterprise Evaluation 26H2 / build 26300.9457，`C:` 为 NTFS（98.6 GiB，可用约 78.7 GiB），8 vCPU / 8 GiB / 100 GiB VirtIO GPT。
@@ -436,3 +545,4 @@ cfapi-prototype expect  [--name <entry> --offset N --length M]
 - S010（2026-11-05）在客体上注册了测试同步根、创建了目录 + 12,345 B + 1 MiB 三个真实占位符、把 48 B 的 `FileIdentity` 交给系统保存，并按“只删自己的占位”完成清理与注销；`run-cfapi-prototype.sh` 退出 0、两端 SHA-256 一致（见 §16.3）。结束后已清理 `C:\vaultsyncd-test` 里的占位、注销同步根（`inspect` 退出码 3）并干净关机，没有注册残留。内容水合（S011）与释放/写保护（S012）仍未实现。
 - S011（2026-11-05）在客体上实现了真正的按需内容供给：`read` 读到的字节与 SHA-256 与宿主固定内容版本一致（12,345 B / 1 MiB / 16 MiB 三个条目，含 1 MiB 范围水合），离线读未水合条目以 `ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE`(388) 在 1 ms 内明确失败、已水合条目离线可读且不再请求内容，慢源超时有界失败，传输中断开同步根后回填循环在 3/16 段停下并有界返回；`run-cfapi-hydration.sh` 退出 0（42 项 `check=pass`、0 fail，两端哈希 `MATCH`），S010 的 `run-cfapi-prototype.sh` 仍退出 0（21 项 pass）。`CANCEL_FETCH_DATA` 在该 build 上未观察到（见 §17.4）。结束后已清理探针目录、注销同步根并干净关机。
 - `provision.ps1` 在已安装客体上整份重跑过一次（10:29:21Z—10:29:35Z）：所有步骤 `BEGIN/END` 成对、无 `FAILED`，依赖介质的四步输出 `SKIP: ... (expected after installation)`；控制台代码页首登实测为 437（`Active codepage: 437`），因此脚本内的错误文本统一用英文，避免转写日志出现乱码。
+- S012（2026-11-05）在客体上实现了释放与写保护判定：干净样本 `CfSetInSyncState`+`CfDehydratePlaceholder` 全 0x0、`on_disk_after=0`，新进程复核仍脱水、再读哈希不变（`fetch_requests=1`）；原地写、映射写（关闭后与仍打开）、独占句柄、共享锁五类场景都以 `dirty`/`busy` 拒绝释放并保留内容与哈希，句柄消失后同一内容可正常释放；`run-cfapi-release.sh` 退出 0（74 项 `check=pass`、0 fail、1 `blocked_item`），S010/S011 的脚本仍退出 0（21/46 项 pass）。**rename-over 保存列为阻塞**：同步根内建不了临时文件，同步根外改名后目标名字无法按路径打开（`0x801F0005`），见 §18.6。结束后已清理两个同步根与探针目录并干净关机。

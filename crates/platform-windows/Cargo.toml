@@ -22,7 +22,8 @@ unused = "deny"
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 
-# 原型命令：create / inspect / cleanup 三个子命令，参数里带同步根路径。
+# 原型命令：create / inspect / cleanup（S010）、read / cancel / hydrate / expect（S011）、
+# protect / release（S012），参数里带同步根路径。
 # 用 example 而非 bin，是因为它只在 Windows 客体上做实验，不属于产品入口；
 # `cargo xwin build --examples` 就能交叉构建，且不会混进 `cargo build` 的默认产物。
 [[example]]

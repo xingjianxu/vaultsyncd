@@ -695,3 +695,40 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - 未观察到 `CANCEL_FETCH_DATA`；其“尽快退出”语义由宿主单测（`serve_range` 的 `aborted` 分支）+ 传输中断实测覆盖，严格断言入口 `--require-cancel-callback` 保留但当前不通过。
 - 跨进程（多进程共享同一同步根）唤醒未打通，需单独排查；本卡只用单进程验收，不据此声称多进程可用。
 - 只在 `C:` 卷 NTFS、build 26300 上实测；ReFS、非系统卷、Explorer 展示、释放/写保护（S012）仍未验证。
+
+## 16. S012 CFAPI 释放与写入保护（2026-11-05 实测）
+
+采集位置：`/wrd/prj/vaultsyncd/.worktrees/s011-s012`（分支 `feat/S011-S012-cfapi-read-write`，基线 `a6aed74`，前置产出提交 `efb0563`）。操作步骤见 `docs/operations/windows-lab.md` §18；接口契约见 `docs/architecture/interfaces.md`；主机与工具链同 §13，客体同 §12。
+
+### 16.1 新增代码与构建
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 新模块 | `cfapi::guard`（纯逻辑判定：`Verdict`/`ProbeOutcome`/`UsageProbe`/`ContentCheck`/`Observation`/`evaluate`）、`cfapi::release`（仅 Windows：三次共享模式探测、两次内容哈希、`CfSetInSyncState` + `CfDehydratePlaceholder`、释放后复核）；`cfapi::prototype` 增加 `pin_state`/`modified_data_size` 访问器与“脱水条目可带 in-sync”的 inspect 断言；`cleanup` 对“探针目录非空”记 `kept_not_empty` 后继续注销 |
+| FFI | `raw.rs` 追加 `CfDehydratePlaceholder`、`CfSetInSyncState` 与 `open_with_share`（`GENERIC_READ`/`GENERIC_WRITE`/`ERROR_DIR_NOT_EMPTY` 等常量）；`CfDehydratePlaceholder` 的 `CF_OPERATION_PARAMETERS*` 传 NULL（与 `CfHydratePlaceholder` 相同），实测被接受 |
+| 依赖 | 仍无第三方依赖 |
+| 宿主单测 | `cargo test --locked -p vaultsyncd-platform-windows` → 38 passed（新增 guard 的 10 个：clean、dirty、内容未核验、三类句柄冲突、探测错误、探测未执行、观察窗口内内容变动、已脱水/pinned/部分水合、非占位符、标签拼写） |
+| lint / 格式 | `cargo clippy --locked --all-targets -p vaultsyncd-platform-windows`、`cargo xwin clippy --target x86_64-pc-windows-msvc --all-targets`、`cargo fmt --all --check` 均退出 0、0 warning |
+| 交叉构建 | `build-cross.sh` 退出 0；`cfapi-prototype.exe` SHA-256 `5219ad5b87508fa5620cf81c966b70211e2fa6133a71de9970441ff3299502a6`（两端一致） |
+| 客体脚本 | `run-cfapi-release.sh` 退出 0：74 项 `check=pass`、0 fail、1 `blocked_item`（rename-over）；回归 `run-cfapi-prototype.sh` 21 项 pass（退出 0）、`run-cfapi-hydration.sh` 46 项 pass（退出 0） |
+
+### 16.2 平台行为实测（build 26300.9457，`C:` NTFS）
+
+| 观察 | 数值/结论 |
+| --- | --- |
+| 干净样本释放 | 水合后 `protect` = `clean`（`content=matched content_stable=true`，三个探测 `opened`）→ `CfSetInSyncState` 与 `CfDehydratePlaceholder` 均返回 `0x00000000`，`on_disk_after=0`；新进程 `inspect` 报 `dehydrated=true` 且 `in_sync_state=1` |
+| 释放后再读 | `read` 重新触发 `FETCH_DATA`（`fetch_requests=1`），`sha256=a82033db…4bcd` 与释放前、宿主 `expect` 三方一致 |
+| 原地写 | 覆盖前 100 B 后 `modified_data_size=4096`（页粒度），内容哈希变化 → `dirty`、`refused`、`dehydrate_hresult=-`，`on_disk_after=12345` |
+| 映射写 | `MemoryMappedFile`（路径重载 `CreateFromFile(path, Open)` + `WriteArray`）写 64 B 后 `modified_data_size=12345` → `dirty`；映射保持打开时三个探测均 `error:32` → `busy` |
+| 独占句柄 | `FileShare.None` 持有者使三个探测全部 `ERROR_SHARING_VIOLATION`(32)；持有者退出后同一内容 `clean` 且可释放 |
+| 共享锁 | `FileAccess.Read`+`FileShare.Read` 持有者使 `probe_read_exclusive`/`probe_write_exclusive` 都 `error:32`、`probe_shared_read=opened` → `busy`（本 build 上 share=0 的探测比直觉更保守） |
+| 新建文件（同步根内） | 占位目录下 `WriteAllBytes` 失败 `0x801F0005`（“An invalid name request…”），同步根顶层失败 `0x8007016A`（“The cloud file provider is not running.”）；即使另一进程持有连接也一样 |
+| rename-over | `Move-Item -Force`（同步根外同卷临时文件）返回成功，但目标名字随后按路径打开失败 `0x801F0005`；`protect` 以 `stage=query.placeholder` 退出 1；目录枚举也报错 |
+| 残留恢复 | `cleanup` 记 `kept_not_empty` 并成功注销（`CfGetSyncRootInfoByPath` → 未注册，`inspect` 退出 3），之后 `rd /s /q` 成功删除 |
+
+### 16.3 限制与未核验项
+
+- **rename-over 保存无法证明安全**（本卡唯一 blocked 项）：同步根内建不了临时文件，同步根外改名后目标名字不可打开，内容与身份都无法核对。恢复条件是打通跨进程提供方唤醒并处理重命名/删除通知（见 `docs/operations/windows-lab.md` §18.6）。
+- 干净判定需要读整份内容，因此“已脱水→判定→释放”会先水合再脱水；真实实现依赖已记录的内容哈希/代际与短期内容租约。
+- 释放进程内紧跟 dehydrate 的 find-data 状态位滞后（`dehydrated_after=false`），首次进入时数据已为 0，复核用新进程。
+- 共享模式探测看不到“完全共享”的读写者；只在 `C:` NTFS、build 26300 上实测，ReFS/非系统卷、Explorer 展示、真实编辑器（Word/VS Code）保存路径未验证。

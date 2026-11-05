@@ -1,4 +1,5 @@
-//! `cfapi-prototype`：CFAPI 原型命令（S010 注册/占位/清理，S011 读取/取消/离线）。
+//! `cfapi-prototype`：CFAPI 原型命令（S010 注册/占位/清理，S011 读取/取消/离线，
+//! S012 释放/写保护判定）。
 //!
 //! 用法（Windows 客体上运行；`expect` 与 `--help` 在任意平台可用）：
 //!
@@ -15,6 +16,10 @@
 //! cfapi-prototype hydrate --name <entry> [--root <path>] [--offset N --length M]
 //!                         [--cancel-after-ms N] [--chunk-delay-ms N]
 //!                         [--require-cancel-callback]
+//! cfapi-prototype protect --name <entry> [--root <path>]
+//!                                   # 只判定：dirty/busy/unknown 都不释放，不改状态
+//! cfapi-prototype release --name <entry> [--root <path>] [--expect released|refused]
+//!                                   # 判定为 clean 才脱水；其余拒绝并保留本地内容
 //! cfapi-prototype expect  [--name <entry> --offset N --length M]
 //!                                   # 打印固定内容版本的条目/长度/整份 SHA-256；
 //!                                   # 给 --name 与范围时打印该区间的 SHA-256
@@ -23,7 +28,9 @@
 //! 所有子命令只作用于 `--root` 指定的专用 NTFS 目录（默认 `C:\vaultsyncd-test`）。`create`
 //! 注册同步根并创建固定占位集合（目录 + 12,345 B + 1 MiB 两个文件），`inspect` 只读核验
 //! 占位状态、逻辑大小、本地数据量与 `FileIdentity`，`cleanup` 只删除本工具创建的占位符、
-//! 保留用户内容并注销同步根；`read`/`cancel` 在本进程内提供内容供给回调并做读取验证。
+//! 保留用户内容并注销同步根；`read`/`cancel` 在本进程内提供内容供给回调并做读取验证；
+//! `protect`/`release` 组合使用保护探测与内容代际（SHA-256）判定能否释放，只有 clean
+//! 才调 `CfSetInSyncState` + `CfDehydratePlaceholder`。
 //!
 //! 退出码：0 成功；1 失败（含阶段与 HRESULT）；2 用法错误；3 `inspect` 发现同步根未注册
 //! （cleanup 之后的预期状态，用它与真正的失败区分开）。
@@ -49,6 +56,8 @@ enum Command {
     Read,
     Cancel,
     Hydrate,
+    Protect,
+    Release,
     Expect,
 }
 
@@ -61,6 +70,8 @@ impl Command {
             "read" => Some(Self::Read),
             "cancel" => Some(Self::Cancel),
             "hydrate" => Some(Self::Hydrate),
+            "protect" => Some(Self::Protect),
+            "release" => Some(Self::Release),
             "expect" => Some(Self::Expect),
             _ => None,
         }
@@ -74,6 +85,8 @@ impl Command {
             Self::Read => "read",
             Self::Cancel => "cancel",
             Self::Hydrate => "hydrate",
+            Self::Protect => "protect",
+            Self::Release => "release",
             Self::Expect => "expect",
         }
     }
@@ -108,10 +121,15 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut iter = args.iter();
     let command = match iter.next().map(String::as_str) {
         Some(text) => Command::parse(text).ok_or_else(|| {
-            format!("未知子命令 {text}（应为 create/inspect/cleanup/read/cancel/hydrate/expect）")
+            format!(
+                "未知子命令 {text}（应为 create/inspect/cleanup/read/cancel/hydrate/protect/release/expect）"
+            )
         })?,
         None => {
-            return Err("缺少子命令（create/inspect/cleanup/read/cancel/expect）".to_string());
+            return Err(
+                "缺少子命令（create/inspect/cleanup/read/cancel/hydrate/protect/release/expect）"
+                    .to_string(),
+            );
         }
     };
     let mut cli = Cli {
@@ -200,7 +218,11 @@ fn main() -> ExitCode {
 
     match cli.command {
         Command::Expect => expect(&cli),
-        Command::Read | Command::Cancel | Command::Hydrate => match require_name(&cli) {
+        Command::Read
+        | Command::Cancel
+        | Command::Hydrate
+        | Command::Protect
+        | Command::Release => match require_name(&cli) {
             Ok(_) => run_platform(cli),
             Err(message) => {
                 eprintln!("cfapi-prototype: {message}");
@@ -290,6 +312,7 @@ fn run_windows(cli: Cli) -> Result<ExitCode, vaultsyncd_platform_windows::cfapi:
     use vaultsyncd_platform_windows::cfapi::provider::{
         ReadExpectation, ReadMode, run_cancel, run_hydrate, run_read,
     };
+    use vaultsyncd_platform_windows::cfapi::release::{run_protect, run_release};
 
     let config = provider_config(&cli).map_err(|message| {
         vaultsyncd_platform_windows::cfapi::StageError::new(
@@ -371,7 +394,77 @@ fn run_windows(cli: Cli) -> Result<ExitCode, vaultsyncd_platform_windows::cfapi:
             )
             .map(|_| ExitCode::SUCCESS)
         }
+        Command::Protect => {
+            let name = cli.name.as_deref().unwrap_or_default().to_string();
+            run_protect(&cli.root, &name).map(|report| {
+                println!(
+                    "protect: name={} verdict={} reason={}",
+                    report.name,
+                    report.verdict.name(),
+                    report.reason
+                );
+                ExitCode::SUCCESS
+            })
+        }
+        Command::Release => {
+            let name = cli.name.as_deref().unwrap_or_default().to_string();
+            run_release(&cli.root, &name).and_then(|report| {
+                println!(
+                    "release: name={} verdict={} reason={} outcome={} on_disk_after={}",
+                    report.guard.name,
+                    report.guard.verdict.name(),
+                    report.guard.reason,
+                    report.outcome.name(),
+                    report.on_disk_after
+                );
+                let expectation = match cli.expect.as_deref() {
+                    None | Some("released") => ReleaseExpectation::Released,
+                    Some("refused") => ReleaseExpectation::Refused,
+                    Some(other) => {
+                        return Err(vaultsyncd_platform_windows::cfapi::StageError::new(
+                            "args",
+                            vaultsyncd_platform_windows::cfapi::HResult::new(0x8007_0057u32 as i32),
+                            format!("--expect 只接受 released 或 refused，收到 {other}"),
+                        ));
+                    }
+                };
+                let matched = match expectation {
+                    ReleaseExpectation::Released => report.outcome.is_released(),
+                    ReleaseExpectation::Refused => !report.outcome.is_released(),
+                };
+                if matched {
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    eprintln!(
+                        "cfapi-prototype: release 结果 {} 与 --expect {} 不符",
+                        report.outcome.name(),
+                        expectation.name()
+                    );
+                    Ok(ExitCode::FAILURE)
+                }
+            })
+        }
         Command::Expect => Ok(ExitCode::SUCCESS),
+    }
+}
+
+/// `--expect` 对 `release` 的两种期望。
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseExpectation {
+    /// 期望内容已不在本地（`released` 或 `already_dehydrated`）。
+    Released,
+    /// 期望平台拒绝释放、本地内容仍完整（`refused` 或 `dehydrate_failed`）。
+    Refused,
+}
+
+#[cfg(windows)]
+impl ReleaseExpectation {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Released => "released",
+            Self::Refused => "refused",
+        }
     }
 }
 
