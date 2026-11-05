@@ -1184,3 +1184,27 @@ python3 tools/context.py --help
 
 - `PutCommitStore` 尚无真实实现：`root_facts`/`entry_baseline`/`object_state`/`apply_put` 要接到 `crates/server-store` 的 `roots`/`entries`/`versions`/`changes`/`operations`/`intents`，并把 `IntentLog` 的真实 `fs_intents` 适配一并落地；在此之前 `apps/server` 的提交入口没有可组装的存储实现。
 
+## crates/server-core — 冲突内容提交与 `OpId` 幂等（S036）
+
+状态：S036 在 S035 的意图/发布顺序上实现 design §10.1—10.2、T02/T03、I01/I06 的服务端部分（`commit::conflict`、`ports::conflict_store`）：过期基线上的不同内容成为一个稳定身份的冲突条目与一条映射，同一 `OpId` 的重试返回原结果。真实存储适配与恢复入口仍未落地（S037 与组装卡）。
+
+| 项目 | 契约 |
+| --- | --- |
+| `commit::conflict::ConflictRequest` | `intent_id`、`op: OperationKey{root, device, op}`、`digest: RequestDigest`、`entry`（客户端想覆盖的 head 条目）、`expected_epoch`、`expected_revision`（客户端的过期基线）、`target_path`（§10.2 冲突路径，Root 内相对）、`staging_path`（单文件名）、`content: ExpectedContent`。形状在任何端口调用前检查 |
+| `commit::conflict::commit_conflict(gate, store, log, target, ids, at, &ConflictRequest)` | 顺序固定：请求形状 → Root 票据 → `conflict_head`（epoch + 源条目现状）→ epoch → `operation` 记录（重放 / `OP_ID_REUSED` / pending 不重做）→ “过期 + 不同内容”判定 → 目标空缺预检 → `begin_conflict`（登记 pending）→ `publish_put`（意图 → 发布 → `published`）→ `apply_conflict`（条目/版本/映射/事件/批次结果/收尾）→ 核对证据 → ACK。任何出口都释放 Root 票据 |
+| `commit::conflict::CommittedConflict` | `op: OpId`、`source`、`sibling`（服务器为该 `OpId` 分配的冲突条目）、`path`、`content: ExpectedContent`、`revision`、`seq`。首次提交与重放返回同一份；它也是 `operations` 里该 `OpId` 的终态结果 |
+| `ports::conflict_store::OperationKey` / `RequestDigest` | `OperationKey{root, device, op}` 是 design §7.2 的幂等键；`RequestDigest` 是 32 字节规范化请求摘要，核心只比较不重算——规范化编码只有一处实现（`vaultsyncd_server_store::operations::request_digest`），摘要必须覆盖源条目、基线 revision、冲突路径与内容摘要/长度 |
+| `ports::conflict_store::ConflictCommitStore` | 异步存储端口（泛型使用）：`conflict_head(root, source) -> ConflictHead{epoch, source: Option<HeadSource{entry, revision, kind, content}>}`、`operation(key) -> Option<RecordedOperation{digest, result}>`、`begin_conflict(key, digest) -> ConflictBegin::{Started, Recorded}`（原子插入或读 `pending`，已存在时绝不改写摘要或结果）、`apply_conflict(&ConflictWrite) -> ConflictRecord{intent_id, phase, conflict, tx}`。`apply_conflict` 必须在同一事务里：创建 `sibling` 条目（挂在 `source` 的父目录下、名称取 `path` 最后一段）、写版本（内容等于 `content`）、写 `conflicts` 映射与 `operations` 终态结果、追加 `changes` 批次、把 `fs_intents` 从 `published` 收尾到 `finalized`；路径已被占用返回 `PathOccupied` |
+| `ports::conflict_store::ConflictStoreError` | `Storage{detail}` / `OutOfScope` / `UnknownRoot{root}` / `PathOccupied{path}` / `DuplicateOperation{op}` / `IllegalIntentTransition{from,to}` / `Rejected{code,detail}` / `MalformedRow{detail}`，`code()` 给稳定短名（`target_path_occupied`、`malformed_conflict_row` 等） |
+| `PutFailureReason` 新增原因与 wire 映射 | `OpIdReused → op_id_reused / OP_ID_REUSED`（同一 `OpId` 不同请求）、`OperationPending → operation_pending / NEEDS_RECOVERY`（pending 不重做）、`ConflictNotStale → conflict_not_stale / RECONCILE_REQUIRED`（head revision 仍是基线）、`ContentAlreadyCommitted → content_already_committed / RECONCILE_REQUIRED`（同结果只归并）、`ConflictStore`（透传存储码） |
+
+不变量：
+
+- **同一个 `OpId` 只有一个结果**：`operation` 记录先于“过期/不同内容”判断（重放时 head 必然已前进），摘要不同即 `OP_ID_REUSED`，摘要相同但记录的源条目/路径/内容不同按 `store_contract_violation`（`NEEDS_RECOVERY`）停写核对。
+- **过期且不同内容才造副本**：head revision 仍是请求基线 → `conflict_not_stale`；head 内容已等于请求内容 → `content_already_committed`（§10.1 第二行不额外造副本）。两者都让客户端重新拉事实再规划。
+- **冲突也是受恢复保护的提交**：冲突条目同样走意图 → 发布 → `published` → 元数据事务；发布失败停在 `prepared`、事务失败停在 `published`，意图不删除，`recovery::classify_put` 可直接分类。
+- **pending 不是 committed**：`begin_conflict` 在动磁盘前登记；重试看到 `pending` 返回 `operation_pending`，不重做也不新建第二份副本。目标被占用这类可重新规划的拒绝在登记之前发生，不把 `OpId` 锁死。
+- **名称不是身份**：`target_path` 由 `planner::conflict::conflict_entry_path` 生成（§10.2 只有一处实现），核心只校验形状；副本身份是 `sibling`（服务器分配）并与结果同事务持久化，重试不改名、不换 id。
+
+未接入（后续卡）：`ConflictCommitStore` 同样只有测试假实现；真实实现要接 `crates/server-store` 的 `entries`/`versions`/`changes`/`operations`/`conflicts` 与 `fs_intents` 收尾，`conflicts` 表本身也尚未建（S028 只落了 `operations`）。崩溃后 `pending` 记录的收尾依赖 S037 的全 Root 恢复；跨进程并发仍靠数据库唯一约束与 Root 票据（同 S035 限制）。
+
