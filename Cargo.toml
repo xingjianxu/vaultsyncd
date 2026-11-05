@@ -9,6 +9,7 @@ resolver = "3"
 members = [
     "crates/domain",
     "crates/fs-common",
+    "crates/planner",
     "crates/platform-linux-server",
     "crates/protocol",
     "crates/platform-windows",
@@ -18,11 +19,13 @@ members = [
 # crates/protocol 是 api/openapi.yaml 生成的 wire 契约与 domain→wire 显式映射（S024），只依赖
 # serde 与 domain，Windows 客户端与 Linux 服务端共用，因此同样进 default-members：两侧编译与
 # 契约测试都在便携检查里跑。
+# crates/planner 是纯规则的三方比较与计划核心（S019），只依赖 domain 与 fs-common，不做任何
+# I/O，因此同样进 default-members。
 #
 # default-members 只选可移植核心：`cargo test --locked`/`cargo clippy` 不构建 xtask 等编排工具，
 # 也不构建只能在 Windows 上运行的测试包与平台适配层（crates/platform-windows 的 Windows 目标
 # 代码只有交叉构建 + 客体运行才能验证），保证便携检查（含 Windows 与 CI 的默认目标）不受影响。
-default-members = ["crates/domain", "crates/fs-common", "crates/protocol"]
+default-members = ["crates/domain", "crates/fs-common", "crates/planner", "crates/protocol"]
 
 [workspace.package]
 # edition 2024 在 Rust 1.85.0 稳定，据此把 rust-version 定为 1.85.0（实测见 agent/tasks/S004.md）。
