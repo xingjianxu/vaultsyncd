@@ -1700,3 +1700,37 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 ### 限制（后续卡）
 
 - 已采纳文件的外部删除/改名管线（rename 配对、回收站）不在本卡：观察到不存在只记录、不推导；自写意图尚无调用方（服务端写入发布路径接入时登记/释放）；内容复核用候选采集（reflink/复制 + 哈希 + 发布同内容对象）实现，开销较大，后续可在端口上增加只读哈希；挂载变化后需重建监视（`RootUnavailable` 之后）由进程入口负责。
+
+## crates/server-core + server-store + apps/server — 快照、changes 与 SSE（S048）
+
+契约在 `api/openapi.yaml`（生成器 format v5：`in: query` 标量参数、`text/event-stream` 成功响应）。四个端点
+都先 `auth::principal_from` 再 `auth::authorize_root`；查询串只接受声明的参数，未知/重复/非规范十进制 400。
+
+| 端点 | 语义 |
+| --- | --- |
+| `POST /v1/roots/{root}/snapshots` → 201 `Snapshot` | 同一写事务读 `roots.seq`（`high_water_seq`）并复制活跃条目成清单；TTL 600 s（`api::snapshots::SNAPSHOT_TTL_SECONDS`） |
+| `GET …/snapshots/{snapshot}/entries?cursor&limit` → 200 `SnapshotPage` | **只读清单**，按 EntryId 升序；`next_cursor` 缺省=末页；`limit` 1–1000（缺省 500），越界 400；快照过期/未知/他人的 **410 `CURSOR_EXPIRED`**（`details.reason=snapshot_expired`），不返回空页 |
+| `GET …/changes?after&limit` → 200 `ChangeList` | 严格 seq 升序；`limit` 1–500（缺省 100）只决定在哪个**事务边界**截断：第 `limit` 个批次与后续批次 `tx_id` 相同且 seq 连续则延伸取完；`has_more`/`next_after`/`head_seq`/`server_epoch` 同读事务取得；`after` 早于保留窗口（默认 90 天）或晚于当前头 → **410 `CURSOR_EXPIRED`**（`details.reason=before_retention_window｜ahead_of_head` + `expired_through｜head_seq`） |
+| `GET …/events` → 200 `text/event-stream` | `event: seq`，`id`/`data`=`SeqHint{root_id,seq}`；新连接立即给当前头，之后头变化才提示（可合并跳号）；**只提示、不带事件内容**；draining 时流主动结束 |
+
+- **存储**：迁移 `0007_snapshots.sql`——`snapshots`（元数据）/`snapshot_entries`（创建时的值拷贝，无外键引用 `entries`，
+  `ON DELETE CASCADE`）与 `changes_by_time` 索引。`server-store::snapshots::{create_snapshot,snapshot_page}`：
+  创建时回收过期快照并把每 Root 的未过期快照压到 `MAX_LIVE_SNAPSHOTS_PER_ROOT`(8)；翻页元数据与条目同一读事务。
+  `server-store::changes` 增补 `change_window`（头、epoch、保留下沿 = “创建时间早于截止的最新批次”的 seq，索引寻址）与
+  `changes_after_whole_transactions`（不拆事务）。`SnapshotId`（`domain::ids`）是快照身份类型。
+- **核心规则**（纯函数，`server_core::api::{events,snapshots}`）：`judge_cursor`、`retention_cutoff`、`changes_limit`/
+  `snapshot_limit`（越界拒绝而非截断）、`page_progress`、`next_hint`、`ChangesFailure`（400/410/503 + 错误码 + 可重试）。
+- **`apps/server::sync`**：`SyncContext::{new,with_config}`（`SyncConfig{event_retention_seconds, sse_poll_interval,
+  sse_keepalive}`）；`http::router` 与 `bootstrap` 增加 `SyncContext` 参数。SSE 流自己轮询 `roots.seq`（间隔默认 1 s），
+  不依赖进程内发布者，所以任何写者推进 seq 都会被提示。
+- **客户端约定**：SSE 可丢/重/乱序，客户端以 `changes` 的游标与 seq 去重修复；断线只需轮询 `changes`；410 时重新取快照并
+  保留本地基线与未上传队列（design §9.4）。`events_json` 是该事务全部条目变化的 JSON 数组文本，整批原子应用。
+
+### 未接入 / 限制
+
+- `events_json` 的事件内容形状由提交协调（S052 起）写入；本卡只保证“整批取出、不拆开”。
+- 事件保留期（90 天）目前只是 `SyncConfig` 默认值，尚未进入 `[config]` TOML；物理清理 `changes` 行受
+  `versions.created_seq`/`operations.root_seq` 的外键约束，保留窗口是逻辑下沿，不删行。
+- `GET …/events` 需要 `Authorization` 头，浏览器原生 `EventSource` 不能直接用（TS 客户端 `subscribeEvents` 返回原始 `Response`）。
+- 未覆盖 `ServerEpoch` 变更后旧游标的显式 410（`after` 不带 epoch；`ahead_of_head` 与 `before_retention_window` 覆盖
+  回退场景的常见形态，epoch 绑定留给重建流程卡）。
