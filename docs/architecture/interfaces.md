@@ -1208,3 +1208,24 @@ python3 tools/context.py --help
 
 未接入（后续卡）：`ConflictCommitStore` 同样只有测试假实现；真实实现要接 `crates/server-store` 的 `entries`/`versions`/`changes`/`operations`/`conflicts` 与 `fs_intents` 收尾，`conflicts` 表本身也尚未建（S028 只落了 `operations`）。崩溃后 `pending` 记录的收尾依赖 S037 的全 Root 恢复；跨进程并发仍靠数据库唯一约束与 Root 票据（同 S035 限制）。
 
+
+## crates/server-core — 启动恢复与写入门（S037）
+
+状态：S037 在 S034 的判定之上实现 design §11.3、I13、T23 的启动恢复执行与“先恢复再开放写入口”，并新建 design §5.8 的集成测试包 `tests/server-integration/`（`vaultsyncd-server-tests`）。真实 SQLite/文件端口适配仍未落地。
+
+| 项目 | 契约 |
+| --- | --- |
+| `recovery::startup::recover_root(log, target, store, at, root) -> Result<RecoveryReport, RecoveryError>` | 按 `IntentLog::unfinished_puts` 的写入顺序处理每条未完成 put 意图：现场 == 前 hash → 重做发布 + 补元数据事务；现场 == 后 hash（阶段 `prepared`/`published`）→ 先按现场证据补记 `published`（若还停在 `prepared`），再补元数据事务；现场是第三种内容 → 保留双方、不覆盖不提交；目标不可读/已标 `needs_recovery` → 落盘 `needs_recovery` 并停写；恢复动作失败 → 不假装完成，Root 保持关闭。`RecoveryError::Intent(IntentLogError)` 表示读不出未完成清单（越权/存储失败），调用方必须保持关闭 |
+| `recovery::startup::RecoveryReport` | `root`、`intents: Vec<RecoveredIntent{intent: PutIntent, decision: RecoveryDecision, outcome: RecoveryOutcome}>`；`pauses_writes()`（任一 `NeedsRecovery`/`Unresolved`）、`needs_reconciliation()`（任一 `Preserved`）、`committed_versions()`、`outcome_for(id)`。报告是恢复输出与候选版本证据（前 hash 在 `intent.before`，后 hash 在 `intent.after`） |
+| `recovery::startup::RecoveryOutcome` | `Redone{version, published}` / `Completed{version}` / `Preserved{reason: ReconcileReason}` / `NeedsRecovery{reason: NeedsRecoveryReason}` / `Unresolved{code, detail}`；`is_committed()` 只对前两者为真，`version()`、`pauses_writes()`、`as_str()`（稳定短名） |
+| `recovery::startup::WriteAdmission` / `RootAdmission` / `AdmissionState` / `WriteRefusal` | 逐 Root 写入门：新建时所有 Root 为 `AwaitingRecovery`（默认拒绝），只有 `record(RecoveryReport)` 能推进到 `Open` 或 `Paused(report)`，没有直接打开的入口。`admit_write(root) -> Result<(), WriteRefusal>`，拒绝码 `recovery_pending`（恢复未完成）与 `needs_recovery`（恢复暂停）；`state(root)` 给 readiness 用；`report(root)` 给诊断/API 输出暂停原因 |
+| `tests/server-integration/`（包 `vaultsyncd-server-tests`） | `src/lib.rs` 是文件型假端口与边界注入装置（`CrashStore`/`StoreHandle`/`Boundary`/`run_commit`/`run_recovery`/`start_with_recovery`），`src/bin/crash-child.rs` 是被强杀的子进程，`tests/recovery.rs` 是验收矩阵。不进 `default-members`，用 `cargo test --locked -p vaultsyncd-server-tests` 执行 |
+
+不变量：
+
+- **先恢复再开放写入**：提交入口必须先 `WriteAdmission::admit_write`；默认状态是拒绝，报告 `pauses_writes()` 为真时永远只能是 `Paused`。
+- **只重放可证明的操作**：恢复只用意图里的 `expected_before`/`desired_after` 与现场实测比较；元数据事务只从 `expected_before` 的快照取条目身份与基线 revision，不猜身份。
+- **事务声称成功也要核对证据**：`apply_put` 返回的 `phase` 不是 `finalized`、内容不等于 `desired_after` 或 revision 没推进，都按 `store_contract_violation` 停写。
+- **保留旧对象与冲突候选**：`Preserved`/`NeedsRecovery` 不删除对象、不改工作文件；`Redone`/`Completed` 只新增一个版本，旧内容对象仍被旧版本引用。
+
+未接入（后续卡）：create/move/delete 的意图日志（S038/S039）要接进同一条启动顺序；`expected_before` 为 `Absent` 的意图（新建条目）当前返回 `Unresolved{code: "missing_entry_baseline"}` 并保持 Root 关闭，因为意图里没有条目身份可收尾；真实存储适配与 `apps/server` 的 readiness 组装（S041）仍待落地；装置里的摘要不是 SHA-256（假端口），仅用于区分前后内容。
