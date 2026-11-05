@@ -914,6 +914,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn short_write_after_publish_stays_prepared_and_is_never_committed() {
+        let (request, _snapshot, mut gate, mut store, mut target) = overwrite();
+        // 端口报告发布成功，但实测只有 3 字节：不能记 published，更不能 ACK。
+        target.publish_reports = Some(crate::ports::target::PublishedTarget {
+            identity: crate::ports::object_store::FileKey {
+                device: 7,
+                inode: 91,
+                links: 1,
+                bytes: 3,
+            },
+            digest: digest(NEW_HEX),
+        });
+        let mut log = FakeIntentLog::default();
+        let failure = commit_put(
+            &mut gate,
+            &mut store,
+            &mut log,
+            &mut target,
+            user_time(100),
+            &request,
+        )
+        .await
+        .expect_err("短写");
+        assert_eq!(failure.code(), "published_target_mismatch");
+        assert_eq!(failure.phase, Some(PutPhase::Prepared));
+        assert!(!failure.is_committed());
+        assert!(store.writes.is_empty(), "发布证据不符时不得写元数据");
+        assert!(!gate.is_held(request.root));
+    }
+
+    #[tokio::test]
+    async fn external_write_between_the_two_observations_is_reconcile_required() {
+        let (request, snapshot, mut gate, mut store, mut target) = overwrite();
+        // 第一次（CAS 预检查）看到请求指纹，第二次（发布前 S034 复核）已被外部删除。
+        target.observe_script.push_back(TargetObservation::Present {
+            identity: snapshot.identity,
+            digest: snapshot.digest,
+        });
+        target.observe_script.push_back(TargetObservation::Absent);
+        let mut log = FakeIntentLog::default();
+        let failure = commit_put(
+            &mut gate,
+            &mut store,
+            &mut log,
+            &mut target,
+            user_time(100),
+            &request,
+        )
+        .await
+        .expect_err("预检查后被外部改写");
+        assert_eq!(failure.code(), "reconcile_required");
+        assert_eq!(failure.error_code(), Some(ErrorCode::ReconcileRequired));
+        assert!(!failure.is_committed());
+        assert!(log.intents.is_empty(), "发布前的复核失败发生在写意图之前");
+        assert!(target.publishes.is_empty());
+        assert!(!gate.is_held(request.root));
+    }
+
+    #[tokio::test]
+    async fn transaction_that_does_not_finalize_the_intent_is_not_acknowledged() {
+        let (request, _snapshot, mut gate, mut store, mut target) = overwrite();
+        store.record = Some(PutRecord {
+            intent_id: request.intent_id,
+            phase: PutPhase::Published,
+            version: version_id(0x81),
+            revision: revision(8),
+            seq: root_seq(11),
+            tx: tx_id(0x71),
+            digest: digest(NEW_HEX),
+            size: 5,
+        });
+        let mut log = FakeIntentLog::default();
+        let failure = commit_put(
+            &mut gate,
+            &mut store,
+            &mut log,
+            &mut target,
+            user_time(100),
+            &request,
+        )
+        .await
+        .expect_err("意图没有收尾");
+        assert_eq!(failure.code(), "store_contract_violation");
+        assert_eq!(failure.error_code(), Some(ErrorCode::NeedsRecovery));
+        assert!(!failure.is_committed());
+    }
+
+    #[tokio::test]
     async fn request_shape_is_checked_before_any_port_is_touched() {
         let (mut request, _snapshot, mut gate, mut store, mut target) = overwrite();
         let mut log = FakeIntentLog::default();

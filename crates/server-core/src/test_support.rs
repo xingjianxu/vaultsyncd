@@ -179,6 +179,8 @@ pub(crate) struct FakeTarget {
     pub(crate) trace: Trace,
     pub(crate) publishes: Vec<PublishRequest>,
     pub(crate) observe_error: Option<TargetError>,
+    /// 依次替换后两次及以后 observe 的返回值，用来模拟“预检查之后、发布之前”的外部写入。
+    pub(crate) observe_script: std::collections::VecDeque<TargetObservation>,
     pub(crate) publish_error: Option<TargetError>,
     pub(crate) publish_reports: Option<PublishedTarget>,
     next_inode: u64,
@@ -191,6 +193,7 @@ impl FakeTarget {
             trace: Trace::default(),
             publishes: Vec::new(),
             observe_error: None,
+            observe_script: std::collections::VecDeque::new(),
             publish_error: None,
             publish_reports: None,
             next_inode: 90,
@@ -218,10 +221,13 @@ impl FakeTarget {
 impl TargetPort for FakeTarget {
     fn observe(&mut self, target_path: &str) -> Result<TargetObservation, TargetError> {
         self.trace.record(format!("target observe {target_path}"));
-        match self.observe_error.take() {
-            Some(error) => Err(error),
-            None => Ok(self.current.clone()),
+        if let Some(error) = self.observe_error.take() {
+            return Err(error);
         }
+        if let Some(next) = self.observe_script.pop_front() {
+            self.current = next;
+        }
+        Ok(self.current.clone())
     }
 
     fn publish(&mut self, request: &PublishRequest) -> Result<PublishedTarget, TargetError> {
