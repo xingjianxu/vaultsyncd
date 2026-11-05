@@ -6,13 +6,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, IntentId, RootId};
-use vaultsyncd_domain::version::UtcTimestamp;
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, IntentId, RootId, TxId, VersionId};
+use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
 
 use crate::commit::intent::{NewPutIntent, PutIntent, PutPhase, TargetSnapshot};
 use crate::objects::ContentDigest;
 use crate::ports::intent_log::{IntentLog, IntentLogError};
 use crate::ports::object_store::FileKey;
+use crate::ports::put_store::{
+    EntryBaseline, EntryKind, ObjectState, PutCommitStore, PutRecord, PutStoreError, PutWrite,
+    RootFacts,
+};
 use crate::ports::target::{
     PublishRequest, PublishedTarget, TargetError, TargetObservation, TargetPort,
 };
@@ -64,6 +68,26 @@ pub(crate) fn entry_id(marker: u8) -> EntryId {
 
 pub(crate) fn user_time(seconds: i64) -> UtcTimestamp {
     UtcTimestamp::from_unix_seconds(seconds).expect("测试用时间合法")
+}
+
+pub(crate) fn revision(value: u64) -> Revision {
+    Revision::new(value).expect("测试用 revision 合法")
+}
+
+pub(crate) fn epoch(value: u64) -> ServerEpoch {
+    ServerEpoch::new(value).expect("测试用 epoch 合法")
+}
+
+pub(crate) fn version_id(marker: u8) -> VersionId {
+    VersionId::from_bytes(identity(marker))
+}
+
+pub(crate) fn tx_id(marker: u8) -> TxId {
+    TxId::from_bytes(identity(marker))
+}
+
+pub(crate) fn root_seq(value: u64) -> RootSeq {
+    RootSeq::new(value).expect("测试用 RootSeq 合法")
 }
 
 /// 测试用现场快照：设备 7、inode 41、单链接、revision 7、条目 0x51。
@@ -155,6 +179,8 @@ pub(crate) struct FakeTarget {
     pub(crate) trace: Trace,
     pub(crate) publishes: Vec<PublishRequest>,
     pub(crate) observe_error: Option<TargetError>,
+    /// 依次替换后两次及以后 observe 的返回值，用来模拟“预检查之后、发布之前”的外部写入。
+    pub(crate) observe_script: std::collections::VecDeque<TargetObservation>,
     pub(crate) publish_error: Option<TargetError>,
     pub(crate) publish_reports: Option<PublishedTarget>,
     next_inode: u64,
@@ -167,10 +193,17 @@ impl FakeTarget {
             trace: Trace::default(),
             publishes: Vec::new(),
             observe_error: None,
+            observe_script: std::collections::VecDeque::new(),
             publish_error: None,
             publish_reports: None,
             next_inode: 90,
         }
+    }
+
+    /// 换用共享轨迹，便于断言跨端口的调用顺序。
+    pub(crate) fn with_trace(mut self, trace: Trace) -> Self {
+        self.trace = trace;
+        self
     }
 
     /// 目标当前是一个已存在文件（现场快照 `snapshot`）。
@@ -188,10 +221,13 @@ impl FakeTarget {
 impl TargetPort for FakeTarget {
     fn observe(&mut self, target_path: &str) -> Result<TargetObservation, TargetError> {
         self.trace.record(format!("target observe {target_path}"));
-        match self.observe_error.take() {
-            Some(error) => Err(error),
-            None => Ok(self.current.clone()),
+        if let Some(error) = self.observe_error.take() {
+            return Err(error);
         }
+        if let Some(next) = self.observe_script.pop_front() {
+            self.current = next;
+        }
+        Ok(self.current.clone())
     }
 
     fn publish(&mut self, request: &PublishRequest) -> Result<PublishedTarget, TargetError> {
@@ -221,5 +257,114 @@ impl TargetPort for FakeTarget {
             digest: published.digest,
         };
         Ok(published)
+    }
+}
+
+/// 内存提交存储：可脚本化每个读方法的错误与事务结果，并记录被写入的事务输入。
+pub(crate) struct FakePutStore {
+    pub(crate) trace: Trace,
+    pub(crate) facts: RootFacts,
+    pub(crate) baseline: EntryBaseline,
+    pub(crate) object: ObjectState,
+    pub(crate) root_facts_error: Option<PutStoreError>,
+    pub(crate) baseline_error: Option<PutStoreError>,
+    pub(crate) object_error: Option<PutStoreError>,
+    pub(crate) apply_error: Option<PutStoreError>,
+    pub(crate) writes: Vec<PutWrite>,
+    pub(crate) record: Option<PutRecord>,
+}
+
+impl FakePutStore {
+    /// 一个已存在普通文件的基线（revision 7、条目 0x51、名字 `note.txt`）。
+    pub(crate) fn for_entry(baseline: EntryBaseline) -> Self {
+        FakePutStore {
+            trace: Trace::default(),
+            facts: RootFacts { epoch: epoch(3) },
+            baseline,
+            object: ObjectState::Persisted { bytes: 5 },
+            root_facts_error: None,
+            baseline_error: None,
+            object_error: None,
+            apply_error: None,
+            writes: Vec::new(),
+            record: None,
+        }
+    }
+
+    /// 默认的“成功事务”证据：由事务输入派生（revision +1、内容一致、阶段 finalized）。
+    fn default_record(write: &PutWrite) -> PutRecord {
+        PutRecord {
+            intent_id: write.intent_id,
+            phase: PutPhase::Finalized,
+            version: version_id(0x81),
+            revision: write
+                .expected_revision
+                .next()
+                .expect("测试用 revision 可推进"),
+            seq: root_seq(11),
+            tx: tx_id(0x71),
+            digest: write.content.digest,
+            size: write.content.bytes,
+        }
+    }
+}
+
+impl PutCommitStore for FakePutStore {
+    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, PutStoreError> {
+        self.trace.record(format!("store root_facts {root}"));
+        match self.root_facts_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.facts),
+        }
+    }
+
+    async fn entry_baseline(
+        &mut self,
+        root: RootId,
+        entry: EntryId,
+    ) -> Result<EntryBaseline, PutStoreError> {
+        self.trace
+            .record(format!("store entry_baseline {root} {entry}"));
+        match self.baseline_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.baseline.clone()),
+        }
+    }
+
+    async fn object_state(
+        &mut self,
+        root: RootId,
+        digest: ContentDigest,
+    ) -> Result<ObjectState, PutStoreError> {
+        self.trace
+            .record(format!("store object_state {root} {digest}"));
+        match self.object_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.object),
+        }
+    }
+
+    async fn apply_put(&mut self, write: &PutWrite) -> Result<PutRecord, PutStoreError> {
+        self.trace.record("store apply_put".to_owned());
+        self.writes.push(write.clone());
+        match self.apply_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self
+                .record
+                .clone()
+                .unwrap_or_else(|| Self::default_record(write))),
+        }
+    }
+}
+
+/// 测试用条目基线：revision 7、父目录 0x61、名称 `note.txt`、普通文件。
+pub(crate) fn file_baseline(root: RootId) -> EntryBaseline {
+    EntryBaseline {
+        entry: entry_id(0x51),
+        root,
+        parent: entry_id(0x61),
+        name: "note.txt".to_owned(),
+        revision: revision(7),
+        kind: EntryKind::File,
     }
 }

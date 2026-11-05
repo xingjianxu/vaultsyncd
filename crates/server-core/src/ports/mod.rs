@@ -5,4 +5,5 @@
 
 pub mod intent_log;
 pub mod object_store;
+pub mod put_store;
 pub mod target;

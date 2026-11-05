@@ -1154,3 +1154,33 @@ python3 tools/context.py --help
 - **错误不是 committed**：所有失败返回 `PutFailure`，`is_committed()` 恒 `false`，且不删除已持久化的意图行（它是恢复证据）。
 - **故障不是删除**：目标不可读只走向 `needs_recovery` 与暂停写入，不解释为“目标不存在”后重做。
 - **证据自描述**：`expected_before`/`desired_after` 的编码与解码在核心一处维护；存储层的 `fs_intents.expected_before/desired_after` 只用这段文本，不另造一套形态（真实 SQLite 迁移与 CHECK 约束下的往返见 `crates/server-store/src/intents.rs` 的 S034 测试）。
+
+## crates/server-core — 内容 CAS 与现场复核（S035）
+
+状态：S035 在 S034 的意图状态机上实现单文件内容 put 的完整 CAS 与 ACK 边界（`commit::put`、`ports::put_store`）。幂等/冲突（S036）、全 Root 恢复（S037）、create/move/delete（S038/S039）仍在其上扩展；服务端存储层的真实适配（SQLite 事务 + `fs_intents` 收尾）尚未落地，见本节末的“未接入”项。
+
+### 端口与模块
+
+| 项目 | 契约 |
+| --- | --- |
+| `commit::put::RootCommitGate` | 进程内 Root 提交串行化：`acquire(root) -> RootCommitTicket`、`release(ticket)`、`is_held(root)`。同一 Root 同时只允许一次提交，第二个得到 `root_commit_busy`（不排队、不阻塞）；不同 Root 互不影响。票据只能由 `acquire` 产生，释放不失败（不匹配即编程错误）。只覆盖单进程，跨进程共享数据库的串行化属服务端组装卡 |
+| `commit::put::PutRequest` | `intent_id`、`root`、`entry`、`expected_epoch`、`expected_revision`、`expected_parent`、`expected_name`、`target_path`、`staging_path`、`content: ExpectedContent`、`before: TargetBefore`。形状校验在任何端口调用之前：暂存名必须是单个文件名（I10），`target_path` 必须是 Root 内相对路径且最后一段等于 `expected_name`，`before` 的条目/revision 必须与请求基线一致 |
+| `commit::put::commit_put(gate, store, log, target, at, &PutRequest)` | 顺序固定：请求形状 → Root 票据 → epoch → 命名空间基线 → 对象持久 → 现场指纹 → `publish_put`（意图 → 发布 → 记 published）→ `apply_put`（元数据/changes/结果事务）→ 核对事务证据 → ACK。任何出口都会释放 Root 票据。成功返回 `CommittedPut{record, target}`，`record.phase` 必须是 `finalized` |
+| `commit::put::CommittedPut` | `record: PutRecord` + `target: PublishedTarget`；`intent_id()` 给出已收尾的意图。只有元数据事务提交后才存在（I01：发布完成不等于 committed） |
+| `ports::put_store::PutCommitStore` | 存储端口（异步，泛型使用）：`root_facts(root) -> RootFacts{epoch}`、`entry_baseline(root, entry) -> EntryBaseline{entry, root, parent, name, revision, kind}`、`object_state(root, digest) -> ObjectState::{Persisted{bytes}, Missing}`、`apply_put(&PutWrite) -> PutRecord`。`apply_put` 必须在一个事务里做：比较并写 `expected_revision`、写 `versions`/`entries.revision`/当前版本、追加 `changes` 批次、写操作结果，并把 `fs_intents` 从 `published` 收尾到 `finalized`；意图不是 `published` 时返回 `IllegalIntentTransition` |
+| `ports::put_store::PutRecord` | `intent_id`、`phase`、`version`、`revision`、`seq: RootSeq`、`tx: TxId`、`digest`、`size`；`phase` 必须是 `finalized`、`digest`/`size` 等于请求内容、`revision` 严格大于基线，否则核心按 `store_contract_violation` 停写（不返回 ACK） |
+| `ports::put_store::PutStoreError` | `Storage{detail}` / `OutOfScope` / `UnknownRoot{root}` / `EntryMissing{entry}` / `RevisionChanged{expected, actual}` / `IllegalIntentTransition{from, to}` / `Rejected{code, detail}` / `MalformedIntent{detail}`，`code()` 给稳定短名（`revision_changed` 等） |
+| `PutFailureReason` 新增原因与 wire 映射 | `EpochChanged → epoch_changed / EPOCH_CHANGED`、`BaseMismatch → base_mismatch / BASE_MISMATCH`（过期 revision）、`SubtreeChanged → subtree_changed / SUBTREE_CHANGED`（父目录/名称变化）、`Reconcile → reconcile_required / RECONCILE_REQUIRED`（现场指纹不符）、`UnsupportedEntry → unsupported_entry / UNSUPPORTED_ENTRY`、`ObjectNotPersisted`/`ObjectSizeMismatch`（无 wire 码）、`Gate`（`root_commit_busy`）、`Store`（透传存储码）、`StoreContract → store_contract_violation / NEEDS_RECOVERY`。`PutFailure::error_code() -> Option<ErrorCode>` 是 API 层唯一的 wire 映射，不在上层重写字符串 |
+
+### 不变量
+
+- **过期基线不覆盖**：epoch、revision、父目录、名称、现场指纹五项都在动磁盘之前核对；前四项分别得到 `EPOCH_CHANGED`/`BASE_MISMATCH`/`SUBTREE_CHANGED`，现场不符得到 `RECONCILE_REQUIRED`（design §11.2 步骤 4、I04）。
+- **对象先于意图**：内容地址上没有已登记对象（或登记长度不符）时一个字节都不发布，也不写意图（design §11.2 步骤 3）。
+- **失败永远不是 committed**：`PutFailure::is_committed()` 恒为 `false`；发布失败停在 `prepared`，事务失败停在 `published`，两者都不删除意图行（恢复证据）。
+- **现场复核两次不宣称消除竞态**：CAS 预检查与 `publish_put` 的发布前复核各观察一次现场；两者之间仍可能被外部写入，按 design §12.2 不承诺保留每一次非协作瞬态写入，只保证“发现不符就拒绝并保留候选版本”。
+- **证据不一致就停写**：存储层声称事务成功但返回的证据（意图阶段、内容摘要/长度、revision 推进）与请求不符，按 `store_contract_violation`（`NEEDS_RECOVERY`）处理，不把适配器缺陷当成成功。
+
+### 未接入（后续卡）
+
+- `PutCommitStore` 尚无真实实现：`root_facts`/`entry_baseline`/`object_state`/`apply_put` 要接到 `crates/server-store` 的 `roots`/`entries`/`versions`/`changes`/`operations`/`intents`，并把 `IntentLog` 的真实 `fs_intents` 适配一并落地；在此之前 `apps/server` 的提交入口没有可组装的存储实现。
+

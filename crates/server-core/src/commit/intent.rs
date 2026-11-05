@@ -29,12 +29,15 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use vaultsyncd_domain::error::ErrorCode;
 use vaultsyncd_domain::ids::{EntryId, IntentId, RootId};
-use vaultsyncd_domain::version::UtcTimestamp;
+use vaultsyncd_domain::version::{ServerEpoch, UtcTimestamp};
 
+use crate::commit::put::CommitGateError;
 use crate::objects::{ContentDigest, DigestParseError, ObjectLayout};
 use crate::ports::intent_log::{IntentLog, IntentLogError};
 use crate::ports::object_store::FileKey;
+use crate::ports::put_store::PutStoreError;
 use crate::ports::target::{
     PublishRequest, PublishedTarget, TargetError, TargetObservation, TargetPort,
 };
@@ -401,6 +404,56 @@ pub enum PutFailureReason {
         /// 发布后实测现场。
         observed: PublishedTarget,
     },
+    /// Root epoch 与请求预期不符：服务器事实已重建，旧提交作废（`EPOCH_CHANGED`）。
+    EpochChanged {
+        /// 请求携带的 epoch。
+        expected: ServerEpoch,
+        /// Root 当前的 epoch。
+        actual: ServerEpoch,
+    },
+    /// 条目 revision 已不是请求基线：过期基线必须重新规划（`BASE_MISMATCH`，I04）。
+    BaseMismatch {
+        /// 原因文本。
+        detail: String,
+    },
+    /// 父目录或名称在计划后变化（`SUBTREE_CHANGED`）。
+    SubtreeChanged {
+        /// 原因文本。
+        detail: String,
+    },
+    /// 工作目录现场与请求指纹不符（`RECONCILE_REQUIRED`）：先采集外部变化再重新计划。
+    Reconcile {
+        /// 请求的现场前提。
+        expected: TargetBefore,
+        /// 实测现场。
+        observed: TargetObservation,
+    },
+    /// 条目不能承载内容（目录等）：标记该条目，不拖垮整个 Root（`UNSUPPORTED_ENTRY`）。
+    UnsupportedEntry {
+        /// 原因文本。
+        detail: String,
+    },
+    /// 内容对象尚未持久化：没有可发布的内容，不得开始意图。
+    ObjectNotPersisted {
+        /// 缺失的内容地址。
+        digest: ContentDigest,
+    },
+    /// 已登记对象的长度与请求内容不符：上传事实与对象事实冲突。
+    ObjectSizeMismatch {
+        /// 请求内容的字节数。
+        expected: u64,
+        /// 对象登记的字节数。
+        actual: u64,
+    },
+    /// 同一 Root 已有提交在进行：不并发修改同一棵树。
+    Gate(CommitGateError),
+    /// 存储层失败（基线读取、对象查询或元数据事务）。
+    Store(PutStoreError),
+    /// 存储层报告事务成功，但返回的证据与请求不一致：适配器缺陷，必须停写人工核对。
+    StoreContract {
+        /// 原因文本。
+        detail: String,
+    },
 }
 
 impl PutFailureReason {
@@ -414,6 +467,43 @@ impl PutFailureReason {
             PutFailureReason::Intent(error) => error.code(),
             PutFailureReason::Publish(error) => error.code(),
             PutFailureReason::PublishedTargetMismatch { .. } => "published_target_mismatch",
+            PutFailureReason::EpochChanged { .. } => "epoch_changed",
+            PutFailureReason::BaseMismatch { .. } => "base_mismatch",
+            PutFailureReason::SubtreeChanged { .. } => "subtree_changed",
+            PutFailureReason::Reconcile { .. } => "reconcile_required",
+            PutFailureReason::UnsupportedEntry { .. } => "unsupported_entry",
+            PutFailureReason::ObjectNotPersisted { .. } => "object_not_persisted",
+            PutFailureReason::ObjectSizeMismatch { .. } => "object_size_mismatch",
+            PutFailureReason::Gate(error) => error.code(),
+            PutFailureReason::Store(error) => error.code(),
+            PutFailureReason::StoreContract { .. } => "store_contract_violation",
+        }
+    }
+
+    /// wire 错误码（design §15.4）；服务端内部原因没有对应 wire 码时返回 `None`。
+    ///
+    /// 基线类拒绝必须映射到已经定义的码，客户端据此决定重新规划：
+    /// 过期 revision → `BASE_MISMATCH`，父目录/名称变化 → `SUBTREE_CHANGED`，现场指纹变化 →
+    /// `RECONCILE_REQUIRED`，epoch 变化 → `EPOCH_CHANGED`（I04）。
+    #[must_use]
+    pub fn error_code(&self) -> Option<ErrorCode> {
+        match self {
+            PutFailureReason::EpochChanged { .. } => Some(ErrorCode::EpochChanged),
+            PutFailureReason::BaseMismatch { .. } => Some(ErrorCode::BaseMismatch),
+            PutFailureReason::SubtreeChanged { .. } => Some(ErrorCode::SubtreeChanged),
+            PutFailureReason::Reconcile { .. } => Some(ErrorCode::ReconcileRequired),
+            PutFailureReason::UnsupportedEntry { .. } => Some(ErrorCode::UnsupportedEntry),
+            PutFailureReason::StoreContract { .. } => Some(ErrorCode::NeedsRecovery),
+            PutFailureReason::InvalidRequest { .. }
+            | PutFailureReason::TargetUnreadable(_)
+            | PutFailureReason::BeforeMismatch { .. }
+            | PutFailureReason::Intent(_)
+            | PutFailureReason::Publish(_)
+            | PutFailureReason::PublishedTargetMismatch { .. }
+            | PutFailureReason::ObjectNotPersisted { .. }
+            | PutFailureReason::ObjectSizeMismatch { .. }
+            | PutFailureReason::Gate(_)
+            | PutFailureReason::Store(_) => None,
         }
     }
 }
@@ -436,6 +526,36 @@ impl fmt::Display for PutFailureReason {
                 observed.identity.device,
                 observed.identity.inode,
                 expected.to_json()
+            ),
+            PutFailureReason::EpochChanged { expected, actual } => write!(
+                f,
+                "Root epoch 已是 {actual}，请求预期是 {expected}：服务器事实已重建，旧提交作废"
+            ),
+            PutFailureReason::BaseMismatch { detail } => {
+                write!(f, "基线已不是请求的 revision：{detail}")
+            }
+            PutFailureReason::SubtreeChanged { detail } => {
+                write!(f, "命名空间基线已变化：{detail}")
+            }
+            PutFailureReason::Reconcile { expected, observed } => write!(
+                f,
+                "工作目录现场 {observed} 与请求指纹 {} 不符，需要先协调",
+                expected.to_json()
+            ),
+            PutFailureReason::UnsupportedEntry { detail } => {
+                write!(f, "条目不支持内容提交：{detail}")
+            }
+            PutFailureReason::ObjectNotPersisted { digest } => {
+                write!(f, "内容对象 {digest} 尚未持久化")
+            }
+            PutFailureReason::ObjectSizeMismatch { expected, actual } => {
+                write!(f, "对象登记 {actual} 字节，请求内容 {expected} 字节")
+            }
+            PutFailureReason::Gate(error) => write!(f, "{error}"),
+            PutFailureReason::Store(error) => write!(f, "{error}"),
+            PutFailureReason::StoreContract { detail } => write!(
+                f,
+                "存储层报告提交成功但证据不一致：{detail}（必须停写人工核对）"
             ),
         }
     }
@@ -486,6 +606,12 @@ impl PutFailure {
     #[must_use]
     pub fn code(&self) -> &'static str {
         self.reason.code()
+    }
+
+    /// wire 错误码（design §15.4）；服务端内部原因没有对应 wire 码时返回 `None`。
+    #[must_use]
+    pub fn error_code(&self) -> Option<ErrorCode> {
+        self.reason.error_code()
     }
 }
 
