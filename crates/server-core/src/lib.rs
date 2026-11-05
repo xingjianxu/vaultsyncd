@@ -11,6 +11,8 @@
 //! - [`commit`] 规定一次 put 的持久阶段顺序（prepared → published → finalized）、前后证据编码与
 //!   完整 CAS（design §11.2 步骤 4—7、I01、I04），并在过期基线上把不同内容提交为稳定身份的冲突条目
 //!   （design §10.1—10.2、I06）；
+//! - [`history`] 在提交协调之上做历史版本恢复与回收站恢复：按旧不可变版本创建新的当前版本（内容
+//!   由短期租约保护，旧版本字节不变，I12），把回收站条目放回命名空间并在目标被占用时另名（T13）；
 //! - [`recovery`] 按持久阶段与工作目录现场给出恢复结论，并在启动时先执行恢复、再开放写入口
 //!   （design §11.3、I13）。
 //!
@@ -24,6 +26,7 @@
 
 pub mod auth;
 pub mod commit;
+pub mod history;
 pub mod objects;
 pub mod ports;
 pub mod recovery;

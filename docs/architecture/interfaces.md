@@ -1296,6 +1296,38 @@ python3 tools/context.py --help
 
 未接入（后续卡）：真实端口适配（`NamespacePort` 的 Linux 实现、`NamespaceIntentLog`/`NamespaceCommitStore` 的 SQLx 实现）与提交入口的进程内装配；delete 的意图与回收站（S039）；`tests/server-integration/` 的强杀矩阵只覆盖 put 边界，命名空间边界目前由 `crates/server-core` 的假端口用例覆盖；目标祖先的逐级存在性由适配器报告，核心只核对目标父目录条目与端口现场。
 
+## crates/server-core + crates/server-store — 可恢复删除与回收站（S039）
+
+状态：S039 把删除接进 put/命名空间同一套持久意图阶段机（design §10.3、T11/T12）。核心给编排与判定，存储层给回收站清单/墓碑表与有界批次软删除；真实 `NamespacePort`/`RemovalPort`/`DeleteIntentLog`/`DeleteStore` 的 SQLx 与 Linux 适配仍未落地（随 S041 之后的装配），本卡证明的是端口契约 + 编排 + 表约束。
+
+| 项目 | 契约 |
+| --- | --- |
+| `commit::delete::commit_delete(gate, store, log, ns, at, &DeleteRequest) -> Result<CommittedDelete, Box<DeleteFailure>>` | 顺序：请求形状（路径）→ Root 串行化 → epoch → 条目基线 revision → 子树忙 → 现场种类 → 冻结清单与 token → 意图 `prepared` → 有界批次移除并复核 → `published` → 单一事务公布 → ACK。`ns` 同时实现 `NamespacePort`（观察）与 `RemovalPort`（移除） |
+| `DeleteRequest` | `{intent_id, root, entry, expected_epoch, expected_revision, subtree_token: Option<SubtreeToken>, path}`。目录删除必须带服务端 token，文件删除必须不带（混用即 `invalid_request`） |
+| `CommittedDelete` | `record: DeleteRecord`（`phase` 必须 `finalized`、`trashed` 等于清单长度）、`target`（必须是 `Absent`）、`removed`（工作目录删掉的目录项数）、`batches` |
+| `SubtreeToken` | 服务端按冻结清单算出的 128 位摘要（FNV-1a），任一条目的身份/父/名/种类/revision/内容版本变化或成员增删都会换值。`to_hex()` 是 32 个小写十六进制字符；它是并发检测，不是安全凭据 |
+| `SubtreeImage` / `SubtreeEntry` / `DeleteBatch` | `SubtreeImage::new(root, entries)` 要求非空、根条目恰好一条且带父目录、身份不重复、路径合法、非根成员的父目录在清单里。`token()`、`batches(limit)`（每批 ≤ `MAX_DELETE_BATCH_ENTRIES = 256`）、`find(entry)` |
+| `SubtreeBusy` / `check_write(root, path)` | 子树忙来自**持久事实**：未收尾的删除意图。`SubtreeBusy::from_intents(&[DeleteIntent])` 后，命中 `path == 子树路径` 或其后代的写入返回 `SubtreeBusyConflict{entry, path}`。装配层应在 put/新建/移动/恢复之前调用它 |
+| `DeleteFailure` / `DeleteFailureReason` | 稳定码：`invalid_request`、`root_commit_busy`、`epoch_changed`、`base_mismatch`、`subtree_changed`、`subtree_busy`、`target_unreadable`、移除错误码（`path_in_use`、`target_unreadable`、存储分类）、`removal_incomplete`、`manifest_mismatch`、意图/存储错误码、`store_contract_violation`。`is_committed()` 恒为 `false`。wire 映射：`EPOCH_CHANGED`、`BASE_MISMATCH`、`SUBTREE_CHANGED`（子树变化/忙/移除未完成）、`NEEDS_RECOVERY`（存储契约违约）；其余无 wire 码 |
+| `DeleteSnapshot` / `DeleteAfter` | `fs_intents` 的 `expected_before`/`desired_after`（`kind = 'delete'`、`staging_path` NULL）。before：`{"present":true,"entry","revision","parent","path_hex","kind","size","device","inode","links","token","entries"}`；after：`{"present":false,"entries"}` |
+| `classify_delete(&DeleteIntent, &ObservedDelete) -> DeleteRecoveryDecision` / `recover_delete_root(log, ns, store, at, root)` | 判定：`Finalized` → 无动作；`needs_recovery` → 停写；路径读不到 → `NeedsRecovery`；路径不存在 → `Complete`；现场还是前提那个条目（同种类同 inode）→ `Redo`；被换成别的条目 → `Reconcile{target_occupied}`；祖先缺失 → `Reconcile{target_unavailable}`。`Complete`/`Redo` 补事务前要求重读的清单 token 与条目数仍等于意图值，否则 `Unresolved("subtree_changed")` 停写；清单根已不存在 → `Preserved{subtree_already_deleted}` |
+| `ports::removal::RemovalPort` | `remove_file(path)`、`remove_directory_batch(path, max_entries) -> RemovalProgress{removed, complete}`。契约：目录按批推进、可被打断后重复调用（已删完报 `finished(0)`）；失败用 `RemovalError{Unreadable\|InUse\|Storage\|InvalidRequest}`，不得报成成功 |
+| `ports::trash_store::DeleteStore` | `root_facts`、`entry_baseline`、`subtree_image(root, entry) -> SubtreeImage`（目标自身 + 全部活跃后代，顺序稳定）、`apply_delete(&DeleteApply) -> DeleteRecord`。事务契约：按 `batches` 逐批软删除（每批 ≤ 256）、每条写回收站清单与墓碑、不写 `objects`/`versions`、不改 `content_version_id`；revision 比较并写失败 → `RevisionChanged`；清单与库不一致 → `ManifestMismatch`；`published → finalized` 与批次同一事务 |
+| `ports::trash_store::TrashManifestEntry` | `{entry, parent, path, kind, revision, content_version, deleted_at, expires_at}`；目录 `content_version` 恒为 `None`，`expires_at = deleted_at + TRASH_RETENTION_SECONDS (30 天)` |
+| `ports::intent_log::DeleteIntentLog` | `begin_delete`、`advance_delete`、`load_delete`、`unfinished_deletes`。与 put/命名空间共用 `fs_intents` 与 `PutPhase`（`kind = 'delete'`）。`unfinished_deletes` 是子树忙的事实来源 |
+| `crates/server-store::trash` | `soft_delete_batch(tx, owner, root, &[SoftDelete{entry, revision}], at) -> usize`（有界、比较并写）、`record_trash_entry`、`insert_tombstone`、`trash_entries`、`trash_entry`、`tombstones`、`tombstone`；错误码 `out_of_scope`、`already_in_trash`、`duplicate_tombstone`、`invalid_batch`、`batch_mismatch`、`invalid_path`、`directory_with_content`、`invalid_retention`、`malformed_trash_row` |
+| 迁移 `0005_trash.sql` | `trash_entries(entry_id PK, root_id, parent_id, path, kind, revision, content_version_id, deleted_at, expires_at)`（`(root_id, entry_id)` 外键指向 `entries`，目录不得带内容版本，`expires_at >= deleted_at`）；`tombstones(root_id, entry_id)` 主键 + 路径/种类/时间/保留期。schema 版本 5 |
+
+不变量：
+
+- **删除前提可证明**：目录删除带 token；并发新增/改名/删改使重算的 token 与请求不一致 → `subtree_changed`，不写意图、不动磁盘（T12）。
+- **工作目录失败不能 ACK**：任一移除错误或“报告完成但路径还在”都停在 `prepared`，不写元数据事务；`is_committed()` 恒 `false`（design §10.3 第三条）。
+- **逻辑批次一次公布**：回收站清单、墓碑、分批软删除、`changes` 事件批次与意图收尾在同一事务；大树不是一条语句，但对外只有“全有或全无”。
+- **删除不动内容与历史**：事务不写 `objects`/`versions`、不改 `content_version_id`；删除后 `version_history` 与内容对象仍可读，回收站行保留原路径与内容版本供 30 天内恢复（S040）。
+- **忙是持久状态**：未收尾的删除意图让该子树的其他写入得到 `subtree_busy`（wire `SUBTREE_CHANGED`），重启后仍然有效。
+
+未接入（后续卡）：`RemovalPort` 的 Linux 实现、`DeleteIntentLog`/`DeleteStore` 的 SQLx 适配与提交入口装配；`SubtreeBusy::check_write` 在 put/新建/移动路径上的调用点；回收站恢复与历史恢复（S040）；回收站过期的内容回收与墓碑压缩（同步协议卡，design §10.3 末条）。强杀矩阵仍只覆盖 put 边界，删除的崩溃与中断由假端口的阶段/现场组合覆盖。
+
 ## apps/server — 服务端进程与配置生命周期（S041）
 
 状态：S041 实现。包名 `vaultsyncd-server`（`apps/server/`），属于 workspace `members` 但**不在** `default-members`：非 Linux 目标直接 `compile_error!`，便携检查不构建它。依赖 `axum 0.8`（HTTP/1 + JSON）、`tokio`、`tracing`/`tracing-subscriber`、`serde`/`toml`，以及 `vaultsyncd-{domain,protocol,server-core,server-store}`；不含 FUSE/CFAPI/Windows 依赖（`cargo tree -p vaultsyncd-server` 无相关 crate）。示例配置在 `deploy/examples/vaultsyncd.toml`。
@@ -1347,3 +1379,46 @@ python3 tools/context.py --help
 - **配置不猜默认**：未知键、非法地址、缺失/相对状态目录一律退出码 2，且不创建数据库。
 
 未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Root 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥由 S042 的状态目录锁提供（见「认证与账号（S042）」），两个进程不再能同时占用同一状态目录。
+
+## crates/server-core — 历史版本与回收站恢复（S040，子树恢复 S040-b）
+
+主要落点 `crates/server-core/src/history/`（`version`、`trash`），端口在 `ports/restore_store.rs` 与
+`ports/content_lease.rs`。设计依据 design §10.3、I12、T13。
+
+### 端口与模块
+
+| 项 | 契约 |
+| --- | --- |
+| `history::version::VersionRestoreRequest` | `intent_id`（重试复用）、`op: OperationKey`、`digest: RequestDigest`（覆盖条目/基线/版本/路径）、`entry`、`version`（被恢复的旧版本）、`expected_epoch`、`expected_revision`、`target_path`、`staging_path`、`before: TargetBefore` |
+| `history::version::restore_version(gate, store, log, target, leases, at, &request)` | 顺序：请求形状 → Root 票据 → epoch → `OpId` 记录 → 版本事实（归属/保留期/种类/基线/名称）→ 内容租约 → 现场指纹 → `publish_put` → `RestoreStore::apply_version_restore` → 核对证据 → 解除租约。返回 `RestoredVersion{ result, lease }` |
+| `history::version::CommittedVersionRestore` | `op`、`root`、`entry`、`version`（**新**当前版本）、`restored_from`（旧版本）、`content`、`revision`、`seq`、`path`；`version != restored_from`、`revision > 基线` 是核心核对项（I12） |
+| `history::trash::TrashRestoreRequest` | `intent_seed`（意图种子，重试复用）、`op`、`digest`、`entry`（文件或子树根）、`expected_epoch`、`expected_revision`（清单里删除时的 revision）；**不含** `staging_path`（暂存名由服务端派生） |
+| `history::trash::restore_trash(gate, &mut TrashRestorePorts{store,log,target,namespace,leases}, at, &request)` | 顺序：epoch → `OpId` 记录 → 清单（存在/逐行未过期/种类自洽/revision 一致）→ 父目录是活目录 → 根的实际名称（占用则另名）→ `plan_subtree` 规划整棵子树（结构不一致在此停写，尚未登记 pending）→ 登记 pending → 按深度 `mkdir` 目录 → 逐文件“租约 + 意图 + 发布” → `apply_trash_restore`（全量 `entries` + 全量 `intents`）→ 核对证据 → 解除全部租约。返回 `RestoredTrash{ result, lease }`；单条目就是长度为 1 的子树 |
+| `trash::plan_subtree(&TrashSubtree, root_path)`（内部纯函数） | 清单 → `Vec<PlannedEntry{entry,parent,path,name,kind,content_version,revision}>`，按（路径深度, 路径）排序；根用调用方给的实际路径，后代=“根新路径 + 清单相对后缀”（另名只换前缀）；不一致→`store_contract_violation` |
+| `history::trash::intent_for(seed, index)` | 第 `index` 个被发布文件的意图身份：`index==0` 就是种子，其后把种子最后 8 字节当大端 u64 递增；溢出→`invalid_request`（不回绕） |
+| `history::trash::staging_name(intent)` | 服务端派生的暂存文件名 `.restore-<意图十六进制>`：稳定、可重入、操作内唯一、单个文件名 |
+| `trash::create_restored_directory`（内部） | 恢复目标目录必须 `inspect` 为 `Absent` 才能 `mkdir`；已存在→`subtree_changed`（不把清单内容合并进别人的目录） |
+| `history::trash::CommittedTrashRestore` | `op`、`root`、`entry`（身份不变）、`path`、`name`（可能另名）、`renamed`、`revision`、`seq`、`entries`（本批恢复的条目数，含根与后代） |
+| `history::trash::alternate_name` | `名称（恢复）.ext`、`名称（恢复 2）.ext`…扩展名保留；`.gitignore` 这类名称整段算原干；上限 `MAX_RESTORE_NAME_ATTEMPTS = 32` |
+| `history::RestoreFailure` / `RestoreFailureReason` | 稳定码 + `error_code()`（design §15.4）+ `intent_id`/`phase`（意图证据，发布阶段失败也带）+ `lease_expires_at`（遗留租约）；`is_committed()` 恒为 `false` |
+| `history::release_all` / `history::release_after_failure` | 整批租约的清理：成功路径报告最晚未解除的保护时刻（`LeaseDisposition::Expires{at}`），失败路径只记 `lease_expires_at`、不改判主因 |
+| `ports::content_lease::ContentLeasePort` | `acquire(&ContentLeaseRequest{root,digest,purpose,expires_at}) -> ContentLease{id,purpose,expires_at}`、`release(&lease)`；`purpose` 与 `object_leases.purpose`（`download`/`commit`）同一套取值；只保护已登记对象 |
+| `ports::restore_store::RestoreStore` | `root_facts`、`operation`、`begin_restore`、`version_facts -> VersionFacts{entry,content,retained_until}`、`apply_version_restore(&VersionRestoreWrite) -> VersionRestoreRecord` |
+| `ports::restore_store::TrashRestoreStore` | `root_facts`、`operation`、`begin_restore`、`trash_subtree -> Option<TrashSubtree>`、`parent_kind`、`name_occupant`（只算活跃条目）、`content_facts(root, version)`、`apply_trash_restore(&TrashRestoreWrite) -> TrashRestoreRecord` |
+| 幂等 | `RestoreBegin::{Started, Recorded}`；同一 `OpId` 同摘要 → 重放首次结果（不再建租约、不再写事务），不同摘要 → `op_id_reused`，登记未收尾 → `operation_pending`（wire `NEEDS_RECOVERY`） |
+
+### 不变量与未接入
+
+- **历史不可变（I12）**：恢复只追加新版本行并引用旧版本的同一内容对象；端口契约禁止修改旧版本行，
+  核心核对 `result.version != restored_from` 与 `result.content == 旧版本内容`。
+- **不覆盖现有内容（T13）**：原名称被活跃条目占用时另名并回报实际 `path`/`name`；现场必须空缺才能发布，
+  事务内再核一次占用（`NameOccupied`）。
+- **失败不是 committed**：任何失败都返回 `RestoreFailure`（`is_committed()==false`），已写意图停在
+  `prepared`/`published`，`pending` 记录保留；租约解除失败只记 `lease_expires_at`，不改判结果。批量恢复
+  任一文件失败就整批停下：元数据事务从未开始（没有任何条目被标成已恢复），返回底层稳定码，已建目录、
+  已发布文件与已持久化意图留作 `fs_intents` 恢复证据，旧条目与内容对象不变；成功与失败路径都解除本批租约。
+- **子树恢复契约（S040-b）**：清单是多行时整棵恢复，不再返回 `restore_subtree_unsupported`；顺序是
+  “按（路径深度, 路径）建目录 → 逐文件租约/意图/发布 → 单一事务收尾全部 `entries` 与 `intents`”。根另名
+  时后代路径整体移位、名称不变；某后代的名称在事务内被并发占用仍整批失败（`NameOccupied`），不逐个另名。
+- **真实适配器未落地**：`RestoreStore`/`TrashRestoreStore`/`ContentLeasePort` 的 SQLx 实现与进程内装配
+  仍未写（与 S035/S039 的同类缺口一致），本卡证明的是核心编排、端口契约与证据核对。

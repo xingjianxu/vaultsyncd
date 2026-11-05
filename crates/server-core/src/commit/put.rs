@@ -670,7 +670,7 @@ mod tests {
     async fn external_site_change_returns_reconcile_required() {
         let (request, _snapshot, mut gate, mut store, mut target) = overwrite();
         // 外部程序把文件删掉了：现场不再是请求指纹，不能当成覆盖继续。
-        target.current = TargetObservation::Absent;
+        target.set_default(TargetObservation::Absent);
         let mut log = FakeIntentLog::default();
         let failure = commit_put(
             &mut gate,
