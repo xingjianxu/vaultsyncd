@@ -439,6 +439,74 @@ impl UploadSessionStore for DbUploads<'_> {
             store_uploads::PartOutcome::AlreadyPresent(_) => PartWrite::AlreadyPresent,
         })
     }
+
+    async fn parts(&mut self, upload: UploadId) -> Result<Vec<uploads::StoredPart>, UploadFailure> {
+        let mut conn =
+            self.database
+                .pool()
+                .acquire()
+                .await
+                .map_err(|error| UploadFailure::Storage {
+                    detail: error.to_string(),
+                })?;
+        let parts = store_uploads::parts_of(&mut conn, self.owner, upload)
+            .await
+            .map_err(store_failure)?;
+        Ok(parts
+            .into_iter()
+            .map(|part| uploads::StoredPart {
+                index: part.index,
+                length: part.length,
+                hash: ContentDigest::from_bytes(part.hash),
+                path: part.path,
+            })
+            .collect())
+    }
+
+    async fn mark_complete(&mut self, upload: UploadId) -> Result<(), UploadFailure> {
+        self.transition(upload, Transition::Complete).await
+    }
+
+    async fn mark_finalized(&mut self, upload: UploadId) -> Result<(), UploadFailure> {
+        self.transition(upload, Transition::Finalized).await
+    }
+
+    async fn abort(&mut self, upload: UploadId) -> Result<(), UploadFailure> {
+        self.transition(upload, Transition::Aborted).await
+    }
+}
+
+/// 会话状态推进的三种目标（`uploads.state` 的转换规则由存储层执行）。
+enum Transition {
+    Complete,
+    Finalized,
+    Aborted,
+}
+
+impl DbUploads<'_> {
+    async fn transition(&mut self, upload: UploadId, to: Transition) -> Result<(), UploadFailure> {
+        let mut tx = self
+            .database
+            .begin_write()
+            .await
+            .map_err(|error| UploadFailure::Storage {
+                detail: error.to_string(),
+            })?;
+        let outcome = match to {
+            Transition::Complete => {
+                store_uploads::mark_upload_complete(&mut tx, self.owner, upload).await
+            }
+            Transition::Finalized => {
+                store_uploads::mark_upload_finalized(&mut tx, self.owner, upload).await
+            }
+            Transition::Aborted => store_uploads::abort_upload(&mut tx, self.owner, upload).await,
+        };
+        outcome.map_err(store_failure)?;
+        tx.commit().await.map_err(|error| UploadFailure::Storage {
+            detail: error.to_string(),
+        })?;
+        Ok(())
+    }
 }
 
 /// 块暂存适配器（端口 [`PartStaging`]）：写入 `uploads/<upload_id>/<index>` 并持久化。

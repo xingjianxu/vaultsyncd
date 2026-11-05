@@ -127,6 +127,19 @@ pub struct StoredBytes {
     pub digest: ContentDigest,
 }
 
+/// 一次区间读取的结果（含字节）。
+///
+/// `bytes` 是**实际读出**的字节数，必须等于请求的长度；少读、多读都是错误，不能用短读冒充切片
+/// （截断的切片会让客户端拼出错误内容，design §13.2、I05）。区间起点不合理的请求由核心在调用前
+/// 拒绝，适配器不再猜 clamp。
+#[derive(Clone, Debug)]
+pub struct StoredSlice {
+    /// 读出的字节。
+    pub data: Vec<u8>,
+    /// 读出的字节数（必须等于 `data.len()` 与请求长度）。
+    pub bytes: u64,
+}
+
 /// 只核对不保留字节时的读取结果（大对象复核用）。
 #[derive(Clone, Copy, Debug)]
 pub struct StoredFacts {
@@ -296,4 +309,19 @@ pub trait ObjectBlobPort {
     ///
     /// 见 [`BlobError`]：对象不存在、读取失败。
     fn read_object(&mut self, object: &Path) -> Result<StoredBytes, BlobError>;
+
+    /// 读出已发布对象从 `offset` 起的 `length` 字节（固定版本下载的 Range 切片）。
+    ///
+    /// `length` 为 0 时返回空切片；`offset + length` 超过对象长度是错误，不得返回短读或补齐的
+    /// 字节。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`BlobError`]：对象不存在、偏移/长度越界、读取失败。
+    fn read_object_range(
+        &mut self,
+        object: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<StoredSlice, BlobError>;
 }

@@ -458,7 +458,6 @@ mod tests {
         calls: Vec<String>,
         fail_record: bool,
     }
-
     #[allow(async_fn_in_trait)]
     impl UploadSessionStore for FakeStore {
         async fn load(&mut self, _upload: UploadId) -> Result<UploadSession, UploadFailure> {
@@ -488,6 +487,26 @@ mod tests {
             }
             self.parts.insert(part.index, part.clone());
             Ok(PartWrite::Recorded)
+        }
+
+        async fn parts(&mut self, _upload: UploadId) -> Result<Vec<StoredPart>, UploadFailure> {
+            self.calls.push("parts".to_owned());
+            Ok(self.parts.values().cloned().collect())
+        }
+
+        async fn mark_complete(&mut self, _upload: UploadId) -> Result<(), UploadFailure> {
+            self.calls.push("complete".to_owned());
+            Ok(())
+        }
+
+        async fn mark_finalized(&mut self, _upload: UploadId) -> Result<(), UploadFailure> {
+            self.calls.push("finalized".to_owned());
+            Ok(())
+        }
+
+        async fn abort(&mut self, _upload: UploadId) -> Result<(), UploadFailure> {
+            self.calls.push("abort".to_owned());
+            Ok(())
         }
     }
 
