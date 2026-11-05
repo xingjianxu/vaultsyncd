@@ -1257,7 +1257,7 @@ fn validate_name(name: &str) -> Result<(), String> {
 }
 
 /// Root 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量。
-fn validate_path(path: &str) -> Result<(), String> {
+pub(crate) fn validate_path(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("路径不能为空".to_owned());
     }
@@ -1272,17 +1272,17 @@ fn validate_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn name_of(path: &str) -> &str {
+pub(crate) fn name_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn is_descendant(path: &str, ancestor: &str) -> bool {
+pub(crate) fn is_descendant(path: &str, ancestor: &str) -> bool {
     path.len() > ancestor.len()
         && path.starts_with(ancestor)
         && path.as_bytes().get(ancestor.len()) == Some(&b'/')
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -1292,7 +1292,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     text
 }
 
-fn take_path(
+pub(crate) fn take_path(
     fields: &mut BTreeMap<String, JsonValue>,
     field: &'static str,
 ) -> Result<String, StateJsonError> {
@@ -1305,7 +1305,7 @@ fn take_path(
     })
 }
 
-fn take_kind(
+pub(crate) fn take_kind(
     fields: &mut BTreeMap<String, JsonValue>,
     field: &'static str,
 ) -> Result<EntryKind, StateJsonError> {
@@ -1316,7 +1316,7 @@ fn take_kind(
     })
 }
 
-fn hex_decode(text: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn hex_decode(text: &str) -> Result<Vec<u8>, String> {
     if text.len() % 2 != 0 {
         return Err("十六进制文本长度必须是偶数".to_owned());
     }

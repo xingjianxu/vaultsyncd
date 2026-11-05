@@ -11,6 +11,9 @@ use vaultsyncd_domain::ids::{DeviceId, EntryId, ID_LEN, IntentId, OpId, RootId, 
 use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
 
 use crate::commit::conflict::CommittedConflict;
+use crate::commit::delete::{
+    DeleteBatch, DeleteIntent, NewDeleteIntent, SubtreeEntry, SubtreeImage,
+};
 use crate::commit::intent::{NewPutIntent, PutIntent, PutPhase, TargetSnapshot};
 use crate::commit::namespace::{NamespaceIntent, NewNamespaceIntent};
 use crate::objects::ContentDigest;
@@ -18,7 +21,7 @@ use crate::ports::conflict_store::{
     ConflictBegin, ConflictCommitStore, ConflictHead, ConflictRecord, ConflictStoreError,
     ConflictWrite, HeadSource, OperationKey, RecordedOperation, RequestDigest,
 };
-use crate::ports::intent_log::{IntentLog, IntentLogError, NamespaceIntentLog};
+use crate::ports::intent_log::{DeleteIntentLog, IntentLog, IntentLogError, NamespaceIntentLog};
 use crate::ports::namespace::{NamespaceError, NamespacePort, PathState};
 use crate::ports::namespace_store::{
     NamespaceCommitStore, NamespaceRecord, NamespaceStoreError, NamespaceWrite,
@@ -28,9 +31,11 @@ use crate::ports::put_store::{
     EntryBaseline, EntryKind, ObjectState, PutCommitStore, PutRecord, PutStoreError, PutWrite,
     RootFacts,
 };
+use crate::ports::removal::{RemovalError, RemovalPort, RemovalProgress};
 use crate::ports::target::{
     PublishRequest, PublishedTarget, TargetError, TargetObservation, TargetPort,
 };
+use crate::ports::trash_store::{DeleteApply, DeleteRecord, DeleteStore, TrashStoreError};
 
 /// 多个假端口共享的调用轨迹。
 #[derive(Clone, Default)]
@@ -134,11 +139,15 @@ pub(crate) struct FakeIntentLog {
     pub(crate) intents: Vec<PutIntent>,
     /// 命名空间意图与 put 意图分开存：两者证据形态不同，混在一起会让断言失去意义。
     pub(crate) namespace_intents: Vec<NamespaceIntent>,
+    /// 删除意图单独存：证据里多了子树 token 与条目数。
+    pub(crate) delete_intents: Vec<DeleteIntent>,
     pub(crate) trace: Trace,
     pub(crate) begin_error: Option<IntentLogError>,
     pub(crate) advance_error: Option<IntentLogError>,
     pub(crate) namespace_begin_error: Option<IntentLogError>,
     pub(crate) namespace_advance_error: Option<IntentLogError>,
+    pub(crate) delete_begin_error: Option<IntentLogError>,
+    pub(crate) delete_advance_error: Option<IntentLogError>,
 }
 
 impl IntentLog for FakeIntentLog {
@@ -646,6 +655,14 @@ pub(crate) struct FakeNamespace {
     pub(crate) inspect_error: Option<NamespaceError>,
     pub(crate) create_error: Option<NamespaceError>,
     pub(crate) rename_error: Option<NamespaceError>,
+    /// 脚本化移除错误（`remove_file` 与 `remove_directory_batch` 共用）。
+    pub(crate) remove_error: Option<RemovalError>,
+    /// 脚本化“移除报告成功但什么都没删”（模拟撒谎的适配器）。
+    pub(crate) removal_keeps_path: bool,
+    /// 适配器自己更小的批次粒度（用来观察核心“循环到完成为止”）。
+    pub(crate) removal_batch_limit: usize,
+    /// 移除调用次数（文件按 1 次计）。
+    pub(crate) removal_batches: usize,
     /// 脚本化 `rename` 的返回（模拟适配器报告错误现场）。
     pub(crate) rename_reports: Option<PathState>,
     /// 报告成功但把源留在原处（模拟被实现成复制的适配器）。
@@ -663,6 +680,10 @@ impl Default for FakeNamespace {
             inspect_error: None,
             create_error: None,
             rename_error: None,
+            remove_error: None,
+            removal_keeps_path: false,
+            removal_batch_limit: 2,
+            removal_batches: 0,
             rename_reports: None,
             rename_keeps_source: false,
             renames: Vec::new(),
@@ -918,4 +939,312 @@ impl vaultsyncd_domain::ids::IdSource for CountingIds {
         self.next += 1;
         [self.next; ID_LEN]
     }
+}
+
+impl DeleteIntentLog for FakeIntentLog {
+    async fn begin_delete(
+        &mut self,
+        new: &NewDeleteIntent,
+        _at: UtcTimestamp,
+    ) -> Result<DeleteIntent, IntentLogError> {
+        self.trace.record("intent begin delete prepared");
+        if let Some(error) = self.delete_begin_error.take() {
+            return Err(error);
+        }
+        let intent = new.prepared();
+        self.delete_intents.push(intent.clone());
+        Ok(intent)
+    }
+
+    async fn advance_delete(
+        &mut self,
+        id: IntentId,
+        next: PutPhase,
+        _at: UtcTimestamp,
+    ) -> Result<DeleteIntent, IntentLogError> {
+        if let Some(error) = self.delete_advance_error.take() {
+            return Err(error);
+        }
+        let found = self
+            .delete_intents
+            .iter_mut()
+            .find(|intent| intent.intent_id == id)
+            .ok_or(IntentLogError::UnknownIntent { id })?;
+        if !found.phase.allows_transition_to(next) {
+            return Err(IntentLogError::IllegalTransition {
+                from: found.phase,
+                to: next,
+            });
+        }
+        found.phase = next;
+        self.trace
+            .record(format!("intent advance {}", next.as_text()));
+        Ok(found.clone())
+    }
+
+    async fn load_delete(&mut self, id: IntentId) -> Result<Option<DeleteIntent>, IntentLogError> {
+        Ok(self
+            .delete_intents
+            .iter()
+            .find(|intent| intent.intent_id == id)
+            .cloned())
+    }
+
+    async fn unfinished_deletes(
+        &mut self,
+        root: RootId,
+    ) -> Result<Vec<DeleteIntent>, IntentLogError> {
+        Ok(self
+            .delete_intents
+            .iter()
+            .filter(|intent| intent.root == root && intent.phase.is_open())
+            .cloned()
+            .collect())
+    }
+}
+
+impl RemovalPort for FakeNamespace {
+    fn remove_file(&mut self, path: &str) -> Result<(), RemovalError> {
+        self.trace.record(format!("namespace remove_file {path}"));
+        self.removal_batches += 1;
+        if let Some(error) = self.remove_error.take() {
+            return Err(error);
+        }
+        match self.paths.get(path) {
+            Some((EntryKind::File, _)) if !self.removal_keeps_path => {
+                self.paths.remove(path);
+                Ok(())
+            }
+            Some((EntryKind::Directory, _)) => Err(RemovalError::InvalidRequest {
+                detail: format!("{path} 是目录"),
+            }),
+            Some(_) => Ok(()),
+            None => Err(RemovalError::InvalidRequest {
+                detail: format!("{path} 不存在"),
+            }),
+        }
+    }
+
+    fn remove_directory_batch(
+        &mut self,
+        path: &str,
+        max_entries: usize,
+    ) -> Result<RemovalProgress, RemovalError> {
+        self.trace.record(format!(
+            "namespace remove_directory {path} limit {max_entries}"
+        ));
+        self.removal_batches += 1;
+        if let Some(error) = self.remove_error.take() {
+            return Err(error);
+        }
+        if !matches!(self.state(path), PathState::Directory { .. }) {
+            // 已经删完：重复调用是幂等的（删除任务可被打断后继续）。
+            return Ok(RemovalProgress::finished(0));
+        }
+        if self.removal_keeps_path {
+            // 脚本化“报告完成但什么都没删”：核心必须靠复核现场拦住它。
+            return Ok(RemovalProgress::finished(0));
+        }
+        let limit = max_entries.min(self.removal_batch_limit);
+        let prefix = format!("{path}/");
+        let victims: Vec<String> = self
+            .paths
+            .keys()
+            .filter(|candidate| candidate.starts_with(&prefix))
+            .cloned()
+            .collect();
+        let mut removed = 0;
+        for victim in victims.into_iter().take(limit) {
+            self.paths.remove(&victim);
+            removed += 1;
+        }
+        if self
+            .paths
+            .keys()
+            .any(|candidate| candidate.starts_with(&prefix))
+        {
+            Ok(RemovalProgress::partial(removed))
+        } else {
+            self.paths.remove(path);
+            Ok(RemovalProgress::finished(removed + 1))
+        }
+    }
+}
+
+/// 内存删除存储：按条目应答基线、按条目应答子树清单，记录事务输入。
+///
+/// 假实现刻意没有任何内容/版本写路径：删除“不改版本、不动内容对象”在假端口上同样由类型保证。
+pub(crate) struct FakeDeleteStore {
+    pub(crate) trace: Trace,
+    pub(crate) facts: RootFacts,
+    pub(crate) baselines: std::collections::BTreeMap<EntryId, EntryBaseline>,
+    pub(crate) images: std::collections::BTreeMap<EntryId, SubtreeImage>,
+    pub(crate) content_versions: std::collections::BTreeMap<EntryId, VersionId>,
+    pub(crate) root_facts_error: Option<TrashStoreError>,
+    pub(crate) baseline_error: Option<TrashStoreError>,
+    pub(crate) image_error: Option<TrashStoreError>,
+    pub(crate) apply_error: Option<TrashStoreError>,
+    pub(crate) writes: Vec<DeleteApply>,
+    pub(crate) record: Option<DeleteRecord>,
+}
+
+impl Default for FakeDeleteStore {
+    fn default() -> Self {
+        FakeDeleteStore {
+            trace: Trace::default(),
+            facts: RootFacts { epoch: epoch(3) },
+            baselines: std::collections::BTreeMap::new(),
+            images: std::collections::BTreeMap::new(),
+            content_versions: std::collections::BTreeMap::new(),
+            root_facts_error: None,
+            baseline_error: None,
+            image_error: None,
+            apply_error: None,
+            writes: Vec::new(),
+            record: None,
+        }
+    }
+}
+
+impl FakeDeleteStore {
+    pub(crate) fn new() -> Self {
+        FakeDeleteStore::default()
+    }
+
+    /// 加入一份冻结清单，同时按清单根条目推出基线（revision/父目录/种类取清单里的值）。
+    pub(crate) fn with_image(mut self, image: SubtreeImage) -> Self {
+        let root = image
+            .find(image.root())
+            .expect("清单必定包含根条目")
+            .clone();
+        self.baselines.insert(
+            root.entry,
+            EntryBaseline {
+                entry: root.entry,
+                root: root_id(0x21),
+                parent: root.parent.expect("子树根必须有父目录"),
+                name: root.path.rsplit('/').next().expect("路径非空").to_owned(),
+                revision: root.revision,
+                kind: root.kind,
+            },
+        );
+        if let Some(version) = root.content_version {
+            self.content_versions.insert(root.entry, version);
+        }
+        self.images.insert(image.root(), image);
+        self
+    }
+
+    fn default_record(apply: &DeleteApply) -> DeleteRecord {
+        DeleteRecord {
+            intent_id: apply.intent_id,
+            phase: PutPhase::Finalized,
+            root: apply.root,
+            entry: apply.entry,
+            trashed: apply.entries() as u64,
+            seq: root_seq(12),
+            tx: tx_id(0x72),
+        }
+    }
+}
+
+impl DeleteStore for FakeDeleteStore {
+    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, TrashStoreError> {
+        self.trace.record(format!("store root_facts {root}"));
+        match self.root_facts_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.facts),
+        }
+    }
+
+    async fn entry_baseline(
+        &mut self,
+        root: RootId,
+        entry: EntryId,
+    ) -> Result<EntryBaseline, TrashStoreError> {
+        self.trace
+            .record(format!("store entry_baseline {root} {entry}"));
+        if let Some(error) = self.baseline_error.take() {
+            return Err(error);
+        }
+        self.baselines
+            .get(&entry)
+            .cloned()
+            .ok_or(TrashStoreError::EntryMissing { entry })
+    }
+
+    async fn subtree_image(
+        &mut self,
+        root: RootId,
+        entry: EntryId,
+    ) -> Result<SubtreeImage, TrashStoreError> {
+        self.trace
+            .record(format!("store subtree_image {root} {entry}"));
+        if let Some(error) = self.image_error.take() {
+            return Err(error);
+        }
+        self.images
+            .get(&entry)
+            .cloned()
+            .ok_or(TrashStoreError::EntryMissing { entry })
+    }
+
+    async fn apply_delete(&mut self, apply: &DeleteApply) -> Result<DeleteRecord, TrashStoreError> {
+        self.trace.record("store apply_delete".to_owned());
+        self.writes.push(apply.clone());
+        if let Some(error) = self.apply_error.take() {
+            return Err(error);
+        }
+        Ok(self
+            .record
+            .clone()
+            .unwrap_or_else(|| Self::default_record(apply)))
+    }
+}
+
+/// 测试用子树清单：`entries` 是（条目标记, 路径, 种类, revision）序列，第一条是子树根。
+///
+/// 父目录按路径前缀推出：`docs/notes.txt` 的父目录是清单里路径为 `docs` 的那一条；子树根的父目录
+/// 固定为 `parent`。
+pub(crate) fn subtree_image(
+    root: EntryId,
+    parent: EntryId,
+    entries: &[(u8, &str, EntryKind, u64)],
+) -> SubtreeImage {
+    let items: Vec<SubtreeEntry> = entries
+        .iter()
+        .map(|(marker, path, kind, rev)| {
+            let id = entry_id(*marker);
+            let parent = if id == root {
+                parent
+            } else {
+                let parent_path = path.rsplit_once('/').map_or("", |(head, _)| head);
+                entries
+                    .iter()
+                    .find(|(_, candidate, _, _)| *candidate == parent_path)
+                    .map(|(marker, _, _, _)| entry_id(*marker))
+                    .expect("清单里的条目必须有父目录")
+            };
+            SubtreeEntry {
+                entry: id,
+                parent: Some(parent),
+                path: (*path).to_owned(),
+                kind: *kind,
+                revision: revision(*rev),
+                content_version: match kind {
+                    EntryKind::File => Some(version_id(*marker)),
+                    EntryKind::Directory => None,
+                },
+            }
+        })
+        .collect();
+    SubtreeImage::new(root, items).expect("测试清单合法")
+}
+
+/// 只取清单条目身份（断言批次覆盖全树用）。
+pub(crate) fn batch_entries(batches: &[DeleteBatch]) -> Vec<EntryId> {
+    batches
+        .iter()
+        .flat_map(|batch| batch.entries.iter().map(|item| item.entry))
+        .collect()
 }
