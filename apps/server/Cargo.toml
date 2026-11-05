@@ -1,0 +1,41 @@
+[package]
+name = "vaultsyncd-server"
+description = "Linux 服务端进程入口：配置、日志、依赖组装、启动恢复门与优雅停止（docs/design.md §4.2、§5.3、§17.2）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vaultsyncd-server"
+path = "src/main.rs"
+
+# 服务端只在 Linux 运行（design §4.2、§17.2）：本包在非 Linux 目标上直接 `compile_error!`，
+# 因此不进 workspace `default-members`，便携检查（含 Windows 默认目标）不构建它。
+#
+# 依赖只落在“进程装配”这一层：HTTP 用 Axum（design §4.1「异步与服务端 | Tokio、Axum、Serde」），
+# 运行时用 Tokio，结构化日志用 tracing（design §4.1「日志 | tracing」、§18.3），配置用 TOML。
+# 不引入 FUSE/CFAPI 相关依赖：服务端不需要 `/dev/fuse`，也不链接 Windows 适配层。
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
+vaultsyncd-domain = { path = "../../crates/domain" }
+vaultsyncd-protocol = { path = "../../crates/protocol" }
+vaultsyncd-server-core = { path = "../../crates/server-core" }
+vaultsyncd-server-store = { path = "../../crates/server-store" }
+
+[dev-dependencies]
+# HTTP 处理器的单元测试用 `tower::ServiceExt::oneshot` 直接调用 router，不启动真实监听。
+tower = { version = "0.5", features = ["util"] }
+# 进程级验收要直接写种子数据（账号表还没有 typed API，属 S042），因此测试侧直接用 SQLx。
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+
+[lints]
+workspace = true
