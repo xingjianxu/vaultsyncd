@@ -592,7 +592,7 @@ python3 tools/context.py --help
 
 ## crates/planner — 三方比较与基本计划（S019、S021）
 
-状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支；S020 增加首次合并入口 `first_sync::plan_first_sync`（design §9.2，见下一节）；S021 在 `crates/planner/src/conflict.rs` 落地 design §10.1—10.2 的内容冲突计划（服务器 head 保留主路径 + 迟到分支的稳定身份冲突副本与预算内冲突名）。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。移动/删除矩阵由后续卡补齐，遇到这些输入只输出延期裁决。没有基线的输入转交首次合并入口。
+状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支；S020 增加首次合并入口 `first_sync::plan_first_sync`（design §9.2，见下一节）；S021 在 `crates/planner/src/conflict.rs` 落地 design §10.1—10.2 的内容冲突计划（服务器 head 保留主路径 + 迟到分支的稳定身份冲突副本与预算内冲突名）；S022 增加 `rename`（design §9.5、§10.1 移动行、跨 Root 两段任务）与 `delete`（design §10.1 删除行、§10.3 子树前提），见后两节。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。`reconcile` 的 `Defer(DeferReason::MissingEntry)`/`DeferReason::LocationOrKindChanged` 是转交信号：上层按缺失方向改调首次合并、移动或删除入口。没有基线的输入转交首次合并入口。
 
 ### 模块与契约
 
@@ -603,10 +603,10 @@ python3 tools/context.py --help
 | `reconcile::ServerFact` | 服务器侧事实（B 或 R）：`path`、`kind`、`entry_id`、`revision`、`version: Option<VersionId>`（文件由 `file()` 保证为 `Some`，目录为 `None`）、`observed_mtime`；构造 `file(path, content, entry_id, revision, version)` / `directory(path, entry_id, revision)` / `with_observed_mtime(mtime)` |
 | `reconcile::LocalFact` | 本地事实 L：`path`、`kind`、`generation`、`observed_mtime`；构造 `file(path, content, generation)` / `directory(path, generation)` / `with_observed_mtime(mtime)` |
 | `reconcile::Plan` | `path`（优先基线位置，其次本地，再其次远端）、`action`、`prerequisites: Vec<Prerequisite>`、`dependencies: Vec<Dependency>`、`local_protection: LocalProtection`；纯值，不承诺执行成功 |
-| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`CreateConflictCopy { entry_id, op_id, generation }`（S021）、`Defer(DeferReason)`；首次合并另有 `UploadNewEntry`、`CreateFromRemote`、`BindRemoteEntry`、`PreserveBoth`（S020，见下一节） |
+| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`CreateConflictCopy { entry_id, op_id, generation }`（S021）、`ApplyRemoteMove { entry_id, revision, version, target }`、`UploadMove { entry_id, base_revision, target }`、`UploadMoveWithContent { entry_id, base_revision, target, generation }`、`ApplyRemoteDelete { entry_id, revision }`、`DeleteEntry { entry_id, base_revision, subtree }`（S022，见后两节）、`Defer(DeferReason)`；首次合并另有 `UploadNewEntry`、`CreateFromRemote`、`BindRemoteEntry`、`PreserveBoth`（S020，见下一节）。移动/删除动作携带路径或子树 token，因此 `Action` 只 `Clone` 不 `Copy` |
 | `reconcile::DeferReason` | `FirstSync`（无基线，转交 design §9.2 的首次合并入口）、`MissingEntry`（某一侧缺失，design §10.3）、`IdentityReplaced`（远端身份已非基线身份，I03）、`LocationOrKindChanged`（移动/类型互换，design §9.5、§10.1）、`ContentConflict`（双方都变且结果不同，design §10）、`IncompleteFacts`（自称内容变化却给不出文件版本） |
 | `reconcile::Prerequisite` | `BaseRevisionCurrent { expected }`（服务器修订仍等于计划基线）、`GenerationUnchanged { expected }`（本地代际未变）、`UsagePermitsChange`（无写入句柄）、`TargetPathUsable`（父目录已同步、名称可表示、无同名另一类型条目）、`ServerPathVacant`（服务器该路径仍无条目，首次合并的创建 CAS）、`LocalPathVacant`（本地该路径仍无条目，避免覆盖扫描后新建的本地内容） |
-| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }`、`ConflictCopyCommitted { entry_id }`（S021：冲突副本提交后才能替换主路径的本地字节） |
+| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }`、`ConflictCopyCommitted { entry_id }`（S021：冲突副本提交后才能替换主路径的本地字节）、`CrossRootTargetCommitted { entry_id }`（S022：跨 Root 目标创建确认后才允许删源） |
 | `reconcile::LocalProtection` | `NotNeeded`（无操作）、`KeepLocalContent`（字节不动，只在基线写入后推进状态）、`SnapshotBeforeReplace { generation }`、`UploadSnapshot { generation }` |
 | `reconcile::reconcile(base, local, remote)` | 三项 `Option<&…>`，`None` 表示该侧没有该条目（删除事实）；返回 `Result<Plan, PlanError>`，三项都缺失返回 `PlanError::NoFacts` |
 | `reconcile::PlanError` | `NoFacts`（没有可比对的条目）、`PathMismatch`（首次合并两侧事实路径不同，调用方没有按规范路径配对） |
@@ -668,6 +668,54 @@ python3 tools/context.py --help
 - `Full` 模式下远端文件给不出 `VersionId` 时输出 `Defer(IncompleteFacts)`，不降级成“只建占位”；`OnDemand` 模式仍可占位。
 - 同一输入多次计算得到完全相同的 `Plan`（含前提与依赖顺序）。
 - 未做（后续卡/上层）：服务器一致性元数据快照（`snapshot_id + epoch + high_water_seq`）与本地导入清单归扫描/会话层；快照期间事件的接续与上传前 CAS 的执行归执行器；冲突副本名称、`OpId` 身份与长度预算归 S021。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/planner — 移动冲突计划（S022）
+
+状态：S022 在 `crates/planner/src/rename.rs` 落地 design §9.5、§10.1 移动行与 T09/T10：同 Root 移动保持 `EntryId`，只改父目录关系（目录移动不重传子项），迟到分支复用 S021 的冲突身份与命名。纯规则、无 I/O：目标位置是否为空/祖先是否还在由调用方观察后以值传入（planner 不枚举同级条目）。
+
+| 模块 | 契约 |
+| --- | --- |
+| `rename::plan_move(&MoveRequest)` | 返回 `Result<MoveOutcome, MoveError>`；`MoveRequest { base, local, remote, targets, late }` 的三方事实必须已绑定同一 `EntryId`（本地身份关联由客户端数据库保证） |
+| `rename::MoveOutcome` | `Planned(Box<MovePlan>)`（`main: Plan` + `late: Option<ConflictCopy>`）、`Replan(ReplanReason)` |
+| `rename::TargetState` / `MoveTargets` | `Vacant` / `Occupied` / `AncestorMissing`；`local` 供“本地落位”的计划判定，`server` 供“上传移动/新建迟到分支”判定 |
+| `rename::LateBranch` | 迟到分支的 `entry_id`、`naming: ConflictNameRequest`、`committed: Option<&CommittedConflict>`（同一 `OpId` 重试返回原身份原路径） |
+| `rename::ReplanReason` | `DirectoryCycle`（目标落在源目录子树内）、`TargetOccupied`、`TargetAncestorMissing`、`IdentityReplaced`（I03）、`DirectoryConflictRequired`（目录迟到分支需目录级冲突记录） |
+| `rename::MoveError` | `NotAMove`（两侧位置都没变或类型互换，应走 `reconcile`/首次合并）、`LateBranchMissing`、`OpIdRequestChanged`、`IncompleteFacts`、`MissingSubtreeToken`/`UnexpectedSubtreeToken`/`SameRoot`（跨 Root 入口）、`Name(ConflictNameError)` |
+| `rename::plan_cross_root_move(&CrossRootMoveRequest)` | 返回 `Result<CrossRootOutcome, MoveError>`：`Planned(Box<CrossRootMovePlan { create_target, delete_source }>)` 或 `Replan`。`delete_source` 必带 `Dependency::CrossRootTargetCommitted`，目标创建失败或结果未知时源删除不得计划完成 |
+
+判定规则与不变量：
+
+- 主条目永远是远端已提交的位置与内容（胜者只看服务器提交序，`mtime` 不参与）；只有远端变化时给 `ApplyRemoteMove`（内容未变不带 `DownloadVersion`，T09）或复用 `ApplyRemote`；只有本地变化时给 `UploadMove`（纯移动）或 `UploadMoveWithContent`（移动+修改，带 `SnapshotLocalContent`）。
+- 双方都变：同位置同内容 → `MergeSameResult`（幂等归并、不造副本）；否则主条目保留已提交侧，落后一侧进入 `late`（内容与意图位置都保留）。迟到分支路径与主条目相同时才追加 §10.2 冲突后缀，不同时保留用户选定的名称。
+- 主条目计划在 `late` 存在时追加 `Dependency::ConflictCopyCommitted`：迟到分支先提交，才允许把本地身份移到已提交位置或替换其内容（I02）。
+- 目录环按路径分量判定（`docs` 与 `docs-old` 无关），只看移动目标；类型互换（文件↔目录）不是移动，返回 `NotAMove`。
+- 跨 Root 移动不保持 `EntryId`：目标 Root 的身份由服务端另分配，源删除带基线修订与（目录）子树 token；源 Root 与目标 Root 相同是调用方错误（`SameRoot`）。
+- 同一输入重复计算得到完全相同的 `MoveOutcome`（含前提与依赖顺序）；交换设备 `mtime` 不改变计划。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/planner — 删除与恢复冲突（S022）
+
+状态：S022 在 `crates/planner/src/delete.rs` 落地 design §10.1 删除行、§10.3 与 T11/T12：删除依据身份 + 修订，目录删除另带服务端子树 token；远端已提交删除而本地仍有不同内容时，先提交恢复冲突条目再撤旧身份。纯规则、无 I/O（不枚举子树、不读时钟、不分配身份）。
+
+| 模块 | 契约 |
+| --- | --- |
+| `delete::SubtreeToken` | 服务端生成的不透明 16 字节值：`from_bytes([u8; 16])`、`as_bytes()`；planner 只比较相等，不从路径/时间/内容推导 |
+| `delete::plan_delete(&DeleteRequest)` | 返回 `Result<DeleteOutcome, DeleteError>`；`DeleteRequest { base, server, local, subtree, subtree_changed, preserve }`，`server: ServerDeletion::Present(&ServerFact)` 或 `Deleted { at_revision }` |
+| `delete::DeleteOutcome` | `Upload(Plan)`（本地删除待提交）、`ApplyLocally(Plan)`（远端已删、本地未变）、`Preserve(PreservePlan)`（先提交恢复条目）、`AlreadyDeleted`（同一修订幂等成功）、`ConflictRequired(ConflictReason)`（旧 Delete 不删新内容）、`Replan(DeleteReplanReason)` |
+| `delete::PreservePlan` | `main: Plan`（`ApplyRemoteDelete`，依赖 `ConflictCopyCommitted`）、`preserve: ConflictCopy`（`Create` 或同一 `OpId` 的 `Reuse`）、`reason: PreservedReason`（`Modified`/`Moved`） |
+| `delete::DeleteReplanReason` | `SubtreeChanged`（T12 `SUBTREE_CHANGED`）、`BaseRevisionMismatch`、`LocalChanged`、`IdentityReplaced`、`DirectoryPreserveRequired` |
+| `delete::DeleteError` | `MissingSubtreeToken`、`UnexpectedSubtreeToken`、`PreserveSettingsMissing`、`OpIdRequestChanged`、`InconsistentFacts`（已提交删除的修订早于基线）、`Name(ConflictNameError)` |
+
+判定规则与不变量：
+
+- 远端仍是基线修订时才会生成 `Upload(Plan)`：动作 `DeleteEntry { entry_id, base_revision, subtree }`，前提 `BaseRevisionCurrent` +（有本地事实时）`GenerationUnchanged`；目录缺 token、文件带 token 都是明确错误，`subtree_changed` 一律 `Replan(SubtreeChanged)`，绝不把并发新增的子项一起删掉。
+- 远端修订已前进：内容变了 → `ConflictRequired(ContentModified)`（修改已提交时旧 Delete 不删新内容）；只移动了 → `ConflictRequired(Moved)`；形状不变 → `Replan(BaseRevisionMismatch)`。
+- 远端已提交删除：本地已无该条目 → `AlreadyDeleted`；本地未变 → `ApplyLocally`（`ApplyRemoteDelete`）；本地已修改或已移走 → `Preserve`，恢复条目（文件）先提交，主计划才撤旧身份（T11）。本地已移走时恢复条目保留用户选的位置，否则用 §10.2 冲突名；目录子树保留需要目录级计划，给 `Replan(DirectoryPreserveRequired)`。
+- 恢复条目的幂等依据是 `OpId`：`preserve.committed` 记录存在时返回原 `entry_id`/原 `path`，请求不一致返回 `OpIdRequestChanged`。
+- 同一输入重复计算得到完全相同的 `DeleteOutcome`。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
 

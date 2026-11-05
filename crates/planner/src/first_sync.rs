@@ -587,12 +587,18 @@ mod tests {
             | Action::BindRemoteEntry { .. }
             | Action::PreserveBoth(_)
             | Action::Defer(_) => true,
-            // 无操作与“应用远端/上传本地/同结果归并/冲突副本”都以基线为前提，不是首次合并的结论。
+            // 无操作与“应用远端/上传本地/同结果归并/冲突副本/移动/删除”都以基线为前提，
+            // 不是首次合并的结论。
             Action::NoOp
             | Action::ApplyRemote { .. }
             | Action::UploadLocal { .. }
             | Action::MergeSameResult { .. }
-            | Action::CreateConflictCopy { .. } => false,
+            | Action::CreateConflictCopy { .. }
+            | Action::ApplyRemoteMove { .. }
+            | Action::UploadMove { .. }
+            | Action::UploadMoveWithContent { .. }
+            | Action::ApplyRemoteDelete { .. }
+            | Action::DeleteEntry { .. } => false,
         }
     }
 
@@ -633,7 +639,7 @@ mod tests {
                             continue;
                         }
                     };
-                    assert!(preserves_both_sides(plan.action), "{label}");
+                    assert!(preserves_both_sides(plan.action.clone()), "{label}");
                     if local.is_some() {
                         assert_ne!(
                             plan.local_protection,

@@ -32,6 +32,7 @@ use vaultsyncd_domain::ids::{EntryId, OpId, VersionId};
 use vaultsyncd_domain::version::{Generation, Revision, UtcTimestamp};
 use vaultsyncd_fs_common::path::RelativePath;
 
+use crate::delete::SubtreeToken;
 use crate::first_sync::{BindingMode, PreserveReason};
 
 use core::fmt;
@@ -249,6 +250,12 @@ pub enum Dependency {
         /// 要等待提交的冲突条目身份。
         entry_id: EntryId,
     },
+    /// 跨 Root 移动的目标条目必须先提交成功，才允许删除源条目（design §9.5）：
+    /// 目标创建失败或结果未知时，源条目的删除不得计划完成。
+    CrossRootTargetCommitted {
+        /// 目标 Root 新建条目的身份。
+        entry_id: EntryId,
+    },
 }
 
 /// 本地未确认内容的保护说明（design I02）。
@@ -275,11 +282,12 @@ pub enum LocalProtection {
 pub enum DeferReason {
     /// 没有共同基线：进入首次合并规则（design §9.2），不推导删除（I07）。
     FirstSync,
-    /// 本地或远端没有该条目：删除/恢复规则（design §10.3），不推导删除。
+    /// 本地或远端没有该条目：删除与恢复规则（[`crate::delete`]、design §10.3），不推导删除。
     MissingEntry,
     /// 远端的条目身份已不是基线身份：原条目被删除后在原路径新建属于新身份（I03）。
     IdentityReplaced,
-    /// 位置或类型相对基线变化：移动、文件—目录互换规则（design §9.5、§10.1）。
+    /// 位置或类型相对基线变化：移动规则（[`crate::rename`]、design §9.5）与文件—目录互换规则
+    /// （design §10.1）。
     LocationOrKindChanged,
     /// 双方都变且无法证明同一结果：冲突规则（design §10）。
     ContentConflict,
@@ -287,8 +295,8 @@ pub enum DeferReason {
     IncompleteFacts,
 }
 
-/// 计划动作。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 计划动作。移动/删除动作携带目标路径与子树 token，因此动作按值移动而不是 `Copy`。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// 双方无变：不生成任何操作（design §9.1）。
     NoOp,
@@ -321,6 +329,55 @@ pub enum Action {
         op_id: OpId,
         /// 作为副本内容的本地代际。
         generation: Generation,
+    },
+    /// 应用远端已提交的移动：本地把该身份放到 `target`，`EntryId` 不变（design §9.5、T09）。
+    ///
+    /// `version` 为 `Some` 时同时安装该内容版本（移动+修改）；`None` 时只改位置、不下载内容。
+    ApplyRemoteMove {
+        /// 条目身份：路径改变不影响它（I03）。
+        entry_id: EntryId,
+        /// 已提交的远端修订。
+        revision: Revision,
+        /// 远端文件版本；仅位置变化时为 `None`（T09），内容也变了才需要下载。
+        version: Option<VersionId>,
+        /// 已提交的目标位置。
+        target: RelativePath,
+    },
+    /// 提交本地移动：目标父目录/名称与源修订，`EntryId` 与内容版本都不变（design §9.5、§15.2）。
+    UploadMove {
+        /// 条目身份：同 Root 内移动保持它（I03）。
+        entry_id: EntryId,
+        /// 提交时携带的源修订（CAS）。
+        base_revision: Revision,
+        /// 本地意图的新位置。
+        target: RelativePath,
+    },
+    /// 提交本地移动并上传该代际的新内容（design §10.1“一端移动、另一端修改”的本地提交方向）。
+    UploadMoveWithContent {
+        /// 条目身份：同 Root 内移动保持它（I03）。
+        entry_id: EntryId,
+        /// 提交时携带的源修订（CAS）。
+        base_revision: Revision,
+        /// 本地意图的新位置。
+        target: RelativePath,
+        /// 要上传的本地内容代际。
+        generation: Generation,
+    },
+    /// 应用远端已提交的删除：本地撤掉已删除的身份，不删除服务端之后新建的内容（design §10.3）。
+    ApplyRemoteDelete {
+        /// 被删除的条目身份。
+        entry_id: EntryId,
+        /// 已提交删除所依据的修订。
+        revision: Revision,
+    },
+    /// 提交本地删除：携带目标修订，目录另带服务端生成的子树 token（design §10.3）。
+    DeleteEntry {
+        /// 要删除的条目身份。
+        entry_id: EntryId,
+        /// 删除所依据的基线修订（CAS）。
+        base_revision: Revision,
+        /// 目录删除的子树 token；文件删除为 `None`。
+        subtree: Option<SubtreeToken>,
     },
     /// 首次合并时本地独有：在服务器新建条目（design §9.2 第 5 步）。没有基线修订可携带，创建条件是
     /// 该路径在服务器仍为空。
@@ -546,7 +603,9 @@ fn upload_local(path: RelativePath, base: &ServerFact, local: &LocalFact) -> Pla
 }
 
 /// 双方已证明同一结果：归并为远端 head，不再传输内容（design §9.1 第三条、§10.1）。
-fn merge_same_result(
+///
+/// 移动规划复用本函数处理“双方已经到同一位置”的幂等归并，因此两处的前提与保护说明只有一份定义。
+pub(crate) fn merge_same_result(
     path: RelativePath,
     base: &ServerFact,
     local: &LocalFact,
