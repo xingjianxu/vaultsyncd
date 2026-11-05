@@ -5,10 +5,12 @@
 //! 直接覆盖或删除任何文件；同一输入必须得到同一计划，执行前的现场复核由执行器按计划中的前提
 //! （[`reconcile::Prerequisite`]）与依赖（[`reconcile::Dependency`]）重新完成。
 //!
-//! 已落地模块（S019）：[`reconcile`] 的 design §9.1 四条基本分支（双方无变、仅本地变、仅远端变、
-//! 双方已证明同一结果）及其动作前提、依赖与本地内容保护说明。首次合并、内容冲突副本、移动/删除
-//! 矩阵分别由后续卡（`first_sync.rs`、`conflict.rs`、`rename.rs`/`delete.rs`）补齐；本卡遇到这些
-//! 输入时只给出明确的延期裁决（[`reconcile::DeferReason`]），不生成删除或覆盖动作。
+//! 已落地模块：[`reconcile`] 的 design §9.1 四条基本分支（双方无变、仅本地变、仅远端变、
+//! 双方已证明同一结果）及其动作前提、依赖与本地内容保护说明；[`conflict`] 的 design §10.1—10.2
+//! 内容冲突计划（服务器 head 保留主路径 + 迟到分支的稳定身份冲突副本、按名称预算截断的冲突名）。
+//! 首次合并、移动/删除矩阵分别由后续卡（`first_sync.rs`、`rename.rs`/`delete.rs`）补齐；未实现的输入
+//! 只给出明确的延期裁决（[`reconcile::DeferReason`]），不生成删除或覆盖动作。
 #![forbid(unsafe_code)]
 
+pub mod conflict;
 pub mod reconcile;
