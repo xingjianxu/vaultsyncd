@@ -9,4 +9,6 @@ pub mod namespace;
 pub mod namespace_store;
 pub mod object_store;
 pub mod put_store;
+pub mod removal;
 pub mod target;
+pub mod trash_store;

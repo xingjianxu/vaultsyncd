@@ -1,9 +1,10 @@
 //! 意图日志端口：把 `fs_intents` 的持久化能力暴露给提交状态机（design §11.2 步骤 5、§11.3）。
 //!
-//! 同一张表覆盖两类提交：[`IntentLog`] 是内容 put（`kind = 'put_content'`），[`NamespaceIntentLog`]
-//! 是目录创建与同 Root 移动（`kind = 'create'`/`'move'`）。两者共用阶段取值与转换规则
-//! （[`PutPhase`]）、共用“先写 `prepared` 意图再动磁盘”的顺序，只是证据 JSON 的形态不同：put 记内容
-//! 摘要，命名空间记位置、种类与 inode。
+//! 同一张表覆盖三类提交：[`IntentLog`] 是内容 put（`kind = 'put_content'`），[`NamespaceIntentLog`]
+//! 是目录创建与同 Root 移动（`kind = 'create'`/`'move'`），[`DeleteIntentLog`] 是删除（`kind =
+//! 'delete'`）。三者共用阶段取值与转换规则（[`PutPhase`]）、共用“先写 `prepared` 意图再动磁盘”的
+//! 顺序，只是证据 JSON 的形态不同：put 记内容摘要，命名空间记位置、种类与 inode，删除记子树 token 与
+//! 条目数。
 //!
 //! 端口只做“写一条 prepared 意图、推进阶段、按身份读回、按 Root 列出未完成意图”，不解释业务语义：
 //! 什么时候能推进、现场是否满足前提，都由核心判定（[`crate::commit::intent`]、
@@ -15,6 +16,7 @@ use std::fmt;
 use vaultsyncd_domain::ids::{IntentId, RootId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
+use crate::commit::delete::{DeleteIntent, NewDeleteIntent};
 use crate::commit::intent::{NewPutIntent, PutIntent, PutPhase};
 use crate::commit::namespace::{NamespaceIntent, NewNamespaceIntent};
 
@@ -193,4 +195,56 @@ pub trait NamespaceIntentLog {
         &mut self,
         root: RootId,
     ) -> Result<Vec<NamespaceIntent>, IntentLogError>;
+}
+
+/// 删除意图日志端口：删除的 `fs_intents` 行（`kind = 'delete'`）。
+///
+/// 契约与 [`IntentLog`] 一致：每次写入在自己的事务里完成，读到的行不合规报
+/// [`IntentLogError::MalformedIntent`]，不猜阶段；`target_path` 写被删条目的路径、`staging_path` 为
+/// NULL（删除没有暂存文件）、`expected_before`/`desired_after` 写删除证据 JSON。
+///
+/// [`unfinished_deletes`](DeleteIntentLog::unfinished_deletes) 同时是“子树忙”的事实来源：未收尾的
+/// 删除意图代表该子树正在被删除（design §10.3），重启后依旧有效。
+// `#[allow(async_fn_in_trait)]`：与 `IntentLog` 同理，只在编排函数里以泛型参数使用。
+#[allow(async_fn_in_trait)]
+pub trait DeleteIntentLog {
+    /// 写入一条 `prepared` 删除意图并返回持久化后的记录。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`IntentLogError`]：存储失败、越权、身份冲突、约束拒绝。
+    async fn begin_delete(
+        &mut self,
+        new: &NewDeleteIntent,
+        at: UtcTimestamp,
+    ) -> Result<DeleteIntent, IntentLogError>;
+
+    /// 把删除意图推进到 `next` 并返回推进后的记录；非法转换必须报错。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`IntentLogError`]：存储失败、意图不存在/越权、非法转换、时间倒退。
+    async fn advance_delete(
+        &mut self,
+        id: IntentId,
+        next: PutPhase,
+        at: UtcTimestamp,
+    ) -> Result<DeleteIntent, IntentLogError>;
+
+    /// 按身份读一条删除意图；不存在或越权返回 `None`。
+    ///
+    /// # Errors
+    ///
+    /// 存储失败或行无法还原。
+    async fn load_delete(&mut self, id: IntentId) -> Result<Option<DeleteIntent>, IntentLogError>;
+
+    /// 按 Root 列出尚未收尾的删除意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`IntentLogError`]：越权（不能返回空列表冒充“没有未完成意图”）、存储失败。
+    async fn unfinished_deletes(
+        &mut self,
+        root: RootId,
+    ) -> Result<Vec<DeleteIntent>, IntentLogError>;
 }
