@@ -1229,3 +1229,30 @@ python3 tools/context.py --help
 - **保留旧对象与冲突候选**：`Preserved`/`NeedsRecovery` 不删除对象、不改工作文件；`Redone`/`Completed` 只新增一个版本，旧内容对象仍被旧版本引用。
 
 未接入（后续卡）：create/move/delete 的意图日志（S038/S039）要接进同一条启动顺序；`expected_before` 为 `Absent` 的意图（新建条目）当前返回 `Unresolved{code: "missing_entry_baseline"}` 并保持 Root 关闭，因为意图里没有条目身份可收尾；真实存储适配与 `apps/server` 的 readiness 组装（S041）仍待落地；装置里的摘要不是 SHA-256（假端口），仅用于区分前后内容。
+
+## crates/server-core — 目录创建与同 Root 移动（S038）
+
+状态：S038 把目录创建与同 Root 移动接进 put 已有的“先持久意图再动磁盘”顺序（design §9.5、§11.2—11.3、T09/T10）。移动只改父关系与名称：`EntryId` 不变、不写版本行、不改内容引用、内容流量为零。真实 SQLite/文件端口与 `apps/server` 组装仍待 S041。
+
+| 项目 | 契约 |
+| --- | --- |
+| `commit::namespace::commit_namespace(gate, store, log, ns, at, &NamespaceRequest) -> Result<CommittedNamespace, Box<NamespaceFailure>>` | 顺序：请求形状（名称/路径/目录环/自指）→ Root 串行化 → epoch → 条目基线（新建要求身份不存在；移动要求 revision/父/名一致）→ 目标父目录存在且是目录 → 源与目标现场 → 意图 `prepared` → `mkdir`/`rename` 并复核 → `published` → 元数据事务 → ACK。失败都不是 committed，已持久化意图保留为恢复证据 |
+| `NamespaceRequest` | `CreateDirectory(CreateDirectoryRequest{intent_id, root, entry, expected_epoch, parent, name, target_path})` 或 `Move(MoveRequest{intent_id, root, entry, expected_epoch, expected_revision, from: NamespaceEndpoint, to: NamespaceEndpoint})`；`NamespaceEndpoint{parent, name, path}` 的路径最后一段必须等于名称 |
+| `CommittedNamespace` | `record: NamespaceRecord`（`phase` 必须是 `finalized`、`entry` 等于意图条目、新建 revision 0、移动严格大于基线）与 `target: PathState`（提交后目标实测现场） |
+| `NamespaceFailure` / `NamespaceFailureReason` | 稳定码：`invalid_request`、`root_commit_busy`、`epoch_changed`、`base_mismatch`、`subtree_changed`、`entry_already_exists`、`target_unreadable`、`target_occupied`、`target_ancestor_missing`、`source_changed`、意图/动作错误码、`applied_state_mismatch`、存储错误码、`store_contract_violation`。wire 映射：`EPOCH_CHANGED`、`BASE_MISMATCH`、`SUBTREE_CHANGED`（占用/祖先缺失/基线变化）、`RECONCILE_REQUIRED`（源与基线不符）、`NEEDS_RECOVERY`（存储契约违约） |
+| `commit::namespace::NamespaceBefore` / `NamespaceAfter` | `fs_intents` 的 `expected_before`/`desired_after`。before：`{"present":false}`（新建）或 `{"present":true,"entry","revision","parent","path_hex","kind","size","device","inode","links"}`；after：`{"present":true,"entry","parent","path_hex","kind"}`。路径按 UTF-8 十六进制编码（同一编码器不接受转义序列），移动的 before 记录源 inode 作为“移动已落地”的证据 |
+| `commit::namespace::classify_namespace(&NamespaceIntent, &ObservedNamespace) -> NamespaceRecoveryDecision` | `ObservedNamespace{target, source}` 原样携带观察错误。判定：现场满足前提 → `Redo`；现场已是目标（移动还要求目标 inode 与 before 相同、源已空）→ `Complete`；目标被占/祖先缺失/源与目标都不见了/`published` 却目标回退 → `Reconcile`；读不到或已标 `needs_recovery` → `NeedsRecovery` |
+| `commit::namespace::recover_namespace_root(log, ns, store, at, root) -> Result<NamespaceRecoveryReport, NamespaceRecoveryError>` | 按 `NamespaceIntentLog::unfinished_namespaces` 顺序处理：`Redo` 重做动作并补事务、`Complete` 只补事务（阶段还停在 `prepared` 时先补记 `published`）、`Reconcile` → `Preserved`（不覆盖不提交）、`NeedsRecovery` → 落盘 `needs_recovery`、动作失败 → `Unresolved` 保持关闭。报告提供 `pauses_writes()`、`needs_reconciliation()`、`committed()` |
+| `ports::namespace::NamespacePort` | `inspect(path) -> PathState{Absent\|AncestorMissing\|File{identity}\|Directory{identity}}`、`create_directory(path)`、`rename(from, to)`。契约：不存在只在父目录可访问且确认没有该名字时报告；读不到是 `Unreadable`（不是“不存在”）；`rename` 必须是同一次改名（inode 不变），不得退化成复制再删除；目标已存在时动作必须失败，不覆盖 |
+| `ports::namespace_store::NamespaceCommitStore` | `root_facts`、`entry_baseline`（复用 `RootFacts`/`EntryBaseline`/`EntryKind`）、`apply_namespace(&NamespaceWrite) -> NamespaceRecord`。事务契约：移动只改 `parent_id`/`name`/`name_key`/`revision`，不写版本行、不改 `content_version_id`；新建只插入 `kind = directory` 且无内容版本的条目（revision 0）；比较并写 `expected_revision`，目标同父活跃名称被占返回 `SlotOccupied`；`published → finalized` 与 `entries`/`changes` 同一事务 |
+| `ports::intent_log::NamespaceIntentLog` | `begin_namespace`、`advance_namespace`、`load_namespace`、`unfinished_namespaces`。与 `IntentLog` 共用 `fs_intents` 表与 `PutPhase` 阶段机（`kind = 'create'`/`'move'`、`staging_path` NULL、`target_path` 是目标路径） |
+
+不变量：
+
+- **`EntryId` 不随路径变**：所有路径都拿基线身份写事务；移动后的 `NamespaceRecord.entry` 必须等于意图条目，否则按 `store_contract_violation` 停写。
+- **移动不搬内容**：命名空间端口只有观察/`mkdir`/`rename`，没有内容方法；事务输入也没有内容字段。移动后内容版本引用必须与移动前一致（假端口测试断言）。
+- **不覆盖目标**：目标被占、祖先缺失、目标落在自己子树里（目录环）、目标父目录就是自己，一律在动磁盘之前拒绝，不动目标也不动源。
+- **动作要能复核**：`rename` 之后必须证明目标 inode 就是源那一个且源位置已空；`mkdir` 之后必须是目录。不符就不推进阶段，意图停在 `prepared`。
+- **恢复先于写入开放**：装配时必须先跑 `recover_namespace_root` 与 put 的 `recover_root`，两者的报告都不暂停，才记录 `WriteAdmission::record` 开放写入口。
+
+未接入（后续卡）：真实端口适配（`NamespacePort` 的 Linux 实现、`NamespaceIntentLog`/`NamespaceCommitStore` 的 SQLx 实现）与 `apps/server` 组装（S041）；delete 的意图与回收站（S039）；`tests/server-integration/` 的强杀矩阵只覆盖 put 边界，命名空间边界目前由 `crates/server-core` 的假端口用例覆盖；目标祖先的逐级存在性由适配器报告，核心只核对目标父目录条目与端口现场。

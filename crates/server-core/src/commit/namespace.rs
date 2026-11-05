@@ -600,10 +600,9 @@ impl fmt::Display for NamespaceFailureReason {
                 f,
                 "目标 {path} 已被占用（{observed}）：不覆盖目标，重新规划另名"
             ),
-            NamespaceFailureReason::TargetAncestorMissing { path } => write!(
-                f,
-                "目标 {path} 的祖先目录不存在：不重建、不覆盖，重新规划"
-            ),
+            NamespaceFailureReason::TargetAncestorMissing { path } => {
+                write!(f, "目标 {path} 的祖先目录不存在：不重建、不覆盖，重新规划")
+            }
             NamespaceFailureReason::SourceChanged { path, observed } => write!(
                 f,
                 "源位置 {path} 现在是 {observed}，与请求基线不符：先采集外部变化再重新计划"
@@ -743,7 +742,9 @@ where
         }));
     }
     match request {
-        NamespaceRequest::CreateDirectory(create) => commit_create(store, log, ns, at, create).await,
+        NamespaceRequest::CreateDirectory(create) => {
+            commit_create(store, log, ns, at, create).await
+        }
         NamespaceRequest::Move(mv) => commit_move(store, log, ns, at, mv).await,
     }
 }
@@ -899,27 +900,34 @@ where
     let published = log
         .advance_namespace(plan.intent.intent_id, PutPhase::Published, at)
         .await
-        .map_err(|error| NamespaceFailure::after_intent(NamespaceFailureReason::Intent(error), &prepared))?;
+        .map_err(|error| {
+            NamespaceFailure::after_intent(NamespaceFailureReason::Intent(error), &prepared)
+        })?;
 
     // 步骤 7：元数据事务与意图收尾同一事务，事务没提交就没有 ACK。
     let write = namespace_write(&published, at)?;
-    let record = store.apply_namespace(&write).await.map_err(|error| match error {
-        NamespaceStoreError::RevisionChanged { expected, actual } => {
-            NamespaceFailure::after_intent(
-                NamespaceFailureReason::BaseMismatch {
-                    detail: format!("提交时条目 revision 已从 {expected} 变为 {actual}"),
+    let record = store
+        .apply_namespace(&write)
+        .await
+        .map_err(|error| match error {
+            NamespaceStoreError::RevisionChanged { expected, actual } => {
+                NamespaceFailure::after_intent(
+                    NamespaceFailureReason::BaseMismatch {
+                        detail: format!("提交时条目 revision 已从 {expected} 变为 {actual}"),
+                    },
+                    &published,
+                )
+            }
+            NamespaceStoreError::SlotOccupied { parent, name } => NamespaceFailure::after_intent(
+                NamespaceFailureReason::SubtreeChanged {
+                    detail: format!("提交时目标位置 {parent}/{name:?} 已被占用"),
                 },
                 &published,
-            )
-        }
-        NamespaceStoreError::SlotOccupied { parent, name } => NamespaceFailure::after_intent(
-            NamespaceFailureReason::SubtreeChanged {
-                detail: format!("提交时目标位置 {parent}/{name:?} 已被占用"),
-            },
-            &published,
-        ),
-        error => NamespaceFailure::after_intent(NamespaceFailureReason::Store(error), &published),
-    })?;
+            ),
+            error => {
+                NamespaceFailure::after_intent(NamespaceFailureReason::Store(error), &published)
+            }
+        })?;
     check_record(&record, &published)?;
     Ok(CommittedNamespace { record, target })
 }
@@ -978,9 +986,7 @@ where
                 });
             }
             // 源位置必须已经不在：否则这不是一次改名，而是复制。
-            let source = ns
-                .inspect(from)
-                .map_err(NamespaceFailureReason::Apply)?;
+            let source = ns.inspect(from).map_err(NamespaceFailureReason::Apply)?;
             if !matches!(source, PathState::Absent) {
                 return Err(NamespaceFailureReason::AppliedStateMismatch {
                     detail: format!("改名后源位置 {from} 仍然存在"),
@@ -1016,10 +1022,9 @@ fn check_record(
         ))
     } else {
         match intent.before.present() {
-            None if record.revision != Revision::new(0).expect("revision 0 合法") => Some(format!(
-                "新建条目的 revision 是 {}，不是 0",
-                record.revision
-            )),
+            None if record.revision != Revision::new(0).expect("revision 0 合法") => Some(
+                format!("新建条目的 revision 是 {}，不是 0", record.revision),
+            ),
             Some(snapshot) if record.revision.get() <= snapshot.revision => Some(format!(
                 "条目 revision 没有推进：{} 不大于基线 {}",
                 record.revision, snapshot.revision
@@ -1210,11 +1215,11 @@ where
 }
 
 fn kind_matches(kind: EntryKind, state: &PathState) -> bool {
-    match (kind, state) {
-        (EntryKind::File, PathState::File { .. }) => true,
-        (EntryKind::Directory, PathState::Directory { .. }) => true,
-        _ => false,
-    }
+    matches!(
+        (kind, state),
+        (EntryKind::File, PathState::File { .. })
+            | (EntryKind::Directory, PathState::Directory { .. })
+    )
 }
 
 fn failure(reason: NamespaceFailureReason) -> Box<NamespaceFailure> {
@@ -1292,7 +1297,8 @@ fn take_path(
     field: &'static str,
 ) -> Result<String, StateJsonError> {
     let text = take_text(fields, field)?;
-    let bytes = hex_decode(&text).map_err(|detail| StateJsonError::InvalidValue { field, detail })?;
+    let bytes =
+        hex_decode(&text).map_err(|detail| StateJsonError::InvalidValue { field, detail })?;
     String::from_utf8(bytes).map_err(|_| StateJsonError::InvalidValue {
         field,
         detail: "十六进制路径不是合法 UTF-8".to_owned(),
@@ -1618,7 +1624,9 @@ impl NamespaceRecoveryOutcome {
 impl fmt::Display for NamespaceRecoveryOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NamespaceRecoveryOutcome::Redone { entry, revision, .. } => {
+            NamespaceRecoveryOutcome::Redone {
+                entry, revision, ..
+            } => {
                 write!(f, "已重做命名空间动作，条目 {entry} 到 revision {revision}")
             }
             NamespaceRecoveryOutcome::Completed { entry, revision } => {
@@ -1661,7 +1669,9 @@ impl NamespaceRecoveryReport {
     /// 是否有任何一条意图要求暂停该 Root 的破坏性写入。
     #[must_use]
     pub fn pauses_writes(&self) -> bool {
-        self.intents.iter().any(|entry| entry.outcome.pauses_writes())
+        self.intents
+            .iter()
+            .any(|entry| entry.outcome.pauses_writes())
     }
 
     /// 是否有需要协调（保留双方）的意图。
@@ -1774,7 +1784,10 @@ where
 {
     match decision {
         NamespaceRecoveryDecision::Redo => {
-            let from = intent.before.present().map(|snapshot| snapshot.path.clone());
+            let from = intent
+                .before
+                .present()
+                .map(|snapshot| snapshot.path.clone());
             let target = match apply_change(ns, intent, from.as_deref()) {
                 Ok(state) => state,
                 Err(reason) => {
@@ -1977,7 +1990,9 @@ mod tests {
             trace: trace.clone(),
             ..FakeIntentLog::default()
         };
-        let ns = FakeNamespace::new().with_trace(trace).with_directory("notes");
+        let ns = FakeNamespace::new()
+            .with_trace(trace)
+            .with_directory("notes");
         (RootCommitGate::new(), store, log, ns)
     }
 
@@ -2131,7 +2146,11 @@ mod tests {
         assert_eq!(write.kind, EntryKind::Directory);
         assert_eq!(write.expected_revision, None, "新建没有基线 revision");
         assert_eq!(write.from, None, "新建没有源位置");
-        assert_eq!(committed.record.revision, revision(0), "新条目从 revision 0 开始");
+        assert_eq!(
+            committed.record.revision,
+            revision(0),
+            "新条目从 revision 0 开始"
+        );
         assert!(ns.state_of("photos").is_directory());
     }
 
@@ -2174,7 +2193,12 @@ mod tests {
         assert_eq!(failure.code(), "target_occupied");
         assert_eq!(failure.error_code(), Some(ErrorCode::SubtreeChanged));
         assert!(log.namespace_intents.is_empty());
-        assert!(log.trace.entries().iter().all(|line| !line.contains("mkdir")));
+        assert!(
+            log.trace
+                .entries()
+                .iter()
+                .all(|line| !line.contains("mkdir"))
+        );
 
         // 目标祖先已删除：不重建目录树。
         let (mut gate, mut store, mut log, mut ns) = create_fixture();
@@ -2208,7 +2232,12 @@ mod tests {
             .expect_err("父目录不是目录");
         assert_eq!(failure.code(), "subtree_changed");
         assert!(log.namespace_intents.is_empty());
-        assert!(log.trace.entries().iter().all(|line| !line.contains("mkdir")));
+        assert!(
+            log.trace
+                .entries()
+                .iter()
+                .all(|line| !line.contains("mkdir"))
+        );
     }
 
     #[tokio::test]
@@ -2226,7 +2255,7 @@ mod tests {
         assert!(!failure.is_committed());
         assert!(log.namespace_intents.is_empty());
         assert!(ns.renames.is_empty(), "基线不符不得改名");
-        assert_eq!(ns.state_of("docs").is_directory(), true);
+        assert!(ns.state_of("docs").is_directory());
     }
 
     #[tokio::test]
@@ -2317,7 +2346,7 @@ mod tests {
         assert_eq!(failure.error_code(), Some(ErrorCode::SubtreeChanged));
         assert!(log.namespace_intents.is_empty());
         assert!(ns.renames.is_empty(), "目标冲突不得改名");
-        assert_eq!(ns.state_of("docs").is_directory(), true, "源位置必须原样保留");
+        assert!(ns.state_of("docs").is_directory(), "源位置必须原样保留");
     }
 
     #[tokio::test]
@@ -2372,7 +2401,7 @@ mod tests {
         assert_eq!(failure.phase, Some(PutPhase::Prepared));
         assert_eq!(log.namespace_intents[0].phase, PutPhase::Prepared);
         assert!(store.writes.is_empty(), "动作失败不得写元数据事务");
-        assert_eq!(ns.state_of("docs").is_directory(), true);
+        assert!(ns.state_of("docs").is_directory());
     }
 
     #[tokio::test]
@@ -2516,11 +2545,7 @@ mod tests {
         assert_eq!(report.intents[0].decision, NamespaceRecoveryDecision::Redo);
         assert!(matches!(
             report.intents[0].outcome,
-            NamespaceRecoveryOutcome::Redone {
-                entry,
-                revision: _,
-                ..
-            } if entry == entry_id(0x62)
+            NamespaceRecoveryOutcome::Redone { entry, .. } if entry == entry_id(0x62)
         ));
         assert_eq!(report.committed(), 1);
         assert!(!report.pauses_writes());
@@ -2600,7 +2625,7 @@ mod tests {
         assert!(!report.pauses_writes());
         assert!(ns.renames.is_empty());
         assert!(store.writes.is_empty(), "协调中的意图不得写事务");
-        assert_eq!(ns.state_of("docs").is_directory(), true);
+        assert!(ns.state_of("docs").is_directory());
     }
 
     #[tokio::test]
@@ -2638,7 +2663,8 @@ mod tests {
         // 目录没建：重做 mkdir。
         let mut store = FakeNamespaceStore::new();
         let mut log = FakeIntentLog::default();
-        log.namespace_intents.push(created_intent(PutPhase::Prepared));
+        log.namespace_intents
+            .push(created_intent(PutPhase::Prepared));
         let mut ns = FakeNamespace::new();
         let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
             .await
@@ -2650,7 +2676,8 @@ mod tests {
         // 目录已建、阶段还停在 published：只补事务。
         let mut store = FakeNamespaceStore::new();
         let mut log = FakeIntentLog::default();
-        log.namespace_intents.push(created_intent(PutPhase::Published));
+        log.namespace_intents
+            .push(created_intent(PutPhase::Published));
         let mut ns = FakeNamespace::new().with_directory("photos");
         let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
             .await
@@ -2661,7 +2688,12 @@ mod tests {
         ));
         assert_eq!(store.writes.len(), 1);
         assert_eq!(
-            store.trace.entries().iter().filter(|line| line.contains("mkdir")).count(),
+            store
+                .trace
+                .entries()
+                .iter()
+                .filter(|line| line.contains("mkdir"))
+                .count(),
             0,
             "已完成的创建不得再建一次"
         );
@@ -2688,7 +2720,10 @@ mod tests {
             },
         });
         let text = present.to_json();
-        assert!(text.contains(r#""path_hex":"646f63732f6122625c63""#), "{text}");
+        assert!(
+            text.contains(r#""path_hex":"646f63732f6122625c63""#),
+            "{text}"
+        );
         assert_eq!(NamespaceBefore::from_json(&text), Ok(present));
 
         let after = NamespaceAfter {
