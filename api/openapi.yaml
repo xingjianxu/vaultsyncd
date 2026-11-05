@@ -753,8 +753,403 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /v1/roots/{root}/snapshots:
+    post:
+      operationId: createSnapshot
+      summary: 创建一致性快照
+      description: |
+        生成一份短期只读的元数据清单（design §9.3）：服务端在同一个事务里读取 Root 当前的
+        `RootSeq`（`high_water_seq`）并复制当时的活跃条目。之后 `…/snapshots/{snapshot}/entries`
+        的翻页只读这份清单，与翻页期间的新增/删除/改名无关；客户端应用清单后从
+        `changes?after=<high_water_seq>` 继续追赶。
+
+        清单只存活 `expires_at` 之前；每个 Root 同时存在的快照数有上限，超出时最旧的先被回收。
+        下载文件内容仍须引用 VersionId，而不是“当前路径”。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+      responses:
+        "201":
+          description: 快照已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端存储不可用或需要恢复
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/roots/{root}/snapshots/{snapshot}/entries:
+    get:
+      operationId: listSnapshotEntries
+      summary: 翻页读取快照清单
+      description: |
+        只读固定的快照清单（design §9.3），按 EntryId 升序分页。`next_cursor` 缺省表示已是最后一页。
+
+        快照不存在、不属于该 Root 或已过期时返回 410 `CURSOR_EXPIRED`（`details.reason=snapshot_expired`），
+        **绝不返回空页或错乱数据**；客户端应重新创建快照并从头翻页。`limit` 超过上限是 400。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: snapshot
+          in: path
+          required: true
+          description: 快照身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          description: 起始序号（十进制文本）；首页省略，之后用上一页的 `next_cursor`。
+          schema:
+            type: string
+            format: decimal_u64
+        - name: limit
+          in: query
+          required: false
+          description: 一页最多返回的条目数（1 至 1000，缺省 500）；越界是 400。
+          schema:
+            type: string
+            format: decimal_u64
+      responses:
+        "200":
+          description: 一页清单
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotPage"
+        "400":
+          description: 游标不是规范十进制、超过清单长度，或 limit 越界
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "410":
+          description: 快照不存在或已过期（`CURSOR_EXPIRED`），需要重新创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端存储不可用或需要恢复
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/roots/{root}/changes:
+    get:
+      operationId: listChanges
+      summary: 拉取有序事务批次
+      description: |
+        返回 `after` 之后（不含 `after`）的事务批次，严格按 RootSeq 升序（design §9.3）。每个批次是
+        一个完整事务：`limit` 只决定在哪个事务边界截断，**绝不把一个事务拆到两页之间**——如果第
+        `limit` 个批次与后续批次属于同一个 `tx_id` 且 seq 连续，本页会延伸到把它们取完。
+
+        `after=0` 表示从头开始；新客户端通常用快照的 `high_water_seq` 作为 `after`。`has_more` 为真
+        时用 `next_after` 继续拉取。重复拉取同一游标得到同样的批次（拉取没有副作用），客户端按
+        seq 去重即可。
+
+        游标早于事件保留窗口（默认 90 天）或晚于服务端当前头时返回 410 `CURSOR_EXPIRED`，
+        **不返回空列表**：`details.reason` 为 `before_retention_window` 或 `ahead_of_head`，
+        客户端重新获取快照并保留本地基线与未上传队列（design §9.4）。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: after
+          in: query
+          required: true
+          description: 已处理到的 RootSeq（十进制文本；0 表示从头）。
+          schema:
+            type: string
+            format: decimal_u64
+        - name: limit
+          in: query
+          required: false
+          description: 本页至少包含的批次数上限（1 至 500，缺省 100）；越界是 400。
+          schema:
+            type: string
+            format: decimal_u64
+      responses:
+        "200":
+          description: 有序事务批次（可能为空，空表示已追平到读取时的头）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeList"
+        "400":
+          description: "`after` 缺失或不是规范十进制，或 limit 越界"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "410":
+          description: 游标已失效（`CURSOR_EXPIRED`），需要重新获取快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端存储不可用或需要恢复
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/roots/{root}/events:
+    get:
+      operationId: subscribeEvents
+      summary: SSE 唤醒提示
+      description: |
+        `text/event-stream` 长连接（design §9.3）。**SSE 只是提示，不是数据来源**：事件只说“Root 的
+        RootSeq 变了”，不携带批次内容；客户端据此立刻调用 `changes` 拉取。
+
+        每条提示是 `event: seq`，`id` 与 `data`（`SeqHint` 的 JSON）都带当前头。新连接立即收到一条
+        当前头的提示；之后头每变化一次提示一次（可能跳号合并）。服务端另发保活注释行。提示可能
+        丢失、重复或乱序（断线重连、代理缓冲），客户端不得依赖它的次序或次数——凭 `changes` 的游标
+        与 seq 去重修复，断线期间只需轮询 `changes` 即可恢复。
+
+        认证与其他端点相同（`Authorization` 头），因此浏览器原生 `EventSource` 不能直接使用，
+        需用 fetch 流式读取。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 事件流（`text/event-stream`），`data` 为 `SeqHint` 的 JSON
+          content:
+            text/event-stream: {}
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端存储不可用或需要恢复
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   schemas:
+    EntryKind:
+      description: 条目种类闭集（design §7.2 `entries.kind`）。未知取值按协议错误处理。
+      type: string
+      enum:
+        - file
+        - directory
+
+    Snapshot:
+      description: |
+        一份一致性快照的元数据（design §9.3）。`high_water_seq` 是创建时刻 Root 的 RootSeq：清单恰好是
+        “应用到该 seq 为止”的状态，继续追赶从 `changes?after=<high_water_seq>` 开始。
+      type: object
+      required: [snapshot_id, root_id, high_water_seq, server_epoch, entry_count, expires_at]
+      properties:
+        snapshot_id:
+          type: string
+          description: 快照身份，32 位小写十六进制。
+        root_id:
+          type: string
+          description: 所属 Root 身份，32 位小写十六进制。
+        high_water_seq:
+          type: string
+          format: decimal_u64
+          description: 创建快照时的 RootSeq（十进制文本）。
+        server_epoch:
+          type: string
+          format: decimal_u64
+          description: 创建快照时 Root 的服务器 epoch（十进制文本）。
+        entry_count:
+          type: string
+          format: decimal_u64
+          description: 清单里的条目总数（十进制文本）。
+        expires_at:
+          type: string
+          format: decimal_u64
+          description: 清单到期时间（UTC Unix 秒的十进制文本）；此刻及之后翻页返回 410。
+
+    SnapshotEntry:
+      description: 快照清单里的一条条目（创建时的值拷贝，不随之后的写入变化）。
+      type: object
+      required: [entry_id, name, kind, revision]
+      properties:
+        entry_id:
+          type: string
+          description: 条目身份，32 位小写十六进制。
+        parent_id:
+          type: string
+          description: 父目录条目身份；Root 的合成根条目没有。
+        name:
+          type: string
+          description: 原始名称（合成根条目为空串）；按数据处理。
+        kind:
+          $ref: "#/components/schemas/EntryKind"
+          description: 文件或目录。
+        revision:
+          type: string
+          format: decimal_u64
+          description: 创建快照时的条目 revision（十进制文本）。
+        version_id:
+          type: string
+          description: 当前内容版本身份（只有带内容的文件有）；下载内容引用它而不是路径。
+        size:
+          type: string
+          format: decimal_u64
+          description: 当前内容字节数（十进制文本，只有带内容的文件有）。
+        hash:
+          type: string
+          description: 当前内容的 SHA-256，64 位小写十六进制（只有带内容的文件有）。
+
+    SnapshotPage:
+      description: 快照清单的一页。
+      type: object
+      required: [snapshot_id, high_water_seq, entries]
+      properties:
+        snapshot_id:
+          type: string
+          description: 快照身份，32 位小写十六进制。
+        high_water_seq:
+          type: string
+          format: decimal_u64
+          description: 快照固定的 RootSeq（十进制文本，所有页相同）。
+        entries:
+          type: array
+          description: 本页条目，按 EntryId 升序。
+          items:
+            $ref: "#/components/schemas/SnapshotEntry"
+        next_cursor:
+          type: string
+          format: decimal_u64
+          description: 下一页的游标（十进制文本）；缺省表示已是最后一页。
+
+    ChangeBatch:
+      description: 一个事务批次（design §9.3）：RootSeq、TxId 与该事务的全部条目变化。
+      type: object
+      required: [seq, tx_id, events_json, created_at]
+      properties:
+        seq:
+          type: string
+          format: decimal_u64
+          description: 批次序号（该 Root 的第 seq 个事务批次，十进制文本）。
+        tx_id:
+          type: string
+          description: 产生该批次的服务端事务身份，32 位小写十六进制。
+        events_json:
+          type: string
+          description: 该事务全部条目变化与冲突关联的 JSON 数组文本；按数据处理，客户端整批原子应用。
+        created_at:
+          type: string
+          format: decimal_u64
+          description: 批次提交时间（UTC Unix 秒的十进制文本）。
+
+    ChangeList:
+      description: 一页有序事务批次。
+      type: object
+      required: [root_id, server_epoch, head_seq, next_after, has_more, batches]
+      properties:
+        root_id:
+          type: string
+          description: Root 身份，32 位小写十六进制。
+        server_epoch:
+          type: string
+          format: decimal_u64
+          description: Root 当前的服务器 epoch（十进制文本）。
+        head_seq:
+          type: string
+          format: decimal_u64
+          description: 读取时 Root 的最新 RootSeq（十进制文本）。
+        next_after:
+          type: string
+          format: decimal_u64
+          description: 下一次拉取应带的 `after`：本页最后一个批次的 seq；本页为空时等于请求的 `after`。
+        has_more:
+          type: boolean
+          description: 读取时 `next_after` 之后是否还有批次。
+        batches:
+          type: array
+          description: 批次，严格按 seq 升序，每个批次完整。
+          items:
+            $ref: "#/components/schemas/ChangeBatch"
+
+    SeqHint:
+      description: |
+        SSE 提示的 `data` 内容（design §9.3）：只告诉客户端 Root 的 RootSeq 已到某个值，
+        不携带任何批次内容。丢失、重复、乱序都由 `changes` 拉取修复。
+      type: object
+      required: [root_id, seq]
+      properties:
+        root_id:
+          type: string
+          description: Root 身份，32 位小写十六进制。
+        seq:
+          type: string
+          format: decimal_u64
+          description: 提示发出时 Root 的最新 RootSeq（十进制文本）。
+
     ObjectReuse:
       description: |
         内容对象的发布方式闭集（design §11.2 步骤 7）。`freshly_published` 本次新建，

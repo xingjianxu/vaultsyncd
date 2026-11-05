@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
-import type { Capabilities, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
+import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
+import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -250,6 +250,53 @@ export async function listRoots(options: ClientOptions, init?: RequestInit): Pro
 }
 
 /**
+ * 拉取有序事务批次
+ *
+ * 返回 `after` 之后（不含 `after`）的事务批次，严格按 RootSeq 升序（design §9.3）。每个批次是
+ * 一个完整事务：`limit` 只决定在哪个事务边界截断，**绝不把一个事务拆到两页之间**——如果第
+ * `limit` 个批次与后续批次属于同一个 `tx_id` 且 seq 连续，本页会延伸到把它们取完。
+ *
+ * `after=0` 表示从头开始；新客户端通常用快照的 `high_water_seq` 作为 `after`。`has_more` 为真
+ * 时用 `next_after` 继续拉取。重复拉取同一游标得到同样的批次（拉取没有副作用），客户端按
+ * seq 去重即可。
+ *
+ * 游标早于事件保留窗口（默认 90 天）或晚于服务端当前头时返回 410 `CURSOR_EXPIRED`，
+ * **不返回空列表**：`details.reason` 为 `before_retention_window` 或 `ahead_of_head`，
+ * 客户端重新获取快照并保留本地基线与未上传队列（design §9.4）。
+ *
+ * 参数 `root`（/v1/roots/{root}/changes）：授权 Root 的身份（32 位小写十六进制）。
+ * 查询参数 `after`（必填）：已处理到的 RootSeq（十进制文本；0 表示从头）。
+ * 查询参数 `limit`（可选）：本页至少包含的批次数上限（1 至 500，缺省 100）；越界是 400。
+ *
+ * 200：有序事务批次（可能为空，空表示已追平到读取时的头）
+ * 400：`after` 缺失或不是规范十进制，或 limit 越界
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 410：游标已失效（`CURSOR_EXPIRED`），需要重新获取快照
+ * 503：服务端存储不可用或需要恢复
+ */
+export async function listChanges(options: ClientOptions, root: string, query: { after: string; limit?: string }, init?: RequestInit): Promise<ChangeList> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/changes`;
+  const search = new URLSearchParams();
+  search.set("after", query.after);
+  if (query.limit !== undefined) {
+    search.set("limit", query.limit);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? path : `${path}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeChangeList(payload);
+}
+
+/**
  * 下载固定版本的内容
  *
  * 按 `(root, entry, version)` 取该版本的**固定**内容字节（design §15.2、I12、I15）：内容地址
@@ -289,6 +336,40 @@ export async function downloadVersionContent(options: ClientOptions, root: strin
     throw api_error(response.status, await read_json(response));
   }
   return await read_bytes(response);
+}
+
+/**
+ * SSE 唤醒提示
+ *
+ * `text/event-stream` 长连接（design §9.3）。**SSE 只是提示，不是数据来源**：事件只说“Root 的
+ * RootSeq 变了”，不携带批次内容；客户端据此立刻调用 `changes` 拉取。
+ *
+ * 每条提示是 `event: seq`，`id` 与 `data`（`SeqHint` 的 JSON）都带当前头。新连接立即收到一条
+ * 当前头的提示；之后头每变化一次提示一次（可能跳号合并）。服务端另发保活注释行。提示可能
+ * 丢失、重复或乱序（断线重连、代理缓冲），客户端不得依赖它的次序或次数——凭 `changes` 的游标
+ * 与 seq 去重修复，断线期间只需轮询 `changes` 即可恢复。
+ *
+ * 认证与其他端点相同（`Authorization` 头），因此浏览器原生 `EventSource` 不能直接使用，
+ * 需用 fetch 流式读取。
+ *
+ * 参数 `root`（/v1/roots/{root}/events）：授权 Root 的身份（32 位小写十六进制）。
+ *
+ * 200：事件流（`text/event-stream`），`data` 为 `SeqHint` 的 JSON
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 503：服务端存储不可用或需要恢复
+ */
+export async function subscribeEvents(options: ClientOptions, root: string, init?: RequestInit): Promise<Response> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/events`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "text/event-stream"),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return response;
 }
 
 /**
@@ -373,6 +454,81 @@ export async function getOperation(options: ClientOptions, root: string, op: str
     throw api_error(response.status, payload);
   }
   return decodeOperationResult(payload);
+}
+
+/**
+ * 创建一致性快照
+ *
+ * 生成一份短期只读的元数据清单（design §9.3）：服务端在同一个事务里读取 Root 当前的
+ * `RootSeq`（`high_water_seq`）并复制当时的活跃条目。之后 `…/snapshots/{snapshot}/entries`
+ * 的翻页只读这份清单，与翻页期间的新增/删除/改名无关；客户端应用清单后从
+ * `changes?after=<high_water_seq>` 继续追赶。
+ *
+ * 清单只存活 `expires_at` 之前；每个 Root 同时存在的快照数有上限，超出时最旧的先被回收。
+ * 下载文件内容仍须引用 VersionId，而不是“当前路径”。
+ *
+ * 参数 `root`（/v1/roots/{root}/snapshots）：授权 Root 的身份（32 位小写十六进制）。
+ *
+ * 201：快照已创建
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 503：服务端存储不可用或需要恢复
+ */
+export async function createSnapshot(options: ClientOptions, root: string, init?: RequestInit): Promise<Snapshot> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/snapshots`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeSnapshot(payload);
+}
+
+/**
+ * 翻页读取快照清单
+ *
+ * 只读固定的快照清单（design §9.3），按 EntryId 升序分页。`next_cursor` 缺省表示已是最后一页。
+ *
+ * 快照不存在、不属于该 Root 或已过期时返回 410 `CURSOR_EXPIRED`（`details.reason=snapshot_expired`），
+ * **绝不返回空页或错乱数据**；客户端应重新创建快照并从头翻页。`limit` 超过上限是 400。
+ *
+ * 参数 `root`（/v1/roots/{root}/snapshots/{snapshot}/entries）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `snapshot`（/v1/roots/{root}/snapshots/{snapshot}/entries）：快照身份（32 位小写十六进制）。
+ * 查询参数 `cursor`（可选）：起始序号（十进制文本）；首页省略，之后用上一页的 `next_cursor`。
+ * 查询参数 `limit`（可选）：一页最多返回的条目数（1 至 1000，缺省 500）；越界是 400。
+ *
+ * 200：一页清单
+ * 400：游标不是规范十进制、超过清单长度，或 limit 越界
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 410：快照不存在或已过期（`CURSOR_EXPIRED`），需要重新创建
+ * 503：服务端存储不可用或需要恢复
+ */
+export async function listSnapshotEntries(options: ClientOptions, root: string, snapshot: string, query?: { cursor?: string; limit?: string }, init?: RequestInit): Promise<SnapshotPage> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/snapshots/${encodeURIComponent(snapshot)}/entries`;
+  const search = new URLSearchParams();
+  if (query?.cursor !== undefined) {
+    search.set("cursor", query.cursor);
+  }
+  if (query?.limit !== undefined) {
+    search.set("limit", query.limit);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? path : `${path}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeSnapshotPage(payload);
 }
 
 /**

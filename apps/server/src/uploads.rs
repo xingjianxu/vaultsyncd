@@ -28,7 +28,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tracing::{info, warn};
 use vaultsyncd_domain::ids::{
-    DeviceId, EntryId, OpId, RootId, SessionId, UploadId, UserId, VersionId,
+    DeviceId, EntryId, OpId, RootId, SessionId, SnapshotId, UploadId, UserId, VersionId,
 };
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_protocol::generated::{
@@ -790,7 +790,9 @@ macro_rules! identity_from_hex {
     )*};
 }
 
-identity_from_hex!(RootId, UploadId, EntryId, VersionId, OpId, DeviceId);
+identity_from_hex!(
+    RootId, UploadId, EntryId, VersionId, OpId, DeviceId, SnapshotId
+);
 
 pub(crate) fn parse_decimal(text: &str) -> Option<u64> {
     vaultsyncd_protocol::decimal::validate(text).ok()

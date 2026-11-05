@@ -182,8 +182,12 @@ async fn open_app(fixture: &Fixture) -> App {
     let operations = Arc::new(OperationsContext::new(Arc::clone(&auth)));
     let lifecycle = Arc::new(Lifecycle::new());
     lifecycle.mark_ready();
+    let sync = Arc::new(vaultsyncd_server::sync::SyncContext::new(
+        Arc::clone(&auth),
+        Arc::clone(&lifecycle),
+    ));
     App {
-        router: router(lifecycle, auth, uploads, roots, content, operations),
+        router: router(lifecycle, auth, uploads, roots, content, operations, sync),
         database,
     }
 }

@@ -37,6 +37,41 @@ pub struct CapabilityLimits {
     pub max_upload_part_bytes: String,
 }
 
+/// 一个事务批次（design §9.3）：RootSeq、TxId 与该事务的全部条目变化。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ChangeBatch {
+    /// 批次提交时间（UTC Unix 秒的十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub created_at: String,
+    /// 该事务全部条目变化与冲突关联的 JSON 数组文本；按数据处理，客户端整批原子应用。
+    pub events_json: String,
+    /// 批次序号（该 Root 的第 seq 个事务批次，十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub seq: String,
+    /// 产生该批次的服务端事务身份，32 位小写十六进制。
+    pub tx_id: String,
+}
+
+/// 一页有序事务批次。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ChangeList {
+    /// 批次，严格按 seq 升序，每个批次完整。
+    pub batches: Vec<ChangeBatch>,
+    /// 读取时 `next_after` 之后是否还有批次。
+    pub has_more: bool,
+    /// 读取时 Root 的最新 RootSeq（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub head_seq: String,
+    /// 下一次拉取应带的 `after`：本页最后一个批次的 seq；本页为空时等于请求的 `after`。
+    #[serde(with = "crate::decimal")]
+    pub next_after: String,
+    /// Root 身份，32 位小写十六进制。
+    pub root_id: String,
+    /// Root 当前的服务器 epoch（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub server_epoch: String,
+}
+
 /// 过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
 /// 都保留，绝不丢内容。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -52,6 +87,17 @@ pub enum ConflictReason {
     /// 取值 `stale_base`。
     #[serde(rename = "stale_base")]
     StaleBase,
+}
+
+/// 条目种类闭集（design §7.2 `entries.kind`）。未知取值按协议错误处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum EntryKind {
+    /// 取值 `file`。
+    #[serde(rename = "file")]
+    File,
+    /// 取值 `directory`。
+    #[serde(rename = "directory")]
+    Directory,
 }
 
 /// 错误主体。
@@ -479,6 +525,17 @@ pub struct RootSummary {
     pub root_id: String,
 }
 
+/// SSE 提示的 `data` 内容（design §9.3）：只告诉客户端 Root 的 RootSeq 已到某个值，
+/// 不携带任何批次内容。丢失、重复、乱序都由 `changes` 拉取修复。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SeqHint {
+    /// Root 身份，32 位小写十六进制。
+    pub root_id: String,
+    /// 提示发出时 Root 的最新 RootSeq（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub seq: String,
+}
+
 /// 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct SessionIssued {
@@ -504,6 +561,76 @@ pub struct SessionRevoked {
     pub revoked_at: String,
     /// 被失效的会话身份，32 个小写十六进制字符。
     pub session_id: String,
+}
+
+/// 一份一致性快照的元数据（design §9.3）。`high_water_seq` 是创建时刻 Root 的 RootSeq：清单恰好是
+/// “应用到该 seq 为止”的状态，继续追赶从 `changes?after=<high_water_seq>` 开始。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct Snapshot {
+    /// 清单里的条目总数（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub entry_count: String,
+    /// 清单到期时间（UTC Unix 秒的十进制文本）；此刻及之后翻页返回 410。
+    #[serde(with = "crate::decimal")]
+    pub expires_at: String,
+    /// 创建快照时的 RootSeq（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub high_water_seq: String,
+    /// 所属 Root 身份，32 位小写十六进制。
+    pub root_id: String,
+    /// 创建快照时 Root 的服务器 epoch（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub server_epoch: String,
+    /// 快照身份，32 位小写十六进制。
+    pub snapshot_id: String,
+}
+
+/// 快照清单里的一条条目（创建时的值拷贝，不随之后的写入变化）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SnapshotEntry {
+    /// 条目身份，32 位小写十六进制。
+    pub entry_id: String,
+    /// 当前内容的 SHA-256，64 位小写十六进制（只有带内容的文件有）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// 文件或目录。
+    pub kind: EntryKind,
+    /// 原始名称（合成根条目为空串）；按数据处理。
+    pub name: String,
+    /// 父目录条目身份；Root 的合成根条目没有。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// 创建快照时的条目 revision（十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub revision: String,
+    /// 当前内容字节数（十进制文本，只有带内容的文件有）。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// 当前内容版本身份（只有带内容的文件有）；下载内容引用它而不是路径。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
+}
+
+/// 快照清单的一页。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SnapshotPage {
+    /// 本页条目，按 EntryId 升序。
+    pub entries: Vec<SnapshotEntry>,
+    /// 快照固定的 RootSeq（十进制文本，所有页相同）。
+    #[serde(with = "crate::decimal")]
+    pub high_water_seq: String,
+    /// 下一页的游标（十进制文本）；缺省表示已是最后一页。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    /// 快照身份，32 位小写十六进制。
+    pub snapshot_id: String,
 }
 
 /// 块登记结果。
