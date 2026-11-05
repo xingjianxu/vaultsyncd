@@ -183,13 +183,64 @@ sha256sum /data/vaultsyncd-lab/win-lab-baseline-*.tar
 - 恢复：解包回同一 `VM_ROOT`，保持相对路径不变，再 `start`。`windows-11/disk.qcow2` 的虚拟大小固定 100 GiB，不要用 `qemu-img resize` 改成更小值。
 - 第二台（S107 并发）：从基线解包到**另一个** `VM_ROOT`（例如 `/data/vaultsyncd-lab/win-lab-2/`），改 `VM_NAME`/`ssh_port`/`spice_port`，首次启动后用新密钥与口令，并让客户端生成独立 DeviceId；不要两台共用同一个 `tpm2-00.permall` 或同一个 qcow2。
 
-## 12. 客体工具链与产物交付（ADR-013）
+## 12. 宿主交叉编译、传输与客体原生执行（ADR-013 / S009）
 
-1. 宿主构建：在 NixOS 上交叉编译 Windows x64 目标（S009 固定工具链），前端在宿主构建；不把 `target/`、`node_modules/` 复制进客体。
+按 design ADR-013 与实施手册 §2.6：Windows 客户端、Windows 测试程序与前端都在 NixOS 宿主构建，客体只承担原生运行、调试、安装升级与 CFAPI/GUI 验收。本节是宿主构建 → 传输 → 客体执行的唯一操作入口；工具链版本与实测证据记录在 `docs/environment.md` §13。
+
+### 12.1 分工与边界
+
+1. 宿主构建：`nix develop .#windows` 提供 `x86_64-pc-windows-msvc` 交叉目标（S009）；前端同样在宿主用默认 devShell 构建。
 2. 传输：`scp -P 2222 -i ... <产物> Quickemu@127.0.0.1:C:/vaultsyncd-lab/`，同时记录宿主 `sha256sum`。
-3. 客体校验：`powershell -c "Get-FileHash C:\vaultsyncd-lab\<file> -Algorithm SHA256"`，与宿主哈希一致才算交付成功。
-4. 客体只装运行所需：WebView2 运行时（Windows 11 自带）、必要 VC++ 运行库（如产物需要）；不装 Rust/VS/SDK/Node/pnpm。
-5. 原生运行/CFAPI/GUI 验收在客体上进行；交叉编译成功不能替代客体执行证据。
+3. 客体校验：`Get-FileHash -Algorithm SHA256`，与宿主哈希一致才算交付成功；哈希不一致时不得继续执行结果。
+4. 客体只装运行所需：WebView2 运行时（Windows 11 自带）、必要 VC++ 运行库（如产物需要）；**不装** Rust/VS/SDK/Node/pnpm。
+5. 原生运行/CFAPI/GUI 验收在客体上进行；交叉编译成功**不能**替代客体执行证据。CFAPI 行为验收属 S010—S012。
+6. 不复制 `target/`、`node_modules/`、缓存或源码树进客体；只传具体产物与执行脚本。
+
+### 12.2 三条命令（宿主侧，均在源码树内执行）
+
+```bash
+# 1) 首次准备：把固定 Rust 工具链与 Windows 标准库装进 .cache/windows/（幂等）
+nix develop .#windows --command bash tests/platform/windows/setup-toolchain.sh
+
+# 2) 交叉构建：产物写到 artifacts/windows/x86_64-pc-windows-msvc/ 并生成 SHA256SUMS
+nix develop .#windows --command bash tests/platform/windows/build-cross.sh
+
+# 3) 传输 + 客体原生执行 + 两端哈希比对（客体需先启动，见 §7）
+nix develop .#windows --command bash tests/platform/windows/run-on-guest.sh
+```
+
+客体侧前置：`nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh start` 与 `wait-ssh`（实测 6 s 可用），结束后 `stop` 干净关机。`run-on-guest.sh` 把产物与 `guest-run.ps1` 传到 `C:\vaultsyncd-lab\s009\`，由 PowerShell 核对校验和、依次运行并采集退出码与输出；脚本退出码 0 才代表“客体原生执行成功且两端哈希一致”。
+
+### 12.3 工具链来源与版本固定
+
+| 项目 | 来源 | 固定方式 |
+| --- | --- | --- |
+| rustup 1.29.2、cargo-xwin 0.23.1、clang/clang-cl 21.1.8、lld-link 21.1.8、llvm-lib 21.1.8 | `flake.nix` 的 `windows` devShell（`devShells.x86_64-linux.windows`） | `flake.lock` 锁定的 nixpkgs rev `1d060086d60cb76a40cf37109f979d88a5bd6396` |
+| 宿主 rustc/cargo 1.99.0 与 `x86_64-pc-windows-msvc` 标准库 | rustup 从 `static.rust-lang.org` 下载 | `rust-toolchain.toml` 的 `channel`/`targets`，`setup-toolchain.sh` 读该文件安装 |
+| MSVC CRT 14.44.17.14、Windows SDK 10.0.26100（含 `cldapi.lib`、`cfapi.h`） | `cargo-xwin` 从 Microsoft 官方 manifest 下载 | `cargo-xwin` 0.23.1 的默认版本选择，缓存到 `.cache/windows/xwin` 并留 `DONE` 标记 |
+
+- 目标三元组固定为 `x86_64-pc-windows-msvc`。**不用 GNU 目标**：锁定 nixpkgs 的 `pkgsCross.mingwW64`（mingw-w64 14.0.0）导入库中不含 `libcldapi.a`，CFAPI 无法链接；xwin 的 Windows SDK 含 `cldapi.lib`。
+- 缓存目录都在工作树根的 `.cache/windows/`，已被 `.gitignore` 的 `/.cache/` 忽略，不写入 `~/.rustup`、`~/.cargo`：`rustup/`（工具链，实测 1.7 GB）、`cargo/`（cargo home）、`xwin/`（CRT+SDK，实测 1.2 GB）。
+- 清理：`rm -rf .cache/windows`（下次 `setup-toolchain.sh` + `build-cross.sh` 会重新下载）。`artifacts/windows/` 同样在 `.gitignore` 忽略的 `artifacts/` 下，可单独删除。
+
+### 12.4 产物与 CRT 链接方式
+
+- `build-cross.sh` 用 `-C target-feature=+crt-static` 静态链接 MSVC CRT。原因：客体只有 CLR 版 `vcruntime140_clr0400.dll`，没有 `VCRUNTIME140.dll`，动态 CRT 产物在客体以 `0xC0000135`（`STATUS_DLL_NOT_FOUND`）退出（S009 实测）。静态链接后导入表只剩 `KERNEL32.dll`、`ntdll.dll`、`VERSION.dll`、`cldapi.dll`、`api-ms-win-core-synch-l1-2-0.dll`。
+- 产品客户端最终用动态还是静态 CRT、是否随安装包分发 VC++ 运行库，属打包卡决定；本卡只为冒烟与测试产物选择无需客体改动的方案。
+- 产物当前为 `platform-smoke.exe`（Win32 版本/架构/`version.dll` 探测）与 `cfapi-link-smoke.exe`（`CfGetPlatformInfo` 链接与运行时解析冒烟），源码在 `tests/windows-integration/`（包 `vaultsyncd-windows-tests`，不在 workspace `default-members`）。
+
+### 12.5 首次实测证据（2026-11-05）
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 工具链准备 | `nix develop .#windows --command bash tests/platform/windows/setup-toolchain.sh` | 退出 0：cargo 1.99.0 (5f94df478 2026-08-27)、rustc 1.99.0 (b940084d7 2026-09-28)、host `x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc` 标准库目录存在 `libstd-*.rlib`、cargo-xwin 0.23.1、clang 21.1.8、LLD 21.1.8 |
+| 交叉构建 | `nix develop .#windows --command bash tests/platform/windows/build-cross.sh` | 退出 0：首次下载 MSVC CRT/SDK `2m 7s`，`Finished` release profile in 0.29s；两个产物均为 `PE32+ executable for MS Windows 6.00 (console), x86-64`，238,592 B / 229,888 B |
+| 宿主哈希 | `sha256sum -- *.exe`（产物目录） | `platform-smoke.exe` `6df177c907fcabe1d5f840b8117449392ce15ff1794b51f77cafae5f0be9d810`；`cfapi-link-smoke.exe` `acae5c6ef10b5514206916bcd92d735bc096fbd25737615243ccdbf8e38346b3` |
+| 客体执行 | `nix develop .#windows --command bash tests/platform/windows/run-on-guest.sh` | 退出 0：客体 `Microsoft Windows 11 Enterprise Evaluation` 10.0.26300 build 26300、`AMD64`、PowerShell 5.1.26100.9444；两个产物 `guest_sha256` 与宿主一致（`MATCH`），退出码均为 0 |
+| platform-smoke 输出 | 客体原生运行 | `build_target: x86_64-windows`、`GetSystemInfo.wProcessorArchitecture: 9`、`RtlGetVersion: 10.0 (build 26300)`、`version.dll file_version: 6.2.26100.1150`、`kernel32.dll file_version: 6.2.26100.9444`、`result: OK` |
+| cfapi-link-smoke 输出 | 客体原生运行 | `CfGetPlatformInfo HRESULT: 0x00000000`、`CF_PLATFORM_INFO: build=26100 revision=9278 integration=1576`、`result: OK` |
+| 前端类型检查（宿主） | `nix develop --command bash -c 'pnpm typecheck'` | 退出 0（`tsc --noEmit`，workspace 2 个项目） |
+| 客体干净关机 | `bootstrap-host.sh stop` / `status` | 关机后 qemu 与 swtpm 退出、`2222`/`5930` 关闭、无 `qemu-system` 进程 |
 
 ## 13. 已知限制
 
@@ -214,6 +265,12 @@ sha256sum /data/vaultsyncd-lab/win-lab-baseline-*.tar
 | SPICE 端口被占 | `start` 前会检查 `ss -ltn`；用 `SPICE_PORT` 环境变量换端口并记录 |
 | 首次启动后立即 100% CPU 且长时间无 SSH | Windows Update 在首登脚本里下载 FoD；按 §13 等待，必要时用 SPICE 控制台登录看进度 |
 | 忘记口令 | `sudo cat /data/vaultsyncd-lab/win-lab/secrets/lab-credentials.txt`；密钥丢失则重新 `prepare` 后需要重装或经 SPICE 手工补 `administrators_authorized_keys` |
+| `nix develop .#windows` 提示“工具链尚未安装” | 先跑 `tests/platform/windows/setup-toolchain.sh`；`shellHook` 用 `rustup which cargo` 解析 `rust-toolchain.toml`，不做隐式下载 |
+| `cargo xwin build` 卡在 `Downloading MSVC CRT...` | 首次要取 MSVC CRT 与 Windows SDK（实测约 1.2 GB，2 分钟）；检查到 Microsoft manifest 的网络，失败后重跑即可续传 |
+| 客体执行产物立刻以退出码 `-1073741515`（`0xC0000135`）结束 | 动态 CRT 缺少 `VCRUNTIME140.dll`；用 `build-cross.sh`（带 `+crt-static`）重新构建，不要往客体装编译工具链 |
+| HRESULT/链接报找不到 `CfGetPlatformInfo` 或 `cldapi.lib` | 确认走的是 `cargo xwin build`（xwin SDK 才有 `cldapi.lib`）；`pkgsCross.mingwW64` 的 mingw-w64 14.0.0 不带该导入库 |
+| 两端哈希判定为不一致但打印值相同 | 客体输出是 CRLF；`run-on-guest.sh` 已统一 `tr -d '\r'`，自定义脚本也要去 CR 后比对 |
+| `.cache/windows` 占用过大（实测 rustup 1.7 GB + xwin 1.2 GB） | 全部可再生：`rm -rf .cache/windows` 后重跑 `setup-toolchain.sh` 与 `build-cross.sh` |
 
 ## 15. 备选通道：WinRM（5985）
 
@@ -243,5 +300,5 @@ PYTHONPATH=$P/lib/python3.14/site-packages $P/bin/python3 your-script.py
 - 系统：Windows 11 Enterprise Evaluation 26H2 / build 26300.9457，`C:` 为 NTFS（98.6 GiB，可用约 78.7 GiB），8 vCPU / 8 GiB / 100 GiB VirtIO GPT。
 - 通道：SSH 密钥登录（`Quickemu@127.0.0.1:2222`，密钥独占认证）+ SPICE `127.0.0.1:5930` + WinRM 5985（按 §15 临时转发）。
 - 基线归档：`/data/vaultsyncd-lab/win-lab-baseline-20261105.tar`（含 conf/qcow2/OVMF_VARS/TPM 状态/unattended.iso）。
-- 客体未安装任何编译工具链；S009 之后的产物按 §12 传输并在客体原生执行。
+- 客体未安装任何编译工具链。S009（2026-11-05）用 `nix develop .#windows` 交叉编译 `platform-smoke.exe` / `cfapi-link-smoke.exe`，传输后客体原生执行退出码均 0、两端 SHA-256 一致（见 §12.5），因此“宿主构建 → 客体运行”通道已可用；CFAPI 行为仍未验证（S010—S012）。
 - `provision.ps1` 在已安装客体上整份重跑过一次（10:29:21Z—10:29:35Z）：所有步骤 `BEGIN/END` 成对、无 `FAILED`，依赖介质的四步输出 `SKIP: ... (expected after installation)`；控制台代码页首登实测为 437（`Active codepage: 437`），因此脚本内的错误文本统一用英文，避免转写日志出现乱码。

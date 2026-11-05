@@ -67,4 +67,4 @@ nix flake check
 git diff --check
 ```
 
-实测工具版本、nixpkgs rev 与实测限制见 [`docs/environment.md`](docs/environment.md) §10。Windows 客户端改为在本 NixOS 开发环境交叉编译，前端也在宿主构建，以节省 Windows 虚拟机资源；客体承担原生运行与验收。当前 flake 尚未提供交叉工具链，由 S009 落实并验证，分工见[实施手册 §2.6](agent/implementation-plan.md#26-windows-验证资源优先-quickemu)。
+实测工具版本、nixpkgs rev 与实测限制见 [`docs/environment.md`](docs/environment.md) §10。Windows 客户端改为在本 NixOS 开发环境交叉编译，前端也在宿主构建，以节省 Windows 虚拟机资源；客体承担原生运行与验收。Windows x64 交叉工具链已由 S009 落实并验证（`nix develop .#windows` + `cargo xwin build`，版本与证据见 [`docs/environment.md`](docs/environment.md) §13，步骤见 [`docs/operations/windows-lab.md`](docs/operations/windows-lab.md) §12），分工见[实施手册 §2.6](agent/implementation-plan.md#26-windows-验证资源优先-quickemu)。

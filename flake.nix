@@ -12,8 +12,9 @@
     { nixpkgs, ... }:
     let
       # 首发仅 Linux 服务端/控制面在 Nix 内构建；按 design ADR-013（2026-11-05），Windows
-      # 客户端改为在本 NixOS 宿主交叉编译、Windows 客体只做原生运行验收，交叉工具链由
-      # S009 补齐并锁定。这里仍只导出 x86_64-linux（交叉目标不是 flake 的 system 列表）。
+      # 客户端在本 NixOS 宿主交叉编译、Windows 客体只做原生运行验收。交叉目标不是 flake 的
+      # system 列表：S009 用独立的 `windows` devShell 提供 x86_64-pc-windows-msvc 交叉能力
+      # （目标、Rust 标准库与 SDK 分工见 docs/environment.md §13）。
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
@@ -74,6 +75,52 @@
 
           shellHook = ''
             export VAULTSYNCD_QUICKEMU_SHELL=1
+          '';
+        };
+
+        # S009：Windows x64 交叉编译 shell（`nix develop .#windows`）。与 default 分开，
+        # 避免日常 Linux 构建引入 rustup/xwin 的下载缓存。
+        #
+        # 分工（全部可由 `tests/platform/windows/setup-toolchain.sh` 复现）：
+        # - Nix（flake.lock 固定）：rustup 1.29.2、cargo-xwin 0.23.1、LLVM 21.1.8
+        #   （clang-cl、lld-link、llvm-lib）、openssh、git。
+        # - rustup 按 rust-toolchain.toml 的 channel 下载官方 Rust 1.99.0 宿主 rustc 与
+        #   x86_64-pc-windows-msvc 标准库；cargo-xwin 下载 MSVC 14.44 CRT 与 Windows SDK
+        #   10.0.26100 的头文件/导入库（含 cldapi.lib）。
+        # - 缓存写到工作树根的 .cache/windows/（已被 .gitignore 忽略），不碰用户全局
+        #   ~/.rustup、~/.cargo；清理用 `rm -rf .cache/windows`。
+        windows = pkgs.mkShell {
+          name = "vaultsyncd-windows";
+          packages = [
+            pkgs.rustup
+            pkgs.cargo-xwin
+            pkgs.llvmPackages.clang
+            # clang-cl（MSVC 兼容驱动）只由 unwrapped 包提供，cargo-xwin 依赖它。
+            pkgs.llvmPackages.clang-unwrapped
+            pkgs.llvmPackages.lld
+            pkgs.llvmPackages.llvm
+            pkgs.openssh
+            pkgs.git
+          ];
+
+          shellHook = ''
+            export VAULTSYNCD_WINDOWS_SHELL=1
+            repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+            export VAULTSYNCD_WINDOWS_CACHE="''${VAULTSYNCD_WINDOWS_CACHE:-$repo_root/.cache/windows}"
+            export RUSTUP_HOME="$VAULTSYNCD_WINDOWS_CACHE/rustup"
+            export CARGO_HOME="$VAULTSYNCD_WINDOWS_CACHE/cargo"
+            export XWIN_CACHE_DIR="$VAULTSYNCD_WINDOWS_CACHE/xwin"
+            mkdir -p "$RUSTUP_HOME" "$CARGO_HOME" "$XWIN_CACHE_DIR"
+
+            # `rustup which cargo` 按 rust-toolchain.toml 解析固定 channel，给出已安装工具链的
+            # cargo 路径；这样 flake 里不重复版本号，缺失时也不隐式安装。NixOS 用 nix-ld 提供
+            # /lib64 解释器与基础库，rustup 下载的官方二进制可直接运行（S009 实测）。
+            if cargo_path=$(rustup which cargo 2>/dev/null); then
+              export PATH="$(dirname "$cargo_path"):$PATH"
+            else
+              echo "vaultsyncd-windows: rust-toolchain.toml 指定的 Rust 工具链尚未安装。" >&2
+              echo "  先运行 tests/platform/windows/setup-toolchain.sh，再重进本 shell。" >&2
+            fi
           '';
         };
       });

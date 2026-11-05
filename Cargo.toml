@@ -2,9 +2,11 @@
 # 每张卡只加入真实存在的成员，避免为空目录预建 crate 占位。
 [workspace]
 resolver = "3"
-members = ["crates/domain", "tools/xtask"]
+# tests/windows-integration 是 design §5.8 指定的 Windows 原生测试包（S009 起）：
+# 只在宿主用 `nix develop .#windows` + `cargo xwin build` 交叉编译，因此不进 default-members。
+members = ["crates/domain", "tests/windows-integration", "tools/xtask"]
 # default-members 只选可移植核心：`cargo test --locked`/`cargo clippy` 不构建 xtask 等编排工具，
-# 保证便携检查（含 Windows 与 CI 的默认目标）不受开发工具影响。
+# 也不构建只能在 Windows 上运行的测试包，保证便携检查（含 Windows 与 CI 的默认目标）不受影响。
 default-members = ["crates/domain"]
 
 [workspace.package]

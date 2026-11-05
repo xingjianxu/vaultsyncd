@@ -279,7 +279,7 @@ env -i HOME="$HOME" TERM=xterm PATH=/run/current-system/sw/bin:/usr/bin:/bin /ru
 
 ### 10.7 限制与未核验项
 
-- S003 实测的 devShell 仅提供 Linux（`x86_64-linux`）本机构建能力，不含 rustup、Windows 交叉编译工具链与 MSVC。2026-11-05 用户决定 Windows 客户端在本 NixOS 开发环境交叉编译、前端在宿主构建，以节省 VM 资源；S009 负责补齐并锁定工具链，Windows 客体负责原生运行与验收。此决定尚未实现或验证，不能将现有 devShell 记为已支持交叉编译；操作分工见实施手册 §2.6。
+- S003 实测的默认 devShell 仅提供 Linux（`x86_64-linux`）本机构建能力，不含 rustup、Windows 交叉编译工具链与 MSVC；这一点在 S009 之后仍然成立。Windows x64 交叉编译由独立的 `devShells.x86_64-linux.windows` 提供，实测版本、来源与证据见 §13，操作步骤见 `docs/operations/windows-lab.md` §12，分工见实施手册 §2.6。
 - 未加入 `rust-analyzer`、`openssl.dev` 等当前卡未要求的包；S004/S005 若需要再按证据补充。
 - 本卡的版本结论仅对本机本次实测成立；Ubuntu 24.04、Linux ARM64、Windows 原生环境仍未核验。
 - 用户 `~/.npmrc` 由 home-manager 管理，registry 指向 `https://registry.npmmirror.com`；这只影响下载源，不影响 pnpm 版本与 store 布局。
@@ -437,7 +437,7 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 
 ### 12.1 分工与边界
 
-按 design ADR-013 与实施手册 §2.6（2026-11-05 用户决定）：Windows 客户端与测试程序在 NixOS 宿主交叉编译、前端在宿主构建，客体只承担**原生运行、调试、安装升级与 CFAPI/GUI 验收**；客体不默认安装 Rust、Visual Studio/C++ Build Tools、Windows SDK、Node/pnpm。交叉工具链由 S009 落实并验证，本节不声称交叉编译能力已就绪。
+按 design ADR-013 与实施手册 §2.6（2026-11-05 用户决定）：Windows 客户端与测试程序在 NixOS 宿主交叉编译、前端在宿主构建，客体只承担**原生运行、调试、安装升级与 CFAPI/GUI 验收**；客体不默认安装 Rust、Visual Studio/C++ Build Tools、Windows SDK、Node/pnpm。交叉工具链由 S009 落实并验证（见 §13），本节只记录 S008 时点的客体事实。
 
 ### 12.2 quickemu devShell（新增）
 
@@ -541,6 +541,74 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - **UAC 关闭**：沿用 quickemu 模板的 `EnableLUA=false`，与生产 Windows 不同；涉及提权的结论需在 S010—S012 说明。
 - **qemu-ga 通道未打通**：服务在客体 Running，但宿主 `windows-11-agent.sock` 上 `guest-ping` 无响应；备选通道目前以 WinRM（5985，NTLM）为准，qemu-ga 的 host 侧接法留给后续卡。
 - **Delivery Optimization 服务启动类型**：`DODownloadMode=0` 策略已生效（P2P 关闭），但 `dosvc` 的启动类型实测仍显示 `Automatic`（`Set-Service`/`sc config` 未改变），未进一步排查；P2P 行为由策略关闭。
-- **未在客体安装任何编译工具链**：按 ADR-013，Rust/VS/SDK/Node/pnpm 均未安装，也未验证；交叉编译由 S009 落实。
+- **未在客体安装任何编译工具链**：按 ADR-013，Rust/VS/SDK/Node/pnpm 均未安装；宿主交叉编译与客体运行已由 S009 验证（见 §13），客体侧只补运行所需组件。
 - **第二台客体/并发（S107）未验证**：基线归档已生成，但"从基线独立初始化 DeviceId"尚未执行。
 - **未验证项**：BitLocker、Secure Boot 开启后的行为、评估版到期、真实长路径与 CFAPI 行为（属后续卡）。
+
+## 13. S009 Windows 交叉编译工具链（2026-11-05 实测）
+
+采集位置：`/wrd/prj/vaultsyncd/.worktrees/s008-s010`（分支 `feat/S008-S010-windows-lab`，基线 `6ad4edd`）。操作步骤的唯一入口是 `docs/operations/windows-lab.md` §12；本节只记录实测事实与证据。目标固定为 `x86_64-pc-windows-msvc`，默认 devShell 不变（`nix develop --command bash -c 'cargo check --locked'` 退出 0）。
+
+### 13.1 分工与两侧边界
+
+| 侧 | 承担 | 不承担 |
+| --- | --- | --- |
+| NixOS 宿主 | Rust 客户端、Windows 测试程序、前端构建；交叉目标、Rust 标准库、链接器与 SDK/CRT 的获取与固定 | 原生 CFAPI/GUI 行为验收 |
+| Windows 客体 | 产物原生执行、调试、安装/升级、CFAPI/Explorer/GUI 验收 | 编译（未装 Rust/VS/SDK/Node/pnpm）、共享 `target`/`node_modules` |
+
+交叉编译成功不构成 CFAPI 能力证据；CFAPI 行为验收属 S010—S012。
+
+### 13.2 分工与版本（哪些来自 Nix、哪些是下载）
+
+| 项目 | 版本 | 来源 | 固定方式 |
+| --- | --- | --- | --- |
+| rustup | 1.29.2 | `pkgs.rustup`（nixpkgs rev `1d060086d60cb76a40cf37109f979d88a5bd6396`） | `flake.lock` |
+| cargo-xwin | 0.23.1 | `pkgs.cargo-xwin`，同一 rev | `flake.lock` |
+| clang / clang-cl / lld-link / llvm-lib | 21.1.8 | `pkgs.llvmPackages.clang`、`clang-unwrapped`（`clang-cl` 只由 unwrapped 提供）、`lld`、`llvm` | `flake.lock` |
+| openssh、git | 10.6p1 / 2.x | 同一 devShell，用于 scp/ssh 与 `git rev-parse` | `flake.lock` |
+| 宿主 rustc / cargo | 1.99.0（rustc `b940084d7 2026-09-28`、cargo `5f94df478 2026-08-27`） | rustup 从 `https://static.rust-lang.org` 下载（channel 清单 `channel-rust-1.99.0.toml`，更新日 2026-10-01） | `rust-toolchain.toml` 的 `channel = "1.99.0"` |
+| `x86_64-pc-windows-msvc` 标准库 | rust-std 1.99.0（`rust-std-1.99.0-x86_64-pc-windows-msvc.tar.gz`） | 同上，随 `rust-toolchain.toml` 的 `targets` 安装 | `rust-toolchain.toml` 的 `targets` |
+| MSVC CRT | 14.44.17.14（`Microsoft.VC.14.44.17.14.CRT.x64.Desktop.base.vsix` 等） | `cargo-xwin` 从 Microsoft 官方 manifest 下载 | cargo-xwin 0.23.1 默认版本选择 + 缓存 `DONE` 标记 |
+| Windows SDK | 10.0.26100（`Win11SDK_10.0.26100_{headers,libs_x86_64,...}.msi`、`ucrt.msi`） | 同上 | 同上 |
+| 目标三元组 | `x86_64-pc-windows-msvc` | `tests/platform/windows/common.sh` 与 `rust-toolchain.toml` | 只此一处定义 |
+| 链接方式 | `lld-link` 21.1.8（由 `clang-cl` 驱动）+ `+crt-static` | `build-cross.sh` 导出 `RUSTFLAGS` | 脚本内单点声明 |
+
+缓存位置（工作树根 `.cache/windows/`，被 `.gitignore` 的 `/.cache/` 忽略，不写 `~/.rustup`/`~/.cargo`）：`rustup/` 1.7 GB、`xwin/` 1.2 GB（含 `xwin/DONE`）、`cargo/`（cargo home）。清理用 `rm -rf .cache/windows`。
+
+**为什么用 MSVC 而不是 GNU**：锁定 nixpkgs 的 `pkgsCross.mingwW64`（mingw-w64 14.0.0）导入库中没有 `libcldapi.a`，任何调用 CFAPI 的产物都无法链接；xwin 下载的 Windows SDK `sdk/lib/um/x86_64/cldapi.lib` 与 `sdk/include/um/cfapi.h` 齐全（两次实测路径存在），因此选 MSVC 目标。
+
+### 13.3 devShell 与脚本契约（实测）
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 新 shell | `devShells.x86_64-linux.windows`，derivation `vaultsyncd-windows`；`nix flake check` 退出 0，`nix eval --raw .#devShells.x86_64-linux.windows.name` 输出 `vaultsyncd-windows` |
+| shellHook | 只导出 `VAULTSYNCD_WINDOWS_SHELL=1`、把 `RUSTUP_HOME`/`CARGO_HOME`/`XWIN_CACHE_DIR` 指到 `.cache/windows/`，并用 `rustup which cargo` 把固定工具链加入 PATH；未安装时只打印提示，不隐式下载 |
+| 工具链安装 | `tests/platform/windows/setup-toolchain.sh` → 退出 0：`rustup toolchain install --profile minimal`（按 `rust-toolchain.toml` 解析 channel/targets）；`rustc --print target-libdir --target x86_64-pc-windows-msvc` 指向 `.cache/windows/rustup/toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-pc-windows-msvc/lib` 且含 `libstd-*.rlib` |
+| NixOS 运行官方二进制 | rustup 下载的 rustc/cargo 是动态链接的官方构建，本机通过 `nix-ld`（`/lib64/ld-linux-x86-64.so.2 → nix-ld`）直接运行成功，无需 patchelf |
+| 交叉构建 | `tests/platform/windows/build-cross.sh` → 退出 0；首次 `Downloaded MSVC CRT in 2m 7s`，随后 `Finished` release profile `0.29s` |
+| 产物 | `artifacts/windows/x86_64-pc-windows-msvc/{platform-smoke.exe,cfapi-link-smoke.exe}`，`file` 均为 `PE32+ executable for MS Windows 6.00 (console), x86-64`，238,592 B / 229,888 B，附 `SHA256SUMS` |
+| 链接自检 | `llvm-objdump --private-headers`：`platform-smoke.exe` 只导入 `KERNEL32.dll`、`ntdll.dll`、`VERSION.dll`、`api-ms-win-core-synch-l1-2-0.dll`；`cfapi-link-smoke.exe` 另加 `cldapi.dll`，无 `VCRUNTIME140.dll`（静态 CRT 生效） |
+| Windows 目标 lint | `cargo xwin clippy --target x86_64-pc-windows-msvc -p vaultsyncd-windows-tests --all-targets` → 退出 0，0 warning |
+| 默认 shell 未受影响 | `cargo check --locked`(0)、`cargo fmt --all --check`(0)、`cargo clippy --locked --all-targets -- -D warnings`(0)、`cargo test --locked`(0)、`cargo metadata --locked --no-deps`(0) |
+| 前端类型检查（宿主） | `pnpm typecheck` → 退出 0（`tsc --noEmit`，2 个 workspace 项目） |
+
+### 13.4 客体原生执行证据（同一提交产物）
+
+| 证据 | 实测结果 |
+| --- | --- |
+| 客体运行时 | `Microsoft Windows 11 Enterprise Evaluation`，`10.0.26300`（build 26300，UBR 9457 见 `ver`），`PROCESSOR_ARCHITECTURE=AMD64`，PowerShell `5.1.26100.9444` |
+| 传输 | `scp` 到 `C:\vaultsyncd-lab\s009\`（只传两个 exe 与 `guest-run.ps1`，未复制 `target/`、`node_modules/`） |
+| 两端 SHA-256 | `platform-smoke.exe` 宿主与客体均 `6df177c907fcabe1d5f840b8117449392ce15ff1794b51f77cafae5f0be9d810`；`cfapi-link-smoke.exe` 均 `acae5c6ef10b5514206916bcd92d735bc096fbd25737615243ccdbf8e38346b3`（`MATCH`） |
+| 原生执行退出码 | `platform-smoke.exe` 0、`cfapi-link-smoke.exe` 0 |
+| platform-smoke 输出 | `build_target: x86_64-windows`、`GetSystemInfo.wProcessorArchitecture: 9`、`RtlGetVersion: 10.0 (build 26300)`、`version.dll file_version: 6.2.26100.1150`、`kernel32.dll file_version: 6.2.26100.9444`、`result: OK` |
+| cfapi-link-smoke 输出 | `CfGetPlatformInfo HRESULT: 0x00000000`、`CF_PLATFORM_INFO: build=26100 revision=9278 integration=1576`、`result: OK`（只读查询，未注册同步根） |
+| 客体 CRT 现状 | `C:\Windows\System32` 只有 `vcruntime140_clr0400.dll`，没有 `VCRUNTIME140.dll`；动态 CRT 产物实测退出码 `-1073741515`（`0xC0000135` `STATUS_DLL_NOT_FOUND`），改用静态 CRT 后通过 |
+
+### 13.5 限制与未核验项
+
+- 首次准备与构建需要网络：rustup（`static.rust-lang.org`）与 cargo-xwin（`aka.ms/vs` 与 Microsoft manifest）。缓存存在后可离线重建；缓存目录未纳入仓库，换机器需重新下载（实测约 3 GB）。
+- 交叉工具链只在 `x86_64-linux` 宿主上验证过；ARM64 宿主、真实 Windows 原生构建、Wine 均未验证（Wine 也不能替代客体证据）。
+- 只验证了 `tests/windows-integration` 的两个最小冒烟程序；完整客户端、Tauri 壳、安装包与签名的宿主支持属对应打包卡。
+- 静态 CRT 只是本卡为冒烟产物选择的方案；产品客户端 CRT 部署方式（静态、动态 + VC++ 运行库、app-local DLL）仍需在打包卡决定并验证。
+- `platform-smoke` 的 `GetSystemInfo`/`RtlGetVersion`/`version.dll` 与 `cfapi-link-smoke` 的 `CfGetPlatformInfo` 都是 FFI 直声明（无第三方 crate）；`crates/platform-windows` 的正式适配层仍属 S010—S012。
+- 未验证：CFAPI 注册/占位/回调（S010—S012）、GUI/Explorer 集成、大文件传输耗时、`.cache/windows` 在 CI 上的缓存策略。

@@ -14,6 +14,9 @@ dist/
 /artifacts/
 /var/
 
+# 交叉编译缓存（rustup 工具链、cargo 注册表、cargo-xwin 的 MSVC CRT/SDK）
+/.cache/
+
 # Nix 构建输出符号链接（nix build/develop 在仓库根产生 result、result-*）
 /result
 /result-*

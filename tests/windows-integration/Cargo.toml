@@ -1,0 +1,23 @@
+[package]
+name = "vaultsyncd-windows-tests"
+description = "Windows 原生平台测试程序：宿主交叉编译、Windows 客体原生执行（docs/design.md §5.8）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 两个冒烟二进制各自独立：`platform-smoke` 只依赖已发布的 Win32 API，
+# `cfapi-link-smoke` 验证 Cloud Files API 的导入库与运行时解析（S009）。
+[[bin]]
+name = "platform-smoke"
+path = "src/bin/platform_smoke.rs"
+
+[[bin]]
+name = "cfapi-link-smoke"
+path = "src/bin/cfapi_link_smoke.rs"
+
+# 沿用 workspace 的 lint 策略。FFI 需要的 `unsafe_code` 例外在各自 bin 里以
+# crate 级 `#![allow(unsafe_code)]` 局部放行：Cargo 不允许同时写 `workspace = true`
+# 与包级 lint 覆盖（S009 实测），源码属性可以覆盖命令行传入的 `--deny`。
+[lints]
+workspace = true

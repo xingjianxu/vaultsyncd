@@ -1,5 +1,7 @@
-# Linux 由 `nix develop` 提供同一版本的 rustc/cargo/rustfmt/clippy，不读取本文件；
-# 本文件供 Windows 侧 rustup 取同一版本：`rustup toolchain install 1.99.0-x86_64-pc-windows-msvc`。
+# Windows x64 交叉编译的固定项（S009）。`nix develop .#windows` 内的 rustup 按本文件
+# 解析 channel 与目标；NixOS 日常构建的 rustc/cargo/rustfmt/clippy 来自锁定 nixpkgs，
+# 不读取本文件，两端版本以 docs/environment.md §13 为唯一记录。
+# 不要用“stable/最新”占位值：改动 channel 必须先复核 Windows 目标可用性与验收证据。
 [toolchain]
 channel = "1.99.0"
-components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc"]
