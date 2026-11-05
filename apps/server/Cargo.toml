@@ -33,7 +33,11 @@ vaultsyncd-server-core = { path = "../../crates/server-core" }
 vaultsyncd-server-store = { path = "../../crates/server-store" }
 
 [dev-dependencies]
-# HTTP 处理器的单元测试用 `tower::ServiceExt::oneshot` 直接调用 router，不启动真实监听。
+# HTTP 处理器与上传端点的验收用 `tower::ServiceExt::oneshot` 直接调用 router，不启动真实监听。
 tower = { version = "0.5", features = ["util"] }
+# 验收用例按生成 DTO 解析响应体（不手写 JSON 字面量比对），并按契约形状断言已收块/缺块区间。
+serde_json = "1"
+# 块摘要由传输层的唯一实现给出（design §5.4）：测试不复刻一份 SHA-256。
+vaultsyncd-transfer = { path = "../../crates/transfer" }
 [lints]
 workspace = true

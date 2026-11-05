@@ -1985,6 +1985,7 @@ dependencies = [
  "axum",
  "rand_core",
  "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "toml",
@@ -1996,6 +1997,7 @@ dependencies = [
  "vaultsyncd-protocol",
  "vaultsyncd-server-core",
  "vaultsyncd-server-store",
+ "vaultsyncd-transfer",
 ]
 
 [[package]]
