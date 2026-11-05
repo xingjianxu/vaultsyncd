@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -52,6 +52,11 @@ pub fn router(
         .route("/v1/roots", get(super::roots::list_roots))
         .route("/v1/admin/roots", post(super::roots::register_root))
         .with_state(roots);
+    // 块请求体是二进制原样字节，大小上限由上传策略决定（`max_chunk_size + 1`，给“超一块”留一次
+    // 拒绝机会）。Axum 默认请求体上限是 2 MiB，比默认块大小 4 MiB 还小：不在这里显式抬到策略值，
+    // 按契约合法的块会在处理器之前就被 413 掉（客户端用默认块大小上传必然失败）。
+    let upload_body_limit =
+        usize::try_from(uploads.policy().max_chunk_size.saturating_add(1)).unwrap_or(usize::MAX);
     let uploads_router = Router::new()
         .route("/v1/roots/{root}/uploads", post(super::uploads::begin))
         .route(
@@ -62,6 +67,7 @@ pub fn router(
             "/v1/roots/{root}/uploads/{upload}/parts/{index}",
             put(super::uploads::put_part),
         )
+        .layer(DefaultBodyLimit::max(upload_body_limit))
         .with_state(uploads);
     public
         .merge(authenticated)
