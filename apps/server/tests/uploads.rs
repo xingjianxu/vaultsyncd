@@ -474,13 +474,44 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
         "错误信息应给出期望与实际长度：{body}"
     );
 
-    // (b) 超过 Axum 默认请求体上限（2 MiB）：路由层直接 413，处理器根本没被调用。
-    let huge = vec![0x42_u8; 3 * 1024 * 1024];
+    // (b) 契约允许的最大块（默认块大小 4 MiB）必须真的收得下：Axum 默认请求体上限只有 2 MiB，
+    //     路由层已按策略把上传端点的上限抬到“最大块大小 + 1”，否则默认块大小根本无法上传。
+    let default_chunk = 4 * 1024 * 1024_usize;
+    let big_content: Vec<u8> = (0..2 * default_chunk)
+        .map(|offset| (offset % 251) as u8)
+        .collect();
+    let big = begin(
+        &app,
+        seeds.root,
+        &token,
+        (2 * default_chunk) as u64,
+        default_chunk as u64,
+        &sha256(&big_content),
+    )
+    .await;
+    assert_eq!(big.chunk_size, default_chunk.to_string());
+    assert_eq!(big.part_count, "2");
     let (status_code, body) = app
         .call(put_part_request(
             seeds.root,
-            &session.upload_id,
+            &big.upload_id,
             0,
+            &token,
+            &sha256(&big_content[..default_chunk]),
+            &big_content[..default_chunk],
+        ))
+        .await;
+    assert_eq!(status_code, StatusCode::OK, "默认块大小必须可用：{body}");
+    let ack: UploadPartAck = parse(&body, "UploadPartAck");
+    assert_eq!(ack.length, default_chunk.to_string());
+
+    // (c) 超过策略上限（16 MiB + 1）的载荷：路由层按同一策略直接 413，处理器不执行、不落盘。
+    let huge = vec![0x42_u8; 16 * 1024 * 1024 + 2];
+    let (status_code, body) = app
+        .call(put_part_request(
+            seeds.root,
+            &big.upload_id,
+            1,
             &token,
             &sha256(&huge),
             &huge,
@@ -489,7 +520,7 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
     assert_eq!(
         status_code,
         StatusCode::PAYLOAD_TOO_LARGE,
-        "超请求体上限的具体返回码：{body}"
+        "超策略上限的真实返回码：{body}"
     );
 
     assert!(
@@ -501,6 +532,26 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
     assert!(
         staging_files(&fixture, &session.upload_id).is_empty(),
         "超长载荷必须在写盘前被拒绝，不留暂存文件"
+    );
+    assert_eq!(
+        stored_part_indices(&fixture, seeds.owner, &big.upload_id).await,
+        vec![0],
+        "413 的块不得留下块行，已收的 4 MiB 块必须真的登记"
+    );
+    assert_eq!(
+        staging_files(&fixture, &big.upload_id),
+        vec!["00000000000000000000".to_owned()],
+        "413 的块不得留下暂存文件"
+    );
+    let reported_big = status(&app, seeds.root, &big.upload_id, &token).await;
+    assert_eq!(
+        reported_big
+            .received
+            .iter()
+            .map(|part| part.index.as_str())
+            .collect::<Vec<_>>(),
+        vec!["0"],
+        "进度只应包括真正收下的块：{reported_big:?}"
     );
     let reported = status(&app, seeds.root, &session.upload_id, &token).await;
     assert!(reported.received.is_empty(), "进度不得变化：{reported:?}");
