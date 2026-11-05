@@ -1585,6 +1585,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaultsyncd-local-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "vaultsyncd-planner"
 version = "0.1.0"
 dependencies = [
@@ -1629,6 +1637,7 @@ name = "vaultsyncd-xtask"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "toml",
 ]

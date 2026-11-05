@@ -1,0 +1,9 @@
+{
+  "request_id": "req_example_002",
+  "kind": "error",
+  "error": {
+    "code": "unsupported_version",
+    "message": "本机 IPC 协议版本 2.0 不受支持（agent 支持 1.0）",
+    "retryable": false
+  }
+}

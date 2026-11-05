@@ -762,7 +762,7 @@ python3 tools/context.py --help
 | 文件 | 契约 |
 | --- | --- |
 | `api/openapi.yaml` | OpenAPI `3.1.0`。当前端点：`GET /v1/health`（无需认证、`HealthResponse`、503 用错误信封）、`GET /v1/capabilities`（`Capabilities`、503 用错误信封）。`info.description` 会原样进生成文件表头 |
-| `api/generation.toml` | 生成配置：`format_version = 1`、`generator = "vaultsyncd-xtask"`、`generator_version`（= 包版本）、`source`、`openapi_version`、`[outputs]` 三个路径、`[types.rust]`/`[types.typescript]` 映射表 |
+| `api/generation.toml` | 生成配置：`format_version = 2`（S025 起含本机 IPC）、`generator = "vaultsyncd-xtask"`、`generator_version`（= 包版本）、`source`/`openapi_version`（远端）、`local_ipc_source`/`local_ipc_schema_draft`（本机 IPC）、`[outputs]` 五个路径、`[types.rust]`/`[types.typescript]` 映射表（两份契约共用） |
 | `api/examples/*.response.json` | 合法响应样本（capabilities/health/error），被 `crates/protocol/tests/contract.rs` 与 `packages/api-client/tests/schema-decoders.mjs` 直接读取；改契约时同步更新 |
 
 ### schema 子集与生成规则
@@ -781,7 +781,8 @@ python3 tools/context.py --help
 
 - 未知/未实现构造一律报错退出：内联 `enum`、内联对象、`oneOf`/`anyOf`/`allOf`、`default` 状态码、非 `#/components/schemas/…` 的 `$ref`、映射值不是 string、`format` 不是 `decimal_u64`、根文档与 schema 的未知键（`serde(deny_unknown_fields)`）。
 - 契约卫生由生成器强制：每个具名 schema 与每个属性都必须有 `description`（生成的公开类型/字段要满足 `missing_docs`，TS 侧对应 JSDoc）；schema 名必须是 PascalCase ASCII 标识符；字段名必须是 snake_case 且不与 Rust 关键字冲突；`required` 不能列出未定义属性；每个端点必须有 `operationId`（lowerCamelCase，也是生成的函数名）、恰好一个 2xx 响应、所有非 2xx 响应引用 `ErrorEnvelope`。
-- 运行前核对 `api/generation.toml`：`format_version`、`generator`、`generator_version`（与 `env!("CARGO_PKG_VERSION")` 比）、`openapi_version`（与文档 `openapi` 字段比）任一不符即报错，避免配置与实现漂移。
+- 运行前核对 `api/generation.toml`：`format_version`、`generator`、`generator_version`（与 `env!("CARGO_PKG_VERSION")` 比）、`openapi_version`（与文档 `openapi` 字段比）、`local_ipc_schema_draft`（与本机 IPC 文档 `$schema` 比）任一不符即报错，避免配置与实现漂移。
+- 可选字段在 Rust 侧带 `#[serde(skip_serializing_if = "Option::is_none")]`（S025 起）：缺省的可选字段不出现在 JSON 里，与 TypeScript 解码器“只接受缺省（`undefined`）”一致，写入方不写 `null`。已知宽容：serde 的 `Option<T>` 对显式 `null` 与缺省都解出 `None`，而 TS 解码器把 `null` 当畸形；正常链路（两侧都由生成代码写出）不会产生 `null`，样本里也没有。
 - 闭合枚举与十进制校验的语义由两侧测试共同锁定：`cargo test --locked -p vaultsyncd-protocol`（13 个契约用例）+ `pnpm --filter @vaultsyncd/api-client test`（9 项运行时断言）。
 - 生成文件表头标注“禁止手改”，不含时间戳或随机顺序，因此重新生成逐字节一致。
 
@@ -811,6 +812,47 @@ python3 tools/context.py --help
 | `tests/schema-decoders.mjs` | 运行时断言（9 项），直接以 `.mjs` 导入 `../src/generated/types.ts`（Node 24 原生剥离类型，无需构建步骤），并读取 `api/examples/` |
 
 脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。客户端不读全局 `fetch`/时钟：传输与 `x-request-id` 生成都由调用方注入，因此可在无浏览器的测试里替换。
+
+## api/ — 本机 IPC 契约源（S025）
+
+状态：S025 建立最小契约与生成通路。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
+
+| 文件 | 契约 |
+| --- | --- |
+| `api/local-ipc.schema.json` | JSON Schema `2020-12`。`$defs`：`IpcVersion`（`major`/`minor`）、`CommandName`（闭集，当前只有 `get_status`）、`Command`、`Request`（`request_id`/`ipc_version`/`command`）、`GetStatusResult`（`agent_version`/`ipc_protocol`）、`LocalIpcErrorCode`（闭集，当前只有 `unsupported_version`）、`ErrorBody`、`ResponseKind`、`Response`（`request_id`/`kind`/可选 `result`/可选 `error`） |
+| `x-vaultsyncd` 元数据 | `protocol`（`major`/`minor`，进生成常量 `PROTOCOL_MAJOR`/`PROTOCOL_MINOR`）与 `frame`（`header_bytes = 4`、`max_frame_bytes = 1048576`，进生成常量 `FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES`）。`header_bytes` 必须是 4，`max_frame_bytes` 必须在 64 B—64 MiB 之间 |
+| `api/examples/local-ipc.{request,response,error}.json` | 合法请求/成功应答/错误应答样本，被 `crates/local-ipc/tests/contract.rs` 与 `packages/local-ipc-types/tests/schema-decoders.mjs` 直接读取；两侧都断言“解码后再编码等于样本” |
+
+生成规则：与远端共用 `emit` 的 schema 渲染（对象/闭集枚举/基础类型），差别是 `$ref` 前缀为 `#/$defs/`、多出协议与帧常量、没有 HTTP 调用文件。schema 名 PascalCase、字段名 snake_case、每个 schema 与属性必须有 `description`、未知键与未支持构造（内联 enum/对象、非 `#/$defs/` 引用）一律报错——规则与失败行为见上一节。
+
+## crates/local-ipc — 本机 IPC DTO、版本判定与消息帧（S025）
+
+状态：S025 实现。包名 `vaultsyncd-local-ipc`，依赖 `serde`（derive），dev 依赖 `serde_json`；在 `members` 与 `default-members` 内（无平台 API，便携检查覆盖）。**不含** Windows 命名管道、ACL 与调用者身份校验（design §5.3；那些属于 S071 的平台传输）。
+
+| 模块 | 契约 |
+| --- | --- |
+| `generated` | 生成代码（`api/local-ipc.schema.json` → `crates/local-ipc/src/generated/mod.rs`）：`PROTOCOL_MAJOR`/`PROTOCOL_MINOR`/`FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES` 常量与全部 DTO。闭集枚举无 catch-all，未知命令/未知种类/未知错误码反序列化失败；未知字段被忽略 |
+| `version` | `SUPPORTED_MAJOR`/`SUPPORTED_MINOR`（= 生成常量）、`supported() -> IpcVersion`、`is_compatible(&IpcVersion) -> bool`：major 必须相同，minor 不得高于 agent 支持的版本（避免调用方假设未实现的命令存在）；更低 minor 兼容 |
+| `framing` | `encode(&[u8]) -> Result<Vec<u8>, FrameError>`：4 字节大端长度头 + 负载；拒绝空负载与超过 `MAX_FRAME_BYTES` 的负载。`FrameDecoder::{new,push,next_frame,buffered_bytes,queued_frames}`：接受任意切分（含 1 字节一块），只有凑满声明长度才产出负载，截断数据永不产出短帧 |
+| `service` | `Service::new(agent_version)`、`Service::handle(&Request) -> Response`；`Response::{ok,error,validate}` 与 `ResponseShapeError`。`get_status` 返回 agent 版本与该 agent 支持的 `ipc_protocol`；版本不兼容返回 `unsupported_version`（`retryable = false`），回显 `request_id` |
+
+帧错误：`FrameError::{EmptyFrame, FrameTooLarge{bytes}, Backlog}`。不变式：等待中的部分帧最多 `FRAME_HEADER_BYTES + MAX_FRAME_BYTES` 字节；已完整但未取走的帧最多 `MAX_QUEUED_FRAMES = 4` 个；超过任一上限即报错而不再收数据。**报错后连接不可继续使用**（缓冲区可能仍有未消费字节），传输实现应关闭该连接。
+
+未知命令与畸形 JSON 在产生应答之前就被拒绝：`Service` 只接收已解码的 `Request`，解码失败由传输层结束连接，因此不存在“未知命令回一个默认成功”的路径。`Response` 的 `kind` 与负载同理：只有 `ok` 带 `result`、`error` 带 `error`，构造只经 `Response::ok`/`Response::error`，`validate()` 供解码侧复核。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-local-ipc`（19 项契约用例）、`cargo clippy --locked -p vaultsyncd-local-ipc --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-local-ipc`。
+
+## packages/local-ipc-types — 本机 IPC TypeScript 类型（S025）
+
+状态：S025 实现。包名 `@vaultsyncd/local-ipc-types`，`private: true`，无运行时依赖，`exports` 指向 `./src/index.ts`；已加入 `pnpm-workspace.yaml` 与根 `typecheck`。只给桌面端用（design §5.6），不含 Tauri invoke 或 IPC 客户端实现。
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/generated/types.ts` | 生成：`interfaces`、字符串字面量联合 + `<NAME>_VALUES`、`decode<Name>()` 解码器，以及 `PROTOCOL_*`/`FRAME_*`/`MAX_FRAME_BYTES` 常量；未知命令、未知应答种类、缺必填字段、非整数版本号都抛错 |
+| `src/index.ts` | 手写的稳定导出面：只从这里导出类型、解码器与常量 |
+| `tests/schema-decoders.mjs` | 运行时断言（8 项），直接以 `.mjs` 导入 `../src/generated/types.ts`，并读取 `api/examples/` |
+
+脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。
 
 ## crates/server-store — 服务端数据库迁移框架（S026）
 
