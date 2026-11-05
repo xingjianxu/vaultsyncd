@@ -12,7 +12,8 @@
 //! `entries` 表的事务内读写、owner scope、活跃同父名称唯一、父子同 Root、目录环检查）、
 //! [`versions`]、[`changes`] 与 [`operations`]（S028：内容对象与不可变版本历史、RootSeq 事务批次、
 //! 幂等操作记录与“批次 + 结果同一事务提交”）、[`uploads`]、[`intents`] 与 [`leases`]（S029：上传
-//! 会话与固定块、显式 phase 的发布意图、下载/提交对象租约与备份租约）。后续卡的迁移只往
+//! 会话与固定块、显式 phase 的发布意图、下载/提交对象租约与备份租约）、[`users`] 与
+//! [`state_lock`]（S042：首次 owner 账号的形态约束与状态目录互斥锁）。后续卡的迁移只往
 //! `crates/server-store/migrations/` 追加文件，不改写已发布的迁移。
 #![forbid(unsafe_code)]
 
@@ -23,7 +24,9 @@ pub mod intents;
 pub mod leases;
 pub mod operations;
 pub mod roots;
+pub mod state_lock;
 pub mod uploads;
+pub mod users;
 pub mod versions;
 
 #[cfg(test)]

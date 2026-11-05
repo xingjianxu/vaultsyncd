@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use vaultsyncd_domain::ids::{DeviceId, EntryId, ID_LEN, IntentId, OpId, RootId, TxId, VersionId};
+use vaultsyncd_domain::ids::{
+    DeviceId, EntryId, ID_LEN, IntentId, OpId, RootId, TxId, UserId, VersionId,
+};
 use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
 
 use crate::commit::conflict::CommittedConflict;
@@ -917,5 +919,86 @@ impl vaultsyncd_domain::ids::IdSource for CountingIds {
     fn next_id_bytes(&mut self) -> [u8; ID_LEN] {
         self.next += 1;
         [self.next; ID_LEN]
+    }
+}
+
+/// 固定字节的账号身份。
+pub(crate) fn user_id(marker: u8) -> UserId {
+    UserId::from_bytes([marker; ID_LEN])
+}
+
+/// 便宜的 Argon2id 参数：用例里只需要“能散列、能比对”，不值得每个断言花几十毫秒。
+pub(crate) fn cheap_hasher() -> crate::auth::password::PasswordHasher {
+    crate::auth::password::PasswordHasher::with_params(8, 1, 1).expect("测试 Argon2id 参数")
+}
+
+/// 用给定散列与登录名造一条已存账号（默认启用）。
+pub(crate) fn stored_owner(
+    hasher: &crate::auth::password::PasswordHasher,
+    marker: u8,
+    login: &str,
+    password: &str,
+) -> crate::auth::account::StoredAccount {
+    crate::auth::account::StoredAccount {
+        id: user_id(marker),
+        login: login.to_owned(),
+        password_hash: hasher.hash(password).expect("测试账号散列"),
+        active: true,
+    }
+}
+
+/// 账号端口的内存假实现：只记“存了哪些账号、被查了几次”，不重实现任何业务判定。
+#[derive(Default)]
+pub(crate) struct FakeAccounts {
+    accounts: Vec<crate::auth::account::StoredAccount>,
+    lookups: usize,
+}
+
+impl FakeAccounts {
+    pub(crate) fn lookups(&self) -> usize {
+        self.lookups
+    }
+
+    pub(crate) fn insert_stored(&mut self, account: crate::auth::account::StoredAccount) {
+        self.accounts.push(account);
+    }
+}
+
+impl crate::auth::account::OwnerAccounts for FakeAccounts {
+    async fn count(&mut self) -> Result<u64, crate::auth::account::AccountError> {
+        Ok(u64::try_from(self.accounts.len()).unwrap_or(u64::MAX))
+    }
+
+    async fn find_by_login(
+        &mut self,
+        login: &str,
+    ) -> Result<Option<crate::auth::account::StoredAccount>, crate::auth::account::AccountError>
+    {
+        self.lookups += 1;
+        Ok(self
+            .accounts
+            .iter()
+            .find(|account| account.login == login)
+            .cloned())
+    }
+
+    async fn insert(
+        &mut self,
+        new: crate::auth::account::NewAccount,
+    ) -> Result<(), crate::auth::account::AccountError> {
+        if self
+            .accounts
+            .iter()
+            .any(|account| account.login == new.login)
+        {
+            return Err(crate::auth::account::AccountError::DuplicateLogin { login: new.login });
+        }
+        self.accounts.push(crate::auth::account::StoredAccount {
+            id: new.id,
+            login: new.login,
+            password_hash: new.password_hash,
+            active: true,
+        });
+        Ok(())
     }
 }

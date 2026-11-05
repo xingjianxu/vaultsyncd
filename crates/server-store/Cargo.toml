@@ -22,6 +22,10 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
     "derive",
 ] }
+# 状态目录互斥锁（`state_lock`）用操作系统的文件锁：标准库的 `File::try_lock` 从 Rust 1.89 起才
+# 稳定，而 workspace `rust-version` 仍是 1.85.0，因此用 `fs2` 的 `FileExt`（unix 走 flock、
+# windows 走 LockFileEx，不把 unsafe 代码带进本 crate）。
+fs2 = "0.4"
 # 请求摘要用 SHA-256：与内容哈希（design §7.1 `ContentHash`）同一算法，避免项目里出现两套摘要惯例。
 # 该版本已由 sqlx 传递引入（Cargo.lock 已有 `sha2 0.10.9`），这里只是增加一条直接依赖边。
 sha2 = "0.10"
