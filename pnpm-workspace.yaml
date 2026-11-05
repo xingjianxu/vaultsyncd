@@ -1,6 +1,7 @@
 # 前端 workspace 成员（docs/design.md §5.1.1、§5.2）。
-# 只列已经真实存在的成员；apps/web、apps/desktop 与 local-ipc-types 等按各自卡创建后再加入，
+# 只列已经真实存在的成员；apps/web、apps/desktop 等按各自卡创建后再加入，
 # 不为尚不存在的目录预留占位。
 packages:
   - packages/api-client
+  - packages/local-ipc-types
   - packages/ui

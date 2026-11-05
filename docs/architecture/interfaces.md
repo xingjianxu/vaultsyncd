@@ -87,7 +87,7 @@ python3 tools/context.py --help
 | 格式 | `rustfmt.toml` 只固定 `style_edition = "2024"`，其余用默认值；`cargo fmt --check` 为格式门禁 |
 | 锁文件 | 仓库根唯一 `Cargo.lock`（生成产物，提交入库），不得忽略；新增依赖后先 `cargo generate-lockfile`，验证用 `--locked` |
 | 验收命令 | `cargo metadata --locked --no-deps`、`cargo check --locked`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` |
-| MSRV 状态 | `rust-version = "1.85.0"` 依据 edition 2024 稳定版本声明；实测只在 1.99.0 上编译（Linux 与 Windows 交叉目标），devShell 内无 1.85.0 工具链，1.85.0 真编译复核仍未执行 |
+| MSRV 状态 | `rust-version = "1.85.0"` 依据 edition 2024 稳定版本声明；实测只在 1.99.0 上编译（Linux 与 Windows 交叉目标），devShell 内无 1.85.0 工具链，1.85.0 真编译复核仍未执行。resolver 3 会按 `rust-version` 做 MSRV 感知解析：S018 的 `ignore = "0.4"` 因此锁定 `ignore 0.4.30`（0.4.31 起要求 Rust 1.88），`globset` 同样停在 0.4.19 而不是 0.4.21 |
 
 ## 前端 pnpm workspace 与 UI 包
 
@@ -560,7 +560,7 @@ python3 tools/context.py --help
 
 ## crates/fs-common — 相对路径与跨平台名称规则（S017）
 
-状态：S017 在 `crates/fs-common/src/path.rs`、`name.rs` 落地纯规则；无第三方依赖、无 I/O、无平台 API，已加入根 workspace 的 `members` 与 `default-members`（可移植核心，`cargo test/clippy --locked` 直接覆盖）。排除规则（`ignore.rs`）、文件事实类型（`fingerprint.rs`）留给后续卡，本卡不预置占位 API。
+状态：S017 在 `crates/fs-common/src/path.rs`、`name.rs` 落地纯规则；无 I/O、无平台 API，已加入根 workspace 的 `members` 与 `default-members`（可移植核心，`cargo test/clippy --locked` 直接覆盖）。S018 增加排除规则模块 `ignore.rs` 与唯一第三方依赖 `ignore`（ripgrep 的 gitignore 实现，见下一节）；文件事实类型（`fingerprint.rs`）留给后续卡，本卡不预置占位 API。
 
 ### 模块与契约
 
@@ -593,6 +593,40 @@ python3 tools/context.py --help
 - 碰撞只报告不消解：接入原生等价端口只会扩大检测范围，不会产生改名或覆盖行为。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/fs-common — 排除规则与解释（S018）
+
+状态：S018 在 `crates/fs-common/src/ignore.rs` 落地 `.syncignore` 的解析与解释（design §10.4、C13、T27），样本与用例表在 `fixtures/paths/`。glob 匹配交给 `ignore` crate 的 `gitignore` 实现（design §4.1“经验证的 gitignore 风格匹配库，不自行拼写 glob 正则”），这是本 crate 唯一的第三方依赖；本模块只接收文本、不读文件（`Gitignore::new`、`GitignoreBuilder::add` 不使用），因此仍属可移植纯规则。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `ignore::DEFAULT_RULES` | 内置默认排除清单文本，**可直接编辑**。只列编辑器交换/锁文件（`*~`、`*.swp`、`.*#`…、`~$*`、`*.tmp`、`*.temp`）、下载中间文件（`*.part`、`*.partial`、`*.crdownload`）与桌面缓存元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）。不排除整个 `.git`、不排除任意隐藏文件、不排除 `.syncignore` 自身 |
+| `IgnoreRules::parse_with_defaults(&str)` | 默认清单在前、调用方文本在后（后者优先，可用 `!` 覆盖默认排除）；返回 `Result<IgnoreRules, RuleIssue>` |
+| `IgnoreRules::parse(&str)` | 只用给定文本，内置默认清单不参与（绑定提供完整清单时用） |
+| `IgnoreRules::decide(&RelativePath, is_dir) -> Decision` | 给出裁决与解释；祖先目录按从浅到深检查 |
+| `IgnoreRules::is_excluded(&RelativePath, is_dir) -> bool` | 只要布尔结果时的入口，与 `decide` 判定一致 |
+| `ignore::Decision` | `Included { reinclude: Option<Hit> }` / `Excluded(Exclusion)`；实现 `Display`（中文解释，供“为什么被排除”查询） |
+| `ignore::Exclusion` | `hit: Hit`（命中的规则）+ `blocked_reinclude: Option<Hit>`（路径自身命中的 `!` 规则因祖先目录被排除而不能生效） |
+| `ignore::Hit` | `rule`（规则原文，保留 `!` 与目录尾 `/`）、`source: RuleSource`（`Defaults` / `Binding`）、`at: MatchedAt`（`Path` / `Ancestor(RelativePath)`） |
+| `ignore::RuleIssue` | `Line { source, line, text, reason }`（行号相对各自来源文本）、`Build { reason }`；实现 `Display` 与 `std::error::Error` |
+
+### 规则与边界
+
+- **语义等同 Git gitignore**：`#` 整行注释、空行、`!` 否定、`*`/`?`/`**`/字符类、前导 `/` 根锚定、尾部 `/` 只匹配目录；首行 UTF-8 BOM 与 CRLF 按 Git 习惯处理。
+- **父目录排除后不能重新包含子项**：`secrets/` 排除后 `!secrets/public.txt` 不生效，解释里给出被阻断的规则；`ignore` crate 的 `matched_path_or_any_parents` 是叶子优先（ripgrep 遍历视角），与 Git 的限制相反，因此本模块自己按祖先自浅到深遍历、只借用该库的 glob 匹配。
+- **规则顺序决定结果**：同一路径的多条规则取最后的匹配；目录被 `!` 重新包含后子项可正常参与同步（`Included.reinclude` 记录命中的否定规则，可能位于祖先目录）。
+- **默认清单可编辑、可替换**：改 `DEFAULT_RULES` 即改所有绑定默认；绑定可用 `parse_with_defaults` 追加或在 `parse` 里给完整清单。默认规则文件本身不能落到“被自己排除而无法更新”的循环（design §10.4）。
+- 行号按来源分别计数：叠加默认清单后，绑定文本的解析错误仍报绑定文本自己的行号。
+
+### 不变量
+
+- **排除不是删除**：本模块只有“参与/不参与”两种裁决，不产生也无法产生 Delete 事件；排除的路径保留已下载的本地内容与服务器内容（design §5/§10.4、C05/C13）。
+- **相同规则结果确定**：裁决只依赖规则文本、路径分量与 `is_dir`，不含哈希顺序、平台比较表或目录遍历状态；重复解析与重复查询给出同一结论。
+- **默认规则不吞掉最终文件**：编辑器先写 `x.docx.tmp` 再 rename-over 成 `x.docx` 时，最终文件参与同步（T27）。
+
+样本与验证：`fixtures/paths/syncignore-binding.syncignore`（绑定级规则样本）+ `fixtures/paths/syncignore-cases.txt`（用例表：路径 | 类型 | 期望 | 规则 | 命中位置 | 被阻断的否定规则），由 `crates/fs-common/tests/ignore_rules.rs` 逐行验证；默认清单的临时文件/最终文件边界在 `src/ignore.rs` 单测里。验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
 
 ## crates/planner — 三方比较与基本计划（S019、S021）
 
@@ -730,7 +764,7 @@ python3 tools/context.py --help
 | 文件 | 契约 |
 | --- | --- |
 | `api/openapi.yaml` | OpenAPI `3.1.0`。当前端点：`GET /v1/health`（无需认证、`HealthResponse`、503 用错误信封）、`GET /v1/capabilities`（`Capabilities`、503 用错误信封）。`info.description` 会原样进生成文件表头 |
-| `api/generation.toml` | 生成配置：`format_version = 1`、`generator = "vaultsyncd-xtask"`、`generator_version`（= 包版本）、`source`、`openapi_version`、`[outputs]` 三个路径、`[types.rust]`/`[types.typescript]` 映射表 |
+| `api/generation.toml` | 生成配置：`format_version = 2`（S025 起含本机 IPC）、`generator = "vaultsyncd-xtask"`、`generator_version`（= 包版本）、`source`/`openapi_version`（远端）、`local_ipc_source`/`local_ipc_schema_draft`（本机 IPC）、`[outputs]` 五个路径、`[types.rust]`/`[types.typescript]` 映射表（两份契约共用） |
 | `api/examples/*.response.json` | 合法响应样本（capabilities/health/error），被 `crates/protocol/tests/contract.rs` 与 `packages/api-client/tests/schema-decoders.mjs` 直接读取；改契约时同步更新 |
 
 ### schema 子集与生成规则
@@ -749,7 +783,8 @@ python3 tools/context.py --help
 
 - 未知/未实现构造一律报错退出：内联 `enum`、内联对象、`oneOf`/`anyOf`/`allOf`、`default` 状态码、非 `#/components/schemas/…` 的 `$ref`、映射值不是 string、`format` 不是 `decimal_u64`、根文档与 schema 的未知键（`serde(deny_unknown_fields)`）。
 - 契约卫生由生成器强制：每个具名 schema 与每个属性都必须有 `description`（生成的公开类型/字段要满足 `missing_docs`，TS 侧对应 JSDoc）；schema 名必须是 PascalCase ASCII 标识符；字段名必须是 snake_case 且不与 Rust 关键字冲突；`required` 不能列出未定义属性；每个端点必须有 `operationId`（lowerCamelCase，也是生成的函数名）、恰好一个 2xx 响应、所有非 2xx 响应引用 `ErrorEnvelope`。
-- 运行前核对 `api/generation.toml`：`format_version`、`generator`、`generator_version`（与 `env!("CARGO_PKG_VERSION")` 比）、`openapi_version`（与文档 `openapi` 字段比）任一不符即报错，避免配置与实现漂移。
+- 运行前核对 `api/generation.toml`：`format_version`、`generator`、`generator_version`（与 `env!("CARGO_PKG_VERSION")` 比）、`openapi_version`（与文档 `openapi` 字段比）、`local_ipc_schema_draft`（与本机 IPC 文档 `$schema` 比）任一不符即报错，避免配置与实现漂移。
+- 可选字段在 Rust 侧带 `#[serde(skip_serializing_if = "Option::is_none")]`（S025 起）：缺省的可选字段不出现在 JSON 里，与 TypeScript 解码器“只接受缺省（`undefined`）”一致，写入方不写 `null`。已知宽容：serde 的 `Option<T>` 对显式 `null` 与缺省都解出 `None`，而 TS 解码器把 `null` 当畸形；正常链路（两侧都由生成代码写出）不会产生 `null`，样本里也没有。
 - 闭合枚举与十进制校验的语义由两侧测试共同锁定：`cargo test --locked -p vaultsyncd-protocol`（13 个契约用例）+ `pnpm --filter @vaultsyncd/api-client test`（9 项运行时断言）。
 - 生成文件表头标注“禁止手改”，不含时间戳或随机顺序，因此重新生成逐字节一致。
 
@@ -779,6 +814,47 @@ python3 tools/context.py --help
 | `tests/schema-decoders.mjs` | 运行时断言（9 项），直接以 `.mjs` 导入 `../src/generated/types.ts`（Node 24 原生剥离类型，无需构建步骤），并读取 `api/examples/` |
 
 脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。客户端不读全局 `fetch`/时钟：传输与 `x-request-id` 生成都由调用方注入，因此可在无浏览器的测试里替换。
+
+## api/ — 本机 IPC 契约源（S025）
+
+状态：S025 建立最小契约与生成通路。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
+
+| 文件 | 契约 |
+| --- | --- |
+| `api/local-ipc.schema.json` | JSON Schema `2020-12`。`$defs`：`IpcVersion`（`major`/`minor`）、`CommandName`（闭集，当前只有 `get_status`）、`Command`、`Request`（`request_id`/`ipc_version`/`command`）、`GetStatusResult`（`agent_version`/`ipc_protocol`）、`LocalIpcErrorCode`（闭集，当前只有 `unsupported_version`）、`ErrorBody`、`ResponseKind`、`Response`（`request_id`/`kind`/可选 `result`/可选 `error`） |
+| `x-vaultsyncd` 元数据 | `protocol`（`major`/`minor`，进生成常量 `PROTOCOL_MAJOR`/`PROTOCOL_MINOR`）与 `frame`（`header_bytes = 4`、`max_frame_bytes = 1048576`，进生成常量 `FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES`）。`header_bytes` 必须是 4，`max_frame_bytes` 必须在 64 B—64 MiB 之间 |
+| `api/examples/local-ipc.{request,response,error}.json` | 合法请求/成功应答/错误应答样本，被 `crates/local-ipc/tests/contract.rs` 与 `packages/local-ipc-types/tests/schema-decoders.mjs` 直接读取；两侧都断言“解码后再编码等于样本” |
+
+生成规则：与远端共用 `emit` 的 schema 渲染（对象/闭集枚举/基础类型），差别是 `$ref` 前缀为 `#/$defs/`、多出协议与帧常量、没有 HTTP 调用文件。schema 名 PascalCase、字段名 snake_case、每个 schema 与属性必须有 `description`、未知键与未支持构造（内联 enum/对象、非 `#/$defs/` 引用）一律报错——规则与失败行为见上一节。
+
+## crates/local-ipc — 本机 IPC DTO、版本判定与消息帧（S025）
+
+状态：S025 实现。包名 `vaultsyncd-local-ipc`，依赖 `serde`（derive），dev 依赖 `serde_json`；在 `members` 与 `default-members` 内（无平台 API，便携检查覆盖）。**不含** Windows 命名管道、ACL 与调用者身份校验（design §5.3；那些属于 S071 的平台传输）。
+
+| 模块 | 契约 |
+| --- | --- |
+| `generated` | 生成代码（`api/local-ipc.schema.json` → `crates/local-ipc/src/generated/mod.rs`）：`PROTOCOL_MAJOR`/`PROTOCOL_MINOR`/`FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES` 常量与全部 DTO。闭集枚举无 catch-all，未知命令/未知种类/未知错误码反序列化失败；未知字段被忽略 |
+| `version` | `SUPPORTED_MAJOR`/`SUPPORTED_MINOR`（= 生成常量）、`supported() -> IpcVersion`、`is_compatible(&IpcVersion) -> bool`：major 必须相同，minor 不得高于 agent 支持的版本（避免调用方假设未实现的命令存在）；更低 minor 兼容 |
+| `framing` | `encode(&[u8]) -> Result<Vec<u8>, FrameError>`：4 字节大端长度头 + 负载；拒绝空负载与超过 `MAX_FRAME_BYTES` 的负载。`FrameDecoder::{new,push,next_frame,buffered_bytes,queued_frames}`：接受任意切分（含 1 字节一块），只有凑满声明长度才产出负载，截断数据永不产出短帧 |
+| `service` | `Service::new(agent_version)`、`Service::handle(&Request) -> Response`；`Response::{ok,error,validate}` 与 `ResponseShapeError`。`get_status` 返回 agent 版本与该 agent 支持的 `ipc_protocol`；版本不兼容返回 `unsupported_version`（`retryable = false`），回显 `request_id` |
+
+帧错误：`FrameError::{EmptyFrame, FrameTooLarge{bytes}, Backlog}`。不变式：等待中的部分帧最多 `FRAME_HEADER_BYTES + MAX_FRAME_BYTES` 字节；已完整但未取走的帧最多 `MAX_QUEUED_FRAMES = 4` 个；超过任一上限即报错而不再收数据。**报错后连接不可继续使用**（缓冲区可能仍有未消费字节），传输实现应关闭该连接。
+
+未知命令与畸形 JSON 在产生应答之前就被拒绝：`Service` 只接收已解码的 `Request`，解码失败由传输层结束连接，因此不存在“未知命令回一个默认成功”的路径。`Response` 的 `kind` 与负载同理：只有 `ok` 带 `result`、`error` 带 `error`，构造只经 `Response::ok`/`Response::error`，`validate()` 供解码侧复核。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-local-ipc`（19 项契约用例）、`cargo clippy --locked -p vaultsyncd-local-ipc --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-local-ipc`。
+
+## packages/local-ipc-types — 本机 IPC TypeScript 类型（S025）
+
+状态：S025 实现。包名 `@vaultsyncd/local-ipc-types`，`private: true`，无运行时依赖，`exports` 指向 `./src/index.ts`；已加入 `pnpm-workspace.yaml` 与根 `typecheck`。只给桌面端用（design §5.6），不含 Tauri invoke 或 IPC 客户端实现。
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/generated/types.ts` | 生成：`interfaces`、字符串字面量联合 + `<NAME>_VALUES`、`decode<Name>()` 解码器，以及 `PROTOCOL_*`/`FRAME_*`/`MAX_FRAME_BYTES` 常量；未知命令、未知应答种类、缺必填字段、非整数版本号都抛错 |
+| `src/index.ts` | 手写的稳定导出面：只从这里导出类型、解码器与常量 |
+| `tests/schema-decoders.mjs` | 运行时断言（8 项），直接以 `.mjs` 导入 `../src/generated/types.ts`，并读取 `api/examples/` |
+
+脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。
 
 ## crates/server-store — 服务端数据库迁移框架（S026）
 

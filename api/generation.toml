@@ -1,24 +1,35 @@
-# 远端协议生成通路（docs/design.md §5.6、§5.12）：唯一编辑源、生成器版本、类型映射与输出路径。
+# 协议生成通路（docs/design.md §5.6、§5.12）：唯一编辑源、生成器版本、类型映射与输出路径。
 #
-# 生成器实现随本仓库提交（`tools/xtask/src/generate/`），其依赖（serde、serde_yaml_ng、toml）
-# 由根 Cargo.lock 锁定。`format_version`、`generator`、`generator_version` 由 `cargo xtask
-# generate` 在运行前核对：任一项与实际生成器不符即报错退出，避免配置与实现悄悄漂移。
-format_version = 1
+# 生成器实现随本仓库提交（`tools/xtask/src/generate/`），其依赖（serde、serde_json、
+# serde_yaml_ng、toml）由根 Cargo.lock 锁定。`format_version`、`generator`、`generator_version`
+# 由 `cargo xtask generate` 在运行前核对：任一项与实际生成器不符即报错退出，避免配置与实现
+# 悄悄漂移。
+#
+# 两份契约分开：`source` 是远端 HTTP/OpenAPI 契约，`local_ipc_source` 是本机 IPC 的 JSON
+# Schema；它们各有唯一编辑源，互不引用（服务器管理 API 不控制客户端本地路径）。
+format_version = 2
 generator = "vaultsyncd-xtask"
 generator_version = "0.1.0"
 
-# 契约来源与它声明的 OpenAPI 版本，必须与文档里的 `openapi` 字段一致。
+# 远端契约来源与它声明的 OpenAPI 版本，必须与文档里的 `openapi` 字段一致。
 source = "api/openapi.yaml"
 openapi_version = "3.1.0"
+
+# 本机 IPC 契约来源与它声明的 JSON Schema draft，必须与文档里的 `$schema` 一致。
+local_ipc_source = "api/local-ipc.schema.json"
+local_ipc_schema_draft = "2020-12"
 
 # 生成代码路径。生成文件带“禁止手改”表头，`--check` 重新生成后逐字节比对。
 [outputs]
 rust = "crates/protocol/src/generated/mod.rs"
 typescript_types = "packages/api-client/src/generated/types.ts"
 typescript_client = "packages/api-client/src/generated/client.ts"
+local_ipc_rust = "crates/local-ipc/src/generated/mod.rs"
+local_ipc_typescript_types = "packages/local-ipc-types/src/generated/types.ts"
 
 # wire 类型到目标语言的映射。`array` 用 `{item}`、`map` 用 `{value}` 占位，其余按 wire 类型名
-# 直接查表（OpenAPI 的 `integer`/`boolean`/`string`，以及自定义 `format` 名）。
+# 直接查表（OpenAPI 的 `integer`/`boolean`/`string`，以及自定义 `format` 名）。本机 IPC 契约
+# 使用同一张表：Cargo 侧只有一个 Rust workspace、一个 pnpm workspace。
 [types.rust]
 boolean = "bool"
 integer = "u32"

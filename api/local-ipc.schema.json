@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vaultsyncd 本机 IPC",
+  "description": "Windows agent 与本机 GUI/CLI 之间的最小命令契约（docs/design.md §15.5、§5.6）。\n本文件是本机 IPC 的唯一编辑源；`cargo xtask generate` 据此生成\ncrates/local-ipc 的 Rust DTO 与 packages/local-ipc-types 的 TypeScript 类型。\n本契约与服务器管理 API 分开：它不经网络传输，也不复用 api/openapi.yaml。\n消息按帧编码：FRAME_HEADER_BYTES 字节的大端长度头（不含头自身）加该长度的\nUTF-8 JSON 负载，单帧负载上限为 MAX_FRAME_BYTES；两个常量由 x-vaultsyncd 生成。\n请求方按 Request 编码，agent 按 Response 应答；request_id 原样回显，\n调用方据此把并发应答配对，agent 不解析它的内容。\n未知命令、未知闭集取值与畸形 JSON 一律拒绝，不当作默认成功：\n解码失败发生在产生应答之前，由传输层结束该连接。",
+  "x-vaultsyncd": {
+    "protocol": {
+      "major": 1,
+      "minor": 0
+    },
+    "frame": {
+      "header_bytes": 4,
+      "max_frame_bytes": 1048576
+    }
+  },
+  "$defs": {
+    "Command": {
+      "type": "object",
+      "description": "命令负载：命令名加该命令自己的参数。当前唯一的 get_status 没有参数。",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/CommandName",
+          "description": "要执行的命令名；未知取值在解码阶段被拒绝。"
+        }
+      }
+    },
+    "CommandName": {
+      "type": "string",
+      "description": "命令名闭集。S025 只实现 get_status；design §15.5 其余命令在其功能卡加入，取值与含义在契约里逐项追加。",
+      "enum": [
+        "get_status"
+      ]
+    },
+    "ErrorBody": {
+      "type": "object",
+      "description": "错误应答主体：协议级失败的原因。带 root_id/details 的同步问题由问题页命令返回，不在本契约里。",
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/LocalIpcErrorCode",
+          "description": "错误码。"
+        },
+        "message": {
+          "type": "string",
+          "description": "界面上直接可读的说明；不含内部绝对路径或凭据。"
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "调用方是否可原样重试；协议不兼容一律为 false。"
+        }
+      }
+    },
+    "GetStatusResult": {
+      "type": "object",
+      "description": "get_status 的结果：agent 身份与它当前支持的 IPC 协议版本。Binding、问题与状态快照等更细的状态字段随 design §15.5 其余命令在各自功能卡加入。",
+      "required": [
+        "agent_version",
+        "ipc_protocol"
+      ],
+      "properties": {
+        "agent_version": {
+          "type": "string",
+          "description": "agent 二进制版本（构建时确定的语义化版本文本），供界面与日志显示。"
+        },
+        "ipc_protocol": {
+          "$ref": "#/$defs/IpcVersion",
+          "description": "agent 当前支持的 IPC 协议版本。"
+        }
+      }
+    },
+    "IpcVersion": {
+      "type": "object",
+      "description": "本机 IPC 协议版本。major 表示帧格式与命令语义的不兼容变更，minor 表示向后兼容的增量。",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "不兼容版本号；与 agent 支持的 major 不同即拒绝。"
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "兼容增量版本号；高于 agent 支持的 minor 时同样拒绝，避免调用方假设尚未实现的命令存在。"
+        }
+      }
+    },
+    "LocalIpcErrorCode": {
+      "type": "string",
+      "description": "本机 IPC 协议级错误码闭集，不是 design §15.4 的同步错误码。S025 只有版本不兼容；需要新错误时先扩展本契约。",
+      "enum": [
+        "unsupported_version"
+      ]
+    },
+    "Request": {
+      "type": "object",
+      "description": "一次命令请求：请求身份、调用方使用的协议版本与命令负载。",
+      "required": [
+        "request_id",
+        "ipc_version",
+        "command"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "调用方生成的不透明请求标识；agent 原样回显，不解析内容、不据此授权。"
+        },
+        "ipc_version": {
+          "$ref": "#/$defs/IpcVersion",
+          "description": "调用方使用的 IPC 协议版本，agent 据此判定兼容性。"
+        },
+        "command": {
+          "$ref": "#/$defs/Command",
+          "description": "命令名与参数。"
+        }
+      }
+    },
+    "Response": {
+      "type": "object",
+      "description": "一次命令的应答：回显 request_id 与应答种类，ok 只带 result、error 只带 error。",
+      "required": [
+        "request_id",
+        "kind"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "回显请求的 request_id，用于把并发应答与请求配对。"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResponseKind",
+          "description": "应答种类，决定 result 与 error 哪个存在。"
+        },
+        "result": {
+          "$ref": "#/$defs/GetStatusResult",
+          "description": "kind 为 ok 时的命令结果。"
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorBody",
+          "description": "kind 为 error 时的错误主体。"
+        }
+      }
+    },
+    "ResponseKind": {
+      "type": "string",
+      "description": "应答种类：ok 只携带 result，error 只携带 error，两者恰有其一。",
+      "enum": [
+        "ok",
+        "error"
+      ]
+    }
+  }
+}

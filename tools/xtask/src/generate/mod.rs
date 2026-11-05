@@ -1,12 +1,14 @@
-//! 远端协议生成（`docs/design.md` §5.6、§5.12）：`api/openapi.yaml` → Rust DTO 与 TypeScript 客户端。
+//! 协议生成（`docs/design.md` §5.6、§5.12）：`api/openapi.yaml` → 远端 Rust DTO/TS 客户端，
+//! `api/local-ipc.schema.json` → 本机 IPC Rust DTO/TS 类型。
 //!
-//! 唯一编辑源是 [`CONFIG_PATH`] 指向的 `api/openapi.yaml`；本模块只负责把已冻结的 wire 契约翻译成
+//! 两份契约各有唯一编辑源，互不引用：远端 HTTP 契约是 OpenAPI，本机 IPC 契约是 JSON Schema，
+//! 服务器管理 API 与本机 IPC 因此不会悄悄合并成一套。本模块只负责把已冻结的 wire 契约翻译成
 //! 两侧代码，并保证“重新生成逐字节一致”。生成器刻意只支持契约当前用到的构造：遇到未支持的
-//! OpenAPI 关键字、未具名的内联对象、缺描述的字段都是错误退出，而不是猜一个默认值——静默降级
-//! 会把“契约里有、代码里没有”的问题拖到运行时。
+//! 关键字、未具名的内联对象、缺描述的字段都是错误退出，而不是猜一个默认值——静默降级会把
+//! “契约里有、代码里没有”的问题拖到运行时。
 //!
-//! `api/generation.toml` 声明生成器身份、配置格式版本、源文件、输出路径与类型映射；每次运行先
-//! 核对这些声明，配置与实现漂移就报错（避免出现过期的生成配置还以为在起作用）。
+//! `api/generation.toml` 声明生成器身份、配置格式版本、两份源文件、输出路径与类型映射；每次
+//! 运行先核对这些声明，配置与实现漂移就报错（避免出现过期的生成配置还以为在起作用）。
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -15,19 +17,22 @@ use std::path::Path;
 use crate::{EXIT_FAILURE, EXIT_OK, EXIT_USAGE, workspace_root};
 
 mod emit;
+mod local_ipc;
 
 /// 生成配置格式版本；与 `api/generation.toml` 的 `format_version` 核对。
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 /// 生成器名；与 `api/generation.toml` 的 `generator` 核对。
 const GENERATOR: &str = "vaultsyncd-xtask";
 /// 生成配置文件（相对 workspace 根）。
 const CONFIG_PATH: &str = "api/generation.toml";
 /// 当前唯一支持的 OpenAPI 文档版本。
 const OPENAPI_VERSION: &str = "3.1.0";
-/// 错误信封的 schema 名：所有非 2xx 响应都必须引用它。
+/// 错误信封请求的 schema 名：所有非 2xx 响应都必须引用它。
 const ERROR_SCHEMA: &str = "ErrorEnvelope";
-/// 生成文件表头里禁止手改的说明（两种语言共用同一句）。
-const DO_NOT_EDIT: &str = "本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。";
+/// OpenAPI 契约的引用前缀（JSON Schema 契约的引用前缀在 [`local_ipc`] 里）。
+const REF_PREFIX: &str = "#/components/schemas/";
+/// 当前唯一支持的 JSON Schema 文档元数据：只认 [`local_ipc::SCHEMA_DRAFT`]。
+const LOCAL_IPC_SCHEMA_DRAFT: &str = local_ipc::SCHEMA_DRAFT;
 
 /// `cargo xtask generate [--check]`。
 ///
@@ -60,13 +65,20 @@ pub(crate) fn verify() -> Result<(), String> {
     generate(true)
 }
 
-/// 读取配置与契约、生成三份代码，然后写入或比对。
+/// 生成文件表头里禁止手改的说明；`source` 是契约源路径（两份契约各自写明自己的源）。
+pub(super) fn do_not_edit(source: &str) -> String {
+    format!("本文件由 `cargo xtask generate` 从 `{source}` 生成，禁止手改。")
+}
+
+/// 读取配置与两份契约、生成全部代码，然后写入或比对。
 fn generate(check_only: bool) -> Result<(), String> {
     let root = workspace_root()?;
     let config = read_config(&root)?;
     let document = read_document(&root, &config)?;
     let model = Model::build(&document)?;
-    let outputs = emit::render(&config, &model);
+    let local_model = local_ipc::load(&root, &config)?;
+    let mut outputs = emit::render(&config, &model);
+    outputs.extend(emit::render_local_ipc(&config, &local_model));
 
     let mut changed = Vec::new();
     for (relative, content) in &outputs {
@@ -90,7 +102,7 @@ fn generate(check_only: bool) -> Result<(), String> {
             eprintln!("  不一致：{relative}");
         }
         return Err(format!(
-            "重新生成有 diff：{} 个文件与 api/openapi.yaml 不同步；运行 `cargo xtask generate` 后提交",
+            "重新生成有 diff：{} 个文件与契约源不同步；运行 `cargo xtask generate` 后提交",
             changed.len()
         ));
     }
@@ -129,10 +141,14 @@ pub(crate) struct GenerationConfig {
     pub(crate) generator: String,
     /// 生成器包版本，必须等于本二进制编译时的包版本。
     pub(crate) generator_version: String,
-    /// 契约源文件（相对 workspace 根）。
+    /// 远端契约源文件（相对 workspace 根）。
     pub(crate) source: String,
-    /// 契约声明的 OpenAPI 版本，必须与文档的 `openapi` 字段一致。
+    /// 远端契约声明的 OpenAPI 版本，必须与文档的 `openapi` 字段一致。
     pub(crate) openapi_version: String,
+    /// 本机 IPC 契约源文件（相对 workspace 根）。
+    pub(crate) local_ipc_source: String,
+    /// 本机 IPC 契约声明的 JSON Schema draft，必须与文档的 `$schema` 一致。
+    pub(crate) local_ipc_schema_draft: String,
     /// 生成代码路径。
     pub(crate) outputs: Outputs,
     /// wire 类型到目标语言的映射。
@@ -143,12 +159,16 @@ pub(crate) struct GenerationConfig {
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Outputs {
-    /// Rust DTO 文件。
+    /// 远端 Rust DTO 文件。
     pub(crate) rust: String,
-    /// TypeScript 类型与解码器文件。
+    /// 远端 TypeScript 类型与解码器文件。
     pub(crate) typescript_types: String,
-    /// TypeScript HTTP 端点调用文件。
+    /// 远端 TypeScript HTTP 端点调用文件。
     pub(crate) typescript_client: String,
+    /// 本机 IPC 的 Rust DTO 文件。
+    pub(crate) local_ipc_rust: String,
+    /// 本机 IPC 的 TypeScript 类型与解码器文件。
+    pub(crate) local_ipc_typescript_types: String,
 }
 
 /// 两种目标语言的映射表。
@@ -211,6 +231,12 @@ fn read_config(root: &Path) -> Result<GenerationConfig, String> {
         return Err(format!(
             "{CONFIG_PATH} 的 openapi_version 是 {}，本生成器支持 {OPENAPI_VERSION}",
             config.openapi_version
+        ));
+    }
+    if config.local_ipc_schema_draft != LOCAL_IPC_SCHEMA_DRAFT {
+        return Err(format!(
+            "{CONFIG_PATH} 的 local_ipc_schema_draft 是 {}，本生成器支持 {LOCAL_IPC_SCHEMA_DRAFT}",
+            config.local_ipc_schema_draft
         ));
     }
     Ok(config)
@@ -445,7 +471,7 @@ impl Model {
         let mut schemas = BTreeMap::new();
         for (name, raw) in &document.components.schemas {
             validate_schema_name(name)?;
-            schemas.insert(name.clone(), build_schema_def(name, raw)?);
+            schemas.insert(name.clone(), build_schema_def(name, raw, REF_PREFIX)?);
         }
 
         let mut operations = Vec::new();
@@ -480,35 +506,43 @@ impl Model {
 
     /// 校验所有具名引用都存在，避免生成引用不到的类型。
     fn validate_references(&self) -> Result<(), String> {
-        let check = |name: &str, context: &str| {
-            if self.schemas.contains_key(name) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "{context} 引用了未定义的 schema `{name}`（#/components/schemas/{name}）"
-                ))
-            }
-        };
-        for (name, def) in &self.schemas {
-            let SchemaDef::Struct { fields, .. } = def else {
-                continue;
-            };
-            for field in fields {
-                check_field_type(
-                    &field.ty,
-                    &format!("schema {name} 的字段 {}", field.wire),
-                    &check,
-                )?;
-            }
-        }
+        validate_schema_references(&self.schemas)?;
         for operation in &self.operations {
-            check(
-                &operation.success_type,
-                &format!("端点 {}", operation.operation_id),
-            )?;
+            if !self.schemas.contains_key(&operation.success_type) {
+                return Err(format!(
+                    "端点 {} 引用了未定义的 schema `{}`（{REF_PREFIX}{}）",
+                    operation.operation_id, operation.success_type, operation.success_type
+                ));
+            }
         }
         Ok(())
     }
+}
+
+/// 校验所有具名引用都存在，避免生成引用不到的类型。
+fn validate_schema_references(schemas: &BTreeMap<String, SchemaDef>) -> Result<(), String> {
+    let check = |name: &str, context: &str| {
+        if schemas.contains_key(name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "{context} 引用了未定义的 schema `{name}`（{REF_PREFIX}{name}）"
+            ))
+        }
+    };
+    for (name, def) in schemas {
+        let SchemaDef::Struct { fields, .. } = def else {
+            continue;
+        };
+        for field in fields {
+            check_field_type(
+                &field.ty,
+                &format!("schema {name} 的字段 {}", field.wire),
+                &check,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// 递归校验字段类型里的具名引用。
@@ -537,8 +571,9 @@ fn validate_schema_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 校验单个具名 schema。
-fn build_schema_def(name: &str, raw: &RawSchema) -> Result<SchemaDef, String> {
+/// 校验单个具名 schema。`ref_prefix` 是该契约格式的引用前缀（OpenAPI 的
+/// `#/components/schemas/` 或 JSON Schema 的 `#/$defs/`），两种契约共用同一份校验规则。
+fn build_schema_def(name: &str, raw: &RawSchema, ref_prefix: &str) -> Result<SchemaDef, String> {
     if raw.reference.is_some() {
         return Err(format!(
             "schema `{name}` 不能是纯 `$ref` 别名；请直接引用目标类型"
@@ -611,7 +646,7 @@ fn build_schema_def(name: &str, raw: &RawSchema) -> Result<SchemaDef, String> {
         validate_field_name(name, wire)?;
         let context = format!("schema `{name}` 的字段 `{wire}`");
         let mut doc = require_doc(&context, property.description.as_deref())?;
-        let ty = build_field_type(&context, property)?;
+        let ty = build_field_type(&context, property, ref_prefix)?;
         if matches!(ty, FieldType::Integer) {
             if property.minimum.is_some() || property.maximum.is_some() {
                 doc.push_str(&format!("（取值范围 {}）", integer_range(property)));
@@ -630,13 +665,11 @@ fn build_schema_def(name: &str, raw: &RawSchema) -> Result<SchemaDef, String> {
 }
 
 /// 校验字段类型的构造。
-fn build_field_type(context: &str, raw: &RawSchema) -> Result<FieldType, String> {
+fn build_field_type(context: &str, raw: &RawSchema, ref_prefix: &str) -> Result<FieldType, String> {
     if let Some(reference) = &raw.reference {
         let name = reference
-            .strip_prefix("#/components/schemas/")
-            .ok_or_else(|| {
-                format!("{context} 的 `$ref` 只支持 #/components/schemas/…：{reference}")
-            })?;
+            .strip_prefix(ref_prefix)
+            .ok_or_else(|| format!("{context} 的 `$ref` 只支持 {ref_prefix}…：{reference}"))?;
         return Ok(FieldType::Named(name.to_string()));
     }
     if raw.enum_values.is_some() {
@@ -667,6 +700,7 @@ fn build_field_type(context: &str, raw: &RawSchema) -> Result<FieldType, String>
             Ok(FieldType::Array(Box::new(build_field_type(
                 &format!("{context}[]"),
                 items,
+                ref_prefix,
             )?)))
         }
         Some("object") => {
@@ -680,7 +714,7 @@ fn build_field_type(context: &str, raw: &RawSchema) -> Result<FieldType, String>
                 .additional_properties
                 .as_ref()
                 .ok_or_else(|| format!("{context} 是 object 但没有 additionalProperties"))?;
-            let value_type = build_field_type(&format!("{context} 的值"), values)?;
+            let value_type = build_field_type(&format!("{context} 的值"), values, ref_prefix)?;
             match value_type {
                 FieldType::Text => Ok(FieldType::Map(Box::new(FieldType::Text))),
                 _ => Err(format!(
@@ -823,10 +857,10 @@ fn build_operation(
             .schema
             .reference
             .as_deref()
-            .and_then(|reference| reference.strip_prefix("#/components/schemas/"))
+            .and_then(|reference| reference.strip_prefix(REF_PREFIX))
             .ok_or_else(|| {
                 format!(
-                    "端点 {} 的状态码 {code} 必须引用具名 schema（$ref: #/components/schemas/…）",
+                    "端点 {} 的状态码 {code} 必须引用具名 schema（$ref: {REF_PREFIX}…）",
                     operation.operation_id
                 )
             })?;
