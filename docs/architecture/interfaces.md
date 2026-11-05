@@ -1539,11 +1539,14 @@ python3 tools/context.py --help
 | --- | --- |
 | `POST /v1/roots/{root}/uploads` | 建会话：`principal_from` → `authorize_root` → `plan_begin` → `uploads::begin_upload`（单次写事务）；201 返回 `UploadSession`；会话绑定签发它的登录会话，到期 24 小时 |
 | `GET /v1/roots/{root}/uploads/{upload}` | 会话状态 + **服务端真实已收块** + 缺失区间；Root 不符/不属于该登录会话 → 404 `UNSUPPORTED_ENTRY`（不泄露存在性） |
-| `PUT /v1/roots/{root}/uploads/{upload}/parts/{index}` | 块体 `application/octet-stream`、块摘要头 `x-part-sha256`；载荷上限 `max_chunk_size + 1`；成功 200 `UploadPartAck{already_present}` |
+| `PUT /v1/roots/{root}/uploads/{upload}/parts/{index}` | 块体 `application/octet-stream`、块摘要头 `x-part-sha256`（64 位小写十六进制，缺失或不合法 → 400 `INVALID_REQUEST`）；载荷上限 `max_chunk_size + 1`，由上传路由上的 `DefaultBodyLimit` 按策略设置（默认 16 MiB + 1，覆盖 Axum 自带的 2 MiB——否则默认块大小 4 MiB 无法上传）；成功 200 `UploadPartAck{already_present}` |
 
-失败映射：401 `AUTH_EXPIRED`、403 `ACCESS_DENIED`、404 `UNSUPPORTED_ENTRY`、400 `INVALID_REQUEST`
-（形状/越界索引/长度不符/超载荷）、409 `PART_CONFLICT`（同索引不同字节或会话已不接收块）、
-422 `HASH_MISMATCH`、503 `NEEDS_RECOVERY`、507 `INSUFFICIENT_STORAGE`。暂存落在
-`state_dir/uploads/<upload_id>/<index>`（临时文件 → fsync → rename → fsync 目录）。
-**已知缺口**：`x-part-sha256` 未进契约（生成器尚不支持 `in: header`）；`INVALID_REQUEST`/
-`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行。
+失败映射（S045-b 的 HTTP 验收用例 `apps/server/tests/uploads.rs` 逐条实测）：401 `AUTH_EXPIRED`、
+403 `ACCESS_DENIED`、404 `UNSUPPORTED_ENTRY`（会话不存在、Root 不符或**不属于该登录会话**）、
+400 `INVALID_REQUEST`（形状/越界索引/长度不符/缺或错的 `x-part-sha256`/超载荷）、
+409 `PART_CONFLICT`（同索引不同字节或会话已不接收块）、422 `HASH_MISMATCH`、
+413（请求体超过策略上限，由路由层在处理器之前返回，无错误信封）、503 `NEEDS_RECOVERY`、
+507 `INSUFFICIENT_STORAGE`。暂存落在 `state_dir/uploads/<upload_id>/<index>`（临时文件 → fsync →
+rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 都在写盘之前返回，不留暂存文件。
+**已知缺口**：`x-part-sha256` 仍未进 `api/openapi.yaml`（生成器只支持 `in: path`，header 参数
+支持待 S046）；`INVALID_REQUEST`/`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行。
