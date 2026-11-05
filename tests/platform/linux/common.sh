@@ -13,6 +13,7 @@ repo_root=$(cd "$script_dir/../../.." && pwd)
 TEST_VOLUME="$repo_root/tools/test-volume/test-volume.sh"
 LAB_ROOT=${VAULTSYNCD_LAB_ROOT:-/data/vaultsyncd-lab}
 ADMISSION_BIN="$repo_root/target/debug/examples/storage-admission"
+FILE_PUBLISH_BIN="$repo_root/target/debug/examples/file-publish"
 
 CASE_TOTAL=0
 CASE_FAILED=0
@@ -78,11 +79,32 @@ build_admission_bin() {
 	log "产物：$ADMISSION_BIN"
 }
 
-# run_admission <子命令与参数...>：结果写入 ADMISSION_OUT / ADMISSION_STATUS。
+build_file_publish_bin() {
+	step "构建 S014 原型命令（cargo build --locked --example file-publish）"
+	(
+		cd "$repo_root"
+		cargo build --locked -p vaultsyncd-platform-linux-server --example file-publish
+	)
+	[ -x "$FILE_PUBLISH_BIN" ] || die "缺少产物 $FILE_PUBLISH_BIN"
+	log "产物：$FILE_PUBLISH_BIN"
+}
+
+# run_admission <子命令与参数...>：结果写入 CMD_OUT / CMD_STATUS。
+# 同时保留 ADMISSION_OUT / ADMISSION_STATUS 别名，供 S013 脚本里的直接引用继续工作。
 run_admission() {
 	set +e
-	ADMISSION_OUT=$("$ADMISSION_BIN" "$@" 2>&1)
-	ADMISSION_STATUS=$?
+	CMD_OUT=$("$ADMISSION_BIN" "$@" 2>&1)
+	CMD_STATUS=$?
+	set -e
+	ADMISSION_OUT=$CMD_OUT
+	ADMISSION_STATUS=$CMD_STATUS
+}
+
+# run_file_publish <子命令与参数...>：结果写入 CMD_OUT / CMD_STATUS。
+run_file_publish() {
+	set +e
+	CMD_OUT=$("${FILE_PUBLISH_BIN:?先运行 build_file_publish_bin}" "$@" 2>&1)
+	CMD_STATUS=$?
 	set -e
 }
 
@@ -91,20 +113,20 @@ expect_decision() {
 	local label=$1 decision=$2 reason=${3:-} expected_status=${4:-}
 	local status_ok=1
 
-	[ -z "$expected_status" ] || [ "$ADMISSION_STATUS" = "$expected_status" ] || status_ok=0
+	[ -z "$expected_status" ] || [ "$CMD_STATUS" = "$expected_status" ] || status_ok=0
 	if [ "$status_ok" = 0 ]; then
-		fail_case "$label：期望退出码 $expected_status，实际 $ADMISSION_STATUS"
-		printf '%s\n' "$ADMISSION_OUT" >&2
+		fail_case "$label：期望退出码 $expected_status，实际 $CMD_STATUS"
+		printf '%s\n' "$CMD_OUT" >&2
 		return 0
 	fi
-	if ! grep -qx "decision=$decision" <<<"$ADMISSION_OUT"; then
+	if ! grep -qx "decision=$decision" <<<"$CMD_OUT"; then
 		fail_case "$label：期望 decision=$decision，实际输出："
-		printf '%s\n' "$ADMISSION_OUT" >&2
+		printf '%s\n' "$CMD_OUT" >&2
 		return 0
 	fi
-	if [ -n "$reason" ] && ! grep -qx "reason=$reason" <<<"$ADMISSION_OUT"; then
+	if [ -n "$reason" ] && ! grep -qx "reason=$reason" <<<"$CMD_OUT"; then
 		fail_case "$label：期望 reason=$reason，实际输出："
-		printf '%s\n' "$ADMISSION_OUT" >&2
+		printf '%s\n' "$CMD_OUT" >&2
 		return 0
 	fi
 	pass "$label（decision=$decision${reason:+, reason=$reason}）"
@@ -113,17 +135,17 @@ expect_decision() {
 # expect_line <label> <pattern>：输出里必须有一行匹配（grep -E）。
 expect_line() {
 	local label=$1 pattern=$2
-	if grep -Eq "$pattern" <<<"$ADMISSION_OUT"; then
+	if grep -Eq "$pattern" <<<"$CMD_OUT"; then
 		pass "$label"
 	else
 		fail_case "$label：输出缺少匹配 /$pattern/："
-		printf '%s\n' "$ADMISSION_OUT" >&2
+		printf '%s\n' "$CMD_OUT" >&2
 	fi
 }
 
 # field <key>：从最近一次输出里取 key=value 的 value（取第一行）。
 field() {
-	sed -n "s/^$1=//p" <<<"$ADMISSION_OUT" | head -n 1
+	sed -n "s/^$1=//p" <<<"$CMD_OUT" | head -n 1
 }
 
 # expect_field <label> <key> <期望值>
@@ -139,11 +161,11 @@ expect_field() {
 
 expect_status() {
 	local label=$1 expected=$2
-	if [ "$ADMISSION_STATUS" = "$expected" ]; then
+	if [ "$CMD_STATUS" = "$expected" ]; then
 		pass "$label（exit=$expected）"
 	else
-		fail_case "$label：期望退出码 $expected，实际 $ADMISSION_STATUS"
-		printf '%s\n' "$ADMISSION_OUT" >&2
+		fail_case "$label：期望退出码 $expected，实际 $CMD_STATUS"
+		printf '%s\n' "$CMD_OUT" >&2
 	fi
 }
 

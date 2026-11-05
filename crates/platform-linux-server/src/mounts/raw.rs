@@ -1,8 +1,11 @@
 //! Linux 内核 ABI 的最小 FFI 声明与只读查询调用。
 //!
-//! 只声明本卡真正用到的部分：`fstatfs(2)`、`statx(2)`、`ioctl(2)` 与三个只读 ioctl 请求
+//! 只声明真正用到的部分：`fstatfs(2)`、`statx(2)`、`ioctl(2)` 与三个只读 ioctl 请求
 //! （`FS_IOC_GETFLAGS`、`BTRFS_IOC_FS_INFO`、`BTRFS_IOC_INO_LOOKUP`）。本模块**没有**任何
 //! 修改状态的调用：不设置或清除 inode 标志（`FS_IOC_SETFLAGS` 未声明）、不改挂载、不写目录。
+//!
+//! S014 起 `files/` 复用这里的 [`statx_of_fd`] 取文件身份，因此模块对 crate 内可见
+//! （`pub(crate)`）；对外仍是私有实现细节。
 //!
 //! 结构体逐项对应 `linux/statfs.h`、`linux/statx.h`、`linux/fs.h` 与 `btrfs/ioctl.h` 的
 //! 64 位（LP64）布局，并用 `size_of`/`offset_of` 的 `const` 断言自检：布局一旦漂移就是编译
@@ -26,8 +29,18 @@ pub(crate) const O_PATH: i32 = 0o10_000_000;
 /// `AT_EMPTY_PATH`：让 `statx` 作用于已打开 fd 本身（`pathname` 传空串）。
 pub(crate) const AT_EMPTY_PATH: c_int = 0x1000;
 
+/// `STATX_MODE`：需要类型与权限位。
+pub(crate) const STATX_MODE: c_uint = 0x2;
+/// `STATX_NLINK`：需要硬链接数。
+pub(crate) const STATX_NLINK: c_uint = 0x4;
+/// `STATX_MTIME`：需要内容修改时间。
+pub(crate) const STATX_MTIME: c_uint = 0x40;
+/// `STATX_CTIME`：需要元数据变更时间。
+pub(crate) const STATX_CTIME: c_uint = 0x80;
 /// `STATX_INO`：需要 inode 号。
 pub(crate) const STATX_INO: c_uint = 0x100;
+/// `STATX_SIZE`：需要逻辑大小。
+pub(crate) const STATX_SIZE: c_uint = 0x200;
 /// `STATX_BTIME`：需要创建时间（btrfs 上有意义；不可用时由内核在 `stx_mask` 里说明）。
 pub(crate) const STATX_BTIME: c_uint = 0x800;
 /// `STATX_MNT_ID`：需要挂载 ID（内核 5.8 起；更旧内核会忽略该位并在 `stx_mask` 里缺席）。
@@ -283,7 +296,7 @@ pub(crate) struct StatFsFacts {
     pub statfs_fsid: [i32; 2],
 }
 
-/// 一次 `statx(AT_EMPTY_PATH)` 结果中本卡使用的字段。
+/// 一次 `statx(AT_EMPTY_PATH)` 结果中本 crate 使用的字段。
 pub(crate) struct StatxFacts {
     /// inode 号。
     pub inode: u64,
@@ -291,6 +304,16 @@ pub(crate) struct StatxFacts {
     pub dev_major: u32,
     /// 所在设备次号。
     pub dev_minor: u32,
+    /// 类型与权限位（`stx_mode`）。
+    pub mode: u16,
+    /// 硬链接数（多链接的可变文件并发覆写语义不一致，见 design §16.2）。
+    pub nlink: u32,
+    /// 逻辑大小（字节）。
+    pub size: u64,
+    /// 内容修改时间（秒、纳秒）。
+    pub mtime: (i64, u32),
+    /// 元数据变更时间（秒、纳秒）。
+    pub ctime: (i64, u32),
     /// 挂载 ID；内核未提供该字段时为 `None`。
     pub mnt_id: Option<u64>,
     /// 创建时间（秒、纳秒）；文件系统未提供时为 `None`。
@@ -336,7 +359,15 @@ pub(crate) fn statx_of_fd(fd: RawFd) -> io::Result<StatxFacts> {
             fd,
             c"".as_ptr(),
             AT_EMPTY_PATH,
-            STATX_INO | STATX_BTIME | STATX_MNT_ID | STATX_SUBVOL,
+            STATX_MODE
+                | STATX_NLINK
+                | STATX_MTIME
+                | STATX_CTIME
+                | STATX_INO
+                | STATX_SIZE
+                | STATX_BTIME
+                | STATX_MNT_ID
+                | STATX_SUBVOL,
             &raw mut buf,
         )
     };
@@ -362,6 +393,11 @@ pub(crate) fn statx_of_fd(fd: RawFd) -> io::Result<StatxFacts> {
         inode: buf.stx_ino,
         dev_major: buf.stx_dev_major,
         dev_minor: buf.stx_dev_minor,
+        mode: buf.stx_mode,
+        nlink: buf.stx_nlink,
+        size: buf.stx_size,
+        mtime: (buf.stx_mtime.tv_sec, buf.stx_mtime.tv_nsec),
+        ctime: (buf.stx_ctime.tv_sec, buf.stx_ctime.tv_nsec),
         mnt_id,
         btime,
         subvol_id,
@@ -457,6 +493,11 @@ mod tests {
         assert_eq!(O_PATH, 0o10_000_000);
         assert_eq!(AT_EMPTY_PATH, 0x1000);
         assert_eq!(STATX_SUBVOL, 0x8000);
+        assert_eq!(STATX_MODE, 0x2);
+        assert_eq!(STATX_NLINK, 0x4);
+        assert_eq!(STATX_MTIME, 0x40);
+        assert_eq!(STATX_CTIME, 0x80);
+        assert_eq!(STATX_SIZE, 0x200);
     }
 
     #[test]

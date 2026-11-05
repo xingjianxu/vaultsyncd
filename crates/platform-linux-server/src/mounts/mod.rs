@@ -2,7 +2,8 @@
 //!
 //! 模块划分：
 //!
-//! - [`raw`]（私有）：`fstatfs`/`statx`/`ioctl` 的最小 FFI 与三个只读请求（布局有 const 断言）。
+//! - [`raw`]（crate 内可见）：`fstatfs`/`statx`/`ioctl` 的最小 FFI 与三个只读请求（布局有
+//!   const 断言）；`files/` 复用其中的 `statx_of_fd` 取文件身份。
 //! - [`mountinfo`]：`/proc/self/mountinfo` 解析，纯逻辑。
 //! - [`paths`]：按路径分量判断关系，纯逻辑（design §16.1 不用字符串前缀）。
 //! - [`probe`]：打开目录句柄、读内核事实、遍历根目录，只读 I/O。
@@ -18,7 +19,7 @@ pub mod content;
 pub mod mountinfo;
 pub mod paths;
 pub mod probe;
-mod raw;
+pub(crate) mod raw;
 
 pub use admission::{
     AdmissionDecision, AdmissionInput, AdmissionOutcome, AdmissionRejection, BackendKind,

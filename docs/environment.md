@@ -743,3 +743,61 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - **旧内核**：没有 `STATX_SUBVOL` 的内核（如 Ubuntu 24.04 的 6.8）上，非 root 进程无法通过 `BTRFS_IOC_INO_LOOKUP` 取子卷 ID，会得到 `subvolume_identity_unavailable`；此时需要给服务进程 `CAP_SYS_ADMIN`，或让 Root 本身就是挂载点以便用 mountinfo 的 `subvolid=` 兜底。Ubuntu 24.04 未实测（首发兼容环境仍是待验证项，见 §8.2）。
 - **第三方 stub/占位**：Linux 上没有可依赖的统一判定；本轮只验证“稀疏文件不是占位证据”，没有也不能声称识别第三方 daemon 的占位/回源视图。
 - **可移植检查不覆盖本 crate**：`crates/platform-linux-server` 不在 `default-members`，`cargo xtask check`/CI 不构建它；必须显式 `cargo test --locked -p vaultsyncd-platform-linux-server` 或跑 `tests/platform/linux/` 脚本（与 `crates/platform-windows` 的分工一致）。
+
+## 16. S014 Linux 普通文件发布实测（2026-11-05）
+
+环境同 §15（`wks-lab`，内核 `7.3.0`，glibc 2.44）。验收脚本 `tests/platform/linux/run-file-publish.sh` 用 `tools/test-volume/test-volume.sh` 在 `/data/vaultsyncd-lab/runs/<run_id>/` 内建 `work`/`state` 两个兄弟子卷与 512 MiB loop btrfs 镜像（另一文件系统）；run `s014-final` 结果 `用例：100 项，失败 0 项`，退出码 0，清理后 `losetup -a`/`findmnt` 与开始时一致、run 目录已删除。
+
+### 16.1 内核能力实测（决定实现取舍）
+
+| 项目 | 实测结果 |
+| --- | --- |
+| `openat2(2)` | 可用：`resolve=openat2`；同一样本用 `--resolve walk`（逐段 `openat`+`O_NOFOLLOW`）得到**同一 inode**（257），两条路径行为一致 |
+| `ResolveMode` 回退条件 | 只有 `ENOSYS` 才回退（本机没有触发回退；`is_openat2_missing` 由单测锁定），`EPERM` 等原样上报 |
+| 符号链接 | `RESOLVE_NO_SYMLINKS` 对末段与中间段都返回 `ELOOP` → 输出 `reason=symlink_rejected`；逐段打开末段同样 `ELOOP`，中间段报 `ENOTDIR`（`resolve_failed`，同样 exit 3） |
+| 逃逸形式 | 相对路径含 `..` 与绝对路径在**系统调用之前**被纯逻辑拒绝（`reason=invalid_relative_path`），未进入内核解析 |
+| `renameat2(RENAME_NOREPLACE)` | 可用：目标已存在时返回 `EEXIST`，映射为 `decision=paused reason=target_appeared`，目标内容不变 |
+| 跨文件系统 `renameat2` | `/data` → loop 镜像返回 `EXDEV`，映射为 `reason=cross_device_rename`，目标未创建、源文件仍在原文件系统 |
+| `FICLONE`（btrfs 跨子卷） | `work` → `state`（不同子卷、同挂载）成功，`method=ficlone`、`filefrag -v` 报告共享 extent |
+| `FICLONE` 跨文件系统 | `/data` → loop 镜像返回 `Invalid cross-device link (os error 18)`，`method=verified_copy`、`fallback=exdev`、`reflink_error` 保留原文；复制后 `filefrag` 无共享 extent |
+| 挂载 ID 区分 | `work`/`state` 与对象目录同为挂载 68；loop 镜像为挂载 363，源/目标 `mount_id` 不同而 `staging_mount_id == target_mount_id` |
+| `fsync`（文件+目录） | `fsync` 暂存文件与目标目录均成功（`directory_fsynced=true`）；未做掉电测试 |
+| 文件权限 | 对象 `0444`（`stat -c %a` = `444`，当前用户追加写被拒绝），工作文件 `0644` |
+
+### 16.2 验收矩阵（`run-file-publish.sh`，run `s014-final`）
+
+| 步骤 | 结果 |
+| --- | --- |
+| `openat2` 与逐段打开 | 同一 inode；`hash` 子命令的 SHA-256 与 `sha256sum` 完全一致（4 MiB 随机样本） |
+| 同卷跨子卷采集 | `method=ficlone`、`fallback=none`、`mode=0444`、共享 extent 1 行、`staging_mount_id == target_mount_id`、`replaced=false` |
+| 外部改写工作文件（4 MiB 原地覆盖） | 对象 SHA-256 仍为改写前的值，且与改写前保存的副本 `cmp` 逐字节一致 |
+| 对象 → 工作文件（`--expect absent`） | `replaced=false`、`target_inode_before=none`、内容与对象一致 |
+| 按身份前提替换 | `replaced=true`、目标 inode 由 259 变为 260（换成暂存 inode），内容为新对象 |
+| 外部竞争（暂存前已变化） | exit 3、`reason=target_changed`、`changed_fields` 含 `inode`、无候选（尚未暂存）、目标未被覆盖 |
+| 外部竞争（暂存后、替换前经 `--race-hook` 注入 `mv`） | exit 3、`reason=target_changed`、`candidate=.vaultsyncd-stage.<pid>.<ns>.0` 保留且哈希等于源对象、目标仍是注入写入的 54321 字节 |
+| `--expect absent` 遇已存在目标 | exit 3、`reason=target_appeared`、目标内容不变 |
+| 跨文件系统采集/发布 | `method=verified_copy`、`fallback=exdev`、落盘字节与源一致、无共享 extent |
+| 跨设备 `rename` | exit 3、`reason=cross_device_rename`、目标未创建、源文件仍在 |
+| 符号链接（末段/中间段）、`..`、绝对路径 | 全部 fail-closed（exit 3） |
+| 重复采集已存在对象 | exit 3、`reason=target_appeared`、对象字节不变 |
+
+### 16.3 与 design/实施手册的核对
+
+- design §11.2 步骤 6（对象 → 目标子卷内 staging → 刷盘 → 受控替换、检测到冲突停止替换并保留候选）：`stage_for_publish` + `commit_staged` 两步实现，替换前二次核对，拒绝时保留候选。
+- design §11.5（优先 `FICLONE`；跨文件系统或能力不支持可退回完整复制并暴露原因；`EIO`/`ENOSPC`/权限错误不能伪装）：`classify_reflink_failure` 只让 `EXDEV` 与 `EOPNOTSUPP`/`ENOTTY`/`EINVAL` 退回，其余直接失败；`fallback=`/`reflink_error=` 输出原因。
+- design §11.1 / C37（不可变副本独立于可变工作文件）：外部改写后对象字节与 SHA-256 不变，且对象 `0444`。
+- design §16.1（运行时以根句柄为边界逐层安全访问）：所有操作按相对名称走 `openat2` 或逐段 `O_NOFOLLOW`，逃逸/符号链接/`.`/`..` 全部拒绝。
+- C33 / §12.2（不宣称消除非协作写入竞态）：输出与文档都只声明“观察到不一致就暂停并报告”，不声明检查后替换绝对原子。
+
+### 16.4 清理核对
+
+脚本结束时输出 `run 目录已删除`、`losetup -a 与开始时一致`、`findmnt 与开始时一致`、`cleanup status=0`。人工复核：`losetup -a` 为空、`findmnt` 无 `vaultsyncd-lab` 挂载、`/data/vaultsyncd-lab/runs` 不存在、`btrfs subvolume list /data | grep 'runs/s014'` 为 0 条。重跑 S013 的 `run-storage-admission.sh`（60/60）与 `run-reflink.sh`（7/7）确认共享脚本的改动没有回归（run `s014-regress-adm`/`s014-regress-reflink`）。
+
+### 16.5 限制与未核验项
+
+- **掉电/崩溃恢复未实测**：`fsync` 只验证返回成功；没有断电、`dm-flakey` 或强制卸载实验，也没有验证发布后崩溃时 `fs_intent` 重放（属后续卡）。
+- **替换与外部写入的窗口仍在**：`statx` 指纹无法证明外部程序不再写（C33）；特权写入者可以把 mtime/ctime 改回去。脚本用 `--race-hook` 注入竞争来验证“观察到不一致就暂停”，未做高速并发压力测试。
+- **暂存文件对观察者可见**：原型把暂存文件名放在目标目录内（`.vaultsyncd-stage.*`），用户/外部 watcher 在替换前可能看到该临时名；产品若需要隐藏，需在目标子卷内另建暂存目录（同挂载仍可原子 `rename`）。
+- **跨文件系统复制未做规模测试**：样本 4 MiB；未测大文件吞吐、`ENOSPC` 中途失败与部分写入的清理（`reflink_failed`/`staging_io_failed` 路径由单测覆盖，没有真实满盘样本）。
+- **对象只读的边界**：`0444` 只约束普通写入者；同用户仍可 `chmod`，root 可改写。真正的对象保护由部署权限/备份策略承担（design C37）。
+- **可移植检查不覆盖本 crate**：仍不在 `default-members`（同 §15.6）。

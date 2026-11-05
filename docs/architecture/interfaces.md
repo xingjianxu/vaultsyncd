@@ -276,13 +276,13 @@ python3 tools/context.py --help
 
 ## crates/platform-linux-server — Linux 服务端挂载准入（S013）
 
-状态：S013 实现 `mounts/`（挂载准入、文件系统身份、NOCOW 检查、根目录遍历）；`files/`（S014 起）、`watcher/`、`ipc/` 尚未实现。包名 `vaultsyncd-platform-linux-server`，**无第三方依赖**（内核 ABI 在 `mounts/raw.rs` 最小声明并带 `const` 布局断言），属于 workspace `members` 但**不在** `default-members`（只在 Linux 上编译）。宿主/服务端的可移植检查不会构建它，验证用 `cargo test --locked -p vaultsyncd-platform-linux-server` 与 `tests/platform/linux/` 的脚本。实测证据见 `docs/environment.md` §15。
+状态：S013 实现 `mounts/`（挂载准入、文件系统身份、NOCOW 检查、根目录遍历）；S014 实现 `files/`（受限读写、暂存、刷盘、受控替换，见后一节）；`watcher/`、`ipc/` 尚未实现。包名 `vaultsyncd-platform-linux-server`，**无第三方依赖**（内核 ABI 在 `mounts/raw.rs` 最小声明并带 `const` 布局断言），属于 workspace `members` 但**不在** `default-members`（只在 Linux 上编译）。宿主/服务端的可移植检查不会构建它，验证用 `cargo test --locked -p vaultsyncd-platform-linux-server` 与 `tests/platform/linux/` 的脚本。实测证据见 `docs/environment.md` §15。
 
 ### 模块与边界
 
 | 项目 | 契约 |
 | --- | --- |
-| `mounts::raw`（私有） | `fstatfs(2)`、`statx(2)`、`ioctl(2)` 与三个**只读**请求：`FS_IOC_GETFLAGS`、`BTRFS_IOC_FS_INFO`、`BTRFS_IOC_INO_LOOKUP`。`struct statfs`/`struct statx`/两个 btrfs 结构的 LP64 布局有 `size_of`/`offset_of` `const` 断言（编译期自检）。未声明任何设置标志、清理 NOCOW、改挂载的调用 |
+| `mounts::raw`（crate 内可见） | `fstatfs(2)`、`statx(2)`、`ioctl(2)` 与三个**只读**请求：`FS_IOC_GETFLAGS`、`BTRFS_IOC_FS_INFO`、`BTRFS_IOC_INO_LOOKUP`。`struct statfs`/`struct statx`/两个 btrfs 结构的 LP64 布局有 `size_of`/`offset_of` `const` 断言（编译期自检）。未声明任何设置标志、清理 NOCOW、改挂载的调用 |
 | `mounts::probe` | `probe_path`：`canonicalize` → `O_PATH|O_DIRECTORY|O_NOFOLLOW` 句柄 → `fstatfs`+`statx`（`STATX_INO`/`STATX_BTIME`/`STATX_MNT_ID`/`STATX_SUBVOL`）→ 第二个 `O_RDONLY` 句柄做 `ioctl` 并核对 inode 未变 → 按挂载 ID 关联本进程 `/proc/self/mountinfo` → btrfs 上取 FSID 与子卷 ID。`scan_root`：遍历目录找嵌套子卷与 NOCOW 目录。`inode_flags_of_path`：单文件/目录的 `FS_IOC_GETFLAGS` |
 | `mounts::mountinfo` | `/proc/self/mountinfo` 解析：挂载 ID、父 ID、`major:minor`、`root`、挂载点、每挂载选项、可选字段、fstype、源、超级块选项；还原 `\040`/`\011`/`\012`/`\134` 转义。坏行报错而不是跳过 |
 | `mounts::paths` | 按路径分量判 `Same`/`Ancestor`/`Descendant`/`Unrelated`；`/data/a` 与 `/data/abc` 无关（design §16.1 禁止字符串前缀判断） |
@@ -342,11 +342,11 @@ python3 tools/context.py --help
 
 | 脚本 | 行为 | 退出码 |
 | --- | --- | --- |
-| `common.sh` | 被两个脚本 source：`repo_root`、`require_dev_shell`（缺 cargo/btrfs/findmnt/losetup 即失败）、`require_sudo_noninteractive`（`sudo -n`）、`build_admission_bin`、`run_admission`、`expect_decision`/`expect_field`/`expect_line`/`expect_status`、`snapshot_mounts`/`snapshot_loops`、`umount_checked`/`umount_tolerant`。失败累加并继续，末尾 `summary` 非零 | — |
+| `common.sh` | 被三个脚本 source：`repo_root`、`require_dev_shell`（缺 cargo/btrfs/findmnt/losetup 即失败）、`require_sudo_noninteractive`（`sudo -n`）、`build_admission_bin`/`build_file_publish_bin`、`run_admission`/`run_file_publish`（结果统一写入 `CMD_OUT`/`CMD_STATUS`；`run_admission` 另保留 `ADMISSION_OUT`/`ADMISSION_STATUS` 别名）、`expect_decision`/`expect_field`/`expect_line`/`expect_status`、`snapshot_mounts`/`snapshot_loops`、`umount_checked`/`umount_tolerant`。失败累加并继续，末尾 `summary` 非零 | — |
 | `run-storage-admission.sh` | 用 `tools/test-volume/test-volume.sh create <run_id>` 建立 run 目录，再在**该 run 目录内**做真实样本：btrfs 子卷与 loop 卷接受；bind mount/符号链接/`..` 别名同存储；`/tmp`、`/dev/shm`、`/run`（tmpfs）、`/proc`、自建 overlay、64 MiB 稀疏镜像上的 ext4 拒绝；嵌套子卷、子挂载、NOCOW 目录（`chattr +C`）与 NOCOW 文件拒绝；内部状态目录重叠/跨文件系统拒绝、同卷另一子卷接受并记录备注；已注册 Root 的别名与重叠拒绝；8 MiB 稀疏文件与 1 MiB 随机文件的内容形态；用法/探测错误退出码 | 0 全部通过；1 有用例失败或清理失败 |
 | `run-reflink.sh` | 在 `/data` 卷上建两个兄弟子卷，`cp --reflink=always`（FICLONE）同卷跨子卷与同子卷克隆必须成功、`filefrag -v` 必须报告共享 extent；跨文件系统克隆必须失败（EXDEV）且不留目标文件；源改写后副本保持旧字节 | 同上 |
 
-清理与隔离要求（两个脚本共同）：
+清理与隔离要求（这三个脚本共同）：
 
 - 所有副本、loop、挂载、子卷只在 `runs/<run_id>/` 内；`create` 之后脚本把自己要写的目录 `chown` 给当前用户，子卷/挂载仍只用 `sudo -n`。
 - `trap cleanup EXIT` 逆序卸载挂载、detach 自建 loop、删除自建子卷与样本路径，最后调用 `test-volume.sh cleanup`（其条目白名单会拒绝任何未预期残留）。
@@ -358,3 +358,54 @@ python3 tools/context.py --help
 - 不把“取不到事实”当作通过：无法确认 FSID/子卷 ID、扫描被上限截断、`FS_IOC_GETFLAGS` 失败都返回拒绝或未完成，并保留原始错误。
 - 后端检查发生在服务进程自己的 mount namespace；容器内路径字符串不是后端类型证明。
 - 同一子卷的多个别名不重复计数；inode 与设备号都不单独作为身份。
+
+## crates/platform-linux-server — 普通文件发布原型（S014）
+
+状态：S014 在 `crates/platform-linux-server/src/files/` 落地受限目录句柄读写、目标文件系统内暂存、`FICLONE`/校验复制、文件与目录刷盘、受控替换与前提核对。包结构、挂载准入与身份规则见上一节（S013）。`watcher/`、`ipc/`、数据库与 `fs_intent` 仍属后续卡；本卡不含任何占位实现。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `files::raw`（crate 内可见） | `openat2`（`__NR_openat2=437`，经 `syscall(2)`）、`openat`、`renameat2`、`unlinkat`、`fsync`、`fchmod` 与 `FICLONE` ioctl 的最小声明；`struct open_how` 24 B 有 `size_of`/`offset_of` 断言，请求号与 `RESOLVE_*`/`RENAME_NOREPLACE` 有自检。errno 只做分类，不吞错 |
+| `files::restricted` | `RestrictedDir`：`O_RDONLY|O_DIRECTORY|O_NOFOLLOW` 根句柄 + `child_dir`/`open_path`（`O_PATH`）/`open_read`/`create_exclusive`（`O_CREAT|O_EXCL`）/`rename`/`unlink`/`fsync_dir`/`identity_at`/`mount_id`。`validate_relative_path` 是纯逻辑，拒绝空、绝对路径、`.`、`..`、空段、NUL、超长段/路径。解析优先 `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS)`：逃逸 → `escape_rejected`（`EXDEV`）、符号链接 → `symlink_rejected`（`ELOOP`）；仅 `ENOSYS` 回退逐段 `openat`+`O_NOFOLLOW`，`EPERM` 等不回退。`--resolve auto|openat2|walk` 可强制机制，输出 `resolve=openat2|component_walk` |
+| `files::identity` | `FileIdentity`（`dev_major`/`dev_minor`/`inode`/`btime`/`size`/`mtime`/`ctime`/`nlink`/`mode`/`mount_id`）来自 `statx(AT_EMPTY_PATH)`；`same_object` 只比设备+inode+btime，`changed_fields` 是完整指纹差异（纯逻辑）。`to_spec`/`parse_identity_spec` 是前提文件的唯一编解码（缺字段、重复字段、非法时间戳都报错）。`ExpectedTarget{Absent,Present}` + `check_target` → `Create`/`Replace`/`Refused{target_appeared,target_missing,target_changed}` |
+| `files::hash` | 零依赖 SHA-256（NIST 向量与流式边界自测）。用于校验复制的写入/读回比对与对象摘要，不用于任何认证 |
+| `files::clone` | `stage_copy`：暂存在**目标目录**内创建独占文件（因此与目标同挂载，创建后核对 `staging_mount_id == target_mount_id`）。`FICLONE` 成功 → `method=ficlone, fallback=none`；`EXDEV` → `method=verified_copy, fallback=exdev`；`EOPNOTSUPP`/`ENOTTY`/`EINVAL` → `method=verified_copy, fallback=unsupported`；`EIO`/`ENOSPC`/`EDQUOT`/权限错误 → `reflink_failed`，**不退回、不重试**。校验复制后 `fsync` 目标、读回比对长度与 SHA-256、对比源前后指纹（变化即 `source_changed`）。失败时删除未验证的暂存文件并报告删除结果（`staging_removed`/`cleanup_error`） |
+| `files::publish` | 两步 API：`stage_for_publish`（前提核对 → 暂存）与 `commit_staged`（替换前再核对 → `fchmod` → `renameat2` → `fsync` 目录 → 发布后核对身份/大小/权限）；`publish` 是两者的便捷组合。新建用 `RENAME_NOREPLACE`（内核在竞争时返回 `EEXIST` → `target_appeared`），替换用 0 旗标原子替换。前提不成立时目标不被修改，已建立的候选随错误返回（`RetainedCandidate`）。常量 `OBJECT_FILE_MODE=0o444`（对象只读）、`WORK_FILE_MODE=0o644` |
+
+### 原型命令 `file-publish`（example 目标）
+
+`crates/platform-linux-server/examples/file-publish.rs`，`cargo build --locked -p vaultsyncd-platform-linux-server --example file-publish`。角色目录在启动时 `canonicalize` 一次（模拟注册期处理），之后所有操作都以该目录句柄为边界。
+
+| 子命令 | 输入 | 行为 | 退出码 |
+| --- | --- | --- | --- |
+| `identity ROOT REL` | 相对名称 | 打印 `FileIdentity::to_spec()` + `resolve=` | 0；3 拒绝（不存在按 `not_found`） |
+| `hash ROOT REL` | 相对名称 | `decision=hashed`、`sha256=`、`bytes=`、`resolve=` | 0；3 拒绝 |
+| `capture --source-root DIR --source REL --object-root DIR --object REL` | 工作文件 → 内容对象 | 按 `capture_object` 发布（`mode=0444`、`--expect absent`），输出 `decision`、`method`、`fallback`、`reflink_error`、`sha256`、`bytes`、`mode`、`source_mount_id`/`target_mount_id`/`staging_mount_id`、`source_inode`、`target_inode_before`/`target_inode_after`、`replaced`、`directory_fsynced`、`staging_name` | 0 成功；3 拒绝（对象已存在等）；1 错误 |
+| `publish ... --target-dir REL --target-name NAME (--expect absent \| --expect-from FILE) [--race-hook CMD]` | 对象 → 工作文件 | `stage_for_publish` + `commit_staged`（`mode=0644`）；拒绝时打印 `decision=paused`、`reason`、`expected`/`observed`、`changed_fields`、`candidate`/`candidate_dir`/`candidate_sha256`。`--race-hook` 在两步之间执行一条命令，**仅用于验收外部竞争**，不是产品写入路径 | 0 发布；3 暂停；1 错误；2 用法 |
+| `rename --from-root DIR --from REL --to-root DIR --to REL [--noreplace]` | 两个目录句柄 | 直接调用 `renameat2`，跨文件系统返回 `cross_device_rename`（`EXDEV`），不留目标文件 | 0 已重命名；3 拒绝；1 错误 |
+| 全局 `--resolve auto\|openat2\|walk` | — | 选择解析机制并写入 `resolve=` | 2 未知取值 |
+
+### `tests/platform/linux/run-file-publish.sh`（S014）
+
+真实样本（`tools/test-volume/test-volume.sh create <run_id>`，全部在 `runs/<run_id>/` 内）：`work` 与 `state` 两个兄弟子卷 + loop btrfs 镜像（另一文件系统）。
+
+1. `openat2` 与 `--resolve walk` 得到同一 inode，`hash` 与 `sha256sum` 一致。
+2. 同卷跨子卷 `capture` → `method=ficlone`、`fallback=none`、`mode=0444`、`filefrag -v` 有共享 extent、追加写入对象被 `0444` 拒绝、`staging_mount_id == target_mount_id`。
+3. 外部改写工作文件后，对象 `sha256` 与字节不变（与改写前副本 `cmp` 一致）。
+4. 从对象发布新工作文件（`--expect absent`）与按身份前提替换已存在工作文件（`replaced=true`，目标换成暂存 inode）。
+5. 外部竞争两条失败路径：暂存前已变化 → 拒绝且无候选；暂存后、替换前的注入写入（`--race-hook`）→ `decision=paused`、`reason=target_changed`、候选保留且哈希与源对象一致、目标未被覆盖。`--expect absent` 遇到已存在目标 → `target_appeared`。
+6. 跨文件系统：`capture`/`publish` 走 `verified_copy` + `fallback=exdev`、`reflink_error` 保留 `EXDEV` 原文、源与目标挂载 ID 不同而暂存仍在目标挂载内、无共享 extent；跨设备 `rename` 返回 `cross_device_rename` 且源文件留在原文件系统。
+7. 符号链接（末段与中间段）、`..`、绝对路径全部 fail-closed。
+8. 重复采集已存在对象 → `target_appeared`，对象字节不变。
+
+清理与隔离同 S013 三个脚本的共同要求（子卷/挂载/loop 的 `trap cleanup`、`losetup -a` 与 `findmnt` 快照核对、`test-volume.sh cleanup` 条目白名单）。
+
+### 不变量
+
+- 暂存永远建在目标文件系统/挂载内；跨文件系统不靠一次 `rename` 完成，也不在源文件系统里暂存后跨设备 `rename`。
+- `EXDEV` 不被忽略也不被当作成功：走校验复制并在 `fallback=`/`reflink_error=` 里暴露；`EIO`/`ENOSPC`/权限错误不退回、不重试。
+- 内容原样保留：对象只读（`0444`）；拒绝替换时保留候选；未验证的暂存一律删除并报告删除结果。
+- 前提核对只覆盖“已观察到的身份/指纹”，不宣称消除与外部非协作写入之间的竞态（design §12.2 / C33）；检测到不一致就暂停并报告，不硬覆盖。
+- 受限访问 fail-closed：`openat2` 的 `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS` 或逐段 `O_NOFOLLOW`，逃逸/符号链接/`.`/`..` 都拒绝，且输出标明实际机制。
