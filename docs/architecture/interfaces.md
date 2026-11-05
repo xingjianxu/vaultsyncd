@@ -495,7 +495,7 @@ python3 tools/context.py --help
 
 | 模块 | 契约 |
 | --- | --- |
-| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
+| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`UserId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
 | `ids::IdParseError` | `Empty` / `Length(实际字节数)` / `NonHexDigit(0 基字节位置)`；长度不符时不继续逐字符检查，故 `0x…` 与带连字符 UUID 文本报 `Length` |
 | `ids::IdSource` | 随机字节端口 `fn next_id_bytes(&mut self) -> [u8; ID_LEN]`；领域层不取随机数，生产端在应用层接线，测试端可注入计数器 |
 | `version` | `DB_INTEGER_MAX = i64::MAX`；计数类型 `Revision`、`RootSeq`、`Generation`（`local_generation`）、`ServerEpoch` 各为 `u64` newtype，取值 `0..=DB_INTEGER_MAX`；接口 `ZERO`、`new`、`from_db_integer`、`to_db_integer`、`get`、`next`、`from_decimal`、`to_decimal`（`Display`/`FromStr` 同形式） |
@@ -514,6 +514,8 @@ python3 tools/context.py --help
 - 上限在构造、解析与递增三处都检查，不依赖调用方自觉；类型内部因此不可能持有超出 SQLite `INTEGER` 的值。
 - 生成身份必须经 `IdSource` 注入，领域层不含随机源或时钟，同一注入序列得到同一结果。
 - 拒绝即报错：空文本、正负号、前导零、非十六进制字符、超界数值都返回明确变体，不静默取默认值或截断。
+
+`UserId` 由 S027 追加：服务端 `users.id` 与 `roots.owner_id` 的账号身份（design §7.2、§17.1），与其它身份同为 16 字节 newtype，不与 `ServerId`/`RootId` 互换。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
 
@@ -736,7 +738,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `db::SERVER_APPLICATION_ID` | `0x56534E31`（ASCII `VSN1`），写入 `PRAGMA application_id`，是“这个文件是服务端库”的唯一标识；客户端库用另一个标识（由 `crates/client-store` 自己的卡定义） |
 | `db::MIGRATOR` | `sqlx::migrate!("./migrations")`，编译期内嵌 `crates/server-store/migrations/*.sql`；文件名 `<版本>_<描述>.sql`，版本单调递增，已发布文件不得改写（校验和不符即拒绝启动） |
-| `db::target_schema_version()` | 内嵌迁移的最大版本号（当前 `1`），即 `PRAGMA user_version` 的目标值；全部已知迁移成功后才写入 |
+| `db::target_schema_version()` | 内嵌迁移的最大版本号（当前 `2`：0001 迁移框架基线 + 0002 命名空间表），即 `PRAGMA user_version` 的目标值；全部已知迁移成功后才写入 |
 | `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`：迁移前一致性备份的位置，留给管理员整套恢复 |
 | `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非服务端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；任一步失败返回 `DbError` 且不给出可写句柄。父目录须已存在 |
 | `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
@@ -751,5 +753,41 @@ python3 tools/context.py --help
 - **备份**：仅在“确实有待执行迁移且库非空”时做，用 `VACUUM INTO`（读事务快照，含 `-wal` 里已提交的数据）+ `PRAGMA quick_check` 自检；同名备份已存在则保留不覆盖（更接近迁移前原始状态）。
 - **连接默认项**：`journal_mode=WAL`（打开后读回实际值校验，切换不到 WAL 就拒绝启动，覆盖 SMB/NFS/只读存储）、`foreign_keys=ON`、`busy_timeout=10 s`、池上限 4（只服务并发读；写由 `BEGIN IMMEDIATE` 串行化）。
 - **事务只包数据库**：文件系统 I/O、网络与等待不得放进写事务（design §6）。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
+
+## crates/server-store — 服务端命名空间表（S027）
+
+状态：S027 实现。表定义在 `crates/server-store/migrations/0002_namespace.sql`（`users`/`roots`/`entries`），读写接口在 `src/roots.rs`、`src/entries.rs`。不写 HTTP、不做挂载探测或路径 I/O；路径重叠与身份比较留给平台层（S032）与注册流程（S044）。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `roots::NewRoot` / `RootRecord` | 注册输入（`id`、`entry`、`owner`、`absolute_path`、`volume_identity`、`root_file_identity`、`epoch`）与读回记录（含 `health`、`seq`、`epoch`） |
+| `roots::RootHealth` | `Healthy` / `Unavailable`（数据库文本 `healthy` / `unavailable`）；挂载消失、身份不匹配、权限失败都是 `unavailable`，不推导删除 |
+| `roots::insert_root(tx, &NewRoot)` | 一个事务内写 `roots` 一行 + 该 Root 的合成根条目一行；返回读回的 `RootRecord` |
+| `roots::root_in_scope(conn, owner, id)` | 按 owner scope 读 Root；不属于该 owner 或不存在都返回 `None` |
+| `roots::roots_of_owner(conn, owner)` | 列出账号名下的 Root，按 `absolute_path` 排序 |
+| `roots::set_health(tx, owner, id, health)` | 只更新自己名下的 Root；0 行受影响返回 `OutOfScope` |
+| `roots::RootError` | `Db` / `InvalidPath{path,reason}` / `EmptyIdentity{field}` / `UnknownOwner{id}` / `DuplicatePath{path}` / `DuplicateId{id}` / `OutOfScope` / `Entry(EntryError)` / `MalformedRow{column}` |
+| `entries::NewEntry` / `EntryRecord` | 新建输入（`id`、`root`、`parent`、`name`、`name_key`、`kind`、`revision`、`content_version`）与读回记录（含 `deleted_at`） |
+| `entries::EntryKind` | `File` / `Directory`（数据库文本 `file` / `directory`） |
+| `entries::insert_entry(tx, owner, &NewEntry)` | 检查 owner scope、父目录、名称与同父唯一性后写一行；返回读回记录 |
+| `entries::move_entry(tx, owner, id, target_parent, name, name_key, revision)` | 同 Root 内移动/改名；检查目标父目录与目录环 |
+| `entries::soft_delete_entry(tx, owner, id, at)` | 写 `deleted_at`；目录仍有活跃子项时 `DirectoryNotEmpty` |
+| `entries::entry_in_scope` / `children` / `root_entry` | 只读查询（接收 `&mut SqliteConnection`，可直接用连接池）：按 owner scope 取单条（含已删）、取活跃子项（按 `name_key`、`name`、`id` 排序）、取合成根条目 |
+| `entries::EntryError` | `Db` / `OutOfScope` / `EntryNotFound{id}` / `ParentNotFound{id}` / `ParentNotDirectory{id}` / `CrossRootParent{entry_root,parent_root}` / `DuplicateName{parent,name}` / `DirectoryCycle{entry,parent}` / `DirectoryNotEmpty{id}` / `InvalidName{name,issue}` / `EmptyNameKey` / `DirectoryHasContentVersion` / `DuplicateId{id}` / `MalformedRow{column}` |
+
+### 表与不变量
+
+- **owner scope**：`roots.owner_id → users(id)` 外键；每个读写接口都带 `UserId`，不属于该 owner 的 Root/条目返回 `OutOfScope` 或 `None`，不区分“不存在”与“别人的”。
+- **父子同 Root**：`entries(root_id, parent_id) → entries(root_id, id)` 复合外键（引用目标由 `UNIQUE (root_id, id)` 提供），跨 Root 父项在 SQL 层即失败；写接口先给出 `CrossRootParent`。
+- **活跃同父名称唯一**：部分唯一索引 `(root_id, parent_id, name_key) WHERE deleted_at IS NULL` 与 `(root_id, parent_id, name) WHERE deleted_at IS NULL`；`name_key` 由调用方按平台等价规则派生（design §7.2，本层不小写、不归一化），名称索引兜住“名字完全一样却给了不同键”。软删除后名称可复用。
+- **一个 Root 一个合成根条目**：`(root_id) WHERE parent_id IS NULL AND deleted_at IS NULL` 部分唯一索引；根条目名称与比较键为空字符串、类型固定目录、`revision` 从 0 起。
+- **目录环**：移动时从目标父项沿 `parent_id` 向上走递归 CTE（`UNION` 去重，坏环也终止），命中被移动条目即 `DirectoryCycle`；自己当父项同样拒绝。
+- **路径与身份**：`roots.absolute_path` 全库唯一，形式检查为“非空、无 NUL、以 `/` 起始、不以 `/` 结尾”（根 `/` 例外），不用宿主 `Path::is_absolute`（本 crate 在 Windows 便携检查里也跑测试）；重叠/别名属 S032/S044。`volume_identity`/`root_file_identity` 是不透明非空字节。
+- **删除不级联**：本卡只软删单条并拒绝删除非空目录；子树删除与回收站属 S039。`entries.content_version_id` 暂只有长度与“目录无内容版本”约束，指向 `versions` 的外键要到 S028 建表后才能加。
+- **写事务**：写接口要求调用方已开 `BEGIN IMMEDIATE` 事务，检查与写入在同一次持锁事务内；只读接口不抢写锁。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
