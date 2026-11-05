@@ -234,6 +234,88 @@ export function decodeRefreshRequest(value: unknown): RefreshRequest {
   };
 }
 
+/**
+ * Root 健康状态闭集（design §7.2 `roots.health`）。`unavailable` 表示挂载、身份或权限
+ * 核对失败，该 Root 暂停同步但绝不据此推导删除。
+ */
+export type RootHealth = "healthy" | "unavailable";
+
+export const ROOT_HEALTH_VALUES = ["healthy", "unavailable"] as const;
+
+export function decodeRootHealth(value: unknown): RootHealth {
+  if (typeof value !== "string" || !(ROOT_HEALTH_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 RootHealth 取值：${JSON.stringify(value)}`);
+  }
+  return value as RootHealth;
+}
+
+/** 授权 Root 清单（design §15.2 `GET /v1/roots`）。 */
+export interface RootList {
+  /** 当前调用者可见的 Root，按身份顺序稳定排列。 */
+  roots: Array<RootSummary>;
+}
+
+export function decodeRootList(value: unknown): RootList {
+  const object = expect_object(value, "RootList");
+  return {
+    roots: expect_array(object.roots, "RootList.roots").map((item) => decodeRootSummary(item)),
+  };
+}
+
+/**
+ * 注册 Root 的输入（design §15.2 `POST /v1/admin/roots`）。这是少数接受服务器绝对路径
+ * 的网络接口之一，因此必须同时受允许基目录与存储准入约束。
+ */
+export interface RootRegisterRequest {
+  /** 服务端绝对路径；必须在部署配置的允许基目录内。 */
+  path: string;
+}
+
+export function decodeRootRegisterRequest(value: unknown): RootRegisterRequest {
+  const object = expect_object(value, "RootRegisterRequest");
+  return {
+    path: expect_string(object.path, "RootRegisterRequest.path"),
+  };
+}
+
+/** 注册结果（design §15.2）。 */
+export interface RootRegistered {
+  /** 注册时的健康状态。 */
+  health: RootHealth;
+  /**
+   * 该 Root 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Root 恒为
+   * true；采集完成后由后续的初始采集步骤推进。
+   */
+  pending_import: boolean;
+  /** 新 Root 的身份，32 个小写十六进制字符。 */
+  root_id: string;
+}
+
+export function decodeRootRegistered(value: unknown): RootRegistered {
+  const object = expect_object(value, "RootRegistered");
+  return {
+    health: decodeRootHealth(object.health),
+    pending_import: expect_boolean(object.pending_import, "RootRegistered.pending_import"),
+    root_id: expect_string(object.root_id, "RootRegistered.root_id"),
+  };
+}
+
+/** 一条授权 Root 的对外摘要；不含服务器绝对路径。 */
+export interface RootSummary {
+  /** 当前健康状态。 */
+  health: RootHealth;
+  /** Root 身份，32 个小写十六进制字符。 */
+  root_id: string;
+}
+
+export function decodeRootSummary(value: unknown): RootSummary {
+  const object = expect_object(value, "RootSummary");
+  return {
+    health: decodeRootHealth(object.health),
+    root_id: expect_string(object.root_id, "RootSummary.root_id"),
+  };
+}
+
 /** 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。 */
 export interface SessionIssued {
   /** 访问凭据到期时间（UTC Unix 秒的十进制文本）。 */
