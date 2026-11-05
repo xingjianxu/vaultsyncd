@@ -557,6 +557,10 @@ mod tests {
     const NAMESPACE_SQL: &str = include_str!("../migrations/0002_namespace.sql");
     /// 第二个已发布迁移的文件名。
     const NAMESPACE_FILE: &str = "0002_namespace.sql";
+    /// `migrations/0003_versions_events.sql`（S028 的对象/版本/批次/操作表），同样是已发布的真实内容。
+    const EVENTS_SQL: &str = include_str!("../migrations/0003_versions_events.sql");
+    /// 第三个已发布迁移的文件名。
+    const EVENTS_FILE: &str = "0003_versions_events.sql";
 
     /// 每个测试独占的临时目录，`Drop` 时删除（含 WAL 与备份文件）。
     struct TestDir {
@@ -605,11 +609,12 @@ mod tests {
         migrator(&dir.migrations(&[(BASELINE_FILE, BASELINE_SQL)])).await
     }
 
-    /// 本二进制当前的迁移集合（0001 + 0002 的真实内容），用于“下一步才多出一版”的场景。
+    /// 本二进制当前的迁移集合（0001 + 0002 + 0003 的真实内容），用于“下一步才多出一版”的场景。
     async fn current_migrator(dir: &TestDir) -> Migrator {
         migrator(&dir.migrations(&[
             (BASELINE_FILE, BASELINE_SQL),
             (NAMESPACE_FILE, NAMESPACE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
         ]))
         .await
     }
@@ -667,15 +672,15 @@ mod tests {
         assert_eq!(database.schema_version(), target_schema_version());
         assert_eq!(
             target_schema_version(),
-            2,
-            "内嵌迁移应当是 0001 与 0002 两版"
+            3,
+            "内嵌迁移应当是 0001、0002 与 0003 三版"
         );
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 2);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 3);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -686,7 +691,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            2
+            3
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -698,7 +703,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 2);
+        assert_eq!(reopened.schema_version(), 3);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1019,15 +1024,16 @@ mod tests {
         insert_metadata(&old, "server_id", "abcd").await;
         old.close().await;
 
-        // 0003 成功、0004 失败：迁移集只完成了前半段。
+        // 0004 成功、0005 失败：迁移集只完成了前半段。
         let partial_dir = dir.migrations(&[
             (BASELINE_FILE, BASELINE_SQL),
             (NAMESPACE_FILE, NAMESPACE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
             (
-                "0003_probe.sql",
+                "0004_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
-            ("0004_broken.sql", "CREATE TABLE broken ("),
+            ("0005_broken.sql", "CREATE TABLE broken ("),
         ]);
         let partial = migrator(&partial_dir).await;
         let error = Database::open_with(&path, &partial)
@@ -1050,8 +1056,8 @@ mod tests {
             matches!(
                 refused,
                 DbError::SchemaTooNew {
-                    found: 3,
-                    supported: 2
+                    found: 4,
+                    supported: 3
                 }
             ),
             "实际错误 {refused:?}"
@@ -1061,22 +1067,22 @@ mod tests {
                 .await
                 .expect_err("本二进制同样不得写更新过的 schema")
                 .to_string()
-                .contains("schema 版本 3"),
+                .contains("schema 版本 4"),
             "错误信息应给出实际版本"
         );
 
-        // 拒绝写入时不改动库：0003 的表与记账仍在，标记仍是 2，数据完好。
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 2);
+        // 拒绝写入时不改动库：0004 的表与记账仍在，标记仍是 3，数据完好。
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 3);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "abcd".to_owned())]
         );
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM _sqlx_migrations").await,
-            3
+            4
         );
 
-        // 备份是 0003 之前的状态：可用于整套恢复。
+        // 备份是 0004 之前的状态：可用于整套恢复。
         assert_eq!(
             scalar::<i64>(
                 &backup,
@@ -1099,8 +1105,9 @@ mod tests {
         let next_dir = dir.migrations(&[
             (BASELINE_FILE, BASELINE_SQL),
             (NAMESPACE_FILE, NAMESPACE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
             (
-                "0003_probe.sql",
+                "0004_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]);
@@ -1116,13 +1123,13 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 3,
-                    supported: 2
+                    found: 4,
+                    supported: 3
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 3);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 4);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "abcd".to_owned())]

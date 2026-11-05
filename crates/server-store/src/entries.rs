@@ -164,6 +164,11 @@ pub enum EntryError {
     EmptyNameKey,
     /// 目录带了内容版本。
     DirectoryHasContentVersion,
+    /// 引用的内容版本还没有被记录：新建条目时不能直接指向一个不存在的版本。
+    UnknownContentVersion {
+        /// 请求的版本身份。
+        version: VersionId,
+    },
     /// 条目身份已被占用。
     DuplicateId {
         /// 冲突的条目身份。
@@ -203,6 +208,9 @@ impl std::fmt::Display for EntryError {
             }
             Self::EmptyNameKey => f.write_str("名称比较键为空"),
             Self::DirectoryHasContentVersion => f.write_str("目录不能带内容版本"),
+            Self::UnknownContentVersion { version } => {
+                write!(f, "内容版本 {version} 还没有被记录到该条目")
+            }
             Self::DuplicateId { id } => write!(f, "条目身份 {id} 已被占用"),
             Self::MalformedRow { column } => write!(f, "数据库列 {column} 的值不符合类型前提"),
         }
@@ -246,6 +254,9 @@ pub async fn insert_entry(
         return Err(EntryError::ParentNotDirectory { id: new.parent });
     }
     validate_child_fields(&new.name, &new.name_key, new.kind, new.content_version)?;
+    if let Some(version) = new.content_version {
+        require_recorded_version(tx, new.root, new.id, version).await?;
+    }
 
     let inserted = sqlx::query(
         "INSERT INTO entries \
@@ -592,6 +603,51 @@ fn validate_child_fields(
         return Err(EntryError::DirectoryHasContentVersion);
     }
     Ok(())
+}
+
+/// 把条目的当前内容版本指针改成给定版本；只由 [`crate::versions::record_version`] 调用。
+///
+/// 指针的可信来源只有一个：版本行在同一事务里先写入 `versions`（它引用已持久化的内容对象与已记录
+/// 的事件批次），再把条目指过去。因此本函数不做存在性检查——存在性由调用方已完成的写入保证；
+/// 其它路径想写这一列，必须先有一个版本。
+pub(crate) async fn set_current_content_version(
+    tx: &mut Transaction<'_, Sqlite>,
+    entry: EntryId,
+    version: VersionId,
+) -> Result<(), EntryError> {
+    let updated = sqlx::query("UPDATE entries SET content_version_id = ?1 WHERE id = ?2")
+        .bind(version.as_bytes().as_slice())
+        .bind(entry.as_bytes().as_slice())
+        .execute(&mut **tx)
+        .await
+        .map_err(EntryError::Db)?;
+    if updated.rows_affected() != 1 {
+        return Err(EntryError::EntryNotFound { id: entry });
+    }
+    Ok(())
+}
+
+/// 确认给定版本已经被记录到该 Root 的该条目（新建条目写入内容版本前的核对）。
+///
+async fn require_recorded_version(
+    conn: &mut SqliteConnection,
+    root: RootId,
+    entry: EntryId,
+    version: VersionId,
+) -> Result<(), EntryError> {
+    let found: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT id FROM versions WHERE id = ?1 AND root_id = ?2 AND entry_id = ?3",
+    )
+    .bind(version.as_bytes().as_slice())
+    .bind(root.as_bytes().as_slice())
+    .bind(entry.as_bytes().as_slice())
+    .fetch_optional(conn)
+    .await
+    .map_err(EntryError::Db)?;
+    match found {
+        Some(_) => Ok(()),
+        None => Err(EntryError::UnknownContentVersion { version }),
+    }
 }
 
 /// 身份列长度检查：BLOB 列可能被外部写入短值，读到就明确报坏行，不截断、不补零。
@@ -1229,6 +1285,28 @@ mod tests {
             matches!(error, EntryError::EmptyNameKey),
             "实际错误 {error:?}"
         );
+        // 新建条目不能直接指向一个还没记录的版本（版本必须先引用已存在的条目）。
+        let unrecorded = VersionId::from_bytes([0x42; ID_LEN]);
+        let error = insert_entry(
+            &mut tx,
+            owner,
+            &NewEntry {
+                id: entry(0x34),
+                root,
+                parent: root_dir,
+                name: "note.txt".to_owned(),
+                name_key: "note.txt".to_owned(),
+                kind: EntryKind::File,
+                revision: rev(1),
+                content_version: Some(unrecorded),
+            },
+        )
+        .await
+        .expect_err("未记录的内容版本必须拒绝");
+        assert!(
+            matches!(error, EntryError::UnknownContentVersion { version } if version == unrecorded),
+            "实际错误 {error:?}"
+        );
         tx.commit().await.expect("提交（失败不应留下改动）");
         assert_eq!(snapshot(&database, root).await, before, "只应有根条目");
         database.close().await;
@@ -1304,9 +1382,9 @@ mod tests {
             .expect("写 schema 版本");
         conn.close().await.expect("关闭旧库连接");
 
-        // 本二进制打开它：0002 建命名空间表，旧数据保留，迁移前备份落在同目录。
+        // 本二进制打开它：0002 建命名空间表、0003 建对象/版本/批次/操作表，旧数据保留，迁移前备份落在同目录。
         let database = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(database.schema_version(), 2);
+        assert_eq!(database.schema_version(), 3);
         let mut conn = database.pool().acquire().await.expect("取连接");
         let value: String =
             sqlx::query_scalar("SELECT value FROM store_metadata WHERE key = 'server_id'")
@@ -1316,15 +1394,27 @@ mod tests {
         assert_eq!(value, "fixture");
         let tables: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('users', 'roots', 'entries') ORDER BY name",
+             AND name IN ('users', 'roots', 'entries', 'objects', 'versions', 'changes', 'operations') \
+             ORDER BY name",
         )
         .fetch_all(&mut *conn)
         .await
         .expect("列出新表");
-        assert_eq!(tables, vec!["entries", "roots", "users"]);
+        assert_eq!(
+            tables,
+            vec![
+                "changes",
+                "entries",
+                "objects",
+                "operations",
+                "roots",
+                "users",
+                "versions"
+            ]
+        );
         drop(conn);
         assert!(
-            crate::db::migration_backup_path(&path, 1, 2).exists(),
+            crate::db::migration_backup_path(&path, 1, 3).exists(),
             "非空库升级前应有备份"
         );
 

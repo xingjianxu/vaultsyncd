@@ -197,6 +197,15 @@ opaque_id! {
     OpId
 }
 
+opaque_id! {
+    /// 服务端事务批次身份：一次提交产生的事件批次带同一个 `TxId`（design §7.2 `changes.tx_id`、
+    /// §9.3「每批含 RootSeq、TxId」）。
+    ///
+    /// 它只用于把同一次提交的批次与日志关联起来，不承担幂等键职责——幂等由
+    /// (`RootId`, `DeviceId`, `OpId`) 决定。
+    TxId
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +244,7 @@ mod tests {
         check_identity_type!(VersionId);
         check_identity_type!(DeviceId);
         check_identity_type!(OpId);
+        check_identity_type!(TxId);
     }
 
     #[test]

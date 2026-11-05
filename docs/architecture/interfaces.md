@@ -495,7 +495,7 @@ python3 tools/context.py --help
 
 | 模块 | 契约 |
 | --- | --- |
-| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`UserId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
+| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`UserId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId`、`TxId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
 | `ids::IdParseError` | `Empty` / `Length(实际字节数)` / `NonHexDigit(0 基字节位置)`；长度不符时不继续逐字符检查，故 `0x…` 与带连字符 UUID 文本报 `Length` |
 | `ids::IdSource` | 随机字节端口 `fn next_id_bytes(&mut self) -> [u8; ID_LEN]`；领域层不取随机数，生产端在应用层接线，测试端可注入计数器 |
 | `version` | `DB_INTEGER_MAX = i64::MAX`；计数类型 `Revision`、`RootSeq`、`Generation`（`local_generation`）、`ServerEpoch` 各为 `u64` newtype，取值 `0..=DB_INTEGER_MAX`；接口 `ZERO`、`new`、`from_db_integer`、`to_db_integer`、`get`、`next`、`from_decimal`、`to_decimal`（`Display`/`FromStr` 同形式） |
@@ -516,6 +516,8 @@ python3 tools/context.py --help
 - 拒绝即报错：空文本、正负号、前导零、非十六进制字符、超界数值都返回明确变体，不静默取默认值或截断。
 
 `UserId` 由 S027 追加：服务端 `users.id` 与 `roots.owner_id` 的账号身份（design §7.2、§17.1），与其它身份同为 16 字节 newtype，不与 `ServerId`/`RootId` 互换。
+
+`TxId` 由 S028 追加：一次服务端提交产生的事件批次所带的身份（design §7.2 `changes.tx_id`、§9.3），只用于把同一提交的批次与日志关联；幂等键是 (`RootId`, `DeviceId`, `OpId`)，不是 `TxId`。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
 
@@ -738,7 +740,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `db::SERVER_APPLICATION_ID` | `0x56534E31`（ASCII `VSN1`），写入 `PRAGMA application_id`，是“这个文件是服务端库”的唯一标识；客户端库用另一个标识（由 `crates/client-store` 自己的卡定义） |
 | `db::MIGRATOR` | `sqlx::migrate!("./migrations")`，编译期内嵌 `crates/server-store/migrations/*.sql`；文件名 `<版本>_<描述>.sql`，版本单调递增，已发布文件不得改写（校验和不符即拒绝启动） |
-| `db::target_schema_version()` | 内嵌迁移的最大版本号（当前 `2`：0001 迁移框架基线 + 0002 命名空间表），即 `PRAGMA user_version` 的目标值；全部已知迁移成功后才写入 |
+| `db::target_schema_version()` | 内嵌迁移的最大版本号（当前 `3`：0001 迁移框架基线 + 0002 命名空间表 + 0003 对象/版本/批次/操作表），即 `PRAGMA user_version` 的目标值；全部已知迁移成功后才写入 |
 | `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`：迁移前一致性备份的位置，留给管理员整套恢复 |
 | `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非服务端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；任一步失败返回 `DbError` 且不给出可写句柄。父目录须已存在 |
 | `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
@@ -777,7 +779,7 @@ python3 tools/context.py --help
 | `entries::move_entry(tx, owner, id, target_parent, name, name_key, revision)` | 同 Root 内移动/改名；检查目标父目录与目录环 |
 | `entries::soft_delete_entry(tx, owner, id, at)` | 写 `deleted_at`；目录仍有活跃子项时 `DirectoryNotEmpty` |
 | `entries::entry_in_scope` / `children` / `root_entry` | 只读查询（接收 `&mut SqliteConnection`，可直接用连接池）：按 owner scope 取单条（含已删）、取活跃子项（按 `name_key`、`name`、`id` 排序）、取合成根条目 |
-| `entries::EntryError` | `Db` / `OutOfScope` / `EntryNotFound{id}` / `ParentNotFound{id}` / `ParentNotDirectory{id}` / `CrossRootParent{entry_root,parent_root}` / `DuplicateName{parent,name}` / `DirectoryCycle{entry,parent}` / `DirectoryNotEmpty{id}` / `InvalidName{name,issue}` / `EmptyNameKey` / `DirectoryHasContentVersion` / `DuplicateId{id}` / `MalformedRow{column}` |
+| `entries::EntryError` | `Db` / `OutOfScope` / `EntryNotFound{id}` / `ParentNotFound{id}` / `ParentNotDirectory{id}` / `CrossRootParent{entry_root,parent_root}` / `DuplicateName{parent,name}` / `DirectoryCycle{entry,parent}` / `DirectoryNotEmpty{id}` / `InvalidName{name,issue}` / `EmptyNameKey` / `DirectoryHasContentVersion` / `UnknownContentVersion{version}` / `DuplicateId{id}` / `MalformedRow{column}` |
 
 ### 表与不变量
 
@@ -787,7 +789,55 @@ python3 tools/context.py --help
 - **一个 Root 一个合成根条目**：`(root_id) WHERE parent_id IS NULL AND deleted_at IS NULL` 部分唯一索引；根条目名称与比较键为空字符串、类型固定目录、`revision` 从 0 起。
 - **目录环**：移动时从目标父项沿 `parent_id` 向上走递归 CTE（`UNION` 去重，坏环也终止），命中被移动条目即 `DirectoryCycle`；自己当父项同样拒绝。
 - **路径与身份**：`roots.absolute_path` 全库唯一，形式检查为“非空、无 NUL、以 `/` 起始、不以 `/` 结尾”（根 `/` 例外），不用宿主 `Path::is_absolute`（本 crate 在 Windows 便携检查里也跑测试）；重叠/别名属 S032/S044。`volume_identity`/`root_file_identity` 是不透明非空字节。
-- **删除不级联**：本卡只软删单条并拒绝删除非空目录；子树删除与回收站属 S039。`entries.content_version_id` 暂只有长度与“目录无内容版本”约束，指向 `versions` 的外键要到 S028 建表后才能加。
+- **删除不级联**：本卡只软删单条并拒绝删除非空目录；子树删除与回收站属 S039。`entries.content_version_id` 的填写规则见 S028：新建时写入的内容版本必须已记录到该条目（`UnknownContentVersion`），当前版本指针只由 `versions::record_version` 改写；指向 `versions` 的外键仍待 `entries` 重建表时再加（判据见 S028 一节）。
 - **写事务**：写接口要求调用方已开 `BEGIN IMMEDIATE` 事务，检查与写入在同一次持锁事务内；只读接口不抢写锁。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
+
+## crates/server-store — 版本、事件与幂等表（S028）
+
+状态：S028 实现。表定义在 `crates/server-store/migrations/0003_versions_events.sql`（`objects`/`versions`/`changes`/`operations`），读写接口在 `src/versions.rs`、`src/changes.rs`、`src/operations.rs`，schema 目标版本随之为 `3`。不写 HTTP/SSE、不算哈希、不做文件系统 I/O：哈希与对象落盘由平台层完成后再交给本层（design §11.2）。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `changes::ChangeBatch` | 一条事务批次：`root`、`seq`（`RootSeq`，从 1 起）、`tx`（`TxId`）、`events_json`（非空 JSON 数组文本）、`created_at` |
+| `changes::append_change(tx, owner, root, tx_id, events_json, at)` | 读 `roots.seq` → 比较并写推进（`WHERE seq = 旧值`）→ 插入批次行；返回分配到的批次。`events_json` 不是非空 JSON 数组时 `InvalidEvents` |
+| `changes::changes_after(conn, owner, root, after, limit)` | 按 `seq > after` 升序取批次，`limit ∈ 1..=MAX_CHANGE_PAGE(500)`；每行是一整批，分页不拆批。Root 不在 owner scope 内返回 `OutOfScope`（不返回空列表） |
+| `changes::ChangeError` | `Db` / `OutOfScope` / `SeqExhausted` / `SeqConflict{root,expected}` / `InvalidEvents` / `InvalidLimit` / `MalformedRow{column}` |
+| `versions::NewObject` / `ObjectRecord` | 已持久化并校验过的内容对象：`root`、`hash`（SHA-256 32 B）、`size`、`storage_path`、`verified_at`，记录另带 `gc_state` |
+| `versions::ObjectGcState` | `Live` / `Collectable`（数据库文本 `live` / `collectable`）；更细的 GC 阶段属对象回收卡 |
+| `versions::record_object(tx, owner, &NewObject)` | 同一 `(root, hash)` 以相同长度与路径重复登记是幂等的（返回库里记录）；长度或路径不同 `ObjectConflict`；路径被别的对象占用 `DuplicateStoragePath` |
+| `versions::object_in_scope(conn, owner, root, hash)` | 按内容哈希读对象（含已标记回收的）；owner scope 不匹配返回 `None` |
+| `versions::NewVersion` / `VersionRecord` | 新版本输入（`id`、`root`、`entry`、`object_hash`、`size`、`created_seq`、`origin`、`at`）与读回记录（含 `superseded_at`） |
+| `versions::VersionOrigin` | `Client` / `External`（数据库文本 `client` / `external`）；首次同步导入记 `Client`，服务端采集的外部变更记 `External`（design I14 同一流程） |
+| `versions::record_version(tx, owner, &NewVersion)` | 核对条目（活跃文件）→ 对象（存在且长度一致）→ 批次（存在）→ 取代旧当前版本 → 插入新版本 → 改写条目当前版本指针；全部在调用方事务内 |
+| `versions::current_version` / `version_history` | 当前版本（`superseded_at IS NULL`）与历史清单（新的在前，`limit ∈ 1..=MAX_VERSION_PAGE(500)`，已删除条目的历史仍可读） |
+| `versions::VersionError` | `Db` / `OutOfScope` / `EntryNotFound{id}` / `NotAFile{id}` / `UnknownObject{hash}` / `ContentSizeMismatch{version_size,object_size}` / `SeqNotRecorded{seq}` / `ObjectConflict{hash,reason}` / `EmptyStoragePath` / `DuplicateStoragePath{path}` / `CurrentVersionConflict{entry}` / `DuplicateId{id}` / `SizeAboveDbLimit{size}` / `InvalidLimit` / `MalformedRow{column}` / `Entry(EntryError)` |
+| `operations::OperationKey` | 幂等键 `root` + `device`(`DeviceId`) + `op`(`OpId`)；数据库主键 `(root_id, device_id, op_id)` |
+| `operations::request_digest(fields)` | 由语义字段算 SHA-256：拒绝空/重复字段名，按字段名排序后以长度前缀编码（值长度 `u64` BE、名长度 `u32` BE）并加固定语义版本前缀。字段顺序无关，语义不同则摘要不同。调用方传语义值（规范十进制计数、身份原始字节），**不传**原始请求字节或 JSON |
+| `operations::NewOperation` / `BeginOperation` / `OperationRecord` | 开始输入（键 + 摘要）；结果 `Started`（首次，已写 `pending`）或 `Replayed(OperationRecord)`（同键同摘要，直接返回记录）；记录含 `digest`、`state`、`result_json`、`root_seq`、`intent_path` |
+| `operations::OperationState` | `Pending` / `Committed` / `Rejected`（数据库文本 `pending` / `committed` / `rejected`）；后两者是终态且有稳定结果 |
+| `operations::begin_operation(tx, owner, &NewOperation)` | 首次写 `pending`；同键同摘要返回 `Replayed`；同键不同摘要 `DigestMismatch` |
+| `operations::attach_intent(tx, owner, &key, path)` | 记下工作目录发布意图位置（design §11.2 步骤 5）；仅 `pending` 可改，空路径 `EmptyIntentPath` |
+| `operations::commit_operation(tx, owner, &key, tx_id, events_json, result_json, at)` | design §11.2 步骤 7 的元数据完成事务：追加事件批次（推进 `RootSeq`）并把操作写成 `committed` + `result_json` + `root_seq`，同一事务提交。已终态报 `AlreadyFinished` |
+| `operations::reject_operation(tx, owner, &key, result_json)` | 稳定拒绝：写 `rejected` + 结果，不推进 `RootSeq`；重试得到同一结果 |
+| `operations::operation_in_scope(conn, owner, &key)` | 按幂等键读记录（用于 `GET /v1/roots/{root}/operations/{op}`）；owner scope 不匹配返回 `None` |
+| `operations::discard_finished_operations(tx, owner, root, device)` | 设备代际失效时删除该设备的**终态**记录，返回行数；`pending` 记录保留 |
+| `operations::OperationError` | `Db` / `OutOfScope` / `UnknownOperation{key}` / `DigestMismatch{key}` / `AlreadyFinished{key,state}` / `EmptyRequestField` / `DuplicateRequestField{name}` / `RequestFieldTooLong{name_len}` / `DuplicateOperation{key}` / `InvalidResult{reason}` / `EmptyIntentPath` / `Change(ChangeError)` / `MalformedRow{column}` |
+| `operations::{REQUEST_DIGEST_LEN, MAX_RESULT_BYTES}` | 请求摘要 32 字节；紧凑结果上限 4096 字节 |
+
+### 表与不变量
+
+- **版本只引用已持久化内容**：`versions(root_id, object_hash) → objects(root_id, hash)`；`objects` 只在内容落盘且校验后才登记（`verified_at NOT NULL`），长度不一致在写入前报 `ContentSizeMismatch`（design I01/I05）。
+- **版本只属于已记录的批次**：`versions(root_id, created_seq) → changes(root_id, seq)`；`operations(root_id, root_seq) → changes(root_id, seq)`（`pending`/`rejected` 的 `root_seq` 为 NULL，复合外键对含 NULL 行不生效）。
+- **RootSeq 单调、批次不可拆**：`changes` 一行就是一批事件，`(root_id, seq)` 主键；追加时用比较并写推进 `roots.seq`，失败报 `SeqConflict` 而不是自增。回滚的事务既不暴露批次也不消耗序号（下一批仍从原 seq+1 开始）。
+- **历史只读**：触发器 `versions_history_is_immutable` 拒绝改写版本的标识与内容引用（design I12），唯一可改的是 `superseded_at`；`objects_content_reference_is_immutable` 同理拒绝改写对象的内容地址证据。恢复历史要写新版本并让它成为当前版本。
+- **每个条目至多一个当前版本**：部分唯一索引 `(root_id, entry_id) WHERE superseded_at IS NULL`；`record_version` 先取代旧当前版本再插入新行。
+- **条目当前版本指针**：`entries.content_version_id` 只由 `versions::record_version` 改写（`pub(crate) entries::set_current_content_version`）；新建条目时若给了内容版本，必须先已记录到该条目（`EntryError::UnknownContentVersion`），否则会留下悬空指针。**未**重建 `entries` 加 `content_version_id → versions(id)` 外键：SQLite 追加外键只能重建表，而 `entries` 与 `versions` 互为引用（循环外键）需要在迁移事务里 `PRAGMA defer_foreign_keys`；本卡用“唯一写入路径 + 写入前存在性核对”达到同样的可见保证，待 `entries` 因其它原因重建时再补该外键。
+- **pending 不是 committed**：`operations` 的 CHECK 保证 `pending` 不带结果、不占 `root_seq`；`committed` 必须有 `root_seq` 与结果；`rejected` 有结果但无 `root_seq`。
+- **紧凑结果保留规则**：只有终态保存 `result_json`，必须是 JSON object 且 ≤ 4096 字节；记录与结果保留到相应设备代际失效（design §7.2、§9.4），届时用 `discard_finished_operations` 删除终态记录；`pending` 不删，否则同一 `op_id` 会被当成新命令重新执行。
+- **owner scope**：所有接口都带 `UserId`，经 `roots.owner_id` 判定；`changes_after` 与 `version_history` 对越权 Root 报错而不是返回空列表，避免把权限失败误当成“已追平”。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
