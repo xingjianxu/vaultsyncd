@@ -565,6 +565,10 @@ mod tests {
     const TRANSFERS_SQL: &str = include_str!("../migrations/0004_uploads_intents_leases.sql");
     /// 第四个已发布迁移的文件名。
     const TRANSFERS_FILE: &str = "0004_uploads_intents_leases.sql";
+    /// `migrations/0005_trash.sql`（S039 的回收站清单与墓碑），同样是已发布的真实内容。
+    const TRASH_SQL: &str = include_str!("../migrations/0005_trash.sql");
+    /// 第五个已发布迁移的文件名。
+    const TRASH_FILE: &str = "0005_trash.sql";
 
     /// 每个测试独占的临时目录，`Drop` 时删除（含 WAL 与备份文件）。
     struct TestDir {
@@ -620,6 +624,7 @@ mod tests {
             (NAMESPACE_FILE, NAMESPACE_SQL),
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
+            (TRASH_FILE, TRASH_SQL),
         ]))
         .await
     }
@@ -675,17 +680,13 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(
-            target_schema_version(),
-            4,
-            "内嵌迁移应当是 0001、0002、0003 与 0004 四版"
-        );
+        assert_eq!(target_schema_version(), 5, "内嵌迁移应当是 0001—0005 五版");
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 4);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -696,7 +697,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            4
+            5
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -708,7 +709,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 4);
+        assert_eq!(reopened.schema_version(), 5);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1036,10 +1037,10 @@ mod tests {
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0005_probe.sql",
+                "0006_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
-            ("0006_broken.sql", "CREATE TABLE broken ("),
+            ("0007_broken.sql", "CREATE TABLE broken ("),
         ]);
         let partial = migrator(&partial_dir).await;
         let error = Database::open_with(&path, &partial)
@@ -1062,8 +1063,8 @@ mod tests {
             matches!(
                 refused,
                 DbError::SchemaTooNew {
-                    found: 5,
-                    supported: 4
+                    found: 6,
+                    supported: 5
                 }
             ),
             "实际错误 {refused:?}"
@@ -1073,22 +1074,22 @@ mod tests {
                 .await
                 .expect_err("本二进制同样不得写更新过的 schema")
                 .to_string()
-                .contains("schema 版本 5"),
+                .contains("schema 版本 6"),
             "错误信息应给出实际版本"
         );
 
-        // 拒绝写入时不改动库：0004 的表与记账仍在，标记仍是 3，数据完好。
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 4);
+        // 拒绝写入时不改动库：0005 的表与记账仍在，标记仍是 5，数据完好。
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "abcd".to_owned())]
         );
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM _sqlx_migrations").await,
-            5
+            6
         );
 
-        // 备份是 0005 之前的状态：可用于整套恢复。
+        // 备份是 0006 之前的状态：可用于整套恢复。
         assert_eq!(
             scalar::<i64>(
                 &backup,
@@ -1114,7 +1115,7 @@ mod tests {
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0005_probe.sql",
+                "0006_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]);
@@ -1130,13 +1131,13 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 5,
-                    supported: 4
+                    found: 6,
+                    supported: 5
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "abcd".to_owned())]
