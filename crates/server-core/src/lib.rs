@@ -16,6 +16,9 @@
 //! - [`recovery`] 按持久阶段与工作目录现场给出恢复结论，并在启动时先执行恢复、再开放写入口
 //!   （design §11.3、I13）。
 //!
+//! - [`observer`] 是外部目录的初始稳定采集（design §12.1—12.2）：有界且可续扫的目录枚举、按指纹的稳定
+//!   窗口、私有候选采集与采纳。枚举读不到不等于不存在，本模块从不推导删除；采纳不写工作目录。
+//!
 //! - [`api`] 是远端 API 的用例规则：Root 注册的允许基目录与存储准入口径（design §11.4），
 //!   以及配置阶段拒绝的对外错误码（design §15.2）。
 //!
@@ -32,6 +35,7 @@ pub mod auth;
 pub mod commit;
 pub mod history;
 pub mod objects;
+pub mod observer;
 pub mod ports;
 pub mod recovery;
 
