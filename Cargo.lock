@@ -1623,6 +1623,10 @@ dependencies = [
 [[package]]
 name = "vaultsyncd-server-core"
 version = "0.1.0"
+dependencies = [
+ "tokio",
+ "vaultsyncd-domain",
+]
 
 [[package]]
 name = "vaultsyncd-server-store"
@@ -1633,6 +1637,7 @@ dependencies = [
  "tokio",
  "vaultsyncd-domain",
  "vaultsyncd-fs-common",
+ "vaultsyncd-server-core",
 ]
 
 [[package]]

@@ -1,15 +1,22 @@
 [package]
 name = "vaultsyncd-server-core"
-description = "服务端用例核心：不可变内容对象的写入/读取规则与服务端端口契约（docs/design.md §5.4、§11.1—11.2、I12）"
+description = "服务端用例核心：不可变内容对象的写入/读取规则、提交意图状态机与恢复判定（docs/design.md §5.4、§11.1—11.3、I12）"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-# 本 crate 只做规则与顺序编排，不直接访问文件系统（design §5.5）：字节操作全部由
-# `crate::ports::object_store::ObjectBlobPort` 的适配器实现。因此这里没有第三方依赖，
+# 本 crate 只做规则与顺序编排，不直接访问文件系统（design §5.5）：字节操作由
+# `ports::object_store::ObjectBlobPort`/`ports::target::TargetPort` 的适配器实现，意图持久化由
+# `ports::intent_log::IntentLog` 的实现（服务端存储层）负责。身份与时间戳只在 crates/domain 定义
+# （design §5.4、§7.1），这里直接用它的类型，不另造一套 id/时间表示。除 domain 外没有第三方依赖，
 # 也不依赖平台适配层，任何宿主目标都能编译与测试。
 [lints]
 workspace = true
 
 [dependencies]
+vaultsyncd-domain = { path = "../domain" }
+
+[dev-dependencies]
+# 意图状态机是异步端口（服务端存储层是异步 SQLx）：测试用 `#[tokio::test]` 驱动内存假端口。
+tokio = { version = "1", features = ["macros", "rt"] }

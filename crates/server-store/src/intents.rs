@@ -961,4 +961,162 @@ mod tests {
         tx.rollback().await.expect("回滚");
         database.close().await;
     }
+
+    /// 提交状态机写出的 before/after 证据必须穿过真实 `fs_intents` 表，并在每个阶段按同一编码还原。
+    ///
+    /// 恢复只读数据库行与工作目录现场（design §11.3），所以“库里那段 JSON 能否还原成 typed 证据”
+    /// 是本表与 S034 状态机之间的契约，必须在真实迁移与 CHECK 约束下验证，而不是只测编码函数。
+    #[tokio::test]
+    async fn put_evidence_written_by_the_commit_state_machine_round_trips_at_every_phase() {
+        use vaultsyncd_server_core::commit::intent::{
+            NewPutIntent, PutIntent, PutPhase, TargetAfter, TargetBefore, TargetSnapshot,
+        };
+        use vaultsyncd_server_core::objects::ContentDigest;
+        use vaultsyncd_server_core::ports::object_store::FileKey;
+
+        use crate::test_support::entry;
+
+        const HEX_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+        const HEX_B: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+        /// 按核心的编码还原一条意图：这是恢复路径实际要做的事。
+        fn decode(stored: &FsIntent) -> PutIntent {
+            PutIntent {
+                intent_id: stored.intent_id,
+                root: stored.root,
+                target_path: stored.target_path.clone(),
+                staging_path: stored.staging_path.clone().expect("put 意图必须记暂存名"),
+                before: TargetBefore::from_json(&stored.expected_before).expect("before 可还原"),
+                after: TargetAfter::from_json(&stored.desired_after).expect("after 可还原"),
+                phase: PutPhase::from_text(stored.phase.as_text()).expect("阶段文本与核心一致"),
+            }
+        }
+
+        let dir = TestDir::new("intents-put-evidence");
+        let path = dir.database();
+        let database = open_database(&dir).await;
+        let owner = seed_owner(&database, 0x11).await;
+        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+
+        let after = TargetAfter {
+            digest: ContentDigest::from_hex(HEX_A).expect("测试摘要"),
+            size: 5,
+        };
+        let create = NewPutIntent {
+            intent_id: intent_id(0x41),
+            root,
+            target_path: "docs/note.txt".to_owned(),
+            staging_path: "put-0041".to_owned(),
+            before: TargetBefore::Absent,
+            after,
+        };
+        // 覆盖形态：前提带完整的现场证据（条目、revision、内容、文件身份）。
+        let overwrite = NewPutIntent {
+            intent_id: intent_id(0x42),
+            root,
+            target_path: "docs/old.txt".to_owned(),
+            staging_path: "put-0042".to_owned(),
+            before: TargetBefore::Present(TargetSnapshot {
+                entry: entry(0x51),
+                revision: 7,
+                digest: ContentDigest::from_hex(HEX_B).expect("测试摘要"),
+                identity: FileKey {
+                    device: 7,
+                    inode: 41,
+                    links: 1,
+                    bytes: 9,
+                },
+            }),
+            after,
+        };
+
+        let mut tx = database.begin_write().await.expect("开始写事务");
+        for (new, marker) in [(&create, 0x41u8), (&overwrite, 0x42)] {
+            let record = begin_intent(
+                &mut tx,
+                owner,
+                &NewFsIntent {
+                    intent_id: new.intent_id,
+                    root,
+                    kind: FsIntentKind::PutContent,
+                    target_path: new.target_path.clone(),
+                    staging_path: Some(new.staging_path.clone()),
+                    expected_before: new.before.to_json(),
+                    desired_after: new.after.to_json(),
+                },
+                at(100 + i64::from(marker - 0x41)),
+            )
+            .await
+            .expect("核心编码写入 prepared");
+            assert_eq!(record.phase, FsIntentPhase::Prepared);
+        }
+        tx.commit().await.expect("提交");
+
+        // prepared：两种 before 形态都能从库里还原成与提交时相同的 typed 证据。
+        let mut conn = database.pool().acquire().await.expect("取连接");
+        for new in [&create, &overwrite] {
+            let stored = intent_in_scope(&mut conn, owner, new.intent_id)
+                .await
+                .expect("读意图")
+                .expect("意图仍在");
+            assert_eq!(stored.kind, FsIntentKind::PutContent);
+            assert_eq!(decode(&stored), new.prepared());
+        }
+
+        // published / finalized：阶段文本必须与核心的 `PutPhase` 一一对应，证据文本不变。
+        for (step, (next, expected)) in [
+            (FsIntentPhase::Published, PutPhase::Published),
+            (FsIntentPhase::Finalized, PutPhase::Finalized),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut tx = database.begin_write().await.expect("开始写事务");
+            advance_intent_phase(
+                &mut tx,
+                owner,
+                create.intent_id,
+                next,
+                at(110 + step as i64),
+            )
+            .await
+            .expect("推进阶段");
+            tx.commit().await.expect("提交");
+            let stored = intent_in_scope(&mut conn, owner, create.intent_id)
+                .await
+                .expect("读意图")
+                .expect("意图仍在");
+            assert_eq!(decode(&stored).phase, expected);
+            assert_eq!(decode(&stored).after, after);
+        }
+        drop(conn);
+        database.close().await;
+
+        // 重启后证据仍在：已收尾的不在待恢复清单里，未完成的覆盖意图可按核心编码还原现场前提。
+        let database = Database::open(&path).await.expect("重启后打开库");
+        let mut conn = database.pool().acquire().await.expect("取连接");
+        assert_eq!(
+            decode(
+                &intent_in_scope(&mut conn, owner, create.intent_id)
+                    .await
+                    .expect("读意图")
+                    .expect("收尾的意图仍是证据")
+            )
+            .phase,
+            PutPhase::Finalized
+        );
+        let unfinished = unfinished_intents(&mut conn, owner, root)
+            .await
+            .expect("列出未完成意图");
+        assert_eq!(
+            unfinished
+                .iter()
+                .map(|intent| intent.intent_id)
+                .collect::<Vec<_>>(),
+            vec![overwrite.intent_id]
+        );
+        assert_eq!(decode(&unfinished[0]).before, overwrite.before);
+        drop(conn);
+        database.close().await;
+    }
 }
