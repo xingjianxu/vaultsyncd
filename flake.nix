@@ -11,8 +11,9 @@
   outputs =
     { nixpkgs, ... }:
     let
-      # 首发仅 Linux 服务端/控制面在 Nix 内构建；Windows 客户端由 S009 用 rustup 与 MSVC
-      # 固定同一 Rust 版本，不在本 flake 做交叉编译，因此这里不列 Windows 系统。
+      # 首发仅 Linux 服务端/控制面在 Nix 内构建；按 design ADR-013（2026-11-05），Windows
+      # 客户端改为在本 NixOS 宿主交叉编译、Windows 客体只做原生运行验收，交叉工具链由
+      # S009 补齐并锁定。这里仍只导出 x86_64-linux（交叉目标不是 flake 的 system 列表）。
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
@@ -53,6 +54,26 @@
           shellHook = ''
             # 未加额外 overlay：锁定 nixpkgs 已提供上述全部能力。
             export VAULTSYNCD_DEV_SHELL=1
+          '';
+        };
+
+        # S008：Windows 客体实验室专用 shell（`nix develop .#quickemu`）。与 default 分开，
+        # 避免把 QEMU/Virtualisation 依赖塞进日常开发环境；版本同样由 flake.lock 固定。
+        # xorriso/wimlib/p7zip 用于核对 install.wim 版本与重打 unattended.iso。
+        quickemu = pkgs.mkShell {
+          name = "vaultsyncd-quickemu";
+          packages = [
+            pkgs.quickemu
+            pkgs.qemu
+            pkgs.xorriso
+            pkgs.wimlib
+            pkgs.p7zip
+            pkgs.openssh
+            pkgs.curl
+          ];
+
+          shellHook = ''
+            export VAULTSYNCD_QUICKEMU_SHELL=1
           '';
         };
       });

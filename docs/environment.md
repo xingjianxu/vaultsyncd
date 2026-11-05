@@ -430,3 +430,117 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - **依赖非交互 sudo**：`losetup`/`mkfs.btrfs`/`mount`/`umount`/`btrfs subvolume` 需要 root；当前主机 `sudo -n` 可用（`(ALL:ALL) NOPASSWD`），若换到不允许免密 sudo 的环境，脚本会立即失败并提示，不提供交互回退。
 - **未做挂载参数持久化**：`create` 只做临时挂载，不写 `/etc/fstab`；重启后 loop 挂载与子卷不会自动恢复，需要重新 `create`。
 - **dev/test/正式实例目录仍未创建**：§11.4 只给出互斥规划与检查，实际创建属于 S026/S095/S097；`/var/lib` 上的专用子卷建议同样未实施。
+
+## 12. S008 Windows 11 实验室客体（2026-11-05 实测）
+
+采集位置：`/wrd/prj/vaultsyncd/.worktrees/s008-s010`（分支 `feat/S008-S010-windows-lab`，基线 `c18029a`），VM 目录 `/data/vaultsyncd-lab/win-lab/`（源码之外）。操作说明的唯一入口是 `docs/operations/windows-lab.md`，模板与引导脚本在 `tools/windows-lab/`。本节只记录本轮实测事实与证据。
+
+### 12.1 分工与边界
+
+按 design ADR-013 与实施手册 §2.6（2026-11-05 用户决定）：Windows 客户端与测试程序在 NixOS 宿主交叉编译、前端在宿主构建，客体只承担**原生运行、调试、安装升级与 CFAPI/GUI 验收**；客体不默认安装 Rust、Visual Studio/C++ Build Tools、Windows SDK、Node/pnpm。交叉工具链由 S009 落实并验证，本节不声称交叉编译能力已就绪。
+
+### 12.2 quickemu devShell（新增）
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 入口 | `flake.nix` 新增 `devShells.x86_64-linux.quickemu`（derivation `vaultsyncd-quickemu`），与 `default` 分开 |
+| 包集合 | quickemu、qemu、xorriso、wimlib、p7zip、openssh、curl，全部来自 `flake.lock` 固定的 nixpkgs rev `1d060086d60cb76a40cf37109f979d88a5bd6396` |
+| 版本 | quickemu 4.9.9；`QEMU emulator version 11.1.2`；`xorriso 1.5.8.pl02`；`wimlib-imagex 1.14.5`；`OpenSSH_10.6p1`；`curl 8.22.0` |
+| 验证命令 | `nix develop .#quickemu --command bash -c 'quickemu --version; qemu-system-x86_64 --version | head -2; xorriso --version | head -2; wimlib-imagex --version | head -1'` → 退出码 0 |
+| 默认 shell 不受影响 | `nix develop --command bash -c 'cargo check --locked'` 仍退出 0（见 §12.8） |
+| 未装宿主全局包 | 未 `nix profile install`、未改 `/etc/nixos`、未执行 `nixos-rebuild` |
+
+`nix develop .#quickemu` 的 `shellHook` 只导出 `VAULTSYNCD_QUICKEMU_SHELL=1`；不改动默认 devShell 的包集合或 hook。
+
+### 12.3 VM 位置与目录
+
+| 项目 | 实测结果 |
+| --- | --- |
+| VM 根 | `/data/vaultsyncd-lab/win-lab/`（`/data` 为 `/dev/sdc1[/@data]` btrfs，`subvolid=256`，可用 22 TiB，`rw,noatime,compress=zstd:1`） |
+| 与 S007 隔离 | S007 的 lab 根同为 `/data/vaultsyncd-lab`，使用 `runs/<run_id>/`；VM 使用 `win-lab/` 子目录，两者不重叠 |
+| 不在 Git 内 | 仓库 `.gitignore` 已忽略 `/artifacts/`、`/var/`、`/.worktrees/`；VM 根本来就在源码树之外，`git status` 不含任何镜像/凭据 |
+| 凭据 | `secrets/lab-credentials.txt`（0600，目录 0700）、`ssh/vaultsyncd-lab_ed25519`（0600）；口令不写入仓库文档 |
+| 关键状态笔记 | `logs/`（下载/启动日志）、`windows-11/windows-11.log`（qemu stderr）、`windows-11/windows-11.sh`（quickemu 生成的完整 qemu 命令行） |
+
+### 12.4 ISO 来源与校验
+
+| 项目 | 实测结果 |
+| --- | --- |
+| `quickget windows 11` 消费者 ISO | 失败：`WARNING! Microsoft blocked the automated download request based on your IP address.`（本机出口 country_code=CN）。命令本身仍退出 0，并生成 `windows-11.conf`、`windows-11/unattended/{autounattend.xml,*.msi}`、`windows-11/unattended.iso`，但 `windows-11/` 下没有 Windows ISO |
+| 替代镜像 | 微软 Evaluation Center 官方 Windows 11 Enterprise 评估版：`https://go.microsoft.com/fwlink/?linkid=2382600` → 302 → `https://software-static.download.prss.microsoft.com/dbazure/26300.9457.260913-1737.26h2_ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_en-us.iso`；HEAD 200，`Content-Length: 8225329152`，`Accept-Ranges: bytes` |
+| 下载与校验 | `curl -fL --retry 5 --continue-at -`，2026-11-05T09:02—09:16Z，8,225,329,152 字节；sha256 `bc3f24086ebadc94489066b5ad78089e2cf5c3491e90e790bb81a2b199c10e38` |
+| 镜像性质 | 卷标 `CENA_X64FREE_EN-US_DV9`，UDF 文件系统，26H2 分支 build 26300、en-US、x64；**90 天评估期、非产品授权**；未使用第三方镜像/UUP dump/修改版 |
+| `install.wim` 映象 | 用 `7z x` 抽出 `sources/install.wim`（7,333,902,541 字节）后 `wimlib-imagex info`：只有 index 1，`Name: Windows 11 Enterprise Evaluation`，`Architecture: x86_64`，`Default Language: en-US` → `ImageInstall` 不需要 `ImageSelect` |
+| virtio-win 驱动 ISO | quickemu 4.9.9 自带下载得到 4,466 字节 HTML 反爬页（`file` = `HTML document`），必须替换；用官方 `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso`（0.1.302，877,373,440 字节，sha256 `303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d`），`file` = `ISO 9660 ... 'virtio-win-0.1.302'`；`7z l` 确认含 `viostor/vioscsi/NetKVM/Balloon/viogpudo/viofs/vioinput/viorng/vioserial/qemufwcfg/qxldod` 与 `guest-agent/qemu-ga-x86_64.msi` |
+
+### 12.5 quickemu 4.9.9 行为核对（`--help` 与包装脚本实测）
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 配置变量 | `quickemu_conf(5)` 支持 `cpu_cores`、`ram`、`disk_size`、`ssh_port`、`spice_port`、`port_forwards`、`tpm`、`secureboot`、`fixed_iso` 等；conf 在脚本末尾 `source`，可覆盖默认值 |
+| SSH 转发 | 设置 `ssh_port="2222"` 后生成 `hostfwd=tcp::2222-:22`；未设置时自动在 22220—22229 找空闲端口。**绑定地址固定为 `tcp::`（即 0.0.0.0）**，4.9.9 无法指定 `127.0.0.1`，`port_forwards` 同样如此 |
+| SPICE 传输 | `--access local` 时：`--display spice` 用 unix socket `windows-11/windows-11.sock`，`--spice-port` 被忽略；`--display none` 用 TCP `127.0.0.1:<spice-port>`。本卡取后者，实测 `ss -ltn` 为 `127.0.0.1:5930` |
+| 共享目录 | 默认 `--public-dir` 指向宿主的 xdg 公共目录（实测会打印 `WebDAV`/`smbd` 共享）；本卡用 `--public-dir none` 关闭 |
+| 磁盘/网卡 | `guest_os="windows"` → `virtio-blk-pci` + `virtio-net-pci`，因此必须提供 virtio-win ISO |
+| CPU 映射 | `cpu_cores="4"` 实测生成 `-smp cores=2,threads=2,sockets=2`（8 个逻辑 vCPU，quickemu 按宿主 socket/thread 拆分）；`ram="8G"` 生成 `-m 8G` |
+| 强制终止 | `--kill` 走 SIGKILL；实测会在下一次启动时触发 `qemu-img` 修复 qcow2 refcount（日志 `ERROR cluster 5 refcount=0 reference=1 / Rebuilding refcount structure`），因此正常路径使用客体软关机 |
+| headless 观察 | `--display none` + qxl 下 `screendump` 与 SPICE 截图（`spicy-screenshot`）都是全黑（`mean=0`），不能用于排障；进度靠 `disk.qcow2` 大小/mtime、`info usernet`、宿主 `ss`/`ssh` 与客体 `provision.log` |
+
+### 12.6 安装过程实测（时间线与排障事实）
+
+| 时间（UTC，2026-11-05） | 事件 |
+| --- | --- |
+| 09:02—09:16 | 评估版 ISO 下载完成（8.2 GB，sha256 见 §12.4） |
+| 09:18 | `bootstrap-host.sh prepare`：生成随机口令与 ed25519 密钥、渲染 `autounattend.xml`、重打 `unattended.iso`、写入 conf |
+| 09:20 | 首次启动（`--display none --viewer none --access local --spice-port 5930 --public-dir none`），qemu 11.1.2 / swtpm / TPM 2.0 就绪 |
+| 09:30—09:40 | Windows 安装写入 `disk.qcow2` 到 16.85 GB（未压缩），期间 `info usernet` 显示客体已通过 slirp 联网 |
+| 09:47:34 | 客体 `C:\vaultsyncd-lab\provision.log` 记录 `provision end`；`sshd`、`QEMU-GA`、WinRM 均 Running |
+| 10:10 | 宿主经动态追加的 `hostfwd_add nic tcp:127.0.0.1:5985-10.0.2.15:5985` 用 pywinrm 进入客体验证（见 §12.7 的通道说明） |
+| 10:16 | 干净关机 → 重打 ISO → 重启 → SSH 20 秒内恢复 → 再次干净关机 |
+
+排障要点（都实际发生过）：
+
+1. **宿主到客体 22「banner 超时 / SYN_SENT」不是 sshd 未启动**：`Get-NetTCPConnection -LocalPort 22 -State Listen` 显示 `sshd` 正在监听，`Get-NetFirewallRule -Name OpenSSH-Server-In-TCP` 的 `Profile` 是 `Private`，而客体唯一网卡被 Windows 判为 `Public`（`Get-NetConnectionProfile`），入站 22 被丢弃。修正：`Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -Profile Any`。
+2. **`winrm.exe enumerate` 在 PATH 中不存在**，首登脚本原来的 WinRM 记录行会写一条误导性的 FAILED；改为 `Get-NetTCPConnection -State Listen -LocalPort 5985`。该项只影响日志，`Enable-PSRemoting` 本身成功。
+3. **headless 截图不可用**：`screendump` 与 `spicy-screenshot` 在 `--display none` + qxl 下都返回全黑；发一次 `sendkey shift` 唤醒后截图才正常（说明当时是屏幕已关闭）。不能把黑屏当作死机。
+4. `quickemu --kill`（SIGKILL）会让下一次启动触发 `qemu-img` 修复 qcow2 refcount；正常路径用客体 `shutdown /s /t 0`。
+5. **安装完成后 `unattended.iso`/安装 ISO 不再挂载**（quickemu 检测到磁盘已使用时清空 `iso`，而 `unattended.iso` 只在 `iso` 非空时附加）。首版 `provision.ps1` 写死 `F:`/`E:`，重跑时报 `FAILED ... 缺失`；改为在 `DriveType=5` 的盘里按内容查找并以 `SKIP` 收尾。盘符本身也不保证稳定。
+
+### 12.7 验收证据（S008）
+
+全部命令在宿主执行；SSH 走 `hostfwd` 的 `127.0.0.1:2222`，密钥为 `/data/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519`。
+
+| 证据 | 命令 | 实测输出（摘要） |
+| --- | --- | --- |
+| Windows 版本（内核） | `ssh ... 'ver'` | `Microsoft Windows [Version 10.0.26300.9457]` |
+| Windows 版本（产品名） | `ssh ... 'systeminfo'` | `OS Name: Microsoft Windows 11 Enterprise Evaluation`；`OS Version: 10.0.26300 N/A Build 26300`；`System Manufacturer: QEMU`；`System Model: Standard PC (Q35 + ICH9, 2009)`；`Total Physical Memory: 8,187 MB` |
+| 版本/分支（注册表） | `Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion` | `ProductName=Windows 10 Enterprise Evaluation`（Windows 11 沿用 Win10 注册表产品名的已知现象，以 `systeminfo`/`OS Name` 与桌面水印为准）、`DisplayVersion=26H2`、`EditionID=EnterpriseEval`、`CurrentBuild=26300`、`UBR=9457` |
+| `Get-ComputerInfo` | `ssh ... 'powershell -Command "(Get-ComputerInfo).WindowsProductName; ..."'` | `Windows 10 Enterprise Evaluation` / `2009` / `26300`（同上，`WindowsVersion=2009` 是兼容性版本号） |
+| C: 文件系统 | `Get-Volume C` | `FileSystemType=NTFS`、`DriveType=Fixed`、`Size=105,894,637,568`、`SizeRemaining≈84.5e9` |
+| C: 卷信息 | `fsutil fsinfo volumeinfo C:` | `Volume Name : Windows`、`Volume Serial Number : 0xa005d9e5`、`File System Name : NTFS`、`Is ReadWrite`、`Supports Reparse Points`、`Supports Case-sensitive filenames` 等 |
+| 客体磁盘/内存/CPU | `Get-Disk`、`Win32_ComputerSystem` | 磁盘 0 `Red Hat VirtIO` 100 GiB GPT/SCSI；`TotalPhysicalMemory=8,584,962,048`；`LogicalProcessors=8`（quickemu 把 `cpu_cores="4"` 映射成 `-smp cores=2,threads=2,sockets=2`） |
+| 宿主 → 客体 | `ssh -p 2222 ... Quickemu@127.0.0.1 'ver'` | 成功，退出码 0；`ss -ltnp` 显示 qemu 监听 `0.0.0.0:2222`（hostfwd）与 `127.0.0.1:5930`（SPICE） |
+| 客体 → 宿主 | `ipconfig /all`；`Test-NetConnection 10.0.2.2 -Port 22` | `IPv4 10.0.2.15`、`DHCP Server 10.0.2.2`、`DNS 10.0.2.3`、网卡 `Red Hat VirtIO Ethernet Adapter`；`TcpTestSucceeded=True`（宿主 `sshd` 在 22 监听，未改动宿主配置） |
+| 传输通道 | 宿主 `scp` 一个 46 字节文本到 `C:\vaultsyncd-lab\lab-probe.txt` 后双侧 SHA-256 | 宿主 `e13b50149f0044bcaaa369bbb5d1eb492ad8f8692b458c2ab56ee851a80e86bd`；客体 `Get-FileHash` `E13B50149F0044BCAAA369BBB5D1EB492AD8F8692B458C2AB56EE851A80E86BD` |
+| 认证收敛 | `ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no ...` | `Permission denied (publickey).`；同密钥登录仍退出码 0 |
+| 备选通道 | `hostfwd_add` 后对 `127.0.0.1:5985` 发 WSMan 请求 | `HTTP/1.1 401`、`Server: Microsoft-HTTPAPI/2.0`、`WWW-Authenticate: Negotiate`；pywinrm（NTLM）执行 `Get-ComputerInfo` 成功；`QEMU-GA` 服务 Running |
+| 电源/长路径/时区 | 注册表与 `Get-TimeZone` | `LongPathsEnabled=1`、`HiberbootEnabled=0`、`TimeZone=China Standard Time`、`Get-Service sshd` = `Running / Automatic` |
+| 基线备份 | `tar --sparse` 打包 conf + qcow2 + `OVMF_VARS.fd` + `tpm2-00.permall` + `unattended.iso` | 13,082,818,560 字节，sha256 `de2fa63429617bb0eff09a1dbb0e41536220e42e3d7773599d527011c75265c6`（最后一次干净关机后生成）；`tar -tvf` 列出 5 个条目 |
+| 干净关机/重启 | `bootstrap-host.sh stop` / `start` | 关机后 qemu 与 swtpm 进程消失、`2222`/`5930` 关闭、无孤儿进程；重启后 SSH 20 s 内恢复 |
+| provision 重跑（幂等性） | 把最终版 `provision.ps1` 复制进客体后经 WinRM 整份重跑两次 | 第二次（修好介质定位后）10:29:21Z—10:29:35Z 全部步骤 `BEGIN/END` 成对、无 `FAILED`；四步依赖介质的动作输出 `SKIP: ... (expected after installation)`；`sshd` 仍 Running、密钥登录仍成功 |
+| 安装后介质状态 | 客体 `info block` / `Get-CimInstance Win32_CDROMDrive`；`Get-CimInstance Win32_LogicalDisk` | `ide2-cd0: [not inserted]`、`F:` `MediaLoaded=False`；只剩 `E:`（virtio-win CDFS）与 `C:`（NTFS）；原因见 §12.5 与 ops §5 |
+| 控制台代码页 | provision 日志 `Active codepage` | 首登会话实测 `437`（不是 936）；脚本内面向日志的错误文本统一英文，避免乱码 |
+
+宿主侧版本与设备：`quickemu --version` → `4.9.9`；`qemu-system-x86_64 --version` → `QEMU emulator version 11.1.2`；`ls -l /dev/kvm` → `crw-rw-rw- root kvm`；`getent group kvm` → `kvm:x:302:xingjian`。
+
+### 12.8 限制与未核验项
+
+- **默认 devShell 不受影响**：`nix develop --command bash -c 'cargo check --locked'` 在本轮结束时复核退出码 0；`quickemu` shell 只按需进入。
+- **评估版 90 天期限**：`Windows 11 Enterprise Evaluation`，桌面水印显示 `License valid for 90 days`；到期后的行为、重装流程未验证，且它不是产品授权镜像。
+- **宿主端口暴露**：hostfwd 只能绑 `0.0.0.0`，宿主有公网地址且主机防火墙放行全端口；靠客体侧密钥独占认证收敛，并且**客体不运行时即关闭**。真实 LAN/公网扫描下的表现未验证。
+- **UAC 关闭**：沿用 quickemu 模板的 `EnableLUA=false`，与生产 Windows 不同；涉及提权的结论需在 S010—S012 说明。
+- **qemu-ga 通道未打通**：服务在客体 Running，但宿主 `windows-11-agent.sock` 上 `guest-ping` 无响应；备选通道目前以 WinRM（5985，NTLM）为准，qemu-ga 的 host 侧接法留给后续卡。
+- **Delivery Optimization 服务启动类型**：`DODownloadMode=0` 策略已生效（P2P 关闭），但 `dosvc` 的启动类型实测仍显示 `Automatic`（`Set-Service`/`sc config` 未改变），未进一步排查；P2P 行为由策略关闭。
+- **未在客体安装任何编译工具链**：按 ADR-013，Rust/VS/SDK/Node/pnpm 均未安装，也未验证；交叉编译由 S009 落实。
+- **第二台客体/并发（S107）未验证**：基线归档已生成，但"从基线独立初始化 DeviceId"尚未执行。
+- **未验证项**：BitLocker、Secure Boot 开启后的行为、评估版到期、真实长路径与 CFAPI 行为（属后续卡）。

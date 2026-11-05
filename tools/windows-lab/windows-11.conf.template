@@ -1,0 +1,24 @@
+#!/usr/bin/env -S quickemu --vm
+# S008 Windows 实验室客体配置模板（quickemu 4.9.9，`quickemu_conf(5)` 的直接变量集）。
+# bootstrap-host.sh 把占位符替换成实验室实参后写到 VM 目录（当前 4 vCPU / 8G / 100G / ssh 2222）。
+#
+# 关键点：
+#   - guest_os="windows" 让 quickemu 使用 virtio-blk-pci 磁盘 + virtio-net-pci 网卡，
+#     因此安装阶段必须有 virtio-win 驱动 ISO（fixed_iso，客体里是 E:）。
+#   - tpm="on" 保留真正的 swtpm 2.0；secureboot="off" 便于实验室，安装脚本里已有
+#     LabConfig 的 SecureBoot/TPM/CPU/RAM 检查绕过。
+#   - ssh_port 让 quickemu 生成 hostfwd=tcp::<port>-:22（宿主 127.0.0.1 可达客体 22）。
+#     注意 quickemu 4.9.9 只能写入 `tcp::PORT`，绑定 0.0.0.0；依赖客体侧 SSH 密钥
+#     认证来限制暴露，见 docs/operations/windows-lab.md。
+guest_os="windows"
+disk_img="windows-11/disk.qcow2"
+iso="windows-11/windows-11.iso"
+fixed_iso="windows-11/virtio-win.iso"
+disk_size="@DISK_SIZE@"
+cpu_cores="@CPU_CORES@"
+ram="@RAM@"
+tpm="on"
+secureboot="off"
+ssh_port="@SSH_PORT@"
+# SPICE 单独由命令行参数控制（--display none --access local --spice-port <port>），
+# 这样 4.9.9 会使用 TCP 127.0.0.1 而不是本地 unix socket。
