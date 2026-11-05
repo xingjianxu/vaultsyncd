@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use vaultsyncd_domain::ids::{
-    BindingId, DeviceId, EntryId, ID_LEN, OpId, RootId, ServerId, VersionId,
+    BindingId, DeviceId, EntryId, ID_LEN, OpId, RootId, ServerId, TxId, VersionId,
 };
 use vaultsyncd_domain::version::ServerEpoch;
 
@@ -78,6 +78,10 @@ pub(crate) fn version_id(marker: u8) -> VersionId {
 
 pub(crate) fn op_id(marker: u8) -> OpId {
     identity(marker, OpId::from_bytes)
+}
+
+pub(crate) fn tx_id(marker: u8) -> TxId {
+    identity(marker, TxId::from_bytes)
 }
 
 /// 建一个测试绑定并提交，返回它的身份。`local_path` 带上标记，避免两个绑定看起来一样。
