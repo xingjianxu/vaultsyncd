@@ -350,7 +350,83 @@ cfapi-prototype cleanup [--root C:\vaultsyncd-test]   # 只删本工具占位 �
 - 本卡不实现内容水合（S011）、释放/写保护（S012）；`FETCH_DATA` 只返回明确错误，占位始终保持脱水。
 - 未标记 in-sync：`CF_INSYNC_POLICY_NONE` + `CF_PLACEHOLDER_CREATE_FLAG_NONE`，`inspect` 报告 `in_sync_state=0`，并在非 0 时失败。
 
-## 17. 当前状态（2026-11-05 本轮结束）
+## 17. CFAPI 内容供给：读取 / 范围 / 离线 / 超时 / 中断（S011）
+
+S011 让原型真的供给内容：`FETCH_DATA` 按回调请求的 `Offset`/`Length` 从固定测试内容源分段回填
+（`CfExecute(TRANSFER_DATA)`），并实现离线、超时与传输中断的明确语义。代码在
+`crates/platform-windows/src/cfapi/{content,provider}.rs`，命令仍是
+`crates/platform-windows/examples/` 下的 example；宿主入口是
+`tests/platform/windows/run-cfapi-hydration.sh`。契约摘要见 `docs/architecture/interfaces.md`，
+环境事实见 `docs/environment.md` §15。
+
+### 17.1 两条命令（宿主侧，客体需先启动）
+
+```bash
+# 1) 交叉构建（与 S010 相同的脚本，产物含 cfapi-prototype.exe）
+nix develop .#windows --command bash tests/platform/windows/build-cross.sh
+
+# 2) 传输 + 客体执行 S011 验收（读取/范围/离线/超时/中断/重复请求 + 两端哈希比对）
+nix develop .#windows --command bash tests/platform/windows/run-cfapi-hydration.sh
+```
+
+`run-cfapi-hydration.sh` 先把 exe 与 `guest-cfapi-hydration.ps1` 传到
+`C:\vaultsyncd-lab\s011\`（`CFAPI_HYDRATION_GUEST_DIR` 可覆盖），同步根仍默认
+`C:\vaultsyncd-test`（`CFAPI_ROOT` 可覆盖）。宿主侧期望哈希来自
+`cargo run --example cfapi-prototype -- expect`（固定种子 ⇒ 固定内容与 SHA-256）；
+客体侧用 PowerShell `Get-FileHash` / 自算区间哈希独立计算，两端必须一致。S010 的
+`run-cfapi-prototype.sh` 保持可用（其读取探测已改为“水合读取成功且长度正确”）。
+
+### 17.2 原型命令（S011 追加）
+
+```text
+cfapi-prototype read    --name <entry> [--offset N --length M] [--source available|unavailable]
+                        [--latency-ms N] [--timeout-ms N] [--chunk-delay-ms N]
+                        [--expect success|failure]
+cfapi-prototype cancel  --name <entry> [--cancel-after-ms N] [--chunk-delay-ms N]
+                        [--require-cancel-callback]
+cfapi-prototype hydrate --name <entry> [--offset N --length M] [--cancel-after-ms N]
+                        [--disconnect-after-ms N] [--chunk-delay-ms N]
+cfapi-prototype inspect [--root <path>] [--allow-hydrated]
+cfapi-prototype expect  [--name <entry> --offset N --length M]
+```
+
+固定内容条目：`small-12345.bin`（12,345 B）、`large-1mib.bin`（1 MiB）、
+`huge-16mib.bin`（16 MiB，S011 新增）。整份 SHA-256 由 `expect` 打印，宿主/客体两端比对。
+
+### 17.3 实测证据（2026-11-05，客体原生运行，退出码 0）
+
+| 验收点 | 证据 |
+| --- | --- |
+| 读取字节与哈希正确 | `read small-12345.bin`：`bytes=12345`、`sha256` 与 `expected_sha256` 一致、`on_disk_data_size=12345`；客体 `Get-FileHash` = `a82033db…4bcd`，与宿主 `expect` 相同（`MATCH`） |
+| 大条目分段供给 | `read huge-16mib.bin`：`chunks_sent=256`、`bytes_served=16,777,216`、`sha256=fb58d81c…f2ed` 与宿主一致 |
+| 范围请求 | `hydrate huge-16mib.bin --offset 4000000 --length 1048576`：平台按页对齐要求 `platform_offset=3997696 platform_length=1052672`（≠ 整份 16 MiB）；客体按区间自算的哈希 = 宿主 `expect_range`；`on_disk_data_size=1052672` |
+| 离线 + 未水合 | `read --source unavailable`：`FETCH_DATA` 被拒 `ack_status=0xC000CF11`（`STATUS_CLOUD_FILE_NETWORK_UNAVAILABLE`），读取失败 `os error 388`、`bytes=0`、`elapsed_ms=1`，三个条目都如此；`unavailable_fetches≥1` |
+| 离线 + 已水合 | 先 `read` 成功水合 `small-12345.bin`，再 `read --source unavailable`：`outcome=matched`、`digest_match=true`、`fetch_requests=0`（完全本地命中）；同一次运行里 `large-1mib.bin` 仍脱水，读取仍明确失败 |
+| 超时 | `read --latency-ms 1200 --timeout-ms 600 --expect failure`：`timeout_fetches=1`、读取失败、`elapsed_ms` 远小于阈值×2（等待被截断到阈值）；1 MiB 条目同样有界失败 |
+| 传输中断（无永久卡住） | `hydrate large-1mib.bin --chunk-delay-ms 150 --disconnect-after-ms 400`：`CfDisconnectSyncRoot` 成功后回填循环在 `chunks_sent=3/16` 就停下（后续 `CfExecute` 失败记入 `failed_acks=1`），`CfHydratePlaceholder` 以 `0x8007016A` 在 `total_ms≈305` 返回，`in_flight=0` |
+| 取消路径（句柄可关闭） | `cancel large-1mib.bin --cancel-after-ms 300 --chunk-delay-ms 100`：`CancelSynchronousIo` 成功（`cancel_code=0`），读取在 `cancel_to_return_ms≈1300` 内返回、句柄正常关闭、`in_flight=0`；**平台未回调 `CANCEL_FETCH_DATA`**（`cancel_callbacks=0`，见 §17.4） |
+| 重复请求幂等 | 离线失败时同一次读取里系统重试 `FETCH_DATA` 两次、两次回执相同状态且都不返回数据；超时失败后再次 `read` 成功且哈希与首次水合一致（`retry_after_timeout_hash` 一致） |
+| 回调生命周期 | 上下文是进程级 `OnceLock<Arc<ProviderContext>>`（回调不解引用 `CallbackContext` 裸指针）；断开后 `provider.drain in_flight=0` 才上报结果；`cancel`/`hydrate` 的中断路径同样如此 |
+| 清理不误删用户内容 | `cleanup` 删除探针子树后 `user-keep.txt` SHA-256 不变，`inspect` 退出 3（未注册），再次 `cleanup` 退出 0 |
+
+### 17.4 实测现象与故障处理（S011）
+
+| 现象 | 判断与处理 |
+| --- | --- |
+| 打开带读权限的占位符即触发**整份**水合并阻塞 | `open_ms≈993`（1 MiB、每段 60 ms）；甚至只读 4 KiB 或 1 MiB 以上条目时平台也要求 `required_offset=0 required_length=<整份>`。`CF_HYDRATION_POLICY_FULL` 与 `PARTIAL` 在本 build（26300）上表现一致；因此“同进程中途取消一次读取”没有可取消的用户态 I/O |
+| 想拿到真正的**范围**请求 | 用只请求 `FILE_READ_ATTRIBUTES` 的句柄调 `CfHydratePlaceholder(handle, offset, length, …)`：平台按页对齐请求部分区间（详见 §17.3）。直接读文件做不到 |
+| `CANCEL_FETCH_DATA` 未观察到 | 试过 5 条路径：① `CancelSynchronousIo(读线程)` 返回成功但水合继续完成；② `CancelIoEx(文件句柄)` 返回 `ERROR_NOT_FOUND`(1168)；③ 传输中关闭句柄——`CfHydratePlaceholder` 立刻返回但平台仍把 17/17 段要完；④ 传输中 `CfDisconnectSyncRoot`——在途分段被拒（`CfExecute` 0x80070057）、循环立即停止，但没发 cancel 回调；⑤ 跨进程读取（PowerShell 或 `--no-connect` 的 hydrate）时提供方**完全收不到** `FETCH_DATA`，请求方一直阻塞。结论：本 build 在该 NTFS 卷上没有发出过 `CANCEL_FETCH_DATA`；取消路径的“尽快退出”由纯逻辑单测（`serve_range` 的 `aborted` 分支）+ 中断实测（④）覆盖，严格断言用 `--require-cancel-callback` 保留 |
+| 跨进程读取不到提供方回调 | 别的进程读同一同步根时，本进程（`CfConnectSyncRoot` 持有者）收不到 `FETCH_DATA`，请求方无限等待；因此取消/中断验证都在同一进程内完成。跨进程唤醒需要进一步排查（可能与连接归属/卷级重定向器状态有关），记录为限制 |
+| `CF_POPULATION_POLICY_FULL` 下其他进程按路径打开占位符阻塞 | 改为 `CF_POPULATION_POLICY_PARTIAL`（不实现 `FETCH_PLACEHOLDERS` 时不应让平台自动填目录）。S010 的“枚举占位目录报 provider not running”现象随策略改变而不同，S010 脚本不依赖枚举 |
+| 宿主 `cargo run --example cfapi-prototype -- expect` | 在 `nix develop .#windows` 内可用：`expect` 子命令与内容源都是平台无关的纯逻辑，宿主侧期望值因此不依赖客体 |
+
+### 17.5 清理与边界
+
+- 结束前必须让两个脚本各自返回 0（`cfapi_hydration_result: OK` / `cfapi_prototype_result: OK`），再清理探针目录与同步根，并干净关机。
+- S011 仍未实现：释放/写保护（S012，`CfDehydratePlaceholder`/`CfSetInSyncState`/写保护）、Explorer 展示、崩溃后注册残留恢复。
+- 内容源是确定性的固定版本（`CONTENT_SEED`），不是服务端对象存储，也不做块级哈希校验；真实实现按 `entry_id + version_id` 取不可变对象并逐块校验。
+
+## 18. 当前状态（2026-11-05 本轮结束）
 
 - 客体**已干净关机**（`shutdown /s /t 0` 后 qemu 与 swtpm 退出，`2222`/`5930` 已关闭，无孤儿进程）。下次使用：`nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh start`，再 `wait-ssh`（实测从启动到 SSH 可用约 20 秒）。
 - 系统：Windows 11 Enterprise Evaluation 26H2 / build 26300.9457，`C:` 为 NTFS（98.6 GiB，可用约 78.7 GiB），8 vCPU / 8 GiB / 100 GiB VirtIO GPT。
@@ -358,4 +434,5 @@ cfapi-prototype cleanup [--root C:\vaultsyncd-test]   # 只删本工具占位 �
 - 基线归档：`/data/vaultsyncd-lab/win-lab-baseline-20261105.tar`（含 conf/qcow2/OVMF_VARS/TPM 状态/unattended.iso）。
 - 客体未安装任何编译工具链。S009 用 `nix develop .#windows` 交叉编译 `platform-smoke.exe` / `cfapi-link-smoke.exe`，传输后客体原生执行退出码均 0、两端 SHA-256 一致（见 §12.5），因此“宿主构建 → 客体运行”通道已可用。
 - S010（2026-11-05）在客体上注册了测试同步根、创建了目录 + 12,345 B + 1 MiB 三个真实占位符、把 48 B 的 `FileIdentity` 交给系统保存，并按“只删自己的占位”完成清理与注销；`run-cfapi-prototype.sh` 退出 0、两端 SHA-256 一致（见 §16.3）。结束后已清理 `C:\vaultsyncd-test` 里的占位、注销同步根（`inspect` 退出码 3）并干净关机，没有注册残留。内容水合（S011）与释放/写保护（S012）仍未实现。
+- S011（2026-11-05）在客体上实现了真正的按需内容供给：`read` 读到的字节与 SHA-256 与宿主固定内容版本一致（12,345 B / 1 MiB / 16 MiB 三个条目，含 1 MiB 范围水合），离线读未水合条目以 `ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE`(388) 在 1 ms 内明确失败、已水合条目离线可读且不再请求内容，慢源超时有界失败，传输中断开同步根后回填循环在 3/16 段停下并有界返回；`run-cfapi-hydration.sh` 退出 0（42 项 `check=pass`、0 fail，两端哈希 `MATCH`），S010 的 `run-cfapi-prototype.sh` 仍退出 0（21 项 pass）。`CANCEL_FETCH_DATA` 在该 build 上未观察到（见 §17.4）。结束后已清理探针目录、注销同步根并干净关机。
 - `provision.ps1` 在已安装客体上整份重跑过一次（10:29:21Z—10:29:35Z）：所有步骤 `BEGIN/END` 成对、无 `FAILED`，依赖介质的四步输出 `SKIP: ... (expected after installation)`；控制台代码页首登实测为 437（`Active codepage: 437`），因此脚本内的错误文本统一用英文，避免转写日志出现乱码。

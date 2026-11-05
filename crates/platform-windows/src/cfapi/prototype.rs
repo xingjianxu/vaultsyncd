@@ -11,8 +11,8 @@
 //!
 //! 不手改 reparse point、不截断文件伪造脱水、不在条件不满足时标 in-sync：占位符用
 //! `CF_PLACEHOLDER_CREATE_FLAG_NONE` 与 `CF_INSYNC_POLICY_NONE` 创建，查询时如实报告
-//! `InSyncState`。内容水合属 S011：`FETCH_DATA` 回调立即用 `STATUS_NOT_SUPPORTED` 结束请求，
-//! 绝不返回空数据。
+//! `InSyncState`。内容水合与回调（`FETCH_DATA`/`CANCEL_FETCH_DATA`）在
+//! [`super::provider`] 中实现（S011），本模块只负责注册/占位/查询/清理。
 //!
 //! 每一步都通过 [`record`] 输出 `stage`、参数摘要与 `HRESULT`；失败返回 [`StageError`]，
 //! 由命令入口以非零退出码结束。
@@ -20,7 +20,6 @@
 use std::ffi::{OsStr, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::identity::{ENCODED_LEN, EntryId, FileIdentity};
@@ -28,6 +27,7 @@ use super::lifecycle::{HResult, StageError, record};
 use super::prototype_layout::{
     PROBE_DIRECTORY, PROBE_FILES, PROTOTYPE_ROOT_ID, entry_id_for, file_identity,
 };
+use super::provider::{ProviderConfig, ProviderSession};
 use super::raw::*;
 
 /// 注册到系统的提供方名称（显示在 Explorer/系统设置里）。
@@ -48,11 +48,6 @@ const PROTOTYPE_PROVIDER_ID: Guid = Guid {
 /// `CfGetPlaceholderInfo` 返回的 `CF_PLACEHOLDER_STANDARD_INFO` 是变长结构：定长前缀按 8
 /// 字节对齐，`FileIdentity` 字节紧跟 `FileIdentityLength`（偏移 60）而不是 `size_of` 的 64。
 const PLACEHOLDER_IDENTITY_OFFSET: usize = 60;
-
-/// 一次 `FETCH_DATA` 回调计数：create 的读取探测据此判断系统是否真的向本提供方请求内容。
-static FETCH_DATA_CALLBACKS: AtomicU64 = AtomicU64::new(0);
-/// 一次 `CANCEL_FETCH_DATA` 回调计数。
-static CANCEL_FETCH_DATA_CALLBACKS: AtomicU64 = AtomicU64::new(0);
 
 /// `inspect` 的结论。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,7 +180,7 @@ pub struct SyncRootProvider {
 // ---------------------------------------------------------------------------
 
 /// `HRESULT_FROM_WIN32(code)`：把 Win32 错误码转成 HRESULT 用于日志。
-fn hresult_from_win32(code: u32) -> HResult {
+pub(crate) fn hresult_from_win32(code: u32) -> HResult {
     if code == 0 {
         HResult::S_OK
     } else if code <= 0xFFFF {
@@ -227,7 +222,7 @@ fn probe_file_list() -> String {
 }
 
 /// 转成以 NUL 结尾的 UTF-16，供 `LPCWSTR` 参数使用。
-fn wide(path: &Path) -> Vec<u16> {
+pub(crate) fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
 }
 
@@ -237,7 +232,7 @@ fn wide_str(text: &str) -> Vec<u16> {
 }
 
 /// 读取以 NUL 结尾的 UTF-16 文本（`PCWSTR`）。
-unsafe fn read_wide(ptr: *const u16) -> String {
+pub(crate) unsafe fn read_wide(ptr: *const u16) -> String {
     if ptr.is_null() {
         return String::new();
     }
@@ -265,116 +260,6 @@ fn now_filetime() -> i64 {
 }
 
 // ---------------------------------------------------------------------------
-// 回调表（S010 只有“明确报错”的水合路径）
-// ---------------------------------------------------------------------------
-
-/// `FETCH_DATA`：S010 不提供内容。
-///
-/// 必须用一个明确的失败 NTSTATUS 结束请求：返回空数据会让读取方把半个文件当成功（design
-/// I05、T06）。`CfExecute` 是文档要求的完成方式，在回调内同步调用即完成请求。
-unsafe extern "system" fn on_fetch_data(
-    info: *const CfCallbackInfo,
-    params: *const CfCallbackParametersFetchData,
-) {
-    let count = FETCH_DATA_CALLBACKS.fetch_add(1, Ordering::SeqCst) + 1;
-    if info.is_null() {
-        eprintln!("callback=fetch_data count={count} error=null_callback_info");
-        return;
-    }
-    let (
-        connection_key,
-        transfer_key,
-        request_key,
-        correlation_vector,
-        file_size,
-        file_identity_len,
-        path,
-        offset,
-        length,
-    ) = unsafe {
-        let info = &*info;
-        let (offset, length) = if params.is_null() {
-            (0, info.file_size)
-        } else {
-            ((*params).required_file_offset, (*params).required_length)
-        };
-        (
-            info.connection_key,
-            info.transfer_key,
-            info.request_key,
-            info.correlation_vector,
-            info.file_size,
-            info.file_identity_length,
-            read_wide(info.normalized_path),
-            offset,
-            length,
-        )
-    };
-    eprintln!(
-        "callback=fetch_data count={count} path={path} file_size={file_size} required_offset={offset} required_length={length} file_identity_length={file_identity_len} request=unsupported hresult=0x{:08X}",
-        STATUS_NOT_SUPPORTED as u32
-    );
-    let op_info = CfOperationInfo {
-        struct_size: u32::try_from(std::mem::size_of::<CfOperationInfo>()).unwrap_or(0),
-        operation_type: CF_OPERATION_TYPE_TRANSFER_DATA,
-        connection_key,
-        transfer_key,
-        // 回执必须带回回调的 CorrelationVector 与 RequestKey，否则 CfExecute 会以
-        // ERROR_CLOUD_FILE_INVALID_REQUEST 拒绝（S010 实测）。
-        correlation_vector,
-        sync_status: std::ptr::null(),
-        request_key,
-    };
-    let mut params = CfOperationParametersTransferData {
-        param_size: CF_OPERATION_PARAMETERS_SIZE,
-        padding: 0,
-        flags: 0,
-        completion_status: STATUS_NOT_SUPPORTED,
-        buffer: std::ptr::null(),
-        // 回执的 Offset/Length 必须与请求范围一致；CompletionStatus 才是失败原因。
-        offset,
-        length,
-    };
-    let hr = unsafe { CfExecute(&op_info, std::ptr::from_mut(&mut params).cast::<c_void>()) };
-    eprintln!("callback=fetch_data.ack hresult=0x{:08X}", hr as u32);
-}
-
-/// `CANCEL_FETCH_DATA`：取消请求只需计数并记录，当前没有在途传输要中止。
-unsafe extern "system" fn on_cancel_fetch_data(
-    info: *const CfCallbackInfo,
-    _params: *const CfCallbackParametersFetchData,
-) {
-    let count = CANCEL_FETCH_DATA_CALLBACKS.fetch_add(1, Ordering::SeqCst) + 1;
-    let connection_key = if info.is_null() {
-        CfConnectionKey::default()
-    } else {
-        unsafe { (*info).connection_key }
-    };
-    eprintln!(
-        "callback=cancel_fetch_data count={count} connection_key=0x{:X}",
-        connection_key.internal
-    );
-}
-
-/// 最小回调表：`FETCH_DATA` + `CANCEL_FETCH_DATA`，以 `CF_CALLBACK_TYPE_NONE` 结束。
-///
-/// 表必须是 `'static`：CFAPI 在连接存活期间会持续引用这张表。
-static CALLBACK_TABLE: [CfCallbackRegistration; 3] = [
-    CfCallbackRegistration {
-        callback_type: CF_CALLBACK_TYPE_FETCH_DATA,
-        callback: Some(on_fetch_data),
-    },
-    CfCallbackRegistration {
-        callback_type: CF_CALLBACK_TYPE_CANCEL_FETCH_DATA,
-        callback: Some(on_cancel_fetch_data),
-    },
-    CfCallbackRegistration {
-        callback_type: CF_CALLBACK_TYPE_NONE,
-        callback: None,
-    },
-];
-
-// ---------------------------------------------------------------------------
 // 只读查询
 // ---------------------------------------------------------------------------
 
@@ -382,7 +267,7 @@ static CALLBACK_TABLE: [CfCallbackRegistration; 3] = [
 ///
 /// 两步都不读取内容、不触发水合：`FindFirstFileW` 取属性/reparse tag/逻辑大小，
 /// `CfGetPlaceholderInfo` 取占位元数据（本地占用字节数、in-sync 状态与 `FileIdentity`）。
-fn try_observe(path: &Path) -> Result<Option<EntryObservation>, StageError> {
+pub(crate) fn try_observe(path: &Path) -> Result<Option<EntryObservation>, StageError> {
     let path_w = wide(path);
     let mut find = Win32FindData::default();
     let find_handle = unsafe { FindFirstFileW(path_w.as_ptr(), &mut find) };
@@ -558,11 +443,16 @@ fn register(root: &Path) -> Result<(), StageError> {
     let policies = CfSyncPolicies {
         struct_size: u32::try_from(std::mem::size_of::<CfSyncPolicies>()).unwrap_or(0),
         hydration: CfHydrationPolicy {
-            primary: CF_HYDRATION_POLICY_FULL,
+            // S011：改成 PARTIAL，只水合被请求的范围。FULL 会在打开条目时就请求整份内容，
+            // 打开返回时水合已结束，无法在回调内观察“传输中途取消”；PARTIAL 也更贴近
+            // design §14.2 “实际回调可要求范围”的模型。未请求部分继续保持脱水。
+            primary: CF_HYDRATION_POLICY_PARTIAL,
             modifier: 0,
         },
         population: CfPopulationPolicy {
-            primary: CF_POPULATION_POLICY_FULL,
+            // S011：PARTIAL —— 不实现 FETCH_PLACEHOLDERS，因此不让平台自动填充目录
+            // （否则别的进程按路径打开占位符会等待提供方枚举，实测会一直阻塞）。
+            primary: CF_POPULATION_POLICY_PARTIAL,
             modifier: 0,
         },
         // 不让系统自动标记 in-sync：是否同步只由核心数据库判定（design §14.2）。
@@ -590,7 +480,8 @@ fn register(root: &Path) -> Result<(), StageError> {
                 "7a5c1f00-5eed-4a31-9b2e-001122334455".to_string(),
             ),
             ("sync_root_identity_length", root_identity.len().to_string()),
-            ("hydration_policy", "full".to_string()),
+            ("hydration_policy", "partial".to_string()),
+            ("population_policy", "partial".to_string()),
             ("in_sync_policy", "none".to_string()),
         ],
         hr,
@@ -614,60 +505,6 @@ fn register(root: &Path) -> Result<(), StageError> {
         hr,
         format!("CfRegisterSyncRoot 失败：{}", show(root)),
     ))
-}
-
-/// `CfConnectSyncRoot`：安装最小回调表并取得连接键。
-fn connect(root: &Path) -> Result<CfConnectionKey, StageError> {
-    let root_w = wide(root);
-    let mut key = CfConnectionKey::default();
-    let hr = HResult::new(unsafe {
-        CfConnectSyncRoot(
-            root_w.as_ptr(),
-            CALLBACK_TABLE.as_ptr(),
-            std::ptr::null_mut(),
-            // 请求完整路径，使 FETCH_DATA 日志能直接显示是哪个条目。
-            CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH,
-            &mut key,
-        )
-    });
-    record(
-        "connect",
-        &[
-            ("path", show(root)),
-            ("callbacks", "fetch_data,cancel_fetch_data".to_string()),
-            ("connect_flags", "require_full_file_path".to_string()),
-            ("connection_key", format!("0x{:X}", key.internal)),
-        ],
-        hr,
-    );
-    if hr.succeeded() {
-        Ok(key)
-    } else {
-        Err(StageError::new(
-            "connect",
-            hr,
-            format!("CfConnectSyncRoot 失败：{}", show(root)),
-        ))
-    }
-}
-
-/// `CfDisconnectSyncRoot`：释放连接键；之后注册仍保留，直到注销。
-fn disconnect(key: CfConnectionKey) -> Result<(), StageError> {
-    let hr = HResult::new(unsafe { CfDisconnectSyncRoot(key) });
-    record(
-        "disconnect",
-        &[("connection_key", format!("0x{:X}", key.internal))],
-        hr,
-    );
-    if hr.succeeded() {
-        Ok(())
-    } else {
-        Err(StageError::new(
-            "disconnect",
-            hr,
-            "CfDisconnectSyncRoot 失败".to_string(),
-        ))
-    }
 }
 
 /// 注销同步根，并用随后的查询确认注销生效（不靠猜错误码判断结果）。
@@ -908,7 +745,11 @@ fn ensure_file_placeholders(root: &Path) -> Result<usize, StageError> {
 // 命令实现
 // ---------------------------------------------------------------------------
 
-/// `create`：注册、连接、创建占位、尝试读取（必须被明确拒绝），最后断开。
+/// `create`：注册、连接、创建占位，最后断开并等待回调静默。
+///
+/// S011 起 `create` 不再做“读取必须失败”的探测（水合已经实现，读取成功才是正常状态）：
+/// 内容验证由 `read`/`cancel` 子命令在需要水合的时机执行，`create` 只负责让条目保持脱水
+/// 占位，从而不影响紧随其后的 `inspect` 脱水断言。
 pub fn create(root: &Path) -> Result<(), StageError> {
     if !root.is_dir() {
         return Err(StageError::new(
@@ -927,10 +768,9 @@ pub fn create(root: &Path) -> Result<(), StageError> {
         HResult::S_OK,
     );
     register(root)?;
-    let key = connect(root)?;
+    let session = ProviderSession::open(root, ProviderConfig::default())?;
     ensure_directory_placeholder(root)?;
     let created = ensure_file_placeholders(root)?;
-    probe_hydration_refusal(root)?;
     record(
         "create.summary",
         &[
@@ -940,50 +780,20 @@ pub fn create(root: &Path) -> Result<(), StageError> {
         ],
         HResult::S_OK,
     );
-    disconnect(key)
+    session.close()
 }
 
-/// 读取一个脱水占位符：S011 之前必须失败并带明确错误码，不能返回 0 字节内容。
-fn probe_hydration_refusal(root: &Path) -> Result<(), StageError> {
-    let (name, size) = PROBE_FILES[0];
-    let path = root.join(PROBE_DIRECTORY).join(name);
-    let before = FETCH_DATA_CALLBACKS.load(Ordering::SeqCst);
-    match std::fs::read(&path) {
-        Ok(bytes) => Err(StageError::new(
-            "hydration.probe",
-            HResult::S_OK,
-            format!(
-                "读取 {} 意外成功（{} 字节）：S010 未实现水合，不得当成功",
-                show(&path),
-                bytes.len()
-            ),
-        )),
-        Err(error) => {
-            let after = FETCH_DATA_CALLBACKS.load(Ordering::SeqCst);
-            let code = error.raw_os_error().unwrap_or(0);
-            record(
-                "hydration.probe",
-                &[
-                    ("path", show(&path)),
-                    ("logical_size", size.to_string()),
-                    ("outcome", "read_failed_as_expected".to_string()),
-                    ("error", error.to_string()),
-                    ("win32_error", code.to_string()),
-                    (
-                        "fetch_data_callbacks",
-                        after.saturating_sub(before).to_string(),
-                    ),
-                    ("bytes_returned", "none".to_string()),
-                ],
-                HResult::new(code),
-            );
-            Ok(())
-        }
-    }
-}
-
-/// `inspect`：只读查询注册信息与每个原型条目的占位/大小/身份。
+/// `inspect`：只读查询注册信息与每个原型条目的占位/大小/身份（默认要求仍脱水）。
 pub fn inspect(root: &Path) -> Result<Inspection, StageError> {
+    inspect_with(root, false)
+}
+
+/// 与 [`inspect`] 相同，但可以选择允许条目已水合（`allow_hydrated`）。
+///
+/// S011 的水合验证会先把条目读成本地数据；此时仍要能核对逻辑大小与身份，因此提供
+/// `--allow-hydrated`，把“必须脱水”的断言换成“本地数据不超过逻辑大小”的断言。默认行为
+/// （脱水断言 + 退出码）不变。
+pub fn inspect_with(root: &Path, allow_hydrated: bool) -> Result<Inspection, StageError> {
     if !root.is_dir() {
         return Err(StageError::new(
             "inspect.preflight",
@@ -1025,7 +835,7 @@ pub fn inspect(root: &Path) -> Result<Inspection, StageError> {
 
     inspect_directory(root)?;
     for (name, size) in PROBE_FILES {
-        inspect_file(root, name, size)?;
+        inspect_file(root, name, size, allow_hydrated)?;
     }
     record(
         "inspect.summary",
@@ -1091,8 +901,13 @@ fn inspect_directory(root: &Path) -> Result<(), StageError> {
     require_placeholder(&relative, &observation)
 }
 
-/// 校验一个文件占位符：占位状态、逻辑大小、脱水状态与身份。
-fn inspect_file(root: &Path, name: &str, expected_size: u64) -> Result<(), StageError> {
+/// 校验一个文件占位符：占位状态、逻辑大小、脱水状态（或允许已水合）与身份。
+fn inspect_file(
+    root: &Path,
+    name: &str,
+    expected_size: u64,
+    allow_hydrated: bool,
+) -> Result<(), StageError> {
     let path = root.join(PROBE_DIRECTORY).join(name);
     let relative = format!("{PROBE_DIRECTORY}/{name}");
     let observation = observe(&path)?;
@@ -1100,6 +915,7 @@ fn inspect_file(root: &Path, name: &str, expected_size: u64) -> Result<(), Stage
     // 相对同步根的完整位置。
     let expected = file_identity(name);
     let dehydrated = observation.is_fully_dehydrated();
+    let expected_size_i64 = i64::try_from(expected_size).unwrap_or(i64::MAX);
     let mut fields = vec![
         ("path", relative.clone()),
         ("kind", "file".to_string()),
@@ -1120,6 +936,10 @@ fn inspect_file(root: &Path, name: &str, expected_size: u64) -> Result<(), Stage
             observation.on_disk_data_size().to_string(),
         ),
         ("dehydrated", dehydrated.to_string()),
+        (
+            "hydrated",
+            (observation.on_disk_data_size() >= expected_size_i64).to_string(),
+        ),
         ("in_sync_state", observation.in_sync_state().to_string()),
         ("identity_length", observation.identity().len().to_string()),
     ];
@@ -1127,7 +947,6 @@ fn inspect_file(root: &Path, name: &str, expected_size: u64) -> Result<(), Stage
     record("inspect.entry", &fields, HResult::S_OK);
 
     require_placeholder(&relative, &observation)?;
-    let expected_size_i64 = i64::try_from(expected_size).unwrap_or(i64::MAX);
     if observation.logical_size != expected_size_i64 {
         return Err(StageError::new(
             "inspect.entry",
@@ -1143,12 +962,23 @@ fn inspect_file(root: &Path, name: &str, expected_size: u64) -> Result<(), Stage
             "inspect.entry",
             HResult::S_OK,
             format!(
-                "{relative} 报告 in_sync_state={}，但 S010 没有内容可校验，不应标记 in-sync",
+                "{relative} 报告 in_sync_state={}，但本原型从不让系统自动标记 in-sync",
                 observation.in_sync_state()
             ),
         ));
     }
-    if !dehydrated {
+    if observation.on_disk_data_size() > observation.logical_size {
+        return Err(StageError::new(
+            "inspect.entry",
+            HResult::S_OK,
+            format!(
+                "{relative} 本地数据 {} 超过逻辑大小 {}",
+                observation.on_disk_data_size(),
+                observation.logical_size
+            ),
+        ));
+    }
+    if !dehydrated && !allow_hydrated {
         return Err(StageError::new(
             "inspect.entry",
             HResult::S_OK,
@@ -1232,13 +1062,13 @@ pub fn cleanup(root: &Path) -> Result<(), StageError> {
         HResult::S_OK,
     );
     // 连接一次，使删除动作发生在“提供方在线”的正常语义下；未注册时继续尝试清理残留。
-    let connection = connect(root).ok();
+    let session = ProviderSession::open(root, ProviderConfig::default()).ok();
     for (name, _) in PROBE_FILES {
         remove_probe_placeholder(root, &format!("{PROBE_DIRECTORY}/{name}"))?;
     }
     remove_probe_placeholder(root, PROBE_DIRECTORY)?;
-    if let Some(key) = connection {
-        disconnect(key)?;
+    if let Some(session) = session {
+        session.close()?;
     }
     unregister(root)?;
     report_preserved(root)
@@ -1348,6 +1178,12 @@ fn report_preserved(root: &Path) -> Result<(), StageError> {
         }
     }
     Ok(())
+}
+
+/// 条目的本地位数（`CfGetPlaceholderInfo`，不触发水合）。
+pub fn on_disk_data_size(path: &Path) -> Result<i64, StageError> {
+    let observation = observe(path)?;
+    Ok(observation.on_disk_data_size())
 }
 
 /// 原型固定条目的绝对路径（供测试脚本或诊断使用）。

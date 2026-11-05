@@ -659,3 +659,39 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - 未验证：Explorer 中占位符的图标/状态显示、多个提供方同时连接、注册在进程崩溃后残留的恢复路径（原型只提供 `cleanup` 收尾）。
 - 目录占位符的 `CfGetPlaceholderStateFromFindData` 在直接查路径时返回 `NO_STATES`（`FindFirstFileW` 不带 reparse tag），原型因此以 `CfGetPlaceholderInfo` 作为占位判定来源；该行为只在 build 26300 上实测。
 - 产物不逐字节可复现（见 §14.1）；`.cache/windows` 仍是交叉构建的唯一缓存，未做 CI 复用。
+
+## 15. S011 CFAPI 内容供给（2026-11-05 实测）
+
+采集位置：`/wrd/prj/vaultsyncd/.worktrees/s011-s012`（分支 `feat/S011-S012-cfapi-read-write`，基线 `a6aed74`）。操作步骤见 `docs/operations/windows-lab.md` §17；接口契约见 `docs/architecture/interfaces.md`；主机与工具链同 §13，客体同 §12。
+
+### 15.1 新增代码与构建
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 新模块 | `cfapi::content`（纯逻辑：确定性固定内容源、SHA-256、范围校验、`serve_range` 回填循环）、`cfapi::provider`（仅 Windows：`ProviderConfig`/`ProviderStats`/`ProviderContext`、`FETCH_DATA`/`CANCEL_FETCH_DATA` 回调、读取/取消/范围水合验证）；`cfapi::prototype` 只保留注册/占位/查询/清理 |
+| 依赖 | 仍无第三方依赖（SHA-256 自带实现，NIST 向量锁定） |
+| 宿主单测 | `cargo test --locked -p vaultsyncd-platform-windows` → 28 passed（新增 content 的 8 个：SHA-256 NIST 向量含 1,000,000×`a`、金样本条目哈希、区间切片、非法范围、分块平铺、`serve_range` 的整份/取消/拒绝/非法范围语义） |
+| lint / 格式 | `cargo clippy --locked --all-targets -p vaultsyncd-platform-windows`、`cargo xwin clippy --target x86_64-pc-windows-msvc --all-targets`、`cargo fmt --all --check` 均退出 0、0 warning |
+| 交叉构建 | `build-cross.sh` 退出 0；`cfapi-prototype.exe` 仍是 `PE32+ x86-64`、静态 CRT（手工 `cargo xwin build` 会漏 `+crt-static`，客体上以 `0xC0000135` 退出——必须走脚本） |
+| 客体脚本 | `run-cfapi-hydration.sh` 42 项 `check=pass`/0 fail、两端哈希 `MATCH`、退出 0；S010 的 `run-cfapi-prototype.sh` 21 项 pass、退出 0 |
+
+### 15.2 平台行为实测（build 26300.9457）
+
+| 观察 | 数值/结论 |
+| --- | --- |
+| 打开即整份水合 | `read` 的 `open_ms≈993`（1 MiB、每段 60 ms 延迟即 16×60=960 ms）；读 4 KiB 也会得到 `required_offset=0 required_length=<整份大小>`。hydration 策略 `FULL` 与 `PARTIAL` 都是这个行为 |
+| 范围请求的来源 | `CfHydratePlaceholder` + 只请求 `FILE_READ_ATTRIBUTES` 的句柄：请求 `offset=4,000,000 length=1,048,576` 时平台要求 `offset=3,997,696 length=1,052,672`（页对齐）；4 KiB 请求要求 8,192 B |
+| 范围水合结果 | `on_disk_data_size=1,052,672`（仅该范围），客体按区间自算哈希与宿主 `expect_range` 一致 |
+| 离线（未水合） | 回执 `STATUS_CLOUD_FILE_NETWORK_UNAVAILABLE`(0xC000CF11) ⇒ 读取 `os error 388`、`bytes=0`、`elapsed_ms=1`；同一次读取里系统重试了 2 次 `FETCH_DATA` |
+| 离线（已水合） | `fetch_requests=0`、`digest_match=true`（完全本地命中） |
+| 超时 | `latency_ms=1200 timeout_ms=600` ⇒ 等待被截断到阈值后以 `STATUS_IO_TIMEOUT` 失败，`elapsed_ms` 远小于 2×阈值 |
+| 传输中断开同步根 | 在途 `CfExecute` 返回 `0x80070057`，循环在 `chunks_sent=3/16` 停止、`failed_acks=1`；`CfHydratePlaceholder` 以 `0x8007016A` 在 `total_ms≈305` 返回；`in_flight=0` |
+| `CANCEL_FETCH_DATA` | 5 条路径都未触发（CancelSynchronousIo 成功但水合继续、CancelIoEx=1168、传输中关句柄、传输中断开、跨进程读取）。详见 `docs/operations/windows-lab.md` §17.4 |
+| 跨进程读取 | 别的进程读同一同步根时，连接持有进程收不到 `FETCH_DATA`，请求方阻塞；取消/中断验证因此都在同一进程内完成 |
+
+### 15.3 限制与未核验项
+
+- 内容源是原型用的确定性固定版本（`CONTENT_SEED`），没有 `entry_id + version_id` 绑定、没有块级与整文件二阶段校验；真实实现按 design §13.1/§13.2 完成后才是“完整版本语义”。
+- 未观察到 `CANCEL_FETCH_DATA`；其“尽快退出”语义由宿主单测（`serve_range` 的 `aborted` 分支）+ 传输中断实测覆盖，严格断言入口 `--require-cancel-callback` 保留但当前不通过。
+- 跨进程（多进程共享同一同步根）唤醒未打通，需单独排查；本卡只用单进程验收，不据此声称多进程可用。
+- 只在 `C:` 卷 NTFS、build 26300 上实测；ReFS、非系统卷、Explorer 展示、释放/写保护（S012）仍未验证。

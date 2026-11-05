@@ -404,9 +404,26 @@ pub const CF_CALLBACK_TYPE_NONE: u32 = 0xFFFF_FFFF;
 
 /// `CF_OPERATION_TYPE_TRANSFER_DATA`
 pub const CF_OPERATION_TYPE_TRANSFER_DATA: u32 = 0;
+/// `CF_HYDRATE_FLAG_NONE`
+pub const CF_HYDRATE_FLAG_NONE: u32 = 0;
+/// `CF_DEHYDRATE_FLAG_NONE`
+pub const CF_DEHYDRATE_FLAG_NONE: u32 = 0;
+/// `CF_OPERATION_TRANSFER_DATA_FLAG_NONE`
+pub const CF_OPERATION_TRANSFER_DATA_FLAG_NONE: u32 = 0x0000_0000;
 
+/// `CF_HYDRATION_POLICY_PARTIAL`（0）：只水合被请求的范围，未请求部分保持脱水。
+///
+/// S011 用它在同进程内观察“传输中的取消”：`FULL`（2）下平台会在打开时请求整份内容，
+/// 打开返回时水合已结束，回调里没有可取消的传输。
+pub const CF_HYDRATION_POLICY_PARTIAL: u16 = 0;
 /// `CF_HYDRATION_POLICY_FULL`
 pub const CF_HYDRATION_POLICY_FULL: u16 = 2;
+/// `CF_POPULATION_POLICY_PARTIAL`（0）：目录不自动从提供方枚举，只用已存在的占位条目。
+///
+/// S011 实测：登记 `FULL`（2）时，**别的进程**按路径打开占位符会先要求目录填充
+/// （`FETCH_PLACEHOLDERS` 回调），而本原型不实现该回调，于是打开无限等待；`PARTIAL`
+/// 下按路径的文件访问不依赖目录枚举。
+pub const CF_POPULATION_POLICY_PARTIAL: u16 = 0;
 /// `CF_POPULATION_POLICY_FULL`
 pub const CF_POPULATION_POLICY_FULL: u16 = 2;
 /// `CF_INSYNC_POLICY_NONE`：不让系统自动把条目当 in-sync。
@@ -461,11 +478,27 @@ const FILE_SHARE_ALL: u32 = 0x0000_0007;
 const OPEN_EXISTING: u32 = 3;
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 
+/// `THREAD_TERMINATE`：`CancelSynchronousIo` 要求线程句柄具备的访问权限。
+pub const THREAD_TERMINATE: u32 = 0x0000_0001;
+
 /// `INVALID_HANDLE_VALUE`
 pub const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
 
-/// `STATUS_NOT_SUPPORTED`：S010 未实现水合，`FETCH_DATA` 用明确错误结束请求。
+/// `STATUS_NOT_SUPPORTED`：S010 未实现水合时 `FETCH_DATA` 用它结束请求；S011 起不再使用。
 pub const STATUS_NOT_SUPPORTED: i32 = 0xC000_00BBu32 as i32;
+/// `STATUS_SUCCESS`：`CfExecute(TRANSFER_DATA)` 回填一段数据时的 `CompletionStatus`。
+pub const STATUS_SUCCESS: i32 = 0;
+
+// 以下 NTSTATUS 取自 Windows SDK 10.0.26100 `shared/ntstatus.h`（S011 核对，`0xC000CFxx`
+// 是 Cloud Files 的专用区间）：
+/// `STATUS_CLOUD_FILE_INVALID_REQUEST`（0xC000CF0B）：非原型条目、范围非法、长度与逻辑大小不符。
+pub const STATUS_CLOUD_FILE_INVALID_REQUEST: i32 = 0xC000_CF0Bu32 as i32;
+/// `STATUS_CLOUD_FILE_INSUFFICIENT_RESOURCES`（0xC000CF10）：单段分配失败。
+pub const STATUS_CLOUD_FILE_INSUFFICIENT_RESOURCES: i32 = 0xC000_CF10u32 as i32;
+/// `STATUS_CLOUD_FILE_NETWORK_UNAVAILABLE`（0xC000CF11）：内容源不可用（离线）。
+pub const STATUS_CLOUD_FILE_NETWORK_UNAVAILABLE: i32 = 0xC000_CF11u32 as i32;
+/// `STATUS_IO_TIMEOUT`（0xC00000B5）：内容源延迟超过阈值。
+pub const STATUS_IO_TIMEOUT: i32 = 0xC000_00B5u32 as i32;
 
 /// `ERROR_ALREADY_EXISTS` 的 `HRESULT_FROM_WIN32`（同步根已注册/占位已存在时出现）。
 pub const HRESULT_FROM_WIN32_ERROR_ALREADY_EXISTS: i32 = 0x8007_00B7u32 as i32;
@@ -529,6 +562,14 @@ unsafe extern "system" {
         info_buffer_length: u32,
         returned_length: *mut u32,
     ) -> i32;
+    /// `CfHydratePlaceholder(HANDLE, LARGE_INTEGER, LARGE_INTEGER, CF_HYDRATE_FLAGS, CF_OPERATION_PARAMETERS *)`
+    pub fn CfHydratePlaceholder(
+        file_handle: Handle,
+        starting_offset: i64,
+        length: i64,
+        hydrate_flags: u32,
+        hydrate_params: *mut c_void,
+    ) -> i32;
     /// `CfExecute(const CF_OPERATION_INFO *, CF_OPERATION_PARAMETERS *)`
     pub fn CfExecute(op_info: *const CfOperationInfo, op_params: *mut c_void) -> i32;
 }
@@ -554,6 +595,18 @@ unsafe extern "system" {
     pub fn FindClose(find_file: Handle) -> i32;
     /// `GetLastError()`：紧跟失败的 Win32 调用读取，用于区分“不存在”与“拒绝访问”。
     pub fn GetLastError() -> u32;
+    /// `CancelIoEx(HANDLE hFile, LPOVERLAPPED lpOverlapped)`：取消该文件句柄上所有线程发出的
+    /// 挂起 I/O（`lpOverlapped` 为 NULL 表示全部）。原型用它触发水合请求的取消。
+    pub fn CancelIoEx(file: Handle, overlapped: *const c_void) -> i32;
+    /// `CancelSynchronousIo(HANDLE hThread)`：取消指定线程上挂起的同步 I/O。
+    ///
+    /// 原型用它验证“读取被取消 ⇒ `CANCEL_FETCH_DATA` 语义 ⇒ 传输中途退出”。
+    pub fn CancelSynchronousIo(thread_handle: Handle) -> i32;
+    /// `OpenThread(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwThreadId)`：
+    /// `CancelSynchronousIo` 需要一个线程句柄，而 `std::thread::Thread` 不提供线程 id/句柄。
+    pub fn OpenThread(desired_access: u32, inherit_handle: i32, thread_id: u32) -> Handle;
+    /// `GetCurrentThreadId()`：读线程用它把自己的系统线程 id 公布给取消方。
+    pub fn GetCurrentThreadId() -> u32;
 }
 
 /// 以“只读属性”方式打开条目：只请求 `FILE_READ_ATTRIBUTES`，因此不会触发水合回调；
