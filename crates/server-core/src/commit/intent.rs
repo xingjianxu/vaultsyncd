@@ -884,12 +884,12 @@ impl std::error::Error for StateJsonError {}
 /// 不接受数字与 `null`：本模块把所有计数与字节写成十进制字符串（避免 JSON number 丢精度），
 /// “未知”由缺字段表达而不是 `null`。因此这里是一个**故意收窄**的解析器：写到库里的证据必然能
 /// 读回来，别的写法一律拒绝而不是猜。
-enum JsonValue {
+pub(crate) enum JsonValue {
     Bool(bool),
     Text(String),
 }
 
-fn parse_flat_object(text: &str) -> Result<BTreeMap<String, JsonValue>, StateJsonError> {
+pub(crate) fn parse_flat_object(text: &str) -> Result<BTreeMap<String, JsonValue>, StateJsonError> {
     let mut scanner = Scanner {
         bytes: text.as_bytes(),
         pos: 0,
@@ -1016,7 +1016,7 @@ impl Scanner<'_> {
     }
 }
 
-fn take_bool(
+pub(crate) fn take_bool(
     fields: &mut BTreeMap<String, JsonValue>,
     field: &'static str,
 ) -> Result<bool, StateJsonError> {
@@ -1030,7 +1030,7 @@ fn take_bool(
     }
 }
 
-fn take_text(
+pub(crate) fn take_text(
     fields: &mut BTreeMap<String, JsonValue>,
     field: &'static str,
 ) -> Result<String, StateJsonError> {
@@ -1044,7 +1044,7 @@ fn take_text(
     }
 }
 
-fn take_u64(
+pub(crate) fn take_u64(
     fields: &mut BTreeMap<String, JsonValue>,
     field: &'static str,
 ) -> Result<u64, StateJsonError> {
@@ -1067,7 +1067,7 @@ fn take_digest(
     })
 }
 
-fn take_entry(
+pub(crate) fn take_entry(
     fields: &mut BTreeMap<String, JsonValue>,
     field: &'static str,
 ) -> Result<EntryId, StateJsonError> {
@@ -1079,7 +1079,10 @@ fn take_entry(
 }
 
 /// 所有已知键都取完后，剩下的键就是本模块不认识的证据：拒绝，而不是忽略。
-fn finish_object<T>(fields: &BTreeMap<String, JsonValue>, value: T) -> Result<T, StateJsonError> {
+pub(crate) fn finish_object<T>(
+    fields: &BTreeMap<String, JsonValue>,
+    value: T,
+) -> Result<T, StateJsonError> {
     match fields.keys().next() {
         Some(field) => Err(StateJsonError::UnknownField {
             field: field.clone(),

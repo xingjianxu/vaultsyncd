@@ -1,5 +1,10 @@
 //! 意图日志端口：把 `fs_intents` 的持久化能力暴露给提交状态机（design §11.2 步骤 5、§11.3）。
 //!
+//! 同一张表覆盖两类提交：[`IntentLog`] 是内容 put（`kind = 'put_content'`），[`NamespaceIntentLog`]
+//! 是目录创建与同 Root 移动（`kind = 'create'`/`'move'`）。两者共用阶段取值与转换规则
+//! （[`PutPhase`]）、共用“先写 `prepared` 意图再动磁盘”的顺序，只是证据 JSON 的形态不同：put 记内容
+//! 摘要，命名空间记位置、种类与 inode。
+//!
 //! 端口只做“写一条 prepared 意图、推进阶段、按身份读回、按 Root 列出未完成意图”，不解释业务语义：
 //! 什么时候能推进、现场是否满足前提，都由核心判定（[`crate::commit::intent`]、
 //! [`crate::recovery`]）。适配器（服务端存储层）必须把每次写入放在自己的事务里，并如实返回行内容；
@@ -11,6 +16,7 @@ use vaultsyncd_domain::ids::{IntentId, RootId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
 use crate::commit::intent::{NewPutIntent, PutIntent, PutPhase};
+use crate::commit::namespace::{NamespaceIntent, NewNamespaceIntent};
 
 /// 意图日志的失败。
 #[derive(Clone, Debug)]
@@ -135,4 +141,56 @@ pub trait IntentLog {
     ///
     /// 见 [`IntentLogError`]：越权（不能返回空列表冒充“没有未完成意图”）、存储失败。
     async fn unfinished_puts(&mut self, root: RootId) -> Result<Vec<PutIntent>, IntentLogError>;
+}
+
+/// 命名空间意图日志端口：目录创建与同 Root 移动的 `fs_intents` 行（`kind = 'create'`/`'move'`）。
+///
+/// 契约与 [`IntentLog`] 一致：每次写入在自己的事务里完成，读到的行不合规报
+/// [`IntentLogError::MalformedIntent`]，不猜阶段；`target_path` 写目标路径、`staging_path` 为 NULL
+/// （命名空间操作没有暂存文件）、`expected_before`/`desired_after` 写命名空间证据 JSON。
+// `#[allow(async_fn_in_trait)]`：与 `IntentLog` 同理，只在编排函数里以泛型参数使用。
+#[allow(async_fn_in_trait)]
+pub trait NamespaceIntentLog {
+    /// 写入一条 `prepared` 命名空间意图并返回持久化后的记录。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`IntentLogError`]：存储失败、越权、身份冲突、约束拒绝。
+    async fn begin_namespace(
+        &mut self,
+        new: &NewNamespaceIntent,
+        at: UtcTimestamp,
+    ) -> Result<NamespaceIntent, IntentLogError>;
+
+    /// 把命名空间意图推进到 `next` 并返回推进后的记录；非法转换必须报错。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`IntentLogError`]：存储失败、意图不存在/越权、非法转换、时间倒退。
+    async fn advance_namespace(
+        &mut self,
+        id: IntentId,
+        next: PutPhase,
+        at: UtcTimestamp,
+    ) -> Result<NamespaceIntent, IntentLogError>;
+
+    /// 按身份读一条命名空间意图；不存在或越权返回 `None`。
+    ///
+    /// # Errors
+    ///
+    /// 存储失败或行无法还原。
+    async fn load_namespace(
+        &mut self,
+        id: IntentId,
+    ) -> Result<Option<NamespaceIntent>, IntentLogError>;
+
+    /// 按 Root 列出尚未收尾的命名空间意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`IntentLogError`]：越权（不能返回空列表冒充“没有未完成意图”）、存储失败。
+    async fn unfinished_namespaces(
+        &mut self,
+        root: RootId,
+    ) -> Result<Vec<NamespaceIntent>, IntentLogError>;
 }
