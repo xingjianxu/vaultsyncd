@@ -55,7 +55,7 @@ impl std::fmt::Display for AllowedBaseError {
 impl std::error::Error for AllowedBaseError {}
 
 /// 预配置的允许基目录集合（design §11.4“确认目录在允许基目录内”）。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AllowedBases {
     bases: Vec<PathBuf>,
 }

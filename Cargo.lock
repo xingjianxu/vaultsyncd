@@ -1992,6 +1992,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vaultsyncd-domain",
+ "vaultsyncd-platform-linux-server",
  "vaultsyncd-protocol",
  "vaultsyncd-server-core",
  "vaultsyncd-server-store",

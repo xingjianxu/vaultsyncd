@@ -172,6 +172,54 @@ pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
+/// Root 健康状态闭集（design §7.2 `roots.health`）。`unavailable` 表示挂载、身份或权限
+/// 核对失败，该 Root 暂停同步但绝不据此推导删除。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum RootHealth {
+    /// 取值 `healthy`。
+    #[serde(rename = "healthy")]
+    Healthy,
+    /// 取值 `unavailable`。
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+
+/// 授权 Root 清单（design §15.2 `GET /v1/roots`）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RootList {
+    /// 当前调用者可见的 Root，按身份顺序稳定排列。
+    pub roots: Vec<RootSummary>,
+}
+
+/// 注册 Root 的输入（design §15.2 `POST /v1/admin/roots`）。这是少数接受服务器绝对路径
+/// 的网络接口之一，因此必须同时受允许基目录与存储准入约束。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RootRegisterRequest {
+    /// 服务端绝对路径；必须在部署配置的允许基目录内。
+    pub path: String,
+}
+
+/// 注册结果（design §15.2）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RootRegistered {
+    /// 注册时的健康状态。
+    pub health: RootHealth,
+    /// 该 Root 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Root 恒为
+    /// true；采集完成后由后续的初始采集步骤推进。
+    pub pending_import: bool,
+    /// 新 Root 的身份，32 个小写十六进制字符。
+    pub root_id: String,
+}
+
+/// 一条授权 Root 的对外摘要；不含服务器绝对路径。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RootSummary {
+    /// 当前健康状态。
+    pub health: RootHealth,
+    /// Root 身份，32 个小写十六进制字符。
+    pub root_id: String,
+}
+
 /// 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct SessionIssued {

@@ -93,8 +93,8 @@ impl AuthContext {
     }
 }
 
-/// OS 随机源：会话身份与凭据都来自它，不用时间或计数器（design §17.1）。
-struct RandomIds;
+/// OS 随机源：会话身份、凭据与 Root 身份都来自它，不用时间或计数器（design §17.1）。
+pub(crate) struct RandomIds;
 
 impl IdSource for RandomIds {
     fn next_id_bytes(&mut self) -> [u8; 16] {
