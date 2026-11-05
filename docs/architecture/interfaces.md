@@ -899,8 +899,8 @@ python3 tools/context.py --help
 | 项 | 契约 |
 | --- | --- |
 | `db::CLIENT_APPLICATION_ID` | `0x434C4E54`（ASCII `CLNT`），写入 `PRAGMA application_id`；与 `server_store::SERVER_APPLICATION_ID`（`VSN1`）互相拒绝 |
-| `db::MIGRATOR` | `sqlx::migrate!("./migrations")` 编译期内嵌 `crates/client-store/migrations/*.sql`（当前只有 `0001_initial.sql`）；已发布文件不得改写（校验和不符即拒绝启动） |
-| `db::target_schema_version()` | 内嵌迁移最大版本号（当前 `1`），即 `PRAGMA user_version` 的目标值 |
+| `db::MIGRATOR` | `sqlx::migrate!("./migrations")` 编译期内嵌 `crates/client-store/migrations/*.sql`（`0001_initial.sql` 属 S030，`0002_events_transfers_intents.sql` 属 S031）；已发布文件不得改写（校验和不符即拒绝启动） |
+| `db::target_schema_version()` | 内嵌迁移最大版本号（当前 `2`），即 `PRAGMA user_version` 的目标值 |
 | `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`，客户端升级不清库（design §19.3），回退走整套备份 |
 | `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非客户端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；失败返回 `DbError` 且不给可写句柄。父目录须已存在 |
 | `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
@@ -934,4 +934,50 @@ python3 tools/context.py --help
 - **种类门禁双向**：客户端拒绝 `VSN1` 服务端库（测试断言拒绝后 `application_id`、`user_version`、表结构与 `journal_mode` 均未改动，且没有建出任何客户端表）；服务端拒绝 `CLNT` 客户端库由 S026 的门禁与测试覆盖（同一 `application_id` 取值）。
 - **迁移/备份/连接默认项**：与 S026 同一套规则——迁移号与 SQLx 记账同事务、迁移前 `VACUUM INTO` + `quick_check` 备份（仅非空库且确有待执行迁移）、`user_version` 与 `_sqlx_migrations` 取大拒绝旧二进制、`WAL`+`foreign_keys`+`busy_timeout=10 s` 每连接默认、池上限 4。
 
-验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-client-store`、`cargo clippy --locked -p vaultsyncd-client-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-client-store`、`sqlite3 :memory: < crates/client-store/migrations/0001_initial.sql`。
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-client-store`、`cargo clippy --locked -p vaultsyncd-client-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-client-store`、`sqlite3 :memory: < crates/client-store/migrations/0001_initial.sql`；S031 追加的事件、传输、意图与通知表见下一节。
+
+## crates/client-store — 事件、传输、意图与通知（S031）
+
+状态：S031 实现。表定义在 `crates/client-store/migrations/0002_events_transfers_intents.sql`（`received_changes`/`transfers`/`local_intents`/`notifications`，并给 `bindings` 追加 `received_seq`/`applied_seq` 游标列），读写接口在 `src/events.rs`、`src/transfers.rs`、`src/intents.rs`、`src/notifications.rs`；schema 目标版本随之为 `2`。仍然不做文件系统 I/O、不拉事件、不传输、不算哈希、不读时钟：wire 变更列表在应用层映射成 `RemoteEntry` + `NewPendingOp` 后交给本层。
+
+### 模块与契约
+
+| 项 | 契约 |
+| --- | --- |
+| `events::IncomingBatch` | 一个不可拆分事务批次：`binding`、`seq`(`RootSeq`，从 1 起)、`tx`(`TxId`)、`events_json`（非空 JSON 数组文本，与 `server_store::changes::ChangeBatch` 同形）、`changes: Vec<RemoteEntry>`、`tasks: Vec<NewPendingOp>`（按依赖顺序） |
+| `events::receive_batch(tx, &IncomingBatch)` | 同一事务内依次写 `received_changes` → `remote_entries` → `pending_ops` → 最后推进 `bindings.received_seq`，返回 `ReceivedBatch`。重复批次（同 seq + 同 tx + 同事件）返回已存记录且不重复入队；同 seq 不同内容 `ConflictingBatch`；seq 不大于游标 `StaleBatch`；seq 0 `InvalidSeq`；任务绑定与批次不一致 `TaskBindingMismatch`；绑定不存在 `UnknownBinding` |
+| `events::ReceivedBatch` / `BatchState` | 批次记录（`seq`、`tx`、`events_json`、`state`、`last_error`）与状态 `Received` / `Applied` / `Blocked`（数据库文本 `received` / `applied` / `blocked`） |
+| `events::cursors(conn, binding)` / `Cursors` | 一对游标 `received`、`applied`（`RootSeq`，0 = 还没有批次）；绑定不存在 `UnknownBinding` |
+| `events::received_batch` / `unapplied_batches` | 按 `(binding, seq)` 读批次；列出状态不等于 `applied` 的批次（升序），即重启后的重放清单 |
+| `events::mark_batch_applied(tx, binding, seq)` / `mark_batch_blocked(tx, binding, seq, code)` | 标记应用完成（并把 `applied_seq` 推进到“连续已应用前缀”末端）/ 标记阻塞并记原因（游标停在它之前，处理后仍可转已应用）；均返回是否命中 |
+| `events::EventError` | `Db` / `UnknownBinding{binding}` / `InvalidSeq` / `InvalidEvents{reason}` / `ConflictingBatch{seq}` / `StaleBatch{seq,received}` / `TaskBindingMismatch{op}` / `Entry(EntryError)` / `Queue(QueueError)` / `MalformedRow{column}` |
+| `transfers::NewTransfer` / `TransferRecord` | 入站内容传输：`binding`、`version`(`VersionId`)、`chunk_size`、`total_size`、`bitmap`（低位在前，第 i 位 = 第 i 块）、`temp_path`；记录另带 `state`、`verified`、`last_error`，并有 `chunk_count()` / `has_chunk(i)` |
+| `transfers::TransferState` | `Running` / `Cancelled` / `Completed` / `Failed`（数据库文本 `running` / `cancelled` / `completed` / `failed`）；只有 `running` 接受进度更新 |
+| `transfers::start_transfer(tx, &NewTransfer)` / `transfer` / `transfers_for_binding` | 开始传输（位图长度与尾部 bit 必须与块几何一致、临时路径非空无 NUL、`(binding,version)` 唯一）/ 读单条 / 列某个绑定的全部进度（按版本字节序） |
+| `transfers::record_chunk(tx, binding, version, index)` | 记录第 `index` 块已收到；返回是否是新块。越界 `ChunkOutOfRange`、终态 `TransferClosed`、缺记录 `UnknownTransfer` |
+| `transfers::{complete_transfer, fail_transfer, cancel_transfer, discard_transfer}` | 完成（要求位图覆盖全部块，写 `verified = 1`）/ 记失败（必须带错误码）/ 取消（保留位图与临时路径）/ 删除记录；均返回是否命中 |
+| `transfers::TransferError` | `Db` / `ZeroChunkSize` / `SizeAboveDbLimit` / `BitmapSizeMismatch{expected,found}` / `BitmapTailNotZero` / `InvalidTempPath{reason}` / `DuplicateTransfer{version}` / `TransferClosed{state}` / `ChunkOutOfRange{index,chunks}` / `IncompleteContent{missing}` / `UnknownTransfer{version}` / `MalformedRow{column}` |
+| `intents::NewLocalIntent` / `LocalIntent` | 可恢复本地动作：`binding`、`kind`、`entry: Option<EntryId>`、`target_path`、`source_path`、`content_hash`（SHA-256 原始字节）、`generation`；记录另带本地序号 `id`、`state`、`last_error` |
+| `intents::LocalIntentKind` / `IntentState` | `Replace` / `Move` / `Release` / `Import`（数据库文本 `replace` / `move` / `release` / `import`）与 `Pending` / `Failed` |
+| `intents::begin_intent(tx, &NewLocalIntent)` / `intent(conn, id)` / `intents_for_binding(conn, binding)` | 写意图并返回记录（同一绑定同一 `target_path` 唯一；路径非空无 NUL；空哈希拒绝）/ 读单条 / 按 `intent_id` 升序列出（恢复顺序） |
+| `intents::record_intent_failure(tx, id, code)` / `complete_intent(tx, id)` | 记失败（保留路径、哈希与 generation）/ 完成后删行；均返回是否命中 |
+| `intents::IntentError` | `Db` / `InvalidPath{field,reason}` / `EmptyBytes{field}` / `DuplicateTarget{path}` / `MalformedRow{column}` |
+| `notifications::NewNotification` / `Notification` | 问题上报输入与记录：`dedupe_key`、`binding: Option<BindingId>`（`None` = 全局问题）、`entry`、`code`(`ErrorCode`)、`state`、`is_read`、`occurrences` |
+| `notifications::NotificationState` | `Active` / `Resolved`（数据库文本 `active` / `resolved`） |
+| `notifications::raise(tx, &NewNotification)` | 按去重键合并：首次写入 `active`/未读/次数 1；仍 `active` 时只加次数并保留已读；`resolved` 后复发回到 `active` 并置未读。同键不同错误码 `CodeMismatch` |
+| `notifications::{notification, notifications, active_notifications, unread_count}` | 按去重键读 / 全部（写入序）/ 未恢复的 / 未读且未恢复的条数 |
+| `notifications::{mark_read, resolve}` | 标记已读 / 标记已恢复；均返回是否命中 |
+| `notifications::NotificationError` | `Db` / `InvalidDedupeKey{reason}` / `CodeMismatch{dedupe_key,existing}` / `MalformedRow{column}` |
+
+### 表与不变量
+
+- **事件与游标同事务，应用游标单独**：`received_changes`、`remote_entries`、`pending_ops` 与 `bindings.received_seq` 在同一 `BEGIN IMMEDIATE` 事务写入，接收游标最后推进（design §9.3、I09）；文件落盘后才通过 `mark_batch_applied` 推进 `applied_seq`，且只越过“连续已应用前缀”。任一步失败由调用方回滚，游标不会领先于批次与任务。
+- **一个 RootSeq = 一个不可拆批次**：`received_changes` 主键 `(binding_id, seq)`，`seq > 0`（0 只是“还没有批次”的游标值）；`events_json` 与 `tx_id` 存服务端批次原形，`CHECK (json_valid(...) AND json_type(...) = 'array')` 兜住非 JSON 数组。
+- **重复批次幂等、冲突批次报错**：同 seq 同 tx 同事件列表重复到达只返回已存记录（不再入队）；同 seq 不同内容 `ConflictingBatch`，seq 不大于游标 `StaleBatch`——不静默覆盖已收位置。
+- **位图编码唯一**：`transfers.bitmap` 长度由块几何（`CHECK length = ceil(ceil(total/chunk)/8)`）约束，块数之后的 bit 必须为 0，写入前与读取时都检查；`(binding_id, version_id)` 主键，同一不可变版本只有一条进度，重启后按位图续传。
+- **完成必须已校验且完整**：`CHECK (state <> 'completed' OR verified = 1)`，`complete_transfer` 还要求位图覆盖全部块；`failed` 必须带错误码；`cancelled` 是持久状态，终态只能由 `discard_transfer` 删除。
+- **本地意图先于磁盘改动**：`local_intents` 在受控替换前写入，`intent_id` 是本地插入序（恢复顺序，不是 wire 身份），`UNIQUE (binding_id, target_path)` 保证同一路径同时只有一个期望；失败保留整条意图（路径、哈希、generation），完成才删行。
+- **通知按“原因 + Root”去重**：`dedupe_key` 主键；重复上报只加 `occurrences` 且不重置已读，`resolved` 后复发重新成为未读的 `active`（design §18.2）；`binding_id` 可为 `NULL`（全局问题），绑定解绑时级联删除。
+- **未做**：`received_changes` 没有保留期/GC（design §9.4 的事件保留期属拉取卡），`transfers` 只记入站内容（上传进度以服务端 `upload_parts` 为准），`local_intents` 不执行文件系统动作，通知不决定何时弹窗。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-client-store`、`cargo clippy --locked -p vaultsyncd-client-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-client-store`、`sqlite3 :memory: < crates/client-store/migrations/0002_events_transfers_intents.sql`。
