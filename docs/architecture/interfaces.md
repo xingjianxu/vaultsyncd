@@ -79,7 +79,7 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| 根清单 | `Cargo.toml` 为虚拟 workspace（无 `[package]`）；`resolver = "3"`；`members`/`default-members` 只列真实存在的包。当前 `members = ["crates/domain", "crates/platform-linux-server", "crates/platform-windows", "crates/protocol", "tests/windows-integration", "tools/xtask"]`，`default-members = ["crates/domain", "crates/protocol"]`：两个平台适配层、只能在 Windows 上运行的测试包与仅用于编排的工具都不进默认集合；`crates/protocol` 只依赖 serde 与 domain，两端共用，因此进默认集合（S024） |
+| 根清单 | `Cargo.toml` 为虚拟 workspace（无 `[package]`）；`resolver = "3"`；`members`/`default-members` 只列真实存在的包。当前 `members = ["crates/domain", "crates/fs-common", "crates/platform-linux-server", "crates/platform-windows", "crates/protocol", "tests/windows-integration", "tools/xtask"]`，`default-members = ["crates/domain", "crates/fs-common", "crates/protocol"]`：两个平台适配层、只能在 Windows 上运行的测试包与仅用于编排的工具都不进默认集合；`crates/fs-common`（S017）与 `crates/protocol`（S024）只依赖纯核心，两端共用，因此进默认集合 |
 | 包命名 | `crates/<目录>/` 的包名为 `vaultsyncd-<目录>`（如 `vaultsyncd-domain`）；`apps/` 入口按 design §5.7 的 `vaultsyncd-server`/`-admin`/`-agent`/`-cli` |
 | 共享包字段 | `[workspace.package]`：`edition = "2024"`、`rust-version = "1.85.0"`、`version = "0.1.0"`、`publish = false`；成员用 `<字段>.workspace = true` 继承，不重复字面量 |
 | lint 接线 | 成员默认写 `[lints] workspace = true`。`[workspace.lints.rust]`：`unsafe_code`、`missing_docs`、`unused` = deny；`[workspace.lints.clippy]`：`all = { level = "deny", priority = -1 }`。crate 内的 `#![forbid(unsafe_code)]` 是更硬的内层约束。**包级放行 `unsafe_code` 的唯一可行写法**（S010 实测）：省略 `[lints] workspace` 键（写 `workspace = false` 会报错“`workspace` cannot be false”，与 `workspace = true` 并存会被拒“cannot override `workspace.lints` in `lints`”），然后在包内手抄 workspace 的其余 lint（`missing_docs`/`unused` deny、`clippy::all` deny）并在 `Cargo.toml` 注释说明理由；实测 `crates/platform-windows` 的 `missing_docs` 与 `unsafe_code` 行为都符合预期。也可以不改 lint 表，改用各 target 源码里的 crate 级 `#![allow(unsafe_code)]`（`tests/windows-integration` 的做法）。S013 的 `crates/platform-linux-server` 用同一写法（包级 `unsafe_code = "allow"` + 手抄其余 lint），理由同样是必须直接调用内核 ABI |
@@ -436,7 +436,7 @@ python3 tools/context.py --help
 
 ## crates/domain — 身份与有界计数（S015）
 
-状态：S015 在 `crates/domain/src/ids.rs`、`version.rs` 落地不透明身份与有界计数/UTC 时间端口。纯数据与纯规则，无第三方依赖、无 I/O；`crates/domain` 仍是身份的唯一定义处，平台层只承载字节。状态维度与错误分类归 S016。
+状态：S015 在 `crates/domain/src/ids.rs`、`version.rs` 落地不透明身份与有界计数/UTC 时间端口。纯数据与纯规则，无第三方依赖、无 I/O；`crates/domain` 仍是身份的唯一定义处，平台层只承载字节。状态维度与错误分类见下节 S016。
 
 ### 模块与契约
 
@@ -463,6 +463,77 @@ python3 tools/context.py --help
 - 拒绝即报错：空文本、正负号、前导零、非十六进制字符、超界数值都返回明确变体，不静默取默认值或截断。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/domain — 状态维度与错误分类（S016）
+
+状态：S016 在 `crates/domain/src/state.rs`、`error.rs` 落地六个正交状态维度、界面主状态投影、“已同步”判断与 design §15.4 错误码分类。纯数据与纯函数：不读写文件、不查数据库、不读时钟、不做重试调度，也不生成状态（执行器负责更新维度值）。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `state::Residency` | `MetadataOnly`（默认）/ `Partial` / `Materialized`；`Partial` 是下载中间态，不代表完整离线可用 |
+| `state::Dirty` | `Clean`（默认）/ `Dirty` / `Snapshotting` / `AwaitingCommit`；`Clean` 只是上次观察，不是“文件未变”的证明 |
+| `state::RemoteApply` | `Current`（默认）/ `Pending` / `BlockedByLocal` / `Conflicted` |
+| `state::Transfer` | `Idle`（默认）/ `Queued` / `Running` / `RetryWait(ErrorCode)` / `Failed(ErrorCode)`；`error_code()` 给出重试/失败原因，其余状态返回 `None` |
+| `state::Usage` | `Idle`（默认）/ `ReadHandles` / `WriteHandles` / `Unknown`；只供破坏性操作（释放、替换）准入使用，不改变主状态 |
+| `state::Availability` | `Online`（默认）/ `Offline` / `MountFailed` / `RootUnavailable` |
+| `state::EntryState` | 六个公开维度字段 + `Default`（仅云端、clean、current、idle、idle、online）；方法与无 I/O 投影：`project() -> EntryStatus`、`is_synced() -> bool` |
+| `state::EntryStatus` | design §8.2 优先级（声明顺序）：`Unavailable` > `Failed` > `Conflict` > `LocalChanges` > `Syncing` > `Downloaded` > `CloudOnly` |
+| `error::ErrorClass` | `Retryable` / `NeedsUserAction` / `Corrupt`；`is_severe()` 仅对后两者为真（design §8.2 严重失败、§18.2 问题页） |
+| `error::ErrorCode` | design §15.4 的 23 个错误码（18 服务端 + 4 首发 Windows 本机 + `MOUNT_FAILED`）；`ALL`、`as_str()`（wire 规范文本）、`from_code()`、`class()`、`Display` |
+
+### 投影与分类规则
+
+- **主状态**：挂载失败/Root 不可用 → `Unavailable`；已停止自动推进的任务或重试队列里出现严重类别 → `Failed`；`Conflicted` → `Conflict`；任一非 `Clean` 的本地变更 → `LocalChanges`；其余 `remote_apply != Current` 或任务非 `Idle` → `Syncing`；最后按 `Residency` 给 `Downloaded`/`CloudOnly`。详情可同时显示多个维度，主状态只有一个。
+- **已同步**：`is_synced()` 的成立条件是 `dirty = Clean`、`remote_apply = Current`，且任务不是 `RetryWait`/`Failed`。`Pending`/`BlockedByLocal`/`Conflicted` 与任一待上传修改都为假；`Queued`/`Running` 的下载或哈希任务不改变“基线一致”。`Residency`、`Availability` 不参与判断，界面另读维度显示“仅云端/当前离线”。
+- **错误类别只由错误码决定**：`Retryable` 允许自动重新规划或退避重试；`NeedsUserAction` 停止相关操作、保留本地内容并进入问题页；`Corrupt` 不发布未通过校验的内容。一次性的前置动作由调用方在分类前完成（例如 `AUTH_EXPIRED` 先受控刷新一次）。`from_code` 对未知代码返回 `None`，不默认归入可重试。
+- **wire `retryable` 与本分类不冲突**：`ROOT_UNAVAILABLE` 在 wire 上可为 `retryable: true`（允许低频复查），分类仍是 `NeedsUserAction`（只能由用户/管理员恢复挂载）。
+
+### 不变量
+
+- 维度可任意组合：`dirty + offline + materialized` 必须能表达，不被压成单一“冲突”标签。
+- 投影与 `is_synced()` 是纯函数，对不一致组合保守处理：不在 `Current` 的远端事实、失败/重试任务与非 `Clean` 状态一律不判为已同步；`RetryWait` 携带严重类别时按失败显示。
+- `Transfer::Failed` 表示已停止自动推进的失败，界面按 `Failed` 显示；可重试错误在退避期间保持 `RetryWait`，不进入问题页。
+- 领域层不生成状态值、不做 I/O 或调度：重试次数、退避与 `Retry-After` 属调度器（design §13.3）。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/fs-common — 相对路径与跨平台名称规则（S017）
+
+状态：S017 在 `crates/fs-common/src/path.rs`、`name.rs` 落地纯规则；无第三方依赖、无 I/O、无平台 API，已加入根 workspace 的 `members` 与 `default-members`（可移植核心，`cargo test/clippy --locked` 直接覆盖）。排除规则（`ignore.rs`）、文件事实类型（`fingerprint.rs`）留给后续卡，本卡不预置占位 API。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `name` | `MAX_COMPONENT_UTF8_BYTES = 255`（Linux `NAME_MAX`）、`MAX_COMPONENT_UTF16_UNITS = 255`（NTFS 组件上限）；`validate_name(&str) -> Result<(), NameIssue>` 与 `validate_name_bytes(&[u8]) -> Result<(), NameIssue>`（非 UTF-8 归类为 `NonUtf8`，不做有损解码） |
+| `name::NameIssue` | `Empty` / `NonUtf8` / `Nul` / `Separator`（`/`、`\`，含 `\\?\`、`\\.\` 前缀）/ `CurrentDirectory` / `ParentDirectory` / `Control(char)` / `Illegal(char)`（`< > : " | ? *`）/ `TrailingDot` / `TrailingSpace` / `Reserved(ReservedName)` / `TooLong { utf8_bytes, utf16_units }`；实现 `Display` 与 `std::error::Error` |
+| `name::ReservedName` | Windows 保留设备名 `CON`/`PRN`/`AUX`/`NUL`/`COM1`—`COM9`/`LPT1`—`LPT9`（含上标 `COM¹`—`COM³`、`LPT¹`—`LPT³`），`as_str()` 给出规范写法 |
+| `name::NameEquivalence` | 原生名称等价端口 `fn equivalent(&self, left: &str, right: &str) -> bool`；平台层用真实比较表（Windows `CompareStringEx`、文件系统归一化）实现，端口只回答“是否同一条目”，未提供改名能力 |
+| `name::PortableNameEquivalence` | 默认实现：字节相同或 Unicode 小写折叠后相同（仅比较，不改写）。不做 NFC/NFD 归一化，组合形式差异留给原生端口 |
+| `name::find_collisions(&[&str], &impl NameEquivalence)` | 按 `(first_index, second_index)` 升序返回 `NameCollision { first_index, second_index, first, second }`；只报告，不选择保留哪一条 |
+| `path::RelativePath` | 已校验的相对路径（非空分量序列）。`RelativePath::parse(&str)`、`FromStr`、`components() -> &[String]`、`Display`（以 `/` 连接，往返不改文本）；实现 `Eq`/`Hash`/`Ord` |
+| `path::PathIssue` | `Empty` / `Absolute` / `DriveLetter(char)` / `Nul` / `Backslash` / `EmptyComponent { index }` / `Component { index, issue: NameIssue }` / `TooLong { utf8_bytes }`；实现 `Display` 与 `std::error::Error` |
+| `path::relation` / `path::is_within` | 按分量判定 `PathRelation::{Same, Ancestor, Descendant, Unrelated}` 与“等于或在之下”；不使用字符串前缀 |
+| `path::MAX_RELATIVE_PATH_UTF8_BYTES` | `4095`（Linux `PATH_MAX` 减 NUL）。Windows 绝对路径上限取决于 Root 挂载前缀，由平台层判定 |
+
+### 编码与边界规则
+
+- **固定检查顺序**（同一输入总是同一结论）：名称“空 → NUL → 分隔符 → `.`/`..` → 控制/非法字符 → 长度 → 尾部点/空格 → 保留名”；路径“空 → NUL → 绝对/设备前缀 → 盘符 → 反斜杠 → 整体长度 → 逐分量（空分量 → 名称规则）”。
+- **保留名按第一个 `.` 之前的部分判定**且大小写不敏感：`con.txt`、`nul.tar.gz` 都是保留名；`CONS`、`com0` 不是。
+- **长度双上限**：一个名称必须同时满足 255 UTF-8 字节与 255 UTF-16 码元，因此 100 个汉字（300 字节 / 100 码元）被报 `TooLong`。
+- **不做规范化**：路径与名称解析只判定、不改写；`a//b`、`a/`、`./a`、`a/../b` 一律报错而不是折叠成另一条路径；大小写与 Unicode 组合形式原样保留。
+- **重叠判定按分量**：`a` 与 `ab` 是 `Unrelated`，不是父子关系（design §16.1）。
+- 文件与目录同名属于上层冲突（design §7.4，planner/store 负责）；`find_collisions` 只按名称等价分组，不区分条目类型。
+
+### 不变量
+
+- 名称与路径的接受/拒绝完全由输入决定，不含哈希表顺序、平台比较表或当前目录状态，可移植核心与平台层得到相同判定。
+- 任何无法无损跨端表示的名称都带明确原因返回，绝不静默小写、归一化、替换字符或截断。
+- 碰撞只报告不消解：接入原生等价端口只会扩大检测范围，不会产生改名或覆盖行为。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
 
 ## api/ — 远端协议契约源与生成配置（S024）
 

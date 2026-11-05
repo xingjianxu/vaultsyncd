@@ -1,0 +1,10 @@
+[package]
+name = "vaultsyncd-fs-common"
+description = "vaultsyncd 与平台无关的路径与名称规则：相对路径校验、跨平台名称分类、名称等价端口"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

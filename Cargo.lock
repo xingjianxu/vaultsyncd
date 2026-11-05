@@ -192,6 +192,10 @@ name = "vaultsyncd-domain"
 version = "0.1.0"
 
 [[package]]
+name = "vaultsyncd-fs-common"
+version = "0.1.0"
+
+[[package]]
 name = "vaultsyncd-platform-linux-server"
 version = "0.1.0"
 
