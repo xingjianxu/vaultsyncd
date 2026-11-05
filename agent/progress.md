@@ -29,20 +29,20 @@
 | S016 | 定义状态维度与错误分类 | L | S015 | done | 产出提交 `01e36a6` + 冲突合并 `a03a3d5`（父提交 `4d69f77`；worktree `.worktrees/s016`；master 合并 `4db6927`） | `crates/domain/src/state.rs`：六维正交状态 + `project`/`is_synced`（`dirty+offline+materialized` 可共存，`Pending`/`BlockedByLocal`/`Conflicted` 均不判已同步）；`error.rs`：`ErrorClass` + 23 个 `ErrorCode` 往返。`cargo test -p vaultsyncd-domain` 32 passed（新增 18）、clippy/fmt/doc/workspace 四步全 0 | 无 | agent/tasks/S016.md |
 | S017 | 路径与名称纯规则 | L | S015 | done | 产出提交 `a67e61a`（父提交 `4d69f77`；worktree `.worktrees/s017`；master 合并 `29b402e`） | 新增 `crates/fs-common`：`RelativePath::parse` 只接受规范相对分量（拒绝绝对/UNC/盘符/NUL/空分量/`.`/`..`，不自动小写不改名）；`validate_name` 按固定顺序分类 Windows 保留名/尾部点空格/控制字符/255 字节+255 码元双上限；`relation`/`is_within` 按分量判重叠；`NameEquivalence` 端口留给平台层。`cargo test -p vaultsyncd-fs-common` 19 passed、clippy/fmt/doc 全 0 | 无（原生等价语义待 S065） | agent/tasks/S017.md |
 | S018 | 排除规则与解释 | L | S017 | todo | — | 未执行 | — | agent/tasks/S018.md（执行时创建） |
-| S019 | 三方规划基本分支 | L | S015、S016、S017 | todo | — | 未执行 | — | agent/tasks/S019.md（执行时创建） |
+| S019 | 三方规划基本分支 | L | S015、S016、S017 | done | 产出提交 `690b106`（父提交 `4d6259e`；worktree `.worktrees/s019`；master 合并 `37a0c0a`，与产出树逐字节一致） | 新增 `crates/planner`（只依赖 domain+fs-common，无 I/O）：B/L/R 事实 + `Plan`（action/prerequisites/dependencies/local_protection）；实现 NoOp/ApplyRemote/UploadLocal/MergeSameResult 四分支，比较只看位置/类型/长度+SHA-256，`mtime` 仅观察；未实现规则一律 `Defer`+保留本地内容。12 单测、clippy/fmt/workspace 全 0 | 无 | agent/tasks/S019.md |
 | S020 | 首次合并规划 | L | S019 | todo | — | 未执行 | — | agent/tasks/S020.md（执行时创建） |
 | S021 | 内容冲突及稳定副本身份 | L | S019 | todo | — | 未执行 | — | agent/tasks/S021.md（执行时创建） |
 | S022 | 移动与删除冲突规划 | L | S020、S021 | todo | — | 未执行 | — | agent/tasks/S022.md（执行时创建） |
 | S023 | 规划器操作重排验证 | L | S022 | todo | — | 未执行 | — | agent/tasks/S023.md（执行时创建） |
 | S024 | 远端协议最小契约与生成通路 | L | S015、S006 | done | 产出提交 `fc0d551` + 冲突合并 `47bf26c`（父提交 `4d69f77`；worktree `.worktrees/s024`；master 合并 `8c22892`） | `api/{openapi.yaml,generation.toml}` + `crates/protocol` + `packages/api-client` + `cargo xtask generate`/`--check`：同源生成 Rust DTO 与 TS client 双方编译、重生成无 diff；`cargo xtask check` 5/5、契约测试 13 项、`pnpm --filter @vaultsyncd/api-client test` 9 项 pass；负控：手改生成文件→check 退 1，删 `RATE_LIMITED`→契约测试失败 | 无 | agent/tasks/S024.md |
 | S025 | 本机 IPC 最小契约与生成通路 | L | S016、S024 | todo | — | 未执行 | — | agent/tasks/S025.md（执行时创建） |
-| S026 | 服务端数据库迁移框架 | L | S015、S007 | todo | — | 未执行 | — | agent/tasks/S026.md（执行时创建） |
+| S026 | 服务端数据库迁移框架 | L | S015、S007 | done | 产出提交 `fc3c240`（+`3184949` 交接、`945ca35` 合并 master；父提交 `4d6259e`；worktree `.worktrees/s026`；master 合并 `eef9da9`） | 新增 `crates/server-store`（SQLx 0.8.6/sqlite）：`application_id=0x56534E31` 库种类门禁（客户端库/未标记非空库/非 SQLite 拒绝且只读探测不改对方）、`user_version` 与 `_sqlx_migrations` 取大覆盖中断态、迁移前 `VACUUM INTO` 快照+`quick_check`、WAL/外键/busy_timeout 每连接默认并读回校验、`begin_write()`=BEGIN IMMEDIATE。10 passed（含 BEGIN 即持锁、客户端库拒绝后文件逐项不变） | 无 | agent/tasks/S026.md |
 | S027 | 服务端命名空间表与约束 | L | S026 | todo | — | 未执行 | — | agent/tasks/S027.md（执行时创建） |
 | S028 | 版本、事件与幂等表 | L | S027 | todo | — | 未执行 | — | agent/tasks/S028.md（执行时创建） |
 | S029 | 上传、意图与租约表 | L | S028 | todo | — | 未执行 | — | agent/tasks/S029.md（执行时创建） |
 | S030 | 客户端数据库与状态表 | L | S015、S016、S026 | todo | — | 未执行 | — | agent/tasks/S030.md（执行时创建） |
 | S031 | 客户端事件、传输与意图持久化 | L | S030 | todo | — | 未执行 | — | agent/tasks/S031.md（执行时创建） |
-| S032 | Linux 安全路径访问正式接口 | L | S014、S017 | todo | — | 未执行 | — | agent/tasks/S032.md（执行时创建） |
+| S032 | Linux 安全路径访问正式接口 | L | S014、S017 | done | 产出提交 `abd6f56`（父提交 `4d6259e`；同步 master `1929980`；worktree `.worktrees/s032`；master 合并 `ea66765`） | `files/root.rs`（Root 句柄正式接口+快照/漂移）、`restricted.rs`（`getdents64` 句柄列举、权限/挂载边界错误分类）、`mounts/overlap.rs`（父子/别名/bind 重叠）；`run-path-access.sh` 真实 btrfs 卷 92 项 0 失败（符号链接目录/文件/中间段全部 `symlink_rejected` 且无外部内容、换目标竞态 40 次、权限失败不返回空目录）；宿主 55 passed、clippy/fmt/workspace 全 0 | 无 | agent/tasks/S032.md |
 | S033 | 不可变对象写入与读取 | L | S029、S032 | todo | — | 未执行 | — | agent/tasks/S033.md（执行时创建） |
 | S034 | 持久提交意图状态机 | L | S033 | todo | — | 未执行 | — | agent/tasks/S034.md（执行时创建） |
 | S035 | 内容 CAS 与现场复核 | L | S034、S028 | todo | — | 未执行 | — | agent/tasks/S035.md（执行时创建） |
