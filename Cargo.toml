@@ -8,7 +8,11 @@ resolver = "3"
 # 语义模拟工作目录发布，并在每个持久化边界强杀提交子进程，因此同样不进 default-members。
 # crates/platform-linux-server 是服务端 Linux 平台适配层（S013 起），只在 Linux 上编译；
 # 它的挂载准入需要直接调用 fstatfs/statx/ioctl，因此同样不进 default-members。
+# apps/server 是 Linux 服务端进程入口（S041，design §5.3）：它只在 Linux 上编译（非 Linux
+# 目标直接 compile_error!），因此进 members 但**不进** default-members，便携检查（含 Windows
+# 默认目标）不会构建服务端应用。
 members = [
+    "apps/server",
     "crates/client-store",
     "crates/domain",
     "crates/fs-common",
