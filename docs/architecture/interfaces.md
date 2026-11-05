@@ -590,9 +590,9 @@ python3 tools/context.py --help
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
 
-## crates/planner — 三方比较与基本计划（S019）
+## crates/planner — 三方比较与基本计划（S019、S021）
 
-状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。冲突副本、移动/删除矩阵由后续卡补齐，本卡遇到这些输入只输出延期裁决。没有基线的输入转交首次合并入口（见下一节）。
+状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支；S020 增加首次合并入口 `first_sync::plan_first_sync`（design §9.2，见下一节）；S021 在 `crates/planner/src/conflict.rs` 落地 design §10.1—10.2 的内容冲突计划（服务器 head 保留主路径 + 迟到分支的稳定身份冲突副本与预算内冲突名）。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。移动/删除矩阵由后续卡补齐，遇到这些输入只输出延期裁决。没有基线的输入转交首次合并入口。
 
 ### 模块与契约
 
@@ -603,10 +603,10 @@ python3 tools/context.py --help
 | `reconcile::ServerFact` | 服务器侧事实（B 或 R）：`path`、`kind`、`entry_id`、`revision`、`version: Option<VersionId>`（文件由 `file()` 保证为 `Some`，目录为 `None`）、`observed_mtime`；构造 `file(path, content, entry_id, revision, version)` / `directory(path, entry_id, revision)` / `with_observed_mtime(mtime)` |
 | `reconcile::LocalFact` | 本地事实 L：`path`、`kind`、`generation`、`observed_mtime`；构造 `file(path, content, generation)` / `directory(path, generation)` / `with_observed_mtime(mtime)` |
 | `reconcile::Plan` | `path`（优先基线位置，其次本地，再其次远端）、`action`、`prerequisites: Vec<Prerequisite>`、`dependencies: Vec<Dependency>`、`local_protection: LocalProtection`；纯值，不承诺执行成功 |
-| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`Defer(DeferReason)`；首次合并另有 `UploadNewEntry`、`CreateFromRemote`、`BindRemoteEntry`、`PreserveBoth`（S020，见下一节） |
+| `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`CreateConflictCopy { entry_id, op_id, generation }`（S021）、`Defer(DeferReason)`；首次合并另有 `UploadNewEntry`、`CreateFromRemote`、`BindRemoteEntry`、`PreserveBoth`（S020，见下一节） |
 | `reconcile::DeferReason` | `FirstSync`（无基线，转交 design §9.2 的首次合并入口）、`MissingEntry`（某一侧缺失，design §10.3）、`IdentityReplaced`（远端身份已非基线身份，I03）、`LocationOrKindChanged`（移动/类型互换，design §9.5、§10.1）、`ContentConflict`（双方都变且结果不同，design §10）、`IncompleteFacts`（自称内容变化却给不出文件版本） |
 | `reconcile::Prerequisite` | `BaseRevisionCurrent { expected }`（服务器修订仍等于计划基线）、`GenerationUnchanged { expected }`（本地代际未变）、`UsagePermitsChange`（无写入句柄）、`TargetPathUsable`（父目录已同步、名称可表示、无同名另一类型条目）、`ServerPathVacant`（服务器该路径仍无条目，首次合并的创建 CAS）、`LocalPathVacant`（本地该路径仍无条目，避免覆盖扫描后新建的本地内容） |
-| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }` |
+| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }`、`ConflictCopyCommitted { entry_id }`（S021：冲突副本提交后才能替换主路径的本地字节） |
 | `reconcile::LocalProtection` | `NotNeeded`（无操作）、`KeepLocalContent`（字节不动，只在基线写入后推进状态）、`SnapshotBeforeReplace { generation }`、`UploadSnapshot { generation }` |
 | `reconcile::reconcile(base, local, remote)` | 三项 `Option<&…>`，`None` 表示该侧没有该条目（删除事实）；返回 `Result<Plan, PlanError>`，三项都缺失返回 `PlanError::NoFacts` |
 | `reconcile::PlanError` | `NoFacts`（没有可比对的条目）、`PathMismatch`（首次合并两侧事实路径不同，调用方没有按规范路径配对） |
@@ -618,11 +618,32 @@ python3 tools/context.py --help
 - **四条基本分支**：`L=B、R=B` → `NoOp`；`L=B、R≠B` → `ApplyRemote`（前提 `BaseRevisionCurrent`、`GenerationUnchanged`、`UsagePermitsChange`、`TargetPathUsable`；内容变化时有 `DownloadVersion` 依赖并要求替换前快照，仅元数据变化时不需要下载、本地字节不动）；`L≠B、R=B` → `UploadLocal`（携带基线 `Revision`，依赖父目录就绪与本地快照，保护说明为上传快照）；`L≠B、R≠B` 且位置/类型/内容都相同 → `MergeSameResult`（不传输内容、不造副本，只在基线写入后推进状态）。
 - **延期裁决**：无基线、某一侧缺失、远端身份被替换、位置或类型变化、双方结果不同、事实不完整都输出 `Action::Defer`；这类计划没有前提与依赖，`local_protection` 固定为 `KeepLocalContent`，不允许执行器删除或覆盖本地内容（I02、I04、I07）。
 
+### 冲突计划（S021）
+
+| 契约 | 形状 |
+| --- | --- |
+| `conflict::plan_content_conflict(&ContentConflictRequest)` | 返回 `Result<ConflictPlan, ConflictPlanError>`；输入 `base`/`local`/`remote` 事实、`conflict_entry_id`（服务端为该 `OpId` 首次分配的身份）、`committed: Option<&CommittedConflict>`（幂等记录）、`naming` |
+| `conflict::ConflictPlan` | `main: Plan`（保留服务器 head 的 `ApplyRemote`，依赖含 `ConflictCopyCommitted`，保护为 `SnapshotBeforeReplace`）、`copy: ConflictCopy` |
+| `conflict::ConflictCopy` | `Create(Plan)`（`Action::CreateConflictCopy { entry_id, op_id, generation }`，同一父目录下的冲突名）、`Reuse(CommittedConflict)`（同一 `OpId` 的既有结果，不造第二份） |
+| `conflict::CommittedConflict` | 幂等记录：`op_id`、`entry_id`、`path`（首次生成的路径，重试不得改名）、`content: ContentFingerprint` |
+| `conflict::conflict_entry_path(&RelativePath, &ConflictNameRequest)` | 按 §10.2 生成同父目录的冲突路径 `Result<RelativePath, ConflictNameError>`；名称形如 `<原名干>（冲突-<设备短标识>-<服务器时间>-<op 短标识>）<扩展名>` |
+| `conflict::NameBudget` | 目标文件系统的名称预算 `new(utf8_bytes, utf16_units)`；上限为 `fs-common` 的 255/255（`NameBudget::CROSS_PLATFORM`），更紧时原名干按字符边界截断 |
+| `conflict::ShortIdLen` | 名称里短标识的十六进制长度（`DEFAULT` = 8，范围 8—32，`extended()` 撞名时翻倍）；长度不合规返回 `ShortIdLenError` |
+| `conflict::ConflictPlanError` | `NotContentConflict`（应走 `reconcile` 的其它分支）、`IncompleteHead`（head 是文件却无内容版本）、`OpIdRequestChanged`（同一 `OpId` 的记录与本次请求不同，I06）、`Name(ConflictNameError)` |
+| `conflict::ConflictNameError` | `NameMissing`、`SuffixExceedsBudget { required_utf8_bytes, required_utf16_units }`、`Unrepresentable(NameIssue)`（设备短标识违规等）、`Path(PathIssue)`（组合后相对路径超长） |
+
+- **只接一种输入**：路径/类型/身份未变、两侧都相对基线改了内容、且两侧 `ContentFingerprint` 不同；其它形态一律 `NotContentConflict`，交回 `reconcile` 对应分支，不抢移动/删除矩阵的裁决。
+- **胜者只看服务器提交序**：保留哪一份由 `remote.revision` 表达，`mtime` 不进入任何判定；交换设备时钟得到同一计划。
+- **同内容归并只看长度与 SHA-256**：`ContentFingerprint` 相同就不创建副本；名称相同、路径相同或 `mtime` 相同都不足以归并。
+- **幂等依据是 `OpId`**：冲突身份与路径由服务端为该操作分配一次后持久化；重试传入 `committed` 时返回原 `entry_id` 与原 `path`，即使设备短标识或服务器时间已变也不改名，不会不断新增副本；同 `OpId` 不同内容/身份返回 `OpIdRequestChanged`。
+- **名称不承担幂等**：短标识撞名只能加长后换名（`ShortIdLen::extended`），不改变身份。
+
 ### 不变量
 
-- 同一三方输入重复计算得到完全相同的 `Plan`（含前提与依赖顺序：按 `Prerequisite`/`Dependency` 声明顺序）。
+- 同一三方输入重复计算得到完全相同的 `Plan`（含前提与依赖顺序：按 `Prerequisite`/`Dependency` 声明顺序）；冲突计划同样对同一输入重复得到相同的 `ConflictPlan`（含冲突身份、路径与名称）。
 - 只输出计划、不执行：不覆盖文件、不删除文件、不推导删除、不做 I/O。
 - 缺少必需事实（如内容变化却无 `VersionId`）不降级成“只推进元数据”，而是延期裁决。
+- 冲突名称只由输入（原名、设备短标识、服务器时间、`OpId`、预算）决定；不带哈希表顺序与客户端时钟，同一输入得到同一名称且严格命中名称预算。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
 

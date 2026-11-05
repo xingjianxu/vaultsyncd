@@ -12,9 +12,11 @@
 //! - [`first_sync::plan_first_sync`]：没有基线的首次合并，落 design §9.2 第 4—7 步；它不接受基线
 //!   参数，因此不会把“另一端没有”当成删除（I07）。
 //!
-//! 内容冲突副本（`conflict.rs`）、移动/删除矩阵（`rename.rs`/`delete.rs`）分别由后续卡补齐；在此之前
-//! 这些输入只给出明确的延期裁决或“保留双方”计划，不生成删除或覆盖动作。
+//! 内容冲突副本由 [`conflict`] 落 design §10.1—10.2（服务器 head 保留主路径 + 迟到分支的稳定身份冲突
+//! 副本、按名称预算截断的冲突名）。移动/删除矩阵（`rename.rs`/`delete.rs`）由后续卡补齐；在此之前这些
+//! 输入只给出明确的延期裁决或“保留双方”计划，不生成删除或覆盖动作。
 #![forbid(unsafe_code)]
 
+pub mod conflict;
 pub mod first_sync;
 pub mod reconcile;

@@ -587,11 +587,12 @@ mod tests {
             | Action::BindRemoteEntry { .. }
             | Action::PreserveBoth(_)
             | Action::Defer(_) => true,
-            // 无操作与“应用远端/上传本地/同结果归并”都以基线为前提，不是首次合并的结论。
+            // 无操作与“应用远端/上传本地/同结果归并/冲突副本”都以基线为前提，不是首次合并的结论。
             Action::NoOp
             | Action::ApplyRemote { .. }
             | Action::UploadLocal { .. }
-            | Action::MergeSameResult { .. } => false,
+            | Action::MergeSameResult { .. }
+            | Action::CreateConflictCopy { .. } => false,
         }
     }
 

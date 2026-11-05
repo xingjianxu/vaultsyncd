@@ -28,7 +28,7 @@
 //!
 //! 任一证据显示变化即按“有变化”处理：宁可重新规划一次，也不把过期基线当成无操作。
 
-use vaultsyncd_domain::ids::{EntryId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, OpId, VersionId};
 use vaultsyncd_domain::version::{Generation, Revision, UtcTimestamp};
 use vaultsyncd_fs_common::path::RelativePath;
 
@@ -244,6 +244,11 @@ pub enum Dependency {
         /// 快照固定的本地代际。
         generation: Generation,
     },
+    /// 冲突副本必须先提交，才能替换主路径上的本地内容（design §10.1、I02）。
+    ConflictCopyCommitted {
+        /// 要等待提交的冲突条目身份。
+        entry_id: EntryId,
+    },
 }
 
 /// 本地未确认内容的保护说明（design I02）。
@@ -307,6 +312,15 @@ pub enum Action {
         revision: Revision,
         /// 归并采用的远端文件版本；目录归并没有内容版本。
         version: Option<VersionId>,
+    },
+    /// 迟到分支的不同内容成为新冲突条目，不覆盖服务器 head（design §10.1、§10.2）。
+    CreateConflictCopy {
+        /// 冲突条目的稳定身份：同一 `OpId` 只分配一次（I06、T03）。
+        entry_id: EntryId,
+        /// 触发该副本的逻辑操作身份；它是幂等依据，不是文件名。
+        op_id: OpId,
+        /// 作为副本内容的本地代际。
+        generation: Generation,
     },
     /// 首次合并时本地独有：在服务器新建条目（design §9.2 第 5 步）。没有基线修订可携带，创建条件是
     /// 该路径在服务器仍为空。
@@ -457,7 +471,10 @@ pub(crate) fn deferred(path: RelativePath, reason: DeferReason) -> Plan {
 }
 
 /// 仅远端变化：先核对使用保护与路径条件，再安装远端版本或只推进元数据（design §9.1 第一条）。
-fn apply_remote(
+///
+/// 冲突规划（[`crate::conflict`]）复用本函数生成“主条目保留服务器 head”的计划，两处的前提与本地
+/// 内容保护因此只有一份定义。
+pub(crate) fn apply_remote(
     path: RelativePath,
     base: &ServerFact,
     local: &LocalFact,
