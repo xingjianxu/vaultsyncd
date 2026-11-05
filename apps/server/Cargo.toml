@@ -22,6 +22,8 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 toml = "0.9"
+# 操作端点要把操作记录里保存的紧凑结果（wire OperationResult 的 JSON）解析回 DTO 再原样回答。
+serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
 # 会话凭据与身份来自 OS 随机源（design §17.1）：与 server-core 使用同一条 rand_core 0.6 依赖线。
@@ -35,8 +37,8 @@ vaultsyncd-server-store = { path = "../../crates/server-store" }
 [dev-dependencies]
 # HTTP 处理器与上传端点的验收用 `tower::ServiceExt::oneshot` 直接调用 router，不启动真实监听。
 tower = { version = "0.5", features = ["util"] }
-# 验收用例按生成 DTO 解析响应体（不手写 JSON 字面量比对），并按契约形状断言已收块/缺块区间。
-serde_json = "1"
+# 验收用例按生成 DTO 解析响应体（不手写 JSON 字面量比对），并按契约形状断言已收块/缺块区间；
+# serde_json 同时也是运行时依赖（见 [dependencies]），这里不重复声明。
 # 块摘要由传输层的唯一实现给出（design §5.4）：测试不复刻一份 SHA-256。
 vaultsyncd-transfer = { path = "../../crates/transfer" }
 [lints]

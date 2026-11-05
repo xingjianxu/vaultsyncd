@@ -104,6 +104,33 @@ export function decodeCapabilityLimits(value: unknown): CapabilityLimits {
   };
 }
 
+/**
+ * 过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
+ * 都保留，绝不丢内容。
+ */
+export type ConflictPolicy = "preserve_both";
+
+export const CONFLICT_POLICY_VALUES = ["preserve_both"] as const;
+
+export function decodeConflictPolicy(value: unknown): ConflictPolicy {
+  if (typeof value !== "string" || !(CONFLICT_POLICY_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 ConflictPolicy 取值：${JSON.stringify(value)}`);
+  }
+  return value as ConflictPolicy;
+}
+
+/** 提交成功但基线与服务器不一致的原因闭集（`preserve_both` 下产生冲突副本）。 */
+export type ConflictReason = "stale_base";
+
+export const CONFLICT_REASON_VALUES = ["stale_base"] as const;
+
+export function decodeConflictReason(value: unknown): ConflictReason {
+  if (typeof value !== "string" || !(CONFLICT_REASON_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 ConflictReason 取值：${JSON.stringify(value)}`);
+  }
+  return value as ConflictReason;
+}
+
 /** 错误主体。 */
 export interface ErrorBody {
   /** 闭集错误码；未知码不是可重试错误，按协议错误处理。 */
@@ -136,10 +163,14 @@ export function decodeErrorBody(value: unknown): ErrorBody {
  * 远端错误码闭集（design §15.4）。未知错误码不能被当成可重试或成功；本机 IPC 专用的
  * 错误码（LOCAL_CHANGED、FILE_BUSY、MODE_REQUIRES_LOCAL_COPY、PLACEHOLDER_OFFLINE）
  * 属于 packages/local-ipc-types，不在远端契约内。
+ *
+ * SERVICE_NOT_READY 是“服务端这一版还没有装配该端点所需的执行链路”的显式拒绝（本卡起用于
+ * 操作命令端点），与 NEEDS_RECOVERY 的“意图无法解释、需要人工介入”不是一回事；它待与
+ * docs/design.md §15.4 的表格同步。
  */
-export type ErrorCode = "AUTH_EXPIRED" | "ACCESS_DENIED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" | "OP_ID_REUSED" | "RECONCILE_REQUIRED" | "CURSOR_EXPIRED" | "EPOCH_CHANGED" | "VERSION_GONE" | "INVALID_NAME" | "INVALID_REQUEST" | "UNSUPPORTED_ENTRY" | "HASH_MISMATCH" | "PART_CONFLICT" | "UNSUPPORTED_STORAGE_BACKEND" | "SERVER_PLACEHOLDER_UNSUPPORTED" | "RATE_LIMITED" | "ROOT_UNAVAILABLE" | "NEEDS_RECOVERY" | "INSUFFICIENT_STORAGE";
+export type ErrorCode = "AUTH_EXPIRED" | "ACCESS_DENIED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" | "OP_ID_REUSED" | "RECONCILE_REQUIRED" | "CURSOR_EXPIRED" | "EPOCH_CHANGED" | "VERSION_GONE" | "INVALID_NAME" | "INVALID_REQUEST" | "UNSUPPORTED_ENTRY" | "HASH_MISMATCH" | "PART_CONFLICT" | "UNSUPPORTED_STORAGE_BACKEND" | "SERVER_PLACEHOLDER_UNSUPPORTED" | "RATE_LIMITED" | "ROOT_UNAVAILABLE" | "NEEDS_RECOVERY" | "INSUFFICIENT_STORAGE" | "SERVICE_NOT_READY";
 
-export const ERROR_CODE_VALUES = ["AUTH_EXPIRED", "ACCESS_DENIED", "BASE_MISMATCH", "SUBTREE_CHANGED", "OP_ID_REUSED", "RECONCILE_REQUIRED", "CURSOR_EXPIRED", "EPOCH_CHANGED", "VERSION_GONE", "INVALID_NAME", "INVALID_REQUEST", "UNSUPPORTED_ENTRY", "HASH_MISMATCH", "PART_CONFLICT", "UNSUPPORTED_STORAGE_BACKEND", "SERVER_PLACEHOLDER_UNSUPPORTED", "RATE_LIMITED", "ROOT_UNAVAILABLE", "NEEDS_RECOVERY", "INSUFFICIENT_STORAGE"] as const;
+export const ERROR_CODE_VALUES = ["AUTH_EXPIRED", "ACCESS_DENIED", "BASE_MISMATCH", "SUBTREE_CHANGED", "OP_ID_REUSED", "RECONCILE_REQUIRED", "CURSOR_EXPIRED", "EPOCH_CHANGED", "VERSION_GONE", "INVALID_NAME", "INVALID_REQUEST", "UNSUPPORTED_ENTRY", "HASH_MISMATCH", "PART_CONFLICT", "UNSUPPORTED_STORAGE_BACKEND", "SERVER_PLACEHOLDER_UNSUPPORTED", "RATE_LIMITED", "ROOT_UNAVAILABLE", "NEEDS_RECOVERY", "INSUFFICIENT_STORAGE", "SERVICE_NOT_READY"] as const;
 
 export function decodeErrorCode(value: unknown): ErrorCode {
   if (typeof value !== "string" || !(ERROR_CODE_VALUES as readonly string[]).includes(value)) {
@@ -271,6 +302,175 @@ export function decodeObjectReuse(value: unknown): ObjectReuse {
     throw new Error(`未知的 ObjectReuse 取值：${JSON.stringify(value)}`);
   }
   return value as ObjectReuse;
+}
+
+/**
+ * 已提交操作附带的冲突信息（design §15.3）：服务器主条目、新建的冲突副本与原因。内容都在
+ * 服务器上，客户端据此把本地迟到修改对到副本身份上。
+ */
+export interface OperationConflict {
+  /** 冲突副本的条目身份，32 位小写十六进制。 */
+  conflict_entry_id: string;
+  /** 服务器主条目的身份，32 位小写十六进制。 */
+  entry_id: string;
+  /** 产生副本的原因。 */
+  reason: ConflictReason;
+}
+
+export function decodeOperationConflict(value: unknown): OperationConflict {
+  const object = expect_object(value, "OperationConflict");
+  return {
+    conflict_entry_id: expect_string(object.conflict_entry_id, "OperationConflict.conflict_entry_id"),
+    entry_id: expect_string(object.entry_id, "OperationConflict.entry_id"),
+    reason: decodeConflictReason(object.reason),
+  };
+}
+
+/** 操作命令闭集（design §15.2）。未知取值按协议错误处理，不能当作任一命令执行。 */
+export type OperationKind = "put_content" | "create" | "move" | "delete" | "restore";
+
+export const OPERATION_KIND_VALUES = ["put_content", "create", "move", "delete", "restore"] as const;
+
+export function decodeOperationKind(value: unknown): OperationKind {
+  if (typeof value !== "string" || !(OPERATION_KIND_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 OperationKind 取值：${JSON.stringify(value)}`);
+  }
+  return value as OperationKind;
+}
+
+/**
+ * 一次修改命令的输入（design §15.3）。`op_id` 与 `device_id` 一起构成幂等键
+ * `(root, device_id, op_id)`；不同命令用不同字段（put 用 `entry_id`/`base_revision`/
+ * `upload_id`，create 用 `parent_id`/`name`/`expected_absent`，move 用源
+ * `entry_id`/`base_revision` 与目标 `parent_id`/`name`，delete 用
+ * `entry_id`/`base_revision`（目录另带 `subtree_token`），restore 用
+ * `entry_id`/`base_revision`（`version_id` 表示恢复指定历史版本））。带错字段一律 400，
+ * 同一请求里不允许两套命令语义。
+ */
+export interface OperationRequest {
+  /** 客户端计划时的条目 revision（十进制文本）；过期基线不会被当作最新事实接受。 */
+  base_revision?: string;
+  /** 客户端计划时看到的版本身份（可选，32 位小写十六进制）。 */
+  base_version_id?: string;
+  /** 过期基线的冲突策略；缺省按 `preserve_both` 处理。 */
+  conflict_policy?: ConflictPolicy;
+  /**
+   * 发起操作的设备身份，32 位小写十六进制。首发没有设备注册表，它是客户端安装实例自报的
+   * 稳定身份，只用来划定幂等键的范围（design §7.2），不作为授权依据。
+   */
+  device_id: string;
+  /** 被操作或被覆盖的条目身份（put/delete 的目标、move 的源、restore 的条目），32 位小写十六进制。 */
+  entry_id?: string;
+  /** 新建时声明“目标原本不存在”；create 必须为 true（design §15.3）。 */
+  expected_absent?: boolean;
+  /** 命令种类。 */
+  kind: OperationKind;
+  /**
+   * 客户端本地内容代际（十进制文本）。服务器只原样回显供客户端核对，**不**把它当作
+   * “客户端确实没有后续修改”的证明（design §15.3）。
+   */
+  local_generation?: string;
+  /** 目标名称（create 必填、move 的目标名称）；不含路径分隔符。 */
+  name?: string;
+  /** 客户端生成的逻辑操作身份，32 位小写十六进制；重试必须复用同一个值。 */
+  op_id: string;
+  /** 目标父目录的条目身份（create 必填、move 的目标父目录），32 位小写十六进制。 */
+  parent_id?: string;
+  /** 客户端事实基础所属的服务器 epoch（十进制文本）。 */
+  server_epoch: string;
+  /**
+   * 目录删除的服务端子树 token（32 位小写十六进制）。它由上一条快照/changes 结果给出；
+   * 子树在之后任何变化都让删除返回 409 `SUBTREE_CHANGED`。
+   */
+  subtree_token?: string;
+  /** 已 finalize 的上传会话身份（put 必填），32 位小写十六进制；内容只通过它引用。 */
+  upload_id?: string;
+  /** 恢复指定的历史版本（可选，32 位小写十六进制）；省略表示恢复回收站里的当前形态。 */
+  version_id?: string;
+}
+
+export function decodeOperationRequest(value: unknown): OperationRequest {
+  const object = expect_object(value, "OperationRequest");
+  return {
+    base_revision: object.base_revision === undefined ? undefined : expect_decimal(object.base_revision, "OperationRequest.base_revision"),
+    base_version_id: object.base_version_id === undefined ? undefined : expect_string(object.base_version_id, "OperationRequest.base_version_id"),
+    conflict_policy: object.conflict_policy === undefined ? undefined : decodeConflictPolicy(object.conflict_policy),
+    device_id: expect_string(object.device_id, "OperationRequest.device_id"),
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "OperationRequest.entry_id"),
+    expected_absent: object.expected_absent === undefined ? undefined : expect_boolean(object.expected_absent, "OperationRequest.expected_absent"),
+    kind: decodeOperationKind(object.kind),
+    local_generation: object.local_generation === undefined ? undefined : expect_decimal(object.local_generation, "OperationRequest.local_generation"),
+    name: object.name === undefined ? undefined : expect_string(object.name, "OperationRequest.name"),
+    op_id: expect_string(object.op_id, "OperationRequest.op_id"),
+    parent_id: object.parent_id === undefined ? undefined : expect_string(object.parent_id, "OperationRequest.parent_id"),
+    server_epoch: expect_decimal(object.server_epoch, "OperationRequest.server_epoch"),
+    subtree_token: object.subtree_token === undefined ? undefined : expect_string(object.subtree_token, "OperationRequest.subtree_token"),
+    upload_id: object.upload_id === undefined ? undefined : expect_string(object.upload_id, "OperationRequest.upload_id"),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "OperationRequest.version_id"),
+  };
+}
+
+/**
+ * 一次操作的状态与业务结果（design §15.3）。`pending` 时只有 `op_id`/`state`（可能带
+ * `echo_local_generation`）：不出现 `revision`/`root_seq`/`version_id`/`entry_id` 一类
+ * “已完成”字段。`replayed` 由端点按本次请求填写（是否命中了已记录的结果）；`request_id`
+ * 在错误信封里给出，成功响应只带操作身份。
+ */
+export interface OperationResult {
+  /** committed 且基线与服务器不一致时给出的冲突副本信息。 */
+  conflict?: OperationConflict;
+  /** 原样回显请求里的本地代际（十进制文本），供客户端核对 ACK 属于哪一代。 */
+  echo_local_generation?: string;
+  /** 业务结果涉及的条目身份（committed 时的目标条目），32 位小写十六进制。 */
+  entry_id?: string;
+  /** 稳定拒绝时的错误码（只有 rejected 有）。 */
+  error_code?: ErrorCode;
+  /** 稳定拒绝的可理解原因（只有 rejected 有，按数据处理）。 */
+  error_message?: string;
+  /** 逻辑操作身份，32 位小写十六进制。 */
+  op_id: string;
+  /** 本次响应是否直接来自已记录的结果（响应丢失后的重试为 true）。 */
+  replayed?: boolean;
+  /** 提交后的条目 revision（只有 committed 有，十进制文本）。 */
+  revision?: string;
+  /** 该批次占用的 RootSeq（只有 committed 有，十进制文本）。 */
+  root_seq?: string;
+  /** 操作状态；`pending` 不代表已同步。 */
+  state: OperationState;
+  /** 提交产生的新版本身份（只有 put/restore 的 committed 有），32 位小写十六进制。 */
+  version_id?: string;
+}
+
+export function decodeOperationResult(value: unknown): OperationResult {
+  const object = expect_object(value, "OperationResult");
+  return {
+    conflict: object.conflict === undefined ? undefined : decodeOperationConflict(object.conflict),
+    echo_local_generation: object.echo_local_generation === undefined ? undefined : expect_decimal(object.echo_local_generation, "OperationResult.echo_local_generation"),
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "OperationResult.entry_id"),
+    error_code: object.error_code === undefined ? undefined : decodeErrorCode(object.error_code),
+    error_message: object.error_message === undefined ? undefined : expect_string(object.error_message, "OperationResult.error_message"),
+    op_id: expect_string(object.op_id, "OperationResult.op_id"),
+    replayed: object.replayed === undefined ? undefined : expect_boolean(object.replayed, "OperationResult.replayed"),
+    revision: object.revision === undefined ? undefined : expect_decimal(object.revision, "OperationResult.revision"),
+    root_seq: object.root_seq === undefined ? undefined : expect_decimal(object.root_seq, "OperationResult.root_seq"),
+    state: decodeOperationState(object.state),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "OperationResult.version_id"),
+  };
+}
+
+/**
+ * 操作状态闭集（`operations.state`）。`pending` 只表示已受理，不占 RootSeq、不判已同步；
+ * `committed` 与 `rejected` 是终态，同一 OpId 的结果不再改变。
+ */
+export type OperationState = "pending" | "committed" | "rejected";
+
+export const OPERATION_STATE_VALUES = ["pending", "committed", "rejected"] as const;
+
+export function decodeOperationState(value: unknown): OperationState {
+  if (typeof value !== "string" || !(OPERATION_STATE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 OperationState 取值：${JSON.stringify(value)}`);
+  }
+  return value as OperationState;
 }
 
 /** 协议主次版本；主版本不同必须拒绝通信。 */

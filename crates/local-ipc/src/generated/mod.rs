@@ -92,6 +92,7 @@ pub struct Request {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct Response {
     /// kind 为 error 时的错误主体。
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorBody>,
     /// 应答种类，决定 result 与 error 哪个存在。
@@ -99,6 +100,7 @@ pub struct Response {
     /// 回显请求的 request_id，用于把并发应答与请求配对。
     pub request_id: String,
     /// kind 为 ok 时的命令结果。
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<GetStatusResult>,
 }

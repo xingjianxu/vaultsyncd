@@ -22,6 +22,7 @@ pub mod http;
 pub mod lifecycle;
 pub mod logging;
 pub mod observer;
+pub mod operations;
 pub mod recovery;
 pub mod roots;
 pub mod uploads;
