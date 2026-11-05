@@ -160,6 +160,14 @@ opaque_id! {
 }
 
 opaque_id! {
+    /// 所有者账号身份（design §7.2 `users.id`、§17.1）。
+    ///
+    /// 每个服务端 Root 都通过 `owner_id` 归属到一个账号；数据访问必须带这个身份作 owner scope，
+    /// 不能因为“首发只有一位 owner”就省略授权边界。
+    UserId
+}
+
+opaque_id! {
     /// 被管理的服务器目录身份，不等于本地路径文本。
     RootId
 }
@@ -220,6 +228,7 @@ mod tests {
     #[test]
     fn every_identity_type_round_trips_through_canonical_hex() {
         check_identity_type!(ServerId);
+        check_identity_type!(UserId);
         check_identity_type!(RootId);
         check_identity_type!(BindingId);
         check_identity_type!(EntryId);
