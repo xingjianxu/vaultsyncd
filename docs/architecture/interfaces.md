@@ -497,3 +497,39 @@ python3 tools/context.py --help
 - 领域层不生成状态值、不做 I/O 或调度：重试次数、退避与 `Retry-After` 属调度器（design §13.3）。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。
+
+## crates/fs-common — 相对路径与跨平台名称规则（S017）
+
+状态：S017 在 `crates/fs-common/src/path.rs`、`name.rs` 落地纯规则；无第三方依赖、无 I/O、无平台 API，已加入根 workspace 的 `members` 与 `default-members`（可移植核心，`cargo test/clippy --locked` 直接覆盖）。排除规则（`ignore.rs`）、文件事实类型（`fingerprint.rs`）留给后续卡，本卡不预置占位 API。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `name` | `MAX_COMPONENT_UTF8_BYTES = 255`（Linux `NAME_MAX`）、`MAX_COMPONENT_UTF16_UNITS = 255`（NTFS 组件上限）；`validate_name(&str) -> Result<(), NameIssue>` 与 `validate_name_bytes(&[u8]) -> Result<(), NameIssue>`（非 UTF-8 归类为 `NonUtf8`，不做有损解码） |
+| `name::NameIssue` | `Empty` / `NonUtf8` / `Nul` / `Separator`（`/`、`\`，含 `\\?\`、`\\.\` 前缀）/ `CurrentDirectory` / `ParentDirectory` / `Control(char)` / `Illegal(char)`（`< > : " | ? *`）/ `TrailingDot` / `TrailingSpace` / `Reserved(ReservedName)` / `TooLong { utf8_bytes, utf16_units }`；实现 `Display` 与 `std::error::Error` |
+| `name::ReservedName` | Windows 保留设备名 `CON`/`PRN`/`AUX`/`NUL`/`COM1`—`COM9`/`LPT1`—`LPT9`（含上标 `COM¹`—`COM³`、`LPT¹`—`LPT³`），`as_str()` 给出规范写法 |
+| `name::NameEquivalence` | 原生名称等价端口 `fn equivalent(&self, left: &str, right: &str) -> bool`；平台层用真实比较表（Windows `CompareStringEx`、文件系统归一化）实现，端口只回答“是否同一条目”，未提供改名能力 |
+| `name::PortableNameEquivalence` | 默认实现：字节相同或 Unicode 小写折叠后相同（仅比较，不改写）。不做 NFC/NFD 归一化，组合形式差异留给原生端口 |
+| `name::find_collisions(&[&str], &impl NameEquivalence)` | 按 `(first_index, second_index)` 升序返回 `NameCollision { first_index, second_index, first, second }`；只报告，不选择保留哪一条 |
+| `path::RelativePath` | 已校验的相对路径（非空分量序列）。`RelativePath::parse(&str)`、`FromStr`、`components() -> &[String]`、`Display`（以 `/` 连接，往返不改文本）；实现 `Eq`/`Hash`/`Ord` |
+| `path::PathIssue` | `Empty` / `Absolute` / `DriveLetter(char)` / `Nul` / `Backslash` / `EmptyComponent { index }` / `Component { index, issue: NameIssue }` / `TooLong { utf8_bytes }`；实现 `Display` 与 `std::error::Error` |
+| `path::relation` / `path::is_within` | 按分量判定 `PathRelation::{Same, Ancestor, Descendant, Unrelated}` 与“等于或在之下”；不使用字符串前缀 |
+| `path::MAX_RELATIVE_PATH_UTF8_BYTES` | `4095`（Linux `PATH_MAX` 减 NUL）。Windows 绝对路径上限取决于 Root 挂载前缀，由平台层判定 |
+
+### 编码与边界规则
+
+- **固定检查顺序**（同一输入总是同一结论）：名称“空 → NUL → 分隔符 → `.`/`..` → 控制/非法字符 → 长度 → 尾部点/空格 → 保留名”；路径“空 → NUL → 绝对/设备前缀 → 盘符 → 反斜杠 → 整体长度 → 逐分量（空分量 → 名称规则）”。
+- **保留名按第一个 `.` 之前的部分判定**且大小写不敏感：`con.txt`、`nul.tar.gz` 都是保留名；`CONS`、`com0` 不是。
+- **长度双上限**：一个名称必须同时满足 255 UTF-8 字节与 255 UTF-16 码元，因此 100 个汉字（300 字节 / 100 码元）被报 `TooLong`。
+- **不做规范化**：路径与名称解析只判定、不改写；`a//b`、`a/`、`./a`、`a/../b` 一律报错而不是折叠成另一条路径；大小写与 Unicode 组合形式原样保留。
+- **重叠判定按分量**：`a` 与 `ab` 是 `Unrelated`，不是父子关系（design §16.1）。
+- 文件与目录同名属于上层冲突（design §7.4，planner/store 负责）；`find_collisions` 只按名称等价分组，不区分条目类型。
+
+### 不变量
+
+- 名称与路径的接受/拒绝完全由输入决定，不含哈希表顺序、平台比较表或当前目录状态，可移植核心与平台层得到相同判定。
+- 任何无法无损跨端表示的名称都带明确原因返回，绝不静默小写、归一化、替换字符或截断。
+- 碰撞只报告不消解：接入原生等价端口只会扩大检测范围，不会产生改名或覆盖行为。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-fs-common`、`cargo clippy --locked -p vaultsyncd-fs-common --all-targets -- -D warnings`、`cargo fmt --check`。
