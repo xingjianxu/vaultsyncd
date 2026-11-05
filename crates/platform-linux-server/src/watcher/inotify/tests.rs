@@ -12,8 +12,10 @@ struct Lab {
 
 impl Lab {
     fn new(name: &str) -> Self {
-        let dir =
-            std::env::temp_dir().join(format!("vaultsyncd-s050-w-{}-{name}", std::process::id()));
+        // `VAULTSYNCD_TEST_DIR` 指向（btrfs 测试卷上的）基目录时用它，否则用系统临时目录。
+        let parent =
+            std::env::var_os("VAULTSYNCD_TEST_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+        let dir = parent.join(format!("vaultsyncd-s050-w-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("建目录");
         Lab { dir }
