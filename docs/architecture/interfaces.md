@@ -432,3 +432,33 @@ python3 tools/context.py --help
 - 内容原样保留：对象只读（`0444`）；拒绝替换时保留候选；未验证的暂存一律删除并报告删除结果。
 - 前提核对只覆盖“已观察到的身份/指纹”，不宣称消除与外部非协作写入之间的竞态（design §12.2 / C33）；检测到不一致就暂停并报告，不硬覆盖。
 - 受限访问 fail-closed：`openat2` 的 `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS` 或逐段 `O_NOFOLLOW`，逃逸/符号链接/`.`/`..` 都拒绝，且输出标明实际机制。
+
+## crates/domain — 身份与有界计数（S015）
+
+状态：S015 在 `crates/domain/src/ids.rs`、`version.rs` 落地不透明身份与有界计数/UTC 时间端口。纯数据与纯规则，无第三方依赖、无 I/O；`crates/domain` 仍是身份的唯一定义处，平台层只承载字节。状态维度与错误分类归 S016。
+
+### 模块与契约
+
+| 模块 | 契约 |
+| --- | --- |
+| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
+| `ids::IdParseError` | `Empty` / `Length(实际字节数)` / `NonHexDigit(0 基字节位置)`；长度不符时不继续逐字符检查，故 `0x…` 与带连字符 UUID 文本报 `Length` |
+| `ids::IdSource` | 随机字节端口 `fn next_id_bytes(&mut self) -> [u8; ID_LEN]`；领域层不取随机数，生产端在应用层接线，测试端可注入计数器 |
+| `version` | `DB_INTEGER_MAX = i64::MAX`；计数类型 `Revision`、`RootSeq`、`Generation`（`local_generation`）、`ServerEpoch` 各为 `u64` newtype，取值 `0..=DB_INTEGER_MAX`；接口 `ZERO`、`new`、`from_db_integer`、`to_db_integer`、`get`、`next`、`from_decimal`、`to_decimal`（`Display`/`FromStr` 同形式） |
+| `version::BoundError` | `Empty` / `InvalidDigit` / `Negative` / `LeadingZero` / `AboveDbLimit`；`next` 到达 `DB_INTEGER_MAX` 返回 `AboveDbLimit`，不回绕 |
+| `version::UtcTimestamp` | Unix 秒的 `i64` newtype，负值（1970 之前）返 `Negative`；`from_unix_seconds`/`from_db_integer`/`as_unix_seconds`/`to_db_integer`/`Display` |
+| `version::Clock` | `fn now_utc(&self) -> Result<UtcTimestamp, BoundError>`；领域层不读时钟，测试注入固定序列 |
+
+### 编码与边界规则
+
+- **身份文本**：规范形式是 32 个小写十六进制字符；解析同时接受大写，因此同一值是唯一的字节表示。不做 base64/UUID 变体，wire 与日志都用 `to_hex()`；16 字节长度与 Windows CFAPI `FileIdentity`（48 B blob 中 RootId、EntryId 各 16 字节）一致，服务端 ID 可直接写入平台身份。
+- **计数文本**：wire/JSON **只传十进制字符串**（design §7.1、§15.1），不传 JSON number；规范文本无符号、无前导零，`0` 写作 `"0"`，非法写法和超过 `i64::MAX` 的值一律拒绝，避免 JavaScript 在 2^53 以上静默丢精度。数据库读写用 `to_db_integer`/`from_db_integer`，负列值报 `Negative`。
+- 各身份/计数类型互不兼容（不同类型不能互相赋值），避免把 `RootSeq` 当 `Revision`、把 `RootId` 当 `EntryId`。
+
+### 不变量
+
+- 上限在构造、解析与递增三处都检查，不依赖调用方自觉；类型内部因此不可能持有超出 SQLite `INTEGER` 的值。
+- 生成身份必须经 `IdSource` 注入，领域层不含随机源或时钟，同一注入序列得到同一结果。
+- 拒绝即报错：空文本、正负号、前导零、非十六进制字符、超界数值都返回明确变体，不静默取默认值或截断。
+
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-domain`、`cargo clippy --locked -p vaultsyncd-domain --all-targets -- -D warnings`、`cargo fmt --check`。

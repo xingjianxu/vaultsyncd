@@ -6,6 +6,10 @@
 //! 以值或端口传入，因此同一输入在任何平台必须得到相同结果（design §6 的确定性要求）。
 //!
 //! 需要对外传递的边界值（身份、计数、状态）在这里以受约束的类型表达，而不是裸整数或字符串，
-//! 避免把非法组合带到持久化与 wire 层。具体类型按实施顺序在后续卡落地：S015 身份与有界计数、
-//! S016 状态维度与错误分类。本卡（S004）只建立 workspace、工具链与 lint 基线，不预置占位 API。
+//! 避免把非法组合带到持久化与 wire 层。已落地的模块：S015 的 [`ids`]（不透明身份与 [`ids::IdSource`]
+//! 端口）与 [`version`]（`Revision`/`RootSeq`/`Generation`/`ServerEpoch` 有界计数、UTC 时间与
+//! [`version::Clock`] 端口）；状态维度与错误分类留给 S016，本卡不预置它们的占位 API。
 #![forbid(unsafe_code)]
+
+pub mod ids;
+pub mod version;
