@@ -24,7 +24,9 @@ mod local_ipc;
 /// v3：端点可有 `requestBody`（只接受 `application/json` 且引用具名 schema）。
 /// v4：端点的成功响应可以是二进制切片（`application/octet-stream`，无 schema），参数可以是
 /// `in: header` 的必填字符串。
-const FORMAT_VERSION: u32 = 4;
+/// v5：参数可以是 `in: query`（标量 `string`/`decimal_u64`，必填或可选），成功响应可以是
+/// `text/event-stream`（SSE，无 schema，TypeScript 侧返回原始 `Response` 由调用方读流）。
+const FORMAT_VERSION: u32 = 5;
 /// 生成器名；与 `api/generation.toml` 的 `generator` 核对。
 const GENERATOR: &str = "vaultsyncd-xtask";
 /// 生成配置文件（相对 workspace 根）。
@@ -317,7 +319,8 @@ struct Operation {
     /// 补充说明（进生成代码文档）。
     #[serde(default)]
     description: Option<String>,
-    /// 参数（S045 起支持路径参数，S046-b 起支持请求头参数）；只接受 `in: path` 与必填的 `in: header`。
+    /// 参数（S045 起支持路径参数，S046-b 起支持请求头参数，S048 起支持查询参数）；只接受 `in: path`、
+    /// 必填的 `in: header` 与 `in: query`。
     #[serde(default)]
     parameters: Vec<Parameter>,
     /// 状态码 → 响应；`default` 之类非数字状态码被拒绝。
@@ -333,7 +336,7 @@ struct Operation {
 struct Parameter {
     /// 参数名；路径参数必须与路径里的 `{name}` 占位符一致，头参数是头名。
     name: String,
-    /// 参数位置；只接受 `path` 与 `header`。
+    /// 参数位置；只接受 `path`、`header` 与 `query`。
     #[serde(rename = "in")]
     location: String,
     /// 是否必填；路径参数与请求头参数都必须显式 `required: true`。
@@ -517,6 +520,8 @@ pub(crate) struct ApiOperation {
     pub(crate) path_params: Vec<PathParam>,
     /// `in: header` 参数，按声明顺序。
     pub(crate) header_params: Vec<HeaderParam>,
+    /// `in: query` 参数，按声明顺序。
+    pub(crate) query_params: Vec<QueryParam>,
     /// 请求体；`None` 表示无请求体。
     pub(crate) request: Option<RequestBodyKind>,
 }
@@ -528,6 +533,8 @@ pub(crate) enum SuccessBody {
     Json(String),
     /// `application/octet-stream`：原始字节，不解码、没有生成类型。
     Bytes,
+    /// `text/event-stream`（SSE）：长连接事件流，不解码；TypeScript 侧交回原始 `Response`。
+    EventStream,
 }
 
 impl SuccessBody {
@@ -544,6 +551,16 @@ pub(crate) struct HeaderParam {
     pub(crate) name: String,
     /// TypeScript 参数名（`x-part-sha256` → `x_part_sha256`）。
     pub(crate) ts_name: String,
+}
+
+/// 一个 `in: query` 参数：名字与是否必填（值的 wire 类型只有 `string`/`decimal_u64`，TypeScript 里都是
+/// `string`，解析时已校验，不另存）。
+#[derive(Debug)]
+pub(crate) struct QueryParam {
+    /// 查询参数名（小写字母、数字与 `_`，同时是 TypeScript 对象字段名）。
+    pub(crate) name: String,
+    /// 是否必填。
+    pub(crate) required: bool,
 }
 
 /// 路径参数：名字与值的 wire 类型（两者在 TypeScript 里都是 `string`）。
@@ -963,7 +980,14 @@ fn build_operation(
 
     let path_params = build_path_params(path, &operation.parameters)?;
     let header_params = build_header_params(path, &operation.parameters)?;
-    let param_docs = describe_params(path, &operation.parameters, &path_params, &header_params);
+    let query_params = build_query_params(path, &operation.parameters)?;
+    let param_docs = describe_params(
+        path,
+        &operation.parameters,
+        &path_params,
+        &header_params,
+        &query_params,
+    );
     if !param_docs.is_empty() {
         doc.extend(param_docs);
         doc.push(String::new());
@@ -1009,6 +1033,7 @@ fn build_operation(
         path: path.to_string(),
         path_params,
         header_params,
+        query_params,
         operation_id: operation.operation_id.clone(),
         doc,
         success: success.ok_or_else(|| format!("端点 {} 没有 2xx 响应", operation.operation_id))?,
@@ -1081,8 +1106,17 @@ fn build_success_body(
             }
             Ok(SuccessBody::Bytes)
         }
+        "text/event-stream" => {
+            if media.schema.is_some() {
+                return Err(format!(
+                    "端点 {} 的状态码 {code} 的事件流响应不声明 schema",
+                    operation.operation_id
+                ));
+            }
+            Ok(SuccessBody::EventStream)
+        }
         other => Err(format!(
-            "端点 {} 的状态码 {code} 的媒体类型 `{other}` 未支持；只支持 application/json 与 application/octet-stream",
+            "端点 {} 的状态码 {code} 的媒体类型 `{other}` 未支持；只支持 application/json、application/octet-stream 与 text/event-stream",
             operation.operation_id
         )),
     }
@@ -1094,8 +1128,25 @@ fn describe_params(
     parameters: &[Parameter],
     params: &[PathParam],
     header_params: &[HeaderParam],
+    query_params: &[QueryParam],
 ) -> Vec<String> {
     let mut lines = describe_path_params(path, parameters, params);
+    for param in query_params {
+        let Some(raw) = parameters.iter().find(|raw| raw.name == param.name) else {
+            continue;
+        };
+        let description = raw
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .unwrap_or("查询参数");
+        let presence = if param.required { "必填" } else { "可选" };
+        lines.push(format!(
+            "查询参数 `{}`（{presence}）：{description}",
+            param.name
+        ));
+    }
     for param in header_params {
         let Some(raw) = parameters.iter().find(|raw| raw.name == param.name) else {
             continue;
@@ -1156,12 +1207,12 @@ fn build_path_params(path: &str, parameters: &[Parameter]) -> Result<Vec<PathPar
 
     let mut params = Vec::new();
     for parameter in parameters {
-        if parameter.location == "header" {
+        if parameter.location == "header" || parameter.location == "query" {
             continue;
         }
         if parameter.location != "path" {
             return Err(format!(
-                "路径 {path} 的参数 `{}` 在 `{}` 位置；生成器只支持 `in: path` 与 `in: header`",
+                "路径 {path} 的参数 `{}` 在 `{}` 位置；生成器只支持 `in: path`、`in: header` 与 `in: query`",
                 parameter.name, parameter.location
             ));
         }
@@ -1249,6 +1300,39 @@ fn build_header_params(path: &str, parameters: &[Parameter]) -> Result<Vec<Heade
         params.push(HeaderParam {
             name: parameter.name.clone(),
             ts_name,
+        });
+    }
+    Ok(params)
+}
+
+/// 解析 `in: query` 参数：标量 `string`/`decimal_u64`，必填或可选（缺省视为可选），名字是小写
+/// snake_case（同时是 TypeScript 对象字段名，不发明第二种拼写）。
+fn build_query_params(path: &str, parameters: &[Parameter]) -> Result<Vec<QueryParam>, String> {
+    let mut params: Vec<QueryParam> = Vec::new();
+    for parameter in parameters {
+        if parameter.location != "query" {
+            continue;
+        }
+        let name = &parameter.name;
+        let valid = name
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+        if !valid {
+            return Err(format!(
+                "路径 {path} 的查询参数 `{name}` 必须是小写 snake_case（字母开头，只含小写字母、数字与 `_`）"
+            ));
+        }
+        if params.iter().any(|seen| &seen.name == name) {
+            return Err(format!("路径 {path} 重复声明了查询参数 `{name}`"));
+        }
+        parameter_type(path, parameter)?;
+        params.push(QueryParam {
+            name: name.clone(),
+            required: parameter.required == Some(true),
         });
     }
     Ok(params)
@@ -1611,5 +1695,63 @@ components:
                 "期望错误含「{expected}」，实际：{error}"
             );
         }
+    }
+
+    #[test]
+    fn query_parameters_become_a_typed_object_argument() {
+        let operation = format!(
+            "      parameters:\n        - name: after\n          in: query\n          required: true\n          description: 游标\n          schema:\n            type: string\n            format: decimal_u64\n        - name: limit\n          in: query\n          description: 页大小\n          schema:\n            type: string\n            format: decimal_u64\n{}",
+            responses("200", JSON_THING)
+        );
+        let model = model_with(&operation).expect("查询参数应被接受");
+        let api = &model.operations[0];
+        assert_eq!(api.query_params.len(), 2);
+        assert_eq!(api.query_params[0].name, "after");
+        assert!(api.query_params[0].required);
+        assert_eq!(api.query_params[1].name, "limit");
+        assert!(!api.query_params[1].required, "缺省视为可选");
+    }
+
+    #[test]
+    fn invalid_query_parameters_are_rejected() {
+        for (extra, expected) in [
+            (
+                "        - name: After\n          in: query\n          description: 大写名\n          schema:\n            type: string\n",
+                "小写 snake_case",
+            ),
+            (
+                "        - name: a\n          in: query\n          description: 一\n          schema:\n            type: string\n        - name: a\n          in: query\n          description: 二\n          schema:\n            type: string\n",
+                "重复声明了查询参数",
+            ),
+            (
+                "        - name: a\n          in: query\n          description: 内联对象\n          schema:\n            type: object\n",
+                "只支持 `type: string`",
+            ),
+            (
+                "        - name: a\n          in: cookie\n          description: cookie\n          schema:\n            type: string\n",
+                "只支持 `in: path`",
+            ),
+        ] {
+            let operation = format!("      parameters:\n{extra}{}", responses("200", JSON_THING));
+            let error = model_with(&operation).expect_err("必须拒绝该查询参数");
+            assert!(
+                error.contains(expected),
+                "期望错误含「{expected}」，实际：{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn event_stream_success_body_needs_no_schema() {
+        let operation = responses("200", "            text/event-stream: {}\n");
+        let model = model_with(&operation).expect("事件流响应应被接受");
+        assert_eq!(model.operations[0].success, SuccessBody::EventStream);
+
+        let with_schema = responses(
+            "200",
+            "            text/event-stream:\n              schema: {$ref: \"#/components/schemas/Thing\"}\n",
+        );
+        let error = model_with(&with_schema).expect_err("事件流带 schema 必须报错");
+        assert!(error.contains("事件流响应不声明 schema"), "{error}");
     }
 }

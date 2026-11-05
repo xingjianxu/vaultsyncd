@@ -43,6 +43,13 @@ function expect_number(value: unknown, what: string): number {
   return value;
 }
 
+function expect_boolean(value: unknown, what: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`期望 ${what} 是布尔值`);
+  }
+  return value;
+}
+
 function expect_string_map(value: unknown, what: string): Record<string, string> {
   const object = expect_object(value, what);
   for (const [key, item] of Object.entries(object)) {
@@ -51,13 +58,6 @@ function expect_string_map(value: unknown, what: string): Record<string, string>
     }
   }
   return object as Record<string, string>;
-}
-
-function expect_boolean(value: unknown, what: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new Error(`期望 ${what} 是布尔值`);
-  }
-  return value;
 }
 
 /** 协议版本、服务器身份、epoch、功能集合与限额（design §15.2）。 */
@@ -104,6 +104,56 @@ export function decodeCapabilityLimits(value: unknown): CapabilityLimits {
   };
 }
 
+/** 一个事务批次（design §9.3）：RootSeq、TxId 与该事务的全部条目变化。 */
+export interface ChangeBatch {
+  /** 批次提交时间（UTC Unix 秒的十进制文本）。 */
+  created_at: string;
+  /** 该事务全部条目变化与冲突关联的 JSON 数组文本；按数据处理，客户端整批原子应用。 */
+  events_json: string;
+  /** 批次序号（该 Root 的第 seq 个事务批次，十进制文本）。 */
+  seq: string;
+  /** 产生该批次的服务端事务身份，32 位小写十六进制。 */
+  tx_id: string;
+}
+
+export function decodeChangeBatch(value: unknown): ChangeBatch {
+  const object = expect_object(value, "ChangeBatch");
+  return {
+    created_at: expect_decimal(object.created_at, "ChangeBatch.created_at"),
+    events_json: expect_string(object.events_json, "ChangeBatch.events_json"),
+    seq: expect_decimal(object.seq, "ChangeBatch.seq"),
+    tx_id: expect_string(object.tx_id, "ChangeBatch.tx_id"),
+  };
+}
+
+/** 一页有序事务批次。 */
+export interface ChangeList {
+  /** 批次，严格按 seq 升序，每个批次完整。 */
+  batches: Array<ChangeBatch>;
+  /** 读取时 `next_after` 之后是否还有批次。 */
+  has_more: boolean;
+  /** 读取时 Root 的最新 RootSeq（十进制文本）。 */
+  head_seq: string;
+  /** 下一次拉取应带的 `after`：本页最后一个批次的 seq；本页为空时等于请求的 `after`。 */
+  next_after: string;
+  /** Root 身份，32 位小写十六进制。 */
+  root_id: string;
+  /** Root 当前的服务器 epoch（十进制文本）。 */
+  server_epoch: string;
+}
+
+export function decodeChangeList(value: unknown): ChangeList {
+  const object = expect_object(value, "ChangeList");
+  return {
+    batches: expect_array(object.batches, "ChangeList.batches").map((item) => decodeChangeBatch(item)),
+    has_more: expect_boolean(object.has_more, "ChangeList.has_more"),
+    head_seq: expect_decimal(object.head_seq, "ChangeList.head_seq"),
+    next_after: expect_decimal(object.next_after, "ChangeList.next_after"),
+    root_id: expect_string(object.root_id, "ChangeList.root_id"),
+    server_epoch: expect_decimal(object.server_epoch, "ChangeList.server_epoch"),
+  };
+}
+
 /**
  * 过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
  * 都保留，绝不丢内容。
@@ -129,6 +179,18 @@ export function decodeConflictReason(value: unknown): ConflictReason {
     throw new Error(`未知的 ConflictReason 取值：${JSON.stringify(value)}`);
   }
   return value as ConflictReason;
+}
+
+/** 条目种类闭集（design §7.2 `entries.kind`）。未知取值按协议错误处理。 */
+export type EntryKind = "file" | "directory";
+
+export const ENTRY_KIND_VALUES = ["file", "directory"] as const;
+
+export function decodeEntryKind(value: unknown): EntryKind {
+  if (typeof value !== "string" || !(ENTRY_KIND_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 EntryKind 取值：${JSON.stringify(value)}`);
+  }
+  return value as EntryKind;
 }
 
 /** 错误主体。 */
@@ -603,6 +665,25 @@ export function decodeRootSummary(value: unknown): RootSummary {
   };
 }
 
+/**
+ * SSE 提示的 `data` 内容（design §9.3）：只告诉客户端 Root 的 RootSeq 已到某个值，
+ * 不携带任何批次内容。丢失、重复、乱序都由 `changes` 拉取修复。
+ */
+export interface SeqHint {
+  /** Root 身份，32 位小写十六进制。 */
+  root_id: string;
+  /** 提示发出时 Root 的最新 RootSeq（十进制文本）。 */
+  seq: string;
+}
+
+export function decodeSeqHint(value: unknown): SeqHint {
+  const object = expect_object(value, "SeqHint");
+  return {
+    root_id: expect_string(object.root_id, "SeqHint.root_id"),
+    seq: expect_decimal(object.seq, "SeqHint.seq"),
+  };
+}
+
 /** 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。 */
 export interface SessionIssued {
   /** 访问凭据到期时间（UTC Unix 秒的十进制文本）。 */
@@ -641,6 +722,93 @@ export function decodeSessionRevoked(value: unknown): SessionRevoked {
   return {
     revoked_at: expect_decimal(object.revoked_at, "SessionRevoked.revoked_at"),
     session_id: expect_string(object.session_id, "SessionRevoked.session_id"),
+  };
+}
+
+/**
+ * 一份一致性快照的元数据（design §9.3）。`high_water_seq` 是创建时刻 Root 的 RootSeq：清单恰好是
+ * “应用到该 seq 为止”的状态，继续追赶从 `changes?after=<high_water_seq>` 开始。
+ */
+export interface Snapshot {
+  /** 清单里的条目总数（十进制文本）。 */
+  entry_count: string;
+  /** 清单到期时间（UTC Unix 秒的十进制文本）；此刻及之后翻页返回 410。 */
+  expires_at: string;
+  /** 创建快照时的 RootSeq（十进制文本）。 */
+  high_water_seq: string;
+  /** 所属 Root 身份，32 位小写十六进制。 */
+  root_id: string;
+  /** 创建快照时 Root 的服务器 epoch（十进制文本）。 */
+  server_epoch: string;
+  /** 快照身份，32 位小写十六进制。 */
+  snapshot_id: string;
+}
+
+export function decodeSnapshot(value: unknown): Snapshot {
+  const object = expect_object(value, "Snapshot");
+  return {
+    entry_count: expect_decimal(object.entry_count, "Snapshot.entry_count"),
+    expires_at: expect_decimal(object.expires_at, "Snapshot.expires_at"),
+    high_water_seq: expect_decimal(object.high_water_seq, "Snapshot.high_water_seq"),
+    root_id: expect_string(object.root_id, "Snapshot.root_id"),
+    server_epoch: expect_decimal(object.server_epoch, "Snapshot.server_epoch"),
+    snapshot_id: expect_string(object.snapshot_id, "Snapshot.snapshot_id"),
+  };
+}
+
+/** 快照清单里的一条条目（创建时的值拷贝，不随之后的写入变化）。 */
+export interface SnapshotEntry {
+  /** 条目身份，32 位小写十六进制。 */
+  entry_id: string;
+  /** 当前内容的 SHA-256，64 位小写十六进制（只有带内容的文件有）。 */
+  hash?: string;
+  /** 文件或目录。 */
+  kind: EntryKind;
+  /** 原始名称（合成根条目为空串）；按数据处理。 */
+  name: string;
+  /** 父目录条目身份；Root 的合成根条目没有。 */
+  parent_id?: string;
+  /** 创建快照时的条目 revision（十进制文本）。 */
+  revision: string;
+  /** 当前内容字节数（十进制文本，只有带内容的文件有）。 */
+  size?: string;
+  /** 当前内容版本身份（只有带内容的文件有）；下载内容引用它而不是路径。 */
+  version_id?: string;
+}
+
+export function decodeSnapshotEntry(value: unknown): SnapshotEntry {
+  const object = expect_object(value, "SnapshotEntry");
+  return {
+    entry_id: expect_string(object.entry_id, "SnapshotEntry.entry_id"),
+    hash: object.hash === undefined ? undefined : expect_string(object.hash, "SnapshotEntry.hash"),
+    kind: decodeEntryKind(object.kind),
+    name: expect_string(object.name, "SnapshotEntry.name"),
+    parent_id: object.parent_id === undefined ? undefined : expect_string(object.parent_id, "SnapshotEntry.parent_id"),
+    revision: expect_decimal(object.revision, "SnapshotEntry.revision"),
+    size: object.size === undefined ? undefined : expect_decimal(object.size, "SnapshotEntry.size"),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "SnapshotEntry.version_id"),
+  };
+}
+
+/** 快照清单的一页。 */
+export interface SnapshotPage {
+  /** 本页条目，按 EntryId 升序。 */
+  entries: Array<SnapshotEntry>;
+  /** 快照固定的 RootSeq（十进制文本，所有页相同）。 */
+  high_water_seq: string;
+  /** 下一页的游标（十进制文本）；缺省表示已是最后一页。 */
+  next_cursor?: string;
+  /** 快照身份，32 位小写十六进制。 */
+  snapshot_id: string;
+}
+
+export function decodeSnapshotPage(value: unknown): SnapshotPage {
+  const object = expect_object(value, "SnapshotPage");
+  return {
+    entries: expect_array(object.entries, "SnapshotPage.entries").map((item) => decodeSnapshotEntry(item)),
+    high_water_seq: expect_decimal(object.high_water_seq, "SnapshotPage.high_water_seq"),
+    next_cursor: object.next_cursor === undefined ? undefined : expect_decimal(object.next_cursor, "SnapshotPage.next_cursor"),
+    snapshot_id: expect_string(object.snapshot_id, "SnapshotPage.snapshot_id"),
   };
 }
 

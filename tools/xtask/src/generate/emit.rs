@@ -471,6 +471,20 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
     for param in &operation.header_params {
         params.push(format!("{}: string", param.ts_name));
     }
+    // 查询参数收成一个对象实参：必填字段不带 `?`，可选字段带 `?`；字段名就是 wire 名。
+    if !operation.query_params.is_empty() {
+        let fields: Vec<String> = operation
+            .query_params
+            .iter()
+            .map(|param| {
+                let optional = if param.required { "" } else { "?" };
+                format!("{}{optional}: string", param.name)
+            })
+            .collect();
+        let all_optional = operation.query_params.iter().all(|param| !param.required);
+        let optional = if all_optional { "?" } else { "" };
+        params.push(format!("query{optional}: {{ {} }}", fields.join("; ")));
+    }
     // 生成的实参：无请求体是 `null`，有请求体是带引号的媒体类型字面量。
     let mut content_type = "null";
     let mut body_line = String::new();
@@ -491,6 +505,7 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
     let success_type = match &operation.success {
         SuccessBody::Json(name) => name.clone(),
         SuccessBody::Bytes => "Uint8Array".to_string(),
+        SuccessBody::EventStream => "Response".to_string(),
     };
     out.push_str(&format!(
         "export async function {}({}): Promise<{}> {{\n",
@@ -517,10 +532,37 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
         url_expr = "path".to_string();
     }
 
+    // 查询串：必填参数总是写入；可选参数只在调用方给了值时写入，不发送空值。
+    if !operation.query_params.is_empty() {
+        out.push_str("  const search = new URLSearchParams();\n");
+        let all_optional = operation.query_params.iter().all(|param| !param.required);
+        for param in &operation.query_params {
+            if param.required {
+                out.push_str(&format!("  search.set(\"{0}\", query.{0});\n", param.name));
+            } else if all_optional {
+                out.push_str(&format!(
+                    "  if (query?.{0} !== undefined) {{\n    search.set(\"{0}\", query.{0});\n  }}\n",
+                    param.name
+                ));
+            } else {
+                out.push_str(&format!(
+                    "  if (query.{0} !== undefined) {{\n    search.set(\"{0}\", query.{0});\n  }}\n",
+                    param.name
+                ));
+            }
+        }
+        out.push_str("  const query_string = search.toString();\n");
+        out.push_str(&format!(
+            "  const target = query_string === \"\" ? {url_expr} : `${{{url_expr}}}?${{query_string}}`;\n"
+        ));
+        url_expr = "target".to_string();
+    }
+
     // 字节响应意味着“读字节”，请求头也要声明接受字节（不假装在要 JSON）。
     let accept = match &operation.success {
         SuccessBody::Json(_) => "application/json",
         SuccessBody::Bytes => "application/octet-stream",
+        SuccessBody::EventStream => "text/event-stream",
     };
     let headers_line = if operation.header_params.is_empty() {
         format!("    headers: request_headers(options, init, {content_type}, \"{accept}\"),\n")
@@ -555,6 +597,13 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
                 "  if (!response.ok) {\n    throw api_error(response.status, await read_json(response));\n  }\n",
             );
             out.push_str("  return await read_bytes(response);\n}\n\n");
+        }
+        SuccessBody::EventStream => {
+            // 事件流由调用方按 SSE 解析（`response.body`）；非 2xx 仍是 JSON 错误信封。
+            out.push_str(
+                "  if (!response.ok) {\n    throw api_error(response.status, await read_json(response));\n  }\n",
+            );
+            out.push_str("  return response;\n}\n\n");
         }
     }
 }

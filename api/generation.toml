@@ -9,7 +9,8 @@
 # Schema；它们各有唯一编辑源，互不引用（服务器管理 API 不控制客户端本地路径）。
 # v4：成功响应可以是二进制切片（`application/octet-stream`，无 schema），端点参数可用
 # `in: header`（必填、`type: string`）。
-format_version = 4
+# v5：端点参数可用 `in: query`（标量，必填或可选），成功响应可以是 `text/event-stream`（SSE）。
+format_version = 5
 generator = "vaultsyncd-xtask"
 generator_version = "0.1.0"
 
