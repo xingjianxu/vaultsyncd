@@ -2007,6 +2007,7 @@ dependencies = [
  "sha2",
  "tokio",
  "vaultsyncd-domain",
+ "vaultsyncd-transfer",
 ]
 
 [[package]]
@@ -2020,6 +2021,7 @@ dependencies = [
  "vaultsyncd-domain",
  "vaultsyncd-fs-common",
  "vaultsyncd-server-core",
+ "vaultsyncd-transfer",
 ]
 
 [[package]]
@@ -2029,6 +2031,13 @@ dependencies = [
  "tokio",
  "vaultsyncd-domain",
  "vaultsyncd-server-core",
+]
+
+[[package]]
+name = "vaultsyncd-transfer"
+version = "0.1.0"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]

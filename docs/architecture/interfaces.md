@@ -1505,3 +1505,45 @@ python3 tools/context.py --help
   时后代路径整体移位、名称不变；某后代的名称在事务内被并发占用仍整批失败（`NameOccupied`），不逐个另名。
 - **真实适配器未落地**：`RestoreStore`/`TrashRestoreStore`/`ContentLeasePort` 的 SQLx 实现与进程内装配
   仍未写（与 S035/S039 的同类缺口一致），本卡证明的是核心编排、端口契约与证据核对。
+
+## crates/transfer — 固定块几何与流式摘要（S045）
+
+状态：S045 实现。包名 `vaultsyncd-transfer`，唯一依赖 `sha2`，在 `default-members` 内；不做任何 I/O。
+
+| 模块 | 契约 |
+| --- | --- |
+| `chunk::ChunkGeometry` | `new(total_size, chunk_size) -> Result<_, GeometryError>`（块大小 0 拒绝）、`total_size()`、`chunk_size()`、`part_count()`（`ceil(total/chunk)`，空内容 0 块）、`part_length(index) -> Option<u64>`（越界返回 `None`，与“空块”可区分）；边界用 `checked_mul`/`checked_sub` |
+| `hash` | `DIGEST_BYTES = 32`；`ContentHasher::{new,update,hashed_bytes,finish}`、`digest_of(&[u8])`、`verify(actual, expected) -> Result<(), DigestMismatch>`（带两侧摘要）、`to_hex(&[u8;32])` |
+
+不变量：**块几何与摘要算法只有这一份实现**——`crates/server-store::uploads::ChunkGeometry` 是它在
+存储层的薄封装（`UploadRecord::geometry()` 因此返回 `Result`），`crates/server-core::api::uploads`
+直接用它。摘要以原始 32 字节交付，不新增第三个摘要包装类型（`server-core::objects::ContentDigest`
+与 `server-store` 的 `ObjectHash` 各自保留自己的类型）。续传位图与传输端口不在此 crate。
+
+## crates/server-core — 上传会话与固定块接收（S045）
+
+状态：S045 实现。
+
+| 接口 | 契约 |
+| --- | --- |
+| `api::uploads::UploadPolicy` | `standard()`：默认块 4 MiB、块上限 16 MiB、总大小上限 64 GiB |
+| `api::uploads::plan_begin(policy, &BeginRequest)` | 总大小/块大小超限分别报 `TotalTooLarge`/`ChunkTooLarge`；`chunk_size = 0` 取策略默认值；返回 `BeginPlan{chunk_size, geometry}` |
+| `api::uploads::receive_part(store, staging, upload, index, declared, bytes)` | 读会话 → 状态必须 `open` → 几何给期望长度 → 摘要核对 → 已收块比较 → `PartStaging::store_part`（返回即已 fsync）→ `record_part`；返回 `PartReceipt{write,index,length,hash,phase}` |
+| `api::uploads::UploadFailure` | `TotalTooLarge`/`ChunkTooLarge`/`IndexOutOfRange`/`LengthMismatch`/`DigestMismatch`/`PartConflict`/`PartsClosed`/`UnknownUpload`/`OutOfScope`/`MalformedSession`/`Storage{detail}`（满盘为 `detail = "no_space"`） |
+| `ports::upload_session::UploadSessionStore` | `load`/`existing_part`/`record_part`：全部限定 owner scope，`load` 对“不存在/别人的 Root/别人的上传”统一 `UnknownUpload` |
+| `ports::upload_session::PartStaging` | `store_part(upload,index,bytes) -> String`（返回前必须写全并 fsync；失败不得留下可登记路径） |
+
+## apps/server — 上传端点（S045）
+
+| 端点 | 语义 |
+| --- | --- |
+| `POST /v1/roots/{root}/uploads` | 建会话：`principal_from` → `authorize_root` → `plan_begin` → `uploads::begin_upload`（单次写事务）；201 返回 `UploadSession`；会话绑定签发它的登录会话，到期 24 小时 |
+| `GET /v1/roots/{root}/uploads/{upload}` | 会话状态 + **服务端真实已收块** + 缺失区间；Root 不符/不属于该登录会话 → 404 `UNSUPPORTED_ENTRY`（不泄露存在性） |
+| `PUT /v1/roots/{root}/uploads/{upload}/parts/{index}` | 块体 `application/octet-stream`、块摘要头 `x-part-sha256`；载荷上限 `max_chunk_size + 1`；成功 200 `UploadPartAck{already_present}` |
+
+失败映射：401 `AUTH_EXPIRED`、403 `ACCESS_DENIED`、404 `UNSUPPORTED_ENTRY`、400 `INVALID_REQUEST`
+（形状/越界索引/长度不符/超载荷）、409 `PART_CONFLICT`（同索引不同字节或会话已不接收块）、
+422 `HASH_MISMATCH`、503 `NEEDS_RECOVERY`、507 `INSUFFICIENT_STORAGE`。暂存落在
+`state_dir/uploads/<upload_id>/<index>`（临时文件 → fsync → rename → fsync 目录）。
+**已知缺口**：`x-part-sha256` 未进契约（生成器尚不支持 `in: header`）；`INVALID_REQUEST`/
+`PART_CONFLICT` 是本次扩展的错误码，design §15.4 需补行。

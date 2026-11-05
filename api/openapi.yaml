@@ -222,8 +222,352 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /v1/roots/{root}/uploads:
+    post:
+      operationId: beginUpload
+      summary: 创建上传会话
+      description: |
+        为一个不可变本地快照申请上传会话（design §13.1—13.2、§15.2）。会话绑定总大小与总
+        SHA-256，块大小由服务端决定并随会话返回；同一会话重复申请不会创建第二个身份。
+        会话与签发它的登录会话、授权 Root 绑定，容量与总大小上限由服务端限定。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadRequest"
+      responses:
+        "201":
+          description: 已创建上传会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+        "400":
+          description: 请求形状不合法（哈希不是 64 位小写十六进制、大小越界）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围（不区分不存在与越权）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "507":
+          description: 服务端空间或会话容量不足
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端不可用（例如需要恢复）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/roots/{root}/uploads/{upload}:
+    get:
+      operationId: getUpload
+      summary: 查询上传进度
+      description: |
+        返回会话状态与**服务端真实已收块**，客户端的续传依据是这里的结果而不是自己记录的位图
+        （design §13.2「查询已收块」）。已收块的哈希与长度都来自持久化记录。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: upload
+          in: path
+          required: true
+          description: 上传会话身份（32 位小写十六进制）。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 会话状态与已收块
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadStatus"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: 会话不存在、不属于该 Root 或不属于该登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端不可用（例如需要恢复）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /v1/roots/{root}/uploads/{upload}/parts/{index}:
+    put:
+      operationId: putUploadPart
+      summary: 上传一个固定块
+      description: |
+        按会话的块几何上传第 `index` 块原始字节（design §13.1、§15.2）。请求体是
+        `application/octet-stream`；块长度必须等于会话几何给出的期望长度，`x-part-sha256`
+        头给出该块的小写十六进制 SHA-256。服务端先把字节落到私有暂存并持久化，再登记该块；
+        同一索引重传必须字节一致（幂等返回既有记录），不一致一律拒绝，不能把两个本地
+        generation 的字节混进一个会话。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: upload
+          in: path
+          required: true
+          description: 上传会话身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: index
+          in: path
+          required: true
+          description: 块索引（从 0 起的十进制文本）。
+          schema:
+            type: string
+            format: decimal_u64
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+      responses:
+        "200":
+          description: 块已登记（首次或幂等重传）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadPartAck"
+        "400":
+          description: 块索引越界、长度与几何不符或载荷超过上限
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 没有可用会话凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在调用方授权范围或会话属于其他登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: 会话不存在或不属于该 Root
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: 同一块索引已登记不同字节
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 块内容与声明的 SHA-256 或长度不符
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 服务端不可用（例如需要恢复）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "507":
+          description: 暂存空间不足
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
 components:
   schemas:
+    UploadRequest:
+      description: 创建上传会话的输入（design §15.2 `POST /v1/roots/{root}/uploads`）。
+      type: object
+      required: [total_size, hash, chunk_size]
+      properties:
+        total_size:
+          type: string
+          format: decimal_u64
+          description: 不可变本地快照的总字节数（十进制文本）。
+        hash:
+          type: string
+          description: 整份内容的 SHA-256，64 位小写十六进制。
+        chunk_size:
+          type: string
+          format: decimal_u64
+          description: |
+            客户端希望的块大小（十进制文本）。0 表示由服务端按能力选择；服务端可以把它调到
+            自己的上限以内，实际值随会话返回。
+
+    UploadSession:
+      description: 上传会话（design §13.1：绑定总大小、总哈希与块几何）。
+      type: object
+      required:
+        [upload_id, root_id, total_size, hash, chunk_size, part_count, state, expires_at]
+      properties:
+        upload_id:
+          type: string
+          description: 上传会话身份，32 位小写十六进制。
+        root_id:
+          type: string
+          description: 所属 Root 身份，32 位小写十六进制。
+        total_size:
+          type: string
+          format: decimal_u64
+          description: 快照总字节数（十进制文本）。
+        hash:
+          type: string
+          description: 整份内容的 SHA-256，64 位小写十六进制。
+        chunk_size:
+          type: string
+          format: decimal_u64
+          description: 本会话实际使用的块大小（十进制文本）。
+        part_count:
+          type: string
+          format: decimal_u64
+          description: 块数（空内容为 0）。
+        state:
+          $ref: "#/components/schemas/UploadState"
+          description: 会话状态；客户端据此决定继续传块、查询结果还是放弃。
+        expires_at:
+          type: string
+          format: decimal_u64
+          description: 会话到期时间（UTC Unix 秒的十进制文本）。
+
+    UploadState:
+      description: |
+        上传会话状态闭集。未知取值按协议错误处理；`open` 接收块，`complete` 只等待
+        finalize（S046），`finalized`/`aborted` 是终态。
+      type: string
+      enum:
+        - open
+        - complete
+        - finalized
+        - aborted
+
+    UploadStatus:
+      description: 续传依据：会话状态加**服务端真实已收块**（design §13.2）。
+      type: object
+      required: [upload, received, missing]
+      properties:
+        upload:
+          $ref: "#/components/schemas/UploadSession"
+          description: 会话状态与块几何。
+        received:
+          type: array
+          description: 已收到的块，按索引升序。
+          items:
+            $ref: "#/components/schemas/ReceivedPart"
+        missing:
+          type: array
+          description: |
+            仍缺失的块区间，按索引升序；空表示块已齐。区间而不是逐块列表，因此长度最多是
+            “已收块数 + 1”，不随文件大小增长。
+          items:
+            $ref: "#/components/schemas/MissingRange"
+
+    ReceivedPart:
+      description: 服务端已持久化的一个块。
+      type: object
+      required: [index, length, hash]
+      properties:
+        index:
+          type: string
+          format: decimal_u64
+          description: 块索引（从 0 起，十进制文本）。
+        length:
+          type: string
+          format: decimal_u64
+          description: 块长度（十进制文本），与块几何一致。
+        hash:
+          type: string
+          description: 块内容的 SHA-256，64 位小写十六进制。
+
+    MissingRange:
+      description: 一段连续缺失的块索引。
+      type: object
+      required: [first_index, count]
+      properties:
+        first_index:
+          type: string
+          format: decimal_u64
+          description: 区间起点（含），十进制文本。
+        count:
+          type: string
+          format: decimal_u64
+          description: 区间内的块数，至少为 1。
+
+    UploadPartAck:
+      description: 块登记结果。
+      type: object
+      required: [upload_id, index, length, hash, state, already_present]
+      properties:
+        upload_id:
+          type: string
+          description: 上传会话身份，32 位小写十六进制。
+        index:
+          type: string
+          format: decimal_u64
+          description: 块索引（十进制文本）。
+        length:
+          type: string
+          format: decimal_u64
+          description: 块长度（十进制文本）。
+        hash:
+          type: string
+          description: 块内容的 SHA-256，64 位小写十六进制。
+        state:
+          $ref: "#/components/schemas/UploadState"
+          description: 登记后的会话状态（块齐之前保持 `open`）。
+        already_present:
+          type: boolean
+          description: 是否为幂等重传（同一索引、同一字节已经登记过）。
+
     RootHealth:
       description: |
         Root 健康状态闭集（design §7.2 `roots.health`）。`unavailable` 表示挂载、身份或权限
@@ -473,8 +817,10 @@ components:
         - EPOCH_CHANGED
         - VERSION_GONE
         - INVALID_NAME
+        - INVALID_REQUEST
         - UNSUPPORTED_ENTRY
         - HASH_MISMATCH
+        - PART_CONFLICT
         - UNSUPPORTED_STORAGE_BACKEND
         - SERVER_PLACEHOLDER_UNSUPPORTED
         - RATE_LIMITED

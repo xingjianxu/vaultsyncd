@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeErrorEnvelope, decodeHealthResponse, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked } from "./types";
-import type { Capabilities, ErrorBody, HealthResponse, LoginRequest, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked } from "./types";
+import { decodeCapabilities, decodeErrorEnvelope, decodeHealthResponse, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
+import type { Capabilities, ErrorBody, HealthResponse, LoginRequest, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -54,12 +54,12 @@ function join_url(base_url: string, path: string): string {
 function request_headers(
   options: ClientOptions,
   init: RequestInit | undefined,
-  has_body: boolean,
+  content_type: string | null,
 ): Headers {
   const headers = new Headers(init?.headers);
   headers.set("accept", "application/json");
-  if (has_body) {
-    headers.set("content-type", "application/json");
+  if (content_type !== null) {
+    headers.set("content-type", content_type);
   }
   headers.set("x-request-id", options.request_id());
   return headers;
@@ -95,7 +95,7 @@ export async function registerRoot(options: ClientOptions, body: RootRegisterReq
   const response = await options.fetch(join_url(options.base_url, "/v1/admin/roots"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, true),
+    headers: request_headers(options, init, "application/json"),
     body: JSON.stringify(body),
   });
   const payload = await read_json(response);
@@ -122,7 +122,7 @@ export async function login(options: ClientOptions, body: LoginRequest, init?: R
   const response = await options.fetch(join_url(options.base_url, "/v1/auth/login"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, true),
+    headers: request_headers(options, init, "application/json"),
     body: JSON.stringify(body),
   });
   const payload = await read_json(response);
@@ -145,7 +145,7 @@ export async function logout(options: ClientOptions, init?: RequestInit): Promis
   const response = await options.fetch(join_url(options.base_url, "/v1/auth/logout"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, false),
+    headers: request_headers(options, init, null),
   });
   const payload = await read_json(response);
   if (!response.ok) {
@@ -167,7 +167,7 @@ export async function refresh(options: ClientOptions, body: RefreshRequest, init
   const response = await options.fetch(join_url(options.base_url, "/v1/auth/refresh"), {
     ...init,
     method: "POST",
-    headers: request_headers(options, init, true),
+    headers: request_headers(options, init, "application/json"),
     body: JSON.stringify(body),
   });
   const payload = await read_json(response);
@@ -190,7 +190,7 @@ export async function getCapabilities(options: ClientOptions, init?: RequestInit
   const response = await options.fetch(join_url(options.base_url, "/v1/capabilities"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init, false),
+    headers: request_headers(options, init, null),
   });
   const payload = await read_json(response);
   if (!response.ok) {
@@ -212,7 +212,7 @@ export async function getHealth(options: ClientOptions, init?: RequestInit): Pro
   const response = await options.fetch(join_url(options.base_url, "/v1/health"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init, false),
+    headers: request_headers(options, init, null),
   });
   const payload = await read_json(response);
   if (!response.ok) {
@@ -235,11 +235,109 @@ export async function listRoots(options: ClientOptions, init?: RequestInit): Pro
   const response = await options.fetch(join_url(options.base_url, "/v1/roots"), {
     ...init,
     method: "GET",
-    headers: request_headers(options, init, false),
+    headers: request_headers(options, init, null),
   });
   const payload = await read_json(response);
   if (!response.ok) {
     throw api_error(response.status, payload);
   }
   return decodeRootList(payload);
+}
+
+/**
+ * 创建上传会话
+ *
+ * 为一个不可变本地快照申请上传会话（design §13.1—13.2、§15.2）。会话绑定总大小与总
+ * SHA-256，块大小由服务端决定并随会话返回；同一会话重复申请不会创建第二个身份。
+ * 会话与签发它的登录会话、授权 Root 绑定，容量与总大小上限由服务端限定。
+ *
+ * 参数 `root`（/v1/roots/{root}/uploads）：授权 Root 的身份（32 位小写十六进制）。
+ *
+ * 201：已创建上传会话
+ * 400：请求形状不合法（哈希不是 64 位小写十六进制、大小越界）
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围（不区分不存在与越权）
+ * 503：服务端不可用（例如需要恢复）
+ * 507：服务端空间或会话容量不足
+ */
+export async function beginUpload(options: ClientOptions, root: string, body: UploadRequest, init?: RequestInit): Promise<UploadSession> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/uploads`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeUploadSession(payload);
+}
+
+/**
+ * 查询上传进度
+ *
+ * 返回会话状态与**服务端真实已收块**，客户端的续传依据是这里的结果而不是自己记录的位图
+ * （design §13.2「查询已收块」）。已收块的哈希与长度都来自持久化记录。
+ *
+ * 参数 `root`（/v1/roots/{root}/uploads/{upload}）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `upload`（/v1/roots/{root}/uploads/{upload}）：上传会话身份（32 位小写十六进制）。
+ *
+ * 200：会话状态与已收块
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围
+ * 404：会话不存在、不属于该 Root 或不属于该登录会话
+ * 503：服务端不可用（例如需要恢复）
+ */
+export async function getUpload(options: ClientOptions, root: string, upload: string, init?: RequestInit): Promise<UploadStatus> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/uploads/${encodeURIComponent(upload)}`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeUploadStatus(payload);
+}
+
+/**
+ * 上传一个固定块
+ *
+ * 按会话的块几何上传第 `index` 块原始字节（design §13.1、§15.2）。请求体是
+ * `application/octet-stream`；块长度必须等于会话几何给出的期望长度，`x-part-sha256`
+ * 头给出该块的小写十六进制 SHA-256。服务端先把字节落到私有暂存并持久化，再登记该块；
+ * 同一索引重传必须字节一致（幂等返回既有记录），不一致一律拒绝，不能把两个本地
+ * generation 的字节混进一个会话。
+ *
+ * 参数 `root`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `upload`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：上传会话身份（32 位小写十六进制）。
+ * 参数 `index`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：块索引（从 0 起的十进制文本）。
+ *
+ * 200：块已登记（首次或幂等重传）
+ * 400：块索引越界、长度与几何不符或载荷超过上限
+ * 401：没有可用会话凭据
+ * 403：Root 不在调用方授权范围或会话属于其他登录会话
+ * 404：会话不存在或不属于该 Root
+ * 409：同一块索引已登记不同字节
+ * 422：块内容与声明的 SHA-256 或长度不符
+ * 503：服务端不可用（例如需要恢复）
+ * 507：暂存空间不足
+ */
+export async function putUploadPart(options: ClientOptions, root: string, upload: string, index: string, body: Uint8Array, init?: RequestInit): Promise<UploadPartAck> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/uploads/${encodeURIComponent(upload)}/parts/${encodeURIComponent(index)}`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "PUT",
+    headers: request_headers(options, init, "application/octet-stream"),
+    body: body as BodyInit,
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeUploadPartAck(payload);
 }

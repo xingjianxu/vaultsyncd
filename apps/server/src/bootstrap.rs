@@ -161,6 +161,10 @@ impl Service {
         }
 
         let auth = Arc::new(auth::AuthContext::new(database.clone()));
+        let uploads = Arc::new(crate::uploads::UploadsContext::new(
+            Arc::clone(&auth),
+            &config.state_dir,
+        ));
         // 允许基目录来自配置；没有配置时注册端点一律拒绝（不是“不限制”）。
         let allowed_root_bases = config.allowed_root_bases.clone();
         info!(
@@ -176,7 +180,7 @@ impl Service {
             config.state_dir.clone(),
             ScanPolicy::default(),
         ));
-        let router = http::router(Arc::clone(&lifecycle), auth, roots);
+        let router = http::router(Arc::clone(&lifecycle), auth, uploads, roots);
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
             shutdown.await;

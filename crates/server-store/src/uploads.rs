@@ -40,47 +40,41 @@ const PART_COLUMNS: &str = "part_index, length, hash, path";
 ///
 /// 块数 = `ceil(total_size / chunk_size)`；每块长度等于 `chunk_size`，最后一块是其剩余长度。
 /// 空内容（`total_size = 0`）有 0 块，因此不需要零长度块来表达“空文件”。
+///
+/// 算术本身由 `vaultsyncd_transfer::chunk::ChunkGeometry` 提供（design §5.4 的 `crates/transfer`）：
+/// 客户端上传与服务端接收必须按同一份定义切块，因此本类型只是它在存储层的薄封装——`new` 把
+/// 几何错误映射成存储层的 [`UploadError::InvalidChunkSize`]，不再另写一遍除法。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChunkGeometry {
-    total_size: u64,
-    chunk_size: u64,
+    inner: vaultsyncd_transfer::chunk::ChunkGeometry,
 }
 
 impl ChunkGeometry {
     /// 由总大小与块大小构造；块大小为 0 时返回 [`UploadError::InvalidChunkSize`]。
     pub fn new(total_size: u64, chunk_size: u64) -> Result<Self, UploadError> {
-        if chunk_size == 0 {
-            return Err(UploadError::InvalidChunkSize);
-        }
-        Ok(Self {
-            total_size,
-            chunk_size,
-        })
+        vaultsyncd_transfer::chunk::ChunkGeometry::new(total_size, chunk_size)
+            .map(|inner| Self { inner })
+            .map_err(|_| UploadError::InvalidChunkSize)
     }
 
     /// 快照总大小（字节）。
-    pub const fn total_size(self) -> u64 {
-        self.total_size
+    pub fn total_size(self) -> u64 {
+        self.inner.total_size()
     }
 
     /// 块大小（字节）。
-    pub const fn chunk_size(self) -> u64 {
-        self.chunk_size
+    pub fn chunk_size(self) -> u64 {
+        self.inner.chunk_size()
     }
 
     /// 块数：完整块与最后一个不足块合计；空内容为 0。
     pub fn part_count(self) -> u64 {
-        self.total_size.div_ceil(self.chunk_size)
+        self.inner.part_count()
     }
 
     /// 第 `index` 块的期望长度；索引大于等于块数时返回 `None`。
     pub fn part_length(self, index: u64) -> Option<u64> {
-        if index >= self.part_count() {
-            return None;
-        }
-        let offset = index.checked_mul(self.chunk_size)?;
-        let remaining = self.total_size.checked_sub(offset)?;
-        Some(remaining.min(self.chunk_size))
+        self.inner.part_length(index)
     }
 }
 
@@ -182,12 +176,9 @@ pub struct UploadRecord {
 }
 
 impl UploadRecord {
-    /// 本会话的块几何；`chunk_size` 已在读库时校验为正。
-    pub fn geometry(&self) -> ChunkGeometry {
-        ChunkGeometry {
-            total_size: self.expected_size,
-            chunk_size: self.chunk_size,
-        }
+    /// 本会话的块几何；`chunk_size` 已在读库时校验为正，因此这里只可能报格式错误。
+    pub fn geometry(&self) -> Result<ChunkGeometry, UploadError> {
+        ChunkGeometry::new(self.expected_size, self.chunk_size)
     }
 }
 
@@ -487,7 +478,7 @@ pub async fn record_part(
             state: record.state,
         });
     }
-    let geometry = record.geometry();
+    let geometry = record.geometry()?;
     let expected = geometry
         .part_length(new.index)
         .ok_or(UploadError::PartOutOfRange {
@@ -551,7 +542,7 @@ pub async fn upload_progress(
 ) -> Result<UploadProgress, UploadError> {
     let record = require_upload(conn, owner, upload).await?;
     let received = read_parts(conn, upload).await?;
-    let geometry = record.geometry();
+    let geometry = record.geometry()?;
     let mut missing = Vec::new();
     let mut next = 0;
     for part in &received {
@@ -914,7 +905,7 @@ mod tests {
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].id, upload_id(0x41));
         assert_eq!(open[0].state, UploadState::Open);
-        assert_eq!(open[0].geometry().part_count(), 3);
+        assert_eq!(open[0].geometry().expect("已校验块大小").part_count(), 3);
 
         let mut conn = database.pool().acquire().await.expect("取连接");
         let progress = upload_progress(&mut conn, owner, upload_id(0x41))

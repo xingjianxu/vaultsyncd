@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 
 use super::local_ipc::{IpcProtocol, LocalIpcModel};
 use super::{
-    ApiOperation, FieldType, GenerationConfig, Model, SchemaDef, TargetTypes, do_not_edit,
+    ApiOperation, FieldType, GenerationConfig, Model, RequestBodyKind, SchemaDef, TargetTypes,
+    do_not_edit,
 };
 
 /// 渲染全部输出，顺序与 `api/generation.toml` 的 `[outputs]` 一致。
@@ -319,7 +320,11 @@ fn render_typescript_client(config: &GenerationConfig, model: &Model) -> String 
     for operation in &model.operations {
         decoders.push(format!("decode{}", operation.success_type));
         types.push(operation.success_type.clone());
-        if let Some(request_type) = &operation.request_type {
+        if let Some(request_type) = operation
+            .request
+            .as_ref()
+            .and_then(RequestBodyKind::json_schema)
+        {
             types.push(request_type.clone());
         }
     }
@@ -404,12 +409,12 @@ function join_url(base_url: string, path: string): string {
 function request_headers(
   options: ClientOptions,
   init: RequestInit | undefined,
-  has_body: boolean,
+  content_type: string | null,
 ): Headers {
   const headers = new Headers(init?.headers);
   headers.set(\"accept\", \"application/json\");
-  if (has_body) {
-    headers.set(\"content-type\", \"application/json\");
+  if (content_type !== null) {
+    headers.set(\"content-type\", content_type);
   }
   headers.set(\"x-request-id\", options.request_id());
   return headers;
@@ -440,28 +445,58 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
         }
     }
     out.push_str(" */\n");
-    match &operation.request_type {
-        Some(request_type) => {
-            out.push_str(&format!(
-                "export async function {}(options: ClientOptions, body: {}, init?: RequestInit): Promise<{}> {{\n",
-                operation.operation_id, request_type, operation.success_type
-            ));
-            out.push_str(&format!(
-                "  const response = await options.fetch(join_url(options.base_url, \"{}\"), {{\n    ...init,\n    method: \"{}\",\n    headers: request_headers(options, init, true),\n    body: JSON.stringify(body),\n  }});\n",
-                operation.path, operation.method
-            ));
-        }
-        None => {
-            out.push_str(&format!(
-                "export async function {}(options: ClientOptions, init?: RequestInit): Promise<{}> {{\n",
-                operation.operation_id, operation.success_type
-            ));
-            out.push_str(&format!(
-                "  const response = await options.fetch(join_url(options.base_url, \"{}\"), {{\n    ...init,\n    method: \"{}\",\n    headers: request_headers(options, init, false),\n  }});\n",
-                operation.path, operation.method
-            ));
-        }
+
+    // 签名：`options` → 路径参数（按路径顺序）→ 请求体（有则带）→ `init`。
+    let mut params = vec!["options: ClientOptions".to_string()];
+    for param in &operation.path_params {
+        params.push(format!("{}: string", param.name));
     }
+    // 生成的实参：无请求体是 `null`，有请求体是带引号的媒体类型字面量。
+    let mut content_type = "null";
+    let mut body_line = String::new();
+    match &operation.request {
+        Some(RequestBodyKind::Json(schema)) => {
+            params.push(format!("body: {schema}"));
+            content_type = "\"application/json\"";
+            body_line.push_str("    body: JSON.stringify(body),\n");
+        }
+        Some(RequestBodyKind::Binary) => {
+            params.push("body: Uint8Array".to_string());
+            content_type = "\"application/octet-stream\"";
+            body_line.push_str("    body: body as BodyInit,\n");
+        }
+        None => {}
+    }
+    params.push("init?: RequestInit".to_string());
+    out.push_str(&format!(
+        "export async function {}({}): Promise<{}> {{\n",
+        operation.operation_id,
+        params.join(", "),
+        operation.success_type
+    ));
+
+    // 路径：占位符换成模板字面量，值用 `encodeURIComponent` 编码，不拼未转义文本。
+    let mut url_expr = format!("\"{}\"", operation.path);
+    if !operation.path_params.is_empty() {
+        let mut template = String::new();
+        let mut rest = operation.path.as_str();
+        while let Some(open) = rest.find('{') {
+            template.push_str(&rest[..open]);
+            let after = &rest[open + 1..];
+            let close = after.find('}').expect("生成模型已校验占位符闭合");
+            let name = &after[..close];
+            template.push_str(&format!("${{encodeURIComponent({name})}}"));
+            rest = &after[close + 1..];
+        }
+        template.push_str(rest);
+        out.push_str(&format!("  const path = `{template}`;\n"));
+        url_expr = "path".to_string();
+    }
+
+    out.push_str(&format!(
+        "  const response = await options.fetch(join_url(options.base_url, {url_expr}), {{\n    ...init,\n    method: \"{}\",\n    headers: request_headers(options, init, {content_type}),\n{body_line}  }});\n",
+        operation.method
+    ));
     out.push_str("  const payload = await read_json(response);\n");
     out.push_str("  if (!response.ok) {\n    throw api_error(response.status, payload);\n  }\n");
     out.push_str(&format!(
