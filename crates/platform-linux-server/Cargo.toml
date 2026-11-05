@@ -23,4 +23,9 @@ all = { level = "deny", priority = -1 }
 # 无第三方依赖：内核 ABI 只用到三个只读 ioctl 与两个查询系统调用，全部在
 # `src/mounts/raw.rs` 里最小声明并用 const 断言自检布局；不引入 libc（理由见
 # agent/tasks/S013.md）。
+# 库本身不依赖 server-core（平台适配层与核心用例不互相依赖，design §5.5）：只有
+# `examples/object-capture.rs` 这个本地组装入口用核心的端口与规则跑 S033 验收。
+[dev-dependencies]
+vaultsyncd-server-core = { path = "../server-core" }
+
 [dependencies]

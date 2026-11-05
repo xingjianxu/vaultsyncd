@@ -1603,6 +1603,9 @@ dependencies = [
 [[package]]
 name = "vaultsyncd-platform-linux-server"
 version = "0.1.0"
+dependencies = [
+ "vaultsyncd-server-core",
+]
 
 [[package]]
 name = "vaultsyncd-platform-windows"
