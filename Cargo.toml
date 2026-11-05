@@ -10,6 +10,7 @@ members = [
     "crates/client-store",
     "crates/domain",
     "crates/fs-common",
+    "crates/local-ipc",
     "crates/planner",
     "crates/platform-linux-server",
     "crates/protocol",
@@ -21,6 +22,10 @@ members = [
 # crates/protocol 是 api/openapi.yaml 生成的 wire 契约与 domain→wire 显式映射（S024），只依赖
 # serde 与 domain，Windows 客户端与 Linux 服务端共用，因此同样进 default-members：两侧编译与
 # 契约测试都在便携检查里跑。
+#
+# crates/local-ipc 是本机 IPC 的 wire 契约、协议版本与消息帧（S025）：只依赖 serde，不含平台
+# 传输（命名管道在 crates/platform-windows），任何宿主目标都能编译与测试，因此也进
+# default-members，让帧上限、部分读取与命令解码的回归进入便携检查。
 # crates/planner 是纯规则的三方比较与计划核心（S019），只依赖 domain 与 fs-common，不做任何
 # I/O，因此同样进 default-members。
 #
@@ -39,6 +44,7 @@ default-members = [
     "crates/client-store",
     "crates/domain",
     "crates/fs-common",
+    "crates/local-ipc",
     "crates/planner",
     "crates/protocol",
     "crates/server-store",

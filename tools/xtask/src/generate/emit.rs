@@ -1,14 +1,18 @@
-//! 把校验后的契约模型渲染成 Rust DTO 与 TypeScript 客户端。
+//! 把校验后的契约模型渲染成 Rust DTO 与 TypeScript 类型/客户端。
 //!
-//! 渲染只依赖 [`Model`] 与 [`GenerationConfig`] 的映射表，因此同一契约必然得到同一份字节：
-//! 没有时间戳、没有随机顺序（schema 与字段都按名字排序），`cargo xtask generate --check`
-//! 才能用逐字节比对来守护“生成代码与契约同步”。
+//! 远端契约与本机 IPC 契约共用同一套 schema 渲染（对象/闭集枚举/基础类型/描述），差别只在文件
+//! 表头与附加常量：远端多一个 HTTP 调用文件，本机 IPC 多一个协议版本与帧上限常量。两份契约的
+//! 输出都只依赖模型与映射表，所以同一契约必然得到同一份字节：没有时间戳、没有随机顺序（schema
+//! 与字段按名字排序），`cargo xtask generate --check` 才能用逐字节比对守住“生成代码与契约同步”。
 //!
 //! 生成的 Rust 必须同时通过 `rustfmt --check`，生成代码的格式因此在这里就按 rustfmt 的默认风格
 //! 产出；排版改动会在重新生成时体现为 diff，字面量不会在运行时被重新格式化。
 
+use std::collections::BTreeMap;
+
+use super::local_ipc::{IpcProtocol, LocalIpcModel};
 use super::{
-    ApiOperation, DO_NOT_EDIT, FieldType, GenerationConfig, Model, SchemaDef, TargetTypes,
+    ApiOperation, FieldType, GenerationConfig, Model, SchemaDef, TargetTypes, do_not_edit,
 };
 
 /// 渲染全部输出，顺序与 `api/generation.toml` 的 `[outputs]` 一致。
@@ -21,7 +25,24 @@ pub(super) fn render(config: &GenerationConfig, model: &Model) -> Vec<(String, S
         ),
         (
             config.outputs.typescript_client.clone(),
-            render_typescript_client(model),
+            render_typescript_client(config, model),
+        ),
+    ]
+}
+
+/// 渲染本机 IPC 的两份输出：Rust DTO 与 TypeScript 类型。
+pub(super) fn render_local_ipc(
+    config: &GenerationConfig,
+    model: &LocalIpcModel,
+) -> Vec<(String, String)> {
+    vec![
+        (
+            config.outputs.local_ipc_rust.clone(),
+            render_local_ipc_rust(config, model),
+        ),
+        (
+            config.outputs.local_ipc_typescript_types.clone(),
+            render_local_ipc_types(config, model),
         ),
     ]
 }
@@ -37,8 +58,8 @@ fn provenance(model: &Model) -> String {
 }
 
 /// 追加契约说明的原文行（按源文件断行，不重新折行，避免中文换行处出现多余空格）。
-fn push_description(out: &mut String, prefix: &str, model: &Model) {
-    for line in &model.description {
+fn push_description(out: &mut String, prefix: &str, description: &[String]) {
+    for line in description {
         out.push_str(&format!(
             "{prefix} {line}
 "
@@ -50,9 +71,9 @@ fn push_description(out: &mut String, prefix: &str, model: &Model) {
 fn render_rust(config: &GenerationConfig, model: &Model) -> String {
     let types = &config.types.rust;
     let mut out = String::new();
-    out.push_str(&format!("//! {DO_NOT_EDIT}\n//!\n"));
+    out.push_str(&format!("//! {}\n//!\n", do_not_edit(&config.source)));
     push_wrapped(&mut out, "//!", &provenance(model));
-    push_description(&mut out, "//!", model);
+    push_description(&mut out, "//!", &model.description);
     out.push_str("//!\n");
     out.push_str(
         "//! 生成代码只做 wire 形态：闭集枚举的未知取值在反序列化时报错，十进制长整数只接受\n",
@@ -61,33 +82,98 @@ fn render_rust(config: &GenerationConfig, model: &Model) -> String {
         "//! 规范文本（见 `crate::decimal`）；domain 类型到 wire 的转换在 `crate::domain_map`。\n",
     );
     out.push('\n');
-    if model_uses_map(model) {
+    if schemas_use_map(&model.schemas) {
         out.push_str("use std::collections::BTreeMap;\n\n");
     }
+    push_rust_schemas(&mut out, types, &model.schemas);
+    trim_trailing_blank_line(&mut out);
+    out
+}
 
-    for (name, definition) in &model.schemas {
+/// 渲染本机 IPC 的 Rust DTO 文件：同一套 schema 渲染，额外生成协议版本与帧上限常量。
+fn render_local_ipc_rust(config: &GenerationConfig, model: &LocalIpcModel) -> String {
+    let types = &config.types.rust;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "//! {}\n//!\n",
+        do_not_edit(&config.local_ipc_source)
+    ));
+    push_wrapped(&mut out, "//!", &local_ipc_provenance(config, model));
+    push_description(&mut out, "//!", &model.description);
+    out.push_str("//!\n");
+    out.push_str(
+        "//! 生成代码只做 wire 形态：闭集枚举的未知取值在反序列化时报错，可选字段缺省时不出现在\n",
+    );
+    out.push_str(
+        "//! JSON 里；帧的读写与命令处理在 `crate::framing`/`crate::service`，传输层（命名管道、\n",
+    );
+    out.push_str("//! socket）不在本 crate。\n\n");
+    push_local_ipc_constants_rust(&mut out, model);
+    if schemas_use_map(&model.schemas) {
+        out.push_str("use std::collections::BTreeMap;\n\n");
+    }
+    push_rust_schemas(&mut out, types, &model.schemas);
+    trim_trailing_blank_line(&mut out);
+    out
+}
+
+/// 本机 IPC 生成文件的表头来源行。
+fn local_ipc_provenance(config: &GenerationConfig, model: &LocalIpcModel) -> String {
+    format!(
+        "契约：{}（{}）；生成器：{} {}",
+        model.title,
+        config.local_ipc_source,
+        super::GENERATOR,
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// 本机 IPC 的协议版本与帧上限常量（Rust）。
+fn push_local_ipc_constants_rust(out: &mut String, model: &LocalIpcModel) {
+    let IpcProtocol { major, minor } = model.protocol;
+    out.push_str("/// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。\n");
+    out.push_str(&format!("pub const PROTOCOL_MAJOR: u32 = {major};\n"));
+    out.push_str("/// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。\n");
+    out.push_str(&format!("pub const PROTOCOL_MINOR: u32 = {minor};\n"));
+    out.push_str("/// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。\n");
+    out.push_str(&format!(
+        "pub const FRAME_HEADER_BYTES: usize = {};\n",
+        model.frame.header_bytes
+    ));
+    out.push_str("/// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。\n");
+    out.push_str(&format!(
+        "pub const MAX_FRAME_BYTES: usize = {};\n\n",
+        model.frame.max_frame_bytes
+    ));
+}
+
+/// 把 schema 列表渲染成 Rust 结构体与枚举（两种契约共用）。
+fn push_rust_schemas(out: &mut String, types: &TargetTypes, schemas: &BTreeMap<String, SchemaDef>) {
+    for (name, definition) in schemas {
         match definition {
             SchemaDef::Struct { doc, fields } => {
-                push_rust_doc(&mut out, "", doc);
+                push_rust_doc(out, "", doc);
                 out.push_str(
                     "#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]\n",
                 );
                 out.push_str(&format!("pub struct {name} {{\n"));
                 for field in fields {
-                    push_rust_doc(&mut out, "    ", &field.doc);
+                    push_rust_doc(out, "    ", &field.doc);
                     if matches!(field.ty, FieldType::Decimal) {
                         out.push_str("    #[serde(with = \"crate::decimal\")]\n");
                     }
                     let mut ty = rust_type(types, &field.ty);
                     if field.optional {
                         ty = format!("Option<{ty}>");
+                        // 可选字段缺省时不出现在 JSON 里：`null` 是第三种状态，两侧解码器都不接受。
+                        out.push_str("    #[serde(skip_serializing_if = \"Option::is_none\")]\n");
                     }
                     out.push_str(&format!("    pub {}: {ty},\n", field.wire));
                 }
                 out.push_str("}\n\n");
             }
             SchemaDef::Enum { doc, variants } => {
-                push_rust_doc(&mut out, "", doc);
+                push_rust_doc(out, "", doc);
                 out.push_str(
                     "#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]\n",
                 );
@@ -101,32 +187,81 @@ fn render_rust(config: &GenerationConfig, model: &Model) -> String {
             }
         }
     }
-    trim_trailing_blank_line(&mut out);
-    out
 }
 
 /// 渲染 TypeScript 类型与解码器文件。
 fn render_typescript_types(config: &GenerationConfig, model: &Model) -> String {
     let types = &config.types.typescript;
     let mut out = String::new();
-    out.push_str(&format!("// {DO_NOT_EDIT}\n//\n"));
+    out.push_str(&format!("// {}\n//\n", do_not_edit(&config.source)));
     push_wrapped(&mut out, "//", &provenance(model));
-    push_description(&mut out, "//", model);
+    push_description(&mut out, "//", &model.description);
     out.push_str("//\n");
     out.push_str("// 解码器只做 wire 形态校验：闭集枚举的未知取值、缺失的必填字段与非法十进制文本都会抛错，\n");
     out.push_str("// 调用方不会拿到“看起来可用”的默认值。\n\n");
 
-    for helper in used_helpers(model) {
+    push_ts_helpers(&mut out, &model.schemas);
+    push_ts_schemas(&mut out, types, &model.schemas);
+    trim_trailing_blank_line(&mut out);
+    out
+}
+
+/// 渲染本机 IPC 的 TypeScript 类型文件：同一套解码器，额外导出协议版本与帧上限常量。
+fn render_local_ipc_types(config: &GenerationConfig, model: &LocalIpcModel) -> String {
+    let types = &config.types.typescript;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "// {}\n//\n",
+        do_not_edit(&config.local_ipc_source)
+    ));
+    push_wrapped(&mut out, "//", &local_ipc_provenance(config, model));
+    push_description(&mut out, "//", &model.description);
+    out.push_str("//\n");
+    out.push_str("// 解码器只做 wire 形态校验：未知命令、未知应答种类、缺失的必填字段都会抛错，\n");
+    out.push_str("// 界面不会拿到“看起来可用”的默认值。\n\n");
+
+    push_local_ipc_constants_typescript(&mut out, model);
+    push_ts_helpers(&mut out, &model.schemas);
+    push_ts_schemas(&mut out, types, &model.schemas);
+    trim_trailing_blank_line(&mut out);
+    out
+}
+
+/// 本机 IPC 的协议版本与帧上限常量（TypeScript）。
+fn push_local_ipc_constants_typescript(out: &mut String, model: &LocalIpcModel) {
+    let IpcProtocol { major, minor } = model.protocol;
+    out.push_str("/** agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。 */\n");
+    out.push_str(&format!("export const PROTOCOL_MAJOR = {major};\n\n"));
+    out.push_str("/** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */\n");
+    out.push_str(&format!("export const PROTOCOL_MINOR = {minor};\n\n"));
+    out.push_str("/** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */\n");
+    out.push_str(&format!(
+        "export const FRAME_HEADER_BYTES = {};\n\n",
+        model.frame.header_bytes
+    ));
+    out.push_str("/** 单帧负载上限（字节）：超过即拒绝，调用方与 agent 用同一个上限。 */\n");
+    out.push_str(&format!(
+        "export const MAX_FRAME_BYTES = {};\n\n",
+        model.frame.max_frame_bytes
+    ));
+}
+
+/// 按需生成解码辅助函数（两种契约共用）。
+fn push_ts_helpers(out: &mut String, schemas: &BTreeMap<String, SchemaDef>) {
+    for helper in used_helpers(schemas) {
         out.push_str(helper_source(helper));
     }
+}
 
-    for (name, definition) in &model.schemas {
+/// 把 schema 列表渲染成 TypeScript 接口、字符串字面量联合与解码函数（两种契约共用）。
+fn push_ts_schemas(out: &mut String, types: &TargetTypes, schemas: &BTreeMap<String, SchemaDef>) {
+    for (name, definition) in schemas {
         match definition {
             SchemaDef::Struct { doc, fields } => {
-                push_ts_doc(&mut out, "", doc);
+                push_ts_doc(out, "", doc);
                 out.push_str(&format!("export interface {name} {{\n"));
                 for field in fields {
-                    push_ts_doc(&mut out, "  ", &field.doc);
+                    push_ts_doc(out, "  ", &field.doc);
                     let ty = ts_type(types, &field.ty);
                     let marker = if field.optional { "?" } else { "" };
                     out.push_str(&format!("  {}{marker}: {ty};\n", field.wire));
@@ -148,7 +283,7 @@ fn render_typescript_types(config: &GenerationConfig, model: &Model) -> String {
                 out.push_str("  };\n}\n\n");
             }
             SchemaDef::Enum { doc, variants } => {
-                push_ts_doc(&mut out, "", doc);
+                push_ts_doc(out, "", doc);
                 let values: Vec<String> = variants
                     .iter()
                     .map(|variant| format!("\"{}\"", variant.value))
@@ -165,16 +300,14 @@ fn render_typescript_types(config: &GenerationConfig, model: &Model) -> String {
             }
         }
     }
-    trim_trailing_blank_line(&mut out);
-    out
 }
 
 /// 渲染 TypeScript 端点调用文件。
-fn render_typescript_client(model: &Model) -> String {
+fn render_typescript_client(config: &GenerationConfig, model: &Model) -> String {
     let mut out = String::new();
-    out.push_str(&format!("// {DO_NOT_EDIT}\n//\n"));
+    out.push_str(&format!("// {}\n//\n", do_not_edit(&config.source)));
     push_wrapped(&mut out, "//", &provenance(model));
-    push_description(&mut out, "//", model);
+    push_description(&mut out, "//", &model.description);
     out.push_str("//\n");
     out.push_str(
         "// 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误\n",
@@ -356,9 +489,9 @@ fn ts_decode(ty: &FieldType, expr: &str, what: &str) -> String {
 }
 
 /// 解码辅助函数名：按需生成，避免产出用不到的代码。
-fn used_helpers(model: &Model) -> Vec<&'static str> {
+fn used_helpers(schemas: &BTreeMap<String, SchemaDef>) -> Vec<&'static str> {
     let mut used: Vec<&'static str> = Vec::new();
-    for definition in model.schemas.values() {
+    for definition in schemas.values() {
         let SchemaDef::Struct { fields, .. } = definition else {
             continue;
         };
@@ -422,7 +555,7 @@ fn helper_source(name: &str) -> &'static str {
 }
 
 /// 是否有任何映射字段：决定 Rust 文件是否需要 `BTreeMap` 导入。
-fn model_uses_map(model: &Model) -> bool {
+fn schemas_use_map(schemas: &BTreeMap<String, SchemaDef>) -> bool {
     fn uses_map(ty: &FieldType) -> bool {
         match ty {
             FieldType::Map(_) => true,
@@ -430,7 +563,7 @@ fn model_uses_map(model: &Model) -> bool {
             _ => false,
         }
     }
-    model.schemas.values().any(|definition| match definition {
+    schemas.values().any(|definition| match definition {
         SchemaDef::Struct { fields, .. } => fields.iter().any(|field| uses_map(&field.ty)),
         SchemaDef::Enum { .. } => false,
     })
@@ -473,19 +606,37 @@ fn push_wrapped(out: &mut String, prefix: &str, text: &str) {
     }
 }
 
-/// 按显示宽度粗略折行：ASCII 记 1、其他字符记 2，够用即可，不做排版级精确对齐。
+/// 按显示宽度折行（ASCII 记 1、其他字符记 2），优先在空白处分行；只有单个词本身超过整行
+/// 宽度时才硬断，避免把标识符或路径从中间切开。本函数只用于表头来源行。
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
-    let mut current_width = 0;
-    for ch in text.chars() {
-        let ch_width = if ch.is_ascii() { 1 } else { 2 };
-        if current_width + ch_width > width && !current.is_empty() {
+    let mut current_width = 0usize;
+    for word in text.split(' ') {
+        let word_width = display_width(word);
+        let needed = current_width + if current.is_empty() { 0 } else { 1 } + word_width;
+        if !current.is_empty() && needed > width {
             lines.push(std::mem::take(&mut current));
             current_width = 0;
         }
-        current.push(ch);
-        current_width += ch_width;
+        if word_width <= width {
+            if !current.is_empty() {
+                current.push(' ');
+                current_width += 1;
+            }
+            current.push_str(word);
+            current_width += word_width;
+            continue;
+        }
+        for ch in word.chars() {
+            let ch_width = display_width(&ch.to_string());
+            if current_width + ch_width > width && !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            current.push(ch);
+            current_width += ch_width;
+        }
     }
     if !current.is_empty() {
         lines.push(current);
@@ -494,6 +645,13 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+/// 粗略显示宽度：ASCII 记 1、其他字符记 2，够用即可，不做排版级精确对齐。
+fn display_width(text: &str) -> usize {
+    text.chars()
+        .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+        .sum()
 }
 
 /// 名字转 SCREAMING_SNAKE_CASE，用于 TypeScript 的取值常量名。

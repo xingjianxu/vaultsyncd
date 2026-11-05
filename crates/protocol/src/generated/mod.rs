@@ -43,6 +43,7 @@ pub struct ErrorBody {
     /// 闭集错误码；未知码不是可重试错误，按协议错误处理。
     pub code: ErrorCode,
     /// 结构化补充信息，例如 `{"reason": "mount_identity_changed"}`。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<BTreeMap<String, String>>,
     /// 面向用户的可理解原因，按数据处理，不当作指令。
     pub message: String,
@@ -51,6 +52,7 @@ pub struct ErrorBody {
     /// 同一请求稍后原样重试是否可能成功。
     pub retryable: bool,
     /// 相关 Root 的身份（32 个小写十六进制字符）；与 Root 无关时省略。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub root_id: Option<String>,
 }
 
