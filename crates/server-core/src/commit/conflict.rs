@@ -820,7 +820,7 @@ mod tests {
     async fn an_occupied_conflict_target_is_rejected_before_the_op_is_claimed() {
         let (request, mut gate, mut store, mut log, mut target, mut ids) =
             fixture(LATE_HEX, 0x71, 0x41);
-        target.current = TargetObservation::Present {
+        target.set_default(TargetObservation::Present {
             identity: crate::ports::object_store::FileKey {
                 device: 7,
                 inode: 77,
@@ -828,7 +828,7 @@ mod tests {
                 bytes: 3,
             },
             digest: digest(OTHER_HEX),
-        };
+        });
 
         let failure = commit_conflict(
             &mut gate,
@@ -952,8 +952,8 @@ mod tests {
         {
             let mut request = request(late, device, op);
             request.target_path = format!("docs/note（冲突-device{index}-op{op:x}）.txt");
-            // 假端口只有一条现场：三台设备的冲突路径不同，逐个重置为空缺；意图身份也各自独立。
-            target.current = TargetObservation::Absent;
+            // 三台设备的冲突路径不同，每条路径的现场默认空缺；意图身份也各自独立。
+
             request.intent_id = crate::test_support::intent_id(0x41 + index as u8);
             let committed = commit_conflict(
                 &mut gate,

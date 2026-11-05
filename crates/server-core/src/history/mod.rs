@@ -9,7 +9,9 @@
 //!   回收对象（design §8.4、§11）。事务只追加新版本行，旧版本行一字不改（I12）。
 //! - [`trash`]：内容取自回收站清单里的内容版本。恢复先按清单决定**实际名称**——原位置被活跃条目
 //!   占用时另名，绝不覆盖现在的新文件（T13）；父目录不在或不是目录时先报 `SUBTREE_CHANGED`，不
-//!   悄悄把子树丢到别处。
+//!   悄悄把子树丢到别处。带后代的目录按清单整棵恢复：先按深度建目录，再逐个文件“内容租约 → 现场
+//!   空缺 → 意图 → 发布”，最后用单一事务把整棵子树与这批意图一起收尾（失败就不 ACK，证据留在
+//!   `fs_intents`）。
 //!
 //! 两条约束在两层都成立：同一 `OpId` 与同一规范化请求只有一个业务结果（I06），重复恢复返回首次的
 //! 实际路径与身份；任何失败都不是 committed，已持久化的意图与 `pending` 记录保留为恢复证据。
@@ -23,7 +25,7 @@ use vaultsyncd_domain::version::{ServerEpoch, UtcTimestamp};
 use crate::commit::intent::{PutFailure, PutFailureReason, PutIntent, PutPhase, TargetAfter};
 use crate::commit::put::CommitGateError;
 use crate::ports::conflict_store::RequestDigest;
-use crate::ports::content_lease::ContentLeaseError;
+use crate::ports::content_lease::{ContentLease, ContentLeaseError, ContentLeasePort};
 use crate::ports::intent_log::IntentLogError;
 use crate::ports::namespace::NamespaceError;
 use crate::ports::restore_store::RestoreStoreError;
@@ -189,11 +191,6 @@ pub enum RestoreFailureReason {
         /// 原因文本。
         detail: String,
     },
-    /// 带后代的大目录子树恢复尚未接入（`restore_subtree_unsupported`）：不做部分恢复。
-    UnsupportedSubtree {
-        /// 原因文本。
-        detail: String,
-    },
     /// 工作目录命名空间动作失败（建目录等）。
     Namespace(NamespaceError),
     /// 同名目标已被占用且没有可用的另名（`restore_name_unavailable`）：不覆盖现有内容。
@@ -241,7 +238,6 @@ impl RestoreFailureReason {
             RestoreFailureReason::OperationPending { .. } => "operation_pending",
             RestoreFailureReason::NotInTrash { .. } => "restore_not_in_trash",
             RestoreFailureReason::NameUnavailable { .. } => "restore_name_unavailable",
-            RestoreFailureReason::UnsupportedSubtree { .. } => "restore_subtree_unsupported",
             RestoreFailureReason::Namespace(error) => error.code(),
             RestoreFailureReason::Lease(error) => error.code(),
             RestoreFailureReason::Intent(error) => error.code(),
@@ -270,7 +266,6 @@ impl RestoreFailureReason {
             RestoreFailureReason::NameUnavailable { .. } => Some(ErrorCode::SubtreeChanged),
             // 清单里不再有该条目：客户端刷新回收站清单即可，服务端无更精确的 wire 码。
             RestoreFailureReason::NotInTrash { .. } => Some(ErrorCode::BaseMismatch),
-            RestoreFailureReason::UnsupportedSubtree { .. } => Some(ErrorCode::UnsupportedEntry),
             RestoreFailureReason::InvalidRequest { .. }
             | RestoreFailureReason::Namespace(_)
             | RestoreFailureReason::TargetUnreadable(_)
@@ -324,9 +319,6 @@ impl fmt::Display for RestoreFailureReason {
             RestoreFailureReason::NameUnavailable { detail } => {
                 write!(f, "没有可用的恢复名称：{detail}")
             }
-            RestoreFailureReason::UnsupportedSubtree { detail } => {
-                write!(f, "带后代的目录子树恢复尚未接入：{detail}")
-            }
             RestoreFailureReason::Namespace(error) => write!(f, "{error}"),
             RestoreFailureReason::Lease(error) => write!(f, "{error}"),
             RestoreFailureReason::Intent(error) => write!(f, "{error}"),
@@ -344,25 +336,55 @@ impl fmt::Display for RestoreFailureReason {
     }
 }
 
+/// 成功路径上的租约清理：把本批次建立的租约全部解除。
+///
+/// 提交成功之后租约只是“提前解除的优化”：到期时间本身就是兜底，GC 在到期前不会回收该对象。因此
+/// 有租约没能解除时如实报告“仍在保护到某时刻”（取最晚的一个），不把已提交的业务结果改判为失败
+/// （I01：committed 不因后续清理失败而回滚），也不假装已经解除。
+pub(crate) async fn release_all<C>(leases: &mut C, held: &[ContentLease]) -> LeaseDisposition
+where
+    C: ContentLeasePort + ?Sized,
+{
+    let mut latest: Option<UtcTimestamp> = None;
+    for lease in held {
+        if leases.release(lease).await.is_err() {
+            latest = Some(latest.map_or(lease.expires_at, |at| at.max(lease.expires_at)));
+        }
+    }
+    match latest {
+        Some(at) => LeaseDisposition::Expires { at },
+        None => LeaseDisposition::Released,
+    }
+}
+
 /// 失败路径上的租约清理：解除失败不覆盖主因，只把“仍保护到某时刻”记到失败证据里。
 ///
 /// 租约到期时间本身就是兜底（GC 到期后才按引用标记回收），因此解除失败不能让已经失败的操作再换一个
 /// 原因，更不能把已提交的结果改判为失败；但也不能假装解除成功，所以留下 `lease_expires_at`。
 pub(crate) async fn release_after_failure<C>(
     leases: &mut C,
-    lease: &crate::ports::content_lease::ContentLease,
+    held: &[ContentLease],
     mut failure: RestoreFailure,
 ) -> RestoreFailure
 where
-    C: crate::ports::content_lease::ContentLeasePort + ?Sized,
+    C: ContentLeasePort + ?Sized,
 {
-    if leases.release(lease).await.is_err() {
-        failure.lease_expires_at = Some(lease.expires_at);
+    for lease in held {
+        if leases.release(lease).await.is_err() {
+            failure.lease_expires_at = Some(
+                failure
+                    .lease_expires_at
+                    .map_or(lease.expires_at, |at| at.max(lease.expires_at)),
+            );
+        }
     }
     failure
 }
 
 /// 把 put 状态机的失败改判成恢复失败：意图与发布两个阶段共用同一套错误词汇。
+///
+/// 已持久化的意图与阶段一并带过去（`intent_id`/`phase`）：失败证据要说清“停在哪一条意图的哪个
+/// 阶段”，恢复流程才能接着判断该重做、收尾还是停写（design §11.3）。
 pub(crate) fn reclassify_publish_failure(failure: PutFailure) -> RestoreFailure {
     use RestoreFailureReason as Reason;
 
@@ -382,5 +404,10 @@ pub(crate) fn reclassify_publish_failure(failure: PutFailure) -> RestoreFailure 
             detail: format!("发布阶段返回了与恢复无关的失败：{other}"),
         },
     };
-    RestoreFailure::new(reason)
+    RestoreFailure {
+        reason,
+        intent_id: failure.intent_id,
+        phase: failure.phase,
+        lease_expires_at: None,
+    }
 }

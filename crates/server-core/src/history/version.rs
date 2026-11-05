@@ -248,7 +248,7 @@ where
         Err(failure) => {
             let failure = reclassify_publish_failure(*failure);
             return Err(Box::new(
-                release_after_failure(leases, &lease, failure).await,
+                release_after_failure(leases, std::slice::from_ref(&lease), failure).await,
             ));
         }
     };
@@ -273,11 +273,15 @@ where
                 &published.intent,
             );
             return Err(Box::new(
-                release_after_failure(leases, &lease, failure).await,
+                release_after_failure(leases, std::slice::from_ref(&lease), failure).await,
             ));
         }
     };
-    check_record(&record, request, &version, &published)?;
+    if let Err(failure) = check_record(&record, request, &version, &published) {
+        // 证据不符同样不能留着租约：停写人工核对，但保护也要释放。
+        let failure = release_after_failure(leases, std::slice::from_ref(&lease), *failure).await;
+        return Err(Box::new(failure));
+    }
 
     Ok(RestoredVersion {
         result: record.result,
