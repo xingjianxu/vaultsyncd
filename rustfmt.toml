@@ -1,0 +1,2 @@
+# 格式化的 edition 基线：与 workspace 的 edition 2024 一致，避免默认 style edition 漂移。
+style_edition = "2024"

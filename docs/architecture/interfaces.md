@@ -68,3 +68,19 @@ python3 tools/context.py --help
 | 覆盖范围 | 仅 Linux `x86_64-linux`；Windows 工具链由 S009 用 rustup+MSVC 固定，不做交叉编译 |
 | 非交互调用 | `nix develop --command bash -c '<cmd>'`；`shellHook` 只导出 `VAULTSYNCD_DEV_SHELL=1` |
 | 跟踪要求 | `flake.nix`/`flake.lock` 必须先被 Git 跟踪，否则 `nix flake lock`/`nix develop` 退出码 1 |
+
+## Cargo workspace 与 Rust 工具链
+
+状态：S004 实现。`crates/domain` 是当前唯一成员；后续卡按 design §5.4 增补成员，不预建空 crate。所有 Cargo 命令在 `nix develop -c` 内执行。
+
+| 项目 | 契约 |
+| --- | --- |
+| 根清单 | `Cargo.toml` 为虚拟 workspace（无 `[package]`）；`resolver = "3"`；`members`/`default-members` 只列真实存在的包 |
+| 包命名 | `crates/<目录>/` 的包名为 `vaultsyncd-<目录>`（如 `vaultsyncd-domain`）；`apps/` 入口按 design §5.7 的 `vaultsyncd-server`/`-admin`/`-agent`/`-cli` |
+| 共享包字段 | `[workspace.package]`：`edition = "2024"`、`rust-version = "1.85.0"`、`version = "0.1.0"`、`publish = false`；成员用 `<字段>.workspace = true` 继承，不重复字面量 |
+| lint 接线 | 成员必须写 `[lints] workspace = true`。`[workspace.lints.rust]`：`unsafe_code`、`missing_docs`、`unused` = deny；`[workspace.lints.clippy]`：`all = { level = "deny", priority = -1 }`。crate 内的 `#![forbid(unsafe_code)]` 是更硬的内层约束 |
+| 工具链固定 | `rust-toolchain.toml`：`channel = "1.99.0"`、`components = ["rustfmt", "clippy"]`。Linux 的 rustc/cargo 来自锁定 nixpkgs，rustup 不读该文件；Windows 用 `rustup toolchain install 1.99.0-x86_64-pc-windows-msvc` 取同一版本，两端版本以本节为唯一基准 |
+| 格式 | `rustfmt.toml` 只固定 `style_edition = "2024"`，其余用默认值；`cargo fmt --check` 为格式门禁 |
+| 锁文件 | 仓库根唯一 `Cargo.lock`（生成产物，提交入库），不得忽略；新增依赖后先 `cargo generate-lockfile`，验证用 `--locked` |
+| 验收命令 | `cargo metadata --locked --no-deps`、`cargo check --locked`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` |
+| MSRV 状态 | `rust-version = "1.85.0"` 依据 edition 2024 稳定版本声明；实测只在 1.99.0 上编译，devShell 内无 1.85.0 工具链，1.85.0 真编译复核待 S006/S009 |

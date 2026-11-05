@@ -1,7 +1,7 @@
 # 实施进度
 
-当前阶段：S003 已完成，根 `flake.nix`/`flake.lock` 锁定 nixpkgs 并提供 `devShells.x86_64-linux.default`（Rust 1.99.0、Node 24.21.0、pnpm 12.9.0、Python 3.14.8、SQLite 3.53.3、GCC 16.2.0）；工程实施继续到 S004/S005。
-最早 ready：**S004**（最小 Cargo workspace）与 **S005**（pnpm workspace 与工具版本），二者依赖 S003 并互不依赖；S006 需 S004+S005，S007 需 S001+S003，Windows 卡依赖 S008/S009。
+当前阶段：S004 已完成，根虚拟 workspace（`Cargo.toml`）、`crates/domain`（`vaultsyncd-domain`）、`rust-toolchain.toml`（1.99.0）、`rustfmt.toml`、`Cargo.lock` 就位，edition 2024 + resolver 3 + MSRV 1.85.0 已实测编译；工程实施继续到 S005。
+最早 ready：**S005**（pnpm workspace 与工具版本）；S007（独立 btrfs 测试位置）前置 S001+S003 亦已满足，按编号顺序在 S005 之后执行；S006 需 S004+S005，Windows 卡依赖 S008/S009。
 平台资源核验结论（S001，2026-11-05）：开发/服务验证主机为 NixOS 26.11 x86_64、Nix 2.34.9；`/`、`/home`、`/nix`、`/var/log`、`/wrd`、`/data` 均为本地 btrfs；`/wrd` 可用 197G、`/data` 可用 22T；KVM 可用且用户在 `kvm` 组，但 QEMU/Quickemu 未安装、无现成 Windows 客体；尚无本项目独立 btrfs 测试卷。Ubuntu 24.04、Linux ARM64、Windows 原生 CFAPI、reflink 与验收规模均未核验。证据见 `docs/environment.md`。
 
 状态图例：`todo` 未开始；`in_progress` 执行中；`blocked` 缺资源/前置；`done` 验收完成。下表共 108 行（S001—S108），编号、结果、环境、前置取自实施手册 §4 任务索引；产出/验证/阻塞列随执行更新。
@@ -11,7 +11,7 @@
 | S001 | 确认主机与同步环境基线 | L | 无 | done | 本卡单次本地提交（父提交 4a2c7e9；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | 只读复核 pwd/Git/NixOS/Nix/架构/挂载/空间/配置入口/端口/btrfs/KVM/权限；见 docs/environment.md | 无 | agent/tasks/S001.md |
 | S002 | 建立 agent 入口与上下文提取工具 | L | S001 | done | 本卡单次本地提交（父提交 db7ce53；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | `python3 tools/context.py card S001` 与 `design 11.2` 边界人工核对；未知/歧义/不存在编号退出 2 并列候选；围栏 fixture 验证；`git diff --check` 清洁 | 无 | agent/tasks/S002.md |
 | S003 | 建立 Nix 开发 shell | L | S001、S002 | done | 本卡单次本地提交（父提交 cf993b1；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | `nix flake lock` 锁定 nixpkgs rev 1d060086（2026-11-03）；devShell 内输出版本全部退出码 0；临时 Rust 编译运行、cargo test/fmt/clippy（含负控）、C+SQLite 链接、pnpm 全部通过；`env -i` 新终端复现一致；`nix flake check` 通过 | 无 | agent/tasks/S003.md |
-| S004 | 建立最小 Cargo workspace | L | S003 | todo | — | 未执行 | — | agent/tasks/S004.md（执行时创建） |
+| S004 | 建立最小 Cargo workspace | L | S003 | done | 本卡单次本地提交（父提交 8165ee6；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | 虚拟 workspace 仅含 `vaultsyncd-domain`；`cargo metadata/check/fmt/clippy/test` 全部退出 0（含 fmt、`unsafe_code`、clippy::all 三项负控）；唯一 `Cargo.lock`；edition 2024 + resolver 3 + rust-version 1.85.0 | 无 | agent/tasks/S004.md |
 | S005 | 建立 pnpm workspace 与工具版本 | L | S003 | todo | — | 未执行 | — | agent/tasks/S005.md（执行时创建） |
 | S006 | 建立任务编排入口与基础 CI | L | S004、S005 | todo | — | 未执行 | — | agent/tasks/S006.md（执行时创建） |
 | S007 | 准备独立 btrfs 测试位置 | L | S001、S003 | todo | — | 未执行 | — | agent/tasks/S007.md（执行时创建） |

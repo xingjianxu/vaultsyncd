@@ -1,0 +1,5 @@
+# Linux 由 `nix develop` 提供同一版本的 rustc/cargo/rustfmt/clippy，不读取本文件；
+# 本文件供 Windows 侧 rustup 取同一版本：`rustup toolchain install 1.99.0-x86_64-pc-windows-msvc`。
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

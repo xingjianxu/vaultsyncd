@@ -1,0 +1,21 @@
+# 虚拟 workspace 根清单：只放成员、共享包字段与 lint 策略，不放包本身（docs/design.md §5.2、§5.7）。
+# 每张卡只加入真实存在的成员，避免为空目录预建 crate 占位。
+[workspace]
+resolver = "3"
+members = ["crates/domain"]
+default-members = ["crates/domain"]
+
+[workspace.package]
+# edition 2024 在 Rust 1.85.0 稳定，据此把 rust-version 定为 1.85.0（实测见 agent/tasks/S004.md）。
+edition = "2024"
+rust-version = "1.85.0"
+version = "0.1.0"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "deny"
+unused = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }

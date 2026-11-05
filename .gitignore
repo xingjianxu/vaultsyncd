@@ -14,6 +14,10 @@ dist/
 /artifacts/
 /var/
 
+# Nix 构建输出符号链接（nix build/develop 在仓库根产生 result、result-*）
+/result
+/result-*
+
 # 环境与凭据
 .env
 .env.local

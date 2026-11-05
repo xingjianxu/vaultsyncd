@@ -1,0 +1,10 @@
+[package]
+name = "vaultsyncd-domain"
+description = "vaultsyncd 与平台无关的领域内核：身份、条目、版本、操作、错误与业务不变量"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
