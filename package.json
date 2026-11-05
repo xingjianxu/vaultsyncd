@@ -1,0 +1,15 @@
+{
+  "name": "vaultsyncd",
+  "private": true,
+  "packageManager": "pnpm@12.9.0",
+  "engines": {
+    "node": "24.21.0",
+    "pnpm": "12.9.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm --recursive run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}
