@@ -19,7 +19,10 @@ pub mod capture;
 pub mod error;
 pub mod read;
 
-pub use capture::{CaptureRequest, CapturedObject, ExpectedContent, ReuseOutcome, capture_object};
+pub use capture::{
+    CaptureRequest, CapturedObject, ExpectedContent, ReuseOutcome, capture_object,
+    capture_observed_object,
+};
 pub use error::{
     CaptureFailure, CaptureFailureReason, DiscardOutcome, ReadFailure, ReadFailureReason,
 };

@@ -106,12 +106,54 @@ pub fn capture_object(
         .map_err(|error| {
             CaptureFailure::new(CaptureFailureReason::Port(error), DiscardOutcome::NotNeeded)
         })?;
+    finish_capture(port, layout, staged, request.expected)
+}
 
-    if let Some(reason) = check_staged(&staged, request.expected) {
+/// 固定一份**事先不知道内容**的工作文件（外部采集，design §12.1）。
+///
+/// 与 [`capture_object`] 的区别只在期望内容的来源：这里没有上传校验给出的摘要，期望值取自暂存副本
+/// 读回后的实测长度与 SHA-256。为了不把“复制期间源还在增长”的副本当成完整内容，额外要求
+/// **暂存副本长度等于建立副本前读到的源长度**；不等就按 `LengthMismatch` 失败（调用方应当重排队）。
+/// 其余判据（独立 inode、无别名、发布后复核）与 [`capture_object`] 完全相同。
+///
+/// # Errors
+///
+/// 见 [`CaptureFailure`]。失败时不会留下可提交引用。
+pub fn capture_observed_object(
+    port: &mut dyn ObjectBlobPort,
+    layout: &ObjectLayout,
+    source: &std::path::Path,
+    staging_name: &str,
+) -> Result<CapturedObject, CaptureFailure> {
+    let staging = layout.staging_path(staging_name).map_err(|error| {
+        CaptureFailure::new(CaptureFailureReason::from(error), DiscardOutcome::NotNeeded)
+    })?;
+    let staged = port.stage_working_copy(source, &staging).map_err(|error| {
+        CaptureFailure::new(CaptureFailureReason::Port(error), DiscardOutcome::NotNeeded)
+    })?;
+    if staged.staged.bytes != staged.source.bytes {
+        let reason = CaptureFailureReason::LengthMismatch {
+            expected: staged.source.bytes,
+            observed: staged.staged.bytes,
+        };
+        return Err(fail_after_staging(port, &staged, reason));
+    }
+    let expected = ExpectedContent::new(staged.digest, staged.staged.bytes);
+    finish_capture(port, layout, staged, expected)
+}
+
+/// 暂存之后的共同步骤：判据 → 内容地址发布 → 发布后复核。
+fn finish_capture(
+    port: &mut dyn ObjectBlobPort,
+    layout: &ObjectLayout,
+    staged: StagedBlob,
+    expected: ExpectedContent,
+) -> Result<CapturedObject, CaptureFailure> {
+    if let Some(reason) = check_staged(&staged, expected) {
         return Err(fail_after_staging(port, &staged, reason));
     }
 
-    let object = layout.object_path(&request.expected.digest);
+    let object = layout.object_path(&expected.digest);
     let published = match port.publish_staged(&staged, &object) {
         Ok(published) => published,
         Err(error) => {
@@ -146,32 +188,32 @@ pub fn capture_object(
     };
 
     // 长度先于摘要比较：短写/截断的字节流即使摘要碰巧不同，也要报出更具体的原因。
-    if facts.bytes != request.expected.bytes {
+    if facts.bytes != expected.bytes {
         let reason = if published.already_present {
             CaptureFailureReason::ExistingObjectMismatch {
-                expected: request.expected.digest,
+                expected: expected.digest,
                 observed: facts.digest,
                 observed_bytes: facts.bytes,
             }
         } else {
             CaptureFailureReason::PostPublishMismatch {
-                expected: request.expected.digest,
+                expected: expected.digest,
                 observed: facts.digest,
                 observed_bytes: facts.bytes,
             }
         };
         return Err(CaptureFailure::new(reason, staging));
     }
-    if facts.digest != request.expected.digest {
+    if facts.digest != expected.digest {
         let reason = if published.already_present {
             CaptureFailureReason::ExistingObjectMismatch {
-                expected: request.expected.digest,
+                expected: expected.digest,
                 observed: facts.digest,
                 observed_bytes: facts.bytes,
             }
         } else {
             CaptureFailureReason::PostPublishMismatch {
-                expected: request.expected.digest,
+                expected: expected.digest,
                 observed: facts.digest,
                 observed_bytes: facts.bytes,
             }
@@ -180,9 +222,9 @@ pub fn capture_object(
     }
 
     Ok(CapturedObject {
-        digest: request.expected.digest,
-        bytes: request.expected.bytes,
-        storage_path: ObjectLayout::relative_object_path(&request.expected.digest),
+        digest: expected.digest,
+        bytes: expected.bytes,
+        storage_path: ObjectLayout::relative_object_path(&expected.digest),
         method: staged.method,
         fallback: staged.fallback,
         reuse: if published.already_present {

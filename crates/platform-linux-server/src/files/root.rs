@@ -535,6 +535,22 @@ impl RootHandle {
         Ok(opened)
     }
 
+    /// 读取 Root 内相对路径的当前身份（`O_PATH`，不跟随符号链接），并核对挂载边界。
+    ///
+    /// 路径合法地不存在时返回 `Ok(None)`；符号链接、逃逸、权限不足、跨挂载都是错误，**不会**被
+    /// 报告成“不存在”（design §11.4：权限/扫描故障不等于删除）。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RestrictError`]。
+    pub fn identity_at(&self, relative: &Path) -> Result<Option<FileIdentity>, RestrictError> {
+        let Some(identity) = self.dir.identity_at(relative)? else {
+            return Ok(None);
+        };
+        self.check_mount(relative, identity.mount_id)?;
+        Ok(Some(identity))
+    }
+
     /// 在 Root 内新建独占文件，并核对新文件仍在 Root 的挂载内。
     ///
     /// 父目录先被打开并核对挂载，再用**那个句柄**建文件：不能先照路径建再回头发现跨了挂载，
