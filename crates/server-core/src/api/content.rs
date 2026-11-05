@@ -66,9 +66,7 @@ impl AssembledParts {
     ///
     /// 块行数量不足、索引不连续或长度不符时返回 [`ContentFailure::IncompleteUpload`]。
     pub fn verify(&self, session: &UploadSession) -> Result<(), ContentFailure> {
-        let geometry = session
-            .geometry()
-            .map_err(ContentFailure::Upload)?;
+        let geometry = session.geometry().map_err(ContentFailure::Upload)?;
         let expected = geometry.part_count();
         if self.part_count != expected || self.parts.len() as u64 != expected {
             return Err(ContentFailure::IncompleteUpload {

@@ -31,6 +31,7 @@ use vaultsyncd_protocol::generated::{
     UploadState, UploadStatus,
 };
 use vaultsyncd_server::auth::AuthContext;
+use vaultsyncd_server::content::ContentContext;
 use vaultsyncd_server::http::router;
 use vaultsyncd_server::lifecycle::Lifecycle;
 use vaultsyncd_server::roots::RootContext;
@@ -149,10 +150,14 @@ async fn open_app(fixture: &Fixture) -> App {
         fixture.state_dir(),
         Default::default(),
     ));
+    let content = Arc::new(ContentContext::new(
+        Arc::clone(&auth),
+        fixture.state_dir().as_path(),
+    ));
     let lifecycle = Arc::new(Lifecycle::new());
     lifecycle.mark_ready();
     App {
-        router: router(lifecycle, Arc::clone(&auth), uploads, roots),
+        router: router(lifecycle, Arc::clone(&auth), uploads, roots, content),
     }
 }
 

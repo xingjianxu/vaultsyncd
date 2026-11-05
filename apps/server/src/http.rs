@@ -27,6 +27,7 @@ use vaultsyncd_protocol::generated::{
 };
 
 use crate::auth::AuthContext;
+use crate::content::ContentContext;
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::roots::RootContext;
 use crate::uploads::UploadsContext;
@@ -39,6 +40,7 @@ pub fn router(
     auth: Arc<AuthContext>,
     uploads: Arc<UploadsContext>,
     roots: Arc<RootContext>,
+    content: Arc<ContentContext>,
 ) -> Router {
     let public = Router::new()
         .route("/v1/health", get(health))
@@ -69,10 +71,22 @@ pub fn router(
         )
         .layer(DefaultBodyLimit::max(upload_body_limit))
         .with_state(uploads);
+    // finalize 与固定版本下载：只在 `Principal`/`authorize_root` 之后动作，处理器自己解析调用者。
+    let content_router = Router::new()
+        .route(
+            "/v1/roots/{root}/uploads/{upload}/finalize",
+            post(super::content::finalize),
+        )
+        .route(
+            "/v1/roots/{root}/entries/{entry}/versions/{version}/content",
+            get(super::content::download),
+        )
+        .with_state(content);
     public
         .merge(authenticated)
         .merge(roots_router)
         .merge(uploads_router)
+        .merge(content_router)
 }
 
 async fn health(State(lifecycle): State<Arc<Lifecycle>>) -> Response {
@@ -150,7 +164,11 @@ mod tests {
             std::env::temp_dir(),
             Default::default(),
         ));
-        router(lifecycle, auth, uploads, roots)
+        let content = Arc::new(ContentContext::new(
+            Arc::clone(&auth),
+            &std::env::temp_dir(),
+        ));
+        router(lifecycle, auth, uploads, roots, content)
     }
 
     async fn get_health(lifecycle: Arc<Lifecycle>) -> (StatusCode, String) {

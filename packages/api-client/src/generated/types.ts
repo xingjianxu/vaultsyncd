@@ -161,6 +161,43 @@ export function decodeErrorEnvelope(value: unknown): ErrorEnvelope {
   };
 }
 
+/**
+ * finalize 的结果：可提交内容引用（design §15.2 上传 finalize「只生成可提交内容引用，
+ * 不修改条目 head」）。它还不是版本：条目 head 由后续操作按 CAS 提交。
+ */
+export interface FinalizedContent {
+  /** 内容的 SHA-256，64 位小写十六进制；提交时用它引用这份内容。 */
+  hash: string;
+  /** 块数（十进制文本）。 */
+  part_count: string;
+  /** 是否为幂等重放（会话本来就已经 `finalized`）。 */
+  replayed: boolean;
+  /** 本次新建还是复用既有对象。 */
+  reuse: ObjectReuse;
+  /** 内容所属 Root 身份，32 位小写十六进制。 */
+  root_id: string;
+  /** 内容字节数（十进制文本）。 */
+  size: string;
+  /** 对象区内的规范相对路径（服务端内部路径）。客户端只原样回传，不拼接、不解释它。 */
+  storage_path: string;
+  /** 上传会话身份，32 位小写十六进制。 */
+  upload_id: string;
+}
+
+export function decodeFinalizedContent(value: unknown): FinalizedContent {
+  const object = expect_object(value, "FinalizedContent");
+  return {
+    hash: expect_string(object.hash, "FinalizedContent.hash"),
+    part_count: expect_decimal(object.part_count, "FinalizedContent.part_count"),
+    replayed: expect_boolean(object.replayed, "FinalizedContent.replayed"),
+    reuse: decodeObjectReuse(object.reuse),
+    root_id: expect_string(object.root_id, "FinalizedContent.root_id"),
+    size: expect_decimal(object.size, "FinalizedContent.size"),
+    storage_path: expect_string(object.storage_path, "FinalizedContent.storage_path"),
+    upload_id: expect_string(object.upload_id, "FinalizedContent.upload_id"),
+  };
+}
+
 /** 健康探测结果。 */
 export interface HealthResponse {
   /** 服务端当前健康状态。 */
@@ -219,6 +256,21 @@ export function decodeMissingRange(value: unknown): MissingRange {
     count: expect_decimal(object.count, "MissingRange.count"),
     first_index: expect_decimal(object.first_index, "MissingRange.first_index"),
   };
+}
+
+/**
+ * 内容对象的发布方式闭集（design §11.2 步骤 7）。`freshly_published` 本次新建，
+ * `existing_verified` 内容地址上已有同内容对象、未覆盖并复核通过后复用。
+ */
+export type ObjectReuse = "freshly_published" | "existing_verified";
+
+export const OBJECT_REUSE_VALUES = ["freshly_published", "existing_verified"] as const;
+
+export function decodeObjectReuse(value: unknown): ObjectReuse {
+  if (typeof value !== "string" || !(OBJECT_REUSE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 ObjectReuse 取值：${JSON.stringify(value)}`);
+  }
+  return value as ObjectReuse;
 }
 
 /** 协议主次版本；主版本不同必须拒绝通信。 */

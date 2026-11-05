@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 
 use super::local_ipc::{IpcProtocol, LocalIpcModel};
 use super::{
-    ApiOperation, FieldType, GenerationConfig, Model, RequestBodyKind, SchemaDef, TargetTypes,
-    do_not_edit,
+    ApiOperation, FieldType, GenerationConfig, Model, RequestBodyKind, SchemaDef, SuccessBody,
+    TargetTypes, do_not_edit,
 };
 
 /// 渲染全部输出，顺序与 `api/generation.toml` 的 `[outputs]` 一致。
@@ -318,8 +318,10 @@ fn render_typescript_client(config: &GenerationConfig, model: &Model) -> String 
     let mut decoders = vec![format!("decode{}", super::ERROR_SCHEMA)];
     let mut types = vec![error_body_type(model)];
     for operation in &model.operations {
-        decoders.push(format!("decode{}", operation.success_type));
-        types.push(operation.success_type.clone());
+        if let SuccessBody::Json(name) = &operation.success {
+            decoders.push(format!("decode{name}"));
+            types.push(name.clone());
+        }
         if let Some(request_type) = operation
             .request
             .as_ref()
@@ -410,9 +412,10 @@ function request_headers(
   options: ClientOptions,
   init: RequestInit | undefined,
   content_type: string | null,
+  accept = \"application/json\",
 ): Headers {
   const headers = new Headers(init?.headers);
-  headers.set(\"accept\", \"application/json\");
+  headers.set(\"accept\", accept);
   if (content_type !== null) {
     headers.set(\"content-type\", content_type);
   }
@@ -426,6 +429,10 @@ async function read_json(response: Response): Promise<unknown> {
   } catch {
     throw new ProtocolError(`响应不是 JSON（HTTP ${response.status}）`);
   }
+}
+
+async function read_bytes(response: Response): Promise<Uint8Array> {
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 function api_error(status: number, body: unknown): ApiError {
@@ -446,10 +453,13 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
     }
     out.push_str(" */\n");
 
-    // 签名：`options` → 路径参数（按路径顺序）→ 请求体（有则带）→ `init`。
+    // 签名：`options` → 路径参数（按路径顺序）→ 请求头参数（按声明顺序）→ 请求体（有则带）→ `init`。
     let mut params = vec!["options: ClientOptions".to_string()];
     for param in &operation.path_params {
         params.push(format!("{}: string", param.name));
+    }
+    for param in &operation.header_params {
+        params.push(format!("{}: string", param.ts_name));
     }
     // 生成的实参：无请求体是 `null`，有请求体是带引号的媒体类型字面量。
     let mut content_type = "null";
@@ -468,11 +478,15 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
         None => {}
     }
     params.push("init?: RequestInit".to_string());
+    let success_type = match &operation.success {
+        SuccessBody::Json(name) => name.clone(),
+        SuccessBody::Bytes => "Uint8Array".to_string(),
+    };
     out.push_str(&format!(
         "export async function {}({}): Promise<{}> {{\n",
         operation.operation_id,
         params.join(", "),
-        operation.success_type
+        success_type
     ));
 
     // 路径：占位符换成模板字面量，值用 `encodeURIComponent` 编码，不拼未转义文本。
@@ -493,16 +507,46 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
         url_expr = "path".to_string();
     }
 
+    // 字节响应意味着“读字节”，请求头也要声明接受字节（不假装在要 JSON）。
+    let accept = match &operation.success {
+        SuccessBody::Json(_) => "application/json",
+        SuccessBody::Bytes => "application/octet-stream",
+    };
+    let headers_line = if operation.header_params.is_empty() {
+        format!("    headers: request_headers(options, init, {content_type}, \"{accept}\"),\n")
+    } else {
+        out.push_str(&format!(
+            "  const headers = request_headers(options, init, {content_type}, \"{accept}\");\n"
+        ));
+        for param in &operation.header_params {
+            out.push_str(&format!(
+                "  headers.set(\"{}\", {});\n",
+                param.name, param.ts_name
+            ));
+        }
+        "    headers,\n".to_string()
+    };
+
     out.push_str(&format!(
-        "  const response = await options.fetch(join_url(options.base_url, {url_expr}), {{\n    ...init,\n    method: \"{}\",\n    headers: request_headers(options, init, {content_type}),\n{body_line}  }});\n",
+        "  const response = await options.fetch(join_url(options.base_url, {url_expr}), {{\n    ...init,\n    method: \"{}\",\n{headers_line}{body_line}  }});\n",
         operation.method
     ));
-    out.push_str("  const payload = await read_json(response);\n");
-    out.push_str("  if (!response.ok) {\n    throw api_error(response.status, payload);\n  }\n");
-    out.push_str(&format!(
-        "  return decode{}(payload);\n}}\n\n",
-        operation.success_type
-    ));
+    match &operation.success {
+        SuccessBody::Json(name) => {
+            out.push_str("  const payload = await read_json(response);\n");
+            out.push_str(
+                "  if (!response.ok) {\n    throw api_error(response.status, payload);\n  }\n",
+            );
+            out.push_str(&format!("  return decode{name}(payload);\n}}\n\n"));
+        }
+        SuccessBody::Bytes => {
+            // 非 2xx 仍然是 JSON 错误信封；2xx 才是字节体。
+            out.push_str(
+                "  if (!response.ok) {\n    throw api_error(response.status, await read_json(response));\n  }\n",
+            );
+            out.push_str("  return await read_bytes(response);\n}\n\n");
+        }
+    }
 }
 
 /// Rust 目标类型。
