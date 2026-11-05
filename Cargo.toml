@@ -23,6 +23,7 @@ members = [
     "crates/protocol",
     "crates/server-core",
     "crates/server-store",
+    "crates/transfer",
     "crates/platform-windows",
     "tests/server-integration",
     "tests/windows-integration",
@@ -46,6 +47,10 @@ members = [
 # 契约，不做平台 I/O，也没有第三方依赖；任何宿主目标都能编译与测试，因此同样进
 # default-members，让“独立 inode/长度/摘要/发布后复核”的规则回归进入便携检查。
 #
+# crates/transfer 是传输侧纯计算（S045）：固定块几何与流式 SHA-256，只有 sha2 一个依赖，没有
+# 文件系统/网络/数据库，客户端与服务端共用，因此进 default-members，让“块边界与摘要算法”的回归
+# 在便携检查里跑。
+#
 # crates/client-store 是客户端 SQLite 存储层（S030）：同样只有 SQLx + domain，没有任何平台 API，
 # 因此也进 default-members；客户端库的种类与 schema 门禁、三张条目表并存的组合都能在便携检查里
 # 回归。它与 server-store 之间没有依赖：两套 schema、两个数据库文件（design §7.3）。
@@ -62,6 +67,7 @@ default-members = [
     "crates/protocol",
     "crates/server-core",
     "crates/server-store",
+    "crates/transfer",
 ]
 
 [workspace.package]

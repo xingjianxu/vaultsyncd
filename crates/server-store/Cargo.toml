@@ -31,6 +31,9 @@ fs2 = "0.4"
 sha2 = "0.10"
 vaultsyncd-domain = { path = "../domain" }
 vaultsyncd-fs-common = { path = "../fs-common" }
+# 块几何（块数/每块长度）只在传输层定义一份（design §5.4 的 `crates/transfer`、§13.1）：客户端上传
+# 与服务端接收必须按同一个定义切块，存储层只把那份几何映射成自已的错误枚举，不另写除法。
+vaultsyncd-transfer = { path = "../transfer" }
 
 [dev-dependencies]
 # 迁移测试是真实 SQLite 文件的异步测试：`#[tokio::test]` 与多线程 runtime 由测试侧提供。
