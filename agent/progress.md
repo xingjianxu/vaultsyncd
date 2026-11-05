@@ -1,7 +1,7 @@
 # 实施进度
 
-当前阶段：S001 已完成，主机与同步环境的只读基线已记录；工程实施从 S002 开始。
-最早 ready：**S002**（S003 依赖 S001+S002；S007 依赖 S001+S003；Windows 卡依赖 S008/S009，当前未准备客体）。
+当前阶段：S002 已完成，agent 入口、上下文提取工具与已实现接口摘要已建立；工程实施继续到 S003。
+最早 ready：**S003**（S003 依赖 S001+S002；S007 依赖 S001+S003；Windows 卡依赖 S008/S009，当前未准备客体）。
 平台资源核验结论（S001，2026-11-05）：开发/服务验证主机为 NixOS 26.11 x86_64、Nix 2.34.9；`/`、`/home`、`/nix`、`/var/log`、`/wrd`、`/data` 均为本地 btrfs；`/wrd` 可用 197G、`/data` 可用 22T；KVM 可用且用户在 `kvm` 组，但 QEMU/Quickemu 未安装、无现成 Windows 客体；尚无本项目独立 btrfs 测试卷。Ubuntu 24.04、Linux ARM64、Windows 原生 CFAPI、reflink 与验收规模均未核验。证据见 `docs/environment.md`。
 
 状态图例：`todo` 未开始；`in_progress` 执行中；`blocked` 缺资源/前置；`done` 验收完成。下表共 108 行（S001—S108），编号、结果、环境、前置取自实施手册 §4 任务索引；产出/验证/阻塞列随执行更新。
@@ -9,7 +9,7 @@
 | 编号 | 结果 | 环境 | 前置 | 状态 | 产出提交/工作树 | 验证摘要 | 阻塞 | 交接路径 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | S001 | 确认主机与同步环境基线 | L | 无 | done | 本卡单次本地提交（父提交 4a2c7e9；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | 只读复核 pwd/Git/NixOS/Nix/架构/挂载/空间/配置入口/端口/btrfs/KVM/权限；见 docs/environment.md | 无 | agent/tasks/S001.md |
-| S002 | 建立 agent 入口与上下文提取工具 | L | S001 | todo | — | 未执行 | — | agent/tasks/S002.md（执行时创建） |
+| S002 | 建立 agent 入口与上下文提取工具 | L | S001 | done | 本卡单次本地提交（父提交 db7ce53；worktree `/wrd/prj/vaultsyncd/.worktrees/s001-s007`，分支 `chore/S001-S007-bootstrap`） | `python3 tools/context.py card S001` 与 `design 11.2` 边界人工核对；未知/歧义/不存在编号退出 2 并列候选；围栏 fixture 验证；`git diff --check` 清洁 | 无 | agent/tasks/S002.md |
 | S003 | 建立 Nix 开发 shell | L | S001、S002 | todo | — | 未执行 | — | agent/tasks/S003.md（执行时创建） |
 | S004 | 建立最小 Cargo workspace | L | S003 | todo | — | 未执行 | — | agent/tasks/S004.md（执行时创建） |
 | S005 | 建立 pnpm workspace 与工具版本 | L | S003 | todo | — | 未执行 | — | agent/tasks/S005.md（执行时创建） |

@@ -4,7 +4,8 @@
 
 - 仓库为单 monorepo，Rust Cargo 与前端 pnpm 各一个根工作区。产品规格在 `docs/design.md`，执行顺序在 `agent/implementation-plan.md`，实际状态在 `agent/progress.md`。
 - 每轮只执行一张 ready 的 Sxxx 卡。首次从 S001 开始；先检查现有文件与 Git diff，保留用户及其他任务的未提交修改。
-- 读取本文件、实施手册 §1—2、当前卡、design 指定小节、直接依赖的短交接及相关源码。用标题定位/上下文提取工具，禁止默认全读两份长文档或整个仓库。
+- 读取本文件、实施手册 §1—2、当前卡、design 指定小节、直接依赖的短交接及相关源码。用 `tools/context.py` 按标题定位，禁止默认全读两份长文档或整个仓库。
+- 上下文提取：`python3 tools/context.py card S002`、`python3 tools/context.py design 11.2`（可给多个参数）。未知/歧义标题会列出候选；接口与围栏、编号边界规则见 `docs/architecture/interfaces.md`。S003 之前用主机自带 `python3`，之后用项目 devShell。
 - 首次上下文建议 6,000—10,000 tokens；超预算分段读取或拆成 Sxxx-a/b。检查点写 `agent/tasks/Sxxx.md`，换会话后从记录和 diff 接续。
 - 用户最新明确决定优先；规格冲突需记录证据和影响。已确认决定不重复询问。普通工程细化自行完成；涉及范围/数据语义变化按 design §24 处理。
 
@@ -13,6 +14,7 @@
 ## 实现与环境
 
 - 开发中凡涉及代码改动（含测试、脚本、schema、构建配置），必须先按下文“Git worktree”约定进入隔离工作树，再编辑、构建和验证。纯文档维护可在当前工作区进行。
+- 项目 devShell 入口由 S003 的 `flake.nix` 建立；在此之前不为项目安装全局依赖，`tools/context.py` 用主机 `python3` 运行。
 - 首发仅 Windows 11 x64 客户端、Linux 服务端。NixOS 为开发及同机服务验证环境；Quickemu Windows NTFS 客体用于原生测试，具体步骤仅维护在实施手册 §2.6。
 - 用户已授权本项目所需 NixOS 配置与 rebuild。先检查实际主机配置入口，保存 diff/旧 generation，build/test/健康检查后 switch。test 会激活配置且不自动定时回滚；保留 SSH 和恢复路径。不要把项目 flake 误当主机配置，不扩大到无关系统升级。
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。
@@ -30,7 +32,7 @@
 
 ## Git worktree（涉及代码改动时必须遵守）
 
-1. 用户已明确选择 Git worktree 开发模式，这是持续授权，不重复询问是否使用。使用已安装的 `using-git-worktrees` skill；本次确认位置为 `.agents/skills/using-git-worktrees/SKILL.md`，执行前读取，路径失效时重新发现，不臆造工具或命令。
+1. 用户已明确选择 Git worktree 开发模式，这是持续授权，不重复询问是否使用。使用已安装的 `using-git-worktrees` skill，入口 `.agents/skills/using-git-worktrees/SKILL.md`；执行前读取，路径失效时重新发现，不臆造工具或命令。任务工作树统一放在仓库内 `.worktrees/`（已在 `.gitignore` 中忽略），分支名含任务编号，例如 `chore/S001-S007-bootstrap`；当前任务的实际路径与分支以最近交接为准。
 2. 先检查 Git 状态、diff、worktree 列表和当前隔离状态，排除子模块误判。已在当前任务的 linked worktree 中则复用，不嵌套创建；否则优先使用环境原生 worktree 工具，无可用工具时按 skill 使用 `git worktree add`。新任务分支名称应含 Sxxx 编号；原生工具管理的分支或 detached HEAD 按其生命周期处理并记录。
 3. 目录选择与忽略检查遵循 skill；仓库内 worktree 目录必须先确认被 Git 忽略。需要补 `.gitignore` 时，仅作必要的初始化改动，并按下文提交规则提交后再创建 worktree。无初始提交或所需文件尚未跟踪时，先记录基线缺失；不得为创建 worktree 擅自打包提交用户现有文件。
 4. 保留主工作区及其他任务的未提交修改，不自动 stash、丢弃或搬运到新 worktree。进入任务 worktree 后确认所需文档、源码和 skill 可用，按实际项目工具链准备依赖并运行相关基线检查；前端使用根 pnpm 工作区。后续编辑、构建、测试和提交均在该任务 worktree 中执行。
@@ -39,7 +41,7 @@
 
 ## Git 提交（必须遵守）
 
-1. 提交前发现执行环境中**已安装且适用于 Git commit 的 skill**，读取其 SKILL.md 并按其工作流执行。优先使用用户指定的 skill；未指定时按实际名称/描述选择。S002 记录真实 skill 名称与位置，后续若失效重新发现。
+1. 提交前发现执行环境中**已安装且适用于 Git commit 的 skill**，读取其 SKILL.md 并按其工作流执行。优先使用用户指定的 skill；未指定时按实际名称/描述选择。S002 探测到的真实 skill 为 `git-commit`，入口 `.agents/skills/git-commit/SKILL.md`；若失效或出现新 skill，重新发现并更新本句。
 2. 不臆造 skill 名称、路径或调用命令。本文件没有宣称当前环境已存在某个具体 skill。若没有可用 skill、读取失败或存在无法解决的冲突，完成代码和验证、保留工作树，在交接中写“提交阻塞”及原因；不要自行退回普通 commit，也不擅自安装 skill。
 3. **每次提交必须同时有中文 summary 和中文 body。** summary 为首行，简洁描述实际变化；空一行后 body 用中文说明原因、实现和实际验证。必要的类型前缀、标识符、文件名可保留英文。该中文要求优先于 skill 的默认语言建议。
 4. 仅暂存当前任务相关变更，先审查 diff/暂存区，排除秘密、数据库、用户文件、VM 镜像及生成的大日志。遵循 skill 要求的检查；不能为了提交而禁用 hook 或伪造测试。
