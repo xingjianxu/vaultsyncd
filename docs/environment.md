@@ -196,7 +196,7 @@
 | 验收规模（10 万文件、1 TiB、50 GiB 单文件、5 客户端） | 未实测 | S106/S107 |
 | 服务端口与部署地址 | 尚未选型；本机多个端口已占用 | S041/S096/S097 |
 
-§1—9 为 S001 的只读基线，§10 记录 S003 建立的 Nix 开发 shell 实测结果。本文件不替代实施手册 §2.4 的环境/状态隔离规则，也不把设计目标当作已达成事实。
+§1—9 为 S001 的只读基线，§10 记录 S003 建立的 Nix 开发 shell 实测结果，§11 记录 S007 的测试位置核查与 `tools/test-volume/` 工具实测。本文件不替代实施手册 §2.4 的环境/状态隔离规则，也不把设计目标当作已达成事实。
 
 ## 10. S003 Nix 开发 shell（2026-11-05 实测）
 
@@ -284,3 +284,149 @@ env -i HOME="$HOME" TERM=xterm PATH=/run/current-system/sw/bin:/usr/bin:/bin /ru
 - 本卡的版本结论仅对本机本次实测成立；Ubuntu 24.04、Linux ARM64、Windows 原生环境仍未核验。
 - 用户 `~/.npmrc` 由 home-manager 管理，registry 指向 `https://registry.npmmirror.com`；这只影响下载源，不影响 pnpm 版本与 store 布局。
 - 主机 `/etc/nixos` 与系统 generation 未做任何改动。
+
+## 11. S007 独立 btrfs 测试位置（2026-11-05 实测）
+
+采集位置：`/wrd/prj/vaultsyncd/.worktrees/s001-s007`。本节记录候选目录核查、选定方案、实际后端证据、路径规划、`tools/test-volume/test-volume.sh` 的一次完整 create→verify→cleanup 循环与清理后核验。所有写操作只落在源码外的 `/data/vaultsyncd-lab/`（脚本创建、循环末尾已删除），未触碰 `/data/llm`、`/.snapshots`、`/data/.snapshots` 或任何既有块设备（未格式化、未改挂载）。
+
+### 11.1 候选目录与后端核查
+
+| 候选 | `findmnt -T` 结果 | `stat -f -c '%T %i'` | 容量 | 结论 |
+| --- | --- | --- | --- | --- |
+| `/data` | `/data` `/dev/sdc1[/@data]` btrfs，`subvolid=256`，`rw,noatime,compress=zstd:1` | `btrfs bd7db9a1987d7664` | 21.83TiB，可用 23,790,515,478,528 B | **合规**：本地块设备 btrfs，选中作 lab 根父目录 |
+| `/data/llm` | 同一挂载 `/dev/sdc1[/@data]` | 同上 | 同上 | 拒绝：既有用户数据目录，绝不进入 |
+| `/data/.snapshots` | `/dev/sdc1[/@data_snapshots]` btrfs，`subvolid=257` | `btrfs` | 共享 sdc1 | 拒绝：快照子卷（独立挂载，属嵌套子挂载） |
+| `/var/lib`（`/var/lib/vaultsyncd*` 尚不存在） | `/` `/dev/sda2[/@]` btrfs，`subvolid=256` | `btrfs c44d12208ed12c54` | 可用 368,902,488,064 B | 合规候选：留给 dev/test/正式实例状态规划（§11.4），不放测试卷 |
+| `/srv` | 同 `/`（`/dev/sda2[/@]`，无独立子卷） | `btrfs c44d12208ed12c52` | 共享 sda2 | 合规但无用途；脚本白名单只允许 `/data`、`/var/lib` 之下 |
+| `/wrd`（源码与 worktree 所在） | `/wrd` `/dev/sdb1[/@wrd]` btrfs，`subvolid=256` | `btrfs 7b93da43d64876ea` | 可用 211,398,459,392 B | 拒绝：源码/仓库所在文件系统，容量小，且 §2.4 要求测试位置在源码之外 |
+| `/tmp` | `tmpfs` | `tmpfs` | RAM | 拒绝：非块设备 btrfs；loop 镜像落在 tmpfs 会占用内存 |
+| `/boot` | `/dev/sda1` vfat | `vfat` | 511M | 拒绝：非 btrfs，仅引导用途 |
+
+补充核查（只读）：
+
+- **无 FUSE/NFS/SMB/overlay**：`findmnt -o TARGET,SOURCE,FSTYPE` 全表中除本地 btrfs（`/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/wrd`、`/home/.snapshots`、`/wrd/.snapshots`、`/data`、`/data/.snapshots`）外只有 `vfat`（`/boot`）与伪文件系统（`devtmpfs`、`tmpfs`、`proc`、`sysfs`、`cgroup2`、`debugfs`、`securityfs`、`fusectl`、`tracefs`、`efivarfs`、`bpf`、`pstore`、`configfs`、`mqueue`、`hugetlbfs`、`ramfs`、`nsfs`）；不存在 `fuse.*`、`nfs*`、`cifs`、`smb3`、`overlay` 挂载。
+- **卷与设备**：`sudo -n btrfs filesystem show` 列出三个单设备 btrfs：`/dev/sda2` 446.63GiB uuid `67a4dc7a-…`、`/dev/sdb1` 447.13GiB uuid `cd40475e-…`、`/dev/sdc1` 21.83TiB uuid `13eeae80-1b59-4e17-ae93-172183243973`。`lsblk` 确认三者均为本地分区（`sda`/`sdb`/`sdc`），无网络块设备。
+- **子卷身份**：`sudo -n btrfs subvolume show /data` → `@data`，`Subvolume ID: 256`，`top level 5`；`/data/.snapshots` 是独立子卷 `@data_snapshots`（ID 257）并单独挂载，即 lab 根与 `/data/.snapshots` 不是同一子卷，创建时必须避开。
+- **NOCOW/nodatasum**：主机缺少 `lsattr`（`e2fsprogs` 未安装，`command -v lsattr` 与 `/run/current-system/sw/bin/lsattr` 均不存在），改用只读 `FS_IOC_GETFLAGS`（`FS_NOCOW_FL=0x00800000`）探测：`/`、`/home`、`/srv`、`/var/lib`、`/data`、`/data/llm`、`/data/.snapshots`、`/wrd` 的 `flags` 全为 `0x00000000`，均未置 `+C`；挂载选项也只有 `compress=zstd:1`，无 `nodatacow`/`nodatasum`。脚本另外在 `verify` 中把 `nodatacow`/`nodatasum` 挂载选项当作硬失败。
+
+### 11.2 选定方案与理由
+
+1. **现有合规卷上的专用子卷**：`/data/vaultsyncd-lab/runs/<run_id>/volume` 由脚本 `btrfs subvolume create` 建立。选 `/data` 的理由：本地单设备 btrfs（`/dev/sdc1`）、容量 21.83TiB、可用 22TiB、无嵌套子挂载（除需要避开的 `/data/.snapshots`）、与源码（`/dev/sdb1`）和系统（`/dev/sda2`）互不重叠；子卷带来可核对的 `Subvolume ID`，符合 design §11.5 对子卷身份的要求，也避免与用户目录 `/data/llm` 混淆。
+2. **独立容量的 loop 镜像**：`/data/vaultsyncd-lab/runs/<run_id>/loop.img`，默认 512MiB 稀疏文件（本次实测逻辑 536,870,912 B，实际占用 328KiB），`mkfs.btrfs -L vaultsyncd-<run_id>` 后挂到 `runs/<run_id>/mnt`。理由：实施手册 §2.4 要求满盘故障必须使用独立测试文件系统；子卷与 lab 根共享 22T 容量，直接用主卷制造 ENOSPC 会污染容量语义并有误伤用户数据的风险。512MiB 的余量足够写满、触发 ENOSPC 与元数据满测试，实际磁盘代价只有几百 KiB。
+3. **位置在源码之外**：lab 根 `/data/vaultsyncd-lab/` 与仓库（`/wrd/prj/vaultsyncd`、`.worktrees/s001-s007`）不同文件系统、不同设备；脚本用 `assert_not_in_repo` 检查祖先目录里是否存在 `.git` 或 `.worktrees`，拒绝在仓库内创建。run 目录名带 `run_id`，与实施手册“按 run_id 分目录”一致。
+4. **lab 根的生命周期**：`cleanup` 在本 run 清理干净后会用 `rmdir` 删除空的 `runs/` 与 lab 根，因此空闲状态下主机上**不存在** `/data/vaultsyncd-lab`；下一次 `create` 重新建立。这样既不留悬挂目录，也让“干净”可被 `ls -ld /data/vaultsyncd-lab` 直接证明。
+
+### 11.3 实际后端证据（本次 run，提取自 `verify` 与独立只读命令）
+
+```
+$ findmnt -T /data/vaultsyncd-lab/runs/s007-run1/volume -o TARGET,SOURCE,FSTYPE,FSROOT,OPTIONS
+TARGET SOURCE            FSTYPE FSROOT OPTIONS
+/data  /dev/sdc1[/@data] btrfs  /@data rw,noatime,compress=zstd:1,space_cache=v2,subvolid=256,subvol=/@data
+
+$ findmnt -T /data/vaultsyncd-lab/runs/s007-run1/mnt -o TARGET,SOURCE,FSTYPE,FSROOT,OPTIONS
+TARGET                                  SOURCE     FSTYPE FSROOT OPTIONS
+/data/vaultsyncd-lab/runs/s007-run1/mnt /dev/loop0 btrfs  /      rw,relatime,ssd,discard=async,space_cache=v2,subvolid=5,subvol=/
+
+$ stat -f -c '%n fstype=%T fsid=%i' /data <volume> <mnt>
+/data   fstype=btrfs fsid=bd7db9a1987d7664
+<volume> fstype=btrfs fsid=bd7db9a1987d7eae
+<mnt>    fstype=btrfs fsid=4a164e75c9887c30
+
+$ sudo -n btrfs filesystem show /data ; sudo -n btrfs filesystem show <mnt>
+Label: none  uuid: 13eeae80-1b59-4e17-ae93-172183243973
+	devid 1 size 21.83TiB used 199.02GiB path /dev/sdc1
+Label: 'vaultsyncd-s007-run1'  uuid: fdf39995-9b49-4378-b7e5-d7e052c13f4d
+	devid 1 size 512.00MiB used 88.00MiB path /dev/loop0
+
+$ sudo -n btrfs subvolume show <volume>
+	Name: volume    Subvolume ID: 2506    Parent ID: 5
+$ sudo -n losetup -a
+/dev/loop0: [0060]:312 (/data/vaultsyncd-lab/runs/s007-run1/loop.img)
+$ lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS /dev/loop0
+loop0 512M loop btrfs /data/vaultsyncd-lab/runs/s007-run1/mnt
+$ ls -A <volume> | wc -l ; ls -A <mnt> | wc -l
+0
+0
+```
+
+结论：专用子卷是 `/dev/sdc1[/@data]`（btrfs，FSUUID `13eeae80-…`，subvolid 256）上的子卷 2506；loop 镜像是独立 btrfs（FSUUID `fdf39995-…`，512MiB，`/dev/loop0`，label `vaultsyncd-s007-run1`），`statfs` 身份（fsid）与主卷不同；两个目录都为空。注意 btrfs 的 `statfs f_fsid` 会随子卷变化（`bd7db9a1987d7664` vs `bd7db9a1987d7eae`），因此脚本用 **btrfs 文件系统 UUID + subvolid** 判定归属，`statfs` 只作辅助证据。
+
+### 11.4 dev / test / 正式实例与 Root 的互斥路径规划
+
+| 用途 | 路径 | 后端与容量 | 说明 |
+| --- | --- | --- | --- |
+| 临时开发实例状态与 Root | `/var/lib/vaultsyncd-dev/` | `/dev/sda2[/@]` btrfs `@` 子卷，可用 ≈344G | 独立账号、端口、DB 与 Root；只在开发时启用 |
+| 集成/故障测试实例状态与 Root | `/var/lib/vaultsyncd-test/<run_id>/` | 同上 | 每轮独立 DB、Root、对象与进程；故障注入只作用于该 run |
+| 满盘/ENOSPC 等容量故障的测试卷 | `/data/vaultsyncd-lab/runs/<run_id>/`（本卡脚本） | `/dev/sdc1[/@data]` btrfs + 独立 512MiB loop btrfs | 与状态目录分离，避免主卷容量语义被污染 |
+| 正式试用实例状态与 Root | `/var/lib/vaultsyncd/` | 同上（建议部署时改为专用子卷） | 只在部署阶段启用，先用可丢弃样本 |
+| 用户工作目录（Root 示例） | 由允许基目录显式选择，如 `/data/llm/` 之外的独立目录 | `/dev/sdc1[/@data]` | 不落在任何上述内部状态目录内 |
+| 禁止位置 | `/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/data/.snapshots`、`/data/llm`、`/wrd`（源码）、`/tmp`（tmpfs）、`/boot`（vfat） | — | 脚本对 lab 根与 run 内部路径硬拒绝 |
+
+互斥性核对（对照 design §16.1）：
+
+- 三个 `/var/lib` 路径互不为父子：`/var/lib/vaultsyncd-test` 与 `/var/lib/vaultsyncd` 是**兄弟**目录，不是后者的子目录（正是 §16.1 用 `/data/a` 与 `/data/abc` 举出的字符串前缀陷阱）。服务端注册 Root 时仍必须按挂载/子卷/目录身份判断，不能只看路径前缀。
+- `/var/lib/...`（`sda2[/@]`）与 `/data/vaultsyncd-lab/`（`sdc1[/@data]`）不同设备、不同文件系统，容量互不影响；与 `/wrd`（`sdb1[/@wrd]`，源码与 worktree）也不重叠。
+- 用户目录只在 `/data` 与 `/home` 上显式选择独立目录；`/data/llm` 是既有用户数据，本轮未读未写（清理前后 `stat -c '%A %i %s %Y' /data/llm` 与条目数完全一致）。
+- 现状：`/var/lib/vaultsyncd-dev`、`/var/lib/vaultsyncd-test`、`/var/lib/vaultsyncd` 均不存在（`ls -ld` 退出 2），本卡不创建它们，只做规划；创建时机见 S026（服务端迁移框架）与 S095/S097（NixOS 模块与部署）。
+- 部署建议（留给 S095/S096）：`/var/lib` 属于系统根子卷 `@`，OS 快照会覆盖这些目录；正式启用时改为专用子卷（如 `@vaultsyncd-dev`、`@vaultsyncd`）并让状态与 Root 同卷，以满足 design §11.5 的 reflink 前提。
+
+### 11.5 `tools/test-volume/test-volume.sh` 的创建与清理
+
+用法（`set -eu`，支持 `--help`；losetup/mkfs/mount/umount/btrfs subvolume 走非交互 `sudo -n`，失败立即退出不等待密码）：
+
+```bash
+tools/test-volume/test-volume.sh create  <run_id> [大小]   # 默认 512M，镜像路径由脚本计算
+tools/test-volume/test-volume.sh verify  <run_id>          # 只读核对后端/归属/重叠/空目录
+tools/test-volume/test-volume.sh cleanup <run_id>          # 仅卸载/detach/删除本 run 资源
+tools/test-volume/test-volume.sh status                    # 只读列出 lab 根与已有 run
+```
+
+安全断言（均为实现，非注释）：lab 根必须是绝对、已规范化路径，必须位于 `/data` 或 `/var/lib` 之下，且不得等于或位于 `/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/data/llm`、`/data/.snapshots`、`/wrd`、`/tmp` 等受保护路径内，也不得在含 `.git` 的目录或 `.worktrees` 下；`run_id` 只允许 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`；镜像/挂载点/meta 路径全部由脚本从 run 目录派生并逐条 `assert_descendant`；`losetup --find --show` 后立刻用 `losetup -O BACK-FILE` 核对回环后端就是本 run 镜像；挂载后核对 `findmnt -T` 的 TARGET/SOURCE/FSTYPE；`verify` 核对 btrfs 文件系统 UUID、subvolid、fsid 与目录空；`cleanup` 先做条目白名单校验（出现未知条目立即停止且不卸载），再核对挂载来源等于本 run 的 loop 设备才 `umount`，`losetup -a` 里只 detach 后端等于本 run 镜像的设备，`btrfs subvolume delete` 前核对 subvolid 与空目录，最后用 `rmdir` 而不是 `rm -rf` 收尾。
+
+### 11.6 完整循环验证（实际命令与退出码）
+
+| 步骤 | 命令 | 退出码 | 关键输出 |
+| --- | --- | --- | --- |
+| 创建 | `test-volume.sh create s007-run1` | 0 | run 目录、子卷 2506、512MiB 稀疏镜像、`/dev/loop0`、UUID `fdf39995-…` |
+| 校验 | `test-volume.sh verify s007-run1` | 0 | `fstype=btrfs`；子卷 `source=/dev/sdc1[/@data]`；镜像 `source=/dev/loop0`、`fs_uuid` 与主卷不同；`PASS` |
+| 状态 | `test-volume.sh status` | 0 | lab 后端 `/dev/sdc1[/@data] btrfs`，`s007-run1 loop=/dev/loop0 已挂载` |
+| 清理 | `test-volume.sh cleanup s007-run1` | 0 | 卸载 `mnt`（来源 `/dev/loop0`）、detach `/dev/loop0`、删子卷 2506、删 run 目录 |
+| 清理后校验 | `test-volume.sh verify s007-run1` | **1** | `run 's007-run1' 不存在或已清理 …（无残留目录）` |
+| 清理后状态 | `test-volume.sh status` | 0 | `未创建（/data/vaultsyncd-lab 不存在）` |
+
+负控（全部按预期非零退出，且拒绝时不产生副作用——复检 `losetup -a`、`findmnt`、`ls -A` 与 `verify` 均保持原状）：
+
+| 场景 | 退出码 | 报错摘要 |
+| --- | --- | --- |
+| `cleanup /data` / `cleanup ../` / `cleanup ../etc` / `create ../escape` | 1 | 非法 run_id（含 `/`、`..`） |
+| `verify does-not-exist` | 1 | 不存在或已清理 |
+| 重复 `create s007-run1` | 1 | run 已存在，拒绝重复创建 |
+| run 目录出现未知条目 `stranger.txt` | 1 | step 0 条目校验直接停止，未执行任何卸载/删除 |
+| 元数据把 `loop_device` 改成 `/dev/loop7` | 1 | 挂载点来源为 `/dev/loop0`，不是本 run 的 `/dev/loop7`，拒绝卸载 |
+| 元数据把 `mount_point` 改成 `/data` | 1 | 元数据 mount_point 越界 |
+| 元数据缺失（`run.env` 移走） | 1 | 无法证明归属，拒绝删除 |
+| `VAULTSYNCD_LAB_ROOT=/data/llm` / `/` / `/data/.snapshots` / `/wrd/prj/vaultsyncd/lab` / `/tmp/lab` / `/srv/vaultsyncd-lab` / 相对路径 | 1 | 受保护路径 / 不在白名单父目录 / 必须绝对路径 |
+
+补充修复记录：首轮实现用 `findmnt -R <run 目录>` 判断嵌套挂载，实测对非挂载点路径返回空，导致“无重叠”检查空转；改为 `findmnt -l -n -o TARGET` 过滤后能正确列出 `…/mnt`。首轮 `btrfs filesystem show <子卷目录>` 报 `not a valid btrfs filesystem`，改为先解析到最近挂载点（`/data`）再取 UUID。首轮 `cleanup` 把未知条目检查放在卸载之后，会导致半个 run 被清理，已移到最前面的条目校验步骤。
+
+### 11.7 清理后核验
+
+| 核验项 | 命令 | 结果 |
+| --- | --- | --- |
+| loop 残留 | `sudo -n losetup -a` | 无输出（退出 0），无 `/dev/loop0` |
+| 挂载残留 | `findmnt -l -o TARGET,SOURCE,FSTYPE` | 42 条挂载与 create 前逐条一致（diff 为空），无 `vaultsyncd`；`grep -c loop0 /proc/self/mountinfo` = 0 |
+| lab 目录残留 | `ls -ld /data/vaultsyncd-lab` | `No such file or directory`（退出 2） |
+| 子卷残留 | `sudo -n btrfs subvolume list /data \| grep -c vaultsyncd` | 0 |
+| `/data` 顶层 | `ls -A /data` | 仅 `llm`、`.snapshots` |
+| 用户数据未受影响 | `stat -c '%A %i %s %Y' /data/llm`、`find /data/llm -maxdepth 1 \| wc -l` | 清理前后完全相同（`drwxr-xr-x`，ino 258，size 122，mtime 1788600381，6 项） |
+| 容量 | `df -B1 --output=target,size,used,avail,fstype / /data /wrd` | `/data` 可用 23,790,515,479,528 → 23,790,515,429,376 B（−48KiB，本次 run 的 btrfs 元数据/CoW 残留，无常驻文件）；`/`、`/wrd` 变化来自其他主活动与本次工作树写文件，与本 run 无关 |
+
+### 11.8 限制与未核验项
+
+- **NOCOW 判定手段受限**：主机没有 `lsattr`/`chattr`（`e2fsprogs` 未安装），本轮用只读 `FS_IOC_GETFLAGS` 探测 + 挂载选项检查；S013 若需要常规文件级别的 `+C` 检查，应把 `e2fsprogs` 加入 devShell 或实现同样的 ioctl 探针，而不是依赖 `/data` 当前无 `+C`。
+- **loop ≠ 真实块设备**：512MiB loop 镜像验证了“独立容量/独立文件系统”与 ENOSPC 测试的可行性，但未验证真实 22T 卷的多设备/大文件系统行为；也未在本轮制造真实满盘（只证明工具能创建独立小卷，满盘实验留给 S013 及容量相关卡片）。
+- **未覆盖第三方占位识别**：本卡只证明后端类型与目录归属，没有能力识别云占位/回源文件；design §11.4 已声明不存在可依赖的统一判定方式，脚本不声称能识别。
+- **无 SMB/NFS/FUSE 支持**：脚本与 `verify` 只接受本地块设备 btrfs；网络文件系统、FUSE 挂载与 overlay 一律拒绝，若将来要在 NAS 上验证，需要单独卡片与实际挂载证据。
+- **依赖非交互 sudo**：`losetup`/`mkfs.btrfs`/`mount`/`umount`/`btrfs subvolume` 需要 root；当前主机 `sudo -n` 可用（`(ALL:ALL) NOPASSWD`），若换到不允许免密 sudo 的环境，脚本会立即失败并提示，不提供交互回退。
+- **未做挂载参数持久化**：`create` 只做临时挂载，不写 `/etc/fstab`；重启后 loop 挂载与子卷不会自动恢复，需要重新 `create`。
+- **dev/test/正式实例目录仍未创建**：§11.4 只给出互斥规划与检查，实际创建属于 S026/S095/S097；`/var/lib` 上的专用子卷建议同样未实施。
