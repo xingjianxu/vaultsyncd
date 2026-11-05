@@ -28,6 +28,7 @@ use vaultsyncd_platform_linux_server::mounts::probe::ScanPolicy;
 
 use crate::auth;
 use crate::config::Config;
+use crate::content::ContentContext;
 use crate::http;
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::recovery::{self, RecoveryAssessment, RecoveryAssessmentError};
@@ -180,7 +181,8 @@ impl Service {
             config.state_dir.clone(),
             ScanPolicy::default(),
         ));
-        let router = http::router(Arc::clone(&lifecycle), auth, uploads, roots);
+        let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
+        let router = http::router(Arc::clone(&lifecycle), auth, uploads, roots, content);
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
             shutdown.await;

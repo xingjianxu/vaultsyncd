@@ -27,7 +27,7 @@ use axum::extract::{Path as UrlPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tracing::{info, warn};
-use vaultsyncd_domain::ids::{RootId, SessionId, UploadId, UserId};
+use vaultsyncd_domain::ids::{EntryId, RootId, SessionId, UploadId, UserId, VersionId};
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_protocol::generated::{
     ErrorCode, MissingRange, ReceivedPart, UploadPartAck, UploadRequest, UploadSession,
@@ -72,25 +72,25 @@ impl UploadsContext {
     }
 }
 
-/// 请求的认证与授权事实。
-struct Caller {
-    principal: Principal,
-    request_id: String,
-    now: UtcTimestamp,
+/// 请求的认证与授权事实（上传与内容端点共用）。
+pub(crate) struct Caller {
+    pub(crate) principal: Principal,
+    pub(crate) request_id: String,
+    pub(crate) now: UtcTimestamp,
 }
 
 impl Caller {
     // 失败类型是 axum 的 Response（处理器直接把它当返回值用）：与 `auth::principal_from` 同一约定。
     #[allow(clippy::result_large_err)]
-    async fn resolve(
-        context: &UploadsContext,
+    pub(crate) async fn resolve(
+        auth_context: &AuthContext,
         headers: &HeaderMap,
         root: &str,
     ) -> Result<(Self, RootId), Response> {
-        let principal = auth::principal_from(&context.auth, headers).await?;
+        let principal = auth::principal_from(auth_context, headers).await?;
         let root_id = parse_identity::<RootId>(root)
             .ok_or_else(|| bad_request(&next_request_id(), "Root 身份不是 32 位小写十六进制"))?;
-        match auth::authorize_root(context.auth.database(), &principal, root_id).await {
+        match auth::authorize_root(auth_context.database(), &principal, root_id).await {
             Ok(_) => {}
             Err(AuthorizeError::Scope(_)) => {
                 return Err(denied(&next_request_id(), "Root 不在授权范围"));
@@ -122,7 +122,7 @@ pub async fn begin(
     headers: HeaderMap,
     Json(body): Json<UploadRequest>,
 ) -> Response {
-    let (caller, root_id) = match Caller::resolve(&context, &headers, &root).await {
+    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -195,7 +195,7 @@ pub async fn status(
     UrlPath((root, upload)): UrlPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let (caller, root_id) = match Caller::resolve(&context, &headers, &root).await {
+    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -276,7 +276,7 @@ pub async fn put_part(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let (caller, root_id) = match Caller::resolve(&context, &headers, &root).await {
+    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -337,14 +337,28 @@ pub async fn put_part(
 }
 
 /// 会话与块的存储适配器（端口 [`UploadSessionStore`]）。
-struct DbUploads<'a> {
+pub(crate) struct DbUploads<'a> {
     database: &'a Database,
     owner: UserId,
     session: SessionId,
     root: RootId,
 }
 
-impl DbUploads<'_> {
+impl<'a> DbUploads<'a> {
+    /// 以调用方身份装配：所有查询都只在 `(owner, session, root)` 的交集内成立。
+    pub(crate) fn new(
+        database: &'a Database,
+        owner: UserId,
+        session: SessionId,
+        root: RootId,
+    ) -> Self {
+        Self {
+            database,
+            owner,
+            session,
+            root,
+        }
+    }
     fn to_core(&self, record: &store_uploads::UploadRecord) -> Result<CoreSession, UploadFailure> {
         if record.root != self.root {
             return Err(UploadFailure::UnknownUpload);
@@ -606,7 +620,11 @@ fn store_failure(error: store_uploads::UploadError) -> UploadFailure {
     }
 }
 
-fn failure_response(request_id: &str, failure: &UploadFailure, root: Option<RootId>) -> Response {
+pub(crate) fn failure_response(
+    request_id: &str,
+    failure: &UploadFailure,
+    root: Option<RootId>,
+) -> Response {
     let root_id = root.map(RootId::to_hex);
     match failure {
         UploadFailure::TotalTooLarge { .. } | UploadFailure::ChunkTooLarge { .. } => {
@@ -674,7 +692,7 @@ fn failure_response(request_id: &str, failure: &UploadFailure, root: Option<Root
     }
 }
 
-fn not_found(request_id: &str, root: RootId) -> Response {
+pub(crate) fn not_found(request_id: &str, root: RootId) -> Response {
     error_response(
         StatusCode::NOT_FOUND,
         ErrorCode::UnsupportedEntry,
@@ -685,7 +703,7 @@ fn not_found(request_id: &str, root: RootId) -> Response {
     )
 }
 
-fn denied(request_id: &str, message: &str) -> Response {
+pub(crate) fn denied(request_id: &str, message: &str) -> Response {
     error_response(
         StatusCode::FORBIDDEN,
         ErrorCode::AccessDenied,
@@ -696,7 +714,7 @@ fn denied(request_id: &str, message: &str) -> Response {
     )
 }
 
-fn bad_request(request_id: &str, message: &str) -> Response {
+pub(crate) fn bad_request(request_id: &str, message: &str) -> Response {
     error_response(
         StatusCode::BAD_REQUEST,
         ErrorCode::InvalidRequest,
@@ -707,7 +725,7 @@ fn bad_request(request_id: &str, message: &str) -> Response {
     )
 }
 
-fn internal_error(request_id: &str, message: &str, root: Option<String>) -> Response {
+pub(crate) fn internal_error(request_id: &str, message: &str, root: Option<String>) -> Response {
     error_response(
         StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::NeedsRecovery,
@@ -718,7 +736,7 @@ fn internal_error(request_id: &str, message: &str, root: Option<String>) -> Resp
     )
 }
 
-fn error_response(
+pub(crate) fn error_response(
     status: StatusCode,
     code: ErrorCode,
     request_id: &str,
@@ -739,7 +757,7 @@ fn error_response(
     (status, Json(envelope)).into_response()
 }
 
-fn parse_identity<T>(text: &str) -> Option<T>
+pub(crate) fn parse_identity<T>(text: &str) -> Option<T>
 where
     T: FromIdentity,
 {
@@ -747,7 +765,7 @@ where
 }
 
 /// 32 位小写十六进制身份文本的解析（只接受规范形式）。
-trait FromIdentity: Sized {
+pub(crate) trait FromIdentity: Sized {
     fn from_hex_text(text: &str) -> Option<Self>;
 }
 
@@ -770,13 +788,13 @@ macro_rules! identity_from_hex {
     )*};
 }
 
-identity_from_hex!(RootId, UploadId);
+identity_from_hex!(RootId, UploadId, EntryId, VersionId);
 
-fn parse_decimal(text: &str) -> Option<u64> {
+pub(crate) fn parse_decimal(text: &str) -> Option<u64> {
     vaultsyncd_protocol::decimal::validate(text).ok()
 }
 
-fn server_now() -> UtcTimestamp {
+pub(crate) fn server_now() -> UtcTimestamp {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
@@ -792,7 +810,7 @@ fn next_request_id() -> String {
     format!("upload-{}-{sequence}", std::process::id())
 }
 
-fn random_bytes() -> [u8; 16] {
+pub(crate) fn random_bytes() -> [u8; 16] {
     use rand_core::{OsRng, RngCore};
     let mut bytes = [0_u8; 16];
     OsRng.fill_bytes(&mut bytes);
