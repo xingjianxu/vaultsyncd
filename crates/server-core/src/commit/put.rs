@@ -462,13 +462,13 @@ fn check_record(
     }
 }
 
-fn invalid_request(detail: impl Into<String>) -> Box<PutFailure> {
+pub(crate) fn invalid_request(detail: impl Into<String>) -> Box<PutFailure> {
     Box::new(PutFailure::new(PutFailureReason::InvalidRequest {
         detail: detail.into(),
     }))
 }
 
-fn base_mismatch(detail: impl Into<String>) -> Box<PutFailure> {
+pub(crate) fn base_mismatch(detail: impl Into<String>) -> Box<PutFailure> {
     Box::new(PutFailure::new(PutFailureReason::BaseMismatch {
         detail: detail.into(),
     }))
@@ -479,7 +479,7 @@ fn store_failure(error: PutStoreError) -> Box<PutFailure> {
 }
 
 /// 现场复核在发布前又发现变化（与预检查之间的竞态）：同样按 `RECONCILE_REQUIRED` 处理。
-fn reclassify_publish_failure(failure: PutFailure) -> Box<PutFailure> {
+pub(crate) fn reclassify_publish_failure(failure: PutFailure) -> Box<PutFailure> {
     match failure.reason {
         PutFailureReason::BeforeMismatch { expected, observed } => {
             Box::new(PutFailure::new(PutFailureReason::Reconcile {
@@ -496,7 +496,7 @@ fn reclassify_publish_failure(failure: PutFailure) -> Box<PutFailure> {
 }
 
 /// 单个名称：非空、不含路径分隔符/NUL、不是 `.`/`..`。
-fn validate_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("名称不能为空".to_owned());
     }
@@ -510,7 +510,7 @@ fn validate_name(name: &str) -> Result<(), String> {
 }
 
 /// Root 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量。
-fn validate_target_path(path: &str) -> Result<(), String> {
+pub(crate) fn validate_target_path(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("目标路径不能为空".to_owned());
     }
@@ -525,7 +525,7 @@ fn validate_target_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn target_name(path: &str) -> Option<&str> {
+pub(crate) fn target_name(path: &str) -> Option<&str> {
     path.rsplit('/').next()
 }
 
