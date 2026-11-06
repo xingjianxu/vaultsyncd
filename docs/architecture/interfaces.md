@@ -1966,11 +1966,18 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
 - **重试语义**：端点与执行器共用同一份 `request_digest` 判定重放；响应丢失后的重试返回同一
   `revision`/`root_seq`/`version_id`。结果 JSON 里没有 `root_seq` 时以 `operations.root_seq` 补齐
   （执行器写结果时批次序号尚未分配）。
-- **失败与稳定拒绝**：任何失败都不返回 committed；失败路径把操作写成 `rejected`（不推进 RootSeq、
-  不产生事件），所以同一 OpId 之后不会被“重做成功”。`ROOT_UNAVAILABLE`/`MAP` 见核心的
-  `OperationFailure` 映射表。
-- **未装配的命令保持 503**：create/move/delete/restore 的存储与工作目录适配器仍未实现，端点继续
-  显式 `503 SERVICE_NOT_READY`，不写状态。
+- **失败与稳定拒绝**：任何失败都不返回 committed；只有读证据成功且该 Root 没有未完成意图时，才尝试
+  写稳定 `rejected`。已经有意图的失败保留 `pending`；读不出意图也不得推测成稳定拒绝。所有命令在共享
+  提交门内检查未完成意图，存在或读取失败即停写。观察器同样不采纳有未完成意图的 Root。
+- **命令适配（S052-b，尚未完整验收）**：`commands::{SqlFsIntentLog, WorkTreeNamespace,
+  SqlNamespaceStore, SqlDeleteStore}` 接入 create/move/delete；移动保持 EntryId/内容版本，删除写清单、墓碑
+  并保留历史。`restore_ops::{SqlRestoreStore, SqlTrashRestoreStore}` 接入历史版本与单文件回收站恢复；
+  `conflict_ops::SqlConflictStore` 在迟到 put 的 preserve_both 下提交独立副本，映射唯一键为
+  `(RootId, DeviceId, OpId)`，不覆盖 head。冲突名称复用 planner，恢复/冲突的真实 RootSeq 在同一事务内写回结果。
+  目录回收站恢复仍是明确 `503 SERVICE_NOT_READY`：核心 mkdir 前缺少整组持久计划，不能伪造恢复能力。
+- **启动恢复仍有缺口**：`recovery::assess_registered_roots` 只评估未完成清单并保持只读，尚未调用真实
+  recover_root/recover_namespace_root/recover_delete_root 补完；意图缺少完整操作键及恢复业务上下文。
+  不能把当前失败关闭或优雅重启测试报告成崩溃补完验收成功，详见 `agent/tasks/S052-b.md`。
 - **外部采纳（`external::SqlExternalStore`）**：`lookup_path` 用 `entries::entry_by_path`（逐分量按
   原始名称）+ 当前版本；`apply_external` 在补建缺失父目录后，按 Create/Update（比较并写
   `expected_revision`）在一个事务里追加批次、幂等登记对象、写版本（`origin=external`）、推进 revision；
@@ -1979,7 +1986,8 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
 - **观察运行时（`external::ObserverRuntime`）**：每轮从库里枚举 Root（新注册的下一轮自动纳入），
   为每个健康 Root 用 `RootHandle + LinuxWorkTree + LinuxObjectPort` 跑一轮
   `ExternalObserver::run_pass`（周期扫描是 S050 三层兜底的正确性层；**未接 inotify**，只影响时延）。
-  服务端自己的发布通过 `expect_own_write` 登记（设备 + inode + 内容），不会被再采纳成外部修改。
+  put 发布通过 `expect_own_write` 登记（设备 + inode + 内容）；其余命令的自写关联仍待验证。
+  HTTP 执行器实际复用观察器的同一个 gate（锁序 gate → roots），不是只复用 gate 的类型。
   运行时用独立线程 + current-thread runtime（端口与 `RootHandle` 不要求 `Send`），优雅停止时先停
   观察循环再关闭数据库。
 - **新增存储函数**：`entries::entry_by_path(conn, owner, root, path)`、

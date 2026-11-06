@@ -452,7 +452,7 @@ async fn unmet_command_premise_is_rejected_without_writing_state() {
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
 
-    // 五类命令都已装配执行器；这里用一个不存在的父目录断言“命令前提不成立时明确失败、
+    // create 已装配真实执行器；这里用一个不存在的父目录断言“命令前提不成立时明确失败、
     // 不登记操作行、不推进 RootSeq”，而不是伪造 202 或默认成功。
     let body = serde_json::to_string(&wire_create(EPOCH)).expect("序列化请求");
     let (status, bytes) = app

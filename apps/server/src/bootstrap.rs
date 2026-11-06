@@ -182,7 +182,7 @@ impl Service {
             ScanPolicy::default(),
         ));
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
-        // 操作命令端点（S047/S052）：内容 put 走真实执行器；其余命令仍显式 503 SERVICE_NOT_READY。
+        // 操作命令端点（S047/S052）：命令走真实适配器；缺少整组证据的目录恢复仍显式未就绪。
         // 外部观察循环（S052）：周期扫描每个健康 Root，把外部改动采纳成版本与事件。
         let observer = Arc::new(crate::external::ObserverRuntime::new(
             database.clone(),

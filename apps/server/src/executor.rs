@@ -18,8 +18,8 @@
 //! 失败分类沿用核心的 [`PutFailure`]：`ENOSPC`/`EDQUOT` 映射成 `INSUFFICIENT_STORAGE`（507），
 //! 存储/数据库故障 `NEEDS_RECOVERY`（503），过期基线 `BASE_MISMATCH`（409）等。
 //!
-//! 未实现的命令（create/move/delete/restore 的存储与工作目录适配器）仍由端点显式回答
-//! `503 SERVICE_NOT_READY`，不在这里用空实现或默认成功冒充。
+//! 其余命令见 `commands`/`restore_ops`/`conflict_ops`；目录回收站恢复仍显式未就绪。
+//! 启动补完尚未装配，有未完成意图时停写，不能据正常路径测试宣称已完成崩溃恢复。
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -257,8 +257,8 @@ impl ExecutorContext {
 
     /// 执行一条内容 put：先登记 `pending` 操作行，再走核心的提交编排。
     ///
-    /// 返回 `Ok` 时元数据事务已经提交（committed）；任何失败都保证没有 committed，并把操作记成
-    /// 稳定拒绝（同一 OpId 的重试得到同一结论，不会重做）。
+    /// 返回 `Ok` 时元数据事务已经提交（committed）；失败不报告 committed。
+    /// 没有未完成意图时尝试稳定拒绝；已有意图或证据读失败时保留 pending，等待恢复。
     ///
     /// # Errors
     ///
