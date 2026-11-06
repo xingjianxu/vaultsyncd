@@ -122,5 +122,6 @@ in {
     lockFile = src + "/packaging/linux/container/ubuntu-lock.json";
     arch = "arm64";
   };
+  platform-tests-aarch64 = import ./platform-tests.nix { inherit pkgs; source = rustSource; };
   web-deps = webDeps;
 }

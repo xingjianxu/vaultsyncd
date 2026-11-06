@@ -120,8 +120,10 @@ def main():
         assert inspected['Architecture']==ARCH and inspected['Config']['User']=='8721:8721'
         health=inspected.get('Healthcheck') or inspected['Config'].get('Healthcheck')
         assert health and health['Test']
-        archive=RUN/'image.oci'
-        command(['podman','save','--format','oci-archive','-o',archive,IMAGE]);engine('load','-i',archive)
+        archive=RUN/'image.tar'
+        command(['podman','save','--format','docker-archive','-o',archive,IMAGE]);engine('load','-i',archive)
+        transferred=json.loads(engine('image','inspect',IMAGE).stdout)[0]
+        assert (transferred.get('Healthcheck') or transferred['Config'].get('Healthcheck'))==health
         RESULT['image_id']=inspected['Id'];RESULT['labels']=inspected['Config']['Labels']
         overlay=engine('run','--rm','--network','none','--cap-drop=all','--security-opt','no-new-privileges',
             '--entrypoint','sh',IMAGE,'-c','/opt/vaultsyncd/bin/vaultsyncd-server --config /etc/vaultsyncd/vaultsyncd.toml; result=$?; test ! -e /var/lib/vaultsyncd/server.sqlite || exit 99; exit "$result"',check=False)
