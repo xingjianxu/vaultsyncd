@@ -119,7 +119,7 @@
 | S094 | Linux 服务端 Nix 构建包 | L | S093、S090 | done | `83d0098`、`90a3f21`；同步锁`3b1fbcc`；`.worktrees/s094` / `build/S094-nix-package` | 真sandbox离线rust/web/default构建、包内64/0；无前端源码server55/0+clippy；qR无Node且空PATH原生/Chromium九类通过 | 无；x86_64-linux/Nix布局实测，生产HTTPS和部署留后续 | agent/tasks/S094.md（+a/b） |
 | S095 | NixOS 服务模块 | L | S094、S007 | done | a70f755、9243d14、eeb8f66 | 完整 NixOS system/导出模块构建；真实非root零caps服务、Root授权/系统拒写与备份快照释放11类通过 | 无；正式主机启用留S096 | agent/tasks/S095.md |
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | done | 99a7ed4；主机ba1837a | 新源包64/0、主机build/test/健康/switch238；实际回滚237并恢复固定版本、两轮提交下载重启重放与备份释放，SSH/既有应用保持 | 无；公网TLS留S097 | agent/tasks/S096.md |
-| S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | todo | — | 未执行 | — | agent/tasks/S097.md（执行时创建） |
+| S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | done | d90a263、b615fd9、b345ac9、d8b3cce、fd2f52d、f580392 | Chromium/Windows原生+Edge严格TLS、16MiB/SSE、Nix+host240与重启、独立bind/持久恢复通过 | 开发CA回环，无公网部署；旧Prepared跨dev保守停写 | agent/tasks/S097.md；下一S098 |
 | S098 | 通用 Linux 包与容器配置 | L | S094、S097 | todo | — | 未执行 | — | agent/tasks/S098.md（执行时创建） |
 | S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | todo | — | 未执行 | — | agent/tasks/S099.md（执行时创建） |
 | S100 | Windows 升级与卸载保护 | W | S099、S091 | todo | — | 未执行 | — | agent/tasks/S100.md（执行时创建） |

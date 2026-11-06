@@ -2503,3 +2503,10 @@ S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站
 - 真实入口`/etc/nixos#wks-lab`，新增host-specific system.nix（主机提交ba1837a），固定永久Git仓库commit3640f3a，删除任务worktree后仍可构建。原有dirty主机flake.lock逐字节保留、不纳入提交；精确锁/NAR/来源快照和GCroot留运行时证据，不能把主机commit单独宣称为完整锁快照。
 - `vaultsyncd.service`的专用vaultsyncd-trial UID985，回环18721；新2GiB普通镜像`/data/vaultsyncd-trial-s096/volume.img`，显式loop btrfs挂载后state0700和samples互不包含。仅此挂载启用user_subvol_rm_allowed，/data原选项不变。owner仅离线CLI stdin，初始凭据root0600运行时文件，不入Git/store。
 - 完整build/test/健康/实际237回滚/恢复test/switch238完成；样本上传committed、固定版本下载、服务重启和同OpId重放、普通UID备份校验释放均真实通过；SSH及既有应用进程/HTTP保持。来源、命令、实际回滚保证与限制唯一运维入口`docs/operations/nixos.md`。当前无公网HTTP；TLS与代理留S097。
+
+## S097 同源 TLS 与启动 Root 围栏
+
+- `deploy/reverse-proxy/caddy.nix`只消费运行时证书路径，回环18443→18721；原Host同源、受控转发头、16MiB请求体上限、SSE立即flush且不重试写操作，无任意文件/Unix socket暴露。证书/owner凭据无Nix选项、store或Git副本。实际Linux Chromium、Windows Edge/正式原生PE证明严格TLS；开发私有CA回环入口不等于公网部署。固定来源、证书指纹与恢复入口见operations/nixos.md。
+- `apps/server/src/root_fences.rs::RootFences`在启动replay之前只读核对历史RootSnapshot的FSID/subvol/canonical path/inode/birth和完整存储准入，再建立当前mount/device围栏；历史blob不回写，无wire/持久格式升级。Auth诊断、管理problems、observer、ExecutorContext及startup replay共享同一Arc<RootHandle>；新注册在活进程严格比对原快照，所有使用仍verify，bind/卸载/权限变化fail closed、不推导删除。缺FSID/subvol/birth的历史证据不伪装为已核实。
+- `RestrictedDir::list_entries`以openat(pinned_fd,".")取得独立open-file-description，getdents游标不共享；不使用dup或rewind共享offset。平台有效账号rwx检查只读faccessat/AT_EACCESS，不写Root探测文件。并发多缓冲完整枚举与真实systemd/bind证明围栏。
+- 旧put intent FileKey无birth，跨匿名dev变化不能重映射：Published以after内容证明只收尾不覆盖；Prepared同dev可redo，旧dev变化保留pending/内容并needs_recovery，等待显式恢复。独立边界测试示例只允许专属run且先StateLock，不修改在线DB；无测试故障开关进入正式服务。实际trial固定永久fd2f52d，重启同Root/seq18/历史版本/全内容健康。
