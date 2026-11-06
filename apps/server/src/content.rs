@@ -106,6 +106,7 @@ pub async fn finalize(
         caller.principal.user_id,
         caller.principal.session_id,
         root_id,
+        caller.now,
     );
     let mut assembler = FsAssembler {
         state_dir: context.state_dir.clone(),

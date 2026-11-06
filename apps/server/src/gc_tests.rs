@@ -292,6 +292,28 @@ async fn crash_child() {
 }
 
 #[tokio::test]
+async fn symlinked_object_parent_cannot_delete_outside_bytes() {
+    let lab = Lab::new("symlink").await;
+    let hash = lab.object(b"old object").await;
+    run_once(&lab.db, &lab.state, at(100)).await.unwrap();
+    let path = lab.path(hash);
+    let outside = lab.state.join("outside-gc-scope");
+    std::fs::rename(path.parent().unwrap(), &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, path.parent().unwrap()).unwrap();
+    assert!(run_once(&lab.db, &lab.state, at(3700)).await.is_err());
+    assert_eq!(
+        std::fs::read(outside.join(path.file_name().unwrap())).unwrap(),
+        b"old object"
+    );
+    let state: String = sqlx::query_scalar("SELECT gc_state FROM objects WHERE hash=?")
+        .bind(hash.as_slice())
+        .fetch_one(lab.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(state, "live");
+}
+
+#[tokio::test]
 async fn expired_incomplete_uploads_are_separate_from_finalized_or_active_content() {
     let lab = Lab::new("uploads").await;
     let mut tx = lab.db.begin_write().await.unwrap();
@@ -328,12 +350,26 @@ async fn expired_incomplete_uploads_are_separate_from_finalized_or_active_conten
             b"interrupted partial block",
         )
         .unwrap();
+        let staging = lab.state.join("objects/staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        for name in [
+            format!(".assemble-{}-123", id.to_hex()),
+            format!("finalize-{}-request", id.to_hex()),
+        ] {
+            std::fs::write(staging.join(name), b"interrupted assembly").unwrap();
+        }
         paths.push(path);
     }
     tx.commit().await.unwrap();
     assert_eq!(
         run_once(&lab.db, &lab.state, at(1000)).await.unwrap().parts,
         1
+    );
+    let expired = vaultsyncd_domain::ids::UploadId::from_bytes([20; 16]).to_hex();
+    assert!(
+        !lab.state
+            .join(format!("objects/staging/.assemble-{expired}-123"))
+            .exists()
     );
     assert!(!paths[0].exists());
     assert!(

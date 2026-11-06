@@ -313,6 +313,10 @@ where
     O: ContentObjectStore,
 {
     let session = store.load(upload).await?;
+    // 过期 finalize 不能重放一个已失去租约、可能被 GC 回收的内容引用。
+    if session.expires_at <= now {
+        return Err(ContentFailure::Upload(UploadFailure::UnknownUpload));
+    }
     match session.phase {
         UploadPhase::Finalized => {
             return Ok(FinalizedContent {
@@ -683,7 +687,8 @@ mod tests {
             hash: digest(b"whole"),
             chunk_size: chunk,
             phase,
-            expires_at: UtcTimestamp::from_unix_seconds(1_700_000_000).expect("时间"),
+            expires_at: UtcTimestamp::from_unix_seconds(1_700_010_000)
+                .expect("测试会话在调用时间之后到期"),
         }
     }
 
@@ -1126,6 +1131,34 @@ mod tests {
         assert_eq!(replayed.content.digest, digest(b"abcdef"));
         assert_eq!(replayed.content.size, 6);
         assert_eq!(store.calls, vec!["load"], "重放不再拼装、不再改状态");
+        assert!(objects.recorded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn expired_finalize_cannot_replay_a_collected_content_reference() {
+        let session = session(6, 3, UploadPhase::Finalized);
+        let mut store = FakeUploads {
+            session: Some(session.clone()),
+            ..FakeUploads::default()
+        };
+        let mut publisher = FakePublisher {
+            published: None,
+            parts_seen: Vec::new(),
+        };
+        let mut objects = FakeObjects::default();
+        assert!(matches!(
+            finalize_upload(
+                &mut store,
+                &mut publisher,
+                &mut objects,
+                session.upload,
+                "expired",
+                session.expires_at
+            )
+            .await,
+            Err(ContentFailure::Upload(UploadFailure::UnknownUpload))
+        ));
+        assert_eq!(store.calls, vec!["load"]);
         assert!(objects.recorded.is_empty());
     }
 

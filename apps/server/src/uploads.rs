@@ -228,7 +228,7 @@ pub async fn status(
         }
     };
     // 跨会话：别的登录会话（即使同一 owner）也不能读这次上传的进度。
-    if record.session != caller.principal.session_id {
+    if record.session != caller.principal.session_id || record.expires_at <= caller.now {
         return not_found(&caller.request_id, root_id);
     }
     let progress = match store_uploads::upload_progress(
@@ -311,6 +311,7 @@ pub async fn put_part(
         owner: caller.principal.user_id,
         session: caller.principal.session_id,
         root: root_id,
+        now: caller.now,
     };
     let mut staging = FsStaging {
         root: context.staging.clone(),
@@ -347,6 +348,7 @@ pub(crate) struct DbUploads<'a> {
     owner: UserId,
     session: SessionId,
     root: RootId,
+    now: UtcTimestamp,
 }
 
 impl<'a> DbUploads<'a> {
@@ -356,15 +358,20 @@ impl<'a> DbUploads<'a> {
         owner: UserId,
         session: SessionId,
         root: RootId,
+        now: UtcTimestamp,
     ) -> Self {
         Self {
             database,
             owner,
             session,
             root,
+            now,
         }
     }
     fn to_core(&self, record: &store_uploads::UploadRecord) -> Result<CoreSession, UploadFailure> {
+        if record.expires_at <= self.now {
+            return Err(UploadFailure::UnknownUpload);
+        }
         if record.root != self.root {
             return Err(UploadFailure::UnknownUpload);
         }

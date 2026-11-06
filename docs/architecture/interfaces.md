@@ -2343,3 +2343,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `server-store::gc::references(tx, owner, root, now)` 从调用方同一 SQLite 事务枚举：活跃当前版本永久保护，历史从取代时刻起 30 天，删除末版本从删除时刻起 30 天，回收站截止至少为删除后 30 天，未结束及 finalized 上传在会话有效期内保护总哈希，下载/提交/备份租约以 `expires_at > now` 保护。`Error::{OutOfScope,InvalidFact,Storage,Lease}` 均应中止本次回收；条目/回收站悬空版本按坏事实拒绝。
 - pending 操作或 `phase != finalized` 意图保守保护 Root 全部已登记对象；备份租约的 `SnapshotSeqMap` 涵盖本 Root 时，在冻结对象清单建立前同样保护整个 Root。此策略允许多保护，不允许遗漏；不把 seq 映射误当对象清单。store 生产依赖 core 的引用类型，core 不依赖 store。
 - 本接口只产出标记事实，不改变数据库 `gc_state`，不清理历史行、临时文件或内容对象。S086 必须在宽限期后重新核对并与发布/租约使用统一协调，禁止凭过期快照直接删除。真实 SQLite 与核心共 6 项新增测试；相关包 lib 回归 311/84 通过。
+
+## 对象删除协调与过期上传清理（S086）
+
+- `server-core::gc::sweep::{GRACE_SECONDS, Decision, decide}`：固定一小时标记宽限；新引用优先 Keep，时钟回退 Wait。满盘不参与过期判据，不缩短30天保留或宽限。
+- `server-store::gc::sweep::{mark_root,candidates,authorize_delete,finish_delete}`：调用方传短事务；0011迁移新增 `gc_candidates(root_id,object_hash,marked_at,phase)`，marked仍可撤销，deleting与objects.collectable同事务持久授权且不能复活。授权前再次读取同事务全部引用；仅无保护的到期内容可移除历史/回收站/过期租约，删除末版本时清已删除条目的content指针、保留墓碑。候选每Root每轮最多100项，deleting优先；引用枚举目前读取Root全部事实。
+- `Database::{object_activity,object_maintenance}` 是克隆句柄共享的读/独占对象门。锁序：对象门 → Root commit gate → observer roots → SQLite短事务；不嵌套获取、不升级读锁、不跨文件I/O持SQLite写事务。同一实例必须复用Database克隆，服务状态独占锁仍为多进程边界。备份在S087使用同一独占对象门，不能另建平行协调器。
+- 服务HTTP submit整体持读门（含restore/conflict/create/put），finalize/download/uploads和观察器run_once持同一读门；版本租约写入由SQLite事务与collectable触发器共同围栏。SQL同时拒绝collectable的新版本、租约、上传和备份租约，幂等对象登记不能复活deleting。过期上传status/put/finalize按不可用会话404回答，禁止重放已经失去保护的旧finalize引用。
+- `apps/server::gc::run_once(database,state_dir,now) -> io::Result<Report>` 在独占门下先清过期未完成上传，再标记/复核/删对象；外部观察后台每轮释放读门后调用。候选storage_path必须等于ObjectLayout规范路径，目录用RestrictedDir/fd锚定，拒绝符号链接；已有字节核对SHA-256与单链接，unlink+父目录fsync成功后才数据库收尾。marked/deleting/unlink边界被SIGKILL后重复继续；坏路径、坏内容、存储失败保留证据并明确报错。
+- 临时清理只处理过期aborted上传的登记块、规范未登记块、`.index.pid.tmp` 和该UploadId的`.assemble-*`/`finalize-*`暂存名。块和会话元数据在相应删除刷盘后清理，缺目录按已不存在幂等收尾；有效及finalized上传、未知名字/类型、用户Root、客户端dirty与完整缓存不参与。Report区分objects/parts/temporary_files；未匹配任何已知过期会话的孤立暂存不凭mtime猜测删除。

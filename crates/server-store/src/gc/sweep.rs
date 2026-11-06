@@ -379,6 +379,58 @@ mod tests {
                 .len(),
             1
         );
+        // 删除后的末版本从 deleted_at 起再保留30天，最终只移除内容而保留墓碑。
+        let deleted_at = after_retention + GRACE_SECONDS + 100;
+        let expiry = deleted_at + vaultsyncd_server_core::gc::mark::RETENTION_SECONDS;
+        sqlx::query("UPDATE entries SET deleted_at=? WHERE id=?")
+            .bind(deleted_at)
+            .bind(entry.as_bytes().as_slice())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO trash_entries VALUES(?,?,?,'file','file',1,?,?,?)")
+            .bind(entry.as_bytes().as_slice())
+            .bind(root.as_bytes().as_slice())
+            .bind(parent.as_bytes().as_slice())
+            .bind([10u8; 16].as_slice())
+            .bind(deleted_at)
+            .bind(expiry)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO tombstones VALUES(?,?,'file','file',?,?)")
+            .bind(root.as_bytes().as_slice())
+            .bind(entry.as_bytes().as_slice())
+            .bind(deleted_at)
+            .bind(expiry)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        mark_root(&mut tx, owner, root, at(expiry - 1))
+            .await
+            .unwrap();
+        assert!(candidates(&mut tx, owner, root).await.unwrap().is_empty());
+        mark_root(&mut tx, owner, root, at(expiry)).await.unwrap();
+        let c = candidates(&mut tx, owner, root).await.unwrap().remove(0);
+        assert!(
+            authorize_delete(&mut tx, owner, &c, at(expiry + GRACE_SECONDS))
+                .await
+                .unwrap()
+        );
+        finish_delete(&mut tx, &c).await.unwrap();
+        let pointer: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT content_version_id FROM entries WHERE id=?")
+                .bind(entry.as_bytes().as_slice())
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        assert!(pointer.is_none());
+        let tombstones: i64 = sqlx::query_scalar("SELECT count(*) FROM tombstones WHERE root_id=?")
+            .bind(root.as_bytes().as_slice())
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(tombstones, 1);
         tx.commit().await.unwrap();
     }
 }

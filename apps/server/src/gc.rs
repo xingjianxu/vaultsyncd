@@ -40,7 +40,14 @@ pub async fn run_once(
     let mut conn = database.pool().acquire().await.map_err(failure)?;
     let roots = roots::all_roots(&mut conn).await.map_err(failure)?;
     drop(conn);
-    let mut report = Report::default();
+    // 先清过期上传的可重建临时名，避免发布后硬链接清理前崩溃留下 nlink=2 阻塞对象复核。
+    let parts = clean_uploads(database, state_dir, now).await?;
+    let temporary_files = clean_unregistered_parts(database, state_dir, now).await?;
+    let mut report = Report {
+        objects: 0,
+        parts,
+        temporary_files,
+    };
     for root in roots {
         let mut tx = database.begin_write().await.map_err(failure)?;
         sweep::mark_root(&mut tx, root.owner, root.id, now)
@@ -62,9 +69,9 @@ pub async fn run_once(
             let name = ContentDigest::from_bytes(candidate.object.hash).to_hex();
             match directory.identity_at(Path::new(&name)).map_err(failure)? {
                 Some(_) => {
-                    let mut object = directory.open_read(Path::new(&name)).map_err(failure)?;
+                    let object = directory.open_read(Path::new(&name)).map_err(failure)?;
                     if object.identity.nlink != 1
-                        || hash_file(&mut object.file).map_err(failure)?.0 != candidate.object.hash
+                        || hash_file(&object.file).map_err(failure)?.0 != candidate.object.hash
                     {
                         return Err(failure("GC object identity/hash mismatch; preserved"));
                     }
@@ -89,8 +96,6 @@ pub async fn run_once(
             report.objects += 1;
         }
     }
-    report.parts = clean_uploads(database, state_dir, now).await?;
-    report.temporary_files = clean_unregistered_parts(database, state_dir, now).await?;
     Ok(report)
 }
 
@@ -190,6 +195,7 @@ async fn clean_unregistered_parts(
             vaultsyncd_domain::ids::UploadId::from_bytes(id).to_hex()
         );
         let base = RestrictedDir::open(state, ResolveMode::Auto).map_err(failure)?;
+        count += clean_upload_assembly(&base, &id)?;
         let directory = match base.child_dir(Path::new(&relative)) {
             Ok(d) => d,
             Err(vaultsyncd_platform_linux_server::files::RestrictError::NotFound { .. }) => {
@@ -262,4 +268,36 @@ async fn forget_upload(database: &Database, id: &[u8; 16], now: UtcTimestamp) ->
         .await
         .map_err(failure)?;
     tx.commit().await.map_err(failure)
+}
+
+fn clean_upload_assembly(base: &RestrictedDir, id: &[u8; 16]) -> io::Result<usize> {
+    let staging = match base.child_dir(Path::new("objects/staging")) {
+        Ok(d) => d,
+        Err(vaultsyncd_platform_linux_server::files::RestrictError::NotFound { .. }) => {
+            return Ok(0);
+        }
+        Err(e) => return Err(failure(e)),
+    };
+    let id = vaultsyncd_domain::ids::UploadId::from_bytes(*id).to_hex();
+    let prefixes = [format!("finalize-{id}-"), format!(".assemble-{id}-")];
+    let mut count = 0;
+    for entry in staging.list_entries().map_err(failure)? {
+        let Some(name) = entry.name.to_str() else {
+            continue;
+        };
+        if !prefixes
+            .iter()
+            .any(|p| name.starts_with(p) && name.len() > p.len())
+        {
+            continue;
+        }
+        if entry.kind != vaultsyncd_platform_linux_server::files::EntryKind::File {
+            return Err(failure(
+                "GC assembly entry is not a regular file; preserved",
+            ));
+        }
+        unlink_object(&staging, name)?;
+        count += 1;
+    }
+    Ok(count)
 }
