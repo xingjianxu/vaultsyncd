@@ -1,8 +1,9 @@
 //! 本机命令处理器的最小骨架（`docs/design.md` §15.5）：“GUI 和 CLI 调用同一命令处理器”。
 //!
 //! S025 只实现 `get_status`：成功应答给出 agent 版本与它支持的 IPC 协议版本；版本不兼容时返回
-//! 协议级错误。更细的同步状态与其余命令在各自功能卡实现，但都走同一个 [`Service::handle`]
-//! 入口，界面不另写一套业务判断。
+//! 协议级错误。S071 的 apps/agent IPC 入口在版本校验后填入核心多维 Binding 快照；
+//! 未接状态源的纯处理器省略 bindings，不伪造空快照。其余管理命令由 S072 实现，
+//! 界面不另写一套业务判断。
 //!
 //! 不变量：
 //!
@@ -63,6 +64,7 @@ impl Service {
                 GetStatusResult {
                     agent_version: self.agent_version.clone(),
                     ipc_protocol: version::supported(),
+                    bindings: None,
                 },
             ),
         }

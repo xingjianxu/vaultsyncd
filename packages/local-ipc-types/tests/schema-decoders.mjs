@@ -65,7 +65,7 @@ check("frame_limits_come_from_contract", () => {
   assert.equal(FRAME_HEADER_BYTES, 4);
   assert.ok(MAX_FRAME_BYTES >= 64 && MAX_FRAME_BYTES <= 64 * 1024 * 1024);
   assert.equal(PROTOCOL_MAJOR, 1);
-  assert.equal(PROTOCOL_MINOR, 0);
+  assert.equal(PROTOCOL_MINOR, 1);
 });
 
 check("request_example_decodes_to_sample", () => {
@@ -76,6 +76,17 @@ check("request_example_decodes_to_sample", () => {
 check("response_ok_example_decodes_to_sample", () => {
   const sample = example("local-ipc.response.json");
   assert.deepEqual(reencode(decodeResponse(sample)), sample);
+});
+
+check("real_status_preserves_decimal_counts_and_legacy_response", () => {
+  const sample = example("local-ipc.status.json");
+  const decoded = decodeResponse(sample);
+  assert.deepEqual(reencode(decoded), sample);
+  assert.equal(decoded.result.bindings[0].dirty, "9007199254740993");
+  assert.equal(decoded.result.bindings[0].synchronized, false);
+  assert.equal(decodeResponse(example("local-ipc.response.json")).result.bindings, undefined);
+  sample.result.bindings[0].dirty = 9007199254740993;
+  expectThrow(() => decodeResponse(sample));
 });
 
 check("response_error_example_decodes_to_sample", () => {

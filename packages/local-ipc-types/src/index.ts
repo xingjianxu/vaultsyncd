@@ -11,6 +11,7 @@ export {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   RESPONSE_KIND_VALUES,
+  decodeBindingStatus,
   decodeCommand,
   decodeCommandName,
   decodeErrorBody,
@@ -22,6 +23,7 @@ export {
   decodeResponseKind,
 } from "./generated/types";
 export type {
+  BindingStatus,
   Command,
   CommandName,
   ErrorBody,

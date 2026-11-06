@@ -38,4 +38,6 @@ name = "cfapi-prototype"
 path = "examples/cfapi_prototype.rs"
 
 [target.'cfg(windows)'.dependencies]
+vaultsyncd-local-ipc = { path = "../local-ipc" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
 windows = { version = "0.61", features = ["Foundation", "Storage", "Storage_Search", "Storage_Provider", "Storage_Streams", "Win32_System_WinRT"] }

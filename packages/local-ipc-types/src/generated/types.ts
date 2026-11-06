@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 1;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 0;
+export const PROTOCOL_MINOR = 1;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -48,11 +48,79 @@ function expect_boolean(value: unknown, what: string): boolean {
   return value;
 }
 
+function expect_array(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`期望 ${what} 是数组`);
+  }
+  return value;
+}
+
 function expect_number(value: unknown, what: string): number {
   if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new Error(`期望 ${what} 是整数`);
   }
   return value;
+}
+
+/** 运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；本卡不提供状态推送。 */
+export interface BindingStatus {
+  /** Binding 稳定身份。 */
+  binding_id: string;
+  /** Binding 已解除。 */
+  detached: boolean;
+  /** 未确认本地内容数量（十进制）。 */
+  dirty: string;
+  /** 接收与应用游标间隔（十进制）。 */
+  event_lag: string;
+  /** 失败队列数量（十进制）。 */
+  failed: string;
+  /** 开放本地意图数量（十进制）。 */
+  intents: string;
+  /** 完整驻留数量（十进制）。 */
+  materialized: string;
+  /** 仅元数据占位数量（十进制）。 */
+  metadata_only: string;
+  /** 模式补齐尚未完成。 */
+  mode_pending: boolean;
+  /** 断网任务数量（十进制）。 */
+  offline: string;
+  /** 部分驻留数量（十进制）。 */
+  partial: string;
+  /** Binding 已暂停。 */
+  paused: boolean;
+  /** 尚未完成队列数量（十进制），不等于 committed。 */
+  pending: string;
+  /** 未完成恢复数量（十进制）。 */
+  recovery: string;
+  /** 核心根据全部维度判定的完成事实；暂停单独展示。 */
+  synchronized: boolean;
+  /** 未完成传输数量（十进制）。 */
+  transfers: string;
+  /** 未核对内容或需重新协调数量（十进制）。 */
+  unknown: string;
+}
+
+export function decodeBindingStatus(value: unknown): BindingStatus {
+  const object = expect_object(value, "BindingStatus");
+  return {
+    binding_id: expect_string(object.binding_id, "BindingStatus.binding_id"),
+    detached: expect_boolean(object.detached, "BindingStatus.detached"),
+    dirty: expect_string(object.dirty, "BindingStatus.dirty"),
+    event_lag: expect_string(object.event_lag, "BindingStatus.event_lag"),
+    failed: expect_string(object.failed, "BindingStatus.failed"),
+    intents: expect_string(object.intents, "BindingStatus.intents"),
+    materialized: expect_string(object.materialized, "BindingStatus.materialized"),
+    metadata_only: expect_string(object.metadata_only, "BindingStatus.metadata_only"),
+    mode_pending: expect_boolean(object.mode_pending, "BindingStatus.mode_pending"),
+    offline: expect_string(object.offline, "BindingStatus.offline"),
+    partial: expect_string(object.partial, "BindingStatus.partial"),
+    paused: expect_boolean(object.paused, "BindingStatus.paused"),
+    pending: expect_string(object.pending, "BindingStatus.pending"),
+    recovery: expect_string(object.recovery, "BindingStatus.recovery"),
+    synchronized: expect_boolean(object.synchronized, "BindingStatus.synchronized"),
+    transfers: expect_string(object.transfers, "BindingStatus.transfers"),
+    unknown: expect_string(object.unknown, "BindingStatus.unknown"),
+  };
 }
 
 /** 命令负载：命令名加该命令自己的参数。当前唯一的 get_status 没有参数。 */
@@ -99,10 +167,12 @@ export function decodeErrorBody(value: unknown): ErrorBody {
   };
 }
 
-/** get_status 的结果：agent 身份与它当前支持的 IPC 协议版本。Binding、问题与状态快照等更细的状态字段随 design §15.5 其余命令在各自功能卡加入。 */
+/** get_status 的结果：agent 身份、IPC 协议与真实 Binding 多维状态。bindings 为 1.1 可选增量；旧处理器未接状态源时省略，不伪装成空快照。 */
 export interface GetStatusResult {
   /** agent 二进制版本（构建时确定的语义化版本文本），供界面与日志显示。 */
   agent_version: string;
+  /** 真实核心快照；应用入口始终返回该字段，读取失败则请求失败，不用空数组替代。 */
+  bindings?: Array<BindingStatus>;
   /** agent 当前支持的 IPC 协议版本。 */
   ipc_protocol: IpcVersion;
 }
@@ -111,6 +181,7 @@ export function decodeGetStatusResult(value: unknown): GetStatusResult {
   const object = expect_object(value, "GetStatusResult");
   return {
     agent_version: expect_string(object.agent_version, "GetStatusResult.agent_version"),
+    bindings: object.bindings === undefined ? undefined : expect_array(object.bindings, "GetStatusResult.bindings").map((item) => decodeBindingStatus(item)),
     ipc_protocol: decodeIpcVersion(object.ipc_protocol),
   };
 }

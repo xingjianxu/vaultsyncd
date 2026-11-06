@@ -393,12 +393,17 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
             remote,
         ));
     }
+    let ipc =
+        crate::ipc::start(db.clone(), live.iter().map(|(id, ..)| *id).collect()).map_err(error)?;
     eprintln!("event=recovery-complete bindings={}", live.len());
     let mut initialized = HashMap::new();
     let mut receivers = HashMap::new();
     loop {
         if shutdown.requested() {
             break;
+        }
+        if ipc.is_finished() {
+            return Err(error("IPC listener stopped unexpectedly"));
         }
         sink.persist()?;
         if sink.failed.load(Ordering::Acquire) {
@@ -488,6 +493,7 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
             .await
             .map_err(error)?;
     }
+    ipc.shutdown().await.map_err(error)?;
     drop(receivers);
     drop(live);
     db.pool().close().await;

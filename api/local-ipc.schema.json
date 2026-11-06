@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 1,
-      "minor": 0
+      "minor": 1
     },
     "frame": {
       "header_bytes": 4,
@@ -13,6 +13,30 @@
     }
   },
   "$defs": {
+    "BindingStatus": {
+      "type": "object",
+      "description": "运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；本卡不提供状态推送。",
+      "required": ["binding_id", "dirty", "metadata_only", "partial", "materialized", "pending", "failed", "offline", "transfers", "intents", "recovery", "event_lag", "mode_pending", "paused", "detached", "unknown", "synchronized"],
+      "properties": {
+        "binding_id": {"type": "string", "description": "Binding 稳定身份。"},
+        "dirty": {"type": "string", "description": "未确认本地内容数量（十进制）。"},
+        "metadata_only": {"type": "string", "description": "仅元数据占位数量（十进制）。"},
+        "partial": {"type": "string", "description": "部分驻留数量（十进制）。"},
+        "materialized": {"type": "string", "description": "完整驻留数量（十进制）。"},
+        "pending": {"type": "string", "description": "尚未完成队列数量（十进制），不等于 committed。"},
+        "failed": {"type": "string", "description": "失败队列数量（十进制）。"},
+        "offline": {"type": "string", "description": "断网任务数量（十进制）。"},
+        "transfers": {"type": "string", "description": "未完成传输数量（十进制）。"},
+        "intents": {"type": "string", "description": "开放本地意图数量（十进制）。"},
+        "recovery": {"type": "string", "description": "未完成恢复数量（十进制）。"},
+        "event_lag": {"type": "string", "description": "接收与应用游标间隔（十进制）。"},
+        "mode_pending": {"type": "boolean", "description": "模式补齐尚未完成。"},
+        "paused": {"type": "boolean", "description": "Binding 已暂停。"},
+        "detached": {"type": "boolean", "description": "Binding 已解除。"},
+        "unknown": {"type": "string", "description": "未核对内容或需重新协调数量（十进制）。"},
+        "synchronized": {"type": "boolean", "description": "核心根据全部维度判定的完成事实；暂停单独展示。"}
+      }
+    },
     "Command": {
       "type": "object",
       "description": "命令负载：命令名加该命令自己的参数。当前唯一的 get_status 没有参数。",
@@ -58,7 +82,7 @@
     },
     "GetStatusResult": {
       "type": "object",
-      "description": "get_status 的结果：agent 身份与它当前支持的 IPC 协议版本。Binding、问题与状态快照等更细的状态字段随 design §15.5 其余命令在各自功能卡加入。",
+      "description": "get_status 的结果：agent 身份、IPC 协议与真实 Binding 多维状态。bindings 为 1.1 可选增量；旧处理器未接状态源时省略，不伪装成空快照。",
       "required": [
         "agent_version",
         "ipc_protocol"
@@ -71,6 +95,11 @@
         "ipc_protocol": {
           "$ref": "#/$defs/IpcVersion",
           "description": "agent 当前支持的 IPC 协议版本。"
+        },
+        "bindings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/BindingStatus"},
+          "description": "真实核心快照；应用入口始终返回该字段，读取失败则请求失败，不用空数组替代。"
         }
       }
     },
