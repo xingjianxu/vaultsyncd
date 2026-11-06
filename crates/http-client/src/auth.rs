@@ -203,15 +203,16 @@ impl AuthSession {
     ///
     /// 返回新代际的快照，并通知保管端口。
     pub fn install(&self, credentials: Credentials) -> CredentialSnapshot {
-        let snapshot = {
+        let generation = {
             let mut state = self.write();
             state.generation = state.generation.saturating_add(1);
             state.reauth_required = false;
-            state.credentials = Some(credentials);
-            CredentialSnapshot {
-                credentials: state.credentials.clone().expect("刚刚写入的凭据必然存在"),
-                generation: state.generation,
-            }
+            state.credentials = Some(credentials.clone());
+            state.generation
+        };
+        let snapshot = CredentialSnapshot {
+            credentials,
+            generation,
         };
         if let Some(sink) = &self.sink {
             sink.credentials_stored(snapshot.credentials());

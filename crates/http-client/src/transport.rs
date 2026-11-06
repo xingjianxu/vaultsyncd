@@ -259,55 +259,78 @@ impl Transport for ReqwestTransport {
 
 /// 把 reqwest 的错误翻成本 crate 的类别；证书问题必须能和“连不上”分开。
 fn classify_reqwest_error(error: &reqwest::Error) -> TransportError {
-    if let Some(problem) = certificate_problem(error) {
-        return TransportError::new(TransportErrorKind::Certificate(problem), error.to_string());
-    }
-    let kind = if error.is_timeout() {
-        TransportErrorKind::Timeout
-    } else if error.is_connect() {
-        // 连接阶段里没有 rustls 证书错误：可能是 TLS 握手本身失败（版本、密码套件）。
-        if error.is_request() || error.is_body() {
-            TransportErrorKind::Connect
-        } else {
-            TransportErrorKind::Tls
-        }
-    } else if error.is_body() || error.is_decode() || error.is_request() {
-        TransportErrorKind::Protocol
-    } else {
-        TransportErrorKind::Io
-    };
+    let kind = transport_error_kind(error);
     TransportError::new(kind, error.to_string())
 }
 
-/// 在错误链里找 rustls 的证书判定结果。
+fn transport_error_kind(error: &reqwest::Error) -> TransportErrorKind {
+    if let Some(problem) = rustls_problem(error) {
+        return problem.into_transport_kind();
+    }
+    if error.is_timeout() {
+        TransportErrorKind::Timeout
+    } else if error.is_connect() {
+        TransportErrorKind::Connect
+    } else if error.is_body() || error.is_decode() {
+        TransportErrorKind::Protocol
+    } else {
+        TransportErrorKind::Io
+    }
+}
+
+/// 错误链里出现过的 rustls 判定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RustlsProblem {
+    /// 证书校验失败，附具体原因。
+    Certificate(CertificateProblem),
+    /// 其它 TLS 失败（握手、版本、密码套件等）。
+    Handshake,
+}
+
+impl RustlsProblem {
+    const fn into_transport_kind(self) -> TransportErrorKind {
+        match self {
+            Self::Certificate(problem) => TransportErrorKind::Certificate(problem),
+            Self::Handshake => TransportErrorKind::Tls,
+        }
+    }
+}
+
+/// 在错误链里找 rustls 的判定结果。
 ///
 /// rustls 的错误常被 `tokio-rustls` 逐层包进 `io::Error`，而 `io::Error::source()` 返回的是内部
 /// 错误自己的 source（通常是 `None`），所以除了沿 `source()` 走，还要递归看
 /// `io::Error::get_ref()`。
-fn certificate_problem(error: &reqwest::Error) -> Option<CertificateProblem> {
+fn rustls_problem(error: &reqwest::Error) -> Option<RustlsProblem> {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = source {
-        if let Some(problem) = find_certificate_error(current) {
-            return Some(certificate_problem_of(problem));
+        if let Some(problem) = find_rustls_problem(current) {
+            return Some(problem);
         }
         source = current.source();
     }
     None
 }
 
-fn find_certificate_error<'a>(
-    error: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a rustls::CertificateError> {
-    if let Some(rustls::Error::InvalidCertificate(problem)) = error.downcast_ref::<rustls::Error>()
-    {
-        return Some(problem);
+fn find_rustls_problem(error: &(dyn std::error::Error + 'static)) -> Option<RustlsProblem> {
+    if let Some(rustls_error) = error.downcast_ref::<rustls::Error>() {
+        return Some(classify_rustls_error(rustls_error));
     }
     if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
         if let Some(inner) = io_error.get_ref() {
-            return find_certificate_error(inner);
+            return find_rustls_problem(inner);
         }
     }
     None
+}
+
+fn classify_rustls_error(error: &rustls::Error) -> RustlsProblem {
+    match error {
+        rustls::Error::InvalidCertificate(problem) => {
+            RustlsProblem::Certificate(certificate_problem_of(problem))
+        }
+        _ => RustlsProblem::Handshake,
+    }
 }
 
 fn certificate_problem_of(error: &rustls::CertificateError) -> CertificateProblem {
@@ -490,6 +513,24 @@ mod tests {
             .with_trust(TlsTrust::system_roots_with_pem(b"not a pem".to_vec()));
         let error = ApiClient::new(config).expect_err("非法 PEM 必须报配置错误");
         assert_eq!(error.kind(), ConfigErrorKind::Tls);
+    }
+
+    #[test]
+    fn rustls_problems_are_classified_as_certificate_or_handshake() {
+        assert_eq!(
+            classify_rustls_error(&rustls::Error::InvalidCertificate(
+                rustls::CertificateError::Expired
+            )),
+            RustlsProblem::Certificate(CertificateProblem::Expired)
+        );
+        assert_eq!(
+            classify_rustls_error(&rustls::Error::NoCertificatesPresented),
+            RustlsProblem::Handshake
+        );
+        assert_eq!(
+            RustlsProblem::Handshake.into_transport_kind(),
+            TransportErrorKind::Tls
+        );
     }
 
     #[test]
