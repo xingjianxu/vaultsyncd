@@ -435,7 +435,8 @@ export async function subscribeEvents(options: ClientOptions, root: string, init
  * 403：Root 不在调用方授权范围
  * 409：同一 OpId 不同请求（`OP_ID_REUSED`），或条目基线/子树已过期（`BASE_MISMATCH`、
 `SUBTREE_CHANGED`、`RECONCILE_REQUIRED`）
- * 410：请求的服务器 epoch 已过期（`EPOCH_CHANGED`）
+ * 410：请求的服务器 epoch 已过期（`EPOCH_CHANGED`），或恢复所需的历史/回收站内容已过保留期
+（`VERSION_GONE`，不拿同路径的新内容冒充）
  * 422：名称不可用（`INVALID_NAME`）或条目种类不支持该命令（`UNSUPPORTED_ENTRY`）
  * 503：Root 当前不可写（`ROOT_UNAVAILABLE`）、存储需要恢复（`NEEDS_RECOVERY`），或本服务端尚未
 装配命令执行器（`SERVICE_NOT_READY`，请求未被受理）
