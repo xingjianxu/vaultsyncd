@@ -114,6 +114,7 @@ pub(crate) struct Importer {
     pub adapter: Arc<Mutex<Adapter>>,
     pub callbacks: Arc<HydrationCallbacks>,
     pub content: Arc<dyn VersionedContent>,
+    pub remote: Arc<crate::remote::Remote>,
 }
 impl Importer {
     pub(crate) fn adopt(&self, path: &str, fixed: &VersionPin) -> Result<(), PortError> {
@@ -258,6 +259,21 @@ impl ImportLocal for Importer {
                 return Err(error("binding mismatch"));
             }
             if request.remote.kind == EntryKind::Directory {
+                let intent = vaultsyncd_agent_core::ports::state::ActionIntent {
+                    op: request.op,
+                    binding: request.binding,
+                    kind: vaultsyncd_agent_core::ports::state::LocalWriteKind::Import,
+                    entry: Some(EntryId::from_hex(&request.remote.entry_id).map_err(error)?),
+                    target_path: request.path.clone(),
+                    source_path: None,
+                    content_hash: None,
+                    generation: Generation::ZERO,
+                };
+                let intent_id = vaultsyncd_agent_core::ports::state::IntentStore::begin_intent(
+                    &ClientStorePorts::new(self.local.db.clone()),
+                    &intent,
+                )
+                .await?;
                 let meta = self
                     .local
                     .root
@@ -266,6 +282,13 @@ impl ImportLocal for Importer {
                 let mut physical = meta.identity.volume.to_le_bytes().to_vec();
                 physical.extend(meta.identity.file);
                 let mut tx = self.local.db.begin_write().await.map_err(error)?;
+                entries::put_baseline(
+                    &mut tx,
+                    request.binding,
+                    &crate::work::baseline(&request.remote)?,
+                )
+                .await
+                .map_err(error)?;
                 entries::put_local(
                     &mut tx,
                     request.binding,
@@ -280,6 +303,9 @@ impl ImportLocal for Importer {
                 )
                 .await
                 .map_err(error)?;
+                vaultsyncd_client_store::intents::complete_intent(&mut tx, intent_id)
+                    .await
+                    .map_err(error)?;
                 tx.commit().await.map_err(error)?;
                 return Ok(Generation::ZERO);
             }
@@ -297,10 +323,17 @@ impl ImportLocal for Importer {
                     )
                     .await?;
                 self.adopt(&request.path.to_string(), &fixed)?;
-                self.local
+                if self
+                    .local
                     .native
-                    .acknowledge_publication(&request.op.to_string())
-                    .map_err(error)?;
+                    .publication_present(&request.op.to_string())
+                    .map_err(error)?
+                {
+                    self.local
+                        .native
+                        .acknowledge_publication(&request.op.to_string())
+                        .map_err(error)?;
+                }
                 return Ok(receipt.generation);
             }
             let id = Identity {
@@ -354,7 +387,7 @@ impl ImportLocal for Importer {
                 request.binding,
                 &LocalEntry {
                     entry: id.entry,
-                    generation: Generation::ZERO,
+                    generation: Generation::new(1).map_err(error)?,
                     dirty: Dirty::Clean,
                     residency: Residency::MetadataOnly,
                     fingerprint: Some(fixed.digest.to_vec()),
@@ -364,7 +397,7 @@ impl ImportLocal for Importer {
             .await
             .map_err(error)?;
             tx.commit().await.map_err(error)?;
-            Ok(Generation::ZERO)
+            Ok(Generation::new(1).map_err(error)?)
         })
     }
 }

@@ -398,6 +398,52 @@ impl Adapter {
         })
     }
 
+    /// Apply a committed deletion to a clean partial placeholder, with no content recall.
+    /// Fully cached contents use application quarantine instead; dirty and active mappings refuse.
+    pub fn remove_unmodified_placeholder(
+        &self,
+        path: &str,
+        expected: &EntryMetadata,
+    ) -> io::Result<()> {
+        self.root.with_parent(path, |_, _| {
+            let before = self.root.inspect(path)?;
+            check_expected(&before, expected)?;
+            let protected = crate::files::controlled::ProtectedFile::open(
+                &self.root.root_path().join(path.replace('/', "\\")),
+                true,
+            )?;
+            let lease = protected.lease()?;
+            let meta = metadata(lease.file())?;
+            check_expected(&meta, expected)?;
+            let cloud = meta
+                .cloud
+                .as_ref()
+                .ok_or_else(|| io::Error::other("not a placeholder"))?;
+            self.context
+                .catalog
+                .read()
+                .map_err(|_| io::Error::other("catalog poisoned"))?
+                .resolve(&cloud.identity)
+                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+            if cloud.modified != 0 || (meta.size > 0 && cloud.on_disk >= meta.size) {
+                return Err(io::Error::other("retained complete or modified cache"));
+            }
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn SetFileInformationByHandle(
+                    handle: Handle,
+                    class: i32,
+                    buffer: *const u8,
+                    length: u32,
+                ) -> i32;
+            }
+            if unsafe { SetFileInformationByHandle(lease.file().as_raw_handle(), 4, &1, 1) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })
+    }
+
     /// Update only an empty placeholder under the expected physical and logical identity.
     /// Hydrated/modified content is preserved for controlled application in S068.
     pub fn update(
@@ -637,7 +683,10 @@ pub(crate) fn register(path: &Path, catalog: &Catalog) -> io::Result<()> {
             modifier: 0,
         },
         population: CfPopulationPolicy {
-            primary: CF_POPULATION_POLICY_PARTIAL,
+            // Snapshot/event consumers maintain every directory name, including on-demand files.
+            // A missing-name open must return NOT_FOUND instead of waiting for an unimplemented
+            // FETCH_PLACEHOLDERS callback. File-range hydration remains independently partial.
+            primary: CF_POPULATION_POLICY_ALWAYS_FULL,
             modifier: 0,
         },
         in_sync: 0,

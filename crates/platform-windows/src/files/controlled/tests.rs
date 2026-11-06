@@ -175,6 +175,19 @@ fn native_protection_rejects_all_shared_writers_readers_and_mapping_after_file_c
     let lab = Lab::new();
     std::fs::write(lab.path(), b"original").unwrap();
     let before = lab.observe();
+    let logical = crate::cfapi::catalog::Identity {
+        binding: BindingId::from_bytes([0x73; 16]),
+        root: RootId::from_bytes([0x74; 16]),
+        entry: vaultsyncd_domain::ids::EntryId::from_bytes([0x75; 16]),
+        version: vaultsyncd_domain::ids::VersionId::from_bytes([0x76; 16]),
+    };
+    let mut adapter = Adapter::connect(
+        &lab.base.join("root"),
+        Catalog::new(logical.binding, logical.root),
+        Arc::new(MetadataOnly),
+    )
+    .unwrap();
+    let original_meta = adapter.inspect("a.txt").unwrap();
     for share in [0, 1, 7] {
         let writer = std::fs::OpenOptions::new()
             .read(true)
@@ -239,6 +252,13 @@ fn native_protection_rejects_all_shared_writers_readers_and_mapping_after_file_c
     assert!(!view.is_null());
     drop(writer);
     assert!(
+        adapter
+            .adopt_complete("a.txt", &original_meta, logical, digest(b"original"), 8)
+            .is_err(),
+        "live mapping must prevent adoption/in-sync even after file handle closes"
+    );
+    assert!(adapter.inspect("a.txt").unwrap().cloud.is_none());
+    assert!(
         lab.files.observe("a.txt").is_err(),
         "live writable section must refuse even after the creating file handle closes"
     );
@@ -259,6 +279,7 @@ fn native_protection_rejects_all_shared_writers_readers_and_mapping_after_file_c
             )
             .is_err()
     );
+    adapter.unregister().unwrap();
 }
 
 #[test]

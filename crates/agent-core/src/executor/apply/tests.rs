@@ -18,6 +18,8 @@ use vaultsyncd_domain::version::{Generation, Revision, ServerEpoch};
 use vaultsyncd_transfer::hash::{digest_of, to_hex};
 use vaultsyncd_transfer::ports::LocalErrorKind;
 
+#[path = "confirmation_tests.rs"]
+mod confirmation_tests;
 #[path = "consumer_tests.rs"]
 mod consumer_tests;
 
@@ -230,7 +232,7 @@ impl ControlledLocal for DiskLocal {
             if self.unknown {
                 return Err(io("根不可读：unknown"));
             }
-            let target = self.root.join("work").join(path);
+            let target = self.root.join("work").join(&path);
             let bytes = match fs::read(&target) {
                 Ok(bytes) => bytes,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -266,7 +268,7 @@ impl ControlledLocal for DiskLocal {
             persist(&stamp, &serde_json::to_vec(&(key, generation)).unwrap());
             Ok(ContentObservation::File {
                 facts: LocalFacts {
-                    path: RelativePath::parse("file.txt").unwrap(),
+                    path: RelativePath::parse(&path).unwrap(),
                     kind: LocalEntryKind::File,
                     generation: Generation::new(generation).unwrap(),
                     size: bytes.len() as u64,
@@ -470,20 +472,43 @@ fn recovery_child() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let db = Arc::new(Database::open(root.join("client.sqlite")).await.unwrap());
         let runner = ControlledApply::new(db.clone(), Arc::new(DiskLocal::new(&root)));
-        if std::env::var("S059_CHILD_MODE").as_deref() == Ok("apply") {
-            runner
-                .apply(
-                    &spec(&root),
-                    &Remote {
-                        path: root.join("server/version-two"),
-                        wrong: false,
-                    },
-                    &DiskTemp(root.join("stage/remote.part").to_str().unwrap().to_owned()),
-                    &ClientStorePorts::new(db.clone()),
-                    &DownloadOptions::new(5),
-                )
-                .await
-                .unwrap();
+        let mode = std::env::var("S059_CHILD_MODE").unwrap();
+        if mode == "apply" || mode == "confirmed" {
+            let spec = spec(&root);
+            let remote = Remote {
+                path: root.join("server/version-two"),
+                wrong: false,
+            };
+            let temp = DiskTemp(root.join("stage/remote.part").to_str().unwrap().to_owned());
+            let progress = ClientStorePorts::new(db.clone());
+            let options = DownloadOptions::new(5);
+            if mode == "confirmed" {
+                runner
+                    .apply_after_confirmed_copy(
+                        &spec,
+                        &remote,
+                        &temp,
+                        &progress,
+                        &options,
+                        confirmation_tests::copy_op(),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                runner
+                    .apply(
+                        &spec,
+                        &Remote {
+                            path: root.join("server/version-two"),
+                            wrong: false,
+                        },
+                        &DiskTemp(root.join("stage/remote.part").to_str().unwrap().to_owned()),
+                        &ClientStorePorts::new(db.clone()),
+                        &DownloadOptions::new(5),
+                    )
+                    .await
+                    .unwrap();
+            }
             if std::env::var("S059_CRASH").as_deref() == Ok("database") {
                 std::process::exit(83);
             }

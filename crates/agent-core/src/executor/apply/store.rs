@@ -90,9 +90,14 @@ pub(super) struct Journal {
     staged: String,
     local_before: Option<LocalState>,
     intent: i64,
+    #[serde(default)]
+    confirmed_copy: Option<[u8; 16]>,
     pub completed: bool,
 }
 impl Journal {
+    pub fn confirmed_copy(&self) -> Option<OpId> {
+        self.confirmed_copy.map(OpId::from_bytes)
+    }
     pub fn op(&self) -> OpId {
         OpId::from_bytes(self.op)
     }
@@ -175,22 +180,34 @@ impl ApplyStore {
             .map(|(text, completed)| decode(text, completed))
             .collect()
     }
-    pub async fn prepare(&self, spec: &ApplySpec, staged: String) -> Result<Journal, PortError> {
+    pub async fn prepare(
+        &self,
+        spec: &ApplySpec,
+        staged: String,
+        copy: Option<OpId>,
+    ) -> Result<Journal, PortError> {
         let mut tx = self.database.begin_write().await.map_err(db)?;
+        if let Some(copy) = copy {
+            verify_copy(&mut tx, spec, copy).await?;
+        }
         let local = entries::local_entry(&mut tx, spec.binding, spec.baseline_after.entry)
             .await
             .map_err(db)?;
         if let Some(local) = &local {
-            if local.dirty != Dirty::Clean
+            if (local.dirty != Dirty::Clean && copy.is_none())
                 || match &spec.expected {
                     ContentEvidence::Absent => true,
                     ContentEvidence::File {
                         generation,
                         identity,
+                        digest,
                         ..
                     } => {
                         local.generation.get() != *generation
                             || local.file_identity.as_ref() != Some(identity)
+                            || (copy.is_some()
+                                && (local.fingerprint.as_deref() != Some(digest.as_slice())
+                                    || local.residency != Residency::Materialized))
                     }
                 }
             {
@@ -230,6 +247,7 @@ impl ApplyStore {
             staged,
             local_before: local.map(LocalState::new),
             intent: intent.id,
+            confirmed_copy: copy.map(|id| *id.as_bytes()),
             completed: false,
         };
         check_tx(&mut tx, &journal).await?;
@@ -286,6 +304,9 @@ impl ApplyStore {
 
 async fn check_tx(tx: &mut Transaction<'_, Sqlite>, journal: &Journal) -> Result<(), PortError> {
     let spec = journal.spec()?;
+    if let Some(copy) = journal.confirmed_copy() {
+        verify_copy(tx, &spec, copy).await?;
+    }
     let base = entries::baseline_entry(tx, spec.binding, spec.baseline_after.entry)
         .await
         .map_err(db)?;
@@ -324,6 +345,31 @@ async fn check_tx(tx: &mut Transaction<'_, Sqlite>, journal: &Journal) -> Result
         {
             return Err(invalid("应用意图不匹配或已停止"));
         }
+    }
+    Ok(())
+}
+
+async fn verify_copy(
+    tx: &mut Transaction<'_, Sqlite>,
+    spec: &ApplySpec,
+    op: OpId,
+) -> Result<(), PortError> {
+    let row: Option<(String, bool)> =
+        sqlx::query_as("SELECT journal,completed FROM controlled_applies WHERE op_id=?")
+            .bind(op.as_bytes().as_slice())
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db)?;
+    let (text, completed) = row.ok_or_else(|| invalid("保留副本的已完成持久发布不存在"))?;
+    let copy = decode(text, completed)?;
+    let fixed = copy.spec()?;
+    if !completed
+        || op == spec.op
+        || fixed.binding != spec.binding
+        || fixed.baseline_after.entry == spec.baseline_after.entry
+        || !spec.expected.has_content(&fixed.pin.digest, fixed.pin.size)
+    {
+        return Err(invalid("保留副本的绑定、身份、固定版本或完整内容不匹配"));
     }
     Ok(())
 }

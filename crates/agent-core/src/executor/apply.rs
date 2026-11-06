@@ -161,10 +161,39 @@ impl ControlledApply {
         progress: &dyn DownloadProgressStore,
         options: &DownloadOptions,
     ) -> Result<ApplyReceipt, PortError> {
+        self.apply_inner(spec, content, temp, progress, options, None)
+            .await
+    }
+
+    /// Restore the server head only after a different entry's completed fixed-version publication
+    /// proves that the exact dirty source bytes were preserved. This never clears a newer generation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn apply_after_confirmed_copy(
+        &self,
+        spec: &ApplySpec,
+        content: &dyn VersionedContent,
+        temp: &dyn TempContent,
+        progress: &dyn DownloadProgressStore,
+        options: &DownloadOptions,
+        copy: OpId,
+    ) -> Result<ApplyReceipt, PortError> {
+        self.apply_inner(spec, content, temp, progress, options, Some(copy))
+            .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_inner(
+        &self,
+        spec: &ApplySpec,
+        content: &dyn VersionedContent,
+        temp: &dyn TempContent,
+        progress: &dyn DownloadProgressStore,
+        options: &DownloadOptions,
+        copy: Option<OpId>,
+    ) -> Result<ApplyReceipt, PortError> {
         recovery::resync::ensure_operation(&self.store.database, spec.binding, spec.op).await?;
         store::validate(spec)?;
         if let Some(journal) = self.store.load(spec.op).await? {
-            if journal.spec()? != *spec {
+            if journal.spec()? != *spec || journal.confirmed_copy() != copy {
                 return Err(PortError::rejected("OP_ID_REUSED", "应用操作输入已变化"));
             }
             return self.resume(journal).await;
@@ -179,7 +208,7 @@ impl ControlledApply {
                 download::DownloadError::Port(error) => error,
                 other => PortError::rejected("DOWNLOAD_FAILED", other.to_string()),
             })?;
-        let journal = self.store.prepare(spec, downloaded.temp_path).await?;
+        let journal = self.store.prepare(spec, downloaded.temp_path, copy).await?;
         self.resume(journal).await
     }
 
@@ -197,6 +226,17 @@ impl ControlledApply {
             results.push((op, self.resume(journal).await));
         }
         Ok(results)
+    }
+
+    /// Read the validated, fixed input of an existing publication, including completed ones.
+    /// Application consumers use this after an ACK/restart instead of rebuilding an old action
+    /// from a newer server snapshot or the already changed local baseline.
+    pub async fn specification(&self, op: OpId) -> Result<Option<ApplySpec>, PortError> {
+        self.store
+            .load(op)
+            .await?
+            .map(|journal| journal.spec())
+            .transpose()
     }
 
     async fn resume(&self, journal: Journal) -> Result<ApplyReceipt, PortError> {

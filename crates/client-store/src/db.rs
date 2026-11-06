@@ -1472,6 +1472,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_nine_upgrade_keeps_pending_work_backs_up_and_refuses_old_writer() {
+        let dir = TestDir::new("s070-upgrade-v9");
+        let path = dir.database();
+        let prior_dir = dir.path.join("version-nine");
+        std::fs::create_dir_all(&prior_dir).unwrap();
+        for migration in MIGRATOR.iter().filter(|m| m.version <= 9) {
+            std::fs::write(
+                prior_dir.join(format!(
+                    "{:04}_{}.sql",
+                    migration.version, migration.description
+                )),
+                migration.sql.as_bytes(),
+            )
+            .unwrap();
+        }
+        let previous = migrator(&prior_dir).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = crate::test_support::seed_binding(&old, 0x70).await;
+        sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES(?,?,23,'dirty','materialized')").bind(binding.as_bytes().as_slice()).bind([7u8;16].as_slice()).execute(old.pool()).await.unwrap();
+        sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind,attempts) VALUES(?,?,'upload_content',1)").bind([8u8;16].as_slice()).bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
+        old.close().await;
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT dirty FROM local_entries")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            "dirty"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT attempts FROM pending_ops")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(migration_backup_path(&path, 9, target_schema_version()).is_file());
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('agent_evidence','agent_versions','agent_actions')").fetch_one(upgraded.pool()).await.unwrap(),3);
+        upgraded.close().await;
+        assert!(
+            matches!(Database::open_with(&path,&previous).await.unwrap_err(),DbError::SchemaTooNew{found,supported:9} if found==target_schema_version())
+        );
+        assert_eq!(
+            scalar::<i64>(&path, "SELECT generation FROM local_entries").await,
+            23
+        );
+    }
+
+    #[tokio::test]
     async fn version_eight_upgrade_preserves_retry_cancellation_and_open_intent_before_release() {
         let dir = TestDir::new("s063-upgrade-v8");
         let path = dir.database();

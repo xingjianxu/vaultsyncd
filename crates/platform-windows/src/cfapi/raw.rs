@@ -418,7 +418,7 @@ pub const CF_OPERATION_TRANSFER_DATA_FLAG_NONE: u32 = 0x0000_0000;
 pub const CF_HYDRATION_POLICY_PARTIAL: u16 = 0;
 /// `CF_HYDRATION_POLICY_FULL`
 pub const CF_HYDRATION_POLICY_FULL: u16 = 2;
-/// `CF_POPULATION_POLICY_PARTIAL`（0）：目录不自动从提供方枚举，只用已存在的占位条目。
+/// `CF_POPULATION_POLICY_PARTIAL`（0）：不完整目录的访问可能要求提供方补齐名字。
 ///
 /// S011 实测：登记 `FULL`（2）时，**别的进程**按路径打开占位符会先要求目录填充
 /// （`FETCH_PLACEHOLDERS` 回调），而本原型不实现该回调，于是打开无限等待；`PARTIAL`
@@ -426,6 +426,8 @@ pub const CF_HYDRATION_POLICY_FULL: u16 = 2;
 pub const CF_POPULATION_POLICY_PARTIAL: u16 = 0;
 /// `CF_POPULATION_POLICY_FULL`
 pub const CF_POPULATION_POLICY_FULL: u16 = 2;
+/// `CF_POPULATION_POLICY_ALWAYS_FULL`（3）：应用维护完整名字空间，不请求 FETCH_PLACEHOLDERS。
+pub const CF_POPULATION_POLICY_ALWAYS_FULL: u16 = 3;
 /// `CF_INSYNC_POLICY_NONE`：不让系统自动把条目当 in-sync。
 pub const CF_INSYNC_POLICY_NONE: u32 = 0;
 /// `CF_HARDLINK_POLICY_NONE`
