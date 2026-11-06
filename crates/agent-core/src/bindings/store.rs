@@ -304,30 +304,47 @@ impl ImportStore {
         let item = journal.items.as_ref().ok_or_else(|| invalid("缺清单"))?[index].clone();
         if let Some(remote) = &item.remote {
             let base = baseline(remote)?;
+            if let Some(current) = entries::baseline_entry(&mut tx, binding.id, base.entry)
+                .await
+                .map_err(db)?
+            {
+                if current.revision > base.revision
+                    || (current.revision == base.revision && current != base)
+                {
+                    return Err(invalid("首次安装收尾不能倒退或改写已确认基线"));
+                }
+            }
             entries::put_baseline(&mut tx, binding.id, &base)
                 .await
                 .map_err(db)?;
             if let Some(generation) = installed {
-                entries::put_local(
-                    &mut tx,
-                    binding.id,
-                    &LocalEntry {
-                        entry: base.entry,
-                        generation,
-                        dirty: Dirty::Clean,
-                        residency: if binding.mode == bindings::SyncMode::OnDemand
-                            && remote.kind == WireKind::File
-                        {
-                            Residency::MetadataOnly
-                        } else {
-                            Residency::Materialized
+                // S059 已在发布事务保存摘要/身份；旧导入收尾不能清除发布后出现的新 dirty。
+                // 无已有行时保留 S058 其它平台安装端口的兼容路径（未知指纹仍不授权覆盖）。
+                let existing = entries::local_entry(&mut tx, binding.id, base.entry)
+                    .await
+                    .map_err(db)?;
+                if existing.is_none() {
+                    entries::put_local(
+                        &mut tx,
+                        binding.id,
+                        &LocalEntry {
+                            entry: base.entry,
+                            generation,
+                            dirty: Dirty::Clean,
+                            residency: if binding.mode == bindings::SyncMode::OnDemand
+                                && remote.kind == WireKind::File
+                            {
+                                Residency::MetadataOnly
+                            } else {
+                                Residency::Materialized
+                            },
+                            fingerprint: None,
+                            file_identity: None,
                         },
-                        fingerprint: None,
-                        file_identity: None,
-                    },
-                )
-                .await
-                .map_err(db)?;
+                    )
+                    .await
+                    .map_err(db)?;
+                }
             } else if !item.upload {
                 let temporary = entry_id(
                     item.temporary

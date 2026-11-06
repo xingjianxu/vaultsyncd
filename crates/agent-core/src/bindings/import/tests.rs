@@ -1249,3 +1249,63 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
     malformed_root.version_id = Some(EntryId::from_bytes([0x99; 16]).to_string());
     assert!(remote_paths(&[malformed_root]).is_err());
 }
+
+#[tokio::test]
+async fn install_checkpoint_preserves_controlled_apply_proof_and_newer_dirty_generation() {
+    for dirty in [Dirty::Clean, Dirty::Dirty, Dirty::AwaitingCommit] {
+        let dir = TestDir::new();
+        let database = setup(&dir.0).await;
+        let import = runner(
+            database.clone(),
+            Arc::new(DiskLocal::new(&dir.0, "")),
+            Arc::new(DiskRemote {
+                base: dir.0.clone(),
+                fault: String::new(),
+            }),
+        );
+        import.run(BINDING, &mut Ids(0), 0).await.expect("持久清单");
+        let mut journal = import.store.load(BINDING).await.unwrap().unwrap();
+        let index = journal
+            .items
+            .as_ref()
+            .unwrap()
+            .iter()
+            .position(|item| item.path == "z-remote.txt")
+            .unwrap();
+        let remote = journal.items.as_ref().unwrap()[index]
+            .remote
+            .clone()
+            .unwrap();
+        let base = baseline(&remote).unwrap();
+        let row = LocalEntry {
+            entry: base.entry,
+            generation: generation(if dirty == Dirty::Clean { 1 } else { 2 }).unwrap(),
+            dirty,
+            residency: Residency::Materialized,
+            fingerprint: Some(vec![0x59; 32]),
+            file_identity: Some(vec![0x23; 16]),
+        };
+        let mut tx = database.begin_write().await.unwrap();
+        entries::put_baseline(&mut tx, BINDING, &base)
+            .await
+            .unwrap();
+        entries::put_local(&mut tx, BINDING, &row).await.unwrap();
+        tx.commit().await.unwrap();
+        let binding = import.store.binding(BINDING).await.unwrap();
+        import
+            .store
+            .finish_item(&binding, &mut journal, index, Some(generation(1).unwrap()))
+            .await
+            .unwrap();
+        let mut conn = database.pool().acquire().await.unwrap();
+        assert_eq!(
+            entries::local_entry(&mut conn, BINDING, base.entry)
+                .await
+                .unwrap(),
+            Some(row)
+        );
+        drop(conn);
+        drop(import);
+        Arc::try_unwrap(database).unwrap().close().await;
+    }
+}
