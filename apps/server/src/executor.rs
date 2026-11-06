@@ -91,17 +91,23 @@ pub struct ExecutorContext {
     state_dir: PathBuf,
     roots: Mutex<HashMap<RootId, Arc<RootHandle>>>,
     gate: tokio::sync::Mutex<RootCommitGate>,
+    observer: Option<Arc<crate::external::ObserverRuntime>>,
 }
 
 impl ExecutorContext {
     /// 以数据库与状态目录装配；Root 句柄按需打开并缓存（注册时已经通过存储准入）。
     #[must_use]
-    pub fn new(database: Database, state_dir: &Path) -> Self {
+    pub fn new(
+        database: Database,
+        state_dir: &Path,
+        observer: Option<Arc<crate::external::ObserverRuntime>>,
+    ) -> Self {
         Self {
             database,
             state_dir: state_dir.to_path_buf(),
             roots: Mutex::new(HashMap::new()),
             gate: tokio::sync::Mutex::new(RootCommitGate::new()),
+            observer,
         }
     }
 
@@ -138,6 +144,7 @@ impl ExecutorContext {
         &self,
         owner: UserId,
         key: store_operations::OperationKey,
+        digest: store_operations::RequestDigest,
         command: &PutCommand,
         at: UtcTimestamp,
     ) -> Result<CommittedPut, OperationFailure> {
@@ -181,8 +188,8 @@ impl ExecutorContext {
                 detail: "Root 根条目不能承载内容".to_owned(),
             })?;
 
-        // 2. 先登记 pending 操作行：后续任何失败都基于这一行给出稳定结论。
-        let digest = operation_digest(command)?;
+        // 2. 先登记 pending 操作行：后续任何失败都基于这一行给出稳定结论。摘要必须与端点用来
+        //    判定重放的是同一份（否则同一请求的重试会变成 OP_ID_REUSED）。
         let began = {
             let mut tx = self.begin_write().await?;
             let began = store_operations::begin_operation(
@@ -271,7 +278,20 @@ impl ExecutorContext {
         drop(gate);
 
         match outcome {
-            Ok(committed) => Ok(committed),
+            Ok(committed) => {
+                // 发布是本服务自己做的：登记自写意图，避免观察器把这次发布再采纳成外部修改。
+                if let Some(observer) = self.observer.as_ref() {
+                    observer
+                        .expect_own_write(
+                            key.root,
+                            &path,
+                            committed.target.identity,
+                            command.content,
+                        )
+                        .await;
+                }
+                Ok(committed)
+            }
             Err(failure) => {
                 let mapped = map_put_failure(&failure);
                 self.reject(owner, key, &mapped).await;
@@ -317,30 +337,6 @@ impl ExecutorContext {
             .await
             .map_err(|error: DbError| storage_error(&error.to_string()))
     }
-}
-
-fn operation_digest(
-    command: &PutCommand,
-) -> Result<store_operations::RequestDigest, OperationFailure> {
-    let entry = command.entry.to_hex();
-    let digest = command.content.digest.to_hex();
-    let size = command.content.bytes.to_string();
-    let revision = command.base_revision.to_string();
-    let epoch = command.expected_epoch.to_string();
-    let generation = command
-        .local_generation
-        .map(|value| value.to_string())
-        .unwrap_or_default();
-    let fields: Vec<(&str, &[u8])> = vec![
-        ("kind", b"put_content"),
-        ("entry_id", entry.as_bytes()),
-        ("base_revision", revision.as_bytes()),
-        ("server_epoch", epoch.as_bytes()),
-        ("hash", digest.as_bytes()),
-        ("size", size.as_bytes()),
-        ("local_generation", generation.as_bytes()),
-    ];
-    store_operations::request_digest(&fields).map_err(|error| storage_error(&error.to_string()))
 }
 
 fn baseline_of(
@@ -649,6 +645,23 @@ impl IntentLog for SqlIntentLog {
     }
 }
 
+/// 目标文件的父目录句柄：Root 自身直接复用已核对的根句柄，子目录另开受限句柄。
+enum ParentDir<'a> {
+    Root(&'a RestrictedDir),
+    Child(RestrictedDir),
+}
+
+impl std::ops::Deref for ParentDir<'_> {
+    type Target = RestrictedDir;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            ParentDir::Root(dir) => dir,
+            ParentDir::Child(dir) => dir,
+        }
+    }
+}
+
 /// Root 工作目录的 `TargetPort` 实现。
 pub struct WorkTreeTarget {
     root: Arc<RootHandle>,
@@ -668,7 +681,7 @@ impl WorkTreeTarget {
         }
     }
 
-    fn parent_and_name(&self, target_path: &str) -> Result<(RestrictedDir, PathBuf), TargetError> {
+    fn parent_and_name(&self, target_path: &str) -> Result<(ParentDir<'_>, PathBuf), TargetError> {
         let path = Path::new(target_path);
         let name: PathBuf = path
             .file_name()
@@ -678,11 +691,14 @@ impl WorkTreeTarget {
             .into();
         let parent = path.parent().unwrap_or_else(|| Path::new(""));
         let dir = if parent.as_os_str().is_empty() {
-            RestrictedDir::open(&self.root.proc_fd_path(), ResolveMode::Auto)
+            ParentDir::Root(self.root.root_dir())
         } else {
-            self.root.open_dir(parent)
-        }
-        .map_err(|error| unreadable(&error))?;
+            ParentDir::Child(
+                self.root
+                    .open_dir(parent)
+                    .map_err(|error| unreadable(&error))?,
+            )
+        };
         Ok((dir, name))
     }
 }

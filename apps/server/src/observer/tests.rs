@@ -4,7 +4,7 @@ use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, TxId, VersionId};
@@ -234,7 +234,7 @@ struct Env {
 
 impl Env {
     fn new(lab: &Lab) -> Self {
-        let root = Rc::new(RootHandle::open(&lab.root_dir, ResolveMode::Auto).expect("打开 Root"));
+        let root = Arc::new(RootHandle::open(&lab.root_dir, ResolveMode::Auto).expect("打开 Root"));
         let root_id = RootId::from_bytes(marker_id(0x11));
         Env {
             work: LinuxWorkTree::new(root.clone()),

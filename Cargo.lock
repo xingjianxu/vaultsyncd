@@ -2566,9 +2566,17 @@ dependencies = [
 name = "vaultsyncd-server-tests"
 version = "0.1.0"
 dependencies = [
+ "rand_core 0.6.4",
+ "reqwest",
+ "serde_json",
+ "sqlx",
  "tokio",
  "vaultsyncd-domain",
+ "vaultsyncd-platform-linux-server",
+ "vaultsyncd-protocol",
+ "vaultsyncd-server",
  "vaultsyncd-server-core",
+ "vaultsyncd-server-store",
 ]
 
 [[package]]

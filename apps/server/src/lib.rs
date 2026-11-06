@@ -19,6 +19,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod content;
 pub mod executor;
+pub mod external;
 pub mod http;
 pub mod lifecycle;
 pub mod logging;
