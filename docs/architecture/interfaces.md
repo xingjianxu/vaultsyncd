@@ -2421,3 +2421,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 在恢复GC前安装24小时backup lease，当前按Root保守保护（包含后来新增对象，允许延后回收）。对象复制使用stage_copy（FICLONE/校验复制），复核摘要/大小、独立inode和刷盘；清单列出DB/配置摘要、schema/protocol契约版本/摘要、ServerId、原Root映射、逻辑表计数与全部对象。外部尚未采集的工作目录变化明确excluded。
 - `recover_incomplete(database,state_dir,now)` 在bootstrap独占状态锁后调用，只清持久preparing/failed未收尾ID、释放对应租约并留失败原因；ready不在此清理范围。没有遗留时不要求启用备份后端。S088负责管理命令/HTTP、导出/verify/release，不得绕过当前准备视图或把ready映射为complete。
 - 原生验收入口 `cargo run -p vaultsyncd-server --example backup-prepare-native -- <独立测试卷内尚不存在的run目录>`；测试不在服务中提权。S087独立target四包与集成共609/0，Windows MSVC core/store all-targets检查通过；实际btrfs持续写218次时固定seq2，历史/回收站/哈希/ro/租约、缺对象拒绝、嵌套拒绝、SIGKILL恢复与pending保护均通过。运维条件见 `docs/operations/backup.md`。
+
+## S082 文件清单与桌面手动管理
+
+- 本机IPC **1.3**新增`list_files(binding_id,cursor?)`，1.2调用该命令明确UnsupportedVersion，其余既有命令保持兼容。schema唯一源生成Rust/TS `FileStatus`及`ManagementResult.files`；CLI提供`files --binding-id ID [--cursor ID]`，缺结果不是空成功。共享样本`api/examples/local-ipc.files.json`验证pending/dirty和六维信息不丢失，错误布尔值/缺维度两端拒绝。
+- `agent::management_listing::list`只经实际安全扫描与客户端持久状态读模型投影，复用domain `EntryState::project`。涵盖驻留、dirty、远端应用、任务、保护忙/未知、调度离线/Root不可用；online仅表示当前无已记录离线事实，不承诺网络连通。未知/未导入文件无entry_id，不能执行远端动作。扫描或挂载故障不作删除；缺完整内容凭据、物理修改、忙、待办、full或门禁阻塞均禁止UI释放。提示不是授权，S069执行器仍重核真实身份/完整hash/代际/版本租约与句柄。
+- 每页最多100项，排序/游标为相对路径SHA256前16字节的规范hex，碰撞明确失败；返回next_cursor续读。实时分页不承诺跨页一致快照，刷新回第一页，界面搜索明确仅当前页。未读/失败不显示伪造空清单；旧页保留但动作禁用，慢响应不覆盖另一绑定页。
+- 桌面固定桥增加`agent_list_files/agent_download_entry/agent_release_entry/agent_list_problems/agent_retry_problem/agent_set_mode/agent_detach_binding/agent_export_recovery`，AppManifest和主窗口capability逐项授权，无通用任意命令/文件/SQL入口。副作用OpId在失败后保留供同动作重试。释放必须确认本地移除/远端保留/离线不可读；绑定管理提供模式、恢复导出和保留数据解绑的独立确认，完成只认agent返回的实际计数/报告。问题重试仅对agent标记retryable项目启用，仍调用既有执行器。
+- `run-native-files-ui.sh`在真Windows WebView操作页面，用只编译于native-acceptance的固定样本句柄/写入控制验证busy/dirty双重保护。实际下载、释放/重新下载、模式、pending不绿、导出dirty/未导入新文件hash、解绑后服务器原字节与本地数据均保留已验证。正式无测试feature构建清理两项测试自动权限，包含测试fixture/控制命令的二进制拒绝作为正式证据。VM保持在线，测试服务/隧道与本run进程清理。

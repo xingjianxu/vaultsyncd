@@ -50,7 +50,10 @@ pub(crate) async fn exchange(
         .result
         .ok_or_else(|| BridgeError::local("agent 状态应答无效。"))
 }
-async fn manage(name: C, parameters: Option<P>) -> Result<ManagementResult, BridgeError> {
+pub(crate) async fn manage(
+    name: C,
+    parameters: Option<P>,
+) -> Result<ManagementResult, BridgeError> {
     exchange(name, parameters)
         .await?
         .management

@@ -45,6 +45,7 @@ const USAGE: &str = "\
   logout
   roots                          列出已授权 Root
   bindings                       列出持久 Binding
+  files --binding-id <ID> [--cursor <ID>]  读取文件状态当前页
   create-binding --binding-id <ID> --root-id <ID> --local-path <目录>
                  --cache-path <目录> --mode <full|on_demand>
   pause --binding-id <ID>
@@ -338,6 +339,18 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
         "logout" => no_options(rest, CommandName::Logout)?,
         "roots" => no_options(rest, CommandName::ListRoots)?,
         "bindings" => no_options(rest, CommandName::ListBindings)?,
+        "files" => {
+            let opts = parse_options(rest, &["--binding-id", "--cursor"])?;
+            (
+                CommandName::ListFiles,
+                Some(CommandParameters {
+                    binding_id: Some(required(&opts, "--binding-id")?),
+                    cursor: optional(&opts, "--cursor"),
+                    ..Default::default()
+                }),
+                None,
+            )
+        }
         "create-binding" => {
             let opts = parse_options(
                 rest,
@@ -585,6 +598,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::Login => "login",
         CommandName::Logout => "logout",
         CommandName::ListRoots => "roots",
+        CommandName::ListFiles => "files",
         CommandName::SetMode => "mode",
         CommandName::ListHistory => "history",
         CommandName::ListTrash => "trash",
@@ -602,6 +616,10 @@ fn validate_result(name: CommandName, result: &GetStatusResult) -> Result<(), Fa
             .and_then(|m| m.bindings.as_ref())
             .is_none()
             .then_some("Binding 列表"),
+        CommandName::ListFiles => management
+            .and_then(|m| m.files.as_ref())
+            .is_none()
+            .then_some("文件列表"),
         CommandName::ListProblems => management
             .and_then(|m| m.problems.as_ref())
             .is_none()
@@ -655,6 +673,14 @@ fn render_success(json: bool, name: CommandName, result: &GetStatusResult) {
         println!("ok {label}");
         return;
     };
+    if let Some(files) = &management.files {
+        for row in files {
+            println!(
+                "{}：{}，驻留={}，未确认={}，待办={}；{}",
+                row.path, row.status, row.residency, row.dirty, row.pending, row.release_reason
+            );
+        }
+    }
     if let Some(connection) = management.connection.as_ref() {
         println!(
             "连接：server={} url={} 登录={}",

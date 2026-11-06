@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 1,
-      "minor": 2
+      "minor": 3
     },
     "frame": {
       "header_bytes": 4,
@@ -79,7 +79,7 @@
     "CommandName": {
       "type": "string",
       "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
-      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry"]
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files"]
     },
     "ErrorBody": {
       "type": "object",
@@ -127,6 +127,25 @@
         },
         "snapshot_version": {"type":"string","description":"进程唯一身份加单调计数；不同进程的版本不可比较。丢失订阅后 get_status 始终返回全量。"},
         "management": {"$ref":"#/$defs/ManagementResult","description":"1.2 管理命令的类型化结果。"}
+      }
+    },
+    "FileStatus": {
+      "type":"object", "description":"agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。",
+      "required":["path","status","residency","dirty","busy","pending","synchronized","release_allowed","release_reason","availability","remote_apply","transfer"],
+      "properties":{
+        "entry_id":{"type":"string","description":"已确认基线身份；本地未导入文件省略。"},
+        "path":{"type":"string","description":"核对后的相对路径。"},
+        "status":{"type":"string","description":"domain EntryState::project结果。"},
+        "availability":{"type":"string","description":"online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。"},
+        "remote_apply":{"type":"string","description":"current/pending/blocked_by_local/conflicted。"},
+        "transfer":{"type":"string","description":"idle/queued/running/retry_wait/failed。"},
+        "residency":{"type":"string","description":"metadata_only/partial/materialized/unknown，不猜测完整驻留。"},
+        "dirty":{"type":"boolean","description":"持久未确认状态或物理修改证据。"},
+        "busy":{"type":"boolean","description":"无法取得当前保护句柄；不保证此后一直空闲。"},
+        "pending":{"type":"boolean","description":"存在相关未完成动作/事件，绝不表示committed。"},
+        "synchronized":{"type":"boolean","description":"基线已确认且没有本地待办；不表示备份。"},
+        "release_allowed":{"type":"boolean","description":"当前UI可提示释放；后端仍重核。"},
+        "release_reason":{"type":"string","description":"释放禁用原因或影响提示。"}
       }
     },
     "BindingInfo": {
@@ -185,6 +204,7 @@
       "type":"object","description":"每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。",
       "properties":{
         "bindings":{"type":"array","items":{"$ref":"#/$defs/BindingInfo"},"description":"持久绑定列表。"},
+        "files":{"type":"array","items":{"$ref":"#/$defs/FileStatus"},"description":"list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。"},
         "problems":{"type":"array","items":{"$ref":"#/$defs/Problem"},"description":"持久问题列表。"},
         "connection":{"$ref":"#/$defs/ConnectionInfo","description":"连接事实。"},
         "items":{"type":"array","items":{"$ref":"#/$defs/RemoteItem"},"description":"远端授权 Root/历史/回收站列表。"},

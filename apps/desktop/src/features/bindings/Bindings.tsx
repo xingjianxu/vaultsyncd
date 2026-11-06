@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Button, Table } from "@vaultsyncd/ui";
 import type { BindingInfo, BindingStatus, RemoteItem } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
+import { BindingActions } from "./BindingActions";
 
 export function Bindings({ agent, bindings, states, read, changed, run, busy }: {
   agent: AgentClient; bindings?: BindingInfo[]; states?: BindingStatus[]; read: boolean;
@@ -9,6 +10,7 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
 }) {
   const [roots, setRoots] = useState<RemoteItem[]>();
   const [notice, setNotice] = useState("");
+  const [managing,setManaging]=useState<string>();
   function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     const rootId = String(form.get("root_id")); const localPath = String(form.get("local_path"));
@@ -42,8 +44,9 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
         { key: "path", title: "本地目录", render: row => row.local_path },
         { key: "mode", title: "模式", render: row => row.mode === "full" ? "完整同步" : "按需下载" },
         { key: "state", title: "状态与合并进度", render: state },
-        { key: "controls", title: "操作", render: row => <Button disabled={busy || row.detached} onClick={() => run(async () => { await (row.paused ? agent.resumeBinding(row.binding_id) : agent.pauseBinding(row.binding_id)); await changed(); })}>{row.paused ? "恢复" : "暂停"}</Button> },
+        { key: "controls", title: "操作", render: row => <><Button disabled={busy || row.detached} onClick={() => run(async () => { await (row.paused ? agent.resumeBinding(row.binding_id) : agent.pauseBinding(row.binding_id)); await changed(); })}>{row.paused ? "恢复" : "暂停"}</Button><Button disabled={busy} onClick={()=>setManaging(row.binding_id)}>管理与恢复</Button></> },
       ]} />
     <p>状态每两秒重新读取；请求失败会保留上次快照并明确显示未连接。</p>
+    {bindings?.filter(b=>b.binding_id===managing).map(binding=><BindingActions key={binding.binding_id} agent={agent} binding={binding} status={states?.find(s=>s.binding_id===binding.binding_id)} changed={changed} run={run} busy={busy} />)}
   </>;
 }

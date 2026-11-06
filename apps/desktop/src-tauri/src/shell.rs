@@ -1,4 +1,5 @@
 use crate::commands::*;
+use crate::file_commands::*;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 // Compiled only for the native acceptance binary; no test report command in production.
@@ -15,10 +16,62 @@ fn acceptance_report(app: tauri::AppHandle, report: serde_json::Value) -> Result
     Ok(())
 }
 
+#[cfg(feature = "native-acceptance")]
+#[tauri::command]
+fn acceptance_file_control(action: String) -> Result<(), String> {
+    use std::{
+        fs::OpenOptions,
+        os::windows::fs::OpenOptionsExt,
+        sync::{Mutex, OnceLock},
+    };
+    static HELD: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
+    let fixture = std::env::var_os("VAULTSYNCD_S082_FIXTURE").ok_or("missing fixture")?;
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture).map_err(|_| "fixture read")?)
+            .map_err(|_| "fixture decode")?;
+    let path = std::path::PathBuf::from(
+        fixture["localPath"]
+            .as_str()
+            .ok_or("missing test local path")?,
+    );
+    let mut held = HELD
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "test lock")?;
+    match action.as_str() {
+        "hold" => {
+            *held = Some(
+                OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(path.join("server-seed.txt"))
+                    .map_err(|_| "test exclusive open")?,
+            )
+        }
+        "unhold" => *held = None,
+        "dirty" => {
+            std::fs::write(path.join("local-only.txt"), b"S082-unconfirmed-local")
+                .map_err(|_| "test dirty write")?;
+            std::fs::write(path.join("pending-only.txt"), b"S082-pending-local")
+                .map_err(|_| "test pending write")?;
+        }
+        _ => return Err("unknown test action".into()),
+    }
+    Ok(())
+}
+
 pub(super) fn run() {
     let builder = tauri::Builder::default();
     #[cfg(not(feature = "native-acceptance"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        agent_list_files,
+        agent_download_entry,
+        agent_release_entry,
+        agent_list_problems,
+        agent_retry_problem,
+        agent_set_mode,
+        agent_detach_binding,
+        agent_export_recovery,
         agent_get_status,
         agent_set_connection,
         agent_login,
@@ -30,6 +83,14 @@ pub(super) fn run() {
     ]);
     #[cfg(feature = "native-acceptance")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        agent_list_files,
+        agent_download_entry,
+        agent_release_entry,
+        agent_list_problems,
+        agent_retry_problem,
+        agent_set_mode,
+        agent_detach_binding,
+        agent_export_recovery,
         agent_get_status,
         agent_set_connection,
         agent_login,
@@ -38,12 +99,13 @@ pub(super) fn run() {
         agent_create_binding,
         agent_pause_binding,
         agent_resume_binding,
-        acceptance_report
+        acceptance_report,
+        acceptance_file_control
     ]);
     builder
         .setup(|app| {
             #[cfg(feature = "native-acceptance")]
-            app.add_capability(r#"{"identifier":"native-acceptance","windows":["main"],"permissions":["allow-acceptance-report"]}"#)?;
+            app.add_capability(r#"{"identifier":"native-acceptance","windows":["main"],"permissions":["allow-acceptance-report","allow-acceptance-file-control"]}"#)?;
             let window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("vaultsyncd")
@@ -53,7 +115,11 @@ pub(super) fn run() {
                             || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
                     });
             #[cfg(feature = "native-acceptance")]
-            let window = if let Some(fixture) = std::env::var_os("VAULTSYNCD_S081_FIXTURE") {
+            let window = if let Some(fixture) = std::env::var_os("VAULTSYNCD_S082_FIXTURE") {
+                let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
+                window.initialization_script(format!("window.__S082_FIXTURE__ = {fixture};"))
+                    .initialization_script(include_str!("../../../../tests/platform/windows/s082-webview.js"))
+            } else if let Some(fixture) = std::env::var_os("VAULTSYNCD_S081_FIXTURE") {
                 let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
                 window.initialization_script(format!("window.__S081_FIXTURE__ = {fixture};"))
                     .initialization_script(include_str!("../../../../tests/platform/windows/s081-webview.js"))

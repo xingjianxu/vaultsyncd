@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 1;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 2;
+pub const PROTOCOL_MINOR: u32 = 3;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -161,6 +161,9 @@ pub enum CommandName {
     /// 取值 `restore_entry`。
     #[serde(rename = "restore_entry")]
     RestoreEntry,
+    /// 取值 `list_files`。
+    #[serde(rename = "list_files")]
+    ListFiles,
 }
 
 /// 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。
@@ -292,6 +295,39 @@ pub struct ErrorBody {
     pub retryable: bool,
 }
 
+/// agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct FileStatus {
+    /// online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。
+    pub availability: String,
+    /// 无法取得当前保护句柄；不保证此后一直空闲。
+    pub busy: bool,
+    /// 持久未确认状态或物理修改证据。
+    pub dirty: bool,
+    /// 已确认基线身份；本地未导入文件省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 核对后的相对路径。
+    pub path: String,
+    /// 存在相关未完成动作/事件，绝不表示committed。
+    pub pending: bool,
+    /// 当前UI可提示释放；后端仍重核。
+    pub release_allowed: bool,
+    /// 释放禁用原因或影响提示。
+    pub release_reason: String,
+    /// current/pending/blocked_by_local/conflicted。
+    pub remote_apply: String,
+    /// metadata_only/partial/materialized/unknown，不猜测完整驻留。
+    pub residency: String,
+    /// domain EntryState::project结果。
+    pub status: String,
+    /// 基线已确认且没有本地待办；不表示备份。
+    pub synchronized: bool,
+    /// idle/queued/running/retry_wait/failed。
+    pub transfer: String,
+}
+
 /// get_status 的结果：agent 身份、IPC 协议与真实 Binding 多维状态。bindings 为 1.1 可选增量；旧处理器未接状态源时省略，不伪装成空快照。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct GetStatusResult {
@@ -366,6 +402,10 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exported_files: Option<String>,
+    /// list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<FileStatus>>,
     /// 解绑后不保证离线可读的条目。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
