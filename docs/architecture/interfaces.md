@@ -2359,3 +2359,10 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `AuthContext.account_gate` 在进程状态锁的单服务约束下串行登录、刷新、改密和全部撤销，防止旧密码已核验但晚于撤销再签发会话。`server-core::auth::manage` 仅做密码规则，`server-store::sessions::{change_password,revoke_all}` 负责原子存储，不新增 schema。
 - Web `BrowserAuth` 只用同源 credentials/no-store 请求；受保护调用复用 `request`，401 并发单飞刷新一次，重复 401 回登录，网络失败保留可重试错误。账号页面可登录、改密、退出、撤销全部；不使用 localStorage，不读 cookie 凭据。
 - Vite 仅回环监听、禁用 CORS，`VAULTSYNCD_DEV_API` 只接受无凭据/路径的本机 HTTP(S) 地址，保留原 Host 让后端校验浏览器 Origin。浏览器验收使用锁定 `nix develop .#web-tests` 的 Playwright Chromium；HTTP localhost 专用测试不代表 S097 生产 HTTPS 已部署。
+
+## S078 owner Root 健康与采集页面
+
+- `GET /v1/admin/roots -> ManagedRootList{allowed_bases,roots}`：仅唯一 active owner，`Cache-Control:no-store`。普通 `GET /v1/roots` 保持无路径；注册也验证同一管理边界。未登录401、非唯一owner403、读取失败503，不返回假空清单。
+- `ManagedRoot{root_id,path,health,reason,next_step,root_seq,collection}`：每次请求按注册 `RootSnapshot` 现场复核挂载/身份/权限，失败 health=unavailable、collection=blocked，绝不推导删除；root_seq仅已提交序号。路径仅在该管理通道暴露。
+- `RootCollection{state,examined,pending,detail}` 来自同一 `ObserverRuntime` 的最近真实 `PassReport`；状态闭集 not_scanned/scanning/pending/complete/blocked，数量为十进制字符串。进程重启后无历史完成观测；只有完整扫描、初始采集完成、无pending/扫描故障才显示complete，不代表客户端同步。Root读取/意图读取/扫描失败会使旧完成状态失效。
+- `AllowedBases::paths()` 仅供管理员配置枚举；`RootContext::with_observer` 由入口装配。Web `RootsPanel` 使用生成API与BrowserAuth；显式刷新，注册不自动重放，网络/5xx结果未知时要求核对清单。`tests/web/roots-browser.py` 使用锁定Playwright及独立run_id btrfs服务，实际bind挂载故障与恢复均验收，测试挂载最终已卸载。

@@ -383,6 +383,53 @@ export function decodeLoginRequest(value: unknown): LoginRequest {
   };
 }
 
+/** 仅 owner 管理通道可见的 Root。 */
+export interface ManagedRoot {
+  /** 本进程采集观测 */
+  collection: RootCollection;
+  /** 现场挂载和存储状态 */
+  health: RootHealth;
+  /** 可执行的修复建议 */
+  next_step: string;
+  /** 已注册服务器绝对路径 */
+  path: string;
+  /** 稳定故障原因；健康时为空 */
+  reason: string;
+  /** Root 身份 */
+  root_id: string;
+  /** 已提交事件序号，不表示采集完成 */
+  root_seq: string;
+}
+
+export function decodeManagedRoot(value: unknown): ManagedRoot {
+  const object = expect_object(value, "ManagedRoot");
+  return {
+    collection: decodeRootCollection(object.collection),
+    health: decodeRootHealth(object.health),
+    next_step: expect_string(object.next_step, "ManagedRoot.next_step"),
+    path: expect_string(object.path, "ManagedRoot.path"),
+    reason: expect_string(object.reason, "ManagedRoot.reason"),
+    root_id: expect_string(object.root_id, "ManagedRoot.root_id"),
+    root_seq: expect_decimal(object.root_seq, "ManagedRoot.root_seq"),
+  };
+}
+
+/** owner 管理清单；不可由普通 Root 列表推导路径。 */
+export interface ManagedRootList {
+  /** 部署预配置允许基目录；空表示未配置且禁止注册。 */
+  allowed_bases: Array<string>;
+  /** owner 已注册 Root。 */
+  roots: Array<ManagedRoot>;
+}
+
+export function decodeManagedRootList(value: unknown): ManagedRootList {
+  const object = expect_object(value, "ManagedRootList");
+  return {
+    allowed_bases: expect_array(object.allowed_bases, "ManagedRootList.allowed_bases").map((item) => expect_string(item, "ManagedRootList.allowed_bases 的元素")),
+    roots: expect_array(object.roots, "ManagedRootList.roots").map((item) => decodeManagedRoot(item)),
+  };
+}
+
 /** 一段连续缺失的块索引。 */
 export interface MissingRange {
   /** 区间内的块数，至少为 1。 */
@@ -695,6 +742,40 @@ export function decodeRefreshRequest(value: unknown): RefreshRequest {
   return {
     refresh_token: expect_string(object.refresh_token, "RefreshRequest.refresh_token"),
   };
+}
+
+/** 实际最近一轮扫描进度，不代表客户端已同步。 */
+export interface RootCollection {
+  /** 未完成原因与本进程观测范围 */
+  detail: string;
+  /** 最近一轮实际检查项数 */
+  examined: string;
+  /** 最近一轮待稳定或重试文件数 */
+  pending: string;
+  /** 采集状态 */
+  state: RootCollectionState;
+}
+
+export function decodeRootCollection(value: unknown): RootCollection {
+  const object = expect_object(value, "RootCollection");
+  return {
+    detail: expect_string(object.detail, "RootCollection.detail"),
+    examined: expect_decimal(object.examined, "RootCollection.examined"),
+    pending: expect_decimal(object.pending, "RootCollection.pending"),
+    state: decodeRootCollectionState(object.state),
+  };
+}
+
+/** 本进程观测状态；重启后不沿用旧完成标志。 */
+export type RootCollectionState = "not_scanned" | "scanning" | "pending" | "complete" | "blocked";
+
+export const ROOT_COLLECTION_STATE_VALUES = ["not_scanned", "scanning", "pending", "complete", "blocked"] as const;
+
+export function decodeRootCollectionState(value: unknown): RootCollectionState {
+  if (typeof value !== "string" || !(ROOT_COLLECTION_STATE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 RootCollectionState 取值：${JSON.stringify(value)}`);
+  }
+  return value as RootCollectionState;
 }
 
 /**

@@ -27,3 +27,6 @@ export type {
   HealthStatus,
   ProtocolVersion,
 } from "./generated/types";
+
+export { listManagedRoots, registerRoot } from "./generated/client";
+export type { ManagedRootList, ManagedRoot, RootCollection, RootCollectionState, RootRegistered, RootRegisterRequest } from "./generated/types";

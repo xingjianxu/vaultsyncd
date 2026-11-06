@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, EmptyState, PageShell, StatusBadge } from "@vaultsyncd/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
+import { RootsPanel } from "./features/roots/Roots";
 import { AccountPanel, AuthProvider, useAuth } from "./features/auth/Auth";
 
 const items = [{ path: "/overview", label: "服务概览" }, { path: "/roots", label: "Root 目录" }, { path: "/account", label: "账号与会话" }];
@@ -30,13 +31,13 @@ function AppView() {
     } finally { if (!current.signal.aborted) { controller.current = null; setBusy(false); } }
   }
   return <PageShell product="服务管理" items={items} activePath={path}
-    status={<StatusBadge tone={status === "未连接" ? "neutral" : "info"}>{status}</StatusBadge>}>
+    status={<StatusBadge tone={status === "未连接" ? "neutral" : "info"}>{auth.account && status === "未连接" ? "账号会话已连接" : status}</StatusBadge>}>
     {path === "/overview" ? <><div className="vs-eyebrow">SERVER / OVERVIEW</div><h1>服务概览</h1>
       <p>查看服务连接，再管理远端目录与文件恢复。</p><section className="vs-card">
         <h2>服务连接</h2><p aria-live="polite">{detail}</p>
         <Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button>
       </section></> : path === "/roots" ? <><h1>Root 目录</h1>
-      <EmptyState title="尚未读取目录">{auth.account ? "账号已授权；目录页面将在下一步接入。" : "请先从账号与会话页面登录服务端账号。"}</EmptyState></>
+      <RootsPanel /></>
       : path === "/account" ? <><h1>账号管理</h1><AccountPanel /></> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
   </PageShell>;
 }

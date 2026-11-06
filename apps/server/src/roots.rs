@@ -38,8 +38,8 @@ use vaultsyncd_platform_linux_server::mounts::admission::{
 use vaultsyncd_platform_linux_server::mounts::mountinfo;
 use vaultsyncd_platform_linux_server::mounts::probe::{self, ScanPolicy};
 use vaultsyncd_protocol::generated::{
-    ErrorBody, ErrorCode, ErrorEnvelope, RootHealth, RootList, RootRegisterRequest, RootRegistered,
-    RootSummary,
+    ErrorBody, ErrorCode, ErrorEnvelope, ManagedRoot, ManagedRootList, RootCollection,
+    RootCollectionState, RootHealth, RootList, RootRegisterRequest, RootRegistered, RootSummary,
 };
 use vaultsyncd_server_core::api::roots::{
     AllowedBases, CandidateFacts, RegistrationRejection, RegistrationVerdict, evaluate_registration,
@@ -55,9 +55,16 @@ pub struct RootContext {
     state_dir: PathBuf,
     scan: ScanPolicy,
     ids: Mutex<RandomIds>,
+    observer: Option<Arc<crate::external::ObserverRuntime>>,
 }
 
 impl RootContext {
+    /// 绑定同一生产观察器；测试或未装配时诚实报告尚未扫描。
+    pub fn with_observer(mut self, observer: Arc<crate::external::ObserverRuntime>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
     /// 生产装配。
     #[must_use]
     pub fn new(
@@ -72,8 +79,137 @@ impl RootContext {
             state_dir,
             scan,
             ids: Mutex::new(RandomIds),
+            observer: None,
         }
     }
+}
+
+/// 管理通道需唯一 active owner；有效普通会话不能读取服务器布局。
+async fn require_owner(context: &RootContext, owner: UserId) -> Result<(), Box<Response>> {
+    let owners: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT id FROM users WHERE status='active' LIMIT 2")
+            .fetch_all(context.auth.database().pool())
+            .await
+            .map_err(|error| Box::new(storage_failure(&next_request_id(), &error.to_string())))?;
+    if owners.len() != 1 || owners[0].as_slice() != owner.as_bytes() {
+        return Err(Box::new(rejected(
+            &next_request_id(),
+            &RegistrationRejection::OutsideAllowedBases,
+            "路径管理仅允许唯一 active owner；请由管理员核对账号配置。",
+        )));
+    }
+    Ok(())
+}
+
+/// 未取得本进程完整扫描证据时禁止显示采集成功。
+pub(crate) fn not_scanned() -> RootCollection {
+    RootCollection {
+        state: RootCollectionState::NotScanned,
+        examined: "0".into(),
+        pending: "0".into(),
+        detail: "本进程尚未扫描；不能据此判断目录为空或已同步。".into(),
+    }
+}
+
+/// `GET /v1/admin/roots`：owner 配置、现场挂载核对和真实采集进度。
+pub async fn list_managed_roots(
+    State(context): State<Arc<RootContext>>,
+    headers: HeaderMap,
+) -> Response {
+    let principal = match auth::principal_from(&context.auth, &headers).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_owner(&context, principal.user_id).await {
+        return *response;
+    }
+    let records = match context.auth.database().pool().acquire().await {
+        Ok(mut conn) => match store_roots::roots_of_owner(&mut conn, principal.user_id).await {
+            Ok(records) => records,
+            Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
+        },
+        Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
+    };
+    let mut roots = Vec::new();
+    for record in records {
+        let path = PathBuf::from(&record.absolute_path);
+        let identity = record.root_file_identity.clone();
+        let reason = match tokio::task::spawn_blocking(move || {
+            let expected = std::str::from_utf8(&identity)
+                .ok()
+                .and_then(|text| RootSnapshot::parse_spec(text).ok());
+            match expected {
+                Some(expected) => {
+                    vaultsyncd_platform_linux_server::mounts::health::verify_root_mount(
+                        &path, &expected,
+                    )
+                    .err()
+                    .map(|error| error.detail_code().to_owned())
+                }
+                None => Some("invalid_root_identity".to_owned()),
+            }
+        })
+        .await
+        {
+            Ok(reason) => reason,
+            Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
+        };
+        let reason = reason.unwrap_or_else(|| {
+            if record.health == StoreRootHealth::Unavailable {
+                "stored_unavailable".into()
+            } else {
+                String::new()
+            }
+        });
+        let mut collection = match &context.observer {
+            Some(observer) => observer.collection_status(record.id).await,
+            None => not_scanned(),
+        };
+        if !reason.is_empty() {
+            collection.state = RootCollectionState::Blocked;
+            collection.detail = "Root 不可用，已暂停采集；不推导删除。".into();
+        }
+        roots.push(ManagedRoot {
+            root_id: record.id.to_hex(),
+            path: record.absolute_path,
+            health: if reason.is_empty() {
+                RootHealth::Healthy
+            } else {
+                RootHealth::Unavailable
+            },
+            next_step: if reason.is_empty() {
+                "等待稳定采集；可刷新查看本进程进度。".into()
+            } else {
+                "恢复原挂载、目录身份与服务账号读取权限，再刷新核验；不要删除或重新绑定来掩盖故障。"
+                    .into()
+            },
+            reason,
+            root_seq: record.seq.get().to_string(),
+            collection,
+        });
+    }
+    let allowed_bases = context
+        .bases
+        .as_ref()
+        .map(|bases| {
+            bases
+                .paths()
+                .map(|path| path.display().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut response = (
+        StatusCode::OK,
+        Json(ManagedRootList {
+            allowed_bases,
+            roots,
+        }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert("cache-control", "no-store".parse().expect("static header"));
+    response
 }
 
 /// `GET /v1/roots`：当前调用者可见的 Root 与健康状态，不含绝对路径。
@@ -130,6 +266,9 @@ pub async fn register_root(
         Ok(principal) => principal,
         Err(response) => return response,
     };
+    if let Err(response) = require_owner(&context, principal.user_id).await {
+        return *response;
+    }
     register_for_owner(context, principal.user_id, body).await
 }
 
@@ -478,7 +617,10 @@ mod tests {
         ));
         axum::Router::new()
             .route("/v1/roots", get(list_roots))
-            .route("/v1/admin/roots", post(register_root))
+            .route(
+                "/v1/admin/roots",
+                get(list_managed_roots).post(register_root),
+            )
             .with_state(context)
     }
 
@@ -562,6 +704,58 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body, "{\"roots\":[]}", "没有 Root 时给出空清单");
         assert!(!body.contains(&fixture.dir.display().to_string()), "{body}");
+    }
+
+    #[tokio::test]
+    async fn management_paths_require_unique_owner_and_unknown_is_not_complete() {
+        let mut fixture = fixture("managed").await;
+        fixture.bases = Some(AllowedBases::new([fixture.dir.clone()]).unwrap());
+        let request = || {
+            Request::builder()
+                .uri("/v1/admin/roots")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let (status, _) = call(roots_router(&fixture), request()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let token = login_token(&fixture).await;
+        let managed = || {
+            Request::builder()
+                .uri("/v1/admin/roots")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let (status, body) = call(roots_router(&fixture), managed()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(&fixture.dir.display().to_string()));
+        let (_, body) = call(roots_router(&fixture), list_request(&token)).await;
+        assert!(!body.contains(&fixture.dir.display().to_string()));
+        let unknown = not_scanned();
+        assert_eq!(unknown.state, RootCollectionState::NotScanned);
+        assert!(unknown.detail.contains("不能"));
+        let mut tx = fixture.auth.database().begin_write().await.unwrap();
+        users::insert_user(
+            &mut tx,
+            &users::NewUser {
+                id: UserId::from_bytes([0x33; 16]),
+                login: "other".into(),
+                password_hash: PasswordHasher::production().hash(PASSWORD).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let (status, body) = call(roots_router(&fixture), managed()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(!body.contains(&fixture.dir.display().to_string()));
+        let (status, _) = call(
+            roots_router(&fixture),
+            register_request(&token, &fixture.dir),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(root_rows(&fixture).await, 0);
     }
 
     #[tokio::test]

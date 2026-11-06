@@ -365,6 +365,35 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
   /v1/admin/roots:
+    get:
+      operationId: listManagedRoots
+      summary: owner Root 配置与现场健康
+      description: 仅唯一 active owner 可读允许基目录及服务器路径。现场核对挂载身份；采集数据仅代表本进程最近扫描，不表示客户端同步完成。
+      responses:
+        "200":
+          description: 管理清单与允许基目录
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedRootList"
+        "401":
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: 不是唯一 active owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 无法读取配置或状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
     post:
       operationId: registerRoot
       summary: 注册 Root
@@ -2382,3 +2411,42 @@ components:
         - NEEDS_RECOVERY
         - INSUFFICIENT_STORAGE
         - SERVICE_NOT_READY
+
+    RootCollectionState:
+      description: 本进程观测状态；重启后不沿用旧完成标志。
+      type: string
+      enum: [not_scanned, scanning, pending, complete, blocked]
+    RootCollection:
+      description: 实际最近一轮扫描进度，不代表客户端已同步。
+      type: object
+      required: [state, examined, pending, detail]
+      properties:
+        state: {$ref: "#/components/schemas/RootCollectionState", description: 采集状态}
+        examined: {type: string, format: decimal_u64, description: 最近一轮实际检查项数}
+        pending: {type: string, format: decimal_u64, description: 最近一轮待稳定或重试文件数}
+        detail: {type: string, description: 未完成原因与本进程观测范围}
+    ManagedRoot:
+      description: 仅 owner 管理通道可见的 Root。
+      type: object
+      required: [root_id, path, health, reason, next_step, root_seq, collection]
+      properties:
+        root_id: {type: string, description: Root 身份}
+        path: {type: string, description: 已注册服务器绝对路径}
+        health: {$ref: "#/components/schemas/RootHealth", description: 现场挂载和存储状态}
+        reason: {type: string, description: 稳定故障原因；健康时为空}
+        next_step: {type: string, description: 可执行的修复建议}
+        root_seq: {type: string, format: decimal_u64, description: 已提交事件序号，不表示采集完成}
+        collection: {$ref: "#/components/schemas/RootCollection", description: 本进程采集观测}
+    ManagedRootList:
+      description: owner 管理清单；不可由普通 Root 列表推导路径。
+      type: object
+      required: [allowed_bases, roots]
+      properties:
+        allowed_bases:
+          type: array
+          description: 部署预配置允许基目录；空表示未配置且禁止注册。
+          items: {type: string}
+        roots:
+          type: array
+          description: owner 已注册 Root。
+          items: {$ref: "#/components/schemas/ManagedRoot"}

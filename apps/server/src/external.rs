@@ -515,6 +515,8 @@ pub struct ObserverRuntime {
     /// Root 提交串行化：与内容 put 共用同一套语义（同一 Root 同时只允许一次提交）。
     gate: tokio::sync::Mutex<RootCommitGate>,
     config: ObserverRuntimeConfig,
+    collection:
+        tokio::sync::RwLock<HashMap<RootId, vaultsyncd_protocol::generated::RootCollection>>,
 }
 
 impl ObserverRuntime {
@@ -527,7 +529,33 @@ impl ObserverRuntime {
             roots: tokio::sync::Mutex::new(HashMap::new()),
             gate: tokio::sync::Mutex::new(RootCommitGate::new()),
             config,
+            collection: tokio::sync::RwLock::new(HashMap::new()),
         }
+    }
+
+    /// 本进程最新扫描进度；未扫描和重启不得继承完成结论。
+    pub async fn collection_status(
+        &self,
+        root: RootId,
+    ) -> vaultsyncd_protocol::generated::RootCollection {
+        self.collection
+            .read()
+            .await
+            .get(&root)
+            .cloned()
+            .unwrap_or_else(crate::roots::not_scanned)
+    }
+
+    async fn collection_state(
+        &self,
+        root: RootId,
+        state: vaultsyncd_protocol::generated::RootCollectionState,
+        detail: &str,
+    ) {
+        let mut states = self.collection.write().await;
+        let value = states.entry(root).or_insert_with(crate::roots::not_scanned);
+        value.state = state;
+        value.detail = detail.into();
     }
 
     /// HTTP 命令和观察器共用的提交门；锁顺序固定为 gate → roots。
@@ -569,6 +597,12 @@ impl ObserverRuntime {
             let mut conn = match self.database.pool().acquire().await {
                 Ok(conn) => conn,
                 Err(error) => {
+                    for progress in self.collection.write().await.values_mut() {
+                        progress.state =
+                            vaultsyncd_protocol::generated::RootCollectionState::Blocked;
+                        progress.detail =
+                            "无法读取 Root 清单，请检查存储；上次完成结果已失效。".into();
+                    }
                     warn!(error = %error, "观察器读 Root 清单失败");
                     return PassSummary::default();
                 }
@@ -576,6 +610,12 @@ impl ObserverRuntime {
             match store_roots::all_roots(&mut conn).await {
                 Ok(roots) => roots,
                 Err(error) => {
+                    for progress in self.collection.write().await.values_mut() {
+                        progress.state =
+                            vaultsyncd_protocol::generated::RootCollectionState::Blocked;
+                        progress.detail =
+                            "无法读取 Root 清单，请检查存储；上次完成结果已失效。".into();
+                    }
                     warn!(error = %error, "观察器读 Root 清单失败");
                     return PassSummary::default();
                 }
@@ -586,8 +626,25 @@ impl ObserverRuntime {
         let mut states = self.roots.lock().await;
         let live: std::collections::BTreeSet<RootId> = roots.iter().map(|root| root.id).collect();
         states.retain(|root, _| live.contains(root));
+        self.collection
+            .write()
+            .await
+            .retain(|root, _| live.contains(root));
         for root in roots {
+            use vaultsyncd_protocol::generated::RootCollectionState as Collection;
+            self.collection_state(
+                root.id,
+                Collection::Scanning,
+                "正在核验本轮扫描前提；尚不能判为完成。",
+            )
+            .await;
             if root.health != store_roots::RootHealth::Healthy {
+                self.collection_state(
+                    root.id,
+                    Collection::Blocked,
+                    "Root 数据库健康状态不可用，等待修复。",
+                )
+                .await;
                 continue;
             }
             // 恢复之前观察器也不能把一次尚未提交的服务端发布误采纳为新的外部事实。
@@ -599,18 +656,44 @@ impl ObserverRuntime {
                     .await
                 }
                 Err(error) => {
+                    self.collection_state(
+                        root.id,
+                        Collection::Blocked,
+                        "无法读取恢复意图，暂停采集；请检查存储。",
+                    )
+                    .await;
                     warn!(root = %root.id, error = %error, "无法读取意图，暂停观察采纳");
                     continue;
                 }
             };
             match unfinished {
                 Ok(intents) if intents.is_empty() => {}
-                Ok(_) => continue,
+                Ok(_) => {
+                    self.collection_state(
+                        root.id,
+                        Collection::Blocked,
+                        "仍有未完成文件意图，等待恢复后采集。",
+                    )
+                    .await;
+                    continue;
+                }
                 Err(error) => {
+                    self.collection_state(
+                        root.id,
+                        Collection::Blocked,
+                        "无法读取恢复意图，暂停采集；请检查存储。",
+                    )
+                    .await;
                     warn!(root = %root.id, error = %error, "无法读取意图，暂停观察采纳");
                     continue;
                 }
             }
+            self.collection_state(
+                root.id,
+                Collection::Scanning,
+                "正在进行本进程的目录扫描与稳定采集。",
+            )
+            .await;
             summary.roots += 1;
             let state = match states.get_mut(&root.id) {
                 Some(state) => state,
@@ -618,6 +701,12 @@ impl ObserverRuntime {
                     let Ok(handle) =
                         RootHandle::open(Path::new(&root.absolute_path), ResolveMode::Auto)
                     else {
+                        self.collection_state(
+                            root.id,
+                            Collection::Blocked,
+                            "无法打开 Root，请恢复原挂载或读取权限。",
+                        )
+                        .await;
                         warn!(root = %root.id.to_hex(), "观察器打不开 Root 句柄");
                         continue;
                     };
@@ -660,6 +749,47 @@ impl ObserverRuntime {
                 store: &mut store,
             };
             let report = state.observer.run_pass(&mut ports, limits, clock).await;
+            let pending = report
+                .outcomes
+                .iter()
+                .filter(|outcome| {
+                    matches!(
+                        outcome.state,
+                        vaultsyncd_server_core::observer::FileState::Pending(_)
+                    )
+                })
+                .count();
+            let blocked = report.root_unavailable
+                || !report.inconclusive.is_empty()
+                || !report.skipped.is_empty();
+            let collection_state = if blocked {
+                Collection::Blocked
+            } else if report.initial_import_complete && report.scan_complete && pending == 0 {
+                Collection::Complete
+            } else {
+                Collection::Pending
+            };
+            let detail = if blocked {
+                format!(
+                    "扫描存在不可采集项或权限/挂载故障，不能判定完整：{:?}；跳过 {} 项。请检查服务日志并修复。",
+                    report.inconclusive,
+                    report.skipped.len()
+                )
+            } else if collection_state == Collection::Complete {
+                "本进程已完成一次初始稳定采集；这不代表客户端已同步。".into()
+            } else {
+                "等待文件稳定或后续扫描；当前项数不是总文件数，也不是同步完成百分比。".into()
+            };
+            self.collection.write().await.insert(
+                root.id,
+                vaultsyncd_protocol::generated::RootCollection {
+                    state: collection_state,
+                    examined: report.entries_examined.to_string(),
+                    pending: pending.to_string(),
+                    detail,
+                },
+            );
+
             summary.adopted += report
                 .outcomes
                 .iter()

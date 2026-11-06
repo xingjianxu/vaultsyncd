@@ -73,7 +73,10 @@ pub fn router(
         .with_state(auth);
     let roots_router = Router::new()
         .route("/v1/roots", get(super::roots::list_roots))
-        .route("/v1/admin/roots", post(super::roots::register_root))
+        .route(
+            "/v1/admin/roots",
+            get(super::roots::list_managed_roots).post(super::roots::register_root),
+        )
         .with_state(roots);
     // 块请求体是二进制原样字节，大小上限由上传策略决定（`max_chunk_size + 1`，给“超一块”留一次
     // 拒绝机会）。Axum 默认请求体上限是 2 MiB，比默认块大小 4 MiB 还小：不在这里显式抬到策略值，

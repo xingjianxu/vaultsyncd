@@ -183,12 +183,6 @@ impl Service {
         if allowed_root_bases.is_none() {
             warn!("没有配置 [roots].allowed_bases：Root 注册端点会拒绝一切路径");
         }
-        let roots = Arc::new(RootContext::new(
-            Arc::clone(&auth),
-            allowed_root_bases,
-            config.state_dir.clone(),
-            ScanPolicy::default(),
-        ));
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
         // 操作命令端点（S047/S052）：命令走真实适配器；缺少整组证据的目录恢复仍显式未就绪。
         // 外部观察循环（S052）：周期扫描每个健康 Root，把外部改动采纳成版本与事件。
@@ -202,6 +196,15 @@ impl Service {
             &config.state_dir,
             Some(Arc::clone(&observer)),
         ));
+        let roots = Arc::new(
+            RootContext::new(
+                Arc::clone(&auth),
+                allowed_root_bases,
+                config.state_dir.clone(),
+                ScanPolicy::default(),
+            )
+            .with_observer(Arc::clone(&observer)),
+        );
         let operations = Arc::new(crate::operations::OperationsContext::new(
             Arc::clone(&auth),
             executor,
