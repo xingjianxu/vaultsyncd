@@ -156,6 +156,7 @@ def main():
         assert all(int(fields[k].strip(),16)==0 for k in ['CapEff','CapBnd','CapAmb']) and fields['NoNewPrivs'].strip()=='1'
         engine('exec',NAME,'test','!','-e','/nix')
         engine('exec',NAME,'test','!','-e','/dev/fuse')
+        engine('exec',NAME,'sh','-c','! command -v node && ! command -v pnpm && ! command -v cargo')
         RESULT['process']={'pid':facts['State']['Pid'],'uid':UID,'capabilities':0,'NoNewPrivs':1,'uname':engine('exec',NAME,'uname','-m').stdout.strip()}
         root=api('/v1/admin/roots',{'path':'/srv/vaultsyncd-roots'})['root_id'];RESULT['root_id']=root
         def head():return next((r for r in api(f'/v1/roots/{root}/recovery')['items'] if r['name']=='sample.txt' and r.get('hash')==hashlib.sha256(old).hexdigest()),None)

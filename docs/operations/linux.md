@@ -11,7 +11,7 @@ nix build .#container-deps .#container-deps-aarch64 --no-link --json
 
 两架构分别为 x86_64-unknown-linux-gnu / aarch64-unknown-linux-gnu，Rust 服务端和管理 CLI 与同提交 Web 独立构建，再封装私有 ELF loader、递归解析的运行库及相对路径入口。Ubuntu 运行不需要 `/nix`、Node 或 Rust；需要发行版 Python 3.11+（tomllib）、btrfs-progs、findmnt、lsattr 和常规 POSIX shell。首发实际验收基线 Ubuntu 24.04。不支持把单个 bin wrapper 移出发行目录；可以整体移动目录。原始 Nix 动态产物不能直接复制冒充此包。
 
-`runtime/share/vaultsyncd/release-manifest.json` 记录产品版本、实际源 commit/NAR、两组件来源、锁摘要、工具链/目标和每个实际文件的长度/摘要。协议版本独立。邻接 `vaultsyncd-runtime-sources.tar.gz` 提供所封装 glibc/GCC 的对应源码及锁定 Nixpkgs 配方；分发二进制/镜像时必须同时提供此归档。私有运行库许可在 `share/licenses`。清单核验失败、dirty source、缺 Web 资源均拒绝，不重标旧包。
+`runtime/share/vaultsyncd/release-manifest.json` 记录产品版本、实际源 commit/NAR、两组件来源、锁摘要、工具链/目标和每个实际文件的长度/摘要。协议版本独立。邻接 `vaultsyncd-runtime-sources.tar.gz` 提供所封装 glibc/GCC 的对应源码及锁定 Nixpkgs 配方；分发二进制/镜像时必须同时提供此归档。私有运行库许可在 `share/vaultsyncd/licenses`。清单核验失败、dirty source、缺 Web 资源均拒绝，不重标旧包。
 
 ## 普通 systemd
 
@@ -25,12 +25,12 @@ nix build .#container-deps .#container-deps-aarch64 --no-link --json
 
 ## 锁定 Ubuntu 镜像与 Compose
 
-`packaging/linux/container/ubuntu-lock.json` 固定官方 Ubuntu24.04 各架构 manifest 与17个实际 .deb 的版本、URL、SHA256。构建驱动先核对完整发行目录/源码归档，再按固定输入取得依赖；Dockerfile 的安装阶段使用 `--network=none`、本地 .deb，不在镜像构建中更新仓库。示例：
+`packaging/linux/container/ubuntu-lock.json` 固定官方 Ubuntu24.04 各架构 manifest 与17个实际 .deb 的版本、URL、SHA256。构建驱动先核对完整发行目录/源码归档，再按固定输入取得依赖；已有base须核验确切digest与架构，--offline要求base和全部.deb已缓存，缺失明确失败；Dockerfile 的安装阶段使用 `--network=none`、本地 .deb，不在镜像构建中更新仓库。示例：
 
 ```sh
 nix develop .#portable-tests --command python3 packaging/linux/container/build.py \
   /实际portable输出/runtime localhost/vaultsyncd:明确来源标识 \
-  --deps /实际container-deps输出 --receipt /受限记录目录/image-receipt.json
+  --offline --deps /实际container-deps输出 --receipt /受限记录目录/image-receipt.json
 ```
 
 镜像收据包含 image ID、base、版本/源和清单/Ubuntu锁摘要。分发固定 image ID/digest；不要把浮动标签当来源证明。Podman 使用 Docker 格式构建，并用 `podman save --format docker-archive` 传递，转移前后核验 Healthcheck；OCI 格式转移可能丢弃 Docker health 配置。镜像自身不含对应源码大归档，发布渠道需邻接提供。

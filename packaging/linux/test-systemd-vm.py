@@ -85,6 +85,7 @@ print(json.dumps({'base':str(base),'unit':str(unit),'data_device':'/dev/'+n['nam
     helper.ORIGIN='http://127.0.0.1:18741';helper.RUN=VM/'systemd-browser';helper.RUN.mkdir(exist_ok=True)
     result={'passed':False,'sourceInfo':manifest['sourceInfo'],'version':manifest['version'],'checks':[]}
     started=False
+    journal_since=remote('date','+%s').stdout.strip()
     try:
         remote('sudo','-n','systemctl','start',UNIT);started=True
         helper.wait(lambda:helper.api('/v1/health')['status']=='ok')
@@ -111,6 +112,7 @@ print(json.dumps({'base':str(base),'unit':str(unit),'data_device':'/dev/'+n['nam
         assert all(int(n)==8721 for n in fields['Uid'].split()) and fields['NoNewPrivs'].strip()=='1'
         assert all(int(fields[k].strip(),16)==0 for k in ['CapEff','CapBnd','CapAmb'])
         assert remote('test','!','-e','/nix').returncode==0
+        remote('sh','-c','! command -v node && ! command -v pnpm && ! command -v cargo')
         helper.browser(password,root)
         result.update(passed=True,server_id=server,root_id=root,before=before,after=after,browser=helper.RESULT['browser'],process_status=status)
         result['checks']=['unmodified-shipped-Ubuntu-systemd-unit-actual-start','nonroot-zero-caps-NoNewPrivs','same-uid-admin-and-real-btrfs-backup','real-service-restart-same-identity-seq','host-Chromium-against-actual-ARM64-service-Web']
@@ -120,7 +122,7 @@ print(json.dumps({'base':str(base),'unit':str(unit),'data_device':'/dev/'+n['nam
             try:helper.api('/v1/auth/logout',{})
             except Exception:pass
         if started:remote('sudo','-n','systemctl','stop',UNIT,check=False)
-        result['journal']=remote('sudo','-n','journalctl','-u',UNIT,'--no-pager','-o','cat').stdout
+        result['journal']=remote('sudo','-n','journalctl','-u',UNIT,'--no-pager','-o','cat','--since','@'+journal_since).stdout
         (VM/'systemd-result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
         print(json.dumps({'passed':result['passed'],'checks':result['checks']}))
 

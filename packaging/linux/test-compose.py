@@ -40,7 +40,7 @@ def main():
     with image.open('wb') as f:f.truncate(1024*1024*1024)
     mount=RUN/'mnt';mount.mkdir();loop=None;mounted=False;up=False
     state=mount/'state';roots=mount/'roots'
-    variables={'DOCKER_HOST':'unix:///run/podman/podman.sock','VAULTSYNCD_IMAGE':IMAGE,
+    variables={'PATH':str(Path(COMPOSE).parent)+':/run/current-system/sw/bin:/usr/bin:/bin','DOCKER_HOST':'unix:///run/podman/podman.sock','VAULTSYNCD_IMAGE':IMAGE,
         'VAULTSYNCD_STATE':str(state),'VAULTSYNCD_ROOTS':str(roots),'VAULTSYNCD_PORT':'18742'}
     def compose(*args,override=None):
         env=variables| (override or {})
@@ -62,7 +62,8 @@ def main():
         helper.TOKEN=helper.api('/v1/auth/login',{'login':'owner','password':password,'device_label':'S098 Compose'})['access_token']
         root=helper.api('/v1/admin/roots',{'path':'/srv/vaultsyncd-roots'})['root_id']
         before=next(x for x in helper.api('/v1/admin/roots')['roots'] if x['root_id']==root)
-        cid=compose('ps','-q').strip()
+        cid=engine('ps','--filter','label=com.docker.compose.project='+PROJECT,'--format','{{.ID}}').strip()
+        assert cid and len(cid.splitlines())==1
         status=engine('exec',cid,'cat','/proc/1/status')
         fields=dict(l.split(':',1) for l in status.splitlines() if ':' in l)
         assert all(int(v)==8721 for v in fields['Uid'].split()) and fields['NoNewPrivs'].strip()=='1'
