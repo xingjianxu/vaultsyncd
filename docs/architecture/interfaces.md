@@ -1900,3 +1900,28 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 
 表不变量：`op_id` 主键并外键 `pending_ops(op_id) ON DELETE CASCADE`（操作成功出队即删除续传记录）；
 不存块位图（已收块以服务端 `upload_parts` 为准，design §9.3）。schema 目标版本随之为 `3`。
+
+## crates/agent-core — 事件接收与应用进度（S057）
+
+`engine::events::EventReceiver<S,D,A>` 是绑定作用域的事件编排器，位于
+`crates/agent-core/src/engine/events.rs`。`ChangeSource` 只负责按 `RootId + after + limit` 拉取
+协议 `ChangeList`；SSE/SeqHint 不进入持久状态，只作为唤醒参数，周期调用 `run_cycle(None)` 仍会
+执行 pull 兜底。`EventDecoder` 同时解码 wire 批次和重启后 `received_changes` 的原始
+`EventEnvelope`，不得把未知事件静默变成空任务。
+
+| 接口 | 契约 |
+| --- | --- |
+| `EventApplier::apply(binding, changes, tasks)` | 对同批次任务执行本地应用；实现应按显式依赖独立推进无依赖条目，返回 `ApplyResult::Applied` 或带 `ErrorCode` 的 `Blocked`。 |
+| `EventReceiver::run_cycle(hint)` | 先恢复未应用批次，再按 `changes` 严格 seq 拉取；重复/过旧提示不重复应用，页有空洞或乱序时报协议错误且不越过空洞。 |
+| 接收事务 | `client_store::events::receive_batch` 在一个短事务中按批次 → remote → pending tasks → received cursor 写入；提交后才调用应用器。 |
+| 应用事务 | 应用器完成后，在独立短事务中写 `baseline_entries` 并调用 `mark_batch_applied`，只推进连续已应用前缀；失败标记 `blocked`，批次与接收游标保留，重启时由 `resume_pending` 重放。 |
+
+`ReceiveError::{Source,Decode,Store,Apply,Protocol}` 不吞底层错误；批次解码或应用事务失败时不伪造
+应用完成。`ReceiveReport` 区分 `received`、`applied`、`blocked` 与重复提示，便于测试和诊断。
+
+## crates/http-client — changes 拉取（S057）
+
+`crates/http-client/src/changes.rs::list` 使用生成的 `ChangeList`，通过 `ApiRequest::with_query_param`
+对 `after`/`limit` 做独立百分号编码，并强制 Bearer 会话；Root 身份和规范十进制游标在发送前校验。
+`ApiRequest` 禁止调用方直接拼接查询串，查询参数按 RFC 3986 编码。SSE 仍只由上层作为唤醒来源，
+不被当作事件正文来源。

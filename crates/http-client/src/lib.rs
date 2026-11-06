@@ -42,13 +42,14 @@
 //!
 //! # 尚未实现（后续卡）
 //!
-//! Root 清单与 events/changes 拉取（design §5.4 的 `roots.rs`、`changes.rs`）、查询串编码、浏览器
-//! cookie 载体（Rust 客户端只走 Bearer）。退避调度属于 `crates/agent-core`。
+//! Root 清单与 SSE 事件流、浏览器 cookie 载体（Rust 客户端只走 Bearer）仍由后续卡接线；
+//! `changes` JSON 拉取与查询串编码已由 [`changes`] 提供。退避调度属于 `crates/agent-core`。
 
 #![forbid(unsafe_code)]
 
 pub mod auth;
 pub mod cancel;
+pub mod changes;
 pub mod client;
 pub mod config;
 pub mod content;

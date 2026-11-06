@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adapters;
+pub mod engine;
 pub mod executor;
 pub mod ports;
 

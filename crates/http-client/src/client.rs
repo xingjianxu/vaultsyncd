@@ -67,6 +67,7 @@ pub struct ApiRequest {
     path: String,
     auth: AuthMode,
     body: Option<RequestBody>,
+    query: Vec<(String, String)>,
     headers: Vec<(String, String)>,
     timeout: Option<Duration>,
     cancellation: Option<Cancellation>,
@@ -80,6 +81,7 @@ impl ApiRequest {
             path: path.into(),
             auth: AuthMode::None,
             body: None,
+            query: Vec::new(),
             headers: Vec::new(),
             timeout: None,
             cancellation: None,
@@ -94,6 +96,30 @@ impl ApiRequest {
     /// `POST` 请求。
     pub fn post(path: impl Into<String>) -> Self {
         Self::new(Method::Post, path)
+    }
+
+    /// 添加一个查询参数。参数名和值会按 RFC 3986 做百分号编码；调用方不能把查询串直接拼进路径。
+    ///
+    /// # Errors
+    ///
+    /// 空参数名或包含控制字符的参数会被拒绝。
+    pub fn with_query_param(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<Self, ClientError> {
+        let name = name.into();
+        let value = value.into();
+        if name.is_empty() || name.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(ClientError::invalid_request(
+                "查询参数名不能为空或包含控制字符",
+            ));
+        }
+        if value.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(ClientError::invalid_request("查询参数值包含控制字符"));
+        }
+        self.query.push((name, value));
+        Ok(self)
     }
 
     /// 设置认证方式。
@@ -440,7 +466,7 @@ impl<T: Transport> ApiClient<T> {
         request: &ApiRequest,
         token: Option<&str>,
     ) -> Result<TransportRequest, ClientError> {
-        let url = self.resolve_path(&request.path)?;
+        let url = self.resolve_path(&request.path, &request.query)?;
         let mut headers = Vec::with_capacity(request.headers.len() + 2);
         for (name, value) in &request.headers {
             if name.eq_ignore_ascii_case("authorization") {
@@ -480,7 +506,7 @@ impl<T: Transport> ApiClient<T> {
         Ok(TransportRequest::new(request.method, url, headers, body))
     }
 
-    fn resolve_path(&self, path: &str) -> Result<String, ClientError> {
+    fn resolve_path(&self, path: &str, query: &[(String, String)]) -> Result<String, ClientError> {
         if !path.starts_with('/') {
             return Err(ClientError::invalid_request(format!(
                 "请求路径必须以 / 开头：{path}"
@@ -495,11 +521,19 @@ impl<T: Transport> ApiClient<T> {
                 "请求路径不能包含方案、查询串、片段或空白：{path}"
             )));
         }
-        Ok(format!(
-            "{}{}",
-            self.base_url.as_str().trim_end_matches('/'),
-            path
-        ))
+        let mut resolved = format!("{}{}", self.base_url.as_str().trim_end_matches('/'), path);
+        if !query.is_empty() {
+            resolved.push('?');
+            for (index, (name, value)) in query.iter().enumerate() {
+                if index != 0 {
+                    resolved.push('&');
+                }
+                resolved.push_str(&encode_query(name));
+                resolved.push('=');
+                resolved.push_str(&encode_query(value));
+            }
+        }
+        Ok(resolved)
     }
 }
 
@@ -526,6 +560,20 @@ fn error_for(response: &ApiResponse) -> ClientError {
             message: format!("非 2xx 响应不是合法错误信封（HTTP {status}）"),
         },
     }
+}
+
+fn encode_query(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+            encoded.push(char::from(b"0123456789ABCDEF"[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
 }
 
 fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
