@@ -344,8 +344,7 @@ async fn version_restore_and_trash_restore_round_trip() {
         .flat_map(|b| {
             serde_json::from_str::<Vec<Value>>(b["events_json"].as_str().unwrap()).unwrap()
         })
-        .filter(|e| e["kind"] == "restore")
-        .next_back()
+        .rfind(|e| e["kind"] == "restore")
         .unwrap();
     assert_eq!(restore_event["revision"], restored["revision"]);
     assert_eq!(
