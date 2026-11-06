@@ -79,6 +79,18 @@ pub fn router(
     // finalize 与固定版本下载：只在 `Principal`/`authorize_root` 之后动作，处理器自己解析调用者。
     let content_router = Router::new()
         .route(
+            "/v1/roots/{root}/entries/{entry}/versions/{version}/leases",
+            post(super::version_leases::acquire),
+        )
+        .route(
+            "/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew",
+            post(super::version_leases::renew),
+        )
+        .route(
+            "/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release",
+            post(super::version_leases::release),
+        )
+        .route(
             "/v1/roots/{root}/uploads/{upload}/finalize",
             post(super::content::finalize),
         )

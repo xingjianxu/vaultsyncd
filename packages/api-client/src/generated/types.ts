@@ -957,3 +957,59 @@ export function decodeUploadStatus(value: unknown): UploadStatus {
     upload: decodeUploadSession(object.upload),
   };
 }
+
+/** 服务器持久化的固定版本保护；expires_at是UTC秒，ttl_seconds是剩余有效秒数。 */
+export interface VersionLease {
+  /** 显式解除后为true，不可重新续期。 */
+  closed: boolean;
+  /** 固定Entry身份。 */
+  entry_id: string;
+  /** UTC到期秒数。 */
+  expires_at: string;
+  /** 请求租约身份。 */
+  lease_id: string;
+  /** 固定Root身份。 */
+  root_id: string;
+  /** 整份内容SHA256。 */
+  sha256: string;
+  /** 固定版本字节数。 */
+  size: string;
+  /** 响应形成时剩余秒数，最大120。 */
+  ttl_seconds: string;
+  /** 固定版本身份。 */
+  version_id: string;
+}
+
+export function decodeVersionLease(value: unknown): VersionLease {
+  const object = expect_object(value, "VersionLease");
+  return {
+    closed: expect_boolean(object.closed, "VersionLease.closed"),
+    entry_id: expect_string(object.entry_id, "VersionLease.entry_id"),
+    expires_at: expect_decimal(object.expires_at, "VersionLease.expires_at"),
+    lease_id: expect_string(object.lease_id, "VersionLease.lease_id"),
+    root_id: expect_string(object.root_id, "VersionLease.root_id"),
+    sha256: expect_string(object.sha256, "VersionLease.sha256"),
+    size: expect_decimal(object.size, "VersionLease.size"),
+    ttl_seconds: expect_decimal(object.ttl_seconds, "VersionLease.ttl_seconds"),
+    version_id: expect_string(object.version_id, "VersionLease.version_id"),
+  };
+}
+
+/** 固定版本内容租约的稳定请求；身份由调用端随机生成并在重试时复用。 */
+export interface VersionLeaseRequest {
+  /** 32位小写十六进制租约请求身份。 */
+  lease_id: string;
+  /** 已提交版本的整份SHA256，小写十六进制。 */
+  sha256: string;
+  /** 已提交版本的逻辑字节数。 */
+  size: string;
+}
+
+export function decodeVersionLeaseRequest(value: unknown): VersionLeaseRequest {
+  const object = expect_object(value, "VersionLeaseRequest");
+  return {
+    lease_id: expect_string(object.lease_id, "VersionLeaseRequest.lease_id"),
+    sha256: expect_string(object.sha256, "VersionLeaseRequest.sha256"),
+    size: expect_decimal(object.size, "VersionLeaseRequest.size"),
+  };
+}

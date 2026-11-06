@@ -33,6 +33,7 @@ pub mod state_lock;
 pub mod trash;
 pub mod uploads;
 pub mod users;
+pub mod version_leases;
 pub mod versions;
 
 #[cfg(test)]

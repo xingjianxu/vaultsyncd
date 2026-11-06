@@ -48,6 +48,61 @@ impl Drop for Slot {
         self.active.lock().expect("调度槽锁").tasks.remove(&self.op);
     }
 }
+/// A user read shares the scheduler's content limit and per-entry exclusion, but cannot
+/// complete a synchronization operation or change a baseline. Durable transfer progress
+/// belongs to the transfer store; an OS read request itself is short-lived.
+pub struct UserReadGuard(Slot);
+impl UserReadGuard {
+    /// Cancellation shared with the active slot. Dropping the guard releases admission.
+    pub fn cancellation(&self) -> &Cancellation {
+        &self.0.cancel
+    }
+}
+/// Cloneable admission handle for CFAPI workers. It must come from the SAME scheduler
+/// that runs background work, rather than a second independently constructed scheduler.
+#[derive(Clone)]
+pub struct UserReads {
+    active: Arc<Mutex<Active>>,
+    gate: Arc<dyn DispatchGate>,
+    limits: Limits,
+}
+impl UserReads {
+    /// Try once without waiting or holding a database transaction. None means capacity
+    /// or this entry is busy; the runtime may wait with a bounded timeout/cancellation.
+    pub async fn try_acquire(
+        &self,
+        request: OpId,
+        binding: BindingId,
+        entry: EntryId,
+    ) -> Result<Option<UserReadGuard>, PortError> {
+        let op = QueuedOperation {
+            op: request,
+            binding,
+            entry: Some(entry),
+            kind: "user_read".into(),
+            baseline_revision: None,
+            baseline_version: None,
+            depends_on: None,
+            pinned_version: None,
+            attempts: 0,
+            last_error: None,
+        };
+        if !self.gate.allowed(&op).await? {
+            return Err(PortError::rejected(
+                "BINDING_NOT_READY",
+                "用户读取被绑定控制拒绝",
+            ));
+        }
+        let slot = claim(&self.active, self.limits, &op, Priority::UserRead);
+        if slot.is_some() && !self.gate.allowed(&op).await? {
+            return Err(PortError::rejected(
+                "BINDING_NOT_READY",
+                "用户读取前绑定控制改变",
+            ));
+        }
+        Ok(slot.map(UserReadGuard))
+    }
+}
 /// 持久调度器。数据库与 Ports.operations 必须来自同一客户端库。
 pub struct Scheduler<H> {
     db: Arc<Database>,
@@ -60,6 +115,14 @@ pub struct Scheduler<H> {
     active: Arc<Mutex<Active>>,
 }
 impl<H: ScheduledHandler> Scheduler<H> {
+    /// Share admission with native user reads without allowing them to dequeue sync work.
+    pub fn user_reads(&self) -> UserReads {
+        UserReads {
+            active: self.active.clone(),
+            gate: self.gate.clone(),
+            limits: self.limits,
+        }
+    }
     /// 构造；参数错误不退化成无界并发或零延迟。
     pub fn new(
         db: Arc<Database>,
@@ -223,44 +286,7 @@ impl<H: ScheduledHandler> Scheduler<H> {
         Ok(report)
     }
     fn claim(&self, op: &QueuedOperation, priority: Priority) -> Option<Slot> {
-        let mut active = self.active.lock().expect("调度槽锁");
-        if active.tasks.contains_key(&op.op)
-            || active.tasks.values().any(|t| {
-                t.binding == op.binding
-                    && (t.entry == op.entry || t.entry.is_none() || op.entry.is_none())
-            })
-        {
-            return None;
-        }
-        let count = |p| active.tasks.values().filter(|t| t.priority == p).count();
-        let content = count(Priority::UserRead) + count(Priority::Background);
-        let full = match priority {
-            Priority::UserRead => content >= self.limits.content,
-            Priority::Background => {
-                content >= self.limits.content
-                    || count(Priority::Background) >= self.limits.content - 1
-            }
-            Priority::Metadata => count(priority) >= self.limits.metadata,
-            Priority::Hash => count(priority) >= self.limits.hash,
-        };
-        if full {
-            return None;
-        }
-        let cancel = Cancellation::new();
-        active.tasks.insert(
-            op.op,
-            ActiveTask {
-                binding: op.binding,
-                entry: op.entry,
-                priority,
-                cancel: cancel.clone(),
-            },
-        );
-        Some(Slot {
-            active: self.active.clone(),
-            op: op.op,
-            cancel,
-        })
+        claim(&self.active, self.limits, op, priority)
     }
     async fn run_one(&self, op: QueuedOperation, slot: Slot) -> Result<(OpId, Outcome), PortError> {
         // claim之后再次过持久取消和控制围栏；排队期间发生的取消不能丢。
@@ -356,6 +382,50 @@ impl<H: ScheduledHandler> Scheduler<H> {
         }
         Ok((op.op, Outcome::Failed))
     }
+}
+fn claim(
+    shared: &Arc<Mutex<Active>>,
+    limits: Limits,
+    op: &QueuedOperation,
+    priority: Priority,
+) -> Option<Slot> {
+    let mut active = shared.lock().expect("调度槽锁");
+    if active.tasks.contains_key(&op.op)
+        || active.tasks.values().any(|t| {
+            t.binding == op.binding
+                && (t.entry == op.entry || t.entry.is_none() || op.entry.is_none())
+        })
+    {
+        return None;
+    }
+    let count = |p| active.tasks.values().filter(|t| t.priority == p).count();
+    let content = count(Priority::UserRead) + count(Priority::Background);
+    let full = match priority {
+        Priority::UserRead => content >= limits.content,
+        Priority::Background => {
+            content >= limits.content || count(Priority::Background) >= limits.content - 1
+        }
+        Priority::Metadata => count(priority) >= limits.metadata,
+        Priority::Hash => count(priority) >= limits.hash,
+    };
+    if full {
+        return None;
+    }
+    let cancel = Cancellation::new();
+    active.tasks.insert(
+        op.op,
+        ActiveTask {
+            binding: op.binding,
+            entry: op.entry,
+            priority,
+            cancel: cancel.clone(),
+        },
+    );
+    Some(Slot {
+        active: shared.clone(),
+        op: op.op,
+        cancel,
+    })
 }
 fn default_priority(op: &QueuedOperation) -> Result<Priority, PortError> {
     if op.kind == "hash_content" {
