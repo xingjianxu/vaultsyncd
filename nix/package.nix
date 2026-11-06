@@ -24,7 +24,7 @@ let
     inherit version;
     src = rustSource;
     # Every fetched crate uses the actual checksum already pinned in Cargo.lock.
-    cargoLock.lockFile = src + "/Cargo.lock";
+    cargoLock.lockFile = "${rustSource}/Cargo.lock";
     cargoBuildFlags = [ "-p" "vaultsyncd-server" "-p" "vaultsyncd-admin" ];
     cargoTestFlags = [ "-p" "vaultsyncd-server" "-p" "vaultsyncd-admin" "--lib" "--bins" ];
     nativeBuildInputs = [ pkgs.pkg-config ];
