@@ -17,6 +17,7 @@ members = [
     "crates/client-store",
     "crates/domain",
     "crates/fs-common",
+    "crates/http-client",
     "crates/local-ipc",
     "crates/planner",
     "crates/platform-linux-server",
@@ -55,6 +56,10 @@ members = [
 # 因此也进 default-members；客户端库的种类与 schema 门禁、三张条目表并存的组合都能在便携检查里
 # 回归。它与 server-store 之间没有依赖：两套 schema、两个数据库文件（design §7.3）。
 #
+# crates/http-client 是共用远端 HTTPS 客户端（S053）：只依赖 reqwest/rustls、tokio 与 wire 契约，
+# 没有平台 API 与本地状态，Linux/Windows 客户端共用，因此进 default-members，让认证刷新合并、
+# 超时、取消、错误分类与 TLS 信任策略的回归进入便携检查（含真实 TLS 握手的证书用例）。
+#
 # default-members 只选可移植核心：`cargo test --locked`/`cargo clippy` 不构建 xtask 等编排工具，
 # 也不构建只能在 Windows 上运行的测试包与平台适配层（crates/platform-windows 的 Windows 目标
 # 代码只有交叉构建 + 客体运行才能验证），保证便携检查（含 Windows 与 CI 的默认目标）不受影响。
@@ -62,6 +67,7 @@ default-members = [
     "crates/client-store",
     "crates/domain",
     "crates/fs-common",
+    "crates/http-client",
     "crates/local-ipc",
     "crates/planner",
     "crates/protocol",

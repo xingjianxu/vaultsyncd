@@ -1,0 +1,37 @@
+[package]
+name = "vaultsyncd-http-client"
+description = "共用 HTTPS 客户端：会话认证与刷新合并、超时、取消与错误分类（docs/design.md §5.4、§13.3）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# 本 crate 是客户端唯一的远端 HTTP 适配层（design §5.4 `crates/http-client/`）：只依赖 wire 契约
+# （`vaultsyncd-protocol` 的生成 DTO），不依赖 domain 状态机、数据库或平台 API，因此 Linux 与
+# Windows 客户端共用同一套认证/超时/取消/错误分类。
+#
+# TLS 只走 rustls，根证书默认取操作系统信任库（`rustls-tls-native-roots`），开发 CA 只能通过
+# `TlsTrust` 显式追加。仓库里没有任何“关闭证书校验”的开关或环境变量。
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+# 只为把 reqwest 错误链里的 `rustls::Error` 认出来（证书问题与其它传输失败分开分类），
+# 不直接用 rustls 建连接。
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "sync", "time"] }
+vaultsyncd-protocol = { path = "../protocol" }
+
+[dev-dependencies]
+# 证书验收：用真实 TLS 握手证明“未显式信任的自签证书一定失败、显式追加的开发 CA 才通过”。
+rcgen = "0.13"
+rustls = { version = "0.23", features = ["ring"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = "0.26"
+
+[features]
+# 让上层 crate 的测试复用传输替身；默认关闭，产品构建里不存在该模块。
+testing = []
+
+[lints]
+workspace = true
