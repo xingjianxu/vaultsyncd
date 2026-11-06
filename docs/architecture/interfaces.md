@@ -2483,3 +2483,10 @@ StateLock::try_acquire_file接收平台已安全打开的同一server.lock，flo
 S089兼容补充：先创建独立种类`RESTORE_GUARD_APPLICATION_ID=0x56535247`的server.sqlite，旧服务既有ForeignDatabase门同样拒绝；导入/更新只作用restore.candidate.sqlite。全部文件/历史/DB/新映射/epoch核验与刷盘后，确认护栏完整身份未变，再原子替换正式名称并刷盘，之后写complete报告和移除marker。不会把含旧Root路径/旧epoch的中间库暴露到正式名；即使旧程序不理解新marker，也不能开启半恢复。新恢复代际为随机63位非零值，排除所有旧Root epoch，重复恢复同一旧备份不会确定复用同一代际；逻辑ServerId、Root seq及历史保持。核心按Linux POSIX根分量解释映射，避免便携构建宿主改变路径语义。
 
 S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站、普通独立inode、会话失效/旧epoch操作410、重复恢复与零Root、在线同锁及非空/非法映射、坏归档与实际空间不足、SIGKILL后的当前启动屏障和既有ForeignDatabase门。护栏必须先于工作写入且候选DB不能用正式名称；完成文件写在原子发布后，marker持久移除才开放。容量预算为估算，运行时ENOSPC仍保留incomplete，源schema12的启动迁移沿用store既有迁移门；恢复不提供隐式覆盖/resume，运维入口见backup文档。
+
+## S095 NixOS 服务模块与显式存储授权
+
+- flake 导出 `nixosModules.default/vaultsyncd`、`checks.x86_64-linux.nixos-module`。`services.vaultsyncd` 提供 enable、package（默认同 flake Linux发行包）、user/group、extraGroups、stateDir、rootPaths、settings.server.listen/settings.log。settings 严格限于非敏感设置；没有 secret/auth/初始密码选项，owner 仅离线 admin stdin 初始化。生成 TOML 只含监听、路径与日志；空 rootPaths 不配置允许基目录，产品拒绝注册。
+- 专用非 root UID；User/Group、0077、NoNewPrivileges、空 capability 集、ProtectSystem=strict/ProtectHome=read-only；ReadWritePaths 仅内部 stateDir 与显式 Root 基目录。rootPaths 与状态互不包含，禁止系统路径，产品注册继续负责真实身份、嵌套 mount/subvolume/扫描准入。外部 Root 权限由管理员 ACL/组明确授予，不递归改权、不创建资料目录。
+- `/var/lib/` 内专用状态用 StateDirectory/0700；其他 stateDir 须预先由服务 UID 持有并0700。RequiresMountsFor 包括状态、backups 与 Root；read-only preflight 核对真实目录、访问权、btrfs/CoW/checksums 与 user_subvol_rm_allowed。不提供自动格式化、迁移、mount/sudo/CAP_SYS_ADMIN。备份 prepared/snapshot 为合法内部子卷；只读顶层 preflight 不误扫/改权。
+- `deploy/nixos/eval.nix` 是不激活的完整 NixOS fixture；构建 system 与 unit/config，`test-service.py` 把相同 unit 改用唯一测试名运行临时 UID/独立 btrfs，实际检查 Root 写入、白名单外/系统 EROFS、普通 UID快照/验证/删除与负例。部署及显式授权说明见 `deploy/nixos/README.md`；正式主机启用由 S096 单独验收。
