@@ -12,6 +12,7 @@ export {
   PROTOCOL_MINOR,
   RESPONSE_KIND_VALUES,
   decodeBindingInfo,
+  decodeFileStatus,
   decodeBindingStatus,
   decodeCommandParameters,
   decodeConnectionInfo,
@@ -30,6 +31,7 @@ export {
 } from "./generated/types";
 export type {
   BindingInfo,
+  FileStatus,
   BindingStatus,
   CommandParameters,
   ConnectionInfo,

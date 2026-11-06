@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 1;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 2;
+export const PROTOCOL_MINOR = 3;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -174,9 +174,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -293,6 +293,46 @@ export function decodeErrorBody(value: unknown): ErrorBody {
   };
 }
 
+/** agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。 */
+export interface FileStatus {
+  /** 无法取得当前保护句柄；不保证此后一直空闲。 */
+  busy: boolean;
+  /** 持久未确认状态或物理修改证据。 */
+  dirty: boolean;
+  /** 已确认基线身份；本地未导入文件省略。 */
+  entry_id?: string;
+  /** 核对后的相对路径。 */
+  path: string;
+  /** 存在相关未完成动作/事件，绝不表示committed。 */
+  pending: boolean;
+  /** 当前UI可提示释放；后端仍重核。 */
+  release_allowed: boolean;
+  /** 释放禁用原因或影响提示。 */
+  release_reason: string;
+  /** metadata_only/partial/materialized/unknown，不猜测完整驻留。 */
+  residency: string;
+  /** domain EntryState::project结果。 */
+  status: string;
+  /** 基线已确认且没有本地待办；不表示备份。 */
+  synchronized: boolean;
+}
+
+export function decodeFileStatus(value: unknown): FileStatus {
+  const object = expect_object(value, "FileStatus");
+  return {
+    busy: expect_boolean(object.busy, "FileStatus.busy"),
+    dirty: expect_boolean(object.dirty, "FileStatus.dirty"),
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "FileStatus.entry_id"),
+    path: expect_string(object.path, "FileStatus.path"),
+    pending: expect_boolean(object.pending, "FileStatus.pending"),
+    release_allowed: expect_boolean(object.release_allowed, "FileStatus.release_allowed"),
+    release_reason: expect_string(object.release_reason, "FileStatus.release_reason"),
+    residency: expect_string(object.residency, "FileStatus.residency"),
+    status: expect_string(object.status, "FileStatus.status"),
+    synchronized: expect_boolean(object.synchronized, "FileStatus.synchronized"),
+  };
+}
+
 /** get_status 的结果：agent 身份、IPC 协议与真实 Binding 多维状态。bindings 为 1.1 可选增量；旧处理器未接状态源时省略，不伪装成空快照。 */
 export interface GetStatusResult {
   /** agent 二进制版本（构建时确定的语义化版本文本），供界面与日志显示。 */
@@ -354,6 +394,8 @@ export interface ManagementResult {
   connection?: ConnectionInfo;
   /** 已完整核验的恢复包文件数。 */
   exported_files?: string;
+  /** list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。 */
+  files?: Array<FileStatus>;
   /** 解绑后不保证离线可读的条目。 */
   incomplete?: Array<string>;
   /** 远端授权 Root/历史/回收站列表。 */
@@ -376,6 +418,7 @@ export function decodeManagementResult(value: unknown): ManagementResult {
     bindings: object.bindings === undefined ? undefined : expect_array(object.bindings, "ManagementResult.bindings").map((item) => decodeBindingInfo(item)),
     connection: object.connection === undefined ? undefined : decodeConnectionInfo(object.connection),
     exported_files: object.exported_files === undefined ? undefined : expect_string(object.exported_files, "ManagementResult.exported_files"),
+    files: object.files === undefined ? undefined : expect_array(object.files, "ManagementResult.files").map((item) => decodeFileStatus(item)),
     incomplete: object.incomplete === undefined ? undefined : expect_array(object.incomplete, "ManagementResult.incomplete").map((item) => expect_string(item, "ManagementResult.incomplete 的元素")),
     items: object.items === undefined ? undefined : expect_array(object.items, "ManagementResult.items").map((item) => decodeRemoteItem(item)),
     mode_remaining: object.mode_remaining === undefined ? undefined : expect_string(object.mode_remaining, "ManagementResult.mode_remaining"),

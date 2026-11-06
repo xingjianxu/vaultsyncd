@@ -30,6 +30,8 @@ mod management_files;
 #[cfg(windows)]
 mod management_history;
 #[cfg(windows)]
+mod management_listing;
+#[cfg(windows)]
 mod namespace;
 #[cfg(windows)]
 pub mod remote;

@@ -205,6 +205,15 @@ pub(crate) async fn execute(
         }
     }
     match command.name {
+        C::ListFiles => {
+            return crate::management_listing::list(
+                db,
+                &running,
+                binding.unwrap(),
+                p.cursor.as_deref(),
+            )
+            .await;
+        }
         C::ListBindings => result.bindings = Some(binding_list(db).await?),
         C::PauseBinding | C::ResumeBinding => {
             control

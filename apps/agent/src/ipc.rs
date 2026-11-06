@@ -63,6 +63,14 @@ pub(crate) fn start(
                         false,
                     ));
                 }
+                if request.command.name == CommandName::ListFiles && request.ipc_version.minor < 3 {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "文件清单需要本机 IPC 1.3",
+                        false,
+                    ));
+                }
                 if let Err(error) = vaultsyncd_local_ipc::commands::validate(&request.command) {
                     return Ok(Response::error(request.request_id, error));
                 }
