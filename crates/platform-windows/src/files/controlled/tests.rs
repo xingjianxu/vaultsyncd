@@ -38,6 +38,17 @@ fn native_application_namespace_keeps_content_and_refuses_collisions() {
         std::fs::read(lab.base.join("root/occupied")).unwrap(),
         b"user"
     );
+    // 腾空的原路径可以被重新写入（首次导入的 preserve-both 正是这样安装远端版本）；
+    // 新内容必须拿到更大的代际，不能复用已经持久化的旧观察。
+    std::fs::write(lab.path(), b"remote-version-at-original-path").unwrap();
+    let replacement = lab.observe();
+    assert!(
+        replacement.evidence().generation > moved.generation,
+        "vacated path must not reuse its generation: {} <= {}",
+        replacement.evidence().generation,
+        moved.generation
+    );
+    assert_ne!(replacement.evidence().digest, moved.digest);
     assert!(root.ensure_directory("../escape").is_err());
 }
 
@@ -383,6 +394,71 @@ fn native_real_cloud_editor_atomic_save_and_guarded_remote_update() {
     assert_eq!(std::fs::read(lab.path()).unwrap(), b"saved-atomic");
     drop(first);
     drop(saved);
+    std::fs::remove_file(lab.path()).unwrap();
+    adapter.unregister().unwrap();
+}
+
+#[test]
+fn native_fully_materialized_file_rebinds_to_new_entry_but_partial_placeholder_does_not() {
+    use crate::cfapi::catalog::Identity;
+    use vaultsyncd_domain::ids::{EntryId, VersionId};
+    let lab = Lab::new();
+    let binding = BindingId::from_bytes([0x78; 16]);
+    let root = RootId::from_bytes([0x79; 16]);
+    let mut adapter = Adapter::connect(
+        &lab.base.join("root"),
+        Catalog::new(binding, root),
+        Arc::new(MetadataOnly),
+    )
+    .unwrap();
+    let old = Identity {
+        binding,
+        root,
+        entry: EntryId::from_bytes([0x7a; 16]),
+        version: VersionId::from_bytes([0x7b; 16]),
+    };
+    std::fs::write(lab.path(), b"deleted-entry-content").unwrap();
+    let first = lab.observe();
+    let meta = adapter.inspect("a.txt").unwrap();
+    adapter
+        .adopt_complete("a.txt", &meta, old, digest(b"deleted-entry-content"), 21)
+        .unwrap();
+    // 删除与离线修改并发：服务端删掉旧条目，本地同一文件带着完整新内容创建新条目。
+    std::fs::write(lab.path(), b"modified-after-delete").unwrap();
+    let edited = lab.observe();
+    let new = Identity {
+        binding,
+        root,
+        entry: EntryId::from_bytes([0x7c; 16]),
+        version: VersionId::from_bytes([0x7d; 16]),
+    };
+    let meta = adapter.inspect("a.txt").unwrap();
+    adapter
+        .adopt_complete("a.txt", &meta, new, digest(b"modified-after-delete"), 21)
+        .unwrap();
+    let adopted = adapter.inspect("a.txt").unwrap();
+    assert_eq!(
+        Identity::decode(&adopted.cloud.unwrap().identity)
+            .unwrap()
+            .entry,
+        new.entry
+    );
+    assert_eq!(std::fs::read(lab.path()).unwrap(), b"modified-after-delete");
+    // 不完整占位不能直接换成本 Root 的另一个条目：那会丢掉原条目的云状态。
+    adapter.catalog().write().unwrap().insert(old).unwrap();
+    adapter.create("b.txt", old, 4096, false).unwrap();
+    let placeholder = adapter.inspect("b.txt").unwrap();
+    assert_eq!(placeholder.cloud.as_ref().unwrap().on_disk, 0);
+    assert!(
+        adapter
+            .adopt_complete("b.txt", &placeholder, new, digest(b"x"), 4096)
+            .is_err()
+    );
+    adapter
+        .remove_unmodified_placeholder("b.txt", &placeholder)
+        .unwrap();
+    drop(first);
+    drop(edited);
     std::fs::remove_file(lab.path()).unwrap();
     adapter.unregister().unwrap();
 }

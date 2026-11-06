@@ -341,10 +341,17 @@ impl Adapter {
             if let Some(cloud) = &meta.cloud {
                 let prior = Identity::decode(&cloud.identity)
                     .map_err(|e| io::Error::other(format!("{e:?}")))?;
-                if prior.binding != id.binding
-                    || prior.root != id.root
-                    || prior.entry != id.entry
-                    || cloud.on_disk < size
+                let same_scope = prior.binding == id.binding && prior.root == id.root;
+                // 完整本地内容可以重新绑定到同一 Root 的新条目：删除与离线修改并发时，
+                // 服务端删除旧条目后客户端会为新内容提交 create，文件仍是同一份完整字节
+                // （S074 T11 实测旧 CFAPI 身份会让 ACK 后的 adopt 永远失败）。不完整占位
+                // 仍拒绝换身份，避免丢弃另一个条目的云状态/水合进度。
+                let rebound = same_scope && cloud.on_disk >= size;
+                if !rebound
+                    && (prior.binding != id.binding
+                        || prior.root != id.root
+                        || prior.entry != id.entry
+                        || cloud.on_disk < size)
                 {
                     return Err(io::Error::other(
                         "different or incomplete placeholder identity",
