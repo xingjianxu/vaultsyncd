@@ -1,5 +1,6 @@
 //! 重启后真实内容核对。数据库 clean 只是历史观察，不能生成覆盖/删除/释放授权。
 //! 每次破坏性动作（不只启动时）重新读取固定快照并流式计算摘要；未知、占用与读失败均关闭闸门。
+pub mod export;
 pub mod resync;
 
 use serde::{Deserialize, Serialize};

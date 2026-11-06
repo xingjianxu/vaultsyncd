@@ -292,3 +292,11 @@ fn db(error: impl std::fmt::Display) -> PortError {
 
 #[cfg(test)]
 mod tests;
+
+/// 在调用方现有读事务内复用模式证据算法，供状态页获取一致视图。
+pub(crate) async fn mode_progress_in(
+    conn: &mut sqlx::SqliteConnection,
+    binding: BindingId,
+) -> Result<ModeProgress, PortError> {
+    store::snapshot(conn, binding).await?.progress()
+}

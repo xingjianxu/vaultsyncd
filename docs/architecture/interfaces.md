@@ -2192,3 +2192,13 @@ API 依据：[NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/
 任何 dirty、冲突/待办、未知指纹/身份、部分驻留或未恢复意图均不授权释放。成功事务只将驻留改为
 metadata_only，保留内容基线与原代际，不生成远端 Delete。`controlled_releases.completed=0` 始终是未完成状态。
 原生 CFAPI 使用保护与服务器租约适配由 S069/应用入口接线；测试磁盘适配器仅 cfg(test)。
+
+## S064：状态、Root问题与恢复导出
+
+`status::snapshot(&Database, BindingId)` 在同一SQLite读事务汇总多维状态；S061 `mode_progress_in` 仅crate内部复用，public API不变。`BindingStatus::synchronized` 必须无dirty/队列/传输/事件差/未知/开放意图/恢复围栏且full证明完整。metadata_only不表示同步完成，完整缓存也不自动淘汰。
+
+`status::issues::report` 按Root+ErrorCode持久合并严重原因，第一次/恢复后复发才返回notify；不绑定单个Binding外键，解绑不删其他绑定的问题。普通网络原因不创建通知，用户打开失败仍返回explain_open。`resolve_root` 仅在Root级所有相关绑定同原因均恢复后由调用方调用。`diagnostics::bounded` 只导出类型化身份、错误码、耗时整行，限制总字节，不接受自由文本/凭据/内容。
+
+`recovery::export::ExportRecovery::run(binding, destination, ExportSource, ExportDestination)` 通过端口固定快照并stream导出，`Target` 区分current/candidate和snapshot；当前dirty与旧固定上传快照分别保存。源discover必须完整或报错，末尾复核新增候选/每个来源与SQLite状态。目的create_new必须使用安全目录句柄、拒绝reparse和覆盖、保持身份、拒绝同步/缓存重叠；ExportDirectory保证create_new/顺序写入/读回/fsync。核心不做平台I/O；测试磁盘适配器不构成生产Windows实现。
+
+文件命名仅kind+稳定身份，state.json包含绑定/epoch/模式/游标、三视图、待办、上传快照事实、恢复日志和隔离操作（排除会话token）；清单带文件长度与SHA-256。写完读回校验、状态未变化后最后写manifest.json，并持久化后validate。validate要求格式、有效绑定、唯一state.json、合法名字/来源、固定大小摘要与state绑定一致；失败返回明确错误，保留部分目录、不清dirty、不覆盖、不宣称完整。缺失快照、部分不可恢复内容同样明确失败。生产Windows快照与安全目的目录适配、IPC接线由应用入口卡承担。
