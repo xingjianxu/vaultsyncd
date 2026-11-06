@@ -17,6 +17,8 @@
 //!
 //! 判定规则本身在 [`super::guard`]（纯逻辑、宿主可测）；本模块只负责取证据与调用平台。
 
+pub mod verified;
+
 use std::path::{Path, PathBuf};
 
 use super::content;

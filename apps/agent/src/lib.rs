@@ -6,3 +6,6 @@ mod hydration;
 #[cfg(all(test, windows))]
 #[allow(unsafe_code)]
 mod hydration_tests;
+
+#[cfg(windows)]
+pub mod release;
