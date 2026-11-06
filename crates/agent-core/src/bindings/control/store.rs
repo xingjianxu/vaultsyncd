@@ -101,7 +101,7 @@ impl Snapshot {
         }
         Ok(())
     }
-    fn progress(&self) -> Result<ModeProgress, PortError> {
+    pub(super) fn progress(&self) -> Result<ModeProgress, PortError> {
         let mut verified = 0;
         let mut remaining = self.unlocated;
         if !self
@@ -425,7 +425,10 @@ async fn report(
     value.offer_export_recovery = !value.unconfirmed.is_empty();
     Ok(value)
 }
-async fn snapshot(conn: &mut SqliteConnection, binding: BindingId) -> Result<Snapshot, PortError> {
+pub(super) async fn snapshot(
+    conn: &mut SqliteConnection,
+    binding: BindingId,
+) -> Result<Snapshot, PortError> {
     let row = sqlx::query("SELECT mode,rules_version FROM bindings WHERE id=?")
         .bind(binding.as_bytes().as_slice())
         .fetch_optional(&mut *conn)
