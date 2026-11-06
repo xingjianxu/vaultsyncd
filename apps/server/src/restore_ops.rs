@@ -13,6 +13,7 @@
 use vaultsyncd_domain::ids::{EntryId, RootId, TxId, UserId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 use vaultsyncd_server_core::api::operations::OperationFailure;
+use vaultsyncd_server_core::commit::namespace::{NamespaceAfter, NamespaceBefore};
 use vaultsyncd_server_core::history::trash::{
     CommittedTrashRestore, RestoredTrash, TrashRestorePorts, TrashRestoreRequest,
 };
@@ -436,6 +437,7 @@ pub struct SqlTrashRestoreStore {
     key: OperationKey,
     digest: RequestDigest,
     now: UtcTimestamp,
+    local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 impl SqlTrashRestoreStore {
@@ -454,8 +456,148 @@ impl SqlTrashRestoreStore {
             key,
             digest,
             now,
+            local_generation: None,
         }
     }
+
+    /// 客户端本地代际：随恢复计划一起持久化，重放与重启补完都回显同一个值。
+    #[must_use]
+    pub fn with_local_generation(
+        mut self,
+        generation: Option<vaultsyncd_domain::version::Generation>,
+    ) -> Self {
+        self.local_generation = generation;
+        self
+    }
+}
+
+fn kind_text(kind: EntryKind) -> &'static str {
+    match kind {
+        EntryKind::File => "file",
+        EntryKind::Directory => "directory",
+    }
+}
+
+/// 整组恢复计划的持久形态：冻结清单（条目身份、种类、内容版本、revision）、实际路径/另名决定与
+/// 每个意图的身份。恢复只信这份快照，不再按路径前缀或最新操作行推断。
+pub(crate) fn plan_context(
+    plan: &TrashRestoreWrite,
+    local_generation: Option<vaultsyncd_domain::version::Generation>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "entry": plan.entry.to_hex(),
+        "revision": plan.expected_revision.to_string(),
+        "path": plan.path,
+        "name": plan.name,
+        "renamed": plan.renamed,
+        "intents": plan.intents.iter().map(|id| id.to_hex()).collect::<Vec<_>>(),
+        "directory_intents": plan.directory_intents.iter().map(|id| id.to_hex()).collect::<Vec<_>>(),
+        "local_generation": local_generation.map(|value| value.to_string()),
+        "entries": plan.entries.iter().map(|entry| serde_json::json!({
+            "entry": entry.entry.to_hex(),
+            "parent": entry.parent.to_hex(),
+            "name": entry.name,
+            "path": entry.path,
+            "kind": kind_text(entry.kind),
+            "content_version": entry.content_version.map(|version| version.to_hex()),
+            "revision": entry.expected_revision.to_string(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// 从持久上下文还原整组计划；任何字段缺失或不合法都报错，由调用方保持停写。
+pub(crate) fn plan_from_context(
+    context: &serde_json::Value,
+    key: OperationKey,
+    digest: RequestDigest,
+    at: UtcTimestamp,
+) -> Result<TrashRestoreWrite, String> {
+    fn text<'a>(value: &'a serde_json::Value, field: &str) -> Result<&'a str, String> {
+        value
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("恢复计划缺少 {field}"))
+    }
+    fn id<T: std::str::FromStr>(value: &serde_json::Value, field: &str) -> Result<T, String> {
+        text(value, field)?
+            .parse()
+            .map_err(|_| format!("恢复计划字段 {field} 不合法"))
+    }
+    fn ids(
+        value: &serde_json::Value,
+        field: &str,
+    ) -> Result<Vec<vaultsyncd_domain::ids::IntentId>, String> {
+        value
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| format!("恢复计划缺少 {field}"))?
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .and_then(|text| text.parse().ok())
+                    .ok_or_else(|| format!("恢复计划 {field} 含非法身份"))
+            })
+            .collect()
+    }
+    let entries = context
+        .get("entries")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "恢复计划缺少 entries".to_owned())?
+        .iter()
+        .map(|item| {
+            Ok(TrashRestoreEntry {
+                entry: id(item, "entry")?,
+                parent: id(item, "parent")?,
+                name: text(item, "name")?.to_owned(),
+                path: text(item, "path")?.to_owned(),
+                kind: match text(item, "kind")? {
+                    "file" => EntryKind::File,
+                    "directory" => EntryKind::Directory,
+                    other => return Err(format!("恢复计划含未知种类 {other}")),
+                },
+                content_version: match item.get("content_version") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(value) => Some(
+                        value
+                            .as_str()
+                            .and_then(|text| text.parse().ok())
+                            .ok_or_else(|| "恢复计划内容版本不合法".to_owned())?,
+                    ),
+                },
+                expected_revision: Revision::from_decimal(text(item, "revision")?)
+                    .map_err(|error| error.to_string())?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let write = TrashRestoreWrite {
+        intents: ids(context, "intents")?,
+        directory_intents: ids(context, "directory_intents")?,
+        key,
+        digest,
+        entry: id(context, "entry")?,
+        expected_revision: Revision::from_decimal(text(context, "revision")?)
+            .map_err(|error| error.to_string())?,
+        path: text(context, "path")?.to_owned(),
+        name: text(context, "name")?.to_owned(),
+        renamed: context
+            .get("renamed")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| "恢复计划缺少 renamed".to_owned())?,
+        entries,
+        at,
+    };
+    let files = write
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::File)
+        .count();
+    if write.intents.len() != files
+        || write.directory_intents.len() != write.entries.len() - files
+        || write.entries.first().map(|entry| entry.entry) != Some(write.entry)
+    {
+        return Err("恢复计划的意图数量与清单不一致".to_owned());
+    }
+    Ok(write)
 }
 
 impl TrashRestoreStore for SqlTrashRestoreStore {
@@ -491,6 +633,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         &mut self,
         key: OperationKey,
         digest: RequestDigest,
+        plan: &TrashRestoreWrite,
     ) -> Result<RestoreBegin, RestoreStoreError> {
         let mut tx = self.database.begin_write().await.map_err(restore_error)?;
         let began = store_operations::begin_operation(
@@ -503,6 +646,47 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         )
         .await
         .map_err(operation_failure)?;
+        if matches!(began, store_operations::BeginOperation::Started) {
+            // 同一事务：操作 pending、整组计划、全部目录的 prepared 意图。三者要么都在要么都不在。
+            let binding = crate::journal::Binding::new(
+                store_key(key),
+                "trash_restore",
+                plan_context(plan, self.local_generation),
+            );
+            binding.persist(&mut tx).await.map_err(restore_error)?;
+            let directories = plan
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == EntryKind::Directory);
+            for (entry, intent) in directories.zip(&plan.directory_intents) {
+                store_intents::begin_intent(
+                    &mut tx,
+                    self.owner,
+                    &store_intents::NewFsIntent {
+                        intent_id: *intent,
+                        root: key.root,
+                        kind: store_intents::FsIntentKind::Create,
+                        target_path: entry.path.clone(),
+                        staging_path: None,
+                        expected_before: NamespaceBefore::Absent.to_json(),
+                        desired_after: NamespaceAfter {
+                            entry: entry.entry,
+                            parent: entry.parent,
+                            path: entry.path.clone(),
+                            kind: EntryKind::Directory,
+                        }
+                        .to_json(),
+                    },
+                    plan.at,
+                )
+                .await
+                .map_err(restore_error)?;
+                binding
+                    .attach(&mut tx, *intent)
+                    .await
+                    .map_err(restore_error)?;
+            }
+        }
         tx.commit().await.map_err(restore_error)?;
         Ok(match began {
             store_operations::BeginOperation::Started => RestoreBegin::Started,
@@ -525,12 +709,47 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         if root_row.expires_at < self.now {
             return Ok(None);
         }
-        let prefix = format!("{}/", root_row.path);
-        let mut entries: Vec<TrashEntryFacts> = rows
-            .iter()
-            .filter(|row| {
-                row.entry == entry || row.path == root_row.path || row.path.starts_with(&prefix)
-            })
+        // 范围由删除时持久化的“批次归属”决定，而不是旧路径前缀：同一路径下另一轮删除的条目
+        // （先恢复/重建再删除、同名新目录）属于别的批次，绝不会被选入。没有归属的行（外部采纳
+        // 的单条删除）只恢复它自己，其后代各自是独立的回收站条目。
+        let membership: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT deletion_id FROM trash_membership WHERE entry_id = ?1")
+                .bind(entry.as_bytes().as_slice())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(restore_error)?;
+        let batch: std::collections::BTreeSet<EntryId> = match membership {
+            None => std::iter::once(entry).collect(),
+            Some(deletion) => {
+                let members: Vec<Vec<u8>> = sqlx::query_scalar(
+                    "SELECT entry_id FROM trash_membership WHERE deletion_id = ?1",
+                )
+                .bind(deletion)
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(restore_error)?;
+                members
+                    .into_iter()
+                    .filter_map(|bytes| <[u8; 16]>::try_from(bytes).ok())
+                    .map(EntryId::from_bytes)
+                    .collect()
+            }
+        };
+        // 沿父子身份从根向下取闭包（只在该批次里走）。
+        let mut selected: Vec<&store_trash::TrashEntry> = vec![root_row];
+        let mut frontier = vec![entry];
+        while let Some(parent) = frontier.pop() {
+            for row in rows.iter().filter(|row| {
+                row.parent == parent && row.entry != entry && batch.contains(&row.entry)
+            }) {
+                if selected.iter().all(|seen| seen.entry != row.entry) {
+                    selected.push(row);
+                    frontier.push(row.entry);
+                }
+            }
+        }
+        let mut entries: Vec<TrashEntryFacts> = selected
+            .into_iter()
             .map(|row| TrashEntryFacts {
                 entry: row.entry,
                 parent: row.parent,
@@ -559,6 +778,28 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             });
         }
         Ok(Some(TrashSubtree { entries }))
+    }
+
+    async fn parent_path(
+        &mut self,
+        root: RootId,
+        parent: EntryId,
+    ) -> Result<Option<String>, RestoreStoreError> {
+        let mut conn = connect(&self.database).await?;
+        let record = store_entries::entry_in_scope(&mut conn, self.owner, parent)
+            .await
+            .map_err(restore_error)?;
+        let Some(record) =
+            record.filter(|record| record.root == root && record.deleted_at.is_none())
+        else {
+            return Ok(None);
+        };
+        if record.parent.is_none() {
+            return Ok(Some(String::new()));
+        }
+        store_entries::path_of(&mut conn, self.owner, parent)
+            .await
+            .map_err(restore_error)
     }
 
     async fn parent_kind(
@@ -716,6 +957,36 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             .await
             .map_err(restore_error)?;
         }
+        // 目录意图：核心已核对目录存在（或补建完成），这里把 prepared 经 published 一并收尾。
+        for intent in &write.directory_intents {
+            let record = store_intents::intent_in_scope(&mut tx, self.owner, *intent)
+                .await
+                .map_err(restore_error)?
+                .ok_or(RestoreStoreError::IllegalIntentTransition {
+                    from: vaultsyncd_server_core::commit::intent::PutPhase::Prepared,
+                    to: vaultsyncd_server_core::commit::intent::PutPhase::Finalized,
+                })?;
+            if record.phase == FsIntentPhase::Prepared {
+                store_intents::advance_intent_phase(
+                    &mut tx,
+                    self.owner,
+                    *intent,
+                    FsIntentPhase::Published,
+                    write.at,
+                )
+                .await
+                .map_err(restore_error)?;
+            }
+            store_intents::advance_intent_phase(
+                &mut tx,
+                self.owner,
+                *intent,
+                FsIntentPhase::Finalized,
+                write.at,
+            )
+            .await
+            .map_err(restore_error)?;
+        }
         tx.commit().await.map_err(restore_error)?;
         let _ = &self.digest;
         Ok(TrashRestoreRecord {
@@ -841,7 +1112,9 @@ pub async fn execute_trash_restore(
     let mut target = crate::executor::WorkTreeTarget::new(handle.clone(), layout);
     let mut ns = crate::commands::WorkTreeNamespace::new(handle);
     let mut store = SqlTrashRestoreStore::new(executor.database().clone(), owner, key, digest, at);
-    let mut log = crate::executor::SqlIntentLog::new(executor.database().clone(), owner);
+    // 计划与目录意图由 begin_restore 一并落盘；文件意图在发布前创建时只与该操作挂钩。
+    let mut log = crate::executor::SqlIntentLog::new(executor.database().clone(), owner)
+        .bound(crate::journal::Binding::linked(store_key(key)));
     let mut leases = crate::content::DbLeases::new(executor.database(), owner, at);
     let request = TrashRestoreRequest {
         intent_seed: vaultsyncd_domain::ids::IntentId::from_bytes(random_bytes()),
@@ -860,28 +1133,6 @@ pub async fn execute_trash_restore(
     };
     let mut gate = executor.commit_gate().lock().await;
     executor.ensure_no_unfinished(owner, key.root).await?;
-    // 目录恢复的核心当前在首个文件意图前 mkdir；缺少整组目录的持久恢复计划。
-    // 在 S052 补完该证据之前，必须显式未就绪，不能先改磁盘再假装可恢复。
-    let mut conn = executor
-        .database()
-        .pool()
-        .acquire()
-        .await
-        .map_err(|error| OperationFailure::Storage {
-            detail: error.to_string(),
-        })?;
-    let rows = store_trash::trash_entries(&mut conn, owner, key.root)
-        .await
-        .map_err(|error| OperationFailure::Storage {
-            detail: error.to_string(),
-        })?;
-    if rows
-        .iter()
-        .any(|row| row.entry == command.entry && row.kind == store_entries::EntryKind::Directory)
-    {
-        return Err(OperationFailure::ExecutorUnavailable);
-    }
-    drop(conn);
     let outcome =
         vaultsyncd_server_core::history::trash::restore_trash(&mut gate, &mut ports, at, &request)
             .await;

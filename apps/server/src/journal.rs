@@ -15,6 +15,8 @@ pub struct Binding {
     pub kind: String,
     /// 类型特有事实（版本恢复来源、冲突副本身份、完整恢复清单等）。
     pub context: serde_json::Value,
+    /// 上下文已经由更早的事务持久化（整组恢复计划）；只关联新意图，不再写上下文。
+    linked: bool,
 }
 impl Binding {
     /// 建立上下文，操作键从已授权请求传入。
@@ -25,6 +27,14 @@ impl Binding {
             op: key.op,
             kind: kind.to_owned(),
             context,
+            linked: false,
+        }
+    }
+    /// 只关联：操作的恢复上下文已先于任何意图落盘（回收站整组恢复的计划），新意图仅与它挂钩。
+    pub fn linked(key: OperationKey) -> Self {
+        Self {
+            linked: true,
+            ..Self::new(key, "", serde_json::Value::Null)
         }
     }
     /// 对应的操作键。
@@ -61,7 +71,9 @@ impl Binding {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         intent: IntentId,
     ) -> Result<(), sqlx::Error> {
-        self.persist(tx).await?;
+        if !self.linked {
+            self.persist(tx).await?;
+        }
         sqlx::query(
             "INSERT INTO intent_operations(intent_id,root_id,device_id,op_id) VALUES (?1,?2,?3,?4)",
         )
@@ -98,6 +110,7 @@ pub async fn for_intent(
             kind,
             context: serde_json::from_str(&text)
                 .map_err(|e| sqlx::Error::Protocol(e.to_string()))?,
+            linked: false,
         })
     })
     .transpose()

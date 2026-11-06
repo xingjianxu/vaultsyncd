@@ -548,3 +548,81 @@ where
     }
     Err(format!("等待 {label} 超时"))
 }
+
+/// 提交一条操作命令。
+pub async fn submit(
+    running: &Running,
+    token: &str,
+    root: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    running
+        .json(
+            "POST",
+            &format!("/v1/roots/{root}/operations"),
+            Some(token),
+            Some(&body),
+        )
+        .await
+        .expect("提交操作")
+}
+
+/// 新建快照并取全部清单条目。
+pub async fn snapshot(running: &Running, token: &str, root: &str) -> Vec<Value> {
+    let created = create_snapshot(running, token, root).await.expect("快照");
+    let id = created
+        .get("snapshot_id")
+        .and_then(Value::as_str)
+        .expect("snapshot_id")
+        .to_owned();
+    snapshot_entries(running, token, root, &id)
+        .await
+        .expect("快照清单")
+}
+
+/// 当前 server epoch 文本。
+pub async fn epoch_of(running: &Running, token: &str, root: &str) -> String {
+    create_snapshot(running, token, root)
+        .await
+        .expect("快照")
+        .get("server_epoch")
+        .and_then(Value::as_str)
+        .expect("epoch")
+        .to_owned()
+}
+
+/// 目录删除所需的子树 token。
+pub async fn subtree_token(
+    running: &Running,
+    token: &str,
+    root: &str,
+    entry: &str,
+) -> (StatusCode, Value) {
+    running
+        .json(
+            "GET",
+            &format!("/v1/roots/{root}/entries/{entry}/subtree"),
+            Some(token),
+            None,
+        )
+        .await
+        .expect("取子树 token")
+}
+
+/// 按名称找清单条目（同名多个时取第一个；需要精确身份的用例自己筛选）。
+pub fn entry_named<'a>(entries: &'a [Value], name: &str) -> &'a Value {
+    entries
+        .iter()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("清单里没有 {name}"))
+}
+
+/// 直连测试库（只对本测试实例注入故障/核对状态用）。
+pub async fn db(lab: &Lab) -> sqlx::SqliteConnection {
+    use sqlx::Connection;
+    sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(lab.state().join("server.sqlite")),
+    )
+    .await
+    .expect("连接测试库")
+}
