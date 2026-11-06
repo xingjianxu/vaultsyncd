@@ -134,7 +134,7 @@ mod tests {
             let response = json_response(200, &v);
             Box::pin(async move { Ok(response) })
         }));
-        let client = ApiClient::with_transport(
+        let client = ApiClient::with_transport_for_unit_tests(
             ClientConfig::new("https://vault.example"),
             transport.clone(),
         )

@@ -2483,3 +2483,10 @@ StateLock::try_acquire_file接收平台已安全打开的同一server.lock，flo
 S089兼容补充：先创建独立种类`RESTORE_GUARD_APPLICATION_ID=0x56535247`的server.sqlite，旧服务既有ForeignDatabase门同样拒绝；导入/更新只作用restore.candidate.sqlite。全部文件/历史/DB/新映射/epoch核验与刷盘后，确认护栏完整身份未变，再原子替换正式名称并刷盘，之后写complete报告和移除marker。不会把含旧Root路径/旧epoch的中间库暴露到正式名；即使旧程序不理解新marker，也不能开启半恢复。新恢复代际为随机63位非零值，排除所有旧Root epoch，重复恢复同一旧备份不会确定复用同一代际；逻辑ServerId、Root seq及历史保持。核心按Linux POSIX根分量解释映射，避免便携构建宿主改变路径语义。
 
 S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站、普通独立inode、会话失效/旧epoch操作410、重复恢复与零Root、在线同锁及非空/非法映射、坏归档与实际空间不足、SIGKILL后的当前启动屏障和既有ForeignDatabase门。护栏必须先于工作写入且候选DB不能用正式名称；完成文件写在原子发布后，marker持久移除才开放。容量预算为估算，运行时ENOSPC仍保留incomplete，源schema12的启动迁移沿用store既有迁移门；恢复不提供隐式覆盖/resume，运维入口见backup文档。
+
+
+### S091 — 真实远端协议协商
+
+补齐既有GET /v1/capabilities，不新增wire DTO/版本。bootstrap在状态锁/DB门后持久稳定ServerId，返回当前恢复epoch、已实现功能和真实限额；Root注册沿用restore_epoch，不在恢复后退回0。权威ServerId是服务器身份，现存agent配置server.id仍按既有客户端命名空间使用，本卡未额外收紧身份pin；URL/TLS/Root/会话授权边界照旧。
+
+默认Rust ApiClient（包括testing/all-features构建）在发送认证/数据请求前读取实际capabilities，拒major/不合法限额或缺已知能力；只使用已知feature交集，兼容更高minor与未知增量字段。刷新和401重试也重核，不向capability请求携带凭据/内容；本地恢复、数据库、缓存和未确认队列不由HTTP错误清理。仅cfg(test/testing)显式单元构造器with_transport_for_unit_tests可关闭这一层，生产默认构造器不受feature隐式影响。真实TCP fixture代理后接真实服务证明major拒绝不抵达login、缺uploads不创建上传，凭据保留；默认/testing各1项通过。当前没有旧正式发行客户端，固定开发profile/历史迁移校验和见tests/contract/fixtures/s091，不冒充正式版本互通。

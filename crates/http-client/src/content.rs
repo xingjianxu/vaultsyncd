@@ -227,7 +227,7 @@ mod tests {
             + 'static,
     {
         let transport = Arc::new(FakeTransport::new(handler));
-        let client = ApiClient::with_transport(
+        let client = ApiClient::with_transport_for_unit_tests(
             ClientConfig::new("https://vault.example"),
             transport.clone(),
         )

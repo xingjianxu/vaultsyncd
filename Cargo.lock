@@ -5292,6 +5292,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "vaultsyncd-domain",
+ "vaultsyncd-http-client",
  "vaultsyncd-platform-linux-server",
  "vaultsyncd-protocol",
  "vaultsyncd-server",

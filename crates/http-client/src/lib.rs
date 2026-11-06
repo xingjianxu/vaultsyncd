@@ -49,6 +49,7 @@
 
 pub mod auth;
 pub mod cancel;
+mod capabilities;
 pub mod changes;
 pub mod client;
 pub mod config;

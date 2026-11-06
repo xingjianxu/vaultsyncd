@@ -49,3 +49,5 @@ pub const EXIT_CONFIG: u8 = 2;
 
 /// Optional explicitly configured static Web assets.
 pub mod web;
+
+pub mod capabilities;
