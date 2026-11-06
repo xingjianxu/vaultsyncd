@@ -25,6 +25,7 @@ pub mod bindings;
 pub mod engine;
 pub mod executor;
 pub mod ports;
+pub mod recovery;
 
 #[cfg(test)]
 mod testing;
