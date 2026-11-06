@@ -11,7 +11,7 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use vaultsyncd_platform_linux_server::files::clone::{StageRequest, stage_copy};
@@ -34,13 +34,13 @@ use vaultsyncd_server_core::ports::work_tree::{
 
 /// Root 工作目录的只读观察端口（Linux）。
 pub struct LinuxWorkTree {
-    root: Rc<RootHandle>,
+    root: Arc<RootHandle>,
 }
 
 impl LinuxWorkTree {
     /// 以已打开的 Root 句柄建立端口。
     #[must_use]
-    pub fn new(root: Rc<RootHandle>) -> Self {
+    pub fn new(root: Arc<RootHandle>) -> Self {
         LinuxWorkTree { root }
     }
 }
@@ -187,7 +187,7 @@ pub fn hint_of(signal: WatchSignal) -> WatchHint {
 /// 使用顺序：**先** [`open`](RootWatcher::open) 建立监视，**再**让驱动器做启动补扫——监视建立之前的变化
 /// 没有事件，只能靠那次补扫发现。
 pub struct RootWatcher {
-    root: Rc<RootHandle>,
+    root: Arc<RootHandle>,
     watcher: DirWatcher,
 }
 
@@ -198,7 +198,7 @@ impl RootWatcher {
     ///
     /// 创建 inotify 实例失败。
     pub fn open(
-        root: Rc<RootHandle>,
+        root: Arc<RootHandle>,
         config: WatchConfig,
     ) -> Result<(Self, Vec<WatchHint>), WatchError> {
         let (watcher, gaps) = DirWatcher::open(&root, config)?;
@@ -234,14 +234,14 @@ impl RootWatcher {
 
 /// 对象区字节层端口（Linux）：源文件经 Root 句柄读取，候选建在对象区 staging 目录。
 pub struct LinuxObjectPort {
-    root: Rc<RootHandle>,
+    root: Arc<RootHandle>,
     objects: std::path::PathBuf,
 }
 
 impl LinuxObjectPort {
     /// 以 Root 句柄与对象区根目录建立端口。
     #[must_use]
-    pub fn new(root: Rc<RootHandle>, objects: impl Into<std::path::PathBuf>) -> Self {
+    pub fn new(root: Arc<RootHandle>, objects: impl Into<std::path::PathBuf>) -> Self {
         LinuxObjectPort {
             root,
             objects: objects.into(),

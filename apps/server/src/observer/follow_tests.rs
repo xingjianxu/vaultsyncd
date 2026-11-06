@@ -4,7 +4,7 @@
 use std::fs::{self, File, FileTimes};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use vaultsyncd_domain::version::UtcTimestamp;
@@ -41,7 +41,7 @@ struct FollowEnv {
 
 impl FollowEnv {
     fn new(lab: &Lab) -> Self {
-        let root = Rc::new(RootHandle::open(&lab.root_dir, ResolveMode::Auto).expect("打开 Root"));
+        let root = Arc::new(RootHandle::open(&lab.root_dir, ResolveMode::Auto).expect("打开 Root"));
         let root_id = RootId::from_bytes(marker_id(0x11));
         let observer = ExternalObserver::new(
             root_id,

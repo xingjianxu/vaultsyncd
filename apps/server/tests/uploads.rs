@@ -156,8 +156,14 @@ async fn open_app(fixture: &Fixture) -> App {
     ));
     let lifecycle = Arc::new(Lifecycle::new());
     lifecycle.mark_ready();
+    let executor = Arc::new(vaultsyncd_server::executor::ExecutorContext::new(
+        auth.database().clone(),
+        fixture.state_dir().as_path(),
+        None,
+    ));
     let operations = Arc::new(vaultsyncd_server::operations::OperationsContext::new(
         Arc::clone(&auth),
+        executor,
     ));
     let sync = Arc::new(vaultsyncd_server::sync::SyncContext::new(
         Arc::clone(&auth),

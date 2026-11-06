@@ -1,0 +1,11 @@
+{
+  "op_id": "44444444444444444444444444444444",
+  "device_id": "55555555555555555555555555555555",
+  "server_epoch": "9007199254740993",
+  "kind": "put_content",
+  "entry_id": "66666666666666666666666666666666",
+  "base_revision": "17",
+  "upload_id": "33333333333333333333333333333333",
+  "local_generation": "7",
+  "conflict_policy": "preserve_both"
+}

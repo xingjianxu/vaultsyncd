@@ -1,0 +1,22 @@
+{
+  "snapshot_id": "88888888888888888888888888888888",
+  "high_water_seq": "42",
+  "entries": [
+    {
+      "entry_id": "99999999999999999999999999999999",
+      "name": "",
+      "kind": "directory",
+      "revision": "0"
+    },
+    {
+      "entry_id": "66666666666666666666666666666666",
+      "parent_id": "99999999999999999999999999999999",
+      "name": "note.txt",
+      "kind": "file",
+      "revision": "18",
+      "version_id": "77777777777777777777777777777777",
+      "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": "9007199254740993"
+    }
+  ]
+}

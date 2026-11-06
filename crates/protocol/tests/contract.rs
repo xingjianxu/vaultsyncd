@@ -12,7 +12,9 @@ use vaultsyncd_protocol::domain_map::{
     server_epoch_from_wire, server_epoch_to_wire, server_id_from_wire, server_id_to_wire,
 };
 use vaultsyncd_protocol::generated::{
-    Capabilities, ErrorCode, ErrorEnvelope, HealthResponse, HealthStatus,
+    Capabilities, ChangeList, ErrorCode, ErrorEnvelope, FinalizedContent, HealthResponse,
+    HealthStatus, OperationRequest, OperationResult, RootList, RootRegistered, SeqHint,
+    SessionIssued, Snapshot, SnapshotPage, UploadSession,
 };
 
 /// `api/examples/capabilities.response.json`
@@ -215,4 +217,79 @@ fn serialize_writes_canonical_decimal_text() {
         json.contains("\"epoch\":\"9007199254740993\""),
         "序列化必须保留字符串形态，实际：{json}"
     );
+}
+
+/// S052 补齐的契约样本：每个都是服务端真实会返回的形状，十进制计数一律是字符串。
+mod examples_s052 {
+    use super::*;
+
+    /// `api/examples/session-issued.response.json`
+    const SESSION: &str = include_str!("../../../api/examples/session-issued.response.json");
+    /// `api/examples/root-registered.response.json`
+    const ROOT_REGISTERED: &str =
+        include_str!("../../../api/examples/root-registered.response.json");
+    /// `api/examples/root-list.response.json`
+    const ROOT_LIST: &str = include_str!("../../../api/examples/root-list.response.json");
+    /// `api/examples/upload-session.response.json`
+    const UPLOAD: &str = include_str!("../../../api/examples/upload-session.response.json");
+    /// `api/examples/finalized-content.response.json`
+    const FINALIZED: &str = include_str!("../../../api/examples/finalized-content.response.json");
+    /// `api/examples/operation.request.json`
+    const OPERATION_REQUEST: &str = include_str!("../../../api/examples/operation.request.json");
+    /// `api/examples/operation-result.response.json`
+    const OPERATION_RESULT: &str =
+        include_str!("../../../api/examples/operation-result.response.json");
+    /// `api/examples/snapshot.response.json`
+    const SNAPSHOT: &str = include_str!("../../../api/examples/snapshot.response.json");
+    /// `api/examples/snapshot-page.response.json`
+    const SNAPSHOT_PAGE: &str = include_str!("../../../api/examples/snapshot-page.response.json");
+    /// `api/examples/changes.response.json`
+    const CHANGES: &str = include_str!("../../../api/examples/changes.response.json");
+    /// `api/examples/seq-hint.event.json`
+    const SEQ_HINT: &str = include_str!("../../../api/examples/seq-hint.event.json");
+
+    #[test]
+    fn every_example_decodes_with_the_generated_dto() {
+        let _: SessionIssued = serde_json::from_str(SESSION).expect("会话样本");
+        let _: RootRegistered = serde_json::from_str(ROOT_REGISTERED).expect("Root 注册样本");
+        let _: RootList = serde_json::from_str(ROOT_LIST).expect("Root 清单样本");
+        let _: UploadSession = serde_json::from_str(UPLOAD).expect("上传会话样本");
+        let _: FinalizedContent = serde_json::from_str(FINALIZED).expect("finalize 样本");
+        let _: OperationRequest = serde_json::from_str(OPERATION_REQUEST).expect("操作请求样本");
+        let _: OperationResult = serde_json::from_str(OPERATION_RESULT).expect("操作结果样本");
+        let _: Snapshot = serde_json::from_str(SNAPSHOT).expect("快照样本");
+        let _: SnapshotPage = serde_json::from_str(SNAPSHOT_PAGE).expect("快照页样本");
+        let _: ChangeList = serde_json::from_str(CHANGES).expect("changes 样本");
+        let _: SeqHint = serde_json::from_str(SEQ_HINT).expect("SSE 提示样本");
+    }
+
+    #[test]
+    fn large_counters_survive_as_decimal_text() {
+        // 2^53 + 1 只有字符串形态能无损传输；样本必须直接用这个值守住契约。
+        let upload: UploadSession = serde_json::from_str(UPLOAD).expect("上传会话样本");
+        assert_eq!(upload.total_size, "9007199254740993");
+        let finalized: FinalizedContent = serde_json::from_str(FINALIZED).expect("finalize 样本");
+        assert_eq!(finalized.size, "9007199254740993");
+        let request: OperationRequest =
+            serde_json::from_str(OPERATION_REQUEST).expect("操作请求样本");
+        server_epoch_from_wire(&request.server_epoch).expect("epoch 是规范十进制文本");
+        let changes: ChangeList = serde_json::from_str(CHANGES).expect("changes 样本");
+        assert_eq!(changes.head_seq, changes.next_after);
+        assert!(
+            changes.batches[0].events_json.starts_with('['),
+            "事件必须是 JSON 数组文本"
+        );
+    }
+
+    #[test]
+    fn pending_and_committed_shapes_are_distinguishable() {
+        // committed 才带 revision/root_seq/version；样本不能把 pending 伪装成已同步。
+        let result: OperationResult = serde_json::from_str(OPERATION_RESULT).expect("操作结果样本");
+        assert!(result.revision.is_some() && result.root_seq.is_some());
+        assert!(result.version_id.is_some());
+        assert_eq!(
+            result.state,
+            vaultsyncd_protocol::generated::OperationState::Committed
+        );
+    }
 }

@@ -38,22 +38,26 @@ use vaultsyncd_server_core::api::operations::{
     self, ConflictPolicy, OperationFailure, OperationKind, OperationRequest, RecordedOperation,
     RecordedOutcome, RootFacts,
 };
+use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent};
 use vaultsyncd_server_store::operations as store_operations;
 use vaultsyncd_server_store::roots::{self as store_roots, RootHealth};
 
 use crate::auth::AuthContext;
+use crate::executor::{ExecutorContext, PutCommand};
 use crate::uploads::{Caller, FromIdentity, bad_request, denied, error_response, parse_identity};
+use vaultsyncd_server_store::uploads as store_uploads;
 
 /// 操作端点共享的进程内状态。
 pub struct OperationsContext {
     auth: Arc<AuthContext>,
+    executor: Arc<ExecutorContext>,
 }
 
 impl OperationsContext {
-    /// 以认证上下文装配；操作的存储读写走同一个数据库。
+    /// 以认证上下文与提交执行器装配；操作的存储读写走同一个数据库。
     #[must_use]
-    pub fn new(auth: Arc<AuthContext>) -> Self {
-        Self { auth }
+    pub fn new(auth: Arc<AuthContext>, executor: Arc<ExecutorContext>) -> Self {
+        Self { auth, executor }
     }
 }
 
@@ -152,19 +156,131 @@ pub async fn submit(
         };
     }
 
-    // 新命令：本版还没有装配执行链路。显式拒绝且不留下任何状态（S052 在这里接
-    // `begin_operation` → 执行命令体 → `commit_operation`/`reject_operation`）。
-    warn!(
-        request_id = %caller.request_id,
-        root = %root_id.to_hex(),
-        kind = request.kind.as_text(),
-        "操作执行器尚未装配，命令未被受理"
-    );
-    failure_response(
-        &caller.request_id,
-        &OperationFailure::ExecutorUnavailable,
-        root_id,
-    )
+    // 新命令：内容 put 走真实执行链路（意图 → 发布 → 元数据事务）；其余命令的适配器尚未落地，
+    // 继续显式 503 `SERVICE_NOT_READY`，不写任何状态、不伪造成功。
+    if request.kind != OperationKind::PutContent {
+        warn!(
+            request_id = %caller.request_id,
+            root = %root_id.to_hex(),
+            kind = request.kind.as_text(),
+            "该命令的存储/工作目录适配器尚未装配，命令未被受理"
+        );
+        return failure_response(
+            &caller.request_id,
+            &OperationFailure::ExecutorUnavailable,
+            root_id,
+        );
+    }
+    let Some(entry) = request.entry else {
+        return failure_response(
+            &caller.request_id,
+            &OperationFailure::InvalidRequest {
+                detail: "put_content 缺少 entry_id".to_owned(),
+            },
+            root_id,
+        );
+    };
+    let (Some(revision), Some(upload)) = (request.base_revision, request.upload) else {
+        return failure_response(
+            &caller.request_id,
+            &OperationFailure::InvalidRequest {
+                detail: "put_content 缺少 base_revision/upload_id".to_owned(),
+            },
+            root_id,
+        );
+    };
+    let content = match finalized_content(&context, caller.principal.user_id, root_id, upload).await
+    {
+        Ok(content) => content,
+        Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
+    };
+    let at = match crate::executor::server_now() {
+        Ok(at) => at,
+        Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(root_id)),
+    };
+    let command = PutCommand {
+        device: request.device,
+        op: request.op,
+        entry,
+        expected_epoch: request.expected_epoch,
+        base_revision: revision,
+        content,
+        local_generation: request.local_generation,
+    };
+    match context
+        .executor
+        .execute_put(caller.principal.user_id, key, digest, &command, at)
+        .await
+    {
+        Ok(committed) => {
+            info!(
+                request_id = %caller.request_id,
+                op = %request.op,
+                revision = %committed.record.revision,
+                root_seq = %committed.record.seq,
+                version = %committed.record.version,
+                "操作已提交"
+            );
+            let result = OperationResult {
+                op_id: request.op.to_hex(),
+                state: WireState::Committed,
+                replayed: Some(false),
+                conflict: None,
+                echo_local_generation: request.local_generation.map(|value| value.to_string()),
+                entry_id: Some(entry.to_hex()),
+                error_code: None,
+                error_message: None,
+                revision: Some(committed.record.revision.to_string()),
+                root_seq: Some(committed.record.seq.to_string()),
+                version_id: Some(committed.record.version.to_hex()),
+            };
+            (StatusCode::OK, Json(result)).into_response()
+        }
+        Err(failure) => failure_response(&caller.request_id, &failure, root_id),
+    }
+}
+
+/// 取一次已 finalize 的内容引用（`uploads.state = finalized` 的摘要与长度）。
+///
+/// 未 finalize 的会话不能提交：没有固定的内容地址就没有可发布的对象。会话不存在/越权/未收齐
+/// 一律按 `INVALID_REQUEST` 回答，不猜默认内容。
+#[allow(clippy::result_large_err)]
+async fn finalized_content(
+    context: &Arc<OperationsContext>,
+    owner: UserId,
+    root: RootId,
+    upload: UploadId,
+) -> Result<ExpectedContent, OperationFailure> {
+    let mut conn = match context.auth.database().pool().acquire().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            return Err(OperationFailure::Storage {
+                detail: error.to_string(),
+            });
+        }
+    };
+    let record = store_uploads::upload_in_scope(&mut conn, owner, upload)
+        .await
+        .map_err(|error| OperationFailure::Storage {
+            detail: error.to_string(),
+        })?
+        .ok_or_else(|| OperationFailure::InvalidRequest {
+            detail: "上传会话不存在或不属于该账号".to_owned(),
+        })?;
+    if record.root != root {
+        return Err(OperationFailure::InvalidRequest {
+            detail: "上传会话不属于该 Root".to_owned(),
+        });
+    }
+    if record.state != store_uploads::UploadState::Finalized {
+        return Err(OperationFailure::InvalidRequest {
+            detail: "上传会话尚未 finalize，不能提交".to_owned(),
+        });
+    }
+    Ok(ExpectedContent::new(
+        ContentDigest::from_bytes(record.hash),
+        record.expected_size,
+    ))
 }
 
 /// `GET /v1/roots/{root}/operations/{op}`：按 OpId 取操作结果。
@@ -380,12 +496,20 @@ fn result_response(
     root: RootId,
 ) -> Response {
     match outcome {
-        RecordedOutcome::Committed { result_json, .. } => {
+        RecordedOutcome::Committed {
+            result_json,
+            root_seq,
+        } => {
             match serde_json::from_str::<OperationResult>(result_json) {
                 Ok(mut result) => {
                     result.op_id = op.to_hex();
                     result.state = WireState::Committed;
                     result.replayed = replayed;
+                    // 结果里没有批次序号时用 `operations.root_seq` 补上：执行器写结果时 seq 还没有
+                    // 分配，而重试必须返回同一个 RootSeq（I01/I06）。
+                    if result.root_seq.is_none() {
+                        result.root_seq = Some(root_seq.to_string());
+                    }
                     (StatusCode::OK, Json(result)).into_response()
                 }
                 Err(error) => {

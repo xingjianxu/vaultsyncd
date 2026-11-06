@@ -182,8 +182,22 @@ impl Service {
             ScanPolicy::default(),
         ));
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
-        // 操作命令端点（S047）：命令执行链路属 S052，本版新命令显式 503 SERVICE_NOT_READY。
-        let operations = Arc::new(crate::operations::OperationsContext::new(Arc::clone(&auth)));
+        // 操作命令端点（S047/S052）：内容 put 走真实执行器；其余命令仍显式 503 SERVICE_NOT_READY。
+        // 外部观察循环（S052）：周期扫描每个健康 Root，把外部改动采纳成版本与事件。
+        let observer = Arc::new(crate::external::ObserverRuntime::new(
+            database.clone(),
+            &config.state_dir,
+            crate::external::ObserverRuntimeConfig::DEFAULT,
+        ));
+        let executor = Arc::new(crate::executor::ExecutorContext::new(
+            database.clone(),
+            &config.state_dir,
+            Some(Arc::clone(&observer)),
+        ));
+        let operations = Arc::new(crate::operations::OperationsContext::new(
+            Arc::clone(&auth),
+            executor,
+        ));
         // 快照、changes 与 SSE（S048）：SSE 在 draining 时主动结束，不拖住优雅停止。
         let sync = Arc::new(crate::sync::SyncContext::new(
             Arc::clone(&auth),
@@ -198,6 +212,26 @@ impl Service {
             operations,
             sync,
         );
+        // 观察循环用独立线程 + current-thread runtime：端口实现（`RootHandle` 与 trait 对象）不要求
+        // `Send`，而 HTTP 服务的多线程 runtime 不能承载非 `Send` 的 future。
+        let stop_observer = Arc::new(tokio::sync::Notify::new());
+        let observer_thread = {
+            let observer = Arc::clone(&observer);
+            let stop = Arc::clone(&stop_observer);
+            std::thread::Builder::new()
+                .name("vaultsyncd-observer".to_owned())
+                .spawn(move || {
+                    match tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                    {
+                        Ok(runtime) => runtime.block_on(observer.run(stop)),
+                        Err(error) => warn!(error = %error, "外部观察循环 runtime 建立失败"),
+                    }
+                })
+                .map_err(|error| warn!(error = %error, "外部观察线程启动失败"))
+                .ok()
+        };
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
             shutdown.await;
@@ -211,6 +245,14 @@ impl Service {
         let serve_result = axum::serve(listener, router)
             .with_graceful_shutdown(graceful)
             .await;
+
+        // 观察循环在关闭数据库之前停下：它的每一轮都在自己的短事务里提交/回滚。
+        stop_observer.notify_one();
+        if let Some(thread) = observer_thread
+            && thread.join().is_err()
+        {
+            warn!("外部观察线程没有正常退出");
+        }
 
         // 证据账目放在关闭数据库之前：这是“停止不丢任务”的可核对输出。
         match recovery::count_unfinished_intents(&database).await {

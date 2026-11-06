@@ -1,0 +1,7 @@
+{
+  "access_token": "access-token-for-example-only",
+  "access_expires_at": "1760003600",
+  "refresh_token": "refresh-token-for-example-only",
+  "refresh_expires_at": "1760600000",
+  "session_id": "0f0e0d0c0b0a09080706050403020100"
+}

@@ -1,0 +1,15 @@
+{
+  "root_id": "11111111111111111111111111111111",
+  "batches": [
+    {
+      "seq": "42",
+      "tx_id": "aaaaaaaa11223344556677889900aabb",
+      "events_json": "[{\"kind\":\"put\",\"entry_id\":\"66666666666666666666666666666666\",\"path\":\"note.txt\",\"revision\":\"18\",\"version_id\":\"77777777777777777777777777777777\",\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":\"9007199254740993\",\"origin\":\"client\"}]",
+      "created_at": "1760000000"
+    }
+  ],
+  "has_more": false,
+  "head_seq": "42",
+  "next_after": "42",
+  "server_epoch": "9007199254740993"
+}
