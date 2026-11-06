@@ -1,10 +1,10 @@
 # Isolated module fixture, not a host deployment. Values are explicit test inputs.
-{ nixpkgs, package, parameters ? "" }:
+{ nixpkgs, package, parameters ? "", module ? ../../nix/modules/vaultsyncd.nix }:
 let
   params = if parameters == "" then { } else builtins.fromJSON (builtins.readFile parameters);
   system = import (nixpkgs + "/nixos/lib/eval-config.nix") {
     system = "x86_64-linux";
-    modules = [ ../../nix/modules/vaultsyncd.nix {
+    modules = [ module {
       system.stateVersion = "26.11";
       boot.loader.grub.enable = false;
       fileSystems."/" = { device = "/dev/test-only"; fsType = "btrfs"; };

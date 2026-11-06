@@ -121,6 +121,12 @@ for name,p in [("outside",outside/"denied.txt"),("system",system)]:
         assert evidence['uid'] == uid and evidence['outside']['denied'] and evidence['system']['denied']
         status = dict(line.split(':', 1) for line in evidence['status'].splitlines() if ':' in line)
         assert int(status['CapEff'].strip(), 16) == 0 and status['NoNewPrivs'].strip() == '1'
+        main_pid = int(sudo('systemctl', 'show', '--property=MainPID', '--value', UNIT).stdout)
+        server_status = sudo('cat', f'/proc/{main_pid}/status').stdout
+        main_fields = dict(line.split(':', 1) for line in server_status.splitlines() if ':' in line)
+        assert all(int(v) == uid for v in main_fields['Uid'].split())
+        assert int(main_fields['CapEff'].strip(), 16) == 0 and main_fields['NoNewPrivs'].strip() == '1'
+        RESULT['server_status'] = server_status
         RESULT['identity'] = evidence
         RESULT['checks'].append('actual-generated-unit-nonroot-empty-capabilities-nonewprivs')
         RESULT['checks'].append('explicit-root-writable-world-writable-sibling-and-etc-readonly')

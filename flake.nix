@@ -27,6 +27,7 @@
       checks = forAllSystems (pkgs: {
         nixos-module = (import ./deploy/nixos/eval.nix {
           nixpkgs = nixpkgs.outPath;
+          module = self.nixosModules.default;
           package = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
         }).unit;
       });
