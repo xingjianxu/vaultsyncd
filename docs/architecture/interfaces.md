@@ -2490,3 +2490,10 @@ S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站
 补齐既有GET /v1/capabilities，不新增wire DTO/版本。bootstrap在状态锁/DB门后持久稳定ServerId，返回当前恢复epoch、已实现功能和真实限额；Root注册沿用restore_epoch，不在恢复后退回0。权威ServerId是服务器身份，现存agent配置server.id仍按既有客户端命名空间使用，本卡未额外收紧身份pin；URL/TLS/Root/会话授权边界照旧。
 
 默认Rust ApiClient（包括testing/all-features构建）在发送认证/数据请求前读取实际capabilities，拒major/不合法限额或缺已知能力；只使用已知feature交集，兼容更高minor与未知增量字段。刷新和401重试也重核，不向capability请求携带凭据/内容；本地恢复、数据库、缓存和未确认队列不由HTTP错误清理。仅cfg(test/testing)显式单元构造器with_transport_for_unit_tests可关闭这一层，生产默认构造器不受feature隐式影响。真实TCP fixture代理后接真实服务证明major拒绝不抵达login、缺uploads不创建上传，凭据保留；默认/testing各1项通过。当前没有旧正式发行客户端，固定开发profile/历史迁移校验和见tests/contract/fixtures/s091，不冒充正式版本互通。
+
+### S099 — Windows每用户安装与独立会话启动
+
+- `vaultsyncd-session.exe`为无窗口固定入口，不接受附加参数，初始化`%LOCALAPPDATA%/vaultsyncd/agent/{agent.json,state/,agent.log}`后直接CreateProcess同目录agent `--config <固定路径>`；已有配置先验证且不覆盖，身份随机，初始无凭据/绑定。GUI关闭不拥有agent生命周期，既有CLI/GUI IPC无新增wire或通用启动能力。
+- desktop精确`--register-shortcut`仅注册自身AUMID `org.vaultsyncd.desktop`再退出；NSIS用户权限写HKCU Run `vaultsyncd-agent`为带引号的固定session路径。程序与状态分离，Windows11 x64/WebView2 pv前置，当前仅未签名首装测试；已有安装/不满足目录拒绝，不清数据。升级卸载由S100。
+- `cargo xtask release build windows-client <new-dir>`扩展S093来源收据：实际全新target cross release四PE，冻结锁前端，实测NSIS与Rust/Node/pnpm工具，PE/验收入口检查，installed-files.json与每个payload hash。合并/交接后的新HEAD不能重用旧来源收据，须真实重建。操作见`docs/operations/windows-installation.md`。
+- 原生驱动`tests/platform/windows/s099-installation.py`只协调独立测试用户与可恢复登录，原LSA备份使用客体私有ACL+机器DPAPI，不进入宿主证据。正式源cf1d174真实新标准用户安装、GUI/CLI同instance、WM_CLOSE后上传、重启登录Run启动及再次上传hash均过；原Quickemu登录恢复且VM在线。原生公开结果与页面截图在忽略artifacts/S099。

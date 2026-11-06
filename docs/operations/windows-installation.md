@@ -44,3 +44,5 @@ nix develop .#web-tests --command python3 tests/platform/windows/s099-installati
 程序、同步目录均使用中文空格路径；GUI是安装后的正式WebView2，通过[官方支持的CDP调试连接](https://playwright.dev/docs/webview2)进行页面操作，不运行浏览器fake，不编译acceptance钩子。只对这个GUI子进程设置调试环境变量，未在安装产物或系统策略中启用远程调试。验证GUI/CLI相同instance、GUI关闭后的实际上传、真实重启后无人工启动agent也继续上传；真实服务端字节与hash作为结果证据。
 
 驱动的系统变更仅限新测试用户、独立目录、自己的登录触发任务和可恢复的自动登录设置。保留S084脏内容与注册根；测试结束保留新用户已安装程序/Root/state/cache，恢复原用户登录，保持VM在线。实际执行结果及来源提交见agent/tasks/S099.md与忽略artifacts/S099。
+
+本次已验收源`cf1d174c3bd47b4babc2db053514619b2e733b07`的0.1.0未签名包，实际Runtime156.0.4314.58；新标准用户`vs_s099_4fcc1e`，run `s099-1793986849-3965593`。四个安装EXE来源/hash、AUMID、Run、真实页面绑定与GUI/CLI同实例、关闭后同步、真实重启后同步均通过；三次不同boot时间戳，最后回Quickemu且无agent后台进程。测试用户安装/状态/Root保留给S100，测试服务和隧道已停止；完整摘要见`agent/tasks/S099.md`。交接追加提交后的新HEAD发布需重新构建，不能重标该实验receipt。
