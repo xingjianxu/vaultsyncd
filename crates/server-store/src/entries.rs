@@ -174,6 +174,13 @@ pub enum EntryError {
         /// 冲突的条目身份。
         id: EntryId,
     },
+    /// 比较并写失败：调用方观察到的 revision 已不是库里的值。
+    RevisionChanged {
+        /// 请求里携带的期望 revision。
+        expected: Revision,
+        /// 库里的当前值。
+        actual: Revision,
+    },
     /// 数据库行不满足本模块的类型前提（长度、枚举或计数越界）。
     MalformedRow {
         /// 出问题的列名。
@@ -212,6 +219,9 @@ impl std::fmt::Display for EntryError {
                 write!(f, "内容版本 {version} 还没有被记录到该条目")
             }
             Self::DuplicateId { id } => write!(f, "条目身份 {id} 已被占用"),
+            Self::RevisionChanged { expected, actual } => {
+                write!(f, "条目 revision 已从 {expected} 变为 {actual}")
+            }
             Self::MalformedRow { column } => write!(f, "数据库列 {column} 的值不符合类型前提"),
         }
     }
@@ -436,6 +446,129 @@ pub async fn root_entry(
     .await
     .map_err(EntryError::Db)?;
     row.map(EntryRow::into_record).transpose()
+}
+
+/// 按 Root 内相对路径查活跃条目（逐分量按原始名称匹配）。
+///
+/// 路径是工作目录里的名字序列，因此按 `name` 精确比较而不是 `name_key`：比较键是跨平台等价规则
+/// 派生的，用它查路径会把“平台认为等价但名字不同”的条目当成同一条。中间分量必须是活跃目录，
+/// 任何一段不存在都返回 `None`（不区分“没有”与“被删”）。
+///
+/// # Errors
+///
+/// 存储失败或行无法还原。
+#[allow(clippy::result_large_err)]
+pub async fn entry_by_path(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+    root: RootId,
+    path: &str,
+) -> Result<Option<EntryRecord>, EntryError> {
+    let mut current = match root_entry(conn, owner, root).await? {
+        Some(entry) => entry,
+        None => return Ok(None),
+    };
+    for part in path.split('/').filter(|part| !part.is_empty()) {
+        let row = sqlx::query_as::<_, EntryRow>(&format!(
+            "SELECT {ENTRY_COLUMNS} FROM entries e JOIN roots r ON r.id = e.root_id \
+             WHERE e.root_id = ?1 AND e.parent_id = ?2 AND e.name = ?3 AND e.deleted_at IS NULL \
+             AND r.owner_id = ?4"
+        ))
+        .bind(root.as_bytes().as_slice())
+        .bind(current.id.as_bytes().as_slice())
+        .bind(part)
+        .bind(owner.as_bytes().as_slice())
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(EntryError::Db)?;
+        match row {
+            Some(row) => current = row.into_record()?,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+
+/// 条目在 Root 内的相对路径（按父链拼原始名称）；根条目对应空串。
+///
+/// 已软删除的中间父项同样拼进路径（历史版本与回收站仍要显示原路径），条目不存在或越权返回 `None`。
+///
+/// # Errors
+///
+/// 存储失败或父链出现坏行（环、超深）。
+#[allow(clippy::result_large_err)]
+pub async fn path_of(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+    entry: EntryId,
+) -> Result<Option<String>, EntryError> {
+    const MAX_DEPTH: usize = 256;
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = match entry_in_scope(&mut *conn, owner, entry).await? {
+        Some(record) => record,
+        None => return Ok(None),
+    };
+    for _ in 0..MAX_DEPTH {
+        match current.parent {
+            None => {
+                parts.reverse();
+                return Ok(Some(parts.join("/")));
+            }
+            Some(parent) => {
+                parts.push(current.name.clone());
+                current = match entry_in_scope(&mut *conn, owner, parent).await? {
+                    Some(record) => record,
+                    None => return Ok(None),
+                };
+            }
+        }
+    }
+    Err(EntryError::MalformedRow {
+        column: "parent_id",
+    })
+}
+
+/// 比较并写地推进条目 revision（内容提交与外部采纳用）：期望值已变化则拒绝。
+///
+/// 不变量：`next` 必须严格大于 `expected`；条目必须活跃且属于调用方。
+///
+/// # Errors
+///
+/// 见 [`EntryError`]：越权/不存在、revision 已变化（[`EntryError::RevisionChanged`]）、非法计数。
+#[allow(clippy::result_large_err)]
+pub async fn advance_entry_revision(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: UserId,
+    id: EntryId,
+    expected: Revision,
+    next: Revision,
+) -> Result<EntryRecord, EntryError> {
+    if next <= expected {
+        return Err(EntryError::MalformedRow { column: "revision" });
+    }
+    let current = active_entry_in_scope(tx, owner, id).await?;
+    if current.revision != expected {
+        return Err(EntryError::RevisionChanged {
+            expected,
+            actual: current.revision,
+        });
+    }
+    let updated = sqlx::query(
+        "UPDATE entries SET revision = ?1 WHERE id = ?2 AND deleted_at IS NULL AND revision = ?3",
+    )
+    .bind(next.to_db_integer())
+    .bind(id.as_bytes().as_slice())
+    .bind(expected.to_db_integer())
+    .execute(&mut **tx)
+    .await
+    .map_err(EntryError::Db)?;
+    if updated.rows_affected() != 1 {
+        let actual = active_entry_in_scope(tx, owner, id).await?.revision;
+        return Err(EntryError::RevisionChanged { expected, actual });
+    }
+    entry_in_scope(tx, owner, id)
+        .await?
+        .ok_or(EntryError::EntryNotFound { id })
 }
 
 /// 建立 Root 的合成根条目；只由 [`crate::roots::insert_root`] 调用。

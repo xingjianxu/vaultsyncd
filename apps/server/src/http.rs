@@ -199,7 +199,11 @@ mod tests {
             Arc::clone(&auth),
             &std::env::temp_dir(),
         ));
-        let operations = Arc::new(OperationsContext::new(Arc::clone(&auth)));
+        let executor = Arc::new(crate::executor::ExecutorContext::new(
+            auth.database().clone(),
+            &std::env::temp_dir(),
+        ));
+        let operations = Arc::new(OperationsContext::new(Arc::clone(&auth), executor));
         let sync = Arc::new(SyncContext::new(Arc::clone(&auth), Arc::clone(&lifecycle)));
         router(lifecycle, auth, uploads, roots, content, operations, sync)
     }

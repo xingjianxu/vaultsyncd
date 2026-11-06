@@ -179,7 +179,11 @@ async fn open_app(fixture: &Fixture) -> App {
         Arc::clone(&auth),
         fixture.state_dir().as_path(),
     ));
-    let operations = Arc::new(OperationsContext::new(Arc::clone(&auth)));
+    let executor = Arc::new(vaultsyncd_server::executor::ExecutorContext::new(
+        auth.database().clone(),
+        fixture.state_dir().as_path(),
+    ));
+    let operations = Arc::new(OperationsContext::new(Arc::clone(&auth), executor));
     let lifecycle = Arc::new(Lifecycle::new());
     lifecycle.mark_ready();
     let sync = Arc::new(vaultsyncd_server::sync::SyncContext::new(
@@ -295,6 +299,27 @@ fn operations_uri(root: RootId) -> String {
 
 fn operation_uri(root: RootId, op: OpId) -> String {
     format!("/v1/roots/{}/operations/{}", root.to_hex(), op.to_hex())
+}
+
+/// 一份合法的 create 命令（wire 形状）：其执行适配器尚未装配，用于 503 断言。
+fn wire_create(epoch: u64) -> OperationRequest {
+    OperationRequest {
+        op_id: op().to_hex(),
+        device_id: device().to_hex(),
+        server_epoch: epoch.to_string(),
+        kind: OperationKind::Create,
+        entry_id: None,
+        base_revision: None,
+        base_version_id: None,
+        upload_id: None,
+        local_generation: None,
+        conflict_policy: None,
+        parent_id: Some(entry().to_hex()),
+        name: Some("新建目录".to_owned()),
+        expected_absent: Some(true),
+        subtree_token: None,
+        version_id: None,
+    }
 }
 
 /// 一份合法的 put 命令（wire 形状）。
@@ -426,7 +451,9 @@ async fn new_command_is_rejected_without_writing_state() {
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
 
-    let body = serde_json::to_string(&wire_put(EPOCH, 17)).expect("序列化请求");
+    // create/move/delete/restore 的存储与工作目录适配器仍未装配；put 已由 S052 接上真实执行链路，
+    // 因此这里用 create 断言“未装配命令仍显式 503 且不写状态”。
+    let body = serde_json::to_string(&wire_create(EPOCH)).expect("序列化请求");
     let (status, bytes) = app
         .call(send(
             "POST",
@@ -457,6 +484,31 @@ async fn new_command_is_rejected_without_writing_state() {
         0,
         "未被受理的命令不得登记操作行"
     );
+    assert_eq!(app.root_seq(seeds.root).await, 0, "不得推进 RootSeq");
+}
+
+/// put 已装配执行器：内容引用不成立时是明确的 400 `INVALID_REQUEST`，仍不登记操作行、不推进 RootSeq。
+#[tokio::test]
+async fn put_without_a_finalized_upload_is_rejected_before_any_state() {
+    let fixture = Fixture::new("put-no-upload");
+    let seeds = seed_accounts(&fixture).await;
+    let app = open_app(&fixture).await;
+    let token = login(&app, "owner").await;
+
+    let body = serde_json::to_string(&wire_put(EPOCH, 17)).expect("序列化请求");
+    let (status, bytes) = app
+        .call(send(
+            "POST",
+            &operations_uri(seeds.root),
+            Some(&token),
+            Some(body),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{}", text(&bytes));
+    let rejected = envelope(&bytes);
+    assert_eq!(rejected.error.code, ErrorCode::InvalidRequest);
+    assert!(!rejected.error.retryable, "会话不存在不会自己变成存在");
+    assert_eq!(app.operation_rows().await, 0, "不得登记操作行");
     assert_eq!(app.root_seq(seeds.root).await, 0, "不得推进 RootSeq");
 }
 
