@@ -125,6 +125,25 @@ impl std::error::Error for MountChange {
     }
 }
 
+/// Read-only effective-credential permission check, including ACLs and traversal.
+///
+/// # Errors
+/// Returns the kernel refusal; it creates no directory entries or probe files.
+pub fn check_access_dir(path: &Path) -> io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    unsafe extern "C" {
+        fn faccessat(dirfd: i32, path: *const std::ffi::c_char, mode: i32, flags: i32) -> i32;
+    }
+    let name = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL path"))?;
+    // AT_FDCWD, R_OK|W_OK|X_OK and AT_EACCESS. No service capability is added.
+    if unsafe { faccessat(-100, name.as_ptr(), 7, 0x200) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// 找出 Root 路径**之下**的挂载点（不含 Root 自身）。
 ///
 /// 只看路径分量，不做字符串前缀比较（`/data/root` 与 `/data/root2` 不是父子）；排序保证结果稳定。

@@ -65,6 +65,7 @@ pub const REFRESH_COOKIE: &str = "vaultsyncd_refresh";
 
 /// 认证端点共享的进程内状态：数据库、密码散列、限流、会话策略与随机源。
 pub struct AuthContext {
+    pub(crate) root_fences: Arc<crate::root_fences::RootFences>,
     database: Database,
     hasher: PasswordHasher,
     throttle: Mutex<LoginThrottle>,
@@ -75,10 +76,21 @@ pub struct AuthContext {
 }
 
 impl AuthContext {
+    pub(crate) fn with_root_fences(mut self, fences: Arc<crate::root_fences::RootFences>) -> Self {
+        self.root_fences = fences;
+        self
+    }
     /// 生产装配：Argon2id 生产参数、默认限流与会话有效期、OS 随机源。
     #[must_use]
     pub fn new(database: Database) -> Self {
+        let root_fences = Arc::new(crate::root_fences::RootFences::new(
+            database
+                .path()
+                .parent()
+                .unwrap_or(std::path::Path::new(".")),
+        ));
         Self {
+            root_fences,
             database,
             hasher: PasswordHasher::production(),
             throttle: Mutex::new(LoginThrottle::new(ThrottlePolicy::default())),

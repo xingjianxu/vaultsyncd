@@ -51,3 +51,5 @@ pub const EXIT_CONFIG: u8 = 2;
 pub mod web;
 
 pub mod capabilities;
+
+mod root_fences;

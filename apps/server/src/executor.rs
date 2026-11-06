@@ -23,11 +23,10 @@
 //! 现场不符（第三种内容、前像被改、意图损坏、关联缺失）保持停写并保留证据。
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId, UserId, VersionId};
@@ -37,7 +36,7 @@ use vaultsyncd_platform_linux_server::files::publish::{
     self, PublishError, PublishFailure, WORK_FILE_MODE,
 };
 use vaultsyncd_platform_linux_server::files::{
-    self, ExpectedTarget, FileIdentity, ResolveMode, RestrictError, RestrictedDir, RootHandle,
+    self, ExpectedTarget, FileIdentity, RestrictError, RestrictedDir, RootHandle,
 };
 use vaultsyncd_protocol::generated::{OperationResult, OperationState as WireState};
 use vaultsyncd_server_core::api::operations::OperationFailure;
@@ -90,7 +89,7 @@ pub struct PutCommand {
 pub struct ExecutorContext {
     database: Database,
     state_dir: PathBuf,
-    roots: Mutex<HashMap<RootId, Arc<RootHandle>>>,
+    fences: Arc<crate::root_fences::RootFences>,
     gate: tokio::sync::Mutex<RootCommitGate>,
     observer: Option<Arc<crate::external::ObserverRuntime>>,
 }
@@ -120,7 +119,10 @@ impl ExecutorContext {
         Self {
             database,
             state_dir: state_dir.to_path_buf(),
-            roots: Mutex::new(HashMap::new()),
+            fences: observer.as_ref().map_or_else(
+                || Arc::new(crate::root_fences::RootFences::new(state_dir)),
+                |o| Arc::clone(&o.fences),
+            ),
             gate: tokio::sync::Mutex::new(RootCommitGate::new()),
             observer,
         }
@@ -155,7 +157,7 @@ impl ExecutorContext {
                 .map_err(|error| storage_error(&error.to_string()))?
                 .ok_or(OperationFailure::RootUnavailable)?
         };
-        self.handle(root, &record.absolute_path)
+        self.handle(&record)
     }
 
     /// 读条目的当前 revision 与内容摘要（冲突副本判定用；目录没有摘要）。
@@ -256,18 +258,13 @@ impl ExecutorContext {
         self.reject(owner, key, failure).await;
     }
 
-    fn handle(&self, root: RootId, path: &str) -> Result<Arc<RootHandle>, OperationFailure> {
-        let mut roots = self.roots.lock().map_err(|_| OperationFailure::Storage {
-            detail: "Root 句柄缓存被污染".to_owned(),
-        })?;
-        if let Some(handle) = roots.get(&root) {
-            return Ok(Arc::clone(handle));
-        }
-        let handle = RootHandle::open(Path::new(path), ResolveMode::Auto)
-            .map_err(|_error| OperationFailure::RootUnavailable)?;
-        let handle = Arc::new(handle);
-        roots.insert(root, Arc::clone(&handle));
-        Ok(handle)
+    fn handle(
+        &self,
+        record: &store_roots::RootRecord,
+    ) -> Result<Arc<RootHandle>, OperationFailure> {
+        self.fences
+            .open(record)
+            .map_err(|_| OperationFailure::RootUnavailable)
     }
 
     /// 执行一条内容 put：先登记 `pending` 操作行，再走核心的提交编排。
@@ -357,7 +354,7 @@ impl ExecutorContext {
             });
         }
 
-        let root_handle = match self.handle(key.root, &root_record.absolute_path) {
+        let root_handle = match self.handle(&root_record) {
             Ok(handle) => handle,
             Err(failure) => {
                 self.reject(owner, key, &failure).await;
