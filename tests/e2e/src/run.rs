@@ -432,6 +432,7 @@ async fn round(options: &Options, scenario: &Scenario) -> Result<Report> {
     for warning in run.cleanup(&fixture.root) {
         println!("check=warn cleanup {warning}");
     }
+    erase_test_credential();
     Ok(report)
 }
 
@@ -1683,6 +1684,22 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn AllocConsole() -> i32;
     fn GenerateConsoleCtrlEvent(event: u32, group: u32) -> i32;
+}
+
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn CredDeleteW(target: *const u16, kind: u32, flags: u32) -> i32;
+}
+
+/// 只删除本卡测试服务端身份对应的 current-user 凭据；缺失不算失败。
+fn erase_test_credential() {
+    let target: Vec<u16> = format!("vaultsyncd/session/{SERVER_ID}")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    unsafe {
+        CredDeleteW(target.as_ptr(), 1, 0);
+    }
 }
 
 fn hash_of(bytes: &[u8]) -> String {
