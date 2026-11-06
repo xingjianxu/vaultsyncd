@@ -3,7 +3,7 @@
 //! 远端只通过三件事进入核心：**提交一次带 `OpId` 的操作**、**按 `OpId` 查询已提交结果**（响应
 //! 丢失后不能换一个新操作重来，I06），以及**取绑定作用域的传输端点**（上传会话、固定版本内容，
 //! 由 S054 的 `vaultsyncd_transfer` 端口定义）。核心不拼 URL、不读凭据、不解析错误信封：这些都属于
-//! `crates/http-client` 的适配器，错误已按 [`PortError`] 分类。
+//! `crates/http-client` 的适配器，错误已按 [`vaultsyncd_transfer::ports::PortError`] 分类。
 //!
 //! # 不变量
 //!

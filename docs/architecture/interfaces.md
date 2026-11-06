@@ -1105,7 +1105,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `db::CLIENT_APPLICATION_ID` | `0x434C4E54`（ASCII `CLNT`），写入 `PRAGMA application_id`；与 `server_store::SERVER_APPLICATION_ID`（`VSN1`）互相拒绝 |
 | `db::MIGRATOR` | `sqlx::migrate!("./migrations")` 编译期内嵌 `crates/client-store/migrations/*.sql`（`0001_initial.sql` 属 S030，`0002_events_transfers_intents.sql` 属 S031）；已发布文件不得改写（校验和不符即拒绝启动） |
-| `db::target_schema_version()` | 内嵌迁移最大版本号（当前 `2`），即 `PRAGMA user_version` 的目标值 |
+| `db::target_schema_version()` | 内嵌迁移最大版本号（当前 `3`，S055 追加 `0003_upload_resumes.sql`），即 `PRAGMA user_version` 的目标值 |
 | `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`，客户端升级不清库（design §19.3），回退走整套备份 |
 | `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非客户端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；失败返回 `DbError` 且不给可写句柄。父目录须已存在 |
 | `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
@@ -1143,7 +1143,7 @@ python3 tools/context.py --help
 
 ## crates/client-store — 事件、传输、意图与通知（S031）
 
-状态：S031 实现。表定义在 `crates/client-store/migrations/0002_events_transfers_intents.sql`（`received_changes`/`transfers`/`local_intents`/`notifications`，并给 `bindings` 追加 `received_seq`/`applied_seq` 游标列），读写接口在 `src/events.rs`、`src/transfers.rs`、`src/intents.rs`、`src/notifications.rs`；schema 目标版本随之为 `2`。仍然不做文件系统 I/O、不拉事件、不传输、不算哈希、不读时钟：wire 变更列表在应用层映射成 `RemoteEntry` + `NewPendingOp` 后交给本层。
+状态：S031 实现。表定义在 `crates/client-store/migrations/0002_events_transfers_intents.sql`（`received_changes`/`transfers`/`local_intents`/`notifications`，并给 `bindings` 追加 `received_seq`/`applied_seq` 游标列），读写接口在 `src/events.rs`、`src/transfers.rs`、`src/intents.rs`、`src/notifications.rs`；schema 目标版本随之为 `2`（S055 的 `0003_upload_resumes.sql` 再追加上传续传表，见文件末尾）。仍然不做文件系统 I/O、不拉事件、不传输、不算哈希、不读时钟：wire 变更列表在应用层映射成 `RemoteEntry` + `NewPendingOp` 后交给本层。
 
 ### 模块与契约
 
@@ -1836,3 +1836,67 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 - **没有“提交条目”的入口**：`finalize` 只返回内容引用；提交与 committed 确认由 agent 执行器用 `OpId` 完成。
 
 验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-http-client`（60 项 + 1 doctest，其中 `flow_tests` 用传输替身当契约服务端跑通断线续传/错块重传/固定版本下载）、`cargo clippy --locked -p vaultsyncd-http-client --all-targets -- -D warnings`。
+
+
+## crates/agent-core — 客户端端口与确定性操作执行器（S055）
+
+状态：S055 实现。包名 `vaultsyncd-agent-core`，位于 `crates/agent-core/`，在 `members` 与
+`default-members` 内。依赖 `vaultsyncd-domain`、`vaultsyncd-fs-common`、`vaultsyncd-planner`、
+`vaultsyncd-protocol`、`vaultsyncd-transfer`、`vaultsyncd-client-store` 与 SQLx（只用于适配器的连接池
+与短事务）；**不依赖** server-core/server-store/Tauri，不做平台 I/O（design §5.5）。假端口只在
+`cfg(test)` 编译；产品代码不依赖 tokio。Linux 同步客户端产品不在本包生成。
+
+### 端口（`ports/`，互不引用）
+
+| 端口 | 契约 |
+| --- | --- |
+| `clock::Clock` | 对 `domain::version::Clock` 的 `Send + Sync` 包装（`impl<T: DomainClock + Send + Sync> Clock for T`），时间点只用 `UtcTimestamp`。`clock::now(&dyn Clock)` 把时钟错误转成 `PortError::Local{Read}`。端口不 sleep：执行器只报告到期时间。 |
+| `local::LocalPort` | `capabilities() -> LocalCapabilities`（按需读取/脱水/使用保护/稳定身份/原子替换/名称约束）、`observe(&RelativePath) -> LocalFacts`（种类、generation、大小、file identity、`Usage`）、`snapshot(path, generation) -> Arc<dyn transfer::SnapshotSource>`、`apply(&ApplyRequest)`、`move_entry(&MoveRequest)`、`remove(&RemoveRequest)`、`release(&ReleaseRequest) -> ApplyReceipt{stage: Applied/Unchanged, generation, file_identity}`。代际不符必须 `LOCAL_CHANGED`，不强行继续。 |
+| `remote::RemotePort` | `submit(&protocol::OperationRequest) -> OperationResult`、`operation(binding, OpId) -> OperationResult`（响应丢失后按原 OpId 查询）、`upload(binding) -> Arc<dyn UploadTarget>`、`content(binding) -> Arc<dyn VersionedContent>`。直接复用 wire DTO 与 S053/S054 端点，不另造操作形状；`pending` 原样返回，不由适配器包装成成功。 |
+| `state::OperationStore` | `pending_ops(binding)`、`record_failure(op, code)`（attempts+1、写错误码，其余不变）、`complete(op)`；队列表类型复用 `client_store::queue::PendingOp`（别名 `QueuedOperation`）。 |
+| `state::IntentStore` | `begin_intent(&ActionIntent) -> i64`（同 binding+target_path 的相同意图复用同一条，字段不同拒绝）、`fail_intent(id, code)`、`complete_intent(id)`、`pending_intents(binding) -> Vec<StoredIntent>`。`ActionIntent{op, binding, kind: LocalWriteKind{Replace,Move,Release,Import}, entry, target_path: RelativePath, source_path, content_hash: Option<[u8;32]>, generation}`。 |
+| `state::UploadResumeStore` | `load_resume(op)`、`save_resume(&StoredUploadResume)`、`discard_resume(op)`；`StoredUploadResume{op,binding,snapshot_identity,total_size,digest,session}` 与 `transfer::upload::{UploadResume,UploadSnapshot}` 互转（坏行报错，不当成“没有续传”）。 |
+| `ports::Ports` | 唯一组装点：`local`/`clock`/`remote`/`operations`/`intents`/`upload_resumes` 六个 `Arc<dyn …>`，只负责组装，不规定构造顺序。 |
+
+端口依赖表写在 `ports/mod.rs` 模块文档；测试逐字校验各叶模块不出现其它端口 trait 名，并要求只有
+组装点同时提到全部端口。端口失败统一用 `vaultsyncd_transfer::ports::PortError` 分类（本地 SQLite
+失败按 `Local{Write}`/`Local{Read}`）。
+
+### 执行器（`executor/`）
+
+| 项 | 契约 |
+| --- | --- |
+| `OperationKind` | `pending_ops.kind` 的闭集：`upload_content`/`upload_new_entry`/`upload_move`/`upload_move_with_content`/`create_conflict_copy`/`apply_remote`/`apply_remote_move`/`apply_remote_delete`/`create_from_remote`/`delete_entry`/`bind_remote_entry`/`merge_baseline`/`release_local`。`from_action(&planner::Action)` 是规划器动作的唯一映射（`NoOp`/`Defer`/`PreserveBoth` 无可执行动作）；`local_write()` 给出需要先落意图的四种（apply/replace、move、release、create_from_remote→replace；`apply_remote_delete` 无 `local_intents` 种类）。未知文本不猜，阻塞该操作。 |
+| `ActionHandler` | S056/S059 接入的缝：`plan_intent(op) -> Option<ActionIntent>`（不得在此改本地内容）与 `execute(ports, op, intent)`；返回 `ActionOutcome::{Completed, Pending{poll_after}}` 或 `ActionFailure{code, detail}`。顺序由执行器保证。 |
+| `Executor<H>::run(&RunRequest)` | 暂停时只返回原因、不读队列；否则按插入顺序依次过“依赖就绪 → 尝试次数 → 退避到期 → 种类可解析”闸。就绪操作先 `IntentStore::begin_intent` 再执行；成功则完成意图并出队；`Pending` 不出队（I01）并记轮询到期；失败调用 `record_failure`，可重试错误（`ErrorCode::class() == Retryable`）退避后重试，用尽或 `NeedsUserAction`/`Corrupt` 时标记意图失败并阻塞。**任何失败都不删除操作与其依赖方**。 |
+| `RetryPolicy` | 默认 `max_attempts=3`、`base=1s`、`max=60s`；`new` 拒绝 0 次、>16 次、0 延迟与上限小于起点。`delay_after(n)=min(base*2^(n-1), max)`，不加抖动（S062）。 |
+| `RunRequest` / `RunReport` | `RunRequest{binding, pause: Option<PauseReason>, max_ops, pending_poll_interval}`；`PauseReason::{UserRequested,Offline,RootUnavailable,BindingDisabled}`。`RunReport{binding, paused, ops: Vec<OpReport>, next_due}`，`OpReport{op, kind, outcome}`，`OpOutcome::{Completed, Pending{poll_after}, Retrying{code,attempts,due}, Blocked(BlockReason)}`，`BlockReason::{DependencyIncomplete{on},RetriesExhausted{code,attempts},NeedsUserAction{code},Corrupt{code},UnknownKind{kind},CyclicDependency,BackoffPending{due},RunLimitReached}`。 |
+| `ExecutorError` | `Port(PortError)`（本轮中止，队列原样）与 `DuplicateOp{op}`（数据损坏，不执行任何一个操作）。 |
+
+调度不使用客户端时钟排序；退避到期时间只存在进程内（`Mutex<HashMap<OpId, UtcTimestamp>>`），避免同一
+进程内连续 `run` 立刻烧光尝试次数；跨重启的退避持久化属 S062。依赖成环时只标记真正成环的一段，
+环的前驱报告 `DependencyIncomplete`。
+
+### 适配器（`adapters::client_store`）
+
+`ClientStorePorts::new(Arc<client_store::db::Database>)` 同时实现 `OperationStore`、`IntentStore`、
+`UploadResumeStore` 与 `transfer::ports::DownloadProgressStore`：队列/意图/续传表直接映射；下载进度
+用 `transfers` 的 `chunk_size`/`total_size`/`temp_path`/`bitmap`，位图只增不回退、几何或临时路径变化
+即作废旧进度、位图完整时 `complete_transfer`（verified=1），已完成记录重复保存幂等；`cancelled`/
+`failed` 终态不返回可用进度。上传续传键为 `OpId`，操作出队由外键级联删除。
+
+验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-agent-core`（28 项）、
+`cargo clippy --locked -p vaultsyncd-agent-core --all-targets -- -D warnings`、`cargo fmt --all -- --check`。
+
+## crates/client-store — 上传续传会话（S055，迁移 0003）
+
+`crates/client-store/migrations/0003_upload_resumes.sql` 新增 `upload_resumes`：
+
+| 项 | 契约 |
+| --- | --- |
+| `upload_resumes::NewUploadResume` / `UploadResume` | `op: OpId`、`binding`、`snapshot_identity`、`total_size`、`digest: [u8;32]`、`session`；`matches_snapshot(identity,total,digest)` 判断会话是否仍可用于这份快照。 |
+| `upload_resumes::save(tx, &NewUploadResume)` | `INSERT … ON CONFLICT (op_id) DO UPDATE`：同一操作的快照与会话一起覆盖，不存在“旧会话配新快照”。快照身份/会话非空无 NUL，长度不超 `INTEGER` 上限，操作不存在（外键）报 `UnknownOperation`。 |
+| `upload_resumes::load(conn, op)` / `discard(tx, op)` | 读一条 / 删除并返回是否命中；坏行（短身份、非法摘要长度、空字段）读时拒绝。 |
+
+表不变量：`op_id` 主键并外键 `pending_ops(op_id) ON DELETE CASCADE`（操作成功出队即删除续传记录）；
+不存块位图（已收块以服务端 `upload_parts` 为准，design §9.3）。schema 目标版本随之为 `3`。
