@@ -208,7 +208,10 @@ pub(crate) fn management_response(
             };
             let (code, retryable) = match source_code {
                 "NOT_FOUND" => (LocalIpcErrorCode::NotFound, false),
-                "INVALID_ARGUMENT" | "PATH_OVERLAP" => (LocalIpcErrorCode::InvalidArgument, false),
+                "INVALID_ARGUMENT" | "PATH_OVERLAP" | "LOCAL_PATH_UNAVAILABLE" => {
+                    (LocalIpcErrorCode::InvalidArgument, false)
+                }
+                "CERTIFICATE_INVALID" => (LocalIpcErrorCode::Blocked, false),
                 "REAUTH_REQUIRED" | "UNAUTHORIZED" | "AUTH_EXPIRED" => {
                     (LocalIpcErrorCode::Unauthenticated, false)
                 }
@@ -247,6 +250,8 @@ pub(crate) fn management_response(
                         | "PENDING"
                         | "INVALID_REQUEST"
                         | "SERVICE_NOT_READY"
+                        | "CERTIFICATE_INVALID"
+                        | "LOCAL_PATH_UNAVAILABLE"
                 );
             let stable = if known { source_code } else { "UNAVAILABLE" };
             eprintln!(
@@ -254,12 +259,13 @@ pub(crate) fn management_response(
                 request.command.name
             );
             // Never Display/Debug HTTP/filesystem errors or requests; both can contain secrets.
-            failure(
-                request,
-                code,
-                &format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
-                retryable,
-            )
+            let message = match stable {
+                "CERTIFICATE_INVALID" => "服务器证书验证失败（CERTIFICATE_INVALID）；请核对服务器地址与名称，或在连接设置中选择管理员提供的附加 CA。证书验证未被关闭。".to_owned(),
+                "LOCAL_PATH_UNAVAILABLE" => "本地目录无法访问（LOCAL_PATH_UNAVAILABLE）；请选择现有本机 NTFS 目录，并检查路径、权限与卷状态。".to_owned(),
+                "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),
+                _ => format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
+            };
+            failure(request, code, &message, retryable)
         }
     }
 }

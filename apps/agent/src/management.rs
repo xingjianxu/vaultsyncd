@@ -25,6 +25,16 @@ pub(crate) type Running = HashMap<BindingId, (Worker, Arc<Scheduler<Dispatch>>)>
 fn reject(code: &str) -> PortError {
     PortError::rejected(code, "management command rejected")
 }
+fn connection_error(error: vaultsyncd_http_client::ClientError) -> PortError {
+    if error.certificate_problem().is_some() {
+        PortError::rejected(
+            "CERTIFICATE_INVALID",
+            "server certificate verification failed",
+        )
+    } else {
+        vaultsyncd_http_client::transfer_error(error)
+    }
+}
 
 pub(crate) async fn load_connection(
     db: &Database,
@@ -115,7 +125,7 @@ pub(crate) fn admit(config: &AgentConfig) -> Result<(), PortError> {
     let mut roots = vec![state];
     for b in &config.bindings {
         for path in [&b.path, &b.cache] {
-            let root = RootHandle::open(path).map_err(error)?;
+            let root = RootHandle::open(path).map_err(|_| reject("LOCAL_PATH_UNAVAILABLE"))?;
             if roots.iter().any(|old| old.overlaps(&root)) {
                 return Err(reject("PATH_OVERLAP"));
             }
@@ -269,7 +279,7 @@ pub(crate) async fn execute(
                     device_label: "Windows agent".into(),
                 })
                 .await
-                .map_err(vaultsyncd_http_client::transfer_error)?;
+                .map_err(connection_error)?;
             result.connection = Some(connection(config, session));
         }
         C::Logout => {
@@ -286,7 +296,7 @@ pub(crate) async fn execute(
                         .with_auth(vaultsyncd_http_client::AuthMode::Bearer),
                 )
                 .await
-                .map_err(vaultsyncd_http_client::transfer_error)?;
+                .map_err(connection_error)?;
             result.items = Some(
                 roots
                     .roots

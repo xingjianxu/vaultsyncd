@@ -106,6 +106,7 @@
             pkgs.llvmPackages.llvm
             pkgs.openssh
             # Native GUI runner writes bounded SHA-256 transport manifests on the host.
+            pkgs.openssl # S081 private TLS acceptance certificates
             pkgs.python3
             pkgs.git
           ];
