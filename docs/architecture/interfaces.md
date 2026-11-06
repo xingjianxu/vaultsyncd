@@ -2449,3 +2449,5 @@ core::backup::restore只消费固定Index/字节与目录事实，验证schema/�
 StateLock::try_acquire_file接收平台已安全打开的同一server.lock，flock语义与服务/init相同。离线apply持锁全过程，restore.incomplete先于任何导入写入持久化；bootstrap/init持状态锁后、打开DB前拒绝该标记，不能启动半成品。全部文件与DB核验、目录刷盘后才移除标记；失败现场保留，默认非空目标拒绝重试，改用新空目标，不隐式覆盖。CLI接线和真实证据在S089-c完成后补充。
 
 S089兼容补充：先创建独立种类`RESTORE_GUARD_APPLICATION_ID=0x56535247`的server.sqlite，旧服务既有ForeignDatabase门同样拒绝；导入/更新只作用restore.candidate.sqlite。全部文件/历史/DB/新映射/epoch核验与刷盘后，确认护栏完整身份未变，再原子替换正式名称并刷盘，之后写complete报告和移除marker。不会把含旧Root路径/旧epoch的中间库暴露到正式名；即使旧程序不理解新marker，也不能开启半恢复。新恢复代际为随机63位非零值，排除所有旧Root epoch，重复恢复同一旧备份不会确定复用同一代际；逻辑ServerId、Root seq及历史保持。核心按Linux POSIX根分量解释映射，避免便携构建宿主改变路径语义。
+
+S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站、普通独立inode、会话失效/旧epoch操作410、重复恢复与零Root、在线同锁及非空/非法映射、坏归档与实际空间不足、SIGKILL后的当前启动屏障和既有ForeignDatabase门。护栏必须先于工作写入且候选DB不能用正式名称；完成文件写在原子发布后，marker持久移除才开放。容量预算为估算，运行时ENOSPC仍保留incomplete，源schema12的启动迁移沿用store既有迁移门；恢复不提供隐式覆盖/resume，运维入口见backup文档。
