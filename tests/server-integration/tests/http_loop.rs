@@ -46,6 +46,21 @@ fn work_file(lab: &Lab) -> PathBuf {
     lab.work().join(NAME)
 }
 
+/// `events_json` 里是否有一条事件精确描述“该路径的新内容就是这份哈希与长度”。
+///
+/// 只按子串匹配长度会让别的批次（revision、其他哈希里的数字）误命中，从而在采纳真正发生之前
+/// 就返回；这里解析事件数组并按字段逐项比较。
+fn events_mention(events_json: &str, path: &str, hash: &str, size: usize) -> bool {
+    let Ok(events) = serde_json::from_str::<Vec<Value>>(events_json) else {
+        return false;
+    };
+    events.iter().any(|event| {
+        event.get("path").and_then(Value::as_str) == Some(path)
+            && event.get("hash").and_then(Value::as_str) == Some(hash)
+            && event.get("size").and_then(Value::as_str) == Some(size.to_string().as_str())
+    })
+}
+
 /// 从快照清单里取某个条目的字段。
 fn entry_field<'a>(entries: &'a [Value], name: &str, field: &str) -> Option<&'a str> {
     entries
@@ -229,10 +244,7 @@ async fn full_http_loop_is_consistent_across_restart() {
             batch
                 .get("events_json")
                 .and_then(Value::as_str)
-                .is_some_and(|events| {
-                    events.contains("\"origin\":\"external\"")
-                        && events.contains(V3.len().to_string().as_str())
-                })
+                .is_some_and(|events| events_mention(events, NAME, &sha256(V3), V3.len()))
         }))
     })
     .await
