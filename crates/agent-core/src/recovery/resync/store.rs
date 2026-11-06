@@ -46,7 +46,7 @@ pub(super) async fn start(
             .fetch_one(&mut *tx)
             .await
             .map_err(error)?;
-    let events: Vec<(i64, Vec<u8>, String, String, Option<String>)> = sqlx::query_as("SELECT seq, tx_id, events_json, state, last_error_code FROM received_changes WHERE binding_id = ? ORDER BY seq")
+    let events: Vec<SavedEvent> = sqlx::query_as("SELECT seq, tx_id AS tx, events_json AS events, state, last_error_code AS last_error FROM received_changes WHERE binding_id = ? ORDER BY seq")
         .bind(binding.as_bytes().as_slice()).fetch_all(&mut *tx).await.map_err(error)?;
     let mut journal = Journal {
         format: 1,
@@ -59,16 +59,7 @@ pub(super) async fn start(
         old_applied: applied,
         old_baseline,
         old_remote,
-        old_events: events
-            .into_iter()
-            .map(|(seq, tx, events, state, last_error)| SavedEvent {
-                seq,
-                tx,
-                events,
-                state,
-                last_error,
-            })
-            .collect(),
+        old_events: events,
         root_identity: None,
         snapshot: None,
         entries: Vec::new(),
@@ -88,6 +79,24 @@ pub(super) async fn start(
     quarantine(&mut tx, &journal).await?;
     tx.commit().await.map_err(error)?;
     Ok(journal)
+}
+
+pub(super) async fn latest(
+    database: &Database,
+    binding: BindingId,
+) -> Result<Option<Journal>, PortError> {
+    let row: Option<(i64, i64, String, bool)> = sqlx::query_as("SELECT resync_id, revision, journal, complete FROM binding_resyncs WHERE binding_id = ? ORDER BY resync_id DESC LIMIT 1")
+        .bind(binding.as_bytes().as_slice()).fetch_optional(database.pool()).await.map_err(error)?;
+    row.map(|(resync_id, revision, text, complete)| {
+        let mut journal: Journal = serde_json::from_str(&text).map_err(error)?;
+        if journal.format != 1 || journal.binding()? != binding || journal.complete != complete {
+            return Err(error("无效重建日志"));
+        }
+        journal.resync_id = resync_id;
+        journal.revision = revision;
+        Ok(journal)
+    })
+    .transpose()
 }
 
 pub(super) async fn pending(
@@ -200,26 +209,13 @@ pub(super) async fn finish(database: &Database, journal: &mut Journal) -> Result
         if item.disposition.needs_review() {
             return Err(error("仍有恢复候选/待核对条目"));
         }
-        if let (
-            Some(entry),
-            Some(ContentEvidence::File {
-                generation,
-                identity,
-                digest,
-                ..
-            }),
-        ) = (&item.old_entry, &item.evidence)
-        {
-            let row = entries::local_entry(&mut tx, binding, id(entry)?)
+        if let Some(entry) = &item.old_entry {
+            let observed = entries::local_entry(&mut tx, binding, id(entry)?)
                 .await
                 .map_err(error)?
-                .ok_or_else(|| error("本地状态消失"))?;
-            if row.dirty != Dirty::Clean
-                || row.generation.get() != *generation
-                || row.file_identity.as_ref() != Some(identity)
-                || row.fingerprint.as_deref() != Some(digest.as_slice())
-            {
-                return Err(error("核对之后出现本地新代际，保留围栏"));
+                .map(LocalStamp::from);
+            if observed != item.local_stamp {
+                return Err(error("核对之后出现本地新状态/代际，保留围栏"));
             }
         }
     }
@@ -315,7 +311,7 @@ async fn bases(
     for bytes in ids {
         let entry = EntryId::from_bytes(bytes.try_into().map_err(|_| error("无效条目身份长度"))?);
         let base = if is_remote {
-            let r = entries::remote_entry(&mut **tx, binding, entry)
+            let r = entries::remote_entry(tx, binding, entry)
                 .await
                 .map_err(error)?
                 .ok_or_else(|| error("远端行消失"))?;
@@ -329,7 +325,7 @@ async fn bases(
                 deleted: r.deleted,
             }
         } else {
-            entries::baseline_entry(&mut **tx, binding, entry)
+            entries::baseline_entry(tx, binding, entry)
                 .await
                 .map_err(error)?
                 .ok_or_else(|| error("基线消失"))?

@@ -1147,6 +1147,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_five_upgrade_preserves_apply_queue_and_backup_and_rejects_old_binary() {
+        let dir = TestDir::new("upgrade-v5-resync");
+        let path = dir.database();
+        let previous = migrator(&dir.migrations(&[
+            (BASELINE_FILE, BASELINE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
+            (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
+            (
+                "0004_first_import.sql",
+                include_str!("../migrations/0004_first_import.sql"),
+            ),
+            (
+                "0005_controlled_apply.sql",
+                include_str!("../migrations/0005_controlled_apply.sql"),
+            ),
+        ]))
+        .await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = crate::test_support::seed_binding(&old, 0x60).await;
+        let op = vaultsyncd_domain::ids::OpId::from_bytes([0x60; 16]);
+        let mut tx = old.begin_write().await.unwrap();
+        crate::queue::enqueue(
+            &mut tx,
+            &crate::queue::NewPendingOp {
+                op,
+                binding,
+                kind: "delete".to_owned(),
+                entry: None,
+                baseline_revision: None,
+                baseline_version: None,
+                depends_on: None,
+                pinned_version: None,
+            },
+        )
+        .await
+        .unwrap();
+        crate::upload_resumes::save(
+            &mut tx,
+            &crate::upload_resumes::NewUploadResume {
+                op,
+                binding,
+                snapshot_identity: "uncommitted-snapshot".to_owned(),
+                total_size: 8,
+                digest: [0x60; 32],
+                session: "old-session".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        let intent = crate::intents::begin_intent(
+            &mut tx,
+            &crate::intents::NewLocalIntent {
+                binding,
+                kind: crate::intents::LocalIntentKind::Replace,
+                entry: None,
+                target_path: "protected.txt".to_owned(),
+                source_path: Some("staged.part".to_owned()),
+                content_hash: Some(vec![0x60; 32]),
+                generation: None,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO controlled_applies(op_id, binding_id, target_path, intent_id, journal) VALUES (?, ?, 'protected.txt', ?, '{\"fixed_version\":\"old\"}')")
+            .bind(op.as_bytes().as_slice()).bind(binding.as_bytes().as_slice()).bind(intent.id).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        old.close().await;
+
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(upgraded.schema_version(), 6);
+        let mut conn = upgraded.pool().acquire().await.unwrap();
+        assert!(
+            crate::queue::pending_op(&mut conn, op)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            crate::upload_resumes::load(&mut conn, op)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            crate::intents::intent(&mut conn, intent.id).await.unwrap(),
+            Some(intent)
+        );
+        let journal: String = sqlx::query_scalar("SELECT journal FROM controlled_applies")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(journal, "{\"fixed_version\":\"old\"}");
+        let resyncs: i64 = sqlx::query_scalar("SELECT count(*) FROM binding_resyncs")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(resyncs, 0, "升级不能猜测旧设备重建已完成");
+        drop(conn);
+        upgraded.close().await;
+        let backup = migration_backup_path(&path, 5, 6);
+        assert!(backup.exists());
+        assert_eq!(
+            scalar::<String>(&backup, "PRAGMA integrity_check").await,
+            "ok"
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT count(*) FROM controlled_applies").await,
+            1
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT count(*) FROM pending_ops").await,
+            1
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name = 'binding_resyncs'"
+            )
+            .await,
+            0
+        );
+        let checksums = "SELECT group_concat(hex(checksum), ',') FROM (SELECT checksum FROM _sqlx_migrations WHERE version <= 5 ORDER BY version)";
+        assert_eq!(
+            scalar::<String>(&path, checksums).await,
+            scalar::<String>(&backup, checksums).await
+        );
+        let rejected = Database::open_with(&path, &previous).await.unwrap_err();
+        assert!(matches!(
+            rejected,
+            DbError::SchemaTooNew {
+                found: 6,
+                supported: 5
+            }
+        ));
+        assert_eq!(
+            scalar::<String>(&path, "PRAGMA integrity_check").await,
+            "ok"
+        );
+        assert_eq!(
+            scalar::<i64>(&path, "SELECT count(*) FROM upload_resumes").await,
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn schema_newer_than_binary_is_refused_before_any_write() {
         let dir = TestDir::new("too-new");
         let path = dir.database();

@@ -1,5 +1,6 @@
 //! 真实 SQLite/WAL、磁盘内容与独立进程。测试端口不生成 Linux 产品，不替代 Windows 原生验收。
 use super::*;
+mod safety_tests;
 use crate::{
     adapters::client_store::ClientStorePorts,
     bindings::import::{ImportInstall, LocalImportEntry, RootAdmission, SnapshotSeed},

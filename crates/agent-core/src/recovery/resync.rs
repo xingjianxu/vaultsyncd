@@ -47,7 +47,7 @@ pub enum Disposition {
     RetiredClean,
     /// 健康根已证明本地/远端均不存在，不推导远端 Delete。
     RetiredAbsent,
-    /// 远端缺失的本地新内容：仅为恢复候选，不复用原 EntryId 上传。
+    /// 远端缺失的本地新内容，或服务器回退后失去确认的完整副本；不复用原 EntryId 上传。
     RecoveryCandidate,
     /// 服务器快照需要本地应用/三方合并；在此入口不覆盖本地。
     Reconcile,
@@ -74,6 +74,8 @@ pub struct ResyncItem {
     pub evidence: Option<ContentEvidence>,
     /// 可解释的保留/合并结论。
     pub disposition: Disposition,
+    // 与核对同一时刻的 DB 观察；发布时比较全部维度，不能丢失核对后的新 dirty/代际。
+    local_stamp: Option<LocalStamp>,
 }
 
 /// 重建结果。prepared 不等于 applied；有候选时 complete=false、游标与旧基线不动。
@@ -136,6 +138,16 @@ impl Resync {
             return Ok(None);
         };
         self.resume(&mut journal).await.map(Some)
+    }
+
+    /// 供状态/诊断入口读取最近一次持久结果，不重新扫描，不把 prepared 当作 complete。
+    pub async fn latest_report(
+        &self,
+        binding: BindingId,
+    ) -> Result<Option<ResyncReport>, PortError> {
+        store::latest(&self.database, binding)
+            .await
+            .map(|journal| journal.map(|j| j.report()))
     }
 
     async fn resume(&self, journal: &mut Journal) -> Result<ResyncReport, PortError> {
@@ -281,7 +293,8 @@ impl Resync {
             .iter()
             .map(SavedBase::snapshot)
             .collect();
-        let old_paths = paths(&old_entries)?;
+        // 历史 tombstone 与新身份可以同名，不能按路径把旧身份折叠成“新增”。
+        let old_paths = locations(&old_entries)?;
         let mut items = Vec::new();
         for (path, old) in &old_paths {
             local_paths.remove(path);
@@ -326,12 +339,17 @@ impl Resync {
             let dirty = local.as_ref().is_some_and(|row| row.dirty != Dirty::Clean)
                 || matches!((&local, &actual), (Some(row), Some(ContentEvidence::File { digest, .. })) if row.fingerprint.as_deref().is_some_and(|hash| hash != digest.as_slice()));
             let disposition = match remote_by_id.get(old.entry_id.as_str()) {
+                None if (clean || directory_clean)
+                    && matches!(journal.reason, ResyncReason::ServerRollback { .. }) =>
+                {
+                    Disposition::RecoveryCandidate
+                }
                 None if directory_clean => Disposition::RetiredClean,
                 None => match &actual {
                     Some(ContentEvidence::File { .. }) if dirty => Disposition::RecoveryCandidate,
                     Some(ContentEvidence::File { .. }) if clean => Disposition::RetiredClean,
                     Some(ContentEvidence::Absent)
-                        if local.as_ref().is_some_and(|row| row.dirty == Dirty::Clean) =>
+                        if local.as_ref().is_none_or(|row| row.dirty == Dirty::Clean) =>
                     {
                         Disposition::RetiredAbsent
                     }
@@ -359,6 +377,7 @@ impl Resync {
                 old_entry: Some(old.entry_id.clone()),
                 evidence: actual,
                 disposition,
+                local_stamp: local.map(LocalStamp::from),
             });
         }
         // 本地无旧来源，哪怕同路径同内容也不能当作首次导入自动上传。
@@ -368,6 +387,7 @@ impl Resync {
                 old_entry: None,
                 evidence: None,
                 disposition: Disposition::Review,
+                local_stamp: None,
             });
         }
         for (path, remote) in remote_paths {
@@ -380,6 +400,7 @@ impl Resync {
                     old_entry: None,
                     evidence: None,
                     disposition: Disposition::Reconcile,
+                    local_stamp: None,
                 });
             }
         }
@@ -421,6 +442,37 @@ pub(crate) async fn ensure_operation(
         return Err(error("旧设备操作已隔离，不能在新基线重放"));
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct LocalStamp {
+    generation: u64,
+    dirty: String,
+    residency: String,
+    fingerprint: Option<Vec<u8>>,
+    identity: Option<Vec<u8>>,
+}
+impl From<entries::LocalEntry> for LocalStamp {
+    fn from(row: entries::LocalEntry) -> Self {
+        Self {
+            generation: row.generation.get(),
+            dirty: match row.dirty {
+                Dirty::Clean => "clean",
+                Dirty::Dirty => "dirty",
+                Dirty::Snapshotting => "snapshotting",
+                Dirty::AwaitingCommit => "awaiting_commit",
+            }
+            .to_owned(),
+            residency: match row.residency {
+                Residency::Materialized => "materialized",
+                Residency::Partial => "partial",
+                Residency::MetadataOnly => "metadata_only",
+            }
+            .to_owned(),
+            fingerprint: row.fingerprint,
+            identity: row.file_identity,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -482,7 +534,7 @@ impl SavedBase {
         })
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
 struct SavedEvent {
     seq: i64,
     tx: Vec<u8>,
@@ -591,10 +643,23 @@ fn validate_page(journal: &Journal, page: &SnapshotPage) -> Result<(), PortError
 }
 // 旧基线不含摘要，因此不能用首次导入的内容校验函数；这里只验证身份/路径树，内容另行真实核对。
 fn paths(entries: &[SnapshotEntry]) -> Result<BTreeMap<String, SnapshotEntry>, PortError> {
+    let mut paths = BTreeMap::new();
+    for (path, entry) in locations(entries)? {
+        if paths.insert(path, entry).is_some() {
+            return Err(error("快照路径重复"));
+        }
+    }
+    Ok(paths)
+}
+fn locations(entries: &[SnapshotEntry]) -> Result<Vec<(String, SnapshotEntry)>, PortError> {
     let mut by_id = BTreeMap::new();
     for entry in entries {
         id(&entry.entry_id)?;
         Revision::new(number(&entry.revision)?).map_err(error)?;
+        if entry.parent_id.is_some() && (entry.name.is_empty() || entry.name.contains(['/', '\\']))
+        {
+            return Err(error("条目名称不是单一分量"));
+        }
         if by_id.insert(entry.entry_id.as_str(), entry).is_some() {
             return Err(error("条目身份重复"));
         }
@@ -603,7 +668,7 @@ fn paths(entries: &[SnapshotEntry]) -> Result<BTreeMap<String, SnapshotEntry>, P
     if roots.len() != 1 || roots[0].kind != WireKind::Directory || !roots[0].name.is_empty() {
         return Err(error("重建缺唯一合成根"));
     }
-    let mut paths = BTreeMap::new();
+    let mut paths = Vec::new();
     for entry in entries.iter().filter(|e| e.parent_id.is_some()) {
         let mut current = entry;
         let mut names = vec![entry.name.as_str()];
@@ -623,9 +688,7 @@ fn paths(entries: &[SnapshotEntry]) -> Result<BTreeMap<String, SnapshotEntry>, P
         names.reverse();
         let path = names.join("/");
         relative(&path)?;
-        if paths.insert(path, entry.clone()).is_some() {
-            return Err(error("路径重复"));
-        }
+        paths.push((path, entry.clone()));
     }
     Ok(paths)
 }
