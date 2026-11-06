@@ -2217,3 +2217,15 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 `platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Root，必须先初始化 WinRT。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
 
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
+
+### S068：Windows 内容观察、持续保护与可恢复发布
+
+`platform-windows::files::controlled` 是同步 blocking 平台 API，不依赖 agent-core/store。应用在 worker 中调用并映射 `ControlledLocal`/`LocalPort`，不持数据库事务：
+
+- `WindowsFiles::open(root,state)`：两个既有、同卷、不重叠的安全 pinned 目录；`seed(path,Evidence)` 从 durable local 状态载入旧代际，下一次仍重新哈希真实内容。
+- `observe(path) -> ObservedContent::{Absent,File(Arc<FixedSnapshot>)}`：健康父目录才能证明 Absent；文件在独占 RH oplock 下流式固定，`Evidence{generation,volume,file,digest,size}`；新字节或新物理身份递增代际，mtime 不授权。`FixedSnapshot::read_at` 最多 1 MiB，句柄拒绝外部修改/删除。
+- `protect(path,writable) -> (ProtectedFile,EntryMetadata)`：元数据 no-follow 后取得正式 CFAPI oplock，再核对身份。`ProtectedFile::lease -> ProtectedLease`，`lease.file()` 为借用 Win32 句柄；不得 close/duplicate。oplock 已破坏、部分内容、可写映射/使用中、未知对象均报错。S069 可在 lease 内再次复核版本/摘要后调用 CFAPI。
+- `replace(op_hex,target,staged_path,before:Option<&Evidence>,digest) -> Evidence`：调用前先持久 core local_intent。内部 stage 固定并再次在 oplock 保护中核对；平台日志绑定 OpId、目标、根物理身份及前后身份/摘要，sync 后才移动旧对象到独立 state，随后不覆盖发布。两段发布存在可恢复间隙；用户填入间隙时拒覆盖，旧内容/新stage/用户文件均保留。
+- `recover_publications() -> Vec<RecoveryOutcome>` 必须先于 core recovery 和同步；后像须身份及摘要同时匹配才 Published，原对象完整且目标不存在才 Restored；第三种内容 Blocked，损坏日志/路径/根身份错误报错且保留。`acknowledge_publication(op)` 仅在 core baseline 事务完成后清对应日志；preserved 原对象及快照由显式恢复/保留策略处理，不自动清除。
+
+应用以同 OpId 关联两层意图，不能只因平台返回 Published 就推进应用游标或宣称 committed。发布出的普通完整文件的业务 CFAPI identity 由应用根据已确认 Entry/Version 安装，平台不猜服务器身份。S068-a/b 记录原生能力边界；原型 `cfapi::release` 三次探测即关句柄不构成正式持续保护授权。

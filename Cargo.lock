@@ -2521,8 +2521,11 @@ dependencies = [
 name = "vaultsyncd-platform-windows"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "vaultsyncd-domain",
  "vaultsyncd-fs-common",
+ "vaultsyncd-transfer",
  "windows",
 ]
 

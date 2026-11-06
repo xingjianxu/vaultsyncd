@@ -670,6 +670,10 @@ impl RootHandle {
         Ok(file)
     }
 
+    pub(crate) fn root_path(&self) -> &Path {
+        &self.path
+    }
+
     #[cfg(test)]
     pub(crate) fn root_file(&self) -> &File {
         self.pins.last().expect("root pin")
