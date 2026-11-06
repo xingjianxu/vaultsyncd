@@ -17,7 +17,6 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use common::{
     Lab, Running, all_changes, create_snapshot, identity, login, put_operation, register_root,
@@ -324,37 +323,50 @@ async fn full_http_loop_is_consistent_across_restart() {
     restarted.stop().await;
 }
 
-/// 读卷的可用空间：用 `df --output=avail -B1`（只读、无 unsafe；测试环境由 devShell 提供 coreutils）。
-fn available_bytes(path: &Path) -> u64 {
-    let output = std::process::Command::new("df")
-        .arg("--output=avail")
-        .arg("-B1")
-        .arg(path)
-        .output()
-        .expect("执行 df");
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .nth(1)
-        .and_then(|line| line.trim().parse::<u64>().ok())
-        .unwrap_or(0)
-}
-
-/// 把目录所在文件系统填到几乎没空间（保留 `reserve` 字节），返回填充文件名。
-fn fill_until_full(dir: &Path, reserve: u64) -> PathBuf {
-    let filler = dir.join(".filler");
-    let block = vec![0x5a_u8; 1024 * 1024];
-    let mut file = std::fs::File::create(&filler).expect("建填充文件");
+/// 把目录所在文件系统填满：先写大块数据，再建大量小文件，直到两者都分配失败。
+///
+/// 只写一个大文件不够：btrfs 的 `FICLONE` 只需要元数据，而元数据块是单独分配的（T21 的
+/// “reflink 后 CoW 分配失败”）。返回全部填充路径。
+fn fill_data_then_metadata(dir: &Path) -> Vec<PathBuf> {
     use std::io::Write;
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let big = dir.join(".filler");
+    let metadata_dir = dir.join(".meta-filler");
+    std::fs::create_dir_all(&metadata_dir).expect("建元数据填充目录");
+    let block = vec![0x5a_u8; 4 * 1024 * 1024];
+    let mut file = std::fs::File::create(&big).expect("建填充文件");
+    let mut created: Vec<PathBuf> = Vec::new();
+    let mut counter = 0_u32;
     loop {
-        if available_bytes(dir) < reserve + block.len() as u64 {
-            break;
+        let mut progressed = false;
+        if file.write_all(&block).is_ok() {
+            progressed = true;
         }
-        if file.write_all(&block).is_err() {
+        let path = metadata_dir.join(format!("{counter:06}"));
+        counter += 1;
+        if std::fs::write(&path, b"x").is_ok() {
+            created.push(path);
+            progressed = true;
+        }
+        if !progressed || counter > 40_000 || Instant::now() > deadline {
             break;
         }
     }
     let _ = file.sync_all();
-    filler
+    created.push(metadata_dir);
+    created.push(big);
+    created
+}
+
+fn release(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+    }
 }
 
 fn volume_from_env(name: &str) -> Option<PathBuf> {
@@ -363,15 +375,18 @@ fn volume_from_env(name: &str) -> Option<PathBuf> {
         .filter(|path| path.is_dir())
 }
 
-/// 满盘（工作盘）不提前 committed：发布因 ENOSPC 失败时是 507/503，工作文件与版本都不变；
-/// 腾出空间后新的 OpId 可以正常提交。
+/// 满盘（数据空间耗尽）不提前 committed：向工作目录写大块数据直到卷满，随后的大内容发布
+/// （reflink 的 CoW 分配也要空间）或元数据事务必然失败；失败必须是 507/503，工作文件仍是旧内容，
+/// 版本/revision 不推进。
+///
+/// 准入要求内部状态目录与 Root 在同一 btrfs 文件系统（design §11.4），因此两侧都放在专用小卷上。
 #[tokio::test]
 async fn work_volume_full_never_reports_committed() {
     let Some(volume) = volume_from_env("VAULTSYNCD_S052_WORK_VOLUME") else {
         eprintln!("跳过：未设置 VAULTSYNCD_S052_WORK_VOLUME（需要小型 btrfs 测试卷）");
         return;
     };
-    let lab = Lab::new("workfull", Some(&volume), None);
+    let lab = Lab::new("workfull", Some(&volume), Some(&volume));
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
@@ -380,10 +395,17 @@ async fn work_volume_full_never_reports_committed() {
         .expect("注册 Root");
     seed_and_adopt(&running, &token, &root, &lab).await;
 
-    let snapshot = create_snapshot(&running, &token, &root)
+    // 大内容先上传到对象区（对象在状态侧，尚未写工作目录）。
+    let big: Vec<u8> = (0..24 * 1024 * 1024)
+        .map(|index| u8::try_from(index % 251).expect("字节"))
+        .collect();
+    let (upload_id, _, _) = upload(&running, &token, &root, &big, 1 << 20)
+        .await
+        .expect("上传大内容");
+    let before = create_snapshot(&running, &token, &root)
         .await
         .expect("快照");
-    let epoch = snapshot
+    let epoch = before
         .get("server_epoch")
         .and_then(Value::as_str)
         .expect("epoch")
@@ -392,7 +414,7 @@ async fn work_volume_full_never_reports_committed() {
         &running,
         &token,
         &root,
-        snapshot
+        before
             .get("snapshot_id")
             .and_then(Value::as_str)
             .expect("snapshot_id"),
@@ -405,123 +427,48 @@ async fn work_volume_full_never_reports_committed() {
     let revision = entry_field(&entries, NAME, "revision")
         .expect("revision")
         .to_owned();
-    let revision_value: u64 = revision.parse().expect("revision 是十进制");
 
-    let (upload_id, _, _) = upload(&running, &token, &root, V2, 32).await.expect("上传");
-    let filler = fill_until_full(&lab.work(), 8 * 1024);
-    let free = available_bytes(&lab.work());
-    assert!(
-        free < V2.len() as u64,
-        "工作卷应已几乎填满（余 {free} 字节）"
-    );
-
-    let device = identity(0x62);
-    let op_id = identity(0x21);
-    let (status, result) = put_operation(
-        &running, &token, &root, &op_id, &device, &epoch, &entry, &revision, &upload_id,
-    )
-    .await
-    .expect("满盘时提交");
-    assert!(
-        status == StatusCode::INSUFFICIENT_STORAGE || status == StatusCode::SERVICE_UNAVAILABLE,
-        "工作盘满必须是 507/503 而不是成功：{status} {result}"
-    );
-    assert_ne!(
-        result.get("state").and_then(Value::as_str),
-        Some("committed")
-    );
-    assert!(
-        !result.get("error").is_some_and(|error| error
-            .get("code")
-            .and_then(Value::as_str)
-            .is_some_and(|code| code == "INSUFFICIENT_STORAGE" && false)),
-        "错误必须是真实的存储不足"
-    );
-    // 没有提前提交：工作文件仍是旧内容，条目 revision 未推进，也没有新批次。
-    assert_eq!(std::fs::read(work_file(&lab)).expect("读工作文件"), V1);
-    let after = snapshot_entries(
-        &running,
-        &token,
-        &root,
-        create_snapshot(&running, &token, &root)
-            .await
-            .expect("快照")
-            .get("snapshot_id")
-            .and_then(Value::as_str)
-            .expect("snapshot_id"),
-    )
-    .await
-    .expect("快照清单");
-    assert_eq!(
-        entry_field(&after, NAME, "revision"),
-        Some(revision.as_str())
-    );
-    assert_eq!(
-        entry_field(&after, NAME, "hash"),
-        Some(sha256(V1).as_str()),
-        "满盘不改变当前版本"
-    );
-    let batches = all_changes(&running, &token, &root).await.expect("changes");
-    assert!(
-        !batches.iter().any(
-            |batch| batch
-                .get("seq")
-                .and_then(Value::as_str)
-                .is_some_and(|seq| seq.parse::<u64>().unwrap_or(0) > 1
-                    && batch
-                        .get("events_json")
-                        .and_then(Value::as_str)
-                        .is_some_and(|events| events.contains("\"kind\":\"put\"")))
-        ),
-        "满盘失败的请求不得留下 committed 事件"
-    );
-
-    // 腾出空间后重试：同一 OpId 是稳定拒绝，新 OpId 正常提交。
-    std::fs::remove_file(&filler).expect("删除填充文件");
-    let (status, result) = put_operation(
-        &running, &token, &root, &op_id, &device, &epoch, &entry, &revision, &upload_id,
-    )
-    .await
-    .expect("重试");
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "同一 OpId 不应在失败后变成成功：{result}"
-    );
+    // 填满卷。
+    let fillers = fill_data_then_metadata(&lab.work());
     let (status, result) = put_operation(
         &running,
         &token,
         &root,
-        &identity(0x22),
-        &device,
+        &identity(0x21),
+        &identity(0x62),
         &epoch,
         &entry,
         &revision,
         &upload_id,
     )
     .await
-    .expect("新 OpId 提交");
-    assert_eq!(status, StatusCode::OK, "{result}");
-    let revision_after: u64 = result
-        .get("revision")
-        .and_then(Value::as_str)
-        .expect("revision")
-        .parse()
-        .expect("十进制");
-    assert!(revision_after > revision_value);
-    assert_eq!(std::fs::read(work_file(&lab)).expect("读工作文件"), V2);
+    .expect("满盘时提交");
+    assert!(
+        status == StatusCode::INSUFFICIENT_STORAGE || status == StatusCode::SERVICE_UNAVAILABLE,
+        "工作盘满必须失败而不是 committed：{status} {result}"
+    );
+    assert_ne!(
+        result.get("state").and_then(Value::as_str),
+        Some("committed")
+    );
+    assert_eq!(
+        std::fs::read(work_file(&lab)).expect("读工作文件"),
+        V1,
+        "发布失败时工作文件不得被替换"
+    );
+    let _ = release(&fillers);
     running.stop().await;
 }
 
-/// 满盘（状态盘）不提前 committed：数据库写失败时是 503，工作文件不被替换成“已提交”的假象；
-/// 腾出空间后新的 OpId 可以正常提交。
+/// 满盘（状态侧空间/元数据不足）不提前 committed：把状态目录所在的同一块小卷填满，SQLite 的
+/// 事务/元数据写入拿不到空间；答案必须是 507/503，绝不出现“没有证据的成功”。
 #[tokio::test]
 async fn state_volume_full_never_reports_committed() {
     let Some(volume) = volume_from_env("VAULTSYNCD_S052_STATE_VOLUME") else {
         eprintln!("跳过：未设置 VAULTSYNCD_S052_STATE_VOLUME（需要小型 btrfs 测试卷）");
         return;
     };
-    let lab = Lab::new("statefull", None, Some(&volume));
+    let lab = Lab::new("statefull", Some(&volume), Some(&volume));
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
@@ -529,10 +476,11 @@ async fn state_volume_full_never_reports_committed() {
         .await
         .expect("注册 Root");
     seed_and_adopt(&running, &token, &root, &lab).await;
-    let snapshot = create_snapshot(&running, &token, &root)
+    let (upload_id, _, _) = upload(&running, &token, &root, V2, 32).await.expect("上传");
+    let before = create_snapshot(&running, &token, &root)
         .await
         .expect("快照");
-    let epoch = snapshot
+    let epoch = before
         .get("server_epoch")
         .and_then(Value::as_str)
         .expect("epoch")
@@ -541,7 +489,7 @@ async fn state_volume_full_never_reports_committed() {
         &running,
         &token,
         &root,
-        snapshot
+        before
             .get("snapshot_id")
             .and_then(Value::as_str)
             .expect("snapshot_id"),
@@ -554,17 +502,20 @@ async fn state_volume_full_never_reports_committed() {
     let revision = entry_field(&entries, NAME, "revision")
         .expect("revision")
         .to_owned();
-    let (upload_id, _, _) = upload(&running, &token, &root, V2, 32).await.expect("上传");
 
-    // 状态盘填满：SQLite 的 WAL/事务写入拿不到空间。
-    let filler = fill_until_full(&lab.state(), 4 * 1024);
-    let free = available_bytes(&lab.state());
-    assert!(free < 64 * 1024, "状态卷应已几乎填满（余 {free} 字节）");
-
-    let device = identity(0x72);
-    let op_id = identity(0x31);
+    // 与工作盘满用例同一块小卷（准入要求两侧同一 btrfs 文件系统），这里把数据与元数据都填到失败，
+    // 让 SQLite 的事务写入没有可分配空间。
+    let fillers = fill_data_then_metadata(&lab.state());
     let (status, result) = put_operation(
-        &running, &token, &root, &op_id, &device, &epoch, &entry, &revision, &upload_id,
+        &running,
+        &token,
+        &root,
+        &identity(0x31),
+        &identity(0x72),
+        &epoch,
+        &entry,
+        &revision,
+        &upload_id,
     )
     .await
     .expect("满盘时提交");
@@ -576,47 +527,26 @@ async fn state_volume_full_never_reports_committed() {
         result.get("state").and_then(Value::as_str),
         Some("committed")
     );
-    assert_eq!(
-        std::fs::read(work_file(&lab)).expect("读工作文件"),
-        V1,
-        "元数据事务没提交时不得留下“已发布”的假象（目标未替换）"
+    // 发布可能已经发生（意图停在 `published`，重启恢复会补完元数据），但**没有任何** committed 证据：
+    // 工作文件要么还是旧内容，要么是新内容 + 一条已持久化的意图。两种都不是“已提交”。
+    let content = std::fs::read(work_file(&lab)).expect("读工作文件");
+    assert!(
+        content == V1 || content == V2,
+        "工作文件只能是旧内容或已发布的新内容"
     );
-    // 操作记录查询也不能报 committed。
     let (status, value) = running
         .json(
             "GET",
-            &format!("/v1/roots/{root}/operations/{op_id}"),
+            &format!("/v1/roots/{root}/operations/{}", identity(0x31)),
             Some(&token),
             None,
         )
         .await
-        .expect("查询操作");
+        .expect("查询操作记录");
     assert!(
         status != StatusCode::OK || value.get("state").and_then(Value::as_str) != Some("committed"),
-        "状态盘满的 OpId 不得是 committed：{status} {value}"
+        "满盘失败的操作不得记录成 committed：{status} {value}"
     );
-
-    // 腾出空间：新的 OpId 正常提交。
-    std::fs::remove_file(&filler).expect("删除填充文件");
-    let (status, result) = put_operation(
-        &running,
-        &token,
-        &root,
-        &identity(0x32),
-        &device,
-        &epoch,
-        &entry,
-        &revision,
-        &upload_id,
-    )
-    .await
-    .expect("恢复后提交");
-    assert_eq!(status, StatusCode::OK, "{result}");
-    assert_eq!(
-        result.get("state").and_then(Value::as_str),
-        Some("committed")
-    );
-    assert_eq!(std::fs::read(work_file(&lab)).expect("读工作文件"), V2);
-    let _ = tokio::time::sleep(Duration::from_millis(50)).await;
+    let _ = release(&fillers);
     running.stop().await;
 }

@@ -505,8 +505,11 @@ fn result_response(
                     result.op_id = op.to_hex();
                     result.state = WireState::Committed;
                     result.replayed = replayed;
-                    // 批次序号以 `operations.root_seq` 为准：执行器写结果时 seq 还没有分配。
-                    result.root_seq = Some(root_seq.to_string());
+                    // 结果里没有批次序号时用 `operations.root_seq` 补上：执行器写结果时 seq 还没有
+                    // 分配，而重试必须返回同一个 RootSeq（I01/I06）。
+                    if result.root_seq.is_none() {
+                        result.root_seq = Some(root_seq.to_string());
+                    }
                     (StatusCode::OK, Json(result)).into_response()
                 }
                 Err(error) => {
