@@ -560,6 +560,24 @@ impl RootHandle {
         self.walk(relative, false).map(|(_, meta)| meta)
     }
 
+    /// Create a normal directory relative to pinned no-follow parents.
+    /// An existing directory is accepted only after the same safety validation; files are never replaced.
+    pub fn ensure_directory(&self, relative: &str) -> io::Result<EntryMetadata> {
+        self.with_parent(relative, |parent, name| {
+            match open_child(parent, name, true, false, 0x0010_0081, true) {
+                Ok(file) => metadata(&file),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    let existing = self.inspect(relative)?;
+                    if !existing.directory {
+                        return Err(invalid("directory target is a file"));
+                    }
+                    Ok(existing)
+                }
+                Err(error) => Err(error),
+            }
+        })
+    }
+
     /// Enumerate metadata only; unsupported objects and errors remain visible and disable deletion.
     #[must_use]
     pub fn scan(&self) -> ScanReport {

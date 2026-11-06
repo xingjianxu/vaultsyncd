@@ -4,8 +4,42 @@ use crate::cfapi::{
     adapter::{Adapter, MetadataOnly},
     catalog::Catalog,
 };
+use crate::files::RootHandle;
 use std::{os::windows::fs::OpenOptionsExt, path::PathBuf, process::Command, sync::Arc};
 use vaultsyncd_domain::ids::{BindingId, RootId};
+
+#[test]
+fn native_application_namespace_keeps_content_and_refuses_collisions() {
+    let lab = Lab::new();
+    let root = RootHandle::open(&lab.base.join("root")).unwrap();
+    assert!(root.ensure_directory("child").unwrap().directory);
+    assert!(root.ensure_directory("child").unwrap().directory);
+    std::fs::write(lab.path(), b"local-only").unwrap();
+    assert!(root.ensure_directory("a.txt").is_err());
+    let source = lab.observe();
+    std::fs::write(lab.base.join("root/occupied"), b"user").unwrap();
+    assert!(
+        lab.files
+            .preserve("a.txt", "occupied", source.evidence())
+            .is_err()
+    );
+    assert_eq!(std::fs::read(lab.path()).unwrap(), b"local-only");
+    let moved = lab
+        .files
+        .preserve("a.txt", "child/kept", source.evidence())
+        .unwrap();
+    assert_eq!(moved, *source.evidence());
+    assert!(!lab.path().exists());
+    assert_eq!(
+        std::fs::read(lab.base.join("root/child/kept")).unwrap(),
+        b"local-only"
+    );
+    assert_eq!(
+        std::fs::read(lab.base.join("root/occupied")).unwrap(),
+        b"user"
+    );
+    assert!(root.ensure_directory("../escape").is_err());
+}
 
 struct Held(Option<WindowsFiles>);
 impl std::ops::Deref for Held {

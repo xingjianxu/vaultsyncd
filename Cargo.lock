@@ -2499,6 +2499,7 @@ dependencies = [
 name = "vaultsyncd-http-client"
 version = "0.1.0"
 dependencies = [
+ "httpdate",
  "rcgen",
  "reqwest",
  "rustls",

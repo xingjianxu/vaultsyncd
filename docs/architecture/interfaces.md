@@ -2244,3 +2244,9 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - callback只入有界队列/置取消；独立runtime先整个固定版本下载/读回SHA-256验证，再按请求范围64KiB分段 `Reply::transfer`。错误、取消、超时不返回假字节，部分进度保留；`cancel_hydration`/真实 `CANCEL_FETCH_DATA` 共用token。取消通过内容端口返回执行器，必须先落已完成位图，不能直接drop整份下载future。`disconnect`停准入并取消，`wait_idle`供启动/退出围栏，CFAPI回执键和correlation始终取S066拥有副本。
 - `platform-windows::files::staging::StagingFile` 是内部目录的安全单文件 TempContent 实现：no-follow相对句柄、普通单链接、独占读写、写后sync、剩余容量检查；拒绝与同步Root重叠。已校验stage最多保留16个独占句柄供连续范围请求复用；未命中/重启重新核对整份摘要，关闭句柄不删除内容。只丢可重建暂存，用户完整缓存不自动回收。驻留在下载开始后保持partial，不凭HTTP下载完成改写baseline或清dirty，后续扫描证明完整驻留。
 - 状态查询 `HydrationStats` 分列成功供给、取消、实际OS取消回调、失败及字节；显式应用取消验证不能替代OS回调触发证明。S011原始build26300的OS取消触发限制继续保留。进程、凭据和启动恢复由S070组装。
+
+## S070-b0 应用组装基础适配
+
+- `http-client::sync::{snapshot,snapshot_page,submit,operation}` 仅实现既有schema端点：固定身份核对，原Op重试，pending不得携带committed事实。snapshot同时返回响应HTTP Date秒数；错误不替换快照、不取客户端时间。
+- `RootHandle::ensure_directory(relative)` 在no-follow父句柄下创建/核对普通目录，现有文件和越界拒绝。`WindowsFiles::preserve(from,to,&Evidence)` 持续保护、完整核对后按句柄不覆盖移动；调用方先落持久意图，重启核对相同物理身份。文件字节和代际不变。
+- S070-a `InstanceGuard` 必须在DB打开前获取并保留至连接池关闭；SID来自实际token，会话mutex加state独占锁。`CredentialVault` 保存current-user WinCred blob，网络logon无库时明确失败；配置/日志不含凭据。
