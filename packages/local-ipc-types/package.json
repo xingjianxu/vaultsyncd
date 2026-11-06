@@ -1,13 +1,13 @@
 {
-  "name": "@vaultsyncd/local-ipc-types",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
+  "name": "@vaultsyncd/local-ipc-types",
+  "private": true,
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "node tests/schema-decoders.mjs"
-  }
+    "test": "node tests/schema-decoders.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "version": "0.1.1"
 }

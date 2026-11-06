@@ -172,3 +172,66 @@ pub(super) fn check_server(pipe: &NamedPipeClient, sid: &str) -> io::Result<()> 
     let token = process_token(process.0)?;
     same_user(&token_user(token.0)?, sid)
 }
+
+/// Handle pinned to the authenticated local IPC server. Never selected by an arbitrary PID.
+pub struct ServerProcess {
+    process: Handle,
+}
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn QueryFullProcessImageNameW(
+        process: Raw,
+        flags: u32,
+        name: *mut u16,
+        length: *mut u32,
+    ) -> i32;
+    fn WaitForSingleObject(handle: Raw, milliseconds: u32) -> u32;
+    fn TerminateProcess(handle: Raw, code: u32) -> i32;
+}
+impl ServerProcess {
+    pub(super) fn capture(
+        pipe: &NamedPipeClient,
+        sid: &str,
+        expected: &std::path::Path,
+    ) -> io::Result<Self> {
+        let mut pid = 0;
+        checked(unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) })?;
+        let process = Handle(unsafe { OpenProcess(0x0010_1001, 0, pid) });
+        if process.0.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let token = process_token(process.0)?;
+        same_user(&token_user(token.0)?, sid)?;
+        let mut text = vec![0u16; 32768];
+        let mut length = text.len() as u32;
+        checked(unsafe {
+            QueryFullProcessImageNameW(process.0, 0, text.as_mut_ptr(), &mut length)
+        })?;
+        let path = std::path::PathBuf::from(
+            String::from_utf16(&text[..length as usize]).map_err(io::Error::other)?,
+        );
+        if std::fs::canonicalize(path)? != std::fs::canonicalize(expected)? {
+            return Err(io::Error::other(
+                "IPC server is not the registered installed agent",
+            ));
+        }
+        Ok(Self { process })
+    }
+    /// Wait for the prepared server to drain and exit, retaining the original process handle.
+    pub fn wait(&self, milliseconds: u32) -> io::Result<bool> {
+        match unsafe { WaitForSingleObject(self.process.0, milliseconds) } {
+            0 => Ok(true),
+            258 => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+    /// Compatibility for the explicitly identified S099 development build only.
+    /// Caller must first pause every binding, verify no active transfers, and export recovery.
+    pub fn stop_preserved_development_build(&self) -> io::Result<()> {
+        checked(unsafe { TerminateProcess(self.process.0, 0) })?;
+        if !self.wait(10_000)? {
+            return Err(io::Error::other("preserved legacy agent did not exit"));
+        }
+        Ok(())
+    }
+}

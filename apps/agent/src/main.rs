@@ -3,6 +3,16 @@
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        if args.len() == 5 && args[1] == "--maintenance" && args[3] == "--program-dir" {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(vaultsyncd_agent::maintenance::run(
+                &args[2],
+                std::path::Path::new(&args[4]),
+            ))?;
+            return Ok(());
+        }
         if args.len() == 2 && args[1] == "--user-session" {
             vaultsyncd_agent::user_session::launch()?;
             return Ok(());
