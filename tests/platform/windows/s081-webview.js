@@ -42,7 +42,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     field("local_path", fixture.localPath); field("mode", "full");
     await click("创建绑定并开始合并"); await wait("binding created", () => text().includes("绑定已建立"));
     await wait("first merge", async () => {
-      const status = await window.__TAURI_INTERNALS__.invoke("agent_get_status");
+      let status;
+      try { status = await window.__TAURI_INTERNALS__.invoke("agent_get_status"); }
+      catch (error) { report.statusReadError = JSON.stringify(error); return false; }
       report.snapshotVersion = status.snapshot_version;
       const info = status.management?.bindings?.find(b => b.local_path === fixture.localPath);
       if (!info) return false;
@@ -55,6 +57,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     await click("恢复"); await wait("resume visible", () => !text().includes("已暂停")); report.resumeVisible = true;
     report.noBrowserCredentialStorage = localStorage.length === 0 && sessionStorage.length === 0;
     report.ok = report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
-  } catch (error) { report.error = String(error); report.page = text(); }
+  } catch (error) { report.error = typeof error === "object" ? JSON.stringify(error) : String(error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

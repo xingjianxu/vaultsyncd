@@ -47,6 +47,7 @@ export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent -p vaultsyncd-desktop --features vaultsyncd-desktop/native-acceptance
 cp "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-desktop.exe" "$artifact_dir/"
 cp "$script_dir/s081-desktop.ps1" "$artifact_dir/"
+python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1])/"s081-desktop.ps1"; p.write_text(p.read_text(),encoding="utf-8-sig")' "$artifact_dir"
 python3 -c 'import hashlib,json,pathlib,sys,uuid; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); (p/"fixture.json").write_text(json.dumps({"serverId":uuid.uuid4().hex,"root":v["root"],"url":"https://127.0.0.1:18771","login":v["login"],"password":v["password"]})); (p/"hashes.json").write_text(json.dumps({f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob("*.exe")}))' "$artifact_dir"
 guest_dir="C:/vaultsyncd-lab/$run_id"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Path '$guest_dir' | Out-Null\""

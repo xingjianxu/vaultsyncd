@@ -1,6 +1,72 @@
 //! Real native transport and SQLite errors must never become successful empty snapshots.
 use super::*;
 
+#[tokio::test]
+async fn new_binding_without_import_proof_is_unknown() {
+    use vaultsyncd_client_store::bindings::{NewBinding, SyncMode, insert_binding};
+    use vaultsyncd_domain::{
+        ids::{DeviceId, RootId, ServerId},
+        version::ServerEpoch,
+    };
+    let path = std::env::temp_dir().join(format!(
+        "s081-no-import-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&path).unwrap();
+    let db = Database::open(path.join("client.sqlite")).await.unwrap();
+    let binding = BindingId::from_bytes([1; 16]);
+    let mut tx = db.begin_write().await.unwrap();
+    insert_binding(
+        &mut tx,
+        &NewBinding {
+            id: binding,
+            server: ServerId::from_bytes([2; 16]),
+            device: DeviceId::from_bytes([3; 16]),
+            root: RootId::from_bytes([4; 16]),
+            local_path: "C:/test/local".into(),
+            cache_path: "C:/test/cache".into(),
+            mode: SyncMode::Full,
+            rules_version: "1".into(),
+            server_epoch: ServerEpoch::new(1).unwrap(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let (_connection, connection) = watch::channel(ConnectionInfo {
+        server_id: "02".repeat(16),
+        server_url: "https://example.invalid".into(),
+        ca_file: None,
+        authenticated: false,
+    });
+    let (_problems, problems) = watch::channel(Vec::new());
+    let (updates, _) = watch::channel(0);
+    let hub = Hub {
+        state: Mutex::new((0, None)),
+        updates,
+        instance: "test".into(),
+        connection,
+        problems,
+    };
+    let result = snapshot(&db, &hub).await.unwrap();
+    let row = &result.bindings.unwrap()[0];
+    assert_eq!(row.unknown, "1");
+    assert!(!row.synchronized);
+    db.close().await;
+    // SQLx's SQLite worker may release its Windows file handle just after pool close.
+    for attempt in 0..100 {
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => return,
+            Err(_) if attempt < 99 => tokio::time::sleep(Duration::from_millis(20)).await,
+            Err(error) => panic!("cannot clean this test's closed database: {error}"),
+        }
+    }
+}
+
 #[test]
 fn expired_credentials_are_an_authentication_failure_not_a_blocked_operation() {
     let request = Request {

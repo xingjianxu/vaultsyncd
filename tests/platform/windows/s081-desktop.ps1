@@ -20,7 +20,7 @@ if ($Worker) {
     $env:VAULTSYNCD_S081_FIXTURE = Join-Path $PSScriptRoot 'fixture-runtime.json'
     $desktop = Start-Process -FilePath (Join-Path $PSScriptRoot 'vaultsyncd-desktop.exe') -PassThru -RedirectStandardError (Join-Path $PSScriptRoot 'desktop.log')
     if (!$desktop.WaitForExit(300000)) { throw 'S081 real WebView acceptance timeout' }
-    $report = Get-Content $env:VAULTSYNCD_S080_REPORT -Raw | ConvertFrom-Json
+    $report = Get-Content $env:VAULTSYNCD_S080_REPORT -Raw -Encoding UTF8 | ConvertFrom-Json
     if (!$report.ok) { throw ('WebView acceptance failed: '+($report | ConvertTo-Json -Compress -Depth 8)) }
     if ($agent.HasExited) { throw 'closing GUI stopped agent' }
     $report | Add-Member -NotePropertyName guiExitKeepsAgent -NotePropertyValue $true
