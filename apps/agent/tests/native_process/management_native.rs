@@ -294,12 +294,13 @@ async fn native_management_every_command() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
+    // The user fixes the actual cause (the open mapping) before asking for a retry.
+    drop(mapping);
     ok(
         "retry_problem",
         serde_json::json!({"binding_id":binding,"operation_id":problem.problem_id}),
     )
     .await;
-    drop(mapping);
     until_file(
         &base.join("root/file.txt"),
         Some(b"S072 remote version behind a real writable mapping"),
