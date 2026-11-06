@@ -3,11 +3,12 @@ import { Button, EmptyState, PageShell, StatusBadge } from "@vaultsyncd/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
 import { RootsPanel } from "./features/roots/Roots";
-import { AccountPanel, AuthProvider } from "./features/auth/Auth";
+import { AccountPanel, AuthProvider, useAuth } from "./features/auth/Auth";
 
 const items = [{ path: "/overview", label: "服务概览" }, { path: "/roots", label: "Root 目录" }, { path: "/account", label: "账号与会话" }];
 export function App() { return <AuthProvider><AppView /></AuthProvider>; }
 function AppView() {
+  const auth = useAuth();
   const path = useRoute("/overview");
   const [status, setStatus] = useState("未连接");
   const [detail, setDetail] = useState("尚未检查服务连接。");
@@ -30,7 +31,7 @@ function AppView() {
     } finally { if (!current.signal.aborted) { controller.current = null; setBusy(false); } }
   }
   return <PageShell product="服务管理" items={items} activePath={path}
-    status={<StatusBadge tone={status === "未连接" ? "neutral" : "info"}>{status}</StatusBadge>}>
+    status={<StatusBadge tone={status === "未连接" ? "neutral" : "info"}>{auth.account && status === "未连接" ? "账号会话已连接" : status}</StatusBadge>}>
     {path === "/overview" ? <><div className="vs-eyebrow">SERVER / OVERVIEW</div><h1>服务概览</h1>
       <p>查看服务连接，再管理远端目录与文件恢复。</p><section className="vs-card">
         <h2>服务连接</h2><p aria-live="polite">{detail}</p>

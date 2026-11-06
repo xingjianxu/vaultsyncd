@@ -85,18 +85,18 @@ impl RootContext {
 }
 
 /// 管理通道需唯一 active owner；有效普通会话不能读取服务器布局。
-async fn require_owner(context: &RootContext, owner: UserId) -> Result<(), Response> {
+async fn require_owner(context: &RootContext, owner: UserId) -> Result<(), Box<Response>> {
     let owners: Vec<Vec<u8>> =
         sqlx::query_scalar("SELECT id FROM users WHERE status='active' LIMIT 2")
             .fetch_all(context.auth.database().pool())
             .await
-            .map_err(|error| storage_failure(&next_request_id(), &error.to_string()))?;
+            .map_err(|error| Box::new(storage_failure(&next_request_id(), &error.to_string())))?;
     if owners.len() != 1 || owners[0].as_slice() != owner.as_bytes() {
-        return Err(rejected(
+        return Err(Box::new(rejected(
             &next_request_id(),
             &RegistrationRejection::OutsideAllowedBases,
             "路径管理仅允许唯一 active owner；请由管理员核对账号配置。",
-        ));
+        )));
     }
     Ok(())
 }
@@ -121,7 +121,7 @@ pub async fn list_managed_roots(
         Err(response) => return response,
     };
     if let Err(response) = require_owner(&context, principal.user_id).await {
-        return response;
+        return *response;
     }
     let records = match context.auth.database().pool().acquire().await {
         Ok(mut conn) => match store_roots::roots_of_owner(&mut conn, principal.user_id).await {
@@ -267,7 +267,7 @@ pub async fn register_root(
         Err(response) => return response,
     };
     if let Err(response) = require_owner(&context, principal.user_id).await {
-        return response;
+        return *response;
     }
     register_for_owner(context, principal.user_id, body).await
 }

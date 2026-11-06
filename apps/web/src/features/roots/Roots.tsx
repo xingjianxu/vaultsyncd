@@ -8,7 +8,7 @@ const collectionLabels: Record<RootCollectionState, string> = {
   not_scanned: "尚未扫描", scanning: "正在采集", pending: "等待稳定或重试", complete: "本进程初始采集完成", blocked: "采集受阻",
 };
 export function registrationError(error: unknown): string {
-  if (!(error instanceof ApiError)) return "无法确认注册结果。请先刷新清单核对路径，再决定是否重试；不要把网络失败当作未注册。";
+  if (!(error instanceof ApiError) || error.status >= 500 || error.status === 408) return "无法确认注册结果。请先刷新清单核对路径，再决定是否重试；不要把网络失败当作未注册。";
   const reason = error.body.details?.reason ?? error.body.code;
   const steps: Record<string, string> = {
     outside_allowed_bases: "请选择下方允许基目录内的服务器绝对路径；账号无管理权限时请联系 owner。",
