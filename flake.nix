@@ -113,6 +113,9 @@
             pkgs.openssh
             # Native GUI runner writes bounded SHA-256 transport manifests on the host.
             pkgs.openssl # S081 private TLS acceptance certificates
+            pkgs.nsis # S099 host-built Unicode per-user Windows installer, pinned by flake.lock
+            pkgs.nodejs
+            pkgs.pnpm
             pkgs.python3
             pkgs.git
           ];

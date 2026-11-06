@@ -3,6 +3,10 @@
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        if args.len() == 2 && args[1] == "--user-session" {
+            vaultsyncd_agent::user_session::launch()?;
+            return Ok(());
+        }
         if args.len() < 3
             || args[1] != "--config"
             || args[3..]

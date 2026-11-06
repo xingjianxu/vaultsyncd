@@ -121,7 +121,7 @@
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | todo | — | 未执行 | — | agent/tasks/S096.md（执行时创建） |
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | todo | — | 未执行 | — | agent/tasks/S097.md（执行时创建） |
 | S098 | 通用 Linux 包与容器配置 | L | S094、S097 | todo | — | 未执行 | — | agent/tasks/S098.md（执行时创建） |
-| S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | todo | — | 未执行 | — | agent/tasks/S099.md（执行时创建） |
+| S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | in_progress | — | 干净隔离树；安装/自启动/同源清单实现中 | 原生新用户重启验收待执行 | agent/tasks/S099.md |
 | S100 | Windows 升级与卸载保护 | W | S099、S091 | todo | — | 未执行 | — | agent/tasks/S100.md（执行时创建） |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | todo | — | 未执行 | — | agent/tasks/S101.md（执行时创建） |
 | S102 | 事件异常与旧设备集成验收 | X | S074、S089、S091 | todo | — | 未执行 | — | agent/tasks/S102.md（执行时创建） |

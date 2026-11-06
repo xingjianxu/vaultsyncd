@@ -89,6 +89,10 @@ fn shortcut() -> io::Result<()> {
     }
     Ok(())
 }
+/// Register this executable's own fixed AUMID shortcut before the first notification.
+pub fn register_shortcut() -> io::Result<()> {
+    apartment(shortcut)
+}
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")

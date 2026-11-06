@@ -1,5 +1,5 @@
 //! Bounded credential-free process configuration. Filesystem admission follows under pinned handles.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     io,
@@ -8,7 +8,7 @@ use std::{
 use vaultsyncd_domain::ids::{BindingId, DeviceId, RootId, ServerId};
 
 /// One authenticated server endpoint and its explicit development trust additions.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Stable server identity; it scopes Credential Manager and existing bindings.
@@ -23,7 +23,7 @@ pub struct ServerConfig {
     pub ca_file: Option<PathBuf>,
 }
 /// A local binding must match its durable database record exactly on restart.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingConfig {
     /// Stable binding identity.
@@ -38,7 +38,7 @@ pub struct BindingConfig {
     pub mode: String,
 }
 /// Minimal multi-binding Windows process configuration. Credentials are always external.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     /// Server transport and trust policy.

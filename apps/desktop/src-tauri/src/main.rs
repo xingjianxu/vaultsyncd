@@ -14,7 +14,16 @@ mod shell;
 
 fn main() {
     #[cfg(windows)]
-    shell::run();
+    {
+        if std::env::args().skip(1).eq(["--register-shortcut"]) {
+            if let Err(error) = vaultsyncd_platform_windows::shell::toast::register_shortcut() {
+                eprintln!("shortcut registration failed: {error}");
+                std::process::exit(1);
+            }
+        } else {
+            shell::run();
+        }
+    }
     #[cfg(not(windows))]
     {
         eprintln!("vaultsyncd desktop runs on Windows 11 x64");
