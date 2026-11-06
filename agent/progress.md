@@ -107,7 +107,7 @@
 | S082 | 桌面文件状态与手动操作 | W | S081、S069、S073 | todo | — | 未执行 | — | agent/tasks/S082.md（执行时创建） |
 | S083 | 桌面历史与系统通知 | W | S082、S079、S064 | todo | — | 未执行 | — | agent/tasks/S083.md（执行时创建） |
 | S084 | 客户端未上传数据恢复演练 | W | S083、S064 | todo | — | 未执行 | — | agent/tasks/S084.md（执行时创建） |
-| S085 | 历史保留与对象引用标记 | L | S040、S029 | todo | — | 未执行 | — | agent/tasks/S085.md（执行时创建） |
+| S085 | 历史保留与对象引用标记 | L | S040、S029 | done | `ae6a8c7`；基线 `b5be427`；任务树 `.worktrees/s085` | core/store 新增 GC 3+3 项，完整 lib 311/84 通过；clippy/fmt通过；业务时间保留30天与活动引用标记 | 无；pending/备份保守保护整Root，删除协调留S086 | agent/tasks/S085.md |
 | S086 | GC 删除协调与临时清理 | L | S085、S037 | todo | — | 未执行 | — | agent/tasks/S086.md（执行时创建） |
 | S087 | 一致性备份快照与租约 | L | S086、S048 | todo | — | 未执行 | — | agent/tasks/S087.md（执行时创建） |
 | S088 | 备份导出、校验与释放接口 | L | S087、S075 | todo | — | 未执行 | — | agent/tasks/S088.md（执行时创建） |

@@ -2336,3 +2336,10 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - Web `services/server.ts::checkServer(options?, signal?) -> Promise<HealthResponse>` 默认同源、浏览器 fetch、随机 request_id；只经 `@vaultsyncd/api-client` 稳定导出请求健康，无令牌存储。默认路由 `#/overview`，另有 `#/roots` 的未读取反馈；未知路由显式显示不存在。
 - 桌面 `services/agent.ts::AgentClient.getStatus() -> Promise<GetStatusResult>` 用本机 IPC 稳定类型；默认 `disconnectedAgent` 始终 reject，明确“IPC 测试替身”。S080 可替换此端口，不将 Tauri 引入 UI。默认 `#/connections`，另有 `#/bindings`/`#/problems` 未读取反馈，无伪造同步完成状态。
 - 验证入口：`pnpm --filter @vaultsyncd/web test`（两应用 SSR 默认未连接与传输正负例），两应用各自 `typecheck`/`build`；无浏览器或 Windows 原生证据。
+
+## 对象引用标记（S085）
+
+- `server-core::gc::mark::{ObjectKey, Reference, Reason}` 表达 Root 内内容地址、排他截止点与八类保护来源；`mark(now, references)` 返回每个对象的原因集合，重复引用合并，已过期原因不能抵消有效引用。`retained_until(at)` 固定加 30 天并饱和处理时间上界；不读取时钟/mtime，不做 I/O。
+- `server-store::gc::references(tx, owner, root, now)` 从调用方同一 SQLite 事务枚举：活跃当前版本永久保护，历史从取代时刻起 30 天，删除末版本从删除时刻起 30 天，回收站截止至少为删除后 30 天，未结束及 finalized 上传在会话有效期内保护总哈希，下载/提交/备份租约以 `expires_at > now` 保护。`Error::{OutOfScope,InvalidFact,Storage,Lease}` 均应中止本次回收；条目/回收站悬空版本按坏事实拒绝。
+- pending 操作或 `phase != finalized` 意图保守保护 Root 全部已登记对象；备份租约的 `SnapshotSeqMap` 涵盖本 Root 时，在冻结对象清单建立前同样保护整个 Root。此策略允许多保护，不允许遗漏；不把 seq 映射误当对象清单。store 生产依赖 core 的引用类型，core 不依赖 store。
+- 本接口只产出标记事实，不改变数据库 `gc_state`，不清理历史行、临时文件或内容对象。S086 必须在宽限期后重新核对并与发布/租约使用统一协调，禁止凭过期快照直接删除。真实 SQLite 与核心共 6 项新增测试；相关包 lib 回归 311/84 通过。

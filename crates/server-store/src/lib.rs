@@ -23,6 +23,7 @@
 pub mod changes;
 pub mod db;
 pub mod entries;
+pub mod gc;
 pub mod intents;
 pub mod leases;
 pub mod operations;
