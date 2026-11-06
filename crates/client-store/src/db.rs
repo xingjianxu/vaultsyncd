@@ -1055,6 +1055,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_four_upgrade_preserves_open_intent_import_and_ack_mapping() {
+        let dir = TestDir::new("upgrade-v4");
+        let path = dir.database();
+        let previous = migrator(&dir.migrations(&[
+            (BASELINE_FILE, BASELINE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
+            (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
+            (
+                "0004_first_import.sql",
+                include_str!("../migrations/0004_first_import.sql"),
+            ),
+        ]))
+        .await;
+        let old = Database::open_with(&path, &previous)
+            .await
+            .expect("0004 库");
+        let binding = crate::test_support::seed_binding(&old, 0x59).await;
+        let mut tx = old.begin_write().await.expect("旧库事务");
+        let intent = crate::intents::begin_intent(
+            &mut tx,
+            &crate::intents::NewLocalIntent {
+                binding,
+                kind: crate::intents::LocalIntentKind::Replace,
+                entry: None,
+                target_path: "protected.txt".to_owned(),
+                source_path: Some("staged.part".to_owned()),
+                content_hash: Some(vec![0x59; 32]),
+                generation: Some(vaultsyncd_domain::version::Generation::new(7).unwrap()),
+            },
+        )
+        .await
+        .expect("旧意图");
+        sqlx::query("INSERT INTO binding_imports(binding_id, journal, revision) VALUES (?, '{\"fixed_snapshot\":\"old\"}', 3)")
+            .bind(binding.as_bytes().as_slice()).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO import_id_map VALUES (?, ?, ?, ?, '{\"state\":\"committed\"}')")
+            .bind(binding.as_bytes().as_slice())
+            .bind(vec![1u8; 16])
+            .bind(vec![2u8; 16])
+            .bind(vec![3u8; 16])
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        old.close().await;
+        let upgraded = Database::open(&path).await.expect("升级 0005");
+        assert_eq!(upgraded.schema_version(), 5);
+        let mut conn = upgraded.pool().acquire().await.unwrap();
+        assert_eq!(
+            crate::intents::intent(&mut conn, intent.id).await.unwrap(),
+            Some(intent)
+        );
+        let imports: (String, i64) =
+            sqlx::query_as("SELECT journal, revision FROM binding_imports")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(imports, ("{\"fixed_snapshot\":\"old\"}".to_owned(), 3));
+        let ack: String = sqlx::query_scalar("SELECT result_json FROM import_id_map")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(ack, "{\"state\":\"committed\"}");
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM controlled_applies")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "旧意图不能被猜成受控应用完成或自动重放");
+        drop(conn);
+        upgraded.close().await;
+        let backup = migration_backup_path(&path, 4, 5);
+        assert!(backup.exists());
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT count(*) FROM local_intents").await,
+            1
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name = 'controlled_applies'"
+            )
+            .await,
+            0
+        );
+    }
+
+    #[tokio::test]
     async fn schema_newer_than_binary_is_refused_before_any_write() {
         let dir = TestDir::new("too-new");
         let path = dir.database();

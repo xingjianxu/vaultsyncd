@@ -58,8 +58,19 @@ impl LocalState {
     fn new(row: LocalEntry) -> Self {
         Self {
             generation: row.generation.get(),
-            dirty: format!("{:?}", row.dirty),
-            residency: format!("{:?}", row.residency),
+            dirty: match row.dirty {
+                Dirty::Clean => "clean",
+                Dirty::Dirty => "dirty",
+                Dirty::Snapshotting => "snapshotting",
+                Dirty::AwaitingCommit => "awaiting_commit",
+            }
+            .to_owned(),
+            residency: match row.residency {
+                Residency::MetadataOnly => "metadata_only",
+                Residency::Partial => "partial",
+                Residency::Materialized => "materialized",
+            }
+            .to_owned(),
             fingerprint: row.fingerprint,
             identity: row.file_identity,
         }
@@ -148,6 +159,15 @@ impl ApplyStore {
             .transpose()
     }
     pub async fn pending(&self, binding: BindingId) -> Result<Vec<Journal>, PortError> {
+        let unknown: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM local_intents i LEFT JOIN controlled_applies a ON a.intent_id = i.intent_id \
+             WHERE i.binding_id = ? AND (a.op_id IS NULL OR a.completed <> 0)")
+            .bind(binding.as_bytes().as_slice()).fetch_one(self.database.pool()).await.map_err(db)?;
+        if unknown != 0 {
+            return Err(invalid(
+                "绑定仍有不能证明结果的旧意图或其它平台意图；禁止破坏性动作",
+            ));
+        }
         let rows: Vec<(String, bool)> = sqlx::query_as(
             "SELECT journal, completed FROM controlled_applies WHERE binding_id = ? AND completed = 0 ORDER BY intent_id")
             .bind(binding.as_bytes().as_slice()).fetch_all(self.database.pool()).await.map_err(db)?;
@@ -296,6 +316,11 @@ async fn check_tx(tx: &mut Transaction<'_, Sqlite>, journal: &Journal) -> Result
             || intent.content_hash.as_deref() != Some(journal.digest.as_slice())
             || intent.source_path.as_deref() != Some(journal.staged.as_str())
             || intent.entry != Some(spec.baseline_after.entry)
+            || intent.generation.map(|g| g.get())
+                != match &journal.expected {
+                    ContentEvidence::Absent => None,
+                    ContentEvidence::File { generation, .. } => Some(*generation),
+                }
         {
             return Err(invalid("应用意图不匹配或已停止"));
         }

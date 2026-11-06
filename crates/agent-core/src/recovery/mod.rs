@@ -41,7 +41,10 @@ pub async fn inspect(
     match local.observe_content(path).await? {
         ContentObservation::Absent => Ok(ContentEvidence::Absent),
         ContentObservation::File { facts, snapshot } => {
-            if facts.usage != Usage::Idle || facts.file_identity.as_ref().is_none_or(Vec::is_empty)
+            if facts.path != *path
+                || facts.kind != crate::ports::local::LocalEntryKind::File
+                || facts.usage != Usage::Idle
+                || facts.file_identity.as_ref().is_none_or(Vec::is_empty)
             {
                 return Err(PortError::rejected(
                     "LOCAL_IN_USE",

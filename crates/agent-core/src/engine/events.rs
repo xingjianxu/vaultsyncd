@@ -392,7 +392,24 @@ where
                             detail: format!("开始应用事务失败：{error}"),
                         })?;
                 for remote in &incoming.changes {
-                    entries::put_baseline(&mut tx, self.binding, &baseline(remote))
+                    let next = baseline(remote);
+                    if let Some(current) =
+                        entries::baseline_entry(&mut tx, self.binding, next.entry)
+                            .await
+                            .map_err(store_events::EventError::Entry)?
+                    {
+                        // S059 发布后、批次确认前崩溃可重放；其它已应用批次也可能已推进基线。
+                        // 旧事件只补游标，不把较新基线倒退。同 revision 不同事实是坏数据。
+                        if current.revision > next.revision {
+                            continue;
+                        }
+                        if current.revision == next.revision && current != next {
+                            return Err(ReceiveError::Protocol {
+                                detail: "事件与已确认基线的同 revision 事实冲突".to_owned(),
+                            });
+                        }
+                    }
+                    entries::put_baseline(&mut tx, self.binding, &next)
                         .await
                         .map_err(store_events::EventError::Entry)?;
                 }

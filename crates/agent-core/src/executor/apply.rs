@@ -73,6 +73,70 @@ pub struct ApplySpec {
     pub expected: ContentEvidence,
 }
 
+impl ApplySpec {
+    /// 将 S058 Full 文件安装转换为同一持久应用输入。
+    /// ImportLocal::install 适配器可直接调用；目录/按需占位仍走各自显式平台能力，不假装成功。
+    pub fn for_import_file(
+        request: &crate::bindings::import::ImportInstall,
+    ) -> Result<Self, PortError> {
+        use vaultsyncd_client_store::bindings::SyncMode;
+        use vaultsyncd_client_store::entries::EntryKind;
+        use vaultsyncd_domain::ids::{EntryId, VersionId};
+        use vaultsyncd_domain::version::Revision;
+        use vaultsyncd_protocol::generated::EntryKind as WireKind;
+        let invalid = |error: &dyn std::fmt::Display| {
+            PortError::rejected("INVALID_ARGUMENT", error.to_string())
+        };
+        if request.mode != SyncMode::Full || request.remote.kind != WireKind::File {
+            return Err(PortError::rejected(
+                "UNSUPPORTED",
+                "本入口仅安装 Full 固定版本文件",
+            ));
+        }
+        let remote = &request.remote;
+        let missing = || PortError::rejected("INVALID_ARGUMENT", "固定版本事实不完整");
+        let entry = EntryId::from_hex(&remote.entry_id).map_err(|e| invalid(&e))?;
+        let version = VersionId::from_hex(remote.version_id.as_deref().ok_or_else(missing)?)
+            .map_err(|e| invalid(&e))?;
+        let spec = Self {
+            op: request.op,
+            binding: request.binding,
+            target: request.path.clone(),
+            baseline_before: None,
+            baseline_after: BaselineEntry {
+                entry,
+                parent: Some(
+                    EntryId::from_hex(remote.parent_id.as_deref().ok_or_else(missing)?)
+                        .map_err(|e| invalid(&e))?,
+                ),
+                name: remote.name.clone(),
+                kind: EntryKind::File,
+                revision: Revision::new(remote.revision.parse().map_err(|e| invalid(&e))?)
+                    .map_err(|e| invalid(&e))?,
+                content_version: Some(version),
+                deleted: false,
+            },
+            pin: VersionPin::new(
+                request.binding.to_string(),
+                entry.to_string(),
+                version.to_string(),
+                vaultsyncd_transfer::hash::from_hex(remote.hash.as_deref().ok_or_else(missing)?)
+                    .map_err(|e| invalid(&e))?,
+                remote
+                    .size
+                    .as_deref()
+                    .ok_or_else(missing)?
+                    .parse()
+                    .map_err(|e| invalid(&e))?,
+            )
+            .map_err(|e| invalid(&e))?,
+            expected: ContentEvidence::Absent,
+        };
+        store::validate(&spec)?;
+        Ok(spec)
+    }
+}
+
 /// 可恢复的本地受控内容执行器。每个绑定应由应用入口串行调度。
 pub struct ControlledApply {
     store: ApplyStore,

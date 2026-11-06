@@ -18,6 +18,9 @@ use vaultsyncd_domain::version::{Generation, Revision, ServerEpoch};
 use vaultsyncd_transfer::hash::{digest_of, to_hex};
 use vaultsyncd_transfer::ports::LocalErrorKind;
 
+#[path = "consumer_tests.rs"]
+mod consumer_tests;
+
 const OLD: &[u8] = b"confirmed old content";
 const NEW: &[u8] = b"committed remote version two";
 const EDIT: &[u8] = b"unconfirmed second local edit";
@@ -299,8 +302,36 @@ impl ControlledLocal for DiskLocal {
                 return Err(io("暂存校验失败"));
             }
             let target = self.root.join("work").join(request.target.to_string());
-            if matches!(before, ContentEvidence::Absent) && target.exists() {
-                return Err(changed());
+            match before {
+                ContentEvidence::Absent if target.exists() => return Err(changed()),
+                ContentEvidence::File {
+                    generation,
+                    identity,
+                    digest,
+                    size,
+                } => {
+                    let current = fs::read(&target).map_err(io)?;
+                    let (_, observed_generation): (String, u64) = serde_json::from_slice(
+                        &fs::read(self.root.join("stamp.json")).map_err(io)?,
+                    )
+                    .map_err(io)?;
+                    #[cfg(unix)]
+                    let current_identity = {
+                        use std::os::unix::fs::MetadataExt;
+                        let m = fs::metadata(&target).map_err(io)?;
+                        [m.dev().to_le_bytes(), m.ino().to_le_bytes()].concat()
+                    };
+                    #[cfg(not(unix))]
+                    let current_identity = b"test-only-file-identity".to_vec();
+                    if current.len() as u64 != *size
+                        || digest_of(&current) != *digest
+                        || current_identity != *identity
+                        || observed_generation != *generation
+                    {
+                        return Err(changed());
+                    }
+                }
+                ContentEvidence::Absent => {}
             }
             fs::rename(&staged, &target).map_err(io)?;
             fs::File::open(target.parent().unwrap())
