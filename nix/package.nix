@@ -66,7 +66,7 @@ let
   # Nix scans for complete store hashes even without /nix/store/. Split them so
   # provenance does not retain .drv build closures (including Node) at runtime.
   reference = value:
-    let base = builtins.baseNameOf (toString value);
+    let base = builtins.baseNameOf (builtins.unsafeDiscardStringContext (toString value));
     in { hash_groups = builtins.genList (i: builtins.substring (i * 8) 8 base) 4;
          name = builtins.substring 33 (builtins.stringLength base - 33) base; };
   provenance = pkgs.writeText "vaultsyncd-build-inputs.json" (builtins.toJSON {
