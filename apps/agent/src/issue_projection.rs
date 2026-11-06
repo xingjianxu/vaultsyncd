@@ -15,6 +15,54 @@ pub(crate) async fn sync(
     cycles: &HashMap<BindingId, Problem>,
 ) -> Result<Vec<Problem>, PortError> {
     let mut origins = crate::management::problems(db, None).await?;
+    let conflicts:Vec<(Vec<u8>,Vec<u8>,i64)>=sqlx::query_as("SELECT c.binding_id,b.root_id,c.seq FROM received_changes c JOIN bindings b ON b.id=c.binding_id WHERE EXISTS(SELECT 1 FROM json_each(c.events_json) e WHERE json_extract(e.value,'$.kind')='conflict')")
+        .fetch_all(db.pool()).await.map_err(error)?;
+    for (binding, root, seq) in conflicts {
+        let root = RootId::from_bytes(
+            root.try_into()
+                .map_err(|_| error("invalid conflict root"))?,
+        );
+        let marker =
+            serde_json::json!({"kind":"conflict_notice","root":root.to_string(),"seq":seq})
+                .to_string();
+        let digest = vaultsyncd_transfer::hash::digest_of(
+            format!(
+                "S083-conflict:{}:{seq}",
+                binding
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            )
+            .as_bytes(),
+        );
+        let mut tx = db.begin_write().await.map_err(error)?;
+        let old: Option<String> =
+            sqlx::query_scalar("SELECT specification FROM agent_actions WHERE op_id=?")
+                .bind(&digest[..16])
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(error)?;
+        if let Some(old) = old {
+            if old != marker {
+                return Err(error("conflict notice identity reused"));
+            }
+        } else {
+            sqlx::query("INSERT INTO agent_actions(op_id,binding_id,specification) VALUES(?,?,?)")
+                .bind(&digest[..16])
+                .bind(binding)
+                .bind(marker)
+                .execute(&mut *tx)
+                .await
+                .map_err(error)?;
+            vaultsyncd_client_store::notifications::raise(
+                &mut tx,
+                &vaultsyncd_agent_core::status::issues::conflict_problem(root),
+            )
+            .await
+            .map_err(error)?;
+        }
+        tx.commit().await.map_err(error)?;
+    }
     origins.retain(|p| !p.problem_id.starts_with("notification:"));
     origins.extend(startup.values().chain(cycles.values()).cloned());
     let mut active = HashSet::new();

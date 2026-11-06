@@ -582,6 +582,12 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                         live.push(value);
                         startup_problems.remove(&id);
                     }
+                    Err(e) if e.is_retryable() => {
+                        offline_bindings.insert(id);
+                        if once {
+                            return Err(e);
+                        }
+                    }
                     Err(e) => {
                         let code = e
                             .code()
@@ -635,6 +641,12 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     if !report.complete {
                         return Ok(());
                     }
+                    crate::management_history::report_existing_conflicts(
+                        &db,
+                        &client,
+                        &root.to_string(),
+                    )
+                    .await?;
                     seed_uploaded_facts(&worker.importer).await?;
                     worker.restore_uploads().await?;
                     let decoder = Arc::new(Decoder {

@@ -60,8 +60,10 @@ pub(crate) async fn manage(
         .ok_or_else(|| BridgeError::local("agent 未返回管理命令结果。"))
 }
 #[tauri::command]
-pub(crate) async fn agent_get_status() -> Result<GetStatusResult, BridgeError> {
-    exchange(C::GetStatus, None).await
+pub(crate) async fn agent_get_status(
+    app: tauri::AppHandle,
+) -> Result<GetStatusResult, BridgeError> {
+    crate::notifications::status(app).await
 }
 
 #[derive(serde::Deserialize)]

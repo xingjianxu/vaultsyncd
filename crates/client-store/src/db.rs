@@ -1522,6 +1522,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_eleven_upgrade_preserves_read_and_resolved_notices_with_unclaimed_episode() {
+        let dir = TestDir::new("s083-upgrade-v11");
+        let path = dir.database();
+        let prior = dir.path.join("v11");
+        std::fs::create_dir(&prior).unwrap();
+        for migration in MIGRATOR.iter().filter(|m| m.version <= 11) {
+            std::fs::write(
+                prior.join(format!(
+                    "{:04}_{}.sql",
+                    migration.version, migration.description
+                )),
+                migration.sql.as_bytes(),
+            )
+            .unwrap();
+        }
+        let previous = migrator(&prior).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        sqlx::query("INSERT INTO notifications(dedupe_key,code,state,is_read,occurrences) VALUES('old-read','MOUNT_FAILED','active',1,7),('old-resolved','INSUFFICIENT_STORAGE','resolved',0,2)").execute(old.pool()).await.unwrap();
+        old.close().await;
+        let db = Database::open(&path).await.unwrap();
+        let records =
+            crate::notifications::delivery::list(&mut *db.pool().acquire().await.unwrap())
+                .await
+                .unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|n| n.generation == 1 && !n.claimed));
+        assert!(records[0].notification.is_read);
+        assert_eq!(records[0].notification.occurrences, 7);
+        assert_eq!(
+            records[1].notification.state,
+            crate::notifications::NotificationState::Resolved
+        );
+        let backup = migration_backup_path(&path, 11, target_schema_version());
+        assert!(backup.is_file());
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT is_read FROM notifications WHERE dedupe_key='old-read'"
+            )
+            .await,
+            1
+        );
+        assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 11);
+        db.close().await;
+        assert!(matches!(
+            Database::open_with(&path, &previous).await.unwrap_err(),
+            DbError::SchemaTooNew { supported: 11, .. }
+        ));
+    }
+
+    #[tokio::test]
     async fn version_ten_upgrade_preserves_unconfirmed_work_and_persists_connection_without_secrets()
      {
         let dir = TestDir::new("s072-upgrade-v10");

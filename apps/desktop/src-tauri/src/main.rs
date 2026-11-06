@@ -6,6 +6,10 @@ mod commands;
 #[cfg(windows)]
 mod file_commands;
 #[cfg(windows)]
+mod history_commands;
+#[cfg(windows)]
+mod notifications;
+#[cfg(windows)]
 mod shell;
 
 fn main() {

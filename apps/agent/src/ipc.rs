@@ -250,9 +250,8 @@ pub(crate) fn management_response(
                 "REAUTH_REQUIRED" | "UNAUTHORIZED" | "AUTH_EXPIRED" => {
                     (LocalIpcErrorCode::Unauthenticated, false)
                 }
-                "ALREADY_EXISTS" | "OP_ID_REUSED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" => {
-                    (LocalIpcErrorCode::Conflict, false)
-                }
+                "RESTORE_REJECTED" | "ALREADY_EXISTS" | "OP_ID_REUSED" | "BASE_MISMATCH"
+                | "SUBTREE_CHANGED" => (LocalIpcErrorCode::Conflict, false),
                 "ACCESS_DENIED"
                 | "VERSION_GONE"
                 | "INVALID_REQUEST"
@@ -283,6 +282,7 @@ pub(crate) fn management_response(
                         | "LOCAL_IN_USE"
                         | "UNKNOWN_LOCAL_STATE"
                         | "PENDING"
+                        | "RESTORE_REJECTED"
                         | "INVALID_REQUEST"
                         | "SERVICE_NOT_READY"
                         | "CERTIFICATE_INVALID"
@@ -295,6 +295,7 @@ pub(crate) fn management_response(
             );
             // Never Display/Debug HTTP/filesystem errors or requests; both can contain secrets.
             let message = match stable {
+                "RESTORE_REJECTED" => "服务器已拒绝此次恢复（RESTORE_REJECTED）；未完成覆盖，请重新读取清单和当前修订后选择操作。".to_owned(),
                 "CERTIFICATE_INVALID" => "服务器证书验证失败（CERTIFICATE_INVALID）；请核对服务器地址与名称，或在连接设置中选择管理员提供的附加 CA。证书验证未被关闭。".to_owned(),
                 "LOCAL_PATH_UNAVAILABLE" => "本地目录无法访问（LOCAL_PATH_UNAVAILABLE）；请选择现有本机 NTFS 目录，并检查路径、权限与卷状态。".to_owned(),
                 "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),

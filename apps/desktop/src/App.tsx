@@ -4,10 +4,11 @@ import type { GetStatusResult } from "@vaultsyncd/local-ipc-types";
 import { nativeAgent, type AgentClient } from "./services/agent";
 import { Connections } from "./features/connections/Connections";
 import { Files } from "./features/files/Files";
+import { History } from "./features/history/History";
 import { Problems } from "./features/problems/Problems";
 import { Bindings } from "./features/bindings/Bindings";
 import { useRoute } from "./route";
-const items = [{ path: "/connections", label: "连接设置" }, { path: "/bindings", label: "同步目录" }, { path: "/files", label: "文件与操作" }, { path: "/problems", label: "问题与恢复" }];
+const items = [{ path: "/connections", label: "连接设置" }, { path: "/bindings", label: "同步目录" }, { path: "/files", label: "文件与操作" }, { path: "/history", label: "历史与回收站" }, { path: "/problems", label: "问题与恢复" }];
 export function App({ agent = nativeAgent }: { agent?: AgentClient }) {
   const path = useRoute("/connections");
   const [message, setMessage] = useState("未连接本机 agent。");
@@ -37,7 +38,8 @@ export function App({ agent = nativeAgent }: { agent?: AgentClient }) {
     {path === "/connections" ? <Connections agent={agent} connection={snapshot?.management?.connection} changed={refresh} run={run} busy={busy} />
     : path === "/bindings" ? <Bindings agent={agent} bindings={snapshot?.management?.bindings} states={snapshot?.bindings} read={connected} changed={refresh} run={run} busy={busy} />
     : path === "/files" ? <Files agent={agent} bindings={snapshot?.management?.bindings} changed={refresh} run={run} busy={busy} />
-    : path === "/problems" ? <Problems agent={agent} run={run} busy={busy} />
+    : path === "/history" ? <History agent={agent} bindings={snapshot?.management?.bindings} changed={refresh} run={run} busy={busy} />
+    : path === "/problems" ? <Problems agent={agent} current={snapshot?.management?.problems} notices={snapshot?.management?.notices} run={run} busy={busy} />
     : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
   </PageShell>;
 }
