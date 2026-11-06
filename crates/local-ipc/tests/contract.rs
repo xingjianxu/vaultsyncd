@@ -59,6 +59,21 @@ fn response_examples_round_trip_and_validate() {
 }
 
 #[test]
+fn real_status_addition_preserves_decimal_counts_and_legacy_response() {
+    let text = include_str!("../../../api/examples/local-ipc.status.json");
+    let response: Response = serde_json::from_str(text).unwrap();
+    response.validate().unwrap();
+    assert_eq!(serde_json::to_value(&response).unwrap(), sample(text));
+    let statuses = response.result.unwrap().bindings.unwrap();
+    assert_eq!(statuses[0].dirty, "9007199254740993");
+    assert!(!statuses[0].synchronized);
+    let legacy: Response = serde_json::from_str(RESPONSE_EXAMPLE).unwrap();
+    assert!(legacy.result.unwrap().bindings.is_none());
+    let old_request: Request = serde_json::from_str(REQUEST_EXAMPLE).unwrap();
+    assert!(Service::new("1.1").handle(&old_request).result.is_some());
+}
+
+#[test]
 fn unknown_command_is_rejected() {
     let mut value = sample(REQUEST_EXAMPLE);
     value["command"]["name"] = json!("detach_binding");
@@ -202,6 +217,7 @@ fn framed_request_reaches_the_handler_and_response_is_framed() {
         GetStatusResult {
             agent_version: "9.9.9".to_string(),
             ipc_protocol: version::supported(),
+            bindings: None,
         }
     );
 }

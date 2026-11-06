@@ -287,6 +287,42 @@ impl Drop for ChildGuard {
         }
     }
 }
+async fn ipc_status(child: &mut ChildGuard) -> vaultsyncd_local_ipc::generated::GetStatusResult {
+    use vaultsyncd_local_ipc::{
+        generated::{Command, CommandName, Request},
+        version,
+    };
+    let endpoint = vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent").unwrap();
+    let request = Request {
+        request_id: "native-agent-status".into(),
+        ipc_version: version::supported(),
+        command: Command {
+            name: CommandName::GetStatus,
+        },
+    };
+    let end = Instant::now() + Duration::from_secs(15);
+    loop {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "agent must survive IPC requests"
+        );
+        match endpoint.request(&request).await {
+            Ok(response) => {
+                assert_eq!(response.request_id, request.request_id);
+                let result = response.result.expect("real agent status");
+                assert_eq!(result.agent_version, env!("CARGO_PKG_VERSION"));
+                assert_eq!(result.ipc_protocol, version::supported());
+                assert!(
+                    result.bindings.is_some(),
+                    "identity-only stub is not real status"
+                );
+                return result;
+            }
+            Err(e) => assert!(Instant::now() < end, "real agent IPC unavailable: {e}"),
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
 async fn until_server(
     client: &ApiClient<vaultsyncd_http_client::ReqwestTransport>,
     root: &str,
@@ -461,6 +497,28 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
             .await
             .unwrap();
     db.close().await;
+    // Query a real running offline agent: durable dirty/pending facts must not become green.
+    let log = std::fs::File::create(base.join("offline-ipc.log")).unwrap();
+    let mut offline_agent = ChildGuard(
+        Command::new(&exe)
+            .arg("--config")
+            .arg(&config_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log)
+            .spawn()
+            .unwrap(),
+    );
+    let status = ipc_status(&mut offline_agent).await;
+    let statuses = status.bindings.unwrap();
+    assert_eq!(statuses.len(), 1);
+    let status = &statuses[0];
+    assert_eq!(status.binding_id, binding);
+    assert!(status.dirty.parse::<u64>().unwrap() > 0);
+    assert!(status.pending.parse::<u64>().unwrap() > 0);
+    assert!(!status.synchronized);
+    drop(offline_agent);
+    println!("check=pass real_agent_ipc_exposes_durable_dirty_pending_not_committed");
     config["server"]["url"] = fixture["url"].clone();
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(25);
@@ -637,6 +695,21 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         .into_iter()
         .find(|r| r.name == "local.txt")
         .unwrap();
+    let initial_status = ipc_status(&mut first).await;
+    assert_eq!(
+        initial_status.bindings.as_ref().unwrap()[0].binding_id,
+        binding
+    );
+    // Malformed and partial clients are isolated from this actual syncing process.
+    use tokio::io::AsyncWriteExt;
+    let endpoint = vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent").unwrap();
+    for bytes in [vec![0, 0], vec![0, 0, 0, 0], vec![0, 0, 0, 1, b'{']] {
+        let mut pipe = endpoint.connect().await.unwrap();
+        pipe.write_all(&bytes).await.unwrap();
+        drop(pipe);
+    }
+    assert_eq!(ipc_status(&mut first).await.bindings.unwrap().len(), 1);
+    println!("check=pass real_agent_ipc_same_user_status_after_malformed_and_partial_disconnects");
     let native_root =
         vaultsyncd_platform_windows::files::RootHandle::open(&base.join("root")).unwrap();
     let before_identity = native_root.inspect("local.txt").unwrap().identity;
@@ -762,6 +835,12 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
     println!("check=pass native_directory_create_child_upload_and_fenced_subtree_delete");
     until_durable_idle(&base.join("state/client.sqlite")).await;
     println!("check=pass real_sqlite_queue_intents_and_received_batches_converged");
+    let final_status = ipc_status(&mut first).await.bindings.unwrap().remove(0);
+    assert_eq!(final_status.binding_id, binding);
+    assert_eq!(final_status.pending, "0");
+    assert_eq!(final_status.intents, "0");
+    assert_eq!(final_status.event_lag, "0");
+    println!("check=pass real_agent_ipc_tracks_queue_and_intent_convergence");
     let second = invoke(&exe, &config_path, &["--once"], None);
     assert_eq!(
         second.status.code(),
@@ -787,6 +866,10 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
             .contains("event=stopped")
     );
     println!("check=pass actual_agent_control_break_drains_and_releases_database");
+    assert!(
+        endpoint.connect().await.is_err(),
+        "stopped agent must release its pipe"
+    );
     drop(native_root);
     vault.erase().unwrap();
     let root_path = base.join("root");

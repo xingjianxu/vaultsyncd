@@ -18,6 +18,8 @@ mod importer;
 #[cfg(windows)]
 mod instance;
 #[cfg(windows)]
+mod ipc;
+#[cfg(windows)]
 pub mod local;
 #[cfg(windows)]
 mod namespace;

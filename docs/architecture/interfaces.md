@@ -909,9 +909,9 @@ python3 tools/context.py --help
 
 | 文件 | 契约 |
 | --- | --- |
-| `api/local-ipc.schema.json` | JSON Schema `2020-12`。`$defs`：`IpcVersion`（`major`/`minor`）、`CommandName`（闭集，当前只有 `get_status`）、`Command`、`Request`（`request_id`/`ipc_version`/`command`）、`GetStatusResult`（`agent_version`/`ipc_protocol`）、`LocalIpcErrorCode`（闭集，当前只有 `unsupported_version`）、`ErrorBody`、`ResponseKind`、`Response`（`request_id`/`kind`/可选 `result`/可选 `error`） |
+| `api/local-ipc.schema.json` | JSON Schema `2020-12`。`$defs`：`IpcVersion`（`major`/`minor`）、`CommandName`（闭集，当前只有 `get_status`）、`Command`、`Request`（`request_id`/`ipc_version`/`command`）、`GetStatusResult`（`agent_version`/`ipc_protocol`，S071 的 1.1 增量可选 `bindings: BindingStatus[]`，真实 agent 始终给出）、`BindingStatus`（身份及核心多维持久快照；详见 S071）、`LocalIpcErrorCode`（闭集，当前只有 `unsupported_version`）、`ErrorBody`、`ResponseKind`、`Response`（`request_id`/`kind`/可选 `result`/可选 `error`） |
 | `x-vaultsyncd` 元数据 | `protocol`（`major`/`minor`，进生成常量 `PROTOCOL_MAJOR`/`PROTOCOL_MINOR`）与 `frame`（`header_bytes = 4`、`max_frame_bytes = 1048576`，进生成常量 `FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES`）。`header_bytes` 必须是 4，`max_frame_bytes` 必须在 64 B—64 MiB 之间 |
-| `api/examples/local-ipc.{request,response,error}.json` | 合法请求/成功应答/错误应答样本，被 `crates/local-ipc/tests/contract.rs` 与 `packages/local-ipc-types/tests/schema-decoders.mjs` 直接读取；两侧都断言“解码后再编码等于样本” |
+| `api/examples/local-ipc.{request,response,error,status}.json` | 合法请求/旧成功应答/错误应答/1.1 状态增量样本，被 `crates/local-ipc/tests/contract.rs` 与 `packages/local-ipc-types/tests/schema-decoders.mjs` 直接读取；两侧都断言“解码后再编码等于样本” |
 
 生成规则：与远端共用 `emit` 的 schema 渲染（对象/闭集枚举/基础类型），差别是 `$ref` 前缀为 `#/$defs/`、多出协议与帧常量、没有 HTTP 调用文件。schema 名 PascalCase、字段名 snake_case、每个 schema 与属性必须有 `description`、未知键与未支持构造（内联 enum/对象、非 `#/$defs/` 引用）一律报错——规则与失败行为见上一节。
 
@@ -924,13 +924,13 @@ python3 tools/context.py --help
 | `generated` | 生成代码（`api/local-ipc.schema.json` → `crates/local-ipc/src/generated/mod.rs`）：`PROTOCOL_MAJOR`/`PROTOCOL_MINOR`/`FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES` 常量与全部 DTO。闭集枚举无 catch-all，未知命令/未知种类/未知错误码反序列化失败；未知字段被忽略 |
 | `version` | `SUPPORTED_MAJOR`/`SUPPORTED_MINOR`（= 生成常量）、`supported() -> IpcVersion`、`is_compatible(&IpcVersion) -> bool`：major 必须相同，minor 不得高于 agent 支持的版本（避免调用方假设未实现的命令存在）；更低 minor 兼容 |
 | `framing` | `encode(&[u8]) -> Result<Vec<u8>, FrameError>`：4 字节大端长度头 + 负载；拒绝空负载与超过 `MAX_FRAME_BYTES` 的负载。`FrameDecoder::{new,push,next_frame,buffered_bytes,queued_frames}`：接受任意切分（含 1 字节一块），只有凑满声明长度才产出负载，截断数据永不产出短帧 |
-| `service` | `Service::new(agent_version)`、`Service::handle(&Request) -> Response`；`Response::{ok,error,validate}` 与 `ResponseShapeError`。`get_status` 返回 agent 版本与该 agent 支持的 `ipc_protocol`；版本不兼容返回 `unsupported_version`（`retryable = false`），回显 `request_id` |
+| `service` | `Service::new(agent_version)`、`Service::handle(&Request) -> Response`；`Response::{ok,error,validate}` 与 `ResponseShapeError`。`get_status` 返回 agent 版本与该 agent 支持的 `ipc_protocol`，纯处理器不伪造持久状态（`bindings = None`）；应用组装补入核心快照；版本不兼容返回 `unsupported_version`（`retryable = false`），回显 `request_id` |
 
 帧错误：`FrameError::{EmptyFrame, FrameTooLarge{bytes}, Backlog}`。不变式：等待中的部分帧最多 `FRAME_HEADER_BYTES + MAX_FRAME_BYTES` 字节；已完整但未取走的帧最多 `MAX_QUEUED_FRAMES = 4` 个；超过任一上限即报错而不再收数据。**报错后连接不可继续使用**（缓冲区可能仍有未消费字节），传输实现应关闭该连接。
 
 未知命令与畸形 JSON 在产生应答之前就被拒绝：`Service` 只接收已解码的 `Request`，解码失败由传输层结束连接，因此不存在“未知命令回一个默认成功”的路径。`Response` 的 `kind` 与负载同理：只有 `ok` 带 `result`、`error` 带 `error`，构造只经 `Response::ok`/`Response::error`，`validate()` 供解码侧复核。
 
-验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-local-ipc`（19 项契约用例）、`cargo clippy --locked -p vaultsyncd-local-ipc --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-local-ipc`。
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-local-ipc`（20 项契约用例）、`cargo clippy --locked -p vaultsyncd-local-ipc --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-local-ipc`。
 
 ## packages/local-ipc-types — 本机 IPC TypeScript 类型（S025）
 
@@ -940,7 +940,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `src/generated/types.ts` | 生成：`interfaces`、字符串字面量联合 + `<NAME>_VALUES`、`decode<Name>()` 解码器，以及 `PROTOCOL_*`/`FRAME_*`/`MAX_FRAME_BYTES` 常量；未知命令、未知应答种类、缺必填字段、非整数版本号都抛错 |
 | `src/index.ts` | 手写的稳定导出面：只从这里导出类型、解码器与常量 |
-| `tests/schema-decoders.mjs` | 运行时断言（8 项），直接以 `.mjs` 导入 `../src/generated/types.ts`，并读取 `api/examples/` |
+| `tests/schema-decoders.mjs` | 运行时断言（9 项），直接以 `.mjs` 导入 `../src/generated/types.ts`，并读取 `api/examples/` |
 
 脚本：`typecheck` = `tsc --noEmit`（根 `pnpm typecheck` 覆盖）、`test` = `node tests/schema-decoders.mjs`。
 
@@ -2275,4 +2275,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `platform-windows::ipc::Endpoint::current(scope)` 从 process token 取 SID/session，生产 scope 固定 `vaultsyncd-agent`，名称 `\\\\.\\pipe\\{scope}-{SID}-{session}`；不接受外部路径/用户身份。`connect/request` 只连本机，校验 server PID 的 token SID，默认 identification-only SQOS；GUI/CLI 消费此模块不启动 CFAPI。
 - `Server::bind(Endpoint, Fn(Request)->Future<io::Result<Response>>)` 首实例独占、拒绝远程、非继承句柄、protected DACL 仅当前 SID 完全控制；每个完整请求通过管道 impersonation 读取 thread token SID，立即 RevertToSelf，跨 await 不保留 impersonation。Revert 失败 fail-closed 终止，不能把借用身份交还线程池。
 - 4 字节大端长度 + JSON，沿用 local-ipc schema 上限（1 MiB）；空/超长/畸形/未知命令/截断均不产成功答复。每连接顺序执行、跨连接最多 8 个请求执行任务（额外一个待连接 listener），超额立即关闭；完整帧、handler、write 各 5 秒 deadline，不因碎片到达重置。断连仅销毁该连接。`shutdown` 取消并等待所有连接；Drop 为紧急取消；`is_finished` 供应用检查 listener 故障。
-- 原生入口 `tests/platform/windows/run-native-ipc.sh`：交叉构建后 Windows 11 真 named pipe + 临时第二本机账号验 ACL；同时验证 token 身份、分片/流水线、并发、有界积压/慢读写/handler、畸形/断连后可继续请求。测试账号在 finally 删除，不碰其他样本。
+- `apps/agent/src/ipc.rs::start(Arc<Database>,Vec<BindingId>)` 在真实恢复完成后、同步循环前绑定；调用 `agent_core::status::snapshot`，逐 Binding 一读事务，读取失败关闭请求连接，不用空数组/默认绿色替代。`get_status` 1.1 在 1.0 身份信封上加可选 `bindings`：dirty/三类驻留/pending/failed/offline/transfers/intents/recovery/event_lag/unknown 均十进制字符串，mode_pending/paused/detached 与核心 synchronized 分别展示。不返回路径/凭据，不承诺多 Binding 原子快照。真实进程始终填 `bindings`；纯 `Service` 未接状态源时省略。版本 1.0 请求继续兼容，管理命令/版本化推送仍属 S072。
+- runtime 持有 Server 到退出，在关闭 DB 前 `shutdown` 取消并等待 IPC；监听异常结束会使主循环明确失败。`--login-stdin` 不启动状态 IPC。
+- 原生入口 `tests/platform/windows/run-native-ipc.sh`：交叉构建后 Windows 11 真 named pipe + 临时第二本机账号验 ACL；同时验证 token 身份、分片/流水线、并发、有界积压/慢读写/handler、畸形/断连后可继续请求，以及真实 SQLite 状态缺失不得假成功/版本先检。测试账号在 finally 删除，不碰其他样本。
+- 真实进程验收：先构建 `release-native-server`，再 `VAULTSYNCD_PROCESS_TASK=S071 tests/platform/windows/run-native-process.sh`（Windows devShell）。复用 S070 产品回归和三项 IPC 断言：离线 dirty/pending 明确未同步、畸形/部分帧断连后能继续查、恢复后 pending/intents/lag 收敛到0且退出释放管道。S071 模式独立 driver/artifacts，仅运行实际进程用例，不执行 S070 旧样本 cleanup。

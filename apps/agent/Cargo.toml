@@ -12,6 +12,7 @@ vaultsyncd-fs-common = { path = "../../crates/fs-common" }
 vaultsyncd-agent-core = { path = "../../crates/agent-core" }
 vaultsyncd-client-store = { path = "../../crates/client-store" }
 vaultsyncd-domain = { path = "../../crates/domain" }
+vaultsyncd-local-ipc = { path = "../../crates/local-ipc" }
 vaultsyncd-http-client = { path = "../../crates/http-client" }
 vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
 vaultsyncd-transfer = { path = "../../crates/transfer" }

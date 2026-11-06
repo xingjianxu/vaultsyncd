@@ -19,11 +19,50 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 1;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 0;
+pub const PROTOCOL_MINOR: u32 = 1;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
 pub const MAX_FRAME_BYTES: usize = 1048576;
+
+/// 运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；本卡不提供状态推送。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct BindingStatus {
+    /// Binding 稳定身份。
+    pub binding_id: String,
+    /// Binding 已解除。
+    pub detached: bool,
+    /// 未确认本地内容数量（十进制）。
+    pub dirty: String,
+    /// 接收与应用游标间隔（十进制）。
+    pub event_lag: String,
+    /// 失败队列数量（十进制）。
+    pub failed: String,
+    /// 开放本地意图数量（十进制）。
+    pub intents: String,
+    /// 完整驻留数量（十进制）。
+    pub materialized: String,
+    /// 仅元数据占位数量（十进制）。
+    pub metadata_only: String,
+    /// 模式补齐尚未完成。
+    pub mode_pending: bool,
+    /// 断网任务数量（十进制）。
+    pub offline: String,
+    /// 部分驻留数量（十进制）。
+    pub partial: String,
+    /// Binding 已暂停。
+    pub paused: bool,
+    /// 尚未完成队列数量（十进制），不等于 committed。
+    pub pending: String,
+    /// 未完成恢复数量（十进制）。
+    pub recovery: String,
+    /// 核心根据全部维度判定的完成事实；暂停单独展示。
+    pub synchronized: bool,
+    /// 未完成传输数量（十进制）。
+    pub transfers: String,
+    /// 未核对内容或需重新协调数量（十进制）。
+    pub unknown: String,
+}
 
 /// 命令负载：命令名加该命令自己的参数。当前唯一的 get_status 没有参数。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -51,11 +90,15 @@ pub struct ErrorBody {
     pub retryable: bool,
 }
 
-/// get_status 的结果：agent 身份与它当前支持的 IPC 协议版本。Binding、问题与状态快照等更细的状态字段随 design §15.5 其余命令在各自功能卡加入。
+/// get_status 的结果：agent 身份、IPC 协议与真实 Binding 多维状态。bindings 为 1.1 可选增量；旧处理器未接状态源时省略，不伪装成空快照。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct GetStatusResult {
     /// agent 二进制版本（构建时确定的语义化版本文本），供界面与日志显示。
     pub agent_version: String,
+    /// 真实核心快照；应用入口始终返回该字段，读取失败则请求失败，不用空数组替代。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<Vec<BindingStatus>>,
     /// agent 当前支持的 IPC 协议版本。
     pub ipc_protocol: IpcVersion,
 }

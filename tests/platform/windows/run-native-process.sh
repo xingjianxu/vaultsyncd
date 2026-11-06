@@ -6,7 +6,14 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
 root=$(repo_root)
 cd "$root"
-artifact_dir="$root/artifacts/S070/native-$(date +%s)-$$"
+# S071 reuses the real-process regression but never runs S070's old-sample cleanup test.
+task="${VAULTSYNCD_PROCESS_TASK:-S070}"
+case "$task" in
+    S070) native_test=all ;;
+    S071) native_test=native_headless_import_real_sync_queue_restart_and_single_instance ;;
+    *) echo 'unsupported native process task' >&2; exit 1 ;;
+esac
+artifact_dir="$root/artifacts/$task/native-$(date +%s)-$$"
 mkdir -p "$artifact_dir"
 helper="${VAULTSYNCD_RELEASE_SERVER:-$root/target/debug/examples/release-native-server}"
 test -x "$helper" || { echo 'build: nix develop --command cargo build --locked -p vaultsyncd-server-tests --example release-native-server' >&2; exit 1; }
@@ -56,7 +63,7 @@ host_hash=$(sha256sum "$artifact_dir/s070-process-tests.exe" | awk '{print $1}')
 fixture_hash=$(sha256sum "$artifact_dir/guest-fixture.json" | awk '{print $1}')
 cleanup_allowlist=$(printf '%s' "${VAULTSYNCD_PROCESS_CLEANUP_ALLOWLIST:-[]}" | base64 -w0)
 cat > "$artifact_dir/guest-process.ps1" <<'PS'
-param([string]$ExpectedHash,[string]$FixtureHash,[string]$CleanupAllowlist,[switch]$Worker)
+param([string]$ExpectedHash,[string]$FixtureHash,[string]$CleanupAllowlist,[string]$TestName='all',[switch]$Worker)
 $ErrorActionPreference='Stop'
 $exe=Join-Path $PSScriptRoot 's070-process-tests.exe'
 $fixture=Join-Path $PSScriptRoot 'guest-fixture.json'
@@ -68,6 +75,7 @@ if ($Worker) {
         $p=New-Object System.Diagnostics.Process
         $p.StartInfo.FileName=$exe
         $p.StartInfo.Arguments='--nocapture --test-threads=1'
+        if ($TestName -ne 'all') {$p.StartInfo.Arguments="--exact $TestName --nocapture --test-threads=1"}
         $p.StartInfo.UseShellExecute=$false
         $p.StartInfo.RedirectStandardOutput=$true
         $p.StartInfo.RedirectStandardError=$true
@@ -85,7 +93,7 @@ if ((Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Fixtu
 Write-Output "guest_test_sha256 $ExpectedHash"
 Write-Output ('guest_agent_sha256 '+(Get-FileHash (Join-Path $PSScriptRoot 'vaultsyncd-agent.exe') -Algorithm SHA256).Hash.ToLowerInvariant())
 $task='vaultsyncd-s070-process-'+[Guid]::NewGuid().ToString('N')
-$action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker -CleanupAllowlist $CleanupAllowlist"
+$action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker -CleanupAllowlist $CleanupAllowlist -TestName $TestName"
 $principal=New-ScheduledTaskPrincipal -UserId 'Quickemu' -LogonType Interactive -RunLevel Limited
 try {
     Register-ScheduledTask -TaskName $task -Action $action -Principal $principal | Out-Null
@@ -97,10 +105,10 @@ try {
 } finally {Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue;Remove-Item -LiteralPath $fixture -Force}
 exit $result
 PS
-guest_dir="C:/vaultsyncd-lab/s070-driver-$$"
+guest_dir="C:/vaultsyncd-lab/${task,,}-driver-$$"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir' | Out-Null\""
 GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
-guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-process.ps1 -ExpectedHash $host_hash -FixtureHash $fixture_hash -CleanupAllowlist $cleanup_allowlist" | tee "$artifact_dir/native-tests.log"
+guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-process.ps1 -ExpectedHash $host_hash -FixtureHash $fixture_hash -CleanupAllowlist $cleanup_allowlist -TestName $native_test" | tee "$artifact_dir/native-tests.log"
 guest_ssh "powershell -NoProfile -Command \"Remove-Item -LiteralPath '$guest_dir' -Recurse -Force\""
 echo "MATCH s070-process-tests.exe $host_hash"
 echo "ARTIFACTS $artifact_dir"
