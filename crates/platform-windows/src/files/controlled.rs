@@ -126,6 +126,10 @@ pub(crate) fn rename(file: &File, parent: &File, name: &str, flags: u32) -> io::
         ) -> i32;
         fn RtlNtStatusToDosError(status: i32) -> u32;
     }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn WaitForSingleObject(handle: *mut c_void, millis: u32) -> u32;
+    }
     let name: Vec<u16> = name.encode_utf16().collect();
     let length = 20 + name.len() * 2;
     let mut words = vec![0u64; length.div_ceil(8)];
@@ -137,15 +141,35 @@ pub(crate) fn rename(file: &File, parent: &File, name: &str, flags: u32) -> io::
     for (out, ch) in bytes[20..length].chunks_exact_mut(2).zip(name) {
         out.copy_from_slice(&ch.to_le_bytes());
     }
-    let status = unsafe {
+    let mut completion = IoStatus {
+        status: 0x103,
+        information: 0,
+    };
+    let mut status = unsafe {
         NtSetInformationFile(
             file.as_raw_handle(),
-            &mut IoStatus::default(),
+            &mut completion,
             words.as_ptr().cast(),
             length as u32,
             10,
         )
     };
+    if status == 0x103 {
+        // Protected Win32 handles can be asynchronous. Keep both IOSB and the rename buffer
+        // alive, and keep the caller's CfReference held, until the kernel actually completes.
+        loop {
+            let waited = unsafe { WaitForSingleObject(file.as_raw_handle(), u32::MAX) };
+            if waited != 0 {
+                // Returning would let the kernel write into dead stack/buffer memory. An invalid
+                // kernel wait handle is an unrecoverable ABI/ownership violation, never success.
+                std::process::abort();
+            }
+            status = unsafe { std::ptr::read_volatile(&completion.status) } as i32;
+            if status != 0x103 {
+                break;
+            }
+        }
+    }
     if status < 0 {
         return Err(io::Error::from_raw_os_error(
             unsafe { RtlNtStatusToDosError(status) } as i32,
@@ -155,9 +179,11 @@ pub(crate) fn rename(file: &File, parent: &File, name: &str, flags: u32) -> io::
 }
 
 mod content;
+mod read;
 pub use content::{
     Evidence, FixedSnapshot, ObservedContent, Publication, RecoveryOutcome, WindowsFiles,
 };
+pub(crate) use read::read_at;
 
 #[cfg(test)]
 mod tests;

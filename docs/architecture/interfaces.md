@@ -2081,6 +2081,8 @@ CAS、旧代际 ACK、未定位冲突保留，以及从 high_water=7 接收/应�
 | `ApplySpec::for_import_file(&ImportInstall)` | S058 Full 文件安装桥接，固定 SnapshotEntry 版本/摘要/大小，expected=Absent；可在 ImportLocal::install 中交给同一 ControlledApply。目录和 OnDemand 占位明确 Unsupported，不静默降级 Full。 |
 | `ControlledApply::apply(spec, content, temp, progress, options)` | 重哈希真实前置内容 → S054 固定版本下载/暂存同步/流式整份校验 → 同事务写意图及重放上下文 → 再核对并平台条件替换 → 再核对真实新内容 → baseline/local/完成记录同事务。失败保留队列、旧基线、暂存与意图；相同 OpId 输入不同拒绝 OP_ID_REUSED。 |
 | `ControlledApply::recover(binding)` | 从 SQLite 按 intent_id 恢复，不依赖原内存规格或网络。现场等于目标摘要/长度只补基线；仍等于 before 才可条件重做；第三种内容、占用、故障或新 DB generation/dirty 保留现场。返回逐操作 Result；读清单失败或存在未归属的旧/其它平台意图返回整体 Err，不得宣布启动恢复完成。 |
+| `ControlledApply::specification(op)` | 只读返回校验过的持久固定输入，包括已完成记录；应用 ACK 重启不从已变化的 head/基线猜旧 spec。 |
+| `ControlledApply::apply_after_confirmed_copy(..., copy_op)` | 仅用于 preserve-both 的原 head 恢复：copy 必须是已完成同 binding、不同 entry 的固定版本发布，摘要/长度等于 source expected；原 dirty 的物理身份、generation、fingerprint 和真实内容仍逐项 CAS。证明随 journal 持久，恢复重新校验；不能作为通用强制覆盖。 |
 
 客户端迁移 `0005_controlled_apply.sql` 追加 `controlled_applies`：OpId 主键、绑定、目标、唯一
 local_intents 外键、完整 JSON 重放上下文、completed。开放目标唯一；意图与日志同事务创建，
@@ -2258,3 +2260,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `apps/agent::release::NativeReleaseLocal::new(root,Arc<Database>,Identity,RelativePath,VersionPin)`：仅固定目标，保护前读当前代际/物理身份，供`ManualRelease`的ReleaseLocal端口。`HttpReleaseRemote::new(ApiClient<ReqwestTransport>,RootId)`：真实LeaseEndpoint，20秒heartbeat、低于30秒保守余量拒绝；失败不得清本地字节，Drop主动解除或留有界TTL。
 - 验收入口：先`nix develop --command cargo build --locked -p vaultsyncd-server-tests --example release-native-server`，再Windows shell运行`tests/platform/windows/run-native-release.sh`。专用`apps/agent/tests/native_release.rs` target使用真实Linux生产bootstrap服务/真实租约/Windows NTFS；bridge manifest含短命测试token，仅0600忽略artifacts及临时客体文件，脚本清理tunnel/server/manifest/driver。宿主桥接example也可供S070真实无GUI验收复用。
 - SQLite FULL证据来自专用测试DB的真实pager容量上限，未填满系统卷；后续物理卷故障与生产GC worker仍按计划验收。S070启动必须先平台publication恢复再core apply/release恢复，之后连接同步。
+
+## S070 Windows 用户会话生产进程
+
+- `vaultsyncd-agent --config <JSON> [--login-stdin|--once]` 组装真实 HTTP/store/core/Windows；凭据来自 current-user WinCred，GUI 不参与同步。配置和实际命令见 `docs/operations/windows-agent.md`。`--once` 不代表所有 pending 已完成；后台轮询复用原 OpId、续传与调度状态。
+- 恢复顺序：SID mutex/state 独占锁先于 DB；平台 publication → 实际存在的受控 release → 应用所有权可证明的 Move/Import → core ControlledApply → 新同步。应用 namespace 恢复核对固定动作、物理身份、generation/hash、目标不覆盖，并在短事务一起写 baseline、完成意图及解除该动作依赖；未知/失败/歧义意图停写。
+- client 0010 的 `agent_evidence` 保存不可变物理内容证据，`agent_versions` 保存固定版本 pin，`agent_actions` 保存原 Op 规格及 ACK；baseline/local/remote/queue 仍是各自当前状态唯一事实来源。新版升级有备份，旧 v9 writer 在写前拒绝；derived event spec 可由持久 received_changes 重建。
+- namespace 与内容发现共用单次健康 metadata scan。收到完整确认删除时 `WindowsFiles::quarantine` 只把同一真实对象保留到内部状态；dirty 内容不被替换。目录删除需真实 subtree token 且前后固定快照与已知子树一致。历史自 ACK/旧事件不重新安装用户已移动或删除的文件。dirty 等待本身上传协调是 Pending，不作永久 halted。
+- 正式 Adapter 目录 population=ALWAYS_FULL(3)，应用通过 snapshot/events 维护所有名字；内容仍使用固定版本按需回源。protected Win32 句柄的读使用存活 OVERLAPPED/event 并等待真实完成，rename 对 STATUS_PENDING 保留 IOSB/缓冲和 CfReference 至完成；不把 pending 当成功、不把异步句柄交给 std 同步读取。
+- 验收 `run-native-process.sh` 使用真实 Linux bootstrap 与 Windows 实际进程，覆盖无 GUI 双向同步、原 Op 重启、冲突双方、namespace、开放 Move 后进程终止恢复、SQLite 三类工作收敛、第二实例和退出。测试 cleanup 缺失配置时只允许显式精确 run allowlist 且同步根已空；未知现场保留。S071/S072 才提供 named pipe 和管理命令，S074/S102 扩展多客户端及故障矩阵。

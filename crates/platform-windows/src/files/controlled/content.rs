@@ -8,7 +8,6 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{self, Read, Write},
-    os::windows::fs::FileExt,
     path::Path,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -674,7 +673,7 @@ fn hash_file(file: &File) -> io::Result<([u8; 32], u64)> {
 }
 fn read_exact_at(file: &File, mut bytes: &mut [u8], mut offset: u64) -> io::Result<()> {
     while !bytes.is_empty() {
-        let n = file.seek_read(bytes, offset)?;
+        let n = super::read_at(file, bytes, offset)?;
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,

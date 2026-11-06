@@ -1,8 +1,11 @@
 //! Existing namespace commands consumed by the headless synchronizer, with durable physical fences.
+#[path = "namespace_recovery.rs"]
+mod recovery;
 use crate::{
     local::error,
     work::{Worker, baseline, load_spec, metadata, new_op, paths},
 };
+pub(crate) use recovery::recover;
 use std::collections::HashMap;
 use vaultsyncd_agent_core::{
     executor::ActionOutcome,

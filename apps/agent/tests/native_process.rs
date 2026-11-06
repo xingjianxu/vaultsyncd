@@ -71,6 +71,120 @@ async fn listing(
     }
 }
 struct Bytes(Vec<u8>);
+#[test]
+fn native_cleanup_only_s070_synthetic_failed_runs() {
+    if std::env::var_os("VAULTSYNCD_PROCESS_FIXTURE").is_none() {
+        return;
+    }
+    let current = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let allowed: Vec<PathBuf> = serde_json::from_str(
+        &std::env::var("VAULTSYNCD_PROCESS_CLEANUP_ALLOWLIST").unwrap_or_else(|_| "[]".into()),
+    )
+    .unwrap();
+    for driver in std::fs::read_dir("C:/vaultsyncd-lab")
+        .unwrap()
+        .filter_map(Result::ok)
+    {
+        if !driver
+            .file_name()
+            .to_string_lossy()
+            .starts_with("s070-driver-")
+            || driver.path() == current
+        {
+            continue;
+        }
+        for run in std::fs::read_dir(driver.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("run-process-"))
+        {
+            let path = run.path();
+            let config_path = path.join("agent.json");
+            if !config_path.exists() {
+                if !std::fs::symlink_metadata(path.join("root"))
+                    .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                {
+                    assert!(
+                        allowed.contains(&path),
+                        "preserve unknown run without config: {}",
+                        path.display()
+                    );
+                    let root =
+                        vaultsyncd_platform_windows::files::RootHandle::open(&path.join("root"))
+                            .unwrap();
+                    let report = root.scan();
+                    assert!(
+                        report.permits_missing_comparison() && report.entries.is_empty(),
+                        "allowlisted partial cleanup root must be empty"
+                    );
+                    drop(root);
+                    use std::os::windows::ffi::OsStrExt;
+                    #[link(name = "cldapi")]
+                    unsafe extern "system" {
+                        fn CfUnregisterSyncRoot(path: *const u16) -> i32;
+                    }
+                    let wide: Vec<u16> = path
+                        .join("root")
+                        .as_os_str()
+                        .encode_wide()
+                        .chain(Some(0))
+                        .collect();
+                    let status = unsafe { CfUnregisterSyncRoot(wide.as_ptr()) };
+                    assert!(
+                        status >= 0 || status as u32 == 0x80070186,
+                        "empty allowlisted root unregister {status:08x}"
+                    );
+                }
+                std::fs::remove_dir_all(&path).unwrap();
+                continue;
+            }
+            let config = vaultsyncd_agent::config::AgentConfig::load(&config_path)
+                .unwrap_or_else(|e| panic!("{}: {e}", config_path.display()));
+            assert_eq!(config.bindings.len(), 1);
+            assert_eq!(config.state_dir, path.join("state"));
+            assert_eq!(config.bindings[0].path, path.join("root"));
+            assert_eq!(config.bindings[0].cache, path.join("cache"));
+            credentials::CredentialVault::new(&config.server.id)
+                .unwrap()
+                .erase()
+                .unwrap();
+            let mut adapter = vaultsyncd_platform_windows::cfapi::adapter::Adapter::connect(
+                &path.join("root"),
+                vaultsyncd_platform_windows::cfapi::catalog::Catalog::new(
+                    vaultsyncd_domain::ids::BindingId::from_hex(&config.bindings[0].id).unwrap(),
+                    vaultsyncd_domain::ids::RootId::from_hex(&config.bindings[0].root_id).unwrap(),
+                ),
+                Arc::new(vaultsyncd_platform_windows::cfapi::adapter::MetadataOnly),
+            )
+            .unwrap();
+            let root =
+                vaultsyncd_platform_windows::files::RootHandle::open(&path.join("root")).unwrap();
+            let report = root.scan();
+            assert!(report.permits_missing_comparison());
+            let mut entries = report.entries;
+            entries.sort_by_key(|e| std::cmp::Reverse(e.path.matches('/').count()));
+            for entry in entries {
+                let meta = entry.metadata.unwrap();
+                let target = path.join("root").join(entry.path);
+                if meta.directory {
+                    std::fs::remove_dir(target).unwrap();
+                } else {
+                    std::fs::remove_file(target).unwrap();
+                }
+            }
+            drop(root);
+            adapter.unregister().unwrap();
+            drop(adapter);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+        std::fs::remove_dir_all(driver.path()).unwrap();
+    }
+    println!("check=pass only_previous_s070_synthetic_runs_and_credentials_cleaned");
+}
 async fn remote_put(
     client: &ApiClient<vaultsyncd_http_client::ReqwestTransport>,
     root: &str,
@@ -94,6 +208,66 @@ async fn remote_put(
     sync::submit(client, root, &request).await.unwrap();
 }
 struct ChildGuard(std::process::Child);
+struct WritableMapping {
+    mapping: *mut std::ffi::c_void,
+    view: *mut std::ffi::c_void,
+}
+impl WritableMapping {
+    fn open(path: &Path) -> Self {
+        use std::os::windows::io::AsRawHandle;
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn CreateFileMappingW(
+                file: *mut std::ffi::c_void,
+                security: *const std::ffi::c_void,
+                protect: u32,
+                high: u32,
+                low: u32,
+                name: *const u16,
+            ) -> *mut std::ffi::c_void;
+            fn MapViewOfFile(
+                mapping: *mut std::ffi::c_void,
+                access: u32,
+                high: u32,
+                low: u32,
+                length: usize,
+            ) -> *mut std::ffi::c_void;
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        let mapping = unsafe {
+            CreateFileMappingW(
+                file.as_raw_handle(),
+                std::ptr::null(),
+                4,
+                0,
+                0,
+                std::ptr::null(),
+            )
+        };
+        assert!(!mapping.is_null());
+        let view = unsafe { MapViewOfFile(mapping, 2, 0, 0, 0) };
+        assert!(!view.is_null());
+        drop(file);
+        Self { mapping, view }
+    }
+}
+impl Drop for WritableMapping {
+    fn drop(&mut self) {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn UnmapViewOfFile(view: *mut std::ffi::c_void) -> i32;
+            fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        }
+        unsafe {
+            UnmapViewOfFile(self.view);
+            CloseHandle(self.mapping);
+        }
+    }
+}
 impl std::ops::Deref for ChildGuard {
     type Target = std::process::Child;
     fn deref(&self) -> &Self::Target {
@@ -485,6 +659,7 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         .into_iter()
         .find(|r| r.name == "file.txt")
         .unwrap();
+    let mapping = WritableMapping::open(&base.join("root/file.txt"));
     let (s, _) = sync::snapshot(&client, root).await.unwrap();
     sync::submit(
         &client,
@@ -498,7 +673,46 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
     )
     .await
     .unwrap();
+    {
+        use sqlx::Connection;
+        let end = Instant::now() + Duration::from_secs(20);
+        loop {
+            let mut conn = sqlx::SqliteConnection::connect_with(
+                &sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(base.join("state/client.sqlite"))
+                    .read_only(true),
+            )
+            .await
+            .unwrap();
+            let count:i64=sqlx::query_scalar("SELECT count(*) FROM local_intents WHERE kind='move' AND target_path='remote-renamed.txt'").fetch_one(&mut conn).await.unwrap();
+            conn.close().await.unwrap();
+            if count == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "real blocked move intent was not persisted"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    first.kill().unwrap();
+    first.wait().unwrap();
+    drop(mapping);
+    let restarted_log = std::fs::File::create(base.join("restarted.log")).unwrap();
+    first = ChildGuard(
+        Command::new(&exe)
+            .arg("--config")
+            .arg(&config_path)
+            .creation_flags(0x200)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(restarted_log)
+            .spawn()
+            .unwrap(),
+    );
     until_file(&base.join("root/remote-renamed.txt"), Some(&bytes.0)).await;
+    println!("check=pass killed_real_process_recovers_open_move_before_sync");
     assert!(!base.join("root/file.txt").exists());
     println!("check=pass both_direction_moves_keep_entry_and_fixed_version");
     let remote = listing(&client, root)
@@ -568,11 +782,12 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(
-        std::fs::read_to_string(base.join("background.log"))
+        std::fs::read_to_string(base.join("restarted.log"))
             .unwrap()
             .contains("event=stopped")
     );
     println!("check=pass actual_agent_control_break_drains_and_releases_database");
+    drop(native_root);
     vault.erase().unwrap();
     let root_path = base.join("root");
     for item in std::fs::read_dir(&root_path).unwrap() {

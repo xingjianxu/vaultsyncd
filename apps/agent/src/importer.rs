@@ -259,6 +259,7 @@ impl ImportLocal for Importer {
                 return Err(error("binding mismatch"));
             }
             if request.remote.kind == EntryKind::Directory {
+                action(&self.local,request.op,&serde_json::json!({"kind":"import_directory","path":request.path.to_string(),"remote":request.remote})).await?;
                 let intent = vaultsyncd_agent_core::ports::state::ActionIntent {
                     op: request.op,
                     binding: request.binding,
@@ -397,7 +398,7 @@ impl ImportLocal for Importer {
             .await
             .map_err(error)?;
             tx.commit().await.map_err(error)?;
-            Ok(Generation::new(1).map_err(error)?)
+            Generation::new(1).map_err(error)
         })
     }
 }
