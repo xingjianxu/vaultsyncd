@@ -2235,7 +2235,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - Wire唯一源 `api/openapi.yaml`：`POST /v1/roots/{root}/entries/{entry}/versions/{version}/leases` 与 `/{lease}/renew`、`/{lease}/release`，body为稳定 `lease_id`、整份 `sha256`、`size`。响应完整回显pin、UTC到期及剩余秒数、closed。仅Bearer/授权Root可操作。
 - `server-store::version_leases`：同BEGIN IMMEDIATE核对固定版本与live对象，使用既有`object_leases`作为GC保护；0010请求关联记住固定输入，ID复用换输入409，失效/释放410；TTL120秒，acquire重放不延长，renew仅活跃，release幂等。活跃对象租约阻止collectable标记，GC仍按既有租约与引用集工作。
 - 服务端租约已提交后才检查对象可读和长度，失败503并保留有界保护，绝不返回可释放证明；客户端`LeaseEndpoint`精确校验Root/Entry/Version/hash/size/id/TTL/closed。调用方必须保留本地副本直到有效租约及持续平台保护均成立；传输成功不代表租约有效。
-- 平台释放与S063薄wrapper仍由S069-a/c交付；本子卡不冒充Windows原生或产品端到端完成。
+- 平台释放与S063薄wrapper由S069-a/c完成，见下节；本子卡自身不冒充Windows原生或完整进程组装。
 
 ## S067 — CFAPI hydration 与传输/调度组装
 
@@ -2250,3 +2250,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `http-client::sync::{snapshot,snapshot_page,submit,operation}` 仅实现既有schema端点：固定身份核对，原Op重试，pending不得携带committed事实。snapshot同时返回响应HTTP Date秒数；错误不替换快照、不取客户端时间。
 - `RootHandle::ensure_directory(relative)` 在no-follow父句柄下创建/核对普通目录，现有文件和越界拒绝。`WindowsFiles::preserve(from,to,&Evidence)` 持续保护、完整核对后按句柄不覆盖移动；调用方先落持久意图，重启核对相同物理身份。文件字节和代际不变。
 - S070-a `InstanceGuard` 必须在DB打开前获取并保留至连接池关闭；SID来自实际token，会话mutex加state独占锁。`CredentialVault` 保存current-user WinCred blob，网络logon无库时明确失败；配置/日志不含凭据。
+
+## S069 Windows显式释放与恢复
+
+- `files::controlled::ProtectedFile::into_owned_lease() -> OwnedProtection`：持续CfReference，Drop先release再close；`file()`仅借用Win32句柄，不能关闭或复制。S063从protect到网络校验/驻留CAS均持此对象，跨await的真实新writer原生测试被阻止。
+- `cfapi::release::verified::ReleaseHandle::open(RootHandle,path,Identity,generation,size,empty_intent)`：安全相对路径+物理/domain身份；`evidence`实际整份hash；`is_released/released_identity`只查元数据，partial/未知报错；`dehydrate(Evidence)`持续保护内再核对，CFAPI实际成功并no-recall复核后才可收尾。调用者必须先持当前固定版本GC租约，不能凭clean标记调用；失败保留核心意图，pin恢复失败也如实返回。
+- `apps/agent::release::NativeReleaseLocal::new(root,Arc<Database>,Identity,RelativePath,VersionPin)`：仅固定目标，保护前读当前代际/物理身份，供`ManualRelease`的ReleaseLocal端口。`HttpReleaseRemote::new(ApiClient<ReqwestTransport>,RootId)`：真实LeaseEndpoint，20秒heartbeat、低于30秒保守余量拒绝；失败不得清本地字节，Drop主动解除或留有界TTL。
+- 验收入口：先`nix develop --command cargo build --locked -p vaultsyncd-server-tests --example release-native-server`，再Windows shell运行`tests/platform/windows/run-native-release.sh`。专用`apps/agent/tests/native_release.rs` target使用真实Linux生产bootstrap服务/真实租约/Windows NTFS；bridge manifest含短命测试token，仅0600忽略artifacts及临时客体文件，脚本清理tunnel/server/manifest/driver。宿主桥接example也可供S070真实无GUI验收复用。
+- SQLite FULL证据来自专用测试DB的真实pager容量上限，未填满系统卷；后续物理卷故障与生产GC worker仍按计划验收。S070启动必须先平台publication恢复再core apply/release恢复，之后连接同步。

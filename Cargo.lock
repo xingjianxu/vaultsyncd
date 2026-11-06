@@ -2447,6 +2447,8 @@ dependencies = [
 name = "vaultsyncd-agent"
 version = "0.1.0"
 dependencies = [
+ "rand_core 0.6.4",
+ "serde_json",
  "sqlx",
  "tokio",
  "vaultsyncd-agent-core",
