@@ -2497,3 +2497,9 @@ S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站
 - 专用非 root UID；User/Group、0077、NoNewPrivileges、空 capability 集、ProtectSystem=strict/ProtectHome=read-only；ReadWritePaths 仅内部 stateDir 与显式 Root 基目录。rootPaths 与状态互不包含，禁止系统路径，产品注册继续负责真实身份、嵌套 mount/subvolume/扫描准入。外部 Root 权限由管理员 ACL/组明确授予，不递归改权、不创建资料目录。
 - `/var/lib/` 内专用状态用 StateDirectory/0700；其他 stateDir 须预先由服务 UID 持有并0700。RequiresMountsFor 包括状态、backups 与 Root；read-only preflight 核对真实目录、访问权、btrfs/CoW/checksums 与 user_subvol_rm_allowed。不提供自动格式化、迁移、mount/sudo/CAP_SYS_ADMIN。备份 prepared/snapshot 为合法内部子卷；只读顶层 preflight 不误扫/改权。
 - `deploy/nixos/eval.nix` 是不激活的完整 NixOS fixture；构建 system 与 unit/config，`test-service.py` 把相同 unit 改用唯一测试名运行临时 UID/独立 btrfs，实际检查 Root 写入、白名单外/系统 EROFS、普通 UID快照/验证/删除与负例。部署及显式授权说明见 `deploy/nixos/README.md`；正式主机启用由 S096 单独验收。
+
+## S096 主机试用实例与配置来源
+
+- 真实入口`/etc/nixos#wks-lab`，新增host-specific system.nix（主机提交ba1837a），固定永久Git仓库commit3640f3a，删除任务worktree后仍可构建。原有dirty主机flake.lock逐字节保留、不纳入提交；精确锁/NAR/来源快照和GCroot留运行时证据，不能把主机commit单独宣称为完整锁快照。
+- `vaultsyncd.service`的专用vaultsyncd-trial UID985，回环18721；新2GiB普通镜像`/data/vaultsyncd-trial-s096/volume.img`，显式loop btrfs挂载后state0700和samples互不包含。仅此挂载启用user_subvol_rm_allowed，/data原选项不变。owner仅离线CLI stdin，初始凭据root0600运行时文件，不入Git/store。
+- 完整build/test/健康/实际237回滚/恢复test/switch238完成；样本上传committed、固定版本下载、服务重启和同OpId重放、普通UID备份校验释放均真实通过；SSH及既有应用进程/HTTP保持。来源、命令、实际回滚保证与限制唯一运维入口`docs/operations/nixos.md`。当前无公网HTTP；TLS与代理留S097。

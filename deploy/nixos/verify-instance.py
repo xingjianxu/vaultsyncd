@@ -17,7 +17,7 @@ import urllib.request
 PACKAGE = Path(sys.argv[1]).resolve(strict=True)
 EVIDENCE = Path(sys.argv[2]).resolve(strict=True)
 PHASE = sys.argv[3]
-assert PHASE in ('test', 'switch')
+assert PHASE in ('test', 'switch', 'recovery')
 ORIGIN = 'http://127.0.0.1:18721'
 BASE = Path('/data/vaultsyncd-trial-s096/mnt')
 SAMPLES = BASE/'samples'
@@ -69,6 +69,19 @@ def main():
     issued = api('/v1/auth/login', {'login':'owner', 'password':password, 'device_label':'S096 isolated trial'})
     token = issued['access_token']
     try:
+        if PHASE == 'recovery':
+            prior = json.loads((EVIDENCE/'acceptance-test.json').read_text())
+            assert capabilities['server_id'] == prior['capabilities']['server_id']
+            root = prior['root_id']; commit = prior['committed']
+            fixed = f'/v1/roots/{root}/entries/{commit["entry_id"]}/versions/{commit["version_id"]}/content'
+            assert hashlib.sha256(api(fixed, binary=True)[2]).hexdigest() == prior['sha256']
+            assert hashlib.sha256((SAMPLES/'s096-test.txt').read_bytes()).hexdigest() == prior['sha256']
+            assert api(f'/v1/roots/{root}/operations/{commit["op_id"]}')['state'] == 'committed'
+            result.update(passed=True, root_id=root, version_id=commit['version_id'], sha256=prior['sha256'])
+            result['checks'].append('old-generation-rollback-remount-restores-server-entry-fixed-version-and-durable-operation')
+            (EVIDENCE/'acceptance-recovery.json').write_text(json.dumps(result, indent=2))
+            print(json.dumps(result, indent=2))
+            return
         sample = SAMPLES/f's096-{PHASE}.txt'
         assert not sample.exists(), 'use a fresh phase; never overwrite an existing fixture'
         old = f'S096 {PHASE} original observed content\n'.encode()
