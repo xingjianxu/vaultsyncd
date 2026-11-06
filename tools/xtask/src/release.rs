@@ -48,6 +48,7 @@ struct Receipt {
     source: Source,
     toolchain: BTreeMap<String, String>,
     command: Vec<String>,
+    preparation: Vec<Vec<String>>,
     files: Vec<File>,
 }
 #[derive(Serialize, Deserialize)]
@@ -278,7 +279,25 @@ fn run_build(root: &Path, component: &str, directory: &Path) -> Result<(), Strin
     fs::create_dir_all(directory.join("payload")).map_err(|e| e.to_string())?;
     let target;
     let command;
+    let mut preparation = Vec::new();
     if let Some(app) = frontend {
+        let arguments = ["install", "--frozen-lockfile", "--offline"];
+        let status = Command::new("pnpm")
+            .args(arguments)
+            .current_dir(root)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(
+                "frozen frontend dependency preparation failed; no receipt produced".into(),
+            );
+        }
+        preparation.push(vec![
+            "pnpm".into(),
+            "install".into(),
+            "--frozen-lockfile".into(),
+            "--offline".into(),
+        ]);
         for base in [root.to_path_buf(), root.join(format!("apps/{app}"))] {
             if fs::read_dir(base).map_err(|e| e.to_string())?.any(|entry| {
                 entry.is_ok_and(|e| e.file_name().to_string_lossy().starts_with(".env"))
@@ -373,6 +392,7 @@ fn run_build(root: &Path, component: &str, directory: &Path) -> Result<(), Strin
             source: before,
             toolchain,
             command,
+            preparation,
             files,
         },
     )?;
@@ -464,6 +484,7 @@ mod tests {
             source: source.clone(),
             toolchain: BTreeMap::from([("pnpm".into(), "12".into())]),
             command: vec!["build".into()],
+            preparation: Vec::new(),
             files,
         };
         validate(&root, &receipt, &source).unwrap();

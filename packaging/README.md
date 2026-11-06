@@ -17,7 +17,7 @@ cargo xtask release verify artifacts/release.json
 ```
 
 build 真实执行固定构建入口，不接收手写占位产物。Web/desktop-ui 每次先清除本应用 dist，再构建复制到
-payload；拒绝 .env 和 VITE_ 覆盖。Linux server/admin 使用全新 Cargo target、locked release 构建，
+payload；先用冻结锁离线准备依赖并记录步骤，拒绝 .env 和 VITE_ 覆盖。Linux server/admin 使用全新 Cargo target、locked release 构建，
 记录宿主目标。Windows 安装和 Linux 发行包组装仍由对应平台发布卡扩展，不把静态 desktop-ui 当原生客户端。
 
 receipt.json 记录产品版本、完整 HEAD/tree、两工作区与 Nix/工具链锁及协议源摘要、

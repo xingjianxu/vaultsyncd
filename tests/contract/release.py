@@ -38,7 +38,7 @@ def main():
     assert data["source"]["commit"]==commit
     for component in data["components"]:
         receipt=component["receipt"]
-        assert receipt["toolchain"] and receipt["command"] and receipt["target"]=="browser-static"
+        assert receipt["toolchain"] and receipt["command"] and receipt["preparation"] and receipt["target"]=="browser-static"
         for name,digest in receipt["source"]["inputs"].items():
             assert hashlib.sha256((ROOT/name).read_bytes()).hexdigest()==digest
         for item in receipt["files"]:
