@@ -197,6 +197,7 @@ pub struct SqlRestoreStore {
     owner: UserId,
     key: OperationKey,
     digest: RequestDigest,
+    local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 impl SqlRestoreStore {
@@ -213,7 +214,18 @@ impl SqlRestoreStore {
             owner,
             key,
             digest,
+            local_generation: None,
         }
+    }
+
+    /// 客户端本地代际：写进持久结果，重放与重启补完都回显它。
+    #[must_use]
+    pub fn with_local_generation(
+        mut self,
+        generation: Option<vaultsyncd_domain::version::Generation>,
+    ) -> Self {
+        self.local_generation = generation;
+        self
     }
 }
 
@@ -319,7 +331,18 @@ impl RestoreStore for SqlRestoreStore {
         &mut self,
         write: &VersionRestoreWrite,
     ) -> Result<VersionRestoreRecord, RestoreStoreError> {
+        if write.key != self.key || write.digest != self.digest {
+            return Err(restore_error("提交的操作键或摘要不是本存储装配的那一个"));
+        }
         let mut tx = self.database.begin_write().await.map_err(restore_error)?;
+        crate::journal::ensure_digest(
+            &mut tx,
+            self.owner,
+            &store_key(write.key),
+            &store_digest(write.digest),
+        )
+        .await
+        .map_err(restore_error)?;
         let intent = store_intents::intent_in_scope(&mut tx, self.owner, write.intent_id)
             .await
             .map_err(restore_error)?
@@ -375,16 +398,20 @@ impl RestoreStore for SqlRestoreStore {
             &store_key(self.key),
             tx_id,
             &events,
-            &version_result_json(&result),
+            &crate::journal::with_echo(version_result_json(&result), self.local_generation),
             write.at,
         )
         .await
         .map_err(operation_failure)?;
         let mut result = result;
         result.seq = committed.batch.seq;
-        persist_result_seq(&mut tx, self.key, &version_result_json(&result))
-            .await
-            .map_err(restore_error)?;
+        persist_result_seq(
+            &mut tx,
+            self.key,
+            &crate::journal::with_echo(version_result_json(&result), self.local_generation),
+        )
+        .await
+        .map_err(restore_error)?;
         store_versions::record_version(
             &mut tx,
             self.owner,
@@ -420,7 +447,6 @@ impl RestoreStore for SqlRestoreStore {
         .await
         .map_err(restore_error)?;
         tx.commit().await.map_err(restore_error)?;
-        let _ = &self.digest;
         Ok(VersionRestoreRecord {
             intent_id: write.intent_id,
             phase: vaultsyncd_server_core::commit::intent::PutPhase::Finalized,
@@ -436,26 +462,23 @@ pub struct SqlTrashRestoreStore {
     owner: UserId,
     key: OperationKey,
     digest: RequestDigest,
-    now: UtcTimestamp,
     local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 impl SqlTrashRestoreStore {
-    /// 以数据库、账号、幂等键与当前时间装配（保留期判定用服务端时间）。
+    /// 以数据库、账号与幂等键装配（保留期由核心按服务端时间判定）。
     #[must_use]
     pub fn new(
         database: Database,
         owner: UserId,
         key: OperationKey,
         digest: RequestDigest,
-        now: UtcTimestamp,
     ) -> Self {
         Self {
             database,
             owner,
             key,
             digest,
-            now,
             local_generation: None,
         }
     }
@@ -706,9 +729,8 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         let Some(root_row) = rows.iter().find(|row| row.entry == entry) else {
             return Ok(None);
         };
-        if root_row.expires_at < self.now {
-            return Ok(None);
-        }
+        // 过期的条目不在这里当成“不存在”：核心按保留期判 `VERSION_GONE`（410，历史已过期），
+        // 客户端才能区分“已被恢复/清单变了”与“保留期已过”。
         // 范围由删除时持久化的“批次归属”决定，而不是旧路径前缀：同一路径下另一轮删除的条目
         // （先恢复/重建再删除、同名新目录）属于别的批次，绝不会被选入。没有归属的行（外部采纳
         // 的单条删除）只恢复它自己，其后代各自是独立的回收站条目。
@@ -849,7 +871,18 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         &mut self,
         write: &TrashRestoreWrite,
     ) -> Result<TrashRestoreRecord, RestoreStoreError> {
+        if write.key != self.key || write.digest != self.digest {
+            return Err(restore_error("提交的操作键或摘要不是本存储装配的那一个"));
+        }
         let mut tx = self.database.begin_write().await.map_err(restore_error)?;
+        crate::journal::ensure_digest(
+            &mut tx,
+            self.owner,
+            &store_key(write.key),
+            &store_digest(write.digest),
+        )
+        .await
+        .map_err(restore_error)?;
         // 目标名称在事务内再核对一次：并发新建在这里被唯一索引或显式检查拒绝。
         let root_parent = write
             .entries
@@ -910,16 +943,20 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             &store_key(self.key),
             tx_id,
             &events,
-            &trash_result_json(&result),
+            &crate::journal::with_echo(trash_result_json(&result), self.local_generation),
             write.at,
         )
         .await
         .map_err(operation_failure)?;
         let mut result = result;
         result.seq = committed.batch.seq;
-        persist_result_seq(&mut tx, self.key, &trash_result_json(&result))
-            .await
-            .map_err(restore_error)?;
+        persist_result_seq(
+            &mut tx,
+            self.key,
+            &crate::journal::with_echo(trash_result_json(&result), self.local_generation),
+        )
+        .await
+        .map_err(restore_error)?;
         for entry in &write.entries {
             let next = entry.expected_revision.next().map_err(restore_error)?;
             let revision = if entry.entry == write.entry {
@@ -988,7 +1025,6 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             .map_err(restore_error)?;
         }
         tx.commit().await.map_err(restore_error)?;
-        let _ = &self.digest;
         Ok(TrashRestoreRecord {
             intents: write.intents.clone(),
             phase: vaultsyncd_server_core::commit::intent::PutPhase::Finalized,
@@ -1009,6 +1045,8 @@ pub struct VersionRestoreCommand {
     pub base_revision: Revision,
     /// 目标在 Root 内的相对路径（最后一段是条目当前名称）。
     pub target_path: String,
+    /// 客户端本地代际（持久回显）。
+    pub local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 /// 执行一次历史版本恢复（发布旧内容为新的当前版本，旧版本行不变）。
@@ -1037,10 +1075,12 @@ pub async fn execute_version_restore(
         Ok(before) => before,
         Err(failure) => return Err(failure),
     };
-    let mut store = SqlRestoreStore::new(executor.database().clone(), owner, key, digest);
+    let mut store = SqlRestoreStore::new(executor.database().clone(), owner, key, digest)
+        .with_local_generation(command.local_generation);
     let mut log = crate::executor::SqlIntentLog::new(executor.database().clone(), owner).bound(
         crate::journal::Binding::new(store_key(key), "version_restore", serde_json::json!({
             "entry": command.entry.to_hex(), "revision": command.base_revision.to_string(), "restored_from": command.version.to_hex(),
+            "local_generation": command.local_generation.map(|value| value.to_string()),
         })));
     let mut leases = crate::content::DbLeases::new(executor.database(), owner, at);
     let request = VersionRestoreRequest {
@@ -1070,10 +1110,13 @@ pub async fn execute_version_restore(
     drop(gate);
     match outcome {
         Ok(restored) => Ok(restored),
-        Err(failure) => Err(crate::commands::map_core_failure(
-            failure.error_code(),
-            failure.to_string(),
-        )),
+        Err(failure) => {
+            let mapped = crate::commands::restore_failure(&failure);
+            executor
+                .reject_failure(owner, store_key(key), &mapped)
+                .await;
+            Err(mapped)
+        }
     }
 }
 
@@ -1086,6 +1129,8 @@ pub struct TrashRestoreCommand {
     pub base_revision: Revision,
     /// 当前只接受 `None`（回原父目录），显式换父目录需要先恢复后 move。
     pub parent: Option<EntryId>,
+    /// 客户端本地代际（持久回显）。
+    pub local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 /// 执行一次回收站恢复（目录连同后代整棵放回；原位置被占用时另名）。
@@ -1111,7 +1156,8 @@ pub async fn execute_trash_restore(
     let layout = executor.objects();
     let mut target = crate::executor::WorkTreeTarget::new(handle.clone(), layout);
     let mut ns = crate::commands::WorkTreeNamespace::new(handle);
-    let mut store = SqlTrashRestoreStore::new(executor.database().clone(), owner, key, digest, at);
+    let mut store = SqlTrashRestoreStore::new(executor.database().clone(), owner, key, digest)
+        .with_local_generation(command.local_generation);
     // 计划与目录意图由 begin_restore 一并落盘；文件意图在发布前创建时只与该操作挂钩。
     let mut log = crate::executor::SqlIntentLog::new(executor.database().clone(), owner)
         .bound(crate::journal::Binding::linked(store_key(key)));
@@ -1139,10 +1185,13 @@ pub async fn execute_trash_restore(
     drop(gate);
     match outcome {
         Ok(restored) => Ok(restored),
-        Err(failure) => Err(crate::commands::map_core_failure(
-            failure.error_code(),
-            failure.to_string(),
-        )),
+        Err(failure) => {
+            let mapped = crate::commands::restore_failure(&failure);
+            executor
+                .reject_failure(owner, store_key(key), &mapped)
+                .await;
+            Err(mapped)
+        }
     }
 }
 

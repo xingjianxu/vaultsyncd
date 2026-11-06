@@ -400,6 +400,7 @@ impl ExecutorContext {
             database: self.database.clone(),
             owner,
             key,
+            digest,
             local_generation: command.local_generation,
         };
         let mut gate = self.commit_gate().lock().await;
@@ -551,7 +552,7 @@ pub fn observe_before(
 }
 
 /// 核心提交失败 → 操作端点失败（状态码与错误码由核心的契约表给出）。
-fn map_put_failure(failure: &PutFailure) -> OperationFailure {
+pub(crate) fn map_put_failure(failure: &PutFailure) -> OperationFailure {
     match &failure.reason {
         PutFailureReason::EpochChanged { expected, actual } => OperationFailure::EpochChanged {
             expected: *expected,
@@ -622,6 +623,7 @@ fn rejection_result(failure: &OperationFailure) -> OperationResult {
         "INVALID_NAME" => Some(ErrorCode::InvalidName),
         "UNSUPPORTED_ENTRY" => Some(ErrorCode::UnsupportedEntry),
         "EPOCH_CHANGED" => Some(ErrorCode::EpochChanged),
+        "VERSION_GONE" => Some(ErrorCode::VersionGone),
         "OP_ID_REUSED" => Some(ErrorCode::OpIdReused),
         "INSUFFICIENT_STORAGE" => Some(ErrorCode::InsufficientStorage),
         _ => Some(ErrorCode::NeedsRecovery),
@@ -1070,6 +1072,7 @@ pub struct SqlPutStore {
     pub(crate) database: Database,
     pub(crate) owner: UserId,
     pub(crate) key: store_operations::OperationKey,
+    pub(crate) digest: store_operations::RequestDigest,
     pub(crate) local_generation: Option<Generation>,
 }
 
@@ -1134,6 +1137,11 @@ impl PutCommitStore for SqlPutStore {
         let mut tx = self
             .database
             .begin_write()
+            .await
+            .map_err(|error| PutStoreError::Storage {
+                detail: error.to_string(),
+            })?;
+        crate::journal::ensure_digest(&mut tx, self.owner, &self.key, &self.digest)
             .await
             .map_err(|error| PutStoreError::Storage {
                 detail: error.to_string(),

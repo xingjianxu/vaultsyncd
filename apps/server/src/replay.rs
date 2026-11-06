@@ -122,7 +122,8 @@ async fn replay(
         "namespace" => {
             let mut log = SqlFsIntentLog::new(db.clone(), owner).only(intent.intent_id);
             let mut ns = WorkTreeNamespace::new(handle);
-            let mut store = SqlNamespaceStore::new(db.clone(), owner, binding.key(), digest);
+            let mut store = SqlNamespaceStore::new(db.clone(), owner, binding.key(), digest)
+                .with_local_generation(crate::journal::echo_of(&binding.context)?);
             let report = vaultsyncd_server_core::commit::namespace::recover_namespace_root(
                 &mut log,
                 &mut ns,
@@ -137,9 +138,24 @@ async fn replay(
             }
         }
         "delete" => {
+            // 重启补完同样不能删掉尚未采纳的内容：先按冻结清单核对现场，通不过就保持停写。
+            let before = vaultsyncd_server_core::commit::delete::DeleteSnapshot::from_json(
+                &intent.expected_before,
+            )
+            .map_err(text)?;
+            crate::commands::verify_delete_scope(
+                db,
+                owner,
+                &handle,
+                ObjectLayout::new(state.join("objects")),
+                binding.root,
+                before.entry,
+            )
+            .await?;
             let mut log = SqlFsIntentLog::new(db.clone(), owner).only(intent.intent_id);
             let mut ns = WorkTreeNamespace::new(handle);
-            let mut store = SqlDeleteStore::new(db.clone(), owner, binding.key(), digest);
+            let mut store = SqlDeleteStore::new(db.clone(), owner, binding.key(), digest)
+                .with_local_generation(crate::journal::echo_of(&binding.context)?);
             let report = vaultsyncd_server_core::commit::delete::recover_delete_root(
                 &mut log,
                 &mut ns,
@@ -198,6 +214,7 @@ async fn replay(
                         database: db.clone(),
                         owner,
                         key: binding.key(),
+                        digest,
                         local_generation: binding
                             .context
                             .get("local_generation")
@@ -225,7 +242,8 @@ async fn replay(
                         owner,
                         key,
                         core_digest,
-                    );
+                    )
+                    .with_local_generation(crate::journal::echo_of(&binding.context)?);
                     store
                         .apply_version_restore(&VersionRestoreWrite {
                             intent_id: put.intent_id,
@@ -243,7 +261,8 @@ async fn replay(
                 }
                 "conflict" => {
                     let mut store =
-                        crate::conflict_ops::SqlConflictStore::new(db.clone(), owner, key);
+                        crate::conflict_ops::SqlConflictStore::new(db.clone(), owner, key)
+                            .with_local_generation(crate::journal::echo_of(&binding.context)?);
                     store
                         .apply_conflict(&ConflictWrite {
                             intent_id: put.intent_id,
@@ -303,7 +322,8 @@ async fn replay_trash_restore(
     );
     let mut log = SqlIntentLog::new(db.clone(), owner).bound(Binding::linked(binding.key()));
     let mut store =
-        crate::restore_ops::SqlTrashRestoreStore::new(db.clone(), owner, key, core_digest, at);
+        crate::restore_ops::SqlTrashRestoreStore::new(db.clone(), owner, key, core_digest)
+            .with_local_generation(crate::journal::echo_of(&binding.context)?);
     let planned_paths: std::collections::HashSet<&str> = plan
         .entries
         .iter()

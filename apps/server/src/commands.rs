@@ -55,6 +55,7 @@ use vaultsyncd_server_store::intents::{FsIntent, FsIntentKind, FsIntentPhase, Ne
 use vaultsyncd_server_store::operations as store_operations;
 use vaultsyncd_server_store::roots as store_roots;
 use vaultsyncd_server_store::trash as store_trash;
+use vaultsyncd_server_store::versions as store_versions;
 
 use crate::uploads::random_bytes;
 
@@ -692,6 +693,7 @@ pub struct SqlNamespaceStore {
     owner: UserId,
     key: store_operations::OperationKey,
     digest: store_operations::RequestDigest,
+    local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 impl SqlNamespaceStore {
@@ -708,7 +710,18 @@ impl SqlNamespaceStore {
             owner,
             key,
             digest,
+            local_generation: None,
         }
+    }
+
+    /// 客户端本地代际：写进持久结果，重放与重启补完都回显它。
+    #[must_use]
+    pub fn with_local_generation(
+        mut self,
+        generation: Option<vaultsyncd_domain::version::Generation>,
+    ) -> Self {
+        self.local_generation = generation;
+        self
     }
 }
 
@@ -787,6 +800,9 @@ impl NamespaceCommitStore for SqlNamespaceStore {
             .begin_write()
             .await
             .map_err(namespace_store_error)?;
+        crate::journal::ensure_digest(&mut tx, self.owner, &self.key, &self.digest)
+            .await
+            .map_err(namespace_store_error)?;
         let intent = store_intents::intent_in_scope(&mut tx, self.owner, write.intent_id)
             .await
             .map_err(namespace_store_error)?
@@ -819,13 +835,16 @@ impl NamespaceCommitStore for SqlNamespaceStore {
             "origin": "client",
         }])
         .to_string();
-        let result_json = serde_json::json!({
-            "op_id": self.key.op.to_hex(),
-            "state": "committed",
-            "entry_id": write.entry.to_hex(),
-            "revision": next.to_string(),
-        })
-        .to_string();
+        let result_json = crate::journal::with_echo(
+            serde_json::json!({
+                "op_id": self.key.op.to_hex(),
+                "state": "committed",
+                "entry_id": write.entry.to_hex(),
+                "revision": next.to_string(),
+            })
+            .to_string(),
+            self.local_generation,
+        );
         let committed = store_operations::commit_operation(
             &mut tx,
             self.owner,
@@ -846,7 +865,6 @@ impl NamespaceCommitStore for SqlNamespaceStore {
             other => namespace_store_error(other),
         })?;
         let batch = committed.batch;
-        let _ = &self.digest;
 
         match (&write.from, write.kind) {
             (None, EntryKind::Directory) => {
@@ -952,6 +970,7 @@ pub struct SqlDeleteStore {
     owner: UserId,
     key: store_operations::OperationKey,
     digest: store_operations::RequestDigest,
+    local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 impl SqlDeleteStore {
@@ -968,7 +987,18 @@ impl SqlDeleteStore {
             owner,
             key,
             digest,
+            local_generation: None,
         }
+    }
+
+    /// 客户端本地代际：写进持久结果，重放与重启补完都回显它。
+    #[must_use]
+    pub fn with_local_generation(
+        mut self,
+        generation: Option<vaultsyncd_domain::version::Generation>,
+    ) -> Self {
+        self.local_generation = generation;
+        self
     }
 }
 
@@ -1038,6 +1068,9 @@ impl DeleteStore for SqlDeleteStore {
             .begin_write()
             .await
             .map_err(trash_store_error)?;
+        crate::journal::ensure_digest(&mut tx, self.owner, &self.key, &self.digest)
+            .await
+            .map_err(trash_store_error)?;
         let intent = store_intents::intent_in_scope(&mut tx, self.owner, apply.intent_id)
             .await
             .map_err(trash_store_error)?
@@ -1063,14 +1096,17 @@ impl DeleteStore for SqlDeleteStore {
             }));
         }
         let events_json = serde_json::Value::Array(events).to_string();
-        let result_json = serde_json::json!({
-            "op_id": self.key.op.to_hex(),
-            "state": "committed",
-            "entry_id": apply.entry.to_hex(),
-            "revision": apply.trash.iter().find(|item| item.entry == apply.entry)
-                .map(|item| item.revision.to_string()),
-        })
-        .to_string();
+        let result_json = crate::journal::with_echo(
+            serde_json::json!({
+                "op_id": self.key.op.to_hex(),
+                "state": "committed",
+                "entry_id": apply.entry.to_hex(),
+                "revision": apply.trash.iter().find(|item| item.entry == apply.entry)
+                    .map(|item| item.revision.to_string()),
+            })
+            .to_string(),
+            self.local_generation,
+        );
         let committed = store_operations::commit_operation(
             &mut tx,
             self.owner,
@@ -1089,7 +1125,6 @@ impl DeleteStore for SqlDeleteStore {
             other => trash_store_error(other),
         })?;
         let batch = committed.batch;
-        let _ = &self.digest;
 
         for batch in &apply.batches {
             let items: Vec<store_trash::SoftDelete> = batch
@@ -1231,6 +1266,8 @@ pub struct CreateCommand {
     pub parent: EntryId,
     /// 目标名称。
     pub name: String,
+    /// 客户端本地代际（持久回显）。
+    pub local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 /// 同 Root 移动命令。
@@ -1244,6 +1281,8 @@ pub struct MoveCommand {
     pub parent: EntryId,
     /// 目标名称。
     pub name: String,
+    /// 客户端本地代际（持久回显）。
+    pub local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 /// 删除命令。
@@ -1255,6 +1294,8 @@ pub struct DeleteCommand {
     pub base_revision: Revision,
     /// 目录删除的服务端子树 token。
     pub subtree_token: Option<[u8; 16]>,
+    /// 客户端本地代际（持久回显）。
+    pub local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 fn command_storage(detail: impl std::fmt::Display) -> OperationFailure {
@@ -1271,6 +1312,7 @@ pub fn map_core_failure(
 ) -> OperationFailure {
     use vaultsyncd_domain::error::ErrorCode;
     match code {
+        // 没有带类型的 epoch 事实时保守按需要协调处理；带类型的路径走下面的 *_failure 包装。
         Some(ErrorCode::EpochChanged) => OperationFailure::ReconcileRequired { detail },
         Some(ErrorCode::BaseMismatch) => OperationFailure::BaseMismatch { detail },
         Some(ErrorCode::SubtreeChanged) => OperationFailure::SubtreeChanged { detail },
@@ -1278,11 +1320,58 @@ pub fn map_core_failure(
         Some(ErrorCode::OpIdReused) => OperationFailure::OpIdReused,
         Some(ErrorCode::InvalidName) => OperationFailure::InvalidName { detail },
         Some(ErrorCode::UnsupportedEntry) => OperationFailure::UnsupportedEntry { detail },
-        Some(ErrorCode::VersionGone) => OperationFailure::ReconcileRequired { detail },
+        Some(ErrorCode::VersionGone) => OperationFailure::VersionGone { detail },
         Some(ErrorCode::RootUnavailable) => OperationFailure::RootUnavailable,
         Some(ErrorCode::InsufficientStorage) => OperationFailure::NoSpace,
         Some(ErrorCode::NeedsRecovery) => OperationFailure::Storage { detail },
         _ => OperationFailure::Storage { detail },
+    }
+}
+
+/// 命名空间失败 → 操作端点失败；epoch 变化保留请求与当前两个 epoch（客户端据此重建基线）。
+#[must_use]
+pub fn namespace_failure(
+    failure: &vaultsyncd_server_core::commit::namespace::NamespaceFailure,
+) -> OperationFailure {
+    use vaultsyncd_server_core::commit::namespace::NamespaceFailureReason;
+    match &failure.reason {
+        NamespaceFailureReason::EpochChanged { expected, actual } => {
+            OperationFailure::EpochChanged {
+                expected: *expected,
+                actual: *actual,
+            }
+        }
+        _ => map_core_failure(failure.error_code(), failure.to_string()),
+    }
+}
+
+/// 删除失败 → 操作端点失败（epoch 带类型保留）。
+#[must_use]
+pub fn delete_failure(
+    failure: &vaultsyncd_server_core::commit::delete::DeleteFailure,
+) -> OperationFailure {
+    use vaultsyncd_server_core::commit::delete::DeleteFailureReason;
+    match &failure.reason {
+        DeleteFailureReason::EpochChanged { expected, actual } => OperationFailure::EpochChanged {
+            expected: *expected,
+            actual: *actual,
+        },
+        _ => map_core_failure(failure.error_code(), failure.to_string()),
+    }
+}
+
+/// 恢复失败 → 操作端点失败（epoch 带类型保留，版本过期是 410 `VERSION_GONE`）。
+#[must_use]
+pub fn restore_failure(
+    failure: &vaultsyncd_server_core::history::RestoreFailure,
+) -> OperationFailure {
+    use vaultsyncd_server_core::history::RestoreFailureReason;
+    match &failure.reason {
+        RestoreFailureReason::EpochChanged { expected, actual } => OperationFailure::EpochChanged {
+            expected: *expected,
+            actual: *actual,
+        },
+        _ => map_core_failure(failure.error_code(), failure.to_string()),
     }
 }
 
@@ -1369,10 +1458,15 @@ pub async fn execute_create(
             return Err(failure);
         }
     };
-    let mut store = SqlNamespaceStore::new(executor.database().clone(), owner, key, digest);
+    let mut store = SqlNamespaceStore::new(executor.database().clone(), owner, key, digest)
+        .with_local_generation(command.local_generation);
     let mut ns = WorkTreeNamespace::new(handle);
     let mut log = SqlFsIntentLog::new(executor.database().clone(), owner).bound(
-        crate::journal::Binding::new(key, "namespace", serde_json::json!({})),
+        crate::journal::Binding::new(
+            key,
+            "namespace",
+            crate::journal::echo_field(command.local_generation),
+        ),
     );
     let request = vaultsyncd_server_core::commit::namespace::NamespaceRequest::CreateDirectory(
         vaultsyncd_server_core::commit::namespace::CreateDirectoryRequest {
@@ -1395,7 +1489,7 @@ pub async fn execute_create(
     match outcome {
         Ok(committed) => Ok(committed.record),
         Err(failure) => {
-            let mapped = map_core_failure(failure.error_code(), failure.to_string());
+            let mapped = namespace_failure(&failure);
             executor.reject_failure(owner, key, &mapped).await;
             Err(mapped)
         }
@@ -1433,10 +1527,15 @@ pub async fn execute_move(
             return Err(failure);
         }
     };
-    let mut store = SqlNamespaceStore::new(executor.database().clone(), owner, key, digest);
+    let mut store = SqlNamespaceStore::new(executor.database().clone(), owner, key, digest)
+        .with_local_generation(command.local_generation);
     let mut ns = WorkTreeNamespace::new(handle);
     let mut log = SqlFsIntentLog::new(executor.database().clone(), owner).bound(
-        crate::journal::Binding::new(key, "namespace", serde_json::json!({})),
+        crate::journal::Binding::new(
+            key,
+            "namespace",
+            crate::journal::echo_field(command.local_generation),
+        ),
     );
     let request = vaultsyncd_server_core::commit::namespace::NamespaceRequest::Move(
         vaultsyncd_server_core::commit::namespace::MoveRequest {
@@ -1467,7 +1566,7 @@ pub async fn execute_move(
     match outcome {
         Ok(committed) => Ok(committed.record),
         Err(failure) => {
-            let mapped = map_core_failure(failure.error_code(), failure.to_string());
+            let mapped = namespace_failure(&failure);
             executor.reject_failure(owner, key, &mapped).await;
             Err(mapped)
         }
@@ -1497,10 +1596,29 @@ pub async fn execute_delete(
             return Err(failure);
         }
     };
-    let mut store = SqlDeleteStore::new(executor.database().clone(), owner, key, digest);
+    let mut store = SqlDeleteStore::new(executor.database().clone(), owner, key, digest)
+        .with_local_generation(command.local_generation);
     let mut log = SqlFsIntentLog::new(executor.database().clone(), owner).bound(
-        crate::journal::Binding::new(key, "delete", serde_json::json!({})),
+        crate::journal::Binding::new(
+            key,
+            "delete",
+            crate::journal::echo_field(command.local_generation),
+        ),
     );
+    if let Err(detail) = verify_delete_scope(
+        executor.database(),
+        owner,
+        &handle,
+        executor.objects(),
+        key.root,
+        command.entry,
+    )
+    .await
+    {
+        let failure = OperationFailure::ReconcileRequired { detail };
+        executor.reject_failure(owner, key, &failure).await;
+        return Err(failure);
+    }
     let mut ns = WorkTreeNamespace::new(handle);
     let request = vaultsyncd_server_core::commit::delete::DeleteRequest {
         intent_id: IntentId::from_bytes(random_bytes()),
@@ -1523,11 +1641,126 @@ pub async fn execute_delete(
     match outcome {
         Ok(committed) => Ok(committed.record),
         Err(failure) => {
-            let mapped = map_core_failure(failure.error_code(), failure.to_string());
+            let mapped = delete_failure(&failure);
             executor.reject_failure(owner, key, &mapped).await;
             Err(mapped)
         }
     }
+}
+
+/// 删除（及其重启补完）之前核对工作目录：现场不得含冻结清单之外的内容。
+///
+/// 删除会把工作目录里的东西移走，而回收站只保留**已确认**的版本。外部在观察循环采纳之前新写入的
+/// 文件、或原地改写的内容，都是尚未确认的内容，删掉它们就丢数据。因此：
+///
+/// - 单个文件：现场内容哈希必须等于该条目当前版本；
+/// - 目录：每个现场项都必须在冻结清单里且种类相同，文件长度必须等于当前版本长度；
+/// - 清单里有而现场没有的项（已被部分删除、或外部删除尚未被采纳）不算问题——删除是幂等的。
+///
+/// # Errors
+///
+/// 返回原因文本；调用方把前向路径映射为 `RECONCILE_REQUIRED`、重启补完保持停写并保留证据。
+pub async fn verify_delete_scope(
+    database: &Database,
+    owner: UserId,
+    handle: &Arc<RootHandle>,
+    layout: vaultsyncd_server_core::objects::ObjectLayout,
+    root: RootId,
+    entry: EntryId,
+) -> Result<(), String> {
+    let mut store = SqlDeleteStore::new(
+        database.clone(),
+        owner,
+        store_operations::OperationKey {
+            root,
+            device: vaultsyncd_domain::ids::DeviceId::from_bytes([0; 16]),
+            op: vaultsyncd_domain::ids::OpId::from_bytes([0; 16]),
+        },
+        store_operations::request_digest(&[("kind", b"delete_scope")])
+            .map_err(|error| error.to_string())?,
+    );
+    let image = store
+        .subtree_image(root, entry)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut known = std::collections::HashMap::new();
+    for item in image.entries() {
+        let expected = match item.content_version {
+            Some(version) => {
+                let mut conn = connect(database).await?;
+                let facts = store_versions::version_facts(&mut conn, owner, root, version)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("版本 {version} 的事实不可读"))?;
+                Some(facts)
+            }
+            None => None,
+        };
+        known.insert(item.path.clone(), (item.kind, expected));
+    }
+    let root_path = image
+        .entries()
+        .iter()
+        .find(|item| item.entry == entry)
+        .map(|item| item.path.clone())
+        .ok_or_else(|| "冻结清单缺少根条目".to_owned())?;
+    let mut ns = WorkTreeNamespace::new(Arc::clone(handle));
+    let mut visited = 0usize;
+    let mut pending = vec![root_path];
+    while let Some(path) = pending.pop() {
+        visited += 1;
+        if visited > known.len() {
+            return Err("现场项数超过冻结清单".to_owned());
+        }
+        let (kind, facts) = known
+            .get(&path)
+            .ok_or_else(|| format!("现场的 {path} 不在冻结清单里"))?;
+        match (ns.inspect(&path).map_err(|error| error.to_string())?, kind) {
+            (PathState::Absent, _) => {}
+            (PathState::Directory { .. }, EntryKind::Directory) => {
+                for child in handle
+                    .list_dir(Path::new(&path))
+                    .map_err(|error| error.to_string())?
+                {
+                    pending.push(format!("{path}/{}", child.name.to_string_lossy()));
+                }
+            }
+            (PathState::File { identity }, EntryKind::File) => {
+                let facts = facts
+                    .as_ref()
+                    .ok_or_else(|| format!("文件 {path} 的清单没有内容版本"))?;
+                if identity.bytes != facts.size {
+                    return Err(format!(
+                        "文件 {path} 现在 {} 字节，当前版本是 {} 字节：存在尚未采纳的内容",
+                        identity.bytes, facts.size
+                    ));
+                }
+                if image.len() == 1 {
+                    let mut target =
+                        crate::executor::WorkTreeTarget::new(Arc::clone(handle), layout.clone());
+                    let observed = vaultsyncd_server_core::ports::target::TargetPort::observe(
+                        &mut target,
+                        &path,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if let vaultsyncd_server_core::ports::target::TargetObservation::Present {
+                        digest,
+                        ..
+                    } = observed
+                        && digest.as_bytes() != &facts.object_hash
+                    {
+                        return Err(format!(
+                            "文件 {path} 的内容与当前版本不同：存在尚未采纳的内容"
+                        ));
+                    }
+                }
+            }
+            (other, _) => {
+                return Err(format!("现场的 {path} 是 {other}，与冻结清单的种类不一致"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 取一个目录条目的冻结子树清单（与删除时用于比较的 token 来自同一份事实）。

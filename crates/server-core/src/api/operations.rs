@@ -469,6 +469,11 @@ pub enum OperationFailure {
     },
     /// 操作记录不存在、不属于该 Root 或不属于该登录会话（三者不区分）。
     UnknownOperation,
+    /// 历史版本/回收站内容已过保留期或不可读：解释历史已过期，不拿同路径新内容冒充（410）。
+    VersionGone {
+        /// 原因文本。
+        detail: String,
+    },
     /// 本进程尚未装配命令执行器：命令没有被受理，也没有写任何状态。
     ExecutorUnavailable,
     /// 存储层失败（含需要恢复的坏状态），必须暴露原因而不是当作成功。
@@ -504,6 +509,7 @@ impl OperationFailure {
             Self::InvalidName { .. } => "INVALID_NAME",
             Self::UnsupportedEntry { .. } => "UNSUPPORTED_ENTRY",
             Self::UnknownOperation => "UNSUPPORTED_ENTRY",
+            Self::VersionGone { .. } => "VERSION_GONE",
             Self::ExecutorUnavailable => EXECUTOR_UNAVAILABLE_CODE,
             Self::Storage { .. } => "NEEDS_RECOVERY",
             Self::NoSpace => "INSUFFICIENT_STORAGE",
@@ -515,7 +521,7 @@ impl OperationFailure {
     pub const fn http_status(&self) -> u16 {
         match self {
             Self::RootUnavailable | Self::Storage { .. } | Self::ExecutorUnavailable => 503,
-            Self::EpochChanged { .. } => 410,
+            Self::EpochChanged { .. } | Self::VersionGone { .. } => 410,
             Self::OpIdReused
             | Self::BaseMismatch { .. }
             | Self::SubtreeChanged { .. }
@@ -546,6 +552,7 @@ impl OperationFailure {
             | Self::InvalidRequest { .. }
             | Self::InvalidName { .. }
             | Self::UnsupportedEntry { .. }
+            | Self::VersionGone { .. }
             | Self::UnknownOperation => false,
         }
     }
@@ -569,6 +576,7 @@ impl fmt::Display for OperationFailure {
             Self::InvalidRequest { detail } => write!(f, "请求不成立：{detail}"),
             Self::InvalidName { detail } => write!(f, "名称不可用：{detail}"),
             Self::UnsupportedEntry { detail } => write!(f, "条目种类不支持该命令：{detail}"),
+            Self::VersionGone { detail } => write!(f, "历史内容已过期或不可读：{detail}"),
             Self::UnknownOperation => f.write_str("操作记录不存在"),
             Self::ExecutorUnavailable => f.write_str("服务端尚未装配命令执行器，本次操作未被受理"),
             Self::Storage { detail } => write!(f, "服务端存储失败：{detail}"),

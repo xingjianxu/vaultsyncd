@@ -115,3 +115,62 @@ pub async fn for_intent(
     })
     .transpose()
 }
+
+/// 在结果 JSON 里写入客户端本地代际回显：重放、状态查询与重启补完都从同一份持久结果回显。
+pub fn with_echo(
+    result: String,
+    generation: Option<vaultsyncd_domain::version::Generation>,
+) -> String {
+    let Some(generation) = generation else {
+        return result;
+    };
+    match serde_json::from_str::<serde_json::Value>(&result) {
+        Ok(serde_json::Value::Object(mut object)) => {
+            object.insert(
+                "echo_local_generation".to_owned(),
+                serde_json::Value::String(generation.to_string()),
+            );
+            serde_json::Value::Object(object).to_string()
+        }
+        _ => result,
+    }
+}
+
+/// 从恢复上下文取回本地代际。
+pub fn echo_of(
+    context: &serde_json::Value,
+) -> Result<Option<vaultsyncd_domain::version::Generation>, String> {
+    match context.get("local_generation") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .and_then(|text| text.parse().ok())
+            .map(Some)
+            .ok_or_else(|| "恢复上下文的 local_generation 不合法".to_owned()),
+    }
+}
+
+/// 命令携带的本地代际 → 上下文字段。
+pub fn echo_field(generation: Option<vaultsyncd_domain::version::Generation>) -> serde_json::Value {
+    serde_json::json!({ "local_generation": generation.map(|value| value.to_string()) })
+}
+
+/// 提交事务内再核对一次：要提交结果的操作行仍是同一个请求摘要，且属于该账号的 Root。
+/// 不一致说明有人拿别的请求的上下文去提交这条操作，整个事务回滚。
+pub async fn ensure_digest(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    owner: UserId,
+    key: &OperationKey,
+    expected: &vaultsyncd_server_store::operations::RequestDigest,
+) -> Result<(), sqlx::Error> {
+    let record = vaultsyncd_server_store::operations::operation_in_scope(tx, owner, key)
+        .await
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?
+        .ok_or_else(|| sqlx::Error::Protocol("提交的操作不在该账号范围内".to_owned()))?;
+    if record.digest.as_bytes() != expected.as_bytes() {
+        return Err(sqlx::Error::Protocol(
+            "操作摘要与持久记录不一致，拒绝提交".to_owned(),
+        ));
+    }
+    Ok(())
+}

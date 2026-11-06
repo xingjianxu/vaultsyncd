@@ -336,6 +336,7 @@ async fn execute_conflict_command(
             .unwrap_or(vaultsyncd_domain::version::Revision::ZERO),
         content,
         target_path,
+        local_generation: request.local_generation,
     };
     match conflict_ops::execute_conflict(
         &context.executor,
@@ -426,7 +427,11 @@ async fn execute_namespace_command(
                     root,
                 );
             };
-            let command = CreateCommand { parent, name };
+            let command = CreateCommand {
+                parent,
+                name,
+                local_generation: request.local_generation,
+            };
             match commands::execute_create(
                 &context.executor,
                 owner,
@@ -469,6 +474,7 @@ async fn execute_namespace_command(
                 base_revision: revision,
                 parent,
                 name,
+                local_generation: request.local_generation,
             };
             match commands::execute_move(
                 &context.executor,
@@ -506,6 +512,7 @@ async fn execute_namespace_command(
                 entry,
                 base_revision: revision,
                 subtree_token: request.subtree_token,
+                local_generation: request.local_generation,
             };
             match commands::execute_delete(
                 &context.executor,
@@ -560,6 +567,7 @@ async fn execute_namespace_command(
                         version,
                         base_revision: revision,
                         target_path: path,
+                        local_generation: request.local_generation,
                     };
                     match restore_ops::execute_version_restore(
                         &context.executor,
@@ -588,6 +596,7 @@ async fn execute_namespace_command(
                         entry,
                         base_revision: revision,
                         parent: request.parent,
+                        local_generation: request.local_generation,
                     };
                     match restore_ops::execute_trash_restore(
                         &context.executor,
@@ -974,6 +983,7 @@ fn failure_response(request_id: &str, failure: &OperationFailure, root: RootId) 
     let code = match failure.design_error_code() {
         "ROOT_UNAVAILABLE" => ErrorCode::RootUnavailable,
         "EPOCH_CHANGED" => ErrorCode::EpochChanged,
+        "VERSION_GONE" => ErrorCode::VersionGone,
         "OP_ID_REUSED" => ErrorCode::OpIdReused,
         "BASE_MISMATCH" => ErrorCode::BaseMismatch,
         "SUBTREE_CHANGED" => ErrorCode::SubtreeChanged,

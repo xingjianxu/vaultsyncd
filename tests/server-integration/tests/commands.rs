@@ -276,8 +276,11 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
         StatusCode::CONFLICT,
         "过期 token 必须拒绝：{refused}"
     );
-    assert_eq!(
-        refused["error"]["code"], "SUBTREE_CHANGED",
+    // 观察循环已采纳新文件 → token 失效（SUBTREE_CHANGED）；尚未采纳 → 现场含冻结清单之外的内容
+    // （RECONCILE_REQUIRED）。两者都要求客户端先刷新事实，且都不得动工作目录。
+    assert!(
+        ["SUBTREE_CHANGED", "RECONCILE_REQUIRED"]
+            .contains(&refused["error"]["code"].as_str().unwrap_or_default()),
         "过期 token 的错误码：{refused}"
     );
     assert!(

@@ -35,7 +35,6 @@ use vaultsyncd_server_store::roots as store_roots;
 use vaultsyncd_server_store::versions as store_versions;
 use vaultsyncd_server_store::versions::{NewVersion, VersionOrigin};
 
-use crate::commands::map_core_failure;
 use crate::executor::{SqlIntentLog, WorkTreeTarget};
 use crate::uploads::random_bytes;
 use vaultsyncd_server_core::api::operations::OperationFailure;
@@ -103,6 +102,7 @@ pub struct SqlConflictStore {
     database: Database,
     owner: UserId,
     key: OperationKey,
+    local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 impl SqlConflictStore {
@@ -113,7 +113,18 @@ impl SqlConflictStore {
             database,
             owner,
             key,
+            local_generation: None,
         }
+    }
+
+    /// 客户端本地代际：写进持久结果，重放与重启补完都回显它。
+    #[must_use]
+    pub fn with_local_generation(
+        mut self,
+        generation: Option<vaultsyncd_domain::version::Generation>,
+    ) -> Self {
+        self.local_generation = generation;
+        self
     }
 }
 
@@ -236,7 +247,18 @@ impl ConflictCommitStore for SqlConflictStore {
         &mut self,
         write: &ConflictWrite,
     ) -> Result<ConflictRecord, ConflictStoreError> {
+        if write.key != self.key {
+            return Err(conflict_error("提交的操作键不是本存储装配的操作键"));
+        }
         let mut tx = self.database.begin_write().await.map_err(conflict_error)?;
+        crate::journal::ensure_digest(
+            &mut tx,
+            self.owner,
+            &store_key(write.key),
+            &store_operations::RequestDigest::from_bytes(*write.digest.as_bytes()),
+        )
+        .await
+        .map_err(conflict_error)?;
         let intent = store_intents::intent_in_scope(&mut tx, self.owner, write.intent_id)
             .await
             .map_err(conflict_error)?
@@ -298,7 +320,7 @@ impl ConflictCommitStore for SqlConflictStore {
             &store_key(write.key),
             tx_id,
             &events,
-            &result_json(&result),
+            &crate::journal::with_echo(result_json(&result), self.local_generation),
             write.at,
         )
         .await
@@ -310,9 +332,13 @@ impl ConflictCommitStore for SqlConflictStore {
         })?;
         let mut result = result;
         result.seq = committed.batch.seq;
-        crate::restore_ops::persist_result_seq(&mut tx, write.key, &result_json(&result))
-            .await
-            .map_err(conflict_error)?;
+        crate::restore_ops::persist_result_seq(
+            &mut tx,
+            write.key,
+            &crate::journal::with_echo(result_json(&result), self.local_generation),
+        )
+        .await
+        .map_err(conflict_error)?;
         store_entries::insert_entry(
             &mut tx,
             self.owner,
@@ -397,6 +423,8 @@ pub struct ConflictCommand {
     pub content: ExpectedContent,
     /// 冲突条目在 Root 内的相对路径（含另名后的文件名）。
     pub target_path: String,
+    /// 客户端本地代际（持久回显）。
+    pub local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
 /// 执行一次冲突副本提交（过期基线的迟到内容保留为独立条目）。
@@ -416,7 +444,8 @@ pub async fn execute_conflict(
     let handle: Arc<RootHandle> = executor.root_handle(owner, key.root).await?;
     let layout = executor.objects();
     let mut target = WorkTreeTarget::new(Arc::clone(&handle), layout);
-    let mut store = SqlConflictStore::new(executor.database().clone(), owner, key);
+    let mut store = SqlConflictStore::new(executor.database().clone(), owner, key)
+        .with_local_generation(command.local_generation);
     let sibling = random_bytes();
     let mut log =
         SqlIntentLog::new(executor.database().clone(), owner).bound(crate::journal::Binding::new(
@@ -424,6 +453,7 @@ pub async fn execute_conflict(
             "conflict",
             serde_json::json!({
                 "source": command.entry.to_hex(), "sibling": EntryId::from_bytes(sibling).to_hex(),
+                "local_generation": command.local_generation.map(|value| value.to_string()),
             }),
         ));
     let mut ids = RandomIds(sibling);
@@ -453,7 +483,13 @@ pub async fn execute_conflict(
     drop(gate);
     match outcome {
         Ok(committed) => Ok(committed),
-        Err(failure) => Err(map_core_failure(failure.error_code(), failure.to_string())),
+        Err(failure) => {
+            let mapped = crate::executor::map_put_failure(&failure);
+            executor
+                .reject_failure(owner, store_key(key), &mapped)
+                .await;
+            Err(mapped)
+        }
     }
 }
 
