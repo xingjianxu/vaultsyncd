@@ -13,6 +13,9 @@
 //!
 //! 查询串只接受契约声明的参数：未知参数、重复参数、非规范十进制一律 400（不猜意图）。
 
+mod history;
+pub use history::{list_history, list_trash};
+
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;

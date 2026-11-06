@@ -117,6 +117,11 @@ pub fn router(
     // 一致性快照、changes 与 SSE 提示（S048）：分页只读清单，游标失效明确 410，SSE 只作提示。
     let sync_router = Router::new()
         .route(
+            "/v1/roots/{root}/entries/{entry}/history",
+            get(super::sync::list_history),
+        )
+        .route("/v1/roots/{root}/trash", get(super::sync::list_trash))
+        .route(
             "/v1/roots/{root}/snapshots",
             post(super::sync::create_snapshot),
         )

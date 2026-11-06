@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
-import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
+import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
+import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -294,6 +294,40 @@ export async function listChanges(options: ClientOptions, root: string, query: {
     throw api_error(response.status, payload);
   }
   return decodeChangeList(payload);
+}
+
+/**
+ * 列出条目历史版本
+ *
+ * 需要 Root 授权；按版本身份分页，最多100条，不泄露服务器路径。
+ *
+ * 参数 `root`（/v1/roots/{root}/entries/{entry}/history）：路径参数
+ * 参数 `entry`（/v1/roots/{root}/entries/{entry}/history）：路径参数
+ * 查询参数 `after`（可选）：查询参数
+ *
+ * 200：一页历史
+ * 400：参数错误
+ * 403：没有 Root 授权
+ * 404：条目不存在
+ */
+export async function listEntryHistory(options: ClientOptions, root: string, entry: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/history`;
+  const search = new URLSearchParams();
+  if (query?.after !== undefined) {
+    search.set("after", query.after);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? path : `${path}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeRecoveryPage(payload);
 }
 
 /**
@@ -670,6 +704,38 @@ export async function listSnapshotEntries(options: ClientOptions, root: string, 
     throw api_error(response.status, payload);
   }
   return decodeSnapshotPage(payload);
+}
+
+/**
+ * 列出回收站
+ *
+ * 需要 Root 授权；按条目身份分页，最多100条，仅返回仍保留的回收站事实。
+ *
+ * 参数 `root`（/v1/roots/{root}/trash）：路径参数
+ * 查询参数 `after`（可选）：查询参数
+ *
+ * 200：一页回收站
+ * 400：参数错误
+ * 403：没有 Root 授权
+ */
+export async function listTrash(options: ClientOptions, root: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/trash`;
+  const search = new URLSearchParams();
+  if (query?.after !== undefined) {
+    search.set("after", query.after);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? path : `${path}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeRecoveryPage(payload);
 }
 
 /**

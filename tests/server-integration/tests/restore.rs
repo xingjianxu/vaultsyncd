@@ -110,6 +110,86 @@ async fn version_restore_and_trash_restore_round_trip() {
     let v2_version = result["version_id"].as_str().expect("v2 版本").to_owned();
     assert_eq!(std::fs::read(&work_file).expect("读文件"), V2);
 
+    // S072: typed, authorized history listing and closed cursor/query shape.
+    let history_path = format!("/v1/roots/{root}/entries/{entry}/history");
+    let (status, history) = running
+        .json("GET", &history_path, Some(&token), None)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history["items"].as_array().unwrap().len(), 2);
+    assert!(
+        history["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["version_id"] == v1_version)
+    );
+    assert_eq!(
+        running
+            .json("GET", &history_path, None, None)
+            .await
+            .unwrap()
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        running
+            .json(
+                "GET",
+                &format!("{history_path}?ignored=true"),
+                Some(&token),
+                None
+            )
+            .await
+            .unwrap()
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        running
+            .json(
+                "GET",
+                &format!(
+                    "{history_path}?after={}&after={}",
+                    identity(0x11),
+                    identity(0x22)
+                ),
+                Some(&token),
+                None
+            )
+            .await
+            .unwrap()
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        running
+            .json(
+                "GET",
+                &format!("/v1/roots/{}/entries/{entry}/history", identity(0x99)),
+                Some(&token),
+                None
+            )
+            .await
+            .unwrap()
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        running
+            .json(
+                "GET",
+                &format!("/v1/roots/{root}/entries/{}/history", identity(0x99)),
+                Some(&token),
+                None
+            )
+            .await
+            .unwrap()
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
     // 3. 历史版本恢复：v1 → 新的当前版本（内容回到 V1）。
     let (status, restored) = submit(
         &running,
@@ -186,6 +266,32 @@ async fn version_restore_and_trash_restore_round_trip() {
         "删除后条目不在活跃清单里"
     );
 
+    let (status, trash) = running
+        .json(
+            "GET",
+            &format!("/v1/roots/{root}/trash"),
+            Some(&token),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(trash["items"][0]["entry_id"], entry);
+    assert_eq!(trash["items"][0]["hash"], sha256(V1));
+    assert_eq!(
+        running
+            .json(
+                "GET",
+                &format!("/v1/roots/{}/trash", identity(0x99)),
+                Some(&token),
+                None
+            )
+            .await
+            .unwrap()
+            .0,
+        StatusCode::FORBIDDEN
+    );
+
     let (status, restored) = submit(
         &running,
         &token,
@@ -210,6 +316,43 @@ async fn version_restore_and_trash_restore_round_trip() {
     assert_eq!(std::fs::read(&work_file).expect("读文件"), V1);
     let entries = snapshot(&running, &token, &root).await;
     assert_eq!(entry_named(&entries, "note.txt")["entry_id"], entry);
+    let (status, trash) = running
+        .json(
+            "GET",
+            &format!("/v1/roots/{root}/trash"),
+            Some(&token),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(trash["items"].as_array().unwrap().is_empty());
+    // Restored event revision and fixed version facts must equal the newly committed namespace.
+    let (_, changes) = running
+        .json(
+            "GET",
+            &format!("/v1/roots/{root}/changes?after=0"),
+            Some(&token),
+            None,
+        )
+        .await
+        .unwrap();
+    let restore_event = changes["batches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|b| {
+            serde_json::from_str::<Vec<Value>>(b["events_json"].as_str().unwrap()).unwrap()
+        })
+        .filter(|e| e["kind"] == "restore")
+        .last()
+        .unwrap();
+    assert_eq!(restore_event["revision"], restored["revision"]);
+    assert_eq!(
+        restore_event["version_id"],
+        entry_named(&entries, "note.txt")["version_id"]
+    );
+    assert_eq!(restore_event["hash"], sha256(V1));
 
     // 5. 同一 OpId 重试同一请求：结果一致（replayed）。
     let (status, replay) = submit(
