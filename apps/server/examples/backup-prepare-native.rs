@@ -253,7 +253,20 @@ impl Lab {
     async fn cleanup(self, ids: &[BackupLeaseId]) -> Result<()> {
         let arena = Arena::open(&self.config.state_dir.join("backups"))?;
         for id in ids {
+            let mut tx = self.db.begin_write().await?;
+            sqlx::query("UPDATE backup_preparations SET phase='releasing' WHERE id=?")
+                .bind(id.as_bytes().as_slice())
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
             arena.remove(&id.to_hex())?;
+            let mut tx = self.db.begin_write().await?;
+            leases::release_backup_lease(&mut tx, *id).await?;
+            sqlx::query("UPDATE backup_preparations SET phase='released' WHERE id=?")
+                .bind(id.as_bytes().as_slice())
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
         }
         self.db.close().await;
         fs::remove_dir_all(self.base)?;
@@ -285,7 +298,20 @@ async fn continuous_write_and_lease(base: &Path) -> Result<()> {
     });
     tokio::time::sleep(Duration::from_millis(20)).await;
     let id = BackupLeaseId::from_bytes([20; 16]);
-    let result = backup::prepare(&lab.db, &lab.config, lab.owner, id, now()).await;
+    let activity = lab.db.object_activity().await;
+    let db = lab.db.clone();
+    let config = lab.config.clone();
+    let owner = lab.owner;
+    let mut preparation =
+        tokio::spawn(async move { backup::prepare(&db, &config, owner, id, now()).await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut preparation)
+            .await
+            .is_err(),
+        "prepare必须等待现有对象动作完成"
+    );
+    drop(activity);
+    let result = preparation.await?;
     stopped.store(true, Ordering::Release);
     writer.join().unwrap();
     let result = result?;
@@ -495,6 +521,38 @@ async fn interrupted_cleanup(base: &Path) -> Result<()> {
     lab.cleanup(&[]).await
 }
 
+async fn unfinished_operation(base: &Path) -> Result<()> {
+    let lab = Lab::new(base, "pending").await?;
+    let (old, current) = lab.seed().await?;
+    let mut tx = lab.db.begin_write().await?;
+    sqlx::query("INSERT INTO operations(root_id,device_id,op_id,request_digest,state) VALUES(?,?,?,?,'pending')")
+        .bind(lab.root.as_bytes().as_slice()).bind([31u8;16].as_slice()).bind([32u8;16].as_slice()).bind([33u8;32].as_slice()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    assert!(
+        backup::prepare(
+            &lab.db,
+            &lab.config,
+            lab.owner,
+            BackupLeaseId::from_bytes([24; 16]),
+            now()
+        )
+        .await
+        .is_err()
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM backup_preparations WHERE phase='ready'")
+            .fetch_one(lab.db.pool())
+            .await?;
+    assert_eq!(count, 0);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operations WHERE state='pending'")
+        .fetch_one(lab.db.pool())
+        .await?;
+    assert_eq!(count, 1);
+    assert!(lab.object_path(old).exists() && lab.object_path(current).exists());
+    println!("PASS unfinished operation is preserved and prevents a false ready snapshot");
+    lab.cleanup(&[]).await
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
@@ -512,6 +570,7 @@ async fn main() -> Result<()> {
     continuous_write_and_lease(&base).await?;
     failures_and_nested(&base).await?;
     interrupted_cleanup(&base).await?;
+    unfinished_operation(&base).await?;
     fs::remove_dir(base)?;
     println!("S087 native prepare acceptance: PASS");
     Ok(())

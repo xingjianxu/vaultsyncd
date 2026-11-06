@@ -51,7 +51,7 @@ pub fn online_backup(source: &Path, destination: &Path) -> io::Result<FrozenData
     let schema: i64 = src
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(err)?;
-    let pending:i64=src.query_row("SELECT (SELECT count(*) FROM fs_intents WHERE phase<>'finalized')+(SELECT count(*) FROM operations WHERE state='pending')+(SELECT count(*) FROM objects WHERE gc_state<>'live')",[],|r|r.get(0)).map_err(err)?;
+    let pending:i64=src.query_row("SELECT (SELECT count(*) FROM fs_intents WHERE phase<>'finalized')+(SELECT count(*) FROM operations WHERE state='pending')+(SELECT count(*) FROM objects WHERE gc_state<>'live')+(SELECT count(*) FROM entries e WHERE e.content_version_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM versions v WHERE v.id=e.content_version_id AND v.root_id=e.root_id AND v.entry_id=e.id))+(SELECT count(*) FROM trash_entries t WHERE t.content_version_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM versions v WHERE v.id=t.content_version_id AND v.root_id=t.root_id AND v.entry_id=t.entry_id))",[],|r|r.get(0)).map_err(err)?;
     if pending != 0 {
         return Err(err("unfinished intents/operations/GC prevent backup"));
     }

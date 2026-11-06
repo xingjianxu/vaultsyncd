@@ -108,4 +108,30 @@ mod tests {
         assert_eq!(ready(&p, 0, true, true, false), Err(Error::Unprotected));
         assert_eq!(ready(&p, 0, true, true, true), Ok(()));
     }
+
+    #[test]
+    fn manifest_rejects_foreign_roots_and_path_escape() {
+        let root = RootId::from_bytes([1; 16]);
+        let hash = [2; 32];
+        let object = FrozenObject {
+            root,
+            hash,
+            size: 1,
+            storage_path: ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
+                .display()
+                .to_string(),
+        };
+        let mut plan = Plan {
+            roots: vec![],
+            objects: vec![object],
+        };
+        assert_eq!(plan.validate(), Err(Error::InvalidIdentity));
+        plan.roots.push(FrozenRoot {
+            root,
+            seq: RootSeq::ZERO,
+        });
+        assert_eq!(plan.validate(), Ok(()));
+        plan.objects[0].storage_path = "../../user-file".into();
+        assert_eq!(plan.validate(), Err(Error::InvalidPath));
+    }
 }

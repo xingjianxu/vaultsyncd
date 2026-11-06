@@ -1370,4 +1370,45 @@ mod tests {
             }
         ));
     }
+
+    #[tokio::test]
+    async fn v11_backup_state_upgrade_preserves_data_and_refuses_the_old_writer() {
+        let dir = TestDir::new("s087-v11-v12");
+        let path = dir.database();
+        let previous = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|m| m.version <= 11)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        insert_metadata(&old, "server_id", "backup-migration-preserved").await;
+        old.close().await;
+        let new = Database::open(&path).await.unwrap();
+        assert_eq!(new.schema_version(), 12);
+        new.close().await;
+        let backup = migration_backup_path(&path, 11, 12);
+        assert!(backup.exists());
+        assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 11);
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name='backup_preparations'"
+            )
+            .await,
+            0
+        );
+        assert_eq!(metadata(&backup).await, metadata(&path).await);
+        assert!(matches!(
+            Database::open_with(&path, &previous).await.unwrap_err(),
+            DbError::SchemaTooNew {
+                found: 12,
+                supported: 11
+            }
+        ));
+    }
 }
