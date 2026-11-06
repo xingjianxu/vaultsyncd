@@ -175,7 +175,7 @@ python3 tools/context.py --help
 
 ## tools/xtask — 任务编排入口
 
-状态：S006 实现 `env`/`check`，S024 实现 `generate`，S092 实现 `check-boundaries`（`package` 仍明确未实现）。包名 `vaultsyncd-xtask`，二进制名 `xtask`，edition 2024。S024 起允许第三方解析器依赖：`serde`（derive）、`serde_yaml_ng` 0.10、`toml` 0.9，全部由根 `Cargo.lock` 锁定；不引入模板引擎，生成逻辑在本包内。它属于 workspace `members` 但**不在 `default-members`**：便携的 `cargo check --locked`/`cargo test --locked`/`cargo clippy` 只构建核心成员，不构建编排工具。
+状态：S006 实现 `env`/`check`，S024 实现 `generate`，S092 实现 `check-boundaries`，S093 实现 `version`/`release`（`package` 仍明确未实现）。包名 `vaultsyncd-xtask`，二进制名 `xtask`，edition 2024。S024 起允许第三方解析器依赖：`serde`（derive）、`serde_yaml_ng` 0.10、`toml` 0.9，全部由根 `Cargo.lock` 锁定；不引入模板引擎，生成逻辑在本包内。它属于 workspace `members` 但**不在 `default-members`**：便携的 `cargo check --locked`/`cargo test --locked`/`cargo clippy` 只构建核心成员，不构建编排工具。
 
 调用入口是根 `.cargo/config.toml` 的唯一别名 `xtask = "run --package vaultsyncd-xtask --"`；该文件不设置目标、镜像、链接器或网络行为。所有子命令都在 `cargo locate-project --workspace` 找到的根目录执行，因此可从任意子目录调用（构建信息由 cargo 写到 stderr）。
 
@@ -185,7 +185,9 @@ python3 tools/context.py --help
 | `check` | 先确认 `<root>/node_modules` 存在：缺失立即报错并提示 `pnpm install --frozen-lockfile`，不跳过前端检查。随后按固定顺序执行下表六步，逐步打印命令与退出码，末尾汇总失败步骤；子进程继承终端，诊断即时可见 | 全部通过 0；任一步失败 1 |
 | `check-boundaries` | 生成一致、三目标metadata、pnpm依赖/源码门禁及前端消费者测试，最后运行 protocol/local-ipc Rust 契约；详见文末 S092 | 通过0；失败1；多余参数2 |
 | `generate` | 从 `api/openapi.yaml` 生成 `crates/protocol/src/generated/mod.rs` 与 `packages/api-client/src/generated/*`；只写有变化的文件并打印路径。`--check` 不写盘，只逐字节比对，不一致时列出文件并退出 1。配置、契约与生成器的校验规则见下文「api/ — 远端协议契约源」 | 无 diff/写入成功 0；配置漂移、未支持构造、`--check` 有 diff 1；多余参数 2 |
-| `package` | 产品打包：尚未实现，同上 | 3 |
+| `version` | 从 Cargo workspace.package.version 核对 Rust继承和JSON镜像；--sync同步镜像，不改协议 | 成功0；失败1；参数错误2 |
+| `release` | 真实build、同提交assemble与verify，参数和来源规则见文末S093 | 成功0；构建/来源/参数不满足1 |
+| `package` | 完整平台安装包：尚未实现，由后续发布卡落实 | 3 |
 | `help`、`--help`、`-h` | 打印子命令与退出码说明 | 0 |
 | 其他 / 缺少子命令 / 多余参数 | 打印未知名或参数错误并附帮助 | 2 |
 
@@ -853,7 +855,7 @@ python3 tools/context.py --help
 | 文件 | 契约 |
 | --- | --- |
 | `api/openapi.yaml` | OpenAPI `3.1.0`。当前端点：`GET /v1/health`（无需认证、`HealthResponse`、503 用错误信封）、`GET /v1/capabilities`（`Capabilities`、503 用错误信封）。`info.description` 会原样进生成文件表头 |
-| `api/generation.toml` | 生成配置：`format_version = 2`（S025 起含本机 IPC）、`generator = "vaultsyncd-xtask"`、`generator_version`（= 包版本）、`source`/`openapi_version`（远端）、`local_ipc_source`/`local_ipc_schema_draft`（本机 IPC）、`[outputs]` 五个路径、`[types.rust]`/`[types.typescript]` 映射表（两份契约共用） |
+| `api/generation.toml` | 生成配置：`format_version = 2`（S025 起含本机 IPC）、`generator = "vaultsyncd-xtask"`、`generator_version`（= 独立 GENERATOR_VERSION 常量）、`source`/`openapi_version`（远端）、`local_ipc_source`/`local_ipc_schema_draft`（本机 IPC）、`[outputs]` 五个路径、`[types.rust]`/`[types.typescript]` 映射表（两份契约共用） |
 | `api/examples/*.response.json` | 合法响应样本（capabilities/health/error），被 `crates/protocol/tests/contract.rs` 与 `packages/api-client/tests/schema-decoders.mjs` 直接读取；改契约时同步更新 |
 
 ### schema 子集与生成规则
@@ -2401,3 +2403,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - pnpm 从实际 workspace 成员清单核对五个消费者，合并 package.json 的普通/dev/optional/peer 声明、npm别名与已安装传递依赖图。GUI/CLI/Web/UI 源码另扫常见 SQL 库及写入语句；这是可审查静态门禁，不能证明任意动态执行均无数据库 I/O。
 - command 随后跑前端 recursive typecheck、recursive --if-present test，以及 `cargo test --locked -p vaultsyncd-protocol -p vaultsyncd-local-ipc`。缺工具、缺依赖、元数据失败或任一步失败均返回1，多余参数2；不静默跳过消费者。统一 `cargo xtask check` 复用 verify，并由默认Rust成员测试及前端测试覆盖消费者，总共六步。
 - `tests/contract/boundaries.py` 为宿主 devShell 可执行负例，不新增空 Cargo 包，不复制已有 Rust wire 契约测试。需先 build xtask，且只在隔离树无其他命令并发改该树时运行；九类真实修改在 finally 逐字节还原原文件及锁。日志写忽略 artifacts/S092；负例后主动确认重新生成一致和完整正例。平台 metadata 不代替原生运行验收。
+
+## S093 产品版本与组件来源清单
+
+- 唯一产品版本源 `Cargo.toml [workspace.package].version`，当前只接受规范 major.minor.patch。所有 Rust 成员必须 version.workspace=true；JSON镜像为根/五个前端包 package.json 和 Tauri config.version。`cargo xtask version [--check|--sync]` 核对/同步，边界与统一check也核对。产品升版后需更新工作区锁；不绑定 API/schema 版本。生成器身份使用独立 `generate::GENERATOR_VERSION`，配置/表头不随产品包版本变化。
+- `cargo xtask release build <web|desktop-ui|server|admin> <new-directory>` 要求干净提交，输出 payload 和 receipt.json。前端先 frozen-lockfile/offline 准备依赖，再移除dist后调用固定构建；拒绝 .env/VITE_ 覆盖。Linuxserver/admin 使用当前Linux宿主三元组与全新target进行locked release构建；不把静态desktop-ui当Windows客户端。
+- receipt format1 含component/target、产品版本、完整commit/tree、Cargo/pnpm/Nix/工具链锁与协议源SHA256、实测工具版本、准备/构建命令、逐文件路径/大小/hash。构建前后来源不一致、特殊文件/符号链接或空输出都不签发记录；已有目录不覆盖。
+- `release assemble <new-manifest.json> <artifact-directory>...` 仅组装严格同当前提交且来源/文件集一致的实际组件；拒绝重复component/target。manifest嵌入records和组件目录，`release verify <manifest>` 再核当前HEAD/版本/锁及完整产物hash。后续提交/合并使旧实验记录过期，必须重新构建；未开放未经验证的混合提交组合。
+- 机制不是签名/完全隔离构建，自包含发行布局及Windows安装由S094/S099延伸；完整package命令仍明确Unsupported。验收 `python3 tests/contract/release.py` 用真实Web与desktop-ui构建，包含产品升版后重编生成器而wire不变、旧dist/旧提交/资源/产物修改拒绝及完整还原。说明见 packaging/README.md。

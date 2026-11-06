@@ -115,7 +115,7 @@
 | S090 | Web 备份管理入口 | B | S079、S088 | todo | — | 未执行 | — | agent/tasks/S090.md（执行时创建） |
 | S091 | 协议与数据库升级演练 | X | S089、S074 | todo | — | 未执行 | — | agent/tasks/S091.md（执行时创建） |
 | S092 | 构建依赖与协议边界检查 | L | S024、S025、S080 | done | 实现 `db95ba8`；基线 `7663799`；worktree `.worktrees/s092` / `feat/S092-boundary-checks` | 三目标metadata/pnpm边界、九负例及逐字节还原正例、xtask21/21与clippy；统一check六步895/0通过 | 无；metadata与源码静态门禁不替代平台原生/语义安全验收 | agent/tasks/S092.md |
-| S093 | 发布版本与产物清单 | L | S052、S076、S092 | todo | — | 未执行 | — | agent/tasks/S093.md（执行时创建） |
+| S093 | 发布版本与产物清单 | L | S052、S076、S092 | done | `d59a7b2`、`7993e72`、`fbc0d27`；基线 `4ab4a5f`；`.worktrees/s093` / `feat/S093-release-manifest` | xtask22/22+clippy；统一check6/6、Rust895/0；真实双前端构建与11类版本/产物/来源负例通过 | 无；实验组件来源fbc0d27，后续HEAD必须重建；Linux发行/Windows安装留后续卡 | agent/tasks/S093.md（+a/b） |
 | S094 | Linux 服务端 Nix 构建包 | L | S093、S090 | todo | — | 未执行 | — | agent/tasks/S094.md（执行时创建） |
 | S095 | NixOS 服务模块 | L | S094、S007 | todo | — | 未执行 | — | agent/tasks/S095.md（执行时创建） |
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | todo | — | 未执行 | — | agent/tasks/S096.md（执行时创建） |
