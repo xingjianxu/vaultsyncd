@@ -297,6 +297,35 @@ impl core::fmt::Debug for LoginRequest {
     }
 }
 
+/// 仅 owner 管理通道可见的 Root。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ManagedRoot {
+    /// 本进程采集观测
+    pub collection: RootCollection,
+    /// 现场挂载和存储状态
+    pub health: RootHealth,
+    /// 可执行的修复建议
+    pub next_step: String,
+    /// 已注册服务器绝对路径
+    pub path: String,
+    /// 稳定故障原因；健康时为空
+    pub reason: String,
+    /// Root 身份
+    pub root_id: String,
+    /// 已提交事件序号，不表示采集完成
+    #[serde(with = "crate::decimal")]
+    pub root_seq: String,
+}
+
+/// owner 管理清单；不可由普通 Root 列表推导路径。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ManagedRootList {
+    /// 部署预配置允许基目录；空表示未配置且禁止注册。
+    pub allowed_bases: Vec<String>,
+    /// owner 已注册 Root。
+    pub roots: Vec<ManagedRoot>,
+}
+
 /// 一段连续缺失的块索引。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct MissingRange {
@@ -563,6 +592,41 @@ pub struct RecoveryPage {
 pub struct RefreshRequest {
     /// 上一次签发的刷新凭据；用一次即失效。
     pub refresh_token: String,
+}
+
+/// 实际最近一轮扫描进度，不代表客户端已同步。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RootCollection {
+    /// 未完成原因与本进程观测范围
+    pub detail: String,
+    /// 最近一轮实际检查项数
+    #[serde(with = "crate::decimal")]
+    pub examined: String,
+    /// 最近一轮待稳定或重试文件数
+    #[serde(with = "crate::decimal")]
+    pub pending: String,
+    /// 采集状态
+    pub state: RootCollectionState,
+}
+
+/// 本进程观测状态；重启后不沿用旧完成标志。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum RootCollectionState {
+    /// 取值 `not_scanned`。
+    #[serde(rename = "not_scanned")]
+    NotScanned,
+    /// 取值 `scanning`。
+    #[serde(rename = "scanning")]
+    Scanning,
+    /// 取值 `pending`。
+    #[serde(rename = "pending")]
+    Pending,
+    /// 取值 `complete`。
+    #[serde(rename = "complete")]
+    Complete,
+    /// 取值 `blocked`。
+    #[serde(rename = "blocked")]
+    Blocked,
 }
 
 /// Root 健康状态闭集（design §7.2 `roots.health`）。`unavailable` 表示挂载、身份或权限

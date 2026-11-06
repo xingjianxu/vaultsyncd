@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeAccountChanged, decodeAccountInfo, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
-import type { AccountChanged, AccountInfo, BrowserSession, Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
+import { decodeAccountChanged, decodeAccountInfo, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedRootList, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
+import type { AccountChanged, AccountInfo, BrowserSession, Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedRootList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -80,6 +80,29 @@ async function read_bytes(response: Response): Promise<Uint8Array> {
 
 function api_error(status: number, body: unknown): ApiError {
   return new ApiError(status, decodeErrorEnvelope(body).error);
+}
+
+/**
+ * owner Root 配置与现场健康
+ *
+ * 仅唯一 active owner 可读允许基目录及服务器路径。现场核对挂载身份；采集数据仅代表本进程最近扫描，不表示客户端同步完成。
+ *
+ * 200：管理清单与允许基目录
+ * 401：未认证
+ * 403：不是唯一 active owner
+ * 503：无法读取配置或状态
+ */
+export async function listManagedRoots(options: ClientOptions, init?: RequestInit): Promise<ManagedRootList> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/admin/roots"), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeManagedRootList(payload);
 }
 
 /**

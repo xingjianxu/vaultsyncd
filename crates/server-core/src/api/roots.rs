@@ -101,6 +101,11 @@ impl AllowedBases {
             .any(|base| base_is_ancestor_or_self(base, path))
     }
 
+    /// 管理员通道枚举预配置基目录；普通客户端不得暴露。
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.bases.iter().map(PathBuf::as_path)
+    }
+
     /// 配置了几个（去重后的）基目录。
     #[must_use]
     pub fn len(&self) -> usize {

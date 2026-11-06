@@ -3,7 +3,7 @@ import type { AccountInfo } from "@vaultsyncd/api-client";
 import { Button } from "@vaultsyncd/ui";
 import { BrowserAuth, SignedOut } from "../../services/auth";
 
-type AuthState = { account: AccountInfo | null; client: BrowserAuth | null; busy: boolean; error: string; run: (action: (client: BrowserAuth) => Promise<AccountInfo | null>) => Promise<void> };
+type AuthState = { account: AccountInfo | null; client: BrowserAuth | null; busy: boolean; error: string; reportSignedOut: () => void; run: (action: (client: BrowserAuth) => Promise<AccountInfo | null>) => Promise<void> };
 const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const client = useRef<BrowserAuth | null>(null);
@@ -28,7 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }).finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
   }, []);
-  return <AuthContext.Provider value={{ account, client: client.current, busy, error, run }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ account, client: client.current, busy, error, reportSignedOut: () => setAccount(null), run }}>{children}</AuthContext.Provider>;
 }
 export function useAuth(): AuthState {
   const auth = useContext(AuthContext);
