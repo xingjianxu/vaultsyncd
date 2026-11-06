@@ -38,6 +38,16 @@
         nixpkgsRevision = nixpkgs.rev;
       });
       devShells = forAllSystems (pkgs: {
+        portable-tests = pkgs.mkShell {
+          name = "vaultsyncd-portable-tests";
+          packages = [ pkgs.podman pkgs.docker-compose pkgs.chromium pkgs.btrfs-progs
+            pkgs.qemu pkgs.xorriso pkgs.openssh
+            pkgs.patchelf pkgs.binutils pkgs.util-linux
+            (pkgs.pkgsStatic.qemu-user.override { hostCpuTargets = [ "aarch64-linux-user" ]; })
+            (pkgs.python3.withPackages (ps: [ ps.playwright ])) ];
+          PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+        };
         web-tests = pkgs.mkShell {
           name = "vaultsyncd-web-tests";
           packages = [ pkgs.nodejs pkgs.pnpm pkgs.chromium pkgs.openssh pkgs.openssl (pkgs.python3.withPackages (ps: [ ps.playwright ])) ];

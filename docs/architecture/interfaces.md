@@ -343,7 +343,7 @@ python3 tools/context.py --help
 | --- | --- |
 | 存储单元 | `(FSID, 子卷 ID)`。同子卷的不同路径（bind mount、`..`、符号链接）相等；`same_storage` 据此判定。`fsid` 取自 `BTRFS_IOC_FS_INFO`（无需特权），与 `btrfs filesystem show` 的 UUID 文本一致 |
 | 目录身份 | `(FSID, 子卷 ID, inode)`；inode 只在所属子卷内解释（`same_directory`、`verify_unchanged`） |
-| 子卷 ID 来源优先级 | ① `statx` 的 `STATX_SUBVOL`/`stx_subvol`（内核 6.7 起，**无需特权**）；② `BTRFS_IOC_INO_LOOKUP`（需要 `CAP_SYS_ADMIN`）；③ mountinfo 超级块选项 `subvolid=`（仅当该目录本身就是挂载点）。全部不可用时拒绝，并在输出里保留原始错误 |
+| 子卷 ID 来源优先级 | ① `statx` 的 `STATX_SUBVOL`/`stx_subvol`（内核 6.10 起，**无需特权**）；② `BTRFS_IOC_INO_LOOKUP` 的treeid=0/objectid=256固定根inode查询（同fd、无需特权，不搜索路径）；③ mountinfo 超级块选项 `subvolid=`（仅当该目录本身就是挂载点）。全部不可用时拒绝，并在输出里保留原始错误 |
 | 挂载 ID 来源 | `statx` 的 `STATX_MNT_ID` 直接对应 mountinfo 的挂载 ID；内核不提供时退化为“覆盖该路径的最长挂载点”，并在 `mount_id_source=` 里标明，不假装是内核给出的 |
 | 设备号 | btrfs 每个子卷有独立匿名设备号，`statx` 的 `stx_dev` 与 mountinfo 的 `major:minor` 本来就不同（实测 `statx_device=0:121` vs `mount_device=0:54`）；因此**不用设备号做身份或一致性校验**，只在输出里分别记录 |
 | 符号链接 | `probe_path` 先 `canonicalize` 再以 `O_NOFOLLOW` 打开；别名得到同一身份。运行时以根句柄为边界，注册期 `canonicalize` 不消除之后的 TOCTOU（design §16.1） |
@@ -2529,3 +2529,13 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 - agent固定`--maintenance <upgrade|uninstall-program|uninstall-provider|recover> --program-dir <目录>`验证程序清单和实际同用户IPC进程路径，停机后独占writer锁，固定整套state（含旧WAL）与程序hash备份先于迁移替换。明确S099开发源cf1d174可在暂停、无传输且导出后兼容停止；不猜其它旧程序。失败恢复全套旧库/程序而不再跑新迁移器，原暂停控制单独恢复；屏障/候选/plan及备份留供recover。
 - 默认卸载只删除固定程序/Run/快捷方式，Root/state/cache/dirty与云端占位保留；后者无provider时不能假称完整离线文件。显式provider模式先检查每个Root、拒绝cloud-only/partial/未知，再连续句柄锁定并比较revert前后SHA256，无任何占位才注销CFAPI/Explorer；完整和dirty字节不删，解绑沿用keep-data。沿既有ensure_no_placeholders保护，不把Windows直接注销当数据保全操作。
 - 产品版本0.1.1经S093唯一源同步；IPC1.5与远端协议/数据库schema独立，当前没有旧正式客户端。原生驱动复用S099标准用户/客体私有密码，原LSA仅私有ACL+机器DPAPI保存恢复；不reset密码、不导出秘密、不改在线DB。实际产品1794752原生八段前缀/最终续验分开记录：busy程序升级回退、正常升级、原生默认卸载重装、不完整拒绝通过；人工验证完整缓存恢复不称网络下载，四个完整占位revert后两Root注销、六文件hash与708恢复包文件独立读回通过。原dirty/state/cache保留，原登录恢复且VM在线。精确源与分段范围见S100交接及artifacts/S100/final-matrix.json、driver-provenance.json。
+
+
+### S098 — 通用 Linux 私有 loader 与目标 UAPI
+
+- flake新增portable/portable-aarch64、container-deps两架构及platform-tests-aarch64。Rust/Web同一干净Git flake组件组装；便携目录封装递归ELF库和私有loader，相对wrapper/资源，完整文件SHA256与对应运行库源码归档；runtime无需/nix或Node。镜像构建先核全文件集合/hash/来源归档，固定Ubuntu manifest与.deb摘要，安装步骤离线，不接受手工拼接的旧Web。
+- 共享preflight.py原JSON CLI保持；新增TOML配置/显式state入口，server和init在写DB前执行，真实btrfs/CoW/权限与backup删除选项不放宽。Compose预存在bind/create_host_path:false、非root/只读/无capability；普通systemd显式白名单写路径，均不自动格式化/改Root权限。
+- mounts/raw O_DIRECTORY/O_NOFOLLOW使用目标Linux UAPI（aarch64分别040000/0100000，x86_64为0200000/0400000），IPC与RestrictedDir共用；强制openat2与逐段回退的真实ARM64拒绝边界已通过。测试临时state显式0700，不以umask规避生产私有目录要求。无wire、数据库格式或版本变化。
+- OCI格式转Docker镜像曾真实丢Healthcheck，构建与传递固定Docker格式并比较转移前后配置，不把缺失健康检查当成功。Ubuntu ARM64存储完整链使用专属全系统TCG内核；QEMU-user btrfs ioctl失败保留，未替代原生能力证明。详细操作见docs/operations/linux.md；最终验收/资源清理以S098交接为准。
+
+S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查前返回该FD实际root ID；256不是推断的子卷ID。Ubuntu6.8非特权实际新子卷/嵌套检测及备份链通过，所有来源均不可用仍拒绝。Podman兼容API实测忽略create_host_path:false，因此部署标准入口为deploy/compose/run.py，先核显式存在源再创建资源，服务自身仍执行完整存储预检。镜像构建--offline要求缓存的base架构/精确digest及全部.deb SHA，缺失失败；最终同源09双架构离线镜像及完整Ubuntu运行通过。普通unit源67与09仅镜像构建脚本不同，所有实际服务/Web/库/preflight文件逐SHA相同；JSON旧消费者预检字节亦相同，明确来源组合见curated矩阵。没有协议/持久格式变化，不把TCG证据说成原生性能。

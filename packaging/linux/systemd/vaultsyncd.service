@@ -1,0 +1,37 @@
+[Unit]
+Description=vaultsyncd Linux server
+After=network.target
+RequiresMountsFor=/var/lib/vaultsyncd /srv/vaultsyncd-roots
+
+[Service]
+Type=simple
+User=vaultsyncd
+Group=vaultsyncd
+UMask=0077
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/vaultsyncd/bin/vaultsyncd-server --config /etc/vaultsyncd/vaultsyncd.toml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=120s
+KillSignal=SIGTERM
+StateDirectory=vaultsyncd
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/vaultsyncd
+ReadWritePaths=/var/lib/vaultsyncd /srv/vaultsyncd-roots
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

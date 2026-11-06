@@ -675,6 +675,8 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 | `BTRFS_IOC_FS_INFO` | 非 root 可用，返回的 `fsid` 与 `sudo btrfs filesystem show /data` 的 UUID 完全一致（`13eeae80-1b59-4e17-ae93-172183243973`） |
 | `BTRFS_IOC_INO_LOOKUP` / btrfs 子卷 ioctl | **需要 `CAP_SYS_ADMIN`**：非 root 调用返回 `EPERM`；同一路径的非 root `btrfs subvolume show` 报 `ERROR: Could not search B-tree: Operation not permitted`，加 `sudo` 才给出 `Subvolume ID: 2538`。因此实现优先用 `statx` 的 `STATX_SUBVOL`，旧内核（无该字段）才退回需要特权的 ioctl，最后由 mountinfo 的 `subvolid=`（仅当目录本身是挂载点）兜底 |
 | btrfs 的 `stx_dev` vs mountinfo 设备 | **不同**：子卷挂载点上 `statx_device=0:121`，而 mountinfo 的 `major:minor` 是 `0:54`（btrfs 每个子卷使用独立匿名设备号）。因此设备号不能用于身份或一致性校验，身份改用 `(FSID, 子卷 ID)`，两者都分别打印在输出里 |
+
+S098更正：上表保留S007当时内核/工具的实测历史；STATX_SUBVOL实际始于Linux6.10（不是6.7）。Ubuntu24.04 ARM64内核6.8上实测无该字段、非root INO_LOOKUP为EPERM；同fd的INO_LOOKUP使用treeid=0/objectid=256根inode查询时，在CAP检查前直接返回内核真实子卷ID；旧objectid=0才误入路径搜索。当前实现改为正确查询模式。此结论不授予服务CAP_SYS_ADMIN、不猜mountinfo之外路径的ID。
 | `FS_IOC_GETFLAGS` | 目录与文件均可读（无特权）；`chattr +C` 的目录返回 `0x00800000`（`FS_NOCOW_FL`），普通目录/文件返回 `0x00000000`。内核 7.3 的 `linux/fs.h` 没有独立的 `FS_NODATASUM_FL`，btrfs 的 nodatasum 与 nodatacow 绑定出现，因此检查项为 `FS_NOCOW_FL` + 挂载/超级块选项里的 `nodatacow`/`nodatasum` |
 | reflink（FICLONE） | 同卷跨子卷 `cp --reflink=always` 成功，`filefrag -v` 报告共享 extent；同子卷克隆同样成功；跨文件系统（`/data` → loop btrfs 镜像）失败为 `Invalid cross-device link`，未留下目标文件 |
 
