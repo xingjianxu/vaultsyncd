@@ -2440,3 +2440,10 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 OpenAPI提供固定清单、仅清单内的DB/config/Root对象读取、整体流式export与job status/list。全部重新校验唯一active owner与请求会话，使用锚定RestrictedDir拒绝任意路径；备份包含受限PHC认证材料但sessions失效，不能公开分享。Unix协议特殊export先framed200握手再VSBK001原始字节，逐次写30秒空闲截止；普通请求仍10秒。流规则与0600收据唯一源`api/backup-export.schema.json`，CLI显式prepare/export/verify/release；本地verify不打开在线数据库。损坏或缺终止标记只能incomplete，服务源verified与客户端持久导出verified分别记录。
 
 S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包含11秒后继续完整流与release排队跨10秒后SIGKILL重放；取消verify先撤销旧verified。CLI本地verify只检查归档全部字节和固定清单，SQLite语义由verify-source及离线恢复入口检查。归档与固定摘要收据需一起保管，后续S089可复用纯`Index`/`ArchiveVerifier`和store只读`verify_database`，不可把未verified收据当成功。
+
+
+### S089 — 离线恢复候选与启动屏障
+
+core::backup::restore只消费固定Index/字节与目录事实，验证schema/协议、全Root新空路径映射及命名空间父链，输出普通工作项和保守空间预算。平台restore::Target用锚定RestrictedDir验证真实CoW btrfs、无子卷/挂载/别名并读取fstatfs可用空间。store::restore::plan先验证源DB整体语义后交core规划；apply在短事务更新Root物理映射与全新随机恢复epoch，保留ServerId、Root seq、条目/版本/历史回收站/操作记录，会话失效。
+
+StateLock::try_acquire_file接收平台已安全打开的同一server.lock，flock语义与服务/init相同。离线apply持锁全过程，restore.incomplete先于任何导入写入持久化；bootstrap/init持状态锁后、打开DB前拒绝该标记，不能启动半成品。全部文件与DB核验、目录刷盘后才移除标记；失败现场保留，默认非空目标拒绝重试，改用新空目标，不隐式覆盖。CLI接线和真实证据在S089-c完成后补充。
