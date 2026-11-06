@@ -2484,6 +2484,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaultsyncd-cli"
+version = "0.1.0"
+dependencies = [
+ "rand_core 0.6.4",
+ "rpassword",
+ "serde_json",
+ "tokio",
+ "vaultsyncd-domain",
+ "vaultsyncd-local-ipc",
+ "vaultsyncd-platform-windows",
+]
+
+[[package]]
 name = "vaultsyncd-client-store"
 version = "0.1.0"
 dependencies = [

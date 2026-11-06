@@ -1,5 +1,25 @@
 //! Real native transport and SQLite errors must never become successful empty snapshots.
 use super::*;
+
+#[test]
+fn expired_credentials_are_an_authentication_failure_not_a_blocked_operation() {
+    let request = Request {
+        request_id: "auth-expired".into(),
+        ipc_version: version::supported(),
+        command: Command {
+            name: CommandName::Login,
+            parameters: None,
+        },
+    };
+    let response = management_response(
+        &request,
+        Err(PortError::rejected("AUTH_EXPIRED", "credentials expired")),
+    );
+    assert_eq!(
+        response.error.unwrap().code,
+        LocalIpcErrorCode::Unauthenticated
+    );
+}
 #[tokio::test]
 async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     let nonce = std::time::SystemTime::now()

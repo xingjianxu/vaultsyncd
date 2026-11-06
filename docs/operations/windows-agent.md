@@ -1,6 +1,6 @@
-# Windows 用户会话 agent（S070、S071）
+# Windows 用户会话 agent（S070—S073）
 
-`vaultsyncd-agent.exe` 可在 GUI 尚未启动时独立同步；入口是用户会话进程。S071 提供只读 named pipe 状态查询；管理命令和自动启动注册由后续卡提供。先创建互不重叠的普通本地 NTFS 同步目录、内部缓存目录和状态目录。
+`vaultsyncd-agent.exe` 可在 GUI 尚未启动时独立同步；入口是用户会话进程。S071 提供受限 named pipe 状态查询，S072 提供 1.2 管理命令与持久连接，S073 提供只经该管道工作的 `vaultsyncd-cli.exe`。自动启动注册仍由后续卡提供。先创建互不重叠的普通本地 NTFS 同步目录、内部缓存目录和状态目录。
 
 最小 JSON 配置如下。所有 ID 换为真实的 32 位小写十六进制稳定身份；`root_id` 来自已授权服务端 Root，重启必须复用原身份及绑定路径。
 
@@ -37,8 +37,29 @@ vaultsyncd-agent.exe --config C:/vaultsyncd/agent.json
 
 ## 本机状态 IPC（S071）
 
-真实恢复完成后进程绑定 `\\\\.\\pipe\\vaultsyncd-agent-{token SID}-{token session ID}`；GUI/CLI 应复用 `vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent").request(&Request)`，不猜 SID、不直接打开 `client.sqlite`，不初始化 CFAPI。请求仍只有 `get_status`，4 字节大端长度 + JSON，协议 1.1 向后接受 1.0 请求。应答包含版本和 `bindings` 多维核心快照；计数均十进制文本，不含本机路径与凭据。快照读取失败是失败连接，不是空列表或同步成功；每个 Binding 原子读取，不承诺跨 Binding 一致时刻。
+真实恢复完成后进程绑定 `\\\\.\\pipe\\vaultsyncd-agent-{token SID}-{token session ID}`；GUI/CLI 应复用 `vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent").request(&Request)`，不猜 SID、不直接打开 `client.sqlite`，不初始化 CFAPI。协议 1.2 的 21 项命令闭集与参数见 `api/local-ipc.schema.json`；请求为 4 字节大端长度 + JSON，1.2 向后接受更低的 minor。`get_status` 应答包含版本、`bindings` 多维核心快照与 `management` 结果；计数均十进制文本，不含本机路径与凭据。快照读取失败是失败连接，不是空列表或同步成功；每个 Binding 原子读取，不承诺跨 Binding 一致时刻。
 
 管道只允许当前用户、拒绝远程并双向核对 token；同用户不同权限进程共享信任边界，不把本机管理员视为隔离沙箱。最多8连接，额外连接关闭；完整帧、处理、写入各5秒超时。客户端断线可重连；退出取消部分帧并在 DB 关闭前释放监听。登录专用进程不启动 IPC。
 
-原生传输与错误状态验证：Windows devShell 执行 `tests/platform/windows/run-native-ipc.sh`（临时第二本机账号在 finally 删除）；实际进程加原 S070 产品回归：`VAULTSYNCD_PROCESS_TASK=S071 tests/platform/windows/run-native-process.sh`，先构建上文 Linux helper。S071 使用独立 artifacts/guest driver，不执行 S070 旧样本清理；VM保持在线。管理命令、版本化推送及全量恢复属于 S072，不是本卡提供的接口。
+原生传输与错误状态验证：Windows devShell 执行 `tests/platform/windows/run-native-ipc.sh`（临时第二本机账号在 finally 删除）；实际进程回归按 `VAULTSYNCD_PROCESS_TASK=S071|S072|S073 tests/platform/windows/run-native-process.sh` 选择（先构建上文 Linux helper）；各卡使用独立 artifacts/guest driver，不执行 S070 旧样本清理。S073 模式的测试与 CLI 见下节。
+
+## Windows CLI（S073）
+
+`vaultsyncd-cli.exe` 是同一用户会话里的最小管理入口，只调用运行中 agent 的 named pipe，不打开 `client.sqlite`、不启动 CFAPI、不自己执行同步。常用命令：
+
+```text
+vaultsyncd-cli.exe --json status
+vaultsyncd-cli.exe --json pause --binding-id <32位小写十六进制>
+vaultsyncd-cli.exe --json download --binding-id <ID> --entry-id <ID>
+vaultsyncd-cli.exe --json release --binding-id <ID> --entry-id <ID>
+vaultsyncd-cli.exe --json export-recovery --binding-id <ID> --destination C:/recovery
+vaultsyncd-cli.exe --json roots
+vaultsyncd-cli.exe --json history --binding-id <ID> --entry-id <ID>
+vaultsyncd-cli.exe --json restore --binding-id <ID> --entry-id <ID> --operation-id <ID> --base-revision <N>
+```
+
+`--help` 列出全部命令。登录只能用 `vaultsyncd-cli.exe login --username <账号>`；密码从终端安全输入，或由脚本经标准输入首行提供，**不接受命令行密码**，不会进入 shell 历史、输出或日志。
+
+`--json` 成功/失败均为单行 JSON；没有 `--json` 时输出简短中文摘要，错误写 stderr。退出码固定为 `0` 成功、`2` 用法/输入错误、`3` 无法连接 agent、`4` 未登录/需重新认证、`5` agent 拒绝或执行失败、`6` 协议/应答不兼容。脚本应同时检查退出码与 JSON `error.code`；空结果与失败不能混为一谈。
+
+原生验收：构建 Linux `release-native-server` helper 后，在 Windows devShell 执行 `VAULTSYNCD_PROCESS_TASK=S073 tests/platform/windows/run-native-process.sh`。测试使用真实 agent/CLI/HTTP/SQLite/NTFS，并以进程句柄枚举证明样例管理请求期间 CLI 没有打开 `client.sqlite`；测试只清理自己的 `run-cli-*` 目录与凭据。

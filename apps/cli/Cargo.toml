@@ -1,0 +1,28 @@
+[package]
+name = "vaultsyncd-cli"
+description = "Windows 本机管理 CLI：只经 named pipe 调用运行中的 vaultsyncd-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vaultsyncd-cli"
+path = "src/main.rs"
+
+# CLI 是 Windows 用户会话的命令行入口，只消费 platform-windows 的 named pipe 客户端，
+# 不依赖 client-store、SQLite 或 agent 核心：它不能直接打开 client.sqlite，也不能绕过
+# agent 执行器。非 Windows 目标只编译说明性 stub，便于宿主做参数与输出单元测试。
+[dependencies]
+rand_core = { version = "0.6", features = ["getrandom"] }
+rpassword = "7"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+vaultsyncd-local-ipc = { path = "../../crates/local-ipc" }
+vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
+
+[dev-dependencies]
+vaultsyncd-domain = { path = "../../crates/domain" }
+
+[lints]
+workspace = true
