@@ -1788,3 +1788,51 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 - 扫描不完整（预算）或健康结论不是 `complete` 时**零删除、零移动**；Root 不可用直接中止整轮。
 - 真实 `umount` 需要特权，未在测试里执行：验收用真实目录“改名 + 原路径建空目录”复现卸载后的现场（对 Root 句柄而言与卸载等价），并在平台层用真实目录验证身份漂移与权限回收。
 - 未接入（S052 及后续）：`apply_external_move`/`apply_external_delete` 的 SQLx 适配与回收站落库；进程入口按 Root 运行后台任务；目录级移动识别（`WorkTreePort` 只提供文件指纹，目录改名时其内文件按 inode 逐个保持身份，目录条目本身由存储层补建）；硬链接去重（当前按独立条目处理）。
+
+## crates/transfer — 续传位图与上传/下载执行（S054）
+
+状态：S054 实现。包名 `vaultsyncd-transfer`，仍在 `default-members` 内，**依旧不做 I/O**：不读文件、不建连接、不碰数据库、不看时钟。执行器只通过 `src/ports.rs` 的端口碰外部世界，适配器在别处（`crates/http-client` 的 `uploads`/`content`，`crates/agent-core` 的本地临时文件与进度表）。设计依据 design §13.1—13.3；服务端事实来自 S045/S046 的上传与内容端点。
+
+| 模块 | 契约 |
+| --- | --- |
+| `bitmap` | `PartRange{first_index,count}`（`new` 拒绝 0 块、`indices`、`end_index`）；`PartBitmap::{empty,from_bytes,geometry,contains,mark,count,is_complete,missing,bytes,into_bytes}`。第 i 位 = 第 i 块、低位在前；`from_bytes` 校验长度与尾部 bit，`mark` 越界返回 `IndexOutOfRange`；`BitmapError::{SizeMismatch,TailNotZero,IndexOutOfRange,Unrepresentable}` |
+| `ports` | `PortFuture<'a,T>`；`PortError::{Unavailable{detail,retry_after},ReauthRequired{detail},Cancelled,Rejected{code,detail},Protocol{detail},Local{kind,detail}}` + `is_retryable/is_cancelled/needs_reauth/is_no_space/code`；`LocalErrorKind::{Read,Write,NoSpace,Missing}` |
+| `ports::SnapshotSource` | `identity()`、`total_size()`、`read(offset,length)->Vec<u8>`（短读是错误） |
+| `ports::UploadTarget` | `begin(&SessionSpec{total_size,digest,chunk_size})->UploadSessionInfo`、`status(session)->UploadProgressInfo{session,received,missing}`、`put_part(session,index,&digest,bytes)->PartAck{index,length,digest,already_present}`、`finalize(session)->FinalizedContent{digest,size,part_count,replayed,storage_path}`；`UploadSessionState::{Open,Complete,Finalized,Aborted}` |
+| `ports::VersionedContent` / `VersionPin` | `read_range(&pin,offset,length)`；`VersionPin{binding,entry,version,digest,size}`（`new` 拒绝空身份/控制字符） |
+| `ports::TempContent` | `path()`、`ensure_capacity(needed)`、`write_at(offset,&bytes)`、`read_at(offset,length)`、`sync()`、`discard()` |
+| `ports::DownloadProgressStore` / `StoredProgress` / `DownloadKey` | `load/save/discard`；进度记录 = 块大小 + 总大小 + 临时路径 + 位图（构造时校验几何一致）；键 = `binding/entry/version`（不同版本永不共用位图） |
+| `concurrency` | `CancelToken::{new,cancel,is_cancelled}`（克隆共享）；内部 `bounded_join`（最多 `limit` 个块在飞、遇错停止启动新块并丢弃在飞的 future） |
+| `upload` | `DEFAULT_CHUNK_SIZE=4 MiB`、`DEFAULT_PART_CONCURRENCY=4`、`DEFAULT_PART_ATTEMPTS=2`；`UploadOptions{chunk_size,part_concurrency,part_attempts,cancel}`；`UploadSnapshot{identity,total_size,digest}`、`UploadResume{snapshot,session}`；`run(source,target,Option<&UploadResume>,&UploadOptions)->Result<UploadOutcome,UploadFailure>`；`UploadOutcome{content: ContentReference, session, uploaded_parts, reused_parts, resumed}`；`UploadErrorKind::{InvalidOptions,InvalidSnapshot,ReadSnapshot,SnapshotChanged,SessionMismatch,SessionClosed{state},PartRejected{index,expected,actual},FinalizedMismatch,Cancelled,Port}`；`UploadFailure{kind, resume: Option<Box<UploadResume>>}`（`resume()` 给出可直接持久化的续传信息） |
+| `download` | `DEFAULT_CONTENT_ATTEMPTS=2`；`DownloadOptions{chunk_size,part_concurrency,content_attempts,cancel}`；`run(content,temp,progress,&VersionPin,&DownloadOptions)->Result<DownloadOutcome,DownloadError>`；`DownloadOutcome{temp_path,size,digest,part_count,downloaded_parts,resumed,attempts}`；`DownloadError::{InvalidOptions,NoSpace{needed},Cancelled,ContentMismatch{expected,actual},Port}` |
+| `hash` 增量 | `from_hex(&str)->Result<[u8;32],HexError>`：只接受 64 位**小写**十六进制（大写在契约里不是同一份摘要） |
+
+### 执行顺序与不变量
+
+- **上传**：流式哈希整份快照（窗口 ≤ 块大小）→ 续传先比对快照身份/大小/摘要（任一变化 → `SnapshotChanged`，不碰旧会话）→ 会话事实（总大小、整份摘要、块数）必须等于快照，否则 `SessionMismatch` → 按服务端 `missing` 补块（还核对“缺失区间 = 已收块的补集”）→ `put_part` 的回执索引/长度/摘要都要一致，不符则重读快照重传（`part_attempts`），持续不符 `PartRejected` 且不 finalize → `finalize` 再核对 hash/size/part_count。**finalize 结果只是可提交内容引用，不写 entries/versions/changes/operations**（design §15.2、I01）。
+- **下载**：固定 `VersionPin` → 载入位图（块几何/总大小/临时路径不符即作废）→ `ensure_capacity`（不足 `NoSpace`，不写不删）→ 只取缺失块并写入临时偏移 → `sync` → 流式读回临时文件算整份摘要 → 相符才返回；不符则作废位图与临时内容、有限次重下，仍不符 `ContentMismatch` 且不安装。安装/发布意图/状态更新属上层。
+- **混版本**：摘要相同即内容相同，因此会话摘要与快照摘要相等时复用旧会话安全；不等时立即拒绝。下载键含 VersionId，且整份摘要不符绝不安装——服务端若供给另一版本，结局是失败而不是发布。
+- **不是跨版本块增量**：没有“按块跨版本复用/内容定义分块/增量专用 GC”的入口；位图只在同一次传输的有效性内使用。
+
+验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-transfer`（59 项）、`cargo clippy --locked -p vaultsyncd-transfer --all-targets -- -D warnings`、`cargo fmt --all -- --check`。执行器用内存端口替身验证断线续传、错块重传、取消保留进度与并发上限。
+
+## crates/http-client — 上传会话与固定版本内容端点（S054）
+
+状态：S054 实现。新增两个模块，均实现上面的 `crates/transfer` 端口，错误分类沿用 S053 的 `ClientError` → `PortError` 映射；不引入第二套 DTO（响应类型来自 `vaultsyncd_protocol::generated`）。
+
+| 模块 | 契约 |
+| --- | --- |
+| `uploads::UploadEndpoint<T: Transport>` | `new(client, root)`（Root 非 32 位小写十六进制 → `ClientError::InvalidRequest`，触网前失败）、`client()`、`root()`；实现 `UploadTarget`：`POST /v1/roots/{root}/uploads`、`GET …/uploads/{upload}`、`PUT …/uploads/{upload}/parts/{index}`（`content-type: application/octet-stream` + 必发 `x-part-sha256`）、`POST …/uploads/{upload}/finalize`（无请求体）。`PART_DIGEST_HEADER = "x-part-sha256"` |
+| `content::ContentEndpoint<T: Transport>` | `new(client, root)`、`client()`、`root()`；实现 `VersionedContent`：`GET /v1/roots/{root}/entries/{entry}/versions/{version}/content` + `Range: bytes=start-end`。`CONTENT_DIGEST_HEADER = "x-content-sha256"` |
+| `content::parse_content_range` / `ContentRange` | `bytes start-end/total` → `{first,last,total}` + `length()`；非 `bytes ` 前缀、非规范十进制、起点大于终点 → 协议错误 |
+
+### 请求与校验规则（不可绕过）
+
+- **身份只接受 32 位小写十六进制**：Root、上传会话、条目、版本在拼 URL 之前校验（`is_identity`/`require_identity`），杜绝把 `../` 之类拼进路径。
+- **块摘要一定要发**：`x-part-sha256` 是 64 位小写十六进制；服务端在写盘前用它核对字节。
+- **区间响应必须自洽**：带 `Content-Range` 时起点/长度/总长都要与请求和 `VersionPin.size` 一致；整份 200 响应只接受“从 0 开始且长度等于版本大小”；缺少 `Content-Range` 的 206 是协议错误；响应体长度不等于请求长度是协议错误（短读不补零）。
+- **整份摘要提前核对**：响应带 `x-content-sha256` 且与固定版本摘要不同 → 协议错误（不用下完整份才发现是别的版本）。
+- **错误分类**：`ClientError` → `PortError`：`Timeout`/可重试 `Transport`/5xx 非信封/`Api{retryable:true}`（带 `Retry-After`）→ `Unavailable`；`Api{retryable:false}` → `Rejected{code}`；401/刷新失败/无凭据 → `ReauthRequired`；证书、协议、请求构造 → `Protocol`（不可重试）；`Cancelled` → `Cancelled`。
+- **没有“提交条目”的入口**：`finalize` 只返回内容引用；提交与 committed 确认由 agent 执行器用 `OpId` 完成。
+
+验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-http-client`（60 项 + 1 doctest，其中 `flow_tests` 用传输替身当契约服务端跑通断线续传/错块重传/固定版本下载）、`cargo clippy --locked -p vaultsyncd-http-client --all-targets -- -D warnings`。

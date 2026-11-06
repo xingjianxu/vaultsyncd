@@ -2475,6 +2475,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "vaultsyncd-protocol",
+ "vaultsyncd-transfer",
 ]
 
 [[package]]
@@ -2576,6 +2577,7 @@ name = "vaultsyncd-transfer"
 version = "0.1.0"
 dependencies = [
  "sha2",
+ "tokio",
 ]
 
 [[package]]
