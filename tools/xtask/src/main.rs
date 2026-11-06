@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode, Output};
 
 mod boundaries;
 mod generate;
+mod release;
 
 /// 子命令成功。
 pub(crate) const EXIT_OK: u8 = 0;
@@ -36,6 +37,8 @@ vaultsyncd 任务编排（xtask）。用法：cargo xtask <子命令>
   generate  从 api/openapi.yaml 生成远端 Rust DTO 与 TypeScript 客户端，从
             api/local-ipc.schema.json 生成本机 IPC Rust DTO 与 TypeScript 类型；
             `--check` 只比对不写入，用于 CI 与“重新生成无 diff”验收
+  version   检查产品版本镜像；--sync 从 Cargo workspace.version 同步JSON（不改协议）
+  release   build/assemble/verify 真实产物记录与同提交清单
   package   产品打包（尚未实现）
   help      显示本帮助
 
@@ -103,6 +106,8 @@ fn main() -> ExitCode {
         "check" => run_check(&rest),
         "check-boundaries" => boundaries::run(&rest),
         "generate" => generate::run(&rest),
+        "version" => release::run_version(&rest),
+        "release" => release::run(&rest),
         "package" => run_unimplemented("package", &rest),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");

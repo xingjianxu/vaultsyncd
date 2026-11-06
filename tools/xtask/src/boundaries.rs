@@ -358,6 +358,7 @@ fn source_check(path: &Path) -> Result<(), String> {
     Ok(())
 }
 pub(crate) fn verify(root: &Path) -> Result<(), String> {
+    crate::release::verify_version(root)?;
     generate::verify()?;
     for target in TARGETS {
         cargo_graph(root, target)?;
