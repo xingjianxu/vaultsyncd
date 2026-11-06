@@ -13,6 +13,7 @@ resolver = "3"
 # 默认目标）不会构建服务端应用。
 members = [
     "apps/agent",
+    "apps/cli",
     "apps/server",
     "crates/agent-core",
     "apps/server-admin",

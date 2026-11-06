@@ -6,12 +6,21 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
 root=$(repo_root)
 cd "$root"
-# S071 reuses the real-process regression but never runs S070's old-sample cleanup test.
+# S071/S072/S073 reuse the real server bridge but never run S070's old-sample cleanup test.
 task="${VAULTSYNCD_PROCESS_TASK:-S070}"
+test_package=vaultsyncd-agent
+test_target=native_process
+with_cli=''
 case "$task" in
     S070) native_test=all ;;
     S071) native_test=native_headless_import_real_sync_queue_restart_and_single_instance ;;
     S072) native_test=management_native::native_management_every_command ;;
+    S073)
+        test_package=vaultsyncd-cli
+        test_target=native_cli
+        native_test=native_cli_management_acceptance
+        with_cli=1
+        ;;
     *) echo 'unsupported native process task' >&2; exit 1 ;;
 esac
 artifact_dir="$root/artifacts/$task/native-$(date +%s)-$$"
@@ -49,7 +58,10 @@ sleep .5
 kill -0 "$tunnel_pid" || { cat "$artifact_dir/tunnel.log"; exit 1; }
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent --bin vaultsyncd-agent
-cargo xwin test --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent --test native_process --no-run --message-format=json > "$artifact_dir/build.json"
+if [ -n "$with_cli" ]; then
+    cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-cli --bin vaultsyncd-cli
+fi
+cargo xwin test --locked --target "$TARGET_TRIPLE" -p "$test_package" --test "$test_target" --no-run --message-format=json > "$artifact_dir/build.json"
 built=$(python3 - "$artifact_dir/build.json" <<'PY'
 import json,sys
 for line in open(sys.argv[1]):
@@ -72,6 +84,8 @@ if ($Worker) {
     $env:VAULTSYNCD_PROCESS_CLEANUP_ALLOWLIST=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CleanupAllowlist))
     $env:VAULTSYNCD_PROCESS_FIXTURE=$fixture
     $env:VAULTSYNCD_AGENT_EXE=Join-Path $PSScriptRoot 'vaultsyncd-agent.exe'
+    $cli=Join-Path $PSScriptRoot 'vaultsyncd-cli.exe'
+    if (Test-Path $cli) {$env:VAULTSYNCD_CLI_EXE=$cli}
     try {
         $p=New-Object System.Diagnostics.Process
         $p.StartInfo.FileName=$exe
@@ -83,7 +97,7 @@ if ($Worker) {
         $p.Start() | Out-Null
         $stdout=$p.StandardOutput.ReadToEndAsync(); $stderr=$p.StandardError.ReadToEndAsync()
         $p.WaitForExit()
-        ($stdout.Result+$stderr.Result) | Set-Content (Join-Path $PSScriptRoot 'process.log')
+        [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'process.log'), ($stdout.Result+$stderr.Result), (New-Object Text.UTF8Encoding($false)))
         $p.ExitCode | Set-Content (Join-Path $PSScriptRoot 'process.exit')
     }
     catch {$_ | Out-String | Add-Content (Join-Path $PSScriptRoot 'process.log'); '99' | Set-Content (Join-Path $PSScriptRoot 'process.exit')}
@@ -93,6 +107,7 @@ if ((Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $ExpectedH
 if ((Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant() -ne $FixtureHash) {throw 'fixture transport mismatch'}
 Write-Output "guest_test_sha256 $ExpectedHash"
 Write-Output ('guest_agent_sha256 '+(Get-FileHash (Join-Path $PSScriptRoot 'vaultsyncd-agent.exe') -Algorithm SHA256).Hash.ToLowerInvariant())
+if (Test-Path (Join-Path $PSScriptRoot 'vaultsyncd-cli.exe')) {Write-Output ('guest_cli_sha256 '+(Get-FileHash (Join-Path $PSScriptRoot 'vaultsyncd-cli.exe') -Algorithm SHA256).Hash.ToLowerInvariant())}
 $task='vaultsyncd-s070-process-'+[Guid]::NewGuid().ToString('N')
 $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker -CleanupAllowlist $CleanupAllowlist -TestName $TestName"
 $principal=New-ScheduledTaskPrincipal -UserId 'Quickemu' -LogonType Interactive -RunLevel Limited
@@ -101,14 +116,18 @@ try {
     Start-ScheduledTask -TaskName $task
     $end=(Get-Date).AddSeconds(240)
     while (!(Test-Path (Join-Path $PSScriptRoot 'process.exit'))) {if ((Get-Date) -ge $end) {throw 'native process timeout'};Start-Sleep -Milliseconds 200}
-    Get-Content (Join-Path $PSScriptRoot 'process.log')
+    Get-Content (Join-Path $PSScriptRoot 'process.log') -Encoding UTF8
     $result=[int](Get-Content (Join-Path $PSScriptRoot 'process.exit'))
 } finally {Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue;Remove-Item -LiteralPath $fixture -Force}
 exit $result
 PS
 guest_dir="C:/vaultsyncd-lab/${task,,}-driver-$$"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir' | Out-Null\""
-GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
+if [ -n "$with_cli" ]; then
+    GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "target/$TARGET_TRIPLE/debug/vaultsyncd-cli.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
+else
+    GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
+fi
 guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-process.ps1 -ExpectedHash $host_hash -FixtureHash $fixture_hash -CleanupAllowlist $cleanup_allowlist -TestName $native_test" | tee "$artifact_dir/native-tests.log"
 guest_ssh "powershell -NoProfile -Command \"Remove-Item -LiteralPath '$guest_dir' -Recurse -Force\""
 echo "MATCH s070-process-tests.exe $host_hash"

@@ -209,12 +209,13 @@ pub(crate) fn management_response(
             let (code, retryable) = match source_code {
                 "NOT_FOUND" => (LocalIpcErrorCode::NotFound, false),
                 "INVALID_ARGUMENT" | "PATH_OVERLAP" => (LocalIpcErrorCode::InvalidArgument, false),
-                "REAUTH_REQUIRED" | "UNAUTHORIZED" => (LocalIpcErrorCode::Unauthenticated, false),
+                "REAUTH_REQUIRED" | "UNAUTHORIZED" | "AUTH_EXPIRED" => {
+                    (LocalIpcErrorCode::Unauthenticated, false)
+                }
                 "ALREADY_EXISTS" | "OP_ID_REUSED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" => {
                     (LocalIpcErrorCode::Conflict, false)
                 }
                 "ACCESS_DENIED"
-                | "AUTH_EXPIRED"
                 | "VERSION_GONE"
                 | "INVALID_REQUEST"
                 | "INVALID_NAME"
@@ -223,6 +224,7 @@ pub(crate) fn management_response(
                 | "INSUFFICIENT_STORAGE" => (LocalIpcErrorCode::Blocked, false),
                 "NOT_READY"
                 | "BINDING_BLOCKED"
+                | "BINDING_UNBOUND"
                 | "MODE_REQUIRES_LOCAL_COPY"
                 | "LOCAL_CHANGED"
                 | "LOCAL_IN_USE"
@@ -239,6 +241,7 @@ pub(crate) fn management_response(
                         | "ALREADY_EXISTS"
                         | "NOT_READY"
                         | "BINDING_BLOCKED"
+                        | "BINDING_UNBOUND"
                         | "LOCAL_IN_USE"
                         | "UNKNOWN_LOCAL_STATE"
                         | "PENDING"

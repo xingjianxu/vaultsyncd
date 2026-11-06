@@ -2307,3 +2307,13 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `crates/client-store` 迁移 0011 增加无凭据 `agent_connection(singleton,server_id,server_url,ca_file)`；10→11 升级保留未确认内容与队列、生成备份、拒绝旧 writer，初始建库包含该表。
 - `GET /v1/roots/{root}/entries/{entry}/history` 与 `GET /v1/roots/{root}/trash` 需要 Root 授权，按稳定身份 `after` 分页、最多 100 项，返回 `RecoveryPage`；未知/重复参数 400、越权 403、条目不存在 404。回收站恢复事件携带提交后的 revision、parent、version、hash、size。`api/openapi.yaml` 与 `packages/api-client` 同步生成；`packages/local-ipc-types` 导出 1.2 类型和解码器。
 - 原生验收入口：`VAULTSYNCD_PROCESS_TASK=S072 tests/platform/windows/run-native-process.sh`，在真实 Windows 用户会话启动产品 agent，逐项调用 21 个命令并验证参数负例、版本拒绝、Credential Manager 登录、真实 HTTP/SQLite/文件副作用、问题重试、恢复包与凭据脱敏。S071 的 `VAULTSYNCD_PROCESS_TASK=S071` 真实进程回归继续复用。
+
+## S073 Windows CLI 最小管理入口
+
+- 新包 `apps/cli`（`vaultsyncd-cli`，产物 `vaultsyncd-cli.exe`）只依赖 `vaultsyncd-local-ipc`、`vaultsyncd-platform-windows`、Tokio、`rpassword` 与 `rand_core`；**不依赖** `vaultsyncd-client-store`、SQLx 或 agent 核心。它无法直接打开 `client.sqlite`，也不自行判断暂停/释放/恢复是否安全，所有副作用仍由运行中的 agent 执行器复核。该包在 `members` 中、不在 `default-members`（Windows 用户会话入口，宿主只跑参数/输出单元测试）。
+- 命令映射：`status`→`get_status`，`subscribe-status`→`subscribe_status`，`connection`/`set-connection`/`login`/`logout`，`roots`，`bindings`/`create-binding`/`pause`/`resume`/`mode`/`detach`，`download`/`release`，`problems`/`retry`，`history`/`trash`/`restore`，`export-recovery`。`download`/`release` 缺省生成规范 32 位十六进制 `operation_id`；ID、路径、修订和模式仍由 `crates/local-ipc::commands::validate` 与 agent 复核。
+- 全局 `--json`/`-j` 输出单行信封：成功 `{ok:true,command,result:GetStatusResult}`，失败 `{ok:false,command,error:{code,message,retryable},exit_code}`。成功应答缺少该命令必需结果（Binding/问题/条目/连接/导出计数/状态快照）时以 `protocol_error` 失败，不把缺失字段显示成空列表或成功。输出与日志不再打印请求，不含密码、token 或命名管道 SID。
+- 稳定退出码：`0` 成功；`2` CLI 用法/本地输入错误（未知命令/选项、缺参数、`--password`、空密码）；`3` 无法连接 agent（管道不存在/拒绝/断连/超时，JSON code `agent_unavailable`）；`4` 未登录或需重新认证（agent `unauthenticated`）；`5` agent 拒绝或执行失败（其余稳定错误码）；`6` 协议版本或应答不兼容（`unsupported_version`/`protocol_error`）。
+- 登录密码只从标准输入读取：终端使用 `rpassword` 不回显，管道只读首行；`login` 不接受 `--password`，密码不进入 argv、shell 历史、JSON、stderr 或日志。请求中的瞬时密码随请求释放，agent 仅写 current-user Credential Manager。
+- 为让 CLI 失败说明准确，agent 的 IPC 错误映射补充：`AUTH_EXPIRED` 归为 `unauthenticated`（需登录/刷新，不再误报 `blocked`）；`BINDING_UNBOUND`（已解绑后恢复/切模式）归为 `blocked`，不再落入 `unavailable`。
+- 原生验收入口：先构建 Linux helper，再在 Windows devShell 运行 `VAULTSYNCD_PROCESS_TASK=S073 tests/platform/windows/run-native-process.sh`。`apps/cli/tests/native_cli.rs` 启动真实产品 agent/CLI，覆盖查询、未登录、错误密码、设置连接/登录、创建/暂停/恢复/解绑、下载/释放成功与暂停/完整模式/不存在条目的失败、模式切换、问题/历史/回收站、恢复导出及重复导出失败、登出与 agent 停止后的连接失败；用 `NtQuerySystemInformation` 枚举 CLI 进程句柄，断言样例请求期间没有任何 `client.sqlite` 文件句柄，并核对 JSON/agent 日志不含测试密码或 token。
