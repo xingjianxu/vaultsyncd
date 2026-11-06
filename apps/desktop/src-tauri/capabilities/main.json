@@ -1,8 +1,21 @@
 {
   "identifier": "main",
-  "description": "Only the bundled main window may read agent status.",
+  "description": "Only bundled main window can manage explicit local agent connections and bindings.",
   "local": true,
-  "windows": ["main"],
-  "platforms": ["windows"],
-  "permissions": ["allow-agent-get-status"]
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "permissions": [
+    "allow-agent-get-status",
+    "allow-agent-set-connection",
+    "allow-agent-login",
+    "allow-agent-logout",
+    "allow-agent-list-roots",
+    "allow-agent-create-binding",
+    "allow-agent-pause-binding",
+    "allow-agent-resume-binding"
+  ]
 }

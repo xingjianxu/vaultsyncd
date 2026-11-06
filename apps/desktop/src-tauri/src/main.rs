@@ -2,6 +2,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod commands;
+#[cfg(windows)]
 mod shell;
 
 fn main() {

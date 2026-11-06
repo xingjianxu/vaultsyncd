@@ -2347,7 +2347,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 ## S080 Windows Tauri 壳与状态桥
 
 - `apps/desktop/src-tauri` 是根 Cargo workspace 的 `vaultsyncd-desktop`，共用根锁；Tauri 仅 Windows 目标构建。默认构建内嵌 `../dist`，先在默认 devShell 执行桌面 `build`，再在 windows devShell 用 `cargo xwin build --locked --target x86_64-pc-windows-msvc -p vaultsyncd-desktop` 构建。Windows shell 增加锁定 Python 供原生验收哈希清单。
-- 唯一正式 command `agent_get_status() -> Result<GetStatusResult, {code,message}>`；无参数，仅连接 `Endpoint::current("vaultsyncd-agent")`，继承 SID/session/服务端身份核验和传输上限；不接受调用方指定路径/管道/系统命令，不直接打开 DB 或返回凭据。错误码为 `unavailable/agent_rejected/invalid_response`，消息不回显内部路径。
+- S080 初始正式 command `agent_get_status() -> Result<GetStatusResult, {code,message}>`；无参数，仅连接 `Endpoint::current("vaultsyncd-agent")`，继承 SID/session/服务端身份核验和传输上限；不接受调用方指定路径/管道/系统命令，不直接打开 DB 或返回凭据。错误码为 `unavailable/agent_rejected/invalid_response`，消息不回显内部路径。
 - `AppManifest` 显式命令清单和 `capabilities/main.json` 仅允许内置 `main` 窗口的 `allow-agent-get-status`。无远程 capability、shell/fs/SQL 插件；CSP 与导航仅内置应用来源。托盘打开/退出仅影响 GUI，agent 不归壳进程管理。前端成功读取后显示 agent 已连接，不把它表示为文件同步成功。
 - 原生验收 `tests/platform/windows/run-native-desktop.sh`：先复核 EXE SHA-256，再在 Interactive/Limited 用户会话启动独立 agent 与真 WebView，实际状态/拒绝命令/GUI 退出不停止 agent。`native-acceptance` feature 才包含测试脚本、报告 command 和动态测试 capability；正式构建清理遗留测试权限元数据，未编译报告入口。报告与测试状态在 run_id 目录，VM 保持在线。
 
@@ -2375,3 +2375,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 服务HTTP submit整体持读门（含restore/conflict/create/put），finalize/download/uploads和观察器run_once持同一读门；版本租约写入由SQLite事务与collectable触发器共同围栏。SQL同时拒绝collectable的新版本、租约、上传和备份租约，幂等对象登记不能复活deleting。过期上传status/put/finalize按不可用会话404回答，禁止重放已经失去保护的旧finalize引用。
 - `apps/server::gc::run_once(database,state_dir,now) -> io::Result<Report>` 在独占门下先清过期未完成上传，再标记/复核/删对象；外部观察后台每轮释放读门后调用。候选storage_path必须等于ObjectLayout规范路径，目录用RestrictedDir/fd锚定，拒绝符号链接；已有字节核对SHA-256与单链接，unlink+父目录fsync成功后才数据库收尾。marked/deleting/unlink边界被SIGKILL后重复继续；坏路径、坏内容、存储失败保留证据并明确报错。
 - 临时清理只处理过期aborted上传的登记块、规范未登记块、`.index.pid.tmp` 和该UploadId的`.assemble-*`/`finalize-*`暂存名。块和会话元数据在相应删除刷盘后清理，缺目录按已不存在幂等收尾；有效及finalized上传、未知名字/类型、用户Root、客户端dirty与完整缓存不参与。Report区分objects/parts/temporary_files；未匹配任何已知过期会话的孤立暂存不凭mtime猜测删除。
+
+## S081 桌面连接与绑定管理
+
+- `apps/desktop/src-tauri/src/commands.rs` 提供八个固定 command：`agent_get_status/agent_set_connection/agent_login/agent_logout/agent_list_roots/agent_create_binding/agent_pause_binding/agent_resume_binding`。每项同时进入 AppManifest 和仅内置主窗口 capability；内部 `exchange` 先复用 IPC 参数校验，后连当前 SID/session 的固定 agent 管道。前端没有任意 command、管道、shell、文件读取或数据库入口。
+- TS `AgentClient` 对应八个类型化方法；连接和创建输入结构拒绝未知字段。`ConnectionInput` 只含 serverId/serverUrl/caFile，服务器身份由管理员提供（当前协议无公开身份发现端点）；`BindingInput` 只含规范 bindingId/rootId/localPath/mode。缓存由桥派生在 `%LOCALAPPDATA%/vaultsyncd/binding-cache/<bindingId>`，agent 复核实际物理路径与范围。密码只在瞬时登录请求内，页面提交后清空；凭据仍由 agent WinCred 保存，结果不返回 token。
+- 连接页提供地址、账号、显式附加CA；绑定页读取授权Root、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
+- agent 保留管理连接证书错误 `CERTIFICATE_INVALID`（blocked/不可自动重试）和目录错误 `LOCAL_PATH_UNAVAILABLE`（invalid_argument），返回核对名称/CA或现有NTFS目录的说明，不回显底层自由错误或凭据。Root/登录仍走现有认证用例，IPC schema 无变更。
+- `run-native-bindings.sh` 复用真实 Linux btrfs 实例，私有测试TLS+认证SSH回环隧道，Windows真React表单经桥/管道操作。先不信任CA而失败，再显式CA成功；验证错误目录、双方非空首合并、暂停恢复、关闭GUI后新文件上传与服务端真实字节。脚本/fixture注入仅 native-acceptance feature，正式程序不包含。生产HTTPS部署仍由S097验收。
