@@ -10,12 +10,13 @@
 //! - **回答**：`committed` 是终态 200，`rejected` 是稳定的 409 加错误信封，**`pending` 是 202** 且
 //!   响应体里不出现 `revision`/`root_seq`/`version_id`/`entry_id`——已受理不等于已同步（I01）。
 //!
-//! # 本版的行为边界（S047）
+//! # 命令体的执行链路（S052 已装配）
 //!
-//! 命令体的执行链路（put/create/move/delete/restore 的提交协调与其存储/工作目录适配器）还没有装配，
-//! 那属服务端整合闭环（S052）。因此**新命令一律显式 503 `SERVICE_NOT_READY`**：不登记 `operations`
-//! 行、不追加事件批次、不返回 202 的“已受理”假象。已有的操作记录（`pending`/`committed`/
-//! `rejected`）照真实语义回答——重试、响应丢失与结果查询在本版就是完整可用的。
+//! put/create/move/delete/restore 的提交协调与存储/工作目录适配器已由 S052 接上：新命令先登记
+//! `operations`（`pending`），执行器完成才写终态并返回 200；执行失败保留稳定 `rejected` 或继续
+//! `pending` 待启动补完，绝不把 `pending` 说成 committed。自写意图、观察器采纳与命令共用同一把
+//! 发布门（见 `bootstrap`/`recovery`）。已有的操作记录（`pending`/`committed`/`rejected`）按重放
+//! 语义回答——重试、响应丢失与结果查询都是完整的。
 //!
 //! 失败映射（design §15.4）：凭据 401 `AUTH_EXPIRED`、越权 403 `ACCESS_DENIED`、形状 400
 //! `INVALID_REQUEST`、同 OpId 不同请求 409 `OP_ID_REUSED`、过期基线/子树 409、旧 epoch 410
@@ -158,8 +159,8 @@ pub async fn submit(
         };
     }
 
-    // 新命令：内容 put 走真实执行链路（意图 → 发布 → 元数据事务）；其余命令的适配器尚未落地，
-    // 继续显式 503 `SERVICE_NOT_READY`，不写任何状态、不伪造成功。
+    // 新命令：put 走 executor 的发布链路，其余命令走 commands/restore_ops/conflict_ops；两者都是
+    // 先登记 pending、再由执行器写终态，不写状态就当没受理。
     let at = match crate::executor::server_now() {
         Ok(at) => at,
         Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(root_id)),

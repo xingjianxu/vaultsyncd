@@ -18,8 +18,9 @@
 //! 失败分类沿用核心的 [`PutFailure`]：`ENOSPC`/`EDQUOT` 映射成 `INSUFFICIENT_STORAGE`（507），
 //! 存储/数据库故障 `NEEDS_RECOVERY`（503），过期基线 `BASE_MISMATCH`（409）等。
 //!
-//! 其余命令见 `commands`/`restore_ops`/`conflict_ops`；目录回收站恢复仍显式未就绪。
-//! 启动补完尚未装配，有未完成意图时停写，不能据正常路径测试宣称已完成崩溃恢复。
+//! 其余命令见 `commands`/`restore_ops`/`conflict_ops`（含目录回收站整组恢复）。
+//! 启动补完在 `replay::registered` 里装配：有未完成意图时先停写，按持久关联补完同一操作；
+//! 现场不符（第三种内容、前像被改、意图损坏、关联缺失）保持停写并保留证据。
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
