@@ -11,6 +11,7 @@ task="${VAULTSYNCD_PROCESS_TASK:-S070}"
 case "$task" in
     S070) native_test=all ;;
     S071) native_test=native_headless_import_real_sync_queue_restart_and_single_instance ;;
+    S072) native_test=management_native::native_management_every_command ;;
     *) echo 'unsupported native process task' >&2; exit 1 ;;
 esac
 artifact_dir="$root/artifacts/$task/native-$(date +%s)-$$"
