@@ -11,8 +11,9 @@
 //! `VACUUM INTO` 一致性备份、WAL/外键/短事务连接选项）、[`bindings`]（绑定与同步模式）、
 //! [`entries`]（基线、远端状态、本地观察三张互相独立的表）、[`queue`]（待执行本地操作），以及
 //! S031 的 [`events`]（事件批次、接收游标与应用游标）、[`transfers`]（入站内容块位图与取消
-//! 状态）、[`intents`]（可恢复的本地动作）、[`notifications`]（问题的去重、已读与恢复）。后续卡
-//! 的迁移只往 `crates/client-store/migrations/` 追加文件，不改写已发布的迁移。
+//! 状态）、[`intents`]（可恢复的本地动作）、[`notifications`]（问题的去重、已读与恢复），以及
+//! S055 的 [`upload_resumes`]（出站上传的快照与会话续传记录）。后续卡的迁移只往
+//! `crates/client-store/migrations/` 追加文件，不改写已发布的迁移。
 //!
 //! 持久化的关键不变量（design §7.3、§8.4、§6）：
 //!
@@ -31,6 +32,7 @@ pub mod intents;
 pub mod notifications;
 pub mod queue;
 pub mod transfers;
+pub mod upload_resumes;
 
 #[cfg(test)]
 mod test_support;

@@ -84,6 +84,29 @@ pub(crate) fn tx_id(marker: u8) -> TxId {
     identity(marker, TxId::from_bytes)
 }
 
+/// 在已开的事务里入队一条最小操作（无依赖、无基线），供需要 `pending_ops` 外键的测试使用。
+pub(crate) async fn enqueue_op(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    binding: BindingId,
+    op: OpId,
+) {
+    crate::queue::enqueue(
+        tx,
+        &crate::queue::NewPendingOp {
+            op,
+            binding,
+            kind: "upload_content".to_owned(),
+            entry: None,
+            baseline_revision: None,
+            baseline_version: None,
+            depends_on: None,
+            pinned_version: None,
+        },
+    )
+    .await
+    .expect("入队测试操作");
+}
+
 /// 建一个测试绑定并提交，返回它的身份。`local_path` 带上标记，避免两个绑定看起来一样。
 pub(crate) async fn seed_binding(database: &Database, marker: u8) -> BindingId {
     let id = binding_id(marker);
