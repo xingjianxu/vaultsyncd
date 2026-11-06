@@ -109,7 +109,7 @@
 | S084 | 客户端未上传数据恢复演练 | W | S083、S064 | todo | — | 未执行 | — | agent/tasks/S084.md（执行时创建） |
 | S085 | 历史保留与对象引用标记 | L | S040、S029 | done | `ae6a8c7`；基线 `b5be427`；任务树 `.worktrees/s085` | core/store 新增 GC 3+3 项，完整 lib 311/84 通过；clippy/fmt通过；业务时间保留30天与活动引用标记 | 无；pending/备份保守保护整Root，删除协调留S086 | agent/tasks/S085.md |
 | S086 | GC 删除协调与临时清理 | L | S085、S037 | done | `7c79ae1`、`accc684`；基线 `8088615`；分支 `feat/S086-gc-sweep` | 专属target：core313/store88/server89＋集成36，共526/0；btrfs GC8项含3边界SIGKILL/FULL/越界保护；三包clippy/fmt通过 | 无；孤立未知暂存保守保留，备份复用同一对象门 | agent/tasks/S086.md（+a/b） |
-| S087 | 一致性备份快照与租约 | L | S086、S048 | in_progress | 基线 `6ebb2d0`；分支 `feat/S087-backup-prepare` | 原生btrfs验收通过：外部写420次/seq2、WAL/历史/回收站/哈希/ro/租约防GC、失败与SIGKILL恢复；最终回归中 | 需专用backup挂载user_subvol_rm_allowed；测试卷待收尾清理 | agent/tasks/S087.md（+a/b/c） |
+| S087 | 一致性备份快照与租约 | L | S086、S048 | done | `813cf39`、`84c7512`；基线 `6ebb2d0`；分支 `feat/S087-backup-prepare` | 独立target四包573＋集成36，共609/0；btrfs持续写218次固定seq2、历史/回收站/hash/ro/租约、失败与SIGKILL恢复；clippy/fmt/Windows store检查通过 | 无；部署需私有CoW btrfs和user_subvol_rm_allowed，CLI/export/verify/release归S088；测试卷已清理 | agent/tasks/S087.md（+a/b/c） |
 | S088 | 备份导出、校验与释放接口 | L | S087、S075 | todo | — | 未执行 | — | agent/tasks/S088.md（执行时创建） |
 | S089 | 离线恢复到空目录 | L | S088、S037 | todo | — | 未执行 | — | agent/tasks/S089.md（执行时创建） |
 | S090 | Web 备份管理入口 | B | S079、S088 | todo | — | 未执行 | — | agent/tasks/S090.md（执行时创建） |
