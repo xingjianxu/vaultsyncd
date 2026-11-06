@@ -1147,4 +1147,95 @@ mod tests {
             vec![("server_id".to_owned(), "abcd".to_owned())]
         );
     }
+
+    /// 真实 0001—0008（S052 之前已发布）→ 当前迁移集合：旧的、未关联完整操作键的意图必须原样保留，
+    /// 新表为空；不为它们编造关联。升级前有一致性备份，且备份里没有新表。
+    #[tokio::test]
+    async fn released_v8_database_upgrades_without_inventing_intent_links() {
+        let dir = TestDir::new("journal-upgrade");
+        let path = dir.database();
+        let released: Vec<(String, &str)> = [
+            (
+                "0001_initial.sql",
+                include_str!("../migrations/0001_initial.sql"),
+            ),
+            (
+                "0002_namespace.sql",
+                include_str!("../migrations/0002_namespace.sql"),
+            ),
+            (
+                "0003_versions_events.sql",
+                include_str!("../migrations/0003_versions_events.sql"),
+            ),
+            (
+                "0004_uploads_intents_leases.sql",
+                include_str!("../migrations/0004_uploads_intents_leases.sql"),
+            ),
+            (
+                "0005_trash.sql",
+                include_str!("../migrations/0005_trash.sql"),
+            ),
+            (
+                "0006_sessions.sql",
+                include_str!("../migrations/0006_sessions.sql"),
+            ),
+            (
+                "0007_snapshots.sql",
+                include_str!("../migrations/0007_snapshots.sql"),
+            ),
+            (
+                "0008_conflicts.sql",
+                include_str!("../migrations/0008_conflicts.sql"),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, sql)| (name.to_owned(), sql))
+        .collect();
+        let files: Vec<(&str, &str)> = released.iter().map(|(n, q)| (n.as_str(), *q)).collect();
+        let previous = migrator(&dir.migrations(&files)).await;
+        let old = Database::open_with(&path, &previous)
+            .await
+            .expect("建 v8 库");
+        assert_eq!(old.schema_version(), 8);
+        let mut tx = old.begin_write().await.expect("写事务");
+        sqlx::query("INSERT INTO users(id,login,password_hash,status) VALUES (x'01010101010101010101010101010101','o','h','active')")
+            .execute(&mut *tx).await.expect("用户");
+        sqlx::query("INSERT INTO roots(id,owner_id,absolute_path,volume_identity,root_file_identity,health,seq,epoch) VALUES (x'02020202020202020202020202020202',x'01010101010101010101010101010101','/r',x'01',x'01','healthy',0,1)")
+            .execute(&mut *tx).await.expect("Root");
+        sqlx::query("INSERT INTO fs_intents(intent_id,root_id,kind,target_path,staging_path,expected_before,desired_after,phase,created_at,updated_at) VALUES (x'03030303030303030303030303030303',x'02020202020202020202020202020202','put_content','a.txt','s','{\"present\":false}','{\"present\":true}','published',1,1)")
+            .execute(&mut *tx).await.expect("遗留意图");
+        tx.commit().await.expect("提交");
+        old.close().await;
+
+        let upgraded = Database::open(&path).await.expect("升级到当前 schema");
+        assert_eq!(upgraded.schema_version(), target_schema_version());
+        upgraded.close().await;
+        assert_eq!(
+            scalar::<i64>(
+                &path,
+                "SELECT count(*) FROM fs_intents WHERE phase = 'published'"
+            )
+            .await,
+            1,
+            "遗留意图原样保留"
+        );
+        for table in ["execution_journal", "intent_operations", "trash_membership"] {
+            assert_eq!(
+                scalar::<i64>(&path, &format!("SELECT count(*) FROM {table}")).await,
+                0,
+                "{table} 为空：不为旧意图编造关联"
+            );
+        }
+        let backup = migration_backup_path(&path, 8, target_schema_version());
+        assert!(backup.exists(), "升级前应有一致性备份");
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name = 'execution_journal'"
+            )
+            .await,
+            0,
+            "备份是迁移前的状态"
+        );
+    }
 }

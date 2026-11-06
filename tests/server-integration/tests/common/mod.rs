@@ -98,7 +98,8 @@ impl Lab {
         self.root.clone()
     }
 
-    fn config_path(&self) -> PathBuf {
+    /// 配置文件路径（`config()` 会写出它；真实子进程用它启动）。
+    pub fn config_path(&self) -> PathBuf {
         self.state.join("server.toml")
     }
 
@@ -195,6 +196,19 @@ impl Running {
         };
         running.wait_healthy().await?;
         Ok(running)
+    }
+
+    /// 附着到外部（子进程）服务端：只有 HTTP 客户端，没有进程内任务。
+    pub fn attach(base: String) -> Self {
+        Running {
+            base,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("HTTP 客户端"),
+            stop: None,
+            task: None,
+        }
     }
 
     async fn wait_healthy(&self) -> Result<(), String> {

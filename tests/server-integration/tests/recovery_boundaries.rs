@@ -515,7 +515,30 @@ async fn version_restore_and_conflict_complete_once_after_commit_failure() {
         .await,
         1
     );
-    let _ = (body, note, root);
+    let _ = (body, note);
+    drop(conn);
+    // 补完后的历史版本逐个下载：字节与内容哈希都对应各自版本，不混版。
+    let mut conn = db(&lab).await;
+    let versions: Vec<String> =
+        sqlx::query_scalar("SELECT lower(hex(id)) FROM versions ORDER BY rowid")
+            .fetch_all(&mut conn)
+            .await
+            .expect("版本");
+    drop(conn);
+    let running = Running::start(&lab).await.expect("启动");
+    let token = login(&running).await.expect("登录");
+    for (version, expected) in versions.iter().zip([V1, V2, V1]) {
+        let (status, bytes, _) = running
+            .download(
+                &format!("/v1/roots/{root}/entries/{entry}/versions/{version}/content"),
+                &token,
+            )
+            .await
+            .expect("下载");
+        assert_eq!(status, StatusCode::OK, "版本 {version}");
+        assert_eq!(bytes, expected, "版本 {version} 的字节");
+    }
+    running.stop().await;
 }
 
 #[tokio::test]
@@ -572,6 +595,32 @@ async fn conflict_sibling_survives_commit_failure_and_is_completed_once() {
     );
     let mut conn = db(&lab).await;
     assert_eq!(scalar(&mut conn, "SELECT count(*) FROM conflicts").await, 1);
+    drop(conn);
+    // 冲突副本的内容可按其当前版本下载，且就是迟到的 V2。
+    let sibling = replay["conflict"]["conflict_entry_id"]
+        .as_str()
+        .expect("副本")
+        .to_owned();
+    let running = Running::start(&lab).await.expect("启动");
+    let token = login(&running).await.expect("登录");
+    let entries = snapshot(&running, &token, &root).await;
+    let version = entries
+        .iter()
+        .find(|entry| entry["entry_id"] == sibling.as_str())
+        .expect("副本在清单里")["version_id"]
+        .as_str()
+        .expect("版本")
+        .to_owned();
+    let (status, bytes, _) = running
+        .download(
+            &format!("/v1/roots/{root}/entries/{sibling}/versions/{version}/content"),
+            &token,
+        )
+        .await
+        .expect("下载");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, V2, "副本保存的是迟到内容");
+    running.stop().await;
 }
 
 #[tokio::test]
