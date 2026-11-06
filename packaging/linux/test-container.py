@@ -80,11 +80,30 @@ def browser(password,root):
             page.get_by_role('button',name='登录',exact=True).click()
             expect(page.get_by_text('已登录：owner',exact=True)).to_be_visible(timeout=30000)
             page.get_by_role('link',name='Root 目录',exact=True).click()
+            deadline=time.monotonic()+60
+            attempts=0
+            while True:
+                page.wait_for_function('root=>fetch("/v1/admin/roots").then(r=>r.json()).then(d=>d.roots.some(x=>x.root_id===root&&x.health==="healthy"&&x.collection.state==="complete"))',arg=root,timeout=30000)
+                page.get_by_role('button',name='刷新目录状态',exact=True).click();attempts+=1
+                try:
+                    expect(page.get_by_text('本进程初始采集完成',exact=True)).to_be_visible(timeout=2000)
+                    break
+                except AssertionError:
+                    # A real scan can begin between the API probe and refresh.
+                    # Keep requiring the real completed UI state; retry the
+                    # offered manual refresh instead of assuming one timestamp.
+                    if time.monotonic()>=deadline:raise
             expect(page.get_by_text('挂载核对通过',exact=True)).to_be_visible(timeout=30000)
             expect(page.get_by_text('本进程初始采集完成',exact=True)).to_be_visible(timeout=30000)
             assert page.evaluate('root=>fetch("/v1/admin/roots").then(r=>r.json()).then(d=>d.roots.some(x=>x.root_id===root&&x.health==="healthy"))',root)
             page.screenshot(path=str(RUN/'web.png'),full_page=True)
             RESULT['browser']=chromium.version
+            RESULT['browser_refresh_attempts']=attempts
+        except Exception:
+            page.screenshot(path=str(RUN/'web-failure.png'),full_page=True)
+            RESULT['web_failure_text']=page.locator('main').inner_text()
+            RESULT['web_failure_root_response']=page.evaluate('fetch("/v1/admin/roots").then(r=>r.json())')
+            raise
         finally:
             try:page.evaluate('fetch("/v1/auth/logout",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(r=>r.status)')
             finally:context.close();chromium.close()
