@@ -1,6 +1,6 @@
 # 实施进度
 
-本轮：**S076—S100 执行中**，单卡单执行者，同时最多三个。已合master并清理任务树/分支：S076—S097、S099—S100共24卡已合master并清理任务树/分支。执行中S098；最终组合恢复测试旧注入点修正与复验尚在进行，不能报告全门禁通过；S099为unsigned-test产物，未冒充正式签名发布。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线b5be427；每卡完成立即合master/归档/清理，证据见 `agent/tasks/S076-S100.md`。
+本轮：**S076—S100 执行中**，单卡单执行者，同时最多三个。S076—S097、S099—S100共24卡已合master并清理任务树/分支。执行中S098；最终组合xtask六步通过，恢复测试旧注入点已修正，受影响服务端组合217通过、0失败、3个需专用运行环境的默认ignored；S099为unsigned-test产物，未冒充正式签名发布。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线b5be427；每卡完成立即合master/归档/清理，证据见 `agent/tasks/S076-S100.md`。
 
 当前阶段：**S071—S075 全部 done（2026-11-06）**。按用户要求每张卡一个 subagent、同时最多 3 个：S071 与 S075 先并行，S072→S073→S074 按依赖顺序推进，S072 中断后同树续接，S074 核验暴露的 socket 残留回归由 S075-c 修复。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`。**合并与清理（2026-11-06，用户要求）**：父会话先核对三批集成分支均以 `0b3b3c6` 为基线并顺序包含（S061—S065 ⊂ S066—S070 ⊂ S071—S075）、三棵树均无未提交修改，再以 `git merge --ff-only feat/S071-S075-integration` 把 master 从 `0b3b3c6` 快进到 `01ce551`（含 S061—S075 全部提交）；逐支确认已被 master 包含后，三棵集成树 `git worktree remove`、本地分支 `git branch -d` 全部清理，ignored 证据归档到主工作区 `artifacts/batch-S061-S075/{s061-s065,s066-s070,s071-s075}`。未推送、未改写历史。
 
@@ -15,7 +15,7 @@
 （上一阶段记录，保留供追溯）S011—S014：Windows：`cfapi::content`/`cfapi::provider` 用固定内容源实现 `FETCH_DATA` 分段落盘（12,345 B / 1 MiB / 16 MiB，含 1 MiB 范围水合），读取字节与 SHA-256 与宿主一致；离线未水合以 `ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE`(388) 明确失败，慢源超时有界，传输中断开同步根有界返回；`cfapi::guard`/`cfapi::release` 把“已观察内容 + 使用保护”做成保守判定，只有 `clean` 才 `CfSetInSyncState`+`CfDehydratePlaceholder`，原地写/映射写/独占句柄/共享锁全部 `refused` 且内容不变，干净样本释放后再读哈希一致。宿主 38 单测、两端 clippy、fmt 与三项客体脚本（21/46/74 项 `check=pass`、0 fail）全通过。**S011 仍有一项阻塞**：`CANCEL_FETCH_DATA` 在本 build（26300）5 条路径均未触发（取消标志与中止路径已实现并有宿主单测）；**S012 有 1 项记录阻塞**：rename-over 保存无法证明安全（同步根内建不了临时文件、根外改名后目标名字无法按路径打开）。Linux：新增 `crates/platform-linux-server`——`mounts/` 挂载准入（fstatfs + statx + mountinfo + 只读 btrfs ioctl；拒绝 FUSE/NFS/SMB/overlay/tmpfs/ext4 等、嵌套子卷与子挂载、NOCOW）与 `files/` 受限句柄发布（`openat2`、目标文件系统内暂存、`FICLONE`/`EXDEV` 校验复制、两步受控替换）在真实 btrfs 测试卷上分别 60/100 项通过，父会话独立重跑 100/100 且清理核对一致。客体已干净关机，测试卷、loop 与探针目录均已清理。
 执行方式（2026-11-06 用户决定）：S015—S060 由父会话按卡分派 subagent 逐个执行，同时运行的 subagent 不超过 3 个；每卡仍在自己的 Git worktree 内实现、验证并本地提交，`agent/progress.md` 由父会话统一更新以避免同表相邻行冲突。Windows 客体按 `docs/operations/windows-lab.md` §19.1 在测试后保持运行，不默认关机。
 
-最早 ready：**S076**（Tauri Windows 壳与最小 IPC 桥，前置 S076 依赖已满足）；S071—S075 本批全部收口。批次范围外最早独立 ready 为 S076。本批S066—S070均验收完成。S011原始OS取消回调未触发的历史限制继续保留，S102等后续矩阵不在本批完成声明内。
+当前执行：**S098**；完成后本批S076—S100全部收口，下一最早ready为S101（依赖S092、S098、S100）。此前S066—S075均已完成。S011原始OS取消回调未触发的历史限制继续保留，S102等后续矩阵不在本批完成声明内。
 构建分工（2026-11-05 用户决定，S009 已实施）：Windows 客户端在本 NixOS 开发环境交叉编译，宿主承担构建、客体承担原生运行验收；design ADR-013、实施手册 §2.6 与环境/操作文档已同步，具体工具链版本与证据见 `docs/environment.md` §13、步骤见 `docs/operations/windows-lab.md` §12。
 平台资源核验结论（S001，2026-11-05）：开发/服务验证主机为 NixOS 26.11 x86_64、Nix 2.34.9；`/`、`/home`、`/nix`、`/var/log`、`/wrd`、`/data` 均为本地 btrfs；`/wrd` 可用 197G、`/data` 可用 22T；KVM 可用且用户在 `kvm` 组，但 QEMU/Quickemu 未安装、无现成 Windows 客体；尚无本项目独立 btrfs 测试卷。Ubuntu 24.04、Linux ARM64、Windows 原生 CFAPI、reflink 与验收规模均未核验。证据见 `docs/environment.md`。
 
@@ -120,7 +120,7 @@
 | S095 | NixOS 服务模块 | L | S094、S007 | done | a70f755、9243d14、eeb8f66 | 完整 NixOS system/导出模块构建；真实非root零caps服务、Root授权/系统拒写与备份快照释放11类通过 | 无；正式主机启用留S096 | agent/tasks/S095.md |
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | done | 99a7ed4；主机ba1837a | 新源包64/0、主机build/test/健康/switch238；实际回滚237并恢复固定版本、两轮提交下载重启重放与备份释放，SSH/既有应用保持 | 无；公网TLS留S097 | agent/tasks/S096.md |
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | done | d90a263、b615fd9、b345ac9、d8b3cce、fd2f52d、f580392 | Chromium/Windows原生+Edge严格TLS、16MiB/SSE、Nix+host240与重启、独立bind/持久恢复通过 | 开发CA回环，无公网部署；旧Prepared跨dev保守停写 | agent/tasks/S097.md；下一S098 |
-| S098 | 通用 Linux 包与容器配置 | L | S094、S097 | todo | — | 未执行 | — | agent/tasks/S098.md（执行时创建） |
+| S098 | 通用 Linux 包与容器配置 | L | S094、S097 | in_progress | build/S098-portable-linux；基线8300f5c | Ubuntu amd64完整运行已通过；ARM64全系统TCG与部署矩阵验收中 | 未冒充交叉构建为原生验收；完成后立即合并清理 | agent/tasks/S098.md |
 | S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | done | ca510ab→cf1d174；交接见任务HEAD | 锁定NSIS/真实同源正式包；标准用户中文空格首装、GUI CLI同实例、关闭与真实重启后上传hash通过 | unsigned-test；原登录恢复且VM在线；父立即合并归档清理 | agent/tasks/S099.md |
 | S100 | Windows 升级与卸载保护 | W | S099、S091 | done | 3a2e2aa→d0392f4；交接见任务HEAD | 真实0.1.0→0.1.1/忙文件回退；默认卸载重装/不完整拒绝/4占位revert、6文件hash、708恢复读回；边界通过 | 产品PE1794752；分段源与失败保留；unsigned-test；父立即合并归档清理；本批结束 | agent/tasks/S100.md |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | todo | — | 未执行 | — | agent/tasks/S101.md（执行时创建） |
