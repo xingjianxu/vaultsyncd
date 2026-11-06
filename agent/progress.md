@@ -1,4 +1,4 @@
-当前批次：**S066—S070 执行中**（2026-11-06 用户授权，每卡一个 subagent，同时最多 3 个）。隔离工作树 `/wrd/prj/vaultsyncd/.worktrees/s066-s070`，分支 `feat/S066-S070-integration`，基线 `26f5416`（含 S061—S065 完整成果）。S066、S067、S068 已完成并集成；S069 真实租约子卡完成，Windows平台释放实现中；S070 生命周期子卡完成，基础适配与协议接线推进中，完整同步组装等待S069验收。主区 master 未修改，不推送。
+当前批次：**S066—S070 执行中**（2026-11-06 用户授权，每卡一个 subagent，同时最多 3 个）。隔离工作树 `/wrd/prj/vaultsyncd/.worktrees/s066-s070`，分支 `feat/S066-S070-integration`，基线 `26f5416`（含 S061—S065 完整成果）。S066、S067、S068 已完成并集成；S069真实租约与平台释放全部完成（Windows原生5/5）；S070已放行完整生产组装与无GUI原生验收，生命周期和基础适配子卡已完成。主区 master 未修改，不推送。
 
 # 实施进度
 
@@ -85,7 +85,7 @@
 | S066 | CFAPI 正式注册与元数据更新 | W | S065、S010 | done | `20367d1`；集成树 `.worktrees/s066-s070`；基 `26f5416` | Windows原生55/55，宿主43+33+1，两端clippy/fmt通过；独立进程身份稳定、零FETCH改名、损坏/陈旧拒绝 | 无；含占位时拒绝注销以防系统删除，Drop仅断开 | agent/tasks/S066.md（a/b） |
 | S067 | CFAPI hydration 接入传输执行器 | W | S066、S054、S062 | done | `6e089ff`、`8a0e921`；集成 `b9bcbce` | 真HTTP/SQLite/CFAPI固定pin整份校验后范围供给；取消/超时保位图。Windows5/5含部分水合后16MiB补齐、核心120/平台43、两端clippy/fmt | 无；继承S011 OS取消回调未触发限制 | agent/tasks/S067.md（a/b） |
 | S068 | Windows 写入检测与使用保护 | W | S066、S056、S059 | done | `f5af3db`、`d874f54`；集成 `1847d9f` | Windows原生63/63、宿主platform43/transfer59，两端clippy/fmt通过；映射/共享写者拒绝、原子保存、三处进程中断和间隙占用保三方 | 无；可恢复两段发布，启动须先平台恢复后core恢复 | agent/tasks/S068.md（a/b） |
-| S069 | Windows 手动释放与恢复 | W | S067、S068、S063 | in_progress | 租约子卡 `59985ea`、`c9b95a0` | b子卡存储80/client64+1/server40/真实HTTP1通过；平台a/c原生实现验证中 | 待整卡Windows验收 | agent/tasks/S069.md（执行时创建） |
+| S069 | Windows 手动释放与恢复 | W | S067、S068、S063 | done | `59985ea`、`c9b95a0`、`e542446`；集成 `7c763bf` | 真实租约+CFAPI+SQLite，Windows5/5含dirty/busy/跨await保护、VERSION_GONE、SQLITE_FULL13及进程81—83恢复；store80/client64+1/server40/HTTP1、clippy/fmt/生成一致通过 | 无；物理卷满盘与GC worker仍留后续卡 | agent/tasks/S069.md（a/b/c） |
 | S070 | Windows agent 进程与单实例 | W | S067、S068、S069、S064 | in_progress | 生命周期子卡 `e0200e3` | 交互会话原生7项通过；同步b/c等前置 | 待整卡端到端验收 | agent/tasks/S070.md（执行时创建） |
 | S071 | Windows named pipe 传输与身份 | W | S070、S025 | todo | — | 未执行 | — | agent/tasks/S071.md（执行时创建） |
 | S072 | 本机管理命令完整接入 | W | S071、S061、S064 | todo | — | 未执行 | — | agent/tasks/S072.md（执行时创建） |
