@@ -387,10 +387,15 @@ impl ExecutorContext {
         };
 
         // 4. 核心编排：epoch/基线/对象/现场复核 → 意图 → 发布 → 元数据事务。
-        let mut log = SqlIntentLog {
-            database: self.database.clone(),
-            owner,
-        };
+        let mut log =
+            SqlIntentLog::new(self.database.clone(), owner).bound(crate::journal::Binding::new(
+                key,
+                "put",
+                serde_json::json!({
+                    "entry": command.entry.to_hex(), "revision": command.base_revision.to_string(),
+                    "local_generation": command.local_generation.map(|v| v.to_string()),
+                }),
+            ));
         let mut store = SqlPutStore {
             database: self.database.clone(),
             owner,
@@ -640,13 +645,24 @@ fn rejection_result(failure: &OperationFailure) -> OperationResult {
 pub struct SqlIntentLog {
     database: Database,
     owner: UserId,
+    binding: Option<crate::journal::Binding>,
 }
 
 impl SqlIntentLog {
     /// 以数据库与 Root 所属账号装配（内容 put 与历史版本恢复共用）。
     #[must_use]
     pub fn new(database: Database, owner: UserId) -> Self {
-        Self { database, owner }
+        Self {
+            database,
+            owner,
+            binding: None,
+        }
+    }
+
+    /// 把完整操作键及业务上下文与新意图原子落盘。
+    pub fn bound(mut self, binding: crate::journal::Binding) -> Self {
+        self.binding = Some(binding);
+        self
     }
 }
 
@@ -683,7 +699,7 @@ fn fs_phase_of(phase: PutPhase) -> FsIntentPhase {
     }
 }
 
-fn put_intent_of(record: FsIntent) -> Result<PutIntent, IntentLogError> {
+pub(crate) fn put_intent_of(record: FsIntent) -> Result<PutIntent, IntentLogError> {
     if record.kind != FsIntentKind::PutContent {
         return Err(IntentLogError::MalformedIntent {
             detail: "意图种类不是 put_content".to_owned(),
@@ -744,6 +760,14 @@ impl IntentLog for SqlIntentLog {
         )
         .await
         .map_err(intent_error)?;
+        if let Some(binding) = &self.binding {
+            binding
+                .attach(&mut tx, new.intent_id)
+                .await
+                .map_err(|error| IntentLogError::Storage {
+                    detail: error.to_string(),
+                })?;
+        }
         tx.commit().await.map_err(|error| IntentLogError::Storage {
             detail: error.to_string(),
         })?;
@@ -1043,10 +1067,10 @@ impl TargetPort for WorkTreeTarget {
 
 /// `PutCommitStore` 的 SQLx 实现：一次 `BEGIN IMMEDIATE` 里写完批次、版本、revision 与意图收尾。
 pub struct SqlPutStore {
-    database: Database,
-    owner: UserId,
-    key: store_operations::OperationKey,
-    local_generation: Option<Generation>,
+    pub(crate) database: Database,
+    pub(crate) owner: UserId,
+    pub(crate) key: store_operations::OperationKey,
+    pub(crate) local_generation: Option<Generation>,
 }
 
 impl PutCommitStore for SqlPutStore {

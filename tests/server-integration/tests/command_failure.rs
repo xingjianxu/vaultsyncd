@@ -1,5 +1,5 @@
 //! 真实 namespace 发布后、元数据事务提交前的 SQL 故障：保留 pending 与意图，禁止继续写入。
-//! 这证明失败关闭，不声称已经实现启动补完恢复。
+//! 重启必须补完原操作、开放写入，同一 OpId 仍返回同一条目和事件。
 mod common;
 
 use common::{Lab, Running, create_snapshot, identity, login, register_root, snapshot_entries};
@@ -8,7 +8,7 @@ use serde_json::json;
 use sqlx::Connection;
 
 #[tokio::test]
-async fn published_namespace_failure_remains_pending_and_blocks_writes() {
+async fn published_namespace_failure_recovers_the_original_operation_after_restart() {
     let lab = Lab::new("command-failure", None, None);
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动隔离实例");
@@ -108,9 +108,36 @@ async fn published_namespace_failure_remains_pending_and_blocks_writes() {
         .await
         .expect("重启评估");
     assert!(
-        !restarted.assessment().is_complete(),
-        "未实现的补完不能冒充恢复成功"
+        restarted.assessment().is_complete(),
+        "已发布且有完整关联的意图应补完：{:?}",
+        restarted.assessment()
     );
-    assert_eq!(restarted.assessment().blocked_roots.len(), 1);
-    assert_eq!(restarted.assessment().blocked_roots[0].unfinished, 1);
+    drop(restarted);
+    let running = Running::start(&lab).await.expect("恢复后开放写入");
+    let token = login(&running).await.expect("重新登录");
+    let (status, result) = running
+        .json("POST", &uri, Some(&token), Some(&request))
+        .await
+        .expect("重放已补完操作");
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["state"], "committed");
+    assert_eq!(result["replayed"], true);
+    assert_eq!(result["root_seq"], "1");
+    let mut conn = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(lab.state().join("server.sqlite")),
+    )
+    .await
+    .expect("核对业务库");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM changes")
+        .fetch_one(&mut conn)
+        .await
+        .expect("事件");
+    assert_eq!(count, 1, "重启和重试不能追加第二个事件");
+    let phase: String = sqlx::query_scalar("SELECT phase FROM fs_intents")
+        .fetch_one(&mut conn)
+        .await
+        .expect("收尾意图");
+    assert_eq!(phase, "finalized");
+    conn.close().await.expect("关闭核对连接");
+    running.stop().await;
 }

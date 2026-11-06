@@ -62,13 +62,30 @@ use crate::uploads::random_bytes;
 pub struct SqlFsIntentLog {
     database: Database,
     owner: UserId,
+    binding: Option<crate::journal::Binding>,
+    only: Option<IntentId>,
 }
 
 impl SqlFsIntentLog {
     /// 以数据库与 Root 所属账号装配。
     #[must_use]
     pub fn new(database: Database, owner: UserId) -> Self {
-        Self { database, owner }
+        Self {
+            database,
+            owner,
+            binding: None,
+            only: None,
+        }
+    }
+    /// 新意图的完整业务关联。
+    pub fn bound(mut self, binding: crate::journal::Binding) -> Self {
+        self.binding = Some(binding);
+        self
+    }
+    /// 恢复只处理指定意图，避免另一操作借用本操作的事务键。
+    pub fn only(mut self, id: IntentId) -> Self {
+        self.only = Some(id);
+        self
     }
 }
 
@@ -199,6 +216,14 @@ impl NamespaceIntentLog for SqlFsIntentLog {
         )
         .await
         .map_err(intent_error)?;
+        if let Some(binding) = &self.binding {
+            binding
+                .attach(&mut tx, new.intent_id)
+                .await
+                .map_err(|error| IntentLogError::Storage {
+                    detail: error.to_string(),
+                })?;
+        }
         tx.commit().await.map_err(|error| IntentLogError::Storage {
             detail: error.to_string(),
         })?;
@@ -258,6 +283,7 @@ impl NamespaceIntentLog for SqlFsIntentLog {
             .map_err(intent_error)?;
         records
             .into_iter()
+            .filter(|record| self.only.is_none_or(|id| record.intent_id == id))
             .filter(|record| matches!(record.kind, FsIntentKind::Create | FsIntentKind::Move))
             .map(namespace_intent_of)
             .collect()
@@ -293,6 +319,14 @@ impl DeleteIntentLog for SqlFsIntentLog {
         )
         .await
         .map_err(intent_error)?;
+        if let Some(binding) = &self.binding {
+            binding
+                .attach(&mut tx, new.intent_id)
+                .await
+                .map_err(|error| IntentLogError::Storage {
+                    detail: error.to_string(),
+                })?;
+        }
         tx.commit().await.map_err(|error| IntentLogError::Storage {
             detail: error.to_string(),
         })?;
@@ -349,6 +383,7 @@ impl DeleteIntentLog for SqlFsIntentLog {
             .map_err(intent_error)?;
         records
             .into_iter()
+            .filter(|record| self.only.is_none_or(|id| record.intent_id == id))
             .filter(|record| record.kind == FsIntentKind::Delete)
             .map(delete_intent_of)
             .collect()
@@ -1087,6 +1122,9 @@ impl DeleteStore for SqlDeleteStore {
             store_trash::insert_tombstone(&mut tx, self.owner, &new)
                 .await
                 .map_err(trash_store_error)?;
+            sqlx::query("INSERT INTO trash_membership(entry_id,deletion_root,deletion_id) VALUES (?1,?2,?3)")
+                .bind(item.entry.as_bytes().as_slice()).bind(apply.entry.as_bytes().as_slice())
+                .bind(apply.intent_id.as_bytes().as_slice()).execute(&mut *tx).await.map_err(trash_store_error)?;
         }
         store_intents::advance_intent_phase(
             &mut tx,
@@ -1332,8 +1370,10 @@ pub async fn execute_create(
         }
     };
     let mut store = SqlNamespaceStore::new(executor.database().clone(), owner, key, digest);
-    let mut log = SqlFsIntentLog::new(executor.database().clone(), owner);
     let mut ns = WorkTreeNamespace::new(handle);
+    let mut log = SqlFsIntentLog::new(executor.database().clone(), owner).bound(
+        crate::journal::Binding::new(key, "namespace", serde_json::json!({})),
+    );
     let request = vaultsyncd_server_core::commit::namespace::NamespaceRequest::CreateDirectory(
         vaultsyncd_server_core::commit::namespace::CreateDirectoryRequest {
             intent_id: IntentId::from_bytes(random_bytes()),
@@ -1394,8 +1434,10 @@ pub async fn execute_move(
         }
     };
     let mut store = SqlNamespaceStore::new(executor.database().clone(), owner, key, digest);
-    let mut log = SqlFsIntentLog::new(executor.database().clone(), owner);
     let mut ns = WorkTreeNamespace::new(handle);
+    let mut log = SqlFsIntentLog::new(executor.database().clone(), owner).bound(
+        crate::journal::Binding::new(key, "namespace", serde_json::json!({})),
+    );
     let request = vaultsyncd_server_core::commit::namespace::NamespaceRequest::Move(
         vaultsyncd_server_core::commit::namespace::MoveRequest {
             intent_id: IntentId::from_bytes(random_bytes()),
@@ -1456,7 +1498,9 @@ pub async fn execute_delete(
         }
     };
     let mut store = SqlDeleteStore::new(executor.database().clone(), owner, key, digest);
-    let mut log = SqlFsIntentLog::new(executor.database().clone(), owner);
+    let mut log = SqlFsIntentLog::new(executor.database().clone(), owner).bound(
+        crate::journal::Binding::new(key, "delete", serde_json::json!({})),
+    );
     let mut ns = WorkTreeNamespace::new(handle);
     let request = vaultsyncd_server_core::commit::delete::DeleteRequest {
         intent_id: IntentId::from_bytes(random_bytes()),

@@ -43,6 +43,8 @@ pub enum StartupError {
     Database(DbError),
     /// 启动恢复无法给出结论。
     Recovery(RecoveryAssessmentError),
+    /// 持久恢复上下文无法读取，拒绝开放服务。
+    Replay(String),
     /// 监听地址绑定失败（端口被占用、权限不足等）。
     Bind {
         /// 配置里的监听地址。
@@ -58,6 +60,7 @@ impl fmt::Display for StartupError {
             StartupError::StateLock(error) => write!(f, "{error}"),
             StartupError::Database(error) => write!(f, "打开服务端数据库失败：{error}"),
             StartupError::Recovery(error) => write!(f, "{error}"),
+            StartupError::Replay(error) => write!(f, "启动恢复无法读取证据：{error}"),
             StartupError::Bind { addr, source } => {
                 write!(f, "绑定监听地址 {addr} 失败：{source}")
             }
@@ -296,6 +299,9 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         .await
         .map_err(StartupError::Database)?;
 
+    crate::replay::registered(&database, &config.state_dir)
+        .await
+        .map_err(StartupError::Replay)?;
     let lifecycle = Arc::new(Lifecycle::new());
     let assessment = recovery::assess_registered_roots(&database, &lifecycle)
         .await

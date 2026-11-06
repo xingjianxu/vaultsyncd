@@ -417,8 +417,16 @@ pub async fn execute_conflict(
     let layout = executor.objects();
     let mut target = WorkTreeTarget::new(Arc::clone(&handle), layout);
     let mut store = SqlConflictStore::new(executor.database().clone(), owner, key);
-    let mut log = SqlIntentLog::new(executor.database().clone(), owner);
-    let mut ids = RandomIds;
+    let sibling = random_bytes();
+    let mut log =
+        SqlIntentLog::new(executor.database().clone(), owner).bound(crate::journal::Binding::new(
+            store_key(key),
+            "conflict",
+            serde_json::json!({
+                "source": command.entry.to_hex(), "sibling": EntryId::from_bytes(sibling).to_hex(),
+            }),
+        ));
+    let mut ids = RandomIds(sibling);
     let request = ConflictRequest {
         intent_id: vaultsyncd_domain::ids::IntentId::from_bytes(random_bytes()),
         op: key,
@@ -450,10 +458,10 @@ pub async fn execute_conflict(
 }
 
 /// 冲突条目身份与另名用到的随机源。
-struct RandomIds;
+struct RandomIds([u8; 16]);
 
 impl vaultsyncd_domain::ids::IdSource for RandomIds {
     fn next_id_bytes(&mut self) -> [u8; 16] {
-        random_bytes()
+        self.0
     }
 }

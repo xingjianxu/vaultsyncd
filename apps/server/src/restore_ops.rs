@@ -767,7 +767,10 @@ pub async fn execute_version_restore(
         Err(failure) => return Err(failure),
     };
     let mut store = SqlRestoreStore::new(executor.database().clone(), owner, key, digest);
-    let mut log = crate::executor::SqlIntentLog::new(executor.database().clone(), owner);
+    let mut log = crate::executor::SqlIntentLog::new(executor.database().clone(), owner).bound(
+        crate::journal::Binding::new(store_key(key), "version_restore", serde_json::json!({
+            "entry": command.entry.to_hex(), "revision": command.base_revision.to_string(), "restored_from": command.version.to_hex(),
+        })));
     let mut leases = crate::content::DbLeases::new(executor.database(), owner, at);
     let request = VersionRestoreRequest {
         intent_id: vaultsyncd_domain::ids::IntentId::from_bytes(random_bytes()),
