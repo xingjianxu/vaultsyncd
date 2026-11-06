@@ -2463,3 +2463,12 @@ S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包�
 - 不新增产品wire或命令，复用现有`export_recovery(binding_id,destination)`及未ready绑定打开Local的路径。新增`tests/windows-integration/tests/unuploaded_recovery.rs`，仅Windows dev依赖，不把SQLite接入CLI/GUI。真实agent IPC与真实Linux API，数据库仅只读核验；上传part断连只作用于本run私有转发器，非fake成功响应或直接写在线DB。
 - 实际Move被NTFS共享锁阻止产生持久intent；强杀重启后先导出。验证current最新dirty、snapshot旧固定上传、candidate新未观察文件及intent源各自可读/hash，人工CreateNew取回至新空目录；导出前后intent/resume/dirty计数保留，baseline版本/revision及服务端已确认字节不变。同名目的/受保护目录/忙源导出失败不清源、不发布manifest。
 - runner校验NTFS、EXE传输hash、同用户Interactive/Limited登录态与helper实际工作路径，拒绝搬cache中带旧树内嵌路径的helper。恢复包与人工取回副本同步到忽略artifacts后由独立Python重核22份清单文件。只停止记录且核对过exe/config的自有进程；注册根与源数据有意保留，不把注销/卸载作为清理。操作步骤及包角色说明见`docs/operations/recovery.md`；安装/卸载另由S099。
+
+## S094 Linux Nix 组件与显式 Web 资源
+
+- flake `packages.x86_64-linux.{rust,web,default,web-deps}`：Rust server/admin 与Web独立源过滤和derivation；Rust由Cargo.lock逐crate checksum抓取，Web fetchPnpmDeps(fetcher5)固定真实SHA256。正式Rust/前端构建在sandbox中offline，不依赖本地target/node_modules/dist；Rust源码单测不要求Web构建。
+- default输出bin/server/admin与share/vaultsyncd/web、release-manifest.json；wrapper补btrfs-progs并为服务设置默认VAULTSYNCD_WEB_DIR。运行闭包经qR实测不含Node/pnpm/TypeScript，工具链版本仅作为构建来源数据。
+- `apps/server/src/web.rs::WebAssets` 仅消费显式绝对目录；prepare在DB之前验证index及引用assets，缺失拒绝启动；未配置即API-only。只服务根index和/assets，带nosniff/CSP/no-store；未知API不会回HTML。无编译期dist内嵌、无数据库或wire迁移。
+- `packaging/linux/nix-manifest.py` 生成独立Nix组件来源记录：干净commit/full flake NAR、锁/协议源SHA256、目标、Nixpkgs revision、工具包版本、组件过滤源/derivation身份和实际文件hash。源/derivation store hash分为四段8字符且只去元数据字符串上下文，避免记录本身保留构建闭包；真实Rust/Web输出仍显式依赖，不伪造S093Git工作树receipt。
+- 默认发行拒绝dirty flake；组件允许开发态构建。Nix store构建输入自洽、同快照关联，不接受手写外部组件混搭。Nix布局不是通用Linux独立包（S098）。模块、主机部署、生产TLS分别S095—S097，不在此卡改主机。
+- 验收 `nix build`；`nix develop .#web-tests --command python3 packaging/linux/test-nix-runtime.py <output>` 验证来源/hash/闭包、空PATH原生运行、缺资源失败、同源Web/API和Chromium登录；测试服务finally停止。说明与示例见packaging/linux/。
