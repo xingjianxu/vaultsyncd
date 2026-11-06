@@ -1989,3 +1989,46 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
   btrfs 工作目录）。满盘用例需要小型专用 btrfs 卷（`tools/test-volume/test-volume.sh create <run> 192M`），
   用 `VAULTSYNCD_S052_WORK_VOLUME` / `VAULTSYNCD_S052_STATE_VOLUME` 指定卷内可写子目录
   （准入要求状态目录与 Root 同一 btrfs 文件系统）。
+
+## crates/agent-core — 首次绑定与可恢复合并（S058）
+
+路径：`crates/agent-core/src/bindings/{import,store}.rs`；`bindings::import::FirstImport` 只用于
+没有共同基线的新绑定。已有 baseline、remote/local 状态、事件、意图、队列或非零游标时拒绝
+重新首次合并，旧设备必须走带基线重建。编排器不做平台文件 I/O，不生成 Linux 客户端。
+
+| 接口 | 契约 |
+| --- | --- |
+| `FirstImport::new(database, Ports, ImportLocal, ImportSnapshot)` / `run(binding, ids, max_items)` | 绑定已由配置层持久化；按根准入 → 固定快照及分页检查点 → 完整本地扫描 → S020 逐路径规划 → 持久清单与稳定 OpId → 有界执行推进。`max_items=0` 可只保存清单；恢复复用原快照、清单、改名目标与身份，不依赖内存注册表。返回 `ImportReport{completed, high_water, complete}`。 |
+| `ImportLocal: NameEquivalence` | `validate(binding, other_paths)` 用平台规范路径/根句柄验证普通健康根、缓存/内部状态/其它绑定不重叠、名称可表示，并给跨重启根身份；`scan(binding)` 必须完整，文件含大小、SHA-256 与 generation；坏扫描报错，不能返回空清单代表失败。原生名称等价由平台注入，同目录非同拼写的等价名称明确拒绝，不静默改名。 |
+| `ImportLocal::preserve(binding, op, from, to, generation)` | 平台先持久本地意图，核对代际与目标未占用，幂等另名保留原内容；目录冲突连同子树另名，子项后续通过最终父目录身份上传。重放必须验证现场身份/内容，不能仅凭目标存在就成功。 |
+| `ImportLocal::install(&ImportInstall) -> Generation` | 输入持久 install OpId、目标、完整 `SnapshotEntry` 与模式。必须核对目标仍为空，固定 VersionId 下载/校验/发布，Full 不得降级为占位；OnDemand 才可建占位。崩溃窗口由同一持久意图核对，不覆盖扫描之后的本地新内容。该端口是 S059/Windows 适配接线点。 |
+| `ImportSnapshot::begin(root) -> SnapshotSeed` / `page(root, snapshot, cursor)` | 直接复用生成的 Snapshot/SnapshotPage；seed 另带认证响应的服务器观察时间，只用于提前固定的冲突标签，不伪造提交时间、不以客户端时钟决胜。每页检查相同 snapshot_id/high_water、严格 EntryId 顺序、前进游标、完整计数和父目录树；到期/错误不能悄悄换快照。 |
+| 内部 `ImportStore: UploadCommitStore` | 仅处理持久导入清单中的 OpId。文件复用 S056 固定 generation 上传，目录 create 不带内容；两者均 `expected_absent=true`、固定 server_epoch，不以旧快照覆盖新创建。committed ACK、临时→稳定 EntryId、baseline/remote、本地 generation 条件清 dirty 与日志同一事务；旧代际 ACK 保留新 dirty。pending/finalize 不算完成。 |
+
+- 同路径同内容只绑定远端 EntryId；内容/类型不同先保留本地另名并上传，再安装原路径的固定远端版本。
+  首次导入没有删除动作，不以 mtime 决胜。新建服务器同名条目的并发变化仍由 create CAS 拒绝。
+- 清单执行完成后，合成根 baseline、`received_seq=applied_seq=snapshot.high_water_seq` 与 complete
+  在一个事务中发布；不是用上传回执中的较新 root_seq 初始化游标。S057 `run_cycle` 与直接
+  `resume_pending` 在导入未完成时拒绝接收/应用，完成后继续按原 high_water 拉 changes。
+- 运行者用日志 revision 条件更新防止旧内存覆盖 ACK。应用入口应在导入期间独占该绑定的通用队列
+  调度；导入自行从日志重建 UploadSpec，不能让另一 S055 执行器抢跑尚未注册规格的上传。
+- 并发提交若返回 `OperationResult::conflict`，持久化主/副本完整回执及稳定副本映射，但响应不含
+  最终路径，不能猜名称写 clean；清单保持未完成，等待取得最终路径后恢复。普通首次合并的
+  同名异内容已经通过固定冲突目标 + create CAS 完整执行，不受这条并发异常限制影响。
+
+### 客户端迁移 0004 与恢复证据
+
+`crates/client-store/migrations/0004_first_import.sql` 追加 `binding_imports`（binding 主键、内部版本化
+JSON 日志、revision、complete）和 `import_id_map`（binding+temporary_id 主键、稳定 entry_id、
+唯一 op_id、原始结果 JSON）。外键随 binding 级联；不改写 0001—0003，不给旧绑定自动制造首次
+导入状态。0003→0004 测试验证旧 pending_ops/upload_resumes 保留及升级前一致性备份。
+
+`bindings/import/{tests,safety_tests}.rs` 用真实客户端 SQLite 与磁盘账本，在独立进程中分别于
+快照分页、远端 committed 未回 ACK、保留改名后、固定版本安装后直接退出（71/73/72/74），
+随后重开数据库完成。验证非空目录、同内容归并、内容与两种类型冲突、子树与临时 ID 映射、
+CAS、旧代际 ACK、未定位冲突保留，以及从 high_water=7 接收/应用其后 5 个完整事件批次。
+测试专用磁盘适配只在 cfg(test) 编译，不能替代 Windows 原生能力验收。
+
+未接线：生产 HTTPS 快照/服务器时间适配、Windows 根扫描与意图/安装、生产 EventDecoder 仍由应用
+入口提供；导入专用 ACK 适配不冒充所有 S056 上传的通用 baseline/冲突适配。当前 S052 的 create
+运行时仍显式未装配，本卡未修改服务端路径；本卡证据是 L 环境真实持久恢复，不宣称产品端到端可用。
