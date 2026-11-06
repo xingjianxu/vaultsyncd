@@ -165,6 +165,10 @@ fn wire(l: Lease, now: i64) -> VersionLease {
     }
 }
 fn failure(request: &str, root: &str, e: Error) -> Response {
+    if let Error::Storage(error) = &e {
+        tracing::warn!(request_id=request, root_id=root, error=%error, "固定版本租约存储失败");
+        return internal_error(request, "固定版本租约存储不可用", Some(root.to_owned()));
+    }
     let (status, code, retry) = match e {
         Error::OutOfScope => (StatusCode::FORBIDDEN, ErrorCode::AccessDenied, false),
         Error::Reused => (StatusCode::CONFLICT, ErrorCode::OpIdReused, false),
