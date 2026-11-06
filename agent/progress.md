@@ -96,7 +96,7 @@
 | S073 | Windows CLI 最小管理入口 | W | S072 | done | `d7742ba`、`32e716b`；集成 `ce7863d`；基线 `a509ca1` | 新增 apps/cli 只经命名管道、21命令映射、--json与退出码0/2/3/4/5/6、密码仅安全输入；真实Windows连续2次原生1/1、S072回归1/1；宿主测试/clippy/生成一致性与xwin clippy通过；父复跑cli/agent/local-ipc测试与clippy通过 | 无；subscribe-status为单次长轮询、不含安装自启动 | agent/tasks/S073.md |
 | S074 | 三台客户端基础互通 | X | S073、S052 | done | `5e5e98f`、`1452d36`、`0d1c673`、`88fb7be`、`eeb7f70`、`ea37025`；集成 `a5bc3c1`；基线 `ce7863d` | 真实Windows原生最终提交退出0：21份输入missing=0、14路径收敛、lost_responses=2、conflict_copies=5；宿主机fmt/生成一致/两端clippy通过；拓扑如实为1台实机3个隔离身份、agent顺序运行 | 无（并发三实机属S107；生产HTTPS反代属S097）；报告暴露的kill_boundaries回归转S075-c修复 | agent/tasks/S074.md |
 | S075 | Linux 在线管理 socket 与 CLI | L | S043、S044、S047、S048 | done | `ace6837`、`526bde0`；集成 `1f415b8`；回归修复 `9082a49`、`5b6fd60`（S075-c，集成 `4898f5f`）；基线 `873f306` | 真实隔离SSH/btrfs十阶段通过；父集成复跑server/admin/platform/store 242/0、生成一致性与fmt通过；子代理clippy通过 | 无；仅同UID/唯一owner、实时偏移分页、崩溃socket需确认停机后清理 | agent/tasks/S075.md（+a/b） |
-| S076 | 前端公共组件与两应用壳 | B | S005、S024、S025 | todo | — | 未执行 | — | agent/tasks/S076.md（执行时创建） |
+| S076 | 前端公共组件与两应用壳 | B | S005、S024、S025 | done | 实现 `cb82498`；基线 `b5be427`；worktree `.worktrees/s076`，分支 `feat/S076-frontend-shell` | pnpm 冻结锁离线安装、五成员 typecheck、Web/desktop 独立 Vite 构建、SSR 初始未连接和 API 传输负例均通过 | 无；浏览器视觉、HTTPS/会话及 Tauri 原生运行留后续卡 | agent/tasks/S076.md（+a/b） |
 | S077 | Web 登录与会话管理 | B | S076、S043 | todo | — | 未执行 | — | agent/tasks/S077.md（执行时创建） |
 | S078 | Web Root 与服务健康页面 | B | S077、S044、S051 | todo | — | 未执行 | — | agent/tasks/S078.md（执行时创建） |
 | S079 | Web 历史、冲突与回收站 | B | S078、S040、S047 | todo | — | 未执行 | — | agent/tasks/S079.md（执行时创建） |

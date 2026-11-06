@@ -3,3 +3,6 @@
 // packages/api-client、packages/local-ipc-types，不在此重导出。
 export { StatusBadge } from "./StatusBadge";
 export type { StatusBadgeProps, StatusTone } from "./StatusBadge";
+
+export { Button, Dialog, EmptyState, PageShell, Table } from "./components";
+export type { NavItem, TableColumn } from "./components";

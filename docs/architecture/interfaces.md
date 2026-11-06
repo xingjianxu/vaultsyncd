@@ -2328,3 +2328,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 断言与报告：每份场景输入内容计算 SHA-256，必须在“当前快照条目 / 冲突副本（当前条目）/ 回收站 / 条目历史”中找到；每端最终命名空间必须与服务端快照一致，完整模式逐字节核对，按需端只允许 `on_disk=0` 占位且已水合内容仍须匹配固定版本；宿主收尾再核对 btrfs Root 工作目录字节与报告 `final_entries` 一致。报告含场景 commit/工作树是否脏、Windows/服务端/agent 版本、三端 DeviceId/Binding、拓扑、各 block 证据、代理操作事件、输入内容覆盖与收敛计数。
 - 场景暴露并修复的三处产品缺陷：① 客户端删除 ACK 保留被删版本，而服务端 delete 事件原先缺 `version_id`（`hash`/`size` 也缺），客户端按“同 revision 不同事实”拒绝整批；现 `apply_delete` 从 `version_facts` 补全三者（外部删除同样补全）。② `WindowsFiles::preserve` 曾删除被腾空路径的代际历史，首次导入 preserve-both 后远端版本在原路径安装会复用 generation 1 并撞上已有 evidence；现在保留被腾空路径的代际，路径代际只单调递增。③ `Adapter::adopt_complete` 曾拒绝把完整本地文件重新绑定到同 Binding/Root 的新条目；删除与离线修改并发时 ACK 后的 adopt 因此永远失败。现在仅当同一 Binding/Root 且 `on_disk >= size`（完整本地内容）时允许换身份，不完整占位仍拒绝。
 - 失败诊断：编排器在客户端未收敛时把当前 `bindings`/`problems`/代理事件写到 run 目录 `failure.json`，并停掉 agent 用 `--once` 复跑一次把产品 `detail` 打进日志；脚本把失败现场取回 artifacts，客体目录保留供诊断。
+
+## S076 公共 UI 与前端应用壳
+
+- `@vaultsyncd/ui` 稳定入口导出 Button、Dialog（挂载时 showModal，onClose 由父移除）、Table<T>（columns/rows/rowKey/emptyMessage）、EmptyState、PageShell（受控 activePath/items/status）及原有 StatusBadge。`@vaultsyncd/ui/styles.css` 为独立样式入口；无 HTTP/IPC/Tauri 依赖。共享 CSS 变量 `--vs-accent`/`--vs-border`。
+- `@vaultsyncd/web`、`@vaultsyncd/desktop` 均提供 dev/typecheck/build/preview；各自 dist，Vite 8.3.6、React 19.3.1、根 pnpm 锁。开发/预览仅绑定 127.0.0.1；默认端口冲突明确失败。Hash 路由不要求服务端 history fallback。
+- Web `services/server.ts::checkServer(options?, signal?) -> Promise<HealthResponse>` 默认同源、浏览器 fetch、随机 request_id；只经 `@vaultsyncd/api-client` 稳定导出请求健康，无令牌存储。默认路由 `#/overview`，另有 `#/roots` 的未读取反馈；未知路由显式显示不存在。
+- 桌面 `services/agent.ts::AgentClient.getStatus() -> Promise<GetStatusResult>` 用本机 IPC 稳定类型；默认 `disconnectedAgent` 始终 reject，明确“IPC 测试替身”。S080 可替换此端口，不将 Tauri 引入 UI。默认 `#/connections`，另有 `#/bindings`/`#/problems` 未读取反馈，无伪造同步完成状态。
+- 验证入口：`pnpm --filter @vaultsyncd/web test`（两应用 SSR 默认未连接与传输正负例），两应用各自 `typecheck`/`build`；无浏览器或 Windows 原生证据。
