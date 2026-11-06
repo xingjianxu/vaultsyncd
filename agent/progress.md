@@ -1,6 +1,6 @@
 # 实施进度
 
-本轮：**S076—S100 执行中**，每卡一个 subagent，同时最多三个。已完成并合入 master：S076/S077/S078/S079/S080/S081/S085/S086/S092；九卡任务树与本地分支均已删除。执行中 S082/S087/S093。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线 `b5be427`；每卡完成立即合 master 并清理，证据与生命周期见 `agent/tasks/S076-S100.md`。
+本轮：**S076—S100 执行中**，单卡单执行者，同时最多三个。已合master并清理任务树/分支：S076—S082、S085—S087、S092—S093，共12卡。执行中S083/S088，第三执行位等待依赖。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线b5be427；每卡完成立即合master/归档/清理，证据见 `agent/tasks/S076-S100.md`。
 
 当前阶段：**S071—S075 全部 done（2026-11-06）**。按用户要求每张卡一个 subagent、同时最多 3 个：S071 与 S075 先并行，S072→S073→S074 按依赖顺序推进，S072 中断后同树续接，S074 核验暴露的 socket 残留回归由 S075-c 修复。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`。**合并与清理（2026-11-06，用户要求）**：父会话先核对三批集成分支均以 `0b3b3c6` 为基线并顺序包含（S061—S065 ⊂ S066—S070 ⊂ S071—S075）、三棵树均无未提交修改，再以 `git merge --ff-only feat/S071-S075-integration` 把 master 从 `0b3b3c6` 快进到 `01ce551`（含 S061—S075 全部提交）；逐支确认已被 master 包含后，三棵集成树 `git worktree remove`、本地分支 `git branch -d` 全部清理，ignored 证据归档到主工作区 `artifacts/batch-S061-S075/{s061-s065,s066-s070,s071-s075}`。未推送、未改写历史。
 
