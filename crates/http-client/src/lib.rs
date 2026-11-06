@@ -56,6 +56,7 @@ pub mod content;
 pub mod error;
 pub mod transport;
 pub mod uploads;
+pub mod version_leases;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

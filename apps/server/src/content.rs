@@ -67,8 +67,8 @@ use crate::uploads::{
 
 /// 内容端点共享的进程内状态。
 pub struct ContentContext {
-    auth: Arc<AuthContext>,
-    state_dir: PathBuf,
+    pub(crate) auth: Arc<AuthContext>,
+    pub(crate) state_dir: PathBuf,
 }
 
 impl ContentContext {

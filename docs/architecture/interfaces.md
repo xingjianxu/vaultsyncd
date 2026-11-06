@@ -2229,3 +2229,10 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `recover_publications() -> Vec<RecoveryOutcome>` 必须先于 core recovery 和同步；后像须身份及摘要同时匹配才 Published，原对象完整且目标不存在才 Restored；第三种内容 Blocked，损坏日志/路径/根身份错误报错且保留。`acknowledge_publication(op)` 仅在 core baseline 事务完成后清对应日志；preserved 原对象及快照由显式恢复/保留策略处理，不自动清除。
 
 应用以同 OpId 关联两层意图，不能只因平台返回 Published 就推进应用游标或宣称 committed。发布出的普通完整文件的业务 CFAPI identity 由应用根据已确认 Entry/Version 安装，平台不猜服务器身份。S068-a/b 记录原生能力边界；原型 `cfapi::release` 三次探测即关句柄不构成正式持续保护授权。
+
+## S069-b 固定版本内容短租约
+
+- Wire唯一源 `api/openapi.yaml`：`POST /v1/roots/{root}/entries/{entry}/versions/{version}/leases` 与 `/{lease}/renew`、`/{lease}/release`，body为稳定 `lease_id`、整份 `sha256`、`size`。响应完整回显pin、UTC到期及剩余秒数、closed。仅Bearer/授权Root可操作。
+- `server-store::version_leases`：同BEGIN IMMEDIATE核对固定版本与live对象，使用既有`object_leases`作为GC保护；0010请求关联记住固定输入，ID复用换输入409，失效/释放410；TTL120秒，acquire重放不延长，renew仅活跃，release幂等。活跃对象租约阻止collectable标记，GC仍按既有租约与引用集工作。
+- 服务端租约已提交后才检查对象可读和长度，失败503并保留有界保护，绝不返回可释放证明；客户端`LeaseEndpoint`精确校验Root/Entry/Version/hash/size/id/TTL/closed。调用方必须保留本地副本直到有效租约及持续平台保护均成立；传输成功不代表租约有效。
+- 平台释放与S063薄wrapper仍由S069-a/c交付；本子卡不冒充Windows原生或产品端到端完成。
