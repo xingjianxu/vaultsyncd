@@ -54,7 +54,7 @@ fn provenance(model: &Model) -> String {
         "契约：{}；生成器：{} {}",
         model.source_line(),
         super::GENERATOR,
-        env!("CARGO_PKG_VERSION")
+        super::GENERATOR_VERSION
     )
 }
 
@@ -125,7 +125,7 @@ fn local_ipc_provenance(config: &GenerationConfig, model: &LocalIpcModel) -> Str
         model.title,
         config.local_ipc_source,
         super::GENERATOR,
-        env!("CARGO_PKG_VERSION")
+        super::GENERATOR_VERSION
     )
 }
 

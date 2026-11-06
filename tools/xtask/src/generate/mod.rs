@@ -28,6 +28,7 @@ mod local_ipc;
 /// `text/event-stream`（SSE，无 schema，TypeScript 侧返回原始 `Response` 由调用方读流）。
 const FORMAT_VERSION: u32 = 5;
 /// 生成器名；与 `api/generation.toml` 的 `generator` 核对。
+pub(crate) const GENERATOR_VERSION: &str = "0.1.0";
 const GENERATOR: &str = "vaultsyncd-xtask";
 /// 生成配置文件（相对 workspace 根）。
 const CONFIG_PATH: &str = "api/generation.toml";
@@ -225,12 +226,11 @@ fn read_config(root: &Path) -> Result<GenerationConfig, String> {
             config.generator
         ));
     }
-    if config.generator_version != env!("CARGO_PKG_VERSION") {
+    if config.generator_version != GENERATOR_VERSION {
         return Err(format!(
             "{CONFIG_PATH} 的 generator_version 是 {}，编译进本命令的是 {}；\
              生成器行为变化时同步更新版本与 format_version",
-            config.generator_version,
-            env!("CARGO_PKG_VERSION")
+            config.generator_version, GENERATOR_VERSION
         ));
     }
     if config.openapi_version != OPENAPI_VERSION {
