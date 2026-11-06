@@ -178,7 +178,18 @@ impl Context {
         id: BackupLeaseId,
     ) -> io::Result<(Vec<u8>, [u8; 32])> {
         let _guard = self.lock(id).await.read_owned().await;
-        let view = self.view(owner, id).await?;
+        let view = match self.view(owner, id).await {
+            Ok(view) => view,
+            Err(error) => {
+                if !matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                ) {
+                    self.incomplete(owner, id, &error.to_string()).await?;
+                }
+                return Err(error);
+            }
+        };
         Ok((view.manifest, view.index.manifest_hash))
     }
 }

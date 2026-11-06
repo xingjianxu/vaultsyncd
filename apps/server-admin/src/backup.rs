@@ -293,6 +293,10 @@ async fn verify(path: &Path) -> io::Result<Value> {
             .ok_or_else(|| bad("receipt manifest hash missing"))?,
     )
     .map_err(failure)?;
+    // 显式verify开始先撤销旧成功收据：取消或SIGKILL不能留下本次未读完的verified。
+    status["state"] = "incomplete".into();
+    status["reason"] = "verification in progress".into();
+    receipt(path, &status, false)?;
     let outcome = async {
         let mut file = tokio::fs::File::open(path).await?;
         let mut verifier = ArchiveVerifier::new(*expected.as_bytes());

@@ -66,20 +66,26 @@ fn failure(error: io::Error) -> Response {
         None,
     )
 }
-fn id(text: &str) -> Result<BackupLeaseId, Response> {
+fn id(text: &str) -> Result<BackupLeaseId, Box<Response>> {
     BackupLeaseId::from_hex(text)
         .ok()
         .filter(|id| id.to_hex() == text)
         .ok_or_else(|| {
-            failure(io::Error::new(
+            Box::new(failure(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid backup identity",
-            ))
+            )))
         })
 }
-async fn owner(state: &HttpState, headers: &HeaderMap) -> Result<UserId, Response> {
-    let p = crate::auth::principal_from(&state.auth, headers).await?;
-    state.context.authorize(p.user_id).await.map_err(failure)?;
+async fn owner(state: &HttpState, headers: &HeaderMap) -> Result<UserId, Box<Response>> {
+    let p = crate::auth::principal_from(&state.auth, headers)
+        .await
+        .map_err(Box::new)?;
+    state
+        .context
+        .authorize(p.user_id)
+        .await
+        .map_err(|e| Box::new(failure(e)))?;
     Ok(p.user_id)
 }
 async fn prepare(
@@ -89,7 +95,7 @@ async fn prepare(
 ) -> Response {
     let owner = match owner(&state, &headers).await {
         Ok(o) => o,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if state.lifecycle.phase() != Phase::Ready {
         return failure(io::Error::other("service is not ready"));
@@ -105,7 +111,7 @@ async fn prepare(
     };
     let id = match id(&body.backup_id) {
         Ok(i) => i,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match state.context.submit(owner, id, "prepare").await {
         Ok(s) => (StatusCode::ACCEPTED, Json(s)).into_response(),
@@ -119,7 +125,7 @@ async fn list(
 ) -> Response {
     let owner = match owner(&state, &headers).await {
         Ok(o) => o,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let query = query.unwrap_or_default();
     let page = if query.is_empty() {
@@ -150,11 +156,11 @@ async fn status(
 ) -> Response {
     let owner = match owner(&state, &headers).await {
         Ok(o) => o,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let id = match id(&text) {
         Ok(i) => i,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match state.context.status(owner, id).await {
         Ok(s) => Json(s).into_response(),
@@ -164,11 +170,11 @@ async fn status(
 async fn operation(state: HttpState, text: String, headers: HeaderMap, kind: &str) -> Response {
     let owner = match owner(&state, &headers).await {
         Ok(o) => o,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let id = match id(&text) {
         Ok(i) => i,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match state.context.submit(owner, id, kind).await {
         Ok(s) => (StatusCode::ACCEPTED, Json(s)).into_response(),
@@ -196,11 +202,11 @@ async fn manifest(
 ) -> Response {
     let owner = match owner(&state, &headers).await {
         Ok(o) => o,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let id = match id(&text) {
         Ok(i) => i,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match state.context.manifest(owner, id).await {
         Ok((bytes, hash)) => Response::builder()
@@ -221,11 +227,11 @@ async fn export(
 ) -> Response {
     let owner = match owner(&state, &headers).await {
         Ok(o) => o,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let id = match id(&text) {
         Ok(i) => i,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match state.context.archive(owner, id).await {
         Ok(stream) => Response::builder()
@@ -256,11 +262,11 @@ async fn object(
 async fn download(state: HttpState, text: String, path: String, headers: HeaderMap) -> Response {
     let owner = match owner(&state, &headers).await {
         Ok(o) => o,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let id = match id(&text) {
         Ok(i) => i,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match state.context.file(owner, id, &path).await {
         Ok(stream) => Response::builder()

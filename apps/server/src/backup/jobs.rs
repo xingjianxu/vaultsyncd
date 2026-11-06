@@ -471,7 +471,7 @@ impl Context {
             loop {
                 tokio::select! {
                     biased;
-                    _ = stop.changed() => { if *stop.borrow() { break; } },
+                    _ = stop.changed() => break,
                     _ = interval.tick() => {
                         if *stop.borrow() { break; }
                         if let Err(error) = context.resume().await {

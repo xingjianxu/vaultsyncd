@@ -92,7 +92,10 @@ async fn backup_command(
     };
     if args.first().is_some_and(|s| s == "list") && (args.len() == 1 || args.len() == 2) {
         let page = if args.len() == 2 {
-            args[1].parse::<u32>()?
+            match args[1].parse::<u32>() {
+                Ok(page) => page,
+                Err(_) => return Ok(failure(400, "INVALID_REQUEST", "非法页码")),
+            }
         } else {
             0
         };
@@ -114,7 +117,10 @@ async fn backup_command(
             "backup命令需要操作与稳定ID",
         ));
     }
-    let id = vaultsyncd_domain::ids::BackupLeaseId::from_hex(&args[1])?;
+    let id = match vaultsyncd_domain::ids::BackupLeaseId::from_hex(&args[1]) {
+        Ok(id) => id,
+        Err(_) => return Ok(failure(400, "INVALID_REQUEST", "非法备份身份")),
+    };
     if id.to_hex() != args[1] {
         return Ok(failure(
             400,
@@ -149,7 +155,7 @@ async fn backup_stream(
         let owners:Vec<Vec<u8>>=sqlx::query_scalar("SELECT id FROM users WHERE status='active' LIMIT 2").fetch_all(context.database.pool()).await.map_err(io::Error::other)?;
         if owners.len()!=1{return Err(io::Error::new(io::ErrorKind::PermissionDenied,"unique owner required"))}
         let owner=UserId::from_bytes(owners[0].clone().try_into().map_err(|_|io::Error::other("invalid owner"))?);
-        let id=vaultsyncd_domain::ids::BackupLeaseId::from_hex(text).map_err(io::Error::other)?;if id.to_hex()!=text{return Err(io::Error::new(io::ErrorKind::InvalidInput,"noncanonical backup ID"))}
+        let id=vaultsyncd_domain::ids::BackupLeaseId::from_hex(text).map_err(|e|io::Error::new(io::ErrorKind::InvalidInput,e))?;if id.to_hex()!=text{return Err(io::Error::new(io::ErrorKind::InvalidInput,"noncanonical backup ID"))}
         let state=backups.status(owner,id).await?;let source=backups.archive(owner,id).await?;
         Ok((source,success(json!({"backup_id":id.to_hex(),"manifest_hash":state.manifest_hash,"format":"VSBK001"}))))
     }).await;
