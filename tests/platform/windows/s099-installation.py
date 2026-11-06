@@ -7,6 +7,7 @@ The caller must coordinate the VM before starting: three controlled restarts res
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -168,10 +169,14 @@ def main():
         summary["installed"] = installed
         with sync_playwright() as playwright:
             browser = wait("actual installed WebView2 CDP", lambda: playwright.chromium.connect_over_cdp("http://127.0.0.1:19299"), 180)
-            page = wait("installed app page", lambda: next((p for c in browser.contexts for p in c.pages if "tauri" in p.url), None), 120)
+            context = browser.contexts[0]
+            page = context.pages[0] if context.pages else context.wait_for_event("page", timeout=120000)
+            # Sync Playwright properties do not pump navigation events while Python sleeps.
+            page.wait_for_url(re.compile("tauri"), timeout=120000)
             page.set_default_timeout(60000)
             page.locator('[name="server_id"]').fill(fixture["serverId"])
             page.locator('[name="server_url"]').fill(fixture["url"])
+            page.get_by_text("开发证书", exact=True).click()
             page.locator('[name="ca_file"]').fill(installed["ca"])
             page.get_by_role("button", name="保存连接", exact=True).click()
             page.wait_for_function("document.body.innerText.includes('操作已由 agent 确认。')")
@@ -232,6 +237,7 @@ def main():
             try:
                 print(ps("Restore"), flush=True)
                 reboot("restore original logon after failed validation")
+                summary["restored_console_user"] = wait("original console after failure", lambda: (value if (value := checked([*SSH, 'powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).UserName"']).strip()) == summary["prior_console_user"] else None), 240)
             except Exception as error:
                 summary["restore_error"] = str(error)
         if prepared:
