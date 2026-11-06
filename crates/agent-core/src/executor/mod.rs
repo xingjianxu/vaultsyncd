@@ -25,6 +25,7 @@
 //! - **未知种类不猜**：`kind` 不是已定义的 [`OperationKind`] 时阻塞该操作并保留现场，不当作成功。
 
 pub mod apply;
+pub mod release;
 pub mod retry;
 mod run;
 pub mod upload;

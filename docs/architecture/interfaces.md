@@ -2173,3 +2173,22 @@ quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按�
 原生验收入口：`VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows nix develop .#windows --command tests/platform/windows/run-native-files.sh`。仅在实验室 NTFS run_id 目录/临时盘符操作，并核对 exe 传输 SHA-256；52 个客体测试包括已 pin 空目录真正原地设置 junction、ACL 变化、真实内核缓冲溢出与三个脱水占位符扫描前后 0 本地内容字节。环境分工、VM 保持在线规则见 `docs/operations/windows-lab.md` §12、§19.1。
 
 API 依据：[NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)、[CreateFileW no-follow/no-recall](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)、[ReadDirectoryChangesW 溢出语义](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw)。
+
+## crates/agent-core — 显式受控释放与版本租约（S063）
+
+`executor::release::ManualRelease::new(Arc<Database>, Arc<dyn ReleaseLocal>, Arc<dyn ReleaseRemote>)`
+提供 `release(&ReleaseSpec)` 与仅恢复开放日志的 `recover(binding)`。没有缓存挑选或自动淘汰入口。
+
+| 接口/事实 | 契约 |
+| --- | --- |
+| `ReleaseSpec` | 固定 OpId/BindingId/EntryId/RelativePath/VersionPin；pin 的版本须为本地共同基线确认内容。复用 OpId 必须保持整个请求，原队列同 OpId 只能是同目标/基线/固定版本的 `release_local`。 |
+| `ReleaseRemote::acquire(pin) -> Box<dyn VersionLease>` | 服务端原子确认版本可读并建立短租约，保护完整条目/版本/摘要/大小的内容对象免于 GC。核心比对完整 pin，`ensure_valid` 在安全点确认或续约；过期、断网、版本丢失都失败。持有者不得在完成前主动撤销保护。 |
+| `ReleaseLocal::protect(path) -> Box<dyn ReleaseProtection>` | 从取得 guard 到 DB 驻留 CAS 完成，持续禁止并发写、替换和删除；无法保护则明确拒绝，短暂共享模式探测不能代替持续保护。 |
+| `ReleaseProtection::content` / `released` | 前者供 S059 `inspect` 固定快照流式核对实际内容/代际/身份；后者只查元数据，返回可信固定 pin/身份/代际的 `ReleasedFile`，不得意外 hydration。未知/部分证据报错。 |
+| `dehydrate_verified(expected, lease)` | 在同一使用保护内重新核对完整真实 before 及租约有效性，平台成功并持久化后才返回已释放证据。guard 和 lease 保持到核心完成 SQLite 条件事务。 |
+| 持久恢复 | 0009 `controlled_releases` 与 local_intents 同事务保存请求、前态与证据。平台已脱水但 DB 旧 materialized：仅按身份/generation/pin 补 DB；内容/dirty/基线/epoch/绑定控制变化均保留意图并拒绝。完成日志不允许旧请求清除新本地内容。 |
+
+释放前检查 S061 门禁，full 精确返回 `MODE_REQUIRES_LOCAL_COPY`，其它暂停/排除/解绑保持阻塞。
+任何 dirty、冲突/待办、未知指纹/身份、部分驻留或未恢复意图均不授权释放。成功事务只将驻留改为
+metadata_only，保留内容基线与原代际，不生成远端 Delete。`controlled_releases.completed=0` 始终是未完成状态。
+原生 CFAPI 使用保护与服务器租约适配由 S069/应用入口接线；测试磁盘适配器仅 cfg(test)。
