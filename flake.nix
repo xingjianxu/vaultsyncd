@@ -9,7 +9,7 @@
   };
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       # 首发仅 Linux 服务端/控制面在 Nix 内构建；按 design ADR-013（2026-11-05），Windows
       # 客户端在本 NixOS 宿主交叉编译、Windows 客体只做原生运行验收。交叉目标不是 flake 的
@@ -19,6 +19,12 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      packages = forAllSystems (pkgs: import ./nix/package.nix {
+        inherit pkgs;
+        src = self.outPath;
+        sourceInfo = { commit = self.rev or null; narHash = self.narHash; };
+        nixpkgsRevision = nixpkgs.rev;
+      });
       devShells = forAllSystems (pkgs: {
         web-tests = pkgs.mkShell {
           name = "vaultsyncd-web-tests";

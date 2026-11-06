@@ -46,3 +46,6 @@ pub const EXIT_OK: u8 = 0;
 pub const EXIT_FAILURE: u8 = 1;
 /// 退出码：用法或配置错误（配置读不出、不合法）。
 pub const EXIT_CONFIG: u8 = 2;
+
+/// Optional explicitly configured static Web assets.
+pub mod web;

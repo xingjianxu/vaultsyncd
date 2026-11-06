@@ -37,6 +37,8 @@ use crate::roots::RootContext;
 /// 启动失败：进程必须以非零退出码结束，且从未开放写入。
 #[derive(Debug)]
 pub enum StartupError {
+    /// Explicit Web directory is missing or incomplete.
+    Web(io::Error),
     /// 状态目录已被另一个进程占用（另一个服务端，或正在执行的离线 init）。
     StateLock(StateLockError),
     /// 数据库打开/迁移失败（含种类与版本门禁）。
@@ -59,6 +61,7 @@ pub enum StartupError {
 impl fmt::Display for StartupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StartupError::Web(error) => write!(f, "Web resource configuration failed: {error}"),
             StartupError::StateLock(error) => write!(f, "{error}"),
             StartupError::Database(error) => write!(f, "打开服务端数据库失败：{error}"),
             StartupError::Recovery(error) => write!(f, "{error}"),
@@ -98,6 +101,7 @@ impl From<io::Error> for RunError {
 
 /// 已准备好对外服务的进程状态。
 pub struct Service {
+    web: Option<crate::web::WebAssets>,
     config: Config,
     database: Database,
     /// 状态目录锁：活到进程停止为止，让离线 init 与第二个服务端都无法同时进入同一状态目录。
@@ -143,6 +147,7 @@ impl Service {
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> Result<(), RunError> {
         let Service {
+            web,
             config,
             database,
             _state_lock,
@@ -256,6 +261,10 @@ impl Service {
             sync,
         )
         .merge(backup_router);
+        let router = match web {
+            Some(web) => router.merge(web.router()),
+            None => router,
+        };
         // 观察循环用独立线程 + current-thread runtime：端口实现（`RootHandle` 与 trait 对象）不要求
         // `Send`，而 HTTP 服务的多线程 runtime 不能承载非 `Send` 的 future。
         let stop_observer = Arc::new(tokio::sync::Notify::new());
@@ -335,6 +344,7 @@ impl Service {
 /// 见 [`StartupError`]：数据库打不开、恢复读不出结论或监听地址绑不上时返回错误，调用方必须以
 /// 非零退出码结束，不能降级成“没恢复也先接写入”。
 pub async fn prepare(config: Config) -> Result<Service, StartupError> {
+    let web = crate::web::WebAssets::configured().map_err(StartupError::Web)?;
     // 先抢状态目录锁，再开数据库：顺序反了就会出现“两个进程都已经打开数据库、再去争锁”的窗口，
     // 而 init 也正好会在这个窗口里看到“没有锁”就动手改账号表。
     let state_lock = StateLock::try_acquire_exclusive(&config.state_dir).map_err(|error| {
@@ -390,6 +400,7 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
     .map_err(StartupError::Admin)?;
 
     Ok(Service {
+        web,
         config,
         database,
         _state_lock: state_lock,

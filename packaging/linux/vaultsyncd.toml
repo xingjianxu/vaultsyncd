@@ -1,0 +1,11 @@
+# Example only. Create and authorize actual btrfs directories before deployment.
+[server]
+listen = "127.0.0.1:8721"
+[state]
+dir = "/var/lib/vaultsyncd"
+[roots]
+allowed_bases = ["/srv/vaultsyncd-roots"]
+[log]
+format = "json"
+level = "info"
+# Web path is explicit VAULTSYNCD_WEB_DIR; the Nix release wrapper sets its immutable store resource directory.
