@@ -197,8 +197,6 @@ impl Commits {
             return crate::conflicts::settle(&self.importer, op, generation, digest, size, result)
                 .await;
         }
-        let actual = local.observe_snapshot(path).await?;
-        let mut tx = local.db.begin_write().await.map_err(error)?;
         let entry = EntryId::from_hex(
             result
                 .entry_id
@@ -238,11 +236,39 @@ impl Commits {
             content_version: Some(version),
             deleted: false,
         };
-        entries::put_baseline(&mut tx, local.binding, &base)
+        // A committed upload can race a newer local/remote delete. Never resurrect that
+        // namespace fact just because the ACK arrived late; still retain the version mapping.
+        let mut conn = local.db.pool().acquire().await.map_err(error)?;
+        let current = entries::baseline_entry(&mut conn, local.binding, entry)
             .await
             .map_err(error)?;
+        drop(conn);
+        let is_superseded = |row: &BaselineEntry| {
+            row.revision > base.revision || (row.deleted && row.revision >= base.revision)
+        };
+        let superseded = current.as_ref().is_some_and(is_superseded);
+        let actual = if superseded {
+            None
+        } else {
+            match local.root.inspect(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(error(e)),
+                Ok(_) => local.observe_snapshot(path).await?,
+            }
+        };
+        let mut tx = local.db.begin_write().await.map_err(error)?;
+        // Recheck inside the write transaction so a delete committed by another step wins.
+        let current = entries::baseline_entry(&mut tx, local.binding, entry)
+            .await
+            .map_err(error)?;
+        let superseded = current.as_ref().is_some_and(is_superseded);
+        if !superseded {
+            entries::put_baseline(&mut tx, local.binding, &base)
+                .await
+                .map_err(error)?;
+        }
         let mut disposition = UploadCommitDisposition::StaleGeneration;
-        if let Some(snapshot) = actual {
+        if !superseded && let Some(snapshot) = actual {
             let e = snapshot.evidence();
             let clean = e.generation == generation.get() && e.digest == digest && e.size == size;
             entries::put_local(
