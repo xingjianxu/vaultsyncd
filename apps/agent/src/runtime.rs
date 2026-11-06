@@ -56,6 +56,14 @@ use vaultsyncd_transfer::{
     ports::{PortError, VersionPin},
 };
 type StoredPin = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
+type LiveBinding = (
+    BindingId,
+    RootId,
+    FirstImport,
+    Worker,
+    Arc<Scheduler<Dispatch>>,
+    Arc<Remote>,
+);
 struct SystemClock;
 impl Clock for SystemClock {
     fn now_utc(&self) -> Result<UtcTimestamp, BoundError> {
@@ -124,7 +132,7 @@ impl CredentialSink for VaultSink {
     }
 }
 /// Run in the actual interactive user session. Authentication input is transient stdin only.
-pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), PortError> {
+pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(), PortError> {
     config.validate().map_err(error)?;
     let state = RootHandle::open(&config.state_dir).map_err(error)?;
     let mut roots = Vec::new();
@@ -154,12 +162,18 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
             error(e)
         }
     })?;
-    let sink = Arc::new(VaultSink {
+    let db = Arc::new(
+        Database::open(config.state_dir.join("client.sqlite"))
+            .await
+            .map_err(error)?,
+    );
+    crate::management::load_connection(&db, &mut config).await?;
+    let mut sink = Arc::new(VaultSink {
         vault: CredentialVault::new(&config.server.id).map_err(error)?,
         failed: AtomicBool::new(false),
         pending: Mutex::new(None),
     });
-    let session = AuthSession::with_sink(sink.clone());
+    let mut session = AuthSession::with_sink(sink.clone());
     let mut http = ClientConfig::new(&config.server.url);
     if config.server.development_http {
         http = http.allow_plaintext_http();
@@ -167,7 +181,7 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
     if let Some(ca) = &config.server.ca_file {
         http = http.with_trust(TlsTrust::system_roots_with_pem_file(ca).map_err(error)?);
     }
-    let client = ApiClient::new(http)
+    let mut client = ApiClient::new(http)
         .map_err(error)?
         .with_auth_session(session.clone());
     if login {
@@ -186,26 +200,22 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
         eprintln!("event=login-stored");
         return Ok(());
     }
-    let stored = sink.vault.load().map_err(error)?.ok_or_else(|| {
-        PortError::rejected(
-            "REAUTH_REQUIRED",
-            "login required in current Windows user session",
-        )
-    })?;
-    let issued: SessionIssued =
-        serde_json::from_slice(&stored).map_err(|_| error("invalid stored credential"))?;
-    session.install(
-        Credentials::from_issued(&issued).map_err(vaultsyncd_http_client::transfer_error)?,
-    );
+    if let Some(stored) = sink.vault.load().map_err(error)? {
+        let issued: SessionIssued =
+            serde_json::from_slice(&stored).map_err(|_| error("invalid stored credential"))?;
+        session.install(
+            Credentials::from_issued(&issued).map_err(vaultsyncd_http_client::transfer_error)?,
+        );
+    }
     sink.persist()?;
-    let db = Arc::new(
-        Database::open(config.state_dir.join("client.sqlite"))
-            .await
-            .map_err(error)?,
-    );
     let shutdown = Shutdown::install().map_err(error)?;
-    let mut live = Vec::new();
-    for binding in &config.bindings {
+    // DB is the authority for dynamically created bindings and mutable modes on restart.
+    crate::management::load_bindings(&db, &mut config).await?;
+    crate::management::admit(&config)?;
+    let assemble = |config: AgentConfig,
+                    binding: crate::config::BindingConfig,
+                    db: Arc<Database>,
+                    client: ApiClient<ReqwestTransport>| async move {
         let id = BindingId::from_hex(&binding.id).map_err(error)?;
         let root = RootId::from_hex(&binding.root_id).map_err(error)?;
         let mode = if binding.mode == "full" {
@@ -222,7 +232,6 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
                 || old.root != root
                 || old.local_path != binding.path.to_string_lossy()
                 || old.cache_path != binding.cache.to_string_lossy()
-                || old.mode != mode
             {
                 return Err(error("configuration differs from durable binding"));
             }
@@ -378,24 +387,33 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
         let worker = Worker {
             importer: importer.clone(),
             uploads,
-            mode,
         };
         deferred
             .0
             .set(worker.clone())
             .map_err(|_| error("handler already installed"))?;
-        live.push((
+        eprintln!("event=recovery-complete binding={id}");
+        Ok::<_, PortError>((
             id,
             root,
             FirstImport::new(db.clone(), ports, importer.clone(), remote.clone()),
             worker,
             scheduler,
             remote,
-        ));
-    }
-    let ipc =
-        crate::ipc::start(db.clone(), live.iter().map(|(id, ..)| *id).collect()).map_err(error)?;
-    eprintln!("event=recovery-complete bindings={}", live.len());
+        ))
+    };
+    let mut live: Vec<LiveBinding> = Vec::new();
+    let (commands, mut requests) = tokio::sync::mpsc::channel::<crate::ipc::CommandRequest>(8);
+    let (connection_updates, connection) =
+        tokio::sync::watch::channel(crate::management::connection(&config, &session));
+    let (problem_updates, problems) = tokio::sync::watch::channel(Vec::new());
+    let mut startup_problems: HashMap<BindingId, vaultsyncd_local_ipc::generated::Problem> =
+        HashMap::new();
+    let ipc = crate::ipc::start(db.clone(), commands, connection, problems).map_err(error)?;
+    eprintln!(
+        "event=management-ready configured={}",
+        config.bindings.len()
+    );
     let mut initialized = HashMap::new();
     let mut receivers = HashMap::new();
     loop {
@@ -406,11 +424,202 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
             return Err(error("IPC listener stopped unexpectedly"));
         }
         sink.persist()?;
+        connection_updates.send_replace(crate::management::connection(&config, &session));
         if sink.failed.load(Ordering::Acquire) {
             return Err(error("credential persistence failed"));
         }
+        while let Ok(command) = requests.try_recv() {
+            if command.reply.is_closed() {
+                continue;
+            }
+            let request = command.request;
+            let mut result = if request.command.name
+                == vaultsyncd_local_ipc::generated::CommandName::SetConnection
+            {
+                async {
+                    let proposed =
+                        crate::management::proposed_connection(&db, &config, &request.command)
+                            .await?;
+                    let next_sink = Arc::new(VaultSink {
+                        vault: CredentialVault::new(&proposed.server.id).map_err(error)?,
+                        failed: AtomicBool::new(false),
+                        pending: Mutex::new(None),
+                    });
+                    let next_session = AuthSession::with_sink(next_sink.clone());
+                    let mut http = ClientConfig::new(&proposed.server.url);
+                    if proposed.server.development_http {
+                        http = http.allow_plaintext_http();
+                    }
+                    if let Some(ca) = &proposed.server.ca_file {
+                        http = http
+                            .with_trust(TlsTrust::system_roots_with_pem_file(ca).map_err(error)?);
+                    }
+                    let next_client = ApiClient::new(http)
+                        .map_err(error)?
+                        .with_auth_session(next_session.clone());
+                    if let Some(bytes) = next_sink.vault.load().map_err(error)? {
+                        let issued: SessionIssued = serde_json::from_slice(&bytes)
+                            .map_err(|_| error("invalid stored credential"))?;
+                        next_session.install(
+                            Credentials::from_issued(&issued)
+                                .map_err(vaultsyncd_http_client::transfer_error)?,
+                        );
+                    }
+                    for (_, _, _, worker, _, _) in &live {
+                        worker.importer.callbacks.disconnect();
+                        worker
+                            .importer
+                            .adapter
+                            .lock()
+                            .map_err(error)?
+                            .disconnect()
+                            .map_err(error)?;
+                        worker
+                            .importer
+                            .callbacks
+                            .wait_idle(Duration::from_secs(5))
+                            .await
+                            .map_err(error)?;
+                    }
+                    receivers.clear();
+                    initialized.clear();
+                    live.clear();
+                    crate::management::save_connection(&db, &proposed).await?;
+                    config = proposed;
+                    client = next_client;
+                    session = next_session;
+                    sink = next_sink;
+                    Ok(vaultsyncd_local_ipc::generated::ManagementResult {
+                        connection: Some(crate::management::connection(&config, &session)),
+                        ..Default::default()
+                    })
+                }
+                .await
+            } else if request.command.name
+                == vaultsyncd_local_ipc::generated::CommandName::CreateBinding
+            {
+                async {
+                    if !session.has_credentials() {
+                        return Err(PortError::rejected("REAUTH_REQUIRED", "login required"));
+                    }
+                    let binding = crate::management::new_binding(&config, &request.command).await?;
+                    let value =
+                        assemble(config.clone(), binding.clone(), db.clone(), client.clone())
+                            .await?;
+                    config.bindings.push(binding);
+                    live.push(value);
+                    Ok(vaultsyncd_local_ipc::generated::ManagementResult::default())
+                }
+                .await
+            } else {
+                crate::management::execute(
+                    &db,
+                    &config,
+                    &client,
+                    &session,
+                    live.iter()
+                        .map(|(id, _, _, worker, scheduler, _)| {
+                            (*id, (worker.clone(), scheduler.clone()))
+                        })
+                        .collect(),
+                    &request.command,
+                )
+                .await
+            };
+            if request.command.name == vaultsyncd_local_ipc::generated::CommandName::ListProblems
+                && let Ok(result) = &mut result
+            {
+                let parameters = request.command.parameters.as_ref();
+                result.problems.get_or_insert_default().extend(
+                    startup_problems
+                        .values()
+                        .filter(|p| {
+                            parameters
+                                .and_then(|p| p.binding_id.as_ref())
+                                .is_none_or(|b| b == &p.binding_id)
+                                && parameters.and_then(|p| p.search.as_ref()).is_none_or(|s| {
+                                    p.code.to_lowercase().contains(&s.to_lowercase())
+                                })
+                        })
+                        .cloned(),
+                );
+            }
+            if result.is_ok() {
+                sink.persist()?;
+                if sink.failed.load(Ordering::Acquire) {
+                    return Err(error("credential persistence failed"));
+                }
+            }
+            connection_updates.send_replace(crate::management::connection(&config, &session));
+            let _ = command
+                .reply
+                .send(crate::ipc::management_response(&request, result));
+        }
+        if session.has_credentials() {
+            for binding in &config.bindings {
+                let id = BindingId::from_hex(&binding.id).map_err(error)?;
+                if live.iter().any(|(existing, ..)| *existing == id) {
+                    continue;
+                }
+                let mut conn = db.pool().acquire().await.map_err(error)?;
+                let detached: Option<bool> =
+                    sqlx::query_scalar("SELECT detached FROM binding_controls WHERE binding_id=?")
+                        .bind(id.as_bytes().as_slice())
+                        .fetch_optional(&mut *conn)
+                        .await
+                        .map_err(error)?;
+                drop(conn);
+                if detached == Some(true) {
+                    continue;
+                }
+                match assemble(config.clone(), binding.clone(), db.clone(), client.clone()).await {
+                    Ok(value) => {
+                        live.push(value);
+                        startup_problems.remove(&id);
+                    }
+                    Err(e) => {
+                        let code = e
+                            .code()
+                            .filter(|s| vaultsyncd_domain::error::ErrorCode::from_code(s).is_some())
+                            .unwrap_or("NEEDS_RECOVERY");
+                        startup_problems.insert(
+                            id,
+                            vaultsyncd_local_ipc::generated::Problem {
+                                binding_id: id.to_string(),
+                                problem_id: format!("startup:{id}"),
+                                entry_id: None,
+                                path: Some(String::new()),
+                                code: code.into(),
+                                reason: "绑定尚未完成恢复或连接，不能显示为同步完成".into(),
+                                local_data: "本地目录、缓存与待办保留；尚未取得安全恢复证明".into(),
+                                next_step:
+                                    "核对连接、证书、目录权限和恢复现场，恢复后 agent 会重新检查"
+                                        .into(),
+                                retryable: false,
+                            },
+                        );
+                        if once {
+                            return Err(e);
+                        }
+                        eprintln!(
+                            "event=binding-start-blocked binding={id} code={}",
+                            e.code().unwrap_or("UNAVAILABLE")
+                        );
+                    }
+                }
+            }
+        }
+        problem_updates.send_replace(startup_problems.values().cloned().collect());
         for (id, root, first, worker, scheduler, remote) in &live {
             let result: Result<(), PortError> = async {
+                if !session.has_credentials()
+                    || BindingControls::new(db.clone())
+                        .execution_gate(*id, None)
+                        .await?
+                        != vaultsyncd_agent_core::bindings::control::ExecutionGate::Ready
+                {
+                    return Ok(());
+                }
                 if !initialized.contains_key(id) {
                     let report = first.run(*id, &mut Random, 128).await?;
                     if !report.complete {
@@ -439,6 +648,16 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
                     .map_err(error)?;
                     receivers.insert(*id, receiver);
                     initialized.insert(*id, true);
+                }
+                let mode = BindingControls::new(db.clone()).mode_progress(*id).await?;
+                if mode.mode == SyncMode::Full && !mode.complete {
+                    BindingControls::new(db.clone())
+                        .resume_mode(
+                            *id,
+                            &crate::management_files::Materializer(worker.clone()),
+                            16,
+                        )
+                        .await?;
                 }
                 scheduler.run_round(*id).await?;
                 let received = receivers
@@ -470,10 +689,13 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
             }
         }
         if once {
+            if !session.has_credentials() {
+                return Err(PortError::rejected("REAUTH_REQUIRED", "login required"));
+            }
             break;
         }
         let end = std::time::Instant::now() + Duration::from_millis(config.poll_millis);
-        while !shutdown.requested() && std::time::Instant::now() < end {
+        while !shutdown.requested() && requests.is_empty() && std::time::Instant::now() < end {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
