@@ -8,11 +8,12 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs"
+    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs && node tests/backup.mjs"
   },
   "dependencies": {
-    "@vaultsyncd/ui": "workspace:*",
+    "@noble/hashes": "2.4.0",
     "@vaultsyncd/api-client": "workspace:*",
+    "@vaultsyncd/ui": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

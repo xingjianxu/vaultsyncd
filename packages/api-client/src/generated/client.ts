@@ -1,6 +1,6 @@
 // 本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。
 //
-// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.1.0
+// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.2.0
 // 服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
 // 不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
 // 在对应功能卡加入。
@@ -190,7 +190,7 @@ export async function backupSnapshotStatus(options: ClientOptions, id: string, i
  * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
  * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
  */
-export async function exportBackupSnapshot(options: ClientOptions, id: string, init?: RequestInit): Promise<Uint8Array> {
+export async function exportBackupSnapshot(options: ClientOptions, id: string, init?: RequestInit): Promise<Response> {
   const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/export`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
@@ -200,7 +200,7 @@ export async function exportBackupSnapshot(options: ClientOptions, id: string, i
   if (!response.ok) {
     throw api_error(response.status, await read_json(response));
   }
-  return await read_bytes(response);
+  return response;
 }
 
 /**
@@ -249,7 +249,7 @@ export async function readBackupFile(options: ClientOptions, id: string, name: s
  * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
  * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
  */
-export async function backupSnapshotManifest(options: ClientOptions, id: string, init?: RequestInit): Promise<Uint8Array> {
+export async function backupSnapshotManifest(options: ClientOptions, id: string, init?: RequestInit): Promise<Response> {
   const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/manifest`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
@@ -259,7 +259,7 @@ export async function backupSnapshotManifest(options: ClientOptions, id: string,
   if (!response.ok) {
     throw api_error(response.status, await read_json(response));
   }
-  return await read_bytes(response);
+  return response;
 }
 
 /**

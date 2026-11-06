@@ -26,9 +26,10 @@ mod local_ipc;
 /// `in: header` 的必填字符串。
 /// v5：参数可以是 `in: query`（标量 `string`/`decimal_u64`，必填或可选），成功响应可以是
 /// `text/event-stream`（SSE，无 schema，TypeScript 侧返回原始 `Response` 由调用方读流）。
-const FORMAT_VERSION: u32 = 5;
+// v6: explicit binary Response streaming for bounded consumers (S090).
+const FORMAT_VERSION: u32 = 6;
 /// 生成器名；与 `api/generation.toml` 的 `generator` 核对。
-pub(crate) const GENERATOR_VERSION: &str = "0.1.0";
+pub(crate) const GENERATOR_VERSION: &str = "0.2.0";
 const GENERATOR: &str = "vaultsyncd-xtask";
 /// 生成配置文件（相对 workspace 根）。
 const CONFIG_PATH: &str = "api/generation.toml";
@@ -314,6 +315,9 @@ struct Operation {
     /// 端点标识，同时是 TypeScript 函数名。
     #[serde(rename = "operationId")]
     operation_id: String,
+    /// Explicit bounded-consumer binary streaming response.
+    #[serde(rename = "x-vaultsyncd-stream-response", default)]
+    stream_response: bool,
     /// 一行摘要（进生成代码文档）。
     summary: String,
     /// 补充说明（进生成代码文档）。
@@ -543,6 +547,8 @@ pub(crate) enum SuccessBody {
     Json(String),
     /// `application/octet-stream`：原始字节，不解码、没有生成类型。
     Bytes,
+    /// Binary response handed to an incremental consumer.
+    ByteStream,
     /// `text/event-stream`（SSE）：长连接事件流，不解码；TypeScript 侧交回原始 `Response`。
     EventStream,
 }
@@ -1112,6 +1118,9 @@ fn build_success_body(
         ));
     }
     let (media_type, media) = content.iter().next().expect("上面刚检查过只有一个媒体类型");
+    if operation.stream_response && media_type != "application/octet-stream" {
+        return Err("stream-response is only valid for binary responses".into());
+    }
     match media_type.as_str() {
         "application/json" => Ok(SuccessBody::Json(
             json_schema_name(operation, code, response)?.to_string(),
@@ -1123,7 +1132,11 @@ fn build_success_body(
                     operation.operation_id
                 ));
             }
-            Ok(SuccessBody::Bytes)
+            Ok(if operation.stream_response {
+                SuccessBody::ByteStream
+            } else {
+                SuccessBody::Bytes
+            })
         }
         "text/event-stream" => {
             if media.schema.is_some() {
@@ -1772,5 +1785,25 @@ components:
         );
         let error = model_with(&with_schema).expect_err("事件流带 schema 必须报错");
         assert!(error.contains("事件流响应不声明 schema"), "{error}");
+    }
+    #[test]
+    fn binary_stream_is_explicit_and_json_stream_override_is_rejected() {
+        let operation = format!(
+            "      x-vaultsyncd-stream-response: true\n{}",
+            responses("200", OCTETS)
+        );
+        assert_eq!(
+            model_with(&operation).unwrap().operations[0].success,
+            SuccessBody::ByteStream
+        );
+        let operation = format!(
+            "      x-vaultsyncd-stream-response: true\n{}",
+            responses("200", JSON_THING)
+        );
+        assert!(
+            model_with(&operation)
+                .unwrap_err()
+                .contains("only valid for binary")
+        );
     }
 }

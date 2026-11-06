@@ -855,7 +855,7 @@ python3 tools/context.py --help
 | 文件 | 契约 |
 | --- | --- |
 | `api/openapi.yaml` | OpenAPI `3.1.0`。当前端点：`GET /v1/health`（无需认证、`HealthResponse`、503 用错误信封）、`GET /v1/capabilities`（`Capabilities`、503 用错误信封）。`info.description` 会原样进生成文件表头 |
-| `api/generation.toml` | 生成配置：`format_version = 2`（S025 起含本机 IPC）、`generator = "vaultsyncd-xtask"`、`generator_version`（= 独立 GENERATOR_VERSION 常量）、`source`/`openapi_version`（远端）、`local_ipc_source`/`local_ipc_schema_draft`（本机 IPC）、`[outputs]` 五个路径、`[types.rust]`/`[types.typescript]` 映射表（两份契约共用） |
+| `api/generation.toml` | 生成配置：`format_version = 6`（S090 起显式二进制流）、`generator = "vaultsyncd-xtask"`、`generator_version`（= 独立 GENERATOR_VERSION 常量）、`source`/`openapi_version`（远端）、`local_ipc_source`/`local_ipc_schema_draft`（本机 IPC）、`[outputs]` 五个路径、`[types.rust]`/`[types.typescript]` 映射表（两份契约共用） |
 | `api/examples/*.response.json` | 合法响应样本（capabilities/health/error），被 `crates/protocol/tests/contract.rs` 与 `packages/api-client/tests/schema-decoders.mjs` 直接读取；改契约时同步更新 |
 
 ### schema 子集与生成规则
@@ -2448,3 +2448,12 @@ S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包�
 - 桌面新增固定 `agent_list_history/agent_list_trash/agent_restore_entry` 与通知设置命令，AppManifest及capability同步最小授权，无任意HTTP/数据库入口。历史/回收站分页含到期下限和冲突来源；恢复输入先持久到agent，再GET原Op，404才POST原请求，只有committed成功。服务端仍核对Root/权限/CAS，同名恢复保留现目标；返回授权快照内实际相对位置，位置尚未取得时明确待核对。UI未知/pending保留原操作身份供核对，不显示已恢复。
 - WinRT Toast固定AUMID `org.vaultsyncd.desktop`，只创建/更新本应用StartMenu快捷方式，拒绝同名他应用和symlink。先原子claim再尝试Show，保证同一活动代际最多尝试一次；Windows禁用/失败时问题仍完整，页面明确投递失败。布尔开关单独保存在用户应用设置，无凭据。微软[桌面AUMID要求](https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid)及[发送示例](https://learn.microsoft.com/en-us/windows/win32/shell/quickstart-sending-desktop-toast)为注册依据；首次未打包应用Setting可能缺行的[平台问题记录](https://github.com/MicrosoftDocs/windows-dev-docs/issues/1431)对应0x80070490，仅该特定错误允许实际Show，其余错误不默认成功。
 - `run-native-notifications.sh` 使用真实Windows WebView及系统History API验证中心记录、清中心/开关不清问题、重复报告与进程重启不风暴、恢复和复发。磁盘满/挂载/冲突的这组输入由离线核心端口夹具产生，只证明问题投影与真实OS投递，不冒充实际卷故障；真实冲突/恢复另由Linux btrfs服务与Windowsagent真壳验证。所有报告/fixture/Toast历史测试桥只在native-acceptance编译，正式构建清理全部四项测试权限。
+
+## S090 Web 备份作业与有界导出
+
+- `#/backup` 使用生成 BackupSnapshotStatus/List 与 BrowserAuth。prepare先存稳定ID、未知结果重试同ID，作业分页并轮询；pending、源integrity、浏览器归档状态相互独立。failed/released/expired可显式使用新ID；释放经确认，只影响该快照/租约，不改本地归档和共享对象。
+- OpenAPI manifest/export两个操作声明 `x-vaultsyncd-stream-response: true`；仅允许application/octet-stream，生成器format6/独立GENERATOR_VERSION0.2.0返回原Response，不arrayBuffer整份归档；其他字节端点不变。HTTP流格式与本机IPC wire语义没有变化，Rust生成改动只有来源表头。
+- `features/backup/archive.ts` 是schema约束的内部Index/流验证器，不是第二套wire DTO。与Rust Index/ArchiveVerifier使用相同VSBK001帧、固定manifest摘要、授权路径/顺序/长度/hash和最终零标记；拒绝BOM路径、重复、缺项、截断及额外数据。清单最大256MiB，内容处理/OPFS写入每步≤64KiB；SHA256来自根锁定@noble/hashes2.4.0。
+- `LocalExport` 写OPFS新文件，每次重试保留旧尝试，不自动删除。元信息仅sessionStorage按用户隔离；下载失败/取消为incomplete，完成写入仍exported_unverified，显式重读才verified。页面重开撤回历史成功，需重新核对。OPFS缺能力明确失败并提示CLI；不把浏览器暂存当独立故障域。
+- 另存归档和收据分别提供下载；仅验证OPFS时收据标exported_unverified，重新选择另存文件验证后才可生成verified收据。收据可交S088 CLI backup verify重读；浏览器无法设置POSIX0600，页面要求管理员私有保存位置，严格权限用CLI。离线restore仅说明停服务及CLI validate，无在线restore入口。
+- 验收 `pnpm --filter @vaultsyncd/web test`、`nix develop .#web-tests --command python3 tests/web/backup-browser.py`。真实专用btrfs/Chromium覆盖14场景，包含CLI验证浏览器下载的真实归档；测试归档/收据0600，finally清服务、loop和挂载。后续HTTPS/离线恢复依各自卡验收。

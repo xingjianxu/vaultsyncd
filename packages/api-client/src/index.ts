@@ -33,3 +33,6 @@ export type { ManagedRootList, ManagedRoot, RootCollection, RootCollectionState,
 
 export { listRecoveryEntries, listConflictCopies, listRoots, createSnapshot, submitOperation, getOperation } from "./generated/client";
 export type { OperationRequest, OperationResult, RootSummary } from "./generated/types";
+
+export { listBackupSnapshots, prepareBackupSnapshot, backupSnapshotStatus, verifyBackupSnapshot, releaseBackupSnapshot, backupSnapshotManifest, exportBackupSnapshot } from "./generated/client";
+export type { BackupSnapshotStatus, BackupSnapshotList, BackupIntegrity, BackupSnapshotPhase } from "./generated/types";

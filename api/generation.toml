@@ -10,9 +10,9 @@
 # v4：成功响应可以是二进制切片（`application/octet-stream`，无 schema），端点参数可用
 # `in: header`（必填、`type: string`）。
 # v5：端点参数可用 `in: query`（标量，必填或可选），成功响应可以是 `text/event-stream`（SSE）。
-format_version = 5
+format_version = 6
 generator = "vaultsyncd-xtask"
-generator_version = "0.1.0"
+generator_version = "0.2.0"
 
 # 远端契约来源与它声明的 OpenAPI 版本，必须与文档里的 `openapi` 字段一致。
 source = "api/openapi.yaml"

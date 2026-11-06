@@ -112,7 +112,7 @@
 | S087 | 一致性备份快照与租约 | L | S086、S048 | done | `813cf39`、`84c7512`；基线 `6ebb2d0`；分支 `feat/S087-backup-prepare` | 独立target四包573＋集成36，共609/0；btrfs持续写218次固定seq2、历史/回收站/hash/ro/租约、失败与SIGKILL恢复；clippy/fmt/Windows store检查通过 | 无；部署需私有CoW btrfs和user_subvol_rm_allowed，CLI/export/verify/release归S088；测试卷已清理 | agent/tasks/S087.md（+a/b/c） |
 | S088 | 备份导出、校验与释放接口 | L | S087、S075 | done | `99cc17a`、`0bc6846`、`f1302ba`；基线 `e1adeb3`；分支 `feat/S088-backup-export` | store92/server54/admin11/core流2/管理恢复3；真实btrfs CLI/HTTP矩阵1/0（49.88秒），坏hash/缺对象/取消/长流/释放崩溃；clippy/fmt/协议/边界/TS通过 | 无；源verified≠持久导出verified，24小时租约；恢复归S089，测试卷已清理 | agent/tasks/S088.md（+a/b/c） |
 | S089 | 离线恢复到空目录 | L | S088、S037 | todo | — | 未执行 | — | agent/tasks/S089.md（执行时创建） |
-| S090 | Web 备份管理入口 | B | S079、S088 | todo | — | 未执行 | — | agent/tasks/S090.md（执行时创建） |
+| S090 | Web 备份管理入口 | B | S079、S088 | done | `e73a5f6`；基线 `5459aec`；`.worktrees/s090` / `feat/S090-web-backup` | 真Chromium+专用btrfs14场景、Rust CLI验浏览器归档；xtask23/23+clippy、Web构建测试、三目标边界/两侧契约通过 | 无；OPFS安全上下文/浏览器权限限制与HTTPS/离线恢复边界见交接 | agent/tasks/S090.md（+a/b） |
 | S091 | 协议与数据库升级演练 | X | S089、S074 | todo | — | 未执行 | — | agent/tasks/S091.md（执行时创建） |
 | S092 | 构建依赖与协议边界检查 | L | S024、S025、S080 | done | 实现 `db95ba8`；基线 `7663799`；worktree `.worktrees/s092` / `feat/S092-boundary-checks` | 三目标metadata/pnpm边界、九负例及逐字节还原正例、xtask21/21与clippy；统一check六步895/0通过 | 无；metadata与源码静态门禁不替代平台原生/语义安全验收 | agent/tasks/S092.md |
 | S093 | 发布版本与产物清单 | L | S052、S076、S092 | done | `d59a7b2`、`7993e72`、`fbc0d27`；基线 `4ab4a5f`；`.worktrees/s093` / `feat/S093-release-manifest` | xtask22/22+clippy；统一check6/6、Rust895/0；真实双前端构建与11类版本/产物/来源负例通过 | 无；实验组件来源fbc0d27，后续HEAD必须重建；Linux发行/Windows安装留后续卡 | agent/tasks/S093.md（+a/b） |
