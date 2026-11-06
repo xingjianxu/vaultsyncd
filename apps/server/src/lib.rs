@@ -16,6 +16,7 @@ compile_error!(
 
 pub mod auth;
 pub mod bootstrap;
+pub mod commands;
 pub mod config;
 pub mod content;
 pub mod executor;

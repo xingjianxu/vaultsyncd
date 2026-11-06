@@ -94,6 +94,10 @@ pub fn router(
             post(super::operations::submit),
         )
         .route(
+            "/v1/roots/{root}/entries/{entry}/subtree",
+            get(super::operations::subtree_token),
+        )
+        .route(
             "/v1/roots/{root}/operations/{op}",
             get(super::operations::status),
         )

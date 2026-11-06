@@ -781,6 +781,69 @@ impl RestrictedDir {
     /// # Errors
     ///
     /// 见 [`RestrictError::Unlink`]。
+    /// 在目录句柄下创建一个子目录（不递归；父目录不存在即失败）。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RestrictError`]：目标已存在为 `AlreadyExists`，父目录不存在为 `NotFound`。
+    pub fn mkdir(&self, relative: &Path, mode: u32) -> Result<(), RestrictError> {
+        let target = to_c_string(relative).map_err(RestrictError::InvalidRelativePath)?;
+        raw::mkdirat(self.handle.as_raw_fd(), &target, mode).map_err(|source| {
+            match source.raw_os_error() {
+                Some(errno::EEXIST) => RestrictError::AlreadyExists {
+                    path: self.path.join(relative),
+                    source,
+                },
+                Some(errno::ENOENT) => RestrictError::NotFound {
+                    path: self.path.join(relative),
+                    source,
+                },
+                Some(errno::EACCES) | Some(errno::EPERM) => RestrictError::PermissionDenied {
+                    path: self.path.join(relative),
+                    source,
+                },
+                _ => RestrictError::Stat {
+                    path: self.path.join(relative),
+                    source,
+                },
+            }
+        })
+    }
+
+    /// 删除目录句柄下的一个空目录（非空即失败，绝不递归）。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RestrictError`]：目录非空为 `AlreadyExists`（用 `ENOTEMPTY` 表达），不存在为 `NotFound`。
+    pub fn unlink_dir(&self, relative: &Path) -> Result<(), RestrictError> {
+        let target = to_c_string(relative).map_err(RestrictError::InvalidRelativePath)?;
+        raw::rmdirat(self.handle.as_raw_fd(), &target).map_err(|source| {
+            match source.raw_os_error() {
+                Some(errno::ENOTEMPTY) | Some(errno::EEXIST) => RestrictError::AlreadyExists {
+                    path: self.path.join(relative),
+                    source,
+                },
+                Some(errno::ENOENT) => RestrictError::NotFound {
+                    path: self.path.join(relative),
+                    source,
+                },
+                Some(errno::EACCES) | Some(errno::EPERM) => RestrictError::PermissionDenied {
+                    path: self.path.join(relative),
+                    source,
+                },
+                _ => RestrictError::Unlink {
+                    path: self.path.join(relative),
+                    source,
+                },
+            }
+        })
+    }
+
+    /// 删除目录句柄下的一个文件（不跟随符号链接；目录要用 [`Self::unlink_dir`]）。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`RestrictError`]：不存在、权限、目录等失败都原样上报。
     pub fn unlink(&self, relative: &Path) -> Result<(), RestrictError> {
         let target = to_c_string(relative).map_err(RestrictError::InvalidRelativePath)?;
         raw::unlinkat(self.handle.as_raw_fd(), &target).map_err(|source| RestrictError::Unlink {

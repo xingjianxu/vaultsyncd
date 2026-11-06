@@ -43,6 +43,7 @@ use vaultsyncd_server_store::operations as store_operations;
 use vaultsyncd_server_store::roots::{self as store_roots, RootHealth};
 
 use crate::auth::AuthContext;
+use crate::commands::{self, CreateCommand, DeleteCommand, MoveCommand};
 use crate::executor::{ExecutorContext, PutCommand};
 use crate::uploads::{Caller, FromIdentity, bad_request, denied, error_response, parse_identity};
 use vaultsyncd_server_store::uploads as store_uploads;
@@ -158,18 +159,35 @@ pub async fn submit(
 
     // 新命令：内容 put 走真实执行链路（意图 → 发布 → 元数据事务）；其余命令的适配器尚未落地，
     // 继续显式 503 `SERVICE_NOT_READY`，不写任何状态、不伪造成功。
-    if request.kind != OperationKind::PutContent {
+    let at = match crate::executor::server_now() {
+        Ok(at) => at,
+        Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(root_id)),
+    };
+    if request.kind == OperationKind::Restore {
         warn!(
             request_id = %caller.request_id,
             root = %root_id.to_hex(),
             kind = request.kind.as_text(),
-            "该命令的存储/工作目录适配器尚未装配，命令未被受理"
+            "恢复的存储/内容适配器尚未装配，命令未被受理"
         );
         return failure_response(
             &caller.request_id,
             &OperationFailure::ExecutorUnavailable,
             root_id,
         );
+    }
+    if request.kind != OperationKind::PutContent {
+        return execute_namespace_command(
+            &context,
+            &caller,
+            root_id,
+            key,
+            digest,
+            &request,
+            at,
+            &caller.request_id,
+        )
+        .await;
     }
     let Some(entry) = request.entry else {
         return failure_response(
@@ -193,10 +211,6 @@ pub async fn submit(
     {
         Ok(content) => content,
         Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
-    };
-    let at = match crate::executor::server_now() {
-        Ok(at) => at,
-        Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(root_id)),
     };
     let command = PutCommand {
         device: request.device,
@@ -281,6 +295,203 @@ async fn finalized_content(
         ContentDigest::from_bytes(record.hash),
         record.expected_size,
     ))
+}
+
+/// create/move/delete 的端点分支：翻译成命令、调用执行器、把结果写进 `OperationResult`。
+#[allow(clippy::too_many_arguments)]
+async fn execute_namespace_command(
+    context: &Arc<OperationsContext>,
+    caller: &Caller,
+    root: RootId,
+    key: store_operations::OperationKey,
+    digest: store_operations::RequestDigest,
+    request: &OperationRequest,
+    at: vaultsyncd_domain::version::UtcTimestamp,
+    request_id: &str,
+) -> Response {
+    let owner = caller.principal.user_id;
+    match request.kind {
+        OperationKind::Create => {
+            let (Some(parent), Some(name)) = (request.parent, request.name.clone()) else {
+                return failure_response(
+                    request_id,
+                    &OperationFailure::InvalidRequest {
+                        detail: "create 缺少 parent_id/name".to_owned(),
+                    },
+                    root,
+                );
+            };
+            let command = CreateCommand { parent, name };
+            match commands::execute_create(
+                &context.executor,
+                owner,
+                key,
+                digest,
+                &command,
+                request.expected_epoch,
+                at,
+            )
+            .await
+            {
+                Ok(record) => committed_result(
+                    request_id,
+                    request,
+                    record.entry,
+                    Some(record.revision),
+                    Some(record.seq),
+                    None,
+                ),
+                Err(failure) => failure_response(request_id, &failure, root),
+            }
+        }
+        OperationKind::Move => {
+            let (Some(entry), Some(revision), Some(parent), Some(name)) = (
+                request.entry,
+                request.base_revision,
+                request.parent,
+                request.name.clone(),
+            ) else {
+                return failure_response(
+                    request_id,
+                    &OperationFailure::InvalidRequest {
+                        detail: "move 缺少 entry_id/base_revision/parent_id/name".to_owned(),
+                    },
+                    root,
+                );
+            };
+            let command = MoveCommand {
+                entry,
+                base_revision: revision,
+                parent,
+                name,
+            };
+            match commands::execute_move(
+                &context.executor,
+                owner,
+                key,
+                digest,
+                &command,
+                request.expected_epoch,
+                at,
+            )
+            .await
+            {
+                Ok(record) => committed_result(
+                    request_id,
+                    request,
+                    record.entry,
+                    Some(record.revision),
+                    Some(record.seq),
+                    None,
+                ),
+                Err(failure) => failure_response(request_id, &failure, root),
+            }
+        }
+        OperationKind::Delete => {
+            let (Some(entry), Some(revision)) = (request.entry, request.base_revision) else {
+                return failure_response(
+                    request_id,
+                    &OperationFailure::InvalidRequest {
+                        detail: "delete 缺少 entry_id/base_revision".to_owned(),
+                    },
+                    root,
+                );
+            };
+            let command = DeleteCommand {
+                entry,
+                base_revision: revision,
+                subtree_token: request.subtree_token,
+            };
+            match commands::execute_delete(
+                &context.executor,
+                owner,
+                key,
+                digest,
+                &command,
+                request.expected_epoch,
+                at,
+            )
+            .await
+            {
+                Ok(record) => committed_result(
+                    request_id,
+                    request,
+                    record.entry,
+                    None,
+                    Some(record.seq),
+                    None,
+                ),
+                Err(failure) => failure_response(request_id, &failure, root),
+            }
+        }
+        OperationKind::PutContent | OperationKind::Restore => {
+            failure_response(request_id, &OperationFailure::ExecutorUnavailable, root)
+        }
+    }
+}
+
+/// 已提交结果的统一形状：只有 committed 才带 revision/root_seq/version。
+fn committed_result(
+    request_id: &str,
+    request: &OperationRequest,
+    entry: EntryId,
+    revision: Option<vaultsyncd_domain::version::Revision>,
+    seq: Option<vaultsyncd_domain::version::RootSeq>,
+    version: Option<VersionId>,
+) -> Response {
+    let _ = request_id;
+    let result = OperationResult {
+        op_id: request.op.to_hex(),
+        state: WireState::Committed,
+        replayed: Some(false),
+        conflict: None,
+        echo_local_generation: request.local_generation.map(|value| value.to_string()),
+        entry_id: Some(entry.to_hex()),
+        error_code: None,
+        error_message: None,
+        revision: revision.map(|value| value.to_string()),
+        root_seq: seq.map(|value| value.to_string()),
+        version_id: version.map(|value| value.to_hex()),
+    };
+    (StatusCode::OK, Json(result)).into_response()
+}
+
+/// `GET /v1/roots/{root}/entries/{entry}/subtree`：取目录的冻结子树 token。
+///
+/// 目录删除必须带这个 token（design §10.3、T12）：从看到清单到发出删除之间，子树的任何新增或变化
+/// 都会让 token 变化，删除因此返回 409 而不是删掉并发新增。
+pub async fn subtree_token(
+    State(context): State<Arc<OperationsContext>>,
+    UrlPath((root, entry)): UrlPath<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
+    };
+    let Some(entry_id) = parse_identity::<EntryId>(&entry) else {
+        return bad_request(&caller.request_id, "条目身份不是 32 位小写十六进制");
+    };
+    match commands::subtree_image_of(
+        &context.executor,
+        caller.principal.user_id,
+        root_id,
+        entry_id,
+    )
+    .await
+    {
+        Ok(image) => (
+            StatusCode::OK,
+            Json(vaultsyncd_protocol::generated::SubtreeToken {
+                root_id: root_id.to_hex(),
+                entry_id: entry_id.to_hex(),
+                token: image.token().to_hex(),
+                entries: image.len().to_string(),
+            }),
+        )
+            .into_response(),
+        Err(failure) => failure_response(&caller.request_id, &failure, root_id),
+    }
 }
 
 /// `GET /v1/roots/{root}/operations/{op}`：按 OpId 取操作结果。

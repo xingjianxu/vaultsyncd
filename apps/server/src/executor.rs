@@ -117,6 +117,75 @@ impl ExecutorContext {
         ObjectLayout::new(self.state_dir.join("objects"))
     }
 
+    /// 数据库句柄（命令适配器需要同一个连接池）。
+    #[must_use]
+    pub fn database(&self) -> &Database {
+        &self.database
+    }
+
+    /// 按 owner scope 取 Root 的绝对路径与已缓存的 Root 句柄。
+    ///
+    /// # Errors
+    ///
+    /// Root 不存在/越权（`RootUnavailable`）或句柄打不开（`SERVICE_NOT_READY` 之外的存储故障）。
+    pub async fn root_handle(
+        &self,
+        owner: UserId,
+        root: RootId,
+    ) -> Result<Arc<RootHandle>, OperationFailure> {
+        let record = {
+            let mut conn = self.pool_conn().await?;
+            store_roots::root_in_scope(&mut conn, owner, root)
+                .await
+                .map_err(|error| storage_error(&error.to_string()))?
+                .ok_or(OperationFailure::RootUnavailable)?
+        };
+        self.handle(root, &record.absolute_path)
+    }
+
+    /// Root 提交串行化门（命名空间/删除命令与 put 共用同一把门）。
+    pub fn commit_gate(&self) -> &tokio::sync::Mutex<RootCommitGate> {
+        &self.gate
+    }
+
+    /// 登记一条 `pending` 操作行；已存在时报错（调用方应先查重放）。
+    ///
+    /// # Errors
+    ///
+    /// 摘要冲突（`OP_ID_REUSED`）或存储失败。
+    pub async fn begin_operation(
+        &self,
+        owner: UserId,
+        key: store_operations::OperationKey,
+        digest: store_operations::RequestDigest,
+    ) -> Result<(), OperationFailure> {
+        let mut tx = self.begin_write().await?;
+        let began = store_operations::begin_operation(
+            &mut tx,
+            owner,
+            &store_operations::NewOperation { key, digest },
+        )
+        .await
+        .map_err(|error| operation_store_error(&error))?;
+        tx.commit()
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?;
+        match began {
+            store_operations::BeginOperation::Started => Ok(()),
+            store_operations::BeginOperation::Replayed(_) => Err(OperationFailure::OpIdReused),
+        }
+    }
+
+    /// 把一个还没有结论的操作记成稳定拒绝（不推进 RootSeq，不产生事件）。
+    pub async fn reject_failure(
+        &self,
+        owner: UserId,
+        key: store_operations::OperationKey,
+        failure: &OperationFailure,
+    ) {
+        self.reject(owner, key, failure).await;
+    }
+
     fn handle(&self, root: RootId, path: &str) -> Result<Arc<RootHandle>, OperationFailure> {
         let mut roots = self.roots.lock().map_err(|_| OperationFailure::Storage {
             detail: "Root 句柄缓存被污染".to_owned(),

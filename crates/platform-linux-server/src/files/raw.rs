@@ -37,12 +37,17 @@ pub(crate) const RESOLVE_STRICT: u64 =
 /// `RENAME_NOREPLACE`（`linux/fs.h`）：目标已存在时让 `renameat2` 失败而不是覆盖。
 pub(crate) const RENAME_NOREPLACE: c_uint = 1;
 
+/// `AT_REMOVEDIR`（`fcntl.h`）：`unlinkat` 删除目录而不是文件。
+pub(crate) const AT_REMOVEDIR: c_int = 0x200;
+
 /// errno 取值（`asm-generic/errno*.h`，这些值在受支持的架构上一致）。
 pub(crate) mod errno {
     /// 跨文件系统链接（`renameat2`/`FICLONE` 的真实边界）。
     pub(crate) const EXDEV: i32 = 18;
     /// 目标已存在（`RENAME_NOREPLACE`、`O_EXCL`）。
     pub(crate) const EEXIST: i32 = 17;
+    /// 目录非空（`ENOTEMPTY`）。
+    pub(crate) const ENOTEMPTY: i32 = 39;
     /// 符号链接环（`O_NOFOLLOW` 命中符号链接时的典型返回）。
     pub(crate) const ELOOP: i32 = 40;
     /// 不存在。
@@ -121,8 +126,10 @@ mod abi {
             newpath: *const c_char,
             flags: c_uint,
         ) -> c_int;
-        /// `unlinkat(2)`：删除相对目录句柄的文件。
+        /// `unlinkat(2)`：删除相对目录句柄的文件（或 `AT_REMOVEDIR` 时的空目录）。
         pub(super) fn unlinkat(dirfd: c_int, pathname: *const c_char, flags: c_int) -> c_int;
+        /// `mkdirat(2)`：在目录句柄下创建一个子目录（不递归）。
+        pub(super) fn mkdirat(dirfd: c_int, pathname: *const c_char, mode: c_uint) -> c_int;
         /// `fsync(2)`：文件与目录刷盘。
         pub(super) fn fsync(fd: c_int) -> c_int;
         /// `lseek(2)`：把目录句柄的读取位置倒回起点（重复列举同一句柄必需）。
@@ -210,6 +217,26 @@ pub(crate) fn renameat2(
 pub(crate) fn unlinkat(dirfd: RawFd, path: &CStr) -> io::Result<()> {
     // SAFETY: path 是 NUL 结尾的 C 字符串；flags 传 0 表示删除文件而非目录。
     let rc = unsafe { abi::unlinkat(dirfd, path.as_ptr(), 0) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// `mkdirat(2)`：在目录句柄下创建一个子目录。
+pub(crate) fn mkdirat(dirfd: RawFd, path: &CStr, mode: u32) -> io::Result<()> {
+    // SAFETY: path 是 NUL 结尾的 C 字符串；模式只取权限位。
+    let rc = unsafe { abi::mkdirat(dirfd, path.as_ptr(), mode) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// `unlinkat(2)` + `AT_REMOVEDIR`：删除目录句柄下的一个空目录。
+pub(crate) fn rmdirat(dirfd: RawFd, path: &CStr) -> io::Result<()> {
+    // SAFETY: 同上；`AT_REMOVEDIR` 让内核只接受空目录。
+    let rc = unsafe { abi::unlinkat(dirfd, path.as_ptr(), AT_REMOVEDIR) };
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
