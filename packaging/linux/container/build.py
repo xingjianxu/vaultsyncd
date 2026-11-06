@@ -64,7 +64,9 @@ def main():
              'sourceInfo':manifest['sourceInfo'],'version':manifest['version'],'runtime_manifest_sha256':sha(manifest_path),
              'ubuntu_lock_sha256':sha(root/'share/vaultsyncd/container/ubuntu-lock.json')}
     assert inspected['Architecture']==arch and inspected['Config']['User']=='8721:8721'
-    assert inspected['Config']['Healthcheck']['Test'], 'image must retain the declared health check'
+    health=inspected.get('Healthcheck') or inspected['Config'].get('Healthcheck')
+    assert health and health['Test'], 'image must retain the declared health check'
+    receipt['healthcheck']=health
     args.receipt.write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
     print(json.dumps(receipt,sort_keys=True))
 

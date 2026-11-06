@@ -99,7 +99,8 @@ def main():
     try:
         inspected=json.loads(command(['podman','image','inspect',IMAGE]).stdout)[0]
         assert inspected['Architecture']==ARCH and inspected['Config']['User']=='8721:8721'
-        assert inspected['Config']['Healthcheck']['Test']
+        health=inspected.get('Healthcheck') or inspected['Config'].get('Healthcheck')
+        assert health and health['Test']
         archive=RUN/'image.oci'
         command(['podman','save','--format','oci-archive','-o',archive,IMAGE]);engine('load','-i',archive)
         RESULT['image_id']=inspected['Id'];RESULT['labels']=inspected['Config']['Labels']
