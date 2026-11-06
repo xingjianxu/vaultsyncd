@@ -1,6 +1,6 @@
 # 实施进度
 
-当前阶段：**S071—S075 执行中**。用户要求每卡一个 subagent、同时最多3个；依赖链 S071→S072→S073→S074，S075 独立并行。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`；各卡独立工作树，父会话统一维护本表。master 与既有集成分支保留不动；只本地提交、不推送。当前已分派 S071 和 S075，尚无本批完成声明。
+当前阶段：**S071—S075 执行中**。用户要求每卡一个 subagent、同时最多3个；依赖链 S071→S072→S073→S074，S075 独立并行。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`；各卡独立工作树，父会话统一维护本表。master 与既有集成分支保留不动；只本地提交、不推送。S071 已通过真实 Windows 验收并集成（`f6ea562`）；现运行 S072 和 S075 两个专属 subagent，其他卡尚未验收。
 
 此前阶段记录：**S066—S070 全部 done（2026-11-06）**。按用户要求每卡一个 subagent，同时最多3个；S066后并行S067/S068，独立租约/生命周期子卡提前准备，平台释放与完整同步按依赖验收。集成树 `/wrd/prj/vaultsyncd/.worktrees/s066-s070`，分支 `feat/S066-S070-integration`，基线 `26f5416`；master保持 `0b3b3c6`，只本地提交，未推送/未合入master。最终真实Windows：S070进程2/2（13项断言）、平台65/65、agent库8/8；core123/store50；统一xtask五步通过（874/0、28结果行）、server lib40和集成33通过、最终Windows agent/platform all-target check及fmt通过。所有任务提交与证据、限制、清理记录见 `agent/tasks/S066-S070.md`；下一 ready：**S071**。
 
@@ -11,7 +11,7 @@
 （上一阶段记录，保留供追溯）S011—S014：Windows：`cfapi::content`/`cfapi::provider` 用固定内容源实现 `FETCH_DATA` 分段落盘（12,345 B / 1 MiB / 16 MiB，含 1 MiB 范围水合），读取字节与 SHA-256 与宿主一致；离线未水合以 `ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE`(388) 明确失败，慢源超时有界，传输中断开同步根有界返回；`cfapi::guard`/`cfapi::release` 把“已观察内容 + 使用保护”做成保守判定，只有 `clean` 才 `CfSetInSyncState`+`CfDehydratePlaceholder`，原地写/映射写/独占句柄/共享锁全部 `refused` 且内容不变，干净样本释放后再读哈希一致。宿主 38 单测、两端 clippy、fmt 与三项客体脚本（21/46/74 项 `check=pass`、0 fail）全通过。**S011 仍有一项阻塞**：`CANCEL_FETCH_DATA` 在本 build（26300）5 条路径均未触发（取消标志与中止路径已实现并有宿主单测）；**S012 有 1 项记录阻塞**：rename-over 保存无法证明安全（同步根内建不了临时文件、根外改名后目标名字无法按路径打开）。Linux：新增 `crates/platform-linux-server`——`mounts/` 挂载准入（fstatfs + statx + mountinfo + 只读 btrfs ioctl；拒绝 FUSE/NFS/SMB/overlay/tmpfs/ext4 等、嵌套子卷与子挂载、NOCOW）与 `files/` 受限句柄发布（`openat2`、目标文件系统内暂存、`FICLONE`/`EXDEV` 校验复制、两步受控替换）在真实 btrfs 测试卷上分别 60/100 项通过，父会话独立重跑 100/100 且清理核对一致。客体已干净关机，测试卷、loop 与探针目录均已清理。
 执行方式（2026-11-06 用户决定）：S015—S060 由父会话按卡分派 subagent 逐个执行，同时运行的 subagent 不超过 3 个；每卡仍在自己的 Git worktree 内实现、验证并本地提交，`agent/progress.md` 由父会话统一更新以避免同表相邻行冲突。Windows 客体按 `docs/operations/windows-lab.md` §19.1 在测试后保持运行，不默认关机。
 
-最早 ready：**S071**（Windows named pipe传输与身份，前置S070/S025已完成）；本批S066—S070均验收完成。S011原始OS取消回调未触发的历史限制继续保留，S102等后续矩阵不在本批完成声明内。
+当前已启动 ready：**S072、S075**；S071 已验收完成，S073 等待 S072，S074 等待 S073。本批S066—S070均验收完成。S011原始OS取消回调未触发的历史限制继续保留，S102等后续矩阵不在本批完成声明内。
 构建分工（2026-11-05 用户决定，S009 已实施）：Windows 客户端在本 NixOS 开发环境交叉编译，宿主承担构建、客体承担原生运行验收；design ADR-013、实施手册 §2.6 与环境/操作文档已同步，具体工具链版本与证据见 `docs/environment.md` §13、步骤见 `docs/operations/windows-lab.md` §12。
 平台资源核验结论（S001，2026-11-05）：开发/服务验证主机为 NixOS 26.11 x86_64、Nix 2.34.9；`/`、`/home`、`/nix`、`/var/log`、`/wrd`、`/data` 均为本地 btrfs；`/wrd` 可用 197G、`/data` 可用 22T；KVM 可用且用户在 `kvm` 组，但 QEMU/Quickemu 未安装、无现成 Windows 客体；尚无本项目独立 btrfs 测试卷。Ubuntu 24.04、Linux ARM64、Windows 原生 CFAPI、reflink 与验收规模均未核验。证据见 `docs/environment.md`。
 
@@ -89,8 +89,8 @@
 | S068 | Windows 写入检测与使用保护 | W | S066、S056、S059 | done | `f5af3db`、`d874f54`；集成 `1847d9f` | Windows原生63/63、宿主platform43/transfer59，两端clippy/fmt通过；映射/共享写者拒绝、原子保存、三处进程中断和间隙占用保三方 | 无；可恢复两段发布，启动须先平台恢复后core恢复 | agent/tasks/S068.md（a/b） |
 | S069 | Windows 手动释放与恢复 | W | S067、S068、S063 | done | `59985ea`、`c9b95a0`、`e542446`；集成 `7c763bf` | 真实租约+CFAPI+SQLite，Windows5/5含dirty/busy/跨await保护、VERSION_GONE、SQLITE_FULL13及进程81—83恢复；store80/client64+1/server40/HTTP1、clippy/fmt/生成一致通过 | 无；物理卷满盘与GC worker仍留后续卡 | agent/tasks/S069.md（a/b/c） |
 | S070 | Windows agent 进程与单实例 | W | S067、S068、S069、S064 | done | `e0200e3`、`f5ce872`、`97c0735`、`f376493`、`5fa3cba`、`daf2dc8`、`75e95b2`、`4e273fe`；集成 `89a0ebe` | 真实进程2/2含13断言（无GUI双向/原Op重启/冲突/namespace/杀进程Move恢复/SQLite全0/单实例/退出）；平台65/agent库8、core123/store50、迁移15、两端clippy | 无；IPC/管理及更广故障矩阵留S071/S072/S102 | agent/tasks/S070.md（a/b0/b3/b4/b5） |
-| S071 | Windows named pipe 传输与身份 | W | S070、S025 | in_progress | `.worktrees/s071`，`feat/S071-windows-named-pipe`；基线 `873f306` | 专属 subagent 实施中，尚未验收 | — | agent/tasks/S071.md（执行时创建） |
-| S072 | 本机管理命令完整接入 | W | S071、S061、S064 | todo | — | 未执行 | — | agent/tasks/S072.md（执行时创建） |
+| S071 | Windows named pipe 传输与身份 | W | S070、S025 | done | `8036466`、`323469f`、`e3a2e51`；集成 `f6ea562`；基线 `873f306` | Windows原生传输5/5、真实SQLite错误1/1、实际进程1/1（16断言）；Rust IPC20、xtask19、TS9，两端clippy/fmt/生成一致通过 | 无；管理及版本化推送归S072 | agent/tasks/S071.md（+a） |
+| S072 | 本机管理命令完整接入 | W | S071、S061、S064 | in_progress | `.worktrees/s072`，`feat/S072-local-management`；基线 `f6ea562` | 专属 subagent 实施中，尚未验收 | — | agent/tasks/S072.md（执行时创建） |
 | S073 | Windows CLI 最小管理入口 | W | S072 | todo | — | 未执行 | — | agent/tasks/S073.md（执行时创建） |
 | S074 | 三台客户端基础互通 | X | S073、S052 | todo | — | 未执行 | — | agent/tasks/S074.md（执行时创建） |
 | S075 | Linux 在线管理 socket 与 CLI | L | S043、S044、S047、S048 | in_progress | `.worktrees/s075`，`feat/S075-linux-admin-socket`；基线 `873f306` | 专属 subagent 实施中，尚未验收 | — | agent/tasks/S075.md（执行时创建） |
