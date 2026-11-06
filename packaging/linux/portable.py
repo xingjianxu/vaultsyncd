@@ -72,7 +72,7 @@ shutil.copy2(os.environ['unit'],ROOT/'share/vaultsyncd/vaultsyncd.service')
 shutil.copy2(os.environ['exampleConfig'],ROOT/'share/vaultsyncd/vaultsyncd.toml')
 shutil.copytree(os.environ['containerTemplates'],ROOT/'share/vaultsyncd/container')
 licenses=ROOT/'share/vaultsyncd/licenses';licenses.mkdir()
-for variable,names in [('glibcSource',['COPYING','COPYING.LIB']),('gccSource',['COPYING3','COPYING.RUNTIME'])]:
+for variable,names in [('glibcSource',['COPYINGv2','COPYINGv3','COPYING.LIB','COPYING.LESSERv2']),('gccSource',['COPYING3','COPYING.RUNTIME'])]:
     with tarfile.open(os.environ[variable]) as archive:
         for name in names:
             matches=[m for m in archive.getmembers() if len(Path(m.name).parts)==2 and Path(m.name).name==name]
