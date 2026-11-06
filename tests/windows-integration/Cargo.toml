@@ -21,3 +21,14 @@ path = "src/bin/cfapi_link_smoke.rs"
 # 与包级 lint 覆盖（S009 实测），源码属性可以覆盖命令行传入的 `--deny`。
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
+vaultsyncd-local-ipc = { path = "../../crates/local-ipc" }
+vaultsyncd-http-client = { path = "../../crates/http-client" }
+vaultsyncd-protocol = { path = "../../crates/protocol" }
+vaultsyncd-transfer = { path = "../../crates/transfer" }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
