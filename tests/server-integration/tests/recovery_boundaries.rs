@@ -99,6 +99,33 @@ fn unlock_dir(dir: &Path) {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).expect("可写");
 }
 
+async fn assert_pending_intent(lab: &Lab) {
+    // Root 准入仍完整可写；只锁发布目标的父目录，不让 upfront rwx 代替真实发布故障。
+    assert_eq!(
+        std::fs::metadata(lab.work()).unwrap().permissions().mode() & 0o700,
+        0o700
+    );
+    let mut conn = db(lab).await;
+    assert_eq!(
+        scalar(
+            &mut conn,
+            "SELECT count(*) FROM fs_intents WHERE phase != 'finalized'"
+        )
+        .await,
+        1,
+        "必须真实经过 Prepared 持久边界"
+    );
+    assert_eq!(
+        scalar(
+            &mut conn,
+            "SELECT count(*) FROM operations WHERE state = 'pending'"
+        )
+        .await,
+        1,
+        "真实操作保留 pending"
+    );
+}
+
 async fn scalar(conn: &mut sqlx::SqliteConnection, sql: &str) -> i64 {
     sqlx::query_scalar(sql)
         .fetch_one(&mut *conn)
@@ -145,9 +172,23 @@ struct PutCase {
 
 /// 准备一次 put：note.txt 已被采纳为 V1，V2 已上传，随后构造请求体（尚未提交）。
 async fn put_case(label: &str) -> PutCase {
+    put_case_at(label, None).await
+}
+
+async fn put_case_at(label: &str, parent: Option<&str>) -> PutCase {
     let setup = boot(
         label,
-        |work| std::fs::write(work.join("note.txt"), V1).expect("写 V1"),
+        |work| {
+            let directory = match parent {
+                Some(name) => {
+                    let directory = work.join(name);
+                    std::fs::create_dir(&directory).expect("建发布父目录");
+                    directory
+                }
+                None => work.to_owned(),
+            };
+            std::fs::write(directory.join("note.txt"), V1).expect("写 V1");
+        },
         "note.txt",
     )
     .await;
@@ -160,7 +201,8 @@ async fn put_case(label: &str) -> PutCase {
         "kind": "put_content", "entry_id": entry, "base_revision": revision,
         "upload_id": upload_id, "local_generation": "7", "conflict_policy": "preserve_both",
     });
-    let work_file = setup.lab.work().join("note.txt");
+    let directory = parent.map_or_else(|| setup.lab.work(), |name| setup.lab.work().join(name));
+    let work_file = directory.join("note.txt");
     PutCase {
         setup,
         body,
@@ -202,12 +244,13 @@ async fn assert_put_finished_once(lab: &Lab, work_file: &Path, replay: &Value) {
 
 #[tokio::test]
 async fn put_before_image_is_redone_after_restart() {
-    let case = put_case("rb-put-before").await;
-    // 工作目录只读：意图已落盘，但发布失败，现场仍是前像 V1。
-    lock_dir(&case.setup.lab.work());
+    let case = put_case_at("rb-put-before", Some("scope")).await;
+    // Root 保持合规，仅发布父目录只读：意图落盘后实际发布失败，仍是 V1。
+    lock_dir(case.work_file.parent().unwrap());
     let (status, failed) = case.setup.submit(case.body.clone()).await;
-    unlock_dir(&case.setup.lab.work());
+    unlock_dir(case.work_file.parent().unwrap());
     assert_ne!(status, StatusCode::OK, "{failed}");
+    assert_pending_intent(&case.setup.lab).await;
     assert_eq!(std::fs::read(&case.work_file).expect("读"), V1);
     let mut conn = db(&case.setup.lab).await;
     assert_eq!(
@@ -230,11 +273,12 @@ async fn put_before_image_is_redone_after_restart() {
 
 #[tokio::test]
 async fn put_prepared_with_changed_before_image_stays_blocked_until_restored() {
-    let case = put_case("rb-put-changed").await;
-    lock_dir(&case.setup.lab.work());
+    let case = put_case_at("rb-put-changed", Some("scope")).await;
+    lock_dir(case.work_file.parent().unwrap());
     let (status, _) = case.setup.submit(case.body.clone()).await;
-    unlock_dir(&case.setup.lab.work());
+    unlock_dir(case.work_file.parent().unwrap());
     assert_ne!(status, StatusCode::OK);
+    assert_pending_intent(&case.setup.lab).await;
     let (lab, root) = case.setup.stop().await;
     // 前像被外部改成第三种内容：不能用 V2 覆盖它。
     std::fs::write(&case.work_file, THIRD).expect("外部改写");
@@ -384,31 +428,38 @@ async fn corrupted_or_unlinked_intent_keeps_writes_closed_without_losing_evidenc
 async fn namespace_before_and_third_state_across_restart() {
     let setup = boot(
         "rb-create",
-        |work| std::fs::write(work.join("seed.txt"), V1).expect("seed"),
+        |work| {
+            std::fs::create_dir(work.join("scope")).expect("scope");
+            std::fs::write(work.join("scope/seed.txt"), V1).expect("seed");
+        },
         "seed.txt",
     )
     .await;
+    let (parent, _) = setup.entry("scope").await;
+    let directory = setup.lab.work().join("scope");
+    let made = directory.join("made");
     let body = json!({
         "op_id": identity(0xd2), "device_id": identity(0x72), "server_epoch": setup.epoch,
-        "kind": "create", "parent_id": setup.root_entry, "name": "made",
+        "kind": "create", "parent_id": parent, "name": "made",
         "expected_absent": true, "local_generation": "5",
     });
     // 前像：意图已落盘，mkdir 因只读失败，目录不存在。
-    lock_dir(&setup.lab.work());
+    lock_dir(&directory);
     let (status, failed) = setup.submit(body.clone()).await;
-    unlock_dir(&setup.lab.work());
+    unlock_dir(&directory);
     assert_ne!(status, StatusCode::CREATED, "{failed}");
     assert_ne!(status, StatusCode::OK, "{failed}");
-    assert!(!setup.lab.work().join("made").exists());
+    assert!(!made.exists());
+    assert_pending_intent(&setup.lab).await;
     let (lab, root) = setup.stop().await;
     // 第三种现场：同名位置现在是一个普通文件（外部创建）：不能当成目录已建好。
-    std::fs::write(lab.work().join("made"), THIRD).expect("外部同名文件");
+    std::fs::write(&made, THIRD).expect("外部同名文件");
     assert!(!recovery_complete(&lab).await);
-    assert_eq!(std::fs::read(lab.work().join("made")).expect("读"), THIRD);
-    std::fs::remove_file(lab.work().join("made")).expect("还原空缺");
+    assert_eq!(std::fs::read(&made).expect("读"), THIRD);
+    std::fs::remove_file(&made).expect("还原空缺");
     assert!(recovery_complete(&lab).await);
     let replay = replay_committed(&lab, &root, &body).await;
-    assert!(lab.work().join("made").is_dir());
+    assert!(made.is_dir());
     assert_eq!(replay["echo_local_generation"], "5", "补完后仍回显本地代际");
     let mut conn = db(&lab).await;
     assert_eq!(scalar(&mut conn, "SELECT count(*) FROM changes WHERE events_json LIKE '%\"made\"%' OR events_json LIKE '%made%'").await, 1);
@@ -418,33 +469,39 @@ async fn namespace_before_and_third_state_across_restart() {
 async fn delete_before_image_is_redone_but_changed_content_is_never_deleted() {
     let setup = boot(
         "rb-delete",
-        |work| std::fs::write(work.join("doomed.txt"), V1).expect("doomed"),
+        |work| {
+            std::fs::create_dir(work.join("scope")).expect("scope");
+            std::fs::write(work.join("scope/doomed.txt"), V1).expect("doomed");
+        },
         "doomed.txt",
     )
     .await;
     let (entry, revision) = setup.entry("doomed.txt").await;
+    let directory = setup.lab.work().join("scope");
+    let doomed = directory.join("doomed.txt");
     let body = json!({
         "op_id": identity(0xd3), "device_id": identity(0x72), "server_epoch": setup.epoch,
         "kind": "delete", "entry_id": entry, "base_revision": revision, "local_generation": "6",
     });
-    lock_dir(&setup.lab.work());
+    lock_dir(&directory);
     let (status, failed) = setup.submit(body.clone()).await;
-    unlock_dir(&setup.lab.work());
+    unlock_dir(&directory);
     assert_ne!(status, StatusCode::OK, "{failed}");
-    assert!(setup.lab.work().join("doomed.txt").exists());
+    assert!(doomed.exists());
+    assert_pending_intent(&setup.lab).await;
     let (lab, root) = setup.stop().await;
     // 删除前像之后文件被外部改写：删除会丢掉新内容，必须停写保留。
-    std::fs::write(lab.work().join("doomed.txt"), THIRD).expect("外部改写");
+    std::fs::write(&doomed, THIRD).expect("外部改写");
     assert!(!recovery_complete(&lab).await);
     assert_eq!(
-        std::fs::read(lab.work().join("doomed.txt")).expect("读"),
+        std::fs::read(&doomed).expect("读"),
         THIRD,
         "改写后的内容不得被删除"
     );
-    std::fs::write(lab.work().join("doomed.txt"), V1).expect("还原");
+    std::fs::write(&doomed, V1).expect("还原");
     assert!(recovery_complete(&lab).await);
     let replay = replay_committed(&lab, &root, &body).await;
-    assert!(!lab.work().join("doomed.txt").exists());
+    assert!(!doomed.exists());
     assert_eq!(replay["echo_local_generation"], "6");
     let mut conn = db(&lab).await;
     assert_eq!(
