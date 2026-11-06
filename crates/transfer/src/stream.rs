@@ -9,7 +9,7 @@ use crate::hash::{ContentHasher, DIGEST_BYTES};
 use crate::ports::{PortError, PortFuture};
 
 /// 流式摘要的读取入口：一次一段，长度由调用方给定。
-pub(crate) trait ChunkReader {
+pub(crate) trait ChunkReader: Send + Sync {
     /// 读取 `[offset, offset + length)`；短读是错误，不补零。
     fn read_chunk<'a>(
         &'a self,
