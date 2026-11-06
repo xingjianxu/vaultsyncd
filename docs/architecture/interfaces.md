@@ -2466,7 +2466,7 @@ S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包�
 
 ## S094 Linux Nix 组件与显式 Web 资源
 
-- flake `packages.x86_64-linux.{rust,web,default,web-deps}`：Rust server/admin 与Web独立源过滤和derivation；Rust由Cargo.lock逐crate checksum抓取，Web fetchPnpmDeps(fetcher5)固定真实SHA256。正式Rust/前端构建在sandbox中offline，不依赖本地target/node_modules/dist；Rust源码单测不要求Web构建。
+- flake `packages.x86_64-linux.{rust,web,default,web-deps}`：Rust server/admin 与Web独立源过滤和derivation；Rust由过滤源中的Cargo.lock逐crate checksum抓取（避免vendor符号链接使文档/纯Web变化牵动Rust），Web fetchPnpmDeps(fetcher5)固定真实SHA256。正式Rust/前端构建在sandbox中offline，不依赖本地target/node_modules/dist；Rust源码单测不要求Web构建。
 - default输出bin/server/admin与share/vaultsyncd/web、release-manifest.json；wrapper补btrfs-progs并为服务设置默认VAULTSYNCD_WEB_DIR。运行闭包经qR实测不含Node/pnpm/TypeScript，工具链版本仅作为构建来源数据。
 - `apps/server/src/web.rs::WebAssets` 仅消费显式绝对目录；prepare在DB之前验证index及引用assets，缺失拒绝启动；未配置即API-only。只服务根index和/assets，带nosniff/CSP/no-store；未知API不会回HTML。无编译期dist内嵌、无数据库或wire迁移。
 - `packaging/linux/nix-manifest.py` 生成独立Nix组件来源记录：干净commit/full flake NAR、锁/协议源SHA256、目标、Nixpkgs revision、工具包版本、组件过滤源/derivation身份和实际文件hash。源/derivation store hash分为四段8字符且只去元数据字符串上下文，避免记录本身保留构建闭包；真实Rust/Web输出仍显式依赖，不伪造S093Git工作树receipt。
