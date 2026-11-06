@@ -149,10 +149,12 @@ def main():
         (run / "fixture.json").write_text(json.dumps(fixture))
         script = run / "s099-installation.ps1"
         script.write_text((ROOT / "tests/platform/windows/s099-installation.ps1").read_text(), encoding="utf-8-sig")
-        (run / "hashes.json").write_text(json.dumps({path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in [setup, script]}))
+        secret_script = run / "s099-logon-secrets.ps1"
+        secret_script.write_text((ROOT / "tests/platform/windows/s099-logon-secrets.ps1").read_text(), encoding="utf-8-sig")
+        (run / "hashes.json").write_text(json.dumps({path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in [setup, script, secret_script]}))
         checked([*SSH, f'powershell -NoProfile -Command "New-Item -ItemType Directory \'{guest}\' | Out-Null"'])
         checked([*SCP, setup, run / "fixture.json", run / "hashes.json", run / "ca.pem",
-                 script, f"{USER}@{HOST}:{guest}/"])
+                 script, secret_script, f"{USER}@{HOST}:{guest}/"])
         # The backup includes real prior logon secrets and stays ACL-protected in the guest only.
         # Restore is attempted even if Prepare partially fails.
         prepared = True
@@ -232,6 +234,11 @@ def main():
                 reboot("restore original logon after failed validation")
             except Exception as error:
                 summary["restore_error"] = str(error)
+        if prepared:
+            try:
+                checked([*SCP, "-r", f"{USER}@{HOST}:{guest}/results", run / "guest-results"])
+            except Exception as error:
+                summary["results_collection_error"] = str(error)
         (run / "result.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
         (run / "stop").touch()
         for process in [tunnel, tls]:

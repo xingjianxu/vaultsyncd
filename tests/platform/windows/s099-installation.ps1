@@ -16,6 +16,9 @@ if($Mode-eq 'Prepare'){
   New-Item -ItemType Directory -Path $private -Force|Out-Null
   & icacls $private /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' |Out-Null
   if($LASTEXITCODE-ne 0){throw 'private backup ACL failed'}
+  . (Join-Path $public 's099-logon-secrets.ps1')
+  [S099LogonSecret]::Backup((Join-Path $private 'prior-lsa.bin'))
+  if(Test-Path (Join-Path $private 'prior-logon.json')){throw 'original registry backup already exists'}
   $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($logonPath,$true)
   $saved=@{}
   foreach($name in @('AutoAdminLogon','DefaultUserName','DefaultDomainName','DefaultPassword','AutoLogonCount','ForceAutoLogon')){
@@ -38,13 +41,18 @@ if($Mode-eq 'Prepare'){
   Write-Json (Join-Path $public 'test-user.json') @{username=$username;sid=$user.SID.Value;task=$task}
   Write-Json (Join-Path $public 'resources-before.json') @{boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o');processes=@(Get-Process|Select-Object Id,ProcessName,SessionId)}
   [IO.File]::WriteAllText((Join-Path $results 'phase.txt'),'install')
-  $key.SetValue('DefaultUserName',$username);$key.SetValue('DefaultDomainName',$env:COMPUTERNAME);$key.SetValue('DefaultPassword',$password);$key.SetValue('AutoAdminLogon','1');$key.SetValue('ForceAutoLogon','1')
+  [S099LogonSecret]::SetTestPassword($password)
+  $key.SetValue('DefaultUserName',$username);$key.SetValue('DefaultDomainName',$env:COMPUTERNAME);$key.SetValue('AutoAdminLogon','1');$key.SetValue('ForceAutoLogon','1')
   if($key.GetValueNames()-contains 'AutoLogonCount'){$key.DeleteValue('AutoLogonCount')}
   $key.Close()
   Write-Output 'PREPARED isolated standard user and private logon backup (secrets not exported)'
   exit
 }
 if($Mode-eq 'Restore'){
+  if(Test-Path (Join-Path $private 'prior-lsa.bin')){
+    . (Join-Path $public 's099-logon-secrets.ps1')
+    [S099LogonSecret]::Restore((Join-Path $private 'prior-lsa.bin'))
+  }
   if(Test-Path (Join-Path $private 'prior-logon.json')){
     $saved=Get-Content (Join-Path $private 'prior-logon.json') -Raw|ConvertFrom-Json
     $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($logonPath,$true)
@@ -57,6 +65,7 @@ if($Mode-eq 'Restore'){
     $user=Get-Content (Join-Path $public 'test-user.json') -Raw|ConvertFrom-Json
     if(Get-ScheduledTask -TaskName $user.task -ErrorAction SilentlyContinue){Unregister-ScheduledTask -TaskName $user.task -Confirm:$false}
   }
+  if(Test-Path (Join-Path $private 'prior-lsa.bin')){Remove-Item (Join-Path $private 'prior-lsa.bin')}
   Write-Output 'RESTORED prior automatic logon; test account, installed application and data retained'
   exit
 }

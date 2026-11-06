@@ -39,7 +39,7 @@ nix develop --command cargo xtask release verify artifacts/S099/release-new.json
 nix develop .#web-tests --command python3 tests/platform/windows/s099-installation.py artifacts/S099/client-new
 ```
 
-驱动会真实创建新标准用户，保存受限ACL下的原自动登录设置，执行约三次客体重启：新用户登录首装、安装后再次登录验证HKCU Run启动、恢复原Quickemu登录。原登录秘密留在客体私有目录，不进入源码或宿主证据；恢复时逐值核对并删除该备份。测试用户密码也只留在客体受限私有目录，便于后续保护演练。
+驱动会真实创建新标准用户，保存受限ACL下的原自动登录设置，执行约三次客体重启：新用户登录首装、安装后再次登录验证HKCU Run启动、恢复原Quickemu登录。原登录秘密留在客体私有目录，不进入源码或宿主证据；原LSA DefaultPassword使用机器DPAPI加密并读回校验，测试密码也只写LSA，不写注册表明文。按[微软自动登录说明](https://learn.microsoft.com/en-us/windows/win32/secauthn/protecting-the-automatic-logon-password)，LSA密码优先于注册表，必须保存与恢复两者；恢复后逐值核对并删除原登录备份。测试用户密码也只留在客体受限私有目录，便于后续保护演练。
 
 程序、同步目录均使用中文空格路径；GUI是安装后的正式WebView2，通过[官方支持的CDP调试连接](https://playwright.dev/docs/webview2)进行页面操作，不运行浏览器fake，不编译acceptance钩子。只对这个GUI子进程设置调试环境变量，未在安装产物或系统策略中启用远程调试。验证GUI/CLI相同instance、GUI关闭后的实际上传、真实重启后无人工启动agent也继续上传；真实服务端字节与hash作为结果证据。
 
