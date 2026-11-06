@@ -63,3 +63,12 @@ vaultsyncd-cli.exe --json restore --binding-id <ID> --entry-id <ID> --operation-
 `--json` 成功/失败均为单行 JSON；没有 `--json` 时输出简短中文摘要，错误写 stderr。退出码固定为 `0` 成功、`2` 用法/输入错误、`3` 无法连接 agent、`4` 未登录/需重新认证、`5` agent 拒绝或执行失败、`6` 协议/应答不兼容。脚本应同时检查退出码与 JSON `error.code`；空结果与失败不能混为一谈。
 
 原生验收：构建 Linux `release-native-server` helper 后，在 Windows devShell 执行 `VAULTSYNCD_PROCESS_TASK=S073 tests/platform/windows/run-native-process.sh`。测试使用真实 agent/CLI/HTTP/SQLite/NTFS，并以进程句柄枚举证明样例管理请求期间 CLI 没有打开 `client.sqlite`；测试只清理自己的 `run-cli-*` 目录与凭据。
+
+## 删除与离线修改并发（S074 实测行为）
+
+- 服务端 `delete` 事件现在携带被删版本的 `version_id`/`hash`/`size`（客户端删除与外部删除一致）。客户端同 revision 的已确认删除基线因此能与事件事实相等，不会整批拒绝或把旧条目复活。
+- 远端删除落在“本地已修改但尚未上传”的同一路径时，agent 先保留本地未确认内容；上传协调完成后可用**新 EntryId** 重新占用同名路径。旧 EntryId 不复活，原内容在回收站/历史可查。
+- 被腾空的路径代际不会清零：本地 preserve-both 改名后远端版本在原路径安装会得到更大的 generation，避免与已持久化证据冲突。
+- CFAPI `adopt_complete` 只允许把**完整本地内容**（`on_disk >= size`，同 Binding/Root）重新绑定到新条目；不完整占位仍拒绝换身份，避免丢弃另一个条目的云状态。
+
+复现入口见 `docs/operations/windows-lab.md` §20 与 `tests/platform/windows/run-native-e2e.sh`；三个客户端是同一台客体的三个隔离身份、agent 顺序运行。

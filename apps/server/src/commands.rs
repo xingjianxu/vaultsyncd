@@ -1087,13 +1087,33 @@ impl DeleteStore for SqlDeleteStore {
         let tx_id = TxId::from_bytes(random_bytes());
         let mut events = Vec::new();
         for item in apply.trash.iter() {
-            events.push(serde_json::json!({
+            let mut event = serde_json::json!({
                 "kind": "delete",
                 "entry_id": item.entry.to_hex(),
                 "path": item.path,
                 "revision": item.revision.to_string(),
                 "origin": "client",
-            }));
+            });
+            // 删除事件必须带上被删版本，否则客户端“同 revision”的已确认基线与事件事实
+            // 无法相等（S074 T11/T14：本地删除 ACK 保留了版本，事件却缺字段，整批被拒）。
+            if let Some(version) = item.content_version {
+                let facts = store_versions::version_facts(&mut tx, self.owner, apply.root, version)
+                    .await
+                    .map_err(trash_store_error)?
+                    .ok_or_else(|| TrashStoreError::MalformedRow {
+                        detail: format!("删除版本 {version} 缺少版本事实"),
+                    })?;
+                event["version_id"] = serde_json::Value::String(version.to_hex());
+                event["hash"] = serde_json::Value::String(
+                    facts
+                        .object_hash
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect(),
+                );
+                event["size"] = serde_json::Value::String(facts.size.to_string());
+            }
+            events.push(event);
         }
         let events_json = serde_json::Value::Array(events).to_string();
         let result_json = crate::journal::with_echo(

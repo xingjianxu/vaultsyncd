@@ -29,6 +29,7 @@ members = [
     "crates/server-store",
     "crates/transfer",
     "crates/platform-windows",
+    "tests/e2e",
     "tests/server-integration",
     "tests/windows-integration",
     "tools/xtask",

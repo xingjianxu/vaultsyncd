@@ -2510,6 +2510,24 @@ name = "vaultsyncd-domain"
 version = "0.1.0"
 
 [[package]]
+name = "vaultsyncd-e2e"
+version = "0.1.0"
+dependencies = [
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "vaultsyncd-domain",
+ "vaultsyncd-http-client",
+ "vaultsyncd-local-ipc",
+ "vaultsyncd-platform-windows",
+ "vaultsyncd-protocol",
+ "vaultsyncd-transfer",
+]
+
+[[package]]
 name = "vaultsyncd-fs-common"
 version = "0.1.0"
 dependencies = [

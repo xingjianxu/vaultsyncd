@@ -251,7 +251,10 @@ impl WindowsFiles {
             .with_parent(to, |parent, name| rename(lease.file(), parent, name, 0))?;
         lease.file().sync_all()?;
         let mut map = self.generations.lock().map_err(poison)?;
-        map.remove(from);
+        // 保留被腾空路径的代际历史：首次导入把本地文件改名到冲突副本后，远端版本会立刻
+        // 在原名上安装；若这里删除 `from`，新内容会重新从 generation 1 开始，和已经持久
+        // 化的“同名不同内容”观察证据撞车（S074 T01 实测的 immutable observation
+        // changed）。代际必须按路径单调，删除路径不能把计数清零。
         map.insert(to.into(), actual.clone());
         Ok(actual)
     }
