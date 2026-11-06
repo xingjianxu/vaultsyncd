@@ -7,8 +7,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+vaultsyncd-transfer = { path = "../transfer" }
 vaultsyncd-domain = { path = "../domain" }
 vaultsyncd-fs-common = { path = "../fs-common" }
+vaultsyncd-transfer = { path = "../transfer" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # 本包直接声明并调用 Win32/Cloud Files API，必须放行 unsafe_code，而根
 # `[workspace.lints.rust]` 是 deny。S010 实测两种写法都不可行：

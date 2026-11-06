@@ -2218,9 +2218,29 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
 
+### S068：Windows 内容观察、持续保护与可恢复发布
+
+`platform-windows::files::controlled` 是同步 blocking 平台 API，不依赖 agent-core/store。应用在 worker 中调用并映射 `ControlledLocal`/`LocalPort`，不持数据库事务：
+
+- `WindowsFiles::open(root,state)`：两个既有、同卷、不重叠的安全 pinned 目录；`seed(path,Evidence)` 从 durable local 状态载入旧代际，下一次仍重新哈希真实内容。
+- `observe(path) -> ObservedContent::{Absent,File(Arc<FixedSnapshot>)}`：健康父目录才能证明 Absent；文件在独占 RH oplock 下流式固定，`Evidence{generation,volume,file,digest,size}`；新字节或新物理身份递增代际，mtime 不授权。`FixedSnapshot::read_at` 最多 1 MiB，句柄拒绝外部修改/删除。
+- `protect(path,writable) -> (ProtectedFile,EntryMetadata)`：元数据 no-follow 后取得正式 CFAPI oplock，再核对身份。`ProtectedFile::lease -> ProtectedLease`，`lease.file()` 为借用 Win32 句柄；不得 close/duplicate。oplock 已破坏、部分内容、可写映射/使用中、未知对象均报错。S069 可在 lease 内再次复核版本/摘要后调用 CFAPI。
+- `replace(op_hex,target,staged_path,before:Option<&Evidence>,digest) -> Evidence`：调用前先持久 core local_intent。内部 stage 固定并再次在 oplock 保护中核对；平台日志绑定 OpId、目标、根物理身份及前后身份/摘要，sync 后才移动旧对象到独立 state，随后不覆盖发布。两段发布存在可恢复间隙；用户填入间隙时拒覆盖，旧内容/新stage/用户文件均保留。
+- `recover_publications() -> Vec<RecoveryOutcome>` 必须先于 core recovery 和同步；后像须身份及摘要同时匹配才 Published，原对象完整且目标不存在才 Restored；第三种内容 Blocked，损坏日志/路径/根身份错误报错且保留。`acknowledge_publication(op)` 仅在 core baseline 事务完成后清对应日志；preserved 原对象及快照由显式恢复/保留策略处理，不自动清除。
+
+应用以同 OpId 关联两层意图，不能只因平台返回 Published 就推进应用游标或宣称 committed。发布出的普通完整文件的业务 CFAPI identity 由应用根据已确认 Entry/Version 安装，平台不猜服务器身份。S068-a/b 记录原生能力边界；原型 `cfapi::release` 三次探测即关句柄不构成正式持续保护授权。
+
 ## S069-b 固定版本内容短租约
 
 - Wire唯一源 `api/openapi.yaml`：`POST /v1/roots/{root}/entries/{entry}/versions/{version}/leases` 与 `/{lease}/renew`、`/{lease}/release`，body为稳定 `lease_id`、整份 `sha256`、`size`。响应完整回显pin、UTC到期及剩余秒数、closed。仅Bearer/授权Root可操作。
 - `server-store::version_leases`：同BEGIN IMMEDIATE核对固定版本与live对象，使用既有`object_leases`作为GC保护；0010请求关联记住固定输入，ID复用换输入409，失效/释放410；TTL120秒，acquire重放不延长，renew仅活跃，release幂等。活跃对象租约阻止collectable标记，GC仍按既有租约与引用集工作。
 - 服务端租约已提交后才检查对象可读和长度，失败503并保留有界保护，绝不返回可释放证明；客户端`LeaseEndpoint`精确校验Root/Entry/Version/hash/size/id/TTL/closed。调用方必须保留本地副本直到有效租约及持续平台保护均成立；传输成功不代表租约有效。
 - 平台释放与S063薄wrapper仍由S069-a/c交付；本子卡不冒充Windows原生或产品端到端完成。
+
+## S067 — CFAPI hydration 与传输/调度组装
+
+- `agent-core::engine::scheduler::{UserReads,UserReadGuard}` 由生产 `Scheduler::user_reads()` 提供，复用内容并发池、per-entry 排他及持久绑定门禁。`try_acquire(request,binding,entry)` 返回 guard/忙/明确拒绝，不写同步队列、基线或 committed。调用方有界等待且响应取消。
+- `apps/agent::bootstrap::{connect_hydration,HydrationConfig,PinnedVersion}` 真实装配 HTTP `ContentEndpoint<ReqwestTransport>`、SQLite `ClientStorePorts`、上述共享资源与 S066 `Adapter`。输入为已恢复 DB、认证客户端、Catalog、固定版本 size/SHA-256、独立内部stage目录、超时/块/在途上限。`HydrationCallbacks::register_version` 先登记不可变版本，再发布Catalog；同一版本改变事实或外来Root/Binding拒绝。在途请求持有原pin。
+- callback只入有界队列/置取消；独立runtime先整个固定版本下载/读回SHA-256验证，再按请求范围64KiB分段 `Reply::transfer`。错误、取消、超时不返回假字节，部分进度保留；`cancel_hydration`/真实 `CANCEL_FETCH_DATA` 共用token。取消通过内容端口返回执行器，必须先落已完成位图，不能直接drop整份下载future。`disconnect`停准入并取消，`wait_idle`供启动/退出围栏，CFAPI回执键和correlation始终取S066拥有副本。
+- `platform-windows::files::staging::StagingFile` 是内部目录的安全单文件 TempContent 实现：no-follow相对句柄、普通单链接、独占读写、写后sync、剩余容量检查；拒绝与同步Root重叠。已校验stage最多保留16个独占句柄供连续范围请求复用；未命中/重启重新核对整份摘要，关闭句柄不删除内容。只丢可重建暂存，用户完整缓存不自动回收。驻留在下载开始后保持partial，不凭HTTP下载完成改写baseline或清dirty，后续扫描证明完整驻留。
+- 状态查询 `HydrationStats` 分列成功供给、取消、实际OS取消回调、失败及字节；显式应用取消验证不能替代OS回调触发证明。S011原始build26300的OS取消触发限制继续保留。进程、凭据和启动恢复由S070组装。
