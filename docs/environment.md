@@ -887,3 +887,10 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 | 构建依赖 | bundled SQLite 用 devShell 的 `gcc` 编译，不需要系统 `libsqlite3`/`sqlite3.pc`；`cargo fetch` 可在当前网络下完成（锁定版本见 `Cargo.lock`） |
 
 结论：产品数据库引擎版本由 `Cargo.lock` 决定（3.46.0），不随宿主 NixOS 的 `pkgs.sqlite` 变化；迁移文件只能使用 3.46 已支持的特性（`STRICT` 表要求 ≥3.37，已满足）。
+
+
+## S077 浏览器验收工具链（2026-11-06）
+
+`nix develop .#web-tests` 复用 flake.lock 锁定 nixpkgs，提供 Node/pnpm、Chromium 和 Python Playwright；浏览器路径由 `pkgs.playwright-driver.browsers` 给定，无全局依赖安装。实测 Python Playwright 1.64.0、驱动 1.64.1，Chromium headless 156.0.8078.4 可启动并完成 S077 全部场景。`PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` 仅跳过非 Nix 发行版库版本探测，不关闭浏览器证书校验。
+
+运行：先在 default shell 构建 Rust server/admin 与 Web，再执行 `nix develop .#web-tests --command python3 tests/web/auth-browser.py`；可用 `VAULTSYNCD_TEST_BIN_DIR` 指向同一提交构建的宿主二进制目录。脚本仅创建 `/data/vs-s077-<run_id>` 的 btrfs 实例，结束停止本次 PID；不直接读写在线数据库，不操作 Windows VM。浏览器使用 HTTP localhost 专用回环测试入口，Cookie 仍为 Secure/HttpOnly/Strict；生产 HTTPS 由 S097 验证。测试使用 Playwright 的真实 [Chromium headless 启动能力](https://playwright.dev/docs/browsers)，不模拟浏览器 Cookie 行为。

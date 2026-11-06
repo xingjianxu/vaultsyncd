@@ -22,16 +22,16 @@ function expect_decimal(value: unknown, what: string): string {
   return value;
 }
 
-function expect_array(value: unknown, what: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`期望 ${what} 是数组`);
+function expect_string(value: unknown, what: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`期望 ${what} 是字符串`);
   }
   return value;
 }
 
-function expect_string(value: unknown, what: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`期望 ${what} 是字符串`);
+function expect_array(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`期望 ${what} 是数组`);
   }
   return value;
 }
@@ -58,6 +58,54 @@ function expect_string_map(value: unknown, what: string): Record<string, string>
     }
   }
   return object as Record<string, string>;
+}
+
+/** 账号操作完成且全部会话已撤销，必须重新登录。 */
+export interface AccountChanged {
+  /** 本次撤销的会话数 */
+  sessions_revoked: string;
+}
+
+export function decodeAccountChanged(value: unknown): AccountChanged {
+  const object = expect_object(value, "AccountChanged");
+  return {
+    sessions_revoked: expect_decimal(object.sessions_revoked, "AccountChanged.sessions_revoked"),
+  };
+}
+
+/** 当前已认证账号，不含凭据。 */
+export interface AccountInfo {
+  /** 登录名 */
+  login: string;
+  /** 会话身份，不是凭据 */
+  session_id: string;
+  /** 账号身份 */
+  user_id: string;
+}
+
+export function decodeAccountInfo(value: unknown): AccountInfo {
+  const object = expect_object(value, "AccountInfo");
+  return {
+    login: expect_string(object.login, "AccountInfo.login"),
+    session_id: expect_string(object.session_id, "AccountInfo.session_id"),
+    user_id: expect_string(object.user_id, "AccountInfo.user_id"),
+  };
+}
+
+/** 浏览器只读会话元信息；凭据只在 HttpOnly cookie 中。 */
+export interface BrowserSession {
+  /** 访问会话到期 UTC Unix 秒 */
+  access_expires_at: string;
+  /** 会话身份，不是凭据 */
+  session_id: string;
+}
+
+export function decodeBrowserSession(value: unknown): BrowserSession {
+  const object = expect_object(value, "BrowserSession");
+  return {
+    access_expires_at: expect_decimal(object.access_expires_at, "BrowserSession.access_expires_at"),
+    session_id: expect_string(object.session_id, "BrowserSession.session_id"),
+  };
 }
 
 /** 协议版本、服务器身份、epoch、功能集合与限额（design §15.2）。 */
@@ -533,6 +581,22 @@ export function decodeOperationState(value: unknown): OperationState {
     throw new Error(`未知的 OperationState 取值：${JSON.stringify(value)}`);
   }
   return value as OperationState;
+}
+
+/** 改密输入；禁止记录明文，沿用初始化密码规则。 */
+export interface PasswordChangeRequest {
+  /** 当前密码，只在本次请求内存在 */
+  current_password: string;
+  /** 新密码，沿用初始化密码规则 */
+  new_password: string;
+}
+
+export function decodePasswordChangeRequest(value: unknown): PasswordChangeRequest {
+  const object = expect_object(value, "PasswordChangeRequest");
+  return {
+    current_password: expect_string(object.current_password, "PasswordChangeRequest.current_password"),
+    new_password: expect_string(object.new_password, "PasswordChangeRequest.new_password"),
+  };
 }
 
 /** 协议主次版本；主版本不同必须拒绝通信。 */

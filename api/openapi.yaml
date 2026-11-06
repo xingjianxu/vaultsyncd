@@ -17,6 +17,126 @@ info:
     在对应功能卡加入。
 
 paths:
+  /v1/auth/browser/login:
+    post:
+      operationId: browserLogin
+      summary: 浏览器登录
+      description: 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoginRequest"}
+      responses:
+        "200":
+          description: 操作完成
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrowserSession"}
+        "401":
+          description: 凭据无效或会话失效
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 跨源请求被拒绝
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
+  /v1/auth/browser/refresh:
+    post:
+      operationId: browserRefresh
+      summary: 浏览器刷新
+      description: 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+      responses:
+        "200":
+          description: 操作完成
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrowserSession"}
+        "401":
+          description: 凭据无效或会话失效
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 跨源请求被拒绝
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
+  /v1/auth/account:
+    get:
+      operationId: getAccount
+      summary: 当前账号
+      description: 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+      responses:
+        "200":
+          description: 操作完成
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountInfo"}
+        "401":
+          description: 凭据无效或会话失效
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 跨源请求被拒绝
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
+  /v1/auth/password:
+    post:
+      operationId: changePassword
+      summary: 修改密码
+      description: 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PasswordChangeRequest"}
+      responses:
+        "200":
+          description: 操作完成
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountChanged"}
+        "401":
+          description: 凭据无效或会话失效
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 跨源请求被拒绝
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
+  /v1/auth/revoke-all:
+    post:
+      operationId: revokeAllSessions
+      summary: 撤销全部会话
+      description: 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+      responses:
+        "200":
+          description: 操作完成
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountChanged"}
+        "401":
+          description: 凭据无效或会话失效
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 跨源请求被拒绝
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
   /v1/roots/{root}/entries/{entry}/history:
     get:
       operationId: listEntryHistory
@@ -2000,6 +2120,40 @@ components:
           description: |
             该 Root 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Root 恒为
             true；采集完成后由后续的初始采集步骤推进。
+
+
+    BrowserSession:
+      description: 浏览器只读会话元信息；凭据只在 HttpOnly cookie 中。
+      type: object
+      required: [session_id, access_expires_at]
+      properties:
+        session_id: {type: string, description: 会话身份，不是凭据}
+        access_expires_at: {type: string, format: decimal_u64, description: 访问会话到期 UTC Unix 秒}
+
+    AccountInfo:
+      description: 当前已认证账号，不含凭据。
+      type: object
+      required: [user_id, login, session_id]
+      properties:
+        user_id: {type: string, description: 账号身份}
+        login: {type: string, description: 登录名}
+        session_id: {type: string, description: 会话身份，不是凭据}
+
+    PasswordChangeRequest:
+      description: 改密输入；禁止记录明文，沿用初始化密码规则。
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: {type: string, description: 当前密码，只在本次请求内存在}
+        new_password: {type: string, description: 新密码，沿用初始化密码规则}
+
+    AccountChanged:
+      description: 账号操作完成且全部会话已撤销，必须重新登录。
+      type: object
+      required: [sessions_revoked]
+      properties:
+        sessions_revoked: {type: string, format: decimal_u64, description: 本次撤销的会话数}
+
 
     LoginRequest:
       description: 登录请求（design §15.2 `POST /v1/auth/login` 的输入）。

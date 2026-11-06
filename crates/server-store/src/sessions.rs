@@ -181,6 +181,46 @@ pub enum RotationOutcome {
 const SESSION_COLUMNS: &str = "id, user_id, device_label, access_digest, refresh_digest, created_at, \
      access_expires_at, refresh_expires_at, revoked_at, replaced_by";
 
+/// 撤销账号所有仍有效的会话；与改密共享调用方写事务，包含刷新后继。
+pub async fn revoke_all(
+    tx: &mut Transaction<'_, Sqlite>,
+    user: UserId,
+    at: UtcTimestamp,
+) -> Result<u64, SessionError> {
+    Ok(
+        sqlx::query(
+            "UPDATE sessions SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL",
+        )
+        .bind(user.as_bytes().as_slice())
+        .bind(at.as_unix_seconds())
+        .execute(&mut **tx)
+        .await?
+        .rows_affected(),
+    )
+}
+
+/// 按旧散列 CAS 改密，再在同一事务撤销全部会话；CAS 失败不做任何撤销。
+pub async fn change_password(
+    tx: &mut Transaction<'_, Sqlite>,
+    user: UserId,
+    expected_hash: &str,
+    new_hash: &str,
+    at: UtcTimestamp,
+) -> Result<Option<u64>, SessionError> {
+    if new_hash.is_empty() {
+        return Err(SessionError::MalformedRow {
+            column: "password_hash",
+        });
+    }
+    let changed = sqlx::query("UPDATE users SET password_hash = ?3 WHERE id = ?1 AND password_hash = ?2 AND status = 'active'")
+        .bind(user.as_bytes().as_slice()).bind(expected_hash).bind(new_hash)
+        .execute(&mut **tx).await?.rows_affected();
+    if changed == 0 {
+        return Ok(None);
+    }
+    revoke_all(tx, user, at).await.map(Some)
+}
+
 /// 写入一条会话；摘要或身份重复时报错且不写入。
 pub async fn insert_session(
     tx: &mut Transaction<'_, Sqlite>,
@@ -493,6 +533,77 @@ mod tests {
         .await
         .expect("写 owner");
         tx.commit().await.expect("提交");
+    }
+
+    #[tokio::test]
+    async fn password_cas_and_revoke_are_atomic_and_scoped() {
+        let dir = TestDir::new("sessions-password-cas");
+        let database = open_database(&dir).await;
+        seed_owner(&database).await;
+        let mut tx = database.begin_write().await.unwrap();
+        let original = crate::users::find_by_id(&mut tx, user(0x11))
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash;
+        insert_session(&mut tx, &new_session(1, 20)).await.unwrap();
+        insert_session(&mut tx, &new_session(2, 30)).await.unwrap();
+        tx.commit().await.unwrap();
+        let mut tx = database.begin_write().await.unwrap();
+        assert_eq!(
+            change_password(&mut tx, user(0x11), "stale", "new-hash", at(1_200))
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            !find_session(&mut tx, session(1))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
+        assert_eq!(
+            change_password(&mut tx, user(0x11), &original, "new-hash", at(1_200))
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        tx.rollback().await.unwrap();
+        let mut tx = database.begin_write().await.unwrap();
+        assert_eq!(
+            crate::users::find_by_id(&mut tx, user(0x11))
+                .await
+                .unwrap()
+                .unwrap()
+                .password_hash,
+            original
+        );
+        assert!(
+            !find_session(&mut tx, session(1))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
+        assert_eq!(
+            change_password(&mut tx, user(0x11), &original, "new-hash", at(1_200))
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        tx.commit().await.unwrap();
+        let mut tx = database.begin_write().await.unwrap();
+        assert!(
+            find_session(&mut tx, session(2))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
+        assert_eq!(revoke_all(&mut tx, user(0x12), at(1_300)).await.unwrap(), 0);
+        assert_eq!(revoke_all(&mut tx, user(0x11), at(1_300)).await.unwrap(), 0);
+        tx.commit().await.unwrap();
     }
 
     #[tokio::test]

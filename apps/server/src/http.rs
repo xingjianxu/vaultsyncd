@@ -54,6 +54,22 @@ pub fn router(
         .route("/v1/auth/login", post(super::auth::login))
         .route("/v1/auth/refresh", post(super::auth::refresh))
         .route("/v1/auth/logout", post(super::auth::logout))
+        .route("/v1/auth/browser/login", post(super::auth::browser_login))
+        .route(
+            "/v1/auth/browser/refresh",
+            post(super::auth::browser_refresh),
+        )
+        .route("/v1/auth/account", get(super::auth::manage::account))
+        .route("/v1/auth/password", post(super::auth::manage::password))
+        .route("/v1/auth/revoke-all", post(super::auth::manage::revoke_all))
+        .layer(axum::middleware::map_response(
+            |mut response: Response| async move {
+                response
+                    .headers_mut()
+                    .insert("cache-control", "no-store".parse().expect("static header"));
+                response
+            },
+        ))
         .with_state(auth);
     let roots_router = Router::new()
         .route("/v1/roots", get(super::roots::list_roots))

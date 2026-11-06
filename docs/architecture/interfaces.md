@@ -834,10 +834,10 @@ python3 tools/context.py --help
 | 项 | 契约 |
 | --- | --- |
 | `POST /v1/auth/login` | 同源检查 → 限流 → 校验凭据 → 签发会话；返回 `SessionIssued` 并下发 `vaultsyncd_session`(`Path=/`) 与 `vaultsyncd_refresh`(`Path=/v1/auth`)，均为 `HttpOnly; Secure; SameSite=Strict` |
-| `POST /v1/auth/refresh` | 凭据来自请求体 `refresh_token`（agent）或 `vaultsyncd_refresh` cookie（浏览器，可省略请求体）；成功即轮换 |
+| `POST /v1/auth/refresh` | 凭据来自请求体 `refresh_token`（agent）；S077 浏览器改走独立 `browser/refresh`，旧端点不以 cookie 导出令牌；成功即轮换 |
 | `POST /v1/auth/logout` | Bearer 或 cookie 认证 → 撤销会话 → 清两个 cookie（`Max-Age=0`）；不碰本地文件 |
 | 认证载体 | `Authorization: Bearer <token>` 或 cookie；两者共用同一套会话与摘要 |
-| CSRF | cookie 写请求要求 `Origin` 主机 == `Host`，或 `Sec-Fetch-Site ∈ {same-origin, none}`；都没有才按非浏览器客户端放行；失败 403 `ACCESS_DENIED` |
+| CSRF | cookie 请求要求有效同源 `Origin` authority == `Host`，或 `Sec-Fetch-Site ∈ {same-origin, none}`；S077 起带 Cookie 且两者都缺失一律拒绝；失败 403 `ACCESS_DENIED` |
 | 失败映射 | 凭据问题 401 `AUTH_EXPIRED`、越权 403 `ACCESS_DENIED`、限流 429 `RATE_LIMITED`（带 `Retry-After`）、存储失败 503 `NEEDS_RECOVERY`（记日志，不伪装成凭据过期） |
 | 复用入口 | `principal_from(&AuthContext,&HeaderMap)`（认证 + 同源）、`authorize_root(&Database,&Principal,RootId)`（I15 的每次请求授权） |
 | `AuthContext::new(Database)` | Argon2id 生产参数、默认限流与 `SessionPolicy::standard()`、OS 随机源；限流与随机源是进程内状态（重启清零） |
@@ -2350,3 +2350,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 唯一正式 command `agent_get_status() -> Result<GetStatusResult, {code,message}>`；无参数，仅连接 `Endpoint::current("vaultsyncd-agent")`，继承 SID/session/服务端身份核验和传输上限；不接受调用方指定路径/管道/系统命令，不直接打开 DB 或返回凭据。错误码为 `unavailable/agent_rejected/invalid_response`，消息不回显内部路径。
 - `AppManifest` 显式命令清单和 `capabilities/main.json` 仅允许内置 `main` 窗口的 `allow-agent-get-status`。无远程 capability、shell/fs/SQL 插件；CSP 与导航仅内置应用来源。托盘打开/退出仅影响 GUI，agent 不归壳进程管理。前端成功读取后显示 agent 已连接，不把它表示为文件同步成功。
 - 原生验收 `tests/platform/windows/run-native-desktop.sh`：先复核 EXE SHA-256，再在 Interactive/Limited 用户会话启动独立 agent 与真 WebView，实际状态/拒绝命令/GUI 退出不停止 agent。`native-acceptance` feature 才包含测试脚本、报告 command 和动态测试 capability；正式构建清理遗留测试权限元数据，未编译报告入口。报告与测试状态在 run_id 目录，VM 保持在线。
+
+
+## Web 会话与账号管理（S077）
+
+- 唯一 wire 源 `api/openapi.yaml`：`POST /v1/auth/browser/login` 接 LoginRequest，`POST /v1/auth/browser/refresh` 无请求体，均返回 BrowserSession（session_id/access_expires_at），令牌只在 HttpOnly/Secure/SameSite=Strict cookie。agent 原登录/带正文刷新保持兼容。全部认证响应 `Cache-Control: no-store`。
+- `GET /v1/auth/account` 返回当前 AccountInfo（user_id/login/session_id）；`POST /v1/auth/password` 接 PasswordChangeRequest，复用初始化密码规则和登录限流，旧散列 CAS 更新与全部会话撤销同一 SQLite 写事务；`POST /v1/auth/revoke-all` 撤销当前账号全部会话。后二者返回 AccountChanged 的撤销计数并清 cookie，成功后重新登录。错误当前/新密码 400 INVALID_REQUEST，失效身份 401，越权来源 403，限流 429，存储错误 503。
+- `AuthContext.account_gate` 在进程状态锁的单服务约束下串行登录、刷新、改密和全部撤销，防止旧密码已核验但晚于撤销再签发会话。`server-core::auth::manage` 仅做密码规则，`server-store::sessions::{change_password,revoke_all}` 负责原子存储，不新增 schema。
+- Web `BrowserAuth` 只用同源 credentials/no-store 请求；受保护调用复用 `request`，401 并发单飞刷新一次，重复 401 回登录，网络失败保留可重试错误。账号页面可登录、改密、退出、撤销全部；不使用 localStorage，不读 cookie 凭据。
+- Vite 仅回环监听、禁用 CORS，`VAULTSYNCD_DEV_API` 只接受无凭据/路径的本机 HTTP(S) 地址，保留原 Host 让后端校验浏览器 Origin。浏览器验收使用锁定 `nix develop .#web-tests` 的 Playwright Chromium；HTTP localhost 专用测试不代表 S097 生产 HTTPS 已部署。

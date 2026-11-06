@@ -20,6 +20,12 @@
     in
     {
       devShells = forAllSystems (pkgs: {
+        web-tests = pkgs.mkShell {
+          name = "vaultsyncd-web-tests";
+          packages = [ pkgs.nodejs pkgs.pnpm pkgs.chromium (pkgs.python3.withPackages (ps: [ ps.playwright ])) ];
+          PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+          PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+        };
         default = pkgs.mkShell {
           name = "vaultsyncd-dev";
           packages = [
