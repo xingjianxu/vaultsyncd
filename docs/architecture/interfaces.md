@@ -1467,7 +1467,7 @@ python3 tools/context.py --help
 
 - **契约源**：`api/admin-socket.schema.json`，动态 JSON 文档，不引入手写 wire DTO 或改动 Windows IPC。平台边界在 `platform_linux_server::ipc`，服务内管理适配器在 `apps/server/src/admin.rs`；CLI 在线模块不打开 SQLite。离线 `init` 继续独占状态锁。
 - **地址与身份**：服务启动时创建 `<state.dir>/admin/socket`；状态目录必须归服务有效 UID 且不可被组/其他用户写入；`admin` 必须是真实目录、归相同 UID、权限恰为 `0700`，socket 为 `0600`。创建/绑定/chmod/清理锚定 `O_DIRECTORY|O_NOFOLLOW` 打开的目录 fd，避免父路径替换导致操作其它位置。服务读取请求前用 Linux `SO_PEERCRED` 核验相同有效 UID；不信任请求内 UID、login、环境变量或 bearer。CLI 同样核验父目录/socket 类型、权限、所有者、连接前后 inode/dev 与对端 UID。管理员用 `sudo -u <服务账号>`，不开放管理组或 root 特例。只接受唯一 active owner；零个/多个返回 409 `OWNER_REQUIRED`，不猜账号、不签发临时或长期会话。
-- **帧与生命周期**：每连接一请求一响应；4 字节大端无符号长度 + UTF-8 JSON，长度 `1..=1048576`，分配前拒绝零长/越界；截断失败。请求为 `["v1", "命令", ...]`，未知版本、命令、参数或非规范页号返回 400。最多 16 个在途连接，每请求 10 秒，CLI 总截止 15 秒。响应 `{"status":200,"result":{...}}` 或 `{"status":4xx/5xx,"error":{"code":...,"message":...}}`；失败不伪装空清单。服务停止前收尾请求，再关数据库；仅清理自身 socket inode。既有路径（包括崩溃残留）不自动覆盖；确认为本实例停机、锁已释放后，由同 UID 运维删除残留 socket 再启动，绝不删除数据库或恢复证据。
+- **帧与生命周期**：每连接一请求一响应；4 字节大端无符号长度 + UTF-8 JSON，长度 `1..=1048576`，分配前拒绝零长/越界；截断失败。请求为 `["v1", "命令", ...]`，未知版本、命令、参数或非规范页号返回 400。最多 16 个在途连接，每请求 10 秒，CLI 总截止 15 秒。响应 `{"status":200,"result":{...}}` 或 `{"status":4xx/5xx,"error":{"code":...,"message":...}}`；失败不伪装空清单。服务停止前收尾请求，再关数据库；仅清理自身 socket inode。崩溃恢复由启动顺序保证：`bootstrap::prepare` 先取得 `<state>/server.lock` 独占锁，之后才调用 `AdminSocket::bind_after_state_lock`，因此持锁时已存在的 `admin/socket` 只能是上一个持锁进程被 SIGKILL 后留下的 inode，可自动回收。回收仍只在 `O_DIRECTORY|O_NOFOLLOW` 锚定的 admin 目录 fd 内、经 `lstat` 确认类型为 socket 且属主为服务有效 UID 时 unlink；普通文件、符号链接、他人属主一律明确失败且不删除。第二个活着的服务端在抢锁阶段即返回 `state_locked`，到不了回收路径，不会覆盖其他实例的实时 socket；绝不删除数据库或恢复证据。
 
 | `vaultsyncd-admin <命令> --socket <绝对路径> [--json]` | 真实用例与输出 |
 | --- | --- |
