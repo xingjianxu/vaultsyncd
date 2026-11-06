@@ -247,7 +247,17 @@ pub(crate) async fn execute(
                 scheduler.resume(op).await?;
                 result.operation_id = Some(op.to_string());
             } else {
-                return crate::management_history::retry_restore(db, binding, op, client).await;
+                // The scheduler may have resolved the problem between listing and retry.
+                // Only report success when no persisted problem still names this operation.
+                if !problems(db, Some(binding))
+                    .await?
+                    .iter()
+                    .any(|p| p.problem_id == op.to_string())
+                {
+                    result.operation_id = Some(op.to_string());
+                } else {
+                    return crate::management_history::retry_restore(db, binding, op, client).await;
+                }
             }
         }
         C::GetConnection => result.connection = Some(connection(config, session)),
