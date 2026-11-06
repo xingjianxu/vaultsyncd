@@ -202,6 +202,7 @@ mod tests {
         let executor = Arc::new(crate::executor::ExecutorContext::new(
             auth.database().clone(),
             &std::env::temp_dir(),
+            None,
         ));
         let operations = Arc::new(OperationsContext::new(Arc::clone(&auth), executor));
         let sync = Arc::new(SyncContext::new(Arc::clone(&auth), Arc::clone(&lifecycle)));
