@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vaultsyncd offline restore report v1",
+  "description": "CLI restore validate/apply and state-local restore.incomplete/restore.complete.json. Dynamic artifact documents have no parallel handwritten DTO. validate rereads all archive bytes and pinned manifest, verifies source SQLite, compatibility, complete Root mapping and actual available space. apply holds the same StateLock as service/init. restore.incomplete is authoritative and blocks both entrances before DBopen; complete report is only diagnostic until the marker is durably removed. Failures preserve evidence and require new empty targets; no implicit overwrite/resume. Fresh random 63-bit epoch avoids reuse when the same old backup is restored more than once; ServerId remains. Root targets share one compliant CoW btrfs filesystem with state, are canonical/new/empty and do not alias or overlap source paths.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/report"
+    },
+    {
+      "$ref": "#/$defs/error"
+    }
+  ],
+  "$defs": {
+    "decimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "backup_id",
+        "server_id",
+        "manifest_hash",
+        "root_count",
+        "working_items",
+        "required_bytes",
+        "available_bytes",
+        "external_uncollected_writes"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "validated",
+            "incomplete",
+            "restored"
+          ]
+        },
+        "backup_id": {
+          "$ref": "#/$defs/id"
+        },
+        "server_id": {
+          "$ref": "#/$defs/id"
+        },
+        "manifest_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "root_count": {
+          "$ref": "#/$defs/decimal"
+        },
+        "working_items": {
+          "$ref": "#/$defs/decimal"
+        },
+        "required_bytes": {
+          "$ref": "#/$defs/decimal"
+        },
+        "available_bytes": {
+          "$ref": "#/$defs/decimal"
+        },
+        "external_uncollected_writes": {
+          "const": "excluded"
+        },
+        "epoch": {
+          "$ref": "#/$defs/decimal"
+        },
+        "root_mapping": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^/"
+          }
+        },
+        "config_path": {
+          "type": "string",
+          "pattern": "^/"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "error"
+      ],
+      "properties": {
+        "state": {
+          "const": "incomplete"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
