@@ -522,7 +522,9 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         .spawn()
         .unwrap();
     for _ in 0..5000 {
-        if interrupted.join("restore.incomplete").exists() {
+        if interrupted.join("restore.incomplete").exists()
+            && interrupted.join("restore.candidate.sqlite").exists()
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -540,6 +542,15 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     assert!(!child.wait().unwrap().success());
     assert!(interrupted.join("restore.incomplete").exists());
     assert!(!interrupted.join("restore.complete.json").exists());
+    assert!(
+        matches!(
+            vaultsyncd_server_store::db::Database::open(interrupted.join("server.sqlite")).await,
+            Err(vaultsyncd_server_store::db::DbError::ForeignDatabase {
+                application_id: vaultsyncd_server_store::restore::RESTORE_GUARD_APPLICATION_ID
+            })
+        ),
+        "unchanged pre-S089 database admission must reject the recovery guard too"
+    );
     let mut cfg = lab.config();
     cfg.state_dir = interrupted.clone();
     cfg.database = interrupted.join("server.sqlite");

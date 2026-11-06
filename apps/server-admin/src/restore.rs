@@ -565,11 +565,27 @@ fn execute(args: &Args) -> io::Result<Value> {
         RESTORE_INCOMPLETE,
         &serde_json::to_vec_pretty(&result).map_err(err)?,
     )?;
+    // 正式名称先放种类护栏，旧服务既有的ForeignDatabase门也会拒绝半恢复。
+    drop(create(&state.dir, Path::new("server.sqlite"), 0o600)?);
+    vaultsyncd_server_store::restore::guard(
+        &state.dir.proc_fd_path().join("server.sqlite"),
+        &source.index,
+    )?;
+    state.dir.fsync_dir().map_err(err)?;
+    let guard_identity = state
+        .dir
+        .identity_at(Path::new("server.sqlite"))
+        .map_err(err)?
+        .ok_or_else(|| err("restore guard missing"))?;
     state.dir.mkdir(Path::new("objects"), 0o700).map_err(err)?;
     let objects = state.dir.child_dir(Path::new("objects")).map_err(err)?;
     source.stream(|item| {
         if item.path == "database.sqlite" {
-            return Ok(Some(create(&state.dir, Path::new("server.sqlite"), 0o600)?));
+            return Ok(Some(create(
+                &state.dir,
+                Path::new("restore.candidate.sqlite"),
+                0o600,
+            )?));
         }
         if item.path == "config.json" {
             return Ok(Some(create(
@@ -619,7 +635,7 @@ fn execute(args: &Args) -> io::Result<Value> {
         })
         .collect();
     vaultsyncd_server_store::restore::apply(
-        &state.dir.proc_fd_path().join("server.sqlite"),
+        &state.dir.proc_fd_path().join("restore.candidate.sqlite"),
         &source.index,
         &remaps,
         epoch,
@@ -658,6 +674,25 @@ fn execute(args: &Args) -> io::Result<Value> {
         .to_string_lossy()
         .into_owned()
         .into();
+    // 只能替换本轮已持久建立且从未变化的护栏，候选DB此时已完成全部物理/逻辑核验。
+    if state
+        .dir
+        .identity_at(Path::new("server.sqlite"))
+        .map_err(err)?
+        != Some(guard_identity)
+    {
+        return Err(err("restore guard changed; preserved"));
+    }
+    state
+        .dir
+        .rename(
+            Path::new("restore.candidate.sqlite"),
+            &state.dir,
+            Path::new("server.sqlite"),
+            false,
+        )
+        .map_err(err)?;
+    state.dir.fsync_dir().map_err(err)?;
     write_document(
         &state.dir,
         "restore.complete.json",

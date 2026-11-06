@@ -73,7 +73,8 @@ pub struct Mapping {
 }
 /// 规范绝对路径不含别名分量、控制字符；平台还必须拒绝符号链接和目录身份别名。
 pub fn canonical_path(path: &Path) -> bool {
-    path.is_absolute()
+    // 这是Linux服务端路径语义；便携核心在Windows上也不能把POSIX根误判成相对盘路径。
+    matches!(path.components().next(), Some(Component::RootDir))
         && path.parent().is_some()
         && path
             .to_str()

@@ -10,6 +10,26 @@ use vaultsyncd_server_core::backup::{
 fn err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
+/// 恢复护栏库与正式服务库不同的种类标记，旧服务同样会以ForeignDatabase拒绝它。
+pub const RESTORE_GUARD_APPLICATION_ID: i32 = 0x5653_5247;
+/// 初始化已经由安全目录能力独占创建的空护栏文件。
+/// 数据导入候选名，不能将旧Root路径/旧epoch的半恢复库暴露为server.sqlite。
+pub fn guard(path: &Path, index: &Index) -> io::Result<()> {
+    if std::fs::metadata(path)?.len() != 0 {
+        return Err(err("restore guard file must be empty and newly created"));
+    }
+    let db = Connection::open(path).map_err(err)?;
+    db.pragma_update(None, "application_id", RESTORE_GUARD_APPLICATION_ID)
+        .map_err(err)?;
+    db.execute_batch("PRAGMA synchronous=FULL;CREATE TABLE restore_guard(backup_id TEXT NOT NULL,manifest_hash BLOB NOT NULL);").map_err(err)?;
+    db.execute(
+        "INSERT INTO restore_guard VALUES(?,?)",
+        rusqlite::params![index.id.to_hex(), index.manifest_hash.as_slice()],
+    )
+    .map_err(err)?;
+    drop(db);
+    std::fs::File::open(path)?.sync_all()
+}
 /// 固定候选数据库推导的工作计划，不包含密码或会话材料。
 pub struct Plan {
     /// 核心验证后的活跃普通工作项，父目录先于子项。
@@ -151,6 +171,30 @@ mod tests {
     use super::*;
     use crate::test_support::*;
     use vaultsyncd_domain::ids::{BackupLeaseId, ServerId};
+    #[tokio::test]
+    async fn existing_database_admission_refuses_restore_guard_without_new_marker_logic() {
+        let dir = TestDir::new("s089-guard");
+        let path = dir.path.join("server.sqlite");
+        std::fs::File::create(&path).unwrap();
+        let index = Index {
+            id: BackupLeaseId::from_bytes([1; 16]),
+            server: ServerId::from_bytes([2; 16]),
+            manifest_hash: [3; 32],
+            items: vec![],
+            root_seqs: BTreeMap::new(),
+            schema_version: 13,
+            table_counts: BTreeMap::new(),
+        };
+        guard(&path, &index).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            crate::db::Database::open(&path).await,
+            Err(crate::db::DbError::ForeignDatabase {
+                application_id: RESTORE_GUARD_APPLICATION_ID
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
     #[tokio::test]
     async fn offline_mapping_preserves_logical_state_and_requires_fresh_epoch() {
         let dir = TestDir::new("s089-remap");
