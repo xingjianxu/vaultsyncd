@@ -2457,3 +2457,9 @@ S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包�
 - `LocalExport` 写OPFS新文件，每次重试保留旧尝试，不自动删除。元信息仅sessionStorage按用户隔离；下载失败/取消为incomplete，完成写入仍exported_unverified，显式重读才verified。页面重开撤回历史成功，需重新核对。OPFS缺能力明确失败并提示CLI；不把浏览器暂存当独立故障域。
 - 另存归档和收据分别提供下载；仅验证OPFS时收据标exported_unverified，重新选择另存文件验证后才可生成verified收据。收据可交S088 CLI backup verify重读；浏览器无法设置POSIX0600，页面要求管理员私有保存位置，严格权限用CLI。离线restore仅说明停服务及CLI validate，无在线restore入口。
 - 验收 `pnpm --filter @vaultsyncd/web test`、`nix develop .#web-tests --command python3 tests/web/backup-browser.py`。真实专用btrfs/Chromium覆盖14场景，包含CLI验证浏览器下载的真实归档；测试归档/收据0600，finally清服务、loop和挂载。后续HTTPS/离线恢复依各自卡验收。
+
+## S084 未上传内容恢复原生演练
+
+- 不新增产品wire或命令，复用现有`export_recovery(binding_id,destination)`及未ready绑定打开Local的路径。新增`tests/windows-integration/tests/unuploaded_recovery.rs`，仅Windows dev依赖，不把SQLite接入CLI/GUI。真实agent IPC与真实Linux API，数据库仅只读核验；上传part断连只作用于本run私有转发器，非fake成功响应或直接写在线DB。
+- 实际Move被NTFS共享锁阻止产生持久intent；强杀重启后先导出。验证current最新dirty、snapshot旧固定上传、candidate新未观察文件及intent源各自可读/hash，人工CreateNew取回至新空目录；导出前后intent/resume/dirty计数保留，baseline版本/revision及服务端已确认字节不变。同名目的/受保护目录/忙源导出失败不清源、不发布manifest。
+- runner校验NTFS、EXE传输hash、同用户Interactive/Limited登录态与helper实际工作路径，拒绝搬cache中带旧树内嵌路径的helper。恢复包与人工取回副本同步到忽略artifacts后由独立Python重核22份清单文件。只停止记录且核对过exe/config的自有进程；注册根与源数据有意保留，不把注销/卸载作为清理。操作步骤及包角色说明见`docs/operations/recovery.md`；安装/卸载另由S099。
