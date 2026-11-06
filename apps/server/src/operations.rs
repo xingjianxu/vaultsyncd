@@ -165,6 +165,35 @@ pub async fn submit(
         Ok(at) => at,
         Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(root_id)),
     };
+    if request.kind == OperationKind::Create
+        && let Some(upload) = request.upload
+    {
+        let content =
+            match finalized_content(&context, caller.principal.user_id, root_id, upload).await {
+                Ok(content) => content,
+                Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
+            };
+        return match crate::create_file::execute(
+            &context.executor,
+            caller.principal.user_id,
+            key,
+            digest,
+            &request,
+            content,
+            at,
+        )
+        .await
+        {
+            Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+            Err(failure) => {
+                context
+                    .executor
+                    .reject_failure(caller.principal.user_id, key, &failure)
+                    .await;
+                failure_response(&caller.request_id, &failure, root_id)
+            }
+        };
+    }
     if request.kind != OperationKind::PutContent {
         return execute_namespace_command(
             &context,

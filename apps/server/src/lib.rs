@@ -20,6 +20,7 @@ pub mod commands;
 pub mod config;
 pub mod conflict_ops;
 pub mod content;
+pub mod create_file;
 pub mod executor;
 pub mod external;
 pub mod http;

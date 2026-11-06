@@ -366,17 +366,37 @@ impl UploadActionHandler {
             _ => (WireOperationKind::PutContent, None),
         };
         OperationRequest {
-            base_revision: op.baseline_revision.map(|value| value.to_decimal()),
-            base_version_id: op.baseline_version.map(|value| value.to_string()),
+            base_revision: if kind == WireOperationKind::Create {
+                None
+            } else {
+                op.baseline_revision.map(|value| value.to_decimal())
+            },
+            base_version_id: if kind == WireOperationKind::Create {
+                None
+            } else {
+                op.baseline_version.map(|value| value.to_string())
+            },
             conflict_policy: spec.conflict_policy,
             device_id: self.device_id.clone(),
-            entry_id: op.entry.map(|value| value.to_string()),
+            entry_id: if kind == WireOperationKind::Create {
+                None
+            } else {
+                op.entry.map(|value| value.to_string())
+            },
             expected_absent,
             kind,
             local_generation: Some(spec.generation.to_decimal()),
-            name: spec.name.clone(),
+            name: if kind == WireOperationKind::Create {
+                spec.name.clone()
+            } else {
+                None
+            },
             op_id: op.op.to_string(),
-            parent_id: spec.parent.map(|value| value.to_string()),
+            parent_id: if kind == WireOperationKind::Create {
+                spec.parent.map(|value| value.to_string())
+            } else {
+                None
+            },
             server_epoch: self.server_epoch.to_decimal(),
             subtree_token: None,
             upload_id: Some(outcome.session.clone()),
@@ -651,6 +671,25 @@ mod tests {
         assert_eq!(request.local_generation.as_deref(), Some("7"));
         assert_eq!(request.base_revision.as_deref(), Some("2"));
         assert_eq!(request.upload_id.as_deref(), Some(outcome.session.as_str()));
+        let targeted = spec.with_target(EntryId::from_bytes([9; 16]), "copy.txt");
+        let existing = handler.request(&op, &targeted, &outcome);
+        assert_eq!(existing.kind, WireOperationKind::PutContent);
+        assert!(existing.parent_id.is_none() && existing.name.is_none());
+        for kind in ["upload_new_entry", "create_conflict_copy"] {
+            let mut new = op.clone();
+            new.kind = kind.into();
+            let request = handler.request(&new, &targeted, &outcome);
+            assert_eq!(request.kind, WireOperationKind::Create);
+            assert_eq!(request.expected_absent, Some(true));
+            assert_eq!(request.name.as_deref(), Some("copy.txt"));
+            assert!(
+                request.entry_id.is_none()
+                    && request.base_revision.is_none()
+                    && request.base_version_id.is_none()
+            );
+            assert_eq!(request.upload_id.as_deref(), Some(outcome.session.as_str()));
+            assert_eq!(request.op_id, op.op.to_string());
+        }
     }
 
     struct NoopCommitStore;

@@ -15,12 +15,13 @@ vaultsyncd-domain = { path = "../../crates/domain" }
 vaultsyncd-http-client = { path = "../../crates/http-client" }
 vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
 vaultsyncd-transfer = { path = "../../crates/transfer" }
+vaultsyncd-protocol = { path = "../../crates/protocol" }
+vaultsyncd-planner = { path = "../../crates/planner" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
-
-[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-vaultsyncd-protocol = { path = "../../crates/protocol" }
+url = "2"
 
 [lints]
 workspace = true

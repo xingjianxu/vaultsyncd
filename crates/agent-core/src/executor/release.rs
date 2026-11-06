@@ -93,6 +93,18 @@ pub struct ManualRelease {
     remote: Arc<dyn ReleaseRemote>,
 }
 impl ManualRelease {
+    /// Typed startup inputs from validated durable journals; applications must not parse private JSON.
+    pub async fn pending_specs(
+        database: Arc<Database>,
+        binding: BindingId,
+    ) -> Result<Vec<ReleaseSpec>, PortError> {
+        Store { database }
+            .pending(binding)
+            .await?
+            .iter()
+            .map(|journal| journal.spec())
+            .collect()
+    }
     /// 组装客户端 SQLite、平台保护与服务器内容租约。
     pub fn new(
         database: Arc<Database>,

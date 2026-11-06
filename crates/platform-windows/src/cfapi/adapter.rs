@@ -316,6 +316,88 @@ impl Adapter {
         }
         Ok(())
     }
+    /// Convert verified complete regular contents without discarding a byte.
+    /// The complete digest is checked under a share-none no-follow handle before marking in-sync.
+    pub fn adopt_complete(
+        &self,
+        path: &str,
+        expected: &EntryMetadata,
+        id: Identity,
+        digest: [u8; 32],
+        size: u64,
+    ) -> io::Result<EntryMetadata> {
+        use std::os::windows::fs::FileExt;
+        self.check_identity(id)?;
+        self.root.with_parent(path, |parent, name| {
+            let _ = (parent, name);
+            let (protected, _) =
+                crate::files::controlled::ProtectedFile::open_under(&self.root, path, true)?;
+            let lease = protected.lease()?;
+            let file = lease.file();
+            let meta = metadata(file)?;
+            check_expected(&meta, expected)?;
+            if meta.size != size || meta.directory || meta.links != 1 {
+                return Err(io::Error::other("LOCAL_CHANGED"));
+            }
+            if let Some(cloud) = &meta.cloud {
+                let prior = Identity::decode(&cloud.identity)
+                    .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                if prior.binding != id.binding
+                    || prior.root != id.root
+                    || prior.entry != id.entry
+                    || cloud.on_disk < size
+                {
+                    return Err(io::Error::other(
+                        "different or incomplete placeholder identity",
+                    ));
+                }
+            }
+            let mut h = vaultsyncd_transfer::hash::ContentHasher::new();
+            let mut at = 0;
+            while at < size {
+                let mut b = vec![0; (size - at).min(1024 * 1024) as usize];
+                let n = file.seek_read(&mut b, at)?;
+                if n == 0 {
+                    return Err(io::Error::other("short adoption read"));
+                }
+                h.update(&b[..n]);
+                at += n as u64;
+            }
+            if h.finish() != digest {
+                return Err(io::Error::other("LOCAL_CHANGED"));
+            }
+            let bytes = id.encode();
+            let mut usn = 0;
+            if meta.cloud.is_none() {
+                hr(unsafe {
+                    CfConvertToPlaceholder(
+                        file.as_raw_handle(),
+                        bytes.as_ptr().cast(),
+                        bytes.len() as u32,
+                        1,
+                        &mut usn,
+                        std::ptr::null_mut(),
+                    )
+                })?;
+            } else {
+                hr(unsafe {
+                    CfUpdatePlaceholder(
+                        file.as_raw_handle(),
+                        std::ptr::null(),
+                        bytes.as_ptr().cast(),
+                        bytes.len() as u32,
+                        std::ptr::null(),
+                        0,
+                        2,
+                        &mut usn,
+                        std::ptr::null_mut(),
+                    )
+                })?;
+            }
+            metadata(file)
+        })
+    }
+
     /// Update only an empty placeholder under the expected physical and logical identity.
     /// Hydrated/modified content is preserved for controlled application in S068.
     pub fn update(

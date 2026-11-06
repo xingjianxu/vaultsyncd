@@ -34,6 +34,30 @@ const V: VersionId = VersionId::from_bytes([3; 16]);
 const O: OpId = OpId::from_bytes([4; 16]);
 const OLD: &[u8] = b"confirmed content retained by a leased immutable version";
 const EDIT: &[u8] = b"unconfirmed same-path content must never be released";
+
+#[tokio::test]
+async fn typed_startup_specs_refuse_malformed_durable_journal_without_io() {
+    let rig = Rig::new().await;
+    let db = rig.db().await;
+    sqlx::query(
+        "INSERT INTO controlled_releases(op_id,binding_id,target_path,journal) VALUES(?,?,?,'{}')",
+    )
+    .bind(O.as_bytes().as_slice())
+    .bind(B.as_bytes().as_slice())
+    .bind("file.txt")
+    .execute(db.pool())
+    .await
+    .unwrap();
+    assert!(ManualRelease::pending_specs(db.clone(), B).await.is_err());
+    assert_eq!(fs::read(rig.0.join("file.txt")).unwrap(), OLD);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM controlled_releases")
+            .fetch_one(db.pool())
+            .await
+            .unwrap(),
+        1
+    );
+}
 fn err(e: impl std::fmt::Display) -> PortError {
     PortError::local(LocalErrorKind::Read, e.to_string())
 }
@@ -707,6 +731,15 @@ async fn durable_release_recovers_before_and_after_platform_and_database() {
             assert!(gc(&rig.0));
         }
         let (db, service, disk, remote) = rig.service(0).await;
+        let pending = ManualRelease::pending_specs(db.clone(), B).await.unwrap();
+        assert_eq!(
+            pending,
+            if phase == "finished" {
+                vec![]
+            } else {
+                vec![spec()]
+            }
+        );
         let recovered = service.recover(B).await.unwrap();
         if phase == "finished" {
             assert!(recovered.is_empty());

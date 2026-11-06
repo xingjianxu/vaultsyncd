@@ -670,7 +670,7 @@ fn published(p: &Publication, e: &Evidence) -> bool {
     e.digest == p.digest && e.size == p.size && e.volume == p.new_volume && e.file == p.new_file
 }
 
-fn protect_under(
+pub(super) fn protect_under(
     root: &RootHandle,
     path: &str,
     write: bool,
