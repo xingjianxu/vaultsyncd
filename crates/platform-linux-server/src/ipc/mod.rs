@@ -48,40 +48,73 @@ pub struct AdminSocket {
 }
 
 impl AdminSocket {
-    /// 在状态目录下创建 `admin/socket`；既有 socket（包括崩溃残留）一律拒绝覆盖。
+    /// 在状态目录下创建 `admin/socket`；既有路径一律拒绝覆盖。
     pub fn bind(state_dir: &Path) -> io::Result<Self> {
-        let open_dir = |path: &Path| {
-            fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(0o200_000 | 0o400_000)
-                .open(path)
-        }; // O_DIRECTORY | O_NOFOLLOW
-        let state = open_dir(state_dir)?;
-        let meta = state.metadata()?;
-        if meta.uid() != effective_uid() || meta.mode() & 0o022 != 0 {
-            return Err(denied());
+        bind_impl(state_dir, false)
+    }
+
+    /// 在已持有状态目录独占锁时创建 `admin/socket`，并回收崩溃遗留的 socket。
+    ///
+    /// 安全前提由调用方保证：同一状态目录的独占锁（`server.lock`）在创建 socket 之前已经取得。
+    /// 因此此刻已存在的 `admin/socket` 不可能是另一个活着的服务端或离线 init 创建的，只能是
+    /// 上次进程被强杀后留下的 inode。回收仍保守：只删除锚定目录内、`lstat` 确认是 socket、
+    /// 且属主为本进程有效 UID 的条目；普通文件、符号链接或他人属主一律明确报错而不删除。
+    pub fn bind_after_state_lock(state_dir: &Path) -> io::Result<Self> {
+        bind_impl(state_dir, true)
+    }
+}
+
+fn bind_impl(state_dir: &Path, recover_stale: bool) -> io::Result<AdminSocket> {
+    let open_dir = |path: &Path| {
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(0o200_000 | 0o400_000)
+            .open(path)
+    }; // O_DIRECTORY | O_NOFOLLOW
+    let state = open_dir(state_dir)?;
+    let meta = state.metadata()?;
+    if meta.uid() != effective_uid() || meta.mode() & 0o022 != 0 {
+        return Err(denied());
+    }
+    let parent = PathBuf::from(format!("/proc/self/fd/{}/admin", state.as_raw_fd()));
+    match fs::DirBuilder::new().mode(0o700).create(&parent) {
+        Ok(()) => (),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error),
+    }
+    let directory = open_dir(&parent)?;
+    let meta = directory.metadata()?;
+    if meta.uid() != effective_uid() || meta.mode() & 0o777 != 0o700 {
+        return Err(denied());
+    }
+    let path = PathBuf::from(format!("/proc/self/fd/{}/socket", directory.as_raw_fd()));
+    if recover_stale {
+        remove_stale_socket(&path)?;
+    }
+    let listener = UnixListener::bind(&path)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    let inode = fs::symlink_metadata(&path)?.ino();
+    Ok(AdminSocket {
+        listener,
+        path,
+        inode,
+        _directory: directory,
+    })
+}
+
+/// 回收崩溃遗留的 socket；只处理锚定目录 fd 下的 socket 条目，不跟随符号链接。
+fn remove_stale_socket(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() && meta.uid() == effective_uid() => {
+            fs::remove_file(path)
         }
-        let parent = PathBuf::from(format!("/proc/self/fd/{}/admin", state.as_raw_fd()));
-        match fs::DirBuilder::new().mode(0o700).create(&parent) {
-            Ok(()) => (),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
-            Err(error) => return Err(error),
-        }
-        let directory = open_dir(&parent)?;
-        let meta = directory.metadata()?;
-        if meta.uid() != effective_uid() || meta.mode() & 0o777 != 0o700 {
-            return Err(denied());
-        }
-        let path = PathBuf::from(format!("/proc/self/fd/{}/socket", directory.as_raw_fd()));
-        let listener = UnixListener::bind(&path)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        let inode = fs::symlink_metadata(&path)?.ino();
-        Ok(Self {
-            listener,
-            path,
-            inode,
-            _directory: directory,
-        })
+        Ok(meta) if meta.file_type().is_socket() => Err(denied()),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "管理 socket 路径已被非 socket 文件占用，拒绝删除",
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -184,6 +217,57 @@ mod tests {
             fs::read(path.join("admin/socket")).unwrap(),
             b"other directory"
         );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_socket_is_reclaimed_but_non_socket_placeholders_are_kept() {
+        let path = std::env::temp_dir().join(format!(
+            "vaultsyncd-s075-stale-socket-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).unwrap();
+
+        // `forget` 等价于进程被强杀：Drop 不执行，socket 文件留在目录里。
+        let first = AdminSocket::bind(&path).unwrap();
+        std::mem::forget(first);
+        assert!(
+            fs::symlink_metadata(path.join("admin/socket"))
+                .unwrap()
+                .file_type()
+                .is_socket()
+        );
+
+        let recovered = AdminSocket::bind_after_state_lock(&path).unwrap();
+        let stream = connect(&path.join("admin/socket")).await.unwrap();
+        authorize_peer(&stream).unwrap();
+        drop(recovered);
+
+        // 非 socket 文件占位：明确失败，且不删除、不覆盖。
+        fs::write(path.join("admin/socket"), b"evidence must survive").unwrap();
+        match AdminSocket::bind_after_state_lock(&path) {
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
+            Ok(_) => panic!("非 socket 占位必须拒绝启动"),
+        }
+        assert_eq!(
+            fs::read(path.join("admin/socket")).unwrap(),
+            b"evidence must survive"
+        );
+        fs::remove_file(path.join("admin/socket")).unwrap();
+
+        // 符号链接同样不被跟随或删除。
+        let outside = path.join("outside.sock");
+        let _target = AdminSocket::bind(&path).unwrap();
+        fs::rename(path.join("admin/socket"), &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, path.join("admin/socket")).unwrap();
+        assert!(AdminSocket::bind_after_state_lock(&path).is_err());
+        assert!(
+            fs::symlink_metadata(path.join("admin/socket"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
         fs::remove_dir_all(path).unwrap();
     }
 

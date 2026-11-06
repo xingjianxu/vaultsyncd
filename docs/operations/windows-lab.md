@@ -589,4 +589,4 @@ VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \
 
 - 不是三台并发实机：顺序 agent 只验证跨客户端最终收敛与冲突保留，不验证同时在线竞争；并发与事件异常/旧设备矩阵属 S102。
 - 生产 HTTPS 反向代理部署属 S097；本卡使用测试 TLS 入口 + 认证 SSH 回环隧道，证书、主机名与校验是真实的，但不是生产代理配置。
-- `kill_boundaries`（S052 子进程强杀恢复）在 S075 加入管理 socket 后存在基线已有的 `AdminSocket` 残留 socket 导致 `AddrInUse` 失败；已在 S074 交接记录为既有问题，与本卡改动无关。
+- `kill_boundaries`（S052 子进程强杀恢复）在 S075 加入管理 socket 后曾因 `AdminSocket` 残留 socket 报 `AddrInUse`；该回归已由 S075-c 修复（服务端持状态锁后回收合法遗留 socket，非 socket/他人属主仍明确失败），4 项已恢复通过。

@@ -353,8 +353,13 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         }
     })?;
 
-    let admin_socket = vaultsyncd_platform_linux_server::ipc::AdminSocket::bind(&config.state_dir)
-        .map_err(StartupError::Admin)?;
+    // 管理 socket 的崩溃残留只能在这里回收：上面已独占状态目录锁，所以此刻存在的
+    // `<state>/admin/socket` 不可能属于另一个活着的服务端；`bind_after_state_lock` 仍会
+    // 核对目录锚定、socket 类型与有效 UID 属主，非 socket 文件一律拒绝。
+    let admin_socket = vaultsyncd_platform_linux_server::ipc::AdminSocket::bind_after_state_lock(
+        &config.state_dir,
+    )
+    .map_err(StartupError::Admin)?;
 
     Ok(Service {
         config,
