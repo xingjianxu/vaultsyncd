@@ -128,6 +128,8 @@ pub async fn run(args: &InitArgs, password: &str) -> Result<InitOutcome, InitFai
         other => InitFailure::new(EXIT_FAILURE, other.to_string()),
     })?;
 
+    vaultsyncd_server_store::state_lock::ensure_restore_complete(state_dir)
+        .map_err(|error| InitFailure::new(EXIT_FAILURE, error.to_string()))?;
     let database_path = state_dir.join(DATABASE_FILE_NAME);
     let database = Database::open(&database_path)
         .await

@@ -2463,3 +2463,30 @@ S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包�
 - 不新增产品wire或命令，复用现有`export_recovery(binding_id,destination)`及未ready绑定打开Local的路径。新增`tests/windows-integration/tests/unuploaded_recovery.rs`，仅Windows dev依赖，不把SQLite接入CLI/GUI。真实agent IPC与真实Linux API，数据库仅只读核验；上传part断连只作用于本run私有转发器，非fake成功响应或直接写在线DB。
 - 实际Move被NTFS共享锁阻止产生持久intent；强杀重启后先导出。验证current最新dirty、snapshot旧固定上传、candidate新未观察文件及intent源各自可读/hash，人工CreateNew取回至新空目录；导出前后intent/resume/dirty计数保留，baseline版本/revision及服务端已确认字节不变。同名目的/受保护目录/忙源导出失败不清源、不发布manifest。
 - runner校验NTFS、EXE传输hash、同用户Interactive/Limited登录态与helper实际工作路径，拒绝搬cache中带旧树内嵌路径的helper。恢复包与人工取回副本同步到忽略artifacts后由独立Python重核22份清单文件。只停止记录且核对过exe/config的自有进程；注册根与源数据有意保留，不把注销/卸载作为清理。操作步骤及包角色说明见`docs/operations/recovery.md`；安装/卸载另由S099。
+
+## S094 Linux Nix 组件与显式 Web 资源
+
+- flake `packages.x86_64-linux.{rust,web,default,web-deps}`：Rust server/admin 与Web独立源过滤和derivation；Rust由过滤源中的Cargo.lock逐crate checksum抓取（避免vendor符号链接使文档/纯Web变化牵动Rust），Web fetchPnpmDeps(fetcher5)固定真实SHA256。正式Rust/前端构建在sandbox中offline，不依赖本地target/node_modules/dist；Rust源码单测不要求Web构建。
+- default输出bin/server/admin与share/vaultsyncd/web、release-manifest.json；wrapper补btrfs-progs并为服务设置默认VAULTSYNCD_WEB_DIR。运行闭包经qR实测不含Node/pnpm/TypeScript，工具链版本仅作为构建来源数据。
+- `apps/server/src/web.rs::WebAssets` 仅消费显式绝对目录；prepare在DB之前验证index及引用assets，缺失拒绝启动；未配置即API-only。只服务根index和/assets，带nosniff/CSP/no-store；未知API不会回HTML。无编译期dist内嵌、无数据库或wire迁移。
+- `packaging/linux/nix-manifest.py` 生成独立Nix组件来源记录：干净commit/full flake NAR、锁/协议源SHA256、目标、Nixpkgs revision、工具包版本、组件过滤源/derivation身份和实际文件hash。源/derivation store hash分为四段8字符且只去元数据字符串上下文，避免记录本身保留构建闭包；真实Rust/Web输出仍显式依赖，不伪造S093Git工作树receipt。
+- 默认发行拒绝dirty flake；组件允许开发态构建。Nix store构建输入自洽、同快照关联，不接受手写外部组件混搭。Nix布局不是通用Linux独立包（S098）。模块、主机部署、生产TLS分别S095—S097，不在此卡改主机。
+- 验收 `nix build`；`nix develop .#web-tests --command python3 packaging/linux/test-nix-runtime.py <output>` 验证来源/hash/闭包、空PATH原生运行、缺资源失败、同源Web/API和Chromium登录；测试服务finally停止。说明与示例见packaging/linux/。
+
+
+### S089 — 离线恢复候选与启动屏障
+
+core::backup::restore只消费固定Index/字节与目录事实，验证schema/协议、全Root新空路径映射及命名空间父链，输出普通工作项和保守空间预算。平台restore::Target用锚定RestrictedDir验证真实CoW btrfs、无子卷/挂载/别名并读取fstatfs可用空间。store::restore::plan先验证源DB整体语义后交core规划；apply在短事务更新Root物理映射与全新随机恢复epoch，保留ServerId、Root seq、条目/版本/历史回收站/操作记录，会话失效。
+
+StateLock::try_acquire_file接收平台已安全打开的同一server.lock，flock语义与服务/init相同。离线apply持锁全过程，restore.incomplete先于任何导入写入持久化；bootstrap/init持状态锁后、打开DB前拒绝该标记，不能启动半成品。全部文件与DB核验、目录刷盘后才移除标记；失败现场保留，默认非空目标拒绝重试，改用新空目标，不隐式覆盖。CLI接线和真实证据在S089-c完成后补充。
+
+S089兼容补充：先创建独立种类`RESTORE_GUARD_APPLICATION_ID=0x56535247`的server.sqlite，旧服务既有ForeignDatabase门同样拒绝；导入/更新只作用restore.candidate.sqlite。全部文件/历史/DB/新映射/epoch核验与刷盘后，确认护栏完整身份未变，再原子替换正式名称并刷盘，之后写complete报告和移除marker。不会把含旧Root路径/旧epoch的中间库暴露到正式名；即使旧程序不理解新marker，也不能开启半恢复。新恢复代际为随机63位非零值，排除所有旧Root epoch，重复恢复同一旧备份不会确定复用同一代际；逻辑ServerId、Root seq及历史保持。核心按Linux POSIX根分量解释映射，避免便携构建宿主改变路径语义。
+
+S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站、普通独立inode、会话失效/旧epoch操作410、重复恢复与零Root、在线同锁及非空/非法映射、坏归档与实际空间不足、SIGKILL后的当前启动屏障和既有ForeignDatabase门。护栏必须先于工作写入且候选DB不能用正式名称；完成文件写在原子发布后，marker持久移除才开放。容量预算为估算，运行时ENOSPC仍保留incomplete，源schema12的启动迁移沿用store既有迁移门；恢复不提供隐式覆盖/resume，运维入口见backup文档。
+
+
+### S091 — 真实远端协议协商
+
+补齐既有GET /v1/capabilities，不新增wire DTO/版本。bootstrap在状态锁/DB门后持久稳定ServerId，返回当前恢复epoch、已实现功能和真实限额；Root注册沿用restore_epoch，不在恢复后退回0。权威ServerId是服务器身份，现存agent配置server.id仍按既有客户端命名空间使用，本卡未额外收紧身份pin；URL/TLS/Root/会话授权边界照旧。
+
+默认Rust ApiClient（包括testing/all-features构建）在发送认证/数据请求前读取实际capabilities，拒major/不合法限额或缺已知能力；只使用已知feature交集，兼容更高minor与未知增量字段。刷新和401重试也重核，不向capability请求携带凭据/内容；本地恢复、数据库、缓存和未确认队列不由HTTP错误清理。仅cfg(test/testing)显式单元构造器with_transport_for_unit_tests可关闭这一层，生产默认构造器不受feature隐式影响。真实TCP fixture代理后接真实服务证明major拒绝不抵达login、缺uploads不创建上传，凭据保留；默认/testing各1项通过。当前没有旧正式发行客户端，固定开发profile/历史迁移校验和见tests/contract/fixtures/s091，不冒充正式版本互通。

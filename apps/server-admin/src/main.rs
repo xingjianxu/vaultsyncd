@@ -26,6 +26,7 @@ mod accounts;
 mod backup;
 mod init;
 mod online;
+mod restore;
 
 /// 初始化成功的退出码。
 pub const EXIT_OK: u8 = 0;
@@ -79,6 +80,9 @@ fn main() -> ExitCode {
 
 async fn run() -> ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "restore") {
+        return ExitCode::from(restore::run(args).await);
+    }
     if args.first().is_some_and(|arg| arg == "backup") {
         return ExitCode::from(backup::run(args).await);
     }
@@ -98,7 +102,12 @@ async fn run() -> ExitCode {
     };
     let args = match command {
         Command::Help => {
-            println!("{USAGE}\n\n{}\n\n{}", online::USAGE, backup::USAGE);
+            println!(
+                "{USAGE}\n\n{}\n\n{}\n\n{}",
+                online::USAGE,
+                backup::USAGE,
+                restore::USAGE
+            );
             return ExitCode::from(EXIT_OK);
         }
         Command::Init(args) => args,

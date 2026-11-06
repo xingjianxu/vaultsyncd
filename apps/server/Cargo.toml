@@ -17,6 +17,7 @@ path = "src/main.rs"
 # 运行时用 Tokio，结构化日志用 tracing（design §4.1「日志 | tracing」、§18.3），配置用 TOML。
 # 不引入 FUSE/CFAPI 相关依赖：服务端不需要 `/dev/fuse`，也不链接 Windows 适配层。
 [dependencies]
+tower-http = { version = "0.6", features = ["fs"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "fs", "io-util"] }

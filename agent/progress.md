@@ -1,6 +1,6 @@
 # 实施进度
 
-本轮：**S076—S100 执行中**，单卡单执行者，同时最多三个。已合master并清理任务树/分支：S076—S083、S085—S088、S090、S092—S093，共15卡。执行中S084/S089/S094。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线b5be427；每卡完成立即合master/归档/清理，证据见 `agent/tasks/S076-S100.md`。
+本轮：**S076—S100 执行中**，单卡单执行者，同时最多三个。已合master并清理任务树/分支：S076—S090、S092—S094，共18卡。执行中S091/S095/S099。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线b5be427；每卡完成立即合master/归档/清理，证据见 `agent/tasks/S076-S100.md`。
 
 当前阶段：**S071—S075 全部 done（2026-11-06）**。按用户要求每张卡一个 subagent、同时最多 3 个：S071 与 S075 先并行，S072→S073→S074 按依赖顺序推进，S072 中断后同树续接，S074 核验暴露的 socket 残留回归由 S075-c 修复。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`。**合并与清理（2026-11-06，用户要求）**：父会话先核对三批集成分支均以 `0b3b3c6` 为基线并顺序包含（S061—S065 ⊂ S066—S070 ⊂ S071—S075）、三棵树均无未提交修改，再以 `git merge --ff-only feat/S071-S075-integration` 把 master 从 `0b3b3c6` 快进到 `01ce551`（含 S061—S075 全部提交）；逐支确认已被 master 包含后，三棵集成树 `git worktree remove`、本地分支 `git branch -d` 全部清理，ignored 证据归档到主工作区 `artifacts/batch-S061-S075/{s061-s065,s066-s070,s071-s075}`。未推送、未改写历史。
 
@@ -111,12 +111,12 @@
 | S086 | GC 删除协调与临时清理 | L | S085、S037 | done | `7c79ae1`、`accc684`；基线 `8088615`；分支 `feat/S086-gc-sweep` | 专属target：core313/store88/server89＋集成36，共526/0；btrfs GC8项含3边界SIGKILL/FULL/越界保护；三包clippy/fmt通过 | 无；孤立未知暂存保守保留，备份复用同一对象门 | agent/tasks/S086.md（+a/b） |
 | S087 | 一致性备份快照与租约 | L | S086、S048 | done | `813cf39`、`84c7512`；基线 `6ebb2d0`；分支 `feat/S087-backup-prepare` | 独立target四包573＋集成36，共609/0；btrfs持续写218次固定seq2、历史/回收站/hash/ro/租约、失败与SIGKILL恢复；clippy/fmt/Windows store检查通过 | 无；部署需私有CoW btrfs和user_subvol_rm_allowed，CLI/export/verify/release归S088；测试卷已清理 | agent/tasks/S087.md（+a/b/c） |
 | S088 | 备份导出、校验与释放接口 | L | S087、S075 | done | `99cc17a`、`0bc6846`、`f1302ba`；基线 `e1adeb3`；分支 `feat/S088-backup-export` | store92/server54/admin11/core流2/管理恢复3；真实btrfs CLI/HTTP矩阵1/0（49.88秒），坏hash/缺对象/取消/长流/释放崩溃；clippy/fmt/协议/边界/TS通过 | 无；源verified≠持久导出verified，24小时租约；恢复归S089，测试卷已清理 | agent/tasks/S088.md（+a/b/c） |
-| S089 | 离线恢复到空目录 | L | S088、S037 | todo | — | 未执行 | — | agent/tasks/S089.md（执行时创建） |
+| S089 | 离线恢复到空目录 | L | S088、S037 | done | `59663a5`、`fae55cc`、`51eecbb`、`ff8fb3d`；基线 `5459aec`；分支 `feat/S089-offline-restore` | 五包591/0＋集成36/0；护栏后store94/0/core恢复3/0；真实btrfs恢复矩阵1/0（22.40秒），字节/历史/回收站/旧epoch与旧程序屏障；clippy/fmt/边界通过 | 无；仅新空映射，同一CoW btrfs，失败保留重试用新空目标；测试卷已清理 | agent/tasks/S089.md（+a/b/c） |
 | S090 | Web 备份管理入口 | B | S079、S088 | done | `e73a5f6`；基线 `5459aec`；`.worktrees/s090` / `feat/S090-web-backup` | 真Chromium+专用btrfs14场景、Rust CLI验浏览器归档；xtask23/23+clippy、Web构建测试、三目标边界/两侧契约通过 | 无；OPFS安全上下文/浏览器权限限制与HTTPS/离线恢复边界见交接 | agent/tasks/S090.md（+a/b） |
 | S091 | 协议与数据库升级演练 | X | S089、S074 | todo | — | 未执行 | — | agent/tasks/S091.md（执行时创建） |
 | S092 | 构建依赖与协议边界检查 | L | S024、S025、S080 | done | 实现 `db95ba8`；基线 `7663799`；worktree `.worktrees/s092` / `feat/S092-boundary-checks` | 三目标metadata/pnpm边界、九负例及逐字节还原正例、xtask21/21与clippy；统一check六步895/0通过 | 无；metadata与源码静态门禁不替代平台原生/语义安全验收 | agent/tasks/S092.md |
 | S093 | 发布版本与产物清单 | L | S052、S076、S092 | done | `d59a7b2`、`7993e72`、`fbc0d27`；基线 `4ab4a5f`；`.worktrees/s093` / `feat/S093-release-manifest` | xtask22/22+clippy；统一check6/6、Rust895/0；真实双前端构建与11类版本/产物/来源负例通过 | 无；实验组件来源fbc0d27，后续HEAD必须重建；Linux发行/Windows安装留后续卡 | agent/tasks/S093.md（+a/b） |
-| S094 | Linux 服务端 Nix 构建包 | L | S093、S090 | todo | — | 未执行 | — | agent/tasks/S094.md（执行时创建） |
+| S094 | Linux 服务端 Nix 构建包 | L | S093、S090 | done | `83d0098`、`90a3f21`；同步锁`3b1fbcc`；`.worktrees/s094` / `build/S094-nix-package` | 真sandbox离线rust/web/default构建、包内64/0；无前端源码server55/0+clippy；qR无Node且空PATH原生/Chromium九类通过 | 无；x86_64-linux/Nix布局实测，生产HTTPS和部署留后续 | agent/tasks/S094.md（+a/b） |
 | S095 | NixOS 服务模块 | L | S094、S007 | todo | — | 未执行 | — | agent/tasks/S095.md（执行时创建） |
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | todo | — | 未执行 | — | agent/tasks/S096.md（执行时创建） |
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | todo | — | 未执行 | — | agent/tasks/S097.md（执行时创建） |

@@ -324,7 +324,7 @@ mod tests {
             + 'static,
     {
         let transport = Arc::new(FakeTransport::new(handler));
-        let client = ApiClient::with_transport(
+        let client = ApiClient::with_transport_for_unit_tests(
             ClientConfig::new("https://vault.example"),
             transport.clone(),
         )
@@ -356,7 +356,7 @@ mod tests {
         let transport = Arc::new(FakeTransport::new(|_request: TransportRequest| {
             Box::pin(async move { panic!("不该发请求") })
         }));
-        let client = ApiClient::with_transport(
+        let client = ApiClient::with_transport_for_unit_tests(
             ClientConfig::new("https://vault.example"),
             transport.clone(),
         )

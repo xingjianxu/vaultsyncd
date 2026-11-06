@@ -47,6 +47,11 @@ pub fn router(
     operations: Arc<OperationsContext>,
     sync: Arc<SyncContext>,
 ) -> Router {
+    let capabilities_router = crate::capabilities::router(
+        auth.database().clone(),
+        Arc::clone(&lifecycle),
+        uploads.policy().max_chunk_size,
+    );
     let public = Router::new()
         .route("/v1/health", get(health))
         .with_state(lifecycle);
@@ -157,6 +162,7 @@ pub fn router(
         .route("/v1/roots/{root}/events", get(super::sync::subscribe))
         .with_state(sync);
     public
+        .merge(capabilities_router)
         .merge(authenticated)
         .merge(roots_router)
         .merge(uploads_router)

@@ -475,8 +475,11 @@ fn client(server: &std::sync::Arc<Server>) -> ApiClient<FakeTransport> {
         let server = std::sync::Arc::clone(&server);
         Box::pin(async move { server.handle(request) })
     }));
-    let client = ApiClient::with_transport(ClientConfig::new("https://vault.example"), transport)
-        .expect("客户端配置");
+    let client = ApiClient::with_transport_for_unit_tests(
+        ClientConfig::new("https://vault.example"),
+        transport,
+    )
+    .expect("客户端配置");
     client
         .auth()
         .install(crate::Credentials::from_issued(&issued("a", "r")).expect("凭据"));
@@ -603,8 +606,11 @@ async fn the_upload_endpoint_requires_credentials() {
     let transport = std::sync::Arc::new(FakeTransport::new(|_request: TransportRequest| {
         Box::pin(async { panic!("没有凭据就不该发请求") })
     }));
-    let client = ApiClient::with_transport(ClientConfig::new("https://vault.example"), transport)
-        .expect("客户端配置");
+    let client = ApiClient::with_transport_for_unit_tests(
+        ClientConfig::new("https://vault.example"),
+        transport,
+    )
+    .expect("客户端配置");
     let endpoint = UploadEndpoint::new(client, ROOT).expect("上传端点");
     let source = SliceSource {
         bytes: content_bytes(),

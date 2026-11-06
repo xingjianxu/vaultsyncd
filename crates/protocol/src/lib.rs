@@ -18,3 +18,5 @@
 pub mod decimal;
 pub mod domain_map;
 pub mod generated;
+
+pub mod negotiation;

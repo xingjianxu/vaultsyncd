@@ -344,6 +344,19 @@ pub(crate) async fn register_for_owner(
     };
 
     let absolute_path = resolved.display().to_string();
+    // 新Root属于同一恢复代际，不能在整服恢复后重新注册成旧epoch零值。
+    let epoch: Option<String> =
+        match sqlx::query_scalar("SELECT value FROM store_metadata WHERE key='restore_epoch'")
+            .fetch_optional(context.auth.database().pool())
+            .await
+        {
+            Ok(epoch) => epoch,
+            Err(error) => return storage_failure(&request_id, &error.to_string()),
+        };
+    let epoch = match epoch.as_deref().map(ServerEpoch::from_decimal).transpose() {
+        Ok(value) => value.unwrap_or(ServerEpoch::ZERO),
+        Err(error) => return storage_failure(&request_id, &error.to_string()),
+    };
     let mut ids = context.ids.lock().await;
     let new = NewRoot {
         id: RootId::from_bytes(ids.next_id_bytes()),
@@ -352,9 +365,7 @@ pub(crate) async fn register_for_owner(
         absolute_path: absolute_path.clone(),
         volume_identity,
         root_file_identity: root_identity,
-        // 服务端 epoch 由恢复流程推进（design §11.3）；当前进程还没有独立的 epoch 状态，
-        // 注册写数据库的零值，避免与未来 capabilities 端点给出两个不同来源的 epoch。
-        epoch: ServerEpoch::ZERO,
+        epoch,
     };
     drop(ids);
 
