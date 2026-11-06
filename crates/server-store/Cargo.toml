@@ -34,14 +34,12 @@ vaultsyncd-fs-common = { path = "../fs-common" }
 # 块几何（块数/每块长度）只在传输层定义一份（design §5.4 的 `crates/transfer`、§13.1）：客户端上传
 # 与服务端接收必须按同一个定义切块，存储层只把那份几何映射成自已的错误枚举，不另写除法。
 vaultsyncd-transfer = { path = "../transfer" }
+# GC 适配器返回核心引用事实；依赖单向，server-core 不依赖存储实现。
+vaultsyncd-server-core = { path = "../server-core" }
 
 [dev-dependencies]
 # 迁移测试是真实 SQLite 文件的异步测试：`#[tokio::test]` 与多线程 runtime 由测试侧提供。
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-# 提交意图证据的编码属 `vaultsyncd-server-core`（S034）：本 crate 的测试要证明核心写出的
-# `expected_before`/`desired_after` 能穿过 `fs_intents` 的 CHECK 并按同一编码还原，因此只在
-# dev-dependencies 里接核心，生产依赖方向仍是“适配器依赖核心的端口”，反向依赖不存在。
-vaultsyncd-server-core = { path = "../server-core" }
 
 [lints]
 workspace = true
