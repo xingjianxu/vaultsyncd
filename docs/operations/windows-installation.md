@@ -68,3 +68,5 @@ agent维护入口独占writer锁后，将包括WAL的整个固定状态及原程
 显式选择“同时注销提供程序”（静默自动化对应`uninstall.exe /S /PROVIDER`）要求每个Root扫描完整且每个文件已完整下载，任何仅云端/partial/未知项都拒绝，并保留程序与恢复现场。用户先在GUI切完整模式或下载全部条目，再重试。控制器只在实际完整驻留且连续句柄身份稳定时，逐文件比较SHA256、调用CfRevertPlaceholder、再次比较hash；确认没有任何占位后才注销CFAPI/Explorer并解除本地管理。完整和dirty文件、缓存与远端数据都保留。
 
 依据微软[CfUnregisterSyncRoot说明](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)，系统注销会删除不完整占位，不能直接用于默认卸载；[CfRevertPlaceholder](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfrevertplaceholder)会尝试回源不完整文件，因此维护前置必须依据真实驻留检查，不能拿逻辑大小或零填充当完整内容。S100原生矩阵结果待本卡验收完成后补记。
+
+S100原生入口（需先协调Windows独占窗口）：`nix develop .#web-tests --command python3 tests/platform/windows/s100-maintenance.py <同HEAD正式windows-client组件>`。复用保留用户，不重置密码；先保存原LSA/注册表，再两次受控重启进入该用户、最后恢复Quickemu在线。仅有用例代理对上传begin制造真实断链，以便保留未确认dirty，其他请求均转发真实服务；无伪造成功或在线DB编辑。静默卸载自动化按[NSIS说明](https://nsis.sourceforge.io/When_I_use_ExecWait_uninstaller.exe_it_doesn%27t_wait_for_the_uninstaller%3F)先复制字节相同卸载器到独立目录，再以末尾不加引号的`_?=<原程序目录>`运行，取得实际退出码并允许删除原卸载器；正常控制面板入口仍使用NSIS标准临时副本。

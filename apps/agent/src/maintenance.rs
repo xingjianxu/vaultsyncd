@@ -233,6 +233,14 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
     } else {
         None
     };
+    let offline_guard = if online.is_none() {
+        Some(InstanceGuard::acquire(
+            &config.state_dir,
+            "vaultsyncd-agent",
+        )?)
+    } else {
+        None
+    };
     let maintenance = profile(&config)?.join("maintenance");
     fs::create_dir_all(&maintenance)?;
     RootHandle::open(&maintenance)?;
@@ -332,7 +340,11 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
                 .stop_preserved_development_build()?;
         }
     }
-    let _guard = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?;
+    let _guard = if let Some(guard) = offline_guard {
+        guard
+    } else {
+        InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?
+    };
     // The full raw state (including a legacy WAL) is fixed while the writer lock is held.
     storage::backup_state(&config.state_dir, &plan.backup.join("state"))?;
     storage::backup_program(program, &plan.backup.join("program"))?;

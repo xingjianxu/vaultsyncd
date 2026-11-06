@@ -4,4 +4,4 @@
 
 launcher通过CreateProcess直接启动同目录vaultsyncd-agent.exe --config <固定配置>，标准错误追加agent.log，窗口隐藏；不经过shell、不接受外部可执行文件。原agent仍保留console/控制信号契约，GUI不持有或停止agent生命周期。单实例与状态锁由既有agent入口负责。实际连接、绑定、模式继续以客户端数据库为权威，凭据由当前用户Credential Manager持有。
 
-程序目录与LocalAppData状态分离。GUI --register-shortcut仅为安装注册自己固定AUMID org.vaultsyncd.desktop，与S083 Toast契约一致；不是任意路径/命令桥。安装器不注销同步Root、不删除数据库/缓存。受控升级卸载另由S100完成。
+程序目录与LocalAppData状态分离。GUI --register-shortcut仅为安装注册自己固定AUMID org.vaultsyncd.desktop，与S083 Toast契约一致；不是任意路径/命令桥。正常启动拒绝maintenance.json屏障；受控升级不注销Root、不删除数据库/缓存。卸载默认仅程序，显式provider注销须先将全部本地占位完整下载并revert且hash不变；细节见docs/operations/windows-installation.md。
