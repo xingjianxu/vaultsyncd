@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { Button, EmptyState, PageShell, StatusBadge } from "@vaultsyncd/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
+import { RecoveryPanel } from "./features/history/Recovery";
 import { RootsPanel } from "./features/roots/Roots";
 import { AccountPanel, AuthProvider, useAuth } from "./features/auth/Auth";
 
-const items = [{ path: "/overview", label: "服务概览" }, { path: "/roots", label: "Root 目录" }, { path: "/account", label: "账号与会话" }];
+const items = [{ path: "/overview", label: "服务概览" }, { path: "/roots", label: "Root 目录" }, { path: "/recovery", label: "历史与恢复" }, { path: "/account", label: "账号与会话" }];
 export function App() { return <AuthProvider><AppView /></AuthProvider>; }
 function AppView() {
   const auth = useAuth();
@@ -38,6 +39,6 @@ function AppView() {
         <Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button>
       </section></> : path === "/roots" ? <><h1>Root 目录</h1>
       <RootsPanel /></>
-      : path === "/account" ? <><h1>账号管理</h1><AccountPanel /></> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
+      : path === "/recovery" ? <><h1>历史与恢复</h1><RecoveryPanel /></> : path === "/account" ? <><h1>账号管理</h1><AccountPanel /></> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
   </PageShell>;
 }

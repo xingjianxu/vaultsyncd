@@ -140,6 +140,11 @@ pub fn router(
             get(super::sync::list_history),
         )
         .route("/v1/roots/{root}/trash", get(super::sync::list_trash))
+        .route("/v1/roots/{root}/recovery", get(super::sync::list_recovery))
+        .route(
+            "/v1/roots/{root}/conflicts",
+            get(super::sync::list_conflicts),
+        )
         .route(
             "/v1/roots/{root}/snapshots",
             post(super::sync::create_snapshot),

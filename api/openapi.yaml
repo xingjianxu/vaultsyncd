@@ -176,6 +176,68 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+  /v1/roots/{root}/conflicts:
+    get:
+      operationId: listConflictCopies
+      summary: 列出冲突副本
+      description: 需要 Root 授权；按身份分页，最多100条。以持久冲突映射识别活跃副本，关闭界面提示不会删除副本。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          schema: {type: string}
+        - name: after
+          in: query
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: 一页条目
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecoveryPage"}
+        "400":
+          description: 参数错误
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 没有 Root 授权
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
+  /v1/roots/{root}/recovery:
+    get:
+      operationId: listRecoveryEntries
+      summary: 列出可查询历史的活跃条目
+      description: 需要 Root 授权；按身份分页，最多100条。返回当前身份、相对路径与版本，可用于历史选择和提交后位置核对。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          schema: {type: string}
+        - name: after
+          in: query
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: 一页条目
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecoveryPage"}
+        "400":
+          description: 参数错误
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 没有 Root 授权
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
   /v1/roots/{root}/trash:
     get:
       operationId: listTrash
@@ -2315,6 +2377,8 @@ components:
         version_id: {type: string, description: 固定内容版本，目录省略。}
         hash: {type: string, description: 固定版本摘要，目录省略。}
         size: {type: string, description: 固定版本字节数，目录省略。}
+        expires_at: {type: string, description: UTC Unix 秒到期下限；当前活跃版本省略，不按文件 mtime。}
+        conflict_source: {type: string, description: 冲突副本对应的原条目身份；普通条目省略。}
     RecoveryPage:
       type: object
       description: 有界恢复项目清单；不是同步状态快照，重复或丢失时重新查询。

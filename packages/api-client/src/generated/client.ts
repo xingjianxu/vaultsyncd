@@ -432,6 +432,38 @@ export async function listChanges(options: ClientOptions, root: string, query: {
 }
 
 /**
+ * 列出冲突副本
+ *
+ * 需要 Root 授权；按身份分页，最多100条。以持久冲突映射识别活跃副本，关闭界面提示不会删除副本。
+ *
+ * 参数 `root`（/v1/roots/{root}/conflicts）：路径参数
+ * 查询参数 `after`（可选）：查询参数
+ *
+ * 200：一页条目
+ * 400：参数错误
+ * 403：没有 Root 授权
+ */
+export async function listConflictCopies(options: ClientOptions, root: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/conflicts`;
+  const search = new URLSearchParams();
+  if (query?.after !== undefined) {
+    search.set("after", query.after);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? path : `${path}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeRecoveryPage(payload);
+}
+
+/**
  * 列出条目历史版本
  *
  * 需要 Root 授权；按版本身份分页，最多100条，不泄露服务器路径。
@@ -764,6 +796,38 @@ export async function getOperation(options: ClientOptions, root: string, op: str
     throw api_error(response.status, payload);
   }
   return decodeOperationResult(payload);
+}
+
+/**
+ * 列出可查询历史的活跃条目
+ *
+ * 需要 Root 授权；按身份分页，最多100条。返回当前身份、相对路径与版本，可用于历史选择和提交后位置核对。
+ *
+ * 参数 `root`（/v1/roots/{root}/recovery）：路径参数
+ * 查询参数 `after`（可选）：查询参数
+ *
+ * 200：一页条目
+ * 400：参数错误
+ * 403：没有 Root 授权
+ */
+export async function listRecoveryEntries(options: ClientOptions, root: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/recovery`;
+  const search = new URLSearchParams();
+  if (query?.after !== undefined) {
+    search.set("after", query.after);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? path : `${path}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeRecoveryPage(payload);
 }
 
 /**

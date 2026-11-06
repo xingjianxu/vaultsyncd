@@ -550,8 +550,16 @@ pub struct ReceivedPart {
 /// 历史或回收站中的可选恢复目标；恢复时仍须复核权限、版本保留和当前修订。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct RecoveryItem {
+    /// 冲突副本对应的原条目身份；普通条目省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict_source: Option<String>,
     /// 原条目身份。
     pub entry_id: String,
+    /// UTC Unix 秒到期下限；当前活跃版本省略，不按文件 mtime。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
     /// 固定版本摘要，目录省略。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
