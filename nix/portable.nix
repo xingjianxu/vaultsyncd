@@ -6,10 +6,14 @@ in assert sourceInfo.commit != null || throw "portable release requires a clean 
 pkgs.runCommand "vaultsyncd-portable-${version}-${target}" {
   nativeBuildInputs = with pkgs.buildPackages; [ python3 patchelf gnutar gzip ];
   runtimeLibraryRoots = lib.makeLibraryPath [ pkgs.glibc (lib.getLib pkgs.stdenv.cc.cc) pkgs.stdenv.cc.cc.libgcc ];
+  runtimeVersions = builtins.toJSON { glibc = pkgs.glibc.version; gcc = pkgs.stdenv.cc.cc.version; patchelf = pkgs.buildPackages.patchelf.version; };
+  glibcSource = pkgs.glibc.src;
+  gccSource = pkgs.stdenv.cc.cc.src;
   launchTemplate = source + "/packaging/linux/portable-launch.sh";
   preflight = source + "/nix/modules/preflight.py";
   unit = source + "/packaging/linux/systemd/vaultsyncd.service";
   exampleConfig = source + "/packaging/linux/vaultsyncd.toml";
+  containerTemplates = source + "/packaging/linux/container";
   passthru = { inherit rust web; };
   meta.platforms = lib.platforms.linux;
 } ''

@@ -1,0 +1,9 @@
+[server]
+listen = "0.0.0.0:8721"
+[state]
+dir = "/var/lib/vaultsyncd"
+[roots]
+allowed_bases = ["/srv/vaultsyncd-roots"]
+[log]
+format = "json"
+level = "info"

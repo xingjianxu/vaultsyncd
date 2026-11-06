@@ -63,7 +63,8 @@ let
   };
   inputs = lib.genAttrs
     [ "Cargo.lock" "pnpm-lock.yaml" "flake.lock" "rust-toolchain.toml"
-      "api/openapi.yaml" "api/local-ipc.schema.json" "api/generation.toml" ]
+      "api/openapi.yaml" "api/local-ipc.schema.json" "api/generation.toml"
+      "packaging/linux/container/ubuntu-lock.json" ]
     (file: builtins.hashFile "sha256" (src + "/" + file));
   # Nix scans for complete store hashes even without /nix/store/. Split them so
   # provenance does not retain .drv build closures (including Node) at runtime.
@@ -111,5 +112,15 @@ in {
       inherit src sourceInfo nixpkgsRevision;
       webPackage = web;
     }).portable;
+  container-deps = import ./ubuntu-deps.nix {
+    pkgs = pkgs.buildPackages;
+    lockFile = src + "/packaging/linux/container/ubuntu-lock.json";
+    arch = "amd64";
+  };
+  container-deps-aarch64 = import ./ubuntu-deps.nix {
+    pkgs = pkgs.buildPackages;
+    lockFile = src + "/packaging/linux/container/ubuntu-lock.json";
+    arch = "arm64";
+  };
   web-deps = webDeps;
 }

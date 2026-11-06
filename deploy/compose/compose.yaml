@@ -1,0 +1,24 @@
+services:
+  vaultsyncd:
+    image: ${VAULTSYNCD_IMAGE:?set an immutable locally verified image reference}
+    user: ${VAULTSYNCD_UID:-8721}:${VAULTSYNCD_GID:-8721}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports:
+      - "127.0.0.1:${VAULTSYNCD_PORT:-8721}:8721"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    volumes:
+      - type: bind
+        source: ${VAULTSYNCD_STATE:?set an existing private btrfs state directory}
+        target: /var/lib/vaultsyncd
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VAULTSYNCD_ROOTS:?set an existing explicitly authorized btrfs Root base}
+        target: /srv/vaultsyncd-roots
+        bind:
+          create_host_path: false
+    stop_grace_period: 120s

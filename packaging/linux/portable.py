@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 
 PROVENANCE, RUST, WEB, OUTPUT, SOURCES = map(Path, sys.argv[1:])
 ROOT=OUTPUT/'runtime'
@@ -69,6 +70,16 @@ shutil.copytree(WEB,ROOT/'share/vaultsyncd/web')
 shutil.copy2(os.environ['preflight'],ROOT/'share/vaultsyncd/preflight.py')
 shutil.copy2(os.environ['unit'],ROOT/'share/vaultsyncd/vaultsyncd.service')
 shutil.copy2(os.environ['exampleConfig'],ROOT/'share/vaultsyncd/vaultsyncd.toml')
+shutil.copytree(os.environ['containerTemplates'],ROOT/'share/vaultsyncd/container')
+licenses=ROOT/'share/vaultsyncd/licenses';licenses.mkdir()
+for variable,names in [('glibcSource',['COPYING','COPYING.LIB']),('gccSource',['COPYING3','COPYING.RUNTIME'])]:
+    with tarfile.open(os.environ[variable]) as archive:
+        for name in names:
+            matches=[m for m in archive.getmembers() if len(Path(m.name).parts)==2 and Path(m.name).name==name]
+            assert len(matches)==1
+            with archive.extractfile(matches[0]) as incoming,(licenses/(variable+'-'+name)).open('wb') as dest:
+                shutil.copyfileobj(incoming,dest)
+data['runtime_toolchain']=json.loads(os.environ['runtimeVersions'])
 data['runtime_libraries']=provenance
 data['corresponding_source_archive']={'name':SOURCES.name,'sha256':sha(SOURCES)}
 data['files']=[{'path':str(p.relative_to(ROOT)),'size':str(p.stat().st_size),'sha256':sha(p)} for p in sorted(ROOT.rglob('*')) if p.is_file()]
