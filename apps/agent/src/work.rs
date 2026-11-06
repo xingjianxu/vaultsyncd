@@ -22,7 +22,6 @@ use vaultsyncd_agent_core::{
     },
 };
 use vaultsyncd_client_store::{
-    bindings::SyncMode,
     entries::{self, BaselineEntry, EntryKind, LocalEntry},
     queue::{self, NewPendingOp},
 };
@@ -68,8 +67,13 @@ pub(crate) fn baseline(row: &SnapshotEntry) -> Result<BaselineEntry, PortError> 
 pub(crate) async fn metadata(
     importer: &Importer,
 ) -> Result<HashMap<String, SnapshotEntry>, PortError> {
-    let db = &importer.local.db;
-    let binding = importer.local.binding;
+    local_metadata(&importer.local).await
+}
+pub(crate) async fn local_metadata(
+    local: &crate::local::Local,
+) -> Result<HashMap<String, SnapshotEntry>, PortError> {
+    let db = &local.db;
+    let binding = local.binding;
     let ids: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT entry_id FROM baseline_entries WHERE binding_id=? AND deleted=0",
     )
@@ -193,8 +197,6 @@ impl Commits {
             return crate::conflicts::settle(&self.importer, op, generation, digest, size, result)
                 .await;
         }
-        let actual = local.observe_snapshot(path).await?;
-        let mut tx = local.db.begin_write().await.map_err(error)?;
         let entry = EntryId::from_hex(
             result
                 .entry_id
@@ -234,11 +236,39 @@ impl Commits {
             content_version: Some(version),
             deleted: false,
         };
-        entries::put_baseline(&mut tx, local.binding, &base)
+        // A committed upload can race a newer local/remote delete. Never resurrect that
+        // namespace fact just because the ACK arrived late; still retain the version mapping.
+        let mut conn = local.db.pool().acquire().await.map_err(error)?;
+        let current = entries::baseline_entry(&mut conn, local.binding, entry)
             .await
             .map_err(error)?;
+        drop(conn);
+        let is_superseded = |row: &BaselineEntry| {
+            row.revision > base.revision || (row.deleted && row.revision >= base.revision)
+        };
+        let superseded = current.as_ref().is_some_and(is_superseded);
+        let actual = if superseded {
+            None
+        } else {
+            match local.root.inspect(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(error(e)),
+                Ok(_) => local.observe_snapshot(path).await?,
+            }
+        };
+        let mut tx = local.db.begin_write().await.map_err(error)?;
+        // Recheck inside the write transaction so a delete committed by another step wins.
+        let current = entries::baseline_entry(&mut tx, local.binding, entry)
+            .await
+            .map_err(error)?;
+        let superseded = current.as_ref().is_some_and(is_superseded);
+        if !superseded {
+            entries::put_baseline(&mut tx, local.binding, &base)
+                .await
+                .map_err(error)?;
+        }
         let mut disposition = UploadCommitDisposition::StaleGeneration;
-        if let Some(snapshot) = actual {
+        if !superseded && let Some(snapshot) = actual {
             let e = snapshot.evidence();
             let clean = e.generation == generation.get() && e.digest == digest && e.size == size;
             entries::put_local(
@@ -302,7 +332,6 @@ pub(crate) async fn load_spec(
 pub(crate) struct Worker {
     pub importer: Arc<Importer>,
     pub uploads: Arc<UploadActionHandler>,
-    pub mode: SyncMode,
 }
 #[derive(Clone)]
 pub(crate) struct Dispatch(pub Arc<std::sync::OnceLock<Worker>>);
@@ -677,7 +706,12 @@ impl Worker {
             .map_err(error)?;
         drop(conn);
         let meta = local.root.inspect(&target.to_string());
-        if self.mode == SyncMode::OnDemand
+        let mode: String = sqlx::query_scalar("SELECT mode FROM bindings WHERE id=?")
+            .bind(local.binding.as_bytes().as_slice())
+            .fetch_one(local.db.pool())
+            .await
+            .map_err(error)?;
+        if mode == "on_demand"
             && meta
                 .as_ref()
                 .ok()
@@ -767,7 +801,13 @@ impl Worker {
             return Ok(());
         }
         let actual = vaultsyncd_agent_core::recovery::inspect(&*local.clone(), &target).await?;
-        if let Some(base) = &before {
+        if before.as_ref().is_some_and(|base| base.deleted) {
+            if actual != vaultsyncd_agent_core::recovery::ContentEvidence::Absent {
+                return Err(error(
+                    "restored remote entry cannot overwrite a locally reused path",
+                ));
+            }
+        } else if let Some(base) = &before {
             let old: Option<(Vec<u8>, i64)> = sqlx::query_as(
                 "SELECT digest,size FROM agent_versions WHERE binding_id=? AND version_id=?",
             )

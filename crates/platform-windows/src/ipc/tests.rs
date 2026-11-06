@@ -20,6 +20,7 @@ fn request(id: &str) -> Request {
         ipc_version: version::supported(),
         command: Command {
             name: CommandName::GetStatus,
+            parameters: None,
         },
     }
 }

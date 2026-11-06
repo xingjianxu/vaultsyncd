@@ -904,22 +904,25 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             });
         }
         let tx_id = TxId::from_bytes(random_bytes());
-        let events = serde_json::Value::Array(
-            write
-                .entries
-                .iter()
-                .map(|entry| {
-                    serde_json::json!({
-                        "kind": "restore",
-                        "entry_id": entry.entry.to_hex(),
-                        "path": entry.path,
-                        "revision": entry.expected_revision.to_string(),
-                        "origin": "client",
-                    })
-                })
-                .collect(),
-        )
-        .to_string();
+        let mut restored_events = Vec::with_capacity(write.entries.len());
+        for entry in &write.entries {
+            let next = entry.expected_revision.next().map_err(restore_error)?;
+            let content: Option<(Vec<u8>, i64)> = if let Some(version) = entry.content_version {
+                Some(sqlx::query_as("SELECT object_hash,size FROM versions WHERE root_id=? AND entry_id=? AND id=?")
+                    .bind(self.key.root.as_bytes().as_slice()).bind(entry.entry.as_bytes().as_slice()).bind(version.as_bytes().as_slice())
+                    .fetch_one(&mut *tx).await.map_err(restore_error)?)
+            } else {
+                None
+            };
+            restored_events.push(serde_json::json!({
+                "kind": "restore", "entry_id": entry.entry.to_hex(), "parent_id":entry.parent.to_hex(),
+                "name":entry.name, "path":entry.path, "revision":next.to_string(), "origin":"client",
+                "version_id":entry.content_version.map(|v|v.to_hex()),
+                "hash":content.as_ref().map(|(hash,_)|hash.iter().map(|b|format!("{b:02x}")).collect::<String>()),
+                "size":content.map(|(_,size)|size.to_string()),
+            }));
+        }
+        let events = serde_json::Value::Array(restored_events).to_string();
         let result = CommittedTrashRestore {
             op: self.key.op,
             root: self.key.root,

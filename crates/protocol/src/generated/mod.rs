@@ -248,7 +248,7 @@ pub enum HealthStatus {
 }
 
 /// 登录请求（design §15.2 `POST /v1/auth/login` 的输入）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct LoginRequest {
     /// 设备的人类可读标签（不是设备身份，首发没有设备注册表）。
     pub device_label: String,
@@ -256,6 +256,16 @@ pub struct LoginRequest {
     pub login: String,
     /// 明文密码；只在本次请求内存在，服务端不记录。
     pub password: String,
+}
+
+impl core::fmt::Debug for LoginRequest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut value = f.debug_struct("LoginRequest");
+        value.field("device_label", &self.device_label);
+        value.field("login", &self.login);
+        value.field("password", &"[REDACTED]");
+        value.finish()
+    }
 }
 
 /// 一段连续缺失的块索引。
@@ -468,6 +478,46 @@ pub struct ReceivedPart {
     /// 块长度（十进制文本），与块几何一致。
     #[serde(with = "crate::decimal")]
     pub length: String,
+}
+
+/// 历史或回收站中的可选恢复目标；恢复时仍须复核权限、版本保留和当前修订。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RecoveryItem {
+    /// 原条目身份。
+    pub entry_id: String,
+    /// 固定版本摘要，目录省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// 分页稳定身份，历史为版本身份，回收站为条目身份。
+    pub id: String,
+    /// 当前名称或回收站原相对路径。
+    pub name: String,
+    /// 原父目录身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// 当前条目修订，恢复提交的 CAS 基础。
+    pub revision: String,
+    /// 固定版本字节数，目录省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// 固定内容版本，目录省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
+}
+
+/// 有界恢复项目清单；不是同步状态快照，重复或丢失时重新查询。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RecoveryPage {
+    /// 按身份升序的一页，最多100条。
+    pub items: Vec<RecoveryItem>,
+    /// 下一页 after 身份；没有下一页时省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 /// 刷新请求（design §15.2 `POST /v1/auth/refresh` 的输入）。

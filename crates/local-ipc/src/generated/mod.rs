@@ -19,13 +19,32 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 1;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 1;
+pub const PROTOCOL_MINOR: u32 = 2;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
 pub const MAX_FRAME_BYTES: usize = 1048576;
 
-/// 运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；本卡不提供状态推送。
+/// 持久 Binding 配置与控制事实，包括解绑记录。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct BindingInfo {
+    /// Binding 身份。
+    pub binding_id: String,
+    /// 保留的缓存。
+    pub cache_path: String,
+    /// 保留数据停止管理。
+    pub detached: bool,
+    /// 用户选择的目录。
+    pub local_path: String,
+    /// 持久目标模式。
+    pub mode: String,
+    /// 已暂停。
+    pub paused: bool,
+    /// Root 身份。
+    pub root_id: String,
+}
+
+/// 运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；1.2 的 subscribe_status 按实例版本长轮询推送全量，get_status 可无条件恢复丢失提示。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct BindingStatus {
     /// Binding 稳定身份。
@@ -64,19 +83,202 @@ pub struct BindingStatus {
     pub unknown: String,
 }
 
-/// 命令负载：命令名加该命令自己的参数。当前唯一的 get_status 没有参数。
+/// 命令负载。parameters 按命令逐项校验必填项与允许项；多余参数、非规范身份、相对路径、越界文本一律失败。1.0/1.1 仍支持无参数 get_status。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Command {
     /// 要执行的命令名；未知取值在解码阶段被拒绝。
     pub name: CommandName,
+    /// 命令专属参数；执行器复核，不能仅信任界面。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<CommandParameters>,
 }
 
-/// 命令名闭集。S025 只实现 get_status；design §15.5 其余命令在其功能卡加入，取值与含义在契约里逐项追加。
+/// 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum CommandName {
     /// 取值 `get_status`。
     #[serde(rename = "get_status")]
     GetStatus,
+    /// 取值 `subscribe_status`。
+    #[serde(rename = "subscribe_status")]
+    SubscribeStatus,
+    /// 取值 `list_bindings`。
+    #[serde(rename = "list_bindings")]
+    ListBindings,
+    /// 取值 `create_binding`。
+    #[serde(rename = "create_binding")]
+    CreateBinding,
+    /// 取值 `pause_binding`。
+    #[serde(rename = "pause_binding")]
+    PauseBinding,
+    /// 取值 `resume_binding`。
+    #[serde(rename = "resume_binding")]
+    ResumeBinding,
+    /// 取值 `download_entry`。
+    #[serde(rename = "download_entry")]
+    DownloadEntry,
+    /// 取值 `release_entry`。
+    #[serde(rename = "release_entry")]
+    ReleaseEntry,
+    /// 取值 `list_problems`。
+    #[serde(rename = "list_problems")]
+    ListProblems,
+    /// 取值 `retry_problem`。
+    #[serde(rename = "retry_problem")]
+    RetryProblem,
+    /// 取值 `detach_binding`。
+    #[serde(rename = "detach_binding")]
+    DetachBinding,
+    /// 取值 `export_recovery`。
+    #[serde(rename = "export_recovery")]
+    ExportRecovery,
+    /// 取值 `get_connection`。
+    #[serde(rename = "get_connection")]
+    GetConnection,
+    /// 取值 `set_connection`。
+    #[serde(rename = "set_connection")]
+    SetConnection,
+    /// 取值 `login`。
+    #[serde(rename = "login")]
+    Login,
+    /// 取值 `logout`。
+    #[serde(rename = "logout")]
+    Logout,
+    /// 取值 `list_roots`。
+    #[serde(rename = "list_roots")]
+    ListRoots,
+    /// 取值 `set_mode`。
+    #[serde(rename = "set_mode")]
+    SetMode,
+    /// 取值 `list_history`。
+    #[serde(rename = "list_history")]
+    ListHistory,
+    /// 取值 `list_trash`。
+    #[serde(rename = "list_trash")]
+    ListTrash,
+    /// 取值 `restore_entry`。
+    #[serde(rename = "restore_entry")]
+    RestoreEntry,
+}
+
+/// 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。
+#[derive(Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CommandParameters {
+    /// 订阅最后看到的 instance:counter；缺省或不匹配立即返回全量。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_version: Option<String>,
+    /// 恢复前当前修订 CAS。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<String>,
+    /// Binding 身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding_id: Option<String>,
+    /// 用户显式选择的附加 CA，不禁用系统证书验证。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<String>,
+    /// 专属且与所有同步根/状态目录分离的缓存。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
+    /// 历史或回收站分页的 after 身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// 新的恢复导出目录；不可覆盖。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// 条目身份，不接受调用方自选相对文件路径。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 用户显式选定的本机绝对目录。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<String>,
+    /// full 或 on_demand。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// 重试/副作用幂等身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// 瞬时登录密码；不能日志输出整个请求。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// 授权 Root 身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+    /// 问题路径或原因的大小写不敏感子串筛选。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    /// 连接的服务器稳定身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
+    /// HTTPS 地址，不允许用户信息、query 或 fragment。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_url: Option<String>,
+    /// 登录账号。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// 固定历史版本。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
+}
+
+impl core::fmt::Debug for CommandParameters {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut value = f.debug_struct("CommandParameters");
+        value.field("after_version", &self.after_version);
+        value.field("base_revision", &self.base_revision);
+        value.field("binding_id", &self.binding_id);
+        value.field("ca_file", &self.ca_file);
+        value.field("cache_path", &self.cache_path);
+        value.field("cursor", &self.cursor);
+        value.field("destination", &self.destination);
+        value.field("entry_id", &self.entry_id);
+        value.field("local_path", &self.local_path);
+        value.field("mode", &self.mode);
+        value.field("operation_id", &self.operation_id);
+        value.field("password", &"[REDACTED]");
+        value.field("root_id", &self.root_id);
+        value.field("search", &self.search);
+        value.field("server_id", &self.server_id);
+        value.field("server_url", &self.server_url);
+        value.field("username", &self.username);
+        value.field("version_id", &self.version_id);
+        value.finish()
+    }
+}
+
+/// 不含 token 的连接与证书配置。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ConnectionInfo {
+    /// 持有凭据；不等于服务器在线。
+    pub authenticated: bool,
+    /// 附加信任 CA 路径。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<String>,
+    /// 服务器身份。
+    pub server_id: String,
+    /// 服务器地址。
+    pub server_url: String,
 }
 
 /// 错误应答主体：协议级失败的原因。带 root_id/details 的同步问题由问题页命令返回，不在本契约里。
@@ -101,6 +303,14 @@ pub struct GetStatusResult {
     pub bindings: Option<Vec<BindingStatus>>,
     /// agent 当前支持的 IPC 协议版本。
     pub ipc_protocol: IpcVersion,
+    /// 1.2 管理命令的类型化结果。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub management: Option<ManagementResult>,
+    /// 进程唯一身份加单调计数；不同进程的版本不可比较。丢失订阅后 get_status 始终返回全量。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_version: Option<String>,
 }
 
 /// 本机 IPC 协议版本。major 表示帧格式与命令语义的不兼容变更，minor 表示向后兼容的增量。
@@ -112,12 +322,138 @@ pub struct IpcVersion {
     pub minor: u32,
 }
 
-/// 本机 IPC 协议级错误码闭集，不是 design §15.4 的同步错误码。S025 只有版本不兼容；需要新错误时先扩展本契约。
+/// 管理入口错误分类；同步错误的稳定 code 放在 problems，不泄露自由诊断或凭据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum LocalIpcErrorCode {
     /// 取值 `unsupported_version`。
     #[serde(rename = "unsupported_version")]
     UnsupportedVersion,
+    /// 取值 `invalid_argument`。
+    #[serde(rename = "invalid_argument")]
+    InvalidArgument,
+    /// 取值 `not_found`。
+    #[serde(rename = "not_found")]
+    NotFound,
+    /// 取值 `blocked`。
+    #[serde(rename = "blocked")]
+    Blocked,
+    /// 取值 `unavailable`。
+    #[serde(rename = "unavailable")]
+    Unavailable,
+    /// 取值 `unauthenticated`。
+    #[serde(rename = "unauthenticated")]
+    Unauthenticated,
+    /// 取值 `conflict`。
+    #[serde(rename = "conflict")]
+    Conflict,
+    /// 取值 `internal`。
+    #[serde(rename = "internal")]
+    Internal,
+}
+
+/// 每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, Default)]
+pub struct ManagementResult {
+    /// 持久绑定列表。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<Vec<BindingInfo>>,
+    /// 连接事实。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionInfo>,
+    /// 已完整核验的恢复包文件数。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exported_files: Option<String>,
+    /// 解绑后不保证离线可读的条目。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incomplete: Option<Vec<String>>,
+    /// 远端授权 Root/历史/回收站列表。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<RemoteItem>>,
+    /// 模式任务仍需真实核对/补齐的条目数。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_remaining: Option<String>,
+    /// 历史或回收站清单下一页游标。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    /// 实际执行的幂等操作身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// 持久问题列表。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problems: Option<Vec<Problem>>,
+    /// 解绑时保留的未确认条目。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unconfirmed: Option<Vec<String>>,
+}
+
+/// 真实持久问题；不返回任意日志文本。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct Problem {
+    /// Binding 身份。
+    pub binding_id: String,
+    /// 稳定原因码。
+    pub code: String,
+    /// 相关条目。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 本地数据保护/驻留情况，不把数据库 clean 当真实完整字节。
+    pub local_data: String,
+    /// 可执行下一步。
+    pub next_step: String,
+    /// 已核对的相对路径；未知时省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// 待办操作身份或只读诊断身份。
+    pub problem_id: String,
+    /// 原因说明。
+    pub reason: String,
+    /// 是否可调用 retry_problem。
+    pub retryable: bool,
+}
+
+/// 服务器返回的授权 Root、历史版本或回收站项目。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct RemoteItem {
+    /// 条目身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 内容摘要。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// 稳定身份。
+    pub id: String,
+    /// 显示名称。
+    pub name: String,
+    /// 原父目录。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// 当前 CAS 修订。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// 字节数。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// 固定版本。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
 }
 
 /// 一次命令请求：请求身份、调用方使用的协议版本与命令负载。

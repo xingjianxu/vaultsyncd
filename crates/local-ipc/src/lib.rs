@@ -16,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod commands;
 pub mod framing;
 pub mod generated;
 pub mod service;

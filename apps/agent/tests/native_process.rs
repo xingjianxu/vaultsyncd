@@ -20,6 +20,8 @@ use vaultsyncd_transfer::{
 };
 #[path = "../src/credentials.rs"]
 mod credentials;
+#[path = "native_process/management_native.rs"]
+mod management_native;
 
 fn identity() -> String {
     let mut b = [0; 16];
@@ -298,6 +300,7 @@ async fn ipc_status(child: &mut ChildGuard) -> vaultsyncd_local_ipc::generated::
         ipc_version: version::supported(),
         command: Command {
             name: CommandName::GetStatus,
+            parameters: None,
         },
     };
     let end = Instant::now() + Duration::from_secs(15);

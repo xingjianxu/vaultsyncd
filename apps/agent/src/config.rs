@@ -120,7 +120,6 @@ impl AgentConfig {
                 .as_ref()
                 .is_some_and(|p| !windows_absolute(p))
             || !(250..=60000).contains(&self.poll_millis)
-            || self.bindings.is_empty()
             || self.bindings.len() > 1024
         {
             return Err(invalid());

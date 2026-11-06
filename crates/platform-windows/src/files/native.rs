@@ -453,10 +453,60 @@ impl RootHandle {
         })
     }
 
+    /// Create a fresh child directory under continuous ancestor handles, never replacing a name.
+    pub fn create_new_directory(&self, name: &str) -> io::Result<Self> {
+        self.verify()?;
+        let file = open_child(self.root_file(), name, true, false, 0x0010_0081, true)?;
+        let meta = metadata(&file)?;
+        if meta.reparse_tag != 0 {
+            return Err(invalid("new directory is a reparse"));
+        }
+        let mut pins = self
+            .pins
+            .iter()
+            .map(File::try_clone)
+            .collect::<io::Result<Vec<_>>>()?;
+        pins.push(file);
+        let mut ancestors = self.ancestors.clone();
+        ancestors.push(meta.identity);
+        Ok(Self {
+            path: self.path.join(name),
+            pins,
+            ancestors,
+            identity: meta.identity,
+        })
+    }
+
+    /// Open an existing single-link readable file, without following reparses or allowing writes/deletes.
+    /// Reading a supported cloud placeholder intentionally invokes its registered hydration provider.
+    pub fn open_read(&self, relative: &str) -> io::Result<File> {
+        self.with_parent(relative, |parent, leaf| {
+            let file = open_child_shared(parent, leaf, false, false, 0x0012_0089, false, 1)?;
+            let meta = metadata(&file)?;
+            if meta.directory || meta.links != 1 || !meta.supported() {
+                return Err(invalid("unsafe readable file"));
+            }
+            Ok(file)
+        })
+    }
+
+    /// Create a new ordinary file under the pinned root; existing objects are never overwritten.
+    pub fn create_new_file(&self, name: &str) -> io::Result<File> {
+        vaultsyncd_fs_common::name::validate_name(name).map_err(invalid)?;
+        self.verify()?;
+        open_child_shared(self.root_file(), name, false, false, 0x0012_019f, true, 1)
+    }
+
     /// Root's physical identity.
     #[must_use]
     pub fn identity(&self) -> FileIdentity {
         self.identity
+    }
+
+    /// Whether this directory equals or descends from another pinned directory.
+    #[must_use]
+    pub fn is_within(&self, ancestor: &Self) -> bool {
+        self.ancestors.contains(&ancestor.identity)
     }
 
     /// Detect equality or ancestry by directory identity, including drive-letter aliases.
@@ -736,7 +786,6 @@ impl RootHandle {
         &self.path
     }
 
-    #[cfg(test)]
     pub(crate) fn root_file(&self) -> &File {
         self.pins.last().expect("root pin")
     }

@@ -694,6 +694,7 @@ mod tests {
             tables.into_iter().map(|(name,)| name).collect::<Vec<_>>(),
             vec![
                 "agent_actions".to_owned(),
+                "agent_connection".to_owned(),
                 "agent_evidence".to_owned(),
                 "agent_versions".to_owned(),
                 "baseline_entries".to_owned(),
@@ -1517,6 +1518,76 @@ mod tests {
         assert_eq!(
             scalar::<i64>(&path, "SELECT generation FROM local_entries").await,
             23
+        );
+    }
+
+    #[tokio::test]
+    async fn version_ten_upgrade_preserves_unconfirmed_work_and_persists_connection_without_secrets()
+     {
+        let dir = TestDir::new("s072-upgrade-v10");
+        let path = dir.database();
+        let prior = dir.path.join("v10");
+        std::fs::create_dir(&prior).unwrap();
+        for migration in MIGRATOR.iter().filter(|m| m.version <= 10) {
+            std::fs::write(
+                prior.join(format!(
+                    "{:04}_{}.sql",
+                    migration.version, migration.description
+                )),
+                migration.sql.as_bytes(),
+            )
+            .unwrap();
+        }
+        let previous = migrator(&prior).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = crate::test_support::seed_binding(&old, 0x72).await;
+        sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES(?,?,72,'awaiting_commit','materialized')").bind(binding.as_bytes().as_slice()).bind([7u8;16].as_slice()).execute(old.pool()).await.unwrap();
+        sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind,attempts) VALUES(?,?,'upload_content',2)").bind([8u8;16].as_slice()).bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
+        old.close().await;
+        let db = Database::open(&path).await.unwrap();
+        sqlx::query("INSERT INTO agent_connection VALUES(1,?,'https://sync.example',NULL)")
+            .bind("72".repeat(16))
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT dirty FROM local_entries")
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            "awaiting_commit"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT attempts FROM pending_ops")
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            2
+        );
+        db.close().await;
+        let backup = migration_backup_path(&path, 10, target_schema_version());
+        assert!(backup.is_file());
+        assert!(matches!(
+            Database::open_with(&path, &previous).await.unwrap_err(),
+            DbError::SchemaTooNew { supported: 10, .. }
+        ));
+        let reopened = Database::open(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT server_url FROM agent_connection")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap(),
+            "https://sync.example"
+        );
+        reopened.close().await;
+        let checksums = "SELECT group_concat(hex(checksum),',') FROM (SELECT checksum FROM _sqlx_migrations WHERE version<=10 ORDER BY version)";
+        assert_eq!(
+            scalar::<String>(&path, checksums).await,
+            scalar::<String>(&backup, checksums).await
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT generation FROM local_entries").await,
+            72
         );
     }
 

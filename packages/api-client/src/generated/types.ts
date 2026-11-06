@@ -570,6 +570,56 @@ export function decodeReceivedPart(value: unknown): ReceivedPart {
   };
 }
 
+/** 历史或回收站中的可选恢复目标；恢复时仍须复核权限、版本保留和当前修订。 */
+export interface RecoveryItem {
+  /** 原条目身份。 */
+  entry_id: string;
+  /** 固定版本摘要，目录省略。 */
+  hash?: string;
+  /** 分页稳定身份，历史为版本身份，回收站为条目身份。 */
+  id: string;
+  /** 当前名称或回收站原相对路径。 */
+  name: string;
+  /** 原父目录身份。 */
+  parent_id?: string;
+  /** 当前条目修订，恢复提交的 CAS 基础。 */
+  revision: string;
+  /** 固定版本字节数，目录省略。 */
+  size?: string;
+  /** 固定内容版本，目录省略。 */
+  version_id?: string;
+}
+
+export function decodeRecoveryItem(value: unknown): RecoveryItem {
+  const object = expect_object(value, "RecoveryItem");
+  return {
+    entry_id: expect_string(object.entry_id, "RecoveryItem.entry_id"),
+    hash: object.hash === undefined ? undefined : expect_string(object.hash, "RecoveryItem.hash"),
+    id: expect_string(object.id, "RecoveryItem.id"),
+    name: expect_string(object.name, "RecoveryItem.name"),
+    parent_id: object.parent_id === undefined ? undefined : expect_string(object.parent_id, "RecoveryItem.parent_id"),
+    revision: expect_string(object.revision, "RecoveryItem.revision"),
+    size: object.size === undefined ? undefined : expect_string(object.size, "RecoveryItem.size"),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "RecoveryItem.version_id"),
+  };
+}
+
+/** 有界恢复项目清单；不是同步状态快照，重复或丢失时重新查询。 */
+export interface RecoveryPage {
+  /** 按身份升序的一页，最多100条。 */
+  items: Array<RecoveryItem>;
+  /** 下一页 after 身份；没有下一页时省略。 */
+  next_cursor?: string;
+}
+
+export function decodeRecoveryPage(value: unknown): RecoveryPage {
+  const object = expect_object(value, "RecoveryPage");
+  return {
+    items: expect_array(object.items, "RecoveryPage.items").map((item) => decodeRecoveryItem(item)),
+    next_cursor: object.next_cursor === undefined ? undefined : expect_string(object.next_cursor, "RecoveryPage.next_cursor"),
+  };
+}
+
 /** 刷新请求（design §15.2 `POST /v1/auth/refresh` 的输入）。 */
 export interface RefreshRequest {
   /** 上一次签发的刷新凭据；用一次即失效。 */

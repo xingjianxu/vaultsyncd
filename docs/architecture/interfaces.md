@@ -905,13 +905,13 @@ python3 tools/context.py --help
 
 ## api/ — 本机 IPC 契约源（S025）
 
-状态：S025 建立最小契约与生成通路。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
+状态：S025 建立最小契约与生成通路；S071 增加 1.1 状态快照，S072 扩展至 1.2 管理命令（详见文末 S072）。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
 
 | 文件 | 契约 |
 | --- | --- |
-| `api/local-ipc.schema.json` | JSON Schema `2020-12`。`$defs`：`IpcVersion`（`major`/`minor`）、`CommandName`（闭集，当前只有 `get_status`）、`Command`、`Request`（`request_id`/`ipc_version`/`command`）、`GetStatusResult`（`agent_version`/`ipc_protocol`，S071 的 1.1 增量可选 `bindings: BindingStatus[]`，真实 agent 始终给出）、`BindingStatus`（身份及核心多维持久快照；详见 S071）、`LocalIpcErrorCode`（闭集，当前只有 `unsupported_version`）、`ErrorBody`、`ResponseKind`、`Response`（`request_id`/`kind`/可选 `result`/可选 `error`） |
+| `api/local-ipc.schema.json` | JSON Schema `2020-12`。`$defs`：`IpcVersion`（`major`/`minor`）、`CommandName`（1.2 闭集 21 项，见 S072）、`CommandParameters`（按命令校验的字段集合）、`Command`、`Request`、`GetStatusResult`（`agent_version`/`ipc_protocol`，1.1 起可选 `bindings` 与 `snapshot_version`，1.2 起可选 `management`）、`BindingStatus`、`ManagementResult`、`BindingInfo`、`Problem`、`ConnectionInfo`、`RemoteItem`、`LocalIpcErrorCode`（1.2 稳定分类闭集）、`ErrorBody`、`ResponseKind`、`Response` |
 | `x-vaultsyncd` 元数据 | `protocol`（`major`/`minor`，进生成常量 `PROTOCOL_MAJOR`/`PROTOCOL_MINOR`）与 `frame`（`header_bytes = 4`、`max_frame_bytes = 1048576`，进生成常量 `FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES`）。`header_bytes` 必须是 4，`max_frame_bytes` 必须在 64 B—64 MiB 之间 |
-| `api/examples/local-ipc.{request,response,error,status}.json` | 合法请求/旧成功应答/错误应答/1.1 状态增量样本，被 `crates/local-ipc/tests/contract.rs` 与 `packages/local-ipc-types/tests/schema-decoders.mjs` 直接读取；两侧都断言“解码后再编码等于样本” |
+| `api/examples/local-ipc.{request,response,error,status}.json`、`local-ipc.management.json` | 合法请求/旧成功应答/错误应答/1.1 状态增量/1.2 全管理命令样本，被 `crates/local-ipc/tests/contract.rs` 与 `packages/local-ipc-types/tests/schema-decoders.mjs` 直接读取；两侧都断言“解码后再编码等于样本” |
 
 生成规则：与远端共用 `emit` 的 schema 渲染（对象/闭集枚举/基础类型），差别是 `$ref` 前缀为 `#/$defs/`、多出协议与帧常量、没有 HTTP 调用文件。schema 名 PascalCase、字段名 snake_case、每个 schema 与属性必须有 `description`、未知键与未支持构造（内联 enum/对象、非 `#/$defs/` 引用）一律报错——规则与失败行为见上一节。
 
@@ -921,7 +921,7 @@ python3 tools/context.py --help
 
 | 模块 | 契约 |
 | --- | --- |
-| `generated` | 生成代码（`api/local-ipc.schema.json` → `crates/local-ipc/src/generated/mod.rs`）：`PROTOCOL_MAJOR`/`PROTOCOL_MINOR`/`FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES` 常量与全部 DTO。闭集枚举无 catch-all，未知命令/未知种类/未知错误码反序列化失败；未知字段被忽略 |
+| `generated` | 生成代码（`api/local-ipc.schema.json` → `crates/local-ipc/src/generated/mod.rs`）：`PROTOCOL_MAJOR`/`PROTOCOL_MINOR`/`FRAME_HEADER_BYTES`/`MAX_FRAME_BYTES` 常量与全部 DTO。闭集枚举无 catch-all，未知命令/未知种类/未知错误码反序列化失败；显式关闭的对象拒绝未知字段，其余可选字段兼容旧客户端 |
 | `version` | `SUPPORTED_MAJOR`/`SUPPORTED_MINOR`（= 生成常量）、`supported() -> IpcVersion`、`is_compatible(&IpcVersion) -> bool`：major 必须相同，minor 不得高于 agent 支持的版本（避免调用方假设未实现的命令存在）；更低 minor 兼容 |
 | `framing` | `encode(&[u8]) -> Result<Vec<u8>, FrameError>`：4 字节大端长度头 + 负载；拒绝空负载与超过 `MAX_FRAME_BYTES` 的负载。`FrameDecoder::{new,push,next_frame,buffered_bytes,queued_frames}`：接受任意切分（含 1 字节一块），只有凑满声明长度才产出负载，截断数据永不产出短帧 |
 | `service` | `Service::new(agent_version)`、`Service::handle(&Request) -> Response`；`Response::{ok,error,validate}` 与 `ResponseShapeError`。`get_status` 返回 agent 版本与该 agent 支持的 `ipc_protocol`，纯处理器不伪造持久状态（`bindings = None`）；应用组装补入核心快照；版本不兼容返回 `unsupported_version`（`retryable = false`），回显 `request_id` |
@@ -930,7 +930,7 @@ python3 tools/context.py --help
 
 未知命令与畸形 JSON 在产生应答之前就被拒绝：`Service` 只接收已解码的 `Request`，解码失败由传输层结束连接，因此不存在“未知命令回一个默认成功”的路径。`Response` 的 `kind` 与负载同理：只有 `ok` 带 `result`、`error` 带 `error`，构造只经 `Response::ok`/`Response::error`，`validate()` 供解码侧复核。
 
-验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-local-ipc`（20 项契约用例）、`cargo clippy --locked -p vaultsyncd-local-ipc --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-local-ipc`。
+验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-local-ipc`（契约与管理命令用例）、`cargo clippy --locked -p vaultsyncd-local-ipc --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-local-ipc`。
 
 ## packages/local-ipc-types — 本机 IPC TypeScript 类型（S025）
 
@@ -2298,3 +2298,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - runtime 持有 Server 到退出，在关闭 DB 前 `shutdown` 取消并等待 IPC；监听异常结束会使主循环明确失败。`--login-stdin` 不启动状态 IPC。
 - 原生入口 `tests/platform/windows/run-native-ipc.sh`：交叉构建后 Windows 11 真 named pipe + 临时第二本机账号验 ACL；同时验证 token 身份、分片/流水线、并发、有界积压/慢读写/handler、畸形/断连后可继续请求，以及真实 SQLite 状态缺失不得假成功/版本先检。测试账号在 finally 删除，不碰其他样本。
 - 真实进程验收：先构建 `release-native-server`，再 `VAULTSYNCD_PROCESS_TASK=S071 tests/platform/windows/run-native-process.sh`（Windows devShell）。复用 S070 产品回归和三项 IPC 断言：离线 dirty/pending 明确未同步、畸形/部分帧断连后能继续查、恢复后 pending/intents/lag 收敛到0且退出释放管道。S071 模式独立 driver/artifacts，仅运行实际进程用例，不执行 S070 旧样本 cleanup。
+
+## S072 本机管理命令与授权恢复读取
+
+- `api/local-ipc.schema.json` 1.2 提供 21 项 `CommandName` 闭集：状态/订阅、绑定列举/创建/暂停/恢复/解绑/模式、问题列举与重试、文件下载/释放、恢复包导出、连接读取/设置/登录/登出、Root/历史/回收站列举与恢复。`CommandParameters` 由 `crates/local-ipc::commands::validate` 按命令复核必填项、拒绝多余参数、非规范身份、相对路径、越界文本和非规范修订；副作用仍由执行器复核，不能只信界面。`ManagementResult` 按命令只填实际结果；稳定错误码为 `invalid_argument`/`not_found`/`blocked`/`unavailable`/`unauthenticated`/`conflict`/`internal`，同步原因仍放在 `Problem.code`。
+- `GetStatusResult.snapshot_version` 为进程身份加单调计数；`subscribe_status(after_version)` 长轮询推送全量快照，进程变化或游标丢失立即返回全量，不追加增量算法。`Problem` 聚合 pending/事件/意图/传输/通知/管理恢复的真实持久原因，`retry_problem` 只恢复已持久操作并在问题已消失时幂等返回。
+- `apps/agent/src/runtime.rs` 以 SQLite `agent_connection` 和 `bindings` 为权威加载连接/绑定，允许未登录启动；管理命令进入单 mailbox 串行执行，创建/解绑/模式切换/连接切换与同步生命周期交错时重新核对执行门。登录凭据只写 current-user Credential Manager，状态/结果/日志不含 token 或口令。`FullMaterializer` 从持久 mode 取值，真实读取固定内容并核对代际/身份/摘要；恢复包导出使用不覆盖的安全目录/文件句柄。完整模式任务只在本地发现完成且无未决 pending/intent 后补齐证据，避免离线上传或删除竞争被误判。
+- `crates/client-store` 迁移 0011 增加无凭据 `agent_connection(singleton,server_id,server_url,ca_file)`；10→11 升级保留未确认内容与队列、生成备份、拒绝旧 writer，初始建库包含该表。
+- `GET /v1/roots/{root}/entries/{entry}/history` 与 `GET /v1/roots/{root}/trash` 需要 Root 授权，按稳定身份 `after` 分页、最多 100 项，返回 `RecoveryPage`；未知/重复参数 400、越权 403、条目不存在 404。回收站恢复事件携带提交后的 revision、parent、version、hash、size。`api/openapi.yaml` 与 `packages/api-client` 同步生成；`packages/local-ipc-types` 导出 1.2 类型和解码器。
+- 原生验收入口：`VAULTSYNCD_PROCESS_TASK=S072 tests/platform/windows/run-native-process.sh`，在真实 Windows 用户会话启动产品 agent，逐项调用 21 个命令并验证参数负例、版本拒绝、Credential Manager 登录、真实 HTTP/SQLite/文件副作用、问题重试、恢复包与凭据脱敏。S071 的 `VAULTSYNCD_PROCESS_TASK=S071` 真实进程回归继续复用。

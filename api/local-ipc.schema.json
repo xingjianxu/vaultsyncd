@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 1,
-      "minor": 1
+      "minor": 2
     },
     "frame": {
       "header_bytes": 4,
@@ -15,7 +15,7 @@
   "$defs": {
     "BindingStatus": {
       "type": "object",
-      "description": "运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；本卡不提供状态推送。",
+      "description": "运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；1.2 的 subscribe_status 按实例版本长轮询推送全量，get_status 可无条件恢复丢失提示。",
       "required": ["binding_id", "dirty", "metadata_only", "partial", "materialized", "pending", "failed", "offline", "transfers", "intents", "recovery", "event_lag", "mode_pending", "paused", "detached", "unknown", "synchronized"],
       "properties": {
         "binding_id": {"type": "string", "description": "Binding 稳定身份。"},
@@ -39,7 +39,8 @@
     },
     "Command": {
       "type": "object",
-      "description": "命令负载：命令名加该命令自己的参数。当前唯一的 get_status 没有参数。",
+      "additionalProperties": false,
+      "description": "命令负载。parameters 按命令逐项校验必填项与允许项；多余参数、非规范身份、相对路径、越界文本一律失败。1.0/1.1 仍支持无参数 get_status。",
       "required": [
         "name"
       ],
@@ -47,15 +48,38 @@
         "name": {
           "$ref": "#/$defs/CommandName",
           "description": "要执行的命令名；未知取值在解码阶段被拒绝。"
-        }
+        },
+        "parameters": {"$ref": "#/$defs/CommandParameters", "description": "命令专属参数；执行器复核，不能仅信任界面。"}
+      }
+    },
+    "CommandParameters": {
+      "additionalProperties": false,
+      "type": "object", "description": "可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。",
+      "properties": {
+        "binding_id": {"type":"string","description":"Binding 身份。"},
+        "root_id": {"type":"string","description":"授权 Root 身份。"},
+        "entry_id": {"type":"string","description":"条目身份，不接受调用方自选相对文件路径。"},
+        "operation_id": {"type":"string","description":"重试/副作用幂等身份。"},
+        "version_id": {"type":"string","description":"固定历史版本。"},
+        "base_revision": {"type":"string","description":"恢复前当前修订 CAS。"},
+        "local_path": {"type":"string","description":"用户显式选定的本机绝对目录。"},
+        "cache_path": {"type":"string","description":"专属且与所有同步根/状态目录分离的缓存。"},
+        "mode": {"type":"string","description":"full 或 on_demand。"},
+        "destination": {"type":"string","description":"新的恢复导出目录；不可覆盖。"},
+        "server_id": {"type":"string","description":"连接的服务器稳定身份。"},
+        "server_url": {"type":"string","description":"HTTPS 地址，不允许用户信息、query 或 fragment。"},
+        "ca_file": {"type":"string","description":"用户显式选择的附加 CA，不禁用系统证书验证。"},
+        "username": {"type":"string","description":"登录账号。"},
+        "password": {"type":"string","description":"瞬时登录密码；不能日志输出整个请求。"},
+        "after_version": {"type":"string","description":"订阅最后看到的 instance:counter；缺省或不匹配立即返回全量。"},
+        "cursor": {"type":"string","description":"历史或回收站分页的 after 身份。"},
+        "search": {"type":"string","description":"问题路径或原因的大小写不敏感子串筛选。"}
       }
     },
     "CommandName": {
       "type": "string",
-      "description": "命令名闭集。S025 只实现 get_status；design §15.5 其余命令在其功能卡加入，取值与含义在契约里逐项追加。",
-      "enum": [
-        "get_status"
-      ]
+      "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry"]
     },
     "ErrorBody": {
       "type": "object",
@@ -100,7 +124,76 @@
           "type": "array",
           "items": {"$ref": "#/$defs/BindingStatus"},
           "description": "真实核心快照；应用入口始终返回该字段，读取失败则请求失败，不用空数组替代。"
-        }
+        },
+        "snapshot_version": {"type":"string","description":"进程唯一身份加单调计数；不同进程的版本不可比较。丢失订阅后 get_status 始终返回全量。"},
+        "management": {"$ref":"#/$defs/ManagementResult","description":"1.2 管理命令的类型化结果。"}
+      }
+    },
+    "BindingInfo": {
+      "type":"object","description":"持久 Binding 配置与控制事实，包括解绑记录。",
+      "required":["binding_id","root_id","local_path","cache_path","mode","paused","detached"],
+      "properties":{
+        "binding_id":{"type":"string","description":"Binding 身份。"},
+        "root_id":{"type":"string","description":"Root 身份。"},
+        "local_path":{"type":"string","description":"用户选择的目录。"},
+        "cache_path":{"type":"string","description":"保留的缓存。"},
+        "mode":{"type":"string","description":"持久目标模式。"},
+        "paused":{"type":"boolean","description":"已暂停。"},
+        "detached":{"type":"boolean","description":"保留数据停止管理。"}
+      }
+    },
+    "Problem": {
+      "type":"object","description":"真实持久问题；不返回任意日志文本。",
+      "required":["binding_id","problem_id","code","reason","local_data","next_step","retryable"],
+      "properties":{
+        "binding_id":{"type":"string","description":"Binding 身份。"},
+        "problem_id":{"type":"string","description":"待办操作身份或只读诊断身份。"},
+        "entry_id":{"type":"string","description":"相关条目。"},
+        "path":{"type":"string","description":"已核对的相对路径；未知时省略。"},
+        "code":{"type":"string","description":"稳定原因码。"},
+        "reason":{"type":"string","description":"原因说明。"},
+        "local_data":{"type":"string","description":"本地数据保护/驻留情况，不把数据库 clean 当真实完整字节。"},
+        "next_step":{"type":"string","description":"可执行下一步。"},
+        "retryable":{"type":"boolean","description":"是否可调用 retry_problem。"}
+      }
+    },
+    "ConnectionInfo": {
+      "type":"object","description":"不含 token 的连接与证书配置。",
+      "required":["server_id","server_url","authenticated"],
+      "properties":{
+        "server_id":{"type":"string","description":"服务器身份。"},
+        "server_url":{"type":"string","description":"服务器地址。"},
+        "ca_file":{"type":"string","description":"附加信任 CA 路径。"},
+        "authenticated":{"type":"boolean","description":"持有凭据；不等于服务器在线。"}
+      }
+    },
+    "RemoteItem": {
+      "type":"object","description":"服务器返回的授权 Root、历史版本或回收站项目。",
+      "required":["id","name"],
+      "properties":{
+        "id":{"type":"string","description":"稳定身份。"},
+        "name":{"type":"string","description":"显示名称。"},
+        "entry_id":{"type":"string","description":"条目身份。"},
+        "version_id":{"type":"string","description":"固定版本。"},
+        "revision":{"type":"string","description":"当前 CAS 修订。"},
+        "parent_id":{"type":"string","description":"原父目录。"},
+        "size":{"type":"string","description":"字节数。"},
+        "hash":{"type":"string","description":"内容摘要。"}
+      }
+    },
+    "ManagementResult": {
+      "type":"object","description":"每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。",
+      "properties":{
+        "bindings":{"type":"array","items":{"$ref":"#/$defs/BindingInfo"},"description":"持久绑定列表。"},
+        "problems":{"type":"array","items":{"$ref":"#/$defs/Problem"},"description":"持久问题列表。"},
+        "connection":{"$ref":"#/$defs/ConnectionInfo","description":"连接事实。"},
+        "items":{"type":"array","items":{"$ref":"#/$defs/RemoteItem"},"description":"远端授权 Root/历史/回收站列表。"},
+        "operation_id":{"type":"string","description":"实际执行的幂等操作身份。"},
+        "unconfirmed":{"type":"array","items":{"type":"string"},"description":"解绑时保留的未确认条目。"},
+        "incomplete":{"type":"array","items":{"type":"string"},"description":"解绑后不保证离线可读的条目。"},
+        "exported_files":{"type":"string","description":"已完整核验的恢复包文件数。"},
+        "mode_remaining":{"type":"string","description":"模式任务仍需真实核对/补齐的条目数。"},
+        "next_cursor":{"type":"string","description":"历史或回收站清单下一页游标。"}
       }
     },
     "IpcVersion": {
@@ -127,10 +220,8 @@
     },
     "LocalIpcErrorCode": {
       "type": "string",
-      "description": "本机 IPC 协议级错误码闭集，不是 design §15.4 的同步错误码。S025 只有版本不兼容；需要新错误时先扩展本契约。",
-      "enum": [
-        "unsupported_version"
-      ]
+      "description": "管理入口错误分类；同步错误的稳定 code 放在 problems，不泄露自由诊断或凭据。",
+      "enum": ["unsupported_version", "invalid_argument", "not_found", "blocked", "unavailable", "unauthenticated", "conflict", "internal"]
     },
     "Request": {
       "type": "object",

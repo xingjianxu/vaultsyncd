@@ -22,6 +22,14 @@ mod ipc;
 #[cfg(windows)]
 pub mod local;
 #[cfg(windows)]
+mod management;
+#[cfg(windows)]
+mod management_export;
+#[cfg(windows)]
+mod management_files;
+#[cfg(windows)]
+mod management_history;
+#[cfg(windows)]
 mod namespace;
 #[cfg(windows)]
 pub mod remote;

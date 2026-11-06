@@ -17,6 +17,75 @@ info:
     在对应功能卡加入。
 
 paths:
+  /v1/roots/{root}/entries/{entry}/history:
+    get:
+      operationId: listEntryHistory
+      summary: 列出条目历史版本
+      description: 需要 Root 授权；按版本身份分页，最多100条，不泄露服务器路径。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          schema: {type: string}
+        - name: entry
+          in: path
+          required: true
+          schema: {type: string}
+        - name: after
+          in: query
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: 一页历史
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecoveryPage"}
+        "400":
+          description: 参数错误
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 没有 Root 授权
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "404":
+          description: 条目不存在
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+  /v1/roots/{root}/trash:
+    get:
+      operationId: listTrash
+      summary: 列出回收站
+      description: 需要 Root 授权；按条目身份分页，最多100条，仅返回仍保留的回收站事实。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          schema: {type: string}
+        - name: after
+          in: query
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: 一页回收站
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecoveryPage"}
+        "400":
+          description: 参数错误
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: 没有 Root 授权
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
   /v1/health:
     get:
       operationId: getHealth
@@ -2050,6 +2119,29 @@ components:
           format: decimal_u64
           description: 单个上传块的最大字节数（十进制文本）。
 
+    RecoveryItem:
+      type: object
+      description: 历史或回收站中的可选恢复目标；恢复时仍须复核权限、版本保留和当前修订。
+      required: [id, entry_id, name, revision]
+      properties:
+        id: {type: string, description: 分页稳定身份，历史为版本身份，回收站为条目身份。}
+        entry_id: {type: string, description: 原条目身份。}
+        name: {type: string, description: 当前名称或回收站原相对路径。}
+        revision: {type: string, description: 当前条目修订，恢复提交的 CAS 基础。}
+        parent_id: {type: string, description: 原父目录身份。}
+        version_id: {type: string, description: 固定内容版本，目录省略。}
+        hash: {type: string, description: 固定版本摘要，目录省略。}
+        size: {type: string, description: 固定版本字节数，目录省略。}
+    RecoveryPage:
+      type: object
+      description: 有界恢复项目清单；不是同步状态快照，重复或丢失时重新查询。
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: 按身份升序的一页，最多100条。
+          items: {$ref: "#/components/schemas/RecoveryItem"}
+        next_cursor: {type: string, description: 下一页 after 身份；没有下一页时省略。}
     HealthResponse:
       description: 健康探测结果。
       type: object

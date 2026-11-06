@@ -348,14 +348,15 @@ async fn catalog(db: &Database, binding: BindingId) -> Result<(Value, Vec<Target
                 .unwrap_or(Value::Null);
                 object.insert(name.into(), value);
             }
-            let directory = state
-                .get("baseline_entries")
-                .and_then(Value::as_array)
-                .is_some_and(|rows| {
-                    rows.iter().any(|base| {
-                        base["entry_id"] == object["entry_id"] && base["kind"] == "directory"
-                    })
-                });
+            let directory = table == "local_entries"
+                && state
+                    .get("baseline_entries")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| {
+                        rows.iter().any(|base| {
+                            base["entry_id"] == object["entry_id"] && base["kind"] == "directory"
+                        })
+                    });
             if table == "local_entries"
                 && !directory
                 && (object["residency"] != "metadata_only" || object["dirty"] != "clean")
