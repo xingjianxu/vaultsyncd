@@ -1,5 +1,7 @@
 # 实施进度
 
+本轮：**S076—S100 执行中**，每卡一个 subagent，同时最多三个。父集成树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线 `b5be427`；S076 已集成为 `da3a368`，父复跑五成员类型检查、两应用独立构建及未连接语义测试通过。S077/S080/S085 正并行推进；细节见 `agent/tasks/S076-S100.md`。
+
 当前阶段：**S071—S075 全部 done（2026-11-06）**。按用户要求每张卡一个 subagent、同时最多 3 个：S071 与 S075 先并行，S072→S073→S074 按依赖顺序推进，S072 中断后同树续接，S074 核验暴露的 socket 残留回归由 S075-c 修复。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`。**合并与清理（2026-11-06，用户要求）**：父会话先核对三批集成分支均以 `0b3b3c6` 为基线并顺序包含（S061—S065 ⊂ S066—S070 ⊂ S071—S075）、三棵树均无未提交修改，再以 `git merge --ff-only feat/S071-S075-integration` 把 master 从 `0b3b3c6` 快进到 `01ce551`（含 S061—S075 全部提交）；逐支确认已被 master 包含后，三棵集成树 `git worktree remove`、本地分支 `git branch -d` 全部清理，ignored 证据归档到主工作区 `artifacts/batch-S061-S075/{s061-s065,s066-s070,s071-s075}`。未推送、未改写历史。
 
 收口门禁（父在集成树实测）：`cargo xtask check` **5/5 通过**；`cargo test -p vaultsyncd-server-tests` 集成套件 **36 passed / 0 failed**（含 `kill_boundaries` 4/4、新增 `admin_socket_recovery` 3/3）；platform/server/admin/store **245 passed / 0 failed**。真实 Windows 证据分别来自各卡子代理：S071 原生传输 5/5＋错误状态 1/1＋进程 16 断言，S072 原生连续 4 次 1/1（21 命令）＋S071 回归 2/1 次，S073 原生 2 次 1/1＋S072 回归 1/1，S074 三身份 e2e 退出 0（21 份输入全命中、14 路径收敛），S075 隔离 SSH/btrfs 十阶段通过。产出提交与限制见各卡交接与 `agent/tasks/S071-S075.md`；下一 ready：**S076**。
