@@ -1,6 +1,6 @@
 # 实施进度
 
-当前阶段：**S071—S075 执行中**。用户要求每卡一个 subagent、同时最多3个；依赖链 S071→S072→S073→S074，S075 独立并行。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`；各卡独立工作树，父会话统一维护本表。master 与既有集成分支保留不动；只本地提交、不推送。S071、S072、S073、S075 已通过真实验收并集成（`f6ea562`、`a509ca1`、`ce7863d`、`1f415b8`），集成树统一 `cargo xtask check` **5/5** 通过；现 S074 专属 subagent 执行。S072 首位子代理曾因上游额度中断，后由新子代理同树续接完成，未降验收。
+当前阶段：**S071—S075 执行中**。用户要求每卡一个 subagent、同时最多3个；依赖链 S071→S072→S073→S074，S075 独立并行。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`；各卡独立工作树，父会话统一维护本表。master 与既有集成分支保留不动；只本地提交、不推送。S071—S075 五张卡均已真实验收并集成（`f6ea562`、`a509ca1`、`ce7863d`、`a5bc3c1`、`1f415b8`），集成树统一 `cargo xtask check` **5/5** 通过。父核验 S074 报告时独立复现出本批次引入的回归：S075 的管理 socket 在 SIGKILL 后残留导致服务端无法重启，`kill_boundaries` **0 passed / 4 failed**；已开 S075-c 修复分支，修好前不宣布批次收口。S072 首位子代理曾因上游额度中断，后由新子代理同树续接完成，未降验收。
 
 此前阶段记录：**S066—S070 全部 done（2026-11-06）**。按用户要求每卡一个 subagent，同时最多3个；S066后并行S067/S068，独立租约/生命周期子卡提前准备，平台释放与完整同步按依赖验收。集成树 `/wrd/prj/vaultsyncd/.worktrees/s066-s070`，分支 `feat/S066-S070-integration`，基线 `26f5416`；master保持 `0b3b3c6`，只本地提交，未推送/未合入master。最终真实Windows：S070进程2/2（13项断言）、平台65/65、agent库8/8；core123/store50；统一xtask五步通过（874/0、28结果行）、server lib40和集成33通过、最终Windows agent/platform all-target check及fmt通过。所有任务提交与证据、限制、清理记录见 `agent/tasks/S066-S070.md`；下一 ready：**S071**。
 
@@ -11,7 +11,7 @@
 （上一阶段记录，保留供追溯）S011—S014：Windows：`cfapi::content`/`cfapi::provider` 用固定内容源实现 `FETCH_DATA` 分段落盘（12,345 B / 1 MiB / 16 MiB，含 1 MiB 范围水合），读取字节与 SHA-256 与宿主一致；离线未水合以 `ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE`(388) 明确失败，慢源超时有界，传输中断开同步根有界返回；`cfapi::guard`/`cfapi::release` 把“已观察内容 + 使用保护”做成保守判定，只有 `clean` 才 `CfSetInSyncState`+`CfDehydratePlaceholder`，原地写/映射写/独占句柄/共享锁全部 `refused` 且内容不变，干净样本释放后再读哈希一致。宿主 38 单测、两端 clippy、fmt 与三项客体脚本（21/46/74 项 `check=pass`、0 fail）全通过。**S011 仍有一项阻塞**：`CANCEL_FETCH_DATA` 在本 build（26300）5 条路径均未触发（取消标志与中止路径已实现并有宿主单测）；**S012 有 1 项记录阻塞**：rename-over 保存无法证明安全（同步根内建不了临时文件、根外改名后目标名字无法按路径打开）。Linux：新增 `crates/platform-linux-server`——`mounts/` 挂载准入（fstatfs + statx + mountinfo + 只读 btrfs ioctl；拒绝 FUSE/NFS/SMB/overlay/tmpfs/ext4 等、嵌套子卷与子挂载、NOCOW）与 `files/` 受限句柄发布（`openat2`、目标文件系统内暂存、`FICLONE`/`EXDEV` 校验复制、两步受控替换）在真实 btrfs 测试卷上分别 60/100 项通过，父会话独立重跑 100/100 且清理核对一致。客体已干净关机，测试卷、loop 与探针目录均已清理。
 执行方式（2026-11-06 用户决定）：S015—S060 由父会话按卡分派 subagent 逐个执行，同时运行的 subagent 不超过 3 个；每卡仍在自己的 Git worktree 内实现、验证并本地提交，`agent/progress.md` 由父会话统一更新以避免同表相邻行冲突。Windows 客体按 `docs/operations/windows-lab.md` §19.1 在测试后保持运行，不默认关机。
 
-当前已启动 ready：**S074**；S071/S072/S073/S075 已验收完成。批次范围外最早独立 ready 为 S076。本批S066—S070均验收完成。S011原始OS取消回调未触发的历史限制继续保留，S102等后续矩阵不在本批完成声明内。
+当前已启动 ready：**S075-c（本批次回归修复）**；S071—S075 单卡均已验收。批次范围外最早独立 ready 为 S076。批次范围外最早独立 ready 为 S076。本批S066—S070均验收完成。S011原始OS取消回调未触发的历史限制继续保留，S102等后续矩阵不在本批完成声明内。
 构建分工（2026-11-05 用户决定，S009 已实施）：Windows 客户端在本 NixOS 开发环境交叉编译，宿主承担构建、客体承担原生运行验收；design ADR-013、实施手册 §2.6 与环境/操作文档已同步，具体工具链版本与证据见 `docs/environment.md` §13、步骤见 `docs/operations/windows-lab.md` §12。
 平台资源核验结论（S001，2026-11-05）：开发/服务验证主机为 NixOS 26.11 x86_64、Nix 2.34.9；`/`、`/home`、`/nix`、`/var/log`、`/wrd`、`/data` 均为本地 btrfs；`/wrd` 可用 197G、`/data` 可用 22T；KVM 可用且用户在 `kvm` 组，但 QEMU/Quickemu 未安装、无现成 Windows 客体；尚无本项目独立 btrfs 测试卷。Ubuntu 24.04、Linux ARM64、Windows 原生 CFAPI、reflink 与验收规模均未核验。证据见 `docs/environment.md`。
 
@@ -92,7 +92,7 @@
 | S071 | Windows named pipe 传输与身份 | W | S070、S025 | done | `8036466`、`323469f`、`e3a2e51`；集成 `f6ea562`；基线 `873f306` | Windows原生传输5/5、真实SQLite错误1/1、实际进程1/1（16断言）；Rust IPC20、xtask19、TS9，两端clippy/fmt/生成一致通过 | 无；管理及版本化推送归S072 | agent/tasks/S071.md（+a） |
 | S072 | 本机管理命令完整接入 | W | S071、S061、S064 | done | `ebc76ae`…`798b36a` 共14个（含父补 `866f2fc`）；集成 `a509ca1`；基线 `f6ea562` | 协议1.2共21项命令与参数负例；真实Windows原生连续4次1/1，S071旧进程回归2次1/1；workspace测试+clippy零警告、xwin clippy、生成一致性、前端10/9测试与typecheck通过；父集成树 xtask check 5/5 | 无；卷故障矩阵与多客户端矩阵归 S074/S102 | agent/tasks/S072.md |
 | S073 | Windows CLI 最小管理入口 | W | S072 | done | `d7742ba`、`32e716b`；集成 `ce7863d`；基线 `a509ca1` | 新增 apps/cli 只经命名管道、21命令映射、--json与退出码0/2/3/4/5/6、密码仅安全输入；真实Windows连续2次原生1/1、S072回归1/1；宿主测试/clippy/生成一致性与xwin clippy通过；父复跑cli/agent/local-ipc测试与clippy通过 | 无；subscribe-status为单次长轮询、不含安装自启动 | agent/tasks/S073.md |
-| S074 | 三台客户端基础互通 | X | S073、S052 | in_progress | `.worktrees/s074`，`feat/S074-three-clients`；基线 `ce7863d` | 专属 subagent 实施中，尚未验收 | — | agent/tasks/S074.md（执行时创建） |
+| S074 | 三台客户端基础互通 | X | S073、S052 | done | `5e5e98f`、`1452d36`、`0d1c673`、`88fb7be`、`eeb7f70`、`ea37025`；集成 `a5bc3c1`；基线 `ce7863d` | 真实Windows原生最终提交退出0：21份输入missing=0、14路径收敛、lost_responses=2、conflict_copies=5；宿主机fmt/生成一致/两端clippy通过；拓扑如实为1台实机3个隔离身份、agent顺序运行 | 无（并发三实机属S107；生产HTTPS反代属S097）；报告暴露的kill_boundaries回归转S075-c修复 | agent/tasks/S074.md |
 | S075 | Linux 在线管理 socket 与 CLI | L | S043、S044、S047、S048 | done | `ace6837`、`526bde0`；集成 `1f415b8`；基线 `873f306` | 真实隔离SSH/btrfs十阶段通过；父集成复跑server/admin/platform/store 242/0、生成一致性与fmt通过；子代理clippy通过 | 无；仅同UID/唯一owner、实时偏移分页、崩溃socket需确认停机后清理 | agent/tasks/S075.md（+a/b） |
 | S076 | 前端公共组件与两应用壳 | B | S005、S024、S025 | todo | — | 未执行 | — | agent/tasks/S076.md（执行时创建） |
 | S077 | Web 登录与会话管理 | B | S076、S043 | todo | — | 未执行 | — | agent/tasks/S077.md（执行时创建） |
