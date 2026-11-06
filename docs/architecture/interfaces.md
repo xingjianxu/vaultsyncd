@@ -2438,3 +2438,5 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 锁次序：每备份ID写门（prepare/verify/release）→对象维护独占门（prepare/release）→S087 Root协调→短SQL事务；导出只持每ID读门，不持对象门。严禁在已有object_activity或object_maintenance门内调用prepare/release。不会在SQL事务持锁期间做文件复制或等待流读者。源租约在导出完成后继续存在，需release或到期清理。
 
 OpenAPI提供固定清单、仅清单内的DB/config/Root对象读取、整体流式export与job status/list。全部重新校验唯一active owner与请求会话，使用锚定RestrictedDir拒绝任意路径；备份包含受限PHC认证材料但sessions失效，不能公开分享。Unix协议特殊export先framed200握手再VSBK001原始字节，逐次写30秒空闲截止；普通请求仍10秒。流规则与0600收据唯一源`api/backup-export.schema.json`，CLI显式prepare/export/verify/release；本地verify不打开在线数据库。损坏或缺终止标记只能incomplete，服务源verified与客户端持久导出verified分别记录。
+
+S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包含11秒后继续完整流与release排队跨10秒后SIGKILL重放；取消verify先撤销旧verified。CLI本地verify只检查归档全部字节和固定清单，SQLite语义由verify-source及离线恢复入口检查。归档与固定摘要收据需一起保管，后续S089可复用纯`Index`/`ArchiveVerifier`和store只读`verify_database`，不可把未verified收据当成功。
