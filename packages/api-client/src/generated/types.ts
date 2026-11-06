@@ -683,8 +683,12 @@ export function decodeReceivedPart(value: unknown): ReceivedPart {
 
 /** 历史或回收站中的可选恢复目标；恢复时仍须复核权限、版本保留和当前修订。 */
 export interface RecoveryItem {
+  /** 冲突副本对应的原条目身份；普通条目省略。 */
+  conflict_source?: string;
   /** 原条目身份。 */
   entry_id: string;
+  /** UTC Unix 秒到期下限；当前活跃版本省略，不按文件 mtime。 */
+  expires_at?: string;
   /** 固定版本摘要，目录省略。 */
   hash?: string;
   /** 分页稳定身份，历史为版本身份，回收站为条目身份。 */
@@ -704,7 +708,9 @@ export interface RecoveryItem {
 export function decodeRecoveryItem(value: unknown): RecoveryItem {
   const object = expect_object(value, "RecoveryItem");
   return {
+    conflict_source: object.conflict_source === undefined ? undefined : expect_string(object.conflict_source, "RecoveryItem.conflict_source"),
     entry_id: expect_string(object.entry_id, "RecoveryItem.entry_id"),
+    expires_at: object.expires_at === undefined ? undefined : expect_string(object.expires_at, "RecoveryItem.expires_at"),
     hash: object.hash === undefined ? undefined : expect_string(object.hash, "RecoveryItem.hash"),
     id: expect_string(object.id, "RecoveryItem.id"),
     name: expect_string(object.name, "RecoveryItem.name"),

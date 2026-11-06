@@ -30,3 +30,6 @@ export type {
 
 export { listManagedRoots, registerRoot } from "./generated/client";
 export type { ManagedRootList, ManagedRoot, RootCollection, RootCollectionState, RootRegistered, RootRegisterRequest } from "./generated/types";
+
+export { listRecoveryEntries, listConflictCopies, listRoots, createSnapshot, submitOperation, getOperation } from "./generated/client";
+export type { OperationRequest, OperationResult, RootSummary } from "./generated/types";

@@ -2383,3 +2383,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 连接页提供地址、账号、显式附加CA；绑定页读取授权Root、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
 - agent 保留管理连接证书错误 `CERTIFICATE_INVALID`（blocked/不可自动重试）和目录错误 `LOCAL_PATH_UNAVAILABLE`（invalid_argument），返回核对名称/CA或现有NTFS目录的说明，不回显底层自由错误或凭据。Root/登录仍走现有认证用例，IPC schema 无变更。
 - `run-native-bindings.sh` 复用真实 Linux btrfs 实例，私有测试TLS+认证SSH回环隧道，Windows真React表单经桥/管道操作。先不信任CA而失败，再显式CA成功；验证错误目录、双方非空首合并、暂停恢复、关闭GUI后新文件上传与服务端真实字节。脚本/fixture注入仅 native-acceptance feature，正式程序不包含。生产HTTPS部署仍由S097验收。
+
+## S079 Web 历史、冲突与回收站
+
+- 新增授权 `GET /v1/roots/{root}/recovery` 与 `/conflicts`，均返回 `RecoveryPage`，固定每页100项，规范 `after` 身份游标；复用 Root 授权，不暴露服务端绝对路径。recovery 返回活跃条目身份/相对路径/当前版本；conflicts 只接受持久映射里的活跃副本，不按名称猜测。关闭提示没有远端删除动作。
+- `RecoveryItem` 新增可选 `expires_at`（UTC Unix秒文本、最早可回收下限）与 `conflict_source`（原条目身份）。历史按 superseded+30天，删除后不少于delete+30天；回收站使用实际 expires_at。当前活跃版本省略到期字段。旧客户端可忽略新可选字段，无迁移。
+- Web `features/history/recovery.ts::RestoreSession` 按用户/Root 保存标签页 sessionStorage 原请求（无凭据），先保存再调用；未知/pending 不另起操作。resume 先 GET 原Op，404 才 POST 原请求，同 OpId/device/epoch/CAS/version；committed 才查询 recovery 的实际当前相对路径。不会把 pending/网络失败显示成恢复成功。
+- `#/recovery` 复用 BrowserAuth。入口按 Root 选择文件历史、冲突和回收站；按服务端返回游标翻页，到期禁用恢复；原Op持久到同标签页刷新，跨标签/清除存储不承诺自动找回。Restore 的最终安全检查继续属于服务端。
+- 验收：`pnpm --filter @vaultsyncd/web test` 含恢复会话故障单测；`nix develop .#web-tests --command python3 tests/web/recovery-browser.py` 使用真实服务/Chromium/btrfs，丢提交响应后刷新原Op核对、同名另名恢复/目标保留、历史落盘与真实分页。pending 由注入单测覆盖，不宣称该浏览器脚本制造了真实后端pending。

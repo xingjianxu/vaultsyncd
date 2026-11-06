@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node tests/shell.mjs && node tests/auth.mjs"
+    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs"
   },
   "dependencies": {
     "@vaultsyncd/ui": "workspace:*",
