@@ -103,6 +103,33 @@ pub(crate) fn version(root: &Path) -> Result<String, String> {
 }
 pub(crate) fn verify_version(root: &Path) -> Result<(), String> {
     let expected = version(root)?;
+    let cargo: toml::Value =
+        toml::from_str(&fs::read_to_string(root.join("Cargo.toml")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let members = cargo
+        .get("workspace")
+        .and_then(|v| v.get("members"))
+        .and_then(toml::Value::as_array)
+        .ok_or("missing workspace members")?;
+    for member in members {
+        let member = member.as_str().ok_or("invalid workspace member")?;
+        let manifest = root.join(member).join("Cargo.toml");
+        let package: toml::Value =
+            toml::from_str(&fs::read_to_string(&manifest).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        if package
+            .get("package")
+            .and_then(|v| v.get("version"))
+            .and_then(|v| v.get("workspace"))
+            .and_then(toml::Value::as_bool)
+            != Some(true)
+        {
+            return Err(format!(
+                "Rust package must inherit product version: {}",
+                manifest.display()
+            ));
+        }
+    }
     for mirror in MIRRORS {
         if read(&root.join(mirror))?["version"].as_str() != Some(expected.as_str()) {
             return Err(format!(
