@@ -1,6 +1,8 @@
 # 实施进度
 
-当前阶段：**S066—S070 全部 done（2026-11-06）**。按用户要求每卡一个 subagent，同时最多3个；S066后并行S067/S068，独立租约/生命周期子卡提前准备，平台释放与完整同步按依赖验收。集成树 `/wrd/prj/vaultsyncd/.worktrees/s066-s070`，分支 `feat/S066-S070-integration`，基线 `26f5416`；master保持 `0b3b3c6`，只本地提交，未推送/未合入master。最终真实Windows：S070进程2/2（13项断言）、平台65/65、agent库8/8；core123/store50；统一xtask五步通过（874/0、28结果行）、server lib40和集成33通过、最终Windows agent/platform all-target check及fmt通过。所有任务提交与证据、限制、清理记录见 `agent/tasks/S066-S070.md`；下一 ready：**S071**。
+当前阶段：**S071—S075 执行中**。用户要求每卡一个 subagent、同时最多3个；依赖链 S071→S072→S073→S074，S075 独立并行。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`；各卡独立工作树，父会话统一维护本表。master 与既有集成分支保留不动；只本地提交、不推送。当前已分派 S071 和 S075，尚无本批完成声明。
+
+此前阶段记录：**S066—S070 全部 done（2026-11-06）**。按用户要求每卡一个 subagent，同时最多3个；S066后并行S067/S068，独立租约/生命周期子卡提前准备，平台释放与完整同步按依赖验收。集成树 `/wrd/prj/vaultsyncd/.worktrees/s066-s070`，分支 `feat/S066-S070-integration`，基线 `26f5416`；master保持 `0b3b3c6`，只本地提交，未推送/未合入master。最终真实Windows：S070进程2/2（13项断言）、平台65/65、agent库8/8；core123/store50；统一xtask五步通过（874/0、28结果行）、server lib40和集成33通过、最终Windows agent/platform all-target check及fmt通过。所有任务提交与证据、限制、清理记录见 `agent/tasks/S066-S070.md`；下一 ready：**S071**。
 
 此前阶段记录：**S015—S065 全部执行完毕（2026-11-06）**。本轮 S061—S065 每卡由一个 subagent 完成，同时运行不超过 3 个；先并行 S061/S062/S065，前置验收后依次启动 S063、S064。新增持久绑定控制、优先级与重试调度、租约和持续使用保护下的手动释放、多维状态/问题去重/恢复导出，以及 Windows 安全元数据访问和通知补扫。全部任务已集成到隔离分支 `feat/S061-S065-integration`，工作树 `/wrd/prj/vaultsyncd/.worktrees/s061-s065`；主工作区 `master` 保留基线 `0b3b3c6`，未推送。统一 `cargo xtask check` **5/5 步通过**（契约生成一致性、fmt、clippy、默认成员测试 **862 通过 / 0 失败，28 个 test result 行**、三个前端 typecheck）；Windows 目标 agent-core/platform-windows `cargo xwin check --all-targets` 通过，S065 Windows 11 原生 **52/52**。本批无验收阻塞；生产 Windows/IPC/租约及恢复导出端口组装限制见各卡交接，不冒充产品端到端完成。产出、日志和工作树清理记录见 `agent/tasks/S061-S065.md`；下一 ready：**S066**。
 
@@ -87,11 +89,11 @@
 | S068 | Windows 写入检测与使用保护 | W | S066、S056、S059 | done | `f5af3db`、`d874f54`；集成 `1847d9f` | Windows原生63/63、宿主platform43/transfer59，两端clippy/fmt通过；映射/共享写者拒绝、原子保存、三处进程中断和间隙占用保三方 | 无；可恢复两段发布，启动须先平台恢复后core恢复 | agent/tasks/S068.md（a/b） |
 | S069 | Windows 手动释放与恢复 | W | S067、S068、S063 | done | `59985ea`、`c9b95a0`、`e542446`；集成 `7c763bf` | 真实租约+CFAPI+SQLite，Windows5/5含dirty/busy/跨await保护、VERSION_GONE、SQLITE_FULL13及进程81—83恢复；store80/client64+1/server40/HTTP1、clippy/fmt/生成一致通过 | 无；物理卷满盘与GC worker仍留后续卡 | agent/tasks/S069.md（a/b/c） |
 | S070 | Windows agent 进程与单实例 | W | S067、S068、S069、S064 | done | `e0200e3`、`f5ce872`、`97c0735`、`f376493`、`5fa3cba`、`daf2dc8`、`75e95b2`、`4e273fe`；集成 `89a0ebe` | 真实进程2/2含13断言（无GUI双向/原Op重启/冲突/namespace/杀进程Move恢复/SQLite全0/单实例/退出）；平台65/agent库8、core123/store50、迁移15、两端clippy | 无；IPC/管理及更广故障矩阵留S071/S072/S102 | agent/tasks/S070.md（a/b0/b3/b4/b5） |
-| S071 | Windows named pipe 传输与身份 | W | S070、S025 | todo | — | 未执行 | — | agent/tasks/S071.md（执行时创建） |
+| S071 | Windows named pipe 传输与身份 | W | S070、S025 | in_progress | `.worktrees/s071`，`feat/S071-windows-named-pipe`；基线 `873f306` | 专属 subagent 实施中，尚未验收 | — | agent/tasks/S071.md（执行时创建） |
 | S072 | 本机管理命令完整接入 | W | S071、S061、S064 | todo | — | 未执行 | — | agent/tasks/S072.md（执行时创建） |
 | S073 | Windows CLI 最小管理入口 | W | S072 | todo | — | 未执行 | — | agent/tasks/S073.md（执行时创建） |
 | S074 | 三台客户端基础互通 | X | S073、S052 | todo | — | 未执行 | — | agent/tasks/S074.md（执行时创建） |
-| S075 | Linux 在线管理 socket 与 CLI | L | S043、S044、S047、S048 | todo | — | 未执行 | — | agent/tasks/S075.md（执行时创建） |
+| S075 | Linux 在线管理 socket 与 CLI | L | S043、S044、S047、S048 | in_progress | `.worktrees/s075`，`feat/S075-linux-admin-socket`；基线 `873f306` | 专属 subagent 实施中，尚未验收 | — | agent/tasks/S075.md（执行时创建） |
 | S076 | 前端公共组件与两应用壳 | B | S005、S024、S025 | todo | — | 未执行 | — | agent/tasks/S076.md（执行时创建） |
 | S077 | Web 登录与会话管理 | B | S076、S043 | todo | — | 未执行 | — | agent/tasks/S077.md（执行时创建） |
 | S078 | Web Root 与服务健康页面 | B | S077、S044、S051 | todo | — | 未执行 | — | agent/tasks/S078.md（执行时创建） |
