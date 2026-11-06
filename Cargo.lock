@@ -2444,6 +2444,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaultsyncd-agent-core"
+version = "0.1.0"
+dependencies = [
+ "sqlx",
+ "tokio",
+ "vaultsyncd-client-store",
+ "vaultsyncd-domain",
+ "vaultsyncd-fs-common",
+ "vaultsyncd-planner",
+ "vaultsyncd-protocol",
+ "vaultsyncd-transfer",
+]
+
+[[package]]
 name = "vaultsyncd-client-store"
 version = "0.1.0"
 dependencies = [
