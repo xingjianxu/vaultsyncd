@@ -81,7 +81,12 @@ pub fn launch() -> io::Result<()> {
     if log.metadata()?.file_attributes() & 0x400 != 0 {
         return Err(io::Error::other("agent log must not be a reparse point"));
     }
-    Command::new(std::env::current_exe()?)
+    let executable = std::env::current_exe()?;
+    let agent = executable
+        .parent()
+        .ok_or_else(|| io::Error::other("installed program directory missing"))?
+        .join("vaultsyncd-agent.exe");
+    Command::new(agent)
         .arg("--config")
         .arg(config)
         .stdin(Stdio::null())
