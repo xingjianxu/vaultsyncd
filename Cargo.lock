@@ -5277,6 +5277,18 @@ dependencies = [
 [[package]]
 name = "vaultsyncd-windows-tests"
 version = "0.1.0"
+dependencies = [
+ "rand_core 0.6.4",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "vaultsyncd-domain",
+ "vaultsyncd-http-client",
+ "vaultsyncd-local-ipc",
+ "vaultsyncd-platform-windows",
+ "vaultsyncd-protocol",
+ "vaultsyncd-transfer",
+]
 
 [[package]]
 name = "vaultsyncd-xtask"
