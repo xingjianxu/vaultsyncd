@@ -702,6 +702,7 @@ mod tests {
                 "binding_rules_history".to_owned(),
                 "bindings".to_owned(),
                 "controlled_applies".to_owned(),
+                "controlled_releases".to_owned(),
                 "import_id_map".to_owned(),
                 "local_entries".to_owned(),
                 "local_intents".to_owned(),
