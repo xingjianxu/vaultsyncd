@@ -2236,3 +2236,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `server-store::version_leases`：同BEGIN IMMEDIATE核对固定版本与live对象，使用既有`object_leases`作为GC保护；0010请求关联记住固定输入，ID复用换输入409，失效/释放410；TTL120秒，acquire重放不延长，renew仅活跃，release幂等。活跃对象租约阻止collectable标记，GC仍按既有租约与引用集工作。
 - 服务端租约已提交后才检查对象可读和长度，失败503并保留有界保护，绝不返回可释放证明；客户端`LeaseEndpoint`精确校验Root/Entry/Version/hash/size/id/TTL/closed。调用方必须保留本地副本直到有效租约及持续平台保护均成立；传输成功不代表租约有效。
 - 平台释放与S063薄wrapper仍由S069-a/c交付；本子卡不冒充Windows原生或产品端到端完成。
+
+## S067 — CFAPI hydration 与传输/调度组装
+
+- `agent-core::engine::scheduler::{UserReads,UserReadGuard}` 由生产 `Scheduler::user_reads()` 提供，复用内容并发池、per-entry 排他及持久绑定门禁。`try_acquire(request,binding,entry)` 返回 guard/忙/明确拒绝，不写同步队列、基线或 committed。调用方有界等待且响应取消。
+- `apps/agent::bootstrap::{connect_hydration,HydrationConfig,PinnedVersion}` 真实装配 HTTP `ContentEndpoint<ReqwestTransport>`、SQLite `ClientStorePorts`、上述共享资源与 S066 `Adapter`。输入为已恢复 DB、认证客户端、Catalog、固定版本 size/SHA-256、独立内部stage目录、超时/块/在途上限。`HydrationCallbacks::register_version` 先登记不可变版本，再发布Catalog；同一版本改变事实或外来Root/Binding拒绝。在途请求持有原pin。
+- callback只入有界队列/置取消；独立runtime先整个固定版本下载/读回SHA-256验证，再按请求范围64KiB分段 `Reply::transfer`。错误、取消、超时不返回假字节，部分进度保留；`cancel_hydration`/真实 `CANCEL_FETCH_DATA` 共用token。取消通过内容端口返回执行器，必须先落已完成位图，不能直接drop整份下载future。`disconnect`停准入并取消，`wait_idle`供启动/退出围栏，CFAPI回执键和correlation始终取S066拥有副本。
+- `platform-windows::files::staging::StagingFile` 是内部目录的安全单文件 TempContent 实现：no-follow相对句柄、普通单链接、独占读写、写后sync、剩余容量检查；拒绝与同步Root重叠。已校验stage最多保留16个独占句柄供连续范围请求复用；未命中/重启重新核对整份摘要，关闭句柄不删除内容。只丢可重建暂存，用户完整缓存不自动回收。驻留在下载开始后保持partial，不凭HTTP下载完成改写baseline或清dirty，后续扫描证明完整驻留。
+- 状态查询 `HydrationStats` 分列成功供给、取消、实际OS取消回调、失败及字节；显式应用取消验证不能替代OS回调触发证明。S011原始build26300的OS取消触发限制继续保留。进程、凭据和启动恢复由S070组装。

@@ -3,6 +3,8 @@
 #[cfg(windows)]
 pub(crate) mod native;
 #[cfg(windows)]
+pub mod staging;
+#[cfg(windows)]
 pub use native::{NativeNames, RootHandle};
 
 /// Stable identity from FILE_ID_INFO, scoped to its volume.
