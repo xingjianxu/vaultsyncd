@@ -2217,3 +2217,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 `platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Root，必须先初始化 WinRT。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
 
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
+
+## S067 — CFAPI hydration 与传输/调度组装
+
+- `agent-core::engine::scheduler::{UserReads,UserReadGuard}` 由生产 `Scheduler::user_reads()` 提供，复用内容并发池、per-entry 排他及持久绑定门禁。`try_acquire(request,binding,entry)` 返回 guard/忙/明确拒绝，不写同步队列、基线或 committed。调用方有界等待且响应取消。
+- `apps/agent::bootstrap::{connect_hydration,HydrationConfig,PinnedVersion}` 真实装配 HTTP `ContentEndpoint<ReqwestTransport>`、SQLite `ClientStorePorts`、上述共享资源与 S066 `Adapter`。输入为已恢复 DB、认证客户端、Catalog、固定版本 size/SHA-256、独立内部stage目录、超时/块/在途上限。`HydrationCallbacks::register_version` 先登记不可变版本，再发布Catalog；同一版本改变事实或外来Root/Binding拒绝。在途请求持有原pin。
+- callback只入有界队列/置取消；独立runtime先整个固定版本下载/读回SHA-256验证，再按请求范围64KiB分段 `Reply::transfer`。错误、取消、超时不返回假字节，部分进度保留；`cancel_hydration`/真实 `CANCEL_FETCH_DATA` 共用token。取消通过内容端口返回执行器，必须先落已完成位图，不能直接drop整份下载future。`disconnect`停准入并取消，`wait_idle`供启动/退出围栏，CFAPI回执键和correlation始终取S066拥有副本。
+- `platform-windows::files::staging::StagingFile` 是内部目录的安全单文件 TempContent 实现：no-follow相对句柄、普通单链接、独占读写、写后sync、剩余容量检查；拒绝与同步Root重叠。已校验stage最多保留16个独占句柄供连续范围请求复用；未命中/重启重新核对整份摘要，关闭句柄不删除内容。只丢可重建暂存，用户完整缓存不自动回收。驻留在下载开始后保持partial，不凭HTTP下载完成改写baseline或清dirty，后续扫描证明完整驻留。
+- 状态查询 `HydrationStats` 分列成功供给、取消、实际OS取消回调、失败及字节；显式应用取消验证不能替代OS回调触发证明。S011原始build26300的OS取消触发限制继续保留。进程、凭据和启动恢复由S070组装。

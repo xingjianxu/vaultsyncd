@@ -1,0 +1,24 @@
+[package]
+name = "vaultsyncd-agent"
+description = "Windows agent application assembly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+vaultsyncd-agent-core = { path = "../../crates/agent-core" }
+vaultsyncd-client-store = { path = "../../crates/client-store" }
+vaultsyncd-domain = { path = "../../crates/domain" }
+vaultsyncd-http-client = { path = "../../crates/http-client" }
+vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
+vaultsyncd-transfer = { path = "../../crates/transfer" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+
+[dev-dependencies]
+vaultsyncd-fs-common = { path = "../../crates/fs-common" }
+vaultsyncd-protocol = { path = "../../crates/protocol" }
+
+[lints]
+workspace = true

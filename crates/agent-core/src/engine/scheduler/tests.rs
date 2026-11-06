@@ -833,3 +833,100 @@ async fn cancelling_before_first_dispatch_preserves_metadata_class_and_unknown_o
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn native_reads_share_content_slots_entry_exclusion_and_control_gate() {
+    let rig = Rig::new().await;
+    let mut scheduler = rig.scheduler();
+    scheduler.limits.content = 4;
+    let reads = scheduler.user_reads();
+    let background = QueuedOperation {
+        op: OpId::from_bytes([1; 16]),
+        binding: rig.binding,
+        entry: Some(EntryId::from_bytes([1; 16])),
+        kind: "apply_remote".into(),
+        baseline_revision: None,
+        baseline_version: None,
+        depends_on: None,
+        pinned_version: None,
+        attempts: 0,
+        last_error: None,
+    };
+    let slot = scheduler.claim(&background, Priority::Background).unwrap();
+    let a = reads
+        .try_acquire(
+            OpId::from_bytes([2; 16]),
+            rig.binding,
+            EntryId::from_bytes([2; 16]),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        reads
+            .try_acquire(
+                OpId::from_bytes([3; 16]),
+                rig.binding,
+                EntryId::from_bytes([2; 16])
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let b = reads
+        .try_acquire(
+            OpId::from_bytes([3; 16]),
+            rig.binding,
+            EntryId::from_bytes([3; 16]),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let c = reads
+        .try_acquire(
+            OpId::from_bytes([4; 16]),
+            rig.binding,
+            EntryId::from_bytes([4; 16]),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        reads
+            .try_acquire(
+                OpId::from_bytes([5; 16]),
+                rig.binding,
+                EntryId::from_bytes([5; 16])
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let cancel = a.cancellation().clone();
+    drop(a);
+    assert!(cancel.is_cancelled());
+    let d = reads
+        .try_acquire(
+            OpId::from_bytes([5; 16]),
+            rig.binding,
+            EntryId::from_bytes([5; 16]),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    drop((slot, b, c, d));
+    assert!(scheduler.active.lock().unwrap().tasks.is_empty());
+    assert!(rig.db.pool().acquire().await.is_ok());
+    rig.gate.closed.store(true, Ordering::SeqCst);
+    assert!(
+        reads
+            .try_acquire(
+                OpId::from_bytes([6; 16]),
+                rig.binding,
+                EntryId::from_bytes([6; 16])
+            )
+            .await
+            .is_err()
+    );
+    assert!(scheduler.status(rig.binding).await.unwrap().is_empty());
+}
