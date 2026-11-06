@@ -11,6 +11,7 @@ pub mod follow;
 pub mod hints;
 pub mod import;
 pub mod intents;
+pub mod reconcile;
 pub mod scan;
 
 pub use capture::{
@@ -24,7 +25,13 @@ pub use import::{
     ObserverPorts, PassClock, PassLimits, PassReport, PendingReason, ReviewReport,
 };
 pub use intents::{IntentError, IntentVerdict, OwnWriteIntent, OwnWriteLedger};
+pub use reconcile::{
+    DeleteRecord, HeldEntry, InvalidReconcileLimits, MissingEntry, MoveCandidate, MoveRecord,
+    ProtectedBatch, ProtectedDirectory, ProtectedEntry, ProtectionReason, ReconcileLimits,
+    ReconcileReport, pair_moves, protection_reason,
+};
 pub use scan::{
-    InconclusiveReason, ScanCompletion, ScanCursor, ScanLimits, ScanReport, ScannedFile,
-    SkipReason, SkippedEntry, Stability, StabilityTracker, StabilityWindow, scan_tree,
+    InconclusiveReason, ReadFailure, ScanCompletion, ScanCursor, ScanHealth, ScanLimits,
+    ScanReport, ScannedFile, SkipReason, SkippedEntry, Stability, StabilityTracker,
+    StabilityWindow, scan_tree,
 };
