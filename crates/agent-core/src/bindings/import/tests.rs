@@ -1141,6 +1141,14 @@ async fn committed_ack_maps_id_without_clearing_new_generation_and_invalid_ack_r
             .expect("旧 ACK"),
         crate::executor::upload::UploadCommitDisposition::StaleGeneration
     );
+    assert_eq!(
+        import
+            .store
+            .ack(BINDING, op_id(&item.op).expect("操作"), &result)
+            .await
+            .expect("重放旧 ACK"),
+        crate::executor::upload::UploadCommitDisposition::StaleGeneration
+    );
     let mut conn = database.pool().acquire().await.expect("连接");
     let local = entries::local_entry(&mut conn, BINDING, stable)
         .await
@@ -1236,5 +1244,8 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
     let mut cycle = root.clone();
     cycle.parent_id = Some(cycle.entry_id.clone());
     cycle.name = "cycle".to_owned();
-    assert!(remote_paths(&[root, cycle]).is_err());
+    assert!(remote_paths(&[root.clone(), cycle]).is_err());
+    let mut malformed_root = root;
+    malformed_root.version_id = Some(EntryId::from_bytes([0x99; 16]).to_string());
+    assert!(remote_paths(&[malformed_root]).is_err());
 }

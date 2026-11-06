@@ -222,6 +222,14 @@ async fn conflict_ack_keeps_both_stable_ids_and_dirty_state_in_one_durable_trans
             .is_err(),
         "不能猜冲突副本最终路径"
     );
+    assert!(
+        import
+            .store
+            .ack(BINDING, op_id(&item.op).expect("操作"), &result)
+            .await
+            .is_err(),
+        "重放也不能把未定位冲突当成功"
+    );
     drop(import);
     Arc::try_unwrap(database).expect("独占库").close().await;
     let database = Arc::new(

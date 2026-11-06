@@ -583,6 +583,9 @@ pub(super) fn remote_paths(
     if roots.len() != 1 || roots[0].kind != WireKind::Directory || !roots[0].name.is_empty() {
         return Err(invalid("快照必须有唯一合成根目录"));
     }
+    if roots[0].hash.is_some() || roots[0].size.is_some() || roots[0].version_id.is_some() {
+        return Err(invalid("合成根目录不得携带文件内容"));
+    }
     let mut paths = BTreeMap::new();
     for entry in entries.iter().filter(|entry| entry.parent_id.is_some()) {
         let mut names = vec![entry.name.clone()];

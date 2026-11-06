@@ -187,7 +187,26 @@ impl ImportStore {
             if &previous != result {
                 return Err(invalid("同一 OpId 收到不同 committed 结果"));
             }
-            return Ok(UploadCommitDisposition::Applied);
+            if result.conflict.is_some() {
+                return Err(invalid("冲突 ACK 已保留，需取得最终路径后恢复"));
+            }
+            let stable = entry_id(
+                result
+                    .entry_id
+                    .as_deref()
+                    .ok_or_else(|| invalid("已保存 ACK 缺 EntryId"))?,
+            )?;
+            let current = entries::local_entry(&mut tx, binding, stable)
+                .await
+                .map_err(db)?;
+            let expected = generation(local.generation)?;
+            return Ok(
+                if current.is_some_and(|entry| entry.generation == expected) {
+                    UploadCommitDisposition::Applied
+                } else {
+                    UploadCommitDisposition::StaleGeneration
+                },
+            );
         }
         let committed_entry = result
             .conflict
@@ -529,9 +548,11 @@ async fn remap_local(
     };
     local.entry = stable;
     entries::put_local(tx, binding, &local).await.map_err(db)?;
-    entries::remove_local(tx, binding, temporary)
-        .await
-        .map_err(db)?;
+    if temporary != stable {
+        entries::remove_local(tx, binding, temporary)
+            .await
+            .map_err(db)?;
+    }
     Ok(disposition)
 }
 async fn put_remote(
