@@ -201,7 +201,9 @@ def main():
             page.get_by_role("button",name="文件与历史",exact=True).click()
             expect(page.get_by_role("button",name="下一页",exact=True)).to_be_visible()
             page.get_by_role("button",name="下一页",exact=True).click()
-            expect(page.get_by_role("table")).to_be_visible()
+            expect(page.get_by_text(entries()[100]["name"],exact=True)).to_be_visible()
+            expect(page.get_by_role("button",name="下一页",exact=True)).not_to_be_visible()
+            page.evaluate("window.scrollTo(0,0)")
             page.screenshot(path=str(RUN/"recovery.png"),full_page=False)
             assert page.evaluate("localStorage.length")==0
             context.close();browser.close()

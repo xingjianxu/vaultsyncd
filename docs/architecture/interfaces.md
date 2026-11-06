@@ -2366,3 +2366,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `ManagedRoot{root_id,path,health,reason,next_step,root_seq,collection}`：每次请求按注册 `RootSnapshot` 现场复核挂载/身份/权限，失败 health=unavailable、collection=blocked，绝不推导删除；root_seq仅已提交序号。路径仅在该管理通道暴露。
 - `RootCollection{state,examined,pending,detail}` 来自同一 `ObserverRuntime` 的最近真实 `PassReport`；状态闭集 not_scanned/scanning/pending/complete/blocked，数量为十进制字符串。进程重启后无历史完成观测；只有完整扫描、初始采集完成、无pending/扫描故障才显示complete，不代表客户端同步。Root读取/意图读取/扫描失败会使旧完成状态失效。
 - `AllowedBases::paths()` 仅供管理员配置枚举；`RootContext::with_observer` 由入口装配。Web `RootsPanel` 使用生成API与BrowserAuth；显式刷新，注册不自动重放，网络/5xx结果未知时要求核对清单。`tests/web/roots-browser.py` 使用锁定Playwright及独立run_id btrfs服务，实际bind挂载故障与恢复均验收，测试挂载最终已卸载。
+
+## S079 Web 历史、冲突与回收站
+
+- 新增授权 `GET /v1/roots/{root}/recovery` 与 `/conflicts`，均返回 `RecoveryPage`，固定每页100项，规范 `after` 身份游标；复用 Root 授权，不暴露服务端绝对路径。recovery 返回活跃条目身份/相对路径/当前版本；conflicts 只接受持久映射里的活跃副本，不按名称猜测。关闭提示没有远端删除动作。
+- `RecoveryItem` 新增可选 `expires_at`（UTC Unix秒文本、最早可回收下限）与 `conflict_source`（原条目身份）。历史按 superseded+30天，删除后不少于delete+30天；回收站使用实际 expires_at。当前活跃版本省略到期字段。旧客户端可忽略新可选字段，无迁移。
+- Web `features/history/recovery.ts::RestoreSession` 按用户/Root 保存标签页 sessionStorage 原请求（无凭据），先保存再调用；未知/pending 不另起操作。resume 先 GET 原Op，404 才 POST 原请求，同 OpId/device/epoch/CAS/version；committed 才查询 recovery 的实际当前相对路径。不会把 pending/网络失败显示成恢复成功。
+- `#/recovery` 复用 BrowserAuth。入口按 Root 选择文件历史、冲突和回收站；按服务端返回游标翻页，到期禁用恢复；原Op持久到同标签页刷新，跨标签/清除存储不承诺自动找回。Restore 的最终安全检查继续属于服务端。
+- 验收：`pnpm --filter @vaultsyncd/web test` 含恢复会话故障单测；`nix develop .#web-tests --command python3 tests/web/recovery-browser.py` 使用真实服务/Chromium/btrfs，丢提交响应后刷新原Op核对、同名另名恢复/目标保留、历史落盘与真实分页。pending 由注入单测覆盖，不宣称该浏览器脚本制造了真实后端pending。
