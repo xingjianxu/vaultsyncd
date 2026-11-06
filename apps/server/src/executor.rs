@@ -143,9 +143,64 @@ impl ExecutorContext {
         self.handle(root, &record.absolute_path)
     }
 
+    /// 读条目的当前 revision 与内容摘要（冲突副本判定用；目录没有摘要）。
+    ///
+    /// # Errors
+    ///
+    /// 条目不存在/越权或存储失败。
+    pub async fn head_summary(
+        &self,
+        owner: UserId,
+        root: RootId,
+        entry: EntryId,
+    ) -> Result<(Revision, Option<ContentDigest>), OperationFailure> {
+        let mut conn = self.pool_conn().await?;
+        let record = store_entries::entry_in_scope(&mut conn, owner, entry)
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?
+            .ok_or_else(|| OperationFailure::BaseMismatch {
+                detail: format!("条目 {entry} 不存在或已删除"),
+            })?;
+        if record.root != root || record.deleted_at.is_some() {
+            return Err(OperationFailure::BaseMismatch {
+                detail: "条目不属于该 Root 或已删除".to_owned(),
+            });
+        }
+        let digest = store_versions::current_version(&mut conn, owner, root, entry)
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?
+            .map(|version| ContentDigest::from_bytes(version.object_hash));
+        Ok((record.revision, digest))
+    }
+
     /// Root 提交串行化门（命名空间/删除命令与 put 共用同一把门）。
     pub fn commit_gate(&self) -> &tokio::sync::Mutex<RootCommitGate> {
-        &self.gate
+        self.observer
+            .as_ref()
+            .map_or(&self.gate, |observer| observer.commit_gate())
+    }
+
+    /// 在共享提交门内核对尚未收尾的意图；失败关闭而不是继续破坏性写入。
+    ///
+    /// # Errors
+    ///
+    /// 无法读取或存在未完成意图时返回 NEEDS_RECOVERY。
+    pub async fn ensure_no_unfinished(
+        &self,
+        owner: UserId,
+        root: RootId,
+    ) -> Result<(), OperationFailure> {
+        let mut conn = self.pool_conn().await?;
+        let intents = store_intents::unfinished_intents(&mut conn, owner, root)
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?;
+        if intents.is_empty() {
+            Ok(())
+        } else {
+            Err(storage_error(
+                "Root 有未完成的文件系统意图，暂停写入并等待恢复",
+            ))
+        }
     }
 
     /// 登记一条 `pending` 操作行；已存在时报错（调用方应先查重放）。
@@ -342,9 +397,9 @@ impl ExecutorContext {
             key,
             local_generation: command.local_generation,
         };
-        let mut gate = self.gate.lock().await;
+        let mut gate = self.commit_gate().lock().await;
+        self.ensure_no_unfinished(owner, key.root).await?;
         let outcome = commit_put(&mut gate, &mut store, &mut log, &mut target, at, &request).await;
-        drop(gate);
 
         match outcome {
             Ok(committed) => {
@@ -384,6 +439,15 @@ impl ExecutorContext {
         let Ok(mut tx) = self.begin_write().await else {
             return;
         };
+        // 已经写入意图的失败不是稳定拒绝：保留 pending，恢复才有资格给出最终结论。
+        // 无法读取证据同样失败关闭，不能将不确定结果写成 rejected。
+        let Ok(unfinished) = store_intents::unfinished_intents(&mut tx, owner, key.root).await
+        else {
+            return;
+        };
+        if !unfinished.is_empty() {
+            return;
+        }
         let _ = store_operations::reject_operation(&mut tx, owner, &key, &json).await;
         let _ = tx.commit().await;
     }
@@ -453,6 +517,31 @@ fn target_failure(error: TargetError) -> OperationFailure {
             StorageFailure::NoSpace | StorageFailure::QuotaExceeded => OperationFailure::NoSpace,
             other => storage_error(&format!("{stage}/{}：{detail}", other.as_str())),
         },
+    }
+}
+
+/// 观察目标现场并构造 `TargetBefore`（恢复与 put 共用同一份现场复核语义）。
+///
+/// # Errors
+///
+/// 目标不可读（权限/挂载/IO）时返回存储失败，不把它当成“不存在”。
+pub fn observe_before(
+    target: &mut WorkTreeTarget,
+    target_path: &str,
+    entry: EntryId,
+    revision: Revision,
+) -> Result<TargetBefore, OperationFailure> {
+    let observation = target.observe(target_path).map_err(target_failure)?;
+    match observation {
+        TargetObservation::Absent => Ok(TargetBefore::Absent),
+        TargetObservation::Present { identity, digest } => {
+            Ok(TargetBefore::Present(TargetSnapshot {
+                entry,
+                revision: revision.get(),
+                digest,
+                identity,
+            }))
+        }
     }
 }
 
@@ -551,6 +640,14 @@ fn rejection_result(failure: &OperationFailure) -> OperationResult {
 pub struct SqlIntentLog {
     database: Database,
     owner: UserId,
+}
+
+impl SqlIntentLog {
+    /// 以数据库与 Root 所属账号装配（内容 put 与历史版本恢复共用）。
+    #[must_use]
+    pub fn new(database: Database, owner: UserId) -> Self {
+        Self { database, owner }
+    }
 }
 
 fn intent_error(error: store_intents::IntentError) -> IntentLogError {

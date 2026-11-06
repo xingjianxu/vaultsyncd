@@ -46,6 +46,7 @@ use crate::auth::AuthContext;
 use crate::commands::{self, CreateCommand, DeleteCommand, MoveCommand};
 use crate::executor::{ExecutorContext, PutCommand};
 use crate::uploads::{Caller, FromIdentity, bad_request, denied, error_response, parse_identity};
+use crate::{conflict_ops, restore_ops};
 use vaultsyncd_server_store::uploads as store_uploads;
 
 /// 操作端点共享的进程内状态。
@@ -163,19 +164,6 @@ pub async fn submit(
         Ok(at) => at,
         Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(root_id)),
     };
-    if request.kind == OperationKind::Restore {
-        warn!(
-            request_id = %caller.request_id,
-            root = %root_id.to_hex(),
-            kind = request.kind.as_text(),
-            "恢复的存储/内容适配器尚未装配，命令未被受理"
-        );
-        return failure_response(
-            &caller.request_id,
-            &OperationFailure::ExecutorUnavailable,
-            root_id,
-        );
-    }
     if request.kind != OperationKind::PutContent {
         return execute_namespace_command(
             &context,
@@ -212,6 +200,20 @@ pub async fn submit(
         Ok(content) => content,
         Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
     };
+    // 过期基线 + 不同内容 + preserve_both：把迟到分支提交为冲突副本，不覆盖服务器 head（T02）。
+    if request.conflict_policy == operations::ConflictPolicy::PreserveBoth
+        && let Ok((head_revision, head_digest)) = context
+            .executor
+            .head_summary(caller.principal.user_id, root_id, entry)
+            .await
+        && head_revision != revision
+        && head_digest != Some(content.digest)
+    {
+        return execute_conflict_command(
+            &context, &caller, root_id, key, digest, &request, entry, content, at,
+        )
+        .await;
+    }
     let command = PutCommand {
         device: request.device,
         op: request.op,
@@ -295,6 +297,109 @@ async fn finalized_content(
         ContentDigest::from_bytes(record.hash),
         record.expected_size,
     ))
+}
+
+/// 把过期基线上的迟到内容提交成冲突副本（`preserve_both`）。
+#[allow(clippy::too_many_arguments)]
+async fn execute_conflict_command(
+    context: &Arc<OperationsContext>,
+    caller: &Caller,
+    root: RootId,
+    key: store_operations::OperationKey,
+    digest: store_operations::RequestDigest,
+    request: &OperationRequest,
+    entry: EntryId,
+    content: vaultsyncd_server_core::objects::ExpectedContent,
+    at: vaultsyncd_domain::version::UtcTimestamp,
+) -> Response {
+    let owner = caller.principal.user_id;
+    let path = match commands::path_of(&context.executor, owner, entry).await {
+        Ok(path) => path,
+        Err(failure) => return failure_response(&caller.request_id, &failure, root),
+    };
+    let target_path = match conflict_path(&path, key.device, key.op, at) {
+        Ok(path) => path,
+        Err(failure) => return failure_response(&caller.request_id, &failure, root),
+    };
+    let core_key = vaultsyncd_server_core::ports::conflict_store::OperationKey {
+        root: key.root,
+        device: key.device,
+        op: key.op,
+    };
+    let core_digest = vaultsyncd_server_core::ports::conflict_store::RequestDigest::from_bytes(
+        *digest.as_bytes(),
+    );
+    let command = conflict_ops::ConflictCommand {
+        entry,
+        base_revision: request
+            .base_revision
+            .unwrap_or(vaultsyncd_domain::version::Revision::ZERO),
+        content,
+        target_path,
+    };
+    match conflict_ops::execute_conflict(
+        &context.executor,
+        owner,
+        core_key,
+        core_digest,
+        &command,
+        request.expected_epoch,
+        at,
+    )
+    .await
+    {
+        Ok(conflict) => {
+            let result = OperationResult {
+                op_id: request.op.to_hex(),
+                state: WireState::Committed,
+                replayed: Some(false),
+                conflict: Some(vaultsyncd_protocol::generated::OperationConflict {
+                    conflict_entry_id: conflict.sibling.to_hex(),
+                    entry_id: conflict.source.to_hex(),
+                    reason: vaultsyncd_protocol::generated::ConflictReason::StaleBase,
+                }),
+                echo_local_generation: request.local_generation.map(|value| value.to_string()),
+                entry_id: Some(conflict.source.to_hex()),
+                error_code: None,
+                error_message: None,
+                revision: Some(conflict.revision.to_string()),
+                root_seq: Some(conflict.seq.to_string()),
+                version_id: None,
+            };
+            (StatusCode::OK, Json(result)).into_response()
+        }
+        Err(failure) => failure_response(&caller.request_id, &failure, root),
+    }
+}
+
+/// 复用规划器唯一的命名实现，按跨端名称预算保留扩展名并截断原名干。
+fn conflict_path(
+    path: &str,
+    device: vaultsyncd_domain::ids::DeviceId,
+    op: vaultsyncd_domain::ids::OpId,
+    at: vaultsyncd_domain::version::UtcTimestamp,
+) -> Result<String, OperationFailure> {
+    use vaultsyncd_planner::conflict::{
+        ConflictNameRequest, NameBudget, ShortIdLen, conflict_entry_path,
+    };
+    let original = vaultsyncd_fs_common::path::RelativePath::parse(path).map_err(|error| {
+        OperationFailure::InvalidName {
+            detail: error.to_string(),
+        }
+    })?;
+    let device_hex = device.to_hex();
+    let request = ConflictNameRequest {
+        device_label: &device_hex[..8],
+        op_id: op,
+        server_time: at,
+        budget: NameBudget::CROSS_PLATFORM,
+        short_id_len: ShortIdLen::DEFAULT,
+    };
+    conflict_entry_path(&original, &request)
+        .map(|path| path.to_string())
+        .map_err(|error| OperationFailure::InvalidName {
+            detail: error.to_string(),
+        })
 }
 
 /// create/move/delete 的端点分支：翻译成命令、调用执行器、把结果写进 `OperationResult`。
@@ -417,14 +522,98 @@ async fn execute_namespace_command(
                     request_id,
                     request,
                     record.entry,
-                    None,
+                    // 删除返回“清单里的 revision”（= 请求基线）：回收站恢复按它比较并写。
+                    Some(revision),
                     Some(record.seq),
                     None,
                 ),
                 Err(failure) => failure_response(request_id, &failure, root),
             }
         }
-        OperationKind::PutContent | OperationKind::Restore => {
+        OperationKind::Restore => {
+            let core_key = vaultsyncd_server_core::ports::conflict_store::OperationKey {
+                root: key.root,
+                device: key.device,
+                op: key.op,
+            };
+            let core_digest =
+                vaultsyncd_server_core::ports::conflict_store::RequestDigest::from_bytes(
+                    *digest.as_bytes(),
+                );
+            let (Some(entry), Some(revision)) = (request.entry, request.base_revision) else {
+                return failure_response(
+                    request_id,
+                    &OperationFailure::InvalidRequest {
+                        detail: "restore 缺少 entry_id/base_revision".to_owned(),
+                    },
+                    root,
+                );
+            };
+            match request.version {
+                Some(version) => {
+                    let path = match commands::path_of(&context.executor, owner, entry).await {
+                        Ok(path) => path,
+                        Err(failure) => return failure_response(request_id, &failure, root),
+                    };
+                    let command = restore_ops::VersionRestoreCommand {
+                        entry,
+                        version,
+                        base_revision: revision,
+                        target_path: path,
+                    };
+                    match restore_ops::execute_version_restore(
+                        &context.executor,
+                        owner,
+                        core_key,
+                        core_digest,
+                        &command,
+                        request.expected_epoch,
+                        at,
+                    )
+                    .await
+                    {
+                        Ok(restored) => committed_result(
+                            request_id,
+                            request,
+                            restored.result.entry,
+                            Some(restored.result.revision),
+                            Some(restored.result.seq),
+                            Some(restored.result.version),
+                        ),
+                        Err(failure) => failure_response(request_id, &failure, root),
+                    }
+                }
+                None => {
+                    let command = restore_ops::TrashRestoreCommand {
+                        entry,
+                        base_revision: revision,
+                        parent: request.parent,
+                    };
+                    match restore_ops::execute_trash_restore(
+                        &context.executor,
+                        owner,
+                        core_key,
+                        core_digest,
+                        &command,
+                        request.expected_epoch,
+                        at,
+                    )
+                    .await
+                    {
+                        Ok(restored) => committed_result(
+                            request_id,
+                            request,
+                            restored.result.entry,
+                            Some(restored.result.revision),
+                            Some(restored.result.seq),
+                            None,
+                        ),
+                        Err(failure) => failure_response(request_id, &failure, root),
+                    }
+                }
+            }
+        }
+        OperationKind::PutContent => {
             failure_response(request_id, &OperationFailure::ExecutorUnavailable, root)
         }
     }

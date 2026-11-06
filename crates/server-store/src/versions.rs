@@ -1319,3 +1319,83 @@ mod tests {
         database.close().await;
     }
 }
+
+/// 一个版本的完整事实（恢复与历史展示用）：内容、批次与批次提交时间。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VersionFacts {
+    /// 所属条目。
+    pub entry: EntryId,
+    /// 内容哈希。
+    pub object_hash: ObjectHash,
+    /// 内容字节数。
+    pub size: u64,
+    /// 记录该版本的批次。
+    pub created_seq: RootSeq,
+    /// 该批次的提交时间（版本创建时间）。
+    pub created_at: UtcTimestamp,
+    /// 被取代的时间；`None` 表示它仍是当前版本。
+    pub superseded_at: Option<UtcTimestamp>,
+}
+
+/// 按版本身份读一条版本事实（含所属批次时间）；不存在或越权返回 `None`。
+///
+/// # Errors
+///
+/// 存储失败或行无法还原。
+pub async fn version_facts(
+    conn: &mut sqlx::SqliteConnection,
+    owner: UserId,
+    root: RootId,
+    version: VersionId,
+) -> Result<Option<VersionFacts>, VersionError> {
+    let row = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64, i64, i64, Option<i64>)>(
+        "SELECT v.entry_id, v.object_hash, v.size, v.created_seq, c.created_at, v.superseded_at \
+         FROM versions v JOIN roots r ON r.id = v.root_id \
+         JOIN changes c ON c.root_id = v.root_id AND c.seq = v.created_seq \
+         WHERE v.root_id = ?1 AND v.id = ?2 AND r.owner_id = ?3",
+    )
+    .bind(root.as_bytes().as_slice())
+    .bind(version.as_bytes().as_slice())
+    .bind(owner.as_bytes().as_slice())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(VersionError::Db)?;
+    let Some((entry, hash, size, created_seq, created_at, superseded_at)) = row else {
+        return Ok(None);
+    };
+    let entry = EntryId::from_bytes(
+        entry
+            .as_slice()
+            .try_into()
+            .map_err(|_| VersionError::MalformedRow { column: "entry_id" })?,
+    );
+    let hash: ObjectHash = hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| VersionError::MalformedRow {
+            column: "object_hash",
+        })?;
+    let size = u64::try_from(size).map_err(|_| VersionError::MalformedRow { column: "size" })?;
+    let created_at =
+        UtcTimestamp::from_db_integer(created_at).map_err(|_| VersionError::MalformedRow {
+            column: "created_at",
+        })?;
+    let superseded_at = superseded_at
+        .map(UtcTimestamp::from_db_integer)
+        .transpose()
+        .map_err(|_| VersionError::MalformedRow {
+            column: "superseded_at",
+        })?;
+    Ok(Some(VersionFacts {
+        entry,
+        object_hash: hash,
+        size,
+        created_seq: RootSeq::from_db_integer(created_seq).map_err(|_| {
+            VersionError::MalformedRow {
+                column: "created_seq",
+            }
+        })?,
+        created_at,
+        superseded_at,
+    }))
+}

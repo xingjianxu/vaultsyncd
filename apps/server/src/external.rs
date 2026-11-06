@@ -202,7 +202,7 @@ impl ExternalAdoptStore for SqlExternalStore {
                         actual: record.revision,
                     });
                 }
-                (entry, expected_revision)
+                (entry, expected_revision.next().map_err(store_error)?)
             }
         };
 
@@ -512,6 +512,11 @@ impl ObserverRuntime {
         }
     }
 
+    /// HTTP 命令和观察器共用的提交门；锁顺序固定为 gate → roots。
+    pub fn commit_gate(&self) -> &tokio::sync::Mutex<RootCommitGate> {
+        &self.gate
+    }
+
     /// 登记一次服务端自己的写入（设备 + inode + 内容），避免把发布本身采纳成外部修改。
     ///
     /// 观察器还没有为该 Root 建立时忽略：那一轮还没开始，之后的完整扫描会用库里的内容判断
@@ -559,12 +564,34 @@ impl ObserverRuntime {
             }
         };
         let mut summary = PassSummary::default();
+        let mut gate = self.gate.lock().await;
         let mut states = self.roots.lock().await;
         let live: std::collections::BTreeSet<RootId> = roots.iter().map(|root| root.id).collect();
         states.retain(|root, _| live.contains(root));
         for root in roots {
             if root.health != store_roots::RootHealth::Healthy {
                 continue;
+            }
+            // 恢复之前观察器也不能把一次尚未提交的服务端发布误采纳为新的外部事实。
+            let unfinished = match self.database.pool().acquire().await {
+                Ok(mut conn) => {
+                    vaultsyncd_server_store::intents::unfinished_intents(
+                        &mut conn, root.owner, root.id,
+                    )
+                    .await
+                }
+                Err(error) => {
+                    warn!(root = %root.id, error = %error, "无法读取意图，暂停观察采纳");
+                    continue;
+                }
+            };
+            match unfinished {
+                Ok(intents) if intents.is_empty() => {}
+                Ok(_) => continue,
+                Err(error) => {
+                    warn!(root = %root.id, error = %error, "无法读取意图，暂停观察采纳");
+                    continue;
+                }
             }
             summary.roots += 1;
             let state = match states.get_mut(&root.id) {
@@ -595,7 +622,6 @@ impl ObserverRuntime {
             let mut work = LinuxWorkTree::new(Arc::clone(&state.handle));
             let mut blobs = LinuxObjectPort::new(Arc::clone(&state.handle), layout.root());
             let mut store = SqlExternalStore::new(self.database.clone(), root.owner);
-            let mut gate = self.gate.lock().await;
             let Ok(limits) = PassLimits::new(
                 ScanLimits::new(self.config.max_scan_entries)
                     .unwrap_or_else(|_| ScanLimits::new(1024).expect("非零")),
@@ -616,7 +642,6 @@ impl ObserverRuntime {
                 store: &mut store,
             };
             let report = state.observer.run_pass(&mut ports, limits, clock).await;
-            drop(gate);
             summary.adopted += report
                 .outcomes
                 .iter()

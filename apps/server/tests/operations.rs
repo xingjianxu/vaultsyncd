@@ -446,14 +446,14 @@ fn recorded_result() -> OperationResult {
 }
 
 #[tokio::test]
-async fn new_command_is_rejected_without_writing_state() {
+async fn unmet_command_premise_is_rejected_without_writing_state() {
     let fixture = Fixture::new("executor-missing");
     let seeds = seed_accounts(&fixture).await;
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
 
-    // create/move/delete/restore 的存储与工作目录适配器仍未装配；put 已由 S052 接上真实执行链路，
-    // 因此这里用 create 断言“未装配命令仍显式 503 且不写状态”。
+    // 五类命令都已装配执行器；这里用一个不存在的父目录断言“命令前提不成立时明确失败、
+    // 不登记操作行、不推进 RootSeq”，而不是伪造 202 或默认成功。
     let body = serde_json::to_string(&wire_create(EPOCH)).expect("序列化请求");
     let (status, bytes) = app
         .call(send(
@@ -463,10 +463,9 @@ async fn new_command_is_rejected_without_writing_state() {
             Some(body),
         ))
         .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{}", text(&bytes));
+    assert_eq!(status, StatusCode::CONFLICT, "{}", text(&bytes));
     let rejected = envelope(&bytes);
-    assert_eq!(rejected.error.code, ErrorCode::ServiceNotReady);
-    assert!(rejected.error.retryable, "服务端恢复后重试可能成功");
+    assert_eq!(rejected.error.code, ErrorCode::BaseMismatch);
     assert!(
         !rejected.error.request_id.is_empty(),
         "错误必须保留 request_id"

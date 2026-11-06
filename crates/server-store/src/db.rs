@@ -683,13 +683,13 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(target_schema_version(), 7, "内嵌迁移应当是 0001—0007 七版");
+        assert_eq!(target_schema_version(), 8, "内嵌迁移应当是 0001—0008 八版");
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 7);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 8);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -700,7 +700,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            7
+            8
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -712,7 +712,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 7);
+        assert_eq!(reopened.schema_version(), 8);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1033,17 +1033,17 @@ mod tests {
         insert_metadata(&old, "server_id", "abcd").await;
         old.close().await;
 
-        // 0008 成功、0009 失败：迁移集只完成了前半段。
+        // 0009 成功、0010 失败：迁移集只完成了前半段。
         let partial_dir = dir.migrations(&[
             (BASELINE_FILE, BASELINE_SQL),
             (NAMESPACE_FILE, NAMESPACE_SQL),
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0008_probe.sql",
+                "0009_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
-            ("0009_broken.sql", "CREATE TABLE broken ("),
+            ("0010_broken.sql", "CREATE TABLE broken ("),
         ]);
         let partial = migrator(&partial_dir).await;
         let error = Database::open_with(&path, &partial)
@@ -1066,7 +1066,7 @@ mod tests {
             matches!(
                 refused,
                 DbError::SchemaTooNew {
-                    found: 8,
+                    found: 9,
                     supported: 5
                 }
             ),
@@ -1077,12 +1077,12 @@ mod tests {
                 .await
                 .expect_err("本二进制同样不得写更新过的 schema")
                 .to_string()
-                .contains("schema 版本 8"),
+                .contains("schema 版本 9"),
             "错误信息应给出实际版本"
         );
 
-        // 拒绝写入时不改动库：0008 的 probe 表与记账仍在，数据完好。`PRAGMA user_version`
-        // 由 SQLx 记“成功应用的迁移个数”（5 个），而版本门禁看的是迁移记账里的最大版本（0008）。
+        // 拒绝写入时不改动库：0009 的 probe 表与记账仍在，数据完好。`PRAGMA user_version`
+        // 由 SQLx 记“成功应用的迁移个数”（5 个），而版本门禁看的是迁移记账里的最大版本（0009）。
         assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
         assert_eq!(
             metadata(&path).await,
@@ -1119,7 +1119,7 @@ mod tests {
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0008_probe.sql",
+                "0009_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]);
@@ -1135,13 +1135,13 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 8,
-                    supported: 7
+                    found: 9,
+                    supported: 8
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 8);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 9);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "abcd".to_owned())]

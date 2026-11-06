@@ -87,7 +87,9 @@ fn intent_error(error: store_intents::IntentError) -> IntentLogError {
     }
 }
 
-fn phase_of(phase: FsIntentPhase) -> PutPhase {
+/// `fs_intents` 阶段 → 核心阶段（恢复适配器也要用）。
+#[must_use]
+pub fn phase_text(phase: FsIntentPhase) -> PutPhase {
     match phase {
         FsIntentPhase::Prepared => PutPhase::Prepared,
         FsIntentPhase::Published => PutPhase::Published,
@@ -127,7 +129,7 @@ fn namespace_intent_of(record: FsIntent) -> Result<NamespaceIntent, IntentLogErr
         op,
         before,
         after,
-        phase: phase_of(record.phase),
+        phase: phase_text(record.phase),
     })
 }
 
@@ -152,7 +154,7 @@ fn delete_intent_of(record: FsIntent) -> Result<DeleteIntent, IntentLogError> {
         root: record.root,
         before,
         after,
-        phase: phase_of(record.phase),
+        phase: phase_text(record.phase),
     })
 }
 
@@ -725,7 +727,7 @@ impl NamespaceCommitStore for SqlNamespaceStore {
             .await
             .map_err(namespace_store_error)?
             .ok_or(NamespaceStoreError::EntryMissing { entry })?;
-        if record.deleted_at.is_some() {
+        if record.root != root || record.deleted_at.is_some() {
             return Err(NamespaceStoreError::EntryMissing { entry });
         }
         // 端口类型里 parent 不是可选：合成根条目用自身当“没有父目录”的哨兵。唯一读 parent 的
@@ -759,7 +761,7 @@ impl NamespaceCommitStore for SqlNamespaceStore {
             })?;
         if intent.phase != FsIntentPhase::Published {
             return Err(NamespaceStoreError::IllegalIntentTransition {
-                from: phase_of(intent.phase),
+                from: phase_text(intent.phase),
                 to: PutPhase::Finalized,
             });
         }
@@ -1010,7 +1012,7 @@ impl DeleteStore for SqlDeleteStore {
             })?;
         if intent.phase != FsIntentPhase::Published {
             return Err(TrashStoreError::IllegalIntentTransition {
-                from: phase_of(intent.phase),
+                from: phase_text(intent.phase),
                 to: PutPhase::Finalized,
             });
         }
@@ -1030,6 +1032,8 @@ impl DeleteStore for SqlDeleteStore {
             "op_id": self.key.op.to_hex(),
             "state": "committed",
             "entry_id": apply.entry.to_hex(),
+            "revision": apply.trash.iter().find(|item| item.entry == apply.entry)
+                .map(|item| item.revision.to_string()),
         })
         .to_string();
         let committed = store_operations::commit_operation(
@@ -1118,7 +1122,7 @@ async fn collect_subtree(
         .await
         .map_err(trash_store_error)?
         .ok_or(TrashStoreError::EntryMissing { entry })?;
-    if record.deleted_at.is_some() {
+    if record.root != root || record.deleted_at.is_some() {
         return Err(TrashStoreError::EntryMissing { entry });
     }
     out.push(SubtreeEntry {
@@ -1244,6 +1248,19 @@ pub fn map_core_failure(
     }
 }
 
+/// 条目在 Root 内的相对路径（恢复命令也要用）。
+///
+/// # Errors
+///
+/// 条目不存在/越权或存储失败。
+pub async fn path_of(
+    executor: &crate::executor::ExecutorContext,
+    owner: UserId,
+    entry: EntryId,
+) -> Result<String, OperationFailure> {
+    entry_path(executor, owner, entry).await
+}
+
 async fn entry_path(
     executor: &crate::executor::ExecutorContext,
     owner: UserId,
@@ -1329,6 +1346,7 @@ pub async fn execute_create(
         },
     );
     let mut gate = executor.commit_gate().lock().await;
+    executor.ensure_no_unfinished(owner, key.root).await?;
     let outcome = vaultsyncd_server_core::commit::namespace::commit_namespace(
         &mut gate, &mut store, &mut log, &mut ns, at, &request,
     )
@@ -1398,6 +1416,7 @@ pub async fn execute_move(
         },
     );
     let mut gate = executor.commit_gate().lock().await;
+    executor.ensure_no_unfinished(owner, key.root).await?;
     let outcome = vaultsyncd_server_core::commit::namespace::commit_namespace(
         &mut gate, &mut store, &mut log, &mut ns, at, &request,
     )
@@ -1451,6 +1470,7 @@ pub async fn execute_delete(
         path,
     };
     let mut gate = executor.commit_gate().lock().await;
+    executor.ensure_no_unfinished(owner, key.root).await?;
     let outcome = vaultsyncd_server_core::commit::delete::commit_delete(
         &mut gate, &mut store, &mut log, &mut ns, at, &request,
     )
