@@ -1,5 +1,6 @@
 param([switch]$Worker)
 $ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 if($Worker){
   $agent=$null;$desktop=$null;$counter=0
   $pref=Join-Path $env:LOCALAPPDATA 'vaultsyncd/desktop-notifications.json'

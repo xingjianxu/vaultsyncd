@@ -166,6 +166,23 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
             .code,
         LocalIpcErrorCode::UnsupportedVersion
     );
+    request.ipc_version.minor = 3;
+    request.command.name = CommandName::ClaimNotification;
+    request.command.parameters = Some(CommandParameters {
+        notification_key: Some("root:11111111111111111111111111111111:MOUNT_FAILED".into()),
+        notification_generation: Some("1".into()),
+        ..Default::default()
+    });
+    assert_eq!(
+        endpoint
+            .request(&request)
+            .await
+            .unwrap()
+            .error
+            .unwrap()
+            .code,
+        LocalIpcErrorCode::UnsupportedVersion
+    );
     server.shutdown().await.unwrap();
     db.pool().close().await;
     std::fs::remove_dir_all(path).unwrap();

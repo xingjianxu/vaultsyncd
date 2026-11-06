@@ -98,3 +98,74 @@ pub(crate) async fn sync(
     }
     Ok(startup.values().chain(cycles.values()).cloned().collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn one_binding_success_cannot_resolve_another_bindings_root_cause() {
+        let path = std::env::temp_dir().join(format!(
+            "s083-aggregate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let db = Database::open(path.join("client.sqlite")).await.unwrap();
+        let config:AgentConfig=serde_json::from_value(serde_json::json!({"server":{"id":"11".repeat(16),"url":"https://example.invalid"},"device_id":"22".repeat(16),"state_dir":"C:/test/state","poll_millis":500,"bindings":[{"id":"33".repeat(16),"root_id":"55".repeat(16),"path":"C:/a","cache":"C:/ca","mode":"full"},{"id":"44".repeat(16),"root_id":"55".repeat(16),"path":"C:/b","cache":"C:/cb","mode":"full"}]})).unwrap();
+        let make = |binding_id: String| Problem {
+            binding_id,
+            code: "INSUFFICIENT_STORAGE".into(),
+            entry_id: None,
+            local_data: "retained".into(),
+            next_step: "free space".into(),
+            path: None,
+            problem_id: "cycle".into(),
+            reason: "storage unavailable".into(),
+            retryable: false,
+        };
+        let a = BindingId::from_bytes([0x33; 16]);
+        let b = BindingId::from_bytes([0x44; 16]);
+        let mut cycles = HashMap::from([(a, make(a.to_string())), (b, make(b.to_string()))]);
+        sync(&db, &config, &HashMap::new(), &cycles).await.unwrap();
+        let n = crate::management_notices::list(&db)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(n.state, "active");
+        assert_eq!(n.generation, "1");
+        cycles.remove(&a);
+        sync(&db, &config, &HashMap::new(), &cycles).await.unwrap();
+        assert_eq!(
+            crate::management_notices::list(&db).await.unwrap()[0].state,
+            "active"
+        );
+        cycles.clear();
+        sync(&db, &config, &HashMap::new(), &cycles).await.unwrap();
+        assert_eq!(
+            crate::management_notices::list(&db).await.unwrap()[0].state,
+            "resolved"
+        );
+        let mut offline = make(a.to_string());
+        offline.code = "RATE_LIMITED".into();
+        cycles.insert(a, offline);
+        sync(&db, &config, &HashMap::new(), &cycles).await.unwrap();
+        assert_eq!(crate::management_notices::list(&db).await.unwrap().len(), 1);
+        cycles.insert(b, make(b.to_string()));
+        sync(&db, &config, &HashMap::new(), &cycles).await.unwrap();
+        assert_eq!(
+            crate::management_notices::list(&db).await.unwrap()[0].generation,
+            "2"
+        );
+        db.close().await;
+        for _ in 0..100 {
+            if std::fs::remove_dir_all(&path).is_ok() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("closed test database remains locked");
+    }
+}

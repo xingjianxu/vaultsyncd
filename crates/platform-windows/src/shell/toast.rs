@@ -68,7 +68,7 @@ fn shortcut() -> io::Result<()> {
                 )
                 .map_err(win)?;
             let identity = properties.GetValue(&PKEY_AppUserModel_ID).map_err(win)?;
-            if BSTR::try_from(&identity).map_err(win)?.to_string() != APP_ID {
+            if BSTR::try_from(&identity).map_err(win)? != APP_ID {
                 return Err(io::Error::other("shortcut belongs to another application"));
             }
         }

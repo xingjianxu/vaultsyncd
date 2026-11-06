@@ -2429,3 +2429,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 每页最多100项，排序/游标为相对路径SHA256前16字节的规范hex，碰撞明确失败；返回next_cursor续读。实时分页不承诺跨页一致快照，刷新回第一页，界面搜索明确仅当前页。未读/失败不显示伪造空清单；旧页保留但动作禁用，慢响应不覆盖另一绑定页。
 - 桌面固定桥增加`agent_list_files/agent_download_entry/agent_release_entry/agent_list_problems/agent_retry_problem/agent_set_mode/agent_detach_binding/agent_export_recovery`，AppManifest和主窗口capability逐项授权，无通用任意命令/文件/SQL入口。副作用OpId在失败后保留供同动作重试。释放必须确认本地移除/远端保留/离线不可读；绑定管理提供模式、恢复导出和保留数据解绑的独立确认，完成只认agent返回的实际计数/报告。问题重试仅对agent标记retryable项目启用，仍调用既有执行器。
 - `run-native-files-ui.sh`在真Windows WebView操作页面，用只编译于native-acceptance的固定样本句柄/写入控制验证busy/dirty双重保护。实际下载、释放/重新下载、模式、pending不绿、导出dirty/未导入新文件hash、解绑后服务器原字节与本地数据均保留已验证。正式无测试feature构建清理两项测试自动权限，包含测试fixture/控制命令的二进制拒绝作为正式证据。VM保持在线，测试服务/隧道与本run进程清理。
+
+## S083 桌面历史恢复与系统通知
+
+- 本机IPC **1.4**新增 `claim_notification(notification_key,notification_generation)`，1.3及之前明确拒绝该新命令；状态返回 `management.notices`（Root/原因/active或resolved/十进制代际/严重度/是否已领取）。client迁移0012增加generation与delivery_claimed，旧库原已读、次数及恢复状态保留，有迁移前备份，旧writer拒绝新schema。恢复后复发代际递增并重置claim，原GUI旧代际不能领取新通知；claim不等于已读或显示成功。
+- 严重问题复用agent-core问题端口，按Root和原因聚合全部绑定之后才解决；普通网络失败仅offline状态。真实提交冲突ACK和收到conflict变化只产生一次持久原因，现有冲突副本不会被开关/清除系统通知移除。问题快照包含持久问题和运行期投影；暂停不能证明故障已恢复。
+- 桌面新增固定 `agent_list_history/agent_list_trash/agent_restore_entry` 与通知设置命令，AppManifest及capability同步最小授权，无任意HTTP/数据库入口。历史/回收站分页含到期下限和冲突来源；恢复输入先持久到agent，再GET原Op，404才POST原请求，只有committed成功。服务端仍核对Root/权限/CAS，同名恢复保留现目标；返回授权快照内实际相对位置，位置尚未取得时明确待核对。UI未知/pending保留原操作身份供核对，不显示已恢复。
+- WinRT Toast固定AUMID `org.vaultsyncd.desktop`，只创建/更新本应用StartMenu快捷方式，拒绝同名他应用和symlink。先原子claim再尝试Show，保证同一活动代际最多尝试一次；Windows禁用/失败时问题仍完整，页面明确投递失败。布尔开关单独保存在用户应用设置，无凭据。微软[桌面AUMID要求](https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid)及[发送示例](https://learn.microsoft.com/en-us/windows/win32/shell/quickstart-sending-desktop-toast)为注册依据；首次未打包应用Setting可能缺行的[平台问题记录](https://github.com/MicrosoftDocs/windows-dev-docs/issues/1431)对应0x80070490，仅该特定错误允许实际Show，其余错误不默认成功。
+- `run-native-notifications.sh` 使用真实Windows WebView及系统History API验证中心记录、清中心/开关不清问题、重复报告与进程重启不风暴、恢复和复发。磁盘满/挂载/冲突的这组输入由离线核心端口夹具产生，只证明问题投影与真实OS投递，不冒充实际卷故障；真实冲突/恢复另由Linux btrfs服务与Windowsagent真壳验证。所有报告/fixture/Toast历史测试桥只在native-acceptance编译，正式构建清理全部四项测试权限。

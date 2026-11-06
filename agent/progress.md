@@ -105,7 +105,7 @@
 | S080 | Tauri Windows 壳与最小 IPC 桥 | W | S076、S072 | done | `692e18f`（实现）及本卡后续修复/交接提交；基线 `da3a368`，`feat/S080-tauri-bridge` | 真 Windows session1 WebView：真实 agent 状态、4 类恶意命令拒绝、GUI 退出 agent 存活；宿主五成员类型/桌面构建/SSR、两端 clippy、Windows 正式与验收构建、生成一致性通过 | 无；连接/绑定管理留 S081，安装签名尚未验证 | agent/tasks/S080.md（+a/b） |
 | S081 | 桌面连接与 Binding 页面 | W | S080 | done | `94dc1af`及最终交接提交；基线af9ea0a，任务树s081交父立即合master清理 | 真WebView表单证书/路径负例、登录、首合并、暂停恢复、GUI退出后上传与真实字节通过；IPC原生3/3；两端clippy、五成员typecheck/build/SSR/生成一致通过 | 无；管理员提供ServerId，生产HTTPS/安装归后续卡 | agent/tasks/S081.md（a/b） |
 | S082 | 桌面文件状态与手动操作 | W | S081、S069、S073 | done | `713d907`及最终验收交接；基线f5d9f8a，任务树s082交父立即合master清理 | 真WebView busy/dirty双重拒绝、下载释放/模式/导出hash/保留解绑通过；IPC原生3/3，Rust相关31/TS11、两端clippy、typecheck/build/SSR/生成一致通过 | 无；实时分页非原子快照，生产HTTPS/大规模/更广重试矩阵留后续卡 | agent/tasks/S082.md（a/b/c） |
-| S083 | 桌面历史与系统通知 | W | S082、S079、S064 | todo | — | 未执行 | — | agent/tasks/S083.md（执行时创建） |
+| S083 | 桌面历史与系统通知 | W | S082、S079、S064 | done | ecd05fa、58188c4、7c77b25；最终验收见任务HEAD | 核心53+124、native agent12、真实Toast中心与授权恢复/hash、边界/clippy/正式构建通过 | 满盘/挂载为离线core投影夹具；待父立即合并归档清理 | agent/tasks/S083.md |
 | S084 | 客户端未上传数据恢复演练 | W | S083、S064 | todo | — | 未执行 | — | agent/tasks/S084.md（执行时创建） |
 | S085 | 历史保留与对象引用标记 | L | S040、S029 | done | `ae6a8c7`；基线 `b5be427`；任务树 `.worktrees/s085` | core/store 新增 GC 3+3 项，完整 lib 311/84 通过；clippy/fmt通过；业务时间保留30天与活动引用标记 | 无；pending/备份保守保护整Root，删除协调留S086 | agent/tasks/S085.md |
 | S086 | GC 删除协调与临时清理 | L | S085、S037 | done | `7c79ae1`、`accc684`；基线 `8088615`；分支 `feat/S086-gc-sweep` | 专属target：core313/store88/server89＋集成36，共526/0；btrfs GC8项含3边界SIGKILL/FULL/越界保护；三包clippy/fmt通过 | 无；孤立未知暂存保守保留，备份复用同一对象门 | agent/tasks/S086.md（+a/b） |
