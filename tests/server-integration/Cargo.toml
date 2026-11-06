@@ -1,14 +1,16 @@
 [package]
 name = "vaultsyncd-server-tests"
-description = "服务端集成测试（design §5.8）：提交与启动恢复的崩溃注入验收（S037）"
+description = "服务端集成测试（design §5.8）：崩溃注入（S037）与真实 HTTP 闭环（S052）"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 # 只放 Linux 服务端的集成验收：用真实文件的 inode/替换语义模拟工作目录发布，并在每个持久化边界
-# 强杀提交子进程（design §21.2、T23）。它不进 default-members：`cargo test --locked` 只跑可移植
-# 核心，本包按需用 `cargo test --locked -p vaultsyncd-server-tests` 执行。
+# 强杀提交子进程（design §21.2、T23）；S052 起还在这里启动真实监听的服务端进程内实例，走完整
+# HTTP 闭环（登录 → Root → 上传 → finalize → 提交 → 快照 → 下载 → 外部修改 → changes）与满盘
+# 故障。它不进 default-members：`cargo test --locked` 只跑可移植核心，本包按需用
+# `cargo test --locked -p vaultsyncd-server-tests` 执行。
 [lints]
 workspace = true
 
@@ -16,3 +18,15 @@ workspace = true
 vaultsyncd-domain = { path = "../../crates/domain" }
 vaultsyncd-server-core = { path = "../../crates/server-core" }
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[dev-dependencies]
+# 真实 HTTP 闭环：在进程内启动 `vaultsyncd-server` 的 router 与监听，客户端走真实 TCP。
+rand_core = { version = "0.6", features = ["getrandom"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
+vaultsyncd-platform-linux-server = { path = "../../crates/platform-linux-server" }
+vaultsyncd-protocol = { path = "../../crates/protocol" }
+vaultsyncd-server = { path = "../../apps/server" }
+vaultsyncd-server-store = { path = "../../crates/server-store" }

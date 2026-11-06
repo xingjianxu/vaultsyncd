@@ -528,6 +528,12 @@ impl RootHandle {
         self.with_verified_dir(relative, RestrictedDir::list_entries)
     }
 
+    /// Root 句柄自身的目录（已核对过的挂载内句柄，供发布等需要目录句柄的适配器使用）。
+    #[must_use]
+    pub fn root_dir(&self) -> &RestrictedDir {
+        &self.dir
+    }
+
     /// Root 句柄自身的 `/proc/self/fd/N` 路径（见 [`RestrictedDir::proc_fd_path`]）。
     #[must_use]
     pub fn proc_fd_path(&self) -> std::path::PathBuf {

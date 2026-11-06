@@ -1,0 +1,10 @@
+{
+  "upload_id": "33333333333333333333333333333333",
+  "root_id": "11111111111111111111111111111111",
+  "chunk_size": "4194304",
+  "part_count": "3",
+  "total_size": "9007199254740993",
+  "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expires_at": "1760007200",
+  "state": "open"
+}
