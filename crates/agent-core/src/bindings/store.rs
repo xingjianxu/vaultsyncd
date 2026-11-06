@@ -38,6 +38,9 @@ impl ImportStore {
             .await
             .map_err(db)
     }
+    pub async fn ensure_not_resyncing(&self, binding: BindingId) -> Result<(), PortError> {
+        crate::recovery::resync::ensure_unblocked(&self.database, binding).await
+    }
     pub async fn ensure_fresh(&self, binding: BindingId) -> Result<(), PortError> {
         let mut tx = self.database.begin_write().await.map_err(db)?;
         ensure_fresh(&mut tx, binding).await?;

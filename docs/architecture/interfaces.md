@@ -2066,3 +2066,26 @@ baseline；S057 应用批次不回写更旧 revision，同 revision 不同事实
 另覆盖旧 clean 同大小新内容、二次修改/创建、暂存篡改、操作复用、未知/旧意图、旧 ACK/新 dirty、
 首次安装收尾与事件 received/applied 游标。测试平台端口仅 cfg(test)，不提供生产 Windows 使用保护。
 生产平台、目录/保留移动、按需占位及事件 DTO 解码仍由相应适配/后续卡接线。
+
+## crates/agent-core — 旧游标与服务器代际重建（S060）
+
+路径：`recovery/resync.rs`、`recovery/resync/store.rs`；客户端迁移 `0006_resync.sql`（`binding_resyncs`、
+`resync_quarantined_ops`，0001—0005 未改）。与 S058 首次导入是两个入口：已有旧基线的绑定只能走本入口，
+首次导入 `FirstImport::run`、事件接收、`ClientStorePorts` 取队列/入队及 `ControlledApply` 都经
+`ensure_unblocked/ensure_operation` 读取持久围栏，重建未完成时拒绝。无旧基线的新绑定调用重建报错。
+
+| 接口 | 契约 |
+| --- | --- |
+| `Resync::new(db, ImportLocal, ControlledLocal, ImportSnapshot)` | 只用健康根准入/完整扫描与 S059 真实内容核对；不调用 preserve/install，不做 Linux 产品客户端。 |
+| `Resync::run(binding, ResyncReason)` | 认证协议错误触发。`CursorExpired`（同 epoch 历史被回收）或 `ServerRollback{new_epoch}`（备份恢复，相同 seq 属新 epoch，高水位可低于旧值）。第一笔事务写围栏、保存旧 baseline/remote/事件，旧队列操作永久隔离。 |
+| `Resync::resume_pending(binding)` / `latest_report(binding)` | 从 SQLite 续接未完成重建（重新真实核对，不信任旧 clean）/ 只读最近持久结果，不重扫。 |
+| `ResyncReport{prepared, complete, items}` | `prepared` 不是 applied。有任何 `RecoveryCandidate/Reconcile/Review` 时 `complete=false`，游标、旧基线、队列不动。 |
+| `Disposition` | `Current`、`RetiredClean`（远端已无的历史 clean，保留本地、不重传）、`RetiredAbsent`（本地/远端皆无，不推导 Delete）、`RecoveryCandidate`（脏缺失，或 `ServerRollback` 下远端缺失、本地完整副本失去确认；不复用原 EntryId）、`Reconcile`、`Review`（unknown/占位/来源不明/同路径新身份）。 |
+
+结果对照（同一份本地内容、远端均缺失）：`CursorExpired` → `RetiredClean`，可 complete；`ServerRollback` →
+`RecoveryCandidate`，不 complete，需用户/后续恢复入口处理，二者都不上传复活、不重放旧 Delete。
+发布（`store::finish`）单事务：核对每条本地行与分类时 `LocalStamp`（generation/dirty/residency/指纹/身份）完全一致，
+否则保留围栏；通过后同事务写新 remote/baseline、server_epoch、received_seq=applied_seq=快照 high_water、
+quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按身份而非路径比较，不折叠。
+
+限制：生产端口（Windows CFAPI、HTTP 快照分页）、恢复候选的处理 UI/入口、`resume` 调度由后续卡接入；测试磁盘端口仅 cfg(test)。
