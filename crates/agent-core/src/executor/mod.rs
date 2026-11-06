@@ -178,6 +178,23 @@ pub enum ActionOutcome {
     },
 }
 
+/// 动作错误携带的类型化调度证据；不解析诊断字符串。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FailureScheduling {
+    /// 沿用错误码的恢复类别。
+    #[default]
+    ByCode,
+    /// 网络、超时或远端服务暂不可用；服务端等待是下界。
+    Unavailable {
+        /// 服务端 Retry-After。
+        retry_after: Option<std::time::Duration>,
+    },
+    /// 活动动作协作取消，不累加失败次数。
+    Cancelled,
+    /// 本地权限失败可低频复查；HTTP403禁止使用此分类。
+    LocalPermission,
+}
+
 /// 动作失败：错误码决定能否自动重试（[`ErrorCode::class`]），详情只用于诊断。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionFailure {
@@ -185,6 +202,8 @@ pub struct ActionFailure {
     pub code: ErrorCode,
     /// 面向诊断的原因；按数据处理，不执行其中内容。
     pub detail: String,
+    /// 保留底层端口的重试/取消事实，供持久调度器消费。
+    pub scheduling: FailureScheduling,
 }
 
 impl ActionFailure {
@@ -194,7 +213,14 @@ impl ActionFailure {
         Self {
             code,
             detail: detail.into(),
+            scheduling: FailureScheduling::ByCode,
         }
+    }
+    /// 附加底层已分类的调度证据，不改变稳定错误码。
+    #[must_use]
+    pub fn with_scheduling(mut self, scheduling: FailureScheduling) -> Self {
+        self.scheduling = scheduling;
+        self
     }
 }
 

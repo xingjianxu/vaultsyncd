@@ -281,7 +281,7 @@ pub struct Executor<H> {
     retry: RetryPolicy,
     /// 本轮进程内的退避到期时间。
     ///
-    /// 到期时间只跨“同一次进程内的多次 `run`”，不写数据库：把退避跨重启持久化属 S062 的调度卡
+    /// 到期时间只跨“同一次进程内的多次 `run`”，不写数据库：跨重启持久化由 `engine::scheduler::Scheduler` 提供
     /// （design §13.3“退避带 jitter，上限和取消持久化”）。这里保留它，避免调用方每轮立刻重试导致
     /// 在极短时间内把有界的尝试次数烧光。
     not_before: Mutex<HashMap<OpId, UtcTimestamp>>,
