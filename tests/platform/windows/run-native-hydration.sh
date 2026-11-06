@@ -14,7 +14,7 @@ artifact_dir="$root/artifacts/S067"
 mkdir -p "$artifact_dir"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin test --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent \
-    --no-run --message-format=json > "$artifact_dir/build.json"
+    --lib --no-run --message-format=json > "$artifact_dir/build.json"
 built=$(python3 - "$artifact_dir/build.json" <<'PY'
 import json, sys
 for line in open(sys.argv[1]):

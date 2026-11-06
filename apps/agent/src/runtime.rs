@@ -267,6 +267,8 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
                 return Err(error("platform publication requires recovery"));
             }
         }
+        recover_releases(&db, &binding.path, id, root, &client).await?;
+        crate::namespace::recover(&local, &recovery_connection).await?;
         let recovered = ControlledApply::new(db.clone(), local.clone())
             .recover(id)
             .await?;
@@ -278,7 +280,6 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
                 .map_err(error)?;
         }
         // Release recovery is per persisted target/version and runs before any new scheduler work.
-        recover_releases(&db, &binding.path, id, root, &client).await?;
         let remote = Arc::new(Remote {
             client: client.clone(),
             binding: id,
@@ -558,6 +559,16 @@ async fn recover_releases(
     root: RootId,
     client: &ApiClient<ReqwestTransport>,
 ) -> Result<(), PortError> {
+    let pending: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM controlled_releases WHERE binding_id=? AND completed=0)",
+    )
+    .bind(binding.as_bytes().as_slice())
+    .fetch_one(db.pool())
+    .await
+    .map_err(error)?;
+    if !pending {
+        return Ok(());
+    }
     let specs =
         vaultsyncd_agent_core::executor::release::ManualRelease::pending_specs(db.clone(), binding)
             .await?;

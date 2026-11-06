@@ -326,7 +326,6 @@ impl Adapter {
         digest: [u8; 32],
         size: u64,
     ) -> io::Result<EntryMetadata> {
-        use std::os::windows::fs::FileExt;
         self.check_identity(id)?;
         self.root.with_parent(path, |parent, name| {
             let _ = (parent, name);
@@ -356,7 +355,7 @@ impl Adapter {
             let mut at = 0;
             while at < size {
                 let mut b = vec![0; (size - at).min(1024 * 1024) as usize];
-                let n = file.seek_read(&mut b, at)?;
+                let n = crate::files::controlled::read_at(file, &mut b, at)?;
                 if n == 0 {
                     return Err(io::Error::other("short adoption read"));
                 }
@@ -615,47 +614,8 @@ unsafe extern "system" {
         overlapped: *mut c_void,
     ) -> i32;
 }
-#[repr(C)]
-#[derive(Default)]
-struct IoStatus {
-    status: usize,
-    information: usize,
-}
-#[link(name = "ntdll")]
-unsafe extern "system" {
-    fn NtSetInformationFile(
-        handle: Handle,
-        status: *mut IoStatus,
-        info: *const c_void,
-        size: u32,
-        class: i32,
-    ) -> i32;
-    fn RtlNtStatusToDosError(status: i32) -> u32;
-}
 fn rename(file: &File, parent: &File, name: &str) -> io::Result<()> {
-    let name: Vec<u16> = name.encode_utf16().collect();
-    // FILE_RENAME_INFO: DWORD flags, HANDLE RootDirectory at 8, DWORD FileNameLength at 16, name at 20.
-    let len = 20 + name.len() * 2;
-    let mut buffer = vec![0u64; len.div_ceil(8)];
-    let p = buffer.as_mut_ptr().cast::<u8>();
-    unsafe {
-        std::ptr::write_unaligned(p.add(8).cast::<Handle>(), parent.as_raw_handle());
-        std::ptr::write_unaligned(p.add(16).cast::<u32>(), (name.len() * 2) as u32);
-        std::ptr::copy_nonoverlapping(name.as_ptr().cast::<u8>(), p.add(20), name.len() * 2);
-        let status = NtSetInformationFile(
-            file.as_raw_handle(),
-            &mut IoStatus::default(),
-            p.cast(),
-            len as u32,
-            10,
-        );
-        if status < 0 {
-            return Err(io::Error::from_raw_os_error(
-                RtlNtStatusToDosError(status) as i32
-            ));
-        }
-    }
-    Ok(())
+    crate::files::controlled::rename(file, parent, name, 0)
 }
 pub(crate) fn register(path: &Path, catalog: &Catalog) -> io::Result<()> {
     let name: Vec<u16> = "vaultsyncd\0".encode_utf16().collect();

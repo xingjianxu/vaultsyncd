@@ -684,6 +684,38 @@ impl Worker {
                 .and_then(|m| m.cloud.as_ref())
                 .is_some_and(|c| c.on_disk == 0)
         {
+            let mut conn = local.db.pool().acquire().await.map_err(error)?;
+            let previous = entries::local_entry(&mut conn, local.binding, after.entry)
+                .await
+                .map_err(error)?
+                .ok_or_else(|| error("placeholder local state missing"))?;
+            drop(conn);
+            let previous_version = before
+                .as_ref()
+                .and_then(|b| b.content_version)
+                .ok_or_else(|| error("placeholder baseline version missing"))?;
+            let previous_size: i64 = sqlx::query_scalar(
+                "SELECT size FROM agent_versions WHERE binding_id=? AND version_id=?",
+            )
+            .bind(local.binding.as_bytes().as_slice())
+            .bind(previous_version.as_bytes().as_slice())
+            .fetch_one(local.db.pool())
+            .await
+            .map_err(error)?;
+            if previous.dirty != Dirty::Clean
+                || meta.as_ref().map_err(error)?.size != previous_size as u64
+                || meta
+                    .as_ref()
+                    .map_err(error)?
+                    .cloud
+                    .as_ref()
+                    .is_none_or(|c| c.modified != 0)
+            {
+                return Err(PortError::rejected(
+                    "LOCAL_CONTENT_PENDING",
+                    "placeholder content changed since baseline",
+                ));
+            }
             let changed = {
                 let adapter = self.importer.adapter.lock().map_err(error)?;
                 let catalog = adapter.catalog();
@@ -722,7 +754,7 @@ impl Worker {
                 local.binding,
                 &LocalEntry {
                     entry: after.entry,
-                    generation: Generation::ZERO,
+                    generation: previous.generation,
                     dirty: Dirty::Clean,
                     residency: Residency::MetadataOnly,
                     fingerprint: Some(fixed.digest.to_vec()),
@@ -798,10 +830,24 @@ impl Worker {
     }
 }
 fn failure(e: PortError) -> ActionFailure {
-    ActionFailure::new(
-        vaultsyncd_domain::error::ErrorCode::NeedsRecovery,
-        e.to_string(),
-    )
+    use vaultsyncd_agent_core::executor::FailureScheduling;
+    use vaultsyncd_domain::error::ErrorCode;
+    let (code, scheduling) = match &e {
+        PortError::Unavailable { retry_after, .. } => (
+            ErrorCode::RateLimited,
+            FailureScheduling::Unavailable {
+                retry_after: *retry_after,
+            },
+        ),
+        PortError::Cancelled => (ErrorCode::RateLimited, FailureScheduling::Cancelled),
+        PortError::ReauthRequired { .. } => (ErrorCode::AuthExpired, FailureScheduling::ByCode),
+        PortError::Rejected { code, .. } => (
+            ErrorCode::from_code(code).unwrap_or(ErrorCode::NeedsRecovery),
+            FailureScheduling::ByCode,
+        ),
+        _ => (ErrorCode::NeedsRecovery, FailureScheduling::ByCode),
+    };
+    ActionFailure::new(code, e.to_string()).with_scheduling(scheduling)
 }
 impl ActionHandler for Worker {
     fn plan_intent<'a>(

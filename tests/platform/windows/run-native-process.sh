@@ -54,12 +54,14 @@ PY
 install -m 0644 "$built" "$artifact_dir/s070-process-tests.exe"
 host_hash=$(sha256sum "$artifact_dir/s070-process-tests.exe" | awk '{print $1}')
 fixture_hash=$(sha256sum "$artifact_dir/guest-fixture.json" | awk '{print $1}')
+cleanup_allowlist=$(printf '%s' "${VAULTSYNCD_PROCESS_CLEANUP_ALLOWLIST:-[]}" | base64 -w0)
 cat > "$artifact_dir/guest-process.ps1" <<'PS'
-param([string]$ExpectedHash,[string]$FixtureHash,[switch]$Worker)
+param([string]$ExpectedHash,[string]$FixtureHash,[string]$CleanupAllowlist,[switch]$Worker)
 $ErrorActionPreference='Stop'
 $exe=Join-Path $PSScriptRoot 's070-process-tests.exe'
 $fixture=Join-Path $PSScriptRoot 'guest-fixture.json'
 if ($Worker) {
+    $env:VAULTSYNCD_PROCESS_CLEANUP_ALLOWLIST=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CleanupAllowlist))
     $env:VAULTSYNCD_PROCESS_FIXTURE=$fixture
     $env:VAULTSYNCD_AGENT_EXE=Join-Path $PSScriptRoot 'vaultsyncd-agent.exe'
     try {
@@ -83,7 +85,7 @@ if ((Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Fixtu
 Write-Output "guest_test_sha256 $ExpectedHash"
 Write-Output ('guest_agent_sha256 '+(Get-FileHash (Join-Path $PSScriptRoot 'vaultsyncd-agent.exe') -Algorithm SHA256).Hash.ToLowerInvariant())
 $task='vaultsyncd-s070-process-'+[Guid]::NewGuid().ToString('N')
-$action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker"
+$action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker -CleanupAllowlist $CleanupAllowlist"
 $principal=New-ScheduledTaskPrincipal -UserId 'Quickemu' -LogonType Interactive -RunLevel Limited
 try {
     Register-ScheduledTask -TaskName $task -Action $action -Principal $principal | Out-Null
@@ -98,7 +100,7 @@ PS
 guest_dir="C:/vaultsyncd-lab/s070-driver-$$"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir' | Out-Null\""
 GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
-guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-process.ps1 -ExpectedHash $host_hash -FixtureHash $fixture_hash" | tee "$artifact_dir/native-tests.log"
+guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-process.ps1 -ExpectedHash $host_hash -FixtureHash $fixture_hash -CleanupAllowlist $cleanup_allowlist" | tee "$artifact_dir/native-tests.log"
 guest_ssh "powershell -NoProfile -Command \"Remove-Item -LiteralPath '$guest_dir' -Recurse -Force\""
 echo "MATCH s070-process-tests.exe $host_hash"
 echo "ARTIFACTS $artifact_dir"
