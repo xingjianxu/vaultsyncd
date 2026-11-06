@@ -27,13 +27,13 @@ def main():
             '-o','UserKnownHostsFile='+str(VM/'known_hosts'),'-i',str(VM/'id_ed25519')]
     ssh=['ssh',*common,'-p',str(meta['ssh_port']),'ubuntu@127.0.0.1']
     scp=['scp',*common,'-P',str(meta['ssh_port'])]
-    archive=EVIDENCE/'current-arm64-image.tar'
+    archive=EVIDENCE/('arm64-image-'+str(os.getpid())+'.tar')
     subprocess.run(['podman','save','--format','docker-archive','-o',archive,IMAGE],check=True)
     script=Path(__file__).with_name('test-container.py')
     subprocess.run([*ssh,'mkdir -p /home/ubuntu/s098; sudo -n mkdir -p /data/s098-acceptance'],check=True)
     subprocess.run([*scp,str(archive),str(script),'ubuntu@127.0.0.1:/home/ubuntu/s098/'],check=True)
     with (VM/'current-image-load.log').open('w') as log:
-        subprocess.run([*ssh,'sudo -n podman load -i /home/ubuntu/s098/current-arm64-image.tar'],check=True,stdout=log,stderr=subprocess.STDOUT,timeout=240)
+        subprocess.run([*ssh,'sudo -n podman load -i /home/ubuntu/s098/'+archive.name],check=True,stdout=log,stderr=subprocess.STDOUT,timeout=240)
     password=secrets.token_urlsafe(24)  # Retained only in these two process memories.
     command='sudo -n env VAULTSYNCD_TEST_EXTERNAL_BROWSER=stdio VAULTSYNCD_TEST_PASSWORD_STDIN=1 VAULTSYNCD_TEST_ISOLATED_VM=1 python3 /home/ubuntu/s098/test-container.py '+IMAGE+' arm64 /data/s098-acceptance'
     report=[]

@@ -2537,3 +2537,5 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 - 共享preflight.py原JSON CLI保持；新增TOML配置/显式state入口，server和init在写DB前执行，真实btrfs/CoW/权限与backup删除选项不放宽。Compose预存在bind/create_host_path:false、非root/只读/无capability；普通systemd显式白名单写路径，均不自动格式化/改Root权限。
 - mounts/raw O_DIRECTORY/O_NOFOLLOW使用目标Linux UAPI（aarch64分别040000/0100000，x86_64为0200000/0400000），IPC与RestrictedDir共用；强制openat2与逐段回退的真实ARM64拒绝边界已通过。测试临时state显式0700，不以umask规避生产私有目录要求。无wire、数据库格式或版本变化。
 - OCI格式转Docker镜像曾真实丢Healthcheck，构建与传递固定Docker格式并比较转移前后配置，不把缺失健康检查当成功。Ubuntu ARM64存储完整链使用专属全系统TCG内核；QEMU-user btrfs ioctl失败保留，未替代原生能力证明。详细操作见docs/operations/linux.md；最终验收/资源清理以S098交接为准。
+
+S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查前返回该FD实际root ID；256不是推断的子卷ID。Ubuntu6.8非特权实际新子卷/嵌套检测及备份链通过，所有来源均不可用仍拒绝。Podman兼容API实测忽略create_host_path:false，因此部署标准入口为deploy/compose/run.py，先核显式存在源再创建资源，服务自身仍执行完整存储预检。镜像构建--offline要求缓存的base架构/精确digest及全部.deb SHA，缺失失败；最终同源09双架构离线镜像及完整Ubuntu运行通过。普通unit源67与09仅镜像构建脚本不同，所有实际服务/Web/库/preflight文件逐SHA相同；JSON旧消费者预检字节亦相同，明确来源组合见curated矩阵。没有协议/持久格式变化，不把TCG证据说成原生性能。

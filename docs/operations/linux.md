@@ -42,3 +42,6 @@ nix develop .#portable-tests --command python3 packaging/linux/container/build.p
 ## 验收与限制
 
 S098 使用独立 run_id 的 btrfs loop 数据、Ubuntu容器及专属 ARM64 全系统 TCG 客体，不改现有 trial/Windows 或主机正式服务。QEMU-user 对 btrfs ioctl 的真实失败被保留，未当作运行成功；ARM64 存储验收必须来自完整 Ubuntu ARM64 内核，不能以交叉编译/help 代替。TCG 证据不代表原生性能。具体完成矩阵、源 commit、包/镜像摘要及清理结果见 `agent/tasks/S098.md` 与 curated artifacts。
+
+
+S098最终实测：产品0.1.1、发行源09d73f9双架构便携包/离线镜像在Ubuntu24.04通过server/admin/Web、overlay拒绝、btrfs bind上传与固定内容下载、备份源与归档分别验证、release和重启幂等；Compose必须使用上述run.py入口，实际缺源拒绝。ARM64另以普通Ubuntu原样systemd unit通过备份/重启/Chromium，服务payload与最终发行逐文件相同（测试源67，差异仅镜像构建脚本）。两处实际目标兼容修复为ARM64目录UAPI位和旧内核INO_LOOKUP的固定根inode查询模式；无capability例外。37份curated元数据及截图见artifacts/S098，敏感/数据盘在外部私有run目录离线保留，专属VM和临时binfmt已停止/移除。没有改主机正式配置或Windows VM。
