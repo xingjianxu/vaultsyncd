@@ -26,6 +26,7 @@ struct Hub {
     instance: String,
     connection: watch::Receiver<ConnectionInfo>,
     problems: watch::Receiver<Vec<Problem>>,
+    offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 }
 
 pub(crate) fn start(
@@ -33,6 +34,7 @@ pub(crate) fn start(
     commands: mpsc::Sender<CommandRequest>,
     connection: watch::Receiver<ConnectionInfo>,
     problems: watch::Receiver<Vec<Problem>>,
+    offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 ) -> io::Result<Server> {
     let (updates, _) = watch::channel(0);
     let mut nonce = [0; 16];
@@ -41,6 +43,7 @@ pub(crate) fn start(
         state: Mutex::new((0, None)),
         connection,
         problems,
+        offline,
         updates,
         instance: nonce.iter().map(|b| format!("{b:02x}")).collect(),
     });
@@ -68,6 +71,16 @@ pub(crate) fn start(
                         &request,
                         LocalIpcErrorCode::UnsupportedVersion,
                         "文件清单需要本机 IPC 1.3",
+                        false,
+                    ));
+                }
+                if request.command.name == CommandName::ClaimNotification
+                    && request.ipc_version.minor < 4
+                {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "通知投递领取需要本机 IPC 1.4",
                         false,
                     ));
                 }
@@ -149,7 +162,10 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
     let mut bindings = Vec::with_capacity(info.len());
     for b in &info {
         let binding = BindingId::from_hex(&b.binding_id).map_err(crate::local::error)?;
-        let s = status::snapshot(db, binding).await?;
+        let mut s = status::snapshot(db, binding).await?;
+        if hub.offline.borrow().contains(&binding) {
+            s.offline += 1;
+        }
         bindings.push(BindingStatus {
             binding_id: b.binding_id.clone(),
             synchronized: s.synchronized(),
@@ -170,6 +186,16 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
             unknown: s.unknown.to_string(),
         });
     }
+    let mut problems = crate::management::problems(db, None).await?;
+    for problem in hub.problems.borrow().iter() {
+        if !problems
+            .iter()
+            .any(|p| p.binding_id == problem.binding_id && p.problem_id == problem.problem_id)
+        {
+            problems.push(problem.clone());
+        }
+    }
+    let notices = crate::management_notices::list(db).await?;
     let mut value = GetStatusResult {
         agent_version: env!("CARGO_PKG_VERSION").into(),
         ipc_protocol: version::supported(),
@@ -178,7 +204,8 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
         management: Some(ManagementResult {
             bindings: Some(info),
             connection: Some(hub.connection.borrow().clone()),
-            problems: Some(hub.problems.borrow().clone()),
+            problems: Some(problems),
+            notices: Some(notices),
             ..Default::default()
         }),
     };

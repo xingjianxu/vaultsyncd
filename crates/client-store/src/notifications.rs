@@ -17,6 +17,7 @@
 use sqlx::{Sqlite, SqliteConnection, Transaction};
 use vaultsyncd_domain::error::ErrorCode;
 use vaultsyncd_domain::ids::{BindingId, EntryId, ID_LEN};
+pub mod delivery;
 
 /// 问题的生命周期（`notifications.state`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,7 +176,7 @@ pub async fn raise(
             .bind(&new.dedupe_key),
             NotificationState::Resolved => sqlx::query(
                 "UPDATE notifications SET state = ?1, is_read = 0, \
-                 occurrences = occurrences + 1 WHERE dedupe_key = ?2",
+                 occurrences = occurrences + 1, generation = generation + 1, delivery_claimed = 0 WHERE dedupe_key = ?2",
             )
             .bind(NotificationState::Active.as_text())
             .bind(&new.dedupe_key),

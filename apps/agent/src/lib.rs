@@ -20,6 +20,8 @@ mod instance;
 #[cfg(windows)]
 mod ipc;
 #[cfg(windows)]
+mod issue_projection;
+#[cfg(windows)]
 pub mod local;
 #[cfg(windows)]
 mod management;
@@ -31,6 +33,8 @@ mod management_files;
 mod management_history;
 #[cfg(windows)]
 mod management_listing;
+#[cfg(windows)]
+mod management_notices;
 #[cfg(windows)]
 mod namespace;
 #[cfg(windows)]

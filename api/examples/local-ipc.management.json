@@ -21,5 +21,6 @@
   {"request_id":"trash","ipc_version":{"major":1,"minor":2},"command":{"name":"list_trash","parameters":{"binding_id":"11111111111111111111111111111111"}}},
   {"request_id":"restore-version","ipc_version":{"major":1,"minor":2},"command":{"name":"restore_entry","parameters":{"binding_id":"11111111111111111111111111111111","entry_id":"33333333333333333333333333333333","operation_id":"77777777777777777777777777777777","base_revision":"9","version_id":"88888888888888888888888888888888"}}},
   {"request_id":"restore-trash","ipc_version":{"major":1,"minor":2},"command":{"name":"restore_entry","parameters":{"binding_id":"11111111111111111111111111111111","entry_id":"33333333333333333333333333333333","operation_id":"99999999999999999999999999999999","base_revision":"10"}}},
-  {"request_id":"files","ipc_version":{"major":1,"minor":3},"command":{"name":"list_files","parameters":{"binding_id":"11111111111111111111111111111111"}}}
+  {"request_id":"files","ipc_version":{"major":1,"minor":3},"command":{"name":"list_files","parameters":{"binding_id":"11111111111111111111111111111111"}}},
+  {"request_id":"claim-notice","ipc_version":{"major":1,"minor":4},"command":{"name":"claim_notification","parameters":{"notification_key":"root:11111111111111111111111111111111:MOUNT_FAILED","notification_generation":"1"}}}
 ]

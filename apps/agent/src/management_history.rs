@@ -60,6 +60,8 @@ pub(crate) async fn execute(
                     parent_id: i.parent_id,
                     size: i.size,
                     hash: i.hash,
+                    expires_at: i.expires_at,
+                    conflict_source: i.conflict_source,
                 })
                 .collect(),
         );

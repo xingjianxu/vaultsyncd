@@ -41,6 +41,7 @@ pub(crate) async fn record_ack(
             .fetch_one(&mut *tx)
             .await
             .map_err(error)?;
+    let first_ack = old.is_none();
     if let Some(old) = old {
         let mut old: OperationResult = serde_json::from_str(&old).map_err(error)?;
         old.replayed = result.replayed;
@@ -55,6 +56,22 @@ pub(crate) async fn record_ack(
         .bind(op.as_bytes().as_slice())
         .bind(local.binding.as_bytes().as_slice())
         .execute(&mut *tx)
+        .await
+        .map_err(error)?;
+    }
+    if first_ack && result.conflict.is_some() {
+        let root: Vec<u8> = sqlx::query_scalar("SELECT root_id FROM bindings WHERE id=?")
+            .bind(local.binding.as_bytes().as_slice())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(error)?;
+        let root = vaultsyncd_domain::ids::RootId::from_bytes(
+            root.try_into().map_err(|_| error("invalid root"))?,
+        );
+        vaultsyncd_client_store::notifications::raise(
+            &mut tx,
+            &vaultsyncd_agent_core::status::issues::conflict_problem(root),
+        )
         .await
         .map_err(error)?;
     }

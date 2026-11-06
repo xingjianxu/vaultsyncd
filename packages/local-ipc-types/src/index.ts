@@ -32,6 +32,7 @@ export {
 export type {
   BindingInfo,
   FileStatus,
+  Notice,
   BindingStatus,
   CommandParameters,
   ConnectionInfo,

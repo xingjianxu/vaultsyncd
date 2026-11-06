@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 1;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 3;
+export const PROTOCOL_MINOR = 4;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -174,9 +174,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -207,6 +207,10 @@ export interface CommandParameters {
   local_path?: string;
   /** full 或 on_demand。 */
   mode?: string;
+  /** 当前活动代际正整数字符串，旧GUI不能领取新复发。 */
+  notification_generation?: string;
+  /** agent通知记录键，仅领取投递，不清问题。 */
+  notification_key?: string;
   /** 重试/副作用幂等身份。 */
   operation_id?: string;
   /** 瞬时登录密码；不能日志输出整个请求。 */
@@ -227,7 +231,7 @@ export interface CommandParameters {
 
 export function decodeCommandParameters(value: unknown): CommandParameters {
   const object = expect_object(value, "CommandParameters");
-  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "operation_id", "password", "root_id", "search", "server_id", "server_url", "username", "version_id"].includes(key))) {
+  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "notification_generation", "notification_key", "operation_id", "password", "root_id", "search", "server_id", "server_url", "username", "version_id"].includes(key))) {
     throw new Error("CommandParameters contains unknown fields");
   }
   return {
@@ -241,6 +245,8 @@ export function decodeCommandParameters(value: unknown): CommandParameters {
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "CommandParameters.entry_id"),
     local_path: object.local_path === undefined ? undefined : expect_string(object.local_path, "CommandParameters.local_path"),
     mode: object.mode === undefined ? undefined : expect_string(object.mode, "CommandParameters.mode"),
+    notification_generation: object.notification_generation === undefined ? undefined : expect_string(object.notification_generation, "CommandParameters.notification_generation"),
+    notification_key: object.notification_key === undefined ? undefined : expect_string(object.notification_key, "CommandParameters.notification_key"),
     operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "CommandParameters.operation_id"),
     password: object.password === undefined ? undefined : expect_string(object.password, "CommandParameters.password"),
     root_id: object.root_id === undefined ? undefined : expect_string(object.root_id, "CommandParameters.root_id"),
@@ -413,10 +419,16 @@ export interface ManagementResult {
   mode_remaining?: string;
   /** 历史或回收站清单下一页游标。 */
   next_cursor?: string;
+  /** 问题生命周期与投递事实 */
+  notices?: Array<Notice>;
+  /** 是否成功领取本活动代际 */
+  notification_claimed?: boolean;
   /** 实际执行的幂等操作身份。 */
   operation_id?: string;
   /** 持久问题列表。 */
   problems?: Array<Problem>;
+  /** committed后按条目身份重新查询的当前位置 */
+  restored_path?: string;
   /** 解绑时保留的未确认条目。 */
   unconfirmed?: Array<string>;
 }
@@ -432,9 +444,46 @@ export function decodeManagementResult(value: unknown): ManagementResult {
     items: object.items === undefined ? undefined : expect_array(object.items, "ManagementResult.items").map((item) => decodeRemoteItem(item)),
     mode_remaining: object.mode_remaining === undefined ? undefined : expect_string(object.mode_remaining, "ManagementResult.mode_remaining"),
     next_cursor: object.next_cursor === undefined ? undefined : expect_string(object.next_cursor, "ManagementResult.next_cursor"),
+    notices: object.notices === undefined ? undefined : expect_array(object.notices, "ManagementResult.notices").map((item) => decodeNotice(item)),
+    notification_claimed: object.notification_claimed === undefined ? undefined : expect_boolean(object.notification_claimed, "ManagementResult.notification_claimed"),
     operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "ManagementResult.operation_id"),
     problems: object.problems === undefined ? undefined : expect_array(object.problems, "ManagementResult.problems").map((item) => decodeProblem(item)),
+    restored_path: object.restored_path === undefined ? undefined : expect_string(object.restored_path, "ManagementResult.restored_path"),
     unconfirmed: object.unconfirmed === undefined ? undefined : expect_array(object.unconfirmed, "ManagementResult.unconfirmed").map((item) => expect_string(item, "ManagementResult.unconfirmed 的元素")),
+  };
+}
+
+/** 核心Root原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。 */
+export interface Notice {
+  /** Root原因，冲突副本为CONFLICT_COPY */
+  cause: string;
+  /** 本代际已领取系统投递 */
+  claimed: boolean;
+  /** 已分类错误码 */
+  code: string;
+  /** 可信核心分类需用户处理 */
+  critical: boolean;
+  /** 活动代际 */
+  generation: string;
+  /** 稳定去重键 */
+  key: string;
+  /** 关联Root，非绑定身份 */
+  root_id?: string;
+  /** active或resolved */
+  state: string;
+}
+
+export function decodeNotice(value: unknown): Notice {
+  const object = expect_object(value, "Notice");
+  return {
+    cause: expect_string(object.cause, "Notice.cause"),
+    claimed: expect_boolean(object.claimed, "Notice.claimed"),
+    code: expect_string(object.code, "Notice.code"),
+    critical: expect_boolean(object.critical, "Notice.critical"),
+    generation: expect_string(object.generation, "Notice.generation"),
+    key: expect_string(object.key, "Notice.key"),
+    root_id: object.root_id === undefined ? undefined : expect_string(object.root_id, "Notice.root_id"),
+    state: expect_string(object.state, "Notice.state"),
   };
 }
 
@@ -477,8 +526,12 @@ export function decodeProblem(value: unknown): Problem {
 
 /** 服务器返回的授权 Root、历史版本或回收站项目。 */
 export interface RemoteItem {
+  /** 冲突副本的原条目身份 */
+  conflict_source?: string;
   /** 条目身份。 */
   entry_id?: string;
+  /** 历史/回收站到期下限UTC秒，当前活跃版本省略 */
+  expires_at?: string;
   /** 内容摘要。 */
   hash?: string;
   /** 稳定身份。 */
@@ -498,7 +551,9 @@ export interface RemoteItem {
 export function decodeRemoteItem(value: unknown): RemoteItem {
   const object = expect_object(value, "RemoteItem");
   return {
+    conflict_source: object.conflict_source === undefined ? undefined : expect_string(object.conflict_source, "RemoteItem.conflict_source"),
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "RemoteItem.entry_id"),
+    expires_at: object.expires_at === undefined ? undefined : expect_string(object.expires_at, "RemoteItem.expires_at"),
     hash: object.hash === undefined ? undefined : expect_string(object.hash, "RemoteItem.hash"),
     id: expect_string(object.id, "RemoteItem.id"),
     name: expect_string(object.name, "RemoteItem.name"),

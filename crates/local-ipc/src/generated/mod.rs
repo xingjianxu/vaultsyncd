@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 1;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 3;
+pub const PROTOCOL_MINOR: u32 = 4;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -164,6 +164,9 @@ pub enum CommandName {
     /// 取值 `list_files`。
     #[serde(rename = "list_files")]
     ListFiles,
+    /// 取值 `claim_notification`。
+    #[serde(rename = "claim_notification")]
+    ClaimNotification,
 }
 
 /// 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。
@@ -210,6 +213,14 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// 当前活动代际正整数字符串，旧GUI不能领取新复发。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_generation: Option<String>,
+    /// agent通知记录键，仅领取投递，不清问题。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_key: Option<String>,
     /// 重试/副作用幂等身份。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,6 +268,8 @@ impl core::fmt::Debug for CommandParameters {
         value.field("entry_id", &self.entry_id);
         value.field("local_path", &self.local_path);
         value.field("mode", &self.mode);
+        value.field("notification_generation", &self.notification_generation);
+        value.field("notification_key", &self.notification_key);
         value.field("operation_id", &self.operation_id);
         value.field("password", &"[REDACTED]");
         value.field("root_id", &self.root_id);
@@ -422,6 +435,14 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// 问题生命周期与投递事实
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notices: Option<Vec<Notice>>,
+    /// 是否成功领取本活动代际
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_claimed: Option<bool>,
     /// 实际执行的幂等操作身份。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -430,10 +451,37 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problems: Option<Vec<Problem>>,
+    /// committed后按条目身份重新查询的当前位置
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_path: Option<String>,
     /// 解绑时保留的未确认条目。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unconfirmed: Option<Vec<String>>,
+}
+
+/// 核心Root原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct Notice {
+    /// Root原因，冲突副本为CONFLICT_COPY
+    pub cause: String,
+    /// 本代际已领取系统投递
+    pub claimed: bool,
+    /// 已分类错误码
+    pub code: String,
+    /// 可信核心分类需用户处理
+    pub critical: bool,
+    /// 活动代际
+    pub generation: String,
+    /// 稳定去重键
+    pub key: String,
+    /// 关联Root，非绑定身份
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<String>,
+    /// active或resolved
+    pub state: String,
 }
 
 /// 真实持久问题；不返回任意日志文本。
@@ -466,10 +514,18 @@ pub struct Problem {
 /// 服务器返回的授权 Root、历史版本或回收站项目。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct RemoteItem {
+    /// 冲突副本的原条目身份
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict_source: Option<String>,
     /// 条目身份。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_id: Option<String>,
+    /// 历史/回收站到期下限UTC秒，当前活跃版本省略
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
     /// 内容摘要。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

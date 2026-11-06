@@ -45,12 +45,14 @@ async fn new_binding_without_import_proof_is_unknown() {
     });
     let (_problems, problems) = watch::channel(Vec::new());
     let (updates, _) = watch::channel(0);
+    let (_offline, offline) = watch::channel(std::collections::HashSet::new());
     let hub = Hub {
         state: Mutex::new((0, None)),
         updates,
         instance: "test".into(),
         connection,
         problems,
+        offline,
     };
     let result = snapshot(&db, &hub).await.unwrap();
     let row = &result.bindings.unwrap()[0];
@@ -103,7 +105,8 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
         authenticated: false,
     });
     let (_problems, problems) = watch::channel(Vec::new());
-    let server = start(db.clone(), commands, connection, problems).unwrap();
+    let (_offline, offline) = watch::channel(std::collections::HashSet::new());
+    let server = start(db.clone(), commands, connection, problems, offline).unwrap();
     let endpoint = Endpoint::current("vaultsyncd-agent").unwrap();
     let mut request = Request {
         request_id: "actual-snapshot".into(),
