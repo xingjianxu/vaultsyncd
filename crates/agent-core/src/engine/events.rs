@@ -238,6 +238,21 @@ where
     /// 运行一次周期轮询。`hint` 只是 SSE 唤醒提示，过旧/重复提示不会重复应用；即使没有提示也
     /// 会拉取，保证断线后的周期兜底。
     pub async fn run_cycle(&self, hint: Option<RootSeq>) -> Result<ReceiveReport, ReceiveError> {
+        // 首次导入尚未发布完整快照时，不能提前接收/应用高水位之前的事件。
+        let importing: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM binding_imports WHERE binding_id = ? AND complete = 0",
+        )
+        .bind(self.binding.as_bytes().as_slice())
+        .fetch_one(self.database.pool())
+        .await
+        .map_err(|error| ReceiveError::Protocol {
+            detail: format!("检查首次导入围栏：{error}"),
+        })?;
+        if importing != 0 {
+            return Err(ReceiveError::Protocol {
+                detail: "首次导入尚未完成，事件接收保持暂停".to_owned(),
+            });
+        }
         let mut report = self.resume_pending().await?;
         let mut after = self.current_received().await?;
         if hint.is_some_and(|hint| hint <= after) {

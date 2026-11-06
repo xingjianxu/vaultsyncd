@@ -550,7 +550,7 @@ mod tests {
     /// `migrations/0002_events_transfers_intents.sql` 的真实内容。
     const EVENTS_SQL: &str = include_str!("../migrations/0002_events_transfers_intents.sql");
     const EVENTS_FILE: &str = "0002_events_transfers_intents.sql";
-    /// `migrations/0003_upload_resumes.sql` 的真实内容（当前最新一版）。
+    /// `migrations/0003_upload_resumes.sql` 的真实内容。
     const UPLOAD_RESUMES_SQL: &str = include_str!("../migrations/0003_upload_resumes.sql");
     const UPLOAD_RESUMES_FILE: &str = "0003_upload_resumes.sql";
 
@@ -612,7 +612,11 @@ mod tests {
             (EVENTS_FILE, EVENTS_SQL),
             (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
             (
-                "0004_probe.sql",
+                "0004_first_import.sql",
+                include_str!("../migrations/0004_first_import.sql"),
+            ),
+            (
+                "0005_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]))
@@ -653,22 +657,22 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(target_schema_version(), 3, "内嵌迁移应当到 0003");
+        assert_eq!(target_schema_version(), 4, "内嵌迁移应当到 0004");
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             CLIENT_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 3);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 4);
         assert_eq!(
             scalar::<i64>(
                 &path,
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            3
+            4
         );
-        // 设计 §7.3 的九张客户端表加 S055 的上传续传表都在，且只有它们（不含服务端表）。
+        // 客户端状态表包含上传续传及首次绑定日志，不含服务端表。
         let tables: Vec<(String,)> = {
             let mut conn = connect_for_inspection(&path)
                 .read_only(true)
@@ -689,7 +693,9 @@ mod tests {
             tables.into_iter().map(|(name,)| name).collect::<Vec<_>>(),
             vec![
                 "baseline_entries".to_owned(),
+                "binding_imports".to_owned(),
                 "bindings".to_owned(),
+                "import_id_map".to_owned(),
                 "local_entries".to_owned(),
                 "local_intents".to_owned(),
                 "notifications".to_owned(),
@@ -702,15 +708,15 @@ mod tests {
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
-            !migration_backup_path(&path, 0, 3).exists(),
+            !migration_backup_path(&path, 0, 4).exists(),
             "空库迁移不应产生备份"
         );
 
         // 再次打开是幂等的：不迁移、不新增备份。
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 3);
-        assert!(!migration_backup_path(&path, 3, 3).exists());
+        assert_eq!(reopened.schema_version(), 4);
+        assert!(!migration_backup_path(&path, 4, 4).exists());
         reopened.close().await;
     }
 
@@ -911,20 +917,19 @@ mod tests {
         let binding = crate::test_support::seed_binding(&old, 0x21).await;
         old.close().await;
 
-        // 本二进制打开旧库：真实执行 0002 与 0003，建出事件/传输/意图/通知四张表、游标列
-        // 与上传续传表。
+        // 本二进制打开旧库：真实执行 0002—0004，保留旧数据并追加首次绑定日志。
         let upgraded = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(upgraded.schema_version(), 3);
+        assert_eq!(upgraded.schema_version(), 4);
         let mut conn = upgraded.pool().acquire().await.expect("取连接");
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN \
-             ('received_changes', 'transfers', 'local_intents', 'notifications', 'upload_resumes') \
+             ('received_changes', 'transfers', 'local_intents', 'notifications', 'upload_resumes', 'binding_imports', 'import_id_map') \
              ORDER BY name",
         )
         .fetch_all(&mut *conn)
         .await
         .expect("列新表");
-        assert_eq!(rows.len(), 5, "0002 与 0003 应建出五张新表");
+        assert_eq!(rows.len(), 7, "0002—0004 应建出七张新表");
         assert_eq!(
             crate::events::cursors(&mut conn, binding)
                 .await
@@ -945,9 +950,9 @@ mod tests {
         drop(conn);
         upgraded.close().await;
 
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 3);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 4);
         // 迁移前备份存在，且内容是**迁移前**的状态：没有新表。
-        let backup = migration_backup_path(&path, 1, 3);
+        let backup = migration_backup_path(&path, 1, 4);
         assert!(backup.exists(), "升级前应有一致性备份");
         for table in [
             "received_changes",
@@ -969,7 +974,7 @@ mod tests {
 
         // 再打开一次：版本已到目标，不重复迁移、不覆盖已有备份。
         let again = Database::open(&path).await.expect("重新打开");
-        assert_eq!(again.schema_version(), 3);
+        assert_eq!(again.schema_version(), 4);
         again.close().await;
     }
 
@@ -990,13 +995,13 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 4,
-                    supported: 3
+                    found: 5,
+                    supported: 4
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 4);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM probe").await,
             1,
