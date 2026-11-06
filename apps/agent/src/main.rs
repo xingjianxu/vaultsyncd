@@ -1,0 +1,36 @@
+//! Windows user-session agent process. No GUI process is required.
+#[cfg(windows)]
+fn main() {
+    let args: Vec<_> = std::env::args().collect();
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        if args.len() < 3
+            || args[1] != "--config"
+            || args[3..]
+                .iter()
+                .any(|a| a != "--login-stdin" && a != "--once")
+        {
+            return Err(
+                "usage: vaultsyncd-agent --config <file.json> [--login-stdin|--once]".into(),
+            );
+        }
+        let config = vaultsyncd_agent::config::AgentConfig::load(std::path::Path::new(&args[2]))?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(vaultsyncd_agent::runtime::run(
+            config,
+            args.iter().any(|a| a == "--login-stdin"),
+            args.iter().any(|a| a == "--once"),
+        ))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        eprintln!("event=agent-failed; inspect persistent state and configuration");
+        std::process::exit(1);
+    }
+}
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("vaultsyncd-agent requires a Windows user session");
+    std::process::exit(3);
+}

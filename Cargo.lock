@@ -2458,6 +2458,7 @@ dependencies = [
  "vaultsyncd-domain",
  "vaultsyncd-fs-common",
  "vaultsyncd-http-client",
+ "vaultsyncd-planner",
  "vaultsyncd-platform-windows",
  "vaultsyncd-protocol",
  "vaultsyncd-transfer",

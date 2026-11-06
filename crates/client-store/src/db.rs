@@ -693,6 +693,9 @@ mod tests {
         assert_eq!(
             tables.into_iter().map(|(name,)| name).collect::<Vec<_>>(),
             vec![
+                "agent_actions".to_owned(),
+                "agent_evidence".to_owned(),
+                "agent_versions".to_owned(),
                 "baseline_entries".to_owned(),
                 "binding_controls".to_owned(),
                 "binding_full_proofs".to_owned(),

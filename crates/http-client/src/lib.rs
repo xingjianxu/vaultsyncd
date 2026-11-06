@@ -55,6 +55,11 @@ pub mod config;
 pub mod content;
 pub mod error;
 pub mod sync;
+
+/// Preserve HTTP timeout/authentication/retry classification when adapting application ports.
+pub fn transfer_error(error: ClientError) -> vaultsyncd_transfer::ports::PortError {
+    uploads::map_error(error)
+}
 pub mod transport;
 pub mod uploads;
 pub mod version_leases;
