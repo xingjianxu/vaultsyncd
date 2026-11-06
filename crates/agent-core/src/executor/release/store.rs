@@ -328,16 +328,21 @@ async fn snapshot(
         }
     }
     // This includes dirty/conflict candidates awaiting planning/commit, and unknown new-file operations.
-    let own: Option<(Vec<u8>, Option<Vec<u8>>, String)> =
-        sqlx::query_as("SELECT binding_id,entry_id,kind FROM pending_ops WHERE op_id=?")
-            .bind(spec.op.as_bytes().as_slice())
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(error)?;
-    if own.is_some_and(|(b, e, kind)| {
-        b != binding || e.as_deref() != Some(entry) || kind != "release_local"
-    }) {
-        return Err(reject("OP_ID_REUSED", "该OpId已用于其他动作/目标"));
+    if let Some(own)=sqlx::query("SELECT binding_id,entry_id,kind,baseline_revision,baseline_version_id,pinned_version_id FROM pending_ops WHERE op_id=?")
+        .bind(spec.op.as_bytes().as_slice()).fetch_optional(&mut *conn).await.map_err(error)? {
+        let own_binding:Vec<u8>=own.try_get("binding_id").map_err(error)?;
+        let own_entry:Option<Vec<u8>>=own.try_get("entry_id").map_err(error)?;
+        let kind:String=own.try_get("kind").map_err(error)?;
+        let revision:Option<i64>=own.try_get("baseline_revision").map_err(error)?;
+        let baseline_version:Option<Vec<u8>>=own.try_get("baseline_version_id").map_err(error)?;
+        let pinned_version:Option<Vec<u8>>=own.try_get("pinned_version_id").map_err(error)?;
+        let fixed=base.content_version.expect("已核对版本");
+        if own_binding!=binding || own_entry.as_deref()!=Some(entry) || kind!="release_local"
+            || revision.is_some_and(|n|n!=base.revision.to_db_integer())
+            || baseline_version.as_deref().is_some_and(|v|v!=fixed.as_bytes())
+            || pinned_version.as_deref().is_some_and(|v|v!=fixed.as_bytes()) {
+            return Err(reject("OP_ID_REUSED","该OpId已用于其他动作/目标/固定版本"));
+        }
     }
     let pending:i64=sqlx::query_scalar("SELECT count(*) FROM pending_ops WHERE binding_id=? AND op_id<>? AND (entry_id=? OR entry_id IS NULL)")
         .bind(binding).bind(spec.op.as_bytes().as_slice()).bind(entry).fetch_one(&mut *conn).await.map_err(error)?;

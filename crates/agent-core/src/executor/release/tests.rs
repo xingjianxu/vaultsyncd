@@ -741,3 +741,116 @@ async fn durable_release_recovers_before_and_after_platform_and_database() {
         );
     }
 }
+
+#[tokio::test]
+async fn interrupted_release_never_clears_new_dirty_or_unknown_journal_identity() {
+    for mutation in ["dirty", "wrong_binding", "wrong_op"] {
+        let rig = Rig::new().await;
+        let (db, service, disk, _) = rig.service(0).await;
+        disk.fail.store(2, Ordering::SeqCst);
+        assert!(service.release(&spec()).await.is_err());
+        match mutation {
+            "dirty" => {
+                persist(&rig.0.join("file.txt"), EDIT);
+                sqlx::query(
+                    "UPDATE local_entries SET dirty='awaiting_commit',generation=generation+1",
+                )
+                .execute(db.pool())
+                .await
+                .unwrap();
+            }
+            _ => {
+                let text: String = sqlx::query_scalar("SELECT journal FROM controlled_releases")
+                    .fetch_one(db.pool())
+                    .await
+                    .unwrap();
+                let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let key = if mutation == "wrong_binding" {
+                    "binding"
+                } else {
+                    "op"
+                };
+                json[key] = serde_json::to_value(vec![255_u8; 16]).unwrap();
+                sqlx::query("UPDATE controlled_releases SET journal=?")
+                    .bind(json.to_string())
+                    .execute(db.pool())
+                    .await
+                    .unwrap();
+            }
+        }
+        disk.fail.store(0, Ordering::SeqCst);
+        let recovered = service.recover(B).await;
+        if mutation == "dirty" {
+            assert!(recovered.unwrap()[0].1.is_err());
+        } else {
+            assert!(recovered.is_err());
+        }
+        assert_eq!(
+            fs::read(rig.0.join("file.txt")).unwrap(),
+            if mutation == "dirty" { EDIT } else { OLD }
+        );
+        assert_eq!(disk.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM local_intents")
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn completed_release_replay_does_not_remove_subsequent_local_content() {
+    let rig = Rig::new().await;
+    let (db, service, disk, _) = rig.service(0).await;
+    service.release(&spec()).await.unwrap();
+    fs::remove_file(rig.0.join("released.json")).unwrap();
+    persist(&rig.0.join("file.txt"), EDIT);
+    sqlx::query(
+        "UPDATE local_entries SET dirty='dirty',residency='materialized',generation=generation+1",
+    )
+    .execute(db.pool())
+    .await
+    .unwrap();
+    assert!(service.release(&spec()).await.is_err());
+    assert_eq!(fs::read(rig.0.join("file.txt")).unwrap(), EDIT);
+    assert_eq!(disk.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn queued_release_must_match_the_fixed_baseline_and_version() {
+    for mismatch in [false, true] {
+        let rig = Rig::new().await;
+        let (db, service, disk, _) = rig.service(0).await;
+        let mut tx = db.begin_write().await.unwrap();
+        queue::enqueue(
+            &mut tx,
+            &NewPendingOp {
+                op: O,
+                binding: B,
+                kind: "release_local".into(),
+                entry: Some(E),
+                baseline_revision: Some(Revision::new(2).unwrap()),
+                baseline_version: Some(V),
+                depends_on: None,
+                pinned_version: Some(if mismatch {
+                    VersionId::from_bytes([0xee; 16])
+                } else {
+                    V
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        if mismatch {
+            assert!(service.release(&spec()).await.is_err());
+            rig.assert_full().await;
+            assert_eq!(disk.calls.load(Ordering::SeqCst), 0);
+        } else {
+            service.release(&spec()).await.unwrap();
+            assert_eq!(disk.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+}
