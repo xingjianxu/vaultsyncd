@@ -14,19 +14,21 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-from playwright.sync_api import sync_playwright, expect
-
-IMAGE,ARCH,PARENT=sys.argv[1:]
-assert IMAGE.startswith('localhost/vaultsyncd-s098:') and ARCH in ('amd64','arm64')
-RUN=Path(PARENT)/f'accept-{ARCH}-{os.getpid()}'
-NAME=f'vs-s098-{ARCH}-{os.getpid()}'
-PORT=18739 if ARCH=='amd64' else 18740
-ORIGIN=f'http://127.0.0.1:{PORT}'
 UID=8721
 TOKEN=None
-RESULT={'passed':False,'run':str(RUN),'image':IMAGE,'architecture':ARCH,'checks':[]}
+
+def configure(image,arch,parent):
+    global IMAGE,ARCH,PARENT,RUN,NAME,PORT,ORIGIN,RESULT
+    IMAGE,ARCH,PARENT=image,arch,parent
+    assert IMAGE.startswith('localhost/vaultsyncd-s098:') and ARCH in ('amd64','arm64')
+    RUN=Path(PARENT)/f'accept-{ARCH}-{os.getpid()}'
+    NAME=f'vs-s098-{ARCH}-{os.getpid()}'
+    PORT=18739 if ARCH=='amd64' else 18740
+    ORIGIN=f'http://127.0.0.1:{PORT}'
+    RESULT={'passed':False,'run':str(RUN),'image':IMAGE,'architecture':ARCH,'checks':[]}
 
 def command(args, *, binary=False, check=True, **kw):
+    if 'input' not in kw:kw['stdin']=subprocess.DEVNULL
     p=subprocess.run(list(map(str,args)),capture_output=True,text=not binary,timeout=180,**kw)
     if check:assert p.returncode==0,'command failed: '+str(args)
     return p
@@ -59,6 +61,16 @@ def admin(*args):
     return json.loads(p.stdout)
 
 def browser(password,root):
+    if os.environ.get('VAULTSYNCD_TEST_EXTERNAL_BROWSER')=='stdio':
+        # The host runs its locked real Chromium against the VM's forwarded
+        # endpoint. Only non-secret coordination crosses stdout; the owner
+        # password arrives once over the existing anonymous SSH stdin pipe.
+        print(json.dumps({'stage':'browser_pending','root':root,'origin':ORIGIN}),flush=True)
+        proof=json.loads(sys.stdin.readline())
+        assert proof['passed'] and proof['root']==root
+        RESULT['browser']=proof['browser']
+        return
+    from playwright.sync_api import sync_playwright, expect
     with sync_playwright() as p:
         chromium=p.chromium.launch(headless=True,args=['--no-proxy-server'])
         context=chromium.new_context();page=context.new_page()
@@ -106,10 +118,12 @@ def main():
         mounts=['-v',f'{state}:/var/lib/vaultsyncd:rw','-v',f'{roots}:/srv/vaultsyncd-roots:rw']
         flags=['--user',f'{UID}:{UID}','--read-only','--cap-drop=all','--security-opt','no-new-privileges',
                '--cpus','2','--pids-limit','256',*mounts]
-        password=secrets.token_urlsafe(24)
+        password=sys.stdin.readline().strip() if os.environ.get('VAULTSYNCD_TEST_PASSWORD_STDIN')=='1' else secrets.token_urlsafe(24)
+        assert len(password)>=24
         init=engine('run','--rm','-i','--network','none',*flags,'--entrypoint','/opt/vaultsyncd/bin/vaultsyncd-admin',IMAGE,'init','--state-dir','/var/lib/vaultsyncd',input=password+'\n')
         assert 'owner' in init.stdout
-        engine('run','-d','--name',NAME,*flags,'-p',f'127.0.0.1:{PORT}:8721',IMAGE);created=True
+        listen='0.0.0.0' if os.environ.get('VAULTSYNCD_TEST_ISOLATED_VM')=='1' else '127.0.0.1'
+        engine('run','-d','--name',NAME,*flags,'-p',f'{listen}:{PORT}:8721',IMAGE);created=True
         wait(lambda:api('/v1/health')['status']=='ok')
         issued=api('/v1/auth/login',{'login':'owner','password':password,'device_label':'S098 Ubuntu actual acceptance'});TOKEN=issued['access_token']
         capabilities=api('/v1/capabilities');RESULT['server_id']=capabilities['server_id']
@@ -170,7 +184,9 @@ def main():
         print(json.dumps({'passed':RESULT['passed'],'run':str(RUN),'checks':RESULT['checks']}))
 
 if __name__=='__main__':
-    try:main()
+    try:
+        configure(*sys.argv[1:])
+        main()
     except Exception as error:
         print(json.dumps({'passed':False,'error_type':type(error).__name__,'frames':[{'line':f.lineno,'function':f.name} for f in traceback.extract_tb(error.__traceback__) if f.filename==__file__]}))
         sys.exit(1)

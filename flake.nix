@@ -41,6 +41,7 @@
         portable-tests = pkgs.mkShell {
           name = "vaultsyncd-portable-tests";
           packages = [ pkgs.podman pkgs.docker-compose pkgs.chromium pkgs.btrfs-progs
+            pkgs.qemu pkgs.xorriso pkgs.openssh
             pkgs.patchelf pkgs.binutils pkgs.util-linux
             (pkgs.pkgsStatic.qemu-user.override { hostCpuTargets = [ "aarch64-linux-user" ]; })
             (pkgs.python3.withPackages (ps: [ ps.playwright ])) ];
