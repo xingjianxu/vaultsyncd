@@ -1734,3 +1734,33 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 - `GET …/events` 需要 `Authorization` 头，浏览器原生 `EventSource` 不能直接用（TS 客户端 `subscribeEvents` 返回原始 `Response`）。
 - 未覆盖 `ServerEpoch` 变更后旧游标的显式 410（`after` 不带 epoch；`ahead_of_head` 与 `before_retention_window` 覆盖
   回退场景的常见形态，epoch 绑定留给重建流程卡）。
+
+## crates/http-client — 共用 HTTPS 客户端与认证刷新（S053）
+
+状态：S053 实现。包名 `vaultsyncd-http-client`，在 `default-members` 内，Linux/Windows 客户端共用；只依赖 wire 契约（`vaultsyncd-protocol` 的生成 DTO）、`reqwest`（rustls + 系统信任库）、`tokio` 与 `serde_json`，不做本地状态与平台 I/O。设计依据 design §5.4、§13.3、§17.3；刷新语义来自 S043 的服务端轮换（旧刷新凭据用一次即失效）。
+
+| 模块 | 契约 |
+| --- | --- |
+| `transport` | 端口 `Transport::send(TransportRequest) -> TransportFuture<Result<TransportResponse, TransportError>>`（装箱 future，可作 trait object）。`TransportRequest{method,url,headers,body}`、`TransportResponse{status,headers,body}`、`Method{Get,Post,Put,Patch,Delete}`、`TransportFuture<'a,T>`。生产实现 `ReqwestTransport`（`pub(crate) new(&ValidatedConfig)`）：rustls + 操作系统信任库、`connect_timeout`、**不跟随重定向**（避免 `Authorization` 跨主机）、`user-agent: vaultsyncd-client/<版本>` |
+| `config` | `ClientConfig`（`new(base_url)` + `with_timeouts` / `with_trust` / `allow_plaintext_http`），由 `ApiClient::new` 校验：只接受 `https`（明文 `http` 必须显式 `allow_plaintext_http`，只用于本机/隔离测试）、拒绝 URL 里的用户信息、查询串与片段、超时必须非零。`Timeouts{request,connect}`（默认 30 s / 10 s）、`TlsTrust::{SystemRoots, SystemRootsWithAdditionalRoots(Vec<PEM>)}`（`system_roots_with_pem` / `system_roots_with_pem_file`）、`ConfigError{kind,message}`、`ConfigErrorKind{Url,Scheme,PlaintextForbidden,Timeout,Tls,Io}` |
+| `auth` | `Credentials{session_id,access_token,refresh_token,access_expires_at,refresh_expires_at}`（`from_issued(&SessionIssued)` 校验 32 位小写十六进制会话身份、非空令牌、规范十进制到期时间、访问不晚于刷新；`Debug` 隐去两个令牌）。`AuthSession`（克隆共享状态）：`install`/`clear`/`snapshot`/`generation`/`needs_reauth`/`has_credentials`；内部 `refresh(observed_generation, refresher)` 用一把异步锁做**单飞合并**——拿到锁后先比代际，别人已刷新就直接复用，不再发请求。`CredentialSink{credentials_stored,credentials_erased}` 是持久化端口（agent 用 OS 凭据库/受限权限文件，见 ADR 0001），本 crate 不写文件 |
+| `client` | `ApiClient<T: Transport>`（`new(ClientConfig)` → 生产传输；`with_transport(config, Arc<T>)` → 测试替身；`with_auth_session` 注入会话；`Clone` 共享会话与连接池）。`ApiRequest::{new,get,post}` + `with_auth`/`with_json`/`with_body`/`with_header`/`with_timeout`/`with_cancellation`；`ApiResponse{status,headers,body}` + `header`/`retry_after`/`json`。`ApiClient::{send,send_json,login,logout}` |
+| `cancel` | `Cancellation`：可克隆的取消开关（`cancel`/`is_cancelled`/`cancelled`），基于 `tokio::sync::watch`；只取消等待，不取消别人共享的刷新 |
+| `error` | `ClientError::{InvalidRequest,Transport,Timeout{phase},Cancelled,NotAuthenticated,ReauthRequired{reason,cause},Api(Box<ApiFailure>),UnexpectedResponse{status},Protocol}`；`is_retryable()`、`retry_after()`、`certificate_problem()`、`api_failure()`。`TransportErrorKind::{Connect,Timeout,Tls,Certificate(CertificateProblem),Io,Protocol}`；`CertificateProblem::{UnknownIssuer,Expired,NotYetValid,NameMismatch,Revoked,Other}`；`ApiFailure{status,body,retry_after}`（`body` 是生成 `ErrorBody`）；`TimeoutPhase::{Request,Refresh}`、`ReauthReason::{RefreshRejected,RetriedUnauthorized}` |
+| `testing`（仅 `cfg(test)`/`testing` feature） | `FakeTransport::new(handler)`（记录每次实际发出的 `TransportRequest`，`calls`/`call_count`）、`json_response`/`error_response`/`issued` 构造器。产品构建里不存在该模块 |
+
+### 认证与请求规则（不可绕过）
+
+- **401 一次受控刷新**：`AuthMode::Bearer` 的请求收到 401 后，用会话里的刷新凭据换新凭据并重试**一次**；同一会话的并发 401 由单飞锁合并成**一次**刷新。重试后仍 401 → `ReauthRequired{RetriedUnauthorized}`，**不再刷新**。
+- **刷新失败分两类**：刷新接口 401 → `ReauthRequired{RefreshRejected}` 并置 `needs_reauth`，凭据与队列都保留；刷新遇到连接/超时/证书问题 → 原样返回该错误（可重试），凭据、代际与队列都**不变**。`NotAuthenticated` 在本地没有凭据时于发送前返回，不碰传输。
+- **TLS 不可降级**：只有系统信任库或“系统信任库 + 显式追加的 PEM”；追加根证书是加法，不会放行其它不受信任的证书，仓库里没有关闭校验的配置项或环境变量。证书问题单独分类、不可重试、不触发刷新。
+- **超时与取消**：每次请求的 `timeout` 默认取 `Timeouts::request`，可按请求覆盖，覆盖传输发送与读响应体全过程；取消返回 `Cancelled`，不是失败状态。
+- **错误分类**：服务端错误信封 → `Api`（`is_retryable` 取 `body.retryable`，`retry_after` 只解析秒数形式的 `Retry-After`）；非信封的非 2xx（代理/网关）→ `UnexpectedResponse`（5xx 可重试）；2xx 但响应体不合契约 → `Protocol`（不可重试）。
+- **请求装配**：路径必须是 `/` 开头的绝对路径且不含方案、查询串、片段或空白（查询串编码留给需要它的端点卡）；`Authorization`、`Content-Type`、`Content-Length` 由客户端生成，调用方手写会被 `InvalidRequest` 拒绝；请求头名称限 ASCII 字母数字与 `-`，值不允控制字符；`base_url` 的路径前缀（如 `/vault/`）对每个请求保留。
+
+### 不变量与未接入
+
+- 本 crate 不读时钟、不取随机数、不写数据库/文件；刷新是否能成功只由服务端判定，客户端不做“提前过期”猜测。
+- 普通网络故障的指数退避与 `Retry-After` 调度属于 `crates/agent-core`（后续卡）：这里只给 `is_retryable`/`retry_after` 结论。
+- 未接入（后续卡）：Root 清单（S054 起）、changes/SSE 拉取、上传会话、固定版本内容下载（design §5.4 的 `roots.rs`/`changes.rs`/`uploads.rs`/`content.rs`）；查询串编码；浏览器 cookie 载体（Rust 客户端只走 Bearer）。
+- 验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-http-client`（36 项 + 1 doctest）、`cargo clippy --locked -p vaultsyncd-http-client --all-targets -- -D warnings`、`cargo fmt --check`。证书用例用本地 rustls 服务与自签 CA 做真实握手。
