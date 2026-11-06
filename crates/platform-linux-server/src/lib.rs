@@ -11,7 +11,7 @@
 //!
 //! - S050：`watcher/` 的 inotify 目录监视——递归登记、变化线索、队列溢出重建与登记缺口上报。
 //!
-//! `ipc/` 尚未实现，这里没有占位实现。
+//! - S075：`ipc/` 的受限 Unix socket、SO_PEERCRED 身份与有界管理帧。
 //!
 //! 边界（design §11.4—11.5、§12.2、§16.1）：
 //!
@@ -30,6 +30,8 @@
 
 #[cfg(target_os = "linux")]
 pub mod files;
+#[cfg(target_os = "linux")]
+pub mod ipc;
 #[cfg(target_os = "linux")]
 pub mod mounts;
 #[cfg(target_os = "linux")]

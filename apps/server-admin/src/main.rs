@@ -1,6 +1,6 @@
 //! `vaultsyncd-admin` 命令入口（design §5.3：只做参数解析、调用用例与输出结果）。
 //!
-//! 本卡只有一个子命令 `init`：在服务端**离线**时初始化首位 owner 账号（design §17.1、C27）。
+//! `init` 在服务端**离线**时初始化首位 owner；在线管理只通过受限 Unix socket（S075）。
 //! 它不经过 HTTP、不写日志文件、不接受命令行密码：
 //!
 //! - 密码只从 stdin 读；stdin 是终端时要求输两遍且不回显（`rpassword`）。
@@ -24,6 +24,7 @@ use std::process::ExitCode;
 
 mod accounts;
 mod init;
+mod online;
 
 /// 初始化成功的退出码。
 pub const EXIT_OK: u8 = 0;
@@ -76,7 +77,15 @@ fn main() -> ExitCode {
 }
 
 async fn run() -> ExitCode {
-    let command = match parse_args(std::env::args_os().skip(1)) {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| {
+        ["roots", "status", "problems", "history", "trash"]
+            .iter()
+            .any(|command| arg == command)
+    }) {
+        return ExitCode::from(online::run(args).await);
+    }
+    let command = match parse_args(args.into_iter()) {
         Ok(command) => command,
         Err(message) => {
             eprintln!("{message}\n\n{USAGE}");
@@ -85,7 +94,7 @@ async fn run() -> ExitCode {
     };
     let args = match command {
         Command::Help => {
-            println!("{USAGE}");
+            println!("{USAGE}\n\n{}", online::USAGE);
             return ExitCode::from(EXIT_OK);
         }
         Command::Init(args) => args,

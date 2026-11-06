@@ -2436,9 +2436,11 @@ version = "0.1.0"
 dependencies = [
  "rand_core 0.6.4",
  "rpassword",
+ "serde_json",
  "sqlx",
  "tokio",
  "vaultsyncd-domain",
+ "vaultsyncd-platform-linux-server",
  "vaultsyncd-server-core",
  "vaultsyncd-server-store",
 ]
@@ -2536,6 +2538,7 @@ dependencies = [
 name = "vaultsyncd-platform-linux-server"
 version = "0.1.0"
 dependencies = [
+ "tokio",
  "vaultsyncd-server-core",
 ]
 

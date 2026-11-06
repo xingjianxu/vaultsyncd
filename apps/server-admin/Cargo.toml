@@ -1,6 +1,6 @@
 [package]
 name = "vaultsyncd-admin"
-description = "服务端本机管理命令：首次 owner 初始化（离线，design §5.3、§17.1、C27）"
+description = "服务端管理命令：离线 owner 初始化与受限 Unix socket 在线管理"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,9 +10,8 @@ publish.workspace = true
 name = "vaultsyncd-admin"
 path = "src/main.rs"
 
-# 管理命令与服务端在同一台 Linux 机器上运行，直接改服务端状态目录里的 SQLite（design §5.3：
-# `apps/server-admin/src/main.rs` 负责参数解析与输出；运行中的服务端走本机管理 socket 属 S075，
-# 本卡只有离线 init）。它因此和服务端一样只在 Linux 上编译，不进 default-members。
+# 管理命令仅离线 init 持有数据库锁；在线命令只能连接服务进程的受限 Unix socket。
+# 本包与服务端一样只在 Linux 上编译，不进 default-members。
 #
 # 密码从 stdin 读（终端下不回显，用 `rpassword` 关闭回显），**不接受命令行参数**：argv 会出现在
 # 进程列表与 shell 历史里。
@@ -22,7 +21,9 @@ rpassword = "7"
 rand_core = { version = "0.6", features = ["getrandom"] }
 # 账号适配器直接持有 `server-store` 打开的写事务，因此需要 sqlx 的 `Transaction` 类型。
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"] }
+serde_json = "1"
+vaultsyncd-platform-linux-server = { path = "../../crates/platform-linux-server" }
 vaultsyncd-domain = { path = "../../crates/domain" }
 vaultsyncd-server-core = { path = "../../crates/server-core" }
 vaultsyncd-server-store = { path = "../../crates/server-store" }

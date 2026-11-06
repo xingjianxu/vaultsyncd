@@ -1463,6 +1463,25 @@ python3 tools/context.py --help
 
 未接入（后续卡）：`pending_import` 目前恒为 `true` 且**没有持久化列**——初始采集（S049）完成时如何把“待导入”推进为“已导入”需要 `roots` 追加迁移（design §7.2 的 roots 列不含该状态，SQLite 改 CHECK 需重建表，故留给采集卡一次做对）；Root 健康状态只在注册时写入，运行期挂载漂移复核（`RootHandle::verify` + `RootSnapshot::compare` → `ROOT_UNAVAILABLE` 暂停）尚未接到后台巡检；`epoch` 写 `ServerEpoch::ZERO`（进程还没有独立的 epoch 来源，`GET /v1/capabilities` 属后续卡）；多账号角色区分（admin 与普通成员）需要账号卡先加角色列。
 
+## apps/server + server-admin — Linux 在线管理（S075）
+
+- **契约源**：`api/admin-socket.schema.json`，动态 JSON 文档，不引入手写 wire DTO 或改动 Windows IPC。平台边界在 `platform_linux_server::ipc`，服务内管理适配器在 `apps/server/src/admin.rs`；CLI 在线模块不打开 SQLite。离线 `init` 继续独占状态锁。
+- **地址与身份**：服务启动时创建 `<state.dir>/admin/socket`；状态目录必须归服务有效 UID 且不可被组/其他用户写入；`admin` 必须是真实目录、归相同 UID、权限恰为 `0700`，socket 为 `0600`。创建/绑定/chmod/清理锚定 `O_DIRECTORY|O_NOFOLLOW` 打开的目录 fd，避免父路径替换导致操作其它位置。服务读取请求前用 Linux `SO_PEERCRED` 核验相同有效 UID；不信任请求内 UID、login、环境变量或 bearer。CLI 同样核验父目录/socket 类型、权限、所有者、连接前后 inode/dev 与对端 UID。管理员用 `sudo -u <服务账号>`，不开放管理组或 root 特例。只接受唯一 active owner；零个/多个返回 409 `OWNER_REQUIRED`，不猜账号、不签发临时或长期会话。
+- **帧与生命周期**：每连接一请求一响应；4 字节大端无符号长度 + UTF-8 JSON，长度 `1..=1048576`，分配前拒绝零长/越界；截断失败。请求为 `["v1", "命令", ...]`，未知版本、命令、参数或非规范页号返回 400。最多 16 个在途连接，每请求 10 秒，CLI 总截止 15 秒。响应 `{"status":200,"result":{...}}` 或 `{"status":4xx/5xx,"error":{"code":...,"message":...}}`；失败不伪装空清单。服务停止前收尾请求，再关数据库；仅清理自身 socket inode。既有路径（包括崩溃残留）不自动覆盖；确认为本实例停机、锁已释放后，由同 UID 运维删除残留 socket 再启动，绝不删除数据库或恢复证据。
+
+| `vaultsyncd-admin <命令> --socket <绝对路径> [--json]` | 真实用例与输出 |
+| --- | --- |
+| `status` | 当前 `phase`、owner 的 `root_count`（十进制字符串）、启动 `recovery_detail` |
+| `roots [页号]` | 复用 Root 清单用例；`roots` + `next_page`，只给身份与数据库健康值，不给绝对路径；store 新增 `roots_of_owner_page`，按 ID 读取至多 101 条（100 + 下一页探针） |
+| `roots register <绝对路径>` | 与 HTTP **共用** `roots::register_for_owner`；允许基目录、btrfs/NOCOW/重叠/完整扫描准入与注册事务不变。仅 ready 时接受；原样返回 `RootRegistered` 或现有错误信封，不直接写在线 DB。超时/断线结果未知，先查询 Root 清单核对，不自动重放 |
+| `history <RootId> <EntryId> [页号]` | 服务内 scope 检查后只读真实 committed `versions`，包括软删除条目；版本 ID、字节数、seq、来源、被取代时间，不读取对象内容或账号材料 |
+| `trash <RootId> [页号]` | 真实 `trash_entries`；原相对路径、种类、版本（目录为 null）、删除与到期时间；未知/越权 Root 为 403，而非空成功。恢复写操作仍走既有 operation API |
+| `problems [页号]` | 持久 conflicts 映射、数据库非健康 Root，以及逐 Root 复用 `verify_root_mount` 的**实时**卷/目录身份、挂载与可读性故障；启动恢复说明另带 `recovery_detail`。探测不更新数据库健康值、不推导删除。内部探测路径/spec 在输出前剔除；不冒称有尚未持久化的逐文件观察器问题目录 |
+
+分页命令固定最多 100 条，页号 `0..=1000000`，`next_page=null` 结束；都是实时偏移分页，不提供一致性快照承诺（需要一致清单用既有 snapshots API）。`problems` 的页按候选 Root/冲突计数，健康 Root 过滤后可能空页但仍有 `next_page`，调用方须跟随游标。JSON 不含密码、PHC、access/refresh 材料；成功退出 0，执行/协议失败 1，用法错误 2。远端仅 SSH 登录主机使用本 CLI，或既有认证 HTTPS；本 socket 不是 HTTP 反代入口、不接受 TCP/URL/`--insecure`。
+
+实机回归：`nix develop --command bash -c 'cargo build --offline -p vaultsyncd-server -p vaultsyncd-admin && python3 tests/platform/linux/run-admin-socket.py'`，在源码外独立 btrfs run_id、隔离 loopback SSH daemon 验证；不改宿主 SSH 配置、Windows VM、其它进程或卷。证据与限制见 `agent/tasks/S075.md`。
+
 ## crates/server-core — 历史版本与回收站恢复（S040，子树恢复 S040-b）
 
 主要落点 `crates/server-core/src/history/`（`version`、`trash`），端口在 `ports/restore_store.rs` 与

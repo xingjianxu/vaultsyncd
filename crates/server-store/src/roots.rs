@@ -253,6 +253,23 @@ pub async fn roots_of_owner(
     rows.into_iter().map(RootRow::into_record).collect()
 }
 
+/// 本机管理的有界 Root 页：按身份排序，最多 101 条（100 条与一条 next-page 探针）。
+pub async fn roots_of_owner_page(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+    page: u32,
+) -> Result<Vec<RootRecord>, RootError> {
+    let rows = sqlx::query_as::<_, RootRow>(&format!(
+        "SELECT {ROOT_COLUMNS} FROM roots WHERE owner_id = ?1 ORDER BY id LIMIT 101 OFFSET ?2"
+    ))
+    .bind(owner.as_bytes().as_slice())
+    .bind(i64::from(page) * 100)
+    .fetch_all(conn)
+    .await
+    .map_err(RootError::Db)?;
+    rows.into_iter().map(RootRow::into_record).collect()
+}
+
 /// 列出全部已注册 Root，按路径文本排序（启动恢复用）。
 ///
 /// 启动恢复是系统级操作，不属于某个 owner scope：进程必须恢复每一个已注册 Root，不能因为
@@ -473,6 +490,31 @@ mod tests {
             roots_of_owner(&mut conn, user(0x12))
                 .await
                 .expect("列 Root")
+                .is_empty()
+        );
+        drop(conn);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn local_admin_root_pages_are_bounded_ordered_and_owner_scoped() {
+        let dir = TestDir::new("admin-root-pages");
+        let database = open_database(&dir).await;
+        let owner = seed_owner(&database, 0x11).await;
+        for seed in 1..=102 {
+            register_root(&database, owner, seed).await;
+        }
+        let mut conn = database.pool().acquire().await.unwrap();
+        let first = roots_of_owner_page(&mut conn, owner, 0).await.unwrap();
+        let second = roots_of_owner_page(&mut conn, owner, 1).await.unwrap();
+        assert_eq!(first.len(), 101);
+        assert_eq!(second.len(), 2);
+        assert_eq!(first[100].id, second[0].id, "额外一行只是下一页探针");
+        assert!(first.windows(2).all(|pair| pair[0].id < pair[1].id));
+        assert!(
+            roots_of_owner_page(&mut conn, user(0x12), 0)
+                .await
+                .unwrap()
                 .is_empty()
         );
         drop(conn);
