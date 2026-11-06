@@ -2447,8 +2447,11 @@ dependencies = [
 name = "vaultsyncd-agent"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
+ "url",
  "vaultsyncd-agent-core",
  "vaultsyncd-client-store",
  "vaultsyncd-domain",

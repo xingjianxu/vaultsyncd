@@ -15,6 +15,9 @@ vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
 vaultsyncd-transfer = { path = "../../crates/transfer" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
 
 [dev-dependencies]
 vaultsyncd-fs-common = { path = "../../crates/fs-common" }
