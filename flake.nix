@@ -19,6 +19,18 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      nixosModules.default = { pkgs, lib, ... }: {
+        imports = [ ./nix/modules/vaultsyncd.nix ];
+        services.vaultsyncd.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      };
+      nixosModules.vaultsyncd = self.nixosModules.default;
+      checks = forAllSystems (pkgs: {
+        nixos-module = (import ./deploy/nixos/eval.nix {
+          nixpkgs = nixpkgs.outPath;
+          module = self.nixosModules.default;
+          package = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        }).unit;
+      });
       packages = forAllSystems (pkgs: import ./nix/package.nix {
         inherit pkgs;
         src = self.outPath;

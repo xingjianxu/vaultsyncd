@@ -2490,3 +2490,10 @@ S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站
 补齐既有GET /v1/capabilities，不新增wire DTO/版本。bootstrap在状态锁/DB门后持久稳定ServerId，返回当前恢复epoch、已实现功能和真实限额；Root注册沿用restore_epoch，不在恢复后退回0。权威ServerId是服务器身份，现存agent配置server.id仍按既有客户端命名空间使用，本卡未额外收紧身份pin；URL/TLS/Root/会话授权边界照旧。
 
 默认Rust ApiClient（包括testing/all-features构建）在发送认证/数据请求前读取实际capabilities，拒major/不合法限额或缺已知能力；只使用已知feature交集，兼容更高minor与未知增量字段。刷新和401重试也重核，不向capability请求携带凭据/内容；本地恢复、数据库、缓存和未确认队列不由HTTP错误清理。仅cfg(test/testing)显式单元构造器with_transport_for_unit_tests可关闭这一层，生产默认构造器不受feature隐式影响。真实TCP fixture代理后接真实服务证明major拒绝不抵达login、缺uploads不创建上传，凭据保留；默认/testing各1项通过。当前没有旧正式发行客户端，固定开发profile/历史迁移校验和见tests/contract/fixtures/s091，不冒充正式版本互通。
+
+## S095 NixOS 服务模块与显式存储授权
+
+- flake 导出 `nixosModules.default/vaultsyncd`、`checks.x86_64-linux.nixos-module`。`services.vaultsyncd` 提供 enable、package（默认同 flake Linux发行包）、user/group、extraGroups、stateDir、rootPaths、settings.server.listen/settings.log。settings 严格限于非敏感设置；没有 secret/auth/初始密码选项，owner 仅离线 admin stdin 初始化。生成 TOML 只含监听、路径与日志；空 rootPaths 不配置允许基目录，产品拒绝注册。
+- 专用非 root UID；User/Group、0077、NoNewPrivileges、空 capability 集、ProtectSystem=strict/ProtectHome=read-only；ReadWritePaths 仅内部 stateDir 与显式 Root 基目录。rootPaths 与状态互不包含，禁止系统路径，产品注册继续负责真实身份、嵌套 mount/subvolume/扫描准入。外部 Root 权限由管理员 ACL/组明确授予，不递归改权、不创建资料目录。
+- `/var/lib/` 内专用状态用 StateDirectory/0700；其他 stateDir 须预先由服务 UID 持有并0700。RequiresMountsFor 包括状态、backups 与 Root；read-only preflight 核对真实目录、访问权、btrfs/CoW/checksums 与 user_subvol_rm_allowed。不提供自动格式化、迁移、mount/sudo/CAP_SYS_ADMIN。备份 prepared/snapshot 为合法内部子卷；只读顶层 preflight 不误扫/改权。
+- `deploy/nixos/eval.nix` 是不激活的完整 NixOS fixture；构建 system 与 unit/config，`test-service.py` 把相同 unit 改用唯一测试名运行临时 UID/独立 btrfs，实际检查 Root 写入、白名单外/系统 EROFS、普通 UID快照/验证/删除与负例。部署及显式授权说明见 `deploy/nixos/README.md`；正式主机启用由 S096 单独验收。
