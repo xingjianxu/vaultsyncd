@@ -5282,7 +5282,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
- "vaultsyncd-domain",
  "vaultsyncd-http-client",
  "vaultsyncd-local-ipc",
  "vaultsyncd-platform-windows",

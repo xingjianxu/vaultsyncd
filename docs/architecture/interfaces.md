@@ -2448,3 +2448,9 @@ S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包�
 - 桌面新增固定 `agent_list_history/agent_list_trash/agent_restore_entry` 与通知设置命令，AppManifest及capability同步最小授权，无任意HTTP/数据库入口。历史/回收站分页含到期下限和冲突来源；恢复输入先持久到agent，再GET原Op，404才POST原请求，只有committed成功。服务端仍核对Root/权限/CAS，同名恢复保留现目标；返回授权快照内实际相对位置，位置尚未取得时明确待核对。UI未知/pending保留原操作身份供核对，不显示已恢复。
 - WinRT Toast固定AUMID `org.vaultsyncd.desktop`，只创建/更新本应用StartMenu快捷方式，拒绝同名他应用和symlink。先原子claim再尝试Show，保证同一活动代际最多尝试一次；Windows禁用/失败时问题仍完整，页面明确投递失败。布尔开关单独保存在用户应用设置，无凭据。微软[桌面AUMID要求](https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid)及[发送示例](https://learn.microsoft.com/en-us/windows/win32/shell/quickstart-sending-desktop-toast)为注册依据；首次未打包应用Setting可能缺行的[平台问题记录](https://github.com/MicrosoftDocs/windows-dev-docs/issues/1431)对应0x80070490，仅该特定错误允许实际Show，其余错误不默认成功。
 - `run-native-notifications.sh` 使用真实Windows WebView及系统History API验证中心记录、清中心/开关不清问题、重复报告与进程重启不风暴、恢复和复发。磁盘满/挂载/冲突的这组输入由离线核心端口夹具产生，只证明问题投影与真实OS投递，不冒充实际卷故障；真实冲突/恢复另由Linux btrfs服务与Windowsagent真壳验证。所有报告/fixture/Toast历史测试桥只在native-acceptance编译，正式构建清理全部四项测试权限。
+
+## S084 未上传内容恢复原生演练
+
+- 不新增产品wire或命令，复用现有`export_recovery(binding_id,destination)`及未ready绑定打开Local的路径。新增`tests/windows-integration/tests/unuploaded_recovery.rs`，仅Windows dev依赖，不把SQLite接入CLI/GUI。真实agent IPC与真实Linux API，数据库仅只读核验；上传part断连只作用于本run私有转发器，非fake成功响应或直接写在线DB。
+- 实际Move被NTFS共享锁阻止产生持久intent；强杀重启后先导出。验证current最新dirty、snapshot旧固定上传、candidate新未观察文件及intent源各自可读/hash，人工CreateNew取回至新空目录；导出前后intent/resume/dirty计数保留，baseline版本/revision及服务端已确认字节不变。同名目的/受保护目录/忙源导出失败不清源、不发布manifest。
+- runner校验NTFS、EXE传输hash、同用户Interactive/Limited登录态与helper实际工作路径，拒绝搬cache中带旧树内嵌路径的helper。恢复包与人工取回副本同步到忽略artifacts后由独立Python重核22份清单文件。只停止记录且核对过exe/config的自有进程；注册根与源数据有意保留，不把注销/卸载作为清理。操作步骤及包角色说明见`docs/operations/recovery.md`；安装/卸载另由S099。
