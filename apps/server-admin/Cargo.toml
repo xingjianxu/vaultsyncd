@@ -21,7 +21,7 @@ rpassword = "7"
 rand_core = { version = "0.6", features = ["getrandom"] }
 # 账号适配器直接持有 `server-store` 打开的写事务，因此需要 sqlx 的 `Transaction` 类型。
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "fs", "io-util"] }
 serde_json = "1"
 vaultsyncd-platform-linux-server = { path = "../../crates/platform-linux-server" }
 vaultsyncd-domain = { path = "../../crates/domain" }

@@ -215,11 +215,28 @@ impl Service {
             Arc::clone(&lifecycle),
         ));
         let admin_context = Arc::new(crate::admin::AdminContext {
+            backups: Some(Arc::new(crate::backup::jobs::Context::new(
+                database.clone(),
+                config.clone(),
+            ))),
             database: database.clone(),
             roots: Arc::clone(&roots),
             lifecycle: Arc::clone(&lifecycle),
         });
+        let backups = Arc::clone(
+            admin_context
+                .backups
+                .as_ref()
+                .expect("service assembles backup context"),
+        );
+        backups.resume().await.map_err(RunError::Serve)?;
+        let backup_router = crate::backup::http::router(
+            Arc::clone(&auth),
+            Arc::clone(&backups),
+            Arc::clone(&lifecycle),
+        );
         let (stop_admin, admin_stopped) = tokio::sync::watch::channel(false);
+        let backup_pump = backups.pump(admin_stopped.clone());
         let admin_failed = Arc::new(tokio::sync::Notify::new());
         let notify_failed = Arc::clone(&admin_failed);
         let admin_task = tokio::spawn(async move {
@@ -237,7 +254,8 @@ impl Service {
             content,
             operations,
             sync,
-        );
+        )
+        .merge(backup_router);
         // 观察循环用独立线程 + current-thread runtime：端口实现（`RootHandle` 与 trait 对象）不要求
         // `Send`，而 HTTP 服务的多线程 runtime 不能承载非 `Send` 的 future。
         let stop_observer = Arc::new(tokio::sync::Notify::new());
@@ -297,6 +315,10 @@ impl Service {
             ),
             Err(error) => warn!(error = %error, "停止时统计未完成意图失败"),
         }
+        if let Err(error) = backup_pump.await {
+            warn!(error=%error,"备份任务重放循环异常结束");
+        }
+        backups.wait().await;
         database.close().await;
         info!(phase = "stopped", "服务端已停止");
 

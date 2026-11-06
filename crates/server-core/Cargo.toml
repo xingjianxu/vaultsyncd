@@ -15,6 +15,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde_json = "1"
 vaultsyncd-domain = { path = "../domain" }
 # 密码散列用 Argon2id（design §17.1、[R12] RFC 9106）：这是本项目允许自行引入密码学库的唯一位置。
 # `password-hash` 提供 PHC 文本与盐生成，`rand` 把操作系统的随机源接进来（盐必须是真随机）。

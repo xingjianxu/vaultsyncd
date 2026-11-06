@@ -22,6 +22,7 @@ const PAGE_SIZE: i64 = 100;
 
 /// 服务内状态；仅本机 UID 认证成功后进入管理用例。
 pub(crate) struct AdminContext {
+    pub backups: Option<Arc<crate::backup::jobs::Context>>,
     pub database: Database,
     pub roots: Arc<RootContext>,
     pub lifecycle: Arc<Lifecycle>,
@@ -43,11 +44,17 @@ pub(crate) async fn serve(
                 let (mut stream, _) = accepted?;
                 if ipc::authorize_peer(&stream).is_err() { continue; }
                 let context = Arc::clone(&context);
+                let stopped = stop.clone();
                 requests.spawn(async move {
                     let exchange = async {
-                        let bytes = ipc::read_frame(&mut stream).await?;
+                        let bytes = bounded(ipc::read_frame(&mut stream)).await?;
                         let result = match serde_json::from_slice::<Vec<String>>(&bytes) {
-                            Ok(args) if args.first().is_some_and(|v| v == "v1") && args.len() <= 5 => dispatch(&context, &args[1..]).await,
+                            Ok(args) if args.first().is_some_and(|v| v == "v1") && args.len() <= 5 => {
+                                if args.len()==4&&args[1]=="backup"&&args[2]=="export" {
+                                    return backup_stream(&context,&mut stream,&args[3],stopped).await;
+                                }
+                                bounded(async{Ok(dispatch(&context, &args[1..]).await)}).await?
+                            },
                             Ok(_) => failure(400, "INVALID_REQUEST", "不支持的协议版本或命令过长"),
                             _ => failure(400, "INVALID_REQUEST", "需要命令字符串数组"),
                         };
@@ -55,9 +62,10 @@ pub(crate) async fn serve(
                         if bytes.len() > ipc::MAX_FRAME {
                             bytes = serde_json::to_vec(&failure(413, "RESPONSE_TOO_LARGE", "单页过大，请缩小管理数据后重试或使用受认证 HTTPS")).map_err(io::Error::other)?;
                         }
-                        ipc::write_frame(&mut stream, &bytes).await
+                        bounded(ipc::write_frame(&mut stream, &bytes)).await
                     };
-                    if let Ok(Err(error)) = tokio::time::timeout(Duration::from_secs(10), exchange).await {
+                    // 常规命令各阶段有10秒截止；流式导出在backup_stream中用逐块截止与停止信号。
+                    if let Err(error) = exchange.await {
                         warn!(error = %error, "本机管理连接失败");
                     }
                 });
@@ -66,6 +74,117 @@ pub(crate) async fn serve(
     }
     while requests.join_next().await.is_some() {}
     Ok(())
+}
+
+async fn bounded<T>(future: impl std::future::Future<Output = io::Result<T>>) -> io::Result<T> {
+    tokio::time::timeout(Duration::from_secs(10), future)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "admin operation deadline exceeded"))?
+}
+
+async fn backup_command(
+    context: &AdminContext,
+    owner: UserId,
+    args: &[String],
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let Some(backups) = &context.backups else {
+        return Ok(failure(503, "NEEDS_RECOVERY", "备份上下文尚未组装"));
+    };
+    if args.first().is_some_and(|s| s == "list") && (args.len() == 1 || args.len() == 2) {
+        let page = if args.len() == 2 {
+            match args[1].parse::<u32>() {
+                Ok(page) => page,
+                Err(_) => return Ok(failure(400, "INVALID_REQUEST", "非法页码")),
+            }
+        } else {
+            0
+        };
+        if page > 1_000_000 || (args.len() == 2 && page.to_string() != args[1]) {
+            return Ok(failure(
+                400,
+                "INVALID_REQUEST",
+                "页码必须为规范十进制0..1000000",
+            ));
+        }
+        return Ok(success(serde_json::to_value(
+            backups.list(owner, page).await?,
+        )?));
+    }
+    if args.len() != 2 {
+        return Ok(failure(
+            400,
+            "INVALID_REQUEST",
+            "backup命令需要操作与稳定ID",
+        ));
+    }
+    let id = match vaultsyncd_domain::ids::BackupLeaseId::from_hex(&args[1]) {
+        Ok(id) => id,
+        Err(_) => return Ok(failure(400, "INVALID_REQUEST", "非法备份身份")),
+    };
+    if id.to_hex() != args[1] {
+        return Ok(failure(
+            400,
+            "INVALID_REQUEST",
+            "备份身份必须为32位小写十六进制",
+        ));
+    }
+    if args[0] == "status" {
+        return Ok(success(serde_json::to_value(
+            backups.status(owner, id).await?,
+        )?));
+    }
+    if !["prepare", "verify", "release"].contains(&args[0].as_str()) {
+        return Ok(failure(400, "INVALID_REQUEST", "未知备份命令"));
+    }
+    if args[0] == "prepare" && context.lifecycle.phase() != crate::lifecycle::Phase::Ready {
+        return Ok(failure(503, "NEEDS_RECOVERY", "服务未就绪"));
+    }
+    Ok(json!({"status":202,"result":backups.submit(owner,id,&args[0]).await?}))
+}
+
+async fn backup_stream(
+    context: &AdminContext,
+    stream: &mut tokio::net::UnixStream,
+    text: &str,
+    mut stopped: watch::Receiver<bool>,
+) -> io::Result<()> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let start=bounded(async{
+        let backups=context.backups.as_ref().ok_or_else(||io::Error::other("backup context unavailable"))?;
+        let owners:Vec<Vec<u8>>=sqlx::query_scalar("SELECT id FROM users WHERE status='active' LIMIT 2").fetch_all(context.database.pool()).await.map_err(io::Error::other)?;
+        if owners.len()!=1{return Err(io::Error::new(io::ErrorKind::PermissionDenied,"unique owner required"))}
+        let owner=UserId::from_bytes(owners[0].clone().try_into().map_err(|_|io::Error::other("invalid owner"))?);
+        let id=vaultsyncd_domain::ids::BackupLeaseId::from_hex(text).map_err(|e|io::Error::new(io::ErrorKind::InvalidInput,e))?;if id.to_hex()!=text{return Err(io::Error::new(io::ErrorKind::InvalidInput,"noncanonical backup ID"))}
+        let state=backups.status(owner,id).await?;let source=backups.archive(owner,id).await?;
+        Ok((source,success(json!({"backup_id":id.to_hex(),"manifest_hash":state.manifest_hash,"format":"VSBK001"}))))
+    }).await;
+    let (mut source, header) = match start {
+        Ok(v) => v,
+        Err(error) => {
+            let code = match error.kind() {
+                io::ErrorKind::PermissionDenied => 403,
+                io::ErrorKind::NotFound => 404,
+                io::ErrorKind::InvalidInput => 400,
+                _ => 503,
+            };
+            let bytes =
+                serde_json::to_vec(&failure(code, "BACKUP_UNAVAILABLE", &error.to_string()))
+                    .map_err(io::Error::other)?;
+            return bounded(ipc::write_frame(stream, &bytes)).await;
+        }
+    };
+    bounded(ipc::write_frame(
+        stream,
+        &serde_json::to_vec(&header).map_err(io::Error::other)?,
+    ))
+    .await?;
+    loop {
+        let next = tokio::select! {_ = stopped.changed()=>return Err(io::Error::new(io::ErrorKind::Interrupted,"service stopping")),next=source.next()=>next};
+        let Some(bytes) = next else { return Ok(()) };
+        let bytes = bytes?;
+        tokio::select! {_ = stopped.changed()=>return Err(io::Error::new(io::ErrorKind::Interrupted,"service stopping")),result=tokio::time::timeout(Duration::from_secs(30),stream.write_all(&bytes))=>result.map_err(|_|io::Error::new(io::ErrorKind::TimedOut,"backup export idle deadline"))??};
+    }
 }
 
 fn failure(status: u16, code: &str, message: &str) -> Value {
@@ -129,6 +248,9 @@ async fn execute(
         ));
     }
     drop(conn);
+    if command == "backup" {
+        return backup_command(context, owner, &args[1..]).await;
+    }
     if command == "roots" && args.len() == 3 && args[1] == "register" {
         if context.lifecycle.phase() != crate::lifecycle::Phase::Ready {
             return Ok(failure(
@@ -282,6 +404,7 @@ mod tests {
         let lifecycle = Arc::new(Lifecycle::new());
         lifecycle.mark_ready();
         let context = AdminContext {
+            backups: None,
             roots: Arc::new(RootContext::new(
                 Arc::new(crate::auth::AuthContext::new(database.clone())),
                 None,

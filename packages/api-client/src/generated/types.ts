@@ -36,16 +36,16 @@ function expect_array(value: unknown, what: string): unknown[] {
   return value;
 }
 
-function expect_number(value: unknown, what: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new Error(`期望 ${what} 是整数`);
+function expect_boolean(value: unknown, what: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`期望 ${what} 是布尔值`);
   }
   return value;
 }
 
-function expect_boolean(value: unknown, what: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new Error(`期望 ${what} 是布尔值`);
+function expect_number(value: unknown, what: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`期望 ${what} 是整数`);
   }
   return value;
 }
@@ -89,6 +89,93 @@ export function decodeAccountInfo(value: unknown): AccountInfo {
     login: expect_string(object.login, "AccountInfo.login"),
     session_id: expect_string(object.session_id, "AccountInfo.session_id"),
     user_id: expect_string(object.user_id, "AccountInfo.user_id"),
+  };
+}
+
+/** 固定源内容的完整性，不能代表客户端目标已持久导出。 */
+export type BackupIntegrity = "unverified" | "verified" | "incomplete";
+
+export const BACKUP_INTEGRITY_VALUES = ["unverified", "verified", "incomplete"] as const;
+
+export function decodeBackupIntegrity(value: unknown): BackupIntegrity {
+  if (typeof value !== "string" || !(BACKUP_INTEGRITY_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 BackupIntegrity 取值：${JSON.stringify(value)}`);
+  }
+  return value as BackupIntegrity;
+}
+
+/** 备份管理的BackupPrepareRequest契约 */
+export interface BackupPrepareRequest {
+  /** 调用方稳定请求身份；重试复用。 */
+  backup_id: string;
+}
+
+export function decodeBackupPrepareRequest(value: unknown): BackupPrepareRequest {
+  const object = expect_object(value, "BackupPrepareRequest");
+  return {
+    backup_id: expect_string(object.backup_id, "BackupPrepareRequest.backup_id"),
+  };
+}
+
+/** 备份管理的BackupSnapshotList契约 */
+export interface BackupSnapshotList {
+  /** 当前页备份状态 */
+  items: Array<BackupSnapshotStatus>;
+  /** 下一页号，缺省表示结束 */
+  next_page?: string;
+}
+
+export function decodeBackupSnapshotList(value: unknown): BackupSnapshotList {
+  const object = expect_object(value, "BackupSnapshotList");
+  return {
+    items: expect_array(object.items, "BackupSnapshotList.items").map((item) => decodeBackupSnapshotStatus(item)),
+    next_page: object.next_page === undefined ? undefined : expect_decimal(object.next_page, "BackupSnapshotList.next_page"),
+  };
+}
+
+/** 源快照准备/释放阶段；不会把pending当complete。 */
+export type BackupSnapshotPhase = "preparing" | "ready" | "failed" | "releasing" | "released" | "expired";
+
+export const BACKUP_SNAPSHOT_PHASE_VALUES = ["preparing", "ready", "failed", "releasing", "released", "expired"] as const;
+
+export function decodeBackupSnapshotPhase(value: unknown): BackupSnapshotPhase {
+  if (typeof value !== "string" || !(BACKUP_SNAPSHOT_PHASE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 BackupSnapshotPhase 取值：${JSON.stringify(value)}`);
+  }
+  return value as BackupSnapshotPhase;
+}
+
+/** 备份管理的BackupSnapshotStatus契约 */
+export interface BackupSnapshotStatus {
+  /** 稳定备份身份，32位小写十六进制 */
+  backup_id: string;
+  /** 创建UTC Unix秒 */
+  created_at: string;
+  /** 当前原因或错误说明 */
+  detail: string;
+  /** 租约到期UTC Unix秒 */
+  expires_at: string;
+  /** 源快照完整性，独立于客户端导出 */
+  integrity: BackupIntegrity;
+  /** 持久作业是否尚未结束 */
+  job_pending: boolean;
+  /** 固定manifest SHA-256，准备成功后才提供 */
+  manifest_hash?: string;
+  /** 快照准备或释放阶段 */
+  phase: BackupSnapshotPhase;
+}
+
+export function decodeBackupSnapshotStatus(value: unknown): BackupSnapshotStatus {
+  const object = expect_object(value, "BackupSnapshotStatus");
+  return {
+    backup_id: expect_string(object.backup_id, "BackupSnapshotStatus.backup_id"),
+    created_at: expect_decimal(object.created_at, "BackupSnapshotStatus.created_at"),
+    detail: expect_string(object.detail, "BackupSnapshotStatus.detail"),
+    expires_at: expect_decimal(object.expires_at, "BackupSnapshotStatus.expires_at"),
+    integrity: decodeBackupIntegrity(object.integrity),
+    job_pending: expect_boolean(object.job_pending, "BackupSnapshotStatus.job_pending"),
+    manifest_hash: object.manifest_hash === undefined ? undefined : expect_string(object.manifest_hash, "BackupSnapshotStatus.manifest_hash"),
+    phase: decodeBackupSnapshotPhase(object.phase),
   };
 }
 

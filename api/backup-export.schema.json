@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vaultsyncd durable backup export receipt v1",
+  "description": "Owner-only 0600 sidecar <archive>.verification.json. exported_unverified records fsynced export; only explicit offline verify rereads every item before verified. Missing, corrupt or canceled exports stay incomplete. VSBK001 archive is magic VSBK001\\n (8 bytes), big-endian u64 manifest length (1..268435456), exact pinned manifest bytes, items ordered by UTF-8 path: big-endian u32 path length, path UTF-8, big-endian u64 content length, exact content. Final u32 zero is emitted only after every manifest item hashes successfully. The manifest fixes all paths, lengths and hashes; no arbitrary or duplicate entries. Each streaming buffer is at most 65536 bytes excluding bounded manifest. Neither ready nor source verified implies a durable client export.",
+  "type": "object",
+  "required": [
+    "format_version",
+    "state",
+    "backup_id",
+    "manifest_hash",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "state": {
+      "enum": [
+        "incomplete",
+        "exported_unverified",
+        "verified"
+      ]
+    },
+    "backup_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "manifest_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "server_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "checked_files": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}

@@ -2,33 +2,243 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vaultsyncd.invalid/schema/admin-socket-v1",
   "title": "Linux local administration v1",
-  "description": "One request and one response per Unix connection. Each document is UTF-8 JSON preceded by a 4-byte big-endian unsigned byte length in 1..1048576. Only the service effective UID is permitted. No credentials, arbitrary SQL or remote transport. Dynamic JSON documents have no parallel handwritten DTO.",
-  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/response"}],
+  "description": "One request and one response per Unix connection. Each document is UTF-8 JSON preceded by a 4-byte big-endian unsigned byte length in 1..1048576. Only the service effective UID is permitted. No credentials, arbitrary SQL or remote transport. Dynamic JSON documents have no parallel handwritten DTO. Backup prepare/verify/release acknowledge a persisted background job, unaffected by the ordinary 10-second request deadline. backup export replies with a framed 200 handshake then an unframed VSBK001 archive until EOF; it uses a 30-second idle deadline per write and never sends a terminal marker on failure. Service shutdown stops export connections but retains accepted jobs. Manifest hash is a pinned digest, not a secret.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
   "$defs": {
-    "id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
-    "page": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,5}|1000000)$", "description": "Canonical page number, 0..1000000, fixed 100 items per page. Live offset pagination, not a consistent snapshot."},
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "page": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,5}|1000000)$",
+      "description": "Canonical page number, 0..1000000, fixed 100 items per page. Live offset pagination, not a consistent snapshot."
+    },
     "request": {
       "type": "array",
       "oneOf": [
-        {"prefixItems": [{"const": "v1"}, {"const": "status"}], "minItems": 2, "maxItems": 2},
-        {"prefixItems": [{"const": "v1"}, {"const": "roots"}, {"$ref": "#/$defs/page"}], "minItems": 2, "maxItems": 3},
-        {"prefixItems": [{"const": "v1"}, {"const": "roots"}, {"const": "register"}, {"type": "string", "pattern": "^/"}], "minItems": 4, "maxItems": 4},
-        {"prefixItems": [{"const": "v1"}, {"const": "problems"}, {"$ref": "#/$defs/page"}], "minItems": 2, "maxItems": 3},
-        {"prefixItems": [{"const": "v1"}, {"const": "trash"}, {"$ref": "#/$defs/id"}, {"$ref": "#/$defs/page"}], "minItems": 3, "maxItems": 4},
-        {"prefixItems": [{"const": "v1"}, {"const": "history"}, {"$ref": "#/$defs/id"}, {"$ref": "#/$defs/id"}, {"$ref": "#/$defs/page"}], "minItems": 4, "maxItems": 5}
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "status"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "roots"
+            },
+            {
+              "$ref": "#/$defs/page"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 3
+        },
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "roots"
+            },
+            {
+              "const": "register"
+            },
+            {
+              "type": "string",
+              "pattern": "^/"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4
+        },
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "problems"
+            },
+            {
+              "$ref": "#/$defs/page"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 3
+        },
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "trash"
+            },
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "$ref": "#/$defs/page"
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 4
+        },
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "history"
+            },
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "$ref": "#/$defs/page"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 5
+        },
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "backup"
+            },
+            {
+              "const": "list"
+            },
+            {
+              "$ref": "#/$defs/page"
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 4
+        },
+        {
+          "prefixItems": [
+            {
+              "const": "v1"
+            },
+            {
+              "const": "backup"
+            },
+            {
+              "enum": [
+                "prepare",
+                "status",
+                "export",
+                "verify",
+                "release"
+              ]
+            },
+            {
+              "$ref": "#/$defs/id"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4
+        }
       ]
     },
     "response": {
       "type": "object",
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "additionalProperties": false,
       "properties": {
-        "status": {"type": "integer", "minimum": 100, "maximum": 599},
-        "result": {"type": "object", "description": "status: phase/root_count/recovery_detail; roots: existing OpenAPI RootList plus next_page; registration: existing OpenAPI RootRegistered; paged reads: items/next_page/recovery_detail. History items whitelist version_id, entry_id, size, created_seq, origin, superseded_at. Trash items whitelist entry_id, path, kind, version_id, deleted_at, expires_at. Problems items are root_health (root_id/health/reason, live mount identity and readability probe) or persisted conflict (root_id/entry_id/copy_entry_id/path/reason). No user, password, hash or session records."},
-        "error": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}, "additionalProperties": true}
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "result": {
+          "type": "object",
+          "description": "status: phase/root_count/recovery_detail; roots: existing OpenAPI RootList plus next_page; registration: existing OpenAPI RootRegistered; paged reads: items/next_page/recovery_detail. History items whitelist version_id, entry_id, size, created_seq, origin, superseded_at. Trash items whitelist entry_id, path, kind, version_id, deleted_at, expires_at. Problems items are root_health (root_id/health/reason, live mount identity and readability probe) or persisted conflict (root_id/entry_id/copy_entry_id/path/reason). No user, password, hash or session records. Backup status/list use OpenAPI BackupSnapshotStatus/List. Export handshake includes backup_id/manifest_hash/format VSBK001. Same UID is still required and each action requires the unique active owner."
+        },
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
       },
-      "oneOf": [{"required": ["result"]}, {"required": ["error"]}]
+      "oneOf": [
+        {
+          "required": [
+            "result"
+          ]
+        },
+        {
+          "required": [
+            "error"
+          ]
+        }
+      ]
     }
   },
-  "examples": [["v1", "status"], ["v1", "roots", "register", "/data/work"], ["v1", "trash", "0123456789abcdef0123456789abcdef", "0"], {"status": 200, "result": {"phase": "ready", "root_count": "1", "recovery_detail": null}}]
+  "examples": [
+    [
+      "v1",
+      "status"
+    ],
+    [
+      "v1",
+      "roots",
+      "register",
+      "/data/work"
+    ],
+    [
+      "v1",
+      "trash",
+      "0123456789abcdef0123456789abcdef",
+      "0"
+    ],
+    {
+      "status": 200,
+      "result": {
+        "phase": "ready",
+        "root_count": "1",
+        "recovery_detail": null
+      }
+    }
+  ]
 }
