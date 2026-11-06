@@ -50,3 +50,8 @@ mod work;
 
 #[cfg(windows)]
 pub mod release;
+
+#[cfg(windows)]
+pub mod maintenance;
+#[cfg(windows)]
+mod maintenance_prepare;

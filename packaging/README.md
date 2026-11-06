@@ -32,4 +32,4 @@ assemble/verify 再核当前提交、版本/锁和 payload 的完整文件集；
 （先 build xtask、提交本卡代码；使用实际双前端构建与可还原负例，不占 Windows VM）。
 
 
-S099增加`windows-client`组件：在`nix develop .#windows`内执行相同release build入口，使用新target真实构建GUI/agent/CLI/session launcher及未签名NSIS首装测试包；继承严格同HEAD、前后来源核对和完整payload清单。用户状态与启动、原生验收条件见[Windows安装操作](../docs/operations/windows-installation.md)。安装验证须真实Windows，不以组件收据代替。
+S099增加`windows-client`组件：在`nix develop .#windows`内执行相同release build入口，使用新target真实构建GUI/agent/CLI/session launcher及未签名NSIS测试包（S100增加受控升级与默认保留数据的卸载）；继承严格同HEAD、前后来源核对和完整payload清单。用户状态与启动、原生验收条件见[Windows安装操作](../docs/operations/windows-installation.md)。安装验证须真实Windows，不以组件收据代替。

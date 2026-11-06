@@ -73,6 +73,8 @@ pub fn launch() -> io::Result<()> {
         std::env::var_os("LOCALAPPDATA").ok_or_else(|| io::Error::other("missing LOCALAPPDATA"))?,
     );
     let config = prepare(&local)?;
+    let parsed = AgentConfig::load(&config)?;
+    crate::maintenance::admit_startup(&parsed).map_err(|e| io::Error::other(e.to_string()))?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)

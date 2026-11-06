@@ -1,6 +1,6 @@
 # 实施进度
 
-本轮：**S076—S100 执行中**，单卡单执行者，同时最多三个。已合master并清理任务树/分支：S076—S096、S099共22卡已合master并清理任务树/分支。执行中S097/S100，S098等待S097；S099为unsigned-test产物，未冒充正式签名发布。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线b5be427；每卡完成立即合master/归档/清理，证据见 `agent/tasks/S076-S100.md`。
+本轮：**S076—S100 执行中**，单卡单执行者，同时最多三个。已合master并清理任务树/分支：S076—S097、S099共23卡已合master并清理任务树/分支。执行中S098/S100；S099为unsigned-test产物，未冒充正式签名发布。父协调树 `/home/xingjian/.codex/worktrees/d836/vaultsyncd`，分支 `feat/S076-S100-integration`，基线b5be427；每卡完成立即合master/归档/清理，证据见 `agent/tasks/S076-S100.md`。
 
 当前阶段：**S071—S075 全部 done（2026-11-06）**。按用户要求每张卡一个 subagent、同时最多 3 个：S071 与 S075 先并行，S072→S073→S074 按依赖顺序推进，S072 中断后同树续接，S074 核验暴露的 socket 残留回归由 S075-c 修复。集成工作树 `/wrd/prj/vaultsyncd/.worktrees/s071-s075`，分支 `feat/S071-S075-integration`，基线 `873f306`。**合并与清理（2026-11-06，用户要求）**：父会话先核对三批集成分支均以 `0b3b3c6` 为基线并顺序包含（S061—S065 ⊂ S066—S070 ⊂ S071—S075）、三棵树均无未提交修改，再以 `git merge --ff-only feat/S071-S075-integration` 把 master 从 `0b3b3c6` 快进到 `01ce551`（含 S061—S075 全部提交）；逐支确认已被 master 包含后，三棵集成树 `git worktree remove`、本地分支 `git branch -d` 全部清理，ignored 证据归档到主工作区 `artifacts/batch-S061-S075/{s061-s065,s066-s070,s071-s075}`。未推送、未改写历史。
 
@@ -122,7 +122,7 @@
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | done | d90a263、b615fd9、b345ac9、d8b3cce、fd2f52d、f580392 | Chromium/Windows原生+Edge严格TLS、16MiB/SSE、Nix+host240与重启、独立bind/持久恢复通过 | 开发CA回环，无公网部署；旧Prepared跨dev保守停写 | agent/tasks/S097.md；下一S098 |
 | S098 | 通用 Linux 包与容器配置 | L | S094、S097 | todo | — | 未执行 | — | agent/tasks/S098.md（执行时创建） |
 | S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | done | ca510ab→cf1d174；交接见任务HEAD | 锁定NSIS/真实同源正式包；标准用户中文空格首装、GUI CLI同实例、关闭与真实重启后上传hash通过 | unsigned-test；原登录恢复且VM在线；父立即合并归档清理 | agent/tasks/S099.md |
-| S100 | Windows 升级与卸载保护 | W | S099、S091 | todo | — | 未执行 | — | agent/tasks/S100.md（执行时创建） |
+| S100 | Windows 升级与卸载保护 | W | S099、S091 | done | 3a2e2aa→d0392f4；交接见任务HEAD | 真实0.1.0→0.1.1/忙文件回退；默认卸载重装/不完整拒绝/4占位revert、6文件hash、708恢复读回；边界通过 | 产品PE1794752；分段源与失败保留；unsigned-test；父立即合并归档清理；本批结束 | agent/tasks/S100.md |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | todo | — | 未执行 | — | agent/tasks/S101.md（执行时创建） |
 | S102 | 事件异常与旧设备集成验收 | X | S074、S089、S091 | todo | — | 未执行 | — | agent/tasks/S102.md（执行时创建） |
 | S103 | 文件与挂载故障集成验收 | X | S074、S051、S068 | todo | — | 未执行 | — | agent/tasks/S103.md（执行时创建） |

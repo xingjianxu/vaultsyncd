@@ -34,3 +34,6 @@ pub use lifecycle::{HResult, StageError};
 #[cfg(windows)]
 pub mod adapter;
 pub mod catalog;
+
+#[cfg(windows)]
+pub mod maintenance;

@@ -2522,3 +2522,10 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 - desktop精确`--register-shortcut`仅注册自身AUMID `org.vaultsyncd.desktop`再退出；NSIS用户权限写HKCU Run `vaultsyncd-agent`为带引号的固定session路径。程序与状态分离，Windows11 x64/WebView2 pv前置，当前仅未签名首装测试；已有安装/不满足目录拒绝，不清数据。升级卸载由S100。
 - `cargo xtask release build windows-client <new-dir>`扩展S093来源收据：实际全新target cross release四PE，冻结锁前端，实测NSIS与Rust/Node/pnpm工具，PE/验收入口检查，installed-files.json与每个payload hash。合并/交接后的新HEAD不能重用旧来源收据，须真实重建。操作见`docs/operations/windows-installation.md`。
 - 原生驱动`tests/platform/windows/s099-installation.py`只协调独立测试用户与可恢复登录，原LSA备份使用客体私有ACL+机器DPAPI，不进入宿主证据。正式源cf1d174真实新标准用户安装、GUI/CLI同instance、WM_CLOSE后上传、重启登录Run启动及再次上传hash均过；原Quickemu登录恢复且VM在线。原生公开结果与页面截图在忽略artifacts/S099。
+
+### S100 — 维护屏障、整套回退与安全卸载
+
+- 唯一schema源增加IPC1.5 `prepare_maintenance(destination)`，严格限定参数；暂停全部绑定、断并排空CFAPI回调、逐绑定ExportRecovery后退出，失败同样停止，不以半断开的运行态继续执行。普通agent和session在打开DB前检查`agent/maintenance.json`；不会自行清屏障。维护导出操作有30分钟上限，普通请求/帧仍5秒，未向GUI开放通用启动/停进程能力。
+- agent固定`--maintenance <upgrade|uninstall-program|uninstall-provider|recover> --program-dir <目录>`验证程序清单和实际同用户IPC进程路径，停机后独占writer锁，固定整套state（含旧WAL）与程序hash备份先于迁移替换。明确S099开发源cf1d174可在暂停、无传输且导出后兼容停止；不猜其它旧程序。失败恢复全套旧库/程序而不再跑新迁移器，原暂停控制单独恢复；屏障/候选/plan及备份留供recover。
+- 默认卸载只删除固定程序/Run/快捷方式，Root/state/cache/dirty与云端占位保留；后者无provider时不能假称完整离线文件。显式provider模式先检查每个Root、拒绝cloud-only/partial/未知，再连续句柄锁定并比较revert前后SHA256，无任何占位才注销CFAPI/Explorer；完整和dirty字节不删，解绑沿用keep-data。沿既有ensure_no_placeholders保护，不把Windows直接注销当数据保全操作。
+- 产品版本0.1.1经S093唯一源同步；IPC1.5与远端协议/数据库schema独立，当前没有旧正式客户端。原生驱动复用S099标准用户/客体私有密码，原LSA仅私有ACL+机器DPAPI保存恢复；不reset密码、不导出秘密、不改在线DB。实际产品1794752原生八段前缀/最终续验分开记录：busy程序升级回退、正常升级、原生默认卸载重装、不完整拒绝通过；人工验证完整缓存恢复不称网络下载，四个完整占位revert后两Root注销、六文件hash与708恢复包文件独立读回通过。原dirty/state/cache保留，原登录恢复且VM在线。精确源与分段范围见S100交接及artifacts/S100/final-matrix.json、driver-provenance.json。
