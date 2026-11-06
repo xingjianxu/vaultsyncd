@@ -24,6 +24,11 @@
     "allow-agent-retry-problem",
     "allow-agent-set-mode",
     "allow-agent-detach-binding",
-    "allow-agent-export-recovery"
+    "allow-agent-export-recovery",
+    "allow-agent-list-history",
+    "allow-agent-list-trash",
+    "allow-agent-restore-entry",
+    "allow-agent-notification-settings",
+    "allow-agent-set-notifications"
   ]
 }

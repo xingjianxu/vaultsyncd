@@ -58,3 +58,28 @@ pub async fn resolve_root(db: &Database, root: RootId, code: ErrorCode) -> Resul
     tx.commit().await.map_err(super::error)?;
     Ok(result)
 }
+/// A committed conflict copy requires review; its explicit cause is separate from transient CAS retry.
+pub async fn report_conflict(db: &Database, root: RootId) -> Result<(), PortError> {
+    let mut tx = db.begin_write().await.map_err(super::error)?;
+    notifications::raise(
+        &mut tx,
+        &NewNotification {
+            dedupe_key: format!("root:{root}:CONFLICT_COPY"),
+            binding: None,
+            entry: None,
+            code: ErrorCode::NeedsRecovery,
+        },
+    )
+    .await
+    .map_err(super::error)?;
+    tx.commit().await.map_err(super::error)
+}
+/// Conflict policy for application adapters that must atomically persist it with a committed ACK.
+pub fn conflict_problem(root: RootId) -> NewNotification {
+    NewNotification {
+        dedupe_key: format!("root:{root}:CONFLICT_COPY"),
+        binding: None,
+        entry: None,
+        code: ErrorCode::NeedsRecovery,
+    }
+}

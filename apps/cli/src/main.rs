@@ -599,6 +599,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::Logout => "logout",
         CommandName::ListRoots => "roots",
         CommandName::ListFiles => "files",
+        CommandName::ClaimNotification => "claim-notification",
         CommandName::SetMode => "mode",
         CommandName::ListHistory => "history",
         CommandName::ListTrash => "trash",

@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface ConnectionInput { serverId: string; serverUrl: string; caFile?: string }
 export interface BindingInput { bindingId: string; rootId: string; localPath: string; mode: "full" | "on_demand" }
+export interface RestoreInput { bindingId:string;entryId:string;operationId:string;baseRevision:string;versionId?:string }
+export interface NotificationSettings { enabled:boolean;delivered:number;blocked:number;last_error?:string }
 export interface AgentClient {
   getStatus(): Promise<GetStatusResult>;
   setConnection(input: ConnectionInput): Promise<ManagementResult>;
@@ -20,6 +22,11 @@ export interface AgentClient {
   setMode(bindingId: string, mode: "full" | "on_demand"): Promise<ManagementResult>;
   detachBinding(bindingId: string): Promise<ManagementResult>;
   exportRecovery(bindingId: string, destination: string): Promise<ManagementResult>;
+  listHistory(bindingId:string,entryId:string,cursor?:string):Promise<ManagementResult>;
+  listTrash(bindingId:string,cursor?:string):Promise<ManagementResult>;
+  restoreEntry(input:RestoreInput):Promise<ManagementResult>;
+  notificationSettings():Promise<NotificationSettings>;
+  setNotifications(enabled:boolean):Promise<NotificationSettings>;
 }
 const unavailable = async (): Promise<never> => { throw new Error("未连接：当前为 IPC 测试替身，尚未接入本机 agent。"); };
 // 仅供应用壳开发的明确替身；S080 替换为 Tauri command 桥，绝不返回伪造 Binding。
@@ -28,6 +35,7 @@ export const disconnectedAgent: AgentClient = {
   listRoots: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   retryProblem: unavailable, setMode: unavailable, detachBinding: unavailable, exportRecovery: unavailable,
+  listHistory:unavailable,listTrash:unavailable,restoreEntry:unavailable,notificationSettings:unavailable,setNotifications:unavailable,
 };
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try { return await invoke<T>(command, args); }
@@ -54,4 +62,9 @@ export const nativeAgent: AgentClient = {
   setMode: (bindingId, mode) => call("agent_set_mode", { bindingId, mode }),
   detachBinding: bindingId => call("agent_detach_binding", { bindingId }),
   exportRecovery: (bindingId, destination) => call("agent_export_recovery", { bindingId, destination }),
+  listHistory:(bindingId,entryId,cursor)=>call("agent_list_history",{bindingId,entryId,cursor}),
+  listTrash:(bindingId,cursor)=>call("agent_list_trash",{bindingId,cursor}),
+  restoreEntry:input=>call("agent_restore_entry",{input}),
+  notificationSettings:()=>call("agent_notification_settings"),
+  setNotifications:enabled=>call("agent_set_notifications",{enabled}),
 };

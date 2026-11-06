@@ -65,7 +65,7 @@ check("frame_limits_come_from_contract", () => {
   assert.equal(FRAME_HEADER_BYTES, 4);
   assert.ok(MAX_FRAME_BYTES >= 64 && MAX_FRAME_BYTES <= 64 * 1024 * 1024);
   assert.equal(PROTOCOL_MAJOR, 1);
-  assert.equal(PROTOCOL_MINOR, 3);
+  assert.equal(PROTOCOL_MINOR, 4);
 });
 
 check("file_projection_preserves_pending_and_rejects_lossy_flags_or_missing_dimensions", () => {
@@ -90,7 +90,7 @@ check("all_management_examples_decode_without_losing_parameters", () => {
     assert.deepEqual(reencode(decoded), sample);
     commands.add(decoded.command.name);
   }
-  assert.equal(commands.size, 22);
+  assert.equal(commands.size, 23);
 });
 
 check("response_ok_example_decodes_to_sample", () => {

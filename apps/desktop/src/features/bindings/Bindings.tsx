@@ -25,7 +25,7 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
     if (row.detached) return "已解除绑定（本地数据保留）";
     if (row.paused) return "已暂停";
     if (!status) return "尚未取得完整状态";
-    if (status.synchronized) return "已同步";
+    if (status.synchronized) return status.offline!=="0" ? "基线已确认 · 当前离线" : "已同步";
     return `正在核对/合并：未确认 ${status.dirty}，待办 ${status.pending}，传输 ${status.transfers}，未核对 ${status.unknown}，失败 ${status.failed}，应用差额 ${status.event_lag}`;
   }
   return <><div className="vs-eyebrow">CLIENT / BINDINGS</div><h1>同步目录</h1>

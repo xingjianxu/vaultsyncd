@@ -26,6 +26,7 @@ struct Hub {
     instance: String,
     connection: watch::Receiver<ConnectionInfo>,
     problems: watch::Receiver<Vec<Problem>>,
+    offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 }
 
 pub(crate) fn start(
@@ -33,6 +34,7 @@ pub(crate) fn start(
     commands: mpsc::Sender<CommandRequest>,
     connection: watch::Receiver<ConnectionInfo>,
     problems: watch::Receiver<Vec<Problem>>,
+    offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 ) -> io::Result<Server> {
     let (updates, _) = watch::channel(0);
     let mut nonce = [0; 16];
@@ -41,6 +43,7 @@ pub(crate) fn start(
         state: Mutex::new((0, None)),
         connection,
         problems,
+        offline,
         updates,
         instance: nonce.iter().map(|b| format!("{b:02x}")).collect(),
     });
@@ -68,6 +71,16 @@ pub(crate) fn start(
                         &request,
                         LocalIpcErrorCode::UnsupportedVersion,
                         "文件清单需要本机 IPC 1.3",
+                        false,
+                    ));
+                }
+                if request.command.name == CommandName::ClaimNotification
+                    && request.ipc_version.minor < 4
+                {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "通知投递领取需要本机 IPC 1.4",
                         false,
                     ));
                 }
@@ -149,7 +162,10 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
     let mut bindings = Vec::with_capacity(info.len());
     for b in &info {
         let binding = BindingId::from_hex(&b.binding_id).map_err(crate::local::error)?;
-        let s = status::snapshot(db, binding).await?;
+        let mut s = status::snapshot(db, binding).await?;
+        if hub.offline.borrow().contains(&binding) {
+            s.offline += 1;
+        }
         bindings.push(BindingStatus {
             binding_id: b.binding_id.clone(),
             synchronized: s.synchronized(),
@@ -170,6 +186,16 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
             unknown: s.unknown.to_string(),
         });
     }
+    let mut problems = crate::management::problems(db, None).await?;
+    for problem in hub.problems.borrow().iter() {
+        if !problems
+            .iter()
+            .any(|p| p.binding_id == problem.binding_id && p.problem_id == problem.problem_id)
+        {
+            problems.push(problem.clone());
+        }
+    }
+    let notices = crate::management_notices::list(db).await?;
     let mut value = GetStatusResult {
         agent_version: env!("CARGO_PKG_VERSION").into(),
         ipc_protocol: version::supported(),
@@ -178,7 +204,8 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
         management: Some(ManagementResult {
             bindings: Some(info),
             connection: Some(hub.connection.borrow().clone()),
-            problems: Some(hub.problems.borrow().clone()),
+            problems: Some(problems),
+            notices: Some(notices),
             ..Default::default()
         }),
     };
@@ -223,9 +250,8 @@ pub(crate) fn management_response(
                 "REAUTH_REQUIRED" | "UNAUTHORIZED" | "AUTH_EXPIRED" => {
                     (LocalIpcErrorCode::Unauthenticated, false)
                 }
-                "ALREADY_EXISTS" | "OP_ID_REUSED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" => {
-                    (LocalIpcErrorCode::Conflict, false)
-                }
+                "RESTORE_REJECTED" | "ALREADY_EXISTS" | "OP_ID_REUSED" | "BASE_MISMATCH"
+                | "SUBTREE_CHANGED" => (LocalIpcErrorCode::Conflict, false),
                 "ACCESS_DENIED"
                 | "VERSION_GONE"
                 | "INVALID_REQUEST"
@@ -256,6 +282,7 @@ pub(crate) fn management_response(
                         | "LOCAL_IN_USE"
                         | "UNKNOWN_LOCAL_STATE"
                         | "PENDING"
+                        | "RESTORE_REJECTED"
                         | "INVALID_REQUEST"
                         | "SERVICE_NOT_READY"
                         | "CERTIFICATE_INVALID"
@@ -268,6 +295,7 @@ pub(crate) fn management_response(
             );
             // Never Display/Debug HTTP/filesystem errors or requests; both can contain secrets.
             let message = match stable {
+                "RESTORE_REJECTED" => "服务器已拒绝此次恢复（RESTORE_REJECTED）；未完成覆盖，请重新读取清单和当前修订后选择操作。".to_owned(),
                 "CERTIFICATE_INVALID" => "服务器证书验证失败（CERTIFICATE_INVALID）；请核对服务器地址与名称，或在连接设置中选择管理员提供的附加 CA。证书验证未被关闭。".to_owned(),
                 "LOCAL_PATH_UNAVAILABLE" => "本地目录无法访问（LOCAL_PATH_UNAVAILABLE）；请选择现有本机 NTFS 目录，并检查路径、权限与卷状态。".to_owned(),
                 "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),

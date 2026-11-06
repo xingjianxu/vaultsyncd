@@ -1,5 +1,7 @@
 use crate::commands::*;
 use crate::file_commands::*;
+use crate::history_commands::*;
+use crate::notifications::*;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 // Compiled only for the native acceptance binary; no test report command in production.
@@ -60,6 +62,50 @@ fn acceptance_file_control(action: String) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "native-acceptance")]
+#[tauri::command]
+async fn acceptance_fixture_phase(action: String) -> Result<(), String> {
+    if !matches!(
+        action.as_str(),
+        "restart" | "duplicate" | "resolve" | "recur" | "offline"
+    ) {
+        return Err("unknown fixture phase".into());
+    }
+    let fixture = std::env::var_os("VAULTSYNCD_S083_FIXTURE").ok_or("missing fixture")?;
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture).map_err(|_| "fixture read")?)
+            .map_err(|_| "fixture decode")?;
+    let request = std::path::PathBuf::from(fixture["requestPath"].as_str().ok_or("request path")?);
+    let ack = std::path::PathBuf::from(fixture["ackPath"].as_str().ok_or("ack path")?);
+    tauri::async_runtime::spawn_blocking(move || {
+        match std::fs::remove_file(&ack) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("ack cleanup".into()),
+        }
+        std::fs::write(request, &action).map_err(|_| "fixture request")?;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while std::time::Instant::now() < end {
+            if std::fs::read_to_string(&ack).is_ok_and(|s| s == action) {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        Err("offline fixture controller timeout".into())
+    })
+    .await
+    .map_err(|_| "fixture controller thread")?
+}
+#[cfg(feature = "native-acceptance")]
+#[tauri::command]
+fn acceptance_toast_history(clear: bool) -> Result<Vec<String>, String> {
+    use vaultsyncd_platform_windows::shell::toast;
+    if clear {
+        toast::clear_history().map_err(|e| e.to_string())?;
+    }
+    toast::history_tags().map_err(|e| e.to_string())
+}
+
 pub(super) fn run() {
     let builder = tauri::Builder::default();
     #[cfg(not(feature = "native-acceptance"))]
@@ -72,6 +118,11 @@ pub(super) fn run() {
         agent_set_mode,
         agent_detach_binding,
         agent_export_recovery,
+        agent_list_history,
+        agent_list_trash,
+        agent_restore_entry,
+        agent_notification_settings,
+        agent_set_notifications,
         agent_get_status,
         agent_set_connection,
         agent_login,
@@ -91,6 +142,11 @@ pub(super) fn run() {
         agent_set_mode,
         agent_detach_binding,
         agent_export_recovery,
+        agent_list_history,
+        agent_list_trash,
+        agent_restore_entry,
+        agent_notification_settings,
+        agent_set_notifications,
         agent_get_status,
         agent_set_connection,
         agent_login,
@@ -100,12 +156,15 @@ pub(super) fn run() {
         agent_pause_binding,
         agent_resume_binding,
         acceptance_report,
-        acceptance_file_control
+        acceptance_file_control,
+        acceptance_fixture_phase,
+        acceptance_toast_history
     ]);
     builder
         .setup(|app| {
+            app.manage(crate::notifications::Notifications::load());
             #[cfg(feature = "native-acceptance")]
-            app.add_capability(r#"{"identifier":"native-acceptance","windows":["main"],"permissions":["allow-acceptance-report","allow-acceptance-file-control"]}"#)?;
+            app.add_capability(r#"{"identifier":"native-acceptance","windows":["main"],"permissions":["allow-acceptance-report","allow-acceptance-file-control","allow-acceptance-fixture-phase","allow-acceptance-toast-history"]}"#)?;
             let window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("vaultsyncd")
@@ -115,7 +174,11 @@ pub(super) fn run() {
                             || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
                     });
             #[cfg(feature = "native-acceptance")]
-            let window = if let Some(fixture) = std::env::var_os("VAULTSYNCD_S082_FIXTURE") {
+            let window = if let Some(fixture)=std::env::var_os("VAULTSYNCD_S083_FIXTURE"){
+                let fixture:serde_json::Value=serde_json::from_slice(&std::fs::read(fixture)?)?;
+                window.initialization_script(format!("window.__S083_FIXTURE__ = {fixture};"))
+                    .initialization_script(include_str!("../../../../tests/platform/windows/s083-webview.js"))
+            } else if let Some(fixture) = std::env::var_os("VAULTSYNCD_S082_FIXTURE") {
                 let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
                 window.initialization_script(format!("window.__S082_FIXTURE__ = {fixture};"))
                     .initialization_script(include_str!("../../../../tests/platform/windows/s082-webview.js"))

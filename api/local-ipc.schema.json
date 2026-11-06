@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 1,
-      "minor": 3
+      "minor": 4
     },
     "frame": {
       "header_bytes": 4,
@@ -71,6 +71,8 @@
         "ca_file": {"type":"string","description":"用户显式选择的附加 CA，不禁用系统证书验证。"},
         "username": {"type":"string","description":"登录账号。"},
         "password": {"type":"string","description":"瞬时登录密码；不能日志输出整个请求。"},
+        "notification_key":{"type":"string","description":"agent通知记录键，仅领取投递，不清问题。"},
+        "notification_generation":{"type":"string","description":"当前活动代际正整数字符串，旧GUI不能领取新复发。"},
         "after_version": {"type":"string","description":"订阅最后看到的 instance:counter；缺省或不匹配立即返回全量。"},
         "cursor": {"type":"string","description":"历史或回收站分页的 after 身份。"},
         "search": {"type":"string","description":"问题路径或原因的大小写不敏感子串筛选。"}
@@ -79,7 +81,7 @@
     "CommandName": {
       "type": "string",
       "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
-      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files"]
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification"]
     },
     "ErrorBody": {
       "type": "object",
@@ -129,6 +131,7 @@
         "management": {"$ref":"#/$defs/ManagementResult","description":"1.2 管理命令的类型化结果。"}
       }
     },
+    "Notice": {"type":"object","description":"核心Root原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。","required":["key","cause","code","state","generation","critical","claimed"],"properties":{"key":{"type":"string","description":"稳定去重键"},"root_id":{"type":"string","description":"关联Root，非绑定身份"},"cause":{"type":"string","description":"Root原因，冲突副本为CONFLICT_COPY"},"code":{"type":"string","description":"已分类错误码"},"state":{"type":"string","description":"active或resolved"},"generation":{"type":"string","description":"活动代际"},"critical":{"type":"boolean","description":"可信核心分类需用户处理"},"claimed":{"type":"boolean","description":"本代际已领取系统投递"}}},
     "FileStatus": {
       "type":"object", "description":"agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。",
       "required":["path","status","residency","dirty","busy","pending","synchronized","release_allowed","release_reason","availability","remote_apply","transfer"],
@@ -197,6 +200,8 @@
         "revision":{"type":"string","description":"当前 CAS 修订。"},
         "parent_id":{"type":"string","description":"原父目录。"},
         "size":{"type":"string","description":"字节数。"},
+        "expires_at":{"type":"string","description":"历史/回收站到期下限UTC秒，当前活跃版本省略"},
+        "conflict_source":{"type":"string","description":"冲突副本的原条目身份"},
         "hash":{"type":"string","description":"内容摘要。"}
       }
     },
@@ -207,6 +212,9 @@
         "files":{"type":"array","items":{"$ref":"#/$defs/FileStatus"},"description":"list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。"},
         "problems":{"type":"array","items":{"$ref":"#/$defs/Problem"},"description":"持久问题列表。"},
         "connection":{"$ref":"#/$defs/ConnectionInfo","description":"连接事实。"},
+        "notices":{"type":"array","items":{"$ref":"#/$defs/Notice"},"description":"问题生命周期与投递事实"},
+        "notification_claimed":{"type":"boolean","description":"是否成功领取本活动代际"},
+        "restored_path":{"type":"string","description":"committed后按条目身份重新查询的当前位置"},
         "items":{"type":"array","items":{"$ref":"#/$defs/RemoteItem"},"description":"远端授权 Root/历史/回收站列表。"},
         "operation_id":{"type":"string","description":"实际执行的幂等操作身份。"},
         "unconfirmed":{"type":"array","items":{"type":"string"},"description":"解绑时保留的未确认条目。"},

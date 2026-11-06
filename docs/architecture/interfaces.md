@@ -2440,3 +2440,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 OpenAPI提供固定清单、仅清单内的DB/config/Root对象读取、整体流式export与job status/list。全部重新校验唯一active owner与请求会话，使用锚定RestrictedDir拒绝任意路径；备份包含受限PHC认证材料但sessions失效，不能公开分享。Unix协议特殊export先framed200握手再VSBK001原始字节，逐次写30秒空闲截止；普通请求仍10秒。流规则与0600收据唯一源`api/backup-export.schema.json`，CLI显式prepare/export/verify/release；本地verify不打开在线数据库。损坏或缺终止标记只能incomplete，服务源verified与客户端持久导出verified分别记录。
 
 S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包含11秒后继续完整流与release排队跨10秒后SIGKILL重放；取消verify先撤销旧verified。CLI本地verify只检查归档全部字节和固定清单，SQLite语义由verify-source及离线恢复入口检查。归档与固定摘要收据需一起保管，后续S089可复用纯`Index`/`ArchiveVerifier`和store只读`verify_database`，不可把未verified收据当成功。
+
+## S083 桌面历史恢复与系统通知
+
+- 本机IPC **1.4**新增 `claim_notification(notification_key,notification_generation)`，1.3及之前明确拒绝该新命令；状态返回 `management.notices`（Root/原因/active或resolved/十进制代际/严重度/是否已领取）。client迁移0012增加generation与delivery_claimed，旧库原已读、次数及恢复状态保留，有迁移前备份，旧writer拒绝新schema。恢复后复发代际递增并重置claim，原GUI旧代际不能领取新通知；claim不等于已读或显示成功。
+- 严重问题复用agent-core问题端口，按Root和原因聚合全部绑定之后才解决；普通网络失败仅offline状态。真实提交冲突ACK和收到conflict变化只产生一次持久原因，现有冲突副本不会被开关/清除系统通知移除。问题快照包含持久问题和运行期投影；暂停不能证明故障已恢复。
+- 桌面新增固定 `agent_list_history/agent_list_trash/agent_restore_entry` 与通知设置命令，AppManifest及capability同步最小授权，无任意HTTP/数据库入口。历史/回收站分页含到期下限和冲突来源；恢复输入先持久到agent，再GET原Op，404才POST原请求，只有committed成功。服务端仍核对Root/权限/CAS，同名恢复保留现目标；返回授权快照内实际相对位置，位置尚未取得时明确待核对。UI未知/pending保留原操作身份供核对，不显示已恢复。
+- WinRT Toast固定AUMID `org.vaultsyncd.desktop`，只创建/更新本应用StartMenu快捷方式，拒绝同名他应用和symlink。先原子claim再尝试Show，保证同一活动代际最多尝试一次；Windows禁用/失败时问题仍完整，页面明确投递失败。布尔开关单独保存在用户应用设置，无凭据。微软[桌面AUMID要求](https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid)及[发送示例](https://learn.microsoft.com/en-us/windows/win32/shell/quickstart-sending-desktop-toast)为注册依据；首次未打包应用Setting可能缺行的[平台问题记录](https://github.com/MicrosoftDocs/windows-dev-docs/issues/1431)对应0x80070490，仅该特定错误允许实际Show，其余错误不默认成功。
+- `run-native-notifications.sh` 使用真实Windows WebView及系统History API验证中心记录、清中心/开关不清问题、重复报告与进程重启不风暴、恢复和复发。磁盘满/挂载/冲突的这组输入由离线核心端口夹具产生，只证明问题投影与真实OS投递，不冒充实际卷故障；真实冲突/恢复另由Linux btrfs服务与Windowsagent真壳验证。所有报告/fixture/Toast历史测试桥只在native-acceptance编译，正式构建清理全部四项测试权限。

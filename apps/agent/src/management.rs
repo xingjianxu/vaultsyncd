@@ -205,6 +205,18 @@ pub(crate) async fn execute(
         }
     }
     match command.name {
+        C::ClaimNotification => {
+            return crate::management_notices::claim(
+                db,
+                p.notification_key.as_deref().unwrap(),
+                p.notification_generation
+                    .as_deref()
+                    .unwrap()
+                    .parse()
+                    .map_err(error)?,
+            )
+            .await;
+        }
         C::ListFiles => {
             return crate::management_listing::list(
                 db,
@@ -319,6 +331,8 @@ pub(crate) async fn execute(
                         parent_id: None,
                         size: None,
                         hash: None,
+                        expires_at: None,
+                        conflict_source: None,
                     })
                     .collect(),
             );
@@ -397,7 +411,10 @@ type ProblemRow = (
     bool,
     Option<String>,
 );
-async fn problems(db: &Database, binding: Option<BindingId>) -> Result<Vec<Problem>, PortError> {
+pub(crate) async fn problems(
+    db: &Database,
+    binding: Option<BindingId>,
+) -> Result<Vec<Problem>, PortError> {
     let rows: Vec<ProblemRow> = sqlx::query_as(
         "WITH origins(binding_id,problem_id,entry_id,code,retryable,path) AS (
          SELECT p.binding_id,lower(hex(p.op_id)),p.entry_id,coalesce(p.last_error_code,'CANCELLED'),1,NULL FROM pending_ops p LEFT JOIN operation_schedule s ON s.op_id=p.op_id WHERE p.last_error_code IS NOT NULL OR coalesce(s.cancelled,0)=1 OR coalesce(s.halted,0)=1
@@ -427,12 +444,17 @@ async fn problems(db: &Database, binding: Option<BindingId>) -> Result<Vec<Probl
                 .find(|(b, e, _)| b == &binding_id && Some(e) == entry_id.as_ref())
                 .map(|(_, _, p)| p.clone())
         });
+        let reason = if problem_id.ends_with(":CONFLICT_COPY") {
+            "双方修改已保留为冲突副本，请检查内容；关闭通知不会删除副本。".into()
+        } else {
+            format!("操作尚未完成（{code}）")
+        };
         result.push(Problem {
             binding_id,
             problem_id,
             entry_id,
             path,
-            reason: format!("操作尚未完成（{code}）"),
+            reason,
             code,
             local_data: format!(
                 "本地状态：{}；驻留：{}；未确认内容和队列保留",

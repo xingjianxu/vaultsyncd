@@ -60,6 +60,8 @@ pub(crate) async fn execute(
                     parent_id: i.parent_id,
                     size: i.size,
                     hash: i.hash,
+                    expires_at: i.expires_at,
+                    conflict_source: i.conflict_source,
                 })
                 .collect(),
         );
@@ -141,8 +143,16 @@ pub(crate) async fn retry_restore(
         root.try_into()
             .map_err(|_| error("invalid root identity"))?,
     );
-    let response = vaultsyncd_http_client::sync::submit(client, &root.to_string(), &request)
-        .await
+    let response =
+        match vaultsyncd_http_client::sync::operation(client, &root.to_string(), &op.to_string())
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(vaultsyncd_http_client::ClientError::Api(failure)) if failure.status() == 404 => {
+                vaultsyncd_http_client::sync::submit(client, &root.to_string(), &request).await
+            }
+            Err(error) => Err(error),
+        }
         .map_err(|e| match e {
             vaultsyncd_http_client::ClientError::Api(failure) => PortError::rejected(
                 serde_json::to_value(failure.body().code)
@@ -153,6 +163,25 @@ pub(crate) async fn retry_restore(
             ),
             other => vaultsyncd_http_client::transfer_error(other),
         })?;
+    if response.state == OperationState::Rejected {
+        sqlx::query("UPDATE agent_actions SET result=? WHERE op_id=? AND binding_id=?")
+            .bind(serde_json::to_string(&response).map_err(error)?)
+            .bind(op.as_bytes().as_slice())
+            .bind(binding.as_bytes().as_slice())
+            .execute(db.pool())
+            .await
+            .map_err(error)?;
+        let code = response
+            .error_code
+            .map(|c| {
+                serde_json::to_value(c)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "INVALID_REQUEST".into())
+            })
+            .unwrap_or_else(|| "INVALID_REQUEST".into());
+        return Err(PortError::rejected("RESTORE_REJECTED", code));
+    }
     if response.state != OperationState::Committed {
         return Err(PortError::rejected(
             "PENDING",
@@ -168,6 +197,68 @@ pub(crate) async fn retry_restore(
         .map_err(error)?;
     Ok(ManagementResult {
         operation_id: Some(op.to_string()),
+        restored_path: location(
+            client,
+            &root.to_string(),
+            response
+                .entry_id
+                .as_deref()
+                .ok_or_else(|| error("restore committed without entry identity"))?,
+        )
+        .await
+        .ok()
+        .flatten(),
         ..Default::default()
     })
+}
+
+async fn location(
+    client: &ApiClient<ReqwestTransport>,
+    root: &str,
+    entry: &str,
+) -> Result<Option<String>, PortError> {
+    let (snapshot, _) = vaultsyncd_http_client::sync::snapshot(client, root)
+        .await
+        .map_err(vaultsyncd_http_client::transfer_error)?;
+    let mut rows = std::collections::HashMap::new();
+    let mut cursor = None;
+    loop {
+        let page = vaultsyncd_http_client::sync::snapshot_page(
+            client,
+            root,
+            &snapshot.snapshot_id,
+            cursor.as_deref(),
+        )
+        .await
+        .map_err(vaultsyncd_http_client::transfer_error)?;
+        for row in page.entries {
+            rows.insert(row.entry_id.clone(), row);
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(crate::work::paths(&rows)?.remove(entry))
+}
+
+pub(crate) async fn report_existing_conflicts(
+    db: &Database,
+    client: &ApiClient<ReqwestTransport>,
+    root: &str,
+) -> Result<(), PortError> {
+    let page: RecoveryPage = client
+        .send_json(
+            ApiRequest::get(format!("/v1/roots/{root}/conflicts")).with_auth(AuthMode::Bearer),
+        )
+        .await
+        .map_err(vaultsyncd_http_client::transfer_error)?;
+    if !page.items.is_empty() {
+        vaultsyncd_agent_core::status::issues::report_conflict(
+            db,
+            vaultsyncd_domain::ids::RootId::from_hex(root).map_err(error)?,
+        )
+        .await?;
+    }
+    Ok(())
 }

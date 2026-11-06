@@ -409,7 +409,12 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
     let (problem_updates, problems) = tokio::sync::watch::channel(Vec::new());
     let mut startup_problems: HashMap<BindingId, vaultsyncd_local_ipc::generated::Problem> =
         HashMap::new();
-    let ipc = crate::ipc::start(db.clone(), commands, connection, problems).map_err(error)?;
+    let (offline_updates, offline) = tokio::sync::watch::channel(std::collections::HashSet::new());
+    let mut offline_bindings = std::collections::HashSet::new();
+    let mut cycle_problems: HashMap<BindingId, vaultsyncd_local_ipc::generated::Problem> =
+        HashMap::new();
+    let ipc =
+        crate::ipc::start(db.clone(), commands, connection, problems, offline).map_err(error)?;
     eprintln!(
         "event=management-ready configured={}",
         config.bindings.len()
@@ -577,6 +582,12 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                         live.push(value);
                         startup_problems.remove(&id);
                     }
+                    Err(e) if e.is_retryable() => {
+                        offline_bindings.insert(id);
+                        if once {
+                            return Err(e);
+                        }
+                    }
                     Err(e) => {
                         let code = e
                             .code()
@@ -611,6 +622,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         }
         problem_updates.send_replace(startup_problems.values().cloned().collect());
         for (id, root, first, worker, scheduler, remote) in &live {
+            let mut observed = false;
             let result: Result<(), PortError> = async {
                 if !session.has_credentials()
                     || BindingControls::new(db.clone())
@@ -620,11 +632,21 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                 {
                     return Ok(());
                 }
+                observed = true;
+                worker.importer.local.root.verify().map_err(|_| {
+                    PortError::rejected("ROOT_UNAVAILABLE", "root identity changed or unavailable")
+                })?;
                 if !initialized.contains_key(id) {
                     let report = first.run(*id, &mut Random, 128).await?;
                     if !report.complete {
                         return Ok(());
                     }
+                    crate::management_history::report_existing_conflicts(
+                        &db,
+                        &client,
+                        &root.to_string(),
+                    )
+                    .await?;
                     seed_uploaded_facts(&worker.importer).await?;
                     worker.restore_uploads().await?;
                     let decoder = Arc::new(Decoder {
@@ -690,8 +712,37 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             }
             .await;
             match result {
-                Ok(()) => eprintln!("event=cycle binding={id}"),
+                Ok(()) => {
+                    if observed {
+                        cycle_problems.remove(id);
+                        offline_bindings.remove(id);
+                    }
+                    eprintln!("event=cycle binding={id}");
+                }
                 Err(e) => {
+                    if e.is_retryable() {
+                        offline_bindings.insert(*id);
+                    } else if let Some(code) = e
+                        .code()
+                        .and_then(vaultsyncd_domain::error::ErrorCode::from_code)
+                        .filter(|c| c.class().is_severe())
+                    {
+                        cycle_problems.insert(
+                            *id,
+                            vaultsyncd_local_ipc::generated::Problem {
+                                binding_id: id.to_string(),
+                                problem_id: format!("cycle:{id}:{code}"),
+                                entry_id: None,
+                                path: None,
+                                code: code.to_string(),
+                                reason: format!("同步受阻（{code}）"),
+                                local_data: "本地内容、队列、缓存和恢复现场保留".into(),
+                                next_step: "恢复存储、挂载或权限后重新核对；不要删除未确认内容"
+                                    .into(),
+                                retryable: false,
+                            },
+                        );
+                    }
                     eprintln!(
                         "event=cycle-blocked binding={id} code={}",
                         e.code().unwrap_or("UNAVAILABLE")
@@ -700,6 +751,23 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                         return Err(e);
                     }
                 }
+            }
+        }
+        offline_updates.send_replace(offline_bindings.clone());
+        match crate::issue_projection::sync(&db, &config, &startup_problems, &cycle_problems).await
+        {
+            Ok(problems) => {
+                problem_updates.send_replace(problems);
+            }
+            Err(_) => {
+                problem_updates.send_replace(
+                    startup_problems
+                        .values()
+                        .chain(cycle_problems.values())
+                        .cloned()
+                        .collect(),
+                );
+                eprintln!("event=problem-persistence-unavailable code=NEEDS_RECOVERY");
             }
         }
         if once {

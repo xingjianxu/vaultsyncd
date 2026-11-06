@@ -24,6 +24,8 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         ("username", &p.username),
         ("password", &p.password),
         ("after_version", &p.after_version),
+        ("notification_key", &p.notification_key),
+        ("notification_generation", &p.notification_generation),
         ("cursor", &p.cursor),
         ("search", &p.search),
     ];
@@ -31,6 +33,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         C::GetStatus | C::ListBindings | C::GetConnection | C::Logout | C::ListRoots => (&[], &[]),
         C::SubscribeStatus => (&[], &["after_version"]),
         C::ListFiles => (&["binding_id"], &["cursor"]),
+        C::ClaimNotification => (&["notification_key", "notification_generation"], &[]),
         C::CreateBinding => (
             &["binding_id", "root_id", "local_path", "cache_path", "mode"],
             &[],
@@ -74,6 +77,13 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         .as_deref()
         .is_some_and(|m| !matches!(m, "full" | "on_demand"))
     {
+        return Err(invalid());
+    }
+    if p.notification_generation.as_deref().is_some_and(|v| {
+        v.parse::<i64>()
+            .ok()
+            .is_none_or(|n| n < 1 || n.to_string() != v)
+    }) {
         return Err(invalid());
     }
     if p.base_revision.as_deref().is_some_and(|v| {
