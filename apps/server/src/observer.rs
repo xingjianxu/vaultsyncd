@@ -28,8 +28,8 @@ use vaultsyncd_server_core::ports::object_store::{
     StorageFailure, StoredBytes, StoredFacts, StoredSlice,
 };
 use vaultsyncd_server_core::ports::work_tree::{
-    FileStamp, WorkDirEntry, WorkDirListing, WorkEntryKind, WorkObservation, WorkTreeError,
-    WorkTreePort,
+    DirIdentity, FileStamp, WorkDirEntry, WorkDirListing, WorkEntryKind, WorkObservation,
+    WorkTreeError, WorkTreePort,
 };
 
 /// Root 工作目录的只读观察端口（Linux）。
@@ -78,6 +78,11 @@ fn map_restrict(path: &str, error: &RestrictError) -> WorkTreeError {
         RestrictError::NotFound { .. } => WorkTreeError::Gone {
             path: path.to_owned(),
         },
+        // 权限与 IO 必须分开：扫描健康结论要区分 `permission_denied` 与 `io_error`（design §12.3）。
+        RestrictError::PermissionDenied { .. } => WorkTreeError::PermissionDenied {
+            path: path.to_owned(),
+            detail: error.to_string(),
+        },
         RestrictError::InvalidRelativePath(_) | RestrictError::EscapesRoot { .. } => {
             WorkTreeError::InvalidPath {
                 detail: error.to_string(),
@@ -117,6 +122,28 @@ impl WorkTreePort for LinuxWorkTree {
             entries,
             unrepresentable_names: unrepresentable,
         })
+    }
+
+    fn observe_dir(&mut self, dir: &str) -> Result<Option<DirIdentity>, WorkTreeError> {
+        // 列一个目录之前先核对挂载健康（身份、子挂载、权限）：漂移 = Root 不可用，不推导删除。
+        self.root
+            .verify()
+            .map_err(|error| WorkTreeError::RootUnavailable {
+                detail: error.to_string(),
+            })?;
+        match self.root.identity_at(Path::new(dir)) {
+            Ok(None) => Ok(None),
+            Ok(Some(identity)) if identity.is_directory() => Ok(Some(DirIdentity {
+                device: file_key(&identity).device,
+                inode: identity.inode,
+                btime: identity.btime,
+            })),
+            Ok(Some(_)) => Err(WorkTreeError::Unreadable {
+                path: dir.to_owned(),
+                detail: "路径不是目录".to_owned(),
+            }),
+            Err(error) => Err(map_restrict(dir, &error)),
+        }
     }
 
     fn observe(&mut self, path: &str) -> Result<WorkObservation, WorkTreeError> {

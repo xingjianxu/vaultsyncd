@@ -14,7 +14,8 @@ use vaultsyncd_domain::version::{Revision, RootSeq};
 
 use crate::objects::ContentDigest;
 use crate::ports::external_store::{
-    AdoptKind, ExternalAdoptStore, ExternalRecord, ExternalStoreError, ExternalWrite, KnownEntry,
+    AdoptKind, ExternalAdoptStore, ExternalDelete, ExternalDeleteRecord, ExternalMove,
+    ExternalMoveRecord, ExternalRecord, ExternalStoreError, ExternalWrite, KnownEntry,
 };
 use crate::ports::object_store::{
     BlobError, CopyFallback, CopyMethod, FileKey, ObjectBlobPort, PublishedBlob, StagedBlob,
@@ -22,8 +23,8 @@ use crate::ports::object_store::{
 };
 use crate::ports::put_store::EntryKind;
 use crate::ports::work_tree::{
-    FileStamp, WorkDirEntry, WorkDirListing, WorkEntryKind, WorkObservation, WorkTreeError,
-    WorkTreePort,
+    DirIdentity, FileStamp, WorkDirEntry, WorkDirListing, WorkEntryKind, WorkObservation,
+    WorkTreeError, WorkTreePort,
 };
 
 pub(crate) fn digest_of(data: &[u8]) -> ContentDigest {
@@ -44,13 +45,18 @@ pub(crate) struct FsState {
     pub(crate) dirs: BTreeSet<String>,
     pub(crate) symlinks: BTreeSet<String>,
     pub(crate) unreadable_dirs: BTreeSet<String>,
+    /// 目录读失败但不是权限问题（`EIO` 等）：健康结论必须是 `io_error`。
+    pub(crate) io_error_dirs: BTreeSet<String>,
     /// 目录项仍被列出，但进入时已确认不存在（并发删除）。
     pub(crate) gone_dirs: BTreeSet<String>,
     pub(crate) unreadable_files: BTreeSet<String>,
     pub(crate) root_unavailable: bool,
     pub(crate) unrepresentable_in: BTreeMap<String, usize>,
+    /// 目录身份（设备 1 + inode）；首次读取时分配。
+    pub(crate) dir_inodes: BTreeMap<String, u64>,
     pub(crate) tick: i64,
     next_inode: u64,
+    next_dir_inode: u64,
 }
 
 impl FsState {
@@ -119,6 +125,34 @@ impl FsState {
         self.files.remove(path);
     }
 
+    /// 改名（同一文件对象换路径）：inode 与 `ctime` 都不变，与 `rename(2)` 对文件本身的效果一致。
+    pub(crate) fn rename(&mut self, from: &str, to: &str) {
+        self.ensure_parents(to);
+        let file = self.files.remove(from).expect("源文件存在");
+        self.files.insert(to.to_owned(), file);
+    }
+
+    /// 目录身份（设备 1，inode 首次读取时分配，之后保持）。
+    fn dir_identity(&mut self, path: &str) -> DirIdentity {
+        let next = self.next_dir_inode + 1;
+        let inode = *self.dir_inodes.entry(path.to_owned()).or_insert_with(|| {
+            self.next_dir_inode = next;
+            2_000 + next
+        });
+        DirIdentity {
+            device: 1,
+            inode,
+            btime: Some((1, 0)),
+        }
+    }
+
+    /// 替换目录身份（模拟目录被换掉：unmount 后露出另一个目录）。
+    pub(crate) fn replace_dir(&mut self, path: &str) {
+        self.next_dir_inode += 1;
+        let inode = 2_000 + self.next_dir_inode;
+        self.dir_inodes.insert(path.to_owned(), inode);
+    }
+
     fn stamp_of(&self, path: &str) -> FileStamp {
         let file = &self.files[path];
         FileStamp {
@@ -169,9 +203,15 @@ impl WorkTreePort for FakeWorkTree {
             });
         }
         if fs.unreadable_dirs.contains(dir) {
-            return Err(WorkTreeError::Unreadable {
+            return Err(WorkTreeError::PermissionDenied {
                 path: dir.to_owned(),
                 detail: "Permission denied".to_owned(),
+            });
+        }
+        if fs.io_error_dirs.contains(dir) {
+            return Err(WorkTreeError::Unreadable {
+                path: dir.to_owned(),
+                detail: "Input/output error".to_owned(),
             });
         }
         let mut entries = Vec::new();
@@ -205,6 +245,31 @@ impl WorkTreePort for FakeWorkTree {
         })
     }
 
+    fn observe_dir(&mut self, dir: &str) -> Result<Option<DirIdentity>, WorkTreeError> {
+        let mut fs = self.fs.borrow_mut();
+        if fs.root_unavailable {
+            return Err(WorkTreeError::RootUnavailable {
+                detail: "挂载身份漂移".to_owned(),
+            });
+        }
+        if fs.unreadable_dirs.contains(dir) {
+            return Err(WorkTreeError::PermissionDenied {
+                path: dir.to_owned(),
+                detail: "Permission denied".to_owned(),
+            });
+        }
+        if fs.io_error_dirs.contains(dir) {
+            return Err(WorkTreeError::Unreadable {
+                path: dir.to_owned(),
+                detail: "Input/output error".to_owned(),
+            });
+        }
+        if !dir.is_empty() && !fs.dirs.contains(dir) {
+            return Ok(None);
+        }
+        Ok(Some(fs.dir_identity(dir)))
+    }
+
     fn observe(&mut self, path: &str) -> Result<WorkObservation, WorkTreeError> {
         let fs = self.fs.borrow();
         if fs.root_unavailable {
@@ -213,7 +278,7 @@ impl WorkTreePort for FakeWorkTree {
             });
         }
         if fs.unreadable_files.contains(path) {
-            return Err(WorkTreeError::Unreadable {
+            return Err(WorkTreeError::PermissionDenied {
                 path: path.to_owned(),
                 detail: "Permission denied".to_owned(),
             });
@@ -441,7 +506,13 @@ pub(crate) struct FakeExternalStore {
     /// 事件批次：`(seq, 路径)`，与版本一一对应。
     pub(crate) events: Vec<(RootSeq, String)>,
     pub(crate) writes: Vec<ExternalWrite>,
+    pub(crate) moves: Vec<ExternalMove>,
+    pub(crate) deletes: Vec<ExternalDelete>,
+    /// 外部删除后留下的回收站记录（路径、条目、版本数）。
+    pub(crate) trashed: Vec<(String, EntryId, usize)>,
     pub(crate) apply_error: Option<ExternalStoreError>,
+    pub(crate) move_error: Option<ExternalStoreError>,
+    pub(crate) delete_error: Option<ExternalStoreError>,
     pub(crate) lookup_error: Option<ExternalStoreError>,
     /// 把返回的证据摘要改坏（模拟违反契约的存储）。
     pub(crate) corrupt_record_digest: bool,
@@ -454,6 +525,11 @@ impl FakeExternalStore {
             .iter()
             .filter(|version| version.path == path)
             .collect()
+    }
+
+    /// 路径当前的条目身份（不存在的路径返回 `None`）。
+    pub(crate) fn entry_of(&self, path: &str) -> Option<EntryId> {
+        self.entries.get(path).map(|(entry, _, _)| *entry)
     }
 }
 
@@ -545,6 +621,88 @@ impl ExternalAdoptStore for FakeExternalStore {
             tx: TxId::from_bytes(id_bytes(7_000 + self.counter)),
             digest,
             size: write.content.bytes,
+        })
+    }
+
+    async fn apply_external_move(
+        &mut self,
+        request: &ExternalMove,
+    ) -> Result<ExternalMoveRecord, ExternalStoreError> {
+        self.moves.push(request.clone());
+        if let Some(error) = self.move_error.take() {
+            return Err(error);
+        }
+        let Some((entry, revision, content)) = self.entries.get(&request.from).cloned() else {
+            return Err(ExternalStoreError::Rejected {
+                code: "unknown_path",
+                detail: format!("{} 不在库里", request.from),
+            });
+        };
+        if entry != request.entry {
+            return Err(ExternalStoreError::Rejected {
+                code: "unknown_entry",
+                detail: "条目身份与请求不符".to_owned(),
+            });
+        }
+        if revision != request.expected_revision {
+            return Err(ExternalStoreError::RevisionChanged {
+                expected: request.expected_revision,
+                actual: revision,
+            });
+        }
+        self.counter += 1;
+        let next = revision.next().expect("可推进");
+        self.entries.remove(&request.from);
+        self.entries
+            .insert(request.to.clone(), (entry, next, content));
+        let seq = RootSeq::new(self.counter).expect("合法");
+        self.events.push((seq, request.to.clone()));
+        Ok(ExternalMoveRecord {
+            entry,
+            revision: next,
+            seq,
+            tx: TxId::from_bytes(id_bytes(7_000 + self.counter)),
+        })
+    }
+
+    async fn apply_external_delete(
+        &mut self,
+        request: &ExternalDelete,
+    ) -> Result<ExternalDeleteRecord, ExternalStoreError> {
+        self.deletes.push(request.clone());
+        if let Some(error) = self.delete_error.take() {
+            return Err(error);
+        }
+        let Some((entry, revision, _)) = self.entries.get(&request.path).cloned() else {
+            return Err(ExternalStoreError::Rejected {
+                code: "unknown_path",
+                detail: format!("{} 不在库里", request.path),
+            });
+        };
+        if entry != request.entry {
+            return Err(ExternalStoreError::Rejected {
+                code: "unknown_entry",
+                detail: "条目身份与请求不符".to_owned(),
+            });
+        }
+        if revision != request.expected_revision {
+            return Err(ExternalStoreError::RevisionChanged {
+                expected: request.expected_revision,
+                actual: revision,
+            });
+        }
+        self.counter += 1;
+        let next = revision.next().expect("可推进");
+        let versions = self.versions_of(&request.path).len();
+        self.entries.remove(&request.path);
+        self.trashed.push((request.path.clone(), entry, versions));
+        let seq = RootSeq::new(self.counter).expect("合法");
+        self.events.push((seq, request.path.clone()));
+        Ok(ExternalDeleteRecord {
+            entry,
+            revision: next,
+            seq,
+            tx: TxId::from_bytes(id_bytes(7_000 + self.counter)),
         })
     }
 }

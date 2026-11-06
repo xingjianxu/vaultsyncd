@@ -1764,3 +1764,27 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 - 普通网络故障的指数退避与 `Retry-After` 调度属于 `crates/agent-core`（后续卡）：这里只给 `is_retryable`/`retry_after` 结论。
 - 未接入（后续卡）：Root 清单（S054 起）、changes/SSE 拉取、上传会话、固定版本内容下载（design §5.4 的 `roots.rs`/`changes.rs`/`uploads.rs`/`content.rs`）；查询串编码；浏览器 cookie 载体（Rust 客户端只走 Bearer）。
 - 验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-http-client`（36 项 + 1 doctest）、`cargo clippy --locked -p vaultsyncd-http-client --all-targets -- -D warnings`、`cargo fmt --check`。证书用例用本地 rustls 服务与自签 CA 做真实握手。
+
+## crates/server-core + platform-linux-server — 外部移动、删除与挂载失效（S051）
+
+### 核心（`vaultsyncd_server_core::observer`）
+
+- **扫描健康结论（`scan`）**：`ScanReport::health() -> ScanHealth`，取值 `Complete` / `PermissionDenied{paths}` / `IoError{paths}` / `MountChanged{detail}` / `Incomplete{remaining_dirs}`（预算耗尽单列）。优先级：挂载 > 权限 > IO > 未走完；完整原因仍在 `ScanCompletion::Inconclusive.reasons`。`InconclusiveReason::{DirectoryUnreadable,EntryUnreadable}` 增 `failure: ReadFailure{PermissionDenied,IoError}`；`WorkTreeError::PermissionDenied{path,detail}` 与 `Unreadable` 是两个错误（`code()` 分别为 `work_tree_permission_denied` / `work_tree_unreadable`）。**只有 `ScanHealth::Complete` 允许推导删除。**
+- **移动识别（`reconcile::pair_moves`）**：证据只认文件对象身份（设备 + inode + 创建时间，`MissingEntry::same_object`），内容哈希不参与配对。一对一才配对：两份同内容文件互换名字时各自 inode 仍能正确对上；一个缺失对多个新路径（硬链接/复制）或多个缺失共用一个身份 → 歧义，不猜，按独立新增/删除处理。移动目标必须尚未采纳；目标路径在库里已有条目 → 不移动（不覆盖别人的条目）。
+- **删除与保护（`ReconcileLimits`）**：`ReconcileLimits{max_deletes_per_cycle, max_delete_percent, protection_capacity}`（`DEFAULT` = 32 / 10% / 8，`new` 拒绝 0 与 >100%）。`protection_reason` 按单轮上限与占比判定，占比规则在已保护条目 < `SHARE_MIN_TOTAL`(16) 时不生效（小集合只看数量）。命中即整批进 `ProtectedBatch{id, reason, protected_total, entries:[ProtectedEntry{path,entry,revision,identity,btime,content}], directories:[ProtectedDirectory{path,identity,error,missing_count}]}`，队列满时逐个记 `held{code=protection_queue_full}`，不静默丢弃。
+- **`ExternalObserver`**：`run_pass` 在 `scan_complete && !root_unavailable` 且扫描健康时、于 `handle_files` **之前**做核对（否则移动目标会被当成新文件建新条目），整轮持有 `RootCommitGate` 票据（忙则 `ReconcileReport::deferred`，下一轮再试）。一次完整扫描可跨多轮续扫，核对用累计的 `scan_files`。`PassReport.reconcile: ReconcileReport{health, ran, moves, ambiguous, deletions, held, protected, deferred}`。
+- **互换名字（`identity_swap_needs_review`）**：两条路径都还在、但文件对象换了位置时，单向移动表达不了，按路径重新采纳又会把两个 EntryId 绑到对方的文件上；因此保留双方基线、把现场记进 `held`/`ambiguous`，既不删除也不重绑，`handle_files` 对该路径返回 `PendingReason::Held{code}`。人工处理后才恢复。
+- **放行**：`protected_batches()` 只读查看；`release_protected(id)` 移出队列并把（路径, 条目身份）记成一次性放行，下一轮只对这些身份传播删除（路径换成别的条目时重新受保护）。`with_reconcile_limits(limits)` 设定限额。
+- **端口**：`ports::external_store::ExternalAdoptStore` 增 `apply_external_move(ExternalMove) -> ExternalMoveRecord`（只改父目录与名称、保留 EntryId、不写版本/对象）与 `apply_external_delete(ExternalDelete) -> ExternalDeleteRecord`（可恢复删除：回收站 + 墓碑 + 事件 + 保留历史），两者都比较并写 `expected_revision` 并返回提交后事实；`ports::work_tree::WorkTreePort` 增 `observe_dir(dir) -> Result<Option<DirIdentity>, _>`（保护队列取目录身份）。`AdoptOutcome::UnchangedContent` 现带回 `entry`/`revision`，写进采纳基线。
+
+### 平台（`vaultsyncd_platform_linux_server::mounts::health`）
+
+- `verify_root_mount(path, &RootSnapshot) -> Result<MountHealth, MountChange>`：重新 `probe_path` → 与注册快照比较（后端/FSID/子卷/挂载 ID/目录身份）→ 检查 Root 之下是否有子挂载（按路径分量，`/data/root2` 不是 `/data/root` 的子挂载）→ 确认根目录仍可列出（读一项）。`MountChange::{Probe,Drift,Submount,PermissionDenied,Unreadable,MountInfo}`，`design_error_code()` 恒为 `ROOT_UNAVAILABLE`，`detail_code()` 给出 `mount_changed`/`submount_detected`/`permission_denied` 等细分。权限不足在探测阶段也单独分类。
+- `RootHandle::verify()` 现在调用它（`RootSpecVerifyError::Mount`），因此所有共享根句柄的路径（`LinuxWorkTree::list_dir`/`observe_dir`）都受同一复核；“卸载后路径下露出空目录”命中的是 `DirectoryChanged`/`MountChanged`，即 Root 不可用。
+- `submounts_under(entries, root)` 是纯函数（可单测）；`apps/server::observer::map_restrict` 把 `RestrictError::PermissionDenied` 映射为 `WorkTreeError::PermissionDenied`。
+
+### 不变量与未接入
+
+- 扫描不完整（预算）或健康结论不是 `complete` 时**零删除、零移动**；Root 不可用直接中止整轮。
+- 真实 `umount` 需要特权，未在测试里执行：验收用真实目录“改名 + 原路径建空目录”复现卸载后的现场（对 Root 句柄而言与卸载等价），并在平台层用真实目录验证身份漂移与权限回收。
+- 未接入（S052 及后续）：`apply_external_move`/`apply_external_delete` 的 SQLx 适配与回收站落库；进程入口按 Root 运行后台任务；目录级移动识别（`WorkTreePort` 只提供文件指纹，目录改名时其内文件按 inode 逐个保持身份，目录条目本身由存储层补建）；硬链接去重（当前按独立条目处理）。

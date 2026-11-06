@@ -123,6 +123,28 @@ pub struct WorkDirListing {
     pub unrepresentable_names: usize,
 }
 
+/// 目录身份（design §12.3 保护队列用）：设备、inode 与创建时间。
+///
+/// 目录没有内容摘要，能证明“还是同一个目录”的只有内核身份；保护队列记录它是为了让复核者判断
+/// 这次批量缺失是“目录被换掉/挂载漂移”还是“文件真的被删除”。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirIdentity {
+    /// 设备号（主号与次号拼成 64 位，与 [`FileKey::device`] 同义）。
+    pub device: u64,
+    /// 目录 inode（只在所属子卷内解释）。
+    pub inode: u64,
+    /// 创建时间；文件系统不提供时为 `None`。
+    pub btime: Option<(i64, u32)>,
+}
+
+impl DirIdentity {
+    /// 是否同一个目录对象（设备、inode 与创建时间都相同）。
+    #[must_use]
+    pub fn same_directory(&self, other: &Self) -> bool {
+        self.device == other.device && self.inode == other.inode && self.btime == other.btime
+    }
+}
+
 /// 路径现在的现场。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkObservation {
@@ -137,8 +159,16 @@ pub enum WorkObservation {
 /// 观察错误：与 [`WorkObservation::Absent`] 是两件不同的事，**不得**当成删除。
 #[derive(Clone, Debug)]
 pub enum WorkTreeError {
-    /// 目录或文件不可读（权限、IO、被并发替换成不同类型）。
+    /// 目录或文件不可读（IO、被并发替换成不同类型）。
     Unreadable {
+        /// 相对路径。
+        path: String,
+        /// 原始错误文本。
+        detail: String,
+    },
+    /// 没有权限读取目录或文件：与“IO 错误”分开，因为扫描健康结论必须区分
+    /// `permission_denied` 与 `io_error`（design §12.3）。
+    PermissionDenied {
         /// 相对路径。
         path: String,
         /// 原始错误文本。
@@ -167,6 +197,7 @@ impl WorkTreeError {
     pub fn code(&self) -> &'static str {
         match self {
             WorkTreeError::Unreadable { .. } => "work_tree_unreadable",
+            WorkTreeError::PermissionDenied { .. } => "work_tree_permission_denied",
             WorkTreeError::Gone { .. } => "work_tree_gone",
             WorkTreeError::RootUnavailable { .. } => "root_unavailable",
             WorkTreeError::InvalidPath { .. } => "invalid_path",
@@ -179,6 +210,9 @@ impl fmt::Display for WorkTreeError {
         match self {
             WorkTreeError::Unreadable { path, detail } => {
                 write!(f, "工作目录路径 {path} 不可读：{detail}")
+            }
+            WorkTreeError::PermissionDenied { path, detail } => {
+                write!(f, "工作目录路径 {path} 没有读取权限：{detail}")
             }
             WorkTreeError::Gone { path } => write!(f, "工作目录路径 {path} 已不存在"),
             WorkTreeError::RootUnavailable { detail } => write!(f, "Root 不可用：{detail}"),
@@ -200,7 +234,9 @@ impl std::error::Error for WorkTreeError {}
 /// 3. [`observe`](WorkTreePort::observe) 只有确认父目录可访问且没有该名字时才返回
 ///    [`WorkObservation::Absent`]；[`list_dir`](WorkTreePort::list_dir) 同理只有确认目录不存在才返回
 ///    [`WorkTreeError::Gone`]；
-/// 4. 每次调用前核对 Root 身份，漂移时返回 [`WorkTreeError::RootUnavailable`]。
+/// 4. 每次调用前核对 Root 身份，漂移时返回 [`WorkTreeError::RootUnavailable`]；
+/// 5. 权限不足用 [`WorkTreeError::PermissionDenied`]，其他读失败用
+///    [`WorkTreeError::Unreadable`]：扫描健康结论要区分这两类（design §12.3）。
 pub trait WorkTreePort {
     /// 列出目录下的项。
     ///
@@ -215,4 +251,14 @@ pub trait WorkTreePort {
     ///
     /// 见 [`WorkTreeError`]：不可读、Root 不可用、路径不成立。
     fn observe(&mut self, path: &str) -> Result<WorkObservation, WorkTreeError>;
+
+    /// 读取目录现在的身份（设备、inode、创建时间），用于保护队列复核（design §12.3）。
+    ///
+    /// 只有确认路径不存在才返回 `Ok(None)`；读不到是错误。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`WorkTreeError`]：权限不足（[`WorkTreeError::PermissionDenied`]）、Root 不可用、
+    /// 路径不成立。
+    fn observe_dir(&mut self, dir: &str) -> Result<Option<DirIdentity>, WorkTreeError>;
 }

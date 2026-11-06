@@ -109,8 +109,8 @@ impl ExternalObserver {
                         InconclusiveReason::BudgetExhausted { .. } => {
                             report.subtree_truncated = true;
                         }
-                        InconclusiveReason::DirectoryUnreadable { path, detail }
-                        | InconclusiveReason::EntryUnreadable { path, detail } => {
+                        InconclusiveReason::DirectoryUnreadable { path, detail, .. }
+                        | InconclusiveReason::EntryUnreadable { path, detail, .. } => {
                             report.unreadable.push((path.clone(), detail.clone()));
                         }
                         InconclusiveReason::RootUnavailable { .. } => {}

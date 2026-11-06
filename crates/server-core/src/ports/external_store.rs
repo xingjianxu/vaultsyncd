@@ -144,7 +144,71 @@ impl fmt::Display for ExternalStoreError {
 
 impl std::error::Error for ExternalStoreError {}
 
-/// 外部内容采纳的存储端口。
+/// 一次外部移动（同 Root 内改名）的请求（design §9.5）。
+///
+/// 证据由核心给出：目标路径上实测到的文件身份与源路径同一 inode；存储层据此**只改父目录与名称**，
+/// 保留 `entry`（EntryId 不随路径变），不写版本、不动对象、不动工作目录。
+#[derive(Clone, Debug)]
+pub struct ExternalMove {
+    /// 所属 Root。
+    pub root: RootId,
+    /// 移动前路径。
+    pub from: String,
+    /// 移动后路径。
+    pub to: String,
+    /// 要保持的条目身份。
+    pub entry: EntryId,
+    /// 调用方观察到的 revision；事务内按它比较并写。
+    pub expected_revision: Revision,
+    /// 提交时间。
+    pub at: UtcTimestamp,
+}
+
+/// 一次外部移动的事务结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalMoveRecord {
+    /// 条目身份（必须等于请求的条目）。
+    pub entry: EntryId,
+    /// 新 revision（必须严格大于 `expected_revision`）。
+    pub revision: Revision,
+    /// 该批次占用的 RootSeq。
+    pub seq: RootSeq,
+    /// 该批次的事务身份。
+    pub tx: TxId,
+}
+
+/// 一次外部删除（工作目录里已确认消失）的请求（design §12.3）。
+///
+/// 只有完整且健康的扫描中的缺失才会到达这里（核心已验证）。存储层必须按“可恢复删除”处理：记回收站
+/// 与墓碑、保留版本历史与对象，追加 `changes` 事件；**不**碰工作目录（那里已经没有了）。
+#[derive(Clone, Debug)]
+pub struct ExternalDelete {
+    /// 所属 Root。
+    pub root: RootId,
+    /// 消失的路径。
+    pub path: String,
+    /// 库里该路径的条目身份（必须与本请求一致）。
+    pub entry: EntryId,
+    /// 调用方观察到的 revision；事务内按它比较并写。
+    pub expected_revision: Revision,
+    /// 提交时间。
+    pub at: UtcTimestamp,
+}
+
+/// 一次外部删除的事务结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalDeleteRecord {
+    /// 条目身份（必须等于请求的条目）。
+    pub entry: EntryId,
+    /// 删除后的 revision（必须严格大于 `expected_revision`）。
+    pub revision: Revision,
+    /// 该批次占用的 RootSeq。
+    pub seq: RootSeq,
+    /// 该批次的事务身份。
+    pub tx: TxId,
+}
+
+/// 外部内容观察的存储端口。
 ///
 /// 用 `async fn` 对接异步 SQLx 事务；因此本 trait 不是 dyn 兼容的，核心以泛型参数接受实现者。
 // `#[allow(async_fn_in_trait)]`：只在编排函数里以泛型参数使用，不外发、不做 dyn 对象。
@@ -179,4 +243,38 @@ pub trait ExternalAdoptStore {
         &mut self,
         write: &ExternalWrite,
     ) -> Result<ExternalRecord, ExternalStoreError>;
+
+    /// 把一个已知条目的路径从 `from` 改到 `to`（同 Root 内移动），保留条目身份。
+    ///
+    /// 实现必须满足的契约（design §9.5、§11.2）：
+    ///
+    /// 1. 只改父目录与名称，不写版本/对象（内容没变，不重传）；
+    /// 2. 用比较并写核对 `expected_revision`，已变化返回 [`ExternalStoreError::RevisionChanged`]；
+    /// 3. 目标路径已有条目、父路径是普通文件等冲突返回 [`ExternalStoreError::PathConflict`]，不覆盖；
+    /// 4. 全部写入同一事务；返回值是提交后的实测事实。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`ExternalStoreError`]。
+    async fn apply_external_move(
+        &mut self,
+        request: &ExternalMove,
+    ) -> Result<ExternalMoveRecord, ExternalStoreError>;
+
+    /// 把一个已确认消失的条目按可恢复删除处理（回收站 + 墓碑 + 事件）。
+    ///
+    /// 实现必须满足的契约（design §10.3、§12.3）：
+    ///
+    /// 1. 版本历史、内容对象与回收站条目保留（旧版本可恢复）；
+    /// 2. 用比较并写核对 `expected_revision`，已变化返回 [`ExternalStoreError::RevisionChanged`]；
+    /// 3. 追加 `changes` 批次；**不**触碰工作目录；
+    /// 4. 全部写入同一事务；返回值为提交后的实测事实。
+    ///
+    /// # Errors
+    ///
+    /// 见 [`ExternalStoreError`]。
+    async fn apply_external_delete(
+        &mut self,
+        request: &ExternalDelete,
+    ) -> Result<ExternalDeleteRecord, ExternalStoreError>;
 }

@@ -21,21 +21,28 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use vaultsyncd_domain::ids::RootId;
-use vaultsyncd_domain::version::UtcTimestamp;
+use vaultsyncd_domain::ids::{EntryId, RootId};
+use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 
 use crate::commit::put::RootCommitGate;
 use crate::objects::{ExpectedContent, InvalidStagingName, ObjectLayout};
 use crate::observer::capture::{
-    AdoptFailure, AdoptOutcome, BlockReason, CaptureOutcome, ExternalProposal, RequeueReason,
-    adopt_external, capture_external,
+    AdoptFailure, AdoptOutcome, BlockReason, CaptureOutcome, RequeueReason, adopt_external,
+    capture_external,
 };
 use crate::observer::intents::{IntentError, IntentVerdict, OwnWriteIntent, OwnWriteLedger};
-use crate::observer::scan::{
-    InconclusiveReason, ScanCompletion, ScanCursor, ScanLimits, ScannedFile, SkippedEntry,
-    Stability, StabilityTracker, StabilityWindow, scan_tree,
+use crate::observer::reconcile::{
+    DeleteRecord, HeldEntry, MissingEntry, MoveRecord, ProtectedBatch, ProtectedDirectory,
+    ProtectedEntry, ProtectionReason, ReconcileLimits, ReconcileReport, pair_moves,
+    protection_reason,
 };
-use crate::ports::external_store::{ExternalAdoptStore, ExternalRecord};
+use crate::observer::scan::{
+    InconclusiveReason, ScanCompletion, ScanCursor, ScanHealth, ScanLimits, ScannedFile,
+    SkippedEntry, Stability, StabilityTracker, StabilityWindow, scan_tree,
+};
+use crate::ports::external_store::{
+    ExternalAdoptStore, ExternalDelete, ExternalMove, ExternalRecord,
+};
 use crate::ports::object_store::{CopyFallback, CopyMethod, ObjectBlobPort};
 use crate::ports::work_tree::{FileStamp, WorkObservation, WorkTreeError, WorkTreePort};
 
@@ -92,6 +99,13 @@ pub enum PendingReason {
     Requeued(RequeueReason),
     /// 被阻止，需要人工协调。
     Blocked(BlockReason),
+    /// 现场成了别人（另一个已采纳条目）的文件：不按路径重新绑 EntryId，等待复核。
+    Held {
+        /// 稳定原因码。
+        code: &'static str,
+        /// 原因文本。
+        detail: String,
+    },
     /// 采集或采纳失败（稳定错误码 + 文本），下一轮重试。
     Failed {
         /// 稳定错误码。
@@ -155,6 +169,8 @@ pub struct PassReport {
     pub root_unavailable: bool,
     /// 初始导入是否已完成（只增不减）。
     pub initial_import_complete: bool,
+    /// 移动/删除/保护核对的结论（含本轮扫描健康结论）。
+    pub reconcile: ReconcileReport,
 }
 
 /// 初始导入创建时的参数错误。
@@ -191,9 +207,12 @@ impl PassLimits {
     }
 }
 
-/// 已采纳路径的基线：采纳时的指纹与内容。指纹未变不再采集；内容复核拿它比对重新读到的内容。
+/// 已采纳路径的基线：采纳时的条目身份、指纹与内容。指纹未变不再采集；内容复核拿它比对重新读到的内容；
+/// 外部移动/删除核对拿条目身份与 revision 做比较并写。
 #[derive(Clone, Copy, Debug)]
-struct AdoptedBaseline {
+struct Adopted {
+    entry: EntryId,
+    revision: Revision,
     stamp: FileStamp,
     content: ExpectedContent,
 }
@@ -203,16 +222,27 @@ pub struct ExternalObserver {
     root: RootId,
     tracker: StabilityTracker,
     /// 已采纳（或库里已有相同内容）的路径 → 采纳时的基线；指纹未变则不再采集。
-    adopted: BTreeMap<String, AdoptedBaseline>,
+    adopted: BTreeMap<String, Adopted>,
     pending: BTreeMap<String, PendingReason>,
     resume: Option<ScanCursor>,
     cycle_seen: BTreeSet<String>,
+    /// 一次完整扫描（可能跨多轮续扫）里枚举到的文件；只有走完的完整健康扫描才拿它核对删除。
+    scan_files: BTreeMap<String, FileStamp>,
     staging_prefix: String,
     staging_counter: u64,
     initial_import_complete: bool,
     intents: OwnWriteLedger,
     /// 内容复核的游标：下一批从这个路径之后开始。
     review_after: Option<String>,
+    /// 移动/删除/保护的限额。
+    limits: ReconcileLimits,
+    /// 保护队列（异常批量缺失，等待人工复核）。
+    protected: Vec<ProtectedBatch>,
+    /// 已复核放行的缺失条目（路径 → 条目身份）：下一轮允许直接传播删除。
+    approved: BTreeMap<String, EntryId>,
+    /// 现场变成另一个条目文件的路径（例如两份同内容文件互换名字）：保留基线、不重绑身份。
+    displaced: BTreeSet<String>,
+    next_batch: u64,
 }
 
 impl ExternalObserver {
@@ -235,12 +265,43 @@ impl ExternalObserver {
             pending: BTreeMap::new(),
             resume: None,
             cycle_seen: BTreeSet::new(),
+            scan_files: BTreeMap::new(),
             staging_prefix: staging_prefix.to_owned(),
             staging_counter: 0,
             initial_import_complete: false,
             intents: OwnWriteLedger::new(OwnWriteLedger::DEFAULT_LIMIT),
             review_after: None,
+            limits: ReconcileLimits::DEFAULT,
+            protected: Vec::new(),
+            approved: BTreeMap::new(),
+            displaced: BTreeSet::new(),
+            next_batch: 1,
         })
+    }
+
+    /// 设定移动/删除/保护的限额（默认 [`ReconcileLimits::DEFAULT`]）。
+    #[must_use]
+    pub fn with_reconcile_limits(mut self, limits: ReconcileLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// 保护队列（异常批量缺失，按发现顺序）。
+    #[must_use]
+    pub fn protected_batches(&self) -> &[ProtectedBatch] {
+        &self.protected
+    }
+
+    /// 人工复核后放行一批：从队列移除，并把其中（路径, 条目身份）记成允许删除。
+    ///
+    /// 放行只对“同一个条目身份”的下一次缺失生效（一次性）：路径被换成别的条目时重新受保护。
+    pub fn release_protected(&mut self, id: u64) -> Option<ProtectedBatch> {
+        let index = self.protected.iter().position(|batch| batch.id == id)?;
+        let batch = self.protected.remove(index);
+        for entry in &batch.entries {
+            self.approved.insert(entry.path.clone(), entry.entry);
+        }
+        Some(batch)
     }
 
     /// 登记本服务即将发布到 `path` 的文件（服务写入之前调用）。观察器只在 inode 与内容都与意图一致时
@@ -325,8 +386,14 @@ impl ExternalObserver {
         limits: PassLimits,
         clock: PassClock,
     ) -> PassReport {
+        let fresh = self.resume.is_none();
         let cursor = self.resume.take().unwrap_or_else(ScanCursor::from_root);
+        if fresh {
+            // 新一轮完整扫描：上一轮的（可能是被 Root 不可用打断的）部分快照不再使用。
+            self.scan_files.clear();
+        }
         let scan = scan_tree(&mut *ports.work, limits.scan, cursor);
+        let health = scan.health();
         let root_unavailable = scan.root_unavailable();
         let (scan_complete, inconclusive) = match scan.completion {
             ScanCompletion::Complete => (true, Vec::new()),
@@ -343,6 +410,21 @@ impl ExternalObserver {
             // 的目录或一次被截断的扫描会让其他文件的稳定窗口永远不推进。
             aborted |= self.recheck_pending(&mut *ports.work, limits, &mut files);
         }
+        // 移动/删除只能在“完整且健康”的扫描上核对：扫描不完整或不健康时“没看到”不是删除证据
+        // （design §12.3）。必须在 handle_files 之前做，否则移动目标会被当成新文件建立新条目。
+        if !root_unavailable {
+            for file in &files {
+                self.scan_files.insert(file.path.clone(), file.stamp);
+            }
+        }
+        let reconcile = if scan_complete && !aborted {
+            // 续扫可能跨多轮：核对要用整轮累计的文件，只有本轮枚举到的部分会把别处已采纳的文件
+            // 误判成删除。
+            let seen = std::mem::take(&mut self.scan_files);
+            self.reconcile(ports, &seen, clock, health).await
+        } else {
+            ReconcileReport::skipped(health)
+        };
         if !aborted {
             for file in &files {
                 self.cycle_seen.insert(file.path.clone());
@@ -369,7 +451,272 @@ impl ExternalObserver {
             outcomes,
             root_unavailable: aborted,
             initial_import_complete: self.initial_import_complete,
+            reconcile,
         }
+    }
+
+    /// 核对上一轮已采纳、本轮完整健康扫描里消失的条目：移动、删除或保护（design §9.5、§12.3）。
+    ///
+    /// 顺序：移动（只认文件身份、一对一不歧义）→ 删除（已复核放行的先做）→ 保护（数量或占比异常时
+    /// 整批暂停）。任何一步失败都保持基线不动，下一轮重试；绝不把“没读到”当成删除。
+    async fn reconcile<S: ExternalAdoptStore>(
+        &mut self,
+        ports: &mut ObserverPorts<'_, S>,
+        seen: &BTreeMap<String, FileStamp>,
+        clock: PassClock,
+        health: ScanHealth,
+    ) -> ReconcileReport {
+        let mut report = ReconcileReport::skipped(health);
+        if !report.health.is_complete_and_healthy() {
+            return report;
+        }
+        self.displaced.clear();
+        report.ran = true;
+        let entries: Vec<MissingEntry> = self
+            .adopted
+            .iter()
+            .map(|(path, baseline)| MissingEntry {
+                path: path.clone(),
+                entry: baseline.entry,
+                revision: baseline.revision,
+                identity: baseline.stamp.key,
+                btime: baseline.stamp.btime,
+                content: baseline.content,
+            })
+            .collect();
+        let missing = missing_of(&entries, seen);
+        // 没有缺失并不意味着没变化：互换名字时两条路径都还在，只有文件身份换了位置。
+        let displaced = displaced_of(&entries, seen);
+        if missing.is_empty() && displaced.is_empty() {
+            return report;
+        }
+
+        let Ok(ticket) = ports.gate.acquire(self.root) else {
+            report.deferred = true;
+            return report;
+        };
+        report = self
+            .reconcile_locked(ports, seen, clock, report, missing, displaced)
+            .await;
+        ports.gate.release(ticket);
+        report
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn reconcile_locked<S: ExternalAdoptStore>(
+        &mut self,
+        ports: &mut ObserverPorts<'_, S>,
+        seen: &BTreeMap<String, FileStamp>,
+        clock: PassClock,
+        mut report: ReconcileReport,
+        missing: Vec<MissingEntry>,
+        displaced: Vec<(String, MissingEntry)>,
+    ) -> ReconcileReport {
+        // 移动目标必须是本轮新出现（尚未采纳）的路径；已采纳路径上的文件不可能是移动目标。
+        let seen_new: BTreeMap<String, FileStamp> = seen
+            .iter()
+            .filter(|(path, _)| !self.adopted.contains_key(path.as_str()))
+            .map(|(path, stamp)| (path.clone(), *stamp))
+            .collect();
+        let displaced_entries: BTreeSet<EntryId> =
+            displaced.iter().map(|(_, owner)| owner.entry).collect();
+        let considered: Vec<MissingEntry> = missing
+            .into_iter()
+            .filter(|entry| !displaced_entries.contains(&entry.entry))
+            .collect();
+        self.displaced = displaced.iter().map(|(path, _)| path.clone()).collect();
+        for (path, owner) in &displaced {
+            report.ambiguous.push(path.clone());
+            report.ambiguous.push(owner.path.clone());
+            report.held.push(HeldEntry {
+                path: path.clone(),
+                code: "identity_swap_needs_review",
+                detail: format!(
+                    "该路径现在放的是 {} 的文件；不按路径重新绑定 EntryId",
+                    owner.path
+                ),
+            });
+        }
+        let (moves, rest, ambiguous) = pair_moves(&considered, &seen_new);
+        report.ambiguous.extend(ambiguous);
+
+        for candidate in moves {
+            let from = candidate.missing.path.clone();
+            let to = candidate.to.clone();
+            // 目标路径在库里已有条目就不能当成一次改名（不能覆盖别人的条目）。
+            match ports.store.lookup_path(self.root, &to).await {
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    report.ambiguous.push(to.clone());
+                    report.ambiguous.push(from.clone());
+                    continue;
+                }
+                Err(error) => {
+                    report.held.push(HeldEntry {
+                        path: from,
+                        code: error.code(),
+                        detail: error.to_string(),
+                    });
+                    continue;
+                }
+            }
+            let request = ExternalMove {
+                root: self.root,
+                from: from.clone(),
+                to: to.clone(),
+                entry: candidate.missing.entry,
+                expected_revision: candidate.missing.revision,
+                at: clock.at,
+            };
+            match ports.store.apply_external_move(&request).await {
+                Ok(record)
+                    if record.entry == request.entry
+                        && record.revision > request.expected_revision =>
+                {
+                    self.adopted.remove(&from);
+                    self.settle(&from);
+                    self.adopted.insert(
+                        to.clone(),
+                        Adopted {
+                            entry: record.entry,
+                            revision: record.revision,
+                            stamp: candidate.stamp,
+                            content: candidate.missing.content,
+                        },
+                    );
+                    self.approved.remove(&from);
+                    report.moves.push(MoveRecord {
+                        from,
+                        to,
+                        entry: record.entry,
+                        revision: record.revision,
+                    });
+                }
+                Ok(record) => report.held.push(HeldEntry {
+                    path: from,
+                    code: "store_contract_violation",
+                    detail: format!(
+                        "移动证据条目 {} revision {} 与请求（{} / {}）不符",
+                        record.entry, record.revision, request.entry, request.expected_revision
+                    ),
+                }),
+                Err(error) => report.held.push(HeldEntry {
+                    path: from,
+                    code: error.code(),
+                    detail: error.to_string(),
+                }),
+            }
+        }
+
+        // 已复核放行的先做；其余按数量与占比判断是否整批进保护队列。
+        let (approved, mut remaining): (Vec<MissingEntry>, Vec<MissingEntry>) = rest
+            .into_iter()
+            .partition(|entry| self.approved.get(&entry.path) == Some(&entry.entry));
+        for entry in approved {
+            self.delete_missing(ports, entry, clock.at, &mut report)
+                .await;
+        }
+        if !remaining.is_empty() {
+            let protected_total = self.adopted.len();
+            match protection_reason(remaining.len(), protected_total, self.limits) {
+                Some(reason) => {
+                    self.protect(
+                        ports,
+                        remaining.split_off(0),
+                        reason,
+                        protected_total,
+                        &mut report,
+                    );
+                }
+                None => {
+                    for entry in remaining {
+                        self.delete_missing(ports, entry, clock.at, &mut report)
+                            .await;
+                    }
+                }
+            }
+        }
+        report
+    }
+
+    /// 提交一次外部删除；失败只记入 `held`，基线保持不动。
+    async fn delete_missing<S: ExternalAdoptStore>(
+        &mut self,
+        ports: &mut ObserverPorts<'_, S>,
+        entry: MissingEntry,
+        at: UtcTimestamp,
+        report: &mut ReconcileReport,
+    ) {
+        let request = ExternalDelete {
+            root: self.root,
+            path: entry.path.clone(),
+            entry: entry.entry,
+            expected_revision: entry.revision,
+            at,
+        };
+        match ports.store.apply_external_delete(&request).await {
+            Ok(record)
+                if record.entry == request.entry && record.revision > request.expected_revision =>
+            {
+                self.adopted.remove(&entry.path);
+                self.settle(&entry.path);
+                self.approved.remove(&entry.path);
+                report.deletions.push(DeleteRecord {
+                    path: entry.path,
+                    entry: record.entry,
+                });
+            }
+            Ok(record) => report.held.push(HeldEntry {
+                path: entry.path,
+                code: "store_contract_violation",
+                detail: format!(
+                    "删除证据条目 {} revision {} 与请求（{} / {}）不符",
+                    record.entry, record.revision, request.entry, request.expected_revision
+                ),
+            }),
+            Err(error) => report.held.push(HeldEntry {
+                path: entry.path,
+                code: error.code(),
+                detail: error.to_string(),
+            }),
+        }
+    }
+
+    /// 把一批异常缺失放进保护队列（附原基线、目录身份与计数）。队列已满时不默默丢弃：
+    /// 每个条目都记入 `held`，并保留已有批次。
+    fn protect<S: ExternalAdoptStore>(
+        &mut self,
+        ports: &mut ObserverPorts<'_, S>,
+        entries: Vec<MissingEntry>,
+        reason: ProtectionReason,
+        protected_total: usize,
+        report: &mut ReconcileReport,
+    ) {
+        let directories = group_directories(&entries, &mut *ports.work);
+        if self.protected.len() >= self.limits.protection_capacity {
+            for entry in entries {
+                report.held.push(HeldEntry {
+                    path: entry.path,
+                    code: "protection_queue_full",
+                    detail: format!(
+                        "保护队列已有 {} 批（上限 {}），本批未入队：{reason}",
+                        self.protected.len(),
+                        self.limits.protection_capacity
+                    ),
+                });
+            }
+            return;
+        }
+        let batch = ProtectedBatch {
+            id: self.next_batch,
+            reason,
+            protected_total,
+            entries: entries.iter().map(ProtectedEntry::from).collect(),
+            directories,
+        };
+        self.next_batch += 1;
+        report.protected = Some(batch.clone());
+        self.protected.push(batch);
     }
 
     /// 对一批已枚举的文件做稳定性判断、采集与采纳。`aborted` 为真（Root 不可用）时什么都不做；
@@ -397,6 +744,20 @@ impl ExternalObserver {
                 // 已核对为本服务写入、指纹未变：不必再等待与采集。任何指纹变化都会重新核对。
                 if self.intents.is_verified(&file.path, &file.stamp) {
                     self.settle(&file.path);
+                    continue;
+                }
+                // 这条路径上的文件现在是另一个已采纳条目的文件：按路径采纳会把两个 EntryId 串起来。
+                // 保留双方基线，等人工复核（design §9.5：不凭内容猜身份）。
+                if self.displaced.contains(&file.path) {
+                    let reason = PendingReason::Held {
+                        code: "identity_swap_needs_review",
+                        detail: "现场是另一个已采纳条目的文件".to_owned(),
+                    };
+                    self.mark_pending(&file.path, reason.clone());
+                    outcomes.push(FileOutcome {
+                        path: file.path,
+                        state: FileState::Pending(reason),
+                    });
                     continue;
                 }
                 match self.tracker.observe(&file.path, file.stamp, clock.now_ms) {
@@ -525,7 +886,15 @@ impl ExternalObserver {
         .await;
         match adopted {
             Ok(AdoptOutcome::Adopted { record, created }) => {
-                self.record_baseline(path, &proposal);
+                self.record_baseline(
+                    path,
+                    Adopted {
+                        entry: record.entry,
+                        revision: record.revision,
+                        stamp: proposal.stamp,
+                        content: proposal.content,
+                    },
+                );
                 self.settle(path);
                 let state = FileState::Adopted {
                     record,
@@ -535,8 +904,20 @@ impl ExternalObserver {
                 };
                 (state, false)
             }
-            Ok(AdoptOutcome::UnchangedContent { .. }) => {
-                self.record_baseline(path, &proposal);
+            Ok(AdoptOutcome::UnchangedContent {
+                content,
+                entry,
+                revision,
+            }) => {
+                self.record_baseline(
+                    path,
+                    Adopted {
+                        entry,
+                        revision,
+                        stamp: proposal.stamp,
+                        content,
+                    },
+                );
                 self.settle(path);
                 (FileState::UnchangedContent, false)
             }
@@ -576,14 +957,8 @@ impl ExternalObserver {
         }
     }
 
-    fn record_baseline(&mut self, path: &str, proposal: &ExternalProposal) {
-        self.adopted.insert(
-            path.to_owned(),
-            AdoptedBaseline {
-                stamp: proposal.stamp,
-                content: proposal.content,
-            },
-        );
+    fn record_baseline(&mut self, path: &str, baseline: Adopted) {
+        self.adopted.insert(path.to_owned(), baseline);
     }
 
     /// 重排队：忘记指纹，重新等待一个完整窗口。
@@ -597,6 +972,72 @@ impl ExternalObserver {
 
 mod hinted;
 #[cfg(test)]
+mod reconcile_tests;
+#[cfg(test)]
 mod tests;
+
+/// 本轮完整扫描里没再出现的已采纳条目。
+fn missing_of(entries: &[MissingEntry], seen: &BTreeMap<String, FileStamp>) -> Vec<MissingEntry> {
+    entries
+        .iter()
+        .filter(|entry| !seen.contains_key(entry.path.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// 现场已经换成“另一个已采纳条目的文件”的路径（互换/被覆盖），以及它现在放的是谁的文件。
+fn displaced_of(
+    entries: &[MissingEntry],
+    seen: &BTreeMap<String, FileStamp>,
+) -> Vec<(String, MissingEntry)> {
+    let mut displaced = Vec::new();
+    for (path, stamp) in seen {
+        let Some(baseline) = entries.iter().find(|entry| entry.path == *path) else {
+            continue;
+        };
+        if baseline.same_object(stamp) {
+            continue;
+        }
+        if let Some(owner) = entries
+            .iter()
+            .find(|entry| entry.path != *path && entry.same_object(stamp))
+        {
+            displaced.push((path.clone(), owner.clone()));
+        }
+    }
+    displaced
+}
+
+/// 把一批缺失条目按父目录分组，并逐个实测目录身份（design §12.3 的“目录身份”）”。
+fn group_directories(
+    entries: &[MissingEntry],
+    work: &mut dyn WorkTreePort,
+) -> Vec<ProtectedDirectory> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for entry in entries {
+        let parent = entry
+            .path
+            .rsplit_once('/')
+            .map_or_else(String::new, |(dir, _)| dir.to_owned());
+        *counts.entry(parent).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(path, missing_count)| match work.observe_dir(&path) {
+            Ok(identity) => ProtectedDirectory {
+                path,
+                identity,
+                error: None,
+                missing_count,
+            },
+            Err(error) => ProtectedDirectory {
+                path,
+                identity: None,
+                error: Some(error.to_string()),
+                missing_count,
+            },
+        })
+        .collect()
+}
 
 pub use hinted::{HintedReport, ReviewReport};
