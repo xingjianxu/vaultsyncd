@@ -14,6 +14,7 @@ use vaultsyncd_client_store::db::Database;
 use vaultsyncd_client_store::entries::{BaselineEntry, EntryKind as StoreKind};
 use vaultsyncd_domain::ids::{BindingId, EntryId, IdSource, OpId, RootId};
 use vaultsyncd_domain::version::{Generation, Revision, RootSeq, UtcTimestamp};
+use vaultsyncd_fs_common::name::NameEquivalence;
 use vaultsyncd_fs_common::path::RelativePath;
 use vaultsyncd_planner::conflict::{
     ConflictNameRequest, NameBudget, ShortIdLen, conflict_entry_path,
@@ -80,7 +81,7 @@ pub struct ImportInstall {
 }
 
 /// 平台首次导入端口。所有破坏性本地动作都有已持久化身份，适配器不能把故障当成缺失。
-pub trait ImportLocal: Send + Sync {
+pub trait ImportLocal: NameEquivalence + Send + Sync {
     /// 检查根/缓存/内部状态及已绑定路径；other_paths 来自数据库而不是调用者猜测。
     fn validate<'a>(
         &'a self,
@@ -103,10 +104,20 @@ pub trait ImportLocal: Send + Sync {
     fn install(&self, request: &ImportInstall) -> PortFuture<'_, Result<Generation, PortError>>;
 }
 
+/// 固定快照及经过认证的响应所报告的服务器时间（例如 HTTPS Date）。
+/// 时间仅用于首次导入的稳定冲突标签，不冒充尚未发生的提交时间，也不参与内容决胜。
+#[derive(Clone, Debug)]
+pub struct SnapshotSeed {
+    /// 直接复用生成的快照 DTO。
+    pub metadata: Snapshot,
+    /// 服务器观察时间；不得用客户端时钟或 expires_at 猜测。
+    pub server_time: UtcTimestamp,
+}
+
 /// 一致性快照端口。每页必须来自 begin 返回的同一个 snapshot_id。
 pub trait ImportSnapshot: Send + Sync {
     /// 固定快照，不能用不断变化的目录列表代替。
-    fn begin(&self, root: RootId) -> PortFuture<'_, Result<Snapshot, PortError>>;
+    fn begin(&self, root: RootId) -> PortFuture<'_, Result<SnapshotSeed, PortError>>;
     /// 读取固定快照的一页；过期必须报错，不悄悄换快照。
     fn page<'a>(
         &'a self,
@@ -178,13 +189,14 @@ impl FirstImport {
             Some(journal) => journal,
             None => {
                 self.store.ensure_fresh(binding_id).await?;
-                let snapshot = self.snapshot.begin(binding.root).await?;
-                validate_snapshot(&snapshot, &binding)?;
+                let seed = self.snapshot.begin(binding.root).await?;
+                validate_snapshot(&seed.metadata, &binding)?;
                 let journal = Journal {
                     format: 1,
                     revision: 0,
                     root_identity: admission.identity.clone(),
-                    snapshot,
+                    snapshot: seed.metadata,
+                    server_time: seed.server_time.as_unix_seconds(),
                     entries: Vec::new(),
                     cursor: None,
                     snapshot_complete: false,
@@ -228,7 +240,9 @@ impl FirstImport {
                 &binding,
                 &journal.entries,
                 local,
-                &journal.snapshot.expires_at,
+                UtcTimestamp::from_unix_seconds(journal.server_time)
+                    .map_err(|e| invalid(e.to_string()))?,
+                self.local.as_ref(),
                 ids,
             )?);
             self.store.prepare(&binding, &mut journal).await?;
@@ -385,6 +399,7 @@ pub(super) struct Journal {
     pub revision: i64,
     pub root_identity: String,
     pub snapshot: Snapshot,
+    pub server_time: i64,
     pub entries: Vec<SnapshotEntry>,
     pub cursor: Option<String>,
     pub snapshot_complete: bool,
@@ -412,7 +427,8 @@ fn plan_manifest(
     binding: &BindingRecord,
     entries: &[SnapshotEntry],
     local: Vec<LocalImportEntry>,
-    server_time: &str,
+    server_time: UtcTimestamp,
+    names: &dyn NameEquivalence,
     ids: &mut impl IdSource,
 ) -> Result<Vec<Item>, PortError> {
     let remote = remote_paths(entries)?;
@@ -425,6 +441,7 @@ fn plan_manifest(
     }
     validate_tree(locals.iter().map(|(p, e)| (p.as_str(), e.kind)))?;
     let mut occupied: BTreeSet<String> = remote.keys().chain(locals.keys()).cloned().collect();
+    validate_names(&occupied, names)?;
     let mut paths: Vec<String> = occupied.iter().cloned().collect();
     paths.sort_by_key(|value| (value.split('/').count(), value.clone()));
     let mut remaps: Vec<(String, String)> = Vec::new();
@@ -473,16 +490,14 @@ fn plan_manifest(
         let upload = match plan.action {
             Action::UploadNewEntry { .. } => true,
             Action::PreserveBoth(_) => {
-                // 时间只作标签，不参与胜负；快照没有 created_at，用固定到期时间作服务器时间标签。
-                let time = UtcTimestamp::from_unix_seconds(number(server_time)? as i64)
-                    .map_err(|e| invalid(e.to_string()))?;
-                // 使用完整 OpId 的短标识，且检查扫描/快照中的所有名称，仍有并发撞名则由 create CAS 拒绝。
+                // 首次导入提前固定服务器观察时间作为标签；真正的去重身份是完整 OpId。
+                // 检查扫描/快照中的所有名称，仍有并发撞名则由 create CAS 拒绝。
                 target = conflict_entry_path(
                     &path(&source)?,
                     &ConflictNameRequest {
                         device_label: &binding.device.to_string()[..8],
                         op_id: op,
-                        server_time: time,
+                        server_time,
                         budget: NameBudget::CROSS_PLATFORM,
                         short_id_len: ShortIdLen::new(32).map_err(|e| invalid(e.to_string()))?,
                     },
@@ -518,7 +533,27 @@ fn plan_manifest(
             complete: false,
         });
     }
+    for item in &items {
+        occupied.insert(item.target.clone());
+    }
+    validate_names(&occupied, names)?;
     Ok(items)
+}
+
+fn validate_names(paths: &BTreeSet<String>, names: &dyn NameEquivalence) -> Result<(), PortError> {
+    let mut siblings: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for value in paths {
+        let (parent, name) = value.rsplit_once('/').unwrap_or(("", value.as_str()));
+        let previous = siblings.entry(parent).or_default();
+        if previous.iter().any(|other| names.equivalent(other, name)) {
+            return Err(PortError::rejected(
+                "INVALID_NAME",
+                "清单含平台等价但拼写不同的名称，不能静默改名或覆盖",
+            ));
+        }
+        previous.push(name);
+    }
+    Ok(())
 }
 
 fn remap(original: &str, remaps: &[(String, String)]) -> String {
@@ -651,23 +686,14 @@ fn validate_page(journal: &Journal, page: &SnapshotPage) -> Result<(), PortError
     {
         return Err(invalid("快照分页混入不同身份或高水位"));
     }
-    if page.next_cursor.is_some()
-        && (page.entries.is_empty()
-            || page
-                .next_cursor
-                .as_deref()
-                .map(number)
-                .transpose()?
-                .is_some_and(|next| {
-                    next <= journal
-                        .cursor
-                        .as_deref()
-                        .map(number)
-                        .transpose()
-                        .unwrap_or(None)
-                        .unwrap_or(0)
-                }))
-    {
+    let current = journal
+        .cursor
+        .as_deref()
+        .map(number)
+        .transpose()?
+        .unwrap_or(0);
+    let next = page.next_cursor.as_deref().map(number).transpose()?;
+    if next.is_some_and(|next| next <= current || page.entries.is_empty()) {
         return Err(invalid("快照分页游标未推进"));
     }
     let mut previous = journal.entries.last().map(|entry| entry.entry_id.as_str());
@@ -763,3 +789,6 @@ fn parse_hash(value: &str) -> Result<[u8; 32], PortError> {
 pub(super) fn invalid(detail: impl Into<String>) -> PortError {
     PortError::rejected("NEEDS_RECOVERY", detail)
 }
+
+#[cfg(test)]
+mod tests;

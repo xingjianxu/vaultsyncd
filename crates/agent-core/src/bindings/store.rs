@@ -32,7 +32,7 @@ impl ImportStore {
             .ok_or_else(|| invalid("绑定不存在"))
     }
     pub async fn other_paths(&self, id: BindingId) -> Result<Vec<String>, PortError> {
-        sqlx::query_scalar("SELECT local_path FROM bindings WHERE id <> ?")
+        sqlx::query_scalar("SELECT local_path FROM bindings WHERE id <> ?1 UNION ALL SELECT cache_path FROM bindings WHERE id <> ?1")
             .bind(id.as_bytes().as_slice())
             .fetch_all(self.database.pool())
             .await
@@ -169,7 +169,9 @@ impl ImportStore {
                     result
                         .error_code
                         .as_ref()
-                        .map(|code| format!("{code:?}"))
+                        .and_then(|code| {
+                            serde_json::to_value(code).ok()?.as_str().map(str::to_owned)
+                        })
                         .unwrap_or_else(|| "NEEDS_RECOVERY".to_owned()),
                     result
                         .error_message

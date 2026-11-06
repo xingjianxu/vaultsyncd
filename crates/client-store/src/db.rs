@@ -979,6 +979,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn version_three_upgrade_keeps_upload_resume_and_creates_empty_import_journal() {
+        let dir = TestDir::new("upgrade-v3");
+        let path = dir.database();
+        let previous = migrator(&dir.migrations(&[
+            (BASELINE_FILE, BASELINE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
+            (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
+        ]))
+        .await;
+        let old = Database::open_with(&path, &previous).await.expect("旧版库");
+        let binding = crate::test_support::seed_binding(&old, 0x58).await;
+        let op = vaultsyncd_domain::ids::OpId::from_bytes([0x58; 16]);
+        let mut tx = old.begin_write().await.expect("事务");
+        crate::queue::enqueue(
+            &mut tx,
+            &crate::queue::NewPendingOp {
+                op,
+                binding,
+                kind: "upload_new_entry".to_owned(),
+                entry: None,
+                baseline_revision: None,
+                baseline_version: None,
+                depends_on: None,
+                pinned_version: None,
+            },
+        )
+        .await
+        .expect("旧版队列");
+        crate::upload_resumes::save(
+            &mut tx,
+            &crate::upload_resumes::NewUploadResume {
+                op,
+                binding,
+                snapshot_identity: "generation-1".to_owned(),
+                total_size: 42,
+                digest: [0x58; 32],
+                session: "old-session".to_owned(),
+            },
+        )
+        .await
+        .expect("旧版续传");
+        tx.commit().await.expect("提交");
+        old.close().await;
+        let upgraded = Database::open(&path).await.expect("升级 0004");
+        assert_eq!(upgraded.schema_version(), 4);
+        let mut conn = upgraded.pool().acquire().await.expect("连接");
+        let resume = crate::upload_resumes::load(&mut conn, op)
+            .await
+            .expect("旧会话")
+            .expect("旧会话仍在");
+        assert!(resume.matches_snapshot("generation-1", 42, &[0x58; 32]));
+        assert!(
+            crate::queue::pending_op(&mut conn, op)
+                .await
+                .expect("旧操作")
+                .is_some()
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM binding_imports")
+            .fetch_one(&mut *conn)
+            .await
+            .expect("空日志");
+        assert_eq!(count, 0, "迁移不能把曾经同步的绑定标为首次导入");
+        drop(conn);
+        upgraded.close().await;
+        assert!(
+            migration_backup_path(&path, 3, 4).exists(),
+            "升级前一致性备份"
+        );
+    }
+
+    #[tokio::test]
     async fn schema_newer_than_binary_is_refused_before_any_write() {
         let dir = TestDir::new("too-new");
         let path = dir.database();
