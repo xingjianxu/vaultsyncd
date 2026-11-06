@@ -1,3 +1,3 @@
 # S091 固定开发配置
 
-这些是已知schema/协议fixture，不是旧正式发行客户端。profiles.json固定源提交及历史迁移SQL的SQLx SHA-512校验和；只允许追加新迁移，旧SQL改动导致fixture测试失败。server12是S087准备快照格式，client11是通知交付迁移前的真实本地库。由当前数据库入口使用固定旧迁移上界模拟旧程序支持范围，覆盖该入口版本拒写规则，不宣称运行了前一正式二进制。远端1.0与本机IPC1.2从既有契约固定，future minor/unknown feature负例由测试在副本上变更。
+这些是已知schema/协议fixture，不是旧正式发行客户端。profiles.json固定源提交及历史迁移SQL的SQLx SHA-384校验和；只允许追加新迁移，旧SQL改动导致fixture测试失败。server12是S087准备快照格式，client11是通知交付迁移前的真实本地库。由当前数据库入口使用固定旧迁移上界模拟旧程序支持范围，覆盖该入口版本拒写规则，不宣称运行了前一正式二进制。远端1.0与本机IPC1.2从既有契约固定，future minor/unknown feature负例由测试在副本上变更。

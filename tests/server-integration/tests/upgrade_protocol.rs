@@ -68,6 +68,11 @@ impl Proxy {
                         bytes.extend_from_slice(&b[..n]);
                     }
                     let (status, body) = if path == "/v1/capabilities" {
+                        assert_eq!(length, 0, "capability probe must not send request content");
+                        assert!(
+                            !header.to_ascii_lowercase().contains("authorization:"),
+                            "capability probe must not send credentials"
+                        );
                         (200, serde_json::to_vec(&capabilities).unwrap())
                     } else {
                         calls.fetch_add(1, Ordering::SeqCst);
