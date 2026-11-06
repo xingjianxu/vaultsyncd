@@ -24,9 +24,16 @@ fn main() {
         ))?;
         Ok(())
     })();
-    if result.is_err() {
-        eprintln!("event=agent-failed; inspect persistent state and configuration");
-        std::process::exit(1);
+    if let Err(error) = result {
+        let code = error
+            .downcast_ref::<vaultsyncd_transfer::ports::PortError>()
+            .and_then(|e| e.code())
+            .unwrap_or("STARTUP_FAILED");
+        eprintln!(
+            "event=agent-failed code={code} detail={:?}",
+            error.to_string().chars().take(512).collect::<String>()
+        );
+        std::process::exit(if code == "ALREADY_RUNNING" { 2 } else { 1 });
     }
 }
 #[cfg(not(windows))]

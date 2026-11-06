@@ -59,6 +59,31 @@ impl Local {
         &self,
         path: &str,
     ) -> Result<Option<Arc<FixedSnapshot>>, PortError> {
+        let meta = self.root.inspect(path);
+        if let Ok(meta) = &meta {
+            if !meta.directory {
+                let mut physical = meta.identity.volume.to_le_bytes().to_vec();
+                physical.extend(meta.identity.file);
+                let prior:Option<(i64,Option<Vec<u8>>)>=sqlx::query_as("SELECT generation,fingerprint FROM local_entries WHERE binding_id=? AND file_identity=? ORDER BY generation DESC LIMIT 1").bind(self.binding.as_bytes().as_slice()).bind(physical).fetch_optional(self.db.pool()).await.map_err(error)?;
+                if let Some((generation, Some(digest))) = prior {
+                    let digest: [u8; 32] = digest
+                        .try_into()
+                        .map_err(|_| error("invalid persisted fingerprint"))?;
+                    self.native
+                        .seed_if_unknown(
+                            path,
+                            Evidence {
+                                generation: generation as u64,
+                                volume: meta.identity.volume,
+                                file: meta.identity.file,
+                                digest,
+                                size: meta.size,
+                            },
+                        )
+                        .map_err(error)?;
+                }
+            }
+        }
         match self.native.observe(path).map_err(error)? {
             ObservedContent::Absent => Ok(None),
             ObservedContent::File(snapshot) => {
@@ -123,8 +148,9 @@ impl Snapshot {
     fn new(inner: Arc<FixedSnapshot>) -> Self {
         let e = inner.evidence();
         let identity = format!(
-            "{}-{}-{}-{}",
+            "{}-{:02x?}-{}-{}-{}",
             e.volume,
+            e.file,
             vaultsyncd_transfer::hash::to_hex(&e.digest),
             e.generation,
             e.size
@@ -217,6 +243,19 @@ impl LocalPort for Local {
     fn observe(&self, path: &RelativePath) -> PortFuture<'_, Result<LocalFacts, PortError>> {
         let path = path.clone();
         Box::pin(async move {
+            let meta = self.root.inspect(&path.to_string()).map_err(error)?;
+            if meta.directory {
+                let mut physical = meta.identity.volume.to_le_bytes().to_vec();
+                physical.extend(meta.identity.file);
+                return Ok(LocalFacts {
+                    path,
+                    kind: LocalEntryKind::Directory,
+                    generation: Generation::ZERO,
+                    size: 0,
+                    file_identity: Some(physical),
+                    usage: Usage::Idle,
+                });
+            }
             let snapshot = self
                 .observe_snapshot(&path.to_string())
                 .await?

@@ -257,6 +257,54 @@ impl WindowsFiles {
         Ok(actual)
     }
 
+    /// Remove a confirmed file from the visible namespace while retaining its original object.
+    /// Caller persists op/path/expected evidence first. Recovery accepts only that same private object.
+    pub fn quarantine(&self, op: &str, path: &str, expected: &Evidence) -> io::Result<()> {
+        validate_op(op)?;
+        let _gate = self.gate.lock().map_err(poison)?;
+        let saved = format!("deleted-{op}");
+        match self.root.inspect(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return self.state.with_parent(&saved, |parent, name| {
+                    let file = open_child_shared(parent, name, false, false, 0x00100081, false, 0)?;
+                    let meta = metadata(&file)?;
+                    let (hash, size) = hash_file(&file)?;
+                    if meta.identity.volume != expected.volume
+                        || meta.identity.file != expected.file
+                        || hash != expected.digest
+                        || size != expected.size
+                    {
+                        return Err(changed());
+                    }
+                    Ok(())
+                });
+            }
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
+        let (guard, meta) = self.protect(path, true)?;
+        let lease = guard.lease()?;
+        if self.evidence_handle(path, lease.file(), meta.identity)? != *expected {
+            return Err(changed());
+        }
+        self.state
+            .with_parent(&saved, |parent, name| rename(lease.file(), parent, name, 0))?;
+        lease.file().sync_all()?;
+        Ok(())
+    }
+
+    /// Seed a moved object's durable generation only when no live observation exists for this path.
+    pub fn seed_if_unknown(&self, path: &str, evidence: Evidence) -> io::Result<()> {
+        RelativePath::parse(path).map_err(invalid)?;
+        Generation::new(evidence.generation).map_err(invalid)?;
+        self.generations
+            .lock()
+            .map_err(poison)?
+            .entry(path.into())
+            .or_insert(evidence);
+        Ok(())
+    }
+
     /// Publish verified contents with durable before/after evidence and preserved original object.
     /// Namespace publication has a recoverable two-rename interval, not a single atomic rename.
     /// Caller must first persist its core local_intent using the same OpId.
@@ -492,6 +540,17 @@ impl WindowsFiles {
                 }
                 Ok(())
             })
+    }
+
+    /// Distinguish a core-only same-content acknowledgement from an actual native publication.
+    pub fn publication_present(&self, op: &str) -> io::Result<bool> {
+        validate_op(op)?;
+        match self.state.inspect(&format!("publication-{op}.json")) {
+            Ok(meta) if !meta.directory && meta.links == 1 && meta.cloud.is_none() => Ok(true),
+            Ok(_) => Err(invalid("unsafe publication journal")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
     }
     fn check_root(&self, p: &Publication) -> io::Result<()> {
         if p.root_volume != self.root.identity().volume || p.root_file != self.root.identity().file

@@ -121,6 +121,31 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
         .find(|item| item.get("entry_id").and_then(Value::as_str) == Some(&sibling))
         .expect("冲突条目在快照里");
     assert_eq!(sibling_entry["hash"], sha256(LATE));
+    let (_, changes) = running
+        .json(
+            "GET",
+            &format!("/v1/roots/{root}/changes?after=0"),
+            Some(&token),
+            None,
+        )
+        .await
+        .unwrap();
+    let events: Vec<Value> = changes["batches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|batch| {
+            serde_json::from_str::<Vec<Value>>(batch["events_json"].as_str().unwrap()).unwrap()
+        })
+        .collect();
+    let event = events
+        .iter()
+        .find(|event| event["entry_id"] == sibling)
+        .expect("conflict create event");
+    assert_eq!(
+        event["version_id"], sibling_entry["version_id"],
+        "file create event must pin the exact committed version"
+    );
     assert!(
         sibling_entry["name"]
             .as_str()

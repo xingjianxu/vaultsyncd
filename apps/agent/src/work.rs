@@ -163,121 +163,124 @@ impl UploadCommitStore for Commits {
         commit: &'a UploadCommit,
     ) -> PortFuture<'a, Result<UploadCommitDisposition, PortError>> {
         Box::pin(async move {
-            let local = &self.importer.local;
-            let spec = load_spec(local, commit.op).await?;
-            let path = spec["path"]
-                .as_str()
-                .ok_or_else(|| error("upload spec missing path"))?;
-            let actual = local.observe_snapshot(path).await?;
-            let mut tx = local.db.begin_write().await.map_err(error)?;
-            sqlx::query(
-                "UPDATE agent_actions SET result=? WHERE op_id=? AND (result IS NULL OR result=?)",
+            self.finish(
+                commit.op,
+                commit.generation,
+                commit.upload.content.digest,
+                commit.upload.content.size,
+                &commit.result,
             )
-            .bind(serde_json::to_string(&commit.result).map_err(error)?)
-            .bind(commit.op.as_bytes().as_slice())
-            .bind(serde_json::to_string(&commit.result).map_err(error)?)
+            .await
+        })
+    }
+}
+impl Commits {
+    pub(crate) async fn finish(
+        &self,
+        op: OpId,
+        generation: Generation,
+        digest: [u8; 32],
+        size: u64,
+        result: &vaultsyncd_protocol::generated::OperationResult,
+    ) -> Result<UploadCommitDisposition, PortError> {
+        let local = &self.importer.local;
+        let spec = load_spec(local, op).await?;
+        let path = spec["path"]
+            .as_str()
+            .ok_or_else(|| error("upload spec missing path"))?;
+        crate::conflicts::record_ack(local, op, result).await?;
+        if result.conflict.is_some() {
+            return crate::conflicts::settle(&self.importer, op, generation, digest, size, result)
+                .await;
+        }
+        let actual = local.observe_snapshot(path).await?;
+        let mut tx = local.db.begin_write().await.map_err(error)?;
+        let entry = EntryId::from_hex(
+            result
+                .entry_id
+                .as_deref()
+                .ok_or_else(|| error("missing ACK entry"))?,
+        )
+        .map_err(error)?;
+        let version = VersionId::from_hex(
+            result
+                .version_id
+                .as_deref()
+                .ok_or_else(|| error("missing ACK version"))?,
+        )
+        .map_err(error)?;
+        let parent = EntryId::from_hex(
+            spec["parent"]
+                .as_str()
+                .ok_or_else(|| error("missing parent"))?,
+        )
+        .map_err(error)?;
+        let name = spec["name"]
+            .as_str()
+            .ok_or_else(|| error("missing name"))?
+            .to_owned();
+        let base = BaselineEntry {
+            entry,
+            parent: Some(parent),
+            name,
+            kind: EntryKind::File,
+            revision: Revision::from_decimal(
+                result
+                    .revision
+                    .as_deref()
+                    .ok_or_else(|| error("missing revision"))?,
+            )
+            .map_err(error)?,
+            content_version: Some(version),
+            deleted: false,
+        };
+        entries::put_baseline(&mut tx, local.binding, &base)
+            .await
+            .map_err(error)?;
+        let mut disposition = UploadCommitDisposition::StaleGeneration;
+        if let Some(snapshot) = actual {
+            let e = snapshot.evidence();
+            let clean = e.generation == generation.get() && e.digest == digest && e.size == size;
+            entries::put_local(
+                &mut tx,
+                local.binding,
+                &LocalEntry {
+                    entry,
+                    generation: Generation::new(e.generation).map_err(error)?,
+                    dirty: if clean { Dirty::Clean } else { Dirty::Dirty },
+                    residency: Residency::Materialized,
+                    fingerprint: Some(e.digest.to_vec()),
+                    file_identity: Some(e.identity()),
+                },
+            )
+            .await
+            .map_err(error)?;
+            if clean {
+                disposition = UploadCommitDisposition::Applied;
+            }
+        }
+        sqlx::query("INSERT OR IGNORE INTO agent_versions VALUES(?,?,?,?,?)")
+            .bind(local.binding.as_bytes().as_slice())
+            .bind(entry.as_bytes().as_slice())
+            .bind(version.as_bytes().as_slice())
+            .bind(digest.as_slice())
+            .bind(size as i64)
             .execute(&mut *tx)
             .await
             .map_err(error)?;
-            if commit.result.conflict.is_some() {
-                tx.commit().await.map_err(error)?;
-                return Err(PortError::rejected(
-                    "NEEDS_RECOVERY",
-                    "committed conflict retained; namespace reconciliation required",
-                ));
-            }
-            let entry = EntryId::from_hex(
-                commit
-                    .result
-                    .entry_id
-                    .as_deref()
-                    .ok_or_else(|| error("missing ACK entry"))?,
+        tx.commit().await.map_err(error)?;
+        if disposition == UploadCommitDisposition::Applied {
+            let fixed = VersionPin::new(
+                local.binding.to_string(),
+                entry.to_string(),
+                version.to_string(),
+                digest,
+                size,
             )
             .map_err(error)?;
-            let version = VersionId::from_hex(
-                commit
-                    .result
-                    .version_id
-                    .as_deref()
-                    .ok_or_else(|| error("missing ACK version"))?,
-            )
-            .map_err(error)?;
-            let parent = EntryId::from_hex(
-                spec["parent"]
-                    .as_str()
-                    .ok_or_else(|| error("missing parent"))?,
-            )
-            .map_err(error)?;
-            let name = spec["name"]
-                .as_str()
-                .ok_or_else(|| error("missing name"))?
-                .to_owned();
-            let base = BaselineEntry {
-                entry,
-                parent: Some(parent),
-                name,
-                kind: EntryKind::File,
-                revision: Revision::from_decimal(
-                    commit
-                        .result
-                        .revision
-                        .as_deref()
-                        .ok_or_else(|| error("missing revision"))?,
-                )
-                .map_err(error)?,
-                content_version: Some(version),
-                deleted: false,
-            };
-            entries::put_baseline(&mut tx, local.binding, &base)
-                .await
-                .map_err(error)?;
-            let mut disposition = UploadCommitDisposition::StaleGeneration;
-            if let Some(snapshot) = actual {
-                let e = snapshot.evidence();
-                let clean = e.generation == commit.generation.get()
-                    && e.digest == commit.upload.content.digest
-                    && e.size == commit.upload.content.size;
-                entries::put_local(
-                    &mut tx,
-                    local.binding,
-                    &LocalEntry {
-                        entry,
-                        generation: Generation::new(e.generation).map_err(error)?,
-                        dirty: if clean { Dirty::Clean } else { Dirty::Dirty },
-                        residency: Residency::Materialized,
-                        fingerprint: Some(e.digest.to_vec()),
-                        file_identity: Some(e.identity()),
-                    },
-                )
-                .await
-                .map_err(error)?;
-                if clean {
-                    disposition = UploadCommitDisposition::Applied;
-                }
-            }
-            sqlx::query("INSERT OR IGNORE INTO agent_versions VALUES(?,?,?,?,?)")
-                .bind(local.binding.as_bytes().as_slice())
-                .bind(entry.as_bytes().as_slice())
-                .bind(version.as_bytes().as_slice())
-                .bind(commit.upload.content.digest.as_slice())
-                .bind(commit.upload.content.size as i64)
-                .execute(&mut *tx)
-                .await
-                .map_err(error)?;
-            tx.commit().await.map_err(error)?;
-            if disposition == UploadCommitDisposition::Applied {
-                let fixed = VersionPin::new(
-                    local.binding.to_string(),
-                    entry.to_string(),
-                    version.to_string(),
-                    commit.upload.content.digest,
-                    commit.upload.content.size,
-                )
-                .map_err(error)?;
-                self.importer.adopt(path, &fixed)?;
-            }
-            Ok(disposition)
-        })
+            self.importer.adopt(path, &fixed)?;
+        }
+        Ok(disposition)
     }
 }
 pub(crate) async fn load_spec(
@@ -349,6 +352,64 @@ impl ScheduledHandler for Dispatch {
     }
 }
 impl Worker {
+    async fn acknowledged_upload(&self, op: OpId) -> Result<bool, PortError> {
+        let local = &self.importer.local;
+        let result: Option<String> =
+            sqlx::query_scalar("SELECT result FROM agent_actions WHERE op_id=? AND binding_id=?")
+                .bind(op.as_bytes().as_slice())
+                .bind(local.binding.as_bytes().as_slice())
+                .fetch_one(local.db.pool())
+                .await
+                .map_err(error)?;
+        let Some(result) = result else {
+            return Ok(false);
+        };
+        let result: vaultsyncd_protocol::generated::OperationResult =
+            serde_json::from_str(&result).map_err(error)?;
+        let spec = load_spec(local, op).await?;
+        let path = spec["path"]
+            .as_str()
+            .ok_or_else(|| error("missing acknowledged path"))?;
+        let generation = spec["generation"]
+            .as_u64()
+            .ok_or_else(|| error("missing acknowledged generation"))?;
+        if result.echo_local_generation.as_deref() != Some(&generation.to_string()) {
+            return Err(error(
+                "stored ACK generation differs from its durable upload",
+            ));
+        }
+        let evidence: String = sqlx::query_scalar(
+            "SELECT evidence FROM agent_evidence WHERE binding_id=? AND path=? AND generation=?",
+        )
+        .bind(local.binding.as_bytes().as_slice())
+        .bind(path)
+        .bind(generation as i64)
+        .fetch_one(local.db.pool())
+        .await
+        .map_err(error)?;
+        let evidence: vaultsyncd_platform_windows::files::controlled::Evidence =
+            serde_json::from_str(&evidence).map_err(error)?;
+        if evidence.generation != generation {
+            return Err(error("stored upload evidence generation differs"));
+        }
+        Commits {
+            importer: self.importer.clone(),
+        }
+        .finish(
+            op,
+            Generation::new(generation).map_err(error)?,
+            evidence.digest,
+            evidence.size,
+            &result,
+        )
+        .await?;
+        vaultsyncd_agent_core::ports::state::UploadResumeStore::discard_resume(
+            &ClientStorePorts::new(local.db.clone()),
+            op,
+        )
+        .await?;
+        Ok(true)
+    }
     pub async fn restore_uploads(&self) -> Result<(), PortError> {
         let local = &self.importer.local;
         let mut conn = local.db.pool().acquire().await.map_err(error)?;
@@ -359,6 +420,9 @@ impl Worker {
         for op in queued {
             if op.kind.starts_with("upload_") {
                 let spec = load_spec(local, op.op).await?;
+                if spec["kind"] != "upload" {
+                    continue;
+                }
                 self.uploads.register(
                     op.op,
                     UploadSpec::new(
@@ -404,8 +468,20 @@ impl Worker {
         if !report.permits_missing_comparison() {
             return Err(error("incomplete local scan"));
         }
-        for item in report.entries {
-            let meta = item.metadata.ok_or_else(|| error("missing metadata"))?;
+        let scan: HashMap<_, _> = report
+            .entries
+            .into_iter()
+            .map(|item| {
+                Ok((
+                    item.path,
+                    item.metadata.ok_or_else(|| error("missing metadata"))?,
+                ))
+            })
+            .collect::<Result<_, PortError>>()?;
+        if crate::namespace::discover(self, &scan).await? {
+            return Ok(());
+        }
+        for (path, meta) in scan {
             if meta.directory {
                 continue;
             }
@@ -413,11 +489,11 @@ impl Worker {
                 continue;
             }
             let snapshot = local
-                .observe_snapshot(&item.path)
+                .observe_snapshot(&path)
                 .await?
                 .ok_or_else(|| error("file vanished during scan"))?;
             let e = snapshot.evidence();
-            let known = by_path.get(&item.path).and_then(|id| rows.get(id));
+            let known = by_path.get(&path).and_then(|id| rows.get(id));
             let id = known
                 .map(|r| EntryId::from_hex(&r.entry_id).map_err(error))
                 .transpose()?;
@@ -444,7 +520,7 @@ impl Worker {
                     continue;
                 }
             }
-            let parts: Vec<_> = item.path.rsplitn(2, '/').collect();
+            let parts: Vec<_> = path.rsplitn(2, '/').collect();
             let name = parts[0];
             let parent_path = parts.get(1).copied().unwrap_or("");
             let parent = by_path
@@ -455,13 +531,13 @@ impl Worker {
                 serde_json::from_str::<serde_json::Value>(s)
                     .ok()
                     .is_some_and(|v| {
-                        v["path"] == item.path && v["generation"].as_u64() == Some(e.generation)
+                        v["path"] == path && v["generation"].as_u64() == Some(e.generation)
                     })
             }) {
                 continue;
             }
             let op = new_op();
-            let value = serde_json::json!({"kind":"upload","path":item.path,"generation":e.generation,"parent":parent,"name":name,"new":known.is_none()});
+            let value = serde_json::json!({"kind":"upload","path":path,"generation":e.generation,"parent":parent,"name":name,"new":known.is_none()});
             let text = serde_json::to_string(&value).map_err(error)?;
             let mut tx = local.db.begin_write().await.map_err(error)?;
             if let Some(id) = id {
@@ -520,27 +596,75 @@ impl Worker {
     async fn apply(&self, op: OpId, cancel: &Cancellation) -> Result<(), PortError> {
         let local = &self.importer.local;
         let spec = load_spec(local, op).await?;
-        if spec["deleted"] == true {
-            return Err(PortError::rejected(
-                "UNSUPPORTED_ENTRY",
-                "delete retained for tombstone coordination",
-            ));
-        }
         let row: SnapshotEntry = serde_json::from_value(spec["remote"].clone()).map_err(error)?;
+        let after = baseline(&row)?;
+        let mut conn = local.db.pool().acquire().await.map_err(error)?;
+        let confirmed = entries::baseline_entry(&mut conn, local.binding, after.entry)
+            .await
+            .map_err(error)?;
+        drop(conn);
+        // Replayed self-ACKs and historical events are facts already confirmed locally.
+        // Reinstalling them would resurrect a file that the user has just moved or removed.
+        if confirmed.as_ref().is_some_and(|b| {
+            b.revision > after.revision
+                || (b.revision == after.revision
+                    && b == &BaselineEntry {
+                        deleted: spec["deleted"] == true,
+                        ..after.clone()
+                    })
+        }) {
+            return Ok(());
+        }
+        if crate::namespace::incoming(self, op, &spec, &row).await? {
+            return Ok(());
+        }
         let target = RelativePath::parse(
             spec["path"]
                 .as_str()
                 .ok_or_else(|| error("missing event path"))?,
         )
         .map_err(error)?;
-        let after = baseline(&row)?;
         if row.kind == WireKind::Directory {
-            local
+            let intent = ActionIntent {
+                op,
+                binding: local.binding,
+                kind: vaultsyncd_agent_core::ports::state::LocalWriteKind::Import,
+                entry: Some(after.entry),
+                target_path: target.clone(),
+                source_path: None,
+                content_hash: None,
+                generation: Generation::ZERO,
+            };
+            let intent_id = vaultsyncd_agent_core::ports::state::IntentStore::begin_intent(
+                &ClientStorePorts::new(local.db.clone()),
+                &intent,
+            )
+            .await?;
+            let meta = local
                 .root
                 .ensure_directory(&target.to_string())
                 .map_err(error)?;
+            let mut physical = meta.identity.volume.to_le_bytes().to_vec();
+            physical.extend(meta.identity.file);
             let mut tx = local.db.begin_write().await.map_err(error)?;
             entries::put_baseline(&mut tx, local.binding, &after)
+                .await
+                .map_err(error)?;
+            entries::put_local(
+                &mut tx,
+                local.binding,
+                &LocalEntry {
+                    entry: after.entry,
+                    generation: Generation::ZERO,
+                    dirty: Dirty::Clean,
+                    residency: Residency::Materialized,
+                    fingerprint: None,
+                    file_identity: Some(physical),
+                },
+            )
+            .await
+            .map_err(error)?;
+            vaultsyncd_client_store::intents::complete_intent(&mut tx, intent_id)
                 .await
                 .map_err(error)?;
             tx.commit().await.map_err(error)?;
@@ -630,7 +754,10 @@ impl Worker {
             if !actual.has_content(&hash, size as u64)
                 && !actual.has_content(&fixed.digest, fixed.size)
             {
-                return Err(error("unconfirmed local content retained"));
+                return Err(PortError::rejected(
+                    "LOCAL_CONTENT_PENDING",
+                    "unconfirmed local content retained while its upload is reconciled",
+                ));
             }
         } else if actual != vaultsyncd_agent_core::recovery::ContentEvidence::Absent
             && !actual.has_content(&fixed.digest, fixed.size)
@@ -657,10 +784,16 @@ impl Worker {
             )
             .await?;
         self.importer.adopt(&target.to_string(), &fixed)?;
-        local
+        if local
             .native
-            .acknowledge_publication(&op.to_string())
-            .map_err(error)?;
+            .publication_present(&op.to_string())
+            .map_err(error)?
+        {
+            local
+                .native
+                .acknowledge_publication(&op.to_string())
+                .map_err(error)?;
+        }
         Ok(())
     }
 }
@@ -684,13 +817,31 @@ impl ActionHandler for Worker {
         intent: Option<&'a ActionIntent>,
     ) -> PortFuture<'a, Result<ActionOutcome, ActionFailure>> {
         Box::pin(async move {
-            if op.kind.starts_with("upload_") {
+            if load_spec(&self.importer.local, op.op)
+                .await
+                .map_err(failure)?["kind"]
+                == "namespace"
+            {
+                crate::namespace::outgoing(self, ports, op)
+                    .await
+                    .map_err(failure)
+            } else if op.kind.starts_with("upload_") {
+                if self.acknowledged_upload(op.op).await.map_err(failure)? {
+                    return Ok(ActionOutcome::Completed);
+                }
                 self.uploads.execute(ports, op, intent).await
             } else {
-                self.apply(op.op, &Cancellation::new())
-                    .await
-                    .map_err(failure)?;
-                Ok(ActionOutcome::Completed)
+                match self.apply(op.op, &Cancellation::new()).await {
+                    Ok(()) => Ok(ActionOutcome::Completed),
+                    Err(e)
+                        if matches!(e.code(), Some("SUBTREE_BUSY" | "LOCAL_CONTENT_PENDING")) =>
+                    {
+                        Ok(ActionOutcome::Pending {
+                            poll_after: Some(std::time::Duration::from_secs(1)),
+                        })
+                    }
+                    Err(e) => Err(failure(e)),
+                }
             }
         })
     }
@@ -704,16 +855,40 @@ impl ScheduledHandler for Worker {
         cancel: &'a Cancellation,
     ) -> PortFuture<'a, Result<ActionOutcome, TaskError>> {
         Box::pin(async move {
-            if op.kind.starts_with("upload_") {
+            if load_spec(&self.importer.local, op.op)
+                .await
+                .map_err(failure)
+                .map_err(TaskError::from)?["kind"]
+                == "namespace"
+            {
+                crate::namespace::outgoing(self, ports, op)
+                    .await
+                    .map_err(failure)
+                    .map_err(TaskError::from)
+            } else if op.kind.starts_with("upload_") {
+                if self
+                    .acknowledged_upload(op.op)
+                    .await
+                    .map_err(failure)
+                    .map_err(TaskError::from)?
+                {
+                    return Ok(ActionOutcome::Completed);
+                }
                 self.uploads
                     .execute_scheduled(ports, op, intent, cancel)
                     .await
             } else {
-                self.apply(op.op, cancel)
-                    .await
-                    .map_err(failure)
-                    .map_err(TaskError::from)?;
-                Ok(ActionOutcome::Completed)
+                match self.apply(op.op, cancel).await {
+                    Ok(()) => Ok(ActionOutcome::Completed),
+                    Err(e)
+                        if matches!(e.code(), Some("SUBTREE_BUSY" | "LOCAL_CONTENT_PENDING")) =>
+                    {
+                        Ok(ActionOutcome::Pending {
+                            poll_after: Some(std::time::Duration::from_millis(500)),
+                        })
+                    }
+                    Err(e) => Err(TaskError::from(failure(e))),
+                }
             }
         })
     }

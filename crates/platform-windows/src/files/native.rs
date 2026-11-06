@@ -578,6 +578,50 @@ impl RootHandle {
         })
     }
 
+    /// Move an identified directory without overwriting another object or following reparses.
+    pub fn move_directory(
+        &self,
+        from: &str,
+        to: &str,
+        expected: FileIdentity,
+    ) -> io::Result<EntryMetadata> {
+        self.with_parent(from, |parent, name| {
+            let file = open_child_shared(parent, name, true, false, 0x00110081, false, 0)?;
+            let meta = metadata(&file)?;
+            if !meta.directory || meta.identity != expected {
+                return Err(invalid("directory identity changed"));
+            }
+            self.with_parent(to, |parent, name| {
+                super::controlled::rename(&file, parent, name, 0)
+            })?;
+            metadata(&file)
+        })
+    }
+
+    /// Delete only a still-empty identified directory. Windows rejects a concurrent child creation.
+    pub fn remove_empty_directory(&self, path: &str, expected: FileIdentity) -> io::Result<()> {
+        self.with_parent(path, |parent, name| {
+            let file = open_child_shared(parent, name, true, false, 0x00110081, false, 0)?;
+            let meta = metadata(&file)?;
+            if !meta.directory || meta.identity != expected {
+                return Err(invalid("directory identity changed"));
+            }
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn SetFileInformationByHandle(
+                    handle: *mut c_void,
+                    class: i32,
+                    buffer: *const u8,
+                    length: u32,
+                ) -> i32;
+            }
+            if unsafe { SetFileInformationByHandle(file.as_raw_handle(), 4, &1, 1) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })
+    }
+
     /// Enumerate metadata only; unsupported objects and errors remain visible and disable deletion.
     #[must_use]
     pub fn scan(&self) -> ScanReport {

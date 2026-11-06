@@ -293,6 +293,7 @@ impl ConflictCommitStore for SqlConflictStore {
                 detail: "冲突路径没有名称分量".to_owned(),
             })?;
         let revision = Revision::ZERO;
+        let version = VersionId::from_bytes(random_bytes());
         let tx_id = TxId::from_bytes(random_bytes());
         let result = CommittedConflict {
             op: self.key.op,
@@ -308,6 +309,7 @@ impl ConflictCommitStore for SqlConflictStore {
             "entry_id": write.sibling.to_hex(),
             "path": write.path,
             "revision": revision.to_string(),
+            "version_id":version.to_string(),
             "hash": write.content.digest.to_hex(),
             "size": write.content.bytes.to_string(),
             "origin": "server",
@@ -364,7 +366,7 @@ impl ConflictCommitStore for SqlConflictStore {
             &mut tx,
             self.owner,
             &NewVersion {
-                id: VersionId::from_bytes(random_bytes()),
+                id: version,
                 root: write.key.root,
                 entry: write.sibling,
                 object_hash: *write.content.digest.as_bytes(),

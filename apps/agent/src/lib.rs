@@ -3,6 +3,8 @@
 pub mod bootstrap;
 pub mod config;
 #[cfg(windows)]
+mod conflicts;
+#[cfg(windows)]
 mod credentials;
 #[cfg(windows)]
 mod events;
@@ -17,6 +19,8 @@ mod importer;
 mod instance;
 #[cfg(windows)]
 pub mod local;
+#[cfg(windows)]
+mod namespace;
 #[cfg(windows)]
 pub mod remote;
 #[cfg(windows)]

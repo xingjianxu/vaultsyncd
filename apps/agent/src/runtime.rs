@@ -144,7 +144,16 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
             return Err(error("binding/state/cache overlap"));
         }
     }
-    let _instance = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent").map_err(error)?;
+    let _instance = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent").map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists || e.raw_os_error() == Some(32) {
+            PortError::rejected(
+                "ALREADY_RUNNING",
+                "another agent owns this session or state",
+            )
+        } else {
+            error(e)
+        }
+    })?;
     let sink = Arc::new(VaultSink {
         vault: CredentialVault::new(&config.server.id).map_err(error)?,
         failed: AtomicBool::new(false),
@@ -351,6 +360,7 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
         )
         .map_err(error)?;
         let importer = Arc::new(Importer {
+            remote: remote.clone(),
             local,
             adapter: Arc::new(Mutex::new(adapter)),
             callbacks,
@@ -424,14 +434,19 @@ pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), Por
                     receivers.insert(*id, receiver);
                     initialized.insert(*id, true);
                 }
-                worker.discover().await?;
                 scheduler.run_round(*id).await?;
-                receivers
+                let received = receivers
                     .get(id)
                     .ok_or_else(|| error("receiver missing"))?
                     .run_cycle(None)
                     .await
-                    .map_err(error)?;
+                    .map_err(error);
+                // An unavailable pull must not suppress durable local discovery. Conversely,
+                // a local scan failure must not prevent already received work from progressing.
+                let discovered = worker.discover().await;
+                scheduler.run_round(*id).await?;
+                received?;
+                discovered?;
                 Ok(())
             }
             .await;

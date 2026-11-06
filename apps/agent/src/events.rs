@@ -42,8 +42,8 @@ impl EventDecoder for Decoder {
         if values.is_empty() {
             return Err(invalid(&"empty transaction"));
         }
-        let mut rows = self.rows.lock().map_err(|e| invalid(&e))?;
-        let mut specs = self.specifications.lock().map_err(|e| invalid(&e))?;
+        let mut rows = self.rows.lock().map_err(|e| invalid(&e))?.clone();
+        let mut specs = HashMap::new();
         let mut changes = Vec::new();
         let mut tasks = Vec::new();
         let mut previous = HashMap::new();
@@ -53,7 +53,14 @@ impl EventDecoder for Decoder {
                 .ok_or_else(|| invalid(&"missing event kind"))?;
             if !matches!(
                 kind,
-                "external" | "put" | "create" | "move" | "delete" | "restore" | "conflict"
+                "external"
+                    | "put"
+                    | "update"
+                    | "create"
+                    | "move"
+                    | "delete"
+                    | "restore"
+                    | "conflict"
             ) {
                 return Err(invalid(&format!("unsupported event {kind}")));
             }
@@ -166,6 +173,29 @@ impl EventDecoder for Decoder {
             });
             rows.insert(id.into(), row);
         }
+        if tasks
+            .iter()
+            .all(|task| specs.get(&task.op).is_some_and(|v| v["deleted"] == true))
+        {
+            tasks.sort_by_key(|task| {
+                std::cmp::Reverse(
+                    specs[&task.op]["path"]
+                        .as_str()
+                        .unwrap_or("")
+                        .matches('/')
+                        .count(),
+                )
+            });
+            let mut dependency = None;
+            for task in &mut tasks {
+                task.depends_on = dependency;
+                dependency = Some(task.op);
+            }
+        }
+        self.specifications
+            .lock()
+            .map_err(|e| invalid(&e))?
+            .extend(specs);
         Ok(IncomingBatch {
             binding,
             seq: envelope.seq,
@@ -193,6 +223,7 @@ impl EventApplier for Bridge {
             if binding != self.worker.importer.local.binding {
                 return Err(error("event binding mismatch"));
             }
+            let mut durable_rows = Vec::new();
             for task in &tasks {
                 let value = self
                     .decoder
@@ -203,6 +234,16 @@ impl EventApplier for Bridge {
                     .cloned()
                     .ok_or_else(|| error("missing decoded action"))?;
                 action(&self.worker.importer.local, task.op, &value).await?;
+                durable_rows.push(
+                    serde_json::from_value::<SnapshotEntry>(value["remote"].clone())
+                        .map_err(error)?,
+                );
+            }
+            {
+                let mut rows = self.decoder.rows.lock().map_err(error)?;
+                for row in durable_rows {
+                    rows.insert(row.entry_id.clone(), row);
+                }
             }
             self.scheduler.run_round(binding).await?;
             let mut conn = self
@@ -225,5 +266,45 @@ impl EventApplier for Bridge {
             }
             Ok(ApplyResult::Applied)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn malformed_tail_and_unpersisted_good_batch_never_publish_namespace() {
+        let root = "11111111111111111111111111111111";
+        let child = "22222222222222222222222222222222";
+        let row = SnapshotEntry {
+            entry_id: root.into(),
+            parent_id: None,
+            name: String::new(),
+            kind: EntryKind::Directory,
+            revision: "0".into(),
+            version_id: None,
+            hash: None,
+            size: None,
+        };
+        let initial = HashMap::from([(root.into(), row)]);
+        let decoder = Decoder {
+            rows: Mutex::new(initial.clone()),
+            specifications: Mutex::new(HashMap::new()),
+        };
+        let mut envelope=EventEnvelope{seq:vaultsyncd_domain::version::RootSeq::new(1).unwrap(),tx:vaultsyncd_domain::ids::TxId::from_bytes([3;16]),events_json:serde_json::json!([{"kind":"create","entry_id":child,"parent_id":root,"name":"newdir","revision":"0"},{"kind":"create","parent_id":root,"name":"bad","revision":"0"}]).to_string()};
+        assert!(
+            decoder
+                .decode(BindingId::from_bytes([4; 16]), &envelope)
+                .is_err()
+        );
+        assert_eq!(*decoder.rows.lock().unwrap(), initial);
+        assert!(decoder.specifications.lock().unwrap().is_empty());
+        envelope.events_json=serde_json::json!([{"kind":"create","entry_id":child,"parent_id":root,"name":"newdir","revision":"0"}]).to_string();
+        assert!(
+            decoder
+                .decode(BindingId::from_bytes([4; 16]), &envelope)
+                .is_ok()
+        );
+        assert_eq!(*decoder.rows.lock().unwrap(), initial);
     }
 }
