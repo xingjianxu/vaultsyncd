@@ -161,3 +161,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(windows)]
+pub mod controlled;
