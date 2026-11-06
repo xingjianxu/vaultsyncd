@@ -132,8 +132,6 @@ mod abi {
         pub(super) fn mkdirat(dirfd: c_int, pathname: *const c_char, mode: c_uint) -> c_int;
         /// `fsync(2)`：文件与目录刷盘。
         pub(super) fn fsync(fd: c_int) -> c_int;
-        /// `lseek(2)`：把目录句柄的读取位置倒回起点（重复列举同一句柄必需）。
-        pub(super) fn lseek(fd: c_int, offset: i64, whence: c_int) -> i64;
         /// `fchmod(2)`：设置发布后的文件权限（对象为只读）。
         pub(super) fn fchmod(fd: c_int, mode: c_uint) -> c_int;
         /// `ioctl(2)`：`FICLONE` 的调用出口。
@@ -248,20 +246,6 @@ pub(crate) fn fsync(fd: RawFd) -> io::Result<()> {
     // SAFETY: fd 由调用方的有效句柄传入。
     let rc = unsafe { abi::fsync(fd) };
     if rc != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// 把目录句柄的读取位置倒回起点（`lseek(fd, 0, SEEK_SET)`）。
-///
-/// 目录句柄的读取位置属于打开文件描述，`getdents64` 读到末尾后再次调用只会返回 0——没有倒回就
-/// 重复列举同一个句柄会得到**空列表**，等于把“已读过”误报成“目录为空”。
-pub(crate) fn rewind_dir(fd: RawFd) -> io::Result<()> {
-    const SEEK_SET: c_int = 0;
-    // SAFETY: fd 由调用方的有效目录句柄传入；偏移 0 与 SEEK_SET 是固定参数。
-    let rc = unsafe { abi::lseek(fd, 0, SEEK_SET) };
-    if rc < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())

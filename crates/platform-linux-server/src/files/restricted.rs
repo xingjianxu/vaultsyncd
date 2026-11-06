@@ -692,16 +692,20 @@ impl RestrictedDir {
     ///
     /// 见 [`RestrictError::ReadDir`]、[`RestrictError::PermissionDenied`]。
     pub fn list_entries(&self) -> Result<Vec<DirEntry>, RestrictError> {
-        // 同一个句柄可能被重复列举（Root 句柄每轮扫描都列一次）：先倒回起点，否则第二次起得到空列表。
-        raw::rewind_dir(self.handle.as_raw_fd()).map_err(|source| RestrictError::ReadDir {
-            path: self.path.clone(),
-            source,
-        })?;
+        // openat(fd, ".") retains the pinned directory, with a new open-file-description.
+        // dup or rewind shares the cursor and can truncate another concurrent scan.
+        let cursor = raw::openat(self.handle.as_raw_fd(), c".", O_DIRECTORY | O_NOFOLLOW, 0)
+            .map_err(|source| RestrictError::ReadDir {
+                path: self.path.clone(),
+                source,
+            })?;
         let mut buffer = vec![0u8; DIRENT_BUFFER_BYTES];
         let mut entries = Vec::new();
         loop {
-            let filled = raw::getdents64(self.handle.as_raw_fd(), &mut buffer).map_err(
-                |source| match source.raw_os_error() {
+            let filled =
+                raw::getdents64(cursor.as_raw_fd(), &mut buffer).map_err(|source| match source
+                    .raw_os_error()
+                {
                     Some(errno::EACCES | errno::EPERM) => RestrictError::PermissionDenied {
                         path: self.path.clone(),
                         source,
@@ -710,8 +714,7 @@ impl RestrictedDir {
                         path: self.path.clone(),
                         source,
                     },
-                },
-            )?;
+                })?;
             if filled == 0 {
                 break;
             }
@@ -1090,5 +1093,33 @@ mod tests {
             first, second,
             "重复列举同一句柄必须得到相同结果，而不是空列表"
         );
+    }
+
+    #[test]
+    fn concurrent_shared_directory_scans_have_independent_cursors() {
+        let base =
+            std::env::temp_dir().join(format!("vaultsyncd-s097-cursors-{}", std::process::id()));
+        std::fs::create_dir(&base).unwrap();
+        for i in 0..3000 {
+            std::fs::write(base.join(format!("file-{i:04}")), b"retained").unwrap();
+        }
+        let dir = RestrictedDir::open(&base, ResolveMode::Auto).unwrap();
+        let expected = dir.list_entries().unwrap();
+        assert_eq!(expected.len(), 3000); // More than one getdents buffer.
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let barrier = &barrier;
+                let dir = &dir;
+                let expected = &expected;
+                scope.spawn(move || {
+                    for _ in 0..16 {
+                        barrier.wait();
+                        assert_eq!(&dir.list_entries().unwrap(), expected);
+                    }
+                });
+            }
+        });
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
