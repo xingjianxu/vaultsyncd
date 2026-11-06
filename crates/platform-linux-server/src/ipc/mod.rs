@@ -1,5 +1,6 @@
 //! Linux 管理 socket：私有路径、内核 UID 身份与有界帧；不承载业务或凭据。
 
+use crate::mounts::raw::{O_DIRECTORY, O_NOFOLLOW};
 use std::fs;
 use std::io;
 use std::os::fd::AsRawFd;
@@ -88,7 +89,7 @@ fn bind_impl(state_dir: &Path, recover_stale: bool) -> io::Result<AdminSocket> {
     let open_dir = |path: &Path| {
         fs::OpenOptions::new()
             .read(true)
-            .custom_flags(0o200_000 | 0o400_000)
+            .custom_flags(O_DIRECTORY | O_NOFOLLOW)
             .open(path)
     }; // O_DIRECTORY | O_NOFOLLOW
     let state = open_dir(state_dir)?;
@@ -206,6 +207,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("vaultsyncd-s075-socket-{}", std::process::id()));
         fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         fs::create_dir(path.join("admin")).unwrap();
         fs::set_permissions(path.join("admin"), fs::Permissions::from_mode(0o755)).unwrap();
         assert!(AdminSocket::bind(&path).is_err());
@@ -260,6 +262,7 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
 
         // `forget` 等价于进程被强杀：Drop 不执行，socket 文件留在目录里。
         let first = AdminSocket::bind(&path).unwrap();
