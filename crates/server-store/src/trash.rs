@@ -579,6 +579,50 @@ impl TombstoneRow {
     }
 }
 
+/// 删除一条回收站清单行（恢复后调用：条目不再在回收站里）。
+///
+/// 返回是否真的删掉了一行；清单行不存在不算错误（恢复可重入）。
+///
+/// # Errors
+///
+/// 存储失败。
+pub async fn remove_trash_entry(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: UserId,
+    root: RootId,
+    entry: EntryId,
+) -> Result<bool, TrashError> {
+    require_root_owner(tx, owner, root).await?;
+    let removed = sqlx::query("DELETE FROM trash_entries WHERE root_id = ?1 AND entry_id = ?2")
+        .bind(root.as_bytes().as_slice())
+        .bind(entry.as_bytes().as_slice())
+        .execute(&mut **tx)
+        .await
+        .map_err(TrashError::Db)?;
+    Ok(removed.rows_affected() > 0)
+}
+
+/// 删除一个条目的墓碑（恢复后调用：条目重新活跃，之后再次删除要能写新墓碑）。
+///
+/// # Errors
+///
+/// 存储失败。
+pub async fn remove_tombstone(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: UserId,
+    root: RootId,
+    entry: EntryId,
+) -> Result<bool, TrashError> {
+    require_root_owner(tx, owner, root).await?;
+    let removed = sqlx::query("DELETE FROM tombstones WHERE root_id = ?1 AND entry_id = ?2")
+        .bind(root.as_bytes().as_slice())
+        .bind(entry.as_bytes().as_slice())
+        .execute(&mut **tx)
+        .await
+        .map_err(TrashError::Db)?;
+    Ok(removed.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

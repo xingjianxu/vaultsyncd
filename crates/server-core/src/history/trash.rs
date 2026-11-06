@@ -200,6 +200,7 @@ where
     check_subtree(&subtree, at, request)?;
 
     // 4. 实际位置：原父目录必须存在且是目录；根的名称被活跃条目占用就另名（T13），后代跟着移位。
+    //    原父目录在删除之后可能被移动或改名：位置由它**现在**的路径决定，不使用清单里的旧路径前缀。
     let parent_kind = ports
         .store
         .parent_kind(request.op.root, root.parent)
@@ -215,7 +216,13 @@ where
             },
         )));
     }
-    let (parent_path, original_name) = split_path(&root.path);
+    let parent_path = ports
+        .store
+        .parent_path(request.op.root, root.parent)
+        .await
+        .map_err(store_failure)?
+        .ok_or_else(|| contract(format!("原父目录 {} 是活跃目录却没有当前路径", root.parent)))?;
+    let (_, original_name) = split_path(&root.path);
     validate_name(&original_name).map_err(invalid_request)?;
     let (name, renamed) = choose_name(ports, request, root.parent, &original_name).await?;
     let path = join_path(&parent_path, &name);
@@ -229,10 +236,48 @@ where
     // 5. 规划整棵子树在新位置下的路径与顺序：清单结构不一致在这里停写，不进入任何 I/O。
     let plan = plan_subtree(&subtree, &path)?;
 
-    // 6. 先登记 pending：并发的同一 OpId 只有一个能继续。
+    // 5b. 现场核对先于任何持久化：根位置必须空缺（后代都在它之下），不把清单合并进已有内容。
+    //     这一步被拒绝时没有 pending、没有意图，也没有建任何目录。
+    check_root_vacancy(ports, &plan[0])?;
+
+    // 6. 在任何 mkdir/发布之前，把完整计划与 pending、目录意图原子持久化：重启后凭它补完或停写，
+    //    不靠暂存文件名、mtime 或路径前缀去猜哪些条目属于这次恢复。
+    let file_count = plan
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::File)
+        .count();
+    let directory_count = plan.len() - file_count;
+    let write = TrashRestoreWrite {
+        intents: (0..file_count)
+            .map(|index| intent_for(request.intent_seed, index as u64))
+            .collect::<Result<Vec<_>, _>>()?,
+        directory_intents: (0..directory_count)
+            .map(|index| intent_for(request.intent_seed, (file_count + index) as u64))
+            .collect::<Result<Vec<_>, _>>()?,
+        key: request.op,
+        digest: request.digest,
+        entry: request.entry,
+        expected_revision: root.revision,
+        path: path.clone(),
+        name: name.clone(),
+        renamed,
+        entries: plan
+            .iter()
+            .map(|planned| TrashRestoreEntry {
+                entry: planned.entry,
+                parent: planned.parent,
+                name: planned.name.clone(),
+                path: planned.path.clone(),
+                kind: planned.kind,
+                content_version: planned.content_version,
+                expected_revision: planned.revision,
+            })
+            .collect(),
+        at,
+    };
     match ports
         .store
-        .begin_restore(request.op, request.digest)
+        .begin_restore(request.op, request.digest, &write)
         .await
         .map_err(store_failure)?
     {
@@ -279,29 +324,12 @@ where
     }
 
     // 8. 单一事务：整棵子树清软删除、改位置、推进 revision、删清单行、事件批次、结果、意图收尾。
-    let write = TrashRestoreWrite {
-        intents,
-        key: request.op,
-        digest: request.digest,
-        entry: request.entry,
-        expected_revision: root.revision,
-        path: path.clone(),
-        name: name.clone(),
-        renamed,
-        entries: plan
-            .iter()
-            .map(|planned| TrashRestoreEntry {
-                entry: planned.entry,
-                parent: planned.parent,
-                name: planned.name.clone(),
-                path: planned.path.clone(),
-                kind: planned.kind,
-                content_version: planned.content_version,
-                expected_revision: planned.revision,
-            })
-            .collect(),
-        at,
-    };
+    if intents != write.intents {
+        return Err(contract(format!(
+            "实际发布的意图 {intents:?} 不是持久化计划里的 {:?}",
+            write.intents
+        )));
+    }
     let record = match ports.store.apply_trash_restore(&write).await {
         Ok(record) => record,
         Err(error) => {
@@ -320,6 +348,54 @@ where
         result: record.result,
         lease: disposition,
     })
+}
+
+/// 根位置必须空缺：目录用命名空间观察，文件用目标观察；后代都在根之下，不需要逐个核对。
+fn check_root_vacancy<S, L, T, N, C>(
+    ports: &mut TrashRestorePorts<'_, S, L, T, N, C>,
+    root: &PlannedEntry,
+) -> Result<(), Box<RestoreFailure>>
+where
+    S: TrashRestoreStore + ?Sized,
+    L: IntentLog + ?Sized,
+    T: TargetPort + ?Sized,
+    N: NamespacePort + ?Sized,
+    C: ContentLeasePort + ?Sized,
+{
+    match root.kind {
+        EntryKind::Directory => {
+            let observed = ports.namespace.inspect(&root.path).map_err(|error| {
+                Box::new(RestoreFailure::new(RestoreFailureReason::Namespace(error)))
+            })?;
+            if !matches!(observed, PathState::Absent) {
+                return Err(Box::new(RestoreFailure::new(
+                    RestoreFailureReason::SubtreeChanged {
+                        detail: format!(
+                            "恢复目标目录 {:?} 已存在（{observed}），不把清单内容合并进现有目录",
+                            root.path
+                        ),
+                    },
+                )));
+            }
+        }
+        EntryKind::File => {
+            let observed = ports.target.observe(&root.path).map_err(|error| {
+                Box::new(RestoreFailure::new(RestoreFailureReason::TargetUnreadable(
+                    error,
+                )))
+            })?;
+            let vacancy = TargetBefore::Absent;
+            if !vacancy.satisfied_by(&observed) {
+                return Err(Box::new(RestoreFailure::new(
+                    RestoreFailureReason::Reconcile {
+                        expected: vacancy.to_json(),
+                        observed,
+                    },
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 把一个恢复目标目录建回工作目录：目标必须空缺。
@@ -1189,6 +1265,83 @@ mod tests {
             collected(&fixture, "namespace mkdir "),
             vec!["docs/report.docx".to_owned()],
             "目录要在工作目录建回来"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_whole_plan_is_persisted_before_the_first_mkdir_or_publish() {
+        let mut fixture = projects_fixture();
+        let request = subtree_request();
+        run(&mut fixture, &request).await.expect("整棵子树应当恢复");
+
+        let trace = fixture.trace.entries();
+        let begin = trace
+            .iter()
+            .position(|line| line == "store begin_restore")
+            .expect("必须登记计划");
+        let first_io = trace
+            .iter()
+            .position(|line| line.starts_with("namespace mkdir ") || line.contains("publish"))
+            .expect("随后才有工作目录动作");
+        assert!(begin < first_io, "计划落盘必须先于 mkdir/发布：{trace:?}");
+
+        let write = &fixture.store.writes[0];
+        assert_eq!(write.intents.len(), 3, "三个文件各有一个预先派生的意图");
+        assert_eq!(write.directory_intents.len(), 2, "两个目录各有一个意图");
+        let mut all = write.intents.clone();
+        all.extend(write.directory_intents.clone());
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 5, "文件与目录意图身份互不相同");
+    }
+
+    #[tokio::test]
+    async fn existing_root_directory_is_rejected_before_any_state_is_written() {
+        let mut fixture = projects_fixture();
+        fixture.namespace = FakeNamespace::new()
+            .with_trace(fixture.trace.clone())
+            .with_directory("projects");
+        let failure = run(&mut fixture, &subtree_request())
+            .await
+            .expect_err("已存在的目录不能被合并");
+        assert_eq!(failure.error_code(), Some(ErrorCode::SubtreeChanged));
+        assert!(
+            !fixture
+                .trace
+                .entries()
+                .iter()
+                .any(|line| line == "store begin_restore"),
+            "冲突必须在登记 pending 之前拒绝"
+        );
+        assert!(fixture.store.writes.is_empty());
+        assert!(fixture.log.intents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn moved_parent_directory_decides_the_restore_location() {
+        let mut fixture = projects_fixture();
+        fixture
+            .store
+            .parent_paths
+            .insert(entry_id(0x31), "archive/2026".to_owned());
+        let restored = run(&mut fixture, &subtree_request())
+            .await
+            .expect("跟随原父目录的当前位置恢复");
+        assert_eq!(restored.result.path, "archive/2026/projects");
+        assert_eq!(
+            collected(&fixture, "namespace mkdir "),
+            vec![
+                "archive/2026/projects".to_owned(),
+                "archive/2026/projects/sub".to_owned()
+            ]
+        );
+        assert_eq!(
+            published_targets(&fixture),
+            vec![
+                "archive/2026/projects/plan.md",
+                "archive/2026/projects/sub/a.txt",
+                "archive/2026/projects/sub/b.txt"
+            ]
         );
     }
 

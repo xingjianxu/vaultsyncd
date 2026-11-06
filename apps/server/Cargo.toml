@@ -31,7 +31,9 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
 # 会话凭据与身份来自 OS 随机源（design §17.1）：与 server-core 使用同一条 rand_core 0.6 依赖线。
 rand_core = { version = "0.6", features = ["getrandom"] }
 vaultsyncd-domain = { path = "../../crates/domain" }
+vaultsyncd-fs-common = { path = "../../crates/fs-common" }
 vaultsyncd-platform-linux-server = { path = "../../crates/platform-linux-server" }
+vaultsyncd-planner = { path = "../../crates/planner" }
 vaultsyncd-protocol = { path = "../../crates/protocol" }
 vaultsyncd-server-core = { path = "../../crates/server-core" }
 vaultsyncd-server-store = { path = "../../crates/server-store" }

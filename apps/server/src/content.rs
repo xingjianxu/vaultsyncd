@@ -639,11 +639,23 @@ fn version_error(error: store_versions::VersionError) -> VersionContentError {
     }
 }
 
-/// 下载租约适配器（端口 [`ContentLeasePort`]）。
-struct DbLeases<'a> {
+/// 内容租约适配器（端口 [`ContentLeasePort`]）：下载、恢复预览与提交窗口都用它。
+pub struct DbLeases<'a> {
     database: &'a Database,
     owner: UserId,
     now: UtcTimestamp,
+}
+
+impl<'a> DbLeases<'a> {
+    /// 以数据库、Root 所属账号与当前时间装配。
+    #[must_use]
+    pub fn new(database: &'a Database, owner: UserId, now: UtcTimestamp) -> Self {
+        Self {
+            database,
+            owner,
+            now,
+        }
+    }
 }
 
 impl DbLeases<'_> {

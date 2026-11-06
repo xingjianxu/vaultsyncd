@@ -683,13 +683,13 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(target_schema_version(), 7, "内嵌迁移应当是 0001—0007 七版");
+        assert_eq!(target_schema_version(), 9, "内嵌迁移应当是 0001—0009 九版");
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 7);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 9);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -700,7 +700,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            7
+            9
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -712,7 +712,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 7);
+        assert_eq!(reopened.schema_version(), 9);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1033,17 +1033,17 @@ mod tests {
         insert_metadata(&old, "server_id", "abcd").await;
         old.close().await;
 
-        // 0008 成功、0009 失败：迁移集只完成了前半段。
+        // 0010 成功、0011 失败：迁移集只完成了前半段。
         let partial_dir = dir.migrations(&[
             (BASELINE_FILE, BASELINE_SQL),
             (NAMESPACE_FILE, NAMESPACE_SQL),
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0008_probe.sql",
+                "0010_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
-            ("0009_broken.sql", "CREATE TABLE broken ("),
+            ("0011_broken.sql", "CREATE TABLE broken ("),
         ]);
         let partial = migrator(&partial_dir).await;
         let error = Database::open_with(&path, &partial)
@@ -1066,7 +1066,7 @@ mod tests {
             matches!(
                 refused,
                 DbError::SchemaTooNew {
-                    found: 8,
+                    found: 10,
                     supported: 5
                 }
             ),
@@ -1077,12 +1077,12 @@ mod tests {
                 .await
                 .expect_err("本二进制同样不得写更新过的 schema")
                 .to_string()
-                .contains("schema 版本 8"),
+                .contains("schema 版本 10"),
             "错误信息应给出实际版本"
         );
 
-        // 拒绝写入时不改动库：0008 的 probe 表与记账仍在，数据完好。`PRAGMA user_version`
-        // 由 SQLx 记“成功应用的迁移个数”（5 个），而版本门禁看的是迁移记账里的最大版本（0008）。
+        // 拒绝写入时不改动库：0010 的 probe 表与记账仍在，数据完好。`PRAGMA user_version`
+        // 由 SQLx 记“成功应用的迁移个数”（5 个），而版本门禁看的是迁移记账里的最大版本（0010）。
         assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
         assert_eq!(
             metadata(&path).await,
@@ -1119,7 +1119,7 @@ mod tests {
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0008_probe.sql",
+                "0010_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]);
@@ -1135,16 +1135,107 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 8,
-                    supported: 7
+                    found: 10,
+                    supported: 9
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 8);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 10);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "abcd".to_owned())]
+        );
+    }
+
+    /// 真实 0001—0008（S052 之前已发布）→ 当前迁移集合：旧的、未关联完整操作键的意图必须原样保留，
+    /// 新表为空；不为它们编造关联。升级前有一致性备份，且备份里没有新表。
+    #[tokio::test]
+    async fn released_v8_database_upgrades_without_inventing_intent_links() {
+        let dir = TestDir::new("journal-upgrade");
+        let path = dir.database();
+        let released: Vec<(String, &str)> = [
+            (
+                "0001_initial.sql",
+                include_str!("../migrations/0001_initial.sql"),
+            ),
+            (
+                "0002_namespace.sql",
+                include_str!("../migrations/0002_namespace.sql"),
+            ),
+            (
+                "0003_versions_events.sql",
+                include_str!("../migrations/0003_versions_events.sql"),
+            ),
+            (
+                "0004_uploads_intents_leases.sql",
+                include_str!("../migrations/0004_uploads_intents_leases.sql"),
+            ),
+            (
+                "0005_trash.sql",
+                include_str!("../migrations/0005_trash.sql"),
+            ),
+            (
+                "0006_sessions.sql",
+                include_str!("../migrations/0006_sessions.sql"),
+            ),
+            (
+                "0007_snapshots.sql",
+                include_str!("../migrations/0007_snapshots.sql"),
+            ),
+            (
+                "0008_conflicts.sql",
+                include_str!("../migrations/0008_conflicts.sql"),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, sql)| (name.to_owned(), sql))
+        .collect();
+        let files: Vec<(&str, &str)> = released.iter().map(|(n, q)| (n.as_str(), *q)).collect();
+        let previous = migrator(&dir.migrations(&files)).await;
+        let old = Database::open_with(&path, &previous)
+            .await
+            .expect("建 v8 库");
+        assert_eq!(old.schema_version(), 8);
+        let mut tx = old.begin_write().await.expect("写事务");
+        sqlx::query("INSERT INTO users(id,login,password_hash,status) VALUES (x'01010101010101010101010101010101','o','h','active')")
+            .execute(&mut *tx).await.expect("用户");
+        sqlx::query("INSERT INTO roots(id,owner_id,absolute_path,volume_identity,root_file_identity,health,seq,epoch) VALUES (x'02020202020202020202020202020202',x'01010101010101010101010101010101','/r',x'01',x'01','healthy',0,1)")
+            .execute(&mut *tx).await.expect("Root");
+        sqlx::query("INSERT INTO fs_intents(intent_id,root_id,kind,target_path,staging_path,expected_before,desired_after,phase,created_at,updated_at) VALUES (x'03030303030303030303030303030303',x'02020202020202020202020202020202','put_content','a.txt','s','{\"present\":false}','{\"present\":true}','published',1,1)")
+            .execute(&mut *tx).await.expect("遗留意图");
+        tx.commit().await.expect("提交");
+        old.close().await;
+
+        let upgraded = Database::open(&path).await.expect("升级到当前 schema");
+        assert_eq!(upgraded.schema_version(), target_schema_version());
+        upgraded.close().await;
+        assert_eq!(
+            scalar::<i64>(
+                &path,
+                "SELECT count(*) FROM fs_intents WHERE phase = 'published'"
+            )
+            .await,
+            1,
+            "遗留意图原样保留"
+        );
+        for table in ["execution_journal", "intent_operations", "trash_membership"] {
+            assert_eq!(
+                scalar::<i64>(&path, &format!("SELECT count(*) FROM {table}")).await,
+                0,
+                "{table} 为空：不为旧意图编造关联"
+            );
+        }
+        let backup = migration_backup_path(&path, 8, target_schema_version());
+        assert!(backup.exists(), "升级前应有一致性备份");
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name = 'execution_journal'"
+            )
+            .await,
+            0,
+            "备份是迁移前的状态"
         );
     }
 }

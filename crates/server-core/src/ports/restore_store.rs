@@ -161,9 +161,14 @@ pub struct TrashRestoreEntry {
 /// 一次回收站恢复的元数据事务输入。
 #[derive(Clone, Debug)]
 pub struct TrashRestoreWrite {
-    /// 为本次恢复中每个文件内容的发布而写的意图（目录本身没有内容，不占意图）。
-    /// 事务必须把这些意图与结果一起收尾到 `finalized`。
+    /// 为本次恢复中每个文件内容的发布而写的意图，顺序与 `entries` 里的文件一致。
+    /// 事务必须把这些意图与结果一起收尾到 `finalized`；意图本身由核心在发布前才创建，身份在
+    /// [`TrashRestoreStore::begin_restore`] 时已经持久化进计划。
     pub intents: Vec<IntentId>,
+    /// 为本次恢复中每个目录的 `mkdir` 而写的意图，顺序与 `entries` 里的目录一致。存储适配器在
+    /// `begin_restore` 的同一事务内创建它们（`prepared`），事务收尾时随结果一起推进到 `finalized`：
+    /// 目录没有内容，但同样要有重启可见的证据，否则半途崩溃的 `mkdir` 会被后台观察当成外部新建。
+    pub directory_intents: Vec<IntentId>,
     /// 幂等键。
     pub key: OperationKey,
     /// 本次请求的规范化摘要。
@@ -398,7 +403,9 @@ pub trait TrashRestoreStore {
         key: OperationKey,
     ) -> Result<Option<RecordedTrashRestore>, RestoreStoreError>;
 
-    /// 为本次恢复登记 `pending` 或返回“已记录”。
+    /// 在**同一事务**里持久化整组恢复计划并登记 `pending`：操作记录、冻结清单（含条目身份与
+    /// 内容版本）、实际路径与另名决定、文件意图身份，以及全部目录的 `prepared` 意图。已记录则返回
+    /// “已记录”，不改写任何已有计划。计划落盘之前核心不得 `mkdir` 或发布任何文件。
     ///
     /// # Errors
     ///
@@ -407,6 +414,7 @@ pub trait TrashRestoreStore {
         &mut self,
         key: OperationKey,
         digest: RequestDigest,
+        plan: &TrashRestoreWrite,
     ) -> Result<RestoreBegin, RestoreStoreError>;
 
     /// 读一个回收站子树的清单；不在回收站（或已过期/已恢复）时返回 `None`。
@@ -430,6 +438,18 @@ pub trait TrashRestoreStore {
         root: RootId,
         parent: EntryId,
     ) -> Result<Option<EntryKind>, RestoreStoreError>;
+
+    /// 读活跃目录**当前**的 Root 内相对路径（Root 顶层目录为空串）；不存在返回 `None`。
+    /// 原父目录在删除之后被移动或改名时，恢复位置跟随它，而不是清单里的旧路径前缀。
+    ///
+    /// # Errors
+    ///
+    /// 存储失败、越权、行无法还原。
+    async fn parent_path(
+        &mut self,
+        root: RootId,
+        parent: EntryId,
+    ) -> Result<Option<String>, RestoreStoreError>;
 
     /// 读同父目录下该名称的活跃占用者。
     ///

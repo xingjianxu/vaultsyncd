@@ -45,6 +45,11 @@ const DIGEST_DOMAIN: &[u8] = b"vaultsyncd.operation.request.v1\0";
 pub struct RequestDigest([u8; REQUEST_DIGEST_LEN]);
 
 impl RequestDigest {
+    /// 由原始摘要字节构造（核心与存储层之间传递同一份摘要时必须用它，而不是重算）。
+    pub const fn from_bytes(bytes: [u8; REQUEST_DIGEST_LEN]) -> Self {
+        Self(bytes)
+    }
+
     /// 原始字节（数据库 BLOB）。
     pub const fn as_bytes(&self) -> &[u8; REQUEST_DIGEST_LEN] {
         &self.0

@@ -18,8 +18,8 @@
 //! 失败分类沿用核心的 [`PutFailure`]：`ENOSPC`/`EDQUOT` 映射成 `INSUFFICIENT_STORAGE`（507），
 //! 存储/数据库故障 `NEEDS_RECOVERY`（503），过期基线 `BASE_MISMATCH`（409）等。
 //!
-//! 未实现的命令（create/move/delete/restore 的存储与工作目录适配器）仍由端点显式回答
-//! `503 SERVICE_NOT_READY`，不在这里用空实现或默认成功冒充。
+//! 其余命令见 `commands`/`restore_ops`/`conflict_ops`；目录回收站恢复仍显式未就绪。
+//! 启动补完尚未装配，有未完成意图时停写，不能据正常路径测试宣称已完成崩溃恢复。
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -117,6 +117,130 @@ impl ExecutorContext {
         ObjectLayout::new(self.state_dir.join("objects"))
     }
 
+    /// 数据库句柄（命令适配器需要同一个连接池）。
+    #[must_use]
+    pub fn database(&self) -> &Database {
+        &self.database
+    }
+
+    /// 按 owner scope 取 Root 的绝对路径与已缓存的 Root 句柄。
+    ///
+    /// # Errors
+    ///
+    /// Root 不存在/越权（`RootUnavailable`）或句柄打不开（`SERVICE_NOT_READY` 之外的存储故障）。
+    pub async fn root_handle(
+        &self,
+        owner: UserId,
+        root: RootId,
+    ) -> Result<Arc<RootHandle>, OperationFailure> {
+        let record = {
+            let mut conn = self.pool_conn().await?;
+            store_roots::root_in_scope(&mut conn, owner, root)
+                .await
+                .map_err(|error| storage_error(&error.to_string()))?
+                .ok_or(OperationFailure::RootUnavailable)?
+        };
+        self.handle(root, &record.absolute_path)
+    }
+
+    /// 读条目的当前 revision 与内容摘要（冲突副本判定用；目录没有摘要）。
+    ///
+    /// # Errors
+    ///
+    /// 条目不存在/越权或存储失败。
+    pub async fn head_summary(
+        &self,
+        owner: UserId,
+        root: RootId,
+        entry: EntryId,
+    ) -> Result<(Revision, Option<ContentDigest>), OperationFailure> {
+        let mut conn = self.pool_conn().await?;
+        let record = store_entries::entry_in_scope(&mut conn, owner, entry)
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?
+            .ok_or_else(|| OperationFailure::BaseMismatch {
+                detail: format!("条目 {entry} 不存在或已删除"),
+            })?;
+        if record.root != root || record.deleted_at.is_some() {
+            return Err(OperationFailure::BaseMismatch {
+                detail: "条目不属于该 Root 或已删除".to_owned(),
+            });
+        }
+        let digest = store_versions::current_version(&mut conn, owner, root, entry)
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?
+            .map(|version| ContentDigest::from_bytes(version.object_hash));
+        Ok((record.revision, digest))
+    }
+
+    /// Root 提交串行化门（命名空间/删除命令与 put 共用同一把门）。
+    pub fn commit_gate(&self) -> &tokio::sync::Mutex<RootCommitGate> {
+        self.observer
+            .as_ref()
+            .map_or(&self.gate, |observer| observer.commit_gate())
+    }
+
+    /// 在共享提交门内核对尚未收尾的意图；失败关闭而不是继续破坏性写入。
+    ///
+    /// # Errors
+    ///
+    /// 无法读取或存在未完成意图时返回 NEEDS_RECOVERY。
+    pub async fn ensure_no_unfinished(
+        &self,
+        owner: UserId,
+        root: RootId,
+    ) -> Result<(), OperationFailure> {
+        let mut conn = self.pool_conn().await?;
+        let intents = store_intents::unfinished_intents(&mut conn, owner, root)
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?;
+        if intents.is_empty() {
+            Ok(())
+        } else {
+            Err(storage_error(
+                "Root 有未完成的文件系统意图，暂停写入并等待恢复",
+            ))
+        }
+    }
+
+    /// 登记一条 `pending` 操作行；已存在时报错（调用方应先查重放）。
+    ///
+    /// # Errors
+    ///
+    /// 摘要冲突（`OP_ID_REUSED`）或存储失败。
+    pub async fn begin_operation(
+        &self,
+        owner: UserId,
+        key: store_operations::OperationKey,
+        digest: store_operations::RequestDigest,
+    ) -> Result<(), OperationFailure> {
+        let mut tx = self.begin_write().await?;
+        let began = store_operations::begin_operation(
+            &mut tx,
+            owner,
+            &store_operations::NewOperation { key, digest },
+        )
+        .await
+        .map_err(|error| operation_store_error(&error))?;
+        tx.commit()
+            .await
+            .map_err(|error| storage_error(&error.to_string()))?;
+        match began {
+            store_operations::BeginOperation::Started => Ok(()),
+            store_operations::BeginOperation::Replayed(_) => Err(OperationFailure::OpIdReused),
+        }
+    }
+
+    /// 把一个还没有结论的操作记成稳定拒绝（不推进 RootSeq，不产生事件）。
+    pub async fn reject_failure(
+        &self,
+        owner: UserId,
+        key: store_operations::OperationKey,
+        failure: &OperationFailure,
+    ) {
+        self.reject(owner, key, failure).await;
+    }
+
     fn handle(&self, root: RootId, path: &str) -> Result<Arc<RootHandle>, OperationFailure> {
         let mut roots = self.roots.lock().map_err(|_| OperationFailure::Storage {
             detail: "Root 句柄缓存被污染".to_owned(),
@@ -133,8 +257,8 @@ impl ExecutorContext {
 
     /// 执行一条内容 put：先登记 `pending` 操作行，再走核心的提交编排。
     ///
-    /// 返回 `Ok` 时元数据事务已经提交（committed）；任何失败都保证没有 committed，并把操作记成
-    /// 稳定拒绝（同一 OpId 的重试得到同一结论，不会重做）。
+    /// 返回 `Ok` 时元数据事务已经提交（committed）；失败不报告 committed。
+    /// 没有未完成意图时尝试稳定拒绝；已有意图或证据读失败时保留 pending，等待恢复。
     ///
     /// # Errors
     ///
@@ -263,19 +387,25 @@ impl ExecutorContext {
         };
 
         // 4. 核心编排：epoch/基线/对象/现场复核 → 意图 → 发布 → 元数据事务。
-        let mut log = SqlIntentLog {
-            database: self.database.clone(),
-            owner,
-        };
+        let mut log =
+            SqlIntentLog::new(self.database.clone(), owner).bound(crate::journal::Binding::new(
+                key,
+                "put",
+                serde_json::json!({
+                    "entry": command.entry.to_hex(), "revision": command.base_revision.to_string(),
+                    "local_generation": command.local_generation.map(|v| v.to_string()),
+                }),
+            ));
         let mut store = SqlPutStore {
             database: self.database.clone(),
             owner,
             key,
+            digest,
             local_generation: command.local_generation,
         };
-        let mut gate = self.gate.lock().await;
+        let mut gate = self.commit_gate().lock().await;
+        self.ensure_no_unfinished(owner, key.root).await?;
         let outcome = commit_put(&mut gate, &mut store, &mut log, &mut target, at, &request).await;
-        drop(gate);
 
         match outcome {
             Ok(committed) => {
@@ -315,6 +445,15 @@ impl ExecutorContext {
         let Ok(mut tx) = self.begin_write().await else {
             return;
         };
+        // 已经写入意图的失败不是稳定拒绝：保留 pending，恢复才有资格给出最终结论。
+        // 无法读取证据同样失败关闭，不能将不确定结果写成 rejected。
+        let Ok(unfinished) = store_intents::unfinished_intents(&mut tx, owner, key.root).await
+        else {
+            return;
+        };
+        if !unfinished.is_empty() {
+            return;
+        }
         let _ = store_operations::reject_operation(&mut tx, owner, &key, &json).await;
         let _ = tx.commit().await;
     }
@@ -387,8 +526,33 @@ fn target_failure(error: TargetError) -> OperationFailure {
     }
 }
 
+/// 观察目标现场并构造 `TargetBefore`（恢复与 put 共用同一份现场复核语义）。
+///
+/// # Errors
+///
+/// 目标不可读（权限/挂载/IO）时返回存储失败，不把它当成“不存在”。
+pub fn observe_before(
+    target: &mut WorkTreeTarget,
+    target_path: &str,
+    entry: EntryId,
+    revision: Revision,
+) -> Result<TargetBefore, OperationFailure> {
+    let observation = target.observe(target_path).map_err(target_failure)?;
+    match observation {
+        TargetObservation::Absent => Ok(TargetBefore::Absent),
+        TargetObservation::Present { identity, digest } => {
+            Ok(TargetBefore::Present(TargetSnapshot {
+                entry,
+                revision: revision.get(),
+                digest,
+                identity,
+            }))
+        }
+    }
+}
+
 /// 核心提交失败 → 操作端点失败（状态码与错误码由核心的契约表给出）。
-fn map_put_failure(failure: &PutFailure) -> OperationFailure {
+pub(crate) fn map_put_failure(failure: &PutFailure) -> OperationFailure {
     match &failure.reason {
         PutFailureReason::EpochChanged { expected, actual } => OperationFailure::EpochChanged {
             expected: *expected,
@@ -459,6 +623,7 @@ fn rejection_result(failure: &OperationFailure) -> OperationResult {
         "INVALID_NAME" => Some(ErrorCode::InvalidName),
         "UNSUPPORTED_ENTRY" => Some(ErrorCode::UnsupportedEntry),
         "EPOCH_CHANGED" => Some(ErrorCode::EpochChanged),
+        "VERSION_GONE" => Some(ErrorCode::VersionGone),
         "OP_ID_REUSED" => Some(ErrorCode::OpIdReused),
         "INSUFFICIENT_STORAGE" => Some(ErrorCode::InsufficientStorage),
         _ => Some(ErrorCode::NeedsRecovery),
@@ -482,6 +647,25 @@ fn rejection_result(failure: &OperationFailure) -> OperationResult {
 pub struct SqlIntentLog {
     database: Database,
     owner: UserId,
+    binding: Option<crate::journal::Binding>,
+}
+
+impl SqlIntentLog {
+    /// 以数据库与 Root 所属账号装配（内容 put 与历史版本恢复共用）。
+    #[must_use]
+    pub fn new(database: Database, owner: UserId) -> Self {
+        Self {
+            database,
+            owner,
+            binding: None,
+        }
+    }
+
+    /// 把完整操作键及业务上下文与新意图原子落盘。
+    pub fn bound(mut self, binding: crate::journal::Binding) -> Self {
+        self.binding = Some(binding);
+        self
+    }
 }
 
 fn intent_error(error: store_intents::IntentError) -> IntentLogError {
@@ -517,7 +701,7 @@ fn fs_phase_of(phase: PutPhase) -> FsIntentPhase {
     }
 }
 
-fn put_intent_of(record: FsIntent) -> Result<PutIntent, IntentLogError> {
+pub(crate) fn put_intent_of(record: FsIntent) -> Result<PutIntent, IntentLogError> {
     if record.kind != FsIntentKind::PutContent {
         return Err(IntentLogError::MalformedIntent {
             detail: "意图种类不是 put_content".to_owned(),
@@ -578,6 +762,14 @@ impl IntentLog for SqlIntentLog {
         )
         .await
         .map_err(intent_error)?;
+        if let Some(binding) = &self.binding {
+            binding
+                .attach(&mut tx, new.intent_id)
+                .await
+                .map_err(|error| IntentLogError::Storage {
+                    detail: error.to_string(),
+                })?;
+        }
         tx.commit().await.map_err(|error| IntentLogError::Storage {
             detail: error.to_string(),
         })?;
@@ -877,10 +1069,11 @@ impl TargetPort for WorkTreeTarget {
 
 /// `PutCommitStore` 的 SQLx 实现：一次 `BEGIN IMMEDIATE` 里写完批次、版本、revision 与意图收尾。
 pub struct SqlPutStore {
-    database: Database,
-    owner: UserId,
-    key: store_operations::OperationKey,
-    local_generation: Option<Generation>,
+    pub(crate) database: Database,
+    pub(crate) owner: UserId,
+    pub(crate) key: store_operations::OperationKey,
+    pub(crate) digest: store_operations::RequestDigest,
+    pub(crate) local_generation: Option<Generation>,
 }
 
 impl PutCommitStore for SqlPutStore {
@@ -944,6 +1137,11 @@ impl PutCommitStore for SqlPutStore {
         let mut tx = self
             .database
             .begin_write()
+            .await
+            .map_err(|error| PutStoreError::Storage {
+                detail: error.to_string(),
+            })?;
+        crate::journal::ensure_digest(&mut tx, self.owner, &self.key, &self.digest)
             .await
             .map_err(|error| PutStoreError::Storage {
                 detail: error.to_string(),

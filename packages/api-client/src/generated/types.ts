@@ -812,6 +812,31 @@ export function decodeSnapshotPage(value: unknown): SnapshotPage {
   };
 }
 
+/**
+ * 目录子树的服务端乐观并发证明（design §10.3、T12）。`token` 覆盖目标条目自身与全部活跃后代
+ * 的身份、父目录、名称、种类与 revision；任一变化都会得到不同的 token。删除时原样回传。
+ */
+export interface SubtreeToken {
+  /** 冻结清单里的条目数（含目标自身，十进制文本）。 */
+  entries: string;
+  /** 目录条目身份，32 位小写十六进制。 */
+  entry_id: string;
+  /** Root 身份，32 位小写十六进制。 */
+  root_id: string;
+  /** 子树 token，32 位小写十六进制。 */
+  token: string;
+}
+
+export function decodeSubtreeToken(value: unknown): SubtreeToken {
+  const object = expect_object(value, "SubtreeToken");
+  return {
+    entries: expect_decimal(object.entries, "SubtreeToken.entries"),
+    entry_id: expect_string(object.entry_id, "SubtreeToken.entry_id"),
+    root_id: expect_string(object.root_id, "SubtreeToken.root_id"),
+    token: expect_string(object.token, "SubtreeToken.token"),
+  };
+}
+
 /** 块登记结果。 */
 export interface UploadPartAck {
   /** 是否为幂等重传（同一索引、同一字节已经登记过）。 */

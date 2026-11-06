@@ -1568,6 +1568,8 @@ pub(crate) struct FakeTrashRestoreStore {
     pub(crate) facts: RootFacts,
     pub(crate) subtrees: std::collections::BTreeMap<EntryId, TrashSubtree>,
     pub(crate) parents: std::collections::BTreeMap<EntryId, EntryKind>,
+    /// 原父目录移动后的当前路径；未配置时沿用清单根的原父路径。
+    pub(crate) parent_paths: std::collections::BTreeMap<EntryId, String>,
     /// 名称 → 占用者；按（父目录, 名称）唯一。
     pub(crate) occupants: std::collections::BTreeMap<(EntryId, String), EntryId>,
     pub(crate) contents: std::collections::BTreeMap<VersionId, ExpectedContent>,
@@ -1586,6 +1588,7 @@ impl Default for FakeTrashRestoreStore {
             facts: RootFacts { epoch: epoch(3) },
             subtrees: std::collections::BTreeMap::new(),
             parents: std::collections::BTreeMap::new(),
+            parent_paths: std::collections::BTreeMap::new(),
             occupants: std::collections::BTreeMap::new(),
             contents: std::collections::BTreeMap::new(),
             recorded: Vec::new(),
@@ -1683,8 +1686,11 @@ impl TrashRestoreStore for FakeTrashRestoreStore {
         &mut self,
         key: OperationKey,
         digest: RequestDigest,
+        plan: &TrashRestoreWrite,
     ) -> Result<RestoreBegin, RestoreStoreError> {
         self.trace.record("store begin_restore".to_owned());
+        assert_eq!(plan.key, key);
+        assert_eq!(plan.digest, digest);
         if self.recorded.iter().any(|(recorded, _)| *recorded == key) {
             return Ok(RestoreBegin::Recorded);
         }
@@ -1719,6 +1725,28 @@ impl TrashRestoreStore for FakeTrashRestoreStore {
         self.trace
             .record(format!("store parent_kind {root} {parent}"));
         Ok(self.parents.get(&parent).copied())
+    }
+
+    async fn parent_path(
+        &mut self,
+        root: RootId,
+        parent: EntryId,
+    ) -> Result<Option<String>, RestoreStoreError> {
+        self.trace
+            .record(format!("store parent_path {root} {parent}"));
+        if let Some(path) = self.parent_paths.get(&parent) {
+            return Ok(Some(path.clone()));
+        }
+        // 没有显式配置时，当前路径就是清单根的原父路径。
+        Ok(self
+            .subtrees
+            .values()
+            .map(TrashSubtree::root)
+            .find(|root| root.parent == parent)
+            .map(|root| match root.path.rsplit_once('/') {
+                Some((parent_path, _)) => parent_path.to_owned(),
+                None => String::new(),
+            }))
     }
 
     async fn name_occupant(

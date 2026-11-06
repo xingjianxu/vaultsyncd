@@ -633,6 +633,21 @@ pub struct SnapshotPage {
     pub snapshot_id: String,
 }
 
+/// 目录子树的服务端乐观并发证明（design §10.3、T12）。`token` 覆盖目标条目自身与全部活跃后代
+/// 的身份、父目录、名称、种类与 revision；任一变化都会得到不同的 token。删除时原样回传。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct SubtreeToken {
+    /// 冻结清单里的条目数（含目标自身，十进制文本）。
+    #[serde(with = "crate::decimal")]
+    pub entries: String,
+    /// 目录条目身份，32 位小写十六进制。
+    pub entry_id: String,
+    /// Root 身份，32 位小写十六进制。
+    pub root_id: String,
+    /// 子树 token，32 位小写十六进制。
+    pub token: String,
+}
+
 /// 块登记结果。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct UploadPartAck {

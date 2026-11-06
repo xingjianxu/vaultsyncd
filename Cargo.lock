@@ -2546,6 +2546,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vaultsyncd-domain",
+ "vaultsyncd-fs-common",
+ "vaultsyncd-planner",
  "vaultsyncd-platform-linux-server",
  "vaultsyncd-protocol",
  "vaultsyncd-server-core",

@@ -43,6 +43,8 @@ pub enum StartupError {
     Database(DbError),
     /// 启动恢复无法给出结论。
     Recovery(RecoveryAssessmentError),
+    /// 持久恢复上下文无法读取，拒绝开放服务。
+    Replay(String),
     /// 监听地址绑定失败（端口被占用、权限不足等）。
     Bind {
         /// 配置里的监听地址。
@@ -58,6 +60,7 @@ impl fmt::Display for StartupError {
             StartupError::StateLock(error) => write!(f, "{error}"),
             StartupError::Database(error) => write!(f, "打开服务端数据库失败：{error}"),
             StartupError::Recovery(error) => write!(f, "{error}"),
+            StartupError::Replay(error) => write!(f, "启动恢复无法读取证据：{error}"),
             StartupError::Bind { addr, source } => {
                 write!(f, "绑定监听地址 {addr} 失败：{source}")
             }
@@ -182,7 +185,7 @@ impl Service {
             ScanPolicy::default(),
         ));
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
-        // 操作命令端点（S047/S052）：内容 put 走真实执行器；其余命令仍显式 503 SERVICE_NOT_READY。
+        // 操作命令端点（S047/S052）：命令走真实适配器；缺少整组证据的目录恢复仍显式未就绪。
         // 外部观察循环（S052）：周期扫描每个健康 Root，把外部改动采纳成版本与事件。
         let observer = Arc::new(crate::external::ObserverRuntime::new(
             database.clone(),
@@ -296,6 +299,9 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         .await
         .map_err(StartupError::Database)?;
 
+    crate::replay::registered(&database, &config.state_dir)
+        .await
+        .map_err(StartupError::Replay)?;
     let lifecycle = Arc::new(Lifecycle::new());
     let assessment = recovery::assess_registered_roots(&database, &lifecycle)
         .await

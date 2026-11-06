@@ -834,6 +834,115 @@ fn classify_write_error(
     EntryError::DuplicateId { id }
 }
 
+/// 把一个软删除的条目放回命名空间（回收站恢复）：清 `deleted_at`、改父目录/名称、写 revision。
+///
+/// 比较并写：条目必须仍是软删除且 revision 等于清单里的值；目标父目录必须活跃且是目录，同父活跃
+/// 名称被占用时由唯一索引拒绝（[`EntryError::DuplicateName`]），绝不覆盖。
+///
+/// # Errors
+///
+/// 见 [`EntryError`]。
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+pub async fn restore_entry(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: UserId,
+    id: EntryId,
+    target_parent: EntryId,
+    name: &str,
+    name_key: &str,
+    expected_revision: Revision,
+    revision: Revision,
+) -> Result<EntryRecord, EntryError> {
+    let current = entry_in_scope(&mut *tx, owner, id)
+        .await?
+        .ok_or(EntryError::EntryNotFound { id })?;
+    if current.revision != expected_revision {
+        return Err(EntryError::RevisionChanged {
+            expected: expected_revision,
+            actual: current.revision,
+        });
+    }
+    if current.deleted_at.is_none() {
+        return Err(EntryError::MalformedRow {
+            column: "deleted_at",
+        });
+    }
+    validate_child_fields(name, name_key, current.kind, current.content_version)?;
+    let parent = parent_facts(tx, target_parent).await?;
+    if parent.root != current.root {
+        return Err(EntryError::CrossRootParent {
+            entry_root: current.root,
+            parent_root: parent.root,
+        });
+    }
+    if parent.deleted_at.is_some() {
+        return Err(EntryError::ParentNotFound { id: target_parent });
+    }
+    if parent.kind != EntryKind::Directory {
+        return Err(EntryError::ParentNotDirectory { id: target_parent });
+    }
+    if is_ancestor_or_self(tx, id, target_parent).await? {
+        return Err(EntryError::DirectoryCycle {
+            entry: id,
+            parent: target_parent,
+        });
+    }
+    let updated = sqlx::query(
+        "UPDATE entries SET deleted_at = NULL, parent_id = ?1, name = ?2, name_key = ?3, \
+         revision = ?4 WHERE id = ?5 AND deleted_at IS NOT NULL AND revision = ?6",
+    )
+    .bind(target_parent.as_bytes().as_slice())
+    .bind(name)
+    .bind(name_key)
+    .bind(revision.to_db_integer())
+    .bind(id.as_bytes().as_slice())
+    .bind(expected_revision.to_db_integer())
+    .execute(&mut **tx)
+    .await;
+    if let Err(error) = updated {
+        return Err(classify_write_error(error, target_parent, name, id));
+    }
+    let affected = updated.map(|result| result.rows_affected()).unwrap_or(0);
+    if affected != 1 {
+        return Err(EntryError::RevisionChanged {
+            expected: expected_revision,
+            actual: entry_in_scope(tx, owner, id)
+                .await?
+                .map_or(expected_revision, |record| record.revision),
+        });
+    }
+    entry_in_scope(tx, owner, id)
+        .await?
+        .ok_or(EntryError::EntryNotFound { id })
+}
+
+/// 读同一父目录下名称等于 `name` 的活跃子项（用于恢复时的名称占用检查）。
+///
+/// # Errors
+///
+/// 存储失败。
+pub async fn active_child_by_name(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+    root: RootId,
+    parent: EntryId,
+    name: &str,
+) -> Result<Option<EntryRecord>, EntryError> {
+    let row = sqlx::query_as::<_, EntryRow>(&format!(
+        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN roots r ON r.id = e.root_id \
+         WHERE e.root_id = ?1 AND e.parent_id = ?2 AND e.name = ?3 AND e.deleted_at IS NULL \
+         AND r.owner_id = ?4"
+    ))
+    .bind(root.as_bytes().as_slice())
+    .bind(parent.as_bytes().as_slice())
+    .bind(name)
+    .bind(owner.as_bytes().as_slice())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(EntryError::Db)?;
+    row.map(EntryRow::into_record).transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1519,7 +1628,7 @@ mod tests {
         // 0005 建回收站清单与墓碑，
         // 旧数据保留，迁移前备份落在同目录。
         let database = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(database.schema_version(), 7);
+        assert_eq!(database.schema_version(), 9);
         let mut conn = database.pool().acquire().await.expect("取连接");
         let value: String =
             sqlx::query_scalar("SELECT value FROM store_metadata WHERE key = 'server_id'")
@@ -1558,7 +1667,7 @@ mod tests {
         );
         drop(conn);
         assert!(
-            crate::db::migration_backup_path(&path, 1, 7).exists(),
+            crate::db::migration_backup_path(&path, 1, 9).exists(),
             "非空库升级前应有备份"
         );
 

@@ -16,16 +16,21 @@ compile_error!(
 
 pub mod auth;
 pub mod bootstrap;
+pub mod commands;
 pub mod config;
+pub mod conflict_ops;
 pub mod content;
 pub mod executor;
 pub mod external;
 pub mod http;
+pub mod journal;
 pub mod lifecycle;
 pub mod logging;
 pub mod observer;
 pub mod operations;
 pub mod recovery;
+pub mod replay;
+pub mod restore_ops;
 pub mod roots;
 pub mod sync;
 pub mod uploads;

@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
-import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
+import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
+import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -297,6 +297,39 @@ export async function listChanges(options: ClientOptions, root: string, query: {
 }
 
 /**
+ * 取目录子树的服务端 token
+ *
+ * 取一个目录条目的冻结子树清单与 token（design §10.3、§11.2、T12）。目录删除必须携带
+ * 这个 token：从看到清单到发出删除之间，子树任何新增/改名/删改都会让 token 变化，删除因此
+ * 返回 409 SUBTREE_CHANGED 而不是删掉并发新增。token 不是安全凭据，只是乐观并发证明。
+ *
+ * 对普通文件返回 422 UNSUPPORTED_ENTRY（文件删除不需要 token）。
+ *
+ * 参数 `root`（/v1/roots/{root}/entries/{entry}/subtree）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `entry`（/v1/roots/{root}/entries/{entry}/subtree）：目录条目身份（32 位小写十六进制）。
+ *
+ * 200：子树清单与 token
+ * 401：没有可用凭据
+ * 403：Root 不在授权范围
+ * 404：条目不存在或已删除
+ * 422：条目不是目录（文件删除不需要 token）
+ * 503：存储故障或 Root 暂不可写
+ */
+export async function getSubtreeToken(options: ClientOptions, root: string, entry: string, init?: RequestInit): Promise<SubtreeToken> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/subtree`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeSubtreeToken(payload);
+}
+
+/**
  * 下载固定版本的内容
  *
  * 按 `(root, entry, version)` 取该版本的**固定**内容字节（design §15.2、I12、I15）：内容地址
@@ -402,7 +435,8 @@ export async function subscribeEvents(options: ClientOptions, root: string, init
  * 403：Root 不在调用方授权范围
  * 409：同一 OpId 不同请求（`OP_ID_REUSED`），或条目基线/子树已过期（`BASE_MISMATCH`、
 `SUBTREE_CHANGED`、`RECONCILE_REQUIRED`）
- * 410：请求的服务器 epoch 已过期（`EPOCH_CHANGED`）
+ * 410：请求的服务器 epoch 已过期（`EPOCH_CHANGED`），或恢复所需的历史/回收站内容已过保留期
+（`VERSION_GONE`，不拿同路径的新内容冒充）
  * 422：名称不可用（`INVALID_NAME`）或条目种类不支持该命令（`UNSUPPORTED_ENTRY`）
  * 503：Root 当前不可写（`ROOT_UNAVAILABLE`）、存储需要恢复（`NEEDS_RECOVERY`），或本服务端尚未
 装配命令执行器（`SERVICE_NOT_READY`，请求未被受理）

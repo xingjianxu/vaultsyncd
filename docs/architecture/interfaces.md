@@ -1644,7 +1644,7 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 `SERVICE_NOT_READY` 是本卡新加的 wire 错误码（design §15.4 闭集里没有“执行器未装配”，`NEEDS_RECOVERY`
 另有“意图无法解释、需人工介入”的专义），**待与 design §15.4 同步**。
 
-### 未接入（属 S052 服务端整合闭环）
+### 未接入（属 S052 服务端整合闭环；已由 S052/S052-b 接入，见「服务端提交执行器与观察运行时（S052）」）
 
 - 命令执行适配器：`PutCommitStore`/`TargetPort`/`NamespaceStore`/`RemovalPort`/`RestoreStore`/
   `ConflictCommitStore` 的真实 SQLx + 文件系统实现、`begin_operation` → 执行 → `commit_operation`/
@@ -1966,11 +1966,43 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
 - **重试语义**：端点与执行器共用同一份 `request_digest` 判定重放；响应丢失后的重试返回同一
   `revision`/`root_seq`/`version_id`。结果 JSON 里没有 `root_seq` 时以 `operations.root_seq` 补齐
   （执行器写结果时批次序号尚未分配）。
-- **失败与稳定拒绝**：任何失败都不返回 committed；失败路径把操作写成 `rejected`（不推进 RootSeq、
-  不产生事件），所以同一 OpId 之后不会被“重做成功”。`ROOT_UNAVAILABLE`/`MAP` 见核心的
-  `OperationFailure` 映射表。
-- **未装配的命令保持 503**：create/move/delete/restore 的存储与工作目录适配器仍未实现，端点继续
-  显式 `503 SERVICE_NOT_READY`，不写状态。
+- **失败与稳定拒绝**：任何失败都不返回 committed；只有读证据成功且该 Root 没有未完成意图时，才尝试
+  写稳定 `rejected`。已经有意图的失败保留 `pending`；读不出意图也不得推测成稳定拒绝。所有命令在共享
+  提交门内检查未完成意图，存在或读取失败即停写。观察器同样不采纳有未完成意图的 Root。
+- **命令适配（S052-b）**：`commands::{SqlFsIntentLog, WorkTreeNamespace,
+  SqlNamespaceStore, SqlDeleteStore}` 接入 create/move/delete；移动保持 EntryId/内容版本，删除写清单、墓碑
+  并保留历史。`restore_ops::{SqlRestoreStore, SqlTrashRestoreStore}` 接入历史版本与回收站（文件/目录）恢复；
+  `conflict_ops::SqlConflictStore` 在迟到 put 的 preserve_both 下提交独立副本，映射唯一键为
+  `(RootId, DeviceId, OpId)`，不覆盖 head。冲突名称复用 planner，恢复/冲突的真实 RootSeq 在同一事务内写回结果。
+- **持久操作关联（迁移 0009）**：`execution_journal(root,device,op → kind, context_json)` 在**发布前**与
+  意图同一事务写入（`journal::Binding::{new,linked,persist,attach}`）；`intent_operations(intent → 完整操作键)`
+  让启动补完不靠暂存名、mtime 或最新操作行推断。`kind ∈ put | namespace | delete | version_restore |
+  conflict | trash_restore`；`context_json` 携带 entry/revision、restored_from、冲突 sibling 身份、
+  `local_generation`，回收站整组恢复则携带冻结清单与全部意图身份。`trash_membership(entry → 删除根/删除批次)`
+  由删除事务写入。升级旧库时遗留的、没有关联的意图原样保留（不编造关联），启动后保持停写。
+- **回收站整组恢复**：`TrashRestoreStore::begin_restore(key, digest, &plan)` 在一个事务里写 `operations`
+  pending、`trash_restore` 计划与全部目录的 `prepared` Create 意图，**之后**才 mkdir/发布；根位置空缺核对
+  在登记之前（已存在的外部目录按 `SUBTREE_CHANGED` 拒绝，无 pending、无意图）。子树范围 = 根的删除批次
+  （`trash_membership.deletion_id`）内按父子身份取闭包，不用旧路径前缀；没有归属的行（外部采纳的单条删除）
+  只恢复它自己。位置跟随原父目录**当前**路径（`TrashRestoreStore::parent_path`）；根名称被活跃条目占用则
+  另名（`名称（恢复）`），不合并。`TrashRestoreWrite` 增 `directory_intents`。保留期已过 → 410 `VERSION_GONE`。
+- **启动补完（`replay::registered`，先于 `recovery::assess` 与监听）**：对每条未完成意图读取持久关联，
+  put/version_restore/conflict 用 `classify_put`（前像重做 / 后像补完 / 其它停写），namespace/delete 用核心
+  `recover_*_root`，trash_restore 按持久计划逐条目补建目录/文件意图后用同一事务收尾（一次整组只补一次）。
+  无法证明的现场（第三种内容、前像被外部改动、计划外内容、意图损坏、关联缺失）返回错误：意图/证据/
+  文件原样保留，Root 保持停写；现场还原后下一次启动补完**同一**操作，不产生第二个版本/副本/事件。
+- **删除不丢未确认内容**：`commands::verify_delete_scope`——文件现场哈希必须等于当前版本；目录现场每项必须在
+  冻结清单里且种类相同、文件长度等于当前版本长度（清单有而现场没有的不算问题）。前向路径不通过 → 409
+  `RECONCILE_REQUIRED`（意图之前拒绝）；重启补完不通过 → 保持停写。限制：目录内同名同长度的原地改写不被该
+  检查发现（观察器周期采纳兜底）。
+- **错误与重放一致性**：`OperationFailure::VersionGone`（410 `VERSION_GONE`）；`commands::{namespace,delete,
+  restore}_failure` 与 `executor::map_put_failure` 保留类型化的 `EpochChanged{expected,actual}`；恢复与冲突
+  命令在没有意图时把失败记成稳定拒绝。`journal::with_echo` 把客户端 `local_generation` 写进持久结果，
+  所有命令的重放、状态查询与重启补完都回显同一值。各 `apply_*` 事务内用 `journal::ensure_digest` 再核对
+  操作摘要与 owner scope。
+- **自写关联**：put 登记 `expect_own_write`（设备 + inode + 内容）；其余命令靠共享提交门 + 提交后现场与
+  数据库一致，由进程级测试 `own_commands_never_come_back_as_external_changes` 证明命令结果不以
+  `origin=external` 重新出现（5 s 内多轮观察）。
 - **外部采纳（`external::SqlExternalStore`）**：`lookup_path` 用 `entries::entry_by_path`（逐分量按
   原始名称）+ 当前版本；`apply_external` 在补建缺失父目录后，按 Create/Update（比较并写
   `expected_revision`）在一个事务里追加批次、幂等登记对象、写版本（`origin=external`）、推进 revision；
@@ -1979,12 +2011,14 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
 - **观察运行时（`external::ObserverRuntime`）**：每轮从库里枚举 Root（新注册的下一轮自动纳入），
   为每个健康 Root 用 `RootHandle + LinuxWorkTree + LinuxObjectPort` 跑一轮
   `ExternalObserver::run_pass`（周期扫描是 S050 三层兜底的正确性层；**未接 inotify**，只影响时延）。
-  服务端自己的发布通过 `expect_own_write` 登记（设备 + inode + 内容），不会被再采纳成外部修改。
+  put 发布通过 `expect_own_write` 登记（设备 + inode + 内容）；其余命令的自写关联仍待验证。
+  HTTP 执行器实际复用观察器的同一个 gate（锁序 gate → roots），不是只复用 gate 的类型。
   运行时用独立线程 + current-thread runtime（端口与 `RootHandle` 不要求 `Send`），优雅停止时先停
   观察循环再关闭数据库。
 - **新增存储函数**：`entries::entry_by_path(conn, owner, root, path)`、
   `entries::path_of(conn, owner, entry)`、`entries::advance_entry_revision(tx, owner, entry, expected, next)`
   （比较并写，变化报 `EntryError::RevisionChanged`）；`RootHandle::root_dir()` 暴露已核对的根目录句柄。
+- **恢复验收入口**：`cargo test -p vaultsyncd-server-tests --test {commands,restore,conflict,dir_restore,recovery_boundaries,kill_boundaries}`；`kill_boundaries` 用 `server-child` 真实子进程（触发器卡住写事务后 SIGKILL）。
 - **验收入口**：`cargo test -p vaultsyncd-server-tests --test http_loop`（真实监听 + 真实 SQLite +
   btrfs 工作目录）。满盘用例需要小型专用 btrfs 卷（`tools/test-volume/test-volume.sh create <run> 192M`），
   用 `VAULTSYNCD_S052_WORK_VOLUME` / `VAULTSYNCD_S052_STATE_VOLUME` 指定卷内可写子目录

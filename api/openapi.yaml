@@ -514,6 +514,67 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 
+  /v1/roots/{root}/entries/{entry}/subtree:
+    get:
+      operationId: getSubtreeToken
+      summary: 取目录子树的服务端 token
+      description: |
+        取一个目录条目的冻结子树清单与 token（design §10.3、§11.2、T12）。目录删除必须携带
+        这个 token：从看到清单到发出删除之间，子树任何新增/改名/删改都会让 token 变化，删除因此
+        返回 409 SUBTREE_CHANGED 而不是删掉并发新增。token 不是安全凭据，只是乐观并发证明。
+
+        对普通文件返回 422 UNSUPPORTED_ENTRY（文件删除不需要 token）。
+      parameters:
+        - name: root
+          in: path
+          required: true
+          description: 授权 Root 的身份（32 位小写十六进制）。
+          schema:
+            type: string
+        - name: entry
+          in: path
+          required: true
+          description: 目录条目身份（32 位小写十六进制）。
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 子树清单与 token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubtreeToken"
+        "401":
+          description: 没有可用凭据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Root 不在授权范围
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: 条目不存在或已删除
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 条目不是目录（文件删除不需要 token）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: 存储故障或 Root 暂不可写
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
   /v1/roots/{root}/entries/{entry}/versions/{version}/content:
     get:
       operationId: downloadVersionContent
@@ -666,7 +727,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "410":
-          description: 请求的服务器 epoch 已过期（`EPOCH_CHANGED`）
+          description: |
+            请求的服务器 epoch 已过期（`EPOCH_CHANGED`），或恢复所需的历史/回收站内容已过保留期
+            （`VERSION_GONE`，不拿同路径的新内容冒充）
           content:
             application/json:
               schema:
@@ -1063,6 +1126,27 @@ components:
         hash:
           type: string
           description: 当前内容的 SHA-256，64 位小写十六进制（只有带内容的文件有）。
+
+    SubtreeToken:
+      description: |
+        目录子树的服务端乐观并发证明（design §10.3、T12）。`token` 覆盖目标条目自身与全部活跃后代
+        的身份、父目录、名称、种类与 revision；任一变化都会得到不同的 token。删除时原样回传。
+      type: object
+      required: [root_id, entry_id, token, entries]
+      properties:
+        root_id:
+          type: string
+          description: Root 身份，32 位小写十六进制。
+        entry_id:
+          type: string
+          description: 目录条目身份，32 位小写十六进制。
+        token:
+          type: string
+          description: 子树 token，32 位小写十六进制。
+        entries:
+          type: string
+          format: decimal_u64
+          description: 冻结清单里的条目数（含目标自身，十进制文本）。
 
     SnapshotPage:
       description: 快照清单的一页。

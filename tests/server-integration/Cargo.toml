@@ -17,7 +17,9 @@ workspace = true
 [dependencies]
 vaultsyncd-domain = { path = "../../crates/domain" }
 vaultsyncd-server-core = { path = "../../crates/server-core" }
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# `server-child` 二进制（真实进程强杀验收）要用服务端库；二进制不能用 dev-dependencies。
+vaultsyncd-server = { path = "../../apps/server" }
 
 [dev-dependencies]
 # 真实 HTTP 闭环：在进程内启动 `vaultsyncd-server` 的 router 与监听，客户端走真实 TCP。
@@ -28,5 +30,4 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 vaultsyncd-platform-linux-server = { path = "../../crates/platform-linux-server" }
 vaultsyncd-protocol = { path = "../../crates/protocol" }
-vaultsyncd-server = { path = "../../apps/server" }
 vaultsyncd-server-store = { path = "../../crates/server-store" }
