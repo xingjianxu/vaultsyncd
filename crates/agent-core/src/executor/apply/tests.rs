@@ -22,6 +22,8 @@ use vaultsyncd_transfer::ports::LocalErrorKind;
 mod confirmation_tests;
 #[path = "consumer_tests.rs"]
 mod consumer_tests;
+#[path = "restore_tests.rs"]
+mod restore_tests;
 
 const OLD: &[u8] = b"confirmed old content";
 const NEW: &[u8] = b"committed remote version two";

@@ -22,6 +22,8 @@ struct Base {
     name: String,
     revision: u64,
     version: Option<[u8; 16]>,
+    #[serde(default)]
+    deleted: bool,
 }
 impl Base {
     fn new(value: &BaselineEntry) -> Self {
@@ -31,6 +33,7 @@ impl Base {
             name: value.name.clone(),
             revision: value.revision.get(),
             version: value.content_version.map(|v| *v.as_bytes()),
+            deleted: value.deleted,
         }
     }
     fn decode(&self) -> Result<BaselineEntry, PortError> {
@@ -41,7 +44,7 @@ impl Base {
             kind: EntryKind::File,
             revision: Revision::new(self.revision).map_err(db)?,
             content_version: self.version.map(VersionId::from_bytes),
-            deleted: false,
+            deleted: self.deleted,
         })
     }
 }
@@ -407,7 +410,7 @@ pub(super) fn validate(spec: &ApplySpec) -> Result<(), PortError> {
         || spec.baseline_before.as_ref().is_some_and(|before| {
             before.entry != after.entry
                 || before.kind != EntryKind::File
-                || before.deleted
+                || (before.deleted && spec.expected != ContentEvidence::Absent)
                 || before.parent.is_none()
                 || before.revision >= after.revision
         })
