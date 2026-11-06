@@ -2154,3 +2154,22 @@ quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按�
 - `ActionFailure::scheduling: FailureScheduling`默认为ByCode；Unavailable携带Retry-After，Cancelled不累计失败，LocalPermission区别于HTTP403。上传端口与分块失败保留这些类型化证据，NoSpace映射InsufficientStorage；不解析detail、不保存敏感诊断到调度表。
 - `operation_schedule`与pending_ops同寿命，持久priority/due_at/cancelled/halted/offline；失败attempts/last_error与调度due/halted/offline同一事务。指数上限默认1—60秒，取半区间正jitter；Retry-After为下界（可超过60秒），UTC秒存储向上取整。停止/取消不删队列、续传、意图或本地字节；显式resume不重置失败次数。普通不可用只在TaskStatus可见，严重错误由needs_attention区分；通知/去重归S064。
 - `Outcome::Pending`始终保留队列，等待至少1秒；重启只重建进程内活动槽，不把in-flight或已传完内容当Committed。v7→v8迁移前备份保留暂停、dirty、失败队列，旧schema校验和不变，旧二进制拒绝v8。
+
+## S065：Windows 安全元数据与通知端口
+
+实现：`crates/platform-windows/src/files/`、`watcher/`。平台 I/O 不进入纯核心；只提供观察事实与补扫要求，不直接生成全局 Delete。
+
+| 接口 | 输入/输出与安全契约 |
+| --- | --- |
+| `RootHandle::open(Path)`、`verify()` | 仅现有本地驱动器绝对目录；逐分量 `NtCreateFile(RootDirectory=已持有父句柄)`，`FILE_OPEN_REPARSE_POINT + FILE_OPEN_NO_RECALL`，持有祖先句柄并禁止 delete 共享。类型中性打开后核对目录；不使用本客体返回参数错误的 `FILE_DIRECTORY_FILE` 组合。verify 重新核对身份/路径及当前 ACL（无 backup intent 的相对重开），旧句柄授权不代表新 ACL 仍可访问。 |
+| `FileIdentity{volume,file}`、`RootHandle::overlaps` | 真实卷 serial + 128 位文件 ID；以祖先/自身目录身份判父子与别名，不能用文本 starts_with；subst 原生证明同一物理目录仍重叠。此身份不替代协议 EntryId。 |
+| `inspect(relative)`、`scan()` | 直接复用 fs-common `RelativePath` 和名称边界；句柄相对 no-follow，拒绝未知 reparse/junction/symlink 与跨卷；原名不改写。目录使用 `GetFileInformationByHandleEx(FileIdExtdDirectoryInfo)` 从句柄枚举，不按路径递归，不读内容；迭代扫描限制深目录持有句柄数量。 |
+| `EntryMetadata` / `CloudMetadata` | 文件 ID、逻辑/分配大小、attributes/tag、links、时间戳；CFAPI 的 on_disk/modified/pin/in_sync/provider identity 来自同一句柄 `CfGetPlaceholderInfo`。CFAPI 过滤器可能隐藏 reparse 属性，不能仅靠 tag 判断占位。identity <=4 KiB；查询失败明确报错。mtime/in_sync 不作为业务 committed 证据。 |
+| `ScanReport{root,health,entries}` | 保留局部问题；`Complete/PermissionDenied/RootUnavailable/Incomplete`。任一未知对象、硬链接、名称碰撞或枚举失败使 `permits_missing_comparison=false`；只有完整健康扫描可以进入核心的缺失核对，仍不直接授权删除。 |
+| `NativeNames: NameEquivalence` | Windows `CompareStringOrdinal(ignoreCase=true)`，API 失败保守报冲突；真实 NTFS case/Unicode 创建验证。不归一化、不静默选择赢家，大小写敏感目录仍保守报问题。 |
+| `DirectoryWatcher::new(&RootHandle, buffer_bytes)` / `poll(timeout_ms)` | 用相同父句柄相对重开并核对 root，`ReadDirectoryChangesW` 原生异步监视；缓冲限16 B..64 KiB、poll <=60s，回传 `Idle/Changes/Rescan`，删除/rename 通知只是提示。溢出/失联/畸形记录均需要全量补扫；drop 取消并等待完成后才释放 OVERLAPPED/缓冲。filter 不含 last-access，避免扫描反馈。 |
+| `ReconcileGate` | 启动/非 Idle 提示即需要补扫，周期元数据扫描覆盖通知丢失和重装间隙；不健康扫描保留围栏。调度/持久基线/受控发布由 agent 入口及后续卡接线。 |
+
+原生验收入口：`VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows nix develop .#windows --command tests/platform/windows/run-native-files.sh`。仅在实验室 NTFS run_id 目录/临时盘符操作，并核对 exe 传输 SHA-256；52 个客体测试包括已 pin 空目录真正原地设置 junction、ACL 变化、真实内核缓冲溢出与三个脱水占位符扫描前后 0 本地内容字节。环境分工、VM 保持在线规则见 `docs/operations/windows-lab.md` §12、§19.1。
+
+API 依据：[NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)、[CreateFileW no-follow/no-recall](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)、[ReadDirectoryChangesW 溢出语义](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw)。

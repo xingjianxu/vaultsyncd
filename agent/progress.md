@@ -78,7 +78,7 @@
 | S062 | 下载优先级与重试调度 | L | S054、S059 | done | 产出提交 `deafbe3`、`ab44a59`；依赖合并 `4806b25`（S061）；基 `0b3b3c6`；worktree `.worktrees/s062`，分支 `feat/S062-transfer-scheduler` | 用户读取保留槽、metadata/hash独立限流、同entry串行；取消/退避跨重启，attempts+due同事务，Retry-After可超过60秒；真实BindingControls门禁与UploadActionHandler证据接线，NoSpace保未确认字节、不驱逐；子进程退出91—94恢复与v7→v8备份/旧二进制拒绝；agent-core 97、client-store 48、transfer 59，clippy/fmt通过 | 无（生产入口共享实例/随机数/唤醒与下载取消接线留S067/S070，通知汇总归S064） | agent/tasks/S062.md（+S062-a/b） |
 | S063 | 手动释放的核心安全条件 | L | S059、S061 | todo | — | 未执行 | — | agent/tasks/S063.md（执行时创建） |
 | S064 | agent 状态、问题与恢复导出 | L | S060、S062、S063 | todo | — | 未执行 | — | agent/tasks/S064.md（执行时创建） |
-| S065 | Windows 安全文件与本地扫描 | W | S012、S017、S059 | todo | — | 未执行 | — | agent/tasks/S065.md（执行时创建） |
+| S065 | Windows 安全文件与本地扫描 | W | S012、S017、S059 | done | 基 `0b3b3c6`；worktree `.worktrees/s065`，分支 `feat/S065-windows-files-scan`；产出 `03055ac`（代码）及交接提交 | 句柄相对 NtCreateFile no-follow/no-recall、卷+128位身份重叠、句柄元数据枚举与 CFAPI 驻留事实；权限/未知 reparse/硬链接/碰撞使整轮不授权缺失推导。原生 watcher 溢出补扫400文件；已pin目录真正FSCTL原地换junction拒绝越界；3个脱水占位扫描后 on_disk 仍0。Windows 11原生52/52、宿主平台42与fs-common33+1、两端clippy/fmt通过 | 无（产品入口接线留 S066—S070；UNC/未知reparse显式不支持，大小写敏感目录保守报问题；规模/故障验收留后续卡）；VM保持在线 | agent/tasks/S065.md（+S065-a/b） |
 | S066 | CFAPI 正式注册与元数据更新 | W | S065、S010 | todo | — | 未执行 | — | agent/tasks/S066.md（执行时创建） |
 | S067 | CFAPI hydration 接入传输执行器 | W | S066、S054、S062 | todo | — | 未执行 | — | agent/tasks/S067.md（执行时创建） |
 | S068 | Windows 写入检测与使用保护 | W | S066、S056、S059 | todo | — | 未执行 | — | agent/tasks/S068.md（执行时创建） |
