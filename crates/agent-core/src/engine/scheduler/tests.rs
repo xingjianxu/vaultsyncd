@@ -788,3 +788,48 @@ async fn already_committed_action_settles_despite_concurrent_cancel() {
     assert_eq!(round.await.unwrap().tasks, vec![(op, Outcome::Completed)]);
     assert!(scheduler.status(rig.binding).await.unwrap().is_empty());
 }
+
+#[path = "consumer_tests.rs"]
+mod consumer_tests;
+
+#[tokio::test]
+async fn failure_due_and_attempt_count_roll_back_together_when_schedule_write_fails() {
+    let rig = Rig::new().await;
+    let op = rig.enqueue(1, "apply_remote", 1, None).await;
+    rig.handler
+        .set(op, Behavior::Fail(failure(ErrorCode::RateLimited)));
+    let scheduler = rig.scheduler();
+    scheduler.status(rig.binding).await.unwrap();
+    sqlx::query("CREATE TRIGGER abort_schedule BEFORE UPDATE OF due_at ON operation_schedule BEGIN SELECT RAISE(ABORT,'injected schedule failure'); END")
+        .execute(rig.db.pool()).await.unwrap();
+    assert!(scheduler.run_round(rig.binding).await.is_err());
+    let state = scheduler.status(rig.binding).await.unwrap().remove(0);
+    assert_eq!(state.attempts, 0);
+    assert_eq!(state.error, None);
+    assert_eq!(state.due.as_unix_seconds(), 0);
+}
+
+#[tokio::test]
+async fn cancelling_before_first_dispatch_preserves_metadata_class_and_unknown_op_is_rejected() {
+    let rig = Rig::new().await;
+    let op = rig.enqueue(1, "merge_baseline", 1, None).await;
+    let scheduler = rig.scheduler();
+    scheduler.cancel(op).await.unwrap();
+    let state = scheduler.status(rig.binding).await.unwrap().remove(0);
+    assert_eq!(state.priority, Priority::Metadata);
+    assert!(state.cancelled);
+    assert!(
+        scheduler
+            .cancel(OpId::from_bytes([0xff; 16]))
+            .await
+            .is_err()
+    );
+    assert!(
+        scheduler
+            .run_round(rig.binding)
+            .await
+            .unwrap()
+            .tasks
+            .is_empty()
+    );
+}

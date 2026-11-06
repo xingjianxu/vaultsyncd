@@ -187,7 +187,27 @@ impl ActionHandler for UploadActionHandler {
         op: &'a QueuedOperation,
         _intent: Option<&'a crate::ports::state::ActionIntent>,
     ) -> PortFuture<'a, Result<ActionOutcome, ActionFailure>> {
-        Box::pin(async move { self.execute_upload(ports, op).await })
+        Box::pin(async move { self.execute_upload(ports, op, &self.options).await })
+    }
+}
+
+impl crate::engine::scheduler::ScheduledHandler for UploadActionHandler {
+    fn execute_scheduled<'a>(
+        &'a self,
+        ports: &'a Ports,
+        op: &'a QueuedOperation,
+        _intent: Option<&'a crate::ports::state::ActionIntent>,
+        cancel: &'a crate::engine::scheduler::Cancellation,
+    ) -> PortFuture<'a, Result<ActionOutcome, crate::engine::scheduler::TaskError>> {
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err(crate::engine::scheduler::TaskError::Cancelled);
+            }
+            let options = self.options.clone().with_cancel(cancel.clone());
+            self.execute_upload(ports, op, &options)
+                .await
+                .map_err(Into::into)
+        })
     }
 }
 
@@ -196,6 +216,7 @@ impl UploadActionHandler {
         &self,
         ports: &Ports,
         op: &QueuedOperation,
+        options: &UploadOptions,
     ) -> Result<ActionOutcome, ActionFailure> {
         let kind = OperationKind::from_db(&op.kind).ok_or_else(|| {
             ActionFailure::new(
@@ -249,17 +270,11 @@ impl UploadActionHandler {
             .upload(op.binding)
             .await
             .map_err(|error| map_port_failure("获取上传端点", error))?;
-        let outcome = match upload::run(
-            source.as_ref(),
-            target.as_ref(),
-            resume.as_ref(),
-            &self.options,
-        )
-        .await
-        {
-            Ok(outcome) => outcome,
-            Err(failure) => return self.handle_upload_failure(ports, op, failure).await,
-        };
+        let outcome =
+            match upload::run(source.as_ref(), target.as_ref(), resume.as_ref(), options).await {
+                Ok(outcome) => outcome,
+                Err(failure) => return self.handle_upload_failure(ports, op, failure).await,
+            };
 
         // 上传期间可能发生第二次保存。快照仍是旧内容时，旧内容可以留在服务端对象区，但不能
         // 进入 put/create 提交，也不能清除新 generation 的 dirty 状态。
@@ -535,11 +550,25 @@ fn map_upload_failure(failure: vaultsyncd_transfer::upload::UploadFailure) -> Ac
         }
         UploadErrorKind::SessionClosed { .. } => ErrorCode::ReconcileRequired,
     };
-    ActionFailure::new(code, failure.to_string())
+    match failure.kind() {
+        UploadErrorKind::Port(error) => map_port_failure("上传传输", error.clone()),
+        UploadErrorKind::Cancelled => ActionFailure::new(code, failure.to_string())
+            .with_scheduling(crate::executor::FailureScheduling::Cancelled),
+        _ => ActionFailure::new(code, failure.to_string()),
+    }
 }
 
 fn map_port_failure(context: &str, error: AgentPortError) -> ActionFailure {
-    ActionFailure::new(map_port_code(&error), format!("{context}：{error}"))
+    let hint = match &error {
+        PortError::Unavailable { retry_after, .. } => {
+            crate::executor::FailureScheduling::Unavailable {
+                retry_after: *retry_after,
+            }
+        }
+        PortError::Cancelled => crate::executor::FailureScheduling::Cancelled,
+        _ => crate::executor::FailureScheduling::ByCode,
+    };
+    ActionFailure::new(map_port_code(&error), format!("{context}：{error}")).with_scheduling(hint)
 }
 
 fn map_port_code(error: &PortError) -> ErrorCode {
@@ -554,8 +583,8 @@ fn map_port_code(error: &PortError) -> ErrorCode {
         PortError::Local { kind, .. } => match kind {
             vaultsyncd_transfer::ports::LocalErrorKind::Read
             | vaultsyncd_transfer::ports::LocalErrorKind::Missing => ErrorCode::LocalChanged,
-            vaultsyncd_transfer::ports::LocalErrorKind::Write
-            | vaultsyncd_transfer::ports::LocalErrorKind::NoSpace => ErrorCode::FileBusy,
+            vaultsyncd_transfer::ports::LocalErrorKind::Write => ErrorCode::FileBusy,
+            vaultsyncd_transfer::ports::LocalErrorKind::NoSpace => ErrorCode::InsufficientStorage,
         },
     }
 }

@@ -53,9 +53,14 @@ pub(super) async fn priority(db: &Database, op: OpId, priority: Priority) -> Res
     Ok(())
 }
 pub(super) async fn cancel(db: &Database, op: OpId) -> Result<(), PortError> {
-    // 未调度过的操作也能取消；未知Op由外键拒绝，不能默认成功。
-    sqlx::query("INSERT INTO operation_schedule(op_id,priority,cancelled) VALUES (?1,2,1) ON CONFLICT(op_id) DO UPDATE SET cancelled=1")
-        .bind(op.as_bytes().as_slice()).execute(db.pool()).await.map_err(error)?;
+    let result = sqlx::query("UPDATE operation_schedule SET cancelled=1 WHERE op_id=?1")
+        .bind(op.as_bytes().as_slice())
+        .execute(db.pool())
+        .await
+        .map_err(error)?;
+    if result.rows_affected() != 1 {
+        return Err(PortError::protocol("取消操作不存在"));
+    }
     Ok(())
 }
 pub(super) async fn pending(db: &Database, op: OpId, due: UtcTimestamp) -> Result<(), PortError> {

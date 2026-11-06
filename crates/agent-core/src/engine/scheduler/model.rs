@@ -76,10 +76,16 @@ pub enum TaskError {
 }
 impl From<ActionFailure> for TaskError {
     fn from(failure: ActionFailure) -> Self {
-        let offline = failure.code == ErrorCode::PlaceholderOffline;
+        use crate::executor::FailureScheduling;
+        let (retry_after, offline) = match failure.scheduling {
+            FailureScheduling::Unavailable { retry_after } => (retry_after, true),
+            FailureScheduling::Cancelled => return Self::Cancelled,
+            FailureScheduling::LocalPermission => return Self::LocalPermission(failure),
+            FailureScheduling::ByCode => (None, failure.code == ErrorCode::PlaceholderOffline),
+        };
         Self::Failed {
             failure,
-            retry_after: None,
+            retry_after,
             offline,
         }
     }
@@ -145,7 +151,7 @@ pub struct TaskStatus {
     pub cancelled: bool,
     /// 停止自动重试，需用户恢复或重新规划。
     pub halted: bool,
-    /// 普通网络故障。
+    /// 网络、超时或远端服务暂不可用，不据此断言主机断网。
     pub offline: bool,
     /// 已持久失败次数。
     pub attempts: u32,
@@ -161,6 +167,8 @@ impl TaskStatus {
 /// 本轮动作的实际结果；没有把 pending 解释成成功。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
+    /// 动作管线期间暂停/排除/解绑，不启动平台动作也不持久取消。
+    Deferred,
     /// 基线或服务器已确认提交，并已出队。
     Completed,
     /// 尚未 committed，任务保留。
@@ -177,4 +185,13 @@ pub struct RoundReport {
     pub tasks: Vec<(OpId, Outcome)>,
     /// 尚在退避任务的最早到期；None 时等待外部唤醒而非忙循环。
     pub next_due: Option<UtcTimestamp>,
+}
+
+impl DispatchGate for crate::bindings::control::BindingControls {
+    fn allowed<'a>(&'a self, op: &'a QueuedOperation) -> PortFuture<'a, Result<bool, PortError>> {
+        Box::pin(async move {
+            Ok(self.execution_gate(op.binding, op.entry).await?
+                == crate::bindings::control::ExecutionGate::Ready)
+        })
+    }
 }

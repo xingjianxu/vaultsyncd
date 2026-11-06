@@ -109,6 +109,12 @@ impl<H: ScheduledHandler> Scheduler<H> {
     }
     /// 先持久取消，再通知活动传输；保留队列、块进度与本地内容。
     pub async fn cancel(&self, op: OpId) -> Result<(), PortError> {
+        let mut conn = self.db.pool().acquire().await.map_err(store::error)?;
+        let queued = vaultsyncd_client_store::queue::pending_op(&mut conn, op)
+            .await
+            .map_err(store::error)?
+            .ok_or_else(|| PortError::protocol("取消操作不存在"))?;
+        store::ensure(&self.db, &queued, default_priority(&queued)?).await?;
         store::cancel(&self.db, op).await?;
         if let Some(task) = self.active.lock().expect("调度槽锁").tasks.get(&op) {
             task.cancel.cancel();
@@ -160,8 +166,21 @@ impl<H: ScheduledHandler> Scheduler<H> {
                 report.next_due = minimum(report.next_due, status.due);
                 continue;
             }
-            if op.depends_on.is_some_and(|id| ids.contains(&id)) {
-                continue;
+            if let Some(dependency) = op.depends_on {
+                let pending = if ids.contains(&dependency) {
+                    true
+                } else {
+                    sqlx::query_scalar::<_, bool>(
+                        "SELECT EXISTS(SELECT 1 FROM pending_ops WHERE op_id=?1)",
+                    )
+                    .bind(dependency.as_bytes().as_slice())
+                    .fetch_one(self.db.pool())
+                    .await
+                    .map_err(store::error)?
+                };
+                if pending {
+                    continue;
+                }
             }
             candidates.push((op, status.priority));
         }
@@ -246,8 +265,11 @@ impl<H: ScheduledHandler> Scheduler<H> {
     async fn run_one(&self, op: QueuedOperation, slot: Slot) -> Result<(OpId, Outcome), PortError> {
         // claim之后再次过持久取消和控制围栏；排队期间发生的取消不能丢。
         let status = store::status(&self.db, &op).await?;
-        if status.cancelled || !self.gate.allowed(&op).await? {
+        if status.cancelled {
             return Ok((op.op, Outcome::Cancelled));
+        }
+        if !self.gate.allowed(&op).await? {
+            return Ok((op.op, Outcome::Deferred));
         }
         let intent = match self.handler.plan_intent(&op).await {
             Ok(intent) => intent,
@@ -257,8 +279,11 @@ impl<H: ScheduledHandler> Scheduler<H> {
             Some(value) => Some(self.ports.intents.begin_intent(value).await?),
             None => None,
         };
-        if slot.cancel.is_cancelled() || !self.gate.allowed(&op).await? {
+        if slot.cancel.is_cancelled() {
             return Ok((op.op, Outcome::Cancelled));
+        }
+        if !self.gate.allowed(&op).await? {
+            return Ok((op.op, Outcome::Deferred));
         }
         let result = self
             .handler
