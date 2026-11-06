@@ -1941,3 +1941,51 @@ file identity 必须仍对应固定快照，否则返回 `LOCAL_CHANGED`，不�
 对 `after`/`limit` 做独立百分号编码，并强制 Bearer 会话；Root 身份和规范十进制游标在发送前校验。
 `ApiRequest` 禁止调用方直接拼接查询串，查询参数按 RFC 3986 编码。SSE 仍只由上层作为唤醒来源，
 不被当作事件正文来源。
+
+### 服务端提交执行器与观察运行时（S052）
+
+S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_NOT_READY`；S049/S050 的观察规则也缺少生产适配器与后台任务。S052 把它们接上（实现见 `apps/server/src/{executor,external}.rs`）：
+
+- **内容 put 执行链路**：`ExecutorContext::{execute_put}`。顺序是
+  1. 读库确定命名空间事实：条目（必须活跃文件）、`entries::path_of` 得相对路径、父目录与名称；
+  2. `begin_operation`（`operations` 表写 `pending`，幂等键 `(root, device, op)`）；
+  3. `commit_put` + 端口实现：`SqlIntentLog`（`fs_intents`，证据 JSON 用核心的
+     `TargetBefore/After::to_json`）、`WorkTreeTarget`（`RootHandle` 观察 + 受控发布）、`SqlPutStore`；
+  4. `SqlPutStore::apply_put` 在一个 `BEGIN IMMEDIATE` 里 `commit_operation`（事件批次 + 终态）
+     →`versions::record_version`→`entries::advance_entry_revision`→意图 `finalized`。
+  ACK 只在事务提交后返回；`pending` 不是 committed。
+- **`WorkTreeTarget` 的替换前提**：`observe(target_path)` 记下实测身份（`RestrictedDir::identity_at`）
+  与 SHA-256；`publish` 用这份实测身份作 `ExpectedTarget::{Present,Absent}`，因此“观察之后目标被外部
+  改写”会在发布前被拒绝；发布走 `platform_linux_server::files::publish`（FICLONE/校验复制 +
+  `renameat2` + 目录刷盘 + 发布后核对）。`ENOSPC`/`EDQUOT` 映射 507 `INSUFFICIENT_STORAGE`，
+  其它存储故障 503 `NEEDS_RECOVERY`。
+- **事件内容（`changes.events_json`）**：固定为对象数组，字段
+  `kind`（`put`/`external`/`move`/`delete`）、`entry_id`、`path`（有路径时）、`revision`、
+  内容变化另带 `version_id`/`hash`/`size`，以及 `origin`（`client`/`external`）；全部计数与摘要都是
+  十进制/十六进制文本。一个 RootSeq = 一条完整批次，客户端整批原子应用。
+- **重试语义**：端点与执行器共用同一份 `request_digest` 判定重放；响应丢失后的重试返回同一
+  `revision`/`root_seq`/`version_id`。结果 JSON 里没有 `root_seq` 时以 `operations.root_seq` 补齐
+  （执行器写结果时批次序号尚未分配）。
+- **失败与稳定拒绝**：任何失败都不返回 committed；失败路径把操作写成 `rejected`（不推进 RootSeq、
+  不产生事件），所以同一 OpId 之后不会被“重做成功”。`ROOT_UNAVAILABLE`/`MAP` 见核心的
+  `OperationFailure` 映射表。
+- **未装配的命令保持 503**：create/move/delete/restore 的存储与工作目录适配器仍未实现，端点继续
+  显式 `503 SERVICE_NOT_READY`，不写状态。
+- **外部采纳（`external::SqlExternalStore`）**：`lookup_path` 用 `entries::entry_by_path`（逐分量按
+  原始名称）+ 当前版本；`apply_external` 在补建缺失父目录后，按 Create/Update（比较并写
+  `expected_revision`）在一个事务里追加批次、幂等登记对象、写版本（`origin=external`）、推进 revision；
+  `apply_external_move` 只改父目录与名称（EntryId 不变）；`apply_external_delete` 推进 revision、软删除、
+  写回收站清单与墓碑（保留历史与对象），三者都不触碰工作目录。
+- **观察运行时（`external::ObserverRuntime`）**：每轮从库里枚举 Root（新注册的下一轮自动纳入），
+  为每个健康 Root 用 `RootHandle + LinuxWorkTree + LinuxObjectPort` 跑一轮
+  `ExternalObserver::run_pass`（周期扫描是 S050 三层兜底的正确性层；**未接 inotify**，只影响时延）。
+  服务端自己的发布通过 `expect_own_write` 登记（设备 + inode + 内容），不会被再采纳成外部修改。
+  运行时用独立线程 + current-thread runtime（端口与 `RootHandle` 不要求 `Send`），优雅停止时先停
+  观察循环再关闭数据库。
+- **新增存储函数**：`entries::entry_by_path(conn, owner, root, path)`、
+  `entries::path_of(conn, owner, entry)`、`entries::advance_entry_revision(tx, owner, entry, expected, next)`
+  （比较并写，变化报 `EntryError::RevisionChanged`）；`RootHandle::root_dir()` 暴露已核对的根目录句柄。
+- **验收入口**：`cargo test -p vaultsyncd-server-tests --test http_loop`（真实监听 + 真实 SQLite +
+  btrfs 工作目录）。满盘用例需要小型专用 btrfs 卷（`tools/test-volume/test-volume.sh create <run> 192M`），
+  用 `VAULTSYNCD_S052_WORK_VOLUME` / `VAULTSYNCD_S052_STATE_VOLUME` 指定卷内可写子目录
+  （准入要求状态目录与 Root 同一 btrfs 文件系统）。
