@@ -278,6 +278,7 @@ pub(crate) async fn register_for_owner(
     owner: UserId,
     body: RootRegisterRequest,
 ) -> Response {
+    let _objects = context.auth.database().object_activity().await;
     let request_id = next_request_id();
     let Some(bases) = context.bases.as_ref() else {
         return rejected(

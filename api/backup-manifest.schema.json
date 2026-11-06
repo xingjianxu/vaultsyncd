@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "vaultsyncd prepared backup manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "state",
+    "backup_id",
+    "server_id",
+    "schema_version",
+    "protocol_contract_version",
+    "protocol_contract_sha256",
+    "product_version",
+    "created_at",
+    "expires_at",
+    "scope",
+    "external_uncollected_writes",
+    "sessions",
+    "roots",
+    "objects",
+    "files",
+    "database_contents"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "state": {
+      "const": "prepared"
+    },
+    "backup_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "server_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "protocol_contract_version": {
+      "type": "string"
+    },
+    "protocol_contract_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "product_version": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "expires_at": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "scope": {
+      "const": "confirmed_logical_state"
+    },
+    "external_uncollected_writes": {
+      "const": "excluded"
+    },
+    "sessions": {
+      "const": "invalidated"
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "root_id",
+          "seq",
+          "original_path",
+          "owner_id",
+          "epoch",
+          "volume_identity",
+          "root_file_identity"
+        ],
+        "properties": {
+          "root_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "seq": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "original_path": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "epoch": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "volume_identity": {
+            "type": "string"
+          },
+          "root_file_identity": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "root_id",
+          "sha256",
+          "size",
+          "storage_path",
+          "archive_path"
+        ],
+        "properties": {
+          "root_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "storage_path": {
+            "type": "string"
+          },
+          "archive_path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256",
+          "size"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          }
+        }
+      }
+    },
+    "database_contents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "users",
+        "roots",
+        "entries",
+        "versions",
+        "trash_entries",
+        "tombstones",
+        "changes",
+        "operations"
+      ],
+      "properties": {
+        "users": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "roots": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "entries": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "versions": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "trash_entries": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "tombstones": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "changes": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "operations": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        }
+      }
+    }
+  }
+}

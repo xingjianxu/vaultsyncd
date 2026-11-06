@@ -29,6 +29,8 @@
 //! 本包不在 workspace `default-members` 中：它只在 Linux 上编译，便携检查不构建它。
 
 #[cfg(target_os = "linux")]
+pub mod backup;
+#[cfg(target_os = "linux")]
 pub mod files;
 #[cfg(target_os = "linux")]
 pub mod ipc;

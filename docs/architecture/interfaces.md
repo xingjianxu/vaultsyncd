@@ -2411,3 +2411,13 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - receipt format1 含component/target、产品版本、完整commit/tree、Cargo/pnpm/Nix/工具链锁与协议源SHA256、实测工具版本、准备/构建命令、逐文件路径/大小/hash。构建前后来源不一致、特殊文件/符号链接或空输出都不签发记录；已有目录不覆盖。
 - `release assemble <new-manifest.json> <artifact-directory>...` 仅组装严格同当前提交且来源/文件集一致的实际组件；拒绝重复component/target。manifest嵌入records和组件目录，`release verify <manifest>` 再核当前HEAD/版本/锁及完整产物hash。后续提交/合并使旧实验记录过期，必须重新构建；未开放未经验证的混合提交组合。
 - 机制不是签名/完全隔离构建，自包含发行布局及Windows安装由S094/S099延伸；完整package命令仍明确Unsupported。验收 `python3 tests/contract/release.py` 用真实Web与desktop-ui构建，包含产品升版后重编生成器而wire不变、旧dist/旧提交/资源/产物修改拒绝及完整还原。说明见 packaging/README.md。
+
+## 一致备份准备与租约（S087）
+
+- `server-core::backup::prepare::{Plan,FrozenRoot,FrozenObject,ready}` 约束清单身份/规范路径与全部ready证据；不做I/O。`server-store::backup::online_backup(source,destination)` 用安全rusqlite Online Backup API，在同一源读取事务取得Root序号/原映射/全部对象/逻辑表计数并导出WAL一致数据库；目标独占创建，清除导出副本会话/临时续传/租约后quick_check、foreign_key_check及fsync，源库不改。
+- `apps/server::backup::prepare(database,config,owner,id,now) -> io::Result<Prepared>` 只能从持服务状态锁的在线进程调用；唯一active owner与每次资源鉴权仍由管理入口保证。函数取共享`object_maintenance`门，完成可恢复意图，未解决pending/intent或collectable对象则明确拒绝。Root注册HTTP/管理socket共用入口现在也取`object_activity`门。禁止另开Database实例绕过该门，也不能在持读门时调用prepare。
+- 0012迁移 `backup_preparations(id,owner_id,phase,created_at,expires_at,snapshot_seq_map,manifest_hash,detail,cleaned_at)`，阶段preparing/ready/failed/releasing/released；ready必须有manifest_hash。`Prepared`含id、只读snapshot路径、固定manifest与其SHA-256；外部格式唯一源 `api/backup-manifest.schema.json`。ready仅表示prepare完成，不代表导出verify通过。
+- `platform-linux-server::backup::Arena::{open,create,freeze,is_read_only,remove,snapshot_path}` 只管理基目录内规范32位ID的prepared/snapshot；拒绝NoCoW/NoDataSum、非btrfs、嵌套子卷/不完整扫描、未知条目及路径逃逸。基目录为state/backups、0700；管理员预置user_subvol_rm_allowed挂载，服务本身不sudo、不挂载或格式化，不需要CAP_SYS_ADMIN。清理ro快照时须调用方先持久failed/releasing，再仅该snapshot清ro后删除。
+- 在恢复GC前安装24小时backup lease，当前按Root保守保护（包含后来新增对象，允许延后回收）。对象复制使用stage_copy（FICLONE/校验复制），复核摘要/大小、独立inode和刷盘；清单列出DB/配置摘要、schema/protocol契约版本/摘要、ServerId、原Root映射、逻辑表计数与全部对象。外部尚未采集的工作目录变化明确excluded。
+- `recover_incomplete(database,state_dir,now)` 在bootstrap独占状态锁后调用，只清持久preparing/failed未收尾ID、释放对应租约并留失败原因；ready不在此清理范围。没有遗留时不要求启用备份后端。S088负责管理命令/HTTP、导出/verify/release，不得绕过当前准备视图或把ready映射为complete。
+- 原生验收入口 `cargo run -p vaultsyncd-server --example backup-prepare-native -- <独立测试卷内尚不存在的run目录>`；测试不在服务中提权。S087独立target四包与集成共609/0，Windows MSVC core/store all-targets检查通过；实际btrfs持续写218次时固定seq2，历史/回收站/哈希/ro/租约、缺对象拒绝、嵌套拒绝、SIGKILL恢复与pending保护均通过。运维条件见 `docs/operations/backup.md`。

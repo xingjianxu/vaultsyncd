@@ -32,6 +32,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod backup;
 pub mod commit;
 pub mod gc;
 pub mod history;

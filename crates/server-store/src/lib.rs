@@ -20,6 +20,7 @@
 //! 已发布的迁移。
 #![forbid(unsafe_code)]
 
+pub mod backup;
 pub mod changes;
 pub mod db;
 pub mod entries;
