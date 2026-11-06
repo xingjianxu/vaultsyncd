@@ -15,7 +15,7 @@ try {
         $ErrorActionPreference='Continue'
         $lines=& $exe $case.filter --exact --test-threads=1 --nocapture 2>&1
         $status=$LASTEXITCODE
-        $ErrorActionPreference='Stop' 
+        $ErrorActionPreference='Stop'
         $text=$lines -join "`n"
         Write-Output $text
         [IO.File]::WriteAllText((Join-Path $PSScriptRoot ($case.file+'.log')),$text,(New-Object Text.UTF8Encoding($false)))
