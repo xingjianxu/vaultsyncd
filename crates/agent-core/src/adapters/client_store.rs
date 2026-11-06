@@ -70,15 +70,24 @@ impl ClientStorePorts {
 impl OperationStore for ClientStorePorts {
     fn pending_ops(&self, binding: BindingId) -> PortFuture<'_, Result<Vec<PendingOp>, PortError>> {
         Box::pin(async move {
+            crate::recovery::resync::ensure_unblocked(&self.database, binding).await?;
             let mut conn = self
                 .database
                 .pool()
                 .acquire()
                 .await
                 .map_err(|error| Self::read_error("取数据库连接", error))?;
-            queue::pending_ops_for_binding(&mut conn, binding)
+            let rows = queue::pending_ops_for_binding(&mut conn, binding)
                 .await
-                .map_err(|error| Self::read_error("读待执行队列", error))
+                .map_err(|error| Self::read_error("读待执行队列", error))?;
+            // 依赖隔离操作的新任务也不能把“调度视图里缺失”解释成“依赖已完成”。
+            let blocked: Vec<Vec<u8>> = sqlx::query_scalar(
+                "WITH RECURSIVE blocked(op_id) AS (SELECT op_id FROM resync_quarantined_ops UNION SELECT p.op_id FROM pending_ops p JOIN blocked b ON p.depends_on = b.op_id) SELECT op_id FROM blocked")
+                .fetch_all(&mut *conn).await.map_err(|error| Self::read_error("读重建隔离队列", error))?;
+            Ok(rows
+                .into_iter()
+                .filter(|row| !blocked.iter().any(|id| id.as_slice() == row.op.as_bytes()))
+                .collect())
         })
     }
 
@@ -107,6 +116,19 @@ impl OperationStore for ClientStorePorts {
 
     fn complete(&self, op: OpId) -> PortFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
+            let mut conn = self
+                .database
+                .pool()
+                .acquire()
+                .await
+                .map_err(|error| Self::read_error("读取操作绑定", error))?;
+            if let Some(row) = queue::pending_op(&mut conn, op)
+                .await
+                .map_err(|error| Self::read_error("读取操作绑定", error))?
+            {
+                crate::recovery::resync::ensure_operation(&self.database, row.binding, op).await?;
+            }
+            drop(conn);
             let mut tx = self
                 .database
                 .begin_write()

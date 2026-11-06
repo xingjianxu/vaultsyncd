@@ -161,6 +161,7 @@ impl ControlledApply {
         progress: &dyn DownloadProgressStore,
         options: &DownloadOptions,
     ) -> Result<ApplyReceipt, PortError> {
+        recovery::resync::ensure_operation(&self.store.database, spec.binding, spec.op).await?;
         store::validate(spec)?;
         if let Some(journal) = self.store.load(spec.op).await? {
             if journal.spec()? != *spec {
@@ -188,6 +189,7 @@ impl ControlledApply {
         &self,
         binding: BindingId,
     ) -> Result<Vec<(OpId, Result<ApplyReceipt, PortError>)>, PortError> {
+        recovery::resync::ensure_unblocked(&self.store.database, binding).await?;
         let journals = self.store.pending(binding).await?;
         let mut results = Vec::with_capacity(journals.len());
         for journal in journals {

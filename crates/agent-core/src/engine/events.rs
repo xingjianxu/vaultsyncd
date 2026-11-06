@@ -300,6 +300,7 @@ where
 
     /// 重启恢复：先处理所有已接收但尚未应用的批次，再由周期拉取接续。
     pub async fn resume_pending(&self) -> Result<ReceiveReport, ReceiveError> {
+        crate::recovery::resync::ensure_unblocked(&self.database, self.binding).await?;
         // 直接调用恢复入口也不能绕过首次导入围栏。
         let importing: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM binding_imports WHERE binding_id = ? AND complete = 0",

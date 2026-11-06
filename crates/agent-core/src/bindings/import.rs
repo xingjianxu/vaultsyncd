@@ -171,6 +171,7 @@ impl FirstImport {
         ids: &mut (impl IdSource + Send),
         max_items: usize,
     ) -> Result<ImportReport, PortError> {
+        self.store.ensure_not_resyncing(binding_id).await?;
         let binding = self.store.binding(binding_id).await?;
         if binding.mode == SyncMode::OnDemand && !self.ports.local.capabilities().on_demand_read {
             return Err(invalid("当前平台不支持按需模式"));

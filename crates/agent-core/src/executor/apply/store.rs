@@ -142,7 +142,7 @@ impl Journal {
 }
 
 pub(super) struct ApplyStore {
-    database: Arc<Database>,
+    pub(super) database: Arc<Database>,
 }
 impl ApplyStore {
     pub fn new(database: Arc<Database>) -> Self {

@@ -620,7 +620,11 @@ mod tests {
                 include_str!("../migrations/0005_controlled_apply.sql"),
             ),
             (
-                "0006_probe.sql",
+                "0006_resync.sql",
+                include_str!("../migrations/0006_resync.sql"),
+            ),
+            (
+                "0007_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]))
@@ -661,20 +665,20 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(target_schema_version(), 5, "内嵌迁移应当到 0005");
+        assert_eq!(target_schema_version(), 6, "内嵌迁移应当到 0006");
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             CLIENT_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
         assert_eq!(
             scalar::<i64>(
                 &path,
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            5
+            6
         );
         // 客户端状态表包含上传续传及首次绑定日志，不含服务端表。
         let tables: Vec<(String,)> = {
@@ -698,6 +702,7 @@ mod tests {
             vec![
                 "baseline_entries".to_owned(),
                 "binding_imports".to_owned(),
+                "binding_resyncs".to_owned(),
                 "bindings".to_owned(),
                 "controlled_applies".to_owned(),
                 "import_id_map".to_owned(),
@@ -707,21 +712,22 @@ mod tests {
                 "pending_ops".to_owned(),
                 "received_changes".to_owned(),
                 "remote_entries".to_owned(),
+                "resync_quarantined_ops".to_owned(),
                 "transfers".to_owned(),
                 "upload_resumes".to_owned(),
             ]
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
-            !migration_backup_path(&path, 0, 5).exists(),
+            !migration_backup_path(&path, 0, 6).exists(),
             "空库迁移不应产生备份"
         );
 
         // 再次打开是幂等的：不迁移、不新增备份。
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 5);
-        assert!(!migration_backup_path(&path, 5, 5).exists());
+        assert_eq!(reopened.schema_version(), 6);
+        assert!(!migration_backup_path(&path, 6, 6).exists());
         reopened.close().await;
     }
 
@@ -922,9 +928,9 @@ mod tests {
         let binding = crate::test_support::seed_binding(&old, 0x21).await;
         old.close().await;
 
-        // 本二进制打开旧库：真实执行 0002—0005，保留旧数据与受控应用上下文。
+        // 本二进制打开旧库：真实执行 0002—0006，保留旧数据与恢复上下文。
         let upgraded = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(upgraded.schema_version(), 5);
+        assert_eq!(upgraded.schema_version(), 6);
         let mut conn = upgraded.pool().acquire().await.expect("取连接");
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN \
@@ -955,9 +961,9 @@ mod tests {
         drop(conn);
         upgraded.close().await;
 
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
         // 迁移前备份存在，且内容是**迁移前**的状态：没有新表。
-        let backup = migration_backup_path(&path, 1, 5);
+        let backup = migration_backup_path(&path, 1, 6);
         assert!(backup.exists(), "升级前应有一致性备份");
         for table in [
             "received_changes",
@@ -979,7 +985,7 @@ mod tests {
 
         // 再打开一次：版本已到目标，不重复迁移、不覆盖已有备份。
         let again = Database::open(&path).await.expect("重新打开");
-        assert_eq!(again.schema_version(), 5);
+        assert_eq!(again.schema_version(), 6);
         again.close().await;
     }
 
@@ -1027,8 +1033,8 @@ mod tests {
         .expect("旧版续传");
         tx.commit().await.expect("提交");
         old.close().await;
-        let upgraded = Database::open(&path).await.expect("升级 0005");
-        assert_eq!(upgraded.schema_version(), 5);
+        let upgraded = Database::open(&path).await.expect("升级 0006");
+        assert_eq!(upgraded.schema_version(), 6);
         let mut conn = upgraded.pool().acquire().await.expect("连接");
         let resume = crate::upload_resumes::load(&mut conn, op)
             .await
@@ -1049,7 +1055,7 @@ mod tests {
         drop(conn);
         upgraded.close().await;
         assert!(
-            migration_backup_path(&path, 3, 5).exists(),
+            migration_backup_path(&path, 3, 6).exists(),
             "升级前一致性备份"
         );
     }
@@ -1099,8 +1105,8 @@ mod tests {
             .unwrap();
         tx.commit().await.unwrap();
         old.close().await;
-        let upgraded = Database::open(&path).await.expect("升级 0005");
-        assert_eq!(upgraded.schema_version(), 5);
+        let upgraded = Database::open(&path).await.expect("升级 0006");
+        assert_eq!(upgraded.schema_version(), 6);
         let mut conn = upgraded.pool().acquire().await.unwrap();
         assert_eq!(
             crate::intents::intent(&mut conn, intent.id).await.unwrap(),
@@ -1124,7 +1130,7 @@ mod tests {
         assert_eq!(count, 0, "旧意图不能被猜成受控应用完成或自动重放");
         drop(conn);
         upgraded.close().await;
-        let backup = migration_backup_path(&path, 4, 5);
+        let backup = migration_backup_path(&path, 4, 6);
         assert!(backup.exists());
         assert_eq!(
             scalar::<i64>(&backup, "SELECT count(*) FROM local_intents").await,
@@ -1157,13 +1163,13 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 6,
-                    supported: 5
+                    found: 7,
+                    supported: 6
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 7);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM probe").await,
             1,
