@@ -28,7 +28,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
-use vaultsyncd_domain::ids::{EntryId, IdSource, RootId};
+use vaultsyncd_domain::ids::{EntryId, IdSource, RootId, UserId};
 use vaultsyncd_domain::version::ServerEpoch;
 use vaultsyncd_platform_linux_server::files::restricted::ResolveMode;
 use vaultsyncd_platform_linux_server::files::root::{RootHandle, RootSnapshot};
@@ -82,14 +82,27 @@ pub async fn list_roots(State(context): State<Arc<RootContext>>, headers: Header
         Ok(principal) => principal,
         Err(response) => return response,
     };
+    list_for_owner(context, principal.user_id, None).await
+}
+
+/// HTTP 和已验证 UID 的本机管理共用同一 Root 清单用例。
+pub(crate) async fn list_for_owner(
+    context: Arc<RootContext>,
+    owner: UserId,
+    page: Option<u32>,
+) -> Response {
     let mut conn = match context.auth.database().pool().acquire().await {
         Ok(conn) => conn,
         Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
     };
-    let records = match store_roots::roots_of_owner(&mut conn, principal.user_id).await {
+    let records = match match page {
+        Some(page) => store_roots::roots_of_owner_page(&mut conn, owner, page).await,
+        None => store_roots::roots_of_owner(&mut conn, owner).await,
+    } {
         Ok(records) => records,
         Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
     };
+    let has_more = page.is_some() && records.len() > 100;
     let mut roots: Vec<RootSummary> = records
         .into_iter()
         .map(|record| RootSummary {
@@ -100,6 +113,10 @@ pub async fn list_roots(State(context): State<Arc<RootContext>>, headers: Header
     // 按身份排序：库里的 `ORDER BY absolute_path` 是为运维可读，对外换成身份顺序，避免清单
     // 顺序泄露路径相对位置。
     roots.sort_by(|left, right| left.root_id.cmp(&right.root_id));
+    if let Some(page) = page {
+        roots.truncate(100);
+        return (StatusCode::OK, Json(serde_json::json!({"roots": roots, "next_page": if has_more { Some(page + 1) } else { None }}))).into_response();
+    }
     (StatusCode::OK, Json(RootList { roots })).into_response()
 }
 
@@ -109,11 +126,20 @@ pub async fn register_root(
     headers: HeaderMap,
     Json(body): Json<RootRegisterRequest>,
 ) -> Response {
-    let request_id = next_request_id();
     let principal = match auth::principal_from(&context.auth, &headers).await {
         Ok(principal) => principal,
         Err(response) => return response,
     };
+    register_for_owner(context, principal.user_id, body).await
+}
+
+/// HTTP 与本机管理共用准入探测和 Root 注册事务，不绕过存储校验。
+pub(crate) async fn register_for_owner(
+    context: Arc<RootContext>,
+    owner: UserId,
+    body: RootRegisterRequest,
+) -> Response {
+    let request_id = next_request_id();
     let Some(bases) = context.bases.as_ref() else {
         return rejected(
             &request_id,
@@ -136,7 +162,7 @@ pub async fn register_root(
         Ok(conn) => conn,
         Err(error) => return storage_failure(&request_id, &error.to_string()),
     };
-    let registered = match store_roots::roots_of_owner(&mut conn, principal.user_id).await {
+    let registered = match store_roots::roots_of_owner(&mut conn, owner).await {
         Ok(records) => records
             .into_iter()
             .map(|record| PathBuf::from(record.absolute_path))
@@ -169,7 +195,7 @@ pub async fn register_root(
         RegistrationVerdict::Rejected(rejection) => {
             info!(
                 request_id = %request_id,
-                user_id = %principal.user_id,
+                user_id = %owner,
                 reason = rejection.reason(),
                 "Root 注册被拒绝"
             );
@@ -182,7 +208,7 @@ pub async fn register_root(
     let new = NewRoot {
         id: RootId::from_bytes(ids.next_id_bytes()),
         entry: EntryId::from_bytes(ids.next_id_bytes()),
-        owner: principal.user_id,
+        owner,
         absolute_path: absolute_path.clone(),
         volume_identity,
         root_file_identity: root_identity,
@@ -208,7 +234,7 @@ pub async fn register_root(
     }
     info!(
         request_id = %request_id,
-        user_id = %principal.user_id,
+        user_id = %owner,
         root_id = %record.id,
         path = %absolute_path,
         "Root 已注册（既有文件未改动，待初始采集）"

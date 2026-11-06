@@ -29,3 +29,4 @@ all = { level = "deny", priority = -1 }
 vaultsyncd-server-core = { path = "../server-core" }
 
 [dependencies]
+tokio = { version = "1", features = ["net", "io-util", "macros", "rt"] }

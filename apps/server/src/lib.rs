@@ -14,6 +14,7 @@ compile_error!(
      不要在 Windows/macOS 目标上编译 apps/server"
 );
 
+mod admin;
 pub mod auth;
 pub mod bootstrap;
 pub mod commands;

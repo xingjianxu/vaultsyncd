@@ -45,6 +45,8 @@ pub enum StartupError {
     Recovery(RecoveryAssessmentError),
     /// 持久恢复上下文无法读取，拒绝开放服务。
     Replay(String),
+    /// 受限本机管理 socket 无法安全绑定。
+    Admin(io::Error),
     /// 监听地址绑定失败（端口被占用、权限不足等）。
     Bind {
         /// 配置里的监听地址。
@@ -61,6 +63,7 @@ impl fmt::Display for StartupError {
             StartupError::Database(error) => write!(f, "打开服务端数据库失败：{error}"),
             StartupError::Recovery(error) => write!(f, "{error}"),
             StartupError::Replay(error) => write!(f, "启动恢复无法读取证据：{error}"),
+            StartupError::Admin(error) => write!(f, "本机管理 socket 绑定失败：{error}"),
             StartupError::Bind { addr, source } => {
                 write!(f, "绑定监听地址 {addr} 失败：{source}")
             }
@@ -101,6 +104,7 @@ pub struct Service {
     _state_lock: StateLock,
     lifecycle: Arc<Lifecycle>,
     listener: TcpListener,
+    admin_socket: vaultsyncd_platform_linux_server::ipc::AdminSocket,
     assessment: RecoveryAssessment,
 }
 
@@ -144,6 +148,7 @@ impl Service {
             _state_lock,
             lifecycle,
             listener,
+            admin_socket,
             assessment,
         } = self;
 
@@ -206,6 +211,21 @@ impl Service {
             Arc::clone(&auth),
             Arc::clone(&lifecycle),
         ));
+        let admin_context = Arc::new(crate::admin::AdminContext {
+            database: database.clone(),
+            roots: Arc::clone(&roots),
+            lifecycle: Arc::clone(&lifecycle),
+        });
+        let (stop_admin, admin_stopped) = tokio::sync::watch::channel(false);
+        let admin_failed = Arc::new(tokio::sync::Notify::new());
+        let notify_failed = Arc::clone(&admin_failed);
+        let admin_task = tokio::spawn(async move {
+            let result = crate::admin::serve(admin_socket, admin_context, admin_stopped).await;
+            if result.is_err() {
+                notify_failed.notify_one();
+            }
+            result
+        });
         let router = http::router(
             Arc::clone(&lifecycle),
             auth,
@@ -237,8 +257,12 @@ impl Service {
         };
         let draining = Arc::clone(&lifecycle);
         let graceful = async move {
-            shutdown.await;
+            tokio::select! {
+                _ = shutdown => {},
+                _ = admin_failed.notified() => {},
+            }
             draining.begin_shutdown();
+            let _ = stop_admin.send(true);
             info!(
                 phase = Phase::Draining.as_str(),
                 "收到停止信号：停止接受新的提交，等待进行中的请求结束"
@@ -248,6 +272,11 @@ impl Service {
         let serve_result = axum::serve(listener, router)
             .with_graceful_shutdown(graceful)
             .await;
+
+        let admin_result = admin_task
+            .await
+            .map_err(io::Error::other)
+            .and_then(|result| result);
 
         // 观察循环在关闭数据库之前停下：它的每一轮都在自己的短事务里提交/回滚。
         stop_observer.notify_one();
@@ -268,7 +297,7 @@ impl Service {
         database.close().await;
         info!(phase = "stopped", "服务端已停止");
 
-        serve_result.map_err(RunError::Serve)
+        serve_result.and(admin_result).map_err(RunError::Serve)
     }
 }
 
@@ -324,12 +353,16 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         }
     })?;
 
+    let admin_socket = vaultsyncd_platform_linux_server::ipc::AdminSocket::bind(&config.state_dir)
+        .map_err(StartupError::Admin)?;
+
     Ok(Service {
         config,
         database,
         _state_lock: state_lock,
         lifecycle,
         listener,
+        admin_socket,
         assessment,
     })
 }
