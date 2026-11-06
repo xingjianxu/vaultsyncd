@@ -92,6 +92,7 @@ pub async fn finalize(
     UrlPath((root, upload)): UrlPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    let _objects = context.auth.database().object_activity().await;
     let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
@@ -147,6 +148,7 @@ pub async fn download(
     UrlPath((root, entry, version)): UrlPath<(String, String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    let _objects = context.auth.database().object_activity().await;
     let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,

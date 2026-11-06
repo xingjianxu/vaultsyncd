@@ -321,6 +321,12 @@ pub async fn record_object(
     let size = db_size(new.size)?;
 
     if let Some(existing) = object_facts(tx, new.root, &new.hash).await? {
+        if existing.gc_state != "live" {
+            return Err(VersionError::ObjectConflict {
+                hash: new.hash,
+                reason: "对象已授权 GC 删除",
+            });
+        }
         if existing.size != new.size {
             return Err(VersionError::ObjectConflict {
                 hash: new.hash,
@@ -581,6 +587,7 @@ impl VersionRow {
 struct ObjectFacts {
     size: u64,
     storage_path: String,
+    gc_state: String,
 }
 
 /// 读已登记对象的长度与路径；未登记返回 `None`。
@@ -589,17 +596,19 @@ async fn object_facts(
     root: RootId,
     hash: &ObjectHash,
 ) -> Result<Option<ObjectFacts>, VersionError> {
-    let row: Option<(i64, String)> =
-        sqlx::query_as("SELECT size, storage_path FROM objects WHERE root_id = ?1 AND hash = ?2")
-            .bind(root.as_bytes().as_slice())
-            .bind(hash.as_slice())
-            .fetch_optional(conn)
-            .await
-            .map_err(VersionError::Db)?;
-    row.map(|(size, storage_path)| {
+    let row: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT size, storage_path, gc_state FROM objects WHERE root_id = ?1 AND hash = ?2",
+    )
+    .bind(root.as_bytes().as_slice())
+    .bind(hash.as_slice())
+    .fetch_optional(conn)
+    .await
+    .map_err(VersionError::Db)?;
+    row.map(|(size, storage_path, gc_state)| {
         Ok(ObjectFacts {
             size: size_of(size, "size")?,
             storage_path,
+            gc_state,
         })
     })
     .transpose()

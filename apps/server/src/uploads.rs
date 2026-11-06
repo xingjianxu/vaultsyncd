@@ -124,6 +124,7 @@ pub async fn begin(
     headers: HeaderMap,
     Json(body): Json<UploadRequest>,
 ) -> Response {
+    let _objects = context.auth.database().object_activity().await;
     let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
@@ -197,6 +198,7 @@ pub async fn status(
     UrlPath((root, upload)): UrlPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    let _objects = context.auth.database().object_activity().await;
     let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
@@ -278,6 +280,7 @@ pub async fn put_part(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    let _objects = context.auth.database().object_activity().await;
     let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
         Ok(resolved) => resolved,
         Err(response) => return response,

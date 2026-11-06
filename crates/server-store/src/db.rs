@@ -82,6 +82,7 @@ pub struct Database {
     pool: SqlitePool,
     path: PathBuf,
     schema_version: i64,
+    objects: std::sync::Arc<tokio::sync::RwLock<()>>,
 }
 
 impl Database {
@@ -161,6 +162,7 @@ impl Database {
             pool,
             path,
             schema_version: target,
+            objects: std::sync::Arc::new(tokio::sync::RwLock::new(())),
         })
     }
 
@@ -177,6 +179,18 @@ impl Database {
     /// 连接池：只读查询直接借用；任何写操作必须走 [`Database::begin_write`]。
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// 对象发布、恢复、下载及采集的共同读门。克隆数据库句柄共享同一门。
+    /// 必须在 Root 提交锁、roots 锁与任何 SQLite 事务之前获取；禁止嵌套获取。
+    pub async fn object_activity(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
+        self.objects.read().await
+    }
+
+    /// GC/备份的对象独占协调门。仅隔离本服务动作，不代替文件/数据库持久证据。
+    /// 持有它时可依次开短事务、执行文件动作，不能跨文件 I/O 持有 SQLite 写事务。
+    pub async fn object_maintenance(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.objects.write().await
     }
 
     /// 短写事务：`BEGIN IMMEDIATE` 先拿写锁（避免“读事务升级写锁”时的 `SQLITE_BUSY`），
@@ -683,13 +697,17 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(target_schema_version(), 10, "内嵌迁移应当是 0001—0010 十版");
+        assert_eq!(
+            target_schema_version(),
+            11,
+            "内嵌迁移应当是 0001—0011 十一版"
+        );
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 10);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 11);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -700,7 +718,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            10
+            11
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -712,7 +730,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 10);
+        assert_eq!(reopened.schema_version(), 11);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1136,7 +1154,7 @@ mod tests {
                 error,
                 DbError::SchemaTooNew {
                     found: 20,
-                    supported: 10
+                    supported: 11
                 }
             ),
             "实际错误 {error:?}"
@@ -1239,7 +1257,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn v9_upgrade_keeps_data_backs_up_and_old_binary_refuses_v10() {
+    async fn v9_upgrade_keeps_data_backs_up_and_old_binary_refuses_current() {
         let dir = TestDir::new("s069-v9-v10");
         let path = dir.database();
         let migrations = dir.migrations(&[
@@ -1286,13 +1304,13 @@ mod tests {
         insert_metadata(&old, "server_id", "preserved").await;
         old.close().await;
         let upgraded = Database::open(&path).await.unwrap();
-        assert_eq!(upgraded.schema_version(), 10);
+        assert_eq!(upgraded.schema_version(), 11);
         upgraded.close().await;
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "preserved".to_owned())]
         );
-        let backup = migration_backup_path(&path, 9, 10);
+        let backup = migration_backup_path(&path, 9, 11);
         assert!(backup.exists());
         assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 9);
         assert_eq!(
@@ -1306,8 +1324,49 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 10,
+                found: 11,
                 supported: 9
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn v10_gc_upgrade_has_a_consistent_backup_and_old_program_refuses_writes() {
+        let dir = TestDir::new("s086-v10-v11");
+        let path = dir.database();
+        let previous = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|m| m.version <= 10)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        assert_eq!(old.schema_version(), 10);
+        insert_metadata(&old, "server_id", "s086-preserved").await;
+        old.close().await;
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(upgraded.schema_version(), 11);
+        upgraded.close().await;
+        let backup = migration_backup_path(&path, 10, 11);
+        assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 10);
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name='gc_candidates'"
+            )
+            .await,
+            0
+        );
+        assert_eq!(metadata(&backup).await, metadata(&path).await);
+        assert!(matches!(
+            Database::open_with(&path, &previous).await.unwrap_err(),
+            DbError::SchemaTooNew {
+                found: 11,
+                supported: 10
             }
         ));
     }

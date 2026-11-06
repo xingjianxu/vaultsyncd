@@ -12,6 +12,7 @@ publish.workspace = true
 # 也不依赖 devShell 里的 nixpkgs sqlite 版本；`macros` 只为 `sqlx::migrate!` 编译期内嵌
 # migrations/ 目录，不使用 `query!`（因此不需要 DATABASE_URL 或 SQLX_OFFLINE）。
 [dependencies]
+tokio = { version = "1", features = ["sync"] }
 # 身份、计数与 UTC 时间只在 crates/domain 定义（design §5.4、§7.1），本 crate 直接用它的类型，
 # 不另造一套 id/seq 表示；名称的跨平台可表示性判定属 crates/fs-common 的纯规则（design §16.1），
 # 条目名称在写库前用它校验，避免把不可跨端表示的名称存进服务端命名空间。

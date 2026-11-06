@@ -565,6 +565,7 @@ impl ObserverRuntime {
     ///
     /// 返回本轮 Root 数与采纳/失败的统计，便于日志与验收断言。
     pub async fn run_once(&self) -> PassSummary {
+        let _objects = self.database.object_activity().await;
         let roots = {
             let mut conn = match self.database.pool().acquire().await {
                 Ok(conn) => conn,
@@ -702,6 +703,24 @@ impl ObserverRuntime {
         );
         loop {
             let summary = self.run_once().await;
+            // run_once 的对象读门已释放；维护必须先拿独占门再开短事务，不能嵌套升级锁。
+            match crate::executor::server_now() {
+                Ok(now) => match crate::gc::run_once(&self.database, &self.state_dir, now).await {
+                    Ok(report)
+                        if report.objects > 0 || report.parts > 0 || report.temporary_files > 0 =>
+                    {
+                        info!(
+                            objects = report.objects,
+                            parts = report.parts,
+                            temporary_files = report.temporary_files,
+                            "GC 清理完成"
+                        )
+                    }
+                    Ok(_) => {}
+                    Err(error) => warn!(error=%error,"GC 未完成；保留持久证据，下轮重试"),
+                },
+                Err(error) => warn!(error=%error,"时钟无效，跳过 GC"),
+            }
             if summary.roots > 0 {
                 debug!(
                     roots = summary.roots,

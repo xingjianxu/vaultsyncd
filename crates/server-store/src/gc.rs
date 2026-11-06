@@ -6,6 +6,8 @@ use vaultsyncd_domain::{
 };
 use vaultsyncd_server_core::gc::mark::{ObjectKey, Reason, Reference, retained_until};
 
+pub mod sweep;
+
 /// 引用枚举失败，失败时不得开始回收。
 #[derive(Debug)]
 pub enum Error {
