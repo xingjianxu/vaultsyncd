@@ -38,3 +38,6 @@ pub mod ipc;
 pub mod mounts;
 #[cfg(target_os = "linux")]
 pub mod watcher;
+
+#[cfg(target_os = "linux")]
+pub mod restore;

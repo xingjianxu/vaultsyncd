@@ -351,6 +351,8 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         error!(error = %error, state_dir = %config.state_dir.display(), "状态目录不可独占，拒绝启动");
         StartupError::StateLock(error)
     })?;
+    vaultsyncd_server_store::state_lock::ensure_restore_complete(&config.state_dir)
+        .map_err(|error| StartupError::Replay(error.to_string()))?;
     info!(
         lock = %state_lock.path().display(),
         "已独占状态目录"

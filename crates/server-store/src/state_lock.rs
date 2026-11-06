@@ -21,6 +21,18 @@ use std::path::{Path, PathBuf};
 
 /// 状态目录里的锁文件名。
 pub const LOCK_FILE_NAME: &str = "server.lock";
+/// 离线恢复尚未整体校验完成；存在时任何普通服务/初始化入口必须保持关闭。
+pub const RESTORE_INCOMPLETE: &str = "restore.incomplete";
+/// 持状态锁后、打开数据库之前检查，不能把半恢复文件作为新实例开放。
+pub fn ensure_restore_complete(state_dir: &Path) -> io::Result<()> {
+    match std::fs::symlink_metadata(state_dir.join(RESTORE_INCOMPLETE)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => Err(io::Error::other(
+            "offline restore is incomplete; preserve evidence and restore into new empty targets",
+        )),
+    }
+}
 
 /// 一份被持有的状态目录锁；`Drop` 时释放。
 ///
@@ -52,6 +64,12 @@ impl StateLock {
                 path: path.clone(),
                 source,
             })?;
+        Self::try_acquire_file(file, path)
+    }
+
+    /// 由平台安全目录能力打开同一个锁文件，避免恢复入口跟随不可信符号链接。
+    /// 文件须为该state目录中的server.lock；锁语义与常规入口完全相同。
+    pub fn try_acquire_file(file: File, path: PathBuf) -> Result<Self, StateLockError> {
         // 必须用 trait 的全路径：Rust 1.89 起 `File` 自己也有 `try_lock`/`unlock`，方法解析会选到标准库
         // 那个（超出 workspace 的 MSRV 1.85）。
         match fs2::FileExt::try_lock_exclusive(&file) {

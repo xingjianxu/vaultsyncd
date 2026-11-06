@@ -294,6 +294,8 @@ pub(crate) struct StatFsFacts {
     pub f_type: i64,
     /// `statfs` 自己的文件系统标识（只作辅助证据，btrfs 上随子卷变化）。
     pub statfs_fsid: [i32; 2],
+    /// 非特权调用者可用字节（饱和计算）。
+    pub available_bytes: u64,
 }
 
 /// 一次 `statx(AT_EMPTY_PATH)` 结果中本 crate 使用的字段。
@@ -346,6 +348,7 @@ pub(crate) fn statfs_of_fd(fd: RawFd) -> io::Result<StatFsFacts> {
     Ok(StatFsFacts {
         f_type: buf.f_type,
         statfs_fsid: buf.f_fsid,
+        available_bytes: buf.f_bavail.saturating_mul(buf.f_bsize.max(0) as u64),
     })
 }
 
