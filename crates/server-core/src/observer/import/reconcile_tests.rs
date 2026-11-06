@@ -461,6 +461,39 @@ async fn a_stale_revision_holds_the_move_instead_of_forcing_it() {
 }
 
 #[tokio::test]
+async fn swapped_identical_files_are_held_instead_of_rebinding_entries() {
+    let mut h = Harness::new(default_limits());
+    h.fs.borrow_mut().write("left.txt", b"same bytes");
+    h.fs.borrow_mut().write("right.txt", b"same bytes");
+    h.settle().await;
+    let left_entry = h.store.entry_of("left.txt").expect("已采纳");
+    let right_entry = h.store.entry_of("right.txt").expect("已采纳");
+    let versions_before = h.store.versions.len();
+
+    // 互换名字：两条路径都还在，但里面的文件对象换了位置。
+    h.fs.borrow_mut().rename("left.txt", ".swap");
+    h.fs.borrow_mut().rename("right.txt", "left.txt");
+    h.fs.borrow_mut().rename(".swap", "right.txt");
+    let report = h.pass(0).await;
+
+    assert!(report.reconcile.moves.is_empty(), "互换不能用单向移动表达");
+    assert!(report.reconcile.deletions.is_empty(), "互换不是删除");
+    assert_eq!(report.reconcile.held.len(), 2);
+    assert!(
+        report
+            .reconcile
+            .held
+            .iter()
+            .all(|held| held.code == "identity_swap_needs_review")
+    );
+    // 不按路径重绑：两边条目身份都没有被改写到对方的文件上。
+    assert_eq!(h.store.entry_of("left.txt"), Some(left_entry));
+    assert_eq!(h.store.entry_of("right.txt"), Some(right_entry));
+    assert_eq!(h.store.versions.len(), versions_before);
+    assert_eq!(h.store.writes.len(), 2, "没有重新采集内容");
+}
+
+#[tokio::test]
 async fn busy_root_defers_reconciliation_to_the_next_round() {
     let mut h = Harness::new(default_limits());
     h.fs.borrow_mut().write("a.txt", b"1");

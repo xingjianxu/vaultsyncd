@@ -17,7 +17,8 @@ use vaultsyncd_server_core::observer::{
     PassReport, PendingReason, ScanLimits, StabilityWindow,
 };
 use vaultsyncd_server_core::ports::external_store::{
-    AdoptKind, ExternalAdoptStore, ExternalRecord, ExternalStoreError, ExternalWrite, KnownEntry,
+    AdoptKind, ExternalAdoptStore, ExternalDelete, ExternalDeleteRecord, ExternalMove,
+    ExternalMoveRecord, ExternalRecord, ExternalStoreError, ExternalWrite, KnownEntry,
 };
 use vaultsyncd_server_core::ports::object_store::CopyMethod;
 use vaultsyncd_server_core::ports::put_store::EntryKind;
@@ -98,6 +99,64 @@ impl ExternalAdoptStore for MemStore {
             tx: TxId::from_bytes(marker_id(700 + self.counter)),
             digest: write.content.digest,
             size: write.content.bytes,
+        })
+    }
+
+    async fn apply_external_move(
+        &mut self,
+        request: &ExternalMove,
+    ) -> Result<ExternalMoveRecord, ExternalStoreError> {
+        let Some(stored) = self.entries.remove(&request.from) else {
+            return Err(ExternalStoreError::Rejected {
+                code: "unknown_path",
+                detail: format!("{} 不在库里", request.from),
+            });
+        };
+        if stored.entry != request.entry || stored.revision != request.expected_revision {
+            self.entries.insert(request.from.clone(), stored);
+            return Err(ExternalStoreError::RevisionChanged {
+                expected: request.expected_revision,
+                actual: request.expected_revision,
+            });
+        }
+        self.counter += 1;
+        let revision = stored.revision.next().expect("可推进");
+        self.entries
+            .insert(request.to.clone(), StoredEntry { revision, ..stored });
+        self.events.push(request.to.clone());
+        Ok(ExternalMoveRecord {
+            entry: request.entry,
+            revision,
+            seq: RootSeq::new(self.counter).expect("合法"),
+            tx: TxId::from_bytes(marker_id(700 + self.counter)),
+        })
+    }
+
+    async fn apply_external_delete(
+        &mut self,
+        request: &ExternalDelete,
+    ) -> Result<ExternalDeleteRecord, ExternalStoreError> {
+        let Some(stored) = self.entries.remove(&request.path) else {
+            return Err(ExternalStoreError::Rejected {
+                code: "unknown_path",
+                detail: format!("{} 不在库里", request.path),
+            });
+        };
+        if stored.entry != request.entry || stored.revision != request.expected_revision {
+            self.entries.insert(request.path.clone(), stored);
+            return Err(ExternalStoreError::RevisionChanged {
+                expected: request.expected_revision,
+                actual: request.expected_revision,
+            });
+        }
+        self.counter += 1;
+        let revision = stored.revision.next().expect("可推进");
+        self.events.push(request.path.clone());
+        Ok(ExternalDeleteRecord {
+            entry: request.entry,
+            revision,
+            seq: RootSeq::new(self.counter).expect("合法"),
+            tx: TxId::from_bytes(marker_id(700 + self.counter)),
         })
     }
 }

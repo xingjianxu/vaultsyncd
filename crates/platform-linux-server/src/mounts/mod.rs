@@ -10,6 +10,7 @@
 //!   mount，只看 inode 会混淆子卷）。
 //! - [`probe`]：打开目录句柄、读内核事实、遍历根目录，只读 I/O。
 //! - [`admission`]：准入判定与身份比较，纯逻辑。
+//! - [`health`]：运行期挂载健康复核（卷身份、根目录身份、子挂载、权限），只读 I/O。
 //! - [`content`]：稀疏与占位的边界（稀疏不是占位证据），纯逻辑。
 //!
 //! 一次服务的典型调用顺序是 [`probe::probe_path`] → [`probe::scan_root`] →
@@ -18,6 +19,7 @@
 
 pub mod admission;
 pub mod content;
+pub mod health;
 pub mod mountinfo;
 pub mod overlap;
 pub mod paths;
@@ -28,6 +30,7 @@ pub use admission::{
     AdmissionDecision, AdmissionInput, AdmissionOutcome, AdmissionRejection, BackendKind,
     InconclusiveReason, StorageIdentity, classify_backend, evaluate, has_nocow_flag, same_storage,
 };
+pub use health::{MountChange, MountHealth, submounts_under, verify_root_mount};
 pub use mountinfo::{DeviceId, MountEntry};
 pub use overlap::{DirectoryRecord, DirectoryRole, Overlap, OverlapKind, find_overlaps};
 pub use probe::{ScanPolicy, ScanReport, StorageFacts, probe_path, scan_root};

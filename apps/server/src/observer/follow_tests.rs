@@ -14,8 +14,8 @@ use vaultsyncd_server_core::commit::put::RootCommitGate;
 use vaultsyncd_server_core::objects::{ExpectedContent, ObjectLayout};
 use vaultsyncd_server_core::observer::{
     ExternalObserver, FollowConfig, FollowDriver, FullScanCause, HintLimits, InconclusiveReason,
-    ObserverPorts, OwnWriteIntent, PassClock, PassLimits, ScanLimits, StabilityWindow, StepReport,
-    WatchHint,
+    ObserverPorts, OwnWriteIntent, PassClock, PassLimits, ScanHealth, ScanLimits, StabilityWindow,
+    StepReport, WatchHint,
 };
 use vaultsyncd_server_core::ports::work_tree::{WorkObservation, WorkTreePort};
 
@@ -408,4 +408,119 @@ async fn watcher_signals_convert_one_to_one_into_core_hints() {
         }),
         WatchHint::Gap { path, detail } if path == "d" && detail.starts_with("watch_limit")
     ));
+}
+
+/// S051 验收 1：卸载后路径下露出空目录 = Root 不可用，零删除事件。
+///
+/// 用真实目录模拟卸载的后果：内核在 `umount` 之后让路径露出挂载点下面的目录（通常是空目录，
+/// 与挂载时的目录不是同一个 inode）。这里把 Root 目录改名再在原路径建一个空目录，观察到的现场
+/// 与卸载后一致；Root 句柄仍指向原来的目录。
+#[tokio::test]
+async fn unmount_leaving_an_empty_directory_makes_the_root_unavailable_with_zero_deletions() {
+    let lab = Lab::new("f-unmount");
+    lab.write("a.txt", b"alpha");
+    lab.write("b.txt", b"beta");
+    let mut env = FollowEnv::new(&lab);
+    env.start().await;
+    assert_eq!(env.versions_of("a.txt").len(), 1);
+    assert_eq!(env.versions_of("b.txt").len(), 1);
+    let versions_before = env.store.versions.len();
+    let events_before = env.store.events.len();
+
+    // 卸载：Root 路径下露出另一个（空）目录。
+    let moved = lab.root_dir.with_extension("unmounted");
+    fs::rename(&lab.root_dir, &moved).expect("把原 Root 目录移走");
+    fs::create_dir(&lab.root_dir).expect("在原路径留下空目录");
+
+    // 没有事件可依赖：周期元数据补扫是触发点（真实卸载同样不产生 Root 内的事件）。
+    let report = env.step(METADATA_MS).await;
+    let pass = report
+        .full_scan
+        .as_ref()
+        .map(|run| &run.report)
+        .expect("周期补扫必须发生");
+    assert!(pass.root_unavailable, "露出空目录必须是 Root 不可用");
+    assert!(matches!(
+        pass.reconcile.health,
+        ScanHealth::MountChanged { .. }
+    ));
+    assert!(!pass.reconcile.ran, "不可用时不核对缺失");
+    assert!(pass.reconcile.deletions.is_empty());
+    assert_eq!(env.store.events.len(), events_before, "零删除事件");
+    assert_eq!(env.store.versions.len(), versions_before, "零新版本");
+
+    // 恢复挂载（把原目录放回原路径）：文件仍是同一身份，不产生删除，也不产生新版本。
+    fs::remove_dir(&lab.root_dir).expect("删掉空目录");
+    fs::rename(&moved, &lab.root_dir).expect("放回原目录");
+    let recovered = env.step(METADATA_MS).await;
+    let pass = recovered
+        .full_scan
+        .as_ref()
+        .map(|run| &run.report)
+        .expect("恢复后仍由周期补扫触发");
+    assert!(!pass.root_unavailable);
+    assert_eq!(pass.reconcile.health, ScanHealth::Complete);
+    assert!(pass.reconcile.deletions.is_empty());
+    assert_eq!(
+        env.store.events.len(),
+        events_before,
+        "恢复后也没有删除事件"
+    );
+    assert_eq!(env.store.versions.len(), versions_before);
+}
+
+/// S051 验收 2（真实目录）：两个内容相同的文件互换名字，EntryId 不串。
+#[tokio::test]
+async fn two_identical_files_swapped_on_a_real_directory_keep_their_own_entries() {
+    let lab = Lab::new("f-swap");
+    lab.write("left.txt", b"identical bytes");
+    lab.write("right.txt", b"identical bytes");
+    let mut env = FollowEnv::new(&lab);
+    env.start().await;
+    assert_eq!(env.versions_of("left.txt").len(), 1);
+    assert_eq!(env.versions_of("right.txt").len(), 1);
+
+    // 互换名字：内容哈希完全相同，只有 inode 能区分。
+    let left = lab.root_dir.join("left.txt");
+    let right = lab.root_dir.join("right.txt");
+    let tmp = lab.root_dir.join(".tmp-swap");
+    fs::rename(&left, &tmp).expect("left → tmp");
+    fs::rename(&right, &left).expect("right → left");
+    fs::rename(&tmp, &right).expect("tmp → right");
+
+    let report = env.step(METADATA_MS).await;
+    let pass = report
+        .full_scan
+        .as_ref()
+        .map(|run| &run.report)
+        .expect("周期补扫");
+    assert_eq!(pass.reconcile.health, ScanHealth::Complete);
+    // 互换名字不是一次单向移动：两个路径都还在、内容哈希完全相同，只有 inode 能看出它们换了位置。
+    // 核心不按路径或内容把 EntryId 重新绑一次，而是保留双方基线并把现场记成待复核。
+    assert!(pass.reconcile.moves.is_empty(), "互换不能用单向移动表达");
+    assert!(
+        pass.reconcile.deletions.is_empty(),
+        "互换不是删除：{:?}",
+        pass.reconcile.deletions
+    );
+    let held: Vec<&str> = pass
+        .reconcile
+        .held
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    assert!(
+        held.contains(&"left.txt") && held.contains(&"right.txt"),
+        "{held:?}"
+    );
+    assert!(
+        pass.reconcile
+            .held
+            .iter()
+            .all(|entry| entry.code == "identity_swap_needs_review")
+    );
+    // 没有按路径重绑：两个路径都还没有新版本、没有新事件。
+    assert_eq!(env.versions_of("left.txt").len(), 1);
+    assert_eq!(env.versions_of("right.txt").len(), 1);
+    assert_eq!(env.store.events.len(), 2);
 }

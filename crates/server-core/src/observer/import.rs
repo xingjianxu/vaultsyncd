@@ -99,6 +99,13 @@ pub enum PendingReason {
     Requeued(RequeueReason),
     /// 被阻止，需要人工协调。
     Blocked(BlockReason),
+    /// 现场成了别人（另一个已采纳条目）的文件：不按路径重新绑 EntryId，等待复核。
+    Held {
+        /// 稳定原因码。
+        code: &'static str,
+        /// 原因文本。
+        detail: String,
+    },
     /// 采集或采纳失败（稳定错误码 + 文本），下一轮重试。
     Failed {
         /// 稳定错误码。
@@ -233,6 +240,8 @@ pub struct ExternalObserver {
     protected: Vec<ProtectedBatch>,
     /// 已复核放行的缺失条目（路径 → 条目身份）：下一轮允许直接传播删除。
     approved: BTreeMap<String, EntryId>,
+    /// 现场变成另一个条目文件的路径（例如两份同内容文件互换名字）：保留基线、不重绑身份。
+    displaced: BTreeSet<String>,
     next_batch: u64,
 }
 
@@ -265,6 +274,7 @@ impl ExternalObserver {
             limits: ReconcileLimits::DEFAULT,
             protected: Vec::new(),
             approved: BTreeMap::new(),
+            displaced: BTreeSet::new(),
             next_batch: 1,
         })
     }
@@ -460,11 +470,11 @@ impl ExternalObserver {
         if !report.health.is_complete_and_healthy() {
             return report;
         }
+        self.displaced.clear();
         report.ran = true;
-        let missing: Vec<MissingEntry> = self
+        let entries: Vec<MissingEntry> = self
             .adopted
             .iter()
-            .filter(|(path, _)| !seen.contains_key(path.as_str()))
             .map(|(path, baseline)| MissingEntry {
                 path: path.clone(),
                 entry: baseline.entry,
@@ -474,7 +484,10 @@ impl ExternalObserver {
                 content: baseline.content,
             })
             .collect();
-        if missing.is_empty() {
+        let missing = missing_of(&entries, seen);
+        // 没有缺失并不意味着没变化：互换名字时两条路径都还在，只有文件身份换了位置。
+        let displaced = displaced_of(&entries, seen);
+        if missing.is_empty() && displaced.is_empty() {
             return report;
         }
 
@@ -483,12 +496,13 @@ impl ExternalObserver {
             return report;
         };
         report = self
-            .reconcile_locked(ports, seen, clock, report, missing)
+            .reconcile_locked(ports, seen, clock, report, missing, displaced)
             .await;
         ports.gate.release(ticket);
         report
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn reconcile_locked<S: ExternalAdoptStore>(
         &mut self,
         ports: &mut ObserverPorts<'_, S>,
@@ -496,6 +510,7 @@ impl ExternalObserver {
         clock: PassClock,
         mut report: ReconcileReport,
         missing: Vec<MissingEntry>,
+        displaced: Vec<(String, MissingEntry)>,
     ) -> ReconcileReport {
         // 移动目标必须是本轮新出现（尚未采纳）的路径；已采纳路径上的文件不可能是移动目标。
         let seen_new: BTreeMap<String, FileStamp> = seen
@@ -503,8 +518,27 @@ impl ExternalObserver {
             .filter(|(path, _)| !self.adopted.contains_key(path.as_str()))
             .map(|(path, stamp)| (path.clone(), *stamp))
             .collect();
-        let (moves, rest, ambiguous) = pair_moves(&missing, &seen_new);
-        report.ambiguous = ambiguous.into_iter().collect();
+        let displaced_entries: BTreeSet<EntryId> =
+            displaced.iter().map(|(_, owner)| owner.entry).collect();
+        let considered: Vec<MissingEntry> = missing
+            .into_iter()
+            .filter(|entry| !displaced_entries.contains(&entry.entry))
+            .collect();
+        self.displaced = displaced.iter().map(|(path, _)| path.clone()).collect();
+        for (path, owner) in &displaced {
+            report.ambiguous.push(path.clone());
+            report.ambiguous.push(owner.path.clone());
+            report.held.push(HeldEntry {
+                path: path.clone(),
+                code: "identity_swap_needs_review",
+                detail: format!(
+                    "该路径现在放的是 {} 的文件；不按路径重新绑定 EntryId",
+                    owner.path
+                ),
+            });
+        }
+        let (moves, rest, ambiguous) = pair_moves(&considered, &seen_new);
+        report.ambiguous.extend(ambiguous);
 
         for candidate in moves {
             let from = candidate.missing.path.clone();
@@ -710,6 +744,20 @@ impl ExternalObserver {
                 // 已核对为本服务写入、指纹未变：不必再等待与采集。任何指纹变化都会重新核对。
                 if self.intents.is_verified(&file.path, &file.stamp) {
                     self.settle(&file.path);
+                    continue;
+                }
+                // 这条路径上的文件现在是另一个已采纳条目的文件：按路径采纳会把两个 EntryId 串起来。
+                // 保留双方基线，等人工复核（design §9.5：不凭内容猜身份）。
+                if self.displaced.contains(&file.path) {
+                    let reason = PendingReason::Held {
+                        code: "identity_swap_needs_review",
+                        detail: "现场是另一个已采纳条目的文件".to_owned(),
+                    };
+                    self.mark_pending(&file.path, reason.clone());
+                    outcomes.push(FileOutcome {
+                        path: file.path,
+                        state: FileState::Pending(reason),
+                    });
                     continue;
                 }
                 match self.tracker.observe(&file.path, file.stamp, clock.now_ms) {
@@ -927,6 +975,38 @@ mod hinted;
 mod reconcile_tests;
 #[cfg(test)]
 mod tests;
+
+/// 本轮完整扫描里没再出现的已采纳条目。
+fn missing_of(entries: &[MissingEntry], seen: &BTreeMap<String, FileStamp>) -> Vec<MissingEntry> {
+    entries
+        .iter()
+        .filter(|entry| !seen.contains_key(entry.path.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// 现场已经换成“另一个已采纳条目的文件”的路径（互换/被覆盖），以及它现在放的是谁的文件。
+fn displaced_of(
+    entries: &[MissingEntry],
+    seen: &BTreeMap<String, FileStamp>,
+) -> Vec<(String, MissingEntry)> {
+    let mut displaced = Vec::new();
+    for (path, stamp) in seen {
+        let Some(baseline) = entries.iter().find(|entry| entry.path == *path) else {
+            continue;
+        };
+        if baseline.same_object(stamp) {
+            continue;
+        }
+        if let Some(owner) = entries
+            .iter()
+            .find(|entry| entry.path != *path && entry.same_object(stamp))
+        {
+            displaced.push((path.clone(), owner.clone()));
+        }
+    }
+    displaced
+}
 
 /// 把一批缺失条目按父目录分组，并逐个实测目录身份（design §12.3 的“目录身份”）”。
 fn group_directories(
