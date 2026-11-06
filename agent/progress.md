@@ -121,7 +121,7 @@
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | done | 99a7ed4；主机ba1837a | 新源包64/0、主机build/test/健康/switch238；实际回滚237并恢复固定版本、两轮提交下载重启重放与备份释放，SSH/既有应用保持 | 无；公网TLS留S097 | agent/tasks/S096.md |
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | todo | — | 未执行 | — | agent/tasks/S097.md（执行时创建） |
 | S098 | 通用 Linux 包与容器配置 | L | S094、S097 | todo | — | 未执行 | — | agent/tasks/S098.md（执行时创建） |
-| S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | todo | — | 未执行 | — | agent/tasks/S099.md（执行时创建） |
+| S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | done | ca510ab→cf1d174；交接见任务HEAD | 锁定NSIS/真实同源正式包；标准用户中文空格首装、GUI CLI同实例、关闭与真实重启后上传hash通过 | unsigned-test；原登录恢复且VM在线；父立即合并归档清理 | agent/tasks/S099.md |
 | S100 | Windows 升级与卸载保护 | W | S099、S091 | todo | — | 未执行 | — | agent/tasks/S100.md（执行时创建） |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | todo | — | 未执行 | — | agent/tasks/S101.md（执行时创建） |
 | S102 | 事件异常与旧设备集成验收 | X | S074、S089、S091 | todo | — | 未执行 | — | agent/tasks/S102.md（执行时创建） |

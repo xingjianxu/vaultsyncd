@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+mod windows;
 
 const MIRRORS: &[&str] = &[
     "package.json",
@@ -254,6 +255,9 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 fn run_build(root: &Path, component: &str, directory: &Path) -> Result<(), String> {
+    if component == "windows-client" {
+        return windows::build(root, directory);
+    }
     let before = source(root)?;
     if directory.exists() {
         return Err("output exists; use a new artifact directory".into());
@@ -448,7 +452,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
                 for component in manifest.components {validate(&component.directory,&component.receipt,&expected)?;}
                 println!("release manifest verified");Ok(())
             },
-            _=>Err("usage: release build <web|desktop-ui|server|admin> <new-directory> | release assemble <new-manifest.json> <artifact-directory>... | release verify <manifest.json>".into()),
+            _=>Err("usage: release build <web|desktop-ui|server|admin|windows-client> <new-directory> | release assemble <new-manifest.json> <artifact-directory>... | release verify <manifest.json>".into()),
         }
     })();
     finish(result)

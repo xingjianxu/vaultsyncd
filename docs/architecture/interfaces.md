@@ -2508,3 +2508,10 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 - 真实入口`/etc/nixos#wks-lab`，新增host-specific system.nix（主机提交ba1837a），固定永久Git仓库commit3640f3a，删除任务worktree后仍可构建。原有dirty主机flake.lock逐字节保留、不纳入提交；精确锁/NAR/来源快照和GCroot留运行时证据，不能把主机commit单独宣称为完整锁快照。
 - `vaultsyncd.service`的专用vaultsyncd-trial UID985，回环18721；新2GiB普通镜像`/data/vaultsyncd-trial-s096/volume.img`，显式loop btrfs挂载后state0700和samples互不包含。仅此挂载启用user_subvol_rm_allowed，/data原选项不变。owner仅离线CLI stdin，初始凭据root0600运行时文件，不入Git/store。
 - 完整build/test/健康/实际237回滚/恢复test/switch238完成；样本上传committed、固定版本下载、服务重启和同OpId重放、普通UID备份校验释放均真实通过；SSH及既有应用进程/HTTP保持。来源、命令、实际回滚保证与限制唯一运维入口`docs/operations/nixos.md`。当前无公网HTTP；TLS与代理留S097。
+
+### S099 — Windows每用户安装与独立会话启动
+
+- `vaultsyncd-session.exe`为无窗口固定入口，不接受附加参数，初始化`%LOCALAPPDATA%/vaultsyncd/agent/{agent.json,state/,agent.log}`后直接CreateProcess同目录agent `--config <固定路径>`；已有配置先验证且不覆盖，身份随机，初始无凭据/绑定。GUI关闭不拥有agent生命周期，既有CLI/GUI IPC无新增wire或通用启动能力。
+- desktop精确`--register-shortcut`仅注册自身AUMID `org.vaultsyncd.desktop`再退出；NSIS用户权限写HKCU Run `vaultsyncd-agent`为带引号的固定session路径。程序与状态分离，Windows11 x64/WebView2 pv前置，当前仅未签名首装测试；已有安装/不满足目录拒绝，不清数据。升级卸载由S100。
+- `cargo xtask release build windows-client <new-dir>`扩展S093来源收据：实际全新target cross release四PE，冻结锁前端，实测NSIS与Rust/Node/pnpm工具，PE/验收入口检查，installed-files.json与每个payload hash。合并/交接后的新HEAD不能重用旧来源收据，须真实重建。操作见`docs/operations/windows-installation.md`。
+- 原生驱动`tests/platform/windows/s099-installation.py`只协调独立测试用户与可恢复登录，原LSA备份使用客体私有ACL+机器DPAPI，不进入宿主证据。正式源cf1d174真实新标准用户安装、GUI/CLI同instance、WM_CLOSE后上传、重启登录Run启动及再次上传hash均过；原Quickemu登录恢复且VM在线。原生公开结果与页面截图在忽略artifacts/S099。

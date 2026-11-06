@@ -44,6 +44,8 @@ pub mod runtime;
 #[cfg(windows)]
 mod shutdown;
 #[cfg(windows)]
+pub mod user_session;
+#[cfg(windows)]
 mod work;
 
 #[cfg(windows)]

@@ -40,7 +40,7 @@
       devShells = forAllSystems (pkgs: {
         web-tests = pkgs.mkShell {
           name = "vaultsyncd-web-tests";
-          packages = [ pkgs.nodejs pkgs.pnpm pkgs.chromium (pkgs.python3.withPackages (ps: [ ps.playwright ])) ];
+          packages = [ pkgs.nodejs pkgs.pnpm pkgs.chromium pkgs.openssh pkgs.openssl (pkgs.python3.withPackages (ps: [ ps.playwright ])) ];
           PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
           PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
         };
@@ -131,6 +131,9 @@
             pkgs.openssh
             # Native GUI runner writes bounded SHA-256 transport manifests on the host.
             pkgs.openssl # S081 private TLS acceptance certificates
+            pkgs.nsis # S099 host-built Unicode per-user Windows installer, pinned by flake.lock
+            pkgs.nodejs
+            pkgs.pnpm
             pkgs.python3
             pkgs.git
           ];
