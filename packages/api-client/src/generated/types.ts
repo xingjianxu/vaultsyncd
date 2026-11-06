@@ -445,7 +445,7 @@ export interface OperationRequest {
    * 子树在之后任何变化都让删除返回 409 `SUBTREE_CHANGED`。
    */
   subtree_token?: string;
-  /** 已 finalize 的上传会话身份（put 必填），32 位小写十六进制；内容只通过它引用。 */
+  /** 已 finalize 的上传会话身份（put 必填，创建文件时 create 也必填；不带它的 create 创建目录），32 位小写十六进制；内容只通过它引用。 */
   upload_id?: string;
   /** 恢复指定的历史版本（可选，32 位小写十六进制）；省略表示恢复回收站里的当前形态。 */
   version_id?: string;

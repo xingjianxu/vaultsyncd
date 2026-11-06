@@ -1798,7 +1798,7 @@ components:
           description: 客户端计划时看到的版本身份（可选，32 位小写十六进制）。
         upload_id:
           type: string
-          description: 已 finalize 的上传会话身份（put 必填），32 位小写十六进制；内容只通过它引用。
+          description: 已 finalize 的上传会话身份（put 必填，创建文件时 create 也必填；不带它的 create 创建目录），32 位小写十六进制；内容只通过它引用。
         local_generation:
           type: string
           format: decimal_u64

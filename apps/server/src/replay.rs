@@ -177,6 +177,11 @@ async fn replay(
                 return Err("内容上下文与意图种类不符".to_owned());
             }
             let put = crate::executor::put_intent_of(intent).map_err(text)?;
+            if binding.context["create_file"] == true {
+                crate::create_file::validate(db, owner, &binding, digest, &put)
+                    .await
+                    .map_err(text)?;
+            }
             let mut target = WorkTreeTarget::new(handle, ObjectLayout::new(state.join("objects")));
             match classify_put(&put, target.observe(&put.target_path)) {
                 RecoveryDecision::Redo => {
@@ -209,6 +214,19 @@ async fn replay(
             let core_digest = RequestDigest::from_bytes(*digest.as_bytes());
             let content = ExpectedContent::new(put.after.digest, put.after.size);
             match binding.kind.as_str() {
+                "put" if binding.context["create_file"] == true => {
+                    crate::create_file::finish(
+                        db,
+                        owner,
+                        &binding,
+                        digest,
+                        put.intent_id,
+                        content,
+                        at,
+                    )
+                    .await
+                    .map_err(text)?;
+                }
                 "put" => {
                     let mut store = SqlPutStore {
                         database: db.clone(),

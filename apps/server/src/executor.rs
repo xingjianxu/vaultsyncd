@@ -96,6 +96,20 @@ pub struct ExecutorContext {
 }
 
 impl ExecutorContext {
+    /// Register a controlled content publication with the observer's existing self-write fence.
+    pub async fn note_own_content(
+        &self,
+        root: RootId,
+        path: &str,
+        identity: vaultsyncd_server_core::ports::object_store::FileKey,
+        content: ExpectedContent,
+    ) {
+        if let Some(observer) = &self.observer {
+            observer
+                .expect_own_write(root, path, identity, content)
+                .await;
+        }
+    }
     /// 以数据库与状态目录装配；Root 句柄按需打开并缓存（注册时已经通过存储准入）。
     #[must_use]
     pub fn new(

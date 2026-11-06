@@ -174,8 +174,8 @@ impl OperationRequest {
                 if self.expected_absent != Some(true) {
                     return Err(invalid("create 必须声明 expected_absent=true"));
                 }
-                if self.base_revision.is_some() || self.upload.is_some() {
-                    return Err(invalid("create 不得带 base_revision/upload_id"));
+                if self.base_revision.is_some() || self.base_version.is_some() {
+                    return Err(invalid("create 不得带 base_revision/base_version_id"));
                 }
                 self.reject_subtree_token()?;
                 self.reject_version()?;

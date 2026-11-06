@@ -372,7 +372,7 @@ pub struct OperationRequest {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtree_token: Option<String>,
-    /// 已 finalize 的上传会话身份（put 必填），32 位小写十六进制；内容只通过它引用。
+    /// 已 finalize 的上传会话身份（put 必填，创建文件时 create 也必填；不带它的 create 创建目录），32 位小写十六进制；内容只通过它引用。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload_id: Option<String>,
