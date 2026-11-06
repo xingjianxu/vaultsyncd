@@ -607,28 +607,18 @@ mod tests {
 
     /// 比本二进制多一版迁移的合成集合：验证“schema 比二进制新”的拒绝，而不是提前发布假迁移。
     async fn next_migrator(dir: &TestDir) -> Migrator {
-        migrator(&dir.migrations(&[
-            (BASELINE_FILE, BASELINE_SQL),
-            (EVENTS_FILE, EVENTS_SQL),
-            (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
-            (
-                "0004_first_import.sql",
-                include_str!("../migrations/0004_first_import.sql"),
-            ),
-            (
-                "0005_controlled_apply.sql",
-                include_str!("../migrations/0005_controlled_apply.sql"),
-            ),
-            (
-                "0006_resync.sql",
-                include_str!("../migrations/0006_resync.sql"),
-            ),
-            (
-                "0007_probe.sql",
-                "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
-            ),
-        ]))
-        .await
+        let migration_dir = dir.path.join("next-migrations");
+        std::fs::create_dir_all(&migration_dir).expect("迁移目录");
+        for migration in MIGRATOR.iter() {
+            let name = format!("{:04}_{}.sql", migration.version, migration.description);
+            std::fs::write(migration_dir.join(name), migration.sql.as_bytes()).expect("当前迁移");
+        }
+        std::fs::write(
+            migration_dir.join(format!("{:04}_probe.sql", target_schema_version() + 1)),
+            "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
+        )
+        .expect("合成未来迁移");
+        migrator(&migration_dir).await
     }
 
     async fn scalar<T>(database: &Path, sql: &str) -> T
@@ -665,20 +655,23 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(target_schema_version(), 6, "内嵌迁移应当到 0006");
+        assert!(target_schema_version() >= 7, "必须包含绑定控制迁移");
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             CLIENT_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
+        assert_eq!(
+            scalar::<i32>(&path, "PRAGMA user_version").await,
+            target_schema_version() as i32
+        );
         assert_eq!(
             scalar::<i64>(
                 &path,
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            6
+            MIGRATOR.iter().count() as i64
         );
         // 客户端状态表包含上传续传及首次绑定日志，不含服务端表。
         let tables: Vec<(String,)> = {
@@ -701,8 +694,12 @@ mod tests {
             tables.into_iter().map(|(name,)| name).collect::<Vec<_>>(),
             vec![
                 "baseline_entries".to_owned(),
+                "binding_controls".to_owned(),
+                "binding_full_proofs".to_owned(),
                 "binding_imports".to_owned(),
+                "binding_participation".to_owned(),
                 "binding_resyncs".to_owned(),
+                "binding_rules_history".to_owned(),
                 "bindings".to_owned(),
                 "controlled_applies".to_owned(),
                 "import_id_map".to_owned(),
@@ -719,15 +716,18 @@ mod tests {
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
-            !migration_backup_path(&path, 0, 6).exists(),
+            !migration_backup_path(&path, 0, target_schema_version()).exists(),
             "空库迁移不应产生备份"
         );
 
         // 再次打开是幂等的：不迁移、不新增备份。
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 6);
-        assert!(!migration_backup_path(&path, 6, 6).exists());
+        assert_eq!(reopened.schema_version(), target_schema_version());
+        assert!(
+            !migration_backup_path(&path, target_schema_version(), target_schema_version())
+                .exists()
+        );
         reopened.close().await;
     }
 
@@ -930,7 +930,7 @@ mod tests {
 
         // 本二进制打开旧库：真实执行 0002—0006，保留旧数据与恢复上下文。
         let upgraded = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(upgraded.schema_version(), 6);
+        assert_eq!(upgraded.schema_version(), target_schema_version());
         let mut conn = upgraded.pool().acquire().await.expect("取连接");
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN \
@@ -961,9 +961,12 @@ mod tests {
         drop(conn);
         upgraded.close().await;
 
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
+        assert_eq!(
+            scalar::<i32>(&path, "PRAGMA user_version").await,
+            target_schema_version() as i32
+        );
         // 迁移前备份存在，且内容是**迁移前**的状态：没有新表。
-        let backup = migration_backup_path(&path, 1, 6);
+        let backup = migration_backup_path(&path, 1, target_schema_version());
         assert!(backup.exists(), "升级前应有一致性备份");
         for table in [
             "received_changes",
@@ -985,7 +988,7 @@ mod tests {
 
         // 再打开一次：版本已到目标，不重复迁移、不覆盖已有备份。
         let again = Database::open(&path).await.expect("重新打开");
-        assert_eq!(again.schema_version(), 6);
+        assert_eq!(again.schema_version(), target_schema_version());
         again.close().await;
     }
 
@@ -1034,7 +1037,7 @@ mod tests {
         tx.commit().await.expect("提交");
         old.close().await;
         let upgraded = Database::open(&path).await.expect("升级 0006");
-        assert_eq!(upgraded.schema_version(), 6);
+        assert_eq!(upgraded.schema_version(), target_schema_version());
         let mut conn = upgraded.pool().acquire().await.expect("连接");
         let resume = crate::upload_resumes::load(&mut conn, op)
             .await
@@ -1055,7 +1058,7 @@ mod tests {
         drop(conn);
         upgraded.close().await;
         assert!(
-            migration_backup_path(&path, 3, 6).exists(),
+            migration_backup_path(&path, 3, target_schema_version()).exists(),
             "升级前一致性备份"
         );
     }
@@ -1106,7 +1109,7 @@ mod tests {
         tx.commit().await.unwrap();
         old.close().await;
         let upgraded = Database::open(&path).await.expect("升级 0006");
-        assert_eq!(upgraded.schema_version(), 6);
+        assert_eq!(upgraded.schema_version(), target_schema_version());
         let mut conn = upgraded.pool().acquire().await.unwrap();
         assert_eq!(
             crate::intents::intent(&mut conn, intent.id).await.unwrap(),
@@ -1130,7 +1133,7 @@ mod tests {
         assert_eq!(count, 0, "旧意图不能被猜成受控应用完成或自动重放");
         drop(conn);
         upgraded.close().await;
-        let backup = migration_backup_path(&path, 4, 6);
+        let backup = migration_backup_path(&path, 4, target_schema_version());
         assert!(backup.exists());
         assert_eq!(
             scalar::<i64>(&backup, "SELECT count(*) FROM local_intents").await,
@@ -1216,7 +1219,7 @@ mod tests {
         old.close().await;
 
         let upgraded = Database::open(&path).await.unwrap();
-        assert_eq!(upgraded.schema_version(), 6);
+        assert_eq!(upgraded.schema_version(), target_schema_version());
         let mut conn = upgraded.pool().acquire().await.unwrap();
         assert!(
             crate::queue::pending_op(&mut conn, op)
@@ -1246,7 +1249,7 @@ mod tests {
         assert_eq!(resyncs, 0, "升级不能猜测旧设备重建已完成");
         drop(conn);
         upgraded.close().await;
-        let backup = migration_backup_path(&path, 5, 6);
+        let backup = migration_backup_path(&path, 5, target_schema_version());
         assert!(backup.exists());
         assert_eq!(
             scalar::<String>(&backup, "PRAGMA integrity_check").await,
@@ -1277,9 +1280,8 @@ mod tests {
         assert!(matches!(
             rejected,
             DbError::SchemaTooNew {
-                found: 6,
-                supported: 5
-            }
+                found, supported: 5
+            } if found == target_schema_version()
         ));
         assert_eq!(
             scalar::<String>(&path, "PRAGMA integrity_check").await,
@@ -1288,6 +1290,82 @@ mod tests {
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM upload_resumes").await,
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn version_six_upgrade_keeps_dirty_queue_and_adds_binding_controls_with_backup() {
+        let dir = TestDir::new("s061-upgrade");
+        let path = dir.database();
+        let migration_dir = dir.path.join("version-six");
+        std::fs::create_dir_all(&migration_dir).unwrap();
+        for migration in MIGRATOR.iter().filter(|m| m.version <= 6) {
+            std::fs::write(
+                migration_dir.join(format!(
+                    "{:04}_{}.sql",
+                    migration.version, migration.description
+                )),
+                migration.sql.as_bytes(),
+            )
+            .unwrap();
+        }
+        let previous = migrator(&migration_dir).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let mut tx = old.begin_write().await.unwrap();
+        let binding = [0x61_u8; 16];
+        // Explicit columns keep this fixture independent of future binding metadata.
+        sqlx::query("INSERT INTO bindings(id,server_id,device_id,root_id,local_path,cache_path,mode,rules_version,server_epoch) VALUES (?,?,?,?,?,?,'full','old',1)")
+            .bind(binding.as_slice()).bind([1_u8;16].as_slice()).bind([2_u8;16].as_slice()).bind([3_u8;16].as_slice()).bind("C:/source").bind("C:/cache").execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES (?,?,9,'awaiting_commit','materialized')")
+            .bind(binding.as_slice()).bind([4_u8;16].as_slice()).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind) VALUES (?,?,'upload_content')")
+            .bind([5_u8; 16].as_slice())
+            .bind(binding.as_slice())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        old.close().await;
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(upgraded.schema_version(), target_schema_version());
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT dirty FROM local_entries")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            "awaiting_commit"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pending_ops")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM binding_controls")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            0
+        );
+        let backup = migration_backup_path(&path, 6, target_schema_version());
+        assert!(backup.exists());
+        assert_eq!(
+            scalar::<String>(&backup, "PRAGMA integrity_check").await,
+            "ok"
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT count(*) FROM pending_ops").await,
+            1
+        );
+        let checksums = "SELECT group_concat(hex(checksum), ',') FROM (SELECT checksum FROM _sqlx_migrations WHERE version<=6 ORDER BY version)";
+        assert_eq!(
+            scalar::<String>(&path, checksums).await,
+            scalar::<String>(&backup, checksums).await
+        );
+        assert!(
+            matches!(Database::open_with(&path,&previous).await.unwrap_err(),DbError::SchemaTooNew {found,supported:6} if found==target_schema_version())
         );
     }
 
@@ -1308,13 +1386,15 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 7,
-                    supported: 6
-                }
+                    found, supported
+                } if found == target_schema_version() + 1 && supported == target_schema_version()
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 7);
+        assert_eq!(
+            scalar::<i32>(&path, "PRAGMA user_version").await,
+            (target_schema_version() + 1) as i32
+        );
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM probe").await,
             1,

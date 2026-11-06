@@ -2123,3 +2123,22 @@ baseline；S057 应用批次不回写更旧 revision，同 revision 不同事实
 quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按身份而非路径比较，不折叠。
 
 限制：生产端口（Windows CFAPI、HTTP 快照分页）、恢复候选的处理 UI/入口、`resume` 调度由后续卡接入；测试磁盘端口仅 cfg(test)。
+
+## crates/agent-core — 绑定控制与可恢复模式任务（S061）
+
+`bindings::control::BindingControls::new(Arc<Database>)` 提供 `set_paused`、`change_mode`、
+`resume_mode`、`mode_progress`、`change_rules`、`acknowledge_reconciled`、`preview_unbind` 和
+`unbind_keep_data`。每绑定入口串行组装；平台与网络不进入 SQLite 事务。
+
+| 接口/结果 | 契约 |
+| --- | --- |
+| `execution_gate(binding, Option<EntryId>) -> ExecutionGate` | 启动新动作前调用；仅 `Ready` 可执行，`Paused/Unbound/Excluded/ReconcileRequired` 保留队列。含 excluded/reconcile 后代的目录也阻塞，不能从本地缺项推导父目录 Delete。存在规则但目标位置未知时保守要求协调。 |
+| `change_mode` / `resume_mode(..., &dyn FullMaterializer, budget)` | full→on_demand 只改配置；on_demand→full 先落持久任务，按预算核对/补齐。逐文件保存与远端版本、路径、本地 generation/dirty/驻留/身份/摘要绑定的证据；全部未排除文件通过才 complete。新本地/远端事实使旧证据失效。 |
+| `FullMaterializer::ensure_full(&FullFile) -> LocalEntry` | 入口适配器用 S059 下载/受控安装固定版本，已有完整内容也须实际核对内容/身份/代际。脏内容只能核对保留。返回后复核数据库相同事实与已应用基线；仅下载、旧 clean 或未应用新远端版本都不能完成。 |
+| `change_rules(binding, version, text)` | 接收完整规则文本，复用 S018 gitignore 解析。记录已有条目 excluded；取消排除变为 reconcile_required。规则版本永不复用，当前相同请求幂等；旧版本 ACK 不放开新规则。协调完成后调用 `acknowledge_reconciled`。 |
+| `UnbindReport` / `unbind_keep_data` | 提示 unconfirmed 条目、incomplete 驻留及恢复导出选择；仅 detached+paused，不删除 bindings/本地行/基线/队列/文件，不发全局 Delete。恢复不能隐式重新绑定。 |
+
+客户端迁移 **0007**：`binding_controls`、`binding_participation`、`binding_full_proofs`、
+`binding_rules_history`，旧迁移不变。中断后原任务/证据保留；独立进程退出 101/102/103
+分别证明意图后、单文件完成后、整任务完成后恢复。6→当前升级保留 awaiting_commit/队列并创建一致性备份。
+生产 Windows materializer 和管理 IPC 入口在后续平台/应用卡组装；测试磁盘适配器仅 cfg(test)。
