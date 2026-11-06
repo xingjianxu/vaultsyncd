@@ -300,6 +300,22 @@ where
 
     /// 重启恢复：先处理所有已接收但尚未应用的批次，再由周期拉取接续。
     pub async fn resume_pending(&self) -> Result<ReceiveReport, ReceiveError> {
+        crate::recovery::resync::ensure_unblocked(&self.database, self.binding).await?;
+        // 直接调用恢复入口也不能绕过首次导入围栏。
+        let importing: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM binding_imports WHERE binding_id = ? AND complete = 0",
+        )
+        .bind(self.binding.as_bytes().as_slice())
+        .fetch_one(self.database.pool())
+        .await
+        .map_err(|error| ReceiveError::Protocol {
+            detail: format!("检查首次导入围栏：{error}"),
+        })?;
+        if importing != 0 {
+            return Err(ReceiveError::Protocol {
+                detail: "首次导入尚未完成，事件接收保持暂停".to_owned(),
+            });
+        }
         let mut report = ReceiveReport::default();
         let batches =
             {
@@ -377,7 +393,24 @@ where
                             detail: format!("开始应用事务失败：{error}"),
                         })?;
                 for remote in &incoming.changes {
-                    entries::put_baseline(&mut tx, self.binding, &baseline(remote))
+                    let next = baseline(remote);
+                    if let Some(current) =
+                        entries::baseline_entry(&mut tx, self.binding, next.entry)
+                            .await
+                            .map_err(store_events::EventError::Entry)?
+                    {
+                        // S059 发布后、批次确认前崩溃可重放；其它已应用批次也可能已推进基线。
+                        // 旧事件只补游标，不把较新基线倒退。同 revision 不同事实是坏数据。
+                        if current.revision > next.revision {
+                            continue;
+                        }
+                        if current.revision == next.revision && current != next {
+                            return Err(ReceiveError::Protocol {
+                                detail: "事件与已确认基线的同 revision 事实冲突".to_owned(),
+                            });
+                        }
+                    }
+                    entries::put_baseline(&mut tx, self.binding, &next)
                         .await
                         .map_err(store_events::EventError::Entry)?;
                 }

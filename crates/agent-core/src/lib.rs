@@ -16,14 +16,17 @@
 //!
 //! # 明确不做
 //!
-//! 上传快照与 ACK 代际核对由 [`executor::upload`] 提供，事件拉取与应用游标属 S057，本地受控替换
-//! 与重启核对属 S059，下载优先级与 jitter 退避属 S062。平台/HTTP/SQLite 适配器仍由应用入口组装。
+//! 上传快照与 ACK 代际核对由 [`executor::upload`] 提供，事件拉取与应用游标在 [`engine::events`]，
+//! 受控内容应用与重启核对在 [`executor::apply`] / [`recovery`]。下载优先级与 jitter 退避属 S062。
+//! 平台/HTTP/SQLite 适配器仍由应用入口组装；本地移动、释放及按需占位的原生实现不在此包。
 #![forbid(unsafe_code)]
 
 pub mod adapters;
+pub mod bindings;
 pub mod engine;
 pub mod executor;
 pub mod ports;
+pub mod recovery;
 
 #[cfg(test)]
 mod testing;

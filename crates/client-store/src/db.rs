@@ -550,7 +550,7 @@ mod tests {
     /// `migrations/0002_events_transfers_intents.sql` 的真实内容。
     const EVENTS_SQL: &str = include_str!("../migrations/0002_events_transfers_intents.sql");
     const EVENTS_FILE: &str = "0002_events_transfers_intents.sql";
-    /// `migrations/0003_upload_resumes.sql` 的真实内容（当前最新一版）。
+    /// `migrations/0003_upload_resumes.sql` 的真实内容。
     const UPLOAD_RESUMES_SQL: &str = include_str!("../migrations/0003_upload_resumes.sql");
     const UPLOAD_RESUMES_FILE: &str = "0003_upload_resumes.sql";
 
@@ -612,7 +612,19 @@ mod tests {
             (EVENTS_FILE, EVENTS_SQL),
             (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
             (
-                "0004_probe.sql",
+                "0004_first_import.sql",
+                include_str!("../migrations/0004_first_import.sql"),
+            ),
+            (
+                "0005_controlled_apply.sql",
+                include_str!("../migrations/0005_controlled_apply.sql"),
+            ),
+            (
+                "0006_resync.sql",
+                include_str!("../migrations/0006_resync.sql"),
+            ),
+            (
+                "0007_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]))
@@ -653,22 +665,22 @@ mod tests {
         let database = Database::open(&path).await.expect("打开新库");
 
         assert_eq!(database.schema_version(), target_schema_version());
-        assert_eq!(target_schema_version(), 3, "内嵌迁移应当到 0003");
+        assert_eq!(target_schema_version(), 6, "内嵌迁移应当到 0006");
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             CLIENT_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 3);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
         assert_eq!(
             scalar::<i64>(
                 &path,
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            3
+            6
         );
-        // 设计 §7.3 的九张客户端表加 S055 的上传续传表都在，且只有它们（不含服务端表）。
+        // 客户端状态表包含上传续传及首次绑定日志，不含服务端表。
         let tables: Vec<(String,)> = {
             let mut conn = connect_for_inspection(&path)
                 .read_only(true)
@@ -689,28 +701,33 @@ mod tests {
             tables.into_iter().map(|(name,)| name).collect::<Vec<_>>(),
             vec![
                 "baseline_entries".to_owned(),
+                "binding_imports".to_owned(),
+                "binding_resyncs".to_owned(),
                 "bindings".to_owned(),
+                "controlled_applies".to_owned(),
+                "import_id_map".to_owned(),
                 "local_entries".to_owned(),
                 "local_intents".to_owned(),
                 "notifications".to_owned(),
                 "pending_ops".to_owned(),
                 "received_changes".to_owned(),
                 "remote_entries".to_owned(),
+                "resync_quarantined_ops".to_owned(),
                 "transfers".to_owned(),
                 "upload_resumes".to_owned(),
             ]
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
-            !migration_backup_path(&path, 0, 3).exists(),
+            !migration_backup_path(&path, 0, 6).exists(),
             "空库迁移不应产生备份"
         );
 
         // 再次打开是幂等的：不迁移、不新增备份。
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 3);
-        assert!(!migration_backup_path(&path, 3, 3).exists());
+        assert_eq!(reopened.schema_version(), 6);
+        assert!(!migration_backup_path(&path, 6, 6).exists());
         reopened.close().await;
     }
 
@@ -911,20 +928,19 @@ mod tests {
         let binding = crate::test_support::seed_binding(&old, 0x21).await;
         old.close().await;
 
-        // 本二进制打开旧库：真实执行 0002 与 0003，建出事件/传输/意图/通知四张表、游标列
-        // 与上传续传表。
+        // 本二进制打开旧库：真实执行 0002—0006，保留旧数据与恢复上下文。
         let upgraded = Database::open(&path).await.expect("升级旧库");
-        assert_eq!(upgraded.schema_version(), 3);
+        assert_eq!(upgraded.schema_version(), 6);
         let mut conn = upgraded.pool().acquire().await.expect("取连接");
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN \
-             ('received_changes', 'transfers', 'local_intents', 'notifications', 'upload_resumes') \
+             ('received_changes', 'transfers', 'local_intents', 'notifications', 'upload_resumes', 'binding_imports', 'import_id_map') \
              ORDER BY name",
         )
         .fetch_all(&mut *conn)
         .await
         .expect("列新表");
-        assert_eq!(rows.len(), 5, "0002 与 0003 应建出五张新表");
+        assert_eq!(rows.len(), 7, "0002—0004 应建出七张新表");
         assert_eq!(
             crate::events::cursors(&mut conn, binding)
                 .await
@@ -945,9 +961,9 @@ mod tests {
         drop(conn);
         upgraded.close().await;
 
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 3);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 6);
         // 迁移前备份存在，且内容是**迁移前**的状态：没有新表。
-        let backup = migration_backup_path(&path, 1, 3);
+        let backup = migration_backup_path(&path, 1, 6);
         assert!(backup.exists(), "升级前应有一致性备份");
         for table in [
             "received_changes",
@@ -969,8 +985,310 @@ mod tests {
 
         // 再打开一次：版本已到目标，不重复迁移、不覆盖已有备份。
         let again = Database::open(&path).await.expect("重新打开");
-        assert_eq!(again.schema_version(), 3);
+        assert_eq!(again.schema_version(), 6);
         again.close().await;
+    }
+
+    #[tokio::test]
+    async fn version_three_upgrade_keeps_upload_resume_and_creates_empty_import_journal() {
+        let dir = TestDir::new("upgrade-v3");
+        let path = dir.database();
+        let previous = migrator(&dir.migrations(&[
+            (BASELINE_FILE, BASELINE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
+            (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
+        ]))
+        .await;
+        let old = Database::open_with(&path, &previous).await.expect("旧版库");
+        let binding = crate::test_support::seed_binding(&old, 0x58).await;
+        let op = vaultsyncd_domain::ids::OpId::from_bytes([0x58; 16]);
+        let mut tx = old.begin_write().await.expect("事务");
+        crate::queue::enqueue(
+            &mut tx,
+            &crate::queue::NewPendingOp {
+                op,
+                binding,
+                kind: "upload_new_entry".to_owned(),
+                entry: None,
+                baseline_revision: None,
+                baseline_version: None,
+                depends_on: None,
+                pinned_version: None,
+            },
+        )
+        .await
+        .expect("旧版队列");
+        crate::upload_resumes::save(
+            &mut tx,
+            &crate::upload_resumes::NewUploadResume {
+                op,
+                binding,
+                snapshot_identity: "generation-1".to_owned(),
+                total_size: 42,
+                digest: [0x58; 32],
+                session: "old-session".to_owned(),
+            },
+        )
+        .await
+        .expect("旧版续传");
+        tx.commit().await.expect("提交");
+        old.close().await;
+        let upgraded = Database::open(&path).await.expect("升级 0006");
+        assert_eq!(upgraded.schema_version(), 6);
+        let mut conn = upgraded.pool().acquire().await.expect("连接");
+        let resume = crate::upload_resumes::load(&mut conn, op)
+            .await
+            .expect("旧会话")
+            .expect("旧会话仍在");
+        assert!(resume.matches_snapshot("generation-1", 42, &[0x58; 32]));
+        assert!(
+            crate::queue::pending_op(&mut conn, op)
+                .await
+                .expect("旧操作")
+                .is_some()
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM binding_imports")
+            .fetch_one(&mut *conn)
+            .await
+            .expect("空日志");
+        assert_eq!(count, 0, "迁移不能把曾经同步的绑定标为首次导入");
+        drop(conn);
+        upgraded.close().await;
+        assert!(
+            migration_backup_path(&path, 3, 6).exists(),
+            "升级前一致性备份"
+        );
+    }
+
+    #[tokio::test]
+    async fn version_four_upgrade_preserves_open_intent_import_and_ack_mapping() {
+        let dir = TestDir::new("upgrade-v4");
+        let path = dir.database();
+        let previous = migrator(&dir.migrations(&[
+            (BASELINE_FILE, BASELINE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
+            (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
+            (
+                "0004_first_import.sql",
+                include_str!("../migrations/0004_first_import.sql"),
+            ),
+        ]))
+        .await;
+        let old = Database::open_with(&path, &previous)
+            .await
+            .expect("0004 库");
+        let binding = crate::test_support::seed_binding(&old, 0x59).await;
+        let mut tx = old.begin_write().await.expect("旧库事务");
+        let intent = crate::intents::begin_intent(
+            &mut tx,
+            &crate::intents::NewLocalIntent {
+                binding,
+                kind: crate::intents::LocalIntentKind::Replace,
+                entry: None,
+                target_path: "protected.txt".to_owned(),
+                source_path: Some("staged.part".to_owned()),
+                content_hash: Some(vec![0x59; 32]),
+                generation: Some(vaultsyncd_domain::version::Generation::new(7).unwrap()),
+            },
+        )
+        .await
+        .expect("旧意图");
+        sqlx::query("INSERT INTO binding_imports(binding_id, journal, revision) VALUES (?, '{\"fixed_snapshot\":\"old\"}', 3)")
+            .bind(binding.as_bytes().as_slice()).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO import_id_map VALUES (?, ?, ?, ?, '{\"state\":\"committed\"}')")
+            .bind(binding.as_bytes().as_slice())
+            .bind(vec![1u8; 16])
+            .bind(vec![2u8; 16])
+            .bind(vec![3u8; 16])
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        old.close().await;
+        let upgraded = Database::open(&path).await.expect("升级 0006");
+        assert_eq!(upgraded.schema_version(), 6);
+        let mut conn = upgraded.pool().acquire().await.unwrap();
+        assert_eq!(
+            crate::intents::intent(&mut conn, intent.id).await.unwrap(),
+            Some(intent)
+        );
+        let imports: (String, i64) =
+            sqlx::query_as("SELECT journal, revision FROM binding_imports")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(imports, ("{\"fixed_snapshot\":\"old\"}".to_owned(), 3));
+        let ack: String = sqlx::query_scalar("SELECT result_json FROM import_id_map")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(ack, "{\"state\":\"committed\"}");
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM controlled_applies")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "旧意图不能被猜成受控应用完成或自动重放");
+        drop(conn);
+        upgraded.close().await;
+        let backup = migration_backup_path(&path, 4, 6);
+        assert!(backup.exists());
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT count(*) FROM local_intents").await,
+            1
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name = 'controlled_applies'"
+            )
+            .await,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn version_five_upgrade_preserves_apply_queue_and_backup_and_rejects_old_binary() {
+        let dir = TestDir::new("upgrade-v5-resync");
+        let path = dir.database();
+        let previous = migrator(&dir.migrations(&[
+            (BASELINE_FILE, BASELINE_SQL),
+            (EVENTS_FILE, EVENTS_SQL),
+            (UPLOAD_RESUMES_FILE, UPLOAD_RESUMES_SQL),
+            (
+                "0004_first_import.sql",
+                include_str!("../migrations/0004_first_import.sql"),
+            ),
+            (
+                "0005_controlled_apply.sql",
+                include_str!("../migrations/0005_controlled_apply.sql"),
+            ),
+        ]))
+        .await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = crate::test_support::seed_binding(&old, 0x60).await;
+        let op = vaultsyncd_domain::ids::OpId::from_bytes([0x60; 16]);
+        let mut tx = old.begin_write().await.unwrap();
+        crate::queue::enqueue(
+            &mut tx,
+            &crate::queue::NewPendingOp {
+                op,
+                binding,
+                kind: "delete".to_owned(),
+                entry: None,
+                baseline_revision: None,
+                baseline_version: None,
+                depends_on: None,
+                pinned_version: None,
+            },
+        )
+        .await
+        .unwrap();
+        crate::upload_resumes::save(
+            &mut tx,
+            &crate::upload_resumes::NewUploadResume {
+                op,
+                binding,
+                snapshot_identity: "uncommitted-snapshot".to_owned(),
+                total_size: 8,
+                digest: [0x60; 32],
+                session: "old-session".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        let intent = crate::intents::begin_intent(
+            &mut tx,
+            &crate::intents::NewLocalIntent {
+                binding,
+                kind: crate::intents::LocalIntentKind::Replace,
+                entry: None,
+                target_path: "protected.txt".to_owned(),
+                source_path: Some("staged.part".to_owned()),
+                content_hash: Some(vec![0x60; 32]),
+                generation: None,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO controlled_applies(op_id, binding_id, target_path, intent_id, journal) VALUES (?, ?, 'protected.txt', ?, '{\"fixed_version\":\"old\"}')")
+            .bind(op.as_bytes().as_slice()).bind(binding.as_bytes().as_slice()).bind(intent.id).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        old.close().await;
+
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(upgraded.schema_version(), 6);
+        let mut conn = upgraded.pool().acquire().await.unwrap();
+        assert!(
+            crate::queue::pending_op(&mut conn, op)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            crate::upload_resumes::load(&mut conn, op)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            crate::intents::intent(&mut conn, intent.id).await.unwrap(),
+            Some(intent)
+        );
+        let journal: String = sqlx::query_scalar("SELECT journal FROM controlled_applies")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(journal, "{\"fixed_version\":\"old\"}");
+        let resyncs: i64 = sqlx::query_scalar("SELECT count(*) FROM binding_resyncs")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(resyncs, 0, "升级不能猜测旧设备重建已完成");
+        drop(conn);
+        upgraded.close().await;
+        let backup = migration_backup_path(&path, 5, 6);
+        assert!(backup.exists());
+        assert_eq!(
+            scalar::<String>(&backup, "PRAGMA integrity_check").await,
+            "ok"
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT count(*) FROM controlled_applies").await,
+            1
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT count(*) FROM pending_ops").await,
+            1
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name = 'binding_resyncs'"
+            )
+            .await,
+            0
+        );
+        let checksums = "SELECT group_concat(hex(checksum), ',') FROM (SELECT checksum FROM _sqlx_migrations WHERE version <= 5 ORDER BY version)";
+        assert_eq!(
+            scalar::<String>(&path, checksums).await,
+            scalar::<String>(&backup, checksums).await
+        );
+        let rejected = Database::open_with(&path, &previous).await.unwrap_err();
+        assert!(matches!(
+            rejected,
+            DbError::SchemaTooNew {
+                found: 6,
+                supported: 5
+            }
+        ));
+        assert_eq!(
+            scalar::<String>(&path, "PRAGMA integrity_check").await,
+            "ok"
+        );
+        assert_eq!(
+            scalar::<i64>(&path, "SELECT count(*) FROM upload_resumes").await,
+            1
+        );
     }
 
     #[tokio::test]
@@ -990,13 +1308,13 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 4,
-                    supported: 3
+                    found: 7,
+                    supported: 6
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 4);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 7);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM probe").await,
             1,

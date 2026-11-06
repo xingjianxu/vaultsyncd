@@ -27,6 +27,9 @@ vaultsyncd-transfer = { path = "../transfer" }
 # 适配器把状态端口接到客户端 SQLite（design §7.3）：只用到连接池与短事务，SQLx 的 bundled
 # SQLite 与迁移仍由 `crates/client-store` 唯一负责，这里不新增 schema 逻辑。
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+# 首次绑定的内部持久日志；不为 wire DTO 维护第二份定义。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 # 端口与执行器是异步接口：测试用 `#[tokio::test]` 驱动（产品代码不依赖运行时）。
