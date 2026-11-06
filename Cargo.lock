@@ -2545,8 +2545,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tokio",
  "vaultsyncd-domain",
  "vaultsyncd-fs-common",
+ "vaultsyncd-local-ipc",
  "vaultsyncd-transfer",
  "windows",
 ]

@@ -2268,4 +2268,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - client 0010 的 `agent_evidence` 保存不可变物理内容证据，`agent_versions` 保存固定版本 pin，`agent_actions` 保存原 Op 规格及 ACK；baseline/local/remote/queue 仍是各自当前状态唯一事实来源。新版升级有备份，旧 v9 writer 在写前拒绝；derived event spec 可由持久 received_changes 重建。
 - namespace 与内容发现共用单次健康 metadata scan。收到完整确认删除时 `WindowsFiles::quarantine` 只把同一真实对象保留到内部状态；dirty 内容不被替换。目录删除需真实 subtree token 且前后固定快照与已知子树一致。历史自 ACK/旧事件不重新安装用户已移动或删除的文件。dirty 等待本身上传协调是 Pending，不作永久 halted。
 - 正式 Adapter 目录 population=ALWAYS_FULL(3)，应用通过 snapshot/events 维护所有名字；内容仍使用固定版本按需回源。protected Win32 句柄的读使用存活 OVERLAPPED/event 并等待真实完成，rename 对 STATUS_PENDING 保留 IOSB/缓冲和 CfReference 至完成；不把 pending 当成功、不把异步句柄交给 std 同步读取。
-- 验收 `run-native-process.sh` 使用真实 Linux bootstrap 与 Windows 实际进程，覆盖无 GUI 双向同步、原 Op 重启、冲突双方、namespace、开放 Move 后进程终止恢复、SQLite 三类工作收敛、第二实例和退出。测试 cleanup 缺失配置时只允许显式精确 run allowlist 且同步根已空；未知现场保留。S071/S072 才提供 named pipe 和管理命令，S074/S102 扩展多客户端及故障矩阵。
+- 验收 `run-native-process.sh` 使用真实 Linux bootstrap 与 Windows 实际进程，覆盖无 GUI 双向同步、原 Op 重启、冲突双方、namespace、开放 Move 后进程终止恢复、SQLite 三类工作收敛、第二实例和退出。测试 cleanup 缺失配置时只允许显式精确 run allowlist 且同步根已空；未知现场保留。S071 提供 named pipe，S072 提供管理命令；S074/S102 扩展多客户端及故障矩阵。
+
+## S071 Windows 本机 named pipe
+
+- `platform-windows::ipc::Endpoint::current(scope)` 从 process token 取 SID/session，生产 scope 固定 `vaultsyncd-agent`，名称 `\\\\.\\pipe\\{scope}-{SID}-{session}`；不接受外部路径/用户身份。`connect/request` 只连本机，校验 server PID 的 token SID，默认 identification-only SQOS；GUI/CLI 消费此模块不启动 CFAPI。
+- `Server::bind(Endpoint, Fn(Request)->Future<io::Result<Response>>)` 首实例独占、拒绝远程、非继承句柄、protected DACL 仅当前 SID 完全控制；每个完整请求通过管道 impersonation 读取 thread token SID，立即 RevertToSelf，跨 await 不保留 impersonation。Revert 失败 fail-closed 终止，不能把借用身份交还线程池。
+- 4 字节大端长度 + JSON，沿用 local-ipc schema 上限（1 MiB）；空/超长/畸形/未知命令/截断均不产成功答复。每连接顺序执行、跨连接最多 8 个请求执行任务（额外一个待连接 listener），超额立即关闭；完整帧、handler、write 各 5 秒 deadline，不因碎片到达重置。断连仅销毁该连接。`shutdown` 取消并等待所有连接；Drop 为紧急取消；`is_finished` 供应用检查 listener 故障。
+- 原生入口 `tests/platform/windows/run-native-ipc.sh`：交叉构建后 Windows 11 真 named pipe + 临时第二本机账号验 ACL；同时验证 token 身份、分片/流水线、并发、有界积压/慢读写/handler、畸形/断连后可继续请求。测试账号在 finally 删除，不碰其他样本。

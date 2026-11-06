@@ -4,7 +4,7 @@
 //! 已落地 `cfapi/` 的同步根注册、连接、占位创建、状态查询、`FileIdentity` 编码（S010）
 //! 与内容水合读取、范围供给、取消、超时/离线失败语义（S011）、释放/写保护（S012）；
 //! S065 增加 `files/` 的句柄相对安全访问/元数据扫描及 `watcher/` 的原生通知与补扫围栏。
-//! `shell/`、`ipc/` 由后续卡实现。
+//! S071 增加 `ipc/` 的本机同用户受限 named pipe 传输；不初始化 CFAPI。
 //!
 //! 边界（design §14.2）：
 //!
@@ -23,3 +23,6 @@ pub mod watcher;
 
 #[cfg(windows)]
 pub mod shell;
+
+#[cfg(windows)]
+pub mod ipc;
