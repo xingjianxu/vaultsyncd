@@ -35,3 +35,23 @@ verify-source校验只读源全部对象及SQLite quick_check、外键、ServerI
 release等待读者退出，先持久releasing，再仅删除该ID快照，最后释放租约并记released；与原对象区无删除关联。重复release幂等，失败/强杀后重启继续。未知工件保留并报告原因，不强制清理；管理员核对本ID故障证据后再恢复。到期释放仅收尾租约，不创建新备份。把归档与收据放到独立故障域并验证后再主动release。
 
 S088专用run `s088-1106` 的真实CLI/HTTP矩阵覆盖完整逐项导出、当前/历史/回收站、坏hash/缺对象、取消、跨10秒长流和释放SIGKILL恢复；服务始终普通用户运行，所有共享对象hash保持不变，测试卷已卸载且loop已detach。详见`agent/tasks/S088.md`。
+
+
+## 离线恢复到新空目录
+
+停止目标实例后，以服务同一UID预建0700状态目录和各Root新空目录。它们必须在同一合规CoW btrfs文件系统，互不重叠；不能使用符号链接/目录身份别名，不能与清单原Root路径重叠。CLI不会自动停止服务，也不覆盖非空目录。保留归档及其固定摘要收据，即使先前export/verify取消，validate仍会重新验证全部字节，不能把收据状态直接当成功。
+
+```sh
+vaultsyncd-admin restore validate --archive /safe-backup/example.vsbk --state-dir /srv/restored/state --root 0123456789abcdef0123456789abcdef=/srv/restored/work
+vaultsyncd-admin restore apply --archive /safe-backup/example.vsbk --state-dir /srv/restored/state --root 0123456789abcdef0123456789abcdef=/srv/restored/work
+```
+
+有多个Root时重复`--root ID=绝对路径`，每个清单Root恰好映射一次；无Root备份省略该参数。validate检查固定清单/完整流终止标记、所有文件hash、SQLite完整性/FK/ServerId/schema/Root seq/逻辑计数、协议版本、活跃命名空间与真实空间预算。支持备份schema12至当前版本，未知未来schema/协议拒绝；产品patch与契约内容摘要不代替独立版本号。容量预算是复制和元数据余量估算，不是配额预留；写入失败不会报告restored。
+
+apply全过程持服务/init同一server.lock，在线实例明确拒绝。先持久`restore.incomplete`；正式`server.sqlite`保存独立种类的恢复护栏，源DB仅写`restore.candidate.sqlite`，所以不认识新标记的旧服务也会沿用数据库种类门拒绝半成品。对象按安全布局导入，活跃文件重建为独立inode的普通文件，历史/回收站留在DB与对象区，不把已删项写回工作目录。短事务更新新物理映射并分配全新随机63位非零epoch，沿用ServerId、Root seq及逻辑历史，所有会话失效。随机代际排除旧值，反复从同一旧备份恢复不会确定复用相同epoch；旧epoch操作在读取旧幂等结果前返回410。
+
+原配置字节保存在0600的`backup-config.json`；新的`server.toml`保留listen/log设置，替换状态目录与Root允许路径，默认仅允许已映射Root。零Root时不配置新允许路径，后续注册前由管理员明确配置。核对端口及新目录后可用该配置启动服务。只有全部对象/工作文件hash、DB/映射/epoch和目录刷盘完成，且护栏身份未变，才原子发布候选DB、写`restore.complete.json`并持久移除未完成标记。报告格式唯一源为`api/backup-restore.schema.json`。
+
+失败或取消保留`restore.incomplete`、护栏/候选及已写文件，服务和init在打开数据库前拒绝。不要手动删标记来绕过检查；保留现场与归档，改用另一组新空目标重新apply。已有目录的数据合并归首次合并流程，不用离线恢复强制覆盖。旧客户端按epoch变化进入重同步，保留未确认本地内容，不自动重放旧操作。
+
+S089专用run `s089-1106` 验证实际CLI完整恢复、真实服务启动/历史下载/回收站、旧session及旧epoch隔离、重复恢复、零Root、坏归档、实际空间不足、非法/在线目标和apply SIGKILL后的双重屏障；22.40秒最终矩阵通过。测试卷已卸载、loop detach及删除，证据见`agent/tasks/S089.md`。

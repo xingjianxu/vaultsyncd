@@ -28,6 +28,7 @@ pub mod gc;
 pub mod intents;
 pub mod leases;
 pub mod operations;
+pub mod restore;
 pub mod roots;
 pub mod sessions;
 pub mod snapshots;

@@ -5231,6 +5231,7 @@ dependencies = [
  "sha2",
  "tokio",
  "vaultsyncd-domain",
+ "vaultsyncd-fs-common",
  "vaultsyncd-transfer",
 ]
 
