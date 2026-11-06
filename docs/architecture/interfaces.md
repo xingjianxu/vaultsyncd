@@ -2032,3 +2032,37 @@ CAS、旧代际 ACK、未定位冲突保留，以及从 high_water=7 接收/应�
 未接线：生产 HTTPS 快照/服务器时间适配、Windows 根扫描与意图/安装、生产 EventDecoder 仍由应用
 入口提供；导入专用 ACK 适配不冒充所有 S056 上传的通用 baseline/冲突适配。当前 S052 的 create
 运行时仍显式未装配，本卡未修改服务端路径；本卡证据是 L 环境真实持久恢复，不宣称产品端到端可用。
+
+## crates/agent-core — 本地受控内容应用与重启核对（S059）
+
+路径：`executor/apply.rs`、`executor/apply/store.rs`、`recovery/mod.rs`。平台与 HTTP 由入口组装，
+纯核心不进行文件 I/O。只处理完整文件内容安装，不生成 Linux 客户端，不冒充 Windows 原生验证。
+
+| 接口 | 契约 |
+| --- | --- |
+| `ControlledLocal::observe_content(path)` | 健康根的 `Absent`，或 `File{LocalFacts, Arc<SnapshotSource>}`。固定快照对应活动文件代际；读取错误、挂载失效、扫描中均返回错误，不返回缺失。稳定身份不可空，使用状态必须 Idle；平台不能只凭 mtime 或数据库 clean 维护 generation。 |
+| `recovery::inspect(local, path)` | 流式读取固定快照（窗口 ≤256 KiB），读取后再次核对活动路径、类型、身份、generation 与使用状态。返回 `ContentEvidence::{Absent, File{generation,identity,digest,size}}`；未知不产生破坏授权。每次应用都调用，重启不缓存旧 clean 结论。删除/释放适配器也必须先完成真实核对，未扫描条目保持 unknown。 |
+| `ControlledLocal::replace_verified(request, before)` | 只在持久意图存在后调用。在平台使用保护/独占句柄内重新核对完整 before，包括真实内容、身份和 generation，再安装重新校验的暂存并持久化文件/父目录。Absent 要求不覆盖创建；不能用无保护的 observe+rename 实现。任何二次修改返回 LOCAL_CHANGED。 |
+| `ApplySpec` | 固定 OpId、BindingId、路径、比较并写的旧 baseline（首次为 None）、已提交新 baseline、VersionPin（版本/摘要/长度）、原确认内容证据。拒绝非文件、删除、版本/身份不匹配和倒退 revision；不接受上传 finalize/pending 作为提交证明。 |
+| `ApplySpec::for_import_file(&ImportInstall)` | S058 Full 文件安装桥接，固定 SnapshotEntry 版本/摘要/大小，expected=Absent；可在 ImportLocal::install 中交给同一 ControlledApply。目录和 OnDemand 占位明确 Unsupported，不静默降级 Full。 |
+| `ControlledApply::apply(spec, content, temp, progress, options)` | 重哈希真实前置内容 → S054 固定版本下载/暂存同步/流式整份校验 → 同事务写意图及重放上下文 → 再核对并平台条件替换 → 再核对真实新内容 → baseline/local/完成记录同事务。失败保留队列、旧基线、暂存与意图；相同 OpId 输入不同拒绝 OP_ID_REUSED。 |
+| `ControlledApply::recover(binding)` | 从 SQLite 按 intent_id 恢复，不依赖原内存规格或网络。现场等于目标摘要/长度只补基线；仍等于 before 才可条件重做；第三种内容、占用、故障或新 DB generation/dirty 保留现场。返回逐操作 Result；读清单失败或存在未归属的旧/其它平台意图返回整体 Err，不得宣布启动恢复完成。 |
+
+客户端迁移 `0005_controlled_apply.sql` 追加 `controlled_applies`：OpId 主键、绑定、目标、唯一
+local_intents 外键、完整 JSON 重放上下文、completed。开放目标唯一；意图与日志同事务创建，
+baseline/local 的 generation/身份/摘要与 completed、意图删除同事务完成。完成记录保留以防
+导入/事件在下一层确认前重放旧安装；再次调用也先检查现场，不覆盖新字节。0001—0004 未改写，
+0004→0005 实迁移测试保留旧意图、导入/ACK 映射及迁移前一致性备份。
+
+消费者围栏：S058 finish_item 保留已有 local 行（含受控发布的指纹/身份或新 dirty），不倒退
+baseline；S057 应用批次不回写更旧 revision，同 revision 不同事实报错，applied_seq 仍只在
+全部动作与基线成功后推进。S056 上传 ACK 的 generation 条件事务及 pending 非 committed 语义不变。
+接 S055 的 handler 应令 plan_intent 返回 None，由 ControlledApply 校验下载后保存完整意图；
+成功才 Completed/出队，失败不清意图。入口仍须串行调度同一 binding，启动恢复和逐条核对完成前
+不得放开破坏动作；本接口不自动替用户处理未知旧意图。
+
+验收：`executor/apply/{tests,consumer_tests}.rs` 使用真实 SQLite/WAL、磁盘暂存/内容与 rename/fsync，
+独立进程在意图后、替换后 DB 未更新、基线事务后直接退出 81/82/83，后续进程重开核对恢复。
+另覆盖旧 clean 同大小新内容、二次修改/创建、暂存篡改、操作复用、未知/旧意图、旧 ACK/新 dirty、
+首次安装收尾与事件 received/applied 游标。测试平台端口仅 cfg(test)，不提供生产 Windows 使用保护。
+生产平台、目录/保留移动、按需占位及事件 DTO 解码仍由相应适配/后续卡接线。
