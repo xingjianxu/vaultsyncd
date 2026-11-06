@@ -41,13 +41,27 @@ def inspect(path, *, private=False, snapshot_mount=False):
         os.close(fd)
 
 
-if os.geteuid() == 0:
-    fail("must run as a dedicated non-root service UID")
-configuration = json.loads(Path(sys.argv[2]).read_text())
-backup = Path(configuration["stateDir"]) / "backups"
-inspect(configuration["stateDir"], private=True, snapshot_mount=not backup.exists())
-if backup.exists() or backup.is_symlink():
-    inspect(str(backup), private=True, snapshot_mount=True)
-for root in configuration["rootPaths"]:
-    inspect(root)
-print("vaultsyncd preflight: btrfs/CoW/access/mount options verified; no permissions changed")
+def main():
+    if os.geteuid() == 0:
+        fail("must run as a dedicated non-root service UID")
+    if sys.argv[2] == "--toml":
+        import tomllib
+        with Path(sys.argv[3]).open("rb") as source:
+            config = tomllib.load(source)
+        configuration = {"stateDir": config["state"]["dir"],
+                         "rootPaths": config.get("roots", {}).get("allowed_bases", [])}
+    elif sys.argv[2] == "--state":
+        configuration = {"stateDir": sys.argv[3], "rootPaths": []}
+    else:
+        configuration = json.loads(Path(sys.argv[2]).read_text())
+    backup = Path(configuration["stateDir"]) / "backups"
+    inspect(configuration["stateDir"], private=True, snapshot_mount=not backup.exists())
+    if backup.exists() or backup.is_symlink():
+        inspect(str(backup), private=True, snapshot_mount=True)
+    for root in configuration["rootPaths"]:
+        inspect(root)
+    print("vaultsyncd preflight: btrfs/CoW/access/mount options verified; no permissions changed")
+
+
+if __name__ == "__main__":
+    main()

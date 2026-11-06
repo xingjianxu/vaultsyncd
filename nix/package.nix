@@ -1,4 +1,4 @@
-{ pkgs, src, sourceInfo, nixpkgsRevision }:
+{ pkgs, src, sourceInfo, nixpkgsRevision, webPackage ? null }:
 let
   lib = pkgs.lib;
   version = (builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"))).workspace.package.version;
@@ -29,7 +29,9 @@ let
     cargoTestFlags = [ "-p" "vaultsyncd-server" "-p" "vaultsyncd-admin" "--lib" "--bins" ];
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.sqlite ];
-    doCheck = true;
+    # Cross binaries are tested by the actual target runtime acceptance, not
+    # silently executed on the build CPU or counted as native unit-test passes.
+    doCheck = pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
     meta.platforms = lib.platforms.linux;
   };
   webDeps = pkgs.fetchPnpmDeps {
@@ -38,7 +40,7 @@ let
     fetcherVersion = 5;
     hash = "sha256-kYr78clfL0b5jXI0uuO9ePOPkk7f5e9+lsqHRnjCf68=";
   };
-  web = pkgs.stdenvNoCC.mkDerivation {
+  web = if webPackage != null then webPackage else pkgs.stdenvNoCC.mkDerivation {
     pname = "vaultsyncd-web";
     inherit version;
     src = webSource;
@@ -96,8 +98,18 @@ let
         --prefix PATH : ${lib.makeBinPath [ pkgs.btrfs-progs ]}
       python3 ${src}/packaging/linux/nix-manifest.py ${provenance} "$out"
     '';
+  portable = import ./portable.nix {
+    inherit pkgs rust web provenance version sourceInfo;
+    source = src;
+  };
 in {
   default = release;
-  inherit rust web;
+  inherit rust web portable;
+  portable-aarch64 = if pkgs.stdenv.hostPlatform.isAarch64 then portable else
+    (import ./package.nix {
+      pkgs = pkgs.pkgsCross.aarch64-multiplatform;
+      inherit src sourceInfo nixpkgsRevision;
+      webPackage = web;
+    }).portable;
   web-deps = webDeps;
 }
