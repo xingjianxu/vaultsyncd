@@ -21,6 +21,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "sync", "time"] }
 vaultsyncd-protocol = { path = "../protocol" }
+# 端点模块实现 `crates/transfer` 的端口（上传会话与固定版本内容），因此依赖它的端口与摘要类型，
+# 而不是再定义一套“客户端专用”的传输结构。
+vaultsyncd-transfer = { path = "../transfer" }
 
 [dev-dependencies]
 # 证书验收：用真实 TLS 握手证明“未显式信任的自签证书一定失败、显式追加的开发 CA 才通过”。
