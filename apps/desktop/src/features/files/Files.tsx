@@ -28,7 +28,7 @@ export function Files({ agent, bindings = [], run, busy, changed }: { agent:Agen
     <p role="status">{message}</p><Button disabled={busy||!binding} onClick={()=>run(load)}>刷新文件状态</Button>
     <Table<FileStatus> caption="文件当前页" rows={(rows??[]).filter(r=>r.path.toLowerCase().includes(search.toLowerCase()))} rowKey={r=>r.path} emptyMessage={rows?"当前页没有匹配文件。":"尚未读取文件。"} columns={[
       {key:"path",title:"路径",render:r=>r.path},
-      {key:"state",title:"状态",render:r=><span>{labels[r.status]??"未知状态"}{r.pending?" · 待确认/未完成":""}{r.busy?" · 正在使用或保护未知":""}{r.synchronized&&!r.pending&&!r.dirty?" · 基线已确认":""}</span>},
+      {key:"state",title:"状态",render:r=><span>{labels[r.status]??"未知状态"}{r.pending?" · 待确认/未完成":""}{r.busy?" · 正在使用或保护未知":""}{r.availability==="offline"?" · 当前离线":""}{r.remote_apply!=="current"?" · 远端/基线仍需核对":""}{r.synchronized&&!r.pending&&!r.dirty?" · 基线已确认":""}</span>},
       {key:"actions",title:"操作",render:r=><><Button disabled={busy||!fresh||!r.entry_id||r.dirty||current?.paused||current?.detached} onClick={()=>run(()=>action(r,"download"))}>下载</Button><Button disabled={busy||!fresh||!r.release_allowed||current?.detached} onClick={()=>setSelected(r)}>释放空间</Button><p>{r.release_reason}</p></>},
     ]}/>
     <Button disabled={busy||!cursor} onClick={()=>setCursor(undefined)}>回到第一页</Button><Button disabled={busy||!next} onClick={()=>setCursor(next)}>下一页</Button>

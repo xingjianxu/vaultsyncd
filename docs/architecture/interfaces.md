@@ -2383,3 +2383,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 连接页提供地址、账号、显式附加CA；绑定页读取授权Root、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
 - agent 保留管理连接证书错误 `CERTIFICATE_INVALID`（blocked/不可自动重试）和目录错误 `LOCAL_PATH_UNAVAILABLE`（invalid_argument），返回核对名称/CA或现有NTFS目录的说明，不回显底层自由错误或凭据。Root/登录仍走现有认证用例，IPC schema 无变更。
 - `run-native-bindings.sh` 复用真实 Linux btrfs 实例，私有测试TLS+认证SSH回环隧道，Windows真React表单经桥/管道操作。先不信任CA而失败，再显式CA成功；验证错误目录、双方非空首合并、暂停恢复、关闭GUI后新文件上传与服务端真实字节。脚本/fixture注入仅 native-acceptance feature，正式程序不包含。生产HTTPS部署仍由S097验收。
+
+## S082 文件清单与桌面手动管理
+
+- 本机IPC **1.3**新增`list_files(binding_id,cursor?)`，1.2调用该命令明确UnsupportedVersion，其余既有命令保持兼容。schema唯一源生成Rust/TS `FileStatus`及`ManagementResult.files`；CLI提供`files --binding-id ID [--cursor ID]`，缺结果不是空成功。共享样本`api/examples/local-ipc.files.json`验证pending/dirty和六维信息不丢失，错误布尔值/缺维度两端拒绝。
+- `agent::management_listing::list`只经实际安全扫描与客户端持久状态读模型投影，复用domain `EntryState::project`。涵盖驻留、dirty、远端应用、任务、保护忙/未知、调度离线/Root不可用；online仅表示当前无已记录离线事实，不承诺网络连通。未知/未导入文件无entry_id，不能执行远端动作。扫描或挂载故障不作删除；缺完整内容凭据、物理修改、忙、待办、full或门禁阻塞均禁止UI释放。提示不是授权，S069执行器仍重核真实身份/完整hash/代际/版本租约与句柄。
+- 每页最多100项，排序/游标为相对路径SHA256前16字节的规范hex，碰撞明确失败；返回next_cursor续读。实时分页不承诺跨页一致快照，刷新回第一页，界面搜索明确仅当前页。未读/失败不显示伪造空清单；旧页保留但动作禁用，慢响应不覆盖另一绑定页。
+- 桌面固定桥增加`agent_list_files/agent_download_entry/agent_release_entry/agent_list_problems/agent_retry_problem/agent_set_mode/agent_detach_binding/agent_export_recovery`，AppManifest和主窗口capability逐项授权，无通用任意命令/文件/SQL入口。副作用OpId在失败后保留供同动作重试。释放必须确认本地移除/远端保留/离线不可读；绑定管理提供模式、恢复导出和保留数据解绑的独立确认，完成只认agent返回的实际计数/报告。问题重试仅对agent标记retryable项目启用，仍调用既有执行器。
+- `run-native-files-ui.sh`在真Windows WebView操作页面，用只编译于native-acceptance的固定样本句柄/写入控制验证busy/dirty双重保护。实际下载、释放/重新下载、模式、pending不绿、导出dirty/未导入新文件hash、解绑后服务器原字节与本地数据均保留已验证。正式无测试feature构建清理两项测试自动权限，包含测试fixture/控制命令的二进制拒绝作为正式证据。VM保持在线，测试服务/隧道与本run进程清理。

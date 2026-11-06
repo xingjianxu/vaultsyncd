@@ -295,6 +295,8 @@ export function decodeErrorBody(value: unknown): ErrorBody {
 
 /** agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。 */
 export interface FileStatus {
+  /** online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。 */
+  availability: string;
   /** 无法取得当前保护句柄；不保证此后一直空闲。 */
   busy: boolean;
   /** 持久未确认状态或物理修改证据。 */
@@ -309,17 +311,22 @@ export interface FileStatus {
   release_allowed: boolean;
   /** 释放禁用原因或影响提示。 */
   release_reason: string;
+  /** current/pending/blocked_by_local/conflicted。 */
+  remote_apply: string;
   /** metadata_only/partial/materialized/unknown，不猜测完整驻留。 */
   residency: string;
   /** domain EntryState::project结果。 */
   status: string;
   /** 基线已确认且没有本地待办；不表示备份。 */
   synchronized: boolean;
+  /** idle/queued/running/retry_wait/failed。 */
+  transfer: string;
 }
 
 export function decodeFileStatus(value: unknown): FileStatus {
   const object = expect_object(value, "FileStatus");
   return {
+    availability: expect_string(object.availability, "FileStatus.availability"),
     busy: expect_boolean(object.busy, "FileStatus.busy"),
     dirty: expect_boolean(object.dirty, "FileStatus.dirty"),
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "FileStatus.entry_id"),
@@ -327,9 +334,11 @@ export function decodeFileStatus(value: unknown): FileStatus {
     pending: expect_boolean(object.pending, "FileStatus.pending"),
     release_allowed: expect_boolean(object.release_allowed, "FileStatus.release_allowed"),
     release_reason: expect_string(object.release_reason, "FileStatus.release_reason"),
+    remote_apply: expect_string(object.remote_apply, "FileStatus.remote_apply"),
     residency: expect_string(object.residency, "FileStatus.residency"),
     status: expect_string(object.status, "FileStatus.status"),
     synchronized: expect_boolean(object.synchronized, "FileStatus.synchronized"),
+    transfer: expect_string(object.transfer, "FileStatus.transfer"),
   };
 }
 

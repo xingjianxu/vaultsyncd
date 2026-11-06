@@ -5,6 +5,26 @@ use vaultsyncd_local_ipc::{
 };
 
 #[test]
+fn file_projection_round_trips_and_rejects_missing_dimensions_or_lossy_flags() {
+    let sample: serde_json::Value =
+        serde_json::from_str(include_str!("../../../api/examples/local-ipc.files.json")).unwrap();
+    let response: vaultsyncd_local_ipc::generated::Response =
+        serde_json::from_value(sample.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&response).unwrap(), sample);
+    let row = &response.result.unwrap().management.unwrap().files.unwrap()[0];
+    assert!(row.pending && row.dirty && !row.synchronized && !row.release_allowed);
+    let mut invalid = sample.clone();
+    invalid["result"]["management"]["files"][0]["busy"] = serde_json::json!("false");
+    assert!(serde_json::from_value::<vaultsyncd_local_ipc::generated::Response>(invalid).is_err());
+    let mut invalid = sample;
+    invalid["result"]["management"]["files"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("availability");
+    assert!(serde_json::from_value::<vaultsyncd_local_ipc::generated::Response>(invalid).is_err());
+}
+
+#[test]
 fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments() {
     let examples: Vec<serde_json::Value> = serde_json::from_str(include_str!(
         "../../../api/examples/local-ipc.management.json"

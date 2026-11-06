@@ -79,6 +79,10 @@ pub(crate) async fn list(
             .bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
         let failed: Option<String> = sqlx::query_scalar("SELECT last_error_code FROM pending_ops WHERE binding_id=? AND (entry_id=? OR entry_id IS NULL) AND last_error_code IS NOT NULL LIMIT 1")
             .bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).fetch_optional(&mut *tx).await.map_err(error)?;
+        let offline: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operation_schedule s JOIN pending_ops p USING(op_id) WHERE p.binding_id=? AND (p.entry_id=? OR p.entry_id IS NULL) AND s.offline=1)")
+            .bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
+        let transferring: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM transfers t JOIN baseline_entries b ON b.binding_id=t.binding_id AND b.content_version_id=t.version_id WHERE b.binding_id=? AND b.entry_id=? AND t.state='running')")
+            .bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
         tx.commit().await.map_err(error)?;
         let mut state = EntryState {
             dirty: persisted.as_ref().map(|e| e.dirty).unwrap_or(Dirty::Dirty),
@@ -88,7 +92,19 @@ pub(crate) async fn list(
                 .unwrap_or(Residency::Partial),
             ..Default::default()
         };
+        let content_evidence = persisted.as_ref().is_some_and(|p| {
+            p.fingerprint.as_ref().is_some_and(|v| !v.is_empty())
+                && p.file_identity.as_ref().is_some_and(|v| !v.is_empty())
+        });
         let (residency, busy) = if let Some(actual) = &actual {
+            if row
+                .size
+                .as_deref()
+                .and_then(|s| s.parse::<u64>().ok())
+                .is_some_and(|s| s != actual.size)
+            {
+                state.dirty = Dirty::Dirty;
+            }
             if let Some(cloud) = &actual.cloud {
                 if cloud.modified > 0 {
                     state.dirty = Dirty::Dirty;
@@ -124,16 +140,28 @@ pub(crate) async fn list(
         }) {
             state.remote_apply = RemoteApply::Pending;
         }
+        if state.residency == Residency::Materialized && !content_evidence {
+            state.remote_apply = RemoteApply::Pending;
+        }
         if pending {
             state.transfer = Transfer::Queued;
+        }
+        if transferring {
+            state.transfer = Transfer::Running;
+        }
+        if offline {
+            state.availability = vaultsyncd_domain::state::Availability::Offline;
         }
         if let Some(code) = failed {
             if code.contains("CONFLICT") {
                 state.remote_apply = RemoteApply::Conflicted;
             } else {
-                state.transfer = Transfer::Failed(
-                    ErrorCode::from_code(&code).unwrap_or(ErrorCode::NeedsRecovery),
-                );
+                let code = ErrorCode::from_code(&code).unwrap_or(ErrorCode::NeedsRecovery);
+                state.transfer = if code.class().is_severe() {
+                    Transfer::Failed(code)
+                } else {
+                    Transfer::RetryWait(code)
+                };
             }
         }
         if !complete {
@@ -147,6 +175,8 @@ pub(crate) async fn list(
             "实际文件可能正在使用、不可访问或尚未核对"
         } else if state.dirty != Dirty::Clean {
             "存在未确认本地修改，不能释放"
+        } else if state.residency == Residency::Materialized && !content_evidence {
+            "尚未取得当前完整内容的确认凭据，不能释放"
         } else if busy {
             "文件正在使用或无法取得保护句柄，不能释放"
         } else if pending
@@ -176,11 +206,36 @@ pub(crate) async fn list(
             entry_id: Some(id.clone()),
             path: path.clone(),
             status: status.into(),
+            availability: match state.availability {
+                vaultsyncd_domain::state::Availability::Online => "online",
+                vaultsyncd_domain::state::Availability::Offline => "offline",
+                _ => "root_unavailable",
+            }
+            .into(),
+            remote_apply: match state.remote_apply {
+                RemoteApply::Current => "current",
+                RemoteApply::Pending => "pending",
+                RemoteApply::BlockedByLocal => "blocked_by_local",
+                RemoteApply::Conflicted => "conflicted",
+            }
+            .into(),
+            transfer: match state.transfer {
+                Transfer::Idle => "idle",
+                Transfer::Queued => "queued",
+                Transfer::Running => "running",
+                Transfer::RetryWait(_) => "retry_wait",
+                Transfer::Failed(_) => "failed",
+            }
+            .into(),
             residency: residency.into(),
             dirty: state.dirty != Dirty::Clean,
             busy,
-            pending,
-            synchronized: state.is_synced() && !pending && actual.is_some(),
+            pending: pending || transferring || state.remote_apply != RemoteApply::Current,
+            synchronized: state.is_synced()
+                && !pending
+                && !transferring
+                && actual.is_some()
+                && complete,
             release_allowed: reason.is_empty(),
             release_reason: if reason.is_empty() {
                 "释放本地内容后远端保留，离线将不可读".into()
@@ -194,6 +249,14 @@ pub(crate) async fn list(
             entry_id: None,
             path,
             status: "local_changes".into(),
+            availability: if complete {
+                "online"
+            } else {
+                "root_unavailable"
+            }
+            .into(),
+            remote_apply: "pending".into(),
+            transfer: "queued".into(),
             residency: "unknown".into(),
             dirty: true,
             busy: false,
@@ -209,6 +272,9 @@ pub(crate) async fn list(
                 entry_id: None,
                 path,
                 status: "unavailable".into(),
+                availability: "root_unavailable".into(),
+                remote_apply: "pending".into(),
+                transfer: "queued".into(),
                 residency: "unknown".into(),
                 dirty: true,
                 busy: true,

@@ -298,6 +298,8 @@ pub struct ErrorBody {
 /// agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct FileStatus {
+    /// online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。
+    pub availability: String,
     /// 无法取得当前保护句柄；不保证此后一直空闲。
     pub busy: bool,
     /// 持久未确认状态或物理修改证据。
@@ -314,12 +316,16 @@ pub struct FileStatus {
     pub release_allowed: bool,
     /// 释放禁用原因或影响提示。
     pub release_reason: String,
+    /// current/pending/blocked_by_local/conflicted。
+    pub remote_apply: String,
     /// metadata_only/partial/materialized/unknown，不猜测完整驻留。
     pub residency: String,
     /// domain EntryState::project结果。
     pub status: String,
     /// 基线已确认且没有本地待办；不表示备份。
     pub synchronized: bool,
+    /// idle/queued/running/retry_wait/failed。
+    pub transfer: String,
 }
 
 /// get_status 的结果：agent 身份、IPC 协议与真实 Binding 多维状态。bindings 为 1.1 可选增量；旧处理器未接状态源时省略，不伪装成空快照。

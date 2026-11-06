@@ -131,11 +131,14 @@
     },
     "FileStatus": {
       "type":"object", "description":"agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。",
-      "required":["path","status","residency","dirty","busy","pending","synchronized","release_allowed","release_reason"],
+      "required":["path","status","residency","dirty","busy","pending","synchronized","release_allowed","release_reason","availability","remote_apply","transfer"],
       "properties":{
         "entry_id":{"type":"string","description":"已确认基线身份；本地未导入文件省略。"},
         "path":{"type":"string","description":"核对后的相对路径。"},
         "status":{"type":"string","description":"domain EntryState::project结果。"},
+        "availability":{"type":"string","description":"online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。"},
+        "remote_apply":{"type":"string","description":"current/pending/blocked_by_local/conflicted。"},
+        "transfer":{"type":"string","description":"idle/queued/running/retry_wait/failed。"},
         "residency":{"type":"string","description":"metadata_only/partial/materialized/unknown，不猜测完整驻留。"},
         "dirty":{"type":"boolean","description":"持久未确认状态或物理修改证据。"},
         "busy":{"type":"boolean","description":"无法取得当前保护句柄；不保证此后一直空闲。"},

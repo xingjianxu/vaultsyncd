@@ -35,7 +35,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=vaultsyncd-S081-CA -
 openssl req -newkey rsa:2048 -nodes -subj /CN=127.0.0.1 -keyout "$artifact_dir/server.key" -out "$artifact_dir/server.csr" >> "$artifact_dir/certificate.log" 2>&1
 python3 -c 'import pathlib,sys;(pathlib.Path(sys.argv[1])/"server.ext").write_text("subjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")' "$artifact_dir"
 openssl x509 -req -days 1 -in "$artifact_dir/server.csr" -CA "$artifact_dir/ca.pem" -CAkey "$artifact_dir/ca.key" -CAcreateserial -extfile "$artifact_dir/server.ext" -out "$artifact_dir/server.pem" >> "$artifact_dir/certificate.log" 2>&1
-python3 "$script_dir/s082-tls.py" "$artifact_dir" "$host_port" > "$artifact_dir/tls.log" 2>&1 &
+python3 "$script_dir/s081-tls.py" "$artifact_dir" "$host_port" > "$artifact_dir/tls.log" 2>&1 &
 tls_pid=$!
 for _ in $(seq 1 100); do test -f "$artifact_dir/tls-port" && break; sleep .1; done
 tls_port=$(cat "$artifact_dir/tls-port")

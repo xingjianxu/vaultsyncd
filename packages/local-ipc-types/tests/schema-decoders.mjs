@@ -68,6 +68,15 @@ check("frame_limits_come_from_contract", () => {
   assert.equal(PROTOCOL_MINOR, 3);
 });
 
+check("file_projection_preserves_pending_and_rejects_lossy_flags_or_missing_dimensions", () => {
+  const sample=example("local-ipc.files.json");
+  assert.deepEqual(reencode(decodeResponse(sample)),sample);
+  const row=sample.result.management.files[0];
+  assert.ok(row.pending && row.dirty && !row.synchronized && !row.release_allowed);
+  row.busy="false"; expectThrow(()=>decodeResponse(sample));
+  row.busy=false; delete row.availability; expectThrow(()=>decodeResponse(sample));
+});
+
 check("request_example_decodes_to_sample", () => {
   const sample = example("local-ipc.request.json");
   assert.deepEqual(reencode(decodeRequest(sample)), sample);
