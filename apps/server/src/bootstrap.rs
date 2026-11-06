@@ -331,6 +331,9 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         .await
         .map_err(StartupError::Database)?;
 
+    crate::backup::recover_incomplete(&database, &config.state_dir, crate::uploads::server_now())
+        .await
+        .map_err(|e| StartupError::Replay(e.to_string()))?;
     crate::replay::registered(&database, &config.state_dir)
         .await
         .map_err(StartupError::Replay)?;
