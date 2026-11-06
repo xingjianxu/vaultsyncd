@@ -25,6 +25,7 @@ use crate::files::restricted::{
     RestrictError, RestrictedDir,
 };
 use crate::mounts::admission::{self, BackendKind};
+use crate::mounts::health::{self, MountChange};
 use crate::mounts::probe::{self, ProbeError, StorageFacts};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -315,7 +316,7 @@ impl fmt::Display for RootDrift {
     }
 }
 
-/// 复核失败的三种来源：探测失败、句柄身份读取失败或身份漂移。
+/// 复核失败的来源：探测失败、句柄身份读取失败、身份漂移或挂载健康复核失败。
 #[derive(Debug)]
 pub enum RootSpecVerifyError {
     /// 重新探测失败（“读不到”不当作“没变化”）。
@@ -324,6 +325,8 @@ pub enum RootSpecVerifyError {
     Handle(RestrictError),
     /// 身份漂移。
     Drift(RootDrift),
+    /// 挂载健康复核失败（子挂载、权限；见 [`crate::mounts::health`]）。
+    Mount(MountChange),
 }
 
 impl fmt::Display for RootSpecVerifyError {
@@ -332,6 +335,7 @@ impl fmt::Display for RootSpecVerifyError {
             RootSpecVerifyError::Probe(error) => write!(f, "重新探测 Root 失败：{error}"),
             RootSpecVerifyError::Handle(error) => write!(f, "读取 Root 句柄身份失败：{error}"),
             RootSpecVerifyError::Drift(drift) => write!(f, "Root 身份已漂移：{}", drift.code()),
+            RootSpecVerifyError::Mount(change) => write!(f, "Root 挂载复核失败：{change}"),
         }
     }
 }
@@ -341,6 +345,7 @@ impl std::error::Error for RootSpecVerifyError {
         match self {
             RootSpecVerifyError::Probe(error) => Some(error),
             RootSpecVerifyError::Handle(error) => Some(error),
+            RootSpecVerifyError::Mount(change) => Some(change),
             RootSpecVerifyError::Drift(_) => None,
         }
     }
@@ -600,11 +605,13 @@ impl RootHandle {
         Ok(file)
     }
 
-    /// 重新核对 Root 身份：句柄自身仍是注册时那个目录，且路径仍指向同一存储单元与挂载。
+    /// 重新核对 Root 身份：句柄自身仍是注册时那个目录，且路径仍指向同一存储单元与挂载；同时复核
+    /// 子挂载与根目录读取权限（design §12.3）。
     ///
     /// # Errors
     ///
-    /// 句柄身份漂移时返回 [`RootDrift`]；路径探测失败时返回 [`RootSpecVerifyError::Probe`]。
+    /// 句柄身份漂移时返回 [`RootDrift`]；路径探测失败、出现子挂载或权限不足时返回
+    /// [`RootSpecVerifyError::Probe`]/[`RootSpecVerifyError::Mount`]。
     pub fn verify(&self) -> Result<(), RootSpecVerifyError> {
         let handle = self.identity().map_err(RootSpecVerifyError::Handle)?;
         if !self.snapshot.same_directory(&handle) {
@@ -613,7 +620,9 @@ impl RootHandle {
         if handle.mount_id != Some(self.snapshot.mount_id) {
             return Err(RootSpecVerifyError::Drift(RootDrift::MountChanged));
         }
-        self.snapshot.verify(&self.snapshot.resolved_path)
+        health::verify_root_mount(&self.snapshot.resolved_path, &self.snapshot)
+            .map_err(RootSpecVerifyError::Mount)?;
+        Ok(())
     }
 
     /// 打开（或复用根句柄）一个子目录，核对挂载边界后执行 `action`。

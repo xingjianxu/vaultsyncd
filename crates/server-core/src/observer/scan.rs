@@ -145,6 +145,39 @@ pub struct SkippedEntry {
     pub reason: SkipReason,
 }
 
+/// 读取失败的分类（design §12.3：扫描健康结论必须区分 `permission_denied` 与 `io_error`）。
+///
+/// 分类只用于报告与“能不能推导删除”，不改变错误处理：两类失败都不会产生删除结论。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadFailure {
+    /// 没有权限（`EACCES`/`EPERM`）。
+    PermissionDenied,
+    /// 其他读失败（IO 错误、路径已不是目录等）。
+    IoError,
+}
+
+impl ReadFailure {
+    /// 稳定短名。
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReadFailure::PermissionDenied => "permission_denied",
+            ReadFailure::IoError => "io_error",
+        }
+    }
+}
+
+/// 从端口错误得出读失败分类；`RootUnavailable` 不在这里（它归挂载变化）。
+fn read_failure(error: &WorkTreeError) -> ReadFailure {
+    match error {
+        WorkTreeError::PermissionDenied { .. } => ReadFailure::PermissionDenied,
+        WorkTreeError::Unreadable { .. }
+        | WorkTreeError::Gone { .. }
+        | WorkTreeError::RootUnavailable { .. }
+        | WorkTreeError::InvalidPath { .. } => ReadFailure::IoError,
+    }
+}
+
 /// 扫描结论不完整的原因。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InconclusiveReason {
@@ -159,6 +192,8 @@ pub enum InconclusiveReason {
         path: String,
         /// 原始错误文本。
         detail: String,
+        /// 失败分类（权限 / 其他 IO）。
+        failure: ReadFailure,
     },
     /// 某一项读不了：不是“项不存在”。
     EntryUnreadable {
@@ -166,6 +201,8 @@ pub enum InconclusiveReason {
         path: String,
         /// 原始错误文本。
         detail: String,
+        /// 失败分类（权限 / 其他 IO）。
+        failure: ReadFailure,
     },
     /// Root 不可用（挂载漂移等）：扫描停止，不推导任何删除。
     RootUnavailable {
@@ -180,11 +217,19 @@ impl fmt::Display for InconclusiveReason {
             InconclusiveReason::BudgetExhausted { limit } => {
                 write!(f, "扫描预算 {limit} 项已用尽")
             }
-            InconclusiveReason::DirectoryUnreadable { path, detail } => {
-                write!(f, "目录 {path:?} 不可读：{detail}")
+            InconclusiveReason::DirectoryUnreadable {
+                path,
+                detail,
+                failure,
+            } => {
+                write!(f, "目录 {path:?} 不可读（{}）：{detail}", failure.as_str())
             }
-            InconclusiveReason::EntryUnreadable { path, detail } => {
-                write!(f, "项 {path:?} 不可读：{detail}")
+            InconclusiveReason::EntryUnreadable {
+                path,
+                detail,
+                failure,
+            } => {
+                write!(f, "项 {path:?} 不可读（{}）：{detail}", failure.as_str())
             }
             InconclusiveReason::RootUnavailable { detail } => write!(f, "Root 不可用：{detail}"),
         }
@@ -213,6 +258,74 @@ impl ScanCompletion {
     }
 }
 
+/// 一次扫描的健康结论（design §12.3）：只有 [`ScanHealth::Complete`] 才能推导删除。
+///
+/// 四类必须区分的结论是 `complete`/`permission_denied`/`io_error`/`mount_changed`；额外单列
+/// [`ScanHealth::Incomplete`]（预算耗尽）：它是“没走完”，既不是健康也不是故障，同样不得推导删除。
+/// 多种原因同时出现时取最严重的一类（挂载 > 权限 > IO > 未走完），完整原因仍在
+/// [`ScanCompletion`] 里。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScanHealth {
+    /// 走完了且没有任何读取失败。
+    Complete,
+    /// 有目录/项因权限失败未被读到。
+    PermissionDenied {
+        /// 读不到的路径。
+        paths: Vec<String>,
+    },
+    /// 有目录/项因 IO 错误未被读到。
+    IoError {
+        /// 读不到的路径。
+        paths: Vec<String>,
+    },
+    /// Root 不可用（挂载漂移、卸载后露出空目录等）。
+    MountChanged {
+        /// 原因文本。
+        detail: String,
+    },
+    /// 预算耗尽，还有目录没检查。
+    Incomplete {
+        /// 还没处理完的目录数。
+        remaining_dirs: usize,
+    },
+}
+
+impl ScanHealth {
+    /// 是否“完整且健康”：唯一允许推导删除的结论。
+    #[must_use]
+    pub fn is_complete_and_healthy(&self) -> bool {
+        matches!(self, ScanHealth::Complete)
+    }
+
+    /// 稳定短名（`complete`/`permission_denied`/`io_error`/`mount_changed`/`incomplete`）。
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ScanHealth::Complete => "complete",
+            ScanHealth::PermissionDenied { .. } => "permission_denied",
+            ScanHealth::IoError { .. } => "io_error",
+            ScanHealth::MountChanged { .. } => "mount_changed",
+            ScanHealth::Incomplete { .. } => "incomplete",
+        }
+    }
+}
+
+impl fmt::Display for ScanHealth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScanHealth::Complete => f.write_str("complete"),
+            ScanHealth::PermissionDenied { paths } => {
+                write!(f, "permission_denied({})", paths.join(","))
+            }
+            ScanHealth::IoError { paths } => write!(f, "io_error({})", paths.join(",")),
+            ScanHealth::MountChanged { detail } => write!(f, "mount_changed({detail})"),
+            ScanHealth::Incomplete { remaining_dirs } => {
+                write!(f, "incomplete(剩余 {remaining_dirs} 个目录)")
+            }
+        }
+    }
+}
+
 /// 一次扫描的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanReport {
@@ -235,6 +348,49 @@ impl ScanReport {
             ScanCompletion::Inconclusive { reasons, .. } => reasons
                 .iter()
                 .any(|reason| matches!(reason, InconclusiveReason::RootUnavailable { .. })),
+        }
+    }
+
+    /// 扫描的健康结论（design §12.3）。
+    #[must_use]
+    pub fn health(&self) -> ScanHealth {
+        let ScanCompletion::Inconclusive { resume, reasons } = &self.completion else {
+            return ScanHealth::Complete;
+        };
+        if let Some(detail) = reasons.iter().find_map(|reason| match reason {
+            InconclusiveReason::RootUnavailable { detail } => Some(detail.clone()),
+            _ => None,
+        }) {
+            return ScanHealth::MountChanged { detail };
+        }
+        let mut denied = Vec::new();
+        let mut io_errors = Vec::new();
+        for reason in reasons {
+            match reason {
+                InconclusiveReason::DirectoryUnreadable {
+                    path,
+                    failure: ReadFailure::PermissionDenied,
+                    ..
+                }
+                | InconclusiveReason::EntryUnreadable {
+                    path,
+                    failure: ReadFailure::PermissionDenied,
+                    ..
+                } => denied.push(path.clone()),
+                InconclusiveReason::DirectoryUnreadable { path, .. }
+                | InconclusiveReason::EntryUnreadable { path, .. } => io_errors.push(path.clone()),
+                InconclusiveReason::BudgetExhausted { .. }
+                | InconclusiveReason::RootUnavailable { .. } => {}
+            }
+        }
+        if !denied.is_empty() {
+            return ScanHealth::PermissionDenied { paths: denied };
+        }
+        if !io_errors.is_empty() {
+            return ScanHealth::IoError { paths: io_errors };
+        }
+        ScanHealth::Incomplete {
+            remaining_dirs: resume.pending_dirs(),
         }
     }
 }
@@ -286,6 +442,7 @@ pub fn scan_tree(
                 reasons.push(InconclusiveReason::DirectoryUnreadable {
                     path: pending.path.clone(),
                     detail: error.to_string(),
+                    failure: read_failure(&error),
                 });
                 retry_dirs.push(pending);
                 continue;
@@ -340,6 +497,7 @@ pub fn scan_tree(
                         reasons.push(InconclusiveReason::EntryUnreadable {
                             path,
                             detail: error.to_string(),
+                            failure: read_failure(&error),
                         });
                         failed_names.insert(entry.name.clone());
                     }

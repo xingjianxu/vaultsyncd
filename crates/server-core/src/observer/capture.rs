@@ -13,8 +13,8 @@
 use std::fmt;
 use std::path::Path;
 
-use vaultsyncd_domain::ids::RootId;
-use vaultsyncd_domain::version::UtcTimestamp;
+use vaultsyncd_domain::ids::{EntryId, RootId};
+use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 
 use crate::commit::put::RootCommitGate;
 use crate::objects::{
@@ -236,6 +236,10 @@ pub enum AdoptOutcome {
     UnchangedContent {
         /// 已知条目当前的内容。
         content: ExpectedContent,
+        /// 已知条目身份（写入采纳基线，供外部移动/删除核对）。
+        entry: EntryId,
+        /// 已知条目当前 revision。
+        revision: Revision,
     },
     /// 需要重新排队。
     Requeue(RequeueReason),
@@ -353,6 +357,8 @@ async fn adopt_locked<S: ExternalAdoptStore>(
             if entry.content == Some(proposal.content) {
                 return Ok(AdoptOutcome::UnchangedContent {
                     content: proposal.content,
+                    entry: entry.entry,
+                    revision: entry.revision,
                 });
             }
             AdoptKind::Update {
