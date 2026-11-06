@@ -2366,3 +2366,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `ManagedRoot{root_id,path,health,reason,next_step,root_seq,collection}`：每次请求按注册 `RootSnapshot` 现场复核挂载/身份/权限，失败 health=unavailable、collection=blocked，绝不推导删除；root_seq仅已提交序号。路径仅在该管理通道暴露。
 - `RootCollection{state,examined,pending,detail}` 来自同一 `ObserverRuntime` 的最近真实 `PassReport`；状态闭集 not_scanned/scanning/pending/complete/blocked，数量为十进制字符串。进程重启后无历史完成观测；只有完整扫描、初始采集完成、无pending/扫描故障才显示complete，不代表客户端同步。Root读取/意图读取/扫描失败会使旧完成状态失效。
 - `AllowedBases::paths()` 仅供管理员配置枚举；`RootContext::with_observer` 由入口装配。Web `RootsPanel` 使用生成API与BrowserAuth；显式刷新，注册不自动重放，网络/5xx结果未知时要求核对清单。`tests/web/roots-browser.py` 使用锁定Playwright及独立run_id btrfs服务，实际bind挂载故障与恢复均验收，测试挂载最终已卸载。
+
+## 对象删除协调与过期上传清理（S086）
+
+- `server-core::gc::sweep::{GRACE_SECONDS, Decision, decide}`：固定一小时标记宽限；新引用优先 Keep，时钟回退 Wait。满盘不参与过期判据，不缩短30天保留或宽限。
+- `server-store::gc::sweep::{mark_root,candidates,authorize_delete,finish_delete}`：调用方传短事务；0011迁移新增 `gc_candidates(root_id,object_hash,marked_at,phase)`，marked仍可撤销，deleting与objects.collectable同事务持久授权且不能复活。授权前再次读取同事务全部引用；仅无保护的到期内容可移除历史/回收站/过期租约，删除末版本时清已删除条目的content指针、保留墓碑。候选每Root每轮最多100项，deleting优先；引用枚举目前读取Root全部事实。
+- `Database::{object_activity,object_maintenance}` 是克隆句柄共享的读/独占对象门。锁序：对象门 → Root commit gate → observer roots → SQLite短事务；不嵌套获取、不升级读锁、不跨文件I/O持SQLite写事务。同一实例必须复用Database克隆，服务状态独占锁仍为多进程边界。备份在S087使用同一独占对象门，不能另建平行协调器。
+- 服务HTTP submit整体持读门（含restore/conflict/create/put），finalize/download/uploads和观察器run_once持同一读门；版本租约写入由SQLite事务与collectable触发器共同围栏。SQL同时拒绝collectable的新版本、租约、上传和备份租约，幂等对象登记不能复活deleting。过期上传status/put/finalize按不可用会话404回答，禁止重放已经失去保护的旧finalize引用。
+- `apps/server::gc::run_once(database,state_dir,now) -> io::Result<Report>` 在独占门下先清过期未完成上传，再标记/复核/删对象；外部观察后台每轮释放读门后调用。候选storage_path必须等于ObjectLayout规范路径，目录用RestrictedDir/fd锚定，拒绝符号链接；已有字节核对SHA-256与单链接，unlink+父目录fsync成功后才数据库收尾。marked/deleting/unlink边界被SIGKILL后重复继续；坏路径、坏内容、存储失败保留证据并明确报错。
+- 临时清理只处理过期aborted上传的登记块、规范未登记块、`.index.pid.tmp` 和该UploadId的`.assemble-*`/`finalize-*`暂存名。块和会话元数据在相应删除刷盘后清理，缺目录按已不存在幂等收尾；有效及finalized上传、未知名字/类型、用户Root、客户端dirty与完整缓存不参与。Report区分objects/parts/temporary_files；未匹配任何已知过期会话的孤立暂存不凭mtime猜测删除。
