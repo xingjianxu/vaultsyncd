@@ -40,7 +40,7 @@
     "Command": {
       "type": "object",
       "additionalProperties": false,
-      "description": "命令负载。parameters 按命令逐项校验必填项与允许项；多余参数、非规范身份、相对路径、越界文本一律失败。1.0/1.1 仍支持无参数 get_status。", 
+      "description": "命令负载。parameters 按命令逐项校验必填项与允许项；多余参数、非规范身份、相对路径、越界文本一律失败。1.0/1.1 仍支持无参数 get_status。",
       "required": [
         "name"
       ],
