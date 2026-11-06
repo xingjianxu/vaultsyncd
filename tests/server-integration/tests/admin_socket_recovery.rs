@@ -9,7 +9,7 @@ mod common;
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -17,6 +17,33 @@ use common::{Lab, Running};
 use serde_json::Value;
 use vaultsyncd_platform_linux_server::ipc;
 use vaultsyncd_server::bootstrap::{self, StartupError};
+
+/// AF_UNIX `sun_path` 含结尾 NUL 共 108 字节；这里给测试自己一个与检出深度无关的短基目录。
+///
+/// `/tmp/vs075c-<pid>-<label>` 远短于上限，且不受 `TMPDIR`/`CARGO_TARGET_TMPDIR`/工作树路径影响，
+/// 避免父集成树因 worktree 更深而把测试变成路径长度探测；`Drop` 删除本测试的短基目录。
+struct ShortBase {
+    path: PathBuf,
+}
+
+impl ShortBase {
+    fn new(label: &str) -> Self {
+        let path = PathBuf::from("/tmp").join(format!("vs075c-{}-{label}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("建短测试基目录");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ShortBase {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
 
 /// 真实服务端子进程：只在 SIGKILL 场景里用，确保 socket 的 Drop 永远不会执行。
 struct ServerChild {
@@ -72,9 +99,15 @@ async fn admin_status(state_dir: &Path) -> Value {
 
 #[tokio::test]
 async fn killed_server_restart_reclaims_stale_admin_socket_and_answers() {
-    let lab = Lab::new("s075c-kill-admin", None, None);
+    let base = ShortBase::new("kill");
+    let lab = Lab::new("s075c-kill-admin", Some(base.path()), Some(base.path()));
     lab.init_owner().await;
     let socket = lab.state().join("admin/socket");
+    assert!(
+        socket.as_os_str().len() <= 107,
+        "测试 socket 路径超过 AF_UNIX 上限：{}",
+        socket.display()
+    );
 
     let child = ServerChild::spawn(&lab).await;
     let before = std::fs::symlink_metadata(&socket).expect("子进程已创建 socket");
@@ -106,7 +139,12 @@ async fn killed_server_restart_reclaims_stale_admin_socket_and_answers() {
 
 #[tokio::test]
 async fn non_socket_placeholder_is_refused_without_deleting_evidence() {
-    let lab = Lab::new("s075c-admin-placeholder", None, None);
+    let base = ShortBase::new("placeholder");
+    let lab = Lab::new(
+        "s075c-admin-placeholder",
+        Some(base.path()),
+        Some(base.path()),
+    );
     lab.init_owner().await;
     let admin = lab.state().join("admin");
     std::fs::create_dir(&admin).expect("建 admin 目录");
@@ -128,7 +166,8 @@ async fn non_socket_placeholder_is_refused_without_deleting_evidence() {
 
 #[tokio::test]
 async fn live_service_keeps_its_socket_because_the_state_lock_is_held() {
-    let lab = Lab::new("s075c-admin-live", None, None);
+    let base = ShortBase::new("live");
+    let lab = Lab::new("s075c-admin-live", Some(base.path()), Some(base.path()));
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动");
     let socket = lab.state().join("admin/socket");

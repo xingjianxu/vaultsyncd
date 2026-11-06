@@ -3,6 +3,7 @@
 use std::fs;
 use std::io;
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -10,6 +11,25 @@ use tokio::net::{UnixListener, UnixStream};
 
 /// 单帧上限（请求与响应相同）。
 pub const MAX_FRAME: usize = 1024 * 1024;
+
+/// AF_UNIX `sun_path` 含结尾 NUL 共 108 字节，可用路径最多 107 字节。
+const MAX_SOCKET_PATH: usize = 107;
+
+/// 客户端按字面路径连接时先给出明确分类，不让内核只回一句 `SUN_LEN`。
+fn check_socket_path(path: &Path) -> io::Result<()> {
+    let length = path.as_os_str().as_bytes().len();
+    if length > MAX_SOCKET_PATH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "管理 socket 路径 {length} 字节超过 AF_UNIX 上限 {MAX_SOCKET_PATH} 字节\
+                 （sun_path 108 字节含结尾 NUL）；请缩短状态目录或 --socket 路径：{}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
 
 unsafe extern "C" {
     fn geteuid() -> u32;
@@ -139,6 +159,7 @@ pub fn authorize_peer(stream: &UnixStream) -> io::Result<()> {
 
 /// 客户端也校验路径权限、inode 与服务 UID，拒绝符号链接和假冒服务。
 pub async fn connect(path: &Path) -> io::Result<UnixStream> {
+    check_socket_path(path)?;
     private_dir(path.parent().ok_or_else(denied)?)?;
     let before = fs::symlink_metadata(path)?;
     if !before.file_type().is_socket()
@@ -218,6 +239,18 @@ mod tests {
             b"other directory"
         );
         fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlong_socket_path_is_reported_explicitly() {
+        let long = PathBuf::from(format!("/tmp/{}/admin/socket", "x".repeat(120)));
+        assert!(long.as_os_str().as_bytes().len() > MAX_SOCKET_PATH);
+        let error = connect(&long).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let message = error.to_string();
+        assert!(message.contains("AF_UNIX"), "{message}");
+        assert!(message.contains("107"), "{message}");
+        assert!(message.contains(&long.display().to_string()), "{message}");
     }
 
     #[tokio::test]
