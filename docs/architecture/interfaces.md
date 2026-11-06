@@ -1901,6 +1901,22 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 表不变量：`op_id` 主键并外键 `pending_ops(op_id) ON DELETE CASCADE`（操作成功出队即删除续传记录）；
 不存块位图（已收块以服务端 `upload_parts` 为准，design §9.3）。schema 目标版本随之为 `3`。
 
+## crates/agent-core — generation 上传动作（S056）
+
+路径：`crates/agent-core/src/executor/upload.rs`。`UploadActionHandler` 按注册的 `OpId`/`UploadSpec`
+执行 `LocalPort::observe → snapshot → transfer::upload::run → observe`：前后 generation、大小及稳定
+file identity 必须仍对应固定快照，否则返回 `LOCAL_CHANGED`，不提交旧内容。上传续传由
+`UploadResumeStore` 保存；finalize 只得到内容引用，仍不是 committed。
+
+| 接口 | 契约 |
+| --- | --- |
+| `UploadSpec` | 本地相对路径、固定 `Generation`、可选 create/move 目标信息；generation 由观察/规划层在每次可观察保存时单调推进，处理器不使用 mtime 生成结论。 |
+| `UploadCommitStore::commit_upload` | 输入原 `OpId`、绑定、generation、快照身份、finalize 内容引用与 `OperationResult`；实现必须在短事务中按 generation 条件写 baseline/dirty，并保存 `OperationResult::conflict` 的稳定主条目/副本 EntryId 映射。返回 `Applied` 或 `StaleGeneration`；后者只确认旧远端提交，不得清理新 generation 的 dirty 内容。 |
+| `UploadActionHandler` | 上传提交请求携带原 `OpId`、`local_generation`、基线 revision/version、设备身份与 server epoch。`pending` 留队列和续传记录；提交响应不可用时使用 `RemotePort::operation(binding, op)` 查询同一 OpId；只有 committed 且 `UploadCommitStore` 成功后才清理续传记录并返回 `Completed`。 |
+
+旧 ACK 不以 mtime 决胜，也不覆盖未确认本地内容；冲突结果必须由 `UploadCommitStore` 与本地快照/基线一起持久化。
+验收命令：`cargo test --locked -p vaultsyncd-agent-core`（30 项），并执行 agent-core clippy/fmt。
+
 ## crates/agent-core — 事件接收与应用进度（S057）
 
 `engine::events::EventReceiver<S,D,A>` 是绑定作用域的事件编排器，位于
@@ -1911,7 +1927,7 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 
 | 接口 | 契约 |
 | --- | --- |
-| `EventApplier::apply(binding, changes, tasks)` | 对同批次任务执行本地应用；实现应按显式依赖独立推进无依赖条目，返回 `ApplyResult::Applied` 或带 `ErrorCode` 的 `Blocked`。 |
+| `EventApplier::apply(binding, changes, tasks)` | 对同批次任务执行本地应用；实现应按显式依赖独立推进无关条目，返回 `ApplyResult::Applied` 或带 `ErrorCode` 的 `Blocked`。 |
 | `EventReceiver::run_cycle(hint)` | 先恢复未应用批次，再按 `changes` 严格 seq 拉取；重复/过旧提示不重复应用，页有空洞或乱序时报协议错误且不越过空洞。 |
 | 接收事务 | `client_store::events::receive_batch` 在一个短事务中按批次 → remote → pending tasks → received cursor 写入；提交后才调用应用器。 |
 | 应用事务 | 应用器完成后，在独立短事务中写 `baseline_entries` 并调用 `mark_batch_applied`，只推进连续已应用前缀；失败标记 `blocked`，批次与接收游标保留，重启时由 `resume_pending` 重放。 |

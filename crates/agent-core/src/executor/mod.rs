@@ -25,6 +25,7 @@
 
 pub mod retry;
 mod run;
+pub mod upload;
 
 use std::fmt;
 
@@ -36,6 +37,9 @@ use crate::ports::{PortFuture, Ports};
 
 pub use retry::{RetryPolicy, RetryPolicyError};
 pub use run::{BlockReason, OpOutcome, OpReport, RunReport, RunRequest};
+pub use upload::{
+    UploadActionHandler, UploadCommit, UploadCommitDisposition, UploadCommitStore, UploadSpec,
+};
 
 /// 执行器公开的单个操作报告（`OpReport` 的便捷访问）。
 pub use run::Executor;
