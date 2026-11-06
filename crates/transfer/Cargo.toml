@@ -1,17 +1,24 @@
 [package]
 name = "vaultsyncd-transfer"
-description = "固定块几何与流式内容哈希：上传/下载两端共用的传输数学（docs/design.md §5.4、§13.1）"
+description = "固定块几何、流式内容哈希与续传执行：上传/下载两端共用的传输规则（docs/design.md §5.4、§13）"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-# 本 crate 只做传输侧纯计算（design §5.4「内容哈希、固定块、续传状态与传输端口抽象」）：
+# 本 crate 只做传输侧规则与执行编排（design §5.4「内容哈希、固定块、续传状态与传输端口抽象」）：
 # 没有文件系统、网络、数据库或平台 API，因此客户端（Windows agent）与服务端（Linux）共用同一套
 # 块几何与摘要实现，不会出现“两边对块边界的理解不同”。摘要用 SHA-256（design §7.1 ContentHash、
 # §13.1 固定块契约），`sha2` 已是 workspace 既有依赖线，不引入新的密码学库。
+#
+# 上传/下载执行只通过 `src/ports.rs` 的端口碰外部世界；真正的 HTTP、文件系统与 SQLite 适配器在
+# `crates/http-client` 与 `crates/agent-core`，所以这里可以用内存替身完整验证续传语义。
 [dependencies]
 sha2 = "0.10"
+
+[dev-dependencies]
+# 只用于测试里等待端口 future 与观察“块并发”的让出点；产品依赖里不引入运行时。
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true
