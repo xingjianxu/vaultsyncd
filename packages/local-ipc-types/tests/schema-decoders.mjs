@@ -64,8 +64,9 @@ function expectThrow(body) {
 check("frame_limits_come_from_contract", () => {
   assert.equal(FRAME_HEADER_BYTES, 4);
   assert.ok(MAX_FRAME_BYTES >= 64 && MAX_FRAME_BYTES <= 64 * 1024 * 1024);
-  assert.equal(PROTOCOL_MAJOR, 1);
-  assert.equal(PROTOCOL_MINOR, 4);
+  const contract = JSON.parse(readFileSync(join(examples, "..", "local-ipc.schema.json"), "utf8"));
+  assert.equal(PROTOCOL_MAJOR, contract["x-vaultsyncd"].protocol.major);
+  assert.equal(PROTOCOL_MINOR, contract["x-vaultsyncd"].protocol.minor);
 });
 
 check("file_projection_preserves_pending_and_rejects_lossy_flags_or_missing_dimensions", () => {

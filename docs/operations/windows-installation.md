@@ -52,7 +52,7 @@ nix develop .#web-tests --command python3 tests/platform/windows/s099-installati
 
 从已安装的S099未签名开发源`cf1d174c3bd47b4babc2db053514619b2e733b07`升级时，使用新版本正式同源安装器。升级目标固定为原程序目录，不允许同版/降版覆盖。关闭GUI和占用程序文件的终端；维护控制器验证已安装/候选的四EXE来源hash，删除本程序Run项以停止新登录启动，暂停所有绑定并导出每份未确认内容，再停止确切的同用户IPC对端。支持IPC1.5的agent会断开并排空回调、导出后正常退出；仅上述明确S099开发源允许在无传输、已暂停且导出成功后停止该已认证进程，不冒称旧正式客户端通用升级。
 
-agent维护入口独占writer锁后，将包括WAL的整个固定状态及原程序写入`%LOCALAPPDATA%\vaultsyncd\agent\maintenance\<事务>/`并刷盘，再打开新数据库迁移器及替换程序。保留原DeviceId、凭据、Root注册、缓存和待办。失败恢复整套原状态与程序；恢复后不调用新迁移器再次升级旧库，仅恢复已知暂停控制。回退不是down migration。资源不足、忙文件或备份损坏时不报告成功，保留屏障、原内容和候选程序。
+agent维护入口独占writer锁后，将包括WAL的整个固定状态及原程序写入`%LOCALAPPDATA%\vaultsyncd\agent\maintenance\<事务>/`并刷盘，再打开新数据库迁移器及替换程序。保留原DeviceId、凭据、Root注册、缓存和待办。迁移/程序替换失败时恢复整套原状态与程序；恢复后不调用新迁移器再次升级旧库，仅恢复已知暂停控制。回退不是down migration。资源不足、忙文件或备份损坏时不报告成功，保留屏障、原内容和候选程序。
 
 若`%LOCALAPPDATA%\vaultsyncd\agent\maintenance.json`仍存在，普通agent与登录launcher拒绝写入，不自行删除该屏障。按安装器所示保留候选路径，在同一Windows用户会话运行：
 
@@ -67,6 +67,16 @@ agent维护入口独占writer锁后，将包括WAL的整个固定状态及原程
 
 显式选择“同时注销提供程序”（静默自动化对应`uninstall.exe /S /PROVIDER`）要求每个Root扫描完整且每个文件已完整下载，任何仅云端/partial/未知项都拒绝，并保留程序与恢复现场。用户先在GUI切完整模式或下载全部条目，再重试。控制器只在实际完整驻留且连续句柄身份稳定时，逐文件比较SHA256、调用CfRevertPlaceholder、再次比较hash；确认没有任何占位后才注销CFAPI/Explorer并解除本地管理。完整和dirty文件、缓存与远端数据都保留。
 
-依据微软[CfUnregisterSyncRoot说明](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)，系统注销会删除不完整占位，不能直接用于默认卸载；[CfRevertPlaceholder](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfrevertplaceholder)会尝试回源不完整文件，因此维护前置必须依据真实驻留检查，不能拿逻辑大小或零填充当完整内容。S100原生矩阵结果待本卡验收完成后补记。
+依据微软[CfUnregisterSyncRoot说明](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)，系统注销会删除不完整占位，不能直接用于默认卸载；[CfRevertPlaceholder](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfrevertplaceholder)会尝试回源不完整文件，因此维护前置必须依据真实驻留检查，不能拿逻辑大小或零填充当完整内容。S100原生矩阵已按下述分段验收。
 
 S100原生入口（需先协调Windows独占窗口）：`nix develop .#web-tests --command python3 tests/platform/windows/s100-maintenance.py <同HEAD正式windows-client组件>`。复用保留用户，不重置密码；先保存原LSA/注册表，再两次受控重启进入该用户、最后恢复Quickemu在线。仅有用例代理对上传begin制造真实断链，以便保留未确认dirty，其他请求均转发真实服务；无伪造成功或在线DB编辑。静默卸载自动化按[NSIS说明](https://nsis.sourceforge.io/When_I_use_ExecWait_uninstaller.exe_it_doesn%27t_wait_for_the_uninstaller%3F)先复制字节相同卸载器到独立目录，再以末尾不加引号的`_?=<原程序目录>`运行，取得实际退出码并允许删除原卸载器；正常控制面板入口仍使用NSIS标准临时副本。
+
+若安装器后续注册/程序删除阶段失败，而准备阶段已移除maintenance.json，完整状态/程序备份及不可变plan.json仍保留。在同一用户确认agent已经停止后，选择**该次失败事务**（核对plan.action、program及备份清单）的plan.json，以不覆盖现有文件的方式复制为agent/maintenance.json，再运行该次保留候选的recover命令。不要编辑plan内容、混搭事务或直接改SQLite；恢复器会持writer锁、验证全部备份hash后恢复。程序清理只操作固定文件，未知文件保留。complete.json表示agent维护阶段结束，整个安装/卸载仍以安装器退出码和实际文件/注册核对为准。
+
+## S100实际分段验收
+
+产品PE/NSIS来源`17947522f73d06b934e704457cb6c01af659dd05`，0.1.1未签名测试包；旧客户端为实际S099开发源cf1d174的0.1.0，不冒充旧正式版。主run `s100-1793990401-4038267`实际通过enroll、dirty、busy程序升级失败自动整套回退、正常升级、原生默认No卸载提示、仅程序卸载、重装、provider不完整拒绝八段。该命令后续自动full任务因故意保留dirty而等待，整体exit1记录保留；没有把它改成成功。
+
+已验证完整缓存`C:\Users\vs_s099_4fcc1e\AppData\Local\vaultsyncd\cache-s100-1793990401-4038267\download-98b7c0e401f406ca330a2779eca650ab`，1,048,576字节，SHA256 `11030261d987f0966338a7afb2fb76b1503b1683d72ffc4ffacd111bc298722f`。人工文件恢复后是实际完整普通文件，不宣称网络下载。首个续验run `s100-cont-1793991690-4089398`在写入/完整hash检查后因装置固定hash列表漏cloud而报错，该失败记录亦保留；最终续验`s100-cont-1793992025-4102900`动态核对全部六份文件、四个真实完整占位经revert后注销、普通文件可读/hash、原dirty仍未确认、state/cache保留，以及708份恢复文件宿主独立读取/hash全部通过。普通文件无CFAPI OnDisk字段，原生观察元组中的0不是“零字节内容”，完整性另以实际读取长度及hash证明。
+
+续验入口`tests/platform/windows/s100-continuation.py <主run目录>`消费明确的历史1794752组件，验证其Git树和每份payload及实际已安装清单，不把历史receipt重标为当前HEAD发行；续验脚本实际运行副本/hash保存在各run。标准用户、Root/state/cache/备份与WinCred保留，原LSA/注册表每轮恢复后删除原秘密备份，最后回Quickemu、无agent、VM在线。大证据在忽略artifacts/S100，精确范围见final-matrix.json及S100任务交接。

@@ -207,6 +207,7 @@ def main():
         assert refused["exit_code"] == 27 and refused["cloud_metadata"][:3] == [1, 0, 1048576]
         materialized = action("materialize")
         assert materialized["cloud_hash"] == hashlib.sha256(b"C" * 1048576).hexdigest()
+        summary["materialization_kind"] = materialized["materialization_kind"]
         removed = action("provider-uninstall")
         assert removed["exit_code"] == 0 and removed["cloud_metadata"][0] == 0 and removed["root_hresult"] < 0
         assert removed["state_retained"] and removed["cache_retained"]
