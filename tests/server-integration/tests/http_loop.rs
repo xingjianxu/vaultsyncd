@@ -19,8 +19,8 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{
-    Lab, Running, all_changes, create_snapshot, identity, login, put_operation, register_root,
-    snapshot_entries, upload, wait_for,
+    Lab, PutArgs, Running, all_changes, create_snapshot, identity, login, put_operation,
+    register_root, snapshot_entries, upload, wait_for,
 };
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -127,11 +127,17 @@ async fn full_http_loop_is_consistent_across_restart() {
     assert_eq!(hash, sha256(V2));
     let device = identity(0x52);
     let op_id = identity(0x11);
-    let (status, result) = put_operation(
-        &running, &token, &root, &op_id, &device, &epoch, &entry, &revision, &upload_id,
-    )
-    .await
-    .expect("提交操作");
+    let args = PutArgs {
+        op_id: &op_id,
+        device_id: &device,
+        epoch: &epoch,
+        entry: &entry,
+        revision: &revision,
+        upload: &upload_id,
+    };
+    let (status, result) = put_operation(&running, &token, &root, &args)
+        .await
+        .expect("提交操作");
     assert_eq!(status, StatusCode::OK, "put 应提交：{result}");
     assert_eq!(
         result.get("state").and_then(Value::as_str),
@@ -164,11 +170,9 @@ async fn full_http_loop_is_consistent_across_restart() {
     );
 
     // 3. 响应丢失后的重试：同一 OpId 同一请求返回同一结果（T03）。
-    let (status, replay) = put_operation(
-        &running, &token, &root, &op_id, &device, &epoch, &entry, &revision, &upload_id,
-    )
-    .await
-    .expect("重试提交");
+    let (status, replay) = put_operation(&running, &token, &root, &args)
+        .await
+        .expect("重试提交");
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay.get("replayed").and_then(Value::as_bool), Some(true));
     for field in ["version_id", "revision", "root_seq"] {
@@ -430,19 +434,17 @@ async fn work_volume_full_never_reports_committed() {
 
     // 填满卷。
     let fillers = fill_data_then_metadata(&lab.work());
-    let (status, result) = put_operation(
-        &running,
-        &token,
-        &root,
-        &identity(0x21),
-        &identity(0x62),
-        &epoch,
-        &entry,
-        &revision,
-        &upload_id,
-    )
-    .await
-    .expect("满盘时提交");
+    let args = PutArgs {
+        op_id: &identity(0x21),
+        device_id: &identity(0x62),
+        epoch: &epoch,
+        entry: &entry,
+        revision: &revision,
+        upload: &upload_id,
+    };
+    let (status, result) = put_operation(&running, &token, &root, &args)
+        .await
+        .expect("满盘时提交");
     assert!(
         status == StatusCode::INSUFFICIENT_STORAGE || status == StatusCode::SERVICE_UNAVAILABLE,
         "工作盘满必须失败而不是 committed：{status} {result}"
@@ -456,7 +458,7 @@ async fn work_volume_full_never_reports_committed() {
         V1,
         "发布失败时工作文件不得被替换"
     );
-    let _ = release(&fillers);
+    release(&fillers);
     running.stop().await;
 }
 
@@ -506,19 +508,17 @@ async fn state_volume_full_never_reports_committed() {
     // 与工作盘满用例同一块小卷（准入要求两侧同一 btrfs 文件系统），这里把数据与元数据都填到失败，
     // 让 SQLite 的事务写入没有可分配空间。
     let fillers = fill_data_then_metadata(&lab.state());
-    let (status, result) = put_operation(
-        &running,
-        &token,
-        &root,
-        &identity(0x31),
-        &identity(0x72),
-        &epoch,
-        &entry,
-        &revision,
-        &upload_id,
-    )
-    .await
-    .expect("满盘时提交");
+    let args = PutArgs {
+        op_id: &identity(0x31),
+        device_id: &identity(0x72),
+        epoch: &epoch,
+        entry: &entry,
+        revision: &revision,
+        upload: &upload_id,
+    };
+    let (status, result) = put_operation(&running, &token, &root, &args)
+        .await
+        .expect("满盘时提交");
     assert!(
         status == StatusCode::INSUFFICIENT_STORAGE || status == StatusCode::SERVICE_UNAVAILABLE,
         "状态盘满必须失败而不是 committed：{status} {result}"
@@ -547,6 +547,6 @@ async fn state_volume_full_never_reports_committed() {
         status != StatusCode::OK || value.get("state").and_then(Value::as_str) != Some("committed"),
         "满盘失败的操作不得记录成 committed：{status} {value}"
     );
-    let _ = release(&fillers);
+    release(&fillers);
     running.stop().await;
 }

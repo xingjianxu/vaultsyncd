@@ -402,26 +402,37 @@ pub async fn upload(
     Ok((upload_id, hash, content.len() as u64))
 }
 
+/// 一次 put 操作的 wire 参数（测试里字段多，打包成结构体以免九个位置参数串位）。
+pub struct PutArgs<'a> {
+    /// 幂等键里的操作身份。
+    pub op_id: &'a str,
+    /// 幂等键里的设备身份。
+    pub device_id: &'a str,
+    /// 客户端事实基础所属的 epoch。
+    pub epoch: &'a str,
+    /// 被覆盖内容的条目。
+    pub entry: &'a str,
+    /// 客户端计划时的条目 revision。
+    pub revision: &'a str,
+    /// 已 finalize 的上传会话。
+    pub upload: &'a str,
+}
+
 /// 提交内容 put 操作（返回状态码与响应体）。
 pub async fn put_operation(
     running: &Running,
     token: &str,
     root: &str,
-    op_id: &str,
-    device_id: &str,
-    epoch: &str,
-    entry: &str,
-    revision: &str,
-    upload: &str,
+    args: &PutArgs<'_>,
 ) -> Result<(StatusCode, Value), String> {
     let body = serde_json::json!({
-        "op_id": op_id,
-        "device_id": device_id,
-        "server_epoch": epoch,
+        "op_id": args.op_id,
+        "device_id": args.device_id,
+        "server_epoch": args.epoch,
         "kind": "put_content",
-        "entry_id": entry,
-        "base_revision": revision,
-        "upload_id": upload,
+        "entry_id": args.entry,
+        "base_revision": args.revision,
+        "upload_id": args.upload,
         "local_generation": "7",
         "conflict_policy": "preserve_both",
     });

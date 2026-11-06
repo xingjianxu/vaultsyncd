@@ -132,7 +132,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         let mut parent = store_entries::root_entry(&mut tx, self.owner, write.root)
             .await
             .map_err(store_error)?
-            .ok_or_else(|| ExternalStoreError::UnknownRoot { root: write.root })?;
+            .ok_or(ExternalStoreError::UnknownRoot { root: write.root })?;
         let mut walked = String::new();
         for part in parents {
             if !walked.is_empty() {
@@ -324,10 +324,7 @@ impl ExternalAdoptStore for SqlExternalStore {
             .ok_or_else(|| ExternalStoreError::PathConflict {
                 detail: format!("目标父目录 {:?} 不存在", request.to),
             })?;
-        let next = request
-            .expected_revision
-            .next()
-            .map_err(|error| store_error(error))?;
+        let next = request.expected_revision.next().map_err(store_error)?;
         let tx_id = TxId::from_bytes(random_bytes());
         let batch = store_changes::append_change(
             &mut tx,
@@ -396,10 +393,7 @@ impl ExternalAdoptStore for SqlExternalStore {
             code: "root_entry",
             detail: "Root 根条目不能删除".to_owned(),
         })?;
-        let next = request
-            .expected_revision
-            .next()
-            .map_err(|error| store_error(error))?;
+        let next = request.expected_revision.next().map_err(store_error)?;
         let tx_id = TxId::from_bytes(random_bytes());
         let batch = store_changes::append_change(
             &mut tx,
@@ -500,7 +494,8 @@ pub struct ObserverRuntime {
     database: Database,
     state_dir: PathBuf,
     roots: tokio::sync::Mutex<HashMap<RootId, RootState>>,
-    gate: std::sync::Mutex<RootCommitGate>,
+    /// Root 提交串行化：与内容 put 共用同一套语义（同一 Root 同时只允许一次提交）。
+    gate: tokio::sync::Mutex<RootCommitGate>,
     config: ObserverRuntimeConfig,
 }
 
@@ -512,7 +507,7 @@ impl ObserverRuntime {
             database,
             state_dir: state_dir.to_path_buf(),
             roots: tokio::sync::Mutex::new(HashMap::new()),
-            gate: std::sync::Mutex::new(RootCommitGate::new()),
+            gate: tokio::sync::Mutex::new(RootCommitGate::new()),
             config,
         }
     }
@@ -600,9 +595,7 @@ impl ObserverRuntime {
             let mut work = LinuxWorkTree::new(Arc::clone(&state.handle));
             let mut blobs = LinuxObjectPort::new(Arc::clone(&state.handle), layout.root());
             let mut store = SqlExternalStore::new(self.database.clone(), root.owner);
-            let Ok(mut gate) = self.gate.lock() else {
-                continue;
-            };
+            let mut gate = self.gate.lock().await;
             let Ok(limits) = PassLimits::new(
                 ScanLimits::new(self.config.max_scan_entries)
                     .unwrap_or_else(|_| ScanLimits::new(1024).expect("非零")),
