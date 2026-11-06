@@ -2429,3 +2429,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 每页最多100项，排序/游标为相对路径SHA256前16字节的规范hex，碰撞明确失败；返回next_cursor续读。实时分页不承诺跨页一致快照，刷新回第一页，界面搜索明确仅当前页。未读/失败不显示伪造空清单；旧页保留但动作禁用，慢响应不覆盖另一绑定页。
 - 桌面固定桥增加`agent_list_files/agent_download_entry/agent_release_entry/agent_list_problems/agent_retry_problem/agent_set_mode/agent_detach_binding/agent_export_recovery`，AppManifest和主窗口capability逐项授权，无通用任意命令/文件/SQL入口。副作用OpId在失败后保留供同动作重试。释放必须确认本地移除/远端保留/离线不可读；绑定管理提供模式、恢复导出和保留数据解绑的独立确认，完成只认agent返回的实际计数/报告。问题重试仅对agent标记retryable项目启用，仍调用既有执行器。
 - `run-native-files-ui.sh`在真Windows WebView操作页面，用只编译于native-acceptance的固定样本句柄/写入控制验证busy/dirty双重保护。实际下载、释放/重新下载、模式、pending不绿、导出dirty/未导入新文件hash、解绑后服务器原字节与本地数据均保留已验证。正式无测试feature构建清理两项测试自动权限，包含测试fixture/控制命令的二进制拒绝作为正式证据。VM保持在线，测试服务/隧道与本run进程清理。
+
+
+### S088 — 固定快照导出与持久长作业
+
+`backup::jobs::Context`由bootstrap唯一组装，HTTP与同UID管理socket共享。0013为源完整性（unverified/verified/incomplete）与prepare/verify/release持久队列；连接10秒截止不取消已接受的作业。启动及1秒pump重放queued/running/releasing，过期租约入队释放，不自动创建备份。重复verify重新读所有项、quick_check/FK/ServerId/schema/Root seq和逻辑表计数；ready不代表verified。释放先持久releasing，只删除该ID的Arena快照后才释放备份租约，失败保留恢复证据。
+
+锁次序：每备份ID写门（prepare/verify/release）→对象维护独占门（prepare/release）→S087 Root协调→短SQL事务；导出只持每ID读门，不持对象门。严禁在已有object_activity或object_maintenance门内调用prepare/release。不会在SQL事务持锁期间做文件复制或等待流读者。源租约在导出完成后继续存在，需release或到期清理。
+
+OpenAPI提供固定清单、仅清单内的DB/config/Root对象读取、整体流式export与job status/list。全部重新校验唯一active owner与请求会话，使用锚定RestrictedDir拒绝任意路径；备份包含受限PHC认证材料但sessions失效，不能公开分享。Unix协议特殊export先framed200握手再VSBK001原始字节，逐次写30秒空闲截止；普通请求仍10秒。流规则与0600收据唯一源`api/backup-export.schema.json`，CLI显式prepare/export/verify/release；本地verify不打开在线数据库。损坏或缺终止标记只能incomplete，服务源verified与客户端持久导出verified分别记录。

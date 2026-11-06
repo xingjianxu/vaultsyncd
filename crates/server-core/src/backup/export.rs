@@ -272,8 +272,14 @@ impl ArchiveVerifier {
     }
     /// 输入传输或磁盘读出的实际字节。
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        if self.failed { return Err(Error::Incomplete) }
-        let result=self.push_inner(bytes);if result.is_err(){self.failed=true;}result
+        if self.failed {
+            return Err(Error::Incomplete);
+        }
+        let result = self.push_inner(bytes);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
     }
     fn push_inner(&mut self, mut bytes: &[u8]) -> Result<(), Error> {
         loop {
@@ -413,6 +419,12 @@ mod tests {
         bytes[n - 5] ^= 1;
         let mut v = ArchiveVerifier::new(hash);
         assert_eq!(v.push(&bytes), Err(Error::ContentMismatch));
+        assert_eq!(v.finish().unwrap_err(), Error::Incomplete);
+        let (_, hash, mut trailing) = fixture();
+        trailing.push(1);
+        let mut v = ArchiveVerifier::new(hash);
+        assert_eq!(v.push(&trailing), Err(Error::Invalid));
+        assert_eq!(v.finish().unwrap_err(), Error::Incomplete);
         let (manifest, hash, _) = fixture();
         let mut value: Value = serde_json::from_slice(&manifest).unwrap();
         value["files"][0]["path"] = "../../user-data".into();

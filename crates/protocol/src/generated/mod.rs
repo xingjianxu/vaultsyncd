@@ -29,6 +29,87 @@ pub struct AccountInfo {
     pub user_id: String,
 }
 
+/// 固定源内容的完整性，不能代表客户端目标已持久导出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum BackupIntegrity {
+    /// 取值 `unverified`。
+    #[serde(rename = "unverified")]
+    Unverified,
+    /// 取值 `verified`。
+    #[serde(rename = "verified")]
+    Verified,
+    /// 取值 `incomplete`。
+    #[serde(rename = "incomplete")]
+    Incomplete,
+}
+
+/// 备份管理的BackupPrepareRequest契约
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct BackupPrepareRequest {
+    /// 调用方稳定请求身份；重试复用。
+    pub backup_id: String,
+}
+
+/// 备份管理的BackupSnapshotList契约
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct BackupSnapshotList {
+    /// 当前页备份状态
+    pub items: Vec<BackupSnapshotStatus>,
+    /// 下一页号，缺省表示结束
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page: Option<String>,
+}
+
+/// 源快照准备/释放阶段；不会把pending当complete。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum BackupSnapshotPhase {
+    /// 取值 `preparing`。
+    #[serde(rename = "preparing")]
+    Preparing,
+    /// 取值 `ready`。
+    #[serde(rename = "ready")]
+    Ready,
+    /// 取值 `failed`。
+    #[serde(rename = "failed")]
+    Failed,
+    /// 取值 `releasing`。
+    #[serde(rename = "releasing")]
+    Releasing,
+    /// 取值 `released`。
+    #[serde(rename = "released")]
+    Released,
+    /// 取值 `expired`。
+    #[serde(rename = "expired")]
+    Expired,
+}
+
+/// 备份管理的BackupSnapshotStatus契约
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct BackupSnapshotStatus {
+    /// 稳定备份身份，32位小写十六进制
+    pub backup_id: String,
+    /// 创建UTC Unix秒
+    #[serde(with = "crate::decimal")]
+    pub created_at: String,
+    /// 当前原因或错误说明
+    pub detail: String,
+    /// 租约到期UTC Unix秒
+    #[serde(with = "crate::decimal")]
+    pub expires_at: String,
+    /// 源快照完整性，独立于客户端导出
+    pub integrity: BackupIntegrity,
+    /// 持久作业是否尚未结束
+    pub job_pending: bool,
+    /// 固定manifest SHA-256，准备成功后才提供
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
+    /// 快照准备或释放阶段
+    pub phase: BackupSnapshotPhase,
+}
+
 /// 浏览器只读会话元信息；凭据只在 HttpOnly cookie 中。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct BrowserSession {

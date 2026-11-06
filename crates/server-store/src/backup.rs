@@ -141,7 +141,7 @@ pub fn online_backup(source: &Path, destination: &Path) -> io::Result<FrozenData
         }
     }
     src.execute_batch("ROLLBACK").map_err(err)?;
-    dst.execute_batch("PRAGMA foreign_keys=ON; BEGIN; UPDATE sessions SET replaced_by=NULL; DELETE FROM sessions; DELETE FROM snapshots; DELETE FROM upload_parts; DELETE FROM uploads; DELETE FROM object_leases; DELETE FROM backup_leases; DELETE FROM backup_preparations; DELETE FROM gc_candidates; DELETE FROM version_lease_requests; COMMIT; PRAGMA journal_mode=DELETE;").map_err(err)?;
+    dst.execute_batch("PRAGMA foreign_keys=ON; BEGIN; UPDATE sessions SET replaced_by=NULL; DELETE FROM sessions; DELETE FROM snapshots; DELETE FROM upload_parts; DELETE FROM uploads; DELETE FROM object_leases; DELETE FROM backup_leases; DELETE FROM backup_jobs; DELETE FROM backup_preparations; DELETE FROM gc_candidates; DELETE FROM version_lease_requests; COMMIT; PRAGMA journal_mode=DELETE;").map_err(err)?;
     let check: String = dst
         .query_row("PRAGMA quick_check", [], |r| r.get(0))
         .map_err(err)?;
@@ -168,6 +168,131 @@ pub fn online_backup(source: &Path, destination: &Path) -> io::Result<FrozenData
         schema,
         table_counts,
     })
+}
+
+/// 对导出副本进行只读逻辑核对；不打开在线库，不迁移/写入归档数据库。
+pub fn verify_database(
+    path: &Path,
+    index: &vaultsyncd_server_core::backup::export::Index,
+) -> io::Result<()> {
+    let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err)?;
+    let quick: String = db
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .map_err(err)?;
+    let app: i32 = db
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
+        .map_err(err)?;
+    let schema: i64 = db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(err)?;
+    if quick != "ok"
+        || app != crate::db::SERVER_APPLICATION_ID
+        || schema != index.schema_version
+        || schema > crate::db::target_schema_version()
+    {
+        return Err(err("backup database identity/schema/quick_check mismatch"));
+    }
+    let server: String = db
+        .query_row(
+            "SELECT value FROM store_metadata WHERE key='server_id'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    if vaultsyncd_domain::ids::ServerId::from_hex(&server).map_err(err)? != index.server {
+        return Err(err("backup ServerId mismatch"));
+    }
+    let sessions: i64 = db
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .map_err(err)?;
+    if sessions != 0 {
+        return Err(err("backup still contains usable sessions"));
+    }
+    let mut q = db.prepare("PRAGMA foreign_key_check").map_err(err)?;
+    if q.query([]).map_err(err)?.next().map_err(err)?.is_some() {
+        return Err(err("backup foreign key failure"));
+    }
+    for (table, expected) in &index.table_counts {
+        if ![
+            "users",
+            "roots",
+            "entries",
+            "versions",
+            "trash_entries",
+            "tombstones",
+            "changes",
+            "operations",
+        ]
+        .contains(&table.as_str())
+        {
+            return Err(err("unrecognized metadata table"));
+        }
+        let count: i64 = db
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .map_err(err)?;
+        if count as u64 != *expected {
+            return Err(err("backup logical table count mismatch"));
+        }
+    }
+    let mut roots = std::collections::BTreeMap::new();
+    let mut q = db
+        .prepare("SELECT lower(hex(id)),seq FROM roots")
+        .map_err(err)?;
+    for r in q
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(err)?
+    {
+        let (id, seq) = r.map_err(err)?;
+        roots.insert(
+            RootId::from_hex(&id).map_err(err)?,
+            u64::try_from(seq).map_err(err)?,
+        );
+    }
+    if roots != index.root_seqs {
+        return Err(err("backup Root sequence map mismatch"));
+    }
+    let mut objects = 0;
+    let mut q = db
+        .prepare("SELECT lower(hex(root_id)),hash,size,storage_path FROM objects")
+        .map_err(err)?;
+    for r in q
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(err)?
+    {
+        let (root, hash, size, path) = r.map_err(err)?;
+        let hash: [u8; 32] = hash
+            .try_into()
+            .map_err(|_| err("invalid backup object hash"))?;
+        let archive = format!(
+            "objects/{}/{}",
+            RootId::from_hex(&root).map_err(err)?.to_hex(),
+            vaultsyncd_server_core::objects::ContentDigest::from_bytes(hash).to_hex()
+        );
+        let item = index
+            .item(&archive)
+            .ok_or_else(|| err("database object missing from manifest"))?;
+        if item.hash != hash
+            || item.size != u64::try_from(size).map_err(err)?
+            || std::path::Path::new(&path)
+                != vaultsyncd_server_core::objects::ObjectLayout::relative_object_path(
+                    &vaultsyncd_server_core::objects::ContentDigest::from_bytes(hash),
+                )
+        {
+            return Err(err("backup object metadata mismatch"));
+        }
+        objects += 1;
+    }
+    if objects + 2 != index.items.len() {
+        return Err(err("manifest objects missing from database"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

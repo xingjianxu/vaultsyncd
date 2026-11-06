@@ -1,5 +1,8 @@
 //! 一致备份prepare的应用装配；在线管理入口由S088接入，不提供运行中restore写库。
 use crate::config::Config;
+pub mod export;
+pub mod http;
+pub mod jobs;
 use serde_json::{Value, json};
 use sqlx::Row;
 use std::{

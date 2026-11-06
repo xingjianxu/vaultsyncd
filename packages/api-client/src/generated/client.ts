@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeAccountChanged, decodeAccountInfo, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedRootList, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
-import type { AccountChanged, AccountInfo, BrowserSession, Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedRootList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
+import { decodeAccountChanged, decodeAccountInfo, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedRootList, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
+import type { AccountChanged, AccountInfo, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedRootList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -80,6 +80,279 @@ async function read_bytes(response: Response): Promise<Uint8Array> {
 
 function api_error(status: number, body: unknown): ApiError {
   return new ApiError(status, decodeErrorEnvelope(body).error);
+}
+
+/**
+ * 备份管理：listBackupSnapshots
+ *
+ * owner备份目录；每页100项。
+ *
+ * 查询参数 `page`（可选）：查询参数
+ *
+ * 200：备份当前持久状态；ready不等于导出完整。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function listBackupSnapshots(options: ClientOptions, query?: { page?: string }, init?: RequestInit): Promise<BackupSnapshotList> {
+  const search = new URLSearchParams();
+  if (query?.page !== undefined) {
+    search.set("page", query.page);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? "/v1/admin/backup-snapshots" : `${"/v1/admin/backup-snapshots"}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeBackupSnapshotList(payload);
+}
+
+/**
+ * 备份管理：prepareBackupSnapshot
+ *
+ * 持久入队prepare，返回202；相同backup_id重试不创建第二份。客户端断开不取消已接受任务。不内置定时备份。
+ *
+ * 200：备份当前持久状态；ready不等于导出完整。
+ * 202：备份当前持久状态；ready不等于导出完整。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function prepareBackupSnapshot(options: ClientOptions, body: BackupPrepareRequest, init?: RequestInit): Promise<BackupSnapshotStatus> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/admin/backup-snapshots"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeBackupSnapshotStatus(payload);
+}
+
+/**
+ * 备份管理：backupSnapshotStatus
+ *
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}）：路径参数
+ *
+ * 200：备份当前持久状态；ready不等于导出完整。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function backupSnapshotStatus(options: ClientOptions, id: string, init?: RequestInit): Promise<BackupSnapshotStatus> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeBackupSnapshotStatus(payload);
+}
+
+/**
+ * 备份管理：exportBackupSnapshot
+ *
+ * 仅唯一active owner；按该备份的固定清单授权，禁止任意服务器路径。最大清单256MiB，对象/归档64KiB分块流动。
+ *
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}/export）：路径参数
+ *
+ * 200：固定清单或按清单授权的字节流。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function exportBackupSnapshot(options: ClientOptions, id: string, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/export`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/octet-stream"),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return await read_bytes(response);
+}
+
+/**
+ * 备份管理：readBackupFile
+ *
+ * 仅唯一active owner；按该备份的固定清单授权，禁止任意服务器路径。最大清单256MiB，对象/归档64KiB分块流动。
+ *
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}/files/{name}）：路径参数
+ * 参数 `name`（/v1/admin/backup-snapshots/{id}/files/{name}）：路径参数
+ *
+ * 200：固定清单或按清单授权的字节流。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function readBackupFile(options: ClientOptions, id: string, name: string, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/octet-stream"),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return await read_bytes(response);
+}
+
+/**
+ * 备份管理：backupSnapshotManifest
+ *
+ * 仅唯一active owner；按该备份的固定清单授权，禁止任意服务器路径。最大清单256MiB，对象/归档64KiB分块流动。
+ *
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}/manifest）：路径参数
+ *
+ * 200：固定清单或按清单授权的字节流。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function backupSnapshotManifest(options: ClientOptions, id: string, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/manifest`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/octet-stream"),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return await read_bytes(response);
+}
+
+/**
+ * 备份管理：readBackupObject
+ *
+ * 仅唯一active owner；按该备份的固定清单授权，禁止任意服务器路径。最大清单256MiB，对象/归档64KiB分块流动。
+ *
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}/objects/{root}/{hash}）：路径参数
+ * 参数 `root`（/v1/admin/backup-snapshots/{id}/objects/{root}/{hash}）：路径参数
+ * 参数 `hash`（/v1/admin/backup-snapshots/{id}/objects/{root}/{hash}）：路径参数
+ *
+ * 200：固定清单或按清单授权的字节流。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function readBackupObject(options: ClientOptions, id: string, root: string, hash: string, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/objects/${encodeURIComponent(root)}/${encodeURIComponent(hash)}`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/octet-stream"),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return await read_bytes(response);
+}
+
+/**
+ * 备份管理：releaseBackupSnapshot
+ *
+ * 先持久releasing，再只删对应快照，最后释放租约；中断后继续，绝不删除共享对象。
+ *
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}/release）：路径参数
+ *
+ * 200：备份当前持久状态；ready不等于导出完整。
+ * 202：备份当前持久状态；ready不等于导出完整。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function releaseBackupSnapshot(options: ClientOptions, id: string, init?: RequestInit): Promise<BackupSnapshotStatus> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/release`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeBackupSnapshotStatus(payload);
+}
+
+/**
+ * 备份管理：verifyBackupSnapshot
+ *
+ * 持久入队检查固定源快照；全部文件与DB逻辑核对后才为verified，错误为incomplete。
+ *
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}/verify）：路径参数
+ *
+ * 200：备份当前持久状态；ready不等于导出完整。
+ * 202：备份当前持久状态；ready不等于导出完整。
+ * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 401：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 403：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 404：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 409：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
+ * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
+ */
+export async function verifyBackupSnapshot(options: ClientOptions, id: string, init?: RequestInit): Promise<BackupSnapshotStatus> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/verify`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeBackupSnapshotStatus(payload);
 }
 
 /**
