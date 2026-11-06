@@ -707,6 +707,7 @@ mod tests {
                 "local_entries".to_owned(),
                 "local_intents".to_owned(),
                 "notifications".to_owned(),
+                "operation_schedule".to_owned(),
                 "pending_ops".to_owned(),
                 "received_changes".to_owned(),
                 "remote_entries".to_owned(),
@@ -1367,6 +1368,103 @@ mod tests {
         );
         assert!(
             matches!(Database::open_with(&path,&previous).await.unwrap_err(),DbError::SchemaTooNew {found,supported:6} if found==target_schema_version())
+        );
+    }
+
+    #[tokio::test]
+    async fn version_seven_upgrade_preserves_paused_dirty_queue_and_backs_up_before_scheduler() {
+        let dir = TestDir::new("s062-upgrade-v7");
+        let path = dir.database();
+        let migration_dir = dir.path.join("version-seven");
+        std::fs::create_dir_all(&migration_dir).unwrap();
+        for migration in MIGRATOR.iter().filter(|m| m.version <= 7) {
+            std::fs::write(
+                migration_dir.join(format!(
+                    "{:04}_{}.sql",
+                    migration.version, migration.description
+                )),
+                migration.sql.as_bytes(),
+            )
+            .unwrap();
+        }
+        let previous = migrator(&migration_dir).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = crate::test_support::seed_binding(&old, 0x62).await;
+        let mut tx = old.begin_write().await.unwrap();
+        sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES (?, ?,9,'awaiting_commit','materialized')")
+            .bind(binding.as_bytes().as_slice()).bind([4_u8;16].as_slice()).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind,attempts,last_error_code) VALUES (?,?,'apply_remote',2,'PLACEHOLDER_OFFLINE')")
+            .bind([5_u8;16].as_slice()).bind(binding.as_bytes().as_slice()).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO binding_controls(binding_id,paused) VALUES (?,1)")
+            .bind(binding.as_bytes().as_slice())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        old.close().await;
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(upgraded.schema_version(), target_schema_version());
+        for (sql, expected) in [
+            ("SELECT dirty FROM local_entries", "awaiting_commit"),
+            (
+                "SELECT last_error_code FROM pending_ops",
+                "PLACEHOLDER_OFFLINE",
+            ),
+        ] {
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(sql)
+                    .fetch_one(upgraded.pool())
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT attempts FROM pending_ops")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT paused FROM binding_controls")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM operation_schedule")
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+            0
+        );
+        let backup = migration_backup_path(&path, 7, target_schema_version());
+        assert!(backup.exists());
+        assert_eq!(
+            scalar::<String>(&backup, "PRAGMA integrity_check").await,
+            "ok"
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT attempts FROM pending_ops").await,
+            2
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &backup,
+                "SELECT count(*) FROM sqlite_master WHERE name='operation_schedule'"
+            )
+            .await,
+            0
+        );
+        let checksums = "SELECT group_concat(hex(checksum),',') FROM (SELECT checksum FROM _sqlx_migrations WHERE version<=7 ORDER BY version)";
+        assert_eq!(
+            scalar::<String>(&path, checksums).await,
+            scalar::<String>(&backup, checksums).await
+        );
+        assert!(
+            matches!(Database::open_with(&path,&previous).await.unwrap_err(),DbError::SchemaTooNew{found,supported:7} if found==target_schema_version())
         );
     }
 

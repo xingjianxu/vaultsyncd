@@ -17,7 +17,7 @@
 //! # 明确不做
 //!
 //! 上传快照与 ACK 代际核对由 [`executor::upload`] 提供，事件拉取与应用游标在 [`engine::events`]，
-//! 受控内容应用与重启核对在 [`executor::apply`] / [`recovery`]。下载优先级与 jitter 退避属 S062。
+//! 受控内容应用与重启核对在 [`executor::apply`] / [`recovery`]。下载优先级、有界资源槽和持久 jitter 退避由 [`engine::scheduler`] 提供。
 //! 平台/HTTP/SQLite 适配器仍由应用入口组装；本地移动、释放及按需占位的原生实现不在此包。
 #![forbid(unsafe_code)]
 

@@ -4,3 +4,6 @@
 //! 通过 [`events`] 的端口注入。
 
 pub mod events;
+
+/// 优先级、有界并发与持久退避调度。
+pub mod scheduler;
