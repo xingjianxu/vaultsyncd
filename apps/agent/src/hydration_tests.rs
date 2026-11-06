@@ -200,6 +200,15 @@ impl Server {
                         .nth(1)
                         .unwrap_or("")
                         .to_owned();
+                    if path == "/v1/capabilities" {
+                        assert!(!header.to_lowercase().contains("authorization:"));
+                        let body = include_bytes!(
+                            "../../../tests/contract/fixtures/s091/remote-v1.0.json"
+                        );
+                        write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+                        socket.write_all(body).unwrap();
+                        return;
+                    }
                     assert!(
                         header
                             .to_lowercase()

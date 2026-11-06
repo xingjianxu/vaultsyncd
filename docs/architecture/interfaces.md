@@ -2491,6 +2491,11 @@ S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站
 
 默认Rust ApiClient（包括testing/all-features构建）在发送认证/数据请求前读取实际capabilities，拒major/不合法限额或缺已知能力；只使用已知feature交集，兼容更高minor与未知增量字段。刷新和401重试也重核，不向capability请求携带凭据/内容；本地恢复、数据库、缓存和未确认队列不由HTTP错误清理。仅cfg(test/testing)显式单元构造器with_transport_for_unit_tests可关闭这一层，生产默认构造器不受feature隐式影响。真实TCP fixture代理后接真实服务证明major拒绝不抵达login、缺uploads不创建上传，凭据保留；默认/testing各1项通过。当前没有旧正式发行客户端，固定开发profile/历史迁移校验和见tests/contract/fixtures/s091，不冒充正式版本互通。
 
+
+S091迁移与回退验收：tests/contract/fixtures/s091/profiles.json固定源提交、server12/client11真实历史SQL的SQLx SHA-384（不是SHA-512），测试只追加合成迁移，不修改生产迁移。两端生产Database入口迁移失败返回备份并不提供可写句柄；固定旧迁移上界拒写更新schema。客户端夹具保留dirty generation41、上传队列attempts3、固定版本、调度状态、通知、工作字节与完整缓存。真实服务回退使用同StateLock的显式测试actor注入未来14成功/15失败，实际bootstrap拒写，然后走完整S089归档恢复，检验当前/历史内容、回收站及身份/epoch。actor仅cfg(test)且限定专用s091 run路径，不增加生产维护后门。Windows夹具runner独立于agent/CFAPI/GUI，SHA-256、NTFS和精确测试数均校验；旧正式发行版缺失，开发fixture不等同正式版互通。
+
+S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源hash与host/guest可执行SHA-256匹配，未启动agent/CFAPI。真实Linux/btrfs完整服务回退1项（含持锁actor1项）通过；两类证据边界不互相替代。首轮Windows刷盘失败已修读写句柄并复验，失败证据保留。专属卷及guest run均已清理。
+
 ## S095 NixOS 服务模块与显式存储授权
 
 - flake 导出 `nixosModules.default/vaultsyncd`、`checks.x86_64-linux.nixos-module`。`services.vaultsyncd` 提供 enable、package（默认同 flake Linux发行包）、user/group、extraGroups、stateDir、rootPaths、settings.server.listen/settings.log。settings 严格限于非敏感设置；没有 secret/auth/初始密码选项，owner 仅离线 admin stdin 初始化。生成 TOML 只含监听、路径与日志；空 rootPaths 不配置允许基目录，产品拒绝注册。

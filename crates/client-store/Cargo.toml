@@ -22,6 +22,8 @@ sqlx = { version = "0.8", default-features = false, features = [
 vaultsyncd-domain = { path = "../domain" }
 
 [dev-dependencies]
+serde_json = "1"
+sha2 = "0.10"
 # 迁移与读写测试是真实 SQLite 文件的异步测试：`#[tokio::test]` 与多线程 runtime 由测试侧提供。
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

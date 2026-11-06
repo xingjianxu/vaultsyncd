@@ -1463,3 +1463,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/contract/upgrade/server.rs"]
+mod s091;

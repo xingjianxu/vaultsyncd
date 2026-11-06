@@ -1542,10 +1542,9 @@ mod tests {
         sqlx::query("INSERT INTO notifications(dedupe_key,code,state,is_read,occurrences) VALUES('old-read','MOUNT_FAILED','active',1,7),('old-resolved','INSUFFICIENT_STORAGE','resolved',0,2)").execute(old.pool()).await.unwrap();
         old.close().await;
         let db = Database::open(&path).await.unwrap();
-        let records =
-            crate::notifications::delivery::list(&mut *db.pool().acquire().await.unwrap())
-                .await
-                .unwrap();
+        let records = crate::notifications::delivery::list(&mut db.pool().acquire().await.unwrap())
+            .await
+            .unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|n| n.generation == 1 && !n.claimed));
         assert!(records[0].notification.is_read);
@@ -1761,3 +1760,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/contract/upgrade/client.rs"]
+mod s091;

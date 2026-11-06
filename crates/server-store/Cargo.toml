@@ -41,6 +41,7 @@ vaultsyncd-transfer = { path = "../transfer" }
 vaultsyncd-server-core = { path = "../server-core" }
 
 [dev-dependencies]
+serde_json = "1"
 # 迁移测试是真实 SQLite 文件的异步测试：`#[tokio::test]` 与多线程 runtime 由测试侧提供。
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

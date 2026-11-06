@@ -5117,6 +5117,8 @@ dependencies = [
 name = "vaultsyncd-client-store"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "vaultsyncd-domain",
@@ -5273,6 +5275,7 @@ version = "0.1.0"
 dependencies = [
  "fs2",
  "rusqlite",
+ "serde_json",
  "sha2",
  "sqlx",
  "tokio",
