@@ -125,7 +125,7 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
         "--bins",
     ]);
     run(&compile, root, Some(&build))?;
-    let mut recorded = strings(&["env"]);
+    let mut recorded = strings(&["env", "-u", "CARGO_ENCODED_RUSTFLAGS"]);
     recorded.push(format!("CARGO_TARGET_DIR={}", build.display()));
     recorded.push(format!("RUSTFLAGS={FLAGS}"));
     recorded.extend(compile);
@@ -149,6 +149,7 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
     fs::write(payload.join("UNSIGNED-TEST.txt"),"Unsigned test build. No production signing identity was provided. First installation only; existing user data is preserved. Controlled upgrade and uninstall workflows are not included in this test package.\n").map_err(|e|e.to_string())?;
     let command = vec![
         "makensis".into(),
+        "-NOCONFIG".into(),
         "-V3".into(),
         "-NOCD".into(),
         format!("-DPRODUCT_VERSION={}", before.version),
