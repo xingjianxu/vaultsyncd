@@ -10,6 +10,35 @@
 
 use std::collections::BTreeMap;
 
+/// 账号操作完成且全部会话已撤销，必须重新登录。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct AccountChanged {
+    /// 本次撤销的会话数
+    #[serde(with = "crate::decimal")]
+    pub sessions_revoked: String,
+}
+
+/// 当前已认证账号，不含凭据。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct AccountInfo {
+    /// 登录名
+    pub login: String,
+    /// 会话身份，不是凭据
+    pub session_id: String,
+    /// 账号身份
+    pub user_id: String,
+}
+
+/// 浏览器只读会话元信息；凭据只在 HttpOnly cookie 中。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct BrowserSession {
+    /// 访问会话到期 UTC Unix 秒
+    #[serde(with = "crate::decimal")]
+    pub access_expires_at: String,
+    /// 会话身份，不是凭据
+    pub session_id: String,
+}
+
 /// 协议版本、服务器身份、epoch、功能集合与限额（design §15.2）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct Capabilities {
@@ -456,6 +485,15 @@ pub enum OperationState {
     /// 取值 `rejected`。
     #[serde(rename = "rejected")]
     Rejected,
+}
+
+/// 改密输入；禁止记录明文，沿用初始化密码规则。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct PasswordChangeRequest {
+    /// 当前密码，只在本次请求内存在
+    pub current_password: String,
+    /// 新密码，沿用初始化密码规则
+    pub new_password: String,
 }
 
 /// 协议主次版本；主版本不同必须拒绝通信。

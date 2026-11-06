@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Button, EmptyState, PageShell, StatusBadge } from "@vaultsyncd/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
+import { AccountPanel, AuthProvider, useAuth } from "./features/auth/Auth";
 
-const items = [{ path: "/overview", label: "服务概览" }, { path: "/roots", label: "Root 目录" }];
-export function App() {
+const items = [{ path: "/overview", label: "服务概览" }, { path: "/roots", label: "Root 目录" }, { path: "/account", label: "账号与会话" }];
+export function App() { return <AuthProvider><AppView /></AuthProvider>; }
+function AppView() {
+  const auth = useAuth();
   const path = useRoute("/overview");
   const [status, setStatus] = useState("未连接");
   const [detail, setDetail] = useState("尚未检查服务连接。");
@@ -33,7 +36,7 @@ export function App() {
         <h2>服务连接</h2><p aria-live="polite">{detail}</p>
         <Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button>
       </section></> : path === "/roots" ? <><h1>Root 目录</h1>
-      <EmptyState title="尚未读取目录">请先登录服务端账号。目录管理将在连接并授权后可用。</EmptyState></>
-      : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
+      <EmptyState title="尚未读取目录">{auth.account ? "账号已授权；目录页面将在下一步接入。" : "请先从账号与会话页面登录服务端账号。"}</EmptyState></>
+      : path === "/account" ? <><h1>账号管理</h1><AccountPanel /></> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
   </PageShell>;
 }

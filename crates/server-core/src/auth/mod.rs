@@ -19,6 +19,7 @@
 pub mod account;
 pub mod init;
 pub mod login;
+pub mod manage;
 pub mod password;
 pub mod scope;
 pub mod session;

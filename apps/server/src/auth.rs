@@ -35,8 +35,8 @@ use tracing::{info, warn};
 use vaultsyncd_domain::ids::{IdSource, RootId};
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_protocol::generated::{
-    ErrorBody, ErrorCode, ErrorEnvelope, LoginRequest, RefreshRequest, SessionIssued,
-    SessionRevoked,
+    BrowserSession, ErrorBody, ErrorCode, ErrorEnvelope, LoginRequest, RefreshRequest,
+    SessionIssued, SessionRevoked,
 };
 use vaultsyncd_server_core::auth::account::{
     AccountError, NewAccount, OwnerAccounts, StoredAccount,
@@ -55,6 +55,9 @@ use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::sessions::{self as store_sessions, DIGEST_LEN};
 use vaultsyncd_server_store::users;
 
+/// 账号元信息、改密和全部会话撤销。
+pub mod manage;
+
 /// 访问凭据的 cookie 名。
 pub const ACCESS_COOKIE: &str = "vaultsyncd_session";
 /// 刷新凭据的 cookie 名。
@@ -67,6 +70,8 @@ pub struct AuthContext {
     throttle: Mutex<LoginThrottle>,
     policy: SessionPolicy,
     ids: Mutex<RandomIds>,
+    // 与登录/刷新串行化，防止旧密码核验后跨过改密撤销边界再签发会话。
+    account_gate: Mutex<()>,
 }
 
 impl AuthContext {
@@ -79,6 +84,7 @@ impl AuthContext {
             throttle: Mutex::new(LoginThrottle::new(ThrottlePolicy::default())),
             policy: SessionPolicy::standard(),
             ids: Mutex::new(RandomIds),
+            account_gate: Mutex::new(()),
         }
     }
 
@@ -132,6 +138,25 @@ pub async fn login(
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Response {
+    login_impl(context, headers, body, false).await
+}
+
+/// 浏览器登录：令牌只写 HttpOnly cookie。
+pub async fn browser_login(
+    State(context): State<Arc<AuthContext>>,
+    headers: HeaderMap,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    login_impl(context, headers, body, true).await
+}
+
+async fn login_impl(
+    context: Arc<AuthContext>,
+    headers: HeaderMap,
+    body: LoginRequest,
+    browser: bool,
+) -> Response {
+    let _gate = context.account_gate.lock().await;
     let facts = match RequestFacts::collect(headers) {
         Ok(facts) => facts,
         Err(response) => return *response,
@@ -181,18 +206,35 @@ pub async fn login(
         session_id = %issued.session_id,
         "登录成功"
     );
-    issued_response(&issued)
+    issued_response(&issued, browser)
 }
 
 /// `POST /v1/auth/refresh`。
 ///
-/// agent 在请求体里提交刷新凭据；浏览器没有可读的刷新凭据（HttpOnly），因此允许空请求体并改从
-/// `vaultsyncd_refresh` cookie 取——两条载体的语义完全相同（ADR 里有边界说明）。
+/// agent 必须在请求体里提交刷新凭据；浏览器使用独立的 browser/refresh，不把 cookie 导出为正文令牌。
 pub async fn refresh(
     State(context): State<Arc<AuthContext>>,
     headers: HeaderMap,
     body: Option<Json<RefreshRequest>>,
 ) -> Response {
+    refresh_impl(context, headers, body, false).await
+}
+
+/// 浏览器刷新：仅从 cookie 读取，响应不含令牌。
+pub async fn browser_refresh(
+    State(context): State<Arc<AuthContext>>,
+    headers: HeaderMap,
+) -> Response {
+    refresh_impl(context, headers, None, true).await
+}
+
+async fn refresh_impl(
+    context: Arc<AuthContext>,
+    headers: HeaderMap,
+    body: Option<Json<RefreshRequest>>,
+    browser: bool,
+) -> Response {
+    let _gate = context.account_gate.lock().await;
     let facts = match RequestFacts::collect(headers) {
         Ok(facts) => facts,
         Err(response) => return *response,
@@ -202,8 +244,11 @@ pub async fn refresh(
     }
     let token = match body
         .and_then(|Json(request)| SecretToken::parse(&request.refresh_token).ok())
-        .or_else(|| cookie_token(&facts.headers, REFRESH_COOKIE))
-    {
+        .or_else(|| {
+            browser
+                .then(|| cookie_token(&facts.headers, REFRESH_COOKIE))
+                .flatten()
+        }) {
         Some(token) => token,
         None => {
             return auth_expired(&facts.request_id, "刷新凭据缺失或格式不正确");
@@ -220,7 +265,7 @@ pub async fn refresh(
     match renewed {
         Ok(issued) => {
             info!(request_id = %facts.request_id, session_id = %issued.session_id, "会话已轮换");
-            issued_response(&issued)
+            issued_response(&issued, browser)
         }
         Err(error) => session_failure(&facts.request_id, &error),
     }
@@ -350,7 +395,7 @@ fn cookie_token(headers: &HeaderMap, name: &str) -> Option<SecretToken> {
 /// cookie 是环境凭据：写请求必须带同源证据，否则按 CSRF 拒绝。
 ///
 /// 判定顺序：`Origin` 必须与 `Host` 同源；没有 `Origin` 时看 `Sec-Fetch-Site`（`same-origin`/`none`
-/// 放行）；两者都没有则视为非浏览器客户端（agent/curl），放行——它们不带 cookie。
+/// 放行）；两者都没有且存在 Cookie 时拒绝；无 Cookie 的非浏览器客户端保留原有调用方式。
 fn same_origin(headers: &HeaderMap) -> bool {
     if let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) {
         let host = headers
@@ -365,17 +410,24 @@ fn same_origin(headers: &HeaderMap) -> bool {
         .and_then(|value| value.to_str().ok())
     {
         Some(site) => matches!(site, "same-origin" | "none"),
-        None => true,
+        None => !headers.contains_key(COOKIE),
     }
 }
 
 fn origin_host(origin: &str) -> Option<&str> {
-    let (_, rest) = origin.split_once("://")?;
-    let host = rest.split('/').next()?;
+    let (scheme, host) = origin.split_once("://")?;
+    if host.is_empty() || host.contains(['/', '?', '#', '@']) {
+        return None;
+    }
+    if scheme != "https"
+        && !(scheme == "http" && (host.starts_with("127.0.0.1:") || host.starts_with("localhost:")))
+    {
+        return None;
+    }
     Some(host)
 }
 
-fn issued_response(issued: &IssuedSession) -> Response {
+fn issued_response(issued: &IssuedSession, browser: bool) -> Response {
     let payload = SessionIssued {
         session_id: issued.session_id.to_hex(),
         access_token: issued.access.expose().to_owned(),
@@ -383,7 +435,15 @@ fn issued_response(issued: &IssuedSession) -> Response {
         access_expires_at: issued.access_expires_at.as_unix_seconds().to_string(),
         refresh_expires_at: issued.refresh_expires_at.as_unix_seconds().to_string(),
     };
-    let mut response = (StatusCode::OK, Json(payload)).into_response();
+    let mut response = if browser {
+        Json(BrowserSession {
+            session_id: issued.session_id.to_hex(),
+            access_expires_at: issued.access_expires_at.as_unix_seconds().to_string(),
+        })
+        .into_response()
+    } else {
+        (StatusCode::OK, Json(payload)).into_response()
+    };
     set_cookie(
         &mut response,
         ACCESS_COOKIE,
@@ -835,6 +895,11 @@ mod tests {
             .route("/v1/auth/login", post(login))
             .route("/v1/auth/refresh", post(refresh))
             .route("/v1/auth/logout", post(logout))
+            .route("/v1/auth/browser/login", post(browser_login))
+            .route("/v1/auth/browser/refresh", post(browser_refresh))
+            .route("/v1/auth/account", axum::routing::get(manage::account))
+            .route("/v1/auth/password", post(manage::password))
+            .route("/v1/auth/revoke-all", post(manage::revoke_all))
             .with_state(context)
     }
 
@@ -874,6 +939,205 @@ mod tests {
             .filter_map(|value| value.to_str().ok())
             .map(str::to_owned)
             .collect()
+    }
+
+    fn browser_request(path: &str, cookie: &str, body: &str) -> Request<Body> {
+        let mut request = Request::builder()
+            .method(if path == "/v1/auth/account" {
+                "GET"
+            } else {
+                "POST"
+            })
+            .uri(path)
+            .header(HOST, "vault.test")
+            .header(ORIGIN, "https://vault.test")
+            .header(header::CONTENT_TYPE, "application/json");
+        if !cookie.is_empty() {
+            request = request.header(COOKIE, cookie);
+        }
+        request.body(Body::from(body.to_owned())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn browser_cookie_management_revokes_access_and_refresh_without_returning_tokens() {
+        let router = router_for(context("browser-management").await);
+        let login = r#"{"login":"owner","password":"correct horse battery staple","device_label":"browser"}"#;
+        let (status, headers, body) = call(
+            router.clone(),
+            browser_request("/v1/auth/browser/login", "", login),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.contains("token"));
+        let original_cookie = cookies(&headers)
+            .iter()
+            .map(|c| c.split(';').next().unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let (status, _, _) = call(
+            router.clone(),
+            browser_request("/v1/auth/account", &original_cookie, ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // cookie 不可经旧 agent 刷新端点导出为明文令牌。
+        let (status, _, _) = call(
+            router.clone(),
+            browser_request("/v1/auth/refresh", &original_cookie, ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, headers, body) = call(
+            router.clone(),
+            browser_request("/v1/auth/browser/refresh", &original_cookie, ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.contains("token"));
+        let cookie = cookies(&headers)
+            .iter()
+            .map(|c| c.split(';').next().unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let bad = r#"{"current_password":"wrong","new_password":"a new long password"}"#;
+        assert_eq!(
+            call(
+                router.clone(),
+                browser_request("/v1/auth/password", &cookie, bad)
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            call(
+                router.clone(),
+                browser_request("/v1/auth/account", &cookie, "")
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let change = r#"{"current_password":"correct horse battery staple","new_password":"a new long password"}"#;
+        assert_eq!(
+            call(
+                router.clone(),
+                browser_request("/v1/auth/password", &cookie, change)
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        for path in ["/v1/auth/account", "/v1/auth/browser/refresh"] {
+            assert_eq!(
+                call(router.clone(), browser_request(path, &cookie, ""))
+                    .await
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert_eq!(
+            call(
+                router.clone(),
+                browser_request("/v1/auth/browser/login", "", login)
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let new_login = login.replace("correct horse battery staple", "a new long password");
+        let (_, headers, _) = call(
+            router.clone(),
+            browser_request("/v1/auth/browser/login", "", &new_login),
+        )
+        .await;
+        let cookie = cookies(&headers)
+            .iter()
+            .map(|c| c.split(';').next().unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert_eq!(
+            call(
+                router.clone(),
+                browser_request("/v1/auth/revoke-all", &cookie, "")
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(
+                router,
+                browser_request("/v1/auth/browser/refresh", &cookie, "")
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn cookie_requests_require_origin_evidence_and_reject_malformed_origins() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "vault.test".parse().unwrap());
+        headers.insert(COOKIE, "vaultsyncd_session=secret".parse().unwrap());
+        assert!(!same_origin(&headers));
+        for origin in [
+            "https://evil.test",
+            "https://vault.test/path",
+            "http://vault.test",
+            "null",
+            "https://user@vault.test",
+        ] {
+            headers.insert(ORIGIN, origin.parse().unwrap());
+            assert!(!same_origin(&headers), "{origin}");
+        }
+        headers.insert(ORIGIN, "https://vault.test".parse().unwrap());
+        assert!(same_origin(&headers));
+    }
+
+    #[tokio::test]
+    async fn login_racing_password_change_cannot_publish_an_old_password_session_after_revocation()
+    {
+        let router = router_for(context("password-login-race").await);
+        let login = r#"{"login":"owner","password":"correct horse battery staple","device_label":"racing-browser"}"#;
+        let (_, headers, _) = call(
+            router.clone(),
+            browser_request("/v1/auth/browser/login", "", login),
+        )
+        .await;
+        let cookie = cookies(&headers)
+            .iter()
+            .map(|c| c.split(';').next().unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let change = r#"{"current_password":"correct horse battery staple","new_password":"a new long password"}"#;
+        let (login_result, changed) = tokio::join!(
+            call(
+                router.clone(),
+                browser_request("/v1/auth/browser/login", "", login)
+            ),
+            call(
+                router.clone(),
+                browser_request("/v1/auth/password", &cookie, change)
+            ),
+        );
+        assert_eq!(changed.0, StatusCode::OK);
+        if login_result.0 == StatusCode::OK {
+            let cookie = cookies(&login_result.1)
+                .iter()
+                .map(|c| c.split(';').next().unwrap())
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert_eq!(
+                call(router, browser_request("/v1/auth/account", &cookie, ""))
+                    .await
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+        } else {
+            assert_eq!(login_result.0, StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[tokio::test]

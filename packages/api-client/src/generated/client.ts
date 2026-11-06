@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
-import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
+import { decodeAccountChanged, decodeAccountInfo, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
+import type { AccountChanged, AccountInfo, BrowserSession, Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -111,6 +111,73 @@ export async function registerRoot(options: ClientOptions, body: RootRegisterReq
 }
 
 /**
+ * 当前账号
+ *
+ * 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+ *
+ * 200：操作完成
+ * 401：凭据无效或会话失效
+ * 403：跨源请求被拒绝
+ */
+export async function getAccount(options: ClientOptions, init?: RequestInit): Promise<AccountInfo> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/account"), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeAccountInfo(payload);
+}
+
+/**
+ * 浏览器登录
+ *
+ * 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+ *
+ * 200：操作完成
+ * 401：凭据无效或会话失效
+ * 403：跨源请求被拒绝
+ */
+export async function browserLogin(options: ClientOptions, body: LoginRequest, init?: RequestInit): Promise<BrowserSession> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/browser/login"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeBrowserSession(payload);
+}
+
+/**
+ * 浏览器刷新
+ *
+ * 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+ *
+ * 200：操作完成
+ * 401：凭据无效或会话失效
+ * 403：跨源请求被拒绝
+ */
+export async function browserRefresh(options: ClientOptions, init?: RequestInit): Promise<BrowserSession> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/browser/refresh"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeBrowserSession(payload);
+}
+
+/**
  * 登录
  *
  * 用登录名与密码换一对凭据（design §15.2、§17.1）。失败一律 401，不区分“账号不存在”
@@ -160,6 +227,29 @@ export async function logout(options: ClientOptions, init?: RequestInit): Promis
 }
 
 /**
+ * 修改密码
+ *
+ * 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+ *
+ * 200：操作完成
+ * 401：凭据无效或会话失效
+ * 403：跨源请求被拒绝
+ */
+export async function changePassword(options: ClientOptions, body: PasswordChangeRequest, init?: RequestInit): Promise<AccountChanged> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/password"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeAccountChanged(payload);
+}
+
+/**
  * 刷新会话凭据
  *
  * 用刷新凭据换新的一对凭据（design §15.2）。轮换是原子的：旧会话随即失效，同一个刷新
@@ -180,6 +270,28 @@ export async function refresh(options: ClientOptions, body: RefreshRequest, init
     throw api_error(response.status, payload);
   }
   return decodeSessionIssued(payload);
+}
+
+/**
+ * 撤销全部会话
+ *
+ * 同源 HttpOnly cookie 会话；浏览器响应不包含令牌。改密和全部撤销成功后须重新登录。
+ *
+ * 200：操作完成
+ * 401：凭据无效或会话失效
+ * 403：跨源请求被拒绝
+ */
+export async function revokeAllSessions(options: ClientOptions, init?: RequestInit): Promise<AccountChanged> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/auth/revoke-all"), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeAccountChanged(payload);
 }
 
 /**
