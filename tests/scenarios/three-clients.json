@@ -1,0 +1,159 @@
+{
+  "schema": 1,
+  "id": "s074-three-clients",
+  "title": "三台 Windows 客户端身份与真实 Linux 服务端基础互通",
+  "requirements": [
+    "T01",
+    "T02",
+    "T03",
+    "T09",
+    "T11",
+    "T14"
+  ],
+  "clients": [
+    {
+      "id": "alpha",
+      "label": "client-alpha",
+      "mode": "full"
+    },
+    {
+      "id": "bravo",
+      "label": "client-bravo",
+      "mode": "full"
+    },
+    {
+      "id": "charlie",
+      "label": "client-charlie",
+      "mode": "on_demand"
+    }
+  ],
+  "server_seed": [
+    {
+      "path": "server-note.txt",
+      "content": "server-only content from the initial non-empty server root\n"
+    },
+    {
+      "path": "shared-import.txt",
+      "content": "shared import content identical on server and all three clients v1\n"
+    },
+    {
+      "path": "divergent.txt",
+      "content": "server divergent content pre-existing before any client import v1\n"
+    },
+    {
+      "path": "rename-me.txt",
+      "content": "rename payload that must never be downloaded by the placeholder peer\n"
+    },
+    {
+      "path": "delete-me.txt",
+      "content": "delete me original content that must survive in trash and history\n"
+    }
+  ],
+  "blocks": [
+    {
+      "id": "T01-import",
+      "kind": "import",
+      "requirements": [
+        "T01"
+      ],
+      "local": {
+        "alpha": [
+          {
+            "path": "alpha-only.txt",
+            "content": "alpha unique local content imported on first bind\n"
+          },
+          {
+            "path": "shared-import.txt",
+            "content": "shared import content identical on server and all three clients v1\n"
+          },
+          {
+            "path": "divergent.txt",
+            "content": "alpha divergent content different from server and peers v1\n"
+          }
+        ],
+        "bravo": [
+          {
+            "path": "bravo-only.txt",
+            "content": "bravo unique local content imported on first bind\n"
+          },
+          {
+            "path": "shared-import.txt",
+            "content": "shared import content identical on server and all three clients v1\n"
+          },
+          {
+            "path": "divergent.txt",
+            "content": "bravo divergent content different from server and peers v1\n"
+          }
+        ],
+        "charlie": [
+          {
+            "path": "charlie-only.txt",
+            "content": "charlie unique local content imported on first bind\n"
+          },
+          {
+            "path": "shared-import.txt",
+            "content": "shared import content identical on server and all three clients v1\n"
+          },
+          {
+            "path": "divergent.txt",
+            "content": "charlie divergent content different from server and peers v1\n"
+          }
+        ]
+      }
+    },
+    {
+      "id": "T02-offline-edit",
+      "kind": "offline_edit",
+      "requirements": [
+        "T02"
+      ],
+      "path": "shared-import.txt",
+      "contents": {
+        "alpha": "alpha offline edit of the shared file while disconnected\n",
+        "bravo": "bravo offline edit of the shared file while disconnected\n",
+        "charlie": "charlie offline edit of the shared file while disconnected\n"
+      }
+    },
+    {
+      "id": "T09-rename",
+      "kind": "rename",
+      "requirements": [
+        "T09"
+      ],
+      "renamer": "alpha",
+      "placeholder_client": "charlie",
+      "from": "rename-me.txt",
+      "to": "renamed.txt"
+    },
+    {
+      "id": "T11-delete-modify",
+      "kind": "delete_modify",
+      "requirements": [
+        "T11"
+      ],
+      "deleter": "alpha",
+      "modifier": "bravo",
+      "modified_content": "bravo offline modification that must not be silently cleared by the concurrent delete\n",
+      "path": "delete-me.txt"
+    },
+    {
+      "id": "T03-lost-response",
+      "kind": "lost_response",
+      "requirements": [
+        "T03",
+        "T14"
+      ],
+      "put": {
+        "client": "alpha",
+        "path": "loss-put.txt",
+        "initial_content": "loss response put content v1 before the dropped acknowledgement\n",
+        "content": "loss response put content v2 committed exactly once despite the dropped response\n"
+      },
+      "delete": {
+        "client": "alpha",
+        "path": "loss-delete.txt",
+        "content": "loss response delete content that must stay in trash and never resurrect\n"
+      }
+    }
+  ]
+}

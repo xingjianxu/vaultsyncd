@@ -556,3 +556,37 @@ cfapi-prototype release --name <entry> [--root <path>] [--expect released|refuse
 - **收尾检查从“已关机”改为“在线且可用”**：轮次结束前用 `bootstrap-host.sh status` 与 `ssh ... 'cmd /c ver'` 确认客体运行可连；探针目录与同步根仍要按各卡要求清理/注销，不留测试残留。
 - **安全收敛**：因为长期在线，`2222` 的 `0.0.0.0` 绑定（见 §9）不能靠关机收敛，必须依赖客体侧密钥独占认证（`PasswordAuthentication no`）与随机口令；不要在客体上开放其他入站端口，也不要为此关闭防火墙。
 - **当前状态**：S013—S050 是 Linux 侧任务，不使用客体，因此本次没有启动它；客体仍为 2026-11-05 收尾时的干净关机状态。一旦后续 Windows 卡（S065 起）启动客体，就按本节保持运行，不再在卡结束时执行 `stop`。
+
+## 20. 三客户端基础互通（S074）
+
+### 20.1 拓扑与资源
+
+- 仓库只有**一台** Windows 11 客体（第二台按计划属 S107）。S074 的三个“客户端”是同一实机上的三个隔离身份/环境：独立 DeviceId、状态目录与 `client.sqlite`、同步根、缓存和 `vaultsyncd-agent.exe` 进程。产品不变量“每个 Windows 用户会话/状态库只允许一个 agent”使三个 agent **顺序**运行；报告显式写 `physical_windows_guests=1`、`concurrent_agent_processes=1`，不把多进程冒充独立实机。
+- 每个客户端在启动前用 `--login-stdin` 登录（同一测试账号、同一 Credential Manager blob），运行配置使用测试 TLS 入口 `https://127.0.0.1:<临时端口>` 与 `server.ca_file=<run>/tls/ca.pem`；不使用 `development_http`。
+- 宿主真实服务端由 `vaultsyncd-server-tests` 的 `e2e-native-server` example 启动：隔离 btrfs Root、按 `tests/scenarios/three-clients.json` 的 `server_seed` 播种非空内容。客体经 **本次 run 私有**的 SSH 回环隧道 `127.0.0.1:18770` 访问宿主服务端；测试 TLS 入口在客体上终结 TLS，客户端仍做完整证书校验。
+- 每个客户端环境在 `C:/vaultsyncd-lab/s074-driver-<pid>/run-e2e-<pid>/clients/{alpha,bravo,charlie}/` 下（`root`、`cache`、`state`）。成功时编排器注销 CFAPI 根并删除这些目录，只保留日志/报告；失败时保留客体目录供诊断，宿主记录警告。
+
+### 20.2 入口与命令
+
+宿主在默认 devShell 先构建真实服务端 fixture，再在 Windows devShell 运行：
+
+```bash
+cd /wrd/prj/vaultsyncd
+nix develop --command cargo build --locked -p vaultsyncd-server-tests --example e2e-native-server
+VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \
+  nix develop .#windows --command bash tests/platform/windows/run-native-e2e.sh
+```
+
+脚本执行顺序：启动 fixture 与反向隧道 → `cargo xwin build` 产品 `vaultsyncd-agent.exe` 与 `vaultsyncd-e2e.exe` → 校验宿主/客体 SHA-256 → 在交互用户会话的 scheduled task 中运行编排器（CFAPI/WinCred/named pipe 需要真实会话）→ 取回 `report.json`、代理事件与 agent 日志到 `artifacts/S074/e2e-<timestamp>-<pid>/` → 用 `final_entries` 复核 btrfs Root 工作目录字节 → 只删除本 run 的 `s074-driver-*`。客体保持在线。
+
+### 20.3 预期证据
+
+- 日志依次出现 `block_done` T01/T02/T09/T11/T03，`every_input_content_found inputs=<n>`，`clients_converged`，`server_work_matches_committed_namespace entries=<n>`，`s074_native_e2e`，退出码 0。
+- `report.json` 含：场景 commit 与工作树是否脏、Windows/服务端/agent 版本、三端 DeviceId/Binding、拓扑、每 block 证据、输入内容覆盖（当前/冲突/历史/回收站来源）、收敛计数、代理操作事件（含两次响应丢失与对应查询/重试）和 `final_entries`。
+- `tests/scenarios/README.md` 说明场景 JSON 形状与约束；新数据不改编排器。
+
+### 20.4 当前限制
+
+- 不是三台并发实机：顺序 agent 只验证跨客户端最终收敛与冲突保留，不验证同时在线竞争；并发与事件异常/旧设备矩阵属 S102。
+- 生产 HTTPS 反向代理部署属 S097；本卡使用测试 TLS 入口 + 认证 SSH 回环隧道，证书、主机名与校验是真实的，但不是生产代理配置。
+- `kill_boundaries`（S052 子进程强杀恢复）在 S075 加入管理 socket 后存在基线已有的 `AdminSocket` 残留 socket 导致 `AddrInUse` 失败；已在 S074 交接记录为既有问题，与本卡改动无关。
