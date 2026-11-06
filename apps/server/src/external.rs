@@ -394,6 +394,24 @@ impl ExternalAdoptStore for SqlExternalStore {
             detail: "Root 根条目不能删除".to_owned(),
         })?;
         let next = request.expected_revision.next().map_err(store_error)?;
+        let content = match current.content_version {
+            Some(version) => {
+                let facts =
+                    store_versions::version_facts(&mut tx, self.owner, request.root, version)
+                        .await
+                        .map_err(store_error)?
+                        .ok_or_else(|| ExternalStoreError::Rejected {
+                            code: "missing_version",
+                            detail: format!("删除版本 {version} 缺少版本事实"),
+                        })?;
+                Some((
+                    version,
+                    vaultsyncd_server_core::objects::ContentDigest::from_bytes(facts.object_hash),
+                    facts.size,
+                ))
+            }
+            None => None,
+        };
         let tx_id = TxId::from_bytes(random_bytes());
         let batch = store_changes::append_change(
             &mut tx,
@@ -405,7 +423,7 @@ impl ExternalAdoptStore for SqlExternalStore {
                 request.entry,
                 Some(&request.path),
                 next,
-                None,
+                content,
                 "external",
             ),
             request.at,
