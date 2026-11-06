@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory=$true)][string]$Base,
   [Parameter(Mandatory=$true)][string]$CaSha256,
   [Parameter(Mandatory=$true)][string]$AgentSha256,
-  [Parameter(Mandatory=$true)][string]$CliSha256
+  [Parameter(Mandatory=$true)][string]$CliSha256,
+  [Parameter(Mandatory=$true)][string]$InputPipe
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -26,7 +27,14 @@ public static class VSS097Credential {
 }
 '@
 if([VSS097Credential]::Exists($target)){throw 'existing trial server credential must be retained, refusing overwrite'}
-$loginJson=[Console]::In.ReadToEnd()
+# The interactive worker receives secrets over a same-SID ACL-protected local pipe.
+$reader=$null
+$pipe=New-Object IO.Pipes.NamedPipeClientStream('.', $InputPipe, [IO.Pipes.PipeDirection]::In)
+try {
+ $pipe.Connect(30000)
+ $reader=New-Object IO.StreamReader($pipe,(New-Object Text.UTF8Encoding($false)))
+ $loginJson=$reader.ReadToEnd()
+} finally {if($reader){$reader.Dispose()};$pipe.Dispose()}
 $login=$loginJson|ConvertFrom-Json
 if($login.login -ne 'owner' -or [string]::IsNullOrWhiteSpace($login.password)){throw 'missing anonymous-stdin login input'}
 $state=Join-Path $Base 'state'
@@ -85,6 +93,7 @@ try {
  if(-not $agentProcess.HasExited){$agentProcess.Kill();$agentProcess.WaitForExit()}
  $agentProcess=$null
  # Explicitly trust the already fingerprint-checked PUBLIC CA for this Windows user only.
+ [pscustomobject]@{worker_pid=$PID;session=(Get-Process -Id $PID).SessionId;ca_sha256=$actualCa}|ConvertTo-Json|Set-Content (Join-Path $Base 'ca-import-pending.json')
  $store=New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','CurrentUser')
  $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
  try{$store.Add($caCertificate)}finally{$store.Close()}
