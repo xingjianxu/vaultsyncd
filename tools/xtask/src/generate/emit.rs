@@ -152,11 +152,23 @@ fn push_local_ipc_constants_rust(out: &mut String, model: &LocalIpcModel) {
 fn push_rust_schemas(out: &mut String, types: &TargetTypes, schemas: &BTreeMap<String, SchemaDef>) {
     for (name, definition) in schemas {
         match definition {
-            SchemaDef::Struct { doc, fields } => {
+            SchemaDef::Struct {
+                doc,
+                fields,
+                closed,
+            } => {
                 push_rust_doc(out, "", doc);
-                out.push_str(
-                    "#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]\n",
-                );
+                let secret = fields.iter().any(|field| field.wire == "password");
+                let debug = if secret { "" } else { "Debug, " };
+                let default = if fields.iter().all(|field| field.optional) {
+                    ", Default"
+                } else {
+                    ""
+                };
+                out.push_str(&format!("#[derive({debug}Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize{default})]\n"));
+                if *closed {
+                    out.push_str("#[serde(deny_unknown_fields)]\n");
+                }
                 out.push_str(&format!("pub struct {name} {{\n"));
                 for field in fields {
                     push_rust_doc(out, "    ", &field.doc);
@@ -182,6 +194,20 @@ fn push_rust_schemas(out: &mut String, types: &TargetTypes, schemas: &BTreeMap<S
                     out.push_str(&format!("    pub {}: {ty},\n", field.wire));
                 }
                 out.push_str("}\n\n");
+                if secret {
+                    out.push_str(&format!("impl core::fmt::Debug for {name} {{\n    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n        let mut value = f.debug_struct(\"{name}\");\n"));
+                    for field in fields {
+                        if field.wire == "password" {
+                            out.push_str("        value.field(\"password\", &\"[REDACTED]\");\n");
+                        } else {
+                            out.push_str(&format!(
+                                "        value.field(\"{}\", &self.{});\n",
+                                field.wire, field.wire
+                            ));
+                        }
+                    }
+                    out.push_str("        value.finish()\n    }\n}\n\n");
+                }
             }
             SchemaDef::Enum { doc, variants } => {
                 push_rust_doc(out, "", doc);
@@ -268,7 +294,11 @@ fn push_ts_helpers(out: &mut String, schemas: &BTreeMap<String, SchemaDef>) {
 fn push_ts_schemas(out: &mut String, types: &TargetTypes, schemas: &BTreeMap<String, SchemaDef>) {
     for (name, definition) in schemas {
         match definition {
-            SchemaDef::Struct { doc, fields } => {
+            SchemaDef::Struct {
+                doc,
+                fields,
+                closed,
+            } => {
                 push_ts_doc(out, "", doc);
                 out.push_str(&format!("export interface {name} {{\n"));
                 for field in fields {
@@ -279,8 +309,17 @@ fn push_ts_schemas(out: &mut String, types: &TargetTypes, schemas: &BTreeMap<Str
                 }
                 out.push_str("}\n\n");
                 out.push_str(&format!(
-                    "export function decode{name}(value: unknown): {name} {{\n  const object = expect_object(value, \"{name}\");\n  return {{\n"
+                    "export function decode{name}(value: unknown): {name} {{\n  const object = expect_object(value, \"{name}\");\n"
                 ));
+                if *closed {
+                    let allowed = fields
+                        .iter()
+                        .map(|field| format!("\"{}\"", field.wire))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    out.push_str(&format!("  if (Object.keys(object).some((key) => ![{allowed}].includes(key))) {{\n    throw new Error(\"{name} contains unknown fields\");\n  }}\n"));
+                }
+                out.push_str("  return {\n");
                 for field in fields {
                     let what = format!("{name}.{}", field.wire);
                     let expr = ts_decode(&field.ty, &format!("object.{}", field.wire), &what);

@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 1;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 1;
+export const PROTOCOL_MINOR = 2;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -62,7 +62,38 @@ function expect_number(value: unknown, what: string): number {
   return value;
 }
 
-/** 运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；本卡不提供状态推送。 */
+/** 持久 Binding 配置与控制事实，包括解绑记录。 */
+export interface BindingInfo {
+  /** Binding 身份。 */
+  binding_id: string;
+  /** 保留的缓存。 */
+  cache_path: string;
+  /** 保留数据停止管理。 */
+  detached: boolean;
+  /** 用户选择的目录。 */
+  local_path: string;
+  /** 持久目标模式。 */
+  mode: string;
+  /** 已暂停。 */
+  paused: boolean;
+  /** Root 身份。 */
+  root_id: string;
+}
+
+export function decodeBindingInfo(value: unknown): BindingInfo {
+  const object = expect_object(value, "BindingInfo");
+  return {
+    binding_id: expect_string(object.binding_id, "BindingInfo.binding_id"),
+    cache_path: expect_string(object.cache_path, "BindingInfo.cache_path"),
+    detached: expect_boolean(object.detached, "BindingInfo.detached"),
+    local_path: expect_string(object.local_path, "BindingInfo.local_path"),
+    mode: expect_string(object.mode, "BindingInfo.mode"),
+    paused: expect_boolean(object.paused, "BindingInfo.paused"),
+    root_id: expect_string(object.root_id, "BindingInfo.root_id"),
+  };
+}
+
+/** 运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；1.2 的 subscribe_status 按实例版本长轮询推送全量，get_status 可无条件恢复丢失提示。 */
 export interface BindingStatus {
   /** Binding 稳定身份。 */
   binding_id: string;
@@ -123,29 +154,124 @@ export function decodeBindingStatus(value: unknown): BindingStatus {
   };
 }
 
-/** 命令负载：命令名加该命令自己的参数。当前唯一的 get_status 没有参数。 */
+/** 命令负载。parameters 按命令逐项校验必填项与允许项；多余参数、非规范身份、相对路径、越界文本一律失败。1.0/1.1 仍支持无参数 get_status。 */
 export interface Command {
   /** 要执行的命令名；未知取值在解码阶段被拒绝。 */
   name: CommandName;
+  /** 命令专属参数；执行器复核，不能仅信任界面。 */
+  parameters?: CommandParameters;
 }
 
 export function decodeCommand(value: unknown): Command {
   const object = expect_object(value, "Command");
+  if (Object.keys(object).some((key) => !["name", "parameters"].includes(key))) {
+    throw new Error("Command contains unknown fields");
+  }
   return {
     name: decodeCommandName(object.name),
+    parameters: object.parameters === undefined ? undefined : decodeCommandParameters(object.parameters),
   };
 }
 
-/** 命令名闭集。S025 只实现 get_status；design §15.5 其余命令在其功能卡加入，取值与含义在契约里逐项追加。 */
-export type CommandName = "get_status";
+/** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry";
 
-export const COMMAND_NAME_VALUES = ["get_status"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
     throw new Error(`未知的 CommandName 取值：${JSON.stringify(value)}`);
   }
   return value as CommandName;
+}
+
+/** 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。 */
+export interface CommandParameters {
+  /** 订阅最后看到的 instance:counter；缺省或不匹配立即返回全量。 */
+  after_version?: string;
+  /** 恢复前当前修订 CAS。 */
+  base_revision?: string;
+  /** Binding 身份。 */
+  binding_id?: string;
+  /** 用户显式选择的附加 CA，不禁用系统证书验证。 */
+  ca_file?: string;
+  /** 专属且与所有同步根/状态目录分离的缓存。 */
+  cache_path?: string;
+  /** 历史或回收站分页的 after 身份。 */
+  cursor?: string;
+  /** 新的恢复导出目录；不可覆盖。 */
+  destination?: string;
+  /** 条目身份，不接受调用方自选相对文件路径。 */
+  entry_id?: string;
+  /** 用户显式选定的本机绝对目录。 */
+  local_path?: string;
+  /** full 或 on_demand。 */
+  mode?: string;
+  /** 重试/副作用幂等身份。 */
+  operation_id?: string;
+  /** 瞬时登录密码；不能日志输出整个请求。 */
+  password?: string;
+  /** 授权 Root 身份。 */
+  root_id?: string;
+  /** 问题路径或原因的大小写不敏感子串筛选。 */
+  search?: string;
+  /** 连接的服务器稳定身份。 */
+  server_id?: string;
+  /** HTTPS 地址，不允许用户信息、query 或 fragment。 */
+  server_url?: string;
+  /** 登录账号。 */
+  username?: string;
+  /** 固定历史版本。 */
+  version_id?: string;
+}
+
+export function decodeCommandParameters(value: unknown): CommandParameters {
+  const object = expect_object(value, "CommandParameters");
+  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "operation_id", "password", "root_id", "search", "server_id", "server_url", "username", "version_id"].includes(key))) {
+    throw new Error("CommandParameters contains unknown fields");
+  }
+  return {
+    after_version: object.after_version === undefined ? undefined : expect_string(object.after_version, "CommandParameters.after_version"),
+    base_revision: object.base_revision === undefined ? undefined : expect_string(object.base_revision, "CommandParameters.base_revision"),
+    binding_id: object.binding_id === undefined ? undefined : expect_string(object.binding_id, "CommandParameters.binding_id"),
+    ca_file: object.ca_file === undefined ? undefined : expect_string(object.ca_file, "CommandParameters.ca_file"),
+    cache_path: object.cache_path === undefined ? undefined : expect_string(object.cache_path, "CommandParameters.cache_path"),
+    cursor: object.cursor === undefined ? undefined : expect_string(object.cursor, "CommandParameters.cursor"),
+    destination: object.destination === undefined ? undefined : expect_string(object.destination, "CommandParameters.destination"),
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "CommandParameters.entry_id"),
+    local_path: object.local_path === undefined ? undefined : expect_string(object.local_path, "CommandParameters.local_path"),
+    mode: object.mode === undefined ? undefined : expect_string(object.mode, "CommandParameters.mode"),
+    operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "CommandParameters.operation_id"),
+    password: object.password === undefined ? undefined : expect_string(object.password, "CommandParameters.password"),
+    root_id: object.root_id === undefined ? undefined : expect_string(object.root_id, "CommandParameters.root_id"),
+    search: object.search === undefined ? undefined : expect_string(object.search, "CommandParameters.search"),
+    server_id: object.server_id === undefined ? undefined : expect_string(object.server_id, "CommandParameters.server_id"),
+    server_url: object.server_url === undefined ? undefined : expect_string(object.server_url, "CommandParameters.server_url"),
+    username: object.username === undefined ? undefined : expect_string(object.username, "CommandParameters.username"),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "CommandParameters.version_id"),
+  };
+}
+
+/** 不含 token 的连接与证书配置。 */
+export interface ConnectionInfo {
+  /** 持有凭据；不等于服务器在线。 */
+  authenticated: boolean;
+  /** 附加信任 CA 路径。 */
+  ca_file?: string;
+  /** 服务器身份。 */
+  server_id: string;
+  /** 服务器地址。 */
+  server_url: string;
+}
+
+export function decodeConnectionInfo(value: unknown): ConnectionInfo {
+  const object = expect_object(value, "ConnectionInfo");
+  return {
+    authenticated: expect_boolean(object.authenticated, "ConnectionInfo.authenticated"),
+    ca_file: object.ca_file === undefined ? undefined : expect_string(object.ca_file, "ConnectionInfo.ca_file"),
+    server_id: expect_string(object.server_id, "ConnectionInfo.server_id"),
+    server_url: expect_string(object.server_url, "ConnectionInfo.server_url"),
+  };
 }
 
 /** 错误应答主体：协议级失败的原因。带 root_id/details 的同步问题由问题页命令返回，不在本契约里。 */
@@ -175,6 +301,10 @@ export interface GetStatusResult {
   bindings?: Array<BindingStatus>;
   /** agent 当前支持的 IPC 协议版本。 */
   ipc_protocol: IpcVersion;
+  /** 1.2 管理命令的类型化结果。 */
+  management?: ManagementResult;
+  /** 进程唯一身份加单调计数；不同进程的版本不可比较。丢失订阅后 get_status 始终返回全量。 */
+  snapshot_version?: string;
 }
 
 export function decodeGetStatusResult(value: unknown): GetStatusResult {
@@ -183,6 +313,8 @@ export function decodeGetStatusResult(value: unknown): GetStatusResult {
     agent_version: expect_string(object.agent_version, "GetStatusResult.agent_version"),
     bindings: object.bindings === undefined ? undefined : expect_array(object.bindings, "GetStatusResult.bindings").map((item) => decodeBindingStatus(item)),
     ipc_protocol: decodeIpcVersion(object.ipc_protocol),
+    management: object.management === undefined ? undefined : decodeManagementResult(object.management),
+    snapshot_version: object.snapshot_version === undefined ? undefined : expect_string(object.snapshot_version, "GetStatusResult.snapshot_version"),
   };
 }
 
@@ -202,16 +334,127 @@ export function decodeIpcVersion(value: unknown): IpcVersion {
   };
 }
 
-/** 本机 IPC 协议级错误码闭集，不是 design §15.4 的同步错误码。S025 只有版本不兼容；需要新错误时先扩展本契约。 */
-export type LocalIpcErrorCode = "unsupported_version";
+/** 管理入口错误分类；同步错误的稳定 code 放在 problems，不泄露自由诊断或凭据。 */
+export type LocalIpcErrorCode = "unsupported_version" | "invalid_argument" | "not_found" | "blocked" | "unavailable" | "unauthenticated" | "conflict" | "internal";
 
-export const LOCAL_IPC_ERROR_CODE_VALUES = ["unsupported_version"] as const;
+export const LOCAL_IPC_ERROR_CODE_VALUES = ["unsupported_version", "invalid_argument", "not_found", "blocked", "unavailable", "unauthenticated", "conflict", "internal"] as const;
 
 export function decodeLocalIpcErrorCode(value: unknown): LocalIpcErrorCode {
   if (typeof value !== "string" || !(LOCAL_IPC_ERROR_CODE_VALUES as readonly string[]).includes(value)) {
     throw new Error(`未知的 LocalIpcErrorCode 取值：${JSON.stringify(value)}`);
   }
   return value as LocalIpcErrorCode;
+}
+
+/** 每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。 */
+export interface ManagementResult {
+  /** 持久绑定列表。 */
+  bindings?: Array<BindingInfo>;
+  /** 连接事实。 */
+  connection?: ConnectionInfo;
+  /** 已完整核验的恢复包文件数。 */
+  exported_files?: string;
+  /** 解绑后不保证离线可读的条目。 */
+  incomplete?: Array<string>;
+  /** 远端授权 Root/历史/回收站列表。 */
+  items?: Array<RemoteItem>;
+  /** 模式任务仍需真实核对/补齐的条目数。 */
+  mode_remaining?: string;
+  /** 历史或回收站清单下一页游标。 */
+  next_cursor?: string;
+  /** 实际执行的幂等操作身份。 */
+  operation_id?: string;
+  /** 持久问题列表。 */
+  problems?: Array<Problem>;
+  /** 解绑时保留的未确认条目。 */
+  unconfirmed?: Array<string>;
+}
+
+export function decodeManagementResult(value: unknown): ManagementResult {
+  const object = expect_object(value, "ManagementResult");
+  return {
+    bindings: object.bindings === undefined ? undefined : expect_array(object.bindings, "ManagementResult.bindings").map((item) => decodeBindingInfo(item)),
+    connection: object.connection === undefined ? undefined : decodeConnectionInfo(object.connection),
+    exported_files: object.exported_files === undefined ? undefined : expect_string(object.exported_files, "ManagementResult.exported_files"),
+    incomplete: object.incomplete === undefined ? undefined : expect_array(object.incomplete, "ManagementResult.incomplete").map((item) => expect_string(item, "ManagementResult.incomplete 的元素")),
+    items: object.items === undefined ? undefined : expect_array(object.items, "ManagementResult.items").map((item) => decodeRemoteItem(item)),
+    mode_remaining: object.mode_remaining === undefined ? undefined : expect_string(object.mode_remaining, "ManagementResult.mode_remaining"),
+    next_cursor: object.next_cursor === undefined ? undefined : expect_string(object.next_cursor, "ManagementResult.next_cursor"),
+    operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "ManagementResult.operation_id"),
+    problems: object.problems === undefined ? undefined : expect_array(object.problems, "ManagementResult.problems").map((item) => decodeProblem(item)),
+    unconfirmed: object.unconfirmed === undefined ? undefined : expect_array(object.unconfirmed, "ManagementResult.unconfirmed").map((item) => expect_string(item, "ManagementResult.unconfirmed 的元素")),
+  };
+}
+
+/** 真实持久问题；不返回任意日志文本。 */
+export interface Problem {
+  /** Binding 身份。 */
+  binding_id: string;
+  /** 稳定原因码。 */
+  code: string;
+  /** 相关条目。 */
+  entry_id?: string;
+  /** 本地数据保护/驻留情况，不把数据库 clean 当真实完整字节。 */
+  local_data: string;
+  /** 可执行下一步。 */
+  next_step: string;
+  /** 已核对的相对路径；未知时省略。 */
+  path?: string;
+  /** 待办操作身份或只读诊断身份。 */
+  problem_id: string;
+  /** 原因说明。 */
+  reason: string;
+  /** 是否可调用 retry_problem。 */
+  retryable: boolean;
+}
+
+export function decodeProblem(value: unknown): Problem {
+  const object = expect_object(value, "Problem");
+  return {
+    binding_id: expect_string(object.binding_id, "Problem.binding_id"),
+    code: expect_string(object.code, "Problem.code"),
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "Problem.entry_id"),
+    local_data: expect_string(object.local_data, "Problem.local_data"),
+    next_step: expect_string(object.next_step, "Problem.next_step"),
+    path: object.path === undefined ? undefined : expect_string(object.path, "Problem.path"),
+    problem_id: expect_string(object.problem_id, "Problem.problem_id"),
+    reason: expect_string(object.reason, "Problem.reason"),
+    retryable: expect_boolean(object.retryable, "Problem.retryable"),
+  };
+}
+
+/** 服务器返回的授权 Root、历史版本或回收站项目。 */
+export interface RemoteItem {
+  /** 条目身份。 */
+  entry_id?: string;
+  /** 内容摘要。 */
+  hash?: string;
+  /** 稳定身份。 */
+  id: string;
+  /** 显示名称。 */
+  name: string;
+  /** 原父目录。 */
+  parent_id?: string;
+  /** 当前 CAS 修订。 */
+  revision?: string;
+  /** 字节数。 */
+  size?: string;
+  /** 固定版本。 */
+  version_id?: string;
+}
+
+export function decodeRemoteItem(value: unknown): RemoteItem {
+  const object = expect_object(value, "RemoteItem");
+  return {
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "RemoteItem.entry_id"),
+    hash: object.hash === undefined ? undefined : expect_string(object.hash, "RemoteItem.hash"),
+    id: expect_string(object.id, "RemoteItem.id"),
+    name: expect_string(object.name, "RemoteItem.name"),
+    parent_id: object.parent_id === undefined ? undefined : expect_string(object.parent_id, "RemoteItem.parent_id"),
+    revision: object.revision === undefined ? undefined : expect_string(object.revision, "RemoteItem.revision"),
+    size: object.size === undefined ? undefined : expect_string(object.size, "RemoteItem.size"),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "RemoteItem.version_id"),
+  };
 }
 
 /** 一次命令请求：请求身份、调用方使用的协议版本与命令负载。 */

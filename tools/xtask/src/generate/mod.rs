@@ -416,7 +416,7 @@ struct RawSchema {
     items: Option<Box<RawSchema>>,
     /// 映射值类型。
     #[serde(rename = "additionalProperties", default)]
-    additional_properties: Option<Box<RawSchema>>,
+    additional_properties: Option<AdditionalProperties>,
     /// 整数下界（只进文档）。
     #[serde(default)]
     minimum: Option<i64>,
@@ -426,6 +426,14 @@ struct RawSchema {
     /// 组件引用；只接受 `#/components/schemas/<名字>`。
     #[serde(rename = "$ref", default)]
     reference: Option<String>,
+}
+
+/// Explicit object closure or a typed string-map value schema.
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum AdditionalProperties {
+    Allowed(bool),
+    Schema(Box<RawSchema>),
 }
 
 /// 校验后的契约模型：只保留生成需要的构造。
@@ -452,6 +460,8 @@ pub(crate) enum SchemaDef {
         doc: String,
         /// 字段，按 wire 名字排序。
         fields: Vec<Field>,
+        /// Unknown input fields are rejected only when the contract explicitly closes the object.
+        closed: bool,
     },
     /// 闭集枚举：未知取值必须解析失败。
     Enum {
@@ -762,11 +772,15 @@ fn build_schema_def(name: &str, raw: &RawSchema, ref_prefix: &str) -> Result<Sch
             raw.ty
         ));
     }
-    if raw.additional_properties.is_some() {
-        return Err(format!(
-            "schema `{name}` 是 object：映射请写成字段的 `additionalProperties`，不要当作具名 schema"
-        ));
-    }
+    let closed = match &raw.additional_properties {
+        None | Some(AdditionalProperties::Allowed(true)) => false,
+        Some(AdditionalProperties::Allowed(false)) => true,
+        Some(AdditionalProperties::Schema(_)) => {
+            return Err(format!(
+                "schema `{name}` 是 object：映射请写成字段的 `additionalProperties`，不要当作具名 schema"
+            ));
+        }
+    };
     let properties = raw
         .properties
         .as_ref()
@@ -804,7 +818,11 @@ fn build_schema_def(name: &str, raw: &RawSchema, ref_prefix: &str) -> Result<Sch
             optional: !required.contains(wire),
         });
     }
-    Ok(SchemaDef::Struct { doc, fields })
+    Ok(SchemaDef::Struct {
+        doc,
+        fields,
+        closed,
+    })
 }
 
 /// 校验字段类型的构造。
@@ -853,10 +871,11 @@ fn build_field_type(context: &str, raw: &RawSchema, ref_prefix: &str) -> Result<
                     "{context} 是内联对象；请提成具名 schema，否则无法生成稳定类型"
                 ));
             }
-            let values = raw
-                .additional_properties
-                .as_ref()
-                .ok_or_else(|| format!("{context} 是 object 但没有 additionalProperties"))?;
+            let Some(AdditionalProperties::Schema(values)) = &raw.additional_properties else {
+                return Err(format!(
+                    "{context} 是映射但没有 additionalProperties 值 schema"
+                ));
+            };
             let value_type = build_field_type(&format!("{context} 的值"), values, ref_prefix)?;
             match value_type {
                 FieldType::Text => Ok(FieldType::Map(Box::new(FieldType::Text))),

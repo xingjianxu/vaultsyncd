@@ -58,6 +58,9 @@ impl Service {
                 },
             );
         }
+        if let Err(error) = crate::commands::validate(&request.command) {
+            return Response::error(request.request_id.clone(), error);
+        }
         match request.command.name {
             CommandName::GetStatus => Response::ok(
                 request.request_id.clone(),
@@ -65,6 +68,16 @@ impl Service {
                     agent_version: self.agent_version.clone(),
                     ipc_protocol: version::supported(),
                     bindings: None,
+                    snapshot_version: None,
+                    management: None,
+                },
+            ),
+            _ => Response::error(
+                request.request_id.clone(),
+                ErrorBody {
+                    code: LocalIpcErrorCode::Internal,
+                    message: "管理命令必须交给运行中的 agent 执行器".into(),
+                    retryable: false,
                 },
             ),
         }

@@ -31,6 +31,7 @@ fn get_status(request_id: &str, major: u32, minor: u32) -> Request {
     Request {
         command: Command {
             name: CommandName::GetStatus,
+            parameters: None,
         },
         ipc_version: IpcVersion { major, minor },
         request_id: request_id.to_string(),
@@ -76,7 +77,7 @@ fn real_status_addition_preserves_decimal_counts_and_legacy_response() {
 #[test]
 fn unknown_command_is_rejected() {
     let mut value = sample(REQUEST_EXAMPLE);
-    value["command"]["name"] = json!("detach_binding");
+    value["command"]["name"] = json!("delete_everything_unknown");
     let error = serde_json::from_value::<Request>(value).expect_err("未知命令必须被拒绝");
     assert!(
         error.to_string().contains("unknown variant"),
@@ -218,6 +219,8 @@ fn framed_request_reaches_the_handler_and_response_is_framed() {
             agent_version: "9.9.9".to_string(),
             ipc_protocol: version::supported(),
             bindings: None,
+            snapshot_version: None,
+            management: None,
         }
     );
 }

@@ -65,12 +65,23 @@ check("frame_limits_come_from_contract", () => {
   assert.equal(FRAME_HEADER_BYTES, 4);
   assert.ok(MAX_FRAME_BYTES >= 64 && MAX_FRAME_BYTES <= 64 * 1024 * 1024);
   assert.equal(PROTOCOL_MAJOR, 1);
-  assert.equal(PROTOCOL_MINOR, 1);
+  assert.equal(PROTOCOL_MINOR, 2);
 });
 
 check("request_example_decodes_to_sample", () => {
   const sample = example("local-ipc.request.json");
   assert.deepEqual(reencode(decodeRequest(sample)), sample);
+});
+
+check("all_management_examples_decode_without_losing_parameters", () => {
+  const samples = example("local-ipc.management.json");
+  const commands = new Set();
+  for (const sample of samples) {
+    const decoded = decodeRequest(sample);
+    assert.deepEqual(reencode(decoded), sample);
+    commands.add(decoded.command.name);
+  }
+  assert.equal(commands.size, 21);
 });
 
 check("response_ok_example_decodes_to_sample", () => {
@@ -96,9 +107,9 @@ check("response_error_example_decodes_to_sample", () => {
 
 check("unknown_command_is_rejected", () => {
   const request = example("local-ipc.request.json");
-  request.command.name = "detach_binding";
+  request.command.name = "delete_everything_unknown";
   expectThrow(() => decodeRequest(request));
-  expectThrow(() => decodeCommandName("detach_binding"));
+  expectThrow(() => decodeCommandName("delete_everything_unknown"));
 });
 
 check("unknown_response_kind_is_rejected", () => {
