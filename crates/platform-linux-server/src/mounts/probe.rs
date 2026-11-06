@@ -71,13 +71,12 @@ impl MountIdSource {
     }
 }
 
-/// 子卷 ID 的来源。既有内核版本差异，也有权限差异：`BTRFS_IOC_INO_LOOKUP` 需要
-/// `CAP_SYS_ADMIN`，而 `statx` 的 `STATX_SUBVOL` 不需要特权。
+/// 子卷 ID 的来源。statx 与 INO_LOOKUP 固定根 inode 查询模式均无需特权。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubvolumeIdSource {
-    /// `statx` 的 `STATX_SUBVOL`/`stx_subvol`（内核 6.7 起，无需特权）。
+    /// `statx` 的 `STATX_SUBVOL`/`stx_subvol`（内核 6.10 起，无需特权）。
     StatxSubvol,
-    /// `BTRFS_IOC_INO_LOOKUP` 的 `treeid`（需要 `CAP_SYS_ADMIN`）。
+    /// `BTRFS_IOC_INO_LOOKUP` 的同 fd `treeid`（objectid=256，无需特权）。
     BtrfsInoLookup,
     /// mountinfo 超级块选项里的 `subvolid=`（仅当目录本身就是挂载点）。
     MountSuperOption,
@@ -558,7 +557,7 @@ struct SubvolumeResolution {
     error: Option<String>,
 }
 
-/// 优先用无特权的 `statx`（`STATX_SUBVOL`），再退回需要 `CAP_SYS_ADMIN` 的 ioctl。
+/// 优先无特权 statx，再使用同 fd 的无特权 INO_LOOKUP 根查询模式。
 fn resolve_subvolume_id(fd: std::os::fd::RawFd, statx: &raw::StatxFacts) -> SubvolumeResolution {
     if let Some(id) = statx.subvol_id {
         return SubvolumeResolution {

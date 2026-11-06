@@ -53,7 +53,7 @@ pub(crate) const STATX_SIZE: c_uint = 0x200;
 pub(crate) const STATX_BTIME: c_uint = 0x800;
 /// `STATX_MNT_ID`：需要挂载 ID（内核 5.8 起；更旧内核会忽略该位并在 `stx_mask` 里缺席）。
 pub(crate) const STATX_MNT_ID: c_uint = 0x1000;
-/// `STATX_SUBVOL`：需要子卷 ID（内核 6.7 起；旧内核忽略该位，此时只能用 ioctl）。
+/// `STATX_SUBVOL`：需要子卷 ID（内核 6.10 起；旧内核忽略该位，此时只能用 ioctl）。
 pub(crate) const STATX_SUBVOL: c_uint = 0x8000;
 
 /// `FS_NOCOW_FL`（`linux/fs.h`）：btrfs 上表示 NOCOW/`+C`，破坏数据 CoW 与校验前提。
@@ -133,8 +133,8 @@ struct StatxTimestamp {
 
 /// `struct statx`：只读使用 `stx_mask`、`stx_ino`、`stx_dev_*`、`stx_mnt_id`、`stx_btime`。
 ///
-/// 6.7 起内核在该结构尾部新增 `stx_subvol`，位置与旧内核的 `__spare3[0]` 重合，因此
-/// 256 字节布局对两侧一致；本卡不读该字段（子卷 ID 走 `BTRFS_IOC_INO_LOOKUP`）。
+/// 6.10 起内核在该结构尾部新增 `stx_subvol`，位置与旧内核的 `__spare3[0]` 重合，因此
+/// 256 字节布局对两侧一致；仅在 stx_mask 确认可用时读取该字段。
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[allow(dead_code, reason = "内核 ABI 布局：未读字段也必须保留，否则偏移全错")]
@@ -185,7 +185,7 @@ struct Statx {
     stx_dio_mem_align: u32,
     /// 直接 I/O 偏移对齐（未使用）。
     stx_dio_offset_align: u32,
-    /// 子卷 ID（`STATX_SUBVOL`，内核 6.7 起）。
+    /// 子卷 ID（`STATX_SUBVOL`，内核 6.10 起）。
     stx_subvol: u64,
     /// 保留字段。
     spare3: [u64; 11],
@@ -267,13 +267,13 @@ const _: () = assert!(size_of::<BtrfsIoFsInfo>() == 1024);
 /// `BTRFS_INO_LOOKUP_PATH_MAX`。
 const INO_LOOKUP_PATH_MAX: usize = 4080;
 
-/// `struct btrfs_ioctl_ino_lookup_args`：`treeid`/`objectid` 传 0 时返回句柄所在子卷的 ID。
+/// `struct btrfs_ioctl_ino_lookup_args`：treeid=0、objectid=256 时只查询句柄所在子卷的 ID，不搜索路径。
 #[repr(C)]
 #[allow(dead_code, reason = "内核 ABI 布局：未读字段也必须保留，否则偏移全错")]
 struct BtrfsIoInoLookup {
     /// 子卷 ID（输出）。
     treeid: u64,
-    /// inode 号（输出）。
+    /// 固定根 inode 查询值（输入）。
     objectid: u64,
     /// 子卷路径名（本卡不使用）。
     name: [u8; INO_LOOKUP_PATH_MAX],
@@ -454,15 +454,17 @@ pub(crate) fn btrfs_fsid(fd: RawFd) -> io::Result<[u8; 16]> {
     Ok(args.fsid)
 }
 
-/// 读取 fd 所在 btrfs 子卷的 ID（`BTRFS_IOC_INO_LOOKUP`，`treeid`/`objectid` 传 0），只读。
+/// 读取同 fd 所在 btrfs 子卷的 ID，无特权的 INO_LOOKUP 根查询模式。
 pub(crate) fn btrfs_subvolume_id(fd: RawFd) -> io::Result<u64> {
     let mut args = BtrfsIoInoLookup {
         treeid: 0,
-        objectid: 0,
+        // BTRFS_FIRST_FREE_OBJECTID is the fixed root inode, not a subvolume ID.
+        // Linux returns this fd's containing treeid before any privileged path search.
+        objectid: 256,
         name: [0; INO_LOOKUP_PATH_MAX],
     };
     // SAFETY: BTRFS_IOC_INO_LOOKUP 是 _IOWR(0x94, 18, 4096)，读写本地 4 KiB 结构体；
-    // treeid/objectid 传 0 时内核用句柄所在子卷与 inode 填充。
+    // treeid=0 绑定该 fd 的 root，objectid=256 直接返回 treeid，不做路径搜索。
     let rc = unsafe { ioctl(fd, BTRFS_IOC_INO_LOOKUP, &raw mut args) };
     if rc != 0 {
         return Err(io::Error::last_os_error());
