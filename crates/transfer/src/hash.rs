@@ -102,6 +102,62 @@ impl fmt::Display for DigestMismatch {
 
 impl std::error::Error for DigestMismatch {}
 
+/// 解析 64 位小写十六进制摘要（wire 契约与数据库都这样存）。
+///
+/// 只接受**小写**十六进制：契约里的摘要是小写，若这里也接受大写，同一份摘要会有两种文本表示，
+/// 比较与主键就会各说各话。
+///
+/// # Errors
+///
+/// 长度不是 64、出现非十六进制字符或出现大写字母时返回 [`HexError`]。
+pub fn from_hex(text: &str) -> Result<[u8; DIGEST_BYTES], HexError> {
+    let bytes = text.as_bytes();
+    if bytes.len() != DIGEST_BYTES * 2 {
+        return Err(HexError {
+            reason: "摘要文本必须是 64 位十六进制",
+        });
+    }
+    let mut digest = [0_u8; DIGEST_BYTES];
+    for (slot, pair) in digest.iter_mut().zip(bytes.chunks_exact(2)) {
+        let high = hex_value(pair[0])?;
+        let low = hex_value(pair[1])?;
+        *slot = (high << 4) | low;
+    }
+    Ok(digest)
+}
+
+fn hex_value(byte: u8) -> Result<u8, HexError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(HexError {
+            reason: "摘要文本只能包含小写十六进制字符",
+        }),
+    }
+}
+
+/// 摘要文本解析失败。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HexError {
+    reason: &'static str,
+}
+
+impl HexError {
+    /// 面向诊断的原因。
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        self.reason
+    }
+}
+
+impl fmt::Display for HexError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.reason)
+    }
+}
+
+impl std::error::Error for HexError {}
+
 /// 32 字节摘要的小写十六进制文本（日志与错误信息用）。
 #[must_use]
 pub fn to_hex(digest: &[u8; DIGEST_BYTES]) -> String {
@@ -149,6 +205,21 @@ mod tests {
         let message = mismatch.to_string();
         assert!(message.contains(&to_hex(&expected)), "{message}");
         assert!(message.contains(&to_hex(&actual)), "{message}");
+    }
+
+    #[test]
+    fn hex_round_trips_and_rejects_non_canonical_text() {
+        let digest = digest_of(b"abc");
+        assert_eq!(from_hex(&to_hex(&digest)), Ok(digest));
+        assert!(
+            from_hex(&to_hex(&digest).to_uppercase()).is_err(),
+            "大写不是规范文本"
+        );
+        assert!(from_hex("abc").is_err());
+        let mut long = to_hex(&digest);
+        long.push('0');
+        assert!(from_hex(&long).is_err());
+        assert!(from_hex(&to_hex(&digest).replace('b', "g")).is_err());
     }
 
     #[test]

@@ -33,23 +33,36 @@
 //! # }
 //! ```
 //!
+//! # 端点模块
+//!
+//! - [`uploads`]：上传会话端点（`begin`/`status`/`put_part`/`finalize`），实现
+//!   `vaultsyncd_transfer::ports::UploadTarget`，块摘要走 `x-part-sha256`。
+//! - [`content`]：固定版本内容端点（`Range` 续传），实现
+//!   `vaultsyncd_transfer::ports::VersionedContent`；请求与校验都绑在版本上。
+//!
 //! # 尚未实现（后续卡）
 //!
-//! 本卡只做传输骨架与认证刷新；Root、events/changes 拉取、上传会话与固定版本内容下载分别由
-//! 后续卡在本 crate 内新增模块（design §5.4 列出的 `roots.rs`、`changes.rs`、`uploads.rs`、
-//! `content.rs`）。查询串编码也留给需要它的端点一并引入。
+//! Root 清单与 SSE 事件流、浏览器 cookie 载体（Rust 客户端只走 Bearer）仍由后续卡接线；
+//! `changes` JSON 拉取与查询串编码已由 [`changes`] 提供。退避调度属于 `crates/agent-core`。
 
 #![forbid(unsafe_code)]
 
 pub mod auth;
 pub mod cancel;
+pub mod changes;
 pub mod client;
 pub mod config;
+pub mod content;
 pub mod error;
 pub mod transport;
+pub mod uploads;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+
+// 端到端接线：真实端点模块 + 传输替身 + `vaultsyncd-transfer` 的执行器（只在测试里编译）。
+#[cfg(test)]
+mod flow_tests;
 
 pub use auth::{AuthSession, CredentialSink, CredentialSnapshot, Credentials};
 pub use cancel::Cancellation;

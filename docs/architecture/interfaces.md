@@ -1105,7 +1105,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `db::CLIENT_APPLICATION_ID` | `0x434C4E54`（ASCII `CLNT`），写入 `PRAGMA application_id`；与 `server_store::SERVER_APPLICATION_ID`（`VSN1`）互相拒绝 |
 | `db::MIGRATOR` | `sqlx::migrate!("./migrations")` 编译期内嵌 `crates/client-store/migrations/*.sql`（`0001_initial.sql` 属 S030，`0002_events_transfers_intents.sql` 属 S031）；已发布文件不得改写（校验和不符即拒绝启动） |
-| `db::target_schema_version()` | 内嵌迁移最大版本号（当前 `2`），即 `PRAGMA user_version` 的目标值 |
+| `db::target_schema_version()` | 内嵌迁移最大版本号（当前 `3`，S055 追加 `0003_upload_resumes.sql`），即 `PRAGMA user_version` 的目标值 |
 | `db::migration_backup_path(db, from, to)` | `<库路径>.pre-migration-v<from>-to-v<to>.bak`，客户端升级不清库（design §19.3），回退走整套备份 |
 | `db::Database::open(path)` | 固定顺序：只读探测种类/版本 → 拒绝非客户端库 → 确认 WAL → 迁移前备份 → 执行迁移 → 写回标记 → 建池；失败返回 `DbError` 且不给可写句柄。父目录须已存在 |
 | `db::Database::{path, schema_version, pool, close}` | 路径、打开时确认的版本、只读查询用的连接池、关闭池 |
@@ -1143,7 +1143,7 @@ python3 tools/context.py --help
 
 ## crates/client-store — 事件、传输、意图与通知（S031）
 
-状态：S031 实现。表定义在 `crates/client-store/migrations/0002_events_transfers_intents.sql`（`received_changes`/`transfers`/`local_intents`/`notifications`，并给 `bindings` 追加 `received_seq`/`applied_seq` 游标列），读写接口在 `src/events.rs`、`src/transfers.rs`、`src/intents.rs`、`src/notifications.rs`；schema 目标版本随之为 `2`。仍然不做文件系统 I/O、不拉事件、不传输、不算哈希、不读时钟：wire 变更列表在应用层映射成 `RemoteEntry` + `NewPendingOp` 后交给本层。
+状态：S031 实现。表定义在 `crates/client-store/migrations/0002_events_transfers_intents.sql`（`received_changes`/`transfers`/`local_intents`/`notifications`，并给 `bindings` 追加 `received_seq`/`applied_seq` 游标列），读写接口在 `src/events.rs`、`src/transfers.rs`、`src/intents.rs`、`src/notifications.rs`；schema 目标版本随之为 `2`（S055 的 `0003_upload_resumes.sql` 再追加上传续传表，见文件末尾）。仍然不做文件系统 I/O、不拉事件、不传输、不算哈希、不读时钟：wire 变更列表在应用层映射成 `RemoteEntry` + `NewPendingOp` 后交给本层。
 
 ### 模块与契约
 
@@ -1788,3 +1788,156 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 - 扫描不完整（预算）或健康结论不是 `complete` 时**零删除、零移动**；Root 不可用直接中止整轮。
 - 真实 `umount` 需要特权，未在测试里执行：验收用真实目录“改名 + 原路径建空目录”复现卸载后的现场（对 Root 句柄而言与卸载等价），并在平台层用真实目录验证身份漂移与权限回收。
 - 未接入（S052 及后续）：`apply_external_move`/`apply_external_delete` 的 SQLx 适配与回收站落库；进程入口按 Root 运行后台任务；目录级移动识别（`WorkTreePort` 只提供文件指纹，目录改名时其内文件按 inode 逐个保持身份，目录条目本身由存储层补建）；硬链接去重（当前按独立条目处理）。
+
+## crates/transfer — 续传位图与上传/下载执行（S054）
+
+状态：S054 实现。包名 `vaultsyncd-transfer`，仍在 `default-members` 内，**依旧不做 I/O**：不读文件、不建连接、不碰数据库、不看时钟。执行器只通过 `src/ports.rs` 的端口碰外部世界，适配器在别处（`crates/http-client` 的 `uploads`/`content`，`crates/agent-core` 的本地临时文件与进度表）。设计依据 design §13.1—13.3；服务端事实来自 S045/S046 的上传与内容端点。
+
+| 模块 | 契约 |
+| --- | --- |
+| `bitmap` | `PartRange{first_index,count}`（`new` 拒绝 0 块、`indices`、`end_index`）；`PartBitmap::{empty,from_bytes,geometry,contains,mark,count,is_complete,missing,bytes,into_bytes}`。第 i 位 = 第 i 块、低位在前；`from_bytes` 校验长度与尾部 bit，`mark` 越界返回 `IndexOutOfRange`；`BitmapError::{SizeMismatch,TailNotZero,IndexOutOfRange,Unrepresentable}` |
+| `ports` | `PortFuture<'a,T>`；`PortError::{Unavailable{detail,retry_after},ReauthRequired{detail},Cancelled,Rejected{code,detail},Protocol{detail},Local{kind,detail}}` + `is_retryable/is_cancelled/needs_reauth/is_no_space/code`；`LocalErrorKind::{Read,Write,NoSpace,Missing}` |
+| `ports::SnapshotSource` | `identity()`、`total_size()`、`read(offset,length)->Vec<u8>`（短读是错误） |
+| `ports::UploadTarget` | `begin(&SessionSpec{total_size,digest,chunk_size})->UploadSessionInfo`、`status(session)->UploadProgressInfo{session,received,missing}`、`put_part(session,index,&digest,bytes)->PartAck{index,length,digest,already_present}`、`finalize(session)->FinalizedContent{digest,size,part_count,replayed,storage_path}`；`UploadSessionState::{Open,Complete,Finalized,Aborted}` |
+| `ports::VersionedContent` / `VersionPin` | `read_range(&pin,offset,length)`；`VersionPin{binding,entry,version,digest,size}`（`new` 拒绝空身份/控制字符） |
+| `ports::TempContent` | `path()`、`ensure_capacity(needed)`、`write_at(offset,&bytes)`、`read_at(offset,length)`、`sync()`、`discard()` |
+| `ports::DownloadProgressStore` / `StoredProgress` / `DownloadKey` | `load/save/discard`；进度记录 = 块大小 + 总大小 + 临时路径 + 位图（构造时校验几何一致）；键 = `binding/entry/version`（不同版本永不共用位图） |
+| `concurrency` | `CancelToken::{new,cancel,is_cancelled}`（克隆共享）；内部 `bounded_join`（最多 `limit` 个块在飞、遇错停止启动新块并丢弃在飞的 future） |
+| `upload` | `DEFAULT_CHUNK_SIZE=4 MiB`、`DEFAULT_PART_CONCURRENCY=4`、`DEFAULT_PART_ATTEMPTS=2`；`UploadOptions{chunk_size,part_concurrency,part_attempts,cancel}`；`UploadSnapshot{identity,total_size,digest}`、`UploadResume{snapshot,session}`；`run(source,target,Option<&UploadResume>,&UploadOptions)->Result<UploadOutcome,UploadFailure>`；`UploadOutcome{content: ContentReference, session, uploaded_parts, reused_parts, resumed}`；`UploadErrorKind::{InvalidOptions,InvalidSnapshot,ReadSnapshot,SnapshotChanged,SessionMismatch,SessionClosed{state},PartRejected{index,expected,actual},FinalizedMismatch,Cancelled,Port}`；`UploadFailure{kind, resume: Option<Box<UploadResume>>}`（`resume()` 给出可直接持久化的续传信息） |
+| `download` | `DEFAULT_CONTENT_ATTEMPTS=2`；`DownloadOptions{chunk_size,part_concurrency,content_attempts,cancel}`；`run(content,temp,progress,&VersionPin,&DownloadOptions)->Result<DownloadOutcome,DownloadError>`；`DownloadOutcome{temp_path,size,digest,part_count,downloaded_parts,resumed,attempts}`；`DownloadError::{InvalidOptions,NoSpace{needed},Cancelled,ContentMismatch{expected,actual},Port}` |
+| `hash` 增量 | `from_hex(&str)->Result<[u8;32],HexError>`：只接受 64 位**小写**十六进制（大写在契约里不是同一份摘要） |
+
+### 执行顺序与不变量
+
+- **上传**：流式哈希整份快照（窗口 ≤ 块大小）→ 续传先比对快照身份/大小/摘要（任一变化 → `SnapshotChanged`，不碰旧会话）→ 会话事实（总大小、整份摘要、块数）必须等于快照，否则 `SessionMismatch` → 按服务端 `missing` 补块（还核对“缺失区间 = 已收块的补集”）→ `put_part` 的回执索引/长度/摘要都要一致，不符则重读快照重传（`part_attempts`），持续不符 `PartRejected` 且不 finalize → `finalize` 再核对 hash/size/part_count。**finalize 结果只是可提交内容引用，不写 entries/versions/changes/operations**（design §15.2、I01）。
+- **下载**：固定 `VersionPin` → 载入位图（块几何/总大小/临时路径不符即作废）→ `ensure_capacity`（不足 `NoSpace`，不写不删）→ 只取缺失块并写入临时偏移 → `sync` → 流式读回临时文件算整份摘要 → 相符才返回；不符则作废位图与临时内容、有限次重下，仍不符 `ContentMismatch` 且不安装。安装/发布意图/状态更新属上层。
+- **混版本**：摘要相同即内容相同，因此会话摘要与快照摘要相等时复用旧会话安全；不等时立即拒绝。下载键含 VersionId，且整份摘要不符绝不安装——服务端若供给另一版本，结局是失败而不是发布。
+- **不是跨版本块增量**：没有“按块跨版本复用/内容定义分块/增量专用 GC”的入口；位图只在同一次传输的有效性内使用。
+
+验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-transfer`（59 项）、`cargo clippy --locked -p vaultsyncd-transfer --all-targets -- -D warnings`、`cargo fmt --all -- --check`。执行器用内存端口替身验证断线续传、错块重传、取消保留进度与并发上限。
+
+## crates/http-client — 上传会话与固定版本内容端点（S054）
+
+状态：S054 实现。新增两个模块，均实现上面的 `crates/transfer` 端口，错误分类沿用 S053 的 `ClientError` → `PortError` 映射；不引入第二套 DTO（响应类型来自 `vaultsyncd_protocol::generated`）。
+
+| 模块 | 契约 |
+| --- | --- |
+| `uploads::UploadEndpoint<T: Transport>` | `new(client, root)`（Root 非 32 位小写十六进制 → `ClientError::InvalidRequest`，触网前失败）、`client()`、`root()`；实现 `UploadTarget`：`POST /v1/roots/{root}/uploads`、`GET …/uploads/{upload}`、`PUT …/uploads/{upload}/parts/{index}`（`content-type: application/octet-stream` + 必发 `x-part-sha256`）、`POST …/uploads/{upload}/finalize`（无请求体）。`PART_DIGEST_HEADER = "x-part-sha256"` |
+| `content::ContentEndpoint<T: Transport>` | `new(client, root)`、`client()`、`root()`；实现 `VersionedContent`：`GET /v1/roots/{root}/entries/{entry}/versions/{version}/content` + `Range: bytes=start-end`。`CONTENT_DIGEST_HEADER = "x-content-sha256"` |
+| `content::parse_content_range` / `ContentRange` | `bytes start-end/total` → `{first,last,total}` + `length()`；非 `bytes ` 前缀、非规范十进制、起点大于终点 → 协议错误 |
+
+### 请求与校验规则（不可绕过）
+
+- **身份只接受 32 位小写十六进制**：Root、上传会话、条目、版本在拼 URL 之前校验（`is_identity`/`require_identity`），杜绝把 `../` 之类拼进路径。
+- **块摘要一定要发**：`x-part-sha256` 是 64 位小写十六进制；服务端在写盘前用它核对字节。
+- **区间响应必须自洽**：带 `Content-Range` 时起点/长度/总长都要与请求和 `VersionPin.size` 一致；整份 200 响应只接受“从 0 开始且长度等于版本大小”；缺少 `Content-Range` 的 206 是协议错误；响应体长度不等于请求长度是协议错误（短读不补零）。
+- **整份摘要提前核对**：响应带 `x-content-sha256` 且与固定版本摘要不同 → 协议错误（不用下完整份才发现是别的版本）。
+- **错误分类**：`ClientError` → `PortError`：`Timeout`/可重试 `Transport`/5xx 非信封/`Api{retryable:true}`（带 `Retry-After`）→ `Unavailable`；`Api{retryable:false}` → `Rejected{code}`；401/刷新失败/无凭据 → `ReauthRequired`；证书、协议、请求构造 → `Protocol`（不可重试）；`Cancelled` → `Cancelled`。
+- **没有“提交条目”的入口**：`finalize` 只返回内容引用；提交与 committed 确认由 agent 执行器用 `OpId` 完成。
+
+验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-http-client`（60 项 + 1 doctest，其中 `flow_tests` 用传输替身当契约服务端跑通断线续传/错块重传/固定版本下载）、`cargo clippy --locked -p vaultsyncd-http-client --all-targets -- -D warnings`。
+
+
+## crates/agent-core — 客户端端口与确定性操作执行器（S055）
+
+状态：S055 实现。包名 `vaultsyncd-agent-core`，位于 `crates/agent-core/`，在 `members` 与
+`default-members` 内。依赖 `vaultsyncd-domain`、`vaultsyncd-fs-common`、`vaultsyncd-planner`、
+`vaultsyncd-protocol`、`vaultsyncd-transfer`、`vaultsyncd-client-store` 与 SQLx（只用于适配器的连接池
+与短事务）；**不依赖** server-core/server-store/Tauri，不做平台 I/O（design §5.5）。假端口只在
+`cfg(test)` 编译；产品代码不依赖 tokio。Linux 同步客户端产品不在本包生成。
+
+### 端口（`ports/`，互不引用）
+
+| 端口 | 契约 |
+| --- | --- |
+| `clock::Clock` | 对 `domain::version::Clock` 的 `Send + Sync` 包装（`impl<T: DomainClock + Send + Sync> Clock for T`），时间点只用 `UtcTimestamp`。`clock::now(&dyn Clock)` 把时钟错误转成 `PortError::Local{Read}`。端口不 sleep：执行器只报告到期时间。 |
+| `local::LocalPort` | `capabilities() -> LocalCapabilities`（按需读取/脱水/使用保护/稳定身份/原子替换/名称约束）、`observe(&RelativePath) -> LocalFacts`（种类、generation、大小、file identity、`Usage`）、`snapshot(path, generation) -> Arc<dyn transfer::SnapshotSource>`、`apply(&ApplyRequest)`、`move_entry(&MoveRequest)`、`remove(&RemoveRequest)`、`release(&ReleaseRequest) -> ApplyReceipt{stage: Applied/Unchanged, generation, file_identity}`。代际不符必须 `LOCAL_CHANGED`，不强行继续。 |
+| `remote::RemotePort` | `submit(&protocol::OperationRequest) -> OperationResult`、`operation(binding, OpId) -> OperationResult`（响应丢失后按原 OpId 查询）、`upload(binding) -> Arc<dyn UploadTarget>`、`content(binding) -> Arc<dyn VersionedContent>`。直接复用 wire DTO 与 S053/S054 端点，不另造操作形状；`pending` 原样返回，不由适配器包装成成功。 |
+| `state::OperationStore` | `pending_ops(binding)`、`record_failure(op, code)`（attempts+1、写错误码，其余不变）、`complete(op)`；队列表类型复用 `client_store::queue::PendingOp`（别名 `QueuedOperation`）。 |
+| `state::IntentStore` | `begin_intent(&ActionIntent) -> i64`（同 binding+target_path 的相同意图复用同一条，字段不同拒绝）、`fail_intent(id, code)`、`complete_intent(id)`、`pending_intents(binding) -> Vec<StoredIntent>`。`ActionIntent{op, binding, kind: LocalWriteKind{Replace,Move,Release,Import}, entry, target_path: RelativePath, source_path, content_hash: Option<[u8;32]>, generation}`。 |
+| `state::UploadResumeStore` | `load_resume(op)`、`save_resume(&StoredUploadResume)`、`discard_resume(op)`；`StoredUploadResume{op,binding,snapshot_identity,total_size,digest,session}` 与 `transfer::upload::{UploadResume,UploadSnapshot}` 互转（坏行报错，不当成“没有续传”）。 |
+| `ports::Ports` | 唯一组装点：`local`/`clock`/`remote`/`operations`/`intents`/`upload_resumes` 六个 `Arc<dyn …>`，只负责组装，不规定构造顺序。 |
+
+端口依赖表写在 `ports/mod.rs` 模块文档；测试逐字校验各叶模块不出现其它端口 trait 名，并要求只有
+组装点同时提到全部端口。端口失败统一用 `vaultsyncd_transfer::ports::PortError` 分类（本地 SQLite
+失败按 `Local{Write}`/`Local{Read}`）。
+
+### 执行器（`executor/`）
+
+| 项 | 契约 |
+| --- | --- |
+| `OperationKind` | `pending_ops.kind` 的闭集：`upload_content`/`upload_new_entry`/`upload_move`/`upload_move_with_content`/`create_conflict_copy`/`apply_remote`/`apply_remote_move`/`apply_remote_delete`/`create_from_remote`/`delete_entry`/`bind_remote_entry`/`merge_baseline`/`release_local`。`from_action(&planner::Action)` 是规划器动作的唯一映射（`NoOp`/`Defer`/`PreserveBoth` 无可执行动作）；`local_write()` 给出需要先落意图的四种（apply/replace、move、release、create_from_remote→replace；`apply_remote_delete` 无 `local_intents` 种类）。未知文本不猜，阻塞该操作。 |
+| `ActionHandler` | S056/S059 接入的缝：`plan_intent(op) -> Option<ActionIntent>`（不得在此改本地内容）与 `execute(ports, op, intent)`；返回 `ActionOutcome::{Completed, Pending{poll_after}}` 或 `ActionFailure{code, detail}`。顺序由执行器保证。 |
+| `Executor<H>::run(&RunRequest)` | 暂停时只返回原因、不读队列；否则按插入顺序依次过“依赖就绪 → 尝试次数 → 退避到期 → 种类可解析”闸。就绪操作先 `IntentStore::begin_intent` 再执行；成功则完成意图并出队；`Pending` 不出队（I01）并记轮询到期；失败调用 `record_failure`，可重试错误（`ErrorCode::class() == Retryable`）退避后重试，用尽或 `NeedsUserAction`/`Corrupt` 时标记意图失败并阻塞。**任何失败都不删除操作与其依赖方**。 |
+| `RetryPolicy` | 默认 `max_attempts=3`、`base=1s`、`max=60s`；`new` 拒绝 0 次、>16 次、0 延迟与上限小于起点。`delay_after(n)=min(base*2^(n-1), max)`，不加抖动（S062）。 |
+| `RunRequest` / `RunReport` | `RunRequest{binding, pause: Option<PauseReason>, max_ops, pending_poll_interval}`；`PauseReason::{UserRequested,Offline,RootUnavailable,BindingDisabled}`。`RunReport{binding, paused, ops: Vec<OpReport>, next_due}`，`OpReport{op, kind, outcome}`，`OpOutcome::{Completed, Pending{poll_after}, Retrying{code,attempts,due}, Blocked(BlockReason)}`，`BlockReason::{DependencyIncomplete{on},RetriesExhausted{code,attempts},NeedsUserAction{code},Corrupt{code},UnknownKind{kind},CyclicDependency,BackoffPending{due},RunLimitReached}`。 |
+| `ExecutorError` | `Port(PortError)`（本轮中止，队列原样）与 `DuplicateOp{op}`（数据损坏，不执行任何一个操作）。 |
+
+调度不使用客户端时钟排序；退避到期时间只存在进程内（`Mutex<HashMap<OpId, UtcTimestamp>>`），避免同一
+进程内连续 `run` 立刻烧光尝试次数；跨重启的退避持久化属 S062。依赖成环时只标记真正成环的一段，
+环的前驱报告 `DependencyIncomplete`。
+
+### 适配器（`adapters::client_store`）
+
+`ClientStorePorts::new(Arc<client_store::db::Database>)` 同时实现 `OperationStore`、`IntentStore`、
+`UploadResumeStore` 与 `transfer::ports::DownloadProgressStore`：队列/意图/续传表直接映射；下载进度
+用 `transfers` 的 `chunk_size`/`total_size`/`temp_path`/`bitmap`，位图只增不回退、几何或临时路径变化
+即作废旧进度、位图完整时 `complete_transfer`（verified=1），已完成记录重复保存幂等；`cancelled`/
+`failed` 终态不返回可用进度。上传续传键为 `OpId`，操作出队由外键级联删除。
+
+验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-agent-core`（28 项）、
+`cargo clippy --locked -p vaultsyncd-agent-core --all-targets -- -D warnings`、`cargo fmt --all -- --check`。
+
+## crates/client-store — 上传续传会话（S055，迁移 0003）
+
+`crates/client-store/migrations/0003_upload_resumes.sql` 新增 `upload_resumes`：
+
+| 项 | 契约 |
+| --- | --- |
+| `upload_resumes::NewUploadResume` / `UploadResume` | `op: OpId`、`binding`、`snapshot_identity`、`total_size`、`digest: [u8;32]`、`session`；`matches_snapshot(identity,total,digest)` 判断会话是否仍可用于这份快照。 |
+| `upload_resumes::save(tx, &NewUploadResume)` | `INSERT … ON CONFLICT (op_id) DO UPDATE`：同一操作的快照与会话一起覆盖，不存在“旧会话配新快照”。快照身份/会话非空无 NUL，长度不超 `INTEGER` 上限，操作不存在（外键）报 `UnknownOperation`。 |
+| `upload_resumes::load(conn, op)` / `discard(tx, op)` | 读一条 / 删除并返回是否命中；坏行（短身份、非法摘要长度、空字段）读时拒绝。 |
+
+表不变量：`op_id` 主键并外键 `pending_ops(op_id) ON DELETE CASCADE`（操作成功出队即删除续传记录）；
+不存块位图（已收块以服务端 `upload_parts` 为准，design §9.3）。schema 目标版本随之为 `3`。
+
+## crates/agent-core — generation 上传动作（S056）
+
+路径：`crates/agent-core/src/executor/upload.rs`。`UploadActionHandler` 按注册的 `OpId`/`UploadSpec`
+执行 `LocalPort::observe → snapshot → transfer::upload::run → observe`：前后 generation、大小及稳定
+file identity 必须仍对应固定快照，否则返回 `LOCAL_CHANGED`，不提交旧内容。上传续传由
+`UploadResumeStore` 保存；finalize 只得到内容引用，仍不是 committed。
+
+| 接口 | 契约 |
+| --- | --- |
+| `UploadSpec` | 本地相对路径、固定 `Generation`、可选 create/move 目标信息；generation 由观察/规划层在每次可观察保存时单调推进，处理器不使用 mtime 生成结论。 |
+| `UploadCommitStore::commit_upload` | 输入原 `OpId`、绑定、generation、快照身份、finalize 内容引用与 `OperationResult`；实现必须在短事务中按 generation 条件写 baseline/dirty，并保存 `OperationResult::conflict` 的稳定主条目/副本 EntryId 映射。返回 `Applied` 或 `StaleGeneration`；后者只确认旧远端提交，不得清理新 generation 的 dirty 内容。 |
+| `UploadActionHandler` | 上传提交请求携带原 `OpId`、`local_generation`、基线 revision/version、设备身份与 server epoch。`pending` 留队列和续传记录；提交响应不可用时使用 `RemotePort::operation(binding, op)` 查询同一 OpId；只有 committed 且 `UploadCommitStore` 成功后才清理续传记录并返回 `Completed`。 |
+
+旧 ACK 不以 mtime 决胜，也不覆盖未确认本地内容；冲突结果必须由 `UploadCommitStore` 与本地快照/基线一起持久化。
+验收命令：`cargo test --locked -p vaultsyncd-agent-core`（30 项），并执行 agent-core clippy/fmt。
+
+## crates/agent-core — 事件接收与应用进度（S057）
+
+`engine::events::EventReceiver<S,D,A>` 是绑定作用域的事件编排器，位于
+`crates/agent-core/src/engine/events.rs`。`ChangeSource` 只负责按 `RootId + after + limit` 拉取
+协议 `ChangeList`；SSE/SeqHint 不进入持久状态，只作为唤醒参数，周期调用 `run_cycle(None)` 仍会
+执行 pull 兜底。`EventDecoder` 同时解码 wire 批次和重启后 `received_changes` 的原始
+`EventEnvelope`，不得把未知事件静默变成空任务。
+
+| 接口 | 契约 |
+| --- | --- |
+| `EventApplier::apply(binding, changes, tasks)` | 对同批次任务执行本地应用；实现应按显式依赖独立推进无关条目，返回 `ApplyResult::Applied` 或带 `ErrorCode` 的 `Blocked`。 |
+| `EventReceiver::run_cycle(hint)` | 先恢复未应用批次，再按 `changes` 严格 seq 拉取；重复/过旧提示不重复应用，页有空洞或乱序时报协议错误且不越过空洞。 |
+| 接收事务 | `client_store::events::receive_batch` 在一个短事务中按批次 → remote → pending tasks → received cursor 写入；提交后才调用应用器。 |
+| 应用事务 | 应用器完成后，在独立短事务中写 `baseline_entries` 并调用 `mark_batch_applied`，只推进连续已应用前缀；失败标记 `blocked`，批次与接收游标保留，重启时由 `resume_pending` 重放。 |
+
+`ReceiveError::{Source,Decode,Store,Apply,Protocol}` 不吞底层错误；批次解码或应用事务失败时不伪造
+应用完成。`ReceiveReport` 区分 `received`、`applied`、`blocked` 与重复提示，便于测试和诊断。
+
+## crates/http-client — changes 拉取（S057）
+
+`crates/http-client/src/changes.rs::list` 使用生成的 `ChangeList`，通过 `ApiRequest::with_query_param`
+对 `after`/`limit` 做独立百分号编码，并强制 Bearer 会话；Root 身份和规范十进制游标在发送前校验。
+`ApiRequest` 禁止调用方直接拼接查询串，查询参数按 RFC 3986 编码。SSE 仍只由上层作为唤醒来源，
+不被当作事件正文来源。
