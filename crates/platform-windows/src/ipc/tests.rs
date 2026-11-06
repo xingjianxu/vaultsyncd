@@ -52,8 +52,24 @@ async fn same_user_partial_frames_pipeline_and_disconnect_are_isolated() {
     let mut pipe = ep.connect().await.unwrap();
     for id in ["split", "pipeline-1", "pipeline-2"] {
         let frame = framing::encode(&serde_json::to_vec(&request(id)).unwrap()).unwrap();
-        for byte in frame {
-            pipe.write_all(&[byte]).await.unwrap();
+        let mut remaining = frame.as_slice();
+        if id == "split" {
+            // Force the native server to see both a partial header and a partial body,
+            // rather than letting the OS coalesce all tiny writes before it is scheduled.
+            for end in [2, 6] {
+                let start = frame.len() - remaining.len();
+                pipe.write_all(&frame[start..end]).await.unwrap();
+                remaining = &frame[end..];
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                assert_eq!(
+                    pipe.try_read(&mut [0]).unwrap_err().kind(),
+                    io::ErrorKind::WouldBlock
+                );
+            }
+        }
+        for byte in remaining {
+            pipe.write_all(&[*byte]).await.unwrap();
+            tokio::task::yield_now().await;
         }
     }
     for id in ["split", "pipeline-1", "pipeline-2"] {
