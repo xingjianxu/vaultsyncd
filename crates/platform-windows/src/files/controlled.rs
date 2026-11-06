@@ -19,6 +19,18 @@ unsafe extern "system" {
 /// CFAPI exclusive RH oplock. A completed break closes the admission gate.
 pub struct ProtectedFile(usize);
 impl ProtectedFile {
+    /// Own a referenced oplock across asynchronous application/database boundaries.
+    /// Unlike a temporary lease, this keeps pending break acknowledgement deferred until Drop.
+    pub fn into_owned_lease(self) -> io::Result<OwnedProtection> {
+        let raw = self.0 as *mut c_void;
+        if unsafe { CfReferenceProtectedHandle(raw) } == 0 {
+            return Err(io::Error::other("LOCAL_IN_USE: oplock broken"));
+        }
+        let file = ManuallyDrop::new(unsafe {
+            File::from_raw_handle(CfGetWin32HandleFromProtectedHandle(raw))
+        });
+        Ok(OwnedProtection { owner: self, file })
+    }
     /// Open with read and optional write/delete access; failure never means idle.
     pub fn open(path: &Path, writable: bool) -> io::Result<Self> {
         let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -47,6 +59,22 @@ impl ProtectedFile {
             File::from_raw_handle(CfGetWin32HandleFromProtectedHandle(raw))
         });
         Ok(ProtectedLease { owner: self, file })
+    }
+}
+/// Owned referenced Win32 handle; Send/Sync like the underlying File, with no self-reference.
+pub struct OwnedProtection {
+    owner: ProtectedFile,
+    file: ManuallyDrop<File>,
+}
+impl OwnedProtection {
+    /// Borrow without closing or duplicating this handle.
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+}
+impl Drop for OwnedProtection {
+    fn drop(&mut self) {
+        unsafe { CfReleaseProtectedHandle(self.owner.0 as *mut c_void) };
     }
 }
 impl Drop for ProtectedFile {
