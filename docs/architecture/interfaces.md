@@ -2142,3 +2142,15 @@ quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按�
 `binding_rules_history`，旧迁移不变。中断后原任务/证据保留；独立进程退出 101/102/103
 分别证明意图后、单文件完成后、整任务完成后恢复。6→当前升级保留 awaiting_commit/队列并创建一致性备份。
 生产 Windows materializer 和管理 IPC 入口在后续平台/应用卡组装；测试磁盘适配器仅 cfg(test)。
+
+## S062：持久优先级调度与上传错误证据
+
+来源：design §13.3、§18.2；实现`crates/agent-core/src/engine/scheduler{.rs,/model.rs,/store.rs}`、迁移`crates/client-store/migrations/0008_scheduler.sql`。
+
+- `Scheduler::new(Arc<Database>, Ports, ScheduledHandler, Arc<dyn DispatchGate>, Arc<dyn Jitter>, Limits)`：数据库与队列端口必须同源；单进程共享一个调度器，各绑定共享资源上限。`run_round(binding)`可并发调用以利用用户保留槽；按`RoundReport::next_due`或外部唤醒再次运行，不立即空转。默认content=4（后台最多3）、metadata=1、hash=2，同entry跨类别互斥，无entry保守串行该绑定；优先级不使用mtime或大小。
+- `prioritize(op, Priority::UserRead)`仅允许下载，不能用metadata/hash绕过内容上限；metadata来自明确元数据操作，`hash_content`是仅由实现它的ScheduledHandler处理的内部队列任务。原OpId/版本pin/依赖不因重试改变；前置仍在任何绑定队列即不启动依赖方，只有真实Committed后解除依赖并出队。
+- `DispatchGate`已有`BindingControls`生产实现：仅`ExecutionGate::Ready`可启动；暂停/排除/解绑/重协调均保留任务。管线进入、动作意图落库后各复核一次，后者变化返回Deferred而非Cancelled。更底层原子平台动作仍承担使用保护与代际CAS；取消已提交动作不能撤销既有Committed或清新dirty。
+- `ScheduledHandler: ActionHandler`沿用`plan_intent→持久意图→动作`，额外接收与S054完全相同的`CancelToken`及返回`TaskError`。`UploadActionHandler`已实现并直连分块取消；`ActionAdapter<H>`兼容旧handler，但仅可在动作开始前取消。需活动取消的下载handler应直接实现新端口并传token给DownloadOptions。
+- `ActionFailure::scheduling: FailureScheduling`默认为ByCode；Unavailable携带Retry-After，Cancelled不累计失败，LocalPermission区别于HTTP403。上传端口与分块失败保留这些类型化证据，NoSpace映射InsufficientStorage；不解析detail、不保存敏感诊断到调度表。
+- `operation_schedule`与pending_ops同寿命，持久priority/due_at/cancelled/halted/offline；失败attempts/last_error与调度due/halted/offline同一事务。指数上限默认1—60秒，取半区间正jitter；Retry-After为下界（可超过60秒），UTC秒存储向上取整。停止/取消不删队列、续传、意图或本地字节；显式resume不重置失败次数。普通不可用只在TaskStatus可见，严重错误由needs_attention区分；通知/去重归S064。
+- `Outcome::Pending`始终保留队列，等待至少1秒；重启只重建进程内活动槽，不把in-flight或已传完内容当Committed。v7→v8迁移前备份保留暂停、dirty、失败队列，旧schema校验和不变，旧二进制拒绝v8。
