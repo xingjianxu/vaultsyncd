@@ -1,5 +1,7 @@
 # 本机 NixOS 隔离试用实例
 
+当前为S097的HTTPS试用 **generation240**，后端固定fd2f52d、回环TLS18443；最新来源、证书及Root恢复限制见下方“S097 当前 HTTPS 开发入口”。前半部分保留S096部署/回滚的历史证据。
+
 ## 实际入口和来源（S096，2026-11-07）
 
 主机 `wks-lab`，配置入口 **`/etc/nixos#wks-lab`**，通过既有 `flake-parts/core.nix` 自动装配 `hosts/wks-lab/system.nix`。项目 flake 只提供包与模块，不能拿它代替主机 flake 执行 rebuild。
@@ -86,3 +88,42 @@ sudo nixos-rebuild test --store-path /nix/store/h2wjnyc8qi268a1z6lylxmqld05y0a8n
 这是generation237的已知健康配置；旧system及准确新配置源的GCroot都保留。若健康后决定让旧配置成为持久默认，再对同一旧store路径执行 `nixos-rebuild switch --store-path ...`（该持久旧配置switch没有在本卡执行，实际演练为test回退与返回新配置）。磁盘镜像、状态和凭据不随回退删除。主机源码还包含启用声明，恢复后需明确回退/禁用 `ba1837a` 中的该声明再做普通flake rebuild；否则普通rebuild会再次启用试用实例。
 
 SSH一直运行，回退不依赖项目服务或密码。日志/原diff/完整配置源/新旧system路径在证据目录，`rollback.sh`也保留已知旧路径。TLS、同源代理与对外入口由S097单独验收；当前HTTP例外严格限定回环试用端口。
+
+## S097 当前 HTTPS 开发入口（generation240）
+
+S097 已在同一真实主机执行两轮 build → dry-activate → test → 严格 TLS/健康检查 → switch，第二轮修复实际服务重启的 Root 身份误报。当前主机提交 `ebd832b7bbe751bfc87cbd9b9260ec53a1a26efe`，实际运行与默认 **generation240**：
+
+```
+/nix/store/51r012i21j0i26br4319xi8k5f0sdvym-nixos-system-wks-lab-26.11.20261102.7356cc7
+```
+
+主机原 dirty `flake.lock` 仍为前述SHA256，未更新或提交。`hosts/wks-lab/system.nix` 的后端固定永久仓库 `git+file:///wrd/prj/vaultsyncd?rev=fd2f52d2f58978b09fccaec3ba87b2377910a1eb`，实际重新构建的包是 `/nix/store/sw8v63x3hv5hql5qfapx0qyrlgc78ikn-vaultsyncd-0.1.0`；不是旧S094产物。代理配置独立固定 `d90a263d962795000aeb2eecfd430891a94a26d0` 的 `deploy/reverse-proxy/caddy.nix`。两源已在master永久可达，均不引用任务树。构建清单保留各自真实来源；本卡PE与包是0.1.0，不能重标为S100后续0.1.1。
+
+提交后的主机配置连同原dirty锁再求值仍产生上述运行system。精确配置源`/nix/store/ky73gbi10wr9xbddjxyhf0n0df0wnk0i-source`、NAR `sha256-x0+sTSHtxF4sUhTQRZlYnzbFYbOunlktgo7+f2kLWQo=`及当前system均有证据目录中的GCroot；主机commit不能单独代替这份锁来源。
+
+| 路径/入口 | 当前保证 |
+| --- | --- |
+| `https://localhost:18443`、`https://127.0.0.1:18443` | Caddy仅监听127.0.0.1，新vhost复用既有Caddy |
+| Windows `https://10.0.2.2:18443` | Quickemu NAT访问同一开发入口，实际Edge与产品PE验收 |
+| 后端 `http://127.0.0.1:18721` | 回环HTTP，仅供本机TLS反代与管理检查 |
+| TLS运行时目录 | `/var/lib/vaultsyncd-tls-s097`，root:caddy0710；ca.key root0600，server.key root:caddy0640 |
+| 公开开发CA | SHA256 `26:2F:E2:25:3A:8A:27:A0:5A:A2:1C:D1:B5:89:C6:81:12:EB:C4:79:9E:39:F9:80:6D:DF:E4:A8:47:E6:F5:7D` |
+| 证据 | `/data/vaultsyncd-deploy/S097-20261107T012157-3886231`；任务artifacts只含筛选的公开材料 |
+
+此入口使用显式信任私有CA：宿主浏览器只在临时NSS HOME导入；Windows在核对上述指纹后导入Quickemu当前用户Root，信任仍保留。叶证书SAN为localhost/127.0.0.1/10.0.2.2，有效30天，CA365天；到期须用同样受限运行时流程续签并reload，私钥不得复制到store、Git或证据。**没有公网域名、ACME、外网监听或公开部署验收**。正式对外前须另行配置真实域名证书、访问范围及证书续期；开发CA不能作为公网信任声明。
+
+Web/API保持同源；代理保留原Host，覆盖受信转发字段并去掉客户端Forwarded，不启用跨源写入。request body上限16777216字节，真实最大块成功，+1字节413；`flush_interval -1` 与5分钟stream_close_delay用于SSE，没有整个响应体超时或自动重试非幂等写。只reverse_proxy，不提供任意file_server或Unix管理socket代理。页面、管理API仍受服务端会话/owner权限；路径探测包括admin/socket、在线DB、/etc/passwd和密码路径均404。会话cookie为Secure/HttpOnly/SameSite=Strict。
+
+Linux Chromium和Windows Edge实际完成HTTPS页面登录、16MiB上传、finalize、committed、固定版本下载摘要与磁盘一致，以及SSE初始seq、15秒心跳和新提交提示。新浏览器不信任私有CA时失败，信任正确CA后错主机证书仍失败。正式receipt PE源cf1d174（agent SHA256 `c25e36a7236edcdc5bcef405760cf1df1df6d599de05b7b426c629c0683a890c`）在Quickemu Interactive/Limited任务中验证默认CA拒绝、显式ca_file登录与Credential Manager、同用户CLI IPC logout。SSH会话1312只说明缺交互凭据，不算TLS失败。密码经同SID+SYSTEM受限命名管道/匿名stdin，不写Windows临时文件；本卡自身agent、计划任务、Edge profile及临时监听已清理，没有重启客体或触碰其他测试用户。
+
+早期Playwright异常格式曾在临时输出中带两枚本次测试cookie，已立即用对应会话logout吊销并清理原值，失败日志不归档；没有输出密码/私钥。最终脚本只记录错误类别与源码位置，finally吊销自身会话，禁止导出HAR/cookie/profile。Windows首轮外层500秒控制器在人工CA提示时超时，内层实际worker退出0且随后Edge矩阵通过；最终900秒控制器改动仅原生语法校验，不声称重跑了整条原生链。
+
+## S097 Root 身份修复与恢复限制
+
+旧注册快照含mount_id1031/dev0:128；当前服务namespace现场为mount916/dev0:110，但FSID `a3f322713ab8458f9af3666696536cf7`、subvol5、目录inode258及birth `1793984671.665929329`完全相同。原管理健康消费者直接比较历史瞬态字段而误报mount_changed；实际上传仍成功。现在启动时完整核对持久身份、CoW/访问权/嵌套准入，再为本进程建立共享RootHandle；诊断、观察、执行与启动重放均使用此表。历史blob不修改，新注册继续严格比较当前围栏，活进程bind/卸载/权限变化不会自动重新准入。目录枚举使用固定fd的openat点目录取得独立游标，避免并发扫描污染偏移造成假空目录。
+
+`fence-acceptance.py`以独立NixOS同策略单元、`/data/vs-s097-fences-*`新普通btrfs镜像验证；离线`fence-boundary`示例先取StateLock再通过真实适配器持久化边界，不往生产加故障开关。最终run `...025123-4077079`真实测得namespace4026534527→4026534585、mount1033→1170，同dev199、Root/blob/seq4/内容保持健康；活进程同目录bind blocked且4条目/seq不变，撤销覆盖恢复。Prepared同dev服务重启redo committed；卷重挂实测dev199→201后Published仅补元数据，文件inode/birth/摘要不变。旧Prepared的FileKey没有birth，dev201→199时**保持pending、Prepared和全局needs_recovery/503**，两份内容与对象保留；不能忽略旧dev冒充强身份或自动覆盖。离线未完成现场保留，单元/keeper/loop均已停止、卸载、分离。并发8线程×16轮×3000文件枚举完整。
+
+新包部署后真实试用服务又执行一次systemctl restart，严格Chromium页面确认“挂载核对通过/本进程初始采集完成”；原ServerId/Root/seq18、历史blob、全部样本字节、先前Linux/Edge committed操作及固定版本摘要不变。服务仍UID985、零capability、NoNewPrivileges=1；10个既有服务和SSH的PID/InvocationID保持，3200/3300/15312均200。上述故障注入只作用隔离run。
+
+S097前的generation239（保留TLS、旧Root诊断行为）为 `/nix/store/bcwryfrqcc8sajf5kk7469q9j8g8r31d-nixos-system-wks-lab-26.11.20261102.7356cc7`；generation238不启用本卡TLS。S097没有再次激活239作回滚演练，S096实际旧代际回滚证据仍按上一节。需要恢复旧配置时可用明确store path执行`nixos-rebuild test --store-path ...`，它立即激活且**不定时回滚**；保留SSH和旧路径，确认健康后再决定switch。正常flake重建还要同步回退host文件固定源，不能只更改运行generation。试用卷/凭据不随配置回退删除。
