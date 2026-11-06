@@ -42,7 +42,7 @@ async fn fixed_snapshot_server_time_and_authenticated_paging() {
             }
         })
     }));
-    let client = ApiClient::with_transport(
+    let client = ApiClient::with_transport_for_unit_tests(
         ClientConfig::new("https://server.invalid"),
         transport.clone(),
     )
@@ -86,8 +86,11 @@ async fn malformed_pending_and_foreign_results_never_become_success() {
             ))
         })
     }));
-    let client =
-        ApiClient::with_transport(ClientConfig::new("https://server.invalid"), transport).unwrap();
+    let client = ApiClient::with_transport_for_unit_tests(
+        ClientConfig::new("https://server.invalid"),
+        transport,
+    )
+    .unwrap();
     client
         .auth()
         .install(Credentials::from_issued(&issued("access", "refresh")).unwrap());

@@ -248,6 +248,7 @@ pub struct ApiClient<T: Transport> {
     timeouts: Timeouts,
     transport: Arc<T>,
     auth: AuthSession,
+    protocol_negotiation: bool,
 }
 
 impl<T: Transport> Clone for ApiClient<T> {
@@ -257,6 +258,7 @@ impl<T: Transport> Clone for ApiClient<T> {
             timeouts: self.timeouts,
             transport: Arc::clone(&self.transport),
             auth: self.auth.clone(),
+            protocol_negotiation: self.protocol_negotiation,
         }
     }
 }
@@ -295,6 +297,17 @@ impl<T: Transport> ApiClient<T> {
         Ok(Self::from_validated(&validated, transport))
     }
 
+    /// 仅隔离的认证/传输单元测试使用；默认构造器在testing构建中仍始终真实协商。
+    #[cfg(any(test, feature = "testing"))]
+    pub fn with_transport_for_unit_tests(
+        config: ClientConfig,
+        transport: Arc<T>,
+    ) -> Result<Self, ConfigError> {
+        let mut client = Self::with_transport(config, transport)?;
+        client.protocol_negotiation = false;
+        Ok(client)
+    }
+
     /// 替换会话（例如注入带 OS 凭据库端口、或已从凭据库恢复凭据的会话）。
     pub fn with_auth_session(mut self, auth: AuthSession) -> Self {
         self.auth = auth;
@@ -328,6 +341,10 @@ impl<T: Transport> ApiClient<T> {
                 return Err(ClientError::Cancelled);
             }
         }
+        if request.auth == AuthMode::Bearer && !self.auth.has_credentials() {
+            return Err(ClientError::NotAuthenticated);
+        }
+        self.check_capabilities(&request).await?;
         match request.auth {
             AuthMode::None => {
                 let response = self.dispatch(&request, None, TimeoutPhase::Request).await?;
@@ -351,6 +368,7 @@ impl<T: Transport> ApiClient<T> {
                         self.send_refresh(refresh_token)
                     })
                     .await?;
+                self.check_capabilities(&request).await?;
                 let retried = self
                     .dispatch(
                         &request,
@@ -411,12 +429,52 @@ impl<T: Transport> ApiClient<T> {
         Ok(revoked)
     }
 
+    async fn check_capabilities(&self, request: &ApiRequest) -> Result<(), ClientError> {
+        if !self.protocol_negotiation
+            || request.path == crate::capabilities::PATH
+            || request.path == "/v1/health"
+        {
+            return Ok(());
+        }
+        let mut probe = ApiRequest::get(crate::capabilities::PATH);
+        probe.timeout = request.timeout;
+        probe.cancellation = request.cancellation.clone();
+        let response = self.dispatch(&probe, None, TimeoutPhase::Request).await?;
+        let value: vaultsyncd_protocol::generated::Capabilities = classify(response)?.json()?;
+        crate::capabilities::admit(&value, &request.path)?;
+        if request.path.contains("/parts/")
+            && let Some(RequestBody::Bytes { bytes, .. }) = &request.body
+            && bytes.len() as u64
+                > value
+                    .limits
+                    .max_upload_part_bytes
+                    .parse::<u64>()
+                    .map_err(|_| ClientError::invalid_request("invalid negotiated upload limit"))?
+        {
+            return Err(ClientError::invalid_request(
+                "part exceeds negotiated upload limit",
+            ));
+        }
+        if let Some((_, limit)) = request.query.iter().find(|(name, _)| name == "limit")
+            && limit
+                .parse::<u32>()
+                .ok()
+                .is_some_and(|n| n > value.limits.max_page_size)
+        {
+            return Err(ClientError::invalid_request(
+                "page exceeds negotiated limit",
+            ));
+        }
+        Ok(())
+    }
+
     fn from_validated(validated: &ValidatedConfig, transport: Arc<T>) -> Self {
         Self {
             base_url: validated.base_url().clone(),
             timeouts: validated.timeouts(),
             transport,
             auth: AuthSession::new(),
+            protocol_negotiation: true,
         }
     }
 
@@ -424,6 +482,7 @@ impl<T: Transport> ApiClient<T> {
     async fn send_refresh(&self, refresh_token: String) -> Result<SessionIssued, ClientError> {
         let body = RefreshRequest { refresh_token };
         let request = ApiRequest::post("/v1/auth/refresh").with_json(&body)?;
+        self.check_capabilities(&request).await?;
         let response = self.dispatch(&request, None, TimeoutPhase::Refresh).await?;
         if response.status() == 401 {
             return Err(ClientError::ReauthRequired {
@@ -640,7 +699,8 @@ mod tests {
             + 'static,
     {
         let transport = Arc::new(FakeTransport::new(handler));
-        let client = ApiClient::with_transport(config(), transport.clone()).expect("客户端配置");
+        let client = ApiClient::with_transport_for_unit_tests(config(), transport.clone())
+            .expect("客户端配置");
         (client, transport)
     }
 
@@ -920,7 +980,7 @@ mod tests {
                     ))
                 })
             }));
-            let client = ApiClient::with_transport(
+            let client = ApiClient::with_transport_for_unit_tests(
                 config().with_timeouts(Timeouts::new(
                     Duration::from_millis(20),
                     Duration::from_secs(1),
@@ -1105,7 +1165,7 @@ mod tests {
                 }
             })
         }));
-        let client = ApiClient::with_transport(config(), transport)
+        let client = ApiClient::with_transport_for_unit_tests(config(), transport)
             .expect("客户端配置")
             .with_auth_session(session);
 
@@ -1172,7 +1232,7 @@ mod tests {
             Box::pin(async move { Ok(json_response(200, &RootList { roots: Vec::new() })) })
         }));
         let client = Arc::new(
-            ApiClient::with_transport(
+            ApiClient::with_transport_for_unit_tests(
                 ClientConfig::new("https://vault.example/vault/"),
                 transport.clone(),
             )

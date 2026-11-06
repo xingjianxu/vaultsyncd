@@ -1,0 +1,136 @@
+{
+  "fixture_version": 1,
+  "kind": "development-profile-not-formal-release",
+  "source_commit": "0ea7d2e",
+  "server_schema": 12,
+  "client_schema": 11,
+  "remote_protocol": {
+    "major": 1,
+    "minor": 0
+  },
+  "local_ipc": {
+    "major": 1,
+    "minor": 2
+  },
+  "migrations": {
+    "server": [
+      {
+        "version": 1,
+        "file": "0001_initial.sql",
+        "sha512": "63a7baf32f1799688ae10ec9d4de796c1c0daadceb0af94ee01eefca1143900b5fe534fe79deb937a1fc257e1a1b4b88ea36392d77cbf05a76468860ba8bdb99"
+      },
+      {
+        "version": 2,
+        "file": "0002_namespace.sql",
+        "sha512": "0fdfd2e526169f20b0e49e27ccbb5581956ada7b0b4a9d89642656946e0053ccfb422c02efaab1d691d9549ddf92f365e055cb0f7db3ea20f6e95775ebdcbfd8"
+      },
+      {
+        "version": 3,
+        "file": "0003_versions_events.sql",
+        "sha512": "86b437d4ecef4496f7952bec810df1d835a2c681741ee20dc97f10b885989bf1eaf199d0fb3b9ebc2fc768e8d3979f3df96f94cd1c9f8bdfba960acb4bed2a2a"
+      },
+      {
+        "version": 4,
+        "file": "0004_uploads_intents_leases.sql",
+        "sha512": "8f222011e2d1f475037ce0d1469147f733dc99f33e5b9cdfa85d71b21ebeccbba6e340937079eb71610424edd11af3d7ac4bf03df13e8cb0a3be6802b4f7cde7"
+      },
+      {
+        "version": 5,
+        "file": "0005_trash.sql",
+        "sha512": "5542290dca613966188e7657ad0f01a28c9075140b240a80a61777237b385a8f0514eda7ccaa60d8df3978dc01f19498bf6090b7805a876c77c2ff4b08bb36d2"
+      },
+      {
+        "version": 6,
+        "file": "0006_sessions.sql",
+        "sha512": "258eb2db9685b015ba51b73442e2284bd60e242db1e6cc5be6aa7e8c3c3e7f4136b693a77aa551fdaa009d483f7eb43f64d3feecfc094b44591fd8b02c81e4d7"
+      },
+      {
+        "version": 7,
+        "file": "0007_snapshots.sql",
+        "sha512": "5c2f01d5bdd300c7ce625b4beaafc9ced45a70b1b6f9c95a8405806a02c73cc704ad2b1292bbc4881b0a27e6f0c0eceefb3a2dd19c9741173fa47d2aaff11a03"
+      },
+      {
+        "version": 8,
+        "file": "0008_conflicts.sql",
+        "sha512": "dfbb7984e35d2d0d56b929ea08b26ef46be3952e695b34e2716193f77b4fca727f1cb568b2360144eac58865a31bc634f7748d127e6d7d7b23b28fb304b0d215"
+      },
+      {
+        "version": 9,
+        "file": "0009_execution_journal.sql",
+        "sha512": "89e85180647b73a91c6bf5fbe4c8418872ace12b5ebb15ff9b49b250ad65d1c0ef96b0db89201ea50715363197feb6cd70d6391bb154815540de18e0c11c923a"
+      },
+      {
+        "version": 10,
+        "file": "0010_version_leases.sql",
+        "sha512": "cffc4334b6a2f8d1ebe0d62c2fa0e005d602d9b57d2d068d683f49fa7530df0c2bff10b81b2e6c7825f9b32a952309b3582c3b2764bd42be57f97a39897f210e"
+      },
+      {
+        "version": 11,
+        "file": "0011_gc_sweep.sql",
+        "sha512": "14b3ac3ebce61a25d3a72ff849d63b479a339323b1045e77c0c6a8933a9f12e7fc0f0e8a3085e0375081df2c03b483539a61141815fd8a5d7f34878236ff5b9e"
+      },
+      {
+        "version": 12,
+        "file": "0012_backup_prepare.sql",
+        "sha512": "4de9e83741cbfb35d0e313648126e8bedc826ca8f5bf08856e9e913cfdbef04cbf38744e2fd3dcb357a6d30319a98579a2d0acb40707e62f6036b641fc31121f"
+      }
+    ],
+    "client": [
+      {
+        "version": 1,
+        "file": "0001_initial.sql",
+        "sha512": "1a9b71cf9b90ea3215348210364443ba50e38427853f1487198535631849fdb6c4263e9ac45421c90019d032393e8eaef30239df34d2a74902479d888cbcabd5"
+      },
+      {
+        "version": 2,
+        "file": "0002_events_transfers_intents.sql",
+        "sha512": "22857931349c63c9d886d696228a4dbb5904d9a6542fc0df65aa2e67e03bb97a642d0afce604e022bf1be316b8bf2afb3fb50210a8fd6c561791b478379ffc1e"
+      },
+      {
+        "version": 3,
+        "file": "0003_upload_resumes.sql",
+        "sha512": "5412178f81e440bf86dd858c105bff8eef010c6944f14a6d6e2f6b6c58f5646f2f10f1341a30f4e6cba6d2b2123c5a56eb1ff276ada6e0dfea559621b74c029e"
+      },
+      {
+        "version": 4,
+        "file": "0004_first_import.sql",
+        "sha512": "eda16a0d32ec09e65f09aa85967a976bb2972fc4b7383ff060058372a9a63ec3b586bb8d5af60c73b56c7c4980801e260bcb0be482acb8b148451b94021f1d4e"
+      },
+      {
+        "version": 5,
+        "file": "0005_controlled_apply.sql",
+        "sha512": "00ce3ac202231c55fe6be8e946c865d5157f6b59688b90ad00eb2967c9913de01e16c9851212239b7eb8ac29c01c908f99a918c7964512535c4316a3a01b6ee5"
+      },
+      {
+        "version": 6,
+        "file": "0006_resync.sql",
+        "sha512": "1a8a52588da329eed20d9c8b47a2c207415ee6e9843334d473df3185e5a63420ae646bfbe531f3c2818d57946ca6cb98560219d406d0590778337730daac58be"
+      },
+      {
+        "version": 7,
+        "file": "0007_binding_controls.sql",
+        "sha512": "456fc41bf978e18200e34f78bcfed7c00c8a6db74e3b04071184120aad4a460844e57ac409a0b2f3ad2e898b6f1ea7657b297e4742a6768264ea949ccb7a6937"
+      },
+      {
+        "version": 8,
+        "file": "0008_scheduler.sql",
+        "sha512": "5bfe857f64263c7492e9a494e2f18ef0e1cdb5b6765ebf573703d73914e5200cd8b88b21d64ddf7c4f1126a393c9bf014b7a849edd98d4e0771b7fab8c34ff03"
+      },
+      {
+        "version": 9,
+        "file": "0009_controlled_release.sql",
+        "sha512": "412e5efeb395d6d1c23c87a71e6744237f907594e3430f9e12a6b49cf4b723b58ad3ede80e1ccd7365bbb0946f4dc5b89733c7f2efbd83c94374c297f14bcbdb"
+      },
+      {
+        "version": 10,
+        "file": "0010_agent_assembly.sql",
+        "sha512": "78691a2bff968ccba237a37f4368a00e84b1ddd458b81e5385e6745992b6ca3e5a981809d4f2b239af2ed1c12df99c9eb39ffa9ac06c30a782ceff8f93a86ef0"
+      },
+      {
+        "version": 11,
+        "file": "0011_local_management.sql",
+        "sha512": "aa58c320c48665daf2775b439bedf2c584d4697b71cf398b32ed6819166e3abeb64c348835879658a75aab4b191babba3a11bcb4666f5692f58b29b0d69214e6"
+      }
+    ]
+  }
+}

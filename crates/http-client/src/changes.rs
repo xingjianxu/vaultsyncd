@@ -87,9 +87,11 @@ mod tests {
                 Ok(json_response(200, &response()))
             })
         }));
-        let client =
-            ApiClient::with_transport(ClientConfig::new("https://vault.example"), transport)
-                .expect("客户端");
+        let client = ApiClient::with_transport_for_unit_tests(
+            ClientConfig::new("https://vault.example"),
+            transport,
+        )
+        .expect("客户端");
         client
             .auth()
             .install(Credentials::from_issued(&issued("access", "refresh")).expect("凭据"));
