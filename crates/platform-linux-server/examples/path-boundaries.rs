@@ -4,6 +4,7 @@ use vaultsyncd_platform_linux_server::files::{
     ResolveMode, RootHandle,
     restricted::{ResolveMechanism, RestrictedDir},
 };
+use vaultsyncd_platform_linux_server::mounts::probe::{self, ScanCompleteness, ScanPolicy};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = std::env::args_os()
@@ -53,6 +54,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle.verify()?;
     }
     assert_eq!(fs::read(outside.join("canary"))?, b"outside must remain");
+    let nested = root.join("nested-subvolume");
+    assert!(
+        std::process::Command::new("btrfs")
+            .args(["subvolume", "create"])
+            .arg(&nested)
+            .status()?
+            .success()
+    );
+    let parent = probe::probe_path(&root)?.btrfs.unwrap();
+    let child = probe::probe_path(&nested)?.btrfs.unwrap();
+    assert_eq!(parent.fsid, child.fsid);
+    let parent_id = parent.subvolume_id.unwrap();
+    let child_id = child
+        .subvolume_id
+        .unwrap_or_else(|| panic!("subvolume facts: {child:?}"));
+    assert!(child_id > 0 && child_id != parent_id);
+    let scan = probe::scan_root(
+        &root,
+        parent_id,
+        &ScanPolicy {
+            max_entries: 100,
+            max_depth: 8,
+        },
+    )?;
+    assert_eq!(scan.completeness, ScanCompleteness::Complete);
+    assert_eq!(scan.subvolumes.len(), 1);
+    assert_eq!(scan.subvolumes[0].subvolume_id, child_id);
+    eprintln!(
+        "real-subvolume-id={child_id};source={}",
+        child.subvolume_id_source.unwrap().as_str()
+    );
     let result = r#"{"passed":true,"checks":["real-btrfs-root","directory-required","root-symlink-rejected","leaf-and-component-symlinks-rejected","openat2-forced-success","component-walk-forced-success","repeated-pinned-directory-enumeration-complete","outside-canary-preserved"]}"#;
     println!("{result}");
     Ok(())

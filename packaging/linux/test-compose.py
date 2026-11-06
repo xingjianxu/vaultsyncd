@@ -20,6 +20,7 @@ assert IMAGE.startswith('localhost/vaultsyncd-s098:') and IMAGE.endswith('-amd64
 RUN=PARENT/('compose-'+str(os.getpid()));RUN.mkdir(mode=0o755)
 PROJECT='vs-s098-'+str(os.getpid())
 FILE=Path(__file__).resolve().parents[2]/'deploy/compose/compose.yaml'
+RUNNER=FILE.with_name('run.py')
 COMPOSE=shutil.which('docker-compose');assert COMPOSE
 RESULT={'passed':False,'run':str(RUN),'image':IMAGE,'checks':[]}
 
@@ -43,14 +44,15 @@ def main():
         'VAULTSYNCD_STATE':str(state),'VAULTSYNCD_ROOTS':str(roots),'VAULTSYNCD_PORT':'18742'}
     def compose(*args,override=None):
         env=variables| (override or {})
-        return sudo('env',*[k+'='+v for k,v in env.items()],COMPOSE,'-p',PROJECT,'-f',FILE,*args)
+        assert args[0] in ('up','down','restart','ps','config')
+        return sudo('env',*[k+'='+v for k,v in env.items()],sys.executable,RUNNER,'--project-name',PROJECT,args[0])
     try:
         loop=sudo('losetup','--find','--show',image).strip()
         sudo('mkfs.btrfs','-q',loop);sudo('mount','-o','user_subvol_rm_allowed',loop,mount);mounted=True
         for p in (state,roots):sudo('mkdir','-m','700',p);sudo('chown','8721:8721',p)
         password=secrets.token_urlsafe(24)
         engine('run','--rm','-i','--network','none','--user','8721:8721','--cap-drop=all','--security-opt','no-new-privileges',
-            '-v',str(state)+':/var/lib/vaultsyncd','--entrypoint','/opt/vaultsyncd/bin/vaultsyncd-admin',IMAGE,'init',input=password+'\n')
+            '-v',str(state)+':/var/lib/vaultsyncd','--entrypoint','/opt/vaultsyncd/bin/vaultsyncd-admin',IMAGE,'init','--state-dir','/var/lib/vaultsyncd',input=password+'\n')
         configuration=json.loads(compose('config','--format','json'))
         service=configuration['services']['vaultsyncd']
         assert service['read_only'] and service['user']=='8721:8721'

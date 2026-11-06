@@ -120,7 +120,7 @@
 | S095 | NixOS 服务模块 | L | S094、S007 | done | a70f755、9243d14、eeb8f66 | 完整 NixOS system/导出模块构建；真实非root零caps服务、Root授权/系统拒写与备份快照释放11类通过 | 无；正式主机启用留S096 | agent/tasks/S095.md |
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | done | 99a7ed4；主机ba1837a | 新源包64/0、主机build/test/健康/switch238；实际回滚237并恢复固定版本、两轮提交下载重启重放与备份释放，SSH/既有应用保持 | 无；公网TLS留S097 | agent/tasks/S096.md |
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | done | d90a263、b615fd9、b345ac9、d8b3cce、fd2f52d、f580392 | Chromium/Windows原生+Edge严格TLS、16MiB/SSE、Nix+host240与重启、独立bind/持久恢复通过 | 开发CA回环，无公网部署；旧Prepared跨dev保守停写 | agent/tasks/S097.md；下一S098 |
-| S098 | 通用 Linux 包与容器配置 | L | S094、S097 | todo | — | 未执行 | — | agent/tasks/S098.md（执行时创建） |
+| S098 | 通用 Linux 包与容器配置 | L | S094、S097 | in_progress | 048aff1、62115d6、a14848f、8f009f8、5f2e1b7 | ARM64平台74/74及路径双机制；旧JSON NixOS消费者真实unit/backup通过；新便携包矩阵进行中 | ARM64用全系统TCG，非原生性能；不占Windows | agent/tasks/S098.md；本批止于S100 |
 | S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | done | ca510ab→cf1d174；交接见任务HEAD | 锁定NSIS/真实同源正式包；标准用户中文空格首装、GUI CLI同实例、关闭与真实重启后上传hash通过 | unsigned-test；原登录恢复且VM在线；父立即合并归档清理 | agent/tasks/S099.md |
 | S100 | Windows 升级与卸载保护 | W | S099、S091 | done | 3a2e2aa→d0392f4；交接见任务HEAD | 真实0.1.0→0.1.1/忙文件回退；默认卸载重装/不完整拒绝/4占位revert、6文件hash、708恢复读回；边界通过 | 产品PE1794752；分段源与失败保留；unsigned-test；父立即合并归档清理；本批结束 | agent/tasks/S100.md |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | todo | — | 未执行 | — | agent/tasks/S101.md（执行时创建） |
