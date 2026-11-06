@@ -9,7 +9,7 @@ use vaultsyncd_domain::{
     ids::{EntryId, UserId},
     version::{Revision, UtcTimestamp},
 };
-use vaultsyncd_platform_linux_server::files::{ResolveMode, RootHandle};
+use vaultsyncd_platform_linux_server::files::RootHandle;
 use vaultsyncd_server_core::{
     commit::intent::PutPhase,
     objects::{ExpectedContent, ObjectLayout},
@@ -43,6 +43,15 @@ fn fact<T: std::str::FromStr>(binding: &Binding, field: &str) -> Result<T, Strin
 
 /// 启动监听与观察器前逐条补完；任何无法证明的条目保持未完成并输出原因。
 pub async fn registered(db: &Database, state_dir: &Path) -> Result<(), String> {
+    let fences = crate::root_fences::RootFences::load(db, state_dir).await?;
+    registered_with_fences(db, state_dir, &fences).await
+}
+
+pub(crate) async fn registered_with_fences(
+    db: &Database,
+    state_dir: &Path,
+    fences: &crate::root_fences::RootFences,
+) -> Result<(), String> {
     let mut conn = db.pool().acquire().await.map_err(text)?;
     let roots = vaultsyncd_server_store::roots::all_roots(&mut conn)
         .await
@@ -58,13 +67,14 @@ pub async fn registered(db: &Database, state_dir: &Path) -> Result<(), String> {
         if intents.is_empty() {
             continue;
         }
-        let handle = match RootHandle::open(Path::new(&root.absolute_path), ResolveMode::Auto) {
-            Ok(handle) => Arc::new(handle),
+        let handle = match fences.open(&root) {
+            Ok(handle) => handle,
             Err(error) => {
                 tracing::warn!(root=%root.id, error=%error, "恢复打不开 Root，保留停写");
                 continue;
             }
         };
+        tracing::info!(root=%root.id, mount_id=handle.snapshot().mount_id, dev_major=handle.snapshot().dev_major, dev_minor=handle.snapshot().dev_minor, "启动意图复用已准入Root围栏");
         let mut attempted = std::collections::HashSet::new();
         for intent in intents {
             let result = async {

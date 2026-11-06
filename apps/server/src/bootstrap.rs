@@ -110,6 +110,7 @@ pub struct Service {
     listener: TcpListener,
     admin_socket: vaultsyncd_platform_linux_server::ipc::AdminSocket,
     assessment: RecoveryAssessment,
+    fences: Arc<crate::root_fences::RootFences>,
 }
 
 impl Service {
@@ -155,6 +156,7 @@ impl Service {
             listener,
             admin_socket,
             assessment,
+            fences,
         } = self;
 
         let addr = listener.local_addr()?;
@@ -174,7 +176,9 @@ impl Service {
             );
         }
 
-        let auth = Arc::new(auth::AuthContext::new(database.clone()));
+        let auth = Arc::new(
+            auth::AuthContext::new(database.clone()).with_root_fences(Arc::clone(&fences)),
+        );
         let uploads = Arc::new(crate::uploads::UploadsContext::new(
             Arc::clone(&auth),
             &config.state_dir,
@@ -191,11 +195,14 @@ impl Service {
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
         // 操作命令端点（S047/S052）：命令走真实适配器；缺少整组证据的目录恢复仍显式未就绪。
         // 外部观察循环（S052）：周期扫描每个健康 Root，把外部改动采纳成版本与事件。
-        let observer = Arc::new(crate::external::ObserverRuntime::new(
-            database.clone(),
-            &config.state_dir,
-            crate::external::ObserverRuntimeConfig::DEFAULT,
-        ));
+        let observer = Arc::new(
+            crate::external::ObserverRuntime::new(
+                database.clone(),
+                &config.state_dir,
+                crate::external::ObserverRuntimeConfig::DEFAULT,
+            )
+            .with_root_fences(Arc::clone(&fences)),
+        );
         let executor = Arc::new(crate::executor::ExecutorContext::new(
             database.clone(),
             &config.state_dir,
@@ -371,7 +378,12 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
     crate::backup::recover_incomplete(&database, &config.state_dir, crate::uploads::server_now())
         .await
         .map_err(|e| StartupError::Replay(e.to_string()))?;
-    crate::replay::registered(&database, &config.state_dir)
+    let fences = Arc::new(
+        crate::root_fences::RootFences::load(&database, &config.state_dir)
+            .await
+            .map_err(StartupError::Replay)?,
+    );
+    crate::replay::registered_with_fences(&database, &config.state_dir, &fences)
         .await
         .map_err(StartupError::Replay)?;
     let lifecycle = Arc::new(Lifecycle::new());
@@ -413,5 +425,6 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         listener,
         admin_socket,
         assessment,
+        fences,
     })
 }

@@ -84,6 +84,12 @@ impl RootContext {
     }
 }
 
+impl RootContext {
+    pub(crate) fn health_reason(&self, record: &store_roots::RootRecord) -> Option<String> {
+        self.auth.root_fences.open(record).err()
+    }
+}
+
 /// 管理通道需唯一 active owner；有效普通会话不能读取服务器布局。
 async fn require_owner(context: &RootContext, owner: UserId) -> Result<(), Box<Response>> {
     let owners: Vec<Vec<u8>> =
@@ -132,28 +138,7 @@ pub async fn list_managed_roots(
     };
     let mut roots = Vec::new();
     for record in records {
-        let path = PathBuf::from(&record.absolute_path);
-        let identity = record.root_file_identity.clone();
-        let reason = match tokio::task::spawn_blocking(move || {
-            let expected = std::str::from_utf8(&identity)
-                .ok()
-                .and_then(|text| RootSnapshot::parse_spec(text).ok());
-            match expected {
-                Some(expected) => {
-                    vaultsyncd_platform_linux_server::mounts::health::verify_root_mount(
-                        &path, &expected,
-                    )
-                    .err()
-                    .map(|error| error.detail_code().to_owned())
-                }
-                None => Some("invalid_root_identity".to_owned()),
-            }
-        })
-        .await
-        {
-            Ok(reason) => reason,
-            Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
-        };
+        let reason = context.health_reason(&record);
         let reason = reason.unwrap_or_else(|| {
             if record.health == StoreRootHealth::Unavailable {
                 "stored_unavailable".into()
@@ -243,7 +228,11 @@ pub(crate) async fn list_for_owner(
         .into_iter()
         .map(|record| RootSummary {
             root_id: record.id.to_hex(),
-            health: map_health(record.health),
+            health: if context.health_reason(&record).is_none() {
+                RootHealth::Healthy
+            } else {
+                RootHealth::Unavailable
+            },
         })
         .collect();
     // 按身份排序：库里的 `ORDER BY absolute_path` 是为运维可读，对外换成身份顺序，避免清单
@@ -400,7 +389,7 @@ pub(crate) async fn register_for_owner(
 }
 
 /// 阻塞探测：打开 Root 句柄、扫描目录、把候选与内部目录/已注册 Root 一起做准入判定。
-fn probe_candidate(
+pub(crate) fn probe_candidate(
     given: &Path,
     state_dir: &Path,
     registered: &[PathBuf],

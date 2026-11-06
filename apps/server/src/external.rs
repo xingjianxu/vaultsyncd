@@ -23,7 +23,6 @@ use tracing::{debug, info, warn};
 use vaultsyncd_domain::ids::{EntryId, RootId, TxId, UserId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 use vaultsyncd_platform_linux_server::files::RootHandle;
-use vaultsyncd_platform_linux_server::files::restricted::ResolveMode;
 use vaultsyncd_server_core::commit::put::RootCommitGate;
 use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent, ObjectLayout};
 use vaultsyncd_server_core::observer::{
@@ -509,6 +508,7 @@ struct RootState {
 
 /// 后台观察循环：每个 Root 一个 `ExternalObserver`，按周期跑一轮完整扫描与采纳。
 pub struct ObserverRuntime {
+    pub(crate) fences: Arc<crate::root_fences::RootFences>,
     database: Database,
     state_dir: PathBuf,
     roots: tokio::sync::Mutex<HashMap<RootId, RootState>>,
@@ -524,6 +524,7 @@ impl ObserverRuntime {
     #[must_use]
     pub fn new(database: Database, state_dir: &Path, config: ObserverRuntimeConfig) -> Self {
         Self {
+            fences: Arc::new(crate::root_fences::RootFences::new(state_dir)),
             database,
             state_dir: state_dir.to_path_buf(),
             roots: tokio::sync::Mutex::new(HashMap::new()),
@@ -533,6 +534,10 @@ impl ObserverRuntime {
         }
     }
 
+    pub(crate) fn with_root_fences(mut self, fences: Arc<crate::root_fences::RootFences>) -> Self {
+        self.fences = fences;
+        self
+    }
     /// 本进程最新扫描进度；未扫描和重启不得继承完成结论。
     pub async fn collection_status(
         &self,
@@ -648,6 +653,18 @@ impl ObserverRuntime {
                 .await;
                 continue;
             }
+            let admitted = match self.fences.open(&root) {
+                Ok(handle) => handle,
+                Err(reason) => {
+                    self.collection_state(
+                        root.id,
+                        Collection::Blocked,
+                        &format!("Root 围栏拒绝采集：{reason}；不推导删除。"),
+                    )
+                    .await;
+                    continue;
+                }
+            };
             // 恢复之前观察器也不能把一次尚未提交的服务端发布误采纳为新的外部事实。
             let unfinished = match self.database.pool().acquire().await {
                 Ok(mut conn) => {
@@ -699,19 +716,7 @@ impl ObserverRuntime {
             let state = match states.get_mut(&root.id) {
                 Some(state) => state,
                 None => {
-                    let Ok(handle) =
-                        RootHandle::open(Path::new(&root.absolute_path), ResolveMode::Auto)
-                    else {
-                        self.collection_state(
-                            root.id,
-                            Collection::Blocked,
-                            "无法打开 Root，请恢复原挂载或读取权限。",
-                        )
-                        .await;
-                        warn!(root = %root.id.to_hex(), "观察器打不开 Root 句柄");
-                        continue;
-                    };
-                    let handle = Arc::new(handle);
+                    let handle = admitted;
                     let prefix = format!("obs-{}-{}", &root.id.to_hex()[..8], std::process::id());
                     let Ok(observer) = ExternalObserver::new(
                         root.id,

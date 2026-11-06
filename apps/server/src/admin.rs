@@ -354,28 +354,19 @@ async fn execute(
     for row in rows.into_iter().take(PAGE_SIZE as usize) {
         let mut value: Value = serde_json::from_str(&row)?;
         if value["kind"] == "root_health" {
-            let path = value
+            value
                 .as_object_mut()
                 .expect("query emits object")
-                .remove("_path")
-                .ok_or("missing Root path")?;
-            let identity = value
+                .remove("_path");
+            value
                 .as_object_mut()
                 .expect("query emits object")
-                .remove("_identity")
-                .ok_or("missing Root identity")?;
-            let expected = vaultsyncd_platform_linux_server::files::root::RootSnapshot::parse_spec(
-                identity.as_str().ok_or("invalid Root identity")?,
-            )?;
-            let path = std::path::PathBuf::from(path.as_str().ok_or("invalid Root path")?);
-            let reason = tokio::task::spawn_blocking(move || {
-                vaultsyncd_platform_linux_server::mounts::health::verify_root_mount(
-                    &path, &expected,
-                )
-                .err()
-                .map(|error| error.detail_code())
-            })
-            .await?;
+                .remove("_identity");
+            let id = RootId::from_hex(value["root_id"].as_str().ok_or("invalid Root id")?)?;
+            let record = roots::root_in_scope(&mut conn, owner, id)
+                .await?
+                .ok_or("Root disappeared")?;
+            let reason = context.roots.health_reason(&record);
             if let Some(reason) = reason {
                 value["health"] = json!("unavailable");
                 value["reason"] = json!(reason);
