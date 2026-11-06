@@ -236,6 +236,27 @@ impl WindowsFiles {
         protect_under(&self.root, path, write)
     }
 
+    /// Preserve a file under another validated relative name without overwriting anything.
+    /// Caller must persist the same source/target/evidence before calling and recover by identity.
+    /// The original object remains protected continuously through full-content recheck and rename.
+    pub fn preserve(&self, from: &str, to: &str, expected: &Evidence) -> io::Result<Evidence> {
+        let _gate = self.gate.lock().map_err(poison)?;
+        self.root.with_parent(to, |_, _| Ok(()))?;
+        let (guard, meta) = self.protect(from, true)?;
+        let lease = guard.lease()?;
+        let actual = self.evidence_handle(from, lease.file(), meta.identity)?;
+        if &actual != expected {
+            return Err(changed());
+        }
+        self.root
+            .with_parent(to, |parent, name| rename(lease.file(), parent, name, 0))?;
+        lease.file().sync_all()?;
+        let mut map = self.generations.lock().map_err(poison)?;
+        map.remove(from);
+        map.insert(to.into(), actual.clone());
+        Ok(actual)
+    }
+
     /// Publish verified contents with durable before/after evidence and preserved original object.
     /// Namespace publication has a recoverable two-rename interval, not a single atomic rename.
     /// Caller must first persist its core local_intent using the same OpId.

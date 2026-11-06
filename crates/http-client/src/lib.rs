@@ -54,6 +54,7 @@ pub mod client;
 pub mod config;
 pub mod content;
 pub mod error;
+pub mod sync;
 pub mod transport;
 pub mod uploads;
 pub mod version_leases;

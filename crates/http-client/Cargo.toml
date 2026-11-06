@@ -19,6 +19,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+httpdate = "1"
 tokio = { version = "1", features = ["macros", "sync", "time"] }
 vaultsyncd-protocol = { path = "../protocol" }
 # 端点模块实现 `crates/transfer` 的端口（上传会话与固定版本内容），因此依赖它的端口与摘要类型，
