@@ -34,6 +34,7 @@ pub mod restore_ops;
 pub mod roots;
 pub mod sync;
 pub mod uploads;
+pub mod version_leases;
 
 /// 退出码：正常停止。
 pub const EXIT_OK: u8 = 0;

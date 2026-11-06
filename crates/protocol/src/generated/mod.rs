@@ -735,3 +735,41 @@ pub struct UploadStatus {
     /// 会话状态与块几何。
     pub upload: UploadSession,
 }
+
+/// 服务器持久化的固定版本保护；expires_at是UTC秒，ttl_seconds是剩余有效秒数。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VersionLease {
+    /// 显式解除后为true，不可重新续期。
+    pub closed: bool,
+    /// 固定Entry身份。
+    pub entry_id: String,
+    /// UTC到期秒数。
+    #[serde(with = "crate::decimal")]
+    pub expires_at: String,
+    /// 请求租约身份。
+    pub lease_id: String,
+    /// 固定Root身份。
+    pub root_id: String,
+    /// 整份内容SHA256。
+    pub sha256: String,
+    /// 固定版本字节数。
+    #[serde(with = "crate::decimal")]
+    pub size: String,
+    /// 响应形成时剩余秒数，最大120。
+    #[serde(with = "crate::decimal")]
+    pub ttl_seconds: String,
+    /// 固定版本身份。
+    pub version_id: String,
+}
+
+/// 固定版本内容租约的稳定请求；身份由调用端随机生成并在重试时复用。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VersionLeaseRequest {
+    /// 32位小写十六进制租约请求身份。
+    pub lease_id: String,
+    /// 已提交版本的整份SHA256，小写十六进制。
+    pub sha256: String,
+    /// 已提交版本的逻辑字节数。
+    #[serde(with = "crate::decimal")]
+    pub size: String,
+}

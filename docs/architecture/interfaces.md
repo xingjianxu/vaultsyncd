@@ -2217,3 +2217,10 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 `platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Root，必须先初始化 WinRT。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
 
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
+
+## S069-b 固定版本内容短租约
+
+- Wire唯一源 `api/openapi.yaml`：`POST /v1/roots/{root}/entries/{entry}/versions/{version}/leases` 与 `/{lease}/renew`、`/{lease}/release`，body为稳定 `lease_id`、整份 `sha256`、`size`。响应完整回显pin、UTC到期及剩余秒数、closed。仅Bearer/授权Root可操作。
+- `server-store::version_leases`：同BEGIN IMMEDIATE核对固定版本与live对象，使用既有`object_leases`作为GC保护；0010请求关联记住固定输入，ID复用换输入409，失效/释放410；TTL120秒，acquire重放不延长，renew仅活跃，release幂等。活跃对象租约阻止collectable标记，GC仍按既有租约与引用集工作。
+- 服务端租约已提交后才检查对象可读和长度，失败503并保留有界保护，绝不返回可释放证明；客户端`LeaseEndpoint`精确校验Root/Entry/Version/hash/size/id/TTL/closed。调用方必须保留本地副本直到有效租约及持续平台保护均成立；传输成功不代表租约有效。
+- 平台释放与S063薄wrapper仍由S069-a/c交付；本子卡不冒充Windows原生或产品端到端完成。

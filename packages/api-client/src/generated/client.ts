@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus } from "./types";
-import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus } from "./types";
+import { decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeOperationResult, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
+import type { Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, OperationRequest, OperationResult, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -369,6 +369,113 @@ export async function downloadVersionContent(options: ClientOptions, root: strin
     throw api_error(response.status, await read_json(response));
   }
   return await read_bytes(response);
+}
+
+/**
+ * 建立固定版本短租约
+ *
+ * S069：授权后在同一写事务核对固定版本和live对象并记录object_leases GC保护。
+ * TTL由服务器固定为120秒；同lease_id仅允许同Root/Entry/Version/摘要/长度。
+ * acquire重放不延长期限；renew只续未过期租约；release幂等，过期或已解除不得复活。
+ * 不可读对象或无法确认租约时拒绝释放本地内容。请求仅用于已认证调用。
+ *
+ * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases）：路径参数
+ * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases）：路径参数
+ * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases）：路径参数
+ *
+ * 200：固定版本租约事实
+ * 400：非法请求
+ * 401：没有可用会话
+ * 403：Root越权
+ * 409：租约ID复用不同请求
+ * 410：版本或租约已失效
+ * 503：存储或对象不可用
+ */
+export async function acquireVersionLease(options: ClientOptions, root: string, entry: string, version: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeVersionLease(payload);
+}
+
+/**
+ * 解除固定版本短租约
+ *
+ * S069：授权后在同一写事务核对固定版本和live对象并记录object_leases GC保护。
+ * TTL由服务器固定为120秒；同lease_id仅允许同Root/Entry/Version/摘要/长度。
+ * acquire重放不延长期限；renew只续未过期租约；release幂等，过期或已解除不得复活。
+ * 不可读对象或无法确认租约时拒绝释放本地内容。请求仅用于已认证调用。
+ *
+ * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ * 参数 `lease`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ *
+ * 200：固定版本租约事实
+ * 400：非法请求
+ * 401：没有可用会话
+ * 403：Root越权
+ * 409：租约ID复用不同请求
+ * 410：版本或租约已失效
+ * 503：存储或对象不可用
+ */
+export async function releaseVersionLease(options: ClientOptions, root: string, entry: string, version: string, lease: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases/${encodeURIComponent(lease)}/release`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeVersionLease(payload);
+}
+
+/**
+ * 续期固定版本短租约
+ *
+ * S069：授权后在同一写事务核对固定版本和live对象并记录object_leases GC保护。
+ * TTL由服务器固定为120秒；同lease_id仅允许同Root/Entry/Version/摘要/长度。
+ * acquire重放不延长期限；renew只续未过期租约；release幂等，过期或已解除不得复活。
+ * 不可读对象或无法确认租约时拒绝释放本地内容。请求仅用于已认证调用。
+ *
+ * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ * 参数 `lease`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ *
+ * 200：固定版本租约事实
+ * 400：非法请求
+ * 401：没有可用会话
+ * 403：Root越权
+ * 409：租约ID复用不同请求
+ * 410：版本或租约已失效
+ * 503：存储或对象不可用
+ */
+export async function renewVersionLease(options: ClientOptions, root: string, entry: string, version: string, lease: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
+  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases/${encodeURIComponent(lease)}/renew`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeVersionLease(payload);
 }
 
 /**
