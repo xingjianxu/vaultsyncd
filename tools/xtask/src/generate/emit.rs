@@ -544,7 +544,7 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
     let success_type = match &operation.success {
         SuccessBody::Json(name) => name.clone(),
         SuccessBody::Bytes => "Uint8Array".to_string(),
-        SuccessBody::EventStream => "Response".to_string(),
+        SuccessBody::EventStream | SuccessBody::ByteStream => "Response".to_string(),
     };
     out.push_str(&format!(
         "export async function {}({}): Promise<{}> {{\n",
@@ -600,7 +600,7 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
     // 字节响应意味着“读字节”，请求头也要声明接受字节（不假装在要 JSON）。
     let accept = match &operation.success {
         SuccessBody::Json(_) => "application/json",
-        SuccessBody::Bytes => "application/octet-stream",
+        SuccessBody::Bytes | SuccessBody::ByteStream => "application/octet-stream",
         SuccessBody::EventStream => "text/event-stream",
     };
     let headers_line = if operation.header_params.is_empty() {
@@ -637,7 +637,7 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
             );
             out.push_str("  return await read_bytes(response);\n}\n\n");
         }
-        SuccessBody::EventStream => {
+        SuccessBody::EventStream | SuccessBody::ByteStream => {
             // 事件流由调用方按 SSE 解析（`response.body`）；非 2xx 仍是 JSON 错误信封。
             out.push_str(
                 "  if (!response.ok) {\n    throw api_error(response.status, await read_json(response));\n  }\n",
