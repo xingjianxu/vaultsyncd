@@ -12,6 +12,7 @@ resolver = "3"
 # 目标直接 compile_error!），因此进 members 但**不进** default-members，便携检查（含 Windows
 # 默认目标）不会构建服务端应用。
 members = [
+    "apps/desktop/src-tauri",
     "apps/agent",
     "apps/cli",
     "apps/server",

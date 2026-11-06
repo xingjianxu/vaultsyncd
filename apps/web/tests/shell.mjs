@@ -17,7 +17,7 @@ try {
     assert.match(html, /未连接/);
     assert.doesNotMatch(html, /同步成功|已同步|无问题/);
     assert.match(html, /aria-current="page"/);
-    if (app === "desktop") assert.match(html, /IPC 测试替身/);
+    if (app === "desktop") assert.match(html, /本机命名管道/);
     console.log(`${app}: 初始渲染明确未连接`);
   }
   const { disconnectedAgent } = await server.ssrLoadModule("/apps/desktop/src/services/agent.ts");

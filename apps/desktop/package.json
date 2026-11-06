@@ -10,8 +10,9 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
-    "@vaultsyncd/ui": "workspace:*",
+    "@tauri-apps/api": "2.12.4",
     "@vaultsyncd/local-ipc-types": "workspace:*",
+    "@vaultsyncd/ui": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

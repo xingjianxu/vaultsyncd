@@ -172,6 +172,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@tauri-apps/api':
+        specifier: 2.12.4
+        version: 2.12.4
       '@vaultsyncd/local-ipc-types':
         specifier: workspace:*
         version: link:../../packages/local-ipc-types
@@ -342,6 +345,9 @@ packages:
 
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
+
+  '@tauri-apps/api@2.12.4':
+    resolution: {integrity: sha512-pVmfis+4zT8H0Qhp3xPZx9Ju7kpzvA6rr/PSJPyuwfvucTQ8sVt61NYU9KMkK703UFlYadFmjKA4HhybOtN0gg==}
 
   '@types/react-dom@19.3.0':
     resolution: {integrity: sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==}
@@ -705,6 +711,8 @@ snapshots:
     optional: true
 
   '@rolldown/pluginutils@1.0.1': {}
+
+  '@tauri-apps/api@2.12.4': {}
 
   '@types/react-dom@19.3.0(@types/react@19.3.0)':
     dependencies:

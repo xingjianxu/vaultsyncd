@@ -1,0 +1,8 @@
+{
+  "identifier": "main",
+  "description": "Only the bundled main window may read agent status.",
+  "local": true,
+  "windows": ["main"],
+  "platforms": ["windows"],
+  "permissions": ["allow-agent-get-status"]
+}
