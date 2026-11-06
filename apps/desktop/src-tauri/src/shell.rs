@@ -69,14 +69,16 @@ pub(super) fn run() {
     ]);
     builder
         .setup(|app| {
+            #[cfg(feature = "native-acceptance")]
+            app.add_capability(r#"{"identifier":"native-acceptance","windows":["main"],"permissions":["allow-acceptance-report"]}"#)?;
             let window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("vaultsyncd")
                     .inner_size(1000.0, 720.0)
-            .on_navigation(|url| {
-                (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
-                    || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
-            });
+                    .on_navigation(|url| {
+                        (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
+                            || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+                    });
             #[cfg(feature = "native-acceptance")]
             let window = window.initialization_script(include_str!(
                 "../../../../tests/platform/windows/s080-webview.js"
@@ -88,7 +90,7 @@ pub(super) fn run() {
             let menu = tauri::menu::Menu::with_items(app, &[&open, &quit])?;
             tauri::tray::TrayIconBuilder::new()
                 .icon(tauri::image::Image::new_owned(
-                    vec![28, 120, 98, 255].repeat(16 * 16),
+                    [28, 120, 98, 255].repeat(16 * 16),
                     16,
                     16,
                 ))

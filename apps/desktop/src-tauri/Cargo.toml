@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-native-acceptance = []
+native-acceptance = ["tauri/dynamic-acl"]
 
 [target.'cfg(windows)'.dependencies]
 tauri = { version = "2", features = ["tray-icon", "custom-protocol"] }

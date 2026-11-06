@@ -2334,5 +2334,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - `@vaultsyncd/ui` 稳定入口导出 Button、Dialog（挂载时 showModal，onClose 由父移除）、Table<T>（columns/rows/rowKey/emptyMessage）、EmptyState、PageShell（受控 activePath/items/status）及原有 StatusBadge。`@vaultsyncd/ui/styles.css` 为独立样式入口；无 HTTP/IPC/Tauri 依赖。共享 CSS 变量 `--vs-accent`/`--vs-border`。
 - `@vaultsyncd/web`、`@vaultsyncd/desktop` 均提供 dev/typecheck/build/preview；各自 dist，Vite 8.3.6、React 19.3.1、根 pnpm 锁。开发/预览仅绑定 127.0.0.1；默认端口冲突明确失败。Hash 路由不要求服务端 history fallback。
 - Web `services/server.ts::checkServer(options?, signal?) -> Promise<HealthResponse>` 默认同源、浏览器 fetch、随机 request_id；只经 `@vaultsyncd/api-client` 稳定导出请求健康，无令牌存储。默认路由 `#/overview`，另有 `#/roots` 的未读取反馈；未知路由显式显示不存在。
-- 桌面 `services/agent.ts::AgentClient.getStatus() -> Promise<GetStatusResult>` 用本机 IPC 稳定类型；默认 `disconnectedAgent` 始终 reject，明确“IPC 测试替身”。S080 可替换此端口，不将 Tauri 引入 UI。默认 `#/connections`，另有 `#/bindings`/`#/problems` 未读取反馈，无伪造同步完成状态。
+- 桌面 `services/agent.ts::AgentClient.getStatus() -> Promise<GetStatusResult>` 用本机 IPC 稳定类型；S080 后默认 `nativeAgent` 调用 Tauri 固定状态桥，`disconnectedAgent` 仅保留为明确失败的测试替身。Tauri 不进入共享 UI。默认 `#/connections`，另有 `#/bindings`/`#/problems` 未读取反馈，无伪造同步完成状态。
 - 验证入口：`pnpm --filter @vaultsyncd/web test`（两应用 SSR 默认未连接与传输正负例），两应用各自 `typecheck`/`build`；无浏览器或 Windows 原生证据。
+
+## S080 Windows Tauri 壳与状态桥
+
+- `apps/desktop/src-tauri` 是根 Cargo workspace 的 `vaultsyncd-desktop`，共用根锁；Tauri 仅 Windows 目标构建。默认构建内嵌 `../dist`，先在默认 devShell 执行桌面 `build`，再在 windows devShell 用 `cargo xwin build --locked --target x86_64-pc-windows-msvc -p vaultsyncd-desktop` 构建。Windows shell 增加锁定 Python 供原生验收哈希清单。
+- 唯一正式 command `agent_get_status() -> Result<GetStatusResult, {code,message}>`；无参数，仅连接 `Endpoint::current("vaultsyncd-agent")`，继承 SID/session/服务端身份核验和传输上限；不接受调用方指定路径/管道/系统命令，不直接打开 DB 或返回凭据。错误码为 `unavailable/agent_rejected/invalid_response`，消息不回显内部路径。
+- `AppManifest` 显式命令清单和 `capabilities/main.json` 仅允许内置 `main` 窗口的 `allow-agent-get-status`。无远程 capability、shell/fs/SQL 插件；CSP 与导航仅内置应用来源。托盘打开/退出仅影响 GUI，agent 不归壳进程管理。前端成功读取后显示 agent 已连接，不把它表示为文件同步成功。
+- 原生验收 `tests/platform/windows/run-native-desktop.sh`：先复核 EXE SHA-256，再在 Interactive/Limited 用户会话启动独立 agent 与真 WebView，实际状态/拒绝命令/GUI 退出不停止 agent。`native-acceptance` feature 才包含测试脚本、报告 command 和动态测试 capability；正式构建清理遗留测试权限元数据，未编译报告入口。报告与测试状态在 run_id 目录，VM 保持在线。

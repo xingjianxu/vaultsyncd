@@ -100,7 +100,7 @@
 | S077 | Web 登录与会话管理 | B | S076、S043 | todo | — | 未执行 | — | agent/tasks/S077.md（执行时创建） |
 | S078 | Web Root 与服务健康页面 | B | S077、S044、S051 | todo | — | 未执行 | — | agent/tasks/S078.md（执行时创建） |
 | S079 | Web 历史、冲突与回收站 | B | S078、S040、S047 | todo | — | 未执行 | — | agent/tasks/S079.md（执行时创建） |
-| S080 | Tauri Windows 壳与最小 IPC 桥 | W | S076、S072 | todo | — | 未执行 | — | agent/tasks/S080.md（执行时创建） |
+| S080 | Tauri Windows 壳与最小 IPC 桥 | W | S076、S072 | done | `692e18f`（实现）及本卡后续修复/交接提交；基线 `da3a368`，`feat/S080-tauri-bridge` | 真 Windows session1 WebView：真实 agent 状态、4 类恶意命令拒绝、GUI 退出 agent 存活；宿主五成员类型/桌面构建/SSR、两端 clippy、Windows 正式与验收构建、生成一致性通过 | 无；连接/绑定管理留 S081，安装签名尚未验证 | agent/tasks/S080.md（+a/b） |
 | S081 | 桌面连接与 Binding 页面 | W | S080 | todo | — | 未执行 | — | agent/tasks/S081.md（执行时创建） |
 | S082 | 桌面文件状态与手动操作 | W | S081、S069、S073 | todo | — | 未执行 | — | agent/tasks/S082.md（执行时创建） |
 | S083 | 桌面历史与系统通知 | W | S082、S079、S064 | todo | — | 未执行 | — | agent/tasks/S083.md（执行时创建） |
