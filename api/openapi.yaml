@@ -727,7 +727,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "410":
-          description: 请求的服务器 epoch 已过期（`EPOCH_CHANGED`）
+          description: |
+            请求的服务器 epoch 已过期（`EPOCH_CHANGED`），或恢复所需的历史/回收站内容已过保留期
+            （`VERSION_GONE`，不拿同路径的新内容冒充）
           content:
             application/json:
               schema:
