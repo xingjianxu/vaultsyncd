@@ -20,3 +20,6 @@
 pub mod cfapi;
 pub mod files;
 pub mod watcher;
+
+#[cfg(windows)]
+pub mod shell;

@@ -1,7 +1,7 @@
 //! Windows metadata-only access. Unknown reparses never authorize traversal or deletion.
 
 #[cfg(windows)]
-mod native;
+pub(crate) mod native;
 #[cfg(windows)]
 pub use native::{NativeNames, RootHandle};
 

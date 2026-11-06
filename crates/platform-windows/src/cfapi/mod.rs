@@ -30,3 +30,7 @@ pub mod release;
 
 pub use identity::{EntryId, FileIdentity, IdentityDecodeError, RootId, VersionHint};
 pub use lifecycle::{HResult, StageError};
+
+#[cfg(windows)]
+pub mod adapter;
+pub mod catalog;

@@ -224,7 +224,7 @@ impl std::error::Error for IdentityDecodeError {}
 ///
 /// 这不是安全校验：它只保证“写进去的 44 字节和读出来的 44 字节一致”。信任边界由服务端
 /// 分配的身份与数据库基线负责，`FileIdentity` 本身不作为业务真相。
-fn crc32(bytes: &[u8]) -> u32 {
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for byte in bytes {
         crc ^= u32::from(*byte);

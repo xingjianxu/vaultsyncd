@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+vaultsyncd-domain = { path = "../domain" }
 vaultsyncd-fs-common = { path = "../fs-common" }
 
 # 本包直接声明并调用 Win32/Cloud Files API，必须放行 unsafe_code，而根
@@ -32,3 +33,6 @@ all = { level = "deny", priority = -1 }
 [[example]]
 name = "cfapi-prototype"
 path = "examples/cfapi_prototype.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Foundation", "Storage", "Storage_Search", "Storage_Provider", "Storage_Streams", "Win32_System_WinRT"] }

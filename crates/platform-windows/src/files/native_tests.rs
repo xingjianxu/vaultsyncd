@@ -438,6 +438,17 @@ fn native_cloud_scan_does_not_hydrate_any_placeholder() {
         }
     }
     let _registration = Registration(&sandbox.0);
+    // A disconnected partially populated directory can reject metadata opens on current Windows.
+    // Such evidence must block deletion; reconnect before requiring complete enumeration.
+    let offline = RootHandle::open(&sandbox.0).unwrap().scan();
+    if !offline.permits_missing_comparison() {
+        assert!(
+            offline.entries.iter().any(|e| e.issue.is_some())
+                || offline.health == crate::files::ScanHealth::RootUnavailable
+        );
+    }
+    let session =
+        crate::cfapi::provider::ProviderSession::open(&sandbox.0, Default::default()).unwrap();
     for (name, _) in PROBE_FILES {
         assert_eq!(
             prototype::on_disk_data_size(&sandbox.0.join(PROBE_DIRECTORY).join(name)).unwrap(),
@@ -454,6 +465,7 @@ fn native_cloud_scan_does_not_hydrate_any_placeholder() {
             report.entries
         );
         assert_eq!(report.entries.len(), 4);
+        assert_eq!(session.context().stats().bytes_served, 0);
         for (name, size) in PROBE_FILES {
             let meta = root.inspect(&format!("{PROBE_DIRECTORY}/{name}")).unwrap();
             assert!(meta.placeholder());
@@ -466,4 +478,5 @@ fn native_cloud_scan_does_not_hydrate_any_placeholder() {
             0
         );
     }
+    session.close().unwrap();
 }

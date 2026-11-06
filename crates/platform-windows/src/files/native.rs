@@ -124,6 +124,36 @@ fn open_relative_mode(
     directory: bool,
     asynchronous: bool,
 ) -> io::Result<File> {
+    open_child(
+        parent,
+        name,
+        directory,
+        asynchronous,
+        0x0010_0080 | u32::from(directory),
+        false,
+    )
+}
+
+pub(crate) fn open_child(
+    parent: &File,
+    name: &str,
+    directory: bool,
+    asynchronous: bool,
+    access: u32,
+    create: bool,
+) -> io::Result<File> {
+    open_child_shared(parent, name, directory, asynchronous, access, create, 3)
+}
+
+pub(crate) fn open_child_shared(
+    parent: &File,
+    name: &str,
+    directory: bool,
+    asynchronous: bool,
+    access: u32,
+    create: bool,
+    share: u32,
+) -> io::Result<File> {
     validate_name(name).map_err(invalid)?;
     let wide: Vec<u16> = name.encode_utf16().collect();
     let mut text = UnicodeString {
@@ -146,14 +176,21 @@ fn open_relative_mode(
     let result = unsafe {
         NtCreateFile(
             &mut handle,
-            0x0010_0080 | u32::from(directory),
+            access,
             &attributes,
             &mut status,
             std::ptr::null(),
             0,
-            3,
-            1,
-            0x0020_0000 | 0x0040_0000 | if asynchronous { 0 } else { 0x20 },
+            share,
+            if create { 2 } else { 1 },
+            0x0020_0000
+                | (if create && directory { 0 } else { 0x0040_0000 })
+                | (if create {
+                    if directory { 1 } else { 0x40 }
+                } else {
+                    0
+                })
+                | (if asynchronous { 0 } else { 0x20 }),
             std::ptr::null(),
             0,
         )
@@ -298,7 +335,7 @@ fn cloud_metadata(file: &File) -> io::Result<Option<CloudMetadata>> {
     }))
 }
 
-fn metadata(file: &File) -> io::Result<EntryMetadata> {
+pub(crate) fn metadata(file: &File) -> io::Result<EntryMetadata> {
     let id: IdInfo = query(file, 18)?;
     let attr: AttributeInfo = query(file, 9)?;
     let standard: StandardInfo = query(file, 1)?;
@@ -383,7 +420,9 @@ impl RootHandle {
         }
         let mut pins = vec![drive_pin];
         let mut ancestors = vec![drive_meta.identity];
-        for component in components {
+        let components: Vec<_> = components.collect();
+        let count = components.len();
+        for (index, component) in components.into_iter().enumerate() {
             let Component::Normal(name) = component else {
                 return Err(invalid("unsafe root component"));
             };
@@ -392,8 +431,12 @@ impl RootHandle {
                 .ok_or_else(|| invalid("root name is not UTF-8"))?;
             let file = open_relative(pins.last().expect("drive pin"), text, true)?;
             let meta = metadata(&file)?;
-            if !meta.directory || meta.reparse_tag != 0 {
-                return Err(invalid("root ancestry contains a reparse or non-directory"));
+            if !meta.directory
+                || (meta.reparse_tag != 0 && (index + 1 != count || !meta.supported()))
+            {
+                return Err(invalid(
+                    "root ancestry contains an unsupported reparse or non-directory",
+                ));
             }
             current.push(name);
             ancestors.push(meta.identity);
@@ -432,7 +475,7 @@ impl RootHandle {
             .last()
             .ok_or_else(|| invalid("missing root pin"))?;
         let current = metadata(file)?;
-        if current.identity != self.identity || current.reparse_tag != 0 {
+        if current.identity != self.identity || !current.supported() {
             return Err(io::Error::other("root identity changed"));
         }
         // Recheck current ACLs through a fresh rooted open, without backup intent.
@@ -488,6 +531,25 @@ impl RootHandle {
             pins.push(file);
         }
         Ok((pins, result.ok_or_else(|| invalid("empty relative path"))?))
+    }
+
+    pub(crate) fn with_parent<T>(
+        &self,
+        relative: &str,
+        action: impl FnOnce(&File, &str) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let parsed = RelativePath::parse(relative).map_err(invalid)?;
+        self.verify()?;
+        let parts = parsed.components();
+        let leaf = parts.last().ok_or_else(|| invalid("empty path"))?;
+        let held;
+        let parent = if parts.len() == 1 {
+            self.pins.last().expect("root pin")
+        } else {
+            held = self.walk(&parts[..parts.len() - 1].join("/"), true)?.0;
+            held.last().expect("parent pin")
+        };
+        action(parent, leaf)
     }
 
     /// Safely query a relative entry without content I/O. Unknown reparses are refused.

@@ -2202,3 +2202,18 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 `recovery::export::ExportRecovery::run(binding, destination, ExportSource, ExportDestination)` 通过端口固定快照并stream导出，`Target` 区分current/candidate和snapshot；当前dirty与旧固定上传快照分别保存。源discover必须完整或报错，末尾复核新增候选/每个来源与SQLite状态。目的create_new必须使用安全目录句柄、拒绝reparse和覆盖、保持身份、拒绝同步/缓存重叠；ExportDirectory保证create_new/顺序写入/读回/fsync。核心不做平台I/O；测试磁盘适配器不构成生产Windows实现。
 
 文件命名仅kind+稳定身份，state.json包含绑定/epoch/模式/游标、三视图、待办、上传快照事实、恢复日志和隔离操作（排除会话token）；清单带文件长度与SHA-256。写完读回校验、状态未变化后最后写manifest.json，并持久化后validate。validate要求格式、有效绑定、唯一state.json、合法名字/来源、固定大小摘要与state绑定一致；失败返回明确错误，保留部分目录、不清dirty、不覆盖、不宣称完整。缺失快照、部分不可恢复内容同样明确失败。生产Windows快照与安全目的目录适配、IPC接线由应用入口卡承担。
+
+### S066：正式 Windows CFAPI 与 Explorer 生命周期
+
+`platform-windows::cfapi::catalog::{Identity,Catalog}` 使用 domain 的 BindingId/RootId/EntryId/VersionId。
+正式 identity v2 固定 72 B：`VS/2/0` + 四个 16 B 身份 + CRC32；v1 原型保持独立，生产解码拒绝旧版、损坏、外根、未知 Entry 与陈旧 Version。Catalog 由应用从持久状态重建，更新后显式发布；CRC 不能代替业务授权。
+
+`cfapi::adapter::Adapter::connect(path,Catalog,Arc<dyn Callbacks>)` 为每个连接持有独立上下文，不用原型进程全局 provider。`Callbacks::fetch(ReadDemand)->Result<(),NTSTATUS>` 只入队；demand 包含完整身份、文件大小、固定范围与 `Reply`（真实 connection/transfer/request keys、拥有的 correlation vector）；`cancel(Reply)` 仅取消对应传输，`disconnect()` 发停止信号。`Reply::transfer` 只在连接存活期间回执，异步工作须由消费者在关闭前停止；下载/整份校验/有界队列由 S067 实现。`MetadataOnly` 明确返回 Unsupported，不能冒充水合成功。
+
+`create` 使用 pinned parent 相对 CREATE_NEW + CfConvertToPlaceholder + CfUpdatePlaceholder；不覆盖本地文件，不手改 reparse。创建和空占位更新用排他共享句柄；只有无本地内容、无修改/保留意图且预期物理/逻辑元数据相符时更新版本/逻辑大小。mark-in-sync 仅表示已成功安装的远端空占位元数据，不能替代核心 committed 基线；hydrated/dirty/pinned 文件保留给 S068。`move_entry` 使用 NtSetInformationFile 的目标 RootDirectory 相对 rename，拒绝覆盖，不打开内容流；Windows rename 可清除 OS in-sync，不能据此清业务基线。核心调用方负责先持久 local_intent、校验 generation，再调用平台并持久回执。失败留下实际中间状态，不能假定完成。
+
+`files::RootHandle` 只允许同步根末分量为已识别 cloud reparse；其祖先仍拒绝所有 reparse。新增 crate 内相对 create/open 工具复用 S065 身份围栏。断开的 partially-populated 目录在 Windows build 26300 可返回 FLT_INVALID_NAME_REQUEST；扫描明确 incomplete、禁止推导删除，连接存活时元数据扫描零内容供给。
+
+`platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Root，必须先初始化 WinRT。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
+
+原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
