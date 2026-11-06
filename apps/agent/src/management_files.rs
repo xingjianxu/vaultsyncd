@@ -162,10 +162,14 @@ impl FullMaterializer for Materializer {
                 }
                 download(&self.0, file.entry, crate::work::new_op()).await?;
             }
-            let _stable = local
-                .root
-                .open_read(&file.path.to_string())
-                .map_err(error)?;
+            // Prove the target is readable without holding a read-only share while CFAPI
+            // takes its evidence oplock; the snapshot below re-reads and hashes the bytes.
+            drop(
+                local
+                    .root
+                    .open_read(&file.path.to_string())
+                    .map_err(error)?,
+            );
             let snapshot = local
                 .observe_snapshot(&file.path.to_string())
                 .await?

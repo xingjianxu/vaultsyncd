@@ -649,16 +649,6 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     receivers.insert(*id, receiver);
                     initialized.insert(*id, true);
                 }
-                let mode = BindingControls::new(db.clone()).mode_progress(*id).await?;
-                if mode.mode == SyncMode::Full && !mode.complete {
-                    BindingControls::new(db.clone())
-                        .resume_mode(
-                            *id,
-                            &crate::management_files::Materializer(worker.clone()),
-                            16,
-                        )
-                        .await?;
-                }
                 scheduler.run_round(*id).await?;
                 let received = receivers
                     .get(id)
@@ -672,6 +662,30 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                 scheduler.run_round(*id).await?;
                 received?;
                 discovered?;
+                // Full-mode proof runs only after durable local discovery and once no
+                // upload/intent is unsettled: an unreachable server must not hide new local
+                // content, and a dirty edit must not be mistaken for an unapplied remote version.
+                let unsettled: i64 = sqlx::query_scalar(
+                    "SELECT (SELECT count(*) FROM pending_ops WHERE binding_id=?) + \
+                     (SELECT count(*) FROM local_intents WHERE binding_id=?)",
+                )
+                .bind(id.as_bytes().as_slice())
+                .bind(id.as_bytes().as_slice())
+                .fetch_one(db.pool())
+                .await
+                .map_err(error)?;
+                if unsettled == 0 {
+                    let mode = BindingControls::new(db.clone()).mode_progress(*id).await?;
+                    if mode.mode == SyncMode::Full && !mode.complete {
+                        BindingControls::new(db.clone())
+                            .resume_mode(
+                                *id,
+                                &crate::management_files::Materializer(worker.clone()),
+                                16,
+                            )
+                            .await?;
+                    }
+                }
                 Ok(())
             }
             .await;
