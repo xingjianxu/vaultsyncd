@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output};
 
+mod boundaries;
 mod generate;
 
 /// 子命令成功。
@@ -27,10 +28,11 @@ vaultsyncd 任务编排（xtask）。用法：cargo xtask <子命令>
 
 子命令：
   env       打印工具链、workspace 成员与关键路径（只读诊断，退出码 0）
-  check     先比对生成结果与 api/openapi.yaml、api/local-ipc.schema.json，再依次运行
+  check     先核对三项目标依赖方向、前端消费者边界与生成一致性，再依次运行
             cargo fmt --check、
             cargo clippy --locked --all-targets -- -D warnings、
-            cargo test --locked、pnpm --recursive run typecheck
+            cargo test --locked、pnpm --recursive run typecheck、pnpm --recursive --if-present run test
+  check-boundaries  按 Linux x64/ARM64、Windows x64 metadata 检查依赖方向、生成一致与 pnpm 消费者
   generate  从 api/openapi.yaml 生成远端 Rust DTO 与 TypeScript 客户端，从
             api/local-ipc.schema.json 生成本机 IPC Rust DTO 与 TypeScript 类型；
             `--check` 只比对不写入，用于 CI 与“重新生成无 diff”验收
@@ -80,6 +82,11 @@ const CHECK_STEPS: &[Step] = &[
         program: "pnpm",
         args: &["--recursive", "run", "typecheck"],
     },
+    Step {
+        name: "frontend-contract-tests",
+        program: "pnpm",
+        args: &["--recursive", "--if-present", "run", "test"],
+    },
 ];
 
 fn main() -> ExitCode {
@@ -94,6 +101,7 @@ fn main() -> ExitCode {
     let code = match command.as_str() {
         "env" => run_env(&rest),
         "check" => run_check(&rest),
+        "check-boundaries" => boundaries::run(&rest),
         "generate" => generate::run(&rest),
         "package" => run_unimplemented("package", &rest),
         "help" | "--help" | "-h" => {
@@ -177,12 +185,12 @@ fn run_check(rest: &[String]) -> u8 {
     // 此时继续跑编译没有意义（编译的是旧类型）。CI 因此不需要额外的“重新生成”步骤。
     let total = CHECK_STEPS.len() + 1;
     let mut failures: Vec<String> = Vec::new();
-    println!("[1/{total}] protocol-regenerate: 比对两份契约与生成代码");
-    match generate::verify() {
+    println!("[1/{total}] boundaries-and-protocol: 目标依赖、两份契约与前端消费者边界");
+    match boundaries::verify(&root) {
         Ok(()) => println!("      -> 退出码 0"),
         Err(message) => {
             println!("      -> 失败：{message}");
-            failures.push("protocol-regenerate（生成代码与契约不同步）".to_string());
+            failures.push("boundaries-and-protocol（依赖或契约边界失败）".to_string());
         }
     }
 

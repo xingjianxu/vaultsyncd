@@ -175,14 +175,15 @@ python3 tools/context.py --help
 
 ## tools/xtask — 任务编排入口
 
-状态：S006 实现 `env`/`check`，S024 实现 `generate`（`package` 仍明确未实现）。包名 `vaultsyncd-xtask`，二进制名 `xtask`，edition 2024。S024 起允许第三方解析器依赖：`serde`（derive）、`serde_yaml_ng` 0.10、`toml` 0.9，全部由根 `Cargo.lock` 锁定；不引入模板引擎，生成逻辑在本包内。它属于 workspace `members` 但**不在 `default-members`**：便携的 `cargo check --locked`/`cargo test --locked`/`cargo clippy` 只构建核心成员，不构建编排工具。
+状态：S006 实现 `env`/`check`，S024 实现 `generate`，S092 实现 `check-boundaries`（`package` 仍明确未实现）。包名 `vaultsyncd-xtask`，二进制名 `xtask`，edition 2024。S024 起允许第三方解析器依赖：`serde`（derive）、`serde_yaml_ng` 0.10、`toml` 0.9，全部由根 `Cargo.lock` 锁定；不引入模板引擎，生成逻辑在本包内。它属于 workspace `members` 但**不在 `default-members`**：便携的 `cargo check --locked`/`cargo test --locked`/`cargo clippy` 只构建核心成员，不构建编排工具。
 
 调用入口是根 `.cargo/config.toml` 的唯一别名 `xtask = "run --package vaultsyncd-xtask --"`；该文件不设置目标、镜像、链接器或网络行为。所有子命令都在 `cargo locate-project --workspace` 找到的根目录执行，因此可从任意子目录调用（构建信息由 cargo 写到 stderr）。
 
 | 子命令 | 行为 | 退出码 |
 | --- | --- | --- |
 | `env` | 只读诊断：定位 workspace 根；探测 `rustc/cargo/node/pnpm --version` 的实际输出（工具缺失时标「不可用」，不写死版本）；用 `cargo tree --locked --workspace --depth 0 --prefix none` 列出成员；列出 `Cargo.toml`、`Cargo.lock`、`package.json`、`pnpm-lock.yaml`、`rust-toolchain.toml`、`node_modules` 是否存在 | 0；无法定位 workspace 时 1 |
-| `check` | 先确认 `<root>/node_modules` 存在：缺失立即报错并提示 `pnpm install --frozen-lockfile`，不跳过前端检查。随后按固定顺序执行下表五步，逐步打印命令与退出码，末尾汇总失败步骤；子进程继承终端，诊断即时可见 | 全部通过 0；任一步失败 1 |
+| `check` | 先确认 `<root>/node_modules` 存在：缺失立即报错并提示 `pnpm install --frozen-lockfile`，不跳过前端检查。随后按固定顺序执行下表六步，逐步打印命令与退出码，末尾汇总失败步骤；子进程继承终端，诊断即时可见 | 全部通过 0；任一步失败 1 |
+| `check-boundaries` | 生成一致、三目标metadata、pnpm依赖/源码门禁及前端消费者测试，最后运行 protocol/local-ipc Rust 契约；详见文末 S092 | 通过0；失败1；多余参数2 |
 | `generate` | 从 `api/openapi.yaml` 生成 `crates/protocol/src/generated/mod.rs` 与 `packages/api-client/src/generated/*`；只写有变化的文件并打印路径。`--check` 不写盘，只逐字节比对，不一致时列出文件并退出 1。配置、契约与生成器的校验规则见下文「api/ — 远端协议契约源」 | 无 diff/写入成功 0；配置漂移、未支持构造、`--check` 有 diff 1；多余参数 2 |
 | `package` | 产品打包：尚未实现，同上 | 3 |
 | `help`、`--help`、`-h` | 打印子命令与退出码说明 | 0 |
@@ -192,13 +193,14 @@ python3 tools/context.py --help
 
 | 步骤名 | 命令 |
 | --- | --- |
-| `protocol-regenerate` | 进程内比对契约与生成代码（等价 `cargo xtask generate --check`），排在最前，失败即说明生成代码与 `api/openapi.yaml` 不同步 |
+| `boundaries-and-protocol` | 进程内比对两份契约与生成代码、三个目标 metadata 及前端依赖/源码边界（详见文末 S092），不编译跨目标应用 |
 | `rust-fmt` | `cargo fmt --check` |
 | `rust-clippy` | `cargo clippy --locked --all-targets -- -D warnings` |
 | `rust-test` | `cargo test --locked` |
 | `frontend-typecheck` | `pnpm --recursive run typecheck` |
+| `frontend-contract-tests` | `pnpm --recursive --if-present run test`，现含 API/IPC 解码及 Web 会话/恢复 |
 
-覆盖面：`cargo fmt --check` 覆盖全部成员（含 `tools/xtask` 与生成的 Rust 文件）；clippy 与 test 按 Cargo 语义只作用于 `default-members`（当前 `crates/domain`、`crates/protocol`），xtask 自身需单独 `cargo clippy -p vaultsyncd-xtask --locked --all-targets -- -D warnings` 验证，扩展名成员后是否改为 `--workspace` 由后续卡按 §5.7/§5.8 决定。`protocol-regenerate` 的失败是非零退出，因此 CI 的单步 `cargo xtask check` 已经包含“重新生成无 diff”检查。`pnpm --filter @vaultsyncd/api-client test` 的运行时断言不在 `check` 内（`check` 只跑 typecheck），需要在协议相关卡手动执行。
+覆盖面：fmt 覆盖全部成员；clippy/test 只作用于 Cargo.toml 的 default-members，不在 Linux 盲跑全 workspace all-features。xtask 本身另以 `cargo test/clippy -p vaultsyncd-xtask` 验证。首步同时包含生成一致和目标依赖边界；前端解码/页面契约已由 S092 纳入统一检查。
 
 约束：`env` 不硬编码会漂移的版本与成员清单；`check` 不吞输出、失败不报成功；未实现子命令不产生副作用。
 
@@ -2391,3 +2393,11 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - Web `features/history/recovery.ts::RestoreSession` 按用户/Root 保存标签页 sessionStorage 原请求（无凭据），先保存再调用；未知/pending 不另起操作。resume 先 GET 原Op，404 才 POST 原请求，同 OpId/device/epoch/CAS/version；committed 才查询 recovery 的实际当前相对路径。不会把 pending/网络失败显示成恢复成功。
 - `#/recovery` 复用 BrowserAuth。入口按 Root 选择文件历史、冲突和回收站；按服务端返回游标翻页，到期禁用恢复；原Op持久到同标签页刷新，跨标签/清除存储不承诺自动找回。Restore 的最终安全检查继续属于服务端。
 - 验收：`pnpm --filter @vaultsyncd/web test` 含恢复会话故障单测；`nix develop .#web-tests --command python3 tests/web/recovery-browser.py` 使用真实服务/Chromium/btrfs，丢提交响应后刷新原Op核对、同名另名恢复/目标保留、历史落盘与真实分页。pending 由注入单测覆盖，不宣称该浏览器脚本制造了真实后端pending。
+
+## S092 构建依赖与协议消费者门禁
+
+- `tools/xtask/src/boundaries.rs` 实现 `cargo xtask check-boundaries`。先 verify 两份生成源，再逐个读取 `cargo metadata --locked --filter-platform <target> --all-features --format-version 1`；target 固定 Linux x64/ARM64、Windows x64。这里 all-features 仅影响依赖图，不编译整个 workspace。遍历 normal/build 传递边并报告消费者到违规包的链，dev 边不作为生产耦合。
+- 策略保护纯核心/wire、server/client、GUI/CLI/store/planner/提交客户端与共享 UI 边界；server-store→server-core 适配方向合法，Windows desktop→Tauri 合法，Linux desktop 不应引入 Tauri runtime。通用基础库 windows-sys 不等于 CFAPI；客户端 Windows 适配器和 Windows API主包另受所属层规则限制。
+- pnpm 从实际 workspace 成员清单核对五个消费者，合并 package.json 的普通/dev/optional/peer 声明、npm别名与已安装传递依赖图。GUI/CLI/Web/UI 源码另扫常见 SQL 库及写入语句；这是可审查静态门禁，不能证明任意动态执行均无数据库 I/O。
+- command 随后跑前端 recursive typecheck、recursive --if-present test，以及 `cargo test --locked -p vaultsyncd-protocol -p vaultsyncd-local-ipc`。缺工具、缺依赖、元数据失败或任一步失败均返回1，多余参数2；不静默跳过消费者。统一 `cargo xtask check` 复用 verify，并由默认Rust成员测试及前端测试覆盖消费者，总共六步。
+- `tests/contract/boundaries.py` 为宿主 devShell 可执行负例，不新增空 Cargo 包，不复制已有 Rust wire 契约测试。需先 build xtask，且只在隔离树无其他命令并发改该树时运行；九类真实修改在 finally 逐字节还原原文件及锁。日志写忽略 artifacts/S092；负例后主动确认重新生成一致和完整正例。平台 metadata 不代替原生运行验收。

@@ -114,7 +114,7 @@
 | S089 | 离线恢复到空目录 | L | S088、S037 | todo | — | 未执行 | — | agent/tasks/S089.md（执行时创建） |
 | S090 | Web 备份管理入口 | B | S079、S088 | todo | — | 未执行 | — | agent/tasks/S090.md（执行时创建） |
 | S091 | 协议与数据库升级演练 | X | S089、S074 | todo | — | 未执行 | — | agent/tasks/S091.md（执行时创建） |
-| S092 | 构建依赖与协议边界检查 | L | S024、S025、S080 | todo | — | 未执行 | — | agent/tasks/S092.md（执行时创建） |
+| S092 | 构建依赖与协议边界检查 | L | S024、S025、S080 | done | 实现 `db95ba8`；基线 `7663799`；worktree `.worktrees/s092` / `feat/S092-boundary-checks` | 三目标metadata/pnpm边界、九负例及逐字节还原正例、xtask21/21与clippy；统一check六步895/0通过 | 无；metadata与源码静态门禁不替代平台原生/语义安全验收 | agent/tasks/S092.md |
 | S093 | 发布版本与产物清单 | L | S052、S076、S092 | todo | — | 未执行 | — | agent/tasks/S093.md（执行时创建） |
 | S094 | Linux 服务端 Nix 构建包 | L | S093、S090 | todo | — | 未执行 | — | agent/tasks/S094.md（执行时创建） |
 | S095 | NixOS 服务模块 | L | S094、S007 | todo | — | 未执行 | — | agent/tasks/S095.md（执行时创建） |
