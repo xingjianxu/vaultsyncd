@@ -103,12 +103,14 @@ pub fn show(tag: &str, title: &str, body: &str) -> io::Result<bool> {
         shortcut().map_err(|e| io::Error::other(format!("shortcut registration: {e}")))?;
         let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
             .map_err(|e| io::Error::other(format!("create notifier: {e}")))?;
-        if notifier
-            .Setting()
-            .map_err(|e| io::Error::other(format!("notification setting: {e}")))?
-            != NotificationSetting::Enabled
-        {
-            return Ok(false);
+        // An unpackaged desktop app may have no per-app settings row until its first Show.
+        // Only this specific absent-setting HRESULT permits the first submission; other errors
+        // remain explicit failures, and a known disabled setting never calls Show.
+        match notifier.Setting() {
+            Ok(setting) if setting != NotificationSetting::Enabled => return Ok(false),
+            Ok(_) => {}
+            Err(error) if error.code().0 == 0x80070490u32 as i32 => {}
+            Err(error) => return Err(io::Error::other(format!("notification setting: {error}"))),
         }
         let document = XmlDocument::new().map_err(win)?;
         document.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",escape(&title),escape(&body)))).map_err(win)?;
