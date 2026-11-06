@@ -39,7 +39,7 @@ in {
   };
   config = mkIf cfg.enable {
     assertions = [
-      { assertion = cfg.user != "root" && cfg.group != "root" && (config.users.users.${cfg.user}.uid or null) != 0; message = "vaultsyncd requires a dedicated non-root user/group"; }
+      { assertion = cfg.user != "root" && cfg.group != "root" && (config.users.users.${cfg.user}.uid or null) != 0 && (config.users.groups.${cfg.group}.gid or null) != 0; message = "vaultsyncd requires a dedicated non-root user/group"; }
       { assertion = cfg.stateDir != "/" && canonical cfg.stateDir && !(builtins.any (base: within base cfg.stateDir || within cfg.stateDir base) protected); message = "vaultsyncd stateDir must be canonical, private and outside system paths"; }
       { assertion = builtins.all safeRoot cfg.rootPaths; message = "vaultsyncd rootPaths must be canonical, disjoint from state and outside protected system paths"; }
       { assertion = builtins.length cfg.rootPaths == builtins.length (lib.unique cfg.rootPaths); message = "vaultsyncd rootPaths must be unique"; }

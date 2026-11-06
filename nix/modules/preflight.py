@@ -12,7 +12,7 @@ def fail(message):
     raise SystemExit(f"vaultsyncd preflight: {message}")
 
 
-def inspect(path, *, private=False):
+def inspect(path, *, private=False, snapshot_mount=False):
     p = Path(path)
     if not p.is_absolute() or p.resolve(strict=True) != p or not p.is_dir():
         fail(f"not a real canonical directory: {p}")
@@ -29,7 +29,7 @@ def inspect(path, *, private=False):
         fail(f"writable btrfs required: {p}")
     if options & {"nodatacow", "nodatasum"}:
         fail(f"CoW and checksums required: {p}")
-    if "user_subvol_rm_allowed" not in options:
+    if snapshot_mount and "user_subvol_rm_allowed" not in options:
         fail(f"mount needs user_subvol_rm_allowed, no privileged fallback: {p}")
     fd = os.open(p, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -44,10 +44,10 @@ def inspect(path, *, private=False):
 if os.geteuid() == 0:
     fail("must run as a dedicated non-root service UID")
 configuration = json.loads(Path(sys.argv[2]).read_text())
-inspect(configuration["stateDir"], private=True)
 backup = Path(configuration["stateDir"]) / "backups"
+inspect(configuration["stateDir"], private=True, snapshot_mount=not backup.exists())
 if backup.exists() or backup.is_symlink():
-    inspect(str(backup), private=True)
+    inspect(str(backup), private=True, snapshot_mount=True)
 for root in configuration["rootPaths"]:
     inspect(root)
 print("vaultsyncd preflight: btrfs/CoW/access/mount options verified; no permissions changed")
