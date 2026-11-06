@@ -122,7 +122,7 @@
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | done | d90a263、b615fd9、b345ac9、d8b3cce、fd2f52d、f580392 | Chromium/Windows原生+Edge严格TLS、16MiB/SSE、Nix+host240与重启、独立bind/持久恢复通过 | 开发CA回环，无公网部署；旧Prepared跨dev保守停写 | agent/tasks/S097.md；下一S098 |
 | S098 | 通用 Linux 包与容器配置 | L | S094、S097 | todo | — | 未执行 | — | agent/tasks/S098.md（执行时创建） |
 | S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | done | ca510ab→cf1d174；交接见任务HEAD | 锁定NSIS/真实同源正式包；标准用户中文空格首装、GUI CLI同实例、关闭与真实重启后上传hash通过 | unsigned-test；原登录恢复且VM在线；父立即合并归档清理 | agent/tasks/S099.md |
-| S100 | Windows 升级与卸载保护 | W | S099、S091 | todo | — | 未执行 | — | agent/tasks/S100.md（执行时创建） |
+| S100 | Windows 升级与卸载保护 | W | S099、S091 | done | 3a2e2aa→d0392f4；交接见任务HEAD | 真实0.1.0→0.1.1/忙文件回退；默认卸载重装/不完整拒绝/4占位revert、6文件hash、708恢复读回；边界通过 | 产品PE1794752；分段源与失败保留；unsigned-test；父立即合并归档清理；本批结束 | agent/tasks/S100.md |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | todo | — | 未执行 | — | agent/tasks/S101.md（执行时创建） |
 | S102 | 事件异常与旧设备集成验收 | X | S074、S089、S091 | todo | — | 未执行 | — | agent/tasks/S102.md（执行时创建） |
 | S103 | 文件与挂载故障集成验收 | X | S074、S051、S068 | todo | — | 未执行 | — | agent/tasks/S103.md（执行时创建） |

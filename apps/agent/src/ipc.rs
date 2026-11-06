@@ -84,6 +84,16 @@ pub(crate) fn start(
                         false,
                     ));
                 }
+                if request.command.name == CommandName::PrepareMaintenance
+                    && request.ipc_version.minor < 5
+                {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "维护准备需要本机 IPC 1.5",
+                        false,
+                    ));
+                }
                 if let Err(error) = vaultsyncd_local_ipc::commands::validate(&request.command) {
                     return Ok(Response::error(request.request_id, error));
                 }

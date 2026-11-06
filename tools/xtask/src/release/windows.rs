@@ -146,7 +146,7 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
         &payload.join("installed-files.json"),
         &serde_json::json!({"format":1,"source":before,"signature_status":"unsigned-test","files":executables,"startup":{"scope":"current-user","mechanism":"HKCU Run","launcher":"vaultsyncd-session.exe"},"state":"%LOCALAPPDATA%/vaultsyncd/agent"}),
     )?;
-    fs::write(payload.join("UNSIGNED-TEST.txt"),"Unsigned test build. No production signing identity was provided. First installation only; existing user data is preserved. Controlled upgrade and uninstall workflows are not included in this test package.\n").map_err(|e|e.to_string())?;
+    fs::write(payload.join("UNSIGNED-TEST.txt"),"Unsigned test build. No production signing identity was provided. Controlled upgrade preserves recovery/state backups; default uninstall removes programs only. Complete files, dirty content and state are retained; cloud-only placeholders are not complete offline files.\n").map_err(|e|e.to_string())?;
     let command = vec![
         "makensis".into(),
         "-NOCONFIG".into(),

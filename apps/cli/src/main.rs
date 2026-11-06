@@ -600,6 +600,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::ListRoots => "roots",
         CommandName::ListFiles => "files",
         CommandName::ClaimNotification => "claim-notification",
+        CommandName::PrepareMaintenance => "prepare-maintenance",
         CommandName::SetMode => "mode",
         CommandName::ListHistory => "history",
         CommandName::ListTrash => "trash",

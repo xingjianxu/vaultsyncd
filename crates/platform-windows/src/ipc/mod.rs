@@ -1,9 +1,11 @@
 //! User/session scoped local IPC. This module does not initialize CFAPI.
 //!
 //! Each connection executes requests sequentially; connections execute concurrently. A whole
-//! request (including partial header/body), handler and write each have a five-second deadline.
+//! request (including partial header/body) and write have a five-second deadline. Ordinary handlers
+//! also have five seconds; the explicit maintenance export is bounded by thirty minutes.
 //! Malformed frames/JSON, peer mismatches and disconnects close only that connection.
 mod security;
+pub use security::ServerProcess;
 use std::{future::Future, io, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -86,11 +88,19 @@ impl Endpoint {
         })
         .await
     }
+    /// Pin the current authenticated server and verify its installed executable before maintenance.
+    pub async fn maintenance_process(
+        &self,
+        expected: &std::path::Path,
+    ) -> io::Result<ServerProcess> {
+        let pipe = self.connect().await?;
+        security::ServerProcess::capture(&pipe, &self.sid, expected)
+    }
     /// Issue a single request and validate its response. GUI/CLI can use this without CFAPI.
     pub async fn request(&self, request: &Request) -> io::Result<Response> {
         let mut pipe = self.connect().await?;
         deadline(write_json(&mut pipe, request)).await?;
-        let bytes = deadline(read_frame(&mut pipe)).await?;
+        let bytes = operation_deadline(request, read_frame(&mut pipe)).await?;
         let response: Response = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         response.validate().map_err(io::Error::other)?;
         if response.request_id != request.request_id {
@@ -181,10 +191,30 @@ where
         // Impersonation never spans an await, and is repeated for every request.
         security::check_client(&pipe, &endpoint.sid)?;
         let request: Request = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        let response = deadline(handler(request)).await?;
+        let duration = operation_duration(&request);
+        let response = tokio::time::timeout(duration, handler(request))
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "IPC operation deadline exceeded")
+            })??;
         response.validate().map_err(io::Error::other)?;
         deadline(write_json(&mut pipe, &response)).await?;
     }
+}
+fn operation_duration(request: &Request) -> Duration {
+    if request.command.name == vaultsyncd_local_ipc::generated::CommandName::PrepareMaintenance {
+        Duration::from_secs(1800)
+    } else {
+        IO_TIMEOUT
+    }
+}
+async fn operation_deadline<T>(
+    request: &Request,
+    future: impl Future<Output = io::Result<T>>,
+) -> io::Result<T> {
+    tokio::time::timeout(operation_duration(request), future)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "IPC operation deadline exceeded"))?
 }
 async fn deadline<T>(future: impl Future<Output = io::Result<T>>) -> io::Result<T> {
     tokio::time::timeout(IO_TIMEOUT, future)

@@ -134,6 +134,7 @@ impl CredentialSink for VaultSink {
 /// Run in the actual interactive user session. Authentication input is transient stdin only.
 pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(), PortError> {
     config.validate().map_err(error)?;
+    crate::maintenance::admit_startup(&config)?;
     let state = RootHandle::open(&config.state_dir).map_err(error)?;
     let mut roots = Vec::new();
     let mut caches = Vec::new();
@@ -421,6 +422,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
     );
     let mut initialized = HashMap::new();
     let mut receivers = HashMap::new();
+    let mut maintenance_stop = false;
     loop {
         if shutdown.requested() {
             break;
@@ -439,6 +441,29 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             }
             let request = command.request;
             let mut result = if request.command.name
+                == vaultsyncd_local_ipc::generated::CommandName::PrepareMaintenance
+            {
+                let result = crate::maintenance_prepare::prepare(
+                    &db,
+                    &config,
+                    live.iter()
+                        .map(|(id, _, _, worker, scheduler, _)| {
+                            (*id, (worker.clone(), scheduler.clone()))
+                        })
+                        .collect(),
+                    request
+                        .command
+                        .parameters
+                        .as_ref()
+                        .unwrap()
+                        .destination
+                        .as_deref()
+                        .unwrap(),
+                )
+                .await;
+                maintenance_stop = true;
+                result
+            } else if request.command.name
                 == vaultsyncd_local_ipc::generated::CommandName::SetConnection
             {
                 async {
@@ -559,6 +584,14 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             let _ = command
                 .reply
                 .send(crate::ipc::management_response(&request, result));
+            if maintenance_stop {
+                break;
+            }
+        }
+        if maintenance_stop {
+            // Let the bounded transport flush the successful preparation acknowledgment.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            break;
         }
         if session.has_credentials() {
             for binding in &config.bindings {
