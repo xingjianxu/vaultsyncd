@@ -19,6 +19,8 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      # null certificate/privateKey lets the host's Caddy manage public ACME TLS.
+      lib.caddyReverseProxy = import ./deploy/reverse-proxy/caddy.nix;
       nixosModules.default = { pkgs, lib, ... }: {
         imports = [ ./nix/modules/vaultsyncd.nix ];
         services.vaultsyncd.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;

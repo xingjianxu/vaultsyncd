@@ -3,8 +3,9 @@
 , certificate ? "/var/lib/vaultsyncd-tls-s097/server.pem"
 , privateKey ? "/var/lib/vaultsyncd-tls-s097/server.key"
 }:
+assert (certificate == null) == (privateKey == null);
 ''
-  tls ${certificate} ${privateKey}
+  ${if certificate == null then "" else "tls ${certificate} ${privateKey}"}
   request_body {
     # Exactly the protocol maximum part size; metadata bodies are much smaller.
     max_size 16MiB
