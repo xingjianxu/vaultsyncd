@@ -199,19 +199,21 @@ public static class S109Native {
     # files; only exit status and length are reported (no credential text).
     $out=Join-Path $results ('zip-'+$operation+'-out.txt')
     $err=Join-Path $results ('zip-'+$operation+'-err.txt')
-    $info=New-Object Diagnostics.ProcessStartInfo
-    $info.FileName=$zipEntry;$info.Arguments=$operation;$info.UseShellExecute=$false
-    $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
-    $process=[Diagnostics.Process]::Start($info)
-    $stdout=$process.StandardOutput.ReadToEndAsync()
-    $stderr=$process.StandardError.ReadToEndAsync()
-    if(!$process.WaitForExit(180000)){try{$process.Kill()}catch{};throw ('product ZIP entry did not return: '+$operation)}
+    # The launcher's long-lived GUI/agent children inherit the caller's standard handles, so a
+    # pipe would only reach EOF when they exit. Redirect to files (never pipes), let a batch file
+    # capture the real exit code, and bound the wait.
+    $code=Join-Path $results ('zip-'+$operation+'-exit.txt')
+    $batch=Join-Path $results ('zip-'+$operation+'.cmd')
+    $lines=@('@echo off', ('"' + $zipEntry + '" ' + $operation + ' > "' + $out + '" 2> "' + $err + '"'), ('echo %ERRORLEVEL% > "' + $code + '"'))
+    [IO.File]::WriteAllLines($batch,$lines,(New-Object Text.ASCIIEncoding))
+    $process=Start-Process -FilePath $batch -PassThru -WindowStyle Hidden
+    if(!$process.WaitForExit(180000)){throw ('product ZIP entry did not return: '+$operation)}
     $process.WaitForExit()
-    [IO.File]::WriteAllText($out,$stdout.Result,(New-Object Text.UTF8Encoding($false)))
-    [IO.File]::WriteAllText($err,$stderr.Result,(New-Object Text.UTF8Encoding($false)))
-    # Start-Process -PassThru can report a null ExitCode; Process.Start always has a real one.
-    if($process.ExitCode-ne 0){throw ('product ZIP entry failed: '+$operation+' exit='+$process.ExitCode)}
-    return $stdout.Result
+    if(!(Test-Path -LiteralPath $code)){throw ('product ZIP entry produced no exit code: '+$operation)}
+    $exit=[int]((Get-Content -Raw -LiteralPath $code).Trim())
+    if($exit-ne 0){throw ('product ZIP entry failed: '+$operation+' exit='+$exit)}
+    if(!(Test-Path -LiteralPath $out)){return ''}
+    return (Get-Content -Raw -Encoding UTF8 $out)
   }
   function Close-Gui {
     # Owned = exact ExecutablePath under this run's extracted program directory, even when an
