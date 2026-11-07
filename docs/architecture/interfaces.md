@@ -2540,3 +2540,12 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 - OCI格式转Docker镜像曾真实丢Healthcheck，构建与传递固定Docker格式并比较转移前后配置，不把缺失健康检查当成功。Ubuntu ARM64存储完整链使用专属全系统TCG内核；QEMU-user btrfs ioctl失败保留，未替代原生能力证明。详细操作见docs/operations/linux.md；最终验收/资源清理以S098交接为准。
 
 S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查前返回该FD实际root ID；256不是推断的子卷ID。Ubuntu6.8非特权实际新子卷/嵌套检测及备份链通过，所有来源均不可用仍拒绝。Podman兼容API实测忽略create_host_path:false，因此部署标准入口为deploy/compose/run.py，先核显式存在源再创建资源，服务自身仍执行完整存储预检。镜像构建--offline要求缓存的base架构/精确digest及全部.deb SHA，缺失失败；最终同源09双架构离线镜像及完整Ubuntu运行通过。普通unit源67与09仅镜像构建脚本不同，所有实际服务/Web/库/preflight文件逐SHA相同；JSON旧消费者预检字节亦相同，明确来源组合见curated矩阵。没有协议/持久格式变化，不把TCG证据说成原生性能。
+
+## S101 — 平台矩阵、同源安装与实验室资源
+
+- `cargo xtask ci <job> [--plan] [--component/--image/--evidence/--vm/--package …]`委托`tools/ci/run.py`唯一目录；portable/contracts/frontend/linux-server、三类release、三平台install与Windows CFAPI/e2e/native-build、ci-selftest均在此编排，YAML不重写测试/发布逻辑。`--plan`不算执行；实际要求干净HEAD并记录前后porcelain、平台、逐步命令/退出码/耗时。成功0、失败非0、缺资源78、参数错误2；报告在忽略的`artifacts/S101/ci/`，release job还保存真实归档/对应源码/清单。
+- `.github/workflows/platform.yml`按保守消费者闭包触发Linux x64各job、ARM cross发行与Windows原生编译（后者不是CFAPI验收）。`platform-lab.yml`仅手工dispatch、保护环境/独占runner/concurrency；`acceptance.py --config <私有JSON> --phase build|lab`对同一干净提交构建/安装，flock串行。无remote/runner时hosted明确blocked，不把本地运行写成GitHub通过。配置与资源条件见`tools/ci/README.md`。
+- `tools/ci/linux-server.py`为stock Ubuntu创建本run专属btrfs loop/bind，拒绝覆盖非空fixture目录；服务测试仍普通用户执行。既有btrfs实验室使用私有TMPDIR。`acceptance.py`仅复制已停机S098 ARM模板，登记自己的静态无INTERP qemu handler并finally清理；完整Ubuntu ARM64内核TCG运行存储，不使用qemu-user冒充内核能力。SSH超时只重试，实际uname和本run进程退出才分别证明就绪/关机。
+- `packaging/linux/test-container.py`在既有上传/备份/重启之后，新增实际新空目标restore validate/apply、恢复服务启动/登录/固定内容下载及新epoch核对。容器UID/capability/no-FUSE约束未放宽，无wire/DB格式变化。NixOS原生闭包、Ubuntu x64容器共享内核、Ubuntu ARM完整TCG内核证据必须分列。
+- `tests/platform/windows/s099-installation.*`仅在`VAULTSYNCD_CI_CLEANUP=1`选择本run清理：真实logout，S100完整驻留门/revert/provider卸载，三份普通文件SHA核对后恢复原Quickemu登录，再删除新测试账号/profile/私有凭据/探针及**确切新SID**的系统任务。默认S099保留行为不变，不清理旧卡账号/Root/WinCred。Windows客体保持在线，宿主trial/Caddy/SSH不动。
+- S101实际产品源fcbbb93，后续装置/交接提交不重标旧receipt；原始失败与同源逐job续验范围、平台build/PE哈希见`agent/tasks/S101*.md`及curated索引。最终装置回归9项通过不替代原生平台证据；原控制器两次失败不被改写为整链成功。

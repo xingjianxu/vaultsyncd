@@ -80,3 +80,11 @@ S100原生入口（需先协调Windows独占窗口）：`nix develop .#web-tests
 已验证完整缓存`C:\Users\vs_s099_4fcc1e\AppData\Local\vaultsyncd\cache-s100-1793990401-4038267\download-98b7c0e401f406ca330a2779eca650ab`，1,048,576字节，SHA256 `11030261d987f0966338a7afb2fb76b1503b1683d72ffc4ffacd111bc298722f`。人工文件恢复后是实际完整普通文件，不宣称网络下载。首个续验run `s100-cont-1793991690-4089398`在写入/完整hash检查后因装置固定hash列表漏cloud而报错，该失败记录亦保留；最终续验`s100-cont-1793992025-4102900`动态核对全部六份文件、四个真实完整占位经revert后注销、普通文件可读/hash、原dirty仍未确认、state/cache保留，以及708份恢复文件宿主独立读取/hash全部通过。普通文件无CFAPI OnDisk字段，原生观察元组中的0不是“零字节内容”，完整性另以实际读取长度及hash证明。
 
 续验入口`tests/platform/windows/s100-continuation.py <主run目录>`消费明确的历史1794752组件，验证其Git树和每份payload及实际已安装清单，不把历史receipt重标为当前HEAD发行；续验脚本实际运行副本/hash保存在各run。标准用户、Root/state/cache/备份与WinCred保留，原LSA/注册表每轮恢复后删除原秘密备份，最后回Quickemu、无agent、VM在线。大证据在忽略artifacts/S100，精确范围见final-matrix.json及S100任务交接。
+
+## S101 同提交安装与可选CI清理
+
+S101实际源`fcbbb93ecff408fedc8fbba6006c81b84a151727`的0.1.1未签名NSIS为7,829,067字节；Windows11实际build26300.9711、NTFS、WebView2 157.0.4341.42。新标准用户真实安装、GUI/CLI同实例、关GUI仍同步、HKCU Run真实重启后同步、三份内容hash通过，原Quickemu登录恢复。安装器与四PE完整SHA-256在`agent/tasks/S101-b.md`和`artifacts/S101/public/windows-client-receipt.json`，不重标交接后的新HEAD产物。
+
+CI显式设置`VAULTSYNCD_CI_CLEANUP=1`时，S099驱动仅对本run新账号执行logout、完整provider卸载（复用S100实际完整驻留/revert门）、普通文件hash核对，再删除新用户/profile/私有凭据/根/探针及准确新SID的系统任务。Windows为新用户生成的SoftLanding任务也须核对SID后清理，不用任务名通配符影响其他用户。默认未设该变量仍按历史S099保留现场。S101新SID清理独立probe通过；原S099/S100账号、数据和WinCred未触碰，VM在线且agent0。
+
+`tools/ci/README.md`是矩阵操作入口。Windows hosted原生编译仍因无remote/runner blocked；本机证据为锁定Linux cross构建后的Windows客体原生运行，不能改称Windows本机编译。

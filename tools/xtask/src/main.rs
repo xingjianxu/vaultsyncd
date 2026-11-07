@@ -43,7 +43,7 @@ vaultsyncd 任务编排（xtask）。用法：cargo xtask <子命令>
   package   产品打包（尚未实现）
   help      显示本帮助
 
-退出码：0 成功；1 检查失败或前置条件不满足；2 用法错误；3 子命令尚未实现。
+退出码：0 成功；1 检查失败或前置条件不满足；2 用法错误；3 子命令尚未实现；78 CI 平台资源缺失（blocked）。
 命令契约与实现状态见 docs/architecture/interfaces.md。
 ";
 
