@@ -82,12 +82,9 @@ const _: () = assert!(offset_of!(OpenHow, resolve) == 16);
 const SYS_OPENAT2: c_long = 437;
 const _: () = assert!(SYS_OPENAT2 == 437);
 
-/// `__NR_getdents64`：**不在** `asm-generic` 编号里，两条首发架构各自取值
-/// （`x86_64: 217`、`arm64: 61`）。
+/// `__NR_getdents64`：使用首发 Linux x86_64 的系统调用号 217。
 #[cfg(target_arch = "x86_64")]
 const SYS_GETDENTS64: c_long = 217;
-#[cfg(target_arch = "aarch64")]
-const SYS_GETDENTS64: c_long = 61;
 
 /// `linux_dirent64` 头部长度：`d_ino(8) + d_off(8) + d_reclen(2) + d_type(1)`，`d_name` 紧随其后。
 const DIRENT64_HEADER: usize = 19;
@@ -280,16 +277,16 @@ pub(crate) fn ficlone(target: RawFd, source: RawFd) -> io::Result<()> {
 ///
 /// 系统调用失败时返回原始 `io::Error`（权限、不是目录、句柄失效等）。
 pub(crate) fn getdents64(fd: RawFd, buffer: &mut [u8]) -> io::Result<usize> {
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = (fd, buffer);
         // 不支持的架构不静默返回空目录：调用方必须看到明确的失败。
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "getdents64 的系统调用号只在本项目首发的 x86_64/aarch64 上声明",
+            "getdents64 的系统调用号只在本项目首发的 x86_64 上声明",
         ));
     }
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
     {
         if buffer.len() < DIRENT64_HEADER {
             return Err(io::Error::new(

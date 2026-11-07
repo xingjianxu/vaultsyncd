@@ -5,20 +5,18 @@
 在 Linux x86_64 主机安装并启用 Nix flakes 后，从干净的已提交源码运行：
 
 ```sh
-./tools/release.sh                                      # 默认全部三个平台
+./tools/release.sh                                      # 默认 Linux x64 与 Windows x64
 ./tools/release.sh --platform windows-x64                # 只构建 Windows ZIP
-./tools/release.sh --platform linux-x64 linux-arm64      # Linux 双架构
+./tools/release.sh --platform linux-x64                  # 只构建 Linux x64
 ./tools/release.sh --output-dir /绝对路径/releases       # 自定义输出根目录
 ./tools/release.sh --plan                               # 只显示计划，不构建
 ```
 
-脚本自动进入锁定 devShell，Linux 使用 `nix build .#portable/.#portable-aarch64`，包含 server、admin、Web、私有 loader/库、示例配置及 systemd 单元；运行时源码归档随包保留。Windows 在宿主使用锁定 Rust/MSVC 交叉工具链和冻结前端依赖，走 `windows-zip` 组件，不调用 NSIS、不生成安装器。默认输出：
+脚本自动进入锁定 devShell，Linux 使用 `nix build .#portable`，包含 server、admin、Web、私有 loader/库、示例配置及 systemd 单元；运行时源码归档随包保留。Windows 在宿主使用锁定 Rust/MSVC 交叉工具链和冻结前端依赖，走 `windows-zip` 组件，不调用 NSIS、不生成安装器。默认输出：
 
 ```text
 dist/releases/v<版本>-<提交前12位>/
   linux-x64/     vaultsyncd-<版本>-x86_64-unknown-linux-gnu.tar.gz
-                 vaultsyncd-runtime-sources.tar.gz、release-manifest.json
-  linux-arm64/   vaultsyncd-<版本>-aarch64-unknown-linux-gnu.tar.gz
                  vaultsyncd-runtime-sources.tar.gz、release-manifest.json
   windows-x64/   vaultsyncd-<版本>-x64-unsigned.zip、receipt.json
   logs/          各步骤完整日志

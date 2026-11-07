@@ -8,11 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-const TARGETS: &[&str] = &[
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-pc-windows-msvc",
-];
+const TARGETS: &[&str] = &["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
 #[derive(Deserialize)]
 struct Metadata {
     packages: Vec<Package>,
@@ -436,12 +432,16 @@ mod tests {
             "vaultsyncd-server-core",
             TARGETS[0]
         ));
-        assert!(!forbidden("vaultsyncd-desktop", "tauri", TARGETS[2]));
+        assert!(!forbidden(
+            "vaultsyncd-desktop",
+            "tauri",
+            "x86_64-pc-windows-msvc"
+        ));
         assert!(forbidden("vaultsyncd-desktop", "tauri", TARGETS[0]));
         assert!(!forbidden(
             "vaultsyncd-cli",
             "vaultsyncd-platform-windows",
-            TARGETS[2]
+            "x86_64-pc-windows-msvc"
         ));
         assert!(forbidden(
             "vaultsyncd-server",

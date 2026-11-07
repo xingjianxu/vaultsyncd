@@ -36,16 +36,14 @@ JOBS = {
                       ["cargo", "test", "--locked", "--target", "x86_64-pc-windows-msvc",
                        "-p", "vaultsyncd-windows-tests", "--no-run"]],
     "release-linux": [["nix", "build", ".#default", ".#portable", ".#container-deps", "--no-link", "--json"]],
-    "release-arm64": [["nix", "build", ".#portable-aarch64", ".#container-deps-aarch64", "--no-link", "--json"]],
     "release-windows": [CARGO + ["release", "build", "windows-client", "{component}"]],
     "windows-e2e": [["bash", "tests/platform/windows/run-native-e2e.sh"]],
     "windows-cfapi": [["bash", "tests/platform/windows/run-native-release.sh"]],
     "windows-install": [["python3", "tests/platform/windows/s099-installation.py", "{component}"]],
     "ubuntu-install": [["python3", "packaging/linux/test-container.py", "{image}", "amd64", "{evidence}"]],
-    "arm64-install": [["python3", "packaging/linux/test-arm64-vm.py", "{vm}", "{image}", "{evidence}"]],
     "nixos-install": [["python3", "packaging/linux/test-nix-runtime.py", "{package}"]],
 }
-LAB = {"windows-e2e", "windows-cfapi", "windows-install", "ubuntu-install", "arm64-install", "nixos-install"}
+LAB = {"windows-e2e", "windows-cfapi", "windows-install", "ubuntu-install", "nixos-install"}
 
 
 def plan(job, values):
@@ -56,7 +54,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("job", choices=sorted(JOBS))
     parser.add_argument("--plan", action="store_true", help="print commands; not execution evidence")
-    for name in ["component", "image", "evidence", "vm", "package"]:
+    for name in ["component", "image", "evidence", "package"]:
         parser.add_argument("--" + name)
     args = parser.parse_args()
     values = {k: v for k, v in vars(args).items() if v is not None}
@@ -91,7 +89,7 @@ def main():
             with (directory / f"{index}.log").open("w") as log:
                 process = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=log, text=True, timeout=3600)
                 log.write(process.stdout)
-            if process.returncode == 0 and args.job in ('release-linux', 'release-arm64'):
+            if process.returncode == 0 and args.job == 'release-linux':
                 release = directory / 'release'
                 for item in json.loads(process.stdout):
                     output = Path(item['outputs']['out'])

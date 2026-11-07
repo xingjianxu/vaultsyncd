@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -25,6 +26,24 @@ class ReleaseBundleTests(unittest.TestCase):
             (self.stage / name).mkdir()
         self.identity = {"commit": "a" * 40, "tree": "b" * 40, "version": "0.1.1"}
         self.builder = RELEASE.Builder(self.stage, self.identity)
+
+    def test_default_and_all_plan_select_only_supported_x64_platforms(self):
+        for arguments in [[], ["--platform", "all"],
+                          ["--platform", "windows-x64", "linux-x64", "windows-x64"]]:
+            with self.subTest(arguments=arguments):
+                result = subprocess.run([sys.executable, str(ROOT / "packaging/release.py"),
+                                         "--plan", *arguments], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                platforms = json.loads(result.stdout)["platforms"]
+                self.assertEqual(set(platforms), {"linux-x64", "windows-x64"})
+                self.assertEqual(len(platforms), 2)
+
+    def test_removed_platform_is_rejected_before_building(self):
+        result = subprocess.run([sys.executable, str(ROOT / "packaging/release.py"),
+                                 "--platform", "linux-arm64", "--plan"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid choice", result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_failed_command_preserves_log_without_success_manifest(self):
         with self.assertRaisesRegex(RuntimeError, "退出码 7"):

@@ -15,7 +15,7 @@ pkgs.runCommand "vaultsyncd-portable-${version}-${target}" {
   exampleConfig = source + "/packaging/linux/vaultsyncd.toml";
   containerTemplates = source + "/packaging/linux/container";
   passthru = { inherit rust web; };
-  meta.platforms = lib.platforms.linux;
+  meta.platforms = [ "x86_64-linux" ];
 } ''
   mkdir -p "$out" corresponding-source
   # Ship the exact upstream runtime-library sources and the complete locked

@@ -56,7 +56,7 @@ nix develop -c pnpm --recursive --if-present run test
 
 ## 构建与运行
 
-一键生成全部支持平台的 release 归档（Linux x64/ARM64、Windows x64 ZIP）：
+一键生成全部支持平台的 release 归档（Linux x64、Windows x64 ZIP）：
 
 ```bash
 ./tools/release.sh

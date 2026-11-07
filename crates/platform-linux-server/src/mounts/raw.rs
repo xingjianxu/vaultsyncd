@@ -20,16 +20,8 @@ use std::os::unix::io::RawFd;
 const _: () = assert!(size_of::<usize>() == 8);
 
 /// `O_DIRECTORY`：句柄必须是目录，避免把普通文件当挂载根。
-// arm64 UAPI keeps ARM's flag assignments for AArch32 compatibility:
-// arch/arm64/include/uapi/asm/fcntl.h. The x86 value is O_DIRECT on arm64.
-#[cfg(target_arch = "aarch64")]
-pub(crate) const O_DIRECTORY: i32 = 0o40_000;
-#[cfg(not(target_arch = "aarch64"))]
 pub(crate) const O_DIRECTORY: i32 = 0o200_000;
 /// `O_NOFOLLOW`：末段是符号链接时失败，不静默跟随。
-#[cfg(target_arch = "aarch64")]
-pub(crate) const O_NOFOLLOW: i32 = 0o100_000;
-#[cfg(not(target_arch = "aarch64"))]
 pub(crate) const O_NOFOLLOW: i32 = 0o400_000;
 /// `O_PATH`：只取句柄，可用于 `fstatfs`/`statx`，但不能 `ioctl`。
 pub(crate) const O_PATH: i32 = 0o10_000_000;

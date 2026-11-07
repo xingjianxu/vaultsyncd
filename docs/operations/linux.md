@@ -5,11 +5,11 @@
 从干净、已提交的 Git flake 构建，不使用工作树内已有 target/dist：
 
 ```sh
-nix build .#portable .#portable-aarch64 --no-link --json
-nix build .#container-deps .#container-deps-aarch64 --no-link --json
+nix build .#portable --no-link --json
+nix build .#container-deps --no-link --json
 ```
 
-两架构分别为 x86_64-unknown-linux-gnu / aarch64-unknown-linux-gnu，Rust 服务端和管理 CLI 与同提交 Web 独立构建，再封装私有 ELF loader、递归解析的运行库及相对路径入口。Ubuntu 运行不需要 `/nix`、Node 或 Rust；需要发行版 Python 3.11+（tomllib）、btrfs-progs、findmnt、lsattr 和常规 POSIX shell。首发实际验收基线 Ubuntu 24.04。不支持把单个 bin wrapper 移出发行目录；可以整体移动目录。原始 Nix 动态产物不能直接复制冒充此包。
+当前仅支持 x86_64-unknown-linux-gnu（S111/ADR-015 已移除 Linux ARM64 范围），Rust 服务端和管理 CLI 与同提交 Web 独立构建，再封装私有 ELF loader、递归解析的运行库及相对路径入口。Ubuntu 运行不需要 `/nix`、Node 或 Rust；需要发行版 Python 3.11+（tomllib）、btrfs-progs、findmnt、lsattr 和常规 POSIX shell。首发实际验收基线 Ubuntu 24.04。不支持把单个 bin wrapper 移出发行目录；可以整体移动目录。原始 Nix 动态产物不能直接复制冒充此包。
 
 `runtime/share/vaultsyncd/release-manifest.json` 记录产品版本、实际源 commit/NAR、两组件来源、锁摘要、工具链/目标和每个实际文件的长度/摘要。协议版本独立。邻接 `vaultsyncd-runtime-sources.tar.gz` 提供所封装 glibc/GCC 的对应源码及锁定 Nixpkgs 配方；分发二进制/镜像时必须同时提供此归档。私有运行库许可在 `share/vaultsyncd/licenses`。清单核验失败、dirty source、缺 Web 资源均拒绝，不重标旧包。
 
@@ -40,6 +40,8 @@ nix develop .#portable-tests --command python3 packaging/linux/container/build.p
 备份需分别核对源快照完整性与导出归档完整性；prepare/verify-source 不能冒充已下载有效包。真实导出后用 `vaultsyncd-admin backup verify` 验证归档，再安全 release。断开传输、进程重启后先查询实际状态，重用原操作标识，不自动删未确认内容。
 
 ## 验收与限制
+
+以下 S098/S101 为历史验收记录；ARM64 不属于当前构建、部署或测试支持范围。
 
 S098 使用独立 run_id 的 btrfs loop 数据、Ubuntu容器及专属 ARM64 全系统 TCG 客体，不改现有 trial/Windows 或主机正式服务。QEMU-user 对 btrfs ioctl 的真实失败被保留，未当作运行成功；ARM64 存储验收必须来自完整 Ubuntu ARM64 内核，不能以交叉编译/help 代替。TCG 证据不代表原生性能。具体完成矩阵、源 commit、包/镜像摘要及清理结果见 `agent/tasks/S098.md` 与 curated artifacts。
 

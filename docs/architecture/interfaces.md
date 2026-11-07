@@ -2399,7 +2399,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S092 构建依赖与协议消费者门禁
 
-- `tools/xtask/src/boundaries.rs` 实现 `cargo xtask check-boundaries`。先 verify 两份生成源，再逐个读取 `cargo metadata --locked --filter-platform <target> --all-features --format-version 1`；target 固定 Linux x64/ARM64、Windows x64。这里 all-features 仅影响依赖图，不编译整个 workspace。遍历 normal/build 传递边并报告消费者到违规包的链，dev 边不作为生产耦合。
+- `tools/xtask/src/boundaries.rs` 实现 `cargo xtask check-boundaries`。先 verify 两份生成源，再逐个读取 `cargo metadata --locked --filter-platform <target> --all-features --format-version 1`；target 固定 Linux x64、Windows x64。这里 all-features 仅影响依赖图，不编译整个 workspace。遍历 normal/build 传递边并报告消费者到违规包的链，dev 边不作为生产耦合。
 - 策略保护纯核心/wire、server/client、GUI/CLI/store/planner/提交客户端与共享 UI 边界；server-store→server-core 适配方向合法，Windows desktop→Tauri 合法，Linux desktop 不应引入 Tauri runtime。通用基础库 windows-sys 不等于 CFAPI；客户端 Windows 适配器和 Windows API主包另受所属层规则限制。
 - pnpm 从实际 workspace 成员清单核对五个消费者，合并 package.json 的普通/dev/optional/peer 声明、npm别名与已安装传递依赖图。GUI/CLI/Web/UI 源码另扫常见 SQL 库及写入语句；这是可审查静态门禁，不能证明任意动态执行均无数据库 I/O。
 - command 随后跑前端 recursive typecheck、recursive --if-present test，以及 `cargo test --locked -p vaultsyncd-protocol -p vaultsyncd-local-ipc`。缺工具、缺依赖、元数据失败或任一步失败均返回1，多余参数2；不静默跳过消费者。统一 `cargo xtask check` 复用 verify，并由默认Rust成员测试及前端测试覆盖消费者，总共六步。
@@ -2591,7 +2591,11 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 
 ## S110 — 一键多平台发行归档
 
-- `./tools/release.sh [--platform all|linux-x64|linux-arm64|windows-x64 ...] [--output-dir <root>] [--plan]`：Linux x64/Nix 主机入口，自动进入 devShell；默认三个首发目标。实现和布局见 `packaging/README.md`。平台列表允许组合；默认输出 `dist/releases/v<产品版本>-<HEAD前12位>`，已有输出不覆盖。
+- `./tools/release.sh [--platform all|linux-x64|windows-x64 ...] [--output-dir <root>] [--plan]`：Linux x64/Nix 主机入口，自动进入 devShell；默认 Linux x64 与 Windows x64 两个目标。实现和布局见 `packaging/README.md`。平台列表允许组合；默认输出 `dist/releases/v<产品版本>-<HEAD前12位>`，已有输出不覆盖。
 - Linux 复用 portable Nix 包，保留对应 runtime sources；Windows 新增 `cargo xtask release build windows-zip <new-dir>`，复用同源 fresh release/PE检查/ZIP集合验证与原receipt格式，只跳过NSIS。既有 windows-client 仍同时构建安装器和ZIP。
 - 编排在构建前后核对干净同HEAD，校验平台/版本/锁输入与Windows收据；完整来源/归档SHA256/日志随包。发布清单format1采用相对文件路径，SHA256SUMS覆盖归档、平台收据及日志；失败保留partial且不签发成功目录；仓库级非阻塞文件锁避免并发入口竞争前端dist。
 - 只构建并核对字节，不代替原生验收、不声明首发通过；无协议/持久化变化，不启动VM或改部署实例。
+
+### S111 / ADR-015：当前平台范围覆盖
+
+2026-11-07 用户确认移除 Linux ARM64。此决定覆盖上文 S032/S098/S101 的 ARM64 实现与操作描述，旧验收仍为历史记录。release 平台仅 `linux-x64` / `windows-x64`，`all` 展开两者，旧选项参数错误退出2；Nix 删除 portable-aarch64/container-deps-aarch64/platform-tests-aarch64 及专用交叉测试表达式。容器只接受 x86_64 manifest/amd64，依赖锁只含 amd64；Linux 平台 crate 明确拒绝非 x86_64 编译，目录标志和系统调用使用 x86_64 ABI。CI 删除 ARM job/VM 参数、ARM 客体驱动、模板配置及 binfmt/QEMU 调用；lab 配置只需 evidence，保留同源与脏源码拒绝、Linux 安装/恢复、Windows CFAPI/e2e/安装链。Windows Quickemu 工具保留。没有 wire/数据库变化，旧产物不重标为新候选。

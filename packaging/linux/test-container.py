@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Actual Ubuntu image, btrfs bind, HTTP/Web, native admin/backup and restart.
-Args: rootless-image-name amd64|arm64 evidence-parent. Own image/loop/unit only.
+Args: rootless-image-name amd64 evidence-parent. Own image/loop/unit only.
 """
 import hashlib
 import json
@@ -20,7 +20,7 @@ TOKEN=None
 def configure(image,arch,parent):
     global IMAGE,ARCH,PARENT,RUN,NAME,PORT,ORIGIN,RESULT
     IMAGE,ARCH,PARENT=image,arch,parent
-    assert IMAGE.startswith('localhost/vaultsyncd-s098:') and ARCH in ('amd64','arm64')
+    assert IMAGE.startswith('localhost/vaultsyncd-s098:') and ARCH == 'amd64'
     RUN=Path(PARENT)/f'accept-{ARCH}-{os.getpid()}'
     NAME=f'vs-s098-{ARCH}-{os.getpid()}'
     PORT=18739 if ARCH=='amd64' else 18740

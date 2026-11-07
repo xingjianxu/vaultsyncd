@@ -17,7 +17,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = {
     "linux-x64": ("portable", "x86_64-unknown-linux-gnu"),
-    "linux-arm64": ("portable-aarch64", "aarch64-unknown-linux-gnu"),
     "windows-x64": (None, "x86_64-pc-windows-msvc"),
 }
 
@@ -149,7 +148,7 @@ def publish(builder, selected, destination):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="在 Linux x64/Nix 上一键构建 Linux 双架构包和 Windows ZIP。")
+    parser = argparse.ArgumentParser(description="在 Linux x64/Nix 上一键构建 Linux x64 包和 Windows ZIP。")
     parser.add_argument("--platform", nargs="+", choices=["all", *PLATFORMS], default=["all"], help="默认全部；可选择一个或多个平台")
     parser.add_argument("--output-dir", default=str(ROOT / "dist/releases"), help="输出根目录，默认仓库 dist/releases")
     parser.add_argument("--plan", action="store_true", help="仅显示平台和输出根目录，不构建")
@@ -160,7 +159,7 @@ def main(argv=None):
         print(json.dumps({"platforms": selected, "output_dir": str(directory), "windows": "ZIP only; unsigned-test"}, indent=2))
         return
     if platform.system() != "Linux" or platform.machine() != "x86_64":
-        raise ValueError("此入口需要 Linux x86_64 主机和 Nix，目标支持 Linux x64/ARM64 与 Windows x64。")
+        raise ValueError("此入口需要 Linux x86_64 主机和 Nix，目标支持 Linux x64 与 Windows x64。")
     expected = source()
     destination = directory / f"v{expected['version']}-{expected['commit'][:12]}"
     if destination.exists():

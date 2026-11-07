@@ -21,7 +21,7 @@
 
 当前环境由用户明确为：开发主机是 NixOS，开发端和服务端位于同一服务器；执行 agent 已获为本项目配置环境和执行系统 rebuild 的授权。本文不会假定本次写文档的沙盒就是那台主机；所有机器事实在 S001 实测。
 
-**本次新增的环境决定：NixOS 为主要开发与本机服务验证环境。** design v1.5 已纳入这一点；S001 核对 C35/平台矩阵和构建部署章节；Ubuntu 24.04 LTS 保留为通用 Linux 发布兼容测试环境，Linux x86_64/ARM64 与 Windows 11 x86_64 的首发范围仍需验收。开发机的发行版不会改变服务端 btrfs 存储准入条件。
+**本次新增的环境决定：NixOS 为主要开发与本机服务验证环境。** design v1.5 已纳入这一点；S001 核对 C35/平台矩阵和构建部署章节；Ubuntu 24.04 LTS 保留为通用 Linux 发布兼容测试环境，Linux x86_64 与 Windows 11 x86_64 的首发范围仍需验收。开发机的发行版不会改变服务端 btrfs 存储准入条件。
 
 首发含 Linux 服务端、管理 CLI、基础 Web，以及 Windows agent、CLI、Tauri 桌面和 CFAPI。Linux 客户端/FUSE、macOS、Android、P2P、跨版本增量均不在本文执行任务内。
 
@@ -243,6 +243,7 @@
 | S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 |
 | S109 | Windows 免安装 ZIP（状态留本机） | W | S099、S100 |
 | S110 | 一键构建多平台 release 归档 | L | S093、S098、S109 |
+| S111 | 移除 Linux ARM64 构建与验证范围 | X | S110 |
 
 ## 5. 逐步任务卡
 
@@ -1153,8 +1154,8 @@
 - **环境与前置**：X；S092、S098、S100。
 - **只读设计范围**：`docs/design.md` §5.8、T36；加直接前置交接及相关源文件。
 - **主要落点**：.github/workflows/；tools/xtask/。
-- **实现要点**：接通 Linux core/server、Windows 原生、前端、契约、e2e/release job；路径过滤包含消费者。Linux ARM64 运行用真实或合适虚拟 runner，记录 emulation；缺 runner 则门禁 blocked。
-- **本步验收**：同一提交两端构建安装；ARM64 至少启动/存储/恢复实测；Windows CFAPI 非 fake；NixOS 与 Ubuntu 证据分列。
+- **实现要点**：接通 Linux core/server、Windows 原生、前端、契约、e2e/release job；路径过滤包含消费者。Linux x64 与 Windows x64 按 ADR-015 执行；缺 runner 则门禁 blocked。
+- **本步验收**：同一提交两端构建安装；Linux x64 启动/存储/恢复实测；Windows CFAPI 非 fake；NixOS 与 Ubuntu 证据分列。
 - **交接**：`agent/tasks/S101.md`，记录实际接口、验证与下一个 ready 任务。
 
 ### S102 — 事件异常与旧设备集成验收
@@ -1234,9 +1235,17 @@
 - **来源与前置**：用户要求统一一键编译各支持平台 release，Windows 只要 ZIP；L；S093、S098、S109 已 done，可独立执行，不改变原发布门禁。
 - **只读设计范围**：design §5.7.1、§5.9、§5.10、§24；直接依赖短交接及既有平台构建器。
 - **主要落点**：`tools/release.sh`、`packaging/release.py`、`tools/xtask/src/release/`。
-- **实现要点**：默认 Linux x64/ARM64 服务端含 Web、Windows x64 客户端 ZIP；自动进入锁定环境和准备依赖。按版本/提交归档到忽略目录，记录来源/哈希/日志，拒绝覆盖与混源；失败保留现场。沿用 ZIP 的现有启动/状态语义，不更改产品平台范围。
-- **本步验收**：真实一键构建三个目标，核对同源收据与 SHA256SUMS、Windows 无安装器；验证失败/脏源码/重复输出拒绝，现有 ZIP 与受影响 xtask 检查通过。构建证据不冒充 Windows/Ubuntu 原生验收。
+- **实现要点**：默认 Linux x64 服务端含 Web（原 ARM64 范围已由 S111/ADR-015 移除）、Windows x64 客户端 ZIP；自动进入锁定环境和准备依赖。按版本/提交归档到忽略目录，记录来源/哈希/日志，拒绝覆盖与混源；失败保留现场。沿用 ZIP 的现有启动/状态语义，不更改产品平台范围。
+- **本步验收**：真实一键构建当前两个 x64 目标（S110 历史为三个目标，S111 更新平台范围），核对同源收据与 SHA256SUMS、Windows 无安装器；验证失败/脏源码/重复输出拒绝，现有 ZIP 与受影响 xtask 检查通过。构建证据不冒充 Windows/Ubuntu 原生验收。
 - **交接**：`agent/tasks/S110.md`；记录源码与产物路径、实际验证、worktree/提交/合并清理；原 blocked 卡保持。
+
+### S111 — 移除 Linux ARM64 构建与验证范围
+
+- **来源与前置**：2026-11-07 用户确认 Linux ARM64 不再考虑，包含脚本、代码与测试；S110 已 done，本卡 ready，可独立执行。
+- **设计范围**：design §2.1、§24（ADR-015）；保留 Linux x64 服务端及 Windows x64 客户端，历史证据不重写。
+- **实现**：S111-a 移除 release/Nix/容器/ABI 的 ARM64 路径；S111-b 移除 CI/客体验收与相关测试，统一当前文档；同卡顺序执行，不启动其他卡。
+- **验收**：release 默认与 all 只含两个 x64 目标，旧 ARM64 选项明确拒绝；Nix 输出、CI 目录和执行控制器不再依赖 ARM64、QEMU/binfmt/ARM模板；保留 x64 失败/来源/隔离校验，相关契约与 Linux 平台测试、xtask/fmt/clippy 通过，Nix 求值通过。不要求本卡重新发行或代替 hosted/Windows 原生验收。
+- **交接**：`agent/tasks/S111.md`；记录实际命令、限制、提交、master 集成及工作树清理。
 
 ## 6. 里程碑与覆盖关系
 

@@ -28,6 +28,9 @@
 //!
 //! 本包不在 workspace `default-members` 中：它只在 Linux 上编译，便携检查不构建它。
 
+#[cfg(all(target_os = "linux", not(target_arch = "x86_64")))]
+compile_error!("vaultsyncd Linux 服务端只支持 x86_64");
+
 #[cfg(target_os = "linux")]
 pub mod backup;
 #[cfg(target_os = "linux")]

@@ -34,7 +34,7 @@ vaultsyncd 任务编排（xtask）。用法：cargo xtask <子命令>
             cargo clippy --locked --all-targets -- -D warnings、
             cargo test --locked、pnpm --recursive run typecheck、pnpm --recursive --if-present run test
   ci        执行 tools/ci/run.py 的单一平台 job 命令目录；--plan 只列命令不算验证
-  check-boundaries  按 Linux x64/ARM64、Windows x64 metadata 检查依赖方向、生成一致与 pnpm 消费者
+  check-boundaries  按 Linux x64、Windows x64 metadata 检查依赖方向、生成一致与 pnpm 消费者
   generate  从 api/openapi.yaml 生成远端 Rust DTO 与 TypeScript 客户端，从
             api/local-ipc.schema.json 生成本机 IPC Rust DTO 与 TypeScript 类型；
             `--check` 只比对不写入，用于 CI 与“重新生成无 diff”验收

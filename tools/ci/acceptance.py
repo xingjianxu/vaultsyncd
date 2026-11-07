@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Exclusive same-commit installation controller for a pre-provisioned lab.
 
-Config JSON: evidence (new absolute /data directory), arm64_template (stopped
-S098 ubuntu-arm64-tcg directory). Windows uses the documented SSH environment.
-Never modifies the template, an existing guest disk, or host production services.
+Config JSON: evidence (new absolute /data directory).
+Windows uses the documented SSH environment. Never modifies host production services.
 Run with VAULTSYNCD_CI_LAB=1; restore/cleanup failures fail the run.
+Only Linux x64 and Windows x64 are in the current platform scope.
 """
 import argparse
 import fcntl
@@ -14,11 +14,12 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import time
 
 from run import plan
 
 ROOT = Path(__file__).resolve().parents[2]
+EVIDENCE_ROOT = Path("/data")
+LAB_LOCK = Path("/tmp/vaultsyncd-platform-lab.lock")
 
 
 def run(command, log, timeout=3600, env=None):
@@ -32,33 +33,6 @@ def run(command, log, timeout=3600, env=None):
     return result.stdout
 
 
-def static_qemu():
-    """binfmt F retains the binary, not a Nix dynamic-loader closure."""
-    for directory in os.environ.get('PATH', '').split(os.pathsep):
-        candidate = Path(directory) / 'qemu-aarch64'
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            headers = subprocess.check_output(['readelf', '-l', str(candidate)], text=True)
-            if 'INTERP' not in headers:
-                return str(candidate)
-    raise RuntimeError('static qemu-aarch64 required; use the locked portable-tests shell')
-
-
-def wait_for_arm64(ssh):
-    deadline = time.monotonic() + 600
-    while time.monotonic() < deadline:
-        try:
-            probe = subprocess.run([*ssh, 'uname -m'], capture_output=True, text=True, timeout=30)
-            if probe.returncode == 0:
-                assert probe.stdout.strip() == 'aarch64', 'wrong target architecture'
-                return
-        except subprocess.TimeoutExpired:
-            # TCG can accept TCP before sshd/CPU is ready. Only an actual uname
-            # response permits continuation; a timed-out probe is not success.
-            pass
-        time.sleep(2)
-    raise RuntimeError('ARM64 guest SSH not ready within 600 seconds')
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -68,14 +42,14 @@ def main():
         print('BLOCKED: reserve the disposable lab and set VAULTSYNCD_CI_LAB=1')
         return 78
     if not Path(args.config).is_file():
-        print('BLOCKED: provision a private lab config with evidence and arm64_template paths')
+        print('BLOCKED: provision a private lab config with an evidence path')
         return 78
     config = json.loads(Path(args.config).read_text())
     evidence = Path(config["evidence"])
-    assert evidence.is_absolute() and evidence.is_relative_to('/data') and not evidence.is_symlink()
+    assert evidence.is_absolute() and evidence.is_relative_to(EVIDENCE_ROOT) and not evidence.is_symlink()
     evidence.mkdir(mode=0o700, exist_ok=True)
     # All local controllers use the same lock; hosted workflow concurrency is additional.
-    with Path('/tmp/vaultsyncd-platform-lab.lock').open('a') as lock:
+    with LAB_LOCK.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
         porcelain = subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True)
@@ -88,9 +62,8 @@ def main():
         env = {**os.environ, 'VAULTSYNCD_WINDOWS_CACHE': os.environ.get('VAULTSYNCD_WINDOWS_CACHE', '/wrd/prj/vaultsyncd/.cache/windows')}
         if args.phase in ('build', 'all'):
             outputs = []
-            for job in ('release-linux', 'release-arm64'):
-                for command in plan(job, {}):
-                    outputs.extend(json.loads(run(command, evidence/(job+'.log'))))
+            for command in plan('release-linux', {}):
+                outputs.extend(json.loads(run(command, evidence/'release-linux.log')))
             products = {'commit': commit, 'outputs': outputs, 'component': str(component)}
             products_file.write_text(json.dumps(products, indent=2))
             run(['nix', 'develop', '.#windows', '--command', 'cargo', 'xtask', 'ci', 'release-windows',
@@ -106,94 +79,34 @@ def main():
                 manifest = json.loads((path/'runtime/share/vaultsyncd/release-manifest.json').read_text())
                 assert manifest['sourceInfo']['commit'] == commit
                 target = manifest['target']
-                packages['arm64' if target.startswith('aarch64') else 'amd64'] = path
+                assert target == 'x86_64-unknown-linux-gnu', 'unsupported Linux target'
+                packages['amd64'] = path
             elif (path/'share/vaultsyncd/release-manifest.json').is_file():
                 packages['nixos'] = path
         receipt = json.loads((component/'receipt.json').read_text())
         assert receipt['source']['commit'] == commit
         run(['nix','develop','--command','cargo','xtask','release','assemble',evidence/'windows-release.json',component],evidence/'assemble.log')
         run(['nix','develop','--command','cargo','xtask','release','verify',evidence/'windows-release.json'],evidence/'verify.log')
-        # Only our own handler and interpreter; never replace a pre-existing entry.
-        handler = 'vs-s101-' + str(os.getpid())
-        binfmt = Path('/proc/sys/fs/binfmt_misc')
-        mounted = not (binfmt/'register').exists()
-        registered = False
-        vm_started = False
-        vm = evidence/'ubuntu-arm64-tcg'
-        sudo = ['sudo','-n']
-        def privileged(*command):
-            subprocess.run([*sudo,*map(str,command)],check=True,timeout=120)
-        try:
-            if mounted:
-                privileged('mount','-t','binfmt_misc','binfmt_misc',binfmt)
-            qemu = static_qemu()
-            privileged('mkdir','-m','755','/run/'+handler)
-            privileged('cp',qemu,'/run/'+handler+'/qemu-aarch64')
-            registration = (f':{handler}:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\xb7\\x00:'
-                            f'\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:/run/{handler}/qemu-aarch64:F')
-            subprocess.run([*sudo,'tee',str(binfmt/'register')],input=registration,text=True,check=True,stdout=subprocess.DEVNULL,timeout=30)
-            registered=True
-            images={}
-            for arch in ('amd64','arm64'):
-                package=packages[arch]
-                deps=next(p for p in paths if p.name.endswith('vaultsyncd-ubuntu-'+arch+'-dependencies'))
-                image=f'localhost/vaultsyncd-s098:s101-{commit[:12]}-{arch}'
-                run(['python3','packaging/linux/container/build.py',package/'runtime',image,'--offline','--deps',deps,
-                     '--receipt',evidence/f'image-{arch}.json'],evidence/f'image-{arch}.log')
-                images[arch]=image
-            run(['python3','tools/ci/run.py','nixos-install','--package',packages['nixos']],evidence/'nixos-install.log')
-            run(['python3','tools/ci/run.py','ubuntu-install','--image',images['amd64'],'--evidence',evidence],evidence/'ubuntu-install.log')
-            # Copy-on-write copies of the stopped, established ARM64 lab. This run
-            # owns the copies only; provisioning a new guest is not CI logic.
-            template=Path(config['arm64_template']).resolve(strict=True)
-            meta=json.loads((template/'vm.json').read_text())
-            assert not Path(f'/proc/{meta["pid"]}').exists(), 'template VM must be stopped'
-            vm.mkdir(mode=0o700)
-            for name in ['root.qcow2','data.raw','vars.fd','seed.iso','id_ed25519','known_hosts']:
-                subprocess.run(['cp','--reflink=auto','--sparse=always',str(template/name),str(vm/name)],check=True,timeout=120)
-            meta['args']=[v.replace(str(template),str(vm)) for v in meta['args']]
-            # Record before launch for recovery even if controller is interrupted.
-            (vm/'vm.json').write_text(json.dumps(meta,indent=2))
-            run(meta['args'],evidence/'arm64-launch.log',120)
-            meta['pid']=int((vm/'qemu.pid').read_text());vm_started=True
-            (vm/'vm.json').write_text(json.dumps(meta,indent=2))
-            ssh=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=5','-o','StrictHostKeyChecking=yes',
-                 '-o','UserKnownHostsFile='+str(vm/'known_hosts'),'-i',str(vm/'id_ed25519'),'-p',str(meta['ssh_port']),'ubuntu@127.0.0.1']
-            wait_for_arm64(ssh)
-            run(['python3','tools/ci/run.py','arm64-install','--vm',vm,'--image',images['arm64'],'--evidence',evidence],evidence/'arm64-install.log')
-            # Fixture binaries are rebuilt at the exact source commit before the
-            # Windows cross/native drivers (not copied from an old target).
-            run(['nix','develop','--command','cargo','build','--locked','-p','vaultsyncd-server-tests',
-                 '--example','e2e-native-server','--example','release-native-server'],evidence/'fixtures.log')
-            for job in ['windows-cfapi','windows-e2e']:
-                run(['nix','develop','.#windows','--command','cargo','xtask','ci',job],evidence/(job+'.log'),env=env)
-            run(['nix','develop','.#web-tests','--command','python3','tests/platform/windows/s099-installation.py',component],evidence/'windows-install.log',env={**os.environ,'VAULTSYNCD_CI_CLEANUP':'1'})
-            public=ROOT/'artifacts/S101/public';public.mkdir(parents=True,exist_ok=True)
-            result={'status':'passed','source':source,'arm64':'full-system Ubuntu ARM64 TCG emulation, not native performance',
-                    'windows':'Linux cross build / Windows 11 native install, WebView2 and CFAPI',
-                    'hosted_ci':'blocked: no git remote or configured runners','products':products,
-                    'windows_payload':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (component/'payload').iterdir() if p.is_file()}}
-            (public/'installation.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
-        finally:
-            try:
-                if vm_started:
-                    try:
-                        subprocess.run([*ssh,'sudo -n systemctl poweroff'],capture_output=True,timeout=60)
-                    except subprocess.TimeoutExpired:
-                        pass  # SSH disconnect/timeout alone never proves shutdown.
-                    for _ in range(120):
-                        process=Path(f'/proc/{meta["pid"]}')
-                        if not process.exists() or (process/'stat').read_text().split()[2]=='Z':
-                            break
-                        time.sleep(2)
-                    else:
-                        raise RuntimeError('owned ARM64 VM did not shut down; preserve evidence')
-            finally:
-                if registered:
-                    subprocess.run([*sudo,'tee',str(binfmt/handler)],input='-1',text=True,check=True,stdout=subprocess.DEVNULL,timeout=30)
-                privileged('rm','-rf','/run/'+handler)
-                if mounted:
-                    privileged('umount',binfmt)
+        package=packages['amd64']
+        deps=next(p for p in paths if p.name.endswith('vaultsyncd-ubuntu-amd64-dependencies'))
+        image=f'localhost/vaultsyncd-s098:s101-{commit[:12]}-amd64'
+        run(['python3','packaging/linux/container/build.py',package/'runtime',image,'--offline','--deps',deps,
+             '--receipt',evidence/'image-amd64.json'],evidence/'image-amd64.log')
+        run(['python3','tools/ci/run.py','nixos-install','--package',packages['nixos']],evidence/'nixos-install.log')
+        run(['python3','tools/ci/run.py','ubuntu-install','--image',image,'--evidence',evidence],evidence/'ubuntu-install.log')
+        # Fixture binaries are rebuilt at the exact source commit before the
+        # Windows cross/native drivers (not copied from an old target).
+        run(['nix','develop','--command','cargo','build','--locked','-p','vaultsyncd-server-tests',
+             '--example','e2e-native-server','--example','release-native-server'],evidence/'fixtures.log')
+        for job in ['windows-cfapi','windows-e2e']:
+            run(['nix','develop','.#windows','--command','cargo','xtask','ci',job],evidence/(job+'.log'),env=env)
+        run(['nix','develop','.#web-tests','--command','python3','tests/platform/windows/s099-installation.py',component],evidence/'windows-install.log',env={**os.environ,'VAULTSYNCD_CI_CLEANUP':'1'})
+        public=ROOT/'artifacts/S101/public';public.mkdir(parents=True,exist_ok=True)
+        result={'status':'passed','source':source,'linux':'NixOS x64 and Ubuntu x64 container',
+                'windows':'Linux cross build / Windows 11 native install, WebView2 and CFAPI',
+                'hosted_ci':'blocked: no git remote or configured runners','products':products,
+                'windows_payload':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (component/'payload').iterdir() if p.is_file()}}
+        (public/'installation.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
     return 0
 
 

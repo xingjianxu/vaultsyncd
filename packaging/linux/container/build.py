@@ -39,7 +39,8 @@ def main():
     for e in manifest['files']:
         p=(root/e['path']).resolve(strict=True)
         assert p.is_relative_to(root) and p.stat().st_size==int(e['size']) and sha(p)==e['sha256'], 'stale/tampered runtime'
-    arch={'x86_64-unknown-linux-gnu':'amd64','aarch64-unknown-linux-gnu':'arm64'}[manifest['target']]
+    assert manifest['target']=='x86_64-unknown-linux-gnu', 'only Linux x64 runtimes are supported'
+    arch='amd64'
     lock=json.loads((root/'share/vaultsyncd/container/ubuntu-lock.json').read_text())
     base='docker.io/library/ubuntu@'+lock['base_manifests'][arch]
     cached=subprocess.run([args.engine,'image','inspect',base],capture_output=True,text=True)

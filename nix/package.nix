@@ -1,4 +1,4 @@
-{ pkgs, src, sourceInfo, nixpkgsRevision, webPackage ? null }:
+{ pkgs, src, sourceInfo, nixpkgsRevision }:
 let
   lib = pkgs.lib;
   version = (builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"))).workspace.package.version;
@@ -29,10 +29,8 @@ let
     cargoTestFlags = [ "-p" "vaultsyncd-server" "-p" "vaultsyncd-admin" "--lib" "--bins" ];
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.sqlite ];
-    # Cross binaries are tested by the actual target runtime acceptance, not
-    # silently executed on the build CPU or counted as native unit-test passes.
-    doCheck = pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
-    meta.platforms = lib.platforms.linux;
+    doCheck = true;
+    meta.platforms = [ "x86_64-linux" ];
   };
   webDeps = pkgs.fetchPnpmDeps {
     pname = "vaultsyncd-web";
@@ -40,7 +38,7 @@ let
     fetcherVersion = 5;
     hash = "sha256-kYr78clfL0b5jXI0uuO9ePOPkk7f5e9+lsqHRnjCf68=";
   };
-  web = if webPackage != null then webPackage else pkgs.stdenvNoCC.mkDerivation {
+  web = pkgs.stdenvNoCC.mkDerivation {
     pname = "vaultsyncd-web";
     inherit version;
     src = webSource;
@@ -88,7 +86,7 @@ let
     pkgs.runCommand "vaultsyncd-${version}" {
       nativeBuildInputs = [ pkgs.makeWrapper pkgs.python3 ];
       passthru = { inherit rust web; };
-      meta.platforms = lib.platforms.linux;
+      meta.platforms = [ "x86_64-linux" ];
     } ''
       mkdir -p "$out/bin" "$out/share/vaultsyncd"
       ln -s ${web} "$out/share/vaultsyncd/web"
@@ -106,22 +104,10 @@ let
 in {
   default = release;
   inherit rust web portable;
-  portable-aarch64 = if pkgs.stdenv.hostPlatform.isAarch64 then portable else
-    (import ./package.nix {
-      pkgs = pkgs.pkgsCross.aarch64-multiplatform;
-      inherit src sourceInfo nixpkgsRevision;
-      webPackage = web;
-    }).portable;
   container-deps = import ./ubuntu-deps.nix {
     pkgs = pkgs.buildPackages;
     lockFile = src + "/packaging/linux/container/ubuntu-lock.json";
     arch = "amd64";
   };
-  container-deps-aarch64 = import ./ubuntu-deps.nix {
-    pkgs = pkgs.buildPackages;
-    lockFile = src + "/packaging/linux/container/ubuntu-lock.json";
-    arch = "arm64";
-  };
-  platform-tests-aarch64 = import ./platform-tests.nix { inherit pkgs; source = rustSource; };
   web-deps = webDeps;
 }

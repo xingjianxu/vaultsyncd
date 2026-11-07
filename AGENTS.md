@@ -15,7 +15,7 @@
 
 - 开发中凡涉及代码改动（含测试、脚本、schema、构建配置），必须先按下文“Git worktree”约定进入隔离工作树，再编辑、构建和验证。纯文档维护可在当前工作区进行。
 - 项目 devShell 由根 `flake.nix` 提供，工具链来自 `flake.lock` 锁定的 nixpkgs：进入用 `nix develop`，非交互校验用 `nix develop --command bash -c 'rustc --version; cargo --version; node --version; pnpm --version; python3 --version; sqlite3 --version'`。不为项目安装全局依赖；实测版本与限制见 `docs/environment.md` §10。
-- 用户已明确（2026-11-07）：编译、测试无需覆盖 `linux-arm64`（`aarch64-linux`）；后续选择构建目标、测试矩阵与验证命令时跳过该平台，不将缺少其编译或测试证据列为阻塞。
+- 用户已明确（2026-11-07）：脚本、代码、发布、编译与测试均不再考虑 `linux-arm64`（`aarch64-linux`）；仅保留 Linux x64 服务端和 Windows x64 客户端，不将 ARM64 证据缺失列为阻塞，历史证据仍保留。
 - 首发仅 Windows 11 x64 客户端、Linux 服务端。Windows 客户端在本 NixOS 开发环境交叉编译，前端构建也在宿主完成，以节省虚拟机资源；Quickemu Windows NTFS 客体用于原生运行与验收，不默认安装完整编译工具链。Windows x64 交叉工具链已由 S009 落实（`nix develop .#windows`，证据见 `docs/environment.md` §13）；具体分工与步骤只维护在实施手册 §2.6 与 `docs/operations/windows-lab.md` §12。
 - 用户已授权本项目所需 NixOS 配置与 rebuild。先检查实际主机配置入口，保存 diff/旧 generation，build/test/健康检查后 switch。test 会激活配置且不自动定时回滚；保留 SSH 和恢复路径。不要把项目 flake 误当主机配置，不扩大到无关系统升级。
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。

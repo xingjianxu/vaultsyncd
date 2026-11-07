@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：S001—S110 共 **110 卡，105 done、5 blocked**；无 todo / in_progress。**当前无 ready 卡**。
+当前：S001—S111 共 **111 卡，105 done、5 blocked、1 in_progress**；当前执行 **S111**，其余无 ready 卡。
 
-用户决定（2026-11-07）：后续编译、测试无需覆盖 `linux-arm64`（`aarch64-linux`），缺少该平台的编译或测试证据不作为阻塞；此前双架构记录保留为历史证据。本轮仅将约定写入 `AGENTS.md` 与本进度，不修改构建脚本或任务状态；未执行产品编译、测试，未提交。下一 ready：无，S101 仍待 hosted CI 条件恢复。
+用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；当前 S111 在隔离 worktree 实施，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
 恢复顺序：先恢复 **S101 hosted CI**（缺 remote、runner 和 Actions 实证），再推进 **S106 → S107 → S108**；另须补 T02 三台独立 Windows 与最终同源发行证据。S011 的 OS 取消回调未触发仍为历史原型阻塞，保留其原生验证条件。当前不宣称首发验收完成。
 
@@ -128,3 +128,4 @@
 | S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | blocked | 35项P0索引、README/运维入口与当前限制；文档5f485a5已abdedd3整合；S105 done/代码候选fd896fa；证据、树与分支已收尾 | 两架构各24个历史runtime文件及发布/源码tar哈希核验，b263源三PE哈希/原生启动验证；当前候选全平台包未完成 | S101 hosted、S106/S107性能容量、T02三台Windows及最终同源发行证据缺失；未宣称首发完成 | agent/tasks/S108.md；docs/operations/release.md |
 | S109 | Windows 免安装 ZIP（状态留本机） | W | S099、S100 | done | 367faf5、3512865 | 历史验收见交接 | 历史限制见交接 | [S109](tasks/S109.md) |
 | S110 | 一键构建多平台 release 归档 | L | S093、S098、S109 | done | d3209ab、81340f6、1c61929；master已ff整合，任务树/分支已清理 | 三目标同源打包/15项SHA；Linux各24文件、ZIP11条目/5PE；契约15/15+xtask23/23，clippy/fmt通过 | 无；新包原生验收未执行，原发布门禁不变 | [S110](tasks/S110.md) |
+| S111 | 移除 Linux ARM64 构建与验证范围 | X | S110 | in_progress | worktree `/wrd/prj/vaultsyncd/.worktrees/s111`，分支 `build/S111-drop-linux-arm64`，基线 b585fc4 | 构建/CI/ABI 路径已修改，验证中 | 无 | [S111](tasks/S111.md) |
