@@ -9,8 +9,8 @@ Windows 11 与 Linux 之间的个人文件同步工具：Linux 服务端（含�
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/design.md`](docs/design.md) | 产品与技术设计基线（唯一产品规格） |
-| [`agent/implementation-plan.md`](agent/implementation-plan.md) | S001—S108 执行顺序与任务卡 |
-| [`agent/progress.md`](agent/progress.md) | 108 行执行状态表与最早 ready 卡 |
+| [`agent/implementation-plan.md`](agent/implementation-plan.md) | S001—S110 执行顺序与任务卡 |
+| [`agent/progress.md`](agent/progress.md) | 执行状态表与最早 ready 卡 |
 | [`docs/environment.md`](docs/environment.md) | 开发/服务验证主机的实测环境基线 |
 | [`docs/architecture/interfaces.md`](docs/architecture/interfaces.md) | 已实现工具与接口的契约摘要 |
 | [`AGENTS.md`](AGENTS.md) | 编码 agent 的入口、worktree 与提交约定 |
