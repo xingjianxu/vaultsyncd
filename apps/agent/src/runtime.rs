@@ -30,6 +30,7 @@ use vaultsyncd_agent_core::{
     },
     executor::{apply::ControlledApply, upload::UploadActionHandler},
     ports::Ports,
+    recovery::resync::rebuild_open,
 };
 use vaultsyncd_client_store::{
     bindings::{self, NewBinding, SyncMode},
@@ -264,6 +265,10 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         };
         // Metadata-only connection keeps offline CFAPI directory queries usable; content requests
         // remain explicitly unavailable until platform and core recovery have both completed.
+        // An open rebuild quarantines old operations from its first transaction; assembly must still
+        // continue, otherwise admission could never resume the durable journal (and the fence itself
+        // would block startup forever). Old operation recovery is deferred to the post-rebuild assembly.
+        let rebuilding = rebuild_open(&db, id).await?;
         let mut recovery_connection =
             vaultsyncd_platform_windows::cfapi::adapter::Adapter::connect(
                 &binding.path,
@@ -277,17 +282,23 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                 return Err(error("platform publication requires recovery"));
             }
         }
-        recover_releases(&db, &binding.path, id, root, &client).await?;
+        if rebuilding {
+            eprintln!("event=rebuild-open binding={id} old-operations=quarantined");
+        } else {
+            recover_releases(&db, &binding.path, id, root, &client).await?;
+        }
         crate::namespace::recover(&local, &recovery_connection).await?;
-        let recovered = ControlledApply::new(db.clone(), local.clone())
-            .recover(id)
-            .await?;
-        for (op, result) in recovered {
-            result?;
-            local
-                .native
-                .acknowledge_publication(&op.to_string())
-                .map_err(error)?;
+        if !rebuilding {
+            let recovered = ControlledApply::new(db.clone(), local.clone())
+                .recover(id)
+                .await?;
+            for (op, result) in recovered {
+                result?;
+                local
+                    .native
+                    .acknowledge_publication(&op.to_string())
+                    .map_err(error)?;
+            }
         }
         // Release recovery is per persisted target/version and runs before any new scheduler work.
         let remote = Arc::new(Remote {
@@ -686,7 +697,11 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                         // Preserve offline discovery, but do not dispatch any remote command until
                         // the authenticated epoch and durable event window have been checked.
                         if e.is_retryable() {
-                            worker.discover().await?;
+                            let fenced: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM binding_resyncs WHERE binding_id=? AND complete=0)")
+                                .bind(id.as_bytes().as_slice()).fetch_one(db.pool()).await.map_err(error)?;
+                            if !fenced {
+                                worker.discover().await?;
+                            }
                         }
                         return Err(e);
                     }
