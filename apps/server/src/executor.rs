@@ -408,7 +408,8 @@ impl ExecutorContext {
             };
             if mismatch {
                 let failure = OperationFailure::ReconcileRequired {
-                    detail: "工作目录内容与已确认版本不一致：外部写入尚未采集，先采集再重试".to_owned(),
+                    detail: "工作目录内容与已确认版本不一致：外部写入尚未采集，先采集再重试"
+                        .to_owned(),
                 };
                 self.reject(owner, key, &failure).await;
                 return Err(failure);

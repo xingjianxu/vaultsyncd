@@ -144,9 +144,9 @@ async fn root_view(running: &Running, token: &str, root: &str) -> Value {
         .get("roots")
         .and_then(Value::as_array)
         .and_then(|roots| {
-            roots.iter().find(|item| {
-                item.get("root_id").and_then(Value::as_str) == Some(root)
-            })
+            roots
+                .iter()
+                .find(|item| item.get("root_id").and_then(Value::as_str) == Some(root))
         })
         .cloned()
         .unwrap_or_else(|| panic!("Root 清单里没有 {root}：{value}"))
@@ -281,14 +281,8 @@ async fn external_write_before_put_is_not_silently_overwritten() {
     // 按新事实重新规划后，同一客户端内容可以提交（证明拒绝不是永久阻塞）。
     let (status, body) = put(&running, &token, &root, &external_head, CLIENT, 0x41).await;
     assert_eq!(status, StatusCode::OK, "重新规划后应能提交：{body}");
-    assert_eq!(
-        body.get("state").and_then(Value::as_str),
-        Some("committed")
-    );
-    assert_eq!(
-        std::fs::read(work_file(&lab)).expect("读工作文件"),
-        CLIENT
-    );
+    assert_eq!(body.get("state").and_then(Value::as_str), Some("committed"));
+    assert_eq!(std::fs::read(work_file(&lab)).expect("读工作文件"), CLIENT);
     assert!(
         history_hashes(&running, &token, &root, &external_head.entry)
             .await
@@ -340,7 +334,10 @@ async fn rename_over_save_retires_old_entry_and_keeps_bytes() {
         hashes.contains(&sha256(BEFORE)),
         "旧内容必须仍可恢复：{hashes:?}"
     );
-    assert!(hashes.contains(&sha256(AFTER)), "最终内容在当前/历史：{hashes:?}");
+    assert!(
+        hashes.contains(&sha256(AFTER)),
+        "最终内容在当前/历史：{hashes:?}"
+    );
     assert_eq!(
         version_count(&lab, &before.entry).await,
         2,
@@ -350,10 +347,7 @@ async fn rename_over_save_retires_old_entry_and_keeps_bytes() {
         !has_delete_event(&events(&running, &token, &root).await, NAME),
         "同一路径的保存不推导删除"
     );
-    assert_eq!(
-        std::fs::read(work_file(&lab)).expect("读工作文件"),
-        AFTER
-    );
+    assert_eq!(std::fs::read(work_file(&lab)).expect("读工作文件"), AFTER);
     assert_eq!(
         std::fs::read(lab.work().join("other.txt")).expect("读邻居文件"),
         OTHER,
@@ -488,7 +482,10 @@ async fn symlink_is_never_followed_or_adopted() {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    assert!(blocked, "含 symlink 的 Root 必须显式暂停采集，而不是静默完成");
+    assert!(
+        blocked,
+        "含 symlink 的 Root 必须显式暂停采集，而不是静默完成"
+    );
     assert_eq!(
         std::fs::read(outside.join("secret.txt")).expect("读 Root 外文件"),
         OUTSIDE,
@@ -647,14 +644,14 @@ async fn external_rename_and_delete_propagate_and_restore() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "回收站恢复应提交：{restored}");
-    assert_eq!(restored.get("entry_id"), Some(&Value::String(gone.entry.clone())));
+    assert_eq!(
+        restored.get("entry_id"),
+        Some(&Value::String(gone.entry.clone()))
+    );
     assert_eq!(
         std::fs::read(lab.work().join("gone.txt")).expect("恢复后读文件"),
         GONE
     );
-    assert!(
-        trash_rows(&lab).await.is_empty(),
-        "恢复后回收站清单应为空"
-    );
+    assert!(trash_rows(&lab).await.is_empty(), "恢复后回收站清单应为空");
     running.stop().await;
 }

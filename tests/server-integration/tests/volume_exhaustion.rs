@@ -302,8 +302,7 @@ async fn data_exhaustion_on_work_volume_never_claims_committed() {
         );
     } else {
         assert!(
-            status == StatusCode::INSUFFICIENT_STORAGE
-                || status == StatusCode::SERVICE_UNAVAILABLE,
+            status == StatusCode::INSUFFICIENT_STORAGE || status == StatusCode::SERVICE_UNAVAILABLE,
             "数据满时提交只能明确失败：{status} {result}"
         );
         assert_eq!(
@@ -434,7 +433,10 @@ fn reflink_cow_allocation_failure_preserves_source_and_clone() {
         "正常同卷克隆必须走 FICLONE（fallback={:?}）",
         clone.fallback
     );
-    assert_eq!(clone.sha256, vaultsyncd_platform_linux_server::files::hash::digest(&source_bytes));
+    assert_eq!(
+        clone.sha256,
+        vaultsyncd_platform_linux_server::files::hash::digest(&source_bytes)
+    );
 
     // 耗尽数据与元数据，制造“克隆后 CoW 新分配失败”。
     let mut fillers = fill_data(&dir, "cow-data");
@@ -476,8 +478,12 @@ fn reflink_cow_allocation_failure_preserves_source_and_clone() {
     }) {
         Err(error) => {
             assert!(
-                ["reflink_failed", "staging_io_failed", "staging_create_failed"]
-                    .contains(&error.code()),
+                [
+                    "reflink_failed",
+                    "staging_io_failed",
+                    "staging_create_failed"
+                ]
+                .contains(&error.code()),
                 "失败原因必须是容量/IO：{} / {error}",
                 error.code()
             );
