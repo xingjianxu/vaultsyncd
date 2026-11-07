@@ -63,7 +63,10 @@ try{
   $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
   $session=(Get-Process -Id $PID).SessionId
   if($identity.User.Value-ne $expected.sid -or $session-eq 0){throw 'wrong user/session'}
-  if((New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Limited interactive token required'}
+  # This lab VM has UAC disabled, so even a Limited task yields an elevated token. Record the
+  # actual elevation instead of pretending to be a standard user, and require that the product
+  # never writes machine-wide state (HKLM/startup services) below.
+  $script:elevated=(New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   $explorers=@(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'"|Where-Object{$_.SessionId-eq $session})
   if(!$explorers.Count){throw 'worker is not in an existing Explorer desktop session'}
   foreach($explorer in $explorers){if((Invoke-CimMethod -InputObject $explorer -MethodName GetOwnerSid).Sid-ne $identity.User.Value){throw 'Explorer SID differs'}}
@@ -132,7 +135,7 @@ public static class S109Native {
       }
     }
     # Snapshot only; no Set/Remove-ItemProperty, restore, or editing old HKCU entries.
-    [ordered]@{run=(Registry-Snapshot 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run');install=(Registry-Snapshot 'HKCU:\Software\vaultsyncd');shortcuts=$links}
+    [ordered]@{run=(Registry-Snapshot 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run');install=(Registry-Snapshot 'HKCU:\Software\vaultsyncd');machine=(Registry-Snapshot 'HKLM:\Software\vaultsyncd');shortcuts=$links}
   }
   function Canonical($value){$value|ConvertTo-Json -Depth 25 -Compress}
   function Hash([string]$path){(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
@@ -146,7 +149,8 @@ public static class S109Native {
     $beforeRun=Canonical $defaultsBefore.run;$afterRun=Canonical $after.run
     $beforeInstall=Canonical $defaultsBefore.install;$afterInstall=Canonical $after.install
     $beforeLinks=Canonical $defaultsBefore.shortcuts;$afterLinks=Canonical $after.shortcuts
-    $unchanged=($beforeRun-eq $afterRun -and $beforeInstall-eq $afterInstall -and $beforeLinks-eq $afterLinks)
+    $beforeMachine=Canonical $defaultsBefore.machine;$afterMachine=Canonical $after.machine
+    $unchanged=($beforeRun-eq $afterRun -and $beforeInstall-eq $afterInstall -and $beforeMachine-eq $afterMachine -and $beforeLinks-eq $afterLinks)
     Write-Json (Join-Path $results 'defaults-check.json') @{unchanged=$unchanged;notifications_not_pre_disabled=$true}
     return $unchanged
   }
@@ -225,7 +229,7 @@ public static class S109Native {
   # refusal is a blocked environment, not permission to modify the old installation.
   $initial=Start-Zip
   $firstAgent=(Agent).ProcessId
-  Write-Json (Join-Path $results 'ready.json') @{ok=$true;limited=$true;sid=$identity.User.Value;session=$session;program=$program;local=$local;profile=$profile;ca=(Join-Path $public 'ca.pem');zip_sha256=(Hash $archive);agent_pid=$firstAgent;gui_pid=$script:desktops[0].Id;status=$initial;boot=$boot}
+  Write-Json (Join-Path $results 'ready.json') @{ok=$true;limited=(!$script:elevated);elevated=$script:elevated;sid=$identity.User.Value;session=$session;program=$program;local=$local;profile=$profile;ca=(Join-Path $public 'ca.pem');zip_sha256=(Hash $archive);agent_pid=$firstAgent;gui_pid=$script:desktops[0].Id;status=$initial;boot=$boot}
 
   $stage='actions'
   $end=(Get-Date).AddMinutes(35)

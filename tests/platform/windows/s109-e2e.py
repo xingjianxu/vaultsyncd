@@ -233,7 +233,10 @@ def main():
         ps("Prepare")
         installed = ready("ready.json")
         assert "同步 程序" in installed["program"] and "同步 样本" in installed["local"]
-        assert installed["zip_sha256"] == summary["zip_sha256"] and installed["limited"]
+        assert installed["zip_sha256"] == summary["zip_sha256"]
+        # Record honestly: this lab VM has UAC disabled, so the Limited task is still elevated.
+        summary["elevated_session"] = installed["elevated"]
+        summary["standard_user_proven"] = installed["limited"]
         summary["ready"] = installed
         summary["phase"] = "real-webview-forms"
         checkpoint()
