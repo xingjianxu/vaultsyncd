@@ -1,6 +1,8 @@
 # 实施进度
 
-本轮：**S101—S103 收尾（2026-11-07）**。用户要求每张卡一个 subagent，按编号顺序执行（三卡共用同一 Windows 客体与故障卷，故不并行）。S102、S103 为 done 并已合入 master（`60200a7`、`b36e31e`），任务 worktree/分支/实验卷全部清理、证据归档 `artifacts/S102`（310 文件）与 `artifacts/S103`（23 文件）。S101 本机同源验收完成、已合入（`f07aab2`），但**仅 hosted CI 保持 blocked**：仓库无 remote、未配置 runner，未执行 Actions；恢复条件见 `agent/tasks/S101.md`。S102 修复两处真实产品缺陷：HTTP SSE 订阅缺失、重建断网时装配被 `ensure_unblocked` 永久拒绝；S103 修复“外部写入尚未采纳时 put 以旧基线静默覆盖未采集内容”，改为 409 `RECONCILE_REQUIRED`。本批未改 wire/schema/产品保留默认值，Windows 均为单客体顺序执行，不冒充多机并发。过程偏差：S103 合并提交使用脚本默认英文消息，未附中文 body（未改写历史，仅记录）。下一 ready **S104**。
+本轮：**S104—S108（2026-11-07）**，按用户要求每卡一个 subagent。S104 已 done，产出 `c03114d`、`71013d9`，以 `326b469` 合入 master；60 份证据 SHA-256 核验通过，归档 `artifacts/S104`，工作树及分支已清理。S105 正在独立树执行；S106—S108 按依赖复核，S101 hosted CI 仍 blocked，尚不能声明首发完成。批次记录：`agent/tasks/S104-S108.md`。
+
+上一批：**S101—S103 收尾（2026-11-07）**。用户要求每张卡一个 subagent，按编号顺序执行（三卡共用同一 Windows 客体与故障卷，故不并行）。S102、S103 为 done 并已合入 master（`60200a7`、`b36e31e`），任务 worktree/分支/实验卷全部清理、证据归档 `artifacts/S102`（310 文件）与 `artifacts/S103`（23 文件）。S101 本机同源验收完成、已合入（`f07aab2`），但**仅 hosted CI 保持 blocked**：仓库无 remote、未配置 runner，未执行 Actions；恢复条件见 `agent/tasks/S101.md`。S102 修复两处真实产品缺陷：HTTP SSE 订阅缺失、重建断网时装配被 `ensure_unblocked` 永久拒绝；S103 修复“外部写入尚未采纳时 put 以旧基线静默覆盖未采集内容”，改为 409 `RECONCILE_REQUIRED`。本批未改 wire/schema/产品保留默认值，Windows 均为单客体顺序执行，不冒充多机并发。过程偏差：S103 合并提交使用脚本默认英文消息，未附中文 body（未改写历史，仅记录）。下一 ready **S104**。
 
 此前阶段：**S076—S100 全部 done（2026-11-07）**。按用户要求单卡单subagent执行，同时最多三个；25卡已全部合入master，单卡worktree与本地分支均已删除，逐卡和批次均记录合并/归档/清理。最终集成032134d；统一xtask六步、平台all-target strict clippy、版本0.1.1检查通过；服务端组合217通过、0失败（3个默认ignored的专用原生用例已有独立实跑）。默认成员Rust顶层912通过、0失败、1个S091专用actor ignored，另有两个子进程1/1结果。真实Windows安装/升级/恢复、Ubuntu amd64及ARM64全系统TCG、普通Ubuntu systemd、Compose、NixOS/TLS矩阵均见各卡实证；ARM模拟不代表原生性能，Windows产物unsigned-test，开发CA不冒充公网发布。证据归档`artifacts/batch-S076-S100/`，批次交接`agent/tasks/S076-S100.md`。父协调树与分支已在归档逐文件一致、master包含c1f6849且树干净后删除；当前仅主工作区master。下一ready **S101**，本批不执行。
 
