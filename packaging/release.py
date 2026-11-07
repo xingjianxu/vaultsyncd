@@ -105,7 +105,8 @@ class Builder:
     def windows(self):
         prefix = ["nix", "develop", ".#windows", "--command"]
         self.run(prefix + ["bash", "tests/platform/windows/setup-toolchain.sh"])
-        self.run(prefix + ["pnpm", "fetch", "--frozen-lockfile"])
+        # pnpm 12 fetch reads the lockfile directly; frozen is an install flag.
+        self.run(prefix + ["pnpm", "fetch"])
         directory = self.stage / "work/windows"
         self.run(prefix + ["cargo", "xtask", "release", "build", "windows-zip", str(directory)])
         manifest = self.stage / "work/windows-manifest.json"
