@@ -4,7 +4,7 @@
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
-最近完成：S112 通过 `features.server.vaultsync.*` 固定项目4856738，主机实现9c2133f、挂载修正56bd93b均已合入main。独立正式btrfs/账号与Let’s Encrypt域名证书，包内65/0、build/test/HTTPS上传committed/下载/重启/普通UID备份/浏览器Cookie与SSE/switch后健康全部通过；旧试用卷和凭据保留。完整提交及清理见 [S112](tasks/S112.md) 和 [批次](tasks/S112-batch.md)。独立外网探测未取得证据，不代替首发门禁。
+最近完成：S112 通过 `features.server.vaultsync.*` 固定项目4856738，主机实现9c2133f、挂载修正56bd93b均已合入main。独立正式btrfs/账号与Let’s Encrypt域名证书，包内65/0、build/test/HTTPS上传committed/下载/重启/普通UID备份/浏览器Cookie与SSE/switch后健康全部通过；旧试用卷和凭据保留。项目验收c94aca4已ff合入master，两个任务树/分支均已清理；完整提交及清理见 [S112](tasks/S112.md) 和 [批次](tasks/S112-batch.md)。独立外网探测未取得证据，不代替首发门禁。
 
 恢复顺序：先恢复 **S101 hosted CI**（缺 remote、runner 和 Actions 实证），再推进 **S106 → S107 → S108**；另须补 T02 三台独立 Windows 与最终同源发行证据。S011 的 OS 取消回调未触发仍为历史原型阻塞，保留其原生验证条件。当前不宣称首发验收完成。
 
@@ -131,4 +131,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S109 | Windows 免安装 ZIP（状态留本机） | W | S099、S100 | done | 367faf5、3512865 | 历史验收见交接 | 历史限制见交接 | [S109](tasks/S109.md) |
 | S110 | 一键构建多平台 release 归档 | L | S093、S098、S109 | done | d3209ab、81340f6、1c61929；master已ff整合，任务树/分支已清理 | 三目标同源打包/15项SHA；Linux各24文件、ZIP11条目/5PE；契约15/15+xtask23/23，clippy/fmt通过 | 无；新包原生验收未执行，原发布门禁不变 | [S110](tasks/S110.md) |
 | S111 | 移除 Linux ARM64 构建与验证范围 | X | S110 | done | 实现9e62b03、交接ecb21dc；master已ff整合，任务树/分支已清理 | release9、ZIP8、CI8、Linux74、xtask23；clippy/fmt/边界/消费者/Nix求值/server-admin check通过 | 无；原hosted及首发原生/性能门禁保留 | [S111](tasks/S111.md) |
-| S112 | 本机域名部署与NixOS功能选项 | L | S095、S096、S097、S111 | done | 项目4856738；主机9c2133f、56bd93b；验收与合并见交接 | 包内65/0；主机build/test/switch244、可信TLS、16MiB/413、committed/下载/重启/备份、Chromium登录/SSE与既有服务检查通过 | 无部署阻塞；独立外网可达性未获证据，原hosted/规模/首发门禁保留 | [S112](tasks/S112.md) |
+| S112 | 本机域名部署与NixOS功能选项 | L | S095、S096、S097、S111 | done | 项目4856738、c94aca4已ff合入master；主机9c2133f、56bd93b已合main，任务树均清理 | 包内65/0；主机build/test/switch244、可信TLS、16MiB/413、committed/下载/重启/备份、Chromium登录/SSE与既有服务检查通过 | 无部署阻塞；独立外网可达性未获证据，原hosted/规模/首发门禁保留 | [S112](tasks/S112.md) |
