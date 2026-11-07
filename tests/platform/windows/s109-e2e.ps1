@@ -303,13 +303,19 @@ public static class S109Native {
     switch($action.action){
       'status' {$answer.status=Status;$answer.agent_pid=(Agent).ProcessId}
       'configure' {
+        Mark 'configure-connection'
         $null=Invoke-Cli @('--json','set-connection','--server-id',$fixture.serverId,'--server-url',$fixture.url,'--ca-file',(Join-Path $public 'ca.pem'))
-        $fixture.password | & $cli --json login --username $fixture.login 2>&1 | Out-Null
-        if($LASTEXITCODE-ne 0){throw 'CLI login failed (output suppressed)'}
+        Mark 'configure-login'
+        $loginOut=$fixture.password | & $cli --json login --username $fixture.login 2>&1
+        Mark ('configure-login-exit:'+$LASTEXITCODE)
+        if($LASTEXITCODE-ne 0){throw ('CLI login failed: '+(($loginOut -join ' ').Substring(0,[Math]::Min(200,($loginOut -join ' ').Length))))}
+        Mark 'configure-roots'
         $roots=Invoke-Cli @('--json','roots')
+        Mark ('configure-roots-count:'+(@($roots.roots).Count))
         if(@($roots.roots).Count-lt 1){throw 'no authorized Root'}
         $binding=[Guid]::NewGuid().ToString('N')
         New-Item -ItemType Directory -Path (Join-Path $local 'cache') -Force|Out-Null
+        Mark 'configure-binding'
         $null=Invoke-Cli @('--json','create-binding','--binding-id',$binding,'--root-id',$fixture.root,'--local-path',$local,'--cache-path',(Join-Path $local 'cache'),'--mode','full')
         $answer.binding_id=$binding
         $answer.initial=Status
