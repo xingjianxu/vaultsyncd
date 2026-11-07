@@ -54,10 +54,12 @@ fn production_pe(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
+pub(super) fn build(root: &Path, directory: &Path, component: &str) -> Result<(), String> {
+    let installer = component == "windows-client";
     if std::env::var("VAULTSYNCD_WINDOWS_SHELL").as_deref() != Ok("1") {
         return Err(
-            "windows-client requires nix develop .#windows and the locked cross toolchain".into(),
+            "Windows packaging requires nix develop .#windows and the locked cross toolchain"
+                .into(),
         );
     }
     let before = source(root)?;
@@ -81,10 +83,12 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
         ("cargo", vec!["--version"]),
         ("node", vec!["--version"]),
         ("pnpm", vec!["--version"]),
-        ("makensis", vec!["-VERSION"]),
         ("python3", vec!["--version"]),
     ] {
         toolchain.insert(tool.into(), output(tool, &args, root)?);
+    }
+    if installer {
+        toolchain.insert("makensis".into(), output("makensis", &["-VERSION"], root)?);
     }
     toolchain.insert(
         "cargo-xwin".into(),
@@ -168,7 +172,10 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
             .display()
             .to_string(),
     ];
-    run(&command, root, None)?;
+    if installer {
+        run(&command, root, None)?;
+        preparation.push(command.clone());
+    }
     let launcher = build.join(TARGET).join("release/vaultsyncd-zip.exe");
     production_pe(&launcher)?;
     let zip_command = vec![
@@ -185,7 +192,7 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
             .to_string(),
     ];
     run(&zip_command, root, None)?;
-    preparation.push(zip_command);
+    preparation.push(zip_command.clone());
     if before != source(root)? {
         return Err("source changed during Windows build; receipt refused".into());
     }
@@ -196,11 +203,11 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
         &directory.join("receipt.json"),
         &Receipt {
             format: 1,
-            component: "windows-client".into(),
+            component: component.into(),
             target: TARGET.into(),
             source: before,
             toolchain,
-            command,
+            command: if installer { command } else { zip_command },
             preparation,
             files,
         },

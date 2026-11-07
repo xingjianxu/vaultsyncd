@@ -2588,3 +2588,10 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - `Endpoint::request_verified(expected,request)`在实际发送请求的同一NamedPipeClient上认证预期EXE及SID，返回`(Response,ServerProcess)`，原`request`接口不变；ZIP每个GetStatus/PrepareMaintenance均用此入口，等待实际执行准备的对端进程，不用先探测再另连的句柄。
 - Stop复用IPC1.5 PrepareMaintenance，认证并等待确切进程退出，再取得writer锁确认停机；未确认内容导出到agent/zip-stop-*。不强杀、不注销提供程序、不删Root/cache/dirty/state。暂停持久化，重启后须用户显式Resume；失败可能部分暂停，绝不默认成功或自动恢复所有绑定。原生入口两个：`tests/platform/windows/s109-zip.ps1`要求手工登录全新标准用户（Fresh/Live/Stop分离，Live另需真实服务端独立hash核对）；`tests/platform/windows/s109-e2e.py`在已登录会话用本run Interactive/Limited task与隔离LocalAppData/AppData/WebView，经真实CLI/IPC配置、要求一个本run程序目录启动的可见响应窗口、验证关窗后真实上传、dirty经安全停止与agent进程重启保留后resume提交，并断言默认Run/HKLM/快捷方式未变（不声称OS重启或标准用户）；两者均不改自动登录、不强杀、保留Root/state/cache。
 - 桌面以命名互斥量`vaultsyncd-desktop`保证每用户会话单窗口：重复Start复用同一窗口，不再派生第二个GUI；该互斥量与agent的writer锁相互独立。
+
+## S110 — 一键多平台发行归档
+
+- `./tools/release.sh [--platform all|linux-x64|linux-arm64|windows-x64 ...] [--output-dir <root>] [--plan]`：Linux x64/Nix 主机入口，自动进入 devShell；默认三个首发目标。实现和布局见 `packaging/README.md`。平台列表允许组合；默认输出 `dist/releases/v<产品版本>-<HEAD前12位>`，已有输出不覆盖。
+- Linux 复用 portable Nix 包，保留对应 runtime sources；Windows 新增 `cargo xtask release build windows-zip <new-dir>`，复用同源 fresh release/PE检查/ZIP集合验证与原receipt格式，只跳过NSIS。既有 windows-client 仍同时构建安装器和ZIP。
+- 编排在构建前后核对干净同HEAD，校验平台/版本/锁输入与Windows收据；完整来源/归档SHA256/日志随包。发布清单format1采用相对文件路径，SHA256SUMS覆盖归档、平台收据及日志；失败保留partial且不签发成功目录；仓库级非阻塞文件锁避免并发入口竞争前端dist。
+- 只构建并核对字节，不代替原生验收、不声明首发通过；无协议/持久化变化，不启动VM或改部署实例。

@@ -56,6 +56,16 @@ nix develop -c pnpm --recursive --if-present run test
 
 ## 构建与运行
 
+一键生成全部支持平台的 release 归档（Linux x64/ARM64、Windows x64 ZIP）：
+
+```bash
+./tools/release.sh
+```
+
+在 Linux x64/Nix 主机运行，自动进入锁定环境并准备依赖。产物写入
+`dist/releases/v<版本>-<提交前12位>/`，包含校验和、来源清单和日志；Windows 只生成免安装 ZIP。
+单平台选择、目录设置和首次下载说明见[统一打包入口](packaging/README.md#一键生成发行归档)。
+
 锁定开发工具链由 `flake.nix` 与 `flake.lock` 提供。服务端只支持 Linux、本地合规 btrfs 与完整普通文件；Windows 客户端只支持 Windows 11 x64/NTFS，原生 CFAPI 必须在 Windows 验证。Linux/macOS/Android 同步客户端、P2P 和增量传输不在首发范围。
 
 | 操作 | 唯一维护入口 |
