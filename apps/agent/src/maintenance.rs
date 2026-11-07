@@ -1,5 +1,5 @@
 //! Agent-owned offline upgrade/uninstall transaction. Ordinary writers obey a durable barrier.
-mod storage;
+pub(crate) mod storage;
 use crate::{config::AgentConfig, instance::InstanceGuard, local::error};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -30,6 +30,7 @@ fn marker(config: &AgentConfig) -> Result<PathBuf> {
 }
 /// A barrier is never silently removed by normal startup, including the login launcher.
 pub fn admit_startup(config: &AgentConfig) -> std::result::Result<(), PortError> {
+    crate::portable::admit(config).map_err(error)?;
     if config
         .state_dir
         .parent()
@@ -148,6 +149,12 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
         return Err("unknown maintenance action".into());
     }
     let mut config = installed_config()?;
+    if PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA absent")?)
+        .join("vaultsyncd/zip-owner.json")
+        .try_exists()?
+    {
+        return Err("ZIP_PROFILE: installed maintenance cannot adopt ZIP state; keep original ZIP and use its safe Stop entry. ZIP upgrades are not supported by this release".into());
+    }
     let program_root = RootHandle::open(program)?;
     let state = RootHandle::open(&config.state_dir)?;
     if program_root.overlaps(&state) {

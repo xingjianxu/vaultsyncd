@@ -26,7 +26,7 @@ pub(super) fn json(path: &Path, value: &impl Serialize) -> io::Result<()> {
     f.write_all(&serde_json::to_vec_pretty(value).map_err(io::Error::other)?)?;
     f.sync_all()
 }
-pub(super) fn hash(path: &Path) -> io::Result<String> {
+pub(crate) fn hash(path: &Path) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut h = ContentHasher::new();
     let mut b = [0; 65536];
@@ -142,7 +142,7 @@ pub(super) fn restore(directory: &Path, target: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-pub(super) fn verify_program(directory: &Path) -> io::Result<serde_json::Value> {
+pub(crate) fn verify_program(directory: &Path) -> io::Result<serde_json::Value> {
     vaultsyncd_platform_windows::files::RootHandle::open(directory)?;
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.join("installed-files.json"))?)

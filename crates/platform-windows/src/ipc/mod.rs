@@ -6,7 +6,7 @@
 //! Malformed frames/JSON, peer mismatches and disconnects close only that connection.
 mod security;
 pub use security::ServerProcess;
-use std::{future::Future, io, sync::Arc, time::Duration};
+use std::{future::Future, io, path::Path, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions},
@@ -99,15 +99,30 @@ impl Endpoint {
     /// Issue a single request and validate its response. GUI/CLI can use this without CFAPI.
     pub async fn request(&self, request: &Request) -> io::Result<Response> {
         let mut pipe = self.connect().await?;
-        deadline(write_json(&mut pipe, request)).await?;
-        let bytes = operation_deadline(request, read_frame(&mut pipe)).await?;
-        let response: Response = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        response.validate().map_err(io::Error::other)?;
-        if response.request_id != request.request_id {
-            return Err(io::Error::other("IPC response identity mismatch"));
-        }
-        Ok(response)
+        request_on(&mut pipe, request).await
     }
+    /// Verify the executable and token user on the request's connection before sending any bytes.
+    /// Returns the original peer's pinned process handle only after validating its response.
+    pub async fn request_verified(
+        &self,
+        expected: &Path,
+        request: &Request,
+    ) -> io::Result<(Response, ServerProcess)> {
+        let mut pipe = self.connect().await?;
+        let process = ServerProcess::capture(&pipe, &self.sid, expected)?;
+        let response = request_on(&mut pipe, request).await?;
+        Ok((response, process))
+    }
+}
+async fn request_on(pipe: &mut NamedPipeClient, request: &Request) -> io::Result<Response> {
+    deadline(write_json(pipe, request)).await?;
+    let bytes = operation_deadline(request, read_frame(pipe)).await?;
+    let response: Response = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    response.validate().map_err(io::Error::other)?;
+    if response.request_id != request.request_id {
+        return Err(io::Error::other("IPC response identity mismatch"));
+    }
+    Ok(response)
 }
 /// Owns the listener and bounded connection tasks. Drop cancels all pending I/O.
 pub struct Server {

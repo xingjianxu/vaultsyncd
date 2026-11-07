@@ -59,3 +59,5 @@ pub mod release;
 pub mod maintenance;
 #[cfg(windows)]
 mod maintenance_prepare;
+#[cfg(windows)]
+pub mod portable;

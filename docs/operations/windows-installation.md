@@ -2,6 +2,8 @@
 
 适用Windows 11 x64。当前安装包是**未签名测试产物**；没有生产签名身份，不应把清单当作数字签名。S100产品版本0.1.1用于从S099 0.1.0开发包真实升级，不宣称存在旧正式发行版；远端协议及数据库schema未随产品版本递增。本机维护命令独立使用IPC1.5。
 
+免安装、状态留在本机的替代入口见[Windows ZIP](windows-zip.md)。同一次`windows-client`构建同时生成两种包，但两者不能接管彼此已用状态；ZIP所有权存在时setup明确拒绝，不允许覆盖绕过S100。
+
 ## 安装与运行条件
 
 - 安装器以当前用户普通权限运行，无需安装Windows服务或完整开发工具链。默认程序目录为`%LOCALAPPDATA%/Programs/vaultsyncd`，也可选择新的普通目录；路径可含中文与空格。已存在的目的目录或`%LOCALAPPDATA%/vaultsyncd/`状态树内目录拒绝写入。
@@ -27,7 +29,7 @@ nix develop --command cargo xtask release assemble artifacts/S099/release-new.js
 nix develop --command cargo xtask release verify artifacts/S099/release-new.json
 ```
 
-适配器使用flake.lock锁定的NSIS（本环境实测3.12）、Rust/Node/pnpm等工具。清除旧desktop dist并冻结锁离线准备前端；在新Cargo target真实编译x64 MSVC release、静态CRT、无native-acceptance；核验PE架构并拒绝测试入口标识，再生成NSIS。收据记录完整commit/tree、版本与锁/协议源hash、工具实测版本、实际命令和全部payload文件hash。安装目录内的installed-files.json含同源身份和四个已安装EXE的摘要。
+适配器使用flake.lock锁定的NSIS（本环境实测3.12）、Rust/Node/pnpm等工具。清除旧desktop dist并冻结锁离线准备前端；在新Cargo target真实编译x64 MSVC release、静态CRT、无native-acceptance；核验PE架构并拒绝测试入口标识，再生成NSIS和程序免安装ZIP（额外专用ZIP入口在同一次编译生成）。收据记录完整commit/tree、版本与锁/协议源hash、工具实测版本、实际命令和全部payload文件hash。安装目录内的installed-files.json含同源身份和四个已安装EXE的摘要。
 
 只接受同一HEAD的组件，脏树/来源变化/旧输出/缺文件均拒绝生成有效收据。合并或追加交接提交后旧组件不是新HEAD的发布产物，必须重新构建；实验记录需按实际来源提交解释，不能改写收据让它看起来来自后来提交。开发编译检查包没有发布receipt，不作为最终验收产物。
 

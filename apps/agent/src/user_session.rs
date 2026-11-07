@@ -73,7 +73,12 @@ pub fn launch() -> io::Result<()> {
         std::env::var_os("LOCALAPPDATA").ok_or_else(|| io::Error::other("missing LOCALAPPDATA"))?,
     );
     let config = prepare(&local)?;
-    let parsed = AgentConfig::load(&config)?;
+    spawn(&config)?;
+    Ok(())
+}
+/// Shared process adapter for installed and ZIP entry points. The caller owns readiness checks.
+pub(crate) fn spawn(config: &Path) -> io::Result<std::process::Child> {
+    let parsed = AgentConfig::load(config)?;
     crate::maintenance::admit_startup(&parsed).map_err(|e| io::Error::other(e.to_string()))?;
     let log = OpenOptions::new()
         .create(true)
@@ -95,8 +100,7 @@ pub fn launch() -> io::Result<()> {
         .stdout(Stdio::null())
         .stderr(log)
         .creation_flags(0x0800_0000)
-        .spawn()?;
-    Ok(())
+        .spawn()
 }
 
 #[cfg(test)]

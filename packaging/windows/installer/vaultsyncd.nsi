@@ -54,6 +54,10 @@ Function .onInit
     SetErrorLevel 21
     Quit
   ${EndIf}
+  IfFileExists "$LOCALAPPDATA\vaultsyncd\zip-owner.json" 0 +4
+    MessageBox MB_OK|MB_ICONSTOP "This user profile is owned by an install-free ZIP. Keep the original ZIP and local state; setup cannot adopt or upgrade it. Do not delete zip-owner.json to bypass maintenance." /SD IDOK
+    SetErrorLevel 22
+    Quit
   StrCpy $Upgrade 0
   SetRegView 64
   ReadRegStr $0 HKCU "Software\vaultsyncd" "InstallDir"

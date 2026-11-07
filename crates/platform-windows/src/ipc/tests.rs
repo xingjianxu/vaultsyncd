@@ -108,6 +108,60 @@ async fn same_user_partial_frames_pipeline_and_disconnect_are_isolated() {
     );
 }
 #[tokio::test]
+async fn verified_request_checks_actual_peer_before_running_handler() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let ep = endpoint();
+    let handled = Arc::new(AtomicU32::new(0));
+    let count = handled.clone();
+    let server = Server::bind(ep.clone(), move |r| {
+        count.fetch_add(1, Ordering::SeqCst);
+        async move { Ok(Service::new("native-s109").handle(&r)) }
+    })
+    .unwrap();
+    let executable = std::env::current_exe().unwrap();
+    // Use a different real executable, so rejection proves the peer image check ran rather
+    // than merely failing to canonicalize a nonexistent expected path.
+    let other = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32")
+        .join("cmd.exe");
+    assert!(other.is_file());
+    assert_ne!(
+        std::fs::canonicalize(&executable).unwrap(),
+        std::fs::canonicalize(&other).unwrap()
+    );
+    let error = ep
+        .request_verified(&other, &request("wrong-executable"))
+        .await
+        .err()
+        .expect("a different existing executable must not authorize the request");
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert_eq!(handled.load(Ordering::SeqCst), 0);
+    let mut wrong_user = ep.clone();
+    wrong_user.sid = "S-1-5-7".into();
+    let error = wrong_user
+        .request_verified(&executable, &request("wrong-user"))
+        .await
+        .err()
+        .expect("a different SID must not authorize the request");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(handled.load(Ordering::SeqCst), 0);
+    let (response, process) = ep
+        .request_verified(&executable, &request("verified"))
+        .await
+        .unwrap();
+    assert_eq!(response.request_id, "verified");
+    assert_eq!(response.result.unwrap().agent_version, "native-s109");
+    assert_eq!(handled.load(Ordering::SeqCst), 1);
+    assert!(
+        !process.wait(0).unwrap(),
+        "the pinned test process is alive"
+    );
+    server.shutdown().await.unwrap();
+    println!(
+        "check=pass native_verified_request_same_executable_allowed_other_image_and_sid_denied_before_handler"
+    );
+}
+#[tokio::test]
 async fn malformed_oversize_unknown_and_truncated_frames_close_only_client() {
     let ep = endpoint();
     let server = serve(ep.clone());

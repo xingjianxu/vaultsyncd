@@ -164,6 +164,8 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             error(e)
         }
     })?;
+    // Recheck after ownership acquisition: a concurrent ZIP claim must not be bypassed.
+    crate::maintenance::admit_startup(&config)?;
     let db = Arc::new(
         Database::open(config.state_dir.join("client.sqlite"))
             .await

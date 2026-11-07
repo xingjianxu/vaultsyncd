@@ -2579,3 +2579,11 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - 运行时只按暂停/解绑关闭整绑定轮询；排除由持久动作的 `path/from` 与核心Entry/目录子树围栏共同判定。新建/远端新条目使用校验过的动作路径；扫描在读内容/推导namespace前排除目标。已知目录有排除后代时不从本地缺失推导整组Delete。
 - 取消排除保持原baseline和队列，先完整读取认证固定快照（ID/epoch/高水位/分页计数）、核对已接收事件与远端身份、观察保留的真实本地内容，再按规则版本CAS解除participation。清洁旧副本不作为新文件上传；双方修改交既有revision/generation围栏与preserve_both执行器，断网/未知证据保持未协调。排除/模式切换/解绑从不回收缓存或删除远端内容。
 - 释放持久化沿类型化错误源识别SQLite SQLITE_FULL（主错误13）为 `LocalErrorKind::NoSpace`；本机IPC映射已有 `INSUFFICIENT_STORAGE`，GUI/CLI显示空间不足与内容保留提示，不回显错误详情/路径。测试的max_page_count必须限定实际释放使用的同一个SQLite pager，不能把另一连接未耗尽误当故障已注入。
+
+## S109 — Windows免安装ZIP与本机所有权
+
+- `windows-client`同一次fresh cross release同时生成NSIS（原四EXE）和ZIP（另含`vaultsyncd-zip.exe`、两个cmd及说明），不重复编译。ZIP清单十份文件hash，receipt递归覆盖展开文件及完整ZIP；hash不是签名，继续标unsigned-test。构建/验证及状态限制见`docs/operations/windows-zip.md`。
+- `vaultsyncd-zip.exe start|health|stop`为专用固定入口；Start在Windows11/WebView2前置、组件完整性、LocalAppData所有权验证后独立启动agent，只在认证正确EXE路径且真实GetStatus成功后开GUI。GUI关闭不停止agent，重复Start复用同实例。ZIP默认不注册Run/StartMenu，不携带状态/凭据；新ZIP profile默认关闭系统通知，用户显式开启后Toast可注册快捷方式，UI明确提示。
+- `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源/覆盖升级明确拒绝；安装器及安装维护控制器拒绝接管ZIP状态。本版本不支持ZIP升级或已用profile互转，不允许删除所有权绕过S100。无DB迁移或wire新增。
+- `Endpoint::request_verified(expected,request)`在实际发送请求的同一NamedPipeClient上认证预期EXE及SID，返回`(Response,ServerProcess)`，原`request`接口不变；ZIP每个GetStatus/PrepareMaintenance均用此入口，等待实际执行准备的对端进程，不用先探测再另连的句柄。
+- Stop复用IPC1.5 PrepareMaintenance，认证并等待确切进程退出，再取得writer锁确认停机；未确认内容导出到agent/zip-stop-*。不强杀、不注销提供程序、不删Root/cache/dirty/state。暂停持久化，重启后须用户显式Resume；失败可能部分暂停，绝不默认成功或自动恢复所有绑定。原生脚本`tests/platform/windows/s109-zip.ps1`要求手工登录全新标准用户，不改自动登录；Fresh/Live/Stop分离，Live另需真实服务端独立hash核对。

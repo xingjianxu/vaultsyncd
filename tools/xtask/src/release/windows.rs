@@ -1,4 +1,4 @@
-//! Host NSIS adapter. Receipts are issued only after a fresh same-commit Windows build.
+//! Host NSIS + ZIP adapter. Both share one fresh same-commit Windows cross-build.
 use super::*;
 const TARGET: &str = "x86_64-pc-windows-msvc";
 const FLAGS: &str = "-C target-feature=+crt-static -C link-arg=/ignore:4099";
@@ -82,6 +82,7 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
         ("node", vec!["--version"]),
         ("pnpm", vec!["--version"]),
         ("makensis", vec!["-VERSION"]),
+        ("python3", vec!["--version"]),
     ] {
         toolchain.insert(tool.into(), output(tool, &args, root)?);
     }
@@ -168,6 +169,23 @@ pub(super) fn build(root: &Path, directory: &Path) -> Result<(), String> {
             .to_string(),
     ];
     run(&command, root, None)?;
+    let launcher = build.join(TARGET).join("release/vaultsyncd-zip.exe");
+    production_pe(&launcher)?;
+    let zip_command = vec![
+        "python3".into(),
+        root.join("packaging/windows/zip/build.py")
+            .display()
+            .to_string(),
+        payload.display().to_string(),
+        launcher.display().to_string(),
+        root.join("packaging/windows/zip").display().to_string(),
+        payload
+            .join(format!("vaultsyncd-{}-x64-unsigned.zip", before.version))
+            .display()
+            .to_string(),
+    ];
+    run(&zip_command, root, None)?;
+    preparation.push(zip_command);
     if before != source(root)? {
         return Err("source changed during Windows build; receipt refused".into());
     }
