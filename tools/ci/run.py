@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -27,10 +28,7 @@ JOBS = {
     "frontend": [["pnpm", "--recursive", "run", "typecheck"],
                  ["pnpm", "--recursive", "--if-present", "run", "test"],
                  ["pnpm", "--recursive", "--if-present", "run", "build"]],
-    "linux-server": [["cargo", "test", "--locked", "-p", "vaultsyncd-platform-linux-server",
-                      "-p", "vaultsyncd-server-store", "-p", "vaultsyncd-server-core",
-                      "-p", "vaultsyncd-server", "-p", "vaultsyncd-admin",
-                      "-p", "vaultsyncd-server-tests"]],
+    "linux-server": [["python3", "tools/ci/linux-server.py"]],
     "windows-build": [["pnpm", "--filter", "@vaultsyncd/desktop", "build"],
                       ["cargo", "build", "--locked", "--release", "--target", "x86_64-pc-windows-msvc",
                        "-p", "vaultsyncd-agent", "-p", "vaultsyncd-cli", "-p", "vaultsyncd-desktop", "--bins"],
@@ -90,7 +88,21 @@ def main():
             print("CI_COMMAND " + json.dumps(command), flush=True)
             start = time.monotonic()
             with (directory / f"{index}.log").open("w") as log:
-                process = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+                process = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=log, text=True, timeout=3600)
+                log.write(process.stdout)
+            if process.returncode == 0 and args.job in ('release-linux', 'release-arm64'):
+                release = directory / 'release'
+                for item in json.loads(process.stdout):
+                    output = Path(item['outputs']['out'])
+                    if (output / 'runtime').is_dir():
+                        destination = release / output.name
+                        destination.mkdir(parents=True)
+                        for archive in output.glob('*.tar.gz'):
+                            shutil.copy2(archive, destination / archive.name)
+                        shutil.copy2(output / 'runtime/share/vaultsyncd/release-manifest.json', destination / 'release-manifest.json')
+            if process.returncode == 0 and args.job == 'release-windows':
+                shutil.copytree(Path(args.component) / 'payload', directory / 'release')
+                shutil.copy2(Path(args.component) / 'receipt.json', directory / 'receipt.json')
             report["steps"].append({"exit": process.returncode, "seconds": round(time.monotonic() - start, 3)})
             print((directory / f"{index}.log").read_text(), end="", flush=True)
             if process.returncode:

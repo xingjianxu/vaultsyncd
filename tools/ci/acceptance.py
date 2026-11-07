@@ -25,11 +25,12 @@ ROOT = Path(__file__).resolve().parents[2]
 def run(command, log, timeout=3600, env=None):
     print("ACCEPTANCE_COMMAND " + json.dumps(list(map(str, command))), flush=True)
     with log.open("w") as output:
-        result = subprocess.run(list(map(str, command)), cwd=ROOT, stdout=output,
-                                stderr=subprocess.STDOUT, timeout=timeout, env=env)
+        result = subprocess.run(list(map(str, command)), cwd=ROOT, stdout=subprocess.PIPE,
+                                stderr=output, text=True, timeout=timeout, env=env)
+        output.write(result.stdout)
     if result.returncode:
         raise RuntimeError(f"exit {result.returncode}: {log}")
-    return log.read_text()
+    return result.stdout
 
 
 def main():
@@ -156,19 +157,21 @@ def main():
                     'windows_payload':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (component/'payload').iterdir() if p.is_file()}}
             (public/'installation.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
         finally:
-            if vm_started:
-                subprocess.run([*ssh,'sudo -n systemctl poweroff'],check=True,timeout=30)
-                for _ in range(90):
-                    if not Path(f'/proc/{meta["pid"]}').exists():
-                        break
-                    time.sleep(2)
-                else:
-                    raise RuntimeError('owned ARM64 VM did not shut down; preserve evidence')
-            if registered:
-                subprocess.run([*sudo,'tee',str(binfmt/handler)],input='-1',text=True,check=True,stdout=subprocess.DEVNULL,timeout=30)
-            privileged('rm','-rf','/run/'+handler)
-            if mounted:
-                privileged('umount',binfmt)
+            try:
+                if vm_started:
+                    subprocess.run([*ssh,'sudo -n systemctl poweroff'],check=True,timeout=30)
+                    for _ in range(90):
+                        if not Path(f'/proc/{meta["pid"]}').exists():
+                            break
+                        time.sleep(2)
+                    else:
+                        raise RuntimeError('owned ARM64 VM did not shut down; preserve evidence')
+            finally:
+                if registered:
+                    subprocess.run([*sudo,'tee',str(binfmt/handler)],input='-1',text=True,check=True,stdout=subprocess.DEVNULL,timeout=30)
+                privileged('rm','-rf','/run/'+handler)
+                if mounted:
+                    privileged('umount',binfmt)
     return 0
 
 
