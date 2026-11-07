@@ -134,4 +134,4 @@
 | S105 | 安全与操作可达性验收 | X | S083、S090、S097、S100 | todo | — | 未执行 | — | agent/tasks/S105.md（执行时创建） |
 | S106 | 小文件时延与常规规模基准 | X | S101、S102、S103、S104、S105 | blocked | 基线c59ff19；独立只读前置/资源报告 `docs/reports/performance.md`，本地文档提交待父记录 | devShell资源核查：双路6430/128线程、503.54GiB RAM、SSD可用143.05GiB、旋转btrfs21.58TiB；仅1台8GiB/8vCPU Windows，未联系客体、未跑小样本/常规档，p95/RSS/CPU/队列全未测 | S101 hosted无remote/runner/Actions证据；核查时S105未完成；需准备3独立Windows及SSD/RTT实证，容量本身未证不足，不降1万文件/约10GiB目标 | agent/tasks/S106.md；artifacts/S106 |
 | S107 | 正式容量与大文件续传验证 | X | S106 | todo | — | 未执行 | — | agent/tasks/S107.md（执行时创建） |
-| S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | todo | — | 未执行 | — | agent/tasks/S108.md（执行时创建） |
+| S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | blocked | 35项P0索引、README/运维入口与当前限制；纯文档收口（S105 done；整合候选fd896fa） | 两架构各24个历史runtime文件及发布/源码tar哈希核验，当前候选未打包 | S101 hosted、S106/S107性能容量、T02三台Windows及最终同源发行证据缺失；未宣称首发完成 | agent/tasks/S108.md；docs/operations/release.md |
