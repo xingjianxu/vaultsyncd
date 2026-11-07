@@ -194,26 +194,24 @@ public static class S109Native {
     $items[0]
   }
   function Invoke-Zip([string]$operation){
-    # Bounded child wait: a *successful* Start must return after it launches the GUI, so an
-    # unbounded pipeline wait here would hide real evidence as a hang. Output goes to per-run
-    # files; only exit status and length are reported (no credential text).
-    $out=Join-Path $results ('zip-'+$operation+'-out.txt')
-    $err=Join-Path $results ('zip-'+$operation+'-err.txt')
-    # The launcher's long-lived GUI/agent children inherit the caller's standard handles, so a
-    # pipe would only reach EOF when they exit. Redirect to files (never pipes), let a batch file
-    # capture the real exit code, and bound the wait.
-    $code=Join-Path $results ('zip-'+$operation+'-exit.txt')
-    # The command line travels as Unicode arguments (never inside a codepage-bound .cmd file,
-    # which would corrupt the Chinese program path), and output goes to files, not pipes.
-    $line='"'+$zipEntry+'" '+$operation+' > "'+$out+'" 2> "'+$err+'" & echo !ERRORLEVEL! > "'+$code+'"'
-    $process=Start-Process -FilePath $env:ComSpec -ArgumentList @('/v:on','/c',$line) -PassThru -WindowStyle Hidden
+    # Health is short-lived and spawns nothing, so a pipeline is safe and gives its JSON.
+    if($operation-eq 'health'){
+      $text=& $zipEntry health 2>&1
+      if($LASTEXITCODE-ne 0){throw 'product ZIP health failed'}
+      return ($text -join "`n")
+    }
+    # Start/Stop derive long-lived GUI/agent children that inherit standard handles; capturing
+    # them would block until those children exit. Do not redirect: only the real exit code of
+    # this process matters here, and success is re-verified through IPC/CLI below.
+    $info=New-Object Diagnostics.ProcessStartInfo
+    $info.FileName=$zipEntry;$info.Arguments=$operation;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
+    $process=[Diagnostics.Process]::Start($info)
     if(!$process.WaitForExit(180000)){throw ('product ZIP entry did not return: '+$operation)}
     $process.WaitForExit()
-    if(!(Test-Path -LiteralPath $code)){throw ('product ZIP entry produced no exit code: '+$operation)}
-    $exit=[int]((Get-Content -Raw -LiteralPath $code).Trim())
+    $exit=$process.ExitCode
+    Mark ('zip-'+$operation+'-exit:'+$exit)
     if($exit-ne 0){throw ('product ZIP entry failed: '+$operation+' exit='+$exit)}
-    if(!(Test-Path -LiteralPath $out)){return ''}
-    return (Get-Content -Raw -Encoding UTF8 $out)
+    return ''
   }
   function Close-Gui {
     # Owned = exact ExecutablePath under this run's extracted program directory, even when an
