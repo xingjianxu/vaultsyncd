@@ -10,6 +10,10 @@ publish.workspace = true
 name = "vaultsyncd-server"
 path = "src/main.rs"
 
+[features]
+# 仅隔离故障验收 helper 显式开启；发布构建不提供停车或数据库测试入口。
+test-faults = []
+
 # 服务端只在 Linux 运行（design §4.2、§17.2）：本包在非 Linux 目标上直接 `compile_error!`，
 # 因此不进 workspace `default-members`，便携检查（含 Windows 默认目标）不构建它。
 #

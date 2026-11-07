@@ -53,3 +53,6 @@ pub mod web;
 pub mod capabilities;
 
 mod root_fences;
+
+#[doc(hidden)]
+pub mod test_faults;

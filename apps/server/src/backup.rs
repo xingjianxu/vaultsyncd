@@ -103,6 +103,7 @@ pub async fn prepare(
     sqlx::query("INSERT INTO backup_preparations(id,owner_id,phase,created_at,expires_at) VALUES(?,?,'preparing',?,?)")
         .bind(id.as_bytes().as_slice()).bind(owner.as_bytes().as_slice()).bind(now.to_db_integer()).bind(expires.to_db_integer()).execute(&mut *tx).await.map_err(err)?;
     tx.commit().await.map_err(err)?;
+    crate::test_faults::checkpoint("backup_preparing");
     let result = prepare_locked(database, config, &arena, owner, id, now, expires).await;
     if let Err(original) = result {
         let detail = original.to_string();
@@ -164,12 +165,14 @@ async fn prepare_locked(
     sqlx::query("UPDATE backup_preparations SET snapshot_seq_map=? WHERE id=? AND owner_id=? AND phase='preparing'")
         .bind(map.as_ref().map_or_else(||"{}".into(),SnapshotSeqMap::to_json)).bind(id.as_bytes().as_slice()).bind(owner.as_bytes().as_slice()).execute(&mut *tx).await.map_err(err)?;
     tx.commit().await.map_err(err)?;
+    crate::test_faults::checkpoint("backup_leased");
     let manifest = copy_manifest(config, &prepared, id, now, expires, &frozen)?;
     let bytes = serde_json::to_vec_pretty(&manifest).map_err(err)?;
     let manifest_hash = digest(&bytes);
     write_private(&prepared.join("manifest.json"), &bytes)?;
     fs::File::open(&prepared)?.sync_all()?;
     let snapshot = arena.freeze(&id.to_hex())?;
+    crate::test_faults::checkpoint("backup_frozen");
     // 最后一次实际读回快照，不凭成功退出推断清单已固定。
     if fs::read(snapshot.join("manifest.json"))? != bytes {
         return Err(err("snapshot manifest mismatch"));
@@ -196,6 +199,7 @@ async fn prepare_locked(
     sqlx::query("UPDATE backup_preparations SET phase='ready',manifest_hash=? WHERE id=? AND phase='preparing'")
         .bind(manifest_hash.as_slice()).bind(id.as_bytes().as_slice()).execute(&mut *tx).await.map_err(err)?;
     tx.commit().await.map_err(err)?;
+    crate::test_faults::checkpoint("backup_ready");
     Ok(Prepared {
         id,
         snapshot,
