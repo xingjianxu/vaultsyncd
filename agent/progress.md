@@ -1,5 +1,7 @@
 # 实施进度
 
+本轮新增：**S109 Windows 免安装 ZIP（状态留本机）in_progress**。用户明确确认此分发形式，按新增卡优先执行；前置 S099/S100 已完成。工作树 `/wrd/prj/vaultsyncd/.worktrees/s109`，分支 `feat/S109-windows-zip`，基线 `fd3d6ab`；基线 xtask 23/23。默认无自启，保留本机状态与凭据，安全启动/停止和同源发布须 Windows 原生验收。交接 `agent/tasks/S109.md`；不改变下面既有首发阻塞结论。
+
 本轮：**S104—S108 收口（2026-11-07）**，按用户要求每卡一个 subagent。**S104、S105 done**：分别以 `326b469`、`fd896fa` 合入master；S105补齐IPC1.6排除规则真实入口/应用，修复CFAPI后续范围误拒和满盘分类，真实Windows与安全矩阵通过。**S106、S107、S108 blocked**：只完成资源预算/发布清单，未执行性能与正式容量，不宣称首发验收完成；文档分别以 `cb9ed20`、`0d4fb30`、`abdedd3` 整合。五卡证据已归档 `artifacts/S104`—`artifacts/S108`，哈希与逐文件一致性已核对，五个任务工作树及本地分支均已清理；Windows在线、本run资源清理完成。**当前无ready卡**：先恢复S101 hosted（无remote/runner/Actions实证），再续S106→S107→S108，并补T02三台Windows与当前同源发行门禁。批次记录：`agent/tasks/S104-S108.md`。
 
 上一批：**S101—S103 收尾（2026-11-07）**。用户要求每张卡一个 subagent，按编号顺序执行（三卡共用同一 Windows 客体与故障卷，故不并行）。S102、S103 为 done 并已合入 master（`60200a7`、`b36e31e`），任务 worktree/分支/实验卷全部清理、证据归档 `artifacts/S102`（310 文件）与 `artifacts/S103`（23 文件）。S101 本机同源验收完成、已合入（`f07aab2`），但**仅 hosted CI 保持 blocked**：仓库无 remote、未配置 runner，未执行 Actions；恢复条件见 `agent/tasks/S101.md`。S102 修复两处真实产品缺陷：HTTP SSE 订阅缺失、重建断网时装配被 `ensure_unblocked` 永久拒绝；S103 修复“外部写入尚未采纳时 put 以旧基线静默覆盖未采集内容”，改为 409 `RECONCILE_REQUIRED`。本批未改 wire/schema/产品保留默认值，Windows 均为单客体顺序执行，不冒充多机并发。过程偏差：S103 合并提交使用脚本默认英文消息，未附中文 body（未改写历史，仅记录）。下一 ready **S104**。
@@ -23,7 +25,7 @@
 构建分工（2026-11-05 用户决定，S009 已实施）：Windows 客户端在本 NixOS 开发环境交叉编译，宿主承担构建、客体承担原生运行验收；design ADR-013、实施手册 §2.6 与环境/操作文档已同步，具体工具链版本与证据见 `docs/environment.md` §13、步骤见 `docs/operations/windows-lab.md` §12。
 平台资源核验结论（S001，2026-11-05）：开发/服务验证主机为 NixOS 26.11 x86_64、Nix 2.34.9；`/`、`/home`、`/nix`、`/var/log`、`/wrd`、`/data` 均为本地 btrfs；`/wrd` 可用 197G、`/data` 可用 22T；KVM 可用且用户在 `kvm` 组，但 QEMU/Quickemu 未安装、无现成 Windows 客体；尚无本项目独立 btrfs 测试卷。Ubuntu 24.04、Linux ARM64、Windows 原生 CFAPI、reflink 与验收规模均未核验。证据见 `docs/environment.md`。
 
-状态图例：`todo` 未开始；`in_progress` 执行中；`blocked` 缺资源/前置；`done` 验收完成。下表共 108 行（S001—S108），编号、结果、环境、前置取自实施手册 §4 任务索引；产出/验证/阻塞列随执行更新。
+状态图例：`todo` 未开始；`in_progress` 执行中；`blocked` 缺资源/前置；`done` 验收完成。原计划表为 S001—S108，用户新增卡从 S109 续号；编号、结果、环境、前置取自实施手册 §4 任务索引；产出/验证/阻塞列随执行更新。
 
 | 编号 | 结果 | 环境 | 前置 | 状态 | 产出提交/工作树 | 验证摘要 | 阻塞 | 交接路径 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -125,6 +127,7 @@
 | S096 | 在本机启用隔离服务实例 | L | S095、S042 | done | 99a7ed4；主机ba1837a | 新源包64/0、主机build/test/健康/switch238；实际回滚237并恢复固定版本、两轮提交下载重启重放与备份释放，SSH/既有应用保持 | 无；公网TLS留S097 | agent/tasks/S096.md |
 | S097 | HTTPS 与同源 Web 部署 | L | S096、S077 | done | d90a263、b615fd9、b345ac9、d8b3cce、fd2f52d、f580392 | Chromium/Windows原生+Edge严格TLS、16MiB/SSE、Nix+host240与重启、独立bind/持久恢复通过 | 开发CA回环，无公网部署；旧Prepared跨dev保守停写 | agent/tasks/S097.md；下一S098 |
 | S098 | 通用 Linux 包与容器配置 | L | S094、S097 | done | 048aff1、62115d6、a14848f、8f009f8、3246089、09d73f9 | 双Ubuntu实际server/admin/Web/backup/重启、Compose正负例及旧JSON消费者通过；ARM74/0、native65/0 | ARM为全系统TCG非性能；只验Ubuntu24.04；外部离线证据保留 | agent/tasks/S098.md；下一S101在本批外 |
+| S109 | Windows 免安装 ZIP（状态留本机） | W | S099、S100 | in_progress | feat/S109-windows-zip；基线fd3d6ab | 基线xtask23/23；实现与原生验收待完成 | 不改变既有首发门禁 | agent/tasks/S109.md |
 | S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | done | ca510ab→cf1d174；交接见任务HEAD | 锁定NSIS/真实同源正式包；标准用户中文空格首装、GUI CLI同实例、关闭与真实重启后上传hash通过 | unsigned-test；原登录恢复且VM在线；父立即合并归档清理 | agent/tasks/S099.md |
 | S100 | Windows 升级与卸载保护 | W | S099、S091 | done | 3a2e2aa→d0392f4；交接见任务HEAD | 真实0.1.0→0.1.1/忙文件回退；默认卸载重装/不完整拒绝/4占位revert、6文件hash、708恢复读回；边界通过 | 产品PE1794752；分段源与失败保留；unsigned-test；父立即合并归档清理；本批结束 | agent/tasks/S100.md |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | blocked | 产品源fcbbb93；任务a6bbb56；master合并f07aab2，任务树/分支已清理 | 本机同源Linux双架构与Windows安装/CFAPI/e2e完成；portable914/0、Linux633/0，CFAPI5/5；NixOS与Ubuntu分列，ARM为全系统TCG | 仅hosted：无remote/runner，未执行Actions；需配置远端、Windows编译及独占platform-lab runner后运行工作流 | agent/tasks/S101.md（+a/b）；artifacts/S101/public/acceptance-matrix.json |
