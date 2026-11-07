@@ -258,12 +258,16 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
     delete(run, "dirty.txt").await?;
     let cursor_fixture = control(run, "expire_cursor").await?;
     let audit_before = run.proxy.audit().len();
+    run.proxy.block_snapshots(true);
+    let outage = observe(run, 1, "rebuild-network-outage").await?;
+    run.proxy.block_snapshots(false);
     let observed = observe(run, 1, "cursor-expired").await?;
     let restarted = observe(run, 1, "cursor-restart").await?;
     let rows = run.entries().await?;
     let snapshot = path_map(&rows)?;
     let checks = json!({
         "real_cursor_410":run.proxy.audit()[audit_before..].iter().any(|(p,s)|p.contains("/changes?") && *s==410),
+        "rebuild_outage_does_not_discover_old_files":run.proxy.blocked_snapshots()>0 && outage["database"]["resyncs"]!="0" && outage["database"]["pending"]=="0",
         "no_clean_revival":!snapshot.contains_key("clean.txt"),
         "dirty_bytes_retained":fs::read(run.clients[1].root.join("dirty.txt")).ok().as_deref()==Some(DIRTY.as_bytes()),
         "rebuild_journal_persisted":observed["database"]["resyncs"]!="0",
@@ -275,7 +279,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
     scenes.push(scene(
         "T15-cursor-expired",
         checks,
-        json!({"fixture":cursor_fixture,"observed":observed,"restarted":restarted}),
+        json!({"fixture":cursor_fixture,"snapshot_connections_dropped":run.proxy.blocked_snapshots(),"outage":outage,"observed":observed,"restarted":restarted}),
     ));
     let history_fixture = control(run, "expire_history").await?;
     // Recovery listings deliberately retain expired metadata. Prove the version cannot be

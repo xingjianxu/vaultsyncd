@@ -70,6 +70,8 @@ struct State {
     sse_fault: Option<String>,
     sse_effects: Vec<String>,
     sse_trace: Vec<serde_json::Value>,
+    block_snapshots: bool,
+    blocked_snapshots: u64,
 }
 
 #[derive(Debug)]
@@ -164,6 +166,14 @@ impl Proxy {
     /// S102：断开指定写请求，明确发生在上游收到请求之前。
     pub fn block_before_forward(&self, kind: Option<&str>) {
         self.state.lock().expect("proxy state").block_kind = kind.map(str::to_owned);
+    }
+
+    pub fn block_snapshots(&self, blocked: bool) {
+        self.state.lock().expect("proxy state").block_snapshots = blocked;
+    }
+
+    pub fn blocked_snapshots(&self) -> u64 {
+        self.state.lock().expect("proxy state").blocked_snapshots
     }
 
     pub fn blocked_requests(&self) -> Vec<serde_json::Value> {
@@ -366,6 +376,13 @@ async fn serve(
     let operation = operation_identity(&request);
     {
         let mut locked = state.lock().expect("proxy state");
+        if locked.block_snapshots
+            && request.method == "POST"
+            && request.path.ends_with("/snapshots")
+        {
+            locked.blocked_snapshots += 1;
+            return Ok(());
+        }
         if operation
             .as_ref()
             .is_some_and(|(_, kind)| locked.block_kind.as_ref() == Some(kind))
