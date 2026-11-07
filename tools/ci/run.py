@@ -22,6 +22,7 @@ PATHS = [".github/**", ".cargo/**", "api/**", "apps/**", "crates/**", "packages/
          "tests/**", "fixtures/**", "tools/**", "packaging/**", "deploy/**", "nix/**",
          "Cargo.*", "package.json", "pnpm-*.yaml", "rust-toolchain.toml", "flake.*"]
 JOBS = {
+    "ci-selftest": [["python3", "tools/ci/test_ci.py"]],
     "portable": [CARGO + ["check"]],
     "contracts": [CARGO + ["generate", "--check"], CARGO + ["version", "--check"],
                   CARGO + ["check-boundaries"]],

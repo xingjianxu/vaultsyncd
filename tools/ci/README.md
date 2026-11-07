@@ -30,7 +30,7 @@ nix develop --command python3 tools/ci/test_ci.py
 工作流concurrency及本地flock禁止本控制器彼此并发；执行者仍需与其他非CI使用者协调窗口。
 不改trial/Caddy/SSH，不关闭Windows客体。S098原ARM64模板必须停机，控制器只reflink复制到本run，
 用完整Ubuntu ARM64内核TCG模拟，不把qemu-user或交叉编译当存储证据；不代表原生性能。
-只登记自己的binfmt handler，finally卸载自己登记/挂载的资源。失败保留外部专属磁盘和日志供恢复。
+只登记自己的binfmt handler，选择无ELF INTERP的静态qemu（不能只取PATH首个动态qemu），finally卸载自己登记/挂载的资源。TCG启动期间SSH超时限时重试，只有实际aarch64响应才继续；关机以本run进程退出为准。失败保留外部专属磁盘和日志供恢复。
 
 在源码外私有JSON中设置：`{"evidence":"/data/vaultsyncd-build/S101-唯一run",
 "arm64_template":"/data/vaultsyncd-build/S098-20261107T031019-4108805/ubuntu-arm64-tcg"}`。
@@ -49,8 +49,16 @@ nix develop .#portable-tests --command python3 tools/ci/acceptance.py --config /
 备份/新目标离线恢复/新epoch/重新登录、ARM64同链、Windows原生CFAPI释放和跨进程e2e，
 最后复用S099安装驱动真实标准用户安装/GUI+CLI/关GUI同步/重启登录同步。
 `VAULTSYNCD_CI_CLEANUP=1`仅本run启用：logout删除本用户凭据，完整驻留门通过才revert并卸载provider；
-核对三份文件hash和普通文件属性后，恢复原Quickemu登录，删除新测试用户/配置/探针和私有密码。
+核对三份文件hash和普通文件属性后，恢复原Quickemu登录，删除新测试用户/配置/探针和私有密码，并仅删除该确切新SID的自动生成任务（包括Windows SoftLanding）。
 历史S099默认保留行为不变。失败不强删不完整Root，也不删除其他卡的账户或数据。
 
 仅非秘密结果写`artifacts/S101/public/`，可上传GitHub；完整私有现场、凭据、SQLite、VM镜像不得上传。
 本地通过不能写成hosted通过；NixOS、Ubuntu x86_64、Ubuntu ARM64 TCG和Windows原生必须分列。
+
+S101实际产品源为`fcbbb93ecff408fedc8fbba6006c81b84a151727`，所有构建与安装时HEAD相同且porcelain为空；
+后续仅实验装置/交接提交不重标旧receipt。NixOS26.11包原生运行；Ubuntu24.04.5 x64容器共享NixOS7.3内核，
+ARM64为完整Ubuntu6.8内核TCG。Windows11 build26300.9711/WebView2 157实际标准用户安装、GUI/CLI同实例、
+关GUI上传与真实重启后上传通过，5项原生CFAPI与S074五块e2e通过，不是三台并发机器。
+首次动态解释器、后续TCG单探针超时两次装置失败均保留，后以相同命令目录逐job续验通过；不能把原控制器整体exit1说成exit0。
+最终装置修复有9项回归及实际静态解释器选择证明；资源复核发现并补清新SID的SoftLanding任务，驱动亦已修正。
+精确平台分列、哈希、失败与恢复范围见`agent/tasks/S101*.md`和忽略的`artifacts/S101/public/`。

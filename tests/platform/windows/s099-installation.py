@@ -240,7 +240,8 @@ def main():
             assert re.fullmatch(r"vs_s099_[0-9a-f]{6}", username) and re.fullmatch(r"S-1-5-21-[0-9-]+", sid)
             checked([*SSH, 'powershell -NoProfile -Command "'
                      + f"$u=Get-LocalUser -Name '{username}'; if($u.SID.Value-ne '{sid}'){{throw 'test SID mismatch'}}; "
-                     + f"Get-CimInstance Win32_UserProfile -Filter \\\"SID='{sid}'\\\" | Remove-CimInstance; Remove-LocalUser -Name '{username}'; "
+                     + f"Get-CimInstance Win32_UserProfile -Filter \\\"SID='{sid}'\\\" | Remove-CimInstance; "
+                     + f"Get-ScheduledTask | Where-Object {{$_.Principal.UserId -eq '{sid}'}} | Unregister-ScheduledTask -Confirm:$false; Remove-LocalUser -Name '{username}'; "
                      + f"Remove-Item -LiteralPath '{guest}' -Recurse -Force; Remove-Item -LiteralPath 'C:/ProgramData/vaultsyncd-lab-private/{run_id}' -Recurse -Force"
                      + '"'])
             summary["ci_resources_removed"] = True
