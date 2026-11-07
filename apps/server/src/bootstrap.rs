@@ -114,6 +114,11 @@ pub struct Service {
 }
 
 impl Service {
+    /// 集成 helper 使用同一连接池/对象门调度 GC；发布构建没有此入口。
+    #[cfg(feature = "test-faults")]
+    pub fn fault_database(&self) -> Database {
+        self.database.clone()
+    }
     /// 当前生命周期（供进程入口打印与测试观察）。
     #[must_use]
     pub fn lifecycle(&self) -> &Arc<Lifecycle> {

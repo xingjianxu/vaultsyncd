@@ -371,7 +371,9 @@ impl Context {
             return Err(failure("backup has not been prepared"));
         }
         tx.commit().await.map_err(failure)?;
+        crate::test_faults::checkpoint("backup_releasing");
         Arena::open(&self.config.state_dir.join("backups"))?.remove(&id.to_hex())?;
+        crate::test_faults::checkpoint("backup_removed");
         let mut tx = self.db.begin_write().await.map_err(failure)?;
         leases::release_backup_lease(&mut tx, id)
             .await

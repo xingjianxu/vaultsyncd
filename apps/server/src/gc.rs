@@ -36,6 +36,7 @@ pub async fn run_once(
     state_dir: &Path,
     now: UtcTimestamp,
 ) -> io::Result<Report> {
+    crate::test_faults::checkpoint("gc_before_lock");
     let _objects = database.object_maintenance().await;
     let mut conn = database.pool().acquire().await.map_err(failure)?;
     let roots = roots::all_roots(&mut conn).await.map_err(failure)?;
@@ -57,6 +58,7 @@ pub async fn run_once(
             .await
             .map_err(failure)?;
         tx.commit().await.map_err(failure)?;
+        crate::test_faults::checkpoint("gc_marked");
         for candidate in candidates {
             if !candidate.deleting
                 && vaultsyncd_server_core::gc::sweep::decide(candidate.marked_at, now, false)
@@ -87,7 +89,9 @@ pub async fn run_once(
             if !authorized {
                 continue;
             }
+            crate::test_faults::checkpoint("gc_deleting");
             unlink_object(&directory, &name)?;
+            crate::test_faults::checkpoint("gc_unlinked");
             let mut tx = database.begin_write().await.map_err(failure)?;
             sweep::finish_delete(&mut tx, &candidate)
                 .await

@@ -359,6 +359,7 @@ impl ExecutorContext {
             });
         }
 
+        crate::test_faults::checkpoint("put_pending");
         let root_handle = match self.handle(&root_record) {
             Ok(handle) => handle,
             Err(failure) => {
@@ -465,6 +466,7 @@ impl ExecutorContext {
                         )
                         .await;
                 }
+                crate::test_faults::checkpoint("put_before_ack");
                 Ok(committed)
             }
             Err(failure) => {
@@ -784,6 +786,7 @@ impl IntentLog for SqlIntentLog {
         new: &NewPutIntent,
         at: UtcTimestamp,
     ) -> Result<PutIntent, IntentLogError> {
+        crate::test_faults::checkpoint("put_before_prepared");
         let mut tx =
             self.database
                 .begin_write()
@@ -818,6 +821,7 @@ impl IntentLog for SqlIntentLog {
         tx.commit().await.map_err(|error| IntentLogError::Storage {
             detail: error.to_string(),
         })?;
+        crate::test_faults::checkpoint("put_after_prepared");
         put_intent_of(record)
     }
 
@@ -827,6 +831,9 @@ impl IntentLog for SqlIntentLog {
         next: PutPhase,
         at: UtcTimestamp,
     ) -> Result<PutIntent, IntentLogError> {
+        if next == PutPhase::Published {
+            crate::test_faults::checkpoint("put_before_published");
+        }
         let mut tx =
             self.database
                 .begin_write()
@@ -841,6 +848,9 @@ impl IntentLog for SqlIntentLog {
         tx.commit().await.map_err(|error| IntentLogError::Storage {
             detail: error.to_string(),
         })?;
+        if next == PutPhase::Published {
+            crate::test_faults::checkpoint("put_after_published");
+        }
         put_intent_of(record)
     }
 
@@ -1077,6 +1087,7 @@ impl TargetPort for WorkTreeTarget {
                     detail: error.to_string(),
                 }
             })?;
+        crate::test_faults::checkpoint("put_before_publish");
         let outcome = publish::publish(publish::PublishRequest {
             source: &object,
             source_identity: &identity,
@@ -1086,6 +1097,7 @@ impl TargetPort for WorkTreeTarget {
             mode: WORK_FILE_MODE,
         })
         .map_err(|error| publish_error(&error, "publish"))?;
+        crate::test_faults::checkpoint("put_after_publish");
         if outcome.bytes != request.size || outcome.sha256 != *request.digest.as_bytes() {
             return Err(TargetError::Storage {
                 stage: "publish_verify",
@@ -1285,10 +1297,12 @@ impl PutCommitStore for SqlPutStore {
             detail: error.to_string(),
         })?;
 
+        crate::test_faults::checkpoint("put_before_metadata");
         tx.commit().await.map_err(|error| PutStoreError::Storage {
             detail: error.to_string(),
         })?;
 
+        crate::test_faults::checkpoint("put_after_metadata");
         Ok(PutRecord {
             intent_id: write.intent_id,
             phase: PutPhase::Finalized,
