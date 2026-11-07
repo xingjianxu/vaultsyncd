@@ -158,7 +158,28 @@ try{
         Write-Json (Join-Path $results 'before-reboot.json') $answer
         [IO.File]::WriteAllText((Join-Path $results 'phase.txt'),'after-reboot')
       }
-      'finish' {$answer.status=Read-Status;$answer.agent_pid=(Agent-Process).ProcessId}
+      'finish' {
+        $answer.status=Read-Status;$answer.agent_pid=(Agent-Process).ProcessId
+        if($fixture.ci_cleanup){
+          if(!$answer.status.bindings[0].synchronized){throw 'CI cleanup requires committed synchronized content'}
+          & $cli --json logout | Out-Null
+          if($LASTEXITCODE-ne 0){throw 'CI credential logout failed'}
+          $uninstaller=Join-Path $results 'ci-uninstall.exe'
+          Copy-Item (Join-Path $program 'uninstall.exe') $uninstaller
+          $uninstall=Start-Process $uninstaller -ArgumentList ('/S /PROVIDER _?='+$program) -PassThru
+          $null=$uninstall.Handle
+          if(!$uninstall.WaitForExit(90000)){throw 'CI provider uninstall timeout'}
+          $uninstall.WaitForExit();$uninstall.Refresh()
+          if($uninstall.ExitCode-ne 0){throw ('CI provider uninstall refused '+$uninstall.ExitCode)}
+          $hashes=@{}
+          foreach($name in @('server-seed.txt','after-gui-close.txt','after-reboot.txt')){
+            $path=Join-Path $local $name
+            if(([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'CI root still contains placeholder'}
+            $hashes[$name]=(Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $answer.ci_cleanup=@{provider_uninstall_exit=$uninstall.ExitCode;ordinary_file_hashes=$hashes;credential_logout=$true}
+        }
+      }
       default {throw 'unknown fixed test action'}
     }
     Write-Json (Join-Path $results 'response.json') $answer

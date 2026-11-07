@@ -146,7 +146,8 @@ def main():
         tls_port = wait("private TLS listener", lambda: (int((run / "tls-port").read_text()) if (run / "tls-port").exists() else None))
         setup = next((component / "payload").glob("*-unsigned-setup.exe"))
         fixture.update({"url": "https://127.0.0.1:18775", "serverId": uuid.uuid4().hex,
-                        "source_commit": receipt["source"]["commit"], "installer": setup.name})
+                        "source_commit": receipt["source"]["commit"], "installer": setup.name,
+                        "ci_cleanup": os.environ.get("VAULTSYNCD_CI_CLEANUP") == "1"})
         (run / "fixture.json").write_text(json.dumps(fixture))
         script = run / "s099-installation.ps1"
         script.write_text((ROOT / "tests/platform/windows/s099-installation.ps1").read_text(), encoding="utf-8-sig")
@@ -231,6 +232,19 @@ def main():
         restored = True
         summary["restored_lab_boot"] = reboot("restore original Quickemu login")
         summary["restored_console_user"] = wait("original console user", lambda: (value if (value := checked([*SSH, 'powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).UserName"']).strip()) == summary["prior_console_user"] else None), 240)
+        if fixture["ci_cleanup"]:
+            assert summary["final_cli"]["ci_cleanup"]["provider_uninstall_exit"] == 0
+            assert summary["final_cli"]["ci_cleanup"]["ordinary_file_hashes"] == summary["real_server_hashes"]
+            checked([*SCP, "-r", f"{USER}@{HOST}:{guest}/results", run / "guest-results"])
+            username, sid = installed["username"], installed["sid"]
+            assert re.fullmatch(r"vs_s099_[0-9a-f]{6}", username) and re.fullmatch(r"S-1-5-21-[0-9-]+", sid)
+            checked([*SSH, 'powershell -NoProfile -Command "'
+                     + f"$u=Get-LocalUser -Name '{username}'; if($u.SID.Value-ne '{sid}'){{throw 'test SID mismatch'}}; "
+                     + f"Get-CimInstance Win32_UserProfile -Filter \\\"SID='{sid}'\\\" | Remove-CimInstance; "
+                     + f"Get-ScheduledTask | Where-Object {{$_.Principal.UserId -eq '{sid}'}} | Unregister-ScheduledTask -Confirm:$false; Remove-LocalUser -Name '{username}'; "
+                     + f"Remove-Item -LiteralPath '{guest}' -Recurse -Force; Remove-Item -LiteralPath 'C:/ProgramData/vaultsyncd-lab-private/{run_id}' -Recurse -Force"
+                     + '"'])
+            summary["ci_resources_removed"] = True
         summary["ok"] = True
     finally:
         if prepared and not restored:
@@ -240,7 +254,7 @@ def main():
                 summary["restored_console_user"] = wait("original console after failure", lambda: (value if (value := checked([*SSH, 'powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).UserName"']).strip()) == summary["prior_console_user"] else None), 240)
             except Exception as error:
                 summary["restore_error"] = str(error)
-        if prepared:
+        if prepared and not summary.get("ci_resources_removed"):
             try:
                 checked([*SCP, "-r", f"{USER}@{HOST}:{guest}/results", run / "guest-results"])
             except Exception as error:
@@ -259,7 +273,8 @@ def main():
         for name in ["ca.key", "server.key"]:
             (run / name).unlink(missing_ok=True)
         print("ARTIFACTS", run, flush=True)
-        print("GUEST", guest, "(VM stays online; installed test-user data retained)", flush=True)
+        resources = "this run's test user/profile/credentials removed" if summary.get("ci_resources_removed") else "installed test-user data retained"
+        print("GUEST", guest, "(VM stays online; " + resources + ")", flush=True)
     assert summary["ok"], summary
 
 

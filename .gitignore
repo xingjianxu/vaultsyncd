@@ -1,6 +1,10 @@
 # 任务隔离工作树（不进版本库，见 AGENTS.md）
 /.worktrees/
 
+# Python 本地检查缓存
+__pycache__/
+*.pyc
+
 # Rust 构建产物
 /target/
 **/target/

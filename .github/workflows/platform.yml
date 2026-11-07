@@ -1,0 +1,58 @@
+# Hosted execution is BLOCKED until a remote and runners are configured.
+# Command semantics live only in tools/ci/run.py, exposed by cargo xtask ci.
+name: platform matrix
+on:
+  push:
+    paths: [".github/**", ".cargo/**", "api/**", "apps/**", "crates/**", "packages/**", "tests/**", "fixtures/**", "tools/**", "packaging/**", "deploy/**", "nix/**", "Cargo.*", "package.json", "pnpm-*.yaml", "rust-toolchain.toml", "flake.*"]
+  pull_request:
+    paths: [".github/**", ".cargo/**", "api/**", "apps/**", "crates/**", "packages/**", "tests/**", "fixtures/**", "tools/**", "packaging/**", "deploy/**", "nix/**", "Cargo.*", "package.json", "pnpm-*.yaml", "rust-toolchain.toml", "flake.*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    name: Linux x86_64 / ${{ matrix.job }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [ci-selftest, contracts, frontend, linux-server, release-linux, release-arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Frozen frontend dependencies
+        run: nix develop --command pnpm install --frozen-lockfile
+      - name: Run shared job catalogue
+        run: nix develop --command cargo xtask ci ${{ matrix.job }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-${{ matrix.job }}-${{ github.sha }}
+          path: artifacts/S101/ci/
+          if-no-files-found: error
+  windows:
+    name: Windows x64 native compilation (not CFAPI acceptance)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: rustup show
+      - run: pnpm install --frozen-lockfile
+      - run: cargo xtask ci windows-build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-build-${{ github.sha }}
+          path: |
+            artifacts/S101/ci/
+            target/x86_64-pc-windows-msvc/release/*.exe
+          if-no-files-found: error
