@@ -102,7 +102,6 @@ public static class S109Native {
   [S109Native]::RefusePipe($pipe)
   Mark 'preflight-pipe'
   $fixture=Get-Content (Join-Path $public 'fixture.json') -Raw -Encoding UTF8|ConvertFrom-Json
-  if(Get-NetTCPConnection -LocalPort $fixture.cdp_port -State Listen -ErrorAction SilentlyContinue){throw 'CDP port already occupied; no takeover'}
   $originalAppData=$env:APPDATA
   $program=Join-Path $public '同步 程序'
   $local=Join-Path $public '同步 样本'
@@ -114,7 +113,6 @@ public static class S109Native {
   $env:LOCALAPPDATA=$isolatedLocal
   $env:APPDATA=$isolatedRoaming
   $env:WEBVIEW2_USER_DATA_FOLDER=$webview
-  $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port='+$fixture.cdp_port+' --remote-debugging-address=127.0.0.1'
   # No notification setting file is written. Exercise ZIP's actual opt-in default honestly.
   $profile=Join-Path $isolatedLocal 'vaultsyncd\agent'
   $configPath=Join-Path $profile 'agent.json'
@@ -241,10 +239,13 @@ public static class S109Native {
     Mark 'zip-start-returned'
     $s=Poll 'healthy exact ZIP agent' {try{$null=Agent;Status}catch{$null}} 90
     Mark 'agent-poll-ok'
-    $gui=Poll 'real ZIP GUI process' {
+    # A process alone is weak evidence: require one owned window that is visible and responsive.
+    $gui=Poll 'real ZIP GUI window' {
       $items=@(Get-CimInstance Win32_Process -Filter "Name='vaultsyncd-desktop.exe'"|Where-Object{$_.SessionId-eq $session -and $_.ExecutablePath-eq (Join-Path $program 'vaultsyncd-desktop.exe')})
-      if($items.Count-eq 1){Get-Process -Id $items[0].ProcessId}
-    } 60
+      if($items.Count-ne 1){return $null}
+      $process=Get-Process -Id $items[0].ProcessId -ErrorAction SilentlyContinue
+      if($process -and $process.MainWindowHandle-ne 0 -and $process.Responding){$process}
+    } 120
     $script:desktops+=@($gui)
     Mark 'gui-poll-ok'
     $health=Invoke-Zip 'health'|ConvertFrom-Json
@@ -279,7 +280,13 @@ public static class S109Native {
   Mark 'signed-check'
   $initial=Start-Zip
   $firstAgent=(Agent).ProcessId
-  Write-Json (Join-Path $results 'ready.json') @{ok=$true;limited=(!$script:elevated);elevated=$script:elevated;sid=$identity.User.Value;session=$session;program=$program;local=$local;profile=$profile;ca=(Join-Path $public 'ca.pem');zip_sha256=(Hash $archive);agent_pid=$firstAgent;gui_pid=$script:desktops[0].Id;status=$initial;boot=$boot}
+  $window=$script:desktops[0]
+  Write-Json (Join-Path $results 'ready.json') @{ok=$true;limited=(!$script:elevated);elevated=$script:elevated;sid=$identity.User.Value;session=$session;program=$program;local=$local;profile=$profile;ca=(Join-Path $public 'ca.pem');zip_sha256=(Hash $archive);agent_pid=$firstAgent;gui_pid=$window.Id;gui_title=$window.MainWindowTitle;gui_handle=$window.MainWindowHandle;gui_responding=$window.Responding;status=$initial;boot=$boot}
+  # A second Start must reuse both the agent and the single window, not open another one.
+  $null=Invoke-Zip 'start'
+  $again=@(Get-CimInstance Win32_Process -Filter "Name='vaultsyncd-desktop.exe'"|Where-Object{$_.SessionId-eq $session -and $_.ExecutablePath-eq (Join-Path $program 'vaultsyncd-desktop.exe')})
+  if($again.Count-ne 1 -or (Agent).ProcessId-ne $firstAgent){throw 'repeated Start did not reuse the same agent/window'}
+  Mark 'repeat-start-reused'
 
   Mark 'ready'
   $stage='actions'
@@ -295,6 +302,18 @@ public static class S109Native {
     Mark ('action:'+$action.action)
     switch($action.action){
       'status' {$answer.status=Status;$answer.agent_pid=(Agent).ProcessId}
+      'configure' {
+        $null=Invoke-Cli @('--json','set-connection','--server-id',$fixture.serverId,'--server-url',$fixture.url,'--ca-file',(Join-Path $public 'ca.pem'))
+        $fixture.password | & $cli --json login --username $fixture.login 2>&1 | Out-Null
+        if($LASTEXITCODE-ne 0){throw 'CLI login failed (output suppressed)'}
+        $roots=Invoke-Cli @('--json','roots')
+        if(@($roots.roots).Count-lt 1){throw 'no authorized Root'}
+        $binding=[Guid]::NewGuid().ToString('N')
+        New-Item -ItemType Directory -Path (Join-Path $local 'cache') -Force|Out-Null
+        $null=Invoke-Cli @('--json','create-binding','--binding-id',$binding,'--root-id',$fixture.root,'--local-path',$local,'--cache-path',(Join-Path $local 'cache'),'--mode','full')
+        $answer.binding_id=$binding
+        $answer.initial=Status
+      }
       'close-gui' {
         Close-Gui
         if((Agent).ProcessId-ne $firstAgent){throw 'closing GUI replaced or stopped the agent'}

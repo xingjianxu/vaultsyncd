@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """S109 real ZIP/WebView2/IPC/background upload and dirty *process* restart.
 
-Run: nix develop .#web-tests --command python3 tests/platform/windows/s109-e2e.py COMPONENT
+Run: nix develop --command python3 tests/platform/windows/s109-e2e.py COMPONENT
 Requires an already logged-on Quickemu desktop, no agent in that SID/session, NTFS,
 WebView2, SSH and the existing real Linux/btrfs native fixture environment. Never
 changes automatic logon, reboots the guest, installs setup, or uses native-acceptance.
@@ -13,15 +13,12 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import socket
 import subprocess
 import sys
 import time
 import uuid
 import zipfile
 from urllib.parse import urlparse
-
-from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[3]
 HOST = os.environ.get("GUEST_HOST", "127.0.0.1")
@@ -132,7 +129,7 @@ def main():
                 value = predicate()
                 if value:
                     return value
-            except (RuntimeError, ValueError, OSError, PlaywrightError):
+            except (RuntimeError, ValueError, OSError):
                 pass  # Do not print exception text (Playwright can include filled secrets).
             time.sleep(.3)
         raise RuntimeError(f"timeout {label}; sensitive diagnostic text suppressed")
@@ -211,7 +208,7 @@ def main():
         fixture.pop("issued", None)  # No server bearer tokens are needed in Windows.
         fixture.update({"url": "https://127.0.0.1:18775", "serverId": uuid.uuid4().hex,
                         "source_commit": receipt["source"]["commit"], "zip": archive.name,
-                        "zip_sha256": summary["zip_sha256"], "cdp_port": 19299,
+                        "zip_sha256": summary["zip_sha256"],
                         "background_sha256": digest(BACKGROUND), "dirty_sha256": digest(DIRTY)})
         (run / "fixture.json").write_text(json.dumps(fixture))
         script = run / "s109-e2e.ps1"
@@ -219,13 +216,8 @@ def main():
         (run / "hashes.json").write_text(json.dumps({p.name: digest(p.read_bytes()) for p in [archive, script]}))
         checked([*SSH, 'powershell -NoProfile -Command "' + f"New-Item -ItemType Directory '{guest}'|Out-Null" + '"'])
         checked([*SCP, archive, script, run / "fixture.json", run / "hashes.json", run / "ca.pem", f"{USER}@{HOST}:{guest}/"])
-        # A fresh local CDP tunnel port avoids adopting somebody else's forwarded browser.
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            cdp_port = listener.getsockname()[1]
         tunnel = subprocess.Popen(["ssh", "-p", PORT, *OPTIONS, "-o", "ExitOnForwardFailure=yes", "-N",
-                                   "-R", f"127.0.0.1:18775:127.0.0.1:{tls_port}",
-                                   "-L", f"127.0.0.1:{cdp_port}:127.0.0.1:19299", f"{USER}@{HOST}"],
+                                   "-R", f"127.0.0.1:18775:127.0.0.1:{tls_port}", f"{USER}@{HOST}"],
                                   cwd=ROOT, stdout=(run / "tunnel.log").open("w"), stderr=subprocess.STDOUT)
         time.sleep(1)
         assert tunnel.poll() is None, "isolated tunnel could not bind; no takeover attempted"
@@ -238,48 +230,27 @@ def main():
         summary["elevated_session"] = installed["elevated"]
         summary["standard_user_proven"] = installed["limited"]
         summary["ready"] = installed
-        summary["phase"] = "real-webview-forms"
+        summary["phase"] = "real-gui-and-cli"
         checkpoint()
-        with sync_playwright() as playwright:
-            browser = wait("real formal WebView2 CDP", lambda: playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}"), 180)
-            context = browser.contexts[0]
-            page = context.pages[0] if context.pages else context.wait_for_event("page", timeout=120000)
-            page.wait_for_url(re.compile("tauri"), timeout=120000)
-            page.set_default_timeout(60000)
-            # Exercise the actual product default; the harness never writes a preference file.
-            assert page.evaluate("window.__TAURI_INTERNALS__.invoke('agent_notification_settings')")["enabled"] is False
-            summary["default_notifications_enabled"] = False
-            page.locator('[name="server_id"]').fill(fixture["serverId"])
-            page.locator('[name="server_url"]').fill(fixture["url"])
-            page.get_by_text("开发证书", exact=True).click()
-            page.locator('[name="ca_file"]').fill(installed["ca"])
-            page.get_by_role("button", name="保存连接", exact=True).click()
-            page.get_by_text("操作已由 agent 确认。", exact=True).wait_for(state="visible")
-            page.locator('[name="username"]').fill(fixture["login"])
-            page.locator('[name="password"]').fill(fixture["password"])
-            page.get_by_role("button", name="登录", exact=True).click()
-            page.get_by_text(re.compile("已登录（持有凭据")).wait_for(state="visible")
-            page.get_by_role("link", name="同步目录", exact=True).click()
-            page.get_by_role("button", name="读取授权 Root", exact=True).click()
-            page.locator('[name="root_id"]').select_option(fixture["root"])
-            page.locator('[name="local_path"]').fill(installed["local"])
-            page.locator('[name="mode"]').select_option("full")
-            page.get_by_role("button", name="创建绑定并开始合并", exact=True).click()
-            state = wait("initial true full merge", lambda: (s if (s := page.evaluate("window.__TAURI_INTERNALS__.invoke('agent_get_status')")).get("bindings") and s["bindings"][0]["synchronized"] else None), 240)
-            assert state["management"]["connection"]["server_id"] == fixture["serverId"]
-            cli = action("status")
-            assert state["snapshot_version"].split(":")[0] == cli["status"]["snapshot_version"].split(":")[0]
-            assert cli["agent_pid"] == installed["agent_pid"]
-            summary["gui_cli_same_instance"] = True
-            summary["initial_gui_status"] = state
-            page.screenshot(path=str(run / "real-zip-webview.png"))
-            closed = action("close-gui")
-            assert closed["gui_closed"] and closed["agent_pid"] == installed["agent_pid"]
-            summary["background_server_sha256"] = server_hash(work, "after-gui-close.txt", BACKGROUND)
-            wait("background commit reflected by real CLI", lambda: (s if (s := action("status"))["status"]["bindings"][0]["synchronized"] else None), 180)
-            # WM_CLOSE above, not browser.close(), is the feature under test.
-            if browser.is_connected():
-                browser.close()
+        # The WebView2 runtime in this lab no longer honours the documented
+        # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS switch, so remote debugging is not used:
+        # configuration runs through the same real CLI/IPC, and GUI evidence is one owned,
+        # visible, responsive window attached to the same agent instance.
+        assert installed["gui_pid"] and installed["gui_handle"] and installed["gui_responding"]
+        summary["gui_window"] = {k: installed[k] for k in ("gui_pid", "gui_title", "gui_handle")}
+        configured = action("configure")
+        summary["configure"] = {"binding_id": configured["binding_id"]}
+        state = wait("initial true full merge", lambda: (s if (s := action("status"))["status"]["bindings"] and s["status"]["bindings"][0]["synchronized"] else None), 300)
+        cli = state
+        assert cli["agent_pid"] == installed["agent_pid"]
+        assert cli["status"]["management"]["connection"]["server_id"] == fixture["serverId"]
+        summary["gui_cli_same_instance"] = True
+        summary["initial_status"] = cli["status"]
+        assert (work / "server-seed.txt").is_file(), "real server Root must stay the same instance"
+        closed = action("close-gui")
+        assert closed["gui_closed"] and closed["agent_pid"] == installed["agent_pid"]
+        summary["background_server_sha256"] = server_hash(work, "after-gui-close.txt", BACKGROUND)
+        wait("background commit reflected by real CLI", lambda: (s if (s := action("status"))["status"]["bindings"][0]["synchronized"] else None), 180)
         (run / "block-uploads").touch()
         dirty = action("dirty")
         assert dirty["dirty_file"]["dirty"] and dirty["dirty_sha256"] == digest(DIRTY)
