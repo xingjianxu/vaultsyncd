@@ -189,6 +189,75 @@ fn native_junction_is_never_followed_and_external_content_is_unchanged() {
 }
 
 #[test]
+fn native_file_symlink_and_retarget_never_expose_outside_content() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir(sandbox.0.join("root")).unwrap();
+    std::fs::create_dir(sandbox.0.join("outside")).unwrap();
+    std::fs::write(sandbox.0.join("outside/secret"), b"first external target").unwrap();
+    std::fs::write(sandbox.0.join("outside/other"), b"second external target").unwrap();
+    std::fs::write(sandbox.0.join("root/note.txt"), b"inside content").unwrap();
+    let link = sandbox.0.join("root/link");
+    let create = |target: &str| {
+        let result = Command::new("cmd")
+            .args(["/c", "mklink"])
+            .arg(link.to_string_lossy().replace('/', "\\"))
+            .arg(sandbox.0.join(target).to_string_lossy().replace('/', "\\"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+    };
+    create("outside/secret");
+
+    let root = RootHandle::open(&sandbox.0.join("root")).unwrap();
+    assert!(
+        root.open_read("link").is_err(),
+        "a file symlink must never be opened as root content"
+    );
+    if let Ok(metadata) = root.inspect("link") {
+        assert_ne!(metadata.reparse_tag, 0, "symlink must stay a reparse point");
+    }
+    let report = root.scan();
+    assert!(
+        !report.permits_missing_comparison(),
+        "a root containing a symlink cannot claim complete enumeration"
+    );
+    assert!(
+        report
+            .entries
+            .iter()
+            .any(|entry| entry.path == "link" && entry.issue.is_some()),
+        "symlink must be reported as an issue, never adopted"
+    );
+    assert_eq!(
+        std::fs::read(sandbox.0.join("outside/secret")).unwrap(),
+        b"first external target"
+    );
+
+    // Retarget the symlink in place: the rooted handle must still refuse to follow it.
+    std::fs::remove_file(&link).unwrap();
+    create("outside/other");
+    assert!(root.open_read("link").is_err());
+    let report = root.scan();
+    assert!(!report.permits_missing_comparison());
+    assert!(
+        report
+            .entries
+            .iter()
+            .any(|entry| entry.path == "link" && entry.issue.is_some())
+    );
+    assert_eq!(
+        std::fs::read(sandbox.0.join("outside/secret")).unwrap(),
+        b"first external target"
+    );
+    assert_eq!(
+        std::fs::read(sandbox.0.join("outside/other")).unwrap(),
+        b"second external target"
+    );
+    drop(root);
+    std::fs::remove_file(&link).unwrap();
+}
+
+#[test]
 fn native_in_place_junction_change_cannot_redirect_an_already_pinned_parent() {
     #[link(name = "kernel32")]
     unsafe extern "system" {

@@ -47,6 +47,8 @@ impl IdSource for OsIds {
 pub struct Lab {
     root: PathBuf,
     state: PathBuf,
+    /// 允许注册的基目录（默认就是工作根本身；挂载故障用例需要额外基目录）。
+    allowed: Vec<PathBuf>,
 }
 
 impl Lab {
@@ -67,10 +69,25 @@ impl Lab {
         let _ = std::fs::remove_dir_all(&state_root);
         std::fs::create_dir_all(state_root.join("state")).expect("建状态目录");
         std::fs::create_dir_all(work_root.join("work")).expect("建工作目录");
+        let allowed = vec![work_root.clone()];
         Lab {
             root: work_root,
             state: state_root,
+            allowed,
         }
+    }
+
+    /// 与 [`Lab::new`] 相同，但显式给出允许注册的基目录（挂载/别名用例需要把 Root 与别名放在
+    /// 不同位置；基目录必须在故障注入前就是规范化的绝对路径）。
+    pub fn allowing(
+        label: &str,
+        work_base: Option<&Path>,
+        state_base: Option<&Path>,
+        allowed: Vec<PathBuf>,
+    ) -> Self {
+        let mut lab = Lab::new(label, work_base, state_base);
+        lab.allowed = allowed;
+        lab
     }
 
     /// 实验根目录。
@@ -93,9 +110,12 @@ impl Lab {
         self.root.join("work")
     }
 
-    /// 允许注册的父目录：工作目录本身。
+    /// 允许注册的父目录（默认工作目录本身）。
     pub fn allowed_base(&self) -> PathBuf {
-        self.root.clone()
+        self.allowed
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.root.clone())
     }
 
     /// 配置文件路径（`config()` 会写出它；真实子进程用它启动）。
@@ -104,10 +124,15 @@ impl Lab {
     }
 
     fn config_text(&self) -> String {
+        let bases: Vec<String> = self
+            .allowed
+            .iter()
+            .map(|base| format!("\"{}\"", base.display()))
+            .collect();
         format!(
-            "[server]\nlisten = \"127.0.0.1:0\"\n\n[state]\ndir = \"{}\"\n\n[roots]\nallowed_bases = [\"{}\"]\n\n[log]\nlevel = \"warn\"\nformat = \"text\"\n",
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[state]\ndir = \"{}\"\n\n[roots]\nallowed_bases = [{}]\n\n[log]\nlevel = \"warn\"\nformat = \"text\"\n",
             self.state().display(),
-            self.allowed_base().display()
+            bases.join(", ")
         )
     }
 

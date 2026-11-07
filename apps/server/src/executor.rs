@@ -15,6 +15,11 @@
 //!   `commit_operation`（事件批次 + 操作终态）、`record_version`、条目 revision 比较并写与意图
 //!   `finalized` 一起提交。事务没提交就没有 ACK，`pending` 也绝不会被当成 committed。
 //!
+//! 现场内容必须仍是**已确认版本**的字节（design §12.2、T18）：外部写入在观察循环采纳之前，
+//! 库里的 revision 还没变，工作文件却已经不同。此时客户端旧基线提交会覆盖从未采集的外部内容，
+//! 因此先返回 `RECONCILE_REQUIRED`，让观察器把它采集成版本，再按新 revision 重新规划；
+//! `publish` 的实测身份只覆盖“观察之后又被改写”的更小窗口。
+//!
 //! 失败分类沿用核心的 [`PutFailure`]：`ENOSPC`/`EDQUOT` 映射成 `INSUFFICIENT_STORAGE`（507），
 //! 存储/数据库故障 `NEEDS_RECOVERY`（503），过期基线 `BASE_MISMATCH`（409）等。
 //!
@@ -365,8 +370,8 @@ impl ExecutorContext {
         let mut target = WorkTreeTarget::new(Arc::clone(&root_handle), layout.clone());
 
         // 3. 现场前提：观察目标并按实测结果构造 `before`（与客户端的基线 revision 一致才继续）。
-        let before = match target.observe(&path) {
-            Ok(observation) => baseline_of(&observation, command.entry, command.base_revision),
+        let observation = match target.observe(&path) {
+            Ok(observation) => observation,
             Err(error) => {
                 let failure = target_failure(error);
                 self.reject(owner, key, &failure).await;
@@ -383,6 +388,34 @@ impl ExecutorContext {
             self.reject(owner, key, &failure).await;
             return Err(failure);
         }
+
+        // 3b. 已确认内容的现场前提（design §12.2、T18）。工作文件必须仍是这条 revision
+        //     对应的已确认内容：外部写入在观察循环采纳之前，库里的 revision 还没变，但文件
+        //     已经不是客户端基线所指的内容。此时发布会把从未采集的外部内容覆盖掉，因此先
+        //     返回可重试的协调结论，让观察器把它采集成版本，再按新 revision 重新规划。
+        if let Some(version) = entry.content_version {
+            let mut conn = self.pool_conn().await?;
+            let confirmed = store_versions::version_facts(&mut conn, owner, key.root, version)
+                .await
+                .map_err(|error| storage_error(&error.to_string()))?
+                .map(|facts| ContentDigest::from_bytes(facts.object_hash));
+            let mismatch = match &observation {
+                // 外部删除尚未被采纳：同样不能拿旧基线把文件凭空写回来。
+                TargetObservation::Absent => confirmed.is_some(),
+                TargetObservation::Present { digest, .. } => {
+                    confirmed.is_some_and(|confirmed| *digest != confirmed)
+                }
+            };
+            if mismatch {
+                let failure = OperationFailure::ReconcileRequired {
+                    detail: "工作目录内容与已确认版本不一致：外部写入尚未采集，先采集再重试"
+                        .to_owned(),
+                };
+                self.reject(owner, key, &failure).await;
+                return Err(failure);
+            }
+        }
+        let before = baseline_of(&observation, command.entry, command.base_revision);
 
         let request = PutRequest {
             intent_id: IntentId::from_bytes(random_bytes()),
