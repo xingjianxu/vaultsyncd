@@ -35,3 +35,12 @@ jobs:
           # Only curated non-secret result receipts, never credentials/DB/VM disks.
           path: artifacts/S101/public/
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: windows-installed-client-${{ github.sha }}
+          # Fixed release-adapter output only; no fixture, profile or private data.
+          path: |
+            artifacts/S101/windows-client/payload/
+            artifacts/S101/windows-client/receipt.json
+          if-no-files-found: error
