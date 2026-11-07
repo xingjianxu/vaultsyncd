@@ -2,6 +2,8 @@
 
 当前：S001—S110 共 **110 卡，105 done、5 blocked**；无 todo / in_progress。**当前无 ready 卡**。
 
+用户决定（2026-11-07）：后续编译、测试无需覆盖 `linux-arm64`（`aarch64-linux`），缺少该平台的编译或测试证据不作为阻塞；此前双架构记录保留为历史证据。本轮仅将约定写入 `AGENTS.md` 与本进度，不修改构建脚本或任务状态；未执行产品编译、测试，未提交。下一 ready：无，S101 仍待 hosted CI 条件恢复。
+
 恢复顺序：先恢复 **S101 hosted CI**（缺 remote、runner 和 Actions 实证），再推进 **S106 → S107 → S108**；另须补 T02 三台独立 Windows 与最终同源发行证据。S011 的 OS 取消回调未触发仍为历史原型阻塞，保留其原生验证条件。当前不宣称首发验收完成。
 
 最近集成：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 已真实构建Linux x64/ARM64与Windows x64 ZIP；包在 `dist/releases/v0.1.1-81340f689b98/`，15项SHA及归档逐文件核对通过。验收交接 `1c61929` 已ff-only合入master，任务树/分支已清理；详见 [S110](tasks/S110.md) 与 [批次](tasks/S110-batch.md)。本次只构建，不代替Windows/Ubuntu原生或S108最终门禁；S109原生历史证据仍见其交接。
