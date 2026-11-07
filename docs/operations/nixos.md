@@ -130,6 +130,8 @@ S097前的generation239（保留TLS、旧Root诊断行为）为 `/nix/store/bcwr
 
 ## S112 当前正式域名部署（2026-11-07，generation244）
 
+以下为 S112 验收时的历史快照；当前运行用户、版本和 generation 以 S113 节为准。
+
 实际入口仍为 `/etc/nixos#wks-lab`。项目固定源 **4856738641ea3421c949476e6951d0a461209223**，同源包 `/nix/store/6nx4qmvrhj1rk3aa9mrjaxky56m4r7ck-vaultsyncd-0.1.1`，构建含65项包内测试通过。主机实现 `9c2133f`，挂载修正 `56bd93b09760d87f068c7a617b8a79904d14b852` 已ff合入主机main；主机锁从干净基线 `93dfcae` 保持不变。主机准确源 `/nix/store/kdr0v41db6vcd39kp9znz5b3xky170dp-source` 与旧/新system都有显式GCroot，证据在 `/data/vaultsyncd-deploy/S112-20261107T133454/`。
 
 ```nix
@@ -215,3 +217,7 @@ cd /wrd/prj/vaultsyncd
 一次性账号迁移证据 `/data/vaultsyncd-deploy/S113-20261107T221130/`：停服后的只读 `state-before` btrfs 快照与 `roots-before` reflink 副本、旧归属和文件摘要均保留在 Git 外。旧运行/启动 generation244 为 `/nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7`。**回到 S112 账号配置前，先停服并把专用正式状态及 Root 的归属恢复为 UID/GID984（旧配置会重建该账号）；仅切换旧 system 不能同时恢复归属。** 备份快照不改权；不要对用户其他目录递归改权，也不要用旧程序直接写新 schema。
 
 初次迁移固定项目4071fd4、主机75d6fb5，系统k92lxnm03xg828lzfzivp0aij810gpns先test；原正式 ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 和旧样本摘要保留。65项包内测试、普通/专用用户模块、aliweb关闭feature的pure完整求值通过。真实HTTPS16MiB上传/413/committed/固定下载/服务重启与同OpId重放、同UID IPC与普通用户备份prepare/verify/release通过；10项既有服务状态/PID/InvocationID保持。最终一键更新提交、generation与switch后证据见 [S113交接](../../agent/tasks/S113.md)。本卡不代替Windows、hosted CI及首发性能门禁。
+
+S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3bcd72e75cf**，主机 **32bfeb54f9c76d5ed781a80800fdce86179c7d6a** 已 ff 合入 `/etc/nixos` main；运行/开机默认 **generation245**，system `/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/180dcgy5j2hx801vg59g2bk15whp3p7j-vaultsyncd-0.1.1`。该源复用已通过65项测试的相同Rust组件；本次重新构建发行provenance与主机。真实脚本从4071fd4更新pin到6b967bd，显式pure构建后dry/test/健康/switch，通过后自动提交pin并清理临时树。主机main的pure toplevel重新求值得到同一system。
+
+最终脚本证据 `/data/vaultsyncd-deploy/local-20261107T221615-1805073/`，完整日志在上方S113证据的 `one-click.log`；`switch-health.json`确认旧ServerId/RootId/committed版本及磁盘/下载摘要、全部正式文件UID1000/GID100、10项既有服务PID/InvocationID及SSH保持，3200/3300/15312跟随重定向后200、主机锁逐字节不变。10服务比较使用保留的S112历史基线，7个已启用服务另有本轮迁移前快照；未把不存在的服务名当作运行证据。最终没有注入生产失败或实际激活旧generation演练回退，也没有再次运行Windows原生/浏览器矩阵或独立外网客户端探测。
