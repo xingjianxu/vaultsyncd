@@ -109,7 +109,7 @@ def browser(password,root):
             finally:context.close();chromium.close()
 
 def main():
-    global TOKEN
+    global TOKEN, NAME
     RUN.mkdir(mode=0o755)
     mount=RUN/'mnt';mount.mkdir()
     image=RUN/'volume.img';image.touch(mode=0o600,exist_ok=False)
@@ -195,6 +195,37 @@ def main():
         RESULT['checks'].append('real-container-restart-keeps-identity-version-bytes-idempotency-and-Chromium-Web')
         api('/v1/auth/logout',{});TOKEN=None
         RESULT['server_log']=engine('logs',NAME).stdout
+        engine('stop','--time','60',NAME);engine('rm',NAME);created=False
+        # Restore the verified archive into new empty physical targets, not just
+        # restart the original DB. Exercise the actual target kernel and CLI.
+        restored_state=mount/'restored-state';restored_root=mount/'restored-root'
+        for directory in (restored_state,restored_root):
+            sudo('mkdir','-m','700',directory);sudo('chown',f'{UID}:{UID}',directory)
+        restore_flags=['--user',f'{UID}:{UID}','--read-only','--cap-drop=all',
+                       '--security-opt','no-new-privileges',
+                       '-v',f'{state}:/source:ro','-v',f'{restored_state}:/restored/state:rw',
+                       '-v',f'{restored_root}:/restored/root:rw']
+        restore_args=['--archive','/source/accepted.vsbk','--state-dir','/restored/state',
+                      '--root',f'{root}=/restored/root','--json']
+        for action in ('validate','apply'):
+            result=engine('run','--rm','--network','none',*restore_flags,
+                          '--entrypoint','/opt/vaultsyncd/bin/vaultsyncd-admin',IMAGE,
+                          'restore',action,*restore_args)
+            RESULT['restore_'+action]=json.loads(result.stdout)
+        assert sudo('cat',restored_root/'sample.txt',binary=True).stdout==content
+        NAME+='-restored'
+        engine('run','-d','--name',NAME,*restore_flags,'-p',f'{listen}:{PORT}:8721',IMAGE,
+               '--config','/restored/state/server.toml');created=True
+        wait(lambda:api('/v1/health')['status']=='ok')
+        assert api('/v1/capabilities')['server_id']==capabilities['server_id']
+        TOKEN=api('/v1/auth/login',{'login':'owner','password':password,'device_label':'CI actual restored instance'})['access_token']
+        assert api(fixed,binary=True)==content
+        restored_epoch=api(f'/v1/roots/{root}/snapshots',{})['server_epoch']
+        assert restored_epoch!=operation['server_epoch']
+        RESULT['restored_content_sha256']=digest
+        RESULT['restored_epoch']=restored_epoch
+        api('/v1/auth/logout',{});TOKEN=None
+        RESULT['checks'].append('offline-restore-validate-apply-new-targets-start-login-fixed-content-new-epoch')
         RESULT['passed']=True
     finally:
         if TOKEN:

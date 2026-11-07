@@ -33,6 +33,7 @@ vaultsyncd 任务编排（xtask）。用法：cargo xtask <子命令>
             cargo fmt --check、
             cargo clippy --locked --all-targets -- -D warnings、
             cargo test --locked、pnpm --recursive run typecheck、pnpm --recursive --if-present run test
+  ci        执行 tools/ci/run.py 的单一平台 job 命令目录；--plan 只列命令不算验证
   check-boundaries  按 Linux x64/ARM64、Windows x64 metadata 检查依赖方向、生成一致与 pnpm 消费者
   generate  从 api/openapi.yaml 生成远端 Rust DTO 与 TypeScript 客户端，从
             api/local-ipc.schema.json 生成本机 IPC Rust DTO 与 TypeScript 类型；
@@ -104,6 +105,7 @@ fn main() -> ExitCode {
     let code = match command.as_str() {
         "env" => run_env(&rest),
         "check" => run_check(&rest),
+        "ci" => run_ci(&rest),
         "check-boundaries" => boundaries::run(&rest),
         "generate" => generate::run(&rest),
         "version" => release::run_version(&rest),
@@ -120,6 +122,32 @@ fn main() -> ExitCode {
         }
     };
     ExitCode::from(code)
+}
+
+/// CI 与本地共同委托给同一个命令目录，不在 YAML 复制平台命令。
+fn run_ci(rest: &[String]) -> u8 {
+    let root = match workspace_root() {
+        Ok(root) => root,
+        Err(message) => {
+            eprintln!("xtask: {message}");
+            return EXIT_FAILURE;
+        }
+    };
+    match Command::new("python3")
+        .arg(root.join("tools/ci/run.py"))
+        .args(rest)
+        .current_dir(root)
+        .status()
+    {
+        Ok(status) => status
+            .code()
+            .and_then(|c| u8::try_from(c).ok())
+            .unwrap_or(EXIT_FAILURE),
+        Err(error) => {
+            eprintln!("xtask ci: {error}");
+            EXIT_FAILURE
+        }
+    }
 }
 
 /// `env`：探测工具链与 workspace 信息，只读，不改动任何文件。

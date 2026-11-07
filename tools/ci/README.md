@@ -1,0 +1,56 @@
+# 平台 CI 与本地等价入口（S101 / T36）
+
+**Hosted 执行 blocked**：当前仓库无 Git remote；没有触发过 GitHub job。
+恢复条件：配置远端、允许 Actions、配置原生 Windows runner，以及受保护的 `platform-lab`
+环境和标签 `vaultsyncd-platform-lab` 的独占 Linux runner，随后原样运行工作流。
+`windows-2025` 只代表待运行的原生编译，不代表 Windows 11/NTFS/CFAPI 验收。
+
+命令的唯一目录为 `run.py`，通过 `cargo xtask ci <job> [参数]` 调用，
+`--plan` 仅显示命令，不能作执行证据。退出0表示实际步骤均成功；失败非0；缺资源78明确blocked。
+每次执行要求干净提交，记录HEAD、空porcelain、平台/架构、实际命令、每步退出码和耗时，
+输出在忽略目录 `artifacts/S101/ci/<job>-<nonce>/`。不会因缺前端依赖或CFAPI环境跳过测试。
+原有 `checks.yml` 保留统一 `cargo xtask check`；新增 `platform.yml` 的保守消费者闭包触发全部相关平台，
+不尝试危险的“只改生成物不检查消费者”优化；路径表由 `test_ci.py` 约束。
+
+```sh
+nix develop --command pnpm install --frozen-lockfile
+nix develop --command cargo xtask ci contracts
+nix develop --command cargo xtask ci frontend
+nix develop --command cargo xtask ci linux-server
+nix develop --command cargo xtask ci release-linux
+nix develop --command cargo xtask ci release-arm64
+nix develop --command python3 tools/ci/test_ci.py
+# 原生Windows（配置远端后的runner执行；本NixOS不能声称跑过）
+# cargo xtask ci windows-build
+```
+
+## 独占真实实验室
+
+自托管特权实验**只允许手工 dispatch**，必须配置环境保护与审批；不执行不受信PR。
+工作流concurrency及本地flock禁止本控制器彼此并发；执行者仍需与其他非CI使用者协调窗口。
+不改trial/Caddy/SSH，不关闭Windows客体。S098原ARM64模板必须停机，控制器只reflink复制到本run，
+用完整Ubuntu ARM64内核TCG模拟，不把qemu-user或交叉编译当存储证据；不代表原生性能。
+只登记自己的binfmt handler，finally卸载自己登记/挂载的资源。失败保留外部专属磁盘和日志供恢复。
+
+在源码外私有JSON中设置：`{"evidence":"/data/vaultsyncd-build/S101-唯一run",
+"arm64_template":"/data/vaultsyncd-build/S098-20261107T031019-4108805/ubuntu-arm64-tcg"}`。
+Windows沿用`docs/operations/windows-lab.md`的密钥与客体，设置共享交叉缓存。
+入口（源码须已提交，两个阶段不允许改变HEAD）：
+
+```sh
+export VAULTSYNCD_CI_LAB=1
+export VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows
+nix develop --command python3 tools/ci/acceptance.py --config /私有/run.json --phase build
+nix develop .#portable-tests --command python3 tools/ci/acceptance.py --config /私有/run.json --phase lab
+```
+
+构建阶段固定同HEAD的Nix/双架构便携包/Web/依赖和Windows正式未签名NSIS；lab阶段
+分别核对来源、manifest和payload hash，实际跑NixOS闭包/页面、Ubuntu容器btrfs上传/提交/固定下载/
+备份/新目标离线恢复/新epoch/重新登录、ARM64同链、Windows原生CFAPI释放和跨进程e2e，
+最后复用S099安装驱动真实标准用户安装/GUI+CLI/关GUI同步/重启登录同步。
+`VAULTSYNCD_CI_CLEANUP=1`仅本run启用：logout删除本用户凭据，完整驻留门通过才revert并卸载provider；
+核对三份文件hash和普通文件属性后，恢复原Quickemu登录，删除新测试用户/配置/探针和私有密码。
+历史S099默认保留行为不变。失败不强删不完整Root，也不删除其他卡的账户或数据。
+
+仅非秘密结果写`artifacts/S101/public/`，可上传GitHub；完整私有现场、凭据、SQLite、VM镜像不得上传。
+本地通过不能写成hosted通过；NixOS、Ubuntu x86_64、Ubuntu ARM64 TCG和Windows原生必须分列。

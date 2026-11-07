@@ -1,0 +1,37 @@
+# Never run untrusted PR code on a privileged persistent lab.
+# Configure this protected environment and its single exclusive runner first.
+name: platform installation lab
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: vaultsyncd-exclusive-platform-lab
+  cancel-in-progress: false
+jobs:
+  acceptance:
+    environment: platform-lab
+    runs-on: [self-hosted, Linux, X64, vaultsyncd-platform-lab]
+    timeout-minutes: 240
+    env:
+      VAULTSYNCD_CI_LAB: '1'
+      VAULTSYNCD_WINDOWS_CACHE: ${{ vars.VAULTSYNCD_WINDOWS_CACHE }}
+    steps:
+      - uses: actions/checkout@v4
+      # This checked-in driver builds both platforms at github.sha, verifies
+      # receipts, reserves Windows/ARM resources, and fails for missing inputs.
+      - name: Same commit release
+        run: nix develop --command python3 tools/ci/acceptance.py --config "$VAULTSYNCD_LAB_CONFIG" --phase build
+        env:
+          VAULTSYNCD_LAB_CONFIG: ${{ vars.VAULTSYNCD_LAB_CONFIG }}
+      - name: Native installation and ARM64 full-system emulation
+        run: nix develop .#portable-tests --command python3 tools/ci/acceptance.py --config "$VAULTSYNCD_LAB_CONFIG" --phase lab
+        env:
+          VAULTSYNCD_LAB_CONFIG: ${{ vars.VAULTSYNCD_LAB_CONFIG }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-installation-${{ github.sha }}
+          # Only curated non-secret result receipts, never credentials/DB/VM disks.
+          path: artifacts/S101/public/
+          if-no-files-found: error

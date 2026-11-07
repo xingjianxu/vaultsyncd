@@ -187,6 +187,7 @@ python3 tools/context.py --help
 | `generate` | 从 `api/openapi.yaml` 生成 `crates/protocol/src/generated/mod.rs` 与 `packages/api-client/src/generated/*`；只写有变化的文件并打印路径。`--check` 不写盘，只逐字节比对，不一致时列出文件并退出 1。配置、契约与生成器的校验规则见下文「api/ — 远端协议契约源」 | 无 diff/写入成功 0；配置漂移、未支持构造、`--check` 有 diff 1；多余参数 2 |
 | `version` | 从 Cargo workspace.package.version 核对 Rust继承和JSON镜像；--sync同步镜像，不改协议 | 成功0；失败1；参数错误2 |
 | `release` | 真实build、同提交assemble与verify，参数和来源规则见文末S093 | 成功0；构建/来源/参数不满足1 |
+| `ci` | S101委托`tools/ci/run.py`单一job命令目录，`--plan`只列计划；实际报告记录干净HEAD/平台/命令/退出码；平台入口和资源要求见`tools/ci/README.md` | 成功0；失败非0；缺实验室资源78；参数错误2 |
 | `package` | 完整平台安装包：尚未实现，由后续发布卡落实 | 3 |
 | `help`、`--help`、`-h` | 打印子命令与退出码说明 | 0 |
 | 其他 / 缺少子命令 / 多余参数 | 打印未知名或参数错误并附帮助 | 2 |
@@ -208,7 +209,7 @@ python3 tools/context.py --help
 
 ## .github/workflows/checks.yml — 便携 CI
 
-状态：S006 接入，仅 Linux runner；平台矩阵、安装包与 Windows 原生验证留给后续卡（S101）。仓库当前**无远端**（`git remote -v` 无输出），因此只有本地证据（actionlint 与命令一致性），未在 CI 上真实运行。
+状态：S006 接入，仅 Linux runner；S101平台矩阵见 `tools/ci/README.md`、`.github/workflows/platform.yml` 和 `platform-lab.yml`。仓库当前**无远端**（`git remote -v` 无输出），因此hosted明确blocked，只有本地证据，未在 CI 上真实运行。
 
 | 项目 | 契约 |
 | --- | --- |
