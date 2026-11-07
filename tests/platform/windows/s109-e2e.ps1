@@ -194,9 +194,16 @@ public static class S109Native {
     $items[0]
   }
   function Invoke-Zip([string]$operation){
-    $text=& $zipEntry $operation 2>&1
-    if($LASTEXITCODE-ne 0){throw ('product ZIP entry failed: '+$operation+' (output suppressed)')}
-    return ($text -join "`n")
+    # Bounded child wait: a *successful* Start must return after it launches the GUI, so an
+    # unbounded pipeline wait here would hide real evidence as a hang. Output goes to per-run
+    # files; only exit status and length are reported (no credential text).
+    $out=Join-Path $results ('zip-'+$operation+'-out.txt')
+    $err=Join-Path $results ('zip-'+$operation+'-err.txt')
+    $process=Start-Process -FilePath $zipEntry -ArgumentList $operation -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    if(!$process.WaitForExit(180000)){throw ('product ZIP entry did not return: '+$operation)}
+    if($process.ExitCode-ne 0){throw ('product ZIP entry failed: '+$operation+' exit='+$process.ExitCode)}
+    if(!(Test-Path -LiteralPath $out)){return ''}
+    return (Get-Content -Raw -Encoding UTF8 $out)
   }
   function Close-Gui {
     foreach($desktop in $script:desktops){
