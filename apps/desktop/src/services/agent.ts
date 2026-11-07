@@ -19,6 +19,8 @@ export interface AgentClient {
   releaseEntry(bindingId: string, entryId: string, operationId: string): Promise<ManagementResult>;
   listProblems(bindingId?: string, search?: string): Promise<ManagementResult>;
   retryProblem(bindingId: string, operationId: string): Promise<ManagementResult>;
+  getRules(bindingId:string):Promise<ManagementResult>;
+  setRules(bindingId:string,rules:string,rulesVersion:string):Promise<ManagementResult>;
   setMode(bindingId: string, mode: "full" | "on_demand"): Promise<ManagementResult>;
   detachBinding(bindingId: string): Promise<ManagementResult>;
   exportRecovery(bindingId: string, destination: string): Promise<ManagementResult>;
@@ -34,6 +36,7 @@ export const disconnectedAgent: AgentClient = {
   getStatus: unavailable, setConnection: unavailable, login: unavailable, logout: unavailable,
   listRoots: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
+  getRules:unavailable,setRules:unavailable,
   retryProblem: unavailable, setMode: unavailable, detachBinding: unavailable, exportRecovery: unavailable,
   listHistory:unavailable,listTrash:unavailable,restoreEntry:unavailable,notificationSettings:unavailable,setNotifications:unavailable,
 };
@@ -59,6 +62,8 @@ export const nativeAgent: AgentClient = {
   releaseEntry: (bindingId, entryId, operationId) => call("agent_release_entry", { bindingId, entryId, operationId }),
   listProblems: (bindingId, search) => call("agent_list_problems", { bindingId, search }),
   retryProblem: (bindingId, operationId) => call("agent_retry_problem", { bindingId, operationId }),
+  getRules: bindingId => call("agent_get_rules", { bindingId }),
+  setRules: (bindingId,rules,rulesVersion) => call("agent_set_rules", { bindingId,rules,rulesVersion }),
   setMode: (bindingId, mode) => call("agent_set_mode", { bindingId, mode }),
   detachBinding: bindingId => call("agent_detach_binding", { bindingId }),
   exportRecovery: (bindingId, destination) => call("agent_export_recovery", { bindingId, destination }),

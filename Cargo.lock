@@ -5105,12 +5105,14 @@ name = "vaultsyncd-cli"
 version = "0.1.1"
 dependencies = [
  "rand_core 0.6.4",
+ "reqwest 0.12.28",
  "rpassword",
  "serde_json",
  "tokio",
  "vaultsyncd-domain",
  "vaultsyncd-local-ipc",
  "vaultsyncd-platform-windows",
+ "vaultsyncd-transfer",
 ]
 
 [[package]]

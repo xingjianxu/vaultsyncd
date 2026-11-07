@@ -62,6 +62,8 @@ pub(crate) async fn discover(
     scan: &HashMap<String, EntryMetadata>,
 ) -> Result<bool, PortError> {
     let local = &worker.importer.local;
+    let rules = crate::exclusions::Rules::load(&local.db, local.binding).await?;
+    let controls = vaultsyncd_agent_core::bindings::control::BindingControls::new(local.db.clone());
     let rows = metadata(&worker.importer).await?;
     let locations = paths(&rows)?;
     let by_path: HashMap<_, _> = locations
@@ -83,6 +85,14 @@ pub(crate) async fn discover(
     });
     'known: for row in order {
         let from = &locations[&row.entry_id];
+        let known_entry = EntryId::from_hex(&row.entry_id).map_err(error)?;
+        if controls
+            .execution_gate(local.binding, Some(known_entry))
+            .await?
+            != vaultsyncd_agent_core::bindings::control::ExecutionGate::Ready
+        {
+            continue;
+        }
         if scan.contains_key(from) {
             continue;
         }
@@ -142,6 +152,12 @@ pub(crate) async fn discover(
             };
             (OperationKind::Delete, from.clone(), None, None, token)
         };
+        if !rules.includes(
+            &path,
+            row.kind == vaultsyncd_protocol::generated::EntryKind::Directory,
+        )? {
+            continue;
+        }
         let request = OperationRequest {
             op_id: new_op().to_string(),
             device_id: binding.device.to_string(),
@@ -174,6 +190,9 @@ pub(crate) async fn discover(
     let mut directories: Vec<_> = scan.iter().filter(|(_, m)| m.directory).collect();
     directories.sort_by_key(|(p, _)| p.matches('/').count());
     for (path, meta) in directories {
+        if !rules.includes(path, true)? {
+            continue;
+        }
         if by_path.contains_key(path) {
             continue;
         }

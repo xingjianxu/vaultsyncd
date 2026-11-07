@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 1;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 5;
+pub const PROTOCOL_MINOR: u32 = 6;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -170,6 +170,12 @@ pub enum CommandName {
     /// 取值 `prepare_maintenance`。
     #[serde(rename = "prepare_maintenance")]
     PrepareMaintenance,
+    /// 取值 `get_rules`。
+    #[serde(rename = "get_rules")]
+    GetRules,
+    /// 取值 `set_rules`。
+    #[serde(rename = "set_rules")]
+    SetRules,
 }
 
 /// 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。
@@ -236,6 +242,14 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_id: Option<String>,
+    /// 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<String>,
+    /// 不可复用的规则版本；同版本同文本幂等。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules_version: Option<String>,
     /// 问题路径或原因的大小写不敏感子串筛选。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,6 +290,8 @@ impl core::fmt::Debug for CommandParameters {
         value.field("operation_id", &self.operation_id);
         value.field("password", &"[REDACTED]");
         value.field("root_id", &self.root_id);
+        value.field("rules", &self.rules);
+        value.field("rules_version", &self.rules_version);
         value.field("search", &self.search);
         value.field("server_id", &self.server_id);
         value.field("server_url", &self.server_url);
@@ -458,6 +474,18 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub restored_path: Option<String>,
+    /// 当前完整排除清单，空字符串表示无排除规则。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<String>,
+    /// get_rules携带entry_id时，按持久身份解析路径并返回命中的规则/行号或包含原因。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules_explanation: Option<String>,
+    /// 当前持久规则版本。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules_version: Option<String>,
     /// 解绑时保留的未确认条目。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

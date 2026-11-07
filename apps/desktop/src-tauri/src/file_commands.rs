@@ -122,3 +122,32 @@ pub(crate) async fn agent_export_recovery(
     )
     .await
 }
+
+#[tauri::command]
+pub(crate) async fn agent_get_rules(binding_id: String) -> Result<ManagementResult, BridgeError> {
+    manage(
+        C::GetRules,
+        Some(P {
+            binding_id: Some(binding_id),
+            ..Default::default()
+        }),
+    )
+    .await
+}
+#[tauri::command]
+pub(crate) async fn agent_set_rules(
+    binding_id: String,
+    rules: String,
+    rules_version: String,
+) -> Result<ManagementResult, BridgeError> {
+    manage(
+        C::SetRules,
+        Some(P {
+            binding_id: Some(binding_id),
+            rules: Some(rules),
+            rules_version: Some(rules_version),
+            ..Default::default()
+        }),
+    )
+    .await
+}

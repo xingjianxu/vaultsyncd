@@ -296,7 +296,9 @@ impl Rig {
         Self::new_size(tag, SIZE).await
     }
     async fn new_size(tag: &str, size: usize) -> Self {
-        cleanup_abandoned_fixture_runs();
+        if std::env::var_os("VAULTSYNCD_SKIP_ABANDONED_HYDRATION_CLEANUP").is_none() {
+            cleanup_abandoned_fixture_runs();
+        }
         let path = PathBuf::from(format!(
             "C:\\vaultsyncd-lab\\s067-{}-{}-{}",
             std::process::id(),

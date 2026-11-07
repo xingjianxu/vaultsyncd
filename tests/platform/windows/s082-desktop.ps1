@@ -32,6 +32,8 @@ if ($Worker) {
     $report | Add-Member -NotePropertyName seedHash -NotePropertyValue (Get-FileHash $seed -Algorithm SHA256).Hash.ToLowerInvariant()
     $report | Add-Member -NotePropertyName localHash -NotePropertyValue (Get-FileHash (Join-Path $local 'local-only.txt') -Algorithm SHA256).Hash.ToLowerInvariant()
     if ((Get-Content (Join-Path $local 'local-only.txt') -Raw) -ne 'S082-unconfirmed-local') { throw 'detach changed dirty bytes' }
+    if ((Get-Content (Join-Path $local 'S105-last-moment.txt') -Raw) -ne 'S105 unique content written after detach confirmation opened') { throw 'last-moment detach content lost' }
+    $report | Add-Member -NotePropertyName detachConfirmationRace -NotePropertyValue $true
     $expected = @( 'S082-unconfirmed-local', 'S082-pending-local' )
     foreach ($value in $expected) {
       $sha=[Security.Cryptography.SHA256]::Create();$digest=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($value)))).Replace('-','').ToLowerInvariant();

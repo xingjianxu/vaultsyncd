@@ -54,7 +54,7 @@ fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments
             serde_json::json!({"extra":"ignored parameters are forbidden"});
         assert!(serde_json::from_value::<Request>(unknown).is_err());
     }
-    assert_eq!(names.len(), 23);
+    assert_eq!(names.len(), 25);
 }
 #[test]
 fn passwords_are_redacted_even_if_an_entire_generated_request_is_debugged() {
@@ -75,4 +75,15 @@ fn canonical_ids_and_counts_do_not_accept_lossy_or_ambiguous_inputs() {
     request.command.parameters.as_mut().unwrap().entry_id =
         Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into());
     assert!(commands::validate(&request.command).is_err());
+}
+
+#[test]
+fn exclusion_rules_accept_empty_clear_but_refuse_overflow_and_extra_fields() {
+    let mut command: vaultsyncd_local_ipc::generated::Command=serde_json::from_value(serde_json::json!({"name":"set_rules","parameters":{"binding_id":"a5".repeat(16),"rules_version":"s105","rules":""}})).unwrap();
+    commands::validate(&command).unwrap();
+    command.parameters.as_mut().unwrap().rules = Some("x".repeat(4097));
+    assert!(commands::validate(&command).is_err());
+    command.parameters.as_mut().unwrap().rules = Some(String::new());
+    command.parameters.as_mut().unwrap().rules_version = Some(String::new());
+    assert!(commands::validate(&command).is_err());
 }

@@ -4,11 +4,16 @@ import type { BindingInfo, BindingStatus } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
 export function BindingActions({agent,binding,status,run,busy,changed}:{agent:AgentClient;binding:BindingInfo;status?:BindingStatus;run(action:()=>Promise<void>):void;busy:boolean;changed():Promise<void>}) {
   const [mode,setMode]=useState<"full"|"on_demand">(binding.mode==="full"?"full":"on_demand");
+  const [rules,setRules]=useState(""); const [rulesLoaded,setRulesLoaded]=useState(false);
   const [destination,setDestination]=useState("");const [confirm,setConfirm]=useState(false);const [message,setMessage]=useState("");
   return <section className="vs-card"><h2>绑定管理：{binding.local_path}</h2><p aria-live="polite">{message}</p>
     <label>目标模式<select name="target_mode" value={mode} onChange={e=>setMode(e.target.value==="full"?"full":"on_demand")}><option value="full">完整同步</option><option value="on_demand">按需下载</option></select></label>
     <p>切到完整同步会补齐内容；完成前仍显示进行中。切到按需不会自动释放已下载内容。</p>
     <Button disabled={busy||binding.detached} onClick={()=>run(async()=>{const result=await agent.setMode(binding.binding_id,mode);setMessage(result.mode_remaining?`模式补齐仍需核对 ${result.mode_remaining} 项。`:"模式目标已保存，请查看真实进度。");await changed();})}>保存模式</Button>
+    <h3>排除规则</h3><p>排除路径停止新同步，保留本地与服务器内容；取消排除后先核对最新远端与本地，再重新协调。支持 # 注释、*、**、! 与目录规则，父目录被排除时不能仅重新包含子文件。</p>
+    <Button disabled={busy||binding.detached} onClick={()=>run(async()=>{const result=await agent.getRules(binding.binding_id);if(result.rules===undefined)throw new Error("未取得当前排除清单");setRules(result.rules);setRulesLoaded(true);})}>读取排除规则</Button>
+    <label>完整排除清单<textarea name="exclusion_rules" value={rules} onChange={e=>setRules(e.target.value)} disabled={!rulesLoaded||busy||binding.detached}/></label>
+    <Button disabled={!rulesLoaded||busy||binding.detached} onClick={()=>run(async()=>{await agent.setRules(binding.binding_id,rules,crypto.randomUUID().replaceAll("-",""));setMessage("排除清单已保存；未删除本地或服务器内容，取消排除的条目正在重新协调。");await changed();})}>保存排除规则</Button>
     <label>恢复导出到新目录<input name="recovery_destination" value={destination} onChange={e=>setDestination(e.target.value)} placeholder="现有父目录下的新绝对路径" /></label>
     <p>先导出未确认数据并核对恢复包；失败时源内容保留。</p>
     <Button disabled={busy||!destination} onClick={()=>run(async()=>{const result=await agent.exportRecovery(binding.binding_id,destination);if(result.exported_files===undefined)throw new Error("agent 未返回导出完成证明。");setMessage(`恢复包已核验 ${result.exported_files} 份内容。`);})}>导出恢复包</Button>

@@ -2571,3 +2571,11 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - `tests/faults/run-maintenance-crash.sh` 创建独占btrfs loop并运行 `maintenance_crash` 与S091真实升级回退装置。控制目录只含固定 `armed`（停车点列表）、`<point>.reached`/`<point>.continue`、`gc-request`（确定性测试时钟）和`gc-started`/`gc-result`。停车点位于真实提交/发布/租约/快照/GC动作之间，已刷盘marker后等待SIGKILL；父进程消失60秒后abort，不能转为默认成功。GC直接调用产品run_once并持同一对象门。
 - 本卡确认已有语义：操作行pending已落盘、意图尚未落盘时重启保留旧内容，查询仍202/pending，不伪造提交；prepared/published可恢复为恰好一个committed版本并返回稳定重放。备份准备中断在重启清理为failed，ready保持可验证；释放中断由持久作业续接。deleting的GC由启动后台循环或显式轮次补完，后续零删除；删掉live对象文件不代表被只读snapshot持有的extent已释放，空间证据必须来自btrfs实际统计。
 - 固定版本T22使用产品HTTP端点和下载执行器，真实TCP截断后从实际磁盘位图续传；错块及混版本是对真实响应的受控故障注入，必须不返回可安装结果。测试自定义传输的回环HTTP不替代TLS或Windows CFAPI验收。逐边界与空间/恢复判据见 `tests/faults/README.md`，证据见S104交接。
+
+## S105 — 安全入口、排除规则与容量错误
+
+- 本机 IPC 1.6 增量：`get_rules(binding_id, entry_id?)` 返回 `rules`、`rules_version`；可选条目身份由 agent 解析持久路径并返回 `rules_explanation`（命中规则/行号/祖先原因）。`set_rules(binding_id,rules_version,rules)` 替换完整清单，允许空文本，UTF-8 最多4096字节；版本非空、无控制字符，不得复用到不同清单。同版本同文本幂等，畸形规则/复用版本拒绝且不改变旧规则；两个命令在 minor<6 时先返回 UnsupportedVersion。唯一编辑源为 `api/local-ipc.schema.json`，生成两侧DTO；持久化复用S061控制表，无迁移/远端wire变化。
+- CLI：`rules --binding-id ID [--entry-id ID]`、`set-rules --binding-id ID --file UTF8文件 --version 版本`；GUI绑定管理读取、编辑、保存完整清单，空清单取消排除。固定Tauri命令/ACL→agent IPC→核心绑定控制，不直接写库。首次合并未完成时拒绝改规则，避免更改导入日志语义。
+- 运行时只按暂停/解绑关闭整绑定轮询；排除由持久动作的 `path/from` 与核心Entry/目录子树围栏共同判定。新建/远端新条目使用校验过的动作路径；扫描在读内容/推导namespace前排除目标。已知目录有排除后代时不从本地缺失推导整组Delete。
+- 取消排除保持原baseline和队列，先完整读取认证固定快照（ID/epoch/高水位/分页计数）、核对已接收事件与远端身份、观察保留的真实本地内容，再按规则版本CAS解除participation。清洁旧副本不作为新文件上传；双方修改交既有revision/generation围栏与preserve_both执行器，断网/未知证据保持未协调。排除/模式切换/解绑从不回收缓存或删除远端内容。
+- 释放持久化沿类型化错误源识别SQLite SQLITE_FULL（主错误13）为 `LocalErrorKind::NoSpace`；本机IPC映射已有 `INSUFFICIENT_STORAGE`，GUI/CLI显示空间不足与内容保留提示，不回显错误详情/路径。测试的max_page_count必须限定实际释放使用的同一个SQLite pager，不能把另一连接未耗尽误当故障已注入。

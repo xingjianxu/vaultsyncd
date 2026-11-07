@@ -188,6 +188,10 @@ pub(crate) async fn list(
             "本地不是完整已下载内容"
         } else if info.mode == vaultsyncd_client_store::bindings::SyncMode::Full {
             "完整同步模式要求保留离线内容"
+        } else if gate == ExecutionGate::Excluded {
+            "路径被绑定排除规则排除；本地与服务器内容保留"
+        } else if gate == ExecutionGate::ReconcileRequired {
+            "取消排除后需要核对最新远端与本地，尚未完成重新协调"
         } else if gate != ExecutionGate::Ready {
             "绑定已暂停、解除或需要核对"
         } else {

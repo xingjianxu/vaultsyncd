@@ -9,6 +9,8 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
     let p = command.parameters.as_ref().unwrap_or(&empty);
     let fields = [
         ("binding_id", &p.binding_id),
+        ("rules", &p.rules),
+        ("rules_version", &p.rules_version),
         ("root_id", &p.root_id),
         ("entry_id", &p.entry_id),
         ("operation_id", &p.operation_id),
@@ -46,6 +48,8 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         C::ExportRecovery => (&["binding_id", "destination"], &[]),
         C::SetConnection => (&["server_id", "server_url"], &["ca_file"]),
         C::Login => (&["username", "password"], &[]),
+        C::GetRules => (&["binding_id"], &["entry_id"]),
+        C::SetRules => (&["binding_id", "rules", "rules_version"], &[]),
         C::SetMode => (&["binding_id", "mode"], &[]),
         C::ListHistory => (&["binding_id", "entry_id"], &["cursor"]),
         C::ListTrash => (&["binding_id"], &["cursor"]),
@@ -62,7 +66,10 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         if !required.contains(&name) && !optional.contains(&name) {
             return Err(invalid());
         }
-        if value.is_empty() || value.len() > 4096 || value.contains('\0') {
+        if name == "rules_version" && value.chars().any(char::is_control) {
+            return Err(invalid());
+        }
+        if (value.is_empty() && name != "rules") || value.len() > 4096 || value.contains('\0') {
             return Err(invalid());
         }
         if (name.ends_with("_id") || name == "cursor")

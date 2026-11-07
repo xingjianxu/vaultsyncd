@@ -566,6 +566,21 @@ async fn real_export_integrity_authorization_and_release_restart() {
             .0,
         403
     );
+    // S105: every artifact/control endpoint rechecks owner, even with an existing exact ID.
+    for (method, path) in [
+        ("GET", "/v1/admin/backup-snapshots".to_owned()),
+        ("GET", url.clone()),
+        ("GET", format!("{url}/export")),
+        ("GET", format!("{url}/files/database.sqlite")),
+        ("GET", format!("{url}/objects/{root}/{}", "a".repeat(64))),
+        ("POST", format!("{url}/verify")),
+        ("POST", format!("{url}/release")),
+    ] {
+        let (status, rejected) = s.http.json(method, &path, Some(token), None).await.unwrap();
+        assert_eq!(status, 403, "{method} {path}: {rejected}");
+        assert_eq!(rejected["error"]["code"], "ACCESS_DENIED");
+        assert!(!rejected.to_string().contains("history-content"));
+    }
     assert_eq!(rpc(&lab, "status", id).await["status"], 409);
     eprintln!(
         "native: canceled export/verify keep recoverable incomplete receipts; second active account cannot read backup materials"

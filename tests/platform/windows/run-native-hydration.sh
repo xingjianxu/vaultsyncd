@@ -10,7 +10,8 @@ if [ "${VAULTSYNCD_WINDOWS_SHELL:-}" != 1 ]; then
 fi
 root=$(repo_root)
 cd "$root"
-artifact_dir="$root/artifacts/S067"
+run_id="s067-$(date +%s)-$$"
+artifact_dir="$root/artifacts/S067/$run_id"
 mkdir -p "$artifact_dir"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin test --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent \
@@ -35,10 +36,11 @@ $exe = Join-Path $PSScriptRoot 's067-platform-tests.exe'
 $actual = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
 if ($actual -ne $ExpectedHash) { throw 'test binary transport hash mismatch' }
 Write-Output "guest_exe_sha256 $actual"
-& $exe --test-threads=1 --nocapture
+$env:VAULTSYNCD_SKIP_ABANDONED_HYDRATION_CLEANUP='1'
+& $exe hydration_tests:: --test-threads=1 --nocapture
 exit $LASTEXITCODE
 PS
-guest_dir='C:/vaultsyncd-lab/s067'
+guest_dir="C:/vaultsyncd-lab/$run_id"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir' | Out-Null\""
 GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/s067-platform-tests.exe" "$artifact_dir/guest-native-files.ps1"
 guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-native-files.ps1 -ExpectedHash $host_hash" \

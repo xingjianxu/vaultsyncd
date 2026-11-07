@@ -23,6 +23,8 @@
     "allow-agent-list-problems",
     "allow-agent-retry-problem",
     "allow-agent-set-mode",
+    "allow-agent-get-rules",
+    "allow-agent-set-rules",
     "allow-agent-detach-binding",
     "allow-agent-export-recovery",
     "allow-agent-list-history",

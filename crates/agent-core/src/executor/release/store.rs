@@ -97,7 +97,7 @@ impl Journal {
                 self.digest,
                 self.size,
             )
-            .map_err(error)?,
+            .map_err(|detail| PortError::local(LocalErrorKind::Write, detail))?,
         })
     }
     pub fn matches_released(&self, receipt: &ReleasedFile) -> Result<(), PortError> {
@@ -433,6 +433,22 @@ fn decode(json: &str, completed: bool) -> Result<Journal, PortError> {
         .matches_content(&journal.evidence, &journal.spec()?.pin)?;
     Ok(journal)
 }
-pub(super) fn error(e: impl std::fmt::Display) -> PortError {
+pub(super) fn error(e: impl std::error::Error + 'static) -> PortError {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+    while let Some(current) = source {
+        if let Some(sqlx::Error::Database(database)) = current.downcast_ref::<sqlx::Error>() {
+            if database
+                .code()
+                .and_then(|c| c.parse::<u32>().ok())
+                .is_some_and(|c| c & 0xff == 13)
+            {
+                return PortError::local(
+                    LocalErrorKind::NoSpace,
+                    "客户端释放日志空间不足；完整本地内容保留",
+                );
+            }
+        }
+        source = current.source();
+    }
     PortError::local(LocalErrorKind::Write, format!("释放状态：{e}"))
 }

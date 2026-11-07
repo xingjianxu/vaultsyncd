@@ -237,6 +237,63 @@ pub(crate) async fn execute(
             result.unconfirmed = Some(report.unconfirmed.iter().map(ToString::to_string).collect());
             result.incomplete = Some(report.incomplete.iter().map(ToString::to_string).collect());
         }
+        C::GetRules | C::SetRules => {
+            let binding = binding.unwrap();
+            if command.name == C::SetRules {
+                if !running.contains_key(&binding) {
+                    return Err(reject("BINDING_BLOCKED"));
+                }
+                let importing: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM binding_imports WHERE binding_id=? AND complete=1)")
+                    .bind(binding.as_bytes().as_slice()).fetch_one(db.pool()).await.map_err(error)?;
+                if importing {
+                    return Err(reject("BINDING_BLOCKED"));
+                }
+                vaultsyncd_fs_common::ignore::IgnoreRules::parse(p.rules.as_deref().unwrap())
+                    .map_err(|_| reject("INVALID_ARGUMENT"))?;
+                control
+                    .change_rules(
+                        binding,
+                        p.rules_version.as_deref().unwrap(),
+                        p.rules.as_deref().unwrap(),
+                    )
+                    .await
+                    .map_err(|failure| {
+                        if failure.code() == Some("RULES_VERSION_REUSED") {
+                            reject("INVALID_ARGUMENT")
+                        } else {
+                            failure
+                        }
+                    })?;
+            }
+            let (version, rules): (String, String) = sqlx::query_as("SELECT b.rules_version,coalesce(c.rules,'') FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?")
+                .bind(binding.as_bytes().as_slice()).fetch_one(db.pool()).await.map_err(error)?;
+            if let Some(entry) = p.entry_id.as_deref() {
+                let (worker, _) = running
+                    .get(&binding)
+                    .ok_or_else(|| reject("BINDING_BLOCKED"))?;
+                let rows = crate::work::metadata(&worker.importer).await?;
+                let row = rows.get(entry).ok_or_else(|| reject("NOT_FOUND"))?;
+                let path = crate::work::paths(&rows)?
+                    .remove(entry)
+                    .ok_or_else(|| reject("NOT_FOUND"))?;
+                let decision =
+                    vaultsyncd_fs_common::ignore::IgnoreRules::parse(&rules).map_err(error)?;
+                result.rules_explanation = Some(if path.is_empty() {
+                    "Root 本身始终保留".into()
+                } else {
+                    format!(
+                        "{:?}",
+                        decision.decide(
+                            &vaultsyncd_fs_common::path::RelativePath::parse(&path)
+                                .map_err(error)?,
+                            row.kind == vaultsyncd_protocol::generated::EntryKind::Directory
+                        )
+                    )
+                });
+            }
+            result.rules_version = Some(version);
+            result.rules = Some(rules);
+        }
         C::SetMode => {
             let mode = if p.mode.as_deref() == Some("full") {
                 SyncMode::Full

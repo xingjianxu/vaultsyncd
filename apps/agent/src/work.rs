@@ -487,6 +487,7 @@ impl Worker {
     }
     pub async fn discover(&self) -> Result<(), PortError> {
         let local = &self.importer.local;
+        let rules = crate::exclusions::Rules::load(&local.db, local.binding).await?;
         let rows = metadata(&self.importer).await?;
         let by_id = paths(&rows)?;
         let by_path: HashMap<_, _> = by_id
@@ -511,6 +512,9 @@ impl Worker {
             return Ok(());
         }
         for (path, meta) in scan {
+            if !rules.includes(&path, meta.directory)? {
+                continue;
+            }
             if meta.directory {
                 continue;
             }
