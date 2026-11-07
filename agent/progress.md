@@ -134,4 +134,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S112 | 本机域名部署与NixOS功能选项 | L | S095、S096、S097、S111 | done | 项目4856738、c94aca4已ff合入master；主机9c2133f、56bd93b已合main，任务树均清理 | 包内65/0；主机build/test/switch244、可信TLS、16MiB/413、committed/下载/重启/备份、Chromium登录/SSE与既有服务检查通过 | 无部署阻塞；独立外网可达性未获证据，原hosted/规模/首发门禁保留 | [S112](tasks/S112.md) |
 | S113 | 主机用户运行与 pure 一键部署 | L | S112 | done | 项目4071fd4/6b967bd，主机32bfeb5已ff合main；整合/清理见批次 | 契约6/6、两类模块、包内65/0；pure构建、迁移test、HTTPS上传/重启/备份；一键pin更新/test/switch245、归属/身份/版本/SSH/10服务/锁核对通过 | 无；原hosted/规模/首发门禁保留 | [S113](tasks/S113.md) |
 
-| S114 | 客户端目录选择与 Root 名称显示 | W | S081、S111 | done | 实现85143c6；整合清理见交接 | protocol20/Root6/agent2、前端/边界/两端clippy；Windows选择/取消/名称/首合并及GUI退出后真实字节通过 | 无本卡阻塞；正式部署/发行未执行 | [S114](tasks/S114.md) |
+| S114 | 客户端目录选择与 Root 名称显示 | W | S081、S111 | done | 实现85143c6、交接bfa5204已ff合master；任务树/分支已清理 | protocol20/Root6/agent2、前端/边界/两端clippy；Windows选择/取消/名称/首合并及GUI退出后真实字节通过 | 无本卡阻塞；正式部署/发行未执行 | [S114](tasks/S114.md) |
