@@ -295,6 +295,12 @@ impl Fixture {
 async fn native_sqlite_full_refuses_release_and_keeps_local_copy() {
     let f = Fixture::prepare(run_path("sqlite-full")).await;
     let mut conn = f.db.pool().acquire().await.unwrap();
+    // max_page_count belongs to this connection's pager. Reserve the other pool slots so the
+    // actual release uses the same exhausted pager, instead of accidentally opening an uncapped one.
+    let mut reserved = Vec::new();
+    for _ in 0..3 {
+        reserved.push(f.db.pool().acquire().await.unwrap());
+    }
     let pages: i64 = sqlx::query_scalar("PRAGMA page_count")
         .fetch_one(&mut *conn)
         .await
@@ -325,9 +331,14 @@ async fn native_sqlite_full_refuses_release_and_keeps_local_copy() {
         .release(&spec(&f.v, 0x7f))
         .await
         .unwrap_err();
+    assert!(
+        error.is_no_space(),
+        "capacity error must retain typed storage classification: {error}"
+    );
     eprintln!("actual bounded SQLite capacity release error: {error}");
     f.full_bytes();
     assert_eq!(f.local().await.residency, Residency::Materialized);
+    drop(reserved);
     f.finish().await;
 }
 fn run_path(tag: &str) -> PathBuf {
@@ -557,4 +568,74 @@ fn native_release_crash_recovery() {
             f.finish().await;
         });
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a dedicated run_id NTFS VHD from run-native-release.sh capacity mode"]
+async fn native_ntfs_exhaustion_keeps_downloaded_bytes_and_reports_no_space() {
+    use std::io::Write;
+    let volume = PathBuf::from(
+        std::env::var_os("VAULTSYNCD_RELEASE_FULL_VOLUME").expect("dedicated NTFS volume"),
+    );
+    assert!(volume.is_absolute() && volume.components().count() == 2);
+    let f = Fixture::prepare(volume.join(format!("s105-full-{}", std::process::id()))).await;
+    let mut connection = f.db.pool().acquire().await.unwrap();
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    drop(connection);
+    let fill_path = volume.join("s105-allocated-data.bin");
+    let mut fill = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&fill_path)
+        .unwrap();
+    let mut wrote = 0u64;
+    for chunk in [vec![0x5a; 1024 * 1024], vec![0x5a; 4096]] {
+        loop {
+            match fill.write_all(&chunk) {
+                Ok(()) => wrote += chunk.len() as u64,
+                Err(e) => {
+                    assert!(
+                        matches!(e.raw_os_error(), Some(112 | 39)),
+                        "actual NTFS full error: {e}"
+                    );
+                    break;
+                }
+            }
+            assert!(
+                wrote < 256 * 1024 * 1024,
+                "test must only fill the bounded 128MiB VHD"
+            );
+        }
+    }
+    let _ = fill.sync_all();
+    assert!(
+        wrote > 64 * 1024 * 1024,
+        "must allocate real bytes, not sparse metadata"
+    );
+    let before = f.adapter.inspect("file.txt").unwrap();
+    assert!(
+        before.cloud.unwrap().on_disk >= pin(&f.v).size,
+        "storage pressure must not autonomously evict downloaded content"
+    );
+    f.full_bytes();
+    let rejected = f
+        .service(0, false)
+        .release(&spec(&f.v, 0xa5))
+        .await
+        .unwrap_err();
+    assert!(
+        rejected.is_no_space(),
+        "actual NTFS exhaustion must remain typed: {rejected}"
+    );
+    f.full_bytes();
+    drop(fill);
+    std::fs::remove_file(fill_path).unwrap();
+    assert_eq!(f.local().await.residency, Residency::Materialized);
+    eprintln!(
+        "check=pass s105_real_ntfs_enospc allocated={wrote} complete_cache_retained typed_no_space=true"
+    );
+    f.finish().await;
 }

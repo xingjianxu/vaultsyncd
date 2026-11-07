@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 1,
-      "minor": 5
+      "minor": 6
     },
     "frame": {
       "header_bytes": 4,
@@ -56,6 +56,8 @@
       "additionalProperties": false,
       "type": "object", "description": "可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。",
       "properties": {
+        "rules": {"type":"string","description":"完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。"},
+        "rules_version": {"type":"string","description":"不可复用的规则版本；同版本同文本幂等。"},
         "binding_id": {"type":"string","description":"Binding 身份。"},
         "root_id": {"type":"string","description":"授权 Root 身份。"},
         "entry_id": {"type":"string","description":"条目身份，不接受调用方自选相对文件路径。"},
@@ -81,7 +83,7 @@
     "CommandName": {
       "type": "string",
       "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
-      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance"]
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"]
     },
     "ErrorBody": {
       "type": "object",
@@ -208,6 +210,9 @@
     "ManagementResult": {
       "type":"object","description":"每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。",
       "properties":{
+        "rules":{"type":"string","description":"当前完整排除清单，空字符串表示无排除规则。"},
+        "rules_version":{"type":"string","description":"当前持久规则版本。"},
+        "rules_explanation":{"type":"string","description":"get_rules携带entry_id时，按持久身份解析路径并返回命中的规则/行号或包含原因。"},
         "bindings":{"type":"array","items":{"$ref":"#/$defs/BindingInfo"},"description":"持久绑定列表。"},
         "files":{"type":"array","items":{"$ref":"#/$defs/FileStatus"},"description":"list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。"},
         "problems":{"type":"array","items":{"$ref":"#/$defs/Problem"},"description":"持久问题列表。"},

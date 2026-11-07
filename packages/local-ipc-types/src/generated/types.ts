@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 1;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 5;
+export const PROTOCOL_MINOR = 6;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -174,9 +174,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -217,6 +217,10 @@ export interface CommandParameters {
   password?: string;
   /** 授权 Root 身份。 */
   root_id?: string;
+  /** 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。 */
+  rules?: string;
+  /** 不可复用的规则版本；同版本同文本幂等。 */
+  rules_version?: string;
   /** 问题路径或原因的大小写不敏感子串筛选。 */
   search?: string;
   /** 连接的服务器稳定身份。 */
@@ -231,7 +235,7 @@ export interface CommandParameters {
 
 export function decodeCommandParameters(value: unknown): CommandParameters {
   const object = expect_object(value, "CommandParameters");
-  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "notification_generation", "notification_key", "operation_id", "password", "root_id", "search", "server_id", "server_url", "username", "version_id"].includes(key))) {
+  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "notification_generation", "notification_key", "operation_id", "password", "root_id", "rules", "rules_version", "search", "server_id", "server_url", "username", "version_id"].includes(key))) {
     throw new Error("CommandParameters contains unknown fields");
   }
   return {
@@ -250,6 +254,8 @@ export function decodeCommandParameters(value: unknown): CommandParameters {
     operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "CommandParameters.operation_id"),
     password: object.password === undefined ? undefined : expect_string(object.password, "CommandParameters.password"),
     root_id: object.root_id === undefined ? undefined : expect_string(object.root_id, "CommandParameters.root_id"),
+    rules: object.rules === undefined ? undefined : expect_string(object.rules, "CommandParameters.rules"),
+    rules_version: object.rules_version === undefined ? undefined : expect_string(object.rules_version, "CommandParameters.rules_version"),
     search: object.search === undefined ? undefined : expect_string(object.search, "CommandParameters.search"),
     server_id: object.server_id === undefined ? undefined : expect_string(object.server_id, "CommandParameters.server_id"),
     server_url: object.server_url === undefined ? undefined : expect_string(object.server_url, "CommandParameters.server_url"),
@@ -429,6 +435,12 @@ export interface ManagementResult {
   problems?: Array<Problem>;
   /** committed后按条目身份重新查询的当前位置 */
   restored_path?: string;
+  /** 当前完整排除清单，空字符串表示无排除规则。 */
+  rules?: string;
+  /** get_rules携带entry_id时，按持久身份解析路径并返回命中的规则/行号或包含原因。 */
+  rules_explanation?: string;
+  /** 当前持久规则版本。 */
+  rules_version?: string;
   /** 解绑时保留的未确认条目。 */
   unconfirmed?: Array<string>;
 }
@@ -449,6 +461,9 @@ export function decodeManagementResult(value: unknown): ManagementResult {
     operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "ManagementResult.operation_id"),
     problems: object.problems === undefined ? undefined : expect_array(object.problems, "ManagementResult.problems").map((item) => decodeProblem(item)),
     restored_path: object.restored_path === undefined ? undefined : expect_string(object.restored_path, "ManagementResult.restored_path"),
+    rules: object.rules === undefined ? undefined : expect_string(object.rules, "ManagementResult.rules"),
+    rules_explanation: object.rules_explanation === undefined ? undefined : expect_string(object.rules_explanation, "ManagementResult.rules_explanation"),
+    rules_version: object.rules_version === undefined ? undefined : expect_string(object.rules_version, "ManagementResult.rules_version"),
     unconfirmed: object.unconfirmed === undefined ? undefined : expect_array(object.unconfirmed, "ManagementResult.unconfirmed").map((item) => expect_string(item, "ManagementResult.unconfirmed 的元素")),
   };
 }

@@ -320,7 +320,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             db.clone(),
             ports.clone(),
             deferred.clone(),
-            Arc::new(BindingControls::new(db.clone())),
+            Arc::new(crate::exclusions::Gate(db.clone())),
             Arc::new(Random),
             Limits::default(),
         )?);
@@ -673,10 +673,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             let mut observed = false;
             let result: Result<(), PortError> = async {
                 if !session.has_credentials()
-                    || BindingControls::new(db.clone())
-                        .execution_gate(*id, None)
-                        .await?
-                        != vaultsyncd_agent_core::bindings::control::ExecutionGate::Ready
+                    || !crate::exclusions::Rules::load(&db, *id).await?.active
                 {
                     return Ok(());
                 }
@@ -750,6 +747,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     .map_err(error);
                 // An unavailable pull must not suppress durable local discovery. Conversely,
                 // a local scan failure must not prevent already received work from progressing.
+                if received.is_ok() { crate::exclusions::reconcile(worker).await?; }
                 let discovered = worker.discover().await;
                 scheduler.run_round(*id).await?;
                 received?;

@@ -51,6 +51,13 @@ fn acceptance_file_control(action: String) -> Result<(), String> {
             )
         }
         "unhold" => *held = None,
+        "late-dirty" => {
+            std::fs::write(
+                path.join("S105-last-moment.txt"),
+                b"S105 unique content written after detach confirmation opened",
+            )
+            .map_err(|_| "test last moment write")?;
+        }
         "dirty" => {
             std::fs::write(path.join("local-only.txt"), b"S082-unconfirmed-local")
                 .map_err(|_| "test dirty write")?;
@@ -116,6 +123,8 @@ pub(super) fn run() {
         agent_list_problems,
         agent_retry_problem,
         agent_set_mode,
+        agent_get_rules,
+        agent_set_rules,
         agent_detach_binding,
         agent_export_recovery,
         agent_list_history,
@@ -140,6 +149,8 @@ pub(super) fn run() {
         agent_list_problems,
         agent_retry_problem,
         agent_set_mode,
+        agent_get_rules,
+        agent_set_rules,
         agent_detach_binding,
         agent_export_recovery,
         agent_list_history,

@@ -94,6 +94,18 @@ pub(crate) fn start(
                         false,
                     ));
                 }
+                if matches!(
+                    request.command.name,
+                    CommandName::GetRules | CommandName::SetRules
+                ) && request.ipc_version.minor < 6
+                {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "排除规则需要本机 IPC 1.6",
+                        false,
+                    ));
+                }
                 if let Err(error) = vaultsyncd_local_ipc::commands::validate(&request.command) {
                     return Ok(Response::error(request.request_id, error));
                 }
@@ -246,7 +258,9 @@ pub(crate) fn management_response(
             },
         ),
         Err(error) => {
-            let source_code = if error.needs_reauth() {
+            let source_code = if error.is_no_space() {
+                "INSUFFICIENT_STORAGE"
+            } else if error.needs_reauth() {
                 "REAUTH_REQUIRED"
             } else {
                 error.code().unwrap_or("UNAVAILABLE")
@@ -308,6 +322,7 @@ pub(crate) fn management_response(
                 "RESTORE_REJECTED" => "服务器已拒绝此次恢复（RESTORE_REJECTED）；未完成覆盖，请重新读取清单和当前修订后选择操作。".to_owned(),
                 "CERTIFICATE_INVALID" => "服务器证书验证失败（CERTIFICATE_INVALID）；请核对服务器地址与名称，或在连接设置中选择管理员提供的附加 CA。证书验证未被关闭。".to_owned(),
                 "LOCAL_PATH_UNAVAILABLE" => "本地目录无法访问（LOCAL_PATH_UNAVAILABLE）；请选择现有本机 NTFS 目录，并检查路径、权限与卷状态。".to_owned(),
+                "INSUFFICIENT_STORAGE" => "本地磁盘或状态库空间不足（INSUFFICIENT_STORAGE）；完整缓存、未确认内容与恢复现场保留，请腾出空间后重试。".to_owned(),
                 "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),
                 _ => format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
             };

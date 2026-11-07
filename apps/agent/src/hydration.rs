@@ -31,9 +31,17 @@ use vaultsyncd_transfer::{
 const CANCELLED: i32 = 0xc0000120u32 as i32;
 const RESOURCES: i32 = 0xc000009au32 as i32;
 const CORRUPT: i32 = 0xc000003fu32 as i32;
-type Key = (i64, i64, i64);
-fn key(reply: Reply) -> Key {
-    (reply.connection, reply.transfer, reply.request)
+// A cloud I/O can request multiple ranges before the preceding range worker has retired.
+// Routing keys identify the OS operation; the range identifies one bounded work item.
+type Key = (i64, i64, i64, u64, u64);
+fn key(demand: ReadDemand) -> Key {
+    (
+        demand.reply.connection,
+        demand.reply.transfer,
+        demand.reply.request,
+        demand.offset,
+        demand.length,
+    )
 }
 struct Active {
     identity: Identity,
@@ -187,18 +195,18 @@ impl Callbacks for HydrationCallbacks {
         if self.shared.closed.load(Ordering::SeqCst) {
             return Err(STATUS_CLOUD_FILE_NETWORK_UNAVAILABLE);
         }
-        if active.len() >= self.limit || active.contains_key(&key(demand.reply)) {
+        if active.len() >= self.limit || active.contains_key(&key(demand)) {
             return Err(RESOURCES);
         }
         active.insert(
-            key(demand.reply),
+            key(demand),
             Active {
                 identity: demand.identity,
                 cancel: CancelToken::new(),
             },
         );
         if self.sender.try_send(demand).is_err() {
-            active.remove(&key(demand.reply));
+            active.remove(&key(demand));
             return Err(RESOURCES);
         }
         self.shared.fetches.fetch_add(1, Ordering::SeqCst);
@@ -252,7 +260,7 @@ impl Worker {
                 .active
                 .lock()
                 .expect("hydration requests")
-                .get(&key(demand.reply))
+                .get(&key(demand))
                 .expect("accepted request")
                 .cancel
                 .clone()
@@ -290,7 +298,7 @@ impl Worker {
             .active
             .lock()
             .expect("hydration requests")
-            .remove(&key(demand.reply));
+            .remove(&key(demand));
     }
     async fn admit(&self, demand: ReadDemand, cancel: &CancelToken) -> Result<UserReadGuard, i32> {
         let request = OpId::from_bytes(

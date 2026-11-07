@@ -66,10 +66,17 @@ try { & $exe --nocapture --test-threads=1; $result=$LASTEXITCODE }
 finally { Remove-Item -LiteralPath $fixture -Force }
 exit $result
 PS
+capacity_script=()
+if [ "${VAULTSYNCD_RELEASE_NTFS_CAPACITY:-0}" = 1 ]; then
+    cp "$script_dir/guest-native-capacity.ps1" "$artifact_dir/"
+    capacity_script=("$artifact_dir/guest-native-capacity.ps1")
+fi
 guest_dir="C:/vaultsyncd-lab/s069-driver-$$"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir' | Out-Null\""
-GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/s069-native-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-release.ps1"
-guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-release.ps1 -ExpectedHash $host_hash -FixtureHash $fixture_hash" | tee "$artifact_dir/native-tests.log"
+GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/s069-native-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-release.ps1" "${capacity_script[@]}"
+guest_runner=guest-release.ps1
+if [ "${VAULTSYNCD_RELEASE_NTFS_CAPACITY:-0}" = 1 ]; then guest_runner=guest-native-capacity.ps1; fi
+guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/$guest_runner -ExpectedHash $host_hash -FixtureHash $fixture_hash" | tee "$artifact_dir/native-tests.log"
 guest_ssh "powershell -NoProfile -Command \"Remove-Item -LiteralPath '$guest_dir' -Recurse -Force\""
 echo "MATCH s069-native-tests.exe $host_hash"
 echo "ARTIFACTS $artifact_dir"

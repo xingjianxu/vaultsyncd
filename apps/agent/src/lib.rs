@@ -9,6 +9,8 @@ mod credentials;
 #[cfg(windows)]
 mod events;
 #[cfg(windows)]
+mod exclusions;
+#[cfg(windows)]
 mod hydration;
 #[cfg(all(test, windows))]
 #[allow(unsafe_code)]

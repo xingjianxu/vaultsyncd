@@ -51,6 +51,8 @@ const USAGE: &str = "\
   pause --binding-id <ID>
   resume --binding-id <ID>
   mode --binding-id <ID> --mode <full|on_demand>
+  rules --binding-id <ID> [--entry-id <ID>]
+  set-rules --binding-id <ID> --file <UTF8文件> --version <版本>
   detach --binding-id <ID>
   download --binding-id <ID> --entry-id <ID> [--operation-id <ID>]
   release --binding-id <ID> --entry-id <ID> [--operation-id <ID>]
@@ -378,6 +380,36 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
         "pause" => binding_only(rest, CommandName::PauseBinding)?,
         "resume" => binding_only(rest, CommandName::ResumeBinding)?,
         "detach" => binding_only(rest, CommandName::DetachBinding)?,
+        "rules" => {
+            let opts = parse_options(rest, &["--binding-id", "--entry-id"])?;
+            (
+                CommandName::GetRules,
+                Some(CommandParameters {
+                    binding_id: Some(required(&opts, "--binding-id")?),
+                    entry_id: optional(&opts, "--entry-id"),
+                    ..Default::default()
+                }),
+                None,
+            )
+        }
+        "set-rules" => {
+            let opts = parse_options(rest, &["--binding-id", "--file", "--version"])?;
+            let text = std::fs::read_to_string(required(&opts, "--file")?)
+                .map_err(|_| Failure::usage("无法读取 UTF-8 排除清单"))?;
+            if text.len() > 4096 {
+                return Err(Failure::usage("排除清单不能超过4096字节"));
+            }
+            (
+                CommandName::SetRules,
+                Some(CommandParameters {
+                    binding_id: Some(required(&opts, "--binding-id")?),
+                    rules: Some(text),
+                    rules_version: Some(required(&opts, "--version")?),
+                    ..Default::default()
+                }),
+                None,
+            )
+        }
         "mode" => {
             let opts = parse_options(rest, &["--binding-id", "--mode"])?;
             (
@@ -602,6 +634,8 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::ClaimNotification => "claim-notification",
         CommandName::PrepareMaintenance => "prepare-maintenance",
         CommandName::SetMode => "mode",
+        CommandName::GetRules => "rules",
+        CommandName::SetRules => "set-rules",
         CommandName::ListHistory => "history",
         CommandName::ListTrash => "trash",
         CommandName::RestoreEntry => "restore",
@@ -675,6 +709,16 @@ fn render_success(json: bool, name: CommandName, result: &GetStatusResult) {
         println!("ok {label}");
         return;
     };
+    if let Some(rules) = &management.rules {
+        println!(
+            "排除规则版本 {}\n{}",
+            management.rules_version.as_deref().unwrap_or("未知"),
+            rules
+        );
+    }
+    if let Some(explanation) = &management.rules_explanation {
+        println!("{explanation}");
+    }
     if let Some(files) = &management.files {
         for row in files {
             println!(

@@ -183,7 +183,46 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
             .code,
         LocalIpcErrorCode::UnsupportedVersion
     );
+    request.ipc_version.minor = 5;
+    for name in [CommandName::GetRules, CommandName::SetRules] {
+        request.command.name = name;
+        request.command.parameters = None;
+        assert_eq!(
+            endpoint
+                .request(&request)
+                .await
+                .unwrap()
+                .error
+                .unwrap()
+                .code,
+            LocalIpcErrorCode::UnsupportedVersion
+        );
+    }
     server.shutdown().await.unwrap();
     db.pool().close().await;
     std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn storage_exhaustion_has_actionable_redacted_gui_cli_error() {
+    let request = Request {
+        request_id: "s105-capacity".into(),
+        ipc_version: version::supported(),
+        command: Command {
+            name: CommandName::ReleaseEntry,
+            parameters: None,
+        },
+    };
+    let response = management_response(
+        &request,
+        Err(PortError::local(
+            vaultsyncd_transfer::ports::LocalErrorKind::NoSpace,
+            "private path and content must not escape",
+        )),
+    );
+    let error = response.error.unwrap();
+    assert_eq!(error.code, LocalIpcErrorCode::Blocked);
+    assert!(error.message.contains("空间不足"));
+    assert!(error.message.contains("INSUFFICIENT_STORAGE"));
+    assert!(!error.message.contains("private path"));
 }
