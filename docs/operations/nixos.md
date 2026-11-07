@@ -1,6 +1,6 @@
 # 本机 NixOS 服务部署
 
-当前正式入口为 **https://vsyncd.132140.xyz**（S112，generation244），后端0.1.1、仅回环8721。配置、凭据位置和恢复见下方“S112 当前正式域名部署”；S096/S097保留为历史证据，其试用数据仍保留，旧18443入口已撤下。
+当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S113 将服务与正式目录切换为主机用户 `xingjian:users`；更新、凭据与恢复见末尾 S113 节。S112/096/097 为历史部署证据，旧试用卷仍保留。
 
 ## 实际入口和来源（S096，2026-11-07）
 
@@ -189,3 +189,29 @@ sudo journalctl -u vaultsyncd --no-pager
 10个既有服务（含sshd/Caddy/PostgreSQL及应用）的PID/InvocationID保持，3200/3300/15312返回200，SSH banner与主机锁摘要不变。未重启宿主/Windows；这次不是Windows原生验收或S108首发门禁。域名HTTPS与证书通过本机使用公网域名验证；独立外部Web抓取工具返回不可访问，**不宣称已有独立外网客户端连通证据**。Caddy自动续期已配置，未等待证书实际临近到期再验收。
 
 恢复入口为部署前generation243：`/nix/store/4q8hm31xrd6wfqslddb5211k6y2birxa-nixos-system-wks-lab-26.11.20261102.7356cc7`。必要时 `sudo nixos-rebuild test --store-path <该旧路径>` 立即恢复旧试用服务及Caddy配置；正式数据/凭据保留，正式状态挂载可能卸载，不要清理它。确认健康后再决定对旧路径switch；也需同步回退主机源码，否则常规flake rebuild会重新启用正式实例。本卡没有激活旧generation演练回退，不把S096的历史演练当作本卡测试。旧版本不得打开已升级的新库，恢复旧试用实例用其原库。
+
+## S113 主机用户运行与 pure 一键部署（2026-11-07）
+
+本机入口 `/etc/nixos#wks-lab`，feature 的 `user` 默认读主机 `host.user`，`group` 默认读 `config.users.users.<user>.group`，当前为 **xingjian:users（UID1000/GID100）**。项目模块 `createUser=false` 不更改普通用户类型/主组/描述/附加组。单元保留零 capabilities、NoNewPrivileges、0700 状态、严格系统写保护与 Root 白名单。
+
+正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd`（挂载源 `/data/vaultsyncd/state`）、`/data/vaultsyncd/roots` 及其 documents 目录均为 xingjian:users、0700；内部文件及原样本已离线改权。`/var/lib/vaultsyncd-credentials` 同归该用户且0700，`owner.password` 为0600，可在受信终端用 `cat /var/lib/vaultsyncd-credentials/owner.password` 读取。保留原登录及 ServerId/RootId，服务重启不会重置密码。没有删除正式数据、没有修改历史试用卷或其账号。
+
+主机配置仍以完整项目 Git SHA 固定 `features.server.vaultsync.rev`，永久地址 `git+file:///wrd/prj/vaultsyncd`，不依赖会清理的 worktree。更新入口：
+
+```sh
+cd /wrd/prj/vaultsyncd
+# 先提交项目更新，项目和 /etc/nixos 均须干净
+./tools/deploy-local.sh
+# 或部署指定的已提交版本
+./tools/deploy-local.sh --rev <完整Git提交>
+# 仅构建，不激活；会保留证据和配置工作树
+./tools/deploy-local.sh --build-only
+```
+
+默认主机名为本机 hostname，可用 `--host wks-lab`，`--config` 默认 `/etc/nixos`。普通用户运行，激活需要 sudo。脚本只在隔离主机 worktree 更新版本，显式启用 `pure-eval=true`、禁止锁更新/写入；根据固定源构建完整主机并核对发行 manifest SHA，按相同 store path dry-activate → test → HTTPS/IPC/ServerId/运行包/UID/目录归属 → switch，再核对开机与运行 system。成功以中文提交版本 pin、ff 回主机原分支并清理临时树，不推送。纯求值固定引用的依据见 [Nix getFlake 手册](https://nix.dev/manual/nix/2.31/language/builtins)；激活已构建路径使用已安装 nixos-rebuild 的 `--store-path`。
+
+证据在 `/data/vaultsyncd-deploy/local-*`：旧运行/启动 system 的 GC root、generation、锁、pin 差异与 result.json；`--build-only` 或失败树保留，检查后按结果中的 worktree/branch 清理。每次部署只操作当前配置，既有未提交修改不会自动 stash 或搬运。`test` 立即激活，不提供定时回滚。失败会尝试恢复旧运行/启动 system；若迁移后旧程序拒绝新 schema，需要离线恢复产品备份，脚本不降级数据库。正常更新前按产品备份流程留可恢复副本。
+
+一次性账号迁移证据 `/data/vaultsyncd-deploy/S113-20261107T221130/`：停服后的只读 `state-before` btrfs 快照与 `roots-before` reflink 副本、旧归属和文件摘要均保留在 Git 外。旧运行/启动 generation244 为 `/nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7`。**回到 S112 账号配置前，先停服并把专用正式状态及 Root 的归属恢复为 UID/GID984（旧配置会重建该账号）；仅切换旧 system 不能同时恢复归属。** 备份快照不改权；不要对用户其他目录递归改权，也不要用旧程序直接写新 schema。
+
+初次迁移固定项目4071fd4、主机75d6fb5，系统k92lxnm03xg828lzfzivp0aij810gpns先test；原正式 ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 和旧样本摘要保留。65项包内测试、普通/专用用户模块、aliweb关闭feature的pure完整求值通过。真实HTTPS16MiB上传/413/committed/固定下载/服务重启与同OpId重放、同UID IPC与普通用户备份prepare/verify/release通过；10项既有服务状态/PID/InvocationID保持。最终一键更新提交、generation与switch后证据见 [S113交接](../../agent/tasks/S113.md)。本卡不代替Windows、hosted CI及首发性能门禁。
