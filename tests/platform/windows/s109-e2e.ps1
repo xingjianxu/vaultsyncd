@@ -199,13 +199,31 @@ public static class S109Native {
     # files; only exit status and length are reported (no credential text).
     $out=Join-Path $results ('zip-'+$operation+'-out.txt')
     $err=Join-Path $results ('zip-'+$operation+'-err.txt')
-    $process=Start-Process -FilePath $zipEntry -ArgumentList $operation -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-    if(!$process.WaitForExit(180000)){throw ('product ZIP entry did not return: '+$operation)}
+    $info=New-Object Diagnostics.ProcessStartInfo
+    $info.FileName=$zipEntry;$info.Arguments=$operation;$info.UseShellExecute=$false
+    $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+    $process=[Diagnostics.Process]::Start($info)
+    $stdout=$process.StandardOutput.ReadToEndAsync()
+    $stderr=$process.StandardError.ReadToEndAsync()
+    if(!$process.WaitForExit(180000)){try{$process.Kill()}catch{};throw ('product ZIP entry did not return: '+$operation)}
+    $process.WaitForExit()
+    [IO.File]::WriteAllText($out,$stdout.Result,(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($err,$stderr.Result,(New-Object Text.UTF8Encoding($false)))
+    # Start-Process -PassThru can report a null ExitCode; Process.Start always has a real one.
     if($process.ExitCode-ne 0){throw ('product ZIP entry failed: '+$operation+' exit='+$process.ExitCode)}
-    if(!(Test-Path -LiteralPath $out)){return ''}
-    return (Get-Content -Raw -Encoding UTF8 $out)
+    return $stdout.Result
   }
   function Close-Gui {
+    # Owned = exact ExecutablePath under this run's extracted program directory, even when an
+    # earlier failure left a window that was never added to the tracked list.
+    $owned=@(Get-CimInstance Win32_Process -Filter "Name='vaultsyncd-desktop.exe'"|Where-Object{$_.SessionId-eq $session -and $_.ExecutablePath-eq (Join-Path $program 'vaultsyncd-desktop.exe')})
+    foreach($item in $owned){
+      $process=Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
+      if($process -and !$process.HasExited){
+        if(!$process.CloseMainWindow()){throw 'owned GUI rejected WM_CLOSE'}
+        if(!$process.WaitForExit(15000)){throw 'owned GUI did not exit after WM_CLOSE; no force kill attempted'}
+      }
+    }
     foreach($desktop in $script:desktops){
       $desktop.Refresh()
       if(!$desktop.HasExited){

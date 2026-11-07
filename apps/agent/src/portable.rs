@@ -11,6 +11,7 @@ use std::{
 use vaultsyncd_local_ipc::generated::*;
 use vaultsyncd_platform_windows::{files::RootHandle, ipc::Endpoint};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+const DESKTOP_SCOPE: &str = "vaultsyncd-desktop";
 const ZIP_FILES: &[&str] = &[
     "vaultsyncd-agent.exe",
     "vaultsyncd-session.exe",
@@ -264,6 +265,12 @@ pub async fn run(action: &str) -> Result<()> {
                     .into());
                 }
             }
+        }
+        // The desktop holds a per-user mutex, so a second Start reuses the open window instead
+        // of creating a duplicate one on the same agent.
+        if vaultsyncd_platform_windows::single::claim(DESKTOP_SCOPE)?.is_none() {
+            println!("Agent IPC healthy; the desktop window is already open in this session.");
+            return Ok(());
         }
         ProcessCommand::new(directory.join("vaultsyncd-desktop.exe"))
             .stdin(Stdio::null())

@@ -22,6 +22,9 @@ pub mod files;
 pub mod watcher;
 
 #[cfg(windows)]
+pub mod single;
+
+#[cfg(windows)]
 pub mod shell;
 
 #[cfg(windows)]
