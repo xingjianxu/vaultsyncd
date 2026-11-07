@@ -203,10 +203,10 @@ public static class S109Native {
     # pipe would only reach EOF when they exit. Redirect to files (never pipes), let a batch file
     # capture the real exit code, and bound the wait.
     $code=Join-Path $results ('zip-'+$operation+'-exit.txt')
-    $batch=Join-Path $results ('zip-'+$operation+'.cmd')
-    $lines=@('@echo off', ('"' + $zipEntry + '" ' + $operation + ' > "' + $out + '" 2> "' + $err + '"'), ('echo %ERRORLEVEL% > "' + $code + '"'))
-    [IO.File]::WriteAllLines($batch,$lines,(New-Object Text.ASCIIEncoding))
-    $process=Start-Process -FilePath $batch -PassThru -WindowStyle Hidden
+    # The command line travels as Unicode arguments (never inside a codepage-bound .cmd file,
+    # which would corrupt the Chinese program path), and output goes to files, not pipes.
+    $line='"'+$zipEntry+'" '+$operation+' > "'+$out+'" 2> "'+$err+'" & echo !ERRORLEVEL! > "'+$code+'"'
+    $process=Start-Process -FilePath $env:ComSpec -ArgumentList @('/v:on','/c',$line) -PassThru -WindowStyle Hidden
     if(!$process.WaitForExit(180000)){throw ('product ZIP entry did not return: '+$operation)}
     $process.WaitForExit()
     if(!(Test-Path -LiteralPath $code)){throw ('product ZIP entry produced no exit code: '+$operation)}
