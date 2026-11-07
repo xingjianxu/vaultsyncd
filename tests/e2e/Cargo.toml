@@ -23,6 +23,7 @@ vaultsyncd-protocol = { path = "../../crates/protocol" }
 vaultsyncd-transfer = { path = "../../crates/transfer" }
 
 [target.'cfg(windows)'.dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
 
 [lints]

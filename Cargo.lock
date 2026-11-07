@@ -5149,6 +5149,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tokio-rustls",
  "vaultsyncd-domain",

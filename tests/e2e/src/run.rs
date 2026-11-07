@@ -8,6 +8,8 @@
 //! - 产品不变量“每用户会话单实例”使三个 agent **顺序**运行（同一交互会话），因此报告
 //!   `concurrent_agent_processes=1`，不宣称并发；这正是本卡验收允许并必须写明的限制。
 
+mod faults;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -217,6 +219,9 @@ struct EntryReport {
 
 /// 执行整轮场景。返回进程退出码（0 成功，1 失败，2 数据/用法错误）。
 pub fn execute(options: &Options, scenario: &Scenario) -> i32 {
+    if options.faults {
+        return faults::execute(options);
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)

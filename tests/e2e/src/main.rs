@@ -40,6 +40,8 @@ pub struct Options {
     pub report: PathBuf,
     /// 只执行指定的 block（可重复；缺省执行全部）。
     pub blocks: Vec<String>,
+    /// S102：旧设备故障矩阵，不执行 S074 的场景块。
+    pub faults: bool,
 }
 
 fn main() {
@@ -83,6 +85,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut driver = None;
     let mut report = None;
     let mut blocks = Vec::new();
+    let mut faults = false;
     let mut args = args;
     while let Some(arg) = args.next() {
         let mut value = |name: &str| -> Result<String, String> {
@@ -95,6 +98,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--driver" => driver = Some(PathBuf::from(value("--driver")?)),
             "--report" => report = Some(PathBuf::from(value("--report")?)),
             "--block" => blocks.push(value("--block")?),
+            "--faults" => faults = true,
             other => return Err(format!("未知参数：{other}")),
         }
     }
@@ -105,5 +109,6 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         driver: driver.ok_or("缺少 --driver")?,
         report: report.ok_or("缺少 --report")?,
         blocks,
+        faults,
     })
 }

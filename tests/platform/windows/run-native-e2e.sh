@@ -16,10 +16,12 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
 root=$(repo_root)
 cd "$root"
-task=S074
+task=${VAULTSYNCD_E2E_TASK:-S074}
+case "$task" in S074|S102) ;; *) echo 'unsupported e2e task' >&2; exit 2;; esac
+target_dir=${CARGO_TARGET_DIR:-$root/target}
 scenario="$root/tests/scenarios/three-clients.json"
 test -f "$scenario" || { echo "missing scenario $scenario" >&2; exit 1; }
-helper="${VAULTSYNCD_RELEASE_SERVER:-$root/target/debug/examples/e2e-native-server}"
+helper="${VAULTSYNCD_RELEASE_SERVER:-$target_dir/debug/examples/e2e-native-server}"
 test -x "$helper" || {
     echo 'build: nix develop --command cargo build --locked -p vaultsyncd-server-tests --example e2e-native-server' >&2
     exit 1
@@ -80,14 +82,14 @@ kill -0 "$tunnel_pid" 2>/dev/null || { cat "$artifact_dir/tunnel.log"; exit 1; }
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent --bin vaultsyncd-agent
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-e2e --bin vaultsyncd-e2e
-agent_hash=$(sha256sum "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" | awk '{print $1}')
-e2e_hash=$(sha256sum "target/$TARGET_TRIPLE/debug/vaultsyncd-e2e.exe" | awk '{print $1}')
+agent_hash=$(sha256sum "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" | awk '{print $1}')
+e2e_hash=$(sha256sum "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-e2e.exe" | awk '{print $1}')
 fixture_hash=$(sha256sum "$artifact_dir/guest-fixture.json" | awk '{print $1}')
 scenario_hash=$(sha256sum "$scenario" | awk '{print $1}')
 echo "agent_sha256=$agent_hash"
 echo "e2e_sha256=$e2e_hash"
 
-guest_dir="C:/vaultsyncd-lab/s074-driver-$$"
+guest_dir="C:/vaultsyncd-lab/${task,,}-driver-$$"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir' | Out-Null\""
 cat > "$artifact_dir/guest-e2e.ps1" <<'PS'
 param(
@@ -99,6 +101,7 @@ param(
     [string]$Commit='unknown',
     [string]$Dirty='1',
     [string]$Scenario='three-clients.json',
+    [string]$Suite='S074',
     [switch]$Worker
 )
 $ErrorActionPreference = 'Stop'
@@ -124,8 +127,8 @@ if (-not $Worker) {
     Write-Output "guest_version: $($os.Version) build $($os.BuildNumber)"
     Write-Output "guest_e2e_sha256 $E2eHash"
     Write-Output "guest_agent_sha256 $AgentHash"
-    $task = 'vaultsyncd-s074-e2e-' + [Guid]::NewGuid().ToString('N')
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker -Driver `"$Driver`" -E2eHash $E2eHash -AgentHash $AgentHash -FixtureHash $FixtureHash -ScenarioHash $ScenarioHash -Commit $Commit -Dirty $Dirty -Scenario `"$Scenario`""
+    $task = 'vaultsyncd-' + $Suite.ToLowerInvariant() + '-e2e-' + [Guid]::NewGuid().ToString('N')
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker -Driver `"$Driver`" -E2eHash $E2eHash -AgentHash $AgentHash -FixtureHash $FixtureHash -ScenarioHash $ScenarioHash -Commit $Commit -Dirty $Dirty -Scenario `"$Scenario`" -Suite $Suite"
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
     try {
@@ -154,6 +157,7 @@ $arguments = @(
     '--driver', "`"$Driver`"",
     '--report', "`"$report`""
 ) -join ' '
+if ($Suite -eq 'S102') { $arguments += ' --faults' }
 $process = New-Object System.Diagnostics.Process
 $process.StartInfo.FileName = $exe
 $process.StartInfo.Arguments = $arguments
@@ -171,15 +175,15 @@ exit $process.ExitCode
 PS
 
 # guest_scp targets the default GUEST_DIR; stage explicitly into this run's driver.
-GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" \
-    "target/$TARGET_TRIPLE/debug/vaultsyncd-e2e.exe" \
+GUEST_TARGET_DIR="$guest_dir" guest_scp "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" \
+    "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-e2e.exe" \
     "$artifact_dir/guest-fixture.json" "$scenario" "$artifact_dir/guest-e2e.ps1"
 
 set +e
 timeout 2700 ssh -p "$GUEST_PORT" -i "$GUEST_SSH_KEY" -o IdentitiesOnly=yes \
     -o StrictHostKeyChecking=no -o BatchMode=yes -o LogLevel=ERROR \
     "$GUEST_USER@$GUEST_HOST" \
-    "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-e2e.ps1 -Driver $guest_dir -E2eHash $e2e_hash -AgentHash $agent_hash -FixtureHash $fixture_hash -ScenarioHash $scenario_hash -Commit $commit -Dirty $dirty -Scenario three-clients.json" \
+    "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-e2e.ps1 -Driver $guest_dir -E2eHash $e2e_hash -AgentHash $agent_hash -FixtureHash $fixture_hash -ScenarioHash $scenario_hash -Commit $commit -Dirty $dirty -Scenario three-clients.json -Suite $task" \
     2>&1 | tee "$artifact_dir/native-e2e.log"
 result=${PIPESTATUS[0]}
 set -e
@@ -205,6 +209,13 @@ fi
 if [ ! -f "$artifact_dir/report.json" ]; then
     echo 'check=fail report.json was not transferred back' >&2
     exit 1
+fi
+
+if [ "$task" = S102 ]; then
+    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["passed"] and len(r["scenes"])==6; print("check=pass S102 scenarios=6")' "$artifact_dir/report.json"
+    guest_ssh "powershell -NoProfile -Command \"Remove-Item -LiteralPath '$guest_dir' -Recurse -Force\""
+    echo "ARTIFACTS $artifact_dir"
+    exit 0
 fi
 
 # Server-side convergence: every committed entry (including conflict copies) must exist on the
