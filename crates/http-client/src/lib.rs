@@ -42,7 +42,7 @@
 //!
 //! # 尚未实现（后续卡）
 //!
-//! Root 清单与 SSE 事件流、浏览器 cookie 载体（Rust 客户端只走 Bearer）仍由后续卡接线；
+//! SSE 事件流只经 `ApiClient::receive_hints` 唤醒持久拉取；浏览器 cookie 载体（Rust 客户端只走 Bearer）不在此实现；
 //! `changes` JSON 拉取与查询串编码已由 [`changes`] 提供。退避调度属于 `crates/agent-core`。
 
 #![forbid(unsafe_code)]
@@ -55,6 +55,7 @@ pub mod client;
 pub mod config;
 pub mod content;
 pub mod error;
+mod hints;
 pub mod sync;
 
 /// Preserve HTTP timeout/authentication/retry classification when adapting application ports.

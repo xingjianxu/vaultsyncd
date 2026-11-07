@@ -2549,3 +2549,10 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - `packaging/linux/test-container.py`在既有上传/备份/重启之后，新增实际新空目标restore validate/apply、恢复服务启动/登录/固定内容下载及新epoch核对。容器UID/capability/no-FUSE约束未放宽，无wire/DB格式变化。NixOS原生闭包、Ubuntu x64容器共享内核、Ubuntu ARM完整TCG内核证据必须分列。
 - `tests/platform/windows/s099-installation.*`仅在`VAULTSYNCD_CI_CLEANUP=1`选择本run清理：真实logout，S100完整驻留门/revert/provider卸载，三份普通文件SHA核对后恢复原Quickemu登录，再删除新测试账号/profile/私有凭据/探针及**确切新SID**的系统任务。默认S099保留行为不变，不清理旧卡账号/Root/WinCred。Windows客体保持在线，宿主trial/Caddy/SSH不动。
 - S101实际产品源fcbbb93，后续装置/交接提交不重标旧receipt；原始失败与同源逐job续验范围、平台build/PE哈希见`agent/tasks/S101*.md`及curated索引。最终装置回归9项通过不替代原生平台证据；原控制器两次失败不被改写为整链成功。
+
+## S102 — 事件提示与旧设备重建准入
+
+- `ApiClient<ReqwestTransport>::receive_hints(root,wake)` 共用命令的 TLS、禁止重定向、真实 capabilities 协商和共享会话刷新；只把合法同 Root 的 `seq` SSE 帧合并为容量1的唤醒，不写游标或命名空间。单帧64KiB上限、45秒无字节超时；中断重连与周期 changes 并存。重复/乱序通知不作为状态事实。`apps/agent::events::Hints` 的 Drop 取消本绑定流，连接切换/重建/退出都会销毁；现有 poll_millis 未改。
+- `apps/agent::resync::admit` 在恢复上传、首次导入续接、scheduler 与本地发现之前检查已有基线的认证 epoch/持久 changes 窗口；`CURSOR_EXPIRED` 或新 epoch 进入既有核心 Resync，开放日志在重启后优先续接。旧 pending 永久隔离，旧 baseline/事件/本地内容保留；RetiredClean 不作为新增，RecoveryCandidate/Reconcile 仍保持 NEEDS_RECOVERY，prepared 不等于 complete。无候选的原子完成后销毁并重新装配绑定，不能复用旧 epoch 上传处理器。尚未进入重建围栏的离线时仍可持久发现本地修改，但不向未核实的 epoch 发送队列；已开放的重建即使拉快照断网，也不再根据旧事实生成新任务。装配遇到开放重建时跳过旧 apply/release 启动恢复并继续装配，把续接交给准入（否则围栏会在下次启动时永久阻塞准入本身）；隔离与破坏性动作围栏不变。
+- 原生入口 `VAULTSYNCD_E2E_TASK=S102 tests/platform/windows/run-native-e2e.sh`，详细环境见 `tests/faults/README.md`。`old-device-native-server` 仅是本 run 的回环测试控制桥，不加产品路由；时间故障在停服持 StateLock 后作用于专属 fixture，历史过期走实际 GC mark/复核/删除并跨测试时钟宽限，旧备份走真实 CLI 验证归档与新空目标恢复。客户端 SQLite 只在 agent 停止后 read_only 检查，pending Delete 必须由实际断网形成。
+- 报告逐项要求：真实 SSE loss/duplicate/reorder 的上/下游帧及远端外部写入经 changes 落到 NTFS；真实游标/固定历史版本410；clean不复活、dirty逐字节保留及正确候选分类；真实新epoch、旧Delete零自动发送且隔离跨agent重启保留。只有全部判据通过退出0。无 wire/schema/产品保留默认值变化；一台Windows实机四隔离身份顺序运行，不冒充多台并发。

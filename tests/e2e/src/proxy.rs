@@ -64,6 +64,14 @@ struct State {
     events: Vec<OperationEvent>,
     requests: u64,
     dropped: u64,
+    audit: Vec<(String, u16)>,
+    block_kind: Option<String>,
+    blocked: Vec<serde_json::Value>,
+    sse_fault: Option<String>,
+    sse_effects: Vec<String>,
+    sse_trace: Vec<serde_json::Value>,
+    block_snapshots: bool,
+    blocked_snapshots: u64,
 }
 
 #[derive(Debug)]
@@ -139,6 +147,42 @@ impl Proxy {
     #[must_use]
     pub fn events(&self) -> Vec<OperationEvent> {
         self.state.lock().expect("proxy state").events.clone()
+    }
+
+    /// S102：只改真实上游 SSE 的通知，不注入 changes 或假快照。
+    pub fn arm_sse(&self, mode: &str) {
+        assert!(matches!(mode, "loss" | "duplicate" | "reorder"));
+        self.state.lock().expect("proxy state").sse_fault = Some(mode.into());
+    }
+
+    pub fn sse_effects(&self) -> Vec<String> {
+        self.state.lock().expect("proxy state").sse_effects.clone()
+    }
+
+    pub fn sse_trace(&self) -> Vec<serde_json::Value> {
+        self.state.lock().expect("proxy state").sse_trace.clone()
+    }
+
+    /// S102：断开指定写请求，明确发生在上游收到请求之前。
+    pub fn block_before_forward(&self, kind: Option<&str>) {
+        self.state.lock().expect("proxy state").block_kind = kind.map(str::to_owned);
+    }
+
+    pub fn block_snapshots(&self, blocked: bool) {
+        self.state.lock().expect("proxy state").block_snapshots = blocked;
+    }
+
+    pub fn blocked_snapshots(&self) -> u64 {
+        self.state.lock().expect("proxy state").blocked_snapshots
+    }
+
+    pub fn blocked_requests(&self) -> Vec<serde_json::Value> {
+        self.state.lock().expect("proxy state").blocked.clone()
+    }
+
+    /// S102：请求路径/真实上游状态，不记录认证头。
+    pub fn audit(&self) -> Vec<(String, u16)> {
+        self.state.lock().expect("proxy state").audit.clone()
     }
 
     /// 已观察到的请求总数（含非操作请求）。
@@ -330,6 +374,23 @@ async fn serve(
     };
     state.lock().expect("proxy state").requests += 1;
     let operation = operation_identity(&request);
+    {
+        let mut locked = state.lock().expect("proxy state");
+        if locked.block_snapshots
+            && request.method == "POST"
+            && request.path.ends_with("/snapshots")
+        {
+            locked.blocked_snapshots += 1;
+            return Ok(());
+        }
+        if operation
+            .as_ref()
+            .is_some_and(|(_, kind)| locked.block_kind.as_ref() == Some(kind))
+        {
+            locked.blocked.push(serde_json::from_slice(&request.body)?);
+            return Ok(());
+        }
+    }
     let forward_head = rewrite_head(&request.head);
     let upstream_host = upstream
         .strip_prefix("http://")
@@ -338,6 +399,9 @@ async fn serve(
     upstream_stream.write_all(forward_head.as_bytes()).await?;
     upstream_stream.write_all(&request.body).await?;
     upstream_stream.flush().await?;
+    if request.path.ends_with("/events") {
+        return sse(&mut stream, &mut upstream_stream, state).await;
+    }
     let mut response = Vec::new();
     tokio::time::timeout(
         Duration::from_secs(120),
@@ -346,6 +410,11 @@ async fn serve(
     .await
     .map_err(|_| "upstream response timed out")??;
     let (status, _head, body) = split_response(&response);
+    state
+        .lock()
+        .expect("proxy state")
+        .audit
+        .push((request.path.clone(), status));
     let drop = if let Some((op_id, kind)) = operation {
         let mut locked = state.lock().expect("proxy state");
         let attempt = locked
@@ -392,6 +461,103 @@ async fn serve(
     }
     let _ = stream.shutdown().await;
     Ok(())
+}
+
+/// SSE 只解 HTTP chunk framing；每次故障只作用于一个/一对真实通知。
+async fn sse(
+    downstream: &mut tokio_rustls::server::TlsStream<TcpStream>,
+    upstream: &mut TcpStream,
+    state: &Arc<Mutex<State>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(upstream.read_u8().await?);
+        if head.len() > 65536 {
+            return Err("SSE head too large".into());
+        }
+    }
+    let text = String::from_utf8_lossy(&head).to_ascii_lowercase();
+    if !text.starts_with("http/1.1 200 ") || !text.contains("transfer-encoding: chunked") {
+        return Err("SSE upstream must be successful chunked HTTP/1.1".into());
+    }
+    downstream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+        )
+        .await?;
+    let mode = state.lock().expect("proxy state").sse_fault.clone();
+    let mut held: Option<Vec<u8>> = None;
+    let mut fired = false;
+    loop {
+        let line = read_line(upstream).await?;
+        let length = usize::from_str_radix(
+            std::str::from_utf8(&line)?
+                .trim()
+                .split(';')
+                .next()
+                .unwrap_or(""),
+            16,
+        )?;
+        if length == 0 {
+            return Ok(());
+        }
+        if length > 1024 * 1024 {
+            return Err("SSE chunk too large".into());
+        }
+        let mut chunk = vec![0; length];
+        upstream.read_exact(&mut chunk).await?;
+        if read_line(upstream).await? != b"\r\n" {
+            return Err("bad SSE chunk terminator".into());
+        }
+        // Axum serializes each Event into one chunk; reject fragmented events rather than
+        // silently claiming an injection on an unrecognised shape.
+        let hint = chunk.windows(6).any(|s| s == b"event:") && chunk.ends_with(b"\n\n");
+        if hint && !fired {
+            match mode.as_deref() {
+                Some("loss") => {
+                    fired = true;
+                    state
+                        .lock()
+                        .expect("proxy state")
+                        .sse_effects
+                        .push("loss".into());
+                    state.lock().expect("proxy state").sse_trace.push(serde_json::json!({"mode":"loss","upstream":[String::from_utf8_lossy(&chunk)],"downstream":[]}));
+                    continue;
+                }
+                Some("duplicate") => {
+                    downstream.write_all(&chunk).await?;
+                    state.lock().expect("proxy state").sse_trace.push(serde_json::json!({"mode":"duplicate","upstream":[String::from_utf8_lossy(&chunk)],"downstream":[String::from_utf8_lossy(&chunk),String::from_utf8_lossy(&chunk)]}));
+                    fired = true;
+                }
+                Some("reorder") => {
+                    if let Some(first) = held.take() {
+                        downstream.write_all(&chunk).await?;
+                        downstream.write_all(&first).await?;
+                        fired = true;
+                        state
+                            .lock()
+                            .expect("proxy state")
+                            .sse_effects
+                            .push("reorder".into());
+                        state.lock().expect("proxy state").sse_trace.push(serde_json::json!({"mode":"reorder","upstream":[String::from_utf8_lossy(&first),String::from_utf8_lossy(&chunk)],"downstream":[String::from_utf8_lossy(&chunk),String::from_utf8_lossy(&first)]}));
+                        continue;
+                    }
+                    held = Some(chunk);
+                    continue;
+                }
+                _ => {}
+            }
+            if fired {
+                state
+                    .lock()
+                    .expect("proxy state")
+                    .sse_effects
+                    .push("duplicate".into());
+            }
+        }
+        downstream.write_all(&chunk).await?;
+        downstream.flush().await?;
+    }
 }
 
 /// 把请求行之外的头里与连接管理相关的字段收敛成 `Connection: close`，其余原样保留。

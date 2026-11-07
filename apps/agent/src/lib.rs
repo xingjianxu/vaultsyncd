@@ -40,6 +40,8 @@ mod namespace;
 #[cfg(windows)]
 pub mod remote;
 #[cfg(windows)]
+mod resync;
+#[cfg(windows)]
 pub mod runtime;
 #[cfg(windows)]
 mod shutdown;

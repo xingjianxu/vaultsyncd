@@ -8,6 +8,8 @@
 //! - 产品不变量“每用户会话单实例”使三个 agent **顺序**运行（同一交互会话），因此报告
 //!   `concurrent_agent_processes=1`，不宣称并发；这正是本卡验收允许并必须写明的限制。
 
+mod faults;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -76,6 +78,9 @@ struct Fixture {
     /// 测试 TLS 入口的私有 CA（编排器启动代理后填入）。
     #[serde(default)]
     ca_file: Option<PathBuf>,
+    /// Optional test-only credential namespace; S102 must not erase another card's credential.
+    #[serde(default)]
+    client_server_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Serialize)]
@@ -217,6 +222,9 @@ struct EntryReport {
 
 /// 执行整轮场景。返回进程退出码（0 成功，1 失败，2 数据/用法错误）。
 pub fn execute(options: &Options, scenario: &Scenario) -> i32 {
+    if options.faults {
+        return faults::execute(options);
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)
@@ -432,7 +440,7 @@ async fn round(options: &Options, scenario: &Scenario) -> Result<Report> {
     for warning in run.cleanup(&fixture.root) {
         println!("check=warn cleanup {warning}");
     }
-    erase_test_credential();
+    erase_test_credential(SERVER_ID);
     Ok(report)
 }
 
@@ -1370,7 +1378,7 @@ fn login(client: &Client, agent: &Path, fixture: &Fixture) -> Result<()> {
 fn write_config(client: &Client, fixture: &Fixture) -> Result<()> {
     let config = json!({
         "server": {
-            "id": SERVER_ID,
+            "id": fixture.client_server_id.as_deref().unwrap_or(SERVER_ID),
             "url": fixture.url,
             "ca_file": fixture.ca_file,
         },
@@ -1692,8 +1700,8 @@ unsafe extern "system" {
 }
 
 /// 只删除本卡测试服务端身份对应的 current-user 凭据；缺失不算失败。
-fn erase_test_credential() {
-    let target: Vec<u16> = format!("vaultsyncd/session/{SERVER_ID}")
+fn erase_test_credential(server: &str) {
+    let target: Vec<u16> = format!("vaultsyncd/session/{server}")
         .encode_utf16()
         .chain(Some(0))
         .collect();

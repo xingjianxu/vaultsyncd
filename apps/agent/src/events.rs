@@ -269,6 +269,27 @@ impl EventApplier for Bridge {
     }
 }
 
+/// Optional wake stream. Drop aborts the connection; errors only reconnect, never update state.
+pub(crate) struct Hints(tokio::task::JoinHandle<()>);
+impl Hints {
+    pub fn start(remote: Arc<crate::remote::Remote>, wake: tokio::sync::mpsc::Sender<()>) -> Self {
+        Self(tokio::spawn(async move {
+            loop {
+                let _ = remote
+                    .client
+                    .receive_hints(&remote.root.to_string(), &wake)
+                    .await;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }))
+    }
+}
+impl Drop for Hints {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

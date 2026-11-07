@@ -10,6 +10,7 @@ publish.workspace = true
 # 可移植代码，因此本包可以进 members 但不进 default-members：宿主 `cargo test -p
 # vaultsyncd-e2e` 只跑数据与代理规则测试，Windows 构建用 `nix develop .#windows` 交叉编译。
 [dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 rcgen = "0.13"
 rustls = { version = "0.23", features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
@@ -23,6 +24,7 @@ vaultsyncd-protocol = { path = "../../crates/protocol" }
 vaultsyncd-transfer = { path = "../../crates/transfer" }
 
 [target.'cfg(windows)'.dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 vaultsyncd-platform-windows = { path = "../../crates/platform-windows" }
 
 [lints]

@@ -274,6 +274,71 @@ impl<T: Transport> std::fmt::Debug for ApiClient<T> {
 }
 
 impl ApiClient<ReqwestTransport> {
+    /// Receive optional SSE wakes using the same negotiated protocol, TLS trust and credentials.
+    /// The caller must independently poll durable changes, reconnect on errors, and cancel this
+    /// future on shutdown. A full wake channel coalesces hints rather than blocking the stream.
+    ///
+    /// # Errors
+    /// Negotiation/authentication/stream/framing failure. No cursor or local state is changed.
+    pub async fn receive_hints(
+        &self,
+        root: &str,
+        wake: &tokio::sync::mpsc::Sender<()>,
+    ) -> Result<(), ClientError> {
+        if root.len() != 32
+            || !root
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(ClientError::invalid_request("invalid SSE RootId"));
+        }
+        let request =
+            ApiRequest::get(format!("/v1/roots/{root}/events")).with_auth(AuthMode::Bearer);
+        self.check_capabilities(&request).await?;
+        let snapshot = self.auth.snapshot().ok_or(ClientError::NotAuthenticated)?;
+        let url = self
+            .base_url
+            .join(request.path.trim_start_matches('/'))
+            .map_err(|_| ClientError::invalid_request("SSE URL"))?;
+        let mut response = tokio::time::timeout(
+            self.timeouts.request(),
+            self.transport.events(url.as_str(), snapshot.access_token()),
+        )
+        .await
+        .map_err(|_| ClientError::Timeout {
+            phase: TimeoutPhase::Request,
+        })??;
+        if response.status().as_u16() == 401 {
+            self.auth
+                .refresh(snapshot.generation(), |token| self.send_refresh(token))
+                .await?;
+            return Err(ClientError::NotAuthenticated); // reconnect with the refreshed snapshot
+        }
+        if response.status().as_u16() != 200
+            || !response
+                .headers()
+                .get("content-type")
+                .is_some_and(|v| v.as_bytes().starts_with(b"text/event-stream"))
+        {
+            return Err(ClientError::invalid_request("invalid SSE response"));
+        }
+        let mut decoder = crate::hints::Decoder::default();
+        loop {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(45), response.chunk())
+                .await
+                .map_err(|_| ClientError::Timeout {
+                    phase: TimeoutPhase::Request,
+                })?
+                .map_err(|_| ClientError::invalid_request("SSE body interrupted"))?;
+            let Some(chunk) = chunk else {
+                return Ok(());
+            };
+            if decoder.push(&chunk, root)? > 0 {
+                let _ = wake.try_send(());
+            }
+        }
+    }
+
     /// 按配置建立生产客户端（rustls + 操作系统信任库，可选追加开发 CA）。
     ///
     /// # Errors

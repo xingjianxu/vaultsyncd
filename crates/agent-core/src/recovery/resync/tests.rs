@@ -683,6 +683,24 @@ async fn rollback_lower_high_water_is_allowed_only_with_changed_epoch() {
     );
 }
 #[tokio::test]
+async fn open_rebuild_is_visible_to_assembly_and_keeps_the_fence() {
+    let rig = Rig::new().await;
+    let database = Arc::new(rig.open().await);
+    assert!(!rebuild_open(&database, binding()).await.unwrap());
+    // 未证实的新文件让重建停在开放日志上：装配必须能看到它仍开放（从而跳过旧操作恢复），
+    // 同时队列/破坏性动作仍被围栏拒绝。
+    persist(&rig.0.join("work/unproven.txt"), b"review");
+    let report = rig
+        .resync(database.clone())
+        .run(binding(), ResyncReason::CursorExpired)
+        .await
+        .unwrap();
+    assert!(report.prepared && !report.complete);
+    assert!(rebuild_open(&database, binding()).await.unwrap());
+    assert!(ensure_unblocked(&database, binding()).await.is_err());
+    assert_preserved(&database, &rig, ORIGINAL).await;
+}
+#[tokio::test]
 async fn unknown_unproven_source_scan_and_network_faults_never_become_deletes_or_uploads() {
     for fault in [
         "unknown",

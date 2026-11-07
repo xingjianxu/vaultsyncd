@@ -408,11 +408,9 @@ impl Resync {
     }
 }
 
-/// 通用队列/事件/受控应用的持久围栏。不是返回空队列假装成功。
-pub(crate) async fn ensure_unblocked(
-    database: &Database,
-    binding: BindingId,
-) -> Result<(), PortError> {
+/// true 表示存在尚未完成的旧基线重建。装配据此跳过旧操作的启动恢复，把续接留给准入代码；
+/// 围栏本身仍由 [`ensure_unblocked`] 施加，队列/事件/破坏性动作不会被放行。
+pub async fn rebuild_open(database: &Database, binding: BindingId) -> Result<bool, PortError> {
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM binding_resyncs WHERE binding_id = ? AND complete = 0",
     )
@@ -420,7 +418,15 @@ pub(crate) async fn ensure_unblocked(
     .fetch_one(database.pool())
     .await
     .map_err(error)?;
-    if count != 0 {
+    Ok(count != 0)
+}
+
+/// 通用队列/事件/受控应用的持久围栏。不是返回空队列假装成功。
+pub(crate) async fn ensure_unblocked(
+    database: &Database,
+    binding: BindingId,
+) -> Result<(), PortError> {
+    if rebuild_open(database, binding).await? {
         return Err(error("旧基线重建尚未完成，旧操作与破坏性动作保持隔离"));
     }
     Ok(())
