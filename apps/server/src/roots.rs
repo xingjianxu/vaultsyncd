@@ -12,7 +12,7 @@
 //!   这里拒绝；扫描不完整不是通过。
 //! - **注册不改写目录内容**：只读探测（`RootHandle` 的句柄打开与目录遍历）、只写数据库。既有
 //!   文件不被导入、不被清空、不被改名；初始采集属后续步骤，响应里报 `pending_import=true`。
-//! - **普通客户端看不到绝对路径**：`GET /v1/roots` 只有身份与健康状态；注册响应同样不回显
+//! - **普通客户端看不到绝对路径**：`GET /v1/roots` 只有身份、健康状态与末级目录名；注册响应同样不回显
 //!   路径（它已经在请求里，回显只会把服务器布局写进客户端日志）。
 //! - **管理权限**：首发只有一位 owner（design §7.2、§17.1，`vaultsyncd-admin init` 只建一个
 //!   账号且没有账号注册接口），因此“仅 owner 管理”的落地是“必须有有效会话”。多账号角色
@@ -227,6 +227,12 @@ pub(crate) async fn list_for_owner(
     let mut roots: Vec<RootSummary> = records
         .into_iter()
         .map(|record| RootSummary {
+            name: Some(
+                Path::new(&record.absolute_path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "/".to_owned()),
+            ),
             root_id: record.id.to_hex(),
             health: if context.health_reason(&record).is_none() {
                 RootHealth::Healthy
@@ -705,6 +711,59 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body, "{\"roots\":[]}", "没有 Root 时给出空清单");
         assert!(!body.contains(&fixture.dir.display().to_string()), "{body}");
+    }
+
+    #[tokio::test]
+    async fn authorized_root_names_are_basenames_without_foreign_roots_or_parent_paths() {
+        let fixture = fixture("names").await;
+        let owner = UserId::from_bytes([0x22; 16]);
+        let mut tx = fixture.auth.database().begin_write().await.unwrap();
+        users::insert_user(
+            &mut tx,
+            &users::NewUser {
+                id: UserId::from_bytes([0x33; 16]),
+                login: "other".into(),
+                password_hash: PasswordHasher::production().hash(PASSWORD).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        for (byte, user, path) in [
+            (2, owner, "/private/parent/同步 目录"),
+            (1, owner, "/other/parent/同步 目录"),
+            (3, UserId::from_bytes([0x33; 16]), "/secret/foreign"),
+        ] {
+            store_roots::insert_root(
+                &mut tx,
+                &store_roots::NewRoot {
+                    id: RootId::from_bytes([byte; 16]),
+                    entry: vaultsyncd_domain::ids::EntryId::from_bytes([byte; 16]),
+                    owner: user,
+                    absolute_path: path.into(),
+                    volume_identity: vec![1; 16],
+                    root_file_identity: vec![byte; 16],
+                    epoch: ServerEpoch::new(1).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let token = login_token(&fixture).await;
+        let (status, body) = call(roots_router(&fixture), list_request(&token)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let roots: RootList = serde_json::from_str(&body).unwrap();
+        assert_eq!(roots.roots.len(), 2);
+        for (index, root) in roots.roots.iter().enumerate() {
+            assert_eq!(root.name.as_deref(), Some("同步 目录"));
+            assert_eq!(
+                root.root_id,
+                RootId::from_bytes([(index + 1) as u8; 16]).to_hex()
+            );
+        }
+        for private in ["/private", "/other", "/secret", "foreign", "absolute_path"] {
+            assert!(!body.contains(private), "{body}");
+        }
     }
 
     #[tokio::test]

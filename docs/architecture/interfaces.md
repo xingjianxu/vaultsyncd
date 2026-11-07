@@ -1454,7 +1454,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `POST /v1/admin/roots` | 需要有效会话（首发只有一位 owner，没有账号注册接口，因此“仅 owner 管理”＝必须有会话）。请求 `RootRegisterRequest{path}`；成功 200 `RootRegistered{root_id,health,pending_import}`，不回显路径。顺序：允许基目录（按请求文本，越界直接 403 且**不探测**，避免成为任意路径探针）→ `RootHandle::open` + `scan_root` + `admission::evaluate`（候选 vs 内部状态目录、已注册 Root、本进程挂载表）→ 按规范路径再判一次允许基目录 → `roots::insert_root` 写行与合成根条目 |
 | 拒绝映射 | 403 `ACCESS_DENIED`（越界/未配置基目录）；422 `UNSUPPORTED_STORAGE_BACKEND`（FUSE/占位视图、非 btrfs、NOCOW、嵌套子卷/子挂载、内部目录重叠、已注册父子/别名重叠、扫描不完整、不是目录）。存储失败 503 `NEEDS_RECOVERY` |
-| `GET /v1/roots` | 需要有效会话。`RootList{roots:[RootSummary{root_id,health}]}`，只含身份与健康状态（`healthy`/`unavailable`），**不含绝对路径**；按 `root_id` 排序（库内 `ORDER BY absolute_path` 只用于运维） |
+| `GET /v1/roots` | 需要有效会话。`RootList{roots:[RootSummary{root_id,health,name?}]}`，含身份、健康状态和末级目录显示名（S114 新增可选 `name`）（`healthy`/`unavailable`），**不含绝对路径**；按 `root_id` 排序（库内 `ORDER BY absolute_path` 只用于运维） |
 | `[roots] allowed_bases` | 配置项（`Option<AllowedBases>`）：缺省为 `None` ＝ 所有注册 403；出现非法项时启动前报 `config_invalid_value` / `roots.allowed_bases` |
 | `RootContext` | `vaultsyncd_server::roots::RootContext{auth, bases, state_dir, scan, ids}`；内部状态目录当前取 `[state] dir`（SQLite 与后续对象/历史/暂存/备份都将在其下），挂载探测在 `spawn_blocking` 里做（`statfs`/`statx`/`getdents64` 是阻塞调用） |
 | 身份字节 | `volume_identity` = btrfs FSID 的 UUID 文本字节；`root_file_identity` = `RootSnapshot::of_facts(facts).to_spec()` 字节。两者都是平台层编码，存储层只存不解释 |
@@ -2383,6 +2383,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S081 桌面连接与绑定管理
 
+- S114：壳新增固定 `select_local_directory()`，仅 Windows 内置 main 窗口 capability 授权。输入无路径/句柄，owner 从 Tauri 窗口取得；在独立 STA 上以 `IFileOpenDialog` + `FOS_PICKFOLDERS/FORCEFILESYSTEM/PATHMUSTEXIST/NOCHANGEDIR` 选择现有单目录，输出绝对路径 `string`，取消 `null`，失败为本地明确错误。它不属于 agent IPC；前端只读展示所选路径且未选前禁止创建，绑定仍由 agent 校验路径/重叠/卷身份。
+- S114：`GET /v1/roots` 可选 `name` 从已授权注册路径的 `file_name` 取得，只传末级名称；同名目录可共存，选择值/绑定身份仍是 `root_id`，排序不变。agent 将名称映射到既有 `RemoteItem.name`；旧服务端缺名或空名显示“未提供目录名（请更新服务器）”，不回退显示 UUID。旧客户端忽略新增字段，无 DB/IPC 迁移。
 - `apps/desktop/src-tauri/src/commands.rs` 提供八个固定 command：`agent_get_status/agent_set_connection/agent_login/agent_logout/agent_list_roots/agent_create_binding/agent_pause_binding/agent_resume_binding`。每项同时进入 AppManifest 和仅内置主窗口 capability；内部 `exchange` 先复用 IPC 参数校验，后连当前 SID/session 的固定 agent 管道。前端没有任意 command、管道、shell、文件读取或数据库入口。
 - TS `AgentClient` 对应八个类型化方法；连接和创建输入结构拒绝未知字段。`ConnectionInput` 只含 serverId/serverUrl/caFile，服务器身份由管理员提供（当前协议无公开身份发现端点）；`BindingInput` 只含规范 bindingId/rootId/localPath/mode。缓存由桥派生在 `%LOCALAPPDATA%/vaultsyncd/binding-cache/<bindingId>`，agent 复核实际物理路径与范围。密码只在瞬时登录请求内，页面提交后清空；凭据仍由 agent WinCred 保存，结果不返回 token。
 - 连接页提供地址、账号、显式附加CA；绑定页读取授权Root、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。

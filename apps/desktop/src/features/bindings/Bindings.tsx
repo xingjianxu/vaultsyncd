@@ -10,10 +10,12 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
 }) {
   const [roots, setRoots] = useState<RemoteItem[]>();
   const [notice, setNotice] = useState("");
+  const [localPath, setLocalPath] = useState("");
   const [managing,setManaging]=useState<string>();
   function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
-    const rootId = String(form.get("root_id")); const localPath = String(form.get("local_path"));
+    const rootId = String(form.get("root_id"));
+    if (!localPath) return;
     const mode = form.get("mode") === "full" ? "full" : "on_demand";
     run(async () => {
       await agent.createBinding({ bindingId: crypto.randomUUID().replaceAll("-", ""), rootId, localPath, mode });
@@ -34,9 +36,13 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
       <form onSubmit={create}>
         <label>远端 Root<select name="root_id" required defaultValue=""><option value="">请选择 Root</option>{roots?.map(root => <option key={root.id} value={root.id}>{root.name}</option>)}</select></label>
         {roots?.length === 0 && <p>服务器当前没有已授权 Root，请联系管理员。</p>}
-        <label>本地目录<input required name="local_path" placeholder="C:\\用户文档\\同步目录" /></label>
+        <label>本地目录<input readOnly name="local_path" value={localPath} placeholder="请选择本地同步目录" /></label>
+        <Button disabled={busy} onClick={() => run(async () => {
+          const selected = await agent.selectDirectory();
+          if (selected !== null) setLocalPath(selected);
+        })}>选择目录…</Button>
         <label>模式<select name="mode" defaultValue="full"><option value="full">完整同步（保留离线内容）</option><option value="on_demand">按需下载（仅完整内容可离线读取）</option></select></label>
-        <Button type="submit" disabled={busy || !roots?.length}>创建绑定并开始合并</Button>
+        <Button type="submit" disabled={busy || !roots?.length || !localPath}>创建绑定并开始合并</Button>
       </form><p aria-live="polite">{notice}</p>
     </section>
     <Table<BindingInfo> caption="本地 Binding" rows={bindings ?? []} rowKey={row => row.binding_id}

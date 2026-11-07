@@ -125,3 +125,71 @@ pub fn registered(binding: BindingId) -> io::Result<bool> {
     }
     Ok(false)
 }
+
+/// Open the Windows single-folder picker owned by the desktop window.
+/// Must run on a blocking worker; cancellation returns `None` and never changes files.
+pub fn select_directory(owner: isize) -> io::Result<Option<String>> {
+    use windows::Win32::{
+        Foundation::{ERROR_CANCELLED, HWND},
+        System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+            CoTaskMemFree, CoUninitialize,
+        },
+        UI::Shell::{
+            FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS,
+            FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+        },
+    };
+    // A dedicated STA avoids inheriting COM state from a shared runtime worker.
+    std::thread::spawn(move || {
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                .ok()
+                .map_err(map)?;
+        }
+        struct Apartment;
+        impl Drop for Apartment {
+            fn drop(&mut self) {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+        let _apartment = Apartment;
+        unsafe {
+            let dialog: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).map_err(map)?;
+            dialog
+                .SetOptions(
+                    dialog.GetOptions().map_err(map)?
+                        | FOS_PICKFOLDERS
+                        | FOS_FORCEFILESYSTEM
+                        | FOS_PATHMUSTEXIST
+                        | FOS_NOCHANGEDIR,
+                )
+                .map_err(map)?;
+            dialog
+                .SetTitle(&HSTRING::from("选择本地同步目录"))
+                .map_err(map)?;
+            dialog
+                .SetOkButtonLabel(&HSTRING::from("选择目录"))
+                .map_err(map)?;
+            if let Err(error) = dialog.Show(Some(HWND(owner as *mut std::ffi::c_void))) {
+                if error.code() == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) {
+                    return Ok(None);
+                }
+                return Err(map(error));
+            }
+            let path = dialog
+                .GetResult()
+                .map_err(map)?
+                .GetDisplayName(SIGDN_FILESYSPATH)
+                .map_err(map)?;
+            let selected = path.to_string().map_err(io::Error::other);
+            CoTaskMemFree(Some(path.0.cast()));
+            selected.map(Some)
+        }
+    })
+    .join()
+    .map_err(|_| io::Error::other("directory picker thread failed"))?
+}

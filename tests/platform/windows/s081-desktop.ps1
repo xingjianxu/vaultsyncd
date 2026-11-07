@@ -1,7 +1,7 @@
 param([switch]$Worker)
 $ErrorActionPreference = 'Stop'
 if ($Worker) {
-  $agent = $null; $desktop = $null
+  $agent = $null; $desktop = $null; $picker = $null
   try {
     $fixture = Get-Content (Join-Path $PSScriptRoot 'fixture.json') -Raw | ConvertFrom-Json
     $state = Join-Path $PSScriptRoot 'state'
@@ -18,9 +18,13 @@ if ($Worker) {
     if ($agent.HasExited) { throw 'agent failed before GUI test' }
     $env:VAULTSYNCD_S080_REPORT = Join-Path $PSScriptRoot 'webview-report.json'
     $env:VAULTSYNCD_S081_FIXTURE = Join-Path $PSScriptRoot 'fixture-runtime.json'
+    $picker = Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', (Join-Path $PSScriptRoot 's114-picker.ps1'), '-Path', ('"'+$local+'"')) -PassThru -RedirectStandardError (Join-Path $PSScriptRoot 'picker-error.log')
     $desktop = Start-Process -FilePath (Join-Path $PSScriptRoot 'vaultsyncd-desktop.exe') -PassThru -RedirectStandardError (Join-Path $PSScriptRoot 'desktop.log')
     if (!$desktop.WaitForExit(300000)) { throw 'S081 real WebView acceptance timeout' }
     $report = Get-Content $env:VAULTSYNCD_S080_REPORT -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (!$picker.WaitForExit(10000)) { throw 'native picker automation timeout' }
+    $picked = Get-Content (Join-Path $PSScriptRoot 'picker-result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($picked.selected -ne $local -or !$picked.cancelled) { throw 'native picker automation failed' }
     if (!$report.ok) { throw ('WebView acceptance failed: '+($report | ConvertTo-Json -Compress -Depth 8)) }
     if ($agent.HasExited) { throw 'closing GUI stopped agent' }
     $report | Add-Member -NotePropertyName guiExitKeepsAgent -NotePropertyValue $true
@@ -37,6 +41,7 @@ if ($Worker) {
     $_ | Out-String | Set-Content (Join-Path $PSScriptRoot 'error.txt')
     '1' | Set-Content (Join-Path $PSScriptRoot 'exit.txt')
   } finally {
+    if ($picker -and !$picker.HasExited) { Stop-Process -Id $picker.Id -Force }
     if ($desktop -and !$desktop.HasExited) { Stop-Process -Id $desktop.Id -Force }
     if ($agent -and !$agent.HasExited) { Stop-Process -Id $agent.Id -Force }
   }

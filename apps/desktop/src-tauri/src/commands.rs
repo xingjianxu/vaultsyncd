@@ -112,6 +112,23 @@ pub(crate) async fn agent_list_roots() -> Result<ManagementResult, BridgeError> 
     manage(C::ListRoots, None).await
 }
 
+// Window handle comes from Tauri, never from caller parameters. The picker performs no sync I/O.
+#[tauri::command]
+pub(crate) async fn select_local_directory(
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, BridgeError> {
+    let owner = window
+        .hwnd()
+        .map_err(|_| BridgeError::local("无法定位目录选择窗口。"))?
+        .0 as isize;
+    tauri::async_runtime::spawn_blocking(move || {
+        vaultsyncd_platform_windows::shell::select_directory(owner)
+            .map_err(|_| BridgeError::local("无法打开或读取目录选择器，请重新选择。"))
+    })
+    .await
+    .map_err(|_| BridgeError::local("目录选择器运行失败，请重试。"))?
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BindingInput {

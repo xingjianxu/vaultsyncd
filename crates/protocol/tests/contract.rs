@@ -293,3 +293,23 @@ mod examples_s052 {
         );
     }
 }
+
+#[test]
+fn root_display_name_is_optional_for_old_servers_and_ignored_by_old_clients() {
+    use vaultsyncd_protocol::generated::RootList;
+    let old = r#"{"roots":[{"root_id":"01010101010101010101010101010101","health":"healthy"}]}"#;
+    let roots: RootList = serde_json::from_str(old).unwrap();
+    assert!(roots.roots[0].name.is_none());
+    let new = old.replace("\"health\"", "\"name\":\"同步 目录\",\"health\"");
+    let roots: RootList = serde_json::from_str(&new).unwrap();
+    assert_eq!(roots.roots[0].name.as_deref(), Some("同步 目录"));
+    #[derive(serde::Deserialize)]
+    struct OldRoot {
+        root_id: String,
+        health: String,
+    }
+    let value: serde_json::Value = serde_json::from_str(&new).unwrap();
+    let old: OldRoot = serde_json::from_value(value["roots"][0].clone()).unwrap();
+    assert_eq!(old.root_id, roots.roots[0].root_id);
+    assert_eq!(old.health, "healthy");
+}

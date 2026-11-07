@@ -11,6 +11,7 @@ export interface AgentClient {
   login(username: string, password: string): Promise<ManagementResult>;
   logout(): Promise<ManagementResult>;
   listRoots(): Promise<ManagementResult>;
+  selectDirectory(): Promise<string | null>;
   createBinding(input: BindingInput): Promise<ManagementResult>;
   pauseBinding(bindingId: string): Promise<ManagementResult>;
   resumeBinding(bindingId: string): Promise<ManagementResult>;
@@ -34,7 +35,7 @@ const unavailable = async (): Promise<never> => { throw new Error("未连接：�
 // 仅供应用壳开发的明确替身；S080 替换为 Tauri command 桥，绝不返回伪造 Binding。
 export const disconnectedAgent: AgentClient = {
   getStatus: unavailable, setConnection: unavailable, login: unavailable, logout: unavailable,
-  listRoots: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
+  listRoots: unavailable, selectDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   getRules:unavailable,setRules:unavailable,
   retryProblem: unavailable, setMode: unavailable, detachBinding: unavailable, exportRecovery: unavailable,
@@ -54,6 +55,7 @@ export const nativeAgent: AgentClient = {
   login: (username, password) => call("agent_login", { username, password }),
   logout: () => call("agent_logout"),
   listRoots: () => call("agent_list_roots"),
+  selectDirectory: () => call("select_local_directory"),
   createBinding: input => call("agent_create_binding", { input }),
   pauseBinding: bindingId => call("agent_pause_binding", { bindingId }),
   resumeBinding: bindingId => call("agent_resume_binding", { bindingId }),

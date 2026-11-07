@@ -762,6 +762,10 @@ pub struct RootRegistered {
 pub struct RootSummary {
     /// 当前健康状态。
     pub health: RootHealth,
+    /// Root 目录末级名称，不含父目录路径。旧服务端可省略；仅用于显示，身份仍使用 root_id。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Root 身份，32 个小写十六进制字符。
     pub root_id: String,
 }

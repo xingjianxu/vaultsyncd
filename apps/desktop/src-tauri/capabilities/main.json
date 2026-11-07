@@ -14,6 +14,7 @@
     "allow-agent-login",
     "allow-agent-logout",
     "allow-agent-list-roots",
+    "allow-select-local-directory",
     "allow-agent-create-binding",
     "allow-agent-pause-binding",
     "allow-agent-resume-binding",

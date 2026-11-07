@@ -2179,6 +2179,9 @@ components:
       type: object
       required: [root_id, health]
       properties:
+        name:
+          type: string
+          description: Root 目录末级名称，不含父目录路径。旧服务端可省略；仅用于显示，身份仍使用 root_id。
         root_id:
           type: string
           description: Root 身份，32 个小写十六进制字符。

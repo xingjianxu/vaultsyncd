@@ -137,6 +137,7 @@ pub(super) fn run() {
         agent_login,
         agent_logout,
         agent_list_roots,
+        select_local_directory,
         agent_create_binding,
         agent_pause_binding,
         agent_resume_binding
@@ -163,6 +164,7 @@ pub(super) fn run() {
         agent_login,
         agent_logout,
         agent_list_roots,
+        select_local_directory,
         agent_create_binding,
         agent_pause_binding,
         agent_resume_binding,

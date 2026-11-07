@@ -46,12 +46,12 @@ kill -0 "$tunnel_pid"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent -p vaultsyncd-desktop --features vaultsyncd-desktop/native-acceptance
 cp "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-desktop.exe" "$artifact_dir/"
-cp "$script_dir/s081-desktop.ps1" "$artifact_dir/"
-python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1])/"s081-desktop.ps1"; p.write_text(p.read_text(),encoding="utf-8-sig")' "$artifact_dir"
-python3 -c 'import hashlib,json,pathlib,sys,uuid; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); (p/"fixture.json").write_text(json.dumps({"serverId":uuid.uuid4().hex,"root":v["root"],"url":"https://127.0.0.1:18771","login":v["login"],"password":v["password"]})); (p/"hashes.json").write_text(json.dumps({f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob("*.exe")}))' "$artifact_dir"
+cp "$script_dir/s081-desktop.ps1" "$script_dir/s114-picker.ps1" "$artifact_dir/"
+python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); [(p/n).write_text((p/n).read_text(),encoding="utf-8-sig") for n in ["s081-desktop.ps1","s114-picker.ps1"]]' "$artifact_dir"
+python3 -c 'import hashlib,json,pathlib,sys,uuid; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); (p/"fixture.json").write_text(json.dumps({"serverId":uuid.uuid4().hex,"root":v["root"],"rootName":pathlib.Path(v["work_dir"]).name,"url":"https://127.0.0.1:18771","login":v["login"],"password":v["password"]})); (p/"hashes.json").write_text(json.dumps({f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob("*.exe")}))' "$artifact_dir"
 guest_dir="C:/vaultsyncd-lab/$run_id"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Path '$guest_dir' | Out-Null\""
-GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/vaultsyncd-agent.exe" "$artifact_dir/vaultsyncd-desktop.exe" "$artifact_dir/s081-desktop.ps1" "$artifact_dir/fixture.json" "$artifact_dir/hashes.json" "$artifact_dir/ca.pem"
+GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/vaultsyncd-agent.exe" "$artifact_dir/vaultsyncd-desktop.exe" "$artifact_dir/s081-desktop.ps1" "$artifact_dir/s114-picker.ps1" "$artifact_dir/fixture.json" "$artifact_dir/hashes.json" "$artifact_dir/ca.pem"
 guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/s081-desktop.ps1" | tee "$artifact_dir/native.log"
 # Prove first import retained local bytes and agent uploaded new bytes after GUI exit.
 python3 -c 'import hashlib,json,pathlib,sys,time; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); w=pathlib.Path(v["work_dir"]); expected={"local-only.txt":b"S081-local-before-import","after-gui.txt":b"S081-agent-after-gui-exit"}; deadline=time.monotonic()+60

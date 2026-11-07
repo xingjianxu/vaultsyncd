@@ -380,8 +380,11 @@ pub(crate) async fn execute(
                     .roots
                     .into_iter()
                     .map(|r| RemoteItem {
-                        id: r.root_id.clone(),
-                        name: r.root_id,
+                        id: r.root_id,
+                        name: r
+                            .name
+                            .filter(|name| !name.trim().is_empty())
+                            .unwrap_or_else(|| "未提供目录名（请更新服务器）".to_owned()),
                         entry_id: None,
                         version_id: None,
                         revision: None,

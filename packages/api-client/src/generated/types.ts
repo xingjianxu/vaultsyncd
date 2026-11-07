@@ -941,6 +941,8 @@ export function decodeRootRegistered(value: unknown): RootRegistered {
 export interface RootSummary {
   /** 当前健康状态。 */
   health: RootHealth;
+  /** Root 目录末级名称，不含父目录路径。旧服务端可省略；仅用于显示，身份仍使用 root_id。 */
+  name?: string;
   /** Root 身份，32 个小写十六进制字符。 */
   root_id: string;
 }
@@ -949,6 +951,7 @@ export function decodeRootSummary(value: unknown): RootSummary {
   const object = expect_object(value, "RootSummary");
   return {
     health: decodeRootHealth(object.health),
+    name: object.name === undefined ? undefined : expect_string(object.name, "RootSummary.name"),
     root_id: expect_string(object.root_id, "RootSummary.root_id"),
   };
 }

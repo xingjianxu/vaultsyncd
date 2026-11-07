@@ -1,10 +1,10 @@
 # 实施进度
 
-当前：S001—S113 共 **113 卡，108 done、5 blocked**；无 todo / in_progress，**当前无 ready 卡**。S113已将本机服务及正式目录切换为 `xingjian:users`，一键pure部署至generation245，固定项目6b967bd；入口与更新见 [部署文档](../docs/operations/nixos.md#s113-主机用户运行与-pure-一键部署2026-11-07)。
+当前：S001—S114 共 **114 卡，109 done、5 blocked**；无 todo / in_progress，**当前无 ready 卡**。S114 已完成本地目录原生选择与 Root 目录名显示，真实 Windows 验收通过。S113已将本机服务及正式目录切换为 `xingjian:users`，一键pure部署至generation245，固定项目6b967bd；入口与更新见 [部署文档](../docs/operations/nixos.md#s113-主机用户运行与-pure-一键部署2026-11-07)。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
-最近完成：S113支持既有主机账号与 `./tools/deploy-local.sh`。普通/专用用户模块、pure主机构建、65项包内测试、HTTPS提交下载/重启/无特权备份通过；真实一键pin更新、test/switch245、来源/UID/全部正式文件归属及旧身份/版本核对通过。主机32bfeb5已ff合入main，锁及SSH/10项服务与3应用保持。项目实现4071fd4、部署源6b967bd、交接396c992已ff合master，项目及主机任务树/分支均已清理；交接及整合/清理见 [S113](tasks/S113.md) 与 [批次](tasks/S113-batch.md)。旧数据与离线备份保留，原首发门禁不变。
+最近部署：S113支持既有主机账号与 `./tools/deploy-local.sh`。普通/专用用户模块、pure主机构建、65项包内测试、HTTPS提交下载/重启/无特权备份通过；真实一键pin更新、test/switch245、来源/UID/全部正式文件归属及旧身份/版本核对通过。主机32bfeb5已ff合入main，锁及SSH/10项服务与3应用保持。项目实现4071fd4、部署源6b967bd、交接396c992已ff合master，项目及主机任务树/分支均已清理；交接及整合/清理见 [S113](tasks/S113.md) 与 [批次](tasks/S113-batch.md)。旧数据与离线备份保留，原首发门禁不变。
 
 恢复顺序：先恢复 **S101 hosted CI**（缺 remote、runner 和 Actions 实证），再推进 **S106 → S107 → S108**；另须补 T02 三台独立 Windows 与最终同源发行证据。S011 的 OS 取消回调未触发仍为历史原型阻塞，保留其原生验证条件。当前不宣称首发验收完成。
 
@@ -133,3 +133,5 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S111 | 移除 Linux ARM64 构建与验证范围 | X | S110 | done | 实现9e62b03、交接ecb21dc；master已ff整合，任务树/分支已清理 | release9、ZIP8、CI8、Linux74、xtask23；clippy/fmt/边界/消费者/Nix求值/server-admin check通过 | 无；原hosted及首发原生/性能门禁保留 | [S111](tasks/S111.md) |
 | S112 | 本机域名部署与NixOS功能选项 | L | S095、S096、S097、S111 | done | 项目4856738、c94aca4已ff合入master；主机9c2133f、56bd93b已合main，任务树均清理 | 包内65/0；主机build/test/switch244、可信TLS、16MiB/413、committed/下载/重启/备份、Chromium登录/SSE与既有服务检查通过 | 无部署阻塞；独立外网可达性未获证据，原hosted/规模/首发门禁保留 | [S112](tasks/S112.md) |
 | S113 | 主机用户运行与 pure 一键部署 | L | S112 | done | 项目4071fd4/6b967bd，主机32bfeb5已ff合main；整合/清理见批次 | 契约6/6、两类模块、包内65/0；pure构建、迁移test、HTTPS上传/重启/备份；一键pin更新/test/switch245、归属/身份/版本/SSH/10服务/锁核对通过 | 无；原hosted/规模/首发门禁保留 | [S113](tasks/S113.md) |
+
+| S114 | 客户端目录选择与 Root 名称显示 | W | S081、S111 | done | 任务验收完成，提交整合记录见交接 | protocol20/Root6/agent2、前端/边界/两端clippy；Windows选择/取消/名称/首合并及GUI退出后真实字节通过 | 无本卡阻塞；正式部署/发行未执行 | [S114](tasks/S114.md) |
