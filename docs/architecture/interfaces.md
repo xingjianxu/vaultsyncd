@@ -2599,3 +2599,11 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 ### S111 / ADR-015：当前平台范围覆盖
 
 2026-11-07 用户确认移除 Linux ARM64。此决定覆盖上文 S032/S098/S101 的 ARM64 实现与操作描述，旧验收仍为历史记录。release 平台仅 `linux-x64` / `windows-x64`，`all` 展开两者，旧选项参数错误退出2；Nix 删除 portable-aarch64/container-deps-aarch64/platform-tests-aarch64 及专用交叉测试表达式。容器只接受 x86_64 manifest/amd64，依赖锁只含 amd64；Linux 平台 crate 明确拒绝非 x86_64 编译，目录标志和系统调用使用 x86_64 ABI。CI 删除 ARM job/VM 参数、ARM 客体驱动、模板配置及 binfmt/QEMU 调用；lab 配置只需 evidence，保留同源与脏源码拒绝、Linux 安装/恢复、Windows CFAPI/e2e/安装链。Windows Quickemu 工具保留。没有 wire/数据库变化，旧产物不重标为新候选。
+
+
+## S112 正式域名与主机 feature
+
+- 项目 flake `lib.caddyReverseProxy { upstream; certificate; privateKey; }` 导出同源 Caddy 片段；certificate/privateKey同时为null时不输出tls指令，交由主机Caddy自动ACME，单边null断言拒绝。原默认私有证书参数保持兼容；16MiB上限、SSE、Host和转发头策略不变。
+- `/etc/nixos/features/server/vaultsync.nix` 暴露 `features.server.vaultsync.{enable,repository,rev,user,group,extraGroups,stateDir,rootPaths,port,log,caddy}`；静态host.features控制不可变来源导入，关闭时不读取本地仓库。启用参数在主机字面features块声明；caddy经既有桥接管理vhost，开关已完整求值验证。
+- S112正式实例0.1.1：`https://vsyncd.132140.xyz`→`127.0.0.1:8721`，新ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`，独立btrfs状态/Root与UID984，旧试用数据保留。没有wire/DB格式修改；当前来源、凭据路径、挂载选项作用域和恢复入口唯一维护在 [运维文档](../operations/nixos.md#s112-当前正式域名部署2026-11-07generation244)。
+- `deploy/nixos/verify-public.py` 是显式有写入/重启的部署验收；browser脚本用系统公网CA与真实UI/SSE，不导出cookie/HAR。实际HTTPS16MiB/committed/固定版本/重启/备份、浏览器与switch后健康通过；不声称独立外网、Windows原生或续期时间推移已验收。

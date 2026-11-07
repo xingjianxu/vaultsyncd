@@ -1,6 +1,6 @@
-# 本机 NixOS 隔离试用实例
+# 本机 NixOS 服务部署
 
-当前为S097的HTTPS试用 **generation240**，后端固定fd2f52d、回环TLS18443；最新来源、证书及Root恢复限制见下方“S097 当前 HTTPS 开发入口”。前半部分保留S096部署/回滚的历史证据。
+当前正式入口为 **https://vsyncd.132140.xyz**（S112，generation244），后端0.1.1、仅回环8721。配置、凭据位置和恢复见下方“S112 当前正式域名部署”；S096/S097保留为历史证据，其试用数据仍保留，旧18443入口已撤下。
 
 ## 实际入口和来源（S096，2026-11-07）
 
@@ -127,3 +127,65 @@ Linux Chromium和Windows Edge实际完成HTTPS页面登录、16MiB上传、final
 新包部署后真实试用服务又执行一次systemctl restart，严格Chromium页面确认“挂载核对通过/本进程初始采集完成”；原ServerId/Root/seq18、历史blob、全部样本字节、先前Linux/Edge committed操作及固定版本摘要不变。服务仍UID985、零capability、NoNewPrivileges=1；10个既有服务和SSH的PID/InvocationID保持，3200/3300/15312均200。上述故障注入只作用隔离run。
 
 S097前的generation239（保留TLS、旧Root诊断行为）为 `/nix/store/bcwryfrqcc8sajf5kk7469q9j8g8r31d-nixos-system-wks-lab-26.11.20261102.7356cc7`；generation238不启用本卡TLS。S097没有再次激活239作回滚演练，S096实际旧代际回滚证据仍按上一节。需要恢复旧配置时可用明确store path执行`nixos-rebuild test --store-path ...`，它立即激活且**不定时回滚**；保留SSH和旧路径，确认健康后再决定switch。正常flake重建还要同步回退host文件固定源，不能只更改运行generation。试用卷/凭据不随配置回退删除。
+
+## S112 当前正式域名部署（2026-11-07，generation244）
+
+实际入口仍为 `/etc/nixos#wks-lab`。项目固定源 **4856738641ea3421c949476e6951d0a461209223**，同源包 `/nix/store/6nx4qmvrhj1rk3aa9mrjaxky56m4r7ck-vaultsyncd-0.1.1`，构建含65项包内测试通过。主机实现 `9c2133f`，挂载修正 `56bd93b09760d87f068c7a617b8a79904d14b852` 已ff合入主机main；主机锁从干净基线 `93dfcae` 保持不变。主机准确源 `/nix/store/kdr0v41db6vcd39kp9znz5b3xky170dp-source` 与旧/新system都有显式GCroot，证据在 `/data/vaultsyncd-deploy/S112-20261107T133454/`。
+
+```nix
+# /etc/nixos/hosts/wks-lab/default.nix 的 features.server 块
+vaultsync = {
+  enable = true;
+  rev = "4856738641ea3421c949476e6951d0a461209223";
+  stateDir = "/var/lib/vaultsyncd";
+  rootPaths = [ "/data/vaultsyncd/roots" ];
+  port = 8721;
+  caddy.domain = "vsyncd.132140.xyz";
+};
+```
+
+主机 `features/server/vaultsync.nix` 条件导入该提交的项目flake模块，消费其 `lib.caddyReverseProxy`。`enable/repository/rev` 必须放在主机字面features块（imports依赖静态host.features）；rev要求40位已提交SHA，未启用主机不读取本地仓库。可配置 `user/group/extraGroups/stateDir/rootPaths/port/log.{level,format}/caddy.{enable,domain,extraConfig}`；后端固定绑定回环。关闭feature会停止服务及本域名代理，保留挂载、账号和数据；`caddy.enable=false`只撤代理。主机vhost经既有 `features.server.caddy.virtualHosts` 桥接，默认不写access log，不直接暴露管理socket或文件。
+
+| 项目 | 当前配置 |
+| --- | --- |
+| HTTPS | `https://vsyncd.132140.xyz`，DNS为本机115.24.115.250；HTTP308到HTTPS |
+| 证书 | Let's Encrypt YE1，SAN匹配域名，TLS1.3；2026-11-07至2027-02-05，由Caddy自动续期 |
+| DNS-01 | 复用Caddy既有Cloudflare插件和 `/run/agenix/cloudflare` 环境文件；无新明文token |
+| 后端 | `127.0.0.1:8721`，`vaultsyncd.service`，UID/GID984，零capabilities、NoNewPrivileges |
+| 正式ServerId | `69dbfa9fdca2bfb8a239b88d0fd30d53`（与旧试用实例不同，客户端连接须核对） |
+| 状态 | 新btrfs子卷 `/data/vaultsyncd/state`（subvol2659），显式挂至 `/var/lib/vaultsyncd`，0700 |
+| Root白名单 | `/data/vaultsyncd/roots`，初始注册 `/data/vaultsyncd/roots/documents`，服务账号所有0700 |
+| 文档RootId | `cf8a15ace18abe4d9c3027ac25c30070` |
+| 初始登录 | `owner`；随机密码在 `/var/lib/vaultsyncd-credentials/owner.password`，root0600，父目录0700 |
+
+在受信终端用 `sudo cat /var/lib/vaultsyncd-credentials/owner.password` 读取初始密码。服务启动不读此文件，不会重置owner；改密后需独立管理凭据，文件不代表永远有效的当前密码。初始化经离线admin匿名stdin完成，不通过argv/env/store传递。真实密码、token、cookie、私钥未进入Git或证据；运行日志、argv、生成TOML核对不含初始密码。
+
+只创建了不存在的新目录/子卷，未格式化既有设备、未递归改权既有资料。挂载CoW、数据校验与压缩保留；`user_subvol_rm_allowed`须同时配置 `/data` 首次挂载和状态挂载，这是**整个btrfs文件系统的选项**，允许普通UID在原有目录权限约束下删除自己拥有的子卷，不限于状态子卷。首次test因仅配置后续子卷挂载而被preflight拒绝，失败日志保留；修正首次挂载、实际remount并核对findmnt后重跑通过。行为依据 [btrfs挂载文档](https://btrfs.readthedocs.io/en/stable/Administration.html)。服务没有sudo/CAP_SYS_ADMIN。Root内仍禁止嵌套子卷/挂载，注册及恢复围栏未降低。
+
+旧镜像 `/data/vaultsyncd-trial-s096/volume.img`、挂载、UID985、全部历史试用状态及 `/var/lib/vaultsyncd-trial-credentials/owner.password` 保留；正式实例不复用旧DB。旧localhost:18443 vhost已撤下，开发CA与私钥未删除，也不用于公网信任。
+
+实际先保存原diff/锁/generation/服务PID与SSH，构建包及主机；dry-activate仅重启本服务/polkit、reload Caddy/dbus，sshd配置逐字节不变。修正后执行以下真实命令，最后设为开机默认；test立即激活且不提供自动定时回滚：
+
+```sh
+nix build /etc/nixos#nixosConfigurations.wks-lab.config.system.build.toplevel --no-update-lock-file --no-write-lock-file --out-link /data/vaultsyncd-deploy/S112-20261107T133454/host-corrected
+sudo nixos-rebuild dry-activate --store-path /nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7
+sudo nixos-rebuild test --store-path /nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7
+# 中间完成下述HTTPS/浏览器/存储/既有应用健康验收
+sudo nixos-rebuild switch --store-path /nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7
+```
+
+主机构建日志在证据目录。当前运行/default system均为上述jg54j3w2路径，切换后重新核对原ServerId、Root健康、committed状态与固定版本SHA，结果见 `switch-health.json`。更新只改已构建项目提交与feature配置，依次build/test/健康/switch；不更新主机依赖。
+
+验收：严格系统CA/主机名的HTTPS健康和capabilities，16MiB上传→finalize→committed，固定版本下载SHA与磁盘一致；+1字节413；重启后原ServerId/版本/同OpId重放；同UID IPC及普通UID btrfs备份prepare/verify/release通过。新Chromium配置无私有CA/不忽略TLS，真实Web登录、Secure/HttpOnly/SameSite=Strict cookies、SSE初始seq及16秒心跳通过；敏感文件/DB/socket探测404。首轮脚本把16MiB按默认分块发送而失败，改为明确协商16MiB后通过；浏览器心跳等待改为真实流等待与页面观测后通过，失败日志不冒充通过。
+
+`deploy/nixos/verify-public.py` 与 `verify-public-browser.py` 为显式部署验收脚本，前者会在指定Root创建新样本并重启指定服务，**不是日常健康探测**。只对本次专用Root执行；使用新run_id，拒绝覆盖旧样本/证据。两脚本从受限运行时文件读密码，只输出公开状态、哈希及Cookie属性，并注销自身会话。证据 `acceptance-test2.json`、`browser.json`、`existing-services-test.json`。日常只用：
+
+```sh
+curl --fail https://vsyncd.132140.xyz/v1/health
+sudo -u vaultsyncd /data/vaultsyncd-deploy/S112-package/bin/vaultsyncd-admin status --socket /var/lib/vaultsyncd/admin/socket --json
+sudo journalctl -u vaultsyncd --no-pager
+```
+
+10个既有服务（含sshd/Caddy/PostgreSQL及应用）的PID/InvocationID保持，3200/3300/15312返回200，SSH banner与主机锁摘要不变。未重启宿主/Windows；这次不是Windows原生验收或S108首发门禁。域名HTTPS与证书通过本机使用公网域名验证；独立外部Web抓取工具返回不可访问，**不宣称已有独立外网客户端连通证据**。Caddy自动续期已配置，未等待证书实际临近到期再验收。
+
+恢复入口为部署前generation243：`/nix/store/4q8hm31xrd6wfqslddb5211k6y2birxa-nixos-system-wks-lab-26.11.20261102.7356cc7`。必要时 `sudo nixos-rebuild test --store-path <该旧路径>` 立即恢复旧试用服务及Caddy配置；正式数据/凭据保留，正式状态挂载可能卸载，不要清理它。确认健康后再决定对旧路径switch；也需同步回退主机源码，否则常规flake rebuild会重新启用正式实例。本卡没有激活旧generation演练回退，不把S096的历史演练当作本卡测试。旧版本不得打开已升级的新库，恢复旧试用实例用其原库。

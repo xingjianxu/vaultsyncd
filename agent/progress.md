@@ -1,16 +1,16 @@
 # 实施进度
 
-当前：S001—S112 共 **112 卡，106 done、5 blocked、1 in_progress**；用户新增 **S112 本机域名部署**，前置已满足，本轮只执行本卡。
+当前：S001—S112 共 **112 卡，107 done、5 blocked**；无 todo / in_progress，**当前无 ready 卡**。S112 已在本机部署 `https://vsyncd.132140.xyz`，主机 generation244，后端0.1.1；初始凭据及配置入口见 [部署文档](../docs/operations/nixos.md#s112-当前正式域名部署2026-11-07generation244)。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
-最近完成：S111 已从发布/Nix/容器/CI/底层适配与测试中移除 Linux ARM64；实现 `9e62b03`、验收交接 `ecb21dc` 已 ff-only 合入 master，任务树/分支已清理；release 默认只含 Linux x64 与 Windows x64。验证与生命周期见 [S111](tasks/S111.md) 和 [批次](tasks/S111-batch.md)，本轮未生成新发行包或重跑原生验收。
+最近完成：S112 通过 `features.server.vaultsync.*` 固定项目4856738，主机实现9c2133f、挂载修正56bd93b均已合入main。独立正式btrfs/账号与Let’s Encrypt域名证书，包内65/0、build/test/HTTPS上传committed/下载/重启/普通UID备份/浏览器Cookie与SSE/switch后健康全部通过；旧试用卷和凭据保留。完整提交及清理见 [S112](tasks/S112.md) 和 [批次](tasks/S112-batch.md)。独立外网探测未取得证据，不代替首发门禁。
 
 恢复顺序：先恢复 **S101 hosted CI**（缺 remote、runner 和 Actions 实证），再推进 **S106 → S107 → S108**；另须补 T02 三台独立 Windows 与最终同源发行证据。S011 的 OS 取消回调未触发仍为历史原型阻塞，保留其原生验证条件。当前不宣称首发验收完成。
 
 S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 已真实构建Linux x64/ARM64与Windows x64 ZIP；包在 `dist/releases/v0.1.1-81340f689b98/`，15项SHA及归档逐文件核对通过。验收交接 `1c61929` 已ff-only合入master，任务树/分支已清理；详见 [S110](tasks/S110.md) 与 [批次](tasks/S110-batch.md)。本次只构建，不代替Windows/Ubuntu原生或S108最终门禁；S109原生历史证据仍见其交接。
 
-资源与边界：已有 NixOS/btrfs、Windows 11 NTFS/CFAPI 及 Ubuntu 双架构历史证据；ARM64 为全系统 TCG，不代表原生性能。Windows 构建在宿主、原生验收在客体，产物 unsigned-test；开发 CA 回环不代表公网发布。历史版本、空间和端口不能代替现场复核。整理时 Git 仅有 master 主工作区/本地分支；下表工作树信息转入历史交接，不作为仍可进入的续接位置。
+资源与边界：已有 NixOS/btrfs、Windows 11 NTFS/CFAPI 及 Ubuntu 双架构历史证据；ARM64 为全系统 TCG，不代表原生性能。Windows 构建在宿主、原生验收在客体，产物 unsigned-test；S112已部署可信域名HTTPS；旧开发CA仅用于历史试用。历史版本、空间和端口不能代替现场复核。整理时 Git 仅有 master 主工作区/本地分支；下表工作树信息转入历史交接，不作为仍可进入的续接位置。
 
 文档维护（2026-11-07）：104 张 done 父卡整理为结论与证据入口，子卡、批次记录及 5 张 blocked 卡保留；原始全文固定在 `599ffe1fe6652409c53c772ae103f193afc737b7`，可用 `git show <该提交>:<原路径>` 读取。验收标准保留在实施手册；详细接口/运维继续以 docs 为准。原始日志仍在 Git 外，Git 历史不能替代 artifacts 备份。本次没有重跑产品验收或改变任务状态。
 
@@ -131,3 +131,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S109 | Windows 免安装 ZIP（状态留本机） | W | S099、S100 | done | 367faf5、3512865 | 历史验收见交接 | 历史限制见交接 | [S109](tasks/S109.md) |
 | S110 | 一键构建多平台 release 归档 | L | S093、S098、S109 | done | d3209ab、81340f6、1c61929；master已ff整合，任务树/分支已清理 | 三目标同源打包/15项SHA；Linux各24文件、ZIP11条目/5PE；契约15/15+xtask23/23，clippy/fmt通过 | 无；新包原生验收未执行，原发布门禁不变 | [S110](tasks/S110.md) |
 | S111 | 移除 Linux ARM64 构建与验证范围 | X | S110 | done | 实现9e62b03、交接ecb21dc；master已ff整合，任务树/分支已清理 | release9、ZIP8、CI8、Linux74、xtask23；clippy/fmt/边界/消费者/Nix求值/server-admin check通过 | 无；原hosted及首发原生/性能门禁保留 | [S111](tasks/S111.md) |
+| S112 | 本机域名部署与NixOS功能选项 | L | S095、S096、S097、S111 | done | 项目4856738；主机9c2133f、56bd93b；验收与合并见交接 | 包内65/0；主机build/test/switch244、可信TLS、16MiB/413、committed/下载/重启/备份、Chromium登录/SSE与既有服务检查通过 | 无部署阻塞；独立外网可达性未获证据，原hosted/规模/首发门禁保留 | [S112](tasks/S112.md) |
