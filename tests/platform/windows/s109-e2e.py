@@ -309,6 +309,14 @@ def main():
     except Exception as error:
         # No traceback/Playwright call log: a failed password fill can include its value.
         summary["failure_kind"] = type(error).__name__
+        # Ordered worker progress marks (no credentials) pinpoint the stalling real step.
+        try:
+            marks = checked([*SSH, 'powershell -NoProfile -Command "'
+                             + f"[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); if(Test-Path '{results}/stages.txt')"
+                             + f"{{Get-Content -Raw -Encoding UTF8 '{results}/stages.txt'}}" + '"'])
+            summary["worker_stages"] = marks.strip().splitlines()[-12:]
+        except Exception:
+            summary["worker_stages"] = "unavailable"
         print("FAIL", summary["phase"], summary["failure_kind"], "(sensitive exception text suppressed)", flush=True)
     finally:
         if prepared:

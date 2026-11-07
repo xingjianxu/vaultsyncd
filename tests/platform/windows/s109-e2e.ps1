@@ -5,6 +5,15 @@ $public=$PSScriptRoot
 if($public-notmatch '^C:\\vaultsyncd-lab\\s109-[a-zA-Z0-9-]+$'){throw 'isolated S109 run directory required'}
 $results=Join-Path $public 'results'
 $taskName='vaultsyncd-'+(Split-Path $public -Leaf)+'-e2e'
+# Ordered progress marks make a stall in a *real* GUI/IPC step diagnosable without
+# serializing any credential or exception text. Never throws.
+function Mark([string]$step){
+  try{
+    if(Test-Path -LiteralPath $results){
+      [IO.File]::AppendAllText((Join-Path $results 'stages.txt'),((Get-Date).ToString('o')+' '+$step+"`n"),(New-Object Text.UTF8Encoding($false)))
+    }
+  }catch{}
+}
 function Write-Json($path,$value){
   $temporary=$path+'.writing'
   [IO.File]::WriteAllText($temporary,($value|ConvertTo-Json -Depth 25 -Compress),(New-Object Text.UTF8Encoding($false)))
@@ -42,6 +51,10 @@ if($Mode-eq 'Cleanup'){
   # Unregistering a task does not interrupt its running action. Signal the worker first;
   # it closes only its own GUI and calls the product safe-stop entry, never TerminateProcess.
   if(Test-Path $results){[IO.File]::WriteAllText((Join-Path $results 'cancel'),'safe cleanup requested')}
+  # Let the worker observe the cancel and run its own safe stop first: unregistering a task
+  # while its action still runs can terminate it and lose the evidence.
+  $deadline=(Get-Date).AddSeconds(120)
+  while((Get-Date)-lt $deadline -and !(Test-Path -LiteralPath (Join-Path $results 'worker-done'))){Start-Sleep -Milliseconds 500}
   $task=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   if($task){
     $expected="-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $public 's109-e2e.ps1')`" -Mode Worker"
@@ -59,6 +72,7 @@ $script:completed=$false
 $stage='worker-preflight'
 try{
   Check-Transport
+  Mark 'prepare-transport'
   $expected=Get-Content (Join-Path $public 'worker.json') -Raw -Encoding UTF8|ConvertFrom-Json
   $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
   $session=(Get-Process -Id $PID).SessionId
@@ -67,6 +81,7 @@ try{
   # actual elevation instead of pretending to be a standard user, and require that the product
   # never writes machine-wide state (HKLM/startup services) below.
   $script:elevated=(New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  Mark 'preflight-explorer'
   $explorers=@(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'"|Where-Object{$_.SessionId-eq $session})
   if(!$explorers.Count){throw 'worker is not in an existing Explorer desktop session'}
   foreach($explorer in $explorers){if((Invoke-CimMethod -InputObject $explorer -MethodName GetOwnerSid).Sid-ne $identity.User.Value){throw 'Explorer SID differs'}}
@@ -85,6 +100,7 @@ public static class S109Native {
 '@
   $pipe='\\.\pipe\vaultsyncd-agent-'+$identity.User.Value+'-'+$session
   [S109Native]::RefusePipe($pipe)
+  Mark 'preflight-pipe'
   $fixture=Get-Content (Join-Path $public 'fixture.json') -Raw -Encoding UTF8|ConvertFrom-Json
   if(Get-NetTCPConnection -LocalPort $fixture.cdp_port -State Listen -ErrorAction SilentlyContinue){throw 'CDP port already occupied; no takeover'}
   $originalAppData=$env:APPDATA
@@ -139,6 +155,7 @@ public static class S109Native {
   }
   function Canonical($value){$value|ConvertTo-Json -Depth 25 -Compress}
   function Hash([string]$path){(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
+  Mark 'preflight-env'
   $defaultsBefore=Defaults-Snapshot
   # Raw registry snapshots remain guest-only, outside collected results.
   Write-Json (Join-Path $public 'defaults-before.json') $defaultsBefore
@@ -194,13 +211,17 @@ public static class S109Native {
   function Start-Zip {
     [S109Native]::RefusePipe($pipe)
     $script:ownsProfile=$true # Even partial startup may leave our exact agent needing safe stop.
+    Mark 'zip-start-enter'
     $null=Invoke-Zip 'start' # Real shipped launcher from ZIP, not direct agent or fake IPC.
+    Mark 'zip-start-returned'
     $s=Poll 'healthy exact ZIP agent' {try{$null=Agent;Status}catch{$null}} 90
+    Mark 'agent-poll-ok'
     $gui=Poll 'real ZIP GUI process' {
       $items=@(Get-CimInstance Win32_Process -Filter "Name='vaultsyncd-desktop.exe'"|Where-Object{$_.SessionId-eq $session -and $_.ExecutablePath-eq (Join-Path $program 'vaultsyncd-desktop.exe')})
       if($items.Count-eq 1){Get-Process -Id $items[0].ProcessId}
     } 60
     $script:desktops+=@($gui)
+    Mark 'gui-poll-ok'
     $health=Invoke-Zip 'health'|ConvertFrom-Json
     if($health.snapshot_version.Split(':')[0]-ne $s.snapshot_version.Split(':')[0]){throw 'ZIP health and CLI differ'}
     return $s
@@ -213,9 +234,11 @@ public static class S109Native {
     if(!(Test-Path (Join-Path $profile 'state\client.sqlite'))){throw 'safe stop lost persistent state'}
   }
 
+  Mark 'defaults-snapshot'
   $stage='extract-and-launch'
   $archive=Join-Path $public $fixture.zip
   if((Hash $archive)-ne $fixture.zip_sha256){throw 'archive hash differs from verified component receipt'}
+  Mark 'archive-hash-ok'
   Expand-Archive -LiteralPath $archive -DestinationPath $program
   $manifest=Get-Content (Join-Path $program 'zip-files.json') -Raw -Encoding UTF8|ConvertFrom-Json
   if($manifest.source.commit-ne $fixture.source_commit -or $manifest.signature_status-ne 'unsigned-test'){throw 'ZIP provenance mismatch'}
@@ -224,13 +247,16 @@ public static class S109Native {
     $path=Join-Path $program $file.path
     if((Hash $path)-ne $file.sha256 -or (Get-Item -LiteralPath $path).Length-ne $file.bytes){throw 'extracted ZIP payload hash/size mismatch'}
   }
+  Mark 'manifest-verified'
   if((Get-AuthenticodeSignature $zipEntry).Status.ToString()-ne 'NotSigned'){throw 'expected honestly unsigned test ZIP'}
   # A setup-managed HKCU InstallDir is intentionally not deleted or bypassed. Product
   # refusal is a blocked environment, not permission to modify the old installation.
+  Mark 'signed-check'
   $initial=Start-Zip
   $firstAgent=(Agent).ProcessId
   Write-Json (Join-Path $results 'ready.json') @{ok=$true;limited=(!$script:elevated);elevated=$script:elevated;sid=$identity.User.Value;session=$session;program=$program;local=$local;profile=$profile;ca=(Join-Path $public 'ca.pem');zip_sha256=(Hash $archive);agent_pid=$firstAgent;gui_pid=$script:desktops[0].Id;status=$initial;boot=$boot}
 
+  Mark 'ready'
   $stage='actions'
   $end=(Get-Date).AddMinutes(35)
   while((Get-Date)-lt $end){
@@ -241,6 +267,7 @@ public static class S109Native {
     Remove-Item -LiteralPath $request
     $stage=$action.action
     $answer=@{id=$action.id;action=$action.action;ok=$true}
+    Mark ('action:'+$action.action)
     switch($action.action){
       'status' {$answer.status=Status;$answer.agent_pid=(Agent).ProcessId}
       'close-gui' {
@@ -323,6 +350,7 @@ public static class S109Native {
       }
       default {throw 'unknown fixed native action'}
     }
+    Mark ('action-done:'+$action.action)
     Write-Json (Join-Path $results ($action.action+'.json')) $answer
     Write-Json (Join-Path $results 'response.json') $answer
     if($action.action-eq 'finish'){break}
@@ -344,5 +372,9 @@ public static class S109Native {
   }catch{$cleanup.ok=$false;$cleanup.failure_kind=$_.Exception.GetType().FullName}
   # Secrets stay out of result files/logs. Only this run's fixture copy is discarded.
   if(Test-Path (Join-Path $public 'fixture.json')){Remove-Item -LiteralPath (Join-Path $public 'fixture.json')}
-  if(Test-Path $results){Write-Json (Join-Path $results 'cleanup.json') $cleanup}
+  if(Test-Path $results){
+    Write-Json (Join-Path $results 'cleanup.json') $cleanup
+    Mark 'worker-finished'
+    [IO.File]::WriteAllText((Join-Path $results 'worker-done'),'done')
+  }
 }
