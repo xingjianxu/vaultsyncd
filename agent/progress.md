@@ -4,7 +4,7 @@
 
 恢复顺序：先恢复 **S101 hosted CI**（缺 remote、runner 和 Actions 实证），再推进 **S106 → S107 → S108**；另须补 T02 三台独立 Windows 与最终同源发行证据。S011 的 OS 取消回调未触发仍为历史原型阻塞，保留其原生验证条件。当前不宣称首发验收完成。
 
-最近完成：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 已真实构建Linux x64/ARM64与Windows x64 ZIP；包在 `dist/releases/v0.1.1-81340f689b98/`，15项SHA及归档逐文件核对通过。详见 [S110](tasks/S110.md)，待本卡整合清理补记。本次只构建，不代替Windows/Ubuntu原生或S108最终门禁；S109原生历史证据仍见其交接。
+最近集成：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 已真实构建Linux x64/ARM64与Windows x64 ZIP；包在 `dist/releases/v0.1.1-81340f689b98/`，15项SHA及归档逐文件核对通过。验收交接 `1c61929` 已ff-only合入master，任务树/分支已清理；详见 [S110](tasks/S110.md) 与 [批次](tasks/S110-batch.md)。本次只构建，不代替Windows/Ubuntu原生或S108最终门禁；S109原生历史证据仍见其交接。
 
 资源与边界：已有 NixOS/btrfs、Windows 11 NTFS/CFAPI 及 Ubuntu 双架构历史证据；ARM64 为全系统 TCG，不代表原生性能。Windows 构建在宿主、原生验收在客体，产物 unsigned-test；开发 CA 回环不代表公网发布。历史版本、空间和端口不能代替现场复核。整理时 Git 仅有 master 主工作区/本地分支；下表工作树信息转入历史交接，不作为仍可进入的续接位置。
 
@@ -125,4 +125,4 @@
 | S107 | 正式容量与大文件续传验证 | X | S106 | blocked | 基线cb9ed20；只读正式档预算与恢复证据要求写 `docs/reports/performance.md`，文档dcadee5已0d4fb30合入，证据/树/分支已收尾 | devShell容量/挂载/btrfs/remote均exit0；data21.5808TiB，SSD142.59GiB；有限情景含余量19.54TiB，另累计五端下载stage情景25.54TiB（差约3.96TiB）；正式10万文件/1TiB/50GiB/5设备与重传字节全未测 | S106未验收，追溯S101 hosted缺口；五独立Windows及大NTFS卷未准备，须先核实内部副本/stage/历史增长再准入容量，不降目标、不以小样本替代 | agent/tasks/S107.md；artifacts/S107 |
 | S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | blocked | 35项P0索引、README/运维入口与当前限制；文档5f485a5已abdedd3整合；S105 done/代码候选fd896fa；证据、树与分支已收尾 | 两架构各24个历史runtime文件及发布/源码tar哈希核验，b263源三PE哈希/原生启动验证；当前候选全平台包未完成 | S101 hosted、S106/S107性能容量、T02三台Windows及最终同源发行证据缺失；未宣称首发完成 | agent/tasks/S108.md；docs/operations/release.md |
 | S109 | Windows 免安装 ZIP（状态留本机） | W | S099、S100 | done | 367faf5、3512865 | 历史验收见交接 | 历史限制见交接 | [S109](tasks/S109.md) |
-| S110 | 一键构建多平台 release 归档 | L | S093、S098、S109 | done | d3209ab、81340f6；整合清理待补记 | 三目标同源打包/15项SHA；Linux各24文件、ZIP11条目/5PE；契约15/15+xtask23/23，clippy/fmt通过 | 无；新包原生验收未执行，原发布门禁不变 | [S110](tasks/S110.md) |
+| S110 | 一键构建多平台 release 归档 | L | S093、S098、S109 | done | d3209ab、81340f6、1c61929；master已ff整合，任务树/分支已清理 | 三目标同源打包/15项SHA；Linux各24文件、ZIP11条目/5PE；契约15/15+xtask23/23，clippy/fmt通过 | 无；新包原生验收未执行，原发布门禁不变 | [S110](tasks/S110.md) |
