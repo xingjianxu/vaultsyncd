@@ -2565,6 +2565,13 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - **容量故障入口（`tests/server-integration/tests/volume_exhaustion.rs` + `run-volume-faults.sh`）**：两块独立 256M loop 卷分别作工作盘（填数据）与状态盘（内联小文件压元数据，必要时用数据填满阻止新元数据块）。真实 ENOSPC 下上传返回 `507 INSUFFICIENT_STORAGE`；提交要么完整 committed，要么明确失败且无新版本、无 committed 记录（状态可为 pending/rejected）。reflink 后 CoW 写入真实返回 ENOSPC，源与克隆字节不变，失败暂存不留下未验证目标。环境变量：`VAULTSYNCD_S103_WORK_VOLUME`/`_STATE_VOLUME`。
 - **Windows 原生矩阵**：`crates/platform-windows/src/files/native_tests.rs` 新增 `native_file_symlink_and_retarget_never_expose_outside_content`（Root 内文件 symlink 不被 `open_read` 跟随，扫描不宣称完整，换目标后仍拒绝，Root 外字节不变）；与既有 junction、硬链接、映射写入/共享锁拒绝、编辑器原子保存、并发发布恢复用例一起在 `tests/platform/windows/run-native-write.sh` 的客体原生执行中覆盖。过滤运行 `files::` 为 24 passed/0 failed。
 
+## S104 — 维护与崩溃联合验收接口
+
+- `vaultsyncd-server/test-faults` 与集成包同名 feature 均默认关闭；只有显式构建的 `s104-child` 调用 `test_faults::configure` 和 `Service::fault_database`，前者设置本run私有控制目录，后者克隆在线实例同一连接池和对象RW门。普通产品构建没有这两个配置入口，checkpoint为空函数；不读取环境变量、不新增产品HTTP/IPC路由、不改wire/schema或保留默认值。
+- `tests/faults/run-maintenance-crash.sh` 创建独占btrfs loop并运行 `maintenance_crash` 与S091真实升级回退装置。控制目录只含固定 `armed`（停车点列表）、`<point>.reached`/`<point>.continue`、`gc-request`（确定性测试时钟）和`gc-started`/`gc-result`。停车点位于真实提交/发布/租约/快照/GC动作之间，已刷盘marker后等待SIGKILL；父进程消失60秒后abort，不能转为默认成功。GC直接调用产品run_once并持同一对象门。
+- 本卡确认已有语义：操作行pending已落盘、意图尚未落盘时重启保留旧内容，查询仍202/pending，不伪造提交；prepared/published可恢复为恰好一个committed版本并返回稳定重放。备份准备中断在重启清理为failed，ready保持可验证；释放中断由持久作业续接。deleting的GC由启动后台循环或显式轮次补完，后续零删除；删掉live对象文件不代表被只读snapshot持有的extent已释放，空间证据必须来自btrfs实际统计。
+- 固定版本T22使用产品HTTP端点和下载执行器，真实TCP截断后从实际磁盘位图续传；错块及混版本是对真实响应的受控故障注入，必须不返回可安装结果。测试自定义传输的回环HTTP不替代TLS或Windows CFAPI验收。逐边界与空间/恢复判据见 `tests/faults/README.md`，证据见S104交接。
+
 ## S105 — 安全入口、排除规则与容量错误
 
 - 本机 IPC 1.6 增量：`get_rules(binding_id, entry_id?)` 返回 `rules`、`rules_version`；可选条目身份由 agent 解析持久路径并返回 `rules_explanation`（命中规则/行号/祖先原因）。`set_rules(binding_id,rules_version,rules)` 替换完整清单，允许空文本，UTF-8 最多4096字节；版本非空、无控制字符，不得复用到不同清单。同版本同文本幂等，畸形规则/复用版本拒绝且不改变旧规则；两个命令在 minor<6 时先返回 UnsupportedVersion。唯一编辑源为 `api/local-ipc.schema.json`，生成两侧DTO；持久化复用S061控制表，无迁移/远端wire变化。

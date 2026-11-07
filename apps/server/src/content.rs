@@ -204,6 +204,7 @@ pub async fn download(
         Err(failure) => return content_failure_response(&caller.request_id, &failure, root_id),
     };
 
+    crate::test_faults::checkpoint("download_open");
     let layout = context.objects();
     let mut port = FsObjectPort;
     let read = content::read_download(&mut port, &layout, &handle);

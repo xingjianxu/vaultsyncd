@@ -5305,6 +5305,7 @@ dependencies = [
  "vaultsyncd-server",
  "vaultsyncd-server-core",
  "vaultsyncd-server-store",
+ "vaultsyncd-transfer",
 ]
 
 [[package]]
