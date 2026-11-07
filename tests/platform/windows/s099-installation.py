@@ -272,7 +272,8 @@ def main():
         for name in ["ca.key", "server.key"]:
             (run / name).unlink(missing_ok=True)
         print("ARTIFACTS", run, flush=True)
-        print("GUEST", guest, "(VM stays online; installed test-user data retained)", flush=True)
+        resources = "this run's test user/profile/credentials removed" if summary.get("ci_resources_removed") else "installed test-user data retained"
+        print("GUEST", guest, "(VM stays online; " + resources + ")", flush=True)
     assert summary["ok"], summary
 
 

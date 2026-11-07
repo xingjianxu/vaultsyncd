@@ -12,7 +12,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import time
@@ -31,6 +30,33 @@ def run(command, log, timeout=3600, env=None):
     if result.returncode:
         raise RuntimeError(f"exit {result.returncode}: {log}")
     return result.stdout
+
+
+def static_qemu():
+    """binfmt F retains the binary, not a Nix dynamic-loader closure."""
+    for directory in os.environ.get('PATH', '').split(os.pathsep):
+        candidate = Path(directory) / 'qemu-aarch64'
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            headers = subprocess.check_output(['readelf', '-l', str(candidate)], text=True)
+            if 'INTERP' not in headers:
+                return str(candidate)
+    raise RuntimeError('static qemu-aarch64 required; use the locked portable-tests shell')
+
+
+def wait_for_arm64(ssh):
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
+        try:
+            probe = subprocess.run([*ssh, 'uname -m'], capture_output=True, text=True, timeout=30)
+            if probe.returncode == 0:
+                assert probe.stdout.strip() == 'aarch64', 'wrong target architecture'
+                return
+        except subprocess.TimeoutExpired:
+            # TCG can accept TCP before sshd/CPU is ready. Only an actual uname
+            # response permits continuation; a timed-out probe is not success.
+            pass
+        time.sleep(2)
+    raise RuntimeError('ARM64 guest SSH not ready within 600 seconds')
 
 
 def main():
@@ -100,8 +126,7 @@ def main():
         try:
             if mounted:
                 privileged('mount','-t','binfmt_misc','binfmt_misc',binfmt)
-            qemu = shutil.which('qemu-aarch64')
-            assert qemu and os.access(qemu,os.X_OK), 'use nix develop .#portable-tests for lab phase'
+            qemu = static_qemu()
             privileged('mkdir','-m','755','/run/'+handler)
             privileged('cp',qemu,'/run/'+handler+'/qemu-aarch64')
             registration = (f':{handler}:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\xb7\\x00:'
@@ -134,14 +159,7 @@ def main():
             (vm/'vm.json').write_text(json.dumps(meta,indent=2))
             ssh=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=5','-o','StrictHostKeyChecking=yes',
                  '-o','UserKnownHostsFile='+str(vm/'known_hosts'),'-i',str(vm/'id_ed25519'),'-p',str(meta['ssh_port']),'ubuntu@127.0.0.1']
-            for _ in range(180):
-                probe=subprocess.run([*ssh,'uname -m'],capture_output=True,timeout=10)
-                if probe.returncode==0:
-                    assert probe.stdout.strip()==b'aarch64'
-                    break
-                time.sleep(2)
-            else:
-                raise RuntimeError('ARM64 guest SSH not ready')
+            wait_for_arm64(ssh)
             run(['python3','tools/ci/run.py','arm64-install','--vm',vm,'--image',images['arm64'],'--evidence',evidence],evidence/'arm64-install.log')
             # Fixture binaries are rebuilt at the exact source commit before the
             # Windows cross/native drivers (not copied from an old target).
@@ -159,9 +177,13 @@ def main():
         finally:
             try:
                 if vm_started:
-                    subprocess.run([*ssh,'sudo -n systemctl poweroff'],check=True,timeout=30)
-                    for _ in range(90):
-                        if not Path(f'/proc/{meta["pid"]}').exists():
+                    try:
+                        subprocess.run([*ssh,'sudo -n systemctl poweroff'],capture_output=True,timeout=60)
+                    except subprocess.TimeoutExpired:
+                        pass  # SSH disconnect/timeout alone never proves shutdown.
+                    for _ in range(120):
+                        process=Path(f'/proc/{meta["pid"]}')
+                        if not process.exists() or (process/'stat').read_text().split()[2]=='Z':
                             break
                         time.sleep(2)
                     else:

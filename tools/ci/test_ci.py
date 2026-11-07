@@ -6,7 +6,9 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
+import acceptance
 import run
 
 
@@ -47,6 +49,27 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertFalse(json.loads(result.stdout)['execution'])
         self.assertEqual(json.loads(result.stdout)['commands'], [['cargo', 'xtask', 'check']])
+
+    def test_tcg_ssh_timeout_requires_a_later_real_uname(self):
+        responses = [subprocess.TimeoutExpired(['ssh'], 30),
+                     subprocess.CompletedProcess(['ssh'], 0, 'aarch64\n', '')]
+        with patch.object(acceptance.subprocess, 'run', side_effect=responses) as probe, \
+                patch.object(acceptance.time, 'sleep'):
+            acceptance.wait_for_arm64(['ssh'])
+        self.assertEqual(probe.call_count, 2)
+
+    def test_wrong_guest_architecture_is_rejected(self):
+        response = subprocess.CompletedProcess(['ssh'], 0, 'x86_64\n', '')
+        with patch.object(acceptance.subprocess, 'run', return_value=response):
+            with self.assertRaises(AssertionError):
+                acceptance.wait_for_arm64(['ssh'])
+
+    def test_dynamic_qemu_is_not_registered(self):
+        with patch.dict(acceptance.os.environ, {'PATH': '/dynamic:/static'}), \
+                patch.object(Path, 'is_file', return_value=True), \
+                patch.object(acceptance.os, 'access', return_value=True), \
+                patch.object(acceptance.subprocess, 'check_output', side_effect=['INTERP', 'LOAD']):
+            self.assertEqual(acceptance.static_qemu(), '/static/qemu-aarch64')
 
     def test_lab_is_manual_and_serial(self):
         workflow = (run.ROOT / '.github/workflows/platform-lab.yml').read_text()
