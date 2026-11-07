@@ -314,9 +314,13 @@ public static class S109Native {
         Mark ('configure-roots-count:'+(@($roots.roots).Count))
         if(@($roots.roots).Count-lt 1){throw 'no authorized Root'}
         $binding=[Guid]::NewGuid().ToString('N')
-        New-Item -ItemType Directory -Path (Join-Path $local 'cache') -Force|Out-Null
+        # Cache and internal state must not live inside the synchronized Root itself.
+        $cache=Join-Path $public '缓存 目录'
+        New-Item -ItemType Directory -Path $cache -Force|Out-Null
         Mark 'configure-binding'
-        $null=Invoke-Cli @('--json','create-binding','--binding-id',$binding,'--root-id',$fixture.root,'--local-path',$local,'--cache-path',(Join-Path $local 'cache'),'--mode','full')
+        $bindOut=& $cli --json create-binding --binding-id $binding --root-id $fixture.root --local-path $local --cache-path $cache --mode full 2>&1
+        Mark ('configure-binding-exit:'+$LASTEXITCODE)
+        if($LASTEXITCODE-ne 0){throw ('create-binding failed: '+(($bindOut -join ' ').Substring(0,[Math]::Min(200,($bindOut -join ' ').Length))))}
         $answer.binding_id=$binding
         $answer.initial=Status
       }
