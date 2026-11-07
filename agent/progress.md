@@ -123,8 +123,8 @@
 | S098 | 通用 Linux 包与容器配置 | L | S094、S097 | done | 048aff1、62115d6、a14848f、8f009f8、3246089、09d73f9 | 双Ubuntu实际server/admin/Web/backup/重启、Compose正负例及旧JSON消费者通过；ARM74/0、native65/0 | ARM为全系统TCG非性能；只验Ubuntu24.04；外部离线证据保留 | agent/tasks/S098.md；下一S101在本批外 |
 | S099 | Windows 安装包与后台启动 | W | S083、S084、S093 | done | ca510ab→cf1d174；交接见任务HEAD | 锁定NSIS/真实同源正式包；标准用户中文空格首装、GUI CLI同实例、关闭与真实重启后上传hash通过 | unsigned-test；原登录恢复且VM在线；父立即合并归档清理 | agent/tasks/S099.md |
 | S100 | Windows 升级与卸载保护 | W | S099、S091 | done | 3a2e2aa→d0392f4；交接见任务HEAD | 真实0.1.0→0.1.1/忙文件回退；默认卸载重装/不完整拒绝/4占位revert、6文件hash、708恢复读回；边界通过 | 产品PE1794752；分段源与失败保留；unsigned-test；父立即合并归档清理；本批结束 | agent/tasks/S100.md |
-| S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | todo | — | 未执行 | — | agent/tasks/S101.md（执行时创建） |
-| S102 | 事件异常与旧设备集成验收 | X | S074、S089、S091 | todo | — | 未执行 | — | agent/tasks/S102.md（执行时创建） |
+| S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | blocked | 产品源fcbbb93；任务a6bbb56；master合并f07aab2，任务树/分支已清理 | 本机同源Linux双架构与Windows安装/CFAPI/e2e完成；portable914/0、Linux633/0，CFAPI5/5；NixOS与Ubuntu分列，ARM为全系统TCG | 仅hosted：无remote/runner，未执行Actions；需配置远端、Windows编译及独占platform-lab runner后运行工作流 | agent/tasks/S101.md（+a/b）；artifacts/S101/public/acceptance-matrix.json |
+| S102 | 事件异常与旧设备集成验收 | X | S074、S089、S091 | in_progress | 基线f07aab2；独立worker执行 | 待逐场景实测与交接，不预报成功 | — | agent/tasks/S102.md（执行时创建） |
 | S103 | 文件与挂载故障集成验收 | X | S074、S051、S068 | todo | — | 未执行 | — | agent/tasks/S103.md（执行时创建） |
 | S104 | GC、备份与崩溃联合验收 | X | S086、S089、S102 | todo | — | 未执行 | — | agent/tasks/S104.md（执行时创建） |
 | S105 | 安全与操作可达性验收 | X | S083、S090、S097、S100 | todo | — | 未执行 | — | agent/tasks/S105.md（执行时创建） |
