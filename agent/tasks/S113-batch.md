@@ -6,4 +6,4 @@
 
 最小验证、恢复与证据索引见 [S113](S113.md)；真实脚本在主机支持树上运行，再ff到永久main。成功的临时部署树由脚本清理；build-only临时树基线75d6fb5及主机支持树均确认干净且祖先于main后，已git worktree remove与git branch -d。只读快照、Root副本、锁/健康及GCroot留在Git外，没有随清理删除。
 
-项目验收交接提交、ff合入master和工作树/分支清理将在实际执行后补记；所有源码实现与本轮验证已完成，未留下部署阻塞。下一ready无，5张原blocked卡保持原恢复条件。
+项目验收交接提交 **396c992703b54682b36edceea2601637f8e7143d** 已ff-only合入master（该hash为整合结果）；确认工作树干净且全部提交在master后，已git worktree remove `.worktrees/S113` 并git branch -d `feat/S113-pure-local-deploy`。项目和主机仅保留master/main主工作树，均干净。下一ready无，5张原blocked卡保持原恢复条件。
