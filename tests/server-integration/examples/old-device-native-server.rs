@@ -132,12 +132,40 @@ impl Host {
                         .execute(&mut *tx)
                         .await
                         .unwrap();
+                    sqlx::query("UPDATE tombstones SET deleted_at=1,expires_at=2")
+                        .execute(&mut *tx)
+                        .await
+                        .unwrap();
+                    sqlx::query("UPDATE entries SET deleted_at=1 WHERE deleted_at IS NOT NULL")
+                        .execute(&mut *tx)
+                        .await
+                        .unwrap();
                 }
                 tx.commit().await.unwrap();
+                let mut collection = Vec::new();
+                if action == "expire_history" {
+                    // Exercise real mark/revalidate/unlink, with a fixture-only clock crossing
+                    // the grace period. No product defaults or online SQL are changed.
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64;
+                    for time in [now, now + 3601] {
+                        let report = vaultsyncd_server::gc::run_once(
+                            &db,
+                            &self.state,
+                            vaultsyncd_domain::version::UtcTimestamp::from_unix_seconds(time)
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                        collection.push(format!("{report:?}"));
+                    }
+                }
                 db.close().await;
                 drop(_lock);
                 self.service = Some(Service::start(self.lab.config()).await);
-                json!({"offline":true,"changes_aged":changes,"versions_aged":versions,"fixture_time":1,"product_retention_unchanged":true})
+                json!({"offline":true,"changes_aged":changes,"versions_aged":versions,"gc":collection,"fixture_time":1,"product_retention_unchanged":true})
             }
             "restore" => {
                 assert!(!self.restored, "restore once per run");
@@ -172,6 +200,33 @@ impl Host {
                 self.restored = true;
                 self.service = Some(Service::start(config).await);
                 result
+            }
+            action if action.starts_with("event-") => {
+                assert!(matches!(
+                    action,
+                    "event-loss-first"
+                        | "event-loss-second"
+                        | "event-duplicate-first"
+                        | "event-duplicate-second"
+                        | "event-reorder-first"
+                        | "event-reorder-second"
+                ));
+                let content = format!("S102 remote {action}\n");
+                let hash = hex(&vaultsyncd_platform_linux_server::files::hash::digest(
+                    content.as_bytes(),
+                ));
+                std::fs::write(self.work.join("event.txt"), content).unwrap();
+                let http = &self.service.as_ref().unwrap().http;
+                let token = common::login(http).await.unwrap();
+                wait_for("remote event adopted", || async {
+                    Ok(common::snapshot(http, &token, &self.root)
+                        .await
+                        .iter()
+                        .any(|row| row["name"] == "event.txt" && row["hash"] == hash))
+                })
+                .await
+                .unwrap();
+                json!({"external_event":action,"hash":hash})
             }
             "info" => json!({"work_dir":self.work,"state_dir":self.state,"restored":self.restored}),
             _ => panic!("unknown test control action"),

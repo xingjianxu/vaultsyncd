@@ -422,6 +422,8 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
     );
     let mut initialized = HashMap::new();
     let mut receivers = HashMap::new();
+    let mut hints = HashMap::new();
+    let (hint_wake, mut hint_woken) = tokio::sync::mpsc::channel(1);
     let mut maintenance_stop = false;
     loop {
         if shutdown.requested() {
@@ -512,6 +514,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                             .map_err(error)?;
                     }
                     receivers.clear();
+                    hints.clear();
                     initialized.clear();
                     live.clear();
                     crate::management::save_connection(&db, &proposed).await?;
@@ -654,6 +657,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             }
         }
         problem_updates.send_replace(startup_problems.values().cloned().collect());
+        let mut rebuilt = Vec::new();
         for (id, root, first, worker, scheduler, remote) in &live {
             let mut observed = false;
             let result: Result<(), PortError> = async {
@@ -666,9 +670,27 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     return Ok(());
                 }
                 observed = true;
+                hints.entry(*id).or_insert_with(|| {
+                    crate::events::Hints::start(remote.clone(), hint_wake.clone())
+                });
                 worker.importer.local.root.verify().map_err(|_| {
                     PortError::rejected("ROOT_UNAVAILABLE", "root identity changed or unavailable")
                 })?;
+                match crate::resync::admit(db.clone(), *id, worker, remote.clone()).await {
+                    Ok(true) => {
+                        rebuilt.push(*id);
+                        return Ok(());
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        // Preserve offline discovery, but do not dispatch any remote command until
+                        // the authenticated epoch and durable event window have been checked.
+                        if e.is_retryable() {
+                            worker.discover().await?;
+                        }
+                        return Err(e);
+                    }
+                }
                 if !initialized.contains_key(id) {
                     let report = first.run(*id, &mut Random, 128).await?;
                     if !report.complete {
@@ -786,6 +808,28 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                 }
             }
         }
+        for id in rebuilt {
+            initialized.remove(&id);
+            receivers.remove(&id);
+            hints.remove(&id);
+            if let Some(index) = live.iter().position(|item| item.0 == id) {
+                let (_, _, _, worker, _, _) = live.remove(index);
+                worker.importer.callbacks.disconnect();
+                worker
+                    .importer
+                    .adapter
+                    .lock()
+                    .map_err(error)?
+                    .disconnect()
+                    .map_err(error)?;
+                worker
+                    .importer
+                    .callbacks
+                    .wait_idle(Duration::from_secs(5))
+                    .await
+                    .map_err(error)?;
+            }
+        }
         offline_updates.send_replace(offline_bindings.clone());
         match crate::issue_projection::sync(&db, &config, &startup_problems, &cycle_problems).await
         {
@@ -811,9 +855,13 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         }
         let end = std::time::Instant::now() + Duration::from_millis(config.poll_millis);
         while !shutdown.requested() && requests.is_empty() && std::time::Instant::now() < end {
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                _ = hint_woken.recv() => break,
+            }
         }
     }
+    drop(hints);
     for (_, _, _, worker, _, _) in &live {
         worker.importer.callbacks.disconnect();
         worker

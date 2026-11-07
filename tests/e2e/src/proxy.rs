@@ -69,6 +69,7 @@ struct State {
     blocked: Vec<serde_json::Value>,
     sse_fault: Option<String>,
     sse_effects: Vec<String>,
+    sse_trace: Vec<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -154,6 +155,10 @@ impl Proxy {
 
     pub fn sse_effects(&self) -> Vec<String> {
         self.state.lock().expect("proxy state").sse_effects.clone()
+    }
+
+    pub fn sse_trace(&self) -> Vec<serde_json::Value> {
+        self.state.lock().expect("proxy state").sse_trace.clone()
     }
 
     /// S102：断开指定写请求，明确发生在上游收到请求之前。
@@ -499,10 +504,12 @@ async fn sse(
                         .expect("proxy state")
                         .sse_effects
                         .push("loss".into());
+                    state.lock().expect("proxy state").sse_trace.push(serde_json::json!({"mode":"loss","upstream":[String::from_utf8_lossy(&chunk)],"downstream":[]}));
                     continue;
                 }
                 Some("duplicate") => {
                     downstream.write_all(&chunk).await?;
+                    state.lock().expect("proxy state").sse_trace.push(serde_json::json!({"mode":"duplicate","upstream":[String::from_utf8_lossy(&chunk)],"downstream":[String::from_utf8_lossy(&chunk),String::from_utf8_lossy(&chunk)]}));
                     fired = true;
                 }
                 Some("reorder") => {
@@ -515,6 +522,7 @@ async fn sse(
                             .expect("proxy state")
                             .sse_effects
                             .push("reorder".into());
+                        state.lock().expect("proxy state").sse_trace.push(serde_json::json!({"mode":"reorder","upstream":[String::from_utf8_lossy(&first),String::from_utf8_lossy(&chunk)],"downstream":[String::from_utf8_lossy(&chunk),String::from_utf8_lossy(&first)]}));
                         continue;
                     }
                     held = Some(chunk);

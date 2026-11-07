@@ -179,6 +179,23 @@ pub struct ReqwestTransport {
 }
 
 impl ReqwestTransport {
+    /// Same TLS/redirect policy as commands, but keep a streaming body rather than buffering it.
+    pub(crate) async fn events(
+        &self,
+        url: &str,
+        token: &str,
+    ) -> Result<reqwest::Response, crate::ClientError> {
+        self.client
+            .get(url)
+            .bearer_auth(token)
+            .header("accept", "text/event-stream")
+            .send()
+            .await
+            .map_err(|error| {
+                crate::ClientError::invalid_request(format!("SSE connection failed: {error}"))
+            })
+    }
+
     /// 按已校验的配置建立连接池。
     ///
     /// # Errors
