@@ -75,10 +75,23 @@ Windows 测试 EXE 内有 `portable::tests::*` 和 `portable::webview::tests::*`
 宿主已有 Windows 交互桌面且该会话没有旧 agent 时，可使用同源组件执行（不改登录、不重启操作系统）：
 
 ```sh
-nix develop .#web-tests --command python3 tests/platform/windows/s109-e2e.py artifacts/S109/client-new
+nix develop --command python3 tests/platform/windows/s109-e2e.py artifacts/S109/client
 ```
 
-脚本创建本 run 无登录触发器的 Limited/Interactive task，同 worker 内运行 ZIP/GUI/CLI，隔离 LocalAppData/AppData/WebView，并使用真实 Linux btrfs fixture、TLS 与上传断链代理。验证默认通知关闭且 Run/快捷方式无变化、正式 WebView 表单、GUI/CLI 同实例、关 GUI 后后台上传并宿主独立 hash；阻断上传产生 dirty，安全停止和 **agent 进程重启** 后核对身份、绑定、暂停与未确认字节，再显式 Resume 并验证真实上传。仅清本 run task、服务和隧道，不强杀、不清既有状态，Root/state/cache/recovery 保留。此脚本不证明 OS 重启或按需水合；后者仍沿现有 CFAPI 验收证据单列。
+脚本创建本 run 无登录触发器的 Limited/Interactive task，同 worker 内运行 ZIP/GUI/CLI，隔离 LocalAppData/AppData/WebView，并用真实 Linux btrfs fixture、TLS 与上传断链代理。覆盖：
+
+- ZIP 同源与逐文件 hash、`zip-files.json`/installed 清单来源、未签名状态；
+- `start` 退出码 0、真实 agent IPC 健康、恰好一个由本 run 程序目录启动且可见/有主窗口句柄/响应的窗口；**重复 start 复用同一 agent 与同一窗口**；
+- 通过同一会话的真实 CLI 完成连接/登录/Root/绑定（不依赖调试端口），首次非空合并 synchronized，GUI 窗口与 CLI 为同一 agent 实例；
+- 关闭窗口（WM_CLOSE）后 agent PID 不变，随后新建文件由后台真实上传，宿主从 Linux fixture 的 Root 目录独立核对字节与 SHA-256；
+- 上传断链代理阻止 begin 造成真实 dirty：安全 `stop` 后 agent 正常退出、未确认字节保留，重新 `start` 后 DeviceId/Root/绑定不变、绑定仍 PAUSED、dirty 仍存在且服务端仍是旧内容；显式 `resume` 后服务端字节变为新内容并独立核对 hash；
+- 默认状态快照（HKCU Run、HKLM、开始菜单/桌面快捷方式）在全程不变，通知默认关闭；`finish` 只对本 run 随机 `server_id` 做 IPC logout。
+
+`result.json` 的 `restart_kind` 明确写“仅 agent 进程重启”，`boot` 不变，**不代表 OS 重启或登录自启动**。本机 Quickemu 关闭 UAC，Limited 任务仍是提升令牌，结果同时记录 `elevated_session=true`、`standard_user_proven=false`，不冒充标准用户；标准用户路径由下面的手工入口覆盖。
+
+真实原生结果（`3512865`，unsigned-test ZIP `8c1dc94b…2b5`）：全部动作通过，关窗后上传、dirty 保留与 resume 后提交的宿主独立 hash 一致，默认 Run/HKLM/快捷方式未变，agent 安全停止、无强制结束；Root/state/cache/recovery 保留在客体。
+
+WebView2 157 起本机不再应用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`：直接启动桌面也不出现 `--remote-debugging-port`，因此自动化不依赖 CDP，也不再操作页面表单；GUI 表单交互的原生证据仍由安装版 S099 验收覆盖，本卡不重复声明。另一个已实测限制是入口派生并长期运行的 GUI/agent 子进程会继承调用方标准句柄，自动化调用应把输出重定向到文件而不是管道。
 
 ## 手工标准用户原生验收入口
 
