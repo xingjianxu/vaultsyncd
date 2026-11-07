@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：S001—S112 共 **112 卡，107 done、5 blocked**；无 todo / in_progress，**当前无 ready 卡**。S112 已在本机部署 `https://vsyncd.132140.xyz`，主机 generation244，后端0.1.1；初始凭据及配置入口见 [部署文档](../docs/operations/nixos.md#s112-当前正式域名部署2026-11-07generation244)。
+当前：S001—S113 共 **113 卡，107 done、5 blocked、1 in_progress**。正在执行用户新增 **S113**：主机用户运行、目录归属与 pure 一键部署。S112 已在本机部署 `https://vsyncd.132140.xyz`；本轮部署进度见 [S113](tasks/S113.md)。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
@@ -132,3 +132,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S110 | 一键构建多平台 release 归档 | L | S093、S098、S109 | done | d3209ab、81340f6、1c61929；master已ff整合，任务树/分支已清理 | 三目标同源打包/15项SHA；Linux各24文件、ZIP11条目/5PE；契约15/15+xtask23/23，clippy/fmt通过 | 无；新包原生验收未执行，原发布门禁不变 | [S110](tasks/S110.md) |
 | S111 | 移除 Linux ARM64 构建与验证范围 | X | S110 | done | 实现9e62b03、交接ecb21dc；master已ff整合，任务树/分支已清理 | release9、ZIP8、CI8、Linux74、xtask23；clippy/fmt/边界/消费者/Nix求值/server-admin check通过 | 无；原hosted及首发原生/性能门禁保留 | [S111](tasks/S111.md) |
 | S112 | 本机域名部署与NixOS功能选项 | L | S095、S096、S097、S111 | done | 项目4856738、c94aca4已ff合入master；主机9c2133f、56bd93b已合main，任务树均清理 | 包内65/0；主机build/test/switch244、可信TLS、16MiB/413、committed/下载/重启/备份、Chromium登录/SSE与既有服务检查通过 | 无部署阻塞；独立外网可达性未获证据，原hosted/规模/首发门禁保留 | [S112](tasks/S112.md) |
+| S113 | 主机用户运行与 pure 一键部署 | L | S112 | in_progress | 两仓库隔离树见交接 | 基线pure求值/模块构建、部署契约6/6 | 尚待真实部署 | [S113](tasks/S113.md) |

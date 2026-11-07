@@ -2607,3 +2607,9 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - `/etc/nixos/features/server/vaultsync.nix` 暴露 `features.server.vaultsync.{enable,repository,rev,user,group,extraGroups,stateDir,rootPaths,port,log,caddy}`；静态host.features控制不可变来源导入，关闭时不读取本地仓库。启用参数在主机字面features块声明；caddy经既有桥接管理vhost，开关已完整求值验证。
 - S112正式实例0.1.1：`https://vsyncd.132140.xyz`→`127.0.0.1:8721`，新ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`，独立btrfs状态/Root与UID984，旧试用数据保留。没有wire/DB格式修改；当前来源、凭据路径、挂载选项作用域和恢复入口唯一维护在 [运维文档](../operations/nixos.md#s112-当前正式域名部署2026-11-07generation244)。
 - `deploy/nixos/verify-public.py` 是显式有写入/重启的部署验收；browser脚本用系统公网CA与真实UI/SSE，不导出cookie/HAR。实际HTTPS16MiB/committed/固定版本/重启/备份、浏览器与switch后健康通过；不声称独立外网、Windows原生或续期时间推移已验收。
+
+## S113 既有主机账号与 pure 本机更新
+
+`services.vaultsyncd.createUser` 默认 true，保持专用系统账号行为；false 时必须已声明非 root user/group，模块不写 users.users/groups 的账号属性。服务单元仍使用 User/Group、SupplementaryGroups、零 capability、NoNewPrivileges 和显式 ReadWritePaths。主机 feature 默认 user=host.user、group=该账号 NixOS 主组，本机 xingjian:users。目录迁移是独立的离线运维操作，不由模块递归改权。
+
+更新入口 `tools/deploy-local.sh` → `deploy/nixos/deploy-local.py`，默认 HEAD，永久仓库完整 SHA；独立 host worktree 修改唯一版本 pin。pure-eval=true、禁止依赖锁更新，构建包 sourceInfo.commit 校验后按同一 store path build/dry/test/HTTPS与IPC健康/switch，成功才以中文提交 pin 并 ff 到原主机分支。证据/GCroot、失败与 schema 恢复边界详见 `deploy/nixos/README.md`；不改变协议/数据库/Root 身份。

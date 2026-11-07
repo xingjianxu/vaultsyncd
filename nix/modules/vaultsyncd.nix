@@ -26,8 +26,9 @@ in {
   options.services.vaultsyncd = {
     enable = mkEnableOption "vaultsyncd Linux server (explicit btrfs storage required)";
     package = mkOption { type = types.package; description = "Server/admin/Web release package; the flake module supplies its own package."; };
-    user = mkOption { type = types.strMatching "[a-z_][a-z0-9_-]*"; default = "vaultsyncd"; description = "Dedicated non-root service account."; };
-    group = mkOption { type = types.strMatching "[a-z_][a-z0-9_-]*"; default = "vaultsyncd"; description = "Dedicated service group."; };
+    createUser = mkOption { type = types.bool; default = true; description = "Create a dedicated system account. Disable to use an existing non-root account without changing its account settings."; };
+    user = mkOption { type = types.strMatching "[a-z_][a-z0-9_-]*"; default = "vaultsyncd"; description = "Non-root service account; must already exist when createUser is false."; };
+    group = mkOption { type = types.strMatching "[a-z_][a-z0-9_-]*"; default = "vaultsyncd"; description = "Non-root service group; must already exist when createUser is false."; };
     extraGroups = mkOption { type = types.listOf types.str; default = [ ]; description = "Explicit operator-managed Root access groups; no ownership changes are made to Roots."; };
     stateDir = mkOption { type = absolute; default = "/var/lib/vaultsyncd"; description = "Private btrfs internal state. Under /var/lib systemd manages StateDirectory (0700); elsewhere the operator must provision it owned by the service UID. Never point at user data."; };
     rootPaths = mkOption { type = types.listOf absolute; default = [ ]; description = "Explicit writable Root base allowlist, disjoint from state and system paths. Registration still checks identity, nested mounts/subvolumes and CoW. Permissions must be granted separately by ACL or group."; };
@@ -39,17 +40,20 @@ in {
   };
   config = mkIf cfg.enable {
     assertions = [
-      { assertion = cfg.user != "root" && cfg.group != "root" && (config.users.users.${cfg.user}.uid or null) != 0 && (config.users.groups.${cfg.group}.gid or null) != 0; message = "vaultsyncd requires a dedicated non-root user/group"; }
+      { assertion = cfg.user != "root" && cfg.group != "root" && (config.users.users.${cfg.user}.uid or null) != 0 && (config.users.groups.${cfg.group}.gid or null) != 0; message = "vaultsyncd requires a non-root user/group"; }
+      { assertion = cfg.createUser || (builtins.hasAttr cfg.user config.users.users && builtins.hasAttr cfg.group config.users.groups); message = "vaultsyncd createUser=false requires an existing user and group"; }
       { assertion = cfg.stateDir != "/" && canonical cfg.stateDir && !(builtins.any (base: within base cfg.stateDir || within cfg.stateDir base) protected); message = "vaultsyncd stateDir must be canonical, private and outside system paths"; }
       { assertion = builtins.all safeRoot cfg.rootPaths; message = "vaultsyncd rootPaths must be canonical, disjoint from state and outside protected system paths"; }
       { assertion = builtins.length cfg.rootPaths == builtins.length (lib.unique cfg.rootPaths); message = "vaultsyncd rootPaths must be unique"; }
     ];
-    users.groups.${cfg.group} = { };
-    users.users.${cfg.user} = {
-      isSystemUser = true;
-      group = cfg.group;
-      extraGroups = cfg.extraGroups;
-      description = "vaultsyncd service";
+    users.groups = lib.optionalAttrs cfg.createUser { ${cfg.group} = { }; };
+    users.users = lib.optionalAttrs cfg.createUser {
+      ${cfg.user} = {
+        isSystemUser = true;
+        group = cfg.group;
+        extraGroups = cfg.extraGroups;
+        description = "vaultsyncd service";
+      };
     };
     systemd.services.vaultsyncd = {
       description = "vaultsyncd server";

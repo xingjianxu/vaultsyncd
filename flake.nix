@@ -27,6 +27,12 @@
       };
       nixosModules.vaultsyncd = self.nixosModules.default;
       checks = forAllSystems (pkgs: {
+        nixos-existing-user = (import ./deploy/nixos/eval.nix {
+          nixpkgs = nixpkgs.outPath;
+          module = self.nixosModules.default;
+          package = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          existingUser = true;
+        }).unit;
         nixos-module = (import ./deploy/nixos/eval.nix {
           nixpkgs = nixpkgs.outPath;
           module = self.nixosModules.default;

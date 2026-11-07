@@ -1334,6 +1334,14 @@
 - **本步验收**：Nix 求值、当前包构建与包内测试，实际主机 build → dry-activate → test → HTTPS/认证/上传 committed/固定版本下载/重启与备份健康 → switch；可信域名证书与续期配置，核对 SSH/既有应用及锁未改变。仅报告实际外网观测能力。
 - **交接**：`agent/tasks/S112.md`，记录两仓库提交、配置/凭据路径、回滚、限制和工作树清理。
 
+### S113 — 主机用户运行与 pure 一键部署
+
+- **依据**：2026-11-07 用户要求本机服务默认使用 `/etc/nixos` 的主机 user，目录同属该用户；允许清空旧数据，版本固定 Git SHA，更新后一键 pure rebuild 部署。
+- **前置**：S112 done；独立于 S101 hosted 与性能验收。
+- **实现**：模块支持既有非 root 账号且不改写其属性；主机默认 `host.user` 和其主组；永久仓库完整 SHA 固定。`tools/deploy-local.sh` 在隔离主机配置树中更新版本，强制 pure、禁止锁更新，build/dry/test/健康/switch 后提交版本配置，保留失败现场与恢复入口。
+- **验收**：专用及普通用户模块求值/构建，部署失败关闭契约；实际主机 pure build → test → HTTPS/同 UID IPC/目录归属/上传下载/重启/备份 → switch；锁及 SSH/既有应用健康保持，真实运行一键脚本。
+- **交接**：`agent/tasks/S113.md` 与批次记录，两仓库提交、旧 system、实际 UID/路径、更新/恢复命令及清理结果；不改变原首发门禁。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
