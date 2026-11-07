@@ -33,9 +33,20 @@ pub(super) fn execute(options: &Options) -> i32 {
     }
 }
 async fn control(run: &Run, action: &str) -> Result<serde_json::Value> {
-    Ok(run
-        .api
-        .send_json(ApiRequest::get(format!("/__s102/{action}")))
+    // This is the test controller, not a product capability. Keep the strict production
+    // ApiClient negotiation untouched; use a separate TLS-validated, credential-free client.
+    let client = reqwest::Client::builder()
+        .add_root_certificate(reqwest::Certificate::from_pem(&fs::read(
+            &run.proxy.ca_file,
+        )?)?)
+        .timeout(Duration::from_secs(120))
+        .build()?;
+    Ok(client
+        .get(format!("{}/__s102/{action}", run.proxy.url()))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
         .await?)
 }
 async fn db(client: &Client) -> Result<serde_json::Value> {

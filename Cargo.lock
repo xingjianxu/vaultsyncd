@@ -5146,6 +5146,7 @@ name = "vaultsyncd-e2e"
 version = "0.1.1"
 dependencies = [
  "rcgen",
+ "reqwest 0.12.28",
  "rustls",
  "serde",
  "serde_json",

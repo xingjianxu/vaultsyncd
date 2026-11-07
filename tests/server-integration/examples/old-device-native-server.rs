@@ -4,7 +4,13 @@
 mod common;
 use common::*;
 use serde_json::{Value, json};
-use std::{io::Write, os::unix::fs::OpenOptionsExt, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    io::Write,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -141,6 +147,9 @@ impl Host {
                 let work = parent.join("restored-work");
                 std::fs::create_dir(&state).unwrap();
                 std::fs::create_dir(&work).unwrap();
+                for path in [&state, &work] {
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+                }
                 let args = vec![
                     "restore".into(),
                     "apply".into(),
@@ -257,7 +266,9 @@ async fn main_local() {
     }
     task.abort();
     let mut host = host.lock().await;
-    host.service.take().unwrap().stop().await;
+    if let Some(service) = host.service.take() {
+        service.stop().await;
+    }
 }
 async fn connection(mut stream: TcpStream, host: Arc<Mutex<Host>>) -> std::io::Result<()> {
     let mut head = Vec::new();
