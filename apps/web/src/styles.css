@@ -22,3 +22,7 @@
 .status-badge .mantine-Badge-label { white-space: normal; overflow-wrap: anywhere; }
 .data-table td { vertical-align: top; overflow-wrap: anywhere; }
 code { overflow-wrap: anywhere; }
+.files-root-select { flex: 1; min-width: 0; max-width: 420px; }
+.files-breadcrumbs { flex-wrap: wrap; overflow-wrap: anywhere; }
+.files-breadcrumbs > * { min-width: 0; white-space: normal; }
+.files-property-value { white-space: pre-wrap; overflow-wrap: anywhere; }

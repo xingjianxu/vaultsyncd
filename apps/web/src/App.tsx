@@ -8,10 +8,12 @@ import { AccountPanel, AuthProvider, useAuth } from "./features/auth/Auth";
 const BackupPanel = lazy(() => import("./features/backup/Backup").then(module => ({ default: module.BackupPanel })));
 const RecoveryPanel = lazy(() => import("./features/history/Recovery").then(module => ({ default: module.RecoveryPanel })));
 const RootsPanel = lazy(() => import("./features/roots/Roots").then(module => ({ default: module.RootsPanel })));
+const FilesPanel = lazy(() => import("./features/files/Files").then(module => ({ default: module.FilesPanel })));
 
 const items = [
   { path: "/overview", label: "服务概览", description: "服务状态与管理入口，一目了然。", icon: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z" },
   { path: "/roots", label: "Root 目录", description: "管理服务器目录，核对挂载健康与采集进度。", icon: "M3 7h6l2 2h10v11H3z M3 7V4h6l2 3" },
+  { path: "/files", label: "文件浏览器", description: "切换 Root、浏览目录并查看文件属性。", icon: "M3 7h6l2 2h10v11H3z M3 7V4h6l2 3 M8 13h8 M8 16h5" },
   { path: "/recovery", label: "历史与恢复", description: "查找历史版本、冲突副本和回收站内容。", icon: "M3 11a9 9 0 1 1 2 7 M3 4v7h7 M12 7v5l3 2" },
   { path: "/backup", label: "备份管理", description: "准备一致备份，导出并验证独立归档。", icon: "M4 8h16v13H4z M3 3h18v5H3z M9 12h6" },
   { path: "/account", label: "账号与会话", description: "管理登录身份、密码与设备会话。", icon: "M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2" },
@@ -71,10 +73,10 @@ function AppView() {
         <Stack gap="lg" className="app-content"><Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title><Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text></Stack>
           <PageBoundary key={path}><Suspense fallback={<Group role="status"><Loader size="sm" /><Text>正在加载管理页面…</Text></Group>}>{path === "/overview" ? <>
             <Card withBorder><Stack><Group justify="space-between"><div><Title order={2} size="h3">服务连接</Title><Text size="sm" c="dimmed">健康检查与目录采集状态分别核对</Text></div><div role="status">{connection}</div></Group><Text size="sm" aria-live="polite">{detail}</Text>{checkedAt && <Text size="xs" c="dimmed">最近成功检查 · {checkedAt}</Text>}<Divider /><Group justify="space-between"><Text size="xs" c="dimmed">{busy ? "正在获取服务状态" : "按需检查当前连接"}</Text><Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button></Group></Stack></Card>
-            <Group justify="space-between"><Title order={2} size="h3">管理工作空间</Title><Text size="xs" c="dimmed">4 个管理入口</Text></Group>
+            <Group justify="space-between"><Title order={2} size="h3">管理工作空间</Title><Text size="xs" c="dimmed">{items.length - 1} 个管理入口</Text></Group>
             <SimpleGrid cols={{ base: 1, sm: 2, xl: 4 }}>{items.slice(1).map(item => <Card withBorder key={item.path}><Stack h="100%"><Group><ThemeIcon variant="light" size="lg"><Icon path={item.icon} /></ThemeIcon><Title order={3} size="h4">{item.label}</Title></Group><Text size="sm" c="dimmed" flex={1}>{item.description}</Text><Anchor href={`#${item.path}`} size="sm">进入管理 →</Anchor></Stack></Card>)}</SimpleGrid>
             <Alert>以服务端实际状态为准。连接可用不代表文件同步完成，备份下载完成后仍需重读验证。</Alert>
-          </> : path === "/roots" ? <RootsPanel /> : path === "/recovery" ? <RecoveryPanel /> : path === "/backup" ? <BackupPanel /> : path === "/account" ? <AccountPanel /> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}</Suspense></PageBoundary>
+          </> : path === "/roots" ? <RootsPanel /> : path === "/files" ? <FilesPanel /> : path === "/recovery" ? <RecoveryPanel /> : path === "/backup" ? <BackupPanel /> : path === "/account" ? <AccountPanel /> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}</Suspense></PageBoundary>
           <Divider /><Group component="footer" justify="space-between"><Text size="xs" c="dimmed">vaultsyncd</Text><Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text></Group>
         </Stack>
       </Container></AppShell.Main>

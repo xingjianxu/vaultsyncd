@@ -2622,7 +2622,15 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - 依赖 `@mantine/core`、`@mantine/hooks`、`@mantine/form` 统一锁定 9.7.5；移除 `@heroui/react`、`@heroui/styles` 与专用 `tailwind-variants`。根 pnpm lock 与 Nix `web-deps` 固定离线闭包，Vite 保留 Tailwind v4 插件，CSS 层叠不覆盖 Mantine 默认主题。
 - 页面直接组合 Mantine Button、Card、Stack/Group/Grid、TextInput/PasswordInput、Select、Alert 等组件；账号与注册表单使用 `@mantine/form`。公共 `Table<T>` 只组合 Mantine Table/ScrollContainer 与既有列渲染接口；`Dialog` 只组合 Mantine Modal，参数为 `opened/title/children/onClose`，保持挂载并通过 opened 控制显示，使 Mantine 自身管理焦点恢复；`EmptyState`/`StatusBadge` 分别组合现成面板/Badge。不再保留 HeroUI Button 兼容映射。
 - `MantineProvider` 使用默认主题/配色，AppShell 管理 Header/Navbar/Main，Burger 控制窄屏导航，NavLink/Breadcrumbs 提供导航，主题通过 Mantine color scheme API 切换。无自制组件体系或定制色板。
-- 五个 hash 路由 `/overview`、`/roots`、`/recovery`、`/backup`、`/account` 保留。主题仅属于页面展示，不保存凭据；认证、原恢复 OpId、备份状态机和远端 DTO/数据库格式不变。
+- 五个原 hash 路由 `/overview`、`/roots`、`/recovery`、`/backup`、`/account` 保留；S122 增加 `/files`。主题仅属于页面展示，不保存凭据；认证、原恢复 OpId、备份状态机和远端 DTO/数据库格式不变。
 - 依据：用户 2026-11-08 最新决定、design ADR-018 与 [Mantine 官方索引](https://mantine.dev/llms.txt)，组件 API 通过已安装 Mantine MCP 核对；具体流程仍按 S077/S078/S079/S090 接口执行。
 
 S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 style nonce，写入 `meta[name=csp-nonce]` 并仅授权该响应的动态样式标签；`MantineProvider.getStyleNonce` 读取该 meta，使默认主题和 AppShell 响应式样式可用。外部入口 `main.tsx` 在渲染前设置 `globalThis.__webpack_nonce__`，让 Mantine Modal 依赖的 `get-nonce` 给滚动锁样式加同一 nonce。删除 React Aria 专用固定样式哈希，`script-src 'self'` 保持，不增加 unsafe-inline。Web/CSP 单测、真实 HTTP 和 Chromium 验证策略、nonce 匹配与跨响应唯一性；浏览器使用与生产一致的策略。根 HTML 比包内模板多出 nonce meta，不再要求响应体与 index.html 逐字节一致，静态 assets 保持原文件字节。
+
+## S122 Web Root 文件浏览器
+
+- `#/files`：Mantine 原生 Select 在工具栏选择授权 Root（名称与短 ID 区分），列表只展示快照中的直接子项；支持面包屑/返回上级、名称筛选、每页 100 项、手动刷新及文件/目录属性弹窗。属性为名称、类型、Root 身份、相对路径、精确字节大小、目录直接子项数、revision、EntryId、VersionId 和 SHA-256；未提供的目录大小用 `—`，不推算时间/权限。
+- `packages/api-client/src/index.ts` 稳定入口增加既有生成 `listSnapshotEntries` 与 `Snapshot/SnapshotEntry/SnapshotPage` 导出。仍调用 `GET /v1/roots`、`POST …/snapshots` 与 `GET …/snapshots/{id}/entries?cursor&limit=1000`；无 schema/DTO/数据库变化，无内容或文件写入请求。
+- `features/files/browser.ts::readDirectorySnapshot(client,rootId,signal)` 读同一快照所有页并校验 Root、snapshot_id/high_water_seq、计数、重复身份、前进游标及父目录树的完整可达性，成功后才返回 `DirectorySnapshot{metadata,root,entries,children}`。单 Root 最多 100,000 元数据项（含合成根），超过明确报错；目录优先、名称自然序、身份兜底排序，大小使用 BigInt 保留精度。
+- `FilesPanel` 按账号身份隔离 Root 清单，`DirectoryBrowser` 按 root_id 挂载；切换/卸载时取消请求并丢弃迟到结果。刷新失败、401/403/410 或不完整快照不显示空目录/旧列表；失效会话走既有 BrowserAuth 单飞刷新和登录流程。Root 健康异常提示检查 Root 页面；清单明示为已采集、已提交状态，外部修改须采集后刷新。
+- 既有采集边界：observer 只采纳普通文件并补建其父目录，不单独登记外部空目录（`observer/scan.rs` 目录仅入扫描队列，`apps/server/src/external.rs::apply_external` 补建父目录）。浏览器可打开已提交的空目录，外部未登记空目录不在快照中；本卡不改变采集或同步语义。真实浏览器验收通过正式 create 操作准备已提交空目录，再审计浏览器无内容/操作请求。
