@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S133 done**（S132 右键菜单服务端已部署到本机，generation255）。S001—S133 共 133 卡：128 done、5 blocked；**当前无 ready 卡**。结果与验证见 [S133](tasks/S133.md)，历史过程查阅见 [归档入口](tasks/README.md)。
+当前：**S134 done**（服务端 Web 统一 Mantine Notification）；**下一 ready：S135**，按用户要求部署本机。S001—S135 共 135 卡：129 done、5 blocked、1 todo。结果与验证见 [S134](tasks/S134.md)，历史过程查阅见 [归档入口](tasks/README.md)。
 
 最近部署：[S133](tasks/S133.md) 将固定源 `b811f41ce862fa4e34ac5776d333c2037b6bfd30` 部署到 generation255，主机 pin `31186c7`；本卡不改库结构（仍 user_version=14），生产 Chromium 验证三列表头、62/14/24 列宽、右键菜单项与光标定位、Shift+F10 可达和剪贴板路径，10 项无关服务与 ServerId 保持。历史部署：[S131](tasks/S131.md) 将固定源 `0cd403add6c02720de96e749e5b603cffe56966b` 部署到 generation254，主机 pin `1d05cfc`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 明暗×320/1440 通过，库迁移 13→14（`entries.modified_at`）且 ServerId 不变；生产只读元数据浏览，恢复入口为部署前 generation253（旧二进制拒绝新 schema，回退用 `server.sqlite.pre-migration-v13-to-v14.bak`）。
 
@@ -9,6 +9,8 @@
 当前平台仅 Linux x64 服务端、Windows 11 x64 客户端（S111/ADR-015）；历史 ARM64 证据保留但不构成恢复门禁。Windows 在宿主构建、客体原生验收；主机、容量、端口与旧工作树须现场复核。
 
 ## 未完成任务
+
+- S135：ready，依赖 S134 已完成；按用户要求部署本机并核验线上通知。
 
 以下保留原状态行和恢复条件；详细证据及执行入口见对应交接。
 
@@ -26,6 +28,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S134 | Web 操作反馈统一 Mantine Notification；五套真实浏览器验收、Nix Web 构建通过 | a1d225a；整合/清理见卡片 | [S134](tasks/S134.md) |
 | S133 | S132 部署到本机：generation255、pin31186c7、无迁移、生产 S132 断言 | 源b811f41；主机31186c7 | [S133](tasks/S133.md) |
 | S132 | 文件列表取消操作列，行上 Mantine Menu 右键菜单（打开/属性/复制路径、Shift+F10、单菜单） | 实现a9f0310/交接b811f41已ff合master；树/分支已清理 | [S132](tasks/S132.md) |
 | S131 | S130 部署到本机：generation254、pin1d05cfc、库迁移13→14、生产S130断言 | 源0cd403a；主机1d05cfc | [S131](tasks/S131.md) |

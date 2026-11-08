@@ -1468,6 +1468,20 @@
 - 验收：相关 Rust 测试/fmt/clippy 与 Windows 交叉构建；真实 Windows 正式 agent 新增绑定、启动修复、重复重启、下载/释放状态切换，以及 Explorer 可见云朵截图；验证浏览不触发下载、退出保留注册和文件。
 - 交接：`agent/tasks/S129.md`，记录隔离、实际命令、原生证据、限制和 master 整合/清理。
 
+### S134 — 服务端 Web 统一 Mantine Notification 操作反馈
+
+- 依据：用户指定 https://mantine.dev/core/notification/，所有服务端 Web feedback（含复制路径成功）统一使用 Mantine Notification；前置 S132、S133 done；design §18.1、§6。
+- 结果：全局 Mantine 通知区与统一反馈入口，覆盖账号、连接检查、Root、文件浏览、恢复、备份的成功/失败与校验反馈；持续状态、风险说明、操作记录保留原位，不将 pending 当 committed 或下载当验证。
+- 验收：根 typecheck、Web test/build、Nix Web sandbox 构建；真实 Chromium + 隔离 btrfs 服务覆盖复制成功/失败、自动/手动关闭、页面错误清理、明暗/窄屏/长路径/CSP，以及账号/Root/文件/恢复/备份回归。
+- 交接：`agent/tasks/S134.md`。无协议/数据库变更；验收合并后由 S135 单独部署本机。
+
+### S135 — 将通知版服务端部署到本机
+
+- 依据：用户追加“完成后，部署到本机”；前置 S134 done；design §19.3，部署规程见 `docs/operations/nixos.md` S113。
+- 结果：固定 S134 已验收提交，使用现有 pure 部署入口 build → dry-activate → test → 健康 → switch，仅更新主机项目 pin。
+- 验收：主机旧 generation/锁/身份基线，真实 HTTPS/IPC/服务身份与线上资产一致性；生产浏览器复制路径 Notification、关闭/自动消失、明暗/窄屏/CSP，无生产内容写入。
+- 交接：`agent/tasks/S135.md`，保留回退路径与真实证据；不降低原 blocked 首发门禁。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
