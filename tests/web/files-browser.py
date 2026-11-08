@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S127: built Web + real Chromium + isolated btrfs service, no API fixtures.
+"""S128: built Web + real Chromium + isolated btrfs service, no API fixtures.
 
 VAULTSYNCD_TEST_BIN_DIR=... nix develop .#web-tests --command python3 tests/web/files-browser.py
 Network faults only affect this run's proxy; no online SQL or production writes.
@@ -22,7 +22,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data") / f"vs-s127-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data") / f"vs-s128-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -35,7 +35,7 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    print(f"S127 artifacts: {RUN}", flush=True)
+    print(f"S128 artifacts: {RUN}", flush=True)
     state, roots = RUN / "state", RUN / "roots"
     state.mkdir(mode=0o700); roots.mkdir()
     documents, archive = roots / "documents", roots / "archive"
@@ -180,10 +180,12 @@ def main():
             docs_node.get_by_role("button", name="展开 文档", exact=True).click()
             expect(docs_node).to_have_attribute("aria-expanded", "true")
             expect(tree.get_by_text("子目录", exact=True)).to_be_visible()
+            open_folder_path = docs_node.get_by_role("button", name="收起 文档", exact=True).locator("path").get_attribute("d")
             docs_node.get_by_role("button", name="收起 文档", exact=True).focus()
             page.keyboard.press("Enter")
             expect(docs_node).to_have_attribute("aria-expanded", "false")
             expect(tree.get_by_text("子目录", exact=True)).not_to_be_visible()
+            assert docs_node.get_by_role("button", name="展开 文档", exact=True).locator("path").get_attribute("d") != open_folder_path
             assert page.url == current_url and len(requests) == current_requests
             docs_node.focus(); page.keyboard.press("ArrowRight")
             expect(docs_node).to_have_attribute("aria-expanded", "true")
@@ -200,7 +202,7 @@ def main():
             docs_node.focus(); page.keyboard.press("Space")
             expect(docs_node).to_have_attribute("aria-expanded", "true")
             expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/文档")
-            # History reveals the selected path again; chevrons never add history.
+            # History reveals the selected path again; folder toggles never add history.
             page.get_by_role("button", name="后退", exact=True).click()
             expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/")
             page.get_by_role("button", name="前进", exact=True).click()
@@ -220,6 +222,19 @@ def main():
                     assert selected_bg != other_bg, (scheme, width, "selection is not visible")
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, "tree overflow")
                     assert tree.evaluate("e => e.scrollWidth > e.parentElement.clientWidth"), "long names must scroll within the sidebar"
+                    for node in (docs_node, empty_node):
+                        label = node.locator('.mantine-Tree-label').first
+                        expect(label.locator("svg")).to_have_count(1)
+                        geometry = node.evaluate("""e => {
+                            const label = e.querySelector('.mantine-Tree-label');
+                            const icon = label.querySelector('svg').getBoundingClientRect();
+                            const text = label.lastElementChild.getBoundingClientRect();
+                            const line = getComputedStyle(e, '::before');
+                            const lineEnd = e.getBoundingClientRect().x + parseFloat(line.left) + parseFloat(line.width);
+                            return { gap: icon.x - lineEnd, size: icon.width, textGap: text.x - icon.right };
+                        }""")
+                        assert abs(geometry["gap"] - 4) < 1, (scheme, width, geometry)
+                        assert geometry["size"] == 14 and geometry["textGap"] == 6, (scheme, width, geometry)
                     page.screenshot(path=str(RUN / f"tree-{scheme}-{width}.png"), full_page=True)
                     tree_layout_cases.append([scheme, width])
             page.emulate_media(color_scheme="light")
@@ -404,8 +419,8 @@ def main():
             expect(page.get_by_role("heading", name="请先登录", exact=True)).to_be_visible()
             expect(table).not_to_be_visible()
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/chevron-no-navigation", "tree-empty-root/long-names/themes/responsive", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
-        print(f"S127 browser acceptance passed: {RUN}", flush=True)
+            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-root/long-names/themes/responsive", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
+        print(f"S128 browser acceptance passed: {RUN}", flush=True)
     finally:
         release.set()
         if proxy: proxy.shutdown(); proxy.server_close()

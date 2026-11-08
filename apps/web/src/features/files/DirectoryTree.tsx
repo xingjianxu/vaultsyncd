@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActionIcon, Tree, useTree, type TreeNodeData } from "@mantine/core";
+import { Tree, UnstyledButton, useTree, type TreeNodeData } from "@mantine/core";
 import type { SnapshotEntry } from "@vaultsyncd/api-client";
 import { ancestry, type DirectorySnapshot } from "./browser";
 import { FileIcon } from "./FileIcon";
@@ -47,12 +47,11 @@ export function DirectoryTree({ snapshot, directory, rootName, navigate }: {
       if (entry) { event.preventDefault(); navigate(entry); }
     }}
     renderNode={({ node, expanded, hasChildren, elementProps }) => <div {...elementProps} title={String(node.label)}>
-      {hasChildren ? <ActionIcon className={classes.chevron} size={20} variant="subtle" color="gray" tabIndex={-1}
+      {hasChildren ? <UnstyledButton className={classes.folder} tabIndex={-1}
         aria-label={`${expanded ? "收起" : "展开"} ${node.label}`}
         onClick={event => { event.stopPropagation(); tree.toggleExpanded(node.value); }}>
-        <FileIcon name={expanded ? "collapse" : "expand"} />
-      </ActionIcon> : <span className={classes.spacer} aria-hidden="true" />}
-      <span className={classes.folder}><FileIcon name={expanded && hasChildren ? "folder-open" : "folder"} /></span>
+        <FileIcon name={expanded ? "folder-open" : "folder"} />
+      </UnstyledButton> : <span className={classes.folder}><FileIcon name="folder" /></span>}
       <span>{node.label}</span>
     </div>} />;
 }

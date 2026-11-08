@@ -1453,6 +1453,13 @@
 - 验收：Web test/build、根 typecheck；真实 Chromium + 独立 btrfs 服务验证展开/收起不导航、空目录、选中与深链/历史同步、键盘与 Root 隔离、明暗/窄屏/CSP，以及既有文件浏览器回归。
 - 交接：`agent/tasks/S127.md`。仅重构目录树，不默认部署；原 blocked 恢复条件保持。
 
+### S128 — 收紧文件浏览器目录树并部署生产
+
+- 依据：2026-11-08 用户指定 Mantine files tree 示例，要求移除展开箭头、缩短折线与目录图标间距，完成后部署生产；前置 S127、S125 done；design §18.1、§17.2。
+- 结果：仅用开合文件夹图标表示展开状态，保留图标独立展开、文字导航与原生键盘语义；空目录不留箭头占位。用现有 pure 入口将固定提交部署到本机生产域名。
+- 验收：Web test/build、根 typecheck；隔离 btrfs Chromium 检查开合图标、4px 折线间距、14px 图标、6px 文字间距、键盘/深链/主题与窄屏；部署 build/dry/test/健康/switch 与线上资产一致性。
+- 交接：`agent/tasks/S128.md` 与批次。只更新主机项目 pin，保留数据、身份、锁与现有首发门禁。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

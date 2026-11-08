@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S127 done**（Mantine Tree 目录树重构）。S001—S127 共 127 卡：122 done、5 blocked；**当前无 ready 卡**。结果与验证见 [S127](tasks/S127.md)，历史过程查阅见 [归档入口](tasks/README.md)。
+当前：**S128 in_progress**（收紧目录树并部署生产，用户新增卡）。S001—S128 共 128 卡：122 done、1 in_progress、5 blocked；本轮执行 S128，**当前无其他 ready 卡**。结果与验证见 [S128](tasks/S128.md)，历史过程查阅见 [归档入口](tasks/README.md)。
 
 最近部署：[S125](tasks/S125.md) 将固定源 `30daa88febd53115b126a08cf062b37a217b117e`（含 S124）部署到 generation251，主机 pin `dc7dd42`。部署机制门禁通过，按用户要求未做部署后 UI、资产和服务基线复核；恢复入口 generation250。最近一次生产浏览器与资产验收为 [S123](tasks/S123.md) 的 generation250，不能当作 generation251 的验证。
 

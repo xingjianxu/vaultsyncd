@@ -8,6 +8,7 @@
   align-items: center;
   gap: 6px;
   min-height: 30px;
+  padding-inline-start: calc(var(--label-offset) + 4px);
   padding-inline-end: 8px;
   border-radius: var(--mantine-radius-sm);
   font-size: var(--mantine-font-size-sm);
@@ -31,12 +32,15 @@
   height: 15px;
 }
 
-.chevron,
-.spacer {
-  flex: 0 0 20px;
-}
-
 .folder {
   display: flex;
-  color: var(--mantine-color-yellow-7);
+  align-items: center;
+  flex: 0 0 14px;
+  height: 30px;
+  color: var(--mantine-color-yellow-9);
+}
+
+.folder svg {
+  width: 14px;
+  height: 14px;
 }
