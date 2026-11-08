@@ -136,4 +136,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S114 | 客户端目录选择与 Root 名称显示 | W | S081、S111 | done | 实现85143c6、交接bfa5204已ff合master；任务树/分支已清理 | protocol20/Root6/agent2、前端/边界/两端clippy；Windows选择/取消/名称/首合并及GUI退出后真实字节通过 | 无本卡阻塞；正式部署/发行未执行 | [S114](tasks/S114.md) |
 
-| S115 | 服务端 Web HeroUI React 完整重构 | B/L | S077、S078、S079、S090、S112 | done | 实现及master整合/清理见S115-batch；基线5c5c797 | Web测试构建/根typecheck、server相关测试/clippy、Nix Web、Chromium账号/Root/恢复/备份17项与响应式/CSP通过 | 无；未部署，原首发门禁保留 | [S115](tasks/S115.md) |
+| S115 | 服务端 Web HeroUI React 完整重构 | B/L | S077、S078、S079、S090、S112 | done | d90b385已ff合master；任务树/分支已清理；基线5c5c797 | Web测试构建/根typecheck、server相关测试/clippy、Nix Web、Chromium账号/Root/恢复/备份17项与响应式/CSP通过 | 无；未部署，原首发门禁保留 | [S115](tasks/S115.md) |
