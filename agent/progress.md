@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S128 in_progress**（收紧目录树并部署生产，用户新增卡）。S001—S128 共 128 卡：122 done、1 in_progress、5 blocked；本轮执行 S128，**当前无其他 ready 卡**。结果与验证见 [S128](tasks/S128.md)，历史过程查阅见 [归档入口](tasks/README.md)。
+当前：**S128 done**（收紧目录树并部署生产）。S001—S128 共 128 卡：123 done、5 blocked；**当前无 ready 卡**。结果与验证见 [S128](tasks/S128.md)，历史过程查阅见 [归档入口](tasks/README.md)。
 
-最近部署：[S125](tasks/S125.md) 将固定源 `30daa88febd53115b126a08cf062b37a217b117e`（含 S124）部署到 generation251，主机 pin `dc7dd42`。部署机制门禁通过，按用户要求未做部署后 UI、资产和服务基线复核；恢复入口 generation250。最近一次生产浏览器与资产验收为 [S123](tasks/S123.md) 的 generation250，不能当作 generation251 的验证。
+最近部署：[S128](tasks/S128.md) 将固定源 `f7609ad12f58c1ef08f6d5322f1896cdf061a86c` 部署到 generation253，主机 pin `6300214`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 明暗×320/1440 通过。生产只读元数据浏览，保留数据、锁与 ServerId；恢复入口为实测部署前 generation252。
 
 恢复顺序：**S101 hosted → S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -147,6 +147,7 @@
 | S124 | Web 文件浏览器左右分栏与 URL 目录定位 | 986c35c已ff合master；任务树/分支已清理，见批次；基线1e2d778 | [S124](tasks/S124.md) |
 | S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | 源30daa88、主机pin dc7dd42；项目整合/清理见批次；基线2f21788 | [S125](tasks/S125.md) |
 | S127 | Mantine Tree 目录树重构 | 实现5ad2634/交接b0fbb0c已ff合master；任务树/分支已清理 | [S127](tasks/S127.md) |
+| S128 | 收紧目录树并部署生产 | 实现f7609ad、主机6300214/generation253；验收交接完成，待整合清理 | [S128](tasks/S128.md) |
 
 ## 本轮维护
 

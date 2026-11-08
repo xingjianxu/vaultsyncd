@@ -283,3 +283,12 @@ pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥no
 **按用户明确要求，本轮不执行部署后验证**：没有 Chromium/浏览器矩阵、没有线上资产 sha256 比对、没有既有服务 PID/应用/SSH/锁基线复核，也没有生产上传/恢复/备份写入或故障注入。实际通过的门禁只有部署机制自身的 clean 检查、pure 求值与构建、manifest 与主机锁核对、`dry-activate` → `test` → HTTPS 健康（ServerId 不变）→ 同 UID IPC `phase=ready` → `stateDir`/Root 归属 → `switch` → 运行/开机 system 一致性；切换前后两次健康检查均通过。因此线上 Web 资产与 UI 的最新证据仍来自 S123（generation250），本卡不构成任何新的生产 UI/安全/服务影响结论。
 
 证据 `/data/vaultsyncd-deploy/local-20261108T160744-2745069/`（result、旧 generation、旧 system/boot GC roots、锁、host-before diff、pin diff）与 `/data/vaultsyncd-deploy/S125-20261108-local/`（契约测试与部署日志），筛选副本在 `artifacts/S125/`。恢复入口为部署前 generation250 `ivwnixw752n1n1bbk57iwrdx5p7nl25f`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。原首发门禁（hosted CI、性能容量、最终发行、T02 Windows）不变。
+
+
+## S128 目录树间距与开合图标部署（2026-11-08，generation253）
+
+固定项目 `f7609ad12f58c1ef08f6d5322f1896cdf061a86c`，从隔离任务树执行现有 `tools/deploy-local.sh --rev <SHA>`。现场部署前已为 generation252、项目7582962/主机2362d9a；进度页原 generation251 仅为历史记录。本次仅更新主机项目 pin，主机提交 `63002140b0af2f1d922f0a97aa1aea81d433f97e` 已 ff 合 main、临时主机树/分支已清理；锁逐字节保持。
+
+pure build、manifest 来源、dry-activate/test、HTTPS/IPC/ServerId/归属、switch 全通过；运行与开机均为 `/nix/store/q92sr3wjc5vidsafwr1n1bhvqn50syfh-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/395v9igpkc8gnh9bfnna0fgkblk821ml-vaultsyncd-0.1.1`。线上 index 剥 nonce 与全量资产逐字节匹配包内；真实 Chromium 严格 TLS1.3、owner 登录、明暗×320/1440 目录树、无页面溢出/CSP/pageerror、注销200通过。既有10服务 PID/InvocationID、3应用200、ServerId不变；只读浏览仅请求元数据，无文件内容写入。
+
+证据 `/data/vaultsyncd-deploy/local-20261108T164823-2812385/`、永久仓库 `artifacts/S128/` 与 `/data/vs-s128-20261108T164620-2810111/`。恢复入口为 generation252 `/nix/store/iqdq51l51lndpk90898kgn7cxjb8kqh1-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 先 test/健康再 switch 并同步 pin；未实际激活旧 generation。Windows、hosted、规模及原首发门禁保持，详见 [S128](../../agent/tasks/S128.md)。
