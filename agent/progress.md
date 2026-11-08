@@ -152,4 +152,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 | done | 实现/验收b16d9a1已ff合master；任务树/分支已清理；基线e598106 | Web测试构建/根typecheck、Nix Web、Rust67项/fmt/build/clippy、Chromium四业务51项与50组主题/宽度/路由/CSP通过 | 无；未部署，原首发门禁保留 | [S119](tasks/S119.md) |
 
-| S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 | done | 实现354bbc4已ff合master；主机6cc497b | Web test/build/typecheck、本地/线上各50组、pure/test/switch249、生产六项/资产/服务核对通过 | 无；原首发门禁保持 | [S121](tasks/S121.md) |
+| S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 | done | 实现354bbc4/交接c8d5429已ff合master，任务树/分支已清理；主机6cc497b | Web test/build/typecheck、本地/线上各50组、pure/test/switch249、生产六项/资产/服务核对通过 | 无；原首发门禁保持 | [S121](tasks/S121.md) |
