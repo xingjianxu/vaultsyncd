@@ -292,3 +292,31 @@ pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥no
 pure build、manifest 来源、dry-activate/test、HTTPS/IPC/ServerId/归属、switch 全通过；运行与开机均为 `/nix/store/q92sr3wjc5vidsafwr1n1bhvqn50syfh-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/395v9igpkc8gnh9bfnna0fgkblk821ml-vaultsyncd-0.1.1`。线上 index 剥 nonce 与全量资产逐字节匹配包内；真实 Chromium 严格 TLS1.3、owner 登录、明暗×320/1440 目录树、无页面溢出/CSP/pageerror、注销200通过。既有10服务 PID/InvocationID、3应用200、ServerId不变；只读浏览仅请求元数据，无文件内容写入。
 
 证据 `/data/vaultsyncd-deploy/local-20261108T164823-2812385/`、永久仓库 `artifacts/S128/` 与 `/data/vs-s128-20261108T164620-2810111/`。恢复入口为 generation252 `/nix/store/iqdq51l51lndpk90898kgn7cxjb8kqh1-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 先 test/健康再 switch 并同步 pin；未实际激活旧 generation。Windows、hosted、规模及原首发门禁保持，详见 [S128](../../agent/tasks/S128.md)。
+
+
+## S133 S132 右键菜单服务端部署（2026-11-08，generation255）
+
+按用户要求（S132 完成后“部署服务端到本机”）执行 `./tools/deploy-local.sh --rev b811f41ce862fa4e34ac5776d333c2037b6bfd30`，
+固定源为 S132 实现 `a9f0310` 与交接 `b811f41`（两者已 ff 合入项目 master）。本卡无 Rust 与迁移改动，主机仅改版本 pin：
+pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` main，临时主机树/分支自动清理，主机依赖锁
+逐字节保持 `1ee4edaf…`，主工作区未提交改动未被触碰。
+
+运行与开机默认均为 **generation255**，system `/nix/store/a86anl2i29i5q3kcx9jqay6p2a2a6ngc-nixos-system-wks-lab-26.11.20261102.7356cc7`，
+包 `/nix/store/vzwp4yzlbrli90ih9avbqq39pm30zk92-vaultsyncd-0.1.1`（manifest 来源与固定源一致）。服务以 xingjian:users 运行、
+`phase=ready`、`/v1/health` 正常；ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53` 与文档 RootId 未变；库保持 `user_version=14`、
+14 条迁移、`entries.modified_at` 仍在（本次不迁移）。10 项无关服务 PID/InvocationID、3 个本机应用 200 与主机锁逐字节保持。
+
+生产验收（`artifacts/S133/verify-production.py`，exit0，`production.json` passed=true）：线上全量 `assets/*` 与包内逐字节一致，
+`index.html` 除 CSP nonce 外一致、CSP 无 `unsafe-inline`，TLS 1.3，owner 登录成功、注销 200。S132 断言：表头恰为
+`名称/大小/修改日期`（无“操作”列）、`table-layout: fixed`、三列 574.1/129.6/222.3 px（份额 62/14/24 ±2%）、数据行三格、
+不存在“查看…的属性”行尾按钮；右键首行菜单在光标处打开（±12/16 px）且项为 `打开/属性/复制路径`，Esc 关闭后
+`Shift+F10` 重开同一菜单，“复制路径”写入剪贴板 `/新建文件夹` 且提示 4 秒后消失；明暗×320/1440 目录树 14px 图标、无页面溢出、
+无 CSP/页面错误。生产浏览审计只有 4 个请求（`GET /v1/roots`、`POST …/snapshots`、`GET …/entries?limit=1000`、`POST /v1/auth/logout`），
+无内容或操作写入。
+
+证据 `/data/vaultsyncd-deploy/local-20261108T194501-3012226/`（result、旧 generation、旧 system/boot GC roots、锁、pin diff）；
+筛选副本在 `artifacts/S133/`。恢复入口为部署前 generation254
+`/nix/store/6xq77p0sdy0zh5il41mqqbi3kva8jsp5-nixos-system-wks-lab-26.11.20261102.7356cc7`：本卡不改库结构，回退只需
+`sudo nixos-rebuild test --store-path <该旧路径>` 并同步回退主机 pin，不必恢复数据库；未实际激活旧 generation。
+限制：生产只读浏览，未做生产内容写入/恢复/故障注入，未做 Windows 原生与规模验收；升级前已存在的条目 `modified_at` 仍为 NULL，
+界面显示 `—`。详见 [S133](../../agent/tasks/S133.md)。

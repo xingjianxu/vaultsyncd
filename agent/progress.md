@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S132 done**（文件列表取消操作列，改为 Mantine Menu 右键上下文菜单）。S001—S132 共 132 卡：127 done、5 blocked；**下一个 ready 卡：S133（将 S132 服务端部署到本机）**。结果与验证见 [S132](tasks/S132.md)，历史过程查阅见 [归档入口](tasks/README.md)。
+当前：**S133 done**（S132 右键菜单服务端已部署到本机，generation255）。S001—S133 共 133 卡：128 done、5 blocked；**当前无 ready 卡**。结果与验证见 [S133](tasks/S133.md)，历史过程查阅见 [归档入口](tasks/README.md)。
 
-最近部署：[S131](tasks/S131.md) 将固定源 `0cd403add6c02720de96e749e5b603cffe56966b` 部署到 generation254，主机 pin `1d05cfc`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 明暗×320/1440 通过，库迁移 13→14（`entries.modified_at`）且 ServerId 不变；生产只读元数据浏览，恢复入口为部署前 generation253（旧二进制拒绝新 schema，回退用 `server.sqlite.pre-migration-v13-to-v14.bak`）。
+最近部署：[S133](tasks/S133.md) 将固定源 `b811f41ce862fa4e34ac5776d333c2037b6bfd30` 部署到 generation255，主机 pin `31186c7`；本卡不改库结构（仍 user_version=14），生产 Chromium 验证三列表头、62/14/24 列宽、右键菜单项与光标定位、Shift+F10 可达和剪贴板路径，10 项无关服务与 ServerId 保持。历史部署：[S131](tasks/S131.md) 将固定源 `0cd403add6c02720de96e749e5b603cffe56966b` 部署到 generation254，主机 pin `1d05cfc`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 明暗×320/1440 通过，库迁移 13→14（`entries.modified_at`）且 ServerId 不变；生产只读元数据浏览，恢复入口为部署前 generation253（旧二进制拒绝新 schema，回退用 `server.sqlite.pre-migration-v13-to-v14.bak`）。
 
 恢复顺序：**S101 hosted → S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -26,7 +26,8 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
-| S132 | 文件列表取消操作列，行上 Mantine Menu 右键菜单（打开/属性/复制路径、Shift+F10、单菜单） | 实现a9f0310；交接见批次；树/分支已清理 | [S132](tasks/S132.md) |
+| S133 | S132 部署到本机：generation255、pin31186c7、无迁移、生产 S132 断言 | 源b811f41；主机31186c7 | [S133](tasks/S133.md) |
+| S132 | 文件列表取消操作列，行上 Mantine Menu 右键菜单（打开/属性/复制路径、Shift+F10、单菜单） | 实现a9f0310/交接b811f41已ff合master；树/分支已清理 | [S132](tasks/S132.md) |
 | S131 | S130 部署到本机：generation254、pin1d05cfc、库迁移13→14、生产S130断言 | 源0cd403a；主机1d05cfc | [S131](tasks/S131.md) |
 | S130 | 文件浏览器固定列宽/无下划线/人类可读大小/修改日期；迁移0014与快照字段 | 实现a9d9e35/交接0cd403a已ff合master；树/分支已清理 | [S130](tasks/S130.md) |
 | S129 | 正式 agent 注册 Explorer；原生云朵/下载勾选/释放/重启验收 | 实现3357d89；交接/ff整合bbddb13；树/分支已清理 | [S129](tasks/S129.md) |
