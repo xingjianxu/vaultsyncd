@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { listRoots, listRecoveryEntries, listConflictCopies, listEntryHistory, listTrash, type RecoveryItem, type RecoveryPage, type RootSummary } from "@vaultsyncd/api-client";
-import { Card } from "@heroui/react/card";
-import { ButtonGroup } from "@heroui/react/button-group";
-import { Label } from "@heroui/react/label";
-import { ListBox } from "@heroui/react/list-box";
-import { Select } from "@heroui/react/select";
-import { Button, EmptyState, StatusBadge, Table } from "../../components/ui";
+import { Alert, Button, Group, Paper, Select, Stack, Text, Title } from "@mantine/core";
+import { EmptyState, StatusBadge, Table } from "../../components/ui";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 import { expiry, expired, RestoreSession, type RestoreRecord } from "./recovery";
@@ -55,46 +51,52 @@ export function RecoveryPanel() {
   if(!user) return <EmptyState title="请先登录">登录后查看授权 Root 的历史、冲突副本和回收站。</EmptyState>;
   const unfinished = record && (!record.result || record.result.state === "pending");
   const title = mode === "trash" ? "回收站" : mode === "conflicts" ? "冲突副本" : mode === "history" ? "历史版本" : "文件与历史";
-  return <div className="space-y-4">
-  <Card className="border border-border p-4 sm:p-5">
-    <Card.Header className="gap-2">
-      <div className="text-xs font-semibold tracking-widest text-muted">RECOVERY</div>
-      <Card.Title render={props => <h2 {...props} />}>文件恢复</Card.Title>
-      <Card.Description>恢复保留当前目标；同名冲突时另名恢复。到期时间是最早回收时间，最终以服务端检查为准。</Card.Description>
-    </Card.Header>
-    <Card.Content className="mt-3 space-y-3">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <Select className="w-full sm:max-w-sm" aria-label="恢复 Root" placeholder="选择授权目录" isDisabled={busy || rootsLoading || !roots.length}
-          value={root || null} onChange={value => { setRoot(value == null ? "" : String(value)); setAfter(undefined); }}>
-          <Label>恢复 Root</Label><Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
-          <Select.Popover><ListBox>{roots.map(item => <ListBox.Item key={item.root_id} id={item.root_id} textValue={item.name || item.root_id}>
-            <div className="min-w-0"><p className="truncate">{item.name || item.root_id}</p>{item.name && <p className="font-mono text-xs text-muted">{item.root_id}</p>}</div><ListBox.ItemIndicator />
-          </ListBox.Item>)}</ListBox></Select.Popover>
-        </Select>
-        <Button size="sm" disabled={busy || rootsLoading || !root} onClick={() => {setAfter(undefined);setRevision(value => value+1);}}>刷新恢复清单</Button>
-      </div>
-      <ButtonGroup size="sm" className="self-start" aria-label="恢复清单类别">
-        {["entries","conflicts","trash"].map((value,i) => <Button size="sm" key={value} disabled={busy} aria-pressed={mode === value || (value === "entries" && mode === "history")}
-          variant={mode === value || (value === "entries" && mode === "history") ? "primary" : "secondary"}
-          onClick={() => tab(value)}>{["文件与历史","冲突副本","回收站"][i]}</Button>)}
-      </ButtonGroup>
-      {mode === "conflicts" && notice && <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-surface-secondary p-4 text-sm"><p>冲突副本保留了另一份修改。</p><Button size="sm" onClick={() => setNotice(false)}>关闭提示</Button></div>}
-      {error && <p role="alert" className="rounded-md bg-danger/10 p-4 text-sm text-danger">{error}</p>}
-      {(busy || rootsLoading) && <p role="status" className="text-sm text-muted">正在核对…</p>}
-      {!rootsLoading && !roots.length && !error && <p className="text-sm text-muted">尚无授权 Root。</p>}
-    </Card.Content>
-  </Card>
-  {record && <Card className="border border-border p-4 sm:p-5"><Card.Header><Card.Title render={props => <h2 {...props} />}>恢复操作</Card.Title><Card.Description>核对服务端结果后确认完成。未确认时保留原操作继续重试。</Card.Description></Card.Header><Card.Content className="mt-4 space-y-4"><p className="break-all text-sm text-muted">操作编号：<code>{record.request.op_id}</code></p>
-    <StatusBadge tone={record.result?.state === "committed" ? "success" : "warning"}>{record.result?.state === "committed" ? "恢复已提交" : record.result?.state === "rejected" ? "恢复被拒绝" : record.result?.state === "pending" ? "恢复 pending，尚未提交" : "结果未知，尚未确认恢复"}</StatusBadge>
-    {record.result?.error_message && <p>{record.result.error_message}</p>}
-    {record.result?.state === "committed" && <p>实际恢复位置：{record.path ?? "尚未读取，请核对结果"} · 条目 {record.result.entry_id}</p>}
-    <Button size="sm" disabled={busy} onClick={() => void restore()}>核对并重试原操作</Button>
-  </Card.Content></Card>}
-  {data && <Card className="min-w-0 border border-border p-4 sm:p-5"><Card.Header className="mb-4"><Card.Title render={props => <h2 {...props} />}>{title}</Card.Title><Card.Description>{mode === "history" ? "按版本核对内容，恢复操作保留当前目标。" : "选择文件查看历史，或核对待恢复的项目。"}</Card.Description></Card.Header><Card.Content className="min-w-0"><Table caption={title} rows={data.items} rowKey={item => item.id} emptyMessage="本页没有项目；这不表示客户端已同步。" columns={[
-    { key:"name",title:"路径 / 身份",render:item=><div className="space-y-2"><code className="break-all font-medium">{item.name}</code><p className="font-mono text-xs text-muted">{item.entry_id}</p>{item.conflict_source && <p className="break-all text-xs text-muted">冲突源：{item.conflict_source}</p>}</div>},
-    { key:"version",title:"版本 / 到期时间",render:item=><div className="space-y-2"><span className="break-all font-mono text-xs">{item.version_id ?? "目录"}</span><p className="text-xs text-muted">{expiry(item)}</p>{expired(item) && <StatusBadge tone="warning">保留期已到</StatusBadge>}</div>},
-    { key:"action",title:"操作",render:item=> mode === "entries" || mode === "conflicts" ? <Button size="sm" disabled={busy || !item.version_id} onClick={() => {setEntry(item.entry_id);tab("history");}}>查看历史</Button>
-      : <Button size="sm" disabled={busy || !!unfinished || expired(item)} onClick={() => void restore(item)}>恢复此项</Button>},
-  ]}/>{data.next_cursor && <div className="mt-4 flex justify-end"><Button size="sm" disabled={busy} onClick={() => setAfter(data.next_cursor)}>下一页</Button></div>}</Card.Content></Card>}
-  </div>;
+  return <Stack>
+    <Paper withBorder p="lg">
+      <Stack>
+        <Title order={2} size="h4">文件恢复</Title>
+        <Text size="sm" c="dimmed">恢复保留当前目标；同名冲突时另名恢复。到期时间是最早回收时间，最终以服务端检查为准。</Text>
+        <Group align="flex-end" justify="space-between">
+          <Select label="恢复 Root" placeholder="选择授权目录" disabled={busy || rootsLoading || !roots.length}
+            value={root || null} allowDeselect={false} data={roots.map(item => ({ value: item.root_id, label: item.name || item.root_id }))}
+            onChange={value => { setRoot(value == null ? "" : String(value)); setAfter(undefined); }} className="w-full sm:max-w-sm" />
+          <Button variant="default" disabled={busy || rootsLoading || !root} onClick={() => { setAfter(undefined); setRevision(value => value + 1); }}>刷新恢复清单</Button>
+        </Group>
+        <Group aria-label="恢复清单类别" gap="xs">
+          {["entries", "conflicts", "trash"].map((value, i) => <Button key={value} disabled={busy}
+            aria-pressed={mode === value || (value === "entries" && mode === "history")}
+            variant={mode === value || (value === "entries" && mode === "history") ? "filled" : "default"}
+            onClick={() => tab(value)}>{["文件与历史", "冲突副本", "回收站"][i]}</Button>)}
+        </Group>
+        {mode === "conflicts" && notice && <Alert><Group justify="space-between"><Text size="sm">冲突副本保留了另一份修改。</Text><Button variant="subtle" onClick={() => setNotice(false)}>关闭提示</Button></Group></Alert>}
+        {error && <Alert color="red" role="alert">{error}</Alert>}
+        {(busy || rootsLoading) && <Text role="status" size="sm" c="dimmed">正在核对…</Text>}
+        {!rootsLoading && !roots.length && !error && <Text size="sm" c="dimmed">尚无授权 Root。</Text>}
+      </Stack>
+    </Paper>
+    {record && <Paper withBorder p="lg">
+      <Stack>
+        <Title order={2} size="h4">恢复操作</Title>
+        <Text size="sm" c="dimmed">核对服务端结果后确认完成。未确认时保留原操作继续重试。</Text>
+        <Text size="sm" c="dimmed" className="break-all">操作编号：<code>{record.request.op_id}</code></Text>
+        <StatusBadge tone={record.result?.state === "committed" ? "success" : "warning"}>{record.result?.state === "committed" ? "恢复已提交" : record.result?.state === "rejected" ? "恢复被拒绝" : record.result?.state === "pending" ? "恢复 pending，尚未提交" : "结果未知，尚未确认恢复"}</StatusBadge>
+        {record.result?.error_message && <Text size="sm">{record.result.error_message}</Text>}
+        {record.result?.state === "committed" && <Text size="sm">实际恢复位置：{record.path ?? "尚未读取，请核对结果"} · 条目 {record.result.entry_id}</Text>}
+        <Group><Button variant="default" disabled={busy} onClick={() => void restore()}>核对并重试原操作</Button></Group>
+      </Stack>
+    </Paper>}
+    {data && <Paper withBorder p="lg">
+      <Stack>
+        <Title order={2} size="h4">{title}</Title>
+        <Text size="sm" c="dimmed">{mode === "history" ? "按版本核对内容，恢复操作保留当前目标。" : "选择文件查看历史，或核对待恢复的项目。"}</Text>
+        <Table caption={title} rows={data.items} rowKey={item => item.id} emptyMessage="本页没有项目；这不表示客户端已同步。" columns={[
+          { key: "name", title: "路径 / 身份", render: item => <Stack gap="xs"><Text component="code" fw={500} className="break-all">{item.name}</Text><Text size="xs" c="dimmed">{item.entry_id}</Text>{item.conflict_source && <Text size="xs" c="dimmed" className="break-all">冲突源：{item.conflict_source}</Text>}</Stack> },
+          { key: "version", title: "版本 / 到期时间", render: item => <Stack gap="xs"><Text component="code" size="xs" className="break-all">{item.version_id ?? "目录"}</Text><Text size="xs" c="dimmed">{expiry(item)}</Text>{expired(item) && <StatusBadge tone="warning">保留期已到</StatusBadge>}</Stack> },
+          { key: "action", title: "操作", render: item => mode === "entries" || mode === "conflicts" ? <Button variant="default" disabled={busy || !item.version_id} onClick={() => { setEntry(item.entry_id); tab("history"); }}>查看历史</Button>
+            : <Button disabled={busy || !!unfinished || expired(item)} onClick={() => void restore(item)}>恢复此项</Button> },
+        ]} />
+        {data.next_cursor && <Group justify="flex-end"><Button variant="default" disabled={busy} onClick={() => setAfter(data.next_cursor)}>下一页</Button></Group>}
+      </Stack>
+    </Paper>}
+  </Stack>;
 }

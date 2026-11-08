@@ -1,12 +1,12 @@
 {
   "dependencies": {
-    "@heroui/react": "3.2.7",
-    "@heroui/styles": "3.2.7",
+    "@mantine/core": "9.7.5",
+    "@mantine/form": "9.7.5",
+    "@mantine/hooks": "9.7.5",
     "@noble/hashes": "2.4.0",
     "@vaultsyncd/api-client": "workspace:*",
     "react": "19.3.1",
-    "react-dom": "19.3.1",
-    "tailwind-variants": "3.3.1"
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.5",

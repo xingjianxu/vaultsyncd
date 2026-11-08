@@ -18,6 +18,7 @@ import subprocess
 import threading
 import time
 
+from csp_support import CspStaticFiles, field_label
 from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
@@ -64,7 +65,7 @@ def main():
         proxy_results = []
         drop_restore = [False]
 
-        class Handler(http.server.SimpleHTTPRequestHandler):
+        class Handler(CspStaticFiles):
             def log_message(self, *_): pass
 
             def do_POST(self): self.forward()
@@ -109,8 +110,8 @@ def main():
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):
-                page.get_by_label("登录名", exact=True).fill("owner")
-                page.get_by_label("密码", exact=True).fill(secret)
+                page.get_by_label(field_label("登录名")).fill("owner")
+                page.get_by_label(field_label("密码")).fill(secret)
                 page.get_by_role("button", name="登录", exact=True).click()
                 expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
 

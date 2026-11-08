@@ -1,41 +1,31 @@
-import type { ReactNode, ComponentProps } from "react";
-import { Button as HeroButton } from "@heroui/react/button";
-import { Card } from "@heroui/react/card";
-import { Chip } from "@heroui/react/chip";
-import { Modal } from "@heroui/react/modal";
-import { Table as HeroTable } from "@heroui/react/table";
+import type { ReactNode } from "react";
+import { Badge, Button, Card, Group, Modal, Stack, Table as MantineTable, Text, Title } from "@mantine/core";
 
-// The compatibility names keep feature actions explicit while HeroUI owns keyboard/press behavior.
-type ButtonProps = Omit<ComponentProps<typeof HeroButton>, "onClick" | "onPress"> & { disabled?: boolean; onClick?: () => void };
-export function Button({ disabled, onClick, type = "button", variant = "secondary", size = "sm", ...props }: ButtonProps) {
-  return <HeroButton {...props} type={type} variant={variant} size={size} isDisabled={disabled || props.isDisabled} onPress={onClick} />;
-}
 export function EmptyState({ title, children }: { title: string; children: ReactNode }) {
-  return <Card className="empty-state"><Card.Header><Card.Title render={props => <h2 {...props} />}>{title}</Card.Title></Card.Header><Card.Content><p>{children}</p></Card.Content></Card>;
+  return <Card withBorder><Stack align="center" gap="sm" py="md"><Title order={2} size="h3">{title}</Title><div>{children}</div></Stack></Card>;
 }
 type Tone = "neutral" | "info" | "success" | "warning" | "danger";
-const colors = { neutral: "default", info: "accent", success: "success", warning: "warning", danger: "danger" } as const;
+const colors = { neutral: "gray", info: "blue", success: "green", warning: "yellow", danger: "red" } as const;
 export function StatusBadge({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
-  return <Chip size="sm" variant="soft" color={colors[tone]} data-tone={tone}><Chip.Label>{children}</Chip.Label></Chip>;
+  return <Badge color={colors[tone]} variant="light" className="status-badge" data-tone={tone}>{children}</Badge>;
 }
 export interface TableColumn<T> { readonly key: string; readonly title: string; readonly render: (row: T) => ReactNode }
 export function Table<T>({ caption, columns, rows, rowKey, emptyMessage }: {
   caption: string; columns: readonly TableColumn<T>[]; rows: readonly T[];
   rowKey: (row: T) => string; emptyMessage: string;
 }) {
-  return <section className="data-section" aria-label={caption}><div className="table-heading"><h3>{caption}</h3><span className="table-count">本页 {rows.length} 项</span></div><HeroTable variant="secondary">
-    <HeroTable.ScrollContainer><HeroTable.Content aria-label={caption} className="min-w-[640px]">
-      <HeroTable.Header>{columns.map((column, i) => <HeroTable.Column key={column.key} id={column.key} isRowHeader={i === 0}>{column.title}</HeroTable.Column>)}</HeroTable.Header>
-      <HeroTable.Body renderEmptyState={() => <div className="p-5 text-center text-muted">{emptyMessage}</div>}>
-        {rows.map(row => <HeroTable.Row key={rowKey(row)} id={rowKey(row)}>{columns.map(column => <HeroTable.Cell key={column.key}>{column.render(row)}</HeroTable.Cell>)}</HeroTable.Row>)}
-      </HeroTable.Body>
-    </HeroTable.Content></HeroTable.ScrollContainer>
-  </HeroTable></section>;
+  return <Card component="section" withBorder padding={0} aria-label={caption}>
+    <Group justify="space-between" p="md"><Title order={3} size="h4">{caption}</Title><Text size="xs" c="dimmed">本页 {rows.length} 项</Text></Group>
+    <MantineTable.ScrollContainer minWidth={640}>
+      <MantineTable aria-label={caption} highlightOnHover verticalSpacing="sm" horizontalSpacing="md" className="data-table">
+        <MantineTable.Thead><MantineTable.Tr>{columns.map(column => <MantineTable.Th key={column.key}>{column.title}</MantineTable.Th>)}</MantineTable.Tr></MantineTable.Thead>
+        <MantineTable.Tbody>{rows.length ? rows.map(row => <MantineTable.Tr key={rowKey(row)}>{columns.map(column => <MantineTable.Td key={column.key}>{column.render(row)}</MantineTable.Td>)}</MantineTable.Tr>) : <MantineTable.Tr><MantineTable.Td colSpan={columns.length}><Text ta="center" c="dimmed" py="md">{emptyMessage}</Text></MantineTable.Td></MantineTable.Tr>}</MantineTable.Tbody>
+      </MantineTable>
+    </MantineTable.ScrollContainer>
+  </Card>;
 }
-export function Dialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  return <Modal isOpen onOpenChange={open => { if (!open) onClose(); }}><Modal.Backdrop><Modal.Container><Modal.Dialog>
-    <Modal.Header><Modal.Heading>{title}</Modal.Heading></Modal.Header>
-    <Modal.Body className="space-y-4">{children}</Modal.Body>
-    <Modal.Footer><Button autoFocus onClick={onClose}>关闭</Button></Modal.Footer>
-  </Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>;
+export function Dialog({ opened, title, children, onClose }: { opened: boolean; title: string; children: ReactNode; onClose: () => void }) {
+  return <Modal opened={opened} onClose={onClose} title={title} centered>
+    <Stack>{children}<Group justify="flex-end"><Button data-autofocus variant="default" onClick={onClose}>关闭</Button></Group></Stack>
+  </Modal>;
 }

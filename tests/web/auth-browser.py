@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 
+from csp_support import CspStaticFiles, field_label
 from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
@@ -55,7 +56,7 @@ def main():
         assert address, "server did not listen"
         proxy_results = []
 
-        class Handler(http.server.SimpleHTTPRequestHandler):
+        class Handler(CspStaticFiles):
             def log_message(self, *_): pass
 
             def do_POST(self): self.forward()
@@ -82,7 +83,18 @@ def main():
 
         factory = functools.partial(Handler, directory=str(REPO / "apps/web/dist"))
         proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), factory)
-        evil = http.server.ThreadingHTTPServer(("127.0.0.1", 0), factory)
+        # The attacker's page controls its own policy; using our connect-src here
+        # would block the request before it can exercise the server's CSRF gate.
+        class Attacker(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_): pass
+            def do_GET(self):
+                body = b"<!doctype html><title>Cross-origin attack test</title>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        evil = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Attacker)
         for listener in [proxy, evil]: threading.Thread(target=listener.serve_forever, daemon=True).start()
         origin = f"http://localhost:{proxy.server_port}"
         with sync_playwright() as playwright:
@@ -94,8 +106,8 @@ def main():
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):
-                page.get_by_label("登录名", exact=True).fill("owner")
-                page.get_by_label("密码", exact=True).fill(secret)
+                page.get_by_label(field_label("登录名")).fill("owner")
+                page.get_by_label(field_label("密码")).fill(secret)
                 page.get_by_role("button", name="登录", exact=True).click()
                 expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
 
@@ -125,14 +137,14 @@ def main():
             assert ("/v1/auth/revoke-all", 403, f"http://localhost:{evil.server_port}") in proxy_results
             other.close()
 
-            page.get_by_label("当前密码", exact=True).fill(password)
-            page.get_by_label("新密码", exact=True).fill(new_password)
+            page.get_by_label(field_label("当前密码")).fill(password)
+            page.get_by_label(field_label("新密码")).fill(new_password)
             page.get_by_role("button", name="修改密码并撤销会话", exact=True).click()
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
             assert second.request.get(origin + "/v1/auth/account", headers={"origin":origin}).status == 401
             assert second.request.post(origin + "/v1/auth/browser/refresh", headers={"origin":origin}).status == 401
-            page.get_by_label("登录名", exact=True).fill("owner")
-            page.get_by_label("密码", exact=True).fill(password)
+            page.get_by_label(field_label("登录名")).fill("owner")
+            page.get_by_label(field_label("密码")).fill(password)
             page.get_by_role("button", name="登录", exact=True).click()
             expect(page.get_by_role("alert")).to_contain_text("密码不正确")
             login(new_password)

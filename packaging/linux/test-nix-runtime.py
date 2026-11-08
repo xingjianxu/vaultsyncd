@@ -65,6 +65,9 @@ def main():
             connection.request("GET",path);r=connection.getresponse();return r.status,dict(r.getheaders()),r.read()
         status,headers,html=get("/");assert status==200 and "text/html" in headers["content-type"]
         assert headers["x-content-type-options"]=="nosniff"
+        nonce=re.search(rb'<meta name="csp-nonce" content="([0-9a-f]{32})">',html).group(1).decode()
+        assert f"'nonce-{nonce}'" in headers["content-security-policy"]
+        assert "unsafe-inline" not in headers["content-security-policy"]
         for target in re.findall(rb'(?:src|href)="(\./assets/[^"]+)"',html):
             path="/"+target.decode().removeprefix("./")
             code,h,body=get(path);assert code==200 and body
@@ -77,7 +80,7 @@ def main():
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True);page=browser.new_page()
             page.goto(origin+"/#/account")
-            page.get_by_label("登录名",exact=True).fill("owner");page.get_by_label("密码",exact=True).fill(password)
+            page.get_by_label(re.compile(r"^登录名(?:\s*\*)?$")).fill("owner");page.get_by_label(re.compile(r"^密码(?:\s*\*)?$")).fill(password)
             page.get_by_role("button",name="登录",exact=True).click()
             expect(page.get_by_text("已登录：owner",exact=True)).to_be_visible()
             page.get_by_role("link",name="备份管理",exact=True).click()

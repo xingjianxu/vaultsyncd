@@ -13,13 +13,10 @@ import secrets
 import subprocess
 import threading
 import time
+from csp_support import CspStaticFiles, field_label
 from playwright.sync_api import sync_playwright, expect
 
 REPO=Path(__file__).resolve().parents[2]
-# Exercise the deployed policy without maintaining a second editable policy string.
-POLICY_MATCH=re.search(r'CONTENT_SECURITY_POLICY\s*,\s*HeaderValue::from_static\("([^"\n]+)"\)',(REPO/"apps/server/src/web.rs").read_text())
-assert POLICY_MATCH, "server Web CSP declaration not found"
-CSP=POLICY_MATCH.group(1)
 BIN=Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR",REPO/"target/debug"))
 RUN=Path("/data")/f"vs-s090-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
@@ -70,12 +67,8 @@ def main():
                 time.sleep(.2)
             assert address
             fault=[None];prepare_drop=[True];requests=[]
-            class Handler(http.server.SimpleHTTPRequestHandler):
+            class Handler(CspStaticFiles):
                 def log_message(self,*_):pass
-                def end_headers(self):
-                    if not self.path.startswith("/v1/"):
-                        self.send_header("Content-Security-Policy",CSP)
-                    super().end_headers()
                 def do_POST(self):self.forward()
                 def do_GET(self):
                     if self.path.startswith("/v1/"):self.forward()
@@ -112,8 +105,10 @@ def main():
                 context=browser.new_context(accept_downloads=True);page=context.new_page()
                 page.add_init_script("""window.__cspViolations=[];document.addEventListener('securitypolicyviolation',event=>{window.__cspViolations.push({directive:event.effectiveDirective,blocked:event.blockedURI});});""")
                 response=page.goto(origin+"/#/account")
-                assert response and response.headers.get("content-security-policy")==CSP
-                page.get_by_label("登录名",exact=True).fill("owner");page.get_by_label("密码",exact=True).fill(password)
+                assert response
+                nonce=page.locator('meta[name="csp-nonce"]').get_attribute("content")
+                assert nonce and f"'nonce-{nonce}'" in response.headers.get("content-security-policy", "")
+                page.get_by_label(field_label("登录名")).fill("owner");page.get_by_label(field_label("密码")).fill(password)
                 page.get_by_role("button",name="登录",exact=True).click();expect(page.get_by_text("已登录：owner",exact=True)).to_be_visible()
                 def api(path,body=None):
                     return page.evaluate("""async ([path,body])=>{
@@ -165,9 +160,9 @@ def main():
                 verified=json.loads(checked([BIN/"vaultsyncd-admin","backup","verify",archive,"--json"]))
                 assert verified["state"]=="verified"
                 bad=RUN/"missing.vsbk";bad.write_bytes(archive.read_bytes()[:-4]);bad.chmod(0o600)
-                page.get_by_label("选择另存归档再次验证",exact=True).set_input_files(bad)
+                page.get_by_label(field_label("选择另存归档再次验证")).set_input_files(bad)
                 expect(page.get_by_text("未完成，不能作为有效备份",exact=True)).to_be_visible()
-                page.get_by_label("选择另存归档再次验证",exact=True).set_input_files(archive)
+                page.get_by_label(field_label("选择另存归档再次验证")).set_input_files(archive)
                 expect(page.get_by_text("归档完整性已验证",exact=True)).to_be_visible(timeout=30000)
                 release=page.get_by_role("button",name="释放服务端快照",exact=True)
                 release.click()

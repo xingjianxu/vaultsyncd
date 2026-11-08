@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { backupSnapshotManifest, backupSnapshotStatus, listBackupSnapshots, prepareBackupSnapshot, releaseBackupSnapshot, verifyBackupSnapshot, type BackupSnapshotStatus, type BackupSnapshotList } from "@vaultsyncd/api-client";
-import { Button } from "@heroui/react/button";
-import { Card } from "@heroui/react/card";
-import { Input } from "@heroui/react/input";
-import { Label } from "@heroui/react/label";
+import { Alert, Anchor, Button, Group, Input, Paper, ScrollArea, Stack, Text, Title } from "@mantine/core";
 import { Dialog, EmptyState, StatusBadge, Table } from "../../components/ui";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
@@ -78,83 +75,81 @@ export function BackupPanel() {
    }catch(cause){failed(cause);}finally{setRecord(local.read());setBusy(false);}
  }
  if(!user)return <EmptyState title="请先登录">备份包含账号验证材料，仅 owner 可准备、导出或释放。</EmptyState>;
- return <div className="space-y-4">
-   <Card className="p-4 sm:p-5">
-     <Card.Header><Card.Title render={props => <h2 {...props} />}>一致备份</Card.Title>
-       <Card.Description>只包含已确认逻辑状态及保留的历史/回收站，不包含尚未采集的外部修改。同盘快照不是独立备份。</Card.Description>
-     </Card.Header>
-     <Card.Content className="mt-3 space-y-3">
-       <div className="flex flex-wrap gap-3">
-         <Button size="sm" isDisabled={busy} onPress={()=>void action("prepare")}>准备一致备份（未知时重试同ID）</Button>
-         <Button size="sm" variant="secondary" isDisabled={busy} onPress={()=>setRevision(v=>v+1)}>刷新备份作业</Button>
-       </div>
-       {error&&<p role="alert" className="rounded-md bg-danger-soft p-4 text-sm text-danger">{error}</p>}
-       {!data&&!error&&<p role="status" className="text-sm text-muted">正在读取备份作业，尚不能判断是否存在有效备份。</p>}
+ return <Stack>
+   <Paper withBorder p="lg">
+     <Stack>
+       <Title order={2} size="h4">一致备份</Title>
+       <Text size="sm" c="dimmed">只包含已确认逻辑状态及保留的历史/回收站，不包含尚未采集的外部修改。同盘快照不是独立备份。</Text>
+       <Group>
+         <Button disabled={busy} onClick={()=>void action("prepare")}>准备一致备份（未知时重试同ID）</Button>
+         <Button variant="default" disabled={busy} onClick={()=>setRevision(v=>v+1)}>刷新备份作业</Button>
+       </Group>
+       {error&&<Alert color="red" role="alert">{error}</Alert>}
+       {!data&&!error&&<Text role="status" size="sm" c="dimmed">正在读取备份作业，尚不能判断是否存在有效备份。</Text>}
        {data&&<Table caption="备份作业" rows={data.items} rowKey={s=>s.backup_id} emptyMessage="尚无备份；不能据此推断数据已安全导出。" columns={[
-         {key:"id",title:"备份身份",render:s=><code className="text-xs break-all">{s.backup_id}</code>},
-         {key:"state",title:"准备/作业",render:s=><div className="space-y-2"><StatusBadge tone={s.phase==="failed"?"danger":s.phase==="ready"?"info":"neutral"}>{phaseLabels[s.phase]}</StatusBadge><p className="text-sm">{s.job_pending?"作业未完成":"作业已结束"}</p><p className="text-sm text-muted">{s.detail}</p></div>},
-         {key:"source",title:"源完整性",render:s=><span className="text-sm">{s.integrity==="verified"?"源已校验（不代表已下载）":s.integrity==="incomplete"?"源不完整":"源未校验"}</span>},
-         {key:"action",title:"操作",render:s=><Button size="sm" variant="secondary" isDisabled={busy} onPress={()=>setSelected(s)}>选择备份</Button>},
+         {key:"id",title:"备份身份",render:s=><Text component="code" size="xs" className="break-all">{s.backup_id}</Text>},
+         {key:"state",title:"准备/作业",render:s=><Stack gap="xs"><StatusBadge tone={s.phase==="failed"?"danger":s.phase==="ready"?"info":"neutral"}>{phaseLabels[s.phase]}</StatusBadge><Text size="sm">{s.job_pending?"作业未完成":"作业已结束"}</Text><Text size="sm" c="dimmed">{s.detail}</Text></Stack>},
+         {key:"source",title:"源完整性",render:s=><Text size="sm">{s.integrity==="verified"?"源已校验（不代表已下载）":s.integrity==="incomplete"?"源不完整":"源未校验"}</Text>},
+         {key:"action",title:"操作",render:s=><Button variant="default" disabled={busy} onClick={()=>setSelected(s)}>选择备份</Button>},
        ]}/>}
-       {data?.next_page&&<Button size="sm" variant="secondary" isDisabled={busy} onPress={()=>setPage(data.next_page!)}>下一页备份</Button>}
-     </Card.Content>
-   </Card>
-   {selected&&<Card className="p-4 sm:p-5">
-     <Card.Header><Card.Title render={props => <h2 {...props} />}>固定备份源</Card.Title>
-       <Card.Description>核对服务端源后，将归档导出到独立位置。</Card.Description></Card.Header>
-     <Card.Content className="mt-3 space-y-4">
-       <p className="text-sm break-all">{selected.backup_id} · {phaseLabels[selected.phase]} · {selected.job_pending?"作业未完成，不能当作有效包":"作业已结束"}</p>
-       <p className="rounded-md bg-surface-secondary p-4 text-sm">源完整性：{selected.integrity}。这不是浏览器下载完整性。</p>
-       <p className="text-xs text-muted break-all">租约到期：{new Date(Number(selected.expires_at)*1000).toISOString()} · 清单摘要 {selected.manifest_hash??"尚未生成"}</p>
-       <div className="flex flex-wrap gap-3">
-         <Button size="sm" variant="secondary" isDisabled={busy||selected.phase!=="ready"||selected.job_pending} onPress={()=>void action("verify")}>校验服务端源</Button>
-         <Button size="sm" variant="secondary" isDisabled={busy||selected.phase!=="ready"} onPress={()=>void manifest()}>查看固定清单</Button>
-         <Button size="sm" isDisabled={busy||selected.phase!=="ready"||selected.job_pending} onPress={()=>void download()}>导出或重试缺失下载</Button>
-         <Button size="sm" variant="danger-soft" isDisabled={busy||selected.phase==="released"||selected.job_pending} onPress={()=>setConfirmRelease(true)}>释放服务端快照</Button>
-         {!selected.job_pending&&["failed","released","expired"].includes(selected.phase)&&<Button size="sm" variant="secondary" isDisabled={busy} onPress={()=>{sessionStorage.removeItem(prepareKey);void action("prepare");}}>使用新ID重新准备</Button>}
-       </div>
-     </Card.Content>
-   </Card>}
-   {index&&<Card className="p-4 sm:p-5">
-     <Card.Header><Card.Title render={props => <h2 {...props} />}>固定清单</Card.Title></Card.Header>
-     <Card.Content className="mt-4 space-y-4 text-sm">
-       <p className="break-all">Server {index.server} · {index.items.length} 个文件/对象 · SHA-256 {index.hash}</p>
-       <ul className="max-h-64 space-y-2 overflow-auto rounded-md bg-surface-secondary p-4">{index.roots.slice(0,100).map(root=><li className="font-mono text-xs break-all" key={root.id}>Root {root.id} · seq {root.seq}</li>)}</ul>
-       <p className="text-muted">清单项目按固定路径校验，下载归档不执行其中的内容。</p>
-     </Card.Content>
-   </Card>}
-   {record&&<Card className="p-4 sm:p-5">
-     <Card.Header><Card.Title render={props => <h2 {...props} />}>本机导出完整性</Card.Title>
-       <Card.Description>浏览器暂存与独立备份位置不同。</Card.Description></Card.Header>
-     <Card.Content className="mt-3 space-y-4">
-       <p className="text-sm break-all">备份 {record.id} · 本次接收 {progress} 字节</p>
+       {data?.next_page&&<Group><Button variant="default" disabled={busy} onClick={()=>setPage(data.next_page!)}>下一页备份</Button></Group>}
+     </Stack>
+   </Paper>
+   {selected&&<Paper withBorder p="lg">
+     <Stack>
+       <Title order={2} size="h4">固定备份源</Title>
+       <Text size="sm" c="dimmed">核对服务端源后，将归档导出到独立位置。</Text>
+       <Text size="sm" className="break-all">{selected.backup_id} · {phaseLabels[selected.phase]} · {selected.job_pending?"作业未完成，不能当作有效包":"作业已结束"}</Text>
+       <Alert role="note">源完整性：{selected.integrity}。这不是浏览器下载完整性。</Alert>
+       <Text size="xs" c="dimmed" className="break-all">租约到期：{new Date(Number(selected.expires_at)*1000).toISOString()} · 清单摘要 {selected.manifest_hash??"尚未生成"}</Text>
+       <Group>
+         <Button variant="default" disabled={busy||selected.phase!=="ready"||selected.job_pending} onClick={()=>void action("verify")}>校验服务端源</Button>
+         <Button variant="default" disabled={busy||selected.phase!=="ready"} onClick={()=>void manifest()}>查看固定清单</Button>
+         <Button disabled={busy||selected.phase!=="ready"||selected.job_pending} onClick={()=>void download()}>导出或重试缺失下载</Button>
+         <Button variant="light" color="red" disabled={busy||selected.phase==="released"||selected.job_pending} onClick={()=>setConfirmRelease(true)}>释放服务端快照</Button>
+         {!selected.job_pending&&["failed","released","expired"].includes(selected.phase)&&<Button variant="default" disabled={busy} onClick={()=>{sessionStorage.removeItem(prepareKey);void action("prepare");}}>使用新ID重新准备</Button>}
+       </Group>
+     </Stack>
+   </Paper>}
+   {index&&<Paper withBorder p="lg">
+     <Stack>
+       <Title order={2} size="h4">固定清单</Title>
+       <Text size="sm" className="break-all">Server {index.server} · {index.items.length} 个文件/对象 · SHA-256 {index.hash}</Text>
+       <ScrollArea.Autosize mah={256} type="auto"><Stack gap="xs">{index.roots.slice(0,100).map(root=><Text component="code" size="xs" className="break-all" key={root.id}>Root {root.id} · seq {root.seq}</Text>)}</Stack></ScrollArea.Autosize>
+       <Text size="sm" c="dimmed">清单项目按固定路径校验，下载归档不执行其中的内容。</Text>
+     </Stack>
+   </Paper>}
+   {record&&<Paper withBorder p="lg">
+     <Stack>
+       <Title order={2} size="h4">本机导出完整性</Title>
+       <Text size="sm" c="dimmed">浏览器暂存与独立备份位置不同。</Text>
+       <Text size="sm" className="break-all">备份 {record.id} · 本次接收 {progress} 字节</Text>
        <StatusBadge tone={record.state==="verified"?"success":"warning"}>{record.state==="verified"?"归档完整性已验证":record.state==="exported_unverified"?"已下载，尚未重读校验":"未完成，不能作为有效备份"}</StatusBadge>
-       <p className="text-sm text-muted">{record.reason}</p>
-       <p className="rounded-md bg-warning-soft p-4 text-sm text-warning">归档含账号验证材料，请保存到仅管理员可读的位置；浏览器不能保证保存文件的权限。</p>
-       <div className="flex flex-wrap gap-3">
-         {busy&&cancel.current&&<Button size="sm" variant="danger-soft" onPress={()=>cancel.current?.abort()}>取消下载并保留未完成状态</Button>}
-         <Button size="sm" variant="secondary" isDisabled={busy} onPress={()=>void verify()}>重读校验浏览器暂存</Button>
-       </div>
-       <div className="flex flex-wrap gap-4 text-sm">
-         {url&&<a className="text-accent underline underline-offset-4" href={url} download={`backup-${record.id}.vsbk`}>另存已校验归档</a>}
-         {receiptUrl&&<a className="text-accent underline underline-offset-4" href={receiptUrl} download={`backup-${record.id}.vsbk.verification.json`}>下载完整性收据</a>}
-       </div>
-       <div className="space-y-2 rounded-md border border-border p-4">
-         <Label htmlFor="backup-archive">选择另存归档再次验证</Label>
-         <Input id="backup-archive" className="w-full" type="file" accept=".vsbk" disabled={busy} onChange={event=>{const file=event.target.files?.[0];if(file)void verify(file);event.target.value="";}} />
-       </div>
-     </Card.Content>
-   </Card>}
-   <Card variant="secondary" className="p-4 sm:p-5">
-     <Card.Header><Card.Title render={props => <h2 {...props} />}>离线恢复</Card.Title></Card.Header>
-     <Card.Content className="mt-3 space-y-3 text-sm text-muted">
-       <p>先保管归档与收据、停止服务，使用 CLI 的 restore validate 流程核对归档、空状态目录和 Root 映射，再按离线恢复文档操作。页面不对在线数据库执行 restore。</p>
-       <p>完整性校验不等于已完成恢复演练。导出到独立故障域并验证后再释放源快照。</p>
-     </Card.Content>
-   </Card>
-   {confirmRelease&&<Dialog title="释放此备份源？" onClose={()=>setConfirmRelease(false)}>
-     <p>只删除此ID的服务端准备快照并释放租约；不会删除共享对象或浏览器归档。先确认另存副本与收据完整。</p>
-     <Button size="sm" variant="danger" onPress={()=>{setConfirmRelease(false);void action("release");}}>确认释放此快照</Button>
-   </Dialog>}
- </div>;
+       <Text size="sm" c="dimmed">{record.reason}</Text>
+       <Alert color="yellow" role="note">归档含账号验证材料，请保存到仅管理员可读的位置；浏览器不能保证保存文件的权限。</Alert>
+       <Group>
+         {busy&&cancel.current&&<Button variant="light" color="red" onClick={()=>cancel.current?.abort()}>取消下载并保留未完成状态</Button>}
+         <Button variant="default" disabled={busy} onClick={()=>void verify()}>重读校验浏览器暂存</Button>
+       </Group>
+       <Group>
+         {url&&<Anchor size="sm" href={url} download={`backup-${record.id}.vsbk`}>另存已校验归档</Anchor>}
+         {receiptUrl&&<Anchor size="sm" href={receiptUrl} download={`backup-${record.id}.vsbk.verification.json`}>下载完整性收据</Anchor>}
+       </Group>
+       <Input.Wrapper label="选择另存归档再次验证" id="backup-archive">
+         <Input id="backup-archive" type="file" accept=".vsbk" disabled={busy} onChange={event=>{const file=event.target.files?.[0];if(file)void verify(file);event.target.value="";}} />
+       </Input.Wrapper>
+     </Stack>
+   </Paper>}
+   <Paper withBorder p="lg">
+     <Stack>
+       <Title order={2} size="h4">离线恢复</Title>
+       <Text size="sm" c="dimmed">先保管归档与收据、停止服务，使用 CLI 的 restore validate 流程核对归档、空状态目录和 Root 映射，再按离线恢复文档操作。页面不对在线数据库执行 restore。</Text>
+       <Text size="sm" c="dimmed">完整性校验不等于已完成恢复演练。导出到独立故障域并验证后再释放源快照。</Text>
+     </Stack>
+   </Paper>
+   <Dialog opened={confirmRelease} title="释放此备份源？" onClose={()=>setConfirmRelease(false)}>
+     <Text size="sm">只删除此ID的服务端准备快照并释放租约；不会删除共享对象或浏览器归档。先确认另存副本与收据完整。</Text>
+     <Group><Button color="red" onClick={()=>{setConfirmRelease(false);void action("release");}}>确认释放此快照</Button></Group>
+   </Dialog>
+ </Stack>;
 }

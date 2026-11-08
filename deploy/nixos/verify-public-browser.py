@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Strict public TLS, browser login and SSE acceptance. Never export cookies/HAR."""
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -25,8 +26,8 @@ def main():
             result['tls'] = response.security_details()
             assert result['tls'] and result['tls']['issuer']
             password = subprocess.check_output(['sudo', '-n', 'cat', '/var/lib/vaultsyncd-credentials/owner.password'], text=True).strip()
-            page.get_by_label('登录名', exact=True).fill('owner')
-            page.get_by_label('密码', exact=True).fill(password)
+            page.get_by_label(re.compile(r'^登录名(?:\s*\*)?$')).fill('owner')
+            page.get_by_label(re.compile(r'^密码(?:\s*\*)?$')).fill(password)
             del password
             page.get_by_role('button', name='登录', exact=True).click()
             expect(page.get_by_text('已登录：owner', exact=True)).to_be_visible(timeout=20000)
