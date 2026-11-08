@@ -252,6 +252,7 @@
 | S118 | 将最新服务端（S117 之后）部署到本机 | L | S116、S117 |
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 |
 | S120 | 将 Mantine 版最新服务端部署到本机 | L | S118、S119 |
+| S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 |
 
 ## 5. 逐步任务卡
 
@@ -1403,6 +1404,13 @@
 - 结果：用现有一键 pure 入口把部署时 master HEAD 固定到 `/etc/nixos#wks-lab`，使 S119 的 Mantine Web 与逐响应 style nonce CSP 上线；保留域名、账号、ServerId、RootId、正式数据与主机依赖锁。
 - 验收：clean/pure 构建/manifest/主机锁/dry-activate/test/HTTPS/IPC/身份/UID与归属/switch；线上 HTML（剥离 nonce 后）与主资产 sha256、CSP nonce 与无 unsafe-inline、真实 Chromium 五路由含 Burger 响应式/主题/登录 cookie/Root 健康/SSE；既有服务、SSH、应用与主机锁核对。
 - 交接：`agent/tasks/S120.md`；记录两仓库提交、generation、证据、恢复入口与清理。仅部署本机，不改变 S101/S106—108 与 T02 首发门禁。
+
+### S121 — Web 顶栏分区与 48px 高度并部署到本机
+
+- 依据：2026-11-08 用户要求 topbar 降至 48px、面包屑居左、Logo 独立分区且边线与左栏对齐，参考 Mantine UI navbars；追加要求完成后部署本机。前置 S119、S120 done；design §18.1、§17.2。
+- 结果：组合现有 AppShell 与 Group 调整布局，保留窄屏折叠菜单、主题和五路由；通过现有 pure 一键部署入口上线，保留账号/数据/身份及主机依赖锁。
+- 验收：Web test/build、根 typecheck；真实 Chromium 五路由明暗主题与 320/390/768/1440/1920 宽度，实测 48px、面包屑左对齐、Logo/侧栏分隔线、无横向溢出与导航可用；部署 build/dry/test/健康/switch、manifest/资产一致、生产 CSP/TLS/登录/Root/SSE 与既有服务核对。
+- 交接：`agent/tasks/S121.md` 及批次；只涉及布局与本机版本 pin，不改变协议/数据库或首发门禁。
 
 ## 7. 记录模板与续接规则
 

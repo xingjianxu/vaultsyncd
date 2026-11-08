@@ -4,6 +4,15 @@
 @source "./**/*.{ts,tsx}";
 
 /* Application-specific details; Mantine owns the theme and component styling. */
+.app-header { display: flex; }
+.app-brand { flex-shrink: 0; border-inline-end: 1px solid var(--app-shell-border-color); }
+.app-topbar { flex: 1; min-width: 0; justify-content: space-between; }
+@media (min-width: 48em) {
+  .app-brand { width: var(--app-shell-navbar-width); }
+}
+@media (max-width: 47.999em) {
+  .app-topbar { justify-content: flex-end; }
+}
 .skip-link { position: fixed; top: -100px; left: 16px; z-index: 300; padding: 10px 14px; background: var(--mantine-color-body); border: 1px solid var(--mantine-color-blue-6); border-radius: var(--mantine-radius-default); }
 .skip-link:focus { top: 12px; }
 #main-content:focus { outline: none; }

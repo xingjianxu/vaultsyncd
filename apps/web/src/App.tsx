@@ -58,12 +58,14 @@ function AppView() {
   const connection = <StatusBadge tone={status === "服务可用" ? "success" : status === "服务降级" || status === "需要恢复" ? "warning" : "neutral"}>{status}</StatusBadge>;
   return <>
     <a className="skip-link" href="#main-content" onClick={event => { event.preventDefault(); document.getElementById("main-content")?.focus(); }}>跳到主要内容</a>
-    <AppShell header={{ height: 60 }} navbar={{ width: 240, breakpoint: "sm", collapsed: { mobile: !opened } }} padding="md">
-      <AppShell.Header><Group h="100%" px="md" justify="space-between" wrap="nowrap">
-        <Group gap="sm" wrap="nowrap"><Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" aria-label="切换导航" aria-controls="main-navigation" /><Anchor href="#/overview" fw={700} c="inherit" underline="never">vaultsyncd</Anchor></Group>
-        <Breadcrumbs visibleFrom="md" aria-label="页面位置"><Anchor href="#/overview">服务管理</Anchor><Text size="sm">{active?.label ?? "页面不存在"}</Text></Breadcrumbs>
-        <Group gap="sm" wrap="nowrap"><div role="status">{connection}</div><ActionIcon aria-label="切换主题" variant="default" onClick={() => toggleColorScheme()}><Icon path={colorScheme === "dark" ? "M12 3v2 M12 19v2 M3 12h2 M19 12h2 M5.6 5.6 7 7 M17 17l1.4 1.4 M5.6 18.4 7 17 M17 7l1.4-1.4 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0" : "M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13"} /></ActionIcon><Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor></Group>
-      </Group></AppShell.Header>
+    <AppShell header={{ height: 48 }} navbar={{ width: 240, breakpoint: "sm", collapsed: { mobile: !opened } }} padding="md">
+      <AppShell.Header className="app-header">
+        <Group className="app-brand" h="100%" px="md" gap="sm" wrap="nowrap"><Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" aria-label="切换导航" aria-controls="main-navigation" /><Anchor href="#/overview" fw={700} c="inherit" underline="never">vaultsyncd</Anchor></Group>
+        <Group className="app-topbar" h="100%" px="md" gap="sm" wrap="nowrap">
+          <Breadcrumbs visibleFrom="sm" aria-label="页面位置"><Anchor href="#/overview" size="sm">服务管理</Anchor><Text size="sm">{active?.label ?? "页面不存在"}</Text></Breadcrumbs>
+          <Group gap="sm" wrap="nowrap"><div role="status">{connection}</div><ActionIcon aria-label="切换主题" variant="default" onClick={() => toggleColorScheme()}><Icon path={colorScheme === "dark" ? "M12 3v2 M12 19v2 M3 12h2 M19 12h2 M5.6 5.6 7 7 M17 17l1.4 1.4 M5.6 18.4 7 17 M17 7l1.4-1.4 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0" : "M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13"} /></ActionIcon><Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor></Group>
+        </Group>
+      </AppShell.Header>
       <AppShell.Navbar p="md" id="main-navigation"><AppShell.Section grow><Text size="xs" c="dimmed" mb="sm">服务端控制台</Text><nav aria-label="主要导航">{items.map(item => <NavLink href={`#${item.path}`} key={item.path} label={item.label} leftSection={<Icon path={item.icon} />} active={path === item.path} aria-current={path === item.path ? "page" : undefined} onClick={close} />)}</nav></AppShell.Section><AppShell.Section><Divider my="md" /><Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text></AppShell.Section></AppShell.Navbar>
       <AppShell.Main id="main-content" tabIndex={-1}><Container size="xl" px={0}>
         <Stack gap="lg" className="app-content"><Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title><Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text></Stack>

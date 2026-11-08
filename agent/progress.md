@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S120 done**，已将部署时 master 最新提交 `b5e96f2`（S119 Mantine Web）部署到本机 **generation248**；S119 的 Mantine 9.7.5 AppShell/默认主题与逐响应 style nonce CSP 已上线，账号/数据/ServerId/RootId 保持，服务仍为 `xingjian:users`。部署、浏览器与既有服务核对详见 [S120](tasks/S120.md) 与 [部署文档](../docs/operations/nixos.md#s120-mantine-版最新服务端部署2026-11-08generation248)。S001—S120 共 **120 卡，115 done、5 blocked**；**当前无 ready 卡**，其余恢复条件保持。
+当前：**S121 in_progress**（Web 顶栏分区与 48px 高度，用户已追加本机部署）；此前 **S120 done**，已将部署时 master 最新提交 `b5e96f2`（S119 Mantine Web）部署到本机 **generation248**；S119 的 Mantine 9.7.5 AppShell/默认主题与逐响应 style nonce CSP 已上线，账号/数据/ServerId/RootId 保持，服务仍为 `xingjian:users`。部署、浏览器与既有服务核对详见 [S120](tasks/S120.md) 与 [部署文档](../docs/operations/nixos.md#s120-mantine-版最新服务端部署2026-11-08generation248)。S001—S120 共 **120 卡，115 done、5 blocked**；**当前无 ready 卡**，其余恢复条件保持。
 
 最近部署：S120 用现有一键入口把 master HEAD `b5e96f2`（S119 Mantine Web）固定到本机 generation248。pure 构建/manifest/主机锁/dry/test/HTTPS/IPC/归属/switch 通过；线上 `index.html`（剥离逐响应 nonce 后）与两个主资产 sha256 与包内一致，CSP 为 `style-src` nonce、无 `unsafe-inline`；真实 Chromium 六项检查（TLS/CSP nonce 与 Mantine 主题/五路由含 Burger 响应式/登录 cookie/Root 健康/SSE）一次通过；10 项既有服务 PID 全不变，3 应用与锁不变。主机 pin `0073fd6` 已 ff 合 main 且自动清理；交接及整合/清理见 [S120](tasks/S120.md) 与 [批次](tasks/S120-batch.md)。旧 system 与证据保留，原首发门禁不变。
 
@@ -151,3 +151,5 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S120 | 将 Mantine 版最新服务端部署到本机 | L | S118、S119 | done | 源b5e96f2、主机0073fd6；项目整合/清理见批次 | pure/manifest/锁/dry/test/switch248、IPC与归属；线上html与两主资产sha256、CSP nonce、Chromium六项、10服务/3应用/SSH/锁不变 | 无本卡阻塞；原首发门禁保留 | [S120](tasks/S120.md) |
 
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 | done | 实现/验收b16d9a1已ff合master；任务树/分支已清理；基线e598106 | Web测试构建/根typecheck、Nix Web、Rust67项/fmt/build/clippy、Chromium四业务51项与50组主题/宽度/路由/CSP通过 | 无；未部署，原首发门禁保留 | [S119](tasks/S119.md) |
+
+| S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 | in_progress | 基线 ec80982 | 基线 frozen install/Web test 通过 | 待浏览器验收与部署 | [S121](tasks/S121.md) |
