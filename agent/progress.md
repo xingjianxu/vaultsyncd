@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S137 done**（Web 重命名与目录树右键菜单，含观察器旧路径防误删修复）；**S138 in_progress**（用户已授权本机部署）。S001—S138 共138卡：132 done、5 blocked、1 in_progress。现场已运行 master7f50cc3/schema15/generation257（既有部署证据 local-20261108T221037-3380053）；S138 将按此基线更新，补齐滞后部署记录。
+当前：**S137/S138 done**（Web 重命名、目录树右键菜单与观察器旧路径防误删，已部署本机）。S001—S138 共138卡：133 done、5 blocked；**当前无 ready 卡**。源`5689be1`运行/开机generation258，schema15保持。验证与交接见[S137](tasks/S137.md)、[S138](tasks/S138.md)。
 
-最近部署：[S135](tasks/S135.md) 将固定源 `faf7adb6dc3b32e97d7384842899c307cde1464b` 部署到 generation256，主机 pin `b98e05f`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 通知（四秒消失/键盘关闭/明暗×320/1440/不挤压布局/CSP）通过，主机锁/10项无关服务/身份保持，无数据库迁移。历史部署：[S133](tasks/S133.md) 将固定源 `b811f41ce862fa4e34ac5776d333c2037b6bfd30` 部署到 generation255，主机 pin `31186c7`；本卡不改库结构（仍 user_version=14），生产 Chromium 验证三列表头、62/14/24 列宽、右键菜单项与光标定位、Shift+F10 可达和剪贴板路径，10 项无关服务与 ServerId 保持。历史部署：[S131](tasks/S131.md) 将固定源 `0cd403add6c02720de96e749e5b603cffe56966b` 部署到 generation254，主机 pin `1d05cfc`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 明暗×320/1440 通过，库迁移 13→14（`entries.modified_at`）且 ServerId 不变；生产只读元数据浏览，恢复入口为部署前 generation253（旧二进制拒绝新 schema，回退用 `server.sqlite.pre-migration-v13-to-v14.bak`）。
+最近部署：[S138](tasks/S138.md) 固定源`5689be16b8bc389ae3781e96c2ff734f7d6761ae`、主机pin`9930ec7`、generation258；异盘完整备份verified，pure build/dry/test/健康/switch、生产全量资产/TLS/CSP/明暗窄屏/新菜单/取消改名、legacy固定版本读取与8对象路径字节保持通过；schema15/ServerId/归属/10无关服务/3应用保持。直接回退入口为现场既有generation257（源7f50cc3，先前部署记录现已补明）；本卡15→15更新。历史已归档部署[S135](tasks/S135.md) generation256/schema14与[S131](tasks/S131.md)的13→14迁移仅描述当时现场，不作为当前回退入口。
 
 恢复顺序：**S101 hosted → S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -163,3 +163,4 @@
 | --- | --- | --- | --- |
 | S126 | done | d50c6ac | [S126](tasks/S126.md) |
 | S137 | done | 999bbee已ff合master，任务树/分支已清理 | [S137](tasks/S137.md) |
+| S138 | done | 源5689be1/主机9930ec7/generation258；交接待补实际提交 | [S138](tasks/S138.md) |

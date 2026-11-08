@@ -1,6 +1,6 @@
 # 本机 NixOS 服务部署
 
-当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S135 已部署通知版源码 `faf7adb`（S134 Mantine Notification），运行与开机默认 generation256；线上资产、通知与健康验证通过。服务及正式目录为主机用户 `xingjian:users`；一键更新与凭据见 S113 节，当前版本及恢复见末尾 S135 节。此前各节为历史部署证据，旧试用卷仍保留。
+当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S138已部署源`5689be1`（文件操作、重命名、目录树菜单与观察器防误删），运行/开机generation258、schema15；全量资产/生产浏览器/旧布局版本与健康验证通过。服务及正式目录为主机用户`xingjian:users`；一键更新见S113，当前版本与直接回退见末尾S138。此前各节保留历史证据。
 
 ## 实际入口和来源（S096，2026-11-07）
 
@@ -328,3 +328,13 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 运行及开机默认 generation256，system `/nix/store/w9jrk25vqz0iqqzsrq1v40bn8zw9vahf-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/vmnd65vsc2ja1fblbdf36zbdr5vh3zfh-vaultsyncd-0.1.1`；无 Rust/迁移改动，库保持14，ServerId/Root/归属保持。线上资产与包内逐字节一致、index 除 nonce 外一致；严格 TLS1.3 Chromium 登录、右键/Shift+F10 复制路径的 Notification、四秒自动消失、Enter 关闭、明暗×320/1440 无溢出/布局位移/CSP错误通过。10项无关服务 PID/InvocationID 和3应用200保持。生产仅只读元数据浏览及剪贴板操作。
 
 证据 `artifacts/S135/` 与 `/data/vaultsyncd-deploy/local-20261108T201005-3057280/`，passed/cleaned=true，含旧system/boot GC roots。恢复入口 generation255 `/nix/store/a86anl2i29i5q3kcx9jqay6p2a2a6ngc-nixos-system-wks-lab-26.11.20261102.7356cc7`，先 `sudo nixos-rebuild test --store-path <旧路径>` 核对健康，再决定 switch，并同步回退主机 pin；无数据库迁移，不必恢复库。本次未实际回退演练、未做生产内容写入或故障注入，不替代 Windows、hosted 和规模门禁。详见 [S135](../../agent/tasks/S135.md)。
+
+## S138 文件操作与重命名版部署（generation258，2026-11-08）
+
+固定源`5689be16b8bc389ae3781e96c2ff734f7d6761ae`包含S136文件操作、S137重命名/树菜单及连续目录改名观察器防误删。现场原已为源7f50cc3/generation257/schema15，纠正此前文档仍写S135的滞后；本次15→15不迁移。
+
+部署前经同UID管理socket完成完整prepare/verify-source/export/verify/release，归档`/wrd/prj/vaultsyncd/artifacts/S138/predeploy.vsbk`与0600收据10文件verified，目录0700。源/data(sdc1)与导出/wrd(sdb1)异盘、仍同主机；不宣称异地备份或实际恢复演练。原状态、Root与配置保留；历史14→15SQLite备份已只读核验，不代替整套归档。
+
+现有脚本pure build→dry→test→健康→switch全部通过，主机pin`9930ec77046abed5744a35f1b672593270bc485e`已ff main并清理临时树/分支，锁不变。运行/开机generation258，system`/nix/store/g16gzr5crzcz29nfpjnjg3j2r7ga25pa-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`/nix/store/hr90dm2vbghdwa9vq8i62ipsn4fqa206-vaultsyncd-0.1.1`。严格TLS1.3生产Chromium全量资产、列表与树右键/键盘/取消改名/Root保护、明暗320/1440、通知与CSP通过；旧布局固定版本内容长度及SHA256匹配，8对象映射/字节、schema15/ServerId/归属与10无关服务/3应用保持。生产只读元数据/固定版本与取消弹窗，无文件操作提交。
+
+永久证据`artifacts/S138/`及`/data/vaultsyncd-deploy/local-20261108T224057-3442489/`（passed/cleaned=true，旧system/boot GC roots）。直接回退为generation257：`/nix/store/r3fvjjgnknna7rm5y7nc9aqifnxmbslc-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113先`sudo nixos-rebuild test --store-path <旧路径>`、健康后再switch并同步pin；本次无迁移，不降schema。未实际回退、生产恢复或故障注入；原Windows/hosted/规模门禁保持，详见[S138](../../agent/tasks/S138.md)。
