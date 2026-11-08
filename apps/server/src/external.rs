@@ -157,6 +157,7 @@ impl ExternalAdoptStore for SqlExternalStore {
                             revision: Revision::ZERO,
                             content_version: None,
                         },
+                        write.at,
                     )
                     .await
                     .map_err(store_error)?;
@@ -179,6 +180,7 @@ impl ExternalAdoptStore for SqlExternalStore {
                         revision: Revision::ZERO,
                         content_version: None,
                     },
+                    write.at,
                 )
                 .await
                 .map_err(store_error)?;
@@ -267,6 +269,7 @@ impl ExternalAdoptStore for SqlExternalStore {
                 entry,
                 expected_revision,
                 next,
+                write.at,
             )
             .await
             .map_err(|error: EntryError| match error {
@@ -350,6 +353,7 @@ impl ExternalAdoptStore for SqlExternalStore {
             name,
             name,
             next,
+            request.at,
         )
         .await
         .map_err(|error: EntryError| match error {
@@ -435,6 +439,7 @@ impl ExternalAdoptStore for SqlExternalStore {
             request.entry,
             request.expected_revision,
             next,
+            request.at,
         )
         .await
         .map_err(store_error)?;

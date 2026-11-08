@@ -29,6 +29,7 @@ async fn import_spec(rig: &Rig) -> ApplySpec {
         path: RelativePath::parse("file.txt").unwrap(),
         mode: SyncMode::Full,
         remote: SnapshotEntry {
+            modified_at: None,
             entry_id: entry().to_string(),
             parent_id: base(2).parent.map(|p| p.to_string()),
             name: "file.txt".to_owned(),

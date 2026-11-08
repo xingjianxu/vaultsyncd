@@ -6,7 +6,7 @@ import { FileIcon } from "./FileIcon";
 import { Dialog, EmptyState } from "../../components/ui";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
-import { ancestry, directoryAtPath, filesLocation, fileSize, parseFilesLocation, readDirectorySnapshot, type DirectorySnapshot } from "./browser";
+import { ancestry, directoryAtPath, filesLocation, fileModified, fileSize, fileSizeDetail, parseFilesLocation, readDirectorySnapshot, type DirectorySnapshot } from "./browser";
 
 export function FilesPanel({ location }: { location: string }) {
   const auth = useAuth();
@@ -154,12 +154,12 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
       {snapshot && !directory && <Alert color="red" role="alert">目录不存在或尚未采集，请检查地址或刷新。</Alert>}
       <div className="files-list">
         {snapshot && directory && <Table aria-label="文件与目录" highlightOnHover verticalSpacing="xs" horizontalSpacing="sm" className="files-table">
-          <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>类型</Table.Th><Table.Th>大小</Table.Th><Table.Th>修订号</Table.Th><Table.Th>操作</Table.Th></Table.Tr></Table.Thead>
+          <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th><Table.Th>操作</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry => <Table.Tr key={entry.entry_id}>
-            <Table.Td><Anchor component="button" ta="left" onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
-            <Table.Td>{entry.kind === "directory" ? "文件夹" : "文件"}</Table.Td><Table.Td>{fileSize(entry)}</Table.Td><Table.Td>{entry.revision}</Table.Td>
+            <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
+            <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
             <Table.Td><Button size="compact-sm" variant="subtle" aria-label={`查看 ${entry.name} 的属性`} onClick={() => setSelected(entry)}>属性</Button></Table.Td>
-          </Table.Tr>) : <Table.Tr><Table.Td colSpan={5}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
+          </Table.Tr>) : <Table.Tr><Table.Td colSpan={4}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
         </Table>}
       </div>
       {children.length > 100 && <Pagination className="files-pagination" aria-label="文件列表分页" total={Math.ceil(children.length / 100)} value={page} onChange={setPage} size="sm" siblings={0} />}
@@ -169,7 +169,8 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
         {[
           ["名称", selected.name || rootName], ["类型", selected.kind === "directory" ? "文件夹" : "文件"],
           ["Root", rootName], ["Root ID", root!.root_id],
-          ["相对路径", ancestry(snapshot, selected).map(entry => entry.name).join("/") || "/"], ["大小", fileSize(selected)],
+          ["相对路径", ancestry(snapshot, selected).map(entry => entry.name).join("/") || "/"], ["大小", fileSizeDetail(selected)],
+          ["修改日期", fileModified(selected)],
           ...(selected.kind === "directory" ? [["直接子项", String(snapshot.children.get(selected.entry_id)?.length ?? 0)]] : []),
           ["修订号", selected.revision], ["条目 ID", selected.entry_id], ["内容版本", selected.version_id ?? "—"], ["SHA-256", selected.hash ?? "—"],
         ].map(([label, value]) => <Stack gap={2} key={label}><Text size="xs" c="dimmed">{label}</Text><Code block className="files-property-value">{value}</Code></Stack>)}

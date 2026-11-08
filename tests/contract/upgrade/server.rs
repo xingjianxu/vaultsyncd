@@ -20,20 +20,17 @@ async fn s091_server_upgrade_preserves_history_and_failure_backup() {
     let (root, parent) = crate::test_support::register_root(&old, owner, 0x92).await;
     let entry = crate::test_support::entry(0x93);
     let mut tx = old.begin_write().await.unwrap();
-    crate::entries::insert_entry(
-        &mut tx,
-        owner,
-        &crate::entries::NewEntry {
-            id: entry,
-            root,
-            parent,
-            name: "history".into(),
-            name_key: "history".into(),
-            kind: crate::entries::EntryKind::File,
-            revision: vaultsyncd_domain::version::Revision::ZERO,
-            content_version: None,
-        },
+    // 固定 profile 是 v12 schema：它还没有 `entries.modified_at`（S130 才加），所以历史装置按旧
+    // schema 直接写行，不用当前写入口——用新写入口会要求旧库不存在的列。
+    sqlx::query(
+        "INSERT INTO entries \
+         (id, root_id, parent_id, name, name_key, kind, revision, content_version_id, deleted_at) \
+         VALUES (?1, ?2, ?3, 'history', 'history', 'file', 0, NULL, NULL)",
     )
+    .bind(entry.as_bytes().as_slice())
+    .bind(root.as_bytes().as_slice())
+    .bind(parent.as_bytes().as_slice())
+    .execute(&mut *tx)
     .await
     .unwrap();
     for marker in [0x94u8, 0x95] {

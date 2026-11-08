@@ -1274,6 +1274,7 @@ impl PutCommitStore for SqlPutStore {
             write.entry,
             write.expected_revision,
             revision,
+            write.at,
         )
         .await
         .map_err(|error| match error {

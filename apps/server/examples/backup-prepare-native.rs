@@ -158,6 +158,7 @@ impl Lab {
                 revision: Revision::new(1)?,
                 content_version: None,
             },
+            now(),
         )
         .await?;
         for (n, hash) in [(8u8, old), (9u8, current)] {
@@ -206,6 +207,7 @@ impl Lab {
                 revision: Revision::new(1)?,
                 content_version: None,
             },
+            now(),
         )
         .await?;
         versions::record_version(

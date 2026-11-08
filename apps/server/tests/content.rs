@@ -402,6 +402,7 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
             revision: Revision::new(1).expect("修订号"),
             content_version: None,
         },
+        moment,
     )
     .await
     .expect("写种子条目");

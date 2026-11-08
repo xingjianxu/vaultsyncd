@@ -881,6 +881,7 @@ impl NamespaceCommitStore for SqlNamespaceStore {
                         revision: Revision::ZERO,
                         content_version: None,
                     },
+                    write.at,
                 )
                 .await
                 .map_err(map_entry_error)?;
@@ -923,6 +924,7 @@ impl NamespaceCommitStore for SqlNamespaceStore {
                     &write.to.name,
                     &write.to.name,
                     next,
+                    write.at,
                 )
                 .await
                 .map_err(map_entry_error)?;

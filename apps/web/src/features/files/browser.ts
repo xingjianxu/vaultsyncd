@@ -90,7 +90,36 @@ export function directoryAtPath(snapshot: DirectorySnapshot, segments: readonly 
   return entry;
 }
 
+/** 1024 进制的人类可读大小；目录没有内容大小，未采集的大小明确显示“未知”。 */
 export function fileSize(entry: SnapshotEntry): string {
   if (entry.kind === "directory") return "—";
-  return entry.size === undefined ? "未知" : `${BigInt(entry.size).toLocaleString("zh-CN")} 字节`;
+  if (entry.size === undefined) return "未知";
+  let value = Number(BigInt(entry.size));
+  if (!Number.isFinite(value)) return "未知";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = unit === 0 ? value : Math.round(value * 10) / 10;
+  return `${rounded.toLocaleString("zh-CN")} ${units[unit]}`;
+}
+
+/** 属性面板里的精确字节数：人类可读值 + 原始字节，避免丢掉准确长度。 */
+export function fileSizeDetail(entry: SnapshotEntry): string {
+  if (entry.kind === "directory") return "—";
+  if (entry.size === undefined) return "未知";
+  return `${fileSize(entry)}（${BigInt(entry.size).toLocaleString("zh-CN")} 字节）`;
+}
+
+/** 服务端记录的最后修改时间按本地时区显示；升级前已存在的条目没有该值。 */
+export function fileModified(entry: SnapshotEntry): string {
+  if (entry.modified_at === undefined) return "—";
+  const seconds = Number(entry.modified_at);
+  if (!Number.isFinite(seconds)) return "—";
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }

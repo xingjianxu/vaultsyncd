@@ -63,6 +63,8 @@ pub struct SnapshotEntry {
     pub kind: EntryKind,
     /// 创建快照时的条目 revision。
     pub revision: Revision,
+    /// 服务端记录的最后修改时间（创建、移动/改名、内容提交、恢复时写入）；旧库行可为 `None`。
+    pub modified: Option<UtcTimestamp>,
     /// 当前内容版本（目录与尚无内容的文件为 `None`）。
     pub version: Option<VersionId>,
     /// 当前内容长度。
@@ -212,9 +214,9 @@ pub async fn create_snapshot(
     let copied = sqlx::query(
         "INSERT INTO snapshot_entries \
          (snapshot_id, ordinal, entry_id, parent_id, name, kind, revision, \
-          content_version_id, content_size, content_hash) \
+          content_version_id, content_size, content_hash, modified_at) \
          SELECT ?1, ROW_NUMBER() OVER (ORDER BY e.id) - 1, e.id, e.parent_id, e.name, e.kind, \
-                e.revision, e.content_version_id, v.size, v.object_hash \
+                e.revision, e.content_version_id, v.size, v.object_hash, e.modified_at \
          FROM entries e LEFT JOIN versions v ON v.id = e.content_version_id \
          WHERE e.root_id = ?2 AND e.deleted_at IS NULL",
     )
@@ -279,7 +281,7 @@ pub async fn snapshot_page(
 
     let rows = sqlx::query_as::<_, EntryRow>(
         "SELECT entry_id, parent_id, name, kind, revision, content_version_id, content_size, \
-                content_hash \
+                content_hash, modified_at \
          FROM snapshot_entries WHERE snapshot_id = ?1 AND ordinal >= ?2 \
          ORDER BY ordinal LIMIT ?3",
     )
@@ -355,6 +357,7 @@ struct EntryRow {
     content_version_id: Option<Vec<u8>>,
     content_size: Option<i64>,
     content_hash: Option<Vec<u8>>,
+    modified_at: Option<i64>,
 }
 
 impl EntryRow {
@@ -370,6 +373,16 @@ impl EntryRow {
                 .ok_or(SnapshotError::MalformedRow { column: "kind" })?,
             revision: Revision::from_db_integer(self.revision)
                 .map_err(|_| SnapshotError::MalformedRow { column: "revision" })?,
+            modified: self
+                .modified_at
+                .map(|seconds| {
+                    UtcTimestamp::from_db_integer(seconds).map_err(|_| {
+                        SnapshotError::MalformedRow {
+                            column: "modified_at",
+                        }
+                    })
+                })
+                .transpose()?,
             version: self
                 .content_version_id
                 .map(|bytes| identity_bytes(bytes, "content_version_id").map(VersionId::from_bytes))
@@ -678,6 +691,77 @@ mod tests {
             (bare_row.version, bare_row.size, bare_row.hash),
             (None, None, None),
             "尚无内容版本的文件不带内容事实"
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_copies_the_server_side_modified_time() {
+        let dir = TestDir::new("snap-modified");
+        let database = open_database(&dir).await;
+        let owner = seed_owner(&database, 0x11).await;
+        let (root, root_entry) = register_root(&database, owner, 0x21).await;
+        let file = seed_file(&database, owner, root, root_entry, 0x30, "a.txt").await;
+
+        // 快照之前的一次改名：`modified_at` 跟着最近一次改动走，而不是条目创建时间。
+        let mut tx = database.begin_write().await.expect("写事务");
+        entries::move_entry(
+            &mut tx,
+            owner,
+            file,
+            root_entry,
+            "b.txt",
+            "b.txt",
+            Revision::new(2).expect("修订号"),
+            at(1_700_000_400),
+        )
+        .await
+        .expect("改名");
+        tx.commit().await.expect("提交改名");
+
+        create(&database, owner, root, SNAPSHOT, 100, 600).await;
+        let listed = page(&database, owner, root, SNAPSHOT, 0, 10, 101)
+            .await
+            .expect("取页");
+        let file_row = listed
+            .entries
+            .iter()
+            .find(|row| row.entry == file)
+            .expect("文件");
+        assert_eq!(file_row.modified, Some(at(1_700_000_400)));
+        let root_row = listed
+            .entries
+            .iter()
+            .find(|row| row.entry == root_entry)
+            .expect("合成根条目");
+        assert_eq!(root_row.modified, None, "根条目不是被创建的文件");
+
+        // 快照之后的新改动只影响 live 表：已发出的清单保持创建时刻的值。
+        let mut tx = database.begin_write().await.expect("写事务");
+        entries::move_entry(
+            &mut tx,
+            owner,
+            file,
+            root_entry,
+            "c.txt",
+            "c.txt",
+            Revision::new(3).expect("修订号"),
+            at(1_700_000_500),
+        )
+        .await
+        .expect("再次改名");
+        tx.commit().await.expect("提交改名");
+        let listed = page(&database, owner, root, SNAPSHOT, 0, 10, 102)
+            .await
+            .expect("取页");
+        let file_row = listed
+            .entries
+            .iter()
+            .find(|row| row.entry == file)
+            .expect("文件");
+        assert_eq!(
+            (file_row.name.as_str(), file_row.modified),
+            ("b.txt", Some(at(1_700_000_400))),
+            "快照条目是创建时的值拷贝"
         );
     }
 }

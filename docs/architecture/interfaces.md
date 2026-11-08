@@ -1742,6 +1742,11 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
   创建时回收过期快照并把每 Root 的未过期快照压到 `MAX_LIVE_SNAPSHOTS_PER_ROOT`(8)；翻页元数据与条目同一读事务。
   `server-store::changes` 增补 `change_window`（头、epoch、保留下沿 = “创建时间早于截止的最新批次”的 seq，索引寻址）与
   `changes_after_whole_transactions`（不拆事务）。`SnapshotId`（`domain::ids`）是快照身份类型。
+- **S130 修改时间**：迁移 `0014_entry_modified_at.sql` 给 `entries` 与 `snapshot_entries` 加可空 `modified_at`（UTC unix 秒）。
+  写路径携带同一批次的服务端时间：`entries::{insert_entry,move_entry,advance_entry_revision,restore_entry}` 新增 `at` 参数，
+  `soft_delete_entry` 复用已有的 `at`；根条目与升级前旧行保持 NULL。`SnapshotEntry.modified_at`（可选十进制文本）随快照复制，
+  所以翻页期间的新改动不改变已发出清单。它**不是**文件系统 mtime，也不参与冲突与保留判断（design §6、§9.4）；
+  Web 文件浏览器把它按浏览器本地时区显示，旧数据显示“—”。
 - **核心规则**（纯函数，`server_core::api::{events,snapshots}`）：`judge_cursor`、`retention_cutoff`、`changes_limit`/
   `snapshot_limit`（越界拒绝而非截断）、`page_progress`、`next_hint`、`ChangesFailure`（400/410/503 + 错误码 + 可重试）。
 - **`apps/server::sync`**：`SyncContext::{new,with_config}`（`SyncConfig{event_retention_seconds, sse_poll_interval,

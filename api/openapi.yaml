@@ -1704,6 +1704,13 @@ components:
         hash:
           type: string
           description: 当前内容的 SHA-256，64 位小写十六进制（只有带内容的文件有）。
+        modified_at:
+          type: string
+          format: decimal_u64
+          description: |
+            服务端记录的最后修改时间（UTC Unix 秒的十进制文本）：创建、移动/改名、内容提交与回收站恢复时写入，
+            软删除同时写入。它是服务端接受改动的时刻，不是文件系统 mtime；升级前已存在的条目没有历史可回填，
+            首次修改前省略。
 
     SubtreeToken:
       description: |

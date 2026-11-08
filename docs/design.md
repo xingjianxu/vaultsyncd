@@ -457,7 +457,7 @@ Rust/前端各自验证，协议变更同时验证双方与消费者。发布统
 | `users` | id、login、password_hash、status | 首发仅一位 owner，但 API 不省略授权 |
 | `sessions` | id、user_id、device_id、token_digest、expires_at、revoked_at | 令牌摘要存储；到期/失效必检 |
 | `roots` | id、owner_id、absolute_path、volume_identity、root_file_identity、health、seq、epoch | 路径不重叠；身份不匹配停止同步 |
-| `entries` | id、root_id、parent_id、name、name_key、kind、revision、content_version_id、deleted_at | 活跃同父目录名称唯一；父子必须同 Root；不允许目录环 |
+| `entries` | id、root_id、parent_id、name、name_key、kind、revision、content_version_id、deleted_at、modified_at | 活跃同父目录名称唯一；父子必须同 Root；不允许目录环；`modified_at` 是服务端接受改动的时刻，不是文件系统 mtime |
 | `versions` | id、root_id、entry_id、object_hash、size、created_seq、superseded_at、origin | 引用已持久化内容；历史只读 |
 | `objects` | root_id、hash、size、storage_path、verified_at、gc_state | 内容地址对象；不通过哈希全局泄露存在性 |
 | `changes` | root_id、seq、tx_id、events_json、created_at | `(root_id,seq)` 唯一；一条记录是一个不可拆分事务批次 |

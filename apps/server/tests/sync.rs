@@ -254,6 +254,7 @@ impl App {
                 revision: Revision::new(1).expect("revision"),
                 content_version: None,
             },
+            at(1_700_000_100),
         )
         .await
         .expect("写条目");
@@ -270,6 +271,7 @@ impl App {
             name,
             name,
             Revision::new(2).expect("revision"),
+            at(1_700_000_100),
         )
         .await
         .expect("改名");
@@ -457,6 +459,22 @@ async fn paging_a_snapshot_while_the_namespace_changes_stays_consistent() {
         !ids.contains(&file_id(0x40).to_hex()),
         "翻页期间新增的条目不得出现在快照里"
     );
+    // S130：清单条目带服务端记录的最后修改时间；合成根条目没有被“创建”过，保持省略。
+    let root_row = all
+        .iter()
+        .find(|entry| entry.entry_id == ROOT_ENTRY.to_hex())
+        .expect("根条目");
+    assert_eq!(root_row.modified_at, None, "合成根条目没有修改时间");
+    for row in all
+        .iter()
+        .filter(|entry| entry.entry_id != ROOT_ENTRY.to_hex())
+    {
+        assert_eq!(
+            row.modified_at.as_deref(),
+            Some("1700000100"),
+            "写入口把服务端时间写进 modified_at，并随快照复制"
+        );
+    }
     let mut sorted = ids.clone();
     sorted.sort();
     assert_eq!(ids, sorted, "按 EntryId 升序，页间无回退");

@@ -793,6 +793,7 @@ mod tests {
                 revision: Revision::new(1).expect("修订号"),
                 content_version: None,
             },
+            at(1_700_000_200),
         )
         .await
         .expect("同名新条目可以落在同一位置");

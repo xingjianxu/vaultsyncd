@@ -224,6 +224,7 @@ impl Rig {
 }
 fn root_snapshot() -> SnapshotEntry {
     SnapshotEntry {
+        modified_at: None,
         entry_id: root_entry().to_string(),
         parent_id: None,
         name: String::new(),
@@ -236,6 +237,7 @@ fn root_snapshot() -> SnapshotEntry {
 }
 fn file_snapshot() -> SnapshotEntry {
     SnapshotEntry {
+        modified_at: None,
         entry_id: file_entry().to_string(),
         parent_id: Some(root_entry().to_string()),
         name: "file.txt".to_owned(),

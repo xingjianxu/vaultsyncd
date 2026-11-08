@@ -125,6 +125,7 @@ async fn concurrent_remote_creation_fails_cas_without_overwrite_or_cursor_advanc
         b"concurrent remote creation",
     );
     state.entries.push(SnapshotEntry {
+        modified_at: None,
         entry_id: EntryId::from_bytes([0xfa; 16]).to_string(),
         hash: Some(hex(&digest_of(b"concurrent remote creation"))),
         kind: WireKind::File,

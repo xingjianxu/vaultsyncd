@@ -509,6 +509,7 @@ impl SavedBase {
     }
     fn snapshot(&self) -> SnapshotEntry {
         SnapshotEntry {
+            modified_at: None,
             entry_id: self.entry.clone(),
             parent_id: self.parent.clone(),
             name: self.name.clone(),

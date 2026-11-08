@@ -105,6 +105,7 @@ impl EventDecoder for Decoder {
             let file = value["version_id"].is_string()
                 || prior.as_ref().is_some_and(|r| r.kind == EntryKind::File);
             let row = SnapshotEntry {
+                modified_at: None,
                 entry_id: id.into(),
                 parent_id: Some(parent),
                 name,
@@ -298,6 +299,7 @@ mod tests {
         let root = "11111111111111111111111111111111";
         let child = "22222222222222222222222222222222";
         let row = SnapshotEntry {
+            modified_at: None,
             entry_id: root.into(),
             parent_id: None,
             name: String::new(),

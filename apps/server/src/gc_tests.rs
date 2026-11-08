@@ -111,6 +111,7 @@ impl Lab {
                 revision: Revision::new(1).unwrap(),
                 content_version: None,
             },
+            at(1_700_000_100),
         )
         .await
         .unwrap();

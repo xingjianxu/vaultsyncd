@@ -5,7 +5,7 @@ import { createServer } from "vite";
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] } });
 try {
-  const { readDirectorySnapshot, ancestry, fileSize, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
+  const { readDirectorySnapshot, ancestry, fileSize, fileSizeDetail, fileModified, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
   const { BrowserAuth } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
   const folder = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
   const entries = [folder("r", undefined, ""), folder("d", "r", "文档"), folder("empty", "r", "空目录"),
@@ -45,10 +45,20 @@ try {
   assert.equal(snapshot.children.get("empty"), undefined);
   assert.deepEqual(ancestry(snapshot, snapshot.entries.get("f")).map(item => item.name), ["", "文档", entries[3].name]);
   assert.equal(snapshot.children.get("r").length, 2);
-  assert.equal(fileSize(entries[3]), "9,007,199,254,740,993 字节");
-  assert.equal(fileSize({ kind: "file", size: "0" }), "0 字节");
+  assert.equal(fileSize(entries[3]), "8 PB");
+  assert.equal(fileSize({ kind: "file", size: "0" }), "0 B");
+  assert.equal(fileSize({ kind: "file", size: "1023" }), "1,023 B");
+  assert.equal(fileSize({ kind: "file", size: "1024" }), "1 KB");
+  assert.equal(fileSize({ kind: "file", size: "1536" }), "1.5 KB");
+  assert.equal(fileSize({ kind: "file", size: "1048576" }), "1 MB");
   assert.equal(fileSize({ kind: "file" }), "未知");
   assert.equal(fileSize(entries[0]), "—");
+  assert.equal(fileSizeDetail({ kind: "file", size: "1536" }), "1.5 KB（1,536 字节）");
+  assert.equal(fileSizeDetail(entries[0]), "—");
+  assert.equal(fileModified(entries[0]), "—");
+  assert.equal(fileModified({ kind: "file", size: "1", modified_at: "1700000000" }), fileModified({ kind: "file", size: "1", modified_at: "1700000000" }));
+  assert.match(fileModified({ kind: "file", size: "1", modified_at: "1700000000" }), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.equal(fileModified({ kind: "file", size: "1", modified_at: "not-a-number" }), "—");
   await assert.rejects(load({ failSecond: true }), /offline midway/);
   await assert.rejects(load({ pageChange: page => ({ ...page, snapshot_id: "other" }) }), /分页不一致/);
   await assert.rejects(load({ pageChange: page => ({ ...page, high_water_seq: "10" }) }), /分页不一致/);
@@ -61,5 +71,5 @@ try {
   await assert.rejects(load({ items: [folder("r", undefined, ""), folder("a", "b", "a"), folder("b", "a", "b")], meta: { ...metadata, entry_count: "3" } }), /不可达/);
   const controller = new AbortController();
   await assert.rejects(load({ signal: controller.signal, onPage: () => controller.abort() }), { name: "AbortError" });
-  console.log("文件浏览器：完整分页、父目录树、精确大小、特殊文件名、中途失败/混页/坏游标/坏树/取消均通过");
+  console.log("文件浏览器：完整分页、父目录树、人类可读大小与修改日期、特殊文件名、中途失败/混页/坏游标/坏树/取消均通过");
 } finally { await server.close(); }

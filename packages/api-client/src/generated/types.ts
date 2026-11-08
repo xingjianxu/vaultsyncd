@@ -1055,6 +1055,12 @@ export interface SnapshotEntry {
   hash?: string;
   /** 文件或目录。 */
   kind: EntryKind;
+  /**
+   * 服务端记录的最后修改时间（UTC Unix 秒的十进制文本）：创建、移动/改名、内容提交与回收站恢复时写入，
+   * 软删除同时写入。它是服务端接受改动的时刻，不是文件系统 mtime；升级前已存在的条目没有历史可回填，
+   * 首次修改前省略。
+   */
+  modified_at?: string;
   /** 原始名称（合成根条目为空串）；按数据处理。 */
   name: string;
   /** 父目录条目身份；Root 的合成根条目没有。 */
@@ -1073,6 +1079,7 @@ export function decodeSnapshotEntry(value: unknown): SnapshotEntry {
     entry_id: expect_string(object.entry_id, "SnapshotEntry.entry_id"),
     hash: object.hash === undefined ? undefined : expect_string(object.hash, "SnapshotEntry.hash"),
     kind: decodeEntryKind(object.kind),
+    modified_at: object.modified_at === undefined ? undefined : expect_decimal(object.modified_at, "SnapshotEntry.modified_at"),
     name: expect_string(object.name, "SnapshotEntry.name"),
     parent_id: object.parent_id === undefined ? undefined : expect_string(object.parent_id, "SnapshotEntry.parent_id"),
     revision: expect_decimal(object.revision, "SnapshotEntry.revision"),

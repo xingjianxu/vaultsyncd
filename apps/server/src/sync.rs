@@ -449,6 +449,9 @@ fn wire_entry(entry: &store_snapshots::SnapshotEntry) -> WireEntry {
             EntryKind::Directory => WireKind::Directory,
         },
         revision: entry.revision.to_decimal(),
+        modified_at: entry
+            .modified
+            .map(|modified| modified.as_unix_seconds().to_string()),
         version_id: entry.version.map(|version| version.to_hex()),
         size: entry.size.map(|size| size.to_string()),
         hash: entry.hash.map(hex_lower),

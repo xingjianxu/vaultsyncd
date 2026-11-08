@@ -528,6 +528,7 @@ impl RemotePort for DiskRemote {
                 version_id: version.clone(),
             };
             state.entries.push(SnapshotEntry {
+                modified_at: None,
                 entry_id: id,
                 hash: bytes.as_ref().map(|b| hex(&digest_of(b))),
                 kind: if bytes.is_some() {
@@ -671,6 +672,7 @@ async fn setup(base: &Path) -> Arc<Database> {
         b"local file at remote directory",
     );
     let root = SnapshotEntry {
+        modified_at: None,
         entry_id: ROOT_ENTRY.to_string(),
         hash: None,
         kind: WireKind::Directory,
@@ -688,6 +690,7 @@ async fn setup(base: &Path) -> Arc<Database> {
         }
         let id = EntryId::from_bytes([marker; 16]);
         entries.push(SnapshotEntry {
+            modified_at: None,
             entry_id: id.to_string(),
             hash: bytes.map(|b| hex(&digest_of(b))),
             kind: if bytes.is_some() {
@@ -1188,6 +1191,7 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
         hash: Some([0; 32]),
     };
     let root = SnapshotEntry {
+        modified_at: None,
         entry_id: ROOT_ENTRY.to_string(),
         hash: None,
         kind: WireKind::Directory,

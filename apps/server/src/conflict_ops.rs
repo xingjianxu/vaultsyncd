@@ -354,6 +354,7 @@ impl ConflictCommitStore for SqlConflictStore {
                 revision,
                 content_version: None,
             },
+            write.at,
         )
         .await
         .map_err(|error| match error {

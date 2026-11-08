@@ -31,11 +31,18 @@ code { overflow-wrap: anywhere; }
 .files-address { flex: 1; min-width: 100px; }
 .files-filter { width: 140px; min-width: 0; }
 .files-list { flex: 1; min-height: 0; overflow: auto; }
-.files-table { min-width: 560px; }
+.files-table { min-width: 560px; table-layout: fixed; }
 .files-table th { white-space: nowrap; }
-.files-table td { vertical-align: middle; overflow-wrap: anywhere; }
-.files-table td:first-child { width: 50%; min-width: 180px; }
-.files-entry-name { overflow-wrap: anywhere; }
+.files-table td { vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.files-table th:nth-child(1) { width: 50%; }
+.files-table th:nth-child(2) { width: 14%; }
+.files-table th:nth-child(3) { width: 24%; }
+.files-table th:nth-child(4) { width: 12%; }
+.files-table td.files-size, .files-table td.files-modified { white-space: nowrap; }
+.files-entry-link { display: block; max-width: 100%; text-decoration: none; }
+.files-entry-link:hover, .files-entry-link:focus, .files-entry-link:active { text-decoration: none; }
+.files-entry-link > .mantine-Group-root { min-width: 0; }
+.files-entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-icon { width: 18px; height: 18px; flex-shrink: 0; }
 .files-pagination { padding: 8px; border-top: 1px solid var(--mantine-color-default-border); }
 @media (max-width: 62em) {

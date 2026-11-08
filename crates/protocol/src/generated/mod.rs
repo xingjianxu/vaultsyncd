@@ -841,6 +841,13 @@ pub struct SnapshotEntry {
     pub hash: Option<String>,
     /// 文件或目录。
     pub kind: EntryKind,
+    /// 服务端记录的最后修改时间（UTC Unix 秒的十进制文本）：创建、移动/改名、内容提交与回收站恢复时写入，
+    /// 软删除同时写入。它是服务端接受改动的时刻，不是文件系统 mtime；升级前已存在的条目没有历史可回填，
+    /// 首次修改前省略。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<String>,
     /// 原始名称（合成根条目为空串）；按数据处理。
     pub name: String,
     /// 父目录条目身份；Root 的合成根条目没有。

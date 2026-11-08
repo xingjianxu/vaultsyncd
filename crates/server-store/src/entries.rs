@@ -243,11 +243,14 @@ const ENTRY_COLUMNS: &str = "e.id, e.root_id, e.parent_id, e.name, e.name_key, e
 
 /// 新建条目：检查 owner scope、父目录、名称与同父唯一性后写入一行。
 ///
+/// `at` 是这一笔改动的服务端时间，写进 `modified_at`（design §7.2）；它不是文件系统 mtime。
+///
 /// 返回写入后的记录（重新读出，不把输入当成数据库内容）。
 pub async fn insert_entry(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
     new: &NewEntry,
+    at: UtcTimestamp,
 ) -> Result<EntryRecord, EntryError> {
     require_root_owner(tx, owner, new.root).await?;
     let parent = parent_facts(tx, new.parent).await?;
@@ -270,8 +273,9 @@ pub async fn insert_entry(
 
     let inserted = sqlx::query(
         "INSERT INTO entries \
-         (id, root_id, parent_id, name, name_key, kind, revision, content_version_id, deleted_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+         (id, root_id, parent_id, name, name_key, kind, revision, content_version_id, \
+          deleted_at, modified_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9)",
     )
     .bind(new.id.as_bytes().as_slice())
     .bind(new.root.as_bytes().as_slice())
@@ -284,6 +288,7 @@ pub async fn insert_entry(
         new.content_version
             .map(|version| version.as_bytes().to_vec()),
     )
+    .bind(at.to_db_integer())
     .execute(&mut **tx)
     .await;
 
@@ -299,6 +304,9 @@ pub async fn insert_entry(
 ///
 /// 检查顺序：owner scope → 条目活跃 → 新名称 → 目标父目录（存在、活跃、同 Root、是目录）→
 /// 目录环。目标父目录与当前父目录相同且名称不变时是合法的无操作更新（仍写入给定的修订号）。
+///
+/// `at` 是这一笔改动的服务端时间，写进 `modified_at`。
+#[allow(clippy::too_many_arguments)]
 pub async fn move_entry(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
@@ -307,6 +315,7 @@ pub async fn move_entry(
     name: &str,
     name_key: &str,
     revision: Revision,
+    at: UtcTimestamp,
 ) -> Result<EntryRecord, EntryError> {
     let current = active_entry_in_scope(tx, owner, id).await?;
     validate_child_fields(name, name_key, current.kind, current.content_version)?;
@@ -332,13 +341,14 @@ pub async fn move_entry(
     }
 
     let updated = sqlx::query(
-        "UPDATE entries SET parent_id = ?1, name = ?2, name_key = ?3, revision = ?4 \
-         WHERE id = ?5 AND deleted_at IS NULL",
+        "UPDATE entries SET parent_id = ?1, name = ?2, name_key = ?3, revision = ?4, \
+         modified_at = ?5 WHERE id = ?6 AND deleted_at IS NULL",
     )
     .bind(target_parent.as_bytes().as_slice())
     .bind(name)
     .bind(name_key)
     .bind(revision.to_db_integer())
+    .bind(at.to_db_integer())
     .bind(id.as_bytes().as_slice())
     .execute(&mut **tx)
     .await;
@@ -376,12 +386,15 @@ pub async fn soft_delete_entry(
         }
     }
 
-    sqlx::query("UPDATE entries SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
-        .bind(at.to_db_integer())
-        .bind(id.as_bytes().as_slice())
-        .execute(&mut **tx)
-        .await
-        .map_err(EntryError::Db)?;
+    sqlx::query(
+        "UPDATE entries SET deleted_at = ?1, modified_at = ?1 \
+         WHERE id = ?2 AND deleted_at IS NULL",
+    )
+    .bind(at.to_db_integer())
+    .bind(id.as_bytes().as_slice())
+    .execute(&mut **tx)
+    .await
+    .map_err(EntryError::Db)?;
 
     entry_in_scope(tx, owner, id)
         .await?
@@ -530,7 +543,8 @@ pub async fn path_of(
 
 /// 比较并写地推进条目 revision（内容提交与外部采纳用）：期望值已变化则拒绝。
 ///
-/// 不变量：`next` 必须严格大于 `expected`；条目必须活跃且属于调用方。
+/// 不变量：`next` 必须严格大于 `expected`；条目必须活跃且属于调用方。`at` 是这一笔改动的服务端
+/// 时间，写进 `modified_at`。
 ///
 /// # Errors
 ///
@@ -542,6 +556,7 @@ pub async fn advance_entry_revision(
     id: EntryId,
     expected: Revision,
     next: Revision,
+    at: UtcTimestamp,
 ) -> Result<EntryRecord, EntryError> {
     if next <= expected {
         return Err(EntryError::MalformedRow { column: "revision" });
@@ -554,9 +569,11 @@ pub async fn advance_entry_revision(
         });
     }
     let updated = sqlx::query(
-        "UPDATE entries SET revision = ?1 WHERE id = ?2 AND deleted_at IS NULL AND revision = ?3",
+        "UPDATE entries SET revision = ?1, modified_at = ?2 \
+         WHERE id = ?3 AND deleted_at IS NULL AND revision = ?4",
     )
     .bind(next.to_db_integer())
+    .bind(at.to_db_integer())
     .bind(id.as_bytes().as_slice())
     .bind(expected.to_db_integer())
     .execute(&mut **tx)
@@ -836,6 +853,8 @@ fn classify_write_error(
 
 /// 把一个软删除的条目放回命名空间（回收站恢复）：清 `deleted_at`、改父目录/名称、写 revision。
 ///
+/// `at` 是这一笔恢复的服务端时间，写进 `modified_at`（结果是活跃条目，需要当前时间）。
+///
 /// 比较并写：条目必须仍是软删除且 revision 等于清单里的值；目标父目录必须活跃且是目录，同父活跃
 /// 名称被占用时由唯一索引拒绝（[`EntryError::DuplicateName`]），绝不覆盖。
 ///
@@ -852,6 +871,7 @@ pub async fn restore_entry(
     name_key: &str,
     expected_revision: Revision,
     revision: Revision,
+    at: UtcTimestamp,
 ) -> Result<EntryRecord, EntryError> {
     let current = entry_in_scope(&mut *tx, owner, id)
         .await?
@@ -889,12 +909,14 @@ pub async fn restore_entry(
     }
     let updated = sqlx::query(
         "UPDATE entries SET deleted_at = NULL, parent_id = ?1, name = ?2, name_key = ?3, \
-         revision = ?4 WHERE id = ?5 AND deleted_at IS NOT NULL AND revision = ?6",
+         revision = ?4, modified_at = ?5 \
+         WHERE id = ?6 AND deleted_at IS NOT NULL AND revision = ?7",
     )
     .bind(target_parent.as_bytes().as_slice())
     .bind(name)
     .bind(name_key)
     .bind(revision.to_db_integer())
+    .bind(at.to_db_integer())
     .bind(id.as_bytes().as_slice())
     .bind(expected_revision.to_db_integer())
     .execute(&mut **tx)
@@ -984,6 +1006,7 @@ mod tests {
                 revision: rev(1),
                 content_version: None,
             },
+            at(1_700_000_300),
         )
         .await;
         match &record {
@@ -1155,6 +1178,7 @@ mod tests {
                 revision: rev(1),
                 content_version: None,
             },
+            at(1_700_000_300),
         )
         .await
         .expect_err("等价键必须撞名");
@@ -1179,6 +1203,7 @@ mod tests {
                 revision: rev(1),
                 content_version: None,
             },
+            at(1_700_000_300),
         )
         .await
         .expect_err("同名不同键也必须失败");
@@ -1243,17 +1268,35 @@ mod tests {
         let before = snapshot(&database, root).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
-        let error = move_entry(&mut tx, owner, outer, deepest, "outer", "outer", rev(2))
-            .await
-            .expect_err("移到自己后代下必须失败");
+        let error = move_entry(
+            &mut tx,
+            owner,
+            outer,
+            deepest,
+            "outer",
+            "outer",
+            rev(2),
+            at(1_700_000_300),
+        )
+        .await
+        .expect_err("移到自己后代下必须失败");
         assert!(
             matches!(error, EntryError::DirectoryCycle { entry, parent } if entry == outer && parent == deepest),
             "实际错误 {error:?}"
         );
         // 自己当自己的父项同样是环。
-        let error = move_entry(&mut tx, owner, inner, inner, "inner", "inner", rev(2))
-            .await
-            .expect_err("自己当父项必须失败");
+        let error = move_entry(
+            &mut tx,
+            owner,
+            inner,
+            inner,
+            "inner",
+            "inner",
+            rev(2),
+            at(1_700_000_300),
+        )
+        .await
+        .expect_err("自己当父项必须失败");
         assert!(
             matches!(error, EntryError::DirectoryCycle { .. }),
             "实际错误 {error:?}"
@@ -1275,6 +1318,7 @@ mod tests {
             "deepest",
             "deepest",
             rev(2),
+            at(1_700_000_300),
         )
         .await
         .expect("合法移动应成功");
@@ -1313,6 +1357,7 @@ mod tests {
             "file.txt",
             "file.txt",
             rev(2),
+            at(1_700_000_300),
         )
         .await
         .expect_err("跨 Root 移动必须失败");
@@ -1320,9 +1365,18 @@ mod tests {
             matches!(error, EntryError::CrossRootParent { .. }),
             "实际错误 {error:?}"
         );
-        let error = move_entry(&mut tx, owner, file, file, "file.txt", "file.txt", rev(2))
-            .await
-            .expect_err("文件不能当父项");
+        let error = move_entry(
+            &mut tx,
+            owner,
+            file,
+            file,
+            "file.txt",
+            "file.txt",
+            rev(2),
+            at(1_700_000_300),
+        )
+        .await
+        .expect_err("文件不能当父项");
         assert!(
             matches!(error, EntryError::ParentNotDirectory { .. }),
             "实际错误 {error:?}"
@@ -1383,6 +1437,7 @@ mod tests {
                 revision: rev(1),
                 content_version: None,
             },
+            at(1_700_000_300),
         )
         .await
         .expect_err("别人的 owner 不能写入");
@@ -1398,6 +1453,7 @@ mod tests {
             "moved.txt",
             "moved.txt",
             rev(2),
+            at(1_700_000_300),
         )
         .await
         .expect_err("别人的 owner 不能移动");
@@ -1480,6 +1536,7 @@ mod tests {
                 revision: rev(1),
                 content_version: None,
             },
+            at(1_700_000_300),
         )
         .await
         .expect_err("Windows 保留名必须拒绝");
@@ -1500,6 +1557,7 @@ mod tests {
                 revision: rev(1),
                 content_version: Some(VersionId::from_bytes([0x41; ID_LEN])),
             },
+            at(1_700_000_300),
         )
         .await
         .expect_err("目录不能带内容版本");
@@ -1520,6 +1578,7 @@ mod tests {
                 revision: rev(1),
                 content_version: None,
             },
+            at(1_700_000_300),
         )
         .await
         .expect_err("空比较键必须拒绝");
@@ -1542,6 +1601,7 @@ mod tests {
                 revision: rev(1),
                 content_version: Some(unrecorded),
             },
+            at(1_700_000_300),
         )
         .await
         .expect_err("未记录的内容版本必须拒绝");

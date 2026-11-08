@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S128: built Web + real Chromium + isolated btrfs service, no API fixtures.
+"""S130: built Web + real Chromium + isolated btrfs service, no API fixtures.
 
 VAULTSYNCD_TEST_BIN_DIR=... nix develop .#web-tests --command python3 tests/web/files-browser.py
 Network faults only affect this run's proxy; no online SQL or production writes.
@@ -10,6 +10,7 @@ import http.client
 import http.server
 import json
 import os
+import re
 from pathlib import Path
 from urllib.parse import quote
 import secrets
@@ -22,7 +23,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data") / f"vs-s128-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data") / f"vs-s130-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -35,7 +36,7 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    print(f"S128 artifacts: {RUN}", flush=True)
+    print(f"S130 artifacts: {RUN}", flush=True)
     state, roots = RUN / "state", RUN / "roots"
     state.mkdir(mode=0o700); roots.mkdir()
     documents, archive = roots / "documents", roots / "archive"
@@ -165,6 +166,31 @@ def main():
             table = page.get_by_role("table", name="文件与目录", exact=True)
             expect(table).to_be_visible(timeout=15000)
             assert len(table.locator("tbody tr").all()) == 100
+            # S130：固定列宽（名称占 50%）、大小人类可读、修改日期本地化、链接悬停无下划线。
+            assert [cell.inner_text() for cell in table.locator("thead th").all()] == ["名称", "大小", "修改日期", "操作"]
+            layout = table.evaluate("""e => {
+                const heads = [...e.querySelectorAll('thead th')].map(th => th.getBoundingClientRect().width);
+                const cells = [...e.querySelectorAll('tbody tr:first-child td')].map(td => td.getBoundingClientRect().width);
+                return {heads, cells, tableLayout: getComputedStyle(e).tableLayout};
+            }""")
+            assert layout["tableLayout"] == "fixed", layout
+            shares = (.5, .14, .24, .12)
+            for widths in (layout["heads"], layout["cells"]):
+                total = sum(widths)
+                assert len(widths) == len(shares), widths
+                for width, share in zip(widths, shares):
+                    assert abs(width / total - share) < .02, (widths, share)
+            file_link = table.get_by_role("button", name="file-0000.txt", exact=True).first
+            assert file_link.evaluate("e => getComputedStyle(e).textDecorationLine") == "none"
+            file_link.hover()
+            page.wait_for_timeout(100)
+            assert file_link.evaluate("e => getComputedStyle(e).textDecorationLine") == "none", "悬停不得出现下划线"
+            file_cells = file_link.locator("xpath=ancestor::tr[1]").locator("td").all()
+            assert len(file_cells) == 4, [cell.inner_text() for cell in file_cells]
+            assert re.fullmatch(r"\d+(?:[.,]\d+)? (?:B|KB|MB|GB|TB|PB)", file_cells[1].inner_text()), file_cells[1].inner_text()
+            assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", file_cells[2].inner_text()), file_cells[2].inner_text()
+            folder_cells = page.get_by_role("button", name="空目录", exact=True).first.locator("xpath=ancestor::tr[1]").locator("td").all()
+            assert folder_cells[1].inner_text() == "—", folder_cells[1].inner_text()
             expect(page.get_by_role("heading", name="文件浏览器", exact=True)).not_to_be_visible()
             expect(page.get_by_text("切换 Root、浏览目录并查看文件属性。", exact=True)).not_to_be_visible()
             expect(page.get_by_role("button", name="刷新 Root 列表", exact=True)).not_to_be_visible()
@@ -420,7 +446,7 @@ def main():
             expect(table).not_to_be_visible()
             context.close(); browser.close()
             (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-root/long-names/themes/responsive", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
-        print(f"S128 browser acceptance passed: {RUN}", flush=True)
+        print(f"S130 browser acceptance passed: {RUN}", flush=True)
     finally:
         release.set()
         if proxy: proxy.shutdown(); proxy.server_close()

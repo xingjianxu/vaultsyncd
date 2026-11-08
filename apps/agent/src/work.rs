@@ -105,6 +105,7 @@ pub(crate) async fn local_metadata(
         result.insert(
             id.to_string(),
             SnapshotEntry {
+                modified_at: None,
                 entry_id: id.to_string(),
                 parent_id: base.parent.map(|p| p.to_string()),
                 name: base.name,

@@ -434,6 +434,7 @@ impl RestoreStore for SqlRestoreStore {
             write.entry,
             write.expected_revision,
             next,
+            write.at,
         )
         .await
         .map_err(restore_error)?;
@@ -976,6 +977,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
                 &entry.name,
                 entry.expected_revision,
                 revision,
+                write.at,
             )
             .await
             .map_err(restore_error)?;

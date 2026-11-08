@@ -279,6 +279,7 @@ pub async fn finish(
             revision: Revision::ZERO,
             content_version: None,
         },
+        at,
     )
     .await
     .map_err(failure)?;
