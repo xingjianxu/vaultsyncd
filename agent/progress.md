@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S122 done**，Web 新增文件浏览器 `#/files`，工具栏切换 Root、目录导航/筛选/分页及属性查看；未部署。S001—S122 共 **122 卡，117 done、5 blocked**；**当前无 ready 卡**，原恢复条件保持。验收与隔离见 [S122](tasks/S122.md)，提交/整合/清理见 [批次](tasks/S122-batch.md)。
+当前：**S122 done**，Web 新增文件浏览器 `#/files`，工具栏切换 Root、目录导航/筛选/分页及属性查看；实现 `25dbf2b` 已合 master，任务树/分支已清理；未部署。S001—S122 共 **122 卡，117 done、5 blocked**；**当前无 ready 卡**，原恢复条件保持。验收与隔离见 [S122](tasks/S122.md)，提交/整合/清理见 [批次](tasks/S122-batch.md)。
 
 最近部署：S121固定源`354bbc479a4ef7b68418aa061d5a7f5a4d5e488c`，主机pin `6cc497b`；pure/build/dry/test/HTTPS/IPC/归属/switch及线上资产一致通过。Chromium本地/线上各50组布局及生产六项TLS/CSP/登录/Root/SSE检查通过；10项服务/3应用/SSH/主机锁保持。账号/数据/ServerId/RootId保持，运行用户仍为xingjian:users；恢复入口generation248。
 
@@ -154,4 +154,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 | done | 实现354bbc4/交接c8d5429已ff合master，任务树/分支已清理；主机6cc497b | Web test/build/typecheck、本地/线上各50组、pure/test/switch249、生产六项/资产/服务核对通过 | 无；原首发门禁保持 | [S121](tasks/S121.md) |
 
-| S122 | Web Root 文件浏览器与属性查看 | B/L | S048、S078、S119、S121 | done | 实现提交/合master及清理见批次；基线209a8a0 | Web test/build/typecheck、api-client9、Nix Web；真实btrfs Chromium16类、属性/选择器各10组与旧五路由50组通过 | 无新增阻塞；仅已提交元数据，外部空目录采集限制见交接；未部署 | [S122](tasks/S122.md) |
+| S122 | Web Root 文件浏览器与属性查看 | B/L | S048、S078、S119、S121 | done | 实现25dbf2b已ff合master，任务树/分支已清理；基线209a8a0 | Web test/build/typecheck、api-client9、Nix Web；真实btrfs Chromium16类、属性/选择器各10组与旧五路由50组通过 | 无新增阻塞；仅已提交元数据，外部空目录采集限制见交接；未部署 | [S122](tasks/S122.md) |
