@@ -231,7 +231,7 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 
 实际验收：部署契约6/6，Nix 包内66/0；完整 pure 构建及同一 store path 的 dry-activate/test/HTTPS与同UID IPC、实例身份/目录归属/switch通过。10项既有服务的PID/InvocationID、SSH配置与banner、3应用200及主机锁保持；线上HTML/JS/CSS共6文件逐字节匹配发行包。真实 Chromium 严格公共CA/TLS1.3、五路由及390/768/1440无溢出、主题、owner登录与Secure/HttpOnly/SameSite=Strict cookie、原Root健康、SSE初始seq及16秒心跳通过，无页面异常及CSP违规，敏感路径404。浏览器脚本前三轮因定位歧义、缺同源证据的APIRequestContext和字符串wait_for_function触发unsafe-eval限制失败；分别限定main、使用页面同源fetch和函数谓词后完整复验通过，未修改产品代码或放宽安全策略。
 
-部署证据 `/data/vaultsyncd-deploy/local-20261108T124809-2457084/` 保存 result.json、旧generation、旧system/boot GC roots、原锁和pin diff；额外核对与浏览器脚本/失败日志/成功JSON/截图在 `/data/vaultsyncd-deploy/S116-20261108-local/`。恢复入口为部署前generation245：`/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113恢复流程先test及健康检查，再决定switch并同步回退源码pin；没有实际激活旧generation演练。未运行生产上传/恢复/备份写入或故障注入、未重启宿主/Windows、未做独立外网客户端验收，原首发门禁保持。交接与任务树整合见 [S116](../../agent/tasks/S116.md) 与 [批次](../../agent/tasks/S116-batch.md)。
+部署证据 `/data/vaultsyncd-deploy/local-20261108T124809-2457084/` 保存 result.json、旧generation、旧system/boot GC roots、原锁和pin diff；额外核对与浏览器脚本/失败日志/成功JSON/截图在 `/data/vaultsyncd-deploy/S116-20261108-local/`。恢复入口为部署前generation245：`/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113恢复流程先test及健康检查，再决定switch并同步回退源码pin；没有实际激活旧generation演练。未运行生产上传/恢复/备份写入或故障注入、未重启宿主/Windows、未做独立外网客户端验收，原首发门禁保持。交接与任务树整合见 [S116](../../agent/tasks/S116.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
 
 ## S118 最新版本部署（2026-11-08，generation247）
@@ -242,7 +242,7 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 
 实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html` 与两个主资产与包内文件 sha256 逐字节一致（资产名已更新为新构建）。真实 Chromium 严格公共 CA/TLS1.3、五路由 390/768/1440 无溢出、主题、owner 登录与 Secure/HttpOnly/SameSite=Strict cookie、原 Root 健康、SSE seq 与 16 秒心跳、无页面异常与 CSP 违规、敏感路径 404 均通过。10 项既有服务中 9 项 PID/InvocationID 不变，`dae` 因规则变更重启后路由集 17/1024、google 与 baidu 均 200；3 应用 200、SSH banner 与主机锁不变。
 
-部署证据 `/data/vaultsyncd-deploy/local-20261108T133746-2533091/` 保存 result.json、旧 generation、旧 system/boot GC roots、原锁与 pin diff；本轮核对与浏览器脚本/JSON/截图/静态文件副本在 `/data/vaultsyncd-deploy/S118-20261108-local/`。恢复入口为部署前 generation246：`/nix/store/22bvy0jasjkb02vd8j2wm6lcmgn5aci9-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 流程先 test 与健康检查再决定 switch，并同步回退源码 pin；如需还原分流规则须同时回退 `42d99c5`。未实际激活旧 generation 演练回退，未运行生产上传/恢复/备份写入或故障注入，未重启宿主/Windows，原首发门禁保持。交接与整合见 [S118](../../agent/tasks/S118.md) 与 [批次](../../agent/tasks/S118-batch.md)。
+部署证据 `/data/vaultsyncd-deploy/local-20261108T133746-2533091/` 保存 result.json、旧 generation、旧 system/boot GC roots、原锁与 pin diff；本轮核对与浏览器脚本/JSON/截图/静态文件副本在 `/data/vaultsyncd-deploy/S118-20261108-local/`。恢复入口为部署前 generation246：`/nix/store/22bvy0jasjkb02vd8j2wm6lcmgn5aci9-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 流程先 test 与健康检查再决定 switch，并同步回退源码 pin；如需还原分流规则须同时回退 `42d99c5`。未实际激活旧 generation 演练回退，未运行生产上传/恢复/备份写入或故障注入，未重启宿主/Windows，原首发门禁保持。交接与整合见 [S118](../../agent/tasks/S118.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
 
 ## S120 Mantine 版最新服务端部署（2026-11-08，generation248）
@@ -253,7 +253,7 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 
 实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html`（剥离逐响应 nonce 后）与 `assets/index-Ckcbaj1u.js`、`assets/index-BX8_IVCu.css` 的 sha256 与包内一致；CSP 为 `style-src 'self' 'nonce-<32位hex>'`、header 与页面 meta 同值、无 `unsafe-inline`。真实 Chromium 严格公共 CA/TLS1.3、Mantine 主题切换、五路由 390/768/1440（窄屏经 Burger）无溢出、owner 登录与 Secure/HttpOnly/SameSite=Strict cookie、原 Root 健康、SSE seq 与 16 秒心跳、无页面异常与 CSP 违规、敏感路径 404 均通过。10 项既有服务 PID/InvocationID 全部不变，3 应用 200、SSH banner 与主机锁不变。
 
-部署证据 `/data/vaultsyncd-deploy/local-20261108T142445-2602881/` 保存 result.json、旧 generation、旧 system/boot GC roots、原锁与 pin diff；本轮核对与浏览器脚本/JSON/截图/响应头/静态文件副本在 `/data/vaultsyncd-deploy/S120-20261108-local/`。恢复入口为部署前 generation247：`/nix/store/cwrpmxw805bg9nrn08a54jmny2lxcg4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 流程先 test 与健康检查再决定 switch，并同步回退源码 pin。未实际激活旧 generation 演练回退，未运行生产上传/恢复/备份写入或故障注入，未重启宿主/Windows，原首发门禁保持。交接与整合见 [S120](../../agent/tasks/S120.md) 与 [批次](../../agent/tasks/S120-batch.md)。
+部署证据 `/data/vaultsyncd-deploy/local-20261108T142445-2602881/` 保存 result.json、旧 generation、旧 system/boot GC roots、原锁与 pin diff；本轮核对与浏览器脚本/JSON/截图/响应头/静态文件副本在 `/data/vaultsyncd-deploy/S120-20261108-local/`。恢复入口为部署前 generation247：`/nix/store/cwrpmxw805bg9nrn08a54jmny2lxcg4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 流程先 test 与健康检查再决定 switch，并同步回退源码 pin。未实际激活旧 generation 演练回退，未运行生产上传/恢复/备份写入或故障注入，未重启宿主/Windows，原首发门禁保持。交接与整合见 [S120](../../agent/tasks/S120.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
 
 ## S121 48px 顶栏部署（2026-11-08，generation249）
@@ -262,7 +262,7 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 
 pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥nonce后与包内一致，`index-ClZcVBwm.js`、`index-Mvsj7_ia.css`字节/哈希一致。真实Chromium线上50组布局和TLS/CSP/登录cookie/原Root健康/SSE/敏感路径六项通过。域名、owner、ServerId、RootId、数据与xingjian:users归属保持；10项服务PID/InvocationID、3应用200、SSH及主机锁保持。
 
-证据`/data/vaultsyncd-deploy/local-20261108T144944-2637582/`与`/data/vaultsyncd-deploy/S121-20261108-local/`；恢复入口generation248（system `i1ydyql7wcb0gs8q5dr1xxygm4zj18h6`），先按S113 test/健康再switch并同步pin，未实际回滚。未做生产内容写入/故障或Windows/规模验收，原首发门禁保持。交接与生命周期见[S121](../../agent/tasks/S121.md)与[批次](../../agent/tasks/S121-batch.md)。
+证据`/data/vaultsyncd-deploy/local-20261108T144944-2637582/`与`/data/vaultsyncd-deploy/S121-20261108-local/`；恢复入口generation248（system `i1ydyql7wcb0gs8q5dr1xxygm4zj18h6`），先按S113 test/健康再switch并同步pin，未实际回滚。未做生产内容写入/故障或Windows/规模验收，原首发门禁保持。交接与生命周期见[S121](../../agent/tasks/S121.md)与[批次（历史归档）](../../agent/tasks/README.md)。
 
 ## S123 最新版本（S122 文件浏览器）部署（2026-11-08，generation250）
 
@@ -272,7 +272,7 @@ pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥no
 
 实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html` 剥 nonce 后与包内逐字节一致，`assets/index-DQ7KusXO.js`、`assets/index-BtUIqXZy.css` 与懒加载块 `assets/Files-V7htNGV1.js` 的 sha256 与包内一致；CSP 为逐响应 nonce、无 `unsafe-inline`。真实 Chromium 严格公共 CA/TLS1.3 七项通过：CSP/主题、六路由（含 `#/files`）在 390/768/1440 无溢出、owner 登录安全 cookie、原 Root 健康、文件浏览器在 `documents` Root 读到 2 项并打开属性弹窗/返回上级、认证 SSE seq 与 16 秒心跳、无 pageerror/CSP 违规、敏感路径 404。文件浏览器请求审计只有 `GET /v1/roots`、`POST /v1/roots/<root>/snapshots`（design §9.3 元数据快照）、`GET …/entries`、`GET …/events` 与 logout，无内容/上传/操作写入；本轮在生产 Root 生成快照 `01bf172d1156e91785681e4812faf5a3`，不修改文件内容。10 项既有服务 PID/InvocationID、3 应用 200、SSH banner 与主机锁（`1ee4edaf…`）不变。
 
-证据 `/data/vaultsyncd-deploy/local-20261108T153312-2697471/`（result、旧 generation、旧 system/boot GC roots、锁、pin diff）与 `/data/vaultsyncd-deploy/S123-20261108-local/`（final-state/assets/production-smoke 脚本与 JSON、截图、web 副本）；脚本与结果另存 `artifacts/S123/`。恢复入口为部署前 generation249 `ds2gqqb5lng9pwwjjffj2z2qf3iavy4n`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。未做生产上传/恢复/备份写入、故障注入、Windows 或规模验收，原首发门禁保持。交接与生命周期见 [S123](../../agent/tasks/S123.md) 与 [批次](../../agent/tasks/S123-batch.md)。
+证据 `/data/vaultsyncd-deploy/local-20261108T153312-2697471/`（result、旧 generation、旧 system/boot GC roots、锁、pin diff）与 `/data/vaultsyncd-deploy/S123-20261108-local/`（final-state/assets/production-smoke 脚本与 JSON、截图、web 副本）；脚本与结果另存 `artifacts/S123/`。恢复入口为部署前 generation249 `ds2gqqb5lng9pwwjjffj2z2qf3iavy4n`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。未做生产上传/恢复/备份写入、故障注入、Windows 或规模验收，原首发门禁保持。交接与生命周期见 [S123](../../agent/tasks/S123.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
 ## S125 最新服务端（S124 分栏文件浏览器）部署（2026-11-08，generation251）
 
