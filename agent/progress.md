@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：S001—S115 共 **115 卡，110 done、5 blocked**；无 todo / in_progress，**当前无 ready 卡**。S115已完成服务端Web HeroUI React重构及真实浏览器/Nix验收，尚未部署正式实例。S114 已完成本地目录原生选择与 Root 目录名显示，真实 Windows 验收通过。S113已将本机服务及正式目录切换为 `xingjian:users`，一键pure部署至generation245，固定项目6b967bd；入口与更新见 [部署文档](../docs/operations/nixos.md#s113-主机用户运行与-pure-一键部署2026-11-07)。
+当前：**S117 done**，完成服务端 Web 紧凑化、小圆角与 HeroUI 控件统一；Web/Nix 构建、四套真实业务浏览器流程及响应式验收通过，详见 [S117](tasks/S117.md)。实现 `3631c29`，整合/清理见 [批次](tasks/S117-batch.md)。**当前无新增 ready 卡**；S116 本机部署记录仍在独立 `.worktrees/S116-local-deploy` 待续接，本卡不接管或默认部署。原 S001—S115 的110 done、5 blocked保持。S114 本地目录选择已原生验收；最近完成并交接的主机部署仍为 S113/generation245，入口见 [部署文档](../docs/operations/nixos.md#s113-主机用户运行与-pure-一键部署2026-11-07)。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
@@ -137,3 +137,5 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S114 | 客户端目录选择与 Root 名称显示 | W | S081、S111 | done | 实现85143c6、交接bfa5204已ff合master；任务树/分支已清理 | protocol20/Root6/agent2、前端/边界/两端clippy；Windows选择/取消/名称/首合并及GUI退出后真实字节通过 | 无本卡阻塞；正式部署/发行未执行 | [S114](tasks/S114.md) |
 
 | S115 | 服务端 Web HeroUI React 完整重构 | B/L | S077、S078、S079、S090、S112 | done | d90b385已ff合master；任务树/分支已清理；基线5c5c797 | Web测试构建/根typecheck、server相关测试/clippy、Nix Web、Chromium账号/Root/恢复/备份17项与响应式/CSP通过 | 无；未部署，原首发门禁保留 | [S115](tasks/S115.md) |
+
+| S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | B | S115 | done | 实现3631c29；整合/清理见批次；基线f3b8979 | Web测试/构建、根typecheck、Nix Web；Chromium四业务51项+恢复10项复验、50组主题/宽度/路由及生产CSP通过 | 无本卡阻塞；未部署，S116现场保留，原首发门禁不变 | [S117](tasks/S117.md) |
