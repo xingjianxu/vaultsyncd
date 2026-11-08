@@ -38,7 +38,7 @@ export function indexManifest(bytes: Uint8Array, expected: string, id: string): 
   const ids=new Set(roots.map(root=>root.id));if(ids.size!==roots.length) throw new Error("重复Root");
   const counts=object(manifest.database_contents);
   for(const table of ["users","roots","entries","versions","trash_entries","tombstones","changes","operations"]) decimal(counts,table);
-  const items: Item[]=[];const paths=new Set<string>();
+  const items: Item[]=[];const paths=new Set<string>(),storagePaths=new Set<string>();
   function add(path: string, item: Record<string,unknown>) {
     if(paths.has(path)) throw new Error("重复归档路径");
     paths.add(path);items.push({path,size:decimal(item,"size"),hash:identity(text(item,"sha256"),64)});
@@ -51,8 +51,10 @@ export function indexManifest(bytes: Uint8Array, expected: string, id: string): 
   for(const item of rows(manifest,"objects")) {
     const root=identity(text(item,"root_id"),32),hash=identity(text(item,"sha256"),64);
     const path="objects/"+root+"/"+hash;
-    if(!ids.has(root) || item.archive_path!==path || item.storage_path!=="objects/"+hash.slice(0,2)+"/"+hash)throw new Error("对象路径越界");
-    add(path,item);
+    const legacy="objects/"+hash.slice(0,2)+"/"+hash;
+    const storage=text(item,"storage_path");
+    if(!ids.has(root) || item.archive_path!==path || (storage!==legacy && storage!=="roots/"+root+"/"+legacy) || storagePaths.has(storage))throw new Error("对象路径越界或重复");
+    storagePaths.add(storage);add(path,item);
   }
   items.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
   return {id,server,hash:expected,items,roots};

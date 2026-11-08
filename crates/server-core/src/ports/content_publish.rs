@@ -132,6 +132,11 @@ impl std::error::Error for PublishFailure {}
 /// 返回的 [`PublishedContent`] 是**实测**事实：拼装出的字节数、它的 SHA-256、对象区内的规范相对
 /// 路径，以及对象是否本次新建。核心拿它与上传会话的总大小/总哈希比较，不符即丢弃（不提交、不引用）。
 pub trait ContentPublisher {
+    /// 重放 finalize 时沿用发布布局（包括已登记旧路径），不重新猜测存储位置。
+    fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
+        crate::objects::ObjectLayout::relative_object_path(digest)
+    }
+
     /// 按索引升序拼装 `parts` 并发布。
     ///
     /// # Errors
@@ -166,7 +171,7 @@ pub trait ContentObjectStore {
 /// 内容地址与对象区相对路径（供适配器把 [`PublishedContent`] 翻译成存储行）。
 #[must_use]
 pub fn storage_path_of(content: &PublishedContent) -> PathBuf {
-    storage_path_for(&content.digest)
+    PathBuf::from(&content.storage_path)
 }
 
 /// 按内容地址算出 `objects.storage_path` 的规范相对路径。

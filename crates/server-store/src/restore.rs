@@ -184,6 +184,7 @@ mod tests {
             root_seqs: BTreeMap::new(),
             schema_version: 13,
             table_counts: BTreeMap::new(),
+            object_storage_paths: BTreeMap::new(),
         };
         guard(&path, &index).unwrap();
         let before = std::fs::read(&path).unwrap();
@@ -227,6 +228,7 @@ mod tests {
                 .map(|r| (r.root, r.seq.get()))
                 .collect(),
             schema_version: frozen.schema,
+            object_storage_paths: BTreeMap::new(),
             table_counts: frozen
                 .table_counts
                 .iter()

@@ -123,6 +123,67 @@ async fn seed_accounts(fixture: &Fixture) -> Seeds {
     }
 }
 
+/// 第二位用户拥有独立 Root，用相同摘要验证对象隔离而不扩大授权范围。
+async fn seed_other_root(fixture: &Fixture) -> Seeds {
+    let seeds = Seeds {
+        owner: UserId::from_bytes([0x33; ID_LEN]),
+        root: RootId::from_bytes([0x23; ID_LEN]),
+        root_entry: EntryId::from_bytes([0x56; ID_LEN]),
+    };
+    let database = Database::open(fixture.database())
+        .await
+        .expect("打开测试库");
+    let mut tx = database.begin_write().await.expect("写事务");
+    roots::insert_root(
+        &mut tx,
+        &NewRoot {
+            id: seeds.root,
+            entry: seeds.root_entry,
+            owner: seeds.owner,
+            absolute_path: "/srv/vaultsyncd-s136c-other".to_owned(),
+            volume_identity: vec![0x79; 16],
+            root_file_identity: vec![0x89; 16],
+            epoch: ServerEpoch::new(1).expect("epoch"),
+        },
+    )
+    .await
+    .expect("写第二个 Root");
+    tx.commit().await.expect("提交第二个 Root");
+    database.close().await;
+    seeds
+}
+
+/// 兼容性种子必须同时有 legacy 字节与该 Root 的持久登记；不是磁盘探测回退。
+async fn seed_legacy_object(fixture: &Fixture, seeds: &Seeds, bytes: &[u8]) -> String {
+    let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
+    let storage_path = ObjectLayout::relative_object_path(&digest)
+        .display()
+        .to_string();
+    let path = fixture.objects().root().join(&storage_path);
+    std::fs::create_dir_all(path.parent().expect("对象父目录")).expect("建对象目录");
+    std::fs::write(path, bytes).expect("写 legacy 对象");
+    let database = Database::open(fixture.database())
+        .await
+        .expect("打开测试库");
+    let mut tx = database.begin_write().await.expect("写事务");
+    versions::record_object(
+        &mut tx,
+        seeds.owner,
+        &NewObject {
+            root: seeds.root,
+            hash: *digest.as_bytes(),
+            size: bytes.len() as u64,
+            storage_path: storage_path.clone(),
+            verified_at: UtcTimestamp::from_unix_seconds(1_700_000_000).expect("时间戳"),
+        },
+    )
+    .await
+    .expect("登记 legacy 对象");
+    tx.commit().await.expect("提交 legacy 对象");
+    database.close().await;
+    storage_path
+}
+
 /// 进程内装配：与 `bootstrap` 一样把同一份数据库与状态目录交给各上下文，再组装真实 router。
 struct App {
     router: Router,
@@ -522,7 +583,8 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     assert!(!finalized.replayed);
     assert_eq!(
         finalized.storage_path,
-        ObjectLayout::relative_object_path(
+        ObjectLayout::scoped_relative_object_path(
+            seeds.root,
             &ContentDigest::from_hex(&sha256(content)).expect("内容地址")
         )
         .display()
@@ -530,9 +592,7 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     );
 
     // 对象字节真的落到了对象区，且内容与会话声明一致。
-    let object = fixture
-        .objects()
-        .object_path(&ContentDigest::from_hex(&sha256(content)).expect("内容地址"));
+    let object = fixture.objects().root().join(&finalized.storage_path);
     assert_eq!(
         std::fs::read(&object).expect("读已发布对象"),
         content.to_vec(),
@@ -541,6 +601,162 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     // 会话变成 finalized；finalize 不改条目，因此这里只断言上传状态。
     let after = status(&app, seeds.root, &session.upload_id, &token).await;
     assert_eq!(after.upload.state, UploadState::Finalized);
+}
+
+#[tokio::test]
+async fn same_digest_in_two_roots_has_independent_publication_reuse_and_replay() {
+    let fixture = Fixture::new("root-scoped-finalize");
+    let first = seed_accounts(&fixture).await;
+    let second = seed_other_root(&fixture).await;
+    let app = open_app(&fixture).await;
+    let owner = login(&app, "owner").await;
+    let other = login(&app, "intruder").await;
+    let bytes = b"same digest, independent root objects";
+    let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
+    let first_session = upload_content(&app, first.root, &owner, bytes, 8, &sha256(bytes)).await;
+    let second_session = upload_content(&app, second.root, &other, bytes, 8, &sha256(bytes)).await;
+
+    // 持有另一 Root 会话也不扩大 Root 授权；拒绝后原会话仍可正常 finalize。
+    for (root, session, token) in [
+        (first.root, &first_session, &other),
+        (second.root, &second_session, &owner),
+    ] {
+        let denied = finalize(&app, root, &session.upload_id, token).await;
+        assert_eq!(denied.status, StatusCode::FORBIDDEN, "{}", denied.text());
+        assert_eq!(denied.envelope().error.code, ErrorCode::AccessDenied);
+    }
+
+    let mut paths = Vec::new();
+    for (root, session, token) in [
+        (first.root, first_session, &owner),
+        (second.root, second_session, &other),
+    ] {
+        let expected = ObjectLayout::scoped_relative_object_path(root, &digest)
+            .display()
+            .to_string();
+        let reply = finalize(&app, root, &session.upload_id, token).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        let published: FinalizedContent = parse(&reply, "FinalizedContent");
+        assert_eq!(published.storage_path, expected);
+        assert_eq!(published.root_id, root.to_hex());
+        assert_eq!(published.reuse, ObjectReuse::FreshlyPublished);
+        assert!(!published.replayed);
+        assert_eq!(
+            std::fs::read(fixture.objects().root().join(&expected)).unwrap(),
+            bytes
+        );
+
+        let replay = finalize(&app, root, &session.upload_id, token).await;
+        assert_eq!(replay.status, StatusCode::OK, "{}", replay.text());
+        let replayed: FinalizedContent = parse(&replay, "FinalizedContent");
+        assert!(replayed.replayed);
+        assert_eq!(replayed.storage_path, expected);
+
+        let again = upload_content(&app, root, token, bytes, 8, &sha256(bytes)).await;
+        let reply = finalize(&app, root, &again.upload_id, token).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        let reused: FinalizedContent = parse(&reply, "FinalizedContent");
+        assert_eq!(reused.reuse, ObjectReuse::ExistingVerified);
+        assert!(!reused.replayed);
+        assert_eq!(reused.storage_path, expected);
+        paths.push(expected);
+    }
+    assert_ne!(paths[0], paths[1]);
+    assert!(
+        !fixture.objects().object_path(&digest).exists(),
+        "新对象不得写入全局 legacy 路径"
+    );
+    let database = Database::open(fixture.database()).await.unwrap();
+    let rows: Vec<(Vec<u8>, String)> =
+        sqlx::query_as("SELECT root_id, storage_path FROM objects WHERE hash = ? ORDER BY root_id")
+            .bind(digest.as_bytes().as_slice())
+            .fetch_all(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (first.root.as_bytes().to_vec(), paths[0].clone()),
+            (second.root.as_bytes().to_vec(), paths[1].clone()),
+        ]
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn registered_legacy_object_keeps_its_path_for_new_upload_and_replay() {
+    let fixture = Fixture::new("legacy-finalize-replay");
+    let seeds = seed_accounts(&fixture).await;
+    let bytes = b"registered legacy object";
+    let legacy = seed_legacy_object(&fixture, &seeds, bytes).await;
+    let app = open_app(&fixture).await;
+    let token = login(&app, "owner").await;
+    let session = upload_content(&app, seeds.root, &token, bytes, 8, &sha256(bytes)).await;
+    for replayed in [false, true] {
+        let reply = finalize(&app, seeds.root, &session.upload_id, &token).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        let finalized: FinalizedContent = parse(&reply, "FinalizedContent");
+        assert_eq!(finalized.storage_path, legacy);
+        assert_eq!(finalized.reuse, ObjectReuse::ExistingVerified);
+        assert_eq!(finalized.replayed, replayed);
+    }
+    assert_eq!(
+        std::fs::read(fixture.objects().root().join(&legacy)).unwrap(),
+        bytes
+    );
+    let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
+    assert!(
+        !fixture
+            .objects()
+            .root()
+            .join(ObjectLayout::scoped_relative_object_path(
+                seeds.root, &digest
+            ))
+            .exists(),
+        "不得为已登记 legacy 对象改写路径"
+    );
+}
+
+#[tokio::test]
+async fn another_roots_legacy_object_is_not_reused_for_new_publication() {
+    let fixture = Fixture::new("legacy-cross-root");
+    let first = seed_accounts(&fixture).await;
+    let second = seed_other_root(&fixture).await;
+    let bytes = b"legacy object belonging to a different root";
+    let legacy = seed_legacy_object(&fixture, &first, bytes).await;
+    let app = open_app(&fixture).await;
+    let token = login(&app, "intruder").await;
+    let session = upload_content(&app, second.root, &token, bytes, 8, &sha256(bytes)).await;
+    let expected = ObjectLayout::scoped_relative_object_path(
+        second.root,
+        &ContentDigest::from_bytes(hash::digest_of(bytes)),
+    )
+    .display()
+    .to_string();
+    for replayed in [false, true] {
+        let reply = finalize(&app, second.root, &session.upload_id, &token).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        let finalized: FinalizedContent = parse(&reply, "FinalizedContent");
+        assert_eq!(finalized.storage_path, expected);
+        assert_ne!(finalized.storage_path, legacy);
+        assert_eq!(finalized.replayed, replayed);
+        if !replayed {
+            assert_eq!(finalized.reuse, ObjectReuse::FreshlyPublished);
+        }
+    }
+    for path in [&legacy, &expected] {
+        assert_eq!(
+            std::fs::read(fixture.objects().root().join(path)).unwrap(),
+            bytes
+        );
+    }
+    let database = Database::open(fixture.database()).await.unwrap();
+    let rows: Vec<String> = sqlx::query_scalar("SELECT storage_path FROM objects ORDER BY root_id")
+        .fetch_all(database.pool())
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![legacy, expected]);
+    database.close().await;
 }
 
 #[tokio::test]
@@ -587,7 +803,7 @@ async fn finalize_with_missing_parts_is_400_and_keeps_the_session_open() {
     let after = status(&app, seeds.root, &session.upload_id, &token).await;
     assert_eq!(after.upload.state, UploadState::Open);
     assert!(
-        !fixture.objects().root().join("objects").exists(),
+        !fixture.objects().root().join("roots").exists(),
         "缺块时不得发布任何对象"
     );
 }

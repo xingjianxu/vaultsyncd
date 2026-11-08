@@ -224,7 +224,7 @@ fn finish_capture(
     Ok(CapturedObject {
         digest: expected.digest,
         bytes: expected.bytes,
-        storage_path: ObjectLayout::relative_object_path(&expected.digest),
+        storage_path: layout.storage_path(&expected.digest),
         method: staged.method,
         fallback: staged.fallback,
         reuse: if published.already_present {

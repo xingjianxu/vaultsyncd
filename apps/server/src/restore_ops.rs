@@ -1069,7 +1069,13 @@ pub async fn execute_version_restore(
     at: UtcTimestamp,
 ) -> Result<RestoredVersion, OperationFailure> {
     let handle = executor.root_handle(owner, key.root).await?;
-    let layout = executor.objects();
+    // 恢复是低频整树操作，且要发布多个既有版本对象：解析该 Root 全部旧登记。
+    let layout =
+        crate::object_layout::for_root(executor.database(), executor.state_dir(), key.root)
+            .await
+            .map_err(|error| OperationFailure::Storage {
+                detail: error.to_string(),
+            })?;
     let mut target = crate::executor::WorkTreeTarget::new(handle, layout);
     let before = match crate::executor::observe_before(
         &mut target,
@@ -1158,7 +1164,12 @@ pub async fn execute_trash_restore(
         });
     }
     let handle = executor.root_handle(owner, key.root).await?;
-    let layout = executor.objects();
+    let layout =
+        crate::object_layout::for_root(executor.database(), executor.state_dir(), key.root)
+            .await
+            .map_err(|error| OperationFailure::Storage {
+                detail: error.to_string(),
+            })?;
     let mut target = crate::executor::WorkTreeTarget::new(handle.clone(), layout);
     let mut ns = crate::commands::WorkTreeNamespace::new(handle);
     let mut store = SqlTrashRestoreStore::new(executor.database().clone(), owner, key, digest)

@@ -104,11 +104,11 @@ pub async fn run_once(
 }
 
 fn object_directory(state: &Path, candidate: &Candidate) -> io::Result<RestrictedDir> {
-    let expected =
-        ObjectLayout::relative_object_path(&ContentDigest::from_bytes(candidate.object.hash));
-    if Path::new(&candidate.storage_path) != expected {
+    let digest = ContentDigest::from_bytes(candidate.object.hash);
+    if !ObjectLayout::valid_storage_path(candidate.object.root, &digest, &candidate.storage_path) {
         return Err(failure("GC storage path is not canonical; preserved"));
     }
+    let expected = Path::new(&candidate.storage_path);
     let base = RestrictedDir::open(&state.join("objects"), ResolveMode::Auto).map_err(failure)?;
     base.child_dir(
         expected

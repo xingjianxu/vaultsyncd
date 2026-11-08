@@ -252,6 +252,7 @@ pub fn verify_database(
         return Err(err("backup Root sequence map mismatch"));
     }
     let mut objects = 0;
+    let mut storage_paths = std::collections::BTreeSet::new();
     let mut q = db
         .prepare("SELECT lower(hex(root_id)),hash,size,storage_path FROM objects")
         .map_err(err)?;
@@ -270,26 +271,26 @@ pub fn verify_database(
         let hash: [u8; 32] = hash
             .try_into()
             .map_err(|_| err("invalid backup object hash"))?;
-        let archive = format!(
-            "objects/{}/{}",
-            RootId::from_hex(&root).map_err(err)?.to_hex(),
-            vaultsyncd_server_core::objects::ContentDigest::from_bytes(hash).to_hex()
-        );
+        let root = RootId::from_hex(&root).map_err(err)?;
+        let digest = vaultsyncd_server_core::objects::ContentDigest::from_bytes(hash);
+        let archive = format!("objects/{}/{}", root.to_hex(), digest.to_hex());
         let item = index
             .item(&archive)
             .ok_or_else(|| err("database object missing from manifest"))?;
         if item.hash != hash
             || item.size != u64::try_from(size).map_err(err)?
-            || std::path::Path::new(&path)
-                != vaultsyncd_server_core::objects::ObjectLayout::relative_object_path(
-                    &vaultsyncd_server_core::objects::ContentDigest::from_bytes(hash),
-                )
+            || !index.root_seqs.contains_key(&root)
+            || !vaultsyncd_server_core::objects::ObjectLayout::valid_storage_path(
+                root, &digest, &path,
+            )
+            || index.object_storage_path(&archive) != Some(path.as_str())
+            || !storage_paths.insert(path)
         {
             return Err(err("backup object metadata mismatch"));
         }
         objects += 1;
     }
-    if objects + 2 != index.items.len() {
+    if objects + 2 != index.items.len() || objects != index.object_storage_paths.len() {
         return Err(err("manifest objects missing from database"));
     }
     Ok(())
@@ -299,6 +300,170 @@ pub fn verify_database(
 mod tests {
     use super::*;
     use crate::test_support::*;
+    #[tokio::test]
+    async fn scoped_same_digest_and_legacy_backup_preserve_exact_database_paths() {
+        use std::collections::BTreeMap;
+        use vaultsyncd_domain::ids::{BackupLeaseId, ServerId};
+        use vaultsyncd_server_core::{
+            backup::export::{Index, Item},
+            objects::{ContentDigest, ObjectLayout},
+        };
+        for root_count in [1, 3] {
+            let dir = TestDir::new(&format!("s136-backup-{root_count}"));
+            let db = open_database(&dir).await;
+            let owner = seed_owner(&db, 1).await;
+            sqlx::query("INSERT INTO store_metadata VALUES('server_id',?)")
+                .bind("abababababababababababababababab")
+                .execute(db.pool())
+                .await
+                .unwrap();
+            let digest = ContentDigest::from_bytes([0xab; 32]);
+            for n in 0..root_count {
+                let (root, _) = register_root(&db, owner, 2 + n).await;
+                let storage_path = if n == 0 {
+                    ObjectLayout::relative_object_path(&digest)
+                } else {
+                    ObjectLayout::scoped_relative_object_path(root, &digest)
+                };
+                let mut tx = db.begin_write().await.unwrap();
+                crate::versions::record_object(
+                    &mut tx,
+                    owner,
+                    &crate::versions::NewObject {
+                        root,
+                        hash: *digest.as_bytes(),
+                        size: 7,
+                        storage_path: storage_path.to_str().unwrap().to_owned(),
+                        verified_at: at(1),
+                    },
+                )
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+            }
+            let target = dir.path.join("backup.sqlite");
+            let frozen = online_backup(db.path(), &target).unwrap();
+            assert_eq!(frozen.plan.objects.len(), root_count as usize);
+            let mut index = Index {
+                id: BackupLeaseId::from_bytes([4; 16]),
+                server: ServerId::from_hex(&frozen.server_id).unwrap(),
+                manifest_hash: [0; 32],
+                items: ["database.sqlite", "config.json"]
+                    .map(|path| Item {
+                        path: path.into(),
+                        hash: [0; 32],
+                        size: 0,
+                    })
+                    .to_vec(),
+                root_seqs: frozen
+                    .plan
+                    .roots
+                    .iter()
+                    .map(|r| (r.root, r.seq.get()))
+                    .collect(),
+                schema_version: frozen.schema,
+                table_counts: frozen
+                    .table_counts
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.parse().unwrap()))
+                    .collect(),
+                object_storage_paths: BTreeMap::new(),
+            };
+            for object in &frozen.plan.objects {
+                let path = format!("objects/{}/{}", object.root.to_hex(), digest.to_hex());
+                index
+                    .object_storage_paths
+                    .insert(path.clone(), object.storage_path.clone());
+                index.items.push(Item {
+                    path,
+                    hash: object.hash,
+                    size: object.size,
+                });
+            }
+            verify_database(&target, &index).unwrap();
+            // Restore keeps exactly the same object metadata, including legacy rows.
+            let restore_plan = crate::restore::plan(&target, &index).unwrap();
+            assert!(restore_plan.work.is_empty());
+            let mappings: Vec<_> = frozen
+                .plan
+                .roots
+                .iter()
+                .map(|r| crate::restore::Remap {
+                    root: r.root,
+                    path: format!("/restored/{}", r.root.to_hex()),
+                    volume: b"volume".to_vec(),
+                    identity: b"identity".to_vec(),
+                })
+                .collect();
+            crate::restore::apply(&target, &index, &mappings, 42).unwrap();
+            verify_database(&target, &index).unwrap();
+            let legacy = &frozen.plan.objects[0];
+            let archive = format!("objects/{}/{}", legacy.root.to_hex(), digest.to_hex());
+            // Even an otherwise valid alternate layout may not silently differ from the manifest.
+            index.object_storage_paths.insert(
+                archive.clone(),
+                ObjectLayout::scoped_relative_object_path(legacy.root, &digest)
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+            assert!(verify_database(&target, &index).is_err());
+            index
+                .object_storage_paths
+                .insert(archive, legacy.storage_path.clone());
+            // 已登记路径不可原地重写（即使同一份字节）；这是必须保留的不可变约束。
+            let copied = Connection::open(&target).unwrap();
+            let invalid = format!("./{}", legacy.storage_path);
+            assert!(
+                copied
+                    .execute(
+                        "UPDATE objects SET storage_path=? WHERE root_id=?",
+                        rusqlite::params![invalid, legacy.root.as_bytes().as_slice()]
+                    )
+                    .is_err()
+            );
+            drop(copied);
+            // 外来/损坏备份若已含非规范路径，验证必须拒绝；INSERT不受不可变触发器限制。
+            let forged = dir.path.join(format!("forged-{root_count}.sqlite"));
+            std::fs::copy(&target, &forged).unwrap();
+            let forged_db = Connection::open(&forged).unwrap();
+            let forged_digest = ContentDigest::from_bytes([0xcd; 32]);
+            let forged_path = format!(
+                "./{}",
+                ObjectLayout::relative_object_path(&forged_digest).display()
+            );
+            forged_db.execute("INSERT INTO objects(root_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')",
+                rusqlite::params![legacy.root.as_bytes().as_slice(), forged_digest.as_bytes().as_slice(), forged_path]).unwrap();
+            let forged_archive = format!(
+                "objects/{}/{}",
+                legacy.root.to_hex(),
+                forged_digest.to_hex()
+            );
+            index
+                .object_storage_paths
+                .insert(forged_archive.clone(), forged_path);
+            index.items.push(Item {
+                path: forged_archive,
+                hash: *forged_digest.as_bytes(),
+                size: 7,
+            });
+            assert!(verify_database(&forged, &index).is_err());
+            index.object_storage_paths.remove(&format!(
+                "objects/{}/{}",
+                legacy.root.to_hex(),
+                forged_digest.to_hex()
+            ));
+            // 另一Root前缀的物理位置不得冒充本Root对象；在线备份同样必须拒绝。
+            let mut tx = db.begin_write().await.unwrap();
+            sqlx::query("INSERT INTO objects(root_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')")
+                .bind(legacy.root.as_bytes().as_slice()).bind(forged_digest.as_bytes().as_slice())
+                .bind(ObjectLayout::scoped_relative_object_path(RootId::from_bytes([9;16]), &forged_digest).to_str().unwrap())
+                .execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+            assert!(online_backup(db.path(), &dir.path.join("foreign.sqlite")).is_err());
+            db.close().await;
+        }
+    }
     #[tokio::test]
     async fn online_backup_contains_committed_wal_and_discards_live_sessions() {
         let dir = TestDir::new("s087-online");

@@ -30,6 +30,7 @@ pub mod http;
 pub mod journal;
 pub mod lifecycle;
 pub mod logging;
+mod object_layout;
 pub mod observer;
 pub mod operations;
 pub mod recovery;

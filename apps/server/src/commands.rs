@@ -1629,9 +1629,9 @@ pub async fn execute_delete(
     );
     if let Err(detail) = verify_delete_scope(
         executor.database(),
+        executor.state_dir(),
         owner,
         &handle,
-        executor.objects(),
         key.root,
         command.entry,
     )
@@ -1684,9 +1684,9 @@ pub async fn execute_delete(
 /// 返回原因文本；调用方把前向路径映射为 `RECONCILE_REQUIRED`、重启补完保持停写并保留证据。
 pub async fn verify_delete_scope(
     database: &Database,
+    state_dir: &Path,
     owner: UserId,
     handle: &Arc<RootHandle>,
-    layout: vaultsyncd_server_core::objects::ObjectLayout,
     root: RootId,
     entry: EntryId,
 ) -> Result<(), String> {
@@ -1758,8 +1758,18 @@ pub async fn verify_delete_scope(
                     ));
                 }
                 if image.len() == 1 {
+                    let layout = crate::object_layout::for_digest(
+                        database,
+                        state_dir,
+                        root,
+                        vaultsyncd_server_core::objects::ContentDigest::from_bytes(
+                            facts.object_hash,
+                        ),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
                     let mut target =
-                        crate::executor::WorkTreeTarget::new(Arc::clone(handle), layout.clone());
+                        crate::executor::WorkTreeTarget::new(Arc::clone(handle), layout);
                     let observed = vaultsyncd_server_core::ports::target::TargetPort::observe(
                         &mut target,
                         &path,

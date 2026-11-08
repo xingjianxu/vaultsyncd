@@ -56,6 +56,8 @@ pub struct Index {
     pub schema_version: i64,
     /// 清单声明的逻辑表计数。
     pub table_counts: std::collections::BTreeMap<String, u64>,
+    /// 对象归档路径到实际存储路径的精确映射；保留旧版与Root隔离布局。
+    pub object_storage_paths: std::collections::BTreeMap<String, String>,
 }
 fn field<'a>(v: &'a Value, k: &str) -> Result<&'a str, Error> {
     v[k].as_str().ok_or(Error::Invalid)
@@ -139,6 +141,8 @@ impl Index {
         if names.len() != 2 {
             return Err(Error::Invalid);
         }
+        let mut object_storage_paths = std::collections::BTreeMap::new();
+        let mut storage_paths = BTreeSet::new();
         for o in v["objects"].as_array().ok_or(Error::Invalid)? {
             let root = RootId::from_hex(field(o, "root_id")?).map_err(|_| Error::Invalid)?;
             let hash = digest_text(o, "sha256")?;
@@ -147,16 +151,20 @@ impl Index {
                 root.to_hex(),
                 ContentDigest::from_bytes(hash).to_hex()
             );
+            let storage_path = field(o, "storage_path")?;
             if !roots.contains(&root)
                 || field(o, "archive_path")? != path
-                || field(o, "storage_path")?
-                    != ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
-                        .to_str()
-                        .ok_or(Error::Invalid)?
+                || !ObjectLayout::valid_storage_path(
+                    root,
+                    &ContentDigest::from_bytes(hash),
+                    storage_path,
+                )
+                || !storage_paths.insert(storage_path)
                 || !names.insert(path.clone())
             {
                 return Err(Error::Invalid);
             }
+            object_storage_paths.insert(path.clone(), storage_path.to_owned());
             items.push(Item {
                 path,
                 hash,
@@ -172,7 +180,14 @@ impl Index {
             root_seqs,
             schema_version,
             table_counts,
+            object_storage_paths,
         })
+    }
+    /// 只返回清单已验证的对象实际路径，不从摘要推测布局。
+    pub fn object_storage_path(&self, archive_path: &str) -> Option<&str> {
+        self.object_storage_paths
+            .get(archive_path)
+            .map(String::as_str)
     }
     /// 只按清单精确查找，不能将哈希变成任意服务器路径。
     pub fn item(&self, path: &str) -> Option<&Item> {
@@ -411,6 +426,94 @@ mod tests {
         let mut v = ArchiveVerifier::new(hash);
         v.push(&bytes[..bytes.len() - 1]).unwrap();
         assert_eq!(v.finish().unwrap_err(), Error::Incomplete);
+    }
+    fn parse_value(value: &Value) -> Result<Index, Error> {
+        let bytes = serde_json::to_vec(value).unwrap();
+        Index::parse(&bytes, Sha256::digest(&bytes).into())
+    }
+    #[test]
+    fn scoped_and_legacy_objects_roundtrip_without_cross_root_or_path_aliases() {
+        let (manifest, _, _) = fixture();
+        let mut value: Value = serde_json::from_slice(&manifest).unwrap();
+        let roots = [RootId::from_bytes([3; 16]), RootId::from_bytes([4; 16])];
+        let content = b"same digest in two Roots";
+        let digest = ContentDigest::from_bytes(Sha256::digest(content).into());
+        value["roots"] = serde_json::json!(
+            roots.map(|root| serde_json::json!({"root_id":root.to_hex(),"seq":"0"}))
+        );
+        value["objects"] = serde_json::json!(roots.map(|root| serde_json::json!({
+            "root_id":root.to_hex(), "sha256":digest.to_hex(), "size":content.len().to_string(),
+            "storage_path":ObjectLayout::scoped_relative_object_path(root,&digest).to_str().unwrap(),
+            "archive_path":format!("objects/{}/{}",root.to_hex(),digest.to_hex())
+        })));
+        let index = parse_value(&value).unwrap();
+        assert_eq!(index.object_storage_paths.len(), 2);
+        for item in index
+            .items
+            .iter()
+            .filter(|i| i.path.starts_with("objects/"))
+        {
+            assert!(
+                index
+                    .object_storage_path(&item.path)
+                    .unwrap()
+                    .starts_with("roots/")
+            );
+        }
+        // The stream format remains v1 and both same-digest archive entries are verified.
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let hash = Sha256::digest(&bytes).into();
+        let mut archive = prefix(bytes.len()).unwrap();
+        archive.extend(bytes);
+        for item in &index.items {
+            archive.extend(item_header(item));
+            archive.extend_from_slice(match item.path.as_str() {
+                "database.sqlite" => b"database",
+                "config.json" => b"config",
+                _ => content,
+            });
+        }
+        archive.extend([0; 4]);
+        let mut verifier = ArchiveVerifier::new(hash);
+        for chunk in archive.chunks(7) {
+            verifier.push(chunk).unwrap();
+        }
+        assert_eq!(
+            verifier.finish().unwrap().object_storage_paths,
+            index.object_storage_paths
+        );
+
+        let scoped = value["objects"][0]["storage_path"].clone();
+        let legacy = ObjectLayout::relative_object_path(&digest)
+            .to_str()
+            .unwrap()
+            .to_owned();
+        value["objects"][0]["storage_path"] = legacy.clone().into();
+        assert!(parse_value(&value).is_ok());
+        value["objects"][1]["storage_path"] = legacy.clone().into();
+        assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
+        // An old backup containing only the legacy record still parses.
+        value["objects"].as_array_mut().unwrap().pop();
+        let index = parse_value(&value).unwrap();
+        let path = value["objects"][0]["archive_path"].as_str().unwrap();
+        assert_eq!(index.object_storage_path(path), Some(legacy.as_str()));
+        for invalid in [
+            format!("./{legacy}"),
+            format!("{legacy}/"),
+            legacy.replace("objects/", "objects//"),
+            format!("roots/{}/objects/../{legacy}", roots[0].to_hex()),
+            ObjectLayout::scoped_relative_object_path(roots[1], &digest)
+                .to_str()
+                .unwrap()
+                .to_owned(),
+            legacy.to_uppercase(),
+        ] {
+            value["objects"][0]["storage_path"] = invalid.into();
+            assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
+        }
+        value["objects"][0]["storage_path"] = scoped;
+        value["objects"][0]["root_id"] = RootId::from_bytes([9; 16]).to_hex().into();
+        assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
     }
     #[test]
     fn corrupt_bytes_and_unlisted_paths_never_verify() {

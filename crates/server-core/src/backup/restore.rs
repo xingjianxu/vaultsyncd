@@ -277,6 +277,10 @@ mod tests {
             root_seqs: BTreeMap::from([(root, 1)]),
             schema_version: 13,
             table_counts: BTreeMap::new(),
+            object_storage_paths: BTreeMap::from([(
+                format!("objects/{}/{}", root.to_hex(), "04".repeat(32)),
+                format!("objects/04/{}", "04".repeat(32)),
+            )]),
         }
     }
     fn root() -> Entry {

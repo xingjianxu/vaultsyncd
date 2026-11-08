@@ -19,7 +19,7 @@ use vaultsyncd_server_core::{
         export::{self, ArchiveVerifier, CHUNK, Index, Item, MAX_MANIFEST},
         restore::{self, Compatibility, Mapping},
     },
-    objects::{ContentDigest, ObjectLayout},
+    objects::ContentDigest,
 };
 use vaultsyncd_server_store::{
     restore::{Plan, Remap},
@@ -296,6 +296,19 @@ fn mkdir_parents(dir: &RestrictedDir, path: &Path) -> io::Result<()> {
 fn create(dir: &RestrictedDir, path: &Path, mode: u32) -> io::Result<File> {
     mkdir_parents(dir, path)?;
     dir.create_exclusive(path, mode).map_err(err)
+}
+fn create_object(
+    dir: &RestrictedDir,
+    paths: &BTreeMap<String, String>,
+    item: &Item,
+) -> io::Result<File> {
+    let path = Path::new(
+        paths
+            .get(&item.path)
+            .ok_or_else(|| bad("object storage path missing from manifest"))?,
+    );
+    // Paths are exact, root-validated manifest records; never merge same-digest objects.
+    create(dir, path, 0o400)
 }
 fn write_document(dir: &RestrictedDir, name: &str, bytes: &[u8]) -> io::Result<()> {
     let mut file = create(dir, Path::new(name), 0o600)?;
@@ -579,6 +592,7 @@ fn execute(args: &Args) -> io::Result<Value> {
         .ok_or_else(|| err("restore guard missing"))?;
     state.dir.mkdir(Path::new("objects"), 0o700).map_err(err)?;
     let objects = state.dir.child_dir(Path::new("objects")).map_err(err)?;
+    let object_storage_paths = source.index.object_storage_paths.clone();
     source.stream(|item| {
         if item.path == "database.sqlite" {
             return Ok(Some(create(
@@ -594,24 +608,23 @@ fn execute(args: &Args) -> io::Result<Value> {
                 0o600,
             )?));
         }
-        let path = ObjectLayout::relative_object_path(&ContentDigest::from_bytes(item.hash));
-        if objects.identity_at(&path).map_err(err)?.is_some() {
-            check_file(&objects, &path, item.hash, item.size)?;
-            return Ok(None);
-        }
-        Ok(Some(create(&objects, &path, 0o400)?))
+        Ok(Some(create_object(&objects, &object_storage_paths, item)?))
     })?;
     for work in &plan.work {
         let target = targets
             .get(&work.root)
             .ok_or_else(|| bad("Root mapping vanished"))?;
         if let Some((hash, size)) = work.content {
-            let mut input = objects
-                .open_read(&ObjectLayout::relative_object_path(
-                    &ContentDigest::from_bytes(hash),
-                ))
-                .map_err(err)?
-                .file;
+            let archive_path = format!(
+                "objects/{}/{}",
+                work.root.to_hex(),
+                ContentDigest::from_bytes(hash).to_hex()
+            );
+            let path = source
+                .index
+                .object_storage_path(&archive_path)
+                .ok_or_else(|| bad("working object storage path missing from manifest"))?;
+            let mut input = objects.open_read(Path::new(path)).map_err(err)?.file;
             let mut output = create(&target.dir, &work.path, 0o600)?;
             io::copy(&mut input, &mut output)?;
             output.sync_all()?;
@@ -659,7 +672,12 @@ fn execute(args: &Args) -> io::Result<Value> {
     {
         check_file(
             &objects,
-            &ObjectLayout::relative_object_path(&ContentDigest::from_bytes(item.hash)),
+            Path::new(
+                source
+                    .index
+                    .object_storage_path(&item.path)
+                    .ok_or_else(|| bad("object storage path missing from manifest"))?,
+            ),
             item.hash,
             item.size,
         )?;

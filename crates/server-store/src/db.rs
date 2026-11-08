@@ -634,7 +634,7 @@ mod tests {
         migrator(&dir.migrations(&[(BASELINE_FILE, BASELINE_SQL)])).await
     }
 
-    /// 本二进制当前的迁移集合（0001—0004 的真实内容），用于“下一步才多出一版”的场景。
+    /// 历史迁移集合（0001—0005 的真实内容），用于“下一步才多出一版”的场景。
     async fn current_migrator(dir: &TestDir) -> Migrator {
         migrator(&dir.migrations(&[
             (BASELINE_FILE, BASELINE_SQL),
@@ -690,6 +690,177 @@ mod tests {
         rows
     }
 
+    const OBJECT_ROWS_SQL: &str = "SELECT json_group_array(json_array(hex(root_id),hex(hash),size,storage_path,verified_at,gc_state)) FROM (SELECT * FROM objects ORDER BY root_id,hash)";
+
+    /// 真实的 target 14 迁移集合，含一行旧布局对象；不改写已发布迁移。
+    async fn v14_database_with_legacy_object(path: &Path) -> (Migrator, String) {
+        let previous = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|m| m.version <= 14)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        let old = Database::open_with(path, &previous)
+            .await
+            .expect("建真实 v14 库");
+        assert_eq!(old.schema_version(), 14);
+        let mut tx = old.begin_write().await.expect("旧库写事务");
+        sqlx::query("INSERT INTO users VALUES(zeroblob(16),'legacy-owner','test-only','active')")
+            .execute(&mut *tx)
+            .await
+            .expect("旧用户");
+        sqlx::query("INSERT INTO roots(id,owner_id,absolute_path,volume_identity,root_file_identity,health,seq,epoch) VALUES(zeroblob(16),zeroblob(16),'/legacy-root',x'01',x'01','healthy',0,1)")
+            .execute(&mut *tx)
+            .await
+            .expect("旧 Root");
+        sqlx::query("INSERT INTO objects(root_id,hash,size,storage_path,verified_at,gc_state) VALUES(zeroblob(16),zeroblob(32),123,?1,456,'live')")
+            .bind(format!("objects/00/{}", "00".repeat(32)))
+            .execute(&mut *tx)
+            .await
+            .expect("旧物理布局对象");
+        tx.commit().await.expect("提交旧对象");
+        old.close().await;
+        let rows = scalar::<String>(path, OBJECT_ROWS_SQL).await;
+        (previous, rows)
+    }
+
+    #[tokio::test]
+    async fn v14_object_layout_fence_backs_up_preserves_legacy_and_refuses_old_writer() {
+        let dir = TestDir::new("s136-v14-v15");
+        let path = dir.database();
+        let (previous, legacy_rows) = v14_database_with_legacy_object(&path).await;
+        let schema_sql =
+            "SELECT group_concat(sql,';') FROM (SELECT sql FROM sqlite_master ORDER BY type,name)";
+        let old_schema = scalar::<String>(&path, schema_sql).await;
+        let backup = migration_backup_path(&path, 14, 15);
+        assert!(!backup.exists());
+
+        let upgraded = Database::open(&path).await.expect("应用对象布局语义围栏");
+        assert_eq!(upgraded.schema_version(), 15);
+        upgraded.close().await;
+
+        assert!(backup.exists(), "14→15 必须先保存一致性备份");
+        assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 14);
+        assert_eq!(scalar::<i64>(&path, "PRAGMA user_version").await, 15);
+        assert_eq!(scalar::<String>(&backup, "PRAGMA quick_check").await, "ok");
+        assert_eq!(
+            scalar::<String>(&backup, OBJECT_ROWS_SQL).await,
+            legacy_rows
+        );
+        assert_eq!(scalar::<String>(&path, OBJECT_ROWS_SQL).await, legacy_rows);
+        assert_eq!(
+            scalar::<String>(&path, schema_sql).await,
+            old_schema,
+            "语义围栏不得改表、放松约束或移除不可变触发器"
+        );
+        assert_eq!(
+            scalar::<i64>(&backup, "SELECT max(version) FROM _sqlx_migrations").await,
+            14
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &path,
+                "SELECT max(version) FROM _sqlx_migrations WHERE success=1"
+            )
+            .await,
+            15
+        );
+
+        let backup_bytes = std::fs::read(&backup).unwrap();
+        let reopened = Database::open(&path).await.expect("新二进制幂等重开");
+        reopened.close().await;
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            backup_bytes,
+            "重开不覆盖迁移前备份"
+        );
+
+        // user_version 已写回和迁移提交后尚未写回两种状态，都不得向旧二进制暴露可写句柄。
+        for marker in [15, 14] {
+            if marker == 14 {
+                let mut conn = connect_options(&path).connect().await.unwrap();
+                sqlx::query("PRAGMA user_version = 14")
+                    .execute(&mut conn)
+                    .await
+                    .unwrap();
+                conn.close().await.unwrap();
+            }
+            let before = std::fs::read(&path).unwrap();
+            assert!(matches!(
+                Database::open_with(&path, &previous).await,
+                Err(DbError::SchemaTooNew {
+                    found: 15,
+                    supported: 14
+                })
+            ));
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "旧二进制拒写前不得修改数据库"
+            );
+            assert_eq!(scalar::<i64>(&path, "PRAGMA user_version").await, marker);
+            assert_eq!(scalar::<String>(&path, OBJECT_ROWS_SQL).await, legacy_rows);
+        }
+    }
+
+    #[tokio::test]
+    async fn v15_failed_migration_returns_no_writer_and_preserves_v14_backup() {
+        let dir = TestDir::new("s136-v15-failed");
+        let path = dir.database();
+        let (previous, legacy_rows) = v14_database_with_legacy_object(&path).await;
+        let mut migrations: Vec<_> = previous.iter().cloned().collect();
+        migrations.push(sqlx::migrate::Migration::new(
+            15,
+            "broken layout fence".into(),
+            sqlx::migrate::MigrationType::Simple,
+            "CREATE TABLE probe(id INTEGER PRIMARY KEY) STRICT; INSERT INTO missing_table VALUES(1);".into(),
+            false,
+        ));
+        let broken = Migrator {
+            migrations: std::borrow::Cow::Owned(migrations),
+            ..Migrator::DEFAULT
+        };
+        let backup = migration_backup_path(&path, 14, 15);
+        match Database::open_with(&path, &broken).await {
+            Err(DbError::Migration {
+                backup: Some(actual),
+                ..
+            }) => assert_eq!(actual, backup),
+            other => panic!("迁移失败不得返回可写句柄，必须给出备份路径：{other:?}"),
+        }
+        assert_eq!(scalar::<i64>(&path, "PRAGMA user_version").await, 14);
+        assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 14);
+        assert_eq!(scalar::<String>(&path, OBJECT_ROWS_SQL).await, legacy_rows);
+        assert_eq!(
+            scalar::<String>(&backup, OBJECT_ROWS_SQL).await,
+            legacy_rows
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &path,
+                "SELECT count(*) FROM _sqlx_migrations WHERE version=15"
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            scalar::<i64>(
+                &path,
+                "SELECT count(*) FROM sqlite_master WHERE name='probe'"
+            )
+            .await,
+            0
+        );
+        let old = Database::open_with(&path, &previous)
+            .await
+            .expect("失败后保留完整 v14 状态");
+        old.close().await;
+    }
+
     #[tokio::test]
     async fn empty_database_is_initialized_as_server_store() {
         let dir = TestDir::new("empty");
@@ -699,15 +870,15 @@ mod tests {
         assert_eq!(database.schema_version(), target_schema_version());
         assert_eq!(
             target_schema_version(),
-            14,
-            "内嵌迁移应当是 0001—0014 十四版"
+            15,
+            "内嵌迁移应当是 0001—0015 十五版"
         );
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 14);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 15);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -718,7 +889,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            14
+            15
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -730,7 +901,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 14);
+        assert_eq!(reopened.schema_version(), 15);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1154,7 +1325,7 @@ mod tests {
                 error,
                 DbError::SchemaTooNew {
                     found: 20,
-                    supported: 14
+                    supported: 15
                 }
             ),
             "实际错误 {error:?}"
@@ -1304,13 +1475,13 @@ mod tests {
         insert_metadata(&old, "server_id", "preserved").await;
         old.close().await;
         let upgraded = Database::open(&path).await.unwrap();
-        assert_eq!(upgraded.schema_version(), 14);
+        assert_eq!(upgraded.schema_version(), 15);
         upgraded.close().await;
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "preserved".to_owned())]
         );
-        let backup = migration_backup_path(&path, 9, 14);
+        let backup = migration_backup_path(&path, 9, 15);
         assert!(backup.exists());
         assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 9);
         assert_eq!(
@@ -1324,7 +1495,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 14,
+                found: 15,
                 supported: 9
             }
         ));
@@ -1349,9 +1520,9 @@ mod tests {
         insert_metadata(&old, "server_id", "s086-preserved").await;
         old.close().await;
         let upgraded = Database::open(&path).await.unwrap();
-        assert_eq!(upgraded.schema_version(), 14);
+        assert_eq!(upgraded.schema_version(), 15);
         upgraded.close().await;
-        let backup = migration_backup_path(&path, 10, 14);
+        let backup = migration_backup_path(&path, 10, 15);
         assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 10);
         assert_eq!(
             scalar::<i64>(
@@ -1365,7 +1536,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 14,
+                found: 15,
                 supported: 10
             }
         ));
@@ -1389,9 +1560,9 @@ mod tests {
         insert_metadata(&old, "server_id", "backup-migration-preserved").await;
         old.close().await;
         let new = Database::open(&path).await.unwrap();
-        assert_eq!(new.schema_version(), 14);
+        assert_eq!(new.schema_version(), 15);
         new.close().await;
-        let backup = migration_backup_path(&path, 11, 14);
+        let backup = migration_backup_path(&path, 11, 15);
         assert!(backup.exists());
         assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 11);
         assert_eq!(
@@ -1406,7 +1577,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 14,
+                found: 15,
                 supported: 11
             }
         ));
@@ -1436,7 +1607,7 @@ mod tests {
         sqlx::query("INSERT INTO backup_preparations(id,owner_id,phase,created_at,expires_at,manifest_hash) VALUES(zeroblob(16),zeroblob(16),'ready',1,2,zeroblob(32))").execute(old.pool()).await.unwrap();
         old.close().await;
         let new = Database::open(&path).await.unwrap();
-        assert_eq!(new.schema_version(), 14);
+        assert_eq!(new.schema_version(), 15);
         let state: (String, String, Option<i64>) =
             sqlx::query_as("SELECT phase,integrity,verified_at FROM backup_preparations")
                 .fetch_one(new.pool())
@@ -1451,13 +1622,13 @@ mod tests {
             0
         );
         new.close().await;
-        let backup = migration_backup_path(&path, 12, 14);
+        let backup = migration_backup_path(&path, 12, 15);
         assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 12);
         assert_eq!(metadata(&backup).await, metadata(&path).await);
         assert!(matches!(
             Database::open_with(&path, &old_migrator).await,
             Err(DbError::SchemaTooNew {
-                found: 14,
+                found: 15,
                 supported: 12
             })
         ));

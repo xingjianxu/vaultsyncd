@@ -60,9 +60,11 @@ impl Plan {
             if !roots.contains(&o.root) || !keys.insert((o.root, o.hash)) {
                 return Err(Error::InvalidIdentity);
             }
-            if ObjectLayout::relative_object_path(&ContentDigest::from_bytes(o.hash)).to_str()
-                != Some(o.storage_path.as_str())
-                || !paths.insert(&o.storage_path)
+            if !ObjectLayout::valid_storage_path(
+                o.root,
+                &ContentDigest::from_bytes(o.hash),
+                &o.storage_path,
+            ) || !paths.insert(&o.storage_path)
             {
                 return Err(Error::InvalidPath);
             }
@@ -107,6 +109,58 @@ mod tests {
         assert_eq!(ready(&p, 0, true, false, true), Err(Error::NotReadOnly));
         assert_eq!(ready(&p, 0, true, true, false), Err(Error::Unprotected));
         assert_eq!(ready(&p, 0, true, true, true), Ok(()));
+    }
+
+    #[test]
+    fn same_digest_is_root_isolated_and_legacy_paths_remain_unique() {
+        let roots: Vec<_> = [1, 2]
+            .into_iter()
+            .map(|n| FrozenRoot {
+                root: RootId::from_bytes([n; 16]),
+                seq: RootSeq::ZERO,
+            })
+            .collect();
+        let digest = ContentDigest::from_bytes([0xab; 32]);
+        let mut plan = Plan {
+            objects: roots
+                .iter()
+                .map(|r| FrozenObject {
+                    root: r.root,
+                    hash: *digest.as_bytes(),
+                    size: 1,
+                    storage_path: ObjectLayout::scoped_relative_object_path(r.root, &digest)
+                        .to_str()
+                        .unwrap()
+                        .to_owned(),
+                })
+                .collect(),
+            roots,
+        };
+        assert_eq!(plan.validate(), Ok(()));
+        let scoped = plan.objects[1].storage_path.clone();
+        plan.objects[1].storage_path = plan.objects[0].storage_path.clone();
+        assert_eq!(plan.validate(), Err(Error::InvalidPath));
+        plan.objects[1].storage_path = scoped;
+        let legacy = ObjectLayout::relative_object_path(&digest)
+            .to_str()
+            .unwrap()
+            .to_owned();
+        plan.objects[0].storage_path = legacy.clone();
+        assert_eq!(plan.validate(), Ok(()));
+        plan.objects[1].storage_path = legacy;
+        assert_eq!(plan.validate(), Err(Error::InvalidPath));
+        plan.objects.pop();
+        assert_eq!(plan.validate(), Ok(()));
+        let canonical = plan.objects[0].storage_path.clone();
+        for invalid in [
+            format!("./{canonical}"),
+            format!("{canonical}/"),
+            canonical.replace("objects/", "objects//"),
+            canonical.to_uppercase(),
+        ] {
+            plan.objects[0].storage_path = invalid;
+            assert_eq!(plan.validate(), Err(Error::InvalidPath));
+        }
     }
 
     #[test]

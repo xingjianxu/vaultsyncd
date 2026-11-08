@@ -12,7 +12,7 @@ use axum::{
 use std::sync::Arc;
 use vaultsyncd_domain::ids::{EntryId, ObjectLeaseId, VersionId};
 use vaultsyncd_protocol::generated::{ErrorCode, VersionLease, VersionLeaseRequest};
-use vaultsyncd_server_core::objects::{ContentDigest, ObjectLayout};
+use vaultsyncd_server_core::objects::ContentDigest;
 use vaultsyncd_server_store::version_leases::{self as store, Error, Lease, Request};
 
 /// Create (or safely replay) an exact fixed-version lease.
@@ -130,7 +130,21 @@ async fn execute(
     }
     if !lease.closed {
         // Protection is already persistent before touching the object, closing the GC read/check race.
-        let path = ObjectLayout::new(c.state_dir.join("objects")).object_path(&digest);
+        let layout =
+            match crate::object_layout::for_digest(c.auth.database(), &c.state_dir, root, digest)
+                .await
+            {
+                Ok(layout) => layout,
+                Err(error) => {
+                    tracing::warn!(root_id=%root, error=%error, "固定版本租约对象布局不可读");
+                    return internal_error(
+                        &caller.request_id,
+                        "固定版本对象登记不可读；不得释放本地副本",
+                        Some(root.to_string()),
+                    );
+                }
+            };
+        let path = layout.object_path(&digest);
         let readable = std::fs::File::open(path)
             .and_then(|f| f.metadata())
             .is_ok_and(|m| m.is_file() && m.len() == size);

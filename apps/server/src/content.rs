@@ -81,8 +81,13 @@ impl ContentContext {
         }
     }
 
-    fn objects(&self) -> ObjectLayout {
-        ObjectLayout::new(self.state_dir.join("objects"))
+    async fn objects(
+        &self,
+        root: RootId,
+        digests: &[ContentDigest],
+    ) -> Result<ObjectLayout, sqlx::Error> {
+        crate::object_layout::for_digests(self.auth.database(), &self.state_dir, root, digests)
+            .await
     }
 }
 
@@ -108,9 +113,32 @@ pub async fn finalize(
         root_id,
         caller.now,
     );
+    // 只按本次上传摘要解析布局；会话不存在时核心会返回 404，这里用空集合不猜路径。
+    let upload_digest: Vec<ContentDigest> =
+        sqlx::query_scalar::<_, Vec<u8>>("SELECT hash FROM uploads WHERE id = ? AND root_id = ?")
+            .bind(upload_id.as_bytes().as_slice())
+            .bind(root_id.as_bytes().as_slice())
+            .fetch_optional(context.auth.database().pool())
+            .await
+            .ok()
+            .flatten()
+            .and_then(|hash| <[u8; 32]>::try_from(hash).ok())
+            .map(|hash| vec![ContentDigest::from_bytes(hash)])
+            .unwrap_or_default();
+    let layout = match context.objects(root_id, &upload_digest).await {
+        Ok(layout) => layout,
+        Err(error) => {
+            warn!(root_id = %root_id, error = %error, "对象布局不可用");
+            return internal_error(
+                &caller.request_id,
+                "对象布局不可用",
+                Some(root_id.to_string()),
+            );
+        }
+    };
     let mut assembler = FsAssembler {
         state_dir: context.state_dir.clone(),
-        layout: context.objects(),
+        layout,
     };
     let mut objects = DbObjects {
         database: context.auth.database(),
@@ -205,7 +233,20 @@ pub async fn download(
     };
 
     crate::test_faults::checkpoint("download_open");
-    let layout = context.objects();
+    let layout = match context.objects(root_id, &[handle.content.digest]).await {
+        Ok(layout) => layout,
+        Err(error) => {
+            if let Err(failure) = content::finish_download(&mut leases, handle).await {
+                warn!(error = %failure, "布局失败后解除下载租约失败");
+            }
+            warn!(root_id = %root_id, error = %error, "对象布局不可用");
+            return internal_error(
+                &caller.request_id,
+                "对象布局不可用",
+                Some(root_id.to_string()),
+            );
+        }
+    };
     let mut port = FsObjectPort;
     let read = content::read_download(&mut port, &layout, &handle);
     // 租约解除失败不改判已读出的字节（那些字节已经是客户端的事），但必须如实记录。
@@ -385,6 +426,10 @@ struct FsAssembler {
 }
 
 impl ContentPublisher for FsAssembler {
+    fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
+        self.layout.storage_path(digest)
+    }
+
     fn publish_parts(
         &mut self,
         upload: UploadId,

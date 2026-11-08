@@ -12,8 +12,11 @@
 //!
 //! 失败一律不返回可提交的结果，并报告暂存副本是否已清理；没有“默认成功”的路径。
 
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+use vaultsyncd_domain::ids::RootId;
 
 pub mod capture;
 pub mod error;
@@ -162,13 +165,59 @@ impl std::error::Error for InvalidStagingName {}
 #[derive(Clone, Debug)]
 pub struct ObjectLayout {
     root: PathBuf,
+    scope: Option<RootId>,
+    legacy: HashSet<ContentDigest>,
 }
 
 impl ObjectLayout {
     /// 以对象区根目录建立布局。
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        ObjectLayout { root: root.into() }
+        ObjectLayout {
+            root: root.into(),
+            scope: None,
+            legacy: HashSet::new(),
+        }
+    }
+
+    /// Root 隔离布局；旧路径仅对该 Root 数据库已登记的摘要开放，不探测磁盘回退。
+    #[must_use]
+    pub fn for_root(
+        root: impl Into<PathBuf>,
+        scope: RootId,
+        legacy: impl IntoIterator<Item = ContentDigest>,
+    ) -> Self {
+        Self {
+            root: root.into(),
+            scope: Some(scope),
+            legacy: legacy.into_iter().collect(),
+        }
+    }
+
+    /// 对象区内该 Root 的规范位置；已有旧记录保持原身份，新对象按 Root 分区。
+    #[must_use]
+    pub fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
+        match self.scope {
+            Some(scope) if !self.legacy.contains(digest) => {
+                Self::scoped_relative_object_path(scope, digest)
+            }
+            _ => Self::relative_object_path(digest),
+        }
+    }
+
+    /// 新对象的全局唯一登记路径，同时也是对象区内的实际物理路径。
+    #[must_use]
+    pub fn scoped_relative_object_path(scope: RootId, digest: &ContentDigest) -> PathBuf {
+        Path::new("roots")
+            .join(scope.to_hex())
+            .join(Self::relative_object_path(digest))
+    }
+
+    /// 只接纳精确匹配摘要及 Root 的新路径，或历史规范路径；拒绝任意路径和跨 Root 前缀。
+    #[must_use]
+    pub fn valid_storage_path(scope: RootId, digest: &ContentDigest, path: &str) -> bool {
+        Self::relative_object_path(digest).to_str() == Some(path)
+            || Self::scoped_relative_object_path(scope, digest).to_str() == Some(path)
     }
 
     /// 对象区根目录。
@@ -186,7 +235,7 @@ impl ObjectLayout {
     /// 已发布对象的绝对路径。
     #[must_use]
     pub fn object_path(&self, digest: &ContentDigest) -> PathBuf {
-        self.root.join(Self::relative_object_path(digest))
+        self.root.join(self.storage_path(digest))
     }
 
     /// 写进 `objects.storage_path` 的规范相对路径（`objects/<aa>/<hex>`，不含对象区根）。
@@ -252,6 +301,52 @@ mod tests {
             ContentDigest::from_hex(&format!("{SAMPLE_HEX}0")),
             Err(DigestParseError::WrongLength { found: 65 })
         );
+    }
+
+    #[test]
+    fn root_layout_only_reuses_explicitly_registered_legacy_digests() {
+        let a = RootId::from_bytes([1; 16]);
+        let b = RootId::from_bytes([2; 16]);
+        let digest = ContentDigest::from_hex(SAMPLE_HEX).expect("摘要");
+        let old = ObjectLayout::for_root("/state", a, [digest]);
+        let new_a = ObjectLayout::for_root("/state", a, []);
+        let new_b = ObjectLayout::for_root("/state", b, []);
+        assert_eq!(
+            old.storage_path(&digest),
+            ObjectLayout::relative_object_path(&digest)
+        );
+        assert_ne!(new_a.object_path(&digest), new_b.object_path(&digest));
+        assert_ne!(old.object_path(&digest), new_b.object_path(&digest));
+        assert!(ObjectLayout::valid_storage_path(
+            a,
+            &digest,
+            old.storage_path(&digest).to_str().unwrap()
+        ));
+        assert!(ObjectLayout::valid_storage_path(
+            a,
+            &digest,
+            new_a.storage_path(&digest).to_str().unwrap()
+        ));
+        assert!(!ObjectLayout::valid_storage_path(
+            a,
+            &digest,
+            new_b.storage_path(&digest).to_str().unwrap()
+        ));
+        assert!(!ObjectLayout::valid_storage_path(
+            a,
+            &digest,
+            &format!("../{}", old.storage_path(&digest).display())
+        ));
+        assert!(!ObjectLayout::valid_storage_path(
+            a,
+            &digest,
+            &format!(
+                "roots/{}/objects/../objects/{}/{}",
+                a.to_hex(),
+                digest.fanout(),
+                digest
+            )
+        ));
     }
 
     #[test]

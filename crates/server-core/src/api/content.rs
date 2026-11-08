@@ -325,9 +325,7 @@ where
                 content: ContentReference {
                     digest: session.hash,
                     size: session.total_size,
-                    storage_path: ObjectLayout::relative_object_path(&session.hash)
-                        .display()
-                        .to_string(),
+                    storage_path: publisher.storage_path(&session.hash).display().to_string(),
                 },
                 part_count: session.geometry().map(|g| g.part_count()).unwrap_or(0),
                 reuse: ReuseOutcome::ExistingVerified,

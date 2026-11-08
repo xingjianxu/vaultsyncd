@@ -12,7 +12,7 @@ use vaultsyncd_domain::{
 use vaultsyncd_platform_linux_server::files::RootHandle;
 use vaultsyncd_server_core::{
     commit::intent::PutPhase,
-    objects::{ExpectedContent, ObjectLayout},
+    objects::ExpectedContent,
     ports::{
         conflict_store::{ConflictCommitStore, ConflictWrite, OperationKey, RequestDigest},
         intent_log::IntentLog,
@@ -155,9 +155,9 @@ async fn replay(
             .map_err(text)?;
             crate::commands::verify_delete_scope(
                 db,
+                state,
                 owner,
                 &handle,
-                ObjectLayout::new(state.join("objects")),
                 binding.root,
                 before.entry,
             )
@@ -192,7 +192,10 @@ async fn replay(
                     .await
                     .map_err(text)?;
             }
-            let mut target = WorkTreeTarget::new(handle, ObjectLayout::new(state.join("objects")));
+            let layout = crate::object_layout::for_root(db, state, binding.root)
+                .await
+                .map_err(text)?;
+            let mut target = WorkTreeTarget::new(handle, layout);
             match classify_put(&put, target.observe(&put.target_path)) {
                 RecoveryDecision::Redo => {
                     let published = target
@@ -346,7 +349,9 @@ async fn replay_trash_restore(
     let mut namespace = WorkTreeNamespace::new(Arc::clone(&handle));
     let mut target = WorkTreeTarget::new(
         Arc::clone(&handle),
-        ObjectLayout::new(state.join("objects")),
+        crate::object_layout::for_root(db, state, binding.root)
+            .await
+            .map_err(text)?,
     );
     let mut log = SqlIntentLog::new(db.clone(), owner).bound(Binding::linked(binding.key()));
     let mut store =

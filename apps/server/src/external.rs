@@ -24,7 +24,7 @@ use vaultsyncd_domain::ids::{EntryId, RootId, TxId, UserId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 use vaultsyncd_platform_linux_server::files::RootHandle;
 use vaultsyncd_server_core::commit::put::RootCommitGate;
-use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent, ObjectLayout};
+use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent};
 use vaultsyncd_server_core::observer::{
     ExternalObserver, ObserverPorts, OwnWriteIntent, PassClock, PassLimits, ScanLimits,
     StabilityWindow,
@@ -711,6 +711,25 @@ impl ObserverRuntime {
                     continue;
                 }
             }
+            let layout = match crate::object_layout::for_root(
+                &self.database,
+                &self.state_dir,
+                root.id,
+            )
+            .await
+            {
+                Ok(layout) => layout,
+                Err(error) => {
+                    self.collection_state(
+                        root.id,
+                        Collection::Blocked,
+                        "无法读取对象布局登记，暂停采集；请检查存储。",
+                    )
+                    .await;
+                    warn!(root = %root.id, error = %error, "无法读取对象布局，暂停观察采纳");
+                    continue;
+                }
+            };
             self.collection_state(
                 root.id,
                 Collection::Scanning,
@@ -736,7 +755,6 @@ impl ObserverRuntime {
                         .or_insert(RootState { handle, observer })
                 }
             };
-            let layout = ObjectLayout::new(self.state_dir.join("objects"));
             let mut work = LinuxWorkTree::new(Arc::clone(&state.handle));
             let mut blobs = LinuxObjectPort::new(Arc::clone(&state.handle), layout.root());
             let mut store = SqlExternalStore::new(self.database.clone(), root.owner);

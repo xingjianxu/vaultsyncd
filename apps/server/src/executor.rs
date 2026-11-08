@@ -133,10 +133,27 @@ impl ExecutorContext {
         }
     }
 
-    /// 对象区布局（与上传 finalize 共用同一个目录）。
+    /// 已授权 Root 的对象区布局（与上传 finalize 共用；旧路径仅按该 Root 的登记允许）。
+    ///
+    /// 调用方必须先核对 Root 的 owner scope；布局选择不替代授权。
+    ///
+    /// # Errors
+    ///
+    /// 对象登记不可读时返回存储失败，不回退到磁盘探测。
+    pub async fn objects(
+        &self,
+        root: RootId,
+        digests: &[ContentDigest],
+    ) -> Result<ObjectLayout, OperationFailure> {
+        crate::object_layout::for_digests(&self.database, &self.state_dir, root, digests)
+            .await
+            .map_err(|error| storage_error(&error.to_string()))
+    }
+
+    /// 状态目录（对象区根；删除现场核对按摘要解析布局时使用）。
     #[must_use]
-    pub fn objects(&self) -> ObjectLayout {
-        ObjectLayout::new(self.state_dir.join("objects"))
+    pub(crate) fn state_dir(&self) -> &std::path::Path {
+        &self.state_dir
     }
 
     /// 数据库句柄（命令适配器需要同一个连接池）。
@@ -367,7 +384,13 @@ impl ExecutorContext {
                 return Err(failure);
             }
         };
-        let layout = self.objects();
+        let layout = match self.objects(key.root, &[command.content.digest]).await {
+            Ok(layout) => layout,
+            Err(failure) => {
+                self.reject(owner, key, &failure).await;
+                return Err(failure);
+            }
+        };
         let mut target = WorkTreeTarget::new(Arc::clone(&root_handle), layout.clone());
 
         // 3. 现场前提：观察目标并按实测结果构造 `before`（与客户端的基线 revision 一致才继续）。
@@ -1412,4 +1435,111 @@ pub fn server_now() -> Result<UtcTimestamp, String> {
         .as_secs();
     UtcTimestamp::from_unix_seconds(i64::try_from(seconds).unwrap_or(i64::MAX))
         .map_err(|error| format!("系统时钟越界：{error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vaultsyncd_domain::version::ServerEpoch;
+    use vaultsyncd_server_store::versions::NewObject;
+
+    #[tokio::test]
+    async fn executor_layout_uses_only_its_roots_registered_legacy_objects() {
+        let state = std::env::temp_dir().join(format!(
+            "vaultsyncd-s136-executor-{}",
+            RootId::from_bytes(random_bytes())
+        ));
+        std::fs::create_dir_all(&state).unwrap();
+        let db = Database::open(state.join("server.sqlite3")).await.unwrap();
+        let owner = UserId::from_bytes([1; 16]);
+        let first = RootId::from_bytes([2; 16]);
+        let second = RootId::from_bytes([3; 16]);
+        let registered = ContentDigest::from_bytes([4; 32]);
+        let unregistered = ContentDigest::from_bytes([5; 32]);
+        let mut tx = db.begin_write().await.unwrap();
+        sqlx::query("INSERT INTO users(id,login,password_hash,status) VALUES(?,'layout-owner','test-only','active')")
+            .bind(owner.as_bytes().as_slice())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        for (root, entry) in [
+            (first, EntryId::from_bytes([6; 16])),
+            (second, EntryId::from_bytes([7; 16])),
+        ] {
+            store_roots::insert_root(
+                &mut tx,
+                &store_roots::NewRoot {
+                    id: root,
+                    entry,
+                    owner,
+                    absolute_path: state.join(root.to_hex()).display().to_string(),
+                    volume_identity: vec![1],
+                    root_file_identity: vec![2],
+                    epoch: ServerEpoch::ZERO,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        store_versions::record_object(
+            &mut tx,
+            owner,
+            &NewObject {
+                root: first,
+                hash: *registered.as_bytes(),
+                size: 3,
+                storage_path: ObjectLayout::relative_object_path(&registered)
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+                verified_at: UtcTimestamp::from_unix_seconds(1).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let legacy = ObjectLayout::new(state.join("objects"));
+        // Both a registered legacy object and a stray old-layout file exist on disk.
+        for digest in [registered, unregistered] {
+            let path = legacy.object_path(&digest);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"old").unwrap();
+        }
+        let executor = ExecutorContext::new(db.clone(), &state, None);
+        let first_layout = executor.objects(first, &[registered]).await.unwrap();
+        let second_layout = executor.objects(second, &[registered]).await.unwrap();
+        assert_eq!(
+            first_layout.object_path(&registered),
+            legacy.object_path(&registered)
+        );
+        assert_eq!(
+            second_layout.object_path(&registered),
+            state
+                .join("objects")
+                .join(ObjectLayout::scoped_relative_object_path(
+                    second,
+                    &registered
+                ))
+        );
+        for (root, layout) in [(first, first_layout), (second, second_layout)] {
+            assert_eq!(
+                layout.object_path(&unregistered),
+                state
+                    .join("objects")
+                    .join(ObjectLayout::scoped_relative_object_path(
+                        root,
+                        &unregistered
+                    ))
+            );
+        }
+        db.pool().close().await;
+        assert!(
+            matches!(
+                executor.objects(first, &[registered]).await,
+                Err(OperationFailure::Storage { .. })
+            ),
+            "unreadable registration must fail closed, not use legacy disk bytes"
+        );
+        std::fs::remove_dir_all(state).unwrap();
+    }
 }
