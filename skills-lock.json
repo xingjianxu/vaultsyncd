@@ -13,6 +13,24 @@
       "skillPath": "skills/productivity/grill-me/SKILL.md",
       "computedHash": "9cdbb4b8f7a3aeaef82e6230c9e823500d4a8a1214c726cf342cf9829d34fc7d"
     },
+    "mantine-combobox": {
+      "source": "mantinedev/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mantine-combobox/SKILL.md",
+      "computedHash": "93749f2dbfc3cd9bbc0238b057843b6f42f0a39e7641dc33c7eeb38efc2a8c99"
+    },
+    "mantine-custom-components": {
+      "source": "mantinedev/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mantine-custom-components/SKILL.md",
+      "computedHash": "eb1dff7e3a2d6cf38a2444a474682bc88e1b8395896a68e29ca0dd848564552c"
+    },
+    "mantine-form": {
+      "source": "mantinedev/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mantine-form/SKILL.md",
+      "computedHash": "3de4989c48fc109299ab2d728ff2360903c5f7c6b2138813a859b35d9f15857a"
+    },
     "using-git-worktrees": {
       "source": "obra/superpowers",
       "sourceType": "github",
