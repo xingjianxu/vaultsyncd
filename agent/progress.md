@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S119 done**，已按用户最新决定以 Mantine 9.7.5 默认主题、AppShell 与现成组件替代 HeroUI；三个 subagent 分工及生命周期见 [S119](tasks/S119.md)。Web test/build、根typecheck、Nix Web、Rust67项/fmt/build/clippy、真实 Chromium四业务51项与50组路由/主题/宽度/CSP全部通过。未部署，线上仍为下述 S118 generation247。S001—S119 共119卡，114 done、5 blocked；**当前无 ready 卡**，其余恢复条件保持。
+当前：**S120 done**，已将部署时 master 最新提交 `b5e96f2`（S119 Mantine Web）部署到本机 **generation248**；S119 的 Mantine 9.7.5 AppShell/默认主题与逐响应 style nonce CSP 已上线，账号/数据/ServerId/RootId 保持，服务仍为 `xingjian:users`。部署、浏览器与既有服务核对详见 [S120](tasks/S120.md) 与 [部署文档](../docs/operations/nixos.md#s120-mantine-版最新服务端部署2026-11-08generation248)。S001—S120 共 **120 卡，115 done、5 blocked**；**当前无 ready 卡**，其余恢复条件保持。
 
-线上基线：**S118 done**，已将部署时 master 最新提交 `9da5ee8`（含 S115/S117 Web 紧凑化）部署到本机 **generation247**，并随该次部署激活用户要求的 dae 分流规则调整；账号/数据/ServerId/RootId 保持，服务仍为 `xingjian:users`。部署、浏览器与既有服务核对详见 [S118](tasks/S118.md) 与 [部署文档](../docs/operations/nixos.md#s118-最新版本部署2026-11-08generation247)。S114 本地目录选择已原生验收。
+最近部署：S120 用现有一键入口把 master HEAD `b5e96f2`（S119 Mantine Web）固定到本机 generation248。pure 构建/manifest/主机锁/dry/test/HTTPS/IPC/归属/switch 通过；线上 `index.html`（剥离逐响应 nonce 后）与两个主资产 sha256 与包内一致，CSP 为 `style-src` nonce、无 `unsafe-inline`；真实 Chromium 六项检查（TLS/CSP nonce 与 Mantine 主题/五路由含 Burger 响应式/登录 cookie/Root 健康/SSE）一次通过；10 项既有服务 PID 全不变，3 应用与锁不变。主机 pin `0073fd6` 已 ff 合 main 且自动清理；交接及整合/清理见 [S120](tasks/S120.md) 与 [批次](tasks/S120-batch.md)。旧 system 与证据保留，原首发门禁不变。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
@@ -145,5 +145,9 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | B | S115 | done | 实现3631c29、交接495a04d已ff合master；任务树/分支已清理；基线f3b8979 | Web测试/构建、根typecheck、Nix Web；Chromium四业务51项+恢复10项复验、50组主题/宽度/路由及生产CSP通过 | 无本卡阻塞；服务端部署见S118，原首发门禁不变 | [S117](tasks/S117.md) |
 
 | S118 | 将最新服务端（S117 之后）部署到本机 | L | S116、S117 | done | 源9da5ee8、主机42d99c5/b0ad622；项目整合/清理见批次 | pure/manifest/锁/dry/test/switch247、IPC与归属；线上3主文件sha256、Chromium六项、dae重启出网与9服务/3应用/SSH/锁核对通过 | 无本卡阻塞；原首发门禁保留 | [S118](tasks/S118.md) |
+
+| S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 | done | 实现b16d9a1、交接b5e96f2已ff合master；任务树/分支已清理；基线e598106 | Web test/build、根typecheck、Nix Web、Rust67项/fmt/build/clippy；Chromium四业务51项与50组路由/主题/宽度/CSP通过 | 无本卡阻塞；服务端部署见S120，原首发门禁不变 | [S119](tasks/S119.md) |
+
+| S120 | 将 Mantine 版最新服务端部署到本机 | L | S118、S119 | done | 源b5e96f2、主机0073fd6；项目整合/清理见批次 | pure/manifest/锁/dry/test/switch248、IPC与归属；线上html与两主资产sha256、CSP nonce、Chromium六项、10服务/3应用/SSH/锁不变 | 无本卡阻塞；原首发门禁保留 | [S120](tasks/S120.md) |
 
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 | done | 实现/验收b16d9a1已ff合master；任务树/分支已清理；基线e598106 | Web测试构建/根typecheck、Nix Web、Rust67项/fmt/build/clippy、Chromium四业务51项与50组主题/宽度/路由/CSP通过 | 无；未部署，原首发门禁保留 | [S119](tasks/S119.md) |

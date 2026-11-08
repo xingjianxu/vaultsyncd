@@ -251,6 +251,7 @@
 | S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | B | S115 |
 | S118 | 将最新服务端（S117 之后）部署到本机 | L | S116、S117 |
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 |
+| S120 | 将 Mantine 版最新服务端部署到本机 | L | S118、S119 |
 
 ## 5. 逐步任务卡
 
@@ -1395,6 +1396,13 @@
 - 分工：S119-a 基础依赖、默认主题、AppShell/导航/概览及现成组件组合；S119-b 账号、Root、恢复、备份页面与 Mantine 表单；S119-c CSP、测试、真实浏览器与 Nix 离线构建。三个 subagent 在同一隔离树内按文件边界合作；主 agent 负责计划、ADR/接口、审查、交接与整合，只执行父卡 S119。
 - 验收：原 Web 测试、生产构建、根 typecheck、Nix Web 离线构建；必要服务端测试/fmt/clippy；真实 Chromium 五路由、明暗主题、320/390/768/1440/1920 响应式、键盘/弹层与生产 CSP，以及真实隔离 btrfs 服务的账号/Root/恢复/备份流程。测试适配组件 DOM，不删减业务断言。
 - 边界：不改 wire DTO、数据库或状态机，不接触正式数据，不默认部署。用户最新决定由 ADR-018 取代 ADR-017 的组件选择；CSP 不增加 unsafe-inline。交接 `agent/tasks/S119.md` 及三个子卡，验收提交后合入 master 并清理本地任务树/分支。
+
+### S120 — 将 Mantine 版最新服务端部署到本机
+
+- 依据：2026-11-08 用户再次要求“将服务端最新版部署到本机”；前置 S118、S119 done；design §17.2、§11.5、§18.1。
+- 结果：用现有一键 pure 入口把部署时 master HEAD 固定到 `/etc/nixos#wks-lab`，使 S119 的 Mantine Web 与逐响应 style nonce CSP 上线；保留域名、账号、ServerId、RootId、正式数据与主机依赖锁。
+- 验收：clean/pure 构建/manifest/主机锁/dry-activate/test/HTTPS/IPC/身份/UID与归属/switch；线上 HTML（剥离 nonce 后）与主资产 sha256、CSP nonce 与无 unsafe-inline、真实 Chromium 五路由含 Burger 响应式/主题/登录 cookie/Root 健康/SSE；既有服务、SSH、应用与主机锁核对。
+- 交接：`agent/tasks/S120.md`；记录两仓库提交、generation、证据、恢复入口与清理。仅部署本机，不改变 S101/S106—108 与 T02 首发门禁。
 
 ## 7. 记录模板与续接规则
 
