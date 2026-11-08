@@ -1446,6 +1446,13 @@
 - 验证：核对被删除文件可逐字节从固定提交恢复；历史卡状态和 blocked 原文/状态行保持；本地链接、上下文提取及 diff 检查通过。保留用户未提交修改，不重跑或重认定产品验收，不清理 Git 外证据。
 - 交接：`agent/tasks/S126.md`；纯文档在 master 原地维护；完成后无 ready 卡，沿用 blocked 恢复顺序。
 
+### S127 — 使用 Mantine Tree 重构文件浏览器目录树
+
+- 依据：2026-11-08 用户指定 https://mantine.dev/core/tree/；前置 S124 done；design §18.1。
+- 结果：将目录树整理为独立 Mantine Tree/useTree 组件，统一节点、层级线、展开图标与选中样式；目录标签导航、箭头独立展开，空目录不显示展开按钮。保持 Root、URL、历史、快照读取和只读边界。
+- 验收：Web test/build、根 typecheck；真实 Chromium + 独立 btrfs 服务验证展开/收起不导航、空目录、选中与深链/历史同步、键盘与 Root 隔离、明暗/窄屏/CSP，以及既有文件浏览器回归。
+- 交接：`agent/tasks/S127.md`。仅重构目录树，不默认部署；原 blocked 恢复条件保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

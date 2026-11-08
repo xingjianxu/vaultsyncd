@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { listRoots, type RootSummary, type SnapshotEntry } from "@vaultsyncd/api-client";
-import { ActionIcon, Alert, Anchor, Button, Code, Group, Pagination, Paper, Select, Stack, Table, Text, TextInput, Tree, useTree, type TreeNodeData } from "@mantine/core";
+import { ActionIcon, Alert, Anchor, Button, Code, Group, Pagination, Paper, Select, Stack, Table, Text, TextInput } from "@mantine/core";
+import { DirectoryTree } from "./DirectoryTree";
+import { FileIcon } from "./FileIcon";
 import { Dialog, EmptyState } from "../../components/ui";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
@@ -71,49 +73,8 @@ function RootBrowser({ location }: { location: string }) {
     navigation={navigation} rootError={rootError} rootsLoading={loading} retryRoots={() => setRevision(value => value + 1)} />;
 }
 
-function FileIcon({ name }: { name: "back" | "forward" | "up" | "refresh" | "properties" | "folder" | "file" | "expand" | "collapse" }) {
-  const paths = {
-    back: "M15 5l-7 7 7 7", forward: "M9 5l7 7-7 7", up: "M5 14l7-7 7 7 M12 7v14",
-    refresh: "M20 7v5h-5 M20 12a8 8 0 1 0-2 6", properties: "M12 11v6 M12 7v.1 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
-    folder: "M3 7h6l2 2h10v11H3z M3 7V4h6l2 3", file: "M6 3h8l4 4v14H6z M14 3v5h4",
-    expand: "M9 5l7 7-7 7", collapse: "M5 9l7 7 7-7",
-  };
-  return <svg aria-hidden="true" className="files-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]} /></svg>;
-}
 function Tool({ label, icon, disabled, onClick }: { label: string; icon: Parameters<typeof FileIcon>[0]["name"]; disabled?: boolean; onClick: () => void }) {
   return <ActionIcon variant="default" size="md" aria-label={label} title={label} disabled={disabled} onClick={onClick}><FileIcon name={icon} /></ActionIcon>;
-}
-
-function DirectoryTree({ snapshot, directory, rootName, navigate }: { snapshot: DirectorySnapshot; directory?: SnapshotEntry; rootName: string; navigate: (entry: SnapshotEntry) => void }) {
-  const data = useMemo(() => {
-    const nodes = new Map<string, TreeNodeData>();
-    for (const entry of snapshot.entries.values()) if (entry.kind === "directory") nodes.set(entry.entry_id, { value: entry.entry_id, label: entry.name || rootName, children: [] });
-    for (const [id, node] of nodes) node.children = (snapshot.children.get(id) ?? []).filter(entry => entry.kind === "directory").map(entry => nodes.get(entry.entry_id)!);
-    return [nodes.get(snapshot.root.entry_id)!];
-  }, [snapshot, rootName]);
-  const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
-  const tree = useTree({ expandedState, onExpandedStateChange: setExpandedState, selectedState: directory ? [directory.entry_id] : [], onSelectedStateChange: values => {
-    const entry = snapshot.entries.get(values[0]);
-    if (entry && entry.entry_id !== directory?.entry_id) navigate(entry);
-  } });
-  useEffect(() => {
-    const ancestors = directory ? ancestry(snapshot, directory).slice(0, -1) : [snapshot.root];
-    setExpandedState(previous => ({ ...previous, [snapshot.root.entry_id]: true, ...Object.fromEntries(ancestors.map(entry => [entry.entry_id, true])) }));
-  }, [snapshot, directory?.entry_id, setExpandedState]);
-  return <Tree aria-label="目录树" data={data} tree={tree} selectOnClick expandOnClick={false} allowRangeSelection={false} levelOffset="sm"
-    onKeyDown={event => {
-      if (event.key !== "Enter") return;
-      const id = (event.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')?.dataset.value;
-      const entry = id ? snapshot.entries.get(id) : undefined;
-      if (entry) { event.preventDefault(); navigate(entry); }
-    }}
-    renderNode={({ node, expanded, hasChildren, elementProps }) => <div {...elementProps} title={String(node.label)}>
-      <Group gap={4} wrap="nowrap">
-        <ActionIcon size="xs" variant="subtle" color="gray" tabIndex={-1} aria-label={`${expanded ? "收起" : "展开"} ${node.label}`} disabled={!hasChildren}
-          onClick={event => { event.stopPropagation(); tree.toggleExpanded(node.value); }}><FileIcon name={expanded ? "collapse" : "expand"} /></ActionIcon>
-        <FileIcon name="folder" /><Text size="sm" truncate>{node.label}</Text>
-      </Group>
-    </div>} />;
 }
 
 function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, rootsLoading, retryRoots }: {

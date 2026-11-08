@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S124: built Web + real Chromium + isolated btrfs service, no API fixtures.
+"""S127: built Web + real Chromium + isolated btrfs service, no API fixtures.
 
 VAULTSYNCD_TEST_BIN_DIR=... nix develop .#web-tests --command python3 tests/web/files-browser.py
 Network faults only affect this run's proxy; no online SQL or production writes.
@@ -22,7 +22,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data") / f"vs-s124-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data") / f"vs-s127-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -35,7 +35,7 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    print(f"S124 artifacts: {RUN}", flush=True)
+    print(f"S127 artifacts: {RUN}", flush=True)
     state, roots = RUN / "state", RUN / "roots"
     state.mkdir(mode=0o700); roots.mkdir()
     documents, archive = roots / "documents", roots / "archive"
@@ -47,6 +47,9 @@ def main():
     special = documents / "URL # % & 空 格" / "子 + %2F"
     special.mkdir(parents=True)
     (special / "deep.txt").write_bytes(b"URL names\n")
+    long_directory = "目录-" + "a" * 120
+    (documents / long_directory).mkdir()
+    (documents / long_directory / "leaf.txt").write_bytes(b"long directory\n")
     (archive / "archive-only.txt").write_bytes(b"second root\n")
     for index in range(1005): (documents / f"file-{index:04}.txt").write_bytes(b"x")
     long_name = "long-" + "a" * 160 + ".txt"
@@ -166,6 +169,62 @@ def main():
             expect(page.get_by_text("切换 Root、浏览目录并查看文件属性。", exact=True)).not_to_be_visible()
             expect(page.get_by_role("button", name="刷新 Root 列表", exact=True)).not_to_be_visible()
             expect(page.get_by_role("tree", name="目录树", exact=True)).to_be_visible()
+            tree = page.get_by_role("tree", name="目录树", exact=True)
+            expect(tree).to_have_attribute("data-with-lines", "true")
+            docs_node = tree.get_by_text("文档", exact=True).locator("xpath=ancestor::li[1]")
+            empty_node = tree.get_by_text("空目录", exact=True).locator("xpath=ancestor::li[1]")
+            expect(empty_node).not_to_have_attribute("aria-expanded")
+            expect(empty_node.get_by_role("button")).to_have_count(0)
+            expect(tree.get_by_text("file-0000.txt", exact=True)).to_have_count(0)
+            current_url, current_requests = page.url, len(requests)
+            docs_node.get_by_role("button", name="展开 文档", exact=True).click()
+            expect(docs_node).to_have_attribute("aria-expanded", "true")
+            expect(tree.get_by_text("子目录", exact=True)).to_be_visible()
+            docs_node.get_by_role("button", name="收起 文档", exact=True).focus()
+            page.keyboard.press("Enter")
+            expect(docs_node).to_have_attribute("aria-expanded", "false")
+            expect(tree.get_by_text("子目录", exact=True)).not_to_be_visible()
+            assert page.url == current_url and len(requests) == current_requests
+            docs_node.focus(); page.keyboard.press("ArrowRight")
+            expect(docs_node).to_have_attribute("aria-expanded", "true")
+            page.keyboard.press("ArrowRight")
+            child_node = tree.get_by_text("子目录", exact=True).locator("xpath=ancestor::li[1]")
+            expect(child_node).to_be_focused()
+            page.keyboard.press("ArrowLeft"); expect(docs_node).to_be_focused()
+            page.keyboard.press("Enter")
+            expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/文档")
+            expect(docs_node).to_have_attribute("aria-selected", "true")
+            docs_node.get_by_role("button", name="收起 文档", exact=True).click()
+            expect(docs_node).to_have_attribute("aria-expanded", "false")
+            expect(table.get_by_role("button", name="子目录", exact=True)).to_be_visible()
+            docs_node.focus(); page.keyboard.press("Space")
+            expect(docs_node).to_have_attribute("aria-expanded", "true")
+            expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/文档")
+            # History reveals the selected path again; chevrons never add history.
+            page.get_by_role("button", name="后退", exact=True).click()
+            expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/")
+            page.get_by_role("button", name="前进", exact=True).click()
+            expect(docs_node).to_have_attribute("aria-selected", "true")
+            expect(docs_node).to_have_attribute("aria-expanded", "true")
+            page.get_by_role("button", name="返回上级", exact=True).click()
+            tree_layout_cases = []
+            for scheme in ("light", "dark"):
+                page.emulate_media(color_scheme=scheme)
+                for width in (320, 390, 768, 1440, 1920):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    page.wait_for_timeout(250)
+                    selected_label = tree.locator('.mantine-Tree-label[data-selected]')
+                    expect(selected_label).to_have_count(1)
+                    selected_bg = selected_label.evaluate("e => getComputedStyle(e).backgroundColor")
+                    other_bg = docs_node.locator('.mantine-Tree-label').first.evaluate("e => getComputedStyle(e).backgroundColor")
+                    assert selected_bg != other_bg, (scheme, width, "selection is not visible")
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, "tree overflow")
+                    assert tree.evaluate("e => e.scrollWidth > e.parentElement.clientWidth"), "long names must scroll within the sidebar"
+                    page.screenshot(path=str(RUN / f"tree-{scheme}-{width}.png"), full_page=True)
+                    tree_layout_cases.append([scheme, width])
+            page.emulate_media(color_scheme="light")
+            page.set_viewport_size({"width": 1440, "height": 1000})
+            page.wait_for_timeout(250)
             panel = page.locator(".files-browser").bounding_box()
             sidebar = page.locator(".files-sidebar").bounding_box()
             toolbar = page.get_by_role("toolbar", name="文件浏览器工具栏").bounding_box()
@@ -276,6 +335,9 @@ def main():
             page.get_by_label("筛选当前目录", exact=True).fill("")
             choose("archive", arc_id)
             expect(table.get_by_role("button", name="archive-only.txt", exact=True)).to_be_visible()
+            expect(tree.get_by_role("treeitem")).to_have_count(1)
+            expect(tree.get_by_role("button")).to_have_count(0)
+            expect(tree.locator('[aria-selected="true"]')).to_have_count(1)
             expect(table.get_by_role("button", name="文档", exact=True)).not_to_be_visible()
             expect(page.get_by_role("button", name="返回上级", exact=True)).to_be_disabled()
             page.get_by_role("button", name="后退", exact=True).click()
@@ -292,6 +354,9 @@ def main():
             assert delayed.is_set()
             choose("archive", arc_id)
             expect(table.get_by_role("button", name="archive-only.txt", exact=True)).to_be_visible()
+            expect(tree.get_by_role("treeitem")).to_have_count(1)
+            expect(tree.get_by_role("button")).to_have_count(0)
+            expect(tree.locator('[aria-selected="true"]')).to_have_count(1)
             faults["mode"] = None; release.set()
             page.wait_for_timeout(500)
             expect(table.get_by_role("button", name="archive-only.txt", exact=True)).to_be_visible()
@@ -339,8 +404,8 @@ def main():
             expect(page.get_by_role("heading", name="请先登录", exact=True)).to_be_visible()
             expect(table).not_to_be_visible()
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
-        print(f"S124 browser acceptance passed: {RUN}", flush=True)
+            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/chevron-no-navigation", "tree-empty-root/long-names/themes/responsive", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
+        print(f"S127 browser acceptance passed: {RUN}", flush=True)
     finally:
         release.set()
         if proxy: proxy.shutdown(); proxy.server_close()
