@@ -23,3 +23,5 @@ S136 批次：对象隔离修复 `f0e0103`、Web 文件操作 `0346ec1` 已 ff-o
 
 S136-d 批次：合并后审查修复 `c2d06b0` 已 ff-only 合 master；确认任务树干净、提交已合入且非当前工作树后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S136-followups` 与 `git branch -d fix/S136-object-layout-followups` 均成功。1 GiB btrfs loop 卷（`/data/vaultsyncd-lab/runs`）用于实跑 ignored 的离线恢复原生测试，结束后已卸载、删除镜像，`/data/vaultsyncd-lab/runs` 不再存在。证据：`artifacts/S136-followups/` 与当时任务树 `artifacts/S136-followups/`（已随工作树移除，摘要见 S136-d）。
 
+
+S137 批次：实现与验收`999bbee2dc941ecf3070aef8b9663e25a7032bfe`已ff合master；确认任务树干净、祖先关系和非当前目录后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S137-web-rename`、`git branch -d feat/S137-web-rename`均成功。原生创建的跨盘临时副本经925个基线文件与无额外文件核对后也已清理。所有日志保留永久`artifacts/S137/`，真实最终浏览器`/data/vs-s137-20261108T223612-3435202`，主树旧S134任务树保持。下一卡S138部署本机。
