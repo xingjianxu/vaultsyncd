@@ -255,6 +255,7 @@
 | S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 |
 | S122 | Web Root 文件浏览器与属性查看 | B/L | S048、S078、S119、S121 |
 | S124 | Web 文件浏览器左右分栏与 URL 目录定位 | B | S122、S123 |
+| S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | L/B | S113、S123、S124 |
 
 ## 5. 逐步任务卡
 
@@ -1429,6 +1430,13 @@
 - 规范：将 “Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.” 写入 design §18.1 和 agent 入口，适用于后续所有 UI 任务。
 - 验收：Web test/build、根 typecheck、Nix Web 构建；真实 Chromium + 独立 btrfs 服务验证左树右列表、Root 切换、URL 深链/重载/特殊名称/错误、地址栏与历史、筛选/分页/属性、网络失败/迟到响应、明暗/窄屏/CSP；保留 S122 只读边界。
 - 交接：`agent/tasks/S124.md` 与批次。仅本卡，不默认部署，不改变协议/数据库或原首发门禁。
+
+### S125 — 将最新服务端（S124 分栏文件浏览器）部署到本机
+
+- 依据：2026-11-08 用户要求“部署服务端到本机，部署完不要验证”；前置 S113（一键部署入口）、S121（generation249）、S123（generation250）、S124 done。design §17.2、§11.5。
+- 结果：用 S113 的一键入口把部署时 master HEAD 固定到本机，使 S124 的左树右列表文件浏览器与 URL 目录深链上线。只改主机版本 pin，不改产品代码、协议、schema 或数据库；域名、owner、正式数据、ServerId、RootId 与运行用户保持。
+- 范围：按用户明确要求，本轮不执行部署后验证（不跑 Chromium/浏览器矩阵、不比对线上资产哈希、不重铺服务 PID/应用/SSH/主机锁基线）。部署脚本自身的 clean 检查、pure 构建、manifest 与主机锁核对、dry-activate → test → HTTPS/IPC/身份/归属 → switch 门禁照常执行，失败即恢复旧 system。
+- 交接：`agent/tasks/S125.md` 与批次。原 S101 hosted、S106/S107 性能容量、S108 最终发行与 T02 Windows 门禁不变。
 
 ## 7. 记录模板与续接规则
 

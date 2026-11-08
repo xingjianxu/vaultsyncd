@@ -161,3 +161,5 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S123 | 将最新服务端（S122 文件浏览器）部署到本机 | L/B | S113、S121、S122 | done | 源6395dfa、主机pin207099c；项目整合/清理见批次 | 契约6/6、包内67/67；pure/锁/dry/test/switch250、IPC与归属；线上3资产sha256、Chromium生产7项含`#/files`只读浏览与属性、10服务/3应用/SSH/锁不变 | 无本卡阻塞；原首发门禁保留 | [S123](tasks/S123.md) |
 
 | S124 | Web 文件浏览器左右分栏与 URL 目录定位 | B | S122、S123 | done | 986c35c已ff合master；任务树/分支已清理，见批次；基线1e2d778 | Web test/build/typecheck、Nix Web；真实btrfs Chromium20类、列表/选择器与属性各10组、旧五路由50组通过 | 无本卡阻塞；未部署，原首发门禁保持 | [S124](tasks/S124.md) |
+
+| S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | L/B | S113、S123、S124 | in_progress | 开卡；任务树 `.worktrees/S125-local-deploy`/分支 `chore/S125-local-deploy` | 待部署（本轮按要求跳过部署后验证） | 待记录 | [S125](tasks/S125.md) |
