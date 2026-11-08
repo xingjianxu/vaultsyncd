@@ -138,4 +138,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S115 | 服务端 Web HeroUI React 完整重构 | B/L | S077、S078、S079、S090、S112 | done | d90b385已ff合master；任务树/分支已清理；基线5c5c797 | Web测试构建/根typecheck、server相关测试/clippy、Nix Web、Chromium账号/Root/恢复/备份17项与响应式/CSP通过 | 无；未部署，原首发门禁保留 | [S115](tasks/S115.md) |
 
-| S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | B | S115 | done | 实现3631c29；整合/清理见批次；基线f3b8979 | Web测试/构建、根typecheck、Nix Web；Chromium四业务51项+恢复10项复验、50组主题/宽度/路由及生产CSP通过 | 无本卡阻塞；未部署，S116现场保留，原首发门禁不变 | [S117](tasks/S117.md) |
+| S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | B | S115 | done | 实现3631c29、交接495a04d已ff合master；任务树/分支已清理；基线f3b8979 | Web测试/构建、根typecheck、Nix Web；Chromium四业务51项+恢复10项复验、50组主题/宽度/路由及生产CSP通过 | 无本卡阻塞；未部署，S116现场保留，原首发门禁不变 | [S117](tasks/S117.md) |
