@@ -1,6 +1,6 @@
 # 本机 NixOS 服务部署
 
-当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S120 已部署最新源码 b5e96f2（S119 Mantine Web），运行与开机默认 generation248。服务及正式目录为主机用户 `xingjian:users`；一键更新与凭据见 S113 节，当前版本及恢复见末尾 S120 节。此前各节为历史部署证据，旧试用卷仍保留。
+当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S123 已部署最新源码 `6395dfa`（S122 文件浏览器 + S121 顶栏），运行与开机默认 generation250。服务及正式目录为主机用户 `xingjian:users`；一键更新与凭据见 S113 节，当前版本及恢复见末尾 S123 节。此前各节为历史部署证据，旧试用卷仍保留。
 
 ## 实际入口和来源（S096，2026-11-07）
 
@@ -263,3 +263,13 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥nonce后与包内一致，`index-ClZcVBwm.js`、`index-Mvsj7_ia.css`字节/哈希一致。真实Chromium线上50组布局和TLS/CSP/登录cookie/原Root健康/SSE/敏感路径六项通过。域名、owner、ServerId、RootId、数据与xingjian:users归属保持；10项服务PID/InvocationID、3应用200、SSH及主机锁保持。
 
 证据`/data/vaultsyncd-deploy/local-20261108T144944-2637582/`与`/data/vaultsyncd-deploy/S121-20261108-local/`；恢复入口generation248（system `i1ydyql7wcb0gs8q5dr1xxygm4zj18h6`），先按S113 test/健康再switch并同步pin，未实际回滚。未做生产内容写入/故障或Windows/规模验收，原首发门禁保持。交接与生命周期见[S121](../../agent/tasks/S121.md)与[批次](../../agent/tasks/S121-batch.md)。
+
+## S123 最新版本（S122 文件浏览器）部署（2026-11-08，generation250）
+
+固定项目完整 SHA `6395dfaf91eae84445695484e65ee740003faec0`（部署时 master HEAD，含 S122 实现 `25dbf2b` 的只读文件浏览器 `#/files` 与 S121 顶栏），入口与 S113 相同，从干净任务树执行 `./tools/deploy-local.sh --rev HEAD`。主机仅改版本 pin，pin 提交 `207099c690eedf4d991efe9bd519a63d2e4b25c3` 已 ff 合 `/etc/nixos` main，临时主机树与分支自动清理；部署契约 6/6 通过，主工作区未提交 skills 文件保留。
+
+运行与开机默认均为 **generation250**，system `/nix/store/ivwnixw752n1n1bbk57iwrdx5p7nl25f-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/z7lcr1c1rz3ia0ixpk646594l5dk2cy9-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致，包内 Rust 组件重建时 67/67 测试通过，Web 组件与 S122 `nix build .#web` 同一 store path。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Root 仍为 btrfs、xingjian:users（UID1000/GID100）、0700，IPC `phase=ready`、`root_count=1`。
+
+实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html` 剥 nonce 后与包内逐字节一致，`assets/index-DQ7KusXO.js`、`assets/index-BtUIqXZy.css` 与懒加载块 `assets/Files-V7htNGV1.js` 的 sha256 与包内一致；CSP 为逐响应 nonce、无 `unsafe-inline`。真实 Chromium 严格公共 CA/TLS1.3 七项通过：CSP/主题、六路由（含 `#/files`）在 390/768/1440 无溢出、owner 登录安全 cookie、原 Root 健康、文件浏览器在 `documents` Root 读到 2 项并打开属性弹窗/返回上级、认证 SSE seq 与 16 秒心跳、无 pageerror/CSP 违规、敏感路径 404。文件浏览器请求审计只有 `GET /v1/roots`、`POST /v1/roots/<root>/snapshots`（design §9.3 元数据快照）、`GET …/entries`、`GET …/events` 与 logout，无内容/上传/操作写入；本轮在生产 Root 生成快照 `01bf172d1156e91785681e4812faf5a3`，不修改文件内容。10 项既有服务 PID/InvocationID、3 应用 200、SSH banner 与主机锁（`1ee4edaf…`）不变。
+
+证据 `/data/vaultsyncd-deploy/local-20261108T153312-2697471/`（result、旧 generation、旧 system/boot GC roots、锁、pin diff）与 `/data/vaultsyncd-deploy/S123-20261108-local/`（final-state/assets/production-smoke 脚本与 JSON、截图、web 副本）；脚本与结果另存 `artifacts/S123/`。恢复入口为部署前 generation249 `ds2gqqb5lng9pwwjjffj2z2qf3iavy4n`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。未做生产上传/恢复/备份写入、故障注入、Windows 或规模验收，原首发门禁保持。交接与生命周期见 [S123](../../agent/tasks/S123.md) 与 [批次](../../agent/tasks/S123-batch.md)。
