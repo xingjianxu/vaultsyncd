@@ -1,6 +1,6 @@
 # 本机 NixOS 服务部署
 
-当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S125 已部署最新源码 `30daa88`（S124 分栏文件浏览器 + URL 目录深链），运行与开机默认 generation251；该轮按用户要求未做部署后验证。服务及正式目录为主机用户 `xingjian:users`；一键更新与凭据见 S113 节，当前版本及恢复见末尾 S125 节。此前各节为历史部署证据，旧试用卷仍保留。
+当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S135 已部署通知版源码 `faf7adb`（S134 Mantine Notification），运行与开机默认 generation256；线上资产、通知与健康验证通过。服务及正式目录为主机用户 `xingjian:users`；一键更新与凭据见 S113 节，当前版本及恢复见末尾 S135 节。此前各节为历史部署证据，旧试用卷仍保留。
 
 ## 实际入口和来源（S096，2026-11-07）
 
@@ -320,3 +320,11 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 `sudo nixos-rebuild test --store-path <该旧路径>` 并同步回退主机 pin，不必恢复数据库；未实际激活旧 generation。
 限制：生产只读浏览，未做生产内容写入/恢复/故障注入，未做 Windows 原生与规模验收；升级前已存在的条目 `modified_at` 仍为 NULL，
 界面显示 `—`。详见 [S133](../../agent/tasks/S133.md)。
+
+## S135 Mantine Notification 服务端部署（2026-11-08，generation256）
+
+固定项目 `faf7adb6dc3b32e97d7384842899c307cde1464b`（S134 实现 `a1d225a` 与交接），执行现有 `tools/deploy-local.sh --rev <SHA>`：pure build、manifest、dry-activate/test、HTTPS/IPC/ServerId/归属、switch 全通过。主机仅更新版本 pin，提交 `b98e05fec08fb88e333a155a5bd9d02e98a3ea20` 已 ff main，临时主机树/分支已清理；锁 `1ee4edaf…` 不变。
+
+运行及开机默认 generation256，system `/nix/store/w9jrk25vqz0iqqzsrq1v40bn8zw9vahf-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/vmnd65vsc2ja1fblbdf36zbdr5vh3zfh-vaultsyncd-0.1.1`；无 Rust/迁移改动，库保持14，ServerId/Root/归属保持。线上资产与包内逐字节一致、index 除 nonce 外一致；严格 TLS1.3 Chromium 登录、右键/Shift+F10 复制路径的 Notification、四秒自动消失、Enter 关闭、明暗×320/1440 无溢出/布局位移/CSP错误通过。10项无关服务 PID/InvocationID 和3应用200保持。生产仅只读元数据浏览及剪贴板操作。
+
+证据 `artifacts/S135/` 与 `/data/vaultsyncd-deploy/local-20261108T201005-3057280/`，passed/cleaned=true，含旧system/boot GC roots。恢复入口 generation255 `/nix/store/a86anl2i29i5q3kcx9jqay6p2a2a6ngc-nixos-system-wks-lab-26.11.20261102.7356cc7`，先 `sudo nixos-rebuild test --store-path <旧路径>` 核对健康，再决定 switch，并同步回退主机 pin；无数据库迁移，不必恢复库。本次未实际回退演练、未做生产内容写入或故障注入，不替代 Windows、hosted 和规模门禁。详见 [S135](../../agent/tasks/S135.md)。
