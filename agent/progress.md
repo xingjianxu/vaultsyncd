@@ -1,8 +1,10 @@
 # 实施进度
 
-当前：**S124 done**，文件浏览器已改为左侧 Root/目录树、右侧工具栏/文件列表，支持 URL 目录深链、相对地址栏与历史导航；UI 去冗余文案原则已写入长期规范。S001—S124 共 **124 卡，119 done、5 blocked**；**当前无 ready 卡**，原恢复条件保持。生产仍为 S123 generation250（本轮未部署）。验收与隔离见 [S124](tasks/S124.md)，提交/整合/清理见 [批次](tasks/S124-batch.md)。
+当前：**S125 done**，S124 分栏文件浏览器已部署到本机 generation251；按用户要求本轮未做部署后验证，线上资产/UI/服务基线以 generation250 的 S123 证据为最近一次。S001—S125 共 **125 卡，120 done、5 blocked**；**当前无 ready 卡**，原恢复条件保持。交接与隔离见 [S125](tasks/S125.md)，提交/整合/清理见 [批次](tasks/S125-batch.md)。
 
-最近部署：S123 固定源 `6395dfaf91eae84445695484e65ee740003faec0`（部署时 master HEAD，含 S122 `25dbf2b`），主机 pin `207099c`；pure/build/manifest/锁/dry/test/HTTPS/IPC/归属/switch 及线上资产一致通过。Chromium 生产 7 项（TLS/CSP/六路由响应式/登录 cookie/Root 健康/文件浏览器只读浏览与属性/SSE/敏感路径 404）通过；10 项服务/3 应用/SSH/主机锁保持，账号/数据/ServerId/RootId 不变；恢复入口 generation249。
+最近部署：S125 固定源 `30daa88febd53115b126a08cf062b37a217b117e`（部署时 master HEAD，含 S124 `986c35c`），主机 pin `dc7dd42`；契约 6/6、pure 构建、manifest/锁、dry/test/HTTPS/IPC/归属/switch 到 generation251 通过，按用户要求未做部署后验证（无 Chromium、资产哈希与服务基线复核）；恢复入口 generation250。
+
+上一次部署（历史）：S123 固定源 `6395dfaf91eae84445695484e65ee740003faec0`（部署时 master HEAD，含 S122 `25dbf2b`），主机 pin `207099c`；pure/build/manifest/锁/dry/test/HTTPS/IPC/归属/switch 及线上资产一致通过。Chromium 生产 7 项（TLS/CSP/六路由响应式/登录 cookie/Root 健康/文件浏览器只读浏览与属性/SSE/敏感路径 404）通过；10 项服务/3 应用/SSH/主机锁保持，账号/数据/ServerId/RootId 不变；恢复入口 generation249。
 
 最近上一次部署（历史）：S121固定源`354bbc479a4ef7b68418aa061d5a7f5a4d5e488c`，主机pin `6cc497b`；pure/build/dry/test/HTTPS/IPC/归属/switch及线上资产一致通过。Chromium本地/线上各50组布局及生产六项TLS/CSP/登录/Root/SSE检查通过；10项服务/3应用/SSH/主机锁保持。账号/数据/ServerId/RootId保持，运行用户仍为xingjian:users；恢复入口generation248。
 
@@ -162,4 +164,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S124 | Web 文件浏览器左右分栏与 URL 目录定位 | B | S122、S123 | done | 986c35c已ff合master；任务树/分支已清理，见批次；基线1e2d778 | Web test/build/typecheck、Nix Web；真实btrfs Chromium20类、列表/选择器与属性各10组、旧五路由50组通过 | 无本卡阻塞；未部署，原首发门禁保持 | [S124](tasks/S124.md) |
 
-| S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | L/B | S113、S123、S124 | in_progress | 开卡；任务树 `.worktrees/S125-local-deploy`/分支 `chore/S125-local-deploy` | 待部署（本轮按要求跳过部署后验证） | 待记录 | [S125](tasks/S125.md) |
+| S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | L/B | S113、S123、S124 | done | 源30daa88、主机pin dc7dd42；项目整合/清理见批次；基线2f21788 | 契约6/6、pure构建、manifest/锁、dry/test/HTTPS/IPC/归属/switch251；按用户要求跳过部署后验证 | 本卡无阻塞；部署后线上资产/UI/服务基线未复核，原首发门禁保留 | [S125](tasks/S125.md) |
