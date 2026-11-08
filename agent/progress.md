@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S129 done**（正式 Windows agent 的 Explorer 占位状态图标）。S001—S129 共 129 卡：124 done、5 blocked；**当前无 ready 卡**。结果与验证见 [S129](tasks/S129.md)，历史过程查阅见 [归档入口](tasks/README.md)。
+当前：**S130 done**（文件浏览器表格列与条目修改时间）。S001—S130 共 130 卡：125 done、5 blocked；**当前无 ready 卡**。结果与验证见 [S130](tasks/S130.md)，历史过程查阅见 [归档入口](tasks/README.md)。
 
 最近部署：[S128](tasks/S128.md) 将固定源 `f7609ad12f58c1ef08f6d5322f1896cdf061a86c` 部署到 generation253，主机 pin `6300214`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 明暗×320/1440 通过。生产只读元数据浏览，保留数据、锁与 ServerId；恢复入口为实测部署前 generation252。
 
@@ -26,6 +26,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S130 | 文件浏览器固定列宽/无下划线/人类可读大小/修改日期；迁移0014与快照字段 | 实现/整合见批次记录 | [S130](tasks/S130.md) |
 | S129 | 正式 agent 注册 Explorer；原生云朵/下载勾选/释放/重启验收 | 实现3357d89；交接/ff整合bbddb13；树/分支已清理 | [S129](tasks/S129.md) |
 | S001 | 确认主机与同步环境基线 | db7ce53 | [S001](tasks/S001.md) |
 | S002 | 建立 agent 入口与上下文提取工具 | cf993b1 | [S002](tasks/S002.md) |
