@@ -66,6 +66,30 @@ export function ancestry(snapshot: DirectorySnapshot, entry: SnapshotEntry): Sna
   return path.reverse();
 }
 
+/** Hash 路由按路径段编码，避免名称中的 #、%、? 被解释成 URL 结构。 */
+export function filesLocation(rootId: string, segments: readonly string[] = []): string {
+  return `/files/${[rootId, ...segments].map(encodeURIComponent).join("/")}`;
+}
+
+export function parseFilesLocation(location: string): { rootId?: string; segments: string[]; error?: string } {
+  if (location === "/files") return { segments: [] };
+  try {
+    const [rootId, ...segments] = location.slice("/files/".length).split("/").map(decodeURIComponent);
+    if (!rootId || segments.some(part => !part || part === "." || part === ".." || part.includes("/") || part.includes("\0"))) throw new Error();
+    return { rootId, segments };
+  } catch { return { segments: [], error: "目录 URL 无效。" }; }
+}
+
+export function directoryAtPath(snapshot: DirectorySnapshot, segments: readonly string[]): SnapshotEntry | undefined {
+  let entry = snapshot.root;
+  for (const name of segments) {
+    const child = snapshot.children.get(entry.entry_id)?.find(item => item.name === name && item.kind === "directory");
+    if (!child) return undefined;
+    entry = child;
+  }
+  return entry;
+}
+
 export function fileSize(entry: SnapshotEntry): string {
   if (entry.kind === "directory") return "—";
   return entry.size === undefined ? "未知" : `${BigInt(entry.size).toLocaleString("zh-CN")} 字节`;

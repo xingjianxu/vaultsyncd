@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S123 done**，S122 的只读文件浏览器 `#/files` 已随最新服务端部署到本机（generation250），域名为 `https://vsyncd.132140.xyz`。S001—S123 共 **123 卡，118 done、5 blocked**；**当前无 ready 卡**，原恢复条件保持。验收与隔离见 [S123](tasks/S123.md)，提交/整合/清理见 [批次](tasks/S123-batch.md)。
+当前：**S124 done**，文件浏览器已改为左侧 Root/目录树、右侧工具栏/文件列表，支持 URL 目录深链、相对地址栏与历史导航；UI 去冗余文案原则已写入长期规范。S001—S124 共 **124 卡，119 done、5 blocked**；**当前无 ready 卡**，原恢复条件保持。生产仍为 S123 generation250（本轮未部署）。验收与隔离见 [S124](tasks/S124.md)，提交/整合/清理见 [批次](tasks/S124-batch.md)。
 
 最近部署：S123 固定源 `6395dfaf91eae84445695484e65ee740003faec0`（部署时 master HEAD，含 S122 `25dbf2b`），主机 pin `207099c`；pure/build/manifest/锁/dry/test/HTTPS/IPC/归属/switch 及线上资产一致通过。Chromium 生产 7 项（TLS/CSP/六路由响应式/登录 cookie/Root 健康/文件浏览器只读浏览与属性/SSE/敏感路径 404）通过；10 项服务/3 应用/SSH/主机锁保持，账号/数据/ServerId/RootId 不变；恢复入口 generation249。
 
@@ -159,3 +159,5 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S122 | Web Root 文件浏览器与属性查看 | B/L | S048、S078、S119、S121 | done | 实现25dbf2b已ff合master，任务树/分支已清理；基线209a8a0 | Web test/build/typecheck、api-client9、Nix Web；真实btrfs Chromium16类、属性/选择器各10组与旧五路由50组通过 | 无新增阻塞；仅已提交元数据，外部空目录采集限制见交接；未部署 | [S122](tasks/S122.md) |
 
 | S123 | 将最新服务端（S122 文件浏览器）部署到本机 | L/B | S113、S121、S122 | done | 源6395dfa、主机pin207099c；项目整合/清理见批次 | 契约6/6、包内67/67；pure/锁/dry/test/switch250、IPC与归属；线上3资产sha256、Chromium生产7项含`#/files`只读浏览与属性、10服务/3应用/SSH/锁不变 | 无本卡阻塞；原首发门禁保留 | [S123](tasks/S123.md) |
+
+| S124 | Web 文件浏览器左右分栏与 URL 目录定位 | B | S122、S123 | done | 产出/整合/清理见批次；基线1e2d778 | Web test/build/typecheck、Nix Web；真实btrfs Chromium20类、列表/选择器与属性各10组、旧五路由50组通过 | 无本卡阻塞；未部署，原首发门禁保持 | [S124](tasks/S124.md) |

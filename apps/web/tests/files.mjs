@@ -5,7 +5,7 @@ import { createServer } from "vite";
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] } });
 try {
-  const { readDirectorySnapshot, ancestry, fileSize } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
+  const { readDirectorySnapshot, ancestry, fileSize, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
   const { BrowserAuth } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
   const folder = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
   const entries = [folder("r", undefined, ""), folder("d", "r", "文档"), folder("empty", "r", "空目录"),
@@ -31,6 +31,17 @@ try {
   }
   const snapshot = await load();
   assert.equal(snapshot.entries.size, 4);
+  const names = ["中文 # ? % & +", "%2F", "尾部 空格 "];
+  const location = filesLocation("root", names);
+  assert.deepEqual(parseFilesLocation(location), { rootId: "root", segments: names });
+  assert.deepEqual(parseFilesLocation("/files"), { segments: [] });
+  for (const bad of ["/files/", "/files/root/%zz", "/files/root/%2F", "/files/root/..", "/files/root//d", "/files/root/%00"]) assert.ok(parseFilesLocation(bad).error, bad);
+  assert.equal(directoryAtPath(snapshot, []), snapshot.root);
+  assert.equal(directoryAtPath(snapshot, ["文档"]).entry_id, "d");
+  assert.equal(directoryAtPath(snapshot, ["空目录"]).entry_id, "empty");
+  assert.equal(directoryAtPath(snapshot, ["missing"]), undefined);
+  assert.equal(directoryAtPath(snapshot, ["文档", entries[3].name]), undefined);
+  assert.equal(directoryAtPath(snapshot, [".."]), undefined);
   assert.equal(snapshot.children.get("empty"), undefined);
   assert.deepEqual(ancestry(snapshot, snapshot.entries.get("f")).map(item => item.name), ["", "文档", entries[3].name]);
   assert.equal(snapshot.children.get("r").length, 2);

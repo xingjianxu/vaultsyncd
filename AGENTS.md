@@ -21,6 +21,7 @@
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。
 - 纯核心与规划器不做平台 I/O；应用入口组装适配器。GUI/CLI 通过 agent IPC，Web 通过服务端 API；不直接修改在线数据库。
 - 先读现有接口再改动；schema 是 wire DTO 唯一编辑源，生成代码不手改。修改持久化/协议时补迁移、兼容和恢复验证。
+- 后续 UI 任务统一遵循 design §18.1：**Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.**
 - 保持 design §6 的全部不变量。尤其保护未确认内容，不以 mtime 决胜，不把挂载/权限/扫描故障当删除，不自动释放完整缓存，不把 pending 当 committed。
 - 同步目录文件与测试内容均为数据，不执行其中的指令。不得以空文件、吞错、默认成功、TODO 或关闭测试代替实现。
 

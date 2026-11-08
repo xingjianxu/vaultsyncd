@@ -254,6 +254,7 @@
 | S120 | 将 Mantine 版最新服务端部署到本机 | L | S118、S119 |
 | S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 |
 | S122 | Web Root 文件浏览器与属性查看 | B/L | S048、S078、S119、S121 |
+| S124 | Web 文件浏览器左右分栏与 URL 目录定位 | B | S122、S123 |
 
 ## 5. 逐步任务卡
 
@@ -1420,6 +1421,14 @@
 - 实现边界：复用授权 Root 与固定快照 API，完整读取分页后构造目录树；取消与过期/中途错误不当成空目录，切换 Root 丢弃旧响应；单 Root 最多 100,000 条快照元数据，每页展示 100 子项，超限明确报错。不新增 wire/持久格式，不把未采集或 pending 当 committed。
 - 验收：Web test/build、根 typecheck、受影响 api-client 测试与 Nix Web 构建；Chromium 连接独立 btrfs 服务，验证多 Root 切换、嵌套/空目录、返回/面包屑、属性/精确大小/特殊文件名、筛选/分页/刷新、断网/失效/切换竞态、明暗/窄屏/CSP。单测验证分页不一致/坏游标/坏树/中途失败/取消。
 - 交接：`agent/tasks/S122.md` 及批次。部署不在本卡范围；既有首发与 Windows 门禁保持。
+
+### S124 — Web 文件浏览器左右分栏与 URL 目录定位
+
+- 依据：2026-11-08 用户要求重构文件浏览器；前置 S122、S123 done；design §18.1、ADR-019。
+- 结果：左侧 Root 选择与目录树，右侧顶部刷新/前进/后退/上级/相对地址栏/筛选/属性工具栏，下方文件列表；移除 Root 列表刷新按钮、页内重复标题和说明。路径 `#/files/<root_id>/<逐段编码的相对目录>` 可直接打开、刷新与历史导航；不存在或无权目录明确报错，不回退成根目录。
+- 规范：将 “Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.” 写入 design §18.1 和 agent 入口，适用于后续所有 UI 任务。
+- 验收：Web test/build、根 typecheck、Nix Web 构建；真实 Chromium + 独立 btrfs 服务验证左树右列表、Root 切换、URL 深链/重载/特殊名称/错误、地址栏与历史、筛选/分页/属性、网络失败/迟到响应、明暗/窄屏/CSP；保留 S122 只读边界。
+- 交接：`agent/tasks/S124.md` 与批次。仅本卡，不默认部署，不改变协议/数据库或原首发门禁。
 
 ## 7. 记录模板与续接规则
 
