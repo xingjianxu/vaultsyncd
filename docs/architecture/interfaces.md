@@ -2620,7 +2620,8 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 
 - Web 独立展示层位于 `apps/web/src/components/ui.tsx`，不再依赖 `@vaultsyncd/ui`；后者仍提供 Windows 桌面的既有组件与样式。
 - `apps/web/src/styles.css` 按 Tailwind、HeroUI 顺序导入，Vite 使用 Tailwind v4 插件；依赖版本及离线闭包由根 pnpm lock 与 Nix `web-deps` 固定摘要管理。
-- 公共 `Button` 将原生 `disabled/onClick` 映射到 HeroUI `isDisabled/onPress`；`Table` 保持列渲染接口并使用 HeroUI 复合表格；`Dialog` 使用受控 HeroUI Modal 管理焦点与 Escape。页面可直接组合 HeroUI Card、TextField 等。
+- 公共 `Button` 将原生 `disabled/onClick` 映射到 HeroUI `isDisabled/onPress`，S117 默认 `size="sm"`（仍可覆盖）；`Table` 保持列渲染接口并使用 HeroUI 复合表格，S117 采用 secondary 表格及本页条目计数；`Dialog` 使用受控 HeroUI Modal 管理焦点与 Escape。页面可直接组合 HeroUI Card、TextField 等。
+- S117 紧凑布局组合现有 Link/Breadcrumbs/Card/ButtonGroup，不新增布局依赖（锁定 3.2.7 无 AppLayout）；桌面侧栏 208px、顶栏 54px，面板圆角 8px、控件 6px、状态标签 4px，窄屏保留触控高度。五个管理路由及原 API/状态机不变。
 - 五个 hash 路由 `/overview`、`/roots`、`/recovery`、`/backup`、`/account` 保留。主题仅属于页面展示，不保存凭据；认证、原恢复 OpId、备份状态机和远端 DTO/数据库格式不变。
 - 依据：用户 2026-11-08 明确要求与 [HeroUI 官方索引](https://heroui.com/react/llms.txt)；具体流程仍按 S077/S078/S079/S090 接口执行。
 

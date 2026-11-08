@@ -69,43 +69,43 @@ export function RootsPanel() {
     } finally { setRegistering(false); }
   }
   if (!auth.account) return <EmptyState title="请先登录">从账号与会话页面登录 owner 后查看 Root 配置与健康。</EmptyState>;
-  return <div className="space-y-6">
-    <Card className="p-6 sm:p-8">
+  return <div className="space-y-4">
+    <Card className="p-4 sm:p-5">
       <Card.Header className="gap-3">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-2"><Card.Title render={props => <h2 {...props} />}>Root 健康与采集</Card.Title>
             <Card.Description>现场核对挂载与目录身份。采集进度只代表本次服务进程的观察结果，不等于客户端已同步。</Card.Description></div>
-          <Button variant="secondary" isDisabled={loading || registering} onPress={() => setRevision(value => value + 1)}>刷新目录状态</Button>
+          <Button size="sm" variant="secondary" isDisabled={loading || registering} onPress={() => setRevision(value => value + 1)}>刷新目录状态</Button>
         </div>
       </Card.Header>
       <Card.Content className="mt-4 space-y-3">
         {loading && <p role="status" className="text-sm text-muted">正在核验目录与采集状态…</p>}
-        {error && <p role="alert" className="rounded-xl bg-danger-soft p-4 text-sm text-danger">{error}</p>}
-        {result && <p role="status" className="rounded-xl bg-success-soft p-4 text-sm text-success">{result}</p>}
+        {error && <p role="alert" className="rounded-md bg-danger-soft p-4 text-sm text-danger">{error}</p>}
+        {result && <p role="status" className="rounded-md bg-success-soft p-4 text-sm text-success">{result}</p>}
         {!loading && !data && !error && <p className="text-sm text-muted">尚未读取目录，不能判断为空或已同步。</p>}
       </Card.Content>
     </Card>
     {data && <>
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(16rem,1fr)]">
-        <Card className="p-6 sm:p-8">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(16rem,1fr)]">
+        <Card className="p-4 sm:p-5">
           <Card.Header><Card.Title render={props => <h2 {...props} />}>注册服务器目录</Card.Title>
             <Card.Description>将允许基目录中的已有目录加入管理。</Card.Description></Card.Header>
-          <Card.Content className="mt-5">
-            <form className="space-y-5" onSubmit={event => void register(event)}>
+          <Card.Content className="mt-3">
+            <form className="space-y-3" onSubmit={event => void register(event)}>
               <TextField name="path" isRequired isDisabled={registering} maxLength={4096}>
                 <Label>服务器目录绝对路径</Label>
                 <Input className="w-full font-mono" placeholder="从允许基目录中选择目录" />
                 <Description>目录必须已存在；校验失败不会清空或重写文件。</Description>
               </TextField>
-              <Button type="submit" isDisabled={registering || loading || !data.allowed_bases.length}>{registering ? "校验并注册中…" : "校验并注册 Root"}</Button>
+              <Button size="sm" type="submit" isDisabled={registering || loading || !data.allowed_bases.length}>{registering ? "校验并注册中…" : "校验并注册 Root"}</Button>
             </form>
           </Card.Content>
         </Card>
-        <Card variant="secondary" className="p-6 sm:p-8">
+        <Card variant="secondary" className="p-4 sm:p-5">
           <Card.Header><Card.Title render={props => <h2 {...props} />}>允许基目录</Card.Title>
             <Card.Description>仅接受以下范围内的服务器路径。</Card.Description></Card.Header>
           <Card.Content className="mt-4">
-            {data.allowed_bases.length ? <ul className="space-y-2">{data.allowed_bases.map(base => <li className="rounded-lg bg-surface p-3 text-sm break-all" key={base}><code>{base}</code></li>)}</ul>
+            {data.allowed_bases.length ? <ul className="space-y-2">{data.allowed_bases.map(base => <li className="rounded-md bg-surface p-3 text-sm break-all" key={base}><code>{base}</code></li>)}</ul>
               : <p className="text-sm text-muted">未配置允许基目录，不能注册。请管理员设置服务端 roots.allowed_bases。</p>}
           </Card.Content>
         </Card>

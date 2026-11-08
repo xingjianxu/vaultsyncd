@@ -7,8 +7,8 @@ import { Table as HeroTable } from "@heroui/react/table";
 
 // The compatibility names keep feature actions explicit while HeroUI owns keyboard/press behavior.
 type ButtonProps = Omit<ComponentProps<typeof HeroButton>, "onClick" | "onPress"> & { disabled?: boolean; onClick?: () => void };
-export function Button({ disabled, onClick, type = "button", variant = "secondary", ...props }: ButtonProps) {
-  return <HeroButton {...props} type={type} variant={variant} isDisabled={disabled || props.isDisabled} onPress={onClick} />;
+export function Button({ disabled, onClick, type = "button", variant = "secondary", size = "sm", ...props }: ButtonProps) {
+  return <HeroButton {...props} type={type} variant={variant} size={size} isDisabled={disabled || props.isDisabled} onPress={onClick} />;
 }
 export function EmptyState({ title, children }: { title: string; children: ReactNode }) {
   return <Card className="empty-state"><Card.Header><Card.Title render={props => <h2 {...props} />}>{title}</Card.Title></Card.Header><Card.Content><p>{children}</p></Card.Content></Card>;
@@ -23,10 +23,10 @@ export function Table<T>({ caption, columns, rows, rowKey, emptyMessage }: {
   caption: string; columns: readonly TableColumn<T>[]; rows: readonly T[];
   rowKey: (row: T) => string; emptyMessage: string;
 }) {
-  return <section className="data-section" aria-label={caption}><h3 className="table-caption">{caption}</h3><HeroTable>
+  return <section className="data-section" aria-label={caption}><div className="table-heading"><h3>{caption}</h3><span className="table-count">本页 {rows.length} 项</span></div><HeroTable variant="secondary">
     <HeroTable.ScrollContainer><HeroTable.Content aria-label={caption} className="min-w-[640px]">
       <HeroTable.Header>{columns.map((column, i) => <HeroTable.Column key={column.key} id={column.key} isRowHeader={i === 0}>{column.title}</HeroTable.Column>)}</HeroTable.Header>
-      <HeroTable.Body renderEmptyState={() => <div className="p-8 text-center text-muted">{emptyMessage}</div>}>
+      <HeroTable.Body renderEmptyState={() => <div className="p-5 text-center text-muted">{emptyMessage}</div>}>
         {rows.map(row => <HeroTable.Row key={rowKey(row)} id={rowKey(row)}>{columns.map(column => <HeroTable.Cell key={column.key}>{column.render(row)}</HeroTable.Cell>)}</HeroTable.Row>)}
       </HeroTable.Body>
     </HeroTable.Content></HeroTable.ScrollContainer>
