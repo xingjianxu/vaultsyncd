@@ -223,6 +223,9 @@ pub struct ExternalObserver {
     tracker: StabilityTracker,
     /// 已采纳（或库里已有相同内容）的路径 → 采纳时的基线；指纹未变则不再采集。
     adopted: BTreeMap<String, Adopted>,
+    // 同一 EntryId 只能保留当前路径；目录自身改名不会推进后代 revision。
+    // 反向索引避免每次内容采纳线性扫描整棵 Root。
+    adopted_paths: BTreeMap<EntryId, String>,
     pending: BTreeMap<String, PendingReason>,
     resume: Option<ScanCursor>,
     cycle_seen: BTreeSet<String>,
@@ -262,6 +265,7 @@ impl ExternalObserver {
             root,
             tracker: StabilityTracker::new(window),
             adopted: BTreeMap::new(),
+            adopted_paths: BTreeMap::new(),
             pending: BTreeMap::new(),
             resume: None,
             cycle_seen: BTreeSet::new(),
@@ -575,8 +579,8 @@ impl ExternalObserver {
                 {
                     self.adopted.remove(&from);
                     self.settle(&from);
-                    self.adopted.insert(
-                        to.clone(),
+                    self.record_baseline(
+                        &to,
                         Adopted {
                             entry: record.entry,
                             revision: record.revision,
@@ -659,6 +663,7 @@ impl ExternalObserver {
                 if record.entry == request.entry && record.revision > request.expected_revision =>
             {
                 self.adopted.remove(&entry.path);
+                self.adopted_paths.remove(&entry.entry);
                 self.settle(&entry.path);
                 self.approved.remove(&entry.path);
                 report.deletions.push(DeleteRecord {
@@ -958,7 +963,21 @@ impl ExternalObserver {
     }
 
     fn record_baseline(&mut self, path: &str, baseline: Adopted) {
-        self.adopted.insert(path.to_owned(), baseline);
+        // 已提交的 API 移动可改变文件/祖先路径而不改变子文件 revision。
+        // 新路径仍经过稳定采集及内容核验，确认同一 EntryId 后才替换旧观察路径。
+        // 不直接采用扫描的新 stamp，否则会跳过移动期间发生的外部内容改写。
+        if let Some(previous) = self.adopted_paths.insert(baseline.entry, path.to_owned())
+            && previous != path
+        {
+            self.adopted.remove(&previous);
+            self.settle(&previous);
+            self.approved.remove(&previous);
+        }
+        if let Some(previous) = self.adopted.insert(path.to_owned(), baseline)
+            && previous.entry != baseline.entry
+        {
+            self.adopted_paths.remove(&previous.entry);
+        }
     }
 
     /// 重排队：忘记指纹，重新等待一个完整窗口。

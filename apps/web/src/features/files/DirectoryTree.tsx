@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { Tree, UnstyledButton, useTree, type TreeNodeData } from "@mantine/core";
 import type { SnapshotEntry } from "@vaultsyncd/api-client";
 import { ancestry, type DirectorySnapshot } from "./browser";
 import { FileIcon } from "./FileIcon";
 import classes from "./DirectoryTree.module.css";
 
-export function DirectoryTree({ snapshot, directory, rootName, navigate }: {
+export function DirectoryTree({ snapshot, directory, rootName, navigate, renderMenu }: {
   snapshot: DirectorySnapshot;
   directory?: SnapshotEntry;
   rootName: string;
   navigate: (entry: SnapshotEntry) => void;
+  renderMenu: (entry: SnapshotEntry, child: ReactElement) => ReactNode;
 }) {
   const data = useMemo(() => {
     const nodes = new Map<string, TreeNodeData>();
@@ -41,17 +42,27 @@ export function DirectoryTree({ snapshot, directory, rootName, navigate }: {
   return <Tree aria-label="目录树" data={data} tree={tree} classNames={classes} withLines levelOffset={20}
     selectOnClick expandOnClick={false} allowRangeSelection={false}
     onKeyDown={event => {
-      if (event.key !== "Enter" || !(event.target as HTMLElement).matches('[role="treeitem"]')) return;
+      if (!(event.target as HTMLElement).matches('[role="treeitem"]')) return;
+      if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+        event.preventDefault();
+        // 菜单触发器为当前 li 的标签；不能选中后代或改变目录选择。
+        const label = (event.target as HTMLElement).firstElementChild as HTMLElement;
+        const box = label.getBoundingClientRect();
+        label.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 12, clientY: box.top + box.height / 2 }));
+        return;
+      }
+      if (event.key !== "Enter") return;
       const id = (event.target as HTMLElement).dataset.value;
       const entry = id ? snapshot.entries.get(id) : undefined;
       if (entry) { event.preventDefault(); navigate(entry); }
     }}
-    renderNode={({ node, expanded, hasChildren, elementProps }) => <div {...elementProps} title={String(node.label)}>
+    renderNode={({ node, expanded, hasChildren, elementProps }) => renderMenu(snapshot.entries.get(node.value)!, <div {...elementProps} title={String(node.label)}
+      onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
       {hasChildren ? <UnstyledButton className={classes.folder} tabIndex={-1}
         aria-label={`${expanded ? "收起" : "展开"} ${node.label}`}
         onClick={event => { event.stopPropagation(); tree.toggleExpanded(node.value); }}>
         <FileIcon name={expanded ? "folder-open" : "folder"} />
       </UnstyledButton> : <span className={classes.folder}><FileIcon name="folder" /></span>}
       <span>{node.label}</span>
-    </div>} />;
+    </div>)} />;
 }

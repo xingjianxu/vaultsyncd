@@ -1,12 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Alert, Button, Group, Stack, Text } from "@mantine/core";
+import { Alert, Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import type { ClientOptions, SnapshotEntry } from "@vaultsyncd/api-client";
 import { Dialog } from "../../components/ui";
 import { showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { BrowserAuth, SignedOut } from "../../services/auth";
 import type { DirectorySnapshot } from "./browser";
-import { createClipboard, createFileActionRecovery, createUploadJob, createPasteJob, prepareDelete, type RecoverableOperation, type RecoveredOperation, type PreparedDelete, type FileActionJob, type FileClipboard } from "./actions";
+import { createClipboard, createRenameJob, createFileActionRecovery, createUploadJob, createPasteJob, prepareDelete, type RecoverableOperation, type RecoveredOperation, type PreparedDelete, type FileActionJob, type FileClipboard } from "./actions";
 
 export interface ActionDirectory { rootId: string; snapshot: DirectorySnapshot; parent: SnapshotEntry }
 type Actions = {
@@ -14,6 +14,7 @@ type Actions = {
   stage: (context: ActionDirectory, entry: SnapshotEntry, mode: "copy" | "cut") => void;
   upload: (context: ActionDirectory, files: File[]) => void;
   paste: (context: ActionDirectory) => void;
+  rename: (context: ActionDirectory, entry: SnapshotEntry) => void;
   remove: (context: ActionDirectory, entry: SnapshotEntry) => void;
 };
 const Context = createContext<Actions | null>(null);
@@ -60,6 +61,9 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
   const running = useRef(false);
   const [message, setMessage] = useState("");
   const [revision, setRevision] = useState(0);
+  const [renaming, setRenaming] = useState<{ context: ActionDirectory; entry: SnapshotEntry } | null>(null);
+  const [name, setName] = useState("");
+  const [nameError, setNameError] = useState("");
   const [deletion, setDeletion] = useState<PreparedDelete | null>(null);
   useEffect(() => {
     if (!job) return;
@@ -67,7 +71,7 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [job]);
-  const locked = auth.busy || busy || !!job || !!deletion || !!replay || records.length > 0 || !!recoveryError;
+  const locked = auth.busy || busy || !!job || !!deletion || !!renaming || !!replay || records.length > 0 || !!recoveryError;
   function syncRecords() {
     try { setRecords(recovery?.list() ?? []); }
     catch (cause) { setRecoveryError(cause instanceof Error ? cause.message : "恢复日志读取失败。"); }
@@ -118,6 +122,10 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
     },
     upload: (context, files) => start(() => createUploadJob(client!, context.rootId, context.snapshot, context.parent, files, recovery)),
     paste: context => { if (clipboard) start(() => createPasteJob(client!, clipboard, context.rootId, context.snapshot, context.parent, recovery)); },
+    rename(context, entry) {
+      if (locked || running.current) return;
+      setRenaming({ context, entry: { ...entry } }); setName(entry.name); setNameError("");
+    },
     async remove(context, entry) {
       if (locked || running.current) return;
       client?.resume();
@@ -148,6 +156,23 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
         </Group>
       </Stack>
     </Alert>}
+    <Dialog opened={!!renaming} title="重命名" onClose={() => setRenaming(null)}
+      footer={<Group justify="flex-end"><Button variant="default" onClick={() => setRenaming(null)}>取消</Button>
+        <Button type="submit" form="rename-entry" disabled={auth.busy || !name || name === renaming?.entry.name}>保存</Button></Group>}>
+      <form id="rename-entry" onSubmit={event => {
+        event.preventDefault();
+        if (!renaming || running.current || auth.busy) return;
+        try {
+          const { context, entry } = renaming;
+          const next = createRenameJob(client!, context.rootId, context.snapshot, entry, name, recovery);
+          setRenaming(null); void run(next);
+        } catch (cause) { setNameError(cause instanceof Error ? cause.message : "名称无效。"); }
+      }}>
+        <TextInput label="名称" value={name} error={nameError} data-autofocus
+          onFocus={event => event.currentTarget.select()}
+          onChange={event => { setName(event.currentTarget.value); setNameError(""); }} />
+      </form>
+    </Dialog>
     <Dialog opened={!!replay} title="重试原操作确认" onClose={() => setReplay(null)}
       footer={replay && <Group justify="flex-end"><Button variant="default" onClick={() => setReplay(null)}>取消</Button>
         <Button color={replay.request.kind === "delete" ? "red" : "blue"} onClick={() => { const id = replay.request.op_id; setReplay(null); void recover(id); }}>继续原操作</Button></Group>}>

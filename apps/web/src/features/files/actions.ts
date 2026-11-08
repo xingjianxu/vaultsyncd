@@ -340,6 +340,22 @@ export function createPasteJob(client: BrowserAuth, source: FileClipboard, targe
   }), scope);
 }
 
+/** 重命名冻结原父目录与 CAS 基线；继续操作沿用同一个 OpId。 */
+export function createRenameJob(client: BrowserAuth, root: string, snapshot: DirectorySnapshot, entry: SnapshotEntry, name: string, recovery?: FileActionRecovery): FileActionJob {
+  const scope = new OperationScope(recovery);
+  checkRoot(root, snapshot);
+  const current = snapshot.entries.get(entry.entry_id);
+  if (!current?.parent_id) throw new Error("不能重命名 Root 根目录或已消失的条目。");
+  const selected = { ...current };
+  if (name === selected.name) throw new Error("名称未改变。");
+  const parent = snapshot.entries.get(selected.parent_id!)!;
+  checkTarget(root, snapshot, parent, [name]);
+  const request: OperationRequest = { kind: "move", op_id: identity(), device_id: identity(), server_epoch: snapshot.metadata.server_epoch,
+    entry_id: selected.entry_id, base_revision: selected.revision, base_version_id: selected.version_id, parent_id: selected.parent_id, name };
+  const commit = operation(client, root, scope, () => request);
+  return new ActionJob("重命名", [{ name: selected.name, run: async () => !!await commit() }], scope);
+}
+
 export interface PreparedDelete {
   readonly entry: Readonly<SnapshotEntry>;
   readonly count: number;

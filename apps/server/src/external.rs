@@ -77,6 +77,27 @@ async fn connect(
     database.pool().acquire().await.map_err(store_error)
 }
 
+/// 路径也是观察基线的一部分：父目录改名不推进子文件 revision，单靠 CAS 不够。
+/// 必须在写事务里确认旧观察路径仍指向原 EntryId，不能删除/移动新路径上的活条目。
+async fn ensure_observed_path(
+    conn: &mut sqlx::SqliteConnection,
+    owner: UserId,
+    root: RootId,
+    entry: EntryId,
+    path: &str,
+) -> Result<(), ExternalStoreError> {
+    let current = store_entries::entry_by_path(conn, owner, root, path)
+        .await
+        .map_err(store_error)?;
+    if current.is_some_and(|current| current.id == entry) {
+        Ok(())
+    } else {
+        Err(ExternalStoreError::PathConflict {
+            detail: format!("观察路径 {path:?} 已不再指向条目 {entry}，保留当前命名空间"),
+        })
+    }
+}
+
 impl ExternalAdoptStore for SqlExternalStore {
     async fn lookup_path(
         &mut self,
@@ -298,6 +319,14 @@ impl ExternalAdoptStore for SqlExternalStore {
         request: &ExternalMove,
     ) -> Result<ExternalMoveRecord, ExternalStoreError> {
         let mut tx = self.database.begin_write().await.map_err(store_error)?;
+        ensure_observed_path(
+            &mut tx,
+            self.owner,
+            request.root,
+            request.entry,
+            &request.from,
+        )
+        .await?;
         let current = store_entries::entry_in_scope(&mut tx, self.owner, request.entry)
             .await
             .map_err(store_error)?
@@ -379,6 +408,14 @@ impl ExternalAdoptStore for SqlExternalStore {
         request: &ExternalDelete,
     ) -> Result<ExternalDeleteRecord, ExternalStoreError> {
         let mut tx = self.database.begin_write().await.map_err(store_error)?;
+        ensure_observed_path(
+            &mut tx,
+            self.owner,
+            request.root,
+            request.entry,
+            &request.path,
+        )
+        .await?;
         let current = store_entries::entry_in_scope(&mut tx, self.owner, request.entry)
             .await
             .map_err(store_error)?
@@ -923,3 +960,7 @@ fn monotonic_millis() -> u64 {
     let start = START.get_or_init(Instant::now);
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
+
+#[cfg(test)]
+#[path = "external_tests.rs"]
+mod tests;

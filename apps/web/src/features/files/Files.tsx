@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { listRoots, type RootSummary, type SnapshotEntry } from "@vaultsyncd/api-client";
 import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select, Stack, Table, Text, TextInput } from "@mantine/core";
+import { EntryMenu, openMenuByKeyboard } from "./EntryMenu";
 import { DirectoryTree } from "./DirectoryTree";
 import { useFileActions } from "./FileActions";
 import { FileIcon } from "./FileIcon";
@@ -77,16 +78,6 @@ function RootBrowser({ location }: { location: string }) {
 
 type ToolIcon = Parameters<typeof FileIcon>[0]["name"];
 
-/** 键盘用户用菜单键或 Shift+F10 打开与右键相同的菜单，位置取名称按钮。 */
-function openMenuByKeyboard(event: React.KeyboardEvent<HTMLElement>) {
-  if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
-  event.preventDefault();
-  const box = event.currentTarget.getBoundingClientRect();
-  event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", {
-    bubbles: true, cancelable: true, clientX: box.left + 12, clientY: box.top + box.height / 2,
-  }));
-}
-
 function Tool({ label, icon, disabled, onClick }: { label: string; icon: ToolIcon; disabled?: boolean; onClick: () => void }) {
   return <ActionIcon variant="default" size="md" aria-label={label} title={label} disabled={disabled} onClick={onClick}><FileIcon name={icon} /></ActionIcon>;
 }
@@ -108,15 +99,24 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const currentPath = "/" + segments.join("/");
+  const pathRef = useRef(currentPath);
+  pathRef.current = currentPath;
   const [address, setAddress] = useState(currentPath);
   const [addressError, setAddressError] = useState("");
   useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setMenuEntryId(null); }, [currentPath]);
   useEffect(() => {
     if (!root) return;
     const controller = new AbortController();
+    const previousDirectory = snapshot ? directoryAtPath(snapshot, segments) : undefined;
+    const previousPath = currentPath;
     setLoading(true); setSnapshot(null); setSelected(null); setError(""); setPage(1);
     readDirectorySnapshot(client, root.root_id, controller.signal).then(result => {
-      if (!controller.signal.aborted) setSnapshot(result);
+      if (!controller.signal.aborted) {
+        setSnapshot(result);
+        // 当前目录或祖先改名后按身份更新地址；读取期间的新导航优先。
+        const current = previousDirectory && result.entries.get(previousDirectory.entry_id);
+        if (current && pathRef.current === previousPath) navigation.navigate(filesLocation(root.root_id, ancestry(result, current).slice(1).map(item => item.name)), true);
+      }
     }).catch(cause => {
       if (controller.signal.aborted) return;
       if (cause instanceof SignedOut) auth.reportSignedOut();
@@ -154,10 +154,17 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
   const writable = !!context && !loading && root?.health !== "unavailable" && !actions.locked;
   const pasteInto = (entry?: SnapshotEntry) => { if (context) actions.paste({ ...context, parent: entry?.kind === "directory" ? entry : context.parent }); };
   const rootName = root?.name || "Root 根目录";
+  function entryMenu(entry: SnapshotEntry, child: ReactElement, source = "list") {
+    const key = `${source}:${entry.entry_id}`;
+    return <EntryMenu key={key} entry={entry} context={{ rootId: root!.root_id, snapshot: snapshot!, parent: directory ?? snapshot!.root }}
+      writable={!loading && root?.health !== "unavailable" && !actions.locked}
+      opened={menuEntryId === key} onChange={opened => setMenuEntryId(opened ? key : null)}
+      navigate={navigate} properties={setSelected} copyPath={entry => void copyPath(entry)}>{child}</EntryMenu>;
+  }
   return <Paper withBorder className="files-browser">
     <aside className="files-sidebar" aria-label="目录面板">
       <div className="files-root-picker">{rootPicker}</div>
-      <div className="files-tree-scroll">{snapshot && <DirectoryTree snapshot={snapshot} directory={directory} rootName={rootName} navigate={navigate} />}</div>
+      <div className="files-tree-scroll">{snapshot && <DirectoryTree snapshot={snapshot} directory={directory} rootName={rootName} navigate={navigate} renderMenu={(entry, child) => entryMenu(entry, child, "tree")} />}</div>
     </aside>
     <section className="files-main" aria-label="文件列表面板">
       <div className="files-toolbar" role="toolbar" aria-label="文件浏览器工具栏">
@@ -195,26 +202,11 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
         {snapshot && directory && <Table aria-label="文件与目录" highlightOnHover verticalSpacing="xs" horizontalSpacing="sm" className="files-table">
           <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry =>
-            <Menu key={entry.entry_id} opened={menuEntryId === entry.entry_id} shadow="md" width={180} position="bottom-start" offset={2}
-              onChange={opened => setMenuEntryId(opened ? entry.entry_id : null)}>
-              <Menu.ContextMenu>
-                <Table.Tr onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
+            entryMenu(entry, <Table.Tr onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
                   <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onKeyDown={openMenuByKeyboard}
                     onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
                   <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
-                </Table.Tr>
-              </Menu.ContextMenu>
-              <Menu.Dropdown>
-                {entry.kind === "directory" && <Menu.Item leftSection={<FileIcon name="folder-open" />} onClick={() => navigate(entry)}>打开</Menu.Item>}
-                <Menu.Item leftSection={<FileIcon name="properties" />} onClick={() => setSelected(entry)}>属性</Menu.Item>
-                <Menu.Item leftSection={<FileIcon name="copy" />} onClick={() => void copyPath(entry)}>复制路径</Menu.Item>
-                <Menu.Divider />
-                <Menu.Item disabled={!writable} leftSection={<FileIcon name="copy" />} onClick={() => context && actions.stage(context, entry, "copy")}>复制</Menu.Item>
-                <Menu.Item disabled={!writable} leftSection={<FileIcon name="cut" />} onClick={() => context && actions.stage(context, entry, "cut")}>剪切</Menu.Item>
-                <Menu.Item disabled={!writable || !actions.clipboard} leftSection={<FileIcon name="paste" />} onClick={() => pasteInto(entry)}>粘贴</Menu.Item>
-                <Menu.Item color="red" disabled={!writable} leftSection={<FileIcon name="delete" />} onClick={() => context && actions.remove(context, entry)}>删除</Menu.Item>
-              </Menu.Dropdown>
-            </Menu>) : <Table.Tr><Table.Td colSpan={3}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
+                </Table.Tr>)) : <Table.Tr><Table.Td colSpan={3}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
         </Table>}
       </div></Menu.ContextMenu>
       <Menu.Dropdown>

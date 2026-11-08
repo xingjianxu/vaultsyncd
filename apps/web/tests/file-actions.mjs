@@ -8,7 +8,7 @@ globalThis.crypto ??= webcrypto;
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] } });
 try {
-  const { createClipboard, createUploadJob, createPasteJob, prepareDelete, createFileActionRecovery, MAX_FILE_ACTION_BYTES, MAX_UPLOAD_BYTES } = await server.ssrLoadModule("/apps/web/src/features/files/actions.ts");
+  const { createClipboard, createUploadJob, createPasteJob, createRenameJob, prepareDelete, createFileActionRecovery, MAX_FILE_ACTION_BYTES, MAX_UPLOAD_BYTES } = await server.ssrLoadModule("/apps/web/src/features/files/actions.ts");
   const { BrowserAuth, SignedOut } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
   const hash = bytes => createHash("sha256").update(bytes).digest("hex");
   const directory = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
@@ -171,6 +171,59 @@ try {
     assert.throws(() => createClipboard("copy", "root", source, source.root), /根目录/);
     assert.throws(() => createUploadJob(api.client, "root", source, source.root, [{ name: "large", size: MAX_UPLOAD_BYTES + 1 }]), /64 GiB/);
     assert.throws(() => createPasteJob(api.client, createClipboard("copy", "root", source, source.entries.get("d")), "root", source, source.entries.get("empty")), /自身或后代/);
+  }
+  // S137 I03/I04: 重命名冻结原父目录、身份和版本，以源 revision CAS，不读取或上传内容。
+  for (const id of ["f", "d"]) {
+    const source = snapshot(), selected = source.entries.get(id), api = transport(source);
+    const original = { ...selected }, job = createRenameJob(api.client, "root", source, selected, "新名称 % & 文档");
+    selected.revision = "99"; selected.name = "并发变化"; selected.parent_id = "empty";
+    await Promise.all([job.run(), job.run()]);
+    assert.equal(job.state, "completed"); assert.equal(job.label, "重命名");
+    const { request } = api.submissions[0];
+    assert.equal(request.kind, "move"); assert.equal(request.entry_id, original.entry_id);
+    assert.equal(request.parent_id, original.parent_id); assert.equal(request.base_revision, original.revision);
+    assert.equal(request.base_version_id, original.version_id); assert.equal(request.name, "新名称 % & 文档");
+    assert.equal(api.calls.length, 1); assert.equal(api.downloads.length, 0); assert.equal(api.uploads.size, 0);
+    await job.run(); assert.equal(api.submissions.length, 1);
+  }
+  {
+    const source = snapshot(), api = transport(source), selected = source.entries.get("f");
+    for (const name of ["", ".", "..", "a/b", "a\\b", "bad\0name"]) assert.throws(() => createRenameJob(api.client, "root", source, selected, name), /无效/);
+    assert.throws(() => createRenameJob(api.client, "root", source, selected, "a.txt"), /未改变/);
+    assert.throws(() => createRenameJob(api.client, "root", source, selected, "empty"), /同名/);
+    assert.throws(() => createRenameJob(api.client, "root", source, source.root, "renamed"), /根目录/);
+    assert.throws(() => createRenameJob(api.client, "other", source, selected, "renamed"), /不匹配/);
+    assert.throws(() => createRenameJob(api.client, "root", source, { ...selected, entry_id: "missing" }, "renamed"), /消失/);
+    assert.equal(api.calls.length, 0);
+    for (const code of ["BASE_MISMATCH", "INVALID_REQUEST", "INVALID_NAME"]) {
+      const rejected = transport(source, { result: request => ({ state: "rejected", op_id: request.op_id, error_code: code }) });
+      const job = createRenameJob(rejected.client, "root", source, selected, "new.txt");
+      await assert.rejects(job.run(), new RegExp(code)); assert.equal(job.canDiscard, true);
+      await assert.rejects(job.run(), new RegExp(code)); assert.equal(rejected.submissions.length, 1);
+    }
+  }
+  // S137 I01/I06/I13: pending 只查原 OpId；丢响应和404重放均保留同一个重命名请求与恢复记录。
+  {
+    const source = snapshot(), api = transport(source, { result: request => ({ state: "pending", op_id: request.op_id }) });
+    const job = createRenameJob(api.client, "root", source, source.entries.get("f"), "new.txt");
+    await job.run(); assert.equal(job.state, "pending"); assert.equal(job.progress.completed, 0); assert.equal(job.canDiscard, false);
+    await job.run(); assert.equal(api.submissions.length, 1);
+    const original = api.submissions[0].request;
+    api.operations.set(original.op_id, { state: "committed", op_id: original.op_id });
+    await job.run(); assert.equal(job.state, "completed"); assert.equal(api.submissions.length, 1);
+  }
+  for (const notRecorded of [false, true]) {
+    const source = snapshot(), values = new Map();
+    const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+    const recovery = createFileActionRecovery("rename-account", storage), api = transport(source, { loseOperation: true, notRecorded });
+    const job = createRenameJob(api.client, "root", source, source.entries.get("f"), "new.txt", recovery);
+    await assert.rejects(job.run(), /lost operation response/); assert.equal(job.canDiscard, false);
+    const original = api.submissions[0].request;
+    assert.deepEqual(recovery.list()[0].request, original);
+    const query = await recovery.query(api.client); assert.equal(query[0].state, notRecorded ? "missing" : "committed");
+    assert.equal(api.submissions.length, 1);
+    if (notRecorded) { await recovery.resume(api.client, original.op_id); assert.deepEqual(api.submissions[1].request, original); }
+    assert.equal(recovery.list().length, 0);
   }
   // 部分完成保留且显式报告；服务器同名/CAS 拒绝不会自动改名、覆盖、回滚或创建后续项。
   {

@@ -541,3 +541,63 @@ async fn hinted_absence_alone_is_not_a_deletion() {
     assert!(h.store.deletes.is_empty(), "线索不是完整扫描，不推导删除");
     assert!(h.observer.history_protected("a.txt"));
 }
+
+#[tokio::test]
+async fn committed_api_moves_replace_old_observation_paths_without_losing_new_content() {
+    for modified_during_move in [false, true] {
+        let mut h = Harness::new(default_limits());
+        h.fs.borrow_mut()
+            .write("parent/child/note.txt", b"original");
+        h.settle().await;
+        let entry = h.store.entry_of("parent/child/note.txt").expect("初始身份");
+        let versions = h.store.versions.len();
+        let mut previous = "parent/child/note.txt";
+        // 模拟 API 先提交父目录、再提交子目录改名：后代 EntryId/revision 均不变。
+        for next in ["renamed/child/note.txt", "renamed/child-renamed/note.txt"] {
+            h.fs.borrow_mut().rename(previous, next);
+            let metadata = h.store.entries.remove(previous).expect("API 旧路径");
+            h.store.entries.insert(next.to_owned(), metadata);
+            if modified_during_move {
+                h.fs.borrow_mut()
+                    .write_preserving_mtime(next, next.as_bytes());
+            }
+            for _ in 0..3 {
+                let report = h.settle().await;
+                assert!(
+                    report.reconcile.deletions.is_empty(),
+                    "API 路径变化不等于删除"
+                );
+                assert!(
+                    report.reconcile.moves.is_empty(),
+                    "API 已提交，不追加重复移动事件"
+                );
+            }
+            assert_eq!(h.store.entry_of(next), Some(entry));
+            assert!(!h.observer.history_protected(previous));
+            assert!(h.observer.history_protected(next));
+            assert_eq!(h.observer.adopted_count(), 1, "同一身份只保留一个观察路径");
+            assert_eq!(h.observer.adopted_paths.len(), 1);
+            previous = next;
+        }
+        assert_eq!(
+            h.store.versions.len(),
+            versions + if modified_during_move { 2 } else { 0 }
+        );
+        if modified_during_move {
+            assert_eq!(
+                h.store.versions.last().unwrap().digest,
+                crate::observer::fixtures::digest_of(previous.as_bytes())
+            );
+        }
+        h.fs.borrow_mut().unlink(previous);
+        let deleted = h.pass(0).await;
+        assert_eq!(
+            deleted.reconcile.deletions.len(),
+            1,
+            "新路径上的真实外部删除仍被观察"
+        );
+        assert_eq!(deleted.reconcile.deletions[0].entry, entry);
+        assert_eq!(deleted.reconcile.deletions[0].path, previous);
+        assert!(h.observer.adopted_paths.is_empty());
+    }
+}

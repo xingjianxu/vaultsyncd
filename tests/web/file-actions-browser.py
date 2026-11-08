@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S136: built Web + real Chromium + isolated btrfs service, not API fixtures.
+"""S136/S137: built Web + real Chromium + isolated btrfs service, not API fixtures.
 
 After the main agent's final Web build, run from this worktree:
   VAULTSYNCD_TEST_BIN_DIR=/wrd/prj/vaultsyncd/target/debug \
@@ -7,7 +7,7 @@ After the main agent's final Web build, run from this worktree:
 
 The binary directory can be overridden; static assets always come from this
 worktree's apps/web/dist. Artifacts, screenshots, server state and input bytes
-stay under /data/vs-s136-<runid>. No online SQL, production writes, fabricated
+stay under /data/vs-s137-<runid>. No online SQL, production writes, fabricated
 operation responses, or application/transport mocks. A scoped same-origin proxy
 can hold one real request/response or discard one real submit response.
 """
@@ -31,7 +31,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data") / f"vs-s136-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data") / f"vs-s137-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -51,7 +51,7 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    print(f"S136 artifacts: {RUN}", flush=True)
+    print(f"S136/S137 artifacts: {RUN}", flush=True)
     state, roots, inputs = RUN / "state", RUN / "roots", RUN / "inputs"
     state.mkdir(mode=0o700); roots.mkdir(); inputs.mkdir()
     documents, archive = roots / "documents", roots / "archive"
@@ -649,6 +649,229 @@ def main():
                 checks.append(f"I02/I06/{task_kind}-in-flight/account-navigation/logout-relogin/old-task-no-next-namespace-submit")
             at("/")
 
+            # S137 uses dedicated samples so every S136 source-preservation check
+            # remains meaningful after real file and directory renames.
+            renamed_input = inputs / "s137-before.txt"
+            renamed_bytes = b"S137 rename preserves immutable content and identity\n"
+            renamed_input.write_bytes(renamed_bytes)
+            upload([renamed_input]); original_file = settled_entry(renamed_input.name)
+            rename_dialog = page.get_by_role("dialog", name="重命名", exact=True)
+            start = len(requests)
+            menu_action(renamed_input.name, "重命名")
+            expect(rename_dialog).to_be_visible()
+            name_input = rename_dialog.get_by_role("textbox", name="名称", exact=True)
+            expect(name_input).to_have_value(renamed_input.name)
+            expect(rename_dialog.get_by_role("button", name="保存", exact=True)).to_be_disabled()
+            rename_dialog.get_by_role("button", name="取消", exact=True).click()
+            expect(rename_dialog).not_to_be_visible()
+            assert not submits_since(start), "rename cancellation submitted a mutation"
+            menu_action(renamed_input.name, "重命名")
+            for invalid in ("cancel.txt", "../escape", "nested/name", "nested\\name", ".", ".."):
+                name_input.fill(invalid)
+                rename_dialog.get_by_role("button", name="保存", exact=True).click()
+                expect(rename_dialog).to_be_visible()
+                expect(rename_dialog.locator('.mantine-TextInput-error')).to_be_visible()
+                assert not submits_since(start), f"invalid/colliding rename submitted {invalid!r}"
+            name_input.fill("")
+            expect(rename_dialog.get_by_role("button", name="保存", exact=True)).to_be_disabled()
+            renamed_name = "s137-renamed & 文档.txt"
+            name_input.fill(renamed_name)
+            rename_dialog.get_by_role("button", name="保存", exact=True).click()
+            renamed_file = settled_entry(renamed_name)
+            assert entry_at(renamed_input.name) is None and not (documents / renamed_input.name).exists()
+            assert (renamed_file["entry_id"], renamed_file["parent_id"], renamed_file["version_id"], renamed_file["hash"]) == (original_file["entry_id"], original_file["parent_id"], original_file["version_id"], original_file["hash"])
+            assert renamed_file["revision"] != original_file["revision"]
+            submitted = submits_since(start)
+            assert len(submitted) == 1, submitted
+            request = submitted[0]["operation"]
+            assert request["kind"] == "move" and request["entry_id"] == original_file["entry_id"]
+            assert request["base_revision"] == original_file["revision"] and request["base_version_id"] == original_file["version_id"]
+            assert request["parent_id"] == original_file["parent_id"] and request["name"] == renamed_name
+            assert_bytes(documents / renamed_name, renamed_bytes)
+            checks.append("S137/I03-I04/file-rename/cancel-invalid-collision-no-submit/CAS/same-identity-version-hash")
+
+            # The open dialog keeps its original revision even when another
+            # legitimate writer renames the source before Save is submitted.
+            stale_rename = inputs / "s137-stale-original.txt"
+            stale_rename.write_bytes(b"S137 stale rename must preserve newer namespace\n")
+            upload([stale_rename]); stale_original = settled_entry(stale_rename.name)
+            menu_action(stale_rename.name, "重命名")
+            command("move", entry_id=stale_original["entry_id"], base_revision=stale_original["revision"],
+                    base_version_id=stale_original["version_id"], parent_id=stale_original["parent_id"], name="s137-stale-current.txt")
+            name_input.fill("s137-stale-requested.txt")
+            start = len(requests)
+            rename_dialog.get_by_role("button", name="保存", exact=True).click()
+            expect(error_notices).not_to_have_count(0)
+            rejected_rename = submits_since(start)
+            assert len(rejected_rename) == 1, rejected_rename
+            assert rejected_rename[0]["operation"]["base_revision"] == stale_original["revision"]
+            assert rejected_rename[0].get("status") == 409 or rejected_rename[0].get("result", {}).get("state") == "rejected", rejected_rename
+            end_rejected()
+            current_stale = settled_entry("s137-stale-current.txt")
+            assert current_stale["entry_id"] == stale_original["entry_id"] and current_stale["version_id"] == stale_original["version_id"]
+            assert entry_at("s137-stale-requested.txt") is None and entry_at(stale_rename.name) is None
+            assert_bytes(documents / "s137-stale-current.txt", stale_rename.read_bytes())
+            assert not (documents / "s137-stale-requested.txt").exists()
+            assert len(submits_since(start)) == 1, "ending stale rename silently submitted another operation"
+            checks.append("S137/I04/rename-dialog-freezes-baseline/concurrent-source-rename-rejected/newer-name-version-bytes-preserved")
+
+            # An unknown rename must recover its original logical operation.
+            menu_action(renamed_name, "重命名")
+            final_name = "s137-recovered.txt"
+            name_input.fill(final_name)
+            arm("drop-after", "move"); start = len(requests)
+            rename_dialog.get_by_role("button", name="保存", exact=True).click()
+            held = await_fault(); original_request = dict(held["operation"])
+            retry = page.get_by_role("button", name="继续操作", exact=True)
+            expect(retry).to_be_visible(timeout=30000)
+            assert not any("重命名完成" in notice.inner_text() for notice in notifications.all()), "unknown rename announced completion"
+            clear_notices(); retry.click()
+            recovered_file = settled_entry(final_name)
+            assert recovered_file["entry_id"] == original_file["entry_id"]
+            assert recovered_file["version_id"] == original_file["version_id"]
+            assert len(submits_since(start)) == 1 and submits_since(start)[0]["operation"] == original_request
+            assert any(item["source"] == "ui" and item["method"] == "GET" and item["path"].endswith("/operations/" + original_request["op_id"]) for item in requests[start:])
+            assert_bytes(documents / final_name, renamed_bytes)
+            checks.append("S137/I01-I06/rename-lost-response/query-original-OpId/no-duplicate")
+
+            root_entry = entry_at("")
+            parent_dir = command("create", parent_id=root_entry["entry_id"], name="s137-tree-parent", expected_absent=True)
+            child_dir = command("create", parent_id=parent_dir["entry_id"], name="child", expected_absent=True)
+            target_dir = command("create", parent_id=root_entry["entry_id"], name="s137-tree-target", expected_absent=True)
+            refresh(); at("/s137-tree-parent/child")
+            inside = inputs / "s137-inside.txt"; inside.write_bytes(b"S137 directory rename and tree paste\n")
+            upload([inside]); inside_entry = settled_entry("s137-tree-parent/child/" + inside.name)
+            tree = page.get_by_role("tree", name="目录树", exact=True)
+
+            def tree_label(entry_id):
+                return tree.locator(f'[role="treeitem"][data-value="{entry_id}"] > div[title]')
+
+            def tree_menu_action(entry_id, action):
+                clear_notices()
+                tree_label(entry_id).click(button="right")
+                menu = page.get_by_role("menu")
+                expect(menu).to_be_visible()
+                menu.get_by_role("menuitem", name=action, exact=True).click()
+                expect(menu).not_to_be_visible()
+
+            # Right-click and keyboard menus use the targeted ancestor without
+            # selecting it, opening it or leaking another list/tree menu.
+            before_url = page.url
+            row(inside.name).click(button="right")
+            expect(page.get_by_role("menu")).to_have_count(1)
+            tree_label(parent_dir["entry_id"]).click(button="right")
+            expect(page.get_by_role("menu")).to_have_count(1)
+            assert page.url == before_url
+            for action in ("打开", "属性", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"):
+                expect(page.get_by_role("menu").get_by_role("menuitem", name=action, exact=True)).to_have_count(1)
+            page.get_by_role("menu").get_by_role("menuitem", name="属性", exact=True).click()
+            properties = page.get_by_role("dialog", name="文件属性", exact=True)
+            expect(properties).to_contain_text(parent_dir["entry_id"])
+            expect(properties).to_contain_text("s137-tree-parent")
+            properties.get_by_role("button", name="关闭", exact=True).click()
+            expect(properties).not_to_be_visible()
+            tree_item = tree.locator(f'[role="treeitem"][data-value="{parent_dir["entry_id"]}"]')
+            tree_item.focus(); tree_item.press("Shift+F10")
+            expect(page.get_by_role("menu")).to_be_visible()
+            assert page.url == before_url
+            expanded_before = tree_item.get_attribute("aria-expanded")
+            property_item = page.get_by_role("menu").get_by_role("menuitem", name="属性", exact=True)
+            property_item.focus()
+            for key in ("ArrowLeft", "ArrowRight"):
+                property_item.press(key)
+                expect(tree_item).to_have_attribute("aria-expanded", expanded_before)
+                expect(page.get_by_role("menu")).to_be_visible()
+                assert page.url == before_url
+            property_item.press("Space")
+            expect(properties).to_be_visible()
+            expect(properties).to_contain_text(parent_dir["entry_id"])
+            properties.get_by_role("button", name="关闭", exact=True).click()
+            expect(properties).not_to_be_visible()
+            tree_item.focus(); tree_item.press("Shift+F10")
+            page.get_by_role("menu").get_by_role("menuitem", name="重命名", exact=True).press("Space")
+            expect(rename_dialog).to_be_visible()
+            name_input.fill("s137-tree-renamed")
+            rename_dialog.get_by_role("button", name="保存", exact=True).click()
+            expect(page).to_have_url(origin + f"/#/files/{doc_id}/s137-tree-renamed/child")
+            expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/s137-tree-renamed/child")
+            expect(row(inside.name)).to_be_visible(timeout=30000)
+            expect(tree.locator(f'[role="treeitem"][data-value="{child_dir["entry_id"]}"]')).to_have_attribute("aria-selected", "true")
+            assert entry_at("s137-tree-parent") is None
+            assert entry_at("s137-tree-renamed")["entry_id"] == parent_dir["entry_id"]
+            assert entry_at("s137-tree-renamed/child")["entry_id"] == child_dir["entry_id"]
+            assert_bytes(documents / "s137-tree-renamed/child" / inside.name, inside.read_bytes())
+            checks.append("S137/tree-right-click/one-menu/no-navigation/target-properties/ShiftF10/ancestor-rename-url-selection-subtree")
+
+            tree_menu_action(child_dir["entry_id"], "重命名")
+            name_input.fill("child-renamed")
+            rename_dialog.get_by_role("button", name="保存", exact=True).click()
+            expect(page).to_have_url(origin + f"/#/files/{doc_id}/s137-tree-renamed/child-renamed")
+            expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/s137-tree-renamed/child-renamed")
+            expect(row(inside.name)).to_be_visible(timeout=30000)
+            assert entry_at("s137-tree-renamed/child-renamed")["entry_id"] == child_dir["entry_id"]
+            assert entry_at("s137-tree-renamed/child-renamed/" + inside.name)["entry_id"] == inside_entry["entry_id"]
+            # Several real observer passes must preserve the renamed subtree,
+            # including descendants whose revision did not change with ancestors.
+            page.wait_for_timeout(3500)
+            refresh()
+            expect(row(inside.name)).to_be_visible(timeout=15000)
+            after_scan = entry_at("s137-tree-renamed/child-renamed/" + inside.name)
+            assert after_scan["entry_id"] == inside_entry["entry_id"] and after_scan["version_id"] == inside_entry["version_id"]
+            checks.append("S137/current-directory-rename/url-address-and-stable-identity/multiple-observer-passes")
+
+            menu_action(inside.name, "复制")
+            tree_menu_action(target_dir["entry_id"], "粘贴")
+            copied_into_tree = wait_for(lambda: entry_at("s137-tree-target/" + inside.name), "tree paste did not target selected directory")
+            expect(toolbar.get_by_role("button", name="上传文件", exact=True)).to_be_enabled(timeout=30000)
+            assert copied_into_tree["parent_id"] == target_dir["entry_id"] and copied_into_tree["entry_id"] != inside_entry["entry_id"]
+            assert_bytes(documents / "s137-tree-target" / inside.name, inside.read_bytes())
+            assert page.url.endswith("/s137-tree-renamed/child-renamed")
+            tree_label(root_entry["entry_id"]).click(button="right")
+            menu = page.get_by_role("menu")
+            for action in ("复制", "剪切", "重命名", "删除"):
+                expect(menu.get_by_role("menuitem", name=action, exact=True)).to_be_disabled()
+            expect(menu.get_by_role("menuitem", name="粘贴", exact=True)).to_be_enabled()
+            menu.get_by_role("menuitem", name="粘贴", exact=True).click()
+            pasted_at_root = wait_for(lambda: entry_at(inside.name), "root-tree paste did not target Root")
+            expect(toolbar.get_by_role("button", name="上传文件", exact=True)).to_be_enabled(timeout=30000)
+            assert pasted_at_root["parent_id"] == root_entry["entry_id"]
+            assert_bytes(documents / inside.name, inside.read_bytes())
+            checks.append("S137/tree-paste-target/root-mutation-guards/root-paste/stable-current-directory")
+
+            start = len(requests)
+            tree_menu_action(target_dir["entry_id"], "删除")
+            expect(deletion).to_contain_text("s137-tree-target")
+            expect(deletion).to_contain_text("2 项")
+            deletion.get_by_role("button", name="取消", exact=True).click()
+            assert not submits_since(start), "tree delete cancel submitted a mutation"
+            assert_bytes(documents / "s137-tree-target" / inside.name, inside.read_bytes())
+            tree_menu_action(target_dir["entry_id"], "删除")
+            deletion.get_by_role("button", name="删除", exact=True).click()
+            wait_for(lambda: entry_at("s137-tree-target") is None, "tree delete never committed")
+            expect(tree_label(target_dir["entry_id"])).to_have_count(0, timeout=30000)
+            submitted = submits_since(start)
+            assert len(submitted) == 1 and submitted[0]["operation"].get("subtree_token"), submitted
+            trash = api(f"/v1/roots/{doc_id}/trash")["items"]
+            assert any(item["entry_id"] == target_dir["entry_id"] for item in trash)
+            assert_bytes(documents / "s137-tree-renamed/child-renamed" / inside.name, inside.read_bytes())
+            checks.append("S137/tree-delete/explicit-confirmation/cancel-no-submit/subtree-token/trash/source-protected")
+
+            # Navigation while a rename result is held must win over the old
+            # directory identity retained for the operation's refresh.
+            menu_action(inside.name, "重命名")
+            name_input.fill("s137-inside-renamed.txt")
+            arm("hold-after", "move")
+            rename_dialog.get_by_role("button", name="保存", exact=True).click()
+            held = await_fault()
+            at("/"); release.set()
+            wait_for(lambda: held.get("delivered"), "rename response never released")
+            expect(toolbar.get_by_role("button", name="上传文件", exact=True)).to_be_enabled(timeout=30000)
+            expect(page).to_have_url(origin + f"/#/files/{doc_id}")
+            expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/")
+            assert entry_at("s137-tree-renamed/child-renamed/s137-inside-renamed.txt")["entry_id"] == inside_entry["entry_id"]
+            assert_bytes(documents / "s137-tree-renamed/child-renamed/s137-inside-renamed.txt", inside.read_bytes())
+            checks.append("S137/rename-response-navigation-race/current-navigation-wins")
+
             # Real operation dialogs and expanded context menus must fit both themes.
             for scheme in ("light", "dark"):
                 page.emulate_media(color_scheme=scheme)
@@ -663,6 +886,14 @@ def main():
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, "menu overflow")
                     page.wait_for_timeout(300)  # Capture the settled menu, not its fade-in frame.
                     page.screenshot(path=str(RUN / f"actions-{scheme}-{width}.png"), full_page=True)
+                    menu.get_by_role("menuitem", name="重命名", exact=True).click()
+                    expect(rename_dialog).to_be_visible()
+                    name_input.fill("s137-窄屏名称-" + "long-name-" * 12 + ".txt")
+                    page.wait_for_timeout(300)
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, "rename modal overflow")
+                    page.screenshot(path=str(RUN / f"rename-{scheme}-{width}.png"), full_page=True)
+                    rename_dialog.get_by_role("button", name="取消", exact=True).click()
+                    row("cancel.txt").click(button="right")
                     menu.get_by_role("menuitem", name="删除", exact=True).click()
                     expect(deletion).to_be_visible()
                     page.wait_for_timeout(300)  # Same for the modal transition.
@@ -670,7 +901,7 @@ def main():
                     assert page.locator("html").get_attribute("data-mantine-color-scheme") == scheme
                     page.screenshot(path=str(RUN / f"delete-{scheme}-{width}.png"), full_page=True)
                     deletion.get_by_role("button", name="取消", exact=True).click()
-            checks.append("light-dark/320-390-1440/context-menu/delete-dialog/no-horizontal-overflow")
+            checks.append("light-dark/320-390-1440/context-menu/rename-delete-dialog/no-horizontal-overflow")
             for name, data in fixtures.items():
                 actual = documents / ("source/stale.txt" if name == "stale.txt" else name)
                 assert_bytes(actual, data)
@@ -683,7 +914,7 @@ def main():
             save_result(True)
             context.close(); context = None
             browser.close(); browser = None
-        print(f"S136 browser acceptance passed: {RUN}", flush=True)
+        print(f"S136/S137 browser acceptance passed: {RUN}", flush=True)
     except Exception as cause:
         save_result(False, f"{type(cause).__name__}: {cause}")
         raise
