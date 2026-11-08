@@ -146,4 +146,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S118 | 将最新服务端（S117 之后）部署到本机 | L | S116、S117 | done | 源9da5ee8、主机42d99c5/b0ad622；项目整合/清理见批次 | pure/manifest/锁/dry/test/switch247、IPC与归属；线上3主文件sha256、Chromium六项、dae重启出网与9服务/3应用/SSH/锁核对通过 | 无本卡阻塞；原首发门禁保留 | [S118](tasks/S118.md) |
 
-| S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 | done | 基线e598106；实现提交及整合/清理见交接与批次 | Web测试构建/根typecheck、Nix Web、Rust67项/fmt/build/clippy、Chromium四业务51项与50组主题/宽度/路由/CSP通过 | 无；未部署，原首发门禁保留 | [S119](tasks/S119.md) |
+| S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 | done | 实现/验收b16d9a1已ff合master；任务树/分支已清理；基线e598106 | Web测试构建/根typecheck、Nix Web、Rust67项/fmt/build/clippy、Chromium四业务51项与50组主题/宽度/路由/CSP通过 | 无；未部署，原首发门禁保留 | [S119](tasks/S119.md) |
