@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S121 in_progress**（Web 顶栏分区与 48px 高度，用户已追加本机部署）；此前 **S120 done**，已将部署时 master 最新提交 `b5e96f2`（S119 Mantine Web）部署到本机 **generation248**；S119 的 Mantine 9.7.5 AppShell/默认主题与逐响应 style nonce CSP 已上线，账号/数据/ServerId/RootId 保持，服务仍为 `xingjian:users`。部署、浏览器与既有服务核对详见 [S120](tasks/S120.md) 与 [部署文档](../docs/operations/nixos.md#s120-mantine-版最新服务端部署2026-11-08generation248)。S001—S120 共 **120 卡，115 done、5 blocked**；**当前无 ready 卡**，其余恢复条件保持。
+当前：**S121 done**，Web顶栏已降至**48px**、Logo独立分区且边线对齐侧栏、面包屑居左；实现`354bbc4`已合master并部署本机**generation249**。详见[S121](tasks/S121.md)。S001—S121共**121卡，116 done、5 blocked**；**当前无ready卡**，原恢复条件保持。
 
-最近部署：S120 用现有一键入口把 master HEAD `b5e96f2`（S119 Mantine Web）固定到本机 generation248。pure 构建/manifest/主机锁/dry/test/HTTPS/IPC/归属/switch 通过；线上 `index.html`（剥离逐响应 nonce 后）与两个主资产 sha256 与包内一致，CSP 为 `style-src` nonce、无 `unsafe-inline`；真实 Chromium 六项检查（TLS/CSP nonce 与 Mantine 主题/五路由含 Burger 响应式/登录 cookie/Root 健康/SSE）一次通过；10 项既有服务 PID 全不变，3 应用与锁不变。主机 pin `0073fd6` 已 ff 合 main 且自动清理；交接及整合/清理见 [S120](tasks/S120.md) 与 [批次](tasks/S120-batch.md)。旧 system 与证据保留，原首发门禁不变。
+最近部署：S121固定源`354bbc479a4ef7b68418aa061d5a7f5a4d5e488c`，主机pin `6cc497b`；pure/build/dry/test/HTTPS/IPC/归属/switch及线上资产一致通过。Chromium本地/线上各50组布局及生产六项TLS/CSP/登录/Root/SSE检查通过；10项服务/3应用/SSH/主机锁保持。账号/数据/ServerId/RootId保持，运行用户仍为xingjian:users；恢复入口generation248。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
@@ -152,4 +152,4 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 | done | 实现/验收b16d9a1已ff合master；任务树/分支已清理；基线e598106 | Web测试构建/根typecheck、Nix Web、Rust67项/fmt/build/clippy、Chromium四业务51项与50组主题/宽度/路由/CSP通过 | 无；未部署，原首发门禁保留 | [S119](tasks/S119.md) |
 
-| S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 | in_progress | 基线 ec80982 | 基线 frozen install/Web test 通过 | 待浏览器验收与部署 | [S121](tasks/S121.md) |
+| S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 | done | 实现354bbc4已ff合master；主机6cc497b | Web test/build/typecheck、本地/线上各50组、pure/test/switch249、生产六项/资产/服务核对通过 | 无；原首发门禁保持 | [S121](tasks/S121.md) |
