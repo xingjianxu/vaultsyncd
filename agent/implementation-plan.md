@@ -247,6 +247,7 @@
 | S112 | 本机域名部署与 NixOS feature 配置 | L | S095、S096、S097、S111 |
 | S113 | 主机用户运行与 pure 一键部署 | L | S112 |
 | S115 | 服务端 Web HeroUI React 完整重构 | B/L | S077、S078、S079、S090、S112 |
+| S116 | 将当前服务端部署到本机 | L/B | S113、S114、S115 |
 
 ## 5. 逐步任务卡
 
@@ -1361,6 +1362,13 @@
 - 验证：Web 原有测试/生产构建、根工作区 typecheck；真实 Chromium 账号/Root/恢复/备份流程与桌面初始渲染回归；移动布局、主题、键盘和弹层焦点验证；更新并验证 Nix pnpm 固定依赖与 Web 离线构建。
 - 边界：不修改 wire DTO/数据库/同步状态机，不将 pending 或未知显示为成功；不访问正式数据、不默认部署或推送。不替代既有 hosted CI 与规模/Windows 首发门禁。
 - 交接：`agent/tasks/S115.md`、`agent/tasks/S115-a.md` 至 `S115-d.md`、`agent/tasks/S115-batch.md`。
+
+### S116 — 将当前服务端部署到本机
+
+- 依据：2026-11-08 用户要求“部署服务端到本机”；design §17.2、§11.5；前置 S113、S114、S115 done。
+- 结果：通过现有一键 pure 部署入口将当前已提交版本固定到 `/etc/nixos#wks-lab`，保留现有域名、账号、ServerId、RootId 与正式数据，不更新主机依赖。
+- 验证：部署契约、固定源 manifest 与包内检查、build/dry-activate/test/HTTPS/IPC/身份/UID及目录归属/switch；真实 Chromium 新版页面/登录/Root 健康/TLS/CSP/SSE，以及既有服务、SSH、应用与主机锁核对。
+- 交接：`agent/tasks/S116.md`；记录两仓库提交、generation、证据、恢复入口与清理。仅部署本机，不改变 S101/S106—108 与 T02 首发门禁。
 
 ### S117 — Web 管理界面紧凑化与 HeroUI 控件统一
 

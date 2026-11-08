@@ -1,6 +1,6 @@
 # 本机 NixOS 服务部署
 
-当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S113 将服务与正式目录切换为主机用户 `xingjian:users`；更新、凭据与恢复见末尾 S113 节。S112/096/097 为历史部署证据，旧试用卷仍保留。
+当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S116 已部署当前源码 f3b8979（含 S114/S115），运行与开机默认 generation246。服务及正式目录为主机用户 `xingjian:users`；一键更新与凭据见 S113 节，当前版本及恢复见末尾 S116 节。此前各节为历史部署证据，旧试用卷仍保留。
 
 ## 实际入口和来源（S096，2026-11-07）
 
@@ -221,3 +221,14 @@ cd /wrd/prj/vaultsyncd
 S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3bcd72e75cf**，主机 **32bfeb54f9c76d5ed781a80800fdce86179c7d6a** 已 ff 合入 `/etc/nixos` main；运行/开机默认 **generation245**，system `/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/180dcgy5j2hx801vg59g2bk15whp3p7j-vaultsyncd-0.1.1`。该源复用已通过65项测试的相同Rust组件；本次重新构建发行provenance与主机。真实脚本从4071fd4更新pin到6b967bd，显式pure构建后dry/test/健康/switch，通过后自动提交pin并清理临时树。主机main的pure toplevel重新求值得到同一system。
 
 最终脚本证据 `/data/vaultsyncd-deploy/local-20261107T221615-1805073/`，完整日志在上方S113证据的 `one-click.log`；`switch-health.json`确认旧ServerId/RootId/committed版本及磁盘/下载摘要、全部正式文件UID1000/GID100、10项既有服务PID/InvocationID及SSH保持，3200/3300/15312跟随重定向后200、主机锁逐字节不变。10服务比较使用保留的S112历史基线，7个已启用服务另有本轮迁移前快照。最终没有注入生产失败或实际激活旧generation演练回退，也没有再次运行Windows原生/浏览器矩阵或独立外网客户端探测。
+
+
+## S116 当前版本部署（2026-11-08，generation246）
+
+按用户要求执行 `./tools/deploy-local.sh --rev f3b8979`，固定项目完整 SHA `f3b897983087af1b6d075d89000c0a5ebc235aeb`，包含 S114 服务端 Root 名称及 S115 HeroUI Web。主机仅改版本 pin，提交 `15cfc075031ba6d9fab4bf040e1adbe5d68be939` 已 ff 合入 `/etc/nixos` main，临时主机树与分支自动清理。主工作区未提交 skills 文件保留；部署从干净任务树执行。
+
+运行与开机默认均为 **generation246**，system `/nix/store/22bvy0jasjkb02vd8j2wm6lcmgn5aci9-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/yd63mh9prpasa8f8647g076mx2m2wjdv-vaultsyncd-0.1.1`，manifest 与固定源一致。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Root 仍为 btrfs、xingjian:users、0700。密码读取方式沿用 S113。
+
+实际验收：部署契约6/6，Nix 包内66/0；完整 pure 构建及同一 store path 的 dry-activate/test/HTTPS与同UID IPC、实例身份/目录归属/switch通过。10项既有服务的PID/InvocationID、SSH配置与banner、3应用200及主机锁保持；线上HTML/JS/CSS共6文件逐字节匹配发行包。真实 Chromium 严格公共CA/TLS1.3、五路由及390/768/1440无溢出、主题、owner登录与Secure/HttpOnly/SameSite=Strict cookie、原Root健康、SSE初始seq及16秒心跳通过，无页面异常及CSP违规，敏感路径404。浏览器脚本前三轮因定位歧义、缺同源证据的APIRequestContext和字符串wait_for_function触发unsafe-eval限制失败；分别限定main、使用页面同源fetch和函数谓词后完整复验通过，未修改产品代码或放宽安全策略。
+
+部署证据 `/data/vaultsyncd-deploy/local-20261108T124809-2457084/` 保存 result.json、旧generation、旧system/boot GC roots、原锁和pin diff；额外核对与浏览器脚本/失败日志/成功JSON/截图在 `/data/vaultsyncd-deploy/S116-20261108-local/`。恢复入口为部署前generation245：`/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113恢复流程先test及健康检查，再决定switch并同步回退源码pin；没有实际激活旧generation演练。未运行生产上传/恢复/备份写入或故障注入、未重启宿主/Windows、未做独立外网客户端验收，原首发门禁保持。交接与任务树整合见 [S116](../../agent/tasks/S116.md) 与 [批次](../../agent/tasks/S116-batch.md)。
