@@ -21,3 +21,5 @@ S129 批次：Explorer 集成实现 `3357d89`、交接 `bbddb133c2046d4d4c08b715
 
 S136 批次：对象隔离修复 `f0e0103`、Web 文件操作 `0346ec1` 已 ff-only 合 master（无额外 merge commit）；确认任务树干净、提交已合入且非当前工作树后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S136-web-file-actions` 与 `git branch -d feat/S136-web-file-actions` 均成功。永久 `artifacts/S136/` 保留 Rust/Web/浏览器日志与证据；真实浏览器运行目录在 `/data/vs-s136-*`。S136 未做生产部署，下一次部署会迁移 schema 14→15。S134 任务树仍按该卡交接保留。
 
+S136-d 批次：合并后审查修复 `c2d06b0` 已 ff-only 合 master；确认任务树干净、提交已合入且非当前工作树后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S136-followups` 与 `git branch -d fix/S136-object-layout-followups` 均成功。1 GiB btrfs loop 卷（`/data/vaultsyncd-lab/runs`）用于实跑 ignored 的离线恢复原生测试，结束后已卸载、删除镜像，`/data/vaultsyncd-lab/runs` 不再存在。证据：`artifacts/S136-followups/` 与当时任务树 `artifacts/S136-followups/`（已随工作树移除，摘要见 S136-d）。
+
