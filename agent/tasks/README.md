@@ -16,3 +16,5 @@ git show 1fb58955152c4f8f75ae4e8c8933f1d3d81db76a:agent/tasks/S125-batch.md
 已完成任务的过程文件只有在结论、验证、限制、生命周期都已有父卡或规范入口，且原文已提交可恢复时才可删除；同步修正引用。未完成任务保留续接点和恢复条件，不能只留 Git 索引。日志、截图、发行产物及 VM 等 Git 外证据须独立保存，本次没有删除或重新验证这些证据。
 
 S128 批次：项目实现 `f7609ad`，主机 pin `6300214`，generation253；交接 `9d58fd7745c7a052ed0a44663fa4828dff9c0c55` 已 ff-only 合 master（整合点同该提交）；确认全部任务提交已合入、工作树干净且非当前目录后，worktree remove 与 branch -d 均成功。永久 `artifacts/S128/` 已保留日志、脚本和生产截图；生命周期详情见 S128。
+
+S129 批次：Explorer 集成实现 `3357d89`、交接 `bbddb133c2046d4d4c08b71510e473eec58c0065` 已 ff-only 合 master，整合点同交接提交；检查祖先关系及任务树干净后，已从主树成功 remove `/wrd/prj/vaultsyncd/.worktrees/S129-explorer-status` 并 branch -d `fix/S129-explorer-status`。永久 `artifacts/S129/` 保留五阶段真实 Explorer 截图/属性、Windows74项与管理回归、失败修正及清理记录。未打包或部署用户客户端；生产服务仍为 S128 generation253，下一 ready 无。
