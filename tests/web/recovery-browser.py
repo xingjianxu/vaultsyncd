@@ -106,7 +106,10 @@ def main():
             context = browser.new_context()
             page = context.new_page(); console = []
             page.on("console", lambda message: console.append(message.text))
+            page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
+            notifications = page.locator(".mantine-Notification-root")
+            operation = page.locator(".mantine-Paper-root").filter(has=page.get_by_role("heading", name="恢复操作", exact=True))
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):
@@ -179,7 +182,8 @@ def main():
             expect(page.get_by_text("恢复已提交",exact=True)).to_be_visible()
             restored=[x for x in entries() if x["entry_id"]==head["entry_id"]][0]
             assert restored["name"]!="keep.txt" and restored["hash"]==head["hash"]
-            expect(page.get_by_text("实际恢复位置：",exact=False)).to_contain_text(restored["name"])
+            expect(operation.get_by_text("实际恢复位置：",exact=False)).to_contain_text(restored["name"])
+            expect(notifications.filter(has_text="恢复已提交")).to_contain_text(restored["name"])
             assert sample.read_bytes()==b"S079 new target must survive"
             assert (candidate/restored["name"]).read_bytes()==b"S079 newer version"
             seq=api(f"/v1/admin/roots")["roots"][0]["root_seq"]
@@ -207,8 +211,9 @@ def main():
             page.evaluate("window.scrollTo(0,0)")
             page.screenshot(path=str(RUN/"recovery.png"),full_page=False)
             assert page.evaluate("localStorage.length")==0
+            assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             context.close();browser.close()
-            (RUN/"result.json").write_text(json.dumps({"passed":True,"restored_path":restored["name"],"checks":["history-restore-matches-disk","versions-expiry","durable-conflict-copy","dismiss-retains-copy","same-name-target-retained","response-lost-committed","reload-original-operation","retry-no-duplicate","actual-path-matches-disk","real-pagination"]},ensure_ascii=False,indent=2))
+            (RUN/"result.json").write_text(json.dumps({"passed":True,"restored_path":restored["name"],"checks":["history-restore-matches-disk","versions-expiry","durable-conflict-copy","dismiss-retains-copy","same-name-target-retained","response-lost-committed","reload-original-operation","retry-no-duplicate","actual-path-matches-disk","real-pagination","notifications/committed-restore-actual-path","CSP"]},ensure_ascii=False,indent=2))
         print(f"S079 browser acceptance passed: {RUN}")
     finally:
         if mounted: checked(["sudo", "-n", "umount", candidate])

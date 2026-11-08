@@ -102,7 +102,9 @@ def main():
             context = browser.new_context()
             page = context.new_page(); console = []
             page.on("console", lambda message: console.append(message.text))
+            page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
+            notifications = page.locator(".mantine-Notification-root")
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):
@@ -112,6 +114,7 @@ def main():
                 expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
 
             login(password)
+            expect(notifications.filter(has_text="登录成功")).to_have_attribute("role", "status")
             cookies = context.cookies()
             assert len(cookies) == 2 and all(c["httpOnly"] and c["secure"] and c["sameSite"] == "Strict" for c in cookies)
             assert page.evaluate("document.cookie") == ""
@@ -146,8 +149,10 @@ def main():
             page.get_by_label(field_label("登录名")).fill("owner")
             page.get_by_label(field_label("密码")).fill(password)
             page.get_by_role("button", name="登录", exact=True).click()
-            expect(page.get_by_role("alert")).to_contain_text("密码不正确")
+            password_error = notifications.filter(has_text="密码不正确")
+            expect(password_error).to_have_attribute("role", "alert")
             login(new_password)
+            expect(password_error).to_have_count(0)
             page.get_by_role("button", name="退出当前会话", exact=True).click()
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
             assert page.evaluate("fetch('/v1/auth/account').then(r => r.status)") == 401
@@ -161,8 +166,9 @@ def main():
             assert password not in combined and new_password not in combined
             assert all(cookie["value"] not in combined for cookie in cookies + old_second_cookie)
             page.screenshot(path=str(RUN / "account.png"))
+            assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             second.close(); context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage"], "scope":"HTTP loopback test; production HTTPS is S097"}, ensure_ascii=False, indent=2))
+            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage", "notifications/login-success/auth-error-clears-on-retry", "CSP"], "scope":"HTTP loopback test; production HTTPS is S097"}, ensure_ascii=False, indent=2))
         print(f"S077 browser acceptance passed: {RUN}")
     finally:
         for listener in [proxy, evil]:

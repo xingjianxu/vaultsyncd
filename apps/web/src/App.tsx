@@ -1,6 +1,9 @@
 import { Component, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ActionIcon, Alert, Anchor, AppShell, Breadcrumbs, Burger, Button, Card, Container, Divider, Group, Loader, MantineProvider, NavLink, SimpleGrid, Stack, Text, ThemeIcon, Title, useComputedColorScheme, useMantineColorScheme } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
+import { Notifications } from "@mantine/notifications";
+import "@mantine/notifications/styles.css";
+import { showFeedback } from "./components/Feedback";
 import { EmptyState, StatusBadge } from "./components/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
@@ -28,7 +31,7 @@ class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean 
   }
 }
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
-export function App() { return <MantineProvider defaultColorScheme="auto" getStyleNonce={getStyleNonce}><AuthProvider><AppView /></AuthProvider></MantineProvider>; }
+export function App() { return <MantineProvider defaultColorScheme="auto" getStyleNonce={getStyleNonce}><Notifications position="top-right" limit={3} zIndex={1100} /><AuthProvider><AppView /></AuthProvider></MantineProvider>; }
 function AppView() {
   const auth = useAuth();
   const location = useRoute("/overview");
@@ -53,9 +56,11 @@ function AppView() {
       setStatus(result.status === "ok" ? "服务可用" : result.status === "degraded" ? "服务降级" : "需要恢复");
       setDetail("健康检查已返回；账号与 Root 状态需登录后查看。");
       setCheckedAt(new Date().toLocaleTimeString("zh-CN"));
+      showFeedback(result.status === "ok" ? "服务可用" : result.status === "degraded" ? "服务降级" : "需要恢复", result.status === "ok" ? "green" : "yellow");
     } catch (error) {
       if (current.signal.aborted) return;
-      setStatus("未连接"); setDetail(error instanceof Error ? error.message : "连接失败，请检查服务地址。");
+      const message = error instanceof Error ? error.message : "连接失败，请检查服务地址。";
+      setStatus("未连接"); setDetail(message); showFeedback(message, "red");
     } finally { if (!current.signal.aborted) { controller.current = null; setBusy(false); } }
   }
   const connection = <StatusBadge tone={status === "服务可用" ? "success" : status === "服务降级" || status === "需要恢复" ? "warning" : "neutral"}>{status}</StatusBadge>;

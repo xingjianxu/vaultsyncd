@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S132: built Web + real Chromium + isolated btrfs service, no API fixtures.
+"""S134: built Web + real Chromium + isolated btrfs service, no API fixtures.
 
 VAULTSYNCD_TEST_BIN_DIR=... nix develop .#web-tests --command python3 tests/web/files-browser.py
 Network faults only affect this run's proxy; no online SQL or production writes.
@@ -23,7 +23,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data") / f"vs-s132-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data") / f"vs-s134-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -36,7 +36,7 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    print(f"S132 artifacts: {RUN}", flush=True)
+    print(f"S134 artifacts: {RUN}", flush=True)
     state, roots = RUN / "state", RUN / "roots"
     state.mkdir(mode=0o700); roots.mkdir()
     documents, archive = roots / "documents", roots / "archive"
@@ -234,12 +234,74 @@ def main():
             assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "复制路径"]
             menu_box, link_box = menu.bounding_box(), file_link.bounding_box()
             assert abs(menu_box["y"] - (link_box["y"] + link_box["height"] / 2)) < 16, (menu_box, link_box)
+            notifications = page.locator(".mantine-Notification-root")
+
+            def notification(message):
+                return notifications.filter(has=page.get_by_text(message, exact=True))
+
+            def copy_row(name):
+                table.get_by_role("button", name=name, exact=True).locator("xpath=ancestor::tr[1]").click(button="right")
+                page.get_by_role("menuitem", name="复制路径", exact=True).click()
+                expect(menu).not_to_be_visible()
+
+            # S134：真实 Clipboard API 成功；全局浮层不改变工具栏、表格与分页几何。
+            layout_targets = [page.locator(selector) for selector in (".files-browser", ".files-sidebar", ".files-toolbar", ".files-list", ".files-table", ".files-pagination")]
+            before_notification = [target.bounding_box() for target in layout_targets]
+            copied_at = time.monotonic()
             page.get_by_role("menuitem", name="复制路径", exact=True).click()
             expect(menu).not_to_be_visible()
-            notice = page.locator(".files-notice")
-            expect(notice).to_have_text("已复制路径 /file-0000.txt")
+            notice = notification("已复制路径 /file-0000.txt")
+            expect(notice).to_have_count(1)
+            expect(notice).to_have_attribute("role", "status")
             assert page.evaluate("navigator.clipboard.readText()") == "/file-0000.txt"
-            expect(notice).not_to_be_visible(timeout=8000)
+            expect(page.locator('.mantine-Notifications-root[data-position="top-right"]')).to_be_visible()
+            page.wait_for_timeout(250)
+            assert [target.bounding_box() for target in layout_targets] == before_notification, "通知挤压了文件布局"
+            # 相同文案再次复制创建新的完整四秒通知，不复用已经消耗的计时器。
+            page.wait_for_timeout(2400)
+            copy_row("file-0000.txt")
+            expect(notice).to_have_count(2)
+            expect(notice).to_have_count(1, timeout=2500)
+            assert time.monotonic() - copied_at >= 3.8, "首条成功通知过早消失"
+            page.wait_for_timeout(700)
+            expect(notice).to_have_count(1)
+            expect(notice).to_have_count(0, timeout=5000)
+            assert time.monotonic() - copied_at < 10, "成功通知未按四秒自动清理"
+            # limit=3：第四条进入队列，关闭一条后补位；成功通知也能手动关闭。
+            for index in range(4): copy_row(f"file-{index:04}.txt")
+            expect(notifications).to_have_count(3)
+            queued = notification("已复制路径 /file-0003.txt")
+            expect(queued).to_have_count(0)
+            notification("已复制路径 /file-0000.txt").get_by_role("button", name="关闭通知", exact=True).click()
+            expect(queued).to_be_visible()
+            expect(notifications).to_have_count(3)
+            for index in range(1, 4):
+                notice_to_close = notification(f"已复制路径 /file-{index:04}.txt")
+                notice_to_close.get_by_role("button", name="关闭通知", exact=True).click()
+                expect(notice_to_close).to_have_count(0)
+            # 拒绝 Chromium 原生剪贴板权限，不替换 navigator.clipboard 或应用 API。
+            context.clear_permissions()
+            cdp = context.new_cdp_session(page)
+            browser_context_id = cdp.send("Target.getTargetInfo")["targetInfo"]["browserContextId"]
+            for unsanitized in (False, True):
+                cdp.send("Browser.setPermission", {"permission": {"name": "clipboard-write", "allowWithoutSanitization": unsanitized}, "setting": "denied", "origin": origin, "browserContextId": browser_context_id})
+            clipboard_permission = page.evaluate("navigator.permissions.query({name:'clipboard-write'}).then(p=>p.state)")
+            assert clipboard_permission == "denied", clipboard_permission
+            copy_row("file-0000.txt")
+            denied = notification("复制失败，请手动复制路径 /file-0000.txt")
+            expect(denied).to_have_attribute("role", "alert")
+            page.wait_for_timeout(4500)
+            expect(denied).to_be_visible()
+            page.screenshot(path=str(RUN / "notification-clipboard-denied.png"))
+            denied.get_by_role("button", name="关闭通知", exact=True).focus()
+            page.keyboard.press("Enter")
+            expect(denied).to_have_count(0)
+            cdp.send("Browser.resetPermissions", {"browserContextId": browser_context_id})
+            context.grant_permissions(["clipboard-read", "clipboard-write"], origin=origin)
+            restored_permission = page.evaluate("navigator.permissions.query({name:'clipboard-write'}).then(p=>p.state)")
+            assert restored_permission == "granted", restored_permission
+            cdp.detach()
+            expect(notifications).to_have_count(0)
             expect(page.get_by_role("heading", name="文件浏览器", exact=True)).not_to_be_visible()
             expect(page.get_by_text("切换 Root、浏览目录并查看文件属性。", exact=True)).not_to_be_visible()
             expect(page.get_by_role("button", name="刷新 Root 列表", exact=True)).not_to_be_visible()
@@ -385,21 +447,30 @@ def main():
             expect(table.get_by_role("button", name="deep.txt", exact=True)).to_be_visible()
             address_input.fill("../")
             address_input.press("Enter")
-            expect(page.get_by_role("alert")).to_contain_text("请输入 Root 内的相对路径")
+            address_error = notifications.filter(has_text="请输入 Root 内的相对路径")
+            expect(address_error).to_have_attribute("role", "alert")
+            page.wait_for_timeout(4500)
+            expect(address_error).to_be_visible()
             address_input.press("Escape")
             expect(address_input).to_have_value("/URL # % & 空 格/子 + %2F")
-            expect(page.get_by_role("alert")).not_to_be_visible()
+            expect(address_error).to_have_count(0)
             address_input.fill("/missing")
             page.get_by_role("button", name="转到目录", exact=True).click()
-            expect(page.get_by_role("alert")).to_contain_text("目录不存在")
+            missing_error = notifications.filter(has_text="目录不存在")
+            expect(missing_error).to_have_attribute("role", "alert")
             expect(table).not_to_be_visible()
             page.get_by_role("button", name="返回上级", exact=True).click()
             expect(table).to_be_visible()
+            expect(missing_error).to_have_count(0)
             expect(page.get_by_role("button", name="前进", exact=True)).to_be_disabled()
             for bad, message in [(f"{doc_id}/%2F", "目录 URL 无效"), (f"{doc_id}/%zz", "目录 URL 无效"), ("0" * 32, "Root 不存在或未获授权")]:
                 page.goto(origin + "/#/files/" + bad)
-                expect(page.get_by_role("alert")).to_contain_text(message)
+                expect(notifications.filter(has_text=message)).to_have_attribute("role", "alert")
                 expect(table).not_to_be_visible()
+            # 离开错误页面会卸载 scoped Feedback，不让旧错误泄漏到其他页面。
+            page.goto(origin + "/#/account")
+            expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
+            expect(notifications).to_have_count(0)
             page.goto(deep_url)
             expect(table.get_by_role("button", name="deep.txt", exact=True)).to_be_visible()
             address_input.fill("/")
@@ -421,6 +492,29 @@ def main():
                         raise AssertionError((scheme, width, "dialog", bounds[:15]))
                     layout_cases.append([scheme, width])
             page.get_by_role("button", name="关闭", exact=True).click()
+            notification_layout_cases = []
+            for scheme in ("light", "dark"):
+                page.emulate_media(color_scheme=scheme)
+                for width in (320, 390):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    page.wait_for_timeout(250)
+                    before_copy = page.locator(".files-list").bounding_box()
+                    copy_row(long_name)
+                    long_notice = notification("已复制路径 /" + long_name)
+                    expect(long_notice).to_be_visible()
+                    page.wait_for_timeout(250)
+                    assert page.locator(".files-list").bounding_box() == before_copy, (scheme, width, "notification shifted list")
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, "notification overflow")
+                    box = long_notice.bounding_box()
+                    assert box["x"] >= 0 and box["x"] + box["width"] <= width + 1, (scheme, width, box)
+                    description = long_notice.locator(".mantine-Notification-description")
+                    assert description.evaluate("e=>e.scrollWidth <= e.clientWidth"), (scheme, width, "long path overflow")
+                    assert page.locator("html").get_attribute("data-mantine-color-scheme") == scheme
+                    page.screenshot(path=str(RUN / f"notification-{scheme}-{width}.png"))
+                    long_notice.get_by_role("button", name="关闭通知", exact=True).click()
+                    expect(long_notice).to_have_count(0)
+                    notification_layout_cases.append([scheme, width])
+            page.emulate_media(color_scheme="light")
             page.set_viewport_size({"width": 1440, "height": 1000})
             page.get_by_label("筛选当前目录", exact=True).fill("")
             choose("archive", arc_id)
@@ -494,8 +588,8 @@ def main():
             expect(page.get_by_role("heading", name="请先登录", exact=True)).to_be_visible()
             expect(table).not_to_be_visible()
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-root/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
-        print(f"S132 browser acceptance passed: {RUN}", flush=True)
+            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-root/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "notifications/top-right/limit-3/queue", "notifications/success-4s/repeated-copy-new-timer/manual-close", "notifications/native-clipboard-denied/sticky-error/keyboard-close", "notifications/no-layout-shift/long-path/narrow-light-dark", "notifications/scoped-error-state-and-unmount-cleanup", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "notification_layout_cases": notification_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
+        print(f"S134 browser acceptance passed: {RUN}", flush=True)
     finally:
         release.set()
         if proxy: proxy.shutdown(); proxy.server_close()

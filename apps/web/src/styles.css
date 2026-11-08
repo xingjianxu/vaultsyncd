@@ -45,7 +45,8 @@ code { overflow-wrap: anywhere; }
 .files-entry-link > .mantine-Group-root { min-width: 0; }
 .files-entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-icon { width: 18px; height: 18px; flex-shrink: 0; }
-.files-notice { border-bottom: 1px solid var(--mantine-color-default-border); }
+/* 反馈浮层不挤压列表，长路径和请求编号在窄屏内换行。 */
+.mantine-Notification-description { overflow-wrap: anywhere; }
 .files-pagination { padding: 8px; border-top: 1px solid var(--mantine-color-default-border); }
 @media (max-width: 62em) {
   .files-address { order: 1; flex-basis: 100%; }

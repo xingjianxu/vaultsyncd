@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { listRoots, listRecoveryEntries, listConflictCopies, listEntryHistory, listTrash, type RecoveryItem, type RecoveryPage, type RootSummary } from "@vaultsyncd/api-client";
 import { Alert, Button, Group, Paper, Select, Stack, Text, Title } from "@mantine/core";
 import { EmptyState, StatusBadge, Table } from "../../components/ui";
+import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 import { expiry, expired, RestoreSession, type RestoreRecord } from "./recovery";
@@ -40,7 +41,13 @@ export function RecoveryPanel() {
     if(!client || !user || busy) return;
     setBusy(true); setError("");
     const session = new RestoreSession(user, root);
-    try { setRecord(await (item ? session.begin(client, item, mode === "history") : session.resume(client))); }
+    try {
+      const restored = await (item ? session.begin(client, item, mode === "history") : session.resume(client));
+      setRecord(restored);
+      if (restored?.result?.state === "committed") showFeedback(`恢复已提交，实际恢复位置：${restored.path ?? "请核对结果"}`);
+      else if (restored?.result?.state === "rejected") showFeedback(restored.result.error_message ?? "恢复被拒绝", "red");
+      else showFeedback("恢复尚未确认提交，请核对原操作。", "yellow");
+    }
     catch(cause) {
       setRecord(session.read());
       if(cause instanceof SignedOut) auth.reportSignedOut();
@@ -69,7 +76,7 @@ export function RecoveryPanel() {
             onClick={() => tab(value)}>{["文件与历史", "冲突副本", "回收站"][i]}</Button>)}
         </Group>
         {mode === "conflicts" && notice && <Alert><Group justify="space-between"><Text size="sm">冲突副本保留了另一份修改。</Text><Button variant="subtle" onClick={() => setNotice(false)}>关闭提示</Button></Group></Alert>}
-        {error && <Alert color="red" role="alert">{error}</Alert>}
+        <Feedback message={error} />
         {(busy || rootsLoading) && <Text role="status" size="sm" c="dimmed">正在核对…</Text>}
         {!rootsLoading && !roots.length && !error && <Text size="sm" c="dimmed">尚无授权 Root。</Text>}
       </Stack>

@@ -99,7 +99,9 @@ def main():
             context = browser.new_context()
             page = context.new_page(); console = []
             page.on("console", lambda message: console.append(message.text))
+            page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
+            notifications = page.locator(".mantine-Notification-root")
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):
@@ -116,7 +118,8 @@ def main():
                 page.get_by_label(field_label("服务器目录绝对路径")).fill(str(path))
                 page.get_by_role("button", name="校验并注册 Root", exact=True).click()
             register(candidate)
-            expect(page.get_by_text("已注册 Root", exact=False).filter(has_text="等待初始采集")).to_be_visible()
+            expect(notifications.filter(has_text="已注册 Root")).to_have_attribute("role", "status")
+            expect(notifications.filter(has_text="已注册 Root")).to_contain_text("等待初始采集")
             expect(page.get_by_text(str(candidate), exact=True)).to_be_visible()
             assert hashlib.sha256(sample.read_bytes()).hexdigest() == original_hash
             ordinary = page.evaluate("fetch('/v1/roots').then(r => r.json())")
@@ -125,11 +128,14 @@ def main():
             assert len(managed["roots"]) == 1 and managed["roots"][0]["health"] == "healthy"
             assert managed["roots"][0]["collection"]["state"] in ["not_scanned", "scanning", "pending", "complete"]
             register(candidate / "child")
-            expect(page.get_by_role("alert")).to_contain_text("重叠")
+            overlap_error = notifications.filter(has_text="路径重叠（overlapping_root）")
+            expect(overlap_error).to_have_attribute("role", "alert")
             register(unsupported)
-            expect(page.get_by_role("alert")).to_contain_text("btrfs")
+            expect(notifications.filter(has_text="btrfs")).to_have_attribute("role", "alert")
+            expect(overlap_error).to_have_count(0)
             register("/etc")
-            expect(page.get_by_role("alert")).to_contain_text("允许基目录")
+            expect(notifications.filter(has_text="允许基目录")).to_have_attribute("role", "alert")
+            expect(notifications.filter(has_text="btrfs")).to_have_count(0)
             for _ in range(30):
                 page.get_by_role("button", name="刷新目录状态", exact=True).click()
                 try:
@@ -153,8 +159,9 @@ def main():
             assert hashlib.sha256(sample.read_bytes()).hexdigest() == original_hash
             page.screenshot(path=str(RUN / "roots.png"), full_page=True)
             assert page.evaluate("localStorage.length") == 0
+            assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed":True,"checks":["owner-login", "allowed-bases", "empty-is-not-synced", "register-btrfs", "existing-hash-preserved", "ordinary-list-no-path", "overlap-rejected", "unsupported-filesystem-rejected", "outside-bases-rejected", "actual-observer-progress", "real-bind-mount-drift", "restore-mount-recovers-health", "source-hash-retained"], "mount_failure":unavailable, "hash":original_hash, "scope":"HTTP loopback browser test; HTTPS deployment S097"}, ensure_ascii=False, indent=2))
+            (RUN / "result.json").write_text(json.dumps({"passed":True,"checks":["owner-login", "allowed-bases", "empty-is-not-synced", "register-btrfs", "existing-hash-preserved", "ordinary-list-no-path", "overlap-rejected", "unsupported-filesystem-rejected", "outside-bases-rejected", "actual-observer-progress", "real-bind-mount-drift", "restore-mount-recovers-health", "source-hash-retained", "notifications/register-success/scoped-error-replacement", "CSP"], "mount_failure":unavailable, "hash":original_hash, "scope":"HTTP loopback browser test; HTTPS deployment S097"}, ensure_ascii=False, indent=2))
         print(f"S078 browser acceptance passed: {RUN}")
     finally:
         if mounted: checked(["sudo", "-n", "umount", candidate])

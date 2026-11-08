@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { ApiError, listManagedRoots, registerRoot, type ManagedRoot, type ManagedRootList, type RootCollectionState } from "@vaultsyncd/api-client";
-import { Alert, Button, Code, Grid, Group, Paper, Stack, Text, TextInput, Title } from "@mantine/core";
+import { Button, Code, Grid, Group, Paper, Stack, Text, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { EmptyState, StatusBadge, Table } from "../../components/ui";
+import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 
@@ -31,7 +32,6 @@ export function RootsPanel() {
   const [loading, setLoading] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState("");
   const [revision, setRevision] = useState(0);
   const client = auth.client;
   const user = auth.account?.user_id;
@@ -53,10 +53,10 @@ export function RootsPanel() {
   }, [client, user, revision]);
   async function register({ path }: typeof form.values) {
     if (!client || registering || !data) return;
-    setRegistering(true); setError(""); setResult("");
+    setRegistering(true); setError("");
     try {
       const registered = await client.request(options => registerRoot(options, { path }));
-      setResult(`已注册 Root ${registered.root_id}；等待初始采集，现有文件保留。`);
+      showFeedback(`已注册 Root ${registered.root_id}；等待初始采集，现有文件保留。`);
       setRevision(value => value + 1);
     } catch (cause) {
       if (cause instanceof SignedOut) auth.reportSignedOut();
@@ -73,8 +73,7 @@ export function RootsPanel() {
           <Button variant="default" disabled={loading || registering} onClick={() => setRevision(value => value + 1)}>刷新目录状态</Button>
         </Group>
         {loading && <Text role="status" size="sm" c="dimmed">正在核验目录与采集状态…</Text>}
-        {error && <Alert color="red" role="alert">{error}</Alert>}
-        {result && <Alert color="green" role="status">{result}</Alert>}
+        <Feedback message={error} />
         {!loading && !data && !error && <Text size="sm" c="dimmed">尚未读取目录，不能判断为空或已同步。</Text>}
       </Stack>
     </Paper>

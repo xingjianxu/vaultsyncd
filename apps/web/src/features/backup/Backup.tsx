@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { backupSnapshotManifest, backupSnapshotStatus, listBackupSnapshots, prepareBackupSnapshot, releaseBackupSnapshot, verifyBackupSnapshot, type BackupSnapshotStatus, type BackupSnapshotList } from "@vaultsyncd/api-client";
 import { Alert, Anchor, Button, Group, Input, Paper, ScrollArea, Stack, Text, Title } from "@mantine/core";
 import { Dialog, EmptyState, StatusBadge, Table } from "../../components/ui";
+import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 import { LocalExport, type ExportRecord } from "./export";
@@ -43,6 +44,7 @@ export function BackupPanel() {
        sessionStorage.setItem(prepareKey,id);
        setSelected(await client.request(options=>prepareBackupSnapshot(options,{backup_id:id})));
      }else if(selected)setSelected(await client.request(options=>(kind==="verify"?verifyBackupSnapshot:releaseBackupSnapshot)(options,selected.backup_id)));
+     showFeedback(kind==="prepare"?"备份准备请求已返回，请核对作业状态。":kind==="verify"?"源校验请求已返回，请核对源完整性。":"快照释放请求已返回，请核对作业状态。", "blue");
      setRevision(value=>value+1);
    }catch(cause){failed(cause);}finally{setBusy(false);}
  }
@@ -56,12 +58,13 @@ export function BackupPanel() {
      finally{await reader.cancel().catch(()=>{});}
      const bytes=new Uint8Array(length);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.length;}
      setIndex(indexManifest(bytes,selected.manifest_hash,selected.backup_id));
+     showFeedback("固定清单已读取并校验");
    }catch(cause){failed(cause);}finally{setBusy(false);}
  }
  async function download(){
    if(!client||!user||!selected||busy)return;const local=new LocalExport(user),controller=new AbortController();
    cancel.current=controller;setBusy(true);setError("");setUrl("");setReceiptUrl("");setProgress("0");
-   try{const running=local.download(client,selected,controller.signal,setProgress);setRecord(local.read());await running;}
+   try{const running=local.download(client,selected,controller.signal,setProgress);setRecord(local.read());await running;showFeedback("已下载，尚未重读校验", "blue");}
    catch(cause){failed(cause);}finally{setRecord(local.read());setBusy(false);cancel.current=null;}
  }
  async function verify(file?:File){
@@ -72,6 +75,7 @@ export function BackupPanel() {
      // Receipt remains exported_unverified until the separately saved archive is selected and reread.
      const receipt={format_version:1,state:file?"verified":"exported_unverified",backup_id:record.id,manifest_hash:record.hash,server_id:result.server,checked_files:String(result.items.length),reason:file?"selected archive verified":"browser staging verified; saved archive must be rechecked"};
      setReceiptUrl(URL.createObjectURL(new Blob([JSON.stringify(receipt,null,2)],{type:"application/json"})));
+     showFeedback(file?"另存归档完整性已验证":"浏览器暂存已校验，另存归档仍需重读验证");
    }catch(cause){failed(cause);}finally{setRecord(local.read());setBusy(false);}
  }
  if(!user)return <EmptyState title="请先登录">备份包含账号验证材料，仅 owner 可准备、导出或释放。</EmptyState>;
@@ -84,7 +88,7 @@ export function BackupPanel() {
          <Button disabled={busy} onClick={()=>void action("prepare")}>准备一致备份（未知时重试同ID）</Button>
          <Button variant="default" disabled={busy} onClick={()=>setRevision(v=>v+1)}>刷新备份作业</Button>
        </Group>
-       {error&&<Alert color="red" role="alert">{error}</Alert>}
+       <Feedback message={error} />
        {!data&&!error&&<Text role="status" size="sm" c="dimmed">正在读取备份作业，尚不能判断是否存在有效备份。</Text>}
        {data&&<Table caption="备份作业" rows={data.items} rowKey={s=>s.backup_id} emptyMessage="尚无备份；不能据此推断数据已安全导出。" columns={[
          {key:"id",title:"备份身份",render:s=><Text component="code" size="xs" className="break-all">{s.backup_id}</Text>},

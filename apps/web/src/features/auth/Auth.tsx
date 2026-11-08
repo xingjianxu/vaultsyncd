@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { AccountInfo } from "@vaultsyncd/api-client";
-import { Alert, Button, Grid, Paper, PasswordInput, Stack, Text, TextInput, Title, Group } from "@mantine/core";
+import { Button, Grid, Paper, PasswordInput, Stack, Text, TextInput, Title, Group } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { StatusBadge } from "../../components/ui";
+import { Feedback, showFeedback } from "../../components/Feedback";
 import { BrowserAuth, SignedOut } from "../../services/auth";
 
 type AuthState = { account: AccountInfo | null; client: BrowserAuth | null; busy: boolean; error: string; reportSignedOut: () => void; run: (action: (client: BrowserAuth) => Promise<AccountInfo | null>) => Promise<void> };
@@ -30,7 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }).finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
   }, []);
-  return <AuthContext.Provider value={{ account, client: client.current, busy, error, reportSignedOut: () => setAccount(null), run }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ account, client: client.current, busy, error, reportSignedOut: () => setAccount(null), run }}><Feedback message={error} />{children}</AuthContext.Provider>;
 }
 export function useAuth(): AuthState {
   const auth = useContext(AuthContext);
@@ -38,17 +39,16 @@ export function useAuth(): AuthState {
   return auth;
 }
 export function AccountPanel() {
-  const { account, busy, error, run } = useAuth();
-  const [message, setMessage] = useState("");
+  const { account, busy, run } = useAuth();
   const loginForm = useForm({ mode: "uncontrolled", initialValues: { login: "", password: "" } });
   const passwordForm = useForm({ mode: "uncontrolled", initialValues: { current_password: "", new_password: "" } });
   async function submitLogin(values: typeof loginForm.values) {
-    setMessage(""); loginForm.reset();
-    await run((client) => client.login(values.login, values.password));
+    loginForm.reset();
+    await run(async (client) => { const account = await client.login(values.login, values.password); showFeedback("登录成功"); return account; });
   }
   async function submitPassword(values: typeof passwordForm.values) {
-    setMessage(""); passwordForm.reset();
-    await run(async (client) => { await client.changePassword(values.current_password, values.new_password); setMessage("密码已修改，全部会话已撤销。请使用新密码重新登录。"); return null; });
+    passwordForm.reset();
+    await run(async (client) => { await client.changePassword(values.current_password, values.new_password); showFeedback("密码已修改，全部会话已撤销。请使用新密码重新登录。"); return null; });
   }
   return <Grid align="flex-start">
     <Grid.Col span={{ base: 12, lg: 8 }}>
@@ -61,13 +61,11 @@ export function AccountPanel() {
             </Group>
             <Text size="sm" c="dimmed">使用 owner 账号管理当前服务，凭据通过同源安全会话传递。</Text>
             <Text role="status" fw={500}>{busy ? "正在核验账号…" : account ? `已登录：${account.login}` : "未登录"}</Text>
-            {error && <Alert color="red" role="alert">{error}</Alert>}
-            {message && <Alert color="green" role="status">{message}</Alert>}
             {account ? <>
               <Text size="sm" c="dimmed">凭据由浏览器的安全 Cookie 携带，页面关闭不会撤销其他设备。</Text>
               <Group>
-                <Button variant="default" disabled={busy} onClick={() => void run(async (client) => { await client.logout(); return null; })}>退出当前会话</Button>
-                <Button variant="light" color="red" disabled={busy} onClick={() => void run(async (client) => { await client.revokeAll(); setMessage("全部会话已撤销，请重新登录。"); return null; })}>撤销全部会话</Button>
+                <Button variant="default" disabled={busy} onClick={() => void run(async (client) => { await client.logout(); showFeedback("已退出当前会话"); return null; })}>退出当前会话</Button>
+                <Button variant="light" color="red" disabled={busy} onClick={() => void run(async (client) => { await client.revokeAll(); showFeedback("全部会话已撤销，请重新登录。"); return null; })}>撤销全部会话</Button>
               </Group>
             </> : <form onSubmit={loginForm.onSubmit(submitLogin)}>
               <Stack maw={480}>

@@ -4,6 +4,7 @@ import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select
 import { DirectoryTree } from "./DirectoryTree";
 import { FileIcon } from "./FileIcon";
 import { Dialog, EmptyState } from "../../components/ui";
+import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 import { ancestry, directoryAtPath, filesLocation, fileModified, fileSize, fileSizeDetail, parseFilesLocation, readDirectorySnapshot, type DirectorySnapshot } from "./browser";
@@ -100,19 +101,13 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [menuEntryId, setMenuEntryId] = useState<string | null>(null);
-  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(!!root);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const currentPath = "/" + segments.join("/");
   const [address, setAddress] = useState(currentPath);
   const [addressError, setAddressError] = useState("");
-  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setMenuEntryId(null); setNotice(""); }, [currentPath]);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = setTimeout(() => setNotice(""), 4000);
-    return () => clearTimeout(timer);
-  }, [notice]);
+  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setMenuEntryId(null); }, [currentPath]);
   useEffect(() => {
     if (!root) return;
     const controller = new AbortController();
@@ -140,9 +135,9 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
     const path = ancestry(snapshot, entry).map(item => item.name).join("/") || "/";
     try {
       await navigator.clipboard.writeText(path);
-      setNotice(`已复制路径 ${path}`);
+      showFeedback(`已复制路径 ${path}`);
     } catch {
-      setNotice(`复制失败，请手动复制路径 ${path}`);
+      showFeedback(`复制失败，请手动复制路径 ${path}`, "red");
     }
   }
   function goToAddress() {
@@ -177,12 +172,11 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
       </div>
       {root?.health === "unavailable" && <Alert color="yellow">Root 当前不可用，清单仅代表已提交的元数据。</Alert>}
       {(loading || rootsLoading) && <Text p="md" role="status">正在读取目录…</Text>}
-      {rootError && <Alert color="red" role="alert">{rootError}</Alert>}
-      {addressError && <Alert color="red" role="alert">{addressError}</Alert>}
-      {error && <Alert color="red" role="alert">{error} 未能读取完整目录，请刷新重试。</Alert>}
+      <Feedback message={rootError} />
+      <Feedback message={addressError} />
+      <Feedback message={error ? `${error} 未能读取完整目录，请刷新重试。` : ""} />
       {!rootsLoading && !root && !rootError && <Text p="md">尚无授权 Root，请先在 Root 目录页面注册目录。</Text>}
-      {snapshot && !directory && <Alert color="red" role="alert">目录不存在或尚未采集，请检查地址或刷新。</Alert>}
-      {notice && <Text size="sm" px="md" py={4} role="status" className="files-notice">{notice}</Text>}
+      <Feedback message={snapshot && !directory ? "目录不存在或尚未采集，请检查地址或刷新。" : ""} />
       <div className="files-list">
         {snapshot && directory && <Table aria-label="文件与目录" highlightOnHover verticalSpacing="xs" horizontalSpacing="sm" className="files-table">
           <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th></Table.Tr></Table.Thead>

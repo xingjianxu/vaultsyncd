@@ -3,6 +3,7 @@
     "@mantine/core": "9.7.5",
     "@mantine/form": "9.7.5",
     "@mantine/hooks": "9.7.5",
+    "@mantine/notifications": "9.7.5",
     "@noble/hashes": "2.4.0",
     "@vaultsyncd/api-client": "workspace:*",
     "react": "19.3.1",
