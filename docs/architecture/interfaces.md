@@ -2615,3 +2615,13 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 `services.vaultsyncd.createUser` 默认 true，保持专用系统账号行为；false 时必须已声明非 root user/group，模块不写 users.users/groups 的账号属性。服务单元仍使用 User/Group、SupplementaryGroups、零 capability、NoNewPrivileges 和显式 ReadWritePaths。主机 feature 默认 user=host.user、group=该账号 NixOS 主组，本机 xingjian:users。目录迁移是独立的离线运维操作，不由模块递归改权。
 
 更新入口 `tools/deploy-local.sh` → `deploy/nixos/deploy-local.py`，默认 HEAD，永久仓库完整 SHA；独立 host worktree 修改唯一版本 pin。pure-eval=true、禁止依赖锁更新，构建包 sourceInfo.commit 校验后按同一 store path build/dry/test/HTTPS与IPC健康/switch，成功才以中文提交 pin 并 ff 到原主机分支。证据/GCroot、失败与 schema 恢复边界详见 `deploy/nixos/README.md`；不改变协议/数据库/Root 身份。
+
+## S115 Web 展示层：HeroUI v3 / Tailwind v4
+
+- Web 独立展示层位于 `apps/web/src/components/ui.tsx`，不再依赖 `@vaultsyncd/ui`；后者仍提供 Windows 桌面的既有组件与样式。
+- `apps/web/src/styles.css` 按 Tailwind、HeroUI 顺序导入，Vite 使用 Tailwind v4 插件；依赖版本及离线闭包由根 pnpm lock 与 Nix `web-deps` 固定摘要管理。
+- 公共 `Button` 将原生 `disabled/onClick` 映射到 HeroUI `isDisabled/onPress`；`Table` 保持列渲染接口并使用 HeroUI 复合表格；`Dialog` 使用受控 HeroUI Modal 管理焦点与 Escape。页面可直接组合 HeroUI Card、TextField 等。
+- 五个 hash 路由 `/overview`、`/roots`、`/recovery`、`/backup`、`/account` 保留。主题仅属于页面展示，不保存凭据；认证、原恢复 OpId、备份状态机和远端 DTO/数据库格式不变。
+- 依据：用户 2026-11-08 明确要求与 [HeroUI 官方索引](https://heroui.com/react/llms.txt)；具体流程仍按 S077/S078/S079/S090 接口执行。
+
+S115 CSP 兼容：`apps/server/src/web.rs` 仅增加 React Aria 3.53.1 固定 pressable/移动端 scroll 样式的两个 SHA-256 白名单；其余策略保持。`apps/web/tests/csp.mjs` 从实际安装依赖源码重算并对照生产策略，升级时需复核。浏览器验收从服务端源码读取同一策略，不使用放宽的测试策略。

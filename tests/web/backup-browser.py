@@ -7,6 +7,7 @@ import http.client
 import http.server
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import subprocess
@@ -15,6 +16,10 @@ import time
 from playwright.sync_api import sync_playwright, expect
 
 REPO=Path(__file__).resolve().parents[2]
+# Exercise the deployed policy without maintaining a second editable policy string.
+POLICY_MATCH=re.search(r'CONTENT_SECURITY_POLICY\s*,\s*HeaderValue::from_static\("([^"\n]+)"\)',(REPO/"apps/server/src/web.rs").read_text())
+assert POLICY_MATCH, "server Web CSP declaration not found"
+CSP=POLICY_MATCH.group(1)
 BIN=Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR",REPO/"target/debug"))
 RUN=Path("/data")/f"vs-s090-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
@@ -67,6 +72,10 @@ def main():
             fault=[None];prepare_drop=[True];requests=[]
             class Handler(http.server.SimpleHTTPRequestHandler):
                 def log_message(self,*_):pass
+                def end_headers(self):
+                    if not self.path.startswith("/v1/"):
+                        self.send_header("Content-Security-Policy",CSP)
+                    super().end_headers()
                 def do_POST(self):self.forward()
                 def do_GET(self):
                     if self.path.startswith("/v1/"):self.forward()
@@ -101,7 +110,9 @@ def main():
             with sync_playwright() as p:
                 browser=p.chromium.launch(headless=True)
                 context=browser.new_context(accept_downloads=True);page=context.new_page()
-                page.goto(origin+"/#/account")
+                page.add_init_script("""window.__cspViolations=[];document.addEventListener('securitypolicyviolation',event=>{window.__cspViolations.push({directive:event.effectiveDirective,blocked:event.blockedURI});});""")
+                response=page.goto(origin+"/#/account")
+                assert response and response.headers.get("content-security-policy")==CSP
                 page.get_by_label("登录名",exact=True).fill("owner");page.get_by_label("密码",exact=True).fill(password)
                 page.get_by_role("button",name="登录",exact=True).click();expect(page.get_by_text("已登录：owner",exact=True)).to_be_visible()
                 def api(path,body=None):
@@ -158,8 +169,25 @@ def main():
                 expect(page.get_by_text("未完成，不能作为有效备份",exact=True)).to_be_visible()
                 page.get_by_label("选择另存归档再次验证",exact=True).set_input_files(archive)
                 expect(page.get_by_text("归档完整性已验证",exact=True)).to_be_visible(timeout=30000)
-                page.get_by_role("button",name="释放服务端快照",exact=True).click()
-                page.get_by_role("button",name="确认释放此快照",exact=True).click()
+                release=page.get_by_role("button",name="释放服务端快照",exact=True)
+                release.click()
+                dialog=page.get_by_role("dialog",name="释放此备份源？",exact=True)
+                expect(dialog).to_be_visible()
+                expect(dialog.get_by_role("button",name="关闭",exact=True)).to_be_focused()
+                # Traverse beyond all controls in both directions to exercise the wrap.
+                for key in ("Tab","Shift+Tab"):
+                    for _ in range(dialog.get_by_role("button").count()+2):
+                        page.keyboard.press(key)
+                        assert dialog.evaluate("element => element.contains(document.activeElement)"), f"focus escaped release dialog via {key}"
+                release_posts_before=[request for request in requests if request[0]=="POST" and request[1].endswith("/release")]
+                page.keyboard.press("Escape")
+                expect(dialog).not_to_be_visible()
+                expect(release).to_be_focused()
+                assert api(f"/v1/admin/backup-snapshots/{backup_id}")["phase"]=="ready", "Escape released the snapshot"
+                assert [request for request in requests if request[0]=="POST" and request[1].endswith("/release")]==release_posts_before
+                release.click()
+                expect(dialog).to_be_visible()
+                dialog.get_by_role("button",name="确认释放此快照",exact=True).click()
                 for _ in range(100):
                     status=api(f"/v1/admin/backup-snapshots/{backup_id}")
                     if status["phase"]=="released" and not status["job_pending"]:break
@@ -170,8 +198,11 @@ def main():
                 assert archive.is_file() and json.loads(sidecar.read_text())["state"]=="verified"
                 page.screenshot(path=str(RUN/"backup.png"),full_page=True)
                 assert page.evaluate("localStorage.length")==0
+                violations=page.evaluate("window.__cspViolations")
+                (RUN/"csp-violations.json").write_text(json.dumps(violations,ensure_ascii=False,indent=2))
+                assert violations==[], f"production CSP blocked backup UI resources: {violations}"
                 context.close();browser.close()
-                (RUN/"result.json").write_text(json.dumps({"passed":True,"backup_id":backup_id,"checks":["unknown-prepare-retries-same-id","real-btrfs-fixed-source","source-verified-is-not-downloaded","bounded-manifest-view","truncated-download-incomplete","cancel-retains-incomplete","retry-without-new-prepare","OPFS-reread-verified","reload-requires-reread","downloaded-archive-and-unverified-receipt","Rust-CLI-verifies-browser-archive","selected-truncated-file-withdraws-verification","selected-complete-file-verifies","release-keeps-original-and-archive"],"verified":verified},ensure_ascii=False,indent=2))
+                (RUN/"result.json").write_text(json.dumps({"passed":True,"backup_id":backup_id,"checks":["unknown-prepare-retries-same-id","real-btrfs-fixed-source","source-verified-is-not-downloaded","bounded-manifest-view","truncated-download-incomplete","cancel-retains-incomplete","retry-without-new-prepare","OPFS-reread-verified","reload-requires-reread","downloaded-archive-and-unverified-receipt","Rust-CLI-verifies-browser-archive","selected-truncated-file-withdraws-verification","selected-complete-file-verifies","release-keeps-original-and-archive","release-dialog-tab-and-shift-tab-trap","escape-cancels-and-restores-focus","production-csp-no-violations"],"verified":verified},ensure_ascii=False,indent=2))
             print(f"S090 browser acceptance passed: {RUN}")
         finally:
             if proxy:proxy.shutdown();proxy.server_close()

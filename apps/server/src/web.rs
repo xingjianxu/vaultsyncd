@@ -79,7 +79,9 @@ impl WebAssets {
             .layer(middleware::map_response(|mut response:Response| async move{
                 response.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS,HeaderValue::from_static("nosniff"));
                 response.headers_mut().insert(header::CACHE_CONTROL,HeaderValue::from_static("no-store"));
-                response.headers_mut().insert(header::CONTENT_SECURITY_POLICY,HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+                // React Aria 3.53.1 fixed pressable/iOS scroll styles; exact bytes are
+                // checked by apps/web/tests/csp.mjs when dependencies change.
+                response.headers_mut().insert(header::CONTENT_SECURITY_POLICY,HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'sha256-38RhXrc7EdReTKsOm23ZPOCUgniTUUcjky8QOOrQx6o=' 'sha256-gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg='; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
                 response
             }))
     }

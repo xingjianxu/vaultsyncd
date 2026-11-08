@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：S001—S114 共 **114 卡，109 done、5 blocked**；无 todo / in_progress，**当前无 ready 卡**。S114 已完成本地目录原生选择与 Root 目录名显示，真实 Windows 验收通过。S113已将本机服务及正式目录切换为 `xingjian:users`，一键pure部署至generation245，固定项目6b967bd；入口与更新见 [部署文档](../docs/operations/nixos.md#s113-主机用户运行与-pure-一键部署2026-11-07)。
+当前：S001—S115 共 **115 卡，110 done、5 blocked**；无 todo / in_progress，**当前无 ready 卡**。S115已完成服务端Web HeroUI React重构及真实浏览器/Nix验收，尚未部署正式实例。S114 已完成本地目录原生选择与 Root 目录名显示，真实 Windows 验收通过。S113已将本机服务及正式目录切换为 `xingjian:users`，一键pure部署至generation245，固定项目6b967bd；入口与更新见 [部署文档](../docs/operations/nixos.md#s113-主机用户运行与-pure-一键部署2026-11-07)。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
@@ -135,3 +135,5 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 | S113 | 主机用户运行与 pure 一键部署 | L | S112 | done | 项目4071fd4/6b967bd，主机32bfeb5已ff合main；整合/清理见批次 | 契约6/6、两类模块、包内65/0；pure构建、迁移test、HTTPS上传/重启/备份；一键pin更新/test/switch245、归属/身份/版本/SSH/10服务/锁核对通过 | 无；原hosted/规模/首发门禁保留 | [S113](tasks/S113.md) |
 
 | S114 | 客户端目录选择与 Root 名称显示 | W | S081、S111 | done | 实现85143c6、交接bfa5204已ff合master；任务树/分支已清理 | protocol20/Root6/agent2、前端/边界/两端clippy；Windows选择/取消/名称/首合并及GUI退出后真实字节通过 | 无本卡阻塞；正式部署/发行未执行 | [S114](tasks/S114.md) |
+
+| S115 | 服务端 Web HeroUI React 完整重构 | B/L | S077、S078、S079、S090、S112 | done | 实现及master整合/清理见S115-batch；基线5c5c797 | Web测试构建/根typecheck、server相关测试/clippy、Nix Web、Chromium账号/Root/恢复/备份17项与响应式/CSP通过 | 无；未部署，原首发门禁保留 | [S115](tasks/S115.md) |

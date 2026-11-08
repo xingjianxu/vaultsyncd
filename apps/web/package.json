@@ -1,14 +1,18 @@
 {
   "dependencies": {
+    "@heroui/react": "3.2.7",
+    "@heroui/styles": "3.2.7",
     "@noble/hashes": "2.4.0",
     "@vaultsyncd/api-client": "workspace:*",
-    "@vaultsyncd/ui": "workspace:*",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "tailwind-variants": "3.3.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.5",
     "vite": "8.3.6"
   },
   "name": "@vaultsyncd/web",
@@ -17,7 +21,7 @@
     "build": "tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs && node tests/backup.mjs",
+    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs && node tests/backup.mjs && node tests/csp.mjs",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",

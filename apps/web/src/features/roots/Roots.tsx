@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { ApiError, listManagedRoots, registerRoot, type ManagedRoot, type ManagedRootList, type RootCollectionState } from "@vaultsyncd/api-client";
-import { Button, EmptyState, StatusBadge, Table } from "@vaultsyncd/ui";
+import { Button } from "@heroui/react/button";
+import { Card } from "@heroui/react/card";
+import { Description } from "@heroui/react/description";
+import { Input } from "@heroui/react/input";
+import { Label } from "@heroui/react/label";
+import { TextField } from "@heroui/react/textfield";
+import { EmptyState, StatusBadge, Table } from "../../components/ui";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 
@@ -20,8 +26,8 @@ export function registrationError(error: unknown): string {
   return `${error.body.message}（${reason}） ${next} 请求编号：${error.body.request_id}`;
 }
 function Collection({ root }: { root: ManagedRoot }) {
-  return <><StatusBadge tone={root.collection.state === "blocked" ? "warning" : "info"}>{collectionLabels[root.collection.state]}</StatusBadge>
-    <p>最近一轮检查 {root.collection.examined} 项 · 待处理 {root.collection.pending} 项</p><p>{root.collection.detail}</p></>;
+  return <div className="space-y-2"><StatusBadge tone={root.collection.state === "blocked" ? "warning" : "info"}>{collectionLabels[root.collection.state]}</StatusBadge>
+    <p className="text-xs text-muted">最近一轮检查 {root.collection.examined} 项 · 待处理 {root.collection.pending} 项</p><p className="text-sm text-muted">{root.collection.detail}</p></div>;
 }
 export function RootsPanel() {
   const auth = useAuth();
@@ -63,21 +69,53 @@ export function RootsPanel() {
     } finally { setRegistering(false); }
   }
   if (!auth.account) return <EmptyState title="请先登录">从账号与会话页面登录 owner 后查看 Root 配置与健康。</EmptyState>;
-  return <><section className="vs-card"><h2>Root 健康与采集</h2>
-    <p>现场核对挂载与目录身份。采集进度只代表本次服务进程的观察结果，不等于客户端已同步。</p>
-    <Button disabled={loading || registering} onClick={() => setRevision(value => value + 1)}>刷新目录状态</Button>
-    {loading && <p role="status">正在核验目录与采集状态…</p>}
-    {error && <p role="alert">{error}</p>}{result && <p role="status">{result}</p>}
-    {!loading && !data && !error && <p>尚未读取目录，不能判断为空或已同步。</p>}
-    {data && <><h3>允许基目录</h3>{data.allowed_bases.length ? <ul>{data.allowed_bases.map(base => <li key={base}><code>{base}</code></li>)}</ul> : <p>未配置允许基目录，不能注册。请管理员设置服务端 roots.allowed_bases。</p>}
-      <form onSubmit={event => void register(event)}><label>服务器目录绝对路径<input name="path" required maxLength={4096} placeholder="从允许基目录中选择目录" disabled={registering} /></label>
-        <Button type="submit" disabled={registering || loading || !data.allowed_bases.length}>{registering ? "校验并注册中…" : "校验并注册 Root"}</Button>
-        <p>目录必须已存在；校验失败不会清空或重写文件。</p></form></>}
-  </section>
-  {data && <Table caption="已注册 Root" rows={data.roots} rowKey={root => root.root_id} emptyMessage="尚未注册 Root；这不表示服务器目录为空或客户端已同步。" columns={[
-    { key: "path", title: "服务器路径 / 身份", render: root => <><code>{root.path}</code><p><small>{root.root_id}</small></p></> },
-    { key: "health", title: "现场健康", render: root => <><StatusBadge tone={root.health === "unavailable" ? "danger" : "info"}>{root.health === "healthy" ? "挂载核对通过" : "Root 不可用"}</StatusBadge>{root.reason && <p role="alert">{root.reason}</p>}<p>{root.next_step}</p></> },
-    { key: "collection", title: "采集进度", render: root => <Collection root={root} /> },
-    { key: "seq", title: "已提交序号", render: root => root.root_seq },
-  ]} />}</>;
+  return <div className="space-y-6">
+    <Card className="p-6 sm:p-8">
+      <Card.Header className="gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2"><Card.Title render={props => <h2 {...props} />}>Root 健康与采集</Card.Title>
+            <Card.Description>现场核对挂载与目录身份。采集进度只代表本次服务进程的观察结果，不等于客户端已同步。</Card.Description></div>
+          <Button variant="secondary" isDisabled={loading || registering} onPress={() => setRevision(value => value + 1)}>刷新目录状态</Button>
+        </div>
+      </Card.Header>
+      <Card.Content className="mt-4 space-y-3">
+        {loading && <p role="status" className="text-sm text-muted">正在核验目录与采集状态…</p>}
+        {error && <p role="alert" className="rounded-xl bg-danger-soft p-4 text-sm text-danger">{error}</p>}
+        {result && <p role="status" className="rounded-xl bg-success-soft p-4 text-sm text-success">{result}</p>}
+        {!loading && !data && !error && <p className="text-sm text-muted">尚未读取目录，不能判断为空或已同步。</p>}
+      </Card.Content>
+    </Card>
+    {data && <>
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(16rem,1fr)]">
+        <Card className="p-6 sm:p-8">
+          <Card.Header><Card.Title render={props => <h2 {...props} />}>注册服务器目录</Card.Title>
+            <Card.Description>将允许基目录中的已有目录加入管理。</Card.Description></Card.Header>
+          <Card.Content className="mt-5">
+            <form className="space-y-5" onSubmit={event => void register(event)}>
+              <TextField name="path" isRequired isDisabled={registering} maxLength={4096}>
+                <Label>服务器目录绝对路径</Label>
+                <Input className="w-full font-mono" placeholder="从允许基目录中选择目录" />
+                <Description>目录必须已存在；校验失败不会清空或重写文件。</Description>
+              </TextField>
+              <Button type="submit" isDisabled={registering || loading || !data.allowed_bases.length}>{registering ? "校验并注册中…" : "校验并注册 Root"}</Button>
+            </form>
+          </Card.Content>
+        </Card>
+        <Card variant="secondary" className="p-6 sm:p-8">
+          <Card.Header><Card.Title render={props => <h2 {...props} />}>允许基目录</Card.Title>
+            <Card.Description>仅接受以下范围内的服务器路径。</Card.Description></Card.Header>
+          <Card.Content className="mt-4">
+            {data.allowed_bases.length ? <ul className="space-y-2">{data.allowed_bases.map(base => <li className="rounded-lg bg-surface p-3 text-sm break-all" key={base}><code>{base}</code></li>)}</ul>
+              : <p className="text-sm text-muted">未配置允许基目录，不能注册。请管理员设置服务端 roots.allowed_bases。</p>}
+          </Card.Content>
+        </Card>
+      </div>
+      <Table caption="已注册 Root" rows={data.roots} rowKey={root => root.root_id} emptyMessage="尚未注册 Root；这不表示服务器目录为空或客户端已同步。" columns={[
+        { key: "path", title: "服务器路径 / 身份", render: root => <div className="space-y-2"><code className="text-sm break-all">{root.path}</code><p className="text-xs text-muted break-all">{root.root_id}</p></div> },
+        { key: "health", title: "现场健康", render: root => <div className="space-y-2"><StatusBadge tone={root.health === "unavailable" ? "danger" : "success"}>{root.health === "healthy" ? "挂载核对通过" : "Root 不可用"}</StatusBadge>{root.reason && <p role="alert" className="text-sm text-danger">{root.reason}</p>}<p className="text-sm text-muted">{root.next_step}</p></div> },
+        { key: "collection", title: "采集进度", render: root => <Collection root={root} /> },
+        { key: "seq", title: "已提交序号", render: root => <span className="font-mono text-sm">{root.root_seq}</span> },
+      ]} />
+    </>}
+  </div>;
 }
