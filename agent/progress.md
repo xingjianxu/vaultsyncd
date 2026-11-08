@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S126 done**（过程文件精简）。S001—S126 共 126 卡：121 done、5 blocked；**当前无 ready 卡**。历史验收状态与恢复条件保持。结果与验证见 [S126](tasks/S126.md)，历史过程查阅见 [归档入口](tasks/README.md)。
+当前：**S127 done**（Mantine Tree 目录树重构）。S001—S127 共 127 卡：122 done、5 blocked；**当前无 ready 卡**。结果与验证见 [S127](tasks/S127.md)，历史过程查阅见 [归档入口](tasks/README.md)。
 
 最近部署：[S125](tasks/S125.md) 将固定源 `30daa88febd53115b126a08cf062b37a217b117e`（含 S124）部署到 generation251，主机 pin `dc7dd42`。部署机制门禁通过，按用户要求未做部署后 UI、资产和服务基线复核；恢复入口 generation250。最近一次生产浏览器与资产验收为 [S123](tasks/S123.md) 的 generation250，不能当作 generation251 的验证。
 
@@ -146,6 +146,8 @@
 | S123 | 将最新服务端（S122 文件浏览器）部署到本机 | 源6395dfa、主机pin207099c；项目整合/清理见批次 | [S123](tasks/S123.md) |
 | S124 | Web 文件浏览器左右分栏与 URL 目录定位 | 986c35c已ff合master；任务树/分支已清理，见批次；基线1e2d778 | [S124](tasks/S124.md) |
 | S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | 源30daa88、主机pin dc7dd42；项目整合/清理见批次；基线2f21788 | [S125](tasks/S125.md) |
+
+| S127 | Mantine Tree 目录树重构 | 5ad2634（整合与清理见交接） | [S127](tasks/S127.md) |
 
 ## 本轮维护
 
