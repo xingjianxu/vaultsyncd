@@ -36,5 +36,8 @@ export type { OperationRequest, OperationResult, RootSummary } from "./generated
 export { listSnapshotEntries } from "./generated/client";
 export type { Snapshot, SnapshotEntry, SnapshotPage } from "./generated/types";
 
+export { beginUpload, getUpload, putUploadPart, finalizeUpload, getSubtreeToken, downloadVersionContent, acquireVersionLease, renewVersionLease, releaseVersionLease } from "./generated/client";
+export type { UploadRequest, UploadSession, UploadStatus, UploadPartAck, FinalizedContent, SubtreeToken, VersionLease, VersionLeaseRequest } from "./generated/types";
+
 export { listBackupSnapshots, prepareBackupSnapshot, backupSnapshotStatus, verifyBackupSnapshot, releaseBackupSnapshot, backupSnapshotManifest, exportBackupSnapshot } from "./generated/client";
 export type { BackupSnapshotStatus, BackupSnapshotList, BackupIntegrity, BackupSnapshotPhase } from "./generated/types";

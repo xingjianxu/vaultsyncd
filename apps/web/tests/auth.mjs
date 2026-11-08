@@ -19,6 +19,14 @@ try {
   const auth = new BrowserAuth(options);
   const accounts = await Promise.all([auth.account(), auth.account(), auth.account()]);
   assert.equal(accounts.length, 3); assert.equal(refreshCount, 1); assert.equal(accountCount, 6);
+  assert.equal(auth.sessionGeneration, 0, "普通请求及cookie刷新不改变文件任务认证代际");
+  const scoped = new BrowserAuth({ ...options, fetch: async () => { throw new Error("offline"); } });
+  for (const action of [() => scoped.login("owner", "password"), () => scoped.logout(), () => scoped.changePassword("old", "new"), () => scoped.revokeAll()]) {
+    const before = scoped.sessionGeneration;
+    const request = action();
+    assert.equal(scoped.sessionGeneration, before + 1, "认证动作发出前即使旧任务失效");
+    await assert.rejects(request, /offline/);
+  }
   const expired = new BrowserAuth({ ...options, fetch: async () => Response.json({ error: { code: "AUTH_EXPIRED", message: "expired", request_id: "auth", retryable: false } }, { status: 401 }) });
   await assert.rejects(expired.account(), SignedOut);
   const offline = new BrowserAuth({ ...options, fetch: async () => { throw new Error("offline"); } });

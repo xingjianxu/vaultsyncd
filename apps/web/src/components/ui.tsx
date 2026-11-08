@@ -24,8 +24,8 @@ export function Table<T>({ caption, columns, rows, rowKey, emptyMessage }: {
     </MantineTable.ScrollContainer>
   </Card>;
 }
-export function Dialog({ opened, title, children, onClose }: { opened: boolean; title: string; children: ReactNode; onClose: () => void }) {
+export function Dialog({ opened, title, children, onClose, footer }: { opened: boolean; title: string; children: ReactNode; onClose: () => void; footer?: ReactNode }) {
   return <Modal opened={opened} onClose={onClose} title={title} centered>
-    <Stack>{children}<Group justify="flex-end"><Button data-autofocus variant="default" onClick={onClose}>关闭</Button></Group></Stack>
+    <Stack>{children}{footer ?? <Group justify="flex-end"><Button data-autofocus variant="default" onClick={onClose}>关闭</Button></Group>}</Stack>
   </Modal>;
 }

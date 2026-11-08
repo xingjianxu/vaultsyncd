@@ -4,6 +4,7 @@ import { useDisclosure } from "@mantine/hooks";
 import { Notifications } from "@mantine/notifications";
 import "@mantine/notifications/styles.css";
 import { showFeedback } from "./components/Feedback";
+import { FileActionsProvider } from "./features/files/FileActions";
 import { EmptyState, StatusBadge } from "./components/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
@@ -76,7 +77,7 @@ function AppView() {
       </AppShell.Header>
       <AppShell.Navbar p="md" id="main-navigation"><AppShell.Section grow><Text size="xs" c="dimmed" mb="sm">服务端控制台</Text><nav aria-label="主要导航">{items.map(item => <NavLink href={`#${item.path}`} key={item.path} label={item.label} leftSection={<Icon path={item.icon} />} active={path === item.path} aria-current={path === item.path ? "page" : undefined} onClick={close} />)}</nav></AppShell.Section><AppShell.Section><Divider my="md" /><Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text></AppShell.Section></AppShell.Navbar>
       <AppShell.Main id="main-content" tabIndex={-1}><Container size={path === "/files" ? "100%" : "xl"} px={0}>
-        <Stack gap="lg" className="app-content">{path !== "/files" && <Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title><Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text></Stack>}
+        <FileActionsProvider key={auth.account?.user_id ?? "signed-out"}><Stack gap="lg" className="app-content">{path !== "/files" && <Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title><Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text></Stack>}
           <PageBoundary key={path}><Suspense fallback={<Group role="status"><Loader size="sm" /><Text>正在加载管理页面…</Text></Group>}>{path === "/overview" ? <>
             <Card withBorder><Stack><Group justify="space-between"><div><Title order={2} size="h3">服务连接</Title><Text size="sm" c="dimmed">健康检查与目录采集状态分别核对</Text></div><div role="status">{connection}</div></Group><Text size="sm" aria-live="polite">{detail}</Text>{checkedAt && <Text size="xs" c="dimmed">最近成功检查 · {checkedAt}</Text>}<Divider /><Group justify="space-between"><Text size="xs" c="dimmed">{busy ? "正在获取服务状态" : "按需检查当前连接"}</Text><Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button></Group></Stack></Card>
             <Group justify="space-between"><Title order={2} size="h3">管理工作空间</Title><Text size="xs" c="dimmed">{items.length - 1} 个管理入口</Text></Group>
@@ -84,7 +85,7 @@ function AppView() {
             <Alert>以服务端实际状态为准。连接可用不代表文件同步完成，备份下载完成后仍需重读验证。</Alert>
           </> : path === "/roots" ? <RootsPanel /> : path === "/files" ? <FilesPanel location={location} /> : path === "/recovery" ? <RecoveryPanel /> : path === "/backup" ? <BackupPanel /> : path === "/account" ? <AccountPanel /> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}</Suspense></PageBoundary>
           {path !== "/files" && <><Divider /><Group component="footer" justify="space-between"><Text size="xs" c="dimmed">vaultsyncd</Text><Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text></Group></>}
-        </Stack>
+        </Stack></FileActionsProvider>
       </Container></AppShell.Main>
     </AppShell>
   </>;

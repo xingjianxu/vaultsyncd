@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listRoots, type RootSummary, type SnapshotEntry } from "@vaultsyncd/api-client";
 import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select, Stack, Table, Text, TextInput } from "@mantine/core";
 import { DirectoryTree } from "./DirectoryTree";
+import { useFileActions } from "./FileActions";
 import { FileIcon } from "./FileIcon";
 import { Dialog, EmptyState } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
@@ -96,6 +97,8 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
 }) {
   const auth = useAuth();
   const client = auth.client!;
+  const actions = useFileActions();
+  const uploadInput = useRef<HTMLInputElement>(null);
   const [snapshot, setSnapshot] = useState<DirectorySnapshot | null>(null);
   const [selected, setSelected] = useState<SnapshotEntry | null>(null);
   const [query, setQuery] = useState("");
@@ -120,7 +123,7 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
       setError(cause instanceof Error ? cause.message : "目录读取失败。");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [client, root?.root_id, revision]);
+  }, [client, root?.root_id, revision, actions.revision]);
   const directory = snapshot ? directoryAtPath(snapshot, segments) : undefined;
   const children = useMemo(() => {
     const term = query.trim().toLocaleLowerCase("zh-CN");
@@ -147,6 +150,9 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
     if (parseFilesLocation(path).error) setAddressError("请输入 Root 内的相对路径。");
     else { setAddressError(""); navigation.navigate(path); }
   }
+  const context = root && snapshot && directory ? { rootId: root.root_id, snapshot, parent: directory } : null;
+  const writable = !!context && !loading && root?.health !== "unavailable" && !actions.locked;
+  const pasteInto = (entry?: SnapshotEntry) => { if (context) actions.paste({ ...context, parent: entry?.kind === "directory" ? entry : context.parent }); };
   const rootName = root?.name || "Root 根目录";
   return <Paper withBorder className="files-browser">
     <aside className="files-sidebar" aria-label="目录面板">
@@ -168,6 +174,13 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
         </form>
         <TextInput aria-label="筛选当前目录" placeholder="筛选名称" className="files-filter" value={query} disabled={!directory || loading}
           onChange={event => { setQuery(event.currentTarget.value); setPage(1); }} />
+        <input ref={uploadInput} type="file" multiple hidden aria-label="选择上传文件" onChange={event => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = "";
+          if (context && files.length) actions.upload(context, files);
+        }} />
+        <Tool label="上传文件" icon="upload" disabled={!writable} onClick={() => uploadInput.current?.click()} />
+        <Tool label="粘贴" icon="paste" disabled={!writable || !actions.clipboard} onClick={() => pasteInto()} />
         <Tool label="当前目录属性" icon="properties" disabled={!directory || loading} onClick={() => setSelected(directory!)} />
       </div>
       {root?.health === "unavailable" && <Alert color="yellow">Root 当前不可用，清单仅代表已提交的元数据。</Alert>}
@@ -177,14 +190,15 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
       <Feedback message={error ? `${error} 未能读取完整目录，请刷新重试。` : ""} />
       {!rootsLoading && !root && !rootError && <Text p="md">尚无授权 Root，请先在 Root 目录页面注册目录。</Text>}
       <Feedback message={snapshot && !directory ? "目录不存在或尚未采集，请检查地址或刷新。" : ""} />
-      <div className="files-list">
+      <Menu opened={menuEntryId === "background"} onChange={opened => setMenuEntryId(opened ? "background" : null)} shadow="md" width={180}>
+      <Menu.ContextMenu><div className="files-list" tabIndex={0} aria-label="当前目录空白区域" onKeyDown={event => { if (event.target === event.currentTarget) openMenuByKeyboard(event); }}>
         {snapshot && directory && <Table aria-label="文件与目录" highlightOnHover verticalSpacing="xs" horizontalSpacing="sm" className="files-table">
           <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry =>
             <Menu key={entry.entry_id} opened={menuEntryId === entry.entry_id} shadow="md" width={180} position="bottom-start" offset={2}
               onChange={opened => setMenuEntryId(opened ? entry.entry_id : null)}>
               <Menu.ContextMenu>
-                <Table.Tr>
+                <Table.Tr onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
                   <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onKeyDown={openMenuByKeyboard}
                     onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
                   <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
@@ -194,10 +208,19 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
                 {entry.kind === "directory" && <Menu.Item leftSection={<FileIcon name="folder-open" />} onClick={() => navigate(entry)}>打开</Menu.Item>}
                 <Menu.Item leftSection={<FileIcon name="properties" />} onClick={() => setSelected(entry)}>属性</Menu.Item>
                 <Menu.Item leftSection={<FileIcon name="copy" />} onClick={() => void copyPath(entry)}>复制路径</Menu.Item>
+                <Menu.Divider />
+                <Menu.Item disabled={!writable} leftSection={<FileIcon name="copy" />} onClick={() => context && actions.stage(context, entry, "copy")}>复制</Menu.Item>
+                <Menu.Item disabled={!writable} leftSection={<FileIcon name="cut" />} onClick={() => context && actions.stage(context, entry, "cut")}>剪切</Menu.Item>
+                <Menu.Item disabled={!writable || !actions.clipboard} leftSection={<FileIcon name="paste" />} onClick={() => pasteInto(entry)}>粘贴</Menu.Item>
+                <Menu.Item color="red" disabled={!writable} leftSection={<FileIcon name="delete" />} onClick={() => context && actions.remove(context, entry)}>删除</Menu.Item>
               </Menu.Dropdown>
             </Menu>) : <Table.Tr><Table.Td colSpan={3}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
         </Table>}
-      </div>
+      </div></Menu.ContextMenu>
+      <Menu.Dropdown>
+        <Menu.Item disabled={!writable} leftSection={<FileIcon name="upload" />} onClick={() => uploadInput.current?.click()}>上传文件</Menu.Item>
+        <Menu.Item disabled={!writable || !actions.clipboard} leftSection={<FileIcon name="paste" />} onClick={() => pasteInto()}>粘贴</Menu.Item>
+      </Menu.Dropdown></Menu>
       {children.length > 100 && <Pagination className="files-pagination" aria-label="文件列表分页" total={Math.ceil(children.length / 100)} value={page} onChange={setPage} size="sm" siblings={0} />}
     </section>
     <Dialog opened={!!snapshot && !!selected} title="文件属性" onClose={() => setSelected(null)}>

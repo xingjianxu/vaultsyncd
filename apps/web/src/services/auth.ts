@@ -7,6 +7,9 @@ export class SignedOut extends Error {
 /** 浏览器只接触会话元信息。所有凭据由同源 HttpOnly cookie 携带。 */
 export class BrowserAuth {
   private refreshing: Promise<void> | null = null;
+  private generation = 0;
+  /** 显式认证动作开始即暂停旧文件任务；普通 cookie refresh 不改变此代际。 */
+  get sessionGeneration() { return this.generation; }
   private readonly options: ClientOptions;
   constructor(options?: ClientOptions) {
     const origin = options?.base_url ?? window.location.origin;
@@ -21,6 +24,7 @@ export class BrowserAuth {
     };
   }
   async login(loginName: string, password: string): Promise<AccountInfo> {
+    this.generation++;
     await browserLogin(this.options, { login: loginName, password, device_label: "Web 浏览器" });
     return getAccount(this.options);
   }
@@ -41,9 +45,10 @@ export class BrowserAuth {
     }
   }
   account(): Promise<AccountInfo> { return this.request(getAccount); }
-  async logout(): Promise<void> { await this.request((options) => logout(options)); }
+  async logout(): Promise<void> { this.generation++; await this.request((options) => logout(options)); }
   async changePassword(current: string, next: string): Promise<void> {
+    this.generation++;
     await this.request((options) => changePassword(options, { current_password: current, new_password: next }));
   }
-  async revokeAll(): Promise<void> { await this.request(revokeAllSessions); }
+  async revokeAll(): Promise<void> { this.generation++; await this.request(revokeAllSessions); }
 }

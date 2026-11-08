@@ -22,7 +22,7 @@
     "build": "tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs && node tests/backup.mjs && node tests/files.mjs && node tests/csp.mjs",
+    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs && node tests/backup.mjs && node tests/files.mjs && node tests/file-actions.mjs && node tests/csp.mjs",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",
