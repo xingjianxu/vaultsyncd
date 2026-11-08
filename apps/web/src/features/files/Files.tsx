@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { listRoots, type RootSummary, type SnapshotEntry } from "@vaultsyncd/api-client";
-import { ActionIcon, Alert, Anchor, Button, Code, Group, Pagination, Paper, Select, Stack, Table, Text, TextInput } from "@mantine/core";
+import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select, Stack, Table, Text, TextInput } from "@mantine/core";
 import { DirectoryTree } from "./DirectoryTree";
 import { FileIcon } from "./FileIcon";
 import { Dialog, EmptyState } from "../../components/ui";
@@ -73,7 +73,19 @@ function RootBrowser({ location }: { location: string }) {
     navigation={navigation} rootError={rootError} rootsLoading={loading} retryRoots={() => setRevision(value => value + 1)} />;
 }
 
-function Tool({ label, icon, disabled, onClick }: { label: string; icon: Parameters<typeof FileIcon>[0]["name"]; disabled?: boolean; onClick: () => void }) {
+type ToolIcon = Parameters<typeof FileIcon>[0]["name"];
+
+/** 键盘用户用菜单键或 Shift+F10 打开与右键相同的菜单，位置取名称按钮。 */
+function openMenuByKeyboard(event: React.KeyboardEvent<HTMLElement>) {
+  if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+  event.preventDefault();
+  const box = event.currentTarget.getBoundingClientRect();
+  event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", {
+    bubbles: true, cancelable: true, clientX: box.left + 12, clientY: box.top + box.height / 2,
+  }));
+}
+
+function Tool({ label, icon, disabled, onClick }: { label: string; icon: ToolIcon; disabled?: boolean; onClick: () => void }) {
   return <ActionIcon variant="default" size="md" aria-label={label} title={label} disabled={disabled} onClick={onClick}><FileIcon name={icon} /></ActionIcon>;
 }
 
@@ -87,13 +99,20 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
   const [selected, setSelected] = useState<SnapshotEntry | null>(null);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [menuEntryId, setMenuEntryId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(!!root);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const currentPath = "/" + segments.join("/");
   const [address, setAddress] = useState(currentPath);
   const [addressError, setAddressError] = useState("");
-  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); }, [currentPath]);
+  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setMenuEntryId(null); setNotice(""); }, [currentPath]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(""), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   useEffect(() => {
     if (!root) return;
     const controller = new AbortController();
@@ -114,6 +133,17 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
   }, [snapshot, directory?.entry_id, query]);
   function navigate(entry: SnapshotEntry) {
     navigation.navigate(filesLocation(root!.root_id, ancestry(snapshot!, entry).slice(1).map(item => item.name)));
+  }
+  /** 复制 Root 相对路径；剪贴板不可用时如实提示，不假装成功。 */
+  async function copyPath(entry: SnapshotEntry) {
+    if (!snapshot) return;
+    const path = ancestry(snapshot, entry).map(item => item.name).join("/") || "/";
+    try {
+      await navigator.clipboard.writeText(path);
+      setNotice(`已复制路径 ${path}`);
+    } catch {
+      setNotice(`复制失败，请手动复制路径 ${path}`);
+    }
   }
   function goToAddress() {
     const parts = address.replace(/^\/+|\/+$/g, "").split("/");
@@ -152,14 +182,26 @@ function DirectoryBrowser({ root, rootPicker, segments, navigation, rootError, r
       {error && <Alert color="red" role="alert">{error} 未能读取完整目录，请刷新重试。</Alert>}
       {!rootsLoading && !root && !rootError && <Text p="md">尚无授权 Root，请先在 Root 目录页面注册目录。</Text>}
       {snapshot && !directory && <Alert color="red" role="alert">目录不存在或尚未采集，请检查地址或刷新。</Alert>}
+      {notice && <Text size="sm" px="md" py={4} role="status" className="files-notice">{notice}</Text>}
       <div className="files-list">
         {snapshot && directory && <Table aria-label="文件与目录" highlightOnHover verticalSpacing="xs" horizontalSpacing="sm" className="files-table">
-          <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th><Table.Th>操作</Table.Th></Table.Tr></Table.Thead>
-          <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry => <Table.Tr key={entry.entry_id}>
-            <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
-            <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
-            <Table.Td><Button size="compact-sm" variant="subtle" aria-label={`查看 ${entry.name} 的属性`} onClick={() => setSelected(entry)}>属性</Button></Table.Td>
-          </Table.Tr>) : <Table.Tr><Table.Td colSpan={4}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
+          <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th></Table.Tr></Table.Thead>
+          <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry =>
+            <Menu key={entry.entry_id} opened={menuEntryId === entry.entry_id} shadow="md" width={180} position="bottom-start" offset={2}
+              onChange={opened => setMenuEntryId(opened ? entry.entry_id : null)}>
+              <Menu.ContextMenu>
+                <Table.Tr>
+                  <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onKeyDown={openMenuByKeyboard}
+                    onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
+                  <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
+                </Table.Tr>
+              </Menu.ContextMenu>
+              <Menu.Dropdown>
+                {entry.kind === "directory" && <Menu.Item leftSection={<FileIcon name="folder-open" />} onClick={() => navigate(entry)}>打开</Menu.Item>}
+                <Menu.Item leftSection={<FileIcon name="properties" />} onClick={() => setSelected(entry)}>属性</Menu.Item>
+                <Menu.Item leftSection={<FileIcon name="copy" />} onClick={() => void copyPath(entry)}>复制路径</Menu.Item>
+              </Menu.Dropdown>
+            </Menu>) : <Table.Tr><Table.Td colSpan={3}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
         </Table>}
       </div>
       {children.length > 100 && <Pagination className="files-pagination" aria-label="文件列表分页" total={Math.ceil(children.length / 100)} value={page} onChange={setPage} size="sm" siblings={0} />}

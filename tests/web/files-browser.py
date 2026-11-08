@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S130: built Web + real Chromium + isolated btrfs service, no API fixtures.
+"""S132: built Web + real Chromium + isolated btrfs service, no API fixtures.
 
 VAULTSYNCD_TEST_BIN_DIR=... nix develop .#web-tests --command python3 tests/web/files-browser.py
 Network faults only affect this run's proxy; no online SQL or production writes.
@@ -23,7 +23,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data") / f"vs-s130-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data") / f"vs-s132-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -36,7 +36,7 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    print(f"S130 artifacts: {RUN}", flush=True)
+    print(f"S132 artifacts: {RUN}", flush=True)
     state, roots = RUN / "state", RUN / "roots"
     state.mkdir(mode=0o700); roots.mkdir()
     documents, archive = roots / "documents", roots / "archive"
@@ -115,6 +115,7 @@ def main():
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             context = browser.new_context(viewport={"width": 1440, "height": 1000})
+            context.grant_permissions(["clipboard-read", "clipboard-write"], origin=origin)
             page = context.new_page(); errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
@@ -166,15 +167,15 @@ def main():
             table = page.get_by_role("table", name="文件与目录", exact=True)
             expect(table).to_be_visible(timeout=15000)
             assert len(table.locator("tbody tr").all()) == 100
-            # S130：固定列宽（名称占 50%）、大小人类可读、修改日期本地化、链接悬停无下划线。
-            assert [cell.inner_text() for cell in table.locator("thead th").all()] == ["名称", "大小", "修改日期", "操作"]
+            # S130：固定列宽（名称占 62%）、大小人类可读、修改日期本地化、链接悬停无下划线。
+            assert [cell.inner_text() for cell in table.locator("thead th").all()] == ["名称", "大小", "修改日期"]
             layout = table.evaluate("""e => {
                 const heads = [...e.querySelectorAll('thead th')].map(th => th.getBoundingClientRect().width);
                 const cells = [...e.querySelectorAll('tbody tr:first-child td')].map(td => td.getBoundingClientRect().width);
                 return {heads, cells, tableLayout: getComputedStyle(e).tableLayout};
             }""")
             assert layout["tableLayout"] == "fixed", layout
-            shares = (.5, .14, .24, .12)
+            shares = (.62, .14, .24)
             for widths in (layout["heads"], layout["cells"]):
                 total = sum(widths)
                 assert len(widths) == len(shares), widths
@@ -186,11 +187,59 @@ def main():
             page.wait_for_timeout(100)
             assert file_link.evaluate("e => getComputedStyle(e).textDecorationLine") == "none", "悬停不得出现下划线"
             file_cells = file_link.locator("xpath=ancestor::tr[1]").locator("td").all()
-            assert len(file_cells) == 4, [cell.inner_text() for cell in file_cells]
+            assert len(file_cells) == 3, [cell.inner_text() for cell in file_cells]
             assert re.fullmatch(r"\d+(?:[.,]\d+)? (?:B|KB|MB|GB|TB|PB)", file_cells[1].inner_text()), file_cells[1].inner_text()
             assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", file_cells[2].inner_text()), file_cells[2].inner_text()
             folder_cells = page.get_by_role("button", name="空目录", exact=True).first.locator("xpath=ancestor::tr[1]").locator("td").all()
             assert folder_cells[1].inner_text() == "—", folder_cells[1].inner_text()
+            # S132：最后一列“操作”已取消，改为 Mantine Menu 右键上下文菜单（含键盘 Shift+F10 与触屏长按）。
+            assert table.locator("thead th").all_inner_texts() == ["名称", "大小", "修改日期"]
+            expect(page.get_by_role("button", name=re.compile(r"^查看 .* 的属性$"))).to_have_count(0)
+            file_row = file_link.locator("xpath=ancestor::tr[1]")
+            assert file_row.evaluate("e => getComputedStyle(e).cursor") == "context-menu"
+            box = file_row.bounding_box()
+            file_row.click(button="right", position={"x": 40, "y": box["height"] / 2})
+            menu = page.get_by_role("menu")
+            expect(menu).to_be_visible()
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "复制路径"], menu.get_by_role("menuitem").all_inner_texts()
+            menu_box = menu.bounding_box()
+            assert abs(menu_box["x"] - (box["x"] + 40)) < 12, (menu_box, box)
+            assert abs(menu_box["y"] - (box["y"] + box["height"] / 2)) < 16, (menu_box, box)
+            page.keyboard.press("Escape")
+            expect(menu).not_to_be_visible()
+            # 同一时刻只允许一个行菜单：在另一行右键时前一个关闭。
+            folder_row = page.get_by_role("button", name="空目录", exact=True).first.locator("xpath=ancestor::tr[1]")
+            file_row.click(button="right")
+            expect(page.get_by_role("menu")).to_have_count(1)
+            folder_row.click(button="right")
+            expect(page.get_by_role("menu")).to_have_count(1)
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["打开", "属性", "复制路径"], menu.get_by_role("menuitem").all_inner_texts()
+            page.wait_for_timeout(150)
+            page.screenshot(path=str(RUN / "context-menu-light-1440.png"))
+            page.emulate_media(color_scheme="dark")
+            page.wait_for_timeout(150)
+            page.screenshot(path=str(RUN / "context-menu-dark-1440.png"))
+            page.emulate_media(color_scheme="light")
+            page.get_by_role("menuitem", name="属性", exact=True).click()
+            dialog = page.get_by_role("dialog", name="文件属性", exact=True)
+            expect(dialog).to_contain_text("空目录")
+            expect(dialog).to_contain_text("直接子项")
+            page.get_by_role("button", name="关闭", exact=True).click()
+            expect(dialog).not_to_be_visible()
+            expect(page.get_by_role("menu")).to_have_count(0)
+            # 键盘：名称按钮上的 Shift+F10 与菜单键打开同一菜单，位置贴近该行。
+            file_link.focus()
+            page.keyboard.press("Shift+F10")
+            expect(menu).to_be_visible()
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "复制路径"]
+            menu_box, link_box = menu.bounding_box(), file_link.bounding_box()
+            assert abs(menu_box["y"] - (link_box["y"] + link_box["height"] / 2)) < 16, (menu_box, link_box)
+            page.get_by_role("menuitem", name="复制路径", exact=True).click()
+            expect(menu).not_to_be_visible()
+            notice = page.locator(".files-notice")
+            expect(notice).to_have_text("已复制路径 /file-0000.txt")
+            assert page.evaluate("navigator.clipboard.readText()") == "/file-0000.txt"
+            expect(notice).not_to_be_visible(timeout=8000)
             expect(page.get_by_role("heading", name="文件浏览器", exact=True)).not_to_be_visible()
             expect(page.get_by_text("切换 Root、浏览目录并查看文件属性。", exact=True)).not_to_be_visible()
             expect(page.get_by_role("button", name="刷新 Root 列表", exact=True)).not_to_be_visible()
@@ -445,8 +494,8 @@ def main():
             expect(page.get_by_role("heading", name="请先登录", exact=True)).to_be_visible()
             expect(table).not_to_be_visible()
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-root/long-names/themes/responsive", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
-        print(f"S130 browser acceptance passed: {RUN}", flush=True)
+            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-root/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
+        print(f"S132 browser acceptance passed: {RUN}", flush=True)
     finally:
         release.set()
         if proxy: proxy.shutdown(); proxy.server_close()
