@@ -1,10 +1,10 @@
 # 实施进度
 
-当前：**S117 done**，完成服务端 Web 紧凑化、小圆角与 HeroUI 控件统一；Web/Nix 构建、四套真实业务浏览器流程及响应式验收通过，详见 [S117](tasks/S117.md)。实现 `3631c29`，整合/清理见 [批次](tasks/S117-batch.md)。S116 已把含 S114/S115 的 `f3b8979` 部署到本机 generation246，账号/数据/ServerId/RootId 保持，服务仍为 `xingjian:users`，详见 [S116](tasks/S116.md) 与 [部署文档](../docs/operations/nixos.md#s116-当前版本部署2026-11-08generation246)。S001—S116 共 **116 卡，111 done、5 blocked**；**当前无 ready 卡**，S114 本地目录选择已原生验收。
+当前：**S118 done**，已将部署时 master 最新提交 `9da5ee8`（含 S115/S117 Web 紧凑化）部署到本机 **generation247**，并随本次部署激活用户要求的 dae 分流规则调整；账号/数据/ServerId/RootId 保持，服务仍为 `xingjian:users`。部署、浏览器与既有服务核对详见 [S118](tasks/S118.md) 与 [部署文档](../docs/operations/nixos.md#s118-最新版本部署2026-11-08generation247)。S001—S118 共 **118 卡，113 done、5 blocked**；**当前无 ready 卡**，S114 本地目录选择已原生验收。
 
 用户决定（2026-11-07，S111/ADR-015）：Linux ARM64 从脚本、代码、发布、编译与测试范围移除；Linux x64 与 Windows x64 保留。此前双架构记录均为历史证据，不再形成 ARM64 门禁。上一轮约定提交 `b585fc4`；S111 已实现并通过验收，原 5 张 blocked 卡恢复条件中的 ARM64 范围由本决定覆盖，其他缺口保留。
 
-最近部署：S116使用现有一键入口完成pure构建/dry/test/健康/switch246，包内66/0，部署契约6/6。真实Chromium严格TLS、五路由/响应式/主题/登录/Root健康/SSE/CSP及线上6项静态文件逐字节核对通过；SSH、10服务、3应用与锁保持。主机15cfc07已ff合main且自动清理；项目交接及整合/清理见 [S116](tasks/S116.md) 与 [批次](tasks/S116-batch.md)。旧system与证据保留，原首发门禁不变。
+最近部署：S118 用现有一键入口把 master HEAD `9da5ee8` 固定到本机 generation247，部署前先提交用户要求的 dae 分流规则 `42d99c5`。pure 构建/manifest/主机锁/dry/test/HTTPS/IPC/归属/switch 通过；线上三个主文件 sha256 与包内一致，真实 Chromium 六项检查（TLS/CSP/五路由响应式/登录 cookie/Root 健康/SSE）一次通过；9 项既有服务 PID 不变，dae 重启后出网正常，3 应用与锁不变。主机 pin `b0ad622` 已 ff 合 main 且自动清理；交接及整合/清理见 [S118](tasks/S118.md) 与 [批次](tasks/S118-batch.md)。旧 system 与证据保留，原首发门禁不变。
 
 恢复顺序：先恢复 **S101 hosted CI**（缺 remote、runner 和 Actions 实证），再推进 **S106 → S107 → S108**；另须补 T02 三台独立 Windows 与最终同源发行证据。S011 的 OS 取消回调未触发仍为历史原型阻塞，保留其原生验证条件。当前不宣称首发验收完成。
 
@@ -140,4 +140,6 @@ S110 历史发行：S110统一入口 `./tools/release.sh`，正式源 `81340f6` 
 
 | S116 | 将当前服务端部署到本机 | L/B | S113、S114、S115 | done | 源f3b8979、主机15cfc07；项目整合/清理见批次 | 契约6/6、包内66/0；pure/test/switch246、HTTPS/IPC/原身份及归属；线上6文件/真实浏览器/TLS/CSP/SSE/SSH/10服务/3应用/锁通过 | 无本卡阻塞；原首发门禁保留 | [S116](tasks/S116.md) |
 
-| S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | B | S115 | done | 实现3631c29、交接495a04d已ff合master；任务树/分支已清理；基线f3b8979 | Web测试/构建、根typecheck、Nix Web；Chromium四业务51项+恢复10项复验、50组主题/宽度/路由及生产CSP通过 | 无本卡阻塞；服务端部署见S116，原首发门禁不变 | [S117](tasks/S117.md) |
+| S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | B | S115 | done | 实现3631c29、交接495a04d已ff合master；任务树/分支已清理；基线f3b8979 | Web测试/构建、根typecheck、Nix Web；Chromium四业务51项+恢复10项复验、50组主题/宽度/路由及生产CSP通过 | 无本卡阻塞；服务端部署见S118，原首发门禁不变 | [S117](tasks/S117.md) |
+
+| S118 | 将最新服务端（S117 之后）部署到本机 | L | S116、S117 | done | 源9da5ee8、主机42d99c5/b0ad622；项目整合/清理见批次 | pure/manifest/锁/dry/test/switch247、IPC与归属；线上3主文件sha256、Chromium六项、dae重启出网与9服务/3应用/SSH/锁核对通过 | 无本卡阻塞；原首发门禁保留 | [S118](tasks/S118.md) |
