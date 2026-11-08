@@ -2240,7 +2240,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 `files::RootHandle` 只允许同步根末分量为已识别 cloud reparse；其祖先仍拒绝所有 reparse。新增 crate 内相对 create/open 工具复用 S065 身份围栏。断开的 partially-populated 目录在 Windows build 26300 可返回 FLT_INVALID_NAME_REQUEST；扫描明确 incomplete、禁止推导删除，连接存活时元数据扫描零内容供给。
 
-`platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Root，必须先初始化 WinRT。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
+`platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Root。S129 起三项操作共用进程内常驻的固定 MTA 工作线程，初始化 WinRT 后保持其与 windows-rs 工厂缓存同寿命；调用者不需初始化，不跨 await 持有 apartment。正式 runtime 的共同 assemble 路径在恢复核对后、切换到内容供给前通过 spawn_blocking 注册，覆盖启动修复、重启、新增绑定及连接重建。失败明确返回，不注销/重建根，不修改文件驻留、pin 或 in-sync；PopulationPolicy=AlwaysFull，与 CFAPI adapter 一致。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
 
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
 

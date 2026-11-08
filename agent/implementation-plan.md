@@ -1461,6 +1461,13 @@
 - 验收：Web test/build、根 typecheck；隔离 btrfs Chromium 检查开合图标、4px 折线间距、14px 图标、6px 文字间距、键盘/深链/主题与窄屏；部署 build/dry/test/健康/switch 与线上资产一致性。
 - 交接：`agent/tasks/S128.md` 与批次。只更新主机项目 pin，保留数据、身份、锁与现有首发门禁。
 
+### S129 — 接通正式 Windows agent 的 Explorer 占位状态图标
+
+- 依据：2026-11-08 用户要求 Explorer 显示未下载占位文件的空心云朵；前置 S066、S070、S072 done；design §14.2、§6。
+- 结果：启动与新增绑定共同注册 WinRT 同步根，修复旧 CFAPI-only 根；在固定线程内管理 WinRT 生命周期，注册策略与适配器对齐。保留文件驻留、pin、同步状态与现有数据；失败明确返回，不注销根。
+- 验收：相关 Rust 测试/fmt/clippy 与 Windows 交叉构建；真实 Windows 正式 agent 新增绑定、启动修复、重复重启、下载/释放状态切换，以及 Explorer 可见云朵截图；验证浏览不触发下载、退出保留注册和文件。
+- 交接：`agent/tasks/S129.md`，记录隔离、实际命令、原生证据、限制和 master 整合/清理。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

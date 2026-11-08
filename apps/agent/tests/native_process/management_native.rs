@@ -79,6 +79,197 @@ fn unregister(path: &Path, binding: &str, root: &str) {
     )
     .unwrap();
     adapter.unregister().unwrap();
+    vaultsyncd_platform_windows::shell::unregister(
+        vaultsyncd_domain::ids::BindingId::from_hex(binding).unwrap(),
+    )
+    .unwrap();
+}
+
+// Runs the *product* assembly, never shell::register from the test. Covers both
+// migration from a CFAPI-only root and binding creation through the public IPC.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_explorer_registration_and_states() {
+    use vaultsyncd_domain::ids::{BindingId, RootId};
+    use vaultsyncd_platform_windows::{
+        cfapi::{
+            adapter::{Adapter, MetadataOnly},
+            catalog::Catalog,
+        },
+        files::RootHandle,
+        shell,
+    };
+    let fixture_path =
+        PathBuf::from(std::env::var_os("VAULTSYNCD_PROCESS_FIXTURE").expect("real server fixture"));
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture_path).unwrap()).unwrap();
+    let exe = PathBuf::from(std::env::var_os("VAULTSYNCD_AGENT_EXE").expect("product agent"));
+    let driver = fixture_path.parent().unwrap();
+    let base = driver.join(format!("run-explorer-{}", std::process::id()));
+    let evidence = driver.join("explorer-evidence");
+    std::fs::create_dir(&base).unwrap();
+    std::fs::create_dir(&evidence).unwrap();
+    for name in ["state", "root", "cache", "new-root", "new-cache"] {
+        std::fs::create_dir(base.join(name)).unwrap();
+    }
+    let server = identity();
+    let binding = identity();
+    let second = identity();
+    let id = BindingId::from_hex(&binding).unwrap();
+    let root = fixture["root"].as_str().unwrap();
+    let entry = fixture["entry"]["entry_id"].as_str().unwrap();
+    let config_path = base.join("agent.json");
+    let config = serde_json::json!({"server":{"id":server,"url":fixture["url"],"development_http":true},"device_id":identity(),"state_dir":base.join("state"),"poll_millis":250,"bindings":[{"id":binding,"root_id":root,"path":base.join("root"),"cache":base.join("cache"),"mode":"on_demand"}]});
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let login = serde_json::json!({"login":"s052-owner","password":"S052-Correct-Horse-Battery-9!","device_label":"S129 Explorer"});
+    success(invoke(
+        &exe,
+        &config_path,
+        &["--login-stdin"],
+        Some(&serde_json::to_vec(&login).unwrap()),
+    ));
+    // Reproduce an old client root: CFAPI registered, no Shell registration.
+    drop(
+        Adapter::connect(
+            &base.join("root"),
+            Catalog::new(id, RootId::from_hex(root).unwrap()),
+            Arc::new(MetadataOnly),
+        )
+        .unwrap(),
+    );
+    assert!(!shell::registered(id).unwrap());
+    let mut child = launch(&exe, &config_path, &base.join("agent.log"));
+    until_status(&mut child, |s| {
+        s.bindings
+            .as_ref()
+            .is_some_and(|b| b.len() == 1 && b[0].metadata_only != "0")
+    })
+    .await;
+    assert!(
+        shell::registered(id).unwrap(),
+        "startup must repair CFAPI-only roots"
+    );
+    let inspect = || {
+        RootHandle::open(&base.join("root"))
+            .unwrap()
+            .inspect("file.txt")
+            .unwrap()
+    };
+    let original = inspect();
+    assert_eq!(original.cloud.as_ref().unwrap().on_disk, 0);
+    let probe = |phase: &str, expected: u32| {
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(driver.join("explorer-probe.ps1"))
+            .arg("-Root")
+            .arg(base.join("root"))
+            .arg("-Evidence")
+            .arg(&evidence)
+            .arg("-Phase")
+            .arg(phase)
+            .arg("-ExpectedState")
+            .arg(expected.to_string())
+            .output()
+            .unwrap();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        success(output);
+    };
+    probe("startup-online-only", 1); // SDK STORAGEPROVIDERSTATE_SPARSE
+    assert_eq!(
+        inspect().cloud.as_ref().unwrap().on_disk,
+        0,
+        "Explorer browsing must not hydrate"
+    );
+    ok("create_binding", serde_json::json!({"binding_id":second,"root_id":root,"local_path":base.join("new-root"),"cache_path":base.join("new-cache"),"mode":"on_demand"})).await;
+    until_status(&mut child, |s| {
+        s.bindings
+            .as_ref()
+            .is_some_and(|b| b.len() == 2 && b.iter().all(|b| b.metadata_only != "0"))
+    })
+    .await;
+    assert!(
+        shell::registered(BindingId::from_hex(&second).unwrap()).unwrap(),
+        "IPC create_binding must register with Explorer"
+    );
+    ok(
+        "download_entry",
+        serde_json::json!({"binding_id":binding,"entry_id":entry,"operation_id":identity()}),
+    )
+    .await;
+    until_file(
+        &base.join("root/file.txt"),
+        Some(fixture["payload"].as_str().unwrap().as_bytes()),
+    )
+    .await;
+    probe("downloaded-local", 2); // SDK STORAGEPROVIDERSTATE_IN_SYNC
+    let downloaded = inspect();
+    drop(child);
+    child = launch(&exe, &config_path, &base.join("restart-local.log"));
+    status(&mut child).await;
+    let retained = inspect();
+    assert_eq!(retained.identity, downloaded.identity);
+    assert_eq!(
+        retained.cloud.as_ref().unwrap().on_disk,
+        downloaded.cloud.as_ref().unwrap().on_disk
+    );
+    assert_eq!(
+        retained.cloud.as_ref().unwrap().pin_state,
+        downloaded.cloud.as_ref().unwrap().pin_state
+    );
+    assert_eq!(
+        std::fs::read(base.join("root/file.txt")).unwrap(),
+        fixture["payload"].as_str().unwrap().as_bytes()
+    );
+    probe("restarted-local", 2);
+    ok(
+        "release_entry",
+        serde_json::json!({"binding_id":binding,"entry_id":entry,"operation_id":identity()}),
+    )
+    .await;
+    assert_eq!(inspect().cloud.as_ref().unwrap().on_disk, 0);
+    probe("released-online-only", 1);
+    for restart in 0..2 {
+        drop(child);
+        assert!(
+            shell::registered(id).unwrap(),
+            "exit must retain registration"
+        );
+        child = launch(
+            &exe,
+            &config_path,
+            &base.join(format!("restart-{restart}.log")),
+        );
+        status(&mut child).await;
+        assert!(shell::registered(id).unwrap());
+        assert_eq!(
+            inspect().identity,
+            original.identity,
+            "registration must not replace placeholders"
+        );
+        assert_eq!(inspect().cloud.as_ref().unwrap().on_disk, 0);
+    }
+    probe("restarted-online-only", 1);
+    drop(child);
+    success(invoke(&exe, &config_path, &["--once"], None));
+    assert!(
+        shell::registered(id).unwrap(),
+        "normal exit must retain registration"
+    );
+    assert_eq!(inspect().cloud.as_ref().unwrap().on_disk, 0);
+    // Only this run's synthetic files are explicitly removed; unregister is never used
+    // to repair a root or to remove partial placeholders.
+    for (directory, binding) in [("root", &binding), ("new-root", &second)] {
+        std::fs::remove_file(base.join(directory).join("file.txt")).unwrap();
+        unregister(&base.join(directory), binding, root);
+        assert!(!shell::registered(BindingId::from_hex(binding).unwrap()).unwrap());
+    }
+    credentials::CredentialVault::new(&server)
+        .unwrap()
+        .erase()
+        .unwrap();
+    std::fs::remove_dir_all(&base).unwrap();
+    println!(
+        "check=pass s129_product_startup_repair_ipc_create_cloud_local_release_restart_identity_zero_hydration_and_persistent_registration"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

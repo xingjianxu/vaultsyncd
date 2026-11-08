@@ -367,6 +367,16 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                 catalog.insert(identity).map_err(error)?;
             }
         }
+        // Both startup and create_binding use this assembly path. Repair older CFAPI-only
+        // roots without unregistering or changing any file's hydration/pin/in-sync state.
+        // Keep the metadata connection live while WinRT resolves the existing folder.
+        let shell_path = binding.path.clone();
+        tokio::task::spawn_blocking(move || {
+            vaultsyncd_platform_windows::shell::register(&shell_path, &Catalog::new(id, root))
+        })
+        .await
+        .map_err(error)?
+        .map_err(error)?;
         recovery_connection.disconnect().map_err(error)?;
         let (adapter, callbacks) = connect_hydration(
             &binding.path,

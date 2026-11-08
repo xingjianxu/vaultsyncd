@@ -35,6 +35,14 @@ vaultsyncd-agent.exe --config C:/vaultsyncd/agent.json
 
 真实 Linux 服务端与 Windows 原生验收入口：先在默认 devShell 构建 `cargo build --locked -p vaultsyncd-server-tests --example release-native-server`，再在 Windows devShell 运行 `tests/platform/windows/run-native-process.sh`。桥接只开放 guest loopback 18770，fixture 为短命合成测试身份，日志和 fixture 仅在 ignored artifacts 内；退出清理服务与 SSH tunnel。
 
+## Explorer 占位状态（S129）
+
+正式 agent 在启动恢复及新增绑定时注册 Explorer 同步根；旧版本仅注册 CFAPI 的目录会在新版 agent 启动时补齐，继续使用原 BindingId、RootId 和路径。注册失败明确报错，不通过注销根修复，也不重新下载或释放现有文件。退出后保留注册与占位文件。
+
+在 Explorer 的同步目录查看“状态”列：未下载文件显示空心云朵；完整下载的文件显示绿色勾选；通过产品“释放空间”成功释放后恢复云朵。图标由 Windows 根据真实驻留和 pin 状态生成。切换到按需模式不会自动释放已下载内容。若列被隐藏，在详细信息视图的列标题菜单中显示“状态”；本程序不修改用户的 Explorer 全局显示设置。
+
+原生复验：默认 devShell 构建 Linux helper 后，Windows devShell 执行 `VAULTSYNCD_PROCESS_TASK=S129 tests/platform/windows/run-native-process.sh`。脚本要求已登录桌面，仅打开/关闭本轮隔离根的 Explorer 窗口；证据保存在 `artifacts/S129/native-*/explorer-evidence/`。验收使用正式 agent 的启动和管理 IPC，不由测试代注册；覆盖 CFAPI-only 修复、新增绑定、下载/释放、重启、文件身份及浏览不回源。Shell 属性 `System.StorageProviderState` 按锁定 SDK 的 sparse=1、in-sync=2 核对，并保留实际 Explorer 截图。
+
 ## 本机状态 IPC（S071）
 
 真实恢复完成后进程绑定 `\\\\.\\pipe\\vaultsyncd-agent-{token SID}-{token session ID}`；GUI/CLI 应复用 `vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent").request(&Request)`，不猜 SID、不直接打开 `client.sqlite`，不初始化 CFAPI。协议 1.2 的 21 项命令闭集与参数见 `api/local-ipc.schema.json`；请求为 4 字节大端长度 + JSON，1.2 向后接受更低的 minor。`get_status` 应答包含版本、`bindings` 多维核心快照与 `management` 结果；计数均十进制文本，不含本机路径与凭据。快照读取失败是失败连接，不是空列表或同步成功；每个 Binding 原子读取，不承诺跨 Binding 一致时刻。

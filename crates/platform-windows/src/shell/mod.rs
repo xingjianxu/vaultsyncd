@@ -15,6 +15,61 @@ use windows::{
 fn map(e: windows::core::Error) -> io::Error {
     io::Error::other(e.to_string())
 }
+type ShellWork = Box<dyn FnOnce() + Send>;
+// Keep the apartment alive for the process lifetime, like windows-rs' activation
+// factory cache. Tearing down the last MTA between calls invalidates cached factories.
+// No WinRT object or apartment guard crosses an async caller's await.
+fn with_runtime<T: Send + 'static>(
+    work: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    use std::sync::{OnceLock, mpsc};
+    static WORKER: OnceLock<io::Result<mpsc::Sender<ShellWork>>> = OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<ShellWork>();
+        let (ready, started) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("vaultsyncd-explorer".into())
+            .spawn(move || {
+                use windows::Win32::System::WinRT::{
+                    RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize,
+                };
+                let initialized = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(map);
+                if let Err(error) = initialized {
+                    let _ = ready.send(Err(error));
+                    return;
+                }
+                struct Apartment;
+                impl Drop for Apartment {
+                    fn drop(&mut self) {
+                        unsafe { RoUninitialize() };
+                    }
+                }
+                let _apartment = Apartment;
+                if ready.send(Ok(())).is_err() {
+                    return;
+                }
+                while let Ok(action) = receiver.recv() {
+                    action();
+                }
+            })?;
+        started
+            .recv()
+            .map_err(|_| io::Error::other("Explorer worker initialization failed"))??;
+        Ok(sender)
+    });
+    let worker = worker
+        .as_ref()
+        .map_err(|e| io::Error::new(e.kind(), e.to_string()))?;
+    let (result, completed) = mpsc::sync_channel(1);
+    worker
+        .send(Box::new(move || {
+            let _ = result.send(work());
+        }))
+        .map_err(|_| io::Error::other("Explorer registration worker stopped"))?;
+    completed
+        .recv()
+        .map_err(|_| io::Error::other("Explorer registration worker failed"))?
+}
 /// Stable Explorer registration ID for a local binding. Does not encode server addresses or credentials.
 pub fn registration_id(binding: BindingId) -> io::Result<String> {
     use std::ffi::c_void;
@@ -68,8 +123,14 @@ pub fn registration_id(binding: BindingId) -> io::Result<String> {
     Ok(format!("vaultsyncd!{sid}!{binding}"))
 }
 /// Register an existing local NTFS root with Explorer. Call from a worker, never a UI callback.
-/// The calling thread must initialize Windows Runtime (MTA or STA) first.
+/// Owns its Windows Runtime thread; callers do not need to initialize COM/WinRT.
 pub fn register(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Result<()> {
+    let path = path.to_owned();
+    // Shell registration needs only the durable root identity, not the file catalog.
+    let catalog = crate::cfapi::catalog::Catalog::new(catalog.binding, catalog.root);
+    with_runtime(move || register_in_runtime(&path, &catalog))
+}
+fn register_in_runtime(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Result<()> {
     let _pin = crate::files::RootHandle::open(path)?;
     crate::cfapi::adapter::register(path, catalog)?;
     let binding = catalog.binding;
@@ -91,7 +152,9 @@ pub fn register(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Re
         .map_err(map)?;
     info.SetHydrationPolicy(StorageProviderHydrationPolicy::Partial)
         .map_err(map)?;
-    info.SetPopulationPolicy(StorageProviderPopulationPolicy::Full)
+    // Names are maintained by snapshots/events, with no FETCH_PLACEHOLDERS callback.
+    // WinRT registration must preserve the CFAPI adapter's ALWAYS_FULL policy.
+    info.SetPopulationPolicy(StorageProviderPopulationPolicy::AlwaysFull)
         .map_err(map)?;
     let writer = windows::Storage::Streams::DataWriter::new().map_err(map)?;
     writer.WriteBytes(&catalog.root_blob()).map_err(map)?;
@@ -105,6 +168,9 @@ pub fn register(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Re
 }
 /// Remove Explorer registration only. Existing files are never deleted by this function.
 pub fn unregister(binding: BindingId) -> io::Result<()> {
+    with_runtime(move || unregister_in_runtime(binding))
+}
+fn unregister_in_runtime(binding: BindingId) -> io::Result<()> {
     for root in StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(map)? {
         if root.Id().map_err(map)? == registration_id(binding)? {
             let path = root.Path().map_err(map)?.Path().map_err(map)?.to_string();
@@ -117,6 +183,9 @@ pub fn unregister(binding: BindingId) -> io::Result<()> {
 }
 /// Query Explorer's persisted registration for restart verification.
 pub fn registered(binding: BindingId) -> io::Result<bool> {
+    with_runtime(move || registered_in_runtime(binding))
+}
+fn registered_in_runtime(binding: BindingId) -> io::Result<bool> {
     let roots = StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(map)?;
     for root in roots {
         if root.Id().map_err(map)? == registration_id(binding)? {

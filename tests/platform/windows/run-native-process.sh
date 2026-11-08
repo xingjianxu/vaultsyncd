@@ -15,6 +15,7 @@ case "$task" in
     S070) native_test=all ;;
     S071) native_test=native_headless_import_real_sync_queue_restart_and_single_instance ;;
     S072) native_test=management_native::native_management_every_command ;;
+    S129) native_test=management_native::native_explorer_registration_and_states ;;
     S105)
         test_package=vaultsyncd-cli
         test_target=native_cli
@@ -63,6 +64,7 @@ tunnel_pid=$!
 sleep .5
 kill -0 "$tunnel_pid" || { cat "$artifact_dir/tunnel.log"; exit 1; }
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
+target_dir="${CARGO_TARGET_DIR:-$root/target}"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent --bin vaultsyncd-agent
 if [ -n "$with_cli" ]; then
     cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-cli --bin vaultsyncd-cli
@@ -79,10 +81,11 @@ PY
 )
 install -m 0644 "$built" "$artifact_dir/s070-process-tests.exe"
 host_hash=$(sha256sum "$artifact_dir/s070-process-tests.exe" | awk '{print $1}')
+agent_hash=$(sha256sum "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" | awk '{print $1}')
 fixture_hash=$(sha256sum "$artifact_dir/guest-fixture.json" | awk '{print $1}')
 cleanup_allowlist=$(printf '%s' "${VAULTSYNCD_PROCESS_CLEANUP_ALLOWLIST:-[]}" | base64 -w0)
 cat > "$artifact_dir/guest-process.ps1" <<'PS'
-param([string]$ExpectedHash,[string]$FixtureHash,[string]$CleanupAllowlist,[string]$TestName='all',[switch]$Worker)
+param([string]$ExpectedHash,[string]$AgentHash,[string]$ProbeHash,[string]$FixtureHash,[string]$CleanupAllowlist,[string]$TestName='all',[switch]$Worker)
 $ErrorActionPreference='Stop'
 $exe=Join-Path $PSScriptRoot 's070-process-tests.exe'
 $fixture=Join-Path $PSScriptRoot 'guest-fixture.json'
@@ -110,6 +113,8 @@ if ($Worker) {
     exit
 }
 if ((Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $ExpectedHash) {throw 'native test transport mismatch'}
+if ((Get-FileHash (Join-Path $PSScriptRoot 'vaultsyncd-agent.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $AgentHash) {throw 'product agent transport mismatch'}
+if ($ProbeHash -and (Get-FileHash (Join-Path $PSScriptRoot 'explorer-probe.ps1') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $ProbeHash) {throw 'Explorer probe transport mismatch'}
 if ((Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant() -ne $FixtureHash) {throw 'fixture transport mismatch'}
 Write-Output "guest_test_sha256 $ExpectedHash"
 Write-Output ('guest_agent_sha256 '+(Get-FileHash (Join-Path $PSScriptRoot 'vaultsyncd-agent.exe') -Algorithm SHA256).Hash.ToLowerInvariant())
@@ -130,11 +135,24 @@ PS
 guest_dir="C:/vaultsyncd-lab/${task,,}-driver-$$"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir' | Out-Null\""
 if [ -n "$with_cli" ]; then
-    GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "target/$TARGET_TRIPLE/debug/vaultsyncd-cli.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
+    GUEST_TARGET_DIR="$guest_dir" guest_scp "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-cli.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
 else
-    GUEST_TARGET_DIR="$guest_dir" guest_scp "target/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
+    GUEST_TARGET_DIR="$guest_dir" guest_scp "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$artifact_dir/s070-process-tests.exe" "$artifact_dir/guest-fixture.json" "$artifact_dir/guest-process.ps1"
 fi
-guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-process.ps1 -ExpectedHash $host_hash -FixtureHash $fixture_hash -CleanupAllowlist $cleanup_allowlist -TestName $native_test" | tee "$artifact_dir/native-tests.log"
+probe_hash=''
+probe_arg=''
+if [ "$task" = S129 ]; then
+    probe_hash=$(sha256sum "$script_dir/explorer-probe.ps1" | awk '{print $1}')
+    probe_arg="-ProbeHash $probe_hash"
+    GUEST_TARGET_DIR="$guest_dir" guest_scp "$script_dir/explorer-probe.ps1"
+fi
+result=0
+guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/guest-process.ps1 -ExpectedHash $host_hash -AgentHash $agent_hash $probe_arg -FixtureHash $fixture_hash -CleanupAllowlist $cleanup_allowlist -TestName $native_test" | tee "$artifact_dir/native-tests.log" || result=$?
+if [ "$task" = S129 ]; then
+    scp -P "$GUEST_PORT" -i "$GUEST_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o BatchMode=yes -o LogLevel=ERROR \
+        -r "$GUEST_USER@$GUEST_HOST:$guest_dir/explorer-evidence" "$artifact_dir/" || { if [ "$result" = 0 ]; then result=1; fi; }
+fi
+test "$result" = 0 || { echo "native test failed; preserving $guest_dir" >&2; exit "$result"; }
 guest_ssh "powershell -NoProfile -Command \"Remove-Item -LiteralPath '$guest_dir' -Recurse -Force\""
 echo "MATCH s070-process-tests.exe $host_hash"
 echo "ARTIFACTS $artifact_dir"
