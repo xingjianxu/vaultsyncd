@@ -170,7 +170,10 @@ pub struct ObjectLayout {
 }
 
 impl ObjectLayout {
-    /// 以对象区根目录建立布局。
+    /// 以对象区根目录建立**未分区**布局：任意摘要都解析成历史全局路径。
+    ///
+    /// 只用于旧布局测试、迁移工具与独立对象区示例；服务端新写必须用
+    /// [`ObjectLayout::for_root`]，否则不同 Root 会共用同一物理对象。
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         ObjectLayout {
@@ -180,7 +183,12 @@ impl ObjectLayout {
         }
     }
 
-    /// Root 隔离布局；旧路径仅对该 Root 数据库已登记的摘要开放，不探测磁盘回退。
+    /// Root 隔离布局；旧路径仅对 `legacy` 中显式声明的摘要开放，不探测磁盘回退。
+    ///
+    /// **调用方义务**：`legacy` 必须覆盖本次布局将触碰的每个摘要。漏声明不会回退到旧文件，
+    /// 而是静默按 Root 分区的新路径解析：读会失败关闭，发布则先造出重复物理对象，再由
+    /// `objects` 的唯一登记约束报 `ObjectConflict`（503）。因此热路径应按摘要解析
+    /// （`for_digests`），整树路径才一次读取该 Root 的全部旧登记。
     #[must_use]
     pub fn for_root(
         root: impl Into<PathBuf>,
@@ -238,7 +246,9 @@ impl ObjectLayout {
         self.root.join(self.storage_path(digest))
     }
 
-    /// 写进 `objects.storage_path` 的规范相对路径（`objects/<aa>/<hex>`，不含对象区根）。
+    /// 历史全局布局的相对路径（`objects/<aa>/<hex>`，不含对象区根）。
+    ///
+    /// 只用于已登记旧对象的兼容读取；新对象写 [`ObjectLayout::scoped_relative_object_path`]。
     #[must_use]
     pub fn relative_object_path(digest: &ContentDigest) -> PathBuf {
         Path::new("objects")
@@ -347,6 +357,29 @@ mod tests {
                 digest
             )
         ));
+    }
+
+    /// 漏声明旧登记时不会猜回旧文件：同一 Root 也解析成 Root 分区路径。
+    /// 读会失败关闭；写会先造重复物理对象，再由登记唯一约束报冲突（见 store 用例）。
+    #[test]
+    fn undeclared_legacy_digest_resolves_to_scoped_path_even_for_same_root() {
+        let root = RootId::from_bytes([1; 16]);
+        let digest = ContentDigest::from_hex(SAMPLE_HEX).expect("摘要");
+        let declared = ObjectLayout::for_root("/state", root, [digest]);
+        let omitted = ObjectLayout::for_root("/state", root, []);
+        assert_eq!(
+            declared.storage_path(&digest),
+            ObjectLayout::relative_object_path(&digest)
+        );
+        assert_eq!(
+            omitted.storage_path(&digest),
+            ObjectLayout::scoped_relative_object_path(root, &digest)
+        );
+        assert_ne!(declared.object_path(&digest), omitted.object_path(&digest));
+        assert_ne!(
+            omitted.object_path(&digest),
+            Path::new("/state").join(ObjectLayout::relative_object_path(&digest))
+        );
     }
 
     #[test]

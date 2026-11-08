@@ -501,148 +501,197 @@ async fn sigkill_at_all_durable_boundaries_resumes_without_deleting_current_data
     }
 }
 
-/// S136/ADR-020：两 Root 同摘要各有独立物理对象；GC 一个 Root 的孤儿对象不得
-/// 删除另一个 Root 的字节或对象行。
+/// S136/ADR-020：两 Root 同摘要各有独立物理对象；回收一个 Root 的孤儿对象时，
+/// 另一个 Root 的存活字节、对象行与登记路径都必须完好。覆盖「两 Root 都 scoped」
+/// 与「A 为已登记 legacy、B 为 scoped」两种实际形态。
 #[tokio::test]
 async fn same_digest_objects_are_gc_isolated_between_roots() {
     use vaultsyncd_server_store::roots;
-    let lab = Lab::new("scoped-gc").await;
-    let second_root = RootId::from_bytes([9; 16]);
-    let mut tx = lab.db.begin_write().await.unwrap();
-    roots::insert_root(
-        &mut tx,
-        &roots::NewRoot {
-            id: second_root,
-            entry: EntryId::from_bytes([10; 16]),
-            owner: lab.owner,
-            absolute_path: lab.state.join("work-second").display().to_string(),
-            volume_identity: vec![3],
-            root_file_identity: vec![4],
-            epoch: ServerEpoch::ZERO,
-        },
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
+    for a_legacy in [false, true] {
+        let lab = Lab::new(if a_legacy {
+            "scoped-gc-legacy-a"
+        } else {
+            "scoped-gc-scoped-both"
+        })
+        .await;
+        let second_root = RootId::from_bytes([9; 16]);
+        let second_entry = EntryId::from_bytes([10; 16]);
+        let mut tx = lab.db.begin_write().await.unwrap();
+        roots::insert_root(
+            &mut tx,
+            &roots::NewRoot {
+                id: second_root,
+                entry: second_entry,
+                owner: lab.owner,
+                absolute_path: lab.state.join("work-second").display().to_string(),
+                volume_identity: vec![3],
+                root_file_identity: vec![4],
+                epoch: ServerEpoch::ZERO,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
 
-    let bytes = b"same digest, two roots";
-    let hash = lab.object(bytes).await;
-    let digest = ContentDigest::from_bytes(hash);
-    let second_path = lab
-        .state
-        .join("objects")
-        .join(ObjectLayout::scoped_relative_object_path(
-            second_root,
-            &digest,
-        ));
-    std::fs::create_dir_all(second_path.parent().unwrap()).unwrap();
-    std::fs::write(&second_path, bytes).unwrap();
-    let mut tx = lab.db.begin_write().await.unwrap();
-    versions::record_object(
-        &mut tx,
-        lab.owner,
-        &NewObject {
-            root: second_root,
-            hash,
-            size: bytes.len() as u64,
-            storage_path: ObjectLayout::scoped_relative_object_path(second_root, &digest)
-                .display()
-                .to_string(),
-            verified_at: at(1),
-        },
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-
-    // 两个对象都没有当前版本引用；先标记，再越过宽限期。
-    run_once(&lab.db, &lab.state, at(100)).await.unwrap();
-    let report = run_once(&lab.db, &lab.state, at(11600)).await.unwrap();
-    assert_eq!(report.objects, 2, "两 Root 的独立对象各自可回收");
-    assert!(!lab.path(hash).exists());
-    assert!(!second_path.exists());
-    assert_ne!(lab.path(hash), second_path, "不同 Root 不得共用物理路径");
-
-    // 只让第二个 Root 的对象重新存活，第一 Root 不再产生该摘要，重放必须幂等。
-    std::fs::create_dir_all(second_path.parent().unwrap()).unwrap();
-    std::fs::write(&second_path, bytes).unwrap();
-    let mut tx = lab.db.begin_write().await.unwrap();
-    versions::record_object(
-        &mut tx,
-        lab.owner,
-        &NewObject {
-            root: second_root,
-            hash,
-            size: bytes.len() as u64,
-            storage_path: ObjectLayout::scoped_relative_object_path(second_root, &digest)
-                .display()
-                .to_string(),
-            verified_at: at(2),
-        },
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-    let entry = EntryId::from_bytes([12; 16]);
-    let mut tx = lab.db.begin_write().await.unwrap();
-    entries::insert_entry(
-        &mut tx,
-        lab.owner,
-        &NewEntry {
-            id: entry,
-            root: second_root,
-            parent: EntryId::from_bytes([10; 16]),
-            name: "second".into(),
-            name_key: "second".into(),
-            kind: EntryKind::File,
-            revision: Revision::new(1).unwrap(),
-            content_version: None,
-        },
-        at(20_000),
-    )
-    .await
-    .unwrap();
-    let batch = changes::append_change(
-        &mut tx,
-        lab.owner,
-        second_root,
-        TxId::from_bytes([13; 16]),
-        "[{}]",
-        at(20_000),
-    )
-    .await
-    .unwrap();
-    versions::record_version(
-        &mut tx,
-        lab.owner,
-        &NewVersion {
-            id: VersionId::from_bytes([11; 16]),
-            root: second_root,
-            entry,
-            object_hash: hash,
-            size: bytes.len() as u64,
-            created_seq: batch.seq,
-            at: at(20_000),
-            origin: VersionOrigin::Client,
-        },
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-    assert_eq!(
-        run_once(&lab.db, &lab.state, at(50_000))
-            .await
-            .unwrap()
-            .objects,
-        0
-    );
-    assert_eq!(std::fs::read(&second_path).unwrap(), bytes);
-    let rows: Vec<(Vec<u8>, String)> =
-        sqlx::query_as("SELECT root_id, storage_path FROM objects WHERE hash = ? ORDER BY root_id")
-            .bind(hash.as_slice())
-            .fetch_all(lab.db.pool())
+        let bytes = b"same digest, two roots";
+        let hash = lab.object(bytes).await;
+        let digest = ContentDigest::from_bytes(hash);
+        let first_path = if a_legacy {
+            lab.path(hash)
+        } else {
+            let path = lab
+                .state
+                .join("objects")
+                .join(ObjectLayout::scoped_relative_object_path(lab.root, &digest));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            let mut tx = lab.db.begin_write().await.unwrap();
+            sqlx::query("DELETE FROM objects WHERE root_id=? AND hash=?")
+                .bind(lab.root.as_bytes().as_slice())
+                .bind(hash.as_slice())
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            versions::record_object(
+                &mut tx,
+                lab.owner,
+                &NewObject {
+                    root: lab.root,
+                    hash,
+                    size: bytes.len() as u64,
+                    storage_path: ObjectLayout::scoped_relative_object_path(lab.root, &digest)
+                        .display()
+                        .to_string(),
+                    verified_at: at(1),
+                },
+            )
             .await
             .unwrap();
-    assert_eq!(rows.len(), 1, "另一 Root 的对象行不得被牵连");
-    assert_eq!(rows[0].0, second_root.as_bytes().to_vec());
+            tx.commit().await.unwrap();
+            path
+        };
+        let second_path =
+            lab.state
+                .join("objects")
+                .join(ObjectLayout::scoped_relative_object_path(
+                    second_root,
+                    &digest,
+                ));
+        std::fs::create_dir_all(second_path.parent().unwrap()).unwrap();
+        std::fs::write(&second_path, bytes).unwrap();
+        let mut tx = lab.db.begin_write().await.unwrap();
+        versions::record_object(
+            &mut tx,
+            lab.owner,
+            &NewObject {
+                root: second_root,
+                hash,
+                size: bytes.len() as u64,
+                storage_path: ObjectLayout::scoped_relative_object_path(second_root, &digest)
+                    .display()
+                    .to_string(),
+                verified_at: at(1),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert_ne!(first_path, second_path, "不同 Root 不得共用物理路径");
+        let rows_before: Vec<(Vec<u8>, String)> = sqlx::query_as(
+            "SELECT root_id, storage_path FROM objects WHERE hash = ? ORDER BY root_id",
+        )
+        .bind(hash.as_slice())
+        .fetch_all(lab.db.pool())
+        .await
+        .unwrap();
+        assert_eq!(rows_before.len(), 2, "两 Root 各自一行");
+        for (root, path) in &rows_before {
+            let expected = if root.as_slice() == lab.root.as_bytes() {
+                first_path.strip_prefix(lab.state.join("objects")).unwrap()
+            } else {
+                second_path.strip_prefix(lab.state.join("objects")).unwrap()
+            };
+            assert_eq!(Path::new(path), expected, "登记路径必须对应各自 Root");
+        }
+
+        // 第二 Root 的对象有当前版本，第一 Root 的没有：只有第一 Root 的对象可回收。
+        let entry = EntryId::from_bytes([12; 16]);
+        let mut tx = lab.db.begin_write().await.unwrap();
+        entries::insert_entry(
+            &mut tx,
+            lab.owner,
+            &NewEntry {
+                id: entry,
+                root: second_root,
+                parent: second_entry,
+                name: "second".into(),
+                name_key: "second".into(),
+                kind: EntryKind::File,
+                revision: Revision::new(1).unwrap(),
+                content_version: None,
+            },
+            at(20_000),
+        )
+        .await
+        .unwrap();
+        let batch = changes::append_change(
+            &mut tx,
+            lab.owner,
+            second_root,
+            TxId::from_bytes([13; 16]),
+            "[{}]",
+            at(20_000),
+        )
+        .await
+        .unwrap();
+        versions::record_version(
+            &mut tx,
+            lab.owner,
+            &NewVersion {
+                id: VersionId::from_bytes([11; 16]),
+                root: second_root,
+                entry,
+                object_hash: hash,
+                size: bytes.len() as u64,
+                created_seq: batch.seq,
+                at: at(20_000),
+                origin: VersionOrigin::Client,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        run_once(&lab.db, &lab.state, at(100)).await.unwrap();
+        let report = run_once(&lab.db, &lab.state, at(11600)).await.unwrap();
+        assert_eq!(report.objects, 1, "只回收无引用的第一 Root 对象");
+        assert!(!first_path.exists(), "第一 Root 的对象应被回收");
+        assert_eq!(
+            std::fs::read(&second_path).unwrap(),
+            bytes,
+            "另一 Root 的存活字节不得被删"
+        );
+        let rows: Vec<(Vec<u8>, String)> = sqlx::query_as(
+            "SELECT root_id, storage_path FROM objects WHERE hash = ? ORDER BY root_id",
+        )
+        .bind(hash.as_slice())
+        .fetch_all(lab.db.pool())
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1, "另一 Root 的对象行不得被牵连");
+        assert_eq!(rows[0].0, second_root.as_bytes().to_vec());
+        assert_eq!(
+            Path::new(&rows[0].1),
+            second_path.strip_prefix(lab.state.join("objects")).unwrap()
+        );
+        // 重放同一轮不得再删存活对象。
+        assert_eq!(
+            run_once(&lab.db, &lab.state, at(50_000))
+                .await
+                .unwrap()
+                .objects,
+            0
+        );
+        assert_eq!(std::fs::read(&second_path).unwrap(), bytes);
+    }
 }

@@ -133,6 +133,9 @@ impl std::error::Error for PublishFailure {}
 /// 路径，以及对象是否本次新建。核心拿它与上传会话的总大小/总哈希比较，不符即丢弃（不提交、不引用）。
 pub trait ContentPublisher {
     /// 重放 finalize 时沿用发布布局（包括已登记旧路径），不重新猜测存储位置。
+    ///
+    /// 默认实现只适用于全局旧布局的测试/旧适配器；按 Root 隔离写入的适配器**必须**覆写，
+    /// 否则重放响应会把已登记旧路径报成新的 Root 分区路径，登记随即冲突。
     fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
         crate::objects::ObjectLayout::relative_object_path(digest)
     }
@@ -172,10 +175,4 @@ pub trait ContentObjectStore {
 #[must_use]
 pub fn storage_path_of(content: &PublishedContent) -> PathBuf {
     PathBuf::from(&content.storage_path)
-}
-
-/// 按内容地址算出 `objects.storage_path` 的规范相对路径。
-#[must_use]
-pub fn storage_path_for(digest: &ContentDigest) -> PathBuf {
-    crate::objects::ObjectLayout::relative_object_path(digest)
 }
