@@ -25,3 +25,5 @@ S136-d 批次：合并后审查修复 `c2d06b0` 已 ff-only 合 master；确认�
 
 
 S137 批次：实现与验收`999bbee2dc941ecf3070aef8b9663e25a7032bfe`已ff合master；确认任务树干净、祖先关系和非当前目录后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S137-web-rename`、`git branch -d feat/S137-web-rename`均成功。原生创建的跨盘临时副本经925个基线文件与无额外文件核对后也已清理。所有日志保留永久`artifacts/S137/`，真实最终浏览器`/data/vs-s137-20261108T223612-3435202`，主树旧S134任务树保持。下一卡S138部署本机。
+
+S138 批次：固定源5689be16b8bc389ae3781e96c2ff734f7d6761ae已部署generation258，主机pin9930ec77046abed5744a35f1b672593270bc485e已ff main且临时主机树/分支清理。项目交接a89debb已ff master（整合点同提交）；确认干净与祖先关系后，从主树`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S138-deploy-verification`及`git branch -d chore/S138-deploy-verification`均成功。原生临时副本932基线文件核对后清理。永久`artifacts/S138/`已保留验证脚本/全部日志/生产截图/异盘verified完整归档与收据，/data/vaultsyncd-deploy/local-20261108T224057-3442489保留旧system/boot GC roots。当前无ready，5张blocked恢复条件保持。

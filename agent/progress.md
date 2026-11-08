@@ -163,4 +163,4 @@
 | --- | --- | --- | --- |
 | S126 | done | d50c6ac | [S126](tasks/S126.md) |
 | S137 | done | 999bbee已ff合master，任务树/分支已清理 | [S137](tasks/S137.md) |
-| S138 | done | 源5689be1/主机9930ec7/generation258；交接待补实际提交 | [S138](tasks/S138.md) |
+| S138 | done | 源5689be1/主机9930ec7/gen258；交接a89debb已ff，任务树/分支已清理 | [S138](tasks/S138.md) |
