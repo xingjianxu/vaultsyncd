@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S136 done**（Web 文件管理器上传及复制/剪切/粘贴/删除；含 ADR-020 跨 Root 对象隔离修复）。S001—S136 共 136 卡：131 done、5 blocked；**当前无 ready 卡**，S136 未做生产部署。结果与验证见 [S136](tasks/S136.md)、[S134](tasks/S134.md)、[S135](tasks/S135.md)，历史过程查阅见 [归档入口](tasks/README.md)。
+当前：**S136 done**（Web 文件管理器上传及复制/剪切/粘贴/删除；含 ADR-020 跨 Root 对象隔离修复，schema 14→15）。S001—S136 共 136 卡：131 done、5 blocked；**当前无 ready 卡**，S136 未做生产部署（下一次部署会触发 14→15 迁移，回退需 `server.sqlite.pre-migration-v14-to-v15.bak` 整套备份）。结果与验证见 [S136](tasks/S136.md)、[S134](tasks/S134.md)、[S135](tasks/S135.md)，历史过程查阅见 [归档入口](tasks/README.md)。
 
 最近部署：[S135](tasks/S135.md) 将固定源 `faf7adb6dc3b32e97d7384842899c307cde1464b` 部署到 generation256，主机 pin `b98e05f`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 通知（四秒消失/键盘关闭/明暗×320/1440/不挤压布局/CSP）通过，主机锁/10项无关服务/身份保持，无数据库迁移。历史部署：[S133](tasks/S133.md) 将固定源 `b811f41ce862fa4e34ac5776d333c2037b6bfd30` 部署到 generation255，主机 pin `31186c7`；本卡不改库结构（仍 user_version=14），生产 Chromium 验证三列表头、62/14/24 列宽、右键菜单项与光标定位、Shift+F10 可达和剪贴板路径，10 项无关服务与 ServerId 保持。历史部署：[S131](tasks/S131.md) 将固定源 `0cd403add6c02720de96e749e5b603cffe56966b` 部署到 generation254，主机 pin `1d05cfc`；pure build/dry/test/健康/switch、线上全量资产与严格 TLS Chromium 明暗×320/1440 通过，库迁移 13→14（`entries.modified_at`）且 ServerId 不变；生产只读元数据浏览，恢复入口为部署前 generation253（旧二进制拒绝新 schema，回退用 `server.sqlite.pre-migration-v13-to-v14.bak`）。
 
@@ -26,7 +26,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
-| S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Root 同摘要对象冲突（schema15 围栏、legacy 兼容） | 待提交；树 `.worktrees/S136-web-file-actions` | [S136](tasks/S136.md) |
+| S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Root 同摘要对象冲突（schema15 围栏、legacy 兼容） | 实现f0e0103/0346ec1已ff合master；树/分支已清理 | [S136](tasks/S136.md) |
 | S135 | 通知版服务端部署本机 generation256；线上通知与资产/健康验收通过 | 源faf7adb；主机b98e05f | [S135](tasks/S135.md) |
 | S134 | Web 操作反馈统一 Mantine Notification；五套真实浏览器验收、Nix Web 构建通过 | 实现a1d225a/交接faf7adb已ff合master；树状态见卡片 | [S134](tasks/S134.md) |
 | S133 | S132 部署到本机：generation255、pin31186c7、无迁移、生产 S132 断言 | 源b811f41；主机31186c7 | [S133](tasks/S133.md) |
