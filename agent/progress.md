@@ -1,6 +1,9 @@
 # 实施进度
 
-当前：**S165 done**，已发布 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，精确源 `d976376` 已推送；同源 Linux x64/Windows x64 归档、8 附件远端大小/SHA-256、标签/说明与属性核对通过，[交接](tasks/S165.md)。包含 S159/S160 Web 改进和 S162 托盘自动更新；预发布不进入自动更新渠道。**下一 ready：无**，原4张blocked保持；当前候选未复跑原生/性能容量/多机与线上升级。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
+当前：**S166 done**，客户端仅填地址自动读取 Server ID，确认保存及慢响应/绑定保护、三套功能与管理原生通过，实现`cbc82ff`；**S167 已独立验收，待整合**（桌面自动启动agent，Windows39/39）。**下一 ready：无**；原四张blocked保持。
+
+最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未发行。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。本轮仅复跑相关功能原生，性能容量/多机与线上成对升级仍未验收。
+
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
 
@@ -29,6 +32,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S166 | 地址自动读取只读Server ID并确认；超时/身份保护、IPC/桌面与Windows功能回归通过 | 实现cbc82ff；交接及合并清理待收尾 | [S166](tasks/S166.md) |
 | S165 | v0.1.2 预发布；双平台同源构建、8附件远端摘要/来源/非Latest核对通过 | 源d976376已推送；交接889c19f已ff合master，任务挂载/树/分支已清理 | [S165](tasks/S165.md) |
 | S164 | 123 个旧vs目录归档，39,360 文件全量恢复摘要/元数据通过后清理；开发目录仅dev根 | a57d364已ff合master；任务树/分支已清理，S134现场保留 | [S164](tasks/S164.md) |
 | S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb、交接762d71d已ff合master；主机a37df31已ff合main，项目/主机任务树及分支清理 | [S160](tasks/S160.md) |
