@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S145 done**（统一 Web 登录入口与本机部署）。S001—S145 共145卡：140 done、5 blocked；**无 ready 卡**。线上源 `6e58bc2`、generation261、schema17，ServerId `9395d9ca…`、账号 `xingjian`、`documents` Vault 保持。未登录只显示独立登录页，认证后恢复原路由，退出/确认失效收回管理壳。验证与交接见[S145](tasks/S145.md)。
+当前：**S146 done**（清理闲置目录、集中临时数据与缓存）。S001—S146共146卡：141 done、5 blocked；**无ready卡**。主机generation262，正式服务仍为S145源`6e58bc2`，ServerId/挂载/服务进程保持；整个win-lab及基线/关联缓存不动。清理清单与验证见[S146](tasks/S146.md)。
 
 最近部署：[S145](tasks/S145.md) 源`6e58bc26fcef09faf675229889693b593f6e9c4f`、主机pin`18a7df5`、generation261；pure部署及严格TLS生产8路由匿名门禁、登录后文件浏览/刷新/退出/后退、明暗320/1440、全量资产/CSP/cookie、ServerId/schema17、10服务/3应用与主机锁均通过。不清库、不改生产内容，无schema迁移；回退入口generation260，按S113先test/健康再switch并同步pin，未实际演练。S144清库历史与留档仍见[S144](tasks/S144.md)，更早部署不代表当前现场。
 
@@ -173,3 +173,5 @@
 | S126 | done | d50c6ac | [S126](tasks/S126.md) |
 | S137 | done | 999bbee已ff合master，任务树/分支已清理 | [S137](tasks/S137.md) |
 | S138 | done | 源5689be1/主机9930ec7/gen258；交接a89debb已ff，任务树/分支已清理 | [S138](tasks/S138.md) |
+
+| S146 | done | 实现f67b8c1；主机13f0dfc已ff合main，原始清理证据在/data/vaultsyncd-temp/S146-cleanup；项目整合/清理见批次 | [S146](tasks/S146.md) |
