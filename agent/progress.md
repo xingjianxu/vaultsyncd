@@ -172,7 +172,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
-| S150 | done | 文件菜单历史弹窗，类型/测试/构建/Nix与两组真实Chromium通过；本卡产出，整合清理见交接 | [S150](tasks/S150.md) |
+| S150 | done | 实现/验收65d56ae已ff合master，任务树/分支已清理；未部署生产 | [S150](tasks/S150.md) |
 | S149 | done | 源d9cfee9；主机pin f5153d8/main整合fb293d5；交接98de5a5已ff合master，两任务树/分支已清理 | [S149](tasks/S149.md) |
 | S126 | done | d50c6ac | [S126](tasks/S126.md) |
 | S137 | done | 999bbee已ff合master，任务树/分支已清理 | [S137](tasks/S137.md) |

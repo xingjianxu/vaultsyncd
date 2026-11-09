@@ -1,5 +1,7 @@
 # 任务交接与历史记录
 
+S150 批次：文件右键版本历史弹窗实现/验收`65d56ae14b142e2594167db1db91e993cf44c479`已ff-only合master，整合点同该提交，无额外merge commit。确认两树干净、全部任务提交为master祖先且当前位于主树后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S150-file-history`与`git branch -d feat/S150-file-history`均成功。S134树保持，永久证据`/data/vaultsyncd-temp/S150-history-20261109T181921-782538/evidence/`及原文件浏览器回归`/data/vaultsyncd-temp/vs-s134-20261109T181740-780344/`保留。未部署生产，下一ready无，原5张blocked首发门禁保持；详见[S150](S150.md)。
+
 S148 批次：实现`3885ab4b4707bd43c1a5dd20428dd66c04a7baac`、交接`4e0b07423e5b42b29a2089338bf96d92aba9b006`已ff-only合master，整合点同交接提交。核对任务树干净、任务提交全属master且当前位于主树后，成功执行`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S148-web-auto-connect`及`git branch -d feat/S148-web-auto-connect`。S134/S147工作树保留；主树flake.lock既有改动未暂存、合并前后哈希一致。真实Chromium及独立btrfs服务验收证据在`/data/vaultsyncd-temp/S148-auth-20261109T154337-494556/`，详见[S148](S148.md)。本卡未部署，下一ready无，原5张blocked首发门禁保持。
 
 当前状态与 ready 入口见 [进度](../progress.md)；任务目标、依赖和验收标准见 [实施手册](../implementation-plan.md)。按任务读取 `Sxxx.md`，接口和运维规则继续在 `docs/` 维护。
