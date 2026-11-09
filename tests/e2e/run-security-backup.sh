@@ -4,7 +4,7 @@ set -euo pipefail
 vault=$(git rev-parse --show-toplevel)
 cd "$vault"
 run_id="s105-backup-$(date +%s)-$$"
-volume="/data/vaultsyncd-lab/runs/$run_id/mnt"
+volume="/data/vaultsyncd-temp/volumes/runs/$run_id/mnt"
 cleanup() {
   result=$?
   trap - EXIT

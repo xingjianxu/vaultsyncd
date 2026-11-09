@@ -2673,3 +2673,11 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 - 数据库：`crates/server-store/migrations/0017_object_layout_vault_scoped.sql` 是语义围栏（不改行数据），schema 16→17；部署按用户决定清空内部状态并用新规则重建。
 - 管理员：`vaultsyncd-admin init` 未给 `--login` 时默认取运行用户（`VAULTSYNCD_ADMIN_LOGIN` → `SUDO_USER` → `USER` → `LOGNAME` → `owner` 兜底）。NixOS 模块新增 `adminUser`（默认 `cfg.user`，提供 `vaultsyncd-init` 包装命令），`rootPaths` 更名为 `vaultPaths`，生成 `[vaults] allowed_bases`。
 - 验证入口：`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo xwin check --locked --workspace --all-targets`、`pnpm --recursive run typecheck`、`pnpm --recursive --if-present run test`；真实浏览器 `tests/web/vaults-browser.py`、`files-browser.py` 在重部署后另跑（S144）。
+
+
+## S146 本机临时任务目录与测试卷入口
+
+- 用户指定的新任务数据根为 `/data/vaultsyncd-temp`；运行前由操作者建立并授权（本机0711，跨UID测试可穿越；私密run/证据目录0700，密码0600）。单次任务不得整体清理该根。
+- `tools/test-volume/test-volume.sh` 默认 `/data/vaultsyncd-temp/volumes`，仍按 `runs/<run_id>` 隔离；`VAULTSYNCD_LAB_VAULT` 的规范路径只允许位于临时根之下，拒绝既有 `/data/vaultsyncd-lab`。平台/故障/安全驱动同步此默认位置。
+- 本机Web、管理CLI和独立NixOS服务验收的run改在临时根内；新部署证据默认 `/data/vaultsyncd-temp/evidence/deploy/local-*`；CI验收evidence须为临时根内的子目录，独占锁也移到该根，Windows组件构建写入当次evidence。
+- Windows devShell工具链缓存默认 `/data/vaultsyncd-temp/cache/windows`；`VAULTSYNCD_WINDOWS_CACHE` 仍可指定临时根内的独立缓存。已有VM目录、基线和关联缓存不自动搬迁或清理。现有产品wire/数据库/IPC接口不变。

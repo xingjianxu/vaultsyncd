@@ -29,7 +29,7 @@ nix develop --command python3 tools/ci/test_ci.py
 工作流concurrency及本地flock禁止本控制器彼此并发；执行者仍需与其他非CI使用者协调窗口。
 不改trial/Caddy/SSH，不关闭Windows客体。当前只覆盖 Linux x64 与 Windows x64；不需要 ARM 模板、QEMU 或 binfmt 注册。失败保留外部专属磁盘和日志供恢复。
 
-在源码外私有JSON中设置：`{"evidence":"/data/vaultsyncd-build/S101-唯一run"}`。
+在源码外私有JSON中设置：`{"evidence":"/data/vaultsyncd-temp/S101-唯一run"}`。
 Windows沿用`docs/operations/windows-lab.md`的密钥与客体，设置共享交叉缓存。
 入口（源码须已提交，两个阶段不允许改变HEAD）：
 

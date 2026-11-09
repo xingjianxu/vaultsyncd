@@ -346,3 +346,14 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 服务端Web未登录仅显示独立登录页，管理导航与业务页不挂载，登录后恢复原hash/目录深链；退出/改密/撤销/最终401收回整个界面。静态登录资产与公开health/capabilities端点仍开放，业务API保持服务端授权。真实生产Chromium（禁QUIC以固定TLS1.3验证，不跳过证书校验）通过8路由匿名门禁、登录后文件浏览及刷新、退出后后退仍拦截、cookie/CSP、明暗320/1440；全量线上静态资产与包逐字节匹配，无页面/CSP错误。ServerId `9395d9cacd7d3fb4b746592806a8b5cb`、schema17、管理员xingjian、10项服务/3应用及主机锁保持，不清库不改生产内容。
 
 证据 `artifacts/S145/` 与 `/data/vaultsyncd-deploy/local-20261109T145920-429779/`（passed/cleaned=true）。回退入口S144的generation260 `/nix/store/rq6p480986lr6hhv87qa0fvapr14g6yj-nixos-system-wks-lab-26.11.20261102.7356cc7`，先按S113 test/健康再switch，并同步主机pin；本卡无迁移、不需降库，未实际演练回退。S144清库历史见[交接](../../agent/tasks/S144.md)，本次不重做清库；Windows/hosted/规模门禁保持。整合与清理见[S145](../../agent/tasks/S145.md)。
+
+
+## S146 闲置目录清理与临时数据集中（2026-11-09）
+
+用户要求清理闲置目录，今后临时任务数据、测试卷、下载与缓存统一在 `/data/vaultsyncd-temp`，按任务/run_id或cache用途分目录。根目录本机为xingjian:users 0711，私密证据与备份子目录0700；不可把整个临时根当成单次任务的删除目标。新部署证据默认 `/data/vaultsyncd-temp/evidence/deploy`。历史 `vaultsyncd-build` / `vaultsyncd-deploy` 仍保留原路径的原始验收资料、备份与GC roots，后续不在这些历史目录新建任务。
+
+清理前逐项核对挂载和进程打开的路径；清理36项、`du`合计11,084,029,952字节（约10.3GiB），包括S097/S098编译缓存、退役ARM64虚拟机存储和测试镜像、6个S075测试目录、S096试用镜像与3处旧凭据/开发证书目录。S075原始材料先私密归档。历史build目录剩约18MiB、deploy约87MiB；所有原始日志/结果及发布GC roots、S113快照、S144清库前归档和当前初始化凭据保留。`df`前后未显示相应物理空间下降，/data存在Snapper快照；本次不删除系统/数据快照，不声称释放10.3GiB独占物理空间。
+
+主机提交 `13f0dfc` 已ff合main，撤下旧试用挂载和账号，pure build、dry、test、HTTPS/IPC健康、switch通过；运行与开机generation262、system `/nix/store/ybwlrf3l0fmir63fjz3y1inbwd3m142h-nixos-system-wks-lab-26.11.20261102.7356cc7`。项目服务pin保持 `6e58bc2`、原包/ServerId与正式挂载保持，vaultsyncd/Caddy/SSH的PID和InvocationID不变；整个 `/data/vaultsyncd-lab`（含win-lab、基线、关联缓存）不进入操作清单，VM PID1894045及启动时间保持。
+
+证据 `/data/vaultsyncd-temp/S146-cleanup/` 保存完整删除清单、脚本、验证JSON、容量记录、主机构建/激活日志及旧generation261 GC roots。新目录下真实256MiB btrfs卷create/verify/cleanup及旧lab拒绝检查通过。旧generation只用于配置排障；已删除S096试用数据不能通过切换generation恢复，旧试用恢复流程退役。正式实例/备份保留，本次未实际回退、未重跑Windows原生能力验收，原5张blocked门禁不变。详见[S146](../../agent/tasks/S146.md)。

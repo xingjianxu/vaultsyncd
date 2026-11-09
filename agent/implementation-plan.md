@@ -60,8 +60,8 @@
 | 用途 | 约定 |
 | --- | --- |
 | 项目源码 | 用户创建的 `vaultsyncd/`；实际绝对路径在 S001 记录，代码开发使用 §2.7 的任务 worktree |
-| 临时开发状态 | 外部目录示例 `/var/lib/vaultsyncd-dev/`，独立账号/端口/配置 |
-| 集成与故障测试 | 外部测试卷下按 run_id 分目录；每轮独立 DB、Vault、对象与进程 |
+| 临时开发状态 | `/data/vaultsyncd-temp/Sxxx-<run_id>/`，独立账号/端口/配置 |
+| 集成与故障测试 | `/data/vaultsyncd-temp/volumes/runs/<run_id>/`；每轮独立 DB、Vault、对象与进程 |
 | 正式试用实例 | 示例 `/var/lib/vaultsyncd/`，只在部署阶段启用，先用可丢弃样本 |
 | 用户工作目录 | 从允许基目录显式选择，与所有内部状态目录互不重叠 |
 | Windows 样本目录 | Windows 客体的独立 NTFS 目录，不使用共享文件夹模拟 NTFS |
@@ -1519,6 +1519,13 @@
 - 范围：顶层会话门禁，初始化核验不显示管理壳；未登录仅独立登录页，登录后恢复原 hash 深链；退出、改密、撤销及受保护请求最终失效后立即回登录。沿用同源 HttpOnly cookie、CSRF、401 单飞刷新，不变更协议/持久格式。
 - 验收：Web 单测/typecheck/build；真实 Chromium 核验所有管理路由与深链的匿名门禁、错误登录、登录/刷新/过期/退出/撤销/改密、网络核验失败与重试、明暗窄屏、CSP；复用 pure 部署入口 build → dry → test → 健康 → switch，线上登录门禁与资产/实例保持复验。
 - 交接：`agent/tasks/S145.md`；生产不清库、不改用户内容，不降低原 blocked 首发门禁。
+
+### S146 — 清理闲置目录并集中临时任务数据
+
+- 依据：用户要求清理上述闲置目录，今后临时任务数据与缓存统一放在 `/data/vaultsyncd-temp`；win-lab 相关目录不动。前置 S144、S145 done；design §6、§11.5、§19.3。
+- 范围：核对进程/挂载后清理旧测试状态、可再生编译产物、退役试用卷与旧凭据；保留生产状态、Vault、备份、原始验收证据和整个 `/data/vaultsyncd-lab`。更新临时目录约定与直接创建数据的脚本默认路径，历史记录不批量改写。
+- 验收：保存清理清单、容量、旧 generation 与 GC roots；主机撤试用挂载经 pure build → dry → test/健康 → switch；相关脚本语法/CI检查、真实独立测试卷 create/verify/cleanup；生产身份、挂载、SSH 与运行中 VM 保持。
+- 交接：`agent/tasks/S146.md`，记录保留路径、清理结果与后续位置；不改变原5张 blocked 首发门禁。
 
 ## 7. 记录模板与续接规则
 

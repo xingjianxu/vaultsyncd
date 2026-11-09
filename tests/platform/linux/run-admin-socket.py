@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """S075 real btrfs + isolated SSH/CLI acceptance. Run inside nix develop after cargo build.
 
-Creates only /data/vaultsyncd-s075-<run_id>; never opens SQLite. SSH keys are ephemeral,
+Creates only /data/vaultsyncd-temp/vaultsyncd-s075-<run_id>; never opens SQLite. SSH keys are ephemeral,
 known_hosts is derived from our own host key (no insecure host-key bypass). Logs stay
 outside Git. Requires passwordless sudo for the isolated sshd and nobody UID test.
 """
@@ -23,7 +23,7 @@ import urllib.request
 REPO = Path(__file__).resolve().parents[3]
 SERVER = REPO / "target/debug/vaultsyncd-server"
 ADMIN = REPO / "target/debug/vaultsyncd-admin"
-RUN = Path("/data") / f"vaultsyncd-s075-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data/vaultsyncd-temp") / f"vaultsyncd-s075-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def call(args, **kwargs):

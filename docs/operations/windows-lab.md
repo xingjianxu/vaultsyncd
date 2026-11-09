@@ -21,7 +21,7 @@
 
 ## 3. 目录布局（全部在源码之外）
 
-VM 根：`/data/vaultsyncd-lab/win-lab/`（可在 `VM_VAULT` 环境变量覆盖）。`/data/vaultsyncd-lab` 同时是 S007 的测试卷 lab 根，二者用子目录隔离。
+VM 根：`/data/vaultsyncd-lab/win-lab/`（可在 `VM_VAULT` 环境变量覆盖）。S146 起该根及其基线、关联缓存保持原位；新临时测试卷改用 `/data/vaultsyncd-temp/volumes`，不再写入既有 VM lab。
 
 | 路径 | 内容 | 权限 |
 | --- | --- | --- |
@@ -590,3 +590,7 @@ VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \
 - 不是三台并发实机：顺序 agent 只验证跨客户端最终收敛与冲突保留，不验证同时在线竞争；并发与事件异常/旧设备矩阵属 S102。
 - 生产 HTTPS 反向代理部署属 S097；本卡使用测试 TLS 入口 + 认证 SSH 回环隧道，证书、主机名与校验是真实的，但不是生产代理配置。
 - `kill_boundaries`（S052 子进程强杀恢复）在 S075 加入管理 socket 后曾因 `AdminSocket` 残留 socket 报 `AddrInUse`；该回归已由 S075-c 修复（服务端持状态锁后回收合法遗留 socket，非 socket/他人属主仍明确失败），4 项已恢复通过。
+
+### S146 临时缓存位置约定（覆盖上述工作树缓存默认值）
+
+新建 Windows 交叉编译工具链缓存默认使用 `/data/vaultsyncd-temp/cache/windows`，仍可用 `VAULTSYNCD_WINDOWS_CACHE` 指向该临时根下的独立缓存。首次运行前建立并授权临时根目录；已有 `.cache/windows` 或 VM lab 缓存不自动搬迁、删除或重装。历史命令和容量为当时证据，当前默认值以 `flake.nix` 为准。VM 磁盘、EFI、TPM、镜像、配置、凭据及恢复基线均不迁移。

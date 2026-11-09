@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exclusive same-commit installation controller for a pre-provisioned lab.
 
-Config JSON: evidence (new absolute /data directory).
+Config JSON: evidence (new absolute directory under /data/vaultsyncd-temp).
 Windows uses the documented SSH environment. Never modifies host production services.
 Run with VAULTSYNCD_CI_LAB=1; restore/cleanup failures fail the run.
 Only Linux x64 and Windows x64 are in the current platform scope.
@@ -18,8 +18,8 @@ import sys
 from run import plan
 
 ROOT = Path(__file__).resolve().parents[2]
-EVIDENCE_ROOT = Path("/data")
-LAB_LOCK = Path("/tmp/vaultsyncd-platform-lab.lock")
+EVIDENCE_ROOT = Path("/data/vaultsyncd-temp")
+LAB_LOCK = EVIDENCE_ROOT / "vaultsyncd-platform-lab.lock"
 
 
 def run(command, log, timeout=3600, env=None):
@@ -46,8 +46,10 @@ def main():
         return 78
     config = json.loads(Path(args.config).read_text())
     evidence = Path(config["evidence"])
-    assert evidence.is_absolute() and evidence.is_relative_to(EVIDENCE_ROOT) and not evidence.is_symlink()
-    evidence.mkdir(mode=0o700, exist_ok=True)
+    assert (evidence.is_absolute() and not evidence.is_symlink()
+            and evidence.resolve().is_relative_to(EVIDENCE_ROOT.resolve())
+            and evidence.resolve() != EVIDENCE_ROOT.resolve())
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
     # All local controllers use the same lock; hosted workflow concurrency is additional.
     with LAB_LOCK.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -58,8 +60,8 @@ def main():
                   'kernel': os.uname().release, 'architecture': os.uname().machine}
         (evidence/'source.json').write_text(json.dumps(source, indent=2))
         products_file = evidence/'products.json'
-        component = ROOT/'artifacts/S101/windows-client'
-        env = {**os.environ, 'VAULTSYNCD_WINDOWS_CACHE': os.environ.get('VAULTSYNCD_WINDOWS_CACHE', '/wrd/prj/vaultsyncd/.cache/windows')}
+        component = evidence/'windows-client'
+        env = {**os.environ, 'VAULTSYNCD_WINDOWS_CACHE': os.environ.get('VAULTSYNCD_WINDOWS_CACHE', '/data/vaultsyncd-temp/cache/windows')}
         if args.phase in ('build', 'all'):
             outputs = []
             for command in plan('release-linux', {}):

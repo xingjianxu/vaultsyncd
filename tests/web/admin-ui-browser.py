@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def main():
-    output = Path(os.environ.get("VAULTSYNCD_UI_ARTIFACTS", REPO / "artifacts" / "S145")) / f"ui-{time.time_ns()}"
+    output = Path(os.environ.get("VAULTSYNCD_UI_ARTIFACTS", Path("/data/vaultsyncd-temp/evidence/S145"))) / f"ui-{time.time_ns()}"
     output.mkdir(parents=True)
     print(f"S145 UI artifacts: {output}", flush=True)
 

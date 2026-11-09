@@ -6,9 +6,9 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
 run_id=${VAULTSYNCD_RUN_ID:-s104-maintenance-$$}
 case "$run_id" in s104-*) ;; *) printf 'run_id must start with s104-\n' >&2; exit 2;; esac
-lab_vault=/data/vaultsyncd-lab
+lab_vault=/data/vaultsyncd-temp/volumes
 volume=$lab_vault/runs/$run_id/mnt
-report=${VAULTSYNCD_S104_REPORT:-$repo_root/artifacts/S104/$run_id}
+report=${VAULTSYNCD_S104_REPORT:-/data/vaultsyncd-temp/evidence/S104/$run_id}
 mkdir -p "$report"
 report=$(realpath "$report")
 volume_tool=$repo_root/tools/test-volume/test-volume.sh

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # vaultsyncd 测试卷生命周期工具（S007）。
 #
-# 在源码仓库之外的 lab 根（默认 /data/vaultsyncd-lab）内，按 run_id 建立
+# 在源码仓库之外的 lab 根（默认 /data/vaultsyncd-temp/volumes）内，按 run_id 建立
 #   1) 现有合规 btrfs 卷上的专用子卷（run 目录下的 volume/）；
 #   2) 独立容量的小型 btrfs loop 镜像（run 目录下的 loop.img），供满盘/ENOSPC 等
 #      故障测试使用，避免污染主机大卷的容量语义。
@@ -20,7 +20,7 @@ set -o pipefail
 
 PROG=${0##*/}
 
-LAB_VAULT=${VAULTSYNCD_LAB_VAULT:-/data/vaultsyncd-lab}
+LAB_VAULT=${VAULTSYNCD_LAB_VAULT:-/data/vaultsyncd-temp/volumes}
 LOOP_SIZE=${VAULTSYNCD_LOOP_SIZE:-512M}
 
 RUNS_NAME=runs
@@ -41,8 +41,8 @@ TRUNCATE=$(command -v truncate || true)
 # 非交互提权：-n 保证不会等待密码输入。
 sudo_run() { sudo -n "$@"; }
 
-# lab 根允许存在的父目录：/data（独立 22T 数据盘）与 /var/lib（dev/test 状态规划）。
-LAB_PARENT_WHITELIST="/data /var/lib"
+# 临时测试卷只能位于用户指定的数据根之下，禁止触碰既有 win-lab。
+LAB_PARENT_WHITELIST="/data/vaultsyncd-temp"
 
 # 永远不允许作为 lab 根或其操作路径的目录（精确匹配）。
 FORBIDDEN_EXACT="/ /boot /home /nix /nix/store /var /var/lib /var/log /srv /data /wrd /tmp /run /proc /sys /dev /etc /usr /opt /vault /.snapshots /data/llm /data/.snapshots /data/snapshots"
@@ -78,8 +78,8 @@ usage() {
   status                  列出 lab 根与已有 run 的状态（只读）。
 
 环境变量：
-  VAULTSYNCD_LAB_VAULT   lab 根，默认 /data/vaultsyncd-lab；必须绝对、已规范化，
-                        必须位于白名单父目录（/data 或 /var/lib）之下，且不得是系统/用户路径。
+  VAULTSYNCD_LAB_VAULT   lab 根，默认 /data/vaultsyncd-temp/volumes；必须绝对、已规范化，
+                        必须位于 /data/vaultsyncd-temp 之下，且不得是系统/用户路径。
   VAULTSYNCD_LOOP_SIZE  loop 镜像大小（truncate 语法），默认 512M。
 
 run_id 规则：^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$；不得包含 '/'、'.'、'..' 或前导 '-'。

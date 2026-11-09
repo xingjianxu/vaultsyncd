@@ -133,8 +133,7 @@
         # - rustup 按 rust-toolchain.toml 的 channel 下载官方 Rust 1.99.0 宿主 rustc 与
         #   x86_64-pc-windows-msvc 标准库；cargo-xwin 下载 MSVC 14.44 CRT 与 Windows SDK
         #   10.0.26100 的头文件/导入库（含 cldapi.lib）。
-        # - 缓存写到工作树根的 .cache/windows/（已被 .gitignore 忽略），不碰用户全局
-        #   ~/.rustup、~/.cargo；清理用 `rm -rf .cache/windows`。
+        # - 缓存统一放到 /data/vaultsyncd-temp/cache/windows，不碰 win-lab 或用户全局目录。
         windows = pkgs.mkShell {
           name = "vaultsyncd-windows";
           packages = [
@@ -157,8 +156,7 @@
 
           shellHook = ''
             export VAULTSYNCD_WINDOWS_SHELL=1
-            repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-            export VAULTSYNCD_WINDOWS_CACHE="''${VAULTSYNCD_WINDOWS_CACHE:-$repo_root/.cache/windows}"
+            export VAULTSYNCD_WINDOWS_CACHE="''${VAULTSYNCD_WINDOWS_CACHE:-/data/vaultsyncd-temp/cache/windows}"
             export RUSTUP_HOME="$VAULTSYNCD_WINDOWS_CACHE/rustup"
             export CARGO_HOME="$VAULTSYNCD_WINDOWS_CACHE/cargo"
             export XWIN_CACHE_DIR="$VAULTSYNCD_WINDOWS_CACHE/xwin"

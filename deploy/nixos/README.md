@@ -44,4 +44,4 @@ nix develop --command python3 deploy/nixos/test-service.py /nix/store/…-vaults
 
 脚本拒绝项目/主机未提交修改，仅在独立 host worktree 改唯一 `vaultsync.rev`。所有 Nix 构建/求值显式 `--option pure-eval true --no-update-lock-file --no-write-lock-file`，项目从主机 feature 指定的永久 Git 仓库完整 SHA 取源；禁止临时工作树作为部署源。主机依赖锁逐字节核对。build 后按相同 store path 执行 dry-activate/test/健康/switch，核对真实 HTTPS 证书、ServerId、运行包及 UID、目录 UID/GID、同 UID IPC ready；成功以中文提交版本 pin 并 ff 到原主机分支，清理临时树/分支，不推送。
 
-证据默认 `/data/vaultsyncd-deploy/local-*`，包含旧运行/启动 system GC root、锁、generation、差异及结果。`test` 立即激活，没有定时自动回滚；失败保留现场并尝试恢复旧运行及启动配置。数据库迁移仍由产品围栏保护；旧版本拒绝新 schema 时必须按备份恢复流程离线处理，不自动降级数据。脚本不清空数据、不递归改权、不更新其他应用依赖。部署前按产品备份流程保留可恢复备份，日常脚本健康检查不创建上传样本。当前路径、账号迁移与真实验收见 `docs/operations/nixos.md` 的 S113 节。
+证据默认 `/data/vaultsyncd-temp/evidence/deploy/local-*`，包含旧运行/启动 system GC root、锁、generation、差异及结果。`test` 立即激活，没有定时自动回滚；失败保留现场并尝试恢复旧运行及启动配置。数据库迁移仍由产品围栏保护；旧版本拒绝新 schema 时必须按备份恢复流程离线处理，不自动降级数据。脚本不清空数据、不递归改权、不更新其他应用依赖。部署前按产品备份流程保留可恢复备份，日常脚本健康检查不创建上传样本。当前路径、账号迁移与真实验收见 `docs/operations/nixos.md` 的 S113 节。
