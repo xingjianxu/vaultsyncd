@@ -34,3 +34,6 @@ S145 批次：统一登录实现/部署源 `6e58bc26fcef09faf675229889693b593f6e
 
 
 S146 批次：实现 `f67b8c1501d2eb928eabe8bf513f7ae75f7c3f67`、交接 `a29ee681f8ac1f7e44d88bd30e1bf4e50cd90320` 已ff-only合master，整合点同交接提交。主机 `13f0dfc` 已ff合main，运行/开机generation262，正式服务pin保持S145。确认两任务树均无未提交修改、全部任务提交属于目标分支后，已分别从主树执行 `git worktree remove /wrd/prj/vaultsyncd/.worktrees/S146-host`、`git branch -d chore/S146-retire-trial`，以及 `git worktree remove /home/xingjian/.codex/worktrees/49b3/vaultsyncd`、`git branch -d chore/S146-temp-cleanup`；本次项目树由原生工具创建，使用其返回路径。旧S134树不动。原始清单、脚本、容量、s075私密归档、验证和主机日志、旧generation261 GC roots独立保存在 `/data/vaultsyncd-temp/S146-cleanup/`，清树前已核对脚本副本一致。36项清理完成，原始du约10.3GiB，不等同df独占空间回收；正式数据、整个win-lab、历史证据/备份保留。无ready，原5张blocked首发门禁保持。
+
+
+S147 批次：实现 `5403c3c4d08c9affb9cd387015ccfdca17109ca0`，整合S148 `1e9367f`；schema18、Web客户端记录及共同认证/自动连接浏览器复验通过。证据与限制见S147；目标master整合/清理待实际执行后补记，原5卡blocked保持。

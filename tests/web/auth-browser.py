@@ -139,7 +139,7 @@ def main():
 
             signed_out()
             assert page.evaluate("location.hash") == "#" + deep_link
-            for route in ["/overview", "/vaults", deep_link, "/recovery", "/backup", "/account", "/missing"]:
+            for route in ["/overview", "/vaults", deep_link, "/recovery", "/backup", "/clients", "/account", "/missing"]:
                 page.evaluate("route => { location.hash = route; }", route)
                 signed_out()
             assert not any(path.startswith("/v1/vaults") for path, *_ in proxy_results)
