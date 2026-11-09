@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S160 in_progress**（服务概览显示 Server ID）；前次 **S159 done**，Vault 服务器路径直达文件浏览器、新增当前已提交文件容量列，已部署本机并通过生产 Chromium 验收；[交接](tasks/S159.md)。运行/开机generation268、源`911449b`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：S160（本卡执行中）**。精确主机配置`2cfc2bf`已合main；并行全系统升级由其自身任务完成（基线`3461249`），本卡保留升级后的锁和修复。原4张blocked门禁保持。
+当前：**S160 done**，服务概览显示完整可选中的 Server ID，读取失败可重试；[交接](tasks/S160.md)。已部署本机，运行/开机generation269、源`85dd2bb`、schema18，Vault基目录`/data/vaultsyncd/vaults`；主机pin `a37df31`已ff合main，依赖锁保持。**下一 ready：无**，原4张blocked门禁保持。
 
-最近部署：S159 pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；线上容量1,698,002字节→1.6 MB，鼠标/Enter/刷新/返回、明暗320/1440、全量资产/CSP/cookie通过。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持；完整备份和异盘副本verified，旧system/boot GC roots保留，未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不包含本次Web改动；详见[S158](tasks/S158.md)。
+最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不含S159/S160 Web变化。
 
 恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -27,6 +27,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb；主机a37df31已ff合main且部署树清理；项目待ff合master/清理 | [S160](tasks/S160.md) |
 | S159 | Vault路径深链与当前文件容量；Rust/Web/两轮真实浏览器及generation268生产验收通过 | 实现911449b、交接0dba961已ff合master；项目/主机任务树及分支清理 | [S159](tasks/S159.md) |
 | S158 | 首个GitHub预发布v0.1.1；同源双平台归档、Linux私有loader及8附件远端哈希通过；修复打包变量与SQLite/zlib依赖 | 源9aa091e已推送；交接f274601已ff合master，发行树/分支清理；并发同编号树保留并提示续接重新编号 | [S158](tasks/S158.md) |
 | S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |

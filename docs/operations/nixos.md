@@ -403,3 +403,12 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 当前服务源911449b、schema18，服务器路径可点击打开对应Vault根目录，“文件容量”统计当前已提交文件的逻辑总大小。运行/开机system为pwcp1j07c6mx6ln9a0z6n8whabhds0jk，主机配置2cfc2bf（main）纯求值复现；公网TLS/资产/浏览器、HTTPS/IPC及正式数据保持均通过。本轮期间其他主机任务已完成全系统更新和修复，当前基线3461249取代S153/S157的旧锁复现入口。
 
 完整备份、日志、截图、部署result及旧system/boot GC roots永久保留在`/data/vaultsyncd-temp/S159-20261109/`，异盘校验备份在`artifacts/S159/backups/`。本次无schema迁移；回退先按S113对旧system `/nix/store/8mjzl3ql0chn39mba7cv2529rf0h0n3n-nixos-system-wks-lab-26.11.20261109.5e6fbb3`执行test并核对HTTPS/IPC，再switch并同步主机pin至3461249。不要退回旧全系统锁而撤销另一任务的主机升级；若恢复备份仍需按备份协议恢复到空目录并换epoch。本次未实际回退，详细证据、验证及清理见[S159](../../agent/tasks/S159.md)。
+
+
+## S160 服务概览 Server ID 部署（generation269，2026-11-09）
+
+源`85dd2bb9ed427a13ec2437bea69038f8300718ec`在概览服务连接卡片显示完整Server ID，窄屏自动换行，供选中复制。沿用GET /v1/capabilities，无wire/schema迁移。以实际主机干净main `2cfc2bf`执行既有`tools/deploy-local.sh --rev HEAD --evidence-base /data/vaultsyncd-temp/S160-20261109/evidence/deploy`，pure build、manifest、dry/test、HTTPS/IPC/身份/归属与switch通过，result的passed/cleaned=true。主机pin `a37df3131590f01e61e4cd1532f9d910d974e3ac`已ff main且任务树/分支清理；锁74319cf7…保持。运行与开机generation269，system `/nix/store/p744ig0hmksv3nw68bfb6vhiy3z1abpc-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/k33fl5g1mjfir3sn6wfb5s0cvfkgydaa-vaultsyncd-0.1.1`。
+
+生产真实Chromium验证编号与API一致、完整选择/只读、刷新、明暗320/1440完整显示与无横向溢出、严格TLS1.3/CSP/cookie/逐字节全量资产，登录退出正常，无pageerror。正式ServerId、schema18/FK、5工作文件摘要、10既有服务PID/InvocationID及3应用保持。原始脚本、日志、截图、result与部署记录永久保存`/data/vaultsyncd-temp/S160-20261109/evidence/`，部署run为`deploy/local-20261109T201823-1530268/`。完整备份及收据在该任务`backups/`，异盘`/wrd/prj/vaultsyncd/artifacts/S160/backups/`已独立verify。
+
+旧system/boot GC roots保留；直接回退入口generation268 `/nix/store/pwcp1j07c6mx6ln9a0z6n8whabhds0jk-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，按S113先test核对HTTPS/IPC再switch，并同步主机pin至2cfc2bf。本卡未实际回退、未做Windows或容量复验；原blocked首发门禁不变。项目合并清理见[S160](../../agent/tasks/S160.md)。
