@@ -69,12 +69,12 @@ fn usage(message: &str) -> ExitCode {
     eprintln!("{message}");
     eprintln!(
         "用法：file-publish <子命令> [--resolve auto|openat2|walk]\n\
-         \x20 identity ROOT REL\n\
-         \x20 hash ROOT REL\n\
-         \x20 capture --source-root DIR --source REL --object-root DIR --object REL\n\
-         \x20 publish --source-root DIR --source REL --target-root DIR --target-dir REL \
+         \x20 identity VAULT REL\n\
+         \x20 hash VAULT REL\n\
+         \x20 capture --source-vault DIR --source REL --object-vault DIR --object REL\n\
+         \x20 publish --source-vault DIR --source REL --target-vault DIR --target-dir REL \
          --target-name NAME (--expect absent | --expect-from FILE) [--race-hook CMD]\n\
-         \x20 rename --from-root DIR --from REL --to-root DIR --to REL [--noreplace]"
+         \x20 rename --from-vault DIR --from REL --to-vault DIR --to REL [--noreplace]"
     );
     ExitCode::from(EXIT_USAGE)
 }
@@ -86,7 +86,7 @@ fn fail(stage: &str, message: impl std::fmt::Display) -> ExitCode {
 }
 
 /// 角色目录在其生命周期内是边界；这里一次 `canonicalize` 只模拟注册期处理，运行期不再用路径。
-fn open_root(path: &Path, mode: ResolveMode, label: &str) -> Result<RestrictedDir, ExitCode> {
+fn open_vault(path: &Path, mode: ResolveMode, label: &str) -> Result<RestrictedDir, ExitCode> {
     let canonical = std::fs::canonicalize(path).map_err(|error| {
         fail(
             "canonicalize_failed",
@@ -101,11 +101,11 @@ fn open_root(path: &Path, mode: ResolveMode, label: &str) -> Result<RestrictedDi
 }
 
 fn identity(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
-    let (root, relative) = match raw {
-        [root, relative] => (root, relative),
-        _ => return Err(usage("identity 需要 ROOT 与 REL 两个参数")),
+    let (vault, relative) = match raw {
+        [vault, relative] => (vault, relative),
+        _ => return Err(usage("identity 需要 VAULT 与 REL 两个参数")),
     };
-    let dir = open_root(Path::new(root), resolve_mode, "ROOT")?;
+    let dir = open_vault(Path::new(vault), resolve_mode, "VAULT")?;
     let opened = dir
         .open_path(Path::new(relative))
         .map_err(|error| print_refused("identity", &error.to_string(), error.code()))?;
@@ -115,11 +115,11 @@ fn identity(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
 }
 
 fn hash(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
-    let (root, relative) = match raw {
-        [root, relative] => (root, relative),
-        _ => return Err(usage("hash 需要 ROOT 与 REL 两个参数")),
+    let (vault, relative) = match raw {
+        [vault, relative] => (vault, relative),
+        _ => return Err(usage("hash 需要 VAULT 与 REL 两个参数")),
     };
-    let dir = open_root(Path::new(root), resolve_mode, "ROOT")?;
+    let dir = open_vault(Path::new(vault), resolve_mode, "VAULT")?;
     let opened = dir
         .open_read(Path::new(relative))
         .map_err(|error| print_refused("hash", &error.to_string(), error.code()))?;
@@ -135,16 +135,16 @@ fn hash(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
 fn capture(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
     let parsed = ParsedArgs::parse(
         raw,
-        &["--source-root", "--source", "--object-root", "--object"],
+        &["--source-vault", "--source", "--object-vault", "--object"],
         &[],
     )?;
-    let source_root = parsed.required("--source-root")?;
+    let source_root = parsed.required("--source-vault")?;
     let source_rel = parsed.required("--source")?;
-    let object_root = parsed.required("--object-root")?;
+    let object_root = parsed.required("--object-vault")?;
     let object_rel = parsed.required("--object")?;
 
-    let source_dir = open_root(Path::new(&source_root), resolve_mode, "source-root")?;
-    let object_dir = open_root(Path::new(&object_root), resolve_mode, "object-root")?;
+    let source_dir = open_vault(Path::new(&source_root), resolve_mode, "source-vault")?;
+    let object_dir = open_vault(Path::new(&object_root), resolve_mode, "object-vault")?;
     let relative = Path::new(&source_rel);
     let opened = source_dir
         .open_read(relative)
@@ -168,9 +168,9 @@ fn publish(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
     let parsed = ParsedArgs::parse(
         raw,
         &[
-            "--source-root",
+            "--source-vault",
             "--source",
-            "--target-root",
+            "--target-vault",
             "--target-dir",
             "--target-name",
             "--expect",
@@ -179,9 +179,9 @@ fn publish(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
         ],
         &[],
     )?;
-    let source_root = parsed.required("--source-root")?;
+    let source_root = parsed.required("--source-vault")?;
     let source_rel = parsed.required("--source")?;
-    let target_root = parsed.required("--target-root")?;
+    let target_vault = parsed.required("--target-vault")?;
     let target_dir_rel = parsed.required("--target-dir")?;
     let target_name = parsed.required("--target-name")?;
 
@@ -204,9 +204,9 @@ fn publish(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
     validate_relative_path(Path::new(&target_name))
         .map_err(|error| print_refused("publish", &error.to_string(), "invalid_relative_path"))?;
 
-    let source_dir = open_root(Path::new(&source_root), resolve_mode, "source-root")?;
-    let target_root_handle = open_root(Path::new(&target_root), resolve_mode, "target-root")?;
-    let target_dir = target_root_handle
+    let source_dir = open_vault(Path::new(&source_root), resolve_mode, "source-vault")?;
+    let target_vault_handle = open_vault(Path::new(&target_vault), resolve_mode, "target-vault")?;
+    let target_dir = target_vault_handle
         .child_dir(Path::new(&target_dir_rel))
         .map_err(|error| print_refused("publish", &error.to_string(), error.code()))?;
     let relative = Path::new(&source_rel);
@@ -245,17 +245,17 @@ fn publish(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
 fn rename(raw: &[String], resolve_mode: ResolveMode) -> Result<(), ExitCode> {
     let parsed = ParsedArgs::parse(
         raw,
-        &["--from-root", "--from", "--to-root", "--to"],
+        &["--from-vault", "--from", "--to-vault", "--to"],
         &["--noreplace"],
     )?;
-    let from_root = parsed.required("--from-root")?;
+    let from_root = parsed.required("--from-vault")?;
     let from_rel = parsed.required("--from")?;
-    let to_root = parsed.required("--to-root")?;
+    let to_root = parsed.required("--to-vault")?;
     let to_rel = parsed.required("--to")?;
     let noreplace = parsed.has_flag("--noreplace");
 
-    let source_dir = open_root(Path::new(&from_root), resolve_mode, "from-root")?;
-    let target_dir = open_root(Path::new(&to_root), resolve_mode, "to-root")?;
+    let source_dir = open_vault(Path::new(&from_root), resolve_mode, "from-vault")?;
+    let target_dir = open_vault(Path::new(&to_root), resolve_mode, "to-vault")?;
     match source_dir.rename(
         Path::new(&from_rel),
         &target_dir,

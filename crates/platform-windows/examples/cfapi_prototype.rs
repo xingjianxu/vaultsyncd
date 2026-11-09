@@ -4,28 +4,28 @@
 //! 用法（Windows 客体上运行；`expect` 与 `--help` 在任意平台可用）：
 //!
 //! ```text
-//! cfapi-prototype create  [--root C:\vaultsyncd-test]
-//! cfapi-prototype inspect [--root C:\vaultsyncd-test] [--allow-hydrated]
-//! cfapi-prototype cleanup [--root C:\vaultsyncd-test]
-//! cfapi-prototype read    --name <entry> [--root <path>] [--offset N --length M]
+//! cfapi-prototype create  [--vault C:\vaultsyncd-test]
+//! cfapi-prototype inspect [--vault C:\vaultsyncd-test] [--allow-hydrated]
+//! cfapi-prototype cleanup [--vault C:\vaultsyncd-test]
+//! cfapi-prototype read    --name <entry> [--vault <path>] [--offset N --length M]
 //!                         [--source available|unavailable] [--latency-ms N]
 //!                         [--timeout-ms N] [--chunk-delay-ms N]
 //!                         [--expect success|failure]
-//! cfapi-prototype cancel  --name <entry> [--root <path>] [--cancel-after-ms N]
+//! cfapi-prototype cancel  --name <entry> [--vault <path>] [--cancel-after-ms N]
 //!                         [--chunk-delay-ms N]
-//! cfapi-prototype hydrate --name <entry> [--root <path>] [--offset N --length M]
+//! cfapi-prototype hydrate --name <entry> [--vault <path>] [--offset N --length M]
 //!                         [--cancel-after-ms N] [--chunk-delay-ms N]
 //!                         [--require-cancel-callback]
-//! cfapi-prototype protect --name <entry> [--root <path>]
+//! cfapi-prototype protect --name <entry> [--vault <path>]
 //!                                   # 只判定：dirty/busy/unknown 都不释放，不改状态
-//! cfapi-prototype release --name <entry> [--root <path>] [--expect released|refused]
+//! cfapi-prototype release --name <entry> [--vault <path>] [--expect released|refused]
 //!                                   # 判定为 clean 才脱水；其余拒绝并保留本地内容
 //! cfapi-prototype expect  [--name <entry> --offset N --length M]
 //!                                   # 打印固定内容版本的条目/长度/整份 SHA-256；
 //!                                   # 给 --name 与范围时打印该区间的 SHA-256
 //! ```
 //!
-//! 所有子命令只作用于 `--root` 指定的专用 NTFS 目录（默认 `C:\vaultsyncd-test`）。`create`
+//! 所有子命令只作用于 `--vault` 指定的专用 NTFS 目录（默认 `C:\vaultsyncd-test`）。`create`
 //! 注册同步根并创建固定占位集合（目录 + 12,345 B + 1 MiB 两个文件），`inspect` 只读核验
 //! 占位状态、逻辑大小、本地数据量与 `FileIdentity`，`cleanup` 只删除本工具创建的占位符、
 //! 保留用户内容并注销同步根；`read`/`cancel` 在本进程内提供内容供给回调并做读取验证；
@@ -45,7 +45,7 @@ use std::process::ExitCode;
 const EXIT_NOT_REGISTERED: u8 = 3;
 
 /// 默认同步根路径：客体本地 NTFS 目录，不用共享文件夹（实施手册 §2.6）。
-const DEFAULT_ROOT: &str = r"C:\vaultsyncd-test";
+const DEFAULT_VAULT: &str = r"C:\vaultsyncd-test";
 
 /// 子命令。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,7 +96,7 @@ impl Command {
 #[derive(Clone, Debug)]
 struct Cli {
     command: Command,
-    root: PathBuf,
+    vault: PathBuf,
     name: Option<String>,
     offset: Option<u64>,
     length: Option<u64>,
@@ -134,7 +134,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     };
     let mut cli = Cli {
         command,
-        root: PathBuf::from(DEFAULT_ROOT),
+        vault: PathBuf::from(DEFAULT_VAULT),
         name: None,
         offset: None,
         length: None,
@@ -150,11 +150,11 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     };
     while let Some(argument) = iter.next() {
         match argument.as_str() {
-            "--root" => {
+            "--vault" => {
                 let value = iter
                     .next()
-                    .ok_or_else(|| "--root 需要一个路径参数".to_string())?;
-                cli.root = PathBuf::from(value);
+                    .ok_or_else(|| "--vault 需要一个路径参数".to_string())?;
+                cli.vault = PathBuf::from(value);
             }
             "--name" => {
                 let value = iter
@@ -214,7 +214,11 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    println!("command={} root={}", cli.command.name(), cli.root.display());
+    println!(
+        "command={} vault={}",
+        cli.command.name(),
+        cli.vault.display()
+    );
 
     match cli.command {
         Command::Expect => expect(&cli),
@@ -298,8 +302,8 @@ fn run_platform(cli: Cli) -> ExitCode {
 fn run_platform(cli: Cli) -> ExitCode {
     // 非 Windows 构建只用于确认宿主侧可编译；真正的验收必须到客体执行。
     eprintln!(
-        "cfapi-prototype: 目标平台不是 Windows（root={}）；请用 `nix develop .#windows` 交叉构建后在客体运行，见 docs/operations/windows-lab.md §16",
-        cli.root.display()
+        "cfapi-prototype: 目标平台不是 Windows（vault={}）；请用 `nix develop .#windows` 交叉构建后在客体运行，见 docs/operations/windows-lab.md §16",
+        cli.vault.display()
     );
     ExitCode::FAILURE
 }
@@ -322,13 +326,13 @@ fn run_windows(cli: Cli) -> Result<ExitCode, vaultsyncd_platform_windows::cfapi:
         )
     })?;
     match cli.command {
-        Command::Create => create(&cli.root).map(|()| ExitCode::SUCCESS),
-        Command::Cleanup => cleanup(&cli.root).map(|()| ExitCode::SUCCESS),
+        Command::Create => create(&cli.vault).map(|()| ExitCode::SUCCESS),
+        Command::Cleanup => cleanup(&cli.vault).map(|()| ExitCode::SUCCESS),
         Command::Inspect => {
-            inspect_with(&cli.root, cli.allow_hydrated).map(|inspection| match inspection {
+            inspect_with(&cli.vault, cli.allow_hydrated).map(|inspection| match inspection {
                 Inspection::Registered => ExitCode::SUCCESS,
                 Inspection::NotRegistered(hr) => {
-                    println!("inspect: sync root 未注册（hresult={hr}），符合 cleanup 之后的预期");
+                    println!("inspect: sync vault 未注册（hresult={hr}），符合 cleanup 之后的预期");
                     ExitCode::from(EXIT_NOT_REGISTERED)
                 }
             })
@@ -357,13 +361,13 @@ fn run_windows(cli: Cli) -> Result<ExitCode, vaultsyncd_platform_windows::cfapi:
                     ));
                 }
             };
-            run_read(&cli.root, &name, mode, config, expectation).map(|()| ExitCode::SUCCESS)
+            run_read(&cli.vault, &name, mode, config, expectation).map(|()| ExitCode::SUCCESS)
         }
         Command::Cancel => {
             let name = cli.name.as_deref().unwrap_or_default().to_string();
             let cancel_after_ms = cli.cancel_after_ms.unwrap_or(150);
             run_cancel(
-                &cli.root,
+                &cli.vault,
                 &name,
                 config,
                 cancel_after_ms,
@@ -385,7 +389,7 @@ fn run_windows(cli: Cli) -> Result<ExitCode, vaultsyncd_platform_windows::cfapi:
                 }
             };
             run_hydrate(
-                &cli.root,
+                &cli.vault,
                 &name,
                 mode,
                 config,
@@ -396,7 +400,7 @@ fn run_windows(cli: Cli) -> Result<ExitCode, vaultsyncd_platform_windows::cfapi:
         }
         Command::Protect => {
             let name = cli.name.as_deref().unwrap_or_default().to_string();
-            run_protect(&cli.root, &name).map(|report| {
+            run_protect(&cli.vault, &name).map(|report| {
                 println!(
                     "protect: name={} verdict={} reason={}",
                     report.name,
@@ -408,7 +412,7 @@ fn run_windows(cli: Cli) -> Result<ExitCode, vaultsyncd_platform_windows::cfapi:
         }
         Command::Release => {
             let name = cli.name.as_deref().unwrap_or_default().to_string();
-            run_release(&cli.root, &name).and_then(|report| {
+            run_release(&cli.vault, &name).and_then(|report| {
                 println!(
                     "release: name={} verdict={} reason={} outcome={} on_disk_after={}",
                     report.guard.name,

@@ -16,7 +16,7 @@
 // 界面不会拿到“看起来可用”的默认值。
 
 /** agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。 */
-export const PROTOCOL_MAJOR = 1;
+export const PROTOCOL_MAJOR = 2;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
 export const PROTOCOL_MINOR = 6;
@@ -76,8 +76,8 @@ export interface BindingInfo {
   mode: string;
   /** 已暂停。 */
   paused: boolean;
-  /** Root 身份。 */
-  root_id: string;
+  /** Vault 身份。 */
+  vault_id: string;
 }
 
 export function decodeBindingInfo(value: unknown): BindingInfo {
@@ -89,7 +89,7 @@ export function decodeBindingInfo(value: unknown): BindingInfo {
     local_path: expect_string(object.local_path, "BindingInfo.local_path"),
     mode: expect_string(object.mode, "BindingInfo.mode"),
     paused: expect_boolean(object.paused, "BindingInfo.paused"),
-    root_id: expect_string(object.root_id, "BindingInfo.root_id"),
+    vault_id: expect_string(object.vault_id, "BindingInfo.vault_id"),
   };
 }
 
@@ -174,9 +174,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_roots" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -215,8 +215,6 @@ export interface CommandParameters {
   operation_id?: string;
   /** 瞬时登录密码；不能日志输出整个请求。 */
   password?: string;
-  /** 授权 Root 身份。 */
-  root_id?: string;
   /** 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。 */
   rules?: string;
   /** 不可复用的规则版本；同版本同文本幂等。 */
@@ -229,13 +227,15 @@ export interface CommandParameters {
   server_url?: string;
   /** 登录账号。 */
   username?: string;
+  /** 授权 Vault 身份。 */
+  vault_id?: string;
   /** 固定历史版本。 */
   version_id?: string;
 }
 
 export function decodeCommandParameters(value: unknown): CommandParameters {
   const object = expect_object(value, "CommandParameters");
-  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "notification_generation", "notification_key", "operation_id", "password", "root_id", "rules", "rules_version", "search", "server_id", "server_url", "username", "version_id"].includes(key))) {
+  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "notification_generation", "notification_key", "operation_id", "password", "rules", "rules_version", "search", "server_id", "server_url", "username", "vault_id", "version_id"].includes(key))) {
     throw new Error("CommandParameters contains unknown fields");
   }
   return {
@@ -253,13 +253,13 @@ export function decodeCommandParameters(value: unknown): CommandParameters {
     notification_key: object.notification_key === undefined ? undefined : expect_string(object.notification_key, "CommandParameters.notification_key"),
     operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "CommandParameters.operation_id"),
     password: object.password === undefined ? undefined : expect_string(object.password, "CommandParameters.password"),
-    root_id: object.root_id === undefined ? undefined : expect_string(object.root_id, "CommandParameters.root_id"),
     rules: object.rules === undefined ? undefined : expect_string(object.rules, "CommandParameters.rules"),
     rules_version: object.rules_version === undefined ? undefined : expect_string(object.rules_version, "CommandParameters.rules_version"),
     search: object.search === undefined ? undefined : expect_string(object.search, "CommandParameters.search"),
     server_id: object.server_id === undefined ? undefined : expect_string(object.server_id, "CommandParameters.server_id"),
     server_url: object.server_url === undefined ? undefined : expect_string(object.server_url, "CommandParameters.server_url"),
     username: object.username === undefined ? undefined : expect_string(object.username, "CommandParameters.username"),
+    vault_id: object.vault_id === undefined ? undefined : expect_string(object.vault_id, "CommandParameters.vault_id"),
     version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "CommandParameters.version_id"),
   };
 }
@@ -286,7 +286,7 @@ export function decodeConnectionInfo(value: unknown): ConnectionInfo {
   };
 }
 
-/** 错误应答主体：协议级失败的原因。带 root_id/details 的同步问题由问题页命令返回，不在本契约里。 */
+/** 错误应答主体：协议级失败的原因。带 vault_id/details 的同步问题由问题页命令返回，不在本契约里。 */
 export interface ErrorBody {
   /** 错误码。 */
   code: LocalIpcErrorCode;
@@ -307,7 +307,7 @@ export function decodeErrorBody(value: unknown): ErrorBody {
 
 /** agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。 */
 export interface FileStatus {
-  /** online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。 */
+  /** online/offline/vault_unavailable；离线来自持久调度事实，不臆造在线。 */
   availability: string;
   /** 无法取得当前保护句柄；不保证此后一直空闲。 */
   busy: boolean;
@@ -419,7 +419,7 @@ export interface ManagementResult {
   files?: Array<FileStatus>;
   /** 解绑后不保证离线可读的条目。 */
   incomplete?: Array<string>;
-  /** 远端授权 Root/历史/回收站列表。 */
+  /** 远端授权 Vault/历史/回收站列表。 */
   items?: Array<RemoteItem>;
   /** 模式任务仍需真实核对/补齐的条目数。 */
   mode_remaining?: string;
@@ -468,9 +468,9 @@ export function decodeManagementResult(value: unknown): ManagementResult {
   };
 }
 
-/** 核心Root原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。 */
+/** 核心Vault原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。 */
 export interface Notice {
-  /** Root原因，冲突副本为CONFLICT_COPY */
+  /** Vault原因，冲突副本为CONFLICT_COPY */
   cause: string;
   /** 本代际已领取系统投递 */
   claimed: boolean;
@@ -482,10 +482,10 @@ export interface Notice {
   generation: string;
   /** 稳定去重键 */
   key: string;
-  /** 关联Root，非绑定身份 */
-  root_id?: string;
   /** active或resolved */
   state: string;
+  /** 关联Vault，非绑定身份 */
+  vault_id?: string;
 }
 
 export function decodeNotice(value: unknown): Notice {
@@ -497,8 +497,8 @@ export function decodeNotice(value: unknown): Notice {
     critical: expect_boolean(object.critical, "Notice.critical"),
     generation: expect_string(object.generation, "Notice.generation"),
     key: expect_string(object.key, "Notice.key"),
-    root_id: object.root_id === undefined ? undefined : expect_string(object.root_id, "Notice.root_id"),
     state: expect_string(object.state, "Notice.state"),
+    vault_id: object.vault_id === undefined ? undefined : expect_string(object.vault_id, "Notice.vault_id"),
   };
 }
 
@@ -539,7 +539,7 @@ export function decodeProblem(value: unknown): Problem {
   };
 }
 
-/** 服务器返回的授权 Root、历史版本或回收站项目。 */
+/** 服务器返回的授权 Vault、历史版本或回收站项目。 */
 export interface RemoteItem {
   /** 冲突副本的原条目身份 */
   conflict_source?: string;

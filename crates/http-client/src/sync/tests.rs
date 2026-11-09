@@ -5,7 +5,7 @@ use crate::{
     transport::{TransportRequest, TransportResponse},
 };
 use std::sync::Arc;
-const ROOT: &str = "11111111111111111111111111111111";
+const VAULT: &str = "11111111111111111111111111111111";
 const SNAP: &str = "22222222222222222222222222222222";
 const OP: &str = "33333333333333333333333333333333";
 
@@ -30,7 +30,7 @@ async fn fixed_snapshot_server_time_and_authenticated_paging() {
                     201,
                     vec![("date".into(), "Thu, 01 Jan 1970 00:00:17 GMT".into())],
                     serde_json::to_vec(&Snapshot {
-                        root_id: ROOT.into(),
+                        vault_id: VAULT.into(),
                         snapshot_id: SNAP.into(),
                         server_epoch: "1".into(),
                         high_water_seq: "3".into(),
@@ -50,14 +50,14 @@ async fn fixed_snapshot_server_time_and_authenticated_paging() {
     client
         .auth()
         .install(Credentials::from_issued(&issued("access", "refresh")).unwrap());
-    let (snap, time) = snapshot(&client, ROOT).await.unwrap();
+    let (snap, time) = snapshot(&client, VAULT).await.unwrap();
     assert_eq!(time, 17);
-    let page = snapshot_page(&client, ROOT, &snap.snapshot_id, Some("7"))
+    let page = snapshot_page(&client, VAULT, &snap.snapshot_id, Some("7"))
         .await
         .unwrap();
     assert_eq!(page.high_water_seq, "3");
     assert!(
-        snapshot_page(&client, ROOT, SNAP, Some("07"))
+        snapshot_page(&client, VAULT, SNAP, Some("07"))
             .await
             .is_err()
     );
@@ -73,9 +73,9 @@ async fn malformed_pending_and_foreign_results_never_become_success() {
                 &OperationResult {
                     op_id: OP.into(),
                     state: OperationState::Pending,
-                    entry_id: Some(ROOT.into()),
+                    entry_id: Some(VAULT.into()),
                     revision: None,
-                    root_seq: None,
+                    vault_seq: None,
                     version_id: None,
                     conflict: None,
                     error_code: None,
@@ -94,6 +94,6 @@ async fn malformed_pending_and_foreign_results_never_become_success() {
     client
         .auth()
         .install(Credentials::from_issued(&issued("access", "refresh")).unwrap());
-    assert!(operation(&client, ROOT, OP).await.is_err());
-    assert!(operation(&client, ROOT, SNAP).await.is_err());
+    assert!(operation(&client, VAULT, OP).await.is_err());
+    assert!(operation(&client, VAULT, SNAP).await.is_err());
 }

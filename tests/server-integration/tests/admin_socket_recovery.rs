@@ -127,7 +127,7 @@ async fn killed_server_restart_reclaims_stale_admin_socket_and_answers() {
     let status = admin_status(&lab.state()).await;
     assert_eq!(status["status"], 200, "{status}");
     assert_eq!(status["result"]["phase"], "ready", "{status}");
-    assert_eq!(status["result"]["root_count"], "0", "{status}");
+    assert_eq!(status["result"]["vault_count"], "0", "{status}");
     running.stop().await;
 
     // 优雅停止仍只清理自己；再次启动并响应，确认不是一次性的偶然成功。

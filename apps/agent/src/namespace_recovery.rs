@@ -61,7 +61,7 @@ pub(crate) async fn recover(
                 return Err(error("invalid directory import intent"));
             }
             let meta = local
-                .root
+                .vault
                 .ensure_directory(&intent.target_path)
                 .map_err(error)?;
             Some(LocalEntry {
@@ -98,7 +98,7 @@ pub(crate) async fn recover(
                 .file_identity
                 .clone()
                 .ok_or_else(|| error("move recovery physical identity missing"))?;
-            let destination = local.root.inspect(&intent.target_path);
+            let destination = local.vault.inspect(&intent.target_path);
             if !destination
                 .as_ref()
                 .is_ok_and(|meta| physical(meta) == expected)
@@ -109,13 +109,13 @@ pub(crate) async fn recover(
                 {
                     return Err(error("move recovery destination occupied or unknown"));
                 }
-                let source = local.root.inspect(from).map_err(error)?;
+                let source = local.vault.inspect(from).map_err(error)?;
                 if physical(&source) != expected {
                     return Err(error("move recovery source changed"));
                 }
                 if source.directory {
                     local
-                        .root
+                        .vault
                         .move_directory(from, &intent.target_path, source.identity)
                         .map_err(error)?;
                 } else if let Some(cloud) =

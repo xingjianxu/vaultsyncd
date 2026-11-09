@@ -8,7 +8,7 @@
 //!    versions/changes/operations）尚未完成。
 //! 3. `finalized`：元数据事务已提交（终态）。
 //!
-//! 另有一个非成功的出口 `needs_recovery`：现场无法解释时由恢复流程置入，暂停该 Root 的破坏性写入，
+//! 另有一个非成功的出口 `needs_recovery`：现场无法解释时由恢复流程置入，暂停该 Vault 的破坏性写入，
 //! 不自动推进（[`crate::recovery`]）。
 //!
 //! 本模块固定的规则：
@@ -23,14 +23,14 @@
 //!   判断该重做、该收尾、该协调还是该停下（design §11.3）。
 //!
 //! 本卡只做 put 的单文件 happy path 与可恢复状态：基线 revision/epoch/父目录与名称的完整 CAS 复核
-//! 属 S035，冲突条目属 S036，崩溃注入与全 Root 恢复入口属 S037。create/move/delete 复用同一意图
+//! 属 S035，冲突条目属 S036，崩溃注入与全 Vault 恢复入口属 S037。create/move/delete 复用同一意图
 //! 机制（S038/S039）。
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use vaultsyncd_domain::error::ErrorCode;
-use vaultsyncd_domain::ids::{EntryId, IntentId, OpId, RootId};
+use vaultsyncd_domain::ids::{EntryId, IntentId, OpId, VaultId};
 use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 
 use crate::commit::put::CommitGateError;
@@ -306,9 +306,9 @@ impl TargetAfter {
 pub struct NewPutIntent {
     /// 意图身份（由调用方生成，重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
-    /// 目标在 Root 内的相对路径。
+    /// 所属 Vault。
+    pub vault: VaultId,
+    /// 目标在 Vault 内的相对路径。
     pub target_path: String,
     /// 目标所在子卷内的暂存文件名（单个文件名，发布端口按它定位暂存文件）。
     pub staging_path: String,
@@ -324,7 +324,7 @@ impl NewPutIntent {
     pub fn prepared(&self) -> PutIntent {
         PutIntent {
             intent_id: self.intent_id,
-            root: self.root,
+            vault: self.vault,
             target_path: self.target_path.clone(),
             staging_path: self.staging_path.clone(),
             before: self.before.clone(),
@@ -339,9 +339,9 @@ impl NewPutIntent {
 pub struct PutIntent {
     /// 意图身份。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
-    /// 目标在 Root 内的相对路径。
+    /// 所属 Vault。
+    pub vault: VaultId,
+    /// 目标在 Vault 内的相对路径。
     pub target_path: String,
     /// 暂存文件名。
     pub staging_path: String,
@@ -405,11 +405,11 @@ pub enum PutFailureReason {
         /// 发布后实测现场。
         observed: PublishedTarget,
     },
-    /// Root epoch 与请求预期不符：服务器事实已重建，旧提交作废（`EPOCH_CHANGED`）。
+    /// Vault epoch 与请求预期不符：服务器事实已重建，旧提交作废（`EPOCH_CHANGED`）。
     EpochChanged {
         /// 请求携带的 epoch。
         expected: ServerEpoch,
-        /// Root 当前的 epoch。
+        /// Vault 当前的 epoch。
         actual: ServerEpoch,
     },
     /// 条目 revision 已不是请求基线：过期基线必须重新规划（`BASE_MISMATCH`，I04）。
@@ -429,7 +429,7 @@ pub enum PutFailureReason {
         /// 实测现场。
         observed: TargetObservation,
     },
-    /// 条目不能承载内容（目录等）：标记该条目，不拖垮整个 Root（`UNSUPPORTED_ENTRY`）。
+    /// 条目不能承载内容（目录等）：标记该条目，不拖垮整个 Vault（`UNSUPPORTED_ENTRY`）。
     UnsupportedEntry {
         /// 原因文本。
         detail: String,
@@ -446,7 +446,7 @@ pub enum PutFailureReason {
         /// 对象登记的字节数。
         actual: u64,
     },
-    /// 同一 Root 已有提交在进行：不并发修改同一棵树。
+    /// 同一 Vault 已有提交在进行：不并发修改同一棵树。
     Gate(CommitGateError),
     /// 存储层失败（基线读取、对象查询或元数据事务）。
     Store(PutStoreError),
@@ -568,7 +568,7 @@ impl fmt::Display for PutFailureReason {
             ),
             PutFailureReason::EpochChanged { expected, actual } => write!(
                 f,
-                "Root epoch 已是 {actual}，请求预期是 {expected}：服务器事实已重建，旧提交作废"
+                "Vault epoch 已是 {actual}，请求预期是 {expected}：服务器事实已重建，旧提交作废"
             ),
             PutFailureReason::BaseMismatch { detail } => {
                 write!(f, "基线已不是请求的 revision：{detail}")
@@ -1117,7 +1117,7 @@ mod tests {
     fn plan(before: TargetBefore, after_value: TargetAfter) -> NewPutIntent {
         NewPutIntent {
             intent_id: intent_id(0x41),
-            root: crate::test_support::root_id(0x21),
+            vault: crate::test_support::vault_id(0x21),
             target_path: "docs/note.txt".to_owned(),
             staging_path: "put-0041".to_owned(),
             before,

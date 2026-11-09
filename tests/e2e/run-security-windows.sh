@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # S105: sequential, real Windows entry points. Host helpers and frontend must be built first.
 set -euo pipefail
-root=$(git rev-parse --show-toplevel)
-cd "$root"
+vault=$(git rev-parse --show-toplevel)
+cd "$vault"
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
 mkdir -p artifacts/S105
 if [ "$#" = 0 ]; then set -- ipc cli rules files history hydration release capacity; fi

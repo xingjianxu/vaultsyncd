@@ -10,7 +10,7 @@
 //!   `received_changes`、`remote_entries`、`pending_ops`，**最后**才推进接收游标（design §9.3、
 //!   I09：不能先推进游标再写任务）。任何一步失败都会让调用方回滚整个事务，游标因此不会领先于
 //!   已持久化的批次与任务。
-//! - **一个 RootSeq 就是一个不可拆分批次**：`(binding_id, seq)` 是主键，批次不以条目分页；
+//! - **一个 VaultSeq 就是一个不可拆分批次**：`(binding_id, seq)` 是主键，批次不以条目分页；
 //!   序号从 1 起，游标 0 表示“还没有批次”。
 //! - **重复批次幂等**：同一 `(binding, seq)` 与同一 `tx_id`/事件列表重复到达时只返回已存记录，
 //!   不重复入队（design §9.3：重复、丢失、乱序都由拉取与去重修复）；同一序号却是不同批次则
@@ -22,7 +22,7 @@
 use sqlx::{Sqlite, SqliteConnection, Transaction};
 use vaultsyncd_domain::error::ErrorCode;
 use vaultsyncd_domain::ids::{BindingId, ID_LEN, OpId, TxId};
-use vaultsyncd_domain::version::RootSeq;
+use vaultsyncd_domain::version::VaultSeq;
 
 use crate::entries::{self, EntryError, RemoteEntry};
 use crate::queue::{self, NewPendingOp, QueueError};
@@ -62,8 +62,8 @@ impl BatchState {
 /// 一个已持久化的事件批次（`received_changes` 一行）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReceivedBatch {
-    /// 批次序号（RootSeq，从 1 起）。
-    pub seq: RootSeq,
+    /// 批次序号（VaultSeq，从 1 起）。
+    pub seq: VaultSeq,
     /// 服务端事务批次身份。
     pub tx: TxId,
     /// 收到的原始事件列表（JSON 数组文本）。
@@ -76,14 +76,14 @@ pub struct ReceivedBatch {
 
 /// 某个绑定的接收与应用游标。
 ///
-/// `received` 是已持久收到批次的最大 RootSeq，`applied` 是这些批次里连续应用完成的最大 RootSeq；
+/// `received` 是已持久收到批次的最大 VaultSeq，`applied` 是这些批次里连续应用完成的最大 VaultSeq；
 /// 0 表示“还没有”。两者不同步是正常状态：远端事件已收到但文件尚未落盘（design §9.3）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cursors {
     /// 接收游标。
-    pub received: RootSeq,
+    pub received: VaultSeq,
     /// 应用游标。
-    pub applied: RootSeq,
+    pub applied: VaultSeq,
 }
 
 /// 待收下的一批事件及其工作。
@@ -96,7 +96,7 @@ pub struct IncomingBatch {
     /// 所属绑定。
     pub binding: BindingId,
     /// 批次序号；同一批次只收一次。
-    pub seq: RootSeq,
+    pub seq: VaultSeq,
     /// 服务端事务批次身份。
     pub tx: TxId,
     /// 原始事件列表（JSON 数组文本，wire 变更列表原样保存）。
@@ -127,14 +127,14 @@ pub enum EventError {
     /// 同一 `(binding, seq)` 已有不同 `tx_id` 或不同事件列表：这是状态不一致，不是重复。
     ConflictingBatch {
         /// 冲突的批次序号。
-        seq: RootSeq,
+        seq: VaultSeq,
     },
     /// 新批次的序号不大于接收游标：这个位置已经收过了，不能用另一批覆盖。
     StaleBatch {
         /// 被拒绝的批次序号。
-        seq: RootSeq,
+        seq: VaultSeq,
         /// 当前接收游标。
-        received: RootSeq,
+        received: VaultSeq,
     },
     /// 任务的绑定与批次绑定不一致：一个批次只落一个绑定的工作。
     TaskBindingMismatch {
@@ -225,7 +225,7 @@ pub async fn receive_batch(
     tx: &mut Transaction<'_, Sqlite>,
     batch: &IncomingBatch,
 ) -> Result<ReceivedBatch, EventError> {
-    if batch.seq == RootSeq::ZERO {
+    if batch.seq == VaultSeq::ZERO {
         return Err(EventError::InvalidSeq);
     }
     validate_events_json(&batch.events_json)?;
@@ -313,7 +313,7 @@ pub async fn cursors(
 pub async fn received_batch(
     conn: &mut SqliteConnection,
     binding: BindingId,
-    seq: RootSeq,
+    seq: VaultSeq,
 ) -> Result<Option<ReceivedBatch>, EventError> {
     let row = sqlx::query_as::<_, BatchRow>(&format!(
         "SELECT {BATCH_COLUMNS} FROM received_changes WHERE binding_id = ?1 AND seq = ?2"
@@ -352,7 +352,7 @@ pub async fn unapplied_batches(
 pub async fn mark_batch_applied(
     tx: &mut Transaction<'_, Sqlite>,
     binding: BindingId,
-    seq: RootSeq,
+    seq: VaultSeq,
 ) -> Result<bool, EventError> {
     let updated = sqlx::query(
         "UPDATE received_changes SET state = ?1, last_error_code = NULL \
@@ -378,7 +378,7 @@ pub async fn mark_batch_applied(
 pub async fn mark_batch_blocked(
     tx: &mut Transaction<'_, Sqlite>,
     binding: BindingId,
-    seq: RootSeq,
+    seq: VaultSeq,
     code: ErrorCode,
 ) -> Result<bool, EventError> {
     let updated = sqlx::query(
@@ -419,7 +419,7 @@ async fn advance_applied_prefix(
                 current.received
             } else {
                 // 已应用前缀止于该批次之前；批次序号从 1 起，没有下溢。
-                RootSeq::new(blocking.get() - 1)
+                VaultSeq::new(blocking.get() - 1)
                     .map_err(|_| EventError::MalformedRow { column: "seq" })?
             }
         }
@@ -453,8 +453,8 @@ fn validate_events_json(text: &str) -> Result<(), EventError> {
     Ok(())
 }
 
-fn seq_from_db(value: i64, column: &'static str) -> Result<RootSeq, EventError> {
-    RootSeq::from_db_integer(value).map_err(|_| EventError::MalformedRow { column })
+fn seq_from_db(value: i64, column: &'static str) -> Result<VaultSeq, EventError> {
+    VaultSeq::from_db_integer(value).map_err(|_| EventError::MalformedRow { column })
 }
 
 /// 数据库行到 [`ReceivedBatch`] 的中间形态。
@@ -507,8 +507,8 @@ mod tests {
     const EVENTS_ONE: &str = r#"[{"entry":"one"}]"#;
     const EVENTS_TWO: &str = r#"[{"entry":"two"}]"#;
 
-    fn seq(value: u64) -> RootSeq {
-        RootSeq::new(value).expect("批次序号")
+    fn seq(value: u64) -> VaultSeq {
+        VaultSeq::new(value).expect("批次序号")
     }
 
     fn revision(value: u64) -> Revision {
@@ -578,7 +578,7 @@ mod tests {
             cursors(&mut tx, binding).await.expect("读游标"),
             Cursors {
                 received: seq(5),
-                applied: RootSeq::ZERO,
+                applied: VaultSeq::ZERO,
             }
         );
         tx.commit().await.expect("提交");
@@ -635,7 +635,7 @@ mod tests {
         );
         assert_eq!(
             cursors(&mut tx, binding).await.expect("读游标").received,
-            RootSeq::ZERO,
+            VaultSeq::ZERO,
             "任务失败时接收游标不得前进"
         );
         tx.rollback().await.expect("回滚");
@@ -663,8 +663,8 @@ mod tests {
         assert_eq!(
             cursors(&mut conn, binding).await.expect("读游标"),
             Cursors {
-                received: RootSeq::ZERO,
-                applied: RootSeq::ZERO,
+                received: VaultSeq::ZERO,
+                applied: VaultSeq::ZERO,
             }
         );
         drop(conn);
@@ -732,7 +732,7 @@ mod tests {
         let mut tx = database.begin_write().await.expect("开始写事务");
 
         let mut zero_seq = batch(0x61, binding, 1);
-        zero_seq.seq = RootSeq::ZERO;
+        zero_seq.seq = VaultSeq::ZERO;
         assert!(matches!(
             receive_batch(&mut tx, &zero_seq)
                 .await
@@ -780,8 +780,8 @@ mod tests {
         assert_eq!(
             cursors(&mut conn, binding).await.expect("读游标"),
             Cursors {
-                received: RootSeq::ZERO,
-                applied: RootSeq::ZERO,
+                received: VaultSeq::ZERO,
+                applied: VaultSeq::ZERO,
             }
         );
         drop(conn);

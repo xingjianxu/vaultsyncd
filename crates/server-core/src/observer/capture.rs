@@ -13,10 +13,10 @@
 use std::fmt;
 use std::path::Path;
 
-use vaultsyncd_domain::ids::{EntryId, RootId};
+use vaultsyncd_domain::ids::{EntryId, VaultId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 
-use crate::commit::put::RootCommitGate;
+use crate::commit::put::VaultCommitGate;
 use crate::objects::{
     CaptureFailure, CaptureFailureReason, CapturedObject, ExpectedContent, ObjectLayout,
     capture_observed_object,
@@ -86,9 +86,9 @@ impl fmt::Display for RequeueReason {
 /// 持有它**不等于**已提交：只有 [`adopt_external`] 返回 [`AdoptOutcome::Adopted`] 才算有了版本。
 #[derive(Clone, Debug)]
 pub struct ExternalProposal {
-    /// 所属 Root。
-    pub root: RootId,
-    /// 文件在 Root 内的相对路径。
+    /// 所属 Vault。
+    pub vault: VaultId,
+    /// 文件在 Vault 内的相对路径。
     pub path: String,
     /// 候选内容的长度与摘要。
     pub content: ExpectedContent,
@@ -101,7 +101,7 @@ pub struct ExternalProposal {
 /// 采集失败（不含“需要重排队”这类正常结果）。
 #[derive(Clone, Debug)]
 pub enum ExternalCaptureError {
-    /// 观察工作目录失败（含 Root 不可用）：不得解释成删除。
+    /// 观察工作目录失败（含 Vault 不可用）：不得解释成删除。
     Work(WorkTreeError),
     /// 候选建立或校验失败（源不可读、`ENOSPC`、校验失败等）。
     Capture(CaptureFailure),
@@ -117,12 +117,12 @@ impl ExternalCaptureError {
         }
     }
 
-    /// 是否 Root 不可用（应停止整个 Root 的本轮工作）。
+    /// 是否 Vault 不可用（应停止整个 Vault 的本轮工作）。
     #[must_use]
-    pub fn is_root_unavailable(&self) -> bool {
+    pub fn is_vault_unavailable(&self) -> bool {
         matches!(
             self,
-            ExternalCaptureError::Work(WorkTreeError::RootUnavailable { .. })
+            ExternalCaptureError::Work(WorkTreeError::VaultUnavailable { .. })
         )
     }
 }
@@ -163,7 +163,7 @@ pub fn capture_external(
     work: &mut dyn WorkTreePort,
     blobs: &mut dyn ObjectBlobPort,
     layout: &ObjectLayout,
-    root: RootId,
+    vault: VaultId,
     path: &str,
     stable: &FileStamp,
     staging_name: &str,
@@ -204,7 +204,7 @@ pub fn capture_external(
     }
 
     Ok(CaptureOutcome::Proposal(Box::new(ExternalProposal {
-        root,
+        vault,
         path: path.to_owned(),
         content: ExpectedContent::new(object.digest, object.bytes),
         object,
@@ -247,8 +247,8 @@ pub enum AdoptOutcome {
     Vanished,
     /// 路径在采纳前变成了非普通文件。
     NotRegular(WorkEntryKind),
-    /// 同一 Root 正在提交别的内容：下一轮再试，不排队、不阻塞。
-    RootBusy,
+    /// 同一 Vault 正在提交别的内容：下一轮再试，不排队、不阻塞。
+    VaultBusy,
     /// 被阻止，需要人工协调。
     Blocked(BlockReason),
 }
@@ -256,7 +256,7 @@ pub enum AdoptOutcome {
 /// 采纳失败。
 #[derive(Clone, Debug)]
 pub enum AdoptFailure {
-    /// 观察工作目录失败（含 Root 不可用）。
+    /// 观察工作目录失败（含 Vault 不可用）。
     Work(WorkTreeError),
     /// 存储层失败：没有提交。
     Store(ExternalStoreError),
@@ -291,12 +291,12 @@ impl fmt::Display for AdoptFailure {
 
 impl std::error::Error for AdoptFailure {}
 
-/// 通过与 put 相同的 Root 内串行化与元数据事务采纳一份提案。
+/// 通过与 put 相同的 Vault 内串行化与元数据事务采纳一份提案。
 ///
-/// 顺序：取 Root 票据（忙则 [`AdoptOutcome::RootBusy`]）→ 再次观察现场并要求指纹仍等于提案指纹 →
+/// 顺序：取 Vault 票据（忙则 [`AdoptOutcome::VaultBusy`]）→ 再次观察现场并要求指纹仍等于提案指纹 →
 /// 按路径查已知条目（内容相同则不产生版本）→ 一个事务写对象登记/版本/revision/事件批次 →
 /// 核对证据。**不写工作目录**：内容已经在那里，服务端不会（也不得）把它再发布一次。无论结果如何，
-/// 退出前都释放 Root 票据。
+/// 退出前都释放 Vault 票据。
 ///
 /// 事务提交之后现场仍可能又被改写；这没有被阻止，也不被宣称阻止：新内容会在下一轮按同样流程成为
 /// 下一个版本。
@@ -305,14 +305,14 @@ impl std::error::Error for AdoptFailure {}
 ///
 /// 见 [`AdoptFailure`]：观察失败、存储失败、存储证据与请求不符。失败时没有提交。
 pub async fn adopt_external<S: ExternalAdoptStore>(
-    gate: &mut RootCommitGate,
+    gate: &mut VaultCommitGate,
     store: &mut S,
     work: &mut dyn WorkTreePort,
     proposal: &ExternalProposal,
     at: UtcTimestamp,
 ) -> Result<AdoptOutcome, AdoptFailure> {
-    let Ok(ticket) = gate.acquire(proposal.root) else {
-        return Ok(AdoptOutcome::RootBusy);
+    let Ok(ticket) = gate.acquire(proposal.vault) else {
+        return Ok(AdoptOutcome::VaultBusy);
     };
     let result = adopt_locked(store, work, proposal, at).await;
     gate.release(ticket);
@@ -339,7 +339,7 @@ async fn adopt_locked<S: ExternalAdoptStore>(
     }
 
     let known = store
-        .lookup_path(proposal.root, &proposal.path)
+        .lookup_path(proposal.vault, &proposal.path)
         .await
         .map_err(AdoptFailure::Store)?;
     let kind = match known {
@@ -369,7 +369,7 @@ async fn adopt_locked<S: ExternalAdoptStore>(
     };
 
     let write = ExternalWrite {
-        root: proposal.root,
+        vault: proposal.vault,
         path: proposal.path.clone(),
         kind,
         content: proposal.content,

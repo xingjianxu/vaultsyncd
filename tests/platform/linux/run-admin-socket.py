@@ -73,16 +73,16 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    state, root = RUN / "state", RUN / "roots/work"
+    state, vault = RUN / "state", RUN / "vaults/work"
     state.mkdir(mode=0o700)
-    root.mkdir(parents=True)
-    sample = root / "sample.txt"
+    vault.mkdir(parents=True)
+    sample = vault / "sample.txt"
     sample.write_bytes(b"S075 first preserved bytes\n")
     first_hash = hashlib.sha256(sample.read_bytes()).hexdigest()
     password = secrets.token_urlsafe(32)
     checked([ADMIN, "init", "--state-dir", state], input=password + "\n")
     config = RUN / "server.toml"
-    config.write_text(f'[server]\nlisten = "127.0.0.1:0"\n[state]\ndir = "{state}"\n[roots]\nallowed_bases = ["{root.parent}"]\n[log]\nformat = "json"\nlevel = "info"\n')
+    config.write_text(f'[server]\nlisten = "127.0.0.1:0"\n[state]\ndir = "{state}"\n[vaults]\nallowed_bases = ["{vault.parent}"]\n[log]\nformat = "json"\nlevel = "info"\n')
     log = (RUN / "server.log").open("w")
     server = subprocess.Popen([str(SERVER), "--config", str(config)], stdout=log, stderr=log)
     sshd = None
@@ -98,7 +98,7 @@ def main():
         uds = state / "admin/socket"
         assert (state / "admin").stat().st_mode & 0o777 == 0o700
         assert uds.stat().st_mode & 0o777 == 0o600
-        print("PASS btrfs state/Root + socket 0700/0600")
+        print("PASS btrfs state/Vault + socket 0700/0600")
 
         # A separate SSH daemon: no changes to host sshd, ~/.ssh or system credentials.
         for name in ["host", "client"]:
@@ -110,7 +110,7 @@ def main():
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         sshconfig = RUN / "sshd_config"
-        sshconfig.write_text(f'Port {port}\nListenAddress 127.0.0.1\nHostKey {RUN}/host\nPidFile {RUN}/sshd.pid\nAuthorizedKeysFile {authorized}\nAllowUsers {getpass.getuser()}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPermitRootLogin no\nLogLevel ERROR\n')
+        sshconfig.write_text(f'Port {port}\nListenAddress 127.0.0.1\nHostKey {RUN}/host\nPidFile {RUN}/sshd.pid\nAuthorizedKeysFile {authorized}\nAllowUsers {getpass.getuser()}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPermitVaultLogin no\nLogLevel ERROR\n')
         sshlog = (RUN / "sshd.log").open("w")
         sshd = subprocess.Popen(["sudo", "-n", "/run/current-system/sw/bin/sshd", "-D", "-e", "-f", str(sshconfig)], stdout=sshlog, stderr=sshlog)
         wait_for(lambda: (RUN / "sshd.pid").exists(), "isolated sshd")
@@ -127,14 +127,14 @@ def main():
             return value
 
         assert cli("status")["result"]["phase"] == "ready"
-        registered = cli("roots", "register", root)["result"]
-        root_id = registered["root_id"]
+        registered = cli("vaults", "register", vault)["result"]
+        vault_id = registered["vault_id"]
         assert registered["health"] == "healthy"
         assert hashlib.sha256(sample.read_bytes()).hexdigest() == first_hash
-        assert cli("roots")["result"]["roots"][0]["root_id"] == root_id
-        assert cli("status")["result"]["root_count"] == "1"
-        assert cli("roots", "register", "/etc", ok=False)["error"]["code"] == "ACCESS_DENIED"
-        print("PASS SSH CLI status/Root registration/list + out-of-base rejection, original bytes preserved")
+        assert cli("vaults")["result"]["vaults"][0]["vault_id"] == vault_id
+        assert cli("status")["result"]["vault_count"] == "1"
+        assert cli("vaults", "register", "/etc", ok=False)["error"]["code"] == "ACCESS_DENIED"
+        print("PASS SSH CLI status/Vault registration/list + out-of-base rejection, original bytes preserved")
 
         def api(method, path, body=None, token=None):
             data = json.dumps(body).encode() if body is not None else None
@@ -150,7 +150,7 @@ def main():
 
         session = api("POST", "/v1/auth/login", {"login": "owner", "password": password, "device_label": "S075-isolated-acceptance"})
         token = session["access_token"]
-        prefix = f"/v1/roots/{root_id}"
+        prefix = f"/v1/vaults/{vault_id}"
 
         def snapshot():
             snap = api("POST", prefix + "/snapshots", {}, token)
@@ -163,10 +163,10 @@ def main():
 
         snap, entry = wait_for(imported, "real observer import")
         entry_id = entry["entry_id"]
-        history = cli("history", root_id, entry_id)["result"]["items"]
+        history = cli("history", vault_id, entry_id)["result"]["items"]
         assert history and history[0]["size"] == str(sample.stat().st_size)
         sample.write_bytes(b"S075 second version bytes\n")
-        wait_for(lambda: len(cli("history", root_id, entry_id)["result"]["items"]) >= 2, "second real committed version")
+        wait_for(lambda: len(cli("history", vault_id, entry_id)["result"]["items"]) >= 2, "second real committed version")
         snap, entries = snapshot()
         entry = next(e for e in entries if e["entry_id"] == entry_id)
         deleted = api("POST", prefix + "/operations", {
@@ -176,17 +176,17 @@ def main():
         }, token)
         assert deleted["state"] == "committed", deleted
         assert not sample.exists()
-        trash = cli("trash", root_id)["result"]["items"]
+        trash = cli("trash", vault_id)["result"]["items"]
         assert trash and trash[0]["entry_id"] == entry_id and trash[0]["expires_at"] > trash[0]["deleted_at"]
-        assert len(cli("history", root_id, entry_id)["result"]["items"]) >= 2
+        assert len(cli("history", vault_id, entry_id)["result"]["items"]) >= 2
         assert cli("trash", "00" * 16, ok=False)["error"]["code"] == "ACCESS_DENIED"
         print("PASS real observer committed history + real delete transaction/trash + deleted-entry history")
 
-        # Mount/path failure becomes an actual unavailable Root, not an empty success.
-        root.rename(root.with_name("offline"))
-        wait_for(lambda: any(p["kind"] == "root_health" for p in cli("problems")["result"]["items"]), "unavailable Root problem")
+        # Mount/path failure becomes an actual unavailable Vault, not an empty success.
+        vault.rename(vault.with_name("offline"))
+        wait_for(lambda: any(p["kind"] == "vault_health" for p in cli("problems")["result"]["items"]), "unavailable Vault problem")
         assert cli("problems", "1")["result"]["items"] == []
-        print("PASS real unavailable Root reported in problems; bounded live pages")
+        print("PASS real unavailable Vault reported in problems; bounded live pages")
 
         denied = call(["sudo", "-n", "-u", "nobody", ADMIN, "status", "--socket", uds, "--json"])
         assert denied.returncode != 0
@@ -210,9 +210,9 @@ def main():
                 stream.sendall(struct.pack("!I", size))
                 assert stream.recv(1) == b""
         assert raw(["v999", "status"])["status"] == 400
-        assert raw(["v1", "trash", root_id, "01"])["status"] == 400
+        assert raw(["v1", "trash", vault_id, "01"])["status"] == 400
         assert raw(["v1", "not-a-command"])["status"] == 400
-        assert cli("status")["result"]["root_count"] == "1"
+        assert cli("status")["result"]["vault_count"] == "1"
         print("PASS oversized/zero frames + malformed commands fail; service remains responsive")
         captured = json.dumps(outputs) + (RUN / "server.log").read_text()
         for secret in [password, session["access_token"], session["refresh_token"], "$argon2", "password_hash"]:
@@ -224,8 +224,8 @@ def main():
         assert not uds.exists(), "graceful stop must remove only its own socket"
         server = subprocess.Popen([str(SERVER), "--config", str(config)], stdout=log, stderr=log)
         wait_for(lambda: uds.exists(), "socket after restart")
-        assert cli("status")["result"]["root_count"] == "1"
-        assert cli("trash", root_id)["result"]["items"][0]["entry_id"] == entry_id
+        assert cli("status")["result"]["vault_count"] == "1"
+        assert cli("trash", vault_id)["result"]["items"][0]["entry_id"] == entry_id
         print("PASS graceful socket cleanup + restart preserves online management state")
         print(f"PASS S075 acceptance artifacts: {RUN}")
     finally:

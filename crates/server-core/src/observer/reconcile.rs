@@ -7,7 +7,7 @@
 //!
 //! 1. **扫描不完整或不健康就不推导任何删除**：`permission_denied`、`io_error`、`mount_changed`、
 //!    预算耗尽的扫描里“没看到”只说明我们没看到（design §12.3）。卸载后路径下露出空目录属于
-//!    `mount_changed`（Root 不可用），零删除事件；
+//!    `mount_changed`（Vault 不可用），零删除事件；
 //! 2. **移动优先用文件身份（设备 + inode + 创建时间）与配对的改名证据**，内容哈希只作辅助。两份内容
 //!    相同的文件互换名字时，按哈希配对会串掉 EntryId，因此[`pair_moves`]只认身份，且一对一不歧义
 //!    （同一身份出现多次 = 硬链接等歧义情形，按独立新增/删除处理）；
@@ -67,7 +67,7 @@ impl std::error::Error for InvalidReconcileLimits {}
 
 impl ReconcileLimits {
     /// 默认值：单轮最多 32 个删除、占比不超过 10%、保护队列 8 批。比例与数量都是保守起点，
-    /// 部署侧可按 Root 规模显式调大（design §23 的调参风格）。
+    /// 部署侧可按 Vault 规模显式调大（design §23 的调参风格）。
     pub const DEFAULT: ReconcileLimits = ReconcileLimits {
         max_deletes_per_cycle: 32,
         max_delete_percent: 10,
@@ -323,7 +323,7 @@ impl From<&MissingEntry> for ProtectedEntry {
 /// 保护队列里记录的一个目录身份（缺失条目所在的父目录）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtectedDirectory {
-    /// 目录相对路径（空串为 Root 自身）。
+    /// 目录相对路径（空串为 Vault 自身）。
     pub path: String,
     /// 实测身份；读不到时为 `None`，原因见 `error`。
     pub identity: Option<DirIdentity>,
@@ -379,7 +379,7 @@ pub struct ReconcileReport {
     pub held: Vec<HeldEntry>,
     /// 本轮进入保护队列的批次。
     pub protected: Option<ProtectedBatch>,
-    /// Root 正在提交别的内容，本轮跳过核对（下一轮再做）。
+    /// Vault 正在提交别的内容，本轮跳过核对（下一轮再做）。
     pub deferred: bool,
 }
 

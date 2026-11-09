@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Guard the shipped Compose entry before any engine resource is created.
 Some Docker-compatible engines ignore bind.create_host_path=false. Never let a
-mistyped state/Root source silently become a new directory on another filesystem.
+mistyped state/Vault source silently become a new directory on another filesystem.
 """
 import argparse
 import os
@@ -15,7 +15,7 @@ def main():
     parser.add_argument('action',choices=['up','create','start','restart','stop','down','ps','logs','config'])
     args=parser.parse_args()
     if args.action in ('up','create','start','restart'):
-        for key in ('VAULTSYNCD_STATE','VAULTSYNCD_ROOTS'):
+        for key in ('VAULTSYNCD_STATE','VAULTSYNCD_VAULTS'):
             raw=os.environ.get(key,'')
             path=Path(raw)
             if not raw or not path.is_absolute():parser.error(key+' must name an existing absolute bind source')

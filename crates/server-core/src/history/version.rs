@@ -3,7 +3,7 @@
 //!
 //! 顺序与 put 的提交步骤一致（§11.2），差别只在于内容来源与事务内容：
 //!
-//! 1. **请求形状 → Root 串行化 → epoch**：与 put 同一套 Gate 与 epoch 判定，旧 epoch 的恢复作废；
+//! 1. **请求形状 → Vault 串行化 → epoch**：与 put 同一套 Gate 与 epoch 判定，旧 epoch 的恢复作废；
 //! 2. **`OpId` 记录**（I06）：先查该幂等键。已提交 → 原样重放首次的实际结果与路径；已登记但
 //!    `pending` → `NEEDS_RECOVERY` 等恢复，不重做；摘要不同 → `OP_ID_REUSED`；
 //! 3. **版本事实**：版本必须属于该条目、条目必须是普通文件、revision 仍是请求基线，且版本仍在历史
@@ -17,11 +17,11 @@
 //!
 //! 恢复不是回滚：它产生新的当前版本，历史里仍然能看到被恢复的旧版本本身，客户端按普通事件收敛。
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, OpId, RootId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, IntentId, OpId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp, VaultSeq};
 
 use crate::commit::intent::{NewPutIntent, TargetAfter, TargetBefore, publish_put};
-use crate::commit::put::{RootCommitGate, target_name, validate_name, validate_target_path};
+use crate::commit::put::{VaultCommitGate, target_name, validate_name, validate_target_path};
 use crate::history::{
     LeaseDisposition, RestoreFailure, RestoreFailureReason, reclassify_publish_failure,
     release_after_failure,
@@ -46,7 +46,7 @@ pub const RESTORE_LEASE_TTL_SECONDS: i64 = 900;
 pub struct VersionRestoreRequest {
     /// 意图身份（由调用方生成，重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 幂等键：`OpId` 的业务结果按 `(RootId, DeviceId, OpId)` 唯一（design §7.2、I06）。
+    /// 幂等键：`OpId` 的业务结果按 `(VaultId, DeviceId, OpId)` 唯一（design §7.2、I06）。
     pub op: OperationKey,
     /// 本次请求的规范化摘要，由调用方用存储层的 `operations::request_digest` 算出。
     ///
@@ -61,7 +61,7 @@ pub struct VersionRestoreRequest {
     pub expected_epoch: ServerEpoch,
     /// 客户端观察到的条目 revision（服务器当前 revision 已前进时不覆盖）。
     pub expected_revision: Revision,
-    /// 目标在 Root 内的相对路径（最后一段必须等于条目当前名称）。
+    /// 目标在 Vault 内的相对路径（最后一段必须等于条目当前名称）。
     pub target_path: String,
     /// 目标所在子卷内的暂存文件名（单个文件名）。
     pub staging_path: String,
@@ -101,8 +101,8 @@ impl VersionRestoreRequest {
 pub struct CommittedVersionRestore {
     /// 产生该结果的逻辑操作身份。
     pub op: OpId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 被恢复内容的条目。
     pub entry: EntryId,
     /// 新的当前版本身份（服务器分配，与被恢复的旧版本不同）。
@@ -113,9 +113,9 @@ pub struct CommittedVersionRestore {
     pub content: ExpectedContent,
     /// 条目新 revision（严格大于请求基线）。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
-    /// 目标的 Root 内相对路径。
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
+    /// 目标的 Vault 内相对路径。
     pub path: String,
 }
 
@@ -130,17 +130,17 @@ pub struct RestoredVersion {
 
 /// 恢复一个历史版本。
 ///
-/// 顺序见模块文档：请求形状 → Root 票据 → epoch → `OpId` 记录 → 版本事实 → 内容租约 → 现场指纹 →
-/// 意图 → 发布 → 元数据事务 → 核对证据 → 解除租约 → ACK。无论成功还是失败，退出前都会释放 Root
+/// 顺序见模块文档：请求形状 → Vault 票据 → epoch → `OpId` 记录 → 版本事实 → 内容租约 → 现场指纹 →
+/// 意图 → 发布 → 元数据事务 → 核对证据 → 解除租约 → ACK。无论成功还是失败，退出前都会释放 Vault
 /// 票据。
 ///
 /// # Errors
 ///
-/// 见 [`RestoreFailure`]：请求不成立、Root 忙、epoch 变化、同一 `OpId` 不同请求、记录仍是 pending、
+/// 见 [`RestoreFailure`]：请求不成立、Vault 忙、epoch 变化、同一 `OpId` 不同请求、记录仍是 pending、
 /// 基线过期、版本不可恢复（`VERSION_GONE`）、条目不是普通文件、现场不符、租约/意图/发布/存储失败、
 /// 存储契约不一致。失败都不是 committed，已持久化的意图与 `pending` 记录保留为恢复证据。
 pub async fn restore_version<S, L, T, C>(
-    gate: &mut RootCommitGate,
+    gate: &mut VaultCommitGate,
     store: &mut S,
     log: &mut L,
     target: &mut T,
@@ -156,7 +156,7 @@ where
 {
     request.validate()?;
     let ticket = gate
-        .acquire(request.op.root)
+        .acquire(request.op.vault)
         .map_err(|error| Box::new(RestoreFailure::new(RestoreFailureReason::Gate(error))))?;
     let outcome = restore_under_ticket(store, log, target, leases, at, request).await;
     gate.release(ticket);
@@ -179,7 +179,7 @@ where
 {
     // 1. epoch：恢复过的服务器不是同一套事实，旧预期的恢复直接作废。
     let facts = store
-        .root_facts(request.op.root)
+        .vault_facts(request.op.vault)
         .await
         .map_err(store_failure)?;
     if facts.epoch != request.expected_epoch {
@@ -198,7 +198,7 @@ where
 
     // 3. 版本事实：属于该条目、仍在保留期、条目仍是普通文件且基线没前进。
     let version = store
-        .version_facts(request.op.root, request.entry, request.version)
+        .version_facts(request.op.vault, request.entry, request.version)
         .await
         .map_err(version_failure)?;
     check_version_facts(&version, at, request)?;
@@ -223,7 +223,7 @@ where
     // 5. 内容租约：把“读到旧版本”与“新版本引用同一对象”之间的窗口保护起来。
     let lease = leases
         .acquire(&ContentLeaseRequest {
-            root: request.op.root,
+            vault: request.op.vault,
             digest: version.content.digest,
             purpose: ContentLeasePurpose::Commit,
             expires_at: lease_expiry(at)?,
@@ -234,7 +234,7 @@ where
     // 6. 现场指纹 → 意图 → 发布：外部写入不是可覆盖的东西（design §12.2）。
     let new = NewPutIntent {
         intent_id: request.intent_id,
-        root: request.op.root,
+        vault: request.op.vault,
         target_path: request.target_path.clone(),
         staging_path: request.staging_path.clone(),
         before: request.before.clone(),
@@ -307,8 +307,8 @@ fn store_failure(error: RestoreStoreError) -> Box<RestoreFailure> {
         RestoreStoreError::EntryMissing { entry } => RestoreFailureReason::BaseMismatch {
             detail: format!("条目 {entry} 已不存在"),
         },
-        RestoreStoreError::UnknownRoot { root } => RestoreFailureReason::BaseMismatch {
-            detail: format!("Root {root} 已不存在"),
+        RestoreStoreError::UnknownVault { vault } => RestoreFailureReason::BaseMismatch {
+            detail: format!("Vault {vault} 已不存在"),
         },
         error => RestoreFailureReason::Store(error),
     }))
@@ -319,12 +319,12 @@ fn check_version_facts(
     at: UtcTimestamp,
     request: &VersionRestoreRequest,
 ) -> Result<(), Box<RestoreFailure>> {
-    if facts.entry.entry != request.entry || facts.entry.root != request.op.root {
+    if facts.entry.entry != request.entry || facts.entry.vault != request.op.vault {
         return Err(Box::new(RestoreFailure::new(
             RestoreFailureReason::BaseMismatch {
                 detail: format!(
-                    "库里的条目 {}（Root {}）不是请求条目 {}",
-                    facts.entry.entry, facts.entry.root, request.entry
+                    "库里的条目 {}（Vault {}）不是请求条目 {}",
+                    facts.entry.entry, facts.entry.vault, request.entry
                 ),
             },
         )));
@@ -547,7 +547,7 @@ mod tests {
     use crate::ports::restore_store::VersionFacts;
     use crate::test_support::{
         FakeContentLease, FakeIntentLog, FakeRestoreStore, FakeTarget, Trace, device_id, digest,
-        entry_id, epoch, op_id, request_digest, revision, root_id, target_snapshot, user_time,
+        entry_id, epoch, op_id, request_digest, revision, target_snapshot, user_time, vault_id,
         version_id,
     };
 
@@ -555,7 +555,7 @@ mod tests {
     const CURRENT_HEX: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
     struct Fixture {
-        gate: RootCommitGate,
+        gate: VaultCommitGate,
         store: FakeRestoreStore,
         log: FakeIntentLog,
         target: FakeTarget,
@@ -567,7 +567,7 @@ mod tests {
         VersionFacts {
             entry: EntryBaseline {
                 entry: entry_id(0x51),
-                root: root_id(0x21),
+                vault: vault_id(0x21),
                 parent: entry_id(0x31),
                 name: "note.txt".to_owned(),
                 revision: revision(7),
@@ -582,7 +582,7 @@ mod tests {
         VersionRestoreRequest {
             intent_id: crate::test_support::intent_id(0x41),
             op: OperationKey {
-                root: root_id(0x21),
+                vault: vault_id(0x21),
                 device: device_id(0x61),
                 op: op_id(0x71),
             },
@@ -603,7 +603,7 @@ mod tests {
         let mut store = FakeRestoreStore::new(facts());
         store.trace = trace.clone();
         Fixture {
-            gate: RootCommitGate::new(),
+            gate: VaultCommitGate::new(),
             store,
             log: FakeIntentLog {
                 trace: trace.clone(),

@@ -147,7 +147,7 @@ pub struct CapabilityLimits {
     pub max_upload_part_bytes: String,
 }
 
-/// 一个事务批次（design §9.3）：RootSeq、TxId 与该事务的全部条目变化。
+/// 一个事务批次（design §9.3）：VaultSeq、TxId 与该事务的全部条目变化。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ChangeBatch {
     /// 批次提交时间（UTC Unix 秒的十进制文本）。
@@ -155,7 +155,7 @@ pub struct ChangeBatch {
     pub created_at: String,
     /// 该事务全部条目变化与冲突关联的 JSON 数组文本；按数据处理，客户端整批原子应用。
     pub events_json: String,
-    /// 批次序号（该 Root 的第 seq 个事务批次，十进制文本）。
+    /// 批次序号（该 Vault 的第 seq 个事务批次，十进制文本）。
     #[serde(with = "crate::decimal")]
     pub seq: String,
     /// 产生该批次的服务端事务身份，32 位小写十六进制。
@@ -169,17 +169,17 @@ pub struct ChangeList {
     pub batches: Vec<ChangeBatch>,
     /// 读取时 `next_after` 之后是否还有批次。
     pub has_more: bool,
-    /// 读取时 Root 的最新 RootSeq（十进制文本）。
+    /// 读取时 Vault 的最新 VaultSeq（十进制文本）。
     #[serde(with = "crate::decimal")]
     pub head_seq: String,
     /// 下一次拉取应带的 `after`：本页最后一个批次的 seq；本页为空时等于请求的 `after`。
     #[serde(with = "crate::decimal")]
     pub next_after: String,
-    /// Root 身份，32 位小写十六进制。
-    pub root_id: String,
-    /// Root 当前的服务器 epoch（十进制文本）。
+    /// Vault 当前的服务器 epoch（十进制文本）。
     #[serde(with = "crate::decimal")]
     pub server_epoch: String,
+    /// Vault 身份，32 位小写十六进制。
+    pub vault_id: String,
 }
 
 /// 过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
@@ -225,10 +225,10 @@ pub struct ErrorBody {
     pub request_id: String,
     /// 同一请求稍后原样重试是否可能成功。
     pub retryable: bool,
-    /// 相关 Root 的身份（32 个小写十六进制字符）；与 Root 无关时省略。
+    /// 相关 Vault 的身份（32 个小写十六进制字符）；与 Vault 无关时省略。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_id: Option<String>,
+    pub vault_id: Option<String>,
 }
 
 /// 远端错误码闭集（design §15.4）。未知错误码不能被当成可重试或成功；本机 IPC 专用的
@@ -291,9 +291,9 @@ pub enum ErrorCode {
     /// 取值 `RATE_LIMITED`。
     #[serde(rename = "RATE_LIMITED")]
     RateLimited,
-    /// 取值 `ROOT_UNAVAILABLE`。
-    #[serde(rename = "ROOT_UNAVAILABLE")]
-    RootUnavailable,
+    /// 取值 `VAULT_UNAVAILABLE`。
+    #[serde(rename = "VAULT_UNAVAILABLE")]
+    VaultUnavailable,
     /// 取值 `NEEDS_RECOVERY`。
     #[serde(rename = "NEEDS_RECOVERY")]
     NeedsRecovery,
@@ -325,8 +325,6 @@ pub struct FinalizedContent {
     pub replayed: bool,
     /// 本次新建还是复用既有对象。
     pub reuse: ObjectReuse,
-    /// 内容所属 Root 身份，32 位小写十六进制。
-    pub root_id: String,
     /// 内容字节数（十进制文本）。
     #[serde(with = "crate::decimal")]
     pub size: String,
@@ -334,6 +332,8 @@ pub struct FinalizedContent {
     pub storage_path: String,
     /// 上传会话身份，32 位小写十六进制。
     pub upload_id: String,
+    /// 内容所属 Vault 身份，32 位小写十六进制。
+    pub vault_id: String,
 }
 
 /// 健康探测结果。
@@ -378,33 +378,33 @@ impl core::fmt::Debug for LoginRequest {
     }
 }
 
-/// 仅 owner 管理通道可见的 Root。
+/// 仅 owner 管理通道可见的 Vault。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct ManagedRoot {
+pub struct ManagedVault {
     /// 本进程采集观测
-    pub collection: RootCollection,
+    pub collection: VaultCollection,
     /// 现场挂载和存储状态
-    pub health: RootHealth,
+    pub health: VaultHealth,
     /// 可执行的修复建议
     pub next_step: String,
     /// 已注册服务器绝对路径
     pub path: String,
     /// 稳定故障原因；健康时为空
     pub reason: String,
-    /// Root 身份
-    pub root_id: String,
+    /// Vault 身份
+    pub vault_id: String,
     /// 已提交事件序号，不表示采集完成
     #[serde(with = "crate::decimal")]
-    pub root_seq: String,
+    pub vault_seq: String,
 }
 
-/// owner 管理清单；不可由普通 Root 列表推导路径。
+/// owner 管理清单；不可由普通 Vault 列表推导路径。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct ManagedRootList {
+pub struct ManagedVaultList {
     /// 部署预配置允许基目录；空表示未配置且禁止注册。
     pub allowed_bases: Vec<String>,
-    /// owner 已注册 Root。
-    pub roots: Vec<ManagedRoot>,
+    /// owner 已注册 Vault。
+    pub vaults: Vec<ManagedVault>,
 }
 
 /// 一段连续缺失的块索引。
@@ -463,7 +463,7 @@ pub enum OperationKind {
 }
 
 /// 一次修改命令的输入（design §15.3）。`op_id` 与 `device_id` 一起构成幂等键
-/// `(root, device_id, op_id)`；不同命令用不同字段（put 用 `entry_id`/`base_revision`/
+/// `(vault, device_id, op_id)`；不同命令用不同字段（put 用 `entry_id`/`base_revision`/
 /// `upload_id`，create 用 `parent_id`/`name`/`expected_absent`，move 用源
 /// `entry_id`/`base_revision` 与目标 `parent_id`/`name`，delete 用
 /// `entry_id`/`base_revision`（目录另带 `subtree_token`），restore 用
@@ -532,7 +532,7 @@ pub struct OperationRequest {
 }
 
 /// 一次操作的状态与业务结果（design §15.3）。`pending` 时只有 `op_id`/`state`（可能带
-/// `echo_local_generation`）：不出现 `revision`/`root_seq`/`version_id`/`entry_id` 一类
+/// `echo_local_generation`）：不出现 `revision`/`vault_seq`/`version_id`/`entry_id` 一类
 /// “已完成”字段。`replayed` 由端点按本次请求填写（是否命中了已记录的结果）；`request_id`
 /// 在错误信封里给出，成功响应只带操作身份。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -569,20 +569,20 @@ pub struct OperationResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
-    /// 该批次占用的 RootSeq（只有 committed 有，十进制文本）。
+    /// 操作状态；`pending` 不代表已同步。
+    pub state: OperationState,
+    /// 该批次占用的 VaultSeq（只有 committed 有，十进制文本）。
     #[serde(with = "crate::decimal::option")]
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_seq: Option<String>,
-    /// 操作状态；`pending` 不代表已同步。
-    pub state: OperationState,
+    pub vault_seq: Option<String>,
     /// 提交产生的新版本身份（只有 put/restore 的 committed 有），32 位小写十六进制。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_id: Option<String>,
 }
 
-/// 操作状态闭集（`operations.state`）。`pending` 只表示已受理，不占 RootSeq、不判已同步；
+/// 操作状态闭集（`operations.state`）。`pending` 只表示已受理，不占 VaultSeq、不判已同步；
 /// `committed` 与 `rejected` 是终态，同一 OpId 的结果不再改变。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum OperationState {
@@ -683,102 +683,15 @@ pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-/// 实际最近一轮扫描进度，不代表客户端已同步。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct RootCollection {
-    /// 未完成原因与本进程观测范围
-    pub detail: String,
-    /// 最近一轮实际检查项数
-    #[serde(with = "crate::decimal")]
-    pub examined: String,
-    /// 最近一轮待稳定或重试文件数
-    #[serde(with = "crate::decimal")]
-    pub pending: String,
-    /// 采集状态
-    pub state: RootCollectionState,
-}
-
-/// 本进程观测状态；重启后不沿用旧完成标志。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub enum RootCollectionState {
-    /// 取值 `not_scanned`。
-    #[serde(rename = "not_scanned")]
-    NotScanned,
-    /// 取值 `scanning`。
-    #[serde(rename = "scanning")]
-    Scanning,
-    /// 取值 `pending`。
-    #[serde(rename = "pending")]
-    Pending,
-    /// 取值 `complete`。
-    #[serde(rename = "complete")]
-    Complete,
-    /// 取值 `blocked`。
-    #[serde(rename = "blocked")]
-    Blocked,
-}
-
-/// Root 健康状态闭集（design §7.2 `roots.health`）。`unavailable` 表示挂载、身份或权限
-/// 核对失败，该 Root 暂停同步但绝不据此推导删除。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub enum RootHealth {
-    /// 取值 `healthy`。
-    #[serde(rename = "healthy")]
-    Healthy,
-    /// 取值 `unavailable`。
-    #[serde(rename = "unavailable")]
-    Unavailable,
-}
-
-/// 授权 Root 清单（design §15.2 `GET /v1/roots`）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct RootList {
-    /// 当前调用者可见的 Root，按身份顺序稳定排列。
-    pub roots: Vec<RootSummary>,
-}
-
-/// 注册 Root 的输入（design §15.2 `POST /v1/admin/roots`）。这是少数接受服务器绝对路径
-/// 的网络接口之一，因此必须同时受允许基目录与存储准入约束。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct RootRegisterRequest {
-    /// 服务端绝对路径；必须在部署配置的允许基目录内。
-    pub path: String,
-}
-
-/// 注册结果（design §15.2）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct RootRegistered {
-    /// 注册时的健康状态。
-    pub health: RootHealth,
-    /// 该 Root 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Root 恒为
-    /// true；采集完成后由后续的初始采集步骤推进。
-    pub pending_import: bool,
-    /// 新 Root 的身份，32 个小写十六进制字符。
-    pub root_id: String,
-}
-
-/// 一条授权 Root 的对外摘要；不含服务器绝对路径。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct RootSummary {
-    /// 当前健康状态。
-    pub health: RootHealth,
-    /// Root 目录末级名称，不含父目录路径。旧服务端可省略；仅用于显示，身份仍使用 root_id。
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Root 身份，32 个小写十六进制字符。
-    pub root_id: String,
-}
-
-/// SSE 提示的 `data` 内容（design §9.3）：只告诉客户端 Root 的 RootSeq 已到某个值，
+/// SSE 提示的 `data` 内容（design §9.3）：只告诉客户端 Vault 的 VaultSeq 已到某个值，
 /// 不携带任何批次内容。丢失、重复、乱序都由 `changes` 拉取修复。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct SeqHint {
-    /// Root 身份，32 位小写十六进制。
-    pub root_id: String,
-    /// 提示发出时 Root 的最新 RootSeq（十进制文本）。
+    /// 提示发出时 Vault 的最新 VaultSeq（十进制文本）。
     #[serde(with = "crate::decimal")]
     pub seq: String,
+    /// Vault 身份，32 位小写十六进制。
+    pub vault_id: String,
 }
 
 /// 会话凭据对与有效期；除 `session_id` 外都是秘密，不得写日志或落到前端 localStorage。
@@ -808,7 +721,7 @@ pub struct SessionRevoked {
     pub session_id: String,
 }
 
-/// 一份一致性快照的元数据（design §9.3）。`high_water_seq` 是创建时刻 Root 的 RootSeq：清单恰好是
+/// 一份一致性快照的元数据（design §9.3）。`high_water_seq` 是创建时刻 Vault 的 VaultSeq：清单恰好是
 /// “应用到该 seq 为止”的状态，继续追赶从 `changes?after=<high_water_seq>` 开始。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct Snapshot {
@@ -818,16 +731,16 @@ pub struct Snapshot {
     /// 清单到期时间（UTC Unix 秒的十进制文本）；此刻及之后翻页返回 410。
     #[serde(with = "crate::decimal")]
     pub expires_at: String,
-    /// 创建快照时的 RootSeq（十进制文本）。
+    /// 创建快照时的 VaultSeq（十进制文本）。
     #[serde(with = "crate::decimal")]
     pub high_water_seq: String,
-    /// 所属 Root 身份，32 位小写十六进制。
-    pub root_id: String,
-    /// 创建快照时 Root 的服务器 epoch（十进制文本）。
+    /// 创建快照时 Vault 的服务器 epoch（十进制文本）。
     #[serde(with = "crate::decimal")]
     pub server_epoch: String,
     /// 快照身份，32 位小写十六进制。
     pub snapshot_id: String,
+    /// 所属 Vault 身份，32 位小写十六进制。
+    pub vault_id: String,
 }
 
 /// 快照清单里的一条条目（创建时的值拷贝，不随之后的写入变化）。
@@ -850,7 +763,7 @@ pub struct SnapshotEntry {
     pub modified_at: Option<String>,
     /// 原始名称（合成根条目为空串）；按数据处理。
     pub name: String,
-    /// 父目录条目身份；Root 的合成根条目没有。
+    /// 父目录条目身份；Vault 的合成根条目没有。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
@@ -873,7 +786,7 @@ pub struct SnapshotEntry {
 pub struct SnapshotPage {
     /// 本页条目，按 EntryId 升序。
     pub entries: Vec<SnapshotEntry>,
-    /// 快照固定的 RootSeq（十进制文本，所有页相同）。
+    /// 快照固定的 VaultSeq（十进制文本，所有页相同）。
     #[serde(with = "crate::decimal")]
     pub high_water_seq: String,
     /// 下一页的游标（十进制文本）；缺省表示已是最后一页。
@@ -894,10 +807,10 @@ pub struct SubtreeToken {
     pub entries: String,
     /// 目录条目身份，32 位小写十六进制。
     pub entry_id: String,
-    /// Root 身份，32 位小写十六进制。
-    pub root_id: String,
     /// 子树 token，32 位小写十六进制。
     pub token: String,
+    /// Vault 身份，32 位小写十六进制。
+    pub vault_id: String,
 }
 
 /// 块登记结果。
@@ -919,7 +832,7 @@ pub struct UploadPartAck {
     pub upload_id: String,
 }
 
-/// 创建上传会话的输入（design §15.2 `POST /v1/roots/{root}/uploads`）。
+/// 创建上传会话的输入（design §15.2 `POST /v1/vaults/{vault}/uploads`）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct UploadRequest {
     /// 客户端希望的块大小（十进制文本）。0 表示由服务端按能力选择；服务端可以把它调到
@@ -947,8 +860,6 @@ pub struct UploadSession {
     /// 块数（空内容为 0）。
     #[serde(with = "crate::decimal")]
     pub part_count: String,
-    /// 所属 Root 身份，32 位小写十六进制。
-    pub root_id: String,
     /// 会话状态；客户端据此决定继续传块、查询结果还是放弃。
     pub state: UploadState,
     /// 快照总字节数（十进制文本）。
@@ -956,6 +867,8 @@ pub struct UploadSession {
     pub total_size: String,
     /// 上传会话身份，32 位小写十六进制。
     pub upload_id: String,
+    /// 所属 Vault 身份，32 位小写十六进制。
+    pub vault_id: String,
 }
 
 /// 上传会话状态闭集。未知取值按协议错误处理；`open` 接收块，`complete` 只等待
@@ -988,6 +901,93 @@ pub struct UploadStatus {
     pub upload: UploadSession,
 }
 
+/// 实际最近一轮扫描进度，不代表客户端已同步。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VaultCollection {
+    /// 未完成原因与本进程观测范围
+    pub detail: String,
+    /// 最近一轮实际检查项数
+    #[serde(with = "crate::decimal")]
+    pub examined: String,
+    /// 最近一轮待稳定或重试文件数
+    #[serde(with = "crate::decimal")]
+    pub pending: String,
+    /// 采集状态
+    pub state: VaultCollectionState,
+}
+
+/// 本进程观测状态；重启后不沿用旧完成标志。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum VaultCollectionState {
+    /// 取值 `not_scanned`。
+    #[serde(rename = "not_scanned")]
+    NotScanned,
+    /// 取值 `scanning`。
+    #[serde(rename = "scanning")]
+    Scanning,
+    /// 取值 `pending`。
+    #[serde(rename = "pending")]
+    Pending,
+    /// 取值 `complete`。
+    #[serde(rename = "complete")]
+    Complete,
+    /// 取值 `blocked`。
+    #[serde(rename = "blocked")]
+    Blocked,
+}
+
+/// Vault 健康状态闭集（design §7.2 `vaults.health`）。`unavailable` 表示挂载、身份或权限
+/// 核对失败，该 Vault 暂停同步但绝不据此推导删除。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum VaultHealth {
+    /// 取值 `healthy`。
+    #[serde(rename = "healthy")]
+    Healthy,
+    /// 取值 `unavailable`。
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+
+/// 授权 Vault 清单（design §15.2 `GET /v1/vaults`）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VaultList {
+    /// 当前调用者可见的 Vault，按身份顺序稳定排列。
+    pub vaults: Vec<VaultSummary>,
+}
+
+/// 注册 Vault 的输入（design §15.2 `POST /v1/admin/vaults`）。这是少数接受服务器绝对路径
+/// 的网络接口之一，因此必须同时受允许基目录与存储准入约束。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VaultRegisterRequest {
+    /// 服务端绝对路径；必须在部署配置的允许基目录内。
+    pub path: String,
+}
+
+/// 注册结果（design §15.2）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VaultRegistered {
+    /// 注册时的健康状态。
+    pub health: VaultHealth,
+    /// 该 Vault 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Vault 恒为
+    /// true；采集完成后由后续的初始采集步骤推进。
+    pub pending_import: bool,
+    /// 新 Vault 的身份，32 个小写十六进制字符。
+    pub vault_id: String,
+}
+
+/// 一条授权 Vault 的对外摘要；不含服务器绝对路径。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct VaultSummary {
+    /// 当前健康状态。
+    pub health: VaultHealth,
+    /// Vault 目录末级名称，不含父目录路径。旧服务端可省略；仅用于显示，身份仍使用 vault_id。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Vault 身份，32 个小写十六进制字符。
+    pub vault_id: String,
+}
+
 /// 服务器持久化的固定版本保护；expires_at是UTC秒，ttl_seconds是剩余有效秒数。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct VersionLease {
@@ -1000,8 +1000,6 @@ pub struct VersionLease {
     pub expires_at: String,
     /// 请求租约身份。
     pub lease_id: String,
-    /// 固定Root身份。
-    pub root_id: String,
     /// 整份内容SHA256。
     pub sha256: String,
     /// 固定版本字节数。
@@ -1010,6 +1008,8 @@ pub struct VersionLease {
     /// 响应形成时剩余秒数，最大120。
     #[serde(with = "crate::decimal")]
     pub ttl_seconds: String,
+    /// 固定Vault身份。
+    pub vault_id: String,
     /// 固定版本身份。
     pub version_id: String,
 }

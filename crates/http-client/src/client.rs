@@ -20,7 +20,7 @@
 //! # 不做的事
 //!
 //! 不跟随重定向、不自动重试普通网络错误（退避策略属于 agent 执行器）、不实现端点级语义
-//! （Root、changes、上传/下载分别由后续卡在本 crate 上加模块）。
+//! （Vault、changes、上传/下载分别由后续卡在本 crate 上加模块）。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -282,18 +282,18 @@ impl ApiClient<ReqwestTransport> {
     /// Negotiation/authentication/stream/framing failure. No cursor or local state is changed.
     pub async fn receive_hints(
         &self,
-        root: &str,
+        vault: &str,
         wake: &tokio::sync::mpsc::Sender<()>,
     ) -> Result<(), ClientError> {
-        if root.len() != 32
-            || !root
+        if vault.len() != 32
+            || !vault
                 .bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
-            return Err(ClientError::invalid_request("invalid SSE RootId"));
+            return Err(ClientError::invalid_request("invalid SSE VaultId"));
         }
         let request =
-            ApiRequest::get(format!("/v1/roots/{root}/events")).with_auth(AuthMode::Bearer);
+            ApiRequest::get(format!("/v1/vaults/{vault}/events")).with_auth(AuthMode::Bearer);
         self.check_capabilities(&request).await?;
         let snapshot = self.auth.snapshot().ok_or(ClientError::NotAuthenticated)?;
         let url = self
@@ -333,7 +333,7 @@ impl ApiClient<ReqwestTransport> {
             let Some(chunk) = chunk else {
                 return Ok(());
             };
-            if decoder.push(&chunk, root)? > 0 {
+            if decoder.push(&chunk, vault)? > 0 {
                 let _ = wake.try_send(());
             }
         }
@@ -738,7 +738,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use vaultsyncd_protocol::generated::{ErrorCode, RootList};
+    use vaultsyncd_protocol::generated::{ErrorCode, VaultList};
 
     use crate::auth::CredentialSink;
     use crate::error::{TransportError, TransportErrorKind};
@@ -775,8 +775,8 @@ mod tests {
             .install(Credentials::from_issued(&issued(access, refresh)).expect("合法凭据"));
     }
 
-    fn roots_request() -> ApiRequest {
-        ApiRequest::get("/v1/roots").with_auth(AuthMode::Bearer)
+    fn vaults_request() -> ApiRequest {
+        ApiRequest::get("/v1/vaults").with_auth(AuthMode::Bearer)
     }
 
     #[tokio::test]
@@ -808,7 +808,7 @@ mod tests {
                             false,
                         )),
                         Some("Bearer access-2") => {
-                            Ok(json_response(200, &RootList { roots: Vec::new() }))
+                            Ok(json_response(200, &VaultList { vaults: Vec::new() }))
                         }
                         other => panic!("意外的凭据：{other:?}"),
                     }
@@ -817,11 +817,11 @@ mod tests {
         });
         install(&client, "access-1", "refresh-1");
 
-        let roots: RootList = client
-            .send_json(roots_request())
+        let vaults: VaultList = client
+            .send_json(vaults_request())
             .await
             .expect("刷新后重试成功");
-        assert!(roots.roots.is_empty());
+        assert!(vaults.vaults.is_empty());
         assert_eq!(transport.call_count(), 3, "业务请求 + 刷新 + 重试");
         assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -855,7 +855,7 @@ mod tests {
         install(&client, "access-1", "refresh-1");
 
         let error = client
-            .send(roots_request())
+            .send(vaults_request())
             .await
             .expect_err("刷新后仍 401");
         assert!(
@@ -895,7 +895,7 @@ mod tests {
                             false,
                         )),
                         Some("Bearer access-2") => {
-                            Ok(json_response(200, &RootList { roots: Vec::new() }))
+                            Ok(json_response(200, &VaultList { vaults: Vec::new() }))
                         }
                         other => panic!("意外的凭据：{other:?}"),
                     }
@@ -908,7 +908,7 @@ mod tests {
         for _ in 0..6 {
             let client = client.clone();
             tasks.push(tokio::spawn(async move {
-                client.send_json::<RootList>(roots_request()).await
+                client.send_json::<VaultList>(vaults_request()).await
             }));
         }
         for task in tasks {
@@ -945,7 +945,7 @@ mod tests {
         });
         install(&client, "access-1", "refresh-1");
 
-        let error = client.send(roots_request()).await.expect_err("刷新被拒");
+        let error = client.send(vaults_request()).await.expect_err("刷新被拒");
         assert!(
             matches!(
                 error,
@@ -986,7 +986,7 @@ mod tests {
         install(&client, "access-1", "refresh-1");
 
         let error = client
-            .send(roots_request())
+            .send(vaults_request())
             .await
             .expect_err("刷新临时失败");
         match &error {
@@ -1009,7 +1009,7 @@ mod tests {
         let (client, _transport) = bearer_client(|_request: TransportRequest| {
             Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                Ok(json_response(200, &RootList { roots: Vec::new() }))
+                Ok(json_response(200, &VaultList { vaults: Vec::new() }))
             })
         });
         let error = client
@@ -1057,7 +1057,7 @@ mod tests {
         };
         install(&client, "access-1", "refresh-1");
 
-        let error = client.send(roots_request()).await.expect_err("刷新超时");
+        let error = client.send(vaults_request()).await.expect_err("刷新超时");
         assert!(
             matches!(
                 error,
@@ -1072,7 +1072,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_before_sending_skips_the_transport() {
         let (client, transport) = bearer_client(|_request: TransportRequest| {
-            Box::pin(async move { Ok(json_response(200, &RootList { roots: Vec::new() })) })
+            Box::pin(async move { Ok(json_response(200, &VaultList { vaults: Vec::new() })) })
         });
         let cancellation = Cancellation::new();
         cancellation.cancel();
@@ -1090,7 +1090,7 @@ mod tests {
         let (client, _transport) = bearer_client(|_request: TransportRequest| {
             Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                Ok(json_response(200, &RootList { roots: Vec::new() }))
+                Ok(json_response(200, &VaultList { vaults: Vec::new() }))
             })
         });
         let cancellation = Cancellation::new();
@@ -1122,7 +1122,7 @@ mod tests {
         });
         install(&client, "access-1", "refresh-1");
         let error = client
-            .send(ApiRequest::get("/v1/roots").with_auth(AuthMode::Bearer))
+            .send(ApiRequest::get("/v1/vaults").with_auth(AuthMode::Bearer))
             .await
             .expect_err("越权");
         let failure = error.api_failure().expect("是服务端错误信封");
@@ -1170,12 +1170,12 @@ mod tests {
                 Ok(TransportResponse::new(
                     200,
                     Vec::new(),
-                    br#"{"roots": 1}"#.to_vec(),
+                    br#"{"vaults": 1}"#.to_vec(),
                 ))
             })
         });
         let error = client
-            .send_json::<RootList>(ApiRequest::get("/v1/roots"))
+            .send_json::<VaultList>(ApiRequest::get("/v1/vaults"))
             .await
             .expect_err("畸形响应");
         assert!(matches!(error, ClientError::Protocol(_)), "得到 {error:?}");
@@ -1262,9 +1262,9 @@ mod tests {
     #[tokio::test]
     async fn requests_without_credentials_fail_before_touching_the_transport() {
         let (client, transport) = bearer_client(|_request: TransportRequest| {
-            Box::pin(async move { Ok(json_response(200, &RootList { roots: Vec::new() })) })
+            Box::pin(async move { Ok(json_response(200, &VaultList { vaults: Vec::new() })) })
         });
-        let error = client.send(roots_request()).await.expect_err("没有凭据");
+        let error = client.send(vaults_request()).await.expect_err("没有凭据");
         assert!(matches!(error, ClientError::NotAuthenticated));
         assert_eq!(transport.call_count(), 0);
     }
@@ -1272,13 +1272,13 @@ mod tests {
     #[tokio::test]
     async fn malformed_requests_are_rejected_before_the_transport() {
         let (client, transport) = bearer_client(|_request: TransportRequest| {
-            Box::pin(async move { Ok(json_response(200, &RootList { roots: Vec::new() })) })
+            Box::pin(async move { Ok(json_response(200, &VaultList { vaults: Vec::new() })) })
         });
         for request in [
-            ApiRequest::get("v1/roots"),
-            ApiRequest::get("/v1/roots?after=1"),
-            ApiRequest::get("/v1/roots#frag"),
-            ApiRequest::get("/v1/roots").with_header("authorization", "Bearer hand-written"),
+            ApiRequest::get("v1/vaults"),
+            ApiRequest::get("/v1/vaults?after=1"),
+            ApiRequest::get("/v1/vaults#frag"),
+            ApiRequest::get("/v1/vaults").with_header("authorization", "Bearer hand-written"),
             ApiRequest::get("/v1/health").with_header("bad header", "x"),
             ApiRequest::get("/v1/health").with_header("x-request-id", "line\r\nbreak"),
         ] {
@@ -1294,7 +1294,7 @@ mod tests {
     #[tokio::test]
     async fn a_base_url_path_prefix_is_used_for_every_request() {
         let transport = Arc::new(FakeTransport::new(|_request: TransportRequest| {
-            Box::pin(async move { Ok(json_response(200, &RootList { roots: Vec::new() })) })
+            Box::pin(async move { Ok(json_response(200, &VaultList { vaults: Vec::new() })) })
         }));
         let client = Arc::new(
             ApiClient::with_transport_for_unit_tests(
@@ -1304,10 +1304,10 @@ mod tests {
             .expect("客户端配置"),
         );
         client
-            .send_json::<RootList>(ApiRequest::get("/v1/roots"))
+            .send_json::<VaultList>(ApiRequest::get("/v1/vaults"))
             .await
             .expect("请求成功");
         let calls = transport.calls();
-        assert_eq!(calls[0].url(), "https://vault.example/vault/v1/roots");
+        assert_eq!(calls[0].url(), "https://vault.example/vault/v1/vaults");
     }
 }

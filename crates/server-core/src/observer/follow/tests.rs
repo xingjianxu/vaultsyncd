@@ -1,5 +1,5 @@
 use super::*;
-use crate::commit::put::RootCommitGate;
+use crate::commit::put::VaultCommitGate;
 use crate::objects::{ExpectedContent, ObjectLayout};
 use crate::observer::fixtures::{
     FakeBlobs, FakeExternalStore, FakeWorkTree, SharedFs, digest_of, shared_fs,
@@ -7,7 +7,7 @@ use crate::observer::fixtures::{
 use crate::observer::import::FileState;
 use crate::observer::intents::OwnWriteIntent;
 use crate::observer::scan::{ScanLimits, StabilityWindow};
-use crate::test_support::{root_id, user_time};
+use crate::test_support::{user_time, vault_id};
 
 const WINDOW_MS: u64 = 500;
 const DEBOUNCE_MS: u64 = 100;
@@ -20,7 +20,7 @@ struct Harness {
     work: FakeWorkTree,
     blobs: FakeBlobs,
     store: FakeExternalStore,
-    gate: RootCommitGate,
+    gate: VaultCommitGate,
     layout: ObjectLayout,
     driver: FollowDriver,
     now_ms: u64,
@@ -31,7 +31,7 @@ impl Harness {
     fn new() -> Self {
         let fs = shared_fs();
         let observer = ExternalObserver::new(
-            root_id(0x11),
+            vault_id(0x11),
             StabilityWindow::from_millis(WINDOW_MS).expect("合法"),
             "ext-follow",
         )
@@ -49,7 +49,7 @@ impl Harness {
             blobs: FakeBlobs::new(&fs),
             fs,
             store: FakeExternalStore::default(),
-            gate: RootCommitGate::new(),
+            gate: VaultCommitGate::new(),
             layout: ObjectLayout::new("/state/objects"),
             driver: FollowDriver::new(observer, config),
             now_ms: 1_000,
@@ -487,17 +487,17 @@ async fn truncated_subtree_scan_hands_over_to_a_full_scan() {
 }
 
 #[tokio::test]
-async fn root_unavailable_stops_everything_without_deletion_and_recovers_with_a_scan() {
+async fn vault_unavailable_stops_everything_without_deletion_and_recovers_with_a_scan() {
     let mut harness = Harness::new();
     harness.fs.borrow_mut().write("a.txt", b"one");
     harness.adopt_existing().await;
-    harness.fs.borrow_mut().root_unavailable = true;
+    harness.fs.borrow_mut().vault_unavailable = true;
     harness.hint(WatchHint::Overflow);
     let down = harness.step(1).await;
-    assert!(down.full_scan.expect("补扫").report.root_unavailable);
+    assert!(down.full_scan.expect("补扫").report.vault_unavailable);
     assert!(harness.driver.observer().history_protected("a.txt"));
 
-    harness.fs.borrow_mut().root_unavailable = false;
+    harness.fs.borrow_mut().vault_unavailable = false;
     harness.fs.borrow_mut().write("a.txt", b"two");
     let back = harness.step(RETRY_MS).await;
     assert_eq!(

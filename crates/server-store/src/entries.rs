@@ -1,22 +1,22 @@
 //! 服务端命名空间条目（`entries` 表）的事务内读写与约束（`docs/design.md` §7.2、§7.4）。
 //!
-//! 边界：本模块只读写 `entries`，不写 `roots`/`changes`，不做文件系统 I/O，也不分配
-//! `Revision`/`RootSeq`（提交协调卡在同一个事务里推进序号）。写函数接收调用方已开的
+//! 边界：本模块只读写 `entries`，不写 `vaults`/`changes`，不做文件系统 I/O，也不分配
+//! `Revision`/`VaultSeq`（提交协调卡在同一个事务里推进序号）。写函数接收调用方已开的
 //! `BEGIN IMMEDIATE` 写事务（[`Database::begin_write`](crate::db::Database::begin_write)），
 //! 因此“先检查后写入”发生在同一个持锁事务里，不存在两个写者之间的检查竞态；只读函数接收
 //! `&mut SqliteConnection`，可以直接用连接池，不为一次 GET 去抢写锁。
 //!
 //! 不变量：
 //!
-//! - **owner scope**：每个函数的业务参数都有 [`UserId`]；条目只能经 `roots.owner_id` 访问，
-//!   不属于该 owner 的 Root 或条目一律 [`EntryError::OutOfScope`] / `None`，不区分“不存在”
+//! - **owner scope**：每个函数的业务参数都有 [`UserId`]；条目只能经 `vaults.owner_id` 访问，
+//!   不属于该 owner 的 Vault 或条目一律 [`EntryError::OutOfScope`] / `None`，不区分“不存在”
 //!   与“别人的”，避免泄露存在性。
-//! - **活跃同父名称唯一**：`(root_id, parent_id, name_key)` 与 `(root_id, parent_id, name)` 各有
+//! - **活跃同父名称唯一**：`(vault_id, parent_id, name_key)` 与 `(vault_id, parent_id, name)` 各有
 //!   一个 `deleted_at IS NULL` 的部分唯一索引（迁移 0002）。`name_key` 由调用方按平台等价规则
 //!   派生（design §7.2：不用简单 Unicode 小写代替 Windows 等价），本层只按它判重，不改写
 //!   `name`、不做归一化。
-//! - **父子必须同 Root**：复合外键 `(root_id, parent_id) → entries(root_id, id)` 在 SQL 层生效；
-//!   本层在写入前还会给出更精确的 [`EntryError::CrossRootParent`]。
+//! - **父子必须同 Vault**：复合外键 `(vault_id, parent_id) → entries(vault_id, id)` 在 SQL 层生效；
+//!   本层在写入前还会给出更精确的 [`EntryError::CrossVaultParent`]。
 //! - **不允许目录环**：移动时从目标父项向上走祖先链（递归 CTE；`UNION` 去重，因此即使库里已有
 //!   坏环也会终止），链上出现被移动条目即 [`EntryError::DirectoryCycle`]。
 //! - **删除不级联**：本模块只把单条条目标记为 `deleted_at`（软删除），并拒绝删除仍有活跃子项的
@@ -26,7 +26,7 @@
 //! S028 建立，外键要到那时才能加（SQLite 追加外键需要重建表）。
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 use vaultsyncd_fs_common::name::{NameIssue, validate_name};
 
@@ -60,15 +60,15 @@ impl EntryKind {
 
 /// 新建一个条目的输入。
 ///
-/// 不变量（违反时 [`insert_entry`] 报错且不写入任何行）：`parent` 必须是同一个 Root 里活跃的
+/// 不变量（违反时 [`insert_entry`] 报错且不写入任何行）：`parent` 必须是同一个 Vault 里活跃的
 /// 目录；`name` 必须是跨平台可表示的名称；`name_key` 非空；目录的 `content_version` 必须为空。
 #[derive(Clone, Debug)]
 pub struct NewEntry {
     /// 新条目的身份（由应用层经 `IdSource` 生成）。
     pub id: EntryId,
-    /// 所属 Root。
-    pub root: RootId,
-    /// 父目录条目；每个 Root 的合成根条目由 [`crate::roots::insert_root`] 建立，不走这里。
+    /// 所属 Vault。
+    pub vault: VaultId,
+    /// 父目录条目；每个 Vault 的合成根条目由 [`crate::vaults::insert_vault`] 建立，不走这里。
     pub parent: EntryId,
     /// 原始名称，原样保存。
     pub name: String,
@@ -87,9 +87,9 @@ pub struct NewEntry {
 pub struct EntryRecord {
     /// 条目身份；路径改变不改变它。
     pub id: EntryId,
-    /// 所属 Root。
-    pub root: RootId,
-    /// 父条目；只有每个 Root 的合成根条目为 `None`。
+    /// 所属 Vault。
+    pub vault: VaultId,
+    /// 父条目；只有每个 Vault 的合成根条目为 `None`。
     pub parent: Option<EntryId>,
     /// 原始名称（根条目为空字符串）。
     pub name: String,
@@ -110,7 +110,7 @@ pub struct EntryRecord {
 pub enum EntryError {
     /// SQLite 层面失败。
     Db(sqlx::Error),
-    /// Root 不存在或不属于调用方的 owner scope（两种情况不区分）。
+    /// Vault 不存在或不属于调用方的 owner scope（两种情况不区分）。
     OutOfScope,
     /// 条目不存在、已删除，或不在调用方的 owner scope 内。
     EntryNotFound {
@@ -127,12 +127,12 @@ pub enum EntryError {
         /// 父条目身份。
         id: EntryId,
     },
-    /// 父条目属于另一个 Root（design §7.2：父子必须同 Root）。
-    CrossRootParent {
-        /// 条目自己的 Root。
-        entry_root: RootId,
-        /// 父条目的 Root。
-        parent_root: RootId,
+    /// 父条目属于另一个 Vault（design §7.2：父子必须同 Vault）。
+    CrossVaultParent {
+        /// 条目自己的 Vault。
+        entry_vault: VaultId,
+        /// 父条目的 Vault。
+        parent_vault: VaultId,
     },
     /// 同一父目录里已有同名的活跃条目。
     DuplicateName {
@@ -192,16 +192,16 @@ impl std::fmt::Display for EntryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Db(source) => write!(f, "SQLite 操作失败：{source}"),
-            Self::OutOfScope => f.write_str("Root 不存在或不在调用方的 owner scope 内"),
+            Self::OutOfScope => f.write_str("Vault 不存在或不在调用方的 owner scope 内"),
             Self::EntryNotFound { id } => write!(f, "条目 {id} 不存在或已删除"),
             Self::ParentNotFound { id } => write!(f, "父条目 {id} 不存在或已删除"),
             Self::ParentNotDirectory { id } => write!(f, "父条目 {id} 不是目录"),
-            Self::CrossRootParent {
-                entry_root,
-                parent_root,
+            Self::CrossVaultParent {
+                entry_vault,
+                parent_vault,
             } => write!(
                 f,
-                "父条目属于 Root {parent_root}，与条目的 Root {entry_root} 不同"
+                "父条目属于 Vault {parent_vault}，与条目的 Vault {entry_vault} 不同"
             ),
             Self::DuplicateName { parent, name } => {
                 write!(f, "父目录 {parent} 下已有同名条目 {name:?}")
@@ -238,7 +238,7 @@ impl std::error::Error for EntryError {
 }
 
 /// `entries` 表的列顺序，多处查询共用，避免手写列名漂移。
-const ENTRY_COLUMNS: &str = "e.id, e.root_id, e.parent_id, e.name, e.name_key, e.kind, \
+const ENTRY_COLUMNS: &str = "e.id, e.vault_id, e.parent_id, e.name, e.name_key, e.kind, \
                              e.revision, e.content_version_id, e.deleted_at";
 
 /// 新建条目：检查 owner scope、父目录、名称与同父唯一性后写入一行。
@@ -252,12 +252,12 @@ pub async fn insert_entry(
     new: &NewEntry,
     at: UtcTimestamp,
 ) -> Result<EntryRecord, EntryError> {
-    require_root_owner(tx, owner, new.root).await?;
+    require_vault_owner(tx, owner, new.vault).await?;
     let parent = parent_facts(tx, new.parent).await?;
-    if parent.root != new.root {
-        return Err(EntryError::CrossRootParent {
-            entry_root: new.root,
-            parent_root: parent.root,
+    if parent.vault != new.vault {
+        return Err(EntryError::CrossVaultParent {
+            entry_vault: new.vault,
+            parent_vault: parent.vault,
         });
     }
     if parent.deleted_at.is_some() {
@@ -268,17 +268,17 @@ pub async fn insert_entry(
     }
     validate_child_fields(&new.name, &new.name_key, new.kind, new.content_version)?;
     if let Some(version) = new.content_version {
-        require_recorded_version(tx, new.root, new.id, version).await?;
+        require_recorded_version(tx, new.vault, new.id, version).await?;
     }
 
     let inserted = sqlx::query(
         "INSERT INTO entries \
-         (id, root_id, parent_id, name, name_key, kind, revision, content_version_id, \
+         (id, vault_id, parent_id, name, name_key, kind, revision, content_version_id, \
           deleted_at, modified_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9)",
     )
     .bind(new.id.as_bytes().as_slice())
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.parent.as_bytes().as_slice())
     .bind(&new.name)
     .bind(&new.name_key)
@@ -300,9 +300,9 @@ pub async fn insert_entry(
         .ok_or(EntryError::EntryNotFound { id: new.id })
 }
 
-/// 在同一 Root 内移动/改名一个活跃条目。
+/// 在同一 Vault 内移动/改名一个活跃条目。
 ///
-/// 检查顺序：owner scope → 条目活跃 → 新名称 → 目标父目录（存在、活跃、同 Root、是目录）→
+/// 检查顺序：owner scope → 条目活跃 → 新名称 → 目标父目录（存在、活跃、同 Vault、是目录）→
 /// 目录环。目标父目录与当前父目录相同且名称不变时是合法的无操作更新（仍写入给定的修订号）。
 ///
 /// `at` 是这一笔改动的服务端时间，写进 `modified_at`。
@@ -321,10 +321,10 @@ pub async fn move_entry(
     validate_child_fields(name, name_key, current.kind, current.content_version)?;
 
     let parent = parent_facts(tx, target_parent).await?;
-    if parent.root != current.root {
-        return Err(EntryError::CrossRootParent {
-            entry_root: current.root,
-            parent_root: parent.root,
+    if parent.vault != current.vault {
+        return Err(EntryError::CrossVaultParent {
+            entry_vault: current.vault,
+            parent_vault: parent.vault,
         });
     }
     if parent.deleted_at.is_some() {
@@ -374,9 +374,9 @@ pub async fn soft_delete_entry(
     if current.kind == EntryKind::Directory {
         let active_children: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM entries \
-             WHERE root_id = ?1 AND parent_id = ?2 AND deleted_at IS NULL",
+             WHERE vault_id = ?1 AND parent_id = ?2 AND deleted_at IS NULL",
         )
-        .bind(current.root.as_bytes().as_slice())
+        .bind(current.vault.as_bytes().as_slice())
         .bind(id.as_bytes().as_slice())
         .fetch_one(&mut **tx)
         .await
@@ -408,7 +408,7 @@ pub async fn entry_in_scope(
     id: EntryId,
 ) -> Result<Option<EntryRecord>, EntryError> {
     let row = sqlx::query_as::<_, EntryRow>(&format!(
-        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN roots r ON r.id = e.root_id \
+        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN vaults r ON r.id = e.vault_id \
          WHERE e.id = ?1 AND r.owner_id = ?2"
     ))
     .bind(id.as_bytes().as_slice())
@@ -421,19 +421,19 @@ pub async fn entry_in_scope(
 
 /// 列出某个父目录下的活跃子项，按比较键（再按名称、身份）排序。
 ///
-/// Root 不在调用方的 owner scope 内时返回空列表，不区分“无权访问”与“没有子项”。
+/// Vault 不在调用方的 owner scope 内时返回空列表，不区分“无权访问”与“没有子项”。
 pub async fn children(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     parent: EntryId,
 ) -> Result<Vec<EntryRecord>, EntryError> {
     let rows = sqlx::query_as::<_, EntryRow>(&format!(
-        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN roots r ON r.id = e.root_id \
-         WHERE e.root_id = ?1 AND e.parent_id = ?2 AND e.deleted_at IS NULL AND r.owner_id = ?3 \
+        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN vaults r ON r.id = e.vault_id \
+         WHERE e.vault_id = ?1 AND e.parent_id = ?2 AND e.deleted_at IS NULL AND r.owner_id = ?3 \
          ORDER BY e.name_key, e.name, e.id"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(parent.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_all(conn)
@@ -442,18 +442,18 @@ pub async fn children(
     rows.into_iter().map(EntryRow::into_record).collect()
 }
 
-/// 读某个 Root 的合成根条目（`parent_id IS NULL` 的那一行）；owner 不匹配时为 `None`。
-pub async fn root_entry(
+/// 读某个 Vault 的合成根条目（`parent_id IS NULL` 的那一行）；owner 不匹配时为 `None`。
+pub async fn vault_entry(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<Option<EntryRecord>, EntryError> {
     let row = sqlx::query_as::<_, EntryRow>(&format!(
-        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN roots r ON r.id = e.root_id \
-         WHERE e.root_id = ?1 AND e.parent_id IS NULL AND e.deleted_at IS NULL \
+        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN vaults r ON r.id = e.vault_id \
+         WHERE e.vault_id = ?1 AND e.parent_id IS NULL AND e.deleted_at IS NULL \
          AND r.owner_id = ?2"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_optional(conn)
     .await
@@ -461,7 +461,7 @@ pub async fn root_entry(
     row.map(EntryRow::into_record).transpose()
 }
 
-/// 按 Root 内相对路径查活跃条目（逐分量按原始名称匹配）。
+/// 按 Vault 内相对路径查活跃条目（逐分量按原始名称匹配）。
 ///
 /// 路径是工作目录里的名字序列，因此按 `name` 精确比较而不是 `name_key`：比较键是跨平台等价规则
 /// 派生的，用它查路径会把“平台认为等价但名字不同”的条目当成同一条。中间分量必须是活跃目录，
@@ -474,20 +474,20 @@ pub async fn root_entry(
 pub async fn entry_by_path(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     path: &str,
 ) -> Result<Option<EntryRecord>, EntryError> {
-    let mut current = match root_entry(conn, owner, root).await? {
+    let mut current = match vault_entry(conn, owner, vault).await? {
         Some(entry) => entry,
         None => return Ok(None),
     };
     for part in path.split('/').filter(|part| !part.is_empty()) {
         let row = sqlx::query_as::<_, EntryRow>(&format!(
-            "SELECT {ENTRY_COLUMNS} FROM entries e JOIN roots r ON r.id = e.root_id \
-             WHERE e.root_id = ?1 AND e.parent_id = ?2 AND e.name = ?3 AND e.deleted_at IS NULL \
+            "SELECT {ENTRY_COLUMNS} FROM entries e JOIN vaults r ON r.id = e.vault_id \
+             WHERE e.vault_id = ?1 AND e.parent_id = ?2 AND e.name = ?3 AND e.deleted_at IS NULL \
              AND r.owner_id = ?4"
         ))
-        .bind(root.as_bytes().as_slice())
+        .bind(vault.as_bytes().as_slice())
         .bind(current.id.as_bytes().as_slice())
         .bind(part)
         .bind(owner.as_bytes().as_slice())
@@ -502,7 +502,7 @@ pub async fn entry_by_path(
     Ok(Some(current))
 }
 
-/// 条目在 Root 内的相对路径（按父链拼原始名称）；根条目对应空串。
+/// 条目在 Vault 内的相对路径（按父链拼原始名称）；根条目对应空串。
 ///
 /// 已软删除的中间父项同样拼进路径（历史版本与回收站仍要显示原路径），条目不存在或越权返回 `None`。
 ///
@@ -588,21 +588,21 @@ pub async fn advance_entry_revision(
         .ok_or(EntryError::EntryNotFound { id })
 }
 
-/// 建立 Root 的合成根条目；只由 [`crate::roots::insert_root`] 调用。
+/// 建立 Vault 的合成根条目；只由 [`crate::vaults::insert_vault`] 调用。
 ///
 /// 根条目不是任何目录里的分量：名称为空字符串，`parent_id IS NULL`，类型固定为目录。
-pub(crate) async fn insert_root_entry(
+pub(crate) async fn insert_vault_entry(
     tx: &mut Transaction<'_, Sqlite>,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<(), EntryError> {
     let inserted = sqlx::query(
         "INSERT INTO entries \
-         (id, root_id, parent_id, name, name_key, kind, revision, content_version_id) \
+         (id, vault_id, parent_id, name, name_key, kind, revision, content_version_id) \
          VALUES (?1, ?2, NULL, '', '', 'directory', 0, NULL)",
     )
     .bind(entry.as_bytes().as_slice())
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .execute(&mut **tx)
     .await;
     match inserted {
@@ -616,7 +616,7 @@ pub(crate) async fn insert_root_entry(
 #[derive(sqlx::FromRow)]
 struct EntryRow {
     id: Vec<u8>,
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     parent_id: Option<Vec<u8>>,
     name: String,
     name_key: String,
@@ -630,7 +630,7 @@ impl EntryRow {
     fn into_record(self) -> Result<EntryRecord, EntryError> {
         Ok(EntryRecord {
             id: identity(self.id, "id", EntryId::from_bytes)?,
-            root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+            vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
             parent: self
                 .parent_id
                 .map(|bytes| identity(bytes, "parent_id", EntryId::from_bytes))
@@ -657,9 +657,9 @@ impl EntryRow {
     }
 }
 
-/// 父条目的事实：所属 Root、类型与是否已软删除。
+/// 父条目的事实：所属 Vault、类型与是否已软删除。
 struct ParentFacts {
-    root: RootId,
+    vault: VaultId,
     kind: EntryKind,
     deleted_at: Option<i64>,
 }
@@ -669,14 +669,14 @@ async fn parent_facts(
     parent: EntryId,
 ) -> Result<ParentFacts, EntryError> {
     let row: Option<(Vec<u8>, String, Option<i64>)> =
-        sqlx::query_as("SELECT root_id, kind, deleted_at FROM entries WHERE id = ?1")
+        sqlx::query_as("SELECT vault_id, kind, deleted_at FROM entries WHERE id = ?1")
             .bind(parent.as_bytes().as_slice())
             .fetch_optional(conn)
             .await
             .map_err(EntryError::Db)?;
-    let (root_id, kind, deleted_at) = row.ok_or(EntryError::ParentNotFound { id: parent })?;
+    let (vault_id, kind, deleted_at) = row.ok_or(EntryError::ParentNotFound { id: parent })?;
     Ok(ParentFacts {
-        root: identity(root_id, "root_id", RootId::from_bytes)?,
+        vault: identity(vault_id, "vault_id", VaultId::from_bytes)?,
         kind: EntryKind::from_text(&kind).ok_or(EntryError::MalformedRow { column: "kind" })?,
         deleted_at,
     })
@@ -694,14 +694,14 @@ async fn active_entry_in_scope(
     }
 }
 
-/// 确认 Root 属于调用方的 owner scope。
-async fn require_root_owner(
+/// 确认 Vault 属于调用方的 owner scope。
+async fn require_vault_owner(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<(), EntryError> {
-    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM roots WHERE id = ?1")
-        .bind(root.as_bytes().as_slice())
+    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM vaults WHERE id = ?1")
+        .bind(vault.as_bytes().as_slice())
         .fetch_optional(conn)
         .await
         .map_err(EntryError::Db)?;
@@ -777,19 +777,19 @@ pub(crate) async fn set_current_content_version(
     Ok(())
 }
 
-/// 确认给定版本已经被记录到该 Root 的该条目（新建条目写入内容版本前的核对）。
+/// 确认给定版本已经被记录到该 Vault 的该条目（新建条目写入内容版本前的核对）。
 ///
 async fn require_recorded_version(
     conn: &mut SqliteConnection,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
     version: VersionId,
 ) -> Result<(), EntryError> {
     let found: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT id FROM versions WHERE id = ?1 AND root_id = ?2 AND entry_id = ?3",
+        "SELECT id FROM versions WHERE id = ?1 AND vault_id = ?2 AND entry_id = ?3",
     )
     .bind(version.as_bytes().as_slice())
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(entry.as_bytes().as_slice())
     .fetch_optional(conn)
     .await
@@ -827,7 +827,7 @@ fn is_unique_violation(error: &sqlx::Error) -> bool {
 
 /// 把写语句的约束错误翻译成带上下文的类型化错误。
 ///
-/// SQLite 的报错文本会写明命中的列（`UNIQUE constraint failed: entries.root_id, …`），据此区分
+/// SQLite 的报错文本会写明命中的列（`UNIQUE constraint failed: entries.vault_id, …`），据此区分
 /// “同父重名”与“条目身份被占用”；其它错误原样上抛，不猜默认值。
 fn classify_write_error(
     error: sqlx::Error,
@@ -889,10 +889,10 @@ pub async fn restore_entry(
     }
     validate_child_fields(name, name_key, current.kind, current.content_version)?;
     let parent = parent_facts(tx, target_parent).await?;
-    if parent.root != current.root {
-        return Err(EntryError::CrossRootParent {
-            entry_root: current.root,
-            parent_root: parent.root,
+    if parent.vault != current.vault {
+        return Err(EntryError::CrossVaultParent {
+            entry_vault: current.vault,
+            parent_vault: parent.vault,
         });
     }
     if parent.deleted_at.is_some() {
@@ -946,16 +946,16 @@ pub async fn restore_entry(
 pub async fn active_child_by_name(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     parent: EntryId,
     name: &str,
 ) -> Result<Option<EntryRecord>, EntryError> {
     let row = sqlx::query_as::<_, EntryRow>(&format!(
-        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN roots r ON r.id = e.root_id \
-         WHERE e.root_id = ?1 AND e.parent_id = ?2 AND e.name = ?3 AND e.deleted_at IS NULL \
+        "SELECT {ENTRY_COLUMNS} FROM entries e JOIN vaults r ON r.id = e.vault_id \
+         WHERE e.vault_id = ?1 AND e.parent_id = ?2 AND e.name = ?3 AND e.deleted_at IS NULL \
          AND r.owner_id = ?4"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(parent.as_bytes().as_slice())
     .bind(name)
     .bind(owner.as_bytes().as_slice())
@@ -972,7 +972,7 @@ mod tests {
     use sqlx::{ConnectOptions, Connection};
 
     use crate::db::Database;
-    use crate::test_support::{TestDir, entry, open_database, register_root, seed_owner, user};
+    use crate::test_support::{TestDir, entry, open_database, register_vault, seed_owner, user};
 
     fn rev(value: u64) -> Revision {
         Revision::new(value).expect("修订号")
@@ -986,7 +986,7 @@ mod tests {
     async fn insert(
         database: &Database,
         owner: UserId,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
         id: EntryId,
         name: &str,
@@ -998,7 +998,7 @@ mod tests {
             owner,
             &NewEntry {
                 id,
-                root,
+                vault,
                 parent,
                 name: name.to_owned(),
                 name_key: name.to_owned(),
@@ -1019,18 +1019,18 @@ mod tests {
     async fn insert_file(
         database: &Database,
         owner: UserId,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
         id: EntryId,
         name: &str,
     ) -> Result<EntryRecord, EntryError> {
-        insert(database, owner, root, parent, id, name, EntryKind::File).await
+        insert(database, owner, vault, parent, id, name, EntryKind::File).await
     }
 
     async fn insert_dir(
         database: &Database,
         owner: UserId,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
         id: EntryId,
         name: &str,
@@ -1038,7 +1038,7 @@ mod tests {
         insert(
             database,
             owner,
-            root,
+            vault,
             parent,
             id,
             name,
@@ -1047,13 +1047,13 @@ mod tests {
         .await
     }
 
-    /// 某个 Root 里所有条目的 `(name, parent_id 首字节, deleted_at)`，用于断言“失败不改数据”。
-    async fn snapshot(database: &Database, root: RootId) -> Vec<(String, Option<u8>, bool)> {
+    /// 某个 Vault 里所有条目的 `(name, parent_id 首字节, deleted_at)`，用于断言“失败不改数据”。
+    async fn snapshot(database: &Database, vault: VaultId) -> Vec<(String, Option<u8>, bool)> {
         let mut conn = database.pool().acquire().await.expect("取连接");
         let rows = sqlx::query_as::<_, (String, Option<Vec<u8>>, Option<i64>)>(
-            "SELECT name, parent_id, deleted_at FROM entries WHERE root_id = ?1 ORDER BY id",
+            "SELECT name, parent_id, deleted_at FROM entries WHERE vault_id = ?1 ORDER BY id",
         )
-        .bind(root.as_bytes().as_slice())
+        .bind(vault.as_bytes().as_slice())
         .fetch_all(&mut *conn)
         .await
         .expect("读条目");
@@ -1065,57 +1065,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parent_in_another_root_is_rejected_and_rows_are_unchanged() {
-        let dir = TestDir::new("cross-root");
+    async fn parent_in_another_vault_is_rejected_and_rows_are_unchanged() {
+        let dir = TestDir::new("cross-vault");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root_a, root_a_dir) = register_root(&database, owner, 0x21).await;
-        let (root_b, root_b_dir) = register_root(&database, owner, 0x22).await;
+        let (vault_a, vault_a_dir) = register_vault(&database, owner, 0x21).await;
+        let (vault_b, vault_b_dir) = register_vault(&database, owner, 0x22).await;
 
-        let before = snapshot(&database, root_a).await;
+        let before = snapshot(&database, vault_a).await;
         let error = insert_file(
             &database,
             owner,
-            root_a,
-            root_b_dir,
+            vault_a,
+            vault_b_dir,
             entry(0x31),
             "cross.txt",
         )
         .await
-        .expect_err("跨 Root 父项必须失败");
+        .expect_err("跨 Vault 父项必须失败");
         assert!(
             matches!(
                 error,
-                EntryError::CrossRootParent {
-                    entry_root,
-                    parent_root,
-                } if entry_root == root_a && parent_root == root_b
+                EntryError::CrossVaultParent {
+                    entry_vault,
+                    parent_vault,
+                } if entry_vault == vault_a && parent_vault == vault_b
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(snapshot(&database, root_a).await, before, "失败不得改数据");
+        assert_eq!(snapshot(&database, vault_a).await, before, "失败不得改数据");
         assert_eq!(
-            snapshot(&database, root_b).await,
+            snapshot(&database, vault_b).await,
             vec![(String::new(), None, false)],
-            "另一个 Root 也不得被写入"
+            "另一个 Vault 也不得被写入"
         );
 
-        // 合法的同 Root 父项仍然可用：失败没有把连接或事务弄坏。
-        let file = insert_file(&database, owner, root_a, root_a_dir, entry(0x32), "ok.txt")
-            .await
-            .expect("同 Root 父项应成功");
-        assert_eq!(file.parent, Some(root_a_dir));
+        // 合法的同 Vault 父项仍然可用：失败没有把连接或事务弄坏。
+        let file = insert_file(
+            &database,
+            owner,
+            vault_a,
+            vault_a_dir,
+            entry(0x32),
+            "ok.txt",
+        )
+        .await
+        .expect("同 Vault 父项应成功");
+        assert_eq!(file.parent, Some(vault_a_dir));
         database.close().await;
     }
 
     #[tokio::test]
-    async fn duplicate_sibling_names_are_rejected_but_other_parents_and_roots_are_free() {
+    async fn duplicate_sibling_names_are_rejected_but_other_parents_and_vaults_are_free() {
         let dir = TestDir::new("duplicate");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root_a, root_a_dir) = register_root(&database, owner, 0x21).await;
-        let (root_b, root_b_dir) = register_root(&database, owner, 0x22).await;
-        let subdir = insert_dir(&database, owner, root_a, root_a_dir, entry(0x31), "sub")
+        let (vault_a, vault_a_dir) = register_vault(&database, owner, 0x21).await;
+        let (vault_b, vault_b_dir) = register_vault(&database, owner, 0x22).await;
+        let subdir = insert_dir(&database, owner, vault_a, vault_a_dir, entry(0x31), "sub")
             .await
             .expect("建子目录")
             .id;
@@ -1123,20 +1130,20 @@ mod tests {
         let first = insert_file(
             &database,
             owner,
-            root_a,
-            root_a_dir,
+            vault_a,
+            vault_a_dir,
             entry(0x32),
             "report.txt",
         )
         .await
         .expect("首次写入");
-        let before = snapshot(&database, root_a).await;
+        let before = snapshot(&database, vault_a).await;
 
         let error = insert_file(
             &database,
             owner,
-            root_a,
-            root_a_dir,
+            vault_a,
+            vault_a_dir,
             entry(0x33),
             "report.txt",
         )
@@ -1146,22 +1153,22 @@ mod tests {
             matches!(error, EntryError::DuplicateName { ref name, .. } if name == "report.txt"),
             "实际错误 {error:?}"
         );
-        assert_eq!(snapshot(&database, root_a).await, before, "失败不得改数据");
+        assert_eq!(snapshot(&database, vault_a).await, before, "失败不得改数据");
 
-        // 不同父目录、不同 Root 里可以用同一个名称。
-        insert_file(&database, owner, root_a, subdir, entry(0x34), "report.txt")
+        // 不同父目录、不同 Vault 里可以用同一个名称。
+        insert_file(&database, owner, vault_a, subdir, entry(0x34), "report.txt")
             .await
             .expect("不同父目录允许同名");
         insert_file(
             &database,
             owner,
-            root_b,
-            root_b_dir,
+            vault_b,
+            vault_b_dir,
             entry(0x35),
             "report.txt",
         )
         .await
-        .expect("不同 Root 允许同名");
+        .expect("不同 Vault 允许同名");
 
         // 比较键相同但名称不同也算重复（平台等价，例如 NTFS 大小写不敏感）。
         let mut tx = database.begin_write().await.expect("开始写事务");
@@ -1170,8 +1177,8 @@ mod tests {
             owner,
             &NewEntry {
                 id: entry(0x36),
-                root: root_a,
-                parent: root_a_dir,
+                vault: vault_a,
+                parent: vault_a_dir,
                 name: "REPORT.TXT".to_owned(),
                 name_key: "report.txt".to_owned(),
                 kind: EntryKind::File,
@@ -1195,8 +1202,8 @@ mod tests {
             owner,
             &NewEntry {
                 id: entry(0x37),
-                root: root_a,
-                parent: root_a_dir,
+                vault: vault_a,
+                parent: vault_a_dir,
                 name: "report.txt".to_owned(),
                 name_key: "another-key".to_owned(),
                 kind: EntryKind::File,
@@ -1218,8 +1225,8 @@ mod tests {
         let uppercase = insert_file(
             &database,
             owner,
-            root_a,
-            root_a_dir,
+            vault_a,
+            vault_a_dir,
             entry(0x39),
             "Report.TXT",
         )
@@ -1237,8 +1244,8 @@ mod tests {
         insert_file(
             &database,
             owner,
-            root_a,
-            root_a_dir,
+            vault_a,
+            vault_a_dir,
             entry(0x38),
             "report.txt",
         )
@@ -1252,20 +1259,20 @@ mod tests {
         let dir = TestDir::new("cycle");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, root_dir) = register_root(&database, owner, 0x21).await;
-        let outer = insert_dir(&database, owner, root, root_dir, entry(0x31), "outer")
+        let (vault, vault_dir) = register_vault(&database, owner, 0x21).await;
+        let outer = insert_dir(&database, owner, vault, vault_dir, entry(0x31), "outer")
             .await
             .expect("建 outer")
             .id;
-        let inner = insert_dir(&database, owner, root, outer, entry(0x32), "inner")
+        let inner = insert_dir(&database, owner, vault, outer, entry(0x32), "inner")
             .await
             .expect("建 inner")
             .id;
-        let deepest = insert_dir(&database, owner, root, inner, entry(0x33), "deepest")
+        let deepest = insert_dir(&database, owner, vault, inner, entry(0x33), "deepest")
             .await
             .expect("建 deepest")
             .id;
-        let before = snapshot(&database, root).await;
+        let before = snapshot(&database, vault).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         let error = move_entry(
@@ -1304,17 +1311,17 @@ mod tests {
         tx.commit().await.expect("提交（失败不应留下改动）");
 
         assert_eq!(
-            snapshot(&database, root).await,
+            snapshot(&database, vault).await,
             before,
             "位置与修订号不得改变"
         );
-        // 合法的同 Root 移动仍然可以：把 deepest 移到根目录下。
+        // 合法的同 Vault 移动仍然可以：把 deepest 移到根目录下。
         let mut tx = database.begin_write().await.expect("开始写事务");
         let moved = move_entry(
             &mut tx,
             owner,
             deepest,
-            root_dir,
+            vault_dir,
             "deepest",
             "deepest",
             rev(2),
@@ -1323,46 +1330,46 @@ mod tests {
         .await
         .expect("合法移动应成功");
         tx.commit().await.expect("提交");
-        assert_eq!(moved.parent, Some(root_dir));
+        assert_eq!(moved.parent, Some(vault_dir));
         assert_eq!(moved.revision, rev(2));
         database.close().await;
     }
 
     #[tokio::test]
-    async fn moving_across_roots_and_under_a_file_is_rejected() {
+    async fn moving_across_vaults_and_under_a_file_is_rejected() {
         let dir = TestDir::new("move-reject");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root_a, root_a_dir) = register_root(&database, owner, 0x21).await;
-        let (_root_b, root_b_dir) = register_root(&database, owner, 0x22).await;
+        let (vault_a, vault_a_dir) = register_vault(&database, owner, 0x21).await;
+        let (_vault_b, vault_b_dir) = register_vault(&database, owner, 0x22).await;
         let file = insert_file(
             &database,
             owner,
-            root_a,
-            root_a_dir,
+            vault_a,
+            vault_a_dir,
             entry(0x31),
             "file.txt",
         )
         .await
         .expect("建文件")
         .id;
-        let before = snapshot(&database, root_a).await;
+        let before = snapshot(&database, vault_a).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         let error = move_entry(
             &mut tx,
             owner,
             file,
-            root_b_dir,
+            vault_b_dir,
             "file.txt",
             "file.txt",
             rev(2),
             at(1_700_000_300),
         )
         .await
-        .expect_err("跨 Root 移动必须失败");
+        .expect_err("跨 Vault 移动必须失败");
         assert!(
-            matches!(error, EntryError::CrossRootParent { .. }),
+            matches!(error, EntryError::CrossVaultParent { .. }),
             "实际错误 {error:?}"
         );
         let error = move_entry(
@@ -1382,7 +1389,7 @@ mod tests {
             "实际错误 {error:?}"
         );
         tx.commit().await.expect("提交（失败不应留下改动）");
-        assert_eq!(snapshot(&database, root_a).await, before);
+        assert_eq!(snapshot(&database, vault_a).await, before);
         database.close().await;
     }
 
@@ -1396,12 +1403,19 @@ mod tests {
         crate::test_support::insert_user(&mut tx, other).await;
         tx.commit().await.expect("提交");
 
-        let (root, root_dir) = register_root(&database, owner, 0x21).await;
-        let file = insert_file(&database, owner, root, root_dir, entry(0x31), "secret.txt")
-            .await
-            .expect("建文件")
-            .id;
-        let before = snapshot(&database, root).await;
+        let (vault, vault_dir) = register_vault(&database, owner, 0x21).await;
+        let file = insert_file(
+            &database,
+            owner,
+            vault,
+            vault_dir,
+            entry(0x31),
+            "secret.txt",
+        )
+        .await
+        .expect("建文件")
+        .id;
+        let before = snapshot(&database, vault).await;
 
         let mut conn = database.pool().acquire().await.expect("取只读连接");
         assert_eq!(
@@ -1410,14 +1424,14 @@ mod tests {
             "别人的 owner 读不到条目"
         );
         assert!(
-            children(&mut conn, other, root, root_dir)
+            children(&mut conn, other, vault, vault_dir)
                 .await
                 .expect("查询")
                 .is_empty(),
             "别人的 owner 读不到子项列表"
         );
         assert_eq!(
-            root_entry(&mut conn, other, root).await.expect("查询"),
+            vault_entry(&mut conn, other, vault).await.expect("查询"),
             None,
             "别人的 owner 读不到根条目"
         );
@@ -1429,8 +1443,8 @@ mod tests {
             other,
             &NewEntry {
                 id: entry(0x32),
-                root,
-                parent: root_dir,
+                vault,
+                parent: vault_dir,
                 name: "intrusion.txt".to_owned(),
                 name_key: "intrusion.txt".to_owned(),
                 kind: EntryKind::File,
@@ -1449,7 +1463,7 @@ mod tests {
             &mut tx,
             other,
             file,
-            root_dir,
+            vault_dir,
             "moved.txt",
             "moved.txt",
             rev(2),
@@ -1469,7 +1483,7 @@ mod tests {
             "实际错误 {error:?}"
         );
         tx.commit().await.expect("提交（失败不应留下改动）");
-        assert_eq!(snapshot(&database, root).await, before);
+        assert_eq!(snapshot(&database, vault).await, before);
         database.close().await;
     }
 
@@ -1478,12 +1492,12 @@ mod tests {
         let dir = TestDir::new("delete-dir");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, root_dir) = register_root(&database, owner, 0x21).await;
-        let outer = insert_dir(&database, owner, root, root_dir, entry(0x31), "outer")
+        let (vault, vault_dir) = register_vault(&database, owner, 0x21).await;
+        let outer = insert_dir(&database, owner, vault, vault_dir, entry(0x31), "outer")
             .await
             .expect("建 outer")
             .id;
-        insert_file(&database, owner, root, outer, entry(0x32), "inside.txt")
+        insert_file(&database, owner, vault, outer, entry(0x32), "inside.txt")
             .await
             .expect("建文件");
 
@@ -1519,8 +1533,8 @@ mod tests {
         let dir = TestDir::new("invalid-input");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, root_dir) = register_root(&database, owner, 0x21).await;
-        let before = snapshot(&database, root).await;
+        let (vault, vault_dir) = register_vault(&database, owner, 0x21).await;
+        let before = snapshot(&database, vault).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         let error = insert_entry(
@@ -1528,8 +1542,8 @@ mod tests {
             owner,
             &NewEntry {
                 id: entry(0x31),
-                root,
-                parent: root_dir,
+                vault,
+                parent: vault_dir,
                 name: "CON".to_owned(),
                 name_key: "con".to_owned(),
                 kind: EntryKind::File,
@@ -1549,8 +1563,8 @@ mod tests {
             owner,
             &NewEntry {
                 id: entry(0x32),
-                root,
-                parent: root_dir,
+                vault,
+                parent: vault_dir,
                 name: "dir".to_owned(),
                 name_key: "dir".to_owned(),
                 kind: EntryKind::Directory,
@@ -1570,8 +1584,8 @@ mod tests {
             owner,
             &NewEntry {
                 id: entry(0x33),
-                root,
-                parent: root_dir,
+                vault,
+                parent: vault_dir,
                 name: "keys.txt".to_owned(),
                 name_key: String::new(),
                 kind: EntryKind::File,
@@ -1593,8 +1607,8 @@ mod tests {
             owner,
             &NewEntry {
                 id: entry(0x34),
-                root,
-                parent: root_dir,
+                vault,
+                parent: vault_dir,
                 name: "note.txt".to_owned(),
                 name_key: "note.txt".to_owned(),
                 kind: EntryKind::File,
@@ -1610,37 +1624,37 @@ mod tests {
             "实际错误 {error:?}"
         );
         tx.commit().await.expect("提交（失败不应留下改动）");
-        assert_eq!(snapshot(&database, root).await, before, "只应有根条目");
+        assert_eq!(snapshot(&database, vault).await, before, "只应有根条目");
         database.close().await;
     }
 
     #[tokio::test]
-    async fn cross_root_parent_is_also_refused_by_the_database_constraint() {
+    async fn cross_vault_parent_is_also_refused_by_the_database_constraint() {
         let dir = TestDir::new("db-constraint");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root_a, _root_a_dir) = register_root(&database, owner, 0x21).await;
-        let (_root_b, root_b_dir) = register_root(&database, owner, 0x22).await;
+        let (vault_a, _vault_a_dir) = register_vault(&database, owner, 0x21).await;
+        let (_vault_b, vault_b_dir) = register_vault(&database, owner, 0x22).await;
 
-        // 绕过本模块直接写 SQL：外键本身必须挡住跨 Root 的父项，而不是只靠 Rust 侧检查。
+        // 绕过本模块直接写 SQL：外键本身必须挡住跨 Vault 的父项，而不是只靠 Rust 侧检查。
         let mut tx = database.begin_write().await.expect("开始写事务");
         let error = sqlx::query(
-            "INSERT INTO entries (id, root_id, parent_id, name, name_key, kind, revision) \
+            "INSERT INTO entries (id, vault_id, parent_id, name, name_key, kind, revision) \
              VALUES (?1, ?2, ?3, 'raw.txt', 'raw.txt', 'file', 1)",
         )
         .bind(entry(0x31).as_bytes().as_slice())
-        .bind(root_a.as_bytes().as_slice())
-        .bind(root_b_dir.as_bytes().as_slice())
+        .bind(vault_a.as_bytes().as_slice())
+        .bind(vault_b_dir.as_bytes().as_slice())
         .execute(&mut *tx)
         .await
-        .expect_err("外键必须拒绝跨 Root 父项");
+        .expect_err("外键必须拒绝跨 Vault 父项");
         assert!(
             error.to_string().contains("FOREIGN KEY"),
             "实际错误 {error}"
         );
         tx.rollback().await.expect("回滚");
         assert_eq!(
-            snapshot(&database, root_a).await,
+            snapshot(&database, vault_a).await,
             vec![(String::new(), None, false)],
             "外键失败不得写入"
         );
@@ -1701,7 +1715,7 @@ mod tests {
         assert_eq!(value, "fixture");
         let tables: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('users', 'roots', 'entries', 'objects', 'versions', 'changes', 'operations', \
+             AND name IN ('users', 'vaults', 'entries', 'objects', 'versions', 'changes', 'operations', \
                           'uploads', 'upload_parts', 'fs_intents', 'backup_leases', 'object_leases', \
                           'trash_entries', 'tombstones') \
              ORDER BY name",
@@ -1719,12 +1733,12 @@ mod tests {
                 "object_leases",
                 "objects",
                 "operations",
-                "roots",
                 "tombstones",
                 "trash_entries",
                 "upload_parts",
                 "uploads",
                 "users",
+                "vaults",
                 "versions"
             ]
         );
@@ -1734,11 +1748,11 @@ mod tests {
             "非空库升级前应有备份"
         );
 
-        // 新表立刻可用：owner + Root + 根条目一次事务写入。
+        // 新表立刻可用：owner + Vault + 根条目一次事务写入。
         let mut tx = database.begin_write().await.expect("开始写事务");
         crate::test_support::insert_user(&mut tx, user(0x11)).await;
         tx.commit().await.expect("提交");
-        register_root(&database, user(0x11), 0x21).await;
+        register_vault(&database, user(0x11), 0x21).await;
         database.close().await;
     }
 

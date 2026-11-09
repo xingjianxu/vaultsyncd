@@ -14,7 +14,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use common::{
-    Lab, Running, db, entry_named, epoch_of, identity, login, register_root, snapshot, submit,
+    Lab, Running, db, entry_named, epoch_of, identity, login, register_vault, snapshot, submit,
     upload, wait_for,
 };
 use reqwest::StatusCode;
@@ -29,9 +29,9 @@ struct Setup {
     lab: Lab,
     running: Running,
     token: String,
-    root: String,
+    vault: String,
     epoch: String,
-    root_entry: String,
+    vault_entry: String,
 }
 
 async fn boot(label: &str, seed: impl FnOnce(&Path), adopted: &str) -> Setup {
@@ -39,21 +39,21 @@ async fn boot(label: &str, seed: impl FnOnce(&Path), adopted: &str) -> Setup {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
         .expect("注册");
     seed(&lab.work());
     wait_for(&format!("采纳 {adopted}"), || async {
-        Ok(snapshot(&running, &token, &root)
+        Ok(snapshot(&running, &token, &vault)
             .await
             .iter()
             .any(|entry| entry["name"] == adopted))
     })
     .await
     .expect("采纳");
-    let epoch = epoch_of(&running, &token, &root).await;
-    let entries = snapshot(&running, &token, &root).await;
-    let root_entry = entries
+    let epoch = epoch_of(&running, &token, &vault).await;
+    let entries = snapshot(&running, &token, &vault).await;
+    let vault_entry = entries
         .iter()
         .find(|entry| entry["parent_id"].is_null())
         .expect("根")["entry_id"]
@@ -64,15 +64,15 @@ async fn boot(label: &str, seed: impl FnOnce(&Path), adopted: &str) -> Setup {
         lab,
         running,
         token,
-        root,
+        vault,
         epoch,
-        root_entry,
+        vault_entry,
     }
 }
 
 impl Setup {
     async fn entry(&self, name: &str) -> (String, String) {
-        let entries = snapshot(&self.running, &self.token, &self.root).await;
+        let entries = snapshot(&self.running, &self.token, &self.vault).await;
         let entry = entry_named(&entries, name);
         (
             entry["entry_id"].as_str().expect("id").to_owned(),
@@ -81,13 +81,13 @@ impl Setup {
     }
 
     async fn submit(&self, body: Value) -> (StatusCode, Value) {
-        submit(&self.running, &self.token, &self.root, body).await
+        submit(&self.running, &self.token, &self.vault, body).await
     }
 
     /// 停止实例并释放所有权，返回实验目录等恢复阶段要用的东西。
     async fn stop(self) -> (Lab, String) {
         self.running.stop().await;
-        (self.lab, self.root)
+        (self.lab, self.vault)
     }
 }
 
@@ -100,7 +100,7 @@ fn unlock_dir(dir: &Path) {
 }
 
 async fn assert_pending_intent(lab: &Lab) {
-    // Root 准入仍完整可写；只锁发布目标的父目录，不让 upfront rwx 代替真实发布故障。
+    // Vault 准入仍完整可写；只锁发布目标的父目录，不让 upfront rwx 代替真实发布故障。
     assert_eq!(
         std::fs::metadata(lab.work()).unwrap().permissions().mode() & 0o700,
         0o700
@@ -133,7 +133,7 @@ async fn scalar(conn: &mut sqlx::SqliteConnection, sql: &str) -> i64 {
         .expect("查询")
 }
 
-/// 只评估启动恢复（不开放监听）：返回恢复是否让所有 Root 都能开放写入。
+/// 只评估启动恢复（不开放监听）：返回恢复是否让所有 Vault 都能开放写入。
 async fn recovery_complete(lab: &Lab) -> bool {
     let service = vaultsyncd_server::bootstrap::prepare(lab.config())
         .await
@@ -152,10 +152,10 @@ async fn external_events(conn: &mut sqlx::SqliteConnection) -> i64 {
 }
 
 /// 补完后真实启动，同一请求必须重放为 committed，并返回该结果。
-async fn replay_committed(lab: &Lab, root: &str, body: &Value) -> Value {
+async fn replay_committed(lab: &Lab, vault: &str, body: &Value) -> Value {
     let running = Running::start(lab).await.expect("补完后开放写入");
     let token = login(&running).await.expect("登录");
-    let (status, replay) = submit(&running, &token, root, body.clone()).await;
+    let (status, replay) = submit(&running, &token, vault, body.clone()).await;
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay["state"], "committed");
     assert_eq!(replay["replayed"], true);
@@ -193,7 +193,7 @@ async fn put_case_at(label: &str, parent: Option<&str>) -> PutCase {
     )
     .await;
     let (entry, revision) = setup.entry("note.txt").await;
-    let (upload_id, _, _) = upload(&setup.running, &setup.token, &setup.root, V2, 32)
+    let (upload_id, _, _) = upload(&setup.running, &setup.token, &setup.vault, V2, 32)
         .await
         .expect("上传 V2");
     let body = json!({
@@ -245,7 +245,7 @@ async fn assert_put_finished_once(lab: &Lab, work_file: &Path, replay: &Value) {
 #[tokio::test]
 async fn put_before_image_is_redone_after_restart() {
     let case = put_case_at("rb-put-before", Some("scope")).await;
-    // Root 保持合规，仅发布父目录只读：意图落盘后实际发布失败，仍是 V1。
+    // Vault 保持合规，仅发布父目录只读：意图落盘后实际发布失败，仍是 V1。
     lock_dir(case.work_file.parent().unwrap());
     let (status, failed) = case.setup.submit(case.body.clone()).await;
     unlock_dir(case.work_file.parent().unwrap());
@@ -262,12 +262,12 @@ async fn put_before_image_is_redone_after_restart() {
         1
     );
     drop(conn);
-    let (lab, root) = case.setup.stop().await;
+    let (lab, vault) = case.setup.stop().await;
     assert!(
         recovery_complete(&lab).await,
         "前像 + prepared 应重做并补完"
     );
-    let replay = replay_committed(&lab, &root, &case.body).await;
+    let replay = replay_committed(&lab, &vault, &case.body).await;
     assert_put_finished_once(&lab, &case.work_file, &replay).await;
 }
 
@@ -279,7 +279,7 @@ async fn put_prepared_with_changed_before_image_stays_blocked_until_restored() {
     unlock_dir(case.work_file.parent().unwrap());
     assert_ne!(status, StatusCode::OK);
     assert_pending_intent(&case.setup.lab).await;
-    let (lab, root) = case.setup.stop().await;
+    let (lab, vault) = case.setup.stop().await;
     // 前像被外部改成第三种内容：不能用 V2 覆盖它。
     std::fs::write(&case.work_file, THIRD).expect("外部改写");
     assert!(!recovery_complete(&lab).await, "前像已变，必须停写");
@@ -310,7 +310,7 @@ async fn put_prepared_with_changed_before_image_stays_blocked_until_restored() {
     // 现场回到前像后，同一操作继续。
     std::fs::write(&case.work_file, V1).expect("还原");
     assert!(recovery_complete(&lab).await);
-    let replay = replay_committed(&lab, &root, &case.body).await;
+    let replay = replay_committed(&lab, &vault, &case.body).await;
     assert_put_finished_once(&lab, &case.work_file, &replay).await;
 }
 
@@ -334,14 +334,14 @@ async fn put_after_image_completes_and_third_content_blocks() {
         .await
         .expect("移除");
     drop(conn);
-    let (lab, root) = case.setup.stop().await;
+    let (lab, vault) = case.setup.stop().await;
     // 后像之后被改成第三种内容：不能把它记成 V2 已提交。
     std::fs::write(&case.work_file, THIRD).expect("外部改写");
     assert!(!recovery_complete(&lab).await);
     assert_eq!(std::fs::read(&case.work_file).expect("读"), THIRD);
     std::fs::write(&case.work_file, V2).expect("还原");
     assert!(recovery_complete(&lab).await);
-    let replay = replay_committed(&lab, &root, &case.body).await;
+    let replay = replay_committed(&lab, &vault, &case.body).await;
     assert_put_finished_once(&lab, &case.work_file, &replay).await;
 }
 
@@ -364,7 +364,7 @@ async fn corrupted_or_unlinked_intent_keeps_writes_closed_without_losing_evidenc
         .await
         .expect("原后像");
     drop(conn);
-    let (lab, root) = case.setup.stop().await;
+    let (lab, vault) = case.setup.stop().await;
 
     // 损坏：后像 JSON 合法但不是意图证据形状。
     let mut conn = db(&lab).await;
@@ -390,7 +390,7 @@ async fn corrupted_or_unlinked_intent_keeps_writes_closed_without_losing_evidenc
 
     // 缺少完整操作键关联：不靠最新操作行推断。
     let link: (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) =
-        sqlx::query_as("SELECT intent_id, root_id, device_id, op_id FROM intent_operations")
+        sqlx::query_as("SELECT intent_id, vault_id, device_id, op_id FROM intent_operations")
             .fetch_one(&mut conn)
             .await
             .expect("关联");
@@ -408,7 +408,7 @@ async fn corrupted_or_unlinked_intent_keeps_writes_closed_without_losing_evidenc
         1
     );
     sqlx::query(
-        "INSERT INTO intent_operations(intent_id,root_id,device_id,op_id) VALUES (?1,?2,?3,?4)",
+        "INSERT INTO intent_operations(intent_id,vault_id,device_id,op_id) VALUES (?1,?2,?3,?4)",
     )
     .bind(link.0)
     .bind(link.1)
@@ -419,7 +419,7 @@ async fn corrupted_or_unlinked_intent_keeps_writes_closed_without_losing_evidenc
     .expect("还原关联");
     drop(conn);
     assert!(recovery_complete(&lab).await);
-    let replay = replay_committed(&lab, &root, &case.body).await;
+    let replay = replay_committed(&lab, &vault, &case.body).await;
     assert_put_finished_once(&lab, &case.work_file, &replay).await;
     let _ = case.entry;
 }
@@ -451,14 +451,14 @@ async fn namespace_before_and_third_state_across_restart() {
     assert_ne!(status, StatusCode::OK, "{failed}");
     assert!(!made.exists());
     assert_pending_intent(&setup.lab).await;
-    let (lab, root) = setup.stop().await;
+    let (lab, vault) = setup.stop().await;
     // 第三种现场：同名位置现在是一个普通文件（外部创建）：不能当成目录已建好。
     std::fs::write(&made, THIRD).expect("外部同名文件");
     assert!(!recovery_complete(&lab).await);
     assert_eq!(std::fs::read(&made).expect("读"), THIRD);
     std::fs::remove_file(&made).expect("还原空缺");
     assert!(recovery_complete(&lab).await);
-    let replay = replay_committed(&lab, &root, &body).await;
+    let replay = replay_committed(&lab, &vault, &body).await;
     assert!(made.is_dir());
     assert_eq!(replay["echo_local_generation"], "5", "补完后仍回显本地代际");
     let mut conn = db(&lab).await;
@@ -489,7 +489,7 @@ async fn delete_before_image_is_redone_but_changed_content_is_never_deleted() {
     assert_ne!(status, StatusCode::OK, "{failed}");
     assert!(doomed.exists());
     assert_pending_intent(&setup.lab).await;
-    let (lab, root) = setup.stop().await;
+    let (lab, vault) = setup.stop().await;
     // 删除前像之后文件被外部改写：删除会丢掉新内容，必须停写保留。
     std::fs::write(&doomed, THIRD).expect("外部改写");
     assert!(!recovery_complete(&lab).await);
@@ -500,7 +500,7 @@ async fn delete_before_image_is_redone_but_changed_content_is_never_deleted() {
     );
     std::fs::write(&doomed, V1).expect("还原");
     assert!(recovery_complete(&lab).await);
-    let replay = replay_committed(&lab, &root, &body).await;
+    let replay = replay_committed(&lab, &vault, &body).await;
     assert!(!doomed.exists());
     assert_eq!(replay["echo_local_generation"], "6");
     let mut conn = db(&lab).await;
@@ -522,7 +522,7 @@ async fn version_restore_and_conflict_complete_once_after_commit_failure() {
     // 先提交 V2，得到 v1/v2 两个版本与新的 revision。
     let (status, put) = setup.submit(case.body.clone()).await;
     assert_eq!(status, StatusCode::OK, "{put}");
-    let entries = snapshot(&setup.running, &setup.token, &setup.root).await;
+    let entries = snapshot(&setup.running, &setup.token, &setup.vault).await;
     let note = entry_named(&entries, "note.txt").clone();
     let mut conn = db(&setup.lab).await;
     let v1: String =
@@ -552,9 +552,9 @@ async fn version_restore_and_conflict_complete_once_after_commit_failure() {
     let work_file = case.work_file.clone();
     let body = case.body.clone();
     let entry = case.entry.clone();
-    let (lab, root) = case.setup.stop().await;
+    let (lab, vault) = case.setup.stop().await;
     assert!(recovery_complete(&lab).await);
-    let replay = replay_committed(&lab, &root, &restore).await;
+    let replay = replay_committed(&lab, &vault, &restore).await;
     assert_eq!(replay["entry_id"], entry);
     assert_eq!(replay["echo_local_generation"], "8");
     assert_eq!(std::fs::read(&work_file).expect("读"), V1);
@@ -587,7 +587,7 @@ async fn version_restore_and_conflict_complete_once_after_commit_failure() {
     for (version, expected) in versions.iter().zip([V1, V2, V1]) {
         let (status, bytes, _) = running
             .download(
-                &format!("/v1/roots/{root}/entries/{entry}/versions/{version}/content"),
+                &format!("/v1/vaults/{vault}/entries/{entry}/versions/{version}/content"),
                 &token,
             )
             .await
@@ -606,7 +606,7 @@ async fn conflict_sibling_survives_commit_failure_and_is_completed_once() {
     std::fs::write(&case.work_file, b"server head advanced\n").expect("改写");
     let stale = case.body["base_revision"].clone();
     wait_for("head 前进", || async {
-        let entries = snapshot(&setup.running, &setup.token, &setup.root).await;
+        let entries = snapshot(&setup.running, &setup.token, &setup.vault).await;
         Ok(entries
             .iter()
             .any(|e| e["entry_id"] == case.entry.as_str() && e["revision"] != stale))
@@ -634,9 +634,9 @@ async fn conflict_sibling_survives_commit_failure_and_is_completed_once() {
     drop(conn);
     let body = case.body.clone();
     let work = case.setup.lab.work();
-    let (lab, root) = case.setup.stop().await;
+    let (lab, vault) = case.setup.stop().await;
     assert!(recovery_complete(&lab).await);
-    let replay = replay_committed(&lab, &root, &body).await;
+    let replay = replay_committed(&lab, &vault, &body).await;
     assert_eq!(replay["conflict"]["reason"], "stale_base");
     let after: Vec<_> = std::fs::read_dir(&work)
         .expect("列目录")
@@ -660,7 +660,7 @@ async fn conflict_sibling_survives_commit_failure_and_is_completed_once() {
         .to_owned();
     let running = Running::start(&lab).await.expect("启动");
     let token = login(&running).await.expect("登录");
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let version = entries
         .iter()
         .find(|entry| entry["entry_id"] == sibling.as_str())
@@ -670,7 +670,7 @@ async fn conflict_sibling_survives_commit_failure_and_is_completed_once() {
         .to_owned();
     let (status, bytes, _) = running
         .download(
-            &format!("/v1/roots/{root}/entries/{sibling}/versions/{version}/content"),
+            &format!("/v1/vaults/{vault}/entries/{sibling}/versions/{version}/content"),
             &token,
         )
         .await
@@ -711,7 +711,7 @@ async fn delete_refuses_to_drop_content_the_observer_has_not_adopted() {
     // 目录里出现尚未采纳的新文件：目录删除同样拒绝。
     std::fs::write(setup.lab.work().join("box/extra.txt"), b"x").expect("新文件");
     let (_, subtree) =
-        common::subtree_token(&setup.running, &setup.token, &setup.root, &boxed).await;
+        common::subtree_token(&setup.running, &setup.token, &setup.vault, &boxed).await;
     let (status, response) = setup
         .submit(json!({
             "op_id": identity(0xd6), "device_id": identity(0x72), "server_epoch": setup.epoch,
@@ -784,10 +784,10 @@ async fn own_commands_never_come_back_as_external_changes() {
         }))
         .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
-    let entries = snapshot(&setup.running, &setup.token, &setup.root).await;
+    let entries = snapshot(&setup.running, &setup.token, &setup.vault).await;
     let current = entry_named(&entries, "dir1")["revision"].clone();
     let (_, subtree) =
-        common::subtree_token(&setup.running, &setup.token, &setup.root, &dir1).await;
+        common::subtree_token(&setup.running, &setup.token, &setup.vault, &dir1).await;
     let (status, deleted) = setup
         .submit(json!({
             "op_id": identity(0xe5), "device_id": device, "server_epoch": setup.epoch,
@@ -813,7 +813,7 @@ async fn own_commands_never_come_back_as_external_changes() {
         baseline,
         "命令结果没有以 origin=external 重新出现"
     );
-    let entries = snapshot(&setup.running, &setup.token, &setup.root).await;
+    let entries = snapshot(&setup.running, &setup.token, &setup.vault).await;
     for name in ["dir1", "sub", "deep.txt", "renamed.txt", "made"] {
         assert_eq!(
             entries.iter().filter(|entry| entry["name"] == name).count(),
@@ -843,7 +843,7 @@ async fn epoch_and_retention_failures_keep_their_wire_codes() {
     for (op, body) in [
         (
             0xf1,
-            json!({"kind": "create", "parent_id": setup.root_entry, "name": "x", "expected_absent": true}),
+            json!({"kind": "create", "parent_id": setup.vault_entry, "name": "x", "expected_absent": true}),
         ),
         (
             0xf2,

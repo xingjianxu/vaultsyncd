@@ -7,8 +7,8 @@
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{EntryId, RootId, TxId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, TxId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, UtcTimestamp, VaultSeq};
 
 use crate::objects::{ContentDigest, ExpectedContent};
 use crate::ports::put_store::EntryKind;
@@ -43,9 +43,9 @@ pub enum AdoptKind {
 /// 一次采纳事务的输入。
 #[derive(Clone, Debug)]
 pub struct ExternalWrite {
-    /// 所属 Root。
-    pub root: RootId,
-    /// 文件在 Root 内的相对路径。
+    /// 所属 Vault。
+    pub vault: VaultId,
+    /// 文件在 Vault 内的相对路径。
     pub path: String,
     /// 创建还是更新。
     pub kind: AdoptKind,
@@ -66,8 +66,8 @@ pub struct ExternalRecord {
     pub version: VersionId,
     /// 条目新 revision；更新时必须严格大于 `expected_revision`。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
     /// 该批次的事务身份。
     pub tx: TxId,
     /// 版本内容摘要（必须等于请求内容）。
@@ -84,10 +84,10 @@ pub enum ExternalStoreError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 不在调用方范围内，或不存在。
-    UnknownRoot {
-        /// 被查询的 Root。
-        root: RootId,
+    /// Vault 不在调用方范围内，或不存在。
+    UnknownVault {
+        /// 被查询的 Vault。
+        vault: VaultId,
     },
     /// 事务内发现条目 revision 已不是调用方观察到的基线（比较并写失败）：他人已提交，重新规划。
     RevisionChanged {
@@ -116,7 +116,7 @@ impl ExternalStoreError {
     pub fn code(&self) -> &'static str {
         match self {
             ExternalStoreError::Storage { .. } => "external_store_failed",
-            ExternalStoreError::UnknownRoot { .. } => "unknown_root",
+            ExternalStoreError::UnknownVault { .. } => "unknown_vault",
             ExternalStoreError::RevisionChanged { .. } => "revision_changed",
             ExternalStoreError::PathConflict { .. } => "path_conflict",
             ExternalStoreError::Rejected { code, .. } => code,
@@ -128,7 +128,7 @@ impl fmt::Display for ExternalStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExternalStoreError::Storage { detail } => write!(f, "采纳存储失败：{detail}"),
-            ExternalStoreError::UnknownRoot { root } => write!(f, "Root {root} 不存在"),
+            ExternalStoreError::UnknownVault { vault } => write!(f, "Vault {vault} 不存在"),
             ExternalStoreError::RevisionChanged { expected, actual } => {
                 write!(f, "条目 revision 已从 {expected} 变为 {actual}")
             }
@@ -144,14 +144,14 @@ impl fmt::Display for ExternalStoreError {
 
 impl std::error::Error for ExternalStoreError {}
 
-/// 一次外部移动（同 Root 内改名）的请求（design §9.5）。
+/// 一次外部移动（同 Vault 内改名）的请求（design §9.5）。
 ///
 /// 证据由核心给出：目标路径上实测到的文件身份与源路径同一 inode；存储层据此**只改父目录与名称**，
 /// 保留 `entry`（EntryId 不随路径变），不写版本、不动对象、不动工作目录。
 #[derive(Clone, Debug)]
 pub struct ExternalMove {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 移动前路径。
     pub from: String,
     /// 移动后路径。
@@ -171,8 +171,8 @@ pub struct ExternalMoveRecord {
     pub entry: EntryId,
     /// 新 revision（必须严格大于 `expected_revision`）。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
     /// 该批次的事务身份。
     pub tx: TxId,
 }
@@ -183,8 +183,8 @@ pub struct ExternalMoveRecord {
 /// 与墓碑、保留版本历史与对象，追加 `changes` 事件；**不**碰工作目录（那里已经没有了）。
 #[derive(Clone, Debug)]
 pub struct ExternalDelete {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 消失的路径。
     pub path: String,
     /// 库里该路径的条目身份（必须与本请求一致）。
@@ -202,8 +202,8 @@ pub struct ExternalDeleteRecord {
     pub entry: EntryId,
     /// 删除后的 revision（必须严格大于 `expected_revision`）。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
     /// 该批次的事务身份。
     pub tx: TxId,
 }
@@ -218,10 +218,10 @@ pub trait ExternalAdoptStore {
     ///
     /// # Errors
     ///
-    /// 存储失败或 Root 不存在。
+    /// 存储失败或 Vault 不存在。
     async fn lookup_path(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         path: &str,
     ) -> Result<Option<KnownEntry>, ExternalStoreError>;
 
@@ -244,7 +244,7 @@ pub trait ExternalAdoptStore {
         write: &ExternalWrite,
     ) -> Result<ExternalRecord, ExternalStoreError>;
 
-    /// 把一个已知条目的路径从 `from` 改到 `to`（同 Root 内移动），保留条目身份。
+    /// 把一个已知条目的路径从 `from` 改到 `to`（同 Vault 内移动），保留条目身份。
     ///
     /// 实现必须满足的契约（design §9.5、§11.2）：
     ///

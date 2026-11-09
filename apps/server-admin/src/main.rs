@@ -87,7 +87,7 @@ async fn run() -> ExitCode {
         return ExitCode::from(backup::run(args).await);
     }
     if args.first().is_some_and(|arg| {
-        ["roots", "status", "problems", "history", "trash"]
+        ["vaults", "status", "problems", "history", "trash"]
             .iter()
             .any(|command| arg == command)
     }) {

@@ -120,13 +120,13 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
     }
     // An unavailable/incomplete remote cannot authorize old local files. Do not reuse first import.
     let remote = &worker.importer.remote;
-    let seed = remote.begin(remote.root).await?;
+    let seed = remote.begin(remote.vault).await?;
     let mut cursor = None;
     let mut count = 0u64;
     let mut current = std::collections::HashMap::new();
     loop {
         let page = remote
-            .page(remote.root, &seed.metadata.snapshot_id, cursor.as_deref())
+            .page(remote.vault, &seed.metadata.snapshot_id, cursor.as_deref())
             .await?;
         if page.snapshot_id != seed.metadata.snapshot_id {
             return Err(error("rule reconciliation snapshot changed"));
@@ -211,7 +211,7 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
         )? {
             continue;
         }
-        let meta = match local.root.inspect(path) {
+        let meta = match local.vault.inspect(path) {
             Ok(m) => Some(m),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(error(e)),

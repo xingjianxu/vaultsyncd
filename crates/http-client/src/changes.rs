@@ -9,19 +9,19 @@ use crate::client::{ApiClient, ApiRequest, AuthMode};
 use crate::error::ClientError;
 use crate::transport::Transport;
 
-/// 拉取一个 Root 的有序事务批次页。
+/// 拉取一个 Vault 的有序事务批次页。
 ///
-/// `after` 必须是规范十进制文本；`limit` 为 `None` 时使用服务端默认值。Root 身份由调用方
+/// `after` 必须是规范十进制文本；`limit` 为 `None` 时使用服务端默认值。Vault 身份由调用方
 /// 传入已验证的 32 位小写十六进制文本，不能把路径或查询串混入该参数。
 pub async fn list<T: Transport>(
     client: &ApiClient<T>,
-    root: &str,
+    vault: &str,
     after: &str,
     limit: Option<u32>,
 ) -> Result<ChangeList, ClientError> {
-    validate_root(root)?;
+    validate_vault(vault)?;
     validate_decimal(after, "after")?;
-    let mut request = ApiRequest::get(format!("/v1/roots/{root}/changes"))
+    let mut request = ApiRequest::get(format!("/v1/vaults/{vault}/changes"))
         .with_auth(AuthMode::Bearer)
         .with_query_param("after", after)?;
     if let Some(limit) = limit {
@@ -31,14 +31,14 @@ pub async fn list<T: Transport>(
     client.send_json(request).await
 }
 
-fn validate_root(root: &str) -> Result<(), ClientError> {
-    if root.len() != 32
-        || !root
+fn validate_vault(vault: &str) -> Result<(), ClientError> {
+    if vault.len() != 32
+        || !vault
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
         return Err(ClientError::invalid_request(
-            "Root 身份必须是 32 位小写十六进制",
+            "Vault 身份必须是 32 位小写十六进制",
         ));
     }
     Ok(())
@@ -73,7 +73,7 @@ mod tests {
             has_more: false,
             head_seq: "0".into(),
             next_after: "0".into(),
-            root_id: "0123456789abcdef0123456789abcdef".into(),
+            vault_id: "0123456789abcdef0123456789abcdef".into(),
             server_epoch: "1".into(),
         }
     }
@@ -102,8 +102,8 @@ mod tests {
     }
 
     #[test]
-    fn malformed_root_or_cursor_is_rejected_before_network() {
-        assert!(validate_root("ABC").is_err());
+    fn malformed_vault_or_cursor_is_rejected_before_network() {
+        assert!(validate_vault("ABC").is_err());
         assert!(validate_decimal("01", "after").is_err());
         assert!(validate_decimal("", "after").is_err());
     }

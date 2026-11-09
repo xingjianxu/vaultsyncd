@@ -3,9 +3,9 @@ mod common;
 use common::*;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
-async fn fixed(r: &Running, token: &str, root: &str) -> Value {
-    let snap = create_snapshot(r, token, root).await.unwrap();
-    snapshot_entries(r, token, root, snap["snapshot_id"].as_str().unwrap())
+async fn fixed(r: &Running, token: &str, vault: &str) -> Value {
+    let snap = create_snapshot(r, token, vault).await.unwrap();
+    snapshot_entries(r, token, vault, snap["snapshot_id"].as_str().unwrap())
         .await
         .unwrap()
         .into_iter()
@@ -18,14 +18,14 @@ async fn exact_version_leases_survive_restart_reject_reuse_and_release_idempoten
     lab.init_owner().await;
     let running = Running::start(&lab).await.unwrap();
     let token = login(&running).await.unwrap();
-    let root = register_root(&running, &token, &lab.work()).await.unwrap();
+    let vault = register_vault(&running, &token, &lab.work()).await.unwrap();
     std::fs::write(lab.work().join("lease.txt"), b"old fixed server content").unwrap();
     wait_for("adopt", || async {
-        let snap = create_snapshot(&running, &token, &root).await?;
+        let snap = create_snapshot(&running, &token, &vault).await?;
         let es = snapshot_entries(
             &running,
             &token,
-            &root,
+            &vault,
             snap["snapshot_id"].as_str().unwrap(),
         )
         .await?;
@@ -35,9 +35,9 @@ async fn exact_version_leases_survive_restart_reject_reuse_and_release_idempoten
     })
     .await
     .unwrap();
-    let first = fixed(&running, &token, &root).await;
+    let first = fixed(&running, &token, &vault).await;
     let base = format!(
-        "/v1/roots/{root}/entries/{}/versions/{}/leases",
+        "/v1/vaults/{vault}/entries/{}/versions/{}/leases",
         first["entry_id"].as_str().unwrap(),
         first["version_id"].as_str().unwrap()
     );
@@ -79,11 +79,11 @@ async fn exact_version_leases_survive_restart_reject_reuse_and_release_idempoten
     )
     .unwrap();
     wait_for("new head", || async {
-        let snap = create_snapshot(&running, &token, &root).await?;
+        let snap = create_snapshot(&running, &token, &vault).await?;
         let entries = snapshot_entries(
             &running,
             &token,
-            &root,
+            &vault,
             snap["snapshot_id"].as_str().unwrap(),
         )
         .await?;
@@ -149,7 +149,7 @@ async fn exact_version_leases_survive_restart_reject_reuse_and_release_idempoten
             .unwrap();
     let object = lab.state().join("objects").join(
         vaultsyncd_server_core::objects::ObjectLayout::scoped_relative_object_path(
-            vaultsyncd_domain::ids::RootId::from_hex(&root).unwrap(),
+            vaultsyncd_domain::ids::VaultId::from_hex(&vault).unwrap(),
             &digest,
         ),
     );
@@ -166,7 +166,7 @@ async fn exact_version_leases_survive_restart_reject_reuse_and_release_idempoten
         StatusCode::SERVICE_UNAVAILABLE
     );
     std::fs::rename(retained, &object).unwrap();
-    let mismatch = base.replacen(&root, "ffffffffffffffffffffffffffffffff", 1);
+    let mismatch = base.replacen(&vault, "ffffffffffffffffffffffffffffffff", 1);
     assert_eq!(
         running
             .json("POST", &mismatch, Some(&token), Some(&body))

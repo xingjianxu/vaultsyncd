@@ -7,7 +7,7 @@
 //!
 //! 需要对外传递的边界值（身份、计数、状态）在这里以受约束的类型表达，而不是裸整数或字符串，
 //! 避免把非法组合带到持久化与 wire 层。已落地的模块：S015 的 [`ids`]（不透明身份与 [`ids::IdSource`]
-//! 端口）与 [`version`]（`Revision`/`RootSeq`/`Generation`/`ServerEpoch` 有界计数、UTC 时间与
+//! 端口）与 [`version`]（`Revision`/`VaultSeq`/`Generation`/`ServerEpoch` 有界计数、UTC 时间与
 //! [`version::Clock`] 端口）；S016 的 [`state`]（六个正交状态维度、界面主状态投影与“已同步”判断）
 //! 与 [`error`]（design §15.4 错误码的三个处理类别）。
 //!

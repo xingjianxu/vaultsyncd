@@ -139,12 +139,19 @@ async fn prepare_locked(
         .await
         .map_err(err)??;
     ServerId::from_hex(&frozen.server_id).map_err(err)?;
-    let map = if frozen.plan.roots.is_empty() {
+    let map = if frozen.plan.vaults.is_empty() {
         None
     } else {
         Some(
-            SnapshotSeqMap::new(frozen.plan.roots.iter().map(|r| (r.root, r.seq)).collect())
-                .map_err(err)?,
+            SnapshotSeqMap::new(
+                frozen
+                    .plan
+                    .vaults
+                    .iter()
+                    .map(|r| (r.vault, r.seq))
+                    .collect(),
+            )
+            .map_err(err)?,
         )
     };
     let mut tx = database.begin_write().await.map_err(err)?;
@@ -216,7 +223,7 @@ fn copy_manifest(
     expires: UtcTimestamp,
     frozen: &FrozenDatabase,
 ) -> io::Result<Value> {
-    let settings = json!({"server":{"listen":config.listen.to_string()},"state":{"original_directory":config.state_dir},"roots":{"allowed_bases":config.allowed_root_bases.as_ref().map(|b|b.paths().map(|p|p.display().to_string()).collect::<Vec<_>>())},"log":{"level":config.log.level.to_string(),"format":config.log.format.as_str()}});
+    let settings = json!({"server":{"listen":config.listen.to_string()},"state":{"original_directory":config.state_dir},"vaults":{"allowed_bases":config.allowed_vault_bases.as_ref().map(|b|b.paths().map(|p|p.display().to_string()).collect::<Vec<_>>())},"log":{"level":config.log.level.to_string(),"format":config.log.format.as_str()}});
     write_private(
         &prepared.join("config.json"),
         &serde_json::to_vec_pretty(&settings).map_err(err)?,
@@ -238,7 +245,7 @@ fn copy_manifest(
         if opened.identity.nlink != 1 {
             return Err(err("object is not an independent immutable file"));
         }
-        let directory = prepared.join("objects").join(o.root.to_hex());
+        let directory = prepared.join("objects").join(o.vault.to_hex());
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -260,7 +267,7 @@ fn copy_manifest(
             .set_permissions(fs::Permissions::from_mode(0o400))?;
         staged.file.sync_all()?;
         target.fsync_dir().map_err(err)?;
-        objects.push(json!({"root_id":o.root.to_hex(),"sha256":name,"size":o.size.to_string(),"storage_path":o.storage_path,"archive_path":format!("objects/{}/{}",o.root.to_hex(),name)}));
+        objects.push(json!({"vault_id":o.vault.to_hex(),"sha256":name,"size":o.size.to_string(),"storage_path":o.storage_path,"archive_path":format!("objects/{}/{}",o.vault.to_hex(),name)}));
     }
     if prepared.join("objects").try_exists()? {
         fs::File::open(prepared.join("objects"))?.sync_all()?;
@@ -271,7 +278,7 @@ fn copy_manifest(
         let (hash, size) = hash_file(&file)?;
         files.push(json!({"path":name,"sha256":hex(&hash),"size":size.to_string()}));
     }
-    let roots:Vec<_>=frozen.mappings.iter().zip(&frozen.plan.roots).map(|((root,path,owner,epoch,volume,identity),r)|json!({"root_id":root,"seq":r.seq.to_decimal(),"original_path":path,"owner_id":owner,"epoch":epoch,"volume_identity":volume,"root_file_identity":identity})).collect();
+    let vaults:Vec<_>=frozen.mappings.iter().zip(&frozen.plan.vaults).map(|((vault,path,owner,epoch,volume,identity),r)|json!({"vault_id":vault,"seq":r.seq.to_decimal(),"original_path":path,"owner_id":owner,"epoch":epoch,"volume_identity":volume,"vault_file_identity":identity})).collect();
     let contract = include_str!("../../../api/openapi.yaml");
     let protocol = contract
         .lines()
@@ -280,7 +287,7 @@ fn copy_manifest(
         .trim()
         .trim_matches('"');
     Ok(
-        json!({"format_version":1,"state":"prepared","backup_id":id.to_hex(),"server_id":frozen.server_id,"schema_version":frozen.schema,"protocol_contract_version":protocol,"protocol_contract_sha256":hex(&digest(contract.as_bytes())),"product_version":env!("CARGO_PKG_VERSION"),"created_at":now.as_unix_seconds().to_string(),"expires_at":expires.as_unix_seconds().to_string(),"database_contents":frozen.table_counts,"scope":"confirmed_logical_state","external_uncollected_writes":"excluded","sessions":"invalidated","roots":roots,"objects":objects,"files":files}),
+        json!({"format_version":1,"state":"prepared","backup_id":id.to_hex(),"server_id":frozen.server_id,"schema_version":frozen.schema,"protocol_contract_version":protocol,"protocol_contract_sha256":hex(&digest(contract.as_bytes())),"product_version":env!("CARGO_PKG_VERSION"),"created_at":now.as_unix_seconds().to_string(),"expires_at":expires.as_unix_seconds().to_string(),"database_contents":frozen.table_counts,"scope":"confirmed_logical_state","external_uncollected_writes":"excluded","sessions":"invalidated","vaults":vaults,"objects":objects,"files":files}),
     )
 }
 

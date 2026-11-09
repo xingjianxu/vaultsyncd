@@ -1,8 +1,8 @@
 //! Offline, disposable S097 fixture: persist an actual put boundary, never edit a live DB.
 use rand_core::{OsRng, RngCore};
 use std::{fs, io::Write, path::PathBuf, sync::Arc};
-use vaultsyncd_domain::ids::{DeviceId, IntentId, OpId, RootId};
-use vaultsyncd_platform_linux_server::files::{ResolveMode, RootHandle, hash};
+use vaultsyncd_domain::ids::{DeviceId, IntentId, OpId, VaultId};
+use vaultsyncd_platform_linux_server::files::{ResolveMode, VaultHandle, hash};
 use vaultsyncd_server::{
     executor::{SqlIntentLog, WorkTreeTarget},
     journal::Binding,
@@ -19,8 +19,8 @@ use vaultsyncd_server_store::{
     db::Database,
     entries,
     operations::{self, NewOperation, OperationKey},
-    roots,
     state_lock::StateLock,
+    vaults,
     versions::{self, NewObject},
 };
 
@@ -50,19 +50,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let _lock = StateLock::try_acquire_exclusive(&state)?;
     let db = Database::open(state.join("server.sqlite")).await?;
-    let root_id: RootId = args[2].parse()?;
+    let vault_id: VaultId = args[2].parse()?;
     let mut conn = db.pool().acquire().await?;
-    let root = roots::all_roots(&mut conn)
+    let vault = vaults::all_vaults(&mut conn)
         .await?
         .into_iter()
-        .find(|r| r.id == root_id)
-        .expect("fixture Root");
-    let entry = entries::entry_by_path(&mut conn, root.owner, root.id, &args[3])
+        .find(|r| r.id == vault_id)
+        .expect("fixture Vault");
+    let entry = entries::entry_by_path(&mut conn, vault.owner, vault.id, &args[3])
         .await?
         .expect("observed fixture file");
     drop(conn);
-    let handle = Arc::new(RootHandle::open(
-        std::path::Path::new(&root.absolute_path),
+    let handle = Arc::new(VaultHandle::open(
+        std::path::Path::new(&vault.absolute_path),
         ResolveMode::Auto,
     )?);
     let layout = ObjectLayout::new(state.join("objects"));
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .try_into()?,
     )?;
     let key = OperationKey {
-        root: root.id,
+        vault: vault.id,
         device: DeviceId::from_bytes(id()),
         op: OpId::from_bytes(id()),
     };
@@ -104,9 +104,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tx = db.begin_write().await?;
     versions::record_object(
         &mut tx,
-        root.owner,
+        vault.owner,
         &NewObject {
-            root: root.id,
+            vault: vault.id,
             hash: *digest.as_bytes(),
             size: content.len() as u64,
             storage_path: object.strip_prefix(&state)?.to_string_lossy().into(),
@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(matches!(
         operations::begin_operation(
             &mut tx,
-            root.owner,
+            vault.owner,
             &NewOperation {
                 key,
                 digest: request_digest
@@ -132,10 +132,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "put",
         serde_json::json!({"entry":entry.id.to_hex(),"revision":entry.revision.to_string()}),
     );
-    let mut log = SqlIntentLog::new(db.clone(), root.owner).bound(binding);
+    let mut log = SqlIntentLog::new(db.clone(), vault.owner).bound(binding);
     let new = NewPutIntent {
         intent_id: IntentId::from_bytes(id()),
-        root: root.id,
+        vault: vault.id,
         target_path: args[3].clone(),
         staging_path: format!("s097-{}", key.op),
         before: TargetBefore::Present(TargetSnapshot {
@@ -162,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!(
         "{}",
-        serde_json::json!({"root":root.id.to_hex(),"entry":entry.id.to_hex(),"op":key.op.to_hex(),"intent":new.intent_id.to_hex(),"phase":args[4],"before_device":identity.device,"before_inode":identity.inode,"before_hash":before_digest.to_hex(),"after_hash":digest.to_hex(),"mount_id":handle.snapshot().mount_id,"dev_minor":handle.snapshot().dev_minor})
+        serde_json::json!({"vault":vault.id.to_hex(),"entry":entry.id.to_hex(),"op":key.op.to_hex(),"intent":new.intent_id.to_hex(),"phase":args[4],"before_device":identity.device,"before_inode":identity.inode,"before_hash":before_digest.to_hex(),"after_hash":digest.to_hex(),"mount_id":handle.snapshot().mount_id,"dev_minor":handle.snapshot().dev_minor})
     );
     drop(log);
     db.close().await;

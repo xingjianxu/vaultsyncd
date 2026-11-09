@@ -2,7 +2,7 @@
 //!
 //! 服务器与客户端的单调计数在这里是同一个受约束形状：取值 `0..=i64::MAX`，即 SQLite `INTEGER`
 //! 的有符号 64 位上限。上限在构造、解析与递增时检查，因此数据库列不会截断，递增也不会回绕。
-//! 各计数是不同类型，不能互相赋值：把 `RootSeq` 当成 `Revision` 用必须在编译期失败。
+//! 各计数是不同类型，不能互相赋值：把 `VaultSeq` 当成 `Revision` 用必须在编译期失败。
 //!
 //! **wire 形式固定为十进制字符串**（design §7.1、§15.1）：计数一旦超过 2^53，JavaScript 的数字
 //! 会静默丢精度，所以 API/JSON 只传 [`to_decimal`](Revision::to_decimal) 这类文本，不传 JSON
@@ -154,8 +154,8 @@ db_counter! {
 }
 
 db_counter! {
-    /// Root 事务事件序号：严格递增，只有服务器分配；外部采集也使用该序列（design §7.1、§7.2）。
-    RootSeq
+    /// Vault 事务事件序号：严格递增，只有服务器分配；外部采集也使用该序列（design §7.1、§7.2）。
+    VaultSeq
 }
 
 db_counter! {
@@ -169,7 +169,7 @@ db_counter! {
     /// 安装实例的恢复代际（`ServerEpoch`）。
     ///
     /// 备份恢复沿用 [`ServerId`](crate::ids::ServerId) 但更换本值；旧 epoch 的待提交操作不自动
-    /// 重放，相同 `RootSeq` 在新 epoch 下不是旧事件（design §7.1、§9.4）。
+    /// 重放，相同 `VaultSeq` 在新 epoch 下不是旧事件（design §7.1、§9.4）。
     ServerEpoch
 }
 
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn every_counter_type_round_trips_at_the_database_limit() {
         check_counter_type!(Revision);
-        check_counter_type!(RootSeq);
+        check_counter_type!(VaultSeq);
         check_counter_type!(Generation);
         check_counter_type!(ServerEpoch);
     }
@@ -283,8 +283,8 @@ mod tests {
             ("99999999999999999999999999", BoundError::AboveDbLimit),
         ];
         for (text, expected) in cases {
-            assert_eq!(RootSeq::from_decimal(text), Err(expected), "text={text:?}");
-            assert_eq!(text.parse::<RootSeq>(), Err(expected), "text={text:?}");
+            assert_eq!(VaultSeq::from_decimal(text), Err(expected), "text={text:?}");
+            assert_eq!(text.parse::<VaultSeq>(), Err(expected), "text={text:?}");
         }
     }
 
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn counter_next_advances_without_wrapping() {
-        let first = RootSeq::ZERO.next().unwrap();
+        let first = VaultSeq::ZERO.next().unwrap();
         assert_eq!(first.get(), 1);
         assert_eq!(first.next().unwrap().get(), 2);
         assert_eq!(first.to_decimal(), "1");

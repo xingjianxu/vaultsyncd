@@ -58,12 +58,12 @@ def main():
         assert uid != 0
         state = mount/'state'; state.mkdir(mode=0o700)
         sudo('chown', f'{uid}:{gid}', state)
-        roots = mount/'root'; roots.mkdir(mode=0o700)
-        sample = roots/'keep.txt'; sample.write_bytes(b'S095 user data must remain intact\n'); sample.chmod(0o600)
+        vaults = mount/'vault'; vaults.mkdir(mode=0o700)
+        sample = vaults/'keep.txt'; sample.write_bytes(b'S095 user data must remain intact\n'); sample.chmod(0o600)
         original = hashlib.sha256(sample.read_bytes()).hexdigest()
         outside = mount/'outside'; outside.mkdir(); outside.chmod(0o777)
         params = RUN/'parameters.json'
-        parameters = {'stateDir': str(state), 'rootPaths': [str(roots)], 'user': USER, 'group': USER,
+        parameters = {'stateDir': str(state), 'vaultPaths': [str(vaults)], 'user': USER, 'group': USER,
                       'settings': {'server': {'listen': '127.0.0.1:0'}}}
         params.write_text(json.dumps(parameters))
         RESULT['toplevel'] = json.loads(nix('eval', 'toplevel', params, flags=['--json']).stdout)
@@ -82,13 +82,13 @@ def main():
         sudo('mount', '-o', 'remount,user_subvol_rm_allowed', mount)
         r = as_user(preflight, check=False)
         assert r.returncode and 'access required' in r.stderr
-        RESULT['checks'].append('root-without-explicit-permission-rejected')
-        sudo('setfacl', '-m', f'u:{uid}:rwx', roots)
+        RESULT['checks'].append('vault-without-explicit-permission-rejected')
+        sudo('setfacl', '-m', f'u:{uid}:rwx', vaults)
         sudo('setfacl', '-m', f'u:{uid}:r', sample)
-        command(['chattr', '+C', roots])
+        command(['chattr', '+C', vaults])
         r = as_user(preflight, check=False)
         assert r.returncode and 'NOCOW' in r.stderr
-        command(['chattr', '-C', roots])
+        command(['chattr', '-C', vaults])
         RESULT['checks'].append('nocow-rejected-without-changing-data')
         as_user(preflight)
         # Password is only an anonymous stdin pipe, never Nix input/store/config/argv.
@@ -97,10 +97,10 @@ def main():
         RESULT['checks'].append('offline-owner-init-as-service-uid')
         probe = RUN/'probe.py'
         probe.write_text('''import json,os,pathlib,sys
-root,outside,system,state=map(pathlib.Path,sys.argv[1:])
+vault,outside,system,state=map(pathlib.Path,sys.argv[1:])
 r={"uid":os.geteuid(),"status":pathlib.Path("/proc/self/status").read_text()}
-(root/"unit-written.txt").write_text("non-root service write\\n")
-r["root_write"]=True
+(vault/"unit-written.txt").write_text("non-root service write\\n")
+r["vault_write"]=True
 for name,p in [("outside",outside/"denied.txt"),("system",system)]:
     try:
         with p.open("x") as f:f.write("unexpected")
@@ -109,7 +109,7 @@ for name,p in [("outside",outside/"denied.txt"),("system",system)]:
 (state/"probe.json").write_text(json.dumps(r))
 ''')
         system_probe = Path('/etc')/f'{USER}-denied.txt'
-        exec_post = ' '.join(shlex.quote(str(v)) for v in [sys.executable, probe, roots, outside, system_probe, state])
+        exec_post = ' '.join(shlex.quote(str(v)) for v in [sys.executable, probe, vaults, outside, system_probe, state])
         # Only the unit name and an in-sandbox evidence probe differ from the generated unit.
         text += f'\n[Service]\nExecStartPost={exec_post}\n'
         temp_unit = RUN/UNIT; temp_unit.write_text(text)
@@ -129,24 +129,24 @@ for name,p in [("outside",outside/"denied.txt"),("system",system)]:
         RESULT['server_status'] = server_status
         RESULT['identity'] = evidence
         RESULT['checks'].append('actual-generated-unit-nonroot-empty-capabilities-nonewprivs')
-        RESULT['checks'].append('explicit-root-writable-world-writable-sibling-and-etc-readonly')
+        RESULT['checks'].append('explicit-vault-writable-world-writable-sibling-and-etc-readonly')
         socket = state/'admin/socket'
         def admin(*args, check=True):
             return as_user(PACKAGE/'bin/vaultsyncd-admin', *args, '--socket', socket, '--json', check=check)
         for _ in range(100):
             if as_user('test', '-S', socket, check=False).returncode == 0: break
             time.sleep(.1)
-        command(['btrfs', 'subvolume', 'create', roots/'nested'])
-        nested = json.loads(admin('roots', 'register', roots, check=False).stdout)
+        command(['btrfs', 'subvolume', 'create', vaults/'nested'])
+        nested = json.loads(admin('vaults', 'register', vaults, check=False).stdout)
         assert nested['status'] >= 400
-        command(['btrfs', 'subvolume', 'delete', roots/'nested'])
-        RESULT['checks'].append('nested-subvolume-root-admission-rejected')
-        registered = json.loads(admin('roots', 'register', roots).stdout)
+        command(['btrfs', 'subvolume', 'delete', vaults/'nested'])
+        RESULT['checks'].append('nested-subvolume-vault-admission-rejected')
+        registered = json.loads(admin('vaults', 'register', vaults).stdout)
         (RUN/'registered.json').write_text(json.dumps(registered, indent=2))
         assert registered['status'] < 400
-        denied = json.loads(admin('roots', 'register', outside, check=False).stdout)
+        denied = json.loads(admin('vaults', 'register', outside, check=False).stdout)
         assert denied['status'] >= 400
-        RESULT['checks'].append('real-root-registration-and-api-whitelist-enforced')
+        RESULT['checks'].append('real-vault-registration-and-api-whitelist-enforced')
         backup_id = secrets.token_hex(16)
         prepared = json.loads(admin('backup', 'prepare', '--id', backup_id).stdout)
         (RUN/'prepared.json').write_text(json.dumps(prepared, indent=2))
@@ -171,8 +171,8 @@ for name,p in [("outside",outside/"denied.txt"),("system",system)]:
         # Defaults and forbidden configurations are evaluated, not merely string-matched.
         default_policy = json.loads(nix('eval', 'policy', flags=['--json']).stdout)
         assert default_policy['StateDirectory'] == 'vaultsyncd' and default_policy['StateDirectoryMode'] == '0700'
-        for name, override in [('root-user', {'user':'root'}), ('system-root', {'rootPaths':['/etc']}),
-                               ('state-overlap', {'rootPaths':['/var/lib/vaultsyncd/data']}),
+        for name, override in [('root-user', {'user':'root'}), ('system-root', {'vaultPaths':['/etc']}),
+                               ('state-overlap', {'vaultPaths':['/var/lib/vaultsyncd/data']}),
                                ('secret-option', {'settings':{'auth':{'password':'not-a-secret-sentinel'}}})]:
             f = RUN/f'{name}.json'; f.write_text(json.dumps(override))
             r = nix('eval', 'toplevel', f, flags=['--json'], check=False)

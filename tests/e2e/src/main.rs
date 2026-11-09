@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 /// 解析后的命令行。
 pub struct Options {
-    /// 宿主生成的 fixture（服务端地址、Root、owner 会话、种子哈希）。
+    /// 宿主生成的 fixture（服务端地址、Vault、owner 会话、种子哈希）。
     pub fixture: PathBuf,
     /// 数据驱动场景文件。
     pub scenario: PathBuf,

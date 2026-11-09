@@ -37,9 +37,9 @@ def main():
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
     print(f"S134 artifacts: {RUN}", flush=True)
-    state, roots = RUN / "state", RUN / "roots"
-    state.mkdir(mode=0o700); roots.mkdir()
-    documents, archive = roots / "documents", roots / "archive"
+    state, vaults = RUN / "state", RUN / "vaults"
+    state.mkdir(mode=0o700); vaults.mkdir()
+    documents, archive = vaults / "documents", vaults / "archive"
     documents.mkdir(); archive.mkdir()
     nested = documents / "文档" / "子目录"; nested.mkdir(parents=True)
     (documents / "空目录").mkdir()
@@ -51,18 +51,18 @@ def main():
     long_directory = "目录-" + "a" * 120
     (documents / long_directory).mkdir()
     (documents / long_directory / "leaf.txt").write_bytes(b"long directory\n")
-    (archive / "archive-only.txt").write_bytes(b"second root\n")
+    (archive / "archive-only.txt").write_bytes(b"second vault\n")
     for index in range(1005): (documents / f"file-{index:04}.txt").write_bytes(b"x")
     long_name = "long-" + "a" * 160 + ".txt"
     (documents / long_name).write_bytes(b"")
     password = secrets.token_urlsafe(24)
     checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
     config = RUN / "server.toml"
-    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[roots]\nallowed_bases=["{roots}"]\n[log]\nformat="json"\nlevel="info"\n')
+    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
     service = subprocess.Popen([str(BIN / "vaultsyncd-server"), "--config", str(config)], stdout=log, stderr=log)
     proxy = None
-    faults = {"mode": None, "root": None}
+    faults = {"mode": None, "vault": None}
     delayed, release = threading.Event(), threading.Event()
     requests = []
     try:
@@ -89,7 +89,7 @@ def main():
                 backend = http.client.HTTPConnection(address, timeout=30)
                 path = self.path
                 is_entries = "/snapshots/" in path and "/entries" in path
-                should_delay = is_entries and faults["mode"] == "delay" and faults["root"] in path
+                should_delay = is_entries and faults["mode"] == "delay" and faults["vault"] in path
                 if is_entries and faults["mode"] == "expired":
                     parts = path.split("/"); parts[5] = "0" * 32; path = "/".join(parts)
                 headers = {key: value for key, value in self.headers.items() if key.lower() not in ("connection", "transfer-encoding")}
@@ -127,17 +127,17 @@ def main():
             page.get_by_role("button", name="登录", exact=True).click()
             expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
             page.goto(origin + "/#/files")
-            expect(page.get_by_text("尚无授权 Root，请先在 Root 目录页面注册目录。", exact=True)).to_be_visible()
+            expect(page.get_by_text("尚无授权 Vault，请先在 Vault 目录页面注册目录。", exact=True)).to_be_visible()
 
             def api(path, body=None):
                 result = page.evaluate("""async ([path, body]) => {const r=await fetch(path,body===null?{}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,body:await r.json()}}""", [path, body])
                 assert result["status"] in (200, 201), result
                 return result["body"]
 
-            doc_id = api("/v1/admin/roots", {"path": str(documents)})["root_id"]
-            arc_id = api("/v1/admin/roots", {"path": str(archive)})["root_id"]
+            doc_id = api("/v1/admin/vaults", {"path": str(documents)})["vault_id"]
+            arc_id = api("/v1/admin/vaults", {"path": str(archive)})["vault_id"]
             for attempt in range(180):
-                managed = api("/v1/admin/roots")["roots"]
+                managed = api("/v1/admin/vaults")["vaults"]
                 if len(managed) == 2 and all(item["collection"]["state"] == "complete" for item in managed): break
                 if attempt % 20 == 0: print(f"waiting for real observer: {attempt}", flush=True)
                 page.wait_for_timeout(500)
@@ -146,22 +146,22 @@ def main():
             # empty directories. Seed a committed empty directory through the public
             # operation API, then audit only requests made by the browser feature.
             (documents / "空目录").rmdir()
-            seed = api(f"/v1/roots/{doc_id}/snapshots", {})
-            cursor, root_entry = None, None
+            seed = api(f"/v1/vaults/{doc_id}/snapshots", {})
+            cursor, vault_entry = None, None
             while True:
-                page_data = api(f"/v1/roots/{doc_id}/snapshots/{seed['snapshot_id']}/entries?limit=1000" + (f"&cursor={cursor}" if cursor else ""))
-                root_entry = next((entry["entry_id"] for entry in page_data["entries"] if "parent_id" not in entry), root_entry)
+                page_data = api(f"/v1/vaults/{doc_id}/snapshots/{seed['snapshot_id']}/entries?limit=1000" + (f"&cursor={cursor}" if cursor else ""))
+                vault_entry = next((entry["entry_id"] for entry in page_data["entries"] if "parent_id" not in entry), vault_entry)
                 cursor = page_data.get("next_cursor")
                 if cursor is None: break
-            assert root_entry
-            made = api(f"/v1/roots/{doc_id}/operations", {"kind": "create", "op_id": secrets.token_hex(16), "device_id": secrets.token_hex(16), "server_epoch": seed["server_epoch"], "parent_id": root_entry, "name": "空目录", "expected_absent": True})
+            assert vault_entry
+            made = api(f"/v1/vaults/{doc_id}/operations", {"kind": "create", "op_id": secrets.token_hex(16), "device_id": secrets.token_hex(16), "server_epoch": seed["server_epoch"], "parent_id": vault_entry, "name": "空目录", "expected_absent": True})
             assert made["state"] == "committed", made
             browsing_start = len(requests)
             page.reload()
 
-            def choose(name, root_id):
-                page.get_by_role("combobox", name="浏览 Root", exact=True).click()
-                page.get_by_role("option", name=f"{name} · {root_id[:8]}", exact=True).click()
+            def choose(name, vault_id):
+                page.get_by_role("combobox", name="浏览 Vault", exact=True).click()
+                page.get_by_role("option", name=f"{name} · {vault_id[:8]}", exact=True).click()
 
             choose("documents", doc_id)
             table = page.get_by_role("table", name="文件与目录", exact=True)
@@ -234,7 +234,7 @@ def main():
             assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"]
             menu_box, link_box = menu.bounding_box(), file_link.bounding_box()
             assert abs(menu_box["y"] - (link_box["y"] + link_box["height"] / 2)) < 16, (menu_box, link_box)
-            notifications = page.locator(".mantine-Notification-root")
+            notifications = page.locator(".mantine-Notification-vault")
 
             def notification(message):
                 return notifications.filter(has=page.get_by_text(message, exact=True))
@@ -254,7 +254,7 @@ def main():
             expect(notice).to_have_count(1)
             expect(notice).to_have_attribute("role", "status")
             assert page.evaluate("navigator.clipboard.readText()") == "/file-0000.txt"
-            expect(page.locator('.mantine-Notifications-root[data-position="top-right"]')).to_be_visible()
+            expect(page.locator('.mantine-Notifications-vault[data-position="top-right"]')).to_be_visible()
             page.wait_for_timeout(250)
             assert [target.bounding_box() for target in layout_targets] == before_notification, "通知挤压了文件布局"
             # 相同文案再次复制创建新的完整四秒通知，不复用已经消耗的计时器。
@@ -303,8 +303,8 @@ def main():
             cdp.detach()
             expect(notifications).to_have_count(0)
             expect(page.get_by_role("heading", name="文件浏览器", exact=True)).not_to_be_visible()
-            expect(page.get_by_text("切换 Root、浏览目录并查看文件属性。", exact=True)).not_to_be_visible()
-            expect(page.get_by_role("button", name="刷新 Root 列表", exact=True)).not_to_be_visible()
+            expect(page.get_by_text("切换 Vault、浏览目录并查看文件属性。", exact=True)).not_to_be_visible()
+            expect(page.get_by_role("button", name="刷新 Vault 列表", exact=True)).not_to_be_visible()
             expect(page.get_by_role("tree", name="目录树", exact=True)).to_be_visible()
             tree = page.get_by_role("tree", name="目录树", exact=True)
             expect(tree).to_have_attribute("data-with-lines", "true")
@@ -447,7 +447,7 @@ def main():
             expect(table.get_by_role("button", name="deep.txt", exact=True)).to_be_visible()
             address_input.fill("../")
             address_input.press("Enter")
-            address_error = notifications.filter(has_text="请输入 Root 内的相对路径")
+            address_error = notifications.filter(has_text="请输入 Vault 内的相对路径")
             expect(address_error).to_have_attribute("role", "alert")
             page.wait_for_timeout(4500)
             expect(address_error).to_be_visible()
@@ -463,7 +463,7 @@ def main():
             expect(table).to_be_visible()
             expect(missing_error).to_have_count(0)
             expect(page.get_by_role("button", name="前进", exact=True)).to_be_disabled()
-            for bad, message in [(f"{doc_id}/%2F", "目录 URL 无效"), (f"{doc_id}/%zz", "目录 URL 无效"), ("0" * 32, "Root 不存在或未获授权")]:
+            for bad, message in [(f"{doc_id}/%2F", "目录 URL 无效"), (f"{doc_id}/%zz", "目录 URL 无效"), ("0" * 32, "Vault 不存在或未获授权")]:
                 page.goto(origin + "/#/files/" + bad)
                 expect(notifications.filter(has_text=message)).to_have_attribute("role", "alert")
                 expect(table).not_to_be_visible()
@@ -530,7 +530,7 @@ def main():
             expect(table.get_by_role("button", name="archive-only.txt", exact=True)).to_be_visible()
             choose("documents", doc_id)
             expect(table.get_by_role("button", name="文档", exact=True)).to_be_visible()
-            faults.update(mode="delay", root=doc_id)
+            faults.update(mode="delay", vault=doc_id)
             page.get_by_role("button", name="刷新文件列表", exact=True).click()
             for _ in range(100):
                 if delayed.is_set(): break
@@ -571,7 +571,7 @@ def main():
                 for width in (320, 390, 768, 1440, 1920):
                     page.set_viewport_size({"width": width, "height": 900})
                     page.wait_for_timeout(250)
-                    page.get_by_role("combobox", name="浏览 Root", exact=True).click()
+                    page.get_by_role("combobox", name="浏览 Vault", exact=True).click()
                     expect(page.get_by_role("option", name=f"documents · {doc_id[:8]}", exact=True)).to_be_visible()
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, "select")
                     page.keyboard.press("Escape")
@@ -588,7 +588,7 @@ def main():
             expect(page.get_by_role("heading", name="请先登录", exact=True)).to_be_visible()
             expect(table).not_to_be_visible()
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-roots", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-root/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "notifications/top-right/limit-3/queue", "notifications/success-4s/repeated-copy-new-timer/manual-close", "notifications/native-clipboard-denied/sticky-error/keyboard-close", "notifications/no-layout-shift/long-path/narrow-light-dark", "notifications/scoped-error-state-and-unmount-cleanup", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/root-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "root-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "notification_layout_cases": notification_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
+            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-vaults", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-vault/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "notifications/top-right/limit-3/queue", "notifications/success-4s/repeated-copy-new-timer/manual-close", "notifications/native-clipboard-denied/sticky-error/keyboard-close", "notifications/no-layout-shift/long-path/narrow-light-dark", "notifications/scoped-error-state-and-unmount-cleanup", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/vault-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "vault-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "notification_layout_cases": notification_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
         print(f"S134 browser acceptance passed: {RUN}", flush=True)
     finally:
         release.set()

@@ -32,7 +32,7 @@ use crate::testing::{FakeTransport, error_response, issued, json_response};
 use crate::transport::{TransportRequest, TransportResponse};
 use crate::uploads::UploadEndpoint;
 
-const ROOT: &str = "11111111111111111111111111111111";
+const VAULT: &str = "11111111111111111111111111111111";
 const ENTRY: &str = "33333333333333333333333333333333";
 const VERSION: &str = "44444444444444444444444444444444";
 
@@ -133,7 +133,7 @@ impl Server {
                 expires_at: "1700000000".to_owned(),
                 hash: to_hex(&spec.digest),
                 part_count: geometry.part_count().to_string(),
-                root_id: ROOT.to_owned(),
+                vault_id: VAULT.to_owned(),
                 state: UploadState::Open,
                 total_size: spec.total_size.to_string(),
                 upload_id: id,
@@ -182,7 +182,7 @@ impl Server {
                     expires_at: "1700000000".to_owned(),
                     hash: to_hex(&session.spec.digest),
                     part_count: geometry.part_count().to_string(),
-                    root_id: ROOT.to_owned(),
+                    vault_id: VAULT.to_owned(),
                     state: session.state,
                     total_size: session.spec.total_size.to_string(),
                     upload_id: id,
@@ -296,7 +296,7 @@ impl Server {
                 part_count: geometry.part_count().to_string(),
                 replayed: false,
                 reuse: ObjectReuse::FreshlyPublished,
-                root_id: ROOT.to_owned(),
+                vault_id: VAULT.to_owned(),
                 size: session.spec.total_size.to_string(),
                 storage_path: format!("objects/{id}"),
                 upload_id: id,
@@ -491,7 +491,7 @@ async fn a_disconnect_through_the_real_endpoints_only_resends_missing_parts() {
     let bytes = content_bytes();
     let server = std::sync::Arc::new(Server::default());
     server.drop_put_once(2);
-    let endpoint = UploadEndpoint::new(client(&server), ROOT).expect("上传端点");
+    let endpoint = UploadEndpoint::new(client(&server), VAULT).expect("上传端点");
     let source = SliceSource {
         bytes: bytes.clone(),
     };
@@ -525,7 +525,7 @@ async fn a_wrong_ack_through_the_real_endpoints_is_retransmitted() {
     let bytes = content_bytes();
     let server = std::sync::Arc::new(Server::default());
     server.wrong_ack_once(1);
-    let endpoint = UploadEndpoint::new(client(&server), ROOT).expect("上传端点");
+    let endpoint = UploadEndpoint::new(client(&server), VAULT).expect("上传端点");
     let source = SliceSource {
         bytes: bytes.clone(),
     };
@@ -559,7 +559,7 @@ async fn a_download_through_the_real_endpoint_is_bound_to_the_version() {
     )
     .expect("固定版本");
     let server = std::sync::Arc::new(Server::default());
-    let endpoint = ContentEndpoint::new(client(&server), ROOT).expect("内容端点");
+    let endpoint = ContentEndpoint::new(client(&server), VAULT).expect("内容端点");
     let temp = MemoryTemp::default();
     let progress = MemoryProgress::default();
 
@@ -588,7 +588,7 @@ async fn a_download_through_the_real_endpoint_is_bound_to_the_version() {
 async fn a_finalized_upload_is_not_treated_as_committed() {
     let bytes = content_bytes();
     let server = std::sync::Arc::new(Server::default());
-    let endpoint = UploadEndpoint::new(client(&server), ROOT).expect("上传端点");
+    let endpoint = UploadEndpoint::new(client(&server), VAULT).expect("上传端点");
     let source = SliceSource {
         bytes: bytes.clone(),
     };
@@ -611,7 +611,7 @@ async fn the_upload_endpoint_requires_credentials() {
         transport,
     )
     .expect("客户端配置");
-    let endpoint = UploadEndpoint::new(client, ROOT).expect("上传端点");
+    let endpoint = UploadEndpoint::new(client, VAULT).expect("上传端点");
     let source = SliceSource {
         bytes: content_bytes(),
     };

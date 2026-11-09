@@ -18,7 +18,7 @@ use vaultsyncd_client_store::{
     queue::{self, NewPendingOp},
 };
 use vaultsyncd_domain::{
-    ids::{DeviceId, RootId, ServerId, VersionId},
+    ids::{DeviceId, ServerId, VaultId, VersionId},
     state::{Dirty, Residency, Usage},
     version::{Generation, Revision, ServerEpoch},
 };
@@ -29,7 +29,7 @@ use vaultsyncd_transfer::{
 
 const B: BindingId = BindingId::from_bytes([0x63; 16]);
 const E: EntryId = EntryId::from_bytes([2; 16]);
-const ROOT: EntryId = EntryId::from_bytes([1; 16]);
+const VAULT_ENTRY: EntryId = EntryId::from_bytes([1; 16]);
 const V: VersionId = VersionId::from_bytes([3; 16]);
 const O: OpId = OpId::from_bytes([4; 16]);
 const OLD: &[u8] = b"confirmed content retained by a leased immutable version";
@@ -118,7 +118,7 @@ impl Rig {
                 id: B,
                 server: ServerId::from_bytes([5; 16]),
                 device: DeviceId::from_bytes([6; 16]),
-                root: RootId::from_bytes([7; 16]),
+                vault: VaultId::from_bytes([7; 16]),
                 local_path: path.to_str().unwrap().into(),
                 cache_path: path.join("cache").to_str().unwrap().into(),
                 mode: SyncMode::OnDemand,
@@ -130,7 +130,7 @@ impl Rig {
         .unwrap();
         for base in [
             BaselineEntry {
-                entry: ROOT,
+                entry: VAULT_ENTRY,
                 parent: None,
                 name: "".into(),
                 kind: EntryKind::Directory,
@@ -140,7 +140,7 @@ impl Rig {
             },
             BaselineEntry {
                 entry: E,
-                parent: Some(ROOT),
+                parent: Some(VAULT_ENTRY),
                 name: "file.txt".into(),
                 kind: EntryKind::File,
                 revision: Revision::new(2).unwrap(),
@@ -205,16 +205,16 @@ impl Drop for Rig {
 
 #[derive(Clone)]
 struct Disk {
-    root: PathBuf,
+    vault: PathBuf,
     held: Arc<AtomicBool>,
     calls: Arc<AtomicUsize>,
     fail: Arc<AtomicU8>,
     lease_valid: Arc<AtomicBool>,
 }
 impl Disk {
-    fn new(root: PathBuf) -> Self {
+    fn new(vault: PathBuf) -> Self {
         Self {
-            root,
+            vault,
             held: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(AtomicUsize::new(0)),
             fail: Arc::new(AtomicU8::new(0)),
@@ -246,17 +246,17 @@ impl ControlledLocal for Disk {
     ) -> PortFuture<'_, Result<ContentObservation, PortError>> {
         let path = path.clone();
         Box::pin(async move {
-            if self.root.join("released.json").exists() {
+            if self.vault.join("released.json").exists() {
                 return Err(reject(
                     "PLACEHOLDER_OFFLINE",
                     "metadata-only must not hydrate",
                 ));
             }
-            let bytes = fs::read(self.root.join("file.txt")).map_err(err)?;
+            let bytes = fs::read(self.vault.join("file.txt")).map_err(err)?;
             #[cfg(unix)]
             let identity = {
                 use std::os::unix::fs::MetadataExt;
-                let m = fs::metadata(self.root.join("file.txt")).map_err(err)?;
+                let m = fs::metadata(self.vault.join("file.txt")).map_err(err)?;
                 [m.dev().to_le_bytes(), m.ino().to_le_bytes()].concat()
             };
             #[cfg(not(unix))]
@@ -266,7 +266,7 @@ impl ControlledLocal for Disk {
                 to_hex(&digest_of(&bytes)),
                 to_hex(&digest_of(&identity))
             );
-            let stamp = self.root.join("stamp.json");
+            let stamp = self.vault.join("stamp.json");
             let previous: Option<(String, u64)> = fs::read(&stamp)
                 .ok()
                 .map(|b| serde_json::from_slice(&b).unwrap());
@@ -331,13 +331,13 @@ impl ReleaseProtection for Guard {
     }
     fn released(&self) -> PortFuture<'_, Result<Option<ReleasedFile>, PortError>> {
         Box::pin(async move {
-            if !self.0.root.join("released.json").exists() {
+            if !self.0.vault.join("released.json").exists() {
                 return Ok(None);
             }
             let marker: Marker =
-                serde_json::from_slice(&fs::read(self.0.root.join("released.json")).map_err(err)?)
+                serde_json::from_slice(&fs::read(self.0.vault.join("released.json")).map_err(err)?)
                     .map_err(err)?;
-            if !fs::read(self.0.root.join("file.txt"))
+            if !fs::read(self.0.vault.join("file.txt"))
                 .map_err(err)?
                 .is_empty()
             {
@@ -346,7 +346,7 @@ impl ReleaseProtection for Guard {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
-                let m = fs::metadata(self.0.root.join("file.txt")).map_err(err)?;
+                let m = fs::metadata(self.0.vault.join("file.txt")).map_err(err)?;
                 if marker.identity != [m.dev().to_le_bytes(), m.ino().to_le_bytes()].concat() {
                     return Err(recovery::changed());
                 }
@@ -398,9 +398,9 @@ impl ReleaseProtection for Guard {
                 digest: *digest,
                 size: *size,
             };
-            persist(&self.0.root.join("file.txt"), b"");
+            persist(&self.0.vault.join("file.txt"), b"");
             persist(
-                &self.0.root.join("released.json"),
+                &self.0.vault.join("released.json"),
                 &serde_json::to_vec(&marker).unwrap(),
             );
             self.0.calls.fetch_add(1, Ordering::SeqCst);
@@ -424,7 +424,7 @@ impl Drop for Lease {
             self.disk.held.load(Ordering::SeqCst),
             "lease must end while guard is held"
         );
-        let _ = fs::remove_file(self.disk.root.join("lease"));
+        let _ = fs::remove_file(self.disk.vault.join("lease"));
     }
 }
 impl VersionLease for Lease {
@@ -434,22 +434,22 @@ impl VersionLease for Lease {
     fn ensure_valid(&self) -> PortFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
             if !self.disk.lease_valid.load(Ordering::SeqCst)
-                || !self.disk.root.join("lease").exists()
+                || !self.disk.vault.join("lease").exists()
             {
                 return Err(reject("LEASE_EXPIRED", "short content lease expired"));
             }
-            if fs::read(self.disk.root.join("object")).map_err(err)? != OLD {
+            if fs::read(self.disk.vault.join("object")).map_err(err)? != OLD {
                 return Err(reject("VERSION_GONE", "immutable version unavailable"));
             }
             Ok(())
         })
     }
 }
-fn gc(root: &Path) -> bool {
-    if root.join("lease").exists() {
+fn gc(vault: &Path) -> bool {
+    if vault.join("lease").exists() {
         false
     } else {
-        fs::remove_file(root.join("object")).is_ok()
+        fs::remove_file(vault.join("object")).is_ok()
     }
 }
 impl ReleaseRemote for Remote {
@@ -462,10 +462,10 @@ impl ReleaseRemote for Remote {
             if self.hook == 2 {
                 return Err(reject("VERSION_GONE", "expired server version"));
             }
-            if fs::read(self.disk.root.join("object")).map_err(err)? != OLD {
+            if fs::read(self.disk.vault.join("object")).map_err(err)? != OLD {
                 return Err(reject("VERSION_GONE", "version unreadable"));
             }
-            persist(&self.disk.root.join("lease"), b"short server lease");
+            persist(&self.disk.vault.join("lease"), b"short server lease");
             if self.hook == 1 {
                 self.disk.lease_valid.store(false, Ordering::SeqCst);
             }
@@ -483,11 +483,11 @@ impl ReleaseRemote for Remote {
                     .await?;
             }
             if self.hook == 7 {
-                persist(&self.disk.root.join("file.txt"), EDIT);
+                persist(&self.disk.vault.join("file.txt"), EDIT);
             }
             if self.hook == 8 {
-                assert!(!gc(&self.disk.root));
-                assert_eq!(fs::read(self.disk.root.join("object")).unwrap(), OLD);
+                assert!(!gc(&self.disk.vault));
+                assert_eq!(fs::read(self.disk.vault.join("object")).unwrap(), OLD);
             }
             let mut pin = pin.clone();
             if self.hook == 3 {
@@ -703,10 +703,10 @@ pub(super) fn checkpoint(phase: &str, exit: i32) {
 }
 #[tokio::test]
 async fn release_child() {
-    let Ok(root) = std::env::var("VAULTSYNCD_S063_ROOT") else {
+    let Ok(vault) = std::env::var("VAULTSYNCD_S063_VAULT") else {
         return;
     };
-    let rig = Rig(PathBuf::from(root));
+    let rig = Rig(PathBuf::from(vault));
     let (_db, service, _disk, _) = rig.service(0).await;
     service.release(&spec()).await.unwrap();
     panic!("checkpoint was not reached");
@@ -721,7 +721,7 @@ async fn durable_release_recovers_before_and_after_platform_and_database() {
                 "executor::release::tests::release_child",
                 "--nocapture",
             ])
-            .env("VAULTSYNCD_S063_ROOT", &rig.0)
+            .env("VAULTSYNCD_S063_VAULT", &rig.0)
             .env("VAULTSYNCD_S063_EXIT", phase)
             .status()
             .unwrap();

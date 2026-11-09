@@ -7,7 +7,7 @@
 //!   客户端仍走完整证书校验（不关闭、不替换验证）。
 //! - 每个 HTTP/1.1 请求单独转发到上游 `http://127.0.0.1:<tunnel>`，按 `Connection: close`
 //!   读到完整响应后再写给客户端。
-//! - 可对指定类别的 `POST /v1/roots/{root}/operations` **先转发、再丢弃响应**，制造
+//! - 可对指定类别的 `POST /v1/vaults/{vault}/operations` **先转发、再丢弃响应**，制造
 //!   “服务端已提交但客户端没收到 ACK”的真实网络故障，并记录每次提交的 op_id/结果。
 //!
 //! 解析只覆盖产品实际使用的形状（JSON 请求体、content-length 或 chunked 响应）；不认识的
@@ -49,8 +49,8 @@ pub struct OperationEvent {
     pub revision: Option<String>,
     /// 提交产生或影响的固定版本。
     pub version_id: Option<String>,
-    /// 提交占用的 RootSeq。
-    pub root_seq: Option<String>,
+    /// 提交占用的 VaultSeq。
+    pub vault_seq: Option<String>,
     /// 冲突副本条目身份（preserve-both 时）。
     pub conflict_entry_id: Option<String>,
     /// POST 提交的原始请求体（供测试按同一 OpId 重试；GET 查询没有）。
@@ -443,7 +443,7 @@ async fn serve(
             replayed: details.replayed,
             revision: details.revision,
             version_id: details.version_id,
-            root_seq: details.root_seq,
+            vault_seq: details.vault_seq,
             conflict_entry_id: details.conflict_entry_id,
             request_body: (!is_query && !request.body.is_empty())
                 .then(|| String::from_utf8_lossy(&request.body).into_owned()),
@@ -624,7 +624,7 @@ struct Details {
     replayed: Option<bool>,
     revision: Option<String>,
     version_id: Option<String>,
-    root_seq: Option<String>,
+    vault_seq: Option<String>,
     conflict_entry_id: Option<String>,
 }
 
@@ -646,8 +646,8 @@ fn operation_details(body: &[u8]) -> Details {
             .get("version_id")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
-        root_seq: value
-            .get("root_seq")
+        vault_seq: value
+            .get("vault_seq")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         conflict_entry_id: value
@@ -670,9 +670,9 @@ mod tests {
 
     #[test]
     fn rewrites_connection_headers_and_preserves_request_line() {
-        let head = b"POST /v1/roots/x/operations HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\nContent-Length: 2\r\n\r\n";
+        let head = b"POST /v1/vaults/x/operations HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\nContent-Length: 2\r\n\r\n";
         let rewritten = rewrite_head(head);
-        assert!(rewritten.starts_with("POST /v1/roots/x/operations HTTP/1.1\r\n"));
+        assert!(rewritten.starts_with("POST /v1/vaults/x/operations HTTP/1.1\r\n"));
         assert!(rewritten.ends_with("Connection: close\r\n\r\n"));
         assert!(!rewritten.contains("keep-alive"));
         assert!(rewritten.contains("Content-Length: 2"));
@@ -684,7 +684,7 @@ mod tests {
             head: Vec::new(),
             body: br#"{"op_id":"0123456789abcdef0123456789abcdef","kind":"put_content"}"#.to_vec(),
             method: "POST".into(),
-            path: "/v1/roots/root/operations".into(),
+            path: "/v1/vaults/vault/operations".into(),
         };
         assert_eq!(
             operation_identity(&request),
@@ -700,7 +700,7 @@ mod tests {
             head: Vec::new(),
             body: Vec::new(),
             method: "GET".into(),
-            path: "/v1/roots/root/operations/0123456789abcdef0123456789abcdef".into(),
+            path: "/v1/vaults/vault/operations/0123456789abcdef0123456789abcdef".into(),
         };
         assert_eq!(
             operation_identity(&query),
@@ -710,13 +710,13 @@ mod tests {
 
     #[test]
     fn parses_committed_drop_details() {
-        let body = br#"{"op_id":"x","state":"committed","replayed":true,"revision":"7","version_id":"v","root_seq":"9","conflict":{"conflict_entry_id":"c"}}"#;
+        let body = br#"{"op_id":"x","state":"committed","replayed":true,"revision":"7","version_id":"v","vault_seq":"9","conflict":{"conflict_entry_id":"c"}}"#;
         let details = operation_details(body);
         assert_eq!(details.state.as_deref(), Some("committed"));
         assert_eq!(details.replayed, Some(true));
         assert_eq!(details.revision.as_deref(), Some("7"));
         assert_eq!(details.version_id.as_deref(), Some("v"));
-        assert_eq!(details.root_seq.as_deref(), Some("9"));
+        assert_eq!(details.vault_seq.as_deref(), Some("9"));
         assert_eq!(details.conflict_entry_id.as_deref(), Some("c"));
     }
 }

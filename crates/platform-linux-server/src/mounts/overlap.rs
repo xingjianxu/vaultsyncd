@@ -1,4 +1,4 @@
-//! Root 与内部目录的父子/别名/bind 重叠判定（design §16.1、§11.5）。
+//! Vault 与内部目录的父子/别名/bind 重叠判定（design §16.1、§11.5）。
 //!
 //! design §16.1 要求注册时检查“规范路径、父子关系、卷身份、目录身份，以及符号链接、junction、
 //! bind mount 等别名关系”，§11.5 补一句“别名/重叠检测不能只比路径或 inode”。因此本模块同时
@@ -11,8 +11,8 @@
 //!   [`OverlapKind::Alias`]，这正是 bind mount 把同一目录挂到另一个路径的样子（两条路径的
 //!   `STATX_MNT_ID` 不同，但目录对象是同一个）。只看路径会漏掉它，只看 inode 又会把不同子卷的
 //!   inode 256 当成同一个目录。
-//! - **角色**：内部数据库/对象/历史/暂存目录必须位于所有受管 Root 之外（design §16.1），所以
-//!   内部目录与 Root 有任何父子关系都要报出来，方向不同原因码也不同。
+//! - **角色**：内部数据库/对象/历史/暂存目录必须位于所有受管 Vault 之外（design §16.1），所以
+//!   内部目录与 Vault 有任何父子关系都要报出来，方向不同原因码也不同。
 //!
 //! 本模块只判定并报告，不做 I/O（[`DirectoryRecord`] 由调用方用
 //! [`crate::mounts::probe::probe_path`] 填好）；也不决定“是否允许”，由注册流程决定。
@@ -24,8 +24,8 @@ use std::fmt;
 /// 目录在部署里的角色。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectoryRole {
-    /// 受管 Root（用户可见的同步目录）。
-    Root,
+    /// 受管 Vault（用户可见的同步目录）。
+    Vault,
     /// 内部状态目录（SQLite、对象、历史、暂存、备份暂存）。
     Internal,
 }
@@ -35,7 +35,7 @@ impl DirectoryRole {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            DirectoryRole::Root => "root",
+            DirectoryRole::Vault => "vault",
             DirectoryRole::Internal => "internal",
         }
     }
@@ -74,10 +74,10 @@ pub enum OverlapKind {
     SamePath,
     /// 同一目录对象经不同路径出现（bind mount、别名），路径上互不包含。
     Alias,
-    /// 内部目录位于 Root 之内（design §16.1 禁止）。
-    InternalInsideRoot,
-    /// Root 位于内部目录之内（内部状态目录被当成 Root 的祖先，同样禁止）。
-    RootInsideInternal,
+    /// 内部目录位于 Vault 之内（design §16.1 禁止）。
+    InternalInsideVault,
+    /// Vault 位于内部目录之内（内部状态目录被当成 Vault 的祖先，同样禁止）。
+    VaultInsideInternal,
     /// 一方是另一方的祖先目录（同角色或其它组合）。
     ParentChild,
 }
@@ -89,8 +89,8 @@ impl OverlapKind {
         match self {
             OverlapKind::SamePath => "same_path",
             OverlapKind::Alias => "alias",
-            OverlapKind::InternalInsideRoot => "internal_inside_root",
-            OverlapKind::RootInsideInternal => "root_inside_internal",
+            OverlapKind::InternalInsideVault => "internal_inside_vault",
+            OverlapKind::VaultInsideInternal => "vault_inside_internal",
             OverlapKind::ParentChild => "parent_child",
         }
     }
@@ -181,11 +181,11 @@ fn classify_pair(left: &DirectoryRecord, right: &DirectoryRecord) -> Option<Over
                 left
             };
             match (ancestor.role, descendant.role) {
-                (DirectoryRole::Root, DirectoryRole::Internal) => {
-                    Some(OverlapKind::InternalInsideRoot)
+                (DirectoryRole::Vault, DirectoryRole::Internal) => {
+                    Some(OverlapKind::InternalInsideVault)
                 }
-                (DirectoryRole::Internal, DirectoryRole::Root) => {
-                    Some(OverlapKind::RootInsideInternal)
+                (DirectoryRole::Internal, DirectoryRole::Vault) => {
+                    Some(OverlapKind::VaultInsideInternal)
                 }
                 _ => Some(OverlapKind::ParentChild),
             }
@@ -256,8 +256,8 @@ mod tests {
     fn unrelated_siblings_do_not_overlap() {
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/runs/s032/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/runs/s032/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
                 DirectoryRole::Internal,
@@ -269,74 +269,74 @@ mod tests {
 
     #[test]
     fn path_prefix_is_not_parent_child() {
-        // `/data/root` 与 `/data/root-old` 是分量上互不包含的兄弟，不是父子。
+        // `/data/vault` 与 `/data/vault-old` 是分量上互不包含的兄弟，不是父子。
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
-                DirectoryRole::Root,
-                facts("/data/root-old", 45, (0, 41), 258, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault-old", 45, (0, 41), 258, Some((1, 0))),
             ),
         ];
         assert!(find_overlaps(&records).is_empty());
     }
 
     #[test]
-    fn internal_directory_inside_root_is_reported() {
+    fn internal_directory_inside_vault_is_reported() {
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
                 DirectoryRole::Internal,
-                facts("/data/root/state", 45, (0, 41), 258, Some((1, 0))),
+                facts("/data/vault/state", 45, (0, 41), 258, Some((1, 0))),
             ),
         ];
         let overlaps = find_overlaps(&records);
         assert_eq!(overlaps.len(), 1);
-        assert_eq!(overlaps[0].kind, OverlapKind::InternalInsideRoot);
+        assert_eq!(overlaps[0].kind, OverlapKind::InternalInsideVault);
         assert!(
             overlaps[0]
                 .render(&records)
-                .contains("kind=internal_inside_root")
+                .contains("kind=internal_inside_vault")
         );
         assert!(
             overlaps[0]
                 .render(&records)
-                .contains("left=root:/data/root right=internal:/data/root/state")
+                .contains("left=vault:/data/vault right=internal:/data/vault/state")
         );
     }
 
     #[test]
-    fn root_inside_internal_directory_is_reported() {
+    fn vault_inside_internal_directory_is_reported() {
         let records = [
             record(
                 DirectoryRole::Internal,
                 facts("/data/state", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
-                DirectoryRole::Root,
-                facts("/data/state/root", 45, (0, 41), 258, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/state/vault", 45, (0, 41), 258, Some((1, 0))),
             ),
         ];
         let overlaps = find_overlaps(&records);
         assert_eq!(overlaps.len(), 1);
-        assert_eq!(overlaps[0].kind, OverlapKind::RootInsideInternal);
+        assert_eq!(overlaps[0].kind, OverlapKind::VaultInsideInternal);
     }
 
     #[test]
-    fn two_roots_with_parent_child_are_reported() {
+    fn two_vaults_with_parent_child_are_reported() {
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
-                DirectoryRole::Root,
-                facts("/data/root/sub", 45, (0, 41), 258, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault/sub", 45, (0, 41), 258, Some((1, 0))),
             ),
         ];
         let overlaps = find_overlaps(&records);
@@ -348,12 +348,12 @@ mod tests {
     fn same_path_is_reported_once_per_pair() {
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
-                DirectoryRole::Root,
-                facts("/data/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
         ];
         let overlaps = find_overlaps(&records);
@@ -366,8 +366,8 @@ mod tests {
         // 同一目录 bind mount 到无关路径：路径无关、挂载 ID 不同，但设备/inode/btime 相同。
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/runs/s032/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/runs/s032/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
                 DirectoryRole::Internal,
@@ -389,8 +389,8 @@ mod tests {
         // btrfs 每个子卷的根目录 inode 都是 256：只比 inode 会把它们当成同一个目录。
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/root", 45, (0, 41), 256, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault", 45, (0, 41), 256, Some((1, 0))),
             ),
             record(
                 DirectoryRole::Internal,
@@ -419,16 +419,16 @@ mod tests {
     fn ordering_of_reported_pairs_is_deterministic() {
         let records = [
             record(
-                DirectoryRole::Root,
-                facts("/data/root", 45, (0, 41), 257, Some((1, 0))),
+                DirectoryRole::Vault,
+                facts("/data/vault", 45, (0, 41), 257, Some((1, 0))),
             ),
             record(
                 DirectoryRole::Internal,
-                facts("/data/root/state", 45, (0, 41), 258, Some((1, 0))),
+                facts("/data/vault/state", 45, (0, 41), 258, Some((1, 0))),
             ),
             record(
                 DirectoryRole::Internal,
-                facts("/data/root/state/objects", 45, (0, 41), 259, Some((1, 0))),
+                facts("/data/vault/state/objects", 45, (0, 41), 259, Some((1, 0))),
             ),
         ];
         let overlaps = find_overlaps(&records);
@@ -441,8 +441,8 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                OverlapKind::InternalInsideRoot,
-                OverlapKind::InternalInsideRoot,
+                OverlapKind::InternalInsideVault,
+                OverlapKind::InternalInsideVault,
                 OverlapKind::ParentChild,
             ]
         );

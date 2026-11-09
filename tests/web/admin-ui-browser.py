@@ -67,7 +67,7 @@ def main():
                     theme.click()
                 for width in (320, 390, 768, 1440, 1920):
                     page.set_viewport_size({"width": width, "height": 900})
-                    for label in ("服务概览", "Root 目录", "历史与恢复", "备份管理", "账号与会话"):
+                    for label in ("服务概览", "Vault 目录", "历史与恢复", "备份管理", "账号与会话"):
                         if width < 768:
                             page.get_by_role("button", name="切换导航", exact=True).click()
                         page.get_by_role("link", name=label, exact=True).click()

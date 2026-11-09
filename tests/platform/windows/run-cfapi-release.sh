@@ -28,7 +28,7 @@ expect_out=$(cargo run --locked -q -p "$PLATFORM_PACKAGE" --example "$CFAPI_PROT
 printf '%s\n' "$expect_out"
 
 guest_dir_win="${CFAPI_RELEASE_GUEST_DIR//\//\\}"
-echo "== 客体工作目录：$guest_dir_win；同步根：$CFAPI_RELEASE_ROOT；rename 专用根：$CFAPI_RELEASE_RENAME_ROOT"
+echo "== 客体工作目录：$guest_dir_win；同步根：$CFAPI_RELEASE_VAULT；rename 专用根：$CFAPI_RELEASE_RENAME_VAULT"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir_win' | Out-Null\""
 
 echo "== 传输 exe 与客体脚本"
@@ -37,7 +37,7 @@ GUEST_TARGET_DIR="$CFAPI_RELEASE_GUEST_DIR" guest_scp \
 
 echo "== 客体执行（protect / release / 编辑器保存场景）"
 guest_status=0
-guest_output=$(guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $CFAPI_RELEASE_GUEST_DIR/guest-cfapi-release.ps1 -Directory $CFAPI_RELEASE_GUEST_DIR -Root $CFAPI_RELEASE_ROOT -RenameRoot $CFAPI_RELEASE_RENAME_ROOT -Exe $CFAPI_PROTOTYPE_BINARY.exe" 2>&1 |
+guest_output=$(guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $CFAPI_RELEASE_GUEST_DIR/guest-cfapi-release.ps1 -Directory $CFAPI_RELEASE_GUEST_DIR -Vault $CFAPI_RELEASE_VAULT -RenameVault $CFAPI_RELEASE_RENAME_VAULT -Exe $CFAPI_PROTOTYPE_BINARY.exe" 2>&1 |
     tr -d '\r') || guest_status=$?
 printf '%s\n' "$guest_output"
 

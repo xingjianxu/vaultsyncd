@@ -29,7 +29,7 @@ use vaultsyncd_platform_windows::{
         adapter::{Adapter, MetadataOnly},
         catalog::{Catalog, Identity},
     },
-    files::RootHandle,
+    files::VaultHandle,
 };
 use vaultsyncd_transfer::{
     hash::from_hex,
@@ -72,7 +72,7 @@ fn client(v: &Value, url: Option<&str>) -> ApiClient<ReqwestTransport> {
 fn identity(v: &Value) -> Identity {
     Identity {
         binding: B,
-        root: RootId::from_hex(v["root"].as_str().unwrap()).unwrap(),
+        vault: VaultId::from_hex(v["vault"].as_str().unwrap()).unwrap(),
         entry: EntryId::from_hex(v["entry"]["entry_id"].as_str().unwrap()).unwrap(),
         version: VersionId::from_hex(v["entry"]["version_id"].as_str().unwrap()).unwrap(),
     }
@@ -99,7 +99,7 @@ fn spec(v: &Value, marker: u8) -> ReleaseSpec {
 }
 struct Fixture {
     path: PathBuf,
-    root: PathBuf,
+    vault: PathBuf,
     db: Arc<Database>,
     adapter: Adapter,
     v: Value,
@@ -113,19 +113,19 @@ impl Fixture {
         if missing_version {
             v["entry"]["version_id"] = Value::String("f".repeat(32));
         }
-        let root = path.join("root");
-        std::fs::create_dir_all(&root).unwrap();
+        let vault = path.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
         std::fs::create_dir(path.join("cache")).unwrap();
         let id = identity(&v);
-        let mut catalog = Catalog::new(B, id.root);
+        let mut catalog = Catalog::new(B, id.vault);
         catalog.insert(id).unwrap();
-        let adapter = Adapter::connect(&root, catalog, Arc::new(MetadataOnly)).unwrap();
-        std::fs::write(root.join("file.txt"), v["payload"].as_str().unwrap()).unwrap();
+        let adapter = Adapter::connect(&vault, catalog, Arc::new(MetadataOnly)).unwrap();
+        std::fs::write(vault.join("file.txt"), v["payload"].as_str().unwrap()).unwrap();
         let f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .share_mode(7)
-            .open(root.join("file.txt"))
+            .open(vault.join("file.txt"))
             .unwrap();
         let bytes = id.encode();
         let mut usn = 0;
@@ -141,7 +141,7 @@ impl Fixture {
         };
         assert!(hr >= 0, "convert {hr:08x}");
         drop(f);
-        let metadata = RootHandle::open(&root)
+        let metadata = VaultHandle::open(&vault)
             .unwrap()
             .inspect("file.txt")
             .unwrap();
@@ -155,9 +155,9 @@ impl Fixture {
             &NewBinding {
                 id: B,
                 server: ServerId::from_bytes([1; 16]),
-                root: id.root,
+                vault: id.vault,
                 device: DeviceId::from_bytes([2; 16]),
-                local_path: root.to_str().unwrap().into(),
+                local_path: vault.to_str().unwrap().into(),
                 cache_path: path.join("cache").to_str().unwrap().into(),
                 mode: SyncMode::OnDemand,
                 rules_version: "S069".into(),
@@ -205,7 +205,7 @@ impl Fixture {
         tx.commit().await.unwrap();
         Self {
             path,
-            root,
+            vault,
             db,
             adapter,
             v,
@@ -213,15 +213,15 @@ impl Fixture {
     }
     async fn load(path: PathBuf) -> Self {
         let v = manifest();
-        let root = path.join("root");
+        let vault = path.join("vault");
         let id = identity(&v);
-        let mut cat = Catalog::new(B, id.root);
+        let mut cat = Catalog::new(B, id.vault);
         cat.insert(id).unwrap();
-        let adapter = Adapter::connect(&root, cat, Arc::new(MetadataOnly)).unwrap();
+        let adapter = Adapter::connect(&vault, cat, Arc::new(MetadataOnly)).unwrap();
         let db = Arc::new(Database::open(path.join("client.sqlite")).await.unwrap());
         Self {
             path,
-            root,
+            vault,
             db,
             adapter,
             v,
@@ -230,7 +230,7 @@ impl Fixture {
     fn service(&self, phase: u8, offline: bool) -> ManualRelease {
         let local = Arc::new(
             NativeReleaseLocal::new(
-                &self.root,
+                &self.vault,
                 self.db.clone(),
                 identity(&self.v),
                 RelativePath::parse("file.txt").unwrap(),
@@ -247,7 +247,7 @@ impl Fixture {
             Arc::new(
                 HttpReleaseRemote::new(
                     client(&self.v, offline.then_some("http://127.0.0.1:9")),
-                    identity(&self.v).root,
+                    identity(&self.v).vault,
                 )
                 .unwrap(),
             ),
@@ -255,7 +255,7 @@ impl Fixture {
     }
     fn full_bytes(&self) {
         assert_eq!(
-            std::fs::read(self.root.join("file.txt")).unwrap(),
+            std::fs::read(self.vault.join("file.txt")).unwrap(),
             self.v["payload"].as_str().unwrap().as_bytes()
         );
     }
@@ -269,7 +269,7 @@ impl Fixture {
     async fn finish(mut self) {
         self.db.pool().close().await;
         drop(self.db);
-        std::fs::remove_file(self.root.join("file.txt")).unwrap();
+        std::fs::remove_file(self.vault.join("file.txt")).unwrap();
         self.adapter.unregister().unwrap();
         drop(self.adapter);
         for attempt in 0..100 {
@@ -423,7 +423,7 @@ async fn native_release_uses_real_lease_and_preserves_metadata() {
 async fn native_owned_release_protection_stays_active_across_await() {
     let f = Fixture::prepare(run_path("owned-protection")).await;
     let local = NativeReleaseLocal::new(
-        &f.root,
+        &f.vault,
         f.db.clone(),
         identity(&f.v),
         RelativePath::parse("file.txt").unwrap(),
@@ -432,7 +432,7 @@ async fn native_owned_release_protection_stays_active_across_await() {
     .unwrap();
     let target = RelativePath::parse("file.txt").unwrap();
     let held = local.protect(&target).await.unwrap();
-    let path = f.root.join("file.txt");
+    let path = f.vault.join("file.txt");
     let (sender, receiver) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let result = std::fs::OpenOptions::new()
@@ -470,7 +470,7 @@ async fn native_dirty_busy_and_network_failures_keep_unique_bytes() {
                 std::fs::OpenOptions::new()
                     .read(true)
                     .share_mode(0)
-                    .open(f.root.join("file.txt"))
+                    .open(f.vault.join("file.txt"))
                     .unwrap(),
             )
         } else {
@@ -484,7 +484,7 @@ async fn native_dirty_busy_and_network_failures_keep_unique_bytes() {
             tx.commit().await.unwrap();
         }
         if case == 3 {
-            std::fs::write(f.root.join("file.txt"), b"UNCONFIRMED unique bytes").unwrap();
+            std::fs::write(f.vault.join("file.txt"), b"UNCONFIRMED unique bytes").unwrap();
         }
         let refused = f
             .service(0, case == 2)
@@ -500,7 +500,7 @@ async fn native_dirty_busy_and_network_failures_keep_unique_bytes() {
         drop(lock);
         if case == 3 {
             assert_eq!(
-                std::fs::read(f.root.join("file.txt")).unwrap(),
+                std::fs::read(f.vault.join("file.txt")).unwrap(),
                 b"UNCONFIRMED unique bytes"
             )
         } else {

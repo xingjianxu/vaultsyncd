@@ -9,12 +9,12 @@ use vaultsyncd_platform_linux_server::ipc;
 
 pub const USAGE: &str =
     "在线用法：vaultsyncd-admin <命令> --socket <状态目录/admin/socket> [--json]
-  status                              服务生命周期与 Root 数量
-  roots [页号]                        Root 身份与健康清单
-  roots register <绝对路径>           复用服务端真实 Root 注册准入
-  problems [页号]                     Root 健康、持久冲突与启动恢复问题
-  history <RootId> <EntryId> [页号]    已提交版本（包含已删除条目）
-  trash <RootId> [页号]               回收站清单、到期时间与版本身份
+  status                              服务生命周期与 Vault 数量
+  vaults [页号]                        Vault 身份与健康清单
+  vaults register <绝对路径>           复用服务端真实 Vault 注册准入
+  problems [页号]                     Vault 健康、持久冲突与启动恢复问题
+  history <VaultId> <EntryId> [页号]    已提交版本（包含已删除条目）
+  trash <VaultId> [页号]               回收站清单、到期时间与版本身份
 分页命令每页最多 100 条，页号默认 0；next_page 为 null 时结束。
 只允许服务进程同一有效 UID（可通过 sudo -u <服务账号> 运行），不接受凭据参数。
 远程管理使用 SSH 进入服务主机运行本命令，或使用已认证 HTTPS API，不支持明文远程 socket。";
@@ -78,7 +78,7 @@ fn parse(args: Vec<OsString>) -> Result<(PathBuf, Vec<String>, bool), String> {
     }
     let valid = match command.get(1).map(String::as_str) {
         Some("status") => command.len() == 2,
-        Some("roots") => {
+        Some("vaults") => {
             (2..=3).contains(&command.len()) || (command.len() == 4 && command[2] == "register")
         }
         Some("problems") => (2..=3).contains(&command.len()),
@@ -120,7 +120,7 @@ async fn exchange(socket: PathBuf, command: Vec<String>) -> std::io::Result<Valu
     .map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::TimedOut,
-            "管理请求超时；修改结果未知，请查询 roots 核对，勿直接重放",
+            "管理请求超时；修改结果未知，请查询 vaults 核对，勿直接重放",
         )
     })?
 }
@@ -135,9 +135,9 @@ mod tests {
     fn online_parser_is_strict_and_never_accepts_credentials() {
         assert!(
             parse(args(&[
-                "roots",
+                "vaults",
                 "register",
-                "/data/root",
+                "/data/vault",
                 "--socket",
                 "/run/admin/socket",
                 "--json"
@@ -149,7 +149,7 @@ mod tests {
             vec!["status", "--socket", "relative"],
             vec!["status", "--socket", "/x", "--password", "secret"],
             vec!["history", "--socket", "/x"],
-            vec!["roots", "delete", "/x", "--socket", "/s"],
+            vec!["vaults", "delete", "/x", "--socket", "/s"],
         ] {
             assert!(parse(args(&input)).is_err());
         }

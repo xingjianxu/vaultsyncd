@@ -36,9 +36,9 @@ pub mod operations;
 pub mod recovery;
 pub mod replay;
 pub mod restore_ops;
-pub mod roots;
 pub mod sync;
 pub mod uploads;
+pub mod vaults;
 pub mod version_leases;
 
 /// 退出码：正常停止。
@@ -53,7 +53,7 @@ pub mod web;
 
 pub mod capabilities;
 
-mod root_fences;
+mod vault_fences;
 
 #[doc(hidden)]
 pub mod test_faults;

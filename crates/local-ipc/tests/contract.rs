@@ -70,8 +70,23 @@ fn real_status_addition_preserves_decimal_counts_and_legacy_response() {
     assert!(!statuses[0].synchronized);
     let legacy: Response = serde_json::from_str(RESPONSE_EXAMPLE).unwrap();
     assert!(legacy.result.unwrap().bindings.is_none());
-    let old_request: Request = serde_json::from_str(REQUEST_EXAMPLE).unwrap();
-    assert!(Service::new("1.1").handle(&old_request).result.is_some());
+    let current_request: Request = serde_json::from_str(REQUEST_EXAMPLE).unwrap();
+    assert!(
+        Service::new("2.6")
+            .handle(&current_request)
+            .result
+            .is_some()
+    );
+    // major 是不兼容边界：改名前的 1.x 调用方必须被明确拒绝，而不是猜字段含义。
+    let legacy_request = get_status("legacy", 1, 6);
+    assert_eq!(
+        Service::new("2.6")
+            .handle(&legacy_request)
+            .error
+            .expect("旧 major 必须被拒绝")
+            .code,
+        LocalIpcErrorCode::UnsupportedVersion
+    );
 }
 
 #[test]
@@ -113,7 +128,7 @@ fn missing_required_field_is_rejected() {
 #[test]
 fn version_numbers_must_be_integers() {
     let mut value = sample(REQUEST_EXAMPLE);
-    value["ipc_version"]["major"] = json!("1");
+    value["ipc_version"]["major"] = json!("2");
     let error = serde_json::from_value::<Request>(value).expect_err("版本号必须是整数");
     assert!(
         error.to_string().contains("invalid type"),

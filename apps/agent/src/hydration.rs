@@ -13,7 +13,7 @@ use std::{
 use tokio::sync::mpsc;
 use vaultsyncd_agent_core::engine::scheduler::{UserReadGuard, UserReads};
 use vaultsyncd_client_store::db::Database;
-use vaultsyncd_domain::ids::{BindingId, EntryId, OpId, RootId};
+use vaultsyncd_domain::ids::{BindingId, EntryId, OpId, VaultId};
 use vaultsyncd_platform_windows::{
     cfapi::{
         adapter::{Callbacks, ReadDemand, Reply},
@@ -84,7 +84,7 @@ pub struct HydrationCallbacks {
     limit: usize,
     pins: Arc<RwLock<HashMap<[u8; 72], VersionPin>>>,
     binding: BindingId,
-    root: RootId,
+    vault: VaultId,
 }
 impl HydrationCallbacks {
     pub(crate) fn start(
@@ -92,7 +92,7 @@ impl HydrationCallbacks {
         content: Arc<dyn VersionedContent>,
         reads: UserReads,
         pins: HashMap<[u8; 72], VersionPin>,
-        owner: (BindingId, RootId),
+        owner: (BindingId, VaultId),
         config: HydrationConfig,
     ) -> io::Result<Arc<Self>> {
         let limit = config.outstanding;
@@ -126,14 +126,14 @@ impl HydrationCallbacks {
             limit,
             pins,
             binding: owner.0,
-            root: owner.1,
+            vault: owner.1,
         }))
     }
     /// Add immutable metadata before publishing a new placeholder identity to its Catalog.
     /// A running request retains its own pin even when another head is installed.
     pub fn register_version(&self, version: PinnedVersion) -> io::Result<()> {
         PinnedVersion::new(version.identity, version.pin.clone())?;
-        if version.identity.binding != self.binding || version.identity.root != self.root {
+        if version.identity.binding != self.binding || version.identity.vault != self.vault {
             return Err(io::Error::other("foreign fixed version"));
         }
         let mut pins = self

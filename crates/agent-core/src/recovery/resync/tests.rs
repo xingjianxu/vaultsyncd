@@ -3,7 +3,7 @@ use super::*;
 mod safety_tests;
 use crate::{
     adapters::client_store::ClientStorePorts,
-    bindings::import::{ImportInstall, LocalImportEntry, RootAdmission, SnapshotSeed},
+    bindings::import::{ImportInstall, LocalImportEntry, SnapshotSeed, VaultAdmission},
     executor::apply::{ContentObservation, ControlledApply},
     ports::{
         local::{ApplyReceipt, ApplyRequest, LocalEntryKind, LocalFacts},
@@ -23,7 +23,7 @@ use vaultsyncd_client_store::{
     upload_resumes::{self, NewUploadResume},
 };
 use vaultsyncd_domain::{
-    ids::{DeviceId, RootId, ServerId, VersionId},
+    ids::{DeviceId, ServerId, VaultId, VersionId},
     state::Usage,
     version::{Generation, UtcTimestamp},
 };
@@ -36,7 +36,7 @@ use vaultsyncd_transfer::{
 fn binding() -> BindingId {
     BindingId::from_bytes([1; 16])
 }
-fn root_entry() -> EntryId {
+fn vault_entry() -> EntryId {
     EntryId::from_bytes([2; 16])
 }
 fn file_entry() -> EntryId {
@@ -101,7 +101,7 @@ impl Rig {
                 id: binding(),
                 server: ServerId::from_bytes([7; 16]),
                 device: DeviceId::from_bytes([8; 16]),
-                root: RootId::from_bytes([9; 16]),
+                vault: VaultId::from_bytes([9; 16]),
                 local_path: rig.0.join("work").display().to_string(),
                 cache_path: rig.0.join("cache").display().to_string(),
                 mode: SyncMode::Full,
@@ -111,7 +111,7 @@ impl Rig {
         )
         .await
         .unwrap();
-        for entry in [root_snapshot(), file_snapshot()] {
+        for entry in [vault_snapshot(), file_snapshot()] {
             let remote = remote(&entry).unwrap();
             entries::put_baseline(
                 &mut tx,
@@ -189,13 +189,13 @@ impl Rig {
     }
     fn server(&self, epoch: u64, high_water: u64, include_file: bool) {
         let entries = if include_file {
-            vec![root_snapshot(), file_snapshot()]
+            vec![vault_snapshot(), file_snapshot()]
         } else {
-            vec![root_snapshot()]
+            vec![vault_snapshot()]
         };
         let snapshot = Snapshot {
             snapshot_id: EntryId::from_bytes([12; 16]).to_string(),
-            root_id: RootId::from_bytes([9; 16]).to_string(),
+            vault_id: VaultId::from_bytes([9; 16]).to_string(),
             server_epoch: epoch.to_string(),
             high_water_seq: high_water.to_string(),
             entry_count: entries.len().to_string(),
@@ -222,10 +222,10 @@ impl Rig {
         )
     }
 }
-fn root_snapshot() -> SnapshotEntry {
+fn vault_snapshot() -> SnapshotEntry {
     SnapshotEntry {
         modified_at: None,
-        entry_id: root_entry().to_string(),
+        entry_id: vault_entry().to_string(),
         parent_id: None,
         name: String::new(),
         kind: WireKind::Directory,
@@ -239,7 +239,7 @@ fn file_snapshot() -> SnapshotEntry {
     SnapshotEntry {
         modified_at: None,
         entry_id: file_entry().to_string(),
-        parent_id: Some(root_entry().to_string()),
+        parent_id: Some(vault_entry().to_string()),
         name: "file.txt".to_owned(),
         kind: WireKind::File,
         revision: "7".to_owned(),
@@ -318,9 +318,9 @@ impl ImportLocal for DiskLocal {
         &'a self,
         _: &'a BindingRecord,
         _: &'a [String],
-    ) -> PortFuture<'a, Result<RootAdmission, PortError>> {
+    ) -> PortFuture<'a, Result<VaultAdmission, PortError>> {
         Box::pin(async move {
-            Ok(RootAdmission {
+            Ok(VaultAdmission {
                 identity: fs::canonicalize(self.0.join("work"))
                     .map_err(error)?
                     .display()
@@ -356,8 +356,8 @@ impl ImportLocal for DiskLocal {
         Box::pin(async { panic!("重建不自动安装") })
     }
 }
-fn scan(root: &Path, prefix: &str, entries: &mut Vec<LocalImportEntry>) -> Result<(), PortError> {
-    for entry in fs::read_dir(root).map_err(error)? {
+fn scan(vault: &Path, prefix: &str, entries: &mut Vec<LocalImportEntry>) -> Result<(), PortError> {
+    for entry in fs::read_dir(vault).map_err(error)? {
         let entry = entry.map_err(error)?;
         let name = entry
             .file_name()
@@ -393,7 +393,7 @@ fn scan(root: &Path, prefix: &str, entries: &mut Vec<LocalImportEntry>) -> Resul
 }
 struct DiskSnapshot(PathBuf);
 impl ImportSnapshot for DiskSnapshot {
-    fn begin(&self, _: RootId) -> PortFuture<'_, Result<SnapshotSeed, PortError>> {
+    fn begin(&self, _: VaultId) -> PortFuture<'_, Result<SnapshotSeed, PortError>> {
         Box::pin(async move {
             checkpoint("fenced", 91);
             if self.0.join("offline").exists() {
@@ -410,7 +410,7 @@ impl ImportSnapshot for DiskSnapshot {
     }
     fn page<'a>(
         &'a self,
-        _: RootId,
+        _: VaultId,
         snapshot: &'a str,
         cursor: Option<&'a str>,
     ) -> PortFuture<'a, Result<SnapshotPage, PortError>> {
@@ -488,8 +488,8 @@ async fn expired_clean_missing_is_retired_never_uploaded_and_cursors_publish_ato
     assert_eq!(
         events::cursors(&mut conn, binding()).await.unwrap(),
         events::Cursors {
-            received: vaultsyncd_domain::version::RootSeq::new(20).unwrap(),
-            applied: vaultsyncd_domain::version::RootSeq::new(20).unwrap()
+            received: vaultsyncd_domain::version::VaultSeq::new(20).unwrap(),
+            applied: vaultsyncd_domain::version::VaultSeq::new(20).unwrap()
         }
     );
     let (text, complete): (String, bool) =
@@ -624,7 +624,7 @@ async fn backup_restore_is_not_log_expiry_and_same_seq_belongs_to_new_epoch() {
         events::received_batch(
             &mut conn,
             binding(),
-            vaultsyncd_domain::version::RootSeq::new(10).unwrap()
+            vaultsyncd_domain::version::VaultSeq::new(10).unwrap()
         )
         .await
         .unwrap()
@@ -650,7 +650,7 @@ async fn backup_restore_is_not_log_expiry_and_same_seq_belongs_to_new_epoch() {
         &mut tx,
         &events::IncomingBatch {
             binding: binding(),
-            seq: vaultsyncd_domain::version::RootSeq::new(10).unwrap(),
+            seq: vaultsyncd_domain::version::VaultSeq::new(10).unwrap(),
             tx: vaultsyncd_domain::ids::TxId::from_bytes([55; 16]),
             events_json: "[{\"new_epoch\":true}]".to_owned(),
             changes: vec![],
@@ -749,7 +749,7 @@ fn child(rig: &Rig, stage: &str, expected: i32) {
             "recovery::resync::tests::resync_child",
             "--nocapture",
         ])
-        .env("S060_ROOT", &rig.0)
+        .env("S060_VAULT", &rig.0)
         .env("S060_CRASH", stage)
         .output()
         .unwrap();
@@ -763,7 +763,7 @@ fn child(rig: &Rig, stage: &str, expected: i32) {
 }
 #[tokio::test]
 async fn resync_child() {
-    let Ok(path) = std::env::var("S060_ROOT") else {
+    let Ok(path) = std::env::var("S060_VAULT") else {
         return;
     };
     let rig = std::mem::ManuallyDrop::new(Rig(PathBuf::from(path)));

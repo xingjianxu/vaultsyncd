@@ -146,14 +146,14 @@ mod platform {
         {
             return Err(format!("GetFileVersionInfoW({path}): {}", last_error()));
         }
-        let root = wide("\\");
+        let vault = wide("\\");
         let mut block: *mut c_void = std::ptr::null_mut();
         let mut block_length: u32 = 0;
         // SAFETY: 查询根块只在 data 内取指针，block_length 校验后才解引用。
         if unsafe {
             VerQueryValueW(
                 data.as_ptr().cast(),
-                root.as_ptr(),
+                vault.as_ptr(),
                 &mut block,
                 &mut block_length,
             )

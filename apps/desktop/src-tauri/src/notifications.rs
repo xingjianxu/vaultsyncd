@@ -152,8 +152,8 @@ pub(crate) async fn observe(app: &tauri::AppHandle, status: &GetStatusResult) {
         });
         let tag = format!("{tag:016x}");
         let body = format!(
-            "Root {}：{}。未确认内容保留，请打开问题与恢复页面。",
-            notice.root_id.as_deref().unwrap_or("全局"),
+            "Vault {}：{}。未确认内容保留，请打开问题与恢复页面。",
+            notice.vault_id.as_deref().unwrap_or("全局"),
             notice.cause
         );
         let delivered = tauri::async_runtime::spawn_blocking(move || {

@@ -278,7 +278,7 @@ impl Hints {
             loop {
                 let _ = remote
                     .client
-                    .receive_hints(&remote.root.to_string(), &wake)
+                    .receive_hints(&remote.vault.to_string(), &wake)
                     .await;
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
@@ -296,11 +296,11 @@ mod tests {
     use super::*;
     #[test]
     fn malformed_tail_and_unpersisted_good_batch_never_publish_namespace() {
-        let root = "11111111111111111111111111111111";
+        let vault = "11111111111111111111111111111111";
         let child = "22222222222222222222222222222222";
         let row = SnapshotEntry {
             modified_at: None,
-            entry_id: root.into(),
+            entry_id: vault.into(),
             parent_id: None,
             name: String::new(),
             kind: EntryKind::Directory,
@@ -309,12 +309,12 @@ mod tests {
             hash: None,
             size: None,
         };
-        let initial = HashMap::from([(root.into(), row)]);
+        let initial = HashMap::from([(vault.into(), row)]);
         let decoder = Decoder {
             rows: Mutex::new(initial.clone()),
             specifications: Mutex::new(HashMap::new()),
         };
-        let mut envelope=EventEnvelope{seq:vaultsyncd_domain::version::RootSeq::new(1).unwrap(),tx:vaultsyncd_domain::ids::TxId::from_bytes([3;16]),events_json:serde_json::json!([{"kind":"create","entry_id":child,"parent_id":root,"name":"newdir","revision":"0"},{"kind":"create","parent_id":root,"name":"bad","revision":"0"}]).to_string()};
+        let mut envelope=EventEnvelope{seq:vaultsyncd_domain::version::VaultSeq::new(1).unwrap(),tx:vaultsyncd_domain::ids::TxId::from_bytes([3;16]),events_json:serde_json::json!([{"kind":"create","entry_id":child,"parent_id":vault,"name":"newdir","revision":"0"},{"kind":"create","parent_id":vault,"name":"bad","revision":"0"}]).to_string()};
         assert!(
             decoder
                 .decode(BindingId::from_bytes([4; 16]), &envelope)
@@ -322,7 +322,7 @@ mod tests {
         );
         assert_eq!(*decoder.rows.lock().unwrap(), initial);
         assert!(decoder.specifications.lock().unwrap().is_empty());
-        envelope.events_json=serde_json::json!([{"kind":"create","entry_id":child,"parent_id":root,"name":"newdir","revision":"0"}]).to_string();
+        envelope.events_json=serde_json::json!([{"kind":"create","entry_id":child,"parent_id":vault,"name":"newdir","revision":"0"}]).to_string();
         assert!(
             decoder
                 .decode(BindingId::from_bytes([4; 16]), &envelope)

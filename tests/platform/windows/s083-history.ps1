@@ -36,7 +36,7 @@ if ($Worker) {
     }
     $conflicts=@(Get-ChildItem $local -File|Where-Object{[IO.File]::ReadAllText($_.FullName)-eq 'S083 independent conflict'})
     if($conflicts.Count-ne 1){throw 'conflict copy missing or duplicated'}
-    if(Test-Path (Join-Path $local 'secret.txt')){throw 'foreign content crossed Root boundary'}
+    if(Test-Path (Join-Path $local 'secret.txt')){throw 'foreign content crossed Vault boundary'}
     $report|Add-Member -NotePropertyName actualBytesVerified -NotePropertyValue $true
     $report|Add-Member -NotePropertyName historyHash -NotePropertyValue (Get-FileHash (Join-Path $local $report.historyPath) -Algorithm SHA256).Hash.ToLowerInvariant()
     $report|Add-Member -NotePropertyName trashHash -NotePropertyValue (Get-FileHash (Join-Path $local $report.trashPath) -Algorithm SHA256).Hash.ToLowerInvariant()

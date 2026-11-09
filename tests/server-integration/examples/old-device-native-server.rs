@@ -50,7 +50,7 @@ impl Service {
 struct Host {
     lab: Lab,
     service: Option<Service>,
-    root: String,
+    vault: String,
     state: PathBuf,
     work: PathBuf,
     archive: PathBuf,
@@ -185,8 +185,8 @@ impl Host {
                     self.archive.display().to_string(),
                     "--state-dir".into(),
                     state.display().to_string(),
-                    "--root".into(),
-                    format!("{}={}", self.root, work.display()),
+                    "--vault".into(),
+                    format!("{}={}", self.vault, work.display()),
                 ];
                 let result = self.admin(args).await;
                 let config_path = state.join("server.toml");
@@ -219,7 +219,7 @@ impl Host {
                 let http = &self.service.as_ref().unwrap().http;
                 let token = common::login(http).await.unwrap();
                 wait_for("remote event adopted", || async {
-                    Ok(common::snapshot(http, &token, &self.root)
+                    Ok(common::snapshot(http, &token, &self.vault)
                         .await
                         .iter()
                         .any(|row| row["name"] == "event.txt" && row["hash"] == hash))
@@ -258,7 +258,7 @@ async fn main_local() {
         .unwrap()
         .1;
     let token = issued["access_token"].as_str().unwrap();
-    let root = register_root(&service.http, token, &lab.work())
+    let vault = register_vault(&service.http, token, &lab.work())
         .await
         .unwrap();
     let seeds = [
@@ -273,7 +273,7 @@ async fn main_local() {
         seeded.push(json!({"path":path,"hash":hex(&vaultsyncd_platform_linux_server::files::hash::digest(content.as_bytes())),"size":content.len().to_string()}));
     }
     wait_for("seed adoption", || async {
-        let rows = common::snapshot(&service.http, token, &root).await;
+        let rows = common::snapshot(&service.http, token, &vault).await;
         Ok(seeded.iter().all(|seed| {
             rows.iter()
                 .any(|r| r["name"] == seed["path"] && r["hash"] == seed["hash"])
@@ -283,14 +283,14 @@ async fn main_local() {
     .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let fixture = json!({"url":format!("http://{address}"),"root":root,"issued":issued,"login":LOGIN,"password":PASSWORD,"server_version":env!("CARGO_PKG_VERSION"),"seeded":seeded,"work_dir":lab.work()});
+    let fixture = json!({"url":format!("http://{address}"),"vault":vault,"issued":issued,"login":LOGIN,"password":PASSWORD,"server_version":env!("CARGO_PKG_VERSION"),"seeded":seeded,"work_dir":lab.work()});
     let host = Arc::new(Mutex::new(Host {
         state: lab.state(),
         work: lab.work(),
         archive: lab.state().parent().unwrap().join("old.vsbk"),
         lab,
         service: Some(service),
-        root,
+        vault,
         restored: false,
     }));
     let task_host = host.clone();

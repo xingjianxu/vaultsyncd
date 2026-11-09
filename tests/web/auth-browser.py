@@ -35,12 +35,12 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    state, roots = RUN / "state", RUN / "roots"
-    state.mkdir(mode=0o700); roots.mkdir()
+    state, vaults = RUN / "state", RUN / "vaults"
+    state.mkdir(mode=0o700); vaults.mkdir()
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
     checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
     config = RUN / "server.toml"
-    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[roots]\nallowed_bases=["{roots}"]\n[log]\nformat="json"\nlevel="info"\n')
+    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
     server = subprocess.Popen([str(BIN / "vaultsyncd-server"), "--config", str(config)], stdout=log, stderr=log)
     proxy = evil = None
@@ -104,7 +104,7 @@ def main():
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
-            notifications = page.locator(".mantine-Notification-root")
+            notifications = page.locator(".mantine-Notification-vault")
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):

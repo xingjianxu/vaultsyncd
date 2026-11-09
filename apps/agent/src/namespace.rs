@@ -336,14 +336,14 @@ async fn directory_token(
         .client
         .send_json(
             ApiRequest::get(format!(
-                "/v1/roots/{}/entries/{}/subtree",
-                remote.root, row.entry_id
+                "/v1/vaults/{}/entries/{}/subtree",
+                remote.vault, row.entry_id
             ))
             .with_auth(AuthMode::Bearer),
         )
         .await
         .map_err(vaultsyncd_http_client::transfer_error)?;
-    if token.root_id != remote.root.to_string() || token.entry_id != row.entry_id {
+    if token.vault_id != remote.vault.to_string() || token.entry_id != row.entry_id {
         return Err(error("subtree token identity mismatch"));
     }
     compare(remote_snapshot(remote).await?)?;
@@ -352,7 +352,7 @@ async fn directory_token(
 pub(crate) async fn remote_snapshot(
     remote: &crate::remote::Remote,
 ) -> Result<Vec<SnapshotEntry>, PortError> {
-    let (s, _) = vaultsyncd_http_client::sync::snapshot(&remote.client, &remote.root.to_string())
+    let (s, _) = vaultsyncd_http_client::sync::snapshot(&remote.client, &remote.vault.to_string())
         .await
         .map_err(vaultsyncd_http_client::transfer_error)?;
     let mut rows = Vec::new();
@@ -360,7 +360,7 @@ pub(crate) async fn remote_snapshot(
     loop {
         let page = vaultsyncd_http_client::sync::snapshot_page(
             &remote.client,
-            &remote.root.to_string(),
+            &remote.vault.to_string(),
             &s.snapshot_id,
             cursor.as_deref(),
         )
@@ -461,7 +461,7 @@ pub(crate) async fn outgoing(
         }
         after.deleted = true;
     }
-    let observed = local.root.inspect(path);
+    let observed = local.vault.inspect(path);
     let missing = observed
         .as_ref()
         .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
@@ -572,7 +572,7 @@ pub(crate) async fn incoming(
     }
     if deleted
         && local
-            .root
+            .vault
             .inspect(&from)
             .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
     {
@@ -596,12 +596,12 @@ pub(crate) async fn incoming(
     let mut after = baseline(row)?;
     after.deleted = deleted;
     if deleted {
-        match local.root.inspect(&from) {
+        match local.vault.inspect(&from) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(error(e)),
             Ok(meta) if meta.directory && physical(&meta) != expected => {}
             Ok(meta) if meta.directory => {
-                match local.root.remove_empty_directory(&from, meta.identity) {
+                match local.vault.remove_empty_directory(&from, meta.identity) {
                     Ok(()) => {}
                     Err(e) if e.raw_os_error() == Some(145) => {
                         if rows
@@ -674,7 +674,7 @@ pub(crate) async fn incoming(
             }
         }
         let missing = local
-            .root
+            .vault
             .inspect(&from)
             .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
         let mut tx = local.db.begin_write().await.map_err(error)?;
@@ -713,10 +713,10 @@ pub(crate) async fn incoming(
         &intent,
     )
     .await?;
-    let destination = local.root.inspect(target);
+    let destination = local.vault.inspect(target);
     let already = destination.as_ref().is_ok_and(|m| physical(m) == expected);
     if !already {
-        let meta = local.root.inspect(&from).map_err(error)?;
+        let meta = local.vault.inspect(&from).map_err(error)?;
         if physical(&meta) != expected {
             return Err(error("move source identity changed"));
         }
@@ -728,7 +728,7 @@ pub(crate) async fn incoming(
         .await?;
         if meta.directory {
             local
-                .root
+                .vault
                 .move_directory(&from, target, meta.identity)
                 .map_err(error)?;
         } else if meta.cloud.as_ref().is_some_and(|c| c.on_disk < meta.size) {

@@ -450,13 +450,13 @@ pub(crate) fn btrfs_fsid(fd: RawFd) -> io::Result<[u8; 16]> {
 pub(crate) fn btrfs_subvolume_id(fd: RawFd) -> io::Result<u64> {
     let mut args = BtrfsIoInoLookup {
         treeid: 0,
-        // BTRFS_FIRST_FREE_OBJECTID is the fixed root inode, not a subvolume ID.
+        // BTRFS_FIRST_FREE_OBJECTID is the fixed vault inode, not a subvolume ID.
         // Linux returns this fd's containing treeid before any privileged path search.
         objectid: 256,
         name: [0; INO_LOOKUP_PATH_MAX],
     };
     // SAFETY: BTRFS_IOC_INO_LOOKUP 是 _IOWR(0x94, 18, 4096)，读写本地 4 KiB 结构体；
-    // treeid=0 绑定该 fd 的 root，objectid=256 直接返回 treeid，不做路径搜索。
+    // treeid=0 绑定该 fd 的 vault，objectid=256 直接返回 treeid，不做路径搜索。
     let rc = unsafe { ioctl(fd, BTRFS_IOC_INO_LOOKUP, &raw mut args) };
     if rc != 0 {
         return Err(io::Error::last_os_error());

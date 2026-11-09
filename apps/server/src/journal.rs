@@ -5,8 +5,8 @@ use vaultsyncd_server_store::{db::Database, operations::OperationKey};
 /// 一个逻辑操作的持久恢复上下文。kind 区分元数据事务，context 不依赖内存或日志。
 #[derive(Clone, Debug)]
 pub struct Binding {
-    /// Root。
-    pub root: vaultsyncd_domain::ids::RootId,
+    /// Vault。
+    pub vault: vaultsyncd_domain::ids::VaultId,
     /// 设备。
     pub device: vaultsyncd_domain::ids::DeviceId,
     /// 操作。
@@ -22,7 +22,7 @@ impl Binding {
     /// 建立上下文，操作键从已授权请求传入。
     pub fn new(key: OperationKey, kind: &str, context: serde_json::Value) -> Self {
         Self {
-            root: key.root,
+            vault: key.vault,
             device: key.device,
             op: key.op,
             kind: kind.to_owned(),
@@ -40,7 +40,7 @@ impl Binding {
     /// 对应的操作键。
     pub fn key(&self) -> OperationKey {
         OperationKey {
-            root: self.root,
+            vault: self.vault,
             device: self.device,
             op: self.op,
         }
@@ -52,11 +52,11 @@ impl Binding {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     ) -> Result<(), sqlx::Error> {
         let text = self.context.to_string();
-        sqlx::query("INSERT INTO execution_journal(root_id,device_id,op_id,kind,context_json) VALUES (?1,?2,?3,?4,?5) ON CONFLICT DO NOTHING")
-            .bind(self.root.as_bytes().as_slice()).bind(self.device.as_bytes().as_slice())
+        sqlx::query("INSERT INTO execution_journal(vault_id,device_id,op_id,kind,context_json) VALUES (?1,?2,?3,?4,?5) ON CONFLICT DO NOTHING")
+            .bind(self.vault.as_bytes().as_slice()).bind(self.device.as_bytes().as_slice())
             .bind(self.op.as_bytes().as_slice()).bind(&self.kind).bind(&text).execute(&mut **tx).await?;
-        let (kind, stored): (String, String) = sqlx::query_as("SELECT kind,context_json FROM execution_journal WHERE root_id=?1 AND device_id=?2 AND op_id=?3")
-            .bind(self.root.as_bytes().as_slice()).bind(self.device.as_bytes().as_slice()).bind(self.op.as_bytes().as_slice())
+        let (kind, stored): (String, String) = sqlx::query_as("SELECT kind,context_json FROM execution_journal WHERE vault_id=?1 AND device_id=?2 AND op_id=?3")
+            .bind(self.vault.as_bytes().as_slice()).bind(self.device.as_bytes().as_slice()).bind(self.op.as_bytes().as_slice())
             .fetch_one(&mut **tx).await?;
         if kind != self.kind || stored != text {
             return Err(sqlx::Error::Protocol(
@@ -75,10 +75,10 @@ impl Binding {
             self.persist(tx).await?;
         }
         sqlx::query(
-            "INSERT INTO intent_operations(intent_id,root_id,device_id,op_id) VALUES (?1,?2,?3,?4)",
+            "INSERT INTO intent_operations(intent_id,vault_id,device_id,op_id) VALUES (?1,?2,?3,?4)",
         )
         .bind(intent.as_bytes().as_slice())
-        .bind(self.root.as_bytes().as_slice())
+        .bind(self.vault.as_bytes().as_slice())
         .bind(self.device.as_bytes().as_slice())
         .bind(self.op.as_bytes().as_slice())
         .execute(&mut **tx)
@@ -96,15 +96,15 @@ pub async fn for_intent(
     intent: IntentId,
 ) -> Result<Option<Binding>, sqlx::Error> {
     let row: Option<JournalRow> = sqlx::query_as(
-        "SELECT j.root_id,j.device_id,j.op_id,j.kind,j.context_json FROM intent_operations i JOIN execution_journal j USING(root_id,device_id,op_id) JOIN roots r ON r.id=j.root_id WHERE i.intent_id=?1 AND r.owner_id=?2")
+        "SELECT j.vault_id,j.device_id,j.op_id,j.kind,j.context_json FROM intent_operations i JOIN execution_journal j USING(vault_id,device_id,op_id) JOIN vaults r ON r.id=j.vault_id WHERE i.intent_id=?1 AND r.owner_id=?2")
         .bind(intent.as_bytes().as_slice()).bind(owner.as_bytes().as_slice()).fetch_optional(db.pool()).await?;
-    row.map(|(root, device, op, kind, text)| {
+    row.map(|(vault, device, op, kind, text)| {
         let bytes = |v: Vec<u8>| {
             v.try_into()
                 .map_err(|_| sqlx::Error::Protocol("恢复身份长度错误".to_owned()))
         };
         Ok(Binding {
-            root: vaultsyncd_domain::ids::RootId::from_bytes(bytes(root)?),
+            vault: vaultsyncd_domain::ids::VaultId::from_bytes(bytes(vault)?),
             device: vaultsyncd_domain::ids::DeviceId::from_bytes(bytes(device)?),
             op: vaultsyncd_domain::ids::OpId::from_bytes(bytes(op)?),
             kind,
@@ -155,7 +155,7 @@ pub fn echo_field(generation: Option<vaultsyncd_domain::version::Generation>) ->
     serde_json::json!({ "local_generation": generation.map(|value| value.to_string()) })
 }
 
-/// 提交事务内再核对一次：要提交结果的操作行仍是同一个请求摘要，且属于该账号的 Root。
+/// 提交事务内再核对一次：要提交结果的操作行仍是同一个请求摘要，且属于该账号的 Vault。
 /// 不一致说明有人拿别的请求的上下文去提交这条操作，整个事务回滚。
 pub async fn ensure_digest(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,

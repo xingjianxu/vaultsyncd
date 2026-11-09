@@ -60,7 +60,7 @@ pub(super) async fn start(
         old_baseline,
         old_remote,
         old_events: events,
-        root_identity: None,
+        vault_identity: None,
         snapshot: None,
         entries: Vec::new(),
         cursor: None,

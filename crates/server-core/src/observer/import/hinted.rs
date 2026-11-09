@@ -35,8 +35,8 @@ pub struct HintedReport {
     pub absent: Vec<String>,
     /// 子树扫描被预算截断：需要交给全量扫描续扫。
     pub subtree_truncated: bool,
-    /// Root 不可用而中止。
-    pub root_unavailable: bool,
+    /// Vault 不可用而中止。
+    pub vault_unavailable: bool,
 }
 
 /// 一次内容复核的报告。
@@ -54,8 +54,8 @@ pub struct ReviewReport {
     pub outcomes: Vec<FileOutcome>,
     /// 一圈复核已走完（下一批从头开始）。
     pub wrapped: bool,
-    /// Root 不可用而中止。
-    pub root_unavailable: bool,
+    /// Vault 不可用而中止。
+    pub vault_unavailable: bool,
 }
 
 impl ExternalObserver {
@@ -88,8 +88,8 @@ impl ExternalObserver {
                     self.settle(&path);
                     report.absent.push(path);
                 }
-                Err(WorkTreeError::RootUnavailable { .. }) => {
-                    report.root_unavailable = true;
+                Err(WorkTreeError::VaultUnavailable { .. }) => {
+                    report.vault_unavailable = true;
                     return report;
                 }
                 Err(error) => report.unreadable.push((path, error.to_string())),
@@ -102,7 +102,7 @@ impl ExternalObserver {
                 continue;
             }
             let scan = scan_tree(&mut *ports.work, limits.scan, ScanCursor::from_dir(&dir));
-            let root_gone = scan.root_unavailable();
+            let vault_gone = scan.vault_unavailable();
             if let ScanCompletion::Inconclusive { reasons, .. } = &scan.completion {
                 for reason in reasons {
                     match reason {
@@ -113,12 +113,12 @@ impl ExternalObserver {
                         | InconclusiveReason::EntryUnreadable { path, detail, .. } => {
                             report.unreadable.push((path.clone(), detail.clone()));
                         }
-                        InconclusiveReason::RootUnavailable { .. } => {}
+                        InconclusiveReason::VaultUnavailable { .. } => {}
                     }
                 }
             }
-            if root_gone {
-                report.root_unavailable = true;
+            if vault_gone {
+                report.vault_unavailable = true;
                 return report;
             }
             for file in scan.files {
@@ -130,7 +130,7 @@ impl ExternalObserver {
 
         let (outcomes, aborted) = self.handle_files(ports, files, limits, clock, false).await;
         report.outcomes = outcomes;
-        report.root_unavailable = aborted;
+        report.vault_unavailable = aborted;
         report
     }
 
@@ -172,8 +172,8 @@ impl ExternalObserver {
                 Review::Skipped => {}
                 Review::Absent => report.absent.push(path),
                 Review::Unreadable(detail) => report.unreadable.push((path, detail)),
-                Review::RootUnavailable => {
-                    report.root_unavailable = true;
+                Review::VaultUnavailable => {
+                    report.vault_unavailable = true;
                     return report;
                 }
             }
@@ -182,7 +182,7 @@ impl ExternalObserver {
             .handle_files(ports, changed, limits, clock, false)
             .await;
         report.outcomes = outcomes;
-        report.root_unavailable = aborted;
+        report.vault_unavailable = aborted;
         report
     }
 
@@ -195,7 +195,7 @@ impl ExternalObserver {
             Ok(WorkObservation::File(stamp)) => stamp,
             Ok(WorkObservation::Absent) | Err(WorkTreeError::Gone { .. }) => return Review::Absent,
             Ok(WorkObservation::NotRegular(_)) => return Review::Skipped,
-            Err(WorkTreeError::RootUnavailable { .. }) => return Review::RootUnavailable,
+            Err(WorkTreeError::VaultUnavailable { .. }) => return Review::VaultUnavailable,
             Err(error) => return Review::Unreadable(error.to_string()),
         };
         let staging = self.next_staging_name();
@@ -203,7 +203,7 @@ impl ExternalObserver {
             &mut *ports.work,
             &mut *ports.blobs,
             ports.layout,
-            self.root,
+            self.vault,
             path,
             &stamp,
             &staging,
@@ -215,7 +215,7 @@ impl ExternalObserver {
                 return Review::Skipped;
             }
             Ok(CaptureOutcome::Vanished) => return Review::Absent,
-            Err(error) if error.is_root_unavailable() => return Review::RootUnavailable,
+            Err(error) if error.is_vault_unavailable() => return Review::VaultUnavailable,
             Err(error) => return Review::Unreadable(error.to_string()),
         };
         let Some(baseline) = self.adopted.get_mut(path) else {
@@ -239,5 +239,5 @@ enum Review {
     Skipped,
     Absent,
     Unreadable(String),
-    RootUnavailable,
+    VaultUnavailable,
 }

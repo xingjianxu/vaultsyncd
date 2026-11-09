@@ -4,7 +4,7 @@ use crate::observer::fixtures::{
 };
 use crate::ports::external_store::ExternalStoreError;
 use crate::ports::object_store::{BlobError, CopyFallback, CopyMethod};
-use crate::test_support::{revision, root_id, user_time};
+use crate::test_support::{revision, user_time, vault_id};
 use vaultsyncd_domain::version::Revision;
 
 const WINDOW_MS: u64 = 500;
@@ -14,7 +14,7 @@ struct Harness {
     work: FakeWorkTree,
     blobs: FakeBlobs,
     store: FakeExternalStore,
-    gate: RootCommitGate,
+    gate: VaultCommitGate,
     layout: ObjectLayout,
     observer: ExternalObserver,
     now_ms: u64,
@@ -30,7 +30,7 @@ impl Harness {
             blobs: FakeBlobs::new(&fs),
             fs,
             store: FakeExternalStore::default(),
-            gate: RootCommitGate::new(),
+            gate: VaultCommitGate::new(),
             layout: ObjectLayout::new("/state/objects"),
             observer: observer(),
             now_ms: 1_000,
@@ -70,7 +70,7 @@ impl Harness {
 
 fn observer() -> ExternalObserver {
     ExternalObserver::new(
-        root_id(0x11),
+        vault_id(0x11),
         StabilityWindow::from_millis(WINDOW_MS).expect("合法"),
         "ext-test",
     )
@@ -426,13 +426,13 @@ async fn capture_time_permission_failure_is_pending_failed_never_vanished() {
 }
 
 #[tokio::test]
-async fn root_unavailable_captures_nothing_and_never_completes_the_import() {
+async fn vault_unavailable_captures_nothing_and_never_completes_the_import() {
     let mut harness = Harness::new();
     harness.fs.borrow_mut().write("a.txt", b"x");
     harness.pass(0).await;
-    harness.fs.borrow_mut().root_unavailable = true;
+    harness.fs.borrow_mut().vault_unavailable = true;
     let report = harness.pass(WINDOW_MS).await;
-    assert!(report.root_unavailable);
+    assert!(report.vault_unavailable);
     assert!(!report.scan_complete);
     assert!(report.outcomes.is_empty());
     assert_eq!(harness.blobs.stage_calls, 0);
@@ -580,15 +580,15 @@ async fn store_conflicts_and_failures_never_mark_history_protected() {
 }
 
 #[tokio::test]
-async fn busy_root_defers_adoption_and_releases_the_ticket_afterwards() {
+async fn busy_vault_defers_adoption_and_releases_the_ticket_afterwards() {
     let mut harness = Harness::new();
     harness.fs.borrow_mut().write("a.txt", b"x");
     harness.pass(0).await;
-    let ticket = harness.gate.acquire(root_id(0x11)).expect("空闲");
+    let ticket = harness.gate.acquire(vault_id(0x11)).expect("空闲");
     let report = harness.pass(WINDOW_MS).await;
     assert_eq!(
         *pending_of(&report, "a.txt"),
-        PendingReason::Deferred(DeferReason::RootBusy)
+        PendingReason::Deferred(DeferReason::VaultBusy)
     );
     assert!(harness.store.versions.is_empty());
     harness.gate.release(ticket);
@@ -597,7 +597,7 @@ async fn busy_root_defers_adoption_and_releases_the_ticket_afterwards() {
         state_of(&report, "a.txt"),
         FileState::Adopted { .. }
     ));
-    assert!(!harness.gate.is_held(root_id(0x11)), "采纳后释放票据");
+    assert!(!harness.gate.is_held(vault_id(0x11)), "采纳后释放票据");
 }
 
 #[tokio::test]
@@ -614,7 +614,7 @@ async fn change_between_capture_and_commit_requeues_before_touching_the_store() 
         &mut harness.work,
         &mut harness.blobs,
         &harness.layout,
-        root_id(0x11),
+        vault_id(0x11),
         "a.txt",
         &stamp,
         "direct-1",
@@ -638,13 +638,13 @@ async fn change_between_capture_and_commit_requeues_before_touching_the_store() 
         AdoptOutcome::Requeue(RequeueReason::ChangedBeforeCommit { .. })
     ));
     assert!(harness.store.writes.is_empty(), "指纹不符不触碰存储");
-    assert!(!harness.gate.is_held(root_id(0x11)));
+    assert!(!harness.gate.is_held(vault_id(0x11)));
 }
 
 #[test]
 fn staging_prefix_and_capture_budget_are_validated() {
     assert!(matches!(
-        ExternalObserver::new(root_id(1), StabilityWindow::DEFAULT, "a/b"),
+        ExternalObserver::new(vault_id(1), StabilityWindow::DEFAULT, "a/b"),
         Err(ObserverConfigError::StagingPrefix(_))
     ));
     assert_eq!(

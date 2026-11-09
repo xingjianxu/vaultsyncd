@@ -7,15 +7,15 @@ from pathlib import Path
 import subprocess
 import time
 
-ROOT = Path(__file__).resolve().parents[2]
-TARGET = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+VAULT = Path(__file__).resolve().parents[2]
+TARGET = Path(os.environ.get("CARGO_TARGET_DIR", VAULT / "target"))
 BIN = TARGET / "debug/xtask"
-OUT = ROOT / "artifacts/S093" / str(time.time_ns())
+OUT = VAULT / "artifacts/S093" / str(time.time_ns())
 MIRRORS = ["package.json","packages/ui/package.json","packages/api-client/package.json","packages/local-ipc-types/package.json","apps/web/package.json","apps/desktop/package.json","apps/desktop/src-tauri/tauri.conf.json"]
 
 
 def call(args, expected=0, contains=None):
-    result = subprocess.run([str(arg) for arg in args], cwd=ROOT, text=True, capture_output=True, timeout=180)
+    result = subprocess.run([str(arg) for arg in args], cwd=VAULT, text=True, capture_output=True, timeout=180)
     text = result.stdout + result.stderr
     (OUT / f"command-{len(list(OUT.glob('command-*'))):03}.log").write_text(text)
     assert result.returncode == expected, text
@@ -26,7 +26,7 @@ def call(args, expected=0, contains=None):
 def main():
     OUT.mkdir(parents=True)
     call([BIN,"version","--check"])
-    stale=ROOT/"apps/web/dist/old-release.js"; stale.parent.mkdir(parents=True,exist_ok=True); stale.write_text("stale asset")
+    stale=VAULT/"apps/web/dist/old-release.js"; stale.parent.mkdir(parents=True,exist_ok=True); stale.write_text("stale asset")
     for component in ["web","desktop-ui"]:
         call([BIN,"release","build",component,OUT/component])
     assert not (OUT/"web/payload/old-release.js").exists()
@@ -34,13 +34,13 @@ def main():
     call([BIN,"release","assemble",manifest,OUT/"web",OUT/"desktop-ui"])
     call([BIN,"release","verify",manifest])
     data=json.loads(manifest.read_text())
-    commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
+    commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=VAULT,text=True).strip()
     assert data["source"]["commit"]==commit
     for component in data["components"]:
         receipt=component["receipt"]
         assert receipt["toolchain"] and receipt["command"] and receipt["preparation"] and receipt["target"]=="browser-static"
         for name,digest in receipt["source"]["inputs"].items():
-            assert hashlib.sha256((ROOT/name).read_bytes()).hexdigest()==digest
+            assert hashlib.sha256((VAULT/name).read_bytes()).hexdigest()==digest
         for item in receipt["files"]:
             actual=Path(component["directory"])/"payload"/item["path"]
             assert actual.stat().st_size==item["bytes"] and hashlib.sha256(actual.read_bytes()).hexdigest()==item["sha256"]
@@ -56,18 +56,18 @@ def main():
         data["source"]["commit"]="0"*40;manifest.write_text(json.dumps(data))
         call([BIN,"release","verify",manifest],1,"stale")
     finally: manifest.write_bytes(old_manifest)
-    source=ROOT/"apps/web/src/App.tsx"; old_source=source.read_bytes()
+    source=VAULT/"apps/web/src/App.tsx"; old_source=source.read_bytes()
     try:
         source.write_bytes(old_source+b"\n// resource changed\n")
         call([BIN,"release","verify",manifest],1,"clean committed")
         call([BIN,"release","build","web",OUT/"dirty"],1,"clean committed")
     finally: source.write_bytes(old_source)
-    paths=[ROOT/name for name in MIRRORS+["Cargo.toml","Cargo.lock"]]
+    paths=[VAULT/name for name in MIRRORS+["Cargo.toml","Cargo.lock"]]
     saved={path:path.read_bytes() for path in paths}
-    generated=[ROOT/name for name in ["crates/protocol/src/generated/mod.rs","crates/local-ipc/src/generated/mod.rs","packages/api-client/src/generated/types.ts","packages/api-client/src/generated/client.ts","packages/local-ipc-types/src/generated/types.ts"]]
+    generated=[VAULT/name for name in ["crates/protocol/src/generated/mod.rs","crates/local-ipc/src/generated/mod.rs","packages/api-client/src/generated/types.ts","packages/api-client/src/generated/client.ts","packages/local-ipc-types/src/generated/types.ts"]]
     saved_generated={path:path.read_bytes() for path in generated}
     try:
-        cargo=ROOT/"Cargo.toml";text=cargo.read_text();version=data["source"]["version"]
+        cargo=VAULT/"Cargo.toml";text=cargo.read_text();version=data["source"]["version"]
         pieces=version.split(".");pieces[2]=str(int(pieces[2])+1);next_version=".".join(pieces)
         cargo.write_text(text.replace('version = "'+version+'"','version = "'+next_version+'"',1))
         call([BIN,"version","--check"],1,"版本不同步")

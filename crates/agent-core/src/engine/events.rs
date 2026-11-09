@@ -16,8 +16,8 @@ use vaultsyncd_client_store::db::Database;
 use vaultsyncd_client_store::entries::{self, BaselineEntry, RemoteEntry};
 use vaultsyncd_client_store::events as store_events;
 use vaultsyncd_domain::error::ErrorCode;
-use vaultsyncd_domain::ids::{BindingId, RootId, TxId};
-use vaultsyncd_domain::version::RootSeq;
+use vaultsyncd_domain::ids::{BindingId, TxId, VaultId};
+use vaultsyncd_domain::version::VaultSeq;
 use vaultsyncd_protocol::generated::{ChangeBatch, ChangeList};
 use vaultsyncd_transfer::ports::{PortError, PortFuture};
 
@@ -28,8 +28,8 @@ pub trait ChangeSource: Send + Sync {
     /// 拉取 `after` 之后的一页完整事务批次。
     fn pull(
         &self,
-        root: RootId,
-        after: RootSeq,
+        vault: VaultId,
+        after: VaultSeq,
         limit: u32,
     ) -> PortFuture<'_, Result<ChangeList, PortError>>;
 }
@@ -41,7 +41,7 @@ pub trait ChangeSource: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventEnvelope {
     /// 批次序号。
-    pub seq: RootSeq,
+    pub seq: VaultSeq,
     /// 服务端事务身份。
     pub tx: TxId,
     /// 服务端原样事件数组文本。
@@ -125,7 +125,7 @@ pub enum ReceiveError {
     Store(store_events::EventError),
     /// 应用阶段的端口失败。
     Apply(PortError),
-    /// 服务端返回了错误 Root 或不递增的批次页。
+    /// 服务端返回了错误 Vault 或不递增的批次页。
     Protocol {
         /// 具体协议错误。
         detail: String,
@@ -195,7 +195,7 @@ impl std::error::Error for DecodeError {}
 /// 绑定作用域的事件接收器。
 pub struct EventReceiver<S, D, A> {
     database: Arc<Database>,
-    root: RootId,
+    vault: VaultId,
     binding: BindingId,
     source: Arc<S>,
     decoder: Arc<D>,
@@ -212,7 +212,7 @@ where
     /// 构造接收器；`page_limit` 必须在服务端 changes 上限内且非零。
     pub fn new(
         database: Arc<Database>,
-        root: RootId,
+        vault: VaultId,
         binding: BindingId,
         source: Arc<S>,
         decoder: Arc<D>,
@@ -226,7 +226,7 @@ where
         }
         Ok(Self {
             database,
-            root,
+            vault,
             binding,
             source,
             decoder,
@@ -237,7 +237,7 @@ where
 
     /// 运行一次周期轮询。`hint` 只是 SSE 唤醒提示，过旧/重复提示不会重复应用；即使没有提示也
     /// 会拉取，保证断线后的周期兜底。
-    pub async fn run_cycle(&self, hint: Option<RootSeq>) -> Result<ReceiveReport, ReceiveError> {
+    pub async fn run_cycle(&self, hint: Option<VaultSeq>) -> Result<ReceiveReport, ReceiveError> {
         let mut report = self.resume_pending().await?;
         let mut after = self.current_received().await?;
         if hint.is_some_and(|hint| hint <= after) {
@@ -248,10 +248,10 @@ where
         loop {
             let page = self
                 .source
-                .pull(self.root, after, self.page_limit)
+                .pull(self.vault, after, self.page_limit)
                 .await
                 .map_err(ReceiveError::Source)?;
-            validate_page(&page, self.root, after)?;
+            validate_page(&page, self.vault, after)?;
             let page_last = page.batches.last().map(|batch| batch.seq.as_str());
             for wire in &page.batches {
                 let envelope = EventEnvelope::from_wire(wire)?;
@@ -264,7 +264,7 @@ where
                 let expected = current
                     .get()
                     .checked_add(1)
-                    .and_then(|value| RootSeq::new(value).ok())
+                    .and_then(|value| VaultSeq::new(value).ok())
                     .ok_or_else(|| ReceiveError::Protocol {
                         detail: format!("批次 {} 溢出", envelope.seq),
                     })?;
@@ -284,9 +284,9 @@ where
                 .next_after
                 .parse::<u64>()
                 .ok()
-                .and_then(|value| RootSeq::new(value).ok());
+                .and_then(|value| VaultSeq::new(value).ok());
             let next = next.ok_or_else(|| ReceiveError::Protocol {
-                detail: "next_after 不是合法 RootSeq".to_owned(),
+                detail: "next_after 不是合法 VaultSeq".to_owned(),
             })?;
             if next <= after || page_last.is_none() {
                 return Err(ReceiveError::Protocol {
@@ -334,7 +334,7 @@ where
         Ok(report)
     }
 
-    async fn current_received(&self) -> Result<RootSeq, ReceiveError> {
+    async fn current_received(&self) -> Result<VaultSeq, ReceiveError> {
         let mut conn =
             self.database
                 .pool()
@@ -451,10 +451,10 @@ fn baseline(remote: &RemoteEntry) -> BaselineEntry {
     }
 }
 
-fn validate_page(page: &ChangeList, root: RootId, after: RootSeq) -> Result<(), ReceiveError> {
-    if page.root_id != root.to_hex() {
+fn validate_page(page: &ChangeList, vault: VaultId, after: VaultSeq) -> Result<(), ReceiveError> {
+    if page.vault_id != vault.to_hex() {
         return Err(ReceiveError::Protocol {
-            detail: format!("响应 Root {} 与绑定 Root {} 不同", page.root_id, root),
+            detail: format!("响应 Vault {} 与绑定 Vault {} 不同", page.vault_id, vault),
         });
     }
     let mut previous = after;
@@ -470,11 +470,11 @@ fn validate_page(page: &ChangeList, root: RootId, after: RootSeq) -> Result<(), 
     Ok(())
 }
 
-fn parse_seq(text: &str, field: &'static str) -> Result<RootSeq, DecodeError> {
+fn parse_seq(text: &str, field: &'static str) -> Result<VaultSeq, DecodeError> {
     let value = text
         .parse::<u64>()
         .map_err(|_| DecodeError::new(field, "不是规范十进制"))?;
-    RootSeq::new(value).map_err(|_| DecodeError::new(field, "必须大于 0 且不超过上限"))
+    VaultSeq::new(value).map_err(|_| DecodeError::new(field, "必须大于 0 且不超过上限"))
 }
 
 fn parse_id<T>(
@@ -498,8 +498,8 @@ mod tests {
     impl ChangeSource for NoSource {
         fn pull(
             &self,
-            _: RootId,
-            _: RootSeq,
+            _: VaultId,
+            _: VaultSeq,
             _: u32,
         ) -> PortFuture<'_, Result<ChangeList, PortError>> {
             Box::pin(async {
@@ -513,18 +513,18 @@ mod tests {
 
     struct StaticSource {
         used: AtomicBool,
-        root: String,
+        vault: String,
     }
 
     impl ChangeSource for StaticSource {
         fn pull(
             &self,
-            _: RootId,
-            after: RootSeq,
+            _: VaultId,
+            after: VaultSeq,
             _: u32,
         ) -> PortFuture<'_, Result<ChangeList, PortError>> {
-            let first = after == RootSeq::ZERO && !self.used.swap(true, Ordering::SeqCst);
-            let root = self.root.clone();
+            let first = after == VaultSeq::ZERO && !self.used.swap(true, Ordering::SeqCst);
+            let vault = self.vault.clone();
             Box::pin(async move {
                 Ok(ChangeList {
                     batches: if first {
@@ -540,7 +540,7 @@ mod tests {
                     has_more: false,
                     head_seq: "1".into(),
                     next_after: "1".into(),
-                    root_id: root,
+                    vault_id: vault,
                     server_epoch: "1".into(),
                 })
             })
@@ -577,14 +577,14 @@ mod tests {
         }
     }
 
-    fn ids(marker: u8) -> (BindingId, RootId) {
+    fn ids(marker: u8) -> (BindingId, VaultId) {
         (
             BindingId::from_bytes([marker; 16]),
-            RootId::from_bytes([marker + 1; 16]),
+            VaultId::from_bytes([marker + 1; 16]),
         )
     }
 
-    async fn database(marker: u8) -> (Arc<Database>, BindingId, RootId, std::path::PathBuf) {
+    async fn database(marker: u8) -> (Arc<Database>, BindingId, VaultId, std::path::PathBuf) {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("时间")
@@ -592,7 +592,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("vaultsyncd-s057-{marker:02x}-{suffix}"));
         std::fs::create_dir_all(&dir).expect("临时目录");
         let database = Arc::new(Database::open(dir.join("client.db")).await.expect("数据库"));
-        let (binding, root) = ids(marker);
+        let (binding, vault) = ids(marker);
         let mut tx = database.begin_write().await.expect("事务");
         bindings::insert_binding(
             &mut tx,
@@ -600,7 +600,7 @@ mod tests {
                 id: binding,
                 server: ServerId::from_bytes([0x01; 16]),
                 device: DeviceId::from_bytes([0x02; 16]),
-                root,
+                vault,
                 local_path: "local".into(),
                 cache_path: "cache".into(),
                 mode: SyncMode::Full,
@@ -611,19 +611,19 @@ mod tests {
         .await
         .expect("绑定");
         tx.commit().await.expect("提交");
-        (database, binding, root, dir)
+        (database, binding, vault, dir)
     }
 
     #[tokio::test]
     async fn a_batch_is_received_then_applied_and_persisted() {
-        let (database, binding, root, dir) = database(0x42).await;
+        let (database, binding, vault, dir) = database(0x42).await;
         let source = Arc::new(StaticSource {
             used: AtomicBool::new(false),
-            root: root.to_hex(),
+            vault: vault.to_hex(),
         });
         let receiver = EventReceiver::new(
             Arc::clone(&database),
-            root,
+            vault,
             binding,
             source,
             Arc::new(Decoder),
@@ -632,7 +632,7 @@ mod tests {
         )
         .expect("接收器");
         let report = receiver
-            .run_cycle(Some(RootSeq::new(1).expect("提示")))
+            .run_cycle(Some(VaultSeq::new(1).expect("提示")))
             .await
             .expect("周期");
         assert_eq!(report.received, 1);
@@ -643,7 +643,7 @@ mod tests {
                 .await
                 .expect("游标")
                 .applied,
-            RootSeq::new(1).expect("seq")
+            VaultSeq::new(1).expect("seq")
         );
         drop(conn);
         drop(database);
@@ -652,10 +652,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_repeated_hint_only_resumes_and_does_not_pull_again() {
-        let (database, binding, root, dir) = database(0x41).await;
+        let (database, binding, vault, dir) = database(0x41).await;
         let receiver = EventReceiver::new(
             Arc::clone(&database),
-            root,
+            vault,
             binding,
             Arc::new(NoSource),
             Arc::new(Decoder),
@@ -663,7 +663,10 @@ mod tests {
             100,
         )
         .expect("接收器");
-        let report = receiver.run_cycle(Some(RootSeq::ZERO)).await.expect("周期");
+        let report = receiver
+            .run_cycle(Some(VaultSeq::ZERO))
+            .await
+            .expect("周期");
         assert_eq!(report, ReceiveReport::default());
         drop(database);
         std::fs::remove_dir_all(dir).expect("清理临时目录");
@@ -672,7 +675,7 @@ mod tests {
     #[test]
     fn stored_envelope_keeps_the_wire_identity() {
         let batch = store_events::ReceivedBatch {
-            seq: RootSeq::new(2).expect("seq"),
+            seq: VaultSeq::new(2).expect("seq"),
             tx: TxId::from_bytes([3; 16]),
             events_json: "[{\"x\":1}]".into(),
             state: store_events::BatchState::Received,

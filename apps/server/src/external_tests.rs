@@ -10,8 +10,8 @@ async fn stale_observed_paths_cannot_move_or_delete_a_file_after_parent_rename()
     std::fs::create_dir_all(&path).unwrap();
     let database = Database::open(path.join("server.sqlite")).await.unwrap();
     let owner = UserId::from_bytes([1; 16]);
-    let root = RootId::from_bytes([2; 16]);
-    let root_entry = EntryId::from_bytes([3; 16]);
+    let vault = VaultId::from_bytes([2; 16]);
+    let vault_entry = EntryId::from_bytes([3; 16]);
     let parent = EntryId::from_bytes([4; 16]);
     let file = EntryId::from_bytes([5; 16]);
     let at = UtcTimestamp::from_unix_seconds(1_700_000_000).unwrap();
@@ -19,22 +19,22 @@ async fn stale_observed_paths_cannot_move_or_delete_a_file_after_parent_rename()
     let mut tx = database.begin_write().await.unwrap();
     sqlx::query("INSERT INTO users(id,login,password_hash,status) VALUES(?,'observer-test','test-only','active')")
         .bind(owner.as_bytes().as_slice()).execute(&mut *tx).await.unwrap();
-    store_roots::insert_root(
+    store_vaults::insert_vault(
         &mut tx,
-        &store_roots::NewRoot {
-            id: root,
-            entry: root_entry,
+        &store_vaults::NewVault {
+            id: vault,
+            entry: vault_entry,
             owner,
             absolute_path: path.join("work").display().to_string(),
             volume_identity: vec![1],
-            root_file_identity: vec![2],
+            vault_file_identity: vec![2],
             epoch: ServerEpoch::ZERO,
         },
     )
     .await
     .unwrap();
     for (id, parent, name, kind) in [
-        (parent, root_entry, "before", StoreKind::Directory),
+        (parent, vault_entry, "before", StoreKind::Directory),
         (file, parent, "note.txt", StoreKind::File),
     ] {
         store_entries::insert_entry(
@@ -42,7 +42,7 @@ async fn stale_observed_paths_cannot_move_or_delete_a_file_after_parent_rename()
             owner,
             &NewEntry {
                 id,
-                root,
+                vault,
                 parent,
                 name: name.into(),
                 name_key: name.into(),
@@ -60,7 +60,7 @@ async fn stale_observed_paths_cannot_move_or_delete_a_file_after_parent_rename()
         &mut tx,
         owner,
         parent,
-        root_entry,
+        vault_entry,
         "after",
         "after",
         revision.next().unwrap(),
@@ -71,7 +71,7 @@ async fn stale_observed_paths_cannot_move_or_delete_a_file_after_parent_rename()
     tx.commit().await.unwrap();
     let mut store = SqlExternalStore::new(database.clone(), owner);
     let deletion = ExternalDelete {
-        root,
+        vault,
         path: "before/note.txt".into(),
         entry: file,
         expected_revision: revision,
@@ -82,7 +82,7 @@ async fn stale_observed_paths_cannot_move_or_delete_a_file_after_parent_rename()
         Err(ExternalStoreError::PathConflict { .. })
     ));
     let movement = ExternalMove {
-        root,
+        vault,
         from: "before/note.txt".into(),
         to: "moved.txt".into(),
         entry: file,
@@ -94,7 +94,7 @@ async fn stale_observed_paths_cannot_move_or_delete_a_file_after_parent_rename()
         Err(ExternalStoreError::PathConflict { .. })
     ));
     let mut conn = database.pool().acquire().await.unwrap();
-    let preserved = store_entries::entry_by_path(&mut conn, owner, root, "after/note.txt")
+    let preserved = store_entries::entry_by_path(&mut conn, owner, vault, "after/note.txt")
         .await
         .unwrap()
         .unwrap();

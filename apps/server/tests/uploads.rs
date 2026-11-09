@@ -11,9 +11,9 @@
 //!    超过 Axum 默认请求体上限 413，两者都不落盘；
 //! 4. 块字节与声明摘要不符 → 422 `HASH_MISMATCH`，不登记块；
 //! 5. 跨会话（A 会话创建的上传用 B 的登录会话写块）→ 404，B 的进度不变；
-//! 6. 回归：无凭据 401 `AUTH_EXPIRED`、别人的 Root 403 `ACCESS_DENIED`。
+//! 6. 回归：无凭据 401 `AUTH_EXPIRED`、别人的 Vault 403 `ACCESS_DENIED`。
 //!
-//! 种子沿用 `tests/process.rs` 的做法：直接开真库，用 `server-store` 的公开接口写 user 与 root；
+//! 种子沿用 `tests/process.rs` 的做法：直接开真库，用 `server-store` 的公开接口写 user 与 vault；
 //! 访问凭据走真实 `POST /v1/auth/login`（不手写会话行，否则测不到认证链）。种子密码散列用
 //! 小参数 Argon2id 只影响写入耗时——校验读的是 PHC 文本里的参数，登录路径仍是生产校验器。
 
@@ -24,7 +24,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, UploadId, UserId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, UploadId, UserId, VaultId};
 use vaultsyncd_domain::version::ServerEpoch;
 use vaultsyncd_protocol::generated::{
     ErrorCode, ErrorEnvelope, LoginRequest, SessionIssued, UploadPartAck, UploadRequest,
@@ -34,14 +34,14 @@ use vaultsyncd_server::auth::AuthContext;
 use vaultsyncd_server::content::ContentContext;
 use vaultsyncd_server::http::router;
 use vaultsyncd_server::lifecycle::Lifecycle;
-use vaultsyncd_server::roots::RootContext;
 use vaultsyncd_server::uploads::{PART_HASH_HEADER, UploadsContext};
+use vaultsyncd_server::vaults::VaultContext;
 use vaultsyncd_server_core::auth::password::PasswordHasher;
 use vaultsyncd_server_core::objects::ContentDigest;
 use vaultsyncd_server_store::db::Database;
-use vaultsyncd_server_store::roots::{self, NewRoot};
 use vaultsyncd_server_store::uploads as store_uploads;
 use vaultsyncd_server_store::users;
+use vaultsyncd_server_store::vaults::{self, NewVault};
 use vaultsyncd_transfer::hash;
 
 /// 种子密码：只在本文件的登录请求里出现。
@@ -81,16 +81,16 @@ impl Drop for Fixture {
     }
 }
 
-/// 种子身份：owner 与一个无关账号（用来验证跨 Root 授权）。
+/// 种子身份：owner 与一个无关账号（用来验证跨 Vault 授权）。
 struct Seeds {
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 }
 
 async fn seed_accounts(fixture: &Fixture) -> Seeds {
     let owner = UserId::from_bytes([0x11; ID_LEN]);
     let intruder = UserId::from_bytes([0x33; ID_LEN]);
-    let root = RootId::from_bytes([0x22; ID_LEN]);
+    let vault = VaultId::from_bytes([0x22; ID_LEN]);
     let database = Database::open(fixture.database())
         .await
         .expect("打开测试库");
@@ -109,25 +109,25 @@ async fn seed_accounts(fixture: &Fixture) -> Seeds {
         .await
         .expect("写种子账号");
     }
-    // 只给 owner 一个 Root：intruder 账号有会话但没有 Root，用来看跨账号访问的 403。
-    roots::insert_root(
+    // 只给 owner 一个 Vault：intruder 账号有会话但没有 Vault，用来看跨账号访问的 403。
+    vaults::insert_vault(
         &mut tx,
-        &NewRoot {
-            id: root,
+        &NewVault {
+            id: vault,
             entry: EntryId::from_bytes([0x55; ID_LEN]),
             owner,
             absolute_path: "/srv/vaultsyncd-s045b-owner".to_owned(),
             volume_identity: vec![0x77; 16],
-            root_file_identity: vec![0x88; 16],
+            vault_file_identity: vec![0x88; 16],
             epoch: ServerEpoch::new(1).expect("epoch"),
         },
     )
     .await
-    .expect("写种子 Root");
+    .expect("写种子 Vault");
     tx.commit().await.expect("提交种子事务");
     database.close().await;
 
-    Seeds { owner, root }
+    Seeds { owner, vault }
 }
 
 /// 进程内装配：与 `bootstrap` 一样把同一份数据库与状态目录交给三个上下文，然后组装真实 router。
@@ -144,7 +144,7 @@ async fn open_app(fixture: &Fixture) -> App {
         Arc::clone(&auth),
         fixture.state_dir().as_path(),
     ));
-    let roots = Arc::new(RootContext::new(
+    let vaults = Arc::new(VaultContext::new(
         Arc::clone(&auth),
         None,
         fixture.state_dir(),
@@ -174,7 +174,7 @@ async fn open_app(fixture: &Fixture) -> App {
             lifecycle,
             Arc::clone(&auth),
             uploads,
-            roots,
+            vaults,
             content,
             operations,
             sync,
@@ -230,7 +230,7 @@ fn get(uri: &str, token: Option<&str>) -> Request<Body> {
 
 /// 一次块上传：`declared` 是请求头里声明的块摘要（故意可错，用来验证 `HASH_MISMATCH`）。
 fn put_part_request(
-    root: RootId,
+    vault: VaultId,
     upload: &str,
     index: u64,
     token: &str,
@@ -240,8 +240,8 @@ fn put_part_request(
     Request::builder()
         .method("PUT")
         .uri(format!(
-            "/v1/roots/{}/uploads/{upload}/parts/{index}",
-            root.to_hex()
+            "/v1/vaults/{}/uploads/{upload}/parts/{index}",
+            vault.to_hex()
         ))
         .header("authorization", format!("Bearer {token}"))
         .header(PART_HASH_HEADER, declared)
@@ -267,7 +267,7 @@ async fn login(app: &App, account: &str) -> String {
 
 async fn begin(
     app: &App,
-    root: RootId,
+    vault: VaultId,
     token: &str,
     total_size: u64,
     chunk_size: u64,
@@ -281,7 +281,7 @@ async fn begin(
     let body = serde_json::to_string(&request).expect("序列化创建请求");
     let (status, body) = app
         .call(post_json(
-            &format!("/v1/roots/{}/uploads", root.to_hex()),
+            &format!("/v1/vaults/{}/uploads", vault.to_hex()),
             Some(token),
             &body,
         ))
@@ -294,10 +294,10 @@ async fn begin(
     parse(&body, "UploadSession")
 }
 
-async fn status(app: &App, root: RootId, upload: &str, token: &str) -> UploadStatus {
+async fn status(app: &App, vault: VaultId, upload: &str, token: &str) -> UploadStatus {
     let (status, body) = app
         .call(get(
-            &format!("/v1/roots/{}/uploads/{upload}", root.to_hex()),
+            &format!("/v1/vaults/{}/uploads/{upload}", vault.to_hex()),
             Some(token),
         ))
         .await;
@@ -341,18 +341,18 @@ async fn begin_put_part_and_status_report_real_parts_and_survive_reconnect() {
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
 
-    let session = begin(&app, seeds.root, &token, 10, 4, &sha256(content)).await;
+    let session = begin(&app, seeds.vault, &token, 10, 4, &sha256(content)).await;
     assert_eq!(session.state, UploadState::Open);
     assert_eq!(session.chunk_size, "4");
     assert_eq!(session.part_count, "3");
     assert_eq!(session.total_size, "10");
     assert_eq!(session.hash, sha256(content));
-    assert_eq!(session.root_id, seeds.root.to_hex());
+    assert_eq!(session.vault_id, seeds.vault.to_hex());
 
     // 块 0：4 字节；块 2：2 字节（末块短，几何按 ceil 给出）。
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token,
@@ -370,7 +370,7 @@ async fn begin_put_part_and_status_report_real_parts_and_survive_reconnect() {
 
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             2,
             &token,
@@ -383,7 +383,7 @@ async fn begin_put_part_and_status_report_real_parts_and_survive_reconnect() {
     assert_eq!(ack.length, "2");
 
     // 服务端真实已收块：索引 0 与 2，缺块区间恰好是 [1, 2)。
-    let reported = status(&app, seeds.root, &session.upload_id, &token).await;
+    let reported = status(&app, seeds.vault, &session.upload_id, &token).await;
     let received: Vec<(String, String)> = reported
         .received
         .iter()
@@ -419,7 +419,7 @@ async fn begin_put_part_and_status_report_real_parts_and_survive_reconnect() {
     // 重连：丢掉 app（以及它持有的数据库句柄与连接池），从同一批文件重新装配后复查。
     drop(app);
     let app = open_app(&fixture).await;
-    let reconnected = status(&app, seeds.root, &session.upload_id, &token).await;
+    let reconnected = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(
         reconnected, reported,
         "重连后服务端给出的已收块、缺块与会话信息必须完全一致"
@@ -433,13 +433,13 @@ async fn out_of_range_part_index_is_rejected_without_creating_a_part_row() {
     let content = b"0123456789";
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
-    let session = begin(&app, seeds.root, &token, 10, 4, &sha256(content)).await;
+    let session = begin(&app, seeds.vault, &token, 10, 4, &sha256(content)).await;
 
     // 块数是 3，索引 3 越界：载荷本身合法（长度与摘要都对），只有索引越界。
     let payload = b"xxxx";
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             3,
             &token,
@@ -466,7 +466,7 @@ async fn out_of_range_part_index_is_rejected_without_creating_a_part_row() {
         staging_files(&fixture, &session.upload_id).is_empty(),
         "越界索引必须在写盘前被拒绝"
     );
-    let reported = status(&app, seeds.root, &session.upload_id, &token).await;
+    let reported = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert!(reported.received.is_empty(), "进度不得变化：{reported:?}");
     assert_eq!(reported.missing.len(), 1);
 }
@@ -478,13 +478,13 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
     let content = b"0123456789";
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
-    let session = begin(&app, seeds.root, &token, 10, 4, &sha256(content)).await;
+    let session = begin(&app, seeds.vault, &token, 10, 4, &sha256(content)).await;
 
     // (a) 超过该块应有长度（4 字节），但仍在 Axum 默认请求体上限内：由用例层拒绝，400。
     let longer = vec![0x41_u8; 64];
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token,
@@ -508,7 +508,7 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
         .collect();
     let big = begin(
         &app,
-        seeds.root,
+        seeds.vault,
         &token,
         (2 * default_chunk) as u64,
         default_chunk as u64,
@@ -519,7 +519,7 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
     assert_eq!(big.part_count, "2");
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &big.upload_id,
             0,
             &token,
@@ -535,7 +535,7 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
     let huge = vec![0x42_u8; 16 * 1024 * 1024 + 2];
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &big.upload_id,
             1,
             &token,
@@ -569,7 +569,7 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
         vec!["00000000000000000000".to_owned()],
         "413 的块不得留下暂存文件"
     );
-    let reported_big = status(&app, seeds.root, &big.upload_id, &token).await;
+    let reported_big = status(&app, seeds.vault, &big.upload_id, &token).await;
     assert_eq!(
         reported_big
             .received
@@ -579,7 +579,7 @@ async fn oversized_payload_is_rejected_by_both_real_limits_and_leaves_nothing_be
         vec!["0"],
         "进度只应包括真正收下的块：{reported_big:?}"
     );
-    let reported = status(&app, seeds.root, &session.upload_id, &token).await;
+    let reported = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert!(reported.received.is_empty(), "进度不得变化：{reported:?}");
 }
 
@@ -590,12 +590,12 @@ async fn mismatched_part_digest_is_rejected_with_422_and_not_recorded() {
     let content = b"0123456789";
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
-    let session = begin(&app, seeds.root, &token, 10, 4, &sha256(content)).await;
+    let session = begin(&app, seeds.vault, &token, 10, 4, &sha256(content)).await;
 
     // 字节本身合法（4 字节），声明的摘要却是另一段内容的。
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token,
@@ -624,7 +624,7 @@ async fn mismatched_part_digest_is_rejected_with_422_and_not_recorded() {
         staging_files(&fixture, &session.upload_id).is_empty(),
         "摘要不符必须在写盘前被拒绝"
     );
-    let reported = status(&app, seeds.root, &session.upload_id, &token).await;
+    let reported = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert!(reported.received.is_empty(), "进度不得变化：{reported:?}");
 }
 
@@ -638,10 +638,10 @@ async fn upload_from_another_login_session_is_404_and_does_not_touch_progress() 
     let token_b = login(&app, "owner").await;
     assert_ne!(token_a, token_b, "两次登录必须是两个不同的登录会话");
 
-    let session = begin(&app, seeds.root, &token_a, 10, 4, &sha256(content)).await;
+    let session = begin(&app, seeds.vault, &token_a, 10, 4, &sha256(content)).await;
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token_a,
@@ -654,7 +654,7 @@ async fn upload_from_another_login_session_is_404_and_does_not_touch_progress() 
     // 同一 owner 的另一个登录会话：写块与读进度都得到与“不存在”相同的 404。
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             1,
             &token_b,
@@ -671,8 +671,8 @@ async fn upload_from_another_login_session_is_404_and_does_not_touch_progress() 
     let (status_code, body) = app
         .call(get(
             &format!(
-                "/v1/roots/{}/uploads/{}",
-                seeds.root.to_hex(),
+                "/v1/vaults/{}/uploads/{}",
+                seeds.vault.to_hex(),
                 session.upload_id
             ),
             Some(&token_b),
@@ -681,7 +681,7 @@ async fn upload_from_another_login_session_is_404_and_does_not_touch_progress() 
     assert_eq!(status_code, StatusCode::NOT_FOUND, "{body}");
 
     // A 的进度不变：只有块 0，块 1、2 仍缺；B 的写请求没有留下任何痕迹。
-    let reported = status(&app, seeds.root, &session.upload_id, &token_a).await;
+    let reported = status(&app, seeds.vault, &session.upload_id, &token_a).await;
     assert_eq!(
         reported
             .received
@@ -707,16 +707,16 @@ async fn upload_from_another_login_session_is_404_and_does_not_touch_progress() 
 }
 
 #[tokio::test]
-async fn missing_credentials_are_401_and_another_accounts_root_is_403() {
+async fn missing_credentials_are_401_and_another_accounts_vault_is_403() {
     let fixture = Fixture::new("authz");
     let seeds = seed_accounts(&fixture).await;
     let content = b"0123456789";
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
-    let session = begin(&app, seeds.root, &token, 10, 4, &sha256(content)).await;
+    let session = begin(&app, seeds.vault, &token, 10, 4, &sha256(content)).await;
     let uri = format!(
-        "/v1/roots/{}/uploads/{}",
-        seeds.root.to_hex(),
+        "/v1/vaults/{}/uploads/{}",
+        seeds.vault.to_hex(),
         session.upload_id
     );
 
@@ -726,7 +726,7 @@ async fn missing_credentials_are_401_and_another_accounts_root_is_403() {
     assert_eq!(error_envelope(&body).error.code, ErrorCode::AuthExpired);
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             "",
@@ -741,14 +741,14 @@ async fn missing_credentials_are_401_and_another_accounts_root_is_403() {
     );
     assert_eq!(error_envelope(&body).error.code, ErrorCode::AuthExpired);
 
-    // 别人的 Root：403 ACCESS_DENIED（不泄露 Root 或会话是否存在）。
+    // 别人的 Vault：403 ACCESS_DENIED（不泄露 Vault 或会话是否存在）。
     let intruder_token = login(&app, "intruder").await;
     let (status_code, body) = app.call(get(&uri, Some(&intruder_token))).await;
     assert_eq!(status_code, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(error_envelope(&body).error.code, ErrorCode::AccessDenied);
     let (status_code, body) = app
         .call(put_part_request(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &intruder_token,

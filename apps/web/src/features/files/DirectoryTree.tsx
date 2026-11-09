@@ -5,24 +5,24 @@ import { ancestry, type DirectorySnapshot } from "./browser";
 import { FileIcon } from "./FileIcon";
 import classes from "./DirectoryTree.module.css";
 
-export function DirectoryTree({ snapshot, directory, rootName, navigate, renderMenu }: {
+export function DirectoryTree({ snapshot, directory, vaultName, navigate, renderMenu }: {
   snapshot: DirectorySnapshot;
   directory?: SnapshotEntry;
-  rootName: string;
+  vaultName: string;
   navigate: (entry: SnapshotEntry) => void;
   renderMenu: (entry: SnapshotEntry, child: ReactElement) => ReactNode;
 }) {
   const data = useMemo(() => {
     const nodes = new Map<string, TreeNodeData>();
     for (const entry of snapshot.entries.values()) {
-      if (entry.kind === "directory") nodes.set(entry.entry_id, { value: entry.entry_id, label: entry.name || rootName });
+      if (entry.kind === "directory") nodes.set(entry.entry_id, { value: entry.entry_id, label: entry.name || vaultName });
     }
     for (const [id, node] of nodes) {
       const children = (snapshot.children.get(id) ?? []).filter(entry => entry.kind === "directory");
       if (children.length) node.children = children.map(entry => nodes.get(entry.entry_id)!);
     }
-    return [nodes.get(snapshot.root.entry_id)!];
-  }, [snapshot, rootName]);
+    return [nodes.get(snapshot.vault.entry_id)!];
+  }, [snapshot, vaultName]);
   const [expandedState, setExpandedState] = useState<Record<string, boolean>>({});
   const tree = useTree({
     expandedState,
@@ -35,7 +35,7 @@ export function DirectoryTree({ snapshot, directory, rootName, navigate, renderM
     },
   });
   useEffect(() => {
-    const path = directory ? ancestry(snapshot, directory) : [snapshot.root];
+    const path = directory ? ancestry(snapshot, directory) : [snapshot.vault];
     setExpandedState(previous => ({ ...previous, ...Object.fromEntries(path.map(entry => [entry.entry_id, true])) }));
   }, [snapshot, directory?.entry_id]);
 

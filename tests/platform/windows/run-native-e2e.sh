@@ -2,7 +2,7 @@
 # S074: three isolated Windows client identities against a real Linux server.
 #
 # Topology: one Windows 11 guest (the only guest in this repository; a second one is S107),
-# three client environments with distinct DeviceId/state/client.sqlite/root/cache and one
+# three client environments with distinct DeviceId/state/client.sqlite/vault/cache and one
 # agent process at a time (product invariant: one agent per user session). The file
 # docs/operations/windows-lab.md records the guest facts; the run log repeats the topology.
 #
@@ -14,19 +14,19 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$script_dir/common.sh"
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
-root=$(repo_root)
-cd "$root"
+vault=$(repo_root)
+cd "$vault"
 task=${VAULTSYNCD_E2E_TASK:-S074}
 case "$task" in S074|S102) ;; *) echo 'unsupported e2e task' >&2; exit 2;; esac
-target_dir=${CARGO_TARGET_DIR:-$root/target}
-scenario="$root/tests/scenarios/three-clients.json"
+target_dir=${CARGO_TARGET_DIR:-$vault/target}
+scenario="$vault/tests/scenarios/three-clients.json"
 test -f "$scenario" || { echo "missing scenario $scenario" >&2; exit 1; }
 helper="${VAULTSYNCD_RELEASE_SERVER:-$target_dir/debug/examples/e2e-native-server}"
 test -x "$helper" || {
     echo 'build: nix develop --command cargo build --locked -p vaultsyncd-server-tests --example e2e-native-server' >&2
     exit 1
 }
-artifact_dir="$root/artifacts/$task/e2e-$(date +%s)-$$"
+artifact_dir="$vault/artifacts/$task/e2e-$(date +%s)-$$"
 mkdir -p "$artifact_dir"
 server_pid=''
 tunnel_pid=''
@@ -49,7 +49,7 @@ if git diff --quiet && git diff --cached --quiet; then dirty=0; else dirty=1; fi
 echo "commit=$commit dirty=$dirty"
 echo "helper_sha256=$(sha256sum "$helper" | awk '{print $1}')"
 
-# 1. Real Linux server: isolated btrfs Root under target/, seeded from the scenario's server_seed.
+# 1. Real Linux server: isolated btrfs Vault under target/, seeded from the scenario's server_seed.
 "$helper" "$artifact_dir/host-fixture.json" "$artifact_dir/stop" "$scenario" > "$artifact_dir/server.log" 2>&1 &
 server_pid=$!
 for _ in $(seq 1 600); do
@@ -219,7 +219,7 @@ if [ "$task" = S102 ]; then
 fi
 
 # Server-side convergence: every committed entry (including conflict copies) must exist on the
-# btrfs Root work directory with the same bytes, and no extra file may linger.
+# btrfs Vault work directory with the same bytes, and no extra file may linger.
 python3 - "$artifact_dir/report.json" <<'PY'
 import hashlib, json, pathlib, sys
 report = json.loads(pathlib.Path(sys.argv[1]).read_text())

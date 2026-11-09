@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listRoots, listRecoveryEntries, listConflictCopies, listEntryHistory, listTrash, type RecoveryItem, type RecoveryPage, type RootSummary } from "@vaultsyncd/api-client";
+import { listVaults, listRecoveryEntries, listConflictCopies, listEntryHistory, listTrash, type RecoveryItem, type RecoveryPage, type VaultSummary } from "@vaultsyncd/api-client";
 import { Alert, Button, Group, Paper, Select, Stack, Text, Title } from "@mantine/core";
 import { EmptyState, StatusBadge, Table } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
@@ -9,38 +9,38 @@ import { expiry, expired, RestoreSession, type RestoreRecord } from "./recovery"
 
 export function RecoveryPanel() {
   const auth = useAuth(); const client = auth.client; const user = auth.account?.user_id;
-  const [roots, setRoots] = useState<RootSummary[]>([]);
-  const [root, setRoot] = useState(""); const [mode, setMode] = useState("entries"); const [entry, setEntry] = useState("");
+  const [vaults, setVaults] = useState<VaultSummary[]>([]);
+  const [vault, setVault] = useState(""); const [mode, setMode] = useState("entries"); const [entry, setEntry] = useState("");
   const [data, setData] = useState<RecoveryPage | null>(null); const [after, setAfter] = useState<string>();
   const [revision, setRevision] = useState(0); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [record, setRecord] = useState<RestoreRecord | null>(null); const [notice, setNotice] = useState(true);
-  const [rootsLoading, setRootsLoading] = useState(false);
+  const [vaultsLoading, setVaultsLoading] = useState(false);
   useEffect(() => {
-    setRoots([]); setRoot(""); setData(null); setRecord(null);
+    setVaults([]); setVault(""); setData(null); setRecord(null);
     if (!user || !client) return;
     let active = true;
-    setRootsLoading(true);
-    client.request(listRoots).then(value => { if(active) { setRoots(value.roots); setRoot(value.roots[0]?.root_id ?? ""); } }).catch(cause => { if(active) { if(cause instanceof SignedOut) auth.reportSignedOut(); setError(String(cause)); } }).finally(() => { if (active) setRootsLoading(false); });
+    setVaultsLoading(true);
+    client.request(listVaults).then(value => { if(active) { setVaults(value.vaults); setVault(value.vaults[0]?.vault_id ?? ""); } }).catch(cause => { if(active) { if(cause instanceof SignedOut) auth.reportSignedOut(); setError(String(cause)); } }).finally(() => { if (active) setVaultsLoading(false); });
     return () => { active = false; };
   }, [client, user]);
   useEffect(() => {
     setData(null); setError("");
-    if (!client || !user || !root) return;
+    if (!client || !user || !vault) return;
     let active = true; const abort = new AbortController();
-    setRecord(new RestoreSession(user, root).read()); setBusy(true);
-    const load = mode === "history" ? (options: Parameters<typeof listRoots>[0]) => listEntryHistory(options, root, entry, { after }, { signal: abort.signal })
-      : (options: Parameters<typeof listRoots>[0]) => (mode === "trash" ? listTrash : mode === "conflicts" ? listConflictCopies : listRecoveryEntries)(options, root, { after }, { signal: abort.signal });
+    setRecord(new RestoreSession(user, vault).read()); setBusy(true);
+    const load = mode === "history" ? (options: Parameters<typeof listVaults>[0]) => listEntryHistory(options, vault, entry, { after }, { signal: abort.signal })
+      : (options: Parameters<typeof listVaults>[0]) => (mode === "trash" ? listTrash : mode === "conflicts" ? listConflictCopies : listRecoveryEntries)(options, vault, { after }, { signal: abort.signal });
     client.request(load).then(value => { if(active) setData(value); }).catch(cause => {
       if (!active) return;
       if (cause instanceof SignedOut) auth.reportSignedOut();
       setError(cause instanceof Error ? cause.message : "读取失败");
     }).finally(() => { if(active) setBusy(false); });
     return () => { active = false; abort.abort(); };
-  }, [client, user, root, mode, entry, after, revision]);
+  }, [client, user, vault, mode, entry, after, revision]);
   async function restore(item?: RecoveryItem) {
     if(!client || !user || busy) return;
     setBusy(true); setError("");
-    const session = new RestoreSession(user, root);
+    const session = new RestoreSession(user, vault);
     try {
       const restored = await (item ? session.begin(client, item, mode === "history") : session.resume(client));
       setRecord(restored);
@@ -55,7 +55,7 @@ export function RecoveryPanel() {
     } finally { setBusy(false); }
   }
   function tab(next: string) { setMode(next); setAfter(undefined); setNotice(true); setRevision(value => value+1); }
-  if(!user) return <EmptyState title="请先登录">登录后查看授权 Root 的历史、冲突副本和回收站。</EmptyState>;
+  if(!user) return <EmptyState title="请先登录">登录后查看授权 Vault 的历史、冲突副本和回收站。</EmptyState>;
   const unfinished = record && (!record.result || record.result.state === "pending");
   const title = mode === "trash" ? "回收站" : mode === "conflicts" ? "冲突副本" : mode === "history" ? "历史版本" : "文件与历史";
   return <Stack>
@@ -64,10 +64,10 @@ export function RecoveryPanel() {
         <Title order={2} size="h4">文件恢复</Title>
         <Text size="sm" c="dimmed">恢复保留当前目标；同名冲突时另名恢复。到期时间是最早回收时间，最终以服务端检查为准。</Text>
         <Group align="flex-end" justify="space-between">
-          <Select label="恢复 Root" placeholder="选择授权目录" disabled={busy || rootsLoading || !roots.length}
-            value={root || null} allowDeselect={false} data={roots.map(item => ({ value: item.root_id, label: item.name || item.root_id }))}
-            onChange={value => { setRoot(value == null ? "" : String(value)); setAfter(undefined); }} className="w-full sm:max-w-sm" />
-          <Button variant="default" disabled={busy || rootsLoading || !root} onClick={() => { setAfter(undefined); setRevision(value => value + 1); }}>刷新恢复清单</Button>
+          <Select label="恢复 Vault" placeholder="选择授权目录" disabled={busy || vaultsLoading || !vaults.length}
+            value={vault || null} allowDeselect={false} data={vaults.map(item => ({ value: item.vault_id, label: item.name || item.vault_id }))}
+            onChange={value => { setVault(value == null ? "" : String(value)); setAfter(undefined); }} className="w-full sm:max-w-sm" />
+          <Button variant="default" disabled={busy || vaultsLoading || !vault} onClick={() => { setAfter(undefined); setRevision(value => value + 1); }}>刷新恢复清单</Button>
         </Group>
         <Group aria-label="恢复清单类别" gap="xs">
           {["entries", "conflicts", "trash"].map((value, i) => <Button key={value} disabled={busy}
@@ -77,8 +77,8 @@ export function RecoveryPanel() {
         </Group>
         {mode === "conflicts" && notice && <Alert><Group justify="space-between"><Text size="sm">冲突副本保留了另一份修改。</Text><Button variant="subtle" onClick={() => setNotice(false)}>关闭提示</Button></Group></Alert>}
         <Feedback message={error} />
-        {(busy || rootsLoading) && <Text role="status" size="sm" c="dimmed">正在核对…</Text>}
-        {!rootsLoading && !roots.length && !error && <Text size="sm" c="dimmed">尚无授权 Root。</Text>}
+        {(busy || vaultsLoading) && <Text role="status" size="sm" c="dimmed">正在核对…</Text>}
+        {!vaultsLoading && !vaults.length && !error && <Text size="sm" c="dimmed">尚无授权 Vault。</Text>}
       </Stack>
     </Paper>
     {record && <Paper withBorder p="lg">

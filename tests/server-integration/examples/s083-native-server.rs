@@ -4,19 +4,19 @@ mod common;
 use common::*;
 use serde_json::{Value, json};
 use std::{io::Write, os::unix::fs::OpenOptionsExt, path::PathBuf, time::Duration};
-async fn adopted(r: &Running, t: &str, root: &str, name: &str, bytes: &[u8]) -> Value {
+async fn adopted(r: &Running, t: &str, vault: &str, name: &str, bytes: &[u8]) -> Value {
     let hash = hex(&vaultsyncd_platform_linux_server::files::hash::digest(
         bytes,
     ));
     wait_for("external content adoption", || async {
-        Ok(snapshot(r, t, root)
+        Ok(snapshot(r, t, vault)
             .await
             .iter()
             .any(|e| e["name"] == name && e["hash"] == hash))
     })
     .await
     .unwrap();
-    entry_named(&snapshot(r, t, root).await, name).clone()
+    entry_named(&snapshot(r, t, vault).await, name).clone()
 }
 #[tokio::main]
 async fn main() {
@@ -35,12 +35,12 @@ async fn main() {
         .await
         .unwrap();
     let token = issued["access_token"].as_str().unwrap();
-    let root = register_root(&running, token, &lab.work()).await.unwrap();
+    let vault = register_vault(&running, token, &lab.work()).await.unwrap();
     std::fs::write(lab.work().join("history.txt"), b"S083 history original").unwrap();
     let original = adopted(
         &running,
         token,
-        &root,
+        &vault,
         "history.txt",
         b"S083 history original",
     )
@@ -49,17 +49,29 @@ async fn main() {
     let head = adopted(
         &running,
         token,
-        &root,
+        &vault,
         "history.txt",
         b"S083 history current",
     )
     .await;
     std::fs::write(lab.work().join("trash.txt"), b"S083 deleted content").unwrap();
-    let deleted = adopted(&running, token, &root, "trash.txt", b"S083 deleted content").await;
+    let deleted = adopted(
+        &running,
+        token,
+        &vault,
+        "trash.txt",
+        b"S083 deleted content",
+    )
+    .await;
     std::fs::remove_file(lab.work().join("trash.txt")).unwrap();
     wait_for("real trash adoption", || async {
         let (_, p) = running
-            .json("GET", &format!("/v1/roots/{root}/trash"), Some(token), None)
+            .json(
+                "GET",
+                &format!("/v1/vaults/{vault}/trash"),
+                Some(token),
+                None,
+            )
             .await?;
         Ok(p["items"]
             .as_array()
@@ -73,20 +85,20 @@ async fn main() {
     adopted(
         &running,
         token,
-        &root,
+        &vault,
         "trash.txt",
         b"S083 same-name target kept",
     )
     .await;
     // Stale CAS uses the real upload/operation path and creates a durable conflict copy.
-    let (upload, _, _) = upload(&running, token, &root, b"S083 independent conflict", 0)
+    let (upload, _, _) = upload(&running, token, &vault, b"S083 independent conflict", 0)
         .await
         .unwrap();
-    let epoch = epoch_of(&running, token, &root).await;
+    let epoch = epoch_of(&running, token, &vault).await;
     let (_, conflict) = put_operation(
         &running,
         token,
-        &root,
+        &vault,
         &PutArgs {
             op_id: &"c3".repeat(16),
             device_id: &"d3".repeat(16),
@@ -100,19 +112,23 @@ async fn main() {
     .unwrap();
     assert_eq!(conflict["state"], "committed");
     assert!(conflict["conflict"].is_object());
-    let foreign_dir = lab.root().join("foreign");
+    let foreign_dir = lab.vault().join("foreign");
     std::fs::create_dir(&foreign_dir).unwrap();
-    let foreign_root = register_root(&running, token, &foreign_dir).await.unwrap();
-    std::fs::write(foreign_dir.join("secret.txt"), b"S083 foreign Root content").unwrap();
+    let foreign_vault = register_vault(&running, token, &foreign_dir).await.unwrap();
+    std::fs::write(
+        foreign_dir.join("secret.txt"),
+        b"S083 foreign Vault content",
+    )
+    .unwrap();
     let foreign = adopted(
         &running,
         token,
-        &foreign_root,
+        &foreign_vault,
         "secret.txt",
-        b"S083 foreign Root content",
+        b"S083 foreign Vault content",
     )
     .await;
-    let fixture = json!({"url":running.uri(""),"root":root,"login":LOGIN,"password":PASSWORD,"work_dir":lab.work(),"original":original,"head":head,"deleted":deleted,"foreign":foreign,"conflict":conflict});
+    let fixture = json!({"url":running.uri(""),"vault":vault,"login":LOGIN,"password":PASSWORD,"work_dir":lab.work(),"original":original,"head":head,"deleted":deleted,"foreign":foreign,"conflict":conflict});
     let mut file = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)

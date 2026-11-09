@@ -1,6 +1,6 @@
-//! Download staging in an internal pinned directory, never in a synchronization root.
+//! Download staging in an internal pinned directory, never in a synchronization vault.
 use super::{
-    RootHandle,
+    VaultHandle,
     native::{metadata, open_child_shared},
 };
 use std::{
@@ -15,7 +15,7 @@ use vaultsyncd_transfer::ports::{LocalErrorKind, PortError, PortFuture, TempCont
 /// A pinned, private regular staging file. All opens are relative/no-follow and the held
 /// file refuses other readers/writers, preventing replacement between validation and CFAPI.
 pub struct StagingFile {
-    root: Arc<RootHandle>,
+    vault: Arc<VaultHandle>,
     file: Mutex<File>,
     path: String,
     directory: Vec<u16>,
@@ -27,8 +27,8 @@ impl StagingFile {
         if name.contains(['/', '\\']) {
             return Err(io::Error::other("staging name must be flat"));
         }
-        let root = Arc::new(RootHandle::open(directory)?);
-        let file = root.with_parent(name, |parent, name| {
+        let vault = Arc::new(VaultHandle::open(directory)?);
+        let file = vault.with_parent(name, |parent, name| {
             let file = match open_child_shared(parent, name, false, false, 0x0010_0183, false, 0) {
                 Ok(f) => f,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -41,14 +41,14 @@ impl StagingFile {
                 || meta.reparse_tag != 0
                 || meta.cloud.is_some()
                 || meta.links != 1
-                || meta.identity.volume != root.identity().volume
+                || meta.identity.volume != vault.identity().volume
             {
                 return Err(io::Error::other("unsafe staging object"));
             }
             Ok(file)
         })?;
         Ok(Self {
-            root,
+            vault,
             file: Mutex::new(file),
             path: directory
                 .join(name)
@@ -59,7 +59,7 @@ impl StagingFile {
         })
     }
     fn run<T>(&self, f: impl FnOnce(&mut File) -> io::Result<T>) -> Result<T, PortError> {
-        self.root.verify().map_err(local)?;
+        self.vault.verify().map_err(local)?;
         f(&mut *self
             .file
             .lock()

@@ -10,27 +10,27 @@ use vaultsyncd_transfer::{
     ports::{PortError, VersionPin},
 };
 
-/// Authenticated endpoint bound to one remote Root.
+/// Authenticated endpoint bound to one remote Vault.
 pub struct LeaseEndpoint<T: Transport> {
     client: ApiClient<T>,
-    root: String,
+    vault: String,
 }
 impl<T: Transport> Clone for LeaseEndpoint<T> {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
-            root: self.root.clone(),
+            vault: self.vault.clone(),
         }
     }
 }
 impl<T: Transport> LeaseEndpoint<T> {
-    /// Bind an authorized Root. Invalid identities fail before sending HTTP.
-    pub fn new(client: ApiClient<T>, root: impl Into<String>) -> Result<Self, PortError> {
-        let root = root.into();
-        if !is_identity(&root) {
-            return Err(PortError::protocol("invalid lease root"));
+    /// Bind an authorized Vault. Invalid identities fail before sending HTTP.
+    pub fn new(client: ApiClient<T>, vault: impl Into<String>) -> Result<Self, PortError> {
+        let vault = vault.into();
+        if !is_identity(&vault) {
+            return Err(PortError::protocol("invalid lease vault"));
         }
-        Ok(Self { client, root })
+        Ok(Self { client, vault })
     }
     /// Establish a GC-protecting lease. Generate the ID once and reuse it after ambiguous responses.
     pub async fn acquire(&self, pin: &VersionPin, id: &str) -> Result<VersionLease, PortError> {
@@ -59,8 +59,8 @@ impl<T: Transport> LeaseEndpoint<T> {
             size: pin.size.to_string(),
         };
         let mut path = format!(
-            "/v1/roots/{}/entries/{}/versions/{}/leases",
-            self.root, pin.entry, pin.version
+            "/v1/vaults/{}/entries/{}/versions/{}/leases",
+            self.vault, pin.entry, pin.version
         );
         if !action.is_empty() {
             path.push_str(&format!("/{id}/{action}"));
@@ -79,7 +79,7 @@ impl<T: Transport> LeaseEndpoint<T> {
             .parse::<u64>()
             .map_err(|_| PortError::protocol("invalid lease expiry"))?;
         if lease.lease_id != id
-            || lease.root_id != self.root
+            || lease.vault_id != self.vault
             || lease.entry_id != pin.entry
             || lease.version_id != pin.version
             || lease.sha256 != body.sha256
@@ -114,12 +114,12 @@ mod tests {
         )
         .unwrap()
     }
-    const ROOT: &str = "22222222222222222222222222222222";
+    const VAULT: &str = "22222222222222222222222222222222";
     const ID: &str = "66666666666666666666666666666666";
     fn receipt() -> VersionLease {
         VersionLease {
             lease_id: ID.into(),
-            root_id: ROOT.into(),
+            vault_id: VAULT.into(),
             entry_id: pin().entry,
             version_id: pin().version,
             sha256: hash::to_hex(&[5; 32]),
@@ -142,7 +142,7 @@ mod tests {
         client
             .auth()
             .install(Credentials::from_issued(&issued("a", "r")).unwrap());
-        (LeaseEndpoint::new(client, ROOT).unwrap(), transport)
+        (LeaseEndpoint::new(client, VAULT).unwrap(), transport)
     }
     #[tokio::test]
     async fn exact_receipt_required_and_invalid_ids_never_send() {
@@ -159,7 +159,7 @@ mod tests {
             let mut bad = receipt();
             match field {
                 0 => bad.lease_id = "7".repeat(32),
-                1 => bad.root_id = "7".repeat(32),
+                1 => bad.vault_id = "7".repeat(32),
                 2 => bad.entry_id = "7".repeat(32),
                 3 => bad.version_id = "7".repeat(32),
                 4 => bad.sha256 = "7".repeat(64),

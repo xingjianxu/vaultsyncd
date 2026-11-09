@@ -5,7 +5,7 @@ pub(crate) mod native;
 #[cfg(windows)]
 pub mod staging;
 #[cfg(windows)]
-pub use native::{NativeNames, RootHandle};
+pub use native::{NativeNames, VaultHandle};
 
 /// Stable identity from FILE_ID_INFO, scoped to its volume.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -73,12 +73,12 @@ impl EntryMetadata {
 /// A scan failure leaves previous entries and baselines intact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScanHealth {
-    /// Enumeration completed under the same pinned root.
+    /// Enumeration completed under the same pinned vault.
     Complete,
     /// An ACL denied enumeration or metadata access.
     PermissionDenied,
-    /// Root or volume identity changed or vanished.
-    RootUnavailable,
+    /// Vault or volume identity changed or vanished.
+    VaultUnavailable,
     /// Enumeration was interrupted or an unsupported object was encountered.
     Incomplete,
 }
@@ -97,8 +97,8 @@ pub struct ScanEntry {
 /// Complete metadata scan, or partial evidence with deletion disabled.
 #[derive(Clone, Debug)]
 pub struct ScanReport {
-    /// Original root identity.
-    pub root: FileIdentity,
+    /// Original vault identity.
+    pub vault: FileIdentity,
     /// Aggregate enumeration health.
     pub health: ScanHealth,
     /// Entries and local errors; no content bytes are read.
@@ -121,11 +121,11 @@ mod tests {
     fn every_incomplete_health_blocks_missing_comparison() {
         for health in [
             ScanHealth::PermissionDenied,
-            ScanHealth::RootUnavailable,
+            ScanHealth::VaultUnavailable,
             ScanHealth::Incomplete,
         ] {
             let report = ScanReport {
-                root: FileIdentity {
+                vault: FileIdentity {
                     volume: 1,
                     file: [0; 16],
                 },

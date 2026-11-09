@@ -64,8 +64,8 @@ pub(crate) async fn admit(
     } else {
         match remote
             .pull(
-                bound.root,
-                vaultsyncd_domain::version::RootSeq::new(received as u64).map_err(error)?,
+                bound.vault,
+                vaultsyncd_domain::version::VaultSeq::new(received as u64).map_err(error)?,
                 1,
             )
             .await
@@ -74,7 +74,7 @@ pub(crate) async fn admit(
                 if page.server_epoch != bound.server_epoch.to_string() {
                     return Err(PortError::rejected(
                         "NEEDS_RECOVERY",
-                        "Root and server epoch disagree",
+                        "Vault and server epoch disagree",
                     ));
                 }
                 None

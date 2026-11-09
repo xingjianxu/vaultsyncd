@@ -18,13 +18,13 @@ use vaultsyncd_server_store::version_leases::{self as store, Error, Lease, Reque
 /// Create (or safely replay) an exact fixed-version lease.
 pub async fn acquire(
     State(c): State<Arc<ContentContext>>,
-    Path((root, entry, version)): Path<(String, String, String)>,
+    Path((vault, entry, version)): Path<(String, String, String)>,
     headers: HeaderMap,
     Json(body): Json<VersionLeaseRequest>,
 ) -> Response {
     execute(
         c,
-        (root, entry, version),
+        (vault, entry, version),
         None,
         headers,
         body,
@@ -35,13 +35,13 @@ pub async fn acquire(
 /// Renew an unexpired exact lease; expiry never silently reacquires it.
 pub async fn renew(
     State(c): State<Arc<ContentContext>>,
-    Path((root, entry, version, lease)): Path<(String, String, String, String)>,
+    Path((vault, entry, version, lease)): Path<(String, String, String, String)>,
     headers: HeaderMap,
     Json(body): Json<VersionLeaseRequest>,
 ) -> Response {
     execute(
         c,
-        (root, entry, version),
+        (vault, entry, version),
         Some(lease),
         headers,
         body,
@@ -52,13 +52,13 @@ pub async fn renew(
 /// Explicit idempotent release, retaining its immutable request identity.
 pub async fn release(
     State(c): State<Arc<ContentContext>>,
-    Path((root, entry, version, lease)): Path<(String, String, String, String)>,
+    Path((vault, entry, version, lease)): Path<(String, String, String, String)>,
     headers: HeaderMap,
     Json(body): Json<VersionLeaseRequest>,
 ) -> Response {
     execute(
         c,
-        (root, entry, version),
+        (vault, entry, version),
         Some(lease),
         headers,
         body,
@@ -74,13 +74,13 @@ enum Action {
 }
 async fn execute(
     c: Arc<ContentContext>,
-    (root, entry, version): (String, String, String),
+    (vault, entry, version): (String, String, String),
     lease: Option<String>,
     headers: HeaderMap,
     body: VersionLeaseRequest,
     action: Action,
 ) -> Response {
-    let (caller, root) = match Caller::resolve(&c.auth, &headers, &root).await {
+    let (caller, vault) = match Caller::resolve(&c.auth, &headers, &vault).await {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -99,31 +99,40 @@ async fn execute(
     }
     let r = Request {
         id,
-        root,
+        vault,
         entry,
         version,
         digest: *digest.as_bytes(),
         size,
     };
-    // 布局解析只是本 Root 的登记读取，放在租约事务之前：解析失败时租约尚未改变，
+    // 布局解析只是本 Vault 的登记读取，放在租约事务之前：解析失败时租约尚未改变，
     // 响应与持久事实一致。对象可读性仍在提交后核对，避免 GC 在检查后删掉未受保护的对象。
-    let layout =
-        match crate::object_layout::for_digest(c.auth.database(), &c.state_dir, root, digest).await
-        {
-            Ok(layout) => layout,
-            Err(error) => {
-                tracing::warn!(root_id=%root, error=%error, "固定版本租约对象布局不可读");
-                return internal_error(
-                    &caller.request_id,
-                    "固定版本对象登记不可读；不得释放本地副本",
-                    Some(root.to_string()),
-                );
-            }
-        };
+    let layout = match crate::object_layout::for_digest(
+        c.auth.database(),
+        &c.state_dir,
+        vault,
+        digest,
+    )
+    .await
+    {
+        Ok(layout) => layout,
+        Err(error) => {
+            tracing::warn!(vault_id=%vault, error=%error, "固定版本租约对象布局不可读");
+            return internal_error(
+                &caller.request_id,
+                "固定版本对象登记不可读；不得释放本地副本",
+                Some(vault.to_string()),
+            );
+        }
+    };
     let mut tx = match c.auth.database().begin_write().await {
         Ok(tx) => tx,
         Err(_) => {
-            return internal_error(&caller.request_id, "租约事务不可用", Some(root.to_string()));
+            return internal_error(
+                &caller.request_id,
+                "租约事务不可用",
+                Some(vault.to_string()),
+            );
         }
     };
     let now = caller.now.to_db_integer();
@@ -134,13 +143,13 @@ async fn execute(
     };
     let lease = match result {
         Ok(v) => v,
-        Err(e) => return failure(&caller.request_id, &root.to_string(), e),
+        Err(e) => return failure(&caller.request_id, &vault.to_string(), e),
     };
     if tx.commit().await.is_err() {
         return internal_error(
             &caller.request_id,
             "租约未确认持久化",
-            Some(root.to_string()),
+            Some(vault.to_string()),
         );
     }
     if !lease.closed {
@@ -154,7 +163,7 @@ async fn execute(
             return internal_error(
                 &caller.request_id,
                 "固定版本内容不可读；不得释放本地副本",
-                Some(root.to_string()),
+                Some(vault.to_string()),
             );
         }
     }
@@ -163,7 +172,7 @@ async fn execute(
 fn wire(l: Lease, now: i64) -> VersionLease {
     VersionLease {
         lease_id: l.request.id.to_string(),
-        root_id: l.request.root.to_string(),
+        vault_id: l.request.vault.to_string(),
         entry_id: l.request.entry.to_string(),
         version_id: l.request.version.to_string(),
         sha256: ContentDigest::from_bytes(l.request.digest).to_hex(),
@@ -180,10 +189,10 @@ fn wire(l: Lease, now: i64) -> VersionLease {
         closed: l.closed,
     }
 }
-fn failure(request: &str, root: &str, e: Error) -> Response {
+fn failure(request: &str, vault: &str, e: Error) -> Response {
     if let Error::Storage(error) = &e {
-        tracing::warn!(request_id=request, root_id=root, error=%error, "固定版本租约存储失败");
-        return internal_error(request, "固定版本租约存储不可用", Some(root.to_owned()));
+        tracing::warn!(request_id=request, vault_id=vault, error=%error, "固定版本租约存储失败");
+        return internal_error(request, "固定版本租约存储不可用", Some(vault.to_owned()));
     }
     let (status, code, retry) = match e {
         Error::OutOfScope => (StatusCode::FORBIDDEN, ErrorCode::AccessDenied, false),
@@ -201,6 +210,6 @@ fn failure(request: &str, root: &str, e: Error) -> Response {
         request,
         &e.to_string(),
         retry,
-        Some(root.to_owned()),
+        Some(vault.to_owned()),
     )
 }

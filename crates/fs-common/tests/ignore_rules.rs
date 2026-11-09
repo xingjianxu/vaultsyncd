@@ -17,7 +17,7 @@ const CASES_FIXTURE: &str = include_str!("../../../fixtures/paths/syncignore-cas
 struct Case {
     /// 用例在用例表里的行号（1 基），用于失败报告。
     line_number: usize,
-    /// Root 相对路径。
+    /// Vault 相对路径。
     path: &'static str,
     /// 条目类型：目录为 `true`。目录规则只匹配目录。
     is_dir: bool,

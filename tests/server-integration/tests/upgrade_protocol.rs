@@ -114,6 +114,12 @@ fn fixture() -> Value {
     ))
     .unwrap()
 }
+/// 冻结 fixture 是改名前的 major 1：除“拒绝不兼容 major”的用例外，其余检查都要先升到当前 major。
+fn current_fixture() -> Value {
+    let mut value = fixture();
+    value["protocol"]["major"] = json!(vaultsyncd_protocol::negotiation::MAJOR);
+    value
+}
 #[tokio::test]
 async fn s091_default_real_tcp_refuses_major_or_missing_capability_before_auth_and_upload() {
     let lab = Lab::new("s091-wire", None, None);
@@ -125,7 +131,7 @@ async fn s091_default_real_tcp_refuses_major_or_missing_capability_before_auth_a
         device_label: "S091-wire".into(),
     };
     let mut bad = fixture();
-    bad["protocol"]["major"] = 2.into();
+    bad["protocol"]["major"] = json!(vaultsyncd_protocol::negotiation::MAJOR + 1);
     let proxy = Proxy::start(running.uri(""), bad).await;
     let client = proxy.client();
     assert!(matches!(
@@ -146,22 +152,22 @@ async fn s091_default_real_tcp_refuses_major_or_missing_capability_before_auth_a
         .unwrap();
     assert_eq!(code, 200);
     let token = issued["access_token"].as_str().unwrap();
-    let root = common::register_root(&running, token, &lab.work())
+    let vault = common::register_vault(&running, token, &lab.work())
         .await
         .unwrap();
     let before: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
         .fetch_one(&mut common::db(&lab).await)
         .await
         .unwrap();
-    let mut caps = fixture();
-    caps["features"] = json!(["auth", "roots"]);
+    let mut caps = current_fixture();
+    caps["features"] = json!(["auth", "vaults"]);
     let proxy = Proxy::start(running.uri(""), caps).await;
     let client = proxy.client();
     client.auth().install(
         Credentials::from_issued(&serde_json::from_value::<SessionIssued>(issued).unwrap())
             .unwrap(),
     );
-    let request = ApiRequest::post(format!("/v1/roots/{root}/uploads"))
+    let request = ApiRequest::post(format!("/v1/vaults/{vault}/uploads"))
         .with_auth(AuthMode::Bearer)
         .with_json(&json!({"hash":"ab".repeat(32),"total_size":"8","chunk_size":"8"}))
         .unwrap();
@@ -186,7 +192,7 @@ async fn s091_default_real_tcp_refuses_major_or_missing_capability_before_auth_a
         before
     );
     drop(proxy);
-    let mut future = fixture();
+    let mut future = current_fixture();
     future["protocol"]["minor"] = 65535.into();
     future["unknown_increment"] = json!({"ignored":true});
     future["features"]
@@ -203,7 +209,7 @@ async fn s091_default_real_tcp_refuses_major_or_missing_capability_before_auth_a
         .unwrap();
     assert_eq!(response.status(), 200);
     let current: Value = response.json().await.unwrap();
-    assert_eq!(current["protocol"]["major"], 1);
+    assert_eq!(current["protocol"]["major"], 2);
     assert!(current.get("path").is_none());
     assert!(
         current["features"]

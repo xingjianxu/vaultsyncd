@@ -12,12 +12,12 @@ import sys
 import tarfile
 
 PROVENANCE, RUST, WEB, OUTPUT, SOURCES = map(Path, sys.argv[1:])
-ROOT=OUTPUT/'runtime'
+VAULT=OUTPUT/'runtime'
 data=json.loads(PROVENANCE.read_text())
 assert data['kind']=='nix-component-set' and len(data['sourceInfo']['commit'])==40
 data['kind']='portable-linux-private-loader'
 data['runtime_requirements']=['Linux kernel with btrfs and CoW', '/bin/sh', 'coreutils', 'Python >= 3.11', 'util-linux findmnt', 'btrfs-progs >= 6.6']
-for name in ('bin','lib','libexec','share/vaultsyncd'): (ROOT/name).mkdir(parents=True,exist_ok=True)
+for name in ('bin','lib','libexec','share/vaultsyncd'): (VAULT/name).mkdir(parents=True,exist_ok=True)
 
 def patchelf(*args):
     return subprocess.check_output(['patchelf',*map(str,args)],text=True).strip()
@@ -28,7 +28,7 @@ def sha(path):
         for block in iter(lambda:f.read(1024*1024),b''):digest.update(block)
     return digest.hexdigest()
 
-allowed=[Path(p).resolve() for p in os.environ['runtimeLibraryRoots'].split(':')]
+allowed=[Path(p).resolve() for p in os.environ['runtimeLibraryVaults'].split(':')]
 seen={}
 provenance=[]
 def copy_elf(source,dest):
@@ -49,7 +49,7 @@ def copy_elf(source,dest):
             continue
         seen[soname]=sha(found)
         provenance.append({'name':soname,'input_sha256':seen[soname]})
-        copy_elf(found,ROOT/'lib'/soname)
+        copy_elf(found,VAULT/'lib'/soname)
 
 for name in ('vaultsyncd-server','vaultsyncd-admin'):
     source=RUST/'bin'/name
@@ -57,21 +57,21 @@ for name in ('vaultsyncd-server','vaultsyncd-admin'):
     assert any(interpreter.resolve().is_relative_to(p) for p in allowed)
     loader=interpreter.name
     if loader not in seen:
-        seen[loader]=sha(interpreter);copy_elf(interpreter,ROOT/'lib'/loader)
-    copy_elf(source,ROOT/'libexec'/f'{name}.elf')
+        seen[loader]=sha(interpreter);copy_elf(interpreter,VAULT/'lib'/loader)
+    copy_elf(source,VAULT/'libexec'/f'{name}.elf')
     # The shell wrapper invokes the bundled loader explicitly. The ELF itself
     # keeps the standard target interpreter, never a /nix/store interpreter.
     standard='/lib64/'+loader if data['target'].startswith('x86_64-') else '/lib/'+loader
-    patchelf('--set-interpreter',standard,ROOT/'libexec'/f'{name}.elf')
+    patchelf('--set-interpreter',standard,VAULT/'libexec'/f'{name}.elf')
     wrapper=Path(os.environ['launchTemplate']).read_text().replace('@LOADER@',loader)
-    (ROOT/'bin'/name).write_text(wrapper);(ROOT/'bin'/name).chmod(0o755)
+    (VAULT/'bin'/name).write_text(wrapper);(VAULT/'bin'/name).chmod(0o755)
 
-shutil.copytree(WEB,ROOT/'share/vaultsyncd/web')
-shutil.copy2(os.environ['preflight'],ROOT/'share/vaultsyncd/preflight.py')
-shutil.copy2(os.environ['unit'],ROOT/'share/vaultsyncd/vaultsyncd.service')
-shutil.copy2(os.environ['exampleConfig'],ROOT/'share/vaultsyncd/vaultsyncd.toml')
-shutil.copytree(os.environ['containerTemplates'],ROOT/'share/vaultsyncd/container')
-licenses=ROOT/'share/vaultsyncd/licenses';licenses.mkdir()
+shutil.copytree(WEB,VAULT/'share/vaultsyncd/web')
+shutil.copy2(os.environ['preflight'],VAULT/'share/vaultsyncd/preflight.py')
+shutil.copy2(os.environ['unit'],VAULT/'share/vaultsyncd/vaultsyncd.service')
+shutil.copy2(os.environ['exampleConfig'],VAULT/'share/vaultsyncd/vaultsyncd.toml')
+shutil.copytree(os.environ['containerTemplates'],VAULT/'share/vaultsyncd/container')
+licenses=VAULT/'share/vaultsyncd/licenses';licenses.mkdir()
 for variable,names in [('glibcSource',['COPYINGv2','COPYINGv3','COPYING.LIB','COPYING.LESSERv2']),('gccSource',['COPYING3','COPYING.RUNTIME'])]:
     with tarfile.open(os.environ[variable]) as archive:
         for name in names:
@@ -82,9 +82,9 @@ for variable,names in [('glibcSource',['COPYINGv2','COPYINGv3','COPYING.LIB','CO
 data['runtime_toolchain']=json.loads(os.environ['runtimeVersions'])
 data['runtime_libraries']=provenance
 data['corresponding_source_archive']={'name':SOURCES.name,'sha256':sha(SOURCES)}
-data['files']=[{'path':str(p.relative_to(ROOT)),'size':str(p.stat().st_size),'sha256':sha(p)} for p in sorted(ROOT.rglob('*')) if p.is_file()]
-(ROOT/'share/vaultsyncd/release-manifest.json').write_text(json.dumps(data,sort_keys=True,ensure_ascii=False,indent=2)+'\n')
-assert not any(p.is_symlink() for p in ROOT.rglob('*'))
-for p in [*ROOT.joinpath('lib').iterdir(),*ROOT.joinpath('libexec').iterdir()]:
+data['files']=[{'path':str(p.relative_to(VAULT)),'size':str(p.stat().st_size),'sha256':sha(p)} for p in sorted(VAULT.rglob('*')) if p.is_file()]
+(VAULT/'share/vaultsyncd/release-manifest.json').write_text(json.dumps(data,sort_keys=True,ensure_ascii=False,indent=2)+'\n')
+assert not any(p.is_symlink() for p in VAULT.rglob('*'))
+for p in [*VAULT.joinpath('lib').iterdir(),*VAULT.joinpath('libexec').iterdir()]:
     assert not patchelf('--print-rpath',p)
     assert all('/' not in name for name in patchelf('--print-needed',p).splitlines())

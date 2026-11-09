@@ -174,7 +174,7 @@ try{
           $hashes=@{}
           foreach($name in @('server-seed.txt','after-gui-close.txt','after-reboot.txt')){
             $path=Join-Path $local $name
-            if(([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'CI root still contains placeholder'}
+            if(([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'CI vault still contains placeholder'}
             $hashes[$name]=(Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
           }
           $answer.ci_cleanup=@{provider_uninstall_exit=$uninstall.ExitCode;ordinary_file_hashes=$hashes;credential_logout=$true}

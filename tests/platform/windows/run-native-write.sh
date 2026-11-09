@@ -8,9 +8,9 @@ if [ "${VAULTSYNCD_WINDOWS_SHELL:-}" != 1 ]; then
     echo 'run-native-files: run inside nix develop .#windows' >&2
     exit 1
 fi
-root=$(repo_root)
-cd "$root"
-artifact_dir="$root/artifacts/S068"
+vault=$(repo_root)
+cd "$vault"
+artifact_dir="$vault/artifacts/S068"
 mkdir -p "$artifact_dir"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin test --locked --target "$TARGET_TRIPLE" -p "$PLATFORM_PACKAGE" \
@@ -46,14 +46,14 @@ public static class S068Cleanup {
     public static extern int CfUnregisterSyncRoot(string path);
 }
 '@
-    # Only this card's synthesized run directories. Never enumerate another card's roots.
+    # Only this card's synthesized run directories. Never enumerate another card's vaults.
     Get-ChildItem -LiteralPath $PSScriptRoot -Directory -Filter 'run-*' | ForEach-Object {
         $run=$_.FullName
-        $root=Join-Path $run 'root'
-        if (Test-Path -LiteralPath $root) {
-            Get-ChildItem -LiteralPath $root -Force | Remove-Item -Recurse -Force
-            $unregister=[S068Cleanup]::CfUnregisterSyncRoot($root)
-            Write-Output "s068_cleanup_root $root unregister=$unregister"
+        $vault=Join-Path $run 'vault'
+        if (Test-Path -LiteralPath $vault) {
+            Get-ChildItem -LiteralPath $vault -Force | Remove-Item -Recurse -Force
+            $unregister=[S068Cleanup]::CfUnregisterSyncRoot($vault)
+            Write-Output "s068_cleanup_vault $vault unregister=$unregister"
         }
         Remove-Item -LiteralPath $run -Recurse -Force
     }

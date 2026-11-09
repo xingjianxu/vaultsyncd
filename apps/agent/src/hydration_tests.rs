@@ -27,7 +27,7 @@ use vaultsyncd_client_store::{
     entries::{self, LocalEntry},
 };
 use vaultsyncd_domain::{
-    ids::{BindingId, DeviceId, EntryId, OpId, RootId, ServerId, VersionId},
+    ids::{BindingId, DeviceId, EntryId, OpId, ServerId, VaultId, VersionId},
     state::{Dirty, Residency},
     version::{BoundError, Generation, ServerEpoch, UtcTimestamp},
 };
@@ -279,14 +279,14 @@ impl Drop for Server {
 fn id(entry: u8) -> Identity {
     Identity {
         binding: BindingId::from_bytes([1; 16]),
-        root: RootId::from_bytes([2; 16]),
+        vault: VaultId::from_bytes([2; 16]),
         entry: EntryId::from_bytes([entry; 16]),
         version: VersionId::from_bytes([4; 16]),
     }
 }
 struct Rig {
     path: PathBuf,
-    root: PathBuf,
+    vault: PathBuf,
     stage: PathBuf,
     db: Arc<Database>,
     server: Server,
@@ -308,9 +308,9 @@ impl Rig {
                 .unwrap()
                 .as_millis()
         ));
-        let root = path.join("root");
+        let vault = path.join("vault");
         let stage = path.join("stage");
-        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&vault).unwrap();
         std::fs::create_dir(&stage).unwrap();
         let db = Arc::new(Database::open(path.join("client.sqlite")).await.unwrap());
         let mut tx = db.begin_write().await.unwrap();
@@ -319,9 +319,9 @@ impl Rig {
             &NewBinding {
                 id: id(3).binding,
                 server: ServerId::from_bytes([5; 16]),
-                root: id(3).root,
+                vault: id(3).vault,
                 device: DeviceId::from_bytes([6; 16]),
-                local_path: root.to_str().unwrap().into(),
+                local_path: vault.to_str().unwrap().into(),
                 cache_path: stage.to_str().unwrap().into(),
                 mode: SyncMode::OnDemand,
                 rules_version: "s067".into(),
@@ -333,7 +333,7 @@ impl Rig {
         tx.commit().await.unwrap();
         Self {
             path,
-            root,
+            vault,
             stage,
             db,
             server: Server::new(size),
@@ -344,7 +344,7 @@ impl Rig {
     }
     fn connect_timed(&self, entry: u8, timeout: Duration) -> (Adapter, Arc<HydrationCallbacks>) {
         let identity = id(entry);
-        let mut cat = Catalog::new(identity.binding, identity.root);
+        let mut cat = Catalog::new(identity.binding, identity.vault);
         cat.insert(identity).unwrap();
         let client =
             ApiClient::new(ClientConfig::new(&self.server.address).allow_plaintext_http()).unwrap();
@@ -386,7 +386,7 @@ impl Rig {
         )
         .unwrap();
         connect_hydration(
-            &self.root,
+            &self.vault,
             cat,
             self.db.clone(),
             client,
@@ -426,7 +426,7 @@ impl Rig {
     }
     async fn finish(self, mut adapter: Adapter, callbacks: Arc<HydrationCallbacks>) {
         callbacks.wait_idle(Duration::from_secs(5)).await.unwrap();
-        std::fs::remove_file(self.root.join("file.bin")).unwrap();
+        std::fs::remove_file(self.vault.join("file.bin")).unwrap();
         adapter.disconnect().unwrap();
         drop(callbacks);
         adapter.unregister().unwrap();
@@ -459,7 +459,7 @@ async fn native_http_hydration_fixed_version_and_range_residency() {
     adapter
         .create("file.bin", id(3), SIZE as u64, false)
         .unwrap();
-    let path = rig.root.join("file.bin");
+    let path = rig.vault.join("file.bin");
     let actual = tokio::task::spawn_blocking(move || std::fs::read(path))
         .await
         .unwrap()
@@ -492,7 +492,7 @@ async fn native_cancel_preserves_bitmap_reconnect_resumes_and_rereads() {
     adapter
         .create("file.bin", id(3), SIZE as u64, false)
         .unwrap();
-    let path = rig.root.join("file.bin");
+    let path = rig.vault.join("file.bin");
     let reader = tokio::task::spawn_blocking(move || std::fs::read(path));
     let start = Instant::now();
     while rig.server.count.load(Ordering::SeqCst) < 2 {
@@ -526,7 +526,7 @@ async fn native_cancel_preserves_bitmap_reconnect_resumes_and_rereads() {
     );
     rig.server.mode.store(0, Ordering::SeqCst);
     let (adapter, callbacks) = rig.connect(3);
-    let path = rig.root.join("file.bin");
+    let path = rig.vault.join("file.bin");
     assert_eq!(
         tokio::task::spawn_blocking(move || std::fs::read(path))
             .await
@@ -553,7 +553,7 @@ async fn native_offline_and_corruption_never_supply_unverified_bytes() {
         adapter
             .create("file.bin", id(3), SIZE as u64, false)
             .unwrap();
-        let path = rig.root.join("file.bin");
+        let path = rig.vault.join("file.bin");
         let start = Instant::now();
         assert!(
             tokio::task::spawn_blocking(move || std::fs::read(path))
@@ -581,7 +581,7 @@ async fn native_verified_whole_download_only_supplies_requested_range() {
     adapter
         .create("file.bin", id(3), rig.server.size as u64, false)
         .unwrap();
-    let path = rig.root.join("file.bin");
+    let path = rig.vault.join("file.bin");
     let hr = tokio::task::spawn_blocking(move || {
         let file = std::fs::OpenOptions::new()
             .access_mode(0x80)
@@ -629,7 +629,7 @@ async fn native_verified_whole_download_only_supplies_requested_range() {
         "verified staging must remain write-protected"
     );
     let requests_before = rig.server.requests.lock().unwrap().len();
-    let path = rig.root.join("file.bin");
+    let path = rig.vault.join("file.bin");
     let read = tokio::task::spawn_blocking(move || std::fs::read(path))
         .await
         .unwrap();
@@ -688,7 +688,7 @@ fn cleanup_abandoned_fixture_runs() {
         }
         let path = child.path();
         if path.is_symlink() || !path.is_dir() {
-            panic!("unexpected fixture root");
+            panic!("unexpected fixture vault");
         }
         for entry in std::fs::read_dir(&path).unwrap() {
             let entry = entry.unwrap();
@@ -696,7 +696,7 @@ fn cleanup_abandoned_fixture_runs() {
                 matches!(
                     entry.file_name().to_str(),
                     Some(
-                        "root"
+                        "vault"
                             | "stage"
                             | "client.sqlite"
                             | "client.sqlite-wal"
@@ -707,17 +707,17 @@ fn cleanup_abandoned_fixture_runs() {
                 entry.path()
             );
         }
-        let root = path.join("root");
-        let mut catalog = Catalog::new(id(3).binding, id(3).root);
+        let vault = path.join("vault");
+        let mut catalog = Catalog::new(id(3).binding, id(3).vault);
         catalog.insert(id(3)).unwrap();
-        let mut adapter = Adapter::connect(&root, catalog, Arc::new(MetadataOnly)).unwrap();
+        let mut adapter = Adapter::connect(&vault, catalog, Arc::new(MetadataOnly)).unwrap();
         match adapter.inspect("file.bin") {
             Ok(meta) => {
                 assert_eq!(
                     Identity::decode(&meta.cloud.unwrap().identity).unwrap(),
                     id(3)
                 );
-                std::fs::remove_file(root.join("file.bin")).unwrap();
+                std::fs::remove_file(vault.join("file.bin")).unwrap();
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => panic!("cleanup inspection {error}"),
@@ -737,7 +737,7 @@ async fn native_timeout_keeps_received_parts_and_never_fakes_success() {
     adapter
         .create("file.bin", id(3), SIZE as u64, false)
         .unwrap();
-    let path = rig.root.join("file.bin");
+    let path = rig.vault.join("file.bin");
     let started = Instant::now();
     assert!(
         tokio::time::timeout(

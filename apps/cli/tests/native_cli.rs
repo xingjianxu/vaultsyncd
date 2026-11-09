@@ -190,7 +190,7 @@ struct Cleanup {
     server: String,
     base: PathBuf,
     binding: Option<String>,
-    root: Option<String>,
+    vault: Option<String>,
 }
 impl Drop for Cleanup {
     fn drop(&mut self) {
@@ -200,8 +200,8 @@ impl Drop for Cleanup {
         if let Ok(vault) = credentials::CredentialVault::new(&self.server) {
             let _ = vault.erase();
         }
-        if let (Some(binding), Some(root)) = (self.binding.as_ref(), self.root.as_ref()) {
-            unregister(&self.base.join("root"), binding, root);
+        if let (Some(binding), Some(vault)) = (self.binding.as_ref(), self.vault.as_ref()) {
+            unregister(&self.base.join("vault"), binding, vault);
         }
         if std::thread::panicking() {
             eprintln!("failed native fixture retained: {}", self.base.display());
@@ -213,7 +213,7 @@ impl Drop for Cleanup {
     }
 }
 
-fn unregister(path: &Path, binding: &str, root: &str) {
+fn unregister(path: &Path, binding: &str, vault: &str) {
     use vaultsyncd_platform_windows::cfapi::{
         adapter::{Adapter, MetadataOnly},
         catalog::Catalog,
@@ -222,7 +222,7 @@ fn unregister(path: &Path, binding: &str, root: &str) {
         path,
         Catalog::new(
             vaultsyncd_domain::ids::BindingId::from_hex(binding).unwrap(),
-            vaultsyncd_domain::ids::RootId::from_hex(root).unwrap(),
+            vaultsyncd_domain::ids::VaultId::from_hex(vault).unwrap(),
         ),
         std::sync::Arc::new(MetadataOnly),
     ) else {
@@ -435,12 +435,12 @@ async fn native_cli_management_acceptance() {
         .unwrap()
         .join(format!("run-cli-{}", std::process::id()));
     std::fs::create_dir(&base).unwrap();
-    for p in ["state", "root", "cache"] {
+    for p in ["state", "vault", "cache"] {
         std::fs::create_dir(base.join(p)).unwrap();
     }
     let server = identity();
     let binding = identity();
-    let root = fixture["root"].as_str().unwrap().to_string();
+    let vault = fixture["vault"].as_str().unwrap().to_string();
     let entry = fixture["entry"]["entry_id"].as_str().unwrap().to_string();
     let payload = fixture["payload"].as_str().unwrap().as_bytes().to_vec();
     let config_path = base.join("agent.json");
@@ -458,7 +458,7 @@ async fn native_cli_management_acceptance() {
         server: server.clone(),
         base: base.clone(),
         binding: Some(binding.clone()),
-        root: Some(root.clone()),
+        vault: Some(vault.clone()),
     };
 
     wait_agent(&cli).await;
@@ -474,7 +474,7 @@ async fn native_cli_management_acceptance() {
 
     // Unauthenticated and connection failures keep distinct stable exit codes.
     failed(
-        call(&cli, cli_args(&["roots"]), None).await,
+        call(&cli, cli_args(&["vaults"]), None).await,
         4,
         "unauthenticated",
     );
@@ -533,13 +533,13 @@ async fn native_cli_management_acceptance() {
     assert!(!login.to_string().contains("access_token"));
     assert!(!login.to_string().contains("refresh_token"));
 
-    let roots = ok(call(&cli, cli_args(&["roots"]), None).await);
+    let vaults = ok(call(&cli, cli_args(&["vaults"]), None).await);
     assert!(
-        roots["result"]["management"]["items"]
+        vaults["result"]["management"]["items"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|item| item["id"] == root)
+            .any(|item| item["id"] == vault)
     );
     ok(call(&cli, cli_args(&["connection"]), None).await);
 
@@ -549,10 +549,10 @@ async fn native_cli_management_acceptance() {
             "create-binding",
             "--binding-id",
             &binding,
-            "--root-id",
-            &root,
+            "--vault-id",
+            &vault,
             "--local-path",
-            base.join("root").to_str().unwrap(),
+            base.join("vault").to_str().unwrap(),
             "--cache-path",
             base.join("cache").to_str().unwrap(),
             "--mode",
@@ -610,7 +610,7 @@ async fn native_cli_management_acceptance() {
         None,
     )
     .await);
-    assert_eq!(std::fs::read(base.join("root/file.txt")).unwrap(), payload);
+    assert_eq!(std::fs::read(base.join("vault/file.txt")).unwrap(), payload);
     failed(
         call(
             &cli,
@@ -633,7 +633,7 @@ async fn native_cli_management_acceptance() {
         None,
     )
     .await);
-    let native = vaultsyncd_platform_windows::files::RootHandle::open(&base.join("root"))
+    let native = vaultsyncd_platform_windows::files::VaultHandle::open(&base.join("vault"))
         .unwrap()
         .inspect("file.txt")
         .unwrap();
@@ -728,7 +728,7 @@ async fn native_cli_management_acceptance() {
 
     ok(call(&cli, cli_args(&["pause", "--binding-id", &binding]), None).await);
     std::fs::write(
-        base.join("root/unique-unconfirmed.bin"),
+        base.join("vault/unique-unconfirmed.bin"),
         b"S073 unique local recovery bytes",
     )
     .unwrap();
@@ -779,7 +779,7 @@ async fn native_cli_management_acceptance() {
     let detached = ok(call(&cli, cli_args(&["detach", "--binding-id", &binding]), None).await);
     assert!(detached["result"]["management"]["unconfirmed"].is_array());
     assert_eq!(
-        std::fs::read(base.join("root/unique-unconfirmed.bin")).unwrap(),
+        std::fs::read(base.join("vault/unique-unconfirmed.bin")).unwrap(),
         b"S073 unique local recovery bytes"
     );
     failed(
@@ -790,7 +790,7 @@ async fn native_cli_management_acceptance() {
 
     ok(call(&cli, cli_args(&["logout"]), None).await);
     failed(
-        call(&cli, cli_args(&["roots"]), None).await,
+        call(&cli, cli_args(&["vaults"]), None).await,
         4,
         "unauthenticated",
     );
@@ -813,10 +813,10 @@ async fn native_cli_management_acceptance() {
 async fn remote_rows(fixture: &serde_json::Value) -> (String, Vec<serde_json::Value>) {
     let client = reqwest::Client::new();
     let url = fixture["url"].as_str().unwrap();
-    let root = fixture["root"].as_str().unwrap();
+    let vault = fixture["vault"].as_str().unwrap();
     let token = fixture["issued"]["access_token"].as_str().unwrap();
     let response = client
-        .post(format!("{url}/v1/roots/{root}/snapshots"))
+        .post(format!("{url}/v1/vaults/{vault}/snapshots"))
         .bearer_auth(token)
         .json(&serde_json::json!({}))
         .send()
@@ -826,7 +826,7 @@ async fn remote_rows(fixture: &serde_json::Value) -> (String, Vec<serde_json::Va
     let snapshot: serde_json::Value = response.json().await.unwrap();
     let response = client
         .get(format!(
-            "{url}/v1/roots/{root}/snapshots/{}/entries",
+            "{url}/v1/vaults/{vault}/snapshots/{}/entries",
             snapshot["snapshot_id"].as_str().unwrap()
         ))
         .bearer_auth(token)
@@ -843,15 +843,15 @@ async fn remote_rows(fixture: &serde_json::Value) -> (String, Vec<serde_json::Va
 async fn remote_put(fixture: &serde_json::Value, bytes: &[u8]) {
     let client = reqwest::Client::new();
     let url = fixture["url"].as_str().unwrap();
-    let root = fixture["root"].as_str().unwrap();
+    let vault = fixture["vault"].as_str().unwrap();
     let token = fixture["issued"]["access_token"].as_str().unwrap();
     let hash = vaultsyncd_transfer::hash::to_hex(&vaultsyncd_transfer::hash::digest_of(bytes));
-    let response=client.post(format!("{url}/v1/roots/{root}/uploads")).bearer_auth(token).json(&serde_json::json!({"hash":hash,"total_size":bytes.len().to_string(),"chunk_size":"4096"})).send().await.unwrap();
+    let response=client.post(format!("{url}/v1/vaults/{vault}/uploads")).bearer_auth(token).json(&serde_json::json!({"hash":hash,"total_size":bytes.len().to_string(),"chunk_size":"4096"})).send().await.unwrap();
     assert!(response.status().is_success());
     let upload: serde_json::Value = response.json().await.unwrap();
     let id = upload["upload_id"].as_str().unwrap();
     let response = client
-        .put(format!("{url}/v1/roots/{root}/uploads/{id}/parts/0"))
+        .put(format!("{url}/v1/vaults/{vault}/uploads/{id}/parts/0"))
         .bearer_auth(token)
         .header("x-part-sha256", &hash)
         .body(bytes.to_vec())
@@ -860,7 +860,7 @@ async fn remote_put(fixture: &serde_json::Value, bytes: &[u8]) {
         .unwrap();
     assert!(response.status().is_success());
     let response = client
-        .post(format!("{url}/v1/roots/{root}/uploads/{id}/finalize"))
+        .post(format!("{url}/v1/vaults/{vault}/uploads/{id}/finalize"))
         .bearer_auth(token)
         .json(&serde_json::json!({}))
         .send()
@@ -869,7 +869,7 @@ async fn remote_put(fixture: &serde_json::Value, bytes: &[u8]) {
     assert!(response.status().is_success());
     let (epoch, rows) = remote_rows(fixture).await;
     let row = rows.iter().find(|r| r["name"] == "file.txt").unwrap();
-    let response=client.post(format!("{url}/v1/roots/{root}/operations")).bearer_auth(token).json(&serde_json::json!({"op_id":identity(),"device_id":identity(),"server_epoch":epoch,"kind":"put_content","entry_id":row["entry_id"],"base_revision":row["revision"],"upload_id":id,"local_generation":"1","conflict_policy":"preserve_both"})).send().await.unwrap();
+    let response=client.post(format!("{url}/v1/vaults/{vault}/operations")).bearer_auth(token).json(&serde_json::json!({"op_id":identity(),"device_id":identity(),"server_epoch":epoch,"kind":"put_content","entry_id":row["entry_id"],"base_revision":row["revision"],"upload_id":id,"local_generation":"1","conflict_policy":"preserve_both"})).send().await.unwrap();
     assert!(response.status().is_success());
     let result: serde_json::Value = response.json().await.unwrap();
     assert_eq!(result["state"], "committed");
@@ -904,12 +904,12 @@ async fn native_cli_exclusion_acceptance() {
         .unwrap()
         .join(format!("s105-rules-{}", std::process::id()));
     std::fs::create_dir(&base).unwrap();
-    for directory in ["state", "root", "cache"] {
+    for directory in ["state", "vault", "cache"] {
         std::fs::create_dir(base.join(directory)).unwrap();
     }
     let server = identity();
     let binding = identity();
-    let root = fixture["root"].as_str().unwrap().to_owned();
+    let vault = fixture["vault"].as_str().unwrap().to_owned();
     let entry = fixture["entry"]["entry_id"].as_str().unwrap();
     let config = base.join("agent.json");
     std::fs::write(&config,serde_json::to_vec(&serde_json::json!({"server":{"id":server,"url":fixture["url"],"development_http":true},"device_id":identity(),"state_dir":base.join("state"),"poll_millis":250,"bindings":[]})).unwrap()).unwrap();
@@ -917,7 +917,7 @@ async fn native_cli_exclusion_acceptance() {
         agent: Some(ChildGuard::spawn(&exe, &config, &base.join("agent.log"))),
         server,
         binding: Some(binding.clone()),
-        root: Some(root),
+        vault: Some(vault),
         base: base.clone(),
     };
     wait_agent(&cli).await;
@@ -933,10 +933,10 @@ async fn native_cli_exclusion_acceptance() {
             "create-binding",
             "--binding-id",
             &binding,
-            "--root-id",
-            fixture["root"].as_str().unwrap(),
+            "--vault-id",
+            fixture["vault"].as_str().unwrap(),
             "--local-path",
-            base.join("root").to_str().unwrap(),
+            base.join("vault").to_str().unwrap(),
             "--cache-path",
             base.join("cache").to_str().unwrap(),
             "--mode",
@@ -987,14 +987,14 @@ async fn native_cli_exclusion_acceptance() {
             .unwrap()
             .contains("file.txt")
     );
-    std::fs::create_dir(base.join("root/private")).unwrap();
+    std::fs::create_dir(base.join("vault/private")).unwrap();
     std::fs::write(
-        base.join("root/private/allowed.txt"),
+        base.join("vault/private/allowed.txt"),
         b"S105 excluded unique local",
     )
     .unwrap();
     std::fs::write(
-        base.join("root/public.txt"),
+        base.join("vault/public.txt"),
         b"S105 ordinary path still synchronizes",
     )
     .unwrap();
@@ -1017,7 +1017,7 @@ async fn native_cli_exclusion_acceptance() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     assert_eq!(
-        std::fs::read(base.join("root/file.txt")).unwrap(),
+        std::fs::read(base.join("vault/file.txt")).unwrap(),
         fixture["payload"].as_str().unwrap().as_bytes()
     );
     cleanup.agent.take().unwrap().kill();
@@ -1026,7 +1026,7 @@ async fn native_cli_exclusion_acceptance() {
     assert!(ok(call(&cli,cli_args(&["rules","--binding-id",&binding]),None).await)["result"]["management"]["rules"].as_str().unwrap().contains("file.txt"));
     set_rules(&cli, &binding, &rules_file, "private/\n").await;
     let end = Instant::now() + Duration::from_secs(60);
-    while std::fs::read(base.join("root/file.txt")).unwrap()
+    while std::fs::read(base.join("vault/file.txt")).unwrap()
         != b"S105 newer remote during exclusion"
     {
         assert!(
@@ -1043,9 +1043,9 @@ async fn native_cli_exclusion_acceptance() {
             b"S105 newer remote during exclusion"
         ))
     );
-    std::fs::create_dir(base.join("root/protected")).unwrap();
+    std::fs::create_dir(base.join("vault/protected")).unwrap();
     std::fs::write(
-        base.join("root/protected/keep.txt"),
+        base.join("vault/protected/keep.txt"),
         b"S105 protected child",
     )
     .unwrap();
@@ -1065,7 +1065,7 @@ async fn native_cli_exclusion_acceptance() {
         "private/\nprotected/keep.txt\n",
     )
     .await;
-    std::fs::remove_dir_all(base.join("root/protected")).unwrap();
+    std::fs::remove_dir_all(base.join("vault/protected")).unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
     let (_, rows) = remote_rows(&fixture).await;
     assert!(
@@ -1073,15 +1073,15 @@ async fn native_cli_exclusion_acceptance() {
             && rows.iter().any(|r| r["name"] == "keep.txt"),
         "missing excluded descendant must not imply parent Delete"
     );
-    std::fs::create_dir(base.join("root/protected")).unwrap();
+    std::fs::create_dir(base.join("vault/protected")).unwrap();
     std::fs::write(
-        base.join("root/protected/keep.txt"),
+        base.join("vault/protected/keep.txt"),
         b"S105 protected child",
     )
     .unwrap();
     set_rules(&cli, &binding, &rules_file, "file.txt\nprivate/\n").await;
     std::fs::write(
-        base.join("root/file.txt"),
+        base.join("vault/file.txt"),
         b"S105 unique edit while excluded",
     )
     .unwrap();
@@ -1108,7 +1108,7 @@ async fn native_cli_exclusion_acceptance() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     assert_eq!(
-        std::fs::read(base.join("root/private/allowed.txt")).unwrap(),
+        std::fs::read(base.join("vault/private/allowed.txt")).unwrap(),
         b"S105 excluded unique local"
     );
     println!(

@@ -63,7 +63,7 @@ pub async fn validate(
     if operations::request_digest(&pairs).map_err(failure)? != digest
         || binding.context["create_file"] != true
         || put.before != TargetBefore::Absent
-        || put.root != binding.root
+        || put.vault != binding.vault
     {
         return Err(failure("invalid bound Create semantics"));
     }
@@ -112,7 +112,7 @@ pub async fn validate(
         .await
         .map_err(failure)?
         .ok_or_else(|| failure("missing finalized Create source"))?;
-    if source.root != binding.root
+    if source.vault != binding.vault
         || source.state != vaultsyncd_server_store::uploads::UploadState::Finalized
         || source.hash != *put.after.digest.as_bytes()
         || source.expected_size != put.after.size
@@ -137,7 +137,7 @@ pub async fn execute(
         .as_ref()
         .ok_or_else(|| failure("missing name"))?;
     let _gate = executor.commit_gate().lock().await;
-    executor.ensure_no_unfinished(owner, key.root).await?;
+    executor.ensure_no_unfinished(owner, key.vault).await?;
     let parent_path = crate::commands::path_of(executor, owner, parent).await?;
     let path = if parent_path.is_empty() {
         name.clone()
@@ -155,12 +155,13 @@ pub async fn execute(
             .await
             .map_err(failure)?
             .ok_or_else(|| failure("parent missing"))?;
-        if p.root != key.root || p.kind != entries::EntryKind::Directory || p.deleted_at.is_some() {
+        if p.vault != key.vault || p.kind != entries::EntryKind::Directory || p.deleted_at.is_some()
+        {
             return Err(OperationFailure::InvalidRequest {
                 detail: "invalid Create parent".into(),
             });
         }
-        if entries::active_child_by_name(&mut conn, owner, key.root, parent, name)
+        if entries::active_child_by_name(&mut conn, owner, key.vault, parent, name)
             .await
             .map_err(failure)?
             .is_some()
@@ -169,20 +170,22 @@ pub async fn execute(
                 detail: "Create expected_absent target occupied".into(),
             });
         }
-        let root = vaultsyncd_server_store::roots::root_in_scope(&mut conn, owner, key.root)
+        let vault = vaultsyncd_server_store::vaults::vault_in_scope(&mut conn, owner, key.vault)
             .await
             .map_err(failure)?
-            .ok_or(OperationFailure::RootUnavailable)?;
-        if root.epoch != request.expected_epoch {
+            .ok_or(OperationFailure::VaultUnavailable)?;
+        if vault.epoch != request.expected_epoch {
             return Err(OperationFailure::EpochChanged {
                 expected: request.expected_epoch,
-                actual: root.epoch,
+                actual: vault.epoch,
             });
         }
     }
-    let handle = executor.root_handle(owner, key.root).await?;
-    let mut target =
-        WorkTreeTarget::new(handle, executor.objects(key.root, &[content.digest]).await?);
+    let handle = executor.vault_handle(owner, key.vault).await?;
+    let mut target = WorkTreeTarget::new(
+        handle,
+        executor.objects(key.vault, &[content.digest]).await?,
+    );
     if !matches!(
         target.observe(&path).map_err(failure)?,
         vaultsyncd_server_core::ports::target::TargetObservation::Absent
@@ -199,7 +202,7 @@ pub async fn execute(
     let mut log = SqlIntentLog::new(executor.database().clone(), owner).bound(binding.clone());
     let new = NewPutIntent {
         intent_id: intent,
-        root: key.root,
+        vault: key.vault,
         target_path: path.clone(),
         staging_path: format!("create-{intent}"),
         before: TargetBefore::Absent,
@@ -222,7 +225,7 @@ pub async fn execute(
     )
     .await?;
     executor
-        .note_own_content(key.root, &path, published.target.identity, content)
+        .note_own_content(key.vault, &path, published.target.identity, content)
         .await;
     Ok(result)
 }
@@ -256,7 +259,7 @@ pub async fn finish(
         .await
         .map_err(failure)?
         .ok_or_else(|| failure("missing Create intent"))?;
-    if stored.root != binding.root || stored.phase != intents::FsIntentPhase::Published {
+    if stored.vault != binding.vault || stored.phase != intents::FsIntentPhase::Published {
         return Err(failure("Create intent is not published"));
     }
     let put = crate::executor::put_intent_of(stored).map_err(failure)?;
@@ -272,7 +275,7 @@ pub async fn finish(
         owner,
         &entries::NewEntry {
             id: entry,
-            root: binding.root,
+            vault: binding.vault,
             parent,
             name: name.into(),
             name_key: name.into(),
@@ -290,7 +293,7 @@ pub async fn finish(
         entry_id: Some(entry.to_string()),
         version_id: Some(version.to_string()),
         revision: Some("0".into()),
-        root_seq: None,
+        vault_seq: None,
         replayed: None,
         conflict: None,
         error_code: None,
@@ -323,7 +326,7 @@ pub async fn finish(
         owner,
         &versions::NewVersion {
             id: version,
-            root: binding.root,
+            vault: binding.vault,
             entry,
             object_hash: *content.digest.as_bytes(),
             size: content.bytes,
@@ -345,6 +348,6 @@ pub async fn finish(
     .map_err(failure)?;
     tx.commit().await.map_err(failure)?;
     let mut result = result;
-    result.root_seq = Some(committed.batch.seq.to_string());
+    result.vault_seq = Some(committed.batch.seq.to_string());
     Ok(result)
 }

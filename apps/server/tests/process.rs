@@ -17,11 +17,11 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, IntentId, RootId, UserId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, IntentId, UserId, VaultId};
 use vaultsyncd_domain::version::{ServerEpoch, UtcTimestamp};
 use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::intents::{self, FsIntentPhase, NewFsIntent};
-use vaultsyncd_server_store::roots::{self, NewRoot};
+use vaultsyncd_server_store::vaults::{self, NewVault};
 
 /// 每个用例独占的状态目录；`Drop` 时删除（测试只写临时目录，不碰真实实例）。
 struct TestDir {
@@ -143,10 +143,10 @@ fn wait_health(port: u16, timeout: Duration) -> (u16, String) {
     }
 }
 
-/// 在状态目录里建库并写入种子：一个账号、一个 Root（必需）、以及给定数量的 `prepared` 意图。
-fn seed(state_dir: &Path, intents_to_write: &[(&str, &str)]) -> (UserId, RootId) {
+/// 在状态目录里建库并写入种子：一个账号、一个 Vault（必需）、以及给定数量的 `prepared` 意图。
+fn seed(state_dir: &Path, intents_to_write: &[(&str, &str)]) -> (UserId, VaultId) {
     let user = UserId::from_bytes([0x11; ID_LEN]);
-    let root = RootId::from_bytes([0x22; ID_LEN]);
+    let vault = VaultId::from_bytes([0x22; ID_LEN]);
     let entry = EntryId::from_bytes([0x33; ID_LEN]);
     let database = state_dir.join("server.sqlite");
 
@@ -167,20 +167,20 @@ fn seed(state_dir: &Path, intents_to_write: &[(&str, &str)]) -> (UserId, RootId)
             .execute(&mut *tx)
             .await
             .expect("写种子账号");
-        roots::insert_root(
+        vaults::insert_vault(
             &mut tx,
-            &NewRoot {
-                id: root,
+            &NewVault {
+                id: vault,
                 entry,
                 owner: user,
                 absolute_path: "/srv/vaultsyncd-s041-seed".to_owned(),
                 volume_identity: vec![0x44; 16],
-                root_file_identity: vec![0x55; 16],
+                vault_file_identity: vec![0x55; 16],
                 epoch: ServerEpoch::new(1).expect("epoch"),
             },
         )
         .await
-        .expect("写种子 Root");
+        .expect("写种子 Vault");
         let created_at = UtcTimestamp::from_unix_seconds(1_700_000_000).expect("时间");
         for (index, (target, desired)) in intents_to_write.iter().enumerate() {
             intents::begin_intent(
@@ -188,7 +188,7 @@ fn seed(state_dir: &Path, intents_to_write: &[(&str, &str)]) -> (UserId, RootId)
                 user,
                 &NewFsIntent {
                     intent_id: IntentId::from_bytes([0x66 + index as u8; ID_LEN]),
-                    root,
+                    vault,
                     kind: intents::FsIntentKind::PutContent,
                     target_path: (*target).to_owned(),
                     staging_path: None,
@@ -204,11 +204,11 @@ fn seed(state_dir: &Path, intents_to_write: &[(&str, &str)]) -> (UserId, RootId)
         db.close().await;
     });
 
-    (user, root)
+    (user, vault)
 }
 
 /// 直接读库核对证据：未完成意图的阶段与条数（进程已退出后调用的独立连接）。
-fn unfinished_phases(state_dir: &Path, user: UserId, root: RootId) -> Vec<FsIntentPhase> {
+fn unfinished_phases(state_dir: &Path, user: UserId, vault: VaultId) -> Vec<FsIntentPhase> {
     let database = state_dir.join("server.sqlite");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -219,7 +219,7 @@ fn unfinished_phases(state_dir: &Path, user: UserId, root: RootId) -> Vec<FsInte
             .await
             .expect("连测试库");
         let mut conn = pool.acquire().await.expect("取连接");
-        let rows = intents::unfinished_intents(&mut conn, user, root)
+        let rows = intents::unfinished_intents(&mut conn, user, vault)
             .await
             .expect("读未完成意图");
         drop(conn);
@@ -354,12 +354,12 @@ fn corrupt_config_exits_2_and_never_opens_state() {
 #[test]
 fn unfinished_intent_keeps_readiness_false_and_survives_graceful_stop() {
     let dir = TestDir::new("unfinished-intent");
-    let (user, root) = seed(
+    let (user, vault) = seed(
         &dir.path,
         &[("report.txt", r#"{"kind":"file","length":12}"#)],
     );
     assert_eq!(
-        unfinished_phases(&dir.path, user, root),
+        unfinished_phases(&dir.path, user, vault),
         vec![FsIntentPhase::Prepared],
         "种子应写入一条 prepared 意图"
     );
@@ -387,7 +387,7 @@ fn unfinished_intent_keeps_readiness_false_and_survives_graceful_stop() {
 
     // 证据保留：进程退出后意图行仍是 prepared，没有被“停止/重启”清掉或推进。
     assert_eq!(
-        unfinished_phases(&dir.path, user, root),
+        unfinished_phases(&dir.path, user, vault),
         vec![FsIntentPhase::Prepared],
         "优雅停止不得清理或改写任务证据"
     );

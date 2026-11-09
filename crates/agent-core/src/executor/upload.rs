@@ -545,7 +545,7 @@ fn map_wire_error_code(code: &vaultsyncd_protocol::generated::ErrorCode) -> Opti
         WireErrorCode::HashMismatch => ErrorCode::HashMismatch,
         WireErrorCode::UnsupportedStorageBackend => ErrorCode::UnsupportedStorageBackend,
         WireErrorCode::ServerPlaceholderUnsupported => ErrorCode::ServerPlaceholderUnsupported,
-        WireErrorCode::RootUnavailable => ErrorCode::RootUnavailable,
+        WireErrorCode::VaultUnavailable => ErrorCode::VaultUnavailable,
         WireErrorCode::NeedsRecovery => ErrorCode::NeedsRecovery,
         WireErrorCode::InsufficientStorage => ErrorCode::InsufficientStorage,
         WireErrorCode::RateLimited => ErrorCode::RateLimited,

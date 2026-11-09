@@ -1,6 +1,6 @@
 //! 离线恢复目录能力：内核存储准入、无别名空目录、安全创建和空间预算。
 use crate::{
-    files::{ResolveMode, RestrictedDir, root::RootSnapshot},
+    files::{ResolveMode, RestrictedDir, vault::VaultSnapshot},
     mounts::{
         admission::{self, AdmissionDecision, AdmissionInput},
         mountinfo,
@@ -33,14 +33,14 @@ impl Target {
         let identity = admission::storage_identity(&facts)
             .ok_or_else(|| err("restore needs btrfs identity"))?;
         let scan =
-            probe::scan_root(path, identity.subvolume_id, &ScanPolicy::default()).map_err(err)?;
+            probe::scan_vault(path, identity.subvolume_id, &ScanPolicy::default()).map_err(err)?;
         let mounts = mountinfo::read_self().map_err(err)?;
         let outcome = admission::evaluate(&AdmissionInput {
-            root: &facts,
+            vault: &facts,
             scan: &scan,
             mounts: &mounts,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
         });
         if !matches!(outcome.decision, AdmissionDecision::Accepted) {
             return Err(err(format!(
@@ -74,7 +74,7 @@ impl Target {
     /// 完成前复核原目录挂载/身份，不把漂移误报为成功。
     pub fn verify_identity(&self) -> io::Result<()> {
         let current = probe::probe_path(&self.facts.resolved_path).map_err(err)?;
-        if RootSnapshot::of_facts(&current) != RootSnapshot::of_facts(&self.facts) {
+        if VaultSnapshot::of_facts(&current) != VaultSnapshot::of_facts(&self.facts) {
             return Err(err("restore directory identity changed"));
         }
         Ok(())

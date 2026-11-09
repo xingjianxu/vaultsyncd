@@ -226,15 +226,15 @@ impl Transport for Forward {
 #[ignore = "S104 real TCP and dedicated btrfs required"]
 async fn download_tcp_cut_resumes_only_missing_ranges_and_rejects_corruption_or_other_version() {
     let bytes = deterministic(4 * 65536 + 117);
-    let (lab, server, token, root, old_entry) = setup("download", &bytes).await;
-    let epoch = epoch_of(&server.http, &token, &root).await;
+    let (lab, server, token, vault, old_entry) = setup("download", &bytes).await;
+    let epoch = epoch_of(&server.http, &token, &vault).await;
     let other: Vec<_> = bytes.iter().map(|b| b ^ 0x5a).collect();
-    let (uploaded, _, _) = upload(&server.http, &token, &root, &other, 65536)
+    let (uploaded, _, _) = upload(&server.http, &token, &vault, &other, 65536)
         .await
         .unwrap();
-    let (status,changed)=submit(&server.http,&token,&root,json!({"op_id":identity(0x61),"device_id":identity(0x62),"server_epoch":epoch,"kind":"put_content","entry_id":old_entry["entry_id"],"base_revision":old_entry["revision"],"upload_id":uploaded,"local_generation":"1","conflict_policy":"preserve_both"})).await;
+    let (status,changed)=submit(&server.http,&token,&vault,json!({"op_id":identity(0x61),"device_id":identity(0x62),"server_epoch":epoch,"kind":"put_content","entry_id":old_entry["entry_id"],"base_revision":old_entry["revision"],"upload_id":uploaded,"local_generation":"1","conflict_policy":"preserve_both"})).await;
     assert_eq!(status, 200, "{changed}");
-    let new_entry = entry_named(&snapshot(&server.http, &token, &root).await, "note").clone();
+    let new_entry = entry_named(&snapshot(&server.http, &token, &vault).await, "note").clone();
     prepare(&lab, BACKUP).await;
     let transport = Arc::new(Forward {
         base: Mutex::new(server.http.uri("")),
@@ -255,7 +255,7 @@ async fn download_tcp_cut_resumes_only_missing_ranges_and_rejects_corruption_or_
         .await
         .unwrap();
     let content =
-        vaultsyncd_http_client::content::ContentEndpoint::new(client, root.clone()).unwrap();
+        vaultsyncd_http_client::content::ContentEndpoint::new(client, vault.clone()).unwrap();
     let pin = VersionPin::new(
         identity(0x63),
         old_entry["entry_id"].as_str().unwrap(),

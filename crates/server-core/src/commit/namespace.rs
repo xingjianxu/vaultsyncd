@@ -1,7 +1,7 @@
-//! 目录创建与同 Root 移动：与内容 put 共用同一套持久意图、阶段与恢复顺序（design §9.5、§11.2—11.3、
+//! 目录创建与同 Vault 移动：与内容 put 共用同一套持久意图、阶段与恢复顺序（design §9.5、§11.2—11.3、
 //! T09/T10）。
 //!
-//! 一次命名空间变化只有两种：**新建目录**（在已存在的父目录下挂一个新条目）与**同 Root 移动**
+//! 一次命名空间变化只有两种：**新建目录**（在已存在的父目录下挂一个新条目）与**同 Vault 移动**
 //! （把一个条目的父关系与名称改掉）。两者都遵守 put 的顺序与不变量：
 //!
 //! 1. **先持久意图再动磁盘**：`prepared` 意图里记着现场前提（`expected_before`：条目当时挂在哪里、是哪
@@ -11,7 +11,7 @@
 //! 3. **阶段推进与元数据事务同一顺序**：`prepared → published`（磁盘已改）→ 元数据事务把意图收尾到
 //!    `finalized`；没有事务就没有 ACK（I01）；
 //! 4. **失败不是 committed**：任何失败都返回 [`NamespaceFailure`]（`is_committed()` 恒为 `false`），已
-//!    持久化意图保留为恢复证据，由 [`recover_namespace_root`] 按证据重做或收尾（§11.3）。
+//!    持久化意图保留为恢复证据，由 [`recover_namespace_vault`] 按证据重做或收尾（§11.3）。
 //!
 //! 本模块固定的判定：
 //!
@@ -28,14 +28,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use vaultsyncd_domain::error::ErrorCode;
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId};
+use vaultsyncd_domain::ids::{EntryId, IntentId, VaultId};
 use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 
 use crate::commit::intent::{
     JsonValue, PutPhase, StateJsonError, finish_object, parse_flat_object, take_bool, take_entry,
     take_text, take_u64,
 };
-use crate::commit::put::{CommitGateError, RootCommitGate};
+use crate::commit::put::{CommitGateError, VaultCommitGate};
 use crate::ports::intent_log::{IntentLogError, NamespaceIntentLog};
 use crate::ports::namespace::{NamespaceError, NamespacePort, PathState};
 use crate::ports::namespace_store::{
@@ -50,7 +50,7 @@ use crate::recovery::NeedsRecoveryReason;
 pub enum NamespaceOpKind {
     /// 新建目录。
     Create,
-    /// 同 Root 移动（文件或目录）。
+    /// 同 Vault 移动（文件或目录）。
     Move,
 }
 
@@ -84,7 +84,7 @@ impl fmt::Display for NamespaceOpKind {
 /// 意图开始时的位置快照（`expected_before` 的 `present: true` 形态）。
 ///
 /// `identity` 让恢复能证明“目标上的条目就是被移动的那一个”（`rename` 保 inode），从而在不看内容的
-/// 前提下判断移动是否已经落地。`revision` 是事务内比较并写的基线，`path` 是端口用的 Root 内相对路径。
+/// 前提下判断移动是否已经落地。`revision` 是事务内比较并写的基线，`path` 是端口用的 Vault 内相对路径。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceSnapshot {
     /// 条目身份。
@@ -93,7 +93,7 @@ pub struct NamespaceSnapshot {
     pub revision: u64,
     /// 父目录条目。
     pub parent: EntryId,
-    /// 条目在 Root 内的相对路径（最后一段即名称）。
+    /// 条目在 Vault 内的相对路径（最后一段即名称）。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -209,7 +209,7 @@ pub struct NamespaceAfter {
     pub entry: EntryId,
     /// 目标父目录。
     pub parent: EntryId,
-    /// 目标在 Root 内的相对路径（最后一段即名称）。
+    /// 目标在 Vault 内的相对路径（最后一段即名称）。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -274,8 +274,8 @@ impl NamespaceAfter {
 pub struct NewNamespaceIntent {
     /// 意图身份（由调用方生成，重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 操作种类。
     pub op: NamespaceOpKind,
     /// 现场前提。
@@ -290,7 +290,7 @@ impl NewNamespaceIntent {
     pub fn prepared(&self) -> NamespaceIntent {
         NamespaceIntent {
             intent_id: self.intent_id,
-            root: self.root,
+            vault: self.vault,
             op: self.op,
             before: self.before.clone(),
             after: self.after.clone(),
@@ -304,8 +304,8 @@ impl NewNamespaceIntent {
 pub struct NamespaceIntent {
     /// 意图身份。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 操作种类。
     pub op: NamespaceOpKind,
     /// 现场前提（已解码）。
@@ -346,14 +346,14 @@ impl NamespaceIntent {
     }
 }
 
-/// 移动的一个端点：父目录 + 名称 + Root 内相对路径。
+/// 移动的一个端点：父目录 + 名称 + Vault 内相对路径。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceEndpoint {
     /// 父目录条目。
     pub parent: EntryId,
     /// 名称。
     pub name: String,
-    /// Root 内相对路径（最后一段必须等于 `name`）。
+    /// Vault 内相对路径（最后一段必须等于 `name`）。
     pub path: String,
 }
 
@@ -374,8 +374,8 @@ impl NamespaceEndpoint {
 pub struct CreateDirectoryRequest {
     /// 意图身份（重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 新条目的身份（由调用方分配；已存在即拒绝，不复用别人的身份）。
     pub entry: EntryId,
     /// 客户端事实基础所属的服务器 epoch。
@@ -384,17 +384,17 @@ pub struct CreateDirectoryRequest {
     pub parent: EntryId,
     /// 目标名称。
     pub name: String,
-    /// 目标在 Root 内的相对路径（最后一段必须等于 `name`）。
+    /// 目标在 Vault 内的相对路径（最后一段必须等于 `name`）。
     pub target_path: String,
 }
 
-/// 同 Root 移动的请求：条目的父关系与名称改变，身份与内容引用不变。
+/// 同 Vault 移动的请求：条目的父关系与名称改变，身份与内容引用不变。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MoveRequest {
     /// 意图身份（重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 被移动的条目。
     pub entry: EntryId,
     /// 客户端事实基础所属的服务器 epoch。
@@ -412,17 +412,17 @@ pub struct MoveRequest {
 pub enum NamespaceRequest {
     /// 新建目录。
     CreateDirectory(CreateDirectoryRequest),
-    /// 同 Root 移动。
+    /// 同 Vault 移动。
     Move(MoveRequest),
 }
 
 impl NamespaceRequest {
-    /// 所属 Root。
+    /// 所属 Vault。
     #[must_use]
-    pub fn root(&self) -> RootId {
+    pub fn vault(&self) -> VaultId {
         match self {
-            NamespaceRequest::CreateDirectory(request) => request.root,
-            NamespaceRequest::Move(request) => request.root,
+            NamespaceRequest::CreateDirectory(request) => request.vault,
+            NamespaceRequest::Move(request) => request.vault,
         }
     }
 
@@ -470,13 +470,13 @@ pub enum NamespaceFailureReason {
         /// 原因文本。
         detail: String,
     },
-    /// 同一 Root 已有提交在进行。
+    /// 同一 Vault 已有提交在进行。
     Gate(CommitGateError),
-    /// Root epoch 与请求预期不符（`EPOCH_CHANGED`）。
+    /// Vault epoch 与请求预期不符（`EPOCH_CHANGED`）。
     EpochChanged {
         /// 请求携带的 epoch。
         expected: ServerEpoch,
-        /// Root 当前的 epoch。
+        /// Vault 当前的 epoch。
         actual: ServerEpoch,
     },
     /// 条目 revision/父目录/名称已不是请求基线（`BASE_MISMATCH`，I04）。
@@ -584,7 +584,7 @@ impl fmt::Display for NamespaceFailureReason {
             NamespaceFailureReason::Gate(error) => write!(f, "{error}"),
             NamespaceFailureReason::EpochChanged { expected, actual } => write!(
                 f,
-                "Root epoch 已是 {actual}，请求预期是 {expected}：服务器事实已重建，旧提交作废"
+                "Vault epoch 已是 {actual}，请求预期是 {expected}：服务器事实已重建，旧提交作废"
             ),
             NamespaceFailureReason::BaseMismatch { detail } => {
                 write!(f, "基线已不是请求的 revision：{detail}")
@@ -686,18 +686,18 @@ impl fmt::Display for NamespaceFailure {
 
 impl std::error::Error for NamespaceFailure {}
 
-/// 提交一次目录创建或同 Root 移动。
+/// 提交一次目录创建或同 Vault 移动。
 ///
-/// 顺序：请求形状（名称/路径/目录环）→ Root 串行化 → epoch → 条目与父目录基线 → 目标现场 →
+/// 顺序：请求形状（名称/路径/目录环）→ Vault 串行化 → epoch → 条目与父目录基线 → 目标现场 →
 /// 意图（`prepared`）→ 命名空间动作与复核 → `published` → 元数据事务 → ACK。无论成功还是失败，退出前
-/// 都会释放 Root 票据。
+/// 都会释放 Vault 票据。
 ///
 /// # Errors
 ///
-/// 见 [`NamespaceFailure`]：请求不成立、Root 忙、epoch 变化、基线过期、目标占用/祖先缺失/源不一致、
+/// 见 [`NamespaceFailure`]：请求不成立、Vault 忙、epoch 变化、基线过期、目标占用/祖先缺失/源不一致、
 /// 意图/动作/存储失败、存储契约不一致。失败都不是 committed，已持久化的意图行保留为恢复证据。
 pub async fn commit_namespace<S, L, N>(
-    gate: &mut RootCommitGate,
+    gate: &mut VaultCommitGate,
     store: &mut S,
     log: &mut L,
     ns: &mut N,
@@ -711,7 +711,7 @@ where
 {
     validate_request(request)?;
     let ticket = gate
-        .acquire(request.root())
+        .acquire(request.vault())
         .map_err(|error| failure(NamespaceFailureReason::Gate(error)))?;
     let outcome = commit_under_ticket(store, log, ns, at, request).await;
     gate.release(ticket);
@@ -732,7 +732,7 @@ where
 {
     // 1. epoch：恢复过的服务器不是同一套事实。
     let facts = store
-        .root_facts(request.root())
+        .vault_facts(request.vault())
         .await
         .map_err(store_failure)?;
     if facts.epoch != request.expected_epoch() {
@@ -762,24 +762,24 @@ where
     N: NamespacePort + ?Sized,
 {
     // 条目身份必须是新的：复用已有身份就是覆盖别人的条目。
-    match store.entry_baseline(request.root, request.entry).await {
+    match store.entry_baseline(request.vault, request.entry).await {
         Err(NamespaceStoreError::EntryMissing { .. }) => {}
         Ok(_) => {
             return Err(failure(NamespaceFailureReason::EntryAlreadyExists {
                 entry: request.entry,
             }));
         }
-        Err(NamespaceStoreError::UnknownRoot { root }) => {
-            return Err(base_mismatch(format!("Root {root} 已不存在")));
+        Err(NamespaceStoreError::UnknownVault { vault }) => {
+            return Err(base_mismatch(format!("Vault {vault} 已不存在")));
         }
         Err(error) => return Err(store_failure(error)),
     }
-    check_directory_parent(store, request.root, request.parent).await?;
+    check_directory_parent(store, request.vault, request.parent).await?;
     inspect_vacant(ns, &request.target_path)?;
 
     let intent = NewNamespaceIntent {
         intent_id: request.intent_id,
-        root: request.root,
+        vault: request.vault,
         op: NamespaceOpKind::Create,
         before: NamespaceBefore::Absent,
         after: NamespaceAfter {
@@ -809,18 +809,18 @@ where
     N: NamespacePort + ?Sized,
 {
     // 条目基线：身份、revision、父目录与名称都必须是请求的那一份。
-    let baseline = match store.entry_baseline(request.root, request.entry).await {
+    let baseline = match store.entry_baseline(request.vault, request.entry).await {
         Ok(baseline) => baseline,
         Err(NamespaceStoreError::EntryMissing { entry }) => {
             return Err(base_mismatch(format!("条目 {entry} 已不存在")));
         }
-        Err(NamespaceStoreError::UnknownRoot { root }) => {
-            return Err(base_mismatch(format!("Root {root} 已不存在")));
+        Err(NamespaceStoreError::UnknownVault { vault }) => {
+            return Err(base_mismatch(format!("Vault {vault} 已不存在")));
         }
         Err(error) => return Err(store_failure(error)),
     };
     check_move_baseline(&baseline, request)?;
-    check_directory_parent(store, request.root, request.to.parent).await?;
+    check_directory_parent(store, request.vault, request.to.parent).await?;
 
     // 源位置必须还是那个条目：现场变了就重新采集再计划（design §12.2）。
     let source = inspect(ns, &request.from.path)?;
@@ -843,7 +843,7 @@ where
 
     let intent = NewNamespaceIntent {
         intent_id: request.intent_id,
-        root: request.root,
+        vault: request.vault,
         op: NamespaceOpKind::Move,
         before: NamespaceBefore::Present(NamespaceSnapshot {
             entry: baseline.entry,
@@ -1068,7 +1068,7 @@ fn namespace_write(
     };
     Ok(NamespaceWrite {
         intent_id: intent.intent_id,
-        root: intent.root,
+        vault: intent.vault,
         entry: intent.after.entry,
         kind: intent.after.kind,
         expected_revision,
@@ -1137,10 +1137,10 @@ fn check_move_baseline(
     baseline: &EntryBaseline,
     request: &MoveRequest,
 ) -> Result<(), Box<NamespaceFailure>> {
-    if baseline.entry != request.entry || baseline.root != request.root {
+    if baseline.entry != request.entry || baseline.vault != request.vault {
         return Err(base_mismatch(format!(
-            "库里的条目 {}（Root {}）不是请求条目 {}",
-            baseline.entry, baseline.root, request.entry
+            "库里的条目 {}（Vault {}）不是请求条目 {}",
+            baseline.entry, baseline.vault, request.entry
         )));
     }
     if baseline.revision != request.expected_revision {
@@ -1163,13 +1163,13 @@ fn check_move_baseline(
 /// 目标父目录必须已存在且是目录：否则挂上去的条目会落在文件下或已删除的子树里。
 async fn check_directory_parent<S>(
     store: &mut S,
-    root: RootId,
+    vault: VaultId,
     parent: EntryId,
 ) -> Result<(), Box<NamespaceFailure>>
 where
     S: NamespaceCommitStore + ?Sized,
 {
-    match store.entry_baseline(root, parent).await {
+    match store.entry_baseline(vault, parent).await {
         Ok(baseline) if baseline.kind == EntryKind::Directory => Ok(()),
         Ok(baseline) => Err(failure(NamespaceFailureReason::SubtreeChanged {
             detail: format!(
@@ -1182,8 +1182,8 @@ where
                 path: format!("条目 {entry}"),
             }))
         }
-        Err(NamespaceStoreError::UnknownRoot { root }) => {
-            Err(base_mismatch(format!("Root {root} 已不存在")))
+        Err(NamespaceStoreError::UnknownVault { vault }) => {
+            Err(base_mismatch(format!("Vault {vault} 已不存在")))
         }
         Err(error) => Err(store_failure(error)),
     }
@@ -1256,13 +1256,13 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Root 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量。
+/// Vault 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量。
 pub(crate) fn validate_path(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("路径不能为空".to_owned());
     }
     if path.starts_with('/') || path.contains('\\') || path.contains('\0') {
-        return Err(format!("路径 {path:?} 必须是 Root 内的相对路径"));
+        return Err(format!("路径 {path:?} 必须是 Vault 内的相对路径"));
     }
     for part in path.split('/') {
         if part.is_empty() || part == "." || part == ".." {
@@ -1393,7 +1393,7 @@ pub enum NamespaceRecoveryDecision {
         /// 具体情形。
         reason: NamespaceReconcileReason,
     },
-    /// 没有可证明的现场：落盘 `needs_recovery` 并暂停该 Root 的破坏性写入。
+    /// 没有可证明的现场：落盘 `needs_recovery` 并暂停该 Vault 的破坏性写入。
     NeedsRecovery {
         /// 具体原因。
         reason: NeedsRecoveryReason,
@@ -1413,7 +1413,7 @@ impl NamespaceRecoveryDecision {
         }
     }
 
-    /// 是否必须暂停该 Root 的破坏性写入（只有 `NeedsRecovery`）。
+    /// 是否必须暂停该 Vault 的破坏性写入（只有 `NeedsRecovery`）。
     #[must_use]
     pub fn pauses_writes(self) -> bool {
         matches!(self, NamespaceRecoveryDecision::NeedsRecovery { .. })
@@ -1574,12 +1574,12 @@ pub enum NamespaceRecoveryOutcome {
         /// 具体情形。
         reason: NamespaceReconcileReason,
     },
-    /// 没有可证明的现场：意图已落 `needs_recovery`，该 Root 暂停破坏性写入。
+    /// 没有可证明的现场：意图已落 `needs_recovery`，该 Vault 暂停破坏性写入。
     NeedsRecovery {
         /// 具体原因。
         reason: NeedsRecoveryReason,
     },
-    /// 恢复动作本身失败：没有完成也没有假装完成，Root 保持关闭，下次启动重试。
+    /// 恢复动作本身失败：没有完成也没有假装完成，Vault 保持关闭，下次启动重试。
     Unresolved {
         /// 稳定错误码。
         code: &'static str,
@@ -1610,7 +1610,7 @@ impl NamespaceRecoveryOutcome {
         )
     }
 
-    /// 是否让该 Root 保持关闭。
+    /// 是否让该 Vault 保持关闭。
     #[must_use]
     pub fn pauses_writes(&self) -> bool {
         matches!(
@@ -1636,7 +1636,7 @@ impl fmt::Display for NamespaceRecoveryOutcome {
                 write!(f, "保留现场等协调（{reason}）")
             }
             NamespaceRecoveryOutcome::NeedsRecovery { reason } => {
-                write!(f, "暂停该 Root 的破坏性写入（{reason}）")
+                write!(f, "暂停该 Vault 的破坏性写入（{reason}）")
             }
             NamespaceRecoveryOutcome::Unresolved { code, detail } => {
                 write!(f, "恢复未完成（{code}）：{detail}")
@@ -1656,17 +1656,17 @@ pub struct RecoveredNamespaceIntent {
     pub outcome: NamespaceRecoveryOutcome,
 }
 
-/// 一个 Root 的命名空间恢复报告。
+/// 一个 Vault 的命名空间恢复报告。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceRecoveryReport {
-    /// 被恢复的 Root。
-    pub root: RootId,
+    /// 被恢复的 Vault。
+    pub vault: VaultId,
     /// 每条未完成意图的处理结果（保持意图写入顺序）。
     pub intents: Vec<RecoveredNamespaceIntent>,
 }
 
 impl NamespaceRecoveryReport {
-    /// 是否有任何一条意图要求暂停该 Root 的破坏性写入。
+    /// 是否有任何一条意图要求暂停该 Vault 的破坏性写入。
     #[must_use]
     pub fn pauses_writes(&self) -> bool {
         self.intents
@@ -1719,9 +1719,9 @@ impl fmt::Display for NamespaceRecoveryError {
 
 impl std::error::Error for NamespaceRecoveryError {}
 
-/// 按未完成命名空间意图恢复一个 Root。
+/// 按未完成命名空间意图恢复一个 Vault。
 ///
-/// 与 [`crate::recovery::startup::recover_root`] 同一套顺序与不变量：只重放能证明的动作（现场满足前提
+/// 与 [`crate::recovery::startup::recover_vault`] 同一套顺序与不变量：只重放能证明的动作（现场满足前提
 /// 才重做，现场已是目标只补事务），现场无法解释就保留双方，读不到就落盘 `needs_recovery` 停写，动作
 /// 本身失败就保持关闭等下次启动。装配时必须在本函数与 put 的恢复**都**完成后再开放写入口
 /// （[`crate::recovery::startup::WriteAdmission`]）。
@@ -1730,12 +1730,12 @@ impl std::error::Error for NamespaceRecoveryError {}
 ///
 /// 见 [`NamespaceRecoveryError`]：读不出未完成意图。单条意图的失败作为
 /// [`NamespaceRecoveryOutcome::Unresolved`] 留在报告里。
-pub async fn recover_namespace_root<L, N, S>(
+pub async fn recover_namespace_vault<L, N, S>(
     log: &mut L,
     ns: &mut N,
     store: &mut S,
     at: UtcTimestamp,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<NamespaceRecoveryReport, NamespaceRecoveryError>
 where
     L: NamespaceIntentLog + ?Sized,
@@ -1743,7 +1743,7 @@ where
     S: NamespaceCommitStore + ?Sized,
 {
     let unfinished = log
-        .unfinished_namespaces(root)
+        .unfinished_namespaces(vault)
         .await
         .map_err(NamespaceRecoveryError::Intent)?;
     let mut intents = Vec::with_capacity(unfinished.len());
@@ -1766,7 +1766,7 @@ where
             outcome,
         });
     }
-    Ok(NamespaceRecoveryReport { root, intents })
+    Ok(NamespaceRecoveryReport { vault, intents })
 }
 
 async fn apply_decision<L, N, S>(
@@ -1888,18 +1888,18 @@ mod tests {
     use crate::ports::namespace_store::NamespaceLocation;
     use crate::test_support::{
         FakeIntentLog, FakeNamespace, FakeNamespaceStore, Trace, entry_id, epoch, intent_id,
-        revision, root_id, user_time, version_id,
+        revision, user_time, vault_id, version_id,
     };
 
-    fn root() -> RootId {
-        root_id(0x21)
+    fn vault() -> VaultId {
+        vault_id(0x21)
     }
 
     /// 移动场景的源条目：目录 `docs`，父目录 0x61，revision 3。
     fn docs() -> EntryBaseline {
         EntryBaseline {
             entry: entry_id(0x62),
-            root: root(),
+            vault: vault(),
             parent: entry_id(0x61),
             name: "docs".to_owned(),
             revision: revision(3),
@@ -1911,7 +1911,7 @@ mod tests {
     fn archive() -> EntryBaseline {
         EntryBaseline {
             entry: entry_id(0x63),
-            root: root(),
+            vault: vault(),
             parent: entry_id(0x60),
             name: "archive".to_owned(),
             revision: revision(1),
@@ -1922,7 +1922,7 @@ mod tests {
     fn move_request() -> MoveRequest {
         MoveRequest {
             intent_id: intent_id(0x41),
-            root: root(),
+            vault: vault(),
             entry: entry_id(0x62),
             expected_epoch: epoch(3),
             expected_revision: revision(3),
@@ -1942,7 +1942,7 @@ mod tests {
     fn create_request() -> CreateDirectoryRequest {
         CreateDirectoryRequest {
             intent_id: intent_id(0x42),
-            root: root(),
+            vault: vault(),
             entry: entry_id(0x66),
             expected_epoch: epoch(3),
             parent: entry_id(0x61),
@@ -1952,7 +1952,7 @@ mod tests {
     }
 
     type MoveFixture = (
-        RootCommitGate,
+        VaultCommitGate,
         FakeNamespaceStore,
         FakeIntentLog,
         FakeNamespace,
@@ -1972,14 +1972,14 @@ mod tests {
             .with_trace(trace)
             .with_directory("docs")
             .with_directory("archive");
-        (RootCommitGate::new(), store, log, ns)
+        (VaultCommitGate::new(), store, log, ns)
     }
 
     /// 共享一条轨迹的“新建目录”场景：库里只有父目录 0x61。
     fn create_fixture() -> MoveFixture {
         let store = FakeNamespaceStore::new().with_baseline(EntryBaseline {
             entry: entry_id(0x61),
-            root: root(),
+            vault: vault(),
             parent: entry_id(0x60),
             name: "notes".to_owned(),
             revision: revision(2),
@@ -1993,11 +1993,11 @@ mod tests {
         let ns = FakeNamespace::new()
             .with_trace(trace)
             .with_directory("notes");
-        (RootCommitGate::new(), store, log, ns)
+        (VaultCommitGate::new(), store, log, ns)
     }
 
     async fn run(
-        gate: &mut RootCommitGate,
+        gate: &mut VaultCommitGate,
         store: &mut FakeNamespaceStore,
         log: &mut FakeIntentLog,
         ns: &mut FakeNamespace,
@@ -2017,9 +2017,9 @@ mod tests {
         assert_eq!(
             store.trace.entries(),
             vec![
-                format!("store root_facts {}", root()),
-                format!("store entry_baseline {} {}", root(), entry_id(0x62)),
-                format!("store entry_baseline {} {}", root(), entry_id(0x63)),
+                format!("store vault_facts {}", vault()),
+                format!("store entry_baseline {} {}", vault(), entry_id(0x62)),
+                format!("store entry_baseline {} {}", vault(), entry_id(0x63)),
                 "namespace inspect docs".to_owned(),
                 "namespace inspect archive/docs".to_owned(),
                 "intent begin namespace prepared".to_owned(),
@@ -2066,14 +2066,14 @@ mod tests {
                 .any(|line| line.contains("target publish") || line.contains("object")),
             "移动不得触碰内容对象：{trace:?}"
         );
-        assert!(!gate.is_held(root()), "退出前必须释放 Root 票据");
+        assert!(!gate.is_held(vault()), "退出前必须释放 Vault 票据");
     }
 
     #[tokio::test]
     async fn moving_a_file_keeps_the_entry_and_its_content_reference() {
         let note = EntryBaseline {
             entry: entry_id(0x52),
-            root: root(),
+            vault: vault(),
             parent: entry_id(0x61),
             name: "note.txt".to_owned(),
             revision: revision(7),
@@ -2084,14 +2084,14 @@ mod tests {
             .with_baseline(archive());
         let content_before = store.content_versions.get(&entry_id(0x52)).copied();
         assert_eq!(content_before, Some(version_id(0x91)));
-        let mut gate = RootCommitGate::new();
+        let mut gate = VaultCommitGate::new();
         let mut log = FakeIntentLog::default();
         let mut ns = FakeNamespace::new()
             .with_file("note.txt")
             .with_directory("archive");
         let request = NamespaceRequest::Move(MoveRequest {
             intent_id: intent_id(0x43),
-            root: root(),
+            vault: vault(),
             entry: entry_id(0x52),
             expected_epoch: epoch(3),
             expected_revision: revision(7),
@@ -2130,9 +2130,9 @@ mod tests {
         assert_eq!(
             store.trace.entries(),
             vec![
-                format!("store root_facts {}", root()),
-                format!("store entry_baseline {} {}", root(), entry_id(0x66)),
-                format!("store entry_baseline {} {}", root(), entry_id(0x61)),
+                format!("store vault_facts {}", vault()),
+                format!("store entry_baseline {} {}", vault(), entry_id(0x66)),
+                format!("store entry_baseline {} {}", vault(), entry_id(0x61)),
                 "namespace inspect photos".to_owned(),
                 "intent begin namespace prepared".to_owned(),
                 "namespace mkdir photos".to_owned(),
@@ -2162,7 +2162,7 @@ mod tests {
             entry_id(0x66),
             EntryBaseline {
                 entry: entry_id(0x66),
-                root: root(),
+                vault: vault(),
                 parent: entry_id(0x61),
                 name: "old".to_owned(),
                 revision: revision(5),
@@ -2219,7 +2219,7 @@ mod tests {
             entry_id(0x61),
             EntryBaseline {
                 entry: entry_id(0x61),
-                root: root(),
+                vault: vault(),
                 parent: entry_id(0x60),
                 name: "notes".to_owned(),
                 revision: revision(2),
@@ -2458,7 +2458,7 @@ mod tests {
             phase: PutPhase::Published,
             entry: entry_id(0x62),
             revision: revision(4),
-            seq: crate::test_support::root_seq(11),
+            seq: crate::test_support::vault_seq(11),
             tx: crate::test_support::tx_id(0x71),
         });
         let failure = run(&mut gate, &mut store, &mut log, &mut ns, &request)
@@ -2470,14 +2470,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_busy_root_serializes_namespace_commits() {
+    async fn a_busy_vault_serializes_namespace_commits() {
         let (mut gate, mut store, mut log, mut ns) = move_fixture();
-        let ticket = gate.acquire(root()).expect("先占用");
+        let ticket = gate.acquire(vault()).expect("先占用");
         let request = NamespaceRequest::Move(move_request());
         let failure = run(&mut gate, &mut store, &mut log, &mut ns, &request)
             .await
-            .expect_err("同一 Root 已有提交");
-        assert_eq!(failure.code(), "root_commit_busy");
+            .expect_err("同一 Vault 已有提交");
+        assert_eq!(failure.code(), "vault_commit_busy");
         assert!(log.namespace_intents.is_empty());
         gate.release(ticket);
     }
@@ -2485,7 +2485,7 @@ mod tests {
     fn move_intent(phase: PutPhase, identity: FileKey) -> NamespaceIntent {
         let mut intent = NewNamespaceIntent {
             intent_id: intent_id(0x41),
-            root: root(),
+            vault: vault(),
             op: NamespaceOpKind::Move,
             before: NamespaceBefore::Present(NamespaceSnapshot {
                 entry: entry_id(0x62),
@@ -2510,7 +2510,7 @@ mod tests {
     fn created_intent(phase: PutPhase) -> NamespaceIntent {
         let mut intent = NewNamespaceIntent {
             intent_id: intent_id(0x42),
-            root: root(),
+            vault: vault(),
             op: NamespaceOpKind::Create,
             before: NamespaceBefore::Absent,
             after: NamespaceAfter {
@@ -2538,9 +2538,10 @@ mod tests {
         let identity = *ns.state_of("docs").identity().expect("源目录在");
         log.namespace_intents
             .push(move_intent(PutPhase::Prepared, identity));
-        let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
-            .await
-            .expect("恢复成功");
+        let report =
+            recover_namespace_vault(&mut log, &mut ns, &mut store, user_time(200), vault())
+                .await
+                .expect("恢复成功");
         assert_eq!(report.intents.len(), 1);
         assert_eq!(report.intents[0].decision, NamespaceRecoveryDecision::Redo);
         assert!(matches!(
@@ -2582,9 +2583,10 @@ mod tests {
                 },
             ),
         );
-        let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
-            .await
-            .expect("恢复成功");
+        let report =
+            recover_namespace_vault(&mut log, &mut ns, &mut store, user_time(200), vault())
+                .await
+                .expect("恢复成功");
         assert_eq!(
             report.intents[0].decision,
             NamespaceRecoveryDecision::Complete
@@ -2612,9 +2614,10 @@ mod tests {
             .push(move_intent(PutPhase::Prepared, identity));
         // 目标位置被别的条目占了：不覆盖、不提交。
         ns = ns.with_directory("archive/docs");
-        let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
-            .await
-            .expect("恢复成功");
+        let report =
+            recover_namespace_vault(&mut log, &mut ns, &mut store, user_time(200), vault())
+                .await
+                .expect("恢复成功");
         assert_eq!(
             report.intents[0].outcome,
             NamespaceRecoveryOutcome::Preserved {
@@ -2643,9 +2646,10 @@ mod tests {
         ns.inspect_error = Some(NamespaceError::Unreadable {
             detail: "EACCES".to_owned(),
         });
-        let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
-            .await
-            .expect("恢复成功");
+        let report =
+            recover_namespace_vault(&mut log, &mut ns, &mut store, user_time(200), vault())
+                .await
+                .expect("恢复成功");
         assert_eq!(
             report.intents[0].outcome,
             NamespaceRecoveryOutcome::NeedsRecovery {
@@ -2666,9 +2670,10 @@ mod tests {
         log.namespace_intents
             .push(created_intent(PutPhase::Prepared));
         let mut ns = FakeNamespace::new();
-        let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
-            .await
-            .expect("恢复成功");
+        let report =
+            recover_namespace_vault(&mut log, &mut ns, &mut store, user_time(200), vault())
+                .await
+                .expect("恢复成功");
         assert_eq!(report.intents[0].decision, NamespaceRecoveryDecision::Redo);
         assert!(ns.state_of("photos").is_directory());
         assert_eq!(store.writes[0].expected_revision, None);
@@ -2679,9 +2684,10 @@ mod tests {
         log.namespace_intents
             .push(created_intent(PutPhase::Published));
         let mut ns = FakeNamespace::new().with_directory("photos");
-        let report = recover_namespace_root(&mut log, &mut ns, &mut store, user_time(200), root())
-            .await
-            .expect("恢复成功");
+        let report =
+            recover_namespace_vault(&mut log, &mut ns, &mut store, user_time(200), vault())
+                .await
+                .expect("恢复成功");
         assert!(matches!(
             report.intents[0].outcome,
             NamespaceRecoveryOutcome::Completed { entry, .. } if entry == entry_id(0x66)

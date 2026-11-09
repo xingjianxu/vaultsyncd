@@ -688,7 +688,7 @@ pub async fn seed_binding(database: &Database, marker: u8) -> BindingId {
             id,
             server: vaultsyncd_domain::ids::ServerId::from_bytes([0x01; 16]),
             device: vaultsyncd_domain::ids::DeviceId::from_bytes([0x02; 16]),
-            root: vaultsyncd_domain::ids::RootId::from_bytes([0x03; 16]),
+            vault: vaultsyncd_domain::ids::VaultId::from_bytes([0x03; 16]),
             local_path: format!(r"C:\vaultsyncd-test-{marker:02x}"),
             cache_path: format!(r"C:\vaultsyncd-test-{marker:02x}\.cache"),
             mode: SyncMode::OnDemand,

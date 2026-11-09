@@ -4,12 +4,12 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$script_dir/../platform/windows/common.sh"
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1
-root=$(repo_root);cd "$root"
-build_base="${CARGO_TARGET_DIR:-$root/target}"
+vault=$(repo_root);cd "$vault"
+build_base="${CARGO_TARGET_DIR:-$vault/target}"
 helper="$build_base/debug/examples/e2e-native-server"
 test -x "$helper" || { echo 'build e2e-native-server in the default devShell first' >&2;exit 1; }
 run_id="s084-$(date +%s)-$$"
-artifact_dir="$root/artifacts/S084/$run_id";mkdir -p "$artifact_dir"
+artifact_dir="$vault/artifacts/S084/$run_id";mkdir -p "$artifact_dir"
 server_pid='';proxy_pid='';tunnel_pid=''
 cleanup() {
     touch "$artifact_dir/stop"
@@ -27,7 +27,7 @@ python3 -c 'import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);(p/"scenario.jso
 server_pid=$!
 for _ in $(seq 1 600);do test -f "$artifact_dir/host-fixture.json" && break;kill -0 "$server_pid" || { cat "$artifact_dir/server.log";exit 1; };sleep .1;done
 # Moved target caches can contain a helper whose embedded lab base points at an old tree.
-python3 -c 'import json,pathlib,sys;root=pathlib.Path.cwd().resolve();work=pathlib.Path(json.load(open(sys.argv[1]))["work_dir"]).resolve();assert work.is_relative_to(root/"target"),"stale helper source path: rebuild e2e-native-server in this worktree before native execution"' "$artifact_dir/host-fixture.json"
+python3 -c 'import json,pathlib,sys;vault=pathlib.Path.cwd().resolve();work=pathlib.Path(json.load(open(sys.argv[1]))["work_dir"]).resolve();assert work.is_relative_to(vault/"target"),"stale helper source path: rebuild e2e-native-server in this worktree before native execution"' "$artifact_dir/host-fixture.json"
 host_port=$(python3 -c 'import json,sys,urllib.parse;print(urllib.parse.urlparse(json.load(open(sys.argv[1]))["url"]).port)' "$artifact_dir/host-fixture.json")
 python3 "$script_dir/s084-upload-fault-proxy.py" "$artifact_dir" "$host_port" > "$artifact_dir/proxy.log" 2>&1 &
 proxy_pid=$!
@@ -40,7 +40,7 @@ cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent
 cargo xwin test --locked --target "$TARGET_TRIPLE" -p vaultsyncd-windows-tests --test unuploaded_recovery --no-run --message-format=json > "$artifact_dir/build.json"
 python3 - "$artifact_dir" <<'PY'
 import hashlib,json,pathlib,shutil,sys
-p=pathlib.Path(sys.argv[1]);root=pathlib.Path.cwd();build=pathlib.Path(__import__('os').environ.get('CARGO_TARGET_DIR',root/'target'))
+p=pathlib.Path(sys.argv[1]);vault=pathlib.Path.cwd();build=pathlib.Path(__import__('os').environ.get('CARGO_TARGET_DIR',vault/'target'))
 shutil.copyfile(build/'x86_64-pc-windows-msvc/debug/vaultsyncd-agent.exe',p/'vaultsyncd-agent.exe')
 for line in (p/'build.json').read_text().splitlines():
     r=json.loads(line)

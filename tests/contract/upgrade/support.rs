@@ -11,10 +11,10 @@ impl Run {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::var_os("VAULTSYNCD_S091_RUN_ROOT")
+        let vault = std::env::var_os("VAULTSYNCD_S091_RUN_VAULT")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        let path = root.join(format!(
+        let path = vault.join(format!(
             "s091-{label}-{}-{stamp}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::SeqCst)
@@ -56,11 +56,11 @@ pub fn previous(side: &str) -> Migrator {
 }
 pub async fn fault_profile(
     base: &Migrator,
-    root: &Path,
+    vault: &Path,
     label: &str,
     extra: &[(i64, &str)],
 ) -> Migrator {
-    let dir = root.join(label);
+    let dir = vault.join(label);
     std::fs::create_dir(&dir).unwrap();
     for m in base.iter() {
         std::fs::write(
@@ -87,10 +87,10 @@ where
     db.close().await.unwrap();
     value
 }
-pub async fn snapshot(path: &Path, queries: &[&str]) -> Vec<String> {
+pub async fn snapshot<S: AsRef<str>>(path: &Path, queries: &[S]) -> Vec<String> {
     let mut out = Vec::new();
     for q in queries {
-        out.push(scalar::<String>(path, q).await);
+        out.push(scalar::<String>(path, q.as_ref()).await);
     }
     out
 }

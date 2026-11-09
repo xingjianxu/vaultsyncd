@@ -7,7 +7,7 @@
 //!   副本**，边写边算 SHA-256，再走 [`capture_object`] 的发布语义（核对长度/摘要 → 不覆盖发布 →
 //!   发布后复核）。核心拿实测摘要与长度与会话声明比较，不符即不登记、不返回引用。
 //! - [`DbObjects`]（端口 `ContentObjectStore`）：走 `versions::record_object`，一个事务登记一行
-//!   `objects`，同一 `(root, hash)` 的相同登记幂等。
+//!   `objects`，同一 `(vault, hash)` 的相同登记幂等。
 //! - [`DbVersionContent`]（端口 `VersionContentStore`）：按**版本身份**读一条版本行（
 //!   `versions::current_version` 优先，其余走 `versions::version_history`），只回答那个版本的
 //!   内容地址与长度，绝不回退成“当前 head 的内容”。
@@ -29,7 +29,7 @@ use axum::extract::{Path as UrlPath, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use tracing::{info, warn};
-use vaultsyncd_domain::ids::{EntryId, ObjectLeaseId, RootId, UploadId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, ObjectLeaseId, UploadId, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_platform_linux_server::files::hash::Sha256;
 use vaultsyncd_platform_linux_server::files::hash_file;
@@ -83,22 +83,22 @@ impl ContentContext {
 
     async fn objects(
         &self,
-        root: RootId,
+        vault: VaultId,
         digests: &[ContentDigest],
     ) -> Result<ObjectLayout, sqlx::Error> {
-        crate::object_layout::for_digests(self.auth.database(), &self.state_dir, root, digests)
+        crate::object_layout::for_digests(self.auth.database(), &self.state_dir, vault, digests)
             .await
     }
 }
 
-/// `POST /v1/roots/{root}/uploads/{upload}/finalize`：核对块齐、发布内容、返回可提交引用。
+/// `POST /v1/vaults/{vault}/uploads/{upload}/finalize`：核对块齐、发布内容、返回可提交引用。
 pub async fn finalize(
     State(context): State<Arc<ContentContext>>,
-    UrlPath((root, upload)): UrlPath<(String, String)>,
+    UrlPath((vault, upload)): UrlPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
     let _objects = context.auth.database().object_activity().await;
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -110,14 +110,14 @@ pub async fn finalize(
         context.auth.database(),
         caller.principal.user_id,
         caller.principal.session_id,
-        root_id,
+        vault_id,
         caller.now,
     );
     // 只按本次上传摘要解析布局；会话不存在时核心会返回 404，这里用空集合不猜路径。
     let upload_digest: Vec<ContentDigest> =
-        sqlx::query_scalar::<_, Vec<u8>>("SELECT hash FROM uploads WHERE id = ? AND root_id = ?")
+        sqlx::query_scalar::<_, Vec<u8>>("SELECT hash FROM uploads WHERE id = ? AND vault_id = ?")
             .bind(upload_id.as_bytes().as_slice())
-            .bind(root_id.as_bytes().as_slice())
+            .bind(vault_id.as_bytes().as_slice())
             .fetch_optional(context.auth.database().pool())
             .await
             .ok()
@@ -125,14 +125,14 @@ pub async fn finalize(
             .and_then(|hash| <[u8; 32]>::try_from(hash).ok())
             .map(|hash| vec![ContentDigest::from_bytes(hash)])
             .unwrap_or_default();
-    let layout = match context.objects(root_id, &upload_digest).await {
+    let layout = match context.objects(vault_id, &upload_digest).await {
         Ok(layout) => layout,
         Err(error) => {
-            warn!(root_id = %root_id, error = %error, "对象布局不可用");
+            warn!(vault_id = %vault_id, error = %error, "对象布局不可用");
             return internal_error(
                 &caller.request_id,
                 "对象布局不可用",
-                Some(root_id.to_string()),
+                Some(vault_id.to_string()),
             );
         }
     };
@@ -160,25 +160,25 @@ pub async fn finalize(
             info!(
                 request_id = %caller.request_id,
                 upload_id = %upload_id,
-                root_id = %root_id,
+                vault_id = %vault_id,
                 digest = %finalized.content.digest,
                 replayed = finalized.replayed,
                 "finalize 完成"
             );
             (StatusCode::OK, Json(to_wire(&finalized))).into_response()
         }
-        Err(failure) => content_failure_response(&caller.request_id, &failure, root_id),
+        Err(failure) => content_failure_response(&caller.request_id, &failure, vault_id),
     }
 }
 
-/// `GET /v1/roots/{root}/entries/{entry}/versions/{version}/content`：按版本读固定内容。
+/// `GET /v1/vaults/{vault}/entries/{entry}/versions/{version}/content`：按版本读固定内容。
 pub async fn download(
     State(context): State<Arc<ContentContext>>,
-    UrlPath((root, entry, version)): UrlPath<(String, String, String)>,
+    UrlPath((vault, entry, version)): UrlPath<(String, String, String)>,
     headers: HeaderMap,
 ) -> Response {
     let _objects = context.auth.database().object_activity().await;
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -222,28 +222,28 @@ pub async fn download(
     let handle = match content::open_download(
         &mut versions,
         &mut leases,
-        root_id,
+        vault_id,
         &request,
         lease_expires_at,
     )
     .await
     {
         Ok(handle) => handle,
-        Err(failure) => return content_failure_response(&caller.request_id, &failure, root_id),
+        Err(failure) => return content_failure_response(&caller.request_id, &failure, vault_id),
     };
 
     crate::test_faults::checkpoint("download_open");
-    let layout = match context.objects(root_id, &[handle.content.digest]).await {
+    let layout = match context.objects(vault_id, &[handle.content.digest]).await {
         Ok(layout) => layout,
         Err(error) => {
             if let Err(failure) = content::finish_download(&mut leases, handle).await {
                 warn!(error = %failure, "布局失败后解除下载租约失败");
             }
-            warn!(root_id = %root_id, error = %error, "对象布局不可用");
+            warn!(vault_id = %vault_id, error = %error, "对象布局不可用");
             return internal_error(
                 &caller.request_id,
                 "对象布局不可用",
-                Some(root_id.to_string()),
+                Some(vault_id.to_string()),
             );
         }
     };
@@ -279,7 +279,7 @@ pub async fn download(
                 &caller.request_id,
             )
         }
-        Err(failure) => content_failure_response(&caller.request_id, &failure, root_id),
+        Err(failure) => content_failure_response(&caller.request_id, &failure, vault_id),
     }
 }
 
@@ -326,7 +326,7 @@ fn bytes_response(
 fn to_wire(finalized: &content::FinalizedContent) -> FinalizedContent {
     FinalizedContent {
         upload_id: finalized.upload.to_hex(),
-        root_id: finalized.root.to_hex(),
+        vault_id: finalized.vault.to_hex(),
         hash: finalized.content.digest.to_hex(),
         size: finalized.content.size.to_string(),
         storage_path: finalized.content.storage_path.clone(),
@@ -340,17 +340,21 @@ fn to_wire(finalized: &content::FinalizedContent) -> FinalizedContent {
 }
 
 /// finalize/下载失败的 HTTP 映射（design §15.4）。
-fn content_failure_response(request_id: &str, failure: &ContentFailure, root: RootId) -> Response {
-    let root_id = Some(root.to_hex());
+fn content_failure_response(
+    request_id: &str,
+    failure: &ContentFailure,
+    vault: VaultId,
+) -> Response {
+    let vault_id = Some(vault.to_hex());
     match failure {
-        ContentFailure::Upload(failure) => failure_response(request_id, failure, Some(root)),
+        ContentFailure::Upload(failure) => failure_response(request_id, failure, Some(vault)),
         ContentFailure::IncompleteUpload { expected, present } => error_response(
             StatusCode::BAD_REQUEST,
             ErrorCode::InvalidRequest,
             request_id,
             &format!("上传尚未收齐块：应有 {expected} 块，实际 {present} 块"),
             false,
-            root_id,
+            vault_id,
         ),
         ContentFailure::ContentMismatch { .. } => error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -358,7 +362,7 @@ fn content_failure_response(request_id: &str, failure: &ContentFailure, root: Ro
             request_id,
             &failure.to_string(),
             false,
-            root_id,
+            vault_id,
         ),
         ContentFailure::Publish(failure) if failure.is_no_space() => error_response(
             StatusCode::INSUFFICIENT_STORAGE,
@@ -366,11 +370,11 @@ fn content_failure_response(request_id: &str, failure: &ContentFailure, root: Ro
             request_id,
             &failure.to_string(),
             true,
-            root_id,
+            vault_id,
         ),
         ContentFailure::Publish(failure) => {
             warn!(request_id = %request_id, code = failure.code(), error = %failure, "内容发布失败");
-            internal_error(request_id, "服务端内部错误", root_id)
+            internal_error(request_id, "服务端内部错误", vault_id)
         }
         ContentFailure::VersionGone | ContentFailure::EntryUnavailable => error_response(
             StatusCode::GONE,
@@ -378,7 +382,7 @@ fn content_failure_response(request_id: &str, failure: &ContentFailure, root: Ro
             request_id,
             "版本已过期、已清理，或不属于该条目",
             false,
-            root_id,
+            vault_id,
         ),
         ContentFailure::RangeNotSatisfiable { .. } | ContentFailure::InvalidRange { .. } => {
             error_response(
@@ -387,7 +391,7 @@ fn content_failure_response(request_id: &str, failure: &ContentFailure, root: Ro
                 request_id,
                 &failure.to_string(),
                 false,
-                root_id,
+                vault_id,
             )
         }
         ContentFailure::Read { detail, no_space } => {
@@ -398,19 +402,19 @@ fn content_failure_response(request_id: &str, failure: &ContentFailure, root: Ro
                     request_id,
                     "服务端对象区空间不足",
                     true,
-                    root_id,
+                    vault_id,
                 );
             }
             warn!(request_id = %request_id, error = %detail, "读取对象字节失败");
-            internal_error(request_id, "服务端内部错误", root_id)
+            internal_error(request_id, "服务端内部错误", vault_id)
         }
         ContentFailure::Lease(error) => {
             warn!(request_id = %request_id, code = error.code(), error = %error, "下载租约失败");
-            internal_error(request_id, "服务端内部错误", root_id)
+            internal_error(request_id, "服务端内部错误", vault_id)
         }
         ContentFailure::Storage { detail } => {
             warn!(request_id = %request_id, error = %detail, "版本内容存储失败");
-            internal_error(request_id, "服务端内部错误", root_id)
+            internal_error(request_id, "服务端内部错误", vault_id)
         }
     }
 }
@@ -579,12 +583,12 @@ struct DbObjects<'a> {
 impl ContentObjectStore for DbObjects<'_> {
     async fn record_published(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         published: &PublishedContent,
         verified_at: UtcTimestamp,
     ) -> Result<(), PublishFailure> {
         let new = NewObject {
-            root,
+            vault,
             hash: *published.digest.as_bytes(),
             size: published.size,
             storage_path: published.storage_path.clone(),
@@ -632,7 +636,7 @@ struct DbVersionContent<'a> {
 impl VersionContentStore for DbVersionContent<'_> {
     async fn version_content(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
         version: VersionId,
     ) -> Result<VersionContent, VersionContentError> {
@@ -644,31 +648,31 @@ impl VersionContentStore for DbVersionContent<'_> {
                 .map_err(|error| VersionContentError::Storage {
                     detail: error.to_string(),
                 })?;
-        let record = match store_versions::current_version(&mut conn, self.owner, root, entry).await
-        {
-            Ok(Some(record)) if record.id == version => Some(record),
-            Ok(_) => store_versions::version_history(
-                &mut conn,
-                self.owner,
-                root,
-                entry,
-                store_versions::MAX_VERSION_PAGE,
-            )
-            .await
-            .map_err(version_error)?
-            .into_iter()
-            .find(|record| record.id == version),
-            Err(error) => return Err(version_error(error)),
-        };
+        let record =
+            match store_versions::current_version(&mut conn, self.owner, vault, entry).await {
+                Ok(Some(record)) if record.id == version => Some(record),
+                Ok(_) => store_versions::version_history(
+                    &mut conn,
+                    self.owner,
+                    vault,
+                    entry,
+                    store_versions::MAX_VERSION_PAGE,
+                )
+                .await
+                .map_err(version_error)?
+                .into_iter()
+                .find(|record| record.id == version),
+                Err(error) => return Err(version_error(error)),
+            };
         let Some(record) = record else {
             return Err(VersionContentError::VersionGone);
         };
-        if record.root != root || record.entry != entry {
-            // 版本行不属于该条目/该 Root：不泄露它到底属于谁。
+        if record.vault != vault || record.entry != entry {
+            // 版本行不属于该条目/该 Vault：不泄露它到底属于谁。
             return Err(VersionContentError::VersionGone);
         }
         Ok(VersionContent {
-            root: record.root,
+            vault: record.vault,
             entry: record.entry,
             version: record.id,
             digest: ContentDigest::from_bytes(record.object_hash),
@@ -696,7 +700,7 @@ pub struct DbLeases<'a> {
 }
 
 impl<'a> DbLeases<'a> {
-    /// 以数据库、Root 所属账号与当前时间装配。
+    /// 以数据库、Vault 所属账号与当前时间装配。
     #[must_use]
     pub fn new(database: &'a Database, owner: UserId, now: UtcTimestamp) -> Self {
         Self {
@@ -733,7 +737,7 @@ impl ContentLeasePort for DbLeases<'_> {
     ) -> Result<ContentLease, ContentLeaseError> {
         let new = store_leases::NewObjectLease {
             id: ObjectLeaseId::from_bytes(random_bytes()),
-            root: request.root,
+            vault: request.vault,
             object_hash: *request.digest.as_bytes(),
             purpose: match request.purpose {
                 ContentLeasePurpose::Download => store_leases::ObjectLeasePurpose::Download,

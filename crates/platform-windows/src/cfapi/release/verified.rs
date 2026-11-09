@@ -7,7 +7,7 @@ use crate::{
         raw::{CfDehydratePlaceholder, CfSetInSyncState},
     },
     files::{
-        EntryMetadata, RootHandle,
+        EntryMetadata, VaultHandle,
         controlled::{Evidence, OwnedProtection, ProtectedFile},
         native::metadata,
     },
@@ -51,7 +51,7 @@ impl ReleaseHandle {
     /// Pin all ancestors, forbid unknown reparses/hard links, and compare the real opened object.
     /// `empty_intent` is true only when a matching durable release intent exists for an empty file.
     pub fn open(
-        root: &RootHandle,
+        vault: &VaultHandle,
         path: &str,
         id: Identity,
         generation: u64,
@@ -61,11 +61,12 @@ impl ReleaseHandle {
         if generation == 0 {
             return Err(failure("UNKNOWN_LOCAL_STATE: zero generation"));
         }
-        root.with_parent(path, |_, _| {
-            let before = root.inspect(path)?;
+        vault.with_parent(path, |_, _| {
+            let before = vault.inspect(path)?;
             check(&before, id, size)?;
-            let guard = ProtectedFile::open(&root.root_path().join(path.replace('/', "\\")), true)?
-                .into_owned_lease()?;
+            let guard =
+                ProtectedFile::open(&vault.vault_path().join(path.replace('/', "\\")), true)?
+                    .into_owned_lease()?;
             let after = metadata(guard.file())?;
             check(&after, id, size)?;
             if before.identity != after.identity {
@@ -213,7 +214,7 @@ fn check(m: &EntryMetadata, id: Identity, size: u64) -> io::Result<()> {
     }
     Ok(())
 }
-/// Open the safe root used by release ports; provided for application assembly convenience.
-pub fn open_root(path: &Path) -> io::Result<RootHandle> {
-    RootHandle::open(path)
+/// Open the safe vault used by release ports; provided for application assembly convenience.
+pub fn open_vault(path: &Path) -> io::Result<VaultHandle> {
+    VaultHandle::open(path)
 }

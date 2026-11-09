@@ -14,7 +14,7 @@ if [[ $mode == build ]]; then
     cargo xwin test --locked --target "$TARGET_TRIPLE" -p vaultsyncd-protocol -p vaultsyncd-local-ipc --test upgrade --no-run --message-format=json > "$artifacts/protocol-build.json" 2> "$artifacts/protocol-build.log"
     python3 - "$artifacts" <<'PY'
 import hashlib,json,pathlib,shutil,subprocess,sys,time
-root=pathlib.Path.cwd();out=pathlib.Path(sys.argv[1]);built={}
+vault=pathlib.Path.cwd();out=pathlib.Path(sys.argv[1]);built={}
 for name in ['store','protocol']:
     for line in (out/(name+'-build.json')).read_text().splitlines():
         try:v=json.loads(line)
@@ -26,10 +26,10 @@ cases=[]
 for package,name,case,marker in spec:
     shutil.copyfile(built[package],out/name);cases.append(dict(file=name,sha256=hashlib.sha256((out/name).read_bytes()).hexdigest(),filter=case,marker=marker))
 source_files=['tests/contract/upgrade/client.rs','tests/contract/upgrade/server.rs','tests/contract/upgrade/support.rs','tests/contract/fixtures/s091/profiles.json','crates/protocol/tests/upgrade.rs','crates/local-ipc/tests/upgrade.rs']
-source=dict(commit=subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),dirty=bool(subprocess.check_output(['git','status','--porcelain'])),files_sha256={p:hashlib.sha256((root/p).read_bytes()).hexdigest()for p in source_files})
+source=dict(commit=subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),dirty=bool(subprocess.check_output(['git','status','--porcelain'])),files_sha256={p:hashlib.sha256((vault/p).read_bytes()).hexdigest()for p in source_files})
 manifest=dict(run_id='s091-upgrade-'+str(time.time_ns()),source=source,formal_previous_release=False,cases=cases)
 (out/'native-input.json').write_text(json.dumps(manifest,indent=2)+'\n')
-shutil.copyfile(root/'tests/windows-integration/upgrade-rehearsal.ps1',out/'upgrade-rehearsal.ps1')
+shutil.copyfile(vault/'tests/windows-integration/upgrade-rehearsal.ps1',out/'upgrade-rehearsal.ps1')
 print(json.dumps({'run_id':manifest['run_id'],'cases':[(c['file'],c['sha256'])for c in cases]}))
 PY
 elif [[ $mode == run ]]; then

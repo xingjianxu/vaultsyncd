@@ -9,7 +9,7 @@
 //! 边界（design §14.2）：
 //!
 //! - 只用 CFAPI 认可的调用序列修改占位与状态，不手改 reparse point、不截断文件伪造脱水。
-//! - `FileIdentity` 只承载 schema_version、RootId、EntryId 与版本提示；不放密码、访问令牌、
+//! - `FileIdentity` 只承载 schema_version、VaultId、EntryId 与版本提示；不放密码、访问令牌、
 //!   服务器地址或绝对路径，也不作为业务真相（业务基线仍由核心数据库持有）。
 //! - 平台 I/O 只在本层出现：纯逻辑（identity 编解码、原型固定布局、生命周期记录格式）不依赖
 //!   Windows，可在宿主 `cargo test -p vaultsyncd-platform-windows` 直接验证。

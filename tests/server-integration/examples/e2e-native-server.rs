@@ -1,8 +1,8 @@
-//! S074 native bridge: real Linux server + isolated Root for the three-identity Windows e2e run.
+//! S074 native bridge: real Linux server + isolated Vault for the three-identity Windows e2e run.
 //!
 //! `tests/platform/windows/run-native-e2e.sh` starts this binary on the host, rewrites the URL to
 //! the SSH loopback tunnel address, and copies the fixture into the guest. The helper seeds the
-//! server Root with the scenario's `server_seed` files so the first client import really is
+//! server Vault with the scenario's `server_seed` files so the first client import really is
 //! "non-empty on both sides" (design §21 T01).
 #[path = "../tests/common/mod.rs"]
 mod common;
@@ -38,9 +38,9 @@ async fn main() {
         .expect("owner login");
     assert_eq!(status, reqwest::StatusCode::OK);
     let token = issued["access_token"].as_str().expect("access token");
-    let root = register_root(&running, token, &lab.work())
+    let vault = register_vault(&running, token, &lab.work())
         .await
-        .expect("register root");
+        .expect("register vault");
 
     let mut seeded = Vec::new();
     for seed in &seeds {
@@ -59,11 +59,11 @@ async fn main() {
     }
     // Wait until the real observer has adopted every seed as a fixed version.
     wait_for("seed adoption", || async {
-        let snapshot = create_snapshot(&running, token, &root).await?;
+        let snapshot = create_snapshot(&running, token, &vault).await?;
         let rows = snapshot_entries(
             &running,
             token,
-            &root,
+            &vault,
             snapshot["snapshot_id"].as_str().unwrap(),
         )
         .await?;
@@ -80,7 +80,7 @@ async fn main() {
 
     let fixture = json!({
         "url": running.uri(""),
-        "root": root,
+        "vault": vault,
         "issued": issued,
         "login": LOGIN,
         "password": PASSWORD,
@@ -97,7 +97,7 @@ async fn main() {
     file.write_all(serde_json::to_string(&fixture).unwrap().as_bytes())
         .expect("write fixture");
     file.sync_all().expect("sync fixture");
-    println!("READY {} root={root}", running.uri(""));
+    println!("READY {} vault={vault}", running.uri(""));
     std::io::stdout().flush().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(3600);
     while !stop.exists() && std::time::Instant::now() < deadline {

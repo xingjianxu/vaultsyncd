@@ -28,11 +28,11 @@ export type {
   ProtocolVersion,
 } from "./generated/types";
 
-export { listManagedRoots, registerRoot } from "./generated/client";
-export type { ManagedRootList, ManagedRoot, RootCollection, RootCollectionState, RootRegistered, RootRegisterRequest } from "./generated/types";
+export { listManagedVaults, registerVault } from "./generated/client";
+export type { ManagedVaultList, ManagedVault, VaultCollection, VaultCollectionState, VaultRegistered, VaultRegisterRequest } from "./generated/types";
 
-export { listRecoveryEntries, listConflictCopies, listRoots, createSnapshot, submitOperation, getOperation } from "./generated/client";
-export type { OperationRequest, OperationResult, RootSummary } from "./generated/types";
+export { listRecoveryEntries, listConflictCopies, listVaults, createSnapshot, submitOperation, getOperation } from "./generated/client";
+export type { OperationRequest, OperationResult, VaultSummary } from "./generated/types";
 export { listSnapshotEntries } from "./generated/client";
 export type { Snapshot, SnapshotEntry, SnapshotPage } from "./generated/types";
 

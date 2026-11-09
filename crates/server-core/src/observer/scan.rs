@@ -3,7 +3,7 @@
 //! 两件事都是**纯规则**，所有文件系统访问经 [`WorkTreePort`]：
 //!
 //! 1. [`scan_tree`]：广度优先、按名称字节序枚举普通文件，并把“这次到底扫全没有”说清楚。预算
-//!    （[`ScanLimits::max_entries`]）耗尽、目录读不了、Root 不可用都会让结论变成
+//!    （[`ScanLimits::max_entries`]）耗尽、目录读不了、Vault 不可用都会让结论变成
 //!    [`ScanCompletion::Inconclusive`]，并带回 [`ScanCursor`]：下次从游标继续，**不会**从头再来，也
 //!    **不会**把已枚举到的部分当成完整快照。读不到不等于不存在：枚举从不产生“删除”结论
 //!    （根 `AGENTS.md`、design §11.5）。
@@ -58,7 +58,7 @@ impl ScanLimits {
 /// 待继续的一个目录。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingDir {
-    /// 目录的相对路径（空串为 Root 自身）。
+    /// 目录的相对路径（空串为 Vault 自身）。
     pub path: String,
     /// 名称不大于它的项已处理（再次列目录时跳过，`retry` 里的除外）。
     pub after: Option<String>,
@@ -90,7 +90,7 @@ pub struct ScanCursor {
 }
 
 impl ScanCursor {
-    /// 从 Root 起点开始的新扫描。
+    /// 从 Vault 起点开始的新扫描。
     #[must_use]
     pub fn from_root() -> Self {
         ScanCursor {
@@ -167,13 +167,13 @@ impl ReadFailure {
     }
 }
 
-/// 从端口错误得出读失败分类；`RootUnavailable` 不在这里（它归挂载变化）。
+/// 从端口错误得出读失败分类；`VaultUnavailable` 不在这里（它归挂载变化）。
 fn read_failure(error: &WorkTreeError) -> ReadFailure {
     match error {
         WorkTreeError::PermissionDenied { .. } => ReadFailure::PermissionDenied,
         WorkTreeError::Unreadable { .. }
         | WorkTreeError::Gone { .. }
-        | WorkTreeError::RootUnavailable { .. }
+        | WorkTreeError::VaultUnavailable { .. }
         | WorkTreeError::InvalidPath { .. } => ReadFailure::IoError,
     }
 }
@@ -204,8 +204,8 @@ pub enum InconclusiveReason {
         /// 失败分类（权限 / 其他 IO）。
         failure: ReadFailure,
     },
-    /// Root 不可用（挂载漂移等）：扫描停止，不推导任何删除。
-    RootUnavailable {
+    /// Vault 不可用（挂载漂移等）：扫描停止，不推导任何删除。
+    VaultUnavailable {
         /// 原因文本。
         detail: String,
     },
@@ -231,7 +231,7 @@ impl fmt::Display for InconclusiveReason {
             } => {
                 write!(f, "项 {path:?} 不可读（{}）：{detail}", failure.as_str())
             }
-            InconclusiveReason::RootUnavailable { detail } => write!(f, "Root 不可用：{detail}"),
+            InconclusiveReason::VaultUnavailable { detail } => write!(f, "Vault 不可用：{detail}"),
         }
     }
 }
@@ -278,7 +278,7 @@ pub enum ScanHealth {
         /// 读不到的路径。
         paths: Vec<String>,
     },
-    /// Root 不可用（挂载漂移、卸载后露出空目录等）。
+    /// Vault 不可用（挂载漂移、卸载后露出空目录等）。
     MountChanged {
         /// 原因文本。
         detail: String,
@@ -340,14 +340,14 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    /// 是否因 Root 不可用而中止。
+    /// 是否因 Vault 不可用而中止。
     #[must_use]
-    pub fn root_unavailable(&self) -> bool {
+    pub fn vault_unavailable(&self) -> bool {
         match &self.completion {
             ScanCompletion::Complete => false,
             ScanCompletion::Inconclusive { reasons, .. } => reasons
                 .iter()
-                .any(|reason| matches!(reason, InconclusiveReason::RootUnavailable { .. })),
+                .any(|reason| matches!(reason, InconclusiveReason::VaultUnavailable { .. })),
         }
     }
 
@@ -358,7 +358,7 @@ impl ScanReport {
             return ScanHealth::Complete;
         };
         if let Some(detail) = reasons.iter().find_map(|reason| match reason {
-            InconclusiveReason::RootUnavailable { detail } => Some(detail.clone()),
+            InconclusiveReason::VaultUnavailable { detail } => Some(detail.clone()),
             _ => None,
         }) {
             return ScanHealth::MountChanged { detail };
@@ -380,7 +380,7 @@ impl ScanReport {
                 InconclusiveReason::DirectoryUnreadable { path, .. }
                 | InconclusiveReason::EntryUnreadable { path, .. } => io_errors.push(path.clone()),
                 InconclusiveReason::BudgetExhausted { .. }
-                | InconclusiveReason::RootUnavailable { .. } => {}
+                | InconclusiveReason::VaultUnavailable { .. } => {}
             }
         }
         if !denied.is_empty() {
@@ -430,13 +430,13 @@ pub fn scan_tree(
         }
         let listing = match port.list_dir(&pending.path) {
             Ok(listing) => listing,
-            Err(WorkTreeError::RootUnavailable { detail }) => {
+            Err(WorkTreeError::VaultUnavailable { detail }) => {
                 queue.push_front(pending);
-                reasons.push(InconclusiveReason::RootUnavailable { detail });
+                reasons.push(InconclusiveReason::VaultUnavailable { detail });
                 break;
             }
             // 目录在入队之后被并发删除/改名：确认不存在，没有什么可续扫的；若又出现，下一轮
-            // 从 Root 起点重扫会发现。
+            // 从 Vault 起点重扫会发现。
             Err(WorkTreeError::Gone { .. }) => continue,
             Err(error) => {
                 reasons.push(InconclusiveReason::DirectoryUnreadable {
@@ -484,12 +484,12 @@ pub fn scan_tree(
                         path,
                         reason: SkipReason::UnsupportedKind(kind),
                     }),
-                    Err(WorkTreeError::RootUnavailable { detail }) => {
+                    Err(WorkTreeError::VaultUnavailable { detail }) => {
                         pending.after = last_processed;
                         pending.retry = failed_names;
                         pending.retry.insert(entry.name);
                         queue.push_front(pending);
-                        reasons.push(InconclusiveReason::RootUnavailable { detail });
+                        reasons.push(InconclusiveReason::VaultUnavailable { detail });
                         break 'dirs;
                     }
                     Err(WorkTreeError::Gone { .. }) => {}

@@ -6,12 +6,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use vaultsyncd_client_store::bindings::{self, NewBinding};
 use vaultsyncd_client_store::entries::{self, BaselineEntry, EntryKind};
 use vaultsyncd_client_store::queue::{self, NewPendingOp};
-use vaultsyncd_domain::ids::{DeviceId, OpId, RootId, ServerId};
+use vaultsyncd_domain::ids::{DeviceId, OpId, ServerId, VaultId};
 use vaultsyncd_domain::version::{Generation, ServerEpoch};
 use vaultsyncd_transfer::hash::digest_of;
 
 const B: BindingId = BindingId::from_bytes([1; 16]);
-const ROOT: EntryId = EntryId::from_bytes([2; 16]);
+const VAULT_ENTRY: EntryId = EntryId::from_bytes([2; 16]);
 const DIRTY: EntryId = EntryId::from_bytes([3; 16]);
 const COLD: EntryId = EntryId::from_bytes([4; 16]);
 struct Dir(PathBuf);
@@ -52,15 +52,19 @@ fn local(entry: EntryId, dirty: Dirty, residency: Residency) -> LocalEntry {
 fn base(entry: EntryId, name: &str) -> BaselineEntry {
     BaselineEntry {
         entry,
-        parent: if entry == ROOT { None } else { Some(ROOT) },
+        parent: if entry == VAULT_ENTRY {
+            None
+        } else {
+            Some(VAULT_ENTRY)
+        },
         name: name.into(),
-        kind: if entry == ROOT {
+        kind: if entry == VAULT_ENTRY {
             EntryKind::Directory
         } else {
             EntryKind::File
         },
         revision: Revision::new(2).unwrap(),
-        content_version: if entry == ROOT {
+        content_version: if entry == VAULT_ENTRY {
             None
         } else {
             Some(VersionId::from_bytes(*entry.as_bytes()))
@@ -77,7 +81,7 @@ async fn setup(dir: &Dir) -> Arc<Database> {
             id: B,
             server: ServerId::from_bytes([5; 16]),
             device: DeviceId::from_bytes([6; 16]),
-            root: RootId::from_bytes([7; 16]),
+            vault: VaultId::from_bytes([7; 16]),
             local_path: dir.0.join("files").to_str().unwrap().into(),
             cache_path: dir.0.join("cache").to_str().unwrap().into(),
             mode: SyncMode::OnDemand,
@@ -88,7 +92,7 @@ async fn setup(dir: &Dir) -> Arc<Database> {
     .await
     .unwrap();
     for item in [
-        base(ROOT, ""),
+        base(VAULT_ENTRY, ""),
         base(DIRTY, "draft.txt"),
         base(COLD, "cold.txt"),
     ] {
@@ -145,7 +149,7 @@ async fn setup(dir: &Dir) -> Arc<Database> {
 }
 struct Disk {
     db: Arc<Database>,
-    root: PathBuf,
+    vault: PathBuf,
     calls: AtomicUsize,
     cancel_at: usize,
     mutate: Option<&'static str>,
@@ -154,7 +158,7 @@ impl Disk {
     fn new(db: Arc<Database>, dir: &Dir) -> Self {
         Self {
             db,
-            root: dir.0.join("files"),
+            vault: dir.0.join("files"),
             calls: AtomicUsize::new(0),
             cancel_at: usize::MAX,
             mutate: None,
@@ -170,7 +174,7 @@ impl FullMaterializer for Disk {
             if self.calls.fetch_add(1, Ordering::Relaxed) == self.cancel_at {
                 return Err(PortError::Cancelled);
             }
-            let path = self.root.join(file.path.to_string());
+            let path = self.vault.join(file.path.to_string());
             let mut conn = self.db.pool().acquire().await.map_err(db)?;
             let mut observed = entries::local_entry(&mut conn, B, file.entry)
                 .await
@@ -469,7 +473,7 @@ async fn excluded_descendants_block_parent_delete_and_rule_versions_cannot_be_re
     let controls = BindingControls::new(db.clone());
     controls.change_rules(B, "v1", "draft.txt").await.unwrap();
     assert_eq!(
-        controls.execution_gate(B, Some(ROOT)).await.unwrap(),
+        controls.execution_gate(B, Some(VAULT_ENTRY)).await.unwrap(),
         ExecutionGate::ReconcileRequired
     );
     // Caller must not start a recursive DeleteEntry for this parent; gate has no delete side effect.
@@ -479,7 +483,7 @@ async fn excluded_descendants_block_parent_delete_and_rule_versions_cannot_be_re
     );
     controls.change_rules(B, "v2", "").await.unwrap();
     assert_eq!(
-        controls.execution_gate(B, Some(ROOT)).await.unwrap(),
+        controls.execution_gate(B, Some(VAULT_ENTRY)).await.unwrap(),
         ExecutionGate::ReconcileRequired
     );
     assert!(controls.change_rules(B, "v1", "").await.is_err());
@@ -495,7 +499,7 @@ async fn excluded_descendants_block_parent_delete_and_rule_versions_cannot_be_re
         .await
         .unwrap();
     assert_eq!(
-        controls.execution_gate(B, Some(ROOT)).await.unwrap(),
+        controls.execution_gate(B, Some(VAULT_ENTRY)).await.unwrap(),
         ExecutionGate::Ready
     );
     preserved(&db, &dir).await;

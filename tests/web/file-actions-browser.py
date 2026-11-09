@@ -52,9 +52,9 @@ def main():
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
     print(f"S136/S137 artifacts: {RUN}", flush=True)
-    state, roots, inputs = RUN / "state", RUN / "roots", RUN / "inputs"
-    state.mkdir(mode=0o700); roots.mkdir(); inputs.mkdir()
-    documents, archive = roots / "documents", roots / "archive"
+    state, vaults, inputs = RUN / "state", RUN / "vaults", RUN / "inputs"
+    state.mkdir(mode=0o700); vaults.mkdir(); inputs.mkdir()
+    documents, archive = vaults / "documents", vaults / "archive"
     documents.mkdir(); archive.mkdir()
     (documents / "source/child").mkdir(parents=True)
     (documents / "destination").mkdir()
@@ -74,7 +74,7 @@ def main():
         "s139-文档😀.txt": b"S139 Unicode filename\n",
     }
     for name, data in fixtures.items(): (documents / name).write_bytes(data)
-    (archive / "archive-only.txt").write_bytes(b"S136 unrelated root\n")
+    (archive / "archive-only.txt").write_bytes(b"S136 unrelated vault\n")
     upload_data = {
         "upload & '文档'.txt": b"S136 multi-file upload\n",
         "empty-upload.dat": b"",
@@ -84,13 +84,13 @@ def main():
     password = secrets.token_urlsafe(24)
     checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
     config = RUN / "server.toml"
-    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[roots]\nallowed_bases=["{roots}"]\n[log]\nformat="json"\nlevel="info"\n')
+    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
     service = subprocess.Popen([str(BIN / "vaultsyncd-server"), "--config", str(config)], stdout=log, stderr=log)
     proxy = browser = context = page = None
     requests, checks, errors, csp = [], [], [], []
     lock = threading.Lock()
-    fault = {"mode": None, "root": None, "kind": None, "record": None}
+    fault = {"mode": None, "vault": None, "kind": None, "record": None}
     triggered, release = threading.Event(), threading.Event()
 
     def save_result(passed, failure=None):
@@ -153,7 +153,7 @@ def main():
                 mode = None
                 with lock:
                     requests.append(record)
-                    if not probe and is_submit and fault["mode"] and f"/roots/{fault['root']}/" in path and command["kind"] == fault["kind"]:
+                    if not probe and is_submit and fault["mode"] and f"/vaults/{fault['vault']}/" in path and command["kind"] == fault["kind"]:
                         mode = fault["mode"]
                         fault.update(mode=None, record=record)
                         record["fault"] = mode
@@ -221,22 +221,22 @@ def main():
                     page.wait_for_timeout(200)
                 raise AssertionError(message)
 
-            doc_id = api("/v1/admin/roots", {"path": str(documents)})["root_id"]
-            arc_id = api("/v1/admin/roots", {"path": str(archive)})["root_id"]
-            wait_for(lambda: all(item["collection"]["state"] == "complete" for item in api("/v1/admin/roots")["roots"]), "real observer import did not complete")
+            doc_id = api("/v1/admin/vaults", {"path": str(documents)})["vault_id"]
+            arc_id = api("/v1/admin/vaults", {"path": str(archive)})["vault_id"]
+            wait_for(lambda: all(item["collection"]["state"] == "complete" for item in api("/v1/admin/vaults")["vaults"]), "real observer import did not complete")
 
-            def snapshot(root_id=doc_id):
-                metadata = api(f"/v1/roots/{root_id}/snapshots", {})
+            def snapshot(vault_id=doc_id):
+                metadata = api(f"/v1/vaults/{vault_id}/snapshots", {})
                 entries, cursor = [], None
                 while True:
-                    batch = api(f"/v1/roots/{root_id}/snapshots/{metadata['snapshot_id']}/entries?limit=1000" + (f"&cursor={cursor}" if cursor else ""))
+                    batch = api(f"/v1/vaults/{vault_id}/snapshots/{metadata['snapshot_id']}/entries?limit=1000" + (f"&cursor={cursor}" if cursor else ""))
                     entries.extend(batch["entries"])
                     cursor = batch.get("next_cursor")
                     if cursor is None: break
                 return metadata, entries
 
-            def entry_at(path, root_id=doc_id):
-                _, entries = snapshot(root_id)
+            def entry_at(path, vault_id=doc_id):
+                _, entries = snapshot(vault_id)
                 current = next(item for item in entries if "parent_id" not in item)
                 for part in path.strip("/").split("/") if path.strip("/") else []:
                     current = next((item for item in entries if item.get("parent_id") == current["entry_id"] and item["name"] == part), None)
@@ -245,14 +245,14 @@ def main():
 
             def command(kind, **fields):
                 epoch = snapshot()[0]["server_epoch"]
-                result = api(f"/v1/roots/{doc_id}/operations", {"kind": kind, "op_id": secrets.token_hex(16), "device_id": secrets.token_hex(16), "server_epoch": epoch, **fields})
+                result = api(f"/v1/vaults/{doc_id}/operations", {"kind": kind, "op_id": secrets.token_hex(16), "device_id": secrets.token_hex(16), "server_epoch": epoch, **fields})
                 if result["state"] == "pending":
                     result = wait_for(lambda: terminal(result["op_id"]), "probe operation remained pending")
                 assert result["state"] == "committed", result
                 return result
 
             def terminal(op_id):
-                result = api(f"/v1/roots/{doc_id}/operations/{op_id}")
+                result = api(f"/v1/vaults/{doc_id}/operations/{op_id}")
                 return result if result["state"] != "pending" else None
 
             # The observer intentionally does not import external empty directories.
@@ -262,22 +262,22 @@ def main():
             page.goto(origin + f"/#/files/{doc_id}")
             table = page.get_by_role("table", name="文件与目录", exact=True)
             toolbar = page.get_by_role("toolbar", name="文件浏览器工具栏", exact=True)
-            notifications = page.locator(".mantine-Notification-root")
-            error_notices = page.locator('.mantine-Notification-root[role="alert"]')
+            notifications = page.locator(".mantine-Notification-vault")
+            error_notices = page.locator('.mantine-Notification-vault[role="alert"]')
 
             def row(name):
                 return table.get_by_role("button", name=name, exact=True).locator("xpath=ancestor::tr[1]")
 
-            def at(path="/", root_id=doc_id):
-                if f"/#/files/{root_id}" not in page.url:
-                    page.get_by_role("combobox", name="浏览 Root", exact=True).click()
-                    name = "documents" if root_id == doc_id else "archive"
-                    page.get_by_role("option", name=f"{name} · {root_id[:8]}", exact=True).click()
+            def at(path="/", vault_id=doc_id):
+                if f"/#/files/{vault_id}" not in page.url:
+                    page.get_by_role("combobox", name="浏览 Vault", exact=True).click()
+                    name = "documents" if vault_id == doc_id else "archive"
+                    page.get_by_role("option", name=f"{name} · {vault_id[:8]}", exact=True).click()
                     expect(table).to_be_visible(timeout=15000)
                 address_input = page.get_by_role("textbox", name="目录地址", exact=True)
                 address_input.fill(path); address_input.press("Enter")
                 encoded = "/".join(quote(part, safe="") for part in path.strip("/").split("/") if part)
-                expect(page).to_have_url(origin + f"/#/files/{root_id}" + ("/" + encoded if encoded else ""))
+                expect(page).to_have_url(origin + f"/#/files/{vault_id}" + ("/" + encoded if encoded else ""))
                 expect(address_input).to_have_value(path)
                 expect(table).to_be_visible(timeout=15000)
                 clear_notices()
@@ -332,14 +332,14 @@ def main():
                 assert chooser.value.is_multiple(), "upload must support selecting multiple files"
                 chooser.value.set_files([str(path) for path in paths])
 
-            def settled_entry(path, root_id=doc_id):
-                item = wait_for(lambda: entry_at(path, root_id), f"entry never committed: {path}")
+            def settled_entry(path, vault_id=doc_id):
+                item = wait_for(lambda: entry_at(path, vault_id), f"entry never committed: {path}")
                 expect(table.get_by_role("button", name=Path(path).name, exact=True)).to_be_visible(timeout=30000)
                 return item
 
             def arm(mode, kind):
                 triggered.clear(); release.clear()
-                with lock: fault.update(mode=mode, root=doc_id, kind=kind, record=None)
+                with lock: fault.update(mode=mode, vault=doc_id, kind=kind, record=None)
 
             def await_fault():
                 wait_for(triggered.is_set, "UI did not reach the armed real operation")
@@ -454,10 +454,10 @@ def main():
             deletion.get_by_role("button", name="删除", exact=True).click()
             expect(row("delete.txt")).to_have_count(0, timeout=30000)
             wait_for(lambda: not (documents / "delete.txt").exists(), "confirmed delete did not remove working path")
-            trash = api(f"/v1/roots/{doc_id}/trash")["items"]
+            trash = api(f"/v1/vaults/{doc_id}/trash")["items"]
             assert any(item["entry_id"] == deleted["entry_id"] and item["hash"] == sha(fixtures["delete.txt"]) for item in trash), trash
             page.goto(origin + "/#/recovery")
-            picker = page.get_by_role("combobox", name=field_label("恢复 Root"))
+            picker = page.get_by_role("combobox", name=field_label("恢复 Vault"))
             picker.click(); page.get_by_role("option", name="documents", exact=True).click()
             page.get_by_role("button", name="回收站", exact=True).click()
             recovery_row = page.get_by_role("row").filter(has=page.get_by_text(deleted["entry_id"], exact=True))
@@ -484,7 +484,7 @@ def main():
             expect(error_notices).not_to_have_count(0)
             assert entry_at("source/stale.txt")["entry_id"] == stale["entry_id"]
             assert_bytes(documents / "source/stale.txt", fixtures["stale.txt"])
-            assert not any(item["entry_id"] == stale["entry_id"] for item in api(f"/v1/roots/{doc_id}/trash")["items"])
+            assert not any(item["entry_id"] == stale["entry_id"] for item in api(f"/v1/vaults/{doc_id}/trash")["items"])
             checks.append("I04/concurrent-old-revision-delete-rejected/newer-location-and-bytes-retained")
             end_rejected()
 
@@ -540,7 +540,7 @@ def main():
             original_request = dict(held["operation"])
             expect(retry).to_be_visible(timeout=30000)
             retained = page.evaluate("Object.entries(sessionStorage).filter(([key])=>key.startsWith('vaultsyncd.file-actions.')).flatMap(([,value])=>JSON.parse(value))")
-            assert any(item["request"] == original_request and item["root"] == doc_id for item in retained), retained
+            assert any(item["request"] == original_request and item["vault"] == doc_id for item in retained), retained
             page.once("dialog", lambda dialog: dialog.accept())
             page.reload()
             expect(table).to_be_visible(timeout=15000)
@@ -563,7 +563,7 @@ def main():
             checks.append("I01/I06/reload-unknown/session-request-retained/query-only-original-OpId/no-duplicate-namespace-submit")
 
             # Navigate while a real create response is delayed. Work belongs to the
-            # captured Root/directory, never to whichever directory is now visible.
+            # captured Vault/directory, never to whichever directory is now visible.
             race = inputs / "navigation-race.txt"; race.write_bytes(b"S136 captured destination\n")
             clear_notices()
             arm("hold-after", "create"); start = len(requests)
@@ -580,26 +580,26 @@ def main():
             expect(row(race.name)).to_have_count(0)
             assert not (archive / race.name).exists()
             assert list(archive.iterdir()) == [archive / "archive-only.txt"]
-            assert_bytes(archive / "archive-only.txt", b"S136 unrelated root\n")
-            assert all(f"/roots/{doc_id}/" in item["path"] for item in submits_since(start)), "task crossed Roots after navigation"
+            assert_bytes(archive / "archive-only.txt", b"S136 unrelated vault\n")
+            assert all(f"/vaults/{doc_id}/" in item["path"] for item in submits_since(start)), "task crossed Vaults after navigation"
             at("/"); refresh(); settled_entry(race.name)
             assert_bytes(documents / race.name, race.read_bytes())
             assert not (documents / "destination" / race.name).exists()
-            checks.append("I01/root-switch-and-directory-navigation-in-flight/captured-target/no-stale-view-or-cross-root-write")
+            checks.append("I01/vault-switch-and-directory-navigation-in-flight/captured-target/no-stale-view-or-cross-vault-write")
 
-            # Cross-Root copy is supported (cross-Root cut is not implied). Read
+            # Cross-Vault copy is supported (cross-Vault cut is not implied). Read
             # fixed source bytes and publish a new identity only in the target.
             at("/source"); menu_action(keep_name, "复制")
             at("/", arc_id)
             start = len(requests)
             toolbar.get_by_role("button", name="粘贴", exact=True).click()
-            cross_root = settled_entry(keep_name, arc_id)
-            assert cross_root["entry_id"] != entry_at("source/" + keep_name)["entry_id"]
-            assert cross_root["hash"] == sha(fixtures["source/" + keep_name])
+            cross_vault = settled_entry(keep_name, arc_id)
+            assert cross_vault["entry_id"] != entry_at("source/" + keep_name)["entry_id"]
+            assert cross_vault["hash"] == sha(fixtures["source/" + keep_name])
             assert_bytes(archive / keep_name, fixtures["source/" + keep_name])
             assert_bytes(documents / "source" / keep_name, fixtures["source/" + keep_name])
-            assert all(f"/roots/{arc_id}/" in item["path"] for item in submits_since(start)), "cross-Root copy mutated the source namespace"
-            checks.append("cross-Root-copy/supported/new-target-identity/source-bytes-unchanged")
+            assert all(f"/vaults/{arc_id}/" in item["path"] for item in submits_since(start)), "cross-Vault copy mutated the source namespace"
+            checks.append("cross-Vault-copy/supported/new-target-identity/source-bytes-unchanged")
 
             # A real multi-step job has already committed its first namespace
             # operation. Log out and back in through SPA navigation before its
@@ -615,8 +615,8 @@ def main():
                     first.write_bytes(b"S136 first item may already be committed\n")
                     second.write_bytes(b"S136 second item must remain unsubmitted\n")
                 arm("hold-after", "create"); start = len(requests)
-                # This run's proxy may intercept either Root, never another run.
-                with lock: fault["root"] = arc_id if task_kind == "copy" else doc_id
+                # This run's proxy may intercept either Vault, never another run.
+                with lock: fault["vault"] = arc_id if task_kind == "copy" else doc_id
                 if task_kind == "copy":
                     toolbar.get_by_role("button", name="粘贴", exact=True).click()
                 else:
@@ -763,10 +763,10 @@ def main():
             assert_bytes(documents / final_name, renamed_bytes)
             checks.append("S137/I01-I06/rename-lost-response/query-original-OpId/no-duplicate")
 
-            root_entry = entry_at("")
-            parent_dir = command("create", parent_id=root_entry["entry_id"], name="s137-tree-parent", expected_absent=True)
+            vault_entry = entry_at("")
+            parent_dir = command("create", parent_id=vault_entry["entry_id"], name="s137-tree-parent", expected_absent=True)
             child_dir = command("create", parent_id=parent_dir["entry_id"], name="child", expected_absent=True)
-            target_dir = command("create", parent_id=root_entry["entry_id"], name="s137-tree-target", expected_absent=True)
+            target_dir = command("create", parent_id=vault_entry["entry_id"], name="s137-tree-target", expected_absent=True)
             refresh(); at("/s137-tree-parent/child")
             inside = inputs / "s137-inside.txt"; inside.write_bytes(b"S137 directory rename and tree paste\n")
             upload([inside]); inside_entry = settled_entry("s137-tree-parent/child/" + inside.name)
@@ -855,17 +855,17 @@ def main():
             assert copied_into_tree["parent_id"] == target_dir["entry_id"] and copied_into_tree["entry_id"] != inside_entry["entry_id"]
             assert_bytes(documents / "s137-tree-target" / inside.name, inside.read_bytes())
             assert page.url.endswith("/s137-tree-renamed/child-renamed")
-            tree_label(root_entry["entry_id"]).click(button="right")
+            tree_label(vault_entry["entry_id"]).click(button="right")
             menu = page.get_by_role("menu")
             for action in ("复制", "剪切", "重命名", "删除"):
                 expect(menu.get_by_role("menuitem", name=action, exact=True)).to_be_disabled()
             expect(menu.get_by_role("menuitem", name="粘贴", exact=True)).to_be_enabled()
             menu.get_by_role("menuitem", name="粘贴", exact=True).click()
-            pasted_at_root = wait_for(lambda: entry_at(inside.name), "root-tree paste did not target Root")
+            pasted_at_vault = wait_for(lambda: entry_at(inside.name), "vault-tree paste did not target Vault")
             expect(toolbar.get_by_role("button", name="上传文件", exact=True)).to_be_enabled(timeout=30000)
-            assert pasted_at_root["parent_id"] == root_entry["entry_id"]
+            assert pasted_at_vault["parent_id"] == vault_entry["entry_id"]
             assert_bytes(documents / inside.name, inside.read_bytes())
-            checks.append("S137/tree-paste-target/root-mutation-guards/root-paste/stable-current-directory")
+            checks.append("S137/tree-paste-target/vault-mutation-guards/vault-paste/stable-current-directory")
 
             start = len(requests)
             tree_menu_action(target_dir["entry_id"], "删除")
@@ -880,7 +880,7 @@ def main():
             expect(tree_label(target_dir["entry_id"])).to_have_count(0, timeout=30000)
             submitted = submits_since(start)
             assert len(submitted) == 1 and submitted[0]["operation"].get("subtree_token"), submitted
-            trash = api(f"/v1/roots/{doc_id}/trash")["items"]
+            trash = api(f"/v1/vaults/{doc_id}/trash")["items"]
             assert any(item["entry_id"] == target_dir["entry_id"] for item in trash)
             assert_bytes(documents / "s137-tree-renamed/child-renamed" / inside.name, inside.read_bytes())
             checks.append("S137/tree-delete/explicit-confirmation/cancel-no-submit/subtree-token/trash/source-protected")

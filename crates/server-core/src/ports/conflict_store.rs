@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{DeviceId, EntryId, IntentId, OpId, RootId, TxId};
+use vaultsyncd_domain::ids::{DeviceId, EntryId, IntentId, OpId, TxId, VaultId};
 use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 
 use crate::commit::conflict::CommittedConflict;
@@ -56,11 +56,11 @@ impl fmt::Debug for RequestDigest {
     }
 }
 
-/// 幂等键：同一设备在同一 Root 内的 `OpId`（design §7.2、I06）。
+/// 幂等键：同一设备在同一 Vault 内的 `OpId`（design §7.2、I06）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OperationKey {
-    /// 操作所在的 Root。
-    pub root: RootId,
+    /// 操作所在的 Vault。
+    pub vault: VaultId,
     /// 发起操作的设备。
     pub device: DeviceId,
     /// 客户端生成的逻辑操作身份。
@@ -70,9 +70,9 @@ pub struct OperationKey {
 /// 源条目（客户端想覆盖的那个 head 条目）当前的服务器事实。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConflictHead {
-    /// Root 当前 epoch：恢复后更换，旧 epoch 的请求不得重放（design §9.4）。
+    /// Vault 当前 epoch：恢复后更换，旧 epoch 的请求不得重放（design §9.4）。
     pub epoch: ServerEpoch,
-    /// 源条目现状；条目已不存在时为 `None`（Root 仍存在）。
+    /// 源条目现状；条目已不存在时为 `None`（Vault 仍存在）。
     pub source: Option<HeadSource>,
 }
 
@@ -120,7 +120,7 @@ pub struct ConflictWrite {
     pub source: EntryId,
     /// 冲突条目的身份（核心分配；事务必须原样使用，重试才拿到同一个副本）。
     pub sibling: EntryId,
-    /// 冲突条目在 Root 内的相对路径（首次提交时生成，重试不改名）。
+    /// 冲突条目在 Vault 内的相对路径（首次提交时生成，重试不改名）。
     pub path: String,
     /// 迟到分支的内容（对象必须已持久化）。
     pub content: ExpectedContent,
@@ -149,16 +149,16 @@ pub enum ConflictStoreError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 或条目不在调用方的 owner scope 内。
+    /// Vault 或条目不在调用方的 owner scope 内。
     OutOfScope,
-    /// Root 不存在。
-    UnknownRoot {
-        /// 被查询的 Root。
-        root: RootId,
+    /// Vault 不存在。
+    UnknownVault {
+        /// 被查询的 Vault。
+        vault: VaultId,
     },
     /// 目标路径已被占用：不覆盖目标，重新规划另名（design §10.1 末段）。
     PathOccupied {
-        /// 被占用的 Root 内相对路径。
+        /// 被占用的 Vault 内相对路径。
         path: String,
     },
     /// 同一幂等键已被别的请求占用（绕过端口写入的坏数据）。
@@ -194,7 +194,7 @@ impl ConflictStoreError {
         match self {
             ConflictStoreError::Storage { .. } => "conflict_store_failed",
             ConflictStoreError::OutOfScope => "out_of_scope",
-            ConflictStoreError::UnknownRoot { .. } => "unknown_root",
+            ConflictStoreError::UnknownVault { .. } => "unknown_vault",
             ConflictStoreError::PathOccupied { .. } => "target_path_occupied",
             ConflictStoreError::DuplicateOperation { .. } => "duplicate_operation",
             ConflictStoreError::IllegalIntentTransition { .. } => "illegal_intent_transition",
@@ -208,8 +208,10 @@ impl fmt::Display for ConflictStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConflictStoreError::Storage { detail } => write!(f, "冲突存储失败：{detail}"),
-            ConflictStoreError::OutOfScope => f.write_str("Root 或条目不在调用方的 owner scope 内"),
-            ConflictStoreError::UnknownRoot { root } => write!(f, "Root {root} 不存在"),
+            ConflictStoreError::OutOfScope => {
+                f.write_str("Vault 或条目不在调用方的 owner scope 内")
+            }
+            ConflictStoreError::UnknownVault { vault } => write!(f, "Vault {vault} 不存在"),
             ConflictStoreError::PathOccupied { path } => {
                 write!(f, "冲突路径 {path:?} 已被占用，不能覆盖")
             }
@@ -236,16 +238,16 @@ impl std::error::Error for ConflictStoreError {}
 // `#[allow(async_fn_in_trait)]`：本 trait 只在编排函数里以泛型参数使用，不外发、不做 dyn 对象。
 #[allow(async_fn_in_trait)]
 pub trait ConflictCommitStore {
-    /// 读 Root 当前 epoch 与源条目现状。
+    /// 读 Vault 当前 epoch 与源条目现状。
     ///
     /// 普通文件没有当前内容版本时报 [`ConflictStoreError::MalformedRow`]，不要给一个空摘要。
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在、行无法还原。
+    /// 存储失败、越权、Vault 不存在、行无法还原。
     async fn conflict_head(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         source: EntryId,
     ) -> Result<ConflictHead, ConflictStoreError>;
 
@@ -253,7 +255,7 @@ pub trait ConflictCommitStore {
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在。
+    /// 存储失败、越权、Vault 不存在。
     async fn operation(
         &mut self,
         key: OperationKey,
@@ -269,7 +271,7 @@ pub trait ConflictCommitStore {
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在、幂等键被坏数据占用（[`ConflictStoreError::DuplicateOperation`]）。
+    /// 存储失败、越权、Vault 不存在、幂等键被坏数据占用（[`ConflictStoreError::DuplicateOperation`]）。
     async fn begin_conflict(
         &mut self,
         key: OperationKey,

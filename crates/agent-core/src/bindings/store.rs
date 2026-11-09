@@ -227,9 +227,9 @@ impl ImportStore {
         .map_err(db)?;
         number(
             result
-                .root_seq
+                .vault_seq
                 .as_deref()
-                .ok_or_else(|| invalid("committed 缺 root_seq"))?,
+                .ok_or_else(|| invalid("committed 缺 vault_seq"))?,
         )?;
         let version = result
             .version_id
@@ -391,12 +391,12 @@ impl ImportStore {
     ) -> Result<(), PortError> {
         let mut tx = self.database.begin_write().await.map_err(db)?;
         let high_water = number(&journal.snapshot.high_water_seq)? as i64;
-        let root = journal
+        let vault = journal
             .entries
             .iter()
             .find(|entry| entry.parent_id.is_none())
             .ok_or_else(|| invalid("缺合成根"))?;
-        let base = baseline(root)?;
+        let base = baseline(vault)?;
         entries::put_baseline(&mut tx, binding.id, &base)
             .await
             .map_err(db)?;

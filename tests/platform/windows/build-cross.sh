@@ -13,8 +13,8 @@ if [ "${VAULTSYNCD_WINDOWS_SHELL:-}" != "1" ]; then
     exit 1
 fi
 
-root=$(repo_root)
-cd "$root"
+vault=$(repo_root)
+cd "$vault"
 
 # 客体（Windows 11 Enterprise Evaluation）只有 CLR 版 vcruntime140_clr0400.dll，没有
 # VCRUNTIME140.dll，动态 CRT 产物会以 0xC0000135 (STATUS_DLL_NOT_FOUND) 退出。冒烟产物
@@ -25,7 +25,7 @@ export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"
 echo "== cargo xwin build --release --locked --target $TARGET_TRIPLE -p $TEST_PACKAGE"
 cargo xwin build --release --locked --target "$TARGET_TRIPLE" -p "$TEST_PACKAGE"
 
-artifact_dir="$root/artifacts/$ARTIFACT_SUBDIR"
+artifact_dir="$vault/artifacts/$ARTIFACT_SUBDIR"
 mkdir -p "$artifact_dir"
 for binary in "${SMOKE_BINARIES[@]}"; do
     built="target/$TARGET_TRIPLE/release/$binary.exe"

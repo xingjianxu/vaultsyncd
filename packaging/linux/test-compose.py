@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual shipped Compose on existing rootful Podman socket, own btrfs loop only.
+"""Actual shipped Compose on existing vaultful Podman socket, own btrfs loop only.
 Args: locally verified image, evidence parent. No daemon/system config changes.
 """
 import hashlib
@@ -39,9 +39,9 @@ def main():
     image=RUN/'volume.img';image.touch(mode=0o600)
     with image.open('wb') as f:f.truncate(1024*1024*1024)
     mount=RUN/'mnt';mount.mkdir();loop=None;mounted=False;up=False
-    state=mount/'state';roots=mount/'roots'
+    state=mount/'state';vaults=mount/'vaults'
     variables={'PATH':str(Path(COMPOSE).parent)+':/run/current-system/sw/bin:/usr/bin:/bin','DOCKER_HOST':'unix:///run/podman/podman.sock','VAULTSYNCD_IMAGE':IMAGE,
-        'VAULTSYNCD_STATE':str(state),'VAULTSYNCD_ROOTS':str(roots),'VAULTSYNCD_PORT':'18742'}
+        'VAULTSYNCD_STATE':str(state),'VAULTSYNCD_VAULTS':str(vaults),'VAULTSYNCD_PORT':'18742'}
     def compose(*args,override=None):
         env=variables| (override or {})
         assert args[0] in ('up','down','restart','ps','config')
@@ -49,7 +49,7 @@ def main():
     try:
         loop=sudo('losetup','--find','--show',image).strip()
         sudo('mkfs.btrfs','-q',loop);sudo('mount','-o','user_subvol_rm_allowed',loop,mount);mounted=True
-        for p in (state,roots):sudo('mkdir','-m','700',p);sudo('chown','8721:8721',p)
+        for p in (state,vaults):sudo('mkdir','-m','700',p);sudo('chown','8721:8721',p)
         password=secrets.token_urlsafe(24)
         engine('run','--rm','-i','--network','none','--user','8721:8721','--cap-drop=all','--security-opt','no-new-privileges',
             '-v',str(state)+':/var/lib/vaultsyncd','--entrypoint','/opt/vaultsyncd/bin/vaultsyncd-admin',IMAGE,'init','--state-dir','/var/lib/vaultsyncd',input=password+'\n')
@@ -60,8 +60,8 @@ def main():
         compose('up','-d','--pull','never');up=True
         helper.wait(lambda:helper.api('/v1/health')['status']=='ok')
         helper.TOKEN=helper.api('/v1/auth/login',{'login':'owner','password':password,'device_label':'S098 Compose'})['access_token']
-        root=helper.api('/v1/admin/roots',{'path':'/srv/vaultsyncd-roots'})['root_id']
-        before=next(x for x in helper.api('/v1/admin/roots')['roots'] if x['root_id']==root)
+        vault=helper.api('/v1/admin/vaults',{'path':'/srv/vaultsyncd-vaults'})['vault_id']
+        before=next(x for x in helper.api('/v1/admin/vaults')['vaults'] if x['vault_id']==vault)
         cid=engine('ps','--filter','label=com.docker.compose.project='+PROJECT,'--format','{{.ID}}').strip()
         assert cid and len(cid.splitlines())==1
         status=engine('exec',cid,'cat','/proc/1/status')
@@ -70,10 +70,10 @@ def main():
         assert int(fields['CapEff'],16)==0 and int(fields['CapBnd'],16)==0
         engine('exec',cid,'sh','-c','test ! -e /nix && test ! -e /dev/fuse && ! command -v node')
         compose('restart');helper.wait(lambda:helper.api('/v1/health')['status']=='ok')
-        after=next(x for x in helper.api('/v1/admin/roots')['roots'] if x['root_id']==root)
-        assert after['health']=='healthy' and after['root_seq']==before['root_seq']
+        after=next(x for x in helper.api('/v1/admin/vaults')['vaults'] if x['vault_id']==vault)
+        assert after['health']=='healthy' and after['vault_seq']==before['vault_seq']
         helper.api('/v1/auth/logout',{});helper.TOKEN=None
-        RESULT['checks']+=['shipped-compose-actual-up','nonroot-readonly-zero-capabilities-no-nix-node-fuse','real-btrfs-root-healthy-after-compose-restart']
+        RESULT['checks']+=['shipped-compose-actual-up','nonvault-readonly-zero-capabilities-no-nix-node-fuse','real-btrfs-vault-healthy-after-compose-restart']
         RESULT.update(container_id=cid,before=before,after=after,process_status=status,compose_sha256=hashlib.sha256(FILE.read_bytes()).hexdigest())
         compose('down');up=False
         missing=RUN/'missing-state'

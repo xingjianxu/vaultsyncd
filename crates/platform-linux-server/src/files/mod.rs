@@ -12,15 +12,15 @@
 //!   `EIO`/`ENOSPC`/权限错误不退回。
 //! - [`publish`]：替换前核对目标身份、`renameat2` 原子替换（新建用 `RENAME_NOREPLACE`）、
 //!   文件和目录刷盘、发布后核对；前提不成立时暂停并保留候选。
-//! - [`root`]：Root 句柄的正式接口——打开时记录身份快照，每次访问复核挂载边界，并可随时重新
-//!   探测比对（`ROOT_UNAVAILABLE` 漂移），安全检查不依赖注册期的 `canonicalize`。
+//! - [`vault`]：Vault 句柄的正式接口——打开时记录身份快照，每次访问复核挂载边界，并可随时重新
+//!   探测比对（`VAULT_UNAVAILABLE` 漂移），安全检查不依赖注册期的 `canonicalize`。
 //!
 //! 典型顺序（design §11.2 步骤 6）：`RestrictedDir::open` → `open_read` 源文件 →
 //! [`clone::stage_copy`] 到目标目录 → [`publish::publish`]（或采集方向的
 //! [`publish::capture_object`]）。跨文件系统不会静默成功：暂存始终建在目标挂载内，`renameat2`
 //! 返回 `EXDEV` 时按 [`restricted::RestrictError::CrossDeviceRename`] 报错。
 //!
-//! Root 级访问用 [`root::RootHandle`]：它在 [`restricted::RestrictedDir`] 之外再加挂载边界与
+//! Vault 级访问用 [`vault::VaultHandle`]：它在 [`restricted::RestrictedDir`] 之外再加挂载边界与
 //! 身份复核；目录列举走已打开句柄的 `getdents64`，权限失败返回错误而不是空目录。
 //!
 //! 边界：本模块不写数据库、不做意图日志、不识别外部 watcher 事件，也不宣称消除“核对后替换”
@@ -33,7 +33,7 @@ pub mod identity;
 pub mod publish;
 mod raw;
 pub mod restricted;
-pub mod root;
+pub mod vault;
 
 pub use clone::{
     CloneMethod, CopyFallback, ReflinkVerdict, StageError, StageFailure, StagedFile,
@@ -52,6 +52,6 @@ pub use restricted::{
     DirEntry, EntryKind, OpenedObject, ResolveMechanism, ResolveMode, RestrictError, RestrictedDir,
     validate_relative_path,
 };
-pub use root::{
-    RootDrift, RootError, RootHandle, RootSnapshot, RootSpecError, RootSpecVerifyError,
+pub use vault::{
+    VaultDrift, VaultError, VaultHandle, VaultSnapshot, VaultSpecError, VaultSpecVerifyError,
 };

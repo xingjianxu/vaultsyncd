@@ -160,21 +160,21 @@ fn unreadable_entry_is_retried_by_name_and_never_reported_absent() {
 }
 
 #[test]
-fn root_unavailable_stops_the_scan_without_any_file_or_deletion_conclusion() {
+fn vault_unavailable_stops_the_scan_without_any_file_or_deletion_conclusion() {
     let fs = shared_fs();
     fs.borrow_mut().write("a.txt", b"a");
-    fs.borrow_mut().root_unavailable = true;
+    fs.borrow_mut().vault_unavailable = true;
     let mut work = FakeWorkTree::new(&fs);
     let report = scan_tree(&mut work, limits(100), ScanCursor::from_root());
-    assert!(report.root_unavailable());
+    assert!(report.vault_unavailable());
     assert!(report.files.is_empty());
     let ScanCompletion::Inconclusive { resume, .. } = report.completion else {
-        panic!("Root 不可用不能得到完整结论");
+        panic!("Vault 不可用不能得到完整结论");
     };
     assert_eq!(
         resume,
         ScanCursor::from_root(),
-        "原样保留起点，等 Root 恢复"
+        "原样保留起点，等 Vault 恢复"
     );
 }
 

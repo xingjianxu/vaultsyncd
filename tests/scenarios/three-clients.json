@@ -30,7 +30,7 @@
   "server_seed": [
     {
       "path": "server-note.txt",
-      "content": "server-only content from the initial non-empty server root\n"
+      "content": "server-only content from the initial non-empty server vault\n"
     },
     {
       "path": "shared-import.txt",

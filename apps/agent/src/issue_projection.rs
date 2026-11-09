@@ -1,10 +1,10 @@
-//! Aggregate all bindings before resolving a Root cause. Notification records are not their own cause.
+//! Aggregate all bindings before resolving a Vault cause. Notification records are not their own cause.
 use crate::{config::AgentConfig, local::error};
 use std::collections::{HashMap, HashSet};
 use vaultsyncd_client_store::db::Database;
 use vaultsyncd_domain::{
     error::ErrorCode,
-    ids::{BindingId, RootId},
+    ids::{BindingId, VaultId},
 };
 use vaultsyncd_local_ipc::generated::Problem;
 use vaultsyncd_transfer::ports::PortError;
@@ -15,15 +15,16 @@ pub(crate) async fn sync(
     cycles: &HashMap<BindingId, Problem>,
 ) -> Result<Vec<Problem>, PortError> {
     let mut origins = crate::management::problems(db, None).await?;
-    let conflicts:Vec<(Vec<u8>,Vec<u8>,i64)>=sqlx::query_as("SELECT c.binding_id,b.root_id,c.seq FROM received_changes c JOIN bindings b ON b.id=c.binding_id WHERE EXISTS(SELECT 1 FROM json_each(c.events_json) e WHERE json_extract(e.value,'$.kind')='conflict')")
+    let conflicts:Vec<(Vec<u8>,Vec<u8>,i64)>=sqlx::query_as("SELECT c.binding_id,b.vault_id,c.seq FROM received_changes c JOIN bindings b ON b.id=c.binding_id WHERE EXISTS(SELECT 1 FROM json_each(c.events_json) e WHERE json_extract(e.value,'$.kind')='conflict')")
         .fetch_all(db.pool()).await.map_err(error)?;
-    for (binding, root, seq) in conflicts {
-        let root = RootId::from_bytes(
-            root.try_into()
-                .map_err(|_| error("invalid conflict root"))?,
+    for (binding, vault, seq) in conflicts {
+        let vault = VaultId::from_bytes(
+            vault
+                .try_into()
+                .map_err(|_| error("invalid conflict vault"))?,
         );
         let marker =
-            serde_json::json!({"kind":"conflict_notice","root":root.to_string(),"seq":seq})
+            serde_json::json!({"kind":"conflict_notice","vault":vault.to_string(),"seq":seq})
                 .to_string();
         let digest = vaultsyncd_transfer::hash::digest_of(
             format!(
@@ -56,7 +57,7 @@ pub(crate) async fn sync(
                 .map_err(error)?;
             vaultsyncd_client_store::notifications::raise(
                 &mut tx,
-                &vaultsyncd_agent_core::status::issues::conflict_problem(root),
+                &vaultsyncd_agent_core::status::issues::conflict_problem(vault),
             )
             .await
             .map_err(error)?;
@@ -66,34 +67,34 @@ pub(crate) async fn sync(
     origins.retain(|p| !p.problem_id.starts_with("notification:"));
     origins.extend(startup.values().chain(cycles.values()).cloned());
     let mut active = HashSet::new();
-    let mut roots = HashSet::new();
+    let mut vaults = HashSet::new();
     for binding in &config.bindings {
-        roots.insert(RootId::from_hex(&binding.root_id).map_err(error)?);
+        vaults.insert(VaultId::from_hex(&binding.vault_id).map_err(error)?);
     }
     for problem in &origins {
         if let Some(code) = ErrorCode::from_code(&problem.code).filter(|c| c.class().is_severe())
             && let Some(binding) = config.bindings.iter().find(|b| b.id == problem.binding_id)
         {
-            active.insert((RootId::from_hex(&binding.root_id).map_err(error)?, code));
+            active.insert((VaultId::from_hex(&binding.vault_id).map_err(error)?, code));
         }
     }
-    for (root, code) in &active {
-        vaultsyncd_agent_core::status::issues::report(db, *root, *code, false).await?;
+    for (vault, code) in &active {
+        vaultsyncd_agent_core::status::issues::report(db, *vault, *code, false).await?;
     }
     let notices = crate::management_notices::list(db).await?;
     for notice in notices {
         if notice.state != "active" || notice.cause == "CONFLICT_COPY" {
             continue;
         }
-        if let Some(root) = notice
-            .root_id
+        if let Some(vault) = notice
+            .vault_id
             .as_deref()
-            .and_then(|r| RootId::from_hex(r).ok())
-            && roots.contains(&root)
+            .and_then(|r| VaultId::from_hex(r).ok())
+            && vaults.contains(&vault)
             && let Some(code) = ErrorCode::from_code(&notice.cause)
-            && !active.contains(&(root, code))
+            && !active.contains(&(vault, code))
         {
-            vaultsyncd_agent_core::status::issues::resolve_root(db, root, code).await?;
+            vaultsyncd_agent_core::status::issues::resolve_vault(db, vault, code).await?;
         }
     }
     Ok(startup.values().chain(cycles.values()).cloned().collect())
@@ -103,7 +104,7 @@ pub(crate) async fn sync(
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn one_binding_success_cannot_resolve_another_bindings_root_cause() {
+    async fn one_binding_success_cannot_resolve_another_bindings_vault_cause() {
         let path = std::env::temp_dir().join(format!(
             "s083-aggregate-{}-{}",
             std::process::id(),
@@ -114,7 +115,7 @@ mod tests {
         ));
         std::fs::create_dir(&path).unwrap();
         let db = Database::open(path.join("client.sqlite")).await.unwrap();
-        let config:AgentConfig=serde_json::from_value(serde_json::json!({"server":{"id":"11".repeat(16),"url":"https://example.invalid"},"device_id":"22".repeat(16),"state_dir":"C:/test/state","poll_millis":500,"bindings":[{"id":"33".repeat(16),"root_id":"55".repeat(16),"path":"C:/a","cache":"C:/ca","mode":"full"},{"id":"44".repeat(16),"root_id":"55".repeat(16),"path":"C:/b","cache":"C:/cb","mode":"full"}]})).unwrap();
+        let config:AgentConfig=serde_json::from_value(serde_json::json!({"server":{"id":"11".repeat(16),"url":"https://example.invalid"},"device_id":"22".repeat(16),"state_dir":"C:/test/state","poll_millis":500,"bindings":[{"id":"33".repeat(16),"vault_id":"55".repeat(16),"path":"C:/a","cache":"C:/ca","mode":"full"},{"id":"44".repeat(16),"vault_id":"55".repeat(16),"path":"C:/b","cache":"C:/cb","mode":"full"}]})).unwrap();
         let make = |binding_id: String| Problem {
             binding_id,
             code: "INSUFFICIENT_STORAGE".into(),

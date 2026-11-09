@@ -118,7 +118,7 @@ pub enum EntryError {
     /// SQLite 层面失败（含外键与 `CHECK` 拒绝）。
     Db(sqlx::Error),
     /// 根条目的形状不对：有父项，或（无父项时）有名称、不是目录。
-    RootEntryShape {
+    VaultEntryShape {
         /// 违反的具体规则。
         reason: &'static str,
     },
@@ -138,7 +138,7 @@ impl std::fmt::Display for EntryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Db(source) => write!(f, "SQLite 操作失败：{source}"),
-            Self::RootEntryShape { reason } => write!(f, "根条目形状不合法：{reason}"),
+            Self::VaultEntryShape { reason } => write!(f, "根条目形状不合法：{reason}"),
             Self::EmptyBytes { field } => write!(f, "字段 {field} 是空字节"),
             Self::MalformedRow { column } => write!(f, "数据库列 {column} 的值不符合类型前提"),
         }
@@ -149,7 +149,7 @@ impl std::error::Error for EntryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Db(source) => Some(source),
-            Self::RootEntryShape { .. } | Self::EmptyBytes { .. } | Self::MalformedRow { .. } => {
+            Self::VaultEntryShape { .. } | Self::EmptyBytes { .. } | Self::MalformedRow { .. } => {
                 None
             }
         }
@@ -474,12 +474,12 @@ fn validate_location(
         return Ok(());
     }
     if !name.is_empty() {
-        return Err(EntryError::RootEntryShape {
+        return Err(EntryError::VaultEntryShape {
             reason: "根条目没有文件名",
         });
     }
     if kind != EntryKind::Directory {
-        return Err(EntryError::RootEntryShape {
+        return Err(EntryError::VaultEntryShape {
             reason: "根条目只能是目录",
         });
     }
@@ -790,7 +790,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn root_entry_directory_version_and_empty_bytes_are_rejected() {
+    async fn vault_entry_directory_version_and_empty_bytes_are_rejected() {
         let dir = TestDir::new("entry-reject");
         let database = open_database(&dir).await;
         let binding = seed_binding(&database, 0x24).await;
@@ -798,26 +798,26 @@ mod tests {
         let mut tx = database.begin_write().await.expect("开始写事务");
 
         // 根条目不能有名称，也不能是文件。
-        let mut named_root = baseline(1, version_id(0x71));
-        named_root.parent = None;
-        named_root.name = "root".to_owned();
-        named_root.kind = EntryKind::Directory;
-        named_root.content_version = None;
+        let mut named_vault = baseline(1, version_id(0x71));
+        named_vault.parent = None;
+        named_vault.name = "vault".to_owned();
+        named_vault.kind = EntryKind::Directory;
+        named_vault.content_version = None;
         assert!(matches!(
-            put_baseline(&mut tx, binding, &named_root)
+            put_baseline(&mut tx, binding, &named_vault)
                 .await
                 .expect_err("有名称的根条目必须被拒绝"),
-            EntryError::RootEntryShape { .. }
+            EntryError::VaultEntryShape { .. }
         ));
-        let mut file_root = named_root.clone();
-        file_root.name = String::new();
-        file_root.kind = EntryKind::File;
-        file_root.content_version = Some(version_id(0x71));
+        let mut file_vault = named_vault.clone();
+        file_vault.name = String::new();
+        file_vault.kind = EntryKind::File;
+        file_vault.content_version = Some(version_id(0x71));
         assert!(matches!(
-            put_baseline(&mut tx, binding, &file_root)
+            put_baseline(&mut tx, binding, &file_vault)
                 .await
                 .expect_err("文件型根条目必须被拒绝"),
-            EntryError::RootEntryShape { .. }
+            EntryError::VaultEntryShape { .. }
         ));
 
         // 目录没有内容版本：Rust 层放行后由迁移里的 `CHECK` 兜底拒绝。

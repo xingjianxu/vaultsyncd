@@ -12,7 +12,7 @@
 mod common;
 
 use common::{
-    Lab, Running, all_changes, create_snapshot, identity, login, register_root, snapshot_entries,
+    Lab, Running, all_changes, create_snapshot, identity, login, register_vault, snapshot_entries,
     wait_for,
 };
 use reqwest::StatusCode;
@@ -20,11 +20,11 @@ use serde_json::{Value, json};
 
 const CONTENT: &[u8] = b"note content for namespace commands\n";
 
-async fn submit(running: &Running, token: &str, root: &str, body: Value) -> (StatusCode, Value) {
+async fn submit(running: &Running, token: &str, vault: &str, body: Value) -> (StatusCode, Value) {
     running
         .json(
             "POST",
-            &format!("/v1/roots/{root}/operations"),
+            &format!("/v1/vaults/{vault}/operations"),
             Some(token),
             Some(&body),
         )
@@ -39,20 +39,20 @@ fn entry_named<'a>(entries: &'a [Value], name: &str) -> &'a Value {
         .expect("条目存在")
 }
 
-async fn snapshot(running: &Running, token: &str, root: &str) -> Vec<Value> {
-    let created = create_snapshot(running, token, root).await.expect("快照");
+async fn snapshot(running: &Running, token: &str, vault: &str) -> Vec<Value> {
+    let created = create_snapshot(running, token, vault).await.expect("快照");
     let id = created
         .get("snapshot_id")
         .and_then(Value::as_str)
         .expect("snapshot_id")
         .to_owned();
-    snapshot_entries(running, token, root, &id)
+    snapshot_entries(running, token, vault, &id)
         .await
         .expect("快照清单")
 }
 
-async fn epoch_of(running: &Running, token: &str, root: &str) -> String {
-    create_snapshot(running, token, root)
+async fn epoch_of(running: &Running, token: &str, vault: &str) -> String {
+    create_snapshot(running, token, vault)
         .await
         .expect("快照")
         .get("server_epoch")
@@ -64,13 +64,13 @@ async fn epoch_of(running: &Running, token: &str, root: &str) -> String {
 async fn subtree_token(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     entry: &str,
 ) -> (StatusCode, Value) {
     running
         .json(
             "GET",
-            &format!("/v1/roots/{root}/entries/{entry}/subtree"),
+            &format!("/v1/vaults/{vault}/entries/{entry}/subtree"),
             Some(token),
             None,
         )
@@ -84,23 +84,23 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
-        .expect("注册 Root");
+        .expect("注册 Vault");
 
     // 初始文件：外部写入 → 观察循环采纳（首个版本）。
     std::fs::write(lab.work().join("note.txt"), CONTENT).expect("写文件");
     wait_for("初始采纳", || async {
-        let entries = snapshot(&running, &token, &root).await;
+        let entries = snapshot(&running, &token, &vault).await;
         Ok(entries
             .iter()
             .any(|entry| entry.get("name").and_then(Value::as_str) == Some("note.txt")))
     })
     .await
     .expect("初始导入");
-    let epoch = epoch_of(&running, &token, &root).await;
-    let entries = snapshot(&running, &token, &root).await;
-    let root_entry = entries
+    let epoch = epoch_of(&running, &token, &vault).await;
+    let entries = snapshot(&running, &token, &vault).await;
+    let vault_entry = entries
         .iter()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(""))
         .expect("根条目")["entry_id"]
@@ -117,13 +117,13 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     let (status, created) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0x41),
             "device_id": device,
             "server_epoch": epoch,
             "kind": "create",
-            "parent_id": root_entry,
+            "parent_id": vault_entry,
             "name": "docs",
             "expected_absent": true,
             "local_generation": "3",
@@ -137,7 +137,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
         lab.work().join("docs").is_dir(),
         "工作目录里必须真的出现 docs/（不是只写数据库）"
     );
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     assert_eq!(entry_named(&entries, "docs")["entry_id"], docs_entry);
     assert_eq!(entry_named(&entries, "docs")["kind"], "directory");
 
@@ -145,13 +145,13 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     let (status, replay) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0x41),
             "device_id": device,
             "server_epoch": epoch,
             "kind": "create",
-            "parent_id": root_entry,
+            "parent_id": vault_entry,
             "name": "docs",
             "expected_absent": true,
             "local_generation": "3",
@@ -166,7 +166,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     let (status, moved) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0x42),
             "device_id": device,
@@ -190,7 +190,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
         !lab.work().join("note.txt").exists(),
         "源路径不得留下副本（同一次 rename）"
     );
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let moved_note = entry_named(&entries, "note.txt");
     assert_eq!(moved_note["entry_id"], note_entry);
     assert_eq!(moved_note["version_id"], note_version, "移动不写新版本");
@@ -200,7 +200,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     );
 
     // 3. 目录 token：docs 现在有 2 条（目录自身 + note.txt）。
-    let (status, subtree) = subtree_token(&running, &token, &root, &docs_entry).await;
+    let (status, subtree) = subtree_token(&running, &token, &vault, &docs_entry).await;
     assert_eq!(status, StatusCode::OK, "{subtree}");
     assert_eq!(subtree["entries"], "2");
     let stale_token = subtree["token"].as_str().expect("token").to_owned();
@@ -209,7 +209,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     let (status, deleted) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0x43),
             "device_id": device,
@@ -223,14 +223,16 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     .await;
     assert_eq!(status, StatusCode::OK, "delete 应提交：{deleted}");
     assert!(!lab.work().join("docs/note.txt").exists());
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     assert!(
         !entries
             .iter()
             .any(|entry| entry.get("entry_id").and_then(Value::as_str) == Some(&note_entry)),
         "软删除后条目不在活跃清单里"
     );
-    let batches = all_changes(&running, &token, &root).await.expect("changes");
+    let batches = all_changes(&running, &token, &vault)
+        .await
+        .expect("changes");
     assert!(
         batches.iter().any(|batch| {
             batch
@@ -245,7 +247,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     // 旧版本内容仍可下载（历史不因删除丢失）。
     let (status, bytes, _) = running
         .download(
-            &format!("/v1/roots/{root}/entries/{note_entry}/versions/{note_version}/content"),
+            &format!("/v1/vaults/{vault}/entries/{note_entry}/versions/{note_version}/content"),
             &token,
         )
         .await
@@ -258,7 +260,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     let (status, refused) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0x44),
             "device_id": device,
@@ -290,14 +292,14 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
 
     // 取新 token（等观察循环把新文件采纳后才稳定）再删。
     wait_for("新文件采纳", || async {
-        let (status, value) = subtree_token(&running, &token, &root, &docs_entry).await;
+        let (status, value) = subtree_token(&running, &token, &vault, &docs_entry).await;
         Ok(status == StatusCode::OK && value["entries"] == "2")
     })
     .await
     .expect("新文件采纳");
-    let (_, fresh) = subtree_token(&running, &token, &root, &docs_entry).await;
+    let (_, fresh) = subtree_token(&running, &token, &vault, &docs_entry).await;
     let fresh_token = fresh["token"].as_str().expect("token").to_owned();
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let docs_revision = entry_named(&entries, "docs")["revision"]
         .as_str()
         .expect("revision")
@@ -305,7 +307,7 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     let (status, deleted_dir) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0x45),
             "device_id": device,
@@ -320,20 +322,20 @@ async fn create_move_and_delete_are_executed_and_replay_stably() {
     .await;
     assert_eq!(status, StatusCode::OK, "目录删除应提交：{deleted_dir}");
     assert!(!lab.work().join("docs").exists(), "目录树必须真的删掉");
-    let (status, _) = subtree_token(&running, &token, &root, &docs_entry).await;
+    let (status, _) = subtree_token(&running, &token, &vault, &docs_entry).await;
     assert_ne!(status, StatusCode::OK, "已删除目录不再提供 token");
 
     // 6. 同一 OpId 不同请求 → OP_ID_REUSED（幂等键语义）。
     let (status, reused) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0x45),
             "device_id": device,
             "server_epoch": epoch,
             "kind": "delete",
-            "entry_id": root_entry,
+            "entry_id": vault_entry,
             "base_revision": "0",
             "local_generation": "3",
         }),

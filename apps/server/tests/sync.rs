@@ -19,7 +19,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use futures_util::StreamExt as _;
 use tower::ServiceExt;
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, TxId, UserId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, TxId, UserId, VaultId};
 use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 use vaultsyncd_protocol::generated::{
     ChangeList, ErrorCode, ErrorEnvelope, LoginRequest, SeqHint, SessionIssued, Snapshot,
@@ -30,23 +30,23 @@ use vaultsyncd_server::content::ContentContext;
 use vaultsyncd_server::http::router;
 use vaultsyncd_server::lifecycle::Lifecycle;
 use vaultsyncd_server::operations::OperationsContext;
-use vaultsyncd_server::roots::RootContext;
 use vaultsyncd_server::sync::{SyncConfig, SyncContext};
 use vaultsyncd_server::uploads::UploadsContext;
+use vaultsyncd_server::vaults::VaultContext;
 use vaultsyncd_server_core::api::{events, snapshots};
 use vaultsyncd_server_core::auth::password::PasswordHasher;
 use vaultsyncd_server_store::changes::{self, ChangeBatch};
 use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::entries::{self, EntryKind, NewEntry};
-use vaultsyncd_server_store::roots::{self as store_roots, NewRoot};
 use vaultsyncd_server_store::users;
+use vaultsyncd_server_store::vaults::{self as store_vaults, NewVault};
 
 const PASSWORD: &str = "correct horse battery staple";
 const OWNER: UserId = UserId::from_bytes([0x11; ID_LEN]);
 const INTRUDER: UserId = UserId::from_bytes([0x33; ID_LEN]);
-const ROOT: RootId = RootId::from_bytes([0x22; ID_LEN]);
-const FOREIGN_ROOT: RootId = RootId::from_bytes([0x66; ID_LEN]);
-const ROOT_ENTRY: EntryId = EntryId::from_bytes([0x55; ID_LEN]);
+const VAULT: VaultId = VaultId::from_bytes([0x22; ID_LEN]);
+const FOREIGN_VAULT: VaultId = VaultId::from_bytes([0x66; ID_LEN]);
+const VAULT_ENTRY: EntryId = EntryId::from_bytes([0x55; ID_LEN]);
 /// 事件内容里的标记：SSE 提示的任何一帧都不能出现它（提示不携带事件内容）。
 const SECRET_MARKER: &str = "secret-event-payload-marker";
 
@@ -105,7 +105,7 @@ struct App {
     lifecycle: Arc<Lifecycle>,
 }
 
-/// 种子：owner 有一个 Root（带合成根条目），intruder 有会话与自己的 Root（越权 403）。
+/// 种子：owner 有一个 Vault（带合成根条目），intruder 有会话与自己的 Vault（越权 403）。
 async fn open_app(fixture: &Fixture) -> App {
     let database = Database::open(fixture.database())
         .await
@@ -126,28 +126,28 @@ async fn open_app(fixture: &Fixture) -> App {
         .expect("写种子账号");
     }
     for (id, entry, path, owner) in [
-        (ROOT, ROOT_ENTRY, "/srv/s048", OWNER),
+        (VAULT, VAULT_ENTRY, "/srv/s048", OWNER),
         (
-            FOREIGN_ROOT,
+            FOREIGN_VAULT,
             EntryId::from_bytes([0x99; ID_LEN]),
             "/srv/s048-intruder",
             INTRUDER,
         ),
     ] {
-        store_roots::insert_root(
+        store_vaults::insert_vault(
             &mut tx,
-            &NewRoot {
+            &NewVault {
                 id,
                 entry,
                 owner,
                 absolute_path: path.to_owned(),
                 volume_identity: vec![0x77; 16],
-                root_file_identity: vec![0x88; 16],
+                vault_file_identity: vec![0x88; 16],
                 epoch: ServerEpoch::new(1).expect("epoch"),
             },
         )
         .await
-        .expect("写种子 Root");
+        .expect("写种子 Vault");
     }
     tx.commit().await.expect("提交种子事务");
 
@@ -156,7 +156,7 @@ async fn open_app(fixture: &Fixture) -> App {
         Arc::clone(&auth),
         fixture.state_dir().as_path(),
     ));
-    let roots = Arc::new(RootContext::new(
+    let vaults = Arc::new(VaultContext::new(
         Arc::clone(&auth),
         None,
         fixture.state_dir(),
@@ -187,7 +187,7 @@ async fn open_app(fixture: &Fixture) -> App {
             Arc::clone(&lifecycle),
             auth,
             uploads,
-            roots,
+            vaults,
             content,
             operations,
             sync,
@@ -217,7 +217,7 @@ impl App {
         self.call(send("GET", uri, Some(token))).await
     }
 
-    /// 向 owner 的 Root 追加一批事务批次，每个 `(tx, 事件数)` 一行，返回分配到的 seq。
+    /// 向 owner 的 Vault 追加一批事务批次，每个 `(tx, 事件数)` 一行，返回分配到的 seq。
     async fn append(&self, batches: &[(u8, usize)], created_at: UtcTimestamp) -> Vec<u64> {
         let mut tx = self.database.begin_write().await.expect("写事务");
         let mut seqs = Vec::new();
@@ -225,7 +225,7 @@ impl App {
             let batch: ChangeBatch = changes::append_change(
                 &mut tx,
                 OWNER,
-                ROOT,
+                VAULT,
                 tx_id(*marker),
                 &events_json(*marker, *events),
                 created_at,
@@ -246,8 +246,8 @@ impl App {
             OWNER,
             &NewEntry {
                 id: file_id(marker),
-                root: ROOT,
-                parent: ROOT_ENTRY,
+                vault: VAULT,
+                parent: VAULT_ENTRY,
                 name: name.to_owned(),
                 name_key: name.to_owned(),
                 kind: EntryKind::File,
@@ -267,7 +267,7 @@ impl App {
             &mut tx,
             OWNER,
             file_id(marker),
-            ROOT_ENTRY,
+            VAULT_ENTRY,
             name,
             name,
             Revision::new(2).expect("revision"),
@@ -339,38 +339,40 @@ fn send(method: &str, uri: &str, token: Option<&str>) -> Request<Body> {
     builder.body(Body::empty()).expect("构造请求")
 }
 
-fn snapshots_uri(root: RootId) -> String {
-    format!("/v1/roots/{}/snapshots", root.to_hex())
+fn snapshots_uri(vault: VaultId) -> String {
+    format!("/v1/vaults/{}/snapshots", vault.to_hex())
 }
 
-fn snapshot_entries_uri(root: RootId, snapshot: &str, query: &str) -> String {
-    format!("{}/{snapshot}/entries{query}", snapshots_uri(root))
+fn snapshot_entries_uri(vault: VaultId, snapshot: &str, query: &str) -> String {
+    format!("{}/{snapshot}/entries{query}", snapshots_uri(vault))
 }
 
-fn changes_uri(root: RootId, query: &str) -> String {
-    format!("/v1/roots/{}/changes{query}", root.to_hex())
+fn changes_uri(vault: VaultId, query: &str) -> String {
+    format!("/v1/vaults/{}/changes{query}", vault.to_hex())
 }
 
-fn events_uri(root: RootId) -> String {
-    format!("/v1/roots/{}/events", root.to_hex())
+fn events_uri(vault: VaultId) -> String {
+    format!("/v1/vaults/{}/events", vault.to_hex())
 }
 
 async fn create_snapshot(app: &App, token: &str) -> Snapshot {
     let (status, body) = app
-        .call(send("POST", &snapshots_uri(ROOT), Some(token)))
+        .call(send("POST", &snapshots_uri(VAULT), Some(token)))
         .await;
     assert_eq!(status, StatusCode::CREATED, "创建快照：{}", text(&body));
     serde_json::from_slice(&body).expect("解析快照")
 }
 
 async fn snapshot_page(app: &App, token: &str, id: &str, query: &str) -> SnapshotPage {
-    let (status, body) = app.get(&snapshot_entries_uri(ROOT, id, query), token).await;
+    let (status, body) = app
+        .get(&snapshot_entries_uri(VAULT, id, query), token)
+        .await;
     assert_eq!(status, StatusCode::OK, "快照翻页：{}", text(&body));
     serde_json::from_slice(&body).expect("解析快照页")
 }
 
 async fn changes_page(app: &App, token: &str, query: &str) -> ChangeList {
-    let (status, body) = app.get(&changes_uri(ROOT, query), token).await;
+    let (status, body) = app.get(&changes_uri(VAULT, query), token).await;
     assert_eq!(status, StatusCode::OK, "拉取 changes：{}", text(&body));
     serde_json::from_slice(&body).expect("解析 ChangeList")
 }
@@ -393,11 +395,11 @@ async fn paging_a_snapshot_while_the_namespace_changes_stays_consistent() {
     assert_eq!(snapshot.entry_count, "8");
     assert_eq!(
         snapshot.high_water_seq, "1",
-        "固定的 high_water_seq 就是创建时的 RootSeq"
+        "固定的 high_water_seq 就是创建时的 VaultSeq"
     );
     assert_eq!(snapshot.server_epoch, "1");
-    assert_eq!(snapshot.root_id, ROOT.to_hex());
-    let expected: BTreeSet<String> = std::iter::once(ROOT_ENTRY)
+    assert_eq!(snapshot.vault_id, VAULT.to_hex());
+    let expected: BTreeSet<String> = std::iter::once(VAULT_ENTRY)
         .chain((0x30..0x37).map(file_id))
         .map(|id| id.to_hex())
         .collect();
@@ -460,14 +462,14 @@ async fn paging_a_snapshot_while_the_namespace_changes_stays_consistent() {
         "翻页期间新增的条目不得出现在快照里"
     );
     // S130：清单条目带服务端记录的最后修改时间；合成根条目没有被“创建”过，保持省略。
-    let root_row = all
+    let vault_row = all
         .iter()
-        .find(|entry| entry.entry_id == ROOT_ENTRY.to_hex())
+        .find(|entry| entry.entry_id == VAULT_ENTRY.to_hex())
         .expect("根条目");
-    assert_eq!(root_row.modified_at, None, "合成根条目没有修改时间");
+    assert_eq!(vault_row.modified_at, None, "合成根条目没有修改时间");
     for row in all
         .iter()
-        .filter(|entry| entry.entry_id != ROOT_ENTRY.to_hex())
+        .filter(|entry| entry.entry_id != VAULT_ENTRY.to_hex())
     {
         assert_eq!(
             row.modified_at.as_deref(),
@@ -487,12 +489,12 @@ async fn paging_a_snapshot_while_the_namespace_changes_stays_consistent() {
         format!("file-{unseen_marker:02x}.txt"),
         "快照里是创建时刻的名字，不是改名后的"
     );
-    let root_row = all
+    let vault_row = all
         .iter()
-        .find(|entry| entry.entry_id == ROOT_ENTRY.to_hex())
+        .find(|entry| entry.entry_id == VAULT_ENTRY.to_hex())
         .expect("含合成根条目");
     assert_eq!(
-        (root_row.parent_id.as_deref(), root_row.name.as_str()),
+        (vault_row.parent_id.as_deref(), vault_row.name.as_str()),
         (None, "")
     );
 
@@ -540,7 +542,7 @@ async fn snapshot_paging_has_a_hard_upper_bound_and_rejects_bad_queries() {
         "?limit=1&limit=2".to_owned(),
     ] {
         let (status, body) = app
-            .get(&snapshot_entries_uri(ROOT, id, &query), &token)
+            .get(&snapshot_entries_uri(VAULT, id, &query), &token)
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}：{}", text(&body));
         assert_eq!(
@@ -552,7 +554,7 @@ async fn snapshot_paging_has_a_hard_upper_bound_and_rejects_bad_queries() {
     let (status, _) = app
         .get(
             &snapshot_entries_uri(
-                ROOT,
+                VAULT,
                 id,
                 &format!("?limit={}", snapshots::MAX_SNAPSHOT_PAGE),
             ),
@@ -582,7 +584,7 @@ async fn an_expired_or_unknown_snapshot_is_410_not_an_empty_page() {
         .await
         .expect("使快照过期");
     for id in [snapshot.snapshot_id.clone(), "ab".repeat(16)] {
-        let (status, body) = app.get(&snapshot_entries_uri(ROOT, &id, ""), &token).await;
+        let (status, body) = app.get(&snapshot_entries_uri(VAULT, &id, ""), &token).await;
         assert_eq!(
             status,
             StatusCode::GONE,
@@ -602,18 +604,18 @@ async fn an_expired_or_unknown_snapshot_is_410_not_an_empty_page() {
         );
     }
 
-    // 别人的账号拿到快照身份也读不到：它自己的 Root 不含该快照 → 410；对方 Root → 403。
+    // 别人的账号拿到快照身份也读不到：它自己的 Vault 不含该快照 → 410；对方 Vault → 403。
     let intruder = app.login("intruder").await;
     let (status, _) = app
         .get(
-            &snapshot_entries_uri(FOREIGN_ROOT, &snapshot.snapshot_id, ""),
+            &snapshot_entries_uri(FOREIGN_VAULT, &snapshot.snapshot_id, ""),
             &intruder,
         )
         .await;
     assert_eq!(status, StatusCode::GONE);
     let (status, _) = app
         .get(
-            &snapshot_entries_uri(ROOT, &snapshot.snapshot_id, ""),
+            &snapshot_entries_uri(VAULT, &snapshot.snapshot_id, ""),
             &intruder,
         )
         .await;
@@ -659,7 +661,7 @@ async fn changes_are_ordered_and_a_transaction_is_never_split_across_pages() {
     assert!(first.has_more);
     assert_eq!(first.next_after, "4");
     assert_eq!(first.head_seq, "5");
-    assert_eq!(first.root_id, ROOT.to_hex());
+    assert_eq!(first.vault_id, VAULT.to_hex());
     assert_eq!(first.server_epoch, "1");
     // 批次内容完整：事件条数与写入时一致，TxId 对应事务。
     let counts: Vec<usize> = first
@@ -734,7 +736,7 @@ async fn changes_rejects_bad_queries_and_the_limit_has_a_hard_bound() {
         "?after=0&extra=1".to_owned(),
         "?after=0&after=1".to_owned(),
     ] {
-        let (status, body) = app.get(&changes_uri(ROOT, &query), &token).await;
+        let (status, body) = app.get(&changes_uri(VAULT, &query), &token).await;
         assert_eq!(
             status,
             StatusCode::BAD_REQUEST,
@@ -750,7 +752,7 @@ async fn changes_rejects_bad_queries_and_the_limit_has_a_hard_bound() {
     let (status, _) = app
         .get(
             &changes_uri(
-                ROOT,
+                VAULT,
                 &format!("?after=0&limit={}", events::MAX_CHANGES_LIMIT),
             ),
             &token,
@@ -778,7 +780,7 @@ async fn a_cursor_older_than_the_retention_window_is_410_never_an_empty_page() {
 
     for after in ["0", "1", "2"] {
         let (status, body) = app
-            .get(&changes_uri(ROOT, &format!("?after={after}")), &token)
+            .get(&changes_uri(VAULT, &format!("?after={after}")), &token)
             .await;
         assert_eq!(
             status,
@@ -803,7 +805,7 @@ async fn a_cursor_older_than_the_retention_window_is_410_never_an_empty_page() {
             details.get("expired_through").map(String::as_str),
             Some("3")
         );
-        assert_eq!(error.root_id.as_deref(), Some(ROOT.to_hex().as_str()));
+        assert_eq!(error.vault_id.as_deref(), Some(VAULT.to_hex().as_str()));
     }
 
     // 下沿本身合法：要的是 seq 3 之后的批次，仍然全部保留。
@@ -819,7 +821,7 @@ async fn a_cursor_ahead_of_the_head_is_410_not_a_caught_up_empty_page() {
     let token = app.login("owner").await;
     app.append(&[(0x01, 1), (0x02, 1)], now()).await;
 
-    let (status, body) = app.get(&changes_uri(ROOT, "?after=99"), &token).await;
+    let (status, body) = app.get(&changes_uri(VAULT, "?after=99"), &token).await;
     assert_eq!(status, StatusCode::GONE, "{}", text(&body));
     let error = envelope(&body).error;
     assert_eq!(error.code, ErrorCode::CursorExpired);
@@ -844,7 +846,7 @@ impl SseReader {
         let response = app
             .router
             .clone()
-            .oneshot(send("GET", &events_uri(ROOT), Some(token)))
+            .oneshot(send("GET", &events_uri(VAULT), Some(token)))
             .await
             .expect("调用处理器");
         let status = response.status();
@@ -970,10 +972,10 @@ async fn sse_hints_carry_no_data_and_lost_duplicated_reordered_hints_are_repaire
     assert_eq!(content_type.as_deref(), Some("text/event-stream"));
     let mut sse = reader.expect("事件流");
 
-    // 新连接立即给出当前头（空 Root 为 0）。
+    // 新连接立即给出当前头（空 Vault 为 0）。
     let (frame, hint) = sse.next_hint(wait).await.expect("连接即提示");
     assert_eq!(hint.seq, "0");
-    assert_eq!(hint.root_id, ROOT.to_hex());
+    assert_eq!(hint.vault_id, VAULT.to_hex());
     let mut all_frames = vec![frame];
 
     let mut replica = Replica::default();
@@ -1024,8 +1026,8 @@ async fn sse_hints_carry_no_data_and_lost_duplicated_reordered_hints_are_repaire
 
     // 最终一致：本地副本恰为服务端的全部批次，每个 seq 一次、严格连续、内容逐字节相同。
     let server: Vec<(i64, String)> =
-        sqlx::query_as("SELECT seq, events_json FROM changes WHERE root_id = ?1 ORDER BY seq")
-            .bind(ROOT.as_bytes().as_slice())
+        sqlx::query_as("SELECT seq, events_json FROM changes WHERE vault_id = ?1 ORDER BY seq")
+            .bind(VAULT.as_bytes().as_slice())
             .fetch_all(app.database.pool())
             .await
             .expect("读服务端批次");
@@ -1076,7 +1078,7 @@ async fn sse_ends_when_the_server_starts_draining() {
 // ───────────────────────── 5. 401 / 403 回归 ─────────────────────────
 
 #[tokio::test]
-async fn every_endpoint_requires_a_session_and_stays_inside_the_callers_roots() {
+async fn every_endpoint_requires_a_session_and_stays_inside_the_callers_vaults() {
     let fixture = Fixture::new("auth");
     let app = open_app(&fixture).await;
     let owner = app.login("owner").await;
@@ -1084,10 +1086,13 @@ async fn every_endpoint_requires_a_session_and_stays_inside_the_callers_roots() 
     let snapshot = create_snapshot(&app, &owner).await;
 
     let endpoints: Vec<(&str, String)> = vec![
-        ("POST", snapshots_uri(ROOT)),
-        ("GET", snapshot_entries_uri(ROOT, &snapshot.snapshot_id, "")),
-        ("GET", changes_uri(ROOT, "?after=0")),
-        ("GET", events_uri(ROOT)),
+        ("POST", snapshots_uri(VAULT)),
+        (
+            "GET",
+            snapshot_entries_uri(VAULT, &snapshot.snapshot_id, ""),
+        ),
+        ("GET", changes_uri(VAULT, "?after=0")),
+        ("GET", events_uri(VAULT)),
     ];
     for (method, uri) in &endpoints {
         // 无凭据与伪造凭据：401。
@@ -1101,7 +1106,7 @@ async fn every_endpoint_requires_a_session_and_stays_inside_the_callers_roots() 
         assert_eq!(envelope(&body).error.code, ErrorCode::AuthExpired);
         let (status, _) = app.call(send(method, uri, Some("not-a-real-token"))).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri} 伪造凭据");
-        // 别人的账号访问 owner 的 Root：403，且不泄露存在性（与不存在的 Root 同一回答）。
+        // 别人的账号访问 owner 的 Vault：403，且不泄露存在性（与不存在的 Vault 同一回答）。
         let (status, body) = app.call(send(method, uri, Some(&intruder))).await;
         assert_eq!(
             status,
@@ -1111,8 +1116,8 @@ async fn every_endpoint_requires_a_session_and_stays_inside_the_callers_roots() 
         );
         assert_eq!(envelope(&body).error.code, ErrorCode::AccessDenied);
     }
-    // 不存在的 Root 与越权同一个 403；Root 身份写法不对是 400。
-    let missing = RootId::from_bytes([0xee; ID_LEN]);
+    // 不存在的 Vault 与越权同一个 403；Vault 身份写法不对是 400。
+    let missing = VaultId::from_bytes([0xee; ID_LEN]);
     for uri in [
         snapshots_uri(missing),
         changes_uri(missing, "?after=0"),
@@ -1129,7 +1134,7 @@ async fn every_endpoint_requires_a_session_and_stays_inside_the_callers_roots() 
     let (status, _) = app
         .call(send(
             "GET",
-            "/v1/roots/not-hex/changes?after=0",
+            "/v1/vaults/not-hex/changes?after=0",
             Some(&owner),
         ))
         .await;
@@ -1137,13 +1142,13 @@ async fn every_endpoint_requires_a_session_and_stays_inside_the_callers_roots() 
     let (status, _) = app
         .call(send(
             "GET",
-            &snapshot_entries_uri(ROOT, "not-hex", ""),
+            &snapshot_entries_uri(VAULT, "not-hex", ""),
             Some(&owner),
         ))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     // 对照：owner 自己都能读通，说明上面的拒绝来自授权而不是端点坏了。
-    let (status, _) = app.get(&changes_uri(ROOT, "?after=0"), &owner).await;
+    let (status, _) = app.get(&changes_uri(VAULT, "?after=0"), &owner).await;
     assert_eq!(status, StatusCode::OK);
     let (status, reader, _) = SseReader::open(&app, &owner).await;
     assert_eq!(status, StatusCode::OK);

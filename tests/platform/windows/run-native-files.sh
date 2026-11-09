@@ -8,9 +8,9 @@ if [ "${VAULTSYNCD_WINDOWS_SHELL:-}" != 1 ]; then
     echo 'run-native-files: run inside nix develop .#windows' >&2
     exit 1
 fi
-root=$(repo_root)
-cd "$root"
-artifact_dir="$root/artifacts/S065"
+vault=$(repo_root)
+cd "$vault"
+artifact_dir="$vault/artifacts/S065"
 mkdir -p "$artifact_dir"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin test --locked --target "$TARGET_TRIPLE" -p "$PLATFORM_PACKAGE" \

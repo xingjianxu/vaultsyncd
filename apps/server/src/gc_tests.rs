@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 use vaultsyncd_domain::{
-    ids::{EntryId, ObjectLeaseId, RootId, TxId, UserId, VersionId},
+    ids::{EntryId, ObjectLeaseId, TxId, UserId, VaultId, VersionId},
     version::{Revision, ServerEpoch},
 };
 use vaultsyncd_server_store::{
@@ -18,7 +18,7 @@ struct Lab {
     state: PathBuf,
     db: Database,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     parent: EntryId,
 }
 fn at(t: i64) -> UtcTimestamp {
@@ -38,19 +38,19 @@ impl Lab {
         std::fs::create_dir_all(&state).unwrap();
         let db = Database::open(state.join("server.sqlite3")).await.unwrap();
         let owner = UserId::from_bytes([1; 16]);
-        let root = RootId::from_bytes([2; 16]);
+        let vault = VaultId::from_bytes([2; 16]);
         let parent = EntryId::from_bytes([3; 16]);
         let mut tx = db.begin_write().await.unwrap();
         sqlx::query("INSERT INTO users(id,login,password_hash,status) VALUES(?,'gc-owner','test-only','active')").bind(owner.as_bytes().as_slice()).execute(&mut *tx).await.unwrap();
-        roots::insert_root(
+        vaults::insert_vault(
             &mut tx,
-            &roots::NewRoot {
-                id: root,
+            &vaults::NewVault {
+                id: vault,
                 entry: parent,
                 owner,
                 absolute_path: state.join("work").display().to_string(),
                 volume_identity: vec![1],
-                root_file_identity: vec![2],
+                vault_file_identity: vec![2],
                 epoch: ServerEpoch::ZERO,
             },
         )
@@ -61,7 +61,7 @@ impl Lab {
             state,
             db,
             owner,
-            root,
+            vault,
             parent,
         }
     }
@@ -78,7 +78,7 @@ impl Lab {
             &mut tx,
             self.owner,
             &NewObject {
-                root: self.root,
+                vault: self.vault,
                 hash,
                 size: bytes.len() as u64,
                 storage_path: ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
@@ -103,7 +103,7 @@ impl Lab {
             self.owner,
             &NewEntry {
                 id: entry,
-                root: self.root,
+                vault: self.vault,
                 parent: self.parent,
                 name: "current".into(),
                 name_key: "current".into(),
@@ -118,7 +118,7 @@ impl Lab {
         let batch = changes::append_change(
             &mut tx,
             self.owner,
-            self.root,
+            self.vault,
             TxId::from_bytes([5; 16]),
             "[{}]",
             at(101),
@@ -130,7 +130,7 @@ impl Lab {
             self.owner,
             &NewVersion {
                 id: VersionId::from_bytes([6; 16]),
-                root: self.root,
+                vault: self.vault,
                 entry,
                 object_hash: hash,
                 size,
@@ -173,7 +173,7 @@ async fn real_files_require_grace_and_a_new_lease_cancels_deletion() {
         lab.owner,
         &NewObjectLease {
             id: ObjectLeaseId::from_bytes([8; 16]),
-            root: lab.root,
+            vault: lab.vault,
             object_hash: orphan,
             purpose: ObjectLeasePurpose::Download,
             expires_at: at(8000),
@@ -259,13 +259,13 @@ async fn crash_child() {
     let phase = std::env::var("VAULTSYNCD_S086_CRASH_PHASE").unwrap();
     let db = Database::open(state.join("server.sqlite3")).await.unwrap();
     let owner = UserId::from_bytes([1; 16]);
-    let root = RootId::from_bytes([2; 16]);
+    let vault = VaultId::from_bytes([2; 16]);
     let _exclusive = db.object_maintenance().await;
     let mut tx = db.begin_write().await.unwrap();
-    sweep::mark_root(&mut tx, owner, root, at(100))
+    sweep::mark_vault(&mut tx, owner, vault, at(100))
         .await
         .unwrap();
-    let c = sweep::candidates(&mut tx, owner, root)
+    let c = sweep::candidates(&mut tx, owner, vault)
         .await
         .unwrap()
         .remove(0);
@@ -327,7 +327,7 @@ async fn expired_incomplete_uploads_are_separate_from_finalized_or_active_conten
         let id = vaultsyncd_domain::ids::UploadId::from_bytes([marker; 16]);
         sqlx::query("INSERT INTO uploads VALUES(?,?,?,1,?,1,?,?)")
             .bind(id.as_bytes().as_slice())
-            .bind(lab.root.as_bytes().as_slice())
+            .bind(lab.vault.as_bytes().as_slice())
             .bind([19u8; 16].as_slice())
             .bind([30u8; 32].as_slice())
             .bind(expires)
@@ -501,12 +501,12 @@ async fn sigkill_at_all_durable_boundaries_resumes_without_deleting_current_data
     }
 }
 
-/// S136/ADR-020：两 Root 同摘要各有独立物理对象；回收一个 Root 的孤儿对象时，
-/// 另一个 Root 的存活字节、对象行与登记路径都必须完好。覆盖「两 Root 都 scoped」
+/// S136/ADR-020：两 Vault 同摘要各有独立物理对象；回收一个 Vault 的孤儿对象时，
+/// 另一个 Vault 的存活字节、对象行与登记路径都必须完好。覆盖「两 Vault 都 scoped」
 /// 与「A 为已登记 legacy、B 为 scoped」两种实际形态。
 #[tokio::test]
-async fn same_digest_objects_are_gc_isolated_between_roots() {
-    use vaultsyncd_server_store::roots;
+async fn same_digest_objects_are_gc_isolated_between_vaults() {
+    use vaultsyncd_server_store::vaults;
     for a_legacy in [false, true] {
         let lab = Lab::new(if a_legacy {
             "scoped-gc-legacy-a"
@@ -514,18 +514,18 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
             "scoped-gc-scoped-both"
         })
         .await;
-        let second_root = RootId::from_bytes([9; 16]);
+        let second_vault = VaultId::from_bytes([9; 16]);
         let second_entry = EntryId::from_bytes([10; 16]);
         let mut tx = lab.db.begin_write().await.unwrap();
-        roots::insert_root(
+        vaults::insert_vault(
             &mut tx,
-            &roots::NewRoot {
-                id: second_root,
+            &vaults::NewVault {
+                id: second_vault,
                 entry: second_entry,
                 owner: lab.owner,
                 absolute_path: lab.state.join("work-second").display().to_string(),
                 volume_identity: vec![3],
-                root_file_identity: vec![4],
+                vault_file_identity: vec![4],
                 epoch: ServerEpoch::ZERO,
             },
         )
@@ -533,7 +533,7 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let bytes = b"same digest, two roots";
+        let bytes = b"same digest, two vaults";
         let hash = lab.object(bytes).await;
         let digest = ContentDigest::from_bytes(hash);
         let first_path = if a_legacy {
@@ -542,12 +542,14 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
             let path = lab
                 .state
                 .join("objects")
-                .join(ObjectLayout::scoped_relative_object_path(lab.root, &digest));
+                .join(ObjectLayout::scoped_relative_object_path(
+                    lab.vault, &digest,
+                ));
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, bytes).unwrap();
             let mut tx = lab.db.begin_write().await.unwrap();
-            sqlx::query("DELETE FROM objects WHERE root_id=? AND hash=?")
-                .bind(lab.root.as_bytes().as_slice())
+            sqlx::query("DELETE FROM objects WHERE vault_id=? AND hash=?")
+                .bind(lab.vault.as_bytes().as_slice())
                 .bind(hash.as_slice())
                 .execute(&mut *tx)
                 .await
@@ -556,10 +558,10 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
                 &mut tx,
                 lab.owner,
                 &NewObject {
-                    root: lab.root,
+                    vault: lab.vault,
                     hash,
                     size: bytes.len() as u64,
-                    storage_path: ObjectLayout::scoped_relative_object_path(lab.root, &digest)
+                    storage_path: ObjectLayout::scoped_relative_object_path(lab.vault, &digest)
                         .display()
                         .to_string(),
                     verified_at: at(1),
@@ -574,7 +576,7 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
             lab.state
                 .join("objects")
                 .join(ObjectLayout::scoped_relative_object_path(
-                    second_root,
+                    second_vault,
                     &digest,
                 ));
         std::fs::create_dir_all(second_path.parent().unwrap()).unwrap();
@@ -584,10 +586,10 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
             &mut tx,
             lab.owner,
             &NewObject {
-                root: second_root,
+                vault: second_vault,
                 hash,
                 size: bytes.len() as u64,
-                storage_path: ObjectLayout::scoped_relative_object_path(second_root, &digest)
+                storage_path: ObjectLayout::scoped_relative_object_path(second_vault, &digest)
                     .display()
                     .to_string(),
                 verified_at: at(1),
@@ -596,25 +598,25 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
         .await
         .unwrap();
         tx.commit().await.unwrap();
-        assert_ne!(first_path, second_path, "不同 Root 不得共用物理路径");
+        assert_ne!(first_path, second_path, "不同 Vault 不得共用物理路径");
         let rows_before: Vec<(Vec<u8>, String)> = sqlx::query_as(
-            "SELECT root_id, storage_path FROM objects WHERE hash = ? ORDER BY root_id",
+            "SELECT vault_id, storage_path FROM objects WHERE hash = ? ORDER BY vault_id",
         )
         .bind(hash.as_slice())
         .fetch_all(lab.db.pool())
         .await
         .unwrap();
-        assert_eq!(rows_before.len(), 2, "两 Root 各自一行");
-        for (root, path) in &rows_before {
-            let expected = if root.as_slice() == lab.root.as_bytes() {
+        assert_eq!(rows_before.len(), 2, "两 Vault 各自一行");
+        for (vault, path) in &rows_before {
+            let expected = if vault.as_slice() == lab.vault.as_bytes() {
                 first_path.strip_prefix(lab.state.join("objects")).unwrap()
             } else {
                 second_path.strip_prefix(lab.state.join("objects")).unwrap()
             };
-            assert_eq!(Path::new(path), expected, "登记路径必须对应各自 Root");
+            assert_eq!(Path::new(path), expected, "登记路径必须对应各自 Vault");
         }
 
-        // 第二 Root 的对象有当前版本，第一 Root 的没有：只有第一 Root 的对象可回收。
+        // 第二 Vault 的对象有当前版本，第一 Vault 的没有：只有第一 Vault 的对象可回收。
         let entry = EntryId::from_bytes([12; 16]);
         let mut tx = lab.db.begin_write().await.unwrap();
         entries::insert_entry(
@@ -622,7 +624,7 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
             lab.owner,
             &NewEntry {
                 id: entry,
-                root: second_root,
+                vault: second_vault,
                 parent: second_entry,
                 name: "second".into(),
                 name_key: "second".into(),
@@ -637,7 +639,7 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
         let batch = changes::append_change(
             &mut tx,
             lab.owner,
-            second_root,
+            second_vault,
             TxId::from_bytes([13; 16]),
             "[{}]",
             at(20_000),
@@ -649,7 +651,7 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
             lab.owner,
             &NewVersion {
                 id: VersionId::from_bytes([11; 16]),
-                root: second_root,
+                vault: second_vault,
                 entry,
                 object_hash: hash,
                 size: bytes.len() as u64,
@@ -664,22 +666,22 @@ async fn same_digest_objects_are_gc_isolated_between_roots() {
 
         run_once(&lab.db, &lab.state, at(100)).await.unwrap();
         let report = run_once(&lab.db, &lab.state, at(11600)).await.unwrap();
-        assert_eq!(report.objects, 1, "只回收无引用的第一 Root 对象");
-        assert!(!first_path.exists(), "第一 Root 的对象应被回收");
+        assert_eq!(report.objects, 1, "只回收无引用的第一 Vault 对象");
+        assert!(!first_path.exists(), "第一 Vault 的对象应被回收");
         assert_eq!(
             std::fs::read(&second_path).unwrap(),
             bytes,
-            "另一 Root 的存活字节不得被删"
+            "另一 Vault 的存活字节不得被删"
         );
         let rows: Vec<(Vec<u8>, String)> = sqlx::query_as(
-            "SELECT root_id, storage_path FROM objects WHERE hash = ? ORDER BY root_id",
+            "SELECT vault_id, storage_path FROM objects WHERE hash = ? ORDER BY vault_id",
         )
         .bind(hash.as_slice())
         .fetch_all(lab.db.pool())
         .await
         .unwrap();
-        assert_eq!(rows.len(), 1, "另一 Root 的对象行不得被牵连");
-        assert_eq!(rows[0].0, second_root.as_bytes().to_vec());
+        assert_eq!(rows.len(), 1, "另一 Vault 的对象行不得被牵连");
+        assert_eq!(rows[0].0, second_vault.as_bytes().to_vec());
         assert_eq!(
             Path::new(&rows[0].1),
             second_path.strip_prefix(lab.state.join("objects")).unwrap()

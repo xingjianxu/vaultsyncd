@@ -7,8 +7,8 @@ import tempfile
 import unittest
 import zipfile
 
-ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("windows_zip", ROOT / "packaging/windows/zip/build.py")
+VAULT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location("windows_zip", VAULT / "packaging/windows/zip/build.py")
 ZIP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ZIP)
 
@@ -29,7 +29,7 @@ class WindowsZip(unittest.TestCase):
         self.archive = self.payload / "unsigned.zip"
 
     def build(self):
-        ZIP.build(self.payload, self.launcher, ROOT / "packaging/windows/zip", self.archive)
+        ZIP.build(self.payload, self.launcher, VAULT / "packaging/windows/zip", self.archive)
 
     def test_complete_archive_and_every_file_hash(self):
         self.build()
@@ -49,7 +49,7 @@ class WindowsZip(unittest.TestCase):
         for name in (*ZIP.EXECUTABLES[:-1], "installed-files.json", "UNSIGNED-TEST.txt"):
             (second / name).write_bytes((self.payload / name).read_bytes())
         archive = second / "unsigned.zip"
-        ZIP.build(second, self.launcher, ROOT / "packaging/windows/zip", archive)
+        ZIP.build(second, self.launcher, VAULT / "packaging/windows/zip", archive)
         self.assertEqual(archive.read_bytes(), self.archive.read_bytes())
 
     def test_missing_input_never_becomes_valid_archive(self):
@@ -92,7 +92,7 @@ class WindowsZip(unittest.TestCase):
             ZIP.verify(self.archive, directory)
 
     def test_double_click_entries_quote_own_directory_and_do_not_kill(self):
-        resources = ROOT / "packaging/windows/zip"
+        resources = VAULT / "packaging/windows/zip"
         for name in ("Start vaultsyncd.cmd", "Stop vaultsyncd.cmd"):
             text = (resources / name).read_text()
             self.assertIn('"%~dp0vaultsyncd-zip.exe"', text)

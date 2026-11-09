@@ -45,34 +45,34 @@ fn main() -> std::io::Result<()> {
         }
         return Ok(());
     }
-    let root = std::env::current_exe()?
+    let vault = std::env::current_exe()?
         .parent()
         .unwrap()
         .join(format!("s070-life-{}", std::process::id()));
-    std::fs::create_dir(&root)?;
+    std::fs::create_dir(&vault)?;
     let scope = format!("s070-life-{}", std::process::id());
-    let guard = instance::InstanceGuard::acquire(&root, &scope)?;
+    let guard = instance::InstanceGuard::acquire(&vault, &scope)?;
     let status = Command::new(std::env::current_exe()?)
         .arg("child")
-        .arg(&root)
+        .arg(&vault)
         .arg(&scope)
         .status()?;
     assert!(status.success());
     println!("check=pass second_process_mutex_refused_before_database");
     let status = Command::new(std::env::current_exe()?)
         .arg("child")
-        .arg(&root)
+        .arg(&vault)
         .arg(format!("{scope}-other-session"))
         .status()?;
     assert!(status.success());
     println!("check=pass different_mutex_same_state_lock_refused");
     drop(guard);
-    let second = instance::InstanceGuard::acquire(&root, &scope)?;
+    let second = instance::InstanceGuard::acquire(&vault, &scope)?;
     drop(second);
     println!("check=pass clean_restart_reacquires_ownership");
     let mut holder = Command::new(std::env::current_exe()?)
         .arg("hold")
-        .arg(&root)
+        .arg(&vault)
         .arg(&scope)
         .stdout(Stdio::piped())
         .spawn()?;
@@ -81,7 +81,7 @@ fn main() -> std::io::Result<()> {
     assert_eq!(ready.trim(), "ready");
     holder.kill()?;
     holder.wait()?;
-    drop(instance::InstanceGuard::acquire(&root, &scope)?);
+    drop(instance::InstanceGuard::acquire(&vault, &scope)?);
     println!("check=pass killed_process_releases_mutex_and_state_ownership");
     let vault = credentials::CredentialVault::new(&format!("{:032x}", std::process::id()))?;
     vault.erase()?;
@@ -115,7 +115,7 @@ fn main() -> std::io::Result<()> {
     }
     assert!(child.wait()?.success());
     println!("check=pass real_ctrl_break_drains_process_loop");
-    std::fs::remove_dir_all(&root)?;
+    std::fs::remove_dir_all(&vault)?;
     println!("check=pass console_handler_install_remove");
     Ok(())
 }

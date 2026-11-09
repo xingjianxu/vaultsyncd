@@ -17,7 +17,7 @@
 //! socket）不在本 crate。
 
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
-pub const PROTOCOL_MAJOR: u32 = 1;
+pub const PROTOCOL_MAJOR: u32 = 2;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
 pub const PROTOCOL_MINOR: u32 = 6;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
@@ -40,8 +40,8 @@ pub struct BindingInfo {
     pub mode: String,
     /// 已暂停。
     pub paused: bool,
-    /// Root 身份。
-    pub root_id: String,
+    /// Vault 身份。
+    pub vault_id: String,
 }
 
 /// 运行中 agent 从核心持久状态读取的单 Binding 多维快照。计数为十进制文本，不含本机路径或凭据；synchronized 只能由核心完整判定，不能仅按 pending 判定。每个 Binding 的字段来自同一读事务，不承诺多 Binding 原子性；1.2 的 subscribe_status 按实例版本长轮询推送全量，get_status 可无条件恢复丢失提示。
@@ -146,9 +146,9 @@ pub enum CommandName {
     /// 取值 `logout`。
     #[serde(rename = "logout")]
     Logout,
-    /// 取值 `list_roots`。
-    #[serde(rename = "list_roots")]
-    ListRoots,
+    /// 取值 `list_vaults`。
+    #[serde(rename = "list_vaults")]
+    ListVaults,
     /// 取值 `set_mode`。
     #[serde(rename = "set_mode")]
     SetMode,
@@ -238,10 +238,6 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    /// 授权 Root 身份。
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_id: Option<String>,
     /// 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,6 +262,10 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// 授权 Vault 身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<String>,
     /// 固定历史版本。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -289,13 +289,13 @@ impl core::fmt::Debug for CommandParameters {
         value.field("notification_key", &self.notification_key);
         value.field("operation_id", &self.operation_id);
         value.field("password", &"[REDACTED]");
-        value.field("root_id", &self.root_id);
         value.field("rules", &self.rules);
         value.field("rules_version", &self.rules_version);
         value.field("search", &self.search);
         value.field("server_id", &self.server_id);
         value.field("server_url", &self.server_url);
         value.field("username", &self.username);
+        value.field("vault_id", &self.vault_id);
         value.field("version_id", &self.version_id);
         value.finish()
     }
@@ -316,7 +316,7 @@ pub struct ConnectionInfo {
     pub server_url: String,
 }
 
-/// 错误应答主体：协议级失败的原因。带 root_id/details 的同步问题由问题页命令返回，不在本契约里。
+/// 错误应答主体：协议级失败的原因。带 vault_id/details 的同步问题由问题页命令返回，不在本契约里。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ErrorBody {
     /// 错误码。
@@ -330,7 +330,7 @@ pub struct ErrorBody {
 /// agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct FileStatus {
-    /// online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。
+    /// online/offline/vault_unavailable；离线来自持久调度事实，不臆造在线。
     pub availability: String,
     /// 无法取得当前保护句柄；不保证此后一直空闲。
     pub busy: bool,
@@ -442,7 +442,7 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incomplete: Option<Vec<String>>,
-    /// 远端授权 Root/历史/回收站列表。
+    /// 远端授权 Vault/历史/回收站列表。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<RemoteItem>>,
@@ -492,10 +492,10 @@ pub struct ManagementResult {
     pub unconfirmed: Option<Vec<String>>,
 }
 
-/// 核心Root原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。
+/// 核心Vault原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct Notice {
-    /// Root原因，冲突副本为CONFLICT_COPY
+    /// Vault原因，冲突副本为CONFLICT_COPY
     pub cause: String,
     /// 本代际已领取系统投递
     pub claimed: bool,
@@ -507,12 +507,12 @@ pub struct Notice {
     pub generation: String,
     /// 稳定去重键
     pub key: String,
-    /// 关联Root，非绑定身份
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_id: Option<String>,
     /// active或resolved
     pub state: String,
+    /// 关联Vault，非绑定身份
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<String>,
 }
 
 /// 真实持久问题；不返回任意日志文本。
@@ -542,7 +542,7 @@ pub struct Problem {
     pub retryable: bool,
 }
 
-/// 服务器返回的授权 Root、历史版本或回收站项目。
+/// 服务器返回的授权 Vault、历史版本或回收站项目。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct RemoteItem {
     /// 冲突副本的原条目身份

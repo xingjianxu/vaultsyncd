@@ -1,22 +1,22 @@
-//! Root 句柄：受限目录句柄 + 注册时身份快照 + 每次访问的挂载边界与身份复核。
+//! Vault 句柄：受限目录句柄 + 注册时身份快照 + 每次访问的挂载边界与身份复核。
 //!
 //! design §11.4 要求“取得受限根句柄”，§11.5 要求“准入核对 btrfs 类型、FSID、子卷 ID、mount ID
 //! 和目录身份”，§16.1 要求“运行时依然以根句柄为边界逐层安全访问”。本模块把这三条落成一个
 //! 接口：
 //!
-//! - [`RootHandle::open`] 先 [`probe_path`] 读内核事实，再用 [`RestrictedDir`] 以
+//! - [`VaultHandle::open`] 先 [`probe_path`] 读内核事实，再用 [`RestrictedDir`] 以
 //!   `O_DIRECTORY|O_NOFOLLOW` 打开根句柄，并核对句柄身份与刚探测到的事实是同一个目录——注册期
-//!   路径被替换就当场失败（[`RootError::ChangedDuringOpen`]），不把“两次打开不是同一个东西”当成功。
+//!   路径被替换就当场失败（[`VaultError::ChangedDuringOpen`]），不把“两次打开不是同一个东西”当成功。
 //! - 所有访问都经由根句柄按相对名称进行（见 [`RestrictedDir`]）：`openat2` 的
 //!   `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS` 保证不逃出根、不跟随符号链接；逐段回退同样带
 //!   `O_NOFOLLOW`。
-//! - 每次打开/列举/创建之后复核**挂载身份**：对象的 `STATX_MNT_ID` 必须等于 Root 的挂载 ID，
+//! - 每次打开/列举/创建之后复核**挂载身份**：对象的 `STATX_MNT_ID` 必须等于 Vault 的挂载 ID，
 //!   否则说明路径穿过了 bind mount/子挂载（[`RestrictError::MountBoundaryCrossed`]）；内核不提供
 //!   挂载 ID 时按 `MountBoundaryUnverified` 失败，不用“无法确认”冒充“没有变化”。
-//! - [`RootSnapshot`] 记录 FSID、子卷 ID、挂载 ID、设备与目录身份，可在之后任意时刻重新探测并
-//!   比较（[`RootSnapshot::verify`]），漂移原因映射到 design 的 `ROOT_UNAVAILABLE`，不推导删除。
+//! - [`VaultSnapshot`] 记录 FSID、子卷 ID、挂载 ID、设备与目录身份，可在之后任意时刻重新探测并
+//!   比较（[`VaultSnapshot::verify`]），漂移原因映射到 design 的 `VAULT_UNAVAILABLE`，不推导删除。
 //!
-//! 边界：本模块不判定后端是否合规（那是 [`crate::mounts::admission`] 的职责，`RootHandle`
+//! 边界：本模块不判定后端是否合规（那是 [`crate::mounts::admission`] 的职责，`VaultHandle`
 //! 接受任何目录以便在注册流程之外复用），不实现递归扫描策略、不写数据库、不做 Epoch 流程。
 
 use crate::files::identity::FileIdentity;
@@ -33,12 +33,12 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
-/// 一个 Root 在注册时的身份快照。
+/// 一个 Vault 在注册时的身份快照。
 ///
 /// 字段全部来自打开句柄与 `/proc/self/mountinfo` 的内核事实，不用路径前缀推断；`fsid` 与
 /// `subvolume_id` 只有 btrfs 上才有，比较时按 `Option` 原样对比（“从有到无”也算变化）。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RootSnapshot {
+pub struct VaultSnapshot {
     /// 规范路径（`canonicalize` 之后），也是后续复核时重新探测的路径。
     pub resolved_path: PathBuf,
     /// 后端分类（[`admission::classify_backend`] 的结论）。
@@ -49,7 +49,7 @@ pub struct RootSnapshot {
     pub fsid: Option<[u8; 16]>,
     /// btrfs 子卷 ID；非 btrfs 或读不到时为 `None`。
     pub subvolume_id: Option<u64>,
-    /// Root 所在挂载的挂载 ID（运行时每次访问都以它核对边界）。
+    /// Vault 所在挂载的挂载 ID（运行时每次访问都以它核对边界）。
     pub mount_id: u64,
     /// `statx` 设备主号。
     pub dev_major: u32,
@@ -61,13 +61,13 @@ pub struct RootSnapshot {
     pub btime: Option<(i64, u32)>,
 }
 
-impl RootSnapshot {
+impl VaultSnapshot {
     /// 从探测事实构造快照。
     ///
     /// # Panics
     ///
     /// 不会 panic；`mount_id` 缺失（内核未提供 `STATX_MNT_ID`）时这里是 `0`，因为
-    /// [`RootHandle::open`] 在此之前已经拒绝该情形。
+    /// [`VaultHandle::open`] 在此之前已经拒绝该情形。
     #[must_use]
     pub fn of_facts(facts: &StorageFacts) -> Self {
         Self {
@@ -93,7 +93,7 @@ impl RootSnapshot {
             && self.btime == identity.btime
     }
 
-    /// 渲染成稳定的 `key=value` 文本（供验收脚本保存后交给 [`RootSnapshot::parse_spec`]）。
+    /// 渲染成稳定的 `key=value` 文本（供验收脚本保存后交给 [`VaultSnapshot::parse_spec`]）。
     #[must_use]
     pub fn to_spec(&self) -> String {
         format!(
@@ -116,12 +116,12 @@ impl RootSnapshot {
         )
     }
 
-    /// 解析 [`RootSnapshot::to_spec`] 产生的文本（未知字段忽略，缺失字段报错）。
+    /// 解析 [`VaultSnapshot::to_spec`] 产生的文本（未知字段忽略，缺失字段报错）。
     ///
     /// # Errors
     ///
-    /// 缺字段、字段重复或取值无法解析时返回 [`RootSpecError`]，调用方必须当作用法错误。
-    pub fn parse_spec(text: &str) -> Result<Self, RootSpecError> {
+    /// 缺字段、字段重复或取值无法解析时返回 [`VaultSpecError`]，调用方必须当作用法错误。
+    pub fn parse_spec(text: &str) -> Result<Self, VaultSpecError> {
         const KEYS: [&str; 10] = [
             "resolved_path",
             "backend",
@@ -145,22 +145,24 @@ impl RootSnapshot {
             };
             if let Some(known) = KEYS.iter().find(|candidate| **candidate == key) {
                 if seen.insert(known, value.to_owned()).is_some() {
-                    return Err(RootSpecError::DuplicateKey(known));
+                    return Err(VaultSpecError::DuplicateKey(known));
                 }
             }
         }
-        let required = |key: &'static str| -> Result<String, RootSpecError> {
-            seen.get(key).cloned().ok_or(RootSpecError::MissingKey(key))
+        let required = |key: &'static str| -> Result<String, VaultSpecError> {
+            seen.get(key)
+                .cloned()
+                .ok_or(VaultSpecError::MissingKey(key))
         };
-        let invalid = |key: &'static str, value: &str| RootSpecError::InvalidValue {
+        let invalid = |key: &'static str, value: &str| VaultSpecError::InvalidValue {
             key: key.to_owned(),
             value: value.to_owned(),
         };
-        let parse_u32 = |key: &'static str| -> Result<u32, RootSpecError> {
+        let parse_u32 = |key: &'static str| -> Result<u32, VaultSpecError> {
             let raw = required(key)?;
             raw.parse::<u32>().map_err(|_| invalid(key, &raw))
         };
-        let parse_u64 = |key: &'static str| -> Result<u64, RootSpecError> {
+        let parse_u64 = |key: &'static str| -> Result<u64, VaultSpecError> {
             let raw = required(key)?;
             raw.parse::<u64>().map_err(|_| invalid(key, &raw))
         };
@@ -213,33 +215,33 @@ impl RootSnapshot {
     /// # Errors
     ///
     /// 探测本身失败时返回 [`ProbeError`]（“读不到”不当作“没变化”）；身份漂移时返回
-    /// [`RootDrift`]。
-    pub fn verify(&self, path: &Path) -> Result<(), RootSpecVerifyError> {
-        let facts = probe::probe_path(path).map_err(RootSpecVerifyError::Probe)?;
-        self.compare(&facts).map_err(RootSpecVerifyError::Drift)
+    /// [`VaultDrift`]。
+    pub fn verify(&self, path: &Path) -> Result<(), VaultSpecVerifyError> {
+        let facts = probe::probe_path(path).map_err(VaultSpecVerifyError::Probe)?;
+        self.compare(&facts).map_err(VaultSpecVerifyError::Drift)
     }
 
     /// 与新的探测事实比较；按“后端 → FSID → 子卷 → 挂载 → 目录”的顺序返回首个漂移。
-    pub fn compare(&self, facts: &StorageFacts) -> Result<(), RootDrift> {
-        let current = RootSnapshot::of_facts(facts);
+    pub fn compare(&self, facts: &StorageFacts) -> Result<(), VaultDrift> {
+        let current = VaultSnapshot::of_facts(facts);
         if current.backend != self.backend {
-            return Err(RootDrift::BackendChanged);
+            return Err(VaultDrift::BackendChanged);
         }
         if current.fsid != self.fsid {
-            return Err(RootDrift::FilesystemChanged);
+            return Err(VaultDrift::FilesystemChanged);
         }
         if current.subvolume_id != self.subvolume_id {
-            return Err(RootDrift::SubvolumeChanged);
+            return Err(VaultDrift::SubvolumeChanged);
         }
         if current.mount_id != self.mount_id {
-            return Err(RootDrift::MountChanged);
+            return Err(VaultDrift::MountChanged);
         }
         if current.dev_major != self.dev_major
             || current.dev_minor != self.dev_minor
             || current.inode != self.inode
             || current.btime != self.btime
         {
-            return Err(RootDrift::DirectoryChanged);
+            return Err(VaultDrift::DirectoryChanged);
         }
         Ok(())
     }
@@ -247,7 +249,7 @@ impl RootSnapshot {
 
 /// 快照规格解析错误。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RootSpecError {
+pub enum VaultSpecError {
     /// 缺少字段。
     MissingKey(&'static str),
     /// 字段取值无法解析。
@@ -261,23 +263,23 @@ pub enum RootSpecError {
     DuplicateKey(&'static str),
 }
 
-impl fmt::Display for RootSpecError {
+impl fmt::Display for VaultSpecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RootSpecError::MissingKey(key) => write!(f, "Root 规格缺少字段 {key}"),
-            RootSpecError::InvalidValue { key, value } => {
-                write!(f, "Root 规格字段 {key} 的取值 '{value}' 无法解析")
+            VaultSpecError::MissingKey(key) => write!(f, "Vault 规格缺少字段 {key}"),
+            VaultSpecError::InvalidValue { key, value } => {
+                write!(f, "Vault 规格字段 {key} 的取值 '{value}' 无法解析")
             }
-            RootSpecError::DuplicateKey(key) => write!(f, "Root 规格字段 {key} 重复出现"),
+            VaultSpecError::DuplicateKey(key) => write!(f, "Vault 规格字段 {key} 重复出现"),
         }
     }
 }
 
-impl std::error::Error for RootSpecError {}
+impl std::error::Error for VaultSpecError {}
 
-/// Root 身份漂移：启动或挂载变化后重新核对时发现的差异（design §11.4—11.5）。
+/// Vault 身份漂移：启动或挂载变化后重新核对时发现的差异（design §11.4—11.5）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RootDrift {
+pub enum VaultDrift {
     /// 普通目录被换成了别的后端（例如 tmpfs、FUSE）。
     BackendChanged,
     /// btrfs 文件系统 UUID 变化（卷被替换或回滚）。
@@ -290,27 +292,27 @@ pub enum RootDrift {
     DirectoryChanged,
 }
 
-impl RootDrift {
+impl VaultDrift {
     /// 稳定原因码。
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
-            RootDrift::BackendChanged => "backend_changed",
-            RootDrift::FilesystemChanged => "filesystem_changed",
-            RootDrift::SubvolumeChanged => "subvolume_changed",
-            RootDrift::MountChanged => "mount_changed",
-            RootDrift::DirectoryChanged => "directory_changed",
+            VaultDrift::BackendChanged => "backend_changed",
+            VaultDrift::FilesystemChanged => "filesystem_changed",
+            VaultDrift::SubvolumeChanged => "subvolume_changed",
+            VaultDrift::MountChanged => "mount_changed",
+            VaultDrift::DirectoryChanged => "directory_changed",
         }
     }
 
-    /// 对应的 design 错误码：运行阶段发现变化一律 `ROOT_UNAVAILABLE`，不推导删除。
+    /// 对应的 design 错误码：运行阶段发现变化一律 `VAULT_UNAVAILABLE`，不推导删除。
     #[must_use]
     pub fn design_error_code(self) -> &'static str {
-        "ROOT_UNAVAILABLE"
+        "VAULT_UNAVAILABLE"
     }
 }
 
-impl fmt::Display for RootDrift {
+impl fmt::Display for VaultDrift {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.code())
     }
@@ -318,42 +320,42 @@ impl fmt::Display for RootDrift {
 
 /// 复核失败的来源：探测失败、句柄身份读取失败、身份漂移或挂载健康复核失败。
 #[derive(Debug)]
-pub enum RootSpecVerifyError {
+pub enum VaultSpecVerifyError {
     /// 重新探测失败（“读不到”不当作“没变化”）。
     Probe(ProbeError),
-    /// 读取 Root 句柄身份失败。
+    /// 读取 Vault 句柄身份失败。
     Handle(RestrictError),
     /// 身份漂移。
-    Drift(RootDrift),
+    Drift(VaultDrift),
     /// 挂载健康复核失败（子挂载、权限；见 [`crate::mounts::health`]）。
     Mount(MountChange),
 }
 
-impl fmt::Display for RootSpecVerifyError {
+impl fmt::Display for VaultSpecVerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RootSpecVerifyError::Probe(error) => write!(f, "重新探测 Root 失败：{error}"),
-            RootSpecVerifyError::Handle(error) => write!(f, "读取 Root 句柄身份失败：{error}"),
-            RootSpecVerifyError::Drift(drift) => write!(f, "Root 身份已漂移：{}", drift.code()),
-            RootSpecVerifyError::Mount(change) => write!(f, "Root 挂载复核失败：{change}"),
+            VaultSpecVerifyError::Probe(error) => write!(f, "重新探测 Vault 失败：{error}"),
+            VaultSpecVerifyError::Handle(error) => write!(f, "读取 Vault 句柄身份失败：{error}"),
+            VaultSpecVerifyError::Drift(drift) => write!(f, "Vault 身份已漂移：{}", drift.code()),
+            VaultSpecVerifyError::Mount(change) => write!(f, "Vault 挂载复核失败：{change}"),
         }
     }
 }
 
-impl std::error::Error for RootSpecVerifyError {
+impl std::error::Error for VaultSpecVerifyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            RootSpecVerifyError::Probe(error) => Some(error),
-            RootSpecVerifyError::Handle(error) => Some(error),
-            RootSpecVerifyError::Mount(change) => Some(change),
-            RootSpecVerifyError::Drift(_) => None,
+            VaultSpecVerifyError::Probe(error) => Some(error),
+            VaultSpecVerifyError::Handle(error) => Some(error),
+            VaultSpecVerifyError::Mount(change) => Some(change),
+            VaultSpecVerifyError::Drift(_) => None,
         }
     }
 }
 
-/// 打开 Root 句柄时的失败。
+/// 打开 Vault 句柄时的失败。
 #[derive(Debug)]
-pub enum RootError {
+pub enum VaultError {
     /// 探测目录事实失败。
     Probe(ProbeError),
     /// 打开受限目录句柄失败。
@@ -374,30 +376,30 @@ pub enum RootError {
     },
 }
 
-impl RootError {
+impl VaultError {
     /// 稳定原因码。
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
-            RootError::Probe(_) => "probe_failed",
-            RootError::Restrict(error) => error.code(),
-            RootError::MountIdUnavailable { .. } => "mount_id_unavailable",
-            RootError::ChangedDuringOpen { .. } => "root_changed_during_open",
+            VaultError::Probe(_) => "probe_failed",
+            VaultError::Restrict(error) => error.code(),
+            VaultError::MountIdUnavailable { .. } => "mount_id_unavailable",
+            VaultError::ChangedDuringOpen { .. } => "vault_changed_during_open",
         }
     }
 }
 
-impl fmt::Display for RootError {
+impl fmt::Display for VaultError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RootError::Probe(error) => write!(f, "探测 Root 失败：{error}"),
-            RootError::Restrict(error) => write!(f, "打开 Root 句柄失败：{error}"),
-            RootError::MountIdUnavailable { path } => write!(
+            VaultError::Probe(error) => write!(f, "探测 Vault 失败：{error}"),
+            VaultError::Restrict(error) => write!(f, "打开 Vault 句柄失败：{error}"),
+            VaultError::MountIdUnavailable { path } => write!(
                 f,
                 "{} 的内核未提供 STATX_MNT_ID，无法核对挂载边界",
                 path.display()
             ),
-            RootError::ChangedDuringOpen {
+            VaultError::ChangedDuringOpen {
                 path,
                 handle,
                 probed,
@@ -410,50 +412,50 @@ impl fmt::Display for RootError {
     }
 }
 
-impl std::error::Error for RootError {
+impl std::error::Error for VaultError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            RootError::Probe(error) => Some(error),
-            RootError::Restrict(error) => Some(error),
-            RootError::MountIdUnavailable { .. } | RootError::ChangedDuringOpen { .. } => None,
+            VaultError::Probe(error) => Some(error),
+            VaultError::Restrict(error) => Some(error),
+            VaultError::MountIdUnavailable { .. } | VaultError::ChangedDuringOpen { .. } => None,
         }
     }
 }
 
-impl From<ProbeError> for RootError {
+impl From<ProbeError> for VaultError {
     fn from(error: ProbeError) -> Self {
-        RootError::Probe(error)
+        VaultError::Probe(error)
     }
 }
 
-impl From<RestrictError> for RootError {
+impl From<RestrictError> for VaultError {
     fn from(error: RestrictError) -> Self {
-        RootError::Restrict(error)
+        VaultError::Restrict(error)
     }
 }
 
-/// 一个 Root 的正式访问接口：打开一次，之后所有访问都以句柄为边界并复核挂载身份。
-pub struct RootHandle {
+/// 一个 Vault 的正式访问接口：打开一次，之后所有访问都以句柄为边界并复核挂载身份。
+pub struct VaultHandle {
     dir: RestrictedDir,
     facts: StorageFacts,
-    snapshot: RootSnapshot,
+    snapshot: VaultSnapshot,
 }
 
-impl RootHandle {
-    /// 探测并打开一个 Root。
+impl VaultHandle {
+    /// 探测并打开一个 Vault。
     ///
     /// 步骤：`probe_path` 读内核事实 → 以 `O_DIRECTORY|O_NOFOLLOW` 打开规范路径 → 核对句柄身份
     /// 与探测事实是同一个目录 → 要求内核提供挂载 ID。
     ///
     /// # Errors
     ///
-    /// 见 [`RootError`]：探测/打开失败、注册期目录被替换或内核缺少 `STATX_MNT_ID` 时都失败。
-    pub fn open(path: &Path, mode: ResolveMode) -> Result<Self, RootError> {
+    /// 见 [`VaultError`]：探测/打开失败、注册期目录被替换或内核缺少 `STATX_MNT_ID` 时都失败。
+    pub fn open(path: &Path, mode: ResolveMode) -> Result<Self, VaultError> {
         let facts = probe::probe_path(path)?;
         let dir = RestrictedDir::open(&facts.resolved_path, mode)?;
         let handle = dir.identity()?;
         let Some(handle_mount_id) = handle.mount_id else {
-            return Err(RootError::MountIdUnavailable {
+            return Err(VaultError::MountIdUnavailable {
                 path: facts.resolved_path,
             });
         };
@@ -463,7 +465,7 @@ impl RootHandle {
             || handle.btime != facts.btime
             || handle_mount_id != facts.mount.mount_id
         {
-            return Err(RootError::ChangedDuringOpen {
+            return Err(VaultError::ChangedDuringOpen {
                 path: facts.resolved_path,
                 handle: handle.to_string(),
                 probed: format!(
@@ -476,7 +478,7 @@ impl RootHandle {
                 ),
             });
         }
-        let snapshot = RootSnapshot::of_facts(&facts);
+        let snapshot = VaultSnapshot::of_facts(&facts);
         Ok(Self {
             dir,
             facts,
@@ -498,7 +500,7 @@ impl RootHandle {
 
     /// 注册时记录的身份快照。
     #[must_use]
-    pub fn snapshot(&self) -> &RootSnapshot {
+    pub fn snapshot(&self) -> &VaultSnapshot {
         &self.snapshot
     }
 
@@ -517,7 +519,7 @@ impl RootHandle {
         self.dir.identity()
     }
 
-    /// 列举 Root 内相对目录的条目（空相对路径表示 Root 自身），并核对挂载边界。
+    /// 列举 Vault 内相对目录的条目（空相对路径表示 Vault 自身），并核对挂载边界。
     ///
     /// 权限失败返回错误而不是空列表（design §11.4：权限/扫描故障不等于删除）。
     ///
@@ -528,19 +530,19 @@ impl RootHandle {
         self.with_verified_dir(relative, RestrictedDir::list_entries)
     }
 
-    /// Root 句柄自身的目录（已核对过的挂载内句柄，供发布等需要目录句柄的适配器使用）。
+    /// Vault 句柄自身的目录（已核对过的挂载内句柄，供发布等需要目录句柄的适配器使用）。
     #[must_use]
-    pub fn root_dir(&self) -> &RestrictedDir {
+    pub fn vault_dir(&self) -> &RestrictedDir {
         &self.dir
     }
 
-    /// Root 句柄自身的 `/proc/self/fd/N` 路径（见 [`RestrictedDir::proc_fd_path`]）。
+    /// Vault 句柄自身的 `/proc/self/fd/N` 路径（见 [`RestrictedDir::proc_fd_path`]）。
     #[must_use]
     pub fn proc_fd_path(&self) -> std::path::PathBuf {
         self.dir.proc_fd_path()
     }
 
-    /// 打开 Root 内的子目录句柄（相对路径不能为空），并核对它仍在 Root 的挂载内。
+    /// 打开 Vault 内的子目录句柄（相对路径不能为空），并核对它仍在 Vault 的挂载内。
     ///
     /// 句柄供 watcher 取 `/proc/self/fd/N` 之类的稳定引用；权限不足、逃逸、符号链接、跨挂载都是
     /// 错误，不会被当成“目录不存在”。
@@ -555,7 +557,7 @@ impl RootHandle {
         Ok(child)
     }
 
-    /// 只读打开 Root 内的普通文件，并核对它仍在 Root 的挂载内。
+    /// 只读打开 Vault 内的普通文件，并核对它仍在 Vault 的挂载内。
     ///
     /// # Errors
     ///
@@ -567,7 +569,7 @@ impl RootHandle {
         Ok(opened)
     }
 
-    /// 读取 Root 内相对路径的当前身份（`O_PATH`，不跟随符号链接），并核对挂载边界。
+    /// 读取 Vault 内相对路径的当前身份（`O_PATH`，不跟随符号链接），并核对挂载边界。
     ///
     /// 路径合法地不存在时返回 `Ok(None)`；符号链接、逃逸、权限不足、跨挂载都是错误，**不会**被
     /// 报告成“不存在”（design §11.4：权限/扫描故障不等于删除）。
@@ -583,7 +585,7 @@ impl RootHandle {
         Ok(Some(identity))
     }
 
-    /// 在 Root 内新建独占文件，并核对新文件仍在 Root 的挂载内。
+    /// 在 Vault 内新建独占文件，并核对新文件仍在 Vault 的挂载内。
     ///
     /// 父目录先被打开并核对挂载，再用**那个句柄**建文件：不能先照路径建再回头发现跨了挂载，
     /// 否则 Bind mount 里已经被写进了外部样本。
@@ -611,23 +613,23 @@ impl RootHandle {
         Ok(file)
     }
 
-    /// 重新核对 Root 身份：句柄自身仍是注册时那个目录，且路径仍指向同一存储单元与挂载；同时复核
+    /// 重新核对 Vault 身份：句柄自身仍是注册时那个目录，且路径仍指向同一存储单元与挂载；同时复核
     /// 子挂载与根目录读取权限（design §12.3）。
     ///
     /// # Errors
     ///
-    /// 句柄身份漂移时返回 [`RootDrift`]；路径探测失败、出现子挂载或权限不足时返回
-    /// [`RootSpecVerifyError::Probe`]/[`RootSpecVerifyError::Mount`]。
-    pub fn verify(&self) -> Result<(), RootSpecVerifyError> {
-        let handle = self.identity().map_err(RootSpecVerifyError::Handle)?;
+    /// 句柄身份漂移时返回 [`VaultDrift`]；路径探测失败、出现子挂载或权限不足时返回
+    /// [`VaultSpecVerifyError::Probe`]/[`VaultSpecVerifyError::Mount`]。
+    pub fn verify(&self) -> Result<(), VaultSpecVerifyError> {
+        let handle = self.identity().map_err(VaultSpecVerifyError::Handle)?;
         if !self.snapshot.same_directory(&handle) {
-            return Err(RootSpecVerifyError::Drift(RootDrift::DirectoryChanged));
+            return Err(VaultSpecVerifyError::Drift(VaultDrift::DirectoryChanged));
         }
         if handle.mount_id != Some(self.snapshot.mount_id) {
-            return Err(RootSpecVerifyError::Drift(RootDrift::MountChanged));
+            return Err(VaultSpecVerifyError::Drift(VaultDrift::MountChanged));
         }
-        health::verify_root_mount(&self.snapshot.resolved_path, &self.snapshot)
-            .map_err(RootSpecVerifyError::Mount)?;
+        health::verify_vault_mount(&self.snapshot.resolved_path, &self.snapshot)
+            .map_err(VaultSpecVerifyError::Mount)?;
         Ok(())
     }
 
@@ -646,13 +648,13 @@ impl RootHandle {
         action(&child)
     }
 
-    /// 对象的挂载 ID 必须是 Root 的挂载 ID；缺失时同样 fail-closed。
+    /// 对象的挂载 ID 必须是 Vault 的挂载 ID；缺失时同样 fail-closed。
     fn check_mount(&self, relative: &Path, observed: Option<u64>) -> Result<(), RestrictError> {
         match observed {
             Some(observed) if observed == self.snapshot.mount_id => Ok(()),
             Some(observed) => Err(RestrictError::MountBoundaryCrossed {
                 path: relative.to_path_buf(),
-                root_mount_id: self.snapshot.mount_id,
+                vault_mount_id: self.snapshot.mount_id,
                 observed_mount_id: observed,
             }),
             None => Err(RestrictError::MountBoundaryUnverified {
@@ -740,15 +742,15 @@ mod tests {
 
     #[test]
     fn snapshot_round_trips_through_spec() {
-        let snapshot = RootSnapshot::of_facts(&facts("/data/root", 257, 45, Some(256)));
+        let snapshot = VaultSnapshot::of_facts(&facts("/data/vault", 257, 45, Some(256)));
         let text = snapshot.to_spec();
-        let parsed = RootSnapshot::parse_spec(&text).expect("自产规格必须可解析");
+        let parsed = VaultSnapshot::parse_spec(&text).expect("自产规格必须可解析");
         assert_eq!(parsed, snapshot);
         assert!(text.contains("backend=btrfs"));
         assert!(text.contains("fsid=11111111111111111111111111111111"));
         assert!(text.contains("subvolume_id=256"));
 
-        let non_btrfs = RootSnapshot {
+        let non_btrfs = VaultSnapshot {
             fsid: None,
             subvolume_id: None,
             btime: None,
@@ -756,88 +758,88 @@ mod tests {
         };
         let text = non_btrfs.to_spec();
         assert_eq!(
-            RootSnapshot::parse_spec(&text).expect("non-btrfs 规格也要可解析"),
+            VaultSnapshot::parse_spec(&text).expect("non-btrfs 规格也要可解析"),
             non_btrfs
         );
     }
 
     #[test]
     fn snapshot_spec_rejects_missing_and_malformed_fields() {
-        let text = RootSnapshot::of_facts(&facts("/data/root", 257, 45, Some(256))).to_spec();
+        let text = VaultSnapshot::of_facts(&facts("/data/vault", 257, 45, Some(256))).to_spec();
         let without_mount = text
             .lines()
             .filter(|line| !line.starts_with("mount_id="))
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(
-            RootSnapshot::parse_spec(&without_mount).unwrap_err(),
-            RootSpecError::MissingKey("mount_id")
+            VaultSnapshot::parse_spec(&without_mount).unwrap_err(),
+            VaultSpecError::MissingKey("mount_id")
         );
         let bad_inode = text.replace("inode=257", "inode=abc");
         assert!(matches!(
-            RootSnapshot::parse_spec(&bad_inode).unwrap_err(),
-            RootSpecError::InvalidValue { key, .. } if key == "inode"
+            VaultSnapshot::parse_spec(&bad_inode).unwrap_err(),
+            VaultSpecError::InvalidValue { key, .. } if key == "inode"
         ));
         let bad_backend = text.replace("backend=btrfs", "backend=teleporter");
         assert!(matches!(
-            RootSnapshot::parse_spec(&bad_backend).unwrap_err(),
-            RootSpecError::InvalidValue { key, .. } if key == "backend"
+            VaultSnapshot::parse_spec(&bad_backend).unwrap_err(),
+            VaultSpecError::InvalidValue { key, .. } if key == "backend"
         ));
         let duplicated = format!("{text}mount_id=46\n");
         assert_eq!(
-            RootSnapshot::parse_spec(&duplicated).unwrap_err(),
-            RootSpecError::DuplicateKey("mount_id")
+            VaultSnapshot::parse_spec(&duplicated).unwrap_err(),
+            VaultSpecError::DuplicateKey("mount_id")
         );
         let short_fsid = text.replace("fsid=11111111111111111111111111111111", "fsid=1111");
         assert!(matches!(
-            RootSnapshot::parse_spec(&short_fsid).unwrap_err(),
-            RootSpecError::InvalidValue { key, .. } if key == "fsid"
+            VaultSnapshot::parse_spec(&short_fsid).unwrap_err(),
+            VaultSpecError::InvalidValue { key, .. } if key == "fsid"
         ));
     }
 
     #[test]
     fn compare_reports_the_first_drift_in_design_order() {
-        let recorded = RootSnapshot::of_facts(&facts("/data/root", 257, 45, Some(256)));
+        let recorded = VaultSnapshot::of_facts(&facts("/data/vault", 257, 45, Some(256)));
 
         assert_eq!(
-            recorded.compare(&facts("/data/root", 257, 45, Some(256))),
+            recorded.compare(&facts("/data/vault", 257, 45, Some(256))),
             Ok(())
         );
 
         // 目录被换成同挂载上的另一个目录。
         assert_eq!(
-            recorded.compare(&facts("/data/root", 300, 45, Some(256))),
-            Err(RootDrift::DirectoryChanged)
+            recorded.compare(&facts("/data/vault", 300, 45, Some(256))),
+            Err(VaultDrift::DirectoryChanged)
         );
 
         // bind mount 覆盖路径：同一子卷、同一 inode，只有挂载 ID 变。
         assert_eq!(
-            recorded.compare(&facts("/data/root", 257, 46, Some(256))),
-            Err(RootDrift::MountChanged)
+            recorded.compare(&facts("/data/vault", 257, 46, Some(256))),
+            Err(VaultDrift::MountChanged)
         );
 
         // 换成另一个子卷。
         assert_eq!(
-            recorded.compare(&facts("/data/root", 256, 45, Some(257))),
-            Err(RootDrift::SubvolumeChanged)
+            recorded.compare(&facts("/data/vault", 256, 45, Some(257))),
+            Err(VaultDrift::SubvolumeChanged)
         );
 
         // btrfs 身份消失（换成 tmpfs 之类）。
-        let mut other = facts("/data/root", 257, 45, Some(256));
+        let mut other = facts("/data/vault", 257, 45, Some(256));
         other.fs_magic = 0x0102_1994;
         other.fs_type = "tmpfs".to_owned();
-        assert_eq!(recorded.compare(&other), Err(RootDrift::BackendChanged));
+        assert_eq!(recorded.compare(&other), Err(VaultDrift::BackendChanged));
 
-        assert_eq!(RootDrift::DirectoryChanged.code(), "directory_changed");
+        assert_eq!(VaultDrift::DirectoryChanged.code(), "directory_changed");
         assert_eq!(
-            RootDrift::MountChanged.design_error_code(),
-            "ROOT_UNAVAILABLE"
+            VaultDrift::MountChanged.design_error_code(),
+            "VAULT_UNAVAILABLE"
         );
     }
 
     #[test]
     fn snapshot_identity_comparison_uses_device_inode_and_btime() {
-        let snapshot = RootSnapshot::of_facts(&facts("/data/root", 257, 45, Some(256)));
+        let snapshot = VaultSnapshot::of_facts(&facts("/data/vault", 257, 45, Some(256)));
         let identity = FileIdentity {
             dev_major: snapshot.dev_major,
             dev_minor: snapshot.dev_minor,

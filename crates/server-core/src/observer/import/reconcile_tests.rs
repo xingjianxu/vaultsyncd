@@ -4,7 +4,7 @@ use super::*;
 use crate::observer::fixtures::{FakeBlobs, FakeExternalStore, FakeWorkTree, SharedFs, shared_fs};
 use crate::observer::reconcile::{ProtectionReason, SHARE_MIN_TOTAL};
 use crate::ports::external_store::ExternalStoreError;
-use crate::test_support::{root_id, user_time};
+use crate::test_support::{user_time, vault_id};
 
 const WINDOW_MS: u64 = 500;
 
@@ -13,7 +13,7 @@ struct Harness {
     work: FakeWorkTree,
     blobs: FakeBlobs,
     store: FakeExternalStore,
-    gate: RootCommitGate,
+    gate: VaultCommitGate,
     layout: ObjectLayout,
     observer: ExternalObserver,
     now_ms: u64,
@@ -28,7 +28,7 @@ impl Harness {
             blobs: FakeBlobs::new(&fs),
             fs,
             store: FakeExternalStore::default(),
-            gate: RootCommitGate::new(),
+            gate: VaultCommitGate::new(),
             layout: ObjectLayout::new("/state/objects"),
             observer: observer(limits),
             now_ms: 1_000,
@@ -63,7 +63,7 @@ impl Harness {
 
 fn observer(limits: ReconcileLimits) -> ExternalObserver {
     ExternalObserver::new(
-        root_id(0x21),
+        vault_id(0x21),
         StabilityWindow::from_millis(WINDOW_MS).expect("合法"),
         "ext-reconcile",
     )
@@ -229,12 +229,12 @@ async fn mount_changed_scan_is_unavailable_and_deletes_nothing() {
     h.settle().await;
     let events_before = h.store.events.len();
 
-    // 卸载后路径下露出空目录：Root 身份变了，扫描报 Root 不可用。
-    h.fs.borrow_mut().root_unavailable = true;
+    // 卸载后路径下露出空目录：Vault 身份变了，扫描报 Vault 不可用。
+    h.fs.borrow_mut().vault_unavailable = true;
     h.fs.borrow_mut().files.clear();
     let report = h.pass(0).await;
 
-    assert!(report.root_unavailable);
+    assert!(report.vault_unavailable);
     assert!(matches!(
         report.reconcile.health,
         ScanHealth::MountChanged { .. }
@@ -252,7 +252,7 @@ async fn truncated_scan_is_not_deletion_evidence() {
     h.fs.borrow_mut().write("d/one.txt", b"1");
     h.settle().await;
     h.fs.borrow_mut().unlink("d/one.txt");
-    // 预算只够列 Root 这一层：子目录 d 根本没被检查到。
+    // 预算只够列 Vault 这一层：子目录 d 根本没被检查到。
     h.scan_budget = 1;
     let report = h.pass(0).await;
     assert!(matches!(
@@ -308,7 +308,7 @@ async fn mass_deletion_is_protected_with_baseline_directory_identity_and_counts(
     assert_eq!(first.identity.inode, inode_a);
     assert_eq!(first.content.bytes, 1);
     assert_eq!(first.entry, entry_a);
-    // 目录身份与计数：三个缺失都在 Root 根目录下。
+    // 目录身份与计数：三个缺失都在 Vault 根目录下。
     assert_eq!(batch.directories.len(), 1);
     assert_eq!(batch.directories[0].path, "");
     assert_eq!(batch.directories[0].missing_count, 3);
@@ -357,7 +357,7 @@ async fn protection_batch_shows_a_changed_directory_identity() {
 }
 
 #[tokio::test]
-async fn large_share_of_a_big_root_is_protected_even_below_the_count_limit() {
+async fn large_share_of_a_big_vault_is_protected_even_below_the_count_limit() {
     let limits = ReconcileLimits::DEFAULT;
     let mut h = Harness::new(limits);
     let total = SHARE_MIN_TOTAL + 4;
@@ -494,17 +494,17 @@ async fn swapped_identical_files_are_held_instead_of_rebinding_entries() {
 }
 
 #[tokio::test]
-async fn busy_root_defers_reconciliation_to_the_next_round() {
+async fn busy_vault_defers_reconciliation_to_the_next_round() {
     let mut h = Harness::new(default_limits());
     h.fs.borrow_mut().write("a.txt", b"1");
     h.settle().await;
     h.fs.borrow_mut().unlink("a.txt");
 
-    let ticket = h.gate.acquire(root_id(0x21)).expect("拿到票据");
+    let ticket = h.gate.acquire(vault_id(0x21)).expect("拿到票据");
     let report = h.pass(0).await;
     assert!(
         report.reconcile.deferred,
-        "Root 忙时整轮核对推迟，不阻塞其他写入"
+        "Vault 忙时整轮核对推迟，不阻塞其他写入"
     );
     assert!(report.reconcile.deletions.is_empty());
     assert!(report.reconcile.held.is_empty(), "推迟不是失败，不记 held");

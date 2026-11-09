@@ -13,7 +13,7 @@
 //! - 单次读取的信号数有上限，同一路径在一次读取内合并。
 //!
 //! 监视的是已打开的目录句柄（`/proc/self/fd/N`），不按路径字符串重新解析：路径被换成符号链接或
-//! 别的目录也带不到 Root 之外（design §16.1）。不识别“谁写的”：忽略本服务自己的写入由核心按
+//! 别的目录也带不到 Vault 之外（design §16.1）。不识别“谁写的”：忽略本服务自己的写入由核心按
 //! 身份与意图核对，不在这里按时间窗口过滤。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,7 +25,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::files::restricted::{EntryKind, RestrictError};
-use crate::files::root::RootHandle;
+use crate::files::vault::VaultHandle;
 use crate::watcher::raw::{self, RawEvent, errno};
 
 /// 监视参数。
@@ -74,7 +74,7 @@ impl GapReason {
 /// 给消费者的变化线索。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WatchSignal {
-    /// 这个路径（文件或目录，Root 内相对路径，空串为 Root 自身）上发生过事件，值得重新观察。
+    /// 这个路径（文件或目录，Vault 内相对路径，空串为 Vault 自身）上发生过事件，值得重新观察。
     Changed {
         /// 相对路径。
         path: String,
@@ -135,7 +135,7 @@ fn join(dir: &str, name: &str) -> String {
     }
 }
 
-/// 一个 Root 目录树的 inotify 监视器。
+/// 一个 Vault 目录树的 inotify 监视器。
 pub struct DirWatcher {
     fd: OwnedFd,
     config: WatchConfig,
@@ -144,7 +144,7 @@ pub struct DirWatcher {
 }
 
 impl DirWatcher {
-    /// 建立实例并递归登记整个 Root。
+    /// 建立实例并递归登记整个 Vault。
     ///
     /// 返回的信号只含 [`WatchSignal::Gap`]（登记不了的目录）。**调用方在监视建立之后必须做一次
     /// 全量扫描**——建立之前发生的变化没有事件。
@@ -153,7 +153,7 @@ impl DirWatcher {
     ///
     /// 创建 inotify 实例失败（例如 `max_user_instances` 耗尽）。
     pub fn open(
-        root: &RootHandle,
+        vault: &VaultHandle,
         config: WatchConfig,
     ) -> Result<(Self, Vec<WatchSignal>), WatchError> {
         let fd = raw::init().map_err(io_error("init"))?;
@@ -164,7 +164,7 @@ impl DirWatcher {
             by_path: BTreeMap::new(),
         };
         let mut gaps = Vec::new();
-        watcher.add_tree(root, "", &mut gaps);
+        watcher.add_tree(vault, "", &mut gaps);
         Ok((watcher, gaps))
     }
 
@@ -187,14 +187,14 @@ impl DirWatcher {
     /// 等待或读取失败、事件无法解析。
     pub fn poll(
         &mut self,
-        root: &RootHandle,
+        vault: &VaultHandle,
         timeout: Duration,
     ) -> Result<Vec<WatchSignal>, WatchError> {
         let millis = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
         if !raw::wait_readable(self.fd.as_raw_fd(), millis).map_err(io_error("poll"))? {
             return Ok(Vec::new());
         }
-        self.drain(root)
+        self.drain(vault)
     }
 
     /// 读取当前队列里的事件（不等待）。
@@ -202,7 +202,7 @@ impl DirWatcher {
     /// # Errors
     ///
     /// 读取失败、事件无法解析。
-    pub fn drain(&mut self, root: &RootHandle) -> Result<Vec<WatchSignal>, WatchError> {
+    pub fn drain(&mut self, vault: &VaultHandle) -> Result<Vec<WatchSignal>, WatchError> {
         let mut out = Vec::new();
         let mut seen: BTreeSet<(bool, String)> = BTreeSet::new();
         let mut overflow = false;
@@ -220,12 +220,12 @@ impl DirWatcher {
                     overflow = true;
                     continue;
                 }
-                self.handle(root, &event, &mut out, &mut seen);
+                self.handle(vault, &event, &mut out, &mut seen);
             }
         }
         if overflow {
             // 被丢弃的事件里可能有新目录或改名：旧监视表不可信，整张重建。
-            self.reset(root, &mut out);
+            self.reset(vault, &mut out);
             out.push(WatchSignal::Overflow);
         }
         Ok(out)
@@ -248,7 +248,7 @@ impl DirWatcher {
 
     fn handle(
         &mut self,
-        root: &RootHandle,
+        vault: &VaultHandle,
         event: &RawEvent,
         out: &mut Vec<WatchSignal>,
         seen: &mut BTreeSet<(bool, String)>,
@@ -292,14 +292,14 @@ impl DirWatcher {
         let newly = !self.by_path.contains_key(&path);
         if newly {
             let mut gaps = Vec::new();
-            self.add_tree(root, &path, &mut gaps);
+            self.add_tree(vault, &path, &mut gaps);
             out.extend(gaps);
         }
         let created = event.mask & (raw::IN_CREATE | raw::IN_MOVED_TO) != 0;
         Self::emit(out, seen, newly || created, path);
     }
 
-    fn reset(&mut self, root: &RootHandle, out: &mut Vec<WatchSignal>) {
+    fn reset(&mut self, vault: &VaultHandle, out: &mut Vec<WatchSignal>) {
         let fd = self.fd.as_raw_fd();
         for wd in self.by_wd.keys() {
             let _ = raw::rm_watch(fd, *wd);
@@ -307,7 +307,7 @@ impl DirWatcher {
         self.by_wd.clear();
         self.by_path.clear();
         let mut gaps = Vec::new();
-        self.add_tree(root, "", &mut gaps);
+        self.add_tree(vault, "", &mut gaps);
         out.extend(gaps);
     }
 
@@ -330,14 +330,14 @@ impl DirWatcher {
 
     /// 递归登记 `start` 及其子目录。先登记、后列目录：登记之后新建的目录会有事件，登记之前已存在
     /// 的目录会出现在随后的列表里，两者之间不留缺口。
-    fn add_tree(&mut self, root: &RootHandle, start: &str, gaps: &mut Vec<WatchSignal>) {
+    fn add_tree(&mut self, vault: &VaultHandle, start: &str, gaps: &mut Vec<WatchSignal>) {
         let mut stack = vec![start.to_owned()];
         while let Some(dir) = stack.pop() {
-            if let Err(gap) = self.ensure_watch(root, &dir) {
+            if let Err(gap) = self.ensure_watch(vault, &dir) {
                 gaps.push(gap);
                 continue;
             }
-            match root.list_dir(Path::new(&dir)) {
+            match vault.list_dir(Path::new(&dir)) {
                 Ok(entries) => {
                     for entry in entries {
                         if entry.kind != EntryKind::Directory {
@@ -353,7 +353,7 @@ impl DirWatcher {
         }
     }
 
-    fn ensure_watch(&mut self, root: &RootHandle, dir: &str) -> Result<(), WatchSignal> {
+    fn ensure_watch(&mut self, vault: &VaultHandle, dir: &str) -> Result<(), WatchSignal> {
         if self.by_path.contains_key(dir) {
             return Ok(());
         }
@@ -370,9 +370,9 @@ impl DirWatcher {
         }
         // 句柄必须活到 add_watch 返回：/proc/self/fd/N 指向它。
         let (target, _held) = if dir.is_empty() {
-            (root.proc_fd_path(), None)
+            (vault.proc_fd_path(), None)
         } else {
-            let held = root
+            let held = vault
                 .open_dir(Path::new(dir))
                 .map_err(|error| gap_of_restrict(dir, &error))?;
             (held.proc_fd_path(), Some(held))

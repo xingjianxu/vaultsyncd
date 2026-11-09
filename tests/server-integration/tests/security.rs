@@ -2,29 +2,31 @@
 //! Test principals and expired timestamps are installed only while the service is stopped.
 mod common;
 
-use common::{Lab, Running, create_snapshot, login, register_root, snapshot_entries, wait_for};
+use common::{Lab, Running, create_snapshot, login, register_vault, snapshot_entries, wait_for};
 use reqwest::StatusCode;
 use serde_json::json;
 use vaultsyncd_server_store::db::Database;
 
 #[tokio::test]
-async fn root_version_resources_reject_foreign_owner_and_mixed_identity() {
+async fn vault_version_resources_reject_foreign_owner_and_mixed_identity() {
     let lab = Lab::new("s105-authorization", None, None);
     lab.init_owner().await;
     let running = Running::start(&lab).await.unwrap();
     let owner = login(&running).await.unwrap();
-    let root = register_root(&running, &owner, &lab.work()).await.unwrap();
-    let second_path = lab.root().join("other-root");
+    let vault = register_vault(&running, &owner, &lab.work()).await.unwrap();
+    let second_path = lab.vault().join("other-vault");
     std::fs::create_dir(&second_path).unwrap();
-    let second_root = register_root(&running, &owner, &second_path).await.unwrap();
-    let bytes = b"S105 fixed content must never authorize another Root";
+    let second_vault = register_vault(&running, &owner, &second_path)
+        .await
+        .unwrap();
+    let bytes = b"S105 fixed content must never authorize another Vault";
     std::fs::write(lab.work().join("private.txt"), bytes).unwrap();
     wait_for("S105 source adopted", || async {
-        let snapshot = create_snapshot(&running, &owner, &root).await?;
+        let snapshot = create_snapshot(&running, &owner, &vault).await?;
         let entries = snapshot_entries(
             &running,
             &owner,
-            &root,
+            &vault,
             snapshot["snapshot_id"].as_str().unwrap(),
         )
         .await?;
@@ -34,11 +36,11 @@ async fn root_version_resources_reject_foreign_owner_and_mixed_identity() {
     })
     .await
     .unwrap();
-    let snapshot = create_snapshot(&running, &owner, &root).await.unwrap();
+    let snapshot = create_snapshot(&running, &owner, &vault).await.unwrap();
     let entries = snapshot_entries(
         &running,
         &owner,
-        &root,
+        &vault,
         snapshot["snapshot_id"].as_str().unwrap(),
     )
     .await
@@ -46,7 +48,7 @@ async fn root_version_resources_reject_foreign_owner_and_mixed_identity() {
     let entry = entries.iter().find(|e| e["name"] == "private.txt").unwrap();
     let entry_id = entry["entry_id"].as_str().unwrap();
     let version_id = entry["version_id"].as_str().unwrap();
-    let base = format!("/v1/roots/{root}");
+    let base = format!("/v1/vaults/{vault}");
     let content = format!("{base}/entries/{entry_id}/versions/{version_id}/content");
     assert_eq!(running.download(&content, &owner).await.unwrap().1, bytes);
     running.stop().await;
@@ -89,8 +91,8 @@ async fn root_version_resources_reject_foreign_owner_and_mixed_identity() {
         assert_eq!(rejected["error"]["code"], "ACCESS_DENIED");
         assert!(!rejected.to_string().contains("private.txt"));
     }
-    // Even the same owner cannot move a fixed version into a different Root's URL.
-    let mixed = content.replace(&root, &second_root);
+    // Even the same owner cannot move a fixed version into a different Vault's URL.
+    let mixed = content.replace(&vault, &second_vault);
     assert_eq!(
         running.download(&mixed, &owner).await.unwrap().0,
         StatusCode::GONE
@@ -127,7 +129,7 @@ async fn expired_access_and_refresh_cannot_read_or_rotate_after_real_restart() {
     let running = Running::start(&lab).await.unwrap();
     for (method, path, body) in [
         ("GET", "/v1/auth/account", None),
-        ("GET", "/v1/roots", None),
+        ("GET", "/v1/vaults", None),
         ("GET", "/v1/admin/backup-snapshots", None),
         (
             "POST",

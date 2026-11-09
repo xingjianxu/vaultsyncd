@@ -2,7 +2,7 @@
 //!
 //! 原型要在客体上可重复复现，因此身份与条目集合固定在代码里，而不是随机生成：
 //!
-//! - 同步根身份 [`PROTOTYPE_ROOT_ID`]：16 字节常量，模拟服务端 RootId。
+//! - 同步根身份 [`PROTOTYPE_VAULT_ID`]：16 字节常量，模拟服务端 VaultId。
 //! - 条目目录 [`PROBE_DIRECTORY`]：目录占位符，先于其下文件创建。
 //! - 条目文件 [`PROBE_FILES`]：12,345 B 与 1 MiB 两个文件占位符，用来证明逻辑大小正确、
 //!   而不是普通零字节文件。
@@ -12,10 +12,10 @@
 //! 真实 EntryId 由服务端分配并随绑定下发；本模块的派生只是原型的确定性替代，不能带到
 //! 业务路径（design I03 的稳定身份由服务端与客户端数据库共同保证）。
 
-use super::identity::{EntryId, FileIdentity, RootId, VersionHint};
+use super::identity::{EntryId, FileIdentity, VaultId, VersionHint};
 
-/// 原型同步根身份（模拟服务端分配的 RootId）。
-pub const PROTOTYPE_ROOT_ID: RootId = RootId::from_bytes([
+/// 原型同步根身份（模拟服务端分配的 VaultId）。
+pub const PROTOTYPE_VAULT_ID: VaultId = VaultId::from_bytes([
     0x56, 0x53, 0x43, 0x46, 0x00, 0x00, 0x40, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
 ]);
 
@@ -51,7 +51,7 @@ pub fn entry_id_for(relative_name: &str) -> EntryId {
 /// 原型条目在 `FileIdentity` 中的完整身份。
 pub fn file_identity(relative_name: &str) -> FileIdentity {
     FileIdentity {
-        root_id: PROTOTYPE_ROOT_ID,
+        vault_id: PROTOTYPE_VAULT_ID,
         entry_id: entry_id_for(relative_name),
         version_hint: PROTOTYPE_VERSION_HINT,
     }
@@ -70,7 +70,7 @@ fn fnv1a64(basis: u64, bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        PROBE_DIRECTORY, PROBE_FILES, PROTOTYPE_ROOT_ID, PROTOTYPE_VERSION_HINT, entry_id_for,
+        PROBE_DIRECTORY, PROBE_FILES, PROTOTYPE_VAULT_ID, PROTOTYPE_VERSION_HINT, entry_id_for,
         file_identity,
     };
 
@@ -97,9 +97,9 @@ mod tests {
     }
 
     #[test]
-    fn file_identity_carries_root_entry_and_hint() {
+    fn file_identity_carries_vault_entry_and_hint() {
         let identity = file_identity("small-12345.bin");
-        assert_eq!(identity.root_id, PROTOTYPE_ROOT_ID);
+        assert_eq!(identity.vault_id, PROTOTYPE_VAULT_ID);
         assert_eq!(identity.entry_id, entry_id_for("small-12345.bin"));
         assert_eq!(identity.version_hint, PROTOTYPE_VERSION_HINT);
 

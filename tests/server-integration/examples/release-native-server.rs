@@ -23,16 +23,16 @@ async fn main() {
         .await
         .unwrap();
     let token = issued["access_token"].as_str().unwrap();
-    let root = register_root(&running, token, &lab.work()).await.unwrap();
+    let vault = register_vault(&running, token, &lab.work()).await.unwrap();
     let payload = "S069 real committed immutable content, retained by a real HTTP object lease.\n"
         .repeat(128);
     std::fs::write(lab.work().join("file.txt"), &payload).unwrap();
     wait_for("adopt fixed version", || async {
-        let snap = create_snapshot(&running, token, &root).await?;
+        let snap = create_snapshot(&running, token, &vault).await?;
         let rows = snapshot_entries(
             &running,
             token,
-            &root,
+            &vault,
             snap["snapshot_id"].as_str().unwrap(),
         )
         .await?;
@@ -42,18 +42,17 @@ async fn main() {
     })
     .await
     .unwrap();
-    let snap = create_snapshot(&running, token, &root).await.unwrap();
+    let snap = create_snapshot(&running, token, &vault).await.unwrap();
     let rows = snapshot_entries(
         &running,
         token,
-        &root,
+        &vault,
         snap["snapshot_id"].as_str().unwrap(),
     )
     .await
     .unwrap();
     let entry = rows.into_iter().find(|e| e["name"] == "file.txt").unwrap();
-    let fixture =
-        json!({"url":running.uri(""),"root":root,"entry":entry,"issued":issued,"payload":payload});
+    let fixture = json!({"url":running.uri(""),"vault":vault,"entry":entry,"issued":issued,"payload":payload});
     let mut f = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)

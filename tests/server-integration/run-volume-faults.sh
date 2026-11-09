@@ -2,7 +2,7 @@
 # S103 容量故障集成验收驱动（design §21.1 T21、§11.5）。
 #
 # 用 tools/test-volume/test-volume.sh 建立**两块互不相同**的小型 btrfs loop 卷，分别作为：
-#   - 工作盘：Root 与内部状态同一 btrfs（准入要求），填满数据块；
+#   - 工作盘：Vault 与内部状态同一 btrfs（准入要求），填满数据块；
 #   - 状态盘：另一块独立卷，用大量小文件耗尽元数据。
 # 然后运行 tests/server-integration/tests/volume_exhaustion.rs（含 reflink 后 CoW 分配失败）。
 #
@@ -16,12 +16,12 @@ PROG=${0##*/}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../.." && pwd)
 TEST_VOLUME="$repo_root/tools/test-volume/test-volume.sh"
-LAB_ROOT=${VAULTSYNCD_LAB_ROOT:-/data/vaultsyncd-lab}
+LAB_VAULT=${VAULTSYNCD_LAB_VAULT:-/data/vaultsyncd-lab}
 base_id=${VAULTSYNCD_RUN_ID:-s103-vol-$$}
 WORK_ID="$base_id-work"
 STATE_ID="$base_id-state"
-WORK_MNT=$LAB_ROOT/runs/$WORK_ID/mnt
-STATE_MNT=$LAB_ROOT/runs/$STATE_ID/mnt
+WORK_MNT=$LAB_VAULT/runs/$WORK_ID/mnt
+STATE_MNT=$LAB_VAULT/runs/$STATE_ID/mnt
 
 log() { printf '%s\n' "$*"; }
 step() { printf '\n==> %s\n' "$*"; }
@@ -47,9 +47,9 @@ cleanup() {
 	sync
 	local id
 	for id in "$WORK_ID" "$STATE_ID"; do
-		if [ -d "$LAB_ROOT/runs/$id" ]; then
+		if [ -d "$LAB_VAULT/runs/$id" ]; then
 			"$TEST_VOLUME" cleanup "$id" ||
-				log "test-volume cleanup 失败，请人工核查 $LAB_ROOT/runs/$id"
+				log "test-volume cleanup 失败，请人工核查 $LAB_VAULT/runs/$id"
 		fi
 	done
 	log "cleanup status=$status"
@@ -61,7 +61,7 @@ require_tools
 step "0) 测试卷基线"
 "$TEST_VOLUME" status
 for id in "$WORK_ID" "$STATE_ID"; do
-	[ -e "$LAB_ROOT/runs/$id" ] && die "run 目录已存在（$LAB_ROOT/runs/$id），换一个 VAULTSYNCD_RUN_ID"
+	[ -e "$LAB_VAULT/runs/$id" ] && die "run 目录已存在（$LAB_VAULT/runs/$id），换一个 VAULTSYNCD_RUN_ID"
 done
 
 step "1) 建立工作盘与状态盘（各 256M 独立 loop 镜像）"

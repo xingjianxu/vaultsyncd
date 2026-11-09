@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use vaultsyncd_client_store::bindings::{self, NewBinding, SyncMode};
 use vaultsyncd_domain::{
     error::ErrorCode,
-    ids::{DeviceId, RootId, ServerId},
+    ids::{DeviceId, ServerId, VaultId},
     version::ServerEpoch,
 };
 pub(crate) const B: BindingId = BindingId::from_bytes([1; 16]);
@@ -34,7 +34,7 @@ pub(crate) async fn setup(dir: &Dir) -> Arc<Database> {
             id: B,
             server: ServerId::from_bytes([2; 16]),
             device: DeviceId::from_bytes([3; 16]),
-            root: RootId::from_bytes([4; 16]),
+            vault: VaultId::from_bytes([4; 16]),
             local_path: "C:/local".into(),
             cache_path: "C:/cache".into(),
             mode: SyncMode::OnDemand,
@@ -75,43 +75,43 @@ async fn pending_events_and_open_release_cannot_be_green() {
     assert_eq!(snapshot(&db, B).await.unwrap().recovery, 1);
 }
 #[tokio::test]
-async fn root_dedup_offline_silent_recovery_and_recurrence() {
+async fn vault_dedup_offline_silent_recovery_and_recurrence() {
     let d = Dir::new();
     let db = setup(&d).await;
-    let root = RootId::from_bytes([4; 16]);
+    let vault = VaultId::from_bytes([4; 16]);
     for _ in 0..100 {
-        let r = issues::report(&db, root, ErrorCode::PlaceholderOffline, false)
+        let r = issues::report(&db, vault, ErrorCode::PlaceholderOffline, false)
             .await
             .unwrap();
         assert!(!r.notify);
     }
     assert!(
-        issues::report(&db, root, ErrorCode::PlaceholderOffline, true)
+        issues::report(&db, vault, ErrorCode::PlaceholderOffline, true)
             .await
             .unwrap()
             .explain_open
     );
     assert!(
-        issues::report(&db, root, ErrorCode::InsufficientStorage, false)
+        issues::report(&db, vault, ErrorCode::InsufficientStorage, false)
             .await
             .unwrap()
             .notify
     );
     for _ in 0..10 {
         assert!(
-            !issues::report(&db, root, ErrorCode::InsufficientStorage, false)
+            !issues::report(&db, vault, ErrorCode::InsufficientStorage, false)
                 .await
                 .unwrap()
                 .notify
         );
     }
     assert!(
-        issues::resolve_root(&db, root, ErrorCode::InsufficientStorage)
+        issues::resolve_vault(&db, vault, ErrorCode::InsufficientStorage)
             .await
             .unwrap()
     );
     assert!(
-        issues::report(&db, root, ErrorCode::InsufficientStorage, false)
+        issues::report(&db, vault, ErrorCode::InsufficientStorage, false)
             .await
             .unwrap()
             .notify

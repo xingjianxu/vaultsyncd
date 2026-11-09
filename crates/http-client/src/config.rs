@@ -95,10 +95,10 @@ impl TlsTrust {
     }
 
     /// 显式追加的 PEM 证书；系统信任库形态返回空切片。
-    pub fn additional_roots(&self) -> &[Vec<u8>] {
+    pub fn additional_vaults(&self) -> &[Vec<u8>] {
         match self {
             Self::SystemRoots => &[],
-            Self::SystemRootsWithAdditionalRoots(roots) => roots,
+            Self::SystemRootsWithAdditionalRoots(vaults) => vaults,
         }
     }
 }
@@ -107,9 +107,9 @@ impl fmt::Debug for TlsTrust {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SystemRoots => f.write_str("TlsTrust::SystemRoots"),
-            Self::SystemRootsWithAdditionalRoots(roots) => f
+            Self::SystemRootsWithAdditionalRoots(vaults) => f
                 .debug_struct("TlsTrust::SystemRootsWithAdditionalRoots")
-                .field("additional_pem_blobs", &roots.len())
+                .field("additional_pem_blobs", &vaults.len())
                 .finish(),
         }
     }
@@ -360,7 +360,7 @@ mod tests {
     fn userinfo_and_query_are_rejected() {
         for base_url in [
             "https://owner:secret@vault.example",
-            "https://vault.example/?root=1",
+            "https://vault.example/?vault=1",
             "https://vault.example/#fragment",
         ] {
             let error = validated(base_url).expect_err("地址形态不合规");
@@ -389,16 +389,16 @@ mod tests {
     }
 
     #[test]
-    fn tls_trust_defaults_to_system_roots_and_never_disables_verification() {
+    fn tls_trust_defaults_to_system_vaults_and_never_disables_verification() {
         let config = ClientConfig::new("https://vault.example");
         assert_eq!(config.trust(), &TlsTrust::system_roots());
-        assert!(config.trust().additional_roots().is_empty());
+        assert!(config.trust().additional_vaults().is_empty());
 
         let with_ca =
             ClientConfig::new("https://vault.example").with_trust(TlsTrust::system_roots_with_pem(
                 "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
             ));
-        assert_eq!(with_ca.trust().additional_roots().len(), 1);
+        assert_eq!(with_ca.trust().additional_vaults().len(), 1);
         // Debug 只报告数量，不打印 PEM 内容。
         assert!(!format!("{:?}", with_ca.trust()).contains("BEGIN CERTIFICATE"));
     }

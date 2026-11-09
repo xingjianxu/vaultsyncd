@@ -575,7 +575,7 @@ mod tests {
     #[test]
     fn port_error_classification_is_explicit() {
         assert!(PortError::unavailable("连接被重置", None).is_retryable());
-        assert!(!PortError::rejected("ACCESS_DENIED", "跨 Root").is_retryable());
+        assert!(!PortError::rejected("ACCESS_DENIED", "跨 Vault").is_retryable());
         assert!(PortError::Cancelled.is_cancelled());
         assert_eq!(
             PortError::rejected("PART_CONFLICT", "同索引不同字节").code(),

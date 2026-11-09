@@ -43,7 +43,7 @@ fn usage(message: &str) -> ExitCode {
     eprintln!("{message}");
     eprintln!(
         "用法：storage-admission <inspect PATH [--internal-state-dir PATH]... \
-         [--registered-root PATH]... [--max-scan-entries N] [--max-scan-depth N] | \
+         [--registered-vault PATH]... [--max-scan-entries N] [--max-scan-depth N] | \
          identity PATH | same-storage PATH_A PATH_B | content PATH>"
     );
     ExitCode::from(EXIT_USAGE)
@@ -58,20 +58,20 @@ fn error(stage: &str, message: impl std::fmt::Display) -> ExitCode {
 struct InspectArgs {
     path: PathBuf,
     internal_state_dirs: Vec<PathBuf>,
-    registered_roots: Vec<PathBuf>,
+    registered_vaults: Vec<PathBuf>,
     policy: ScanPolicy,
 }
 
 fn parse_inspect_args(rest: &[String]) -> Result<InspectArgs, String> {
     let mut path: Option<PathBuf> = None;
     let mut internal_state_dirs = Vec::new();
-    let mut registered_roots = Vec::new();
+    let mut registered_vaults = Vec::new();
     let mut policy = ScanPolicy::default();
     let mut index = 0;
     while index < rest.len() {
         match rest[index].as_str() {
             "--internal-state-dir"
-            | "--registered-root"
+            | "--registered-vault"
             | "--max-scan-entries"
             | "--max-scan-depth" => {
                 let flag = rest[index].clone();
@@ -81,7 +81,7 @@ fn parse_inspect_args(rest: &[String]) -> Result<InspectArgs, String> {
                 index += 2;
                 match flag.as_str() {
                     "--internal-state-dir" => internal_state_dirs.push(PathBuf::from(value)),
-                    "--registered-root" => registered_roots.push(PathBuf::from(value)),
+                    "--registered-vault" => registered_vaults.push(PathBuf::from(value)),
                     "--max-scan-entries" => policy.max_entries = parse_u64(value, &flag)?,
                     _ => {
                         policy.max_depth = parse_u64(value, &flag)?
@@ -103,7 +103,7 @@ fn parse_inspect_args(rest: &[String]) -> Result<InspectArgs, String> {
     Ok(InspectArgs {
         path: path.ok_or_else(|| "inspect 需要一个路径".to_owned())?,
         internal_state_dirs,
-        registered_roots,
+        registered_vaults,
         policy,
     })
 }
@@ -127,9 +127,9 @@ fn inspect(rest: &[String]) -> ExitCode {
         Err(message) => return usage(&message),
     };
 
-    let root = match probe::probe_path(&args.path) {
+    let vault = match probe::probe_path(&args.path) {
         Ok(facts) => facts,
-        Err(error) => return self::error("probe.root", error),
+        Err(error) => return self::error("probe.vault", error),
     };
     let mut internal_state_dirs = Vec::new();
     for path in &args.internal_state_dirs {
@@ -138,29 +138,29 @@ fn inspect(rest: &[String]) -> ExitCode {
             Err(error) => return self::error("probe.internal_state_dir", error),
         }
     }
-    let mut registered_roots = Vec::new();
-    for path in &args.registered_roots {
+    let mut registered_vaults = Vec::new();
+    for path in &args.registered_vaults {
         match probe::probe_path(path) {
-            Ok(facts) => registered_roots.push(facts),
-            Err(error) => return self::error("probe.registered_root", error),
+            Ok(facts) => registered_vaults.push(facts),
+            Err(error) => return self::error("probe.registered_vault", error),
         }
     }
     let mounts = match mountinfo::read_self() {
         Ok(mounts) => mounts,
         Err(error) => return self::error("mountinfo", error),
     };
-    // 只有 btrfs Root 需要子卷/NOCOW 遍历；其它后端在第一步就会被拒绝，遍历也没有意义
+    // 只有 btrfs Vault 需要子卷/NOCOW 遍历；其它后端在第一步就会被拒绝，遍历也没有意义
     // （非 btrfs 上没有子卷身份，GETFLAGS 也未必支持）。
-    let backend = admission::classify_backend(root.fs_magic, &root.fs_type);
+    let backend = admission::classify_backend(vault.fs_magic, &vault.fs_type);
     let scanned = backend == BackendKind::Btrfs;
     let scan = if scanned {
-        let Some(subvolume_id) = root.btrfs.as_ref().and_then(|btrfs| btrfs.subvolume_id) else {
+        let Some(subvolume_id) = vault.btrfs.as_ref().and_then(|btrfs| btrfs.subvolume_id) else {
             return self::error(
                 "scan",
-                "Root 是 btrfs 但无法解析子卷 ID，无法遍历确认嵌套子卷",
+                "Vault 是 btrfs 但无法解析子卷 ID，无法遍历确认嵌套子卷",
             );
         };
-        match probe::scan_root(&root.resolved_path, subvolume_id, &args.policy) {
+        match probe::scan_vault(&vault.resolved_path, subvolume_id, &args.policy) {
             Ok(scan) => scan,
             Err(error) => return self::error("scan", error),
         }
@@ -173,9 +173,9 @@ fn inspect(rest: &[String]) -> ExitCode {
         }
     };
 
-    print_facts(&root);
+    print_facts(&vault);
     print_scan(&scan, scanned);
-    let sub_mounts = admission::nested_mounts(&mounts, &root);
+    let sub_mounts = admission::nested_mounts(&mounts, &vault);
     println!("submounts={}", sub_mounts.len());
     for entry in &sub_mounts {
         println!(
@@ -187,9 +187,9 @@ fn inspect(rest: &[String]) -> ExitCode {
     }
 
     let outcome = admission::evaluate(&AdmissionInput {
-        root: &root,
+        vault: &vault,
         internal_state_dirs: &internal_state_dirs,
-        registered_roots: &registered_roots,
+        registered_vaults: &registered_vaults,
         mounts: &mounts,
         scan: &scan,
     });
@@ -216,7 +216,7 @@ fn inspect(rest: &[String]) -> ExitCode {
         AdmissionDecision::Inconclusive(reason) => {
             println!("reason={}", reason.code());
             println!("error_code=-");
-            println!("detail=扫描上限内无法证明 Root 合规，结论未定");
+            println!("detail=扫描上限内无法证明 Vault 合规，结论未定");
             for note in &outcome.notes {
                 println!("note={note}");
             }

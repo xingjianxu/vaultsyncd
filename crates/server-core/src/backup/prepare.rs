@@ -1,21 +1,21 @@
 //! 备份清单与发布前提（design §19.1）。
 use crate::objects::{ContentDigest, ObjectLayout};
 use std::collections::BTreeSet;
-use vaultsyncd_domain::{ids::RootId, version::RootSeq};
+use vaultsyncd_domain::{ids::VaultId, version::VaultSeq};
 
-/// 一份被冻结的Root序号。
+/// 一份被冻结的Vault序号。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FrozenRoot {
-    /// Root身份。
-    pub root: RootId,
+pub struct FrozenVault {
+    /// Vault身份。
+    pub vault: VaultId,
     /// 提交屏障内选定的已确认序号。
-    pub seq: RootSeq,
+    pub seq: VaultSeq,
 }
 /// 导出数据库引用的不可变对象。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrozenObject {
-    /// 所属Root。
-    pub root: RootId,
+    /// 所属Vault。
+    pub vault: VaultId,
     /// SHA-256。
     pub hash: [u8; 32],
     /// 字节数。
@@ -26,15 +26,15 @@ pub struct FrozenObject {
 /// 从同一SQLite读取快照得到的准备计划。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
-    /// 各Root的序号。
-    pub roots: Vec<FrozenRoot>,
+    /// 各Vault的序号。
+    pub vaults: Vec<FrozenVault>,
     /// 完整对象清单（也包含仍在DB中的历史/回收站对象）。
     pub objects: Vec<FrozenObject>,
 }
 /// 任何一个证据不成立都不能发布ready。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// 身份重复或对象不属于清单Root。
+    /// 身份重复或对象不属于清单Vault。
     InvalidIdentity,
     /// 内容路径不规范或重用同一个物理位置。
     InvalidPath,
@@ -48,20 +48,20 @@ pub enum Error {
     Unprotected,
 }
 impl Plan {
-    /// 检查稳定身份/Root隔离/规范对象路径；空服务器可有空清单。
+    /// 检查稳定身份/Vault隔离/规范对象路径；空服务器可有空清单。
     pub fn validate(&self) -> Result<(), Error> {
-        let roots: BTreeSet<_> = self.roots.iter().map(|r| r.root).collect();
-        if roots.len() != self.roots.len() {
+        let vaults: BTreeSet<_> = self.vaults.iter().map(|r| r.vault).collect();
+        if vaults.len() != self.vaults.len() {
             return Err(Error::InvalidIdentity);
         }
         let mut keys = BTreeSet::new();
         let mut paths = BTreeSet::new();
         for o in &self.objects {
-            if !roots.contains(&o.root) || !keys.insert((o.root, o.hash)) {
+            if !vaults.contains(&o.vault) || !keys.insert((o.vault, o.hash)) {
                 return Err(Error::InvalidIdentity);
             }
             if !ObjectLayout::valid_storage_path(
-                o.root,
+                o.vault,
                 &ContentDigest::from_bytes(o.hash),
                 &o.storage_path,
             ) || !paths.insert(&o.storage_path)
@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn every_publication_evidence_is_required() {
         let p = Plan {
-            roots: vec![],
+            vaults: vec![],
             objects: vec![],
         };
         assert_eq!(ready(&p, 1, true, true, true), Err(Error::UnfinishedIntent));
@@ -112,29 +112,29 @@ mod tests {
     }
 
     #[test]
-    fn same_digest_is_root_isolated_and_legacy_paths_remain_unique() {
-        let roots: Vec<_> = [1, 2]
+    fn same_digest_is_vault_isolated_and_legacy_paths_remain_unique() {
+        let vaults: Vec<_> = [1, 2]
             .into_iter()
-            .map(|n| FrozenRoot {
-                root: RootId::from_bytes([n; 16]),
-                seq: RootSeq::ZERO,
+            .map(|n| FrozenVault {
+                vault: VaultId::from_bytes([n; 16]),
+                seq: VaultSeq::ZERO,
             })
             .collect();
         let digest = ContentDigest::from_bytes([0xab; 32]);
         let mut plan = Plan {
-            objects: roots
+            objects: vaults
                 .iter()
                 .map(|r| FrozenObject {
-                    root: r.root,
+                    vault: r.vault,
                     hash: *digest.as_bytes(),
                     size: 1,
-                    storage_path: ObjectLayout::scoped_relative_object_path(r.root, &digest)
+                    storage_path: ObjectLayout::scoped_relative_object_path(r.vault, &digest)
                         .to_str()
                         .unwrap()
                         .to_owned(),
                 })
                 .collect(),
-            roots,
+            vaults,
         };
         assert_eq!(plan.validate(), Ok(()));
         let scoped = plan.objects[1].storage_path.clone();
@@ -164,11 +164,11 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_foreign_roots_and_path_escape() {
-        let root = RootId::from_bytes([1; 16]);
+    fn manifest_rejects_foreign_vaults_and_path_escape() {
+        let vault = VaultId::from_bytes([1; 16]);
         let hash = [2; 32];
         let object = FrozenObject {
-            root,
+            vault,
             hash,
             size: 1,
             storage_path: ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
@@ -176,13 +176,13 @@ mod tests {
                 .to_string(),
         };
         let mut plan = Plan {
-            roots: vec![],
+            vaults: vec![],
             objects: vec![object],
         };
         assert_eq!(plan.validate(), Err(Error::InvalidIdentity));
-        plan.roots.push(FrozenRoot {
-            root,
-            seq: RootSeq::ZERO,
+        plan.vaults.push(FrozenVault {
+            vault,
+            seq: VaultSeq::ZERO,
         });
         assert_eq!(plan.validate(), Ok(()));
         plan.objects[0].storage_path = "../../user-file".into();

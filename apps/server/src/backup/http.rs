@@ -30,7 +30,7 @@ pub fn router(auth: Arc<AuthContext>, context: Arc<Context>, lifecycle: Arc<Life
         .route("/v1/admin/backup-snapshots/{id}/export", get(export))
         .route("/v1/admin/backup-snapshots/{id}/files/{name}", get(file))
         .route(
-            "/v1/admin/backup-snapshots/{id}/objects/{root}/{hash}",
+            "/v1/admin/backup-snapshots/{id}/objects/{vault}/{hash}",
             get(object),
         )
         .route("/v1/admin/backup-snapshots/{id}/verify", post(verify))
@@ -254,10 +254,10 @@ async fn file(
 }
 async fn object(
     State(state): State<HttpState>,
-    Path((text, root, hash)): Path<(String, String, String)>,
+    Path((text, vault, hash)): Path<(String, String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    download(state, text, format!("objects/{root}/{hash}"), headers).await
+    download(state, text, format!("objects/{vault}/{hash}"), headers).await
 }
 async fn download(state: HttpState, text: String, path: String, headers: HeaderMap) -> Response {
     let owner = match owner(&state, &headers).await {

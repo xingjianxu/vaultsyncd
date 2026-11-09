@@ -251,7 +251,7 @@ impl Commits {
         let actual = if superseded {
             None
         } else {
-            match local.root.inspect(path) {
+            match local.vault.inspect(path) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => return Err(error(e)),
                 Ok(_) => local.observe_snapshot(path).await?,
@@ -495,7 +495,7 @@ impl Worker {
             .iter()
             .map(|(id, path)| (path.clone(), id.clone()))
             .collect();
-        let report = local.root.scan();
+        let report = local.vault.scan();
         if !report.permits_missing_comparison() {
             return Err(error("incomplete local scan"));
         }
@@ -675,7 +675,7 @@ impl Worker {
             )
             .await?;
             let meta = local
-                .root
+                .vault
                 .ensure_directory(&target.to_string())
                 .map_err(error)?;
             let mut physical = meta.identity.volume.to_le_bytes().to_vec();
@@ -710,7 +710,7 @@ impl Worker {
             .await
             .map_err(error)?;
         drop(conn);
-        let meta = local.root.inspect(&target.to_string());
+        let meta = local.vault.inspect(&target.to_string());
         let mode: String = sqlx::query_scalar("SELECT mode FROM bindings WHERE id=?")
             .bind(local.binding.as_bytes().as_slice())
             .fetch_one(local.db.pool())
@@ -758,10 +758,10 @@ impl Worker {
             let changed = {
                 let adapter = self.importer.adapter.lock().map_err(error)?;
                 let catalog = adapter.catalog();
-                let root = catalog.read().map_err(error)?.root;
+                let vault = catalog.read().map_err(error)?.vault;
                 let id = vaultsyncd_platform_windows::cfapi::catalog::Identity {
                     binding: local.binding,
-                    root,
+                    vault,
                     entry: after.entry,
                     version: after.content_version.unwrap(),
                 };

@@ -18,7 +18,7 @@
 //!
 //! # 下载
 //!
-//! 顺序固定为：解析 `(root, entry, version)` → 解析并收敛 Range → **建立下载租约** → 从对象区按
+//! 顺序固定为：解析 `(vault, entry, version)` → 解析并收敛 Range → **建立下载租约** → 从对象区按
 //! 切片读取 → 结束时解除租约。
 //!
 //! - **按版本取字节**：内容地址只来自该版本行；路径上后来出现的新 head 与本请求无关（I12）。版本
@@ -30,7 +30,7 @@
 //! - **整文件校验**：请求覆盖整个对象时，读出的字节必须与内容地址的 SHA-256 一致才返回；部分切片
 //!   无法在服务端核对整份摘要，由客户端按 design §13.2 的“校验各块及整文件”负责。
 
-use vaultsyncd_domain::ids::{EntryId, RootId, UploadId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, UploadId, VaultId, VersionId};
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_transfer::hash;
 
@@ -144,8 +144,8 @@ impl PublishedContent {
 pub struct FinalizedContent {
     /// 会话身份。
     pub upload: UploadId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 可提交内容引用。
     pub content: ContentReference,
     /// 块数。
@@ -183,7 +183,7 @@ pub enum ContentFailure {
     Publish(PublishFailure),
     /// 版本已过期或被清理（design §15.4 `VERSION_GONE`）。
     VersionGone,
-    /// 条目不存在、不在该 Root 内、或是目录。
+    /// 条目不存在、不在该 Vault 内、或是目录。
     EntryUnavailable,
     /// 下载的切片落在对象范围之外（含空区间）。
     RangeNotSatisfiable {
@@ -321,7 +321,7 @@ where
         UploadPhase::Finalized => {
             return Ok(FinalizedContent {
                 upload,
-                root: session.root,
+                vault: session.vault,
                 content: ContentReference {
                     digest: session.hash,
                     size: session.total_size,
@@ -373,12 +373,12 @@ where
     }
 
     objects
-        .record_published(session.root, &published, now)
+        .record_published(session.vault, &published, now)
         .await?;
     store.mark_finalized(upload).await?;
     Ok(FinalizedContent {
         upload,
-        root: session.root,
+        vault: session.vault,
         content: published.reference(),
         part_count: assembled.part_count,
         reuse: published.reuse,
@@ -389,8 +389,8 @@ where
 /// 一个具名条目版本的内容事实（下载的唯一依据）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VersionContent {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 条目身份。
     pub entry: EntryId,
     /// 版本身份。
@@ -539,7 +539,7 @@ pub struct DownloadHandle {
 pub async fn open_download<S, L>(
     store: &mut S,
     leases: &mut L,
-    root: RootId,
+    vault: VaultId,
     request: &DownloadRequest,
     lease_expires_at: UtcTimestamp,
 ) -> Result<DownloadHandle, ContentFailure>
@@ -548,9 +548,11 @@ where
     L: ContentLeasePort,
 {
     let content = store
-        .version_content(root, request.entry, request.version)
+        .version_content(vault, request.entry, request.version)
         .await?;
-    if content.root != root || content.entry != request.entry || content.version != request.version
+    if content.vault != vault
+        || content.entry != request.entry
+        || content.version != request.version
     {
         // 适配器返回的事实与本请求不符：不拿“另一个版本/条目”的字节冒充。
         return Err(ContentFailure::EntryUnavailable);
@@ -573,7 +575,7 @@ where
     };
     let lease = leases
         .acquire(&ContentLeaseRequest {
-            root,
+            vault,
             digest: content.digest,
             purpose: ContentLeasePurpose::Download,
             expires_at: lease_expires_at,
@@ -679,7 +681,7 @@ mod tests {
     fn session(total: u64, chunk: u64, phase: UploadPhase) -> UploadSession {
         UploadSession {
             upload: UploadId::from_bytes([0x51; 16]),
-            root: RootId::from_bytes([0x52; 16]),
+            vault: VaultId::from_bytes([0x52; 16]),
             session: vaultsyncd_domain::ids::SessionId::from_bytes([0x53; 16]),
             total_size: total,
             hash: digest(b"whole"),
@@ -772,18 +774,18 @@ mod tests {
 
     #[derive(Default)]
     struct FakeObjects {
-        recorded: Vec<(RootId, PublishedContent)>,
+        recorded: Vec<(VaultId, PublishedContent)>,
     }
 
     #[allow(async_fn_in_trait)]
     impl ContentObjectStore for FakeObjects {
         async fn record_published(
             &mut self,
-            root: RootId,
+            vault: VaultId,
             content: &PublishedContent,
             _verified_at: UtcTimestamp,
         ) -> Result<(), PublishFailure> {
-            self.recorded.push((root, content.clone()));
+            self.recorded.push((vault, content.clone()));
             Ok(())
         }
     }
@@ -824,14 +826,14 @@ mod tests {
     impl VersionContentStore for FakeVersions {
         async fn version_content(
             &mut self,
-            root: RootId,
+            vault: VaultId,
             entry: EntryId,
             version: VersionId,
         ) -> Result<VersionContent, VersionContentError> {
             let _ = self.current;
             match &self.facts {
                 Some(facts)
-                    if facts.root == root && facts.entry == entry && facts.version == version =>
+                    if facts.vault == vault && facts.entry == entry && facts.version == version =>
                 {
                     Ok(facts.clone())
                 }
@@ -1269,7 +1271,7 @@ mod tests {
         let old_bytes: &[u8] = b"version-one";
         let new_bytes: &[u8] = b"version-two-with-more-bytes";
         let facts = VersionContent {
-            root: RootId::from_bytes([0x52; 16]),
+            vault: VaultId::from_bytes([0x52; 16]),
             entry: EntryId::from_bytes([0x54; 16]),
             version: VersionId::from_bytes([0x55; 16]),
             digest: digest(old_bytes),
@@ -1284,7 +1286,7 @@ mod tests {
         let handle = open_download(
             &mut store,
             &mut leases,
-            facts.root,
+            facts.vault,
             &DownloadRequest {
                 entry: facts.entry,
                 version: facts.version,
@@ -1337,7 +1339,7 @@ mod tests {
         let failure = open_download(
             &mut store,
             &mut leases,
-            RootId::from_bytes([0x52; 16]),
+            VaultId::from_bytes([0x52; 16]),
             &DownloadRequest {
                 entry: EntryId::from_bytes([0x54; 16]),
                 version: VersionId::from_bytes([0x55; 16]),
@@ -1355,7 +1357,7 @@ mod tests {
     async fn range_download_reads_exactly_the_requested_slice() {
         let bytes: &[u8] = b"0123456789";
         let facts = VersionContent {
-            root: RootId::from_bytes([0x52; 16]),
+            vault: VaultId::from_bytes([0x52; 16]),
             entry: EntryId::from_bytes([0x54; 16]),
             version: VersionId::from_bytes([0x55; 16]),
             digest: digest(bytes),
@@ -1369,7 +1371,7 @@ mod tests {
         let handle = open_download(
             &mut store,
             &mut leases,
-            facts.root,
+            facts.vault,
             &DownloadRequest {
                 entry: facts.entry,
                 version: facts.version,
@@ -1413,7 +1415,7 @@ mod tests {
     fn whole_object_read_is_verified_against_the_version_digest() {
         let bytes: &[u8] = b"fixed bytes";
         let content = VersionContent {
-            root: RootId::from_bytes([0x52; 16]),
+            vault: VaultId::from_bytes([0x52; 16]),
             entry: EntryId::from_bytes([0x54; 16]),
             version: VersionId::from_bytes([0x55; 16]),
             digest: digest(bytes),

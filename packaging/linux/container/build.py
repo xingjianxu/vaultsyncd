@@ -27,21 +27,21 @@ def main():
     parser.add_argument('--receipt',type=Path,required=True)
     parser.add_argument('--offline',action='store_true',help='require the exact base digest and every locked .deb already cached')
     args=parser.parse_args()
-    root=args.runtime.resolve(strict=True)
-    manifest_path=root/'share/vaultsyncd/release-manifest.json'
+    vault=args.runtime.resolve(strict=True)
+    manifest_path=vault/'share/vaultsyncd/release-manifest.json'
     manifest=json.loads(manifest_path.read_text())
     assert manifest['kind']=='portable-linux-private-loader'
-    sources=args.sources or root.parent/manifest['corresponding_source_archive']['name']
+    sources=args.sources or vault.parent/manifest['corresponding_source_archive']['name']
     assert sha(sources)==manifest['corresponding_source_archive']['sha256'], 'keep the matching runtime sources archive available'
     expected={e['path'] for e in manifest['files']}|{'share/vaultsyncd/release-manifest.json'}
-    actual={str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}
-    assert expected==actual and not any(p.is_symlink() for p in root.rglob('*')), 'unexpected/missing runtime files'
+    actual={str(p.relative_to(vault)) for p in vault.rglob('*') if p.is_file()}
+    assert expected==actual and not any(p.is_symlink() for p in vault.rglob('*')), 'unexpected/missing runtime files'
     for e in manifest['files']:
-        p=(root/e['path']).resolve(strict=True)
-        assert p.is_relative_to(root) and p.stat().st_size==int(e['size']) and sha(p)==e['sha256'], 'stale/tampered runtime'
+        p=(vault/e['path']).resolve(strict=True)
+        assert p.is_relative_to(vault) and p.stat().st_size==int(e['size']) and sha(p)==e['sha256'], 'stale/tampered runtime'
     assert manifest['target']=='x86_64-unknown-linux-gnu', 'only Linux x64 runtimes are supported'
     arch='amd64'
-    lock=json.loads((root/'share/vaultsyncd/container/ubuntu-lock.json').read_text())
+    lock=json.loads((vault/'share/vaultsyncd/container/ubuntu-lock.json').read_text())
     base='docker.io/library/ubuntu@'+lock['base_manifests'][arch]
     cached=subprocess.run([args.engine,'image','inspect',base],capture_output=True,text=True)
     base_cached=cached.returncode==0
@@ -54,8 +54,8 @@ def main():
     assert base_facts['Architecture']==arch and (base_facts.get('Digest')==digest or any(
         value.endswith('@'+digest) for value in base_facts.get('RepoDigests',[]))), 'cached Ubuntu base identity mismatch'
     with tempfile.TemporaryDirectory(prefix='vaultsyncd-image-') as temp:
-        context=Path(temp);shutil.copytree(root,context/'runtime')
-        shutil.copy2(root/'share/vaultsyncd/container/Dockerfile',context/'Dockerfile')
+        context=Path(temp);shutil.copytree(vault,context/'runtime')
+        shutil.copy2(vault/'share/vaultsyncd/container/Dockerfile',context/'Dockerfile')
         deps=context/'apt-debs';deps.mkdir()
         for e in lock['packages'][arch]:
             assert Path(e['filename']).name==e['filename']
@@ -75,7 +75,7 @@ def main():
     receipt={'format':1,'image':args.image,'image_id':inspected['Id'],'architecture':arch,'base':base,
              'offline':args.offline,'base_cached_verified':base_cached,
              'sourceInfo':manifest['sourceInfo'],'version':manifest['version'],'runtime_manifest_sha256':sha(manifest_path),
-             'ubuntu_lock_sha256':sha(root/'share/vaultsyncd/container/ubuntu-lock.json')}
+             'ubuntu_lock_sha256':sha(vault/'share/vaultsyncd/container/ubuntu-lock.json')}
     assert inspected['Architecture']==arch and inspected['Config']['User']=='8721:8721'
     health=inspected.get('Healthcheck') or inspected['Config'].get('Healthcheck')
     assert health and health['Test'], 'image must retain the declared health check'

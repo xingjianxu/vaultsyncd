@@ -28,7 +28,7 @@ export class BrowserAuth {
     await browserLogin(this.options, { login: loginName, password, device_label: "Web 浏览器" });
     return getAccount(this.options);
   }
-  /** 可供后续 Root/历史/备份消费者复用；401 单飞刷新一次，失败回到登录。 */
+  /** 可供后续 Vault/历史/备份消费者复用；401 单飞刷新一次，失败回到登录。 */
   async request<T>(operation: (options: ClientOptions) => Promise<T>): Promise<T> {
     try { return await operation(this.options); }
     catch (error) {

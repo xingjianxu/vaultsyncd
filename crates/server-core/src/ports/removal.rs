@@ -1,4 +1,4 @@
-//! Root 工作目录的移除端口：把条目（及其整棵子树）从工作目录删掉（design §10.3、§11.2 步骤 6）。
+//! Vault 工作目录的移除端口：把条目（及其整棵子树）从工作目录删掉（design §10.3、§11.2 步骤 6）。
 //!
 //! 删除是唯一会毁掉工作目录内容的命名空间动作，因此端口契约比 `mkdir`/`rename` 更严：
 //!
@@ -109,7 +109,7 @@ impl fmt::Display for RemovalError {
 
 impl std::error::Error for RemovalError {}
 
-/// Root 工作目录的移除端口。
+/// Vault 工作目录的移除端口。
 pub trait RemovalPort {
     /// 删除一个普通文件。
     ///

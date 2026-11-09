@@ -8,7 +8,7 @@ import { BrowserAuth, SignedOut } from "../../services/auth";
 import type { DirectorySnapshot } from "./browser";
 import { createClipboard, createRenameJob, createFileActionRecovery, createUploadJob, createPasteJob, prepareDelete, type RecoverableOperation, type RecoveredOperation, type PreparedDelete, type FileActionJob, type FileClipboard } from "./actions";
 
-export interface ActionDirectory { rootId: string; snapshot: DirectorySnapshot; parent: SnapshotEntry }
+export interface ActionDirectory { vaultId: string; snapshot: DirectorySnapshot; parent: SnapshotEntry }
 type Actions = {
   clipboard: FileClipboard | null; busy: boolean; locked: boolean; revision: number;
   stage: (context: ActionDirectory, entry: SnapshotEntry, mode: "copy" | "cut") => void;
@@ -37,7 +37,7 @@ class ActionAuth extends BrowserAuth {
   }
 }
 
-/** 记录放在 Root/目录导航之上，切换目录不会遗失剪贴板或未确认的 OpId。 */
+/** 记录放在 Vault/目录导航之上，切换目录不会遗失剪贴板或未确认的 OpId。 */
 export function FileActionsProvider({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const mounted = useRef(true);
@@ -117,12 +117,12 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
     clipboard, busy, locked, revision,
     stage(context, entry, mode) {
       if (locked) return;
-      try { setClipboard(createClipboard(mode, context.rootId, context.snapshot, entry)); }
+      try { setClipboard(createClipboard(mode, context.vaultId, context.snapshot, entry)); }
       catch (cause) { failure(cause); return; }
       showFeedback(mode === "copy" ? `已复制 ${entry.name}，请选择目标目录粘贴。` : `已剪切 ${entry.name}，粘贴后才移动。`);
     },
-    upload: (context, files) => start(() => createUploadJob(client!, context.rootId, context.snapshot, context.parent, files, recovery)),
-    paste: context => { if (clipboard) start(() => createPasteJob(client!, clipboard, context.rootId, context.snapshot, context.parent, recovery)); },
+    upload: (context, files) => start(() => createUploadJob(client!, context.vaultId, context.snapshot, context.parent, files, recovery)),
+    paste: context => { if (clipboard) start(() => createPasteJob(client!, clipboard, context.vaultId, context.snapshot, context.parent, recovery)); },
     rename(context, entry) {
       if (locked || running.current) return;
       selectRenameName.current = true;
@@ -133,7 +133,7 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
       client?.resume();
       running.current = true; setBusy(true);
       try {
-        const prepared = await prepareDelete(client!, context.rootId, context.snapshot, entry, recovery);
+        const prepared = await prepareDelete(client!, context.vaultId, context.snapshot, entry, recovery);
         setDeletion(prepared);
       } catch (cause) { failure(cause); }
       finally { running.current = false; setBusy(false); }
@@ -152,7 +152,7 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
     {recoveryError && <Alert color="red" title="文件操作恢复记录不可用">{recoveryError}</Alert>}
     {!job && records.length > 0 && <Alert color="yellow" title="未确认文件操作">
       <Stack gap="xs"><Text size="sm">有未确认的提交，请先核对原操作。后续批量任务不会自动恢复。</Text>
-        {records.map(record => <Text size="xs" key={record.request.op_id}>{record.request.kind} · {record.request.name ?? record.request.entry_id} · Root {record.root} · Op {record.request.op_id}</Text>)}
+        {records.map(record => <Text size="xs" key={record.request.op_id}>{record.request.kind} · {record.request.name ?? record.request.entry_id} · Vault {record.vault} · Op {record.request.op_id}</Text>)}
         <Group><Button size="xs" disabled={busy || auth.busy} onClick={() => void recover()}>核对未确认操作</Button>
           {missing.map(record => <Button key={record.request.op_id} size="xs" variant="default" onClick={() => setReplay(record)}>重试原操作</Button>)}
         </Group>
@@ -166,7 +166,7 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
         if (!renaming || running.current || auth.busy) return;
         try {
           const { context, entry } = renaming;
-          const next = createRenameJob(client!, context.rootId, context.snapshot, entry, name, recovery);
+          const next = createRenameJob(client!, context.vaultId, context.snapshot, entry, name, recovery);
           setRenaming(null); void run(next);
         } catch (cause) { setNameError(cause instanceof Error ? cause.message : "名称无效。"); }
       }}>
@@ -185,7 +185,7 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
       footer={replay && <Group justify="flex-end"><Button variant="default" onClick={() => setReplay(null)}>取消</Button>
         <Button color={replay.request.kind === "delete" ? "red" : "blue"} onClick={() => { const id = replay.request.op_id; setReplay(null); void recover(id); }}>继续原操作</Button></Group>}>
       {replay && <><Text>将按原始基线重试 {replay.request.kind}：{replay.request.name ?? replay.request.entry_id}。不会更新版本或扩大删除范围。</Text>
-        <Text size="xs">Root {replay.root} · Op {replay.request.op_id}</Text></>}
+        <Text size="xs">Vault {replay.vault} · Op {replay.request.op_id}</Text></>}
     </Dialog>
     <Dialog opened={!!deletion} title="删除确认" onClose={() => setDeletion(null)}
       footer={deletion && <Group justify="flex-end"><Button variant="default" onClick={() => setDeletion(null)}>取消</Button>

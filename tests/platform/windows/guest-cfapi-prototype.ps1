@@ -6,7 +6,7 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Directory,
-    [Parameter(Mandatory = $true)][string]$Root,
+    [Parameter(Mandatory = $true)][string]$Vault,
     [string]$Exe = 'cfapi-prototype.exe'
 )
 
@@ -44,29 +44,29 @@ Write-Output "guest_build: $($os.BuildNumber)"
 Write-Output "guest_architecture: $env:PROCESSOR_ARCHITECTURE"
 Write-Output "guest_exe_sha256 $Exe $((Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToLower())"
 
-$volume = Get-Volume -DriveLetter $Root.Substring(0, 1)
-Write-Output "guest_root_volume filesystem=$($volume.FileSystem) drive=$($volume.DriveLetter)"
+$volume = Get-Volume -DriveLetter $Vault.Substring(0, 1)
+Write-Output "guest_vault_volume filesystem=$($volume.FileSystem) drive=$($volume.DriveLetter)"
 
 Stage 'prereset'
 # 上一轮留下的注册/目录会让“是否是占位符”的证据失效，因此先清理再建目录。
-if (Test-Path -LiteralPath $Root) {
-    & $exePath cleanup --root $Root
+if (Test-Path -LiteralPath $Vault) {
+    & $exePath cleanup --vault $Vault
     Write-Output "prereset_cleanup_exit=$LASTEXITCODE"
-    Remove-Item -LiteralPath $Root -Recurse -Force
+    Remove-Item -LiteralPath $Vault -Recurse -Force
 }
-New-Item -ItemType Directory -Force -Path $Root | Out-Null
-Write-Output "guest_root_path=$Root"
+New-Item -ItemType Directory -Force -Path $Vault | Out-Null
+Write-Output "guest_vault_path=$Vault"
 
 Stage 'user_content'
 # 清理前先放普通用户内容：同步根下的文件与子目录都必须原样保留。
-$keepPath = Join-Path $Root 'user-keep.txt'
+$keepPath = Join-Path $Vault 'user-keep.txt'
 $keepText = "user content must survive cleanup`r`nS010 vaultsyncd"
 Set-Content -LiteralPath $keepPath -Value $keepText -NoNewline -Encoding Ascii
 $keepHashBefore = (Get-FileHash -Algorithm SHA256 -Path $keepPath).Hash.ToLower()
 $keepSizeBefore = (Get-Item -LiteralPath $keepPath).Length
 Write-Output "user_keep_before path=user-keep.txt sha256=$keepHashBefore size=$keepSizeBefore"
 
-$userDir = Join-Path $Root 'user-dir'
+$userDir = Join-Path $Vault 'user-dir'
 New-Item -ItemType Directory -Force -Path $userDir | Out-Null
 $notePath = Join-Path $userDir 'keep-note.txt'
 Set-Content -LiteralPath $notePath -Value 'nested user content must survive cleanup' -NoNewline -Encoding Ascii
@@ -74,20 +74,20 @@ $noteHashBefore = (Get-FileHash -Algorithm SHA256 -Path $notePath).Hash.ToLower(
 Write-Output "user_note_before path=user-dir/keep-note.txt sha256=$noteHashBefore size=$((Get-Item -LiteralPath $notePath).Length)"
 
 Stage 'create'
-& $exePath create --root $Root
+& $exePath create --vault $Vault
 $createExit = $LASTEXITCODE
 Write-Output "create_exit=$createExit"
 Check 'create_exit' ($createExit -eq 0) "exit=$createExit"
 
 Stage 'inspect'
-& $exePath inspect --root $Root
+& $exePath inspect --vault $Vault
 $inspectExit = $LASTEXITCODE
 Write-Output "inspect_exit=$inspectExit"
 Check 'inspect_exit' ($inspectExit -eq 0) "exit=$inspectExit (0 = registered and all entries verified)"
 
 Stage 'placeholder_evidence'
 # 与原型无关的第三方证据：Get-Item 属性/长度、attrib、fsutil reparsepoint 与 sparse 查询。
-$prototypeDir = Join-Path $Root $prototypeDirName
+$prototypeDir = Join-Path $Vault $prototypeDirName
 $dirItem = Get-Item -LiteralPath $prototypeDir -Force
 Write-Output "evidence_getitem_dir path=$prototypeDirName length=$($dirItem.Length) attributes_value=$([int]$dirItem.Attributes) attributes_name=$($dirItem.Attributes)"
 foreach ($name in $placeholderFiles) {
@@ -114,7 +114,7 @@ Stage 'read_hydration'
 # S011 起内容水合已实现：用 `read` 子命令（自己连接提供方）读取小条目，必须成功且长度正确。
 # 逐字节/哈希、范围请求、离线、超时与中断的完整证据在 `guest-cfapi-hydration.ps1`（S011）。
 $readTarget = Join-Path $prototypeDir $placeholderFiles[0]
-& $exePath read --root $Root --name $placeholderFiles[0]
+& $exePath read --vault $Vault --name $placeholderFiles[0]
 $readExit = $LASTEXITCODE
 Write-Output "read_exit=$readExit"
 Check 'read_hydrated_exit' ($readExit -eq 0) "exit=$readExit"
@@ -124,7 +124,7 @@ Write-Output "evidence_read path=$prototypeDirName/$($placeholderFiles[0]) outco
 Check 'read_hydrated_length' ($readLength -eq $expectedSizes[$placeholderFiles[0]]) "length=$readLength expected=$($expectedSizes[$placeholderFiles[0]])"
 
 Stage 'cleanup'
-& $exePath cleanup --root $Root
+& $exePath cleanup --vault $Vault
 $cleanupExit = $LASTEXITCODE
 Write-Output "cleanup_exit=$cleanupExit"
 Check 'cleanup_exit' ($cleanupExit -eq 0) "exit=$cleanupExit"
@@ -154,14 +154,14 @@ foreach ($name in $placeholderFiles) {
 
 Stage 'inspect_after_cleanup'
 # 3 = 同步根未注册（cleanup 之后的预期状态）；其他非零值都是失败。
-& $exePath inspect --root $Root
+& $exePath inspect --vault $Vault
 $postInspectExit = $LASTEXITCODE
 Write-Output "inspect_after_cleanup_exit=$postInspectExit"
 Check 'unregistered_after_cleanup' ($postInspectExit -eq 3) "exit=$postInspectExit (3 = not registered)"
 
 Stage 'cleanup_again'
 # 幂等性：没有注册也没有占位时再清理一次仍然成功，且不改动用户内容。
-& $exePath cleanup --root $Root
+& $exePath cleanup --vault $Vault
 $cleanupAgainExit = $LASTEXITCODE
 Write-Output "cleanup_again_exit=$cleanupAgainExit"
 Check 'cleanup_again_exit' ($cleanupAgainExit -eq 0) "exit=$cleanupAgainExit"

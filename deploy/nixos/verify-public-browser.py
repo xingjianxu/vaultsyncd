@@ -12,7 +12,7 @@ from playwright.sync_api import sync_playwright, expect
 def main():
     origin, evidence, receipt = sys.argv[1:]
     evidence = Path(evidence).resolve(strict=True)
-    root = json.loads(Path(receipt).read_text())['root_id']
+    vault = json.loads(Path(receipt).read_text())['vault_id']
     result = {'origin': origin, 'checks': []}
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, args=['--no-proxy-server'])
@@ -38,16 +38,16 @@ def main():
             assert 'vaultsyncd_session' not in page.evaluate('document.cookie')
             result['cookies'] = [{k: c[k] for k in ('name', 'secure', 'httpOnly', 'sameSite', 'path')} for c in session]
             result['checks'].append('public-CA-strict-browser-TLS-and-ui-login-secure-cookie')
-            page.evaluate('''root => {
+            page.evaluate('''vault => {
               window.acceptance={controller:new AbortController(),text:'',failed:false};
-              fetch(`/v1/roots/${root}/events`,{signal:window.acceptance.controller.signal}).then(async r=>{
+              fetch(`/v1/vaults/${vault}/events`,{signal:window.acceptance.controller.signal}).then(async r=>{
                 if(!r.ok||!r.headers.get('content-type').startsWith('text/event-stream'))throw Error('SSE headers');
                 const reader=r.body.getReader(),decoder=new TextDecoder();
                 while(true){const {value,done}=await reader.read();if(done)break;
                   window.acceptance.text+=decoder.decode(value,{stream:true});
                   if(window.acceptance.text.length>65536)throw Error('SSE bound');}
               }).catch(e=>{if(e.name!=='AbortError')window.acceptance.failed=true});
-            }''', root)
+            }''', vault)
             page.wait_for_function("window.acceptance.text.includes('event: seq')", timeout=10000)
             page.wait_for_timeout(16000)
             assert page.evaluate("() => /(^|\\n):/.test(window.acceptance.text)")

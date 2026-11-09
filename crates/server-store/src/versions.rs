@@ -3,30 +3,30 @@
 //!
 //! 边界：本模块只读写 `objects`/`versions`，并把条目的“当前内容版本”指针写成同一个版本
 //! （[`crate::entries`] 的 `set_current_content_version`）。它不做文件系统 I/O、不算哈希、不分配
-//! `RootSeq`：哈希由平台层校验后交给本层（design §11.2 步骤 3），批次序号由 [`crate::changes`]
+//! `VaultSeq`：哈希由平台层校验后交给本层（design §11.2 步骤 3），批次序号由 [`crate::changes`]
 //! 分配。写函数接收调用方已开的 `BEGIN IMMEDIATE` 事务，因此“对象存在 → 版本入历史 → 条目指针
 //! 更新”与同一事务里的事件批次一起提交或一起回滚。
 //!
 //! 不变量：
 //!
-//! - **版本只引用已持久化内容**：`versions(root_id, object_hash) → objects(root_id, hash)` 外键；
+//! - **版本只引用已持久化内容**：`versions(vault_id, object_hash) → objects(vault_id, hash)` 外键；
 //!   本层在写入前核对对象存在且长度一致，长度不一致就是“[`VersionError::ContentSizeMismatch`]”，
 //!   不允许“同一个内容地址两种长度”。（design I05：不完整内容不可见为完整版本。）
-//! - **版本只属于已记录的事务批次**：`versions(root_id, created_seq) → changes(root_id, seq)`
+//! - **版本只属于已记录的事务批次**：`versions(vault_id, created_seq) → changes(vault_id, seq)`
 //!   外键；写入前核对批次存在，否则 [`VersionError::SeqNotRecorded`]。回滚的事务不会留下版本、
 //!   也不会有指向不存在批次的历史行（design I09、§11.2 步骤 7）。
 //! - **历史只读**：已提交版本的标识与内容引用由触发器拒绝更新（design I12），唯一可改的列是
 //!   `superseded_at`；恢复历史要写一个新版本并让它成为当前版本，而不是改写旧行。
-//! - **每个条目至多一个当前版本**：部分唯一索引 `(root_id, entry_id) WHERE superseded_at IS NULL`。
+//! - **每个条目至多一个当前版本**：部分唯一索引 `(vault_id, entry_id) WHERE superseded_at IS NULL`。
 //!   写入新版本时先把旧当前版本标记为被取代，再插入新行，因此中间状态也在事务内。
 //! - **只有文件有条目版本**：目录没有 `VersionId`（design §7.1）。给目录记录版本报
 //!   [`VersionError::NotAFile`]；为已软删除的条目重建版本也拒绝，删除后的历史仍然可读。
-//! - **owner scope**：每个接口都带 [`UserId`]，经 `roots.owner_id` 判定；不属于该 owner 的 Root
+//! - **owner scope**：每个接口都带 [`UserId`]，经 `vaults.owner_id` 判定；不属于该 owner 的 Vault
 //!   一律 [`VersionError::OutOfScope`] / `None`，不泄露存在性。
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, UserId, VersionId};
-use vaultsyncd_domain::version::{RootSeq, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, UserId, VaultId, VersionId};
+use vaultsyncd_domain::version::{UtcTimestamp, VaultSeq};
 
 use crate::entries::{self, EntryError, EntryKind};
 
@@ -72,13 +72,13 @@ impl ObjectGcState {
 
 /// 记录一个已持久化并校验过的内容对象。
 ///
-/// 不变量（违反时报错且不写入）：Root 属于调用方；`storage_path` 非空且全库唯一；`size` 在数据库
-/// 有符号 64 位范围内。同一 `(root, hash)` 再次以相同长度与同一路径登记是幂等的（返回既有记录），
+/// 不变量（违反时报错且不写入）：Vault 属于调用方；`storage_path` 非空且全库唯一；`size` 在数据库
+/// 有符号 64 位范围内。同一 `(vault, hash)` 再次以相同长度与同一路径登记是幂等的（返回既有记录），
 /// 长度或路径不同则报 [`VersionError::ObjectConflict`]——内容地址只能对应一份内容。
 #[derive(Clone, Debug)]
 pub struct NewObject {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 内容 SHA-256。
     pub hash: ObjectHash,
     /// 内容字节数。
@@ -92,8 +92,8 @@ pub struct NewObject {
 /// 从数据库读出的一条 `objects` 记录。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectRecord {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 内容 SHA-256。
     pub hash: ObjectHash,
     /// 内容字节数。
@@ -139,14 +139,14 @@ impl VersionOrigin {
 
 /// 记录一个新版本（`versions` 的一行），并让它成为条目的当前版本。
 ///
-/// 不变量（违反时报错且不写入）：Root 属于调用方；条目在该 Root 内、是活跃的文件；对象的长度与
-/// 版本长度一致；`created_seq` 是该 Root 已存在的批次；`at` 不早于该批次的创建时间由调用方保证。
+/// 不变量（违反时报错且不写入）：Vault 属于调用方；条目在该 Vault 内、是活跃的文件；对象的长度与
+/// 版本长度一致；`created_seq` 是该 Vault 已存在的批次；`at` 不早于该批次的创建时间由调用方保证。
 #[derive(Clone, Debug)]
 pub struct NewVersion {
     /// 版本身份（由应用层经 `IdSource` 生成）。
     pub id: VersionId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 内容所属的条目。
     pub entry: EntryId,
     /// 内容对象的哈希。
@@ -154,7 +154,7 @@ pub struct NewVersion {
     /// 内容字节数，必须与对象一致。
     pub size: u64,
     /// 记录本版本的批次序号。
-    pub created_seq: RootSeq,
+    pub created_seq: VaultSeq,
     /// 内容来源。
     pub origin: VersionOrigin,
     /// 本版本成为当前版本的时间；同时写入被取代的旧版本的 `superseded_at`。
@@ -166,8 +166,8 @@ pub struct NewVersion {
 pub struct VersionRecord {
     /// 版本身份。
     pub id: VersionId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 内容所属的条目。
     pub entry: EntryId,
     /// 内容对象的哈希。
@@ -175,7 +175,7 @@ pub struct VersionRecord {
     /// 内容字节数。
     pub size: u64,
     /// 记录本版本的批次序号。
-    pub created_seq: RootSeq,
+    pub created_seq: VaultSeq,
     /// 被取代的时间；`None` 表示这是当前版本。
     pub superseded_at: Option<UtcTimestamp>,
     /// 内容来源。
@@ -187,9 +187,9 @@ pub struct VersionRecord {
 pub enum VersionError {
     /// SQLite 层面失败。
     Db(sqlx::Error),
-    /// Root 不存在或不属于调用方的 owner scope（两种情况不区分）。
+    /// Vault 不存在或不属于调用方的 owner scope（两种情况不区分）。
     OutOfScope,
-    /// 条目不存在、已删除，或不属于该 Root。
+    /// 条目不存在、已删除，或不属于该 Vault。
     EntryNotFound {
         /// 请求的条目身份。
         id: EntryId,
@@ -211,10 +211,10 @@ pub enum VersionError {
         /// 对象记录的长度。
         object_size: u64,
     },
-    /// 批次序号在该 Root 里不存在：版本只能写在已记录的事务批次里。
+    /// 批次序号在该 Vault 里不存在：版本只能写在已记录的事务批次里。
     SeqNotRecorded {
         /// 请求的批次序号。
-        seq: RootSeq,
+        seq: VaultSeq,
     },
     /// 同一内容地址已用不同的长度或路径登记过。
     ObjectConflict {
@@ -260,8 +260,8 @@ impl std::fmt::Display for VersionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Db(source) => write!(f, "SQLite 操作失败：{source}"),
-            Self::OutOfScope => f.write_str("Root 不存在或不在调用方的 owner scope 内"),
-            Self::EntryNotFound { id } => write!(f, "条目 {id} 不存在、已删除或不在该 Root 内"),
+            Self::OutOfScope => f.write_str("Vault 不存在或不在调用方的 owner scope 内"),
+            Self::EntryNotFound { id } => write!(f, "条目 {id} 不存在、已删除或不在该 Vault 内"),
             Self::NotAFile { id } => write!(f, "条目 {id} 是目录，目录没有内容版本"),
             Self::UnknownObject { hash } => {
                 write!(f, "内容对象 {} 尚未记录", hex(hash.as_slice()))
@@ -273,7 +273,7 @@ impl std::fmt::Display for VersionError {
                 f,
                 "版本长度 {version_size} 与内容对象长度 {object_size} 不同"
             ),
-            Self::SeqNotRecorded { seq } => write!(f, "批次序号 {seq} 在该 Root 里不存在"),
+            Self::SeqNotRecorded { seq } => write!(f, "批次序号 {seq} 在该 Vault 里不存在"),
             Self::ObjectConflict { hash, reason } => {
                 write!(f, "内容对象 {} 冲突：{reason}", hex(hash.as_slice()))
             }
@@ -304,23 +304,24 @@ impl std::error::Error for VersionError {
 }
 
 /// `objects` 表的列顺序，多处查询共用。
-const OBJECT_COLUMNS: &str = "o.root_id, o.hash, o.size, o.storage_path, o.verified_at, o.gc_state";
+const OBJECT_COLUMNS: &str =
+    "o.vault_id, o.hash, o.size, o.storage_path, o.verified_at, o.gc_state";
 
 /// `versions` 表的列顺序，多处查询共用。
-const VERSION_COLUMNS: &str = "v.id, v.root_id, v.entry_id, v.object_hash, v.size, \
+const VERSION_COLUMNS: &str = "v.id, v.vault_id, v.entry_id, v.object_hash, v.size, \
                                v.created_seq, v.superseded_at, v.origin";
 
-/// 记录一个已校验的内容对象；同一 `(root, hash)` 的相同登记是幂等的。
+/// 记录一个已校验的内容对象；同一 `(vault, hash)` 的相同登记是幂等的。
 pub async fn record_object(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
     new: &NewObject,
 ) -> Result<ObjectRecord, VersionError> {
-    require_root_owner(tx, owner, new.root).await?;
+    require_vault_owner(tx, owner, new.vault).await?;
     require_storage_path(&new.storage_path)?;
     let size = db_size(new.size)?;
 
-    if let Some(existing) = object_facts(tx, new.root, &new.hash).await? {
+    if let Some(existing) = object_facts(tx, new.vault, &new.hash).await? {
         if existing.gc_state != "live" {
             return Err(VersionError::ObjectConflict {
                 hash: new.hash,
@@ -340,16 +341,16 @@ pub async fn record_object(
             });
         }
         // 幂等登记返回**库里的**记录，而不是把输入拼成结果。
-        return object_in_scope(tx, owner, new.root, &new.hash)
+        return object_in_scope(tx, owner, new.vault, &new.hash)
             .await?
             .ok_or(VersionError::OutOfScope);
     }
 
     let inserted = sqlx::query(
-        "INSERT INTO objects (root_id, hash, size, storage_path, verified_at, gc_state) \
+        "INSERT INTO objects (vault_id, hash, size, storage_path, verified_at, gc_state) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.hash.as_slice())
     .bind(size)
     .bind(&new.storage_path)
@@ -360,7 +361,7 @@ pub async fn record_object(
     if let Err(error) = inserted {
         return Err(classify_object_error(error, new));
     }
-    object_in_scope(tx, owner, new.root, &new.hash)
+    object_in_scope(tx, owner, new.vault, &new.hash)
         .await?
         .ok_or(VersionError::OutOfScope)
 }
@@ -369,14 +370,14 @@ pub async fn record_object(
 pub async fn object_in_scope(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     hash: &ObjectHash,
 ) -> Result<Option<ObjectRecord>, VersionError> {
     let row = sqlx::query_as::<_, ObjectRow>(&format!(
-        "SELECT {OBJECT_COLUMNS} FROM objects o JOIN roots r ON r.id = o.root_id \
-         WHERE o.root_id = ?1 AND o.hash = ?2 AND r.owner_id = ?3"
+        "SELECT {OBJECT_COLUMNS} FROM objects o JOIN vaults r ON r.id = o.vault_id \
+         WHERE o.vault_id = ?1 AND o.hash = ?2 AND r.owner_id = ?3"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(hash.as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_optional(conn)
@@ -394,29 +395,28 @@ pub async fn record_version(
     owner: UserId,
     new: &NewVersion,
 ) -> Result<VersionRecord, VersionError> {
-    require_root_owner(tx, owner, new.root).await?;
-    require_active_file(tx, new.root, new.entry).await?;
-    let object =
-        object_facts(tx, new.root, &new.object_hash)
-            .await?
-            .ok_or(VersionError::UnknownObject {
-                hash: new.object_hash,
-            })?;
+    require_vault_owner(tx, owner, new.vault).await?;
+    require_active_file(tx, new.vault, new.entry).await?;
+    let object = object_facts(tx, new.vault, &new.object_hash).await?.ok_or(
+        VersionError::UnknownObject {
+            hash: new.object_hash,
+        },
+    )?;
     if object.size != new.size {
         return Err(VersionError::ContentSizeMismatch {
             version_size: new.size,
             object_size: object.size,
         });
     }
-    require_recorded_seq(tx, new.root, new.created_seq).await?;
+    require_recorded_seq(tx, new.vault, new.created_seq).await?;
 
     // 先把旧当前版本标记为被取代，再插入新行：部分唯一索引要求任何时刻只有一行是当前版本。
     sqlx::query(
         "UPDATE versions SET superseded_at = ?1 \
-         WHERE root_id = ?2 AND entry_id = ?3 AND superseded_at IS NULL",
+         WHERE vault_id = ?2 AND entry_id = ?3 AND superseded_at IS NULL",
     )
     .bind(new.at.to_db_integer())
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.entry.as_bytes().as_slice())
     .execute(&mut **tx)
     .await
@@ -424,11 +424,11 @@ pub async fn record_version(
 
     let inserted = sqlx::query(
         "INSERT INTO versions \
-         (id, root_id, entry_id, object_hash, size, created_seq, superseded_at, origin) \
+         (id, vault_id, entry_id, object_hash, size, created_seq, superseded_at, origin) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
     )
     .bind(new.id.as_bytes().as_slice())
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.entry.as_bytes().as_slice())
     .bind(new.object_hash.as_slice())
     .bind(db_size(new.size)?)
@@ -453,14 +453,14 @@ pub async fn record_version(
 pub async fn current_version(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<Option<VersionRecord>, VersionError> {
     let row = sqlx::query_as::<_, VersionRow>(&format!(
-        "SELECT {VERSION_COLUMNS} FROM versions v JOIN roots r ON r.id = v.root_id \
-         WHERE v.root_id = ?1 AND v.entry_id = ?2 AND v.superseded_at IS NULL AND r.owner_id = ?3"
+        "SELECT {VERSION_COLUMNS} FROM versions v JOIN vaults r ON r.id = v.vault_id \
+         WHERE v.vault_id = ?1 AND v.entry_id = ?2 AND v.superseded_at IS NULL AND r.owner_id = ?3"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(entry.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_optional(conn)
@@ -475,19 +475,19 @@ pub async fn current_version(
 pub async fn version_history(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
     limit: u32,
 ) -> Result<Vec<VersionRecord>, VersionError> {
     if limit == 0 || limit > MAX_VERSION_PAGE {
         return Err(VersionError::InvalidLimit);
     }
-    require_root_owner(conn, owner, root).await?;
+    require_vault_owner(conn, owner, vault).await?;
     let rows = sqlx::query_as::<_, VersionRow>(&format!(
-        "SELECT {VERSION_COLUMNS} FROM versions v WHERE v.root_id = ?1 AND v.entry_id = ?2 \
+        "SELECT {VERSION_COLUMNS} FROM versions v WHERE v.vault_id = ?1 AND v.entry_id = ?2 \
          ORDER BY v.created_seq DESC, v.superseded_at, v.id LIMIT ?3"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(entry.as_bytes().as_slice())
     .bind(i64::from(limit))
     .fetch_all(conn)
@@ -503,7 +503,7 @@ async fn version_in_scope(
     id: VersionId,
 ) -> Result<Option<VersionRecord>, VersionError> {
     let row = sqlx::query_as::<_, VersionRow>(&format!(
-        "SELECT {VERSION_COLUMNS} FROM versions v JOIN roots r ON r.id = v.root_id \
+        "SELECT {VERSION_COLUMNS} FROM versions v JOIN vaults r ON r.id = v.vault_id \
          WHERE v.id = ?1 AND r.owner_id = ?2"
     ))
     .bind(id.as_bytes().as_slice())
@@ -517,7 +517,7 @@ async fn version_in_scope(
 /// 数据库行到 [`ObjectRecord`] 的中间形态。
 #[derive(sqlx::FromRow)]
 struct ObjectRow {
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     hash: Vec<u8>,
     size: i64,
     storage_path: String,
@@ -528,7 +528,7 @@ struct ObjectRow {
 impl ObjectRow {
     fn into_record(self) -> Result<ObjectRecord, VersionError> {
         Ok(ObjectRecord {
-            root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+            vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
             hash: content_hash(self.hash)?,
             size: size_of(self.size, "size")?,
             storage_path: self.storage_path,
@@ -547,7 +547,7 @@ impl ObjectRow {
 #[derive(sqlx::FromRow)]
 struct VersionRow {
     id: Vec<u8>,
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     entry_id: Vec<u8>,
     object_hash: Vec<u8>,
     size: i64,
@@ -560,11 +560,11 @@ impl VersionRow {
     fn into_record(self) -> Result<VersionRecord, VersionError> {
         Ok(VersionRecord {
             id: identity(self.id, "id", VersionId::from_bytes)?,
-            root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+            vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
             entry: identity(self.entry_id, "entry_id", EntryId::from_bytes)?,
             object_hash: content_hash(self.object_hash)?,
             size: size_of(self.size, "size")?,
-            created_seq: RootSeq::from_db_integer(self.created_seq).map_err(|_| {
+            created_seq: VaultSeq::from_db_integer(self.created_seq).map_err(|_| {
                 VersionError::MalformedRow {
                     column: "created_seq",
                 }
@@ -593,13 +593,13 @@ struct ObjectFacts {
 /// 读已登记对象的长度与路径；未登记返回 `None`。
 async fn object_facts(
     conn: &mut SqliteConnection,
-    root: RootId,
+    vault: VaultId,
     hash: &ObjectHash,
 ) -> Result<Option<ObjectFacts>, VersionError> {
     let row: Option<(i64, String, String)> = sqlx::query_as(
-        "SELECT size, storage_path, gc_state FROM objects WHERE root_id = ?1 AND hash = ?2",
+        "SELECT size, storage_path, gc_state FROM objects WHERE vault_id = ?1 AND hash = ?2",
     )
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(hash.as_slice())
     .fetch_optional(conn)
     .await
@@ -614,14 +614,14 @@ async fn object_facts(
     .transpose()
 }
 
-/// 确认 Root 属于调用方的 owner scope。
-async fn require_root_owner(
+/// 确认 Vault 属于调用方的 owner scope。
+async fn require_vault_owner(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<(), VersionError> {
-    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM roots WHERE id = ?1")
-        .bind(root.as_bytes().as_slice())
+    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM vaults WHERE id = ?1")
+        .bind(vault.as_bytes().as_slice())
         .fetch_optional(conn)
         .await
         .map_err(VersionError::Db)?;
@@ -631,22 +631,22 @@ async fn require_root_owner(
     }
 }
 
-/// 确认条目存在、活跃、属于该 Root 且是文件。
+/// 确认条目存在、活跃、属于该 Vault 且是文件。
 async fn require_active_file(
     conn: &mut SqliteConnection,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<(), VersionError> {
     let row: Option<(Vec<u8>, String, Option<i64>)> =
-        sqlx::query_as("SELECT root_id, kind, deleted_at FROM entries WHERE id = ?1")
+        sqlx::query_as("SELECT vault_id, kind, deleted_at FROM entries WHERE id = ?1")
             .bind(entry.as_bytes().as_slice())
             .fetch_optional(conn)
             .await
             .map_err(VersionError::Db)?;
-    let Some((entry_root, kind, deleted_at)) = row else {
+    let Some((entry_vault, kind, deleted_at)) = row else {
         return Err(VersionError::EntryNotFound { id: entry });
     };
-    if entry_root.as_slice() != root.as_bytes() || deleted_at.is_some() {
+    if entry_vault.as_slice() != vault.as_bytes() || deleted_at.is_some() {
         return Err(VersionError::EntryNotFound { id: entry });
     }
     match EntryKind::from_text(&kind) {
@@ -656,15 +656,15 @@ async fn require_active_file(
     }
 }
 
-/// 确认批次序号在该 Root 的 `changes` 里存在。
+/// 确认批次序号在该 Vault 的 `changes` 里存在。
 async fn require_recorded_seq(
     conn: &mut SqliteConnection,
-    root: RootId,
-    seq: RootSeq,
+    vault: VaultId,
+    seq: VaultSeq,
 ) -> Result<(), VersionError> {
     let found: Option<i64> =
-        sqlx::query_scalar("SELECT seq FROM changes WHERE root_id = ?1 AND seq = ?2")
-            .bind(root.as_bytes().as_slice())
+        sqlx::query_scalar("SELECT seq FROM changes WHERE vault_id = ?1 AND seq = ?2")
+            .bind(vault.as_bytes().as_slice())
             .bind(seq.to_db_integer())
             .fetch_optional(conn)
             .await
@@ -769,7 +769,7 @@ mod tests {
     use crate::db::Database;
     use crate::entries;
     use crate::test_support::{
-        TestDir, open_database, register_root, seed_file, seed_owner, tx as tx_id, user,
+        TestDir, open_database, register_vault, seed_file, seed_owner, tx as tx_id, user,
     };
 
     fn at(seconds: i64) -> UtcTimestamp {
@@ -790,11 +790,11 @@ mod tests {
     async fn commit_version(
         database: &Database,
         owner: UserId,
-        root: RootId,
+        vault: VaultId,
         new: NewVersion,
     ) -> Result<(ChangeBatch, VersionRecord), VersionError> {
         let mut tx = database.begin_write().await.expect("开始写事务");
-        let batch = changes::append_change(&mut tx, owner, root, tx_id(0x31), EVENTS, new.at)
+        let batch = changes::append_change(&mut tx, owner, vault, tx_id(0x31), EVENTS, new.at)
             .await
             .expect("追加批次");
         let recorded = record_version(
@@ -813,7 +813,7 @@ mod tests {
     async fn record_object_ok(
         database: &Database,
         owner: UserId,
-        root: RootId,
+        vault: VaultId,
         marker: u8,
         size: u64,
     ) -> ObjectRecord {
@@ -822,7 +822,7 @@ mod tests {
             &mut tx,
             owner,
             &NewObject {
-                root,
+                vault,
                 hash: hash(marker),
                 size,
                 storage_path: format!("/srv/objects/{marker:02x}"),
@@ -840,15 +840,15 @@ mod tests {
         let dir = TestDir::new("versions-object");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
 
-        let first = record_object_ok(&database, owner, root, 0x41, 12).await;
+        let first = record_object_ok(&database, owner, vault, 0x41, 12).await;
         assert_eq!(first.size, 12);
         assert_eq!(first.gc_state, ObjectGcState::Live);
         assert_eq!(first.verified_at, at(9));
 
-        // 相同 (root, hash) + 相同长度 + 相同路径：幂等，返回库里的记录。
-        let again = record_object_ok(&database, owner, root, 0x41, 12).await;
+        // 相同 (vault, hash) + 相同长度 + 相同路径：幂等，返回库里的记录。
+        let again = record_object_ok(&database, owner, vault, 0x41, 12).await;
         assert_eq!(again, first);
         let mut conn = database.pool().acquire().await.expect("取连接");
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM objects")
@@ -863,7 +863,7 @@ mod tests {
             &mut tx,
             owner,
             &NewObject {
-                root,
+                vault,
                 hash: hash(0x41),
                 size: 13,
                 storage_path: "/srv/objects/41".to_owned(),
@@ -884,7 +884,7 @@ mod tests {
             &mut tx,
             owner,
             &NewObject {
-                root,
+                vault,
                 hash: hash(0x41),
                 size: 12,
                 storage_path: "/srv/objects/other".to_owned(),
@@ -899,13 +899,13 @@ mod tests {
         );
         tx.rollback().await.expect("回滚");
 
-        // 另一个对象占用同一路径：拒绝（按 Root 的 GC 不能删掉别人的字节）。
+        // 另一个对象占用同一路径：拒绝（按 Vault 的 GC 不能删掉别人的字节）。
         let mut tx = database.begin_write().await.expect("开始写事务");
         let error = record_object(
             &mut tx,
             owner,
             &NewObject {
-                root,
+                vault,
                 hash: hash(0x42),
                 size: 5,
                 storage_path: "/srv/objects/41".to_owned(),
@@ -926,7 +926,7 @@ mod tests {
             &mut tx,
             owner,
             &NewObject {
-                root,
+                vault,
                 hash: hash(0x43),
                 size: 1,
                 storage_path: String::new(),
@@ -943,7 +943,7 @@ mod tests {
             &mut tx,
             owner,
             &NewObject {
-                root,
+                vault,
                 hash: hash(0x43),
                 size: u64::MAX,
                 storage_path: "/srv/objects/43".to_owned(),
@@ -961,7 +961,7 @@ mod tests {
         // 别人的账号看不到、也写不了。
         let mut conn = database.pool().acquire().await.expect("取连接");
         assert_eq!(
-            object_in_scope(&mut conn, user(0x12), root, &hash(0x41))
+            object_in_scope(&mut conn, user(0x12), vault, &hash(0x41))
                 .await
                 .expect("读对象"),
             None
@@ -975,30 +975,30 @@ mod tests {
         let dir = TestDir::new("versions-current");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, root_entry) = register_root(&database, owner, 0x21).await;
-        let file = seed_file(&database, owner, root, root_entry, 0x51, "note.txt").await;
+        let (vault, vault_entry) = register_vault(&database, owner, 0x21).await;
+        let file = seed_file(&database, owner, vault, vault_entry, 0x51, "note.txt").await;
 
-        record_object_ok(&database, owner, root, 0x41, 12).await;
-        record_object_ok(&database, owner, root, 0x42, 20).await;
+        record_object_ok(&database, owner, vault, 0x41, 12).await;
+        record_object_ok(&database, owner, vault, 0x42, 20).await;
 
         let (_first_batch, first) = commit_version(
             &database,
             owner,
-            root,
+            vault,
             NewVersion {
                 id: version(0x61),
-                root,
+                vault,
                 entry: file,
                 object_hash: hash(0x41),
                 size: 12,
-                created_seq: RootSeq::ZERO,
+                created_seq: VaultSeq::ZERO,
                 origin: VersionOrigin::Client,
                 at: at(10),
             },
         )
         .await
         .expect("记录第一个版本");
-        assert_eq!(first.created_seq, RootSeq::new(1).expect("seq"));
+        assert_eq!(first.created_seq, VaultSeq::new(1).expect("seq"));
         assert_eq!(first.superseded_at, None);
         assert_eq!(first.origin, VersionOrigin::Client);
 
@@ -1010,7 +1010,7 @@ mod tests {
             .expect("条目存在");
         assert_eq!(entry_record.content_version, Some(version(0x61)));
         assert_eq!(
-            current_version(&mut conn, owner, root, file)
+            current_version(&mut conn, owner, vault, file)
                 .await
                 .expect("读当前版本"),
             Some(first.clone())
@@ -1020,25 +1020,25 @@ mod tests {
         let (_second_batch, second) = commit_version(
             &database,
             owner,
-            root,
+            vault,
             NewVersion {
                 id: version(0x62),
-                root,
+                vault,
                 entry: file,
                 object_hash: hash(0x42),
                 size: 20,
-                created_seq: RootSeq::ZERO,
+                created_seq: VaultSeq::ZERO,
                 origin: VersionOrigin::External,
                 at: at(20),
             },
         )
         .await
         .expect("记录第二个版本");
-        assert_eq!(second.created_seq, RootSeq::new(2).expect("seq"));
+        assert_eq!(second.created_seq, VaultSeq::new(2).expect("seq"));
         assert_eq!(second.superseded_at, None);
 
         let mut conn = database.pool().acquire().await.expect("取连接");
-        let current = current_version(&mut conn, owner, root, file)
+        let current = current_version(&mut conn, owner, vault, file)
             .await
             .expect("读当前版本")
             .expect("当前版本存在");
@@ -1053,7 +1053,7 @@ mod tests {
         );
 
         // 历史保留旧版本，且旧行只剩“被取代的时间”是新的。
-        let history = version_history(&mut conn, owner, root, file, 10)
+        let history = version_history(&mut conn, owner, vault, file, 10)
             .await
             .expect("读历史");
         assert_eq!(history.len(), 2);
@@ -1072,21 +1072,28 @@ mod tests {
         let dir = TestDir::new("versions-reject");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, root_entry) = register_root(&database, owner, 0x21).await;
-        let (other_root, other_entry) = register_root(&database, owner, 0x22).await;
-        let file = seed_file(&database, owner, root, root_entry, 0x51, "note.txt").await;
-        let other_file =
-            seed_file(&database, owner, other_root, other_entry, 0x52, "other.txt").await;
-        record_object_ok(&database, owner, root, 0x41, 12).await;
+        let (vault, vault_entry) = register_vault(&database, owner, 0x21).await;
+        let (other_vault, other_entry) = register_vault(&database, owner, 0x22).await;
+        let file = seed_file(&database, owner, vault, vault_entry, 0x51, "note.txt").await;
+        let other_file = seed_file(
+            &database,
+            owner,
+            other_vault,
+            other_entry,
+            0x52,
+            "other.txt",
+        )
+        .await;
+        record_object_ok(&database, owner, vault, 0x41, 12).await;
         let mut tx = database.begin_write().await.expect("开始写事务");
-        let batch = changes::append_change(&mut tx, owner, root, tx_id(0x31), EVENTS, at(10))
+        let batch = changes::append_change(&mut tx, owner, vault, tx_id(0x31), EVENTS, at(10))
             .await
             .expect("追加批次");
         tx.commit().await.expect("提交批次");
 
         let base = NewVersion {
             id: version(0x61),
-            root,
+            vault,
             entry: file,
             object_hash: hash(0x41),
             size: 12,
@@ -1143,14 +1150,14 @@ mod tests {
             &mut tx,
             owner,
             &NewVersion {
-                created_seq: RootSeq::new(9).expect("seq"),
+                created_seq: VaultSeq::new(9).expect("seq"),
                 ..base.clone()
             },
         )
         .await
         .expect_err("版本必须写在已记录的批次里");
         assert!(
-            matches!(error, VersionError::SeqNotRecorded { seq } if seq == RootSeq::new(9).expect("seq")),
+            matches!(error, VersionError::SeqNotRecorded { seq } if seq == VaultSeq::new(9).expect("seq")),
             "实际错误 {error:?}"
         );
         tx.rollback().await.expect("回滚");
@@ -1161,19 +1168,19 @@ mod tests {
             &mut tx,
             owner,
             &NewVersion {
-                entry: root_entry,
+                entry: vault_entry,
                 ..base.clone()
             },
         )
         .await
         .expect_err("目录不能有内容版本");
         assert!(
-            matches!(error, VersionError::NotAFile { id } if id == root_entry),
+            matches!(error, VersionError::NotAFile { id } if id == vault_entry),
             "实际错误 {error:?}"
         );
         tx.rollback().await.expect("回滚");
 
-        // 另一个 Root 的条目不能借用本 Root 的版本，别人的账号也写不了。
+        // 另一个 Vault 的条目不能借用本 Vault 的版本，别人的账号也写不了。
         let mut tx = database.begin_write().await.expect("开始写事务");
         let error = record_version(
             &mut tx,
@@ -1184,7 +1191,7 @@ mod tests {
             },
         )
         .await
-        .expect_err("跨 Root 的条目不能有本 Root 的版本");
+        .expect_err("跨 Vault 的条目不能有本 Vault 的版本");
         assert!(
             matches!(error, VersionError::EntryNotFound { .. }),
             "实际错误 {error:?}"
@@ -1233,19 +1240,19 @@ mod tests {
 
         let mut conn = database.pool().acquire().await.expect("取连接");
         assert_eq!(
-            version_history(&mut conn, owner, root, file, 10)
+            version_history(&mut conn, owner, vault, file, 10)
                 .await
                 .expect("读已删除条目的历史"),
             vec![recorded]
         );
         assert!(
-            version_history(&mut conn, user(0x12), root, file, 10)
+            version_history(&mut conn, user(0x12), vault, file, 10)
                 .await
                 .is_err(),
             "别人的账号不得读历史"
         );
         for limit in [0, MAX_VERSION_PAGE + 1] {
-            let error = version_history(&mut conn, owner, root, file, limit)
+            let error = version_history(&mut conn, owner, vault, file, limit)
                 .await
                 .expect_err("越界的分页大小必须拒绝");
             assert!(matches!(error, VersionError::InvalidLimit), "limit={limit}");
@@ -1259,22 +1266,22 @@ mod tests {
         let dir = TestDir::new("versions-immutable");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, root_entry) = register_root(&database, owner, 0x21).await;
-        let file = seed_file(&database, owner, root, root_entry, 0x51, "note.txt").await;
+        let (vault, vault_entry) = register_vault(&database, owner, 0x21).await;
+        let file = seed_file(&database, owner, vault, vault_entry, 0x51, "note.txt").await;
         // 第二个文件留给“绕过 Rust 直接写 SQL”的用例：它还没有当前版本，唯一索引不会先报错。
-        let second = seed_file(&database, owner, root, root_entry, 0x52, "second.txt").await;
-        record_object_ok(&database, owner, root, 0x41, 12).await;
+        let second = seed_file(&database, owner, vault, vault_entry, 0x52, "second.txt").await;
+        record_object_ok(&database, owner, vault, 0x41, 12).await;
         let (_batch, recorded) = commit_version(
             &database,
             owner,
-            root,
+            vault,
             NewVersion {
                 id: version(0x61),
-                root,
+                vault,
                 entry: file,
                 object_hash: hash(0x41),
                 size: 12,
-                created_seq: RootSeq::ZERO,
+                created_seq: VaultSeq::ZERO,
                 origin: VersionOrigin::Client,
                 at: at(10),
             },
@@ -1310,11 +1317,11 @@ mod tests {
         let mut tx = database.begin_write().await.expect("开始写事务");
         let error = sqlx::query(
             "INSERT INTO versions \
-             (id, root_id, entry_id, object_hash, size, created_seq, superseded_at, origin) \
+             (id, vault_id, entry_id, object_hash, size, created_seq, superseded_at, origin) \
              VALUES (?1, ?2, ?3, ?4, 12, 7, NULL, 'client')",
         )
         .bind(version(0x62).as_bytes().as_slice())
-        .bind(root.as_bytes().as_slice())
+        .bind(vault.as_bytes().as_slice())
         .bind(second.as_bytes().as_slice())
         .bind(hash(0x99).as_slice())
         .execute(&mut *tx)
@@ -1339,7 +1346,7 @@ pub struct VersionFacts {
     /// 内容字节数。
     pub size: u64,
     /// 记录该版本的批次。
-    pub created_seq: RootSeq,
+    pub created_seq: VaultSeq,
     /// 该批次的提交时间（版本创建时间）。
     pub created_at: UtcTimestamp,
     /// 被取代的时间；`None` 表示它仍是当前版本。
@@ -1354,16 +1361,16 @@ pub struct VersionFacts {
 pub async fn version_facts(
     conn: &mut sqlx::SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     version: VersionId,
 ) -> Result<Option<VersionFacts>, VersionError> {
     let row = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64, i64, i64, Option<i64>)>(
         "SELECT v.entry_id, v.object_hash, v.size, v.created_seq, c.created_at, v.superseded_at \
-         FROM versions v JOIN roots r ON r.id = v.root_id \
-         JOIN changes c ON c.root_id = v.root_id AND c.seq = v.created_seq \
-         WHERE v.root_id = ?1 AND v.id = ?2 AND r.owner_id = ?3",
+         FROM versions v JOIN vaults r ON r.id = v.vault_id \
+         JOIN changes c ON c.vault_id = v.vault_id AND c.seq = v.created_seq \
+         WHERE v.vault_id = ?1 AND v.id = ?2 AND r.owner_id = ?3",
     )
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(version.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_optional(&mut *conn)
@@ -1399,7 +1406,7 @@ pub async fn version_facts(
         entry,
         object_hash: hash,
         size,
-        created_seq: RootSeq::from_db_integer(created_seq).map_err(|_| {
+        created_seq: VaultSeq::from_db_integer(created_seq).map_err(|_| {
             VersionError::MalformedRow {
                 column: "created_seq",
             }

@@ -1,7 +1,7 @@
 {
-  "protocol": { "major": 1, "minor": 0 },
+  "protocol": { "major": 2, "minor": 0 },
   "server_id": "0123456789abcdef0123456789abcdef",
   "epoch": "9007199254740993",
-  "features": ["roots", "snapshots", "feature_from_a_newer_server"],
+  "features": ["vaults", "snapshots", "feature_from_a_newer_server"],
   "limits": { "max_page_size": 500, "max_upload_part_bytes": "67108864" }
 }

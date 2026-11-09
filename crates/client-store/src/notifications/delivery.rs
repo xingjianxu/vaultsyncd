@@ -1,7 +1,7 @@
 //! Durable at-most-once desktop delivery claim per active problem episode; never marks it read.
 use super::{Notification, NotificationError, notification};
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-/// A root cause and its delivery episode.
+/// A vault cause and its delivery episode.
 #[derive(Debug)]
 pub struct Delivery {
     /// Existing authoritative problem record.
@@ -11,7 +11,7 @@ pub struct Delivery {
     /// A frontend has already claimed this episode; it may not have been shown if Windows disabled it.
     pub claimed: bool,
 }
-/// Read root/global notification state, including recovered records.
+/// Read vault/global notification state, including recovered records.
 pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Delivery>, NotificationError> {
     let rows: Vec<(String, i64, bool)> = sqlx::query_as(
         "SELECT dedupe_key,generation,delivery_claimed FROM notifications ORDER BY dedupe_key",
@@ -59,7 +59,7 @@ mod tests {
         let path = dir.database();
         let db = Database::open(&path).await.unwrap();
         let n = NewNotification {
-            dedupe_key: "root:11111111111111111111111111111111:INSUFFICIENT_STORAGE".into(),
+            dedupe_key: "vault:11111111111111111111111111111111:INSUFFICIENT_STORAGE".into(),
             binding: None,
             entry: None,
             code: ErrorCode::InsufficientStorage,

@@ -11,7 +11,7 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../../.." && pwd)
 
 TEST_VOLUME="$repo_root/tools/test-volume/test-volume.sh"
-LAB_ROOT=${VAULTSYNCD_LAB_ROOT:-/data/vaultsyncd-lab}
+LAB_VAULT=${VAULTSYNCD_LAB_VAULT:-/data/vaultsyncd-lab}
 ADMISSION_BIN="$repo_root/target/debug/examples/storage-admission"
 FILE_PUBLISH_BIN="$repo_root/target/debug/examples/file-publish"
 PATH_ACCESS_BIN="$repo_root/target/debug/examples/path-access"

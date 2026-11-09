@@ -13,8 +13,8 @@ use vaultsyncd_protocol::domain_map::{
 };
 use vaultsyncd_protocol::generated::{
     Capabilities, ChangeList, ErrorCode, ErrorEnvelope, FinalizedContent, HealthResponse,
-    HealthStatus, OperationRequest, OperationResult, RootList, RootRegistered, SeqHint,
-    SessionIssued, Snapshot, SnapshotPage, UploadSession,
+    HealthStatus, OperationRequest, OperationResult, SeqHint, SessionIssued, Snapshot,
+    SnapshotPage, UploadSession, VaultList, VaultRegistered,
 };
 
 /// `api/examples/capabilities.response.json`
@@ -31,7 +31,7 @@ fn capabilities() -> Capabilities {
 #[test]
 fn capabilities_example_decodes_with_string_epoch() {
     let capabilities = capabilities();
-    assert_eq!(capabilities.protocol.major, 1);
+    assert_eq!(capabilities.protocol.major, 2);
     assert_eq!(capabilities.protocol.minor, 0);
     assert_eq!(capabilities.server_id, "0123456789abcdef0123456789abcdef");
     // 2^53 + 1：JSON number 会把这个值读成 9007199254740992，只有字符串能原样传。
@@ -113,11 +113,11 @@ fn error_example_decodes_and_rejects_unknown_code() {
     let envelope: ErrorEnvelope =
         serde_json::from_str(ERROR_EXAMPLE).expect("错误样本必须符合契约");
     let body = &envelope.error;
-    assert_eq!(body.code, ErrorCode::RootUnavailable);
+    assert_eq!(body.code, ErrorCode::VaultUnavailable);
     assert!(body.retryable);
     assert_eq!(body.request_id, "req_example");
     assert_eq!(
-        body.root_id.as_deref(),
+        body.vault_id.as_deref(),
         Some("fedcba9876543210fedcba9876543210")
     );
     assert_eq!(
@@ -148,8 +148,8 @@ fn error_optional_fields_may_be_absent() {
         }
     });
     let envelope: ErrorEnvelope =
-        serde_json::from_value(minimal).expect("root_id 与 details 可省略");
-    assert!(envelope.error.root_id.is_none());
+        serde_json::from_value(minimal).expect("vault_id 与 details 可省略");
+    assert!(envelope.error.vault_id.is_none());
     assert!(envelope.error.details.is_none());
 }
 
@@ -225,11 +225,11 @@ mod examples_s052 {
 
     /// `api/examples/session-issued.response.json`
     const SESSION: &str = include_str!("../../../api/examples/session-issued.response.json");
-    /// `api/examples/root-registered.response.json`
-    const ROOT_REGISTERED: &str =
-        include_str!("../../../api/examples/root-registered.response.json");
-    /// `api/examples/root-list.response.json`
-    const ROOT_LIST: &str = include_str!("../../../api/examples/root-list.response.json");
+    /// `api/examples/vault-registered.response.json`
+    const VAULT_REGISTERED: &str =
+        include_str!("../../../api/examples/vault-registered.response.json");
+    /// `api/examples/vault-list.response.json`
+    const VAULT_LIST: &str = include_str!("../../../api/examples/vault-list.response.json");
     /// `api/examples/upload-session.response.json`
     const UPLOAD: &str = include_str!("../../../api/examples/upload-session.response.json");
     /// `api/examples/finalized-content.response.json`
@@ -251,8 +251,8 @@ mod examples_s052 {
     #[test]
     fn every_example_decodes_with_the_generated_dto() {
         let _: SessionIssued = serde_json::from_str(SESSION).expect("会话样本");
-        let _: RootRegistered = serde_json::from_str(ROOT_REGISTERED).expect("Root 注册样本");
-        let _: RootList = serde_json::from_str(ROOT_LIST).expect("Root 清单样本");
+        let _: VaultRegistered = serde_json::from_str(VAULT_REGISTERED).expect("Vault 注册样本");
+        let _: VaultList = serde_json::from_str(VAULT_LIST).expect("Vault 清单样本");
         let _: UploadSession = serde_json::from_str(UPLOAD).expect("上传会话样本");
         let _: FinalizedContent = serde_json::from_str(FINALIZED).expect("finalize 样本");
         let _: OperationRequest = serde_json::from_str(OPERATION_REQUEST).expect("操作请求样本");
@@ -283,9 +283,9 @@ mod examples_s052 {
 
     #[test]
     fn pending_and_committed_shapes_are_distinguishable() {
-        // committed 才带 revision/root_seq/version；样本不能把 pending 伪装成已同步。
+        // committed 才带 revision/vault_seq/version；样本不能把 pending 伪装成已同步。
         let result: OperationResult = serde_json::from_str(OPERATION_RESULT).expect("操作结果样本");
-        assert!(result.revision.is_some() && result.root_seq.is_some());
+        assert!(result.revision.is_some() && result.vault_seq.is_some());
         assert!(result.version_id.is_some());
         assert_eq!(
             result.state,
@@ -295,21 +295,21 @@ mod examples_s052 {
 }
 
 #[test]
-fn root_display_name_is_optional_for_old_servers_and_ignored_by_old_clients() {
-    use vaultsyncd_protocol::generated::RootList;
-    let old = r#"{"roots":[{"root_id":"01010101010101010101010101010101","health":"healthy"}]}"#;
-    let roots: RootList = serde_json::from_str(old).unwrap();
-    assert!(roots.roots[0].name.is_none());
+fn vault_display_name_is_optional_for_old_servers_and_ignored_by_old_clients() {
+    use vaultsyncd_protocol::generated::VaultList;
+    let old = r#"{"vaults":[{"vault_id":"01010101010101010101010101010101","health":"healthy"}]}"#;
+    let vaults: VaultList = serde_json::from_str(old).unwrap();
+    assert!(vaults.vaults[0].name.is_none());
     let new = old.replace("\"health\"", "\"name\":\"同步 目录\",\"health\"");
-    let roots: RootList = serde_json::from_str(&new).unwrap();
-    assert_eq!(roots.roots[0].name.as_deref(), Some("同步 目录"));
+    let vaults: VaultList = serde_json::from_str(&new).unwrap();
+    assert_eq!(vaults.vaults[0].name.as_deref(), Some("同步 目录"));
     #[derive(serde::Deserialize)]
-    struct OldRoot {
-        root_id: String,
+    struct OldVault {
+        vault_id: String,
         health: String,
     }
     let value: serde_json::Value = serde_json::from_str(&new).unwrap();
-    let old: OldRoot = serde_json::from_value(value["roots"][0].clone()).unwrap();
-    assert_eq!(old.root_id, roots.roots[0].root_id);
+    let old: OldVault = serde_json::from_value(value["vaults"][0].clone()).unwrap();
+    assert_eq!(old.vault_id, vaults.vaults[0].vault_id);
     assert_eq!(old.health, "healthy");
 }

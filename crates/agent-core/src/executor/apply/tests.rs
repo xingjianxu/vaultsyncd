@@ -12,7 +12,7 @@ use crate::adapters::ClientStorePorts;
 use crate::ports::local::{ApplyStage, LocalEntryKind};
 use vaultsyncd_client_store::bindings::{self, NewBinding, SyncMode};
 use vaultsyncd_client_store::entries::{self, EntryKind, LocalEntry};
-use vaultsyncd_domain::ids::{DeviceId, EntryId, RootId, ServerId, VersionId};
+use vaultsyncd_domain::ids::{DeviceId, EntryId, ServerId, VaultId, VersionId};
 use vaultsyncd_domain::state::{Dirty, Residency, Usage};
 use vaultsyncd_domain::version::{Generation, Revision, ServerEpoch};
 use vaultsyncd_transfer::hash::{digest_of, to_hex};
@@ -74,7 +74,7 @@ impl Rig {
                 id: binding(),
                 server: ServerId::from_bytes([1; 16]),
                 device: DeviceId::from_bytes([2; 16]),
-                root: RootId::from_bytes([3; 16]),
+                vault: VaultId::from_bytes([3; 16]),
                 local_path: path.join("work").to_str().unwrap().to_owned(),
                 cache_path: path.join("stage").to_str().unwrap().to_owned(),
                 mode: SyncMode::Full,
@@ -209,15 +209,15 @@ impl SnapshotSource for Bytes {
 }
 
 struct DiskLocal {
-    root: PathBuf,
+    vault: PathBuf,
     gate: Mutex<()>,
     race: bool,
     unknown: bool,
 }
 impl DiskLocal {
-    fn new(root: &Path) -> Self {
+    fn new(vault: &Path) -> Self {
         Self {
-            root: root.to_owned(),
+            vault: vault.to_owned(),
             gate: Mutex::new(()),
             race: false,
             unknown: false,
@@ -234,7 +234,7 @@ impl ControlledLocal for DiskLocal {
             if self.unknown {
                 return Err(io("根不可读：unknown"));
             }
-            let target = self.root.join("work").join(&path);
+            let target = self.vault.join("work").join(&path);
             let bytes = match fs::read(&target) {
                 Ok(bytes) => bytes,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -256,7 +256,7 @@ impl ControlledLocal for DiskLocal {
                 to_hex(&digest_of(&bytes)),
                 to_hex(&digest_of(&identity))
             );
-            let stamp = self.root.join("stamp.json");
+            let stamp = self.vault.join("stamp.json");
             let previous: Option<(String, u64)> = fs::read(&stamp)
                 .ok()
                 .map(|b| serde_json::from_slice(&b).unwrap());
@@ -290,7 +290,7 @@ impl ControlledLocal for DiskLocal {
             // Mutex 覆盖本测试端口的所有发布，外部修改通过明确注入点模拟。
             // 生产端口必须使用 Windows 使用保护/独占句柄，而不是这种测试锁。
             if self.race {
-                persist(&self.root.join("work/file.txt"), EDIT);
+                persist(&self.vault.join("work/file.txt"), EDIT);
             }
             if std::env::var("S059_CRASH").as_deref() == Ok("intent") {
                 std::process::exit(81);
@@ -305,7 +305,7 @@ impl ControlledLocal for DiskLocal {
             if Some(digest_of(&bytes)) != request.expected_digest {
                 return Err(io("暂存校验失败"));
             }
-            let target = self.root.join("work").join(request.target.to_string());
+            let target = self.vault.join("work").join(request.target.to_string());
             match before {
                 ContentEvidence::Absent if target.exists() => return Err(changed()),
                 ContentEvidence::File {
@@ -316,7 +316,7 @@ impl ControlledLocal for DiskLocal {
                 } => {
                     let current = fs::read(&target).map_err(io)?;
                     let (_, observed_generation): (String, u64) = serde_json::from_slice(
-                        &fs::read(self.root.join("stamp.json")).map_err(io)?,
+                        &fs::read(self.vault.join("stamp.json")).map_err(io)?,
                     )
                     .map_err(io)?;
                     #[cfg(unix)]
@@ -452,7 +452,7 @@ fn child(rig: &Rig, mode: &str, crash: &str, expected: i32) {
             "executor::apply::tests::recovery_child",
             "--nocapture",
         ])
-        .env("S059_CHILD_ROOT", &rig.path)
+        .env("S059_CHILD_VAULT", &rig.path)
         .env("S059_CHILD_MODE", mode)
         .env("S059_CRASH", crash)
         .output()
@@ -467,21 +467,21 @@ fn child(rig: &Rig, mode: &str, crash: &str, expected: i32) {
 }
 #[test]
 fn recovery_child() {
-    let Ok(path) = std::env::var("S059_CHILD_ROOT") else {
+    let Ok(path) = std::env::var("S059_CHILD_VAULT") else {
         return;
     };
-    let root = PathBuf::from(path);
+    let vault = PathBuf::from(path);
     tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let db = Arc::new(Database::open(root.join("client.sqlite")).await.unwrap());
-        let runner = ControlledApply::new(db.clone(), Arc::new(DiskLocal::new(&root)));
+        let db = Arc::new(Database::open(vault.join("client.sqlite")).await.unwrap());
+        let runner = ControlledApply::new(db.clone(), Arc::new(DiskLocal::new(&vault)));
         let mode = std::env::var("S059_CHILD_MODE").unwrap();
         if mode == "apply" || mode == "confirmed" {
-            let spec = spec(&root);
+            let spec = spec(&vault);
             let remote = Remote {
-                path: root.join("server/version-two"),
+                path: vault.join("server/version-two"),
                 wrong: false,
             };
-            let temp = DiskTemp(root.join("stage/remote.part").to_str().unwrap().to_owned());
+            let temp = DiskTemp(vault.join("stage/remote.part").to_str().unwrap().to_owned());
             let progress = ClientStorePorts::new(db.clone());
             let options = DownloadOptions::new(5);
             if mode == "confirmed" {
@@ -501,10 +501,10 @@ fn recovery_child() {
                     .apply(
                         &spec,
                         &Remote {
-                            path: root.join("server/version-two"),
+                            path: vault.join("server/version-two"),
                             wrong: false,
                         },
-                        &DiskTemp(root.join("stage/remote.part").to_str().unwrap().to_owned()),
+                        &DiskTemp(vault.join("stage/remote.part").to_str().unwrap().to_owned()),
                         &ClientStorePorts::new(db.clone()),
                         &DownloadOptions::new(5),
                     )

@@ -45,14 +45,14 @@ def volume():
 def main():
     checked(["sudo","-n","mkdir","-m","755",RUN]);checked(["sudo","-n","chown",f"{os.getuid()}:{os.getgid()}",RUN])
     with volume() as mount:
-        state=mount/"state";roots=mount/"roots";state.mkdir(mode=0o700);roots.mkdir()
-        candidate=roots/"documents";candidate.mkdir()
+        state=mount/"state";vaults=mount/"vaults";state.mkdir(mode=0o700);vaults.mkdir()
+        candidate=vaults/"documents";candidate.mkdir()
         sample=candidate/"keep.txt";sample.write_bytes(b"S090 confirmed bytes\n")
         (candidate/"large.bin").write_bytes(b"A"*(8*1024*1024))
         original=hashlib.sha256(sample.read_bytes()).hexdigest()
         password=secrets.token_urlsafe(24)
         checked([BIN/"vaultsyncd-admin","init","--state-dir",state],input=password+"\n")
-        config=RUN/"server.toml";config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[roots]\nallowed_bases=["{roots}"]\n[log]\nformat="json"\nlevel="info"\n')
+        config=RUN/"server.toml";config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
         log=(RUN/"server.log").open("w")
         server=subprocess.Popen([str(BIN/"vaultsyncd-server"),"--config",str(config)],stdout=log,stderr=log)
         proxy=None
@@ -105,8 +105,8 @@ def main():
                 context=browser.new_context(accept_downloads=True);page=context.new_page()
                 page.add_init_script("""window.__cspViolations=[];document.addEventListener('securitypolicyviolation',event=>{window.__cspViolations.push({directive:event.effectiveDirective,blocked:event.blockedURI});});""")
                 response=page.goto(origin+"/#/account")
-                notifications = page.locator(".mantine-Notification-root")
-                integrity = page.locator(".mantine-Paper-root").filter(has=page.get_by_role("heading", name="本机导出完整性", exact=True))
+                notifications = page.locator(".mantine-Notification-vault")
+                integrity = page.locator(".mantine-Paper-vault").filter(has=page.get_by_role("heading", name="本机导出完整性", exact=True))
                 assert response
                 nonce=page.locator('meta[name="csp-nonce"]').get_attribute("content")
                 assert nonce and f"'nonce-{nonce}'" in response.headers.get("content-security-policy", "")
@@ -117,15 +117,15 @@ def main():
                       const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'content-type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});
                       const v=await r.json();if(!r.ok)throw new Error(JSON.stringify(v));return v;
                     }""",[path,body])
-                root=api("/v1/admin/roots",{"path":str(candidate)})["root_id"]
+                vault=api("/v1/admin/vaults",{"path":str(candidate)})["vault_id"]
                 for _ in range(150):
-                    entries=api(f"/v1/roots/{root}/recovery")["items"]
+                    entries=api(f"/v1/vaults/{vault}/recovery")["items"]
                     if len(entries)==2:break
                     time.sleep(.2)
                 else:raise AssertionError("observer did not capture source")
                 page.get_by_role("link",name="备份管理",exact=True).click()
                 prepare=page.get_by_role("button",name="准备一致备份（未知时重试同ID）",exact=True)
-                prepare.click();expect(page.locator('.mantine-Notification-root[role="alert"]')).to_be_visible()
+                prepare.click();expect(page.locator('.mantine-Notification-vault[role="alert"]')).to_be_visible()
                 prepare.click()
                 download=page.get_by_role("button",name="导出或重试缺失下载",exact=True)
                 expect(download).to_be_enabled(timeout=30000)
@@ -137,7 +137,7 @@ def main():
                 expect(page.get_by_role("heading",name="固定清单",exact=True)).to_be_visible()
                 fault[0]="truncate";download.click()
                 expect(page.get_by_text("未完成，不能作为有效备份",exact=True)).to_be_visible(timeout=20000)
-                expect(page.locator('.mantine-Notification-root[role="alert"]')).to_be_visible()
+                expect(page.locator('.mantine-Notification-vault[role="alert"]')).to_be_visible()
                 assert page.get_by_text("归档完整性已验证",exact=True).count()==0
                 fault[0]="slow";download.click()
                 cancel=page.get_by_role("button",name="取消下载并保留未完成状态",exact=True)

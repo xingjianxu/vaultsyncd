@@ -4,12 +4,17 @@ use crate::engine::events::{
     EventReceiver,
 };
 use vaultsyncd_client_store::events::IncomingBatch;
-use vaultsyncd_domain::version::RootSeq;
+use vaultsyncd_domain::version::VaultSeq;
 use vaultsyncd_protocol::generated::ChangeList;
 
 struct NeverEvents;
 impl ChangeSource for NeverEvents {
-    fn pull(&self, _: RootId, _: RootSeq, _: u32) -> PortFuture<'_, Result<ChangeList, PortError>> {
+    fn pull(
+        &self,
+        _: VaultId,
+        _: VaultSeq,
+        _: u32,
+    ) -> PortFuture<'_, Result<ChangeList, PortError>> {
         Box::pin(async { panic!("重建未完成不得拉取旧游标事件") })
     }
 }
@@ -69,7 +74,7 @@ async fn identical_missing_clean_content_has_distinct_expiry_and_backup_restore_
     );
     let receiver = EventReceiver::new(
         db.clone(),
-        RootId::from_bytes([9; 16]),
+        VaultId::from_bytes([9; 16]),
         binding(),
         Arc::new(NeverEvents),
         Arc::new(NeverEvents),
@@ -89,7 +94,7 @@ async fn identical_missing_clean_content_has_distinct_expiry_and_backup_restore_
         10
     );
     assert!(
-        events::received_batch(&mut conn, binding(), RootSeq::new(10).unwrap())
+        events::received_batch(&mut conn, binding(), VaultSeq::new(10).unwrap())
             .await
             .unwrap()
             .is_some()
@@ -152,9 +157,12 @@ async fn absence_is_verified_without_replaying_delete_and_publish_cas_protects_n
         .unwrap()
         .unwrap();
     drop(conn);
-    let seed = DiskSnapshot(rig.0.clone()).begin(bound.root).await.unwrap();
+    let seed = DiskSnapshot(rig.0.clone())
+        .begin(bound.vault)
+        .await
+        .unwrap();
     journal.snapshot = Some(seed.metadata);
-    journal.entries = vec![root_snapshot()];
+    journal.entries = vec![vault_snapshot()];
     journal.snapshot_complete = true;
     journal.items = Some(service.classify(&bound, &journal).await.unwrap());
     assert_eq!(
@@ -229,7 +237,7 @@ async fn historical_tombstone_and_new_identity_at_same_path_are_not_collapsed() 
     let mut tx = db.begin_write().await.unwrap();
     let historical = SavedBase {
         entry: EntryId::from_bytes([99; 16]).to_string(),
-        parent: Some(root_entry().to_string()),
+        parent: Some(vault_entry().to_string()),
         name: "file.txt".to_owned(),
         kind: WireKind::File,
         revision: 2,
@@ -271,7 +279,7 @@ async fn malformed_snapshot_files_and_native_name_aliases_do_not_publish() {
             file.hash = None;
             persist(
                 &rig.0.join("entries.json"),
-                &serde_json::to_vec(&vec![root_snapshot(), file]).unwrap(),
+                &serde_json::to_vec(&vec![vault_snapshot(), file]).unwrap(),
             );
         } else {
             let mut meta: Snapshot =

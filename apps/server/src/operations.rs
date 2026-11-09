@@ -1,14 +1,14 @@
-//! 操作端点：`POST /v1/roots/{root}/operations`、`GET /v1/roots/{root}/operations/{op}`（design
+//! 操作端点：`POST /v1/vaults/{vault}/operations`、`GET /v1/vaults/{vault}/operations/{op}`（design
 //! §15.2—15.4、I01、I06）。
 //!
 //! 规则都在 [`vaultsyncd_server_core::api::operations`] 里；本模块只做三件事：
 //!
 //! - **翻译**：把 wire 的身份/计数文本解析成核心的强类型请求（解析失败即 400，不猜默认值）；
 //! - **真实幂等**：操作记录读写走 `server-store::operations`（`operations` 表），同一
-//!   `(root, device_id, op_id)` 与同一语义摘要就是重放，不同摘要就是 `OP_ID_REUSED`；`server_epoch`
-//!   与 Root 当前 epoch 的比对来自 `roots` 行；
+//!   `(vault, device_id, op_id)` 与同一语义摘要就是重放，不同摘要就是 `OP_ID_REUSED`；`server_epoch`
+//!   与 Vault 当前 epoch 的比对来自 `vaults` 行；
 //! - **回答**：`committed` 是终态 200，`rejected` 是稳定的 409 加错误信封，**`pending` 是 202** 且
-//!   响应体里不出现 `revision`/`root_seq`/`version_id`/`entry_id`——已受理不等于已同步（I01）。
+//!   响应体里不出现 `revision`/`vault_seq`/`version_id`/`entry_id`——已受理不等于已同步（I01）。
 //!
 //! # 命令体的执行链路（S052 已装配）
 //!
@@ -20,7 +20,7 @@
 //!
 //! 失败映射（design §15.4）：凭据 401 `AUTH_EXPIRED`、越权 403 `ACCESS_DENIED`、形状 400
 //! `INVALID_REQUEST`、同 OpId 不同请求 409 `OP_ID_REUSED`、过期基线/子树 409、旧 epoch 410
-//! `EPOCH_CHANGED`、名称/条目种类 422、Root 不可写与存储故障 503、空间不足 507。
+//! `EPOCH_CHANGED`、名称/条目种类 422、Vault 不可写与存储故障 503、空间不足 507。
 
 use std::sync::Arc;
 
@@ -30,18 +30,18 @@ use axum::extract::{Path as UrlPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tracing::{info, warn};
-use vaultsyncd_domain::ids::{DeviceId, EntryId, OpId, RootId, UploadId, UserId, VersionId};
+use vaultsyncd_domain::ids::{DeviceId, EntryId, OpId, UploadId, UserId, VaultId, VersionId};
 use vaultsyncd_protocol::generated::{
     ConflictPolicy as WirePolicy, ErrorCode, OperationKind as WireKind,
     OperationRequest as WireRequest, OperationResult, OperationState as WireState,
 };
 use vaultsyncd_server_core::api::operations::{
     self, ConflictPolicy, OperationFailure, OperationKind, OperationRequest, RecordedOperation,
-    RecordedOutcome, RootFacts,
+    RecordedOutcome, VaultFacts,
 };
 use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent};
 use vaultsyncd_server_store::operations as store_operations;
-use vaultsyncd_server_store::roots::{self as store_roots, RootHealth};
+use vaultsyncd_server_store::vaults::{self as store_vaults, VaultHealth};
 
 use crate::auth::AuthContext;
 use crate::commands::{self, CreateCommand, DeleteCommand, MoveCommand};
@@ -64,15 +64,15 @@ impl OperationsContext {
     }
 }
 
-/// `POST /v1/roots/{root}/operations`：受理或重放一次修改命令。
+/// `POST /v1/vaults/{vault}/operations`：受理或重放一次修改命令。
 pub async fn submit(
     State(context): State<Arc<OperationsContext>>,
-    UrlPath(root): UrlPath<String>,
+    UrlPath(vault): UrlPath<String>,
     headers: HeaderMap,
     body: Result<Json<WireRequest>, JsonRejection>,
 ) -> Response {
     let _objects = context.auth.database().object_activity().await;
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -87,12 +87,12 @@ pub async fn submit(
     };
     let request = match parse_request(&body) {
         Ok(request) => request,
-        Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
+        Err(failure) => return failure_response(&caller.request_id, &failure, vault_id),
     };
-    let facts = match root_facts(
+    let facts = match vault_facts(
         &context,
         caller.principal.user_id,
-        root_id,
+        vault_id,
         &caller.request_id,
     )
     .await
@@ -100,13 +100,13 @@ pub async fn submit(
         Ok(facts) => facts,
         Err(response) => return response,
     };
-    // epoch 与 Root 可用性先于命令形状，也先于任何操作记录读写（design §15.4）。
+    // epoch 与 Vault 可用性先于命令形状，也先于任何操作记录读写（design §15.4）。
     if let Err(failure) = operations::admit(facts, &request) {
-        return failure_response(&caller.request_id, &failure, root_id);
+        return failure_response(&caller.request_id, &failure, vault_id);
     }
 
     let key = store_operations::OperationKey {
-        root: root_id,
+        vault: vault_id,
         device: request.device,
         op: request.op,
     };
@@ -119,7 +119,7 @@ pub async fn submit(
         Ok(digest) => digest,
         Err(error) => {
             warn!(request_id = %caller.request_id, error = %error, "操作请求摘要失败");
-            return internal_error(&caller.request_id, "服务端内部错误", Some(root_id));
+            return internal_error(&caller.request_id, "服务端内部错误", Some(vault_id));
         }
     };
 
@@ -128,7 +128,7 @@ pub async fn submit(
             Ok(conn) => conn,
             Err(error) => {
                 warn!(request_id = %caller.request_id, error = %error, "读取操作记录失败");
-                return internal_error(&caller.request_id, "服务端内部错误", Some(root_id));
+                return internal_error(&caller.request_id, "服务端内部错误", Some(vault_id));
             }
         };
         match store_operations::operation_in_scope(&mut conn, caller.principal.user_id, &key).await
@@ -136,7 +136,7 @@ pub async fn submit(
             Ok(record) => record,
             Err(error) => {
                 warn!(request_id = %caller.request_id, error = %error, "读取操作记录失败");
-                return internal_error(&caller.request_id, "服务端内部错误", Some(root_id));
+                return internal_error(&caller.request_id, "服务端内部错误", Some(vault_id));
             }
         }
     };
@@ -144,7 +144,7 @@ pub async fn submit(
     if let Some(record) = existing {
         let recorded = match recorded_operation(&record) {
             Ok(recorded) => recorded,
-            Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
+            Err(failure) => return failure_response(&caller.request_id, &failure, vault_id),
         };
         return match operations::decide_replay(&recorded, digest.as_bytes()) {
             Ok(outcome) => {
@@ -154,9 +154,15 @@ pub async fn submit(
                     status = outcome.http_status(),
                     "操作请求命中已记录的结果"
                 );
-                result_response(&caller.request_id, request.op, outcome, Some(true), root_id)
+                result_response(
+                    &caller.request_id,
+                    request.op,
+                    outcome,
+                    Some(true),
+                    vault_id,
+                )
             }
-            Err(failure) => failure_response(&caller.request_id, &failure, root_id),
+            Err(failure) => failure_response(&caller.request_id, &failure, vault_id),
         };
     }
 
@@ -164,15 +170,15 @@ pub async fn submit(
     // 先登记 pending、再由执行器写终态，不写状态就当没受理。
     let at = match crate::executor::server_now() {
         Ok(at) => at,
-        Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(root_id)),
+        Err(_) => return internal_error(&caller.request_id, "系统时钟不可用", Some(vault_id)),
     };
     if request.kind == OperationKind::Create
         && let Some(upload) = request.upload
     {
         let content =
-            match finalized_content(&context, caller.principal.user_id, root_id, upload).await {
+            match finalized_content(&context, caller.principal.user_id, vault_id, upload).await {
                 Ok(content) => content,
-                Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
+                Err(failure) => return failure_response(&caller.request_id, &failure, vault_id),
             };
         return match crate::create_file::execute(
             &context.executor,
@@ -191,7 +197,7 @@ pub async fn submit(
                     .executor
                     .reject_failure(caller.principal.user_id, key, &failure)
                     .await;
-                failure_response(&caller.request_id, &failure, root_id)
+                failure_response(&caller.request_id, &failure, vault_id)
             }
         };
     }
@@ -199,7 +205,7 @@ pub async fn submit(
         return execute_namespace_command(
             &context,
             &caller,
-            root_id,
+            vault_id,
             key,
             digest,
             &request,
@@ -214,7 +220,7 @@ pub async fn submit(
             &OperationFailure::InvalidRequest {
                 detail: "put_content 缺少 entry_id".to_owned(),
             },
-            root_id,
+            vault_id,
         );
     };
     let (Some(revision), Some(upload)) = (request.base_revision, request.upload) else {
@@ -223,25 +229,25 @@ pub async fn submit(
             &OperationFailure::InvalidRequest {
                 detail: "put_content 缺少 base_revision/upload_id".to_owned(),
             },
-            root_id,
+            vault_id,
         );
     };
-    let content = match finalized_content(&context, caller.principal.user_id, root_id, upload).await
-    {
-        Ok(content) => content,
-        Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
-    };
+    let content =
+        match finalized_content(&context, caller.principal.user_id, vault_id, upload).await {
+            Ok(content) => content,
+            Err(failure) => return failure_response(&caller.request_id, &failure, vault_id),
+        };
     // 过期基线 + 不同内容 + preserve_both：把迟到分支提交为冲突副本，不覆盖服务器 head（T02）。
     if request.conflict_policy == operations::ConflictPolicy::PreserveBoth
         && let Ok((head_revision, head_digest)) = context
             .executor
-            .head_summary(caller.principal.user_id, root_id, entry)
+            .head_summary(caller.principal.user_id, vault_id, entry)
             .await
         && head_revision != revision
         && head_digest != Some(content.digest)
     {
         return execute_conflict_command(
-            &context, &caller, root_id, key, digest, &request, entry, content, at,
+            &context, &caller, vault_id, key, digest, &request, entry, content, at,
         )
         .await;
     }
@@ -264,7 +270,7 @@ pub async fn submit(
                 request_id = %caller.request_id,
                 op = %request.op,
                 revision = %committed.record.revision,
-                root_seq = %committed.record.seq,
+                vault_seq = %committed.record.seq,
                 version = %committed.record.version,
                 "操作已提交"
             );
@@ -278,12 +284,12 @@ pub async fn submit(
                 error_code: None,
                 error_message: None,
                 revision: Some(committed.record.revision.to_string()),
-                root_seq: Some(committed.record.seq.to_string()),
+                vault_seq: Some(committed.record.seq.to_string()),
                 version_id: Some(committed.record.version.to_hex()),
             };
             (StatusCode::OK, Json(result)).into_response()
         }
-        Err(failure) => failure_response(&caller.request_id, &failure, root_id),
+        Err(failure) => failure_response(&caller.request_id, &failure, vault_id),
     }
 }
 
@@ -295,7 +301,7 @@ pub async fn submit(
 async fn finalized_content(
     context: &Arc<OperationsContext>,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     upload: UploadId,
 ) -> Result<ExpectedContent, OperationFailure> {
     let mut conn = match context.auth.database().pool().acquire().await {
@@ -314,9 +320,9 @@ async fn finalized_content(
         .ok_or_else(|| OperationFailure::InvalidRequest {
             detail: "上传会话不存在或不属于该账号".to_owned(),
         })?;
-    if record.root != root {
+    if record.vault != vault {
         return Err(OperationFailure::InvalidRequest {
-            detail: "上传会话不属于该 Root".to_owned(),
+            detail: "上传会话不属于该 Vault".to_owned(),
         });
     }
     if record.state != store_uploads::UploadState::Finalized {
@@ -335,7 +341,7 @@ async fn finalized_content(
 async fn execute_conflict_command(
     context: &Arc<OperationsContext>,
     caller: &Caller,
-    root: RootId,
+    vault: VaultId,
     key: store_operations::OperationKey,
     digest: store_operations::RequestDigest,
     request: &OperationRequest,
@@ -346,14 +352,14 @@ async fn execute_conflict_command(
     let owner = caller.principal.user_id;
     let path = match commands::path_of(&context.executor, owner, entry).await {
         Ok(path) => path,
-        Err(failure) => return failure_response(&caller.request_id, &failure, root),
+        Err(failure) => return failure_response(&caller.request_id, &failure, vault),
     };
     let target_path = match conflict_path(&path, key.device, key.op, at) {
         Ok(path) => path,
-        Err(failure) => return failure_response(&caller.request_id, &failure, root),
+        Err(failure) => return failure_response(&caller.request_id, &failure, vault),
     };
     let core_key = vaultsyncd_server_core::ports::conflict_store::OperationKey {
-        root: key.root,
+        vault: key.vault,
         device: key.device,
         op: key.op,
     };
@@ -395,12 +401,12 @@ async fn execute_conflict_command(
                 error_code: None,
                 error_message: None,
                 revision: Some(conflict.revision.to_string()),
-                root_seq: Some(conflict.seq.to_string()),
+                vault_seq: Some(conflict.seq.to_string()),
                 version_id: None,
             };
             (StatusCode::OK, Json(result)).into_response()
         }
-        Err(failure) => failure_response(&caller.request_id, &failure, root),
+        Err(failure) => failure_response(&caller.request_id, &failure, vault),
     }
 }
 
@@ -439,7 +445,7 @@ fn conflict_path(
 async fn execute_namespace_command(
     context: &Arc<OperationsContext>,
     caller: &Caller,
-    root: RootId,
+    vault: VaultId,
     key: store_operations::OperationKey,
     digest: store_operations::RequestDigest,
     request: &OperationRequest,
@@ -455,7 +461,7 @@ async fn execute_namespace_command(
                     &OperationFailure::InvalidRequest {
                         detail: "create 缺少 parent_id/name".to_owned(),
                     },
-                    root,
+                    vault,
                 );
             };
             let command = CreateCommand {
@@ -482,7 +488,7 @@ async fn execute_namespace_command(
                     Some(record.seq),
                     None,
                 ),
-                Err(failure) => failure_response(request_id, &failure, root),
+                Err(failure) => failure_response(request_id, &failure, vault),
             }
         }
         OperationKind::Move => {
@@ -497,7 +503,7 @@ async fn execute_namespace_command(
                     &OperationFailure::InvalidRequest {
                         detail: "move 缺少 entry_id/base_revision/parent_id/name".to_owned(),
                     },
-                    root,
+                    vault,
                 );
             };
             let command = MoveCommand {
@@ -526,7 +532,7 @@ async fn execute_namespace_command(
                     Some(record.seq),
                     None,
                 ),
-                Err(failure) => failure_response(request_id, &failure, root),
+                Err(failure) => failure_response(request_id, &failure, vault),
             }
         }
         OperationKind::Delete => {
@@ -536,7 +542,7 @@ async fn execute_namespace_command(
                     &OperationFailure::InvalidRequest {
                         detail: "delete 缺少 entry_id/base_revision".to_owned(),
                     },
-                    root,
+                    vault,
                 );
             };
             let command = DeleteCommand {
@@ -565,12 +571,12 @@ async fn execute_namespace_command(
                     Some(record.seq),
                     None,
                 ),
-                Err(failure) => failure_response(request_id, &failure, root),
+                Err(failure) => failure_response(request_id, &failure, vault),
             }
         }
         OperationKind::Restore => {
             let core_key = vaultsyncd_server_core::ports::conflict_store::OperationKey {
-                root: key.root,
+                vault: key.vault,
                 device: key.device,
                 op: key.op,
             };
@@ -584,14 +590,14 @@ async fn execute_namespace_command(
                     &OperationFailure::InvalidRequest {
                         detail: "restore 缺少 entry_id/base_revision".to_owned(),
                     },
-                    root,
+                    vault,
                 );
             };
             match request.version {
                 Some(version) => {
                     let path = match commands::path_of(&context.executor, owner, entry).await {
                         Ok(path) => path,
-                        Err(failure) => return failure_response(request_id, &failure, root),
+                        Err(failure) => return failure_response(request_id, &failure, vault),
                     };
                     let command = restore_ops::VersionRestoreCommand {
                         entry,
@@ -619,7 +625,7 @@ async fn execute_namespace_command(
                             Some(restored.result.seq),
                             Some(restored.result.version),
                         ),
-                        Err(failure) => failure_response(request_id, &failure, root),
+                        Err(failure) => failure_response(request_id, &failure, vault),
                     }
                 }
                 None => {
@@ -648,24 +654,24 @@ async fn execute_namespace_command(
                             Some(restored.result.seq),
                             None,
                         ),
-                        Err(failure) => failure_response(request_id, &failure, root),
+                        Err(failure) => failure_response(request_id, &failure, vault),
                     }
                 }
             }
         }
         OperationKind::PutContent => {
-            failure_response(request_id, &OperationFailure::ExecutorUnavailable, root)
+            failure_response(request_id, &OperationFailure::ExecutorUnavailable, vault)
         }
     }
 }
 
-/// 已提交结果的统一形状：只有 committed 才带 revision/root_seq/version。
+/// 已提交结果的统一形状：只有 committed 才带 revision/vault_seq/version。
 fn committed_result(
     request_id: &str,
     request: &OperationRequest,
     entry: EntryId,
     revision: Option<vaultsyncd_domain::version::Revision>,
-    seq: Option<vaultsyncd_domain::version::RootSeq>,
+    seq: Option<vaultsyncd_domain::version::VaultSeq>,
     version: Option<VersionId>,
 ) -> Response {
     let _ = request_id;
@@ -679,22 +685,22 @@ fn committed_result(
         error_code: None,
         error_message: None,
         revision: revision.map(|value| value.to_string()),
-        root_seq: seq.map(|value| value.to_string()),
+        vault_seq: seq.map(|value| value.to_string()),
         version_id: version.map(|value| value.to_hex()),
     };
     (StatusCode::OK, Json(result)).into_response()
 }
 
-/// `GET /v1/roots/{root}/entries/{entry}/subtree`：取目录的冻结子树 token。
+/// `GET /v1/vaults/{vault}/entries/{entry}/subtree`：取目录的冻结子树 token。
 ///
 /// 目录删除必须带这个 token（design §10.3、T12）：从看到清单到发出删除之间，子树的任何新增或变化
 /// 都会让 token 变化，删除因此返回 409 而不是删掉并发新增。
 pub async fn subtree_token(
     State(context): State<Arc<OperationsContext>>,
-    UrlPath((root, entry)): UrlPath<(String, String)>,
+    UrlPath((vault, entry)): UrlPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -704,7 +710,7 @@ pub async fn subtree_token(
     match commands::subtree_image_of(
         &context.executor,
         caller.principal.user_id,
-        root_id,
+        vault_id,
         entry_id,
     )
     .await
@@ -712,24 +718,24 @@ pub async fn subtree_token(
         Ok(image) => (
             StatusCode::OK,
             Json(vaultsyncd_protocol::generated::SubtreeToken {
-                root_id: root_id.to_hex(),
+                vault_id: vault_id.to_hex(),
                 entry_id: entry_id.to_hex(),
                 token: image.token().to_hex(),
                 entries: image.len().to_string(),
             }),
         )
             .into_response(),
-        Err(failure) => failure_response(&caller.request_id, &failure, root_id),
+        Err(failure) => failure_response(&caller.request_id, &failure, vault_id),
     }
 }
 
-/// `GET /v1/roots/{root}/operations/{op}`：按 OpId 取操作结果。
+/// `GET /v1/vaults/{vault}/operations/{op}`：按 OpId 取操作结果。
 pub async fn status(
     State(context): State<Arc<OperationsContext>>,
-    UrlPath((root, op)): UrlPath<(String, String)>,
+    UrlPath((vault, op)): UrlPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -741,13 +747,13 @@ pub async fn status(
             Ok(conn) => conn,
             Err(error) => {
                 warn!(request_id = %caller.request_id, error = %error, "读取操作记录失败");
-                return internal_error(&caller.request_id, "服务端内部错误", Some(root_id));
+                return internal_error(&caller.request_id, "服务端内部错误", Some(vault_id));
             }
         };
-        match store_operations::operation_of_root_in_scope(
+        match store_operations::operation_of_vault_in_scope(
             &mut conn,
             caller.principal.user_id,
-            root_id,
+            vault_id,
             op_id,
         )
         .await
@@ -755,7 +761,7 @@ pub async fn status(
             Ok(record) => record,
             Err(error) => {
                 warn!(request_id = %caller.request_id, error = %error, "读取操作记录失败");
-                return internal_error(&caller.request_id, "服务端内部错误", Some(root_id));
+                return internal_error(&caller.request_id, "服务端内部错误", Some(vault_id));
             }
         }
     };
@@ -763,41 +769,41 @@ pub async fn status(
         return failure_response(
             &caller.request_id,
             &OperationFailure::UnknownOperation,
-            root_id,
+            vault_id,
         );
     };
     let recorded = match recorded_operation(&record) {
         Ok(recorded) => recorded,
-        Err(failure) => return failure_response(&caller.request_id, &failure, root_id),
+        Err(failure) => return failure_response(&caller.request_id, &failure, vault_id),
     };
-    result_response(&caller.request_id, op_id, &recorded.outcome, None, root_id)
+    result_response(&caller.request_id, op_id, &recorded.outcome, None, vault_id)
 }
 
-/// 读 Root 的当前 epoch 与可写性；越权与不存在同一个 403 回答。
+/// 读 Vault 的当前 epoch 与可写性；越权与不存在同一个 403 回答。
 // 失败类型是 axum 的 Response（调用方直接把它当返回值用）：与 `auth::principal_from` 同一约定。
 #[allow(clippy::result_large_err)]
-async fn root_facts(
+async fn vault_facts(
     context: &Arc<OperationsContext>,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     request_id: &str,
-) -> Result<RootFacts, Response> {
+) -> Result<VaultFacts, Response> {
     let mut conn = match context.auth.database().pool().acquire().await {
         Ok(conn) => conn,
         Err(error) => {
-            warn!(request_id = %request_id, error = %error, "读取 Root 失败");
-            return Err(internal_error(request_id, "服务端内部错误", Some(root)));
+            warn!(request_id = %request_id, error = %error, "读取 Vault 失败");
+            return Err(internal_error(request_id, "服务端内部错误", Some(vault)));
         }
     };
-    match store_roots::root_in_scope(&mut conn, owner, root).await {
-        Ok(Some(record)) => Ok(RootFacts {
+    match store_vaults::vault_in_scope(&mut conn, owner, vault).await {
+        Ok(Some(record)) => Ok(VaultFacts {
             epoch: record.epoch,
-            accepts_writes: record.health == RootHealth::Healthy,
+            accepts_writes: record.health == VaultHealth::Healthy,
         }),
-        Ok(None) => Err(denied(request_id, "Root 不在授权范围")),
+        Ok(None) => Err(denied(request_id, "Vault 不在授权范围")),
         Err(error) => {
-            warn!(request_id = %request_id, error = %error, "读取 Root 失败");
-            Err(internal_error(request_id, "服务端内部错误", Some(root)))
+            warn!(request_id = %request_id, error = %error, "读取 Vault 失败");
+            Err(internal_error(request_id, "服务端内部错误", Some(vault)))
         }
     }
 }
@@ -905,14 +911,15 @@ fn recorded_operation(
 ) -> Result<RecordedOperation, OperationFailure> {
     let outcome = match record.state {
         store_operations::OperationState::Committed => {
-            let (Some(root_seq), Some(result_json)) = (record.root_seq, record.result_json.clone())
+            let (Some(vault_seq), Some(result_json)) =
+                (record.vault_seq, record.result_json.clone())
             else {
                 return Err(OperationFailure::Storage {
-                    detail: "committed 操作缺少 root_seq 或结果".to_owned(),
+                    detail: "committed 操作缺少 vault_seq 或结果".to_owned(),
                 });
             };
             RecordedOutcome::Committed {
-                root_seq,
+                vault_seq,
                 result_json,
             }
         }
@@ -933,22 +940,22 @@ fn result_response(
     op: OpId,
     outcome: &RecordedOutcome,
     replayed: Option<bool>,
-    root: RootId,
+    vault: VaultId,
 ) -> Response {
     match outcome {
         RecordedOutcome::Committed {
             result_json,
-            root_seq,
+            vault_seq,
         } => {
             match serde_json::from_str::<OperationResult>(result_json) {
                 Ok(mut result) => {
                     result.op_id = op.to_hex();
                     result.state = WireState::Committed;
                     result.replayed = replayed;
-                    // 结果里没有批次序号时用 `operations.root_seq` 补上：执行器写结果时 seq 还没有
-                    // 分配，而重试必须返回同一个 RootSeq（I01/I06）。
-                    if result.root_seq.is_none() {
-                        result.root_seq = Some(root_seq.to_string());
+                    // 结果里没有批次序号时用 `operations.vault_seq` 补上：执行器写结果时 seq 还没有
+                    // 分配，而重试必须返回同一个 VaultSeq（I01/I06）。
+                    if result.vault_seq.is_none() {
+                        result.vault_seq = Some(vault_seq.to_string());
                     }
                     (StatusCode::OK, Json(result)).into_response()
                 }
@@ -960,7 +967,7 @@ fn result_response(
                         request_id,
                         "操作结果记录不符合契约形状，需要人工核对",
                         false,
-                        Some(root.to_hex()),
+                        Some(vault.to_hex()),
                     )
                 }
             }
@@ -977,7 +984,7 @@ fn result_response(
                 error_code: None,
                 error_message: None,
                 revision: None,
-                root_seq: None,
+                vault_seq: None,
                 version_id: None,
             }),
         )
@@ -1001,18 +1008,18 @@ fn result_response(
                 request_id,
                 &message,
                 false,
-                Some(root.to_hex()),
+                Some(vault.to_hex()),
             )
         }
     }
 }
 
 /// 核心失败 → 错误信封（状态码与错误码都来自核心的契约表，不在这里另写一套）。
-fn failure_response(request_id: &str, failure: &OperationFailure, root: RootId) -> Response {
+fn failure_response(request_id: &str, failure: &OperationFailure, vault: VaultId) -> Response {
     let status =
         StatusCode::from_u16(failure.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let code = match failure.design_error_code() {
-        "ROOT_UNAVAILABLE" => ErrorCode::RootUnavailable,
+        "VAULT_UNAVAILABLE" => ErrorCode::VaultUnavailable,
         "EPOCH_CHANGED" => ErrorCode::EpochChanged,
         "VERSION_GONE" => ErrorCode::VersionGone,
         "OP_ID_REUSED" => ErrorCode::OpIdReused,
@@ -1043,17 +1050,17 @@ fn failure_response(request_id: &str, failure: &OperationFailure, root: RootId) 
         request_id,
         &failure.to_string(),
         failure.is_retryable(),
-        Some(root.to_hex()),
+        Some(vault.to_hex()),
     )
 }
 
-fn internal_error(request_id: &str, message: &str, root: Option<RootId>) -> Response {
+fn internal_error(request_id: &str, message: &str, vault: Option<VaultId>) -> Response {
     error_response(
         StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::NeedsRecovery,
         request_id,
         message,
         true,
-        root.map(RootId::to_hex),
+        vault.map(VaultId::to_hex),
     )
 }

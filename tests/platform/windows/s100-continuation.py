@@ -4,15 +4,15 @@ import hashlib, importlib.util, json, os
 from pathlib import Path
 import subprocess, sys, time, uuid
 sys.dont_write_bytecode = True
-ROOT=Path(__file__).resolve().parents[3]
-spec=importlib.util.spec_from_file_location("s100_native",ROOT/"tests/platform/windows/s100-maintenance.py")
+VAULT=Path(__file__).resolve().parents[3]
+spec=importlib.util.spec_from_file_location("s100_native",VAULT/"tests/platform/windows/s100-maintenance.py")
 native=importlib.util.module_from_spec(spec);spec.loader.exec_module(native)
 SSH,SCP,USER,HOST=native.SSH,native.SCP,native.USER,native.HOST
 checked=native.checked
 
 def main():
     prior=Path(sys.argv[1]).resolve();data=json.loads((prior/"checkpoint.json").read_text())
-    component=ROOT/"artifacts/S100/client-1794752";receipt=json.loads((component/"receipt.json").read_text())
+    component=VAULT/"artifacts/S100/client-1794752";receipt=json.loads((component/"receipt.json").read_text())
     source=receipt["source"]["commit"]
     assert len(source)==40 and all(c in "0123456789abcdef" for c in source)
     checked(["git","merge-base","--is-ancestor",source,"HEAD"])
@@ -21,12 +21,12 @@ def main():
         path=(component/"payload"/item["path"]).resolve()
         assert path.is_relative_to((component/"payload").resolve())
         raw=path.read_bytes();assert len(raw)==item["bytes"] and hashlib.sha256(raw).hexdigest()==item["sha256"]
-    run_id=f"s100-cont-{int(time.time())}-{os.getpid()}";run=ROOT/"artifacts/S100"/run_id;run.mkdir()
+    run_id=f"s100-cont-{int(time.time())}-{os.getpid()}";run=VAULT/"artifacts/S100"/run_id;run.mkdir()
     guest=f"C:/vaultsyncd-lab/{run_id}";results=guest+"/results"
     summary={"ok":False,"prior_run":prior.name,"source_commit":receipt["source"]["commit"],"materialization_kind":"manual recovery of verified actual fixed-version cache; no network success claimed"}
     fixture={"source_commit":receipt["source"]["commit"],"cache_file":data["enroll"]["cache"]+"\\download-98b7c0e401f406ca330a2779eca650ab","cache_bytes":1048576,"cache_sha256":hashlib.sha256(b"C"*1048576).hexdigest()}
     (run/"fixture.json").write_text(json.dumps(fixture));(run/"prior.json").write_text(json.dumps(data))
-    for name,source in [("s100-continuation.ps1",Path(__file__).with_suffix(".ps1")),("s099-logon-secrets.ps1",ROOT/"tests/platform/windows/s099-logon-secrets.ps1")]:
+    for name,source in [("s100-continuation.ps1",Path(__file__).with_suffix(".ps1")),("s099-logon-secrets.ps1",VAULT/"tests/platform/windows/s099-logon-secrets.ps1")]:
         (run/name).write_text(source.read_text(),encoding="utf-8-sig")
     (run/"hashes.json").write_text(json.dumps({p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in run.glob("*.ps1")}))
     def ps(mode):return checked([*SSH,f"powershell -NoProfile -ExecutionPolicy Bypass -File {guest}/s100-continuation.ps1 -Mode {mode}"])
@@ -72,7 +72,7 @@ def main():
         summary["retained_user_boot"]=reboot("retained user continuation")
         summary["ready"]=ready("ready.json")
         restored_file=action("materialize-cache");assert restored_file["cache"]["sha256"]==fixture["cache_sha256"]
-        removed=action("provider-uninstall");assert removed["cloud_metadata"][0]==0 and removed["root_hresult"]<0 and removed["state_retained"] and removed["cache_retained"]
+        removed=action("provider-uninstall");assert removed["cloud_metadata"][0]==0 and removed["vault_hresult"]<0 and removed["state_retained"] and removed["cache_retained"]
         final=action("finish");assert final["processes"]==[]
         print(ps("Restore"),flush=True);restored=True;summary["restored_boot"]=reboot("restore original Quickemu")
         summary["restored_console_user"]=wait("original console",lambda:(x if(x:=console())==summary["prior_console_user"] else None))

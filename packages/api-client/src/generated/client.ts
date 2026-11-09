@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeAccountChanged, decodeAccountInfo, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedRootList, decodeOperationResult, decodeRecoveryPage, decodeRootList, decodeRootRegistered, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVersionLease } from "./types";
-import type { AccountChanged, AccountInfo, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedRootList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, RootList, RootRegisterRequest, RootRegistered, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VersionLease, VersionLeaseRequest } from "./types";
+import { decodeAccountChanged, decodeAccountInfo, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedVaultList, decodeOperationResult, decodeRecoveryPage, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVaultList, decodeVaultRegistered, decodeVersionLease } from "./types";
+import type { AccountChanged, AccountInfo, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedVaultList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VaultList, VaultRegisterRequest, VaultRegistered, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -267,9 +267,9 @@ export async function backupSnapshotManifest(options: ClientOptions, id: string,
  *
  * 仅唯一active owner；按该备份的固定清单授权，禁止任意服务器路径。最大清单256MiB，对象/归档64KiB分块流动。
  *
- * 参数 `id`（/v1/admin/backup-snapshots/{id}/objects/{root}/{hash}）：路径参数
- * 参数 `root`（/v1/admin/backup-snapshots/{id}/objects/{root}/{hash}）：路径参数
- * 参数 `hash`（/v1/admin/backup-snapshots/{id}/objects/{root}/{hash}）：路径参数
+ * 参数 `id`（/v1/admin/backup-snapshots/{id}/objects/{vault}/{hash}）：路径参数
+ * 参数 `vault`（/v1/admin/backup-snapshots/{id}/objects/{vault}/{hash}）：路径参数
+ * 参数 `hash`（/v1/admin/backup-snapshots/{id}/objects/{vault}/{hash}）：路径参数
  *
  * 200：固定清单或按清单授权的字节流。
  * 400：明确失败；没有完整导出或已释放快照不能被当作成功。
@@ -280,8 +280,8 @@ export async function backupSnapshotManifest(options: ClientOptions, id: string,
  * 410：明确失败；没有完整导出或已释放快照不能被当作成功。
  * 503：明确失败；没有完整导出或已释放快照不能被当作成功。
  */
-export async function readBackupObject(options: ClientOptions, id: string, root: string, hash: string, init?: RequestInit): Promise<Uint8Array> {
-  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/objects/${encodeURIComponent(root)}/${encodeURIComponent(hash)}`;
+export async function readBackupObject(options: ClientOptions, id: string, vault: string, hash: string, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/admin/backup-snapshots/${encodeURIComponent(id)}/objects/${encodeURIComponent(vault)}/${encodeURIComponent(hash)}`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "GET",
@@ -356,7 +356,7 @@ export async function verifyBackupSnapshot(options: ClientOptions, id: string, i
 }
 
 /**
- * owner Root 配置与现场健康
+ * owner Vault 配置与现场健康
  *
  * 仅唯一 active owner 可读允许基目录及服务器路径。现场核对挂载身份；采集数据仅代表本进程最近扫描，不表示客户端同步完成。
  *
@@ -365,8 +365,8 @@ export async function verifyBackupSnapshot(options: ClientOptions, id: string, i
  * 403：不是唯一 active owner
  * 503：无法读取配置或状态
  */
-export async function listManagedRoots(options: ClientOptions, init?: RequestInit): Promise<ManagedRootList> {
-  const response = await options.fetch(join_url(options.base_url, "/v1/admin/roots"), {
+export async function listManagedVaults(options: ClientOptions, init?: RequestInit): Promise<ManagedVaultList> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/admin/vaults"), {
     ...init,
     method: "GET",
     headers: request_headers(options, init, null, "application/json"),
@@ -375,14 +375,14 @@ export async function listManagedRoots(options: ClientOptions, init?: RequestIni
   if (!response.ok) {
     throw api_error(response.status, payload);
   }
-  return decodeManagedRootList(payload);
+  return decodeManagedVaultList(payload);
 }
 
 /**
- * 注册 Root
+ * 注册 Vault
  *
  * 注册一个服务端工作目录（design §11.4、§15.2）。只接受部署配置里预置的允许基目录内的
- * 普通目录；后端不是本地 btrfs（FUSE、占位/按需回源视图等）、路径与已注册 Root 或内部
+ * 普通目录；后端不是本地 btrfs（FUSE、占位/按需回源视图等）、路径与已注册 Vault 或内部
  * 状态目录重叠、以及扫描内无法证明合规的目录一律拒绝。注册只读探测，不改写、不清空、
  * 不导入既有文件；初始采集是后续步骤，因此响应报告“待导入”。
  *
@@ -392,8 +392,8 @@ export async function listManagedRoots(options: ClientOptions, init?: RequestIni
  * 422：目录不是可注册的普通存储（配置阶段拒绝）
  * 503：服务端存储不可用
  */
-export async function registerRoot(options: ClientOptions, body: RootRegisterRequest, init?: RequestInit): Promise<RootRegistered> {
-  const response = await options.fetch(join_url(options.base_url, "/v1/admin/roots"), {
+export async function registerVault(options: ClientOptions, body: VaultRegisterRequest, init?: RequestInit): Promise<VaultRegistered> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/admin/vaults"), {
     ...init,
     method: "POST",
     headers: request_headers(options, init, "application/json", "application/json"),
@@ -403,7 +403,7 @@ export async function registerRoot(options: ClientOptions, body: RootRegisterReq
   if (!response.ok) {
     throw api_error(response.status, payload);
   }
-  return decodeRootRegistered(payload);
+  return decodeVaultRegistered(payload);
 }
 
 /**
@@ -635,17 +635,17 @@ export async function getHealth(options: ClientOptions, init?: RequestInit): Pro
 }
 
 /**
- * 授权 Root 清单
+ * 授权 Vault 清单
  *
- * 列出当前调用者可见的 Root 及其健康状态（design §15.2）。响应只有身份与状态：
+ * 列出当前调用者可见的 Vault 及其健康状态（design §15.2）。响应只有身份与状态：
  * 普通客户端不获得服务器绝对路径，管理面要用路径时走本机或管理员通道。
  *
- * 200：当前调用者的 Root 清单
+ * 200：当前调用者的 Vault 清单
  * 401：没有可用凭据
  * 503：服务端存储不可用
  */
-export async function listRoots(options: ClientOptions, init?: RequestInit): Promise<RootList> {
-  const response = await options.fetch(join_url(options.base_url, "/v1/roots"), {
+export async function listVaults(options: ClientOptions, init?: RequestInit): Promise<VaultList> {
+  const response = await options.fetch(join_url(options.base_url, "/v1/vaults"), {
     ...init,
     method: "GET",
     headers: request_headers(options, init, null, "application/json"),
@@ -654,13 +654,13 @@ export async function listRoots(options: ClientOptions, init?: RequestInit): Pro
   if (!response.ok) {
     throw api_error(response.status, payload);
   }
-  return decodeRootList(payload);
+  return decodeVaultList(payload);
 }
 
 /**
  * 拉取有序事务批次
  *
- * 返回 `after` 之后（不含 `after`）的事务批次，严格按 RootSeq 升序（design §9.3）。每个批次是
+ * 返回 `after` 之后（不含 `after`）的事务批次，严格按 VaultSeq 升序（design §9.3）。每个批次是
  * 一个完整事务：`limit` 只决定在哪个事务边界截断，**绝不把一个事务拆到两页之间**——如果第
  * `limit` 个批次与后续批次属于同一个 `tx_id` 且 seq 连续，本页会延伸到把它们取完。
  *
@@ -672,19 +672,19 @@ export async function listRoots(options: ClientOptions, init?: RequestInit): Pro
  * **不返回空列表**：`details.reason` 为 `before_retention_window` 或 `ahead_of_head`，
  * 客户端重新获取快照并保留本地基线与未上传队列（design §9.4）。
  *
- * 参数 `root`（/v1/roots/{root}/changes）：授权 Root 的身份（32 位小写十六进制）。
- * 查询参数 `after`（必填）：已处理到的 RootSeq（十进制文本；0 表示从头）。
+ * 参数 `vault`（/v1/vaults/{vault}/changes）：授权 Vault 的身份（32 位小写十六进制）。
+ * 查询参数 `after`（必填）：已处理到的 VaultSeq（十进制文本；0 表示从头）。
  * 查询参数 `limit`（可选）：本页至少包含的批次数上限（1 至 500，缺省 100）；越界是 400。
  *
  * 200：有序事务批次（可能为空，空表示已追平到读取时的头）
  * 400：`after` 缺失或不是规范十进制，或 limit 越界
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
+ * 403：Vault 不在调用方授权范围
  * 410：游标已失效（`CURSOR_EXPIRED`），需要重新获取快照
  * 503：服务端存储不可用或需要恢复
  */
-export async function listChanges(options: ClientOptions, root: string, query: { after: string; limit?: string }, init?: RequestInit): Promise<ChangeList> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/changes`;
+export async function listChanges(options: ClientOptions, vault: string, query: { after: string; limit?: string }, init?: RequestInit): Promise<ChangeList> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/changes`;
   const search = new URLSearchParams();
   search.set("after", query.after);
   if (query.limit !== undefined) {
@@ -707,17 +707,17 @@ export async function listChanges(options: ClientOptions, root: string, query: {
 /**
  * 列出冲突副本
  *
- * 需要 Root 授权；按身份分页，最多100条。以持久冲突映射识别活跃副本，关闭界面提示不会删除副本。
+ * 需要 Vault 授权；按身份分页，最多100条。以持久冲突映射识别活跃副本，关闭界面提示不会删除副本。
  *
- * 参数 `root`（/v1/roots/{root}/conflicts）：路径参数
+ * 参数 `vault`（/v1/vaults/{vault}/conflicts）：路径参数
  * 查询参数 `after`（可选）：查询参数
  *
  * 200：一页条目
  * 400：参数错误
- * 403：没有 Root 授权
+ * 403：没有 Vault 授权
  */
-export async function listConflictCopies(options: ClientOptions, root: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/conflicts`;
+export async function listConflictCopies(options: ClientOptions, vault: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/conflicts`;
   const search = new URLSearchParams();
   if (query?.after !== undefined) {
     search.set("after", query.after);
@@ -739,19 +739,19 @@ export async function listConflictCopies(options: ClientOptions, root: string, q
 /**
  * 列出条目历史版本
  *
- * 需要 Root 授权；按版本身份分页，最多100条，不泄露服务器路径。
+ * 需要 Vault 授权；按版本身份分页，最多100条，不泄露服务器路径。
  *
- * 参数 `root`（/v1/roots/{root}/entries/{entry}/history）：路径参数
- * 参数 `entry`（/v1/roots/{root}/entries/{entry}/history）：路径参数
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/history）：路径参数
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/history）：路径参数
  * 查询参数 `after`（可选）：查询参数
  *
  * 200：一页历史
  * 400：参数错误
- * 403：没有 Root 授权
+ * 403：没有 Vault 授权
  * 404：条目不存在
  */
-export async function listEntryHistory(options: ClientOptions, root: string, entry: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/history`;
+export async function listEntryHistory(options: ClientOptions, vault: string, entry: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/history`;
   const search = new URLSearchParams();
   if (query?.after !== undefined) {
     search.set("after", query.after);
@@ -779,18 +779,18 @@ export async function listEntryHistory(options: ClientOptions, root: string, ent
  *
  * 对普通文件返回 422 UNSUPPORTED_ENTRY（文件删除不需要 token）。
  *
- * 参数 `root`（/v1/roots/{root}/entries/{entry}/subtree）：授权 Root 的身份（32 位小写十六进制）。
- * 参数 `entry`（/v1/roots/{root}/entries/{entry}/subtree）：目录条目身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/subtree）：授权 Vault 的身份（32 位小写十六进制）。
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/subtree）：目录条目身份（32 位小写十六进制）。
  *
  * 200：子树清单与 token
  * 401：没有可用凭据
- * 403：Root 不在授权范围
+ * 403：Vault 不在授权范围
  * 404：条目不存在或已删除
  * 422：条目不是目录（文件删除不需要 token）
- * 503：存储故障或 Root 暂不可写
+ * 503：存储故障或 Vault 暂不可写
  */
-export async function getSubtreeToken(options: ClientOptions, root: string, entry: string, init?: RequestInit): Promise<SubtreeToken> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/subtree`;
+export async function getSubtreeToken(options: ClientOptions, vault: string, entry: string, init?: RequestInit): Promise<SubtreeToken> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/subtree`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "GET",
@@ -806,7 +806,7 @@ export async function getSubtreeToken(options: ClientOptions, root: string, entr
 /**
  * 下载固定版本的内容
  *
- * 按 `(root, entry, version)` 取该版本的**固定**内容字节（design §15.2、I12、I15）：内容地址
+ * 按 `(vault, entry, version)` 取该版本的**固定**内容字节（design §15.2、I12、I15）：内容地址
  * 只来自那条版本行，路径上后来出现的新 head 与本请求无关。
  *
  * 整份请求返回 **200**，带 `Content-Length` 与整份内容的 `x-content-sha256`。请求头
@@ -820,20 +820,20 @@ export async function getSubtreeToken(options: ClientOptions, root: string, entr
  *
  * Range 是可选请求头，由调用方经 `init.headers` 传入（可选头不生成函数参数）。
  *
- * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/content）：授权 Root 的身份（32 位小写十六进制）。
- * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/content）：条目身份（32 位小写十六进制）。
- * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/content）：版本身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/content）：授权 Vault 的身份（32 位小写十六进制）。
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/content）：条目身份（32 位小写十六进制）。
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/content）：版本身份（32 位小写十六进制）。
  *
  * 200：整份内容字节（`application/octet-stream`）
  * 206：请求区间的字节，`Content-Range` 给出实际区间
  * 400：Range 头语法不合法，或区间落在对象之外
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
- * 410：版本已过期、已清理，或不属于该条目/Root（不泄露是否存在）
+ * 403：Vault 不在调用方授权范围
+ * 410：版本已过期、已清理，或不属于该条目/Vault（不泄露是否存在）
  * 503：服务端不可用（对象读取或租约失败、需要恢复）
  */
-export async function downloadVersionContent(options: ClientOptions, root: string, entry: string, version: string, init?: RequestInit): Promise<Uint8Array> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/content`;
+export async function downloadVersionContent(options: ClientOptions, vault: string, entry: string, version: string, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/content`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "GET",
@@ -849,24 +849,24 @@ export async function downloadVersionContent(options: ClientOptions, root: strin
  * 建立固定版本短租约
  *
  * S069：授权后在同一写事务核对固定版本和live对象并记录object_leases GC保护。
- * TTL由服务器固定为120秒；同lease_id仅允许同Root/Entry/Version/摘要/长度。
+ * TTL由服务器固定为120秒；同lease_id仅允许同Vault/Entry/Version/摘要/长度。
  * acquire重放不延长期限；renew只续未过期租约；release幂等，过期或已解除不得复活。
  * 不可读对象或无法确认租约时拒绝释放本地内容。请求仅用于已认证调用。
  *
- * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases）：路径参数
- * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases）：路径参数
- * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases）：路径参数
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases）：路径参数
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases）：路径参数
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases）：路径参数
  *
  * 200：固定版本租约事实
  * 400：非法请求
  * 401：没有可用会话
- * 403：Root越权
+ * 403：Vault越权
  * 409：租约ID复用不同请求
  * 410：版本或租约已失效
  * 503：存储或对象不可用
  */
-export async function acquireVersionLease(options: ClientOptions, root: string, entry: string, version: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases`;
+export async function acquireVersionLease(options: ClientOptions, vault: string, entry: string, version: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
@@ -884,25 +884,25 @@ export async function acquireVersionLease(options: ClientOptions, root: string, 
  * 解除固定版本短租约
  *
  * S069：授权后在同一写事务核对固定版本和live对象并记录object_leases GC保护。
- * TTL由服务器固定为120秒；同lease_id仅允许同Root/Entry/Version/摘要/长度。
+ * TTL由服务器固定为120秒；同lease_id仅允许同Vault/Entry/Version/摘要/长度。
  * acquire重放不延长期限；renew只续未过期租约；release幂等，过期或已解除不得复活。
  * 不可读对象或无法确认租约时拒绝释放本地内容。请求仅用于已认证调用。
  *
- * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
- * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
- * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
- * 参数 `lease`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
+ * 参数 `lease`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/release）：路径参数
  *
  * 200：固定版本租约事实
  * 400：非法请求
  * 401：没有可用会话
- * 403：Root越权
+ * 403：Vault越权
  * 409：租约ID复用不同请求
  * 410：版本或租约已失效
  * 503：存储或对象不可用
  */
-export async function releaseVersionLease(options: ClientOptions, root: string, entry: string, version: string, lease: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases/${encodeURIComponent(lease)}/release`;
+export async function releaseVersionLease(options: ClientOptions, vault: string, entry: string, version: string, lease: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases/${encodeURIComponent(lease)}/release`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
@@ -920,25 +920,25 @@ export async function releaseVersionLease(options: ClientOptions, root: string, 
  * 续期固定版本短租约
  *
  * S069：授权后在同一写事务核对固定版本和live对象并记录object_leases GC保护。
- * TTL由服务器固定为120秒；同lease_id仅允许同Root/Entry/Version/摘要/长度。
+ * TTL由服务器固定为120秒；同lease_id仅允许同Vault/Entry/Version/摘要/长度。
  * acquire重放不延长期限；renew只续未过期租约；release幂等，过期或已解除不得复活。
  * 不可读对象或无法确认租约时拒绝释放本地内容。请求仅用于已认证调用。
  *
- * 参数 `root`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
- * 参数 `entry`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
- * 参数 `version`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
- * 参数 `lease`（/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
+ * 参数 `lease`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/renew）：路径参数
  *
  * 200：固定版本租约事实
  * 400：非法请求
  * 401：没有可用会话
- * 403：Root越权
+ * 403：Vault越权
  * 409：租约ID复用不同请求
  * 410：版本或租约已失效
  * 503：存储或对象不可用
  */
-export async function renewVersionLease(options: ClientOptions, root: string, entry: string, version: string, lease: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases/${encodeURIComponent(lease)}/renew`;
+export async function renewVersionLease(options: ClientOptions, vault: string, entry: string, version: string, lease: string, body: VersionLeaseRequest, init?: RequestInit): Promise<VersionLease> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/leases/${encodeURIComponent(lease)}/renew`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
@@ -955,8 +955,8 @@ export async function renewVersionLease(options: ClientOptions, root: string, en
 /**
  * SSE 唤醒提示
  *
- * `text/event-stream` 长连接（design §9.3）。**SSE 只是提示，不是数据来源**：事件只说“Root 的
- * RootSeq 变了”，不携带批次内容；客户端据此立刻调用 `changes` 拉取。
+ * `text/event-stream` 长连接（design §9.3）。**SSE 只是提示，不是数据来源**：事件只说“Vault 的
+ * VaultSeq 变了”，不携带批次内容；客户端据此立刻调用 `changes` 拉取。
  *
  * 每条提示是 `event: seq`，`id` 与 `data`（`SeqHint` 的 JSON）都带当前头。新连接立即收到一条
  * 当前头的提示；之后头每变化一次提示一次（可能跳号合并）。服务端另发保活注释行。提示可能
@@ -966,15 +966,15 @@ export async function renewVersionLease(options: ClientOptions, root: string, en
  * 认证与其他端点相同（`Authorization` 头），因此浏览器原生 `EventSource` 不能直接使用，
  * 需用 fetch 流式读取。
  *
- * 参数 `root`（/v1/roots/{root}/events）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/events）：授权 Vault 的身份（32 位小写十六进制）。
  *
  * 200：事件流（`text/event-stream`），`data` 为 `SeqHint` 的 JSON
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
+ * 403：Vault 不在调用方授权范围
  * 503：服务端存储不可用或需要恢复
  */
-export async function subscribeEvents(options: ClientOptions, root: string, init?: RequestInit): Promise<Response> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/events`;
+export async function subscribeEvents(options: ClientOptions, vault: string, init?: RequestInit): Promise<Response> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/events`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "GET",
@@ -990,41 +990,41 @@ export async function subscribeEvents(options: ClientOptions, root: string, init
  * 提交一次修改操作
  *
  * 提交 Put/Create/Move/Delete/Restore 命令之一（design §15.2、§15.3）。命令只引用已上传并
- * 校验的内容（`upload_id`），不携带字节；服务端按 `(root, device_id, op_id)` 做幂等
+ * 校验的内容（`upload_id`），不携带字节；服务端按 `(vault, device_id, op_id)` 做幂等
  * （I06）：
  *
  * - 首次出现的 OpId 被登记为 `pending`，命令体随后执行；
  * - 同一 OpId 与同一语义再次出现是**重放**：返回记录里的同一结果（`replayed=true`），不重做；
  * - 同一 OpId 用于不同语义是协议错误 `OP_ID_REUSED`（409），绝不用旧结果回答新请求；
- * - `server_epoch` 不是 Root 当前 epoch 时 410 `EPOCH_CHANGED`，客户端进入保留基线的重建流程；
+ * - `server_epoch` 不是 Vault 当前 epoch 时 410 `EPOCH_CHANGED`，客户端进入保留基线的重建流程；
  * - 过期基线的 CAS/子树冲突按 design §15.4 返回 409（`BASE_MISMATCH`/`SUBTREE_CHANGED`/
  *   `RECONCILE_REQUIRED`）；`preserve_both` 下能提交的过期修改返回 committed 并带 `conflict`。
  *
  * 响应是本次操作的状态：`committed`/`rejected` 用 200（终态结果稳定），**`pending` 用 202**，
- * 且 `pending` 不携带 `revision`/`root_seq`/`version_id`/`entry_id`——已受理不等于已同步
+ * 且 `pending` 不携带 `revision`/`vault_seq`/`version_id`/`entry_id`——已受理不等于已同步
  * （I01）。响应丢失后的重试必须得到同一份结果。
  *
  * 本服务端的命令执行链路尚未装配时（见 503 `SERVICE_NOT_READY`），请求不被受理：不登记
  * `operations` 行、不追加事件批次、不返回 202。
  *
- * 参数 `root`（/v1/roots/{root}/operations）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/operations）：授权 Vault 的身份（32 位小写十六进制）。
  *
  * 200：操作已有终态结果（committed 或 rejected）
  * 202：操作已受理但还没有业务结果（pending，不判已同步）
  * 400：请求形状不成立（缺少该命令的前提字段、混用两套命令语义、身份文本非法）
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
+ * 403：Vault 不在调用方授权范围
  * 409：同一 OpId 不同请求（`OP_ID_REUSED`），或条目基线/子树已过期（`BASE_MISMATCH`、
 `SUBTREE_CHANGED`、`RECONCILE_REQUIRED`）
  * 410：请求的服务器 epoch 已过期（`EPOCH_CHANGED`），或恢复所需的历史/回收站内容已过保留期
 （`VERSION_GONE`，不拿同路径的新内容冒充）
  * 422：名称不可用（`INVALID_NAME`）或条目种类不支持该命令（`UNSUPPORTED_ENTRY`）
- * 503：Root 当前不可写（`ROOT_UNAVAILABLE`）、存储需要恢复（`NEEDS_RECOVERY`），或本服务端尚未
+ * 503：Vault 当前不可写（`VAULT_UNAVAILABLE`）、存储需要恢复（`NEEDS_RECOVERY`），或本服务端尚未
 装配命令执行器（`SERVICE_NOT_READY`，请求未被受理）
  * 507：服务端空间不足（`INSUFFICIENT_STORAGE`），事务未提交
  */
-export async function submitOperation(options: ClientOptions, root: string, body: OperationRequest, init?: RequestInit): Promise<OperationResult> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/operations`;
+export async function submitOperation(options: ClientOptions, vault: string, body: OperationRequest, init?: RequestInit): Promise<OperationResult> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/operations`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
@@ -1045,20 +1045,20 @@ export async function submitOperation(options: ClientOptions, root: string, body
  * 一致：`committed`/`rejected` 用 200 带终态结果，**`pending` 用 202** 且不含修订与序号。
  *
  * 查询不要求 `server_epoch`：客户端要先知道结果才可能决定是否重建，因此 epoch 变化不影响
- * 读取既有记录。记录不存在、不属于该 Root 或不属于该登录会话都按同一 404 回答，不泄露是否存在。
+ * 读取既有记录。记录不存在、不属于该 Vault 或不属于该登录会话都按同一 404 回答，不泄露是否存在。
  *
- * 参数 `root`（/v1/roots/{root}/operations/{op}）：授权 Root 的身份（32 位小写十六进制）。
- * 参数 `op`（/v1/roots/{root}/operations/{op}）：客户端生成的逻辑操作身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/operations/{op}）：授权 Vault 的身份（32 位小写十六进制）。
+ * 参数 `op`（/v1/vaults/{vault}/operations/{op}）：客户端生成的逻辑操作身份（32 位小写十六进制）。
  *
  * 200：操作已有终态结果（committed 或 rejected）
  * 202：操作仍是 pending（已受理、没有业务结果，不判已同步）
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
- * 404：操作记录不存在、不属于该 Root 或不属于该登录会话
+ * 403：Vault 不在调用方授权范围
+ * 404：操作记录不存在、不属于该 Vault 或不属于该登录会话
  * 503：服务端存储不可用或需要恢复
  */
-export async function getOperation(options: ClientOptions, root: string, op: string, init?: RequestInit): Promise<OperationResult> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/operations/${encodeURIComponent(op)}`;
+export async function getOperation(options: ClientOptions, vault: string, op: string, init?: RequestInit): Promise<OperationResult> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/operations/${encodeURIComponent(op)}`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "GET",
@@ -1074,17 +1074,17 @@ export async function getOperation(options: ClientOptions, root: string, op: str
 /**
  * 列出可查询历史的活跃条目
  *
- * 需要 Root 授权；按身份分页，最多100条。返回当前身份、相对路径与版本，可用于历史选择和提交后位置核对。
+ * 需要 Vault 授权；按身份分页，最多100条。返回当前身份、相对路径与版本，可用于历史选择和提交后位置核对。
  *
- * 参数 `root`（/v1/roots/{root}/recovery）：路径参数
+ * 参数 `vault`（/v1/vaults/{vault}/recovery）：路径参数
  * 查询参数 `after`（可选）：查询参数
  *
  * 200：一页条目
  * 400：参数错误
- * 403：没有 Root 授权
+ * 403：没有 Vault 授权
  */
-export async function listRecoveryEntries(options: ClientOptions, root: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/recovery`;
+export async function listRecoveryEntries(options: ClientOptions, vault: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/recovery`;
   const search = new URLSearchParams();
   if (query?.after !== undefined) {
     search.set("after", query.after);
@@ -1106,23 +1106,23 @@ export async function listRecoveryEntries(options: ClientOptions, root: string, 
 /**
  * 创建一致性快照
  *
- * 生成一份短期只读的元数据清单（design §9.3）：服务端在同一个事务里读取 Root 当前的
- * `RootSeq`（`high_water_seq`）并复制当时的活跃条目。之后 `…/snapshots/{snapshot}/entries`
+ * 生成一份短期只读的元数据清单（design §9.3）：服务端在同一个事务里读取 Vault 当前的
+ * `VaultSeq`（`high_water_seq`）并复制当时的活跃条目。之后 `…/snapshots/{snapshot}/entries`
  * 的翻页只读这份清单，与翻页期间的新增/删除/改名无关；客户端应用清单后从
  * `changes?after=<high_water_seq>` 继续追赶。
  *
- * 清单只存活 `expires_at` 之前；每个 Root 同时存在的快照数有上限，超出时最旧的先被回收。
+ * 清单只存活 `expires_at` 之前；每个 Vault 同时存在的快照数有上限，超出时最旧的先被回收。
  * 下载文件内容仍须引用 VersionId，而不是“当前路径”。
  *
- * 参数 `root`（/v1/roots/{root}/snapshots）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/snapshots）：授权 Vault 的身份（32 位小写十六进制）。
  *
  * 201：快照已创建
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
+ * 403：Vault 不在调用方授权范围
  * 503：服务端存储不可用或需要恢复
  */
-export async function createSnapshot(options: ClientOptions, root: string, init?: RequestInit): Promise<Snapshot> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/snapshots`;
+export async function createSnapshot(options: ClientOptions, vault: string, init?: RequestInit): Promise<Snapshot> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/snapshots`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
@@ -1140,23 +1140,23 @@ export async function createSnapshot(options: ClientOptions, root: string, init?
  *
  * 只读固定的快照清单（design §9.3），按 EntryId 升序分页。`next_cursor` 缺省表示已是最后一页。
  *
- * 快照不存在、不属于该 Root 或已过期时返回 410 `CURSOR_EXPIRED`（`details.reason=snapshot_expired`），
+ * 快照不存在、不属于该 Vault 或已过期时返回 410 `CURSOR_EXPIRED`（`details.reason=snapshot_expired`），
  * **绝不返回空页或错乱数据**；客户端应重新创建快照并从头翻页。`limit` 超过上限是 400。
  *
- * 参数 `root`（/v1/roots/{root}/snapshots/{snapshot}/entries）：授权 Root 的身份（32 位小写十六进制）。
- * 参数 `snapshot`（/v1/roots/{root}/snapshots/{snapshot}/entries）：快照身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/snapshots/{snapshot}/entries）：授权 Vault 的身份（32 位小写十六进制）。
+ * 参数 `snapshot`（/v1/vaults/{vault}/snapshots/{snapshot}/entries）：快照身份（32 位小写十六进制）。
  * 查询参数 `cursor`（可选）：起始序号（十进制文本）；首页省略，之后用上一页的 `next_cursor`。
  * 查询参数 `limit`（可选）：一页最多返回的条目数（1 至 1000，缺省 500）；越界是 400。
  *
  * 200：一页清单
  * 400：游标不是规范十进制、超过清单长度，或 limit 越界
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
+ * 403：Vault 不在调用方授权范围
  * 410：快照不存在或已过期（`CURSOR_EXPIRED`），需要重新创建
  * 503：服务端存储不可用或需要恢复
  */
-export async function listSnapshotEntries(options: ClientOptions, root: string, snapshot: string, query?: { cursor?: string; limit?: string }, init?: RequestInit): Promise<SnapshotPage> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/snapshots/${encodeURIComponent(snapshot)}/entries`;
+export async function listSnapshotEntries(options: ClientOptions, vault: string, snapshot: string, query?: { cursor?: string; limit?: string }, init?: RequestInit): Promise<SnapshotPage> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/snapshots/${encodeURIComponent(snapshot)}/entries`;
   const search = new URLSearchParams();
   if (query?.cursor !== undefined) {
     search.set("cursor", query.cursor);
@@ -1181,17 +1181,17 @@ export async function listSnapshotEntries(options: ClientOptions, root: string, 
 /**
  * 列出回收站
  *
- * 需要 Root 授权；按条目身份分页，最多100条，仅返回仍保留的回收站事实。
+ * 需要 Vault 授权；按条目身份分页，最多100条，仅返回仍保留的回收站事实。
  *
- * 参数 `root`（/v1/roots/{root}/trash）：路径参数
+ * 参数 `vault`（/v1/vaults/{vault}/trash）：路径参数
  * 查询参数 `after`（可选）：查询参数
  *
  * 200：一页回收站
  * 400：参数错误
- * 403：没有 Root 授权
+ * 403：没有 Vault 授权
  */
-export async function listTrash(options: ClientOptions, root: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/trash`;
+export async function listTrash(options: ClientOptions, vault: string, query?: { after?: string }, init?: RequestInit): Promise<RecoveryPage> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/trash`;
   const search = new URLSearchParams();
   if (query?.after !== undefined) {
     search.set("after", query.after);
@@ -1215,19 +1215,19 @@ export async function listTrash(options: ClientOptions, root: string, query?: { 
  *
  * 为一个不可变本地快照申请上传会话（design §13.1—13.2、§15.2）。会话绑定总大小与总
  * SHA-256，块大小由服务端决定并随会话返回；同一会话重复申请不会创建第二个身份。
- * 会话与签发它的登录会话、授权 Root 绑定，容量与总大小上限由服务端限定。
+ * 会话与签发它的登录会话、授权 Vault 绑定，容量与总大小上限由服务端限定。
  *
- * 参数 `root`（/v1/roots/{root}/uploads）：授权 Root 的身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/uploads）：授权 Vault 的身份（32 位小写十六进制）。
  *
  * 201：已创建上传会话
  * 400：请求形状不合法（哈希不是 64 位小写十六进制、大小越界）
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围（不区分不存在与越权）
+ * 403：Vault 不在调用方授权范围（不区分不存在与越权）
  * 503：服务端不可用（例如需要恢复）
  * 507：服务端空间或会话容量不足
  */
-export async function beginUpload(options: ClientOptions, root: string, body: UploadRequest, init?: RequestInit): Promise<UploadSession> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/uploads`;
+export async function beginUpload(options: ClientOptions, vault: string, body: UploadRequest, init?: RequestInit): Promise<UploadSession> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/uploads`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
@@ -1247,17 +1247,17 @@ export async function beginUpload(options: ClientOptions, root: string, body: Up
  * 返回会话状态与**服务端真实已收块**，客户端的续传依据是这里的结果而不是自己记录的位图
  * （design §13.2「查询已收块」）。已收块的哈希与长度都来自持久化记录。
  *
- * 参数 `root`（/v1/roots/{root}/uploads/{upload}）：授权 Root 的身份（32 位小写十六进制）。
- * 参数 `upload`（/v1/roots/{root}/uploads/{upload}）：上传会话身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/uploads/{upload}）：授权 Vault 的身份（32 位小写十六进制）。
+ * 参数 `upload`（/v1/vaults/{vault}/uploads/{upload}）：上传会话身份（32 位小写十六进制）。
  *
  * 200：会话状态与已收块
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
- * 404：会话不存在、不属于该 Root 或不属于该登录会话
+ * 403：Vault 不在调用方授权范围
+ * 404：会话不存在、不属于该 Vault 或不属于该登录会话
  * 503：服务端不可用（例如需要恢复）
  */
-export async function getUpload(options: ClientOptions, root: string, upload: string, init?: RequestInit): Promise<UploadStatus> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/uploads/${encodeURIComponent(upload)}`;
+export async function getUpload(options: ClientOptions, vault: string, upload: string, init?: RequestInit): Promise<UploadStatus> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/uploads/${encodeURIComponent(upload)}`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "GET",
@@ -1284,21 +1284,21 @@ export async function getUpload(options: ClientOptions, root: string, upload: st
  * （`aborted`）并返回 422，不登记对象（I05）。已 `finalized` 的会话重复调用是幂等重放：
  * 返回同一内容引用与 `replayed=true`，不重新发布。
  *
- * 参数 `root`（/v1/roots/{root}/uploads/{upload}/finalize）：授权 Root 的身份（32 位小写十六进制）。
- * 参数 `upload`（/v1/roots/{root}/uploads/{upload}/finalize）：上传会话身份（32 位小写十六进制）。
+ * 参数 `vault`（/v1/vaults/{vault}/uploads/{upload}/finalize）：授权 Vault 的身份（32 位小写十六进制）。
+ * 参数 `upload`（/v1/vaults/{vault}/uploads/{upload}/finalize）：上传会话身份（32 位小写十六进制）。
  *
  * 200：内容已发布（首次或幂等重放），返回可提交内容引用
  * 400：身份/形状不合法，或块还没有收齐（不改会话状态）
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围
- * 404：会话不存在、不属于该 Root 或不属于该登录会话
+ * 403：Vault 不在调用方授权范围
+ * 404：会话不存在、不属于该 Vault 或不属于该登录会话
  * 409：会话已被放弃（不再接收块，也不能 finalize）
  * 422：拼装内容与声明的总长度或总 SHA-256 不符（会话被放弃）
  * 503：服务端不可用（存储失败或需要恢复）
  * 507：对象区空间不足，对象未发布
  */
-export async function finalizeUpload(options: ClientOptions, root: string, upload: string, init?: RequestInit): Promise<FinalizedContent> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/uploads/${encodeURIComponent(upload)}/finalize`;
+export async function finalizeUpload(options: ClientOptions, vault: string, upload: string, init?: RequestInit): Promise<FinalizedContent> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/uploads/${encodeURIComponent(upload)}/finalize`;
   const response = await options.fetch(join_url(options.base_url, path), {
     ...init,
     method: "POST",
@@ -1320,23 +1320,23 @@ export async function finalizeUpload(options: ClientOptions, root: string, uploa
  * 同一索引重传必须字节一致（幂等返回既有记录），不一致一律拒绝，不能把两个本地
  * generation 的字节混进一个会话。
  *
- * 参数 `root`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：授权 Root 的身份（32 位小写十六进制）。
- * 参数 `upload`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：上传会话身份（32 位小写十六进制）。
- * 参数 `index`（/v1/roots/{root}/uploads/{upload}/parts/{index}）：块索引（从 0 起的十进制文本）。
+ * 参数 `vault`（/v1/vaults/{vault}/uploads/{upload}/parts/{index}）：授权 Vault 的身份（32 位小写十六进制）。
+ * 参数 `upload`（/v1/vaults/{vault}/uploads/{upload}/parts/{index}）：上传会话身份（32 位小写十六进制）。
+ * 参数 `index`（/v1/vaults/{vault}/uploads/{upload}/parts/{index}）：块索引（从 0 起的十进制文本）。
  * 请求头 `x-part-sha256`：该块原始字节的 SHA-256（64 位小写十六进制），与该块字节分开传：服务端先核对再登记。
  *
  * 200：块已登记（首次或幂等重传）
  * 400：块索引越界、长度与几何不符或载荷超过上限
  * 401：没有可用会话凭据
- * 403：Root 不在调用方授权范围或会话属于其他登录会话
- * 404：会话不存在或不属于该 Root
+ * 403：Vault 不在调用方授权范围或会话属于其他登录会话
+ * 404：会话不存在或不属于该 Vault
  * 409：同一块索引已登记不同字节
  * 422：块内容与声明的 SHA-256 或长度不符
  * 503：服务端不可用（例如需要恢复）
  * 507：暂存空间不足
  */
-export async function putUploadPart(options: ClientOptions, root: string, upload: string, index: string, x_part_sha256: string, body: Uint8Array, init?: RequestInit): Promise<UploadPartAck> {
-  const path = `/v1/roots/${encodeURIComponent(root)}/uploads/${encodeURIComponent(upload)}/parts/${encodeURIComponent(index)}`;
+export async function putUploadPart(options: ClientOptions, vault: string, upload: string, index: string, x_part_sha256: string, body: Uint8Array, init?: RequestInit): Promise<UploadPartAck> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/uploads/${encodeURIComponent(upload)}/parts/${encodeURIComponent(index)}`;
   const headers = request_headers(options, init, "application/octet-stream", "application/json");
   headers.set("x-part-sha256", x_part_sha256);
   const response = await options.fetch(join_url(options.base_url, path), {

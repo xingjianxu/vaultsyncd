@@ -20,7 +20,7 @@ set -o pipefail
 
 PROG=${0##*/}
 
-LAB_ROOT=${VAULTSYNCD_LAB_ROOT:-/data/vaultsyncd-lab}
+LAB_VAULT=${VAULTSYNCD_LAB_VAULT:-/data/vaultsyncd-lab}
 LOOP_SIZE=${VAULTSYNCD_LOOP_SIZE:-512M}
 
 RUNS_NAME=runs
@@ -45,10 +45,10 @@ sudo_run() { sudo -n "$@"; }
 LAB_PARENT_WHITELIST="/data /var/lib"
 
 # 永远不允许作为 lab 根或其操作路径的目录（精确匹配）。
-FORBIDDEN_EXACT="/ /boot /home /nix /nix/store /var /var/lib /var/log /srv /data /wrd /tmp /run /proc /sys /dev /etc /usr /opt /root /.snapshots /data/llm /data/.snapshots /data/snapshots"
+FORBIDDEN_EXACT="/ /boot /home /nix /nix/store /var /var/lib /var/log /srv /data /wrd /tmp /run /proc /sys /dev /etc /usr /opt /vault /.snapshots /data/llm /data/.snapshots /data/snapshots"
 
 # 永远不允许在其内部创建 lab 目录的父路径（按完整路径分量匹配）。
-FORBIDDEN_INSIDE="/boot /home /nix /var/log /.snapshots /data/llm /data/.snapshots /data/snapshots /wrd /tmp /run /proc /sys /dev /etc /root"
+FORBIDDEN_INSIDE="/boot /home /nix /var/log /.snapshots /data/llm /data/.snapshots /data/snapshots /wrd /tmp /run /proc /sys /dev /etc /vault"
 
 log() { printf '%s\n' "$*"; }
 step() { printf '==> %s\n' "$*"; }
@@ -78,7 +78,7 @@ usage() {
   status                  列出 lab 根与已有 run 的状态（只读）。
 
 环境变量：
-  VAULTSYNCD_LAB_ROOT   lab 根，默认 /data/vaultsyncd-lab；必须绝对、已规范化，
+  VAULTSYNCD_LAB_VAULT   lab 根，默认 /data/vaultsyncd-lab；必须绝对、已规范化，
                         必须位于白名单父目录（/data 或 /var/lib）之下，且不得是系统/用户路径。
   VAULTSYNCD_LOOP_SIZE  loop 镜像大小（truncate 语法），默认 512M。
 
@@ -105,7 +105,7 @@ preflight() {
 	done
 	[ -z "$missing" ] || die "缺少必需工具:$missing"
 	sudo_run true 2>/dev/null ||
-		die "需要非交互 sudo（sudo -n 失败）；脚本不会提示输入密码，请先配置免密 sudo 或使用具备 root 能力的环境"
+		die "需要非交互 sudo（sudo -n 失败）；脚本不会提示输入密码，请先配置免密 sudo 或使用具备 vault 能力的环境"
 }
 
 # ---------------------------------------------------------------------------
@@ -180,13 +180,13 @@ assert_descendant() {
 	esac
 }
 
-lab_root_resolve() {
-	case $LAB_ROOT in
+lab_vault_resolve() {
+	case $LAB_VAULT in
 	/*) ;;
-	*) die "lab 根必须是绝对路径：'$LAB_ROOT'" ;;
+	*) die "lab 根必须是绝对路径：'$LAB_VAULT'" ;;
 	esac
-	LAB=$(canon "$LAB_ROOT")
-	assert_safe_path "$LAB" "lab 根($LAB_ROOT)" yes
+	LAB=$(canon "$LAB_VAULT")
+	assert_safe_path "$LAB" "lab 根($LAB_VAULT)" yes
 	assert_not_in_repo "$LAB"
 	RUNS_DIR=$LAB/$RUNS_NAME
 }
@@ -194,7 +194,7 @@ lab_root_resolve() {
 run_paths() {
 	local run_id=$1 p
 	assert_run_id "$run_id"
-	lab_root_resolve
+	lab_vault_resolve
 	RUN_DIR=$RUNS_DIR/$run_id
 	VOLUME_DIR=$RUN_DIR/$VOLUME_NAME
 	IMAGE=$RUN_DIR/$IMAGE_NAME
@@ -242,11 +242,11 @@ fs_uuid_at() {
 # 列出 $1 之下（不含自身）的挂载点。findmnt -R 对非挂载点路径返回空，因此直接
 # 过滤挂载表（-l 关闭树形前缀）并按完整路径分量比较。
 mounts_under() {
-	local root target
-	root=$(canon "$1")
+	local vault target
+	vault=$(canon "$1")
 	"$FINDMNT" -l -n -o TARGET 2>/dev/null | while IFS= read -r target; do
 		case $target in
-		"$root"/*) printf '%s\n' "$target" ;;
+		"$vault"/*) printf '%s\n' "$target" ;;
 		esac
 	done
 }
@@ -387,7 +387,7 @@ cmd_create() {
 	cat >"$META" <<EOF
 run_id=$run_id
 created_at=$(date -Ins)
-lab_root=$LAB
+lab_vault=$LAB
 run_dir=$RUN_DIR
 volume_dir=$VOLUME_DIR
 volume_subvol_id=$subvol_id
@@ -633,7 +633,7 @@ cmd_status() {
 	local run_dir run_id rec_loop rec_mount state
 
 	preflight
-	lab_root_resolve
+	lab_vault_resolve
 	log "lab 根       : $LAB"
 	if [ ! -d "$LAB" ]; then
 		log "状态         : 未创建（$LAB 不存在）"

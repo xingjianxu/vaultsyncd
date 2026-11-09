@@ -1,11 +1,11 @@
-//! 离线恢复的纯规则：兼容、Root新映射、命名空间与空间预算；无平台I/O。
+//! 离线恢复的纯规则：兼容、Vault新映射、命名空间与空间预算；无平台I/O。
 use super::export::Index;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
 };
-use vaultsyncd_domain::ids::{EntryId, RootId};
+use vaultsyncd_domain::ids::{EntryId, VaultId};
 use vaultsyncd_fs_common::name::validate_name;
 
 /// 不满足条件时不得写入目标或声明成功。
@@ -63,11 +63,11 @@ pub fn compatible(
     }
     Ok(())
 }
-/// 请求的新Root绝对路径（内部参数，不另造wire DTO）。
+/// 请求的新Vault绝对路径（内部参数，不另造wire DTO）。
 #[derive(Debug, Clone)]
 pub struct Mapping {
-    /// 固定Root身份。
-    pub root: RootId,
+    /// 固定Vault身份。
+    pub vault: VaultId,
     /// 经过平台解析后仍需纯路径关系复核的新路径。
     pub path: PathBuf,
 }
@@ -86,18 +86,18 @@ pub fn canonical_path(path: &Path) -> bool {
 fn overlaps(a: &Path, b: &Path) -> bool {
     a.starts_with(b) || b.starts_with(a)
 }
-/// 所有Root恰好映射一次，互不重叠，也不能覆盖状态、归档或原工作目录。
+/// 所有Vault恰好映射一次，互不重叠，也不能覆盖状态、归档或原工作目录。
 pub fn mappings(
     index: &Index,
     manifest: &Value,
     state: &Path,
     archive: &Path,
     requested: &[Mapping],
-) -> Result<BTreeMap<RootId, PathBuf>, Error> {
+) -> Result<BTreeMap<VaultId, PathBuf>, Error> {
     if !canonical_path(state) || !canonical_path(archive) || overlaps(state, archive) {
         return Err(Error::Mapping);
     }
-    let originals: Vec<PathBuf> = manifest["roots"]
+    let originals: Vec<PathBuf> = manifest["vaults"]
         .as_array()
         .ok_or(Error::Invalid)?
         .iter()
@@ -111,8 +111,8 @@ pub fn mappings(
     let mut result = BTreeMap::new();
     for m in requested {
         if !canonical_path(&m.path)
-            || !index.root_seqs.contains_key(&m.root)
-            || result.insert(m.root, m.path.clone()).is_some()
+            || !index.vault_seqs.contains_key(&m.vault)
+            || result.insert(m.vault, m.path.clone()).is_some()
             || overlaps(&m.path, state)
             || overlaps(&m.path, archive)
             || originals.iter().any(|p| overlaps(p, &m.path))
@@ -120,7 +120,7 @@ pub fn mappings(
             return Err(Error::Mapping);
         }
     }
-    if result.len() != index.root_seqs.len() {
+    if result.len() != index.vault_seqs.len() {
         return Err(Error::Mapping);
     }
     let paths: Vec<_> = result.values().collect();
@@ -136,9 +136,9 @@ pub fn mappings(
 pub struct Entry {
     /// 条目身份。
     pub id: EntryId,
-    /// 所属Root。
-    pub root: RootId,
-    /// 仅合成Root条目无父。
+    /// 所属Vault。
+    pub vault: VaultId,
+    /// 仅合成Vault条目无父。
     pub parent: Option<EntryId>,
     /// 原始安全名称。
     pub name: String,
@@ -150,23 +150,23 @@ pub struct Entry {
 /// 深度优先级已排序的普通工作项。
 #[derive(Debug, Clone)]
 pub struct Work {
-    /// 所属Root。
-    pub root: RootId,
-    /// Root内安全相对路径。
+    /// 所属Vault。
+    pub vault: VaultId,
+    /// Vault内安全相对路径。
     pub path: PathBuf,
     /// None为目录，Some为完整普通文件。
     pub content: Option<([u8; 32], u64)>,
 }
-/// 检查唯一合成根、父子Root一致、环/缺父/不安全名和清单对象完备，输出父在前的工作计划。
+/// 检查唯一合成根、父子Vault一致、环/缺父/不安全名和清单对象完备，输出父在前的工作计划。
 pub fn namespace(index: &Index, entries: Vec<Entry>) -> Result<Vec<Work>, Error> {
     let mut nodes = BTreeMap::new();
-    let mut roots = BTreeSet::new();
+    let mut vaults = BTreeSet::new();
     for e in entries {
-        if !index.root_seqs.contains_key(&e.root) || e.directory == e.content.is_some() {
+        if !index.vault_seqs.contains_key(&e.vault) || e.directory == e.content.is_some() {
             return Err(Error::Invalid);
         }
         if e.parent.is_none() {
-            if !e.directory || !e.name.is_empty() || !roots.insert(e.root) {
+            if !e.directory || !e.name.is_empty() || !vaults.insert(e.vault) {
                 return Err(Error::Invalid);
             }
         } else if validate_name(&e.name).is_err() {
@@ -176,7 +176,7 @@ pub fn namespace(index: &Index, entries: Vec<Entry>) -> Result<Vec<Work>, Error>
             return Err(Error::Invalid);
         }
     }
-    if roots.len() != index.root_seqs.len() {
+    if vaults.len() != index.vault_seqs.len() {
         return Err(Error::Invalid);
     }
     let mut work = Vec::new();
@@ -191,7 +191,7 @@ pub fn namespace(index: &Index, entries: Vec<Entry>) -> Result<Vec<Work>, Error>
                 return Err(Error::Invalid);
             }
             let p = nodes.get(&parent).ok_or(Error::Invalid)?;
-            if p.root != e.root || !p.directory {
+            if p.vault != e.vault || !p.directory {
                 return Err(Error::Invalid);
             }
             if p.parent.is_some() {
@@ -201,13 +201,13 @@ pub fn namespace(index: &Index, entries: Vec<Entry>) -> Result<Vec<Work>, Error>
         }
         components.reverse();
         let path: PathBuf = components.iter().collect();
-        if !unique.insert((e.root, path.clone())) {
+        if !unique.insert((e.vault, path.clone())) {
             return Err(Error::Invalid);
         }
         if let Some((hash, size)) = e.content {
             let object = format!(
                 "objects/{}/{}",
-                e.root.to_hex(),
+                e.vault.to_hex(),
                 crate::objects::ContentDigest::from_bytes(hash).to_hex()
             );
             if index
@@ -218,7 +218,7 @@ pub fn namespace(index: &Index, entries: Vec<Entry>) -> Result<Vec<Work>, Error>
             }
         }
         work.push(Work {
-            root: e.root,
+            vault: e.vault,
             path,
             content: e.content,
         });
@@ -228,7 +228,7 @@ pub fn namespace(index: &Index, entries: Vec<Entry>) -> Result<Vec<Work>, Error>
             .components()
             .count()
             .cmp(&b.path.components().count())
-            .then(a.root.cmp(&b.root))
+            .then(a.vault.cmp(&b.vault))
             .then(a.path.cmp(&b.path))
     });
     Ok(work)
@@ -264,29 +264,29 @@ mod tests {
     use crate::backup::export::Item;
     use vaultsyncd_domain::ids::{BackupLeaseId, ServerId};
     fn index() -> Index {
-        let root = RootId::from_bytes([1; 16]);
+        let vault = VaultId::from_bytes([1; 16]);
         Index {
             id: BackupLeaseId::from_bytes([2; 16]),
             server: ServerId::from_bytes([3; 16]),
             manifest_hash: [0; 32],
             items: vec![Item {
-                path: format!("objects/{}/{}", root.to_hex(), "04".repeat(32)),
+                path: format!("objects/{}/{}", vault.to_hex(), "04".repeat(32)),
                 hash: [4; 32],
                 size: 5,
             }],
-            root_seqs: BTreeMap::from([(root, 1)]),
+            vault_seqs: BTreeMap::from([(vault, 1)]),
             schema_version: 13,
             table_counts: BTreeMap::new(),
             object_storage_paths: BTreeMap::from([(
-                format!("objects/{}/{}", root.to_hex(), "04".repeat(32)),
+                format!("objects/{}/{}", vault.to_hex(), "04".repeat(32)),
                 format!("objects/04/{}", "04".repeat(32)),
             )]),
         }
     }
-    fn root() -> Entry {
+    fn vault() -> Entry {
         Entry {
             id: EntryId::from_bytes([1; 16]),
-            root: RootId::from_bytes([1; 16]),
+            vault: VaultId::from_bytes([1; 16]),
             parent: None,
             name: String::new(),
             directory: true,
@@ -296,37 +296,37 @@ mod tests {
     fn file() -> Entry {
         Entry {
             id: EntryId::from_bytes([2; 16]),
-            parent: Some(root().id),
+            parent: Some(vault().id),
             name: "note".into(),
             directory: false,
             content: Some(([4; 32], 5)),
-            ..root()
+            ..vault()
         }
     }
     #[test]
     fn namespace_needs_real_complete_objects_and_safe_acyclic_parents() {
         let i = index();
-        let work = namespace(&i, vec![file(), root()]).unwrap();
+        let work = namespace(&i, vec![file(), vault()]).unwrap();
         assert_eq!(work[0].path, Path::new("note"));
         let mut bad = file();
         bad.name = "../escape".into();
         assert_eq!(
-            namespace(&i, vec![root(), bad]).unwrap_err(),
+            namespace(&i, vec![vault(), bad]).unwrap_err(),
             Error::Invalid
         );
         let mut bad = file();
         bad.parent = Some(bad.id);
-        assert!(namespace(&i, vec![root(), bad]).is_err());
+        assert!(namespace(&i, vec![vault(), bad]).is_err());
         let mut i = index();
         i.items.clear();
-        assert!(namespace(&i, vec![root(), file()]).is_err());
+        assert!(namespace(&i, vec![vault(), file()]).is_err());
     }
     #[test]
-    fn mapping_requires_all_roots_and_rejects_source_state_and_target_overlap() {
+    fn mapping_requires_all_vaults_and_rejects_source_state_and_target_overlap() {
         let i = index();
-        let v = serde_json::json!({"roots":[{"original_path":"/old/work"}]});
+        let v = serde_json::json!({"vaults":[{"original_path":"/old/work"}]});
         let m = Mapping {
-            root: root().root,
+            vault: vault().vault,
             path: "/new/work".into(),
         };
         assert!(
@@ -380,7 +380,7 @@ mod tests {
             ),
             Err(Error::Incompatible)
         );
-        let n = required(&i, &namespace(&i, vec![root(), file()]).unwrap()).unwrap();
+        let n = required(&i, &namespace(&i, vec![vault(), file()]).unwrap()).unwrap();
         assert_eq!(space(n, n - 1), Err(Error::Space));
         assert_eq!(space(n, n), Ok(()));
     }

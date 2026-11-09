@@ -22,7 +22,7 @@ host_hash=$(sha256sum "$prototype_exe" | awk '{ print $1 }')
 printf '%s  %s\n' "$host_hash" "$CFAPI_PROTOTYPE_BINARY.exe"
 
 guest_dir_win="${CFAPI_GUEST_DIR//\//\\}"
-echo "== 客体工作目录：$guest_dir_win；同步根：$CFAPI_ROOT"
+echo "== 客体工作目录：$guest_dir_win；同步根：$CFAPI_VAULT"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '$guest_dir_win' | Out-Null\""
 
 echo "== 传输 exe 与客体脚本"
@@ -32,7 +32,7 @@ GUEST_TARGET_DIR="$CFAPI_GUEST_DIR" guest_scp "$prototype_exe" "$script_dir/gues
 echo "== 客体执行（create / inspect / cleanup）"
 guest_status=0
 # 客体输出是 CRLF；先去掉 CR，后续按行解析哈希。
-guest_output=$(guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $CFAPI_GUEST_DIR/guest-cfapi-prototype.ps1 -Directory $CFAPI_GUEST_DIR -Root $CFAPI_ROOT -Exe $CFAPI_PROTOTYPE_BINARY.exe" 2>&1 |
+guest_output=$(guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $CFAPI_GUEST_DIR/guest-cfapi-prototype.ps1 -Directory $CFAPI_GUEST_DIR -Vault $CFAPI_VAULT -Exe $CFAPI_PROTOTYPE_BINARY.exe" 2>&1 |
     tr -d '\r') || guest_status=$?
 printf '%s\n' "$guest_output"
 

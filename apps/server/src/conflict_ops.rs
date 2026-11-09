@@ -3,7 +3,7 @@
 //! 过期基线上的迟到内容不会被丢弃、也不会覆盖服务器 head：核心 [`commit_conflict`] 把它提交成一个
 //! 独立的冲突条目（`sibling`）。本模块实现 `ConflictCommitStore`：
 //!
-//! - `conflict_head`：Root epoch + 源条目当前 revision 与内容摘要（目录没有内容）；
+//! - `conflict_head`：Vault epoch + 源条目当前 revision 与内容摘要（目录没有内容）；
 //! - `operation` / `begin_conflict`：`operations` 表的幂等记录（同一 OpId 重试拿到同一副本）；
 //! - `apply_conflict`：单一事务里写冲突条目、版本、`conflicts` 映射（迁移 0008）、事件批次、操作结果与
 //!   意图收尾。目标名称已被占用时返回 `PathOccupied`，绝不覆盖。
@@ -12,9 +12,9 @@
 
 use std::sync::Arc;
 
-use vaultsyncd_domain::ids::{EntryId, RootId, TxId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, TxId, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
-use vaultsyncd_platform_linux_server::files::RootHandle;
+use vaultsyncd_platform_linux_server::files::VaultHandle;
 use vaultsyncd_server_core::commit::conflict::{
     CommittedConflict, ConflictRequest, commit_conflict,
 };
@@ -31,7 +31,7 @@ use vaultsyncd_server_store::entries::NewEntry;
 use vaultsyncd_server_store::intents as store_intents;
 use vaultsyncd_server_store::intents::FsIntentPhase;
 use vaultsyncd_server_store::operations as store_operations;
-use vaultsyncd_server_store::roots as store_roots;
+use vaultsyncd_server_store::vaults as store_vaults;
 use vaultsyncd_server_store::versions as store_versions;
 use vaultsyncd_server_store::versions::{NewVersion, VersionOrigin};
 
@@ -47,7 +47,7 @@ fn conflict_error(detail: impl std::fmt::Display) -> ConflictStoreError {
 
 fn store_key(key: OperationKey) -> store_operations::OperationKey {
     store_operations::OperationKey {
-        root: key.root,
+        vault: key.vault,
         device: key.device,
         op: key.op,
     }
@@ -70,7 +70,7 @@ fn result_from_json(text: &str) -> Option<CommittedConflict> {
             value.get("size")?.as_str()?.parse().ok()?,
         ),
         revision: value.get("revision")?.as_str()?.parse().ok()?,
-        seq: value.get("root_seq")?.as_str()?.parse().ok()?,
+        seq: value.get("vault_seq")?.as_str()?.parse().ok()?,
     })
 }
 
@@ -82,7 +82,7 @@ fn result_json(result: &CommittedConflict) -> String {
         "state": "committed",
         "entry_id": result.source.to_hex(),
         "revision": result.revision.to_string(),
-        "root_seq": result.seq.to_string(),
+        "vault_seq": result.seq.to_string(),
         "conflict": {
             "conflict_entry_id": result.sibling.to_hex(),
             "entry_id": result.source.to_hex(),
@@ -131,7 +131,7 @@ impl SqlConflictStore {
 impl ConflictCommitStore for SqlConflictStore {
     async fn conflict_head(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         source: EntryId,
     ) -> Result<ConflictHead, ConflictStoreError> {
         let mut conn = self
@@ -140,19 +140,19 @@ impl ConflictCommitStore for SqlConflictStore {
             .acquire()
             .await
             .map_err(conflict_error)?;
-        let root_record = store_roots::root_in_scope(&mut conn, self.owner, root)
+        let vault_record = store_vaults::vault_in_scope(&mut conn, self.owner, vault)
             .await
             .map_err(conflict_error)?
-            .ok_or(ConflictStoreError::UnknownRoot { root })?;
+            .ok_or(ConflictStoreError::UnknownVault { vault })?;
         let entry = store_entries::entry_in_scope(&mut conn, self.owner, source)
             .await
             .map_err(conflict_error)?;
         let source_facts = match entry {
             None => None,
-            Some(record) if record.deleted_at.is_some() || record.root != root => None,
+            Some(record) if record.deleted_at.is_some() || record.vault != vault => None,
             Some(record) => {
                 let content = if record.kind == store_entries::EntryKind::File {
-                    store_versions::current_version(&mut conn, self.owner, root, source)
+                    store_versions::current_version(&mut conn, self.owner, vault, source)
                         .await
                         .map_err(conflict_error)?
                         .map(|version| {
@@ -175,7 +175,7 @@ impl ConflictCommitStore for SqlConflictStore {
             }
         };
         Ok(ConflictHead {
-            epoch: root_record.epoch,
+            epoch: vault_record.epoch,
             source: source_facts,
         })
     }
@@ -280,8 +280,8 @@ impl ConflictCommitStore for SqlConflictStore {
                 detail: "冲突源条目不存在".to_owned(),
             })?;
         let parent = source.parent.ok_or(ConflictStoreError::Rejected {
-            code: "source_root_entry",
-            detail: "Root 根条目不能作为冲突源".to_owned(),
+            code: "source_vault_entry",
+            detail: "Vault 根条目不能作为冲突源".to_owned(),
         })?;
         let name = write
             .path
@@ -302,7 +302,7 @@ impl ConflictCommitStore for SqlConflictStore {
             path: write.path.clone(),
             content: write.content,
             revision,
-            seq: vaultsyncd_domain::version::RootSeq::ZERO,
+            seq: vaultsyncd_domain::version::VaultSeq::ZERO,
         };
         let events = serde_json::json!([{
             "kind": "create",
@@ -346,7 +346,7 @@ impl ConflictCommitStore for SqlConflictStore {
             self.owner,
             &NewEntry {
                 id: write.sibling,
-                root: write.key.root,
+                vault: write.key.vault,
                 parent,
                 name: name.to_owned(),
                 name_key: name.to_owned(),
@@ -368,7 +368,7 @@ impl ConflictCommitStore for SqlConflictStore {
             self.owner,
             &NewVersion {
                 id: version,
-                root: write.key.root,
+                vault: write.key.vault,
                 entry: write.sibling,
                 object_hash: *write.content.digest.as_bytes(),
                 size: write.content.bytes,
@@ -381,10 +381,10 @@ impl ConflictCommitStore for SqlConflictStore {
         .map_err(conflict_error)?;
         let inserted = sqlx::query(
             "INSERT INTO conflicts \
-             (root_id, device_id, op_id, source_entry_id, sibling_entry_id, path, reason, created_at) \
+             (vault_id, device_id, op_id, source_entry_id, sibling_entry_id, path, reason, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'stale_base', ?7)",
         )
-        .bind(write.key.root.as_bytes().as_slice())
+        .bind(write.key.vault.as_bytes().as_slice())
         .bind(write.key.device.as_bytes().as_slice())
         .bind(write.key.op.as_bytes().as_slice())
         .bind(write.source.as_bytes().as_slice())
@@ -424,7 +424,7 @@ pub struct ConflictCommand {
     pub base_revision: Revision,
     /// 迟到分支的内容（已 finalize 的对象）。
     pub content: ExpectedContent,
-    /// 冲突条目在 Root 内的相对路径（含另名后的文件名）。
+    /// 冲突条目在 Vault 内的相对路径（含另名后的文件名）。
     pub target_path: String,
     /// 客户端本地代际（持久回显）。
     pub local_generation: Option<vaultsyncd_domain::version::Generation>,
@@ -444,9 +444,9 @@ pub async fn execute_conflict(
     expected_epoch: vaultsyncd_domain::version::ServerEpoch,
     at: UtcTimestamp,
 ) -> Result<CommittedConflict, OperationFailure> {
-    let handle: Arc<RootHandle> = executor.root_handle(owner, key.root).await?;
+    let handle: Arc<VaultHandle> = executor.vault_handle(owner, key.vault).await?;
     let layout = executor
-        .objects(key.root, &[command.content.digest])
+        .objects(key.vault, &[command.content.digest])
         .await?;
     let mut target = WorkTreeTarget::new(Arc::clone(&handle), layout);
     let mut store = SqlConflictStore::new(executor.database().clone(), owner, key)
@@ -474,7 +474,7 @@ pub async fn execute_conflict(
         content: command.content,
     };
     let mut gate = executor.commit_gate().lock().await;
-    executor.ensure_no_unfinished(owner, key.root).await?;
+    executor.ensure_no_unfinished(owner, key.vault).await?;
     let outcome = commit_conflict(
         &mut gate,
         &mut store,

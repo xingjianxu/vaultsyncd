@@ -121,14 +121,14 @@ impl Arena {
         }
         let facts = probe::probe_path(path).map_err(err)?;
         if facts.inode != 256 {
-            return Err(err("backup path is not a subvolume root"));
+            return Err(err("backup path is not a subvolume vault"));
         }
         let id = facts
             .btrfs
             .as_ref()
             .and_then(|f| f.subvolume_id)
             .ok_or_else(|| err("backup subvolume identity unavailable"))?;
-        let scan = probe::scan_root(
+        let scan = probe::scan_vault(
             path,
             id,
             &ScanPolicy {

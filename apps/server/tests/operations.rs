@@ -1,15 +1,15 @@
 //! S047：操作端点的 HTTP 级验收（design §15.2—15.4、I01、I06）。
 //!
 //! 用例走真实 router、真实 SQLite：操作记录用 `server-store::operations` 的真实 API 种子（不是假端口），
-//! 断言的是端点实际返回的状态码与响应体，以及端点有没有偷偷写状态（`operations` 行数、`roots.seq`）。
+//! 断言的是端点实际返回的状态码与响应体，以及端点有没有偷偷写状态（`operations` 行数、`vaults.seq`）。
 //!
 //! 覆盖本卡验收点：
 //!
-//! - 同一请求重试两次逐字段相同，且不新增操作行、不推进 RootSeq；
+//! - 同一请求重试两次逐字段相同，且不新增操作行、不推进 VaultSeq；
 //! - 响应丢失（先真实提交为 committed，再用同 OpId 同摘要请求）拿到可辨识的重放结果；
-//! - 旧 epoch → 410 `EPOCH_CHANGED`；Root 不可写 → 503 `ROOT_UNAVAILABLE`；
+//! - 旧 epoch → 410 `EPOCH_CHANGED`；Vault 不可写 → 503 `VAULT_UNAVAILABLE`；
 //! - 同 OpId 不同摘要 → 409 `OP_ID_REUSED`；
-//! - pending → 202 且不含 `revision`/`root_seq`/`version_id`/`entry_id`（不判已同步）；
+//! - pending → 202 且不含 `revision`/`vault_seq`/`version_id`/`entry_id`（不判已同步）；
 //! - 未装配执行器的新命令 → 503 `SERVICE_NOT_READY` 且 `operations` 行数不变。
 
 use std::path::PathBuf;
@@ -20,7 +20,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 use vaultsyncd_domain::ids::{
-    DeviceId, EntryId, ID_LEN, OpId, RootId, TxId, UploadId, UserId, VersionId,
+    DeviceId, EntryId, ID_LEN, OpId, TxId, UploadId, UserId, VaultId, VersionId,
 };
 use vaultsyncd_domain::version::{Generation, Revision, ServerEpoch, UtcTimestamp};
 use vaultsyncd_protocol::generated::{
@@ -32,16 +32,16 @@ use vaultsyncd_server::content::ContentContext;
 use vaultsyncd_server::http::router;
 use vaultsyncd_server::lifecycle::Lifecycle;
 use vaultsyncd_server::operations::OperationsContext;
-use vaultsyncd_server::roots::RootContext;
 use vaultsyncd_server::uploads::UploadsContext;
+use vaultsyncd_server::vaults::VaultContext;
 use vaultsyncd_server_core::api::operations::{
     ConflictPolicy, OperationKind as CoreKind, OperationRequest as CoreRequest,
 };
 use vaultsyncd_server_core::auth::password::PasswordHasher;
 use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::operations::{self as store_operations, NewOperation};
-use vaultsyncd_server_store::roots::{self as store_roots, NewRoot, RootHealth};
 use vaultsyncd_server_store::users;
+use vaultsyncd_server_store::vaults::{self as store_vaults, NewVault, VaultHealth};
 
 const PASSWORD: &str = "correct horse battery staple";
 const EPOCH: u64 = 1;
@@ -76,19 +76,19 @@ impl Drop for Fixture {
 
 struct Seeds {
     owner: UserId,
-    root: RootId,
-    blocked_root: RootId,
-    foreign_root: RootId,
+    vault: VaultId,
+    blocked_vault: VaultId,
+    foreign_vault: VaultId,
 }
 
-/// 种子：owner 有一个可写 Root 与一个不可写 Root（验证 503 `ROOT_UNAVAILABLE`），
-/// intruder 有会话但没有 Root（越权 403）。
+/// 种子：owner 有一个可写 Vault 与一个不可写 Vault（验证 503 `VAULT_UNAVAILABLE`），
+/// intruder 有会话但没有 Vault（越权 403）。
 async fn seed_accounts(fixture: &Fixture) -> Seeds {
     let owner = UserId::from_bytes([0x11; ID_LEN]);
     let intruder = UserId::from_bytes([0x33; ID_LEN]);
-    let root = RootId::from_bytes([0x22; ID_LEN]);
-    let blocked_root = RootId::from_bytes([0x44; ID_LEN]);
-    let foreign_root = RootId::from_bytes([0x66; ID_LEN]);
+    let vault = VaultId::from_bytes([0x22; ID_LEN]);
+    let blocked_vault = VaultId::from_bytes([0x44; ID_LEN]);
+    let foreign_vault = VaultId::from_bytes([0x66; ID_LEN]);
     let database = Database::open(fixture.database())
         .await
         .expect("打开测试库");
@@ -109,49 +109,49 @@ async fn seed_accounts(fixture: &Fixture) -> Seeds {
     }
     for (id, entry, path, account) in [
         (
-            root,
+            vault,
             EntryId::from_bytes([0x55; ID_LEN]),
             "/srv/s047",
             owner,
         ),
         (
-            blocked_root,
+            blocked_vault,
             EntryId::from_bytes([0x77; ID_LEN]),
             "/srv/s047-blocked",
             owner,
         ),
         (
-            foreign_root,
+            foreign_vault,
             EntryId::from_bytes([0x99; ID_LEN]),
             "/srv/s047-intruder",
             intruder,
         ),
     ] {
-        store_roots::insert_root(
+        store_vaults::insert_vault(
             &mut tx,
-            &NewRoot {
+            &NewVault {
                 id,
                 entry,
                 owner: account,
                 absolute_path: path.to_owned(),
                 volume_identity: vec![0x77; 16],
-                root_file_identity: vec![0x88; 16],
+                vault_file_identity: vec![0x88; 16],
                 epoch: ServerEpoch::new(EPOCH).expect("epoch"),
             },
         )
         .await
-        .expect("写种子 Root");
+        .expect("写种子 Vault");
     }
-    store_roots::set_health(&mut tx, owner, blocked_root, RootHealth::Unavailable)
+    store_vaults::set_health(&mut tx, owner, blocked_vault, VaultHealth::Unavailable)
         .await
-        .expect("标记 Root 不可写");
+        .expect("标记 Vault 不可写");
     tx.commit().await.expect("提交种子事务");
     database.close().await;
     Seeds {
         owner,
-        root,
-        blocked_root,
-        foreign_root,
+        vault,
+        blocked_vault,
+        foreign_vault,
     }
 }
 
@@ -169,7 +169,7 @@ async fn open_app(fixture: &Fixture) -> App {
         Arc::clone(&auth),
         fixture.state_dir().as_path(),
     ));
-    let roots = Arc::new(RootContext::new(
+    let vaults = Arc::new(VaultContext::new(
         Arc::clone(&auth),
         None,
         fixture.state_dir(),
@@ -192,7 +192,7 @@ async fn open_app(fixture: &Fixture) -> App {
         Arc::clone(&lifecycle),
     ));
     App {
-        router: router(lifecycle, auth, uploads, roots, content, operations, sync),
+        router: router(lifecycle, auth, uploads, vaults, content, operations, sync),
         database,
     }
 }
@@ -221,13 +221,13 @@ impl App {
             .expect("统计 operations 行")
     }
 
-    /// Root 当前的 RootSeq（证明端点有没有推进事件批次）。
-    async fn root_seq(&self, root: RootId) -> i64 {
-        sqlx::query_scalar("SELECT seq FROM roots WHERE id = ?1")
-            .bind(root.as_bytes().as_slice())
+    /// Vault 当前的 VaultSeq（证明端点有没有推进事件批次）。
+    async fn vault_seq(&self, vault: VaultId) -> i64 {
+        sqlx::query_scalar("SELECT seq FROM vaults WHERE id = ?1")
+            .bind(vault.as_bytes().as_slice())
             .fetch_one(self.database.pool())
             .await
-            .expect("读取 roots.seq")
+            .expect("读取 vaults.seq")
     }
 }
 
@@ -294,12 +294,12 @@ fn version() -> VersionId {
     VersionId::from_bytes([0xe5; ID_LEN])
 }
 
-fn operations_uri(root: RootId) -> String {
-    format!("/v1/roots/{}/operations", root.to_hex())
+fn operations_uri(vault: VaultId) -> String {
+    format!("/v1/vaults/{}/operations", vault.to_hex())
 }
 
-fn operation_uri(root: RootId, op: OpId) -> String {
-    format!("/v1/roots/{}/operations/{}", root.to_hex(), op.to_hex())
+fn operation_uri(vault: VaultId, op: OpId) -> String {
+    format!("/v1/vaults/{}/operations/{}", vault.to_hex(), op.to_hex())
 }
 
 /// 一份合法的 create 命令（wire 形状）：其执行适配器尚未装配，用于 503 断言。
@@ -375,9 +375,9 @@ fn digest_of(request: &CoreRequest) -> store_operations::RequestDigest {
     store_operations::request_digest(&pairs).expect("计算摘要")
 }
 
-fn operation_key(root: RootId) -> store_operations::OperationKey {
+fn operation_key(vault: VaultId) -> store_operations::OperationKey {
     store_operations::OperationKey {
-        root,
+        vault,
         device: device(),
         op: op(),
     }
@@ -390,7 +390,7 @@ async fn seed_pending(app: &App, seeds: &Seeds) {
         &mut tx,
         seeds.owner,
         &NewOperation {
-            key: operation_key(seeds.root),
+            key: operation_key(seeds.vault),
             digest: digest_of(&core_put(17)),
         },
     )
@@ -407,7 +407,7 @@ async fn seed_committed(app: &App, seeds: &Seeds, result: &OperationResult) {
         &mut tx,
         seeds.owner,
         &NewOperation {
-            key: operation_key(seeds.root),
+            key: operation_key(seeds.vault),
             digest: digest_of(&core_put(17)),
         },
     )
@@ -418,7 +418,7 @@ async fn seed_committed(app: &App, seeds: &Seeds, result: &OperationResult) {
     store_operations::commit_operation(
         &mut tx,
         seeds.owner,
-        &operation_key(seeds.root),
+        &operation_key(seeds.vault),
         TxId::from_bytes([0xf6; ID_LEN]),
         r#"[{"kind":"test"}]"#,
         &result_json,
@@ -433,7 +433,7 @@ fn recorded_result() -> OperationResult {
     OperationResult {
         op_id: op().to_hex(),
         state: OperationState::Committed,
-        root_seq: Some("42".to_owned()),
+        vault_seq: Some("42".to_owned()),
         entry_id: Some(entry().to_hex()),
         revision: Some("18".to_owned()),
         version_id: Some(version().to_hex()),
@@ -453,12 +453,12 @@ async fn unmet_command_premise_is_rejected_without_writing_state() {
     let token = login(&app, "owner").await;
 
     // create 已装配真实执行器；这里用一个不存在的父目录断言“命令前提不成立时明确失败、
-    // 不登记操作行、不推进 RootSeq”，而不是伪造 202 或默认成功。
+    // 不登记操作行、不推进 VaultSeq”，而不是伪造 202 或默认成功。
     let body = serde_json::to_string(&wire_create(EPOCH)).expect("序列化请求");
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -471,8 +471,8 @@ async fn unmet_command_premise_is_rejected_without_writing_state() {
         "错误必须保留 request_id"
     );
     assert_eq!(
-        rejected.error.root_id.as_deref(),
-        Some(seeds.root.to_hex().as_str())
+        rejected.error.vault_id.as_deref(),
+        Some(seeds.vault.to_hex().as_str())
     );
     assert!(
         !text(&bytes).contains("\"committed\""),
@@ -484,10 +484,10 @@ async fn unmet_command_premise_is_rejected_without_writing_state() {
         0,
         "未被受理的命令不得登记操作行"
     );
-    assert_eq!(app.root_seq(seeds.root).await, 0, "不得推进 RootSeq");
+    assert_eq!(app.vault_seq(seeds.vault).await, 0, "不得推进 VaultSeq");
 }
 
-/// put 已装配执行器：内容引用不成立时是明确的 400 `INVALID_REQUEST`，仍不登记操作行、不推进 RootSeq。
+/// put 已装配执行器：内容引用不成立时是明确的 400 `INVALID_REQUEST`，仍不登记操作行、不推进 VaultSeq。
 #[tokio::test]
 async fn put_without_a_finalized_upload_is_rejected_before_any_state() {
     let fixture = Fixture::new("put-no-upload");
@@ -499,7 +499,7 @@ async fn put_without_a_finalized_upload_is_rejected_before_any_state() {
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -509,7 +509,7 @@ async fn put_without_a_finalized_upload_is_rejected_before_any_state() {
     assert_eq!(rejected.error.code, ErrorCode::InvalidRequest);
     assert!(!rejected.error.retryable, "会话不存在不会自己变成存在");
     assert_eq!(app.operation_rows().await, 0, "不得登记操作行");
-    assert_eq!(app.root_seq(seeds.root).await, 0, "不得推进 RootSeq");
+    assert_eq!(app.vault_seq(seeds.vault).await, 0, "不得推进 VaultSeq");
 }
 
 #[tokio::test]
@@ -525,7 +525,7 @@ async fn pending_operation_answers_202_without_sync_fields() {
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body.clone()),
         ))
@@ -535,17 +535,17 @@ async fn pending_operation_answers_202_without_sync_fields() {
     assert_eq!(replayed.state, OperationState::Pending);
     assert_eq!(replayed.replayed, Some(true), "命中已记录的结果");
     assert_eq!(replayed.revision, None, "pending 不得带 revision");
-    assert_eq!(replayed.root_seq, None, "pending 不得带 root_seq");
+    assert_eq!(replayed.vault_seq, None, "pending 不得带 vault_seq");
     assert_eq!(replayed.version_id, None, "pending 不得带 version_id");
     assert_eq!(replayed.entry_id, None, "pending 不得带 entry_id");
     assert_eq!(app.operation_rows().await, 1, "重放不得新增操作行");
-    assert_eq!(app.root_seq(seeds.root).await, 0, "pending 不占 RootSeq");
+    assert_eq!(app.vault_seq(seeds.vault).await, 0, "pending 不占 VaultSeq");
 
     // 同一请求再重试一次：仍是 202，响应逐字段相同。
     let (status, again) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -557,7 +557,7 @@ async fn pending_operation_answers_202_without_sync_fields() {
     let (status, bytes) = app
         .call(send(
             "GET",
-            &operation_uri(seeds.root, op()),
+            &operation_uri(seeds.vault, op()),
             Some(&token),
             None,
         ))
@@ -566,7 +566,7 @@ async fn pending_operation_answers_202_without_sync_fields() {
     let queried = result(&bytes);
     assert_eq!(queried.state, OperationState::Pending);
     assert_eq!(queried.replayed, None, "查询不是重放");
-    assert_eq!(queried.root_seq, None);
+    assert_eq!(queried.vault_seq, None);
 }
 
 #[tokio::test]
@@ -577,13 +577,13 @@ async fn committed_operation_replays_the_same_result_after_response_loss() {
     let token = login(&app, "owner").await;
     let recorded = recorded_result();
     seed_committed(&app, &seeds, &recorded).await;
-    assert_eq!(app.root_seq(seeds.root).await, 1);
+    assert_eq!(app.vault_seq(seeds.vault).await, 1);
 
     let body = serde_json::to_string(&wire_put(EPOCH, 17)).expect("序列化请求");
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -593,7 +593,7 @@ async fn committed_operation_replays_the_same_result_after_response_loss() {
     assert_eq!(replayed.op_id, op().to_hex());
     assert_eq!(replayed.state, OperationState::Committed);
     assert_eq!(replayed.replayed, Some(true), "响应丢失后的重试必须可辨识");
-    assert_eq!(replayed.root_seq.as_deref(), Some("42"));
+    assert_eq!(replayed.vault_seq.as_deref(), Some("42"));
     assert_eq!(replayed.revision.as_deref(), Some("18"));
     assert_eq!(
         replayed.entry_id.as_deref(),
@@ -605,12 +605,12 @@ async fn committed_operation_replays_the_same_result_after_response_loss() {
     );
     assert_eq!(replayed.echo_local_generation.as_deref(), Some("8"));
     assert_eq!(app.operation_rows().await, 1, "重放不得新增操作行");
-    assert_eq!(app.root_seq(seeds.root).await, 1, "重放不得推进 RootSeq");
+    assert_eq!(app.vault_seq(seeds.vault).await, 1, "重放不得推进 VaultSeq");
 
     let (status, bytes) = app
         .call(send(
             "GET",
-            &operation_uri(seeds.root, op()),
+            &operation_uri(seeds.vault, op()),
             Some(&token),
             None,
         ))
@@ -619,7 +619,7 @@ async fn committed_operation_replays_the_same_result_after_response_loss() {
     let queried = result(&bytes);
     assert_eq!(queried.state, OperationState::Committed);
     assert_eq!(queried.replayed, None);
-    assert_eq!(queried.root_seq.as_deref(), Some("42"));
+    assert_eq!(queried.vault_seq.as_deref(), Some("42"));
     assert_eq!(queried.revision.as_deref(), Some("18"));
 }
 
@@ -636,7 +636,7 @@ async fn same_op_id_with_different_semantics_is_rejected_as_reused() {
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -653,7 +653,7 @@ async fn same_op_id_with_different_semantics_is_rejected_as_reused() {
 }
 
 #[tokio::test]
-async fn stale_epoch_and_unavailable_root_are_rejected_before_the_operation_log() {
+async fn stale_epoch_and_unavailable_vault_are_rejected_before_the_operation_log() {
     let fixture = Fixture::new("epoch-health");
     let seeds = seed_accounts(&fixture).await;
     let app = open_app(&fixture).await;
@@ -663,7 +663,7 @@ async fn stale_epoch_and_unavailable_root_are_rejected_before_the_operation_log(
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -677,14 +677,14 @@ async fn stale_epoch_and_unavailable_root_are_rejected_before_the_operation_log(
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.blocked_root),
+            &operations_uri(seeds.blocked_vault),
             Some(&token),
             Some(body),
         ))
         .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{}", text(&bytes));
     let blocked = envelope(&bytes);
-    assert_eq!(blocked.error.code, ErrorCode::RootUnavailable);
+    assert_eq!(blocked.error.code, ErrorCode::VaultUnavailable);
     assert!(blocked.error.retryable);
     assert_eq!(app.operation_rows().await, 0, "被拒的请求不得登记操作行");
 }
@@ -701,7 +701,7 @@ async fn auth_scope_shape_and_unknown_operation_are_reported_distinctly() {
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             None,
             Some(body.clone()),
         ))
@@ -709,11 +709,11 @@ async fn auth_scope_shape_and_unknown_operation_are_reported_distinctly() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(envelope(&bytes).error.code, ErrorCode::AuthExpired);
 
-    // 别人的 Root：403（与不存在同一个回答）。
+    // 别人的 Vault：403（与不存在同一个回答）。
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.foreign_root),
+            &operations_uri(seeds.foreign_vault),
             Some(&token),
             Some(body.clone()),
         ))
@@ -733,7 +733,7 @@ async fn auth_scope_shape_and_unknown_operation_are_reported_distinctly() {
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -748,7 +748,7 @@ async fn auth_scope_shape_and_unknown_operation_are_reported_distinctly() {
     let (status, bytes) = app
         .call(send(
             "POST",
-            &operations_uri(seeds.root),
+            &operations_uri(seeds.vault),
             Some(&token),
             Some(body),
         ))
@@ -761,7 +761,7 @@ async fn auth_scope_shape_and_unknown_operation_are_reported_distinctly() {
     let (status, bytes) = app
         .call(send(
             "GET",
-            &operation_uri(seeds.root, unknown),
+            &operation_uri(seeds.vault, unknown),
             Some(&token),
             None,
         ))
@@ -769,11 +769,11 @@ async fn auth_scope_shape_and_unknown_operation_are_reported_distinctly() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{}", text(&bytes));
     assert_eq!(envelope(&bytes).error.code, ErrorCode::UnsupportedEntry);
 
-    // 查询他人的 Root：403。
+    // 查询他人的 Vault：403。
     let (status, _) = app
         .call(send(
             "GET",
-            &operation_uri(seeds.foreign_root, unknown),
+            &operation_uri(seeds.foreign_vault, unknown),
             Some(&token),
             None,
         ))

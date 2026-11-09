@@ -2,7 +2,7 @@ import type { GetStatusResult, ManagementResult } from "@vaultsyncd/local-ipc-ty
 import { invoke } from "@tauri-apps/api/core";
 
 export interface ConnectionInput { serverId: string; serverUrl: string; caFile?: string }
-export interface BindingInput { bindingId: string; rootId: string; localPath: string; mode: "full" | "on_demand" }
+export interface BindingInput { bindingId: string; vaultId: string; localPath: string; mode: "full" | "on_demand" }
 export interface RestoreInput { bindingId:string;entryId:string;operationId:string;baseRevision:string;versionId?:string }
 export interface NotificationSettings { enabled:boolean;delivered:number;blocked:number;last_error?:string }
 export interface AgentClient {
@@ -10,7 +10,7 @@ export interface AgentClient {
   setConnection(input: ConnectionInput): Promise<ManagementResult>;
   login(username: string, password: string): Promise<ManagementResult>;
   logout(): Promise<ManagementResult>;
-  listRoots(): Promise<ManagementResult>;
+  listVaults(): Promise<ManagementResult>;
   selectDirectory(): Promise<string | null>;
   createBinding(input: BindingInput): Promise<ManagementResult>;
   pauseBinding(bindingId: string): Promise<ManagementResult>;
@@ -35,7 +35,7 @@ const unavailable = async (): Promise<never> => { throw new Error("未连接：�
 // 仅供应用壳开发的明确替身；S080 替换为 Tauri command 桥，绝不返回伪造 Binding。
 export const disconnectedAgent: AgentClient = {
   getStatus: unavailable, setConnection: unavailable, login: unavailable, logout: unavailable,
-  listRoots: unavailable, selectDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
+  listVaults: unavailable, selectDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   getRules:unavailable,setRules:unavailable,
   retryProblem: unavailable, setMode: unavailable, detachBinding: unavailable, exportRecovery: unavailable,
@@ -54,7 +54,7 @@ export const nativeAgent: AgentClient = {
   setConnection: input => call("agent_set_connection", { input }),
   login: (username, password) => call("agent_login", { username, password }),
   logout: () => call("agent_logout"),
-  listRoots: () => call("agent_list_roots"),
+  listVaults: () => call("agent_list_vaults"),
   selectDirectory: () => call("select_local_directory"),
   createBinding: input => call("agent_create_binding", { input }),
   pauseBinding: bindingId => call("agent_pause_binding", { bindingId }),

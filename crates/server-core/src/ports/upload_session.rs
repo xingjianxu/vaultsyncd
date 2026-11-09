@@ -15,7 +15,7 @@ use crate::api::uploads::{PartWrite, StoredPart, UploadFailure, UploadSession};
 ///
 /// 不变量（由适配器保证）：所有读写都限定在调用方的 owner scope 内；`record_part` 在同一索引
 /// 已有不同字节时返回 [`UploadFailure::PartConflict`] 且不覆盖旧记录；`load` 对“不存在”“不是你的
-/// Root”“不是你的上传”统一返回 [`UploadFailure::UnknownUpload`]，不泄露存在性。
+/// Vault”“不是你的上传”统一返回 [`UploadFailure::UnknownUpload`]，不泄露存在性。
 #[allow(async_fn_in_trait)]
 pub trait UploadSessionStore {
     /// 读一个上传会话（含状态与块几何）。

@@ -5,7 +5,7 @@
 //!
 //! 解析出的记录提供三件准入必需的事实：挂载 ID（与 `statx` 的 `STATX_MNT_ID` 对齐）、
 //! 设备 `major:minor`（与 `statx`/`statfs` 对齐）、以及 `fstype` 与挂载选项。路径只用于
-//! 判断“某个挂载点位于 Root 之下”这类关系，且一律按路径分量比较，不用字符串前缀。
+//! 判断“某个挂载点位于 Vault 之下”这类关系，且一律按路径分量比较，不用字符串前缀。
 
 use std::fmt;
 use std::path::{Path, PathBuf};

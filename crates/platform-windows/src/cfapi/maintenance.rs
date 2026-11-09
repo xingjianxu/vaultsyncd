@@ -1,6 +1,6 @@
 //! Explicit, lossless provider removal. Incomplete placeholders are never passed to unregister.
 use crate::files::{
-    RootHandle,
+    VaultHandle,
     native::{metadata, open_child_shared},
 };
 use std::{
@@ -34,10 +34,12 @@ fn hash(file: &mut File) -> io::Result<String> {
 }
 /// Scan without recall. Unknown scans, reparses, partial or cloud-only files refuse removal.
 pub fn check_materialized(path: &Path) -> io::Result<()> {
-    let root = RootHandle::open(path)?;
-    let report = root.scan();
+    let vault = VaultHandle::open(path)?;
+    let report = vault.scan();
     if !report.permits_missing_comparison() {
-        return Err(io::Error::other("UNREGISTER_REFUSED: incomplete root scan"));
+        return Err(io::Error::other(
+            "UNREGISTER_REFUSED: incomplete vault scan",
+        ));
     }
     for item in report.entries {
         let m = item
@@ -60,8 +62,8 @@ pub fn check_materialized(path: &Path) -> io::Result<()> {
 /// Returns the preserved file hashes; errors retain data and prohibit subsequent unregister.
 pub fn revert_materialized(path: &Path) -> io::Result<Vec<(String, String)>> {
     check_materialized(path)?;
-    let root = RootHandle::open(path)?;
-    let mut report = root.scan();
+    let vault = VaultHandle::open(path)?;
+    let mut report = vault.scan();
     if !report.permits_missing_comparison() {
         return Err(io::Error::other("UNREGISTER_REFUSED: rescan failed"));
     }
@@ -73,7 +75,7 @@ pub fn revert_materialized(path: &Path) -> io::Result<Vec<(String, String)>> {
         let observed = item
             .metadata
             .ok_or_else(|| io::Error::other("unknown entry"))?;
-        root.with_parent(&item.path, |parent, leaf| {
+        vault.with_parent(&item.path, |parent, leaf| {
             let mut file = open_child_shared(
                 parent,
                 leaf,
@@ -125,7 +127,7 @@ pub fn revert_materialized(path: &Path) -> io::Result<Vec<(String, String)>> {
     super::adapter::ensure_no_placeholders(path)?;
     Ok(hashes)
 }
-/// Remove only a root already verified free of placeholders. No content is deleted.
+/// Remove only a vault already verified free of placeholders. No content is deleted.
 pub fn unregister_materialized(path: &Path) -> io::Result<()> {
     super::adapter::ensure_no_placeholders(path)?;
     let wide: Vec<u16> = path

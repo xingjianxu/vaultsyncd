@@ -693,7 +693,7 @@ mod tests {
         // 第一个操作需要用户处理（403）：立即终态，不重试。
         let handler = FakeHandler::new().fail(
             op(0x01),
-            ActionFailure::new(ErrorCode::AccessDenied, "跨 Root"),
+            ActionFailure::new(ErrorCode::AccessDenied, "跨 Vault"),
         );
         let report = executor(state.clone(), handler.clone())
             .run(&RunRequest::new(binding()))

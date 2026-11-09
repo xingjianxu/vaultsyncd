@@ -4,7 +4,7 @@
 //! `VAULTSYNCD_S103_WORK_VOLUME` / `VAULTSYNCD_S103_STATE_VOLUME` 时跳过（不以 fake 冒充）。
 //! 驱动脚本 `tests/server-integration/run-volume-faults.sh` 建立两个互不相同的卷：
 //!
-//! - 工作盘（Root + 内部状态同一 btrfs，准入要求）：先填满**数据**块，再验证新内容上传失败，
+//! - 工作盘（Vault + 内部状态同一 btrfs，准入要求）：先填满**数据**块，再验证新内容上传失败，
 //!   以及预先上传的内容提交时“要么真正成功、要么明确失败”，绝不提前返回 committed；
 //! - 状态盘（同布局的另一块卷）：用大量小文件耗尽**元数据**，验证提交事务/发布失败时没有
 //!   任何 committed 证据，工作文件与已确认版本保持可恢复；
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{
-    Lab, Running, create_snapshot, identity, login, register_root, snapshot_entries, upload,
+    Lab, Running, create_snapshot, identity, login, register_vault, snapshot_entries, upload,
 };
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -55,11 +55,11 @@ struct Head {
     epoch: String,
 }
 
-async fn head_of(running: &Running, token: &str, root: &str, name: &str) -> Option<Head> {
-    let snapshot = create_snapshot(running, token, root).await.ok()?;
+async fn head_of(running: &Running, token: &str, vault: &str, name: &str) -> Option<Head> {
+    let snapshot = create_snapshot(running, token, vault).await.ok()?;
     let epoch = snapshot.get("server_epoch")?.as_str()?.to_owned();
     let id = snapshot.get("snapshot_id")?.as_str()?;
-    let entries = snapshot_entries(running, token, root, id).await.ok()?;
+    let entries = snapshot_entries(running, token, vault, id).await.ok()?;
     let entry = entries
         .iter()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(name))?;
@@ -79,9 +79,9 @@ async fn head_of(running: &Running, token: &str, root: &str, name: &str) -> Opti
     })
 }
 
-async fn wait_head(running: &Running, token: &str, root: &str, name: &str, hash: &str) -> Head {
+async fn wait_head(running: &Running, token: &str, vault: &str, name: &str, hash: &str) -> Head {
     for _ in 0..160 {
-        if let Some(head) = head_of(running, token, root, name).await
+        if let Some(head) = head_of(running, token, vault, name).await
             && head.hash == hash
             && !head.version.is_empty()
         {
@@ -197,7 +197,7 @@ fn release(paths: &[PathBuf]) {
 async fn upload_first_part(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     content: &[u8],
 ) -> (StatusCode, Value) {
     let hash = sha256(content);
@@ -209,7 +209,7 @@ async fn upload_first_part(
     let (status, value) = running
         .json(
             "POST",
-            &format!("/v1/roots/{root}/uploads"),
+            &format!("/v1/vaults/{vault}/uploads"),
             Some(token),
             Some(&body),
         )
@@ -223,7 +223,7 @@ async fn upload_first_part(
         .to_owned();
     running
         .put_part(
-            &format!("/v1/roots/{root}/uploads/{upload_id}/parts/0"),
+            &format!("/v1/vaults/{vault}/uploads/{upload_id}/parts/0"),
             token,
             content.to_vec(),
         )
@@ -242,24 +242,25 @@ async fn data_exhaustion_on_work_volume_never_claims_committed() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
-        .expect("注册 Root");
+        .expect("注册 Vault");
     std::fs::write(work_file(&lab), BASE).expect("写已确认内容");
-    let before = wait_head(&running, &token, &root, NAME, &sha256(BASE)).await;
+    let before = wait_head(&running, &token, &vault, NAME, &sha256(BASE)).await;
 
     // 先在盘还有空间时上传一份内容：之后填满数据，提交只能“真正成功（reflink 共享）或明确失败”。
     let prepared: Vec<u8> = (0..8 * 1024 * 1024_usize)
         .map(|index| u8::try_from(index % 251).expect("字节"))
         .collect();
-    let (upload_id, prepared_hash, _) = upload(&running, &token, &root, &prepared, 4 * 1024 * 1024)
-        .await
-        .expect("预上传内容");
+    let (upload_id, prepared_hash, _) =
+        upload(&running, &token, &vault, &prepared, 4 * 1024 * 1024)
+            .await
+            .expect("预上传内容");
 
     let fillers = fill_data(&lab.work(), "data");
     // 新内容上传：对象写入需要新的数据块，必须明确 507，而不是静默成功。
     let fresh = vec![0x7b_u8; 4 * 1024 * 1024];
-    let (status, value) = upload_first_part(&running, &token, &root, &fresh).await;
+    let (status, value) = upload_first_part(&running, &token, &vault, &fresh).await;
     assert_eq!(
         status,
         StatusCode::INSUFFICIENT_STORAGE,
@@ -282,7 +283,7 @@ async fn data_exhaustion_on_work_volume_never_claims_committed() {
         revision: &before.revision,
         upload: &upload_id,
     };
-    let (status, result) = common::put_operation(&running, &token, &root, &args)
+    let (status, result) = common::put_operation(&running, &token, &vault, &args)
         .await
         .expect("提交预上传内容");
     let committed = result.get("state").and_then(Value::as_str) == Some("committed");
@@ -293,7 +294,7 @@ async fn data_exhaustion_on_work_volume_never_claims_committed() {
             "声称 committed 就必须是完整的新内容"
         );
         assert_eq!(
-            head_of(&running, &token, &root, NAME)
+            head_of(&running, &token, &vault, NAME)
                 .await
                 .expect("清单")
                 .hash,
@@ -337,16 +338,16 @@ async fn metadata_exhaustion_on_state_volume_never_reports_committed() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
-        .expect("注册 Root");
+        .expect("注册 Vault");
     std::fs::write(work_file(&lab), BASE).expect("写已确认内容");
-    let before = wait_head(&running, &token, &root, NAME, &sha256(BASE)).await;
+    let before = wait_head(&running, &token, &vault, NAME, &sha256(BASE)).await;
 
     let content: Vec<u8> = (0..2 * 1024 * 1024_usize)
         .map(|index| u8::try_from(index % 241).expect("字节"))
         .collect();
-    let (upload_id, _, _) = upload(&running, &token, &root, &content, 1024 * 1024)
+    let (upload_id, _, _) = upload(&running, &token, &vault, &content, 1024 * 1024)
         .await
         .expect("预上传内容");
 
@@ -362,7 +363,7 @@ async fn metadata_exhaustion_on_state_volume_never_reports_committed() {
         revision: &before.revision,
         upload: &upload_id,
     };
-    let (status, result) = common::put_operation(&running, &token, &root, &args)
+    let (status, result) = common::put_operation(&running, &token, &vault, &args)
         .await
         .expect("元数据满时提交");
     assert!(

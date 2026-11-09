@@ -2,7 +2,7 @@
 //!
 //! 一轮 [`ExternalObserver::run_pass`] 做的事：
 //!
-//! 1. 从上次的续扫游标（没有就从 Root 起点）做一次有界扫描（[`scan_tree`]）；
+//! 1. 从上次的续扫游标（没有就从 Vault 起点）做一次有界扫描（[`scan_tree`]）；
 //! 2. 每个枚举到的文件记录指纹；**首次看到总要等待一个完整稳定窗口**，指纹在窗口内变化就重新计时
 //!    （持续写入的文件一直是“等待”，不会被反复传播部分片段）；
 //! 3. 稳定的文件做采集（[`capture_external`]）与采纳（[`adopt_external`]），每轮最多
@@ -11,9 +11,9 @@
 //!
 //! 不变量：
 //!
-//! - 本流程**从不推导删除**：扫描中读不到、消失、Root 不可用都不产生任何删除结论；消失的从未采纳
+//! - 本流程**从不推导删除**：扫描中读不到、消失、Vault 不可用都不产生任何删除结论；消失的从未采纳
 //!   文件只是从待处理中移除。已采纳文件之后被外部删除属于后续事件管线的职责，这里不处理；
-//! - 扫描不完整（预算耗尽、读取失败、Root 不可用）时，**不**宣布初始导入完成，也不据此清理账本；
+//! - 扫描不完整（预算耗尽、读取失败、Vault 不可用）时，**不**宣布初始导入完成，也不据此清理账本；
 //! - 初始导入完成需要：一轮扫描完整走完，且这一轮结束时没有任何待处理文件。完成标志一旦为真
 //!   就保持（之后的新文件按普通外部变化处理）；
 //! - 账本只是进程内的报告视图，真相在库里；重启后账本为空，文件会被重新枚举，内容相同的由库查询
@@ -21,10 +21,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use vaultsyncd_domain::ids::{EntryId, RootId};
+use vaultsyncd_domain::ids::{EntryId, VaultId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 
-use crate::commit::put::RootCommitGate;
+use crate::commit::put::VaultCommitGate;
 use crate::objects::{ExpectedContent, InvalidStagingName, ObjectLayout};
 use crate::observer::capture::{
     AdoptFailure, AdoptOutcome, BlockReason, CaptureOutcome, RequeueReason, adopt_external,
@@ -72,8 +72,8 @@ pub struct ObserverPorts<'a, S: ExternalAdoptStore> {
     pub blobs: &'a mut dyn ObjectBlobPort,
     /// 对象区布局。
     pub layout: &'a ObjectLayout,
-    /// Root 内提交串行化（与 put 共用）。
-    pub gate: &'a mut RootCommitGate,
+    /// Vault 内提交串行化（与 put 共用）。
+    pub gate: &'a mut VaultCommitGate,
     /// 采纳存储端口。
     pub store: &'a mut S,
 }
@@ -81,8 +81,8 @@ pub struct ObserverPorts<'a, S: ExternalAdoptStore> {
 /// 被推迟的原因（不是失败，下一轮继续）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeferReason {
-    /// 同一 Root 正在提交别的内容。
-    RootBusy,
+    /// 同一 Vault 正在提交别的内容。
+    VaultBusy,
     /// 本轮采集预算用尽。
     CaptureBudget,
 }
@@ -165,8 +165,8 @@ pub struct PassReport {
     pub skipped: Vec<SkippedEntry>,
     /// 逐文件结局。
     pub outcomes: Vec<FileOutcome>,
-    /// Root 不可用而中止（本轮没有采集任何内容，也没有推导任何删除）。
-    pub root_unavailable: bool,
+    /// Vault 不可用而中止（本轮没有采集任何内容，也没有推导任何删除）。
+    pub vault_unavailable: bool,
     /// 初始导入是否已完成（只增不减）。
     pub initial_import_complete: bool,
     /// 移动/删除/保护核对的结论（含本轮扫描健康结论）。
@@ -217,14 +217,14 @@ struct Adopted {
     content: ExpectedContent,
 }
 
-/// 某个 Root 的外部内容观察器（初始稳定采集，以及事件线索驱动下的持续观察）。
+/// 某个 Vault 的外部内容观察器（初始稳定采集，以及事件线索驱动下的持续观察）。
 pub struct ExternalObserver {
-    root: RootId,
+    vault: VaultId,
     tracker: StabilityTracker,
     /// 已采纳（或库里已有相同内容）的路径 → 采纳时的基线；指纹未变则不再采集。
     adopted: BTreeMap<String, Adopted>,
     // 同一 EntryId 只能保留当前路径；目录自身改名不会推进后代 revision。
-    // 反向索引避免每次内容采纳线性扫描整棵 Root。
+    // 反向索引避免每次内容采纳线性扫描整棵 Vault。
     adopted_paths: BTreeMap<EntryId, String>,
     pending: BTreeMap<String, PendingReason>,
     resume: Option<ScanCursor>,
@@ -249,20 +249,20 @@ pub struct ExternalObserver {
 }
 
 impl ExternalObserver {
-    /// 建立观察器。`staging_prefix` 必须在对象区 staging 目录里唯一（例如含进程号与 Root 前缀）。
+    /// 建立观察器。`staging_prefix` 必须在对象区 staging 目录里唯一（例如含进程号与 Vault 前缀）。
     ///
     /// # Errors
     ///
     /// 暂存名前缀不是合规的单个文件名。
     pub fn new(
-        root: RootId,
+        vault: VaultId,
         window: StabilityWindow,
         staging_prefix: &str,
     ) -> Result<Self, ObserverConfigError> {
         ObjectLayout::validate_staging_name(staging_prefix)
             .map_err(ObserverConfigError::StagingPrefix)?;
         Ok(ExternalObserver {
-            root,
+            vault,
             tracker: StabilityTracker::new(window),
             adopted: BTreeMap::new(),
             adopted_paths: BTreeMap::new(),
@@ -393,12 +393,12 @@ impl ExternalObserver {
         let fresh = self.resume.is_none();
         let cursor = self.resume.take().unwrap_or_else(ScanCursor::from_root);
         if fresh {
-            // 新一轮完整扫描：上一轮的（可能是被 Root 不可用打断的）部分快照不再使用。
+            // 新一轮完整扫描：上一轮的（可能是被 Vault 不可用打断的）部分快照不再使用。
             self.scan_files.clear();
         }
         let scan = scan_tree(&mut *ports.work, limits.scan, cursor);
         let health = scan.health();
-        let root_unavailable = scan.root_unavailable();
+        let vault_unavailable = scan.vault_unavailable();
         let (scan_complete, inconclusive) = match scan.completion {
             ScanCompletion::Complete => (true, Vec::new()),
             ScanCompletion::Inconclusive { resume, reasons } => {
@@ -408,15 +408,15 @@ impl ExternalObserver {
         };
 
         let mut files = scan.files;
-        let mut aborted = root_unavailable;
-        if !root_unavailable {
+        let mut aborted = vault_unavailable;
+        if !vault_unavailable {
             // 续扫只覆盖游标里的目录；之前已见过、仍待处理的文件要在这一轮单独复查，否则一个一直读不了
             // 的目录或一次被截断的扫描会让其他文件的稳定窗口永远不推进。
             aborted |= self.recheck_pending(&mut *ports.work, limits, &mut files);
         }
         // 移动/删除只能在“完整且健康”的扫描上核对：扫描不完整或不健康时“没看到”不是删除证据
         // （design §12.3）。必须在 handle_files 之前做，否则移动目标会被当成新文件建立新条目。
-        if !root_unavailable {
+        if !vault_unavailable {
             for file in &files {
                 self.scan_files.insert(file.path.clone(), file.stamp);
             }
@@ -453,7 +453,7 @@ impl ExternalObserver {
             entries_examined: scan.entries_examined,
             skipped: scan.skipped,
             outcomes,
-            root_unavailable: aborted,
+            vault_unavailable: aborted,
             initial_import_complete: self.initial_import_complete,
             reconcile,
         }
@@ -495,7 +495,7 @@ impl ExternalObserver {
             return report;
         }
 
-        let Ok(ticket) = ports.gate.acquire(self.root) else {
+        let Ok(ticket) = ports.gate.acquire(self.vault) else {
             report.deferred = true;
             return report;
         };
@@ -548,7 +548,7 @@ impl ExternalObserver {
             let from = candidate.missing.path.clone();
             let to = candidate.to.clone();
             // 目标路径在库里已有条目就不能当成一次改名（不能覆盖别人的条目）。
-            match ports.store.lookup_path(self.root, &to).await {
+            match ports.store.lookup_path(self.vault, &to).await {
                 Ok(None) => {}
                 Ok(Some(_)) => {
                     report.ambiguous.push(to.clone());
@@ -565,7 +565,7 @@ impl ExternalObserver {
                 }
             }
             let request = ExternalMove {
-                root: self.root,
+                vault: self.vault,
                 from: from.clone(),
                 to: to.clone(),
                 entry: candidate.missing.entry,
@@ -652,7 +652,7 @@ impl ExternalObserver {
         report: &mut ReconcileReport,
     ) {
         let request = ExternalDelete {
-            root: self.root,
+            vault: self.vault,
             path: entry.path.clone(),
             entry: entry.entry,
             expected_revision: entry.revision,
@@ -724,8 +724,8 @@ impl ExternalObserver {
         self.protected.push(batch);
     }
 
-    /// 对一批已枚举的文件做稳定性判断、采集与采纳。`aborted` 为真（Root 不可用）时什么都不做；
-    /// 返回逐文件结局与“Root 是否不可用”。
+    /// 对一批已枚举的文件做稳定性判断、采集与采纳。`aborted` 为真（Vault 不可用）时什么都不做；
+    /// 返回逐文件结局与“Vault 是否不可用”。
     async fn handle_files<S: ExternalAdoptStore>(
         &mut self,
         ports: &mut ObserverPorts<'_, S>,
@@ -794,14 +794,14 @@ impl ExternalObserver {
                 continue;
             }
             captures += 1;
-            let (state, root_gone) = self.process_candidate(ports, &path, &stamp, clock).await;
-            aborted |= root_gone;
+            let (state, vault_gone) = self.process_candidate(ports, &path, &stamp, clock).await;
+            aborted |= vault_gone;
             outcomes.push(FileOutcome { path, state });
         }
         (outcomes, aborted)
     }
 
-    /// 复查本轮扫描没有覆盖到的待处理文件，把仍是普通文件的并入 `files`；返回 Root 是否不可用。
+    /// 复查本轮扫描没有覆盖到的待处理文件，把仍是普通文件的并入 `files`；返回 Vault 是否不可用。
     ///
     /// 复查读不到（权限等）的文件保持待处理，不当成消失；只有确认路径不存在才移出待处理——它从未
     /// 被采纳，没有历史可保护，也没有可传播的删除。
@@ -825,14 +825,14 @@ impl ExternalObserver {
                 Ok(WorkObservation::Absent | WorkObservation::NotRegular(_)) => {
                     self.settle(&path);
                 }
-                Err(WorkTreeError::RootUnavailable { .. }) => return true,
+                Err(WorkTreeError::VaultUnavailable { .. }) => return true,
                 Err(_) => {}
             }
         }
         false
     }
 
-    /// 处理一个稳定文件；返回结局与“Root 是否不可用”。
+    /// 处理一个稳定文件；返回结局与“Vault 是否不可用”。
     async fn process_candidate<S: ExternalAdoptStore>(
         &mut self,
         ports: &mut ObserverPorts<'_, S>,
@@ -845,7 +845,7 @@ impl ExternalObserver {
             &mut *ports.work,
             &mut *ports.blobs,
             ports.layout,
-            self.root,
+            self.vault,
             path,
             stamp,
             &staging,
@@ -862,13 +862,13 @@ impl ExternalObserver {
                 return (FileState::NotRegular, false);
             }
             Err(error) => {
-                let root_gone = error.is_root_unavailable();
+                let vault_gone = error.is_vault_unavailable();
                 let reason = PendingReason::Failed {
                     code: error.code(),
                     detail: error.to_string(),
                 };
                 self.mark_pending(path, reason.clone());
-                return (FileState::Pending(reason), root_gone);
+                return (FileState::Pending(reason), vault_gone);
             }
         };
 
@@ -935,8 +935,8 @@ impl ExternalObserver {
                 self.settle(path);
                 (FileState::NotRegular, false)
             }
-            Ok(AdoptOutcome::RootBusy) => {
-                let reason = PendingReason::Deferred(DeferReason::RootBusy);
+            Ok(AdoptOutcome::VaultBusy) => {
+                let reason = PendingReason::Deferred(DeferReason::VaultBusy);
                 self.mark_pending(path, reason.clone());
                 (FileState::Pending(reason), false)
             }
@@ -946,10 +946,10 @@ impl ExternalObserver {
                 (FileState::Pending(reason), false)
             }
             Err(error) => {
-                let root_gone = matches!(
+                let vault_gone = matches!(
                     error,
                     AdoptFailure::Work(
-                        crate::ports::work_tree::WorkTreeError::RootUnavailable { .. }
+                        crate::ports::work_tree::WorkTreeError::VaultUnavailable { .. }
                     )
                 );
                 let reason = PendingReason::Failed {
@@ -957,7 +957,7 @@ impl ExternalObserver {
                     detail: error.to_string(),
                 };
                 self.mark_pending(path, reason.clone());
-                (FileState::Pending(reason), root_gone)
+                (FileState::Pending(reason), vault_gone)
             }
         }
     }

@@ -10,13 +10,13 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::warn;
-use vaultsyncd_domain::ids::{EntryId, RootId, UserId};
+use vaultsyncd_domain::ids::{EntryId, UserId, VaultId};
 use vaultsyncd_platform_linux_server::ipc::{self, AdminSocket};
-use vaultsyncd_protocol::generated::RootRegisterRequest;
-use vaultsyncd_server_store::{db::Database, roots};
+use vaultsyncd_protocol::generated::VaultRegisterRequest;
+use vaultsyncd_server_store::{db::Database, vaults};
 
 use crate::lifecycle::Lifecycle;
-use crate::roots::RootContext;
+use crate::vaults::VaultContext;
 
 const PAGE_SIZE: i64 = 100;
 
@@ -24,7 +24,7 @@ const PAGE_SIZE: i64 = 100;
 pub(crate) struct AdminContext {
     pub backups: Option<Arc<crate::backup::jobs::Context>>,
     pub database: Database,
-    pub roots: Arc<RootContext>,
+    pub vaults: Arc<VaultContext>,
     pub lifecycle: Arc<Lifecycle>,
 }
 
@@ -239,31 +239,31 @@ async fn execute(
         return Ok(failure(400, "INVALID_REQUEST", "缺少命令"));
     };
     if command == "status" && args.len() == 1 {
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM roots WHERE owner_id = ?")
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM vaults WHERE owner_id = ?")
             .bind(owner.as_bytes().as_slice())
             .fetch_one(&mut *conn)
             .await?;
         return Ok(success(
-            json!({"phase":context.lifecycle.phase().as_str(),"root_count":count.to_string(),"recovery_detail":context.lifecycle.recovery_detail()}),
+            json!({"phase":context.lifecycle.phase().as_str(),"vault_count":count.to_string(),"recovery_detail":context.lifecycle.recovery_detail()}),
         ));
     }
     drop(conn);
     if command == "backup" {
         return backup_command(context, owner, &args[1..]).await;
     }
-    if command == "roots" && args.len() == 3 && args[1] == "register" {
+    if command == "vaults" && args.len() == 3 && args[1] == "register" {
         if context.lifecycle.phase() != crate::lifecycle::Phase::Ready {
             return Ok(failure(
                 503,
                 "NEEDS_RECOVERY",
-                "服务未就绪，不开放 Root 注册",
+                "服务未就绪，不开放 Vault 注册",
             ));
         }
         return Ok(response(
-            crate::roots::register_for_owner(
-                Arc::clone(&context.roots),
+            crate::vaults::register_for_owner(
+                Arc::clone(&context.vaults),
                 owner,
-                RootRegisterRequest {
+                VaultRegisterRequest {
                     path: args[2].clone(),
                 },
             )
@@ -273,7 +273,7 @@ async fn execute(
     }
     // 所有分页命令固定 100 条；page 是十进制偏移页号，不是持久快照，不承诺并发写入期间一致性。
     let expected = match command {
-        "roots" | "problems" => 1,
+        "vaults" | "problems" => 1,
         "trash" => 2,
         "history" => 3,
         _ => 0,
@@ -295,25 +295,25 @@ async fn execute(
     } else {
         0
     };
-    if command == "roots" {
+    if command == "vaults" {
         return Ok(response(
-            crate::roots::list_for_owner(Arc::clone(&context.roots), owner, Some(page)).await,
+            crate::vaults::list_for_owner(Arc::clone(&context.vaults), owner, Some(page)).await,
         )
         .await);
     }
     let mut conn = context.database.pool().acquire().await?;
-    let root = if command != "problems" {
-        let root = match RootId::from_hex(&args[1]) {
-            Ok(root) if root.to_hex() == args[1] => root,
-            _ => return Ok(failure(400, "INVALID_REQUEST", "RootId 格式无效")),
+    let vault = if command != "problems" {
+        let vault = match VaultId::from_hex(&args[1]) {
+            Ok(vault) if vault.to_hex() == args[1] => vault,
+            _ => return Ok(failure(400, "INVALID_REQUEST", "VaultId 格式无效")),
         };
-        if roots::root_in_scope(&mut conn, owner, root)
+        if vaults::vault_in_scope(&mut conn, owner, vault)
             .await?
             .is_none()
         {
-            return Ok(failure(403, "ACCESS_DENIED", "Root 不存在或不属于 owner"));
+            return Ok(failure(403, "ACCESS_DENIED", "Vault 不存在或不属于 owner"));
         }
-        Some(root)
+        Some(vault)
     } else {
         None
     };
@@ -325,19 +325,19 @@ async fn execute(
     // 此处是服务端只读管理查询，不让 CLI 打开数据库；字段白名单绝不 SELECT 用户或会话材料。
     let sql = match command {
         "history" => {
-            "SELECT json_object('version_id', lower(hex(v.id)), 'entry_id', lower(hex(v.entry_id)), 'size', cast(v.size AS TEXT), 'created_seq', cast(v.created_seq AS TEXT), 'origin', v.origin, 'superseded_at', v.superseded_at) FROM versions v WHERE v.root_id = ?1 AND lower(hex(v.entry_id)) = ?2 ORDER BY v.created_seq DESC, v.id LIMIT 101 OFFSET ?3"
+            "SELECT json_object('version_id', lower(hex(v.id)), 'entry_id', lower(hex(v.entry_id)), 'size', cast(v.size AS TEXT), 'created_seq', cast(v.created_seq AS TEXT), 'origin', v.origin, 'superseded_at', v.superseded_at) FROM versions v WHERE v.vault_id = ?1 AND lower(hex(v.entry_id)) = ?2 ORDER BY v.created_seq DESC, v.id LIMIT 101 OFFSET ?3"
         }
         "trash" => {
-            "SELECT json_object('entry_id', lower(hex(t.entry_id)), 'path', t.path, 'kind', t.kind, 'version_id', CASE WHEN t.content_version_id IS NULL THEN NULL ELSE lower(hex(t.content_version_id)) END, 'deleted_at', t.deleted_at, 'expires_at', t.expires_at) FROM trash_entries t WHERE t.root_id = ?1 AND ?2 IS NULL ORDER BY t.entry_id LIMIT 101 OFFSET ?3"
+            "SELECT json_object('entry_id', lower(hex(t.entry_id)), 'path', t.path, 'kind', t.kind, 'version_id', CASE WHEN t.content_version_id IS NULL THEN NULL ELSE lower(hex(t.content_version_id)) END, 'deleted_at', t.deleted_at, 'expires_at', t.expires_at) FROM trash_entries t WHERE t.vault_id = ?1 AND ?2 IS NULL ORDER BY t.entry_id LIMIT 101 OFFSET ?3"
         }
         "problems" => {
-            "SELECT document FROM (SELECT 'root:' || lower(hex(r.id)) AS key, json_object('kind', 'root_health', 'root_id', lower(hex(r.id)), 'health', r.health, '_path', r.absolute_path, '_identity', cast(r.root_file_identity AS TEXT)) AS document FROM roots r WHERE r.owner_id = ?1 UNION ALL SELECT 'conflict:' || lower(hex(c.root_id)) || lower(hex(c.sibling_entry_id)), json_object('kind', 'conflict', 'root_id', lower(hex(c.root_id)), 'entry_id', lower(hex(c.source_entry_id)), 'copy_entry_id', lower(hex(c.sibling_entry_id)), 'path', c.path, 'reason', c.reason) FROM conflicts c JOIN roots r ON r.id = c.root_id WHERE r.owner_id = ?1) WHERE ?2 IS NULL ORDER BY key LIMIT 101 OFFSET ?3"
+            "SELECT document FROM (SELECT 'vault:' || lower(hex(r.id)) AS key, json_object('kind', 'vault_health', 'vault_id', lower(hex(r.id)), 'health', r.health, '_path', r.absolute_path, '_identity', cast(r.vault_file_identity AS TEXT)) AS document FROM vaults r WHERE r.owner_id = ?1 UNION ALL SELECT 'conflict:' || lower(hex(c.vault_id)) || lower(hex(c.sibling_entry_id)), json_object('kind', 'conflict', 'vault_id', lower(hex(c.vault_id)), 'entry_id', lower(hex(c.source_entry_id)), 'copy_entry_id', lower(hex(c.sibling_entry_id)), 'path', c.path, 'reason', c.reason) FROM conflicts c JOIN vaults r ON r.id = c.vault_id WHERE r.owner_id = ?1) WHERE ?2 IS NULL ORDER BY key LIMIT 101 OFFSET ?3"
         }
         _ => unreachable!(),
     };
-    let scope = root.map_or_else(
+    let scope = vault.map_or_else(
         || owner.as_bytes().to_vec(),
-        |root| root.as_bytes().to_vec(),
+        |vault| vault.as_bytes().to_vec(),
     );
     let rows: Vec<String> = sqlx::query_scalar(sql)
         .bind(scope)
@@ -353,7 +353,7 @@ async fn execute(
     let mut items = Vec::new();
     for row in rows.into_iter().take(PAGE_SIZE as usize) {
         let mut value: Value = serde_json::from_str(&row)?;
-        if value["kind"] == "root_health" {
+        if value["kind"] == "vault_health" {
             value
                 .as_object_mut()
                 .expect("query emits object")
@@ -362,11 +362,11 @@ async fn execute(
                 .as_object_mut()
                 .expect("query emits object")
                 .remove("_identity");
-            let id = RootId::from_hex(value["root_id"].as_str().ok_or("invalid Root id")?)?;
-            let record = roots::root_in_scope(&mut conn, owner, id)
+            let id = VaultId::from_hex(value["vault_id"].as_str().ok_or("invalid Vault id")?)?;
+            let record = vaults::vault_in_scope(&mut conn, owner, id)
                 .await?
-                .ok_or("Root disappeared")?;
-            let reason = context.roots.health_reason(&record);
+                .ok_or("Vault disappeared")?;
+            let reason = context.vaults.health_reason(&record);
             if let Some(reason) = reason {
                 value["health"] = json!("unavailable");
                 value["reason"] = json!(reason);
@@ -396,7 +396,7 @@ mod tests {
         lifecycle.mark_ready();
         let context = AdminContext {
             backups: None,
-            roots: Arc::new(RootContext::new(
+            vaults: Arc::new(VaultContext::new(
                 Arc::new(crate::auth::AuthContext::new(database.clone())),
                 None,
                 path.clone(),
@@ -425,7 +425,7 @@ mod tests {
             tx.commit().await.unwrap();
             if id == 1 {
                 assert_eq!(
-                    dispatch(&context, &status).await["result"]["root_count"],
+                    dispatch(&context, &status).await["result"]["vault_count"],
                     "0"
                 );
                 assert_eq!(

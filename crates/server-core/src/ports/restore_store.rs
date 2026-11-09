@@ -17,7 +17,7 @@
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, IntentId, TxId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 
 use crate::commit::intent::PutPhase;
@@ -25,7 +25,7 @@ use crate::history::trash::CommittedTrashRestore;
 use crate::history::version::CommittedVersionRestore;
 use crate::objects::ExpectedContent;
 use crate::ports::conflict_store::{OperationKey, RequestDigest};
-use crate::ports::put_store::{EntryBaseline, EntryKind, RootFacts};
+use crate::ports::put_store::{EntryBaseline, EntryKind, VaultFacts};
 
 /// [`RestoreStore::begin_restore`]/[`TrashRestoreStore::begin_restore`] 的结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,7 +75,7 @@ pub struct VersionRestoreWrite {
     pub restored_from: VersionId,
     /// 旧版本的内容对象（新版本引用同一个对象，不复制字节）。
     pub content: ExpectedContent,
-    /// 目标的 Root 内相对路径。
+    /// 目标的 Vault 内相对路径。
     pub path: String,
     /// 提交时间。
     pub at: UtcTimestamp,
@@ -110,7 +110,7 @@ pub struct TrashEntryFacts {
     pub entry: EntryId,
     /// 删除时的父目录。
     pub parent: EntryId,
-    /// 删除时的 Root 内相对路径。
+    /// 删除时的 Vault 内相对路径。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -134,7 +134,7 @@ pub struct TrashSubtree {
 impl TrashSubtree {
     /// 子树根（清单第一行）。
     #[must_use]
-    pub fn root(&self) -> &TrashEntryFacts {
+    pub fn vault(&self) -> &TrashEntryFacts {
         &self.entries[0]
     }
 }
@@ -148,7 +148,7 @@ pub struct TrashRestoreEntry {
     pub parent: EntryId,
     /// 恢复后的名称（只有根可能被另名，后代名称不变）。
     pub name: String,
-    /// 恢复后的 Root 内相对路径。
+    /// 恢复后的 Vault 内相对路径。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -210,12 +210,12 @@ pub enum RestoreStoreError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 或条目不在调用方的 owner scope 内。
+    /// Vault 或条目不在调用方的 owner scope 内。
     OutOfScope,
-    /// Root 不存在。
-    UnknownRoot {
-        /// 被查询的 Root。
-        root: RootId,
+    /// Vault 不存在。
+    UnknownVault {
+        /// 被查询的 Vault。
+        vault: VaultId,
     },
     /// 条目不存在（含已经软删除、已不在活跃命名空间里）。
     EntryMissing {
@@ -245,7 +245,7 @@ pub enum RestoreStoreError {
     },
     /// 事务内发现恢复目标名称已被活跃条目占用（并发新建）：另名或重新规划，不覆盖。
     NameOccupied {
-        /// 被占用的 Root 内相对路径。
+        /// 被占用的 Vault 内相对路径。
         path: String,
     },
     /// 写入被存储层约束拒绝（路径、名称、JSON 形态等）：核心应在写库前就拦住。
@@ -269,7 +269,7 @@ impl RestoreStoreError {
         match self {
             RestoreStoreError::Storage { .. } => "restore_store_failed",
             RestoreStoreError::OutOfScope => "out_of_scope",
-            RestoreStoreError::UnknownRoot { .. } => "unknown_root",
+            RestoreStoreError::UnknownVault { .. } => "unknown_vault",
             RestoreStoreError::EntryMissing { .. } => "entry_missing",
             RestoreStoreError::VersionMissing { .. } => "version_missing",
             RestoreStoreError::DuplicateOperation => "duplicate_operation",
@@ -286,8 +286,8 @@ impl fmt::Display for RestoreStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RestoreStoreError::Storage { detail } => write!(f, "恢复存储失败：{detail}"),
-            RestoreStoreError::OutOfScope => f.write_str("Root 或条目不在调用方的 owner scope 内"),
-            RestoreStoreError::UnknownRoot { root } => write!(f, "Root {root} 不存在"),
+            RestoreStoreError::OutOfScope => f.write_str("Vault 或条目不在调用方的 owner scope 内"),
+            RestoreStoreError::UnknownVault { vault } => write!(f, "Vault {vault} 不存在"),
             RestoreStoreError::EntryMissing { entry } => write!(f, "条目 {entry} 不存在"),
             RestoreStoreError::VersionMissing { version } => write!(f, "版本 {version} 不可用"),
             RestoreStoreError::DuplicateOperation => f.write_str("同一 OpId 已被别的请求占用"),
@@ -322,12 +322,12 @@ impl std::error::Error for RestoreStoreError {}
 /// 3. 恢复后的版本必须能被 `version_history` 看到，且旧版本仍在清单里、哈希不变。
 #[allow(async_fn_in_trait)]
 pub trait RestoreStore {
-    /// 读 Root 当前事实（epoch）。
+    /// 读 Vault 当前事实（epoch）。
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在。
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError>;
+    /// 存储失败、越权、Vault 不存在。
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, RestoreStoreError>;
 
     /// 读该 `OpId` 已记录的恢复状态。
     ///
@@ -357,7 +357,7 @@ pub trait RestoreStore {
     /// 存储失败、越权、条目不存在、版本不可用、行无法还原。
     async fn version_facts(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
         version: VersionId,
     ) -> Result<VersionFacts, RestoreStoreError>;
@@ -386,12 +386,12 @@ pub trait RestoreStore {
 ///    意图收尾到 `finalized`；事务内再核对一次名称占用（并发新建 → [`RestoreStoreError::NameOccupied`]）。
 #[allow(async_fn_in_trait)]
 pub trait TrashRestoreStore {
-    /// 读 Root 当前事实（epoch）。
+    /// 读 Vault 当前事实（epoch）。
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在。
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError>;
+    /// 存储失败、越权、Vault 不存在。
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, RestoreStoreError>;
 
     /// 读该 `OpId` 已记录的回收站恢复状态。
     ///
@@ -424,7 +424,7 @@ pub trait TrashRestoreStore {
     /// 存储失败、越权、行无法还原。
     async fn trash_subtree(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<Option<TrashSubtree>, RestoreStoreError>;
 
@@ -435,11 +435,11 @@ pub trait TrashRestoreStore {
     /// 存储失败、越权、行无法还原。
     async fn parent_kind(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
     ) -> Result<Option<EntryKind>, RestoreStoreError>;
 
-    /// 读活跃目录**当前**的 Root 内相对路径（Root 顶层目录为空串）；不存在返回 `None`。
+    /// 读活跃目录**当前**的 Vault 内相对路径（Vault 顶层目录为空串）；不存在返回 `None`。
     /// 原父目录在删除之后被移动或改名时，恢复位置跟随它，而不是清单里的旧路径前缀。
     ///
     /// # Errors
@@ -447,7 +447,7 @@ pub trait TrashRestoreStore {
     /// 存储失败、越权、行无法还原。
     async fn parent_path(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
     ) -> Result<Option<String>, RestoreStoreError>;
 
@@ -458,7 +458,7 @@ pub trait TrashRestoreStore {
     /// 存储失败、越权、行无法还原。
     async fn name_occupant(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
         name: &str,
     ) -> Result<Option<EntryId>, RestoreStoreError>;
@@ -470,7 +470,7 @@ pub trait TrashRestoreStore {
     /// 存储失败、越权、行无法还原。
     async fn content_facts(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         version: VersionId,
     ) -> Result<Option<ExpectedContent>, RestoreStoreError>;
 

@@ -1,17 +1,17 @@
-//! Root 注册与健康状态的用例规则（design §11.4、§15.2）。
+//! Vault 注册与健康状态的用例规则（design §11.4、§15.2）。
 //!
 //! 边界：本模块只做判定与编码，不做文件系统 I/O、不读数据库。挂载探测（后端类型、子卷、NOCOW、
 //! 嵌套挂载、身份字节）由 `crates/platform-linux-server` 的 `mounts::admission` 给出，注册行由
-//! `crates/server-store` 的 `roots::insert_root` 写入，HTTP 处理在 `apps/server`。
+//! `crates/server-store` 的 `vaults::insert_vault` 写入，HTTP 处理在 `apps/server`。
 //!
 //! 不变量：
 //!
 //! - **只接受预配置允许基目录中的目录**：允许基目录是部署契约（管理员在配置里给出），不是客户端
-//!   能自选的路径。判定按路径分量，不用字符串前缀（design §16.1）：`/data/root` 不是
-//!   `/data/rootx` 的祖先。规范路径也要再判一次——第一段判的是客户端给的文本，探测之后才知道
+//!   能自选的路径。判定按路径分量，不用字符串前缀（design §16.1）：`/data/vault` 不是
+//!   `/data/vaultx` 的祖先。规范路径也要再判一次——第一段判的是客户端给的文本，探测之后才知道
 //!   真实目录在哪，符号链接不能把它带出允许范围。
 //! - **配置阶段拒绝一律 `UNSUPPORTED_STORAGE_BACKEND`**（design §11.4）：拒绝发生在注册时，
-//!   因此不用运行期的 `ROOT_UNAVAILABLE`；越出允许基目录是授权问题，用 `ACCESS_DENIED`，且不
+//!   因此不用运行期的 `VAULT_UNAVAILABLE`；越出允许基目录是授权问题，用 `ACCESS_DENIED`，且不
 //!   回显“允许哪些目录”（那等于把服务器布局告诉调用方）。
 //! - **不猜结论**：探测不完整（扫描上限内无法证明合规）不是通过，也不是拒绝，单独
 //!   [`RegistrationVerdict::Inconclusive`]，调用方不得据此写库。
@@ -41,7 +41,7 @@ pub enum AllowedBaseError {
 impl std::fmt::Display for AllowedBaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Empty => f.write_str("没有配置任何允许的 Root 基目录"),
+            Self::Empty => f.write_str("没有配置任何允许的 Vault 基目录"),
             Self::NotAbsolute { path } => {
                 write!(f, "允许基目录 {} 不是绝对路径", path.display())
             }
@@ -127,7 +127,7 @@ pub enum CandidateFacts {
         /// 卷身份（btrfs FSID 的 UUID 文本字节）。
         volume_identity: Vec<u8>,
         /// 根目录身份（平台快照文本字节）。
-        root_identity: Vec<u8>,
+        vault_identity: Vec<u8>,
     },
     /// 不是可注册的普通目录（不存在、不是目录、打不开、无权限、打开期被替换）。
     NotADirectory {
@@ -245,7 +245,7 @@ pub enum RegistrationVerdict {
         /// 卷身份。
         volume_identity: Vec<u8>,
         /// 根目录身份。
-        root_identity: Vec<u8>,
+        vault_identity: Vec<u8>,
     },
     /// 不能注册。
     Rejected(RegistrationRejection),
@@ -262,7 +262,7 @@ impl RegistrationVerdict {
 /// 判定一个候选目录能否注册（design §11.4）。
 ///
 /// `resolved` 是平台层探测后得到的规范路径，不是客户端给的原文：第一段按原文判允许基目录是为了
-/// 尽早拒绝、不探测任意路径，这一段再判规范路径是为了让符号链接不能把 Root 带出允许范围。
+/// 尽早拒绝、不探测任意路径，这一段再判规范路径是为了让符号链接不能把 Vault 带出允许范围。
 #[must_use]
 pub fn evaluate_registration(
     bases: &AllowedBases,
@@ -275,10 +275,10 @@ pub fn evaluate_registration(
     match facts {
         CandidateFacts::Accepted {
             volume_identity,
-            root_identity,
+            vault_identity,
         } => RegistrationVerdict::Accepted {
             volume_identity,
-            root_identity,
+            vault_identity,
         },
         CandidateFacts::NotADirectory { reason, detail } => {
             RegistrationVerdict::Rejected(RegistrationRejection::NotADirectory { reason, detail })
@@ -317,7 +317,7 @@ fn require_normal_absolute(path: &Path) -> Result<(), NormalPathError> {
     Ok(())
 }
 
-/// 按分量判断 `base` 是 `path` 的祖先或本身（不用字符串前缀：`/data/rootx` 不在 `/data/root` 下）。
+/// 按分量判断 `base` 是 `path` 的祖先或本身（不用字符串前缀：`/data/vaultx` 不在 `/data/vault` 下）。
 fn base_is_ancestor_or_self(base: &Path, path: &Path) -> bool {
     let base_parts: Vec<Component<'_>> = base.components().collect();
     let path_parts: Vec<Component<'_>> = path.components().collect();
@@ -341,7 +341,7 @@ mod tests {
     fn accepted() -> CandidateFacts {
         CandidateFacts::Accepted {
             volume_identity: b"fsid".to_vec(),
-            root_identity: b"root".to_vec(),
+            vault_identity: b"vault".to_vec(),
         }
     }
 
@@ -364,35 +364,35 @@ mod tests {
             }
         );
         // `.` 与结尾分隔符不是 `..` 分量：`Components` 会折叠它们，不影响判定。
-        let trailing = bases(&["/data/roots/"]);
-        assert!(trailing.contains(Path::new("/data/roots/a")));
+        let trailing = bases(&["/data/vaults/"]);
+        assert!(trailing.contains(Path::new("/data/vaults/a")));
     }
 
     #[test]
     fn duplicate_bases_are_counted_once() {
-        let bases = bases(&["/data/roots", "/data/roots", "/srv/roots"]);
+        let bases = bases(&["/data/vaults", "/data/vaults", "/srv/vaults"]);
         assert_eq!(bases.len(), 2);
         assert!(!bases.is_empty());
     }
 
     #[test]
     fn containment_is_component_wise_not_string_prefix() {
-        let bases = bases(&["/data/roots"]);
-        assert!(bases.contains(Path::new("/data/roots")), "基目录本身可用");
-        assert!(bases.contains(Path::new("/data/roots/a")));
-        assert!(bases.contains(Path::new("/data/roots/a/b")));
+        let bases = bases(&["/data/vaults"]);
+        assert!(bases.contains(Path::new("/data/vaults")), "基目录本身可用");
+        assert!(bases.contains(Path::new("/data/vaults/a")));
+        assert!(bases.contains(Path::new("/data/vaults/a/b")));
         assert!(
-            !bases.contains(Path::new("/data/rootsx")),
+            !bases.contains(Path::new("/data/vaultsx")),
             "同前缀兄弟不是子目录"
         );
         assert!(!bases.contains(Path::new("/data")), "父目录不在允许范围内");
         assert!(!bases.contains(Path::new("/etc")));
         assert!(
-            !bases.contains(Path::new("data/roots")),
+            !bases.contains(Path::new("data/vaults")),
             "相对路径不在允许范围内"
         );
         assert!(
-            !bases.contains(Path::new("/data/roots/../etc")),
+            !bases.contains(Path::new("/data/vaults/../etc")),
             "不折叠 .."
         );
         assert!(
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn outside_bases_is_denied_without_revealing_the_layout() {
-        let bases = bases(&["/data/roots"]);
+        let bases = bases(&["/data/vaults"]);
         let verdict = evaluate_registration(&bases, Path::new("/etc"), accepted());
         let RegistrationVerdict::Rejected(rejection) = verdict else {
             panic!("越界路径必须被拒绝");
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(rejection.reason(), "outside_allowed_bases");
         assert!(!rejection.retryable());
         assert!(
-            !rejection.detail().contains("/data/roots"),
+            !rejection.detail().contains("/data/vaults"),
             "拒绝理由不得回显允许基目录：{}",
             rejection.detail()
         );
@@ -421,13 +421,13 @@ mod tests {
 
     #[test]
     fn accepted_candidate_keeps_platform_identity_bytes() {
-        let bases = bases(&["/data/roots"]);
-        let verdict = evaluate_registration(&bases, Path::new("/data/roots/a"), accepted());
+        let bases = bases(&["/data/vaults"]);
+        let verdict = evaluate_registration(&bases, Path::new("/data/vaults/a"), accepted());
         assert_eq!(
             verdict,
             RegistrationVerdict::Accepted {
                 volume_identity: b"fsid".to_vec(),
-                root_identity: b"root".to_vec(),
+                vault_identity: b"vault".to_vec(),
             }
         );
         assert!(verdict.is_accepted());
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn storage_rejections_map_to_the_configuration_error_code() {
-        let bases = bases(&["/data/roots"]);
+        let bases = bases(&["/data/vaults"]);
         let cases = [
             CandidateFacts::NotADirectory {
                 reason: "not_a_directory".to_owned(),
@@ -447,7 +447,7 @@ mod tests {
             },
             CandidateFacts::UnsupportedStorage {
                 reason: "internal_state_overlap".to_owned(),
-                detail: "内部状态目录与 Root 重叠".to_owned(),
+                detail: "内部状态目录与 Vault 重叠".to_owned(),
             },
             CandidateFacts::Inconclusive {
                 reason: "scan_entry_limit_reached".to_owned(),
@@ -461,7 +461,7 @@ mod tests {
                 | CandidateFacts::Inconclusive { reason, .. } => reason.clone(),
                 CandidateFacts::Accepted { .. } => unreachable!(),
             };
-            let verdict = evaluate_registration(&bases, Path::new("/data/roots/a"), facts);
+            let verdict = evaluate_registration(&bases, Path::new("/data/vaults/a"), facts);
             let RegistrationVerdict::Rejected(rejection) = verdict else {
                 panic!("非合规候选必须被拒绝");
             };
@@ -475,13 +475,13 @@ mod tests {
     #[test]
     fn resolved_path_outside_bases_is_rejected_even_if_the_given_path_looked_inside() {
         // 客户端给的是允许基目录下的文本，探测出的规范路径却是别处（符号链接逃逸）。
-        let bases = bases(&["/data/roots"]);
+        let bases = bases(&["/data/vaults"]);
         let verdict = evaluate_registration(
             &bases,
-            Path::new("/data/roots/escape/target"),
+            Path::new("/data/vaults/escape/target"),
             CandidateFacts::Accepted {
                 volume_identity: b"fsid".to_vec(),
-                root_identity: b"root".to_vec(),
+                vault_identity: b"vault".to_vec(),
             },
         );
         assert!(verdict.is_accepted(), "规范路径仍在基目录内就该接受");

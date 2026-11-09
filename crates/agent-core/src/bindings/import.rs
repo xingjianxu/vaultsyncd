@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use vaultsyncd_client_store::bindings::{BindingRecord, SyncMode};
 use vaultsyncd_client_store::db::Database;
 use vaultsyncd_client_store::entries::{BaselineEntry, EntryKind as StoreKind};
-use vaultsyncd_domain::ids::{BindingId, EntryId, IdSource, OpId, RootId};
-use vaultsyncd_domain::version::{Generation, Revision, RootSeq, UtcTimestamp};
+use vaultsyncd_domain::ids::{BindingId, EntryId, IdSource, OpId, VaultId};
+use vaultsyncd_domain::version::{Generation, Revision, UtcTimestamp, VaultSeq};
 use vaultsyncd_fs_common::name::NameEquivalence;
 use vaultsyncd_fs_common::path::RelativePath;
 use vaultsyncd_planner::conflict::{
@@ -35,7 +35,7 @@ use crate::ports::Ports;
 /// 平台根准入证据。适配器必须用打开的根句柄检查真实身份、权限、重解析点与规范路径重叠；
 /// 不能仅凭用户路径的字符串前缀宣称准入。失败返回错误，不返回空扫描。
 #[derive(Clone, Debug)]
-pub struct RootAdmission {
+pub struct VaultAdmission {
     /// 跨重启稳定的卷/根目录身份；挂载漂移时必须改变或直接报错。
     pub identity: String,
     /// 根健康且可完整扫描。
@@ -52,7 +52,7 @@ pub struct RootAdmission {
 /// generation 必须由平台观察器稳定维护，不能用 mtime 代替。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalImportEntry {
-    /// 已规范的 Root 内相对路径。
+    /// 已规范的 Vault 内相对路径。
     pub path: String,
     /// 文件/目录。
     pub kind: WireKind,
@@ -87,7 +87,7 @@ pub trait ImportLocal: NameEquivalence + Send + Sync {
         &'a self,
         binding: &'a BindingRecord,
         other_paths: &'a [String],
-    ) -> PortFuture<'a, Result<RootAdmission, PortError>>;
+    ) -> PortFuture<'a, Result<VaultAdmission, PortError>>;
     /// 完整扫描；任一目录扫描不完整必须返回错误。先元数据、再必要哈希由适配器执行。
     fn scan(&self, binding: BindingId) -> PortFuture<'_, Result<Vec<LocalImportEntry>, PortError>>;
     /// 保留本地内容到另名；须先落意图并按 generation/身份核对，目标存在则不覆盖。
@@ -117,11 +117,11 @@ pub struct SnapshotSeed {
 /// 一致性快照端口。每页必须来自 begin 返回的同一个 snapshot_id。
 pub trait ImportSnapshot: Send + Sync {
     /// 固定快照，不能用不断变化的目录列表代替。
-    fn begin(&self, root: RootId) -> PortFuture<'_, Result<SnapshotSeed, PortError>>;
+    fn begin(&self, vault: VaultId) -> PortFuture<'_, Result<SnapshotSeed, PortError>>;
     /// 读取固定快照的一页；过期必须报错，不悄悄换快照。
     fn page<'a>(
         &'a self,
-        root: RootId,
+        vault: VaultId,
         snapshot: &'a str,
         cursor: Option<&'a str>,
     ) -> PortFuture<'a, Result<SnapshotPage, PortError>>;
@@ -132,8 +132,8 @@ pub trait ImportSnapshot: Send + Sync {
 pub struct ImportReport {
     /// 本次新完成的路径数。
     pub completed: usize,
-    /// 原始快照高水位，绝不是上传回执中的最新 root_seq。
-    pub high_water: RootSeq,
+    /// 原始快照高水位，绝不是上传回执中的最新 vault_seq。
+    pub high_water: VaultSeq,
     /// 清单是否全部完成。
     pub complete: bool,
 }
@@ -190,12 +190,12 @@ impl FirstImport {
             Some(journal) => journal,
             None => {
                 self.store.ensure_fresh(binding_id).await?;
-                let seed = self.snapshot.begin(binding.root).await?;
+                let seed = self.snapshot.begin(binding.vault).await?;
                 validate_snapshot(&seed.metadata, &binding)?;
                 let journal = Journal {
                     format: 1,
                     revision: 0,
-                    root_identity: admission.identity.clone(),
+                    vault_identity: admission.identity.clone(),
                     snapshot: seed.metadata,
                     server_time: seed.server_time.as_unix_seconds(),
                     entries: Vec::new(),
@@ -209,7 +209,7 @@ impl FirstImport {
             }
         };
         validate_snapshot(&journal.snapshot, &binding)?;
-        if journal.format != 1 || journal.root_identity != admission.identity {
+        if journal.format != 1 || journal.vault_identity != admission.identity {
             return Err(invalid("导入日志版本或本地根身份变化，需恢复现场"));
         }
         if journal.complete {
@@ -219,7 +219,7 @@ impl FirstImport {
             let page = self
                 .snapshot
                 .page(
-                    binding.root,
+                    binding.vault,
                     &journal.snapshot.snapshot_id,
                     journal.cursor.as_deref(),
                 )
@@ -398,7 +398,7 @@ pub(super) struct Journal {
     pub format: u32,
     #[serde(skip)]
     pub revision: i64,
-    pub root_identity: String,
+    pub vault_identity: String,
     pub snapshot: Snapshot,
     pub server_time: i64,
     pub entries: Vec<SnapshotEntry>,
@@ -577,14 +577,14 @@ pub(super) fn remote_paths(
             return Err(invalid("快照条目身份重复"));
         }
     }
-    let roots: Vec<_> = entries
+    let vaults: Vec<_> = entries
         .iter()
         .filter(|entry| entry.parent_id.is_none())
         .collect();
-    if roots.len() != 1 || roots[0].kind != WireKind::Directory || !roots[0].name.is_empty() {
+    if vaults.len() != 1 || vaults[0].kind != WireKind::Directory || !vaults[0].name.is_empty() {
         return Err(invalid("快照必须有唯一合成根目录"));
     }
-    if roots[0].hash.is_some() || roots[0].size.is_some() || roots[0].version_id.is_some() {
+    if vaults[0].hash.is_some() || vaults[0].size.is_some() || vaults[0].version_id.is_some() {
         return Err(invalid("合成根目录不得携带文件内容"));
     }
     let mut paths = BTreeMap::new();
@@ -674,14 +674,14 @@ fn fact_kind(
 }
 fn validate_snapshot(snapshot: &Snapshot, binding: &BindingRecord) -> Result<(), PortError> {
     entry_id(&snapshot.snapshot_id)?;
-    if snapshot.root_id != binding.root.to_string()
+    if snapshot.vault_id != binding.vault.to_string()
         || snapshot.server_epoch != binding.server_epoch.to_decimal()
     {
-        return Err(invalid("快照 Root 或 epoch 与绑定不符"));
+        return Err(invalid("快照 Vault 或 epoch 与绑定不符"));
     }
     number(&snapshot.entry_count)?;
     number(&snapshot.expires_at)?;
-    RootSeq::new(number(&snapshot.high_water_seq)?).map_err(|e| invalid(e.to_string()))?;
+    VaultSeq::new(number(&snapshot.high_water_seq)?).map_err(|e| invalid(e.to_string()))?;
     Ok(())
 }
 fn validate_page(journal: &Journal, page: &SnapshotPage) -> Result<(), PortError> {
@@ -718,7 +718,7 @@ fn validate_page(journal: &Journal, page: &SnapshotPage) -> Result<(), PortError
 fn report(journal: &Journal, completed: usize) -> Result<ImportReport, PortError> {
     Ok(ImportReport {
         completed,
-        high_water: RootSeq::new(number(&journal.snapshot.high_water_seq)?)
+        high_water: VaultSeq::new(number(&journal.snapshot.high_water_seq)?)
             .map_err(|e| invalid(e.to_string()))?,
         complete: journal.complete,
     })

@@ -1,6 +1,6 @@
 use super::{ProtectedFile, rename};
 use crate::files::{
-    FileIdentity, RootHandle,
+    FileIdentity, VaultHandle,
     native::{metadata, open_child_shared},
 };
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,7 @@ impl FixedSnapshot {
         Ok(bytes)
     }
 }
-/// Missing is reported only after healthy pinned-root and parent verification.
+/// Missing is reported only after healthy pinned-vault and parent verification.
 pub enum ObservedContent {
     /// File does not exist in a healthy parent.
     Absent,
@@ -102,10 +102,10 @@ pub struct Publication {
     pub new_volume: u64,
     /// Physical NTFS identity of the staged object.
     pub new_file: [u8; 16],
-    /// Pinned original sync root volume; logs cannot be transplanted across roots.
-    pub root_volume: u64,
-    /// Pinned original sync root physical ID.
-    pub root_file: [u8; 16],
+    /// Pinned original sync vault volume; logs cannot be transplanted across vaults.
+    pub vault_volume: u64,
+    /// Pinned original sync vault physical ID.
+    pub vault_file: [u8; 16],
 }
 /// Recovery classification. Unknown states preserve all three copies.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,21 +122,21 @@ pub enum RecoveryOutcome {
 /// Windows native content adapter; application code maps it to core ports.
 /// All methods are blocking and must run outside UI threads and SQLite transactions.
 pub struct WindowsFiles {
-    root: RootHandle,
-    state: RootHandle,
+    vault: VaultHandle,
+    state: VaultHandle,
     generations: Mutex<HashMap<String, Evidence>>,
     gate: Mutex<()>,
 }
 impl WindowsFiles {
     /// Open disjoint existing local directories on the same volume. No files are created implicitly.
-    pub fn open(root: &Path, state: &Path) -> io::Result<Self> {
-        let root = RootHandle::open(root)?;
-        let state = RootHandle::open(state)?;
-        if root.overlaps(&state) || root.identity().volume != state.identity().volume {
-            return Err(invalid("state/root must be disjoint on same volume"));
+    pub fn open(vault: &Path, state: &Path) -> io::Result<Self> {
+        let vault = VaultHandle::open(vault)?;
+        let state = VaultHandle::open(state)?;
+        if vault.overlaps(&state) || vault.identity().volume != state.identity().volume {
+            return Err(invalid("state/vault must be disjoint on same volume"));
         }
         Ok(Self {
-            root,
+            vault,
             state,
             generations: Mutex::new(HashMap::new()),
             gate: Mutex::new(()),
@@ -159,8 +159,8 @@ impl WindowsFiles {
         self.observe_inner(path)
     }
     fn observe_inner(&self, path: &str) -> io::Result<ObservedContent> {
-        self.root.with_parent(path, |_, _| Ok(()))?;
-        match self.root.inspect(path) {
+        self.vault.with_parent(path, |_, _| Ok(()))?;
+        match self.vault.inspect(path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ObservedContent::Absent),
             Err(e) => return Err(e),
             Ok(meta) => {
@@ -232,7 +232,7 @@ impl WindowsFiles {
         path: &str,
         write: bool,
     ) -> io::Result<(ProtectedFile, crate::files::EntryMetadata)> {
-        protect_under(&self.root, path, write)
+        protect_under(&self.vault, path, write)
     }
 
     /// Preserve a file under another validated relative name without overwriting anything.
@@ -240,14 +240,14 @@ impl WindowsFiles {
     /// The original object remains protected continuously through full-content recheck and rename.
     pub fn preserve(&self, from: &str, to: &str, expected: &Evidence) -> io::Result<Evidence> {
         let _gate = self.gate.lock().map_err(poison)?;
-        self.root.with_parent(to, |_, _| Ok(()))?;
+        self.vault.with_parent(to, |_, _| Ok(()))?;
         let (guard, meta) = self.protect(from, true)?;
         let lease = guard.lease()?;
         let actual = self.evidence_handle(from, lease.file(), meta.identity)?;
         if &actual != expected {
             return Err(changed());
         }
-        self.root
+        self.vault
             .with_parent(to, |parent, name| rename(lease.file(), parent, name, 0))?;
         lease.file().sync_all()?;
         let mut map = self.generations.lock().map_err(poison)?;
@@ -265,7 +265,7 @@ impl WindowsFiles {
         validate_op(op)?;
         let _gate = self.gate.lock().map_err(poison)?;
         let saved = format!("deleted-{op}");
-        match self.root.inspect(path) {
+        match self.vault.inspect(path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return self.state.with_parent(&saved, |parent, name| {
                     let file = open_child_shared(parent, name, false, false, 0x00100081, false, 0)?;
@@ -322,7 +322,7 @@ impl WindowsFiles {
         validate_op(op)?;
         RelativePath::parse(target).map_err(invalid)?;
         self.state.verify()?;
-        self.root.verify()?;
+        self.vault.verify()?;
         let stage_name = format!("publication-{op}.data");
         let backup = format!("preserved-{op}.data");
         let journal = format!("publication-{op}.json");
@@ -335,7 +335,7 @@ impl WindowsFiles {
                 log.read_to_end(&mut bytes)?;
                 let p: Publication = serde_json::from_slice(&bytes).map_err(invalid)?;
                 validate_record(&p, &journal)?;
-                self.check_root(&p)?;
+                self.check_vault(&p)?;
                 if p.target != target || p.before.as_ref() != before || p.digest != digest {
                     return Err(invalid("OP_ID_REUSED: publication inputs differ"));
                 }
@@ -359,8 +359,8 @@ impl WindowsFiles {
                 size: meta.size,
                 new_volume: meta.identity.volume,
                 new_file: meta.identity.file,
-                root_volume: self.root.identity().volume,
-                root_file: self.root.identity().file,
+                vault_volume: self.vault.identity().volume,
+                vault_file: self.vault.identity().file,
             }
         };
         let size = record.size;
@@ -381,7 +381,7 @@ impl WindowsFiles {
             drop(lease);
             Some(guard)
         } else {
-            self.root.with_parent(target, |parent, leaf| {
+            self.vault.with_parent(target, |parent, leaf| {
                 match open_child_shared(parent, leaf, false, false, 0x00100080, false, 7) {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
                     Err(e) => Err(e),
@@ -415,12 +415,12 @@ impl WindowsFiles {
         }
         checkpoint("preserved");
         let result = self
-            .root
+            .vault
             .with_parent(target, |parent, leaf| rename(stage.file(), parent, leaf, 0));
         if let Err(error) = result {
             if let Some(lease) = &held {
                 if let Err(restore_error) = self
-                    .root
+                    .vault
                     .with_parent(target, |parent, leaf| rename(lease.file(), parent, leaf, 0))
                 {
                     return Err(io::Error::other(format!(
@@ -470,7 +470,7 @@ impl WindowsFiles {
             file.read_to_end(&mut bytes)?;
             let p: Publication = serde_json::from_slice(&bytes).map_err(invalid)?;
             validate_record(&p, &item.path)?;
-            self.check_root(&p)?;
+            self.check_vault(&p)?;
             let state = match self.observe_inner(&p.target) {
                 Ok(ObservedContent::File(snapshot)) if published(&p, snapshot.evidence()) => {
                     RecoveryOutcome::Published(p.op)
@@ -496,7 +496,7 @@ impl WindowsFiles {
                                     })
                                     && actual == (before.digest, before.size)
                                 {
-                                    self.root.with_parent(&p.target, |parent, leaf| {
+                                    self.vault.with_parent(&p.target, |parent, leaf| {
                                         rename(file, parent, leaf, 0)
                                     })?;
                                     file.sync_all()?;
@@ -554,10 +554,11 @@ impl WindowsFiles {
             Err(e) => Err(e),
         }
     }
-    fn check_root(&self, p: &Publication) -> io::Result<()> {
-        if p.root_volume != self.root.identity().volume || p.root_file != self.root.identity().file
+    fn check_vault(&self, p: &Publication) -> io::Result<()> {
+        if p.vault_volume != self.vault.identity().volume
+            || p.vault_file != self.vault.identity().file
         {
-            return Err(invalid("publication belongs to another root"));
+            return Err(invalid("publication belongs to another vault"));
         }
         Ok(())
     }
@@ -584,7 +585,7 @@ impl WindowsFiles {
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| invalid("staged name invalid"))?;
-        let source_root = RootHandle::open(parent)?;
+        let source_root = VaultHandle::open(parent)?;
         source_root.with_parent(leaf, |_, _| {
             let initial = source_root.inspect(leaf)?;
             if initial.directory || !initial.supported() || initial.links != 1 {
@@ -732,12 +733,12 @@ fn published(p: &Publication, e: &Evidence) -> bool {
 }
 
 pub(super) fn protect_under(
-    root: &RootHandle,
+    vault: &VaultHandle,
     path: &str,
     write: bool,
 ) -> io::Result<(ProtectedFile, crate::files::EntryMetadata)> {
-    root.with_parent(path, |_, _| {
-        let before = root.inspect(path)?;
+    vault.with_parent(path, |_, _| {
+        let before = vault.inspect(path)?;
         if before.directory || !before.supported() || before.links != 1 {
             return Err(invalid("unsafe content object"));
         }
@@ -748,7 +749,7 @@ pub(super) fn protect_under(
         {
             return Err(io::Error::other("CONTENT_UNAVAILABLE: partial placeholder"));
         }
-        let guard = ProtectedFile::open(&root.root_path().join(path.replace('/', "\\")), write)?;
+        let guard = ProtectedFile::open(&vault.vault_path().join(path.replace('/', "\\")), write)?;
         let lease = guard.lease()?;
         let after = metadata(lease.file())?;
         if before.identity != after.identity || !after.supported() || after.links != 1 {

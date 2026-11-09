@@ -65,7 +65,7 @@ if($Mode-eq 'Restore'){
     if(Get-ScheduledTask -TaskName $user.task -ErrorAction SilentlyContinue){Unregister-ScheduledTask -TaskName $user.task -Confirm:$false}
   }
   if(Test-Path (Join-Path $private 'prior-lsa.bin')){Remove-Item (Join-Path $private 'prior-lsa.bin')}
-  Write-Output 'RESTORED prior automatic logon; retained user, Root/state/cache and recovery evidence preserved'
+  Write-Output 'RESTORED prior automatic logon; retained user, Vault/state/cache and recovery evidence preserved'
   exit
 }
 
@@ -120,7 +120,7 @@ public static class S100Native {
  [DllImport("cldapi.dll")]static extern int CfGetPlaceholderInfo(IntPtr h,int c,IntPtr b,uint n,out uint r);
  [DllImport("cldapi.dll",CharSet=CharSet.Unicode)]static extern int CfGetSyncRootInfoByPath(string p,int c,IntPtr b,uint n,out uint r);
  public static long[] Observe(string p){IntPtr h=CreateFileW(p,0x80,7,IntPtr.Zero,3,0x02200000,IntPtr.Zero);if(h==new IntPtr(-1))throw new System.ComponentModel.Win32Exception();IntPtr b=Marshal.AllocHGlobal(8192);try{if(!GetFileInformationByHandleEx(h,1,b,64))throw new System.ComponentModel.Win32Exception();long size=Marshal.ReadInt64(b,8);if(!GetFileInformationByHandleEx(h,9,b,64))throw new System.ComponentModel.Win32Exception();long attr=(uint)Marshal.ReadInt32(b,0),tag=(uint)Marshal.ReadInt32(b,4);uint used;int hr=CfGetPlaceholderInfo(h,1,b,8192,out used);if(hr==unchecked((int)0x80070178))return new long[]{0,0,size,tag,attr};if(hr<0)throw new Exception("CfGetPlaceholderInfo "+hr.ToString("x"));return new long[]{1,Marshal.ReadInt64(b,0),size,tag,attr};}finally{Marshal.FreeHGlobal(b);CloseHandle(h);}}
- public static int Root(string p){IntPtr b=Marshal.AllocHGlobal(8192);try{uint used;return CfGetSyncRootInfoByPath(p,0,b,8192,out used);}finally{Marshal.FreeHGlobal(b);}}
+ public static int Vault(string p){IntPtr b=Marshal.AllocHGlobal(8192);try{uint used;return CfGetSyncRootInfoByPath(p,0,b,8192,out used);}finally{Marshal.FreeHGlobal(b);}}
  delegate bool Window(IntPtr h,IntPtr p);
  [DllImport("user32.dll")]static extern bool EnumWindows(Window c,IntPtr p);
  [DllImport("user32.dll")]static extern bool EnumChildWindows(IntPtr h,Window c,IntPtr p);
@@ -139,7 +139,7 @@ public static class S100Native {
   $initial=Wait-Agent;$null=Check-Installed $fixture.source_commit
   if($initial.agent_version-ne '0.1.1'){throw 'actual tested 0.1.1 package required'}
   $dirty=Files|Where-Object path -eq 'dirty.txt';if(!$dirty.dirty){throw 'original unconfirmed dirty lost'}
-  $answer=@{ok=$true;status=$initial;hashes=(Check-Content);cloud_metadata=([S100Native]::Observe((Join-Path $local 'cloud-only.bin')));root_hresult=([S100Native]::Root($local));materialization_source='verified existing complete cache; no network success claimed'}
+  $answer=@{ok=$true;status=$initial;hashes=(Check-Content);cloud_metadata=([S100Native]::Observe((Join-Path $local 'cloud-only.bin')));vault_hresult=([S100Native]::Vault($local));materialization_source='verified existing complete cache; no network success claimed'}
   Write-Json (Join-Path $results 'ready.json') $answer
   $end=(Get-Date).AddMinutes(20)
   while((Get-Date)-lt $end){
@@ -175,8 +175,8 @@ public static class S100Native {
       }
       'provider-uninstall' {
         $answer.exit_code=Run-Uninstall '/S /PROVIDER' 0;$answer.hashes=Check-Content
-        $answer.cloud_metadata=[S100Native]::Observe((Join-Path $local 'cloud-only.bin'));$answer.root_hresult=[S100Native]::Root($local)
-        if($answer.cloud_metadata[0]-ne 0 -or $answer.root_hresult-ge 0 -or (Test-Path $cli)){throw 'provider removal was not actual ordinary files/unregistered/program removal'}
+        $answer.cloud_metadata=[S100Native]::Observe((Join-Path $local 'cloud-only.bin'));$answer.vault_hresult=[S100Native]::Vault($local)
+        if($answer.cloud_metadata[0]-ne 0 -or $answer.vault_hresult-ge 0 -or (Test-Path $cli)){throw 'provider removal was not actual ordinary files/unregistered/program removal'}
         $answer.state_retained=Test-Path (Join-Path $agentProfile 'state\client.sqlite');$answer.cache_retained=Test-Path $cache
         $answer.provider_reports=@(Get-ChildItem (Join-Path $agentProfile 'maintenance') -Filter provider-removal.json -Recurse|ForEach-Object{Get-Content $_.FullName -Raw -Encoding UTF8|ConvertFrom-Json})
         $answer.exports=Exports

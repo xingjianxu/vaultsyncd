@@ -7,7 +7,7 @@ use vaultsyncd_server_core::objects::{ContentDigest, ObjectLayout};
 use vaultsyncd_server_store::{
     db::Database,
     gc::sweep::{self, Candidate},
-    roots,
+    vaults,
 };
 
 #[cfg(test)]
@@ -30,7 +30,7 @@ fn failure(e: impl std::fmt::Display) -> io::Error {
 }
 
 /// 在共享对象门下标记、宽限后复核、持久授权，再按 fd 锚定路径删对象并刷盘。
-/// 不扫描用户 Root、不读取 mtime、不做全盘垃圾猜测；任何失败中止本轮，证据留待重试。
+/// 不扫描用户 Vault、不读取 mtime、不做全盘垃圾猜测；任何失败中止本轮，证据留待重试。
 pub async fn run_once(
     database: &Database,
     state_dir: &Path,
@@ -39,7 +39,7 @@ pub async fn run_once(
     crate::test_faults::checkpoint("gc_before_lock");
     let _objects = database.object_maintenance().await;
     let mut conn = database.pool().acquire().await.map_err(failure)?;
-    let roots = roots::all_roots(&mut conn).await.map_err(failure)?;
+    let vaults = vaults::all_vaults(&mut conn).await.map_err(failure)?;
     drop(conn);
     // 先清过期上传的可重建临时名，避免发布后硬链接清理前崩溃留下 nlink=2 阻塞对象复核。
     let parts = clean_uploads(database, state_dir, now).await?;
@@ -49,12 +49,12 @@ pub async fn run_once(
         parts,
         temporary_files,
     };
-    for root in roots {
+    for vault in vaults {
         let mut tx = database.begin_write().await.map_err(failure)?;
-        sweep::mark_root(&mut tx, root.owner, root.id, now)
+        sweep::mark_vault(&mut tx, vault.owner, vault.id, now)
             .await
             .map_err(failure)?;
-        let candidates = sweep::candidates(&mut tx, root.owner, root.id)
+        let candidates = sweep::candidates(&mut tx, vault.owner, vault.id)
             .await
             .map_err(failure)?;
         tx.commit().await.map_err(failure)?;
@@ -82,7 +82,7 @@ pub async fn run_once(
                 None => return Err(failure("GC live object missing; metadata preserved")),
             }
             let mut tx = database.begin_write().await.map_err(failure)?;
-            let authorized = sweep::authorize_delete(&mut tx, root.owner, &candidate, now)
+            let authorized = sweep::authorize_delete(&mut tx, vault.owner, &candidate, now)
                 .await
                 .map_err(failure)?;
             tx.commit().await.map_err(failure)?;
@@ -105,7 +105,7 @@ pub async fn run_once(
 
 fn object_directory(state: &Path, candidate: &Candidate) -> io::Result<RestrictedDir> {
     let digest = ContentDigest::from_bytes(candidate.object.hash);
-    if !ObjectLayout::valid_storage_path(candidate.object.root, &digest, &candidate.storage_path) {
+    if !ObjectLayout::valid_storage_path(candidate.object.vault, &digest, &candidate.storage_path) {
         return Err(failure("GC storage path is not canonical; preserved"));
     }
     let expected = Path::new(&candidate.storage_path);

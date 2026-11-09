@@ -1,4 +1,4 @@
-//! Root 工作目录的目标端口：观察目标现场、按意图发布工作文件（design §11.2 步骤 4—6、§11.3）。
+//! Vault 工作目录的目标端口：观察目标现场、按意图发布工作文件（design §11.2 步骤 4—6、§11.3）。
 //!
 //! 端口只回答“目标现在是什么”和“把这份内容发布上去之后目标是什么”，不做判定：现场是否等于意图
 //! 前提、发布结果是否等于意图目标，都由核心比较。适配器必须报告实测事实（身份、SHA-256、字节数），
@@ -66,10 +66,10 @@ impl fmt::Display for TargetObservation {
     }
 }
 
-/// 一次发布请求：把内容地址上的对象发布到 Root 内的目标路径。
+/// 一次发布请求：把内容地址上的对象发布到 Vault 内的目标路径。
 #[derive(Clone, Debug)]
 pub struct PublishRequest {
-    /// 目标在 Root 内的相对路径。
+    /// 目标在 Vault 内的相对路径。
     pub target_path: String,
     /// 目标所在子卷内的暂存文件名（单个文件名，由意图记录）。
     pub staging_path: String,
@@ -140,7 +140,7 @@ impl fmt::Display for TargetError {
 
 impl std::error::Error for TargetError {}
 
-/// Root 工作目录的目标端口。
+/// Vault 工作目录的目标端口。
 ///
 /// 实现方（Linux 适配器）必须满足的契约：
 ///

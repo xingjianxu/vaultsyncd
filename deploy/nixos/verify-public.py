@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit deployment acceptance; writes one new sample in an operator-selected Root.
+"""Explicit deployment acceptance; writes one new sample in an operator-selected Vault.
 
 Uses normal verified public HTTPS, same-UID IPC and runtime password input.
 No tokens, cookies, passwords or private keys are included in the evidence.
@@ -42,7 +42,7 @@ def main():
     parser.add_argument('package', type=Path)
     parser.add_argument('evidence', type=Path)
     parser.add_argument('run_id')
-    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--vault', type=Path, required=True)
     parser.add_argument('--state', type=Path, default=Path('/var/lib/vaultsyncd'))
     parser.add_argument('--user', default='vaultsyncd')
     parser.add_argument('--credential', type=Path, default=Path('/var/lib/vaultsyncd-credentials/owner.password'))
@@ -85,25 +85,25 @@ def main():
     del password
     token = issued['access_token']
     try:
-        sample = args.root / f'deployment-{args.run_id}.txt'
+        sample = args.vault / f'deployment-{args.run_id}.txt'
         original = f'deployment {args.run_id} initial local sample\n'.encode()
         command(['sudo', '-n', '-u', args.user, 'python3', '-c',
                  'import pathlib,sys; p=pathlib.Path(sys.argv[1]); f=p.open("xb"); f.write(sys.stdin.buffer.read()); f.close(); p.chmod(0o600)',
                  sample], input=original)
-        registered = api('/v1/admin/roots')['roots']
-        matching = [root for root in registered if root.get('path') == str(args.root)]
+        registered = api('/v1/admin/vaults')['vaults']
+        matching = [vault for vault in registered if vault.get('path') == str(args.vault)]
         if matching:
-            root = matching[0]['root_id']
+            vault = matching[0]['vault_id']
         else:
-            root = api('/v1/admin/roots', {'path': str(args.root)})['root_id']
+            vault = api('/v1/admin/vaults', {'path': str(args.vault)})['vault_id']
         initial_hash = hashlib.sha256(original).hexdigest()
-        head = wait(lambda: next((item for item in api(f'/v1/roots/{root}/recovery')['items']
+        head = wait(lambda: next((item for item in api(f'/v1/vaults/{vault}/recovery')['items']
                                  if item['name'] == sample.name and item.get('hash') == initial_hash), None))
         pattern = f'vaultsyncd {args.run_id} verified public HTTPS\n'.encode()
         content = (pattern * (16 * 1024 * 1024 // len(pattern) + 1))[:16 * 1024 * 1024]
         digest = hashlib.sha256(content).hexdigest()
-        upload = api(f'/v1/roots/{root}/uploads', {'total_size': str(len(content)), 'hash': digest, 'chunk_size': str(len(content))})
-        part = f'/v1/roots/{root}/uploads/{upload["upload_id"]}/parts/0'
+        upload = api(f'/v1/vaults/{vault}/uploads', {'total_size': str(len(content)), 'hash': digest, 'chunk_size': str(len(content))})
+        part = f'/v1/vaults/{vault}/uploads/{upload["upload_id"]}/parts/0'
         try:
             api(part, content + b'x', method='PUT', headers={'content-type': 'application/octet-stream', 'x-part-sha256': digest})
         except urllib.error.HTTPError as error:
@@ -111,16 +111,16 @@ def main():
         else:
             raise AssertionError('oversize upload was accepted')
         api(part, content, method='PUT', headers={'content-type': 'application/octet-stream', 'x-part-sha256': digest})
-        api(f'/v1/roots/{root}/uploads/{upload["upload_id"]}/finalize', {})
-        snapshot = api(f'/v1/roots/{root}/snapshots', {})
+        api(f'/v1/vaults/{vault}/uploads/{upload["upload_id"]}/finalize', {})
+        snapshot = api(f'/v1/vaults/{vault}/snapshots', {})
         operation = {'kind': 'put_content', 'op_id': secrets.token_hex(16), 'device_id': secrets.token_hex(16),
                      'server_epoch': snapshot['server_epoch'], 'entry_id': head['entry_id'],
                      'base_revision': head['revision'], 'upload_id': upload['upload_id']}
-        committed = api(f'/v1/roots/{root}/operations', operation)
+        committed = api(f'/v1/vaults/{vault}/operations', operation)
         if committed['state'] == 'pending':
-            committed = wait(lambda: (value if (value := api(f'/v1/roots/{root}/operations/{operation["op_id"]}'))['state'] != 'pending' else None))
+            committed = wait(lambda: (value if (value := api(f'/v1/vaults/{vault}/operations/{operation["op_id"]}'))['state'] != 'pending' else None))
         assert committed['state'] == 'committed' and not committed.get('conflict')
-        fixed = f'/v1/roots/{root}/entries/{head["entry_id"]}/versions/{committed["version_id"]}/content'
+        fixed = f'/v1/vaults/{vault}/entries/{head["entry_id"]}/versions/{committed["version_id"]}/content'
         assert hashlib.sha256(api(fixed, binary=True)).hexdigest() == disk_hash(sample) == digest
         result['checks'].append('16MiB-upload-finalize-committed-fixed-version-and-disk-hash-oversize-413')
         before = command(['systemctl', 'show', args.service, '--property=MainPID', '--value'])
@@ -129,7 +129,7 @@ def main():
         after = command(['systemctl', 'show', args.service, '--property=MainPID', '--value'])
         assert before != after and int(after) > 0
         assert api('/v1/capabilities')['server_id'] == capabilities['server_id']
-        replay = api(f'/v1/roots/{root}/operations', operation)
+        replay = api(f'/v1/vaults/{vault}/operations', operation)
         assert replay['state'] == 'committed' and replay['replayed']
         assert replay['version_id'] == committed['version_id']
         assert hashlib.sha256(api(fixed, binary=True)).hexdigest() == disk_hash(sample) == digest
@@ -143,7 +143,7 @@ def main():
         assert all(int(fields[k].strip(), 16) == 0 for k in ('CapEff', 'CapBnd', 'CapAmb'))
         assert fields['NoNewPrivs'].strip() == '1' and int(fields['Uid'].split()[0]) != 0
         result['checks'].append('same-uid-IPC-unprivileged-btrfs-backup-verify-release')
-        result.update(passed=True, root_id=root, sample=str(sample), committed=committed, sha256=digest)
+        result.update(passed=True, vault_id=vault, sample=str(sample), committed=committed, sha256=digest)
         output.write_text(json.dumps(result, indent=2))
         print(json.dumps(result, indent=2))
     finally:

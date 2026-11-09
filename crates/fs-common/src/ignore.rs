@@ -1,7 +1,7 @@
 //! 排除规则（`.syncignore`）：注释、通配、根锚定、目录与否定规则，以及“为什么被排除”的解释。
 //!
 //! 语义以 Git 官方规则为参照（design §10.4、C13）。glob 匹配交给经验证的 `ignore::gitignore`
-//! 实现（design §4.1：不自行拼写 glob 正则）；本模块只负责从文本构建规则集、按 Root 相对
+//! 实现（design §4.1：不自行拼写 glob 正则）；本模块只负责从文本构建规则集、按 Vault 相对
 //! 路径给出裁决，并把命中的规则与原因说明白。
 //!
 //! 不变量（design §10.4）：
@@ -30,7 +30,7 @@ const DEFAULT_RULES_LABEL: &str = "vaultsyncd-default-rules";
 /// 绑定规则文本在匹配库里的来源标记（同上）。
 const BINDING_RULES_LABEL: &str = ".syncignore";
 
-/// 匹配根：解析后的路径一律是 Root 相对路径，匹配器按原样使用，不剥离前缀。
+/// 匹配根：解析后的路径一律是 Vault 相对路径，匹配器按原样使用，不剥离前缀。
 const MATCH_ROOT: &str = ".";
 
 /// 内置默认排除清单（design §10.4、C13）。**可编辑**：改这里即改所有绑定的默认规则。
@@ -113,9 +113,9 @@ impl IgnoreRules {
         Ok(IgnoreRules { matcher })
     }
 
-    /// 判定一个 Root 内路径是否参与同步，并给出命中的规则与原因。
+    /// 判定一个 Vault 内路径是否参与同步，并给出命中的规则与原因。
     ///
-    /// `is_dir` 必须是该路径在 Root 里的条目类型：带尾部 `/` 的规则只匹配目录。祖先目录按
+    /// `is_dir` 必须是该路径在 Vault 里的条目类型：带尾部 `/` 的规则只匹配目录。祖先目录按
     /// 从浅到深的顺序检查，因此父目录被排除后，子项的 `!` 规则不会生效（Git 的父目录限制，
     /// design §10.4）；被阻断的否定规则记录在 [`Exclusion::blocked_reinclude`]。
     #[must_use]
@@ -210,7 +210,7 @@ pub struct Hit {
 pub enum MatchedAt {
     /// 命中查询路径自身。
     Path,
-    /// 命中它的祖先目录；值是该祖先相对 Root 的路径。
+    /// 命中它的祖先目录；值是该祖先相对 Vault 的路径。
     Ancestor(RelativePath),
 }
 
@@ -225,7 +225,7 @@ pub struct Exclusion {
     pub blocked_reinclude: Option<Hit>,
 }
 
-/// 一个 Root 内路径相对排除规则的裁决。
+/// 一个 Vault 内路径相对排除规则的裁决。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
     /// 参与同步。
@@ -429,7 +429,7 @@ mod tests {
             "/root-only.txt"
         );
         included(&rules, "sub/root-only.txt", false);
-        // 含 `/` 的规则按 Git 规则锚定在 Root，而不是任意深度。
+        // 含 `/` 的规则按 Git 规则锚定在 Vault，而不是任意深度。
         excluded(&rules, "sub/anchored.txt", false);
         included(&rules, "x/sub/anchored.txt", false);
     }

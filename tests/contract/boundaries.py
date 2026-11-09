@@ -9,13 +9,13 @@ import os
 from pathlib import Path
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[2]
-TARGET = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+VAULT = Path(__file__).resolve().parents[2]
+TARGET = Path(os.environ.get("CARGO_TARGET_DIR", VAULT / "target"))
 XTASK = TARGET / "debug/xtask"
 
 
 def run(args):
-    return subprocess.run([str(a) for a in args], cwd=ROOT, capture_output=True, text=True, timeout=180)
+    return subprocess.run([str(a) for a in args], cwd=VAULT, capture_output=True, text=True, timeout=180)
 
 
 def main():
@@ -23,12 +23,12 @@ def main():
     common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"])
     assert gitdir.returncode == common.returncode == 0 and gitdir.stdout != common.stdout, "requires isolated linked worktree"
     assert XTASK.is_file(), "build xtask first"
-    artifacts = ROOT / "artifacts/S092"
+    artifacts = VAULT / "artifacts/S092"
     artifacts.mkdir(parents=True, exist_ok=True)
-    lock = ROOT / "Cargo.lock"
+    lock = VAULT / "Cargo.lock"
 
     def negative(label, relative, transform, expected, cargo=False):
-        path = ROOT / relative
+        path = VAULT / relative
         old, old_lock = path.read_bytes(), lock.read_bytes()
         try:
             path.write_text(transform(old.decode()))
@@ -76,11 +76,11 @@ def main():
              lambda text: text + "\nexport type BoundaryNegative = MissingBoundaryType;\n",
              "MissingBoundaryType")
     generated = [
-        ROOT / "packages/api-client/src/generated/types.ts",
-        ROOT / "packages/api-client/src/generated/client.ts",
-        ROOT / "crates/protocol/src/generated/mod.rs",
-        ROOT / "packages/local-ipc-types/src/generated/types.ts",
-        ROOT / "crates/local-ipc/src/generated/mod.rs",
+        VAULT / "packages/api-client/src/generated/types.ts",
+        VAULT / "packages/api-client/src/generated/client.ts",
+        VAULT / "crates/protocol/src/generated/mod.rs",
+        VAULT / "packages/local-ipc-types/src/generated/types.ts",
+        VAULT / "crates/local-ipc/src/generated/mod.rs",
     ]
     before = {path: path.read_bytes() for path in generated}
     assert run([XTASK, "generate"]).returncode == 0

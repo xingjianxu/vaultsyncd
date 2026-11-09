@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, TxId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq, UtcTimestamp};
-use vaultsyncd_platform_linux_server::files::{self, ResolveMode, RootHandle};
-use vaultsyncd_server_core::commit::put::RootCommitGate;
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, TxId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, UtcTimestamp, VaultSeq};
+use vaultsyncd_platform_linux_server::files::{self, ResolveMode, VaultHandle};
+use vaultsyncd_server_core::commit::put::VaultCommitGate;
 use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent, ObjectLayout};
 use vaultsyncd_server_core::observer::{
     ExternalObserver, FileState, InconclusiveReason, ObserverPorts, PassClock, PassLimits,
@@ -51,7 +51,7 @@ pub(super) struct MemStore {
 impl ExternalAdoptStore for MemStore {
     async fn lookup_path(
         &mut self,
-        _root: RootId,
+        _vault: VaultId,
         path: &str,
     ) -> Result<Option<KnownEntry>, ExternalStoreError> {
         Ok(self.entries.get(path).map(|stored| KnownEntry {
@@ -95,7 +95,7 @@ impl ExternalAdoptStore for MemStore {
             entry,
             version: VersionId::from_bytes(marker_id(500 + self.counter)),
             revision,
-            seq: RootSeq::new(self.counter).expect("合法"),
+            seq: VaultSeq::new(self.counter).expect("合法"),
             tx: TxId::from_bytes(marker_id(700 + self.counter)),
             digest: write.content.digest,
             size: write.content.bytes,
@@ -127,7 +127,7 @@ impl ExternalAdoptStore for MemStore {
         Ok(ExternalMoveRecord {
             entry: request.entry,
             revision,
-            seq: RootSeq::new(self.counter).expect("合法"),
+            seq: VaultSeq::new(self.counter).expect("合法"),
             tx: TxId::from_bytes(marker_id(700 + self.counter)),
         })
     }
@@ -155,7 +155,7 @@ impl ExternalAdoptStore for MemStore {
         Ok(ExternalDeleteRecord {
             entry: request.entry,
             revision,
-            seq: RootSeq::new(self.counter).expect("合法"),
+            seq: VaultSeq::new(self.counter).expect("合法"),
             tx: TxId::from_bytes(marker_id(700 + self.counter)),
         })
     }
@@ -164,7 +164,7 @@ impl ExternalAdoptStore for MemStore {
 /// 真实目录夹具：`VAULTSYNCD_TEST_DIR` 指向（btrfs 测试卷上的）基目录时用它，否则用系统临时目录。
 pub(super) struct Lab {
     base: PathBuf,
-    pub(super) root_dir: PathBuf,
+    pub(super) vault_dir: PathBuf,
     pub(super) objects: PathBuf,
 }
 
@@ -174,19 +174,19 @@ impl Lab {
             std::env::var_os("VAULTSYNCD_TEST_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
         let base = parent.join(format!("vaultsyncd-s049-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
-        let root_dir = base.join("root");
+        let vault_dir = base.join("vault");
         let objects = base.join("objects");
-        fs::create_dir_all(&root_dir).expect("建 Root 目录");
+        fs::create_dir_all(&vault_dir).expect("建 Vault 目录");
         fs::create_dir_all(&objects).expect("建对象区目录");
         Lab {
             base,
-            root_dir,
+            vault_dir,
             objects,
         }
     }
 
     pub(super) fn write(&self, relative: &str, data: &[u8]) {
-        let path = self.root_dir.join(relative);
+        let path = self.vault_dir.join(relative);
         fs::create_dir_all(path.parent().expect("有父目录")).expect("建父目录");
         let mut file = File::create(path).expect("写文件");
         file.write_all(data).expect("写内容");
@@ -225,31 +225,32 @@ struct Env {
     work: LinuxWorkTree,
     blobs: LinuxObjectPort,
     store: MemStore,
-    gate: RootCommitGate,
+    gate: VaultCommitGate,
     layout: ObjectLayout,
     observer: ExternalObserver,
     now_ms: u64,
-    root_id: RootId,
+    vault_id: VaultId,
 }
 
 impl Env {
     fn new(lab: &Lab) -> Self {
-        let root = Arc::new(RootHandle::open(&lab.root_dir, ResolveMode::Auto).expect("打开 Root"));
-        let root_id = RootId::from_bytes(marker_id(0x11));
+        let vault =
+            Arc::new(VaultHandle::open(&lab.vault_dir, ResolveMode::Auto).expect("打开 Vault"));
+        let vault_id = VaultId::from_bytes(marker_id(0x11));
         Env {
-            work: LinuxWorkTree::new(root.clone()),
-            blobs: LinuxObjectPort::new(root, &lab.objects),
+            work: LinuxWorkTree::new(vault.clone()),
+            blobs: LinuxObjectPort::new(vault, &lab.objects),
             store: MemStore::default(),
-            gate: RootCommitGate::new(),
+            gate: VaultCommitGate::new(),
             layout: ObjectLayout::new(&lab.objects),
             observer: ExternalObserver::new(
-                root_id,
+                vault_id,
                 StabilityWindow::from_millis(WINDOW_MS).expect("合法"),
                 "ext-s049",
             )
             .expect("前缀合法"),
             now_ms: 1_000,
-            root_id,
+            vault_id,
         }
     }
 
@@ -337,7 +338,7 @@ async fn real_directory_create_and_edit_produce_versions_and_events() {
         "对象不向外部写入者开放写权限"
     );
     assert_eq!(
-        fs::read(lab.root_dir.join("docs/a.txt")).expect("读工作文件"),
+        fs::read(lab.vault_dir.join("docs/a.txt")).expect("读工作文件"),
         b"hello world"
     );
     assert_eq!(
@@ -363,7 +364,7 @@ async fn real_directory_create_and_edit_produce_versions_and_events() {
         fs::read(object_file_of(&lab, &env.store.versions[0].2)).expect("旧对象"),
         b"hello world"
     );
-    let _ = env.root_id;
+    let _ = env.vault_id;
 }
 
 #[tokio::test]
@@ -375,7 +376,7 @@ async fn real_continuous_writes_keep_waiting_until_the_writer_stops() {
     for round in 0..5 {
         let mut file = fs::OpenOptions::new()
             .append(true)
-            .open(lab.root_dir.join("big.log"))
+            .open(lab.vault_dir.join("big.log"))
             .expect("打开追加");
         file.write_all(format!("line {round}\n").as_bytes())
             .expect("追加");
@@ -395,7 +396,7 @@ async fn real_continuous_writes_keep_waiting_until_the_writer_stops() {
         state_of(&done, "big.log"),
         FileState::Adopted { .. }
     ));
-    let final_bytes = fs::read(lab.root_dir.join("big.log")).expect("读最终内容");
+    let final_bytes = fs::read(lab.vault_dir.join("big.log")).expect("读最终内容");
     assert_eq!(env.store.versions[0].1, sha(&final_bytes));
 }
 
@@ -409,7 +410,7 @@ async fn real_rewrite_preserving_mtime_and_rename_over_are_found() {
     assert_eq!(env.store.versions.len(), 2);
 
     // 同样大小的改写，并把 mtime 设回原值：只有 ctime 暴露变化。
-    let path = lab.root_dir.join("keep.txt");
+    let path = lab.vault_dir.join("keep.txt");
     let old_mtime = fs::metadata(&path)
         .expect("元数据")
         .modified()
@@ -424,9 +425,9 @@ async fn real_rewrite_preserving_mtime_and_rename_over_are_found() {
     }
     settle_clock();
     // rename-over：同目录写新文件再替换。
-    let tmp = lab.root_dir.join(".swap.tmp");
+    let tmp = lab.vault_dir.join(".swap.tmp");
     fs::write(&tmp, b"brand new").expect("写临时文件");
-    fs::rename(&tmp, lab.root_dir.join("swap.txt")).expect("rename-over");
+    fs::rename(&tmp, lab.vault_dir.join("swap.txt")).expect("rename-over");
     settle_clock();
 
     let waiting = env.pass(10, 1_000).await;
@@ -462,11 +463,11 @@ async fn real_permission_failure_never_becomes_a_deletion_and_resumes_after_fix(
     let lab = Lab::new("perm");
     lab.write("open/one.txt", b"1");
     lab.write("locked/two.txt", b"2");
-    let locked = lab.root_dir.join("locked");
+    let locked = lab.vault_dir.join("locked");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("收回权限");
     let mut env = Env::new(&lab);
     if File::open(&locked).is_ok() || fs::read_dir(&locked).is_ok() {
-        // 以 root 或带 CAP_DAC_OVERRIDE 运行时权限位不生效，本场景无法构造：如实跳过。
+        // 以 vault 或带 CAP_DAC_OVERRIDE 运行时权限位不生效，本场景无法构造：如实跳过。
         eprintln!("跳过：当前进程可绕过目录权限");
         return;
     }
@@ -507,9 +508,9 @@ async fn real_permission_failure_never_becomes_a_deletion_and_resumes_after_fix(
 async fn real_symlinks_and_non_utf8_names_are_reported_and_never_followed() {
     let lab = Lab::new("skips");
     lab.write("real.txt", b"data");
-    std::os::unix::fs::symlink("/etc/hostname", lab.root_dir.join("link")).expect("建符号链接");
+    std::os::unix::fs::symlink("/etc/hostname", lab.vault_dir.join("link")).expect("建符号链接");
     let odd = lab
-        .root_dir
+        .vault_dir
         .join(std::ffi::OsStr::from_bytes(b"bad-\xff-name"));
     fs::write(&odd, b"odd").expect("写非 UTF-8 名字文件");
     let mut env = Env::new(&lab);

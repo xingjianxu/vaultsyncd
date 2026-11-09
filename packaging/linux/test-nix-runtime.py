@@ -12,7 +12,7 @@ import sys
 import time
 from playwright.sync_api import sync_playwright, expect
 
-ROOT=Path(__file__).resolve().parents[2]
+VAULT=Path(__file__).resolve().parents[2]
 PACKAGE=Path(sys.argv[1])
 RUN=Path("/data")/f"vs-s094-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
@@ -24,9 +24,9 @@ def command(args,**kwargs):
 def main():
     command(["sudo","-n","mkdir","-m","755",RUN]);command(["sudo","-n","chown",f"{os.getuid()}:{os.getgid()}",RUN])
     manifest=json.loads((PACKAGE/"share/vaultsyncd/release-manifest.json").read_text())
-    assert manifest["kind"]=="nix-component-set" and manifest["sourceInfo"]["commit"]==command(["git","rev-parse","HEAD"],cwd=ROOT).strip()
+    assert manifest["kind"]=="nix-component-set" and manifest["sourceInfo"]["commit"]==command(["git","rev-parse","HEAD"],cwd=VAULT).strip()
     for name,digest in manifest["inputs"].items():
-        assert hashlib.sha256((ROOT/name).read_bytes()).hexdigest()==digest
+        assert hashlib.sha256((VAULT/name).read_bytes()).hexdigest()==digest
     for item in manifest["files"]:
         path=PACKAGE/item["path"];assert path.stat().st_size==int(item["size"])
         assert hashlib.sha256(path.read_bytes()).hexdigest()==item["sha256"]
@@ -44,10 +44,10 @@ def main():
     bad=subprocess.run([str(PACKAGE/"bin/vaultsyncd-server"),"--config",str(invalid)],env={**runtime,"VAULTSYNCD_WEB_DIR":str(RUN/"no-web")},text=True,capture_output=True,timeout=10)
     assert bad.returncode==1 and "Web" in bad.stdout+bad.stderr
     assert not (missing/"server.sqlite").exists()
-    state=RUN/"state";state.mkdir(mode=0o700);roots=RUN/"roots";roots.mkdir()
+    state=RUN/"state";state.mkdir(mode=0o700);vaults=RUN/"vaults";vaults.mkdir()
     password=secrets.token_urlsafe(24)
     command([PACKAGE/"bin/vaultsyncd-admin","init","--state-dir",state],input=password+"\n",env=runtime)
-    config=RUN/"service.toml";config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[roots]\nallowed_bases=["{roots}"]\n[log]\nformat="json"\nlevel="info"\n')
+    config=RUN/"service.toml";config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
     log=(RUN/"server.log").open("w")
     service=subprocess.Popen([str(PACKAGE/"bin/vaultsyncd-server"),"--config",str(config)],env=runtime,stdout=log,stderr=log)
     try:

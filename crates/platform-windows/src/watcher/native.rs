@@ -1,7 +1,7 @@
 //! Owned overlapped request: drop cancels and joins I/O before freeing any buffers.
 
 use super::{RescanReason, WatchBatch, decode_notifications};
-use crate::files::RootHandle;
+use crate::files::VaultHandle;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::{ffi::c_void, fs::File, io, ptr};
 
@@ -46,9 +46,9 @@ unsafe extern "system" {
 }
 
 /// A recursive native watch with bounded polling and explicit hint-loss reporting.
-/// The root borrow keeps all ancestor pins alive throughout the asynchronous request.
-pub struct DirectoryWatcher<'root> {
-    root: &'root RootHandle,
+/// The vault borrow keeps all ancestor pins alive throughout the asynchronous request.
+pub struct DirectoryWatcher<'vault> {
+    vault: &'vault VaultHandle,
     directory: File,
     event: File,
     request: Box<Overlapped>,
@@ -56,14 +56,14 @@ pub struct DirectoryWatcher<'root> {
     pending: bool,
 }
 
-impl<'root> DirectoryWatcher<'root> {
+impl<'vault> DirectoryWatcher<'vault> {
     /// Start a native watch; buffer size is bounded to 16 B..64 KiB (tiny sizes test overflow).
     ///
     /// # Errors
     /// Returns ACL, unsupported volume or native registration failures.
-    pub fn new(root: &'root RootHandle, buffer_bytes: usize) -> io::Result<Self> {
-        root.verify()?;
-        let directory = root.watch_file()?;
+    pub fn new(vault: &'vault VaultHandle, buffer_bytes: usize) -> io::Result<Self> {
+        vault.verify()?;
+        let directory = vault.watch_file()?;
         // SAFETY: null security/name pointers are supported; ownership transfers only on success.
         let event = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
         if event.is_null() {
@@ -75,7 +75,7 @@ impl<'root> DirectoryWatcher<'root> {
             ..Overlapped::default()
         });
         let mut watcher = Self {
-            root,
+            vault,
             directory,
             event,
             request,
@@ -113,7 +113,7 @@ impl<'root> DirectoryWatcher<'root> {
     /// Wait at most 60 seconds. Completion failures are explicit rescan requirements.
     #[must_use]
     pub fn poll(&mut self, timeout_ms: u32) -> WatchBatch {
-        if self.root.verify().is_err() {
+        if self.vault.verify().is_err() {
             return WatchBatch::Rescan(RescanReason::WatchLost);
         }
         if !self.pending && self.arm().is_err() {

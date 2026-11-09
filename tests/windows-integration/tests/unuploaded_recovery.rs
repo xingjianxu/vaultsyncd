@@ -129,9 +129,9 @@ async fn counts(path: &Path) -> (i64, i64, i64) {
     conn.close().await.unwrap();
     value
 }
-async fn listing(client: &ApiClient<ReqwestTransport>, root: &str) -> Vec<SnapshotEntry> {
-    let (s, _) = sync::snapshot(client, root).await.unwrap();
-    sync::snapshot_page(client, root, &s.snapshot_id, None)
+async fn listing(client: &ApiClient<ReqwestTransport>, vault: &str) -> Vec<SnapshotEntry> {
+    let (s, _) = sync::snapshot(client, vault).await.unwrap();
+    sync::snapshot_page(client, vault, &s.snapshot_id, None)
         .await
         .unwrap()
         .entries
@@ -223,10 +223,10 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
         .unwrap()
         .join(format!("run-s084-{}", std::process::id()));
     std::fs::create_dir(&base).unwrap();
-    for directory in ["state", "root", "cache", "manual-recovered"] {
+    for directory in ["state", "vault", "cache", "manual-recovered"] {
         std::fs::create_dir(base.join(directory)).unwrap();
     }
-    let root = fixture["root"].as_str().unwrap();
+    let vault = fixture["vault"].as_str().unwrap();
     let binding = id();
     let server = id();
     let config = base.join("agent.json");
@@ -238,7 +238,7 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
         json!({"username":fixture["login"],"password":fixture["password"]}),
     )
     .await;
-    ok("create_binding",json!({"binding_id":binding,"root_id":root,"local_path":base.join("root"),"cache_path":base.join("cache"),"mode":"full"})).await;
+    ok("create_binding",json!({"binding_id":binding,"vault_id":vault,"local_path":base.join("vault"),"cache_path":base.join("cache"),"mode":"full"})).await;
     let end = Instant::now() + Duration::from_secs(60);
     loop {
         let s = status(&mut agent).await;
@@ -252,10 +252,13 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert_eq!(
-        std::fs::read(base.join("root/dirty.txt")).unwrap(),
+        std::fs::read(base.join("vault/dirty.txt")).unwrap(),
         BASELINE
     );
-    assert_eq!(std::fs::read(base.join("root/intent.txt")).unwrap(), INTENT);
+    assert_eq!(
+        std::fs::read(base.join("vault/intent.txt")).unwrap(),
+        INTENT
+    );
     let issued: SessionIssued = serde_json::from_value(fixture["issued"].clone()).unwrap();
     let client =
         ApiClient::new(ClientConfig::new(fixture["url"].as_str().unwrap()).allow_plaintext_http())
@@ -263,7 +266,7 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
     client
         .auth()
         .install(Credentials::from_issued(&issued).unwrap());
-    let before = listing(&client, root).await;
+    let before = listing(&client, vault).await;
     let dirty = before
         .iter()
         .find(|e| e.name == "dirty.txt")
@@ -274,7 +277,7 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
         .find(|e| e.name == "intent.txt")
         .unwrap()
         .clone();
-    std::fs::write(base.join("root/dirty.txt"), UPLOAD).unwrap();
+    std::fs::write(base.join("vault/dirty.txt"), UPLOAD).unwrap();
     let db = base.join("state/client.sqlite");
     let end = Instant::now() + Duration::from_secs(60);
     loop {
@@ -290,14 +293,14 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     ok("pause_binding", json!({"binding_id":binding})).await;
-    std::fs::write(base.join("root/dirty.txt"), LATEST).unwrap();
+    std::fs::write(base.join("vault/dirty.txt"), LATEST).unwrap();
     let lock = OpenOptions::new()
         .read(true)
         .share_mode(1)
-        .open(base.join("root/intent.txt"))
+        .open(base.join("vault/intent.txt"))
         .unwrap();
 
-    let (snapshot, _) = sync::snapshot(&client, root).await.unwrap();
+    let (snapshot, _) = sync::snapshot(&client, vault).await.unwrap();
     let move_request = OperationRequest {
         device_id: id(),
         op_id: id(),
@@ -316,7 +319,7 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
         upload_id: None,
     };
     assert_eq!(
-        sync::submit(&client, root, &move_request)
+        sync::submit(&client, vault, &move_request)
             .await
             .unwrap()
             .state,
@@ -337,7 +340,7 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     agent.terminate(); // Real abnormal exit, only the PID owned by this test.
-    std::fs::write(base.join("root/new-未上传.txt"), NEW).unwrap();
+    std::fs::write(base.join("vault/new-未上传.txt"), NEW).unwrap();
     let before_export = counts(&db).await;
     assert!(before_export.0 > 0 && before_export.1 > 0 && before_export.2 > 0);
     agent = Agent::launch(&exe, &config, &base.join("restarted-agent.log"));
@@ -377,13 +380,13 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
     let busy = OpenOptions::new()
         .write(true)
         .share_mode(0)
-        .open(base.join("root/dirty.txt"))
+        .open(base.join("vault/dirty.txt"))
         .unwrap();
     let incomplete = base.join("incomplete-busy");
     let busy_error = failed_export(&binding, &incomplete).await;
     assert!(!incomplete.join("manifest.json").exists());
     drop(busy);
-    assert_eq!(std::fs::read(base.join("root/dirty.txt")).unwrap(), LATEST);
+    assert_eq!(std::fs::read(base.join("vault/dirty.txt")).unwrap(), LATEST);
     assert_eq!(counts(&db).await, before_export);
     let release = request(
         "release_entry",
@@ -455,13 +458,16 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
             "current",
         ),
     ];
-    assert_eq!(std::fs::read(base.join("root/dirty.txt")).unwrap(), LATEST);
+    assert_eq!(std::fs::read(base.join("vault/dirty.txt")).unwrap(), LATEST);
     assert_eq!(
-        std::fs::read(base.join("root/new-未上传.txt")).unwrap(),
+        std::fs::read(base.join("vault/new-未上传.txt")).unwrap(),
         NEW
     );
-    assert_eq!(std::fs::read(base.join("root/intent.txt")).unwrap(), INTENT);
-    assert!(!base.join("root/remote-renamed.txt").exists());
+    assert_eq!(
+        std::fs::read(base.join("vault/intent.txt")).unwrap(),
+        INTENT
+    );
+    assert!(!base.join("vault/remote-renamed.txt").exists());
     assert_eq!(counts(&db).await, before_export);
     let text = std::fs::read_to_string(package.join("state.json")).unwrap();
     for secret in [
@@ -471,18 +477,18 @@ async fn real_agent_crash_exports_every_unconfirmed_byte_before_recovery() {
     ] {
         assert!(!text.contains(secret));
     }
-    let remote = listing(&client, root).await;
+    let remote = listing(&client, vault).await;
     assert_eq!(
         remote.iter().find(|e| e.name == "dirty.txt").unwrap().hash,
         Some(hash(BASELINE))
     );
     assert!(!remote.iter().any(|e| e.name == "new-未上传.txt"));
-    let report = json!({"ok":true,"binding":binding,"root":root,"run":base,"package":package,"manual_recovered":recovered,"baseline_version":dirty.version_id,"baseline_hash":hash(BASELINE),"durable_counts_before_and_after":before_export,"failures":{"existing_destination":existing_error,"protected_destination":overlap_error,"busy_source":busy_error},"abnormal_exit":true,"real_pending_intent":true,"real_upload_part_transport_failure":true,"sources_unchanged":true,"first_export_precedes_recovery":true,"registered_root_preserved":true,"installation_uninstallation":"not exercised; S099 pending"});
+    let report = json!({"ok":true,"binding":binding,"vault":vault,"run":base,"package":package,"manual_recovered":recovered,"baseline_version":dirty.version_id,"baseline_hash":hash(BASELINE),"durable_counts_before_and_after":before_export,"failures":{"existing_destination":existing_error,"protected_destination":overlap_error,"busy_source":busy_error},"abnormal_exit":true,"real_pending_intent":true,"real_upload_part_transport_failure":true,"sources_unchanged":true,"first_export_precedes_recovery":true,"registered_vault_preserved":true,"installation_uninstallation":"not exercised; S099 pending"});
     ok("logout", json!({})).await;
     agent.terminate();
     drop(lock);
-    // Preserve the registered root, database, cache and package. Unregistering an unsettled
-    // Cloud Files root is not part of recovery and may delete partial content.
+    // Preserve the registered vault, database, cache and package. Unregistering an unsettled
+    // Cloud Files vault is not part of recovery and may delete partial content.
     std::fs::write(
         fixture_path.parent().unwrap().join("result.json"),
         serde_json::to_vec_pretty(&report).unwrap(),

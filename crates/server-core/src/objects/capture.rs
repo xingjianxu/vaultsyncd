@@ -30,7 +30,7 @@ impl ExpectedContent {
 /// 一次采集请求。
 #[derive(Clone, Debug)]
 pub struct CaptureRequest {
-    /// 工作文件路径（Root 内路径；由适配器按 Root 安全路径语义解释）。
+    /// 工作文件路径（Vault 内路径；由适配器按 Vault 安全路径语义解释）。
     pub source: std::path::PathBuf,
     /// 对象区 staging 目录下的独占暂存名。
     pub staging_name: String,
@@ -427,7 +427,7 @@ mod tests {
 
     fn request(digest: ContentDigest, bytes: u64) -> CaptureRequest {
         CaptureRequest {
-            source: PathBuf::from("/root/file.bin"),
+            source: PathBuf::from("/vault/file.bin"),
             staging_name: "cas-1".to_owned(),
             expected: ExpectedContent::new(digest, bytes),
         }

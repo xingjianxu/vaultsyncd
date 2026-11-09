@@ -28,7 +28,7 @@ pub mod raw;
 #[cfg(windows)]
 pub mod release;
 
-pub use identity::{EntryId, FileIdentity, IdentityDecodeError, RootId, VersionHint};
+pub use identity::{EntryId, FileIdentity, IdentityDecodeError, VaultId, VersionHint};
 pub use lifecycle::{HResult, StageError};
 
 #[cfg(windows)]

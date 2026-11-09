@@ -29,10 +29,13 @@ pub(crate) async fn list(
         .get(&binding)
         .ok_or_else(|| PortError::rejected("BINDING_BLOCKED", "binding not active"))?;
     let local = &worker.importer.local;
-    let scan = local.root.scan();
+    let scan = local.vault.scan();
     let complete = scan.permits_missing_comparison();
-    if scan.health == vaultsyncd_platform_windows::files::ScanHealth::RootUnavailable {
-        return Err(PortError::rejected("ROOT_UNAVAILABLE", "root unavailable"));
+    if scan.health == vaultsyncd_platform_windows::files::ScanHealth::VaultUnavailable {
+        return Err(PortError::rejected(
+            "VAULT_UNAVAILABLE",
+            "vault unavailable",
+        ));
     }
     let issues: Vec<String> = scan
         .entries
@@ -120,7 +123,7 @@ pub(crate) async fn list(
                 state.dirty = Dirty::Dirty;
             }
             let busy = state.residency == Residency::Materialized
-                && ProtectedFile::open_under(&local.root, path, true).is_err();
+                && ProtectedFile::open_under(&local.vault, path, true).is_err();
             (
                 match state.residency {
                     Residency::MetadataOnly => "metadata_only",
@@ -130,7 +133,7 @@ pub(crate) async fn list(
                 busy,
             )
         } else {
-            state.availability = vaultsyncd_domain::state::Availability::RootUnavailable;
+            state.availability = vaultsyncd_domain::state::Availability::VaultUnavailable;
             ("unknown", true)
         };
         if remote.is_some_and(|r| {
@@ -165,7 +168,7 @@ pub(crate) async fn list(
             }
         }
         if !complete {
-            state.availability = vaultsyncd_domain::state::Availability::RootUnavailable;
+            state.availability = vaultsyncd_domain::state::Availability::VaultUnavailable;
         }
         state.usage = if busy { Usage::Unknown } else { Usage::Idle };
         let gate = controls.execution_gate(binding, Some(entry)).await?;
@@ -213,7 +216,7 @@ pub(crate) async fn list(
             availability: match state.availability {
                 vaultsyncd_domain::state::Availability::Online => "online",
                 vaultsyncd_domain::state::Availability::Offline => "offline",
-                _ => "root_unavailable",
+                _ => "vault_unavailable",
             }
             .into(),
             remote_apply: match state.remote_apply {
@@ -256,7 +259,7 @@ pub(crate) async fn list(
             availability: if complete {
                 "online"
             } else {
-                "root_unavailable"
+                "vault_unavailable"
             }
             .into(),
             remote_apply: "pending".into(),
@@ -276,7 +279,7 @@ pub(crate) async fn list(
                 entry_id: None,
                 path,
                 status: "unavailable".into(),
-                availability: "root_unavailable".into(),
+                availability: "vault_unavailable".into(),
                 remote_apply: "pending".into(),
                 transfer: "queued".into(),
                 residency: "unknown".into(),

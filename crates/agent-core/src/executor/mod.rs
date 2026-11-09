@@ -58,9 +58,9 @@ pub enum OperationKind {
     UploadContent,
     /// 首次合并时在服务器新建条目（`create`）。
     UploadNewEntry,
-    /// 同 Root 移动（`move`，内容不变）。
+    /// 同 Vault 移动（`move`，内容不变）。
     UploadMove,
-    /// 同 Root 移动并上传该代际的新内容。
+    /// 同 Vault 移动并上传该代际的新内容。
     UploadMoveWithContent,
     /// 迟到分支成为新冲突条目（`create`）。
     CreateConflictCopy,
@@ -260,8 +260,8 @@ pub enum PauseReason {
     UserRequested,
     /// 当前断网；普通操作静默等待，不进入问题页（design §18.2）。
     Offline,
-    /// Root 挂载不可用；暂停该 Root 并保留队列（design §12.3）。
-    RootUnavailable,
+    /// Vault 挂载不可用；暂停该 Vault 并保留队列（design §12.3）。
+    VaultUnavailable,
     /// 绑定被停用（模式切换、解除绑定准备中）。
     BindingDisabled,
 }
@@ -273,7 +273,7 @@ impl PauseReason {
         match self {
             Self::UserRequested => "user_requested",
             Self::Offline => "offline",
-            Self::RootUnavailable => "root_unavailable",
+            Self::VaultUnavailable => "vault_unavailable",
             Self::BindingDisabled => "binding_disabled",
         }
     }

@@ -14,8 +14,8 @@ if [ "${VAULTSYNCD_WINDOWS_SHELL:-}" != "1" ]; then
     exit 1
 fi
 
-root=$(repo_root)
-cd "$root"
+vault=$(repo_root)
+cd "$vault"
 
 # 只安装 rust-toolchain.toml 声明的 channel 与 targets；--profile minimal 不下载
 # rustfmt/clippy/docs（Linux 侧由锁定 nixpkgs 提供同版本组件）。

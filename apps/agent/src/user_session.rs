@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
-use vaultsyncd_platform_windows::files::RootHandle;
+use vaultsyncd_platform_windows::files::VaultHandle;
 fn identity() -> io::Result<String> {
     let mut bytes = [0; 16];
     OsRng
@@ -19,9 +19,9 @@ fn identity() -> io::Result<String> {
         .map_err(|e| io::Error::other(e.to_string()))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
-fn child(parent: &RootHandle, path: &Path, name: &str) -> io::Result<RootHandle> {
+fn child(parent: &VaultHandle, path: &Path, name: &str) -> io::Result<VaultHandle> {
     match std::fs::symlink_metadata(path.join(name)) {
-        Ok(_) => RootHandle::open(&path.join(name)),
+        Ok(_) => VaultHandle::open(&path.join(name)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => parent.create_new_directory(name),
         Err(e) => Err(e),
     }
@@ -33,7 +33,7 @@ pub fn prepare(local_app_data: &Path) -> io::Result<PathBuf> {
             "LOCALAPPDATA must be an absolute user directory",
         ));
     }
-    let base = RootHandle::open(local_app_data)?;
+    let base = VaultHandle::open(local_app_data)?;
     let product = child(&base, local_app_data, "vaultsyncd")?;
     let product_path = local_app_data.join("vaultsyncd");
     let profile = child(&product, &product_path, "agent")?;

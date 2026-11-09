@@ -75,7 +75,7 @@ struct UnicodeString {
 #[repr(C)]
 struct ObjectAttributes {
     length: u32,
-    root: *mut c_void,
+    vault: *mut c_void,
     name: *mut UnicodeString,
     attributes: u32,
     security: *const c_void,
@@ -163,7 +163,7 @@ pub(crate) fn open_child_shared(
     };
     let attributes = ObjectAttributes {
         length: size_of::<ObjectAttributes>() as u32,
-        root: parent.as_raw_handle(),
+        vault: parent.as_raw_handle(),
         name: &mut text,
         attributes: 0x40,
         security: std::ptr::null(),
@@ -388,15 +388,15 @@ impl NameEquivalence for NativeNames {
     }
 }
 
-/// Pinned local root and all of its ancestors. Only local drive paths are supported.
-pub struct RootHandle {
+/// Pinned local vault and all of its ancestors. Only local drive paths are supported.
+pub struct VaultHandle {
     path: PathBuf,
     pins: Vec<File>,
     ancestors: Vec<FileIdentity>,
     identity: FileIdentity,
 }
 
-impl RootHandle {
+impl VaultHandle {
     /// Open an existing directory without following any reparse in its ancestry.
     ///
     /// # Errors
@@ -416,7 +416,7 @@ impl RootHandle {
         let drive_pin = open(&current)?;
         let drive_meta = metadata(&drive_pin)?;
         if !drive_meta.directory || drive_meta.reparse_tag != 0 {
-            return Err(invalid("drive root is a reparse or non-directory"));
+            return Err(invalid("drive vault is a reparse or non-directory"));
         }
         let mut pins = vec![drive_pin];
         let mut ancestors = vec![drive_meta.identity];
@@ -424,18 +424,18 @@ impl RootHandle {
         let count = components.len();
         for (index, component) in components.into_iter().enumerate() {
             let Component::Normal(name) = component else {
-                return Err(invalid("unsafe root component"));
+                return Err(invalid("unsafe vault component"));
             };
             let text = name
                 .to_str()
-                .ok_or_else(|| invalid("root name is not UTF-8"))?;
+                .ok_or_else(|| invalid("vault name is not UTF-8"))?;
             let file = open_relative(pins.last().expect("drive pin"), text, true)?;
             let meta = metadata(&file)?;
             if !meta.directory
                 || (meta.reparse_tag != 0 && (index + 1 != count || !meta.supported()))
             {
                 return Err(invalid(
-                    "root ancestry contains an unsupported reparse or non-directory",
+                    "vault ancestry contains an unsupported reparse or non-directory",
                 ));
             }
             current.push(name);
@@ -444,7 +444,7 @@ impl RootHandle {
         }
         let identity = *ancestors
             .last()
-            .ok_or_else(|| invalid("root identity absent"))?;
+            .ok_or_else(|| invalid("vault identity absent"))?;
         Ok(Self {
             path: current,
             pins,
@@ -456,7 +456,7 @@ impl RootHandle {
     /// Create a fresh child directory under continuous ancestor handles, never replacing a name.
     pub fn create_new_directory(&self, name: &str) -> io::Result<Self> {
         self.verify()?;
-        let file = open_child(self.root_file(), name, true, false, 0x0010_0081, true)?;
+        let file = open_child(self.vault_file(), name, true, false, 0x0010_0081, true)?;
         let meta = metadata(&file)?;
         if meta.reparse_tag != 0 {
             return Err(invalid("new directory is a reparse"));
@@ -490,14 +490,14 @@ impl RootHandle {
         })
     }
 
-    /// Create a new ordinary file under the pinned root; existing objects are never overwritten.
+    /// Create a new ordinary file under the pinned vault; existing objects are never overwritten.
     pub fn create_new_file(&self, name: &str) -> io::Result<File> {
         vaultsyncd_fs_common::name::validate_name(name).map_err(invalid)?;
         self.verify()?;
-        open_child_shared(self.root_file(), name, false, false, 0x0012_019f, true, 1)
+        open_child_shared(self.vault_file(), name, false, false, 0x0012_019f, true, 1)
     }
 
-    /// Root's physical identity.
+    /// Vault's physical identity.
     #[must_use]
     pub fn identity(&self) -> FileIdentity {
         self.identity
@@ -515,18 +515,18 @@ impl RootHandle {
         self.ancestors.contains(&other.identity) || other.ancestors.contains(&self.identity)
     }
 
-    /// Recheck the pinned root's physical identity.
+    /// Recheck the pinned vault's physical identity.
     ///
     /// # Errors
-    /// An inaccessible or changed root never becomes an empty successful scan.
+    /// An inaccessible or changed vault never becomes an empty successful scan.
     pub fn verify(&self) -> io::Result<()> {
         let file = self
             .pins
             .last()
-            .ok_or_else(|| invalid("missing root pin"))?;
+            .ok_or_else(|| invalid("missing vault pin"))?;
         let current = metadata(file)?;
         if current.identity != self.identity || !current.supported() {
-            return Err(io::Error::other("root identity changed"));
+            return Err(io::Error::other("vault identity changed"));
         }
         // Recheck current ACLs through a fresh rooted open, without backup intent.
         // Existing handles keep granted access even after a deny ACL is installed.
@@ -535,15 +535,15 @@ impl RootHandle {
                 .path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .ok_or_else(|| invalid("root has no name"))?;
+                .ok_or_else(|| invalid("vault has no name"))?;
             let checked = open_relative(&self.pins[self.pins.len() - 2], name, true)?;
             if metadata(&checked)?.identity != self.identity {
-                return Err(io::Error::other("root identity changed"));
+                return Err(io::Error::other("vault identity changed"));
             }
         }
         let reopened = open(&self.path)?;
         if metadata(&reopened)?.identity != self.identity {
-            return Err(io::Error::other("root path or volume changed"));
+            return Err(io::Error::other("vault path or volume changed"));
         }
         Ok(())
     }
@@ -562,7 +562,7 @@ impl RootHandle {
             }
             let parent = pins
                 .last()
-                .unwrap_or_else(|| self.pins.last().expect("root pin"));
+                .unwrap_or_else(|| self.pins.last().expect("vault pin"));
             let file = open_relative(parent, name, index + 1 < parts.len() || directory_end)?;
             let meta = metadata(&file)?;
             if meta.identity.volume != self.identity.volume {
@@ -594,7 +594,7 @@ impl RootHandle {
         let leaf = parts.last().ok_or_else(|| invalid("empty path"))?;
         let held;
         let parent = if parts.len() == 1 {
-            self.pins.last().expect("root pin")
+            self.pins.last().expect("vault pin")
         } else {
             held = self.walk(&parts[..parts.len() - 1].join("/"), true)?.0;
             held.last().expect("parent pin")
@@ -676,12 +676,12 @@ impl RootHandle {
     #[must_use]
     pub fn scan(&self) -> ScanReport {
         let mut report = ScanReport {
-            root: self.identity,
+            vault: self.identity,
             health: ScanHealth::Complete,
             entries: vec![],
         };
         if self.verify().is_err() {
-            report.health = ScanHealth::RootUnavailable;
+            report.health = ScanHealth::VaultUnavailable;
             return report;
         }
         let mut pending = vec![String::new()];
@@ -689,7 +689,7 @@ impl RootHandle {
             pending.extend(self.scan_directory(&relative, &mut report));
         }
         if self.verify().is_err() {
-            report.health = ScanHealth::RootUnavailable;
+            report.health = ScanHealth::VaultUnavailable;
         }
         report
     }
@@ -710,7 +710,7 @@ impl RootHandle {
         let directory = held
             .as_ref()
             .and_then(|(pins, _)| pins.last())
-            .unwrap_or_else(|| self.pins.last().expect("root pin"));
+            .unwrap_or_else(|| self.pins.last().expect("vault pin"));
         let listing = match directory_names(directory) {
             Ok(value) => value,
             Err(error) => {
@@ -766,7 +766,7 @@ impl RootHandle {
                 .path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .ok_or_else(|| invalid("root has no name"))?;
+                .ok_or_else(|| invalid("vault has no name"))?;
             open_relative_mode(&self.pins[self.pins.len() - 2], name, true, true)?
         } else {
             OpenOptions::new()
@@ -777,17 +777,17 @@ impl RootHandle {
         };
         let observed = metadata(&file)?;
         if observed.identity != self.identity || observed.reparse_tag != 0 {
-            return Err(io::Error::other("watch root identity changed"));
+            return Err(io::Error::other("watch vault identity changed"));
         }
         Ok(file)
     }
 
-    pub(crate) fn root_path(&self) -> &Path {
+    pub(crate) fn vault_path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) fn root_file(&self) -> &File {
-        self.pins.last().expect("root pin")
+    pub(crate) fn vault_file(&self) -> &File {
+        self.pins.last().expect("vault pin")
     }
 }
 

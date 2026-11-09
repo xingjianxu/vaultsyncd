@@ -5,33 +5,33 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use vaultsyncd_domain::ids::RootId;
+use vaultsyncd_domain::ids::VaultId;
 use vaultsyncd_platform_linux_server::{
-    files::{ResolveMode, RootHandle, RootSnapshot, root::RootSpecVerifyError},
+    files::{ResolveMode, VaultHandle, VaultSnapshot, vault::VaultSpecVerifyError},
     mounts::{health, probe::ScanPolicy},
 };
-use vaultsyncd_server_core::api::roots::CandidateFacts;
+use vaultsyncd_server_core::api::vaults::CandidateFacts;
 use vaultsyncd_server_store::{
     db::Database,
-    roots::{RootHealth, RootRecord},
+    vaults::{VaultHealth, VaultRecord},
 };
 
-type Entry = Result<Arc<RootHandle>, String>;
-pub(crate) struct RootFences {
+type Entry = Result<Arc<VaultHandle>, String>;
+pub(crate) struct VaultFences {
     state: PathBuf,
-    roots: Mutex<HashMap<RootId, Entry>>,
+    vaults: Mutex<HashMap<VaultId, Entry>>,
 }
-impl RootFences {
+impl VaultFences {
     pub(crate) fn new(state: &Path) -> Self {
         Self {
             state: state.to_owned(),
-            roots: Mutex::new(HashMap::new()),
+            vaults: Mutex::new(HashMap::new()),
         }
     }
     /// Called exactly once before startup replay, listeners or background work.
     pub(crate) async fn load(db: &Database, state: &Path) -> Result<Self, String> {
         let mut conn = db.pool().acquire().await.map_err(|e| e.to_string())?;
-        let records = vaultsyncd_server_store::roots::all_roots(&mut conn)
+        let records = vaultsyncd_server_store::vaults::all_vaults(&mut conn)
             .await
             .map_err(|e| e.to_string())?;
         drop(conn);
@@ -39,24 +39,24 @@ impl RootFences {
         for record in records {
             let entry = table.admit(&record, true);
             table
-                .roots
+                .vaults
                 .lock()
-                .map_err(|_| "root_fence_poisoned")?
+                .map_err(|_| "vault_fence_poisoned")?
                 .insert(record.id, entry);
         }
         Ok(table)
     }
-    fn admit(&self, record: &RootRecord, startup: bool) -> Entry {
-        let old = std::str::from_utf8(&record.root_file_identity)
+    fn admit(&self, record: &VaultRecord, startup: bool) -> Entry {
+        let old = std::str::from_utf8(&record.vault_file_identity)
             .ok()
-            .and_then(|s| RootSnapshot::parse_spec(s).ok())
-            .ok_or("invalid_root_identity")?;
+            .and_then(|s| VaultSnapshot::parse_spec(s).ok())
+            .ok_or("invalid_vault_identity")?;
         let path = Path::new(&record.absolute_path);
         let (_, candidate) =
-            crate::roots::probe_candidate(path, &self.state, &[], &ScanPolicy::default());
+            crate::vaults::probe_candidate(path, &self.state, &[], &ScanPolicy::default());
         let CandidateFacts::Accepted {
             volume_identity,
-            root_identity,
+            vault_identity,
         } = candidate
         else {
             return Err("storage_admission_failed".into());
@@ -64,13 +64,13 @@ impl RootFences {
         if volume_identity != record.volume_identity {
             return Err("filesystem_changed".into());
         }
-        let current = RootSnapshot::parse_spec(
-            std::str::from_utf8(&root_identity).map_err(|_| "invalid_root_identity")?,
+        let current = VaultSnapshot::parse_spec(
+            std::str::from_utf8(&vault_identity).map_err(|_| "invalid_vault_identity")?,
         )
-        .map_err(|_| "invalid_root_identity")?;
+        .map_err(|_| "invalid_vault_identity")?;
         persistent_match(&old, &current)?;
         // New registrations in a live process never get a namespace/device rebase.
-        let handle = RootHandle::open(path, ResolveMode::Auto).map_err(|e| e.code().to_owned())?;
+        let handle = VaultHandle::open(path, ResolveMode::Auto).map_err(|e| e.code().to_owned())?;
         current
             .compare(handle.facts())
             .map_err(|e| e.code().to_owned())?;
@@ -81,23 +81,23 @@ impl RootFences {
         Self::check(&handle)?;
         Ok(Arc::new(handle))
     }
-    pub(crate) fn open(&self, record: &RootRecord) -> Entry {
-        if record.health != RootHealth::Healthy {
+    pub(crate) fn open(&self, record: &VaultRecord) -> Entry {
+        if record.health != VaultHealth::Healthy {
             return Err("stored_unavailable".into());
         }
         let cached = self
-            .roots
+            .vaults
             .lock()
-            .map_err(|_| "root_fence_poisoned")?
+            .map_err(|_| "vault_fence_poisoned")?
             .get(&record.id)
             .cloned();
         let entry = match cached {
             Some(entry) => entry,
             None => {
                 let candidate = self.admit(record, false);
-                self.roots
+                self.vaults
                     .lock()
-                    .map_err(|_| "root_fence_poisoned")?
+                    .map_err(|_| "vault_fence_poisoned")?
                     .entry(record.id)
                     .or_insert(candidate)
                     .clone()
@@ -105,18 +105,18 @@ impl RootFences {
         };
         let handle = entry?;
         if handle.path() != Path::new(&record.absolute_path) {
-            return Err("root_path_changed".into());
+            return Err("vault_path_changed".into());
         }
         Self::check(&handle)?;
         Ok(handle)
     }
-    fn check(handle: &RootHandle) -> Result<(), String> {
+    fn check(handle: &VaultHandle) -> Result<(), String> {
         handle.verify().map_err(|e| match e {
-            RootSpecVerifyError::Drift(d) => d.code().to_owned(),
-            RootSpecVerifyError::Mount(m) => m.detail_code().to_owned(),
-            _ => "root_unreadable".into(),
+            VaultSpecVerifyError::Drift(d) => d.code().to_owned(),
+            VaultSpecVerifyError::Mount(m) => m.detail_code().to_owned(),
+            _ => "vault_unreadable".into(),
         })?;
-        let facts = health::verify_root_mount(handle.path(), handle.snapshot())
+        let facts = health::verify_vault_mount(handle.path(), handle.snapshot())
             .map_err(|e| e.detail_code().to_owned())?
             .facts;
         if facts.mount.has_option("ro")
@@ -129,7 +129,7 @@ impl RootFences {
         health::check_access_dir(handle.path()).map_err(|_| "permission_denied".to_owned())
     }
 }
-fn persistent_match(old: &RootSnapshot, current: &RootSnapshot) -> Result<(), &'static str> {
+fn persistent_match(old: &VaultSnapshot, current: &VaultSnapshot) -> Result<(), &'static str> {
     if old.backend != current.backend || old.fs_magic != current.fs_magic {
         return Err("backend_changed");
     }
@@ -151,8 +151,8 @@ fn persistent_match(old: &RootSnapshot, current: &RootSnapshot) -> Result<(), &'
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn snapshot() -> RootSnapshot {
-        RootSnapshot::parse_spec("resolved_path=/fixture\nbackend=btrfs\nfs_magic=2435016766\nfsid=01010101010101010101010101010101\nsubvolume_id=5\nmount_id=100\ndev_major=0\ndev_minor=8\ninode=258\nbtime=100.123\n").unwrap()
+    fn snapshot() -> VaultSnapshot {
+        VaultSnapshot::parse_spec("resolved_path=/fixture\nbackend=btrfs\nfs_magic=2435016766\nfsid=01010101010101010101010101010101\nsubvolume_id=5\nmount_id=100\ndev_major=0\ndev_minor=8\ninode=258\nbtime=100.123\n").unwrap()
     }
     #[test]
     fn only_startup_persistent_match_excludes_transient_numbers() {

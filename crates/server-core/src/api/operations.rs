@@ -1,4 +1,4 @@
-//! 操作端点（design §15.2 `POST /v1/roots/{root}/operations`、`GET /v1/roots/{root}/operations/{op}`、
+//! 操作端点（design §15.2 `POST /v1/vaults/{vault}/operations`、`GET /v1/vaults/{vault}/operations/{op}`、
 //! §15.3 修改提交示例、§15.4 错误契约、I06）。
 //!
 //! 边界：本模块决定“这次命令能不能受理、已有的操作记录怎么回答、失败怎么映射成错误码与状态码”，
@@ -7,14 +7,14 @@
 //!
 //! 固定的顺序与判据：
 //!
-//! 1. **先 epoch，后形状**：[`admit`] 先比较请求携带的服务器 epoch 与 Root 当前 epoch，不符即
+//! 1. **先 epoch，后形状**：[`admit`] 先比较请求携带的服务器 epoch 与 Vault 当前 epoch，不符即
 //!    `EPOCH_CHANGED`（design §15.4：客户端进入保留基线的重建流程）；随后才是命令自身的形状校验。
-//!    Root 当前不可写（挂载/身份核对失败）时同样在动任何状态之前返回 `ROOT_UNAVAILABLE`。
-//! 2. **幂等键是 `(root, device, op_id)`**（design §7.2、I06）：同一键同一语义摘要就是重放，必须
+//!    Vault 当前不可写（挂载/身份核对失败）时同样在动任何状态之前返回 `VAULT_UNAVAILABLE`。
+//! 2. **幂等键是 `(vault, device, op_id)`**（design §7.2、I06）：同一键同一语义摘要就是重放，必须
 //!    返回已记录的结果而不重做；同一键不同摘要说明客户端把同一个身份用于了两个请求，是协议错误
 //!    `OP_ID_REUSED`，绝不用旧结果回答新请求（[`decide_replay`]）。
 //! 3. **pending 不是 committed**（design I01）：`pending` 只表示“已受理、还没有业务结果”，它的回答
-//!    必须是 202 且**不携带** revision/root_seq/version/entry 一类“已完成”字段
+//!    必须是 202 且**不携带** revision/vault_seq/version/entry 一类“已完成”字段
 //!    （[`RecordedOutcome::http_status`]、[`is_synced`]）。
 //! 4. **摘要只覆盖语义**：命令种类、身份、基线 revision、上传引用、本地代际、冲突策略与命名空间
 //!    目标参与摘要（[`OperationRequest::digest_fields`]）；`op_id` 与 `device_id` 是幂等键本身、
@@ -27,7 +27,7 @@
 use std::fmt;
 
 use vaultsyncd_domain::ids::{DeviceId, EntryId, OpId, UploadId, VersionId};
-use vaultsyncd_domain::version::{Generation, Revision, RootSeq, ServerEpoch};
+use vaultsyncd_domain::version::{Generation, Revision, ServerEpoch, VaultSeq};
 
 /// 命令种类闭集（design §15.2：Put/Create/Move/Delete/Restore）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub enum OperationKind {
     PutContent,
     /// 在已有父目录下新建条目。
     Create,
-    /// 同 Root 内移动条目（父关系/名称改变，内容引用不变）。
+    /// 同 Vault 内移动条目（父关系/名称改变，内容引用不变）。
     Move,
     /// 删除条目；目录另带服务端给出的子树 token。
     Delete,
@@ -334,25 +334,25 @@ impl OperationRequest {
     }
 }
 
-/// 服务端为这次命令能确认的 Root 事实（适配器从 `roots` 行给出）。
+/// 服务端为这次命令能确认的 Vault 事实（适配器从 `vaults` 行给出）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RootFacts {
-    /// Root 当前 epoch：恢复后更换，旧 epoch 的预期不得当成同一事实（design §7.1）。
+pub struct VaultFacts {
+    /// Vault 当前 epoch：恢复后更换，旧 epoch 的预期不得当成同一事实（design §7.1）。
     pub epoch: ServerEpoch,
-    /// Root 当前是否可写（health 为 healthy 且写入门已开放）。
+    /// Vault 当前是否可写（health 为 healthy 且写入门已开放）。
     pub accepts_writes: bool,
 }
 
-/// 受理判定：epoch 与 Root 可用性先于命令形状（[`admit`] 的注释给固定顺序）。
+/// 受理判定：epoch 与 Vault 可用性先于命令形状（[`admit`] 的注释给固定顺序）。
 ///
 /// # Errors
 ///
-/// Root 不可写 → [`OperationFailure::RootUnavailable`]；epoch 不符 →
+/// Vault 不可写 → [`OperationFailure::VaultUnavailable`]；epoch 不符 →
 /// [`OperationFailure::EpochChanged`]；形状不符 → [`OperationFailure::InvalidRequest`] 或
 /// [`OperationFailure::InvalidName`]。
-pub fn admit(facts: RootFacts, request: &OperationRequest) -> Result<(), OperationFailure> {
+pub fn admit(facts: VaultFacts, request: &OperationRequest) -> Result<(), OperationFailure> {
     if !facts.accepts_writes {
-        return Err(OperationFailure::RootUnavailable);
+        return Err(OperationFailure::VaultUnavailable);
     }
     if request.expected_epoch != facts.epoch {
         return Err(OperationFailure::EpochChanged {
@@ -366,14 +366,14 @@ pub fn admit(facts: RootFacts, request: &OperationRequest) -> Result<(), Operati
 /// 操作日志里已有记录的业务结果（`operations` 行的 `state` 与结果列）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordedOutcome {
-    /// 已提交：结果与该批次占用的 RootSeq 都是终态。
+    /// 已提交：结果与该批次占用的 VaultSeq 都是终态。
     Committed {
-        /// 该批次占用的 RootSeq。
-        root_seq: RootSeq,
+        /// 该批次占用的 VaultSeq。
+        vault_seq: VaultSeq,
         /// 紧凑结果（wire `OperationResult` 的 JSON）。
         result_json: String,
     },
-    /// 已受理、还没有业务结果：不占 RootSeq，不判已同步。
+    /// 已受理、还没有业务结果：不占 VaultSeq，不判已同步。
     Pending,
     /// 已稳定拒绝：同一 OpId 的重复请求得到同一个结论。
     Rejected {
@@ -426,13 +426,13 @@ pub fn decide_replay<'a>(
 /// 命令受理或重放失败的分类（HTTP 层据此给状态码与错误码，不另写映射）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OperationFailure {
-    /// Root 当前不可写（挂载/身份核对失败或写入门关闭）：暂停该 Root，保留队列。
-    RootUnavailable,
+    /// Vault 当前不可写（挂载/身份核对失败或写入门关闭）：暂停该 Vault，保留队列。
+    VaultUnavailable,
     /// 请求携带的 epoch 不是服务器当前 epoch：客户端进入保留基线的重建流程。
     EpochChanged {
         /// 请求携带的 epoch。
         expected: ServerEpoch,
-        /// Root 当前的 epoch。
+        /// Vault 当前的 epoch。
         actual: ServerEpoch,
     },
     /// 同一 OpId 已被不同语义的请求占用（协议错误，停止而不是重试）。
@@ -467,7 +467,7 @@ pub enum OperationFailure {
         /// 原因文本。
         detail: String,
     },
-    /// 操作记录不存在、不属于该 Root 或不属于该登录会话（三者不区分）。
+    /// 操作记录不存在、不属于该 Vault 或不属于该登录会话（三者不区分）。
     UnknownOperation,
     /// 历史版本/回收站内容已过保留期或不可读：解释历史已过期，不拿同路径新内容冒充（410）。
     VersionGone {
@@ -499,7 +499,7 @@ impl OperationFailure {
     #[must_use]
     pub const fn design_error_code(&self) -> &'static str {
         match self {
-            Self::RootUnavailable => "ROOT_UNAVAILABLE",
+            Self::VaultUnavailable => "VAULT_UNAVAILABLE",
             Self::EpochChanged { .. } => "EPOCH_CHANGED",
             Self::OpIdReused => "OP_ID_REUSED",
             Self::BaseMismatch { .. } => "BASE_MISMATCH",
@@ -520,7 +520,7 @@ impl OperationFailure {
     #[must_use]
     pub const fn http_status(&self) -> u16 {
         match self {
-            Self::RootUnavailable | Self::Storage { .. } | Self::ExecutorUnavailable => 503,
+            Self::VaultUnavailable | Self::Storage { .. } | Self::ExecutorUnavailable => 503,
             Self::EpochChanged { .. } | Self::VersionGone { .. } => 410,
             Self::OpIdReused
             | Self::BaseMismatch { .. }
@@ -536,11 +536,11 @@ impl OperationFailure {
     /// 同一请求稍后原样重试是否可能成功。
     ///
     /// 基线/子树/epoch 类失败都要求客户端先刷新事实再重新规划，因此对“原样重试”为假；
-    /// Root 不可用、执行器未装配、存储失败与空间不足是服务端状态，原样重试在服务端恢复后可能成功。
+    /// Vault 不可用、执行器未装配、存储失败与空间不足是服务端状态，原样重试在服务端恢复后可能成功。
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
         match self {
-            Self::RootUnavailable
+            Self::VaultUnavailable
             | Self::Storage { .. }
             | Self::ExecutorUnavailable
             | Self::NoSpace => true,
@@ -561,7 +561,7 @@ impl OperationFailure {
 impl fmt::Display for OperationFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RootUnavailable => f.write_str("Root 当前不可写，已暂停该目录的写操作"),
+            Self::VaultUnavailable => f.write_str("Vault 当前不可写，已暂停该目录的写操作"),
             Self::EpochChanged { expected, actual } => write!(
                 f,
                 "请求的服务器 epoch {} 不是当前 epoch {}",
@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn admit_reports_unavailable_root_and_stale_epoch_before_shape() {
+    fn admit_reports_unavailable_vault_and_stale_epoch_before_shape() {
         let stale = OperationRequest {
             expected_epoch: ServerEpoch::new(6).expect("epoch"),
             // 形状也不成立：epoch 必须先被回答。
@@ -766,7 +766,7 @@ mod tests {
         };
         assert_eq!(
             admit(
-                RootFacts {
+                VaultFacts {
                     epoch: ServerEpoch::new(7).expect("epoch"),
                     accepts_writes: true,
                 },
@@ -779,16 +779,16 @@ mod tests {
         );
         assert_eq!(
             admit(
-                RootFacts {
+                VaultFacts {
                     epoch: ServerEpoch::new(7).expect("epoch"),
                     accepts_writes: false,
                 },
                 &put()
             ),
-            Err(OperationFailure::RootUnavailable)
+            Err(OperationFailure::VaultUnavailable)
         );
         admit(
-            RootFacts {
+            VaultFacts {
                 epoch: ServerEpoch::new(7).expect("epoch"),
                 accepts_writes: true,
             },
@@ -854,8 +854,8 @@ mod tests {
     fn failure_codes_statuses_and_retryability_follow_the_contract_table() {
         let cases = [
             (
-                OperationFailure::RootUnavailable,
-                "ROOT_UNAVAILABLE",
+                OperationFailure::VaultUnavailable,
+                "VAULT_UNAVAILABLE",
                 503,
                 true,
             ),

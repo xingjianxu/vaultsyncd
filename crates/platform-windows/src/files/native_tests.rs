@@ -32,15 +32,15 @@ impl Drop for Sandbox {
 fn native_identity_tracks_object_not_contents_or_path_spelling() {
     let sandbox = Sandbox::new();
     std::fs::write(sandbox.0.join("a.txt"), b"one").unwrap();
-    let root = RootHandle::open(&sandbox.0).unwrap();
-    let first = root.inspect("a.txt").unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
+    let first = vault.inspect("a.txt").unwrap();
     std::fs::write(sandbox.0.join("a.txt"), b"two").unwrap();
-    assert_eq!(root.inspect("A.TXT").unwrap().identity, first.identity);
+    assert_eq!(vault.inspect("A.TXT").unwrap().identity, first.identity);
     std::fs::write(sandbox.0.join("replacement"), b"two").unwrap();
     std::fs::remove_file(sandbox.0.join("a.txt")).unwrap();
     std::fs::rename(sandbox.0.join("replacement"), sandbox.0.join("a.txt")).unwrap();
-    assert_ne!(root.inspect("a.txt").unwrap().identity, first.identity);
-    let report = root.scan();
+    assert_ne!(vault.inspect("a.txt").unwrap().identity, first.identity);
+    let report = vault.scan();
     assert_eq!(report.health, ScanHealth::Complete, "{:?}", report.entries);
     assert_eq!(report.entries.len(), 1);
 }
@@ -64,12 +64,12 @@ fn native_names_match_real_case_and_unicode_creation_without_normalization() {
     assert!(!NativeNames.equivalent("é.txt", "e\u{301}.txt"));
     std::fs::write(sandbox.0.join("é.txt"), b"one").unwrap();
     std::fs::write(sandbox.0.join("e\u{301}.txt"), b"two").unwrap();
-    let root = RootHandle::open(&sandbox.0).unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
     assert_ne!(
-        root.inspect("é.txt").unwrap().identity,
-        root.inspect("e\u{301}.txt").unwrap().identity
+        vault.inspect("é.txt").unwrap().identity,
+        vault.inspect("e\u{301}.txt").unwrap().identity
     );
-    assert!(root.scan().permits_missing_comparison());
+    assert!(vault.scan().permits_missing_comparison());
 }
 
 #[test]
@@ -78,12 +78,12 @@ fn native_overlap_is_identity_and_component_based_and_pins_prevent_rename() {
     for dir in ["a/child", "abc"] {
         std::fs::create_dir_all(sandbox.0.join(dir)).unwrap();
     }
-    let root = RootHandle::open(&sandbox.0.join("a")).unwrap();
-    let child = RootHandle::open(&sandbox.0.join("a/child")).unwrap();
-    let sibling = RootHandle::open(&sandbox.0.join("abc")).unwrap();
-    assert!(root.overlaps(&child));
-    assert!(child.overlaps(&root));
-    assert!(!root.overlaps(&sibling));
+    let vault = VaultHandle::open(&sandbox.0.join("a")).unwrap();
+    let child = VaultHandle::open(&sandbox.0.join("a/child")).unwrap();
+    let sibling = VaultHandle::open(&sandbox.0.join("abc")).unwrap();
+    assert!(vault.overlaps(&child));
+    assert!(child.overlaps(&vault));
+    assert!(!vault.overlaps(&sibling));
     assert!(std::fs::rename(sandbox.0.join("a"), sandbox.0.join("moved")).is_err());
 }
 
@@ -126,8 +126,8 @@ fn native_drive_alias_and_hard_links_keep_physical_identity() {
     let _alias = Alias(letter.clone());
     std::fs::write(sandbox.0.join("one"), b"kept").unwrap();
     std::fs::hard_link(sandbox.0.join("one"), sandbox.0.join("two")).unwrap();
-    let physical = RootHandle::open(&sandbox.0).unwrap();
-    let alias = RootHandle::open(Path::new(&format!("{letter}\\"))).unwrap();
+    let physical = VaultHandle::open(&sandbox.0).unwrap();
+    let alias = VaultHandle::open(Path::new(&format!("{letter}\\"))).unwrap();
     assert_eq!(physical.identity(), alias.identity());
     assert!(physical.overlaps(&alias));
     assert_eq!(
@@ -147,7 +147,7 @@ fn native_drive_alias_and_hard_links_keep_physical_identity() {
 #[test]
 fn native_junction_is_never_followed_and_external_content_is_unchanged() {
     let sandbox = Sandbox::new();
-    std::fs::create_dir(sandbox.0.join("root")).unwrap();
+    std::fs::create_dir(sandbox.0.join("vault")).unwrap();
     std::fs::create_dir(sandbox.0.join("outside")).unwrap();
     std::fs::write(sandbox.0.join("outside/secret"), b"external-proof").unwrap();
     let result = Command::new("cmd")
@@ -155,7 +155,7 @@ fn native_junction_is_never_followed_and_external_content_is_unchanged() {
         .arg(
             sandbox
                 .0
-                .join("root/link")
+                .join("vault/link")
                 .to_string_lossy()
                 .replace('/', "\\"),
         )
@@ -169,10 +169,10 @@ fn native_junction_is_never_followed_and_external_content_is_unchanged() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    let root = RootHandle::open(&sandbox.0.join("root")).unwrap();
-    assert!(root.inspect("link/secret").is_err());
-    assert!(RootHandle::open(&sandbox.0.join("root/link")).is_err());
-    let report = root.scan();
+    let vault = VaultHandle::open(&sandbox.0.join("vault")).unwrap();
+    assert!(vault.inspect("link/secret").is_err());
+    assert!(VaultHandle::open(&sandbox.0.join("vault/link")).is_err());
+    let report = vault.scan();
     assert!(!report.permits_missing_comparison());
     assert!(
         report
@@ -184,19 +184,19 @@ fn native_junction_is_never_followed_and_external_content_is_unchanged() {
         std::fs::read(sandbox.0.join("outside/secret")).unwrap(),
         b"external-proof"
     );
-    drop(root);
-    std::fs::remove_dir(sandbox.0.join("root/link")).unwrap();
+    drop(vault);
+    std::fs::remove_dir(sandbox.0.join("vault/link")).unwrap();
 }
 
 #[test]
 fn native_file_symlink_and_retarget_never_expose_outside_content() {
     let sandbox = Sandbox::new();
-    std::fs::create_dir(sandbox.0.join("root")).unwrap();
+    std::fs::create_dir(sandbox.0.join("vault")).unwrap();
     std::fs::create_dir(sandbox.0.join("outside")).unwrap();
     std::fs::write(sandbox.0.join("outside/secret"), b"first external target").unwrap();
     std::fs::write(sandbox.0.join("outside/other"), b"second external target").unwrap();
-    std::fs::write(sandbox.0.join("root/note.txt"), b"inside content").unwrap();
-    let link = sandbox.0.join("root/link");
+    std::fs::write(sandbox.0.join("vault/note.txt"), b"inside content").unwrap();
+    let link = sandbox.0.join("vault/link");
     let create = |target: &str| {
         let result = Command::new("cmd")
             .args(["/c", "mklink"])
@@ -208,18 +208,18 @@ fn native_file_symlink_and_retarget_never_expose_outside_content() {
     };
     create("outside/secret");
 
-    let root = RootHandle::open(&sandbox.0.join("root")).unwrap();
+    let vault = VaultHandle::open(&sandbox.0.join("vault")).unwrap();
     assert!(
-        root.open_read("link").is_err(),
-        "a file symlink must never be opened as root content"
+        vault.open_read("link").is_err(),
+        "a file symlink must never be opened as vault content"
     );
-    if let Ok(metadata) = root.inspect("link") {
+    if let Ok(metadata) = vault.inspect("link") {
         assert_ne!(metadata.reparse_tag, 0, "symlink must stay a reparse point");
     }
-    let report = root.scan();
+    let report = vault.scan();
     assert!(
         !report.permits_missing_comparison(),
-        "a root containing a symlink cannot claim complete enumeration"
+        "a vault containing a symlink cannot claim complete enumeration"
     );
     assert!(
         report
@@ -236,8 +236,8 @@ fn native_file_symlink_and_retarget_never_expose_outside_content() {
     // Retarget the symlink in place: the rooted handle must still refuse to follow it.
     std::fs::remove_file(&link).unwrap();
     create("outside/other");
-    assert!(root.open_read("link").is_err());
-    let report = root.scan();
+    assert!(vault.open_read("link").is_err());
+    let report = vault.scan();
     assert!(!report.permits_missing_comparison());
     assert!(
         report
@@ -253,7 +253,7 @@ fn native_file_symlink_and_retarget_never_expose_outside_content() {
         std::fs::read(sandbox.0.join("outside/other")).unwrap(),
         b"second external target"
     );
-    drop(root);
+    drop(vault);
     std::fs::remove_file(&link).unwrap();
 }
 
@@ -276,8 +276,8 @@ fn native_in_place_junction_change_cannot_redirect_an_already_pinned_parent() {
     std::fs::create_dir(sandbox.0.join("switch")).unwrap();
     std::fs::create_dir(sandbox.0.join("outside")).unwrap();
     std::fs::write(sandbox.0.join("outside/secret"), b"untouched").unwrap();
-    let root = RootHandle::open(&sandbox.0).unwrap();
-    let pinned = open_relative(root.root_file(), "switch", true).unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
+    let pinned = open_relative(vault.vault_file(), "switch", true).unwrap();
     let target = sandbox
         .0
         .join("outside")
@@ -339,21 +339,21 @@ fn native_in_place_junction_change_cannot_redirect_an_already_pinned_parent() {
         open_relative(&pinned, "secret", false).is_err(),
         "a rooted open must never follow the parent junction"
     );
-    assert!(root.inspect("switch/secret").is_err());
+    assert!(vault.inspect("switch/secret").is_err());
     assert_eq!(
         std::fs::read(sandbox.0.join("outside/secret")).unwrap(),
         b"untouched"
     );
     drop(writer);
     drop(pinned);
-    drop(root);
+    drop(vault);
     std::fs::remove_dir(sandbox.0.join("switch")).unwrap();
 }
 
 #[test]
 fn native_path_errors_are_explicit_and_extended_long_paths_work() {
     let sandbox = Sandbox::new();
-    let root = RootHandle::open(&sandbox.0).unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
     for path in [
         "../outside",
         "a/../outside",
@@ -364,13 +364,13 @@ fn native_path_errors_are_explicit_and_extended_long_paths_work() {
         "\\\\?\\C:\\outside",
     ] {
         assert_eq!(
-            root.inspect(path).unwrap_err().kind(),
+            vault.inspect(path).unwrap_err().kind(),
             io::ErrorKind::InvalidInput,
             "{path}"
         );
     }
     assert_eq!(
-        root.inspect(&"a".repeat(256)).unwrap_err().kind(),
+        vault.inspect(&"a".repeat(256)).unwrap_err().kind(),
         io::ErrorKind::InvalidInput
     );
     let relative = format!(
@@ -386,8 +386,8 @@ fn native_path_errors_are_explicit_and_extended_long_paths_work() {
     .join(relative.replace('/', "\\"));
     std::fs::create_dir_all(extended.parent().unwrap()).unwrap();
     std::fs::write(&extended, b"long").unwrap();
-    assert_eq!(root.inspect(&relative).unwrap().size, 4);
-    assert!(root.scan().permits_missing_comparison());
+    assert_eq!(vault.inspect(&relative).unwrap().size, 4);
+    assert!(vault.scan().permits_missing_comparison());
 }
 
 #[test]
@@ -396,7 +396,7 @@ fn native_acl_failure_is_partial_evidence_never_deletion() {
     let protected = sandbox.0.join("protected");
     std::fs::create_dir(&protected).unwrap();
     std::fs::write(protected.join("kept"), b"kept").unwrap();
-    let root = RootHandle::open(&sandbox.0).unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
     assert!(
         Command::new("icacls")
             .arg(&protected)
@@ -406,7 +406,7 @@ fn native_acl_failure_is_partial_evidence_never_deletion() {
             .status
             .success()
     );
-    let report = root.scan();
+    let report = vault.scan();
     let restored = Command::new("icacls")
         .arg(&protected)
         .args(["/remove:d", "*S-1-1-0"])
@@ -421,8 +421,8 @@ fn native_acl_failure_is_partial_evidence_never_deletion() {
     );
     assert!(!report.permits_missing_comparison());
     assert_eq!(std::fs::read(protected.join("kept")).unwrap(), b"kept");
-    assert!(root.scan().permits_missing_comparison());
-    let mut watcher = DirectoryWatcher::new(&root, 65536).unwrap();
+    assert!(vault.scan().permits_missing_comparison());
+    let mut watcher = DirectoryWatcher::new(&vault, 65536).unwrap();
     assert!(
         Command::new("icacls")
             .arg(&sandbox.0)
@@ -432,7 +432,7 @@ fn native_acl_failure_is_partial_evidence_never_deletion() {
             .status
             .success()
     );
-    let unavailable = root.scan();
+    let unavailable = vault.scan();
     let lost = watcher.poll(1);
     let restored = Command::new("icacls")
         .arg(&sandbox.0)
@@ -440,15 +440,15 @@ fn native_acl_failure_is_partial_evidence_never_deletion() {
         .output()
         .unwrap();
     assert!(restored.status.success());
-    assert_eq!(unavailable.health, ScanHealth::RootUnavailable);
+    assert_eq!(unavailable.health, ScanHealth::VaultUnavailable);
     assert_eq!(lost, WatchBatch::Rescan(RescanReason::WatchLost));
 }
 
 #[test]
 fn native_watch_reports_hints_real_overflow_and_drop_cancels_pending_io() {
     let sandbox = Sandbox::new();
-    let root = RootHandle::open(&sandbox.0).unwrap();
-    let mut watcher = DirectoryWatcher::new(&root, 64).unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
+    let mut watcher = DirectoryWatcher::new(&vault, 64).unwrap();
     assert_eq!(watcher.poll(1), WatchBatch::Idle);
     for i in 0..400 {
         std::fs::write(
@@ -468,7 +468,7 @@ fn native_watch_reports_hints_real_overflow_and_drop_cancels_pending_io() {
         overflow,
         "native 64-byte watch must report actual buffer loss"
     );
-    let report = root.scan();
+    let report = vault.scan();
     assert!(report.permits_missing_comparison());
     assert_eq!(report.entries.len(), 400);
     // The scan can overlap further queued native completions. Drain them first;
@@ -509,11 +509,11 @@ fn native_cloud_scan_does_not_hydrate_any_placeholder() {
     let _registration = Registration(&sandbox.0);
     // A disconnected partially populated directory can reject metadata opens on current Windows.
     // Such evidence must block deletion; reconnect before requiring complete enumeration.
-    let offline = RootHandle::open(&sandbox.0).unwrap().scan();
+    let offline = VaultHandle::open(&sandbox.0).unwrap().scan();
     if !offline.permits_missing_comparison() {
         assert!(
             offline.entries.iter().any(|e| e.issue.is_some())
-                || offline.health == crate::files::ScanHealth::RootUnavailable
+                || offline.health == crate::files::ScanHealth::VaultUnavailable
         );
     }
     let session =
@@ -525,8 +525,8 @@ fn native_cloud_scan_does_not_hydrate_any_placeholder() {
         );
     }
     {
-        let root = RootHandle::open(&sandbox.0).unwrap();
-        let report = root.scan();
+        let vault = VaultHandle::open(&sandbox.0).unwrap();
+        let report = vault.scan();
         assert!(
             report.permits_missing_comparison(),
             "{:?}: {:?}",
@@ -536,7 +536,7 @@ fn native_cloud_scan_does_not_hydrate_any_placeholder() {
         assert_eq!(report.entries.len(), 4);
         assert_eq!(session.context().stats().bytes_served, 0);
         for (name, size) in PROBE_FILES {
-            let meta = root.inspect(&format!("{PROBE_DIRECTORY}/{name}")).unwrap();
+            let meta = vault.inspect(&format!("{PROBE_DIRECTORY}/{name}")).unwrap();
             assert!(meta.placeholder());
             assert_eq!(meta.size, size);
         }

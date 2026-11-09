@@ -106,7 +106,7 @@ enum ScanState {
     Clean,
     /// 预算耗尽、还有游标：立刻继续。
     Truncated,
-    /// 有读不了的目录/项或 Root 不可用：到重试时间再扫。
+    /// 有读不了的目录/项或 Vault 不可用：到重试时间再扫。
     Unreadable,
 }
 
@@ -226,10 +226,10 @@ impl FollowDriver {
             let pass = self.observer.run_pass(ports, limits, clock).await;
             self.started = true;
             self.last_full_ms = Some(now);
-            full_complete = pass.scan_complete && !pass.root_unavailable;
+            full_complete = pass.scan_complete && !pass.vault_unavailable;
             self.scan_state = if full_complete {
                 ScanState::Clean
-            } else if !pass.root_unavailable
+            } else if !pass.vault_unavailable
                 && pass
                     .inconclusive
                     .iter()

@@ -9,15 +9,15 @@
 mod common;
 
 use common::{
-    Lab, Running, db, entry_named, epoch_of, identity, login, register_root, snapshot, submit,
+    Lab, Running, db, entry_named, epoch_of, identity, login, register_vault, snapshot, submit,
     subtree_token, wait_for,
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
-async fn adopted(running: &Running, token: &str, root: &str, name: &str) {
+async fn adopted(running: &Running, token: &str, vault: &str, name: &str) {
     wait_for(&format!("采纳 {name}"), || async {
-        Ok(snapshot(running, token, root)
+        Ok(snapshot(running, token, vault)
             .await
             .iter()
             .any(|entry| entry.get("name").and_then(Value::as_str) == Some(name)))
@@ -43,18 +43,18 @@ fn revision(entries: &[Value], name: &str) -> String {
 async fn delete_directory(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     epoch: &str,
     op: u8,
     entry: &str,
     revision: &str,
 ) -> Value {
-    let (status, subtree) = subtree_token(running, token, root, entry).await;
+    let (status, subtree) = subtree_token(running, token, vault, entry).await;
     assert_eq!(status, StatusCode::OK, "{subtree}");
     let (status, deleted) = submit(
         running,
         token,
-        root,
+        vault,
         json!({
             "op_id": identity(op),
             "device_id": identity(0x71),
@@ -83,7 +83,7 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
         .expect("注册");
 
@@ -92,15 +92,15 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     std::fs::create_dir_all(&sub_dir).expect("建目录");
     std::fs::write(lab.work().join("area/proj/keep.txt"), b"keep v1\n").expect("keep");
     std::fs::write(sub_dir.join("old.txt"), b"old round-1 content\n").expect("old");
-    adopted(&running, &token, &root, "old.txt").await;
-    let epoch = epoch_of(&running, &token, &root).await;
-    let entries = snapshot(&running, &token, &root).await;
+    adopted(&running, &token, &vault, "old.txt").await;
+    let epoch = epoch_of(&running, &token, &vault).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let old_sub = entry_id(&entries, "sub");
     let old_file = entry_id(&entries, "old.txt");
     let proj = entry_id(&entries, "proj");
     let keep = entry_id(&entries, "keep.txt");
     let area = entry_id(&entries, "area");
-    let root_entry = entries
+    let vault_entry = entries
         .iter()
         .find(|entry| entry["parent_id"].is_null())
         .expect("根")["entry_id"]
@@ -110,7 +110,7 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     delete_directory(
         &running,
         &token,
-        &root,
+        &vault,
         &epoch,
         0xa1,
         &old_sub,
@@ -122,8 +122,8 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     // 同一路径下出现一个全新的 sub（新身份）和 new.txt，然后整个 proj 被删除（第 2 轮）。
     std::fs::create_dir_all(&sub_dir).expect("重建 sub");
     std::fs::write(sub_dir.join("new.txt"), b"new round-2 content\n").expect("new");
-    adopted(&running, &token, &root, "new.txt").await;
-    let entries = snapshot(&running, &token, &root).await;
+    adopted(&running, &token, &vault, "new.txt").await;
+    let entries = snapshot(&running, &token, &vault).await;
     let new_sub = entries
         .iter()
         .find(|entry| entry["name"] == "sub")
@@ -136,7 +136,7 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     let deleted = delete_directory(
         &running,
         &token,
-        &root,
+        &vault,
         &epoch,
         0xa2,
         &proj,
@@ -149,7 +149,7 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     let (status, moved) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0xa3),
             "device_id": identity(0x71),
@@ -157,7 +157,7 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
             "kind": "move",
             "entry_id": area,
             "base_revision": revision(&entries, "area"),
-            "parent_id": root_entry,
+            "parent_id": vault_entry,
             "name": "moved",
         }),
     )
@@ -182,7 +182,7 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
         "entry_id": proj,
         "base_revision": deleted["revision"],
     });
-    let (status, failed) = submit(&running, &token, &root, restore.clone()).await;
+    let (status, failed) = submit(&running, &token, &vault, restore.clone()).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{failed}");
     let restored_dir = lab.work().join("moved/proj");
     assert!(restored_dir.join("keep.txt").is_file());
@@ -211,11 +211,11 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     assert_eq!(
         scalar(
             &mut conn,
-            "SELECT count(*) FROM intent_operations i JOIN execution_journal j USING(root_id,device_id,op_id) WHERE j.kind = 'trash_restore'"
+            "SELECT count(*) FROM intent_operations i JOIN execution_journal j USING(vault_id,device_id,op_id) WHERE j.kind = 'trash_restore'"
         )
         .await,
         4,
-        "全部意图都与完整 (Root,Device,Op) 持久关联"
+        "全部意图都与完整 (Vault,Device,Op) 持久关联"
     );
     // 只有第 2 轮的 4 条被选入计划；第 1 轮的两条仍在回收站。
     let planned: String = sqlx::query_scalar(
@@ -245,10 +245,10 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
     let (status, blocked) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0xa5), "device_id": identity(0x71), "server_epoch": epoch,
-            "kind": "create", "parent_id": root_entry, "name": "must-not-publish",
+            "kind": "create", "parent_id": vault_entry, "name": "must-not-publish",
             "expected_absent": true,
         }),
     )
@@ -331,12 +331,12 @@ async fn directory_group_restore_resumes_after_crash_without_second_copy() {
 
     let running = Running::start(&lab).await.expect("补完后开放写入");
     let token = login(&running).await.expect("登录");
-    let (status, replay) = submit(&running, &token, &root, restore).await;
+    let (status, replay) = submit(&running, &token, &vault, restore).await;
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay["state"], "committed");
     assert_eq!(replay["replayed"], true);
     assert_eq!(replay["entry_id"], proj, "原身份恢复");
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     for (name, id) in [("proj", &proj), ("keep.txt", &keep), ("new.txt", &new_file)] {
         assert_eq!(entry_named(&entries, name)["entry_id"], id.as_str());
     }
@@ -366,19 +366,19 @@ async fn occupied_name_restores_under_alternate_name_and_foreign_directory_never
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
         .expect("注册");
     std::fs::create_dir_all(lab.work().join("docs")).expect("docs");
     std::fs::write(lab.work().join("docs/a.txt"), b"first docs\n").expect("a");
-    adopted(&running, &token, &root, "a.txt").await;
-    let epoch = epoch_of(&running, &token, &root).await;
-    let entries = snapshot(&running, &token, &root).await;
+    adopted(&running, &token, &vault, "a.txt").await;
+    let epoch = epoch_of(&running, &token, &vault).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let docs = entry_id(&entries, "docs");
     let deleted = delete_directory(
         &running,
         &token,
-        &root,
+        &vault,
         &epoch,
         0xb1,
         &docs,
@@ -389,11 +389,11 @@ async fn occupied_name_restores_under_alternate_name_and_foreign_directory_never
     // 新的同名目录被采纳（新身份）：原名称被活跃条目占用 → 另名恢复，不合并。
     std::fs::create_dir_all(lab.work().join("docs")).expect("新 docs");
     std::fs::write(lab.work().join("docs/b.txt"), b"second docs\n").expect("b");
-    adopted(&running, &token, &root, "b.txt").await;
+    adopted(&running, &token, &vault, "b.txt").await;
     let (status, restored) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0xb2), "device_id": identity(0x71), "server_epoch": epoch,
             "kind": "restore", "entry_id": docs, "base_revision": deleted["revision"],
@@ -415,12 +415,12 @@ async fn occupied_name_restores_under_alternate_name_and_foreign_directory_never
     );
 
     // 工作目录里已存在但尚未采纳的目录：登记前拒绝，没有 pending 也没有意图。
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let alt_entry = entry_id(&entries, "docs（恢复）");
     let deleted = delete_directory(
         &running,
         &token,
-        &root,
+        &vault,
         &epoch,
         0xb3,
         &alt_entry,
@@ -432,7 +432,7 @@ async fn occupied_name_restores_under_alternate_name_and_foreign_directory_never
     let (status, response) = submit(
         &running,
         &token,
-        &root,
+        &vault,
         json!({
             "op_id": identity(0xb4), "device_id": identity(0x71), "server_epoch": epoch,
             "kind": "restore", "entry_id": alt_entry, "base_revision": deleted["revision"],
@@ -479,21 +479,21 @@ async fn crashed_restore(
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
         .expect("注册");
     fixture(&lab.work());
-    adopted(&running, &token, &root, "last.txt").await;
+    adopted(&running, &token, &vault, "last.txt").await;
     for name in also_adopted {
-        adopted(&running, &token, &root, name).await;
+        adopted(&running, &token, &vault, name).await;
     }
-    let epoch = epoch_of(&running, &token, &root).await;
-    let entries = snapshot(&running, &token, &root).await;
+    let epoch = epoch_of(&running, &token, &vault).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let top = entry_id(&entries, "top");
     let deleted = delete_directory(
         &running,
         &token,
-        &root,
+        &vault,
         &epoch,
         0xc1,
         &top,
@@ -509,14 +509,14 @@ async fn crashed_restore(
         "op_id": identity(0xc2), "device_id": identity(0x71), "server_epoch": epoch,
         "kind": "restore", "entry_id": top, "base_revision": deleted["revision"],
     });
-    let (status, failed) = submit(&running, &token, &root, restore.clone()).await;
+    let (status, failed) = submit(&running, &token, &vault, restore.clone()).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{failed}");
     drop(conn);
     running.stop().await;
-    (lab, root, restore, entries[0].clone())
+    (lab, vault, restore, entries[0].clone())
 }
 
-async fn finish_after_restart(lab: &Lab, root: &str, restore: &Value) -> Value {
+async fn finish_after_restart(lab: &Lab, vault: &str, restore: &Value) -> Value {
     let mut conn = db(lab).await;
     sqlx::query("DROP TRIGGER s052_fail")
         .execute(&mut conn)
@@ -541,7 +541,7 @@ async fn finish_after_restart(lab: &Lab, root: &str, restore: &Value) -> Value {
     );
     let running = Running::start(lab).await.expect("启动");
     let token = login(&running).await.expect("登录");
-    let (status, replay) = submit(&running, &token, root, restore.clone()).await;
+    let (status, replay) = submit(&running, &token, vault, restore.clone()).await;
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay["replayed"], true);
     running.stop().await;
@@ -551,7 +551,7 @@ async fn finish_after_restart(lab: &Lab, root: &str, restore: &Value) -> Value {
 #[tokio::test]
 async fn restore_resumes_when_a_file_intent_was_never_created() {
     let trigger = "CREATE TRIGGER s052_fail BEFORE INSERT ON fs_intents WHEN NEW.kind = 'put_content' AND NEW.target_path LIKE '%last.txt' BEGIN SELECT RAISE(ABORT, 'S052 injected intent failure'); END";
-    let (lab, root, restore, _) =
+    let (lab, vault, restore, _) =
         crashed_restore("dir-restore-insert", trigger, &["first.txt"], |work| {
             std::fs::create_dir_all(work.join("top")).expect("top");
             std::fs::write(work.join("top/first.txt"), b"first\n").expect("first");
@@ -566,7 +566,7 @@ async fn restore_resumes_when_a_file_intent_was_never_created() {
         !lab.work().join("top/last.txt").exists(),
         "最后一个文件没有意图就没有发布"
     );
-    let replay = finish_after_restart(&lab, &root, &restore).await;
+    let replay = finish_after_restart(&lab, &vault, &restore).await;
     assert_eq!(replay["state"], "committed");
     assert_eq!(
         std::fs::read(lab.work().join("top/last.txt")).expect("读"),
@@ -586,8 +586,8 @@ async fn restore_resumes_when_a_file_intent_was_never_created() {
 
 #[tokio::test]
 async fn restore_resumes_after_everything_was_published_but_the_commit_failed() {
-    let trigger = "CREATE TRIGGER s052_fail BEFORE UPDATE OF state ON operations WHEN NEW.state = 'committed' AND NEW.root_seq IS NOT NULL BEGIN SELECT RAISE(ABORT, 'S052 injected commit failure'); END";
-    let (lab, root, restore, _) =
+    let trigger = "CREATE TRIGGER s052_fail BEFORE UPDATE OF state ON operations WHEN NEW.state = 'committed' AND NEW.vault_seq IS NOT NULL BEGIN SELECT RAISE(ABORT, 'S052 injected commit failure'); END";
+    let (lab, vault, restore, _) =
         crashed_restore("dir-restore-commit", trigger, &["inner.txt"], |work| {
             std::fs::create_dir_all(work.join("top/mid")).expect("mid");
             std::fs::write(work.join("top/mid/inner.txt"), b"inner\n").expect("inner");
@@ -598,7 +598,7 @@ async fn restore_resumes_after_everything_was_published_but_the_commit_failed() 
         lab.work().join("top/mid/inner.txt").is_file(),
         "子目录与文件都已建回"
     );
-    let replay = finish_after_restart(&lab, &root, &restore).await;
+    let replay = finish_after_restart(&lab, &vault, &restore).await;
     assert_eq!(replay["state"], "committed");
     assert!(lab.work().join("top/mid/inner.txt").is_file());
     assert_eq!(

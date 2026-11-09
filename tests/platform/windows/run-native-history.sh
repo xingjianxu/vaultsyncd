@@ -4,14 +4,14 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$script_dir/common.sh"
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
-root=$(repo_root)
-cd "$root"
+vault=$(repo_root)
+cd "$vault"
 test -f apps/desktop/dist/index.html
-build_base="${CARGO_TARGET_DIR:-$root/target}"
+build_base="${CARGO_TARGET_DIR:-$vault/target}"
 helper="$build_base/debug/examples/s083-native-server"
 test -x "$helper" || { echo 'build s083-native-server in default devShell first' >&2; exit 1; }
 run_id="s083-history-$(date +%s)-$$"
-artifact_dir="$root/artifacts/S083/$run_id"
+artifact_dir="$vault/artifacts/S083/$run_id"
 mkdir -p "$artifact_dir"
 server_pid=''; tls_pid=''; tunnel_pid=''
 cleanup() {
@@ -47,13 +47,13 @@ cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent -p vault
 cp "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-desktop.exe" "$artifact_dir/"
 cp "$script_dir/s083-history.ps1" "$artifact_dir/"
 python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1])/"s083-history.ps1"; p.write_text(p.read_text(),encoding="utf-8-sig")' "$artifact_dir"
-python3 -c 'import hashlib,json,pathlib,sys,uuid; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); (p/"fixture.json").write_text(json.dumps({"phase":"history","head":v["head"],"original":v["original"],"foreign":v["foreign"],"serverId":uuid.uuid4().hex,"root":v["root"],"url":"https://127.0.0.1:18771","login":v["login"],"password":v["password"]})); (p/"hashes.json").write_text(json.dumps({f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob("*.exe")}))' "$artifact_dir"
+python3 -c 'import hashlib,json,pathlib,sys,uuid; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); (p/"fixture.json").write_text(json.dumps({"phase":"history","head":v["head"],"original":v["original"],"foreign":v["foreign"],"serverId":uuid.uuid4().hex,"vault":v["vault"],"url":"https://127.0.0.1:18771","login":v["login"],"password":v["password"]})); (p/"hashes.json").write_text(json.dumps({f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob("*.exe")}))' "$artifact_dir"
 guest_dir="C:/vaultsyncd-lab/$run_id"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Path '$guest_dir' | Out-Null\""
 GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/vaultsyncd-agent.exe" "$artifact_dir/vaultsyncd-desktop.exe" "$artifact_dir/s083-history.ps1" "$artifact_dir/fixture.json" "$artifact_dir/hashes.json" "$artifact_dir/ca.pem"
 guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/s083-history.ps1" | tee "$artifact_dir/native.log"
 scp -P "$GUEST_PORT" -i "$GUEST_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o BatchMode=yes -o LogLevel=ERROR "$GUEST_USER@$GUEST_HOST:$guest_dir/result.json" "$artifact_dir/result.json"
 # Independently verify actual server files before the owned fixture is stopped.
-python3 -c 'import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);v=json.loads((p/"host-fixture.json").read_text());w=pathlib.Path(v["work_dir"]);r=json.loads((p/"result.json").read_text(encoding="utf-8-sig"));assert (w/r["historyPath"]).read_bytes()==b"S083 history original";assert (w/r["trashPath"]).read_bytes()==b"S083 deleted content";assert (w/"trash.txt").read_bytes()==b"S083 same-name target kept";assert sum(f.read_bytes()==b"S083 independent conflict" for f in w.iterdir() if f.is_file())==1;assert not (w/"secret.txt").exists();print("PASS real server restored bytes, same-name preservation and Root scope")' "$artifact_dir"
+python3 -c 'import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);v=json.loads((p/"host-fixture.json").read_text());w=pathlib.Path(v["work_dir"]);r=json.loads((p/"result.json").read_text(encoding="utf-8-sig"));assert (w/r["historyPath"]).read_bytes()==b"S083 history original";assert (w/r["trashPath"]).read_bytes()==b"S083 deleted content";assert (w/"trash.txt").read_bytes()==b"S083 same-name target kept";assert sum(f.read_bytes()==b"S083 independent conflict" for f in w.iterdir() if f.is_file())==1;assert not (w/"secret.txt").exists();print("PASS real server restored bytes, same-name preservation and Vault scope")' "$artifact_dir"
 echo "ARTIFACTS $artifact_dir"
 echo "GUEST $guest_dir (VM remains online)"

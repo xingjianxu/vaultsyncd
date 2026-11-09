@@ -119,7 +119,7 @@ export function BackupPanel() {
      <Stack>
        <Title order={2} size="h4">固定清单</Title>
        <Text size="sm" className="break-all">Server {index.server} · {index.items.length} 个文件/对象 · SHA-256 {index.hash}</Text>
-       <ScrollArea.Autosize mah={256} type="auto"><Stack gap="xs">{index.roots.slice(0,100).map(root=><Text component="code" size="xs" className="break-all" key={root.id}>Root {root.id} · seq {root.seq}</Text>)}</Stack></ScrollArea.Autosize>
+       <ScrollArea.Autosize mah={256} type="auto"><Stack gap="xs">{index.vaults.slice(0,100).map(vault=><Text component="code" size="xs" className="break-all" key={vault.id}>Vault {vault.id} · seq {vault.seq}</Text>)}</Stack></ScrollArea.Autosize>
        <Text size="sm" c="dimmed">清单项目按固定路径校验，下载归档不执行其中的内容。</Text>
      </Stack>
    </Paper>}
@@ -147,7 +147,7 @@ export function BackupPanel() {
    <Paper withBorder p="lg">
      <Stack>
        <Title order={2} size="h4">离线恢复</Title>
-       <Text size="sm" c="dimmed">先保管归档与收据、停止服务，使用 CLI 的 restore validate 流程核对归档、空状态目录和 Root 映射，再按离线恢复文档操作。页面不对在线数据库执行 restore。</Text>
+       <Text size="sm" c="dimmed">先保管归档与收据、停止服务，使用 CLI 的 restore validate 流程核对归档、空状态目录和 Vault 映射，再按离线恢复文档操作。页面不对在线数据库执行 restore。</Text>
        <Text size="sm" c="dimmed">完整性校验不等于已完成恢复演练。导出到独立故障域并验证后再释放源快照。</Text>
      </Stack>
    </Paper>

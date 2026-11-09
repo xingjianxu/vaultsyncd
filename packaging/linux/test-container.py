@@ -60,14 +60,14 @@ def admin(*args):
     p=engine('exec','--user',f'{UID}:{UID}',NAME,'/opt/vaultsyncd/bin/vaultsyncd-admin',*args,'--socket','/var/lib/vaultsyncd/admin/socket','--json')
     return json.loads(p.stdout)
 
-def browser(password,root):
+def browser(password,vault):
     if os.environ.get('VAULTSYNCD_TEST_EXTERNAL_BROWSER')=='stdio':
         # The host runs its locked real Chromium against the VM's forwarded
         # endpoint. Only non-secret coordination crosses stdout; the owner
         # password arrives once over the existing anonymous SSH stdin pipe.
-        print(json.dumps({'stage':'browser_pending','root':root,'origin':ORIGIN}),flush=True)
+        print(json.dumps({'stage':'browser_pending','vault':vault,'origin':ORIGIN}),flush=True)
         proof=json.loads(sys.stdin.readline())
-        assert proof['passed'] and proof['root']==root
+        assert proof['passed'] and proof['vault']==vault
         RESULT['browser']=proof['browser']
         return
     from playwright.sync_api import sync_playwright, expect
@@ -79,11 +79,11 @@ def browser(password,root):
             page.get_by_label('登录名',exact=True).fill('owner');page.get_by_label('密码',exact=True).fill(password)
             page.get_by_role('button',name='登录',exact=True).click()
             expect(page.get_by_text('已登录：owner',exact=True)).to_be_visible(timeout=30000)
-            page.get_by_role('link',name='Root 目录',exact=True).click()
+            page.get_by_role('link',name='Vault 目录',exact=True).click()
             deadline=time.monotonic()+60
             attempts=0
             while True:
-                page.wait_for_function('root=>fetch("/v1/admin/roots").then(r=>r.json()).then(d=>d.roots.some(x=>x.root_id===root&&x.health==="healthy"&&x.collection.state==="complete"))',arg=root,timeout=30000)
+                page.wait_for_function('vault=>fetch("/v1/admin/vaults").then(r=>r.json()).then(d=>d.vaults.some(x=>x.vault_id===vault&&x.health==="healthy"&&x.collection.state==="complete"))',arg=vault,timeout=30000)
                 page.get_by_role('button',name='刷新目录状态',exact=True).click();attempts+=1
                 try:
                     expect(page.get_by_text('本进程初始采集完成',exact=True)).to_be_visible(timeout=2000)
@@ -95,14 +95,14 @@ def browser(password,root):
                     if time.monotonic()>=deadline:raise
             expect(page.get_by_text('挂载核对通过',exact=True)).to_be_visible(timeout=30000)
             expect(page.get_by_text('本进程初始采集完成',exact=True)).to_be_visible(timeout=30000)
-            assert page.evaluate('root=>fetch("/v1/admin/roots").then(r=>r.json()).then(d=>d.roots.some(x=>x.root_id===root&&x.health==="healthy"))',root)
+            assert page.evaluate('vault=>fetch("/v1/admin/vaults").then(r=>r.json()).then(d=>d.vaults.some(x=>x.vault_id===vault&&x.health==="healthy"))',vault)
             page.screenshot(path=str(RUN/'web.png'),full_page=True)
             RESULT['browser']=chromium.version
             RESULT['browser_refresh_attempts']=attempts
         except Exception:
             page.screenshot(path=str(RUN/'web-failure.png'),full_page=True)
             RESULT['web_failure_text']=page.locator('main').inner_text()
-            RESULT['web_failure_root_response']=page.evaluate('fetch("/v1/admin/roots").then(r=>r.json())')
+            RESULT['web_failure_vault_response']=page.evaluate('fetch("/v1/admin/vaults").then(r=>r.json())')
             raise
         finally:
             try:page.evaluate('fetch("/v1/auth/logout",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(r=>r.status)')
@@ -132,12 +132,12 @@ def main():
         RESULT['checks'].append('actual-default-overlay-rejected-before-database-open')
         loop=sudo('losetup','--find','--show',image).stdout.strip()
         sudo('mkfs.btrfs','-q',loop);sudo('mount','-o','user_subvol_rm_allowed',loop,mount);mounted=True
-        state=mount/'state';roots=mount/'roots'
-        for directory in (state,roots):sudo('mkdir','-m','700',directory);sudo('chown',f'{UID}:{UID}',directory)
-        sample=roots/'sample.txt'
+        state=mount/'state';vaults=mount/'vaults'
+        for directory in (state,vaults):sudo('mkdir','-m','700',directory);sudo('chown',f'{UID}:{UID}',directory)
+        sample=vaults/'sample.txt'
         old=b'S098 actual Ubuntu externally observed content\n'
         temp=RUN/'sample-input.txt';temp.write_bytes(old);sudo('install','-m','600','-o',UID,'-g',UID,temp,sample)
-        mounts=['-v',f'{state}:/var/lib/vaultsyncd:rw','-v',f'{roots}:/srv/vaultsyncd-roots:rw']
+        mounts=['-v',f'{state}:/var/lib/vaultsyncd:rw','-v',f'{vaults}:/srv/vaultsyncd-vaults:rw']
         flags=['--user',f'{UID}:{UID}','--read-only','--cap-drop=all','--security-opt','no-new-privileges',
                '--cpus','2','--pids-limit','256',*mounts]
         password=sys.stdin.readline().strip() if os.environ.get('VAULTSYNCD_TEST_PASSWORD_STDIN')=='1' else secrets.token_urlsafe(24)
@@ -158,21 +158,21 @@ def main():
         engine('exec',NAME,'test','!','-e','/dev/fuse')
         engine('exec',NAME,'sh','-c','! command -v node && ! command -v pnpm && ! command -v cargo')
         RESULT['process']={'pid':facts['State']['Pid'],'uid':UID,'capabilities':0,'NoNewPrivs':1,'uname':engine('exec',NAME,'uname','-m').stdout.strip()}
-        root=api('/v1/admin/roots',{'path':'/srv/vaultsyncd-roots'})['root_id'];RESULT['root_id']=root
-        def head():return next((r for r in api(f'/v1/roots/{root}/recovery')['items'] if r['name']=='sample.txt' and r.get('hash')==hashlib.sha256(old).hexdigest()),None)
+        vault=api('/v1/admin/vaults',{'path':'/srv/vaultsyncd-vaults'})['vault_id'];RESULT['vault_id']=vault
+        def head():return next((r for r in api(f'/v1/vaults/{vault}/recovery')['items'] if r['name']=='sample.txt' and r.get('hash')==hashlib.sha256(old).hexdigest()),None)
         entry=wait(head)
         content=(f'S098 {ARCH} portable committed '+secrets.token_hex(8)+'\n').encode()*512
         digest=hashlib.sha256(content).hexdigest()
-        upload=api(f'/v1/roots/{root}/uploads',{'total_size':str(len(content)),'hash':digest,'chunk_size':'0'})
-        api(f'/v1/roots/{root}/uploads/{upload["upload_id"]}/parts/0',content,method='PUT',headers={'content-type':'application/octet-stream','x-part-sha256':digest})
-        api(f'/v1/roots/{root}/uploads/{upload["upload_id"]}/finalize',{})
+        upload=api(f'/v1/vaults/{vault}/uploads',{'total_size':str(len(content)),'hash':digest,'chunk_size':'0'})
+        api(f'/v1/vaults/{vault}/uploads/{upload["upload_id"]}/parts/0',content,method='PUT',headers={'content-type':'application/octet-stream','x-part-sha256':digest})
+        api(f'/v1/vaults/{vault}/uploads/{upload["upload_id"]}/finalize',{})
         operation={'kind':'put_content','op_id':secrets.token_hex(16),'device_id':secrets.token_hex(16),
-                   'server_epoch':api(f'/v1/roots/{root}/snapshots',{})['server_epoch'],'entry_id':entry['entry_id'],
+                   'server_epoch':api(f'/v1/vaults/{vault}/snapshots',{})['server_epoch'],'entry_id':entry['entry_id'],
                    'base_revision':entry['revision'],'upload_id':upload['upload_id']}
-        committed=api(f'/v1/roots/{root}/operations',operation)
-        if committed['state']=='pending':committed=wait(lambda:(x if x['state']!='pending' else None) if (x:=api(f'/v1/roots/{root}/operations/{operation["op_id"]}')) else None)
+        committed=api(f'/v1/vaults/{vault}/operations',operation)
+        if committed['state']=='pending':committed=wait(lambda:(x if x['state']!='pending' else None) if (x:=api(f'/v1/vaults/{vault}/operations/{operation["op_id"]}')) else None)
         assert committed['state']=='committed' and not committed.get('conflict')
-        fixed=f'/v1/roots/{root}/entries/{entry["entry_id"]}/versions/{committed["version_id"]}/content'
+        fixed=f'/v1/vaults/{vault}/entries/{entry["entry_id"]}/versions/{committed["version_id"]}/content'
         assert api(fixed,binary=True)==content and sudo('cat',sample,binary=True).stdout==content
         RESULT.update(committed=committed,sha256=digest)
         RESULT['checks'].append('actual-Ubuntu-server-admin-init-observer-upload-finalize-committed-fixed-content')
@@ -188,31 +188,31 @@ def main():
         engine('stop','--time','60',NAME);engine('start',NAME)
         wait(lambda:api('/v1/health')['status']=='ok')
         assert api('/v1/capabilities')['server_id']==capabilities['server_id']
-        replay=api(f'/v1/roots/{root}/operations',operation)
-        assert replay['state']=='committed' and replay['replayed'] and replay['version_id']==committed['version_id'] and replay['root_seq']==committed['root_seq']
+        replay=api(f'/v1/vaults/{vault}/operations',operation)
+        assert replay['state']=='committed' and replay['replayed'] and replay['version_id']==committed['version_id'] and replay['vault_seq']==committed['vault_seq']
         assert api(fixed,binary=True)==content and sudo('cat',sample,binary=True).stdout==content
-        browser(password,root)
+        browser(password,vault)
         RESULT['checks'].append('real-container-restart-keeps-identity-version-bytes-idempotency-and-Chromium-Web')
         api('/v1/auth/logout',{});TOKEN=None
         RESULT['server_log']=engine('logs',NAME).stdout
         engine('stop','--time','60',NAME);engine('rm',NAME);created=False
         # Restore the verified archive into new empty physical targets, not just
         # restart the original DB. Exercise the actual target kernel and CLI.
-        restored_state=mount/'restored-state';restored_root=mount/'restored-root'
-        for directory in (restored_state,restored_root):
+        restored_state=mount/'restored-state';restored_vault=mount/'restored-vault'
+        for directory in (restored_state,restored_vault):
             sudo('mkdir','-m','700',directory);sudo('chown',f'{UID}:{UID}',directory)
         restore_flags=['--user',f'{UID}:{UID}','--read-only','--cap-drop=all',
                        '--security-opt','no-new-privileges',
                        '-v',f'{state}:/source:ro','-v',f'{restored_state}:/restored/state:rw',
-                       '-v',f'{restored_root}:/restored/root:rw']
+                       '-v',f'{restored_vault}:/restored/vault:rw']
         restore_args=['--archive','/source/accepted.vsbk','--state-dir','/restored/state',
-                      '--root',f'{root}=/restored/root','--json']
+                      '--vault',f'{vault}=/restored/vault','--json']
         for action in ('validate','apply'):
             result=engine('run','--rm','--network','none',*restore_flags,
                           '--entrypoint','/opt/vaultsyncd/bin/vaultsyncd-admin',IMAGE,
                           'restore',action,*restore_args)
             RESULT['restore_'+action]=json.loads(result.stdout)
-        assert sudo('cat',restored_root/'sample.txt',binary=True).stdout==content
+        assert sudo('cat',restored_vault/'sample.txt',binary=True).stdout==content
         NAME+='-restored'
         engine('run','-d','--name',NAME,*restore_flags,'-p',f'{listen}:{PORT}:8721',IMAGE,
                '--config','/restored/state/server.toml');created=True
@@ -220,7 +220,7 @@ def main():
         assert api('/v1/capabilities')['server_id']==capabilities['server_id']
         TOKEN=api('/v1/auth/login',{'login':'owner','password':password,'device_label':'CI actual restored instance'})['access_token']
         assert api(fixed,binary=True)==content
-        restored_epoch=api(f'/v1/roots/{root}/snapshots',{})['server_epoch']
+        restored_epoch=api(f'/v1/vaults/{vault}/snapshots',{})['server_epoch']
         assert restored_epoch!=operation['server_epoch']
         RESULT['restored_content_sha256']=digest
         RESULT['restored_epoch']=restored_epoch

@@ -18,7 +18,7 @@ use vaultsyncd_http_client::{ApiClient, ApiRequest, AuthSession, Method, Reqwest
 use vaultsyncd_local_ipc::generated::{
     BindingInfo, Command, CommandName as C, ManagementResult, Problem, RemoteItem,
 };
-use vaultsyncd_platform_windows::files::RootHandle;
+use vaultsyncd_platform_windows::files::VaultHandle;
 use vaultsyncd_transfer::ports::PortError;
 
 pub(crate) type Running = HashMap<BindingId, (Worker, Arc<Scheduler<Dispatch>>)>;
@@ -92,13 +92,13 @@ pub(crate) async fn load_bindings(
     db: &Database,
     config: &mut AgentConfig,
 ) -> Result<(), PortError> {
-    let rows: Vec<(String,String,String,String,String)> = sqlx::query_as("SELECT lower(hex(id)),lower(hex(root_id)),local_path,cache_path,mode FROM bindings WHERE server_id=? AND device_id=? ORDER BY id")
+    let rows: Vec<(String,String,String,String,String)> = sqlx::query_as("SELECT lower(hex(id)),lower(hex(vault_id)),local_path,cache_path,mode FROM bindings WHERE server_id=? AND device_id=? ORDER BY id")
         .bind(vaultsyncd_domain::ids::ServerId::from_hex(&config.server.id).map_err(error)?.as_bytes().as_slice())
         .bind(vaultsyncd_domain::ids::DeviceId::from_hex(&config.device_id).map_err(error)?.as_bytes().as_slice())
         .fetch_all(db.pool()).await.map_err(error)?;
-    for (id, root_id, path, cache, mode) in rows {
+    for (id, vault_id, path, cache, mode) in rows {
         if let Some(existing) = config.bindings.iter_mut().find(|b| b.id == id) {
-            if existing.root_id != root_id
+            if existing.vault_id != vault_id
                 || existing.path != Path::new(&path)
                 || existing.cache != Path::new(&cache)
             {
@@ -108,7 +108,7 @@ pub(crate) async fn load_bindings(
         } else {
             config.bindings.push(BindingConfig {
                 id,
-                root_id,
+                vault_id,
                 path: path.into(),
                 cache: cache.into(),
                 mode,
@@ -121,15 +121,15 @@ pub(crate) async fn load_bindings(
 /// Recheck physical ancestry, including drive aliases; neither a GUI check nor string prefixes suffice.
 pub(crate) fn admit(config: &AgentConfig) -> Result<(), PortError> {
     config.validate().map_err(error)?;
-    let state = RootHandle::open(&config.state_dir).map_err(error)?;
-    let mut roots = vec![state];
+    let state = VaultHandle::open(&config.state_dir).map_err(error)?;
+    let mut vaults = vec![state];
     for b in &config.bindings {
         for path in [&b.path, &b.cache] {
-            let root = RootHandle::open(path).map_err(|_| reject("LOCAL_PATH_UNAVAILABLE"))?;
-            if roots.iter().any(|old| old.overlaps(&root)) {
+            let vault = VaultHandle::open(path).map_err(|_| reject("LOCAL_PATH_UNAVAILABLE"))?;
+            if vaults.iter().any(|old| old.overlaps(&vault)) {
                 return Err(reject("PATH_OVERLAP"));
             }
-            roots.push(root);
+            vaults.push(vault);
         }
     }
     Ok(())
@@ -144,7 +144,7 @@ pub(crate) async fn new_binding(
         .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
     let binding = BindingConfig {
         id: p.binding_id.clone().unwrap(),
-        root_id: p.root_id.clone().unwrap(),
+        vault_id: p.vault_id.clone().unwrap(),
         path: p.local_path.clone().unwrap().into(),
         cache: p.cache_path.clone().unwrap().into(),
         mode: p.mode.clone().unwrap(),
@@ -158,14 +158,14 @@ pub(crate) async fn new_binding(
     Ok(binding)
 }
 pub(crate) async fn binding_list(db: &Database) -> Result<Vec<BindingInfo>, PortError> {
-    let rows: Vec<(String,String,String,String,String,bool,bool)> = sqlx::query_as("SELECT lower(hex(b.id)),lower(hex(b.root_id)),b.local_path,b.cache_path,b.mode,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id ORDER BY b.id")
+    let rows: Vec<(String,String,String,String,String,bool,bool)> = sqlx::query_as("SELECT lower(hex(b.id)),lower(hex(b.vault_id)),b.local_path,b.cache_path,b.mode,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id ORDER BY b.id")
         .fetch_all(db.pool()).await.map_err(error)?;
     Ok(rows
         .into_iter()
         .map(
-            |(binding_id, root_id, local_path, cache_path, mode, paused, detached)| BindingInfo {
+            |(binding_id, vault_id, local_path, cache_path, mode, paused, detached)| BindingInfo {
                 binding_id,
-                root_id,
+                vault_id,
                 local_path,
                 cache_path,
                 mode,
@@ -279,7 +279,7 @@ pub(crate) async fn execute(
                 let decision =
                     vaultsyncd_fs_common::ignore::IgnoreRules::parse(&rules).map_err(error)?;
                 result.rules_explanation = Some(if path.is_empty() {
-                    "Root 本身始终保留".into()
+                    "Vault 本身始终保留".into()
                 } else {
                     format!(
                         "{:?}",
@@ -367,20 +367,20 @@ pub(crate) async fn execute(
                 .map_err(vaultsyncd_http_client::transfer_error)?;
             result.connection = Some(connection(config, session));
         }
-        C::ListRoots => {
-            let roots: vaultsyncd_protocol::generated::RootList = client
+        C::ListVaults => {
+            let vaults: vaultsyncd_protocol::generated::VaultList = client
                 .send_json(
-                    ApiRequest::new(Method::Get, "/v1/roots")
+                    ApiRequest::new(Method::Get, "/v1/vaults")
                         .with_auth(vaultsyncd_http_client::AuthMode::Bearer),
                 )
                 .await
                 .map_err(connection_error)?;
             result.items = Some(
-                roots
-                    .roots
+                vaults
+                    .vaults
                     .into_iter()
                     .map(|r| RemoteItem {
-                        id: r.root_id,
+                        id: r.vault_id,
                         name: r
                             .name
                             .filter(|name| !name.trim().is_empty())
@@ -481,7 +481,7 @@ pub(crate) async fn problems(
          UNION ALL SELECT binding_id,'event:'||seq,NULL,last_error_code,0,NULL FROM received_changes WHERE state='blocked'
          UNION ALL SELECT binding_id,'intent:'||intent_id,entry_id,last_error_code,0,target_path FROM local_intents WHERE state='failed'
          UNION ALL SELECT t.binding_id,'transfer:'||lower(hex(t.version_id)),v.entry_id,t.last_error_code,0,NULL FROM transfers t LEFT JOIN agent_versions v ON v.binding_id=t.binding_id AND v.version_id=t.version_id WHERE t.state='failed'
-         UNION ALL SELECT b.id,'notification:'||n.dedupe_key,n.entry_id,n.code,0,NULL FROM notifications n JOIN bindings b ON n.binding_id=b.id OR (n.binding_id IS NULL AND (n.dedupe_key LIKE 'root:'||lower(hex(b.root_id))||':%' OR n.dedupe_key NOT LIKE 'root:%')) WHERE n.state='active'
+         UNION ALL SELECT b.id,'notification:'||n.dedupe_key,n.entry_id,n.code,0,NULL FROM notifications n JOIN bindings b ON n.binding_id=b.id OR (n.binding_id IS NULL AND (n.dedupe_key LIKE 'vault:'||lower(hex(b.vault_id))||':%' OR n.dedupe_key NOT LIKE 'vault:%')) WHERE n.state='active'
          UNION ALL SELECT a.binding_id,lower(hex(a.op_id)),NULL,'MANAGEMENT_PENDING',1,NULL FROM agent_actions a WHERE json_extract(a.specification,'$.kind')='management_restore' AND a.result IS NULL
         ) SELECT lower(hex(o.binding_id)),o.problem_id,CASE WHEN o.entry_id IS NOT NULL THEN lower(hex(o.entry_id)) END,o.code,l.dirty,l.residency,o.retryable,o.path FROM origins o LEFT JOIN local_entries l ON l.binding_id=o.binding_id AND l.entry_id=o.entry_id WHERE (? IS NULL OR o.binding_id=?) ORDER BY o.binding_id,o.problem_id")
         .bind(binding.map(|b|b.as_bytes().to_vec())).bind(binding.map(|b|b.as_bytes().to_vec())).fetch_all(db.pool()).await.map_err(error)?;

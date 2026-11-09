@@ -620,20 +620,20 @@ pub(crate) static CALLBACK_TABLE: [CfCallbackRegistration; 3] = [
 
 /// 一个已连接的同步根：连接键 + 上下文。`close` 负责断开、等待回调静默并上报计数。
 pub struct ProviderSession {
-    root: PathBuf,
+    vault: PathBuf,
     key: CfConnectionKey,
     context: Arc<ProviderContext>,
 }
 
 impl ProviderSession {
     /// 安装上下文并连接同步根（调用方负责注册）。
-    pub fn open(root: &Path, config: ProviderConfig) -> Result<Self, StageError> {
+    pub fn open(vault: &Path, config: ProviderConfig) -> Result<Self, StageError> {
         let context = install_provider(config)?;
-        let key = connect(root)?;
+        let key = connect(vault)?;
         record(
             "provider.session",
             &[
-                ("path", root.display().to_string()),
+                ("path", vault.display().to_string()),
                 ("source", config.source.name().to_string()),
                 ("latency_ms", config.latency_ms.to_string()),
                 ("timeout_ms", config.timeout_ms.to_string()),
@@ -643,7 +643,7 @@ impl ProviderSession {
             HResult::S_OK,
         );
         Ok(Self {
-            root: root.to_path_buf(),
+            vault: vault.to_path_buf(),
             key,
             context,
         })
@@ -668,7 +668,7 @@ impl ProviderSession {
         record(
             "provider.drain",
             &[
-                ("path", self.root.display().to_string()),
+                ("path", self.vault.display().to_string()),
                 ("in_flight", self.context.stats().in_flight.to_string()),
             ],
             hr,
@@ -678,12 +678,12 @@ impl ProviderSession {
 }
 
 /// `CfConnectSyncRoot`：安装回调表并取得连接键。
-fn connect(root: &Path) -> Result<CfConnectionKey, StageError> {
-    let root_w = wide(root);
+fn connect(vault: &Path) -> Result<CfConnectionKey, StageError> {
+    let vault_w = wide(vault);
     let mut key = CfConnectionKey::default();
     let hr = HResult::new(unsafe {
         CfConnectSyncRoot(
-            root_w.as_ptr(),
+            vault_w.as_ptr(),
             CALLBACK_TABLE.as_ptr(),
             std::ptr::null_mut(),
             // 请求完整路径，使 FETCH_DATA 日志能直接显示是哪个条目。
@@ -694,7 +694,7 @@ fn connect(root: &Path) -> Result<CfConnectionKey, StageError> {
     record(
         "connect",
         &[
-            ("path", root.display().to_string()),
+            ("path", vault.display().to_string()),
             ("callbacks", "fetch_data,cancel_fetch_data".to_string()),
             ("connect_flags", "require_full_file_path".to_string()),
             ("connection_key", format!("0x{:X}", key.internal)),
@@ -707,7 +707,7 @@ fn connect(root: &Path) -> Result<CfConnectionKey, StageError> {
         Err(StageError::new(
             "connect",
             hr,
-            format!("CfConnectSyncRoot 失败：{}", root.display()),
+            format!("CfConnectSyncRoot 失败：{}", vault.display()),
         ))
     }
 }
@@ -795,8 +795,8 @@ impl ReadMode {
 }
 
 /// 原型条目的绝对路径（`release`/`guard` 复用）。
-pub(crate) fn entry_path(root: &Path, name: &str) -> PathBuf {
-    root.join(PROBE_DIRECTORY).join(name)
+pub(crate) fn entry_path(vault: &Path, name: &str) -> PathBuf {
+    vault.join(PROBE_DIRECTORY).join(name)
 }
 
 /// 原型条目的逻辑大小；未知名目报错（`release`/`guard` 复用）。
@@ -818,10 +818,10 @@ pub(crate) fn require_entry(name: &str) -> Result<u64, StageError> {
 }
 
 /// 读取条目（整份或区间），并把结果与固定内容版本的期望哈希逐字节比对。
-pub fn read_entry(root: &Path, name: &str, mode: ReadMode) -> Result<ReadOutcome, StageError> {
+pub fn read_entry(vault: &Path, name: &str, mode: ReadMode) -> Result<ReadOutcome, StageError> {
     let size = require_entry(name)?;
     let (offset, length) = mode.start_and_length(size)?;
-    let path = entry_path(root, name);
+    let path = entry_path(vault, name);
     let started = Instant::now();
     let (attempt, open_ms, read_ms) = read_bytes(&path, offset, length);
     let elapsed_ms = started.elapsed().as_millis();
@@ -945,7 +945,7 @@ struct CancelTiming {
 /// 针对**那个线程**发取消。取消发生在 `FETCH_DATA` 已开始之后（`cancel_after_ms` 从观察到
 /// 第一个回调开始计时），返回前读线程必须已经退出（用 `wait_idle` 确认没有回调仍在执行）。
 pub fn read_with_cancel(
-    root: &Path,
+    vault: &Path,
     name: &str,
     cancel_after_ms: u64,
 ) -> Result<CancelOutcome, StageError> {
@@ -953,7 +953,7 @@ pub fn read_with_cancel(
     use std::os::windows::io::AsRawHandle;
 
     let size = require_entry(name)?;
-    let path = entry_path(root, name);
+    let path = entry_path(vault, name);
     let context = provider_context().ok_or_else(|| {
         StageError::new(
             "cancel.preflight",
@@ -1121,8 +1121,8 @@ fn cancel_reader(thread_id: u64, file_handle: isize) -> u32 {
 }
 
 /// 已水合数据的第三方证据：`CfGetPlaceholderInfo` 报告的本地位数（不触发水合）。
-pub fn on_disk_data_size(root: &Path, name: &str) -> Result<i64, StageError> {
-    let path = entry_path(root, name);
+pub fn on_disk_data_size(vault: &Path, name: &str) -> Result<i64, StageError> {
+    let path = entry_path(vault, name);
     super::prototype::on_disk_data_size(&path)
 }
 
@@ -1150,8 +1150,8 @@ impl ReadExpectation {
 }
 
 /// 条目必须是原型占位符：不存在的条目、普通文件都不能被当成“水合失败”的证据。
-fn require_placeholder(root: &Path, name: &str) -> Result<(), StageError> {
-    let path = entry_path(root, name);
+fn require_placeholder(vault: &Path, name: &str) -> Result<(), StageError> {
+    let path = entry_path(vault, name);
     match super::prototype::try_observe(&path)? {
         Some(observation) if observation.is_placeholder() => Ok(()),
         Some(_) => Err(StageError::new(
@@ -1172,7 +1172,7 @@ fn require_placeholder(root: &Path, name: &str) -> Result<(), StageError> {
 /// 返回 `Ok(())` 表示“实际观察符合声明期望”；不符时返回带阶段与错误码的
 /// [`StageError`]，由命令入口以非零退出码结束（不允许把意外成功/意外失败当成功）。
 pub fn run_read(
-    root: &Path,
+    vault: &Path,
     name: &str,
     mode: ReadMode,
     config: ProviderConfig,
@@ -1180,10 +1180,10 @@ pub fn run_read(
 ) -> Result<(), StageError> {
     let size = require_entry(name)?;
     let (offset, length) = mode.start_and_length(size)?;
-    require_placeholder(root, name)?;
-    let session = ProviderSession::open(root, config)?;
-    let outcome = read_entry(root, name, mode)?;
-    let on_disk = on_disk_data_size(root, name).unwrap_or(-1);
+    require_placeholder(vault, name)?;
+    let session = ProviderSession::open(vault, config)?;
+    let outcome = read_entry(vault, name, mode)?;
+    let on_disk = on_disk_data_size(vault, name).unwrap_or(-1);
     let hr = outcome.error_code.map_or(HResult::S_OK, hresult_from_win32);
     record(
         "read.result",
@@ -1274,16 +1274,16 @@ pub fn run_read(
 
 /// `cancel` 子命令：读取大条目并在传输中途取消，验证回调中止、读取有界返回、句柄可关闭。
 pub fn run_cancel(
-    root: &Path,
+    vault: &Path,
     name: &str,
     config: ProviderConfig,
     cancel_after_ms: u64,
     require_cancel_callback: bool,
 ) -> Result<(), StageError> {
     require_entry(name)?;
-    require_placeholder(root, name)?;
-    let session = ProviderSession::open(root, config)?;
-    let outcome = read_with_cancel(root, name, cancel_after_ms)?;
+    require_placeholder(vault, name)?;
+    let session = ProviderSession::open(vault, config)?;
+    let outcome = read_with_cancel(vault, name, cancel_after_ms)?;
     let hr = outcome.error_code.map_or(HResult::S_OK, hresult_from_win32);
     record(
         "cancel.result",
@@ -1415,7 +1415,7 @@ pub struct HydrateOutcome {
 /// `cancel_after_ms` 在传输中途关闭句柄、`disconnect_after_ms` 在传输中途
 /// `CfDisconnectSyncRoot`：两者都必须在有限时间内返回，并且不留下在途回调。
 pub fn run_hydrate(
-    root: &Path,
+    vault: &Path,
     name: &str,
     mode: ReadMode,
     config: ProviderConfig,
@@ -1424,10 +1424,10 @@ pub fn run_hydrate(
 ) -> Result<HydrateOutcome, StageError> {
     let size = require_entry(name)?;
     let (offset, length) = mode.start_and_length(size)?;
-    require_placeholder(root, name)?;
-    let path = entry_path(root, name);
+    require_placeholder(vault, name)?;
+    let path = entry_path(vault, name);
     let path_w = wide(&path);
-    let session = ProviderSession::open(root, config)?;
+    let session = ProviderSession::open(vault, config)?;
     let context = Arc::clone(session.context());
     let connection_key = session.key();
 
@@ -1507,7 +1507,7 @@ pub fn run_hydrate(
     context.wait_idle(DEFAULT_DRAIN_TIMEOUT)?;
     let stats = context.stats();
     let platform_range = context.last_fetch_range();
-    let on_disk = on_disk_data_size(root, name).unwrap_or(-1);
+    let on_disk = on_disk_data_size(vault, name).unwrap_or(-1);
     record(
         "hydrate.result",
         &[

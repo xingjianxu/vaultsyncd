@@ -1,7 +1,7 @@
 //! 历史与回收站恢复（design §10.3、I12、T13）：按旧不可变版本创建**新的**当前版本，以及把回收站
 //! 清单里的文件/目录子树放回命名空间（原位置被占用时另名并回报实际位置）。
 //!
-//! 两类恢复都复用 put 的提交协调（[`crate::commit::put::RootCommitGate`]、意图状态机、受控发布、
+//! 两类恢复都复用 put 的提交协调（[`crate::commit::put::VaultCommitGate`]、意图状态机、受控发布、
 //! 单一元数据事务），差别只在“内容从哪来”和“事务写什么”：
 //!
 //! - [`version`]：内容取自已提交的旧版本对象。发布前先建立**内容租约**（[`ContentLeasePort`]），
@@ -134,13 +134,13 @@ pub enum RestoreFailureReason {
         /// 原因文本。
         detail: String,
     },
-    /// 同一 Root 已有提交在进行：不并发修改同一棵树。
+    /// 同一 Vault 已有提交在进行：不并发修改同一棵树。
     Gate(CommitGateError),
-    /// Root epoch 与请求预期不符：服务器事实已重建，旧恢复作废（`EPOCH_CHANGED`）。
+    /// Vault epoch 与请求预期不符：服务器事实已重建，旧恢复作废（`EPOCH_CHANGED`）。
     EpochChanged {
         /// 请求携带的 epoch。
         expected: ServerEpoch,
-        /// Root 当前的 epoch。
+        /// Vault 当前的 epoch。
         actual: ServerEpoch,
     },
     /// 条目 revision 已不是请求基线（`BASE_MISMATCH`）。
@@ -286,7 +286,7 @@ impl fmt::Display for RestoreFailureReason {
             RestoreFailureReason::Gate(error) => write!(f, "{error}"),
             RestoreFailureReason::EpochChanged { expected, actual } => write!(
                 f,
-                "Root epoch 已从请求的 {expected} 变为 {actual}，旧恢复作废"
+                "Vault epoch 已从请求的 {expected} 变为 {actual}，旧恢复作废"
             ),
             RestoreFailureReason::BaseMismatch { detail } => write!(f, "基线过期：{detail}"),
             RestoreFailureReason::SubtreeChanged { detail } => {

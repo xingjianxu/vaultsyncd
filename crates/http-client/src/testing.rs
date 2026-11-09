@@ -85,7 +85,7 @@ pub fn error_response(
                 message: message.to_owned(),
                 request_id: "test-request".to_owned(),
                 retryable,
-                root_id: None,
+                vault_id: None,
             },
         },
     )

@@ -1,7 +1,7 @@
 use super::*;
 use crate::cfapi::catalog::Identity;
 use std::sync::atomic::{AtomicU64, Ordering};
-use vaultsyncd_domain::ids::{BindingId, EntryId, RootId, VersionId};
+use vaultsyncd_domain::ids::{BindingId, EntryId, VaultId, VersionId};
 struct Counting(AtomicU64);
 impl Callbacks for Counting {
     fn fetch(&self, _: ReadDemand) -> Result<(), i32> {
@@ -13,7 +13,7 @@ impl Callbacks for Counting {
 fn identity() -> Identity {
     Identity {
         binding: BindingId::from_bytes([66; 16]),
-        root: RootId::from_bytes([67; 16]),
+        vault: VaultId::from_bytes([67; 16]),
         entry: EntryId::from_bytes([68; 16]),
         version: VersionId::from_bytes([69; 16]),
     }
@@ -37,7 +37,7 @@ fn native_adapter_lifecycle_metadata_restart_and_rename() {
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(path.join("keep.txt"), b"user content").unwrap();
     let id = identity();
-    let mut cat = Catalog::new(id.binding, id.root);
+    let mut cat = Catalog::new(id.binding, id.vault);
     cat.insert(id).unwrap();
     let callbacks = Arc::new(Counting(AtomicU64::new(0)));
     crate::shell::register(&path, &cat).unwrap();
@@ -92,7 +92,7 @@ fn native_adapter_lifecycle_metadata_restart_and_rename() {
             "cfapi::adapter::native_tests::native_adapter_restart_child",
             "--nocapture",
         ])
-        .env("VAULTSYNCD_S066_RESTART_ROOT", &path)
+        .env("VAULTSYNCD_S066_RESTART_VAULT", &path)
         .env(
             "VAULTSYNCD_S066_FILE_ID",
             format!("{:?}", original.identity),
@@ -132,15 +132,15 @@ fn native_adapter_lifecycle_metadata_restart_and_rename() {
     broken[20] ^= 1;
     assert!(cat.resolve(&broken).is_err());
     assert_eq!(callbacks.0.load(Ordering::SeqCst), 0);
-    // A separate connection verifies callback context/root routing without global process state.
+    // A separate connection verifies callback context/vault routing without global process state.
     let other = path.with_extension("other");
     std::fs::create_dir(&other).unwrap();
     let foreign = Identity {
         binding: BindingId::from_bytes([80; 16]),
-        root: RootId::from_bytes([81; 16]),
+        vault: VaultId::from_bytes([81; 16]),
         ..id
     };
-    let mut foreign_cat = Catalog::new(foreign.binding, foreign.root);
+    let mut foreign_cat = Catalog::new(foreign.binding, foreign.vault);
     foreign_cat.insert(foreign).unwrap();
     let mut second = Adapter::connect(&other, foreign_cat, callbacks.clone()).unwrap();
     assert!(second.create("wrong", id, 1, false).is_err());
@@ -160,7 +160,7 @@ fn native_adapter_lifecycle_metadata_restart_and_rename() {
     adapter.catalog().write().unwrap().insert(new_id).unwrap();
     let mutate_blob = |bytes: &[u8]| {
         adapter
-            .root
+            .vault
             .with_parent("renamed.bin", |parent, name| {
                 let file = open_child_shared(parent, name, false, false, 0x0010_0182, false, 0)?;
                 hr(unsafe {
@@ -212,7 +212,7 @@ fn native_adapter_lifecycle_metadata_restart_and_rename() {
 
 #[test]
 fn native_adapter_restart_child() {
-    let Some(path) = std::env::var_os("VAULTSYNCD_S066_RESTART_ROOT") else {
+    let Some(path) = std::env::var_os("VAULTSYNCD_S066_RESTART_VAULT") else {
         return;
     };
     let id = identity();
@@ -220,7 +220,7 @@ fn native_adapter_restart_child() {
         version: VersionId::from_bytes([71; 16]),
         ..id
     };
-    let mut cat = Catalog::new(id.binding, id.root);
+    let mut cat = Catalog::new(id.binding, id.vault);
     cat.insert(current).unwrap();
     let mut adapter = Adapter::connect(Path::new(&path), cat, Arc::new(MetadataOnly)).unwrap();
     let observed = adapter.inspect("renamed.bin").unwrap();

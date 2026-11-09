@@ -11,7 +11,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         ("binding_id", &p.binding_id),
         ("rules", &p.rules),
         ("rules_version", &p.rules_version),
-        ("root_id", &p.root_id),
+        ("vault_id", &p.vault_id),
         ("entry_id", &p.entry_id),
         ("operation_id", &p.operation_id),
         ("version_id", &p.version_id),
@@ -32,13 +32,13 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         ("search", &p.search),
     ];
     let (required, optional): (&[&str], &[&str]) = match command.name {
-        C::GetStatus | C::ListBindings | C::GetConnection | C::Logout | C::ListRoots => (&[], &[]),
+        C::GetStatus | C::ListBindings | C::GetConnection | C::Logout | C::ListVaults => (&[], &[]),
         C::PrepareMaintenance => (&["destination"], &[]),
         C::SubscribeStatus => (&[], &["after_version"]),
         C::ListFiles => (&["binding_id"], &["cursor"]),
         C::ClaimNotification => (&["notification_key", "notification_generation"], &[]),
         C::CreateBinding => (
-            &["binding_id", "root_id", "local_path", "cache_path", "mode"],
+            &["binding_id", "vault_id", "local_path", "cache_path", "mode"],
             &[],
         ),
         C::PauseBinding | C::ResumeBinding | C::DetachBinding => (&["binding_id"], &[]),

@@ -9,8 +9,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use sha2::{Digest, Sha256};
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, TxId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, TxId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, VaultSeq};
 
 use crate::objects::ContentDigest;
 use crate::ports::external_store::{
@@ -50,7 +50,7 @@ pub(crate) struct FsState {
     /// 目录项仍被列出，但进入时已确认不存在（并发删除）。
     pub(crate) gone_dirs: BTreeSet<String>,
     pub(crate) unreadable_files: BTreeSet<String>,
-    pub(crate) root_unavailable: bool,
+    pub(crate) vault_unavailable: bool,
     pub(crate) unrepresentable_in: BTreeMap<String, usize>,
     /// 目录身份（设备 1 + inode）；首次读取时分配。
     pub(crate) dir_inodes: BTreeMap<String, u64>,
@@ -192,8 +192,8 @@ fn parent_of(path: &str) -> &str {
 impl WorkTreePort for FakeWorkTree {
     fn list_dir(&mut self, dir: &str) -> Result<WorkDirListing, WorkTreeError> {
         let fs = self.fs.borrow();
-        if fs.root_unavailable {
-            return Err(WorkTreeError::RootUnavailable {
+        if fs.vault_unavailable {
+            return Err(WorkTreeError::VaultUnavailable {
                 detail: "挂载身份漂移".to_owned(),
             });
         }
@@ -247,8 +247,8 @@ impl WorkTreePort for FakeWorkTree {
 
     fn observe_dir(&mut self, dir: &str) -> Result<Option<DirIdentity>, WorkTreeError> {
         let mut fs = self.fs.borrow_mut();
-        if fs.root_unavailable {
-            return Err(WorkTreeError::RootUnavailable {
+        if fs.vault_unavailable {
+            return Err(WorkTreeError::VaultUnavailable {
                 detail: "挂载身份漂移".to_owned(),
             });
         }
@@ -272,8 +272,8 @@ impl WorkTreePort for FakeWorkTree {
 
     fn observe(&mut self, path: &str) -> Result<WorkObservation, WorkTreeError> {
         let fs = self.fs.borrow();
-        if fs.root_unavailable {
-            return Err(WorkTreeError::RootUnavailable {
+        if fs.vault_unavailable {
+            return Err(WorkTreeError::VaultUnavailable {
                 detail: "挂载身份漂移".to_owned(),
             });
         }
@@ -491,7 +491,7 @@ pub(crate) struct StoredVersion {
     pub(crate) digest: ContentDigest,
     pub(crate) bytes: u64,
     pub(crate) revision: Revision,
-    pub(crate) seq: RootSeq,
+    pub(crate) seq: VaultSeq,
     pub(crate) storage_path: String,
 }
 
@@ -504,7 +504,7 @@ pub(crate) struct FakeExternalStore {
     pub(crate) directories: BTreeSet<String>,
     pub(crate) versions: Vec<StoredVersion>,
     /// 事件批次：`(seq, 路径)`，与版本一一对应。
-    pub(crate) events: Vec<(RootSeq, String)>,
+    pub(crate) events: Vec<(VaultSeq, String)>,
     pub(crate) writes: Vec<ExternalWrite>,
     pub(crate) moves: Vec<ExternalMove>,
     pub(crate) deletes: Vec<ExternalDelete>,
@@ -536,7 +536,7 @@ impl FakeExternalStore {
 impl ExternalAdoptStore for FakeExternalStore {
     async fn lookup_path(
         &mut self,
-        _root: RootId,
+        _vault: VaultId,
         path: &str,
     ) -> Result<Option<KnownEntry>, ExternalStoreError> {
         if let Some(error) = self.lookup_error.take() {
@@ -590,7 +590,7 @@ impl ExternalAdoptStore for FakeExternalStore {
                 (entry, expected_revision.next().expect("可推进"))
             }
         };
-        let seq = RootSeq::new(self.counter).expect("合法");
+        let seq = VaultSeq::new(self.counter).expect("合法");
         self.entries.insert(
             write.path.clone(),
             (
@@ -655,7 +655,7 @@ impl ExternalAdoptStore for FakeExternalStore {
         self.entries.remove(&request.from);
         self.entries
             .insert(request.to.clone(), (entry, next, content));
-        let seq = RootSeq::new(self.counter).expect("合法");
+        let seq = VaultSeq::new(self.counter).expect("合法");
         self.events.push((seq, request.to.clone()));
         Ok(ExternalMoveRecord {
             entry,
@@ -696,7 +696,7 @@ impl ExternalAdoptStore for FakeExternalStore {
         let versions = self.versions_of(&request.path).len();
         self.entries.remove(&request.path);
         self.trashed.push((request.path.clone(), entry, versions));
-        let seq = RootSeq::new(self.counter).expect("合法");
+        let seq = VaultSeq::new(self.counter).expect("合法");
         self.events.push((seq, request.path.clone()));
         Ok(ExternalDeleteRecord {
             entry,

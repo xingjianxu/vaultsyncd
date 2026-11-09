@@ -1,7 +1,7 @@
 //! Atomic fixed-version leases exposed to authenticated clients (S069).
 //! A caller holds BEGIN IMMEDIATE across version/object checks and lease insertion.
 use sqlx::{Row, Sqlite, Transaction};
-use vaultsyncd_domain::ids::{EntryId, ObjectLeaseId, RootId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, ObjectLeaseId, UserId, VaultId, VersionId};
 
 /// Server-controlled bounded lease duration, in seconds.
 pub const TTL_SECONDS: i64 = 120;
@@ -10,8 +10,8 @@ pub const TTL_SECONDS: i64 = 120;
 pub struct Request {
     /// Lease/request identity.
     pub id: ObjectLeaseId,
-    /// Authorized root.
-    pub root: RootId,
+    /// Authorized vault.
+    pub vault: VaultId,
     /// Fixed entry.
     pub entry: EntryId,
     /// Fixed version, never head.
@@ -34,7 +34,7 @@ pub struct Lease {
 /// Failure keeps the caller's local bytes intact.
 #[derive(Debug)]
 pub enum Error {
-    /// Root is not owned by this account.
+    /// Vault is not owned by this account.
     OutOfScope,
     /// Version/object missing, collectable, or content facts disagree.
     Gone,
@@ -60,10 +60,10 @@ impl std::error::Error for Error {}
 async fn authorize(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<(), Error> {
-    let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM roots WHERE id=? AND owner_id=?")
-        .bind(root.as_bytes().as_slice())
+    let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM vaults WHERE id=? AND owner_id=?")
+        .bind(vault.as_bytes().as_slice())
         .bind(owner.as_bytes().as_slice())
         .fetch_optional(&mut **tx)
         .await?;
@@ -73,7 +73,7 @@ async fn existing(tx: &mut Transaction<'_, Sqlite>, r: &Request) -> Result<Optio
     let row=sqlx::query("SELECT q.*,coalesce(l.expires_at,0) AS expiry FROM version_lease_requests q LEFT JOIN object_leases l ON l.id=q.id WHERE q.id=?")
         .bind(r.id.as_bytes().as_slice()).fetch_optional(&mut **tx).await?;
     let Some(row) = row else { return Ok(None) };
-    if row.get::<Vec<u8>, _>("root_id") != r.root.as_bytes()
+    if row.get::<Vec<u8>, _>("vault_id") != r.vault.as_bytes()
         || row.get::<Vec<u8>, _>("entry_id") != r.entry.as_bytes()
         || row.get::<Vec<u8>, _>("version_id") != r.version.as_bytes()
         || row.get::<Vec<u8>, _>("object_hash") != r.digest
@@ -88,8 +88,8 @@ async fn existing(tx: &mut Transaction<'_, Sqlite>, r: &Request) -> Result<Optio
     }))
 }
 async fn version_exists(tx: &mut Transaction<'_, Sqlite>, r: &Request) -> Result<(), Error> {
-    let found:Option<i64>=sqlx::query_scalar("SELECT 1 FROM versions v JOIN objects o ON o.root_id=v.root_id AND o.hash=v.object_hash WHERE v.root_id=? AND v.entry_id=? AND v.id=? AND v.object_hash=? AND v.size=? AND o.size=v.size AND o.gc_state='live'")
-        .bind(r.root.as_bytes().as_slice()).bind(r.entry.as_bytes().as_slice()).bind(r.version.as_bytes().as_slice())
+    let found:Option<i64>=sqlx::query_scalar("SELECT 1 FROM versions v JOIN objects o ON o.vault_id=v.vault_id AND o.hash=v.object_hash WHERE v.vault_id=? AND v.entry_id=? AND v.id=? AND v.object_hash=? AND v.size=? AND o.size=v.size AND o.gc_state='live'")
+        .bind(r.vault.as_bytes().as_slice()).bind(r.entry.as_bytes().as_slice()).bind(r.version.as_bytes().as_slice())
         .bind(r.digest.as_slice()).bind(i64::try_from(r.size).map_err(|_|Error::Gone)?).fetch_optional(&mut **tx).await?;
     found.map(|_| ()).ok_or(Error::Gone)
 }
@@ -100,7 +100,7 @@ pub async fn acquire(
     r: &Request,
     now: i64,
 ) -> Result<Lease, Error> {
-    authorize(tx, owner, r.root).await?;
+    authorize(tx, owner, r.vault).await?;
     if let Some(lease) = existing(tx, r).await? {
         if lease.closed || lease.expires_at <= now {
             return Err(Error::Expired);
@@ -113,10 +113,10 @@ pub async fn acquire(
         .checked_add(TTL_SECONDS)
         .filter(|_| now >= 0)
         .ok_or(Error::Gone)?;
-    sqlx::query("INSERT INTO object_leases(id,root_id,object_hash,purpose,expires_at) VALUES(?,?,?,'download',?)")
-        .bind(r.id.as_bytes().as_slice()).bind(r.root.as_bytes().as_slice()).bind(r.digest.as_slice()).bind(expiry).execute(&mut **tx).await?;
-    sqlx::query("INSERT INTO version_lease_requests(id,root_id,entry_id,version_id,object_hash,size) VALUES(?,?,?,?,?,?)")
-        .bind(r.id.as_bytes().as_slice()).bind(r.root.as_bytes().as_slice()).bind(r.entry.as_bytes().as_slice())
+    sqlx::query("INSERT INTO object_leases(id,vault_id,object_hash,purpose,expires_at) VALUES(?,?,?,'download',?)")
+        .bind(r.id.as_bytes().as_slice()).bind(r.vault.as_bytes().as_slice()).bind(r.digest.as_slice()).bind(expiry).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO version_lease_requests(id,vault_id,entry_id,version_id,object_hash,size) VALUES(?,?,?,?,?,?)")
+        .bind(r.id.as_bytes().as_slice()).bind(r.vault.as_bytes().as_slice()).bind(r.entry.as_bytes().as_slice())
         .bind(r.version.as_bytes().as_slice()).bind(r.digest.as_slice()).bind(r.size as i64).execute(&mut **tx).await?;
     Ok(Lease {
         request: r.clone(),
@@ -132,7 +132,7 @@ pub async fn inspect(
     now: i64,
     renew: bool,
 ) -> Result<Lease, Error> {
-    authorize(tx, owner, r.root).await?;
+    authorize(tx, owner, r.vault).await?;
     let mut lease = existing(tx, r).await?.ok_or(Error::Expired)?;
     if lease.closed || lease.expires_at <= now {
         return Err(Error::Expired);
@@ -154,7 +154,7 @@ pub async fn release(
     owner: UserId,
     r: &Request,
 ) -> Result<Lease, Error> {
-    authorize(tx, owner, r.root).await?;
+    authorize(tx, owner, r.vault).await?;
     let mut lease = existing(tx, r).await?.ok_or(Error::Expired)?;
     sqlx::query("DELETE FROM object_leases WHERE id=?")
         .bind(r.id.as_bytes().as_slice())
@@ -178,9 +178,9 @@ mod tests {
         let dir = TestDir::new(label);
         let db = open_database(&dir).await;
         let owner = seed_owner(&db, 1).await;
-        let (root, parent) = register_root(&db, owner, 2).await;
-        let entry = seed_file(&db, owner, root, parent, 3, "content").await;
-        let digest = seed_object(&db, owner, root, 4, 12).await;
+        let (vault, parent) = register_vault(&db, owner, 2).await;
+        let entry = seed_file(&db, owner, vault, parent, 3, "content").await;
+        let digest = seed_object(&db, owner, vault, 4, 12).await;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -190,7 +190,7 @@ mod tests {
         let batch = changes::append_change(
             &mut tx,
             owner,
-            root,
+            vault,
             crate::test_support::tx(6),
             "[{\"kind\":\"test\"}]",
             at(now),
@@ -202,7 +202,7 @@ mod tests {
             owner,
             &versions::NewVersion {
                 id: version,
-                root,
+                vault,
                 entry,
                 object_hash: digest,
                 size: 12,
@@ -220,7 +220,7 @@ mod tests {
             owner,
             Request {
                 id: object_lease(7),
-                root,
+                vault,
                 entry,
                 version,
                 digest,
@@ -238,13 +238,13 @@ mod tests {
         assert_eq!(l.expires_at, now + TTL_SECONDS);
         let mut tx = db.begin_write().await.unwrap();
         assert_eq!(acquire(&mut tx, owner, &r, now + 10).await.unwrap(), l);
-        let active = leases::active_object_leases(&mut tx, owner, r.root, at(now))
+        let active = leases::active_object_leases(&mut tx, owner, r.vault, at(now))
             .await
             .unwrap();
         assert_eq!(active.len(), 1);
         let attempted =
-            sqlx::query("UPDATE objects SET gc_state='collectable' WHERE root_id=? AND hash=?")
-                .bind(r.root.as_bytes().as_slice())
+            sqlx::query("UPDATE objects SET gc_state='collectable' WHERE vault_id=? AND hash=?")
+                .bind(r.vault.as_bytes().as_slice())
                 .bind(r.digest.as_slice())
                 .execute(&mut *tx)
                 .await;
@@ -277,13 +277,13 @@ mod tests {
             Err(Error::Expired)
         ));
         assert!(
-            leases::active_object_leases(&mut tx, owner, r.root, at(now))
+            leases::active_object_leases(&mut tx, owner, r.vault, at(now))
                 .await
                 .unwrap()
                 .is_empty()
         );
-        sqlx::query("UPDATE objects SET gc_state='collectable' WHERE root_id=? AND hash=?")
-            .bind(r.root.as_bytes().as_slice())
+        sqlx::query("UPDATE objects SET gc_state='collectable' WHERE vault_id=? AND hash=?")
+            .bind(r.vault.as_bytes().as_slice())
             .bind(r.digest.as_slice())
             .execute(&mut *tx)
             .await

@@ -1,4 +1,4 @@
-"""Read-only service-UID checks. Root admission remains authoritative at registration."""
+"""Read-only service-UID checks. Vault admission remains authoritative at registration."""
 import fcntl
 import json
 import os
@@ -49,17 +49,17 @@ def main():
         with Path(sys.argv[3]).open("rb") as source:
             config = tomllib.load(source)
         configuration = {"stateDir": config["state"]["dir"],
-                         "rootPaths": config.get("roots", {}).get("allowed_bases", [])}
+                         "vaultPaths": config.get("vaults", {}).get("allowed_bases", [])}
     elif sys.argv[2] == "--state":
-        configuration = {"stateDir": sys.argv[3], "rootPaths": []}
+        configuration = {"stateDir": sys.argv[3], "vaultPaths": []}
     else:
         configuration = json.loads(Path(sys.argv[2]).read_text())
     backup = Path(configuration["stateDir"]) / "backups"
     inspect(configuration["stateDir"], private=True, snapshot_mount=not backup.exists())
     if backup.exists() or backup.is_symlink():
         inspect(str(backup), private=True, snapshot_mount=True)
-    for root in configuration["rootPaths"]:
-        inspect(root)
+    for vault in configuration["vaultPaths"]:
+        inspect(vault)
     print("vaultsyncd preflight: btrfs/CoW/access/mount options verified; no permissions changed")
 
 

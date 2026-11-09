@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use vaultsyncd_server_core::api::roots::AllowedBases;
+use vaultsyncd_server_core::api::vaults::AllowedBases;
 
 /// 开发默认监听地址：只监听回环地址，端口与常见开发服务分开。
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8721";
@@ -63,8 +63,8 @@ pub struct Config {
     pub state_dir: PathBuf,
     /// 服务端数据库文件的绝对路径（`state_dir/server.sqlite`）。
     pub database: PathBuf,
-    /// 允许注册 Root 的基目录（design §11.4）；`None` 表示没有配置，任何注册都拒绝。
-    pub allowed_root_bases: Option<AllowedBases>,
+    /// 允许注册 Vault 的基目录（design §11.4）；`None` 表示没有配置，任何注册都拒绝。
+    pub allowed_vault_bases: Option<AllowedBases>,
     /// 日志配置。
     pub log: LogConfig,
 }
@@ -136,15 +136,15 @@ struct RawConfig {
     server: RawServer,
     state: RawState,
     #[serde(default)]
-    roots: RawRoots,
+    vaults: RawVaults,
     #[serde(default)]
     log: RawLog,
 }
 
-/// `[roots]` 段：Root 注册的部署契约。
+/// `[vaults]` 段：Vault 注册的部署契约。
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct RawRoots {
+struct RawVaults {
     /// 允许注册的基目录（服务器绝对路径，规整形式）。缺省即“没有配置”。
     #[serde(default)]
     allowed_bases: Option<Vec<String>>,
@@ -244,12 +244,12 @@ impl Config {
         let database = state_dir.join(DATABASE_FILE_NAME);
 
         // 允许基目录是部署契约：写错就拒绝启动，而不是把“空集合”解释成“不限制”。
-        let allowed_root_bases = match raw.roots.allowed_bases {
+        let allowed_vault_bases = match raw.vaults.allowed_bases {
             None => None,
             Some(list) => Some(
                 AllowedBases::new(list.into_iter().map(PathBuf::from)).map_err(|error| {
                     ConfigError::InvalidValue {
-                        field: "roots.allowed_bases",
+                        field: "vaults.allowed_bases",
                         detail: error.to_string(),
                     }
                 })?,
@@ -281,7 +281,7 @@ impl Config {
             listen,
             state_dir,
             database,
-            allowed_root_bases,
+            allowed_vault_bases,
             log: LogConfig { level, format },
         })
     }
@@ -320,25 +320,25 @@ mod tests {
     }
 
     #[test]
-    fn allowed_root_bases_are_optional_but_validated_when_present() {
-        let dir = temp_dir("roots");
+    fn allowed_vault_bases_are_optional_but_validated_when_present() {
+        let dir = temp_dir("vaults");
         let text = format!(
-            "[state]\ndir = \"{}\"\n\n[roots]\nallowed_bases = [\"/data/roots\"]\n",
+            "[state]\ndir = \"{}\"\n\n[vaults]\nallowed_bases = [\"/data/vaults\"]\n",
             dir.display()
         );
         let config = Config::parse(&text, "test.toml").expect("解析配置");
-        let bases = config.allowed_root_bases.as_ref().expect("允许基目录");
+        let bases = config.allowed_vault_bases.as_ref().expect("允许基目录");
         assert_eq!(bases.len(), 1);
-        assert!(bases.contains(Path::new("/data/roots/project")));
+        assert!(bases.contains(Path::new("/data/vaults/project")));
 
         // 没有配置就是 `None`：注册端点拒绝一切路径，而不是“不限制”。
         let without = format!("[state]\ndir = \"{}\"\n", dir.display());
         let config = Config::parse(&without, "test.toml").expect("解析配置");
-        assert!(config.allowed_root_bases.is_none());
+        assert!(config.allowed_vault_bases.is_none());
 
-        for bad in ["[]", "[\"relative\"]", "[\"/data/../roots\"]"] {
+        for bad in ["[]", "[\"relative\"]", "[\"/data/../vaults\"]"] {
             let text = format!(
-                "[state]\ndir = \"{}\"\n\n[roots]\nallowed_bases = {bad}\n",
+                "[state]\ndir = \"{}\"\n\n[vaults]\nallowed_bases = {bad}\n",
                 dir.display()
             );
             let error = Config::parse(&text, "test.toml").expect_err("非法允许基目录必须拒绝");

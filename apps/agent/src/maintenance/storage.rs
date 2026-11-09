@@ -143,7 +143,7 @@ pub(super) fn restore(directory: &Path, target: &Path) -> io::Result<()> {
     Ok(())
 }
 pub(crate) fn verify_program(directory: &Path) -> io::Result<serde_json::Value> {
-    vaultsyncd_platform_windows::files::RootHandle::open(directory)?;
+    vaultsyncd_platform_windows::files::VaultHandle::open(directory)?;
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.join("installed-files.json"))?)
             .map_err(io::Error::other)?;

@@ -16,8 +16,8 @@ use vaultsyncd_server_core::recovery::RecoveryDecision;
 use vaultsyncd_server_core::recovery::startup::{AdmissionState, RecoveryOutcome};
 
 use vaultsyncd_server_tests::{
-    Boundary, EXTERNAL_CONTENT, JournalState, NEW_CONTENT, OLD_CONTENT, ROOT, SEED_REVISION,
-    StoreHandle, digest_of, run_recovery, start_with_recovery,
+    Boundary, EXTERNAL_CONTENT, JournalState, NEW_CONTENT, OLD_CONTENT, SEED_REVISION, StoreHandle,
+    VAULT, digest_of, run_recovery, start_with_recovery,
 };
 
 fn setup(name: &str) -> (StoreHandle, PathBuf) {
@@ -222,8 +222,8 @@ fn crash_at_each_persistence_boundary_yields_a_provable_result() {
             "{} 可证明的现场不应停写",
             scenario.boundary.as_str()
         );
-        assert_eq!(admission.state(ROOT), AdmissionState::Open);
-        assert!(admission.admit_write(ROOT).is_ok());
+        assert_eq!(admission.state(VAULT), AdmissionState::Open);
+        assert!(admission.admit_write(VAULT).is_ok());
         // 旧对象与冲突候选都必须保留：恢复不删任何不可变内容。
         let settled = state(&restarted);
         assert!(
@@ -286,12 +286,12 @@ fn published_then_externally_rewritten_keeps_both_versions_and_commits_nothing()
         PutPhase::Published,
         "意图保留为协调证据"
     );
-    assert_eq!(admission.state(ROOT), AdmissionState::Open);
-    assert!(admission.report(ROOT).is_none(), "打开的门不保留报告");
+    assert_eq!(admission.state(VAULT), AdmissionState::Open);
+    assert!(admission.report(VAULT).is_none(), "打开的门不保留报告");
 }
 
 #[test]
-fn unreadable_target_pauses_the_root_with_needs_recovery() {
+fn unreadable_target_pauses_the_vault_with_needs_recovery() {
     let (probe, dir) = setup("unreadable");
     assert_eq!(crash_child_at(&dir, Boundary::AfterIntentPrepared), 9);
     probe.store().mark_unreadable().expect("注入不可读故障");
@@ -311,10 +311,10 @@ fn unreadable_target_pauses_the_root_with_needs_recovery() {
     assert_eq!(work(&restarted), OLD_CONTENT);
     assert!(settled.objects.contains_key(&digest_of(OLD_CONTENT)));
     // 写入门：拒绝写入并保留报告（readiness 为假）。
-    assert_eq!(admission.state(ROOT), AdmissionState::Paused);
-    let refusal = admission.admit_write(ROOT).expect_err("暂停必须拒绝写入");
+    assert_eq!(admission.state(VAULT), AdmissionState::Paused);
+    let refusal = admission.admit_write(VAULT).expect_err("暂停必须拒绝写入");
     assert_eq!(refusal.code(), "needs_recovery");
-    assert!(admission.report(ROOT).is_some());
+    assert!(admission.report(VAULT).is_some());
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn write_admission_is_closed_until_recovery_is_recorded() {
     let mut admission = vaultsyncd_server_core::recovery::startup::WriteAdmission::new();
     assert_eq!(
         admission
-            .admit_write(ROOT)
+            .admit_write(VAULT)
             .expect_err("先恢复再开放写入口")
             .code(),
         "recovery_pending"
@@ -331,8 +331,8 @@ fn write_admission_is_closed_until_recovery_is_recorded() {
     let report = run_blocking(run_recovery(&handle)).expect("启动恢复");
     assert!(report.intents.is_empty(), "干净装置没有未完成意图");
     admission.record(report);
-    assert_eq!(admission.state(ROOT), AdmissionState::Open);
-    assert!(admission.admit_write(ROOT).is_ok());
+    assert_eq!(admission.state(VAULT), AdmissionState::Open);
+    assert!(admission.admit_write(VAULT).is_ok());
 }
 
 /// 用当前线程 runtime 跑一个异步步骤（测试是同步的：需要在同一线程里 spawn/kill 子进程）。

@@ -14,12 +14,12 @@
 #   nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh stop
 #   nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh facts
 #
-# VM_ROOT 可用环境变量覆盖，默认 /data/vaultsyncd-lab/win-lab。
+# VM_VAULT 可用环境变量覆盖，默认 /data/vaultsyncd-lab/win-lab。
 
 set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-VM_ROOT="${VM_ROOT:-/data/vaultsyncd-lab/win-lab}"
+VM_VAULT="${VM_VAULT:-/data/vaultsyncd-lab/win-lab}"
 VM_NAME="${VM_NAME:-windows-11}"
 LAB_USER="${LAB_USER:-Quickemu}"
 SSH_PORT="${SSH_PORT:-2222}"
@@ -28,20 +28,20 @@ SPICE_PORT="${SPICE_PORT:-5930}"
 # 微软 Evaluation Center 的 Windows 11 Enterprise 评估版（官方未修改镜像）。
 # 消费者 ISO 端点会按来源 IP 拦截，见 docs/environment.md §12。
 ISO_URL="${ISO_URL:-https://go.microsoft.com/fwlink/?linkid=2382600}"
-ISO_FILE="${VM_ROOT}/${VM_NAME}/windows-11.iso"
-ISO_SHA256_FILE="${VM_ROOT}/${VM_NAME}/windows-11.iso.sha256"
+ISO_FILE="${VM_VAULT}/${VM_NAME}/windows-11.iso"
+ISO_SHA256_FILE="${VM_VAULT}/${VM_NAME}/windows-11.iso.sha256"
 
 # virtio-win 官方稳定版驱动 ISO（quickemu 自带的下载链路返回反爬 HTML，需替换）。
 VIRTIO_URL="${VIRTIO_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso}"
-VIRTIO_FILE="${VM_ROOT}/${VM_NAME}/virtio-win.iso"
+VIRTIO_FILE="${VM_VAULT}/${VM_NAME}/virtio-win.iso"
 
-UNATTENDED_DIR="${VM_ROOT}/${VM_NAME}/unattended"
-CREDENTIAL_FILE="${VM_ROOT}/secrets/lab-credentials.txt"
-SSH_KEY="${VM_ROOT}/ssh/vaultsyncd-lab_ed25519"
-KNOWN_HOSTS="${VM_ROOT}/ssh/known_hosts"
-LOG_DIR="${VM_ROOT}/logs"
-CONF="${VM_ROOT}/${VM_NAME}.conf"
-PID_FILE="${VM_ROOT}/${VM_NAME}/${VM_NAME}.pid"
+UNATTENDED_DIR="${VM_VAULT}/${VM_NAME}/unattended"
+CREDENTIAL_FILE="${VM_VAULT}/secrets/lab-credentials.txt"
+SSH_KEY="${VM_VAULT}/ssh/vaultsyncd-lab_ed25519"
+KNOWN_HOSTS="${VM_VAULT}/ssh/known_hosts"
+LOG_DIR="${VM_VAULT}/logs"
+CONF="${VM_VAULT}/${VM_NAME}.conf"
+PID_FILE="${VM_VAULT}/${VM_NAME}/${VM_NAME}.pid"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*"; exit 1; }
@@ -58,8 +58,8 @@ lab_ssh() {
 is_iso9660() { [ "$(dd if="$1" bs=1 skip=32769 count=5 2>/dev/null)" = "CD001" ]; }
 
 cmd_fetch_virtio() {
-    mkdir -p "${VM_ROOT}/downloads"
-    local tmp="${VM_ROOT}/downloads/virtio-win.iso"
+    mkdir -p "${VM_VAULT}/downloads"
+    local tmp="${VM_VAULT}/downloads/virtio-win.iso"
     if [ -f "${tmp}" ] && is_iso9660 "${tmp}"; then
         log "virtio-win ISO 已在 ${tmp}，跳过下载"
     else
@@ -108,8 +108,8 @@ cmd_prepare() {
     is_iso9660 "${ISO_FILE}" || die "${ISO_FILE} 不是 ISO 9660"
     is_iso9660 "${VIRTIO_FILE}" || die "缺可用 ${VIRTIO_FILE}，先运行 fetch-virtio"
 
-    mkdir -p "${VM_ROOT}/secrets" "${VM_ROOT}/ssh" "${LOG_DIR}"
-    chmod 700 "${VM_ROOT}/secrets" "${VM_ROOT}/ssh"
+    mkdir -p "${VM_VAULT}/secrets" "${VM_VAULT}/ssh" "${LOG_DIR}"
+    chmod 700 "${VM_VAULT}/secrets" "${VM_VAULT}/ssh"
 
     if [ ! -f "${CREDENTIAL_FILE}" ]; then
         local password
@@ -147,8 +147,8 @@ cmd_prepare() {
     fi
 
     # 重打 unattended.iso（quickget 的原命令是 mkisofs -quiet -J；这里用 xorriso 的兼容模式）。
-    xorriso -as mkisofs -quiet -J -o "${VM_ROOT}/${VM_NAME}/unattended.iso" "${UNATTENDED_DIR}/"
-    log "unattended.iso 已重打：$(stat -c %s "${VM_ROOT}/${VM_NAME}/unattended.iso") 字节"
+    xorriso -as mkisofs -quiet -J -o "${VM_VAULT}/${VM_NAME}/unattended.iso" "${UNATTENDED_DIR}/"
+    log "unattended.iso 已重打：$(stat -c %s "${VM_VAULT}/${VM_NAME}/unattended.iso") 字节"
 
     sed -e "s|@DISK_SIZE@|100G|" -e "s|@CPU_CORES@|4|" -e "s|@RAM@|8G|" \
         -e "s|@SSH_PORT@|${SSH_PORT}|" "${SCRIPT_DIR}/windows-11.conf.template" > "${CONF}"
@@ -167,7 +167,7 @@ cmd_start() {
         *$'\n'*":${SSH_PORT}"$'\n'*) die "宿主端口 ${SSH_PORT} 已被占用" ;;
     esac
     log "启动客体（display=none + SPICE TCP 127.0.0.1:${SPICE_PORT}，无本地 viewer）"
-    cd "${VM_ROOT}"
+    cd "${VM_VAULT}"
     setsid nohup quickemu --vm "${CONF}" \
         --display none --viewer none --access local --spice-port "${SPICE_PORT}" \
         --public-dir none \
@@ -189,7 +189,7 @@ cmd_status() {
         log "客体未运行（无 ${PID_FILE}）"
     fi
     ss -ltn | grep -E ":(${SSH_PORT}|${SPICE_PORT})\b" || log "端口 ${SSH_PORT}/${SPICE_PORT} 未监听"
-    tail -n 5 "${VM_ROOT}/${VM_NAME}/${VM_NAME}.log" 2>/dev/null || true
+    tail -n 5 "${VM_VAULT}/${VM_NAME}/${VM_NAME}.log" 2>/dev/null || true
 }
 
 cmd_wait_ssh() {
@@ -202,7 +202,7 @@ cmd_wait_ssh() {
         fi
         sleep 15
     done
-    die "SSH 在等待期内未可用；查看 ${LOG_DIR}、${VM_ROOT}/${VM_NAME}/${VM_NAME}.log"
+    die "SSH 在等待期内未可用；查看 ${LOG_DIR}、${VM_VAULT}/${VM_NAME}/${VM_NAME}.log"
 }
 
 cmd_facts() {
@@ -223,7 +223,7 @@ cmd_stop() {
         fi
         sleep 5
     done
-    die "qemu 在 ${STOP_SECONDS:-180}s 内未退出；不要 kill -9，先检查 ${VM_ROOT}/${VM_NAME}/${VM_NAME}.log"
+    die "qemu 在 ${STOP_SECONDS:-180}s 内未退出；不要 kill -9，先检查 ${VM_VAULT}/${VM_NAME}/${VM_NAME}.log"
 }
 
 usage() {

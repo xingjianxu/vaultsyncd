@@ -7,14 +7,14 @@
 //! 不变量：
 //!
 //! - **同一 OpId 同一请求只产生一个业务结果**（design I06）：幂等键是
-//!   `(root_id, device_id, op_id)`；[`begin_operation`] 首次写入 `pending`，重复调用返回
+//!   `(vault_id, device_id, op_id)`；[`begin_operation`] 首次写入 `pending`，重复调用返回
 //!   [`BeginOperation::Replayed`] 且携带已记录的结果，调用方不得重做。
 //! - **同一 OpId 不同请求拒绝**：`request_digest` 不同就是 [`OperationError::DigestMismatch`]，
 //!   永远不会用旧结果回答一个新请求，也不会覆盖旧记录。
 //! - **摘要基于规范化请求语义**：[`request_digest`] 只接受语义字段（名、值），按字段名排序后以
 //!   长度前缀编码再做 SHA-256。JSON 键顺序、空白、等价字段顺序都不参与，因此“同一请求的两种写法”
 //!   摘要相同；字段值不同则摘要必然不同。调用方传语义值，不传原始请求字节。
-//! - **pending 不是 committed**（design I01）：`pending` 行不携带结果、不占 RootSeq；只有
+//! - **pending 不是 committed**（design I01）：`pending` 行不携带结果、不占 VaultSeq；只有
 //!   [`commit_operation`] 在同一个事务里追加事件批次并写入结果，两者一起提交或一起回滚。
 //! - **终态稳定**：`committed` 与 `rejected` 都是终态，重复的 `commit`/`reject` 返回
 //!   [`OperationError::AlreadyFinished`]；重试路径是 `begin_operation` 拿到原结果，而不是重做。
@@ -26,8 +26,8 @@
 
 use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use vaultsyncd_domain::ids::{DeviceId, ID_LEN, OpId, RootId, TxId, UserId};
-use vaultsyncd_domain::version::{RootSeq, UtcTimestamp};
+use vaultsyncd_domain::ids::{DeviceId, ID_LEN, OpId, TxId, UserId, VaultId};
+use vaultsyncd_domain::version::{UtcTimestamp, VaultSeq};
 
 use crate::changes::{self, ChangeBatch, ChangeError};
 
@@ -72,11 +72,11 @@ impl std::fmt::Debug for RequestDigest {
     }
 }
 
-/// 幂等键：同一设备在同一 Root 内的 `OpId`（design §7.2）。
+/// 幂等键：同一设备在同一 Vault 内的 `OpId`（design §7.2）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OperationKey {
-    /// 操作所在的 Root。
-    pub root: RootId,
+    /// 操作所在的 Vault。
+    pub vault: VaultId,
     /// 发起操作的设备。
     pub device: DeviceId,
     /// 客户端生成的逻辑操作身份。
@@ -86,11 +86,11 @@ pub struct OperationKey {
 /// 操作记录的状态（`operations.state`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OperationState {
-    /// 已接受、尚未产生业务结果；不占 RootSeq，不对外显示为已完成（design I01）。
+    /// 已接受、尚未产生业务结果；不占 VaultSeq，不对外显示为已完成（design I01）。
     Pending,
     /// 已提交：同一事务里写入了事件批次与结果。
     Committed,
-    /// 已稳定拒绝：结果对同一 OpId 保持不变，但不推进 RootSeq。
+    /// 已稳定拒绝：结果对同一 OpId 保持不变，但不推进 VaultSeq。
     Rejected,
 }
 
@@ -122,7 +122,7 @@ impl OperationState {
 
 /// 开始一个操作的输入。
 ///
-/// 不变量：`key.root` 必须属于调用方；`digest` 必须由 [`request_digest`] 从该请求的语义字段算出。
+/// 不变量：`key.vault` 必须属于调用方；`digest` 必须由 [`request_digest`] 从该请求的语义字段算出。
 #[derive(Clone, Copy, Debug)]
 pub struct NewOperation {
     /// 幂等键。
@@ -142,8 +142,8 @@ pub struct OperationRecord {
     pub state: OperationState,
     /// 紧凑结果；只有终态有值。
     pub result_json: Option<String>,
-    /// committed 操作推进到的 RootSeq；`pending`/`rejected` 为 `None`。
-    pub root_seq: Option<RootSeq>,
+    /// committed 操作推进到的 VaultSeq；`pending`/`rejected` 为 `None`。
+    pub vault_seq: Option<VaultSeq>,
     /// 工作目录发布意图记录的位置（design §11.2 步骤 5）。
     pub intent_path: Option<String>,
 }
@@ -162,7 +162,7 @@ pub enum BeginOperation {
 pub struct CommittedOperation {
     /// 幂等键。
     pub key: OperationKey,
-    /// 本事务追加的批次（其 `seq` 就是结果的 `root_seq`）。
+    /// 本事务追加的批次（其 `seq` 就是结果的 `vault_seq`）。
     pub batch: ChangeBatch,
     /// 写入的紧凑结果。
     pub result_json: String,
@@ -173,7 +173,7 @@ pub struct CommittedOperation {
 pub enum OperationError {
     /// SQLite 层面失败。
     Db(sqlx::Error),
-    /// Root 不存在或不属于调用方的 owner scope（两种情况不区分）。
+    /// Vault 不存在或不属于调用方的 owner scope（两种情况不区分）。
     OutOfScope,
     /// 幂等键不存在（或不在调用方的 owner scope 内）。
     UnknownOperation {
@@ -229,7 +229,7 @@ impl std::fmt::Display for OperationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Db(source) => write!(f, "SQLite 操作失败：{source}"),
-            Self::OutOfScope => f.write_str("Root 不存在或不在调用方的 owner scope 内"),
+            Self::OutOfScope => f.write_str("Vault 不存在或不在调用方的 owner scope 内"),
             Self::UnknownOperation { key } => write!(f, "操作 {} 不存在", key.op),
             Self::DigestMismatch { key } => {
                 write!(f, "操作 {} 已用不同的请求摘要登记过", key.op)
@@ -269,8 +269,8 @@ impl std::error::Error for OperationError {
 }
 
 /// `operations` 表的列顺序，读取点共用。
-const OPERATION_COLUMNS: &str = "root_id, device_id, op_id, request_digest, state, result_json, \
-                                 root_seq, intent_path";
+const OPERATION_COLUMNS: &str = "vault_id, device_id, op_id, request_digest, state, result_json, \
+                                 vault_seq, intent_path";
 
 /// 由规范化请求语义算摘要。
 ///
@@ -324,7 +324,7 @@ pub async fn begin_operation(
     owner: UserId,
     new: &NewOperation,
 ) -> Result<BeginOperation, OperationError> {
-    require_root_owner(tx, owner, new.key.root).await?;
+    require_vault_owner(tx, owner, new.key.vault).await?;
     if let Some(record) = operation_in_scope(tx, owner, &new.key).await? {
         if record.digest != new.digest {
             return Err(OperationError::DigestMismatch { key: new.key });
@@ -334,10 +334,10 @@ pub async fn begin_operation(
 
     let inserted = sqlx::query(
         "INSERT INTO operations \
-         (root_id, device_id, op_id, request_digest, state, result_json, root_seq, intent_path) \
+         (vault_id, device_id, op_id, request_digest, state, result_json, vault_seq, intent_path) \
          VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL)",
     )
-    .bind(new.key.root.as_bytes().as_slice())
+    .bind(new.key.vault.as_bytes().as_slice())
     .bind(new.key.device.as_bytes().as_slice())
     .bind(new.key.op.as_bytes().as_slice())
     .bind(new.digest.as_bytes().as_slice())
@@ -369,10 +369,10 @@ pub async fn attach_intent(
     }
     sqlx::query(
         "UPDATE operations SET intent_path = ?1 \
-         WHERE root_id = ?2 AND device_id = ?3 AND op_id = ?4 AND state = 'pending'",
+         WHERE vault_id = ?2 AND device_id = ?3 AND op_id = ?4 AND state = 'pending'",
     )
     .bind(intent_path)
-    .bind(key.root.as_bytes().as_slice())
+    .bind(key.vault.as_bytes().as_slice())
     .bind(key.device.as_bytes().as_slice())
     .bind(key.op.as_bytes().as_slice())
     .execute(&mut **tx)
@@ -383,8 +383,8 @@ pub async fn attach_intent(
 
 /// 提交操作结果：在调用方的事务里追加事件批次，并把操作写成 `committed`。
 ///
-/// 这是 design §11.2 步骤 7 的“元数据完成事务”：事件批次、`roots.seq` 推进与操作结果同一个提交，
-/// 因此客户端重试拿到的是同一个 `root_seq` 与同一份结果，不存在“结果写了但事件没写”。
+/// 这是 design §11.2 步骤 7 的“元数据完成事务”：事件批次、`vaults.seq` 推进与操作结果同一个提交，
+/// 因此客户端重试拿到的是同一个 `vault_seq` 与同一份结果，不存在“结果写了但事件没写”。
 pub async fn commit_operation(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
@@ -403,17 +403,17 @@ pub async fn commit_operation(
         });
     }
 
-    let batch = changes::append_change(tx, owner, key.root, tx_id, events_json, at)
+    let batch = changes::append_change(tx, owner, key.vault, tx_id, events_json, at)
         .await
         .map_err(OperationError::Change)?;
 
     let updated = sqlx::query(
-        "UPDATE operations SET state = 'committed', result_json = ?1, root_seq = ?2 \
-         WHERE root_id = ?3 AND device_id = ?4 AND op_id = ?5 AND state = 'pending'",
+        "UPDATE operations SET state = 'committed', result_json = ?1, vault_seq = ?2 \
+         WHERE vault_id = ?3 AND device_id = ?4 AND op_id = ?5 AND state = 'pending'",
     )
     .bind(result_json)
     .bind(batch.seq.to_db_integer())
-    .bind(key.root.as_bytes().as_slice())
+    .bind(key.vault.as_bytes().as_slice())
     .bind(key.device.as_bytes().as_slice())
     .bind(key.op.as_bytes().as_slice())
     .execute(&mut **tx)
@@ -433,7 +433,7 @@ pub async fn commit_operation(
     })
 }
 
-/// 稳定拒绝一个操作：写入终态 `rejected` 与结果，不推进 RootSeq。
+/// 稳定拒绝一个操作：写入终态 `rejected` 与结果，不推进 VaultSeq。
 ///
 /// 用于无法自动解决、且对同一 OpId 必须给出同一答复的提交（design §11.2、§15.3）。
 pub async fn reject_operation(
@@ -451,11 +451,11 @@ pub async fn reject_operation(
         });
     }
     let updated = sqlx::query(
-        "UPDATE operations SET state = 'rejected', result_json = ?1, root_seq = NULL \
-         WHERE root_id = ?2 AND device_id = ?3 AND op_id = ?4 AND state = 'pending'",
+        "UPDATE operations SET state = 'rejected', result_json = ?1, vault_seq = NULL \
+         WHERE vault_id = ?2 AND device_id = ?3 AND op_id = ?4 AND state = 'pending'",
     )
     .bind(result_json)
-    .bind(key.root.as_bytes().as_slice())
+    .bind(key.vault.as_bytes().as_slice())
     .bind(key.device.as_bytes().as_slice())
     .bind(key.op.as_bytes().as_slice())
     .execute(&mut **tx)
@@ -474,10 +474,10 @@ pub async fn operation_in_scope(
     key: &OperationKey,
 ) -> Result<Option<OperationRecord>, OperationError> {
     let row = sqlx::query_as::<_, OperationRow>(&format!(
-        "SELECT {OPERATION_COLUMNS} FROM operations o JOIN roots r ON r.id = o.root_id \
-         WHERE o.root_id = ?1 AND o.device_id = ?2 AND o.op_id = ?3 AND r.owner_id = ?4"
+        "SELECT {OPERATION_COLUMNS} FROM operations o JOIN vaults r ON r.id = o.vault_id \
+         WHERE o.vault_id = ?1 AND o.device_id = ?2 AND o.op_id = ?3 AND r.owner_id = ?4"
     ))
-    .bind(key.root.as_bytes().as_slice())
+    .bind(key.vault.as_bytes().as_slice())
     .bind(key.device.as_bytes().as_slice())
     .bind(key.op.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
@@ -487,22 +487,22 @@ pub async fn operation_in_scope(
     row.map(OperationRow::into_record).transpose()
 }
 
-/// 按 OpId 读一条操作记录（跨设备查询用）：同一 Root 的同一 OpId 必须唯一。
+/// 按 OpId 读一条操作记录（跨设备查询用）：同一 Vault 的同一 OpId 必须唯一。
 ///
-/// 客户端的结果查询只知道自己的 `OpId`（`GET /v1/roots/{root}/operations/{op}`，design §15.2），
-/// 幂等键里的设备由记录本身给出。`OpId` 是 128 位随机值，同一 Root 内跨设备撞值意味着坏数据；
+/// 客户端的结果查询只知道自己的 `OpId`（`GET /v1/vaults/{vault}/operations/{op}`，design §15.2），
+/// 幂等键里的设备由记录本身给出。`OpId` 是 128 位随机值，同一 Vault 内跨设备撞值意味着坏数据；
 /// 发现多行时不猜哪一个，报 [`OperationError::DuplicateOperation`]。
-pub async fn operation_of_root_in_scope(
+pub async fn operation_of_vault_in_scope(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     op: OpId,
 ) -> Result<Option<OperationRecord>, OperationError> {
     let rows = sqlx::query_as::<_, OperationRow>(&format!(
-        "SELECT {OPERATION_COLUMNS} FROM operations o JOIN roots r ON r.id = o.root_id \
-         WHERE o.root_id = ?1 AND o.op_id = ?2 AND r.owner_id = ?3"
+        "SELECT {OPERATION_COLUMNS} FROM operations o JOIN vaults r ON r.id = o.vault_id \
+         WHERE o.vault_id = ?1 AND o.op_id = ?2 AND r.owner_id = ?3"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(op.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_all(conn)
@@ -517,7 +517,7 @@ pub async fn operation_of_root_in_scope(
         1 => Ok(records.pop()),
         _ => Err(OperationError::DuplicateOperation {
             key: OperationKey {
-                root,
+                vault,
                 device: records[0].key.device,
                 op,
             },
@@ -525,22 +525,22 @@ pub async fn operation_of_root_in_scope(
     }
 }
 
-/// 删除某设备在某 Root 下的终态操作记录，返回删除行数。
+/// 删除某设备在某 Vault 下的终态操作记录，返回删除行数。
 ///
 /// 调用时机由设备代际/会话生命周期决定（design §7.2、§9.4：保留紧凑结果直到相应设备代际失效）。
 /// `pending` 记录保留：删掉它会让同一个 `op_id` 被当作新命令重新执行。
 pub async fn discard_finished_operations(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     device: DeviceId,
 ) -> Result<u64, OperationError> {
-    require_root_owner(tx, owner, root).await?;
+    require_vault_owner(tx, owner, vault).await?;
     let deleted = sqlx::query(
         "DELETE FROM operations \
-         WHERE root_id = ?1 AND device_id = ?2 AND state IN ('committed', 'rejected')",
+         WHERE vault_id = ?1 AND device_id = ?2 AND state IN ('committed', 'rejected')",
     )
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(device.as_bytes().as_slice())
     .execute(&mut **tx)
     .await
@@ -548,14 +548,14 @@ pub async fn discard_finished_operations(
     Ok(deleted.rows_affected())
 }
 
-/// 确认 Root 属于调用方的 owner scope。
-async fn require_root_owner(
+/// 确认 Vault 属于调用方的 owner scope。
+async fn require_vault_owner(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<(), OperationError> {
-    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM roots WHERE id = ?1")
-        .bind(root.as_bytes().as_slice())
+    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM vaults WHERE id = ?1")
+        .bind(vault.as_bytes().as_slice())
         .fetch_optional(conn)
         .await
         .map_err(OperationError::Db)?;
@@ -614,13 +614,13 @@ async fn require_result(
 /// 数据库行到 [`OperationRecord`] 的中间形态。
 #[derive(sqlx::FromRow)]
 struct OperationRow {
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     device_id: Vec<u8>,
     op_id: Vec<u8>,
     request_digest: Vec<u8>,
     state: String,
     result_json: Option<String>,
-    root_seq: Option<i64>,
+    vault_seq: Option<i64>,
     intent_path: Option<String>,
 }
 
@@ -634,7 +634,7 @@ impl OperationRow {
             })?;
         Ok(OperationRecord {
             key: OperationKey {
-                root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+                vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
                 device: identity(self.device_id, "device_id", DeviceId::from_bytes)?,
                 op: identity(self.op_id, "op_id", OpId::from_bytes)?,
             },
@@ -642,11 +642,12 @@ impl OperationRow {
             state: OperationState::from_text(&self.state)
                 .ok_or(OperationError::MalformedRow { column: "state" })?,
             result_json: self.result_json,
-            root_seq: self
-                .root_seq
+            vault_seq: self
+                .vault_seq
                 .map(|seq| {
-                    RootSeq::from_db_integer(seq)
-                        .map_err(|_| OperationError::MalformedRow { column: "root_seq" })
+                    VaultSeq::from_db_integer(seq).map_err(|_| OperationError::MalformedRow {
+                        column: "vault_seq",
+                    })
                 })
                 .transpose()?,
             intent_path: self.intent_path,
@@ -692,10 +693,10 @@ mod tests {
 
     use crate::changes;
     use crate::db::Database;
-    use crate::roots;
     use crate::test_support::{
-        TestDir, device, op, open_database, register_root, seed_owner, tx as tx_id, user,
+        TestDir, device, op, open_database, register_vault, seed_owner, tx as tx_id, user,
     };
+    use crate::vaults;
 
     fn at(seconds: i64) -> UtcTimestamp {
         UtcTimestamp::from_unix_seconds(seconds).expect("固定时间戳必须合法")
@@ -704,9 +705,9 @@ mod tests {
     const EVENTS: &str = r#"[{"kind":"entry_created","entry":"01"}]"#;
     const RESULT: &str = r#"{"status":"committed","entry_id":"01","revision":"2"}"#;
 
-    fn key(root: RootId, marker: u8) -> OperationKey {
+    fn key(vault: VaultId, marker: u8) -> OperationKey {
         OperationKey {
-            root,
+            vault,
             device: device(0x71),
             op: op(marker),
         }
@@ -716,12 +717,12 @@ mod tests {
         request_digest(&[("kind", b"put_content"), ("name", name.as_bytes())]).expect("算摘要")
     }
 
-    async fn root_seq(database: &Database, owner: UserId, root: RootId) -> RootSeq {
+    async fn vault_seq(database: &Database, owner: UserId, vault: VaultId) -> VaultSeq {
         let mut conn = database.pool().acquire().await.expect("取连接");
-        roots::root_in_scope(&mut conn, owner, root)
+        vaults::vault_in_scope(&mut conn, owner, vault)
             .await
-            .expect("读 Root")
-            .expect("Root 必须存在")
+            .expect("读 Vault")
+            .expect("Vault 必须存在")
             .seq
     }
 
@@ -730,8 +731,8 @@ mod tests {
         let dir = TestDir::new("operations-replay");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        let key = key(root, 0x81);
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        let key = key(vault, 0x81);
         let request = NewOperation {
             key,
             digest: digest_of("note.txt"),
@@ -747,24 +748,24 @@ mod tests {
         attach_intent(&mut tx, owner, &key, "/srv/intents/op-81")
             .await
             .expect("记录意图路径");
-        // pending 不携带结果，也不占 RootSeq。
+        // pending 不携带结果，也不占 VaultSeq。
         let pending = operation_in_scope(&mut tx, owner, &key)
             .await
             .expect("读操作")
             .expect("pending 记录存在");
         assert_eq!(pending.state, OperationState::Pending);
         assert_eq!(pending.result_json, None);
-        assert_eq!(pending.root_seq, None);
+        assert_eq!(pending.vault_seq, None);
         assert_eq!(pending.intent_path.as_deref(), Some("/srv/intents/op-81"));
 
         let committed = commit_operation(&mut tx, owner, &key, tx_id(0x31), EVENTS, RESULT, at(10))
             .await
             .expect("提交操作");
         tx.commit().await.expect("提交事务");
-        assert_eq!(committed.batch.seq, RootSeq::new(1).expect("seq"));
+        assert_eq!(committed.batch.seq, VaultSeq::new(1).expect("seq"));
         assert_eq!(committed.result_json, RESULT);
 
-        // 客户端重试：同一个 OpId、同一个请求，拿到同一份结果与同一个 root_seq，不再执行操作体。
+        // 客户端重试：同一个 OpId、同一个请求，拿到同一份结果与同一个 vault_seq，不再执行操作体。
         let mut tx = database.begin_write().await.expect("开始写事务");
         let replayed = begin_operation(&mut tx, owner, &request)
             .await
@@ -774,7 +775,7 @@ mod tests {
             BeginOperation::Replayed(record) => {
                 assert_eq!(record.state, OperationState::Committed);
                 assert_eq!(record.result_json.as_deref(), Some(RESULT));
-                assert_eq!(record.root_seq, Some(committed.batch.seq));
+                assert_eq!(record.vault_seq, Some(committed.batch.seq));
                 assert_eq!(record.digest, request.digest);
                 assert_eq!(record.intent_path.as_deref(), Some("/srv/intents/op-81"));
             }
@@ -806,9 +807,9 @@ mod tests {
         assert!(matches!(error, OperationError::AlreadyFinished { .. }));
         tx.rollback().await.expect("回滚");
         assert_eq!(
-            root_seq(&database, owner, root).await,
-            RootSeq::new(1).expect("seq"),
-            "重试不得再推进 RootSeq"
+            vault_seq(&database, owner, vault).await,
+            VaultSeq::new(1).expect("seq"),
+            "重试不得再推进 VaultSeq"
         );
         database.close().await;
     }
@@ -818,8 +819,8 @@ mod tests {
         let dir = TestDir::new("operations-digest");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        let key = key(root, 0x81);
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        let key = key(vault, 0x81);
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         begin_operation(
@@ -868,8 +869,8 @@ mod tests {
         let dir = TestDir::new("operations-rejected");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        let key = key(root, 0x81);
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        let key = key(vault, 0x81);
         let request = NewOperation {
             key,
             digest: digest_of("note.txt"),
@@ -886,10 +887,10 @@ mod tests {
         tx.commit().await.expect("提交");
         assert_eq!(rejected.state, OperationState::Rejected);
         assert_eq!(rejected.result_json.as_deref(), Some(refusal));
-        assert_eq!(rejected.root_seq, None, "拒绝不推进 RootSeq");
+        assert_eq!(rejected.vault_seq, None, "拒绝不推进 VaultSeq");
         assert_eq!(
-            root_seq(&database, owner, root).await,
-            RootSeq::ZERO,
+            vault_seq(&database, owner, vault).await,
+            VaultSeq::ZERO,
             "拒绝的操作不占批次"
         );
 
@@ -923,8 +924,8 @@ mod tests {
         let dir = TestDir::new("operations-atomic");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        let key = key(root, 0x81);
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        let key = key(vault, 0x81);
         let request = NewOperation {
             key,
             digest: digest_of("note.txt"),
@@ -948,14 +949,14 @@ mod tests {
             None
         );
         assert!(
-            changes::changes_after(&mut conn, owner, root, RootSeq::ZERO, 10)
+            changes::changes_after(&mut conn, owner, vault, VaultSeq::ZERO, 10)
                 .await
                 .expect("拉取批次")
                 .is_empty(),
             "回滚的事务不得暴露事件"
         );
         drop(conn);
-        assert_eq!(root_seq(&database, owner, root).await, RootSeq::ZERO);
+        assert_eq!(vault_seq(&database, owner, vault).await, VaultSeq::ZERO);
 
         // 再次开始时是全新的操作，而不是“已提交但没结果”的重放。
         let mut tx = database.begin_write().await.expect("开始写事务");
@@ -972,8 +973,8 @@ mod tests {
         let dir = TestDir::new("operations-result");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        let key = key(root, 0x81);
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        let key = key(vault, 0x81);
         let request = NewOperation {
             key,
             digest: digest_of("note.txt"),
@@ -1027,12 +1028,12 @@ mod tests {
         );
         // 不合格的结果不得推进 seq，也不得改变状态。
         assert_eq!(
-            roots::root_in_scope(&mut tx, owner, root)
+            vaults::vault_in_scope(&mut tx, owner, vault)
                 .await
-                .expect("读 Root")
-                .expect("Root 存在")
+                .expect("读 Vault")
+                .expect("Vault 存在")
                 .seq,
-            RootSeq::ZERO
+            VaultSeq::ZERO
         );
         assert_eq!(
             operation_in_scope(&mut tx, owner, &key)
@@ -1064,10 +1065,10 @@ mod tests {
         let dir = TestDir::new("operations-discard");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        let committed_key = key(root, 0x81);
-        let rejected_key = key(root, 0x82);
-        let pending_key = key(root, 0x83);
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        let committed_key = key(vault, 0x81);
+        let rejected_key = key(vault, 0x82);
+        let pending_key = key(vault, 0x83);
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         for (key, digest) in [
@@ -1096,7 +1097,7 @@ mod tests {
         tx.commit().await.expect("提交");
 
         let mut tx = database.begin_write().await.expect("开始写事务");
-        let removed = discard_finished_operations(&mut tx, owner, root, device(0x71))
+        let removed = discard_finished_operations(&mut tx, owner, vault, device(0x71))
             .await
             .expect("回收终态记录");
         tx.commit().await.expect("提交");
@@ -1133,9 +1134,9 @@ mod tests {
         let dir = TestDir::new("operations-by-op");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        let (other_root, _other_entry) = register_root(&database, owner, 0x22).await;
-        let key = key(root, 0x81);
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        let (other_vault, _other_entry) = register_vault(&database, owner, 0x22).await;
+        let key = key(vault, 0x81);
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         begin_operation(
@@ -1154,7 +1155,7 @@ mod tests {
         tx.commit().await.expect("提交");
 
         let mut conn = database.pool().acquire().await.expect("取连接");
-        let by_op = operation_of_root_in_scope(&mut conn, owner, root, key.op)
+        let by_op = operation_of_vault_in_scope(&mut conn, owner, vault, key.op)
             .await
             .expect("按 OpId 读操作")
             .expect("记录必须存在");
@@ -1165,17 +1166,17 @@ mod tests {
                 .expect("记录必须存在")
         });
         assert_eq!(by_op.state, OperationState::Committed);
-        assert_eq!(by_op.root_seq, Some(RootSeq::new(1).expect("seq")));
+        assert_eq!(by_op.vault_seq, Some(VaultSeq::new(1).expect("seq")));
 
-        // 同一个 OpId 在别的 Root、或对别的 owner 不可见。
+        // 同一个 OpId 在别的 Vault、或对别的 owner 不可见。
         assert_eq!(
-            operation_of_root_in_scope(&mut conn, owner, other_root, key.op)
+            operation_of_vault_in_scope(&mut conn, owner, other_vault, key.op)
                 .await
                 .expect("读操作"),
             None
         );
         assert_eq!(
-            operation_of_root_in_scope(&mut conn, user(0x12), root, key.op)
+            operation_of_vault_in_scope(&mut conn, user(0x12), vault, key.op)
                 .await
                 .expect("读操作"),
             None

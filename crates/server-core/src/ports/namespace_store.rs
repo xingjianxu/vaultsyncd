@@ -1,6 +1,6 @@
 //! 命名空间提交的存储端口：条目基线、父目录状态与命名空间元数据事务（design §9.5、§11.2 步骤 7）。
 //!
-//! 与 [`crate::ports::put_store`] 同一套服务器事实词汇（[`RootFacts`]、[`EntryBaseline`]、
+//! 与 [`crate::ports::put_store`] 同一套服务器事实词汇（[`VaultFacts`]、[`EntryBaseline`]、
 //! [`EntryKind`]），但事务内容不同：这里只改父关系与名称，不写版本、不碰内容对象。端口不做判定
 //! （epoch 是否过期、基线是否落后、父目录是否可挂），只如实返回库里的当前值与事务结果，读到的行
 //! 不合规就报 [`NamespaceStoreError::MalformedRow`]。
@@ -11,15 +11,15 @@
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId};
-use vaultsyncd_domain::version::{Revision, RootSeq, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, IntentId, TxId, VaultId};
+use vaultsyncd_domain::version::{Revision, UtcTimestamp, VaultSeq};
 
 use crate::commit::intent::PutPhase;
-use crate::ports::put_store::{EntryBaseline, EntryKind, RootFacts};
+use crate::ports::put_store::{EntryBaseline, EntryKind, VaultFacts};
 
-/// 一个条目在 Root 内的位置：父目录 + 名称。
+/// 一个条目在 Vault 内的位置：父目录 + 名称。
 ///
-/// 名称与父目录分开记录：`entries` 的唯一性约束是 `(root_id, parent_id, name_key)`，移动要比较并写的
+/// 名称与父目录分开记录：`entries` 的唯一性约束是 `(vault_id, parent_id, name_key)`，移动要比较并写的
 /// 正是这两个字段。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceLocation {
@@ -51,8 +51,8 @@ impl fmt::Display for NamespaceLocation {
 pub struct NamespaceWrite {
     /// 已写进 `fs_intents` 且已推进到 `published` 的意图。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 条目身份（新建时就是新条目的身份，保持 EntryId）。
     pub entry: EntryId,
     /// 条目种类。
@@ -78,8 +78,8 @@ pub struct NamespaceRecord {
     pub entry: EntryId,
     /// 条目新 revision：新建为 0，移动严格大于 `expected_revision`。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
     /// 该批次的事务身份。
     pub tx: TxId,
 }
@@ -92,12 +92,12 @@ pub enum NamespaceStoreError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 或条目不在调用方的 owner scope 内。
+    /// Vault 或条目不在调用方的 owner scope 内。
     OutOfScope,
-    /// Root 不存在。
-    UnknownRoot {
-        /// 被查询的 Root。
-        root: RootId,
+    /// Vault 不存在。
+    UnknownVault {
+        /// 被查询的 Vault。
+        vault: VaultId,
     },
     /// 条目不存在。
     EntryMissing {
@@ -151,7 +151,7 @@ impl NamespaceStoreError {
         match self {
             NamespaceStoreError::Storage { .. } => "namespace_store_failed",
             NamespaceStoreError::OutOfScope => "out_of_scope",
-            NamespaceStoreError::UnknownRoot { .. } => "unknown_root",
+            NamespaceStoreError::UnknownVault { .. } => "unknown_vault",
             NamespaceStoreError::EntryMissing { .. } => "entry_missing",
             NamespaceStoreError::RevisionChanged { .. } => "revision_changed",
             NamespaceStoreError::EntryExists { .. } => "entry_exists",
@@ -168,9 +168,9 @@ impl fmt::Display for NamespaceStoreError {
         match self {
             NamespaceStoreError::Storage { detail } => write!(f, "命名空间存储失败：{detail}"),
             NamespaceStoreError::OutOfScope => {
-                f.write_str("Root 或条目不在调用方的 owner scope 内")
+                f.write_str("Vault 或条目不在调用方的 owner scope 内")
             }
-            NamespaceStoreError::UnknownRoot { root } => write!(f, "Root {root} 不存在"),
+            NamespaceStoreError::UnknownVault { vault } => write!(f, "Vault {vault} 不存在"),
             NamespaceStoreError::EntryMissing { entry } => write!(f, "条目 {entry} 不存在"),
             NamespaceStoreError::RevisionChanged { expected, actual } => {
                 write!(f, "条目 revision 已从 {expected} 变为 {actual}")
@@ -203,12 +203,12 @@ impl std::error::Error for NamespaceStoreError {}
 // `#[allow(async_fn_in_trait)]`：本 trait 只在编排函数里以泛型参数使用，不外发、不做 dyn 对象。
 #[allow(async_fn_in_trait)]
 pub trait NamespaceCommitStore {
-    /// 读 Root 当前事实（epoch）。
+    /// 读 Vault 当前事实（epoch）。
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在。
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, NamespaceStoreError>;
+    /// 存储失败、越权、Vault 不存在。
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, NamespaceStoreError>;
 
     /// 读条目当前命名空间基线。
     ///
@@ -217,7 +217,7 @@ pub trait NamespaceCommitStore {
     /// 存储失败、越权、条目不存在、行无法还原。
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, NamespaceStoreError>;
 

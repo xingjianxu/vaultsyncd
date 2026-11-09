@@ -3,7 +3,7 @@ use crate::objects::{ContentDigest, ObjectLayout};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use vaultsyncd_domain::ids::{BackupLeaseId, RootId, ServerId};
+use vaultsyncd_domain::ids::{BackupLeaseId, ServerId, VaultId};
 
 /// 固定流格式：magic、u64清单长度、清单、各项(path长度/path/u64字节数/字节)、u32零终止。
 pub const MAGIC: &[u8; 8] = b"VSBK001\n";
@@ -50,13 +50,13 @@ pub struct Index {
     pub manifest_hash: [u8; 32],
     /// 排序后的全部文件，不含清单自身。
     pub items: Vec<Item>,
-    /// 固定Root序号，用于导出数据库语义核对。
-    pub root_seqs: std::collections::BTreeMap<RootId, u64>,
+    /// 固定Vault序号，用于导出数据库语义核对。
+    pub vault_seqs: std::collections::BTreeMap<VaultId, u64>,
     /// 数据库版本，与产品/协议版本独立。
     pub schema_version: i64,
     /// 清单声明的逻辑表计数。
     pub table_counts: std::collections::BTreeMap<String, u64>,
-    /// 对象归档路径到实际存储路径的精确映射；保留旧版与Root隔离布局。
+    /// 对象归档路径到实际存储路径的精确映射；保留旧版与Vault隔离布局。
     pub object_storage_paths: std::collections::BTreeMap<String, String>,
 }
 fn field<'a>(v: &'a Value, k: &str) -> Result<&'a str, Error> {
@@ -76,7 +76,7 @@ fn decimal(v: &Value, k: &str) -> Result<u64, Error> {
     Ok(n)
 }
 impl Index {
-    /// 校验固定清单、规范Root/对象路径、唯一文件位置及必须具备的DB/配置。
+    /// 校验固定清单、规范Vault/对象路径、唯一文件位置及必须具备的DB/配置。
     pub fn parse(bytes: &[u8], expected: [u8; 32]) -> Result<Self, Error> {
         if bytes.is_empty() || bytes.len() > MAX_MANIFEST {
             return Err(Error::Invalid);
@@ -96,15 +96,15 @@ impl Index {
         }
         let id = BackupLeaseId::from_hex(field(&v, "backup_id")?).map_err(|_| Error::Invalid)?;
         let server = ServerId::from_hex(field(&v, "server_id")?).map_err(|_| Error::Invalid)?;
-        let mut roots = BTreeSet::new();
-        let mut root_seqs = std::collections::BTreeMap::new();
-        for r in v["roots"].as_array().ok_or(Error::Invalid)? {
-            let root = RootId::from_hex(field(r, "root_id")?).map_err(|_| Error::Invalid)?;
+        let mut vaults = BTreeSet::new();
+        let mut vault_seqs = std::collections::BTreeMap::new();
+        for r in v["vaults"].as_array().ok_or(Error::Invalid)? {
+            let vault = VaultId::from_hex(field(r, "vault_id")?).map_err(|_| Error::Invalid)?;
             let seq = decimal(r, "seq")?;
-            if !roots.insert(root) {
+            if !vaults.insert(vault) {
                 return Err(Error::Invalid);
             }
-            root_seqs.insert(root, seq);
+            vault_seqs.insert(vault, seq);
         }
         let schema_version = v["schema_version"]
             .as_i64()
@@ -113,7 +113,7 @@ impl Index {
         let mut table_counts = std::collections::BTreeMap::new();
         for table in [
             "users",
-            "roots",
+            "vaults",
             "entries",
             "versions",
             "trash_entries",
@@ -144,18 +144,18 @@ impl Index {
         let mut object_storage_paths = std::collections::BTreeMap::new();
         let mut storage_paths = BTreeSet::new();
         for o in v["objects"].as_array().ok_or(Error::Invalid)? {
-            let root = RootId::from_hex(field(o, "root_id")?).map_err(|_| Error::Invalid)?;
+            let vault = VaultId::from_hex(field(o, "vault_id")?).map_err(|_| Error::Invalid)?;
             let hash = digest_text(o, "sha256")?;
             let path = format!(
                 "objects/{}/{}",
-                root.to_hex(),
+                vault.to_hex(),
                 ContentDigest::from_bytes(hash).to_hex()
             );
             let storage_path = field(o, "storage_path")?;
-            if !roots.contains(&root)
+            if !vaults.contains(&vault)
                 || field(o, "archive_path")? != path
                 || !ObjectLayout::valid_storage_path(
-                    root,
+                    vault,
                     &ContentDigest::from_bytes(hash),
                     storage_path,
                 )
@@ -177,7 +177,7 @@ impl Index {
             server,
             manifest_hash: actual,
             items,
-            root_seqs,
+            vault_seqs,
             schema_version,
             table_counts,
             object_storage_paths,
@@ -398,7 +398,7 @@ mod tests {
     fn fixture() -> (Vec<u8>, [u8; 32], Vec<u8>) {
         let db = b"database";
         let config = b"config";
-        let value = serde_json::json!({"format_version":1,"state":"prepared","backup_id":"01010101010101010101010101010101","server_id":"02020202020202020202020202020202","schema_version":13,"scope":"confirmed_logical_state","sessions":"invalidated","external_uncollected_writes":"excluded","roots":[],"objects":[],"database_contents":{"users":"1","roots":"0","entries":"0","versions":"0","trash_entries":"0","tombstones":"0","changes":"0","operations":"0"},"files":[{"path":"database.sqlite","size":db.len().to_string(),"sha256":ContentDigest::from_bytes(Sha256::digest(db).into()).to_hex()},{"path":"config.json","size":config.len().to_string(),"sha256":ContentDigest::from_bytes(Sha256::digest(config).into()).to_hex()}]});
+        let value = serde_json::json!({"format_version":1,"state":"prepared","backup_id":"01010101010101010101010101010101","server_id":"02020202020202020202020202020202","schema_version":13,"scope":"confirmed_logical_state","sessions":"invalidated","external_uncollected_writes":"excluded","vaults":[],"objects":[],"database_contents":{"users":"1","vaults":"0","entries":"0","versions":"0","trash_entries":"0","tombstones":"0","changes":"0","operations":"0"},"files":[{"path":"database.sqlite","size":db.len().to_string(),"sha256":ContentDigest::from_bytes(Sha256::digest(db).into()).to_hex()},{"path":"config.json","size":config.len().to_string(),"sha256":ContentDigest::from_bytes(Sha256::digest(config).into()).to_hex()}]});
         let manifest = serde_json::to_vec(&value).unwrap();
         let hash = Sha256::digest(&manifest).into();
         let index = Index::parse(&manifest, hash).unwrap();
@@ -432,19 +432,19 @@ mod tests {
         Index::parse(&bytes, Sha256::digest(&bytes).into())
     }
     #[test]
-    fn scoped_and_legacy_objects_roundtrip_without_cross_root_or_path_aliases() {
+    fn scoped_and_legacy_objects_roundtrip_without_cross_vault_or_path_aliases() {
         let (manifest, _, _) = fixture();
         let mut value: Value = serde_json::from_slice(&manifest).unwrap();
-        let roots = [RootId::from_bytes([3; 16]), RootId::from_bytes([4; 16])];
-        let content = b"same digest in two Roots";
+        let vaults = [VaultId::from_bytes([3; 16]), VaultId::from_bytes([4; 16])];
+        let content = b"same digest in two Vaults";
         let digest = ContentDigest::from_bytes(Sha256::digest(content).into());
-        value["roots"] = serde_json::json!(
-            roots.map(|root| serde_json::json!({"root_id":root.to_hex(),"seq":"0"}))
+        value["vaults"] = serde_json::json!(
+            vaults.map(|vault| serde_json::json!({"vault_id":vault.to_hex(),"seq":"0"}))
         );
-        value["objects"] = serde_json::json!(roots.map(|root| serde_json::json!({
-            "root_id":root.to_hex(), "sha256":digest.to_hex(), "size":content.len().to_string(),
-            "storage_path":ObjectLayout::scoped_relative_object_path(root,&digest).to_str().unwrap(),
-            "archive_path":format!("objects/{}/{}",root.to_hex(),digest.to_hex())
+        value["objects"] = serde_json::json!(vaults.map(|vault| serde_json::json!({
+            "vault_id":vault.to_hex(), "sha256":digest.to_hex(), "size":content.len().to_string(),
+            "storage_path":ObjectLayout::scoped_relative_object_path(vault,&digest).to_str().unwrap(),
+            "archive_path":format!("objects/{}/{}",vault.to_hex(),digest.to_hex())
         })));
         let index = parse_value(&value).unwrap();
         assert_eq!(index.object_storage_paths.len(), 2);
@@ -501,8 +501,8 @@ mod tests {
             format!("./{legacy}"),
             format!("{legacy}/"),
             legacy.replace("objects/", "objects//"),
-            format!("roots/{}/objects/../{legacy}", roots[0].to_hex()),
-            ObjectLayout::scoped_relative_object_path(roots[1], &digest)
+            format!("roots/{}/objects/../{legacy}", vaults[0].to_hex()),
+            ObjectLayout::scoped_relative_object_path(vaults[1], &digest)
                 .to_str()
                 .unwrap()
                 .to_owned(),
@@ -512,7 +512,7 @@ mod tests {
             assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
         }
         value["objects"][0]["storage_path"] = scoped;
-        value["objects"][0]["root_id"] = RootId::from_bytes([9; 16]).to_hex().into();
+        value["objects"][0]["vault_id"] = VaultId::from_bytes([9; 16]).to_hex().into();
         assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
     }
     #[test]

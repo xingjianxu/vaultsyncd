@@ -6,7 +6,7 @@ use super::{
     raw::*,
 };
 use crate::files::{
-    EntryMetadata, RootHandle,
+    EntryMetadata, VaultHandle,
     native::{metadata, open_child, open_child_shared},
 };
 use std::{
@@ -74,7 +74,7 @@ impl Reply {
 /// Validated file demand, independent of callback stack and path spelling.
 #[derive(Clone, Copy, Debug)]
 pub struct ReadDemand {
-    /// Binding, root, entry and fixed version validated against the connection catalog.
+    /// Binding, vault, entry and fixed version validated against the connection catalog.
     pub identity: Identity,
     /// Logical file length observed by CFAPI.
     pub file_size: u64,
@@ -153,12 +153,12 @@ unsafe fn route(
             return Err(STATUS_CLOUD_FILE_INVALID_REQUEST);
         }
         let bytes = unsafe { std::slice::from_raw_parts(i.file_identity.cast(), Identity::LEN) };
-        let root = unsafe { std::slice::from_raw_parts(i.sync_root_identity.cast::<u8>(), 32) };
+        let vault = unsafe { std::slice::from_raw_parts(i.sync_root_identity.cast::<u8>(), 32) };
         let cat = context
             .catalog
             .read()
             .map_err(|_| STATUS_CLOUD_FILE_INVALID_REQUEST)?;
-        if root != cat.root_blob() {
+        if vault != cat.vault_blob() {
             return Err(STATUS_CLOUD_FILE_INVALID_REQUEST);
         }
         let identity = cat
@@ -222,7 +222,7 @@ static TABLE: [CfCallbackRegistration; 3] = [
 
 /// Live connection. Drop disconnects; registration and files survive process exit.
 pub struct Adapter {
-    root: RootHandle,
+    vault: VaultHandle,
     path: PathBuf,
     key: Option<CfConnectionKey>,
     context: Box<Context>,
@@ -234,7 +234,7 @@ impl Adapter {
         catalog: Catalog,
         callbacks: Arc<dyn Callbacks>,
     ) -> io::Result<Self> {
-        let root = RootHandle::open(path)?;
+        let vault = VaultHandle::open(path)?;
         register(path, &catalog)?;
         let context = Box::new(Context {
             catalog: Arc::new(RwLock::new(catalog)),
@@ -251,7 +251,7 @@ impl Adapter {
             )
         })?;
         Ok(Self {
-            root,
+            vault,
             path: path.to_path_buf(),
             key: Some(key),
             context,
@@ -263,14 +263,14 @@ impl Adapter {
     }
     /// Metadata-only scan; errors disable missing-entry inference (S065).
     pub fn scan(&self) -> crate::files::ScanReport {
-        self.root.scan()
+        self.vault.scan()
     }
     /// Safe metadata observation.
     pub fn inspect(&self, path: &str) -> io::Result<EntryMetadata> {
-        self.root.inspect(path)
+        self.vault.inspect(path)
     }
     /// Create a new placeholder without replacing any local object. Intermediate failures stay visible.
-    /// Uses a root-relative create then CFAPI conversion, so path races cannot escape the pinned parent.
+    /// Uses a vault-relative create then CFAPI conversion, so path races cannot escape the pinned parent.
     pub fn create(
         &self,
         path: &str,
@@ -279,7 +279,7 @@ impl Adapter {
         directory: bool,
     ) -> io::Result<EntryMetadata> {
         self.check_identity(id)?;
-        self.root.with_parent(path, |parent, name| {
+        self.vault.with_parent(path, |parent, name| {
             let file = open_child_shared(
                 parent,
                 name,
@@ -311,7 +311,7 @@ impl Adapter {
             .catalog
             .read()
             .map_err(|_| io::Error::other("catalog poisoned"))?;
-        if id.binding != cat.binding || id.root != cat.root {
+        if id.binding != cat.binding || id.vault != cat.vault {
             return Err(io::Error::other("foreign identity"));
         }
         Ok(())
@@ -327,10 +327,10 @@ impl Adapter {
         size: u64,
     ) -> io::Result<EntryMetadata> {
         self.check_identity(id)?;
-        self.root.with_parent(path, |parent, name| {
+        self.vault.with_parent(path, |parent, name| {
             let _ = (parent, name);
             let (protected, _) =
-                crate::files::controlled::ProtectedFile::open_under(&self.root, path, true)?;
+                crate::files::controlled::ProtectedFile::open_under(&self.vault, path, true)?;
             let lease = protected.lease()?;
             let file = lease.file();
             let meta = metadata(file)?;
@@ -341,15 +341,15 @@ impl Adapter {
             if let Some(cloud) = &meta.cloud {
                 let prior = Identity::decode(&cloud.identity)
                     .map_err(|e| io::Error::other(format!("{e:?}")))?;
-                let same_scope = prior.binding == id.binding && prior.root == id.root;
-                // 完整本地内容可以重新绑定到同一 Root 的新条目：删除与离线修改并发时，
+                let same_scope = prior.binding == id.binding && prior.vault == id.vault;
+                // 完整本地内容可以重新绑定到同一 Vault 的新条目：删除与离线修改并发时，
                 // 服务端删除旧条目后客户端会为新内容提交 create，文件仍是同一份完整字节
                 // （S074 T11 实测旧 CFAPI 身份会让 ACK 后的 adopt 永远失败）。不完整占位
                 // 仍拒绝换身份，避免丢弃另一个条目的云状态/水合进度。
                 let rebound = same_scope && cloud.on_disk >= size;
                 if !rebound
                     && (prior.binding != id.binding
-                        || prior.root != id.root
+                        || prior.vault != id.vault
                         || prior.entry != id.entry
                         || cloud.on_disk < size)
                 {
@@ -411,11 +411,11 @@ impl Adapter {
         path: &str,
         expected: &EntryMetadata,
     ) -> io::Result<()> {
-        self.root.with_parent(path, |_, _| {
-            let before = self.root.inspect(path)?;
+        self.vault.with_parent(path, |_, _| {
+            let before = self.vault.inspect(path)?;
             check_expected(&before, expected)?;
             let protected = crate::files::controlled::ProtectedFile::open(
-                &self.root.root_path().join(path.replace('/', "\\")),
+                &self.vault.vault_path().join(path.replace('/', "\\")),
                 true,
             )?;
             let lease = protected.lease()?;
@@ -460,7 +460,7 @@ impl Adapter {
         size: u64,
     ) -> io::Result<EntryMetadata> {
         self.check_identity(id)?;
-        self.root.with_parent(path, |parent, name| {
+        self.vault.with_parent(path, |parent, name| {
             let file = open_child_shared(
                 parent,
                 name,
@@ -479,7 +479,7 @@ impl Adapter {
             let prior = Identity::decode(&cloud.identity)
                 .map_err(|e| io::Error::other(format!("identity {e:?}")))?;
             if prior.binding != id.binding
-                || prior.root != id.root
+                || prior.vault != id.vault
                 || prior.entry != id.entry
                 || cloud.on_disk != 0
                 || cloud.modified != 0
@@ -507,7 +507,7 @@ impl Adapter {
         to: &str,
         expected: &EntryMetadata,
     ) -> io::Result<EntryMetadata> {
-        self.root.with_parent(from, |parent, name| {
+        self.vault.with_parent(from, |parent, name| {
             let file = open_child(parent, name, expected.directory, false, 0x0011_0080, false)?;
             let current = metadata(&file)?;
             check_expected(&current, expected)?;
@@ -522,7 +522,7 @@ impl Adapter {
                 .map_err(|_| io::Error::other("catalog poisoned"))?
                 .resolve(blob)
                 .map_err(|e| io::Error::other(format!("identity {e:?}")))?;
-            self.root
+            self.vault
                 .with_parent(to, |target, name| rename(&file, target, name))?;
             metadata(&file)
         })
@@ -541,7 +541,7 @@ impl Adapter {
     pub fn unregister(&mut self) -> io::Result<()> {
         ensure_no_placeholders(&self.path)?;
         self.disconnect()?;
-        self.root.verify()?;
+        self.vault.verify()?;
         hr(unsafe { CfUnregisterSyncRoot(wide(&self.path).as_ptr()) })
     }
 }
@@ -627,7 +627,7 @@ fn rename(file: &File, parent: &File, name: &str) -> io::Result<()> {
 pub(crate) fn register(path: &Path, catalog: &Catalog) -> io::Result<()> {
     let name: Vec<u16> = "vaultsyncd\0".encode_utf16().collect();
     let version: Vec<u16> = "0.1.0\0".encode_utf16().collect();
-    let identity = catalog.root_blob();
+    let identity = catalog.vault_blob();
     let registration = CfSyncRegistration {
         struct_size: size_of::<CfSyncRegistration>() as u32,
         provider_name: name.as_ptr(),
@@ -660,7 +660,7 @@ pub(crate) fn register(path: &Path, catalog: &Catalog) -> io::Result<()> {
         hard_link: 0,
         placeholder_management: 0,
     };
-    // Verify existing registration identity before accepting ERROR_ALREADY_EXISTS; never steal a root.
+    // Verify existing registration identity before accepting ERROR_ALREADY_EXISTS; never steal a vault.
     let mut buf = vec![0u64; 1024];
     let mut returned = 0;
     let existing = unsafe {
@@ -676,7 +676,7 @@ pub(crate) fn register(path: &Path, catalog: &Catalog) -> io::Result<()> {
         let b = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len() * 8) };
         // CF_SYNC_ROOT_STANDARD_INFO: 28-byte prefix + 2 WCHAR[256], length at 1052, blob at 1056.
         if returned < 1088 || b[1052..1056] != 32u32.to_le_bytes() || b[1056..1088] != identity {
-            return Err(io::Error::other("foreign root registration"));
+            return Err(io::Error::other("foreign vault registration"));
         }
         return Ok(());
     }
@@ -697,8 +697,8 @@ mod native_tests;
 
 /// CfUnregisterSyncRoot deletes partial placeholders. Require explicit prior materialization/conversion.
 pub(crate) fn ensure_no_placeholders(path: &Path) -> io::Result<()> {
-    let root = RootHandle::open(path)?;
-    let report = root.scan();
+    let vault = VaultHandle::open(path)?;
+    let report = vault.scan();
     if !report.permits_missing_comparison()
         || report
             .entries

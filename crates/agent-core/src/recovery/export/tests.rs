@@ -13,7 +13,7 @@ fn io(e: impl std::fmt::Display) -> PortError {
     error(e)
 }
 struct Source {
-    root: PathBuf,
+    vault: PathBuf,
     changed: AtomicBool,
     mutate: bool,
     late: bool,
@@ -62,7 +62,7 @@ impl ExportSource for Source {
         t: &'a Target,
     ) -> PortFuture<'a, Result<Box<dyn SnapshotSource>, PortError>> {
         Box::pin(async move {
-            let p = self.root.join(&t.kind);
+            let p = self.vault.join(&t.kind);
             let f = std::fs::File::open(p).map_err(io)?;
             let size = f.metadata().map_err(io)?.len();
             Ok(Box::new(Data {
@@ -87,14 +87,14 @@ struct Destination {
     corrupt: bool,
 }
 struct Directory {
-    root: PathBuf,
+    vault: PathBuf,
     files: Mutex<std::collections::HashMap<String, std::fs::File>>,
     corrupt: bool,
 }
 impl Directory {
-    fn reopen(root: PathBuf) -> Self {
+    fn reopen(vault: PathBuf) -> Self {
         Self {
-            root,
+            vault,
             files: Mutex::default(),
             corrupt: false,
         }
@@ -123,7 +123,7 @@ impl ExportDestination for Destination {
             }
             fs::create_dir(&p).map_err(io)?;
             Ok(Box::new(Directory {
-                root: p,
+                vault: p,
                 files: Mutex::default(),
                 corrupt: self.corrupt,
             }) as Box<dyn ExportDirectory>)
@@ -137,7 +137,7 @@ impl ExportDirectory for Directory {
                 .read(true)
                 .write(true)
                 .create_new(true)
-                .open(self.root.join(n))
+                .open(self.vault.join(n))
                 .map_err(io)?;
             self.files.lock().unwrap().insert(n.into(), f);
             Ok(())
@@ -162,7 +162,7 @@ impl ExportDirectory for Directory {
         l: u64,
     ) -> PortFuture<'a, Result<Vec<u8>, PortError>> {
         Box::pin(async move {
-            let mut f = std::fs::File::open(self.root.join(n)).map_err(io)?;
+            let mut f = std::fs::File::open(self.vault.join(n)).map_err(io)?;
             f.seek(SeekFrom::Start(o)).map_err(io)?;
             let mut b = vec![];
             f.take(l).read_to_end(&mut b).map_err(io)?;
@@ -171,7 +171,7 @@ impl ExportDirectory for Directory {
     }
     fn finish(&self) -> PortFuture<'_, Result<(), PortError>> {
         Box::pin(async move {
-            std::fs::File::open(&self.root)
+            std::fs::File::open(&self.vault)
                 .map_err(io)?
                 .sync_all()
                 .map_err(io)
@@ -194,7 +194,7 @@ async fn recovery_bundle_keeps_new_dirty_and_fixed_upload_and_validates_output()
     let d = Dir::new();
     let db = fixture(&d).await;
     let source = Source {
-        root: d.0.clone(),
+        vault: d.0.clone(),
         changed: AtomicBool::new(false),
         mutate: false,
         late: false,
@@ -245,7 +245,7 @@ async fn source_change_or_destination_corruption_never_publishes_manifest() {
         let d = Dir::new();
         let db = fixture(&d).await;
         let source = Source {
-            root: d.0.clone(),
+            vault: d.0.clone(),
             changed: AtomicBool::new(false),
             mutate: change,
             late: false,
@@ -275,7 +275,7 @@ async fn traversal_symlink_and_existing_destination_leave_outside_unchanged() {
     let d = Dir::new();
     let db = fixture(&d).await;
     let source = Source {
-        root: d.0.clone(),
+        vault: d.0.clone(),
         changed: AtomicBool::new(false),
         mutate: false,
         late: false,
@@ -353,7 +353,7 @@ async fn late_candidate_prevents_complete_package() {
     let d = Dir::new();
     let db = fixture(&d).await;
     let source = Source {
-        root: d.0.clone(),
+        vault: d.0.clone(),
         changed: AtomicBool::new(false),
         mutate: false,
         late: true,

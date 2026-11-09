@@ -1,6 +1,6 @@
 //! S091整套回退：真实一致备份→合成未来迁移失败→真实服务停写→S089新空目标恢复。
 mod common;
-use common::{Lab, Running, login, register_root};
+use common::{Lab, Running, login, register_vault};
 use serde_json::Value;
 use std::{
     ffi::OsString,
@@ -88,9 +88,9 @@ async fn backup(lab: &Lab, args: &[&str]) -> Value {
 fn hash(data: &[u8]) -> String {
     common::hex(&vaultsyncd_platform_linux_server::files::hash::digest(data))
 }
-async fn adopted(server: &Server, token: &str, root: &str, name: &str, bytes: &[u8]) {
+async fn adopted(server: &Server, token: &str, vault: &str, name: &str, bytes: &[u8]) {
     for _ in 0..200 {
-        let entries = common::snapshot(&server.http, token, root).await;
+        let entries = common::snapshot(&server.http, token, vault).await;
         if entries
             .iter()
             .any(|e| e["name"] == name && e["hash"] == hash(bytes))
@@ -121,17 +121,17 @@ async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_
     let _ = lab.config();
     let source = Server::start(&lab.config_path()).await;
     let token = login(&source.http).await.unwrap();
-    let root = register_root(&source.http, &token, &lab.work())
+    let vault = register_vault(&source.http, &token, &lab.work())
         .await
         .unwrap();
-    adopted(&source, &token, &root, "note", b"before upgrade history").await;
-    adopted(&source, &token, &root, "trash", b"retained trash bytes").await;
-    let entries = common::snapshot(&source.http, &token, &root).await;
+    adopted(&source, &token, &vault, "note", b"before upgrade history").await;
+    adopted(&source, &token, &vault, "trash", b"retained trash bytes").await;
+    let entries = common::snapshot(&source.http, &token, &vault).await;
     let note = common::entry_named(&entries, "note");
     let entry = note["entry_id"].as_str().unwrap().to_owned();
     let version = note["version_id"].as_str().unwrap().to_owned();
     std::fs::write(lab.work().join("note"), b"current committed bytes").unwrap();
-    adopted(&source, &token, &root, "note", b"current committed bytes").await;
+    adopted(&source, &token, &vault, "note", b"current committed bytes").await;
     std::fs::remove_file(lab.work().join("trash")).unwrap();
     let mut trash = Value::Null;
     for _ in 0..200 {
@@ -139,7 +139,7 @@ async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_
             .http
             .json(
                 "GET",
-                &format!("/v1/roots/{root}/trash"),
+                &format!("/v1/vaults/{vault}/trash"),
                 Some(&token),
                 None,
             )
@@ -225,8 +225,8 @@ async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_
             archive.as_os_str().into(),
             "--state-dir".into(),
             state.as_os_str().into(),
-            "--root".into(),
-            format!("{root}={}", work.display()).into(),
+            "--vault".into(),
+            format!("{vault}={}", work.display()).into(),
         ]
     };
     admin(args("validate")).await;
@@ -239,7 +239,7 @@ async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_
         b"current committed bytes"
     );
     assert!(!work.join("trash").exists());
-    // 管理员在本run内显式允许额外空Root，用于核对恢复后的新注册也属于新epoch。
+    // 管理员在本run内显式允许额外空Vault，用于核对恢复后的新注册也属于新epoch。
     let config = state.join("server.toml");
     let text = std::fs::read_to_string(&config).unwrap();
     let text = text
@@ -262,7 +262,7 @@ async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_
     let (code, bytes, _) = running
         .http
         .download(
-            &format!("/v1/roots/{root}/entries/{entry}/versions/{version}/content"),
+            &format!("/v1/vaults/{vault}/entries/{entry}/versions/{version}/content"),
             &fresh,
         )
         .await
@@ -273,7 +273,7 @@ async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_
         .http
         .json(
             "GET",
-            &format!("/v1/roots/{root}/trash"),
+            &format!("/v1/vaults/{vault}/trash"),
             Some(&fresh),
             None,
         )
@@ -289,13 +289,13 @@ async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_
     assert_eq!(code, 200);
     assert_eq!(caps["server_id"], prior_capabilities["server_id"]);
     assert_eq!(caps["epoch"], restored["epoch"]);
-    let extra_root = register_root(&running.http, &fresh, &extra).await.unwrap();
+    let extra_vault = register_vault(&running.http, &fresh, &extra).await.unwrap();
     assert_eq!(
-        common::epoch_of(&running.http, &fresh, &extra_root).await,
+        common::epoch_of(&running.http, &fresh, &extra_vault).await,
         caps["epoch"]
     );
     running.kill();
     println!(
-        "S091 native full rollback=verified partial_future_schema=refused archive=complete server_id=retained new_epoch=verified current_and_history_bytes=verified trash=retained new_root_epoch=consistent; future migrations are injected fixtures, not released versions"
+        "S091 native full rollback=verified partial_future_schema=refused archive=complete server_id=retained new_epoch=verified current_and_history_bytes=verified trash=retained new_vault_epoch=consistent; future migrations are injected fixtures, not released versions"
     );
 }

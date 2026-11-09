@@ -61,7 +61,7 @@ try {
  $untrusted=Invoke-ProductLogin
  if($untrusted.code -eq 0 -or $untrusted.stderr -notmatch 'certificate'){throw 'untrusted native product TLS did not fail as certificate error'}
  if([VSS097Credential]::Exists($target)){throw 'failed TLS request persisted a credential'}
- $result.checks+= 'native-product-default-roots-reject-private-CA-without-persisting-session'
+ $result.checks+= 'native-product-default-vaults-reject-private-CA-without-persisting-session'
  $settings.server.ca_file=$ca
  $settings.server.url='https://10.0.2.2:18444'
  $mismatch=Invoke-ProductLogin
@@ -94,10 +94,10 @@ try {
  $agentProcess=$null
  # Explicitly trust the already fingerprint-checked PUBLIC CA for this Windows user only.
  [pscustomobject]@{worker_pid=$PID;session=(Get-Process -Id $PID).SessionId;ca_sha256=$actualCa}|ConvertTo-Json|Set-Content (Join-Path $Base 'ca-import-pending.json')
- $store=New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','CurrentUser')
+ $store=New-Object System.Security.Cryptography.X509Certificates.X509Store('Vault','CurrentUser')
  $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
  try{$store.Add($caCertificate)}finally{$store.Close()}
- $result.checks+='fingerprint-checked-public-development-CA-added-to-CurrentUser-Root'
+ $result.checks+='fingerprint-checked-public-development-CA-added-to-CurrentUser-Vault'
  $edgePath=Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
  if(-not (Test-Path $edgePath)){$edgePath=Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'}
  if(-not (Test-Path $edgePath)){throw 'real Windows Edge missing'}

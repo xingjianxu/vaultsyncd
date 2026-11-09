@@ -16,7 +16,7 @@ use vaultsyncd_agent_core::recovery::export::{
     ExportDestination, ExportDirectory, ExportRecovery, ExportSource, Target,
 };
 use vaultsyncd_domain::ids::BindingId;
-use vaultsyncd_platform_windows::files::RootHandle;
+use vaultsyncd_platform_windows::files::VaultHandle;
 use vaultsyncd_transfer::{
     hash::{ContentHasher, digest_of, to_hex},
     ports::{PortError, PortFuture, SnapshotSource},
@@ -71,16 +71,16 @@ impl SnapshotSource for Shared {
 struct Source {
     local: Arc<Local>,
     paths: HashMap<String, String>,
-    cache: Arc<RootHandle>,
+    cache: Arc<VaultHandle>,
     files: Mutex<HashMap<(String, String), Arc<Fixed>>>,
 }
 impl Source {
-    fn fixed(root: &RootHandle, path: &str, identity: String) -> Result<Arc<Fixed>, PortError> {
-        let meta = root.inspect(path).map_err(error)?;
+    fn fixed(vault: &VaultHandle, path: &str, identity: String) -> Result<Arc<Fixed>, PortError> {
+        let meta = vault.inspect(path).map_err(error)?;
         if meta.directory || meta.cloud.as_ref().is_some_and(|c| c.on_disk < meta.size) {
             return Err(error("incomplete bytes cannot be exported as complete"));
         }
-        let file = root.open_read(path).map_err(error)?;
+        let file = vault.open_read(path).map_err(error)?;
         if file.metadata().map_err(error)?.len() != meta.size {
             return Err(error("source changed"));
         }
@@ -120,8 +120,8 @@ impl ExportSource for Source {
                 .map(|(entry, version)| format!("{binding}-{entry}-{version}.part"))
                 .collect();
             let mut result = vec![];
-            for (kind, root) in [("local", &*local.root), ("cache", &*self.cache)] {
-                let report = root.scan();
+            for (kind, vault) in [("local", &*local.vault), ("cache", &*self.cache)] {
+                let report = vault.scan();
                 if !report.permits_missing_comparison() {
                     return Err(error("incomplete recovery scan"));
                 }
@@ -165,7 +165,7 @@ impl ExportSource for Source {
                     );
                     let key = ("candidate".into(), id.clone());
                     if !self.files.lock().map_err(error)?.contains_key(&key) {
-                        let fixed = Self::fixed(root, &entry.path, identity.clone())?;
+                        let fixed = Self::fixed(vault, &entry.path, identity.clone())?;
                         self.files.lock().map_err(error)?.insert(key, fixed);
                     }
                     result.push(Target {
@@ -195,7 +195,7 @@ impl ExportSource for Source {
                     .paths
                     .get(&target.id)
                     .ok_or_else(|| error("current path unknown; export cannot omit bytes"))?;
-                Self::fixed(&self.local.root, path, target.identity.clone())?
+                Self::fixed(&self.local.vault, path, target.identity.clone())?
             } else if target.kind == "snapshot" {
                 let expected = target
                     .digest
@@ -241,10 +241,10 @@ impl ExportSource for Source {
     }
 }
 struct Destination {
-    protected: Vec<RootHandle>,
+    protected: Vec<VaultHandle>,
 }
 struct Directory {
-    root: RootHandle,
+    vault: VaultHandle,
     files: Mutex<HashMap<String, File>>,
 }
 impl ExportDestination for Destination {
@@ -254,7 +254,7 @@ impl ExportDestination for Destination {
     ) -> PortFuture<'a, Result<Box<dyn ExportDirectory>, PortError>> {
         Box::pin(async move {
             let path = Path::new(destination);
-            let parent = RootHandle::open(
+            let parent = VaultHandle::open(
                 path.parent()
                     .ok_or_else(|| error("destination parent missing"))?,
             )
@@ -266,9 +266,9 @@ impl ExportDestination for Destination {
                 .file_name()
                 .and_then(|v| v.to_str())
                 .ok_or_else(|| error("invalid destination"))?;
-            let root = parent.create_new_directory(name).map_err(error)?;
+            let vault = parent.create_new_directory(name).map_err(error)?;
             Ok(Box::new(Directory {
-                root,
+                vault,
                 files: Mutex::new(HashMap::new()),
             }) as Box<dyn ExportDirectory>)
         })
@@ -277,7 +277,7 @@ impl ExportDestination for Destination {
 impl ExportDirectory for Directory {
     fn create<'a>(&'a self, name: &'a str) -> PortFuture<'a, Result<(), PortError>> {
         Box::pin(async move {
-            let file = self.root.create_new_file(name).map_err(error)?;
+            let file = self.vault.create_new_file(name).map_err(error)?;
             if self
                 .files
                 .lock()
@@ -326,7 +326,7 @@ impl ExportDirectory for Directory {
             for file in self.files.lock().map_err(error)?.values() {
                 file.sync_all().map_err(error)?;
             }
-            self.root.verify().map_err(error)
+            self.vault.verify().map_err(error)
         })
     }
 }
@@ -335,15 +335,15 @@ pub(crate) async fn export(
     config: &AgentConfig,
     destination: &str,
 ) -> Result<usize, PortError> {
-    let mut protected = vec![RootHandle::open(&config.state_dir).map_err(error)?];
+    let mut protected = vec![VaultHandle::open(&config.state_dir).map_err(error)?];
     for binding in &config.bindings {
-        protected.push(RootHandle::open(&binding.path).map_err(error)?);
-        protected.push(RootHandle::open(&binding.cache).map_err(error)?);
+        protected.push(VaultHandle::open(&binding.path).map_err(error)?);
+        protected.push(VaultHandle::open(&binding.cache).map_err(error)?);
     }
     let source = Source {
         local: local.clone(),
         paths: paths(&local_metadata(&local).await?)?,
-        cache: Arc::new(RootHandle::open(&local.cache).map_err(error)?),
+        cache: Arc::new(VaultHandle::open(&local.cache).map_err(error)?),
         files: Mutex::new(HashMap::new()),
     };
     let manifest = ExportRecovery::new(local.db.clone())

@@ -19,13 +19,13 @@ unsafe extern "system" {
 /// CFAPI exclusive RH oplock. A completed break closes the admission gate.
 pub struct ProtectedFile(usize);
 impl ProtectedFile {
-    /// Open through a pinned no-follow Root, verifying the physical object before returning.
+    /// Open through a pinned no-follow Vault, verifying the physical object before returning.
     pub fn open_under(
-        root: &crate::files::RootHandle,
+        vault: &crate::files::VaultHandle,
         path: &str,
         writable: bool,
     ) -> io::Result<(Self, crate::files::EntryMetadata)> {
-        content::protect_under(root, path, writable)
+        content::protect_under(vault, path, writable)
     }
     /// Own a referenced oplock across asynchronous application/database boundaries.
     /// Unlike a temporary lease, this keeps pending break acknowledgement deferred until Drop.

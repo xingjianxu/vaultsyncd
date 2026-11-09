@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use vaultsyncd_local_ipc::generated::*;
-use vaultsyncd_platform_windows::{files::RootHandle, ipc::Endpoint};
+use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const DESKTOP_SCOPE: &str = "vaultsyncd-desktop";
 const ZIP_FILES: &[&str] = &[
@@ -35,7 +35,7 @@ fn local() -> io::Result<PathBuf> {
     let path = PathBuf::from(
         std::env::var_os("LOCALAPPDATA").ok_or_else(|| io::Error::other("LOCALAPPDATA absent"))?,
     );
-    RootHandle::open(&path)?;
+    VaultHandle::open(&path)?;
     Ok(path)
 }
 fn program() -> io::Result<PathBuf> {
@@ -44,15 +44,15 @@ fn program() -> io::Result<PathBuf> {
         .parent()
         .ok_or_else(|| io::Error::other("program directory absent"))?;
     // Validate before canonicalizing: canonicalize must not silently follow a junction.
-    RootHandle::open(directory)?;
+    VaultHandle::open(directory)?;
     let canonical = fs::canonicalize(directory)?;
-    // Windows canonicalize returns a verbatim DOS path, while RootHandle deliberately accepts
+    // Windows canonicalize returns a verbatim DOS path, while VaultHandle deliberately accepts
     // only ordinary absolute drive paths. Revalidate after removing that API-only prefix.
     let text = canonical
         .to_str()
         .ok_or_else(|| io::Error::other("program path is not Unicode"))?;
     let directory = PathBuf::from(text.strip_prefix("\\\\?\\").unwrap_or(text));
-    RootHandle::open(&directory)?;
+    VaultHandle::open(&directory)?;
     Ok(directory)
 }
 fn mismatch() -> io::Error {
@@ -62,8 +62,8 @@ fn mismatch() -> io::Error {
 }
 fn verify_zip(directory: &Path) -> io::Result<String> {
     storage::verify_program(directory)?;
-    let root = RootHandle::open(directory)?;
-    let _manifest_pin = root.open_read("zip-files.json")?;
+    let vault = VaultHandle::open(directory)?;
+    let _manifest_pin = vault.open_read("zip-files.json")?;
     let path = directory.join("zip-files.json");
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&path)?).map_err(io::Error::other)?;
@@ -76,7 +76,7 @@ fn verify_zip(directory: &Path) -> io::Result<String> {
     }
     let mut pins = Vec::new();
     for &name in ZIP_FILES {
-        pins.push(root.open_read(name)?);
+        pins.push(vault.open_read(name)?);
         let entries: Vec<_> = files
             .iter()
             .filter(|f| f["path"].as_str() == Some(name))
@@ -93,11 +93,11 @@ fn verify_zip(directory: &Path) -> io::Result<String> {
     storage::hash(&path)
 }
 fn check_owner(path: &Path, directory: &Path, manifest: &str) -> io::Result<()> {
-    let root = RootHandle::open(
+    let vault = VaultHandle::open(
         path.parent()
             .ok_or_else(|| io::Error::other("owner parent absent"))?,
     )?;
-    let _pin = root.open_read("zip-owner.json")?;
+    let _pin = vault.open_read("zip-owner.json")?;
     let owner: Owner = serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
     if owner.format != 1 || owner.program != directory || owner.manifest != manifest {
         return Err(mismatch());
@@ -130,12 +130,12 @@ fn claim() -> Result<PathBuf> {
         return Err("ZIP_INSTALLED_CLIENT: a setup-managed client is registered for this user; use its S100 maintenance path, not ZIP".into());
     }
     let base = local.join("vaultsyncd");
-    let local_root = RootHandle::open(&local)?;
+    let local_vault = VaultHandle::open(&local)?;
     if !base.try_exists()? {
-        local_root.create_new_directory("vaultsyncd")?;
+        local_vault.create_new_directory("vaultsyncd")?;
     }
-    let base_root = RootHandle::open(&base)?;
-    if base_root.overlaps(&RootHandle::open(&directory)?) {
+    let base_vault = VaultHandle::open(&base)?;
+    if base_vault.overlaps(&VaultHandle::open(&directory)?) {
         return Err("ZIP program/state directories must not overlap".into());
     }
     let owner = base.join("zip-owner.json");
@@ -147,14 +147,14 @@ fn claim() -> Result<PathBuf> {
     // when all that exists is our empty directory/lock scaffolding, not configuration or data.
     let profile = base.join("agent");
     if !profile.try_exists()? {
-        base_root.create_new_directory("agent")?;
+        base_vault.create_new_directory("agent")?;
     }
-    let profile_root = RootHandle::open(&profile)?;
+    let profile_root = VaultHandle::open(&profile)?;
     let state = profile.join("state");
     if !state.try_exists()? {
         profile_root.create_new_directory("state")?;
     }
-    RootHandle::open(&state)?;
+    VaultHandle::open(&state)?;
     let _guard = InstanceGuard::acquire(&state, "vaultsyncd-agent")?;
     if owner.try_exists()? {
         check_owner(&owner, &directory, &manifest)?;
@@ -169,7 +169,7 @@ fn claim() -> Result<PathBuf> {
                 return Err("ZIP_EXISTING_STATE: existing local state is preserved".into());
             }
         }
-        let mut file = base_root.create_new_file("zip-owner.json")?;
+        let mut file = base_vault.create_new_file("zip-owner.json")?;
         file.write_all(&serde_json::to_vec_pretty(&Owner {
             format: 1,
             program: directory,
@@ -298,13 +298,13 @@ pub async fn run(action: &str) -> Result<()> {
     // PrepareMaintenance persists pause controls before exporting and exiting. They deliberately
     // remain paused on next start; never auto-resume a binding the user had already paused.
     let base = config_path.parent().ok_or("profile absent")?;
-    let root = RootHandle::open(base)?;
+    let vault = VaultHandle::open(base)?;
     let name = format!(
         "zip-stop-{}-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
         std::process::id()
     );
-    root.create_new_directory(&name)?;
+    vault.create_new_directory(&name)?;
     let destination = base.join(name);
     // Retain the process from the very connection that executes preparation, not a prior probe.
     let (_, process) = rpc(
@@ -322,7 +322,7 @@ pub async fn run(action: &str) -> Result<()> {
     }
     let _guard = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?;
     println!(
-        "Stopped safely; writer lock released. Recovery exports: {}. Bindings remain PAUSED after restart; explicitly Resume each desired binding in the GUI/CLI. Root, cache, dirty content and provider registration were retained.",
+        "Stopped safely; writer lock released. Recovery exports: {}. Bindings remain PAUSED after restart; explicitly Resume each desired binding in the GUI/CLI. Vault, cache, dirty content and provider registration were retained.",
         destination.display()
     );
     Ok(())

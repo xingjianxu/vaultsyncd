@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S096 deployed trial acceptance. Uses only the fixed disposable sample Root.
+"""S096 deployed trial acceptance. Uses only the fixed disposable sample Vault.
 Run in nix develop with package, evidence directory and unique phase arguments.
 No credentials or tokens are written to evidence; admin traffic uses same-UID IPC.
 """
@@ -72,12 +72,12 @@ def main():
         if PHASE == 'recovery':
             prior = json.loads((EVIDENCE/'acceptance-test.json').read_text())
             assert capabilities['server_id'] == prior['capabilities']['server_id']
-            root = prior['root_id']; commit = prior['committed']
-            fixed = f'/v1/roots/{root}/entries/{commit["entry_id"]}/versions/{commit["version_id"]}/content'
+            vault = prior['vault_id']; commit = prior['committed']
+            fixed = f'/v1/vaults/{vault}/entries/{commit["entry_id"]}/versions/{commit["version_id"]}/content'
             assert hashlib.sha256(api(fixed, binary=True)[2]).hexdigest() == prior['sha256']
             assert hashlib.sha256((SAMPLES/'s096-test.txt').read_bytes()).hexdigest() == prior['sha256']
-            assert api(f'/v1/roots/{root}/operations/{commit["op_id"]}')['state'] == 'committed'
-            result.update(passed=True, root_id=root, version_id=commit['version_id'], sha256=prior['sha256'])
+            assert api(f'/v1/vaults/{vault}/operations/{commit["op_id"]}')['state'] == 'committed'
+            result.update(passed=True, vault_id=vault, version_id=commit['version_id'], sha256=prior['sha256'])
             result['checks'].append('old-generation-rollback-remount-restores-server-entry-fixed-version-and-durable-operation')
             (EVIDENCE/'acceptance-recovery.json').write_text(json.dumps(result, indent=2))
             print(json.dumps(result, indent=2))
@@ -88,26 +88,26 @@ def main():
         sample.write_bytes(old); sample.chmod(0o600)
         command(['setfacl', '-m', f'u:{SERVICE_USER}:rw', sample])
         original_keep = hashlib.sha256((SAMPLES/'keep.txt').read_bytes()).hexdigest()
-        roots = api('/v1/roots')['roots']
-        root = roots[0]['root_id'] if roots else api('/v1/admin/roots', {'path':str(SAMPLES)})['root_id']
-        head = wait(lambda: next((item for item in api(f'/v1/roots/{root}/recovery')['items']
+        vaults = api('/v1/vaults')['vaults']
+        vault = vaults[0]['vault_id'] if vaults else api('/v1/admin/vaults', {'path':str(SAMPLES)})['vault_id']
+        head = wait(lambda: next((item for item in api(f'/v1/vaults/{vault}/recovery')['items']
                                  if item['name'] == sample.name and item.get('hash') == hashlib.sha256(old).hexdigest()), None))
         content = f'S096 {PHASE} committed upload {secrets.token_hex(8)}\n'.encode()
         digest = hashlib.sha256(content).hexdigest()
-        upload = api(f'/v1/roots/{root}/uploads', {'total_size':str(len(content)), 'hash':digest, 'chunk_size':'0'})
-        api(f'/v1/roots/{root}/uploads/{upload["upload_id"]}/parts/0', content, method='PUT',
+        upload = api(f'/v1/vaults/{vault}/uploads', {'total_size':str(len(content)), 'hash':digest, 'chunk_size':'0'})
+        api(f'/v1/vaults/{vault}/uploads/{upload["upload_id"]}/parts/0', content, method='PUT',
             headers={'content-type':'application/octet-stream', 'x-part-sha256':digest})
-        api(f'/v1/roots/{root}/uploads/{upload["upload_id"]}/finalize', {})
-        snapshot = api(f'/v1/roots/{root}/snapshots', {})
+        api(f'/v1/vaults/{vault}/uploads/{upload["upload_id"]}/finalize', {})
+        snapshot = api(f'/v1/vaults/{vault}/snapshots', {})
         operation = {'kind':'put_content', 'op_id':secrets.token_hex(16), 'device_id':secrets.token_hex(16),
                      'server_epoch':snapshot['server_epoch'], 'entry_id':head['entry_id'],
                      'base_revision':head['revision'], 'upload_id':upload['upload_id']}
-        committed = api(f'/v1/roots/{root}/operations', operation)
+        committed = api(f'/v1/vaults/{vault}/operations', operation)
         if committed['state'] == 'pending':
-            committed = wait(lambda: (r if (r := api(f'/v1/roots/{root}/operations/{operation["op_id"]}'))['state'] != 'pending' else None))
+            committed = wait(lambda: (r if (r := api(f'/v1/vaults/{vault}/operations/{operation["op_id"]}'))['state'] != 'pending' else None))
         assert committed['state'] == 'committed' and not committed.get('conflict')
         assert sample.read_bytes() == content
-        fixed_path = f'/v1/roots/{root}/entries/{head["entry_id"]}/versions/{committed["version_id"]}/content'
+        fixed_path = f'/v1/vaults/{vault}/entries/{head["entry_id"]}/versions/{committed["version_id"]}/content'
         assert api(fixed_path, binary=True)[2] == content
         result['checks'].append('owner-login-local-observer-upload-finalize-committed-and-fixed-download')
         before = int(command(['systemctl', 'show', '--property=MainPID', '--value', 'vaultsyncd.service']))
@@ -116,9 +116,9 @@ def main():
         after = int(command(['systemctl', 'show', '--property=MainPID', '--value', 'vaultsyncd.service']))
         assert before != after and after > 0
         assert api('/v1/capabilities')['server_id'] == capabilities['server_id']
-        replay = api(f'/v1/roots/{root}/operations', operation)
+        replay = api(f'/v1/vaults/{vault}/operations', operation)
         assert replay['state'] == 'committed' and replay['replayed']
-        assert replay['version_id'] == committed['version_id'] and replay['root_seq'] == committed['root_seq']
+        assert replay['version_id'] == committed['version_id'] and replay['vault_seq'] == committed['vault_seq']
         assert api(fixed_path, binary=True)[2] == content and sample.read_bytes() == content
         assert hashlib.sha256((SAMPLES/'keep.txt').read_bytes()).hexdigest() == original_keep
         result['checks'].append('restart-stable-server-and-entry-identity-fixed-bytes-and-idempotent-replay')
@@ -150,7 +150,7 @@ def main():
             assert s.recv(256).decode().strip() == baseline['ssh_banner']
         assert hashlib.sha256(Path('/etc/nixos/flake.lock').read_bytes()).hexdigest() == baseline['lock_sha256']
         result['checks'].append('ssh-existing-services-pids-and-http-healthy-host-lock-unchanged')
-        result.update(passed=True, root_id=root, committed=committed, sha256=digest)
+        result.update(passed=True, vault_id=vault, committed=committed, sha256=digest)
         (EVIDENCE/f'acceptance-{PHASE}.json').write_text(json.dumps(result, indent=2))
         print(json.dumps(result, indent=2))
     finally:

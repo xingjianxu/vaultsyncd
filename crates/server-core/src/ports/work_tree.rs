@@ -1,4 +1,4 @@
-//! Root 工作目录的只读观察端口：枚举与指纹（design §12.1、§12.2、§11.5）。
+//! Vault 工作目录的只读观察端口：枚举与指纹（design §12.1、§12.2、§11.5）。
 //!
 //! 外部采集只需要两个问题的答案：“这个目录下现在有哪些项”和“这个路径现在是什么、指纹是什么”。
 //! 适配器必须报告实测事实；读不到（权限、挂载漂移、IO）一律是错误，**不得**报告成“目录为空”或
@@ -113,7 +113,7 @@ pub struct WorkDirEntry {
 
 /// 一个目录下被适配器无法表示成文本的名字（非 UTF-8）的数量。
 ///
-/// 这些名字不能进入同步范围，但也不能静默消失：核心把它们记为“跳过”，使 Root 的初始采集不会被
+/// 这些名字不能进入同步范围，但也不能静默消失：核心把它们记为“跳过”，使 Vault 的初始采集不会被
 /// 报告成已完整保护。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkDirListing {
@@ -179,8 +179,8 @@ pub enum WorkTreeError {
         /// 相对路径。
         path: String,
     },
-    /// Root 本身不可用（挂载漂移、根句柄身份变化、跨越挂载边界）：整个 Root 暂停，不推导删除。
-    RootUnavailable {
+    /// Vault 本身不可用（挂载漂移、根句柄身份变化、跨越挂载边界）：整个 Vault 暂停，不推导删除。
+    VaultUnavailable {
         /// 原因文本。
         detail: String,
     },
@@ -199,7 +199,7 @@ impl WorkTreeError {
             WorkTreeError::Unreadable { .. } => "work_tree_unreadable",
             WorkTreeError::PermissionDenied { .. } => "work_tree_permission_denied",
             WorkTreeError::Gone { .. } => "work_tree_gone",
-            WorkTreeError::RootUnavailable { .. } => "root_unavailable",
+            WorkTreeError::VaultUnavailable { .. } => "vault_unavailable",
             WorkTreeError::InvalidPath { .. } => "invalid_path",
         }
     }
@@ -215,7 +215,7 @@ impl fmt::Display for WorkTreeError {
                 write!(f, "工作目录路径 {path} 没有读取权限：{detail}")
             }
             WorkTreeError::Gone { path } => write!(f, "工作目录路径 {path} 已不存在"),
-            WorkTreeError::RootUnavailable { detail } => write!(f, "Root 不可用：{detail}"),
+            WorkTreeError::VaultUnavailable { detail } => write!(f, "Vault 不可用：{detail}"),
             WorkTreeError::InvalidPath { detail } => write!(f, "路径不成立：{detail}"),
         }
     }
@@ -223,18 +223,18 @@ impl fmt::Display for WorkTreeError {
 
 impl std::error::Error for WorkTreeError {}
 
-/// Root 工作目录的只读观察端口。
+/// Vault 工作目录的只读观察端口。
 ///
 /// 实现方（Linux 适配器）必须满足的契约：
 ///
-/// 1. 所有路径都是 Root 内的相对路径（空串表示 Root 自身），经受限句柄解析：不跟随符号链接，
-///    不穿过挂载边界，不逃出 Root；
+/// 1. 所有路径都是 Vault 内的相对路径（空串表示 Vault 自身），经受限句柄解析：不跟随符号链接，
+///    不穿过挂载边界，不逃出 Vault；
 /// 2. [`list_dir`](WorkTreePort::list_dir) 返回按名称字节序排序的列表；读不全就返回错误，
 ///    不返回截断的列表；
 /// 3. [`observe`](WorkTreePort::observe) 只有确认父目录可访问且没有该名字时才返回
 ///    [`WorkObservation::Absent`]；[`list_dir`](WorkTreePort::list_dir) 同理只有确认目录不存在才返回
 ///    [`WorkTreeError::Gone`]；
-/// 4. 每次调用前核对 Root 身份，漂移时返回 [`WorkTreeError::RootUnavailable`]；
+/// 4. 每次调用前核对 Vault 身份，漂移时返回 [`WorkTreeError::VaultUnavailable`]；
 /// 5. 权限不足用 [`WorkTreeError::PermissionDenied`]，其他读失败用
 ///    [`WorkTreeError::Unreadable`]：扫描健康结论要区分这两类（design §12.3）。
 pub trait WorkTreePort {
@@ -242,14 +242,14 @@ pub trait WorkTreePort {
     ///
     /// # Errors
     ///
-    /// 见 [`WorkTreeError`]：目录不可读、Root 不可用、路径不成立。
+    /// 见 [`WorkTreeError`]：目录不可读、Vault 不可用、路径不成立。
     fn list_dir(&mut self, dir: &str) -> Result<WorkDirListing, WorkTreeError>;
 
     /// 观察路径现在的现场与指纹。
     ///
     /// # Errors
     ///
-    /// 见 [`WorkTreeError`]：不可读、Root 不可用、路径不成立。
+    /// 见 [`WorkTreeError`]：不可读、Vault 不可用、路径不成立。
     fn observe(&mut self, path: &str) -> Result<WorkObservation, WorkTreeError>;
 
     /// 读取目录现在的身份（设备、inode、创建时间），用于保护队列复核（design §12.3）。
@@ -258,7 +258,7 @@ pub trait WorkTreePort {
     ///
     /// # Errors
     ///
-    /// 见 [`WorkTreeError`]：权限不足（[`WorkTreeError::PermissionDenied`]）、Root 不可用、
+    /// 见 [`WorkTreeError`]：权限不足（[`WorkTreeError::PermissionDenied`]）、Vault 不可用、
     /// 路径不成立。
     fn observe_dir(&mut self, dir: &str) -> Result<Option<DirIdentity>, WorkTreeError>;
 }

@@ -1,16 +1,16 @@
-//! 上传端点：`POST/GET /v1/roots/{root}/uploads…`（design §13.1—13.2、§15.2）。
+//! 上传端点：`POST/GET /v1/vaults/{vault}/uploads…`（design §13.1—13.2、§15.2）。
 //!
 //! 本模块只做“HTTP → 用例 → 存储/暂存”的翻译：会话边界、块校验顺序与同索引重传语义都在
 //! [`vaultsyncd_server_core::api::uploads`] 里；这里负责
 //!
-//! - 授权：先 [`crate::auth::principal_from`] 认出调用者，再 [`crate::auth::authorize_root`]
-//!   确认 Root 属于它（I15：每个资源请求都做，不泄露 Root 是否存在）；
+//! - 授权：先 [`crate::auth::principal_from`] 认出调用者，再 [`crate::auth::authorize_vault`]
+//!   确认 Vault 属于它（I15：每个资源请求都做，不泄露 Vault 是否存在）；
 //! - 跨会话：上传会话与签发它的登录会话绑定，别的登录会话即使同一个 owner 也拿不到（404，
 //!   与“不存在”同一个回答）；
 //! - 载荷上限：块请求体最多读到策略允许的最大块大小 + 1 字节，超出立即拒绝，不把任意大的载荷
 //!   读进内存；
 //! - 持久化：块字节先由 [`FsStaging`] 写入内部暂存目录并 `fsync` 文件与目录，再登记块行
-//!   （核心规定的顺序）；暂存目录是 `state_dir/uploads/<upload_id>/`，不落在 Root 工作目录里。
+//!   （核心规定的顺序）；暂存目录是 `state_dir/uploads/<upload_id>/`，不落在 Vault 工作目录里。
 //!
 //! 失败映射（design §15.4）：凭据问题 401 `AUTH_EXPIRED`、越权 403 `ACCESS_DENIED`、会话不存在
 //! 404 `UNSUPPORTED_ENTRY`（“请求的对象不在你的世界里”，不区分是否存在）、形状/越界/超载荷
@@ -28,7 +28,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tracing::{info, warn};
 use vaultsyncd_domain::ids::{
-    DeviceId, EntryId, OpId, RootId, SessionId, SnapshotId, UploadId, UserId, VersionId,
+    DeviceId, EntryId, OpId, SessionId, SnapshotId, UploadId, UserId, VaultId, VersionId,
 };
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_protocol::generated::{
@@ -87,22 +87,22 @@ impl Caller {
     pub(crate) async fn resolve(
         auth_context: &AuthContext,
         headers: &HeaderMap,
-        root: &str,
-    ) -> Result<(Self, RootId), Response> {
+        vault: &str,
+    ) -> Result<(Self, VaultId), Response> {
         let principal = auth::principal_from(auth_context, headers).await?;
-        let root_id = parse_identity::<RootId>(root)
-            .ok_or_else(|| bad_request(&next_request_id(), "Root 身份不是 32 位小写十六进制"))?;
-        match auth::authorize_root(auth_context.database(), &principal, root_id).await {
+        let vault_id = parse_identity::<VaultId>(vault)
+            .ok_or_else(|| bad_request(&next_request_id(), "Vault 身份不是 32 位小写十六进制"))?;
+        match auth::authorize_vault(auth_context.database(), &principal, vault_id).await {
             Ok(_) => {}
             Err(AuthorizeError::Scope(_)) => {
-                return Err(denied(&next_request_id(), "Root 不在授权范围"));
+                return Err(denied(&next_request_id(), "Vault 不在授权范围"));
             }
             Err(AuthorizeError::Storage(detail)) => {
-                warn!(error = %detail, "读取 Root 归属失败");
+                warn!(error = %detail, "读取 Vault 归属失败");
                 return Err(internal_error(
                     &next_request_id(),
                     "服务端内部错误",
-                    Some(root_id.to_hex()),
+                    Some(vault_id.to_hex()),
                 ));
             }
         }
@@ -112,20 +112,20 @@ impl Caller {
                 request_id: next_request_id(),
                 now: server_now(),
             },
-            root_id,
+            vault_id,
         ))
     }
 }
 
-/// `POST /v1/roots/{root}/uploads`：创建上传会话。
+/// `POST /v1/vaults/{vault}/uploads`：创建上传会话。
 pub async fn begin(
     State(context): State<Arc<UploadsContext>>,
-    UrlPath((root,)): UrlPath<(String,)>,
+    UrlPath((vault,)): UrlPath<(String,)>,
     headers: HeaderMap,
     Json(body): Json<UploadRequest>,
 ) -> Response {
     let _objects = context.auth.database().object_activity().await;
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -145,12 +145,12 @@ pub async fn begin(
     };
     let plan = match uploads::plan_begin(context.policy, &request) {
         Ok(plan) => plan,
-        Err(failure) => return failure_response(&caller.request_id, &failure, Some(root_id)),
+        Err(failure) => return failure_response(&caller.request_id, &failure, Some(vault_id)),
     };
 
     let new = store_uploads::NewUpload {
         id: UploadId::from_bytes(random_bytes()),
-        root: root_id,
+        vault: vault_id,
         session: caller.principal.session_id,
         expected_size: total_size,
         hash: *hash.as_bytes(),
@@ -165,7 +165,11 @@ pub async fn begin(
         Ok(tx) => tx,
         Err(error) => {
             warn!(error = %error, "创建上传会话时打不开写事务");
-            return internal_error(&caller.request_id, "服务端内部错误", Some(root_id.to_hex()));
+            return internal_error(
+                &caller.request_id,
+                "服务端内部错误",
+                Some(vault_id.to_hex()),
+            );
         }
     };
     match store_uploads::begin_upload(&mut tx, caller.principal.user_id, &new).await {
@@ -174,7 +178,7 @@ pub async fn begin(
                 info!(
                     request_id = %caller.request_id,
                     upload_id = %record.id,
-                    root_id = %root_id,
+                    vault_id = %vault_id,
                     "已创建上传会话"
                 );
                 let session = to_wire_session(&record, plan.chunk_size);
@@ -182,24 +186,28 @@ pub async fn begin(
             }
             Err(error) => {
                 warn!(error = %error, "提交上传会话失败");
-                internal_error(&caller.request_id, "服务端内部错误", Some(root_id.to_hex()))
+                internal_error(
+                    &caller.request_id,
+                    "服务端内部错误",
+                    Some(vault_id.to_hex()),
+                )
             }
         },
         Err(error) => {
             let failure = store_failure(error);
-            failure_response(&caller.request_id, &failure, Some(root_id))
+            failure_response(&caller.request_id, &failure, Some(vault_id))
         }
     }
 }
 
-/// `GET /v1/roots/{root}/uploads/{upload}`：会话状态与服务端真实已收块。
+/// `GET /v1/vaults/{vault}/uploads/{upload}`：会话状态与服务端真实已收块。
 pub async fn status(
     State(context): State<Arc<UploadsContext>>,
-    UrlPath((root, upload)): UrlPath<(String, String)>,
+    UrlPath((vault, upload)): UrlPath<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
     let _objects = context.auth.database().object_activity().await;
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -210,7 +218,11 @@ pub async fn status(
         Ok(conn) => conn,
         Err(error) => {
             warn!(error = %error, "读取上传进度时取连接失败");
-            return internal_error(&caller.request_id, "服务端内部错误", Some(root_id.to_hex()));
+            return internal_error(
+                &caller.request_id,
+                "服务端内部错误",
+                Some(vault_id.to_hex()),
+            );
         }
     };
     let record = match store_uploads::upload_in_scope(
@@ -220,16 +232,16 @@ pub async fn status(
     )
     .await
     {
-        Ok(Some(record)) if record.root == root_id => record,
-        Ok(_) => return not_found(&caller.request_id, root_id),
+        Ok(Some(record)) if record.vault == vault_id => record,
+        Ok(_) => return not_found(&caller.request_id, vault_id),
         Err(error) => {
             let failure = store_failure(error);
-            return failure_response(&caller.request_id, &failure, Some(root_id));
+            return failure_response(&caller.request_id, &failure, Some(vault_id));
         }
     };
     // 跨会话：别的登录会话（即使同一 owner）也不能读这次上传的进度。
     if record.session != caller.principal.session_id || record.expires_at <= caller.now {
-        return not_found(&caller.request_id, root_id);
+        return not_found(&caller.request_id, vault_id);
     }
     let progress = match store_uploads::upload_progress(
         &mut conn,
@@ -241,7 +253,7 @@ pub async fn status(
         Ok(progress) => progress,
         Err(error) => {
             let failure = store_failure(error);
-            return failure_response(&caller.request_id, &failure, Some(root_id));
+            return failure_response(&caller.request_id, &failure, Some(vault_id));
         }
     };
     let session = to_wire_session(&record, record.chunk_size);
@@ -273,15 +285,15 @@ pub async fn status(
         .into_response()
 }
 
-/// `PUT /v1/roots/{root}/uploads/{upload}/parts/{index}`：接收一个固定块。
+/// `PUT /v1/vaults/{vault}/uploads/{upload}/parts/{index}`：接收一个固定块。
 pub async fn put_part(
     State(context): State<Arc<UploadsContext>>,
-    UrlPath((root, upload, index)): UrlPath<(String, String, String)>,
+    UrlPath((vault, upload, index)): UrlPath<(String, String, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let _objects = context.auth.database().object_activity().await;
-    let (caller, root_id) = match Caller::resolve(&context.auth, &headers, &root).await {
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, &vault).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
@@ -310,11 +322,11 @@ pub async fn put_part(
         database: context.auth.database(),
         owner: caller.principal.user_id,
         session: caller.principal.session_id,
-        root: root_id,
+        vault: vault_id,
         now: caller.now,
     };
     let mut staging = FsStaging {
-        root: context.staging.clone(),
+        vault: context.staging.clone(),
     };
     match uploads::receive_part(&mut store, &mut staging, upload_id, index, declared, &body).await {
         Ok(receipt) => {
@@ -338,7 +350,7 @@ pub async fn put_part(
             )
                 .into_response()
         }
-        Err(failure) => failure_response(&caller.request_id, &failure, Some(root_id)),
+        Err(failure) => failure_response(&caller.request_id, &failure, Some(vault_id)),
     }
 }
 
@@ -347,24 +359,24 @@ pub(crate) struct DbUploads<'a> {
     database: &'a Database,
     owner: UserId,
     session: SessionId,
-    root: RootId,
+    vault: VaultId,
     now: UtcTimestamp,
 }
 
 impl<'a> DbUploads<'a> {
-    /// 以调用方身份装配：所有查询都只在 `(owner, session, root)` 的交集内成立。
+    /// 以调用方身份装配：所有查询都只在 `(owner, session, vault)` 的交集内成立。
     pub(crate) fn new(
         database: &'a Database,
         owner: UserId,
         session: SessionId,
-        root: RootId,
+        vault: VaultId,
         now: UtcTimestamp,
     ) -> Self {
         Self {
             database,
             owner,
             session,
-            root,
+            vault,
             now,
         }
     }
@@ -372,7 +384,7 @@ impl<'a> DbUploads<'a> {
         if record.expires_at <= self.now {
             return Err(UploadFailure::UnknownUpload);
         }
-        if record.root != self.root {
+        if record.vault != self.vault {
             return Err(UploadFailure::UnknownUpload);
         }
         if record.session != self.session {
@@ -380,7 +392,7 @@ impl<'a> DbUploads<'a> {
         }
         Ok(CoreSession {
             upload: record.id,
-            root: record.root,
+            vault: record.vault,
             session: record.session,
             total_size: record.expected_size,
             hash: ContentDigest::from_bytes(record.hash),
@@ -537,7 +549,7 @@ impl DbUploads<'_> {
 
 /// 块暂存适配器（端口 [`PartStaging`]）：写入 `uploads/<upload_id>/<index>` 并持久化。
 struct FsStaging {
-    root: PathBuf,
+    vault: PathBuf,
 }
 
 #[allow(async_fn_in_trait)]
@@ -548,7 +560,7 @@ impl PartStaging for FsStaging {
         index: u64,
         bytes: &[u8],
     ) -> Result<String, UploadFailure> {
-        let directory = self.root.join(upload.to_hex());
+        let directory = self.vault.join(upload.to_hex());
         let name = format!("{index:020}");
         let path = directory.join(&name);
         let temporary = directory.join(format!(".{name}.{}.tmp", std::process::id()));
@@ -608,7 +620,7 @@ fn to_wire_session(record: &store_uploads::UploadRecord, chunk_size: u64) -> Upl
         .unwrap_or_else(|_| store_uploads::ChunkGeometry::new(0, 1).expect("块大小 1"));
     UploadSession {
         upload_id: record.id.to_hex(),
-        root_id: record.root.to_hex(),
+        vault_id: record.vault.to_hex(),
         total_size: record.expected_size.to_string(),
         hash: ContentDigest::from_bytes(record.hash).to_hex(),
         chunk_size: geometry.chunk_size().to_string(),
@@ -635,9 +647,9 @@ fn store_failure(error: store_uploads::UploadError) -> UploadFailure {
 pub(crate) fn failure_response(
     request_id: &str,
     failure: &UploadFailure,
-    root: Option<RootId>,
+    vault: Option<VaultId>,
 ) -> Response {
-    let root_id = root.map(RootId::to_hex);
+    let vault_id = vault.map(VaultId::to_hex);
     match failure {
         UploadFailure::TotalTooLarge { .. } | UploadFailure::ChunkTooLarge { .. } => {
             error_response(
@@ -646,7 +658,7 @@ pub(crate) fn failure_response(
                 request_id,
                 &failure.to_string(),
                 false,
-                root_id,
+                vault_id,
             )
         }
         UploadFailure::IndexOutOfRange { .. } | UploadFailure::LengthMismatch { .. } => {
@@ -656,7 +668,7 @@ pub(crate) fn failure_response(
                 request_id,
                 &failure.to_string(),
                 false,
-                root_id,
+                vault_id,
             )
         }
         UploadFailure::DigestMismatch { .. } => error_response(
@@ -665,7 +677,7 @@ pub(crate) fn failure_response(
             request_id,
             &failure.to_string(),
             false,
-            root_id,
+            vault_id,
         ),
         UploadFailure::PartConflict { .. } => error_response(
             StatusCode::CONFLICT,
@@ -673,7 +685,7 @@ pub(crate) fn failure_response(
             request_id,
             &failure.to_string(),
             false,
-            root_id,
+            vault_id,
         ),
         UploadFailure::PartsClosed { .. } => error_response(
             StatusCode::CONFLICT,
@@ -681,37 +693,37 @@ pub(crate) fn failure_response(
             request_id,
             &failure.to_string(),
             false,
-            root_id,
+            vault_id,
         ),
         UploadFailure::UnknownUpload => not_found(
             request_id,
-            root.unwrap_or_else(|| RootId::from_bytes([0; 16])),
+            vault.unwrap_or_else(|| VaultId::from_bytes([0; 16])),
         ),
-        UploadFailure::OutOfScope => denied(request_id, "Root 不在授权范围"),
-        UploadFailure::MalformedSession => internal_error(request_id, "上传会话数据损坏", root_id),
+        UploadFailure::OutOfScope => denied(request_id, "Vault 不在授权范围"),
+        UploadFailure::MalformedSession => internal_error(request_id, "上传会话数据损坏", vault_id),
         UploadFailure::Storage { detail } if detail == "no_space" => error_response(
             StatusCode::INSUFFICIENT_STORAGE,
             ErrorCode::InsufficientStorage,
             request_id,
             "服务端暂存空间不足",
             true,
-            root_id,
+            vault_id,
         ),
         UploadFailure::Storage { detail } => {
             warn!(request_id = %request_id, error = %detail, "上传存储失败");
-            internal_error(request_id, "服务端内部错误", root_id)
+            internal_error(request_id, "服务端内部错误", vault_id)
         }
     }
 }
 
-pub(crate) fn not_found(request_id: &str, root: RootId) -> Response {
+pub(crate) fn not_found(request_id: &str, vault: VaultId) -> Response {
     error_response(
         StatusCode::NOT_FOUND,
         ErrorCode::UnsupportedEntry,
         request_id,
         "上传会话不存在或不属于当前调用者",
         false,
-        Some(root.to_hex()),
+        Some(vault.to_hex()),
     )
 }
 
@@ -737,14 +749,14 @@ pub(crate) fn bad_request(request_id: &str, message: &str) -> Response {
     )
 }
 
-pub(crate) fn internal_error(request_id: &str, message: &str, root: Option<String>) -> Response {
+pub(crate) fn internal_error(request_id: &str, message: &str, vault: Option<String>) -> Response {
     error_response(
         StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::NeedsRecovery,
         request_id,
         message,
         true,
-        root,
+        vault,
     )
 }
 
@@ -754,7 +766,7 @@ pub(crate) fn error_response(
     request_id: &str,
     message: &str,
     retryable: bool,
-    root_id: Option<String>,
+    vault_id: Option<String>,
 ) -> Response {
     let envelope = vaultsyncd_protocol::generated::ErrorEnvelope {
         error: vaultsyncd_protocol::generated::ErrorBody {
@@ -763,7 +775,7 @@ pub(crate) fn error_response(
             message: message.to_owned(),
             request_id: request_id.to_owned(),
             retryable,
-            root_id,
+            vault_id,
         },
     };
     (status, Json(envelope)).into_response()
@@ -801,7 +813,7 @@ macro_rules! identity_from_hex {
 }
 
 identity_from_hex!(
-    RootId, UploadId, EntryId, VersionId, OpId, DeviceId, SnapshotId
+    VaultId, UploadId, EntryId, VersionId, OpId, DeviceId, SnapshotId
 );
 
 pub(crate) fn parse_decimal(text: &str) -> Option<u64> {

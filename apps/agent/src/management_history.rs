@@ -31,12 +31,12 @@ pub(crate) async fn execute(
     if matches!(command.name, C::ListHistory | C::ListTrash) {
         let path = if command.name == C::ListHistory {
             format!(
-                "/v1/roots/{}/entries/{}/history",
-                record.root,
+                "/v1/vaults/{}/entries/{}/history",
+                record.vault,
                 p.entry_id.as_deref().unwrap()
             )
         } else {
-            format!("/v1/roots/{}/trash", record.root)
+            format!("/v1/vaults/{}/trash", record.vault)
         };
         let mut request = ApiRequest::get(path).with_auth(AuthMode::Bearer);
         if let Some(cursor) = &p.cursor {
@@ -134,22 +134,23 @@ pub(crate) async fn retry_restore(
     let value: serde_json::Value = serde_json::from_str(&text).map_err(error)?;
     let request: OperationRequest =
         serde_json::from_value(value["request"].clone()).map_err(error)?;
-    let root: Vec<u8> = sqlx::query_scalar("SELECT root_id FROM bindings WHERE id=?")
+    let vault: Vec<u8> = sqlx::query_scalar("SELECT vault_id FROM bindings WHERE id=?")
         .bind(binding.as_bytes().as_slice())
         .fetch_one(db.pool())
         .await
         .map_err(error)?;
-    let root = vaultsyncd_domain::ids::RootId::from_bytes(
-        root.try_into()
-            .map_err(|_| error("invalid root identity"))?,
+    let vault = vaultsyncd_domain::ids::VaultId::from_bytes(
+        vault
+            .try_into()
+            .map_err(|_| error("invalid vault identity"))?,
     );
     let response =
-        match vaultsyncd_http_client::sync::operation(client, &root.to_string(), &op.to_string())
+        match vaultsyncd_http_client::sync::operation(client, &vault.to_string(), &op.to_string())
             .await
         {
             Ok(result) => Ok(result),
             Err(vaultsyncd_http_client::ClientError::Api(failure)) if failure.status() == 404 => {
-                vaultsyncd_http_client::sync::submit(client, &root.to_string(), &request).await
+                vaultsyncd_http_client::sync::submit(client, &vault.to_string(), &request).await
             }
             Err(error) => Err(error),
         }
@@ -199,7 +200,7 @@ pub(crate) async fn retry_restore(
         operation_id: Some(op.to_string()),
         restored_path: location(
             client,
-            &root.to_string(),
+            &vault.to_string(),
             response
                 .entry_id
                 .as_deref()
@@ -214,10 +215,10 @@ pub(crate) async fn retry_restore(
 
 async fn location(
     client: &ApiClient<ReqwestTransport>,
-    root: &str,
+    vault: &str,
     entry: &str,
 ) -> Result<Option<String>, PortError> {
-    let (snapshot, _) = vaultsyncd_http_client::sync::snapshot(client, root)
+    let (snapshot, _) = vaultsyncd_http_client::sync::snapshot(client, vault)
         .await
         .map_err(vaultsyncd_http_client::transfer_error)?;
     let mut rows = std::collections::HashMap::new();
@@ -225,7 +226,7 @@ async fn location(
     loop {
         let page = vaultsyncd_http_client::sync::snapshot_page(
             client,
-            root,
+            vault,
             &snapshot.snapshot_id,
             cursor.as_deref(),
         )
@@ -245,18 +246,18 @@ async fn location(
 pub(crate) async fn report_existing_conflicts(
     db: &Database,
     client: &ApiClient<ReqwestTransport>,
-    root: &str,
+    vault: &str,
 ) -> Result<(), PortError> {
     let page: RecoveryPage = client
         .send_json(
-            ApiRequest::get(format!("/v1/roots/{root}/conflicts")).with_auth(AuthMode::Bearer),
+            ApiRequest::get(format!("/v1/vaults/{vault}/conflicts")).with_auth(AuthMode::Bearer),
         )
         .await
         .map_err(vaultsyncd_http_client::transfer_error)?;
     if !page.items.is_empty() {
         vaultsyncd_agent_core::status::issues::report_conflict(
             db,
-            vaultsyncd_domain::ids::RootId::from_hex(root).map_err(error)?,
+            vaultsyncd_domain::ids::VaultId::from_hex(vault).map_err(error)?,
         )
         .await?;
     }

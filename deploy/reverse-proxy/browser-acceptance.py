@@ -24,7 +24,7 @@ ORIGIN = sys.argv[4] if len(sys.argv) > 4 else 'https://localhost:18443'
 LABEL = sys.argv[5] if len(sys.argv) > 5 else 'linux-chromium'
 assert ORIGIN in ('https://localhost:18443', 'https://10.0.2.2:18443')
 assert LABEL in ('linux-chromium', 'windows-edge')
-ROOT = '58e698e16616ff0162055df963f9c1fa'
+VAULT = '58e698e16616ff0162055df963f9c1fa'
 SERVER = '9e9d06c5d0d371a43c2cb4043de02cd8'
 SAMPLES = Path('/data/vaultsyncd-trial-s096/mnt/samples')
 CA = EVIDENCE/'development-ca.pem'
@@ -73,20 +73,20 @@ def run(browser, result):
         command(['setfacl','-m','u:vaultsyncd-trial:rw',sample])
         head = None
         for _ in range(150):
-            head = next((x for x in api(f'/v1/roots/{ROOT}/recovery')['items'] if x['name']==sample.name),None)
+            head = next((x for x in api(f'/v1/vaults/{VAULT}/recovery')['items'] if x['name']==sample.name),None)
             if head:break
             time.sleep(.2)
         assert head
         # Streaming fetch is authenticated with actual same-origin browser cookies.
-        page.evaluate('''root => {
+        page.evaluate('''vault => {
           window.s097={controller:new AbortController(),text:'',ready:false,failed:null};
-          fetch(`/v1/roots/${root}/events`,{signal:window.s097.controller.signal}).then(async r=>{
+          fetch(`/v1/vaults/${vault}/events`,{signal:window.s097.controller.signal}).then(async r=>{
             if(!r.ok||!r.headers.get('content-type').startsWith('text/event-stream'))throw Error('SSE headers');
             window.s097.ready=true;const reader=r.body.getReader(),decoder=new TextDecoder();
             while(true){const {value,done}=await reader.read();if(done)break;
               window.s097.text+=decoder.decode(value,{stream:true});if(window.s097.text.length>65536)throw Error('SSE bound');}
           }).catch(e=>{if(e.name!=='AbortError')window.s097.failed=String(e)});
-        }''',ROOT)
+        }''',VAULT)
         def until(expression, arg=None, timeout=6):
             end=time.monotonic()+timeout
             while time.monotonic()<end:
@@ -103,27 +103,27 @@ def run(browser, result):
         byte = 0x62 if LABEL=='linux-chromium' else 0x77
         digest = page.evaluate('''async value=>{window.s097.content=new Uint8Array(16777216).fill(value);
           return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',window.s097.content))).map(b=>b.toString(16).padStart(2,'0')).join('');}''',byte)
-        upload = api(f'/v1/roots/{ROOT}/uploads',{'total_size':maximum,'hash':digest,'chunk_size':maximum})
-        part = f'/v1/roots/{ROOT}/uploads/{upload["upload_id"]}/parts/0'
+        upload = api(f'/v1/vaults/{VAULT}/uploads',{'total_size':maximum,'hash':digest,'chunk_size':maximum})
+        part = f'/v1/vaults/{VAULT}/uploads/{upload["upload_id"]}/parts/0'
         too_large = page.evaluate('''async ([url,hash])=>{const r=await fetch(url,{method:'PUT',headers:{'content-type':'application/octet-stream','x-part-sha256':hash},body:new Uint8Array(16777217)});await r.text();return r.status;}''',[part,digest])
         assert too_large == 413, f'proxy maximum+1 must be 413: {too_large}'
         accepted = page.evaluate('''async ([url,hash])=>{const r=await fetch(url,{method:'PUT',headers:{'content-type':'application/octet-stream','x-part-sha256':hash},body:window.s097.content});const value=await r.json();if(!r.ok)throw Error(JSON.stringify(value));return r.status;}''',[part,digest])
         assert accepted == 200
-        api(f'/v1/roots/{ROOT}/uploads/{upload["upload_id"]}/finalize',{})
-        epoch = api(f'/v1/roots/{ROOT}/snapshots',{})['server_epoch']
+        api(f'/v1/vaults/{VAULT}/uploads/{upload["upload_id"]}/finalize',{})
+        epoch = api(f'/v1/vaults/{VAULT}/snapshots',{})['server_epoch']
         operation={'kind':'put_content','op_id':secrets.token_hex(16),'device_id':secrets.token_hex(16),'server_epoch':epoch,'entry_id':head['entry_id'],'base_revision':head['revision'],'upload_id':upload['upload_id']}
-        committed = api(f'/v1/roots/{ROOT}/operations',operation)
+        committed = api(f'/v1/vaults/{VAULT}/operations',operation)
         for _ in range(100):
             if committed['state']!='pending':break
-            time.sleep(.1);committed=api(f'/v1/roots/{ROOT}/operations/{operation["op_id"]}')
+            time.sleep(.1);committed=api(f'/v1/vaults/{VAULT}/operations/{operation["op_id"]}')
         assert committed['state']=='committed' and not committed.get('conflict')
-        until('seq => Array.from(window.s097.text.matchAll(/"seq":"(\\d+)"/g)).some(m => BigInt(m[1]) >= BigInt(seq))', committed['root_seq'])
-        fixed=f'/v1/roots/{ROOT}/entries/{head["entry_id"]}/versions/{committed["version_id"]}/content'
+        until('seq => Array.from(window.s097.text.matchAll(/"seq":"(\\d+)"/g)).some(m => BigInt(m[1]) >= BigInt(seq))', committed['vault_seq'])
+        fixed=f'/v1/vaults/{VAULT}/entries/{head["entry_id"]}/versions/{committed["version_id"]}/content'
         downloaded = page.evaluate('''async url=>{const r=await fetch(url);if(!r.ok)throw Error('download');const data=await r.arrayBuffer();return {size:data.byteLength,hash:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',data))).map(b=>b.toString(16).padStart(2,'0')).join('')}}''',fixed)
         assert downloaded=={'size':16777216,'hash':digest}
         assert hashlib.sha256(sample.read_bytes()).hexdigest()==digest
         result['checks'].append('16MiB-TLS-part-accepted-maximum-plus-one-413-finalize-committed-and-fixed-download')
-        result['checks'].append('SSE-promptly-signals-new-committed-RootSeq-during-upload')
+        result['checks'].append('SSE-promptly-signals-new-committed-VaultSeq-during-upload')
         # The browser engine uses its NSS/Windows trust store. A separate strict
         # checker supplies the CA explicitly and never prints Cookie headers.
         cookie_header='; '.join(c['name']+'='+c['value'] for c in cookies)
@@ -132,7 +132,7 @@ def run(browser, result):
             h={'Cookie':cookie_header,'Content-Type':'application/json','Origin':origin,
                'Host':ORIGIN.removeprefix('https://'),'X-Forwarded-Host':'evil.invalid',
                'X-Forwarded-Proto':'http','Forwarded':'host=evil.invalid;proto=http'}
-            q=urllib.request.Request('https://localhost:18443'+f'/v1/roots/{ROOT}/snapshots',data=b'{}',headers=h)
+            q=urllib.request.Request('https://localhost:18443'+f'/v1/vaults/{VAULT}/snapshots',data=b'{}',headers=h)
             try:
                 with urllib.request.urlopen(q,context=tls,timeout=15) as response:return response.status
             except urllib.error.HTTPError as error:return error.code
@@ -146,7 +146,7 @@ def run(browser, result):
         result['path_status']=statuses
         result['checks'].append('no-management-socket-database-arbitrary-file-or-HTML-API-fallback')
         page.evaluate('window.s097.controller.abort()')
-        page.get_by_role('link',name='Root 目录',exact=True).click()
+        page.get_by_role('link',name='Vault 目录',exact=True).click()
         page.screenshot(path=str(EVIDENCE/f'{LABEL}.png'),full_page=True)
         api('/v1/auth/logout',{})
         result.update(passed=True,origin=ORIGIN,browser=browser.version,server_id=SERVER,committed=committed,sha256=digest)

@@ -17,7 +17,7 @@
     "scope",
     "external_uncollected_writes",
     "sessions",
-    "roots",
+    "vaults",
     "objects",
     "files",
     "database_contents"
@@ -68,22 +68,22 @@
     "sessions": {
       "const": "invalidated"
     },
-    "roots": {
+    "vaults": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "root_id",
+          "vault_id",
           "seq",
           "original_path",
           "owner_id",
           "epoch",
           "volume_identity",
-          "root_file_identity"
+          "vault_file_identity"
         ],
         "properties": {
-          "root_id": {
+          "vault_id": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$"
           },
@@ -105,7 +105,7 @@
           "volume_identity": {
             "type": "string"
           },
-          "root_file_identity": {
+          "vault_file_identity": {
             "type": "string"
           }
         }
@@ -117,14 +117,14 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "root_id",
+          "vault_id",
           "sha256",
           "size",
           "storage_path",
           "archive_path"
         ],
         "properties": {
-          "root_id": {
+          "vault_id": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$"
           },
@@ -175,7 +175,7 @@
       "additionalProperties": false,
       "required": [
         "users",
-        "roots",
+        "vaults",
         "entries",
         "versions",
         "trash_entries",
@@ -188,7 +188,7 @@
           "type": "string",
           "pattern": "^(0|[1-9][0-9]*)$"
         },
-        "roots": {
+        "vaults": {
           "type": "string",
           "pattern": "^(0|[1-9][0-9]*)$"
         },

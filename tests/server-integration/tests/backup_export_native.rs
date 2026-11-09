@@ -1,7 +1,7 @@
 //! 显式运行的S088原生验收：真实btrfs、独立服务子进程、实际admin二进制与TCP。
 //! 需要专属run_id且已挂载user_subvol_rm_allowed；本测试和服务都不挂载、不sudo。
 mod common;
-use common::{Lab, Running, login, register_root};
+use common::{Lab, Running, login, register_vault};
 use serde_json::Value;
 use std::{
     io::{BufRead, BufReader},
@@ -112,9 +112,9 @@ async fn wait_state(lab: &Lab, id: &str, phase: &str) {
     }
     panic!("state did not become {phase}: {}", state(lab, id).await);
 }
-async fn adopted(s: &Server, token: &str, root: &str, name: &str, hash: &str) {
+async fn adopted(s: &Server, token: &str, vault: &str, name: &str, hash: &str) {
     for _ in 0..200 {
-        let entries = common::snapshot(&s.http, token, root).await;
+        let entries = common::snapshot(&s.http, token, vault).await;
         if entries
             .iter()
             .any(|e| e["name"] == name && e["hash"] == hash)
@@ -218,25 +218,25 @@ async fn real_export_integrity_authorization_and_release_restart() {
     std::fs::write(lab.work().join("large"), vec![0x5b; 16 * 1024 * 1024]).unwrap();
     let mut s = Server::start(&lab).await;
     let token = login(&s.http).await.unwrap();
-    let root = register_root(&s.http, &token, &lab.work()).await.unwrap();
-    adopted(&s, &token, &root, "note", &hex(b"history-content")).await;
+    let vault = register_vault(&s.http, &token, &lab.work()).await.unwrap();
+    adopted(&s, &token, &vault, "note", &hex(b"history-content")).await;
     adopted(
         &s,
         &token,
-        &root,
+        &vault,
         "large",
         &hex(&vec![0x5b; 16 * 1024 * 1024]),
     )
     .await;
     std::fs::write(lab.work().join("note"), b"current-content").unwrap();
-    adopted(&s, &token, &root, "note", &hex(b"current-content")).await;
+    adopted(&s, &token, &vault, "note", &hex(b"current-content")).await;
     std::fs::remove_file(lab.work().join("trash")).unwrap();
     for _ in 0..200 {
         let (status, body) = s
             .http
             .json(
                 "GET",
-                &format!("/v1/roots/{root}/trash"),
+                &format!("/v1/vaults/{vault}/trash"),
                 Some(&token),
                 None,
             )
@@ -286,7 +286,7 @@ async fn real_export_integrity_authorization_and_release_restart() {
             >= 1
     );
     assert_eq!(manifest["sessions"], "invalidated");
-    assert_eq!(manifest["roots"][0]["root_id"], root);
+    assert_eq!(manifest["vaults"][0]["vault_id"], vault);
     let objects = source_objects(&lab, &manifest);
     assert!(objects.len() >= 4);
     for item in manifest["files"]
@@ -298,7 +298,7 @@ async fn real_export_integrity_authorization_and_release_restart() {
             (
                 format!(
                     "{url}/objects/{}/{}",
-                    o["root_id"].as_str().unwrap(),
+                    o["vault_id"].as_str().unwrap(),
                     o["sha256"].as_str().unwrap()
                 ),
                 o,
@@ -318,7 +318,7 @@ async fn real_export_integrity_authorization_and_release_restart() {
     }
     for path in [
         format!("{url}/files/server.sqlite"),
-        format!("{url}/objects/{root}/{}", "00".repeat(32)),
+        format!("{url}/objects/{vault}/{}", "00".repeat(32)),
     ] {
         assert_eq!(
             client
@@ -572,7 +572,7 @@ async fn real_export_integrity_authorization_and_release_restart() {
         ("GET", url.clone()),
         ("GET", format!("{url}/export")),
         ("GET", format!("{url}/files/database.sqlite")),
-        ("GET", format!("{url}/objects/{root}/{}", "a".repeat(64))),
+        ("GET", format!("{url}/objects/{vault}/{}", "a".repeat(64))),
         ("POST", format!("{url}/verify")),
         ("POST", format!("{url}/release")),
     ] {

@@ -37,9 +37,9 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    state, roots = RUN / "state", RUN / "roots"
-    state.mkdir(mode=0o700); roots.mkdir()
-    candidate = roots / "documents"; candidate.mkdir(); (candidate / "child").mkdir()
+    state, vaults = RUN / "state", RUN / "vaults"
+    state.mkdir(mode=0o700); vaults.mkdir()
+    candidate = vaults / "documents"; candidate.mkdir(); (candidate / "child").mkdir()
     sample = candidate / "keep.txt"; sample.write_bytes(b"S079 confirmed content is preserved\n")
     original_hash = hashlib.sha256(sample.read_bytes()).hexdigest()
     unsupported = Path(tempfile.mkdtemp(prefix="vs-s079-unsupported-"))
@@ -48,7 +48,7 @@ def main():
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
     checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
     config = RUN / "server.toml"
-    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[roots]\nallowed_bases=["{roots}","{unsupported}"]\n[log]\nformat="json"\nlevel="info"\n')
+    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}","{unsupported}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
     server = subprocess.Popen([str(BIN / "vaultsyncd-server"), "--config", str(config)], stdout=log, stderr=log)
     proxy = evil = None
@@ -108,8 +108,8 @@ def main():
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
-            notifications = page.locator(".mantine-Notification-root")
-            operation = page.locator(".mantine-Paper-root").filter(has=page.get_by_role("heading", name="恢复操作", exact=True))
+            notifications = page.locator(".mantine-Notification-vault")
+            operation = page.locator(".mantine-Paper-vault").filter(has=page.get_by_role("heading", name="恢复操作", exact=True))
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):
@@ -125,11 +125,11 @@ def main():
                   const r=await fetch(path,{method:method||(body?'POST':'GET'),headers:body?{'content-type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});
                   const value=await r.json(); if(!r.ok) throw new Error(JSON.stringify(value)); return value;
                 }""",[path,body,method])
-            root=api("/v1/admin/roots",{"path":str(candidate)})["root_id"]
+            vault=api("/v1/admin/vaults",{"path":str(candidate)})["vault_id"]
             def entries(endpoint="recovery"):
                 items=[]; after=""
                 while True:
-                    batch=api(f"/v1/roots/{root}/{endpoint}"+("?after="+after if after else ""))
+                    batch=api(f"/v1/vaults/{vault}/{endpoint}"+("?after="+after if after else ""))
                     items+=batch["items"]
                     after=batch.get("next_cursor")
                     if not after: return items
@@ -143,19 +143,19 @@ def main():
             old_hash=original["hash"]
             sample.write_bytes(b"S079 newer version")
             head=wait_for(lambda:next((x for x in entries() if x["entry_id"]==original["entry_id"] and x["hash"]!=old_hash),None))
-            history=api(f"/v1/roots/{root}/entries/{head['entry_id']}/history")["items"]
+            history=api(f"/v1/vaults/{vault}/entries/{head['entry_id']}/history")["items"]
             assert len(history)==2 and any(x.get("expires_at") for x in history)
             # Produce a durable conflict mapping through the production put endpoint.
             content=b"S079 late independent edit"
             digest=hashlib.sha256(content).hexdigest()
-            upload=api(f"/v1/roots/{root}/uploads",{"total_size":str(len(content)),"hash":digest,"chunk_size":"0"})
+            upload=api(f"/v1/vaults/{vault}/uploads",{"total_size":str(len(content)),"hash":digest,"chunk_size":"0"})
             page.evaluate("""async ([url,content,hash]) => {
               const r=await fetch(url,{method:'PUT',headers:{'content-type':'application/octet-stream','x-part-sha256':hash},body:new Uint8Array(content)});
               if(!r.ok)throw new Error(await r.text());
-            }""",[f"/v1/roots/{root}/uploads/{upload['upload_id']}/parts/0",list(content),digest])
-            api(f"/v1/roots/{root}/uploads/{upload['upload_id']}/finalize",{})
-            epoch=api(f"/v1/roots/{root}/snapshots",{})["server_epoch"]
-            conflict=api(f"/v1/roots/{root}/operations",{"kind":"put_content","op_id":secrets.token_hex(16),"device_id":secrets.token_hex(16),"server_epoch":epoch,"entry_id":head["entry_id"],"base_revision":original["revision"],"upload_id":upload["upload_id"]})
+            }""",[f"/v1/vaults/{vault}/uploads/{upload['upload_id']}/parts/0",list(content),digest])
+            api(f"/v1/vaults/{vault}/uploads/{upload['upload_id']}/finalize",{})
+            epoch=api(f"/v1/vaults/{vault}/snapshots",{})["server_epoch"]
+            conflict=api(f"/v1/vaults/{vault}/operations",{"kind":"put_content","op_id":secrets.token_hex(16),"device_id":secrets.token_hex(16),"server_epoch":epoch,"entry_id":head["entry_id"],"base_revision":original["revision"],"upload_id":upload["upload_id"]})
             assert conflict["state"]=="committed" and conflict["conflict"]
             copies=entries("conflicts"); assert len(copies)==1 and copies[0]["conflict_source"]==head["entry_id"]
             page.get_by_role("link",name="历史与恢复",exact=True).click()
@@ -186,11 +186,11 @@ def main():
             expect(notifications.filter(has_text="恢复已提交")).to_contain_text(restored["name"])
             assert sample.read_bytes()==b"S079 new target must survive"
             assert (candidate/restored["name"]).read_bytes()==b"S079 newer version"
-            seq=api(f"/v1/admin/roots")["roots"][0]["root_seq"]
+            seq=api(f"/v1/admin/vaults")["vaults"][0]["vault_seq"]
             page.get_by_role("button",name="核对并重试原操作",exact=True).click()
             expect(page.get_by_text("恢复已提交",exact=True)).to_be_visible()
-            assert api(f"/v1/admin/roots")["roots"][0]["root_seq"]==seq
-            assert api(f"/v1/roots/{root}/operations/{op}")["state"]=="committed"
+            assert api(f"/v1/admin/vaults")["vaults"][0]["vault_seq"]==seq
+            assert api(f"/v1/vaults/{vault}/operations/{op}")["state"]=="committed"
 
             page.get_by_role("button",name="文件与历史",exact=True).click()
             target_row=page.get_by_role("row").filter(has=page.get_by_text(restored["name"],exact=True))

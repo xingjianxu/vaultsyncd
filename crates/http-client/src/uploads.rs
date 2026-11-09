@@ -8,16 +8,16 @@
 //!
 //! | 方法 | 端点 |
 //! | --- | --- |
-//! | [`UploadTarget::begin`] | `POST /v1/roots/{root}/uploads` |
-//! | [`UploadTarget::status`] | `GET /v1/roots/{root}/uploads/{upload}` |
-//! | [`UploadTarget::put_part`] | `PUT /v1/roots/{root}/uploads/{upload}/parts/{index}` |
-//! | [`UploadTarget::finalize`] | `POST /v1/roots/{root}/uploads/{upload}/finalize` |
+//! | [`UploadTarget::begin`] | `POST /v1/vaults/{vault}/uploads` |
+//! | [`UploadTarget::status`] | `GET /v1/vaults/{vault}/uploads/{upload}` |
+//! | [`UploadTarget::put_part`] | `PUT /v1/vaults/{vault}/uploads/{upload}/parts/{index}` |
+//! | [`UploadTarget::finalize`] | `POST /v1/vaults/{vault}/uploads/{upload}/finalize` |
 //!
 //! # 不变量
 //!
 //! - **块摘要一定要发**：`PUT` 带 `x-part-sha256`（64 位小写十六进制）。服务端在写盘前核对它，
 //!   所以“发出去的字节”和“声明的内容”不可能各说各话。
-//! - **身份只接受 32 位小写十六进制**：Root 与上传会话身份来自服务端；拼进 URL 之前先校验形态，
+//! - **身份只接受 32 位小写十六进制**：Vault 与上传会话身份来自服务端；拼进 URL 之前先校验形态，
 //!   避免把任意文本（例如 `../`）拼进路径。
 //! - **错误分类保留语义**：可重试的暂时失败、服务端拒绝（含 `PART_CONFLICT`/`HASH_MISMATCH`）、
 //!   需要重新登录与协议错误分成不同的 [`PortError`]，调度器据此决定退避、重新登录还是上报。
@@ -42,37 +42,37 @@ use crate::transport::Transport;
 /// 块摘要请求头（服务端在写盘前核对它）。
 pub const PART_DIGEST_HEADER: &str = "x-part-sha256";
 
-/// 一个 Root 下的上传会话端点集合。
+/// 一个 Vault 下的上传会话端点集合。
 ///
 /// 克隆共享同一个 [`ApiClient`]（同一个会话与连接池）。
 pub struct UploadEndpoint<T: Transport> {
     client: ApiClient<T>,
-    root: String,
+    vault: String,
 }
 
 impl<T: Transport> Clone for UploadEndpoint<T> {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
-            root: self.root.clone(),
+            vault: self.vault.clone(),
         }
     }
 }
 
 impl<T: Transport> UploadEndpoint<T> {
-    /// 绑定一个 Root；身份必须是 32 位小写十六进制。
+    /// 绑定一个 Vault；身份必须是 32 位小写十六进制。
     ///
     /// # Errors
     ///
-    /// Root 身份形态不对时返回 [`ClientError::InvalidRequest`]（在发出任何请求之前就拒绝）。
-    pub fn new(client: ApiClient<T>, root: impl Into<String>) -> Result<Self, ClientError> {
-        let root = root.into();
-        if !is_identity(&root) {
+    /// Vault 身份形态不对时返回 [`ClientError::InvalidRequest`]（在发出任何请求之前就拒绝）。
+    pub fn new(client: ApiClient<T>, vault: impl Into<String>) -> Result<Self, ClientError> {
+        let vault = vault.into();
+        if !is_identity(&vault) {
             return Err(ClientError::invalid_request(
-                "Root 身份必须是 32 位小写十六进制",
+                "Vault 身份必须是 32 位小写十六进制",
             ));
         }
-        Ok(Self { client, root })
+        Ok(Self { client, vault })
     }
 
     /// 底层客户端（继续发别的请求时复用同一个会话）。
@@ -80,13 +80,13 @@ impl<T: Transport> UploadEndpoint<T> {
         &self.client
     }
 
-    /// 绑定的 Root 身份。
-    pub fn root(&self) -> &str {
-        &self.root
+    /// 绑定的 Vault 身份。
+    pub fn vault(&self) -> &str {
+        &self.vault
     }
 
     fn uploads_path(&self) -> String {
-        format!("/v1/roots/{}/uploads", self.root)
+        format!("/v1/vaults/{}/uploads", self.vault)
     }
 
     fn upload_path(&self, upload: &str) -> Result<String, PortError> {
@@ -275,7 +275,7 @@ pub(crate) fn parse_digest(text: &str) -> Result<[u8; DIGEST_BYTES], PortError> 
     from_hex(text).map_err(|error| PortError::protocol(format!("摘要不合法：{error}")))
 }
 
-/// 32 位小写十六进制身份（Root、会话、条目、版本）。
+/// 32 位小写十六进制身份（Vault、会话、条目、版本）。
 pub(crate) fn is_identity(text: &str) -> bool {
     text.len() == 32
         && text
@@ -309,7 +309,7 @@ mod tests {
     };
     use vaultsyncd_transfer::hash::digest_of;
 
-    const ROOT: &str = "11111111111111111111111111111111";
+    const VAULT: &str = "11111111111111111111111111111111";
     const UPLOAD: &str = "22222222222222222222222222222222";
 
     fn endpoint<F>(handler: F) -> (UploadEndpoint<FakeTransport>, Arc<FakeTransport>)
@@ -333,7 +333,7 @@ mod tests {
             .auth()
             .install(crate::Credentials::from_issued(&issued("a", "r")).expect("凭据"));
         (
-            UploadEndpoint::new(client, ROOT).expect("Root 身份"),
+            UploadEndpoint::new(client, VAULT).expect("Vault 身份"),
             transport,
         )
     }
@@ -344,7 +344,7 @@ mod tests {
             expires_at: "1700000000".to_owned(),
             hash: to_hex(&digest_of(b"abc")),
             part_count: "1".to_owned(),
-            root_id: ROOT.to_owned(),
+            vault_id: VAULT.to_owned(),
             state,
             total_size: "3".to_owned(),
             upload_id: UPLOAD.to_owned(),
@@ -352,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn root_identity_is_validated_before_any_request() {
+    fn vault_identity_is_validated_before_any_request() {
         let transport = Arc::new(FakeTransport::new(|_request: TransportRequest| {
             Box::pin(async move { panic!("不该发请求") })
         }));
@@ -363,7 +363,7 @@ mod tests {
         .expect("客户端配置");
         assert!(UploadEndpoint::new(client.clone(), "../../etc").is_err());
         assert!(UploadEndpoint::new(client.clone(), "ABCDEF").is_err());
-        assert!(UploadEndpoint::new(client, ROOT).is_ok());
+        assert!(UploadEndpoint::new(client, VAULT).is_ok());
         assert_eq!(transport.call_count(), 0);
     }
 
@@ -374,7 +374,7 @@ mod tests {
                 assert_eq!(request.method(), crate::transport::Method::Post);
                 assert_eq!(
                     request.url(),
-                    format!("https://vault.example/v1/roots/{ROOT}/uploads")
+                    format!("https://vault.example/v1/vaults/{VAULT}/uploads")
                 );
                 assert_eq!(request.header("authorization"), Some("Bearer a"));
                 let body: serde_json::Value =
@@ -405,7 +405,7 @@ mod tests {
                 assert_eq!(request.method(), crate::transport::Method::Get);
                 assert_eq!(
                     request.url(),
-                    format!("https://vault.example/v1/roots/{ROOT}/uploads/{UPLOAD}")
+                    format!("https://vault.example/v1/vaults/{VAULT}/uploads/{UPLOAD}")
                 );
                 Ok(json_response(
                     200,
@@ -445,7 +445,7 @@ mod tests {
                 assert!(
                     request
                         .url()
-                        .ends_with(&format!("/v1/roots/{ROOT}/uploads/{UPLOAD}/parts/7")),
+                        .ends_with(&format!("/v1/vaults/{VAULT}/uploads/{UPLOAD}/parts/7")),
                     "{}",
                     request.url()
                 );
@@ -496,7 +496,7 @@ mod tests {
                         part_count: "1".to_owned(),
                         replayed: false,
                         reuse: ObjectReuse::FreshlyPublished,
-                        root_id: ROOT.to_owned(),
+                        vault_id: VAULT.to_owned(),
                         size: "3".to_owned(),
                         storage_path: "objects/ab/cd".to_owned(),
                         upload_id: UPLOAD.to_owned(),
@@ -569,7 +569,7 @@ mod tests {
     async fn malformed_decimal_text_is_a_protocol_error() {
         // 生成的 DTO 在序列化时就拒绝非规范十进制，因此这里直接给原始 JSON 响应体。
         let body = format!(
-            r#"{{"chunk_size":"4","expires_at":"1700000000","hash":"{}","part_count":"1.0","root_id":"{ROOT}","state":"open","total_size":"3","upload_id":"{UPLOAD}"}}"#,
+            r#"{{"chunk_size":"4","expires_at":"1700000000","hash":"{}","part_count":"1.0","vault_id":"{VAULT}","state":"open","total_size":"3","upload_id":"{UPLOAD}"}}"#,
             to_hex(&digest_of(b"abc"))
         );
         let (endpoint, _transport) = endpoint(move |_request: TransportRequest| {

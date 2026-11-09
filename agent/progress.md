@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S139 done**（Web 重命名弹窗默认只选文件名主体，排除扩展名；未部署生产）。S001—S139 共139卡：134 done、5 blocked；**当前无 ready 卡**。线上仍为S138源`5689be1`运行/开机generation258，schema15保持。验证与交接见[S139](tasks/S139.md)、[S138](tasks/S138.md)。
+当前：**S140 done**（共享目录概念改名 Vault：核心/wire/数据库/服务端与客户端通用代码；未部署生产）。S001—S140 共140卡：135 done、5 blocked；下一 ready 为 S141（Windows 客户端原生复验），其后 S142（Web 测试、文档、部署）。线上仍为S138源`5689be1`运行/开机generation258，schema15保持。验证与交接见[S140](tasks/S140.md)、[S139](tasks/S139.md)。
 
 最近部署：[S138](tasks/S138.md) 固定源`5689be16b8bc389ae3781e96c2ff734f7d6761ae`、主机pin`9930ec7`、generation258；异盘完整备份verified，pure build/dry/test/健康/switch、生产全量资产/TLS/CSP/明暗窄屏/新菜单/取消改名、legacy固定版本读取与8对象路径字节保持通过；schema15/ServerId/归属/10无关服务/3应用保持。直接回退入口为现场既有generation257（源7f50cc3，先前部署记录现已补明）；本卡15→15更新。历史已归档部署[S135](tasks/S135.md) generation256/schema14与[S131](tasks/S131.md)的13→14迁移仅描述当时现场，不作为当前回退入口。
 
@@ -27,6 +27,7 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
+| S140 | 共享目录概念改名 Vault（代码/wire/DB/服务端/客户端通用层）；schema16 迁移、协议 major 2 | 实现提交见交接 | [S140](tasks/S140.md) |
 | S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Root 同摘要对象冲突（schema15 围栏、legacy 兼容） | 实现f0e0103/0346ec1、审查修复c2d06b0已ff合master；树/分支已清理 | [S136](tasks/S136.md) |
 | S135 | 通知版服务端部署本机 generation256；线上通知与资产/健康验收通过 | 源faf7adb；主机b98e05f | [S135](tasks/S135.md) |
 | S134 | Web 操作反馈统一 Mantine Notification；五套真实浏览器验收、Nix Web 构建通过 | 实现a1d225a/交接faf7adb已ff合master；树状态见卡片 | [S134](tasks/S134.md) |

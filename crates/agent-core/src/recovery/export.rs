@@ -300,7 +300,7 @@ async fn catalog(db: &Database, binding: BindingId) -> Result<(Value, Vec<Target
     }
     let mut state = Map::new();
     let mut targets = vec![];
-    let binding_json:String=sqlx::query_scalar("SELECT json_object('id',hex(id),'server_id',hex(server_id),'device_id',hex(device_id),'root_id',hex(root_id),'server_epoch',server_epoch,'mode',mode,'received_seq',received_seq,'applied_seq',applied_seq,'rules_version',rules_version) FROM bindings WHERE id=?").bind(binding.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
+    let binding_json:String=sqlx::query_scalar("SELECT json_object('id',hex(id),'server_id',hex(server_id),'device_id',hex(device_id),'vault_id',hex(vault_id),'server_epoch',server_epoch,'mode',mode,'received_seq',received_seq,'applied_seq',applied_seq,'rules_version',rules_version) FROM bindings WHERE id=?").bind(binding.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
     state.insert(
         "binding".into(),
         serde_json::from_str(&binding_json).map_err(error)?,

@@ -23,12 +23,12 @@
 //!
 //! let client = ApiClient::new(ClientConfig::new("https://vault.example:8443"))?;
 //! // 凭据由登录或 OS 凭据库恢复后装入会话。
-//! let roots = client
-//!     .send_json::<vaultsyncd_protocol::generated::RootList>(
-//!         ApiRequest::get("/v1/roots").with_auth(AuthMode::Bearer),
+//! let vaults = client
+//!     .send_json::<vaultsyncd_protocol::generated::VaultList>(
+//!         ApiRequest::get("/v1/vaults").with_auth(AuthMode::Bearer),
 //!     )
 //!     .await?;
-//! # let _ = roots;
+//! # let _ = vaults;
 //! # Ok(())
 //! # }
 //! ```

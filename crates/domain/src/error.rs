@@ -12,7 +12,7 @@
 //! （design §13.3），不在本模块建模。一次性的前置动作也由调用方在分类前完成——例如
 //! [`ErrorCode::AuthExpired`] 先受控刷新一次，刷新失败后才按“需用户处理”提示重新登录。
 //!
-//! wire 上的 `retryable` 字段与本分类不矛盾：design §15.4 的示例对 `ROOT_UNAVAILABLE` 写
+//! wire 上的 `retryable` 字段与本分类不矛盾：design §15.4 的示例对 `VAULT_UNAVAILABLE` 写
 //! `retryable: true`，本模块仍把它归为 [`ErrorClass::NeedsUserAction`]，因为周期复查不能替代
 //! 用户恢复挂载；`retryable` 只说明调度器可以低频重试，不说明错误会自行消失。
 
@@ -100,9 +100,9 @@ error_codes! {
     EpochChanged => "EPOCH_CHANGED": Retryable,
     /// 410：请求的历史版本已被回收；解释历史过期，不用同路径新内容冒充旧版本。
     VersionGone => "VERSION_GONE": NeedsUserAction,
-    /// 422：名称不合规；标记该条目，不拖垮整个 Root。
+    /// 422：名称不合规；标记该条目，不拖垮整个 Vault。
     InvalidName => "INVALID_NAME": NeedsUserAction,
-    /// 422：条目不支持的正式范围；标记该条目，不拖垮整个 Root。
+    /// 422：条目不支持的正式范围；标记该条目，不拖垮整个 Vault。
     UnsupportedEntry => "UNSUPPORTED_ENTRY": NeedsUserAction,
     /// 422：内容哈希不符；不发布内容，保留证据并报告损坏。
     HashMismatch => "HASH_MISMATCH": Corrupt,
@@ -112,9 +112,9 @@ error_codes! {
     ServerPlaceholderUnsupported => "SERVER_PLACEHOLDER_UNSUPPORTED": NeedsUserAction,
     /// 429：被限流；按服务器给出的重试时间退避。
     RateLimited => "RATE_LIMITED": Retryable,
-    /// 503：Root 当前不可用（如挂载身份改变）；暂停该 Root，通知并保留队列。
-    RootUnavailable => "ROOT_UNAVAILABLE": NeedsUserAction,
-    /// 503：服务端需要恢复；暂停该 Root，通知并保留队列。
+    /// 503：Vault 当前不可用（如挂载身份改变）；暂停该 Vault，通知并保留队列。
+    VaultUnavailable => "VAULT_UNAVAILABLE": NeedsUserAction,
+    /// 503：服务端需要恢复；暂停该 Vault，通知并保留队列。
     NeedsRecovery => "NEEDS_RECOVERY": NeedsUserAction,
     /// 507：空间不足；立即通知，保留脏数据并低频复查。
     InsufficientStorage => "INSUFFICIENT_STORAGE": NeedsUserAction,
@@ -169,7 +169,7 @@ mod tests {
             ErrorCode::UnsupportedEntry,
             ErrorCode::UnsupportedStorageBackend,
             ErrorCode::ServerPlaceholderUnsupported,
-            ErrorCode::RootUnavailable,
+            ErrorCode::VaultUnavailable,
             ErrorCode::NeedsRecovery,
             ErrorCode::InsufficientStorage,
             ErrorCode::ModeRequiresLocalCopy,

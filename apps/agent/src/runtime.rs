@@ -38,7 +38,7 @@ use vaultsyncd_client_store::{
     entries,
 };
 use vaultsyncd_domain::{
-    ids::{BindingId, DeviceId, EntryId, IdSource, RootId, ServerId, VersionId},
+    ids::{BindingId, DeviceId, EntryId, IdSource, ServerId, VaultId, VersionId},
     version::{BoundError, Clock, ServerEpoch, UtcTimestamp},
 };
 use vaultsyncd_http_client::{
@@ -49,7 +49,7 @@ use vaultsyncd_platform_windows::{
         adapter::Callbacks,
         catalog::{Catalog, Identity},
     },
-    files::{RootHandle, controlled::RecoveryOutcome},
+    files::{VaultHandle, controlled::RecoveryOutcome},
 };
 use vaultsyncd_protocol::generated::SessionIssued;
 use vaultsyncd_transfer::{
@@ -59,7 +59,7 @@ use vaultsyncd_transfer::{
 type StoredPin = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
 type LiveBinding = (
     BindingId,
-    RootId,
+    VaultId,
     FirstImport,
     Worker,
     Arc<Scheduler<Dispatch>>,
@@ -136,20 +136,20 @@ impl CredentialSink for VaultSink {
 pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(), PortError> {
     config.validate().map_err(error)?;
     crate::maintenance::admit_startup(&config)?;
-    let state = RootHandle::open(&config.state_dir).map_err(error)?;
-    let mut roots = Vec::new();
+    let state = VaultHandle::open(&config.state_dir).map_err(error)?;
+    let mut vaults = Vec::new();
     let mut caches = Vec::new();
     for b in &config.bindings {
-        roots.push(RootHandle::open(&b.path).map_err(error)?);
-        caches.push(RootHandle::open(&b.cache).map_err(error)?);
+        vaults.push(VaultHandle::open(&b.path).map_err(error)?);
+        caches.push(VaultHandle::open(&b.cache).map_err(error)?);
     }
-    for (i, root) in roots.iter().enumerate() {
-        if root.overlaps(&state)
-            || caches.iter().any(|c| root.overlaps(c))
-            || roots
+    for (i, vault) in vaults.iter().enumerate() {
+        if vault.overlaps(&state)
+            || caches.iter().any(|c| vault.overlaps(c))
+            || vaults
                 .iter()
                 .enumerate()
-                .any(|(j, r)| i != j && root.overlaps(r))
+                .any(|(j, r)| i != j && vault.overlaps(r))
         {
             return Err(error("binding/state/cache overlap"));
         }
@@ -221,7 +221,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     db: Arc<Database>,
                     client: ApiClient<ReqwestTransport>| async move {
         let id = BindingId::from_hex(&binding.id).map_err(error)?;
-        let root = RootId::from_hex(&binding.root_id).map_err(error)?;
+        let vault = VaultId::from_hex(&binding.vault_id).map_err(error)?;
         let mode = if binding.mode == "full" {
             SyncMode::Full
         } else {
@@ -233,7 +233,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         let epoch = if let Some(old) = &old {
             if old.server.to_string() != config.server.id
                 || old.device.to_string() != config.device_id
-                || old.root != root
+                || old.vault != vault
                 || old.local_path != binding.path.to_string_lossy()
                 || old.cache_path != binding.cache.to_string_lossy()
             {
@@ -241,7 +241,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             }
             old.server_epoch
         } else {
-            let (snapshot, _) = vaultsyncd_http_client::sync::snapshot(&client, &root.to_string())
+            let (snapshot, _) = vaultsyncd_http_client::sync::snapshot(&client, &vault.to_string())
                 .await
                 .map_err(vaultsyncd_http_client::transfer_error)?;
             let epoch = ServerEpoch::from_decimal(&snapshot.server_epoch).map_err(error)?;
@@ -252,7 +252,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     id,
                     server: ServerId::from_hex(&config.server.id).map_err(error)?,
                     device: DeviceId::from_hex(&config.device_id).map_err(error)?,
-                    root,
+                    vault,
                     local_path: binding.path.to_string_lossy().into_owned(),
                     cache_path: binding.cache.to_string_lossy().into_owned(),
                     mode,
@@ -274,7 +274,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         let mut recovery_connection =
             vaultsyncd_platform_windows::cfapi::adapter::Adapter::connect(
                 &binding.path,
-                Catalog::new(id, root),
+                Catalog::new(id, vault),
                 Arc::new(vaultsyncd_platform_windows::cfapi::adapter::MetadataOnly),
             )
             .map_err(error)?;
@@ -287,7 +287,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         if rebuilding {
             eprintln!("event=rebuild-open binding={id} old-operations=quarantined");
         } else {
-            recover_releases(&db, &binding.path, id, root, &client).await?;
+            recover_releases(&db, &binding.path, id, vault, &client).await?;
         }
         crate::namespace::recover(&local, &recovery_connection).await?;
         if !rebuilding {
@@ -306,7 +306,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         let remote = Arc::new(Remote {
             client: client.clone(),
             binding: id,
-            root,
+            vault,
         });
         let ports_store = Arc::new(ClientStorePorts::new(db.clone()));
         let ports = Ports::new(
@@ -326,7 +326,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             Arc::new(Random),
             Limits::default(),
         )?);
-        let mut catalog = Catalog::new(id, root);
+        let mut catalog = Catalog::new(id, vault);
         let mut versions = Vec::new();
         let pins: Vec<StoredPin> = sqlx::query_as(
             "SELECT entry_id,version_id,digest,size FROM agent_versions WHERE binding_id=?",
@@ -338,7 +338,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         for (entry, version, digest, size) in pins {
             let identity = Identity {
                 binding: id,
-                root,
+                vault,
                 entry: EntryId::from_bytes(entry.try_into().map_err(|_| error("bad entry id"))?),
                 version: VersionId::from_bytes(
                     version.try_into().map_err(|_| error("bad version id"))?,
@@ -354,25 +354,25 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             .map_err(error)?;
             versions.push(PinnedVersion::new(identity, fixed).map_err(error)?);
         }
-        let placeholders = local.root.scan();
+        let placeholders = local.vault.scan();
         if !placeholders.permits_missing_comparison() {
             return Err(error("incomplete startup metadata scan"));
         }
         for entry in placeholders.entries {
             if let Some(cloud) = entry.metadata.and_then(|m| m.cloud) {
                 let identity = Identity::decode(&cloud.identity).map_err(error)?;
-                if identity.binding != id || identity.root != root {
+                if identity.binding != id || identity.vault != vault {
                     return Err(error("foreign placeholder"));
                 }
                 catalog.insert(identity).map_err(error)?;
             }
         }
         // Both startup and create_binding use this assembly path. Repair older CFAPI-only
-        // roots without unregistering or changing any file's hydration/pin/in-sync state.
+        // vaults without unregistering or changing any file's hydration/pin/in-sync state.
         // Keep the metadata connection live while WinRT resolves the existing folder.
         let shell_path = binding.path.clone();
         tokio::task::spawn_blocking(move || {
-            vaultsyncd_platform_windows::shell::register(&shell_path, &Catalog::new(id, root))
+            vaultsyncd_platform_windows::shell::register(&shell_path, &Catalog::new(id, vault))
         })
         .await
         .map_err(error)?
@@ -419,7 +419,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         eprintln!("event=recovery-complete binding={id}");
         Ok::<_, PortError>((
             id,
-            root,
+            vault,
             FirstImport::new(db.clone(), ports, importer.clone(), remote.clone()),
             worker,
             scheduler,
@@ -681,7 +681,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         }
         problem_updates.send_replace(startup_problems.values().cloned().collect());
         let mut rebuilt = Vec::new();
-        for (id, root, first, worker, scheduler, remote) in &live {
+        for (id, vault, first, worker, scheduler, remote) in &live {
             let mut observed = false;
             let result: Result<(), PortError> = async {
                 if !session.has_credentials()
@@ -693,8 +693,8 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                 hints.entry(*id).or_insert_with(|| {
                     crate::events::Hints::start(remote.clone(), hint_wake.clone())
                 });
-                worker.importer.local.root.verify().map_err(|_| {
-                    PortError::rejected("ROOT_UNAVAILABLE", "root identity changed or unavailable")
+                worker.importer.local.vault.verify().map_err(|_| {
+                    PortError::rejected("VAULT_UNAVAILABLE", "vault identity changed or unavailable")
                 })?;
                 match crate::resync::admit(db.clone(), *id, worker, remote.clone()).await {
                     Ok(true) => {
@@ -723,7 +723,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     crate::management_history::report_existing_conflicts(
                         &db,
                         &client,
-                        &root.to_string(),
+                        &vault.to_string(),
                     )
                     .await?;
                     seed_uploaded_facts(&worker.importer).await?;
@@ -739,7 +739,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     });
                     let receiver = EventReceiver::new(
                         db.clone(),
-                        *root,
+                        *vault,
                         *id,
                         remote.clone(),
                         decoder,
@@ -972,7 +972,7 @@ async fn recover_releases(
     db: &Arc<Database>,
     path: &Path,
     binding: BindingId,
-    root: RootId,
+    vault: VaultId,
     client: &ApiClient<ReqwestTransport>,
 ) -> Result<(), PortError> {
     let pending: bool = sqlx::query_scalar(
@@ -995,7 +995,7 @@ async fn recover_releases(
     for spec in specs {
         let identity = Identity {
             binding,
-            root,
+            vault,
             entry: spec.entry,
             version: VersionId::from_hex(&spec.pin.version).map_err(error)?,
         };
@@ -1012,7 +1012,7 @@ async fn recover_releases(
     }
     let remote = Arc::new(crate::release::HttpReleaseRemote::new(
         client.clone(),
-        root,
+        vault,
     )?);
     for (_, result) in vaultsyncd_agent_core::executor::release::ManualRelease::new(
         db.clone(),

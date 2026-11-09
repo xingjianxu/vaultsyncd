@@ -54,12 +54,12 @@ async fn real_binding_pause_and_unbind_close_scheduler_gate_without_deleting_que
 async fn real_binding_exclusion_and_reconciliation_gate_retains_operation() {
     let rig = Rig::new().await;
     let op = rig.enqueue(1, "apply_remote", 1, None).await;
-    let root = EntryId::from_bytes([0xaa; 16]);
+    let vault = EntryId::from_bytes([0xaa; 16]);
     let entry = EntryId::from_bytes([1; 16]);
     let mut tx = rig.db.begin_write().await.unwrap();
     for base in [
         BaselineEntry {
-            entry: root,
+            entry: vault,
             parent: None,
             name: String::new(),
             kind: EntryKind::Directory,
@@ -69,7 +69,7 @@ async fn real_binding_exclusion_and_reconciliation_gate_retains_operation() {
         },
         BaselineEntry {
             entry,
-            parent: Some(root),
+            parent: Some(vault),
             name: "private.txt".into(),
             kind: EntryKind::File,
             revision: Revision::new(1).unwrap(),

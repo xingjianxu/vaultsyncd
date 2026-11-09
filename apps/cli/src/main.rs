@@ -43,10 +43,10 @@ const USAGE: &str = "\
   set-connection --server-id <ID> --server-url <URL> [--ca-file <文件>]
   login --username <账号>         从标准输入读取密码后登录
   logout
-  roots                          列出已授权 Root
+  vaults                          列出已授权 Vault
   bindings                       列出持久 Binding
   files --binding-id <ID> [--cursor <ID>]  读取文件状态当前页
-  create-binding --binding-id <ID> --root-id <ID> --local-path <目录>
+  create-binding --binding-id <ID> --vault-id <ID> --local-path <目录>
                  --cache-path <目录> --mode <full|on_demand>
   pause --binding-id <ID>
   resume --binding-id <ID>
@@ -339,7 +339,7 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
             (CommandName::Login, None, Some(username))
         }
         "logout" => no_options(rest, CommandName::Logout)?,
-        "roots" => no_options(rest, CommandName::ListRoots)?,
+        "vaults" => no_options(rest, CommandName::ListVaults)?,
         "bindings" => no_options(rest, CommandName::ListBindings)?,
         "files" => {
             let opts = parse_options(rest, &["--binding-id", "--cursor"])?;
@@ -358,7 +358,7 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
                 rest,
                 &[
                     "--binding-id",
-                    "--root-id",
+                    "--vault-id",
                     "--local-path",
                     "--cache-path",
                     "--mode",
@@ -368,7 +368,7 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
                 CommandName::CreateBinding,
                 Some(CommandParameters {
                     binding_id: Some(required(&opts, "--binding-id")?),
-                    root_id: Some(required(&opts, "--root-id")?),
+                    vault_id: Some(required(&opts, "--vault-id")?),
                     local_path: Some(required(&opts, "--local-path")?),
                     cache_path: Some(required(&opts, "--cache-path")?),
                     mode: Some(mode(&opts)?),
@@ -629,7 +629,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::SetConnection => "set-connection",
         CommandName::Login => "login",
         CommandName::Logout => "logout",
-        CommandName::ListRoots => "roots",
+        CommandName::ListVaults => "vaults",
         CommandName::ListFiles => "files",
         CommandName::ClaimNotification => "claim-notification",
         CommandName::PrepareMaintenance => "prepare-maintenance",
@@ -660,7 +660,7 @@ fn validate_result(name: CommandName, result: &GetStatusResult) -> Result<(), Fa
             .and_then(|m| m.problems.as_ref())
             .is_none()
             .then_some("问题列表"),
-        CommandName::ListRoots | CommandName::ListHistory | CommandName::ListTrash => management
+        CommandName::ListVaults | CommandName::ListHistory | CommandName::ListTrash => management
             .and_then(|m| m.items.as_ref())
             .is_none()
             .then_some("远端条目列表"),
@@ -745,9 +745,9 @@ fn render_success(json: bool, name: CommandName, result: &GetStatusResult) {
         }
         for binding in bindings {
             println!(
-                "Binding {} root={} path={} cache={} mode={}{}{}",
+                "Binding {} vault={} path={} cache={} mode={}{}{}",
                 binding.binding_id,
-                binding.root_id,
+                binding.vault_id,
                 binding.local_path,
                 binding.cache_path,
                 binding.mode,
@@ -890,7 +890,7 @@ mod tests {
                 "create-binding",
                 "--binding-id",
                 "b",
-                "--root-id",
+                "--vault-id",
                 "r",
                 "--local-path",
                 "C:/a",
@@ -981,7 +981,7 @@ mod tests {
             CommandName::SetConnection
         );
         assert_eq!(ipc(&["logout"]).0, CommandName::Logout);
-        assert_eq!(ipc(&["roots"]).0, CommandName::ListRoots);
+        assert_eq!(ipc(&["vaults"]).0, CommandName::ListVaults);
         assert_eq!(ipc(&["bindings"]).0, CommandName::ListBindings);
         let login = ipc(&["login", "--username", "owner"]);
         assert_eq!(login.0, CommandName::Login);

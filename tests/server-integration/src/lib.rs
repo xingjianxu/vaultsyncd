@@ -10,7 +10,7 @@
 //!   文件；每个持久化动作前后调用 [`CrashStore::boundary`]，到点后把边界名写进
 //!   `state/boundary.txt` 并挂起，等父进程用 `SIGKILL` 强杀（超时自 abort，避免测试挂死）；
 //! - [`StoreHandle`] + [`LogPort`]/[`HostTargetPort`]/[`JournalStorePort`]：把同一个文件型状态拆成
-//!   `IntentLog`/`TargetPort`/`PutCommitStore` 三个端口，供 `commit_put` 与 `recover_root` 使用
+//!   `IntentLog`/`TargetPort`/`PutCommitStore` 三个端口，供 `commit_put` 与 `recover_vault` 使用
 //!   （提交路径需要三个可同时可变借用的端口）；
 //! - [`run_commit`]/[`run_recovery`]：子进程与父进程共用的两条驱动路径。
 //!
@@ -27,36 +27,36 @@ use std::time::{Duration, Instant};
 
 use std::os::unix::fs::MetadataExt;
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, IntentId, TxId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp, VaultSeq};
 
 use vaultsyncd_server_core::commit::intent::{
     NewPutIntent, PutIntent, PutPhase, TargetAfter, TargetBefore, TargetSnapshot,
 };
-use vaultsyncd_server_core::commit::put::{CommittedPut, PutRequest, RootCommitGate, commit_put};
+use vaultsyncd_server_core::commit::put::{CommittedPut, PutRequest, VaultCommitGate, commit_put};
 use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent};
 use vaultsyncd_server_core::ports::intent_log::{IntentLog, IntentLogError};
 use vaultsyncd_server_core::ports::object_store::{FileKey, StorageFailure};
 use vaultsyncd_server_core::ports::put_store::{
     EntryBaseline, EntryKind, ObjectState, PutCommitStore, PutRecord, PutStoreError, PutWrite,
-    RootFacts,
+    VaultFacts,
 };
 use vaultsyncd_server_core::ports::target::{
     PublishRequest, PublishedTarget, TargetError, TargetObservation, TargetPort,
 };
 use vaultsyncd_server_core::recovery::startup::{
-    RecoveryError, RecoveryReport, WriteAdmission, recover_root,
+    RecoveryError, RecoveryReport, WriteAdmission, recover_vault,
 };
 
-/// 固定 Root（测试装置只服务一个 Root）。
-pub const ROOT: RootId = RootId::from_bytes([0x21; 16]);
+/// 固定 Vault（测试装置只服务一个 Vault）。
+pub const VAULT: VaultId = VaultId::from_bytes([0x21; 16]);
 /// 固定条目。
 pub const ENTRY: EntryId = EntryId::from_bytes([0x51; 16]);
 /// 固定父目录条目。
 pub const PARENT: EntryId = EntryId::from_bytes([0x61; 16]);
 /// 固定意图身份（一次只跑一条意图）。
 pub const INTENT: IntentId = IntentId::from_bytes([0x41; 16]);
-/// 目标在 Root 内的相对路径。
+/// 目标在 Vault 内的相对路径。
 pub const TARGET_PATH: &str = "note.txt";
 /// 暂存文件名。
 pub const STAGING: &str = "put-0041";
@@ -493,7 +493,7 @@ impl CrashStore {
             &format!(
                 "begin {} {} {} {} {} {}",
                 intent.intent_id,
-                intent.root,
+                intent.vault,
                 intent.target_path,
                 intent.staging_path,
                 intent.before.to_json(),
@@ -580,7 +580,7 @@ fn parse_begin(fields: &[&str]) -> io::Result<PutIntent> {
     }
     Ok(PutIntent {
         intent_id: parse_id::<IntentId>(fields, 1)?,
-        root: parse_id::<RootId>(fields, 2)?,
+        vault: parse_id::<VaultId>(fields, 2)?,
         target_path: fields[3].to_owned(),
         staging_path: fields[4].to_owned(),
         before: TargetBefore::from_json(fields[5]).map_err(|_| invalid("expected_before"))?,
@@ -660,12 +660,12 @@ impl IntentLog for LogPort {
             .find(|intent| intent.intent_id == id))
     }
 
-    async fn unfinished_puts(&mut self, root: RootId) -> Result<Vec<PutIntent>, IntentLogError> {
+    async fn unfinished_puts(&mut self, vault: VaultId) -> Result<Vec<PutIntent>, IntentLogError> {
         let state = self.0.store().journal().map_err(log_io)?;
         Ok(state
             .intents
             .into_iter()
-            .filter(|intent| intent.root == root && intent.phase.is_open())
+            .filter(|intent| intent.vault == vault && intent.phase.is_open())
             .collect())
     }
 }
@@ -698,8 +698,8 @@ impl TargetPort for HostTargetPort {
 }
 
 impl PutCommitStore for JournalStorePort {
-    async fn root_facts(&mut self, _root: RootId) -> Result<RootFacts, PutStoreError> {
-        Ok(RootFacts {
+    async fn vault_facts(&mut self, _vault: VaultId) -> Result<VaultFacts, PutStoreError> {
+        Ok(VaultFacts {
             epoch: ServerEpoch::new(EPOCH).map_err(|_| PutStoreError::MalformedIntent {
                 detail: "epoch 越界".to_owned(),
             })?,
@@ -708,7 +708,7 @@ impl PutCommitStore for JournalStorePort {
 
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, PutStoreError> {
         let state = self.0.store().journal().map_err(store_io)?;
@@ -719,7 +719,7 @@ impl PutCommitStore for JournalStorePort {
             .ok_or(PutStoreError::EntryMissing { entry })?;
         Ok(EntryBaseline {
             entry,
-            root,
+            vault,
             parent: PARENT,
             name: NAME.to_owned(),
             revision,
@@ -729,7 +729,7 @@ impl PutCommitStore for JournalStorePort {
 
     async fn object_state(
         &mut self,
-        _root: RootId,
+        _vault: VaultId,
         digest: ContentDigest,
     ) -> Result<ObjectState, PutStoreError> {
         let state = self.0.store().journal().map_err(store_io)?;
@@ -773,9 +773,9 @@ impl PutCommitStore for JournalStorePort {
         let next = actual.next().map_err(|_| PutStoreError::MalformedIntent {
             detail: "revision 越界".to_owned(),
         })?;
-        let seq = RootSeq::new(state.versions.len() as u64 + 1).map_err(|_| {
+        let seq = VaultSeq::new(state.versions.len() as u64 + 1).map_err(|_| {
             PutStoreError::MalformedIntent {
-                detail: "RootSeq 越界".to_owned(),
+                detail: "VaultSeq 越界".to_owned(),
             }
         })?;
         let version = VersionId::from_bytes([0x80u8.wrapping_add(seq.get() as u8); 16]);
@@ -850,7 +850,7 @@ pub fn commit_request(store: &CrashStore) -> Result<PutRequest, String> {
     };
     Ok(PutRequest {
         intent_id: INTENT,
-        root: ROOT,
+        vault: VAULT,
         entry: ENTRY,
         expected_epoch: ServerEpoch::new(EPOCH).expect("装置 epoch 合法"),
         expected_revision: revision,
@@ -871,7 +871,7 @@ pub fn commit_request(store: &CrashStore) -> Result<PutRequest, String> {
 pub async fn run_commit(handle: &StoreHandle) -> Result<CommittedPut, String> {
     let request = commit_request(handle.store())?;
     let (mut log, mut target, mut journal) = handle.ports();
-    let mut gate = RootCommitGate::new();
+    let mut gate = VaultCommitGate::new();
     let committed = commit_put(
         &mut gate,
         &mut journal,
@@ -897,7 +897,7 @@ pub async fn run_commit(handle: &StoreHandle) -> Result<CommittedPut, String> {
 /// 见 [`RecoveryError`]（读不出未完成意图）。
 pub async fn run_recovery(handle: &StoreHandle) -> Result<RecoveryReport, RecoveryError> {
     let (mut log, mut target, mut journal) = handle.ports();
-    recover_root(&mut log, &mut target, &mut journal, now(), ROOT).await
+    recover_vault(&mut log, &mut target, &mut journal, now(), VAULT).await
 }
 
 /// 启动顺序：先恢复，再把报告交给写入门，最后返回可用的门与报告。

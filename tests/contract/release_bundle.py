@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("release_bundle", ROOT / "packaging/release.py")
+VAULT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location("release_bundle", VAULT / "packaging/release.py")
 RELEASE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RELEASE)
 
@@ -19,8 +19,8 @@ class ReleaseBundleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.stage = self.root / ".partial"
+        self.vault = Path(self.temp.name)
+        self.stage = self.vault / ".partial"
         self.stage.mkdir()
         for name in ("work", "logs"):
             (self.stage / name).mkdir()
@@ -31,7 +31,7 @@ class ReleaseBundleTests(unittest.TestCase):
         for arguments in [[], ["--platform", "all"],
                           ["--platform", "windows-x64", "linux-x64", "windows-x64"]]:
             with self.subTest(arguments=arguments):
-                result = subprocess.run([sys.executable, str(ROOT / "packaging/release.py"),
+                result = subprocess.run([sys.executable, str(VAULT / "packaging/release.py"),
                                          "--plan", *arguments], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 platforms = json.loads(result.stdout)["platforms"]
@@ -39,7 +39,7 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertEqual(len(platforms), 2)
 
     def test_removed_platform_is_rejected_before_building(self):
-        result = subprocess.run([sys.executable, str(ROOT / "packaging/release.py"),
+        result = subprocess.run([sys.executable, str(VAULT / "packaging/release.py"),
                                  "--platform", "linux-arm64", "--plan"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid choice", result.stderr)
@@ -54,15 +54,15 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_changed_source_refuses_publication(self):
         with patch.object(RELEASE, "source", return_value={**self.identity, "commit": "c" * 40}):
             with self.assertRaisesRegex(ValueError, "源码发生变化"):
-                RELEASE.publish(self.builder, ["linux-x64"], self.root / "published")
-        self.assertFalse((self.root / "published").exists())
+                RELEASE.publish(self.builder, ["linux-x64"], self.vault / "published")
+        self.assertFalse((self.vault / "published").exists())
 
     def test_publication_is_self_contained_with_hashes_and_no_work_directory(self):
         payload = self.stage / "package.zip"
         payload.write_bytes(b"archive bytes for publication control")
         with patch.object(RELEASE, "source", return_value=self.identity):
-            RELEASE.publish(self.builder, ["windows-x64"], self.root / "published")
-        published = self.root / "published"
+            RELEASE.publish(self.builder, ["windows-x64"], self.vault / "published")
+        published = self.vault / "published"
         manifest = json.loads((published / "release-manifest.json").read_text())
         self.assertEqual(manifest["source"], self.identity)
         self.assertEqual(manifest["native_acceptance"], "not-run-by-this-tool")
@@ -73,7 +73,7 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertFalse(self.stage.exists())
 
     def test_existing_release_is_never_overwritten(self):
-        published = self.root / "published"
+        published = self.vault / "published"
         published.mkdir()
         (published / "original").write_text("keep")
         with patch.object(RELEASE, "source", return_value=self.identity):
@@ -87,10 +87,10 @@ class ReleaseBundleTests(unittest.TestCase):
                 RELEASE.source()
 
     def test_wrong_platform_or_commit_and_stale_lock_are_rejected(self):
-        lock = self.root / "Cargo.lock"
+        lock = self.vault / "Cargo.lock"
         lock.write_text("locked")
         record = {"source": {**self.identity, "inputs": {"Cargo.lock": RELEASE.sha(lock)}}, "target": "windows"}
-        with patch.object(RELEASE, "ROOT", self.root):
+        with patch.object(RELEASE, "VAULT", self.vault):
             RELEASE.check_identity(record, self.identity, "windows", windows=True)
             for expected, target in [({**self.identity, "commit": "c" * 40}, "windows"), (self.identity, "linux")]:
                 with self.assertRaises(ValueError):
@@ -101,13 +101,13 @@ class ReleaseBundleTests(unittest.TestCase):
 
     def test_output_inside_tracked_source_and_symlink_payload_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "Git 忽略"):
-            RELEASE.output_directory(ROOT / "tools")
-        original = self.root / "original"
+            RELEASE.output_directory(VAULT / "tools")
+        original = self.vault / "original"
         original.write_text("bytes")
-        link = self.root / "link"
+        link = self.vault / "link"
         link.symlink_to(original)
         with self.assertRaisesRegex(ValueError, "普通文件"):
-            RELEASE.copy_file(link, self.root / "copy")
+            RELEASE.copy_file(link, self.vault / "copy")
 
 
 if __name__ == "__main__":

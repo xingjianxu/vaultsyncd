@@ -4,14 +4,14 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$script_dir/common.sh"
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
-root=$(repo_root)
-cd "$root"
+vault=$(repo_root)
+cd "$vault"
 test -f apps/desktop/dist/index.html
-build_base="${CARGO_TARGET_DIR:-$root/target}"
+build_base="${CARGO_TARGET_DIR:-$vault/target}"
 helper="$build_base/debug/examples/e2e-native-server"
 test -x "$helper" || { echo 'build e2e-native-server in default devShell first' >&2; exit 1; }
 run_id="s082-$(date +%s)-$$"
-artifact_dir="$root/artifacts/S082/$run_id"
+artifact_dir="$vault/artifacts/S082/$run_id"
 mkdir -p "$artifact_dir"
 server_pid=''; tls_pid=''; tunnel_pid=''
 cleanup() {
@@ -48,7 +48,7 @@ cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent -p vault
 cp "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-desktop.exe" "$artifact_dir/"
 cp "$script_dir/s082-desktop.ps1" "$artifact_dir/"
 python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1])/"s082-desktop.ps1"; p.write_text(p.read_text(),encoding="utf-8-sig")' "$artifact_dir"
-python3 -c 'import hashlib,json,pathlib,sys,uuid; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); (p/"fixture.json").write_text(json.dumps({"serverId":uuid.uuid4().hex,"root":v["root"],"url":"https://127.0.0.1:18771","login":v["login"],"password":v["password"]})); (p/"hashes.json").write_text(json.dumps({f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob("*.exe")}))' "$artifact_dir"
+python3 -c 'import hashlib,json,pathlib,sys,uuid; p=pathlib.Path(sys.argv[1]); v=json.loads((p/"host-fixture.json").read_text()); (p/"fixture.json").write_text(json.dumps({"serverId":uuid.uuid4().hex,"vault":v["vault"],"url":"https://127.0.0.1:18771","login":v["login"],"password":v["password"]})); (p/"hashes.json").write_text(json.dumps({f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob("*.exe")}))' "$artifact_dir"
 guest_dir="C:/vaultsyncd-lab/$run_id"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Path '$guest_dir' | Out-Null\""
 GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/vaultsyncd-agent.exe" "$artifact_dir/vaultsyncd-desktop.exe" "$artifact_dir/s082-desktop.ps1" "$artifact_dir/fixture.json" "$artifact_dir/hashes.json" "$artifact_dir/ca.pem"

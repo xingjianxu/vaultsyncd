@@ -2,7 +2,7 @@
 # S013 验收 1/2：Linux 存储准入矩阵（真实后端样本）。
 #
 # 覆盖：btrfs 子卷与合规 bind mount 接受；tmpfs/proc/overlay/ext4 真实样本拒绝；嵌套子卷、
-# 子挂载、NOCOW 目录/文件拒绝；内部状态目录重叠/跨中立文件系统拒绝；已注册 Root 的别名与
+# 子挂载、NOCOW 目录/文件拒绝；内部状态目录重叠/跨中立文件系统拒绝；已注册 Vault 的别名与
 # 重叠拒绝；稀疏文件不是占位证据。
 #
 # 全部样本只在 tools/test-volume/test-volume.sh 建立的 run 目录内，结束时清理并核对。
@@ -17,7 +17,7 @@ require_sudo_noninteractive
 require_tools mkfs.ext4 chattr truncate
 
 run_id=${VAULTSYNCD_RUN_ID:-s013-adm-$$}
-RUN_DIR=$LAB_ROOT/runs/$run_id
+RUN_DIR=$LAB_VAULT/runs/$run_id
 VOLUME=$RUN_DIR/volume
 MNT=$RUN_DIR/mnt
 
@@ -83,10 +83,10 @@ cleanup() {
 	if [ -d "$RUN_DIR" ]; then
 		"$TEST_VOLUME" cleanup "$run_id" || log "test-volume.sh cleanup 失败，请人工核查 $RUN_DIR"
 	fi
-	if [ -e "$LAB_ROOT/runs/$run_id" ]; then
-		log "run 目录仍存在：$LAB_ROOT/runs/$run_id"
+	if [ -e "$LAB_VAULT/runs/$run_id" ]; then
+		log "run 目录仍存在：$LAB_VAULT/runs/$run_id"
 	else
-		log "run 目录已删除：$LAB_ROOT/runs/$run_id"
+		log "run 目录已删除：$LAB_VAULT/runs/$run_id"
 	fi
 	if [ "$(snapshot_loops)" != "$LOOPS_BEFORE" ]; then
 		log "注意：losetup 与开始时不一致，请核对："
@@ -149,16 +149,16 @@ else
 fi
 
 step "3) 合规 bind mount 接受，且与源是同一存储（别名不重复计数）"
-mkdir -p -- "$RUN_DIR/bind-root"
-track_path "$RUN_DIR/bind-root"
-mount_bind "$VOLUME" "$RUN_DIR/bind-root"
-track_mount "$RUN_DIR/bind-root"
-run_admission inspect "$RUN_DIR/bind-root"
+mkdir -p -- "$RUN_DIR/bind-vault"
+track_path "$RUN_DIR/bind-vault"
+mount_bind "$VOLUME" "$RUN_DIR/bind-vault"
+track_mount "$RUN_DIR/bind-vault"
+run_admission inspect "$RUN_DIR/bind-vault"
 expect_decision "bind mount 接受" accepted "" 0
 expect_field "bind mount 子卷 ID 与源相同" subvol_id "$VOL_SUBVOL"
 expect_field "bind mount FSID 与源相同" fsid "$cpu_fsid"
 bind_mount_id=$(field mount_id)
-run_admission same-storage "$VOLUME" "$RUN_DIR/bind-root"
+run_admission same-storage "$VOLUME" "$RUN_DIR/bind-vault"
 expect_line "bind mount 与源同存储" '^same_storage=true$'
 expect_line "bind mount 与源同目录" '^same_directory=true$'
 expect_status "same-storage 退出码" 0
@@ -168,7 +168,7 @@ if [ -n "$src_mount_id" ] && [ "$src_mount_id" != "$bind_mount_id" ]; then
 else
 	fail_case "bind mount 与源 mount id 相同或缺失：$bind_mount_id / $src_mount_id"
 fi
-umount_checked "$RUN_DIR/bind-root"
+umount_checked "$RUN_DIR/bind-vault"
 
 step "4) 符号链接与 .. 别名解析为同一存储"
 ln -s -- "$VOLUME" "$RUN_DIR/alias-link"
@@ -180,7 +180,7 @@ run_admission same-storage "$VOLUME/../volume" "$VOLUME"
 expect_line ".. 别名同存储" '^same_storage=true$'
 expect_status ".. 别名退出码" 0
 
-step "5) 子卷内普通目录接受（Root 可以是子卷内任意目录）"
+step "5) 子卷内普通目录接受（Vault 可以是子卷内任意目录）"
 mkdir -p -- "$VOLUME/plain"
 track_path "$VOLUME/plain"
 run_admission inspect "$VOLUME/plain"
@@ -234,19 +234,19 @@ sudo_run btrfs subvolume create -- "$VOLUME/inner" >/dev/null
 track_subvol "$VOLUME/inner"
 own_run_path "$VOLUME/inner"
 run_admission inspect "$VOLUME"
-expect_decision "拒绝含嵌套子卷的 Root" rejected nested_subvolume 3
+expect_decision "拒绝含嵌套子卷的 Vault" rejected nested_subvolume 3
 expect_line "报告嵌套子卷相对路径" '^nested_subvolume=inner subvol_id=[0-9]+$'
 run_admission inspect "$VOLUME/inner"
-expect_decision "嵌套子卷本身作为 Root 可接受" accepted "" 0
+expect_decision "嵌套子卷本身作为 Vault 可接受" accepted "" 0
 sudo_run btrfs subvolume delete -- "$VOLUME/inner" >/dev/null
 
-step "11) 子挂载拒绝（Root 内 tmpfs 挂载点）"
+step "11) 子挂载拒绝（Vault 内 tmpfs 挂载点）"
 mkdir -p -- "$VOLUME/submount"
 track_path "$VOLUME/submount"
 mount_tmpfs "$VOLUME/submount"
 track_mount "$VOLUME/submount"
 run_admission inspect "$VOLUME"
-expect_decision "拒绝含子挂载的 Root" rejected nested_mount 3
+expect_decision "拒绝含子挂载的 Vault" rejected nested_mount 3
 expect_line "报告子挂载 fstype" '^submount=.* fstype=tmpfs'
 umount_checked "$VOLUME/submount"
 
@@ -255,10 +255,10 @@ mkdir -p -- "$VOLUME/nocow"
 track_path "$VOLUME/nocow"
 chattr +C -- "$VOLUME/nocow"
 run_admission inspect "$VOLUME/nocow"
-expect_decision "NOCOW 目录作为 Root 拒绝" rejected nocow_inode_flags 3
+expect_decision "NOCOW 目录作为 Vault 拒绝" rejected nocow_inode_flags 3
 expect_line "报告 NOCOW 标志位" '^inode_flags=0x00800000$'
 run_admission inspect "$VOLUME"
-expect_decision "扫描发现 NOCOW 子目录后拒绝 Root" rejected nocow_inode_flags 3
+expect_decision "扫描发现 NOCOW 子目录后拒绝 Vault" rejected nocow_inode_flags 3
 expect_line "报告 NOCOW 子目录" '^nocow_directory=nocow flags=0x00800000$'
 nocow_file=$VOLUME/nocow-file.bin
 : >"$nocow_file"
@@ -273,7 +273,7 @@ step "13) 内部状态目录重叠 / 跨文件系统拒绝，同卷另一子卷�
 mkdir -p -- "$VOLUME/db"
 track_path "$VOLUME/db"
 run_admission inspect "$VOLUME" --internal-state-dir "$VOLUME/db"
-expect_decision "内部状态目录与 Root 重叠拒绝" rejected internal_state_overlap 3
+expect_decision "内部状态目录与 Vault 重叠拒绝" rejected internal_state_overlap 3
 sudo_run btrfs subvolume create -- "$RUN_DIR/state" >/dev/null
 track_subvol "$RUN_DIR/state"
 own_run_path "$RUN_DIR/state"
@@ -285,18 +285,18 @@ track_path "$MNT/state"
 run_admission inspect "$VOLUME" --internal-state-dir "$MNT/state"
 expect_decision "内部状态目录在另一文件系统拒绝" rejected internal_state_other_filesystem 3
 
-step "14) 已注册 Root 的别名与重叠拒绝"
-mkdir -p -- "$RUN_DIR/bind-root"
-track_path "$RUN_DIR/bind-root"
-mount_bind "$VOLUME" "$RUN_DIR/bind-root"
-track_mount "$RUN_DIR/bind-root"
-run_admission inspect "$RUN_DIR/bind-root" --registered-root "$VOLUME"
-expect_decision "同一目录的 bind 别名不能重复注册" rejected duplicate_root 3
-umount_checked "$RUN_DIR/bind-root"
+step "14) 已注册 Vault 的别名与重叠拒绝"
+mkdir -p -- "$RUN_DIR/bind-vault"
+track_path "$RUN_DIR/bind-vault"
+mount_bind "$VOLUME" "$RUN_DIR/bind-vault"
+track_mount "$RUN_DIR/bind-vault"
+run_admission inspect "$RUN_DIR/bind-vault" --registered-vault "$VOLUME"
+expect_decision "同一目录的 bind 别名不能重复注册" rejected duplicate_vault 3
+umount_checked "$RUN_DIR/bind-vault"
 mkdir -p -- "$VOLUME/sub"
 track_path "$VOLUME/sub"
-run_admission inspect "$VOLUME/sub" --registered-root "$VOLUME"
-expect_decision "与已注册 Root 路径重叠拒绝" rejected overlapping_root 3
+run_admission inspect "$VOLUME/sub" --registered-vault "$VOLUME"
+expect_decision "与已注册 Vault 路径重叠拒绝" rejected overlapping_vault 3
 
 step "15) 普通稀疏文件不是占位证据"
 sparse=$RUN_DIR/sparse.bin

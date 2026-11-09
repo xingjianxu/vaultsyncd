@@ -18,7 +18,7 @@ require_sudo_noninteractive
 require_tools filefrag sha256sum cmp dd
 
 run_id=${VAULTSYNCD_RUN_ID:-s014-publish-$$}
-RUN_DIR=$LAB_ROOT/runs/$run_id
+RUN_DIR=$LAB_VAULT/runs/$run_id
 WORK_SUBVOL=$RUN_DIR/work
 STATE_SUBVOL=$RUN_DIR/state
 CROSS_MOUNT=$RUN_DIR/mnt
@@ -156,8 +156,8 @@ expect_field "hash 字节数" bytes 4194304
 
 step "3) 同卷跨子卷采集：FICLONE 到 state 子卷的对象"
 run_file_publish capture \
-	--source-root "$WORK_SUBVOL" --source doc.bin \
-	--object-root "$STATE_SUBVOL" --object obj1.bin
+	--source-vault "$WORK_SUBVOL" --source doc.bin \
+	--object-vault "$STATE_SUBVOL" --object obj1.bin
 expect_status "capture 退出码" 0
 expect_decision "capture 发布成功" published
 expect_field "capture 走 FICLONE" method ficlone
@@ -216,8 +216,8 @@ fi
 step "5) 从对象发布新工作文件（--expect absent）"
 mkdir -p -- "$WORK_SUBVOL/issued"
 run_file_publish publish \
-	--source-root "$STATE_SUBVOL" --source obj1.bin \
-	--target-root "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
+	--source-vault "$STATE_SUBVOL" --source obj1.bin \
+	--target-vault "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
 	--expect absent
 expect_status "首次发布退出码" 0
 expect_decision "首次发布成功" published
@@ -239,14 +239,14 @@ printf '%s\n' "$CMD_OUT" >"$RUN_DIR/restored.identity"
 target_inode_before=$(field inode)
 
 run_file_publish capture \
-	--source-root "$WORK_SUBVOL" --source doc.bin \
-	--object-root "$STATE_SUBVOL" --object obj2.bin
+	--source-vault "$WORK_SUBVOL" --source doc.bin \
+	--object-vault "$STATE_SUBVOL" --object obj2.bin
 expect_status "第二个对象采集退出码" 0
 expect_field "第二个对象内容为改写后的工作文件" sha256 "$work_sha_now"
 
 run_file_publish publish \
-	--source-root "$STATE_SUBVOL" --source obj2.bin \
-	--target-root "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
+	--source-vault "$STATE_SUBVOL" --source obj2.bin \
+	--target-vault "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
 	--expect-from "$RUN_DIR/restored.identity"
 expect_status "替换发布退出码" 0
 expect_decision "替换发布成功" published
@@ -272,8 +272,8 @@ mv -f -- "$RUN_DIR/external.bin" "$WORK_SUBVOL/issued/restored.bin"
 external_sha=$(sha_of "$WORK_SUBVOL/issued/restored.bin")
 
 run_file_publish publish \
-	--source-root "$STATE_SUBVOL" --source obj1.bin \
-	--target-root "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
+	--source-vault "$STATE_SUBVOL" --source obj1.bin \
+	--target-vault "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
 	--expect-from "$RUN_DIR/restored.identity2"
 expect_status "外部竞争（暂存前）：退出码 3（暂停）" 3
 expect_decision "外部竞争（暂存前）：暂停并报告" paused target_changed
@@ -293,8 +293,8 @@ head -c 54321 /dev/urandom >"$RUN_DIR/external2.bin"
 sync -- "$RUN_DIR/external2.bin"
 hook="mv -f -- '$RUN_DIR/external2.bin' '$WORK_SUBVOL/issued/restored.bin'"
 run_file_publish publish \
-	--source-root "$STATE_SUBVOL" --source obj1.bin \
-	--target-root "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
+	--source-vault "$STATE_SUBVOL" --source obj1.bin \
+	--target-vault "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
 	--expect-from "$RUN_DIR/restored.identity3" --race-hook "$hook"
 expect_status "外部竞争（暂存后）：退出码 3（暂停）" 3
 expect_decision "外部竞争（暂存后）：暂停并报告" paused target_changed
@@ -332,8 +332,8 @@ fi
 step "8) --expect absent 遇到已存在目标：拒绝而不是覆盖"
 pre_expect_absent_sha=$(sha_of "$WORK_SUBVOL/issued/restored.bin")
 run_file_publish publish \
-	--source-root "$STATE_SUBVOL" --source obj1.bin \
-	--target-root "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
+	--source-vault "$STATE_SUBVOL" --source obj1.bin \
+	--target-vault "$WORK_SUBVOL" --target-dir issued --target-name restored.bin \
 	--expect absent
 expect_status "目标已存在：退出码 3" 3
 expect_decision "目标已存在：拒绝创建" paused target_appeared
@@ -346,8 +346,8 @@ fi
 step "9) 跨文件系统采集（loop btrfs 镜像）：EXDEV 走校验复制"
 mkdir -p -- "$CROSS_MOUNT/objects"
 run_file_publish capture \
-	--source-root "$WORK_SUBVOL" --source doc.bin \
-	--object-root "$CROSS_MOUNT" --object objects/obj-cross.bin
+	--source-vault "$WORK_SUBVOL" --source doc.bin \
+	--object-vault "$CROSS_MOUNT" --object objects/obj-cross.bin
 expect_status "跨文件系统采集退出码" 0
 expect_decision "跨文件系统采集成功" published
 expect_field "跨文件系统采集走校验复制" method verified_copy
@@ -382,8 +382,8 @@ fi
 
 step "10) 跨文件系统发布（对象在 loop 卷 → 工作文件在 /data）"
 run_file_publish publish \
-	--source-root "$CROSS_MOUNT" --source objects/obj-cross.bin \
-	--target-root "$WORK_SUBVOL" --target-dir issued --target-name cross.bin \
+	--source-vault "$CROSS_MOUNT" --source objects/obj-cross.bin \
+	--target-vault "$WORK_SUBVOL" --target-dir issued --target-name cross.bin \
 	--expect absent
 expect_status "跨文件系统发布退出码" 0
 expect_decision "跨文件系统发布成功" published
@@ -398,8 +398,8 @@ fi
 
 step "11) 跨设备 rename 必须明确失败（不得在源文件系统里暂存再跨设备 rename）"
 run_file_publish rename \
-	--from-root "$STATE_SUBVOL" --from obj1.bin \
-	--to-root "$CROSS_MOUNT" --to moved.bin
+	--from-vault "$STATE_SUBVOL" --from obj1.bin \
+	--to-vault "$CROSS_MOUNT" --to moved.bin
 expect_status "跨设备 rename 退出码 3" 3
 expect_decision "跨设备 rename 被拒绝" paused cross_device_rename
 if [ ! -e "$CROSS_MOUNT/moved.bin" ]; then
@@ -442,8 +442,8 @@ expect_decision "绝对路径拒绝" paused invalid_relative_path
 
 step "13) 已存在的对象不被覆盖（内容对象不可变）"
 run_file_publish capture \
-	--source-root "$WORK_SUBVOL" --source doc.bin \
-	--object-root "$STATE_SUBVOL" --object obj1.bin
+	--source-vault "$WORK_SUBVOL" --source doc.bin \
+	--object-vault "$STATE_SUBVOL" --object obj1.bin
 expect_status "重复采集同一对象退出码 3" 3
 expect_decision "重复采集同一对象被拒绝" paused target_appeared
 if [ "$(sha_of "$STATE_SUBVOL/obj1.bin")" = "$src_sha" ]; then

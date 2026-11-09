@@ -1,15 +1,15 @@
 //! 外部内容采纳的 SQLx 适配器与后台观察循环（S052）。
 //!
 //! S049/S050 落地了观察规则、平台监视器与端口，但进程里没有后台任务、`ExternalAdoptStore` 也只有
-//! 测试替身：注册 Root 之后外部修改永远不会产生版本与事件。本模块补上两件事：
+//! 测试替身：注册 Vault 之后外部修改永远不会产生版本与事件。本模块补上两件事：
 //!
 //! - [`SqlExternalStore`]（端口 `ExternalAdoptStore`）：按路径查已知条目；在一个
 //!   `BEGIN IMMEDIATE` 事务里登记对象（幂等）、追加事件批次、写版本与条目 revision；移动只改父目录
 //!   与名称（EntryId 不变、不搬内容）；删除按可恢复删除写回收站清单与墓碑并保留版本历史。
-//! - [`ObserverRuntime`]：每个 Root 一条后台循环，用 `RootHandle` + `LinuxWorkTree` +
-//!   `LinuxObjectPort` 周期性跑一轮 `ExternalObserver::run_pass`。**没有 inotify 接线**（`RootWatcher`
+//! - [`ObserverRuntime`]：每个 Vault 一条后台循环，用 `VaultHandle` + `LinuxWorkTree` +
+//!   `LinuxObjectPort` 周期性跑一轮 `ExternalObserver::run_pass`。**没有 inotify 接线**（`VaultWatcher`
 //!   的 `spawn_blocking` 循环属后续卡）：周期扫描是 S050 三层兜底里的正确性层，事件只是线索，因此
-//!   不接监视只会更慢，不会更不准。Root 由每次循环从库里重新枚举，新注册的 Root 下一轮自动开始观察。
+//!   不接监视只会更慢，不会更不准。Vault 由每次循环从库里重新枚举，新注册的 Vault 下一轮自动开始观察。
 //!
 //! 服务端自己的写入通过 `ExternalObserver::expect_own_write` 登记（设备 + inode + 内容）：观察到同一
 //! inode 同一内容时不会把这次发布再采纳成“外部修改”；同一 inode 内容变了就是真的外部修改。
@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
-use vaultsyncd_domain::ids::{EntryId, RootId, TxId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, TxId, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
-use vaultsyncd_platform_linux_server::files::RootHandle;
-use vaultsyncd_server_core::commit::put::RootCommitGate;
+use vaultsyncd_platform_linux_server::files::VaultHandle;
+use vaultsyncd_server_core::commit::put::VaultCommitGate;
 use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent};
 use vaultsyncd_server_core::observer::{
     ExternalObserver, ObserverPorts, OwnWriteIntent, PassClock, PassLimits, ScanLimits,
@@ -39,8 +39,8 @@ use vaultsyncd_server_store::changes as store_changes;
 use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::entries as store_entries;
 use vaultsyncd_server_store::entries::{EntryError, NewEntry};
-use vaultsyncd_server_store::roots as store_roots;
 use vaultsyncd_server_store::trash as store_trash;
+use vaultsyncd_server_store::vaults as store_vaults;
 use vaultsyncd_server_store::versions as store_versions;
 use vaultsyncd_server_store::versions::{NewObject, NewVersion, VersionError, VersionOrigin};
 
@@ -58,7 +58,7 @@ pub struct SqlExternalStore {
 }
 
 impl SqlExternalStore {
-    /// 以数据库与 Root 所属账号装配。
+    /// 以数据库与 Vault 所属账号装配。
     #[must_use]
     pub fn new(database: Database, owner: UserId) -> Self {
         Self { database, owner }
@@ -82,11 +82,11 @@ async fn connect(
 async fn ensure_observed_path(
     conn: &mut sqlx::SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
     path: &str,
 ) -> Result<(), ExternalStoreError> {
-    let current = store_entries::entry_by_path(conn, owner, root, path)
+    let current = store_entries::entry_by_path(conn, owner, vault, path)
         .await
         .map_err(store_error)?;
     if current.is_some_and(|current| current.id == entry) {
@@ -101,18 +101,18 @@ async fn ensure_observed_path(
 impl ExternalAdoptStore for SqlExternalStore {
     async fn lookup_path(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         path: &str,
     ) -> Result<Option<KnownEntry>, ExternalStoreError> {
         let mut conn = connect(&self.database).await?;
-        let record = store_entries::entry_by_path(&mut conn, self.owner, root, path)
+        let record = store_entries::entry_by_path(&mut conn, self.owner, vault, path)
             .await
             .map_err(store_error)?;
         let Some(record) = record else {
             return Ok(None);
         };
         let content = if record.kind == store_entries::EntryKind::File {
-            store_versions::current_version(&mut conn, self.owner, root, record.id)
+            store_versions::current_version(&mut conn, self.owner, vault, record.id)
                 .await
                 .map_err(store_error)?
                 .map(|version| {
@@ -149,17 +149,17 @@ impl ExternalAdoptStore for SqlExternalStore {
         let file_name = *file_name;
 
         // 缺失的父目录按目录条目补建（外部程序可以在服务端没见过的目录里建文件）。
-        let mut parent = store_entries::root_entry(&mut tx, self.owner, write.root)
+        let mut parent = store_entries::vault_entry(&mut tx, self.owner, write.vault)
             .await
             .map_err(store_error)?
-            .ok_or(ExternalStoreError::UnknownRoot { root: write.root })?;
+            .ok_or(ExternalStoreError::UnknownVault { vault: write.vault })?;
         let mut walked = String::new();
         for part in parents {
             if !walked.is_empty() {
                 walked.push('/');
             }
             walked.push_str(part);
-            match store_entries::entry_by_path(&mut tx, self.owner, write.root, &walked)
+            match store_entries::entry_by_path(&mut tx, self.owner, write.vault, &walked)
                 .await
                 .map_err(store_error)?
             {
@@ -170,7 +170,7 @@ impl ExternalAdoptStore for SqlExternalStore {
                         self.owner,
                         &NewEntry {
                             id: EntryId::from_bytes(random_bytes()),
-                            root: write.root,
+                            vault: write.vault,
                             parent: parent.id,
                             name: (*part).to_owned(),
                             name_key: (*part).to_owned(),
@@ -193,7 +193,7 @@ impl ExternalAdoptStore for SqlExternalStore {
                     self.owner,
                     &NewEntry {
                         id: EntryId::from_bytes(random_bytes()),
-                        root: write.root,
+                        vault: write.vault,
                         parent: parent.id,
                         name: file_name.to_owned(),
                         name_key: file_name.to_owned(),
@@ -233,7 +233,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         let batch = store_changes::append_change(
             &mut tx,
             self.owner,
-            write.root,
+            write.vault,
             tx_id,
             &events_json(
                 "external",
@@ -252,7 +252,7 @@ impl ExternalAdoptStore for SqlExternalStore {
             &mut tx,
             self.owner,
             &NewObject {
-                root: write.root,
+                vault: write.vault,
                 hash: *write.content.digest.as_bytes(),
                 size: write.content.bytes,
                 storage_path: write.storage_path.clone(),
@@ -267,7 +267,7 @@ impl ExternalAdoptStore for SqlExternalStore {
             self.owner,
             &NewVersion {
                 id: version,
-                root: write.root,
+                vault: write.vault,
                 entry,
                 object_hash: *write.content.digest.as_bytes(),
                 size: write.content.bytes,
@@ -322,7 +322,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         ensure_observed_path(
             &mut tx,
             self.owner,
-            request.root,
+            request.vault,
             request.entry,
             &request.from,
         )
@@ -349,7 +349,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         };
         let name = *name;
         let parent_path = parent_parts.join("/");
-        let parent = store_entries::entry_by_path(&mut tx, self.owner, request.root, &parent_path)
+        let parent = store_entries::entry_by_path(&mut tx, self.owner, request.vault, &parent_path)
             .await
             .map_err(store_error)?
             .ok_or_else(|| ExternalStoreError::PathConflict {
@@ -360,7 +360,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         let batch = store_changes::append_change(
             &mut tx,
             self.owner,
-            request.root,
+            request.vault,
             tx_id,
             &events_json(
                 "move",
@@ -411,7 +411,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         ensure_observed_path(
             &mut tx,
             self.owner,
-            request.root,
+            request.vault,
             request.entry,
             &request.path,
         )
@@ -430,14 +430,14 @@ impl ExternalAdoptStore for SqlExternalStore {
             });
         }
         let parent = current.parent.ok_or_else(|| ExternalStoreError::Rejected {
-            code: "root_entry",
-            detail: "Root 根条目不能删除".to_owned(),
+            code: "vault_entry",
+            detail: "Vault 根条目不能删除".to_owned(),
         })?;
         let next = request.expected_revision.next().map_err(store_error)?;
         let content = match current.content_version {
             Some(version) => {
                 let facts =
-                    store_versions::version_facts(&mut tx, self.owner, request.root, version)
+                    store_versions::version_facts(&mut tx, self.owner, request.vault, version)
                         .await
                         .map_err(store_error)?
                         .ok_or_else(|| ExternalStoreError::Rejected {
@@ -456,7 +456,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         let batch = store_changes::append_change(
             &mut tx,
             self.owner,
-            request.root,
+            request.vault,
             tx_id,
             &events_json(
                 "delete",
@@ -492,7 +492,7 @@ impl ExternalAdoptStore for SqlExternalStore {
         .map_err(store_error)?;
         let trash = store_trash::NewTrashEntry {
             entry: request.entry,
-            root: request.root,
+            vault: request.vault,
             parent,
             path: request.path.clone(),
             kind: match current.kind {
@@ -543,22 +543,22 @@ impl ObserverRuntimeConfig {
     };
 }
 
-struct RootState {
-    handle: Arc<RootHandle>,
+struct VaultState {
+    handle: Arc<VaultHandle>,
     observer: ExternalObserver,
 }
 
-/// 后台观察循环：每个 Root 一个 `ExternalObserver`，按周期跑一轮完整扫描与采纳。
+/// 后台观察循环：每个 Vault 一个 `ExternalObserver`，按周期跑一轮完整扫描与采纳。
 pub struct ObserverRuntime {
-    pub(crate) fences: Arc<crate::root_fences::RootFences>,
+    pub(crate) fences: Arc<crate::vault_fences::VaultFences>,
     database: Database,
     state_dir: PathBuf,
-    roots: tokio::sync::Mutex<HashMap<RootId, RootState>>,
-    /// Root 提交串行化：与内容 put 共用同一套语义（同一 Root 同时只允许一次提交）。
-    gate: tokio::sync::Mutex<RootCommitGate>,
+    vaults: tokio::sync::Mutex<HashMap<VaultId, VaultState>>,
+    /// Vault 提交串行化：与内容 put 共用同一套语义（同一 Vault 同时只允许一次提交）。
+    gate: tokio::sync::Mutex<VaultCommitGate>,
     config: ObserverRuntimeConfig,
     collection:
-        tokio::sync::RwLock<HashMap<RootId, vaultsyncd_protocol::generated::RootCollection>>,
+        tokio::sync::RwLock<HashMap<VaultId, vaultsyncd_protocol::generated::VaultCollection>>,
 }
 
 impl ObserverRuntime {
@@ -566,64 +566,69 @@ impl ObserverRuntime {
     #[must_use]
     pub fn new(database: Database, state_dir: &Path, config: ObserverRuntimeConfig) -> Self {
         Self {
-            fences: Arc::new(crate::root_fences::RootFences::new(state_dir)),
+            fences: Arc::new(crate::vault_fences::VaultFences::new(state_dir)),
             database,
             state_dir: state_dir.to_path_buf(),
-            roots: tokio::sync::Mutex::new(HashMap::new()),
-            gate: tokio::sync::Mutex::new(RootCommitGate::new()),
+            vaults: tokio::sync::Mutex::new(HashMap::new()),
+            gate: tokio::sync::Mutex::new(VaultCommitGate::new()),
             config,
             collection: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
-    pub(crate) fn with_root_fences(mut self, fences: Arc<crate::root_fences::RootFences>) -> Self {
+    pub(crate) fn with_vault_fences(
+        mut self,
+        fences: Arc<crate::vault_fences::VaultFences>,
+    ) -> Self {
         self.fences = fences;
         self
     }
     /// 本进程最新扫描进度；未扫描和重启不得继承完成结论。
     pub async fn collection_status(
         &self,
-        root: RootId,
-    ) -> vaultsyncd_protocol::generated::RootCollection {
+        vault: VaultId,
+    ) -> vaultsyncd_protocol::generated::VaultCollection {
         self.collection
             .read()
             .await
-            .get(&root)
+            .get(&vault)
             .cloned()
-            .unwrap_or_else(crate::roots::not_scanned)
+            .unwrap_or_else(crate::vaults::not_scanned)
     }
 
     async fn collection_state(
         &self,
-        root: RootId,
-        state: vaultsyncd_protocol::generated::RootCollectionState,
+        vault: VaultId,
+        state: vaultsyncd_protocol::generated::VaultCollectionState,
         detail: &str,
     ) {
         let mut states = self.collection.write().await;
-        let value = states.entry(root).or_insert_with(crate::roots::not_scanned);
+        let value = states
+            .entry(vault)
+            .or_insert_with(crate::vaults::not_scanned);
         value.state = state;
         value.detail = detail.into();
     }
 
-    /// HTTP 命令和观察器共用的提交门；锁顺序固定为 gate → roots。
-    pub fn commit_gate(&self) -> &tokio::sync::Mutex<RootCommitGate> {
+    /// HTTP 命令和观察器共用的提交门；锁顺序固定为 gate → vaults。
+    pub fn commit_gate(&self) -> &tokio::sync::Mutex<VaultCommitGate> {
         &self.gate
     }
 
     /// 登记一次服务端自己的写入（设备 + inode + 内容），避免把发布本身采纳成外部修改。
     ///
-    /// 观察器还没有为该 Root 建立时忽略：那一轮还没开始，之后的完整扫描会用库里的内容判断
+    /// 观察器还没有为该 Vault 建立时忽略：那一轮还没开始，之后的完整扫描会用库里的内容判断
     /// “内容相同 → 不产生版本”。
     pub async fn expect_own_write(
         &self,
-        root: RootId,
+        vault: VaultId,
         path: &str,
         identity: FileKey,
         content: ExpectedContent,
     ) {
         let _ = identity.links;
-        let mut roots = self.roots.lock().await;
-        let Some(state) = roots.get_mut(&root) else {
+        let mut vaults = self.vaults.lock().await;
+        let Some(state) = vaults.get_mut(&vault) else {
             return;
         };
         let intent = OwnWriteIntent {
@@ -632,76 +637,77 @@ impl ObserverRuntime {
             content,
         };
         if let Err(error) = state.observer.expect_own_write(path, intent) {
-            warn!(root = %root.to_hex(), path, error = %error, "自写意图登记失败");
+            warn!(vault = %vault.to_hex(), path, error = %error, "自写意图登记失败");
         }
     }
 
-    /// 跑一轮（测试与运维诊断用）：枚举库里的 Root，逐个 Root 做一次完整扫描。
+    /// 跑一轮（测试与运维诊断用）：枚举库里的 Vault，逐个 Vault 做一次完整扫描。
     ///
-    /// 返回本轮 Root 数与采纳/失败的统计，便于日志与验收断言。
+    /// 返回本轮 Vault 数与采纳/失败的统计，便于日志与验收断言。
     pub async fn run_once(&self) -> PassSummary {
         let _objects = self.database.object_activity().await;
-        let roots = {
+        let vaults = {
             let mut conn = match self.database.pool().acquire().await {
                 Ok(conn) => conn,
                 Err(error) => {
                     for progress in self.collection.write().await.values_mut() {
                         progress.state =
-                            vaultsyncd_protocol::generated::RootCollectionState::Blocked;
+                            vaultsyncd_protocol::generated::VaultCollectionState::Blocked;
                         progress.detail =
-                            "无法读取 Root 清单，请检查存储；上次完成结果已失效。".into();
+                            "无法读取 Vault 清单，请检查存储；上次完成结果已失效。".into();
                     }
-                    warn!(error = %error, "观察器读 Root 清单失败");
+                    warn!(error = %error, "观察器读 Vault 清单失败");
                     return PassSummary::default();
                 }
             };
-            match store_roots::all_roots(&mut conn).await {
-                Ok(roots) => roots,
+            match store_vaults::all_vaults(&mut conn).await {
+                Ok(vaults) => vaults,
                 Err(error) => {
                     for progress in self.collection.write().await.values_mut() {
                         progress.state =
-                            vaultsyncd_protocol::generated::RootCollectionState::Blocked;
+                            vaultsyncd_protocol::generated::VaultCollectionState::Blocked;
                         progress.detail =
-                            "无法读取 Root 清单，请检查存储；上次完成结果已失效。".into();
+                            "无法读取 Vault 清单，请检查存储；上次完成结果已失效。".into();
                     }
-                    warn!(error = %error, "观察器读 Root 清单失败");
+                    warn!(error = %error, "观察器读 Vault 清单失败");
                     return PassSummary::default();
                 }
             }
         };
         let mut summary = PassSummary::default();
         let mut gate = self.gate.lock().await;
-        let mut states = self.roots.lock().await;
-        let live: std::collections::BTreeSet<RootId> = roots.iter().map(|root| root.id).collect();
-        states.retain(|root, _| live.contains(root));
+        let mut states = self.vaults.lock().await;
+        let live: std::collections::BTreeSet<VaultId> =
+            vaults.iter().map(|vault| vault.id).collect();
+        states.retain(|vault, _| live.contains(vault));
         self.collection
             .write()
             .await
-            .retain(|root, _| live.contains(root));
-        for root in roots {
-            use vaultsyncd_protocol::generated::RootCollectionState as Collection;
+            .retain(|vault, _| live.contains(vault));
+        for vault in vaults {
+            use vaultsyncd_protocol::generated::VaultCollectionState as Collection;
             self.collection_state(
-                root.id,
+                vault.id,
                 Collection::Scanning,
                 "正在核验本轮扫描前提；尚不能判为完成。",
             )
             .await;
-            if root.health != store_roots::RootHealth::Healthy {
+            if vault.health != store_vaults::VaultHealth::Healthy {
                 self.collection_state(
-                    root.id,
+                    vault.id,
                     Collection::Blocked,
-                    "Root 数据库健康状态不可用，等待修复。",
+                    "Vault 数据库健康状态不可用，等待修复。",
                 )
                 .await;
                 continue;
             }
-            let admitted = match self.fences.open(&root) {
+            let admitted = match self.fences.open(&vault) {
                 Ok(handle) => handle,
                 Err(reason) => {
                     self.collection_state(
-                        root.id,
+                        vault.id,
                         Collection::Blocked,
-                        &format!("Root 围栏拒绝采集：{reason}；不推导删除。"),
+                        &format!("Vault 围栏拒绝采集：{reason}；不推导删除。"),
                     )
                     .await;
                     continue;
@@ -711,18 +717,20 @@ impl ObserverRuntime {
             let unfinished = match self.database.pool().acquire().await {
                 Ok(mut conn) => {
                     vaultsyncd_server_store::intents::unfinished_intents(
-                        &mut conn, root.owner, root.id,
+                        &mut conn,
+                        vault.owner,
+                        vault.id,
                     )
                     .await
                 }
                 Err(error) => {
                     self.collection_state(
-                        root.id,
+                        vault.id,
                         Collection::Blocked,
                         "无法读取恢复意图，暂停采集；请检查存储。",
                     )
                     .await;
-                    warn!(root = %root.id, error = %error, "无法读取意图，暂停观察采纳");
+                    warn!(vault = %vault.id, error = %error, "无法读取意图，暂停观察采纳");
                     continue;
                 }
             };
@@ -730,7 +738,7 @@ impl ObserverRuntime {
                 Ok(intents) if intents.is_empty() => {}
                 Ok(_) => {
                     self.collection_state(
-                        root.id,
+                        vault.id,
                         Collection::Blocked,
                         "仍有未完成文件意图，等待恢复后采集。",
                     )
@@ -739,48 +747,45 @@ impl ObserverRuntime {
                 }
                 Err(error) => {
                     self.collection_state(
-                        root.id,
+                        vault.id,
                         Collection::Blocked,
                         "无法读取恢复意图，暂停采集；请检查存储。",
                     )
                     .await;
-                    warn!(root = %root.id, error = %error, "无法读取意图，暂停观察采纳");
+                    warn!(vault = %vault.id, error = %error, "无法读取意图，暂停观察采纳");
                     continue;
                 }
             }
-            let layout = match crate::object_layout::for_root(
-                &self.database,
-                &self.state_dir,
-                root.id,
-            )
-            .await
-            {
-                Ok(layout) => layout,
-                Err(error) => {
-                    self.collection_state(
-                        root.id,
-                        Collection::Blocked,
-                        "无法读取对象布局登记，暂停采集；请检查存储。",
-                    )
-                    .await;
-                    warn!(root = %root.id, error = %error, "无法读取对象布局，暂停观察采纳");
-                    continue;
-                }
-            };
+            let layout =
+                match crate::object_layout::for_vault(&self.database, &self.state_dir, vault.id)
+                    .await
+                {
+                    Ok(layout) => layout,
+                    Err(error) => {
+                        self.collection_state(
+                            vault.id,
+                            Collection::Blocked,
+                            "无法读取对象布局登记，暂停采集；请检查存储。",
+                        )
+                        .await;
+                        warn!(vault = %vault.id, error = %error, "无法读取对象布局，暂停观察采纳");
+                        continue;
+                    }
+                };
             self.collection_state(
-                root.id,
+                vault.id,
                 Collection::Scanning,
                 "正在进行本进程的目录扫描与稳定采集。",
             )
             .await;
-            summary.roots += 1;
-            let state = match states.get_mut(&root.id) {
+            summary.vaults += 1;
+            let state = match states.get_mut(&vault.id) {
                 Some(state) => state,
                 None => {
                     let handle = admitted;
-                    let prefix = format!("obs-{}-{}", &root.id.to_hex()[..8], std::process::id());
+                    let prefix = format!("obs-{}-{}", &vault.id.to_hex()[..8], std::process::id());
                     let Ok(observer) = ExternalObserver::new(
-                        root.id,
+                        vault.id,
                         StabilityWindow::from_millis(self.config.window_millis)
                             .unwrap_or(StabilityWindow::DEFAULT),
                         &prefix,
@@ -788,13 +793,13 @@ impl ObserverRuntime {
                         continue;
                     };
                     states
-                        .entry(root.id)
-                        .or_insert(RootState { handle, observer })
+                        .entry(vault.id)
+                        .or_insert(VaultState { handle, observer })
                 }
             };
             let mut work = LinuxWorkTree::new(Arc::clone(&state.handle));
-            let mut blobs = LinuxObjectPort::new(Arc::clone(&state.handle), layout.root());
-            let mut store = SqlExternalStore::new(self.database.clone(), root.owner);
+            let mut blobs = LinuxObjectPort::new(Arc::clone(&state.handle), layout.vault());
+            let mut store = SqlExternalStore::new(self.database.clone(), vault.owner);
             let Ok(limits) = PassLimits::new(
                 ScanLimits::new(self.config.max_scan_entries)
                     .unwrap_or_else(|_| ScanLimits::new(1024).expect("非零")),
@@ -825,7 +830,7 @@ impl ObserverRuntime {
                     )
                 })
                 .count();
-            let blocked = report.root_unavailable
+            let blocked = report.vault_unavailable
                 || !report.inconclusive.is_empty()
                 || !report.skipped.is_empty();
             let collection_state = if blocked {
@@ -847,8 +852,8 @@ impl ObserverRuntime {
                 "等待文件稳定或后续扫描；当前项数不是总文件数，也不是同步完成百分比。".into()
             };
             self.collection.write().await.insert(
-                root.id,
-                vaultsyncd_protocol::generated::RootCollection {
+                vault.id,
+                vaultsyncd_protocol::generated::VaultCollection {
                     state: collection_state,
                     examined: report.entries_examined.to_string(),
                     pending: pending.to_string(),
@@ -876,11 +881,11 @@ impl ObserverRuntime {
                     )
                 })
                 .count();
-            summary.root_unavailable |= report.root_unavailable;
+            summary.vault_unavailable |= report.vault_unavailable;
             summary.moves += report.reconcile.moves.len();
             summary.deletes += report.reconcile.deletions.len();
             debug!(
-                root = %root.id.to_hex(),
+                vault = %vault.id.to_hex(),
                 scanned = report.entries_examined,
                 complete = report.scan_complete,
                 "观察器完成一轮"
@@ -916,9 +921,9 @@ impl ObserverRuntime {
                 },
                 Err(error) => warn!(error=%error,"时钟无效，跳过 GC"),
             }
-            if summary.roots > 0 {
+            if summary.vaults > 0 {
                 debug!(
-                    roots = summary.roots,
+                    vaults = summary.vaults,
                     adopted = summary.adopted,
                     pending = summary.pending,
                     moves = summary.moves,
@@ -940,8 +945,8 @@ impl ObserverRuntime {
 /// 一轮的统计。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PassSummary {
-    /// 本轮观察的 Root 数。
-    pub roots: usize,
+    /// 本轮观察的 Vault 数。
+    pub vaults: usize,
     /// 采纳的文件数。
     pub adopted: usize,
     /// 仍在等待稳定窗口/重试的文件数。
@@ -950,8 +955,8 @@ pub struct PassSummary {
     pub moves: usize,
     /// 传播的外部删除数。
     pub deletes: usize,
-    /// 是否遇到 Root 不可用。
-    pub root_unavailable: bool,
+    /// 是否遇到 Vault 不可用。
+    pub vault_unavailable: bool,
 }
 
 fn monotonic_millis() -> u64 {

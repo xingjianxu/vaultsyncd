@@ -18,7 +18,7 @@
 //! 6. **状态由服务器给出**：只有 `open` 会话接收块；`complete`/`finalized`/`aborted` 一律拒绝，
 //!    续传依据是服务器记录的已收块，不是客户端位图。
 
-use vaultsyncd_domain::ids::{RootId, SessionId, UploadId};
+use vaultsyncd_domain::ids::{SessionId, UploadId, VaultId};
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_transfer::chunk::{ChunkGeometry, GeometryError};
 use vaultsyncd_transfer::hash;
@@ -93,8 +93,8 @@ impl UploadPhase {
 pub struct UploadSession {
     /// 会话身份。
     pub upload: UploadId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 签发会话的登录会话（用于“跨会话访问拒绝”）。
     pub session: SessionId,
     /// 快照总大小。
@@ -230,9 +230,9 @@ pub enum UploadFailure {
         /// 当前状态。
         phase: UploadPhase,
     },
-    /// 会话不存在、不属于该 Root 或不属于该登录会话（三者不区分）。
+    /// 会话不存在、不属于该 Vault 或不属于该登录会话（三者不区分）。
     UnknownUpload,
-    /// Root 不在调用方授权范围。
+    /// Vault 不在调用方授权范围。
     OutOfScope,
     /// 会话行不满足本层的类型前提（块大小为 0）。
     MalformedSession,
@@ -277,7 +277,7 @@ impl std::fmt::Display for UploadFailure {
                 write!(f, "上传会话已是 {}，不再接收块", phase.as_text())
             }
             Self::UnknownUpload => f.write_str("上传会话不存在"),
-            Self::OutOfScope => f.write_str("Root 不在调用方授权范围"),
+            Self::OutOfScope => f.write_str("Vault 不在调用方授权范围"),
             Self::MalformedSession => f.write_str("上传会话的块大小无效"),
             Self::Storage { detail } => write!(f, "上传存储失败：{detail}"),
         }
@@ -440,7 +440,7 @@ mod tests {
     fn session(total: u64, chunk: u64, phase: UploadPhase) -> UploadSession {
         UploadSession {
             upload: UploadId::from_bytes([0x41; 16]),
-            root: RootId::from_bytes([0x42; 16]),
+            vault: VaultId::from_bytes([0x42; 16]),
             session: SessionId::from_bytes([0x43; 16]),
             total_size: total,
             hash: digest(b"whole"),

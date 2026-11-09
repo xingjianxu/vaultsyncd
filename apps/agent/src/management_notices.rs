@@ -17,7 +17,7 @@ pub(crate) async fn list(db: &Database) -> Result<Vec<Notice>, PortError> {
             let n = d.notification;
             let pieces: Vec<_> = n.dedupe_key.splitn(3, ':').collect();
             Notice {
-                root_id: if pieces.len() == 3 && pieces[0] == "root" {
+                vault_id: if pieces.len() == 3 && pieces[0] == "vault" {
                     Some(pieces[1].into())
                 } else {
                     None

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "vaultsyncd offline restore report v1",
-  "description": "CLI restore validate/apply and state-local restore.incomplete/restore.complete.json. Dynamic artifact documents have no parallel handwritten DTO. validate rereads all archive bytes and pinned manifest, verifies source SQLite, compatibility, complete Root mapping and actual available space. apply holds the same StateLock as service/init. restore.incomplete is authoritative and blocks both entrances before DBopen; complete report is only diagnostic until the marker is durably removed. Failures preserve evidence and require new empty targets; no implicit overwrite/resume. Fresh random 63-bit epoch avoids reuse when the same old backup is restored more than once; ServerId remains. Root targets share one compliant CoW btrfs filesystem with state, are canonical/new/empty and do not alias or overlap source paths. During apply the official server.sqlite has a distinct restore-guard application_id; older binaries refuse it through their existing database-kind gate. Import/update uses restore.candidate.sqlite. Only after all object/work hashes, mappings/epoch and fsync succeed does an atomic rename replace the unchanged owned guard. The restored report is written after database publication; the incomplete marker remains authoritative until durably removed.",
+  "description": "CLI restore validate/apply and state-local restore.incomplete/restore.complete.json. Dynamic artifact documents have no parallel handwritten DTO. validate rereads all archive bytes and pinned manifest, verifies source SQLite, compatibility, complete Vault mapping and actual available space. apply holds the same StateLock as service/init. restore.incomplete is authoritative and blocks both entrances before DBopen; complete report is only diagnostic until the marker is durably removed. Failures preserve evidence and require new empty targets; no implicit overwrite/resume. Fresh random 63-bit epoch avoids reuse when the same old backup is restored more than once; ServerId remains. Vault targets share one compliant CoW btrfs filesystem with state, are canonical/new/empty and do not alias or overlap source paths. During apply the official server.sqlite has a distinct restore-guard application_id; older binaries refuse it through their existing database-kind gate. Import/update uses restore.candidate.sqlite. Only after all object/work hashes, mappings/epoch and fsync succeed does an atomic rename replace the unchanged owned guard. The restored report is written after database publication; the incomplete marker remains authoritative until durably removed.",
   "oneOf": [
     {
       "$ref": "#/$defs/report"
@@ -27,7 +27,7 @@
         "backup_id",
         "server_id",
         "manifest_hash",
-        "root_count",
+        "vault_count",
         "working_items",
         "required_bytes",
         "available_bytes",
@@ -51,7 +51,7 @@
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },
-        "root_count": {
+        "vault_count": {
           "$ref": "#/$defs/decimal"
         },
         "working_items": {
@@ -69,7 +69,7 @@
         "epoch": {
           "$ref": "#/$defs/decimal"
         },
-        "root_mapping": {
+        "vault_mapping": {
           "type": "object",
           "propertyNames": {
             "$ref": "#/$defs/id"

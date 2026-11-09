@@ -5,7 +5,7 @@ use std::{
     io,
     path::{Path, PathBuf},
 };
-use vaultsyncd_domain::ids::{BindingId, DeviceId, RootId, ServerId};
+use vaultsyncd_domain::ids::{BindingId, DeviceId, ServerId, VaultId};
 
 /// One authenticated server endpoint and its explicit development trust additions.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -28,8 +28,8 @@ pub struct ServerConfig {
 pub struct BindingConfig {
     /// Stable binding identity.
     pub id: String,
-    /// Authorized remote Root identity.
-    pub root_id: String,
+    /// Authorized remote Vault identity.
+    pub vault_id: String,
     /// Existing ordinary NTFS directory.
     pub path: PathBuf,
     /// Existing internal cache directory, physically disjoint from every binding.
@@ -130,10 +130,10 @@ impl AgentConfig {
                 .map_err(|_| invalid())?
                 .to_string()
                 != binding.id
-                || RootId::from_hex(&binding.root_id)
+                || VaultId::from_hex(&binding.vault_id)
                     .map_err(|_| invalid())?
                     .to_string()
-                    != binding.root_id
+                    != binding.vault_id
                 || !ids.insert(&binding.id)
                 || !matches!(binding.mode.as_str(), "full" | "on_demand")
                 || !windows_absolute(&binding.path)
@@ -149,7 +149,7 @@ impl AgentConfig {
 mod tests {
     use super::*;
     fn sample() -> serde_json::Value {
-        serde_json::json!({"server":{"id":"11111111111111111111111111111111","url":"https://sync.example"},"device_id":"22222222222222222222222222222222","state_dir":"C:\\state","poll_millis":1000,"bindings":[{"id":"33333333333333333333333333333333","root_id":"44444444444444444444444444444444","path":"C:\\root","cache":"C:\\cache","mode":"full"}]})
+        serde_json::json!({"server":{"id":"11111111111111111111111111111111","url":"https://sync.example"},"device_id":"22222222222222222222222222222222","state_dir":"C:\\state","poll_millis":1000,"bindings":[{"id":"33333333333333333333333333333333","vault_id":"44444444444444444444444444444444","path":"C:\\vault","cache":"C:\\cache","mode":"full"}]})
     }
     #[test]
     fn config_rejects_credentials_and_unsupported_transport() {

@@ -7,14 +7,14 @@
 //!
 //! 契约：
 //!
-//! - 所有查询都在调用方的 owner scope 内；Root 不存在与不在 scope 内一律
-//!   [`VersionContentError::OutOfScope`]，不泄露 Root 是否存在（I15）。
+//! - 所有查询都在调用方的 owner scope 内；Vault 不存在与不在 scope 内一律
+//!   [`VersionContentError::OutOfScope`]，不泄露 Vault 是否存在（I15）。
 //! - 条目或版本不存在、已经过期并被清理时返回 [`VersionContentError::VersionGone`]——调用方据此给
 //!   410 `VERSION_GONE`，不得退化成“按当前 head 返回同路径的新内容”。
 //! - 条目是目录时返回 [`VersionContentError::NotAFile`]：目录没有内容版本。
 //! - 返回的长度来自持久化的 `versions.size`/`objects.size`，不由读到的字节反推。
 
-use vaultsyncd_domain::ids::{EntryId, RootId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, VaultId, VersionId};
 
 use crate::api::content::VersionContent;
 
@@ -26,9 +26,9 @@ pub enum VersionContentError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 不在调用方的 owner scope 内（含 Root 不存在）。
+    /// Vault 不在调用方的 owner scope 内（含 Vault 不存在）。
     OutOfScope,
-    /// 条目不存在，或不在该 Root 内。
+    /// 条目不存在，或不在该 Vault 内。
     EntryNotFound,
     /// 条目是目录：没有内容版本。
     NotAFile,
@@ -60,8 +60,8 @@ impl std::fmt::Display for VersionContentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Storage { detail } => write!(f, "版本内容存储失败：{detail}"),
-            Self::OutOfScope => f.write_str("Root 不在调用方的授权范围"),
-            Self::EntryNotFound => f.write_str("条目不存在或不在该 Root 内"),
+            Self::OutOfScope => f.write_str("Vault 不在调用方的授权范围"),
+            Self::EntryNotFound => f.write_str("条目不存在或不在该 Vault 内"),
             Self::NotAFile => f.write_str("条目是目录，没有内容版本"),
             Self::VersionGone => f.write_str("版本已过期或被清理"),
             Self::ObjectUnavailable { digest } => {
@@ -76,14 +76,14 @@ impl std::error::Error for VersionContentError {}
 /// 版本内容事实的来源。
 #[allow(async_fn_in_trait)]
 pub trait VersionContentStore {
-    /// 解析 `(root, entry, version)` 到固定内容地址与长度。
+    /// 解析 `(vault, entry, version)` 到固定内容地址与长度。
     ///
     /// # Errors
     ///
     /// 见 [`VersionContentError`]：越权、条目不存在/不是文件、版本已过期、内容对象缺失、存储失败。
     async fn version_content(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
         version: VersionId,
     ) -> Result<VersionContent, VersionContentError>;

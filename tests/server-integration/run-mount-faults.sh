@@ -4,8 +4,8 @@
 # 在 tools/test-volume/test-volume.sh 建立的**独立 btrfs loop 卷**上运行
 # `tests/server-integration/tests/mount_faults.rs`：
 #   - 真实 umount/mount 卷根目录（卸载后露出空目录）；
-#   - 用 -o subvol=decoy 把另一个子卷挂到同一 Root 路径（卷/子卷替换）；
-#   - bind 别名重复注册、Root 内子挂载。
+#   - 用 -o subvol=decoy 把另一个子卷挂到同一 Vault 路径（卷/子卷替换）；
+#   - bind 别名重复注册、Vault 内子挂载。
 #
 # 只有本脚本建立/核对的挂载会被卸载；失败时也先清理再退出。真实用户目录不参与。
 #
@@ -17,9 +17,9 @@ PROG=${0##*/}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../.." && pwd)
 TEST_VOLUME="$repo_root/tools/test-volume/test-volume.sh"
-LAB_ROOT=${VAULTSYNCD_LAB_ROOT:-/data/vaultsyncd-lab}
+LAB_VAULT=${VAULTSYNCD_LAB_VAULT:-/data/vaultsyncd-lab}
 run_id=${VAULTSYNCD_RUN_ID:-s103-mount-$$}
-RUN_DIR=$LAB_ROOT/runs/$run_id
+RUN_DIR=$LAB_VAULT/runs/$run_id
 MNT=$RUN_DIR/mnt
 IMAGE=$RUN_DIR/loop.img
 META=$RUN_DIR/run.env
@@ -120,28 +120,28 @@ done <"$META"
 [ -n "$LOOP" ] || die "run.env 缺少 loop_device"
 mountpoint -q "$MNT" || die "镜像未挂载：$MNT"
 
-step "2) 准备 Root/替换子卷与卸载后的空目录"
-# Root 是 <mnt>/rootmnt：它是一次真实子卷挂载；卸载后该路径露出主文件系统上的空目录（T19）。
+step "2) 准备 Vault/替换子卷与卸载后的空目录"
+# Vault 是 <mnt>/vaultmnt：它是一次真实子卷挂载；卸载后该路径露出主文件系统上的空目录（T19）。
 # 内部状态也必须在同一 btrfs 文件系统（准入要求），由用例在 <mnt> 下建立。
-sudo_run btrfs subvolume create "$MNT/root" >/dev/null
+sudo_run btrfs subvolume create "$MNT/vault" >/dev/null
 sudo_run btrfs subvolume create "$MNT/decoy" >/dev/null
 sudo_run chown -R "$(id -u):$(id -g)" "$MNT"
-printf 'the original subvolume content\n' >"$MNT/root/note.txt"
+printf 'the original subvolume content\n' >"$MNT/vault/note.txt"
 printf 'another subvolume mounted at the same path\n' >"$MNT/decoy/note.txt"
-mkdir -p "$MNT/rootmnt"
-sudo_run mount -o subvol=root -- "$LOOP" "$MNT/rootmnt"
-mountpoint -q "$MNT/rootmnt" || die "Root 子卷挂载失败：$MNT/rootmnt"
-[ -f "$MNT/rootmnt/note.txt" ] || die "Root 子卷内容不可见"
+mkdir -p "$MNT/vaultmnt"
+sudo_run mount -o subvol=vault -- "$LOOP" "$MNT/vaultmnt"
+mountpoint -q "$MNT/vaultmnt" || die "Vault 子卷挂载失败：$MNT/vaultmnt"
+[ -f "$MNT/vaultmnt/note.txt" ] || die "Vault 子卷内容不可见"
 mkdir -p "$ALIAS_BASE"
-ls -la "$MNT" "$MNT/rootmnt"
+ls -la "$MNT" "$MNT/vaultmnt"
 
 step "3) 运行真实挂载故障用例（server-integration mount_faults）"
 status=0
 (
 	cd "$repo_root"
 	VAULTSYNCD_S103_MOUNT="$MNT" \
-		VAULTSYNCD_S103_ROOT="$MNT/rootmnt" \
-		VAULTSYNCD_S103_ROOT_SUBVOL=root \
+		VAULTSYNCD_S103_VAULT="$MNT/vaultmnt" \
+		VAULTSYNCD_S103_VAULT_SUBVOL=vault \
 		VAULTSYNCD_S103_LOOP="$LOOP" \
 		VAULTSYNCD_S103_DECOY_SUBVOL=decoy \
 		VAULTSYNCD_S103_ALIAS_BASE="$ALIAS_BASE" \

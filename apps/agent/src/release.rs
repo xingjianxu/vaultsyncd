@@ -16,12 +16,12 @@ use vaultsyncd_agent_core::{
     recovery::ContentEvidence,
 };
 use vaultsyncd_client_store::{db::Database, entries};
-use vaultsyncd_domain::{ids::RootId, state::Usage, version::Generation};
+use vaultsyncd_domain::{ids::VaultId, state::Usage, version::Generation};
 use vaultsyncd_fs_common::path::RelativePath;
 use vaultsyncd_http_client::{ApiClient, ReqwestTransport, version_leases::LeaseEndpoint};
 use vaultsyncd_platform_windows::{
     cfapi::{catalog::Identity, release::verified::ReleaseHandle},
-    files::{RootHandle, controlled::Evidence},
+    files::{VaultHandle, controlled::Evidence},
 };
 use vaultsyncd_transfer::ports::{PortError, PortFuture, SnapshotSource, VersionPin};
 fn local(e: impl std::fmt::Display) -> PortError {
@@ -31,16 +31,16 @@ fn local(e: impl std::fmt::Display) -> PortError {
 /// An explicit target's native release adapter; instantiate from durable fixed metadata.
 /// Supports only its configured relative path, never a caller-selected arbitrary file.
 pub struct NativeReleaseLocal {
-    root: Arc<RootHandle>,
+    vault: Arc<VaultHandle>,
     database: Arc<Database>,
     identity: Identity,
     path: RelativePath,
     pin: VersionPin,
 }
 impl NativeReleaseLocal {
-    /// Bind verified logical identity/pin to a safe root. No file is changed or recalled here.
+    /// Bind verified logical identity/pin to a safe vault. No file is changed or recalled here.
     pub fn new(
-        root: &Path,
+        vault: &Path,
         database: Arc<Database>,
         identity: Identity,
         path: RelativePath,
@@ -53,7 +53,7 @@ impl NativeReleaseLocal {
             return Err(PortError::protocol("release identity/pin mismatch"));
         }
         Ok(Self {
-            root: Arc::new(RootHandle::open(root).map_err(local)?),
+            vault: Arc::new(VaultHandle::open(vault).map_err(local)?),
             database,
             identity,
             path,
@@ -88,7 +88,7 @@ impl ReleaseLocal for NativeReleaseLocal {
                 .bind(self.identity.binding.as_bytes().as_slice()).bind(path.to_string()).fetch_one(&mut *conn).await.map_err(local)?;
             drop(conn);
             let handle = ReleaseHandle::open(
-                &self.root,
+                &self.vault,
                 &path.to_string(),
                 self.identity,
                 state.generation.get(),
@@ -235,10 +235,10 @@ pub struct HttpReleaseRemote {
     endpoint: LeaseEndpoint<ReqwestTransport>,
 }
 impl HttpReleaseRemote {
-    /// Bind the authenticated client to its exact remote root.
-    pub fn new(client: ApiClient<ReqwestTransport>, root: RootId) -> Result<Self, PortError> {
+    /// Bind the authenticated client to its exact remote vault.
+    pub fn new(client: ApiClient<ReqwestTransport>, vault: VaultId) -> Result<Self, PortError> {
         Ok(Self {
-            endpoint: LeaseEndpoint::new(client, root.to_string())?,
+            endpoint: LeaseEndpoint::new(client, vault.to_string())?,
         })
     }
 }

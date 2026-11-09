@@ -1,8 +1,8 @@
-//! 外部目录观察的 Linux 适配器（design §12.1、§11.5、§16.1）：把 `RootHandle` 与 `stage_copy` 接到
+//! 外部目录观察的 Linux 适配器（design §12.1、§11.5、§16.1）：把 `VaultHandle` 与 `stage_copy` 接到
 //! `server-core` 的 [`WorkTreePort`] 与 [`ObjectBlobPort`]。
 //!
-//! 核心只定义端口与规则，平台库不依赖核心，装配发生在进程入口（本模块）。所有对 Root 内容的访问都
-//! 走 Root 句柄：不跟随符号链接、不穿过挂载边界；读不到一律上报错误，**不会**报告成“不存在”或
+//! 核心只定义端口与规则，平台库不依赖核心，装配发生在进程入口（本模块）。所有对 Vault 内容的访问都
+//! 走 Vault 句柄：不跟随符号链接、不穿过挂载边界；读不到一律上报错误，**不会**报告成“不存在”或
 //! “目录为空”（design §11.4）。候选建在对象区 staging 目录：同一文件系统优先 `FICLONE`，跨卷或
 //! 不支持时校验复制并暴露原因（design §11.5）。
 
@@ -17,8 +17,8 @@ use std::time::Duration;
 use vaultsyncd_platform_linux_server::files::clone::{StageRequest, stage_copy};
 use vaultsyncd_platform_linux_server::files::{
     self, CloneMethod as PlatformCloneMethod, CopyFallback as PlatformCopyFallback, EntryKind,
-    FileIdentity, OBJECT_FILE_MODE, ResolveMode, RestrictError, RestrictedDir, RootHandle,
-    StageError, StageFailure,
+    FileIdentity, OBJECT_FILE_MODE, ResolveMode, RestrictError, RestrictedDir, StageError,
+    StageFailure, VaultHandle,
 };
 use vaultsyncd_platform_linux_server::watcher::{DirWatcher, WatchConfig, WatchError, WatchSignal};
 use vaultsyncd_server_core::objects::ContentDigest;
@@ -32,16 +32,16 @@ use vaultsyncd_server_core::ports::work_tree::{
     WorkTreeError, WorkTreePort,
 };
 
-/// Root 工作目录的只读观察端口（Linux）。
+/// Vault 工作目录的只读观察端口（Linux）。
 pub struct LinuxWorkTree {
-    root: Arc<RootHandle>,
+    vault: Arc<VaultHandle>,
 }
 
 impl LinuxWorkTree {
-    /// 以已打开的 Root 句柄建立端口。
+    /// 以已打开的 Vault 句柄建立端口。
     #[must_use]
-    pub fn new(root: Arc<RootHandle>) -> Self {
-        LinuxWorkTree { root }
+    pub fn new(vault: Arc<VaultHandle>) -> Self {
+        LinuxWorkTree { vault }
     }
 }
 
@@ -83,7 +83,7 @@ fn map_restrict(path: &str, error: &RestrictError) -> WorkTreeError {
             path: path.to_owned(),
             detail: error.to_string(),
         },
-        RestrictError::InvalidRelativePath(_) | RestrictError::EscapesRoot { .. } => {
+        RestrictError::InvalidRelativePath(_) | RestrictError::EscapesVault { .. } => {
             WorkTreeError::InvalidPath {
                 detail: error.to_string(),
             }
@@ -97,14 +97,14 @@ fn map_restrict(path: &str, error: &RestrictError) -> WorkTreeError {
 
 impl WorkTreePort for LinuxWorkTree {
     fn list_dir(&mut self, dir: &str) -> Result<WorkDirListing, WorkTreeError> {
-        // 每列一个目录核对一次 Root 身份（挂载漂移时整 Root 暂停，不推导删除）。
-        self.root
+        // 每列一个目录核对一次 Vault 身份（挂载漂移时整 Vault 暂停，不推导删除）。
+        self.vault
             .verify()
-            .map_err(|error| WorkTreeError::RootUnavailable {
+            .map_err(|error| WorkTreeError::VaultUnavailable {
                 detail: error.to_string(),
             })?;
         let raw = self
-            .root
+            .vault
             .list_dir(Path::new(dir))
             .map_err(|error| map_restrict(dir, &error))?;
         let mut entries = Vec::with_capacity(raw.len());
@@ -125,13 +125,13 @@ impl WorkTreePort for LinuxWorkTree {
     }
 
     fn observe_dir(&mut self, dir: &str) -> Result<Option<DirIdentity>, WorkTreeError> {
-        // 列一个目录之前先核对挂载健康（身份、子挂载、权限）：漂移 = Root 不可用，不推导删除。
-        self.root
+        // 列一个目录之前先核对挂载健康（身份、子挂载、权限）：漂移 = Vault 不可用，不推导删除。
+        self.vault
             .verify()
-            .map_err(|error| WorkTreeError::RootUnavailable {
+            .map_err(|error| WorkTreeError::VaultUnavailable {
                 detail: error.to_string(),
             })?;
-        match self.root.identity_at(Path::new(dir)) {
+        match self.vault.identity_at(Path::new(dir)) {
             Ok(None) => Ok(None),
             Ok(Some(identity)) if identity.is_directory() => Ok(Some(DirIdentity {
                 device: file_key(&identity).device,
@@ -147,7 +147,7 @@ impl WorkTreePort for LinuxWorkTree {
     }
 
     fn observe(&mut self, path: &str) -> Result<WorkObservation, WorkTreeError> {
-        match self.root.identity_at(Path::new(path)) {
+        match self.vault.identity_at(Path::new(path)) {
             Ok(None) => Ok(WorkObservation::Absent),
             Ok(Some(identity)) if identity.is_regular_file() => {
                 Ok(WorkObservation::File(stamp_of(&identity)))
@@ -182,28 +182,28 @@ pub fn hint_of(signal: WatchSignal) -> WatchHint {
     }
 }
 
-/// 一个 Root 的 inotify 监视（Linux）：把内核事件转成线索交给 [`FollowDriver`]。
+/// 一个 Vault 的 inotify 监视（Linux）：把内核事件转成线索交给 [`FollowDriver`]。
 ///
-/// 使用顺序：**先** [`open`](RootWatcher::open) 建立监视，**再**让驱动器做启动补扫——监视建立之前的变化
+/// 使用顺序：**先** [`open`](VaultWatcher::open) 建立监视，**再**让驱动器做启动补扫——监视建立之前的变化
 /// 没有事件，只能靠那次补扫发现。
-pub struct RootWatcher {
-    root: Arc<RootHandle>,
+pub struct VaultWatcher {
+    vault: Arc<VaultHandle>,
     watcher: DirWatcher,
 }
 
-impl RootWatcher {
-    /// 递归登记 Root 内全部目录；登记不了的目录以 [`WatchHint::Gap`] 形式返回（只能靠周期扫描覆盖）。
+impl VaultWatcher {
+    /// 递归登记 Vault 内全部目录；登记不了的目录以 [`WatchHint::Gap`] 形式返回（只能靠周期扫描覆盖）。
     ///
     /// # Errors
     ///
     /// 创建 inotify 实例失败。
     pub fn open(
-        root: Arc<RootHandle>,
+        vault: Arc<VaultHandle>,
         config: WatchConfig,
     ) -> Result<(Self, Vec<WatchHint>), WatchError> {
-        let (watcher, gaps) = DirWatcher::open(&root, config)?;
+        let (watcher, gaps) = DirWatcher::open(&vault, config)?;
         let hints = gaps.into_iter().map(hint_of).collect();
-        Ok((RootWatcher { root, watcher }, hints))
+        Ok((VaultWatcher { vault, watcher }, hints))
     }
 
     /// 等待最多 `timeout` 读取事件，把线索记入驱动器；返回收到的线索数。
@@ -217,7 +217,7 @@ impl RootWatcher {
         now_ms: u64,
         timeout: Duration,
     ) -> Result<usize, WatchError> {
-        let signals = self.watcher.poll(&self.root, timeout)?;
+        let signals = self.watcher.poll(&self.vault, timeout)?;
         let count = signals.len();
         for signal in signals {
             driver.push_hint(hint_of(signal), now_ms);
@@ -232,18 +232,18 @@ impl RootWatcher {
     }
 }
 
-/// 对象区字节层端口（Linux）：源文件经 Root 句柄读取，候选建在对象区 staging 目录。
+/// 对象区字节层端口（Linux）：源文件经 Vault 句柄读取，候选建在对象区 staging 目录。
 pub struct LinuxObjectPort {
-    root: Arc<RootHandle>,
+    vault: Arc<VaultHandle>,
     objects: std::path::PathBuf,
 }
 
 impl LinuxObjectPort {
-    /// 以 Root 句柄与对象区根目录建立端口。
+    /// 以 Vault 句柄与对象区根目录建立端口。
     #[must_use]
-    pub fn new(root: Arc<RootHandle>, objects: impl Into<std::path::PathBuf>) -> Self {
+    pub fn new(vault: Arc<VaultHandle>, objects: impl Into<std::path::PathBuf>) -> Self {
         LinuxObjectPort {
-            root,
+            vault,
             objects: objects.into(),
         }
     }
@@ -285,7 +285,7 @@ impl ObjectBlobPort for LinuxObjectPort {
             })?
             .to_owned();
         let opened = self
-            .root
+            .vault
             .open_read(source)
             .map_err(|error| BlobError::SourceUnreadable {
                 detail: error.to_string(),
@@ -491,9 +491,9 @@ fn map_stage(error: &StageError) -> BlobError {
 fn storage_failure_of_restrict(error: &RestrictError) -> StorageFailure {
     let source = match error {
         RestrictError::PermissionDenied { .. } => return StorageFailure::PermissionDenied,
-        RestrictError::OpenRoot { source, .. }
+        RestrictError::OpenVault { source, .. }
         | RestrictError::Resolve { source, .. }
-        | RestrictError::EscapesRoot { source, .. }
+        | RestrictError::EscapesVault { source, .. }
         | RestrictError::SymlinkRejected { source, .. }
         | RestrictError::NotFound { source, .. }
         | RestrictError::AlreadyExists { source, .. }

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use vaultsyncd_domain::ids::{
-    BindingId, DeviceId, EntryId, ID_LEN, OpId, RootId, ServerId, TxId, VersionId,
+    BindingId, DeviceId, EntryId, ID_LEN, OpId, ServerId, TxId, VaultId, VersionId,
 };
 use vaultsyncd_domain::version::ServerEpoch;
 
@@ -64,8 +64,8 @@ pub(crate) fn device_id(marker: u8) -> DeviceId {
     identity(marker, DeviceId::from_bytes)
 }
 
-pub(crate) fn root_id(marker: u8) -> RootId {
-    identity(marker, RootId::from_bytes)
+pub(crate) fn vault_id(marker: u8) -> VaultId {
+    identity(marker, VaultId::from_bytes)
 }
 
 pub(crate) fn entry_id(marker: u8) -> EntryId {
@@ -107,6 +107,30 @@ pub(crate) async fn enqueue_op(
     .expect("入队测试操作");
 }
 
+/// 在只有 0001 的旧库里写入绑定：那一版列名是 `root_id`，S140 的迁移 0013 才改成 `vault_id`。
+///
+/// 升级类测试要构造“旧客户端建出的库”，所以这里必须写旧列名，不能复用当前写接口。
+pub(crate) async fn seed_binding_at_v1(database: &Database, marker: u8) -> BindingId {
+    let id = binding_id(marker);
+    let mut tx = database.begin_write().await.expect("开始写事务");
+    sqlx::query(
+        "INSERT INTO bindings \
+         (id, server_id, device_id, root_id, local_path, cache_path, mode, rules_version, server_epoch) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'on_demand', 'rules-v1', 4)",
+    )
+    .bind(id.as_bytes().as_slice())
+    .bind(server_id(0x01).as_bytes().as_slice())
+    .bind(device_id(0x02).as_bytes().as_slice())
+    .bind(vault_id(0x03).as_bytes().as_slice())
+    .bind(format!(r"C:\vaultsyncd-test-{marker:02x}"))
+    .bind(format!(r"C:\vaultsyncd-test-{marker:02x}\.cache"))
+    .execute(&mut *tx)
+    .await
+    .expect("写 0001 版测试绑定");
+    tx.commit().await.expect("提交 0001 版测试绑定");
+    id
+}
+
 /// 建一个测试绑定并提交，返回它的身份。`local_path` 带上标记，避免两个绑定看起来一样。
 pub(crate) async fn seed_binding(database: &Database, marker: u8) -> BindingId {
     let id = binding_id(marker);
@@ -117,7 +141,7 @@ pub(crate) async fn seed_binding(database: &Database, marker: u8) -> BindingId {
             id,
             server: server_id(0x01),
             device: device_id(0x02),
-            root: root_id(0x03),
+            vault: vault_id(0x03),
             local_path: format!(r"C:\vaultsyncd-test-{marker:02x}"),
             cache_path: format!(r"C:\vaultsyncd-test-{marker:02x}\.cache"),
             mode: SyncMode::OnDemand,

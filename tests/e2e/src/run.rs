@@ -32,7 +32,7 @@ use vaultsyncd_local_ipc::{
     },
     version,
 };
-use vaultsyncd_platform_windows::{files::RootHandle, ipc::Endpoint};
+use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 use vaultsyncd_protocol::generated::{
     EntryKind, OperationState, RecoveryItem, RecoveryPage, SessionIssued, SnapshotEntry,
 };
@@ -61,8 +61,8 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 struct Fixture {
     /// 宿主侧服务端地址（脚本会改写成客体回环隧道地址）。
     url: String,
-    /// Root 身份。
-    root: String,
+    /// Vault 身份。
+    vault: String,
     /// owner 会话（编排器自己的 HTTP 客户端用它读取快照/历史/回收站）。
     issued: SessionIssued,
     /// 测试账号与口令（仅用于让真实 agent 经 `--login-stdin` 登录）。
@@ -71,7 +71,7 @@ struct Fixture {
     password: String,
     /// 服务端二进制版本（宿主 helper 的 `CARGO_PKG_VERSION`）。
     server_version: String,
-    /// 服务端 Root 初始内容（路径、摘要、大小）。
+    /// 服务端 Vault 初始内容（路径、摘要、大小）。
     seeded: Vec<Seeded>,
     /// 服务端工作目录绝对路径（宿主侧收尾核对用）。
     work_dir: String,
@@ -96,7 +96,7 @@ struct Client {
     spec: ClientSpec,
     device_id: String,
     binding_id: String,
-    root: PathBuf,
+    vault: PathBuf,
     cache: PathBuf,
     state: PathBuf,
     config: PathBuf,
@@ -119,7 +119,7 @@ impl Drop for ChildGuard {
 /// 编排状态。
 struct Run {
     api: Api,
-    root: String,
+    vault: String,
     proxy: Proxy,
     fixture: Fixture,
     agent: PathBuf,
@@ -165,7 +165,7 @@ struct ClientReport {
     mode: String,
     device_id: String,
     binding_id: String,
-    root: String,
+    vault: String,
     state_dir: String,
     agent_log: String,
     agent_version: Option<String>,
@@ -303,7 +303,7 @@ async fn round(options: &Options, scenario: &Scenario) -> Result<Report> {
     api.auth()
         .install(Credentials::from_issued(&fixture.issued)?);
     // 经真实 TLS 入口确认服务端可达，并核对宿主种子内容确实已经是服务端命名空间事实。
-    let seeded = entries(&api, &fixture.root).await?;
+    let seeded = entries(&api, &fixture.vault).await?;
     let seeded_paths = path_map(&seeded)?;
     for seed in &fixture.seeded {
         let entry = seeded_paths
@@ -320,7 +320,7 @@ async fn round(options: &Options, scenario: &Scenario) -> Result<Report> {
         }
     }
     println!(
-        "check=pass https_reachable_and_non_empty_server_root seeded={}",
+        "check=pass https_reachable_and_non_empty_server_vault seeded={}",
         fixture.seeded.len()
     );
 
@@ -330,7 +330,7 @@ async fn round(options: &Options, scenario: &Scenario) -> Result<Report> {
     }
     let mut run = Run {
         api,
-        root: fixture.root.clone(),
+        vault: fixture.vault.clone(),
         proxy,
         fixture: fixture.clone(),
         agent: options.agent.clone(),
@@ -420,7 +420,7 @@ async fn round(options: &Options, scenario: &Scenario) -> Result<Report> {
                 mode: client.spec.mode.as_str().to_owned(),
                 device_id: client.device_id.clone(),
                 binding_id: client.binding_id.clone(),
-                root: client.root.display().to_string(),
+                vault: client.vault.display().to_string(),
                 state_dir: client.state.display().to_string(),
                 agent_log: client.log.display().to_string(),
                 agent_version: client.agent_version.clone(),
@@ -437,7 +437,7 @@ async fn round(options: &Options, scenario: &Scenario) -> Result<Report> {
     println!(
         "check=pass topology_one_guest_three_isolated_identities sequential_agent_processes=1"
     );
-    for warning in run.cleanup(&fixture.root) {
+    for warning in run.cleanup(&fixture.vault) {
         println!("check=warn cleanup {warning}");
     }
     erase_test_credential(SERVER_ID);
@@ -466,10 +466,10 @@ fn topology(guest_count: u32) -> Topology {
 
 fn prepare_client(run_dir: &Path, spec: &ClientSpec) -> Result<Client> {
     let base = run_dir.join("clients").join(&spec.id);
-    let root = base.join("root");
+    let vault = base.join("vault");
     let cache = base.join("cache");
     let state = base.join("state");
-    for path in [&root, &cache, &state] {
+    for path in [&vault, &cache, &state] {
         fs::create_dir_all(path)?;
     }
     let config = base.join("agent.json");
@@ -478,7 +478,7 @@ fn prepare_client(run_dir: &Path, spec: &ClientSpec) -> Result<Client> {
         spec: spec.clone(),
         device_id: id32(),
         binding_id: id32(),
-        root,
+        vault,
         cache,
         state,
         config,
@@ -496,7 +496,7 @@ impl Run {
         for (client_id, files) in local {
             let index = self.index(client_id)?;
             for file in files {
-                write_file(&self.clients[index].root, &file.path, &file.content)?;
+                write_file(&self.clients[index].vault, &file.path, &file.content)?;
             }
         }
         self.converge().await?;
@@ -584,7 +584,7 @@ impl Run {
         }
         for (client_id, content) in contents {
             let index = self.index(client_id)?;
-            write_file(&self.clients[index].root, path, content)?;
+            write_file(&self.clients[index].vault, path, content)?;
         }
         self.converge().await?;
         let rows = self.entries().await?;
@@ -631,7 +631,7 @@ impl Run {
     ) -> Result<Vec<String>> {
         // 文件来自服务端初始内容：完整客户端已物化，按需端在首次导入后只有占位。
         let mover = self.index(renamer)?;
-        if !self.clients[mover].root.join(from).exists() {
+        if !self.clients[mover].vault.join(from).exists() {
             return Err(format!("{} 本地缺少重命名源：{from}", self.clients[mover].spec.id).into());
         }
         let holder = self.index(placeholder_client)?;
@@ -639,8 +639,8 @@ impl Run {
         self.wait_idle(holder).await?;
         self.stop_client(holder).await?;
         let before = snapshot_entry(&self.entries().await?, from)?;
-        let before_identity = self.clients[holder].root.inspect_or_err(from)?.identity;
-        let on_disk = placeholder_on_disk(&self.clients[holder].root, from)?;
+        let before_identity = self.clients[holder].vault.inspect_or_err(from)?.identity;
+        let on_disk = placeholder_on_disk(&self.clients[holder].vault, from)?;
         if self.clients[holder].spec.mode == Mode::OnDemand && on_disk != Some(0) {
             return Err(format!("按需端在重命名前已下载内容：on_disk={on_disk:?}").into());
         }
@@ -649,8 +649,8 @@ impl Run {
 
         self.start_client(mover).await?;
         fs::rename(
-            self.clients[mover].root.join(from),
-            self.clients[mover].root.join(to),
+            self.clients[mover].vault.join(from),
+            self.clients[mover].vault.join(to),
         )?;
         self.wait_server("重命名提交", |rows| {
             let paths = path_map(rows).ok();
@@ -672,11 +672,11 @@ impl Run {
         if after.version_id != version_id {
             return Err("重命名改变了固定版本".into());
         }
-        let after_identity = self.clients[holder].root.inspect_or_err(to)?.identity;
+        let after_identity = self.clients[holder].vault.inspect_or_err(to)?.identity;
         if before_identity != after_identity {
             return Err("按需端重命名后本地文件身份变化".into());
         }
-        let after_on_disk = placeholder_on_disk(&self.clients[holder].root, to)?;
+        let after_on_disk = placeholder_on_disk(&self.clients[holder].vault, to)?;
         if self.clients[holder].spec.mode == Mode::OnDemand && after_on_disk != Some(0) {
             return Err(format!("按需端为重命名下载了内容：on_disk={after_on_disk:?}").into());
         }
@@ -703,12 +703,12 @@ impl Run {
             .hash
             .ok_or_else(|| format!("删除目标没有固定版本：{path}"))?;
         let modifier_index = self.index(modifier)?;
-        write_file(&self.clients[modifier_index].root, path, modified_content)?;
+        write_file(&self.clients[modifier_index].vault, path, modified_content)?;
         let modified = hash_of(modified_content.as_bytes());
 
         let deleter_index = self.index(deleter)?;
         self.start_client(deleter_index).await?;
-        fs::remove_file(self.clients[deleter_index].root.join(path))?;
+        fs::remove_file(self.clients[deleter_index].vault.join(path))?;
         self.wait_server("删除提交", |rows| {
             path_map(rows).is_ok_and(|paths| !paths.contains_key(path))
         })
@@ -744,7 +744,7 @@ impl Run {
             return Err("回收站没有保留被删除内容".into());
         }
         // 修改方本地必须真的保留那份字节（可能在冲突副本名下）。
-        if !self.clients[modifier_index].root.find_content(&modified)? {
+        if !self.clients[modifier_index].vault.find_content(&modified)? {
             return Err("修改方本地找不到保留的并发修改内容".into());
         }
         Ok(vec![
@@ -764,7 +764,7 @@ impl Run {
         // 先让 put 目标以初始内容存在并收敛。
         let client = self.index(&put.client)?;
         self.start_client(client).await?;
-        write_file(&self.clients[client].root, &put.path, &put.initial_content)?;
+        write_file(&self.clients[client].vault, &put.path, &put.initial_content)?;
         let initial = hash_of(put.initial_content.as_bytes());
         self.wait_server("lost-response put 初始内容", |rows| {
             hash_index(rows)
@@ -778,7 +778,7 @@ impl Run {
         let before = self.proxy.events().len();
         self.start_client(client).await?;
         self.proxy.arm_drop("put_content", 1);
-        write_file(&self.clients[client].root, &put.path, &put.content)?;
+        write_file(&self.clients[client].vault, &put.path, &put.content)?;
         let dropped = self.wait_drop("put_content", before).await?;
         if dropped.state.as_deref() != Some("committed") || !dropped.dropped {
             return Err(format!("put 丢响应前的提交不是 committed：{dropped:?}").into());
@@ -788,7 +788,7 @@ impl Run {
         if query.state.as_deref() != Some("committed")
             || query.revision != dropped.revision
             || query.version_id != dropped.version_id
-            || query.root_seq != dropped.root_seq
+            || query.vault_seq != dropped.vault_seq
         {
             return Err(format!(
                 "put 查询结果与丢掉的 ACK 不同：dropped={dropped:?} query={query:?}"
@@ -800,12 +800,12 @@ impl Run {
         self.converge().await?;
         let final_hash = hash_of(put.content.as_bytes());
         let request = replay_request(&dropped)?;
-        let replayed = sync::submit(&self.api, &self.root, &request).await?;
+        let replayed = sync::submit(&self.api, &self.vault, &request).await?;
         if replayed.replayed != Some(true)
             || replayed.state != OperationState::Committed
             || replayed.revision != dropped.revision
             || replayed.version_id != dropped.version_id
-            || replayed.root_seq != dropped.root_seq
+            || replayed.vault_seq != dropped.vault_seq
         {
             return Err(format!("put 按原 OpId 重试不是相同结果：{replayed:?}").into());
         }
@@ -819,13 +819,13 @@ impl Run {
             return Err("put 丢响应改变了 EntryId".into());
         }
         evidence.push(format!(
-            "put op_id={} dropped_ack_revision={:?} query_same=true replay_same=true version_id={:?} root_seq={:?}",
-            dropped.op_id, dropped.revision, dropped.version_id, dropped.root_seq
+            "put op_id={} dropped_ack_revision={:?} query_same=true replay_same=true version_id={:?} vault_seq={:?}",
+            dropped.op_id, dropped.revision, dropped.version_id, dropped.vault_seq
         ));
 
         // delete：让目标存在并收敛，然后丢弃删除提交的响应。
         self.start_client(client).await?;
-        write_file(&self.clients[client].root, &delete.path, &delete.content)?;
+        write_file(&self.clients[client].vault, &delete.path, &delete.content)?;
         let deleted = hash_of(delete.content.as_bytes());
         self.wait_server("lost-response delete 初始内容", |rows| {
             hash_index(rows)
@@ -838,7 +838,7 @@ impl Run {
         let before = self.proxy.events().len();
         self.start_client(client).await?;
         self.proxy.arm_drop("delete", 1);
-        fs::remove_file(self.clients[client].root.join(&delete.path))?;
+        fs::remove_file(self.clients[client].vault.join(&delete.path))?;
         let dropped = self.wait_drop("delete", before).await?;
         if dropped.state.as_deref() != Some("committed") || !dropped.dropped {
             return Err("delete 丢响应前的提交不是 committed".into());
@@ -846,7 +846,7 @@ impl Run {
         let query = self.wait_query(&dropped.op_id).await?;
         if query.state.as_deref() != Some("committed")
             || query.revision != dropped.revision
-            || query.root_seq != dropped.root_seq
+            || query.vault_seq != dropped.vault_seq
         {
             return Err(format!(
                 "delete 查询结果与丢掉的 ACK 不同：dropped={dropped:?} query={query:?}"
@@ -857,11 +857,11 @@ impl Run {
         self.stop_client(client).await?;
         self.converge().await?;
         let request = replay_request(&dropped)?;
-        let replayed = sync::submit(&self.api, &self.root, &request).await?;
+        let replayed = sync::submit(&self.api, &self.vault, &request).await?;
         if replayed.replayed != Some(true)
             || replayed.state != OperationState::Committed
             || replayed.revision != dropped.revision
-            || replayed.root_seq != dropped.root_seq
+            || replayed.vault_seq != dropped.vault_seq
         {
             return Err(format!("delete 按原 OpId 重试不是相同结果：{replayed:?}").into());
         }
@@ -880,8 +880,8 @@ impl Run {
             return Err("delete 丢响应后回收站没有保留内容".into());
         }
         evidence.push(format!(
-            "delete op_id={} dropped_ack_revision={:?} query_same=true replay_same=true root_seq={:?}",
-            dropped.op_id, dropped.revision, dropped.root_seq
+            "delete op_id={} dropped_ack_revision={:?} query_same=true replay_same=true vault_seq={:?}",
+            dropped.op_id, dropped.revision, dropped.vault_seq
         ));
         Ok(evidence)
     }
@@ -942,7 +942,7 @@ impl Run {
             let server: BTreeSet<String> = path_map(&rows)?.keys().cloned().collect();
             let mut matched = true;
             for index in 0..self.clients.len() {
-                let local = self.clients[index].root.paths()?;
+                let local = self.clients[index].vault.paths()?;
                 if local != server {
                     matched = false;
                     let missing: Vec<_> = server.difference(&local).take(5).cloned().collect();
@@ -975,7 +975,7 @@ impl Run {
         let mut materialized = 0usize;
         let mut placeholders = 0usize;
         for client in &self.clients {
-            let local = client.root.paths()?;
+            let local = client.vault.paths()?;
             client_paths.insert(client.spec.id.clone(), local.len());
             if local != server_keys {
                 let missing: Vec<_> = server_keys.difference(&local).take(8).cloned().collect();
@@ -986,8 +986,8 @@ impl Run {
                 )
                 .into());
             }
-            let root = RootHandle::open(&client.root)?;
-            let report = root.scan();
+            let vault = VaultHandle::open(&client.vault)?;
+            let report = vault.scan();
             if !report.permits_missing_comparison() {
                 return Err(format!("{} 的最终扫描不完整", client.spec.id).into());
             }
@@ -1014,7 +1014,7 @@ impl Run {
                         placeholders += 1;
                     }
                     _ => {
-                        let bytes = fs::read(client.root.join(&entry.path))?;
+                        let bytes = fs::read(client.vault.join(&entry.path))?;
                         let actual = hash_of(&bytes);
                         if Some(actual.as_str()) != expected.hash.as_deref() {
                             return Err(format!(
@@ -1106,13 +1106,13 @@ impl Run {
     /// 成功收尾：停止 agent、注销 CFAPI 根并删除本 run 自己的客户端目录。
     ///
     /// 只处理 `run-e2e-<pid>` 下的三个客户端；不触碰其他卡的历史样本或端口。
-    fn cleanup(&mut self, root_id: &str) -> Vec<String> {
+    fn cleanup(&mut self, vault_id: &str) -> Vec<String> {
         let mut warnings = Vec::new();
         for index in 0..self.clients.len() {
             if let Err(error) = self.stop_client_blocking(index) {
                 warnings.push(format!("stop {}: {error}", self.clients[index].spec.id));
             }
-            if let Err(error) = remove_client(&self.clients[index], root_id) {
+            if let Err(error) = remove_client(&self.clients[index], vault_id) {
                 warnings.push(format!("cleanup {}: {error}", self.clients[index].spec.id));
             }
         }
@@ -1131,17 +1131,17 @@ impl Run {
     }
 
     async fn entries(&self) -> Result<Vec<SnapshotEntry>> {
-        entries(&self.api, &self.root).await
+        entries(&self.api, &self.vault).await
     }
 
     async fn trash(&self) -> Result<Vec<RecoveryItem>> {
-        recovery(&self.api, &format!("/v1/roots/{}/trash", self.root)).await
+        recovery(&self.api, &format!("/v1/vaults/{}/trash", self.vault)).await
     }
 
     async fn history(&self, entry: &str) -> Result<Vec<RecoveryItem>> {
         recovery(
             &self.api,
-            &format!("/v1/roots/{}/entries/{entry}/history", self.root),
+            &format!("/v1/vaults/{}/entries/{entry}/history", self.vault),
         )
         .await
     }
@@ -1308,12 +1308,13 @@ fn path_of(entry: &SnapshotEntry, by_id: &BTreeMap<&str, &SnapshotEntry>) -> Res
     Ok(components.join("/"))
 }
 
-async fn entries(api: &Api, root: &str) -> Result<Vec<SnapshotEntry>> {
-    let (snapshot, _) = sync::snapshot(api, root).await?;
+async fn entries(api: &Api, vault: &str) -> Result<Vec<SnapshotEntry>> {
+    let (snapshot, _) = sync::snapshot(api, vault).await?;
     let mut all = Vec::new();
     let mut cursor = None;
     loop {
-        let page = sync::snapshot_page(api, root, &snapshot.snapshot_id, cursor.as_deref()).await?;
+        let page =
+            sync::snapshot_page(api, vault, &snapshot.snapshot_id, cursor.as_deref()).await?;
         all.extend(page.entries);
         cursor = page.next_cursor;
         if cursor.is_none() {
@@ -1387,8 +1388,8 @@ fn write_config(client: &Client, fixture: &Fixture) -> Result<()> {
         "poll_millis": 250,
         "bindings": [{
             "id": client.binding_id,
-            "root_id": fixture.root,
-            "path": client.root,
+            "vault_id": fixture.vault,
+            "path": client.vault,
             "cache": client.cache,
             "mode": client.spec.mode.as_str(),
         }],
@@ -1646,8 +1647,8 @@ fn stop(client: &mut Client) -> Result<()> {
     }
 }
 
-fn write_file(root: &Path, relative: &str, content: &str) -> Result<()> {
-    let target = root.join(relative);
+fn write_file(vault: &Path, relative: &str, content: &str) -> Result<()> {
+    let target = vault.join(relative);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1741,7 +1742,7 @@ fn one_line(text: &str) -> String {
     text.replace(['\r', '\n'], " ")
 }
 
-trait RootExt {
+trait VaultExt {
     fn paths(&self) -> Result<BTreeSet<String>>;
     fn inspect_or_err(
         &self,
@@ -1750,10 +1751,10 @@ trait RootExt {
     fn find_content(&self, hash: &str) -> Result<bool>;
 }
 
-impl RootExt for PathBuf {
+impl VaultExt for PathBuf {
     fn paths(&self) -> Result<BTreeSet<String>> {
-        let root = RootHandle::open(self)?;
-        let report = root.scan();
+        let vault = VaultHandle::open(self)?;
+        let report = vault.scan();
         if !report.permits_missing_comparison() {
             return Err(format!("本地扫描不完整：{:?}", report.health).into());
         }
@@ -1769,12 +1770,12 @@ impl RootExt for PathBuf {
         &self,
         relative: &str,
     ) -> Result<vaultsyncd_platform_windows::files::EntryMetadata> {
-        Ok(RootHandle::open(self)?.inspect(relative)?)
+        Ok(VaultHandle::open(self)?.inspect(relative)?)
     }
 
     fn find_content(&self, hash: &str) -> Result<bool> {
-        let root = RootHandle::open(self)?;
-        let report = root.scan();
+        let vault = VaultHandle::open(self)?;
+        let report = vault.scan();
         for entry in report.entries {
             let Some(metadata) = entry.metadata else {
                 continue;
@@ -1799,25 +1800,25 @@ impl RootExt for PathBuf {
     }
 }
 
-fn placeholder_on_disk(root: &Path, relative: &str) -> Result<Option<u64>> {
-    let metadata = RootHandle::open(root)?.inspect(relative)?;
+fn placeholder_on_disk(vault: &Path, relative: &str) -> Result<Option<u64>> {
+    let metadata = VaultHandle::open(vault)?.inspect(relative)?;
     Ok(metadata.cloud.map(|cloud| cloud.on_disk))
 }
 
-fn remove_client(client: &Client, root_id: &str) -> Result<()> {
+fn remove_client(client: &Client, vault_id: &str) -> Result<()> {
     use std::sync::Arc;
-    use vaultsyncd_domain::ids::{BindingId, RootId};
+    use vaultsyncd_domain::ids::{BindingId, VaultId};
     use vaultsyncd_platform_windows::cfapi::{
         adapter::{Adapter, MetadataOnly},
         catalog::Catalog,
     };
 
-    if let Ok(root) = RootHandle::open(&client.root) {
-        let report = root.scan();
+    if let Ok(vault) = VaultHandle::open(&client.vault) {
+        let report = vault.scan();
         let mut entries = report.entries;
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.path.matches('/').count()));
         for entry in entries {
-            let target = client.root.join(&entry.path);
+            let target = client.vault.join(&entry.path);
             let is_directory = entry
                 .metadata
                 .as_ref()
@@ -1828,20 +1829,20 @@ fn remove_client(client: &Client, root_id: &str) -> Result<()> {
                 let _ = fs::remove_file(target);
             }
         }
-        drop(root);
+        drop(vault);
     }
     let binding = BindingId::from_hex(&client.binding_id)?;
-    let root = RootId::from_hex(root_id)?;
+    let vault = VaultId::from_hex(vault_id)?;
     let mut adapter = Adapter::connect(
-        &client.root,
-        Catalog::new(binding, root),
+        &client.vault,
+        Catalog::new(binding, vault),
         Arc::new(MetadataOnly),
     )?;
     adapter.unregister()?;
     drop(adapter);
     let end = Instant::now() + Duration::from_secs(10);
     loop {
-        match fs::remove_dir_all(&client.root) {
+        match fs::remove_dir_all(&client.vault) {
             Ok(()) => break,
             Err(error) if Instant::now() >= end => return Err(error.into()),
             Err(_) => std::thread::sleep(Duration::from_millis(100)),

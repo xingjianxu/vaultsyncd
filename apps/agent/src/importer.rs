@@ -120,10 +120,10 @@ impl Importer {
     pub(crate) fn adopt(&self, path: &str, fixed: &VersionPin) -> Result<(), PortError> {
         let adapter = self.adapter.lock().map_err(error)?;
         let catalog = adapter.catalog();
-        let root = catalog.read().map_err(error)?.root;
+        let vault = catalog.read().map_err(error)?.vault;
         let id = Identity {
             binding: self.local.binding,
-            root,
+            vault,
             entry: EntryId::from_hex(&fixed.entry).map_err(error)?,
             version: VersionId::from_hex(&fixed.version).map_err(error)?,
         };
@@ -148,23 +148,23 @@ impl ImportLocal for Importer {
         &'a self,
         binding: &'a BindingRecord,
         other: &'a [String],
-    ) -> PortFuture<'a, Result<RootAdmission, PortError>> {
+    ) -> PortFuture<'a, Result<VaultAdmission, PortError>> {
         Box::pin(async move {
-            self.local.root.verify().map_err(error)?;
-            let state = vaultsyncd_platform_windows::files::RootHandle::open(&self.local.cache)
+            self.local.vault.verify().map_err(error)?;
+            let state = vaultsyncd_platform_windows::files::VaultHandle::open(&self.local.cache)
                 .map_err(error)?;
-            let mut disjoint = !self.local.root.overlaps(&state);
+            let mut disjoint = !self.local.vault.overlaps(&state);
             for p in other {
                 let other =
-                    vaultsyncd_platform_windows::files::RootHandle::open(std::path::Path::new(p))
+                    vaultsyncd_platform_windows::files::VaultHandle::open(std::path::Path::new(p))
                         .map_err(error)?;
-                disjoint &= !self.local.root.overlaps(&other);
+                disjoint &= !self.local.vault.overlaps(&other);
             }
             if binding.id != self.local.binding {
                 return Err(error("binding mismatch"));
             }
-            Ok(RootAdmission {
-                identity: format!("{:?}", self.local.root.identity()),
+            Ok(VaultAdmission {
+                identity: format!("{:?}", self.local.vault.identity()),
                 healthy: true,
                 directory: true,
                 disjoint,
@@ -177,7 +177,7 @@ impl ImportLocal for Importer {
             if binding != self.local.binding {
                 return Err(error("binding mismatch"));
             }
-            let scan = self.local.root.scan();
+            let scan = self.local.vault.scan();
             if !scan.permits_missing_comparison() {
                 return Err(error("incomplete scan"));
             }
@@ -229,7 +229,7 @@ impl ImportLocal for Importer {
             let expected: vaultsyncd_platform_windows::files::controlled::Evidence =
                 serde_json::from_str(&text).map_err(error)?;
             action(&self.local,op,&serde_json::json!({"kind":"preserve","from":from.to_string(),"to":to.to_string(),"before":expected})).await?;
-            match self.local.root.inspect(&from.to_string()) {
+            match self.local.vault.inspect(&from.to_string()) {
                 Ok(_) => {
                     self.local
                         .native
@@ -277,7 +277,7 @@ impl ImportLocal for Importer {
                 .await?;
                 let meta = self
                     .local
-                    .root
+                    .vault
                     .ensure_directory(&request.path.to_string())
                     .map_err(error)?;
                 let mut physical = meta.identity.volume.to_le_bytes().to_vec();
@@ -339,14 +339,14 @@ impl ImportLocal for Importer {
             }
             let id = Identity {
                 binding: request.binding,
-                root: self
+                vault: self
                     .adapter
                     .lock()
                     .map_err(error)?
                     .catalog()
                     .read()
                     .map_err(error)?
-                    .root,
+                    .vault,
                 entry: EntryId::from_hex(&request.remote.entry_id).map_err(error)?,
                 version: VersionId::from_hex(&fixed.version).map_err(error)?,
             };

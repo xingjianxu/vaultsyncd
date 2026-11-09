@@ -4,8 +4,8 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$script_dir/common.sh"
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
-root=$(repo_root)
-cd "$root"
+vault=$(repo_root)
+cd "$vault"
 # S071/S072/S073 reuse the real server bridge but never run S070's old-sample cleanup test.
 task="${VAULTSYNCD_PROCESS_TASK:-S070}"
 test_package=vaultsyncd-agent
@@ -30,9 +30,9 @@ case "$task" in
         ;;
     *) echo 'unsupported native process task' >&2; exit 1 ;;
 esac
-artifact_dir="$root/artifacts/$task/native-$(date +%s)-$$"
+artifact_dir="$vault/artifacts/$task/native-$(date +%s)-$$"
 mkdir -p "$artifact_dir"
-helper="${VAULTSYNCD_RELEASE_SERVER:-$root/target/debug/examples/release-native-server}"
+helper="${VAULTSYNCD_RELEASE_SERVER:-$vault/target/debug/examples/release-native-server}"
 test -x "$helper" || { echo 'build: nix develop --command cargo build --locked -p vaultsyncd-server-tests --example release-native-server' >&2; exit 1; }
 server_pid=''
 tunnel_pid=''
@@ -64,7 +64,7 @@ tunnel_pid=$!
 sleep .5
 kill -0 "$tunnel_pid" || { cat "$artifact_dir/tunnel.log"; exit 1; }
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
-target_dir="${CARGO_TARGET_DIR:-$root/target}"
+target_dir="${CARGO_TARGET_DIR:-$vault/target}"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent --bin vaultsyncd-agent
 if [ -n "$with_cli" ]; then
     cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-cli --bin vaultsyncd-cli

@@ -2,13 +2,13 @@
 use crate::generated::Capabilities;
 use std::collections::BTreeSet;
 /// 当前远端协议major，与产品和数据库版本独立。
-pub const MAJOR: u32 = 1;
+pub const MAJOR: u32 = 2;
 /// 当前实现的远端协议minor。
 pub const MINOR: u32 = 0;
 /// 当前实现认识的功能标记，未知标记不能自动启用动作。
 pub const KNOWN_FEATURES: &[&str] = &[
     "auth",
-    "roots",
+    "vaults",
     "snapshots",
     "changes",
     "events",
@@ -18,7 +18,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "history",
     "trash",
     "version_leases",
-    "root_admin",
+    "vault_admin",
     "backup_snapshots",
 ];
 /// 协商失败不能发送登录凭据或数据请求。

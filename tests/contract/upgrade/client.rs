@@ -2,14 +2,22 @@
 use super::*;
 #[path = "support.rs"]
 mod support;
-const QUERIES: &[&str] = &[
-    "SELECT json_group_array(json_array(hex(id),hex(server_id),hex(device_id),hex(root_id),local_path,cache_path,mode,rules_version,server_epoch)) FROM bindings",
-    "SELECT json_group_array(json_array(hex(entry_id),generation,dirty,residency,hex(fingerprint),hex(file_identity))) FROM local_entries",
-    "SELECT json_group_array(json_array(hex(op_id),kind,attempts,last_error_code,hex(pinned_version_id))) FROM pending_ops",
-    "SELECT json_group_array(json_array(hex(op_id),priority,due_at,cancelled,halted,offline)) FROM operation_schedule",
-    "SELECT json_group_array(json_array(hex(version_id),hex(digest),size)) FROM agent_versions",
-    "SELECT json_group_array(json_array(dedupe_key,code,state,is_read,occurrences)) FROM notifications",
-];
+/// 状态快照查询；`vault_id` 列在 S140 的迁移 0013 才由 `root_id` 改名，旧库快照必须用旧列名。
+fn queries(column: &str) -> Vec<String> {
+    vec![
+        format!("SELECT json_group_array(json_array(hex(id),hex(server_id),hex(device_id),hex({column}),local_path,cache_path,mode,rules_version,server_epoch)) FROM bindings"),
+        "SELECT json_group_array(json_array(hex(entry_id),generation,dirty,residency,hex(fingerprint),hex(file_identity))) FROM local_entries".to_owned(),
+        "SELECT json_group_array(json_array(hex(op_id),kind,attempts,last_error_code,hex(pinned_version_id))) FROM pending_ops".to_owned(),
+        "SELECT json_group_array(json_array(hex(op_id),priority,due_at,cancelled,halted,offline)) FROM operation_schedule".to_owned(),
+        "SELECT json_group_array(json_array(hex(version_id),hex(digest),size)) FROM agent_versions".to_owned(),
+        "SELECT json_group_array(json_array(dedupe_key,code,state,is_read,occurrences)) FROM notifications".to_owned(),
+    ]
+}
+
+/// 当前 schema 的列名。
+fn column(version: i64) -> &'static str {
+    if version >= 13 { "vault_id" } else { "root_id" }
+}
 #[tokio::test]
 async fn s091_client_upgrade_failure_and_complete_state_rollback() {
     let run = support::Run::new("client");
@@ -28,7 +36,7 @@ async fn s091_client_upgrade_failure_and_complete_state_rollback() {
     let old_version = target_version_of(&previous);
     assert_eq!(old_version, 11);
     let old = Database::open_with(&path, &previous).await.unwrap();
-    let binding = crate::test_support::seed_binding(&old, 0x91).await;
+    let binding = crate::test_support::seed_binding_at_v1(&old, 0x91).await;
     sqlx::query("UPDATE bindings SET local_path=?,cache_path=?")
         .bind(work.to_string_lossy().as_ref())
         .bind(cache.to_string_lossy().as_ref())
@@ -49,9 +57,9 @@ async fn s091_client_upgrade_failure_and_complete_state_rollback() {
     .execute(old.pool())
     .await
     .unwrap();
-    sqlx::query("INSERT INTO notifications(dedupe_key,binding_id,code,state,is_read,occurrences) VALUES('s091-notice',?,'ROOT_UNAVAILABLE','active',1,5)").bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
+    sqlx::query("INSERT INTO notifications(dedupe_key,binding_id,code,state,is_read,occurrences) VALUES('s091-notice',?,'VAULT_UNAVAILABLE','active',1,5)").bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
     old.close().await;
-    let before = support::snapshot(&path, QUERIES).await;
+    let before = support::snapshot(&path, &queries(column(11))).await;
     let broken = support::fault_profile(
         &previous,
         &run.path,
@@ -73,8 +81,20 @@ async fn s091_client_upgrade_failure_and_complete_state_rollback() {
         support::scalar::<i64>(&path, "PRAGMA user_version").await,
         11
     );
-    assert_eq!(support::snapshot(&path, QUERIES).await, before);
-    assert_eq!(support::snapshot(&backup, QUERIES).await, before);
+    assert_eq!(
+        support::snapshot(
+            &path,
+            &queries(column(
+                support::scalar::<i64>(&path, "PRAGMA user_version").await
+            ))
+        )
+        .await,
+        before
+    );
+    assert_eq!(
+        support::snapshot(&backup, &queries(column(11))).await,
+        before
+    );
     assert_eq!(
         support::scalar::<i64>(
             &path,
@@ -86,7 +106,16 @@ async fn s091_client_upgrade_failure_and_complete_state_rollback() {
     let success = Database::open(&path).await.unwrap();
     assert_eq!(success.schema_version(), target_schema_version());
     success.close().await;
-    assert_eq!(support::snapshot(&path, QUERIES).await, before);
+    assert_eq!(
+        support::snapshot(
+            &path,
+            &queries(column(
+                support::scalar::<i64>(&path, "PRAGMA user_version").await
+            ))
+        )
+        .await,
+        before
+    );
     let image = std::fs::read(&path).unwrap();
     assert!(matches!(
         Database::open_with(&path, &previous).await.unwrap_err(),
@@ -116,7 +145,16 @@ async fn s091_client_upgrade_failure_and_complete_state_rollback() {
         Database::open(&path).await.unwrap_err(),
         DbError::SchemaTooNew { .. }
     ));
-    assert_eq!(support::snapshot(&path, QUERIES).await, before);
+    assert_eq!(
+        support::snapshot(
+            &path,
+            &queries(column(
+                support::scalar::<i64>(&path, "PRAGMA user_version").await
+            ))
+        )
+        .await,
+        before
+    );
     // 回退用迁移前DB加同一受控停止区间的工作/缓存整体备份，不运行down SQL、不注销绑定。
     let full = run.path.join("full-before");
     std::fs::create_dir(&full).unwrap();
@@ -128,7 +166,16 @@ async fn s091_client_upgrade_failure_and_complete_state_rollback() {
     let recovered = Database::open_with(&path, &previous).await.unwrap();
     assert_eq!(recovered.schema_version(), 11);
     recovered.close().await;
-    assert_eq!(support::snapshot(&path, QUERIES).await, before);
+    assert_eq!(
+        support::snapshot(
+            &path,
+            &queries(column(
+                support::scalar::<i64>(&path, "PRAGMA user_version").await
+            ))
+        )
+        .await,
+        before
+    );
     assert_eq!(std::fs::read(work.join("dirty")).unwrap(), dirty);
     assert_eq!(std::fs::read(cache.join("complete")).unwrap(), cached);
     assert_eq!(std::fs::read(full.join("dirty")).unwrap(), dirty);

@@ -23,7 +23,7 @@
 //! [`DeleteIntentLog::unfinished_deletes`] 构造并供其他写路径调用
 //! [`SubtreeBusy::check_write`]；本模块在开始删除前也用它拒绝“子树已经在删”的重复请求。
 //!
-//! 恢复（[`recover_delete_root`]）：现场是“路径还在、身份与前提一致”就重做删除，路径已不存在就只补完
+//! 恢复（[`recover_delete_vault`]）：现场是“路径还在、身份与前提一致”就重做删除，路径已不存在就只补完
 //! 事务，被换成别的条目就保留现场等协调，读不到就落 `needs_recovery` 停写。补事务时要求库里的子树
 //! token 仍等于意图里的 token：冻结之后又冒出新的子条目属于异常，不能悄悄一起删掉。
 
@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use vaultsyncd_domain::error::ErrorCode;
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, IntentId, RootId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, IntentId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 
 use crate::commit::intent::{
@@ -41,7 +41,7 @@ use crate::commit::intent::{
 use crate::commit::namespace::{
     hex_decode, hex_encode, is_descendant, take_kind, take_path, validate_path,
 };
-use crate::commit::put::{CommitGateError, RootCommitGate};
+use crate::commit::put::{CommitGateError, VaultCommitGate};
 use crate::ports::intent_log::{DeleteIntentLog, IntentLogError};
 use crate::ports::namespace::{NamespaceError, NamespacePort, PathState};
 use crate::ports::object_store::FileKey;
@@ -120,7 +120,7 @@ impl SubtreeToken {
             }
         };
         feed(b"vaultsyncd.subtree_token.v1");
-        feed(image.root.as_bytes());
+        feed(image.vault.as_bytes());
         feed(&(image.entries.len() as u64).to_be_bytes());
         for item in &image.entries {
             feed(item.entry.as_bytes());
@@ -160,7 +160,7 @@ pub struct SubtreeEntry {
     pub entry: EntryId,
     /// 父目录条目（合成根条目不能删除，因此子树根也有父目录）。
     pub parent: Option<EntryId>,
-    /// Root 内相对路径。
+    /// Vault 内相对路径。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -176,27 +176,27 @@ pub struct SubtreeEntry {
 /// 与“写什么”用的是同一份事实。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubtreeImage {
-    root: EntryId,
+    vault: EntryId,
     entries: Vec<SubtreeEntry>,
 }
 
 impl SubtreeImage {
     /// 校验并构造清单。
     ///
-    /// 不变量：至少一条；恰好一条的 `entry` 等于 `root`；没有重复身份；每条路径都是合法的 Root 内
+    /// 不变量：至少一条；恰好一条的 `entry` 等于 `vault`；没有重复身份；每条路径都是合法的 Vault 内
     /// 相对路径；非根成员的父目录必须在清单里（否则不是一棵连通的子树）。
     ///
     /// # Errors
     ///
     /// 违反上述不变量时返回原因文本（适配器缺陷或坏行，调用方按契约违规处理）。
-    pub fn new(root: EntryId, entries: Vec<SubtreeEntry>) -> Result<Self, String> {
+    pub fn new(vault: EntryId, entries: Vec<SubtreeEntry>) -> Result<Self, String> {
         if entries.is_empty() {
             return Err("子树清单不能为空".to_owned());
         }
-        let roots = entries.iter().filter(|item| item.entry == root).count();
-        if roots != 1 {
+        let vaults = entries.iter().filter(|item| item.entry == vault).count();
+        if vaults != 1 {
             return Err(format!(
-                "子树清单里根条目 {root} 出现 {roots} 次，应恰好一次"
+                "子树清单里根条目 {vault} 出现 {vaults} 次，应恰好一次"
             ));
         }
         let mut seen = std::collections::BTreeSet::new();
@@ -208,11 +208,11 @@ impl SubtreeImage {
         }
         for item in &entries {
             match item.parent {
-                None if item.entry == root => {
-                    return Err("子树根条目缺少父目录：Root 根条目不能被删除".to_owned());
+                None if item.entry == vault => {
+                    return Err("子树根条目缺少父目录：Vault 根条目不能被删除".to_owned());
                 }
                 None => return Err(format!("条目 {} 缺少父目录", item.entry)),
-                Some(parent) if item.entry != root && !seen.contains(&parent) => {
+                Some(parent) if item.entry != vault && !seen.contains(&parent) => {
                     return Err(format!(
                         "条目 {} 的父目录 {parent} 不在清单里：清单不是连通的子树",
                         item.entry
@@ -221,13 +221,13 @@ impl SubtreeImage {
                 Some(_) => {}
             }
         }
-        Ok(SubtreeImage { root, entries })
+        Ok(SubtreeImage { vault, entries })
     }
 
     /// 子树根条目。
     #[must_use]
-    pub fn root(&self) -> EntryId {
-        self.root
+    pub fn vault(&self) -> EntryId {
+        self.vault
     }
 
     /// 清单内容（顺序稳定）。
@@ -295,7 +295,7 @@ pub struct DeleteSnapshot {
     pub revision: u64,
     /// 删除时的父目录条目。
     pub parent: EntryId,
-    /// Root 内相对路径。
+    /// Vault 内相对路径。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -433,8 +433,8 @@ impl DeleteAfter {
 pub struct NewDeleteIntent {
     /// 意图身份（由调用方生成，重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 现场前提。
     pub before: DeleteSnapshot,
     /// 目标。
@@ -447,7 +447,7 @@ impl NewDeleteIntent {
     pub fn prepared(&self) -> DeleteIntent {
         DeleteIntent {
             intent_id: self.intent_id,
-            root: self.root,
+            vault: self.vault,
             before: self.before.clone(),
             after: self.after,
             phase: PutPhase::Prepared,
@@ -460,8 +460,8 @@ impl NewDeleteIntent {
 pub struct DeleteIntent {
     /// 意图身份。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 现场前提（已解码）。
     pub before: DeleteSnapshot,
     /// 目标（已解码）。
@@ -501,11 +501,11 @@ impl DeleteIntent {
 /// 子树忙标记的一条：正在删除的子树。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BusySubtree {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 子树根条目。
     pub entry: EntryId,
-    /// 子树根的 Root 内相对路径。
+    /// 子树根的 Vault 内相对路径。
     pub path: String,
 }
 
@@ -559,7 +559,7 @@ impl SubtreeBusy {
             .iter()
             .filter(|intent| intent.phase.is_open())
             .map(|intent| BusySubtree {
-                root: intent.root,
+                vault: intent.vault,
                 entry: intent.entry(),
                 path: intent.target_path().to_owned(),
             })
@@ -573,7 +573,7 @@ impl SubtreeBusy {
         &self.subtrees
     }
 
-    /// 该 Root 内的某个路径能否写入：落在任一正在删除的子树里就返回冲突。
+    /// 该 Vault 内的某个路径能否写入：落在任一正在删除的子树里就返回冲突。
     ///
     /// 这是“受影响子树写入返回明确忙状态”的判定入口（design §10.3）；装配层在 put/新建/移动/恢复
     /// 之前调用它，把冲突映射成 `SUBTREE_CHANGED`（可重试，客户端等删除批次完成后重新规划）。
@@ -581,10 +581,10 @@ impl SubtreeBusy {
     /// # Errors
     ///
     /// 命中正在删除的子树时返回 [`SubtreeBusyConflict`]。
-    pub fn check_write(&self, root: RootId, path: &str) -> Result<(), SubtreeBusyConflict> {
+    pub fn check_write(&self, vault: VaultId, path: &str) -> Result<(), SubtreeBusyConflict> {
         self.subtrees
             .iter()
-            .find(|busy| busy.root == root && busy.covers(path))
+            .find(|busy| busy.vault == vault && busy.covers(path))
             .map(|busy| SubtreeBusyConflict {
                 entry: busy.entry,
                 path: busy.path.clone(),
@@ -598,8 +598,8 @@ impl SubtreeBusy {
 pub struct DeleteRequest {
     /// 意图身份（重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 被删除的条目。
     pub entry: EntryId,
     /// 客户端事实基础所属的服务器 epoch。
@@ -608,7 +608,7 @@ pub struct DeleteRequest {
     pub expected_revision: Revision,
     /// 服务端上次给出的子树 token；目录删除必填，文件删除必须为空。
     pub subtree_token: Option<SubtreeToken>,
-    /// 条目的 Root 内相对路径。
+    /// 条目的 Vault 内相对路径。
     pub path: String,
 }
 
@@ -636,18 +636,18 @@ impl CommittedDelete {
 /// 删除失败的原因。
 #[derive(Clone, Debug)]
 pub enum DeleteFailureReason {
-    /// 请求本身不成立（路径、token 形态、Root 根条目），未做任何 I/O。
+    /// 请求本身不成立（路径、token 形态、Vault 根条目），未做任何 I/O。
     InvalidRequest {
         /// 原因文本。
         detail: String,
     },
-    /// 同一 Root 已有提交在进行。
+    /// 同一 Vault 已有提交在进行。
     Gate(CommitGateError),
-    /// Root epoch 与请求预期不符（`EPOCH_CHANGED`）。
+    /// Vault epoch 与请求预期不符（`EPOCH_CHANGED`）。
     EpochChanged {
         /// 请求携带的 epoch。
         expected: ServerEpoch,
-        /// Root 当前的 epoch。
+        /// Vault 当前的 epoch。
         actual: ServerEpoch,
     },
     /// 条目 revision 已不是请求基线（`BASE_MISMATCH`）。
@@ -740,7 +740,7 @@ impl fmt::Display for DeleteFailureReason {
             DeleteFailureReason::Gate(error) => write!(f, "{error}"),
             DeleteFailureReason::EpochChanged { expected, actual } => write!(
                 f,
-                "Root epoch 已是 {actual}，请求预期是 {expected}：服务器事实已重建，旧提交作废"
+                "Vault epoch 已是 {actual}，请求预期是 {expected}：服务器事实已重建，旧提交作废"
             ),
             DeleteFailureReason::BaseMismatch { detail } => {
                 write!(f, "基线已不是请求的 revision：{detail}")
@@ -838,17 +838,17 @@ impl std::error::Error for DeleteFailure {}
 
 /// 提交一次删除（文件或整棵目录子树）。
 ///
-/// 顺序：请求形状 → Root 串行化 → epoch → 基线 revision → 子树忙 → 现场 → 冻结清单与 token → 意图
+/// 顺序：请求形状 → Vault 串行化 → epoch → 基线 revision → 子树忙 → 现场 → 冻结清单与 token → 意图
 /// （`prepared`）→ 有界批次移除与复核 → `published` → 单一事务公布 → ACK。无论成功还是失败，退出前
-/// 都会释放 Root 票据。
+/// 都会释放 Vault 票据。
 ///
 /// # Errors
 ///
-/// 见 [`DeleteFailure`]：请求不成立、Root 忙、epoch 变化、基线/revision 过期、token 失效、子树忙、
+/// 见 [`DeleteFailure`]：请求不成立、Vault 忙、epoch 变化、基线/revision 过期、token 失效、子树忙、
 /// 现场不可读、移除失败或没做完、意图/存储失败、存储契约不一致。失败都不是 committed，未收尾的意图
 /// 保留为恢复证据，并继续让该子树保持忙。
 pub async fn commit_delete<S, L, N>(
-    gate: &mut RootCommitGate,
+    gate: &mut VaultCommitGate,
     store: &mut S,
     log: &mut L,
     ns: &mut N,
@@ -862,7 +862,7 @@ where
 {
     validate_request(request)?;
     let ticket = gate
-        .acquire(request.root)
+        .acquire(request.vault)
         .map_err(|error| failure(DeleteFailureReason::Gate(error)))?;
     let outcome = commit_under_ticket(store, log, ns, at, request).await;
     gate.release(ticket);
@@ -883,7 +883,7 @@ where
 {
     // 1. epoch：恢复过的服务器不是同一套事实。
     let facts = store
-        .root_facts(request.root)
+        .vault_facts(request.vault)
         .await
         .map_err(store_failure)?;
     if facts.epoch != request.expected_epoch {
@@ -893,14 +893,14 @@ where
         }));
     }
 
-    // 2. 基线：条目存在、revision 是请求的那一份、不是 Root 的合成根条目。
-    let baseline = match store.entry_baseline(request.root, request.entry).await {
+    // 2. 基线：条目存在、revision 是请求的那一份、不是 Vault 的合成根条目。
+    let baseline = match store.entry_baseline(request.vault, request.entry).await {
         Ok(baseline) => baseline,
         Err(TrashStoreError::EntryMissing { entry }) => {
             return Err(base_mismatch(format!("条目 {entry} 已不存在或已删除")));
         }
-        Err(TrashStoreError::UnknownRoot { root }) => {
-            return Err(base_mismatch(format!("Root {root} 已不存在")));
+        Err(TrashStoreError::UnknownVault { vault }) => {
+            return Err(base_mismatch(format!("Vault {vault} 已不存在")));
         }
         Err(error) => return Err(store_failure(error)),
     };
@@ -908,11 +908,11 @@ where
 
     // 3. 子树忙：未完成的删除意图（含别的会话、上一轮崩溃留下的）挡住同一子树。
     let open = log
-        .unfinished_deletes(request.root)
+        .unfinished_deletes(request.vault)
         .await
         .map_err(intent_failure)?;
     SubtreeBusy::from_intents(&open)
-        .check_write(request.root, &request.path)
+        .check_write(request.vault, &request.path)
         .map_err(|conflict| failure(DeleteFailureReason::SubtreeBusy { conflict }))?;
 
     // 4. 现场：种类与基线一致，才谈得上“删的是同一个东西”。
@@ -935,18 +935,18 @@ where
 
     // 5. 冻结清单与 token：并发新增让前提失败（T12）。
     let image = store
-        .subtree_image(request.root, request.entry)
+        .subtree_image(request.vault, request.entry)
         .await
         .map_err(store_failure)?;
     check_image(&image, &baseline, &request.path)?;
     check_token(request, baseline.kind, &image)?;
-    // Root 的合成根条目没有父目录，不能删（删了就没有可删的 Root）。
+    // Vault 的合成根条目没有父目录，不能删（删了就没有可删的 Vault）。
     let parent = image
         .find(baseline.entry)
         .and_then(|item| item.parent)
         .ok_or_else(|| {
             invalid_request(format!(
-                "条目 {} 是 Root 的合成根条目：根条目不能被删除",
+                "条目 {} 是 Vault 的合成根条目：根条目不能被删除",
                 baseline.entry
             ))
         })?;
@@ -954,7 +954,7 @@ where
     // 6. 先持久意图：写不进去就什么都不动。
     let new = NewDeleteIntent {
         intent_id: request.intent_id,
-        root: request.root,
+        vault: request.vault,
         before: DeleteSnapshot {
             entry: baseline.entry,
             revision: baseline.revision.get(),
@@ -1045,10 +1045,10 @@ fn check_baseline(
     baseline: &EntryBaseline,
     request: &DeleteRequest,
 ) -> Result<(), Box<DeleteFailure>> {
-    if baseline.entry != request.entry || baseline.root != request.root {
+    if baseline.entry != request.entry || baseline.vault != request.vault {
         return Err(base_mismatch(format!(
-            "库里的条目 {}（Root {}）不是请求条目 {}",
-            baseline.entry, baseline.root, request.entry
+            "库里的条目 {}（Vault {}）不是请求条目 {}",
+            baseline.entry, baseline.vault, request.entry
         )));
     }
     if baseline.revision != request.expected_revision {
@@ -1066,31 +1066,31 @@ fn check_image(
     baseline: &EntryBaseline,
     path: &str,
 ) -> Result<(), Box<DeleteFailure>> {
-    if image.root() != baseline.entry {
+    if image.vault() != baseline.entry {
         return Err(failure(DeleteFailureReason::Manifest {
             detail: format!(
                 "清单的根是 {}，不是请求条目 {}",
-                image.root(),
+                image.vault(),
                 baseline.entry
             ),
         }));
     }
-    let root = image.find(baseline.entry).ok_or_else(|| {
+    let vault = image.find(baseline.entry).ok_or_else(|| {
         failure(DeleteFailureReason::Manifest {
             detail: "清单缺少目标条目自身".to_owned(),
         })
     })?;
-    if root.path != path {
+    if vault.path != path {
         return Err(failure(DeleteFailureReason::Manifest {
-            detail: format!("清单里目标路径是 {:?}，请求是 {path:?}", root.path),
+            detail: format!("清单里目标路径是 {:?}，请求是 {path:?}", vault.path),
         }));
     }
-    if root.kind != baseline.kind || root.revision != baseline.revision {
+    if vault.kind != baseline.kind || vault.revision != baseline.revision {
         return Err(failure(DeleteFailureReason::SubtreeChanged {
             detail: format!(
                 "清单里目标条目是 {}/revision {}，基线是 {}/revision {}",
-                root.kind.as_text(),
-                root.revision,
+                vault.kind.as_text(),
+                vault.revision,
                 baseline.kind.as_text(),
                 baseline.revision
             ),
@@ -1200,8 +1200,8 @@ fn delete_apply(
             intent,
         )
     })?;
-    let root_revision = image.find(intent.before.entry).map(|item| item.revision);
-    if root_revision != Some(revision) {
+    let vault_revision = image.find(intent.before.entry).map(|item| item.revision);
+    if vault_revision != Some(revision) {
         return Err(Box::new(DeleteFailure::after_intent(
             DeleteFailureReason::SubtreeChanged {
                 detail: format!(
@@ -1220,7 +1220,7 @@ fn delete_apply(
     })?;
     Ok(DeleteApply {
         intent_id: intent.intent_id,
-        root: intent.root,
+        vault: intent.vault,
         entry: intent.entry(),
         batches,
         trash,
@@ -1277,12 +1277,12 @@ fn check_record(
         ))
     } else if !record.phase.is_finished() {
         Some(format!("意图阶段是 {} 而不是 finalized", record.phase))
-    } else if record.entry != intent.entry() || record.root != intent.root {
+    } else if record.entry != intent.entry() || record.vault != intent.vault {
         Some(format!(
-            "事务写的是 Root {} 条目 {}，不是请求的 Root {} 条目 {}",
-            record.root,
+            "事务写的是 Vault {} 条目 {}，不是请求的 Vault {} 条目 {}",
+            record.vault,
             record.entry,
-            intent.root,
+            intent.vault,
             intent.entry()
         ))
     } else if record.trashed != entries as u64 {
@@ -1400,7 +1400,7 @@ pub enum DeleteRecoveryDecision {
         /// 具体情形。
         reason: DeleteReconcileReason,
     },
-    /// 没有可证明的现场：落盘 `needs_recovery` 并暂停该 Root 的破坏性写入。
+    /// 没有可证明的现场：落盘 `needs_recovery` 并暂停该 Vault 的破坏性写入。
     NeedsRecovery {
         /// 具体原因。
         reason: NeedsRecoveryReason,
@@ -1420,7 +1420,7 @@ impl DeleteRecoveryDecision {
         }
     }
 
-    /// 是否必须暂停该 Root 的破坏性写入（只有 `NeedsRecovery`）。
+    /// 是否必须暂停该 Vault 的破坏性写入（只有 `NeedsRecovery`）。
     #[must_use]
     pub fn pauses_writes(self) -> bool {
         matches!(self, DeleteRecoveryDecision::NeedsRecovery { .. })
@@ -1484,12 +1484,12 @@ pub enum DeleteRecoveryOutcome {
         /// 具体情形。
         reason: DeleteReconcileReason,
     },
-    /// 没有可证明的现场：意图已落 `needs_recovery`，该 Root 暂停破坏性写入。
+    /// 没有可证明的现场：意图已落 `needs_recovery`，该 Vault 暂停破坏性写入。
     NeedsRecovery {
         /// 具体原因。
         reason: NeedsRecoveryReason,
     },
-    /// 恢复动作本身失败：没有完成也没有假装完成，Root 保持关闭，下次启动重试。
+    /// 恢复动作本身失败：没有完成也没有假装完成，Vault 保持关闭，下次启动重试。
     Unresolved {
         /// 稳定错误码。
         code: &'static str,
@@ -1520,7 +1520,7 @@ impl DeleteRecoveryOutcome {
         )
     }
 
-    /// 是否让该 Root 保持关闭。
+    /// 是否让该 Vault 保持关闭。
     #[must_use]
     pub fn pauses_writes(&self) -> bool {
         matches!(
@@ -1544,7 +1544,7 @@ impl fmt::Display for DeleteRecoveryOutcome {
                 write!(f, "保留现场等协调（{reason}）")
             }
             DeleteRecoveryOutcome::NeedsRecovery { reason } => {
-                write!(f, "暂停该 Root 的破坏性写入（{reason}）")
+                write!(f, "暂停该 Vault 的破坏性写入（{reason}）")
             }
             DeleteRecoveryOutcome::Unresolved { code, detail } => {
                 write!(f, "恢复未完成（{code}）：{detail}")
@@ -1564,17 +1564,17 @@ pub struct RecoveredDeleteIntent {
     pub outcome: DeleteRecoveryOutcome,
 }
 
-/// 一个 Root 的删除恢复报告。
+/// 一个 Vault 的删除恢复报告。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeleteRecoveryReport {
-    /// 被恢复的 Root。
-    pub root: RootId,
+    /// 被恢复的 Vault。
+    pub vault: VaultId,
     /// 每条未完成意图的处理结果（保持意图写入顺序）。
     pub intents: Vec<RecoveredDeleteIntent>,
 }
 
 impl DeleteRecoveryReport {
-    /// 是否有任何一条意图要求暂停该 Root 的破坏性写入。
+    /// 是否有任何一条意图要求暂停该 Vault 的破坏性写入。
     #[must_use]
     pub fn pauses_writes(&self) -> bool {
         self.intents
@@ -1627,7 +1627,7 @@ impl fmt::Display for DeleteRecoveryError {
 
 impl std::error::Error for DeleteRecoveryError {}
 
-/// 按未完成删除意图恢复一个 Root。
+/// 按未完成删除意图恢复一个 Vault。
 ///
 /// 与 put/命名空间的恢复同一套不变量：只重放能证明的动作，现场无法解释就保留，读不到就落盘
 /// `needs_recovery` 停写，动作本身失败就保持关闭等下次启动。补事务时重新读一次子树清单，并要求它的
@@ -1637,12 +1637,12 @@ impl std::error::Error for DeleteRecoveryError {}
 ///
 /// 见 [`DeleteRecoveryError`]：读不出未完成意图。单条意图的失败作为
 /// [`DeleteRecoveryOutcome::Unresolved`] 留在报告里。
-pub async fn recover_delete_root<L, N, S>(
+pub async fn recover_delete_vault<L, N, S>(
     log: &mut L,
     ns: &mut N,
     store: &mut S,
     at: UtcTimestamp,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<DeleteRecoveryReport, DeleteRecoveryError>
 where
     L: DeleteIntentLog + ?Sized,
@@ -1650,7 +1650,7 @@ where
     S: DeleteStore + ?Sized,
 {
     let unfinished = log
-        .unfinished_deletes(root)
+        .unfinished_deletes(vault)
         .await
         .map_err(DeleteRecoveryError::Intent)?;
     let mut intents = Vec::with_capacity(unfinished.len());
@@ -1669,7 +1669,7 @@ where
             outcome,
         });
     }
-    Ok(DeleteRecoveryReport { root, intents })
+    Ok(DeleteRecoveryReport { vault, intents })
 }
 
 async fn apply_decision<L, N, S>(
@@ -1735,7 +1735,7 @@ where
     L: DeleteIntentLog + ?Sized,
     S: DeleteStore + ?Sized,
 {
-    let image = match store.subtree_image(intent.root, intent.entry()).await {
+    let image = match store.subtree_image(intent.vault, intent.entry()).await {
         Ok(image) => image,
         Err(TrashStoreError::EntryMissing { .. }) => {
             return DeleteRecoveryOutcome::Preserved {
@@ -1801,11 +1801,11 @@ mod tests {
 
     use crate::test_support::{
         FakeDeleteStore, FakeIntentLog, FakeNamespace, batch_entries, entry_id, epoch, intent_id,
-        revision, root_id, subtree_image, user_time, version_id,
+        revision, subtree_image, user_time, vault_id, version_id,
     };
 
-    fn root() -> RootId {
-        root_id(0x21)
+    fn vault() -> VaultId {
+        vault_id(0x21)
     }
 
     /// 被删除的目录 `docs`（revision 3）及其两个文件、一个子目录与一个深层文件。
@@ -1835,7 +1835,7 @@ mod tests {
     fn file_request() -> DeleteRequest {
         DeleteRequest {
             intent_id: intent_id(0x41),
-            root: root(),
+            vault: vault(),
             entry: entry_id(0x71),
             expected_epoch: epoch(3),
             expected_revision: revision(2),
@@ -1847,7 +1847,7 @@ mod tests {
     fn dir_request(token: Option<SubtreeToken>) -> DeleteRequest {
         DeleteRequest {
             intent_id: intent_id(0x42),
-            root: root(),
+            vault: vault(),
             entry: entry_id(0x62),
             expected_epoch: epoch(3),
             expected_revision: revision(3),
@@ -1868,7 +1868,7 @@ mod tests {
     }
 
     struct Fixture {
-        gate: RootCommitGate,
+        gate: VaultCommitGate,
         store: FakeDeleteStore,
         log: FakeIntentLog,
         ns: FakeNamespace,
@@ -1878,7 +1878,7 @@ mod tests {
         let store = FakeDeleteStore::new().with_image(image);
         let trace = store.trace.clone();
         Fixture {
-            gate: RootCommitGate::new(),
+            gate: VaultCommitGate::new(),
             store,
             log: FakeIntentLog {
                 trace,
@@ -2133,7 +2133,7 @@ mod tests {
         let mut fixture = fixture(dir_image());
         let busy_intent = NewDeleteIntent {
             intent_id: intent_id(0x40),
-            root: root(),
+            vault: vault(),
             before: DeleteSnapshot {
                 entry: entry_id(0x62),
                 revision: 3,
@@ -2161,18 +2161,18 @@ mod tests {
         assert_eq!(fixture.log.delete_intents.len(), 1, "不写第二条意图");
         assert_eq!(fixture.ns.removal_batches, 0);
 
-        // 忙判定本身：子树根与后代忙，兄弟路径与其他 Root 不忙。
+        // 忙判定本身：子树根与后代忙，兄弟路径与其他 Vault 不忙。
         let busy = SubtreeBusy::from_intents(&fixture.log.delete_intents);
-        assert!(busy.check_write(root(), "docs").is_err());
-        assert!(busy.check_write(root(), "docs/sub/c.txt").is_err());
-        assert!(busy.check_write(root(), "docs2").is_ok());
-        assert!(busy.check_write(root_id(0x22), "docs").is_ok());
+        assert!(busy.check_write(vault(), "docs").is_err());
+        assert!(busy.check_write(vault(), "docs/sub/c.txt").is_err());
+        assert!(busy.check_write(vault(), "docs2").is_ok());
+        assert!(busy.check_write(vault_id(0x22), "docs").is_ok());
         assert_eq!(busy.subtrees().len(), 1);
         // 收尾后的意图不再挡路。
         fixture.log.delete_intents[0].phase = PutPhase::Finalized;
         assert!(
             SubtreeBusy::from_intents(&fixture.log.delete_intents)
-                .check_write(root(), "docs")
+                .check_write(vault(), "docs")
                 .is_ok()
         );
     }
@@ -2183,10 +2183,10 @@ mod tests {
         fixture.store.record = Some(DeleteRecord {
             intent_id: intent_id(0x41),
             phase: PutPhase::Finalized,
-            root: root(),
+            vault: vault(),
             entry: entry_id(0x71),
             trashed: 0,
-            seq: crate::test_support::root_seq(1),
+            seq: crate::test_support::vault_seq(1),
             tx: crate::test_support::tx_id(0x71),
         });
         let failure = run(&mut fixture, &file_request())
@@ -2212,20 +2212,20 @@ mod tests {
 
     /// 恢复证据用的现场身份：从工作目录假端口取，不写死 inode。
     fn prepared_intent(fixture: &Fixture, image: &SubtreeImage) -> DeleteIntent {
-        let root = image.find(image.root()).expect("清单有根条目");
+        let vault = image.find(image.vault()).expect("清单有根条目");
         let identity = *fixture
             .ns
-            .state_of(&root.path)
+            .state_of(&vault.path)
             .identity()
             .expect("恢复前提要求路径存在");
         prepared_delete_intent(image, identity)
     }
 
     fn prepared_delete_intent(image: &SubtreeImage, identity: FileKey) -> DeleteIntent {
-        let item = image.find(image.root()).expect("清单有根条目");
+        let item = image.find(image.vault()).expect("清单有根条目");
         NewDeleteIntent {
             intent_id: intent_id(0x43),
-            root: root(),
+            vault: vault(),
             before: DeleteSnapshot {
                 entry: item.entry,
                 revision: item.revision.get(),
@@ -2251,12 +2251,12 @@ mod tests {
         fixture.log.delete_intents.push(intent);
         fixture.ns.removal_batch_limit = 2;
 
-        let report = recover_delete_root(
+        let report = recover_delete_vault(
             &mut fixture.log,
             &mut fixture.ns,
             &mut fixture.store,
             user_time(1_000),
-            root(),
+            vault(),
         )
         .await
         .expect("恢复应读取成功");
@@ -2287,12 +2287,12 @@ mod tests {
             fixture.ns.paths.remove(path);
         }
 
-        let report = recover_delete_root(
+        let report = recover_delete_vault(
             &mut fixture.log,
             &mut fixture.ns,
             &mut fixture.store,
             user_time(1_000),
-            root(),
+            vault(),
         )
         .await
         .expect("恢复应读取成功");
@@ -2324,12 +2324,12 @@ mod tests {
             ),
         );
 
-        let report = recover_delete_root(
+        let report = recover_delete_vault(
             &mut fixture.log,
             &mut fixture.ns,
             &mut fixture.store,
             user_time(1_000),
-            root(),
+            vault(),
         )
         .await
         .expect("恢复应读取成功");
@@ -2354,12 +2354,12 @@ mod tests {
             detail: "挂载掉线".to_owned(),
         });
 
-        let report = recover_delete_root(
+        let report = recover_delete_vault(
             &mut fixture.log,
             &mut fixture.ns,
             &mut fixture.store,
             user_time(1_000),
-            root(),
+            vault(),
         )
         .await
         .expect("恢复应读取成功");
@@ -2388,12 +2388,12 @@ mod tests {
             ),
         );
 
-        let report = recover_delete_root(
+        let report = recover_delete_vault(
             &mut fixture.log,
             &mut fixture.ns,
             &mut fixture.store,
             user_time(1_000),
-            root(),
+            vault(),
         )
         .await
         .expect("恢复应读取成功");
@@ -2478,7 +2478,7 @@ mod tests {
     }
 
     #[test]
-    fn image_rejects_unconnected_and_rootless_manifests() {
+    fn image_rejects_unconnected_and_vaultless_manifests() {
         let orphan = SubtreeEntry {
             entry: entry_id(0x63),
             parent: Some(entry_id(0x99)),
@@ -2487,7 +2487,7 @@ mod tests {
             revision: revision(1),
             content_version: Some(version_id(0x63)),
         };
-        let root_entry = SubtreeEntry {
+        let vault_entry = SubtreeEntry {
             entry: entry_id(0x62),
             parent: Some(entry_id(0x61)),
             path: "docs".to_owned(),
@@ -2495,15 +2495,18 @@ mod tests {
             revision: revision(3),
             content_version: None,
         };
-        assert!(SubtreeImage::new(entry_id(0x62), vec![root_entry.clone(), orphan]).is_err());
+        assert!(SubtreeImage::new(entry_id(0x62), vec![vault_entry.clone(), orphan]).is_err());
         assert!(SubtreeImage::new(entry_id(0x62), Vec::new()).is_err());
         assert!(
-            SubtreeImage::new(entry_id(0x62), vec![root_entry.clone(), root_entry.clone()])
-                .is_err()
+            SubtreeImage::new(
+                entry_id(0x62),
+                vec![vault_entry.clone(), vault_entry.clone()]
+            )
+            .is_err()
         );
         let rootless = SubtreeEntry {
             parent: None,
-            ..root_entry
+            ..vault_entry
         };
         assert!(SubtreeImage::new(entry_id(0x62), vec![rootless]).is_err());
     }

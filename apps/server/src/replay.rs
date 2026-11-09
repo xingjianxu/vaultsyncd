@@ -9,7 +9,7 @@ use vaultsyncd_domain::{
     ids::{EntryId, UserId},
     version::{Revision, UtcTimestamp},
 };
-use vaultsyncd_platform_linux_server::files::RootHandle;
+use vaultsyncd_platform_linux_server::files::VaultHandle;
 use vaultsyncd_server_core::{
     commit::intent::PutPhase,
     objects::ExpectedContent,
@@ -43,48 +43,48 @@ fn fact<T: std::str::FromStr>(binding: &Binding, field: &str) -> Result<T, Strin
 
 /// 启动监听与观察器前逐条补完；任何无法证明的条目保持未完成并输出原因。
 pub async fn registered(db: &Database, state_dir: &Path) -> Result<(), String> {
-    let fences = crate::root_fences::RootFences::load(db, state_dir).await?;
+    let fences = crate::vault_fences::VaultFences::load(db, state_dir).await?;
     registered_with_fences(db, state_dir, &fences).await
 }
 
 pub(crate) async fn registered_with_fences(
     db: &Database,
     state_dir: &Path,
-    fences: &crate::root_fences::RootFences,
+    fences: &crate::vault_fences::VaultFences,
 ) -> Result<(), String> {
     let mut conn = db.pool().acquire().await.map_err(text)?;
-    let roots = vaultsyncd_server_store::roots::all_roots(&mut conn)
+    let vaults = vaultsyncd_server_store::vaults::all_vaults(&mut conn)
         .await
         .map_err(text)?;
     drop(conn);
-    for root in roots {
+    for vault in vaults {
         let mut conn = db.pool().acquire().await.map_err(text)?;
         let intents =
-            vaultsyncd_server_store::intents::unfinished_intents(&mut conn, root.owner, root.id)
+            vaultsyncd_server_store::intents::unfinished_intents(&mut conn, vault.owner, vault.id)
                 .await
                 .map_err(text)?;
         drop(conn);
         if intents.is_empty() {
             continue;
         }
-        let handle = match fences.open(&root) {
+        let handle = match fences.open(&vault) {
             Ok(handle) => handle,
             Err(error) => {
-                tracing::warn!(root=%root.id, error=%error, "恢复打不开 Root，保留停写");
+                tracing::warn!(vault=%vault.id, error=%error, "恢复打不开 Vault，保留停写");
                 continue;
             }
         };
-        tracing::info!(root=%root.id, mount_id=handle.snapshot().mount_id, dev_major=handle.snapshot().dev_major, dev_minor=handle.snapshot().dev_minor, "启动意图复用已准入Root围栏");
+        tracing::info!(vault=%vault.id, mount_id=handle.snapshot().mount_id, dev_major=handle.snapshot().dev_major, dev_minor=handle.snapshot().dev_minor, "启动意图复用已准入Vault围栏");
         let mut attempted = std::collections::HashSet::new();
         for intent in intents {
             let result = async {
-                let binding = crate::journal::for_intent(db, root.owner, intent.intent_id)
+                let binding = crate::journal::for_intent(db, vault.owner, intent.intent_id)
                     .await
                     .map_err(text)?
                     .ok_or_else(|| "旧意图未关联完整操作键，不能猜测".to_owned())?;
                 let mut conn = db.pool().acquire().await.map_err(text)?;
                 let operation =
-                    operations::operation_in_scope(&mut conn, root.owner, &binding.key())
+                    operations::operation_in_scope(&mut conn, vault.owner, &binding.key())
                         .await
                         .map_err(text)?
                         .ok_or_else(|| "恢复上下文没有对应操作".to_owned())?;
@@ -99,7 +99,7 @@ pub(crate) async fn registered_with_fences(
                 replay(
                     db,
                     state_dir,
-                    root.owner,
+                    vault.owner,
                     Arc::clone(&handle),
                     intent,
                     binding,
@@ -110,7 +110,7 @@ pub(crate) async fn registered_with_fences(
             }
             .await;
             if let Err(error) = result {
-                tracing::warn!(root=%root.id, error, "意图恢复未完成，保留证据和停写");
+                tracing::warn!(vault=%vault.id, error, "意图恢复未完成，保留证据和停写");
             }
         }
     }
@@ -122,7 +122,7 @@ async fn replay(
     db: &Database,
     state: &Path,
     owner: UserId,
-    handle: Arc<RootHandle>,
+    handle: Arc<VaultHandle>,
     intent: FsIntent,
     binding: Binding,
     digest: operations::RequestDigest,
@@ -134,12 +134,12 @@ async fn replay(
             let mut ns = WorkTreeNamespace::new(handle);
             let mut store = SqlNamespaceStore::new(db.clone(), owner, binding.key(), digest)
                 .with_local_generation(crate::journal::echo_of(&binding.context)?);
-            let report = vaultsyncd_server_core::commit::namespace::recover_namespace_root(
+            let report = vaultsyncd_server_core::commit::namespace::recover_namespace_vault(
                 &mut log,
                 &mut ns,
                 &mut store,
                 at,
-                binding.root,
+                binding.vault,
             )
             .await
             .map_err(text)?;
@@ -158,7 +158,7 @@ async fn replay(
                 state,
                 owner,
                 &handle,
-                binding.root,
+                binding.vault,
                 before.entry,
             )
             .await?;
@@ -166,12 +166,12 @@ async fn replay(
             let mut ns = WorkTreeNamespace::new(handle);
             let mut store = SqlDeleteStore::new(db.clone(), owner, binding.key(), digest)
                 .with_local_generation(crate::journal::echo_of(&binding.context)?);
-            let report = vaultsyncd_server_core::commit::delete::recover_delete_root(
+            let report = vaultsyncd_server_core::commit::delete::recover_delete_vault(
                 &mut log,
                 &mut ns,
                 &mut store,
                 at,
-                binding.root,
+                binding.vault,
             )
             .await
             .map_err(text)?;
@@ -192,7 +192,7 @@ async fn replay(
                     .await
                     .map_err(text)?;
             }
-            let layout = crate::object_layout::for_root(db, state, binding.root)
+            let layout = crate::object_layout::for_vault(db, state, binding.vault)
                 .await
                 .map_err(text)?;
             let mut target = WorkTreeTarget::new(handle, layout);
@@ -220,7 +220,7 @@ async fn replay(
                     .map_err(text)?;
             }
             let key = OperationKey {
-                root: binding.root,
+                vault: binding.vault,
                 device: binding.device,
                 op: binding.op,
             };
@@ -257,7 +257,7 @@ async fn replay(
                     store
                         .apply_put(&PutWrite {
                             intent_id: put.intent_id,
-                            root: binding.root,
+                            vault: binding.vault,
                             entry: fact(&binding, "entry")?,
                             expected_revision: fact::<Revision>(&binding, "revision")?,
                             content,
@@ -329,7 +329,7 @@ async fn replay_trash_restore(
     db: &Database,
     state: &Path,
     owner: UserId,
-    handle: Arc<RootHandle>,
+    handle: Arc<VaultHandle>,
     binding: &Binding,
     digest: operations::RequestDigest,
     at: UtcTimestamp,
@@ -340,7 +340,7 @@ async fn replay_trash_restore(
         target::TargetObservation,
     };
     let key = OperationKey {
-        root: binding.root,
+        vault: binding.vault,
         device: binding.device,
         op: binding.op,
     };
@@ -349,7 +349,7 @@ async fn replay_trash_restore(
     let mut namespace = WorkTreeNamespace::new(Arc::clone(&handle));
     let mut target = WorkTreeTarget::new(
         Arc::clone(&handle),
-        crate::object_layout::for_root(db, state, binding.root)
+        crate::object_layout::for_vault(db, state, binding.vault)
             .await
             .map_err(text)?,
     );
@@ -406,7 +406,7 @@ async fn replay_trash_restore(
                     .content_version
                     .ok_or_else(|| format!("文件 {} 的计划没有内容版本", entry.path))?;
                 let content = store
-                    .content_facts(binding.root, version)
+                    .content_facts(binding.vault, version)
                     .await
                     .map_err(text)?
                     .ok_or_else(|| format!("版本 {version} 的内容已不可读"))?;
@@ -453,7 +453,7 @@ async fn replay_trash_restore(
                             at,
                             &vaultsyncd_server_core::commit::intent::NewPutIntent {
                                 intent_id: intent,
-                                root: binding.root,
+                                vault: binding.vault,
                                 target_path: entry.path.clone(),
                                 staging_path: vaultsyncd_server_core::history::trash::staging_name(
                                     intent,

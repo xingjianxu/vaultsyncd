@@ -18,16 +18,16 @@ fn id(value: &str) -> Result<(), ClientError> {
 /// No client clock or inferred expiry timestamp is used as server time.
 pub async fn snapshot<T: Transport>(
     client: &ApiClient<T>,
-    root: &str,
+    vault: &str,
 ) -> Result<(Snapshot, u64), ClientError> {
-    id(root)?;
+    id(vault)?;
     let response = client
-        .send(ApiRequest::post(format!("/v1/roots/{root}/snapshots")).with_auth(AuthMode::Bearer))
+        .send(ApiRequest::post(format!("/v1/vaults/{vault}/snapshots")).with_auth(AuthMode::Bearer))
         .await?;
     let value: Snapshot = response.json()?;
     id(&value.snapshot_id)?;
-    if value.root_id != root {
-        return Err(ClientError::invalid_request("snapshot root mismatch"));
+    if value.vault_id != vault {
+        return Err(ClientError::invalid_request("snapshot vault mismatch"));
     }
     let date = response
         .header("date")
@@ -42,13 +42,13 @@ pub async fn snapshot<T: Transport>(
 /// Read only the specified fixed snapshot. Expiry errors are propagated without replacement.
 pub async fn snapshot_page<T: Transport>(
     client: &ApiClient<T>,
-    root: &str,
+    vault: &str,
     snapshot: &str,
     cursor: Option<&str>,
 ) -> Result<SnapshotPage, ClientError> {
-    id(root)?;
+    id(vault)?;
     id(snapshot)?;
-    let mut request = ApiRequest::get(format!("/v1/roots/{root}/snapshots/{snapshot}/entries"))
+    let mut request = ApiRequest::get(format!("/v1/vaults/{vault}/snapshots/{snapshot}/entries"))
         .with_auth(AuthMode::Bearer);
     if let Some(cursor) = cursor {
         vaultsyncd_protocol::decimal::validate(cursor)
@@ -66,14 +66,14 @@ pub async fn snapshot_page<T: Transport>(
 /// Submit with the original OpId; caller retains the operation until committed.
 pub async fn submit<T: Transport>(
     client: &ApiClient<T>,
-    root: &str,
+    vault: &str,
     request: &OperationRequest,
 ) -> Result<OperationResult, ClientError> {
-    id(root)?;
+    id(vault)?;
     id(&request.op_id)?;
     let result = client
         .send_json(
-            ApiRequest::post(format!("/v1/roots/{root}/operations"))
+            ApiRequest::post(format!("/v1/vaults/{vault}/operations"))
                 .with_auth(AuthMode::Bearer)
                 .with_json(request)?,
         )
@@ -81,17 +81,17 @@ pub async fn submit<T: Transport>(
     validate_result(&result, &request.op_id)?;
     Ok(result)
 }
-/// Query the same operation after a lost response in the authenticated Root scope.
+/// Query the same operation after a lost response in the authenticated Vault scope.
 pub async fn operation<T: Transport>(
     client: &ApiClient<T>,
-    root: &str,
+    vault: &str,
     op: &str,
 ) -> Result<OperationResult, ClientError> {
-    id(root)?;
+    id(vault)?;
     id(op)?;
     let result = client
         .send_json(
-            ApiRequest::get(format!("/v1/roots/{root}/operations/{op}"))
+            ApiRequest::get(format!("/v1/vaults/{vault}/operations/{op}"))
                 .with_auth(AuthMode::Bearer),
         )
         .await?;
@@ -105,7 +105,7 @@ fn validate_result(value: &OperationResult, op: &str) -> Result<(), ClientError>
     if value.state == OperationState::Pending
         && (value.entry_id.is_some()
             || value.revision.is_some()
-            || value.root_seq.is_some()
+            || value.vault_seq.is_some()
             || value.version_id.is_some())
     {
         return Err(ClientError::invalid_request(
@@ -113,7 +113,7 @@ fn validate_result(value: &OperationResult, op: &str) -> Result<(), ClientError>
         ));
     }
     if value.state == OperationState::Committed
-        && (value.entry_id.is_none() || value.revision.is_none() || value.root_seq.is_none())
+        && (value.entry_id.is_none() || value.revision.is_none() || value.vault_seq.is_none())
     {
         return Err(ClientError::invalid_request("committed lacks facts"));
     }

@@ -10,14 +10,14 @@ try {
   const folder = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
   const entries = [folder("r", undefined, ""), folder("d", "r", "文档"), folder("empty", "r", "空目录"),
     { entry_id: "f", parent_id: "d", name: "<img src=x onerror=alert(1)>.txt", kind: "file", revision: "3", size: "9007199254740993", hash: "a".repeat(64), version_id: "v" }];
-  const metadata = { root_id: "root", snapshot_id: "snapshot", server_epoch: "1", high_water_seq: "9", entry_count: "4", expires_at: "2000000000" };
+  const metadata = { vault_id: "vault", snapshot_id: "snapshot", server_epoch: "1", high_water_seq: "9", entry_count: "4", expires_at: "2000000000" };
   async function load({ items = entries, meta = metadata, pageChange, failSecond = false, signal = new AbortController().signal, onPage } = {}) {
     let pages = 0;
     const client = new BrowserAuth({ base_url: "https://test.invalid", request_id: () => "files-test", fetch: async (url, init) => {
       assert.equal(init.signal, signal);
       if (url.endsWith("/snapshots")) return Response.json(meta);
       const parsed = new URL(url);
-      assert.equal(parsed.pathname, "/v1/roots/root/snapshots/snapshot/entries");
+      assert.equal(parsed.pathname, "/v1/vaults/vault/snapshots/snapshot/entries");
       assert.equal(parsed.searchParams.get("limit"), "1000");
       assert.equal(parsed.searchParams.get("cursor"), pages ? "2" : null);
       pages++;
@@ -27,16 +27,16 @@ try {
         ...(pages === 1 && items.length > 2 ? { next_cursor: "2" } : {}) };
       return Response.json(pageChange ? pageChange(page, pages) : page);
     } });
-    return readDirectorySnapshot(client, "root", signal);
+    return readDirectorySnapshot(client, "vault", signal);
   }
   const snapshot = await load();
   assert.equal(snapshot.entries.size, 4);
   const names = ["中文 # ? % & +", "%2F", "尾部 空格 "];
-  const location = filesLocation("root", names);
-  assert.deepEqual(parseFilesLocation(location), { rootId: "root", segments: names });
+  const location = filesLocation("vault", names);
+  assert.deepEqual(parseFilesLocation(location), { vaultId: "vault", segments: names });
   assert.deepEqual(parseFilesLocation("/files"), { segments: [] });
-  for (const bad of ["/files/", "/files/root/%zz", "/files/root/%2F", "/files/root/..", "/files/root//d", "/files/root/%00"]) assert.ok(parseFilesLocation(bad).error, bad);
-  assert.equal(directoryAtPath(snapshot, []), snapshot.root);
+  for (const bad of ["/files/", "/files/vault/%zz", "/files/vault/%2F", "/files/vault/..", "/files/vault//d", "/files/vault/%00"]) assert.ok(parseFilesLocation(bad).error, bad);
+  assert.equal(directoryAtPath(snapshot, []), snapshot.vault);
   assert.equal(directoryAtPath(snapshot, ["文档"]).entry_id, "d");
   assert.equal(directoryAtPath(snapshot, ["空目录"]).entry_id, "empty");
   assert.equal(directoryAtPath(snapshot, ["missing"]), undefined);
@@ -65,7 +65,7 @@ try {
   await assert.rejects(load({ pageChange: page => ({ ...page, next_cursor: "0" }) }), /没有前进/);
   await assert.rejects(load({ items: [...entries.slice(0, 3), entries[0]] }), /重复条目/);
   await assert.rejects(load({ meta: { ...metadata, entry_count: "5" } }), /未完整读取/);
-  await assert.rejects(load({ meta: { ...metadata, root_id: "other" } }), /Root 不匹配/);
+  await assert.rejects(load({ meta: { ...metadata, vault_id: "other" } }), /Vault 不匹配/);
   await assert.rejects(load({ meta: { ...metadata, entry_count: "100001" } }), /上限/);
   await assert.rejects(load({ items: [folder("r", undefined, ""), folder("d", "missing", "d")], meta: { ...metadata, entry_count: "2" } }), /父目录缺失/);
   await assert.rejects(load({ items: [folder("r", undefined, ""), folder("a", "b", "a"), folder("b", "a", "b")], meta: { ...metadata, entry_count: "3" } }), /不可达/);

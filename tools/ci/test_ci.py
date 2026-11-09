@@ -76,32 +76,32 @@ class LabControllerTests(unittest.TestCase):
 
     def test_x64_only_products_keep_linux_and_windows_installation_chain(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            evidence = root / 'run'
+            vault = Path(directory)
+            evidence = vault / 'run'
             evidence.mkdir()
             commit = 'a' * 40
-            portable = root / 'portable'
+            portable = vault / 'portable'
             manifest = portable / 'runtime/share/vaultsyncd/release-manifest.json'
             manifest.parent.mkdir(parents=True)
             record = {'sourceInfo': {'commit': commit}, 'target': 'x86_64-unknown-linux-gnu'}
             manifest.write_text(json.dumps(record))
-            nixos = root / 'nixos'
+            nixos = vault / 'nixos'
             (nixos / 'share/vaultsyncd').mkdir(parents=True)
             (nixos / 'share/vaultsyncd/release-manifest.json').write_text('{}')
-            deps = root / 'vaultsyncd-ubuntu-amd64-dependencies'
+            deps = vault / 'vaultsyncd-ubuntu-amd64-dependencies'
             deps.mkdir()
             (evidence / 'products.json').write_text(json.dumps({
                 'commit': commit, 'outputs': [{'outputs': {'out': str(path)}}
                                             for path in (portable, nixos, deps)]}))
-            component = root / 'artifacts/S101/windows-client'
+            component = vault / 'artifacts/S101/windows-client'
             (component / 'payload').mkdir(parents=True)
             (component / 'payload/client.zip').write_bytes(b'controller fixture')
             (component / 'receipt.json').write_text(json.dumps({'source': {'commit': commit}}))
-            config = root / 'config.json'
+            config = vault / 'config.json'
             config.write_text(json.dumps({'evidence': str(evidence)}))
-            with patch.object(acceptance, 'ROOT', root), \
-                    patch.object(acceptance, 'EVIDENCE_ROOT', root), \
-                    patch.object(acceptance, 'LAB_LOCK', root / 'lab.lock'), \
+            with patch.object(acceptance, 'ROOT', vault), \
+                    patch.object(acceptance, 'EVIDENCE_ROOT', vault), \
+                    patch.object(acceptance, 'LAB_LOCK', vault / 'lab.lock'), \
                     patch.dict(os.environ, {'VAULTSYNCD_CI_LAB': '1'}), \
                     patch.object(sys, 'argv', ['acceptance', '--config', str(config), '--phase', 'lab']), \
                     patch.object(acceptance.subprocess, 'check_output', side_effect=[commit, '']), \

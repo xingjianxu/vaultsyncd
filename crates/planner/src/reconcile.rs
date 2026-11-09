@@ -77,7 +77,7 @@ pub enum EntryKind {
 /// 服务器侧的条目事实：最新远端状态 R 或共同基线 B。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerFact {
-    /// Root 内相对位置（父目录与名称）。
+    /// Vault 内相对位置（父目录与名称）。
     pub path: RelativePath,
     /// 类型与内容。
     pub kind: EntryKind,
@@ -138,7 +138,7 @@ impl ServerFact {
 /// 本地侧的条目事实 L：本地只有观察到的内容与代际，没有服务器修订。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalFact {
-    /// Root 内相对位置（父目录与名称）。
+    /// Vault 内相对位置（父目录与名称）。
     pub path: RelativePath,
     /// 类型与内容。
     pub kind: EntryKind,
@@ -250,10 +250,10 @@ pub enum Dependency {
         /// 要等待提交的冲突条目身份。
         entry_id: EntryId,
     },
-    /// 跨 Root 移动的目标条目必须先提交成功，才允许删除源条目（design §9.5）：
+    /// 跨 Vault 移动的目标条目必须先提交成功，才允许删除源条目（design §9.5）：
     /// 目标创建失败或结果未知时，源条目的删除不得计划完成。
-    CrossRootTargetCommitted {
-        /// 目标 Root 新建条目的身份。
+    CrossVaultTargetCommitted {
+        /// 目标 Vault 新建条目的身份。
         entry_id: EntryId,
     },
 }
@@ -345,7 +345,7 @@ pub enum Action {
     },
     /// 提交本地移动：目标父目录/名称与源修订，`EntryId` 与内容版本都不变（design §9.5、§15.2）。
     UploadMove {
-        /// 条目身份：同 Root 内移动保持它（I03）。
+        /// 条目身份：同 Vault 内移动保持它（I03）。
         entry_id: EntryId,
         /// 提交时携带的源修订（CAS）。
         base_revision: Revision,
@@ -354,7 +354,7 @@ pub enum Action {
     },
     /// 提交本地移动并上传该代际的新内容（design §10.1“一端移动、另一端修改”的本地提交方向）。
     UploadMoveWithContent {
-        /// 条目身份：同 Root 内移动保持它（I03）。
+        /// 条目身份：同 Vault 内移动保持它（I03）。
         entry_id: EntryId,
         /// 提交时携带的源修订（CAS）。
         base_revision: Revision,

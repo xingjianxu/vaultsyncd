@@ -8,9 +8,9 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use vaultsyncd_domain::ids::{
-    DeviceId, EntryId, ID_LEN, IntentId, ObjectLeaseId, OpId, RootId, TxId, UserId, VersionId,
+    DeviceId, EntryId, ID_LEN, IntentId, ObjectLeaseId, OpId, TxId, UserId, VaultId, VersionId,
 };
-use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
+use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp, VaultSeq};
 
 use crate::commit::conflict::CommittedConflict;
 use crate::commit::delete::{
@@ -36,7 +36,7 @@ use crate::ports::namespace_store::{
 use crate::ports::object_store::FileKey;
 use crate::ports::put_store::{
     EntryBaseline, EntryKind, ObjectState, PutCommitStore, PutRecord, PutStoreError, PutWrite,
-    RootFacts,
+    VaultFacts,
 };
 use crate::ports::removal::{RemovalError, RemovalPort, RemovalProgress};
 use crate::ports::restore_store::{
@@ -86,8 +86,8 @@ pub(crate) fn intent_id(marker: u8) -> IntentId {
     IntentId::from_bytes(identity(marker))
 }
 
-pub(crate) fn root_id(marker: u8) -> RootId {
-    RootId::from_bytes(identity(marker))
+pub(crate) fn vault_id(marker: u8) -> VaultId {
+    VaultId::from_bytes(identity(marker))
 }
 
 pub(crate) fn entry_id(marker: u8) -> EntryId {
@@ -126,8 +126,8 @@ pub(crate) fn tx_id(marker: u8) -> TxId {
     TxId::from_bytes(identity(marker))
 }
 
-pub(crate) fn root_seq(value: u64) -> RootSeq {
-    RootSeq::new(value).expect("测试用 RootSeq 合法")
+pub(crate) fn vault_seq(value: u64) -> VaultSeq {
+    VaultSeq::new(value).expect("测试用 VaultSeq 合法")
 }
 
 /// 测试用现场快照：设备 7、inode 41、单链接、revision 7、条目 0x51。
@@ -211,11 +211,11 @@ impl IntentLog for FakeIntentLog {
             .cloned())
     }
 
-    async fn unfinished_puts(&mut self, root: RootId) -> Result<Vec<PutIntent>, IntentLogError> {
+    async fn unfinished_puts(&mut self, vault: VaultId) -> Result<Vec<PutIntent>, IntentLogError> {
         Ok(self
             .intents
             .iter()
-            .filter(|intent| intent.root == root && intent.phase.is_open())
+            .filter(|intent| intent.vault == vault && intent.phase.is_open())
             .cloned()
             .collect())
     }
@@ -275,12 +275,12 @@ impl NamespaceIntentLog for FakeIntentLog {
 
     async fn unfinished_namespaces(
         &mut self,
-        root: RootId,
+        vault: VaultId,
     ) -> Result<Vec<NamespaceIntent>, IntentLogError> {
         Ok(self
             .namespace_intents
             .iter()
-            .filter(|intent| intent.root == root && intent.phase.is_open())
+            .filter(|intent| intent.vault == vault && intent.phase.is_open())
             .cloned()
             .collect())
     }
@@ -407,10 +407,10 @@ impl TargetPort for FakeTarget {
 /// 内存提交存储：可脚本化每个读方法的错误与事务结果，并记录被写入的事务输入。
 pub(crate) struct FakePutStore {
     pub(crate) trace: Trace,
-    pub(crate) facts: RootFacts,
+    pub(crate) facts: VaultFacts,
     pub(crate) baseline: EntryBaseline,
     pub(crate) object: ObjectState,
-    pub(crate) root_facts_error: Option<PutStoreError>,
+    pub(crate) vault_facts_error: Option<PutStoreError>,
     pub(crate) baseline_error: Option<PutStoreError>,
     pub(crate) object_error: Option<PutStoreError>,
     pub(crate) apply_error: Option<PutStoreError>,
@@ -423,10 +423,10 @@ impl FakePutStore {
     pub(crate) fn for_entry(baseline: EntryBaseline) -> Self {
         FakePutStore {
             trace: Trace::default(),
-            facts: RootFacts { epoch: epoch(3) },
+            facts: VaultFacts { epoch: epoch(3) },
             baseline,
             object: ObjectState::Persisted { bytes: 5 },
-            root_facts_error: None,
+            vault_facts_error: None,
             baseline_error: None,
             object_error: None,
             apply_error: None,
@@ -445,7 +445,7 @@ impl FakePutStore {
                 .expected_revision
                 .next()
                 .expect("测试用 revision 可推进"),
-            seq: root_seq(11),
+            seq: vault_seq(11),
             tx: tx_id(0x71),
             digest: write.content.digest,
             size: write.content.bytes,
@@ -454,9 +454,9 @@ impl FakePutStore {
 }
 
 impl PutCommitStore for FakePutStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, PutStoreError> {
-        self.trace.record(format!("store root_facts {root}"));
-        match self.root_facts_error.take() {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, PutStoreError> {
+        self.trace.record(format!("store vault_facts {vault}"));
+        match self.vault_facts_error.take() {
             Some(error) => Err(error),
             None => Ok(self.facts),
         }
@@ -464,11 +464,11 @@ impl PutCommitStore for FakePutStore {
 
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, PutStoreError> {
         self.trace
-            .record(format!("store entry_baseline {root} {entry}"));
+            .record(format!("store entry_baseline {vault} {entry}"));
         match self.baseline_error.take() {
             Some(error) => Err(error),
             None => Ok(self.baseline.clone()),
@@ -477,11 +477,11 @@ impl PutCommitStore for FakePutStore {
 
     async fn object_state(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         digest: ContentDigest,
     ) -> Result<ObjectState, PutStoreError> {
         self.trace
-            .record(format!("store object_state {root} {digest}"));
+            .record(format!("store object_state {vault} {digest}"));
         match self.object_error.take() {
             Some(error) => Err(error),
             None => Ok(self.object),
@@ -502,10 +502,10 @@ impl PutCommitStore for FakePutStore {
 }
 
 /// 测试用条目基线：revision 7、父目录 0x61、名称 `note.txt`、普通文件。
-pub(crate) fn file_baseline(root: RootId) -> EntryBaseline {
+pub(crate) fn file_baseline(vault: VaultId) -> EntryBaseline {
     EntryBaseline {
         entry: entry_id(0x51),
-        root,
+        vault,
         parent: entry_id(0x61),
         name: "note.txt".to_owned(),
         revision: revision(7),
@@ -594,7 +594,7 @@ impl FakeConflictStore {
                 path: write.path.clone(),
                 content: write.content,
                 revision: revision(1),
-                seq: root_seq(21),
+                seq: vault_seq(21),
             },
             tx: tx_id(0x72),
         }
@@ -604,11 +604,11 @@ impl FakeConflictStore {
 impl ConflictCommitStore for FakeConflictStore {
     async fn conflict_head(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         source: EntryId,
     ) -> Result<ConflictHead, ConflictStoreError> {
         self.trace
-            .record(format!("store conflict_head {root} {source}"));
+            .record(format!("store conflict_head {vault} {source}"));
         match self.head_error.take() {
             Some(error) => Err(error),
             None => Ok(self.head.clone()),
@@ -868,10 +868,10 @@ impl NamespacePort for FakeNamespace {
 /// 测试只需断言内容引用表在提交前后一致。
 pub(crate) struct FakeNamespaceStore {
     pub(crate) trace: Trace,
-    pub(crate) facts: RootFacts,
+    pub(crate) facts: VaultFacts,
     pub(crate) baselines: std::collections::BTreeMap<EntryId, EntryBaseline>,
     pub(crate) content_versions: std::collections::BTreeMap<EntryId, VersionId>,
-    pub(crate) root_facts_error: Option<NamespaceStoreError>,
+    pub(crate) vault_facts_error: Option<NamespaceStoreError>,
     pub(crate) baseline_error: Option<NamespaceStoreError>,
     pub(crate) apply_error: Option<NamespaceStoreError>,
     pub(crate) writes: Vec<NamespaceWrite>,
@@ -882,10 +882,10 @@ impl Default for FakeNamespaceStore {
     fn default() -> Self {
         FakeNamespaceStore {
             trace: Trace::default(),
-            facts: RootFacts { epoch: epoch(3) },
+            facts: VaultFacts { epoch: epoch(3) },
             baselines: std::collections::BTreeMap::new(),
             content_versions: std::collections::BTreeMap::new(),
-            root_facts_error: None,
+            vault_facts_error: None,
             baseline_error: None,
             apply_error: None,
             writes: Vec::new(),
@@ -919,16 +919,16 @@ impl FakeNamespaceStore {
                 Some(revision) => revision.next().expect("测试用 revision 可推进"),
                 None => revision(0),
             },
-            seq: root_seq(11),
+            seq: vault_seq(11),
             tx: tx_id(0x71),
         }
     }
 }
 
 impl NamespaceCommitStore for FakeNamespaceStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, NamespaceStoreError> {
-        self.trace.record(format!("store root_facts {root}"));
-        match self.root_facts_error.take() {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, NamespaceStoreError> {
+        self.trace.record(format!("store vault_facts {vault}"));
+        match self.vault_facts_error.take() {
             Some(error) => Err(error),
             None => Ok(self.facts),
         }
@@ -936,11 +936,11 @@ impl NamespaceCommitStore for FakeNamespaceStore {
 
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, NamespaceStoreError> {
         self.trace
-            .record(format!("store entry_baseline {root} {entry}"));
+            .record(format!("store entry_baseline {vault} {entry}"));
         if let Some(error) = self.baseline_error.take() {
             return Err(error);
         }
@@ -1116,12 +1116,12 @@ impl DeleteIntentLog for FakeIntentLog {
 
     async fn unfinished_deletes(
         &mut self,
-        root: RootId,
+        vault: VaultId,
     ) -> Result<Vec<DeleteIntent>, IntentLogError> {
         Ok(self
             .delete_intents
             .iter()
-            .filter(|intent| intent.root == root && intent.phase.is_open())
+            .filter(|intent| intent.vault == vault && intent.phase.is_open())
             .cloned()
             .collect())
     }
@@ -1200,11 +1200,11 @@ impl RemovalPort for FakeNamespace {
 /// 假实现刻意没有任何内容/版本写路径：删除“不改版本、不动内容对象”在假端口上同样由类型保证。
 pub(crate) struct FakeDeleteStore {
     pub(crate) trace: Trace,
-    pub(crate) facts: RootFacts,
+    pub(crate) facts: VaultFacts,
     pub(crate) baselines: std::collections::BTreeMap<EntryId, EntryBaseline>,
     pub(crate) images: std::collections::BTreeMap<EntryId, SubtreeImage>,
     pub(crate) content_versions: std::collections::BTreeMap<EntryId, VersionId>,
-    pub(crate) root_facts_error: Option<TrashStoreError>,
+    pub(crate) vault_facts_error: Option<TrashStoreError>,
     pub(crate) baseline_error: Option<TrashStoreError>,
     pub(crate) image_error: Option<TrashStoreError>,
     pub(crate) apply_error: Option<TrashStoreError>,
@@ -1216,11 +1216,11 @@ impl Default for FakeDeleteStore {
     fn default() -> Self {
         FakeDeleteStore {
             trace: Trace::default(),
-            facts: RootFacts { epoch: epoch(3) },
+            facts: VaultFacts { epoch: epoch(3) },
             baselines: std::collections::BTreeMap::new(),
             images: std::collections::BTreeMap::new(),
             content_versions: std::collections::BTreeMap::new(),
-            root_facts_error: None,
+            vault_facts_error: None,
             baseline_error: None,
             image_error: None,
             apply_error: None,
@@ -1237,25 +1237,25 @@ impl FakeDeleteStore {
 
     /// 加入一份冻结清单，同时按清单根条目推出基线（revision/父目录/种类取清单里的值）。
     pub(crate) fn with_image(mut self, image: SubtreeImage) -> Self {
-        let root = image
-            .find(image.root())
+        let vault = image
+            .find(image.vault())
             .expect("清单必定包含根条目")
             .clone();
         self.baselines.insert(
-            root.entry,
+            vault.entry,
             EntryBaseline {
-                entry: root.entry,
-                root: root_id(0x21),
-                parent: root.parent.expect("子树根必须有父目录"),
-                name: root.path.rsplit('/').next().expect("路径非空").to_owned(),
-                revision: root.revision,
-                kind: root.kind,
+                entry: vault.entry,
+                vault: vault_id(0x21),
+                parent: vault.parent.expect("子树根必须有父目录"),
+                name: vault.path.rsplit('/').next().expect("路径非空").to_owned(),
+                revision: vault.revision,
+                kind: vault.kind,
             },
         );
-        if let Some(version) = root.content_version {
-            self.content_versions.insert(root.entry, version);
+        if let Some(version) = vault.content_version {
+            self.content_versions.insert(vault.entry, version);
         }
-        self.images.insert(image.root(), image);
+        self.images.insert(image.vault(), image);
         self
     }
 
@@ -1263,19 +1263,19 @@ impl FakeDeleteStore {
         DeleteRecord {
             intent_id: apply.intent_id,
             phase: PutPhase::Finalized,
-            root: apply.root,
+            vault: apply.vault,
             entry: apply.entry,
             trashed: apply.entries() as u64,
-            seq: root_seq(12),
+            seq: vault_seq(12),
             tx: tx_id(0x72),
         }
     }
 }
 
 impl DeleteStore for FakeDeleteStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, TrashStoreError> {
-        self.trace.record(format!("store root_facts {root}"));
-        match self.root_facts_error.take() {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, TrashStoreError> {
+        self.trace.record(format!("store vault_facts {vault}"));
+        match self.vault_facts_error.take() {
             Some(error) => Err(error),
             None => Ok(self.facts),
         }
@@ -1283,11 +1283,11 @@ impl DeleteStore for FakeDeleteStore {
 
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, TrashStoreError> {
         self.trace
-            .record(format!("store entry_baseline {root} {entry}"));
+            .record(format!("store entry_baseline {vault} {entry}"));
         if let Some(error) = self.baseline_error.take() {
             return Err(error);
         }
@@ -1299,11 +1299,11 @@ impl DeleteStore for FakeDeleteStore {
 
     async fn subtree_image(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<SubtreeImage, TrashStoreError> {
         self.trace
-            .record(format!("store subtree_image {root} {entry}"));
+            .record(format!("store subtree_image {vault} {entry}"));
         if let Some(error) = self.image_error.take() {
             return Err(error);
         }
@@ -1331,7 +1331,7 @@ impl DeleteStore for FakeDeleteStore {
 /// 父目录按路径前缀推出：`docs/notes.txt` 的父目录是清单里路径为 `docs` 的那一条；子树根的父目录
 /// 固定为 `parent`。
 pub(crate) fn subtree_image(
-    root: EntryId,
+    vault: EntryId,
     parent: EntryId,
     entries: &[(u8, &str, EntryKind, u64)],
 ) -> SubtreeImage {
@@ -1339,7 +1339,7 @@ pub(crate) fn subtree_image(
         .iter()
         .map(|(marker, path, kind, rev)| {
             let id = entry_id(*marker);
-            let parent = if id == root {
+            let parent = if id == vault {
                 parent
             } else {
                 let parent_path = path.rsplit_once('/').map_or("", |(head, _)| head);
@@ -1362,7 +1362,7 @@ pub(crate) fn subtree_image(
             }
         })
         .collect();
-    SubtreeImage::new(root, items).expect("测试清单合法")
+    SubtreeImage::new(vault, items).expect("测试清单合法")
 }
 
 /// 只取清单条目身份（断言批次覆盖全树用）。
@@ -1426,10 +1426,10 @@ impl ContentLeasePort for FakeContentLease {
 /// 历史版本恢复的内存存储：可脚本化事实与错误，并记录事务输入。
 pub(crate) struct FakeRestoreStore {
     pub(crate) trace: Trace,
-    pub(crate) facts: RootFacts,
+    pub(crate) facts: VaultFacts,
     pub(crate) version: Option<VersionFacts>,
     pub(crate) recorded: Vec<(OperationKey, RecordedVersionRestore)>,
-    pub(crate) root_facts_error: Option<RestoreStoreError>,
+    pub(crate) vault_facts_error: Option<RestoreStoreError>,
     pub(crate) version_error: Option<RestoreStoreError>,
     pub(crate) apply_error: Option<RestoreStoreError>,
     pub(crate) writes: Vec<VersionRestoreWrite>,
@@ -1440,10 +1440,10 @@ impl FakeRestoreStore {
     pub(crate) fn new(version: VersionFacts) -> Self {
         FakeRestoreStore {
             trace: Trace::default(),
-            facts: RootFacts { epoch: epoch(3) },
+            facts: VaultFacts { epoch: epoch(3) },
             version: Some(version),
             recorded: Vec::new(),
-            root_facts_error: None,
+            vault_facts_error: None,
             version_error: None,
             apply_error: None,
             writes: Vec::new(),
@@ -1458,7 +1458,7 @@ impl FakeRestoreStore {
             tx: tx_id(0x73),
             result: CommittedVersionRestore {
                 op: write.key.op,
-                root: write.key.root,
+                vault: write.key.vault,
                 entry: write.entry,
                 version: version_id(0x82),
                 restored_from: write.restored_from,
@@ -1467,7 +1467,7 @@ impl FakeRestoreStore {
                     .expected_revision
                     .next()
                     .expect("测试用 revision 可推进"),
-                seq: root_seq(13),
+                seq: vault_seq(13),
                 path: write.path.clone(),
             },
         }
@@ -1475,9 +1475,9 @@ impl FakeRestoreStore {
 }
 
 impl RestoreStore for FakeRestoreStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError> {
-        self.trace.record(format!("store root_facts {root}"));
-        match self.root_facts_error.take() {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, RestoreStoreError> {
+        self.trace.record(format!("store vault_facts {vault}"));
+        match self.vault_facts_error.take() {
             Some(error) => Err(error),
             None => Ok(self.facts),
         }
@@ -1516,12 +1516,12 @@ impl RestoreStore for FakeRestoreStore {
 
     async fn version_facts(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
         version: VersionId,
     ) -> Result<VersionFacts, RestoreStoreError> {
         self.trace
-            .record(format!("store version_facts {root} {entry} {version}"));
+            .record(format!("store version_facts {vault} {entry} {version}"));
         if let Some(error) = self.version_error.take() {
             return Err(error);
         }
@@ -1565,7 +1565,7 @@ impl RestoreStore for FakeRestoreStore {
 /// 回收站恢复的内存存储：清单、占用、内容事实与事务输入。
 pub(crate) struct FakeTrashRestoreStore {
     pub(crate) trace: Trace,
-    pub(crate) facts: RootFacts,
+    pub(crate) facts: VaultFacts,
     pub(crate) subtrees: std::collections::BTreeMap<EntryId, TrashSubtree>,
     pub(crate) parents: std::collections::BTreeMap<EntryId, EntryKind>,
     /// 原父目录移动后的当前路径；未配置时沿用清单根的原父路径。
@@ -1574,7 +1574,7 @@ pub(crate) struct FakeTrashRestoreStore {
     pub(crate) occupants: std::collections::BTreeMap<(EntryId, String), EntryId>,
     pub(crate) contents: std::collections::BTreeMap<VersionId, ExpectedContent>,
     pub(crate) recorded: Vec<(OperationKey, RecordedTrashRestore)>,
-    pub(crate) root_facts_error: Option<RestoreStoreError>,
+    pub(crate) vault_facts_error: Option<RestoreStoreError>,
     pub(crate) subtree_error: Option<RestoreStoreError>,
     pub(crate) apply_error: Option<RestoreStoreError>,
     pub(crate) writes: Vec<TrashRestoreWrite>,
@@ -1585,14 +1585,14 @@ impl Default for FakeTrashRestoreStore {
     fn default() -> Self {
         FakeTrashRestoreStore {
             trace: Trace::default(),
-            facts: RootFacts { epoch: epoch(3) },
+            facts: VaultFacts { epoch: epoch(3) },
             subtrees: std::collections::BTreeMap::new(),
             parents: std::collections::BTreeMap::new(),
             parent_paths: std::collections::BTreeMap::new(),
             occupants: std::collections::BTreeMap::new(),
             contents: std::collections::BTreeMap::new(),
             recorded: Vec::new(),
-            root_facts_error: None,
+            vault_facts_error: None,
             subtree_error: None,
             apply_error: None,
             writes: Vec::new(),
@@ -1615,7 +1615,7 @@ impl FakeTrashRestoreStore {
     /// 需要区分多个文件时用 [`with_content`](Self::with_content) 覆盖。
     pub(crate) fn with_subtree(mut self, entries: Vec<TrashEntryFacts>, parent: EntryId) -> Self {
         self.parents.insert(parent, EntryKind::Directory);
-        let root = entries.first().cloned().expect("清单至少要有根这一行");
+        let vault = entries.first().cloned().expect("清单至少要有根这一行");
         for facts in &entries {
             if let Some(version) = facts.content_version {
                 self.contents
@@ -1623,7 +1623,7 @@ impl FakeTrashRestoreStore {
                     .or_insert(ExpectedContent::new(digest(0x0d), 11));
             }
         }
-        self.subtrees.insert(root.entry, TrashSubtree { entries });
+        self.subtrees.insert(vault.entry, TrashSubtree { entries });
         self
     }
 
@@ -1645,7 +1645,7 @@ impl FakeTrashRestoreStore {
             tx: tx_id(0x74),
             result: CommittedTrashRestore {
                 op: write.key.op,
-                root: write.key.root,
+                vault: write.key.vault,
                 entry: write.entry,
                 path: write.path.clone(),
                 name: write.name.clone(),
@@ -1654,7 +1654,7 @@ impl FakeTrashRestoreStore {
                     .expected_revision
                     .next()
                     .expect("测试用 revision 可推进"),
-                seq: root_seq(14),
+                seq: vault_seq(14),
                 entries: write.entries.len() as u64,
             },
         }
@@ -1662,9 +1662,9 @@ impl FakeTrashRestoreStore {
 }
 
 impl TrashRestoreStore for FakeTrashRestoreStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError> {
-        self.trace.record(format!("store root_facts {root}"));
-        match self.root_facts_error.take() {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, RestoreStoreError> {
+        self.trace.record(format!("store vault_facts {vault}"));
+        match self.vault_facts_error.take() {
             Some(error) => Err(error),
             None => Ok(self.facts),
         }
@@ -1706,11 +1706,11 @@ impl TrashRestoreStore for FakeTrashRestoreStore {
 
     async fn trash_subtree(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<Option<TrashSubtree>, RestoreStoreError> {
         self.trace
-            .record(format!("store trash_subtree {root} {entry}"));
+            .record(format!("store trash_subtree {vault} {entry}"));
         if let Some(error) = self.subtree_error.take() {
             return Err(error);
         }
@@ -1719,21 +1719,21 @@ impl TrashRestoreStore for FakeTrashRestoreStore {
 
     async fn parent_kind(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
     ) -> Result<Option<EntryKind>, RestoreStoreError> {
         self.trace
-            .record(format!("store parent_kind {root} {parent}"));
+            .record(format!("store parent_kind {vault} {parent}"));
         Ok(self.parents.get(&parent).copied())
     }
 
     async fn parent_path(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
     ) -> Result<Option<String>, RestoreStoreError> {
         self.trace
-            .record(format!("store parent_path {root} {parent}"));
+            .record(format!("store parent_path {vault} {parent}"));
         if let Some(path) = self.parent_paths.get(&parent) {
             return Ok(Some(path.clone()));
         }
@@ -1741,9 +1741,9 @@ impl TrashRestoreStore for FakeTrashRestoreStore {
         Ok(self
             .subtrees
             .values()
-            .map(TrashSubtree::root)
-            .find(|root| root.parent == parent)
-            .map(|root| match root.path.rsplit_once('/') {
+            .map(TrashSubtree::vault)
+            .find(|vault| vault.parent == parent)
+            .map(|vault| match vault.path.rsplit_once('/') {
                 Some((parent_path, _)) => parent_path.to_owned(),
                 None => String::new(),
             }))
@@ -1751,22 +1751,22 @@ impl TrashRestoreStore for FakeTrashRestoreStore {
 
     async fn name_occupant(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
         name: &str,
     ) -> Result<Option<EntryId>, RestoreStoreError> {
         self.trace
-            .record(format!("store name_occupant {root} {parent} {name}"));
+            .record(format!("store name_occupant {vault} {parent} {name}"));
         Ok(self.occupants.get(&(parent, name.to_owned())).copied())
     }
 
     async fn content_facts(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         version: VersionId,
     ) -> Result<Option<ExpectedContent>, RestoreStoreError> {
         self.trace
-            .record(format!("store content_facts {root} {version}"));
+            .record(format!("store content_facts {vault} {version}"));
         Ok(self.contents.get(&version).copied())
     }
 

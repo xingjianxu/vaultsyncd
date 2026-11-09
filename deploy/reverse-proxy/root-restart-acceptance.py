@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only trial data verification plus strict Chromium health after Root fence fix.
+"""Read-only trial data verification plus strict Chromium health after Vault fence fix.
 Args: evidence tls-tools before|test|switch|restart. Sessions revoked, no credentials saved.
 """
 import hashlib
@@ -17,7 +17,7 @@ from playwright.sync_api import sync_playwright, expect
 EVIDENCE, TOOLS = map(Path, sys.argv[1:3])
 PHASE = sys.argv[3]
 assert PHASE in ('before','test','switch','restart')
-ROOT='58e698e16616ff0162055df963f9c1fa'
+VAULT='58e698e16616ff0162055df963f9c1fa'
 BASE=Path('/data/vaultsyncd-trial-s096/mnt')
 ORIGIN='https://localhost:18443'
 def command(args):
@@ -37,24 +37,24 @@ def main():
     password=command(['sudo','-n','cat','/var/lib/vaultsyncd-trial-credentials/owner.password'])
     token=api('/v1/auth/login',{'login':'owner','password':password,'device_label':'S097 read-only restart acceptance'})['access_token']
     try:
-        managed=next(r for r in api('/v1/admin/roots')['roots'] if r['root_id']==ROOT)
-        identity=command(['sudo','-n','-u','vaultsyncd-trial','sqlite3','-readonly',BASE/'state/server.sqlite',"SELECT cast(root_file_identity as text) FROM roots WHERE lower(hex(id))='"+ROOT+"'"])
+        managed=next(r for r in api('/v1/admin/vaults')['vaults'] if r['vault_id']==VAULT)
+        identity=command(['sudo','-n','-u','vaultsyncd-trial','sqlite3','-readonly',BASE/'state/server.sqlite',"SELECT cast(vault_file_identity as text) FROM vaults WHERE lower(hex(id))='"+VAULT+"'"])
         contents={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((BASE/'samples').iterdir()) if p.is_file()}
         checks=[]
         for label in ('linux-chromium','windows-edge'):
             prior=json.loads((EVIDENCE/f'{label}.json').read_text())
             op=prior['committed'];entry=op['entry_id'];version=op['version_id']
-            assert api(f'/v1/roots/{ROOT}/operations/{op["op_id"]}')['state']=='committed'
-            assert hashlib.sha256(api(f'/v1/roots/{ROOT}/entries/{entry}/versions/{version}/content',binary=True)).hexdigest()==prior['sha256']
+            assert api(f'/v1/vaults/{VAULT}/operations/{op["op_id"]}')['state']=='committed'
+            assert hashlib.sha256(api(f'/v1/vaults/{VAULT}/entries/{entry}/versions/{version}/content',binary=True)).hexdigest()==prior['sha256']
             checks.append(label+'-old-committed-operation-and-fixed-version-still-valid')
-        result={'passed':True,'phase':PHASE,'root':ROOT,'server_id':api('/v1/capabilities')['server_id'],'managed':managed,'historical_identity':identity,'contents':contents,'checks':checks}
+        result={'passed':True,'phase':PHASE,'vault':VAULT,'server_id':api('/v1/capabilities')['server_id'],'managed':managed,'historical_identity':identity,'contents':contents,'checks':checks}
         if PHASE!='before':
-            prior=json.loads((EVIDENCE/'root-restart-before.json').read_text())
+            prior=json.loads((EVIDENCE/'vault-restart-before.json').read_text())
             assert result['server_id']==prior['server_id']
             assert identity==prior['historical_identity'] and contents==prior['contents']
-            assert managed['root_seq']==prior['managed']['root_seq'] and managed['health']=='healthy'
-            result['checks'].append('same-server-root-seq-historical-blob-and-all-sample-bytes-healthy')
-            runtime=EVIDENCE/f'root-browser-private-{os.getpid()}';runtime.mkdir(mode=0o700)
+            assert managed['vault_seq']==prior['managed']['vault_seq'] and managed['health']=='healthy'
+            result['checks'].append('same-server-vault-seq-historical-blob-and-all-sample-bytes-healthy')
+            runtime=EVIDENCE/f'vault-browser-private-{os.getpid()}';runtime.mkdir(mode=0o700)
             try:
                 nss=runtime/'.pki/nssdb';nss.mkdir(parents=True)
                 command([TOOLS/'bin/certutil','-N','-d','sql:'+str(nss),'--empty-password'])
@@ -68,21 +68,21 @@ def main():
                         page.get_by_label('登录名',exact=True).fill('owner');page.get_by_label('密码',exact=True).fill(password)
                         page.get_by_role('button',name='登录',exact=True).click()
                         expect(page.get_by_text('已登录：owner',exact=True)).to_be_visible(timeout=20000)
-                        page.get_by_role('link',name='Root 目录',exact=True).click()
-                        page.wait_for_function('root=>fetch("/v1/admin/roots").then(r=>r.json()).then(d=>d.roots.some(x=>x.root_id===root&&x.health==="healthy"&&x.collection.state==="complete"))',arg=ROOT)
+                        page.get_by_role('link',name='Vault 目录',exact=True).click()
+                        page.wait_for_function('vault=>fetch("/v1/admin/vaults").then(r=>r.json()).then(d=>d.vaults.some(x=>x.vault_id===vault&&x.health==="healthy"&&x.collection.state==="complete"))',arg=VAULT)
                         # Wait for React's own fetched rows, not only the API predicate.
                         expect(page.get_by_text('mount_changed',exact=False)).to_have_count(0)
                         expect(page.get_by_text('挂载核对通过',exact=True)).to_be_visible()
                         expect(page.get_by_text('本进程初始采集完成',exact=True)).to_be_visible()
-                        page.screenshot(path=str(EVIDENCE/f'root-restart-{PHASE}.png'),full_page=True)
+                        page.screenshot(path=str(EVIDENCE/f'vault-restart-{PHASE}.png'),full_page=True)
                         result['browser']=browser.version
-                        result['checks'].append('strict-trusted-CA-real-Chromium-login-and-healthy-Root-page')
+                        result['checks'].append('strict-trusted-CA-real-Chromium-login-and-healthy-Vault-page')
                     finally:
                         try:page.evaluate('fetch("/v1/auth/logout",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(r=>r.status)')
                         finally:context.close();browser.close()
             finally:shutil.rmtree(runtime)
-            result['managed']=next(r for r in api('/v1/admin/roots')['roots'] if r['root_id']==ROOT)
-        (EVIDENCE/f'root-restart-{PHASE}.json').write_text(json.dumps(result,indent=2,ensure_ascii=False))
+            result['managed']=next(r for r in api('/v1/admin/vaults')['vaults'] if r['vault_id']==VAULT)
+        (EVIDENCE/f'vault-restart-{PHASE}.json').write_text(json.dumps(result,indent=2,ensure_ascii=False))
         print(json.dumps({'passed':True,'phase':PHASE,'managed':managed,'checks':result['checks']},ensure_ascii=False))
     finally:api('/v1/auth/logout',{})
 

@@ -48,7 +48,7 @@ pub trait OperationStore: Send + Sync {
 pub enum LocalWriteKind {
     /// 用暂存内容替换目标文件（下载安装、远端内容落盘）。
     Replace,
-    /// 同 Root 本地移动。
+    /// 同 Vault 本地移动。
     Move,
     /// 释放本地完整内容。
     Release,

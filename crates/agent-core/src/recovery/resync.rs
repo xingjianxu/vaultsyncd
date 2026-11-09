@@ -172,18 +172,18 @@ impl Resync {
             return Err(error("重建根准入失败，不能把挂载/扫描故障当删除"));
         }
         if journal
-            .root_identity
+            .vault_identity
             .as_ref()
             .is_some_and(|id| *id != admission.identity)
         {
             return Err(error("重建根身份改变"));
         }
-        if journal.root_identity.is_none() {
-            journal.root_identity = Some(admission.identity);
+        if journal.vault_identity.is_none() {
+            journal.vault_identity = Some(admission.identity);
             store::save(&self.database, journal).await?;
         }
         if journal.snapshot.is_none() {
-            let seed = self.snapshot.begin(binding.root).await?;
+            let seed = self.snapshot.begin(binding.vault).await?;
             validate_snapshot(&seed.metadata, &binding, journal)?;
             journal.snapshot = Some(seed.metadata);
             store::save(&self.database, journal).await?;
@@ -193,7 +193,7 @@ impl Resync {
             let page = self
                 .snapshot
                 .page(
-                    binding.root,
+                    binding.vault,
                     &snapshot.snapshot_id,
                     journal.cursor.as_deref(),
                 )
@@ -214,16 +214,16 @@ impl Resync {
             remote(entry)?;
         }
         paths(&journal.entries)?;
-        let old_root = journal
+        let old_vault = journal
             .old_baseline
             .iter()
             .find(|entry| entry.parent.is_none());
-        let new_root = journal
+        let new_vault = journal
             .entries
             .iter()
             .find(|entry| entry.parent_id.is_none());
-        if old_root.map(|e| &e.entry) != new_root.map(|e| &e.entry_id) {
-            return Err(error("合成根身份改变，需核对服务器 Root 身份"));
+        if old_vault.map(|e| &e.entry) != new_vault.map(|e| &e.entry_id) {
+            return Err(error("合成根身份改变，需核对服务器 Vault 身份"));
         }
         journal.items = Some(self.classify(&binding, journal).await?);
         store::save(&self.database, journal).await?;
@@ -564,7 +564,7 @@ struct Journal {
     old_baseline: Vec<SavedBase>,
     old_remote: Vec<SavedBase>,
     old_events: Vec<SavedEvent>,
-    root_identity: Option<String>,
+    vault_identity: Option<String>,
     snapshot: Option<Snapshot>,
     entries: Vec<SnapshotEntry>,
     cursor: Option<String>,
@@ -602,10 +602,10 @@ fn validate_snapshot(
     journal: &Journal,
 ) -> Result<(), PortError> {
     id(&snapshot.snapshot_id)?;
-    if snapshot.root_id != binding.root.to_string()
+    if snapshot.vault_id != binding.vault.to_string()
         || number(&snapshot.server_epoch)? != journal.epoch()
     {
-        return Err(error("快照 Root/epoch 不符，不能混合恢复代际"));
+        return Err(error("快照 Vault/epoch 不符，不能混合恢复代际"));
     }
     let high_water = number(&snapshot.high_water_seq)?;
     if journal.reason == ResyncReason::CursorExpired && high_water < journal.old_received as u64 {
@@ -671,8 +671,8 @@ fn locations(entries: &[SnapshotEntry]) -> Result<Vec<(String, SnapshotEntry)>, 
             return Err(error("条目身份重复"));
         }
     }
-    let roots: Vec<_> = entries.iter().filter(|e| e.parent_id.is_none()).collect();
-    if roots.len() != 1 || roots[0].kind != WireKind::Directory || !roots[0].name.is_empty() {
+    let vaults: Vec<_> = entries.iter().filter(|e| e.parent_id.is_none()).collect();
+    if vaults.len() != 1 || vaults[0].kind != WireKind::Directory || !vaults[0].name.is_empty() {
         return Err(error("重建缺唯一合成根"));
     }
     let mut paths = Vec::new();

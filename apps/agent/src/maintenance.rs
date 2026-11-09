@@ -11,7 +11,7 @@ use vaultsyncd_agent_core::bindings::control::BindingControls;
 use vaultsyncd_client_store::db::Database;
 use vaultsyncd_domain::ids::BindingId;
 use vaultsyncd_local_ipc::generated::*;
-use vaultsyncd_platform_windows::{files::RootHandle, ipc::Endpoint};
+use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 use vaultsyncd_transfer::ports::PortError;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const LEGACY_SOURCE: &str = "cf1d174c3bd47b4babc2db053514619b2e733b07";
@@ -155,8 +155,8 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
     {
         return Err("ZIP_PROFILE: installed maintenance cannot adopt ZIP state; keep original ZIP and use its safe Stop entry. ZIP upgrades are not supported by this release".into());
     }
-    let program_root = RootHandle::open(program)?;
-    let state = RootHandle::open(&config.state_dir)?;
+    let program_root = VaultHandle::open(program)?;
+    let state = VaultHandle::open(&config.state_dir)?;
     if program_root.overlaps(&state) {
         return Err("program/state overlap".into());
     }
@@ -220,7 +220,7 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
         {
             return Err("same-version/downgrade replacement refused; use explicit recovery".into());
         }
-        if program_root.overlaps(&RootHandle::open(candidate)?) {
+        if program_root.overlaps(&VaultHandle::open(candidate)?) {
             return Err("upgrade candidate must be separate from installed program".into());
         }
     }
@@ -250,7 +250,7 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
     };
     let maintenance = profile(&config)?.join("maintenance");
     fs::create_dir_all(&maintenance)?;
-    RootHandle::open(&maintenance)?;
+    VaultHandle::open(&maintenance)?;
     let mut nonce = [0u8; 16];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut nonce);
     let backup = maintenance.join(vaultsyncd_transfer::hash::to_hex(
@@ -363,7 +363,7 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
                 for binding in &config.bindings{let id=BindingId::from_hex(&binding.id)?;let local=Arc::new(crate::local::Local::open(&binding.path,&binding.cache,db.clone(),id).await?);crate::management_export::export(local,&config,plan.backup.join("recovery").join(&binding.id).to_str().ok_or("invalid recovery destination")?).await?;}}
             if action.starts_with("uninstall-"){storage::require_program_idle(program)?;}
             if action=="uninstall-provider"{
-                // Preflight every Root before converting any file. Never unregister partial placeholders.
+                // Preflight every Vault before converting any file. Never unregister partial placeholders.
                 for binding in &config.bindings{vaultsyncd_platform_windows::cfapi::maintenance::check_materialized(&binding.path)?;}
                 let mut reports=vec![];
                 for binding in &config.bindings{

@@ -3,6 +3,6 @@
   "kind": "ok",
   "result": {
     "agent_version": "0.1.0",
-    "ipc_protocol": { "major": 1, "minor": 0 }
+    "ipc_protocol": { "major": 2, "minor": 0 }
   }
 }

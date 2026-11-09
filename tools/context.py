@@ -13,9 +13,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CARD_FILE = REPO_ROOT / "agent" / "implementation-plan.md"
-DESIGN_FILE = REPO_ROOT / "docs" / "design.md"
+REPO_VAULT = Path(__file__).resolve().parent.parent
+CARD_FILE = REPO_VAULT / "agent" / "implementation-plan.md"
+DESIGN_FILE = REPO_VAULT / "docs" / "design.md"
 
 ATX_HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*$")
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
@@ -138,7 +138,7 @@ def scan_headings(lines: list[str], mode: str) -> tuple[list[Heading], int | Non
 
 def load_document(mode: str) -> Document:
     path = CARD_FILE if mode == "card" else DESIGN_FILE
-    display = path.relative_to(REPO_ROOT).as_posix()
+    display = path.relative_to(REPO_VAULT).as_posix()
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as error:

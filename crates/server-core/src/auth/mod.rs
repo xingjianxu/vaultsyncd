@@ -8,7 +8,7 @@
 //! - [`login`]：凭据校验用例——限流在前、统一失败、不泄露账号是否存在；
 //! - [`throttle`]：登录失败限流（进程内、按登录名、按服务端时间）；
 //! - [`session`]：会话签发/校验/刷新轮换/注销，凭据只存摘要、刷新单次使用；
-//! - [`scope`]：每次资源请求按 owner/root scope 检查（I15）。
+//! - [`scope`]：每次资源请求按 owner/vault scope 检查（I15）。
 //!
 //! 边界：本模块不做 I/O（存储经 [`account::OwnerAccounts`] 与 [`session::SessionStore`] 端口）、
 //! 不读时钟（时间由调用方给出）、不处理 HTTP（路由、cookie 与 CSRF 在 `apps/server`，错误映射用

@@ -16,7 +16,7 @@ import uuid
 
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
-ROOT = Path(__file__).resolve().parents[3]
+VAULT = Path(__file__).resolve().parents[3]
 HOST = os.environ.get("GUEST_HOST", "127.0.0.1")
 USER = os.environ.get("GUEST_USER", "Quickemu")
 PORT = os.environ.get("GUEST_PORT", "2222")
@@ -28,7 +28,7 @@ SCP = ["scp", "-P", PORT, *OPTIONS]
 
 
 def checked(args, **kwargs):
-    result = subprocess.run([str(x) for x in args], cwd=ROOT, text=True,
+    result = subprocess.run([str(x) for x in args], cwd=VAULT, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
     if result.returncode:
         raise RuntimeError(f"{args[0]} failed ({result.returncode}): {result.stderr[-2000:]}")
@@ -41,7 +41,7 @@ def main():
     assert receipt["component"] == "windows-client" and receipt["target"] == "x86_64-pc-windows-msvc"
     assert receipt["source"]["commit"] == checked(["git", "rev-parse", "HEAD"]).strip()
     run_id = f"s099-{int(time.time())}-{os.getpid()}"
-    run = ROOT / "artifacts/S099" / run_id
+    run = VAULT / "artifacts/S099" / run_id
     run.mkdir(parents=True)
     checked(["nix", "develop", "--command", "cargo", "xtask", "release", "assemble",
              run / "release-manifest.json", component])
@@ -49,11 +49,11 @@ def main():
              run / "release-manifest.json"])
     checked(["nix", "develop", "--command", "cargo", "build", "--locked", "-p",
              "vaultsyncd-server-tests", "--example", "e2e-native-server"])
-    helper = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "debug/examples/e2e-native-server"
+    helper = Path(os.environ.get("CARGO_TARGET_DIR", VAULT / "target")) / "debug/examples/e2e-native-server"
     scenario = {"server_seed": [{"path": "server-seed.txt", "content": "S099 server before installation"}]}
     (run / "scenario.json").write_text(json.dumps(scenario))
     server = subprocess.Popen([str(helper), str(run / "host-fixture.json"), str(run / "stop"),
-                               str(run / "scenario.json")], cwd=ROOT,
+                               str(run / "scenario.json")], cwd=VAULT,
                               stdout=(run / "server.log").open("w"), stderr=subprocess.STDOUT)
     tls = tunnel = None
     prepared = False
@@ -84,7 +84,7 @@ def main():
     def ready(filename):
         def poll():
             error = subprocess.run([*SSH, f'powershell -NoProfile -Command "[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); if(Test-Path \'{results}/worker-error.json\'){{Get-Content -Raw -Encoding UTF8 \'{results}/worker-error.json\'}}"'],
-                                   capture_output=True, text=True, cwd=ROOT)
+                                   capture_output=True, text=True, cwd=VAULT)
             if error.stdout.strip():
                 raise AssertionError("native worker: " + error.stdout)
             return json.loads(read_guest(f"{results}/{filename}"))
@@ -109,7 +109,7 @@ def main():
         tunnel = subprocess.Popen(["ssh", "-p", PORT, *OPTIONS, "-o", "ExitOnForwardFailure=yes", "-N",
                                    "-R", f"127.0.0.1:18775:127.0.0.1:{port}",
                                    "-L", "127.0.0.1:19299:127.0.0.1:19299", f"{USER}@{HOST}"],
-                                  cwd=ROOT, stdout=(run / "tunnel.log").open("a"), stderr=subprocess.STDOUT)
+                                  cwd=VAULT, stdout=(run / "tunnel.log").open("a"), stderr=subprocess.STDOUT)
         time.sleep(.5)
         assert tunnel.poll() is None, "isolated authenticated tunnel failed"
 
@@ -119,7 +119,7 @@ def main():
         # SSH disconnect is expected; a different real boot timestamp is required before continuing.
         try:
             subprocess.run([*SSH, 'powershell -NoProfile -Command "Restart-Computer -Force"'],
-                           cwd=ROOT, capture_output=True, timeout=30)
+                           cwd=VAULT, capture_output=True, timeout=30)
         except subprocess.TimeoutExpired:
             pass  # Only a changed real boot timestamp below permits continuation.
         after = wait(label + " actual boot", lambda: (value if (value := boot()) != before else None), 420)
@@ -131,7 +131,7 @@ def main():
         wait("real server", lambda: (run / "host-fixture.json").exists() and server.poll() is None)
         fixture = json.loads((run / "host-fixture.json").read_text())
         work = Path(fixture["work_dir"])
-        assert work.resolve().is_relative_to(ROOT / "target"), "rebuild stale embedded helper in this worktree"
+        assert work.resolve().is_relative_to(VAULT / "target"), "rebuild stale embedded helper in this worktree"
         from urllib.parse import urlparse
         backend = str(urlparse(fixture["url"]).port)
         checked(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj",
@@ -141,8 +141,8 @@ def main():
         (run / "server.ext").write_text("subjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
         checked(["openssl", "x509", "-req", "-days", "1", "-in", run / "server.csr", "-CA", run / "ca.pem",
                  "-CAkey", run / "ca.key", "-CAcreateserial", "-extfile", run / "server.ext", "-out", run / "server.pem"])
-        tls = subprocess.Popen([sys.executable, str(ROOT / "tests/platform/windows/s081-tls.py"), str(run), backend],
-                               cwd=ROOT, stdout=(run / "tls.log").open("w"), stderr=subprocess.STDOUT)
+        tls = subprocess.Popen([sys.executable, str(VAULT / "tests/platform/windows/s081-tls.py"), str(run), backend],
+                               cwd=VAULT, stdout=(run / "tls.log").open("w"), stderr=subprocess.STDOUT)
         tls_port = wait("private TLS listener", lambda: (int((run / "tls-port").read_text()) if (run / "tls-port").exists() else None))
         setup = next((component / "payload").glob("*-unsigned-setup.exe"))
         fixture.update({"url": "https://127.0.0.1:18775", "serverId": uuid.uuid4().hex,
@@ -150,9 +150,9 @@ def main():
                         "ci_cleanup": os.environ.get("VAULTSYNCD_CI_CLEANUP") == "1"})
         (run / "fixture.json").write_text(json.dumps(fixture))
         script = run / "s099-installation.ps1"
-        script.write_text((ROOT / "tests/platform/windows/s099-installation.ps1").read_text(), encoding="utf-8-sig")
+        script.write_text((VAULT / "tests/platform/windows/s099-installation.ps1").read_text(), encoding="utf-8-sig")
         secret_script = run / "s099-logon-secrets.ps1"
-        secret_script.write_text((ROOT / "tests/platform/windows/s099-logon-secrets.ps1").read_text(), encoding="utf-8-sig")
+        secret_script.write_text((VAULT / "tests/platform/windows/s099-logon-secrets.ps1").read_text(), encoding="utf-8-sig")
         (run / "hashes.json").write_text(json.dumps({path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in [setup, script, secret_script]}))
         checked([*SSH, f'powershell -NoProfile -Command "New-Item -ItemType Directory \'{guest}\' | Out-Null"'])
         checked([*SCP, setup, run / "fixture.json", run / "hashes.json", run / "ca.pem",
@@ -186,8 +186,8 @@ def main():
             page.get_by_role("button", name="登录", exact=True).click()
             page.get_by_text(re.compile("已登录（持有凭据")).wait_for(state="visible")
             page.get_by_role("link", name="同步目录", exact=True).click()
-            page.get_by_role("button", name="读取授权 Root", exact=True).click()
-            page.locator('[name="root_id"]').select_option(fixture["root"])
+            page.get_by_role("button", name="读取授权 Vault", exact=True).click()
+            page.locator('[name="vault_id"]').select_option(fixture["vault"])
             page.locator('[name="local_path"]').fill(installed["local"])
             page.locator('[name="mode"]').select_option("full")
             page.get_by_role("button", name="创建绑定并开始合并", exact=True).click()

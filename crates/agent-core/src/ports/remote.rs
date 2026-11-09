@@ -11,9 +11,9 @@
 //!   适配器不得把 202 `pending` 包装成成功。
 //! - **重试复用同一个 `OpId`**：`submit` 的请求由调用方构造并保留 `op_id`；`operation` 用同一个
 //!   `OpId` 查询，服务端据此返回已记录结果而不是第二次执行（design §15.3）。
-//! - **传输端点按绑定取**：上传与内容接口都绑定一个 Root（design §15.2）；端口返回 trait object，
+//! - **传输端点按绑定取**：上传与内容接口都绑定一个 Vault（design §15.2）；端口返回 trait object，
 //!   核心的传输执行器直接使用，不关心 HTTP 细节。
-//! - **身份只由领域类型表达**：请求里的 `op_id`/`root` 等文本由适配器从领域身份编码；端口参数用
+//! - **身份只由领域类型表达**：请求里的 `op_id`/`vault` 等文本由适配器从领域身份编码；端口参数用
 //!   [`OpId`]/[`BindingId`]，避免核心自己拼十六进制。
 
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use vaultsyncd_transfer::ports::{PortFuture, UploadTarget, VersionedContent};
 
 /// 远端操作与传输端口。
 pub trait RemotePort: Send + Sync {
-    /// 提交一次操作；同一 `(root, device, op_id)` 重复提交返回已记录结果（[`OperationResult`]）。
+    /// 提交一次操作；同一 `(vault, device, op_id)` 重复提交返回已记录结果（[`OperationResult`]）。
     fn submit(
         &self,
         request: &OperationRequest,

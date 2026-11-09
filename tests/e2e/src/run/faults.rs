@@ -128,11 +128,11 @@ async fn observe(run: &mut Run, index: usize, phase: &str) -> Result<serde_json:
 }
 async fn delete(run: &Run, name: &str) -> Result<()> {
     let entry = snapshot_entry(&run.entries().await?, name)?;
-    let (snapshot, _) = sync::snapshot(&run.api, &run.root).await?;
+    let (snapshot, _) = sync::snapshot(&run.api, &run.vault).await?;
     let operation = serde_json::from_value(
         json!({"op_id":id32(),"device_id":id32(),"server_epoch":snapshot.server_epoch,"kind":"delete","entry_id":entry.entry_id,"base_revision":entry.revision,"local_generation":"1"}),
     )?;
-    let result = sync::submit(&run.api, &run.root, &operation).await?;
+    let result = sync::submit(&run.api, &run.vault, &operation).await?;
     if result.state != OperationState::Committed {
         return Err(format!("delete not committed: {result:?}").into());
     }
@@ -175,7 +175,7 @@ async fn round(options: &Options) -> Result<serde_json::Value> {
     }
     let mut run = Run {
         api,
-        root: fixture.root.clone(),
+        vault: fixture.vault.clone(),
         proxy,
         fixture: fixture.clone(),
         agent: options.agent.clone(),
@@ -183,8 +183,8 @@ async fn round(options: &Options) -> Result<serde_json::Value> {
         clients,
     };
     let outcome = matrix(&mut run).await;
-    // Always stop our processes and unregister only our four CFAPI roots; no other lab state.
-    let cleanup = run.cleanup(&fixture.root);
+    // Always stop our processes and unregister only our four CFAPI vaults; no other lab state.
+    let cleanup = run.cleanup(&fixture.vault);
     erase_test_credential(CREDENTIAL_NAMESPACE);
     let mut report = outcome?;
     report["cleanup_warnings"] = json!(cleanup);
@@ -199,7 +199,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
         run.sync_client(index).await?;
         saved_log(run, index, "initial")?;
         for seed in &run.fixture.seeded {
-            if hash_of(&fs::read(run.clients[index].root.join(&seed.path))?) != seed.hash {
+            if hash_of(&fs::read(run.clients[index].vault.join(&seed.path))?) != seed.hash {
                 return Err("initial native hydration mismatch".into());
             }
         }
@@ -224,7 +224,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
         run.stop_client(0).await?;
         saved_log(run, 0, mode)?;
         let injected = run.proxy.sse_effects().iter().any(|v| v == mode);
-        let content = fs::read(run.clients[0].root.join("event.txt"))?;
+        let content = fs::read(run.clients[0].vault.join("event.txt"))?;
         let rows = run.entries().await?;
         let event = snapshot_entry(&rows, "event.txt")?;
         let database = db(&run.clients[0]).await?;
@@ -237,7 +237,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
     // Queue the rollback device before expiry, while all its baseline files still exist.
     run.proxy.block_before_forward(Some("delete"));
     run.start_client(3).await?;
-    fs::remove_file(run.clients[3].root.join("pending-delete.txt"))?;
+    fs::remove_file(run.clients[3].vault.join("pending-delete.txt"))?;
     let end = Instant::now() + Duration::from_secs(30);
     while run.proxy.blocked_requests().is_empty() && Instant::now() < end {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -251,9 +251,9 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
         return Err("real old Delete never reached pre-forward fault".into());
     }
     // Keep two deliberately old baseline DBs untouched while the server commits deletes.
-    write_file(&run.clients[1].root, "dirty.txt", DIRTY)?;
-    write_file(&run.clients[2].root, "dirty.txt", DIRTY)?;
-    write_file(&run.clients[3].root, "dirty.txt", DIRTY)?;
+    write_file(&run.clients[1].vault, "dirty.txt", DIRTY)?;
+    write_file(&run.clients[2].vault, "dirty.txt", DIRTY)?;
+    write_file(&run.clients[3].vault, "dirty.txt", DIRTY)?;
     delete(run, "clean.txt").await?;
     delete(run, "dirty.txt").await?;
     let cursor_fixture = control(run, "expire_cursor").await?;
@@ -269,7 +269,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
         "real_cursor_410":run.proxy.audit()[audit_before..].iter().any(|(p,s)|p.contains("/changes?") && *s==410),
         "rebuild_outage_does_not_discover_old_files":run.proxy.blocked_snapshots()>0 && outage["database"]["resyncs"]!="0" && outage["database"]["pending"]=="0",
         "no_clean_revival":!snapshot.contains_key("clean.txt"),
-        "dirty_bytes_retained":fs::read(run.clients[1].root.join("dirty.txt")).ok().as_deref()==Some(DIRTY.as_bytes()),
+        "dirty_bytes_retained":fs::read(run.clients[1].vault.join("dirty.txt")).ok().as_deref()==Some(DIRTY.as_bytes()),
         "rebuild_journal_persisted":observed["database"]["resyncs"]!="0",
         "old_baseline_retained":observed["database"]["baseline"]==initial[1]["baseline"],
         "clean_classified_retired":classified(&observed,"clean.txt","RetiredClean"),
@@ -289,8 +289,8 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
         .api
         .send(
             ApiRequest::get(format!(
-                "/v1/roots/{}/entries/{}/versions/{}/content",
-                run.root,
+                "/v1/vaults/{}/entries/{}/versions/{}/content",
+                run.vault,
                 initial_dirty.entry_id,
                 initial_dirty
                     .version_id
@@ -307,7 +307,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
     };
     let observed = observe(run, 2, "history-expired").await?;
     let paths = path_map(&run.entries().await?)?;
-    let checks = json!({"real_history_expired":expired,"no_clean_revival":!paths.contains_key("clean.txt"),"dirty_bytes_retained":fs::read(run.clients[2].root.join("dirty.txt")).ok().as_deref()==Some(DIRTY.as_bytes()),"rebuild_journal_persisted":observed["database"]["resyncs"]!="0","old_baseline_retained":observed["database"]["baseline"]==initial[2]["baseline"],"clean_classified_retired":classified(&observed,"clean.txt","RetiredClean"),"dirty_classified_recovery":classified(&observed,"dirty.txt","RecoveryCandidate")});
+    let checks = json!({"real_history_expired":expired,"no_clean_revival":!paths.contains_key("clean.txt"),"dirty_bytes_retained":fs::read(run.clients[2].vault.join("dirty.txt")).ok().as_deref()==Some(DIRTY.as_bytes()),"rebuild_journal_persisted":observed["database"]["resyncs"]!="0","old_baseline_retained":observed["database"]["baseline"]==initial[2]["baseline"],"clean_classified_retired":classified(&observed,"clean.txt","RetiredClean"),"dirty_classified_recovery":classified(&observed,"dirty.txt","RecoveryCandidate")});
     scenes.push(scene(
         "T15-history-expired",
         checks,
@@ -317,7 +317,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
     // Restore the actual verified old archive; do not fabricate a new epoch in live SQLite.
     let restored = control(run, "restore").await?;
     fresh_owner(run).await?;
-    let (restored_snapshot, _) = sync::snapshot(&run.api, &run.root).await?;
+    let (restored_snapshot, _) = sync::snapshot(&run.api, &run.vault).await?;
     let before = run.proxy.events().len();
     let observed = observe(run, 3, "restored-epoch").await?;
     let restarted = observe(run, 3, "restored-restart").await?;
@@ -332,7 +332,7 @@ async fn matrix(run: &mut Run) -> Result<serde_json::Value> {
         "genuine_pending_delete":pending_before["pending"]!="0" && blocked.iter().any(|v|v["kind"]=="delete"),
         "no_old_epoch_delete_sent":replayed.is_empty(),
         "restored_file_not_deleted":paths.contains_key("pending-delete.txt"),
-        "dirty_bytes_retained":fs::read(run.clients[3].root.join("dirty.txt")).ok().as_deref()==Some(DIRTY.as_bytes()),
+        "dirty_bytes_retained":fs::read(run.clients[3].vault.join("dirty.txt")).ok().as_deref()==Some(DIRTY.as_bytes()),
         "old_delete_quarantined":observed["database"]["quarantined"]!="0",
         "rollback_journal_persisted":observed["database"]["resyncs"]!="0",
         "quarantine_survives_restart":restarted["database"]["quarantined"]==observed["database"]["quarantined"] && restarted["database"]["quarantined"]!="0",

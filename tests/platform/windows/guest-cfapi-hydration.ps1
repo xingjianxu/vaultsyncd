@@ -12,7 +12,7 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Directory,
-    [Parameter(Mandatory = $true)][string]$Root,
+    [Parameter(Mandatory = $true)][string]$Vault,
     [string]$Exe = 'cfapi-prototype.exe'
 )
 
@@ -103,33 +103,33 @@ $os = Get-CimInstance -ClassName Win32_OperatingSystem
 Write-Output "guest_os: $($os.Caption)"
 Write-Output "guest_build: $($os.BuildNumber)"
 Write-Output "guest_exe_sha256 $Exe $((Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToLower())"
-$volume = Get-Volume -DriveLetter $Root.Substring(0, 1)
-Write-Output "guest_root_volume filesystem=$($volume.FileSystem) drive=$($volume.DriveLetter)"
+$volume = Get-Volume -DriveLetter $Vault.Substring(0, 1)
+Write-Output "guest_vault_volume filesystem=$($volume.FileSystem) drive=$($volume.DriveLetter)"
 
 Stage 'prereset'
-if (Test-Path -LiteralPath $Root) {
-    & $exePath cleanup --root $Root | Out-Null
+if (Test-Path -LiteralPath $Vault) {
+    & $exePath cleanup --vault $Vault | Out-Null
     Write-Output "prereset_cleanup_exit=$LASTEXITCODE"
-    Remove-Item -LiteralPath $Root -Recurse -Force
+    Remove-Item -LiteralPath $Vault -Recurse -Force
 }
-New-Item -ItemType Directory -Force -Path $Root | Out-Null
-$keepPath = Join-Path $Root 'user-keep.txt'
+New-Item -ItemType Directory -Force -Path $Vault | Out-Null
+$keepPath = Join-Path $Vault 'user-keep.txt'
 Set-Content -LiteralPath $keepPath -Value "user content must survive cleanup`r`nS011 vaultsyncd" -NoNewline -Encoding Ascii
 $keepHashBefore = FileSha256 $keepPath
 Write-Output "user_keep_before sha256=$keepHashBefore size=$((Get-Item -LiteralPath $keepPath).Length)"
 
 Stage 'create'
-RunExe @('create', '--root', $Root)
+RunExe @('create', '--vault', $Vault)
 Check 'create_exit' ($lastExit -eq 0) "exit=$lastExit"
 
 Stage 'inspect_dehydrated'
-RunExe @('inspect', '--root', $Root)
+RunExe @('inspect', '--vault', $Vault)
 Check 'inspect_dehydrated_exit' ($lastExit -eq 0) "exit=$lastExit"
 
 # --- 离线：未水合条目必须明确失败，不能返回 0 字节成功 -------------------------------
 Stage 'offline_dehydrated'
 foreach ($name in @($small, $large, $huge)) {
-    RunExe @('read', '--root', $Root, '--name', $name, '--source', 'unavailable', '--expect', 'failure')
+    RunExe @('read', '--vault', $Vault, '--name', $name, '--source', 'unavailable', '--expect', 'failure')
     $outcome = Field 'read.result' 'outcome'
     $bytes = Field 'read.result' 'bytes'
     $readError = Field 'read.result' 'error'
@@ -141,8 +141,8 @@ foreach ($name in @($small, $large, $huge)) {
 
 # --- 读取整份内容：字节与哈希必须等于固定内容版本 -----------------------------------
 Stage 'read_small'
-$smallPath = Join-Path (Join-Path $Root $prototypeDirName) $small
-RunExe @('read', '--root', $Root, '--name', $small)
+$smallPath = Join-Path (Join-Path $Vault $prototypeDirName) $small
+RunExe @('read', '--vault', $Vault, '--name', $small)
 $bytes = Field 'read.result' 'bytes'
 $digestMatch = Field 'read.result' 'digest_match'
 $onDisk = Field 'read.result' 'on_disk_data_size'
@@ -157,21 +157,21 @@ Check 'read_small_length' ((Get-Item -LiteralPath $smallPath).Length -eq 12345) 
 
 # --- 离线读取已水合数据：本地命中，不应再向提供方请求内容 ---------------------------
 Stage 'offline_hydrated'
-RunExe @('read', '--root', $Root, '--name', $small, '--source', 'unavailable')
+RunExe @('read', '--vault', $Vault, '--name', $small, '--source', 'unavailable')
 $outcome = Field 'read.result' 'outcome'
 $digestMatch = Field 'read.result' 'digest_match'
 $fetches = Field 'provider.stats' 'fetch_requests'
 Check 'offline_hydrated_read_ok' ($lastExit -eq 0 -and $outcome -eq 'matched' -and $digestMatch -eq 'true') `
     "exit=$lastExit outcome=$outcome digest_match=$digestMatch"
 Check 'offline_hydrated_no_fetch' ($fetches -eq '0') "fetch_requests=$fetches"
-RunExe @('read', '--root', $Root, '--name', $large, '--source', 'unavailable', '--expect', 'failure')
+RunExe @('read', '--vault', $Vault, '--name', $large, '--source', 'unavailable', '--expect', 'failure')
 Check 'offline_unhydrated_still_fails' ($lastExit -eq 0 -and (Field 'read.result' 'outcome') -eq 'failed') `
     "exit=$lastExit outcome=$(Field 'read.result' 'outcome') error=$(Field 'read.result' 'error')"
 
 # --- 范围水合：平台应按页对齐请求一段而不是整份 -----------------------------------
 Stage 'hydrate_range'
-$hugePath = Join-Path (Join-Path $Root $prototypeDirName) $huge
-RunExe @('hydrate', '--root', $Root, '--name', $huge, '--offset', "$rangeOffset", '--length', "$rangeLength")
+$hugePath = Join-Path (Join-Path $Vault $prototypeDirName) $huge
+RunExe @('hydrate', '--vault', $Vault, '--name', $huge, '--offset', "$rangeOffset", '--length', "$rangeLength")
 $platformOffset = Field 'hydrate.result' 'platform_offset'
 $platformLength = Field 'hydrate.result' 'platform_length'
 $hydrateHr = Field 'hydrate.result' 'hydrate_hresult'
@@ -185,7 +185,7 @@ Write-Output "guest_range_sha256 name=$huge offset=$rangeOffset length=$rangeLen
 
 # --- 大条目整份读取：分段回填（每段 64 KiB）后字节与哈希仍必须正确 -----------------
 Stage 'read_huge_full'
-RunExe @('read', '--root', $Root, '--name', $huge)
+RunExe @('read', '--vault', $Vault, '--name', $huge)
 $bytes = Field 'read.result' 'bytes'
 $chunks = Field 'provider.stats' 'chunks_sent'
 Check 'read_huge_exit' ($lastExit -eq 0) "exit=$lastExit"
@@ -197,7 +197,7 @@ Write-Output "guest_file_sha256 name=$huge sha256=$hugeHash"
 
 # --- 传输中断开同步根：回填循环必须尽快停止，调用有界返回 ---------------------------
 Stage 'abort_disconnect'
-RunExe @('hydrate', '--root', $Root, '--name', $large, '--offset', '0', '--length', '1048576', '--chunk-delay-ms', '150', '--disconnect-after-ms', '400')
+RunExe @('hydrate', '--vault', $Vault, '--name', $large, '--offset', '0', '--length', '1048576', '--chunk-delay-ms', '150', '--disconnect-after-ms', '400')
 $interruption = Field 'hydrate.result' 'interruption'
 $chunksSent = Field 'hydrate.result' 'chunks_sent'
 $failedAcks = Field 'hydrate.result' 'failed_acks'
@@ -211,15 +211,15 @@ Check 'abort_no_inflight' ($inFlight -eq '0') "in_flight=$inFlight"
 
 # --- 重置为脱水状态，验证“句柄可关闭、无永久卡住”的取消路径 -------------------------
 Stage 'reset_placeholders'
-& $exePath cleanup --root $Root | Out-Null
+& $exePath cleanup --vault $Vault | Out-Null
 Write-Output "reset_cleanup_exit=$LASTEXITCODE"
-Remove-Item -LiteralPath (Join-Path $Root $prototypeDirName) -Recurse -Force -ErrorAction SilentlyContinue
-RunExe @('create', '--root', $Root)
+Remove-Item -LiteralPath (Join-Path $Vault $prototypeDirName) -Recurse -Force -ErrorAction SilentlyContinue
+RunExe @('create', '--vault', $Vault)
 Check 'reset_create_exit' ($lastExit -eq 0) "exit=$lastExit"
 
 Stage 'cancel_close_handle'
 # 1 MiB 条目 + 100 ms/段：整份水合约 1.6 s，取消点在 300 ms，足以验证“取消后读取有界返回”。
-RunExe @('cancel', '--root', $Root, '--name', $large, '--cancel-after-ms', '300', '--chunk-delay-ms', '100')
+RunExe @('cancel', '--vault', $Vault, '--name', $large, '--cancel-after-ms', '300', '--chunk-delay-ms', '100')
 $cancelCode = Field 'cancel.result' 'cancel_code'
 $returnMs = Field 'cancel.result' 'cancel_to_return_ms'
 $cancelCallbacks = Field 'cancel.result' 'cancel_callbacks'
@@ -234,14 +234,14 @@ Write-Output "cancel_callback_observed=${cancelCallbacks} aborted_fetches=${abor
 
 # --- 超时：慢源超过阈值必须明确失败且有界返回，不能悬挂 -----------------------------
 Stage 'reset_for_timeout'
-& $exePath cleanup --root $Root | Out-Null
+& $exePath cleanup --vault $Vault | Out-Null
 Write-Output "timeout_reset_cleanup_exit=$LASTEXITCODE"
-Remove-Item -LiteralPath (Join-Path $Root $prototypeDirName) -Recurse -Force -ErrorAction SilentlyContinue
-RunExe @('create', '--root', $Root)
+Remove-Item -LiteralPath (Join-Path $Vault $prototypeDirName) -Recurse -Force -ErrorAction SilentlyContinue
+RunExe @('create', '--vault', $Vault)
 Check 'timeout_reset_create_exit' ($lastExit -eq 0) "exit=$lastExit"
 
 Stage 'timeout_short'
-RunExe @('read', '--root', $Root, '--name', $small, '--latency-ms', '1200', '--timeout-ms', '600', '--expect', 'failure')
+RunExe @('read', '--vault', $Vault, '--name', $small, '--latency-ms', '1200', '--timeout-ms', '600', '--expect', 'failure')
 $outcome = Field 'read.result' 'outcome'
 $readError = Field 'read.result' 'error'
 $elapsed = Field 'read.result' 'elapsed_ms'
@@ -251,35 +251,35 @@ Check 'timeout_source_counted' ([int]$timeouts -ge 1) "timeout_fetches=$timeouts
 Check 'timeout_bounded' ([int]$elapsed -le 3000) "elapsed_ms=$elapsed"
 
 Stage 'timeout_large'
-RunExe @('read', '--root', $Root, '--name', $large, '--latency-ms', '1500', '--timeout-ms', '500', '--expect', 'failure')
+RunExe @('read', '--vault', $Vault, '--name', $large, '--latency-ms', '1500', '--timeout-ms', '500', '--expect', 'failure')
 Check 'timeout_large_fails_bounded' ($lastExit -eq 0 -and (Field 'read.result' 'outcome') -eq 'failed') `
     "exit=$lastExit outcome=$(Field 'read.result' 'outcome') elapsed_ms=$(Field 'read.result' 'elapsed_ms') error=$(Field 'read.result' 'error')"
 
 # --- 重复请求：超时失败后再次读取必须成功且哈希一致（同一固定版本，无混版本） -----
 Stage 'retry_after_timeout'
-RunExe @('read', '--root', $Root, '--name', $small)
+RunExe @('read', '--vault', $Vault, '--name', $small)
 $fetches = Field 'provider.stats' 'fetch_requests'
 $chunks = Field 'provider.stats' 'chunks_sent'
 Check 'retry_after_timeout_ok' ($lastExit -eq 0 -and (Field 'read.result' 'digest_match') -eq 'true') `
     "exit=$lastExit digest_match=$(Field 'read.result' 'digest_match') fetch_requests=$fetches chunks_sent=$chunks"
-$retryHash = FileSha256 (Join-Path (Join-Path $Root $prototypeDirName) $small)
+$retryHash = FileSha256 (Join-Path (Join-Path $Vault $prototypeDirName) $small)
 Check 'retry_after_timeout_hash' ($retryHash -eq $smallHash) "before=$smallHash after=$retryHash"
 
 # --- 收尾：只删本工具占位，用户内容保留，注销生效 ----------------------------------
 Stage 'inspect_hydrated'
-RunExe @('inspect', '--root', $Root, '--allow-hydrated')
+RunExe @('inspect', '--vault', $Vault, '--allow-hydrated')
 Check 'inspect_hydrated_exit' ($lastExit -eq 0) "exit=$lastExit"
 
 Stage 'cleanup'
-RunExe @('cleanup', '--root', $Root)
+RunExe @('cleanup', '--vault', $Vault)
 Check 'cleanup_exit' ($lastExit -eq 0) "exit=$lastExit"
-$dirExists = Test-Path -LiteralPath (Join-Path $Root $prototypeDirName)
+$dirExists = Test-Path -LiteralPath (Join-Path $Vault $prototypeDirName)
 Check 'cleanup_removed_probe_dir' (-not $dirExists) "path=$prototypeDirName"
 $keepHashAfter = FileSha256 $keepPath
 Check 'cleanup_preserved_user_content' ($keepHashAfter -eq $keepHashBefore) "before=$keepHashBefore after=$keepHashAfter"
-RunExe @('inspect', '--root', $Root)
+RunExe @('inspect', '--vault', $Vault)
 Check 'unregistered_after_cleanup' ($lastExit -eq 3) "exit=$lastExit (3 = not registered)"
-RunExe @('cleanup', '--root', $Root)
+RunExe @('cleanup', '--vault', $Vault)
 Check 'cleanup_again_exit' ($lastExit -eq 0) "exit=$lastExit"
 
 if ($failed -ne 0) {

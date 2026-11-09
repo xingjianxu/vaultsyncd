@@ -56,13 +56,13 @@ fn success(output: std::process::Output) {
 }
 async fn listing(
     client: &ApiClient<vaultsyncd_http_client::ReqwestTransport>,
-    root: &str,
+    vault: &str,
 ) -> Vec<SnapshotEntry> {
-    let (s, _) = sync::snapshot(client, root).await.unwrap();
+    let (s, _) = sync::snapshot(client, vault).await.unwrap();
     let mut cursor = None;
     let mut all = Vec::new();
     loop {
-        let page = sync::snapshot_page(client, root, &s.snapshot_id, cursor.as_deref())
+        let page = sync::snapshot_page(client, vault, &s.snapshot_id, cursor.as_deref())
             .await
             .unwrap();
         all.extend(page.entries);
@@ -107,7 +107,7 @@ fn native_cleanup_only_s070_synthetic_failed_runs() {
             let path = run.path();
             let config_path = path.join("agent.json");
             if !config_path.exists() {
-                if !std::fs::symlink_metadata(path.join("root"))
+                if !std::fs::symlink_metadata(path.join("vault"))
                     .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
                 {
                     assert!(
@@ -115,22 +115,22 @@ fn native_cleanup_only_s070_synthetic_failed_runs() {
                         "preserve unknown run without config: {}",
                         path.display()
                     );
-                    let root =
-                        vaultsyncd_platform_windows::files::RootHandle::open(&path.join("root"))
+                    let vault =
+                        vaultsyncd_platform_windows::files::VaultHandle::open(&path.join("vault"))
                             .unwrap();
-                    let report = root.scan();
+                    let report = vault.scan();
                     assert!(
                         report.permits_missing_comparison() && report.entries.is_empty(),
-                        "allowlisted partial cleanup root must be empty"
+                        "allowlisted partial cleanup vault must be empty"
                     );
-                    drop(root);
+                    drop(vault);
                     use std::os::windows::ffi::OsStrExt;
                     #[link(name = "cldapi")]
                     unsafe extern "system" {
                         fn CfUnregisterSyncRoot(path: *const u16) -> i32;
                     }
                     let wide: Vec<u16> = path
-                        .join("root")
+                        .join("vault")
                         .as_os_str()
                         .encode_wide()
                         .chain(Some(0))
@@ -138,7 +138,7 @@ fn native_cleanup_only_s070_synthetic_failed_runs() {
                     let status = unsafe { CfUnregisterSyncRoot(wide.as_ptr()) };
                     assert!(
                         status >= 0 || status as u32 == 0x80070186,
-                        "empty allowlisted root unregister {status:08x}"
+                        "empty allowlisted vault unregister {status:08x}"
                     );
                 }
                 std::fs::remove_dir_all(&path).unwrap();
@@ -148,37 +148,38 @@ fn native_cleanup_only_s070_synthetic_failed_runs() {
                 .unwrap_or_else(|e| panic!("{}: {e}", config_path.display()));
             assert_eq!(config.bindings.len(), 1);
             assert_eq!(config.state_dir, path.join("state"));
-            assert_eq!(config.bindings[0].path, path.join("root"));
+            assert_eq!(config.bindings[0].path, path.join("vault"));
             assert_eq!(config.bindings[0].cache, path.join("cache"));
             credentials::CredentialVault::new(&config.server.id)
                 .unwrap()
                 .erase()
                 .unwrap();
             let mut adapter = vaultsyncd_platform_windows::cfapi::adapter::Adapter::connect(
-                &path.join("root"),
+                &path.join("vault"),
                 vaultsyncd_platform_windows::cfapi::catalog::Catalog::new(
                     vaultsyncd_domain::ids::BindingId::from_hex(&config.bindings[0].id).unwrap(),
-                    vaultsyncd_domain::ids::RootId::from_hex(&config.bindings[0].root_id).unwrap(),
+                    vaultsyncd_domain::ids::VaultId::from_hex(&config.bindings[0].vault_id)
+                        .unwrap(),
                 ),
                 Arc::new(vaultsyncd_platform_windows::cfapi::adapter::MetadataOnly),
             )
             .unwrap();
-            let root =
-                vaultsyncd_platform_windows::files::RootHandle::open(&path.join("root")).unwrap();
-            let report = root.scan();
+            let vault =
+                vaultsyncd_platform_windows::files::VaultHandle::open(&path.join("vault")).unwrap();
+            let report = vault.scan();
             assert!(report.permits_missing_comparison());
             let mut entries = report.entries;
             entries.sort_by_key(|e| std::cmp::Reverse(e.path.matches('/').count()));
             for entry in entries {
                 let meta = entry.metadata.unwrap();
-                let target = path.join("root").join(entry.path);
+                let target = path.join("vault").join(entry.path);
                 if meta.directory {
                     std::fs::remove_dir(target).unwrap();
                 } else {
                     std::fs::remove_file(target).unwrap();
                 }
             }
-            drop(root);
+            drop(vault);
             adapter.unregister().unwrap();
             drop(adapter);
             std::fs::remove_dir_all(path).unwrap();
@@ -189,25 +190,25 @@ fn native_cleanup_only_s070_synthetic_failed_runs() {
 }
 async fn remote_put(
     client: &ApiClient<vaultsyncd_http_client::ReqwestTransport>,
-    root: &str,
+    vault: &str,
     old: &SnapshotEntry,
     bytes: &[u8],
 ) {
     let upload = upload::run(
         &Bytes(bytes.to_vec()),
-        &vaultsyncd_http_client::uploads::UploadEndpoint::new(client.clone(), root).unwrap(),
+        &vaultsyncd_http_client::uploads::UploadEndpoint::new(client.clone(), vault).unwrap(),
         None,
         &UploadOptions::default(),
     )
     .await
     .unwrap();
-    let (snapshot, _) = sync::snapshot(client, root).await.unwrap();
+    let (snapshot, _) = sync::snapshot(client, vault).await.unwrap();
     let mut request =
         namespace_request(old, OperationKind::PutContent, snapshot.server_epoch, None);
     request.base_version_id = old.version_id.clone();
     request.upload_id = Some(upload.session);
     request.local_generation = Some("1".into());
-    sync::submit(client, root, &request).await.unwrap();
+    sync::submit(client, vault, &request).await.unwrap();
 }
 struct ChildGuard(std::process::Child);
 struct WritableMapping {
@@ -328,12 +329,12 @@ async fn ipc_status(child: &mut ChildGuard) -> vaultsyncd_local_ipc::generated::
 }
 async fn until_server(
     client: &ApiClient<vaultsyncd_http_client::ReqwestTransport>,
-    root: &str,
+    vault: &str,
     predicate: impl Fn(&[SnapshotEntry]) -> bool,
 ) {
     let end = Instant::now() + Duration::from_secs(20);
     loop {
-        let rows = listing(client, root).await;
+        let rows = listing(client, vault).await;
         if predicate(&rows) {
             return;
         }
@@ -360,7 +361,7 @@ async fn until_file(path: &Path, bytes: Option<&[u8]>) {
             Instant::now() < end,
             "native path did not converge: {} actual={read:?} metadata={:?}",
             path.display(),
-            vaultsyncd_platform_windows::files::RootHandle::open(path.parent().unwrap())
+            vaultsyncd_platform_windows::files::VaultHandle::open(path.parent().unwrap())
                 .and_then(|r| r.inspect(path.file_name().unwrap().to_str().unwrap()))
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -442,15 +443,15 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         .unwrap()
         .join(format!("run-process-{}", std::process::id()));
     std::fs::create_dir(&base).unwrap();
-    for p in ["root", "cache", "state"] {
+    for p in ["vault", "cache", "state"] {
         std::fs::create_dir(base.join(p)).unwrap();
     }
-    std::fs::write(base.join("root/local.txt"), b"local-first-import").unwrap();
+    std::fs::write(base.join("vault/local.txt"), b"local-first-import").unwrap();
     let server = identity();
     let device = identity();
     let binding = identity();
-    let root = fixture["root"].as_str().unwrap();
-    let mut config = serde_json::json!({"server":{"id":server,"url":fixture["url"],"development_http":true},"device_id":device,"state_dir":base.join("state"),"poll_millis":250,"bindings":[{"id":binding,"root_id":root,"path":base.join("root"),"cache":base.join("cache"),"mode":"full"}]});
+    let vault = fixture["vault"].as_str().unwrap();
+    let mut config = serde_json::json!({"server":{"id":server,"url":fixture["url"],"development_http":true},"device_id":device,"state_dir":base.join("state"),"poll_millis":250,"bindings":[{"id":binding,"vault_id":vault,"path":base.join("vault"),"cache":base.join("cache"),"mode":"full"}]});
     let config_path = base.join("agent.json");
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let login = serde_json::json!({"login":"s052-owner","password":"S052-Correct-Horse-Battery-9!","device_label":"S070 native process"});
@@ -467,7 +468,7 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
     println!("check=pass real_process_login_to_current_user_wincred");
     success(invoke(&exe, &config_path, &["--once"], None));
     assert_eq!(
-        std::fs::read(base.join("root/file.txt")).unwrap(),
+        std::fs::read(base.join("vault/file.txt")).unwrap(),
         fixture["payload"].as_str().unwrap().as_bytes()
     );
     let client =
@@ -480,13 +481,13 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         .unwrap(),
     );
     assert!(
-        listing(&client, root)
+        listing(&client, vault)
             .await
             .iter()
             .any(|r| r.name == "local.txt")
     );
     println!("check=pass no_gui_first_merge_upload_download");
-    std::fs::write(base.join("root/local.txt"), b"new-local-before-restart").unwrap();
+    std::fs::write(base.join("vault/local.txt"), b"new-local-before-restart").unwrap();
     config["server"]["url"] = "http://127.0.0.1:1".into();
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let offline = invoke(&exe, &config_path, &["--once"], None);
@@ -549,7 +550,7 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     let op = vaultsyncd_domain::ids::OpId::from_bytes(pending.try_into().unwrap());
-    let ack = sync::operation(&client, root, &op.to_string())
+    let ack = sync::operation(&client, vault, &op.to_string())
         .await
         .unwrap();
     assert_eq!(
@@ -557,18 +558,18 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         vaultsyncd_protocol::generated::OperationState::Committed
     );
     println!("check=pass real_sqlite_queue_restart_reuses_original_operation");
-    let rows = listing(&client, root).await;
+    let rows = listing(&client, vault).await;
     let old = rows.iter().find(|r| r.name == "file.txt").unwrap();
     let mut bytes = Bytes(b"real-remote-next-version".to_vec());
     let upload = upload::run(
         &bytes,
-        &vaultsyncd_http_client::uploads::UploadEndpoint::new(client.clone(), root).unwrap(),
+        &vaultsyncd_http_client::uploads::UploadEndpoint::new(client.clone(), vault).unwrap(),
         None,
         &UploadOptions::default(),
     )
     .await
     .unwrap();
-    let (snapshot, _) = sync::snapshot(&client, root).await.unwrap();
+    let (snapshot, _) = sync::snapshot(&client, vault).await.unwrap();
     let request = OperationRequest {
         op_id: identity(),
         device_id: identity(),
@@ -586,11 +587,11 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         subtree_token: None,
         version_id: None,
     };
-    sync::submit(&client, root, &request).await.unwrap();
+    sync::submit(&client, vault, &request).await.unwrap();
     success(invoke(&exe, &config_path, &["--once"], None));
-    assert_eq!(std::fs::read(base.join("root/file.txt")).unwrap(), bytes.0);
+    assert_eq!(std::fs::read(base.join("vault/file.txt")).unwrap(), bytes.0);
     println!("check=pass real_remote_version_download_controlled_publish");
-    std::fs::write(base.join("root/file.txt"), b"late-local-conflicting-edit").unwrap();
+    std::fs::write(base.join("vault/file.txt"), b"late-local-conflicting-edit").unwrap();
     config["server"]["url"] = "http://127.0.0.1:1".into();
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     assert!(
@@ -607,12 +608,12 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
             .await
             .unwrap();
     db.close().await;
-    let head = listing(&client, root)
+    let head = listing(&client, vault)
         .await
         .into_iter()
         .find(|r| r.name == "file.txt")
         .unwrap();
-    remote_put(&client, root, &head, b"remote-wins-original-name").await;
+    remote_put(&client, vault, &head, b"remote-wins-original-name").await;
     bytes = Bytes(b"remote-wins-original-name".to_vec());
     config["server"]["url"] = fixture["url"].clone();
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
@@ -622,9 +623,9 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         let output = invoke(&exe, &config_path, &["--once"], None);
         attempts.push_str(&String::from_utf8_lossy(&output.stderr));
         let op = vaultsyncd_domain::ids::OpId::from_bytes(conflict_op.clone().try_into().unwrap());
-        if let Ok(ack) = sync::operation(&client, root, &op.to_string()).await {
+        if let Ok(ack) = sync::operation(&client, vault, &op.to_string()).await {
             if ack.conflict.is_some()
-                && std::fs::read(base.join("root/file.txt")).is_ok_and(|b| b == bytes.0)
+                && std::fs::read(base.join("vault/file.txt")).is_ok_and(|b| b == bytes.0)
             {
                 break ack;
             }
@@ -641,18 +642,18 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         .unwrap()
         .conflict_entry_id
         .clone();
-    let copy = listing(&client, root)
+    let copy = listing(&client, vault)
         .await
         .into_iter()
         .find(|r| r.entry_id == sibling)
         .unwrap();
     assert_eq!(
-        std::fs::read(base.join("root").join(&copy.name)).unwrap(),
+        std::fs::read(base.join("vault").join(&copy.name)).unwrap(),
         b"late-local-conflicting-edit"
     );
     success(invoke(&exe, &config_path, &["--once"], None));
     assert_eq!(
-        listing(&client, root)
+        listing(&client, vault)
             .await
             .iter()
             .filter(|r| r.entry_id == sibling)
@@ -693,7 +694,7 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         assert!(Instant::now() < end);
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let local_before = listing(&client, root)
+    let local_before = listing(&client, vault)
         .await
         .into_iter()
         .find(|r| r.name == "local.txt")
@@ -713,15 +714,15 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
     }
     assert_eq!(ipc_status(&mut first).await.bindings.unwrap().len(), 1);
     println!("check=pass real_agent_ipc_same_user_status_after_malformed_and_partial_disconnects");
-    let native_root =
-        vaultsyncd_platform_windows::files::RootHandle::open(&base.join("root")).unwrap();
-    let before_identity = native_root.inspect("local.txt").unwrap().identity;
-    std::fs::rename(base.join("root/local.txt"), base.join("root/renamed.txt")).unwrap();
+    let native_vault =
+        vaultsyncd_platform_windows::files::VaultHandle::open(&base.join("vault")).unwrap();
+    let before_identity = native_vault.inspect("local.txt").unwrap().identity;
+    std::fs::rename(base.join("vault/local.txt"), base.join("vault/renamed.txt")).unwrap();
     assert_eq!(
-        native_root.inspect("renamed.txt").unwrap().identity,
+        native_vault.inspect("renamed.txt").unwrap().identity,
         before_identity
     );
-    until_server(&client, root, |rows| {
+    until_server(&client, vault, |rows| {
         rows.iter().any(|r| {
             r.name == "renamed.txt"
                 && r.entry_id == local_before.entry_id
@@ -730,16 +731,16 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
     })
     .await;
     println!("check=pass local_move_keeps_entry_and_fixed_version");
-    let remote_before = listing(&client, root)
+    let remote_before = listing(&client, vault)
         .await
         .into_iter()
         .find(|r| r.name == "file.txt")
         .unwrap();
-    let mapping = WritableMapping::open(&base.join("root/file.txt"));
-    let (s, _) = sync::snapshot(&client, root).await.unwrap();
+    let mapping = WritableMapping::open(&base.join("vault/file.txt"));
+    let (s, _) = sync::snapshot(&client, vault).await.unwrap();
     sync::submit(
         &client,
-        root,
+        vault,
         &namespace_request(
             &remote_before,
             OperationKind::Move,
@@ -787,24 +788,24 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
             .spawn()
             .unwrap(),
     );
-    until_file(&base.join("root/remote-renamed.txt"), Some(&bytes.0)).await;
+    until_file(&base.join("vault/remote-renamed.txt"), Some(&bytes.0)).await;
     println!("check=pass killed_real_process_recovers_open_move_before_sync");
-    assert!(!base.join("root/file.txt").exists());
+    assert!(!base.join("vault/file.txt").exists());
     println!("check=pass both_direction_moves_keep_entry_and_fixed_version");
-    let remote = listing(&client, root)
+    let remote = listing(&client, vault)
         .await
         .into_iter()
         .find(|r| r.name == "remote-renamed.txt")
         .unwrap();
-    let (s, _) = sync::snapshot(&client, root).await.unwrap();
+    let (s, _) = sync::snapshot(&client, vault).await.unwrap();
     sync::submit(
         &client,
-        root,
+        vault,
         &namespace_request(&remote, OperationKind::Delete, s.server_epoch, None),
     )
     .await
     .unwrap();
-    until_file(&base.join("root/remote-renamed.txt"), None).await;
+    until_file(&base.join("vault/remote-renamed.txt"), None).await;
     assert!(
         std::fs::read_dir(base.join("cache"))
             .unwrap()
@@ -812,15 +813,15 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
             .filter(|e| e.file_name().to_string_lossy().starts_with("deleted-"))
             .any(|e| std::fs::read(e.path()).is_ok_and(|b| b == bytes.0))
     );
-    std::fs::remove_file(base.join("root/renamed.txt")).unwrap();
-    until_server(&client, root, |rows| {
+    std::fs::remove_file(base.join("vault/renamed.txt")).unwrap();
+    until_server(&client, vault, |rows| {
         !rows.iter().any(|r| r.entry_id == local_before.entry_id)
     })
     .await;
     println!("check=pass both_direction_deletes_preserve_confirmed_native_object");
-    std::fs::create_dir(base.join("root/nested")).unwrap();
-    std::fs::write(base.join("root/nested/data.txt"), b"nested-new-file").unwrap();
-    until_server(&client, root, |rows| {
+    std::fs::create_dir(base.join("vault/nested")).unwrap();
+    std::fs::write(base.join("vault/nested/data.txt"), b"nested-new-file").unwrap();
+    until_server(&client, vault, |rows| {
         let parent = rows.iter().find(|r| r.name == "nested");
         parent.is_some_and(|p| {
             rows.iter()
@@ -828,8 +829,8 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         })
     })
     .await;
-    std::fs::remove_dir_all(base.join("root/nested")).unwrap();
-    until_server(&client, root, |rows| {
+    std::fs::remove_dir_all(base.join("vault/nested")).unwrap();
+    until_server(&client, vault, |rows| {
         !rows
             .iter()
             .any(|r| r.name == "nested" || r.name == "data.txt")
@@ -873,10 +874,10 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         endpoint.connect().await.is_err(),
         "stopped agent must release its pipe"
     );
-    drop(native_root);
+    drop(native_vault);
     vault.erase().unwrap();
-    let root_path = base.join("root");
-    for item in std::fs::read_dir(&root_path).unwrap() {
+    let vault_path = base.join("vault");
+    for item in std::fs::read_dir(&vault_path).unwrap() {
         let p = item.unwrap().path();
         if p.is_dir() {
             std::fs::remove_dir_all(p).unwrap();
@@ -885,10 +886,10 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         }
     }
     let mut adapter = vaultsyncd_platform_windows::cfapi::adapter::Adapter::connect(
-        &root_path,
+        &vault_path,
         vaultsyncd_platform_windows::cfapi::catalog::Catalog::new(
             vaultsyncd_domain::ids::BindingId::from_hex(&binding).unwrap(),
-            vaultsyncd_domain::ids::RootId::from_hex(root).unwrap(),
+            vaultsyncd_domain::ids::VaultId::from_hex(vault).unwrap(),
         ),
         Arc::new(vaultsyncd_platform_windows::cfapi::adapter::MetadataOnly),
     )

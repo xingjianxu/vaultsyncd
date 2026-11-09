@@ -1,6 +1,6 @@
 //! 回收站清单与墓碑（`trash_entries`、`tombstones` 表；`docs/design.md` §10.3、§7.2）。
 //!
-//! 边界：本模块只读写这两张表与 `entries.deleted_at`，不做文件系统 I/O、不分配 RootSeq、不写
+//! 边界：本模块只读写这两张表与 `entries.deleted_at`，不做文件系统 I/O、不分配 VaultSeq、不写
 //! `changes`。删除事务的编排（冻结子树、有界批次、事件批次、意图收尾）在
 //! `crates/server-core` 的 `commit::delete` 与它的存储适配器里；本模块提供它需要的三件事：
 //!
@@ -13,8 +13,8 @@
 //!
 //! 不变量：
 //!
-//! - **owner scope**：每个函数的业务参数都有 [`UserId`]，Root 只能经 `roots.owner_id` 访问；不属于该
-//!   owner 的 Root 一律 [`TrashError::OutOfScope`]，不区分“不存在”与“别人的”。
+//! - **owner scope**：每个函数的业务参数都有 [`UserId`]，Vault 只能经 `vaults.owner_id` 访问；不属于该
+//!   owner 的 Vault 一律 [`TrashError::OutOfScope`]，不区分“不存在”与“别人的”。
 //! - **删除不动内容**：本模块不写 `objects`/`versions`，也不改 `entries.content_version_id`。回收站里
 //!   的内容版本在 `expires_at` 之前仍可读，历史版本照常可查（design §10.3、I12）。
 //! - **同一身份只能进回收站一次**：`trash_entries.entry_id` 是主键，重复写返回
@@ -23,7 +23,7 @@
 //!   [`TrashError::DirectoryWithContent`]。
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 
 use crate::entries::EntryKind;
@@ -34,20 +34,21 @@ use crate::entries::EntryKind;
 pub const MAX_SOFT_DELETE_BATCH: usize = 256;
 
 /// `trash_entries`/`tombstones` 的列顺序，多处查询共用，避免手写列名漂移。
-const TRASH_COLUMNS: &str = "t.entry_id, t.root_id, t.parent_id, t.path, t.kind, t.revision, \
+const TRASH_COLUMNS: &str = "t.entry_id, t.vault_id, t.parent_id, t.path, t.kind, t.revision, \
                              t.content_version_id, t.deleted_at, t.expires_at";
-const TOMBSTONE_COLUMNS: &str = "t.root_id, t.entry_id, t.path, t.kind, t.deleted_at, t.expires_at";
+const TOMBSTONE_COLUMNS: &str =
+    "t.vault_id, t.entry_id, t.path, t.kind, t.deleted_at, t.expires_at";
 
 /// 写一条回收站清单的输入。
 #[derive(Clone, Debug)]
 pub struct NewTrashEntry {
     /// 被删除的条目身份。
     pub entry: EntryId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 删除时的父目录。
     pub parent: EntryId,
-    /// 删除时的 Root 内相对路径。
+    /// 删除时的 Vault 内相对路径。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -66,8 +67,8 @@ pub struct NewTrashEntry {
 pub struct TrashEntry {
     /// 被删除的条目身份。
     pub entry: EntryId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 删除时的父目录。
     pub parent: EntryId,
     /// 原路径。
@@ -87,8 +88,8 @@ pub struct TrashEntry {
 /// 一条墓碑：旧设备基线据此判断条目已经消失。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tombstone {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 被删除的条目身份。
     pub entry: EntryId,
     /// 原路径。
@@ -106,10 +107,10 @@ pub struct Tombstone {
 pub enum TrashError {
     /// SQLite 层面失败。
     Db(sqlx::Error),
-    /// Root 不存在或不属于调用方的 owner scope（两种情况不区分）。
+    /// Vault 不存在或不属于调用方的 owner scope（两种情况不区分）。
     OutOfScope,
-    /// 条目不在该 Root 内。
-    EntryNotInRoot {
+    /// 条目不在该 Vault 内。
+    EntryNotInVault {
         /// 请求的条目。
         entry: EntryId,
     },
@@ -118,7 +119,7 @@ pub enum TrashError {
         /// 命中的条目。
         entry: EntryId,
     },
-    /// 同一 Root 里已经有这个条目的墓碑。
+    /// 同一 Vault 里已经有这个条目的墓碑。
     DuplicateTombstone {
         /// 命中的条目。
         entry: EntryId,
@@ -133,7 +134,7 @@ pub enum TrashError {
         /// 命中的条目。
         entry: EntryId,
     },
-    /// 路径不是合法的 Root 内相对路径。
+    /// 路径不是合法的 Vault 内相对路径。
     InvalidPath {
         /// 请求的路径。
         path: String,
@@ -163,7 +164,7 @@ impl TrashError {
         match self {
             TrashError::Db(_) => "trash_storage_failed",
             TrashError::OutOfScope => "out_of_scope",
-            TrashError::EntryNotInRoot { .. } => "entry_not_in_root",
+            TrashError::EntryNotInVault { .. } => "entry_not_in_vault",
             TrashError::AlreadyInTrash { .. } => "already_in_trash",
             TrashError::DuplicateTombstone { .. } => "duplicate_tombstone",
             TrashError::InvalidBatch { .. } => "invalid_batch",
@@ -180,8 +181,8 @@ impl std::fmt::Display for TrashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TrashError::Db(error) => write!(f, "回收站存储失败：{error}"),
-            TrashError::OutOfScope => f.write_str("Root 不在调用方的 owner scope 内"),
-            TrashError::EntryNotInRoot { entry } => write!(f, "条目 {entry} 不在该 Root 内"),
+            TrashError::OutOfScope => f.write_str("Vault 不在调用方的 owner scope 内"),
+            TrashError::EntryNotInVault { entry } => write!(f, "条目 {entry} 不在该 Vault 内"),
             TrashError::AlreadyInTrash { entry } => write!(f, "条目 {entry} 已经在回收站里"),
             TrashError::DuplicateTombstone { entry } => write!(f, "条目 {entry} 已有墓碑"),
             TrashError::InvalidBatch { entries } => write!(
@@ -234,7 +235,7 @@ pub struct SoftDelete {
 pub async fn soft_delete_batch(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     batch: &[SoftDelete],
     at: UtcTimestamp,
 ) -> Result<usize, TrashError> {
@@ -243,15 +244,15 @@ pub async fn soft_delete_batch(
             entries: batch.len(),
         });
     }
-    require_root_owner(tx, owner, root).await?;
+    require_vault_owner(tx, owner, vault).await?;
     for item in batch {
         let updated = sqlx::query(
             "UPDATE entries SET deleted_at = ?1 \
-             WHERE id = ?2 AND root_id = ?3 AND deleted_at IS NULL AND revision = ?4",
+             WHERE id = ?2 AND vault_id = ?3 AND deleted_at IS NULL AND revision = ?4",
         )
         .bind(at.to_db_integer())
         .bind(item.entry.as_bytes().as_slice())
-        .bind(root.as_bytes().as_slice())
+        .bind(vault.as_bytes().as_slice())
         .bind(item.revision.to_db_integer())
         .execute(&mut **tx)
         .await?;
@@ -264,15 +265,15 @@ pub async fn soft_delete_batch(
 
 /// 写一条回收站清单行并读回。
 ///
-/// 前置检查：Root 属于 owner；条目在该 Root 内；路径是 Root 内相对路径；目录不带内容版本；
+/// 前置检查：Vault 属于 owner；条目在该 Vault 内；路径是 Vault 内相对路径；目录不带内容版本；
 /// `expires_at` 不早于 `deleted_at`；条目还没有回收站清单行。
 pub async fn record_trash_entry(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
     new: &NewTrashEntry,
 ) -> Result<TrashEntry, TrashError> {
-    require_root_owner(tx, owner, new.root).await?;
-    require_entry_in_root(tx, new.root, new.entry).await?;
+    require_vault_owner(tx, owner, new.vault).await?;
+    require_entry_in_vault(tx, new.vault, new.entry).await?;
     validate_path(&new.path)?;
     if new.kind == EntryKind::Directory && new.content_version.is_some() {
         return Err(TrashError::DirectoryWithContent { entry: new.entry });
@@ -283,12 +284,12 @@ pub async fn record_trash_entry(
 
     let inserted = sqlx::query(
         "INSERT INTO trash_entries \
-         (entry_id, root_id, parent_id, path, kind, revision, content_version_id, deleted_at, \
+         (entry_id, vault_id, parent_id, path, kind, revision, content_version_id, deleted_at, \
           expires_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )
     .bind(new.entry.as_bytes().as_slice())
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.parent.as_bytes().as_slice())
     .bind(&new.path)
     .bind(new.kind.as_text())
@@ -307,9 +308,9 @@ pub async fn record_trash_entry(
         }
         return Err(TrashError::Db(error));
     }
-    trash_entry(tx, owner, new.root, new.entry)
+    trash_entry(tx, owner, new.vault, new.entry)
         .await?
-        .ok_or(TrashError::EntryNotInRoot { entry: new.entry })
+        .ok_or(TrashError::EntryNotInVault { entry: new.entry })
 }
 
 /// 写一条墓碑并读回（同一个条目只能有一条墓碑）。
@@ -318,17 +319,17 @@ pub async fn insert_tombstone(
     owner: UserId,
     new: &NewTrashEntry,
 ) -> Result<Tombstone, TrashError> {
-    require_root_owner(tx, owner, new.root).await?;
-    require_entry_in_root(tx, new.root, new.entry).await?;
+    require_vault_owner(tx, owner, new.vault).await?;
+    require_entry_in_vault(tx, new.vault, new.entry).await?;
     validate_path(&new.path)?;
     if new.expires_at < new.deleted_at {
         return Err(TrashError::InvalidRetention { entry: new.entry });
     }
     let inserted = sqlx::query(
-        "INSERT INTO tombstones (root_id, entry_id, path, kind, deleted_at, expires_at) \
+        "INSERT INTO tombstones (vault_id, entry_id, path, kind, deleted_at, expires_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.entry.as_bytes().as_slice())
     .bind(&new.path)
     .bind(new.kind.as_text())
@@ -342,26 +343,26 @@ pub async fn insert_tombstone(
         }
         return Err(TrashError::Db(error));
     }
-    tombstone(tx, owner, new.root, new.entry)
+    tombstone(tx, owner, new.vault, new.entry)
         .await?
-        .ok_or(TrashError::EntryNotInRoot { entry: new.entry })
+        .ok_or(TrashError::EntryNotInVault { entry: new.entry })
 }
 
-/// 读一个 Root 的回收站清单，按路径（再按身份）排序。
+/// 读一个 Vault 的回收站清单，按路径（再按身份）排序。
 ///
-/// Root 不在调用方的 owner scope 内时返回 [`TrashError::OutOfScope`]，不返回空列表冒充“没有可恢复
+/// Vault 不在调用方的 owner scope 内时返回 [`TrashError::OutOfScope`]，不返回空列表冒充“没有可恢复
 /// 内容”。
 pub async fn trash_entries(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<Vec<TrashEntry>, TrashError> {
-    require_root_owner(conn, owner, root).await?;
+    require_vault_owner(conn, owner, vault).await?;
     let rows = sqlx::query_as::<_, TrashRow>(&format!(
-        "SELECT {TRASH_COLUMNS} FROM trash_entries t JOIN roots r ON r.id = t.root_id \
-         WHERE t.root_id = ?1 AND r.owner_id = ?2 ORDER BY t.path, t.entry_id"
+        "SELECT {TRASH_COLUMNS} FROM trash_entries t JOIN vaults r ON r.id = t.vault_id \
+         WHERE t.vault_id = ?1 AND r.owner_id = ?2 ORDER BY t.path, t.entry_id"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_all(conn)
     .await?;
@@ -372,14 +373,14 @@ pub async fn trash_entries(
 pub async fn trash_entry(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<Option<TrashEntry>, TrashError> {
     let row = sqlx::query_as::<_, TrashRow>(&format!(
-        "SELECT {TRASH_COLUMNS} FROM trash_entries t JOIN roots r ON r.id = t.root_id \
-         WHERE t.root_id = ?1 AND t.entry_id = ?2 AND r.owner_id = ?3"
+        "SELECT {TRASH_COLUMNS} FROM trash_entries t JOIN vaults r ON r.id = t.vault_id \
+         WHERE t.vault_id = ?1 AND t.entry_id = ?2 AND r.owner_id = ?3"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(entry.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_optional(conn)
@@ -387,18 +388,18 @@ pub async fn trash_entry(
     row.map(TrashRow::into_record).transpose()
 }
 
-/// 读一个 Root 的墓碑，按删除时间（再按身份）排序。
+/// 读一个 Vault 的墓碑，按删除时间（再按身份）排序。
 pub async fn tombstones(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<Vec<Tombstone>, TrashError> {
-    require_root_owner(conn, owner, root).await?;
+    require_vault_owner(conn, owner, vault).await?;
     let rows = sqlx::query_as::<_, TombstoneRow>(&format!(
-        "SELECT {TOMBSTONE_COLUMNS} FROM tombstones t JOIN roots r ON r.id = t.root_id \
-         WHERE t.root_id = ?1 AND r.owner_id = ?2 ORDER BY t.deleted_at, t.entry_id"
+        "SELECT {TOMBSTONE_COLUMNS} FROM tombstones t JOIN vaults r ON r.id = t.vault_id \
+         WHERE t.vault_id = ?1 AND r.owner_id = ?2 ORDER BY t.deleted_at, t.entry_id"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_all(conn)
     .await?;
@@ -409,14 +410,14 @@ pub async fn tombstones(
 pub async fn tombstone(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<Option<Tombstone>, TrashError> {
     let row = sqlx::query_as::<_, TombstoneRow>(&format!(
-        "SELECT {TOMBSTONE_COLUMNS} FROM tombstones t JOIN roots r ON r.id = t.root_id \
-         WHERE t.root_id = ?1 AND t.entry_id = ?2 AND r.owner_id = ?3"
+        "SELECT {TOMBSTONE_COLUMNS} FROM tombstones t JOIN vaults r ON r.id = t.vault_id \
+         WHERE t.vault_id = ?1 AND t.entry_id = ?2 AND r.owner_id = ?3"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(entry.as_bytes().as_slice())
     .bind(owner.as_bytes().as_slice())
     .fetch_optional(conn)
@@ -424,35 +425,35 @@ pub async fn tombstone(
     row.map(TombstoneRow::into_record).transpose()
 }
 
-async fn require_root_owner(
+async fn require_vault_owner(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<(), TrashError> {
     let found: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM roots WHERE id = ?1 AND owner_id = ?2")
-            .bind(root.as_bytes().as_slice())
+        sqlx::query_scalar("SELECT 1 FROM vaults WHERE id = ?1 AND owner_id = ?2")
+            .bind(vault.as_bytes().as_slice())
             .bind(owner.as_bytes().as_slice())
             .fetch_optional(conn)
             .await?;
     found.map_or(Err(TrashError::OutOfScope), |_| Ok(()))
 }
 
-async fn require_entry_in_root(
+async fn require_entry_in_vault(
     conn: &mut SqliteConnection,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<(), TrashError> {
     let found: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM entries WHERE root_id = ?1 AND id = ?2")
-            .bind(root.as_bytes().as_slice())
+        sqlx::query_scalar("SELECT 1 FROM entries WHERE vault_id = ?1 AND id = ?2")
+            .bind(vault.as_bytes().as_slice())
             .bind(entry.as_bytes().as_slice())
             .fetch_optional(conn)
             .await?;
-    found.map_or(Err(TrashError::EntryNotInRoot { entry }), |_| Ok(()))
+    found.map_or(Err(TrashError::EntryNotInVault { entry }), |_| Ok(()))
 }
 
-/// Root 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量（与意图日志同一规则）。
+/// Vault 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量（与意图日志同一规则）。
 fn validate_path(path: &str) -> Result<(), TrashError> {
     let invalid = |reason: &'static str| TrashError::InvalidPath {
         path: path.to_owned(),
@@ -465,7 +466,7 @@ fn validate_path(path: &str) -> Result<(), TrashError> {
         return Err(invalid("不能含 NUL"));
     }
     if path.starts_with('/') {
-        return Err(invalid("必须是 Root 内相对路径"));
+        return Err(invalid("必须是 Vault 内相对路径"));
     }
     for component in path.split('/') {
         if component.is_empty() {
@@ -523,7 +524,7 @@ fn timestamp_of(value: i64, column: &'static str) -> Result<UtcTimestamp, TrashE
 #[derive(sqlx::FromRow)]
 struct TrashRow {
     entry_id: Vec<u8>,
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     parent_id: Vec<u8>,
     path: String,
     kind: String,
@@ -537,7 +538,7 @@ impl TrashRow {
     fn into_record(self) -> Result<TrashEntry, TrashError> {
         Ok(TrashEntry {
             entry: identity(self.entry_id, "entry_id", EntryId::from_bytes)?,
-            root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+            vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
             parent: identity(self.parent_id, "parent_id", EntryId::from_bytes)?,
             path: self.path,
             kind: kind_of(&self.kind, "kind")?,
@@ -558,7 +559,7 @@ impl TrashRow {
 
 #[derive(sqlx::FromRow)]
 struct TombstoneRow {
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     entry_id: Vec<u8>,
     path: String,
     kind: String,
@@ -569,7 +570,7 @@ struct TombstoneRow {
 impl TombstoneRow {
     fn into_record(self) -> Result<Tombstone, TrashError> {
         Ok(Tombstone {
-            root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+            vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
             entry: identity(self.entry_id, "entry_id", EntryId::from_bytes)?,
             path: self.path,
             kind: kind_of(&self.kind, "kind")?,
@@ -589,12 +590,12 @@ impl TombstoneRow {
 pub async fn remove_trash_entry(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<bool, TrashError> {
-    require_root_owner(tx, owner, root).await?;
-    let removed = sqlx::query("DELETE FROM trash_entries WHERE root_id = ?1 AND entry_id = ?2")
-        .bind(root.as_bytes().as_slice())
+    require_vault_owner(tx, owner, vault).await?;
+    let removed = sqlx::query("DELETE FROM trash_entries WHERE vault_id = ?1 AND entry_id = ?2")
+        .bind(vault.as_bytes().as_slice())
         .bind(entry.as_bytes().as_slice())
         .execute(&mut **tx)
         .await
@@ -610,12 +611,12 @@ pub async fn remove_trash_entry(
 pub async fn remove_tombstone(
     tx: &mut Transaction<'_, Sqlite>,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<bool, TrashError> {
-    require_root_owner(tx, owner, root).await?;
-    let removed = sqlx::query("DELETE FROM tombstones WHERE root_id = ?1 AND entry_id = ?2")
-        .bind(root.as_bytes().as_slice())
+    require_vault_owner(tx, owner, vault).await?;
+    let removed = sqlx::query("DELETE FROM tombstones WHERE vault_id = ?1 AND entry_id = ?2")
+        .bind(vault.as_bytes().as_slice())
         .bind(entry.as_bytes().as_slice())
         .execute(&mut **tx)
         .await
@@ -632,7 +633,7 @@ mod tests {
     use crate::changes;
     use crate::entries::{self, NewEntry};
     use crate::test_support::{
-        TestDir, at, content_hash, entry, open_database, register_root, seed_file, seed_object,
+        TestDir, at, content_hash, entry, open_database, register_vault, seed_file, seed_object,
         seed_owner, tx as tx_id_marker,
     };
     use crate::versions::{self, NewVersion, VersionOrigin};
@@ -644,25 +645,25 @@ mod tests {
         _dir: TestDir,
         database: crate::db::Database,
         owner: UserId,
-        root: RootId,
-        root_entry: EntryId,
+        vault: VaultId,
+        vault_entry: EntryId,
     }
 
     async fn fixture() -> Fixture {
         let dir = TestDir::new("s039-trash");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x01).await;
-        let (root, root_entry) = register_root(&database, owner, 0x21).await;
+        let (vault, vault_entry) = register_vault(&database, owner, 0x21).await;
         Fixture {
             _dir: dir,
             database,
             owner,
-            root,
-            root_entry,
+            vault,
+            vault_entry,
         }
     }
 
-    /// 在 Root 根条目下放一个文件，并给它记录一个带内容对象的版本。
+    /// 在 Vault 根条目下放一个文件，并给它记录一个带内容对象的版本。
     async fn seed_versioned_file(
         fixture: &Fixture,
         marker: u8,
@@ -672,8 +673,8 @@ mod tests {
         let id = seed_file(
             &fixture.database,
             fixture.owner,
-            fixture.root,
-            fixture.root_entry,
+            fixture.vault,
+            fixture.vault_entry,
             marker,
             name,
         )
@@ -681,7 +682,7 @@ mod tests {
         let hash = seed_object(
             &fixture.database,
             fixture.owner,
-            fixture.root,
+            fixture.vault,
             object_marker,
             5,
         )
@@ -690,7 +691,7 @@ mod tests {
         let batch = changes::append_change(
             &mut tx,
             fixture.owner,
-            fixture.root,
+            fixture.vault,
             tx_id_marker(0x71),
             r#"[{"kind":"entry_written"}]"#,
             at(1_700_000_100),
@@ -702,7 +703,7 @@ mod tests {
             fixture.owner,
             &NewVersion {
                 id: VersionId::from_bytes([marker; ID_LEN]),
-                root: fixture.root,
+                vault: fixture.vault,
                 entry: id,
                 object_hash: hash,
                 size: 5,
@@ -718,7 +719,7 @@ mod tests {
     }
 
     fn trash_of(
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
         parent: EntryId,
         path: &str,
@@ -726,7 +727,7 @@ mod tests {
     ) -> NewTrashEntry {
         NewTrashEntry {
             entry,
-            root,
+            vault,
             parent,
             path: path.to_owned(),
             kind,
@@ -743,8 +744,8 @@ mod tests {
         let id = seed_file(
             &fixture.database,
             fixture.owner,
-            fixture.root,
-            fixture.root_entry,
+            fixture.vault,
+            fixture.vault_entry,
             0x31,
             "notes.txt",
         )
@@ -754,7 +755,7 @@ mod tests {
         let deleted = soft_delete_batch(
             &mut tx,
             fixture.owner,
-            fixture.root,
+            fixture.vault,
             &[SoftDelete {
                 entry: id,
                 revision: Revision::new(1).expect("修订号"),
@@ -773,7 +774,7 @@ mod tests {
             .expect("条目还在（软删除不硬删行）");
         assert_eq!(record.deleted_at, Some(at(1_700_000_200)));
         let children =
-            entries::children(&mut conn, fixture.owner, fixture.root, fixture.root_entry)
+            entries::children(&mut conn, fixture.owner, fixture.vault, fixture.vault_entry)
                 .await
                 .expect("读子项");
         assert!(children.is_empty(), "活跃子项里不该再有它");
@@ -785,8 +786,8 @@ mod tests {
             fixture.owner,
             &NewEntry {
                 id: entry(0x32),
-                root: fixture.root,
-                parent: fixture.root_entry,
+                vault: fixture.vault,
+                parent: fixture.vault_entry,
                 name: "notes.txt".to_owned(),
                 name_key: "notes.txt".to_owned(),
                 kind: EntryKind::File,
@@ -806,8 +807,8 @@ mod tests {
         let id = seed_file(
             &fixture.database,
             fixture.owner,
-            fixture.root,
-            fixture.root_entry,
+            fixture.vault,
+            fixture.vault_entry,
             0x31,
             "notes.txt",
         )
@@ -817,7 +818,7 @@ mod tests {
         let failure = soft_delete_batch(
             &mut tx,
             fixture.owner,
-            fixture.root,
+            fixture.vault,
             &[SoftDelete {
                 entry: id,
                 revision: Revision::new(7).expect("修订号"),
@@ -845,7 +846,14 @@ mod tests {
         let fixture = fixture().await;
         let mut tx = fixture.database.begin_write().await.expect("开始写事务");
         assert!(matches!(
-            soft_delete_batch(&mut tx, fixture.owner, fixture.root, &[], at(1_700_000_200)).await,
+            soft_delete_batch(
+                &mut tx,
+                fixture.owner,
+                fixture.vault,
+                &[],
+                at(1_700_000_200)
+            )
+            .await,
             Err(TrashError::InvalidBatch { entries: 0 })
         ));
         let oversized = vec![
@@ -859,7 +867,7 @@ mod tests {
             soft_delete_batch(
                 &mut tx,
                 fixture.owner,
-                fixture.root,
+                fixture.vault,
                 &oversized,
                 at(1_700_000_200)
             )
@@ -876,9 +884,9 @@ mod tests {
 
         let mut tx = fixture.database.begin_write().await.expect("开始写事务");
         let mut new = trash_of(
-            fixture.root,
+            fixture.vault,
             id,
-            fixture.root_entry,
+            fixture.vault_entry,
             "notes.txt",
             EntryKind::File,
         );
@@ -889,7 +897,7 @@ mod tests {
         tx.commit().await.expect("提交");
 
         assert_eq!(recorded.path, "notes.txt");
-        assert_eq!(recorded.parent, fixture.root_entry);
+        assert_eq!(recorded.parent, fixture.vault_entry);
         assert_eq!(recorded.revision, Revision::new(1).expect("修订号"));
         assert_eq!(
             recorded.content_version,
@@ -913,8 +921,8 @@ mod tests {
         let id = seed_file(
             &fixture.database,
             fixture.owner,
-            fixture.root,
-            fixture.root_entry,
+            fixture.vault,
+            fixture.vault_entry,
             0x31,
             "notes.txt",
         )
@@ -922,9 +930,9 @@ mod tests {
 
         let mut tx = fixture.database.begin_write().await.expect("开始写事务");
         let mut absolute = trash_of(
-            fixture.root,
+            fixture.vault,
             id,
-            fixture.root_entry,
+            fixture.vault_entry,
             "/etc/passwd",
             EntryKind::File,
         );
@@ -934,9 +942,9 @@ mod tests {
         ));
         absolute.path = "notes.txt".to_owned();
         let mut directory_with_content = trash_of(
-            fixture.root,
+            fixture.vault,
             id,
-            fixture.root_entry,
+            fixture.vault_entry,
             "notes.txt",
             EntryKind::Directory,
         );
@@ -946,9 +954,9 @@ mod tests {
             Err(TrashError::DirectoryWithContent { .. })
         ));
         let mut backwards = trash_of(
-            fixture.root,
+            fixture.vault,
             id,
-            fixture.root_entry,
+            fixture.vault_entry,
             "notes.txt",
             EntryKind::File,
         );
@@ -959,7 +967,7 @@ mod tests {
         ));
         tx.rollback().await.expect("回滚");
 
-        // 越权的 Root 不泄露“存在与否”。
+        // 越权的 Vault 不泄露“存在与否”。
         let mut tx = fixture.database.begin_write().await.expect("开始写事务");
         let intruder = UserId::from_bytes([0x02; ID_LEN]);
         assert!(matches!(
@@ -967,9 +975,9 @@ mod tests {
                 &mut tx,
                 intruder,
                 &trash_of(
-                    fixture.root,
+                    fixture.vault,
                     id,
-                    fixture.root_entry,
+                    fixture.vault_entry,
                     "notes.txt",
                     EntryKind::File
                 )
@@ -986,8 +994,8 @@ mod tests {
         let id = seed_file(
             &fixture.database,
             fixture.owner,
-            fixture.root,
-            fixture.root_entry,
+            fixture.vault,
+            fixture.vault_entry,
             0x31,
             "notes.txt",
         )
@@ -998,9 +1006,9 @@ mod tests {
             &mut tx,
             fixture.owner,
             &trash_of(
-                fixture.root,
+                fixture.vault,
                 id,
-                fixture.root_entry,
+                fixture.vault_entry,
                 "notes.txt",
                 EntryKind::File,
             ),
@@ -1019,9 +1027,9 @@ mod tests {
                 &mut tx,
                 fixture.owner,
                 &trash_of(
-                    fixture.root,
+                    fixture.vault,
                     id,
-                    fixture.root_entry,
+                    fixture.vault_entry,
                     "notes.txt",
                     EntryKind::File
                 )
@@ -1042,7 +1050,7 @@ mod tests {
         soft_delete_batch(
             &mut tx,
             fixture.owner,
-            fixture.root,
+            fixture.vault,
             &[SoftDelete {
                 entry: old,
                 revision: Revision::new(1).expect("修订号"),
@@ -1052,9 +1060,9 @@ mod tests {
         .await
         .expect("软删除");
         let mut new = trash_of(
-            fixture.root,
+            fixture.vault,
             old,
-            fixture.root_entry,
+            fixture.vault_entry,
             "notes.txt",
             EntryKind::File,
         );
@@ -1069,14 +1077,14 @@ mod tests {
 
         // 同路径的新内容（新条目、新版本）：删除不该碰到它，旧历史也要照旧可读。
         let mut conn = fixture.database.pool().acquire().await.expect("取连接");
-        let history = versions::version_history(&mut conn, fixture.owner, fixture.root, old, 10)
+        let history = versions::version_history(&mut conn, fixture.owner, fixture.vault, old, 10)
             .await
             .expect("旧条目的历史仍可读");
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].object_hash, content_hash(0x41));
         assert!(history[0].superseded_at.is_none(), "当前版本不因删除而失效");
         let object =
-            versions::object_in_scope(&mut conn, fixture.owner, fixture.root, &content_hash(0x41))
+            versions::object_in_scope(&mut conn, fixture.owner, fixture.vault, &content_hash(0x41))
                 .await
                 .expect("读内容对象")
                 .expect("内容对象仍登记");
@@ -1086,34 +1094,34 @@ mod tests {
         let fresh = seed_versioned_file(&fixture, 0x32, "notes.txt", 0x42).await;
         assert_ne!(fresh, old);
         let mut conn = fixture.database.pool().acquire().await.expect("取连接");
-        let history = versions::version_history(&mut conn, fixture.owner, fixture.root, old, 10)
+        let history = versions::version_history(&mut conn, fixture.owner, fixture.vault, old, 10)
             .await
             .expect("旧历史仍可读");
         assert_eq!(history[0].object_hash, content_hash(0x41), "旧版本哈希不变");
-        let history = versions::version_history(&mut conn, fixture.owner, fixture.root, fresh, 10)
+        let history = versions::version_history(&mut conn, fixture.owner, fixture.vault, fresh, 10)
             .await
             .expect("新条目历史可读");
         assert_eq!(history[0].object_hash, content_hash(0x42));
-        let trashed = trash_entries(&mut conn, fixture.owner, fixture.root)
+        let trashed = trash_entries(&mut conn, fixture.owner, fixture.vault)
             .await
             .expect("读回收站");
         assert_eq!(trashed.len(), 1);
         assert_eq!(trashed[0].entry, old);
         assert_eq!(trashed[0].path, "notes.txt");
-        let stones = tombstones(&mut conn, fixture.owner, fixture.root)
+        let stones = tombstones(&mut conn, fixture.owner, fixture.vault)
             .await
             .expect("读墓碑");
         assert_eq!(stones.len(), 1);
         assert_eq!(stones[0].entry, old);
         assert!(
-            trash_entry(&mut conn, fixture.owner, fixture.root, fresh)
+            trash_entry(&mut conn, fixture.owner, fixture.vault, fresh)
                 .await
                 .expect("读清单")
                 .is_none(),
             "新条目不在回收站里"
         );
         assert!(
-            tombstone(&mut conn, fixture.owner, fixture.root, old)
+            tombstone(&mut conn, fixture.owner, fixture.vault, old)
                 .await
                 .expect("读墓碑")
                 .is_some()

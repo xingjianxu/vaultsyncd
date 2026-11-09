@@ -2,7 +2,7 @@
 //! 调用者负责StateLock、目标句柄及普通工作文件；本层不接受任意SQL。
 use rusqlite::{Connection, OpenFlags};
 use std::{collections::BTreeMap, io, path::Path};
-use vaultsyncd_domain::ids::{EntryId, RootId};
+use vaultsyncd_domain::ids::{EntryId, VaultId};
 use vaultsyncd_server_core::backup::{
     export::Index,
     restore::{self, Entry, Work},
@@ -13,7 +13,7 @@ fn err(e: impl std::fmt::Display) -> io::Error {
 /// 恢复护栏库与正式服务库不同的种类标记，旧服务同样会以ForeignDatabase拒绝它。
 pub const RESTORE_GUARD_APPLICATION_ID: i32 = 0x5653_5247;
 /// 初始化已经由安全目录能力独占创建的空护栏文件。
-/// 数据导入候选名，不能将旧Root路径/旧epoch的半恢复库暴露为server.sqlite。
+/// 数据导入候选名，不能将旧Vault路径/旧epoch的半恢复库暴露为server.sqlite。
 pub fn guard(path: &Path, index: &Index) -> io::Result<()> {
     if std::fs::metadata(path)?.len() != 0 {
         return Err(err("restore guard file must be empty and newly created"));
@@ -34,8 +34,8 @@ pub fn guard(path: &Path, index: &Index) -> io::Result<()> {
 pub struct Plan {
     /// 核心验证后的活跃普通工作项，父目录先于子项。
     pub work: Vec<Work>,
-    /// 各Root原恢复代际。
-    pub epochs: BTreeMap<RootId, u64>,
+    /// 各Vault原恢复代际。
+    pub epochs: BTreeMap<VaultId, u64>,
 }
 /// 核对DB与固定清单后，只读提取活跃命名空间并交核心规划。
 pub fn plan(path: &Path, index: &Index) -> io::Result<Plan> {
@@ -43,7 +43,7 @@ pub fn plan(path: &Path, index: &Index) -> io::Result<Plan> {
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(err)?;
     let mut epochs = BTreeMap::new();
     let mut q = db
-        .prepare("SELECT lower(hex(id)),epoch FROM roots ORDER BY id")
+        .prepare("SELECT lower(hex(id)),epoch FROM vaults ORDER BY id")
         .map_err(err)?;
     for row in q
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
@@ -51,11 +51,11 @@ pub fn plan(path: &Path, index: &Index) -> io::Result<Plan> {
     {
         let (id, epoch) = row.map_err(err)?;
         epochs.insert(
-            RootId::from_hex(&id).map_err(err)?,
+            VaultId::from_hex(&id).map_err(err)?,
             u64::try_from(epoch).map_err(err)?,
         );
     }
-    let mut q=db.prepare("SELECT lower(hex(e.id)),lower(hex(e.root_id)),CASE WHEN e.parent_id IS NULL THEN NULL ELSE lower(hex(e.parent_id)) END,e.name,e.kind,v.object_hash,v.size FROM entries e LEFT JOIN versions v ON v.id=e.content_version_id AND v.root_id=e.root_id AND v.entry_id=e.id WHERE e.deleted_at IS NULL ORDER BY e.id").map_err(err)?;
+    let mut q=db.prepare("SELECT lower(hex(e.id)),lower(hex(e.vault_id)),CASE WHEN e.parent_id IS NULL THEN NULL ELSE lower(hex(e.parent_id)) END,e.name,e.kind,v.object_hash,v.size FROM entries e LEFT JOIN versions v ON v.id=e.content_version_id AND v.vault_id=e.vault_id AND v.entry_id=e.id WHERE e.deleted_at IS NULL ORDER BY e.id").map_err(err)?;
     let mut entries = Vec::new();
     for row in q
         .query_map([], |r| {
@@ -71,7 +71,7 @@ pub fn plan(path: &Path, index: &Index) -> io::Result<Plan> {
         })
         .map_err(err)?
     {
-        let (id, root, parent, name, kind, hash, size) = row.map_err(err)?;
+        let (id, vault, parent, name, kind, hash, size) = row.map_err(err)?;
         if !["directory", "file"].contains(&kind.as_str()) {
             return Err(err("unsupported restored entry kind"));
         }
@@ -85,7 +85,7 @@ pub fn plan(path: &Path, index: &Index) -> io::Result<Plan> {
         };
         entries.push(Entry {
             id: EntryId::from_hex(&id).map_err(err)?,
-            root: RootId::from_hex(&root).map_err(err)?,
+            vault: VaultId::from_hex(&vault).map_err(err)?,
             parent: parent
                 .as_deref()
                 .map(EntryId::from_hex)
@@ -101,24 +101,24 @@ pub fn plan(path: &Path, index: &Index) -> io::Result<Plan> {
         epochs,
     })
 }
-/// 每个Root的新物理映射，来源必须是应用入口已验证的实际目录句柄。
+/// 每个Vault的新物理映射，来源必须是应用入口已验证的实际目录句柄。
 pub struct Remap {
-    /// 固定逻辑Root身份。
-    pub root: RootId,
+    /// 固定逻辑Vault身份。
+    pub vault: VaultId,
     /// 规范绝对新路径。
     pub path: String,
-    /// 新btrfs FSID文本字节，与Root注册编码一致。
+    /// 新btrfs FSID文本字节，与Vault注册编码一致。
     pub volume: Vec<u8>,
-    /// 实际RootSnapshot编码。
+    /// 实际VaultSnapshot编码。
     pub identity: Vec<u8>,
 }
-/// 所有文件已完成后，在同一短事务改变Root映射与epoch，ServerId和历史不变。
+/// 所有文件已完成后，在同一短事务改变Vault映射与epoch，ServerId和历史不变。
 /// epoch由OS随机源生成且不得复用任何旧值，避免同一旧备份重复恢复分配相同代际。
-pub fn apply(path: &Path, index: &Index, roots: &[Remap], epoch: u64) -> io::Result<()> {
+pub fn apply(path: &Path, index: &Index, vaults: &[Remap], epoch: u64) -> io::Result<()> {
     let original = plan(path, index)?;
     if epoch > i64::MAX as u64
         || original.epochs.values().any(|old| *old == epoch)
-        || roots.len() != original.epochs.len()
+        || vaults.len() != original.epochs.len()
     {
         return Err(err("restore requires a fresh epoch and complete mappings"));
     }
@@ -133,18 +133,18 @@ pub fn apply(path: &Path, index: &Index, roots: &[Remap], epoch: u64) -> io::Res
         return Err(err("unfinished backup cannot be restored"));
     }
     let mut seen = std::collections::BTreeSet::new();
-    for root in roots {
-        if !original.epochs.contains_key(&root.root)
-            || !seen.insert(root.root)
-            || !restore::canonical_path(Path::new(&root.path))
-            || root.volume.is_empty()
-            || root.identity.is_empty()
+    for vault in vaults {
+        if !original.epochs.contains_key(&vault.vault)
+            || !seen.insert(vault.vault)
+            || !restore::canonical_path(Path::new(&vault.path))
+            || vault.volume.is_empty()
+            || vault.identity.is_empty()
         {
-            return Err(err("invalid restored root mapping"));
+            return Err(err("invalid restored vault mapping"));
         }
-        let n=tx.execute("UPDATE roots SET absolute_path=?,volume_identity=?,root_file_identity=?,health='healthy',epoch=? WHERE id=?",rusqlite::params![root.path,root.volume,root.identity,epoch as i64,root.root.as_bytes().as_slice()]).map_err(err)?;
+        let n=tx.execute("UPDATE vaults SET absolute_path=?,volume_identity=?,vault_file_identity=?,health='healthy',epoch=? WHERE id=?",rusqlite::params![vault.path,vault.volume,vault.identity,epoch as i64,vault.vault.as_bytes().as_slice()]).map_err(err)?;
         if n != 1 {
-            return Err(err("restore Root mapping missing"));
+            return Err(err("restore Vault mapping missing"));
         }
     }
     tx.execute_batch("UPDATE sessions SET replaced_by=NULL;DELETE FROM sessions;")
@@ -181,7 +181,7 @@ mod tests {
             server: ServerId::from_bytes([2; 16]),
             manifest_hash: [3; 32],
             items: vec![],
-            root_seqs: BTreeMap::new(),
+            vault_seqs: BTreeMap::new(),
             schema_version: 13,
             table_counts: BTreeMap::new(),
             object_storage_paths: BTreeMap::new(),
@@ -201,7 +201,7 @@ mod tests {
         let dir = TestDir::new("s089-remap");
         let db = open_database(&dir).await;
         let owner = seed_owner(&db, 1).await;
-        let (root, _) = register_root(&db, owner, 2).await;
+        let (vault, _) = register_vault(&db, owner, 2).await;
         sqlx::query("INSERT INTO store_metadata VALUES('server_id',?)")
             .bind("abababababababababababababababab")
             .execute(db.pool())
@@ -221,11 +221,11 @@ mod tests {
                     size: 0,
                 })
                 .collect(),
-            root_seqs: frozen
+            vault_seqs: frozen
                 .plan
-                .roots
+                .vaults
                 .iter()
-                .map(|r| (r.root, r.seq.get()))
+                .map(|r| (r.vault, r.seq.get()))
                 .collect(),
             schema_version: frozen.schema,
             object_storage_paths: BTreeMap::new(),
@@ -237,23 +237,23 @@ mod tests {
         };
         let plan = plan(&path, &index).unwrap();
         assert!(plan.work.is_empty());
-        let roots = [Remap {
-            root,
+        let vaults = [Remap {
+            vault,
             path: "/restored/work".into(),
             volume: b"new-fsid".to_vec(),
             identity: b"actual-handle-proof".to_vec(),
         }];
-        assert!(apply(&path, &index, &roots, *plan.epochs.get(&root).unwrap()).is_err());
-        apply(&path, &index, &roots, 42).unwrap();
+        assert!(apply(&path, &index, &vaults, *plan.epochs.get(&vault).unwrap()).is_err());
+        apply(&path, &index, &vaults, 42).unwrap();
         crate::backup::verify_database(&path, &index).unwrap();
         let copy = Connection::open(&path).unwrap();
         assert_eq!(
-            copy.query_row("SELECT epoch FROM roots", [], |r| r.get::<_, i64>(0))
+            copy.query_row("SELECT epoch FROM vaults", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
             42
         );
         assert_eq!(
-            copy.query_row("SELECT absolute_path FROM roots", [], |r| r
+            copy.query_row("SELECT absolute_path FROM vaults", [], |r| r
                 .get::<_, String>(0))
                 .unwrap(),
             "/restored/work"

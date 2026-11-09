@@ -6,7 +6,7 @@ pub(crate) struct Decoder {
     bytes: Vec<u8>,
 }
 impl Decoder {
-    pub(crate) fn push(&mut self, chunk: &[u8], root: &str) -> Result<usize, ClientError> {
+    pub(crate) fn push(&mut self, chunk: &[u8], vault: &str) -> Result<usize, ClientError> {
         let mut hints = 0;
         // Parse incrementally even if a transport chunk contains many small frames. Reject a
         // single oversized frame before allocating more than the bounded 64KiB buffer.
@@ -32,10 +32,10 @@ impl Decoder {
                     let hint: vaultsyncd_protocol::generated::SeqHint =
                         serde_json::from_str(&data.join("\n"))
                             .map_err(|_| ClientError::invalid_request("malformed SSE hint"))?;
-                    if hint.root_id != root
+                    if hint.vault_id != vault
                         || vaultsyncd_protocol::decimal::validate(&hint.seq).is_err()
                     {
-                        return Err(ClientError::invalid_request("SSE root/seq mismatch"));
+                        return Err(ClientError::invalid_request("SSE vault/seq mismatch"));
                     }
                     hints += 1;
                 }
@@ -48,30 +48,30 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    const ROOT: &str = "00112233445566778899aabbccddeeff";
+    const VAULT: &str = "00112233445566778899aabbccddeeff";
     fn frame(seq: &str) -> Vec<u8> {
         format!(
-            "event: seq\r\nid: {seq}\r\ndata: {{\"root_id\":\"{ROOT}\",\"seq\":\"{seq}\"}}\r\n\r\n"
+            "event: seq\r\nid: {seq}\r\ndata: {{\"vault_id\":\"{VAULT}\",\"seq\":\"{seq}\"}}\r\n\r\n"
         )
         .into_bytes()
     }
     #[test]
     fn split_frames_comments_duplicates_and_reordering_only_wake() {
         let mut decoder = Decoder::default();
-        assert_eq!(decoder.push(b": keepalive\n\n", ROOT).unwrap(), 0);
+        assert_eq!(decoder.push(b": keepalive\n\n", VAULT).unwrap(), 0);
         for seq in ["4", "4", "9", "3"] {
             let frame = frame(seq);
             let mut count = 0;
             for part in frame.chunks(3) {
-                count += decoder.push(part, ROOT).unwrap();
+                count += decoder.push(part, VAULT).unwrap();
             }
             assert_eq!(count, 1);
         }
     }
     #[test]
     fn malformed_foreign_and_oversized_frames_are_rejected() {
-        assert!(Decoder::default().push(&frame("01"), ROOT).is_err());
+        assert!(Decoder::default().push(&frame("01"), VAULT).is_err());
         assert!(Decoder::default().push(&frame("1"), "different").is_err());
-        assert!(Decoder::default().push(&vec![b'x'; 65537], ROOT).is_err());
+        assert!(Decoder::default().push(&vec![b'x'; 65537], VAULT).is_err());
     }
 }

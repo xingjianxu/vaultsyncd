@@ -11,7 +11,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use tower::ServiceExt;
-use vaultsyncd_domain::ids::{EntryId, ID_LEN, RootId, TxId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, ID_LEN, TxId, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 use vaultsyncd_protocol::generated::{
     ErrorCode, ErrorEnvelope, FinalizedContent, ObjectReuse, SessionIssued, UploadRequest,
@@ -21,15 +21,15 @@ use vaultsyncd_server::auth::AuthContext;
 use vaultsyncd_server::content::ContentContext;
 use vaultsyncd_server::http::router;
 use vaultsyncd_server::lifecycle::Lifecycle;
-use vaultsyncd_server::roots::RootContext;
 use vaultsyncd_server::uploads::{PART_HASH_HEADER, UploadsContext};
+use vaultsyncd_server::vaults::VaultContext;
 use vaultsyncd_server_core::auth::password::PasswordHasher;
 use vaultsyncd_server_core::objects::{ContentDigest, ObjectLayout};
 use vaultsyncd_server_store::changes;
 use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::entries::{self, EntryKind, NewEntry};
-use vaultsyncd_server_store::roots::{self, NewRoot};
 use vaultsyncd_server_store::users;
+use vaultsyncd_server_store::vaults::{self, NewVault};
 use vaultsyncd_server_store::versions::{self, NewObject, NewVersion, VersionOrigin};
 use vaultsyncd_transfer::hash;
 
@@ -70,18 +70,18 @@ impl Drop for Fixture {
     }
 }
 
-/// 种子身份：owner 有 Root，intruder 有会话但没有 Root（用来验证 403）。
+/// 种子身份：owner 有 Vault，intruder 有会话但没有 Vault（用来验证 403）。
 struct Seeds {
     owner: UserId,
-    root: RootId,
-    root_entry: EntryId,
+    vault: VaultId,
+    vault_entry: EntryId,
 }
 
 async fn seed_accounts(fixture: &Fixture) -> Seeds {
     let owner = UserId::from_bytes([0x11; ID_LEN]);
     let intruder = UserId::from_bytes([0x33; ID_LEN]);
-    let root = RootId::from_bytes([0x22; ID_LEN]);
-    let root_entry = EntryId::from_bytes([0x55; ID_LEN]);
+    let vault = VaultId::from_bytes([0x22; ID_LEN]);
+    let vault_entry = EntryId::from_bytes([0x55; ID_LEN]);
     let database = Database::open(fixture.database())
         .await
         .expect("打开测试库");
@@ -100,66 +100,66 @@ async fn seed_accounts(fixture: &Fixture) -> Seeds {
         .await
         .expect("写种子账号");
     }
-    roots::insert_root(
+    vaults::insert_vault(
         &mut tx,
-        &NewRoot {
-            id: root,
-            entry: root_entry,
+        &NewVault {
+            id: vault,
+            entry: vault_entry,
             owner,
             absolute_path: "/srv/vaultsyncd-s046b-owner".to_owned(),
             volume_identity: vec![0x77; 16],
-            root_file_identity: vec![0x88; 16],
+            vault_file_identity: vec![0x88; 16],
             epoch: ServerEpoch::new(1).expect("epoch"),
         },
     )
     .await
-    .expect("写种子 Root");
+    .expect("写种子 Vault");
     tx.commit().await.expect("提交种子事务");
     database.close().await;
     Seeds {
         owner,
-        root,
-        root_entry,
+        vault,
+        vault_entry,
     }
 }
 
-/// 第二位用户拥有独立 Root，用相同摘要验证对象隔离而不扩大授权范围。
-async fn seed_other_root(fixture: &Fixture) -> Seeds {
+/// 第二位用户拥有独立 Vault，用相同摘要验证对象隔离而不扩大授权范围。
+async fn seed_other_vault(fixture: &Fixture) -> Seeds {
     let seeds = Seeds {
         owner: UserId::from_bytes([0x33; ID_LEN]),
-        root: RootId::from_bytes([0x23; ID_LEN]),
-        root_entry: EntryId::from_bytes([0x56; ID_LEN]),
+        vault: VaultId::from_bytes([0x23; ID_LEN]),
+        vault_entry: EntryId::from_bytes([0x56; ID_LEN]),
     };
     let database = Database::open(fixture.database())
         .await
         .expect("打开测试库");
     let mut tx = database.begin_write().await.expect("写事务");
-    roots::insert_root(
+    vaults::insert_vault(
         &mut tx,
-        &NewRoot {
-            id: seeds.root,
-            entry: seeds.root_entry,
+        &NewVault {
+            id: seeds.vault,
+            entry: seeds.vault_entry,
             owner: seeds.owner,
             absolute_path: "/srv/vaultsyncd-s136c-other".to_owned(),
             volume_identity: vec![0x79; 16],
-            root_file_identity: vec![0x89; 16],
+            vault_file_identity: vec![0x89; 16],
             epoch: ServerEpoch::new(1).expect("epoch"),
         },
     )
     .await
-    .expect("写第二个 Root");
-    tx.commit().await.expect("提交第二个 Root");
+    .expect("写第二个 Vault");
+    tx.commit().await.expect("提交第二个 Vault");
     database.close().await;
     seeds
 }
 
-/// 兼容性种子必须同时有 legacy 字节与该 Root 的持久登记；不是磁盘探测回退。
+/// 兼容性种子必须同时有 legacy 字节与该 Vault 的持久登记；不是磁盘探测回退。
 async fn seed_legacy_object(fixture: &Fixture, seeds: &Seeds, bytes: &[u8]) -> String {
     let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
     let storage_path = ObjectLayout::relative_object_path(&digest)
         .display()
         .to_string();
-    let path = fixture.objects().root().join(&storage_path);
+    let path = fixture.objects().vault().join(&storage_path);
     std::fs::create_dir_all(path.parent().expect("对象父目录")).expect("建对象目录");
     std::fs::write(path, bytes).expect("写 legacy 对象");
     let database = Database::open(fixture.database())
@@ -170,7 +170,7 @@ async fn seed_legacy_object(fixture: &Fixture, seeds: &Seeds, bytes: &[u8]) -> S
         &mut tx,
         seeds.owner,
         &NewObject {
-            root: seeds.root,
+            vault: seeds.vault,
             hash: *digest.as_bytes(),
             size: bytes.len() as u64,
             storage_path: storage_path.clone(),
@@ -198,7 +198,7 @@ async fn open_app(fixture: &Fixture) -> App {
         Arc::clone(&auth),
         fixture.state_dir().as_path(),
     ));
-    let roots = Arc::new(RootContext::new(
+    let vaults = Arc::new(VaultContext::new(
         Arc::clone(&auth),
         None,
         fixture.state_dir(),
@@ -224,7 +224,7 @@ async fn open_app(fixture: &Fixture) -> App {
         Arc::clone(&lifecycle),
     ));
     App {
-        router: router(lifecycle, auth, uploads, roots, content, operations, sync),
+        router: router(lifecycle, auth, uploads, vaults, content, operations, sync),
     }
 }
 
@@ -322,7 +322,7 @@ fn get_range(uri: &str, token: Option<&str>, range: &str) -> Request<Body> {
 }
 
 fn put_part(
-    root: RootId,
+    vault: VaultId,
     upload: &str,
     index: u64,
     token: &str,
@@ -332,8 +332,8 @@ fn put_part(
     let mut builder = Request::builder()
         .method("PUT")
         .uri(format!(
-            "/v1/roots/{}/uploads/{upload}/parts/{index}",
-            root.to_hex()
+            "/v1/vaults/{}/uploads/{upload}/parts/{index}",
+            vault.to_hex()
         ))
         .header("authorization", format!("Bearer {token}"));
     if let Some(declared) = declared {
@@ -360,7 +360,7 @@ async fn login(app: &App, account: &str) -> String {
 
 async fn begin(
     app: &App,
-    root: RootId,
+    vault: VaultId,
     token: &str,
     total_size: u64,
     chunk_size: u64,
@@ -374,7 +374,7 @@ async fn begin(
     let body = serde_json::to_string(&request).expect("序列化创建请求");
     let reply = app
         .call(post_json(
-            &format!("/v1/roots/{}/uploads", root.to_hex()),
+            &format!("/v1/vaults/{}/uploads", vault.to_hex()),
             Some(token),
             &body,
         ))
@@ -388,10 +388,10 @@ async fn begin(
     parse(&reply, "UploadSession")
 }
 
-async fn status(app: &App, root: RootId, upload: &str, token: &str) -> UploadStatus {
+async fn status(app: &App, vault: VaultId, upload: &str, token: &str) -> UploadStatus {
     let reply = app
         .call(get(
-            &format!("/v1/roots/{}/uploads/{upload}", root.to_hex()),
+            &format!("/v1/vaults/{}/uploads/{upload}", vault.to_hex()),
             Some(token),
         ))
         .await;
@@ -404,18 +404,18 @@ async fn status(app: &App, root: RootId, upload: &str, token: &str) -> UploadSta
     parse(&reply, "UploadStatus")
 }
 
-async fn finalize(app: &App, root: RootId, upload: &str, token: &str) -> Reply {
+async fn finalize(app: &App, vault: VaultId, upload: &str, token: &str) -> Reply {
     app.call(post(
-        &format!("/v1/roots/{}/uploads/{upload}/finalize", root.to_hex()),
+        &format!("/v1/vaults/{}/uploads/{upload}/finalize", vault.to_hex()),
         Some(token),
     ))
     .await
 }
 
-fn download_uri(root: RootId, entry: EntryId, version: VersionId) -> String {
+fn download_uri(vault: VaultId, entry: EntryId, version: VersionId) -> String {
     format!(
-        "/v1/roots/{}/entries/{}/versions/{}/content",
-        root.to_hex(),
+        "/v1/vaults/{}/entries/{}/versions/{}/content",
+        vault.to_hex(),
         entry.to_hex(),
         version.to_hex()
     )
@@ -455,8 +455,8 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
         seeds.owner,
         &NewEntry {
             id: entry,
-            root: seeds.root,
-            parent: seeds.root_entry,
+            vault: seeds.vault,
+            parent: seeds.vault_entry,
             name: "notes.txt".to_owned(),
             name_key: "notes.txt".to_owned(),
             kind: EntryKind::File,
@@ -478,7 +478,7 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
             &mut tx,
             seeds.owner,
             &NewObject {
-                root: seeds.root,
+                vault: seeds.vault,
                 hash: *digest.as_bytes(),
                 size: bytes.len() as u64,
                 storage_path: ObjectLayout::relative_object_path(digest)
@@ -492,7 +492,7 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
         let batch = changes::append_change(
             &mut tx,
             seeds.owner,
-            seeds.root,
+            seeds.vault,
             TxId::from_bytes([marker; ID_LEN]),
             r#"[{"kind":"content_put","entry":"66"}]"#,
             moment,
@@ -504,7 +504,7 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
             seeds.owner,
             &NewVersion {
                 id: version,
-                root: seeds.root,
+                vault: seeds.vault,
                 entry,
                 object_hash: *digest.as_bytes(),
                 size: bytes.len() as u64,
@@ -528,18 +528,26 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
 /// 一条上传：按块上传 `bytes`（每块长度由几何决定），返回会话身份。
 async fn upload_content(
     app: &App,
-    root: RootId,
+    vault: VaultId,
     token: &str,
     bytes: &[u8],
     chunk_size: u64,
     total_hash: &str,
 ) -> UploadSession {
-    let session = begin(app, root, token, bytes.len() as u64, chunk_size, total_hash).await;
+    let session = begin(
+        app,
+        vault,
+        token,
+        bytes.len() as u64,
+        chunk_size,
+        total_hash,
+    )
+    .await;
     let chunk = usize::try_from(chunk_size).expect("块大小");
     for (index, part) in bytes.chunks(chunk).enumerate() {
         let reply = app
             .call(put_part(
-                root,
+                vault,
                 &session.upload_id,
                 index as u64,
                 token,
@@ -564,9 +572,9 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
     let content = b"six-byte-content";
-    let session = upload_content(&app, seeds.root, &token, content, 4, &sha256(content)).await;
+    let session = upload_content(&app, seeds.vault, &token, content, 4, &sha256(content)).await;
 
-    let reply = finalize(&app, seeds.root, &session.upload_id, &token).await;
+    let reply = finalize(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(
         reply.status,
         StatusCode::OK,
@@ -575,7 +583,7 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     );
     let finalized: FinalizedContent = parse(&reply, "FinalizedContent");
     assert_eq!(finalized.upload_id, session.upload_id);
-    assert_eq!(finalized.root_id, seeds.root.to_hex());
+    assert_eq!(finalized.vault_id, seeds.vault.to_hex());
     assert_eq!(finalized.hash, sha256(content));
     assert_eq!(finalized.size, content.len().to_string());
     assert_eq!(finalized.part_count, "4");
@@ -584,7 +592,7 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     assert_eq!(
         finalized.storage_path,
         ObjectLayout::scoped_relative_object_path(
-            seeds.root,
+            seeds.vault,
             &ContentDigest::from_hex(&sha256(content)).expect("内容地址")
         )
         .display()
@@ -592,68 +600,68 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     );
 
     // 对象字节真的落到了对象区，且内容与会话声明一致。
-    let object = fixture.objects().root().join(&finalized.storage_path);
+    let object = fixture.objects().vault().join(&finalized.storage_path);
     assert_eq!(
         std::fs::read(&object).expect("读已发布对象"),
         content.to_vec(),
         "对象字节应等于上传内容"
     );
     // 会话变成 finalized；finalize 不改条目，因此这里只断言上传状态。
-    let after = status(&app, seeds.root, &session.upload_id, &token).await;
+    let after = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(after.upload.state, UploadState::Finalized);
 }
 
 #[tokio::test]
-async fn same_digest_in_two_roots_has_independent_publication_reuse_and_replay() {
-    let fixture = Fixture::new("root-scoped-finalize");
+async fn same_digest_in_two_vaults_has_independent_publication_reuse_and_replay() {
+    let fixture = Fixture::new("vault-scoped-finalize");
     let first = seed_accounts(&fixture).await;
-    let second = seed_other_root(&fixture).await;
+    let second = seed_other_vault(&fixture).await;
     let app = open_app(&fixture).await;
     let owner = login(&app, "owner").await;
     let other = login(&app, "intruder").await;
-    let bytes = b"same digest, independent root objects";
+    let bytes = b"same digest, independent vault objects";
     let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
-    let first_session = upload_content(&app, first.root, &owner, bytes, 8, &sha256(bytes)).await;
-    let second_session = upload_content(&app, second.root, &other, bytes, 8, &sha256(bytes)).await;
+    let first_session = upload_content(&app, first.vault, &owner, bytes, 8, &sha256(bytes)).await;
+    let second_session = upload_content(&app, second.vault, &other, bytes, 8, &sha256(bytes)).await;
 
-    // 持有另一 Root 会话也不扩大 Root 授权；拒绝后原会话仍可正常 finalize。
-    for (root, session, token) in [
-        (first.root, &first_session, &other),
-        (second.root, &second_session, &owner),
+    // 持有另一 Vault 会话也不扩大 Vault 授权；拒绝后原会话仍可正常 finalize。
+    for (vault, session, token) in [
+        (first.vault, &first_session, &other),
+        (second.vault, &second_session, &owner),
     ] {
-        let denied = finalize(&app, root, &session.upload_id, token).await;
+        let denied = finalize(&app, vault, &session.upload_id, token).await;
         assert_eq!(denied.status, StatusCode::FORBIDDEN, "{}", denied.text());
         assert_eq!(denied.envelope().error.code, ErrorCode::AccessDenied);
     }
 
     let mut paths = Vec::new();
-    for (root, session, token) in [
-        (first.root, first_session, &owner),
-        (second.root, second_session, &other),
+    for (vault, session, token) in [
+        (first.vault, first_session, &owner),
+        (second.vault, second_session, &other),
     ] {
-        let expected = ObjectLayout::scoped_relative_object_path(root, &digest)
+        let expected = ObjectLayout::scoped_relative_object_path(vault, &digest)
             .display()
             .to_string();
-        let reply = finalize(&app, root, &session.upload_id, token).await;
+        let reply = finalize(&app, vault, &session.upload_id, token).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         let published: FinalizedContent = parse(&reply, "FinalizedContent");
         assert_eq!(published.storage_path, expected);
-        assert_eq!(published.root_id, root.to_hex());
+        assert_eq!(published.vault_id, vault.to_hex());
         assert_eq!(published.reuse, ObjectReuse::FreshlyPublished);
         assert!(!published.replayed);
         assert_eq!(
-            std::fs::read(fixture.objects().root().join(&expected)).unwrap(),
+            std::fs::read(fixture.objects().vault().join(&expected)).unwrap(),
             bytes
         );
 
-        let replay = finalize(&app, root, &session.upload_id, token).await;
+        let replay = finalize(&app, vault, &session.upload_id, token).await;
         assert_eq!(replay.status, StatusCode::OK, "{}", replay.text());
         let replayed: FinalizedContent = parse(&replay, "FinalizedContent");
         assert!(replayed.replayed);
         assert_eq!(replayed.storage_path, expected);
 
-        let again = upload_content(&app, root, token, bytes, 8, &sha256(bytes)).await;
-        let reply = finalize(&app, root, &again.upload_id, token).await;
+        let again = upload_content(&app, vault, token, bytes, 8, &sha256(bytes)).await;
+        let reply = finalize(&app, vault, &again.upload_id, token).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         let reused: FinalizedContent = parse(&reply, "FinalizedContent");
         assert_eq!(reused.reuse, ObjectReuse::ExistingVerified);
@@ -667,17 +675,18 @@ async fn same_digest_in_two_roots_has_independent_publication_reuse_and_replay()
         "新对象不得写入全局 legacy 路径"
     );
     let database = Database::open(fixture.database()).await.unwrap();
-    let rows: Vec<(Vec<u8>, String)> =
-        sqlx::query_as("SELECT root_id, storage_path FROM objects WHERE hash = ? ORDER BY root_id")
-            .bind(digest.as_bytes().as_slice())
-            .fetch_all(database.pool())
-            .await
-            .unwrap();
+    let rows: Vec<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT vault_id, storage_path FROM objects WHERE hash = ? ORDER BY vault_id",
+    )
+    .bind(digest.as_bytes().as_slice())
+    .fetch_all(database.pool())
+    .await
+    .unwrap();
     assert_eq!(
         rows,
         vec![
-            (first.root.as_bytes().to_vec(), paths[0].clone()),
-            (second.root.as_bytes().to_vec(), paths[1].clone()),
+            (first.vault.as_bytes().to_vec(), paths[0].clone()),
+            (second.vault.as_bytes().to_vec(), paths[1].clone()),
         ]
     );
     database.close().await;
@@ -691,9 +700,9 @@ async fn registered_legacy_object_keeps_its_path_for_new_upload_and_replay() {
     let legacy = seed_legacy_object(&fixture, &seeds, bytes).await;
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
-    let session = upload_content(&app, seeds.root, &token, bytes, 8, &sha256(bytes)).await;
+    let session = upload_content(&app, seeds.vault, &token, bytes, 8, &sha256(bytes)).await;
     for replayed in [false, true] {
-        let reply = finalize(&app, seeds.root, &session.upload_id, &token).await;
+        let reply = finalize(&app, seeds.vault, &session.upload_id, &token).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         let finalized: FinalizedContent = parse(&reply, "FinalizedContent");
         assert_eq!(finalized.storage_path, legacy);
@@ -701,16 +710,17 @@ async fn registered_legacy_object_keeps_its_path_for_new_upload_and_replay() {
         assert_eq!(finalized.replayed, replayed);
     }
     assert_eq!(
-        std::fs::read(fixture.objects().root().join(&legacy)).unwrap(),
+        std::fs::read(fixture.objects().vault().join(&legacy)).unwrap(),
         bytes
     );
     let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
     assert!(
         !fixture
             .objects()
-            .root()
+            .vault()
             .join(ObjectLayout::scoped_relative_object_path(
-                seeds.root, &digest
+                seeds.vault,
+                &digest
             ))
             .exists(),
         "不得为已登记 legacy 对象改写路径"
@@ -718,23 +728,23 @@ async fn registered_legacy_object_keeps_its_path_for_new_upload_and_replay() {
 }
 
 #[tokio::test]
-async fn another_roots_legacy_object_is_not_reused_for_new_publication() {
-    let fixture = Fixture::new("legacy-cross-root");
+async fn another_vaults_legacy_object_is_not_reused_for_new_publication() {
+    let fixture = Fixture::new("legacy-cross-vault");
     let first = seed_accounts(&fixture).await;
-    let second = seed_other_root(&fixture).await;
-    let bytes = b"legacy object belonging to a different root";
+    let second = seed_other_vault(&fixture).await;
+    let bytes = b"legacy object belonging to a different vault";
     let legacy = seed_legacy_object(&fixture, &first, bytes).await;
     let app = open_app(&fixture).await;
     let token = login(&app, "intruder").await;
-    let session = upload_content(&app, second.root, &token, bytes, 8, &sha256(bytes)).await;
+    let session = upload_content(&app, second.vault, &token, bytes, 8, &sha256(bytes)).await;
     let expected = ObjectLayout::scoped_relative_object_path(
-        second.root,
+        second.vault,
         &ContentDigest::from_bytes(hash::digest_of(bytes)),
     )
     .display()
     .to_string();
     for replayed in [false, true] {
-        let reply = finalize(&app, second.root, &session.upload_id, &token).await;
+        let reply = finalize(&app, second.vault, &session.upload_id, &token).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         let finalized: FinalizedContent = parse(&reply, "FinalizedContent");
         assert_eq!(finalized.storage_path, expected);
@@ -746,15 +756,16 @@ async fn another_roots_legacy_object_is_not_reused_for_new_publication() {
     }
     for path in [&legacy, &expected] {
         assert_eq!(
-            std::fs::read(fixture.objects().root().join(path)).unwrap(),
+            std::fs::read(fixture.objects().vault().join(path)).unwrap(),
             bytes
         );
     }
     let database = Database::open(fixture.database()).await.unwrap();
-    let rows: Vec<String> = sqlx::query_scalar("SELECT storage_path FROM objects ORDER BY root_id")
-        .fetch_all(database.pool())
-        .await
-        .unwrap();
+    let rows: Vec<String> =
+        sqlx::query_scalar("SELECT storage_path FROM objects ORDER BY vault_id")
+            .fetch_all(database.pool())
+            .await
+            .unwrap();
     assert_eq!(rows, vec![legacy, expected]);
     database.close().await;
 }
@@ -768,7 +779,7 @@ async fn finalize_with_missing_parts_is_400_and_keeps_the_session_open() {
     let content = b"abcdefgh";
     let session = begin(
         &app,
-        seeds.root,
+        seeds.vault,
         &token,
         content.len() as u64,
         4,
@@ -778,7 +789,7 @@ async fn finalize_with_missing_parts_is_400_and_keeps_the_session_open() {
     // 只传第 0 块：块数够但缺一块，finalize 的前提不成立。
     let reply = app
         .call(put_part(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token,
@@ -788,7 +799,7 @@ async fn finalize_with_missing_parts_is_400_and_keeps_the_session_open() {
         .await;
     assert_eq!(reply.status, StatusCode::OK, "块应被接收：{}", reply.text());
 
-    let reply = finalize(&app, seeds.root, &session.upload_id, &token).await;
+    let reply = finalize(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(
         reply.status,
         StatusCode::BAD_REQUEST,
@@ -800,10 +811,10 @@ async fn finalize_with_missing_parts_is_400_and_keeps_the_session_open() {
     assert!(!envelope.error.retryable);
 
     // 会话没有被推进，也没有对象被发布。
-    let after = status(&app, seeds.root, &session.upload_id, &token).await;
+    let after = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(after.upload.state, UploadState::Open);
     assert!(
-        !fixture.objects().root().join("roots").exists(),
+        !fixture.objects().vault().join("vaults").exists(),
         "缺块时不得发布任何对象"
     );
 }
@@ -818,7 +829,7 @@ async fn finalize_with_mismatched_content_is_422_and_aborts_the_session() {
     // 会话声明的是另一份内容的哈希：块本身合法，拼装后总哈希不符。
     let session = upload_content(
         &app,
-        seeds.root,
+        seeds.vault,
         &token,
         uploaded,
         4,
@@ -826,7 +837,7 @@ async fn finalize_with_mismatched_content_is_422_and_aborts_the_session() {
     )
     .await;
 
-    let reply = finalize(&app, seeds.root, &session.upload_id, &token).await;
+    let reply = finalize(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(
         reply.status,
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -836,7 +847,7 @@ async fn finalize_with_mismatched_content_is_422_and_aborts_the_session() {
     assert_eq!(reply.envelope().error.code, ErrorCode::HashMismatch);
 
     // 校验失败不提交：会话被放弃，且没有任何对象行/对象字节残留。
-    let after = status(&app, seeds.root, &session.upload_id, &token).await;
+    let after = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(after.upload.state, UploadState::Aborted);
     let database = Database::open(fixture.database())
         .await
@@ -858,13 +869,13 @@ async fn finalize_replay_returns_the_same_reference() {
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
     let content = b"replay-me";
-    let session = upload_content(&app, seeds.root, &token, content, 4, &sha256(content)).await;
+    let session = upload_content(&app, seeds.vault, &token, content, 4, &sha256(content)).await;
 
     let first: FinalizedContent = parse(
-        &finalize(&app, seeds.root, &session.upload_id, &token).await,
+        &finalize(&app, seeds.vault, &session.upload_id, &token).await,
         "FinalizedContent",
     );
-    let reply = finalize(&app, seeds.root, &session.upload_id, &token).await;
+    let reply = finalize(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(reply.status, StatusCode::OK, "重放应成功：{}", reply.text());
     let second: FinalizedContent = parse(&reply, "FinalizedContent");
     assert!(second.replayed, "第二次 finalize 必须标记为重放");
@@ -883,7 +894,7 @@ async fn part_digest_header_is_required_and_enforced() {
     let content = b"abcdefgh";
     let session = begin(
         &app,
-        seeds.root,
+        seeds.vault,
         &token,
         content.len() as u64,
         4,
@@ -894,7 +905,7 @@ async fn part_digest_header_is_required_and_enforced() {
     // 缺少 `x-part-sha256`：形状不成立，不登记块。
     let reply = app
         .call(put_part(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token,
@@ -913,7 +924,7 @@ async fn part_digest_header_is_required_and_enforced() {
     // 声明了错误摘要：422 `HASH_MISMATCH`，块不登记。
     let reply = app
         .call(put_part(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token,
@@ -932,7 +943,7 @@ async fn part_digest_header_is_required_and_enforced() {
     // 正确摘要才登记，并且进度里出现这一块。
     let reply = app
         .call(put_part(
-            seeds.root,
+            seeds.vault,
             &session.upload_id,
             0,
             &token,
@@ -946,7 +957,7 @@ async fn part_digest_header_is_required_and_enforced() {
         "正确摘要应被接收：{}",
         reply.text()
     );
-    let after = status(&app, seeds.root, &session.upload_id, &token).await;
+    let after = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(after.received.len(), 1);
     assert_eq!(after.received[0].index, "0");
 }
@@ -959,7 +970,7 @@ async fn download_serves_the_requested_version_and_range_slices() {
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
     let (current_version, current_bytes) = seeded.current.clone();
-    let uri = download_uri(seeds.root, seeded.entry, current_version);
+    let uri = download_uri(seeds.vault, seeded.entry, current_version);
 
     // 整份：200 + 长度 + 内容地址头。
     let reply = app.call(get(&uri, Some(&token))).await;
@@ -1035,7 +1046,7 @@ async fn download_of_a_superseded_version_serves_the_old_bytes() {
     let (old_version, old_bytes) = seeded.old.clone();
     let reply = app
         .call(get(
-            &download_uri(seeds.root, seeded.entry, old_version),
+            &download_uri(seeds.vault, seeded.entry, old_version),
             Some(&token),
         ))
         .await;
@@ -1063,7 +1074,7 @@ async fn download_of_a_gone_version_is_410() {
     let missing = VersionId::from_bytes([0x7f; ID_LEN]);
     let reply = app
         .call(get(
-            &download_uri(seeds.root, seeded.entry, missing),
+            &download_uri(seeds.vault, seeded.entry, missing),
             Some(&token),
         ))
         .await;
@@ -1077,13 +1088,13 @@ async fn download_of_a_gone_version_is_410() {
 }
 
 #[tokio::test]
-async fn content_endpoints_require_credentials_and_root_scope() {
+async fn content_endpoints_require_credentials_and_vault_scope() {
     let fixture = Fixture::new("content-auth");
     let seeds = seed_accounts(&fixture).await;
     let seeded = seed_versions(&fixture, &seeds, 1_700_000_300).await;
     let app = open_app(&fixture).await;
     let (current_version, _) = seeded.current.clone();
-    let uri = download_uri(seeds.root, seeded.entry, current_version);
+    let uri = download_uri(seeds.vault, seeded.entry, current_version);
 
     // 无凭据：401 `AUTH_EXPIRED`。
     let reply = app.call(get(&uri, None)).await;
@@ -1092,8 +1103,8 @@ async fn content_endpoints_require_credentials_and_root_scope() {
     let reply = app
         .call(post(
             &format!(
-                "/v1/roots/{}/uploads/{}0000000000000000000000000000000/finalize",
-                seeds.root.to_hex(),
+                "/v1/vaults/{}/uploads/{}0000000000000000000000000000000/finalize",
+                seeds.vault.to_hex(),
                 ""
             ),
             None,
@@ -1101,15 +1112,15 @@ async fn content_endpoints_require_credentials_and_root_scope() {
         .await;
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{}", reply.text());
 
-    // 别人的 Root：403 `ACCESS_DENIED`，下载与 finalize 都拒。
+    // 别人的 Vault：403 `ACCESS_DENIED`，下载与 finalize 都拒。
     let intruder = login(&app, "intruder").await;
     let reply = app.call(get(&uri, Some(&intruder))).await;
     assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text());
     assert_eq!(reply.envelope().error.code, ErrorCode::AccessDenied);
 
     let owner = login(&app, "owner").await;
-    let session = upload_content(&app, seeds.root, &owner, b"abc", 4, &sha256(b"abc")).await;
-    let reply = finalize(&app, seeds.root, &session.upload_id, &intruder).await;
+    let session = upload_content(&app, seeds.vault, &owner, b"abc", 4, &sha256(b"abc")).await;
+    let reply = finalize(&app, seeds.vault, &session.upload_id, &intruder).await;
     assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text());
     assert_eq!(reply.envelope().error.code, ErrorCode::AccessDenied);
 }

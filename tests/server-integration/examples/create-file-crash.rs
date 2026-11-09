@@ -1,7 +1,7 @@
 //! Native Linux child holds real Create publication boundaries for parent SIGKILL acceptance.
 use std::{io::Write, path::PathBuf};
 use vaultsyncd_domain::{
-    ids::{DeviceId, EntryId, IntentId, OpId, RootId, UploadId, UserId, VersionId},
+    ids::{DeviceId, EntryId, IntentId, OpId, UploadId, UserId, VaultId, VersionId},
     version::{Generation, ServerEpoch},
 };
 use vaultsyncd_server::{
@@ -26,9 +26,9 @@ async fn main() {
     let text = |key: &str| fixture[key].as_str().unwrap();
     let state = PathBuf::from(text("state"));
     let db = Database::open(state.join("server.sqlite")).await.unwrap();
-    let root = RootId::from_hex(text("root")).unwrap();
-    let owner: Vec<u8> = sqlx::query_scalar("SELECT owner_id FROM roots WHERE id=?")
-        .bind(root.as_bytes().as_slice())
+    let vault = VaultId::from_hex(text("vault")).unwrap();
+    let owner: Vec<u8> = sqlx::query_scalar("SELECT owner_id FROM vaults WHERE id=?")
+        .bind(vault.as_bytes().as_slice())
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -51,7 +51,7 @@ async fn main() {
         version: None,
     };
     let key = OperationKey {
-        root,
+        vault,
         device: request.device,
         op: request.op,
     };
@@ -88,7 +88,7 @@ async fn main() {
         let mut log = SqlIntentLog::new(db.clone(), owner).bound(binding);
         let new = NewPutIntent {
             intent_id: IntentId::from_bytes([0x93; 16]),
-            root,
+            vault,
             target_path: text("name").into(),
             staging_path: "create-crash-stage".into(),
             before: TargetBefore::Absent,
@@ -101,8 +101,8 @@ async fn main() {
             log.begin_put(&new, at).await.unwrap();
         } else {
             let mut target = WorkTreeTarget::new(
-                executor.root_handle(owner, root).await.unwrap(),
-                executor.objects(root, &[content.digest]).await.unwrap(),
+                executor.vault_handle(owner, vault).await.unwrap(),
+                executor.objects(vault, &[content.digest]).await.unwrap(),
             );
             publish_put(&mut log, &mut target, at, &new).await.unwrap();
         }

@@ -17,8 +17,8 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ${VAULTSYNCD_ROOTS:?set an existing explicitly authorized btrfs Root base}
-        target: /srv/vaultsyncd-roots
+        source: ${VAULTSYNCD_VAULTS:?set an existing explicitly authorized btrfs Vault base}
+        target: /srv/vaultsyncd-vaults
         bind:
           create_host_path: false
     stop_grace_period: 120s

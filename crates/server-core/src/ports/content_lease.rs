@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{ObjectLeaseId, RootId};
+use vaultsyncd_domain::ids::{ObjectLeaseId, VaultId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
 use crate::objects::ContentDigest;
@@ -49,8 +49,8 @@ impl ContentLeasePurpose {
 /// 一次租约请求。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContentLeaseRequest {
-    /// 对象所属 Root：对象按 `(root_id, hash)` 登记，内容地址不跨 Root 共享。
-    pub root: RootId,
+    /// 对象所属 Vault：对象按 `(vault_id, hash)` 登记，内容地址不跨 Vault 共享。
+    pub vault: VaultId,
     /// 被保护的内容地址。
     pub digest: ContentDigest,
     /// 用途。
@@ -78,7 +78,7 @@ pub enum ContentLeaseError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 不在调用方的 owner scope 内。
+    /// Vault 不在调用方的 owner scope 内。
     OutOfScope,
     /// 内容地址上还没有登记的对象：没有可保护的内容。
     ObjectNotRegistered {
@@ -111,7 +111,7 @@ impl fmt::Display for ContentLeaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ContentLeaseError::Storage { detail } => write!(f, "内容租约存储失败：{detail}"),
-            ContentLeaseError::OutOfScope => f.write_str("Root 不在调用方的 owner scope 内"),
+            ContentLeaseError::OutOfScope => f.write_str("Vault 不在调用方的 owner scope 内"),
             ContentLeaseError::ObjectNotRegistered { digest } => {
                 write!(f, "内容 {digest} 还没有登记对象，无法建立租约")
             }

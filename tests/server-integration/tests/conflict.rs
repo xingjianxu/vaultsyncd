@@ -6,7 +6,7 @@
 mod common;
 
 use common::{
-    Lab, PutArgs, Running, create_snapshot, identity, login, put_operation, register_root,
+    Lab, PutArgs, Running, create_snapshot, identity, login, put_operation, register_vault,
     snapshot_entries, upload, wait_for,
 };
 use reqwest::StatusCode;
@@ -22,14 +22,14 @@ fn sha256(bytes: &[u8]) -> String {
     ))
 }
 
-async fn snapshot(running: &Running, token: &str, root: &str) -> Vec<Value> {
-    let created = create_snapshot(running, token, root).await.expect("快照");
+async fn snapshot(running: &Running, token: &str, vault: &str) -> Vec<Value> {
+    let created = create_snapshot(running, token, vault).await.expect("快照");
     let id = created
         .get("snapshot_id")
         .and_then(Value::as_str)
         .expect("snapshot_id")
         .to_owned();
-    snapshot_entries(running, token, root, &id)
+    snapshot_entries(running, token, vault, &id)
         .await
         .expect("快照清单")
 }
@@ -40,13 +40,13 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
-        .expect("注册 Root");
+        .expect("注册 Vault");
     let work_file = lab.work().join("note.txt");
     std::fs::write(&work_file, V1).expect("写 head 内容");
     wait_for("初始采纳", || async {
-        let entries = snapshot(&running, &token, &root).await;
+        let entries = snapshot(&running, &token, &vault).await;
         Ok(entries
             .iter()
             .any(|entry| entry.get("name").and_then(Value::as_str) == Some("note.txt")))
@@ -54,11 +54,11 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
     .await
     .expect("初始采纳");
 
-    let created = create_snapshot(&running, &token, &root)
+    let created = create_snapshot(&running, &token, &vault)
         .await
         .expect("快照");
     let epoch = created["server_epoch"].as_str().expect("epoch").to_owned();
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let note = entries
         .iter()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some("note.txt"))
@@ -70,7 +70,7 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
     // 服务器 head 前进：外部改写被观察循环采纳（新版本）。
     std::fs::write(&work_file, b"server head advanced\n").expect("外部改写");
     wait_for("head 前进", || async {
-        let entries = snapshot(&running, &token, &root).await;
+        let entries = snapshot(&running, &token, &vault).await;
         Ok(entries.iter().any(|item| {
             item.get("entry_id").and_then(Value::as_str) == Some(&entry)
                 && item.get("revision").and_then(Value::as_str) != Some(&stale_revision)
@@ -80,7 +80,7 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
     .expect("head 前进");
 
     // 迟到分支：用过期基线上传另一份内容并提交（preserve_both）。
-    let (upload_id, _, _) = upload(&running, &token, &root, LATE, 32)
+    let (upload_id, _, _) = upload(&running, &token, &vault, LATE, 32)
         .await
         .expect("上传迟到分支");
     let device = identity(0x52);
@@ -92,7 +92,7 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
         revision: &stale_revision,
         upload: &upload_id,
     };
-    let (status, result) = put_operation(&running, &token, &root, &args)
+    let (status, result) = put_operation(&running, &token, &vault, &args)
         .await
         .expect("提交迟到分支");
     assert_eq!(status, StatusCode::OK, "应提交为冲突副本：{result}");
@@ -115,7 +115,7 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
         "迟到分支不得覆盖服务器 head"
     );
     // 副本内容与身份都在：名称带 conflict 标记、哈希等于迟到内容。
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let sibling_entry = entries
         .iter()
         .find(|item| item.get("entry_id").and_then(Value::as_str) == Some(&sibling))
@@ -124,7 +124,7 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
     let (_, changes) = running
         .json(
             "GET",
-            &format!("/v1/roots/{root}/changes?after=0"),
+            &format!("/v1/vaults/{vault}/changes?after=0"),
             Some(&token),
             None,
         )
@@ -161,14 +161,14 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
     );
 
     // 同一 OpId 重试：同一份结果与同一个副本（I01/I06）。
-    let (status, replay) = put_operation(&running, &token, &root, &args)
+    let (status, replay) = put_operation(&running, &token, &vault, &args)
         .await
         .expect("重试");
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay["replayed"], true);
     assert_eq!(replay["conflict"]["conflict_entry_id"], sibling);
-    assert_eq!(replay["root_seq"], result["root_seq"]);
-    assert_ne!(replay["root_seq"], "0");
+    assert_eq!(replay["vault_seq"], result["vault_seq"]);
+    assert_ne!(replay["vault_seq"], "0");
 
     // 冲突映射落库：同一 OpId 只能产生一个副本（0008 迁移的 `conflicts` 表）。
     let mut conn = sqlx::SqliteConnection::connect_with(
@@ -197,7 +197,7 @@ async fn stale_baseline_is_preserved_as_a_conflict_sibling() {
     let (status, value) = running
         .json(
             "GET",
-            &format!("/v1/roots/{root}/operations/{}", identity(0x71)),
+            &format!("/v1/vaults/{vault}/operations/{}", identity(0x71)),
             Some(&token),
             None,
         )

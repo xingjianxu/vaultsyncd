@@ -5,7 +5,7 @@ mod common;
 mod download_faults;
 
 use common::{
-    Lab, Running, db, entry_named, epoch_of, identity, login, register_root, snapshot, submit,
+    Lab, Running, db, entry_named, epoch_of, identity, login, register_vault, snapshot, submit,
     upload,
 };
 use serde_json::{Value, json};
@@ -220,9 +220,9 @@ async fn gc(lab: &Lab, time: i64) -> String {
     gc_start(lab, time).await;
     gc_done(lab).await
 }
-async fn adopt(s: &Server, token: &str, root: &str, name: &str, bytes: &[u8]) -> Value {
+async fn adopt(s: &Server, token: &str, vault: &str, name: &str, bytes: &[u8]) -> Value {
     for _ in 0..200 {
-        let entries = snapshot(&s.http, token, root).await;
+        let entries = snapshot(&s.http, token, vault).await;
         if let Some(e) = entries
             .iter()
             .find(|e| e["name"] == name && e["hash"] == hash(bytes))
@@ -240,15 +240,15 @@ async fn setup(label: &str, bytes: &[u8]) -> (Lab, Server, String, String, Value
     std::fs::write(lab.work().join("note"), bytes).unwrap();
     let server = Server::start(&lab).await;
     let token = login(&server.http).await.unwrap();
-    let root = register_root(&server.http, &token, &lab.work())
+    let vault = register_vault(&server.http, &token, &lab.work())
         .await
         .unwrap();
-    let entry = adopt(&server, &token, &root, "note", bytes).await;
-    (lab, server, token, root, entry)
+    let entry = adopt(&server, &token, &vault, "note", bytes).await;
+    (lab, server, token, vault, entry)
 }
-fn content_path(root: &str, e: &Value) -> String {
+fn content_path(vault: &str, e: &Value) -> String {
     format!(
-        "/v1/roots/{root}/entries/{}/versions/{}/content",
+        "/v1/vaults/{vault}/entries/{}/versions/{}/content",
         e["entry_id"].as_str().unwrap(),
         e["version_id"].as_str().unwrap()
     )
@@ -269,7 +269,7 @@ async fn all_objects(lab: &Lab) -> usize {
         assert_eq!(bytes.len() as i64, row.get::<i64, _>("size"));
         assert_eq!(digest(&bytes).as_slice(), row.get::<Vec<u8>, _>("hash"));
     }
-    let dangling: i64 = sqlx::query_scalar("SELECT count(*) FROM versions v LEFT JOIN objects o ON o.root_id=v.root_id AND o.hash=v.object_hash WHERE o.hash IS NULL").fetch_one(&mut conn).await.unwrap();
+    let dangling: i64 = sqlx::query_scalar("SELECT count(*) FROM versions v LEFT JOIN objects o ON o.vault_id=v.vault_id AND o.hash=v.object_hash WHERE o.hash IS NULL").fetch_one(&mut conn).await.unwrap();
     assert_eq!(dangling, 0);
     rows.len()
 }
@@ -297,16 +297,16 @@ async fn facts(lab: &Lab, point: &str) {
 async fn each_real_put_boundary_preserves_download_backup_and_gc_references() {
     for point in PUT_POINTS {
         trace(json!({"event":"case-start","point":point}));
-        let (lab, server, token, root, entry) = setup(point, OLD).await;
-        let epoch = epoch_of(&server.http, &token, &root).await;
-        let (upload_id, _, _) = upload(&server.http, &token, &root, NEW, 16).await.unwrap();
+        let (lab, server, token, vault, entry) = setup(point, OLD).await;
+        let epoch = epoch_of(&server.http, &token, &vault).await;
+        let (upload_id, _, _) = upload(&server.http, &token, &vault, NEW, 16).await.unwrap();
         prepare(&lab, BACKUP).await;
         // 固定交错：后台GC先停在独占门之外，避免writer优先调度让第二个真实读者
         // 在故障装置的无限暂停期间排到GC后。随后仅显式GC竞争同一个真实门。
         arm(&lab, &["gc_before_lock"]);
         reached(&lab, "gc_before_lock").await;
         // 已真实读取一段，下一段在持久下载租约建立后停住；杀服务即真正断开 TCP。
-        let url = content_path(&root, &entry);
+        let url = content_path(&vault, &entry);
         let http = reqwest::Client::new();
         let first = http
             .get(server.http.uri(&url))
@@ -345,12 +345,12 @@ async fn each_real_put_boundary_preserves_download_backup_and_gc_references() {
         let pending_put = {
             let http = server.http.clone();
             let token = token.clone();
-            let root = root.clone();
+            let vault = vault.clone();
             let body = body.clone();
             tokio::spawn(async move {
                 http.json(
                     "POST",
-                    &format!("/v1/roots/{root}/operations"),
+                    &format!("/v1/vaults/{vault}/operations"),
                     Some(&token),
                     Some(&body),
                 )
@@ -394,7 +394,7 @@ async fn each_real_put_boundary_preserves_download_backup_and_gc_references() {
                 .json(
                     "GET",
                     &format!(
-                        "/v1/roots/{root}/operations/{}?device_id={}",
+                        "/v1/vaults/{vault}/operations/{}?device_id={}",
                         identity(0x41),
                         identity(0x42)
                     ),
@@ -410,11 +410,11 @@ async fn each_real_put_boundary_preserves_download_backup_and_gc_references() {
             );
         } else {
             assert_eq!(bytes, NEW);
-            let (code, result) = submit(&server.http, &token, &root, body.clone()).await;
+            let (code, result) = submit(&server.http, &token, &vault, body.clone()).await;
             assert_eq!(code, 200, "{point}: {result}");
             assert_eq!(result["state"], "committed");
             assert_eq!(result["replayed"], true);
-            let second = submit(&server.http, &token, &root, body).await.1;
+            let second = submit(&server.http, &token, &vault, body).await.1;
             assert_eq!(second, result, "replay remains identical");
         }
         let rest = reqwest::Client::new()
@@ -520,8 +520,8 @@ async fn snapshot_prepare_and_release_sigkill_are_explainable_and_idempotent() {
 #[ignore = "S104 dedicated btrfs and explicit test-faults helper required"]
 async fn real_gc_mark_authorize_unlink_sigkill_never_removes_current_objects() {
     for point in ["gc_marked", "gc_deleting", "gc_unlinked"] {
-        let (lab, server, token, root, _) = setup(point, OLD).await;
-        upload(&server.http, &token, &root, NEW, 16).await.unwrap();
+        let (lab, server, token, vault, _) = setup(point, OLD).await;
+        upload(&server.http, &token, &vault, NEW, 16).await.unwrap();
         server.kill();
         // 此 fixture 的上传已完成但从未提交；停服持同一StateLock老化会话，不改产品保留期。
         let lock =
@@ -641,10 +641,10 @@ fn filesystem_sync(path: &Path) {
 #[ignore = "S104 dedicated btrfs, admin and explicit test-faults helper required"]
 async fn expired_live_objects_remain_in_snapshot_and_complete_archive_restores_every_reference() {
     let old = deterministic(16 * 1024 * 1024);
-    let (lab, server, token, root, old_entry) = setup("snapshot-extents", &old).await;
-    let epoch = epoch_of(&server.http, &token, &root).await;
-    let (uploaded, _, _) = upload(&server.http, &token, &root, NEW, 16).await.unwrap();
-    let (code, committed) = submit(&server.http, &token, &root, json!({
+    let (lab, server, token, vault, old_entry) = setup("snapshot-extents", &old).await;
+    let epoch = epoch_of(&server.http, &token, &vault).await;
+    let (uploaded, _, _) = upload(&server.http, &token, &vault, NEW, 16).await.unwrap();
+    let (code, committed) = submit(&server.http, &token, &vault, json!({
         "op_id":identity(0x51),"device_id":identity(0x52),"server_epoch":epoch,"kind":"put_content",
         "entry_id":old_entry["entry_id"],"base_revision":old_entry["revision"],"upload_id":uploaded,
         "local_generation":"2","conflict_policy":"preserve_both"
@@ -653,11 +653,11 @@ async fn expired_live_objects_remain_in_snapshot_and_complete_archive_restores_e
     std::fs::create_dir(lab.work().join("nested")).unwrap();
     std::fs::write(lab.work().join("nested/current"), b"nested current bytes").unwrap();
     std::fs::write(lab.work().join("trash"), b"trash bytes retained in backup").unwrap();
-    adopt(&server, &token, &root, "current", b"nested current bytes").await;
+    adopt(&server, &token, &vault, "current", b"nested current bytes").await;
     adopt(
         &server,
         &token,
-        &root,
+        &vault,
         "trash",
         b"trash bytes retained in backup",
     )
@@ -668,7 +668,7 @@ async fn expired_live_objects_remain_in_snapshot_and_complete_archive_restores_e
             .http
             .json(
                 "GET",
-                &format!("/v1/roots/{root}/trash"),
+                &format!("/v1/vaults/{vault}/trash"),
                 Some(&token),
                 None,
             )
@@ -761,7 +761,7 @@ async fn expired_live_objects_remain_in_snapshot_and_complete_archive_restores_e
     .await;
     assert_eq!(verified["state"], "verified");
     let restored = lab.state().parent().unwrap().join("restored");
-    let work = lab.root().join("restored-work");
+    let work = lab.vault().join("restored-work");
     for dir in [&restored, &work] {
         std::fs::create_dir(dir).unwrap();
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -773,8 +773,8 @@ async fn expired_live_objects_remain_in_snapshot_and_complete_archive_restores_e
         archive.as_os_str().into(),
         "--state-dir".into(),
         restored.as_os_str().into(),
-        "--root".into(),
-        format!("{root}={}", work.display()).into(),
+        "--vault".into(),
+        format!("{vault}={}", work.display()).into(),
     ])
     .await;
     assert_eq!(restored_report["state"], "restored");
@@ -800,7 +800,7 @@ async fn expired_live_objects_remain_in_snapshot_and_complete_archive_restores_e
         assert_eq!(digest(&bytes).as_slice(), row.get::<Vec<u8>, _>("hash"));
         assert_eq!(bytes.len() as i64, row.get::<i64, _>("size"));
     }
-    let dangling:i64=sqlx::query_scalar("SELECT count(*) FROM versions v LEFT JOIN objects o ON o.root_id=v.root_id AND o.hash=v.object_hash WHERE o.hash IS NULL").fetch_one(&mut conn).await.unwrap();
+    let dangling:i64=sqlx::query_scalar("SELECT count(*) FROM versions v LEFT JOIN objects o ON o.vault_id=v.vault_id AND o.hash=v.object_hash WHERE o.hash IS NULL").fetch_one(&mut conn).await.unwrap();
     assert_eq!(dangling, 0);
     for table in ["versions", "entries", "trash_entries"] {
         let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
@@ -818,17 +818,17 @@ async fn expired_live_objects_remain_in_snapshot_and_complete_archive_restores_e
     let restored_control = restored.join("s104-control");
     std::fs::create_dir(&restored_control).unwrap();
     let config = restored.join("restored-server.toml");
-    std::fs::write(&config,format!("[server]\nlisten=\"127.0.0.1:0\"\n[state]\ndir=\"{}\"\n[roots]\nallowed_bases=[\"{}\"]\n",restored.display(),work.display())).unwrap();
+    std::fs::write(&config,format!("[server]\nlisten=\"127.0.0.1:0\"\n[state]\ndir=\"{}\"\n[vaults]\nallowed_bases=[\"{}\"]\n",restored.display(),work.display())).unwrap();
     let target = Server::config(&config, &restored_control).await;
     let token = login(&target.http).await.unwrap();
     let (status, bytes, _) = target
         .http
-        .download(&content_path(&root, &old_entry), &token)
+        .download(&content_path(&vault, &old_entry), &token)
         .await
         .unwrap();
     assert_eq!(status, 200);
     assert_eq!(digest(&bytes), digest(&old));
-    let entries = snapshot(&target.http, &token, &root).await;
+    let entries = snapshot(&target.http, &token, &vault).await;
     assert_eq!(entry_named(&entries, "note")["hash"], hash(NEW));
     target.kill();
     release(&lab, BACKUP).await;

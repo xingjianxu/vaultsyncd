@@ -3,7 +3,7 @@
 //! 隔离约定（design §2.4、根 AGENTS.md）：
 //!
 //! - 每个用例独占一个 `<target>/s052-lab/<label>-<pid>-<seq>/` 工作根，其下 `state/`（服务端内部状态
-//!   目录：SQLite、对象区、上传暂存）与 `work/`（Root 工作目录）互不重叠，都在 btrfs 上（`cargo
+//!   目录：SQLite、对象区、上传暂存）与 `work/`（Vault 工作目录）互不重叠，都在 btrfs 上（`cargo
 //!   target` 与仓库同一个 btrfs 卷；满盘用例改用 `VAULTSYNCD_S052_*_VOLUME` 指定的小卷）。
 //! - 端口由内核分配（`listen = 127.0.0.1:0`），不同用例不会互相冲突；没有固定账号、没有真实数据。
 //! - 停止是真实的优雅停止（`Lifecycle::begin_shutdown` → HTTP 收尾 → 观察循环停下 → 数据库关闭），
@@ -45,7 +45,7 @@ impl IdSource for OsIds {
 
 /// 一个隔离的实验目录。
 pub struct Lab {
-    root: PathBuf,
+    vault: PathBuf,
     state: PathBuf,
     /// 允许注册的基目录（默认就是工作根本身；挂载故障用例需要额外基目录）。
     allowed: Vec<PathBuf>,
@@ -71,13 +71,13 @@ impl Lab {
         std::fs::create_dir_all(work_root.join("work")).expect("建工作目录");
         let allowed = vec![work_root.clone()];
         Lab {
-            root: work_root,
+            vault: work_root,
             state: state_root,
             allowed,
         }
     }
 
-    /// 与 [`Lab::new`] 相同，但显式给出允许注册的基目录（挂载/别名用例需要把 Root 与别名放在
+    /// 与 [`Lab::new`] 相同，但显式给出允许注册的基目录（挂载/别名用例需要把 Vault 与别名放在
     /// 不同位置；基目录必须在故障注入前就是规范化的绝对路径）。
     pub fn allowing(
         label: &str,
@@ -91,8 +91,8 @@ impl Lab {
     }
 
     /// 实验根目录。
-    pub fn root(&self) -> &Path {
-        &self.root
+    pub fn vault(&self) -> &Path {
+        &self.vault
     }
 
     /// 服务端内部状态目录。
@@ -101,13 +101,13 @@ impl Lab {
     }
 
     /// 实验根目录（清理用；状态目录可能在别处）。
-    pub fn roots(&self) -> [&Path; 2] {
-        [self.root.as_path(), self.state.as_path()]
+    pub fn vaults(&self) -> [&Path; 2] {
+        [self.vault.as_path(), self.state.as_path()]
     }
 
-    /// Root 工作目录（测试直接往里写外部文件）。
+    /// Vault 工作目录（测试直接往里写外部文件）。
     pub fn work(&self) -> PathBuf {
-        self.root.join("work")
+        self.vault.join("work")
     }
 
     /// 允许注册的父目录（默认工作目录本身）。
@@ -115,7 +115,7 @@ impl Lab {
         self.allowed
             .first()
             .cloned()
-            .unwrap_or_else(|| self.root.clone())
+            .unwrap_or_else(|| self.vault.clone())
     }
 
     /// 配置文件路径（`config()` 会写出它；真实子进程用它启动）。
@@ -130,7 +130,7 @@ impl Lab {
             .map(|base| format!("\"{}\"", base.display()))
             .collect();
         format!(
-            "[server]\nlisten = \"127.0.0.1:0\"\n\n[state]\ndir = \"{}\"\n\n[roots]\nallowed_bases = [{}]\n\n[log]\nlevel = \"warn\"\nformat = \"text\"\n",
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[state]\ndir = \"{}\"\n\n[vaults]\nallowed_bases = [{}]\n\n[log]\nlevel = \"warn\"\nformat = \"text\"\n",
             self.state().display(),
             bases.join(", ")
         )
@@ -168,7 +168,7 @@ impl Lab {
 
 impl Drop for Lab {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        let _ = std::fs::remove_dir_all(&self.vault);
         let _ = std::fs::remove_dir_all(&self.state);
     }
 }
@@ -367,27 +367,27 @@ pub async fn login(running: &Running) -> Result<String, String> {
         .ok_or_else(|| "登录响应没有 access_token".to_owned())
 }
 
-/// 注册一个新的 Root 并返回 Root 身份。
-pub async fn register_root(running: &Running, token: &str, path: &Path) -> Result<String, String> {
+/// 注册一个新的 Vault 并返回 Vault 身份。
+pub async fn register_vault(running: &Running, token: &str, path: &Path) -> Result<String, String> {
     let body = serde_json::json!({ "path": path.display().to_string() });
     let (status, value) = running
-        .json("POST", "/v1/admin/roots", Some(token), Some(&body))
+        .json("POST", "/v1/admin/vaults", Some(token), Some(&body))
         .await?;
     if status != StatusCode::CREATED && status != StatusCode::OK {
-        return Err(format!("注册 Root 失败（{status}）：{value}"));
+        return Err(format!("注册 Vault 失败（{status}）：{value}"));
     }
     value
-        .get("root_id")
+        .get("vault_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| "注册响应没有 root_id".to_owned())
+        .ok_or_else(|| "注册响应没有 vault_id".to_owned())
 }
 
 /// 上传一份内容并 finalize；返回（upload_id、hash、size）。
 pub async fn upload(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     content: &[u8],
     chunk_size: usize,
 ) -> Result<(String, String, u64), String> {
@@ -402,7 +402,7 @@ pub async fn upload(
     let (status, value) = running
         .json(
             "POST",
-            &format!("/v1/roots/{root}/uploads"),
+            &format!("/v1/vaults/{vault}/uploads"),
             Some(token),
             Some(&body),
         )
@@ -421,7 +421,7 @@ pub async fn upload(
         .and_then(|text| text.parse().ok())
         .ok_or_else(|| "上传响应没有 chunk_size".to_owned())?;
     for (index, chunk) in content.chunks(chunk_size.max(1)).enumerate() {
-        let path = format!("/v1/roots/{root}/uploads/{upload_id}/parts/{index}");
+        let path = format!("/v1/vaults/{vault}/uploads/{upload_id}/parts/{index}");
         let (status, value) = running.put_part(&path, token, chunk.to_vec()).await?;
         if status != StatusCode::OK {
             return Err(format!("上传块 {index} 失败（{status}）：{value}"));
@@ -430,7 +430,7 @@ pub async fn upload(
     let (status, value) = running
         .json(
             "POST",
-            &format!("/v1/roots/{root}/uploads/{upload_id}/finalize"),
+            &format!("/v1/vaults/{vault}/uploads/{upload_id}/finalize"),
             Some(token),
             Some(&serde_json::json!({})),
         )
@@ -461,7 +461,7 @@ pub struct PutArgs<'a> {
 pub async fn put_operation(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     args: &PutArgs<'_>,
 ) -> Result<(StatusCode, Value), String> {
     let body = serde_json::json!({
@@ -478,7 +478,7 @@ pub async fn put_operation(
     running
         .json(
             "POST",
-            &format!("/v1/roots/{root}/operations"),
+            &format!("/v1/vaults/{vault}/operations"),
             Some(token),
             Some(&body),
         )
@@ -486,11 +486,11 @@ pub async fn put_operation(
 }
 
 /// 新快照的身份。
-pub async fn create_snapshot(running: &Running, token: &str, root: &str) -> Result<Value, String> {
+pub async fn create_snapshot(running: &Running, token: &str, vault: &str) -> Result<Value, String> {
     let (status, value) = running
         .json(
             "POST",
-            &format!("/v1/roots/{root}/snapshots"),
+            &format!("/v1/vaults/{vault}/snapshots"),
             Some(token),
             Some(&serde_json::json!({})),
         )
@@ -501,17 +501,17 @@ pub async fn create_snapshot(running: &Running, token: &str, root: &str) -> Resu
     Ok(value)
 }
 
-/// 快照清单（一次取完；测试 Root 很小）。
+/// 快照清单（一次取完；测试 Vault 很小）。
 pub async fn snapshot_entries(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     snapshot: &str,
 ) -> Result<Vec<Value>, String> {
     let mut entries = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let mut path = format!("/v1/roots/{root}/snapshots/{snapshot}/entries?limit=100");
+        let mut path = format!("/v1/vaults/{vault}/snapshots/{snapshot}/entries?limit=100");
         if let Some(cursor) = &cursor {
             path.push_str(&format!("&cursor={cursor}"));
         }
@@ -533,11 +533,15 @@ pub async fn snapshot_entries(
 }
 
 /// 拉取全部 changes 批次（从 0 开始翻页）。
-pub async fn all_changes(running: &Running, token: &str, root: &str) -> Result<Vec<Value>, String> {
+pub async fn all_changes(
+    running: &Running,
+    token: &str,
+    vault: &str,
+) -> Result<Vec<Value>, String> {
     let mut batches = Vec::new();
     let mut after = "0".to_owned();
     loop {
-        let path = format!("/v1/roots/{root}/changes?after={after}&limit=100");
+        let path = format!("/v1/vaults/{vault}/changes?after={after}&limit=100");
         let (status, value) = running.json("GET", &path, Some(token), None).await?;
         if status != StatusCode::OK {
             return Err(format!("读取 changes 失败（{status}）：{value}"));
@@ -592,13 +596,13 @@ where
 pub async fn submit(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     body: Value,
 ) -> (StatusCode, Value) {
     running
         .json(
             "POST",
-            &format!("/v1/roots/{root}/operations"),
+            &format!("/v1/vaults/{vault}/operations"),
             Some(token),
             Some(&body),
         )
@@ -607,21 +611,21 @@ pub async fn submit(
 }
 
 /// 新建快照并取全部清单条目。
-pub async fn snapshot(running: &Running, token: &str, root: &str) -> Vec<Value> {
-    let created = create_snapshot(running, token, root).await.expect("快照");
+pub async fn snapshot(running: &Running, token: &str, vault: &str) -> Vec<Value> {
+    let created = create_snapshot(running, token, vault).await.expect("快照");
     let id = created
         .get("snapshot_id")
         .and_then(Value::as_str)
         .expect("snapshot_id")
         .to_owned();
-    snapshot_entries(running, token, root, &id)
+    snapshot_entries(running, token, vault, &id)
         .await
         .expect("快照清单")
 }
 
 /// 当前 server epoch 文本。
-pub async fn epoch_of(running: &Running, token: &str, root: &str) -> String {
-    create_snapshot(running, token, root)
+pub async fn epoch_of(running: &Running, token: &str, vault: &str) -> String {
+    create_snapshot(running, token, vault)
         .await
         .expect("快照")
         .get("server_epoch")
@@ -634,13 +638,13 @@ pub async fn epoch_of(running: &Running, token: &str, root: &str) -> String {
 pub async fn subtree_token(
     running: &Running,
     token: &str,
-    root: &str,
+    vault: &str,
     entry: &str,
 ) -> (StatusCode, Value) {
     running
         .json(
             "GET",
-            &format!("/v1/roots/{root}/entries/{entry}/subtree"),
+            &format!("/v1/vaults/{vault}/entries/{entry}/subtree"),
             Some(token),
             None,
         )

@@ -4,7 +4,7 @@
   "description": "Windows agent 与本机 GUI/CLI 之间的最小命令契约（docs/design.md §15.5、§5.6）。\n本文件是本机 IPC 的唯一编辑源；`cargo xtask generate` 据此生成\ncrates/local-ipc 的 Rust DTO 与 packages/local-ipc-types 的 TypeScript 类型。\n本契约与服务器管理 API 分开：它不经网络传输，也不复用 api/openapi.yaml。\n消息按帧编码：FRAME_HEADER_BYTES 字节的大端长度头（不含头自身）加该长度的\nUTF-8 JSON 负载，单帧负载上限为 MAX_FRAME_BYTES；两个常量由 x-vaultsyncd 生成。\n请求方按 Request 编码，agent 按 Response 应答；request_id 原样回显，\n调用方据此把并发应答配对，agent 不解析它的内容。\n未知命令、未知闭集取值与畸形 JSON 一律拒绝，不当作默认成功：\n解码失败发生在产生应答之前，由传输层结束该连接。",
   "x-vaultsyncd": {
     "protocol": {
-      "major": 1,
+      "major": 2,
       "minor": 6
     },
     "frame": {
@@ -59,7 +59,7 @@
         "rules": {"type":"string","description":"完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。"},
         "rules_version": {"type":"string","description":"不可复用的规则版本；同版本同文本幂等。"},
         "binding_id": {"type":"string","description":"Binding 身份。"},
-        "root_id": {"type":"string","description":"授权 Root 身份。"},
+        "vault_id": {"type":"string","description":"授权 Vault 身份。"},
         "entry_id": {"type":"string","description":"条目身份，不接受调用方自选相对文件路径。"},
         "operation_id": {"type":"string","description":"重试/副作用幂等身份。"},
         "version_id": {"type":"string","description":"固定历史版本。"},
@@ -83,11 +83,11 @@
     "CommandName": {
       "type": "string",
       "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
-      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_roots", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"]
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"]
     },
     "ErrorBody": {
       "type": "object",
-      "description": "错误应答主体：协议级失败的原因。带 root_id/details 的同步问题由问题页命令返回，不在本契约里。",
+      "description": "错误应答主体：协议级失败的原因。带 vault_id/details 的同步问题由问题页命令返回，不在本契约里。",
       "required": [
         "code",
         "message",
@@ -133,7 +133,7 @@
         "management": {"$ref":"#/$defs/ManagementResult","description":"1.2 管理命令的类型化结果。"}
       }
     },
-    "Notice": {"type":"object","description":"核心Root原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。","required":["key","cause","code","state","generation","critical","claimed"],"properties":{"key":{"type":"string","description":"稳定去重键"},"root_id":{"type":"string","description":"关联Root，非绑定身份"},"cause":{"type":"string","description":"Root原因，冲突副本为CONFLICT_COPY"},"code":{"type":"string","description":"已分类错误码"},"state":{"type":"string","description":"active或resolved"},"generation":{"type":"string","description":"活动代际"},"critical":{"type":"boolean","description":"可信核心分类需用户处理"},"claimed":{"type":"boolean","description":"本代际已领取系统投递"}}},
+    "Notice": {"type":"object","description":"核心Vault原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。","required":["key","cause","code","state","generation","critical","claimed"],"properties":{"key":{"type":"string","description":"稳定去重键"},"vault_id":{"type":"string","description":"关联Vault，非绑定身份"},"cause":{"type":"string","description":"Vault原因，冲突副本为CONFLICT_COPY"},"code":{"type":"string","description":"已分类错误码"},"state":{"type":"string","description":"active或resolved"},"generation":{"type":"string","description":"活动代际"},"critical":{"type":"boolean","description":"可信核心分类需用户处理"},"claimed":{"type":"boolean","description":"本代际已领取系统投递"}}},
     "FileStatus": {
       "type":"object", "description":"agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。",
       "required":["path","status","residency","dirty","busy","pending","synchronized","release_allowed","release_reason","availability","remote_apply","transfer"],
@@ -141,7 +141,7 @@
         "entry_id":{"type":"string","description":"已确认基线身份；本地未导入文件省略。"},
         "path":{"type":"string","description":"核对后的相对路径。"},
         "status":{"type":"string","description":"domain EntryState::project结果。"},
-        "availability":{"type":"string","description":"online/offline/root_unavailable；离线来自持久调度事实，不臆造在线。"},
+        "availability":{"type":"string","description":"online/offline/vault_unavailable；离线来自持久调度事实，不臆造在线。"},
         "remote_apply":{"type":"string","description":"current/pending/blocked_by_local/conflicted。"},
         "transfer":{"type":"string","description":"idle/queued/running/retry_wait/failed。"},
         "residency":{"type":"string","description":"metadata_only/partial/materialized/unknown，不猜测完整驻留。"},
@@ -155,10 +155,10 @@
     },
     "BindingInfo": {
       "type":"object","description":"持久 Binding 配置与控制事实，包括解绑记录。",
-      "required":["binding_id","root_id","local_path","cache_path","mode","paused","detached"],
+      "required":["binding_id","vault_id","local_path","cache_path","mode","paused","detached"],
       "properties":{
         "binding_id":{"type":"string","description":"Binding 身份。"},
-        "root_id":{"type":"string","description":"Root 身份。"},
+        "vault_id":{"type":"string","description":"Vault 身份。"},
         "local_path":{"type":"string","description":"用户选择的目录。"},
         "cache_path":{"type":"string","description":"保留的缓存。"},
         "mode":{"type":"string","description":"持久目标模式。"},
@@ -192,7 +192,7 @@
       }
     },
     "RemoteItem": {
-      "type":"object","description":"服务器返回的授权 Root、历史版本或回收站项目。",
+      "type":"object","description":"服务器返回的授权 Vault、历史版本或回收站项目。",
       "required":["id","name"],
       "properties":{
         "id":{"type":"string","description":"稳定身份。"},
@@ -220,7 +220,7 @@
         "notices":{"type":"array","items":{"$ref":"#/$defs/Notice"},"description":"问题生命周期与投递事实"},
         "notification_claimed":{"type":"boolean","description":"是否成功领取本活动代际"},
         "restored_path":{"type":"string","description":"committed后按条目身份重新查询的当前位置"},
-        "items":{"type":"array","items":{"$ref":"#/$defs/RemoteItem"},"description":"远端授权 Root/历史/回收站列表。"},
+        "items":{"type":"array","items":{"$ref":"#/$defs/RemoteItem"},"description":"远端授权 Vault/历史/回收站列表。"},
         "operation_id":{"type":"string","description":"实际执行的幂等操作身份。"},
         "unconfirmed":{"type":"array","items":{"type":"string"},"description":"解绑时保留的未确认条目。"},
         "incomplete":{"type":"array","items":{"type":"string"},"description":"解绑后不保证离线可读的条目。"},

@@ -8,17 +8,17 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
   agent: AgentClient; bindings?: BindingInfo[]; states?: BindingStatus[]; read: boolean;
   changed(): Promise<void>; run(action: () => Promise<void>): void; busy: boolean;
 }) {
-  const [roots, setRoots] = useState<RemoteItem[]>();
+  const [vaults, setVaults] = useState<RemoteItem[]>();
   const [notice, setNotice] = useState("");
   const [localPath, setLocalPath] = useState("");
   const [managing,setManaging]=useState<string>();
   function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
-    const rootId = String(form.get("root_id"));
+    const vaultId = String(form.get("vault_id"));
     if (!localPath) return;
     const mode = form.get("mode") === "full" ? "full" : "on_demand";
     run(async () => {
-      await agent.createBinding({ bindingId: crypto.randomUUID().replaceAll("-", ""), rootId, localPath, mode });
+      await agent.createBinding({ bindingId: crypto.randomUUID().replaceAll("-", ""), vaultId, localPath, mode });
       setNotice("绑定已建立；agent 正在核对并合并内容，请查看下方进度。"); await changed();
     });
   }
@@ -32,17 +32,17 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
   }
   return <><div className="vs-eyebrow">CLIENT / BINDINGS</div><h1>同步目录</h1>
     <section className="vs-card"><h2>添加同步目录</h2><p>选择现有的本机目录。首次合并保留双方内容，不根据“缺少文件”推导删除。</p>
-      <Button disabled={busy} onClick={() => run(async () => { const result = await agent.listRoots(); if (!result.items) throw new Error("agent 未返回 Root 清单。"); setRoots(result.items); })}>读取授权 Root</Button>
+      <Button disabled={busy} onClick={() => run(async () => { const result = await agent.listVaults(); if (!result.items) throw new Error("agent 未返回 Vault 清单。"); setVaults(result.items); })}>读取授权 Vault</Button>
       <form onSubmit={create}>
-        <label>远端 Root<select name="root_id" required defaultValue=""><option value="">请选择 Root</option>{roots?.map(root => <option key={root.id} value={root.id}>{root.name}</option>)}</select></label>
-        {roots?.length === 0 && <p>服务器当前没有已授权 Root，请联系管理员。</p>}
+        <label>远端 Vault<select name="vault_id" required defaultValue=""><option value="">请选择 Vault</option>{vaults?.map(vault => <option key={vault.id} value={vault.id}>{vault.name}</option>)}</select></label>
+        {vaults?.length === 0 && <p>服务器当前没有已授权 Vault，请联系管理员。</p>}
         <label>本地目录<input readOnly name="local_path" value={localPath} placeholder="请选择本地同步目录" /></label>
         <Button disabled={busy} onClick={() => run(async () => {
           const selected = await agent.selectDirectory();
           if (selected !== null) setLocalPath(selected);
         })}>选择目录…</Button>
         <label>模式<select name="mode" defaultValue="full"><option value="full">完整同步（保留离线内容）</option><option value="on_demand">按需下载（仅完整内容可离线读取）</option></select></label>
-        <Button type="submit" disabled={busy || !roots?.length || !localPath}>创建绑定并开始合并</Button>
+        <Button type="submit" disabled={busy || !vaults?.length || !localPath}>创建绑定并开始合并</Button>
       </form><p aria-live="polite">{notice}</p>
     </section>
     <Table<BindingInfo> caption="本地 Binding" rows={bindings ?? []} rowKey={row => row.binding_id}

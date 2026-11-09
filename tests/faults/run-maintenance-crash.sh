@@ -6,17 +6,17 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
 run_id=${VAULTSYNCD_RUN_ID:-s104-maintenance-$$}
 case "$run_id" in s104-*) ;; *) printf 'run_id must start with s104-\n' >&2; exit 2;; esac
-lab_root=/data/vaultsyncd-lab
-volume=$lab_root/runs/$run_id/mnt
+lab_vault=/data/vaultsyncd-lab
+volume=$lab_vault/runs/$run_id/mnt
 report=${VAULTSYNCD_S104_REPORT:-$repo_root/artifacts/S104/$run_id}
 mkdir -p "$report"
 report=$(realpath "$report")
 volume_tool=$repo_root/tools/test-volume/test-volume.sh
-[ ! -e "$lab_root/runs/$run_id" ] || { printf 'run already exists: %s\n' "$run_id" >&2; exit 2; }
+[ ! -e "$lab_vault/runs/$run_id" ] || { printf 'run already exists: %s\n' "$run_id" >&2; exit 2; }
 cleanup() {
     local result=$?
     trap - EXIT
-    if [ -e "$lab_root/runs/$run_id/run.env" ]; then
+    if [ -e "$lab_vault/runs/$run_id/run.env" ]; then
         if ! bash "$volume_tool" cleanup "$run_id" >"$report/cleanup.log" 2>&1; then
             cat "$report/cleanup.log" >&2
             [ "$result" -ne 0 ] || result=1

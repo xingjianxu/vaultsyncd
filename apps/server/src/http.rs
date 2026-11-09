@@ -10,7 +10,7 @@
 //! | [`Phase::NeedsRecovery`] | 503 | 错误信封 `NEEDS_RECOVERY`，`retryable=false`（需要人工核对） |
 //!
 //! 返回 503 时不用 200 冒充可用：客户端与运维脚本只需看状态码就能判断能否提交
-//! （design §15.2 的 503 语义）。业务端点（认证、Root、上传等）由各自功能卡加入同一个 router。
+//! （design §15.2 的 503 语义）。业务端点（认证、Vault、上传等）由各自功能卡加入同一个 router。
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,11 +30,11 @@ use crate::auth::AuthContext;
 use crate::content::ContentContext;
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::operations::OperationsContext;
-use crate::roots::RootContext;
 use crate::sync::SyncContext;
 use crate::uploads::UploadsContext;
+use crate::vaults::VaultContext;
 
-/// 全部路由：健康探测（无认证）、认证端点（S043）、Root 注册/清单（S044）、上传与内容（S045/S046）、
+/// 全部路由：健康探测（无认证）、认证端点（S043）、Vault 注册/清单（S044）、上传与内容（S045/S046）、
 /// 操作命令（S047）与快照/changes/SSE（S048）。
 ///
 /// 状态直接就是进程级状态对象，业务端点由后续功能卡加入同一个 router 并从它取数据库与授权检查。
@@ -42,7 +42,7 @@ pub fn router(
     lifecycle: Arc<Lifecycle>,
     auth: Arc<AuthContext>,
     uploads: Arc<UploadsContext>,
-    roots: Arc<RootContext>,
+    vaults: Arc<VaultContext>,
     content: Arc<ContentContext>,
     operations: Arc<OperationsContext>,
     sync: Arc<SyncContext>,
@@ -76,95 +76,98 @@ pub fn router(
             },
         ))
         .with_state(auth);
-    let roots_router = Router::new()
-        .route("/v1/roots", get(super::roots::list_roots))
+    let vaults_router = Router::new()
+        .route("/v1/vaults", get(super::vaults::list_vaults))
         .route(
-            "/v1/admin/roots",
-            get(super::roots::list_managed_roots).post(super::roots::register_root),
+            "/v1/admin/vaults",
+            get(super::vaults::list_managed_vaults).post(super::vaults::register_vault),
         )
-        .with_state(roots);
+        .with_state(vaults);
     // 块请求体是二进制原样字节，大小上限由上传策略决定（`max_chunk_size + 1`，给“超一块”留一次
     // 拒绝机会）。Axum 默认请求体上限是 2 MiB，比默认块大小 4 MiB 还小：不在这里显式抬到策略值，
     // 按契约合法的块会在处理器之前就被 413 掉（客户端用默认块大小上传必然失败）。
     let upload_body_limit =
         usize::try_from(uploads.policy().max_chunk_size.saturating_add(1)).unwrap_or(usize::MAX);
     let uploads_router = Router::new()
-        .route("/v1/roots/{root}/uploads", post(super::uploads::begin))
+        .route("/v1/vaults/{vault}/uploads", post(super::uploads::begin))
         .route(
-            "/v1/roots/{root}/uploads/{upload}",
+            "/v1/vaults/{vault}/uploads/{upload}",
             get(super::uploads::status),
         )
         .route(
-            "/v1/roots/{root}/uploads/{upload}/parts/{index}",
+            "/v1/vaults/{vault}/uploads/{upload}/parts/{index}",
             put(super::uploads::put_part),
         )
         .layer(DefaultBodyLimit::max(upload_body_limit))
         .with_state(uploads);
-    // finalize 与固定版本下载：只在 `Principal`/`authorize_root` 之后动作，处理器自己解析调用者。
+    // finalize 与固定版本下载：只在 `Principal`/`authorize_vault` 之后动作，处理器自己解析调用者。
     let content_router = Router::new()
         .route(
-            "/v1/roots/{root}/entries/{entry}/versions/{version}/leases",
+            "/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases",
             post(super::version_leases::acquire),
         )
         .route(
-            "/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/renew",
+            "/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/renew",
             post(super::version_leases::renew),
         )
         .route(
-            "/v1/roots/{root}/entries/{entry}/versions/{version}/leases/{lease}/release",
+            "/v1/vaults/{vault}/entries/{entry}/versions/{version}/leases/{lease}/release",
             post(super::version_leases::release),
         )
         .route(
-            "/v1/roots/{root}/uploads/{upload}/finalize",
+            "/v1/vaults/{vault}/uploads/{upload}/finalize",
             post(super::content::finalize),
         )
         .route(
-            "/v1/roots/{root}/entries/{entry}/versions/{version}/content",
+            "/v1/vaults/{vault}/entries/{entry}/versions/{version}/content",
             get(super::content::download),
         )
         .with_state(content);
     // 操作命令与结果查询（S047）：幂等键与结果都来自 `operations` 表，`pending` 用 202。
     let operations_router = Router::new()
         .route(
-            "/v1/roots/{root}/operations",
+            "/v1/vaults/{vault}/operations",
             post(super::operations::submit),
         )
         .route(
-            "/v1/roots/{root}/entries/{entry}/subtree",
+            "/v1/vaults/{vault}/entries/{entry}/subtree",
             get(super::operations::subtree_token),
         )
         .route(
-            "/v1/roots/{root}/operations/{op}",
+            "/v1/vaults/{vault}/operations/{op}",
             get(super::operations::status),
         )
         .with_state(operations);
     // 一致性快照、changes 与 SSE 提示（S048）：分页只读清单，游标失效明确 410，SSE 只作提示。
     let sync_router = Router::new()
         .route(
-            "/v1/roots/{root}/entries/{entry}/history",
+            "/v1/vaults/{vault}/entries/{entry}/history",
             get(super::sync::list_history),
         )
-        .route("/v1/roots/{root}/trash", get(super::sync::list_trash))
-        .route("/v1/roots/{root}/recovery", get(super::sync::list_recovery))
+        .route("/v1/vaults/{vault}/trash", get(super::sync::list_trash))
         .route(
-            "/v1/roots/{root}/conflicts",
+            "/v1/vaults/{vault}/recovery",
+            get(super::sync::list_recovery),
+        )
+        .route(
+            "/v1/vaults/{vault}/conflicts",
             get(super::sync::list_conflicts),
         )
         .route(
-            "/v1/roots/{root}/snapshots",
+            "/v1/vaults/{vault}/snapshots",
             post(super::sync::create_snapshot),
         )
         .route(
-            "/v1/roots/{root}/snapshots/{snapshot}/entries",
+            "/v1/vaults/{vault}/snapshots/{snapshot}/entries",
             get(super::sync::list_snapshot_entries),
         )
-        .route("/v1/roots/{root}/changes", get(super::sync::list_changes))
-        .route("/v1/roots/{root}/events", get(super::sync::subscribe))
+        .route("/v1/vaults/{vault}/changes", get(super::sync::list_changes))
+        .route("/v1/vaults/{vault}/events", get(super::sync::subscribe))
         .with_state(sync);
     public
         .merge(capabilities_router)
         .merge(authenticated)
-        .merge(roots_router)
+        .merge(vaults_router)
         .merge(uploads_router)
         .merge(content_router)
         .merge(operations_router)
@@ -205,7 +208,7 @@ fn unavailable(request_id: String, message: &str, retryable: bool) -> Response {
             message: message.to_owned(),
             request_id,
             retryable,
-            root_id: None,
+            vault_id: None,
         },
     };
     (StatusCode::SERVICE_UNAVAILABLE, Json(envelope)).into_response()
@@ -240,7 +243,7 @@ mod tests {
             Arc::clone(&auth),
             &std::env::temp_dir(),
         ));
-        let roots = Arc::new(RootContext::new(
+        let vaults = Arc::new(VaultContext::new(
             Arc::clone(&auth),
             None,
             std::env::temp_dir(),
@@ -257,7 +260,7 @@ mod tests {
         ));
         let operations = Arc::new(OperationsContext::new(Arc::clone(&auth), executor));
         let sync = Arc::new(SyncContext::new(Arc::clone(&auth), Arc::clone(&lifecycle)));
-        router(lifecycle, auth, uploads, roots, content, operations, sync)
+        router(lifecycle, auth, uploads, vaults, content, operations, sync)
     }
 
     async fn get_health(lifecycle: Arc<Lifecycle>) -> (StatusCode, String) {
@@ -306,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn needs_recovery_reports_unavailable_and_not_retryable() {
         let lifecycle = Arc::new(Lifecycle::new());
-        lifecycle.mark_needs_recovery("Root 00000000000000000000000000000001 还有未完成意图");
+        lifecycle.mark_needs_recovery("Vault 00000000000000000000000000000001 还有未完成意图");
         let (status, body) = get_health(lifecycle).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(body.contains("\"NEEDS_RECOVERY\""), "{body}");

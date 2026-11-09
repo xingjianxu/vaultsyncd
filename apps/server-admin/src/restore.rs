@@ -8,9 +8,9 @@ use std::{
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
-use vaultsyncd_domain::ids::RootId;
+use vaultsyncd_domain::ids::VaultId;
 use vaultsyncd_platform_linux_server::{
-    files::{ResolveMode, RestrictedDir, hash_file, root::RootSnapshot},
+    files::{ResolveMode, RestrictedDir, hash_file, vault::VaultSnapshot},
     mounts::admission,
     restore::Target,
 };
@@ -26,12 +26,12 @@ use vaultsyncd_server_store::{
     state_lock::{self, RESTORE_INCOMPLETE, StateLock, StateLockError},
 };
 
-pub const USAGE: &str = "restore validate|apply --archive ABSOLUTE.vsbk --state-dir EMPTY_ABSOLUTE --root ROOT_ID=EMPTY_ABSOLUTE [--root ...] [--json]\n先validate，停服务后apply；全量Root必须映射到新空CoW btrfs目录。失败现场保留并阻止服务启动；重试用新空目标，不覆盖半成品。归档及固定摘要收据须一起保管。";
+pub const USAGE: &str = "restore validate|apply --archive ABSOLUTE.vsbk --state-dir EMPTY_ABSOLUTE --vault VAULT_ID=EMPTY_ABSOLUTE [--vault ...] [--json]\n先validate，停服务后apply；全量Vault必须映射到新空CoW btrfs目录。失败现场保留并阻止服务启动；重试用新空目标，不覆盖半成品。归档及固定摘要收据须一起保管。";
 struct Args {
     apply: bool,
     archive: PathBuf,
     state: PathBuf,
-    roots: Vec<Mapping>,
+    vaults: Vec<Mapping>,
     json: bool,
 }
 fn err(e: impl std::fmt::Display) -> io::Error {
@@ -52,7 +52,7 @@ fn parse(args: Vec<OsString>) -> io::Result<Args> {
     };
     let mut archive = None;
     let mut state = None;
-    let mut roots = Vec::new();
+    let mut vaults = Vec::new();
     let mut json = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -66,20 +66,20 @@ fn parse(args: Vec<OsString>) -> io::Result<Args> {
                     args.next().ok_or_else(|| bad("state directory missing"))?,
                 ))
             }
-            Some("--root") => {
+            Some("--vault") => {
                 let text = args
                     .next()
                     .and_then(|s| s.into_string().ok())
-                    .ok_or_else(|| bad("Root mapping missing"))?;
+                    .ok_or_else(|| bad("Vault mapping missing"))?;
                 let (id, path) = text
                     .split_once('=')
-                    .ok_or_else(|| bad("Root mapping needs ID=absolute-path"))?;
-                let root = RootId::from_hex(id).map_err(err)?;
-                if root.to_hex() != id {
-                    return Err(bad("noncanonical Root ID"));
+                    .ok_or_else(|| bad("Vault mapping needs ID=absolute-path"))?;
+                let vault = VaultId::from_hex(id).map_err(err)?;
+                if vault.to_hex() != id {
+                    return Err(bad("noncanonical Vault ID"));
                 }
-                roots.push(Mapping {
-                    root,
+                vaults.push(Mapping {
+                    vault,
                     path: path.into(),
                 });
             }
@@ -91,7 +91,7 @@ fn parse(args: Vec<OsString>) -> io::Result<Args> {
     let state = state.ok_or_else(|| bad("state directory required"))?;
     if !restore::canonical_path(&archive)
         || !restore::canonical_path(&state)
-        || roots.iter().any(|m| !restore::canonical_path(&m.path))
+        || vaults.iter().any(|m| !restore::canonical_path(&m.path))
     {
         return Err(bad("restore paths must be canonical absolute paths"));
     }
@@ -99,7 +99,7 @@ fn parse(args: Vec<OsString>) -> io::Result<Args> {
         apply,
         archive,
         state,
-        roots,
+        vaults,
         json,
     })
 }
@@ -307,7 +307,7 @@ fn create_object(
             .get(&item.path)
             .ok_or_else(|| bad("object storage path missing from manifest"))?,
     );
-    // Paths are exact, root-validated manifest records; never merge same-digest objects.
+    // Paths are exact, vault-validated manifest records; never merge same-digest objects.
     create(dir, path, 0o400)
 }
 fn write_document(dir: &RestrictedDir, name: &str, bytes: &[u8]) -> io::Result<()> {
@@ -396,7 +396,7 @@ fn fresh_epoch(plan: &Plan) -> u64 {
         }
     }
 }
-fn config(source: &Value, state: &Path, roots: &BTreeMap<RootId, PathBuf>) -> io::Result<String> {
+fn config(source: &Value, state: &Path, vaults: &BTreeMap<VaultId, PathBuf>) -> io::Result<String> {
     let listen = source["server"]["listen"]
         .as_str()
         .ok_or_else(|| bad("backup listen missing"))?;
@@ -414,21 +414,21 @@ fn config(source: &Value, state: &Path, roots: &BTreeMap<RootId, PathBuf>) -> io
         return Err(bad("unsupported backup logging settings"));
     }
     let quote = |s: &str| serde_json::to_string(s).map_err(err);
-    let paths = roots
+    let paths = vaults
         .values()
-        .map(|p| quote(p.to_str().ok_or_else(|| bad("non UTF8 root"))?))
+        .map(|p| quote(p.to_str().ok_or_else(|| bad("non UTF8 vault"))?))
         .collect::<io::Result<Vec<_>>>()?
         .join(",");
-    let root_section = if roots.is_empty() {
+    let vault_section = if vaults.is_empty() {
         String::new()
     } else {
-        format!("[roots]\nallowed_bases=[{paths}]\n")
+        format!("[vaults]\nallowed_bases=[{paths}]\n")
     };
     Ok(format!(
         "[server]\nlisten={}\n[state]\ndir={}\n{}[log]\nlevel={}\nformat={}\n",
         quote(listen)?,
         quote(state.to_str().ok_or_else(|| bad("non UTF8 state"))?)?,
-        root_section,
+        vault_section,
         quote(&level)?,
         quote(format)?
     ))
@@ -494,18 +494,18 @@ fn execute(args: &Args) -> io::Result<Value> {
         &source.value,
         &args.state,
         &args.archive,
-        &args.roots,
+        &args.vaults,
     )
     .map_err(err)?;
     let mut targets = BTreeMap::new();
     let mut available = state.available()?;
-    for (root, path) in &mappings {
+    for (vault, path) in &mappings {
         let target = Target::open(path)?;
         target.empty_except(&[])?;
         let a = admission::storage_identity(&state.facts)
             .ok_or_else(|| bad("state storage identity missing"))?;
         let b = admission::storage_identity(&target.facts)
-            .ok_or_else(|| bad("Root storage identity missing"))?;
+            .ok_or_else(|| bad("Vault storage identity missing"))?;
         if a.fsid != b.fsid
             || admission::same_directory(&state.facts, &target.facts)
             || targets
@@ -513,11 +513,11 @@ fn execute(args: &Args) -> io::Result<Value> {
                 .any(|other: &Target| admission::same_directory(&other.facts, &target.facts))
         {
             return Err(bad(
-                "restore Root storage aliases or differs from state filesystem",
+                "restore Vault storage aliases or differs from state filesystem",
             ));
         }
         available = available.min(target.available()?);
-        targets.insert(*root, target);
+        targets.insert(*vault, target);
     }
     let inspect_bytes = source
         .index
@@ -553,7 +553,7 @@ fn execute(args: &Args) -> io::Result<Value> {
     )?)
     .map_err(err)?;
     let configuration = config(&settings, &args.state, &mappings)?;
-    let mut result = json!({"state":"validated","backup_id":source.index.id.to_hex(),"server_id":source.index.server.to_hex(),"manifest_hash":ContentDigest::from_bytes(source.index.manifest_hash).to_hex(),"root_count":mappings.len().to_string(),"working_items":plan.work.len().to_string(),"required_bytes":required.to_string(),"available_bytes":available.to_string(),"external_uncollected_writes":"excluded"});
+    let mut result = json!({"state":"validated","backup_id":source.index.id.to_hex(),"server_id":source.index.server.to_hex(),"manifest_hash":ContentDigest::from_bytes(source.index.manifest_hash).to_hex(),"vault_count":mappings.len().to_string(),"working_items":plan.work.len().to_string(),"required_bytes":required.to_string(),"available_bytes":available.to_string(),"external_uncollected_writes":"excluded"});
     if !args.apply {
         scratch.clean()?;
         return Ok(result);
@@ -566,7 +566,7 @@ fn execute(args: &Args) -> io::Result<Value> {
     let epoch = fresh_epoch(&plan);
     result["epoch"] = epoch.to_string().into();
     result["state"] = "incomplete".into();
-    result["root_mapping"] = serde_json::to_value(
+    result["vault_mapping"] = serde_json::to_value(
         mappings
             .iter()
             .map(|(r, p)| (r.to_hex(), p.to_string_lossy().into_owned()))
@@ -612,12 +612,12 @@ fn execute(args: &Args) -> io::Result<Value> {
     })?;
     for work in &plan.work {
         let target = targets
-            .get(&work.root)
-            .ok_or_else(|| bad("Root mapping vanished"))?;
+            .get(&work.vault)
+            .ok_or_else(|| bad("Vault mapping vanished"))?;
         if let Some((hash, size)) = work.content {
             let archive_path = format!(
                 "objects/{}/{}",
-                work.root.to_hex(),
+                work.vault.to_hex(),
                 ContentDigest::from_bytes(hash).to_hex()
             );
             let path = source
@@ -635,16 +635,18 @@ fn execute(args: &Args) -> io::Result<Value> {
     }
     let remaps: Vec<_> = targets
         .iter()
-        .map(|(root, target)| Remap {
-            root: *root,
-            path: mappings[root].to_string_lossy().into_owned(),
+        .map(|(vault, target)| Remap {
+            vault: *vault,
+            path: mappings[vault].to_string_lossy().into_owned(),
             volume: admission::fsid_text(
                 &admission::storage_identity(&target.facts)
                     .expect("verified btrfs")
                     .fsid,
             )
             .into_bytes(),
-            identity: RootSnapshot::of_facts(&target.facts).to_spec().into_bytes(),
+            identity: VaultSnapshot::of_facts(&target.facts)
+                .to_spec()
+                .into_bytes(),
         })
         .collect();
     vaultsyncd_server_store::restore::apply(
@@ -654,11 +656,11 @@ fn execute(args: &Args) -> io::Result<Value> {
         epoch,
     )?;
     write_document(&state.dir, "server.toml", configuration.as_bytes())?;
-    for (root, target) in &targets {
+    for (vault, target) in &targets {
         let work: Vec<_> = plan
             .work
             .iter()
-            .filter(|w| w.root == *root)
+            .filter(|w| w.vault == *vault)
             .cloned()
             .collect();
         verify_work(target, &work)?;

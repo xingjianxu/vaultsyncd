@@ -68,20 +68,20 @@ def facts(path):
     return {'stat':sudo('stat','-c','%d|%i|%h|%s|%W|%w',path),
             'sha256':sudo('sha256sum',path).split()[0]}
 
-def runtime(rootpath):
+def runtime(vaultpath):
     current=pid()
     return {'pid':current,'namespace':sudo('readlink',f'/proc/{current}/ns/mnt'),
-            'mount':sudo('nsenter','-t',current,'-m','--','findmnt','-T',rootpath,'-n','-o','ID,MAJ:MIN,UUID,FSROOT,OPTIONS')}
+            'mount':sudo('nsenter','-t',current,'-m','--','findmnt','-T',vaultpath,'-n','-o','ID,MAJ:MIN,UUID,FSVAULT,OPTIONS')}
 
-def managed(root):return next(x for x in api('/v1/admin/roots')['roots'] if x['root_id']==root)
+def managed(vault):return next(x for x in api('/v1/admin/vaults')['vaults'] if x['vault_id']==vault)
 
 def dbfacts(state):
     # Read-only after service stop; no credentials selected and no mutations.
     return json.loads(user('sqlite3','-readonly','-json',state/'server.sqlite',
-        "SELECT lower(hex(id)) AS root,seq,cast(root_file_identity as text) AS identity FROM roots"))[0]
+        "SELECT lower(hex(id)) AS vault,seq,cast(vault_file_identity as text) AS identity FROM vaults"))[0]
 
-def seed(state, root, name, phase):
-    return json.loads(user(HELPER,state,root,name,phase))
+def seed(state, vault, name, phase):
+    return json.loads(user(HELPER,state,vault,name,phase))
 
 def run():
     global TOKEN, HELPER
@@ -103,12 +103,12 @@ def run():
         spacer_loop=sudo('losetup','--find','--show',spacer_image)
         sudo('mkfs.btrfs','-q',spacer_loop)
         sudo('mount','-o','user_subvol_rm_allowed',loop,mount);mounted=True
-        state=mount/'state';rootpath=mount/'root'
-        for path in (state,rootpath):sudo('mkdir','-m','700',path);sudo('chown',f'{USER}:{USER}',path)
+        state=mount/'state';vaultpath=mount/'vault'
+        for path in (state,vaultpath):sudo('mkdir','-m','700',path);sudo('chown',f'{USER}:{USER}',path)
         for name in ('keep.txt','same-dev.txt','published-remount.txt','prepared-remount.txt'):
-            user('sh','-c','umask 077; printf "%s\\n" "$1" > "$2"','fixture',f'S097 original {name}',rootpath/name)
+            user('sh','-c','umask 077; printf "%s\\n" "$1" > "$2"','fixture',f'S097 original {name}',vaultpath/name)
         params=RUN/'parameters.json'
-        params.write_text(json.dumps({'stateDir':str(state),'rootPaths':[str(rootpath)],'user':USER,'group':USER,'settings':{'server':{'listen':'127.0.0.1:18729'}}}))
+        params.write_text(json.dumps({'stateDir':str(state),'vaultPaths':[str(vaultpath)],'user':USER,'group':USER,'settings':{'server':{'listen':'127.0.0.1:18729'}}}))
         unit=json.loads(command(['nix','build','--impure','--file',REPO/'deploy/nixos/eval.nix','--argstr','nixpkgs',NIXPKGS,'--argstr','package',PACKAGE,'--argstr','parameters',params,'unit','--no-link','--json']))[0]['outputs']['out']
         sudo('install','-m','644',Path(unit)/'vaultsyncd.service',unit_file)
         password=secrets.token_urlsafe(24)
@@ -116,80 +116,80 @@ def run():
         sudo('systemctl','daemon-reload');start()
         issued=api('/v1/auth/login',{'login':'owner','password':password,'device_label':'S097 fence fixture'})
         TOKEN=issued['access_token'];password=None
-        root=api('/v1/admin/roots',{'path':str(rootpath)})['root_id']
-        wait(lambda:len(api(f'/v1/roots/{root}/recovery')['items'])==4)
-        wait(lambda:managed(root)['collection']['state']=='complete')
-        RESULT['root']=root;RESULT['initial_managed']=managed(root)
-        keep=facts(rootpath/'keep.txt')
-        runtime_before=runtime(rootpath)
+        vault=api('/v1/admin/vaults',{'path':str(vaultpath)})['vault_id']
+        wait(lambda:len(api(f'/v1/vaults/{vault}/recovery')['items'])==4)
+        wait(lambda:managed(vault)['collection']['state']=='complete')
+        RESULT['vault']=vault;RESULT['initial_managed']=managed(vault)
+        keep=facts(vaultpath/'keep.txt')
+        runtime_before=runtime(vaultpath)
         # Pin the old namespace read-only: otherwise the kernel may recycle both
         # namespace inode and mount IDs immediately and fail to exercise the bug.
         keeper=subprocess.Popen(['sudo','-n','nsenter','-t',str(pid()),'-m','--','sh','-c','echo $$; exec sleep 90'],stdout=subprocess.PIPE,text=True)
         keeper_pid=int(keeper.stdout.readline().strip())
         stop();initial=dbfacts(state);start()
-        healthy=wait(lambda:managed(root) if managed(root)['health']=='healthy' else None)
-        runtime_after=runtime(rootpath)
+        healthy=wait(lambda:managed(vault) if managed(vault)['health']=='healthy' else None)
+        runtime_after=runtime(vaultpath)
         assert runtime_before['namespace']!=runtime_after['namespace']
         assert runtime_before['mount'].split()[0]!=runtime_after['mount'].split()[0]
         sudo('kill','-TERM',keeper_pid);keeper.wait(timeout=10);keeper=None;keeper_pid=None
         stop();restarted=dbfacts(state)
-        assert initial==restarted and keep==facts(rootpath/'keep.txt')
+        assert initial==restarted and keep==facts(vaultpath/'keep.txt')
         RESULT['normal_restart']={'before':initial,'after':restarted,'managed':healthy,'runtime_before':runtime_before,'runtime_after':runtime_after,'keep':keep}
-        RESULT['checks'].append('systemd-namespace-restart-same-root-blob-seq-file-healthy')
+        RESULT['checks'].append('systemd-namespace-restart-same-vault-blob-seq-file-healthy')
         # Real Prepared boundary, ordinary service restart keeps anonymous device.
-        same=seed(state,root,'same-dev.txt','prepared');before=facts(rootpath/'same-dev.txt')
-        start();op=wait(lambda: (x if x['state']=='committed' else None) if (x:=api(f'/v1/roots/{root}/operations/{same["op"]}')) else None)
-        assert facts(rootpath/'same-dev.txt')['sha256']==same['after_hash']
-        RESULT['same_device_prepared']={'boundary':same,'before':before,'after':facts(rootpath/'same-dev.txt'),'operation':op}
+        same=seed(state,vault,'same-dev.txt','prepared');before=facts(vaultpath/'same-dev.txt')
+        start();op=wait(lambda: (x if x['state']=='committed' else None) if (x:=api(f'/v1/vaults/{vault}/operations/{same["op"]}')) else None)
+        assert facts(vaultpath/'same-dev.txt')['sha256']==same['after_hash']
+        RESULT['same_device_prepared']={'boundary':same,'before':before,'after':facts(vaultpath/'same-dev.txt'),'operation':op}
         RESULT['checks'].append('prepared-durable-intent-redone-after-real-systemd-restart')
         # Live same-directory bind changes mount fence even with identical storage identity.
         current=pid();ns_before=sudo('readlink',f'/proc/{current}/ns/mnt')
-        seq=api(f'/v1/roots/{root}/snapshots',{})['high_water_seq']
-        sudo('nsenter','-t',current,'-m','--','mount','--bind',rootpath,rootpath)
+        seq=api(f'/v1/vaults/{vault}/snapshots',{})['high_water_seq']
+        sudo('nsenter','-t',current,'-m','--','mount','--bind',vaultpath,vaultpath)
         try:
-            blocked=wait(lambda:managed(root) if managed(root)['collection']['state']=='blocked' else None)
+            blocked=wait(lambda:managed(vault) if managed(vault)['collection']['state']=='blocked' else None)
             assert blocked['health']=='unavailable'
             time.sleep(2)
-            assert api(f'/v1/roots/{root}/snapshots',{})['high_water_seq']==seq
-            assert len(api(f'/v1/roots/{root}/recovery')['items'])==4
-            assert facts(rootpath/'keep.txt')==keep
+            assert api(f'/v1/vaults/{vault}/snapshots',{})['high_water_seq']==seq
+            assert len(api(f'/v1/vaults/{vault}/recovery')['items'])==4
+            assert facts(vaultpath/'keep.txt')==keep
             RESULT['bind']={'namespace':ns_before,'managed':blocked,'seq':seq,'entries':4}
-        finally:sudo('nsenter','-t',current,'-m','--','umount',rootpath)
-        wait(lambda:managed(root)['health']=='healthy')
+        finally:sudo('nsenter','-t',current,'-m','--','umount',vaultpath)
+        wait(lambda:managed(vault)['health']=='healthy')
         RESULT['checks'].append('live-identical-directory-bind-blocked-zero-deletions-original-fence-restored')
         # Published boundary: remount changes dev, content proof permits metadata-only completion.
-        stop();published=seed(state,root,'published-remount.txt','published');published_before=facts(rootpath/'published-remount.txt')
+        stop();published=seed(state,vault,'published-remount.txt','published');published_before=facts(vaultpath/'published-remount.txt')
         prior=dbfacts(state)
         sudo('umount',mount);mounted=False
         # Kernel may immediately recycle the old anonymous dev. Occupy that number
         # with another disposable btrfs before remounting the same original volume.
         sudo('mount',spacer_loop,spacer);spacer_mounted=True
         sudo('mount','-o','user_subvol_rm_allowed',loop,mount);mounted=True
-        published_remounted=facts(rootpath/'published-remount.txt')
+        published_remounted=facts(vaultpath/'published-remount.txt')
         assert published_before['stat'].split('|')[0]!=published_remounted['stat'].split('|')[0], 'must actually change anonymous dev'
         assert published_before['stat'].split('|')[1:]==published_remounted['stat'].split('|')[1:]
-        start();op=wait(lambda: (x if x['state']=='committed' else None) if (x:=api(f'/v1/roots/{root}/operations/{published["op"]}')) else None)
-        assert facts(rootpath/'published-remount.txt')==published_remounted
-        RESULT['published_remount']={'boundary':published,'before':published_before,'remounted':published_remounted,'after':facts(rootpath/'published-remount.txt'),'operation':op,'old_root':prior}
+        start();op=wait(lambda: (x if x['state']=='committed' else None) if (x:=api(f'/v1/vaults/{vault}/operations/{published["op"]}')) else None)
+        assert facts(vaultpath/'published-remount.txt')==published_remounted
+        RESULT['published_remount']={'boundary':published,'before':published_before,'remounted':published_remounted,'after':facts(vaultpath/'published-remount.txt'),'operation':op,'old_vault':prior}
         RESULT['checks'].append('published-durable-intent-completed-after-dev-change-without-overwrite')
         # Old FileKey lacks birth. Prepared + changed dev must preserve before bytes and pending.
-        stop();prepared=seed(state,root,'prepared-remount.txt','prepared');prepared_before=facts(rootpath/'prepared-remount.txt')
+        stop();prepared=seed(state,vault,'prepared-remount.txt','prepared');prepared_before=facts(vaultpath/'prepared-remount.txt')
         sudo('umount',mount);mounted=False
         sudo('umount',spacer);spacer_mounted=False
         sudo('mount','-o','user_subvol_rm_allowed',loop,mount);mounted=True
-        prepared_remounted=facts(rootpath/'prepared-remount.txt')
+        prepared_remounted=facts(vaultpath/'prepared-remount.txt')
         assert prepared_before['stat'].split('|')[0]!=prepared_remounted['stat'].split('|')[0]
         start(recovery=True);time.sleep(2)
-        assert api(f'/v1/roots/{root}/operations/{prepared["op"]}')['state']=='pending'
-        assert facts(rootpath/'prepared-remount.txt')==prepared_remounted
+        assert api(f'/v1/vaults/{vault}/operations/{prepared["op"]}')['state']=='pending'
+        assert facts(vaultpath/'prepared-remount.txt')==prepared_remounted
         assert prepared_remounted['sha256']==prepared['before_hash']
         stop()
         unfinished=json.loads(user('sqlite3','-readonly','-json',state/'server.sqlite',"SELECT phase FROM fs_intents WHERE phase!='finalized'"))
         assert unfinished
-        RESULT['prepared_remount']={'boundary':prepared,'before':prepared_before,'after':prepared_remounted,'unfinished':unfinished,'root':dbfacts(state)}
+        RESULT['prepared_remount']={'boundary':prepared,'before':prepared_before,'after':prepared_remounted,'unfinished':unfinished,'vault':dbfacts(state)}
         RESULT['checks'].append('prepared-old-dev-cannot-prove-legacy-file-identity-preserves-pending-and-content')
         RESULT['journal']=sudo('journalctl','-u',UNIT,'--no-pager','-o','cat')
-        assert '启动意图复用已准入Root围栏' in RESULT['journal']
+        assert '启动意图复用已准入Vault围栏' in RESULT['journal']
         RESULT['passed']=True
     finally:
         if keeper_pid:

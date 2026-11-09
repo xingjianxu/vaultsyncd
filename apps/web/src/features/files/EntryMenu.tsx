@@ -20,7 +20,7 @@ export function EntryMenu({ children, entry, context, writable, opened, onChange
   navigate: (entry: SnapshotEntry) => void; properties: (entry: SnapshotEntry) => void; copyPath: (entry: SnapshotEntry) => void;
 }) {
   const actions = useFileActions();
-  const mutable = writable && entry.entry_id !== context.snapshot.root.entry_id;
+  const mutable = writable && entry.entry_id !== context.snapshot.vault.entry_id;
   return <Menu opened={opened} onChange={onChange} shadow="md" width={180} position="bottom-start" offset={2}>
     <Menu.ContextMenu>{children}</Menu.ContextMenu>
     <Menu.Dropdown onKeyDown={event => event.stopPropagation()}>

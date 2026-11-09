@@ -7,9 +7,9 @@
 //!
 //! 顺序即不变量：
 //!
-//! 1. **请求形状**：冲突路径必须是 Root 内相对路径，暂存名只能是单个文件名（I10）；这些在任何端口
+//! 1. **请求形状**：冲突路径必须是 Vault 内相对路径，暂存名只能是单个文件名（I10）；这些在任何端口
 //!    调用之前检查。
-//! 2. **Root 串行化**：复用 [`RootCommitGate`]，同一 Root 的冲突提交与普通 put 不会并发改同一棵树。
+//! 2. **Vault 串行化**：复用 [`VaultCommitGate`]，同一 Vault 的冲突提交与普通 put 不会并发改同一棵树。
 //! 3. **epoch 先于重放**：恢复后的服务器不是同一套事实，旧 epoch 的请求不自动重放（design §9.4）。
 //! 4. **幂等记录先于“过期/不同内容”判断**：重放自己已提交的结果时，head 一定已经前进且内容不同，
 //!    所以先查 `OpId` 记录，再判定本次请求是不是“过期 + 不同内容”，否则重试会被误判成新冲突。
@@ -31,13 +31,13 @@
 //! `target_path` 并校验形状；身份的稳定性来自 `OpId` 记录，不来自名称。
 
 use vaultsyncd_domain::ids::{EntryId, IdSource, IntentId, OpId};
-use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
+use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp, VaultSeq};
 
 use crate::commit::intent::{
     NewPutIntent, PutFailure, PutFailureReason, TargetAfter, TargetBefore, publish_put,
 };
 use crate::commit::put::{
-    RootCommitGate, base_mismatch, invalid_request, reclassify_publish_failure, validate_name,
+    VaultCommitGate, base_mismatch, invalid_request, reclassify_publish_failure, validate_name,
     validate_target_path,
 };
 use crate::objects::{ExpectedContent, ObjectLayout};
@@ -53,7 +53,7 @@ use crate::ports::target::TargetPort;
 pub struct ConflictRequest {
     /// 意图身份（由调用方生成，重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 幂等键：`OpId` 的业务结果按 `(RootId, DeviceId, OpId)` 唯一（design §7.2、I06）。
+    /// 幂等键：`OpId` 的业务结果按 `(VaultId, DeviceId, OpId)` 唯一（design §7.2、I06）。
     pub op: OperationKey,
     /// 本次请求的规范化摘要，由调用方用存储层的 `operations::request_digest` 算出。
     ///
@@ -67,7 +67,7 @@ pub struct ConflictRequest {
     pub expected_epoch: ServerEpoch,
     /// 客户端计划时的条目 revision（过期时 head 已前进）。
     pub expected_revision: Revision,
-    /// 冲突条目在 Root 内的相对路径（§10.2 名称由 `planner` 生成，重试不改名）。
+    /// 冲突条目在 Vault 内的相对路径（§10.2 名称由 `planner` 生成，重试不改名）。
     pub target_path: String,
     /// 目标所在子卷内的暂存文件名（单个文件名）。
     pub staging_path: String,
@@ -99,30 +99,30 @@ pub struct CommittedConflict {
     pub source: EntryId,
     /// 迟到内容的冲突条目身份（服务器为该 `OpId` 首次分配）。
     pub sibling: EntryId,
-    /// 冲突条目在 Root 内的路径（首次提交时生成）。
+    /// 冲突条目在 Vault 内的路径（首次提交时生成）。
     pub path: String,
     /// 冲突条目的内容（按摘要可查）。
     pub content: ExpectedContent,
     /// 冲突条目的 revision（服务器分配）。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
 }
 
 /// 提交一次冲突内容。
 ///
-/// 顺序见模块文档：请求形状 → Root 票据 → epoch → `OpId` 记录（重放/拒绝）→ 源条目现状与
+/// 顺序见模块文档：请求形状 → Vault 票据 → epoch → `OpId` 记录（重放/拒绝）→ 源条目现状与
 /// “过期 + 不同内容”判定 → 目标空缺预检 → 登记 pending → 意图 → 发布 → 冲突事务（条目/版本/映射/
-/// 结果/收尾）→ 核对证据 → ACK。无论成功还是失败，退出前都会释放 Root 票据。
+/// 结果/收尾）→ 核对证据 → ACK。无论成功还是失败，退出前都会释放 Vault 票据。
 ///
 /// # Errors
 ///
-/// 见 [`PutFailure`]：请求不成立、Root 忙、epoch 变化、同一 `OpId` 不同请求（`OP_ID_REUSED`）、
+/// 见 [`PutFailure`]：请求不成立、Vault 忙、epoch 变化、同一 `OpId` 不同请求（`OP_ID_REUSED`）、
 /// 记录仍是 pending（`NEEDS_RECOVERY`）、基线未过期或内容已提交（`RECONCILE_REQUIRED`）、源条目
 /// 已消失、意图/发布/存储失败、存储契约不一致。失败都不是 committed，已持久化的意图行与 `pending`
 /// 记录保留为恢复证据。
 pub async fn commit_conflict<S, L, T, I>(
-    gate: &mut RootCommitGate,
+    gate: &mut VaultCommitGate,
     store: &mut S,
     log: &mut L,
     target: &mut T,
@@ -138,7 +138,7 @@ where
 {
     request.validate()?;
     let ticket = gate
-        .acquire(request.op.root)
+        .acquire(request.op.vault)
         .map_err(|error| Box::new(PutFailure::new(PutFailureReason::Gate(error))))?;
     let outcome = commit_under_ticket(store, log, target, ids, at, request).await;
     gate.release(ticket);
@@ -161,7 +161,7 @@ where
 {
     // 1. 服务器事实：epoch 与源条目现状。epoch 先于重放（design §9.4：旧 epoch 不自动重放）。
     let head = store
-        .conflict_head(request.op.root, request.entry)
+        .conflict_head(request.op.vault, request.entry)
         .await
         .map_err(conflict_store_failure)?;
     check_epoch(&head, request)?;
@@ -240,7 +240,7 @@ where
     let sibling = EntryId::generate(ids);
     let new = NewPutIntent {
         intent_id: request.intent_id,
-        root: request.op.root,
+        vault: request.op.vault,
         target_path: request.target_path.clone(),
         staging_path: request.staging_path.clone(),
         before: TargetBefore::Absent,
@@ -382,7 +382,7 @@ mod tests {
     use crate::ports::target::{TargetError, TargetObservation};
     use crate::test_support::{
         CountingIds, FakeConflictStore, FakeIntentLog, FakeTarget, Trace, device_id, entry_id,
-        epoch, op_id, request_digest, revision, root_id, root_seq, user_time,
+        epoch, op_id, request_digest, revision, user_time, vault_id, vault_seq,
     };
 
     /// 迟到分支（本设备）的内容。
@@ -401,7 +401,7 @@ mod tests {
 
     fn key(device: u8, op: u8) -> OperationKey {
         OperationKey {
-            root: root_id(0x21),
+            vault: vault_id(0x21),
             device: device_id(device),
             op: op_id(op),
         }
@@ -424,7 +424,7 @@ mod tests {
 
     type Fixture = (
         ConflictRequest,
-        RootCommitGate,
+        VaultCommitGate,
         FakeConflictStore,
         FakeIntentLog,
         FakeTarget,
@@ -442,7 +442,7 @@ mod tests {
         let target = FakeTarget::absent().with_trace(trace);
         (
             request(late_hex, device, op),
-            RootCommitGate::new(),
+            VaultCommitGate::new(),
             store,
             log,
             target,
@@ -459,7 +459,7 @@ mod tests {
             path: request.target_path.clone(),
             content: request.content,
             revision: revision(1),
-            seq: root_seq(21),
+            seq: vault_seq(21),
         }
     }
 
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(
             store.trace.entries(),
             vec![
-                format!("store conflict_head {} {}", request.op.root, request.entry),
+                format!("store conflict_head {} {}", request.op.vault, request.entry),
                 format!("store operation {}", request.op.op),
                 format!("target observe {CONFLICT_PATH}"),
                 format!(
@@ -517,7 +517,7 @@ mod tests {
         // 意图走同一套阶段机：假端口分开记录，真实适配器在同一事务里收尾。
         assert_eq!(log.intents[0].phase, PutPhase::Published);
         assert_eq!(log.intents[0].target_path, CONFLICT_PATH);
-        assert!(!gate.is_held(request.op.root), "退出前必须释放 Root 票据");
+        assert!(!gate.is_held(request.op.vault), "退出前必须释放 Vault 票据");
     }
 
     #[tokio::test]
@@ -556,7 +556,7 @@ mod tests {
         assert_eq!(
             store.trace.entries()[before..].to_vec(),
             vec![
-                format!("store conflict_head {} {}", request.op.root, request.entry),
+                format!("store conflict_head {} {}", request.op.vault, request.entry),
                 format!("store operation {}", request.op.op),
             ],
             "重放只读事实与幂等记录，不再登记、不再发布"
@@ -592,7 +592,7 @@ mod tests {
         assert!(!failure.is_committed());
         assert!(store.writes.is_empty(), "不得用新请求覆盖旧结果");
         assert!(target.publishes.is_empty());
-        assert!(!gate.is_held(request.op.root));
+        assert!(!gate.is_held(request.op.vault));
     }
 
     #[tokio::test]
@@ -737,7 +737,7 @@ mod tests {
             store.trace.entries(),
             vec![format!(
                 "store conflict_head {} {}",
-                request.op.root, request.entry
+                request.op.vault, request.entry
             )],
             "epoch 不符时连幂等记录都不读"
         );
@@ -884,7 +884,7 @@ mod tests {
         assert_eq!(failure.phase, Some(PutPhase::Prepared));
         assert_eq!(log.intents[0].phase, PutPhase::Prepared, "意图是恢复证据");
         assert!(store.writes.is_empty(), "发布失败不得写冲突映射");
-        assert!(!gate.is_held(request.op.root));
+        assert!(!gate.is_held(request.op.vault));
     }
 
     #[tokio::test]
@@ -930,7 +930,7 @@ mod tests {
 
     #[tokio::test]
     async fn three_devices_keep_three_findable_copies_and_each_retry_reuses_its_own() {
-        let mut gate = RootCommitGate::new();
+        let mut gate = VaultCommitGate::new();
         let trace = Trace::default();
         let mut store = FakeConflictStore::for_source();
         store.trace = trace.clone();
@@ -1041,17 +1041,17 @@ mod tests {
             &request,
         )
         .await
-        .expect_err("冲突路径逃逸 Root");
+        .expect_err("冲突路径逃逸 Vault");
         assert_eq!(failure.code(), "invalid_request");
         assert!(target.publishes.is_empty());
-        assert!(!gate.is_held(request.op.root));
+        assert!(!gate.is_held(request.op.vault));
     }
 
     #[tokio::test]
-    async fn one_root_commits_at_a_time() {
+    async fn one_vault_commits_at_a_time() {
         let (request, mut gate, mut store, mut log, mut target, mut ids) =
             fixture(LATE_HEX, 0x71, 0x41);
-        let held = gate.acquire(request.op.root).expect("占住该 Root");
+        let held = gate.acquire(request.op.vault).expect("占住该 Vault");
 
         let failure = commit_conflict(
             &mut gate,
@@ -1063,10 +1063,10 @@ mod tests {
             &request,
         )
         .await
-        .expect_err("同 Root 已有提交");
-        assert_eq!(failure.code(), "root_commit_busy");
+        .expect_err("同 Vault 已有提交");
+        assert_eq!(failure.code(), "vault_commit_busy");
         assert!(store.trace.entries().is_empty(), "未拿到票据不得读库");
-        assert!(gate.is_held(request.op.root), "别人的票据不被顺手释放");
+        assert!(gate.is_held(request.op.vault), "别人的票据不被顺手释放");
 
         gate.release(held);
         commit_conflict(

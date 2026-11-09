@@ -2,17 +2,17 @@
 //! 访问权限与子挂载。
 //!
 //! 与准入（[`crate::mounts::admission`]）的分工：准入只在注册时判定一次；本模块在运行期回答
-//! “Root 还是启动时那个存储单元吗”。两者都用内核事实（打开句柄的 `fstatfs`/`statx` 与本进程
+//! “Vault 还是启动时那个存储单元吗”。两者都用内核事实（打开句柄的 `fstatfs`/`statx` 与本进程
 //! `/proc/self/mountinfo`），不按路径字符串推断。
 //!
-//! 四条检查，任一不满足都让 Root 进入 `ROOT_UNAVAILABLE`，**不推导任何删除**：
+//! 四条检查，任一不满足都让 Vault 进入 `VAULT_UNAVAILABLE`，**不推导任何删除**：
 //!
-//! 1. 卷身份：后端类型、btrfs FSID 与子卷 ID（[`RootSnapshot::compare`]）；
+//! 1. 卷身份：后端类型、btrfs FSID 与子卷 ID（[`VaultSnapshot::compare`]）；
 //! 2. 根目录身份与挂载 ID：目录被替换、路径被 bind mount 覆盖（`DirectoryChanged`/`MountChanged`）；
-//! 3. 子挂载：Root 路径下出现其他挂载点（嵌套挂载绕过了根句柄的边界假设）；
+//! 3. 子挂载：Vault 路径下出现其他挂载点（嵌套挂载绕过了根句柄的边界假设）；
 //! 4. 权限：根目录仍可打开并列出。
 //!
-//! “卸载后路径下露出空目录”正好命中 2（底层目录的 inode/设备/挂载 ID 都变了）或 1：这是 Root
+//! “卸载后路径下露出空目录”正好命中 2（底层目录的 inode/设备/挂载 ID 都变了）或 1：这是 Vault
 //! 不可用，不是“用户删除了所有文件”（T19）。
 
 use std::fmt;
@@ -22,7 +22,7 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::files::root::{RootDrift, RootSnapshot};
+use crate::files::vault::{VaultDrift, VaultSnapshot};
 use crate::mounts::mountinfo::{self, MountEntry};
 use crate::mounts::paths::{self, PathRelation};
 use crate::mounts::probe::{self, ProbeError, StorageFacts};
@@ -32,7 +32,7 @@ use crate::mounts::probe::{self, ProbeError, StorageFacts};
 pub struct MountHealth {
     /// 本次实测的存储事实。
     pub facts: StorageFacts,
-    /// Root 路径下的其他挂载点（正常为空）。
+    /// Vault 路径下的其他挂载点（正常为空）。
     pub submounts: Vec<PathBuf>,
     /// 根目录第一层读到的目录项数（最多读一个，用于确认可列目录）。
     pub entries_readable: usize,
@@ -44,8 +44,8 @@ pub enum MountChange {
     /// 重新探测失败（“读不到”不是“没变化”）。
     Probe(ProbeError),
     /// 身份漂移（后端、FSID、子卷、挂载 ID 或目录身份）。
-    Drift(RootDrift),
-    /// Root 路径下出现了子挂载。
+    Drift(VaultDrift),
+    /// Vault 路径下出现了子挂载。
     Submount {
         /// 第一个发现的子挂载点。
         path: PathBuf,
@@ -71,10 +71,10 @@ pub enum MountChange {
 }
 
 impl MountChange {
-    /// 稳定原因码。运行期一律 `ROOT_UNAVAILABLE`（design §11.4—11.5），细分原因见 [`Self::detail_code`]。
+    /// 稳定原因码。运行期一律 `VAULT_UNAVAILABLE`（design §11.4—11.5），细分原因见 [`Self::detail_code`]。
     #[must_use]
     pub fn design_error_code(&self) -> &'static str {
-        "ROOT_UNAVAILABLE"
+        "VAULT_UNAVAILABLE"
     }
 
     /// 细分原因码（诊断与验收脚本用）。
@@ -85,7 +85,7 @@ impl MountChange {
             MountChange::Drift(drift) => drift.code(),
             MountChange::Submount { .. } => "submount_detected",
             MountChange::PermissionDenied { .. } => "permission_denied",
-            MountChange::Unreadable { .. } => "root_unreadable",
+            MountChange::Unreadable { .. } => "vault_unreadable",
             MountChange::MountInfo(_) => "mountinfo_unreadable",
         }
     }
@@ -94,11 +94,11 @@ impl MountChange {
 impl fmt::Display for MountChange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MountChange::Probe(error) => write!(f, "重新探测 Root 失败：{error}"),
-            MountChange::Drift(drift) => write!(f, "Root 身份已漂移：{}", drift.code()),
+            MountChange::Probe(error) => write!(f, "重新探测 Vault 失败：{error}"),
+            MountChange::Drift(drift) => write!(f, "Vault 身份已漂移：{}", drift.code()),
             MountChange::Submount { path, fs_type } => write!(
                 f,
-                "Root 内出现子挂载 {}（{fs_type}）：挂载边界不再可信",
+                "Vault 内出现子挂载 {}（{fs_type}）：挂载边界不再可信",
                 path.display()
             ),
             MountChange::PermissionDenied { path, detail } => {
@@ -144,26 +144,29 @@ pub fn check_access_dir(path: &Path) -> io::Result<()> {
     }
 }
 
-/// 找出 Root 路径**之下**的挂载点（不含 Root 自身）。
+/// 找出 Vault 路径**之下**的挂载点（不含 Vault 自身）。
 ///
-/// 只看路径分量，不做字符串前缀比较（`/data/root` 与 `/data/root2` 不是父子）；排序保证结果稳定。
+/// 只看路径分量，不做字符串前缀比较（`/data/vault` 与 `/data/vault2` 不是父子）；排序保证结果稳定。
 #[must_use]
-pub fn submounts_under<'a>(entries: &'a [MountEntry], root: &Path) -> Vec<&'a MountEntry> {
+pub fn submounts_under<'a>(entries: &'a [MountEntry], vault: &Path) -> Vec<&'a MountEntry> {
     let mut found: Vec<&MountEntry> = entries
         .iter()
-        .filter(|entry| paths::relation(&entry.mount_point, root) == PathRelation::Descendant)
+        .filter(|entry| paths::relation(&entry.mount_point, vault) == PathRelation::Descendant)
         .collect();
     found.sort_by(|left, right| left.mount_point.cmp(&right.mount_point));
     found
 }
 
-/// 复核 Root 的挂载健康：卷身份、根目录身份、子挂载与读取权限。
+/// 复核 Vault 的挂载健康：卷身份、根目录身份、子挂载与读取权限。
 ///
 /// # Errors
 ///
-/// 见 [`MountChange`]。任何失败都意味着 Root 不可用（`ROOT_UNAVAILABLE`），调用方必须暂停该 Root，
+/// 见 [`MountChange`]。任何失败都意味着 Vault 不可用（`VAULT_UNAVAILABLE`），调用方必须暂停该 Vault，
 /// 并且**不得**把此间的扫描结果当成删除证据。
-pub fn verify_root_mount(path: &Path, expected: &RootSnapshot) -> Result<MountHealth, MountChange> {
+pub fn verify_vault_mount(
+    path: &Path,
+    expected: &VaultSnapshot,
+) -> Result<MountHealth, MountChange> {
     let facts = probe::probe_path(path).map_err(|error| probe_change(path, error))?;
     expected.compare(&facts).map_err(MountChange::Drift)?;
 
@@ -260,12 +263,12 @@ mod tests {
     fn submounts_are_found_by_path_components_not_by_string_prefix() {
         let entries = vec![
             entry("/data", "btrfs"),
-            entry("/data/root", "btrfs"),
-            entry("/data/root2", "btrfs"),
-            entry("/data/root/nested", "tmpfs"),
-            entry("/data/root/deep/bind", "btrfs"),
+            entry("/data/vault", "btrfs"),
+            entry("/data/vault2", "btrfs"),
+            entry("/data/vault/nested", "tmpfs"),
+            entry("/data/vault/deep/bind", "btrfs"),
         ];
-        let found = submounts_under(&entries, Path::new("/data/root"));
+        let found = submounts_under(&entries, Path::new("/data/vault"));
         let paths: Vec<&Path> = found
             .iter()
             .map(|entry| entry.mount_point.as_path())
@@ -273,28 +276,28 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                Path::new("/data/root/deep/bind"),
-                Path::new("/data/root/nested")
+                Path::new("/data/vault/deep/bind"),
+                Path::new("/data/vault/nested")
             ],
-            "兄弟目录 /data/root2 不算子挂载"
+            "兄弟目录 /data/vault2 不算子挂载"
         );
         assert_eq!(found[1].fs_type, "tmpfs");
     }
 
     #[test]
-    fn a_clean_root_has_no_submounts() {
-        let entries = vec![entry("/data", "btrfs"), entry("/data/root", "btrfs")];
-        assert!(submounts_under(&entries, Path::new("/data/root")).is_empty());
+    fn a_clean_vault_has_no_submounts() {
+        let entries = vec![entry("/data", "btrfs"), entry("/data/vault", "btrfs")];
+        assert!(submounts_under(&entries, Path::new("/data/vault")).is_empty());
     }
 
     #[test]
-    fn mount_change_reports_root_unavailable_and_a_detail_code() {
-        let change = MountChange::Drift(RootDrift::MountChanged);
-        assert_eq!(change.design_error_code(), "ROOT_UNAVAILABLE");
+    fn mount_change_reports_vault_unavailable_and_a_detail_code() {
+        let change = MountChange::Drift(VaultDrift::MountChanged);
+        assert_eq!(change.design_error_code(), "VAULT_UNAVAILABLE");
         assert_eq!(change.detail_code(), "mount_changed");
         assert_eq!(
             MountChange::Submount {
-                path: PathBuf::from("/data/root/nested"),
+                path: PathBuf::from("/data/vault/nested"),
                 fs_type: "tmpfs".to_owned()
             }
             .detail_code(),
@@ -302,27 +305,27 @@ mod tests {
         );
         assert_eq!(
             MountChange::PermissionDenied {
-                path: PathBuf::from("/data/root"),
+                path: PathBuf::from("/data/vault"),
                 detail: "EACCES".to_owned()
             }
             .detail_code(),
             "permission_denied"
         );
         assert!(
-            MountChange::Drift(RootDrift::DirectoryChanged)
+            MountChange::Drift(VaultDrift::DirectoryChanged)
                 .to_string()
                 .contains("directory_changed")
         );
         assert_eq!(
-            MountChange::Drift(RootDrift::MountChanged).design_error_code(),
-            "ROOT_UNAVAILABLE"
+            MountChange::Drift(VaultDrift::MountChanged).design_error_code(),
+            "VAULT_UNAVAILABLE"
         );
     }
 
     /// 真实目录：健康 → 目录被换掉（卸载后露出另一个目录）→ 权限被收回。
     #[test]
-    fn verify_root_mount_notices_a_swapped_directory_and_lost_permissions() {
-        use crate::files::root::RootSnapshot;
+    fn verify_vault_mount_notices_a_swapped_directory_and_lost_permissions() {
+        use crate::files::vault::VaultSnapshot;
 
         let token = format!("{}-{}", std::process::id(), line!());
         let base = std::env::temp_dir().join(format!("vaultsyncd-health-{token}"));
@@ -333,26 +336,26 @@ mod tests {
         fs::write(base.join("inner/file.txt"), b"x").expect("写文件");
 
         let facts = probe::probe_path(&base).expect("探测根目录");
-        let snapshot = RootSnapshot::of_facts(&facts);
-        let healthy = verify_root_mount(&base, &snapshot).expect("刚建立的目录必须健康");
+        let snapshot = VaultSnapshot::of_facts(&facts);
+        let healthy = verify_vault_mount(&base, &snapshot).expect("刚建立的目录必须健康");
         assert!(healthy.submounts.is_empty());
         assert_eq!(healthy.entries_readable, 1);
 
         // 卸载后路径下露出另一个（空）目录：身份与挂载 ID 都不再是注册时那个。
         fs::rename(&base, &moved).expect("移走原目录");
         fs::create_dir(&base).expect("在原路径建空目录");
-        let error = verify_root_mount(&base, &snapshot).expect_err("空目录不是原来的 Root");
+        let error = verify_vault_mount(&base, &snapshot).expect_err("空目录不是原来的 Vault");
         assert!(
-            matches!(error, MountChange::Drift(RootDrift::DirectoryChanged)),
+            matches!(error, MountChange::Drift(VaultDrift::DirectoryChanged)),
             "实际：{error}"
         );
-        assert_eq!(error.design_error_code(), "ROOT_UNAVAILABLE");
+        assert_eq!(error.design_error_code(), "VAULT_UNAVAILABLE");
         fs::remove_dir(&base).expect("删掉空目录");
         fs::rename(&moved, &base).expect("还原目录");
 
         // 权限被收回：不能当成“目录为空”。
         fs::set_permissions(&base, fs::Permissions::from_mode(0o000)).expect("收回权限");
-        let denied = verify_root_mount(&base, &snapshot).expect_err("无权限必须失败");
+        let denied = verify_vault_mount(&base, &snapshot).expect_err("无权限必须失败");
         assert!(
             matches!(denied, MountChange::PermissionDenied { .. }),
             "实际：{denied}"

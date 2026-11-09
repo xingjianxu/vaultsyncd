@@ -1,7 +1,7 @@
 //! 需要关注的问题：去重、已读与恢复状态（`docs/design.md` §7.3、§18.2）。
 //!
 //! 边界：本模块只保存“这个问题存在过、出现过几次、用户是否已读、是否已恢复”。它不决定何时
-//! 通知、不读时钟、不合并文本：什么算同一个问题由调用方按“原因 + Root”组成去重键，是否进入
+//! 通知、不读时钟、不合并文本：什么算同一个问题由调用方按“原因 + Vault”组成去重键，是否进入
 //! 系统通知由界面层按 design §18.2 判断。
 //!
 //! 不变量：
@@ -53,7 +53,7 @@ impl NotificationState {
 /// 必须相同。
 #[derive(Clone, Debug)]
 pub struct NewNotification {
-    /// 去重键（调用方按“原因 + Root”组成）。
+    /// 去重键（调用方按“原因 + Vault”组成）。
     pub dedupe_key: String,
     /// 相关绑定；`None` 表示与具体绑定无关的全局问题。
     pub binding: Option<BindingId>,
@@ -357,7 +357,7 @@ mod tests {
 
     fn new_notification(binding: BindingId) -> NewNotification {
         NewNotification {
-            dedupe_key: "INSUFFICIENT_STORAGE:root-1".to_owned(),
+            dedupe_key: "INSUFFICIENT_STORAGE:vault-1".to_owned(),
             binding: Some(binding),
             entry: Some(entry_id(0x11)),
             code: ErrorCode::InsufficientStorage,
@@ -441,7 +441,7 @@ mod tests {
         assert!(!recurring.is_read, "复发需要重新提醒");
         assert_eq!(recurring.occurrences, 2);
         assert!(
-            !resolve(&mut tx, "MISSING:root").await.expect("标记恢复"),
+            !resolve(&mut tx, "MISSING:vault").await.expect("标记恢复"),
             "不存在的键不命中"
         );
         tx.commit().await.expect("提交");
@@ -522,7 +522,7 @@ mod tests {
         // 未知错误码的行（绕过 Rust 层写入）：读取时按坏行拒绝。
         let mut tx = database.begin_write().await.expect("开始写事务");
         sqlx::query(
-            "INSERT INTO notifications (dedupe_key, code) VALUES ('NOT_A_CODE:root', 'NOT_A_CODE')",
+            "INSERT INTO notifications (dedupe_key, code) VALUES ('NOT_A_CODE:vault', 'NOT_A_CODE')",
         )
         .execute(&mut *tx)
         .await

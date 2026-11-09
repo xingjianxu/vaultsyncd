@@ -6,8 +6,8 @@ pub(super) struct DiskCatchUp(pub PathBuf);
 impl ChangeSource for DiskCatchUp {
     fn pull(
         &self,
-        root: RootId,
-        after: RootSeq,
+        vault: VaultId,
+        after: VaultSeq,
         _: u32,
     ) -> PortFuture<'_, Result<ChangeList, PortError>> {
         Box::pin(async move {
@@ -15,7 +15,7 @@ impl ChangeSource for DiskCatchUp {
             let state: RemoteDisk = read_json(&self.0.join("server.json"))?;
             let mut batches = Vec::new();
             for result in state.results.values() {
-                let seq = result.root_seq.as_ref().expect("提交序号");
+                let seq = result.vault_seq.as_ref().expect("提交序号");
                 let entry = state
                     .entries
                     .iter()
@@ -34,7 +34,7 @@ impl ChangeSource for DiskCatchUp {
                 has_more: false,
                 head_seq: state.seq.to_string(),
                 next_after: state.seq.to_string(),
-                root_id: root.to_string(),
+                vault_id: vault.to_string(),
                 server_epoch: "3".to_owned(),
             })
         })
@@ -130,7 +130,7 @@ async fn concurrent_remote_creation_fails_cas_without_overwrite_or_cursor_advanc
         hash: Some(hex(&digest_of(b"concurrent remote creation"))),
         kind: WireKind::File,
         name: "a-local.txt".to_owned(),
-        parent_id: Some(ROOT_ENTRY.to_string()),
+        parent_id: Some(VAULT_ENTRY.to_string()),
         revision: "1".to_owned(),
         size: Some("26".to_owned()),
         version_id: Some(version.clone()),
@@ -211,7 +211,7 @@ async fn conflict_ack_keeps_both_stable_ids_and_dirty_state_in_one_durable_trans
         op_id: item.op.clone(),
         replayed: Some(false),
         revision: Some("2".to_owned()),
-        root_seq: Some("8".to_owned()),
+        vault_seq: Some("8".to_owned()),
         state: OperationState::Committed,
         version_id: Some(EntryId::from_bytes([0xf2; 16]).to_string()),
     };

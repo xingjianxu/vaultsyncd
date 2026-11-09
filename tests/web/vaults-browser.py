@@ -37,9 +37,9 @@ def main():
     checked(["sudo", "-n", "mkdir", "-m", "755", RUN])
     checked(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", RUN])
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
-    state, roots = RUN / "state", RUN / "roots"
-    state.mkdir(mode=0o700); roots.mkdir()
-    candidate = roots / "documents"; candidate.mkdir(); (candidate / "child").mkdir()
+    state, vaults = RUN / "state", RUN / "vaults"
+    state.mkdir(mode=0o700); vaults.mkdir()
+    candidate = vaults / "documents"; candidate.mkdir(); (candidate / "child").mkdir()
     sample = candidate / "keep.txt"; sample.write_bytes(b"S078 confirmed content is preserved\n")
     original_hash = hashlib.sha256(sample.read_bytes()).hexdigest()
     unsupported = Path(tempfile.mkdtemp(prefix="vs-s078-unsupported-"))
@@ -48,7 +48,7 @@ def main():
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
     checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
     config = RUN / "server.toml"
-    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[roots]\nallowed_bases=["{roots}","{unsupported}"]\n[log]\nformat="json"\nlevel="info"\n')
+    config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}","{unsupported}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
     server = subprocess.Popen([str(BIN / "vaultsyncd-server"), "--config", str(config)], stdout=log, stderr=log)
     proxy = evil = None
@@ -101,7 +101,7 @@ def main():
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
-            notifications = page.locator(".mantine-Notification-root")
+            notifications = page.locator(".mantine-Notification-vault")
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):
@@ -111,24 +111,24 @@ def main():
                 expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
 
             login(password)
-            page.get_by_role("link", name="Root 目录", exact=True).click()
-            expect(page.get_by_text(str(roots), exact=True)).to_be_visible()
-            expect(page.get_by_text("尚未注册 Root；这不表示服务器目录为空或客户端已同步。", exact=True)).to_be_visible()
+            page.get_by_role("link", name="Vault 目录", exact=True).click()
+            expect(page.get_by_text(str(vaults), exact=True)).to_be_visible()
+            expect(page.get_by_text("尚未注册 Vault；这不表示服务器目录为空或客户端已同步。", exact=True)).to_be_visible()
             def register(path):
                 page.get_by_label(field_label("服务器目录绝对路径")).fill(str(path))
-                page.get_by_role("button", name="校验并注册 Root", exact=True).click()
+                page.get_by_role("button", name="校验并注册 Vault", exact=True).click()
             register(candidate)
-            expect(notifications.filter(has_text="已注册 Root")).to_have_attribute("role", "status")
-            expect(notifications.filter(has_text="已注册 Root")).to_contain_text("等待初始采集")
+            expect(notifications.filter(has_text="已注册 Vault")).to_have_attribute("role", "status")
+            expect(notifications.filter(has_text="已注册 Vault")).to_contain_text("等待初始采集")
             expect(page.get_by_text(str(candidate), exact=True)).to_be_visible()
             assert hashlib.sha256(sample.read_bytes()).hexdigest() == original_hash
-            ordinary = page.evaluate("fetch('/v1/roots').then(r => r.json())")
+            ordinary = page.evaluate("fetch('/v1/vaults').then(r => r.json())")
             assert str(candidate) not in json.dumps(ordinary)
-            managed = page.evaluate("fetch('/v1/admin/roots').then(r => r.json())")
-            assert len(managed["roots"]) == 1 and managed["roots"][0]["health"] == "healthy"
-            assert managed["roots"][0]["collection"]["state"] in ["not_scanned", "scanning", "pending", "complete"]
+            managed = page.evaluate("fetch('/v1/admin/vaults').then(r => r.json())")
+            assert len(managed["vaults"]) == 1 and managed["vaults"][0]["health"] == "healthy"
+            assert managed["vaults"][0]["collection"]["state"] in ["not_scanned", "scanning", "pending", "complete"]
             register(candidate / "child")
-            overlap_error = notifications.filter(has_text="路径重叠（overlapping_root）")
+            overlap_error = notifications.filter(has_text="路径重叠（overlapping_vault）")
             expect(overlap_error).to_have_attribute("role", "alert")
             register(unsupported)
             expect(notifications.filter(has_text="btrfs")).to_have_attribute("role", "alert")
@@ -143,21 +143,21 @@ def main():
                     break
                 except AssertionError: time.sleep(.2)
             else: raise AssertionError("observer never provided completed initial import evidence")
-            managed = page.evaluate("fetch('/v1/admin/roots').then(r => r.json())")
-            assert int(managed["roots"][0]["root_seq"]) > 0
+            managed = page.evaluate("fetch('/v1/admin/vaults').then(r => r.json())")
+            assert int(managed["vaults"][0]["vault_seq"]) > 0
             # Actual mount replacement, scoped only to this run; API must detect mount drift.
             checked(["sudo", "-n", "mount", "--bind", alternate, candidate]); mounted = True
             page.get_by_role("button", name="刷新目录状态", exact=True).click()
-            expect(page.get_by_text("Root 不可用", exact=True)).to_be_visible()
+            expect(page.get_by_text("Vault 不可用", exact=True)).to_be_visible()
             expect(page.get_by_text("恢复原挂载", exact=False)).to_be_visible()
-            unavailable = page.evaluate("fetch('/v1/admin/roots').then(r => r.json())")["roots"][0]
+            unavailable = page.evaluate("fetch('/v1/admin/vaults').then(r => r.json())")["vaults"][0]
             assert unavailable["health"] == "unavailable" and unavailable["collection"]["state"] == "blocked"
             assert unavailable["reason"]
             checked(["sudo", "-n", "umount", candidate]); mounted = False
             page.get_by_role("button", name="刷新目录状态", exact=True).click()
             expect(page.get_by_text("挂载核对通过", exact=True)).to_be_visible()
             assert hashlib.sha256(sample.read_bytes()).hexdigest() == original_hash
-            page.screenshot(path=str(RUN / "roots.png"), full_page=True)
+            page.screenshot(path=str(RUN / "vaults.png"), full_page=True)
             assert page.evaluate("localStorage.length") == 0
             assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             context.close(); browser.close()

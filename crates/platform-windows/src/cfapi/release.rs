@@ -182,9 +182,9 @@ fn observe_entry(path: &Path) -> Result<EntryObservation, StageError> {
 }
 
 /// 收集判定证据：观察 → 使用探测 → 两次内容哈希 → 再观察。
-fn collect(root: &Path, name: &str) -> Result<Collected, StageError> {
+fn collect(vault: &Path, name: &str) -> Result<Collected, StageError> {
     let size = require_entry(name)?;
-    let path = entry_path(root, name);
+    let path = entry_path(vault, name);
     let first = observe_entry(&path)?;
     let version_hint = FileIdentity::decode(first.identity())
         .ok()
@@ -355,13 +355,13 @@ fn hash_file(path: &Path) -> std::io::Result<String> {
 // ---------------------------------------------------------------------------
 
 /// `protect`：只做判定与证据记录，不改变任何状态（不释放、不写 in-sync）。
-pub fn run_protect(root: &Path, name: &str) -> Result<GuardReport, StageError> {
-    Ok(collect(root, name)?.report)
+pub fn run_protect(vault: &Path, name: &str) -> Result<GuardReport, StageError> {
+    Ok(collect(vault, name)?.report)
 }
 
 /// `release`：先判定，只有 `Clean` 才释放；其余一律保留本地内容。
-pub fn run_release(root: &Path, name: &str) -> Result<ReleaseReport, StageError> {
-    let collected = collect(root, name)?;
+pub fn run_release(vault: &Path, name: &str) -> Result<ReleaseReport, StageError> {
+    let collected = collect(vault, name)?;
     let size_i = i64::try_from(collected.size).unwrap_or(i64::MAX);
     let on_disk_before = collected.report.observation.on_disk_data_size;
 
@@ -387,7 +387,7 @@ pub fn run_release(root: &Path, name: &str) -> Result<ReleaseReport, StageError>
     }
 
     // 判定为 Clean：连上提供方（释放与后续水合都由平台向连接方要内容）后释放。
-    let session = ProviderSession::open(root, ProviderConfig::default())?;
+    let session = ProviderSession::open(vault, ProviderConfig::default())?;
     let path_w = wide(&collected.path);
     let handle = unsafe { open_with_share(&path_w, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_ALL) };
     if handle == INVALID_HANDLE_VALUE {

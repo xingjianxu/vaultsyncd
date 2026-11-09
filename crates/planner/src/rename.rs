@@ -1,6 +1,6 @@
 //! 移动冲突规划（`docs/design.md` §9.5、§10.1 的移动行、T09/T10、I03）。
 //!
-//! 本模块只接“至少一侧改了位置、且类型没变”的输入：同 Root 内移动保持 [`EntryId`]（路径改变不影响
+//! 本模块只接“至少一侧改了位置、且类型没变”的输入：同 Vault 内移动保持 [`EntryId`]（路径改变不影响
 //! 身份，I03），移动目录只改父目录关系、不给子文件重新传输内容（design §9.5）。输出是一份**主条目
 //! 计划**加可选的迟到分支：
 //!
@@ -21,8 +21,8 @@
 //!
 //! 1. **胜者只看服务器提交序**：远端事实就是已提交状态，主条目保留它；`observed_mtime` 只随事实记录，
 //!    交换两台设备的时钟不改变计划（I04）。
-//! 2. **`EntryId` 不随路径变**：主条目的动作一律携带基线身份，只有迟到分支拿新的冲突身份；跨 Root 移动
-//!    是明确例外（design §9.5 把它当“目标创建 + 源删除”的可恢复任务，见 [`plan_cross_root_move`]）。
+//! 2. **`EntryId` 不随路径变**：主条目的动作一律携带基线身份，只有迟到分支拿新的冲突身份；跨 Vault 移动
+//!    是明确例外（design §9.5 把它当“目标创建 + 源删除”的可恢复任务，见 [`plan_cross_vault_move`]）。
 //! 3. **前提不成立就返回重规划结果**：目录环、目标位置已有别的条目、目标祖先已删除、远端身份被替换都给出
 //!    [`MoveOutcome::Replan`]，不生成可执行动作，也不覆盖任何东西（design §10.1 末两行）。
 //!
@@ -31,7 +31,7 @@
 
 use core::fmt;
 
-use vaultsyncd_domain::ids::{EntryId, RootId};
+use vaultsyncd_domain::ids::{EntryId, VaultId};
 use vaultsyncd_domain::version::Generation;
 use vaultsyncd_fs_common::path::{PathRelation, RelativePath, relation};
 
@@ -81,7 +81,7 @@ pub struct LateBranch<'a> {
     pub committed: Option<&'a CommittedConflict>,
 }
 
-/// 同 Root 移动的规划输入：三方事实都已绑定到同一 `EntryId`（本地身份关联由客户端数据库保证）。
+/// 同 Vault 移动的规划输入：三方事实都已绑定到同一 `EntryId`（本地身份关联由客户端数据库保证）。
 #[derive(Clone, Copy, Debug)]
 pub struct MoveRequest<'a> {
     /// 共同基线 B：身份与已提交位置。
@@ -141,12 +141,12 @@ pub enum MoveError {
     OpIdRequestChanged,
     /// 自称内容变化却给不出文件内容版本：事实不完整，不生成缺少下载前提的计划。
     IncompleteFacts,
-    /// 跨 Root 移动的源是目录，却没有携带删除所需的子树 token（design §10.3）。
+    /// 跨 Vault 移动的源是目录，却没有携带删除所需的子树 token（design §10.3）。
     MissingSubtreeToken,
-    /// 跨 Root 移动的源是文件，却带了目录的子树 token：删除语义不成立。
+    /// 跨 Vault 移动的源是文件，却带了目录的子树 token：删除语义不成立。
     UnexpectedSubtreeToken,
-    /// 跨 Root 移动入口收到了同一个 Root 的两侧：同 Root 移动保持 `EntryId`，应走 [`plan_move`]。
-    SameRoot,
+    /// 跨 Vault 移动入口收到了同一个 Vault 的两侧：同 Vault 移动保持 `EntryId`，应走 [`plan_move`]。
+    SameVault,
     /// 冲突名称无法在预算内生成。
     Name(ConflictNameError),
 }
@@ -160,9 +160,9 @@ impl fmt::Display for MoveError {
                 f.write_str("同一 OpId 已记录的冲突结果与本次请求不同，按幂等规则拒绝")
             }
             Self::IncompleteFacts => f.write_str("内容变化缺少文件版本，事实不完整"),
-            Self::MissingSubtreeToken => f.write_str("跨 Root 移动的目录源缺少子树 token"),
-            Self::UnexpectedSubtreeToken => f.write_str("跨 Root 移动的文件源不应携带子树 token"),
-            Self::SameRoot => f.write_str("跨 Root 移动要求源与目标 Root 不同"),
+            Self::MissingSubtreeToken => f.write_str("跨 Vault 移动的目录源缺少子树 token"),
+            Self::UnexpectedSubtreeToken => f.write_str("跨 Vault 移动的文件源不应携带子树 token"),
+            Self::SameVault => f.write_str("跨 Vault 移动要求源与目标 Vault 不同"),
             Self::Name(error) => write!(f, "冲突名称生成失败：{error}"),
         }
     }
@@ -170,7 +170,7 @@ impl fmt::Display for MoveError {
 
 impl core::error::Error for MoveError {}
 
-/// 规划一次同 Root 移动（design §9.5、§10.1 的移动行）。
+/// 规划一次同 Vault 移动（design §9.5、§10.1 的移动行）。
 ///
 /// 主条目永远是已提交的远端事实；本地相对基线改过位置或内容时，它的内容与意图位置通过 [`MovePlan::late`]
 /// 保留下来（design §10.1“首发保守保留两种候选”）。
@@ -415,62 +415,62 @@ fn late_copy(
     )))
 }
 
-/// 跨 Root 移动的输入（design §9.5：目标创建确认后再删源，不假装是原子 rename）。
+/// 跨 Vault 移动的输入（design §9.5：目标创建确认后再删源，不假装是原子 rename）。
 ///
-/// 跨 Root 不保持 `EntryId`：目标 Root 的命名空间里身份不复用，因此调用方要给出服务端为目标分配的
-/// [`EntryId`]，并保证源与目标 Root 不同。
+/// 跨 Vault 不保持 `EntryId`：目标 Vault 的命名空间里身份不复用，因此调用方要给出服务端为目标分配的
+/// [`EntryId`]，并保证源与目标 Vault 不同。
 #[derive(Clone, Copy, Debug)]
-pub struct CrossRootMoveRequest<'a> {
-    /// 源 Root 身份（只用于与目标 Root 做一致性检查）。
-    pub source_root: RootId,
-    /// 源 Root 的已提交事实：身份、修订与类型。
+pub struct CrossVaultMoveRequest<'a> {
+    /// 源 Vault 身份（只用于与目标 Vault 做一致性检查）。
+    pub source_root: VaultId,
+    /// 源 Vault 的已提交事实：身份、修订与类型。
     pub source: &'a ServerFact,
-    /// 目标 Root 身份。
-    pub target_root: RootId,
-    /// 目标 Root 内的位置。
+    /// 目标 Vault 身份。
+    pub target_vault: VaultId,
+    /// 目标 Vault 内的位置。
     pub target_path: &'a RelativePath,
     /// 服务端为目标条目分配的身份；源删除依赖它已提交。
     pub target_entry_id: EntryId,
     /// 要上传到目标的本地内容代际。
     pub generation: Generation,
-    /// 源 Root 删除所需的子树 token：目录必须为 `Some`，文件必须为 `None`（design §10.3）。
+    /// 源 Vault 删除所需的子树 token：目录必须为 `Some`，文件必须为 `None`（design §10.3）。
     pub source_subtree: Option<SubtreeToken>,
     /// 目标位置的服务端观察。
     pub target: TargetState,
 }
 
-/// 跨 Root 移动的两段计划。
+/// 跨 Vault 移动的两段计划。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CrossRootMovePlan {
-    /// 第一步：在目标 Root 新建条目。目标位置仍为空时才允许创建（`ServerPathVacant`）。
+pub struct CrossVaultMovePlan {
+    /// 第一步：在目标 Vault 新建条目。目标位置仍为空时才允许创建（`ServerPathVacant`）。
     pub create_target: Plan,
-    /// 第二步：删除源条目。依赖 [`Dependency::CrossRootTargetCommitted`]：目标创建失败或结果未知时，
+    /// 第二步：删除源条目。依赖 [`Dependency::CrossVaultTargetCommitted`]：目标创建失败或结果未知时，
     /// 源删除不得计划完成。
     pub delete_source: Plan,
 }
 
-/// 跨 Root 移动的规划结果。
+/// 跨 Vault 移动的规划结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CrossRootOutcome {
+pub enum CrossVaultOutcome {
     /// 两段计划：先创建目标、再删源（装箱：计划值远大于重规划原因）。
-    Planned(Box<CrossRootMovePlan>),
+    Planned(Box<CrossVaultMovePlan>),
     /// 目标位置前提不成立：重新规划；既不创建目标，也不计划删除源。
     Replan(ReplanReason),
 }
 
-/// 规划一次跨 Root 移动（design §9.5）。
+/// 规划一次跨 Vault 移动（design §9.5）。
 ///
 /// # Errors
 ///
-/// 见 [`MoveError`]：两侧是同一个 Root、目录源缺子树 token、文件源带了子树 token，或目标位置前提不成立
-/// 时由调用方改用 [`CrossRootOutcome::Replan`]（那是结果，不是错误）。
-pub fn plan_cross_root_move(
-    request: &CrossRootMoveRequest<'_>,
-) -> Result<CrossRootOutcome, MoveError> {
-    let CrossRootMoveRequest {
+/// 见 [`MoveError`]：两侧是同一个 Vault、目录源缺子树 token、文件源带了子树 token，或目标位置前提不成立
+/// 时由调用方改用 [`CrossVaultOutcome::Replan`]（那是结果，不是错误）。
+pub fn plan_cross_vault_move(
+    request: &CrossVaultMoveRequest<'_>,
+) -> Result<CrossVaultOutcome, MoveError> {
+    let CrossVaultMoveRequest {
         source_root,
         source,
-        target_root,
+        target_vault,
         target_path,
         target_entry_id,
         generation,
@@ -478,11 +478,11 @@ pub fn plan_cross_root_move(
         target,
     } = *request;
 
-    if source_root == target_root {
-        return Err(MoveError::SameRoot);
+    if source_root == target_vault {
+        return Err(MoveError::SameVault);
     }
     if let Some(reason) = replan(target) {
-        return Ok(CrossRootOutcome::Replan(reason));
+        return Ok(CrossVaultOutcome::Replan(reason));
     }
     match (matches!(source.kind, EntryKind::Directory), source_subtree) {
         (true, None) => return Err(MoveError::MissingSubtreeToken),
@@ -516,12 +516,12 @@ pub fn plan_cross_root_move(
         prerequisites: vec![Prerequisite::BaseRevisionCurrent {
             expected: source.revision,
         }],
-        dependencies: vec![Dependency::CrossRootTargetCommitted {
+        dependencies: vec![Dependency::CrossVaultTargetCommitted {
             entry_id: target_entry_id,
         }],
         local_protection: LocalProtection::KeepLocalContent,
     };
-    Ok(CrossRootOutcome::Planned(Box::new(CrossRootMovePlan {
+    Ok(CrossVaultOutcome::Planned(Box::new(CrossVaultMovePlan {
         create_target,
         delete_source,
     })))
@@ -562,8 +562,8 @@ fn same_type(left: EntryKind, right: EntryKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CrossRootMoveRequest, CrossRootOutcome, LateBranch, MoveError, MoveOutcome, MoveRequest,
-        MoveTargets, ReplanReason, TargetState, plan_cross_root_move, plan_move,
+        CrossVaultMoveRequest, CrossVaultOutcome, LateBranch, MoveError, MoveOutcome, MoveRequest,
+        MoveTargets, ReplanReason, TargetState, plan_cross_vault_move, plan_move,
     };
     use crate::conflict::{
         CommittedConflict, ConflictCopy, ConflictNameRequest, NameBudget, ShortIdLen,
@@ -573,7 +573,7 @@ mod tests {
         Action, ContentFingerprint, Dependency, LocalFact, LocalProtection, Prerequisite,
         ServerFact,
     };
-    use vaultsyncd_domain::ids::{EntryId, OpId, RootId, VersionId};
+    use vaultsyncd_domain::ids::{EntryId, OpId, VaultId, VersionId};
     use vaultsyncd_domain::version::{Generation, Revision, UtcTimestamp};
     use vaultsyncd_fs_common::path::RelativePath;
 
@@ -585,8 +585,8 @@ mod tests {
     const VERSION_NEW: VersionId = VersionId::from_bytes([0xb2; 16]);
     const OP: OpId = OpId::from_bytes([0x5a; 16]);
     const OTHER_OP: OpId = OpId::from_bytes([0x5b; 16]);
-    const SOURCE_ROOT: RootId = RootId::from_bytes([0x91; 16]);
-    const TARGET_ROOT: RootId = RootId::from_bytes([0x92; 16]);
+    const SOURCE_VAULT: VaultId = VaultId::from_bytes([0x91; 16]);
+    const TARGET_VAULT: VaultId = VaultId::from_bytes([0x92; 16]);
     const SOURCE_TOKEN: SubtreeToken = SubtreeToken::from_bytes([0x7e; 16]);
     /// 2026-11-05T08:30:00Z。
     const SERVER_TIME: i64 = 1_793_867_400;
@@ -1289,22 +1289,22 @@ mod tests {
     }
 
     #[test]
-    fn cross_root_move_confirms_the_target_before_deleting_the_source() {
+    fn cross_vault_move_confirms_the_target_before_deleting_the_source() {
         let source = source_file();
         let target_path = path("imports/report.txt");
-        let request = CrossRootMoveRequest {
-            source_root: SOURCE_ROOT,
+        let request = CrossVaultMoveRequest {
+            source_root: SOURCE_VAULT,
             source: &source,
-            target_root: TARGET_ROOT,
+            target_vault: TARGET_VAULT,
             target_path: &target_path,
             target_entry_id: TARGET_ENTRY,
             generation: generation(9),
             source_subtree: None,
             target: TargetState::Vacant,
         };
-        let CrossRootOutcome::Planned(plan) = plan_cross_root_move(&request).expect("可规划")
+        let CrossVaultOutcome::Planned(plan) = plan_cross_vault_move(&request).expect("可规划")
         else {
-            panic!("跨 Root 移动应给出两段计划");
+            panic!("跨 Vault 移动应给出两段计划");
         };
         assert_eq!(
             plan.create_target.action,
@@ -1317,7 +1317,7 @@ mod tests {
             plan.create_target
                 .prerequisites
                 .contains(&Prerequisite::ServerPathVacant),
-            "创建条件是该路径在目标 Root 仍为空"
+            "创建条件是该路径在目标 Vault 仍为空"
         );
         assert_eq!(
             plan.delete_source.action,
@@ -1329,7 +1329,7 @@ mod tests {
         );
         assert_eq!(
             plan.delete_source.dependencies,
-            [Dependency::CrossRootTargetCommitted {
+            [Dependency::CrossVaultTargetCommitted {
                 entry_id: TARGET_ENTRY
             }],
             "目标创建失败或结果未知时不得计划完成源删除"
@@ -1343,13 +1343,13 @@ mod tests {
     }
 
     #[test]
-    fn cross_root_target_failure_cannot_plan_a_source_delete() {
+    fn cross_vault_target_failure_cannot_plan_a_source_delete() {
         let source = source_file();
         let target_path = path("imports/report.txt");
-        let request = CrossRootMoveRequest {
-            source_root: SOURCE_ROOT,
+        let request = CrossVaultMoveRequest {
+            source_root: SOURCE_VAULT,
             source: &source,
-            target_root: TARGET_ROOT,
+            target_vault: TARGET_VAULT,
             target_path: &target_path,
             target_entry_id: TARGET_ENTRY,
             generation: generation(9),
@@ -1357,19 +1357,19 @@ mod tests {
             target: TargetState::Occupied,
         };
         assert_eq!(
-            plan_cross_root_move(&request).expect("可规划"),
-            CrossRootOutcome::Replan(ReplanReason::TargetOccupied)
+            plan_cross_vault_move(&request).expect("可规划"),
+            CrossVaultOutcome::Replan(ReplanReason::TargetOccupied)
         );
     }
 
     #[test]
-    fn cross_root_move_checks_root_and_subtree_token() {
+    fn cross_vault_move_checks_vault_and_subtree_token() {
         let source = source_file();
         let target_path = path("imports/report.txt");
-        let same_root = CrossRootMoveRequest {
-            source_root: SOURCE_ROOT,
+        let same_vault = CrossVaultMoveRequest {
+            source_root: SOURCE_VAULT,
             source: &source,
-            target_root: SOURCE_ROOT,
+            target_vault: SOURCE_VAULT,
             target_path: &target_path,
             target_entry_id: TARGET_ENTRY,
             generation: generation(9),
@@ -1377,25 +1377,25 @@ mod tests {
             target: TargetState::Vacant,
         };
         assert_eq!(
-            plan_cross_root_move(&same_root).expect_err("同 Root 不是跨 Root 移动"),
-            MoveError::SameRoot
+            plan_cross_vault_move(&same_vault).expect_err("同 Vault 不是跨 Vault 移动"),
+            MoveError::SameVault
         );
 
-        let with_token = CrossRootMoveRequest {
+        let with_token = CrossVaultMoveRequest {
             source_subtree: Some(SOURCE_TOKEN),
-            target_root: TARGET_ROOT,
-            ..same_root
+            target_vault: TARGET_VAULT,
+            ..same_vault
         };
         assert_eq!(
-            plan_cross_root_move(&with_token).expect_err("文件源不应带 token"),
+            plan_cross_vault_move(&with_token).expect_err("文件源不应带 token"),
             MoveError::UnexpectedSubtreeToken
         );
 
         let directory = ServerFact::directory(path("docs"), ENTRY, revision(4));
-        let directory_move = CrossRootMoveRequest {
-            source_root: SOURCE_ROOT,
+        let directory_move = CrossVaultMoveRequest {
+            source_root: SOURCE_VAULT,
             source: &directory,
-            target_root: TARGET_ROOT,
+            target_vault: TARGET_VAULT,
             target_path: &target_path,
             target_entry_id: TARGET_ENTRY,
             generation: generation(9),
@@ -1403,7 +1403,7 @@ mod tests {
             target: TargetState::Vacant,
         };
         assert_eq!(
-            plan_cross_root_move(&directory_move).expect_err("目录源必须带 token"),
+            plan_cross_vault_move(&directory_move).expect_err("目录源必须带 token"),
             MoveError::MissingSubtreeToken
         );
     }

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{
-    Lab, Running, db, entry_named, epoch_of, identity, login, register_root, snapshot, submit,
+    Lab, Running, db, entry_named, epoch_of, identity, login, register_vault, snapshot, submit,
     subtree_token, upload, wait_for,
 };
 use reqwest::StatusCode;
@@ -124,7 +124,7 @@ async fn wait_gone(path: &Path) {
     panic!("等待 {path:?} 消失超时");
 }
 
-/// 真实重启评估：恢复必须让所有 Root 都可以开放写入。
+/// 真实重启评估：恢复必须让所有 Vault 都可以开放写入。
 async fn recovery_complete(lab: &Lab) -> bool {
     let service = vaultsyncd_server::bootstrap::prepare(lab.config())
         .await
@@ -134,10 +134,10 @@ async fn recovery_complete(lab: &Lab) -> bool {
     complete
 }
 
-async fn replay(lab: &Lab, root: &str, body: &Value) -> Value {
+async fn replay(lab: &Lab, vault: &str, body: &Value) -> Value {
     let running = Running::start(lab).await.expect("补完后开放写入");
     let token = login(&running).await.expect("登录");
-    let (status, replay) = submit(&running, &token, root, body.clone()).await;
+    let (status, replay) = submit(&running, &token, vault, body.clone()).await;
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay["state"], "committed");
     assert_eq!(replay["replayed"], true);
@@ -147,12 +147,12 @@ async fn replay(lab: &Lab, root: &str, body: &Value) -> Value {
 
 struct Prelude {
     lab: Lab,
-    root: String,
+    vault: String,
     epoch: String,
-    root_entry: String,
+    vault_entry: String,
 }
 
-/// 进程内准备：注册 Root、外部文件被采纳；调用方继续用 `running` 做前置命令，最后自行 stop。
+/// 进程内准备：注册 Vault、外部文件被采纳；调用方继续用 `running` 做前置命令，最后自行 stop。
 async fn prelude(
     label: &str,
     seed: impl FnOnce(&Path),
@@ -162,13 +162,13 @@ async fn prelude(
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
         .expect("注册");
     seed(&lab.work());
     for name in adopted {
         wait_for(&format!("采纳 {name}"), || async {
-            Ok(snapshot(&running, &token, &root)
+            Ok(snapshot(&running, &token, &vault)
                 .await
                 .iter()
                 .any(|entry| entry["name"] == *name))
@@ -176,9 +176,9 @@ async fn prelude(
         .await
         .expect("采纳");
     }
-    let epoch = epoch_of(&running, &token, &root).await;
-    let entries = snapshot(&running, &token, &root).await;
-    let root_entry = entries
+    let epoch = epoch_of(&running, &token, &vault).await;
+    let entries = snapshot(&running, &token, &vault).await;
+    let vault_entry = entries
         .iter()
         .find(|entry| entry["parent_id"].is_null())
         .expect("根")["entry_id"]
@@ -188,9 +188,9 @@ async fn prelude(
     (
         Prelude {
             lab,
-            root,
+            vault,
             epoch,
-            root_entry,
+            vault_entry,
         },
         running,
         token,
@@ -201,7 +201,7 @@ async fn prelude(
 fn fire(
     child: &ServerChild,
     token: String,
-    root: String,
+    vault: String,
     body: Value,
 ) -> tokio::task::JoinHandle<()> {
     let running = Arc::clone(&child.running);
@@ -209,7 +209,7 @@ fn fire(
         let _ = running
             .json(
                 "POST",
-                &format!("/v1/roots/{root}/operations"),
+                &format!("/v1/vaults/{vault}/operations"),
                 Some(&token),
                 Some(&body),
             )
@@ -225,13 +225,13 @@ async fn killed_put_between_publish_and_phase_advance_is_completed_once() {
         &["note.txt"],
     )
     .await;
-    let entries = snapshot(&running, &token, &pre.root).await;
+    let entries = snapshot(&running, &token, &pre.vault).await;
     let note = entry_named(&entries, "note.txt");
     let (entry, revision) = (
         note["entry_id"].as_str().expect("id").to_owned(),
         note["revision"].as_str().expect("rev").to_owned(),
     );
-    let (upload_id, _, _) = upload(&running, &token, &pre.root, V2, 32)
+    let (upload_id, _, _) = upload(&running, &token, &pre.vault, V2, 32)
         .await
         .expect("上传");
     running.stop().await;
@@ -252,7 +252,7 @@ async fn killed_put_between_publish_and_phase_advance_is_completed_once() {
     drop(conn);
     let child = ServerChild::spawn(&pre.lab).await;
     let token = login(&child.running).await.expect("登录");
-    let _request = fire(&child, token, pre.root.clone(), body.clone());
+    let _request = fire(&child, token, pre.vault.clone(), body.clone());
     wait_file(&pre.lab.work().join("note.txt"), V2).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     child.kill();
@@ -281,7 +281,7 @@ async fn killed_put_between_publish_and_phase_advance_is_completed_once() {
     );
     drop(conn);
     assert!(recovery_complete(&pre.lab).await, "后像 + prepared 应补完");
-    let result = replay(&pre.lab, &pre.root, &body).await;
+    let result = replay(&pre.lab, &pre.vault, &body).await;
     assert_eq!(result["echo_local_generation"], "7");
     let mut conn = db(&pre.lab).await;
     assert_eq!(scalar(&mut conn, "SELECT count(*) FROM versions").await, 2);
@@ -311,14 +311,14 @@ async fn killed_directory_restore_at_commit_is_completed_without_a_second_copy()
         &["inner.txt", "first.txt"],
     )
     .await;
-    let entries = snapshot(&running, &token, &pre.root).await;
+    let entries = snapshot(&running, &token, &pre.vault).await;
     let top = entry_named(&entries, "top");
     let top_id = top["entry_id"].as_str().expect("id").to_owned();
-    let (_, subtree) = subtree_token(&running, &token, &pre.root, &top_id).await;
+    let (_, subtree) = subtree_token(&running, &token, &pre.vault, &top_id).await;
     let (status, deleted) = submit(
         &running,
         &token,
-        &pre.root,
+        &pre.vault,
         json!({
             "op_id": identity(0x32), "device_id": identity(0x72), "server_epoch": pre.epoch,
             "kind": "delete", "entry_id": top_id, "base_revision": top["revision"],
@@ -342,7 +342,7 @@ async fn killed_directory_restore_at_commit_is_completed_without_a_second_copy()
     drop(conn);
     let child = ServerChild::spawn(&pre.lab).await;
     let token = login(&child.running).await.expect("登录");
-    let _request = fire(&child, token, pre.root.clone(), restore.clone());
+    let _request = fire(&child, token, pre.vault.clone(), restore.clone());
     wait_file(&pre.lab.work().join("top/mid/inner.txt"), b"inner\n").await;
     wait_file(&pre.lab.work().join("top/first.txt"), b"first\n").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -368,7 +368,7 @@ async fn killed_directory_restore_at_commit_is_completed_without_a_second_copy()
     );
     drop(conn);
     assert!(recovery_complete(&pre.lab).await);
-    let result = replay(&pre.lab, &pre.root, &restore).await;
+    let result = replay(&pre.lab, &pre.vault, &restore).await;
     assert_eq!(result["echo_local_generation"], "4");
     let mut conn = db(&pre.lab).await;
     assert_eq!(
@@ -402,14 +402,14 @@ async fn killed_directory_restore_midway_resumes_the_same_plan() {
         &["last.txt", "first.txt"],
     )
     .await;
-    let entries = snapshot(&running, &token, &pre.root).await;
+    let entries = snapshot(&running, &token, &pre.vault).await;
     let top = entry_named(&entries, "top");
     let top_id = top["entry_id"].as_str().expect("id").to_owned();
-    let (_, subtree) = subtree_token(&running, &token, &pre.root, &top_id).await;
+    let (_, subtree) = subtree_token(&running, &token, &pre.vault, &top_id).await;
     let (status, deleted) = submit(
         &running,
         &token,
-        &pre.root,
+        &pre.vault,
         json!({
             "op_id": identity(0x34), "device_id": identity(0x72), "server_epoch": pre.epoch,
             "kind": "delete", "entry_id": top_id, "base_revision": top["revision"],
@@ -435,7 +435,7 @@ async fn killed_directory_restore_midway_resumes_the_same_plan() {
     drop(conn);
     let child = ServerChild::spawn(&pre.lab).await;
     let token = login(&child.running).await.expect("登录");
-    let _request = fire(&child, token, pre.root.clone(), restore.clone());
+    let _request = fire(&child, token, pre.vault.clone(), restore.clone());
     wait_file(&pre.lab.work().join("top/first.txt"), b"first\n").await;
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(!pre.lab.work().join("top/last.txt").exists());
@@ -460,7 +460,7 @@ async fn killed_directory_restore_midway_resumes_the_same_plan() {
         recovery_complete(&pre.lab).await,
         "按持久计划补建第二个文件"
     );
-    replay(&pre.lab, &pre.root, &restore).await;
+    replay(&pre.lab, &pre.vault, &restore).await;
     assert_eq!(
         std::fs::read(pre.lab.work().join("top/last.txt")).expect("读"),
         b"last\n"
@@ -492,7 +492,7 @@ async fn killed_create_and_delete_at_commit_are_completed_by_restart() {
         &["doomed.txt"],
     )
     .await;
-    let entries = snapshot(&running, &token, &pre.root).await;
+    let entries = snapshot(&running, &token, &pre.vault).await;
     let doomed = entry_named(&entries, "doomed.txt");
     let (doomed_id, doomed_rev) = (
         doomed["entry_id"].as_str().expect("id").to_owned(),
@@ -501,7 +501,7 @@ async fn killed_create_and_delete_at_commit_are_completed_by_restart() {
     running.stop().await;
     let create = json!({
         "op_id": identity(0x36), "device_id": identity(0x72), "server_epoch": pre.epoch,
-        "kind": "create", "parent_id": pre.root_entry, "name": "made", "expected_absent": true,
+        "kind": "create", "parent_id": pre.vault_entry, "name": "made", "expected_absent": true,
         "local_generation": "2",
     });
     let delete = json!({
@@ -522,7 +522,7 @@ async fn killed_create_and_delete_at_commit_are_completed_by_restart() {
         drop(conn);
         let child = ServerChild::spawn(&pre.lab).await;
         let token = login(&child.running).await.expect("登录");
-        let _request = fire(&child, token, pre.root.clone(), body.clone());
+        let _request = fire(&child, token, pre.vault.clone(), body.clone());
         if probe_exists {
             wait_exists(&path).await;
         } else {
@@ -545,7 +545,7 @@ async fn killed_create_and_delete_at_commit_are_completed_by_restart() {
         );
         drop(conn);
         assert!(recovery_complete(&pre.lab).await);
-        let result = replay(&pre.lab, &pre.root, &body).await;
+        let result = replay(&pre.lab, &pre.vault, &body).await;
         assert_eq!(result["state"], "committed");
     }
     assert!(pre.lab.work().join("made").is_dir());

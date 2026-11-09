@@ -1,6 +1,6 @@
 //! S089显式原生验收：实际备份CLI、离线restore、真实服务和旧epoch请求。
 mod common;
-use common::{Lab, Running, login, register_root};
+use common::{Lab, Running, login, register_vault};
 use serde_json::Value;
 use std::{
     io::{BufRead, BufReader, Write},
@@ -99,7 +99,7 @@ async fn backup(lab: &Lab, args: &[&str]) -> Value {
     ]);
     command(a, 0).await
 }
-fn restore_args(op: &str, archive: &Path, state: &Path, root: &str, work: &Path) -> Vec<OsString> {
+fn restore_args(op: &str, archive: &Path, state: &Path, vault: &str, work: &Path) -> Vec<OsString> {
     vec![
         "restore".into(),
         op.into(),
@@ -107,8 +107,8 @@ fn restore_args(op: &str, archive: &Path, state: &Path, root: &str, work: &Path)
         archive.as_os_str().into(),
         "--state-dir".into(),
         state.as_os_str().into(),
-        "--root".into(),
-        format!("{root}={}", work.display()).into(),
+        "--vault".into(),
+        format!("{vault}={}", work.display()).into(),
     ]
 }
 fn empty(volume: &Path, label: &str) -> (PathBuf, PathBuf) {
@@ -123,9 +123,9 @@ fn empty(volume: &Path, label: &str) -> (PathBuf, PathBuf) {
 fn hex(bytes: &[u8]) -> String {
     ContentDigest::from_bytes(digest(bytes)).to_hex()
 }
-async fn adopt(s: &Server, token: &str, root: &str, name: &str, hash: &str) {
+async fn adopt(s: &Server, token: &str, vault: &str, name: &str, hash: &str) {
     for _ in 0..200 {
-        let entries = common::snapshot(&s.http, token, root).await;
+        let entries = common::snapshot(&s.http, token, vault).await;
         if entries
             .iter()
             .any(|e| e["name"] == name && e["hash"] == hash)
@@ -158,27 +158,28 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     std::fs::write(lab.work().join("large"), vec![0x89; 16 * 1024 * 1024]).unwrap();
     let source = Server::lab(&lab).await;
     let token = login(&source.http).await.unwrap();
-    let root = register_root(&source.http, &token, &lab.work())
+    let vault = register_vault(&source.http, &token, &lab.work())
         .await
         .unwrap();
-    adopt(&source, &token, &root, "note", &hex(b"historical bytes")).await;
-    adopt(&source, &token, &root, "trash", &hex(b"trash bytes")).await;
+    adopt(&source, &token, &vault, "note", &hex(b"historical bytes")).await;
+    adopt(&source, &token, &vault, "trash", &hex(b"trash bytes")).await;
     adopt(
         &source,
         &token,
-        &root,
+        &vault,
         "large",
         &hex(&vec![0x89; 16 * 1024 * 1024]),
     )
     .await;
-    let entries = common::snapshot(&source.http, &token, &root).await;
+    let entries = common::snapshot(&source.http, &token, &vault).await;
     let note = common::entry_named(&entries, "note");
     let entry = note["entry_id"].as_str().unwrap().to_owned();
     let history = note["version_id"].as_str().unwrap().to_owned();
-    let old_epoch = common::epoch_of(&source.http, &token, &root).await;
-    let (upload, _, _) = common::upload(&source.http, &token, &root, b"current committed bytes", 8)
-        .await
-        .unwrap();
+    let old_epoch = common::epoch_of(&source.http, &token, &vault).await;
+    let (upload, _, _) =
+        common::upload(&source.http, &token, &vault, b"current committed bytes", 8)
+            .await
+            .unwrap();
     let op = "89010000000000000000000000000001";
     let device = "89020000000000000000000000000002";
     let args = common::PutArgs {
@@ -189,7 +190,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         revision: note["revision"].as_str().unwrap(),
         upload: &upload,
     };
-    let (code, result) = common::put_operation(&source.http, &token, &root, &args)
+    let (code, result) = common::put_operation(&source.http, &token, &vault, &args)
         .await
         .unwrap();
     assert_eq!(code, 200, "{result}");
@@ -200,7 +201,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
             .http
             .json(
                 "GET",
-                &format!("/v1/roots/{root}/trash"),
+                &format!("/v1/vaults/{vault}/trash"),
                 Some(&token),
                 None,
             )
@@ -244,11 +245,11 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     .unwrap();
     source.kill();
     let (state, work) = empty(&volume, "first");
-    let validated = command(restore_args("validate", &archive, &state, &root, &work), 0).await;
+    let validated = command(restore_args("validate", &archive, &state, &vault, &work), 0).await;
     assert_eq!(validated["state"], "validated");
     assert!(!state.join("server.sqlite").exists());
     assert_eq!(std::fs::read_dir(&work).unwrap().count(), 0);
-    let restored = command(restore_args("apply", &archive, &state, &root, &work), 0).await;
+    let restored = command(restore_args("apply", &archive, &state, &vault, &work), 0).await;
     assert_eq!(restored["state"], "restored");
     assert_eq!(restored["server_id"], manifest["server_id"]);
     assert_ne!(restored["epoch"], old_epoch);
@@ -265,7 +266,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     let object = state
         .join("objects")
         .join(ObjectLayout::scoped_relative_object_path(
-            vaultsyncd_domain::ids::RootId::from_hex(&root).unwrap(),
+            vaultsyncd_domain::ids::VaultId::from_hex(&vault).unwrap(),
             &ContentDigest::from_bytes(digest(b"current committed bytes")),
         ));
     assert_ne!(
@@ -281,16 +282,16 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     assert_eq!(
         running
             .http
-            .json("GET", "/v1/admin/roots", Some(&token), None)
+            .json("GET", "/v1/admin/vaults", Some(&token), None)
             .await
             .unwrap()
             .0,
         401
     );
     let fresh = login(&running.http).await.unwrap();
-    let epoch = common::epoch_of(&running.http, &fresh, &root).await;
+    let epoch = common::epoch_of(&running.http, &fresh, &vault).await;
     assert_eq!(restored["epoch"], epoch);
-    let (code, body) = common::put_operation(&running.http, &fresh, &root, &args)
+    let (code, body) = common::put_operation(&running.http, &fresh, &vault, &args)
         .await
         .unwrap();
     assert_eq!(code, 410, "{body}");
@@ -301,7 +302,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     let (code, bytes, _) = running
         .http
         .download(
-            &format!("/v1/roots/{root}/entries/{entry}/versions/{history}/content"),
+            &format!("/v1/vaults/{vault}/entries/{entry}/versions/{history}/content"),
             &fresh,
         )
         .await
@@ -312,7 +313,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         .http
         .json(
             "GET",
-            &format!("/v1/roots/{root}/trash"),
+            &format!("/v1/vaults/{vault}/trash"),
             Some(&fresh),
             None,
         )
@@ -320,7 +321,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         .unwrap();
     assert_eq!(code, 200);
     assert_eq!(value["items"], trash["items"]);
-    let online = command(restore_args("apply", &archive, &state, &root, &work), 3).await;
+    let online = command(restore_args("apply", &archive, &state, &vault, &work), 3).await;
     assert_eq!(online["state"], "incomplete"); // 同一状态锁先拒绝在线实例，绝不写在线DB。
     running.kill();
     eprintln!(
@@ -330,7 +331,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     // 第二次从同一旧备份恢复，不得再次分配相同epoch。
     let (second, second_work) = empty(&volume, "second");
     let second_result = command(
-        restore_args("apply", &archive, &second, &root, &second_work),
+        restore_args("apply", &archive, &second, &vault, &second_work),
         0,
     )
     .await;
@@ -341,7 +342,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         epoch: restored["epoch"].as_str().unwrap(),
         ..args
     };
-    let (code, body) = common::put_operation(&running.http, &fresh, &root, &previous)
+    let (code, body) = common::put_operation(&running.http, &fresh, &vault, &previous)
         .await
         .unwrap();
     assert_eq!(code, 410, "{body}");
@@ -349,7 +350,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     let (nonempty, nonempty_work) = empty(&volume, "nonempty");
     std::fs::write(nonempty_work.join("user-data"), b"preserve").unwrap();
     command(
-        restore_args("apply", &archive, &nonempty, &root, &nonempty_work),
+        restore_args("apply", &archive, &nonempty, &vault, &nonempty_work),
         1,
     )
     .await;
@@ -361,13 +362,13 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     let (alias, alias_work) = empty(&volume, "alias");
     let link = volume.join("aliased-work");
     std::os::unix::fs::symlink(&alias_work, &link).unwrap();
-    command(restore_args("validate", &archive, &alias, &root, &link), 1).await;
+    command(restore_args("validate", &archive, &alias, &vault, &link), 1).await;
     command(
-        restore_args("validate", &archive, &alias, &root, &lab.work()),
+        restore_args("validate", &archive, &alias, &vault, &lab.work()),
         1,
     )
     .await;
-    let mut missing = restore_args("validate", &archive, &alias, &root, &alias_work);
+    let mut missing = restore_args("validate", &archive, &alias, &vault, &alias_work);
     missing.truncate(missing.len() - 2);
     command(missing, 1).await;
     // 真正的在线空实例拥有相同flock；错误码3且普通文件、数据库均不被restore写入。
@@ -377,7 +378,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     let live_work = volume.join("live-new-work");
     std::fs::create_dir(&live_work).unwrap();
     command(
-        restore_args("apply", &archive, &live.state(), &root, &live_work),
+        restore_args("apply", &archive, &live.state(), &vault, &live_work),
         3,
     )
     .await;
@@ -408,7 +409,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         0,
     )
     .await;
-    assert_eq!(empty_result["root_count"], "0");
+    assert_eq!(empty_result["vault_count"], "0");
     let empty_server = Server::config(&empty_state.join("server.toml")).await;
     login(&empty_server.http).await.unwrap();
     empty_server.kill();
@@ -432,7 +433,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
             "validate",
             &corrupt_archive,
             &corrupt_state,
-            &root,
+            &vault,
             &corrupt_work,
         ),
         1,
@@ -474,7 +475,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
                 .unwrap()
     );
     command(
-        restore_args("validate", &archive, &space_state, &root, &space_work),
+        restore_args("validate", &archive, &space_state, &vault, &space_work),
         1,
     )
     .await;
@@ -514,7 +515,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
             "apply",
             &archive,
             &interrupted,
-            &root,
+            &vault,
             &interrupted_work,
         ))
         .arg("--json")
@@ -580,7 +581,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("incomplete"));
     command(
-        restore_args("apply", &archive, &interrupted, &root, &interrupted_work),
+        restore_args("apply", &archive, &interrupted, &vault, &interrupted_work),
         1,
     )
     .await;

@@ -1,6 +1,6 @@
 //! 固定版本内容端点：按 `(entry, version)` 取字节，支持区间续传（design §13.1—13.2）。
 //!
-//! 只有一条路径：`GET /v1/roots/{root}/entries/{entry}/versions/{version}/content`，带
+//! 只有一条路径：`GET /v1/vaults/{vault}/entries/{entry}/versions/{version}/content`，带
 //! `Range: bytes=start-end`。请求里**没有**“当前内容”的位置，因此不可能把另一个版本的字节
 //! 当成这个版本；服务端返回的 `Content-Range` 与 `x-content-sha256` 都会核对，对不上就报错，
 //! 由下载执行器决定不安装。
@@ -25,35 +25,35 @@ use crate::uploads::{is_identity, map_error, parse_digest, parse_u64};
 /// 服务端在内容响应里回显的整份摘要头。
 pub const CONTENT_DIGEST_HEADER: &str = "x-content-sha256";
 
-/// 一个 Root 下的固定版本内容端点。
+/// 一个 Vault 下的固定版本内容端点。
 pub struct ContentEndpoint<T: Transport> {
     client: ApiClient<T>,
-    root: String,
+    vault: String,
 }
 
 impl<T: Transport> Clone for ContentEndpoint<T> {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
-            root: self.root.clone(),
+            vault: self.vault.clone(),
         }
     }
 }
 
 impl<T: Transport> ContentEndpoint<T> {
-    /// 绑定一个 Root；身份必须是 32 位小写十六进制。
+    /// 绑定一个 Vault；身份必须是 32 位小写十六进制。
     ///
     /// # Errors
     ///
-    /// Root 身份形态不对时返回 [`ClientError::InvalidRequest`]。
-    pub fn new(client: ApiClient<T>, root: impl Into<String>) -> Result<Self, ClientError> {
-        let root = root.into();
-        if !is_identity(&root) {
+    /// Vault 身份形态不对时返回 [`ClientError::InvalidRequest`]。
+    pub fn new(client: ApiClient<T>, vault: impl Into<String>) -> Result<Self, ClientError> {
+        let vault = vault.into();
+        if !is_identity(&vault) {
             return Err(ClientError::invalid_request(
-                "Root 身份必须是 32 位小写十六进制",
+                "Vault 身份必须是 32 位小写十六进制",
             ));
         }
-        Ok(Self { client, root })
+        Ok(Self { client, vault })
     }
 
     /// 底层客户端。
@@ -61,9 +61,9 @@ impl<T: Transport> ContentEndpoint<T> {
         &self.client
     }
 
-    /// 绑定的 Root 身份。
-    pub fn root(&self) -> &str {
-        &self.root
+    /// 绑定的 Vault 身份。
+    pub fn vault(&self) -> &str {
+        &self.vault
     }
 
     fn content_path(&self, pin: &VersionPin) -> Result<String, PortError> {
@@ -74,8 +74,8 @@ impl<T: Transport> ContentEndpoint<T> {
             return Err(PortError::protocol("版本身份必须是 32 位小写十六进制"));
         }
         Ok(format!(
-            "/v1/roots/{}/entries/{}/versions/{}/content",
-            self.root, pin.entry, pin.version
+            "/v1/vaults/{}/entries/{}/versions/{}/content",
+            self.vault, pin.entry, pin.version
         ))
     }
 }
@@ -149,7 +149,7 @@ impl<T: Transport> VersionedContent for ContentEndpoint<T> {
 impl<T: Transport> std::fmt::Debug for ContentEndpoint<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContentEndpoint")
-            .field("root", &self.root)
+            .field("vault", &self.vault)
             .finish_non_exhaustive()
     }
 }
@@ -206,7 +206,7 @@ mod tests {
     use vaultsyncd_protocol::generated::ErrorCode;
     use vaultsyncd_transfer::hash::{digest_of, to_hex};
 
-    const ROOT: &str = "11111111111111111111111111111111";
+    const VAULT: &str = "11111111111111111111111111111111";
     const ENTRY: &str = "33333333333333333333333333333333";
     const VERSION: &str = "44444444444444444444444444444444";
     const CONTENT: &[u8] = b"0123456789";
@@ -235,7 +235,10 @@ mod tests {
         client
             .auth()
             .install(crate::Credentials::from_issued(&issued("a", "r")).expect("凭据"));
-        (ContentEndpoint::new(client, ROOT).expect("Root"), transport)
+        (
+            ContentEndpoint::new(client, VAULT).expect("Vault"),
+            transport,
+        )
     }
 
     fn range_response(first: u64, last: u64, total: u64, body: Vec<u8>) -> TransportResponse {
@@ -263,7 +266,7 @@ mod tests {
                 assert_eq!(
                     request.url(),
                     format!(
-                        "https://vault.example/v1/roots/{ROOT}/entries/{ENTRY}/versions/{VERSION}/content"
+                        "https://vault.example/v1/vaults/{VAULT}/entries/{ENTRY}/versions/{VERSION}/content"
                     )
                 );
                 assert_eq!(request.header("range"), Some("bytes=2-5"));

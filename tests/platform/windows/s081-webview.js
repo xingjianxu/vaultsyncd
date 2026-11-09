@@ -34,14 +34,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     await click("登录"); await wait("authenticated", () => text().includes("已登录（持有凭据"));
     report.passwordCleared = document.querySelector('[name="password"]').value === "";
     location.hash = "/bindings";
-    await wait("binding page", () => !!document.querySelector('[name="root_id"]'));
-    await click("读取授权 Root"); await wait("authorized roots", () => document.querySelector(`option[value="${fixture.root}"]`));
-    const option = document.querySelector(`option[value="${fixture.root}"]`);
-    report.rootNameDisplayed = option.textContent === fixture.rootName && option.textContent !== fixture.root;
+    await wait("binding page", () => !!document.querySelector('[name="vault_id"]'));
+    await click("读取授权 Vault"); await wait("authorized vaults", () => document.querySelector(`option[value="${fixture.vault}"]`));
+    const option = document.querySelector(`option[value="${fixture.vault}"]`);
+    report.vaultNameDisplayed = option.textContent === fixture.vaultName && option.textContent !== fixture.vault;
     const pathInput = () => document.querySelector('[name="local_path"]');
     report.pathReadOnly = pathInput().readOnly;
     report.noSelectionCannotSubmit = [...document.querySelectorAll("button")].find(b => b.textContent === "创建绑定并开始合并").disabled;
-    field("root_id", fixture.root);
+    field("vault_id", fixture.vault);
     await click("选择目录…");
     await wait("native selection", () => pathInput().value === fixture.localPath);
     report.nativeDirectorySelected = true;
@@ -49,7 +49,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     await wait("native cancellation", () => ![...document.querySelectorAll("button")].find(b => b.textContent === "选择目录…").disabled);
     report.cancelKeepsSelection = pathInput().value === fixture.localPath;
     try {
-      await window.__TAURI_INTERNALS__.invoke("agent_create_binding", {input:{bindingId:crypto.randomUUID().replaceAll("-",""),rootId:fixture.root,localPath:"Z:\\vaultsyncd-S081-missing",mode:"full"}});
+      await window.__TAURI_INTERNALS__.invoke("agent_create_binding", {input:{bindingId:crypto.randomUUID().replaceAll("-",""),vaultId:fixture.vault,localPath:"Z:\\vaultsyncd-S081-missing",mode:"full"}});
       throw new Error("missing path was accepted");
     } catch (error) {
       report.invalidPathVisible = String(error.message ?? error).includes("LOCAL_PATH_UNAVAILABLE");
@@ -72,7 +72,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     await click("暂停"); await wait("pause visible", () => text().includes("已暂停")); report.pauseVisible = true;
     await click("恢复"); await wait("resume visible", () => !text().includes("已暂停")); report.resumeVisible = true;
     report.noBrowserCredentialStorage = localStorage.length === 0 && sessionStorage.length === 0;
-    report.ok = report.rootNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
+    report.ok = report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

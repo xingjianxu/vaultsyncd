@@ -15,7 +15,7 @@ require_sudo_noninteractive
 require_tools filefrag chattr
 
 run_id=${VAULTSYNCD_RUN_ID:-s013-reflink-$$}
-RUN_DIR=$LAB_ROOT/runs/$run_id
+RUN_DIR=$LAB_VAULT/runs/$run_id
 SOURCE_SUBVOL=$RUN_DIR/reflink-a
 TARGET_SUBVOL=$RUN_DIR/reflink-b
 

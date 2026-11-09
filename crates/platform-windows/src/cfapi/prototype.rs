@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::identity::{ENCODED_LEN, EntryId, FileIdentity};
 use super::lifecycle::{HResult, StageError, record};
 use super::prototype_layout::{
-    PROBE_DIRECTORY, PROBE_FILES, PROTOTYPE_ROOT_ID, entry_id_for, file_identity,
+    PROBE_DIRECTORY, PROBE_FILES, PROTOTYPE_VAULT_ID, entry_id_for, file_identity,
 };
 use super::provider::{ProviderConfig, ProviderSession};
 use super::raw::*;
@@ -445,16 +445,16 @@ fn query_sync_root(path: &Path) -> Result<SyncRootProvider, HResult> {
 ///
 /// 已注册时按 `ERROR_ALREADY_EXISTS` 处理并继续（`create` 可重复运行），但会把该 HRESULT
 /// 记进日志，不假装第一次注册成功。
-fn register(root: &Path) -> Result<(), StageError> {
+fn register(vault: &Path) -> Result<(), StageError> {
     let provider_name = wide_str(PROVIDER_NAME);
     let provider_version = wide_str(PROVIDER_VERSION);
-    let root_identity = PROTOTYPE_ROOT_ID.as_bytes().to_vec();
+    let vault_identity = PROTOTYPE_VAULT_ID.as_bytes().to_vec();
     let registration = CfSyncRegistration {
         struct_size: u32::try_from(std::mem::size_of::<CfSyncRegistration>()).unwrap_or(0),
         provider_name: provider_name.as_ptr(),
         provider_version: provider_version.as_ptr(),
-        sync_root_identity: root_identity.as_ptr().cast::<c_void>(),
-        sync_root_identity_length: u32::try_from(root_identity.len()).unwrap_or(0),
+        sync_root_identity: vault_identity.as_ptr().cast::<c_void>(),
+        sync_root_identity_length: u32::try_from(vault_identity.len()).unwrap_or(0),
         file_identity: std::ptr::null(),
         file_identity_length: 0,
         provider_id: PROTOTYPE_PROVIDER_ID,
@@ -479,10 +479,10 @@ fn register(root: &Path) -> Result<(), StageError> {
         hard_link: CF_HARDLINK_POLICY_NONE,
         placeholder_management: CF_PLACEHOLDER_MANAGEMENT_POLICY_DEFAULT,
     };
-    let root_w = wide(root);
+    let vault_w = wide(vault);
     let hr = HResult::new(unsafe {
         CfRegisterSyncRoot(
-            root_w.as_ptr(),
+            vault_w.as_ptr(),
             &registration,
             &policies,
             CF_REGISTER_FLAG_NONE,
@@ -491,14 +491,17 @@ fn register(root: &Path) -> Result<(), StageError> {
     record(
         "register",
         &[
-            ("path", show(root)),
+            ("path", show(vault)),
             ("provider", PROVIDER_NAME.to_string()),
             ("provider_version", PROVIDER_VERSION.to_string()),
             (
                 "provider_id",
                 "7a5c1f00-5eed-4a31-9b2e-001122334455".to_string(),
             ),
-            ("sync_root_identity_length", root_identity.len().to_string()),
+            (
+                "sync_root_identity_length",
+                vault_identity.len().to_string(),
+            ),
             ("hydration_policy", "partial".to_string()),
             ("population_policy", "partial".to_string()),
             ("in_sync_policy", "none".to_string()),
@@ -512,7 +515,7 @@ fn register(root: &Path) -> Result<(), StageError> {
         record(
             "register",
             &[
-                ("path", show(root)),
+                ("path", show(vault)),
                 ("status", "already_registered".to_string()),
             ],
             hr,
@@ -522,21 +525,21 @@ fn register(root: &Path) -> Result<(), StageError> {
     Err(StageError::new(
         "register",
         hr,
-        format!("CfRegisterSyncRoot 失败：{}", show(root)),
+        format!("CfRegisterSyncRoot 失败：{}", show(vault)),
     ))
 }
 
 /// 注销同步根，并用随后的查询确认注销生效（不靠猜错误码判断结果）。
-fn unregister(root: &Path) -> Result<(), StageError> {
-    let root_w = wide(root);
-    let hr = HResult::new(unsafe { CfUnregisterSyncRoot(root_w.as_ptr()) });
-    record("unregister", &[("path", show(root))], hr);
-    match query_sync_root(root) {
+fn unregister(vault: &Path) -> Result<(), StageError> {
+    let vault_w = wide(vault);
+    let hr = HResult::new(unsafe { CfUnregisterSyncRoot(vault_w.as_ptr()) });
+    record("unregister", &[("path", show(vault))], hr);
+    match query_sync_root(vault) {
         Err(query_hr) => {
             record(
                 "sync_root.query",
                 &[
-                    ("path", show(root)),
+                    ("path", show(vault)),
                     ("status", "verified_not_registered".to_string()),
                 ],
                 query_hr,
@@ -692,8 +695,8 @@ fn create_placeholders(base: &Path, specs: &[PlaceholderSpec]) -> Result<(), Sta
 }
 
 /// 确保目录占位符存在：不存在则创建；已存在但不是占位符则拒绝覆盖。
-fn ensure_directory_placeholder(root: &Path) -> Result<(), StageError> {
-    let path = root.join(PROBE_DIRECTORY);
+fn ensure_directory_placeholder(vault: &Path) -> Result<(), StageError> {
+    let path = vault.join(PROBE_DIRECTORY);
     match try_observe(&path)? {
         Some(observation) if observation.is_placeholder() => {
             record(
@@ -716,13 +719,13 @@ fn ensure_directory_placeholder(root: &Path) -> Result<(), StageError> {
                 observation.placeholder_state
             ),
         )),
-        None => create_placeholders(root, &[directory_spec()]),
+        None => create_placeholders(vault, &[directory_spec()]),
     }
 }
 
 /// 确保目录下的文件占位符存在，返回新建的条目数。
-fn ensure_file_placeholders(root: &Path) -> Result<usize, StageError> {
-    let directory = root.join(PROBE_DIRECTORY);
+fn ensure_file_placeholders(vault: &Path) -> Result<usize, StageError> {
+    let directory = vault.join(PROBE_DIRECTORY);
     let mut missing = Vec::new();
     for spec in file_specs() {
         let path = directory.join(&spec.relative_name);
@@ -769,31 +772,31 @@ fn ensure_file_placeholders(root: &Path) -> Result<usize, StageError> {
 /// S011 起 `create` 不再做“读取必须失败”的探测（水合已经实现，读取成功才是正常状态）：
 /// 内容验证由 `read`/`cancel` 子命令在需要水合的时机执行，`create` 只负责让条目保持脱水
 /// 占位，从而不影响紧随其后的 `inspect` 脱水断言。
-pub fn create(root: &Path) -> Result<(), StageError> {
-    if !root.is_dir() {
+pub fn create(vault: &Path) -> Result<(), StageError> {
+    if !vault.is_dir() {
         return Err(StageError::new(
             "create.preflight",
             hresult_from_win32(ERROR_PATH_NOT_FOUND),
-            format!("同步根目录不存在：{}", show(root)),
+            format!("同步根目录不存在：{}", show(vault)),
         ));
     }
     record(
         "create.begin",
         &[
-            ("path", show(root)),
+            ("path", show(vault)),
             ("probe_directory", PROBE_DIRECTORY.to_string()),
             ("probe_files", probe_file_list()),
         ],
         HResult::S_OK,
     );
-    register(root)?;
-    let session = ProviderSession::open(root, ProviderConfig::default())?;
-    ensure_directory_placeholder(root)?;
-    let created = ensure_file_placeholders(root)?;
+    register(vault)?;
+    let session = ProviderSession::open(vault, ProviderConfig::default())?;
+    ensure_directory_placeholder(vault)?;
+    let created = ensure_file_placeholders(vault)?;
     record(
         "create.summary",
         &[
-            ("path", show(root)),
+            ("path", show(vault)),
             ("placeholders_created", created.to_string()),
             ("probe_files", probe_file_list()),
         ],
@@ -803,8 +806,8 @@ pub fn create(root: &Path) -> Result<(), StageError> {
 }
 
 /// `inspect`：只读查询注册信息与每个原型条目的占位/大小/身份（默认要求仍脱水）。
-pub fn inspect(root: &Path) -> Result<Inspection, StageError> {
-    inspect_with(root, false)
+pub fn inspect(vault: &Path) -> Result<Inspection, StageError> {
+    inspect_with(vault, false)
 }
 
 /// 与 [`inspect`] 相同，但可以选择允许条目已水合（`allow_hydrated`）。
@@ -812,20 +815,20 @@ pub fn inspect(root: &Path) -> Result<Inspection, StageError> {
 /// S011 的水合验证会先把条目读成本地数据；此时仍要能核对逻辑大小与身份，因此提供
 /// `--allow-hydrated`，把“必须脱水”的断言换成“本地数据不超过逻辑大小”的断言。默认行为
 /// （脱水断言 + 退出码）不变。
-pub fn inspect_with(root: &Path, allow_hydrated: bool) -> Result<Inspection, StageError> {
-    if !root.is_dir() {
+pub fn inspect_with(vault: &Path, allow_hydrated: bool) -> Result<Inspection, StageError> {
+    if !vault.is_dir() {
         return Err(StageError::new(
             "inspect.preflight",
             hresult_from_win32(ERROR_PATH_NOT_FOUND),
-            format!("同步根目录不存在：{}", show(root)),
+            format!("同步根目录不存在：{}", show(vault)),
         ));
     }
-    match query_sync_root(root) {
+    match query_sync_root(vault) {
         Ok(provider) => {
             record(
                 "sync_root.query",
                 &[
-                    ("path", show(root)),
+                    ("path", show(vault)),
                     ("status", "registered".to_string()),
                     ("provider", provider.provider_name),
                     ("provider_version", provider.provider_version),
@@ -833,7 +836,7 @@ pub fn inspect_with(root: &Path, allow_hydrated: bool) -> Result<Inspection, Sta
                         "provider_status",
                         format!("0x{:08X}", provider.provider_status),
                     ),
-                    ("expected_root_id", hex(PROTOTYPE_ROOT_ID.as_bytes())),
+                    ("expected_vault_id", hex(PROTOTYPE_VAULT_ID.as_bytes())),
                 ],
                 HResult::S_OK,
             );
@@ -842,7 +845,7 @@ pub fn inspect_with(root: &Path, allow_hydrated: bool) -> Result<Inspection, Sta
             record(
                 "sync_root.query",
                 &[
-                    ("path", show(root)),
+                    ("path", show(vault)),
                     ("status", "not_registered".to_string()),
                     ("probe_files", probe_file_list()),
                 ],
@@ -852,14 +855,14 @@ pub fn inspect_with(root: &Path, allow_hydrated: bool) -> Result<Inspection, Sta
         }
     }
 
-    inspect_directory(root)?;
+    inspect_directory(vault)?;
     for (name, size) in PROBE_FILES {
-        inspect_file(root, name, size, allow_hydrated)?;
+        inspect_file(vault, name, size, allow_hydrated)?;
     }
     record(
         "inspect.summary",
         &[
-            ("path", show(root)),
+            ("path", show(vault)),
             ("entries", (PROBE_FILES.len() + 1).to_string()),
             ("probe_files", probe_file_list()),
         ],
@@ -869,8 +872,8 @@ pub fn inspect_with(root: &Path, allow_hydrated: bool) -> Result<Inspection, Sta
 }
 
 /// 校验目录占位符。
-fn inspect_directory(root: &Path) -> Result<(), StageError> {
-    let path = root.join(PROBE_DIRECTORY);
+fn inspect_directory(vault: &Path) -> Result<(), StageError> {
+    let path = vault.join(PROBE_DIRECTORY);
     let relative = PROBE_DIRECTORY.to_string();
     let observation = observe(&path)?;
     let expected = file_identity(&relative);
@@ -923,12 +926,12 @@ fn inspect_directory(root: &Path) -> Result<(), StageError> {
 
 /// 校验一个文件占位符：占位状态、逻辑大小、脱水状态（或允许已水合）与身份。
 fn inspect_file(
-    root: &Path,
+    vault: &Path,
     name: &str,
     expected_size: u64,
     allow_hydrated: bool,
 ) -> Result<(), StageError> {
-    let path = root.join(PROBE_DIRECTORY).join(name);
+    let path = vault.join(PROBE_DIRECTORY).join(name);
     let relative = format!("{PROBE_DIRECTORY}/{name}");
     let observation = observe(&path)?;
     // 身份按“相对其父目录的条目名”派生，与 create 时写入的 blob 一致；日志里的 path 才是
@@ -1042,7 +1045,7 @@ fn identity_fields(
         )
     })?;
     let fields = vec![
-        ("identity_root_id", hex(decoded.root_id.as_bytes())),
+        ("identity_vault_id", hex(decoded.vault_id.as_bytes())),
         ("identity_entry_id", hex(decoded.entry_id.as_bytes())),
         (
             "identity_version_hint",
@@ -1054,8 +1057,8 @@ fn identity_fields(
             "inspect.identity",
             HResult::S_OK,
             format!(
-                "FileIdentity 与预期不符：root={} entry={} hint={}",
-                hex(decoded.root_id.as_bytes()),
+                "FileIdentity 与预期不符：vault={} entry={} hint={}",
+                hex(decoded.vault_id.as_bytes()),
                 hex(decoded.entry_id.as_bytes()),
                 decoded.version_hint.get()
             ),
@@ -1065,39 +1068,39 @@ fn identity_fields(
 }
 
 /// `cleanup`：只删除本工具创建的占位符，保留用户内容，然后断开并注销。
-pub fn cleanup(root: &Path) -> Result<(), StageError> {
-    if !root.is_dir() {
+pub fn cleanup(vault: &Path) -> Result<(), StageError> {
+    if !vault.is_dir() {
         return Err(StageError::new(
             "cleanup.preflight",
             hresult_from_win32(ERROR_PATH_NOT_FOUND),
-            format!("同步根目录不存在：{}", show(root)),
+            format!("同步根目录不存在：{}", show(vault)),
         ));
     }
     record(
         "cleanup.begin",
         &[
-            ("path", show(root)),
+            ("path", show(vault)),
             ("probe_directory", PROBE_DIRECTORY.to_string()),
             ("probe_files", probe_file_list()),
         ],
         HResult::S_OK,
     );
     // 连接一次，使删除动作发生在“提供方在线”的正常语义下；未注册时继续尝试清理残留。
-    let session = ProviderSession::open(root, ProviderConfig::default()).ok();
+    let session = ProviderSession::open(vault, ProviderConfig::default()).ok();
     for (name, _) in PROBE_FILES {
-        remove_probe_placeholder(root, &format!("{PROBE_DIRECTORY}/{name}"))?;
+        remove_probe_placeholder(vault, &format!("{PROBE_DIRECTORY}/{name}"))?;
     }
-    remove_probe_placeholder(root, PROBE_DIRECTORY)?;
+    remove_probe_placeholder(vault, PROBE_DIRECTORY)?;
     if let Some(session) = session {
         session.close()?;
     }
-    unregister(root)?;
-    report_preserved(root)
+    unregister(vault)?;
+    report_preserved(vault)
 }
 
 /// 只删除确认是占位符的探针条目；不是占位符就保留并在日志里说明。
-fn remove_probe_placeholder(root: &Path, relative: &str) -> Result<(), StageError> {
-    let path = root.join(relative);
+fn remove_probe_placeholder(vault: &Path, relative: &str) -> Result<(), StageError> {
+    let path = vault.join(relative);
     match try_observe(&path)? {
         None => {
             record(
@@ -1181,12 +1184,12 @@ fn remove_probe_placeholder(root: &Path, relative: &str) -> Result<(), StageErro
 }
 
 /// 逐条列出同步根里剩下的内容：占位符只可能来自残留，其余是用户数据必须保留。
-fn report_preserved(root: &Path) -> Result<(), StageError> {
-    let entries = std::fs::read_dir(root).map_err(|error| {
+fn report_preserved(vault: &Path) -> Result<(), StageError> {
+    let entries = std::fs::read_dir(vault).map_err(|error| {
         StageError::new(
             "cleanup.report",
             hresult_from_io(&error),
-            format!("读取 {} 失败：{error}", show(root)),
+            format!("读取 {} 失败：{error}", show(vault)),
         )
     })?;
     for entry in entries {
@@ -1194,12 +1197,12 @@ fn report_preserved(root: &Path) -> Result<(), StageError> {
             StageError::new(
                 "cleanup.report",
                 hresult_from_io(&error),
-                format!("遍历 {} 失败：{error}", show(root)),
+                format!("遍历 {} 失败：{error}", show(vault)),
             )
         })?;
         let path = entry.path();
         let relative = path
-            .strip_prefix(root)
+            .strip_prefix(vault)
             .map(show)
             .unwrap_or_else(|_| show(&path));
         match try_observe(&path)? {
@@ -1230,8 +1233,8 @@ pub fn on_disk_data_size(path: &Path) -> Result<i64, StageError> {
 }
 
 /// 原型固定条目的绝对路径（供测试脚本或诊断使用）。
-pub fn probe_paths(root: &Path) -> Vec<PathBuf> {
-    let directory = root.join(PROBE_DIRECTORY);
+pub fn probe_paths(vault: &Path) -> Vec<PathBuf> {
+    let directory = vault.join(PROBE_DIRECTORY);
     let mut paths = vec![directory.clone()];
     for (name, _) in PROBE_FILES {
         paths.push(directory.join(name));

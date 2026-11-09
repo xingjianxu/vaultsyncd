@@ -13,7 +13,7 @@
 //!   上次提示的值不同就提示一次（包括头反而变小——服务端被回退时客户端同样需要立刻重新拉取并
 //!   走 `CURSOR_EXPIRED` 路径）。提示可以丢、重、乱序，客户端仍凭 `changes` 的游标与 seq 去重修复。
 
-use vaultsyncd_domain::version::{RootSeq, UtcTimestamp};
+use vaultsyncd_domain::version::{UtcTimestamp, VaultSeq};
 
 /// 事件保留期默认值：90 天（design §9.4）。
 pub const DEFAULT_EVENT_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
@@ -27,7 +27,7 @@ pub const MAX_CHANGES_LIMIT: u32 = 500;
 /// SSE 保活注释的间隔（秒）：代理与负载均衡不会把空闲连接当成死连接。
 pub const SSE_KEEPALIVE_SECONDS: u64 = 15;
 
-/// SSE 轮询 `roots.seq` 的默认间隔（毫秒）。
+/// SSE 轮询 `vaults.seq` 的默认间隔（毫秒）。
 pub const SSE_POLL_INTERVAL_MILLIS: u64 = 1000;
 
 /// 事件保留窗口的截止时间：创建时间早于它的批次视为已出窗口。
@@ -45,12 +45,12 @@ pub enum CursorProblem {
     /// 游标早于事件保留窗口。
     BeforeRetention {
         /// 窗口下沿：仍保留的最早批次是 `expired_through + 1`。
-        expired_through: RootSeq,
+        expired_through: VaultSeq,
     },
     /// 游标晚于服务端当前头：服务端回退（备份恢复）或客户端伪造；不能当作“已追平”。
     AheadOfHead {
         /// 服务端当前头。
-        head: RootSeq,
+        head: VaultSeq,
     },
     /// 快照不存在或已过期。
     SnapshotExpired,
@@ -139,11 +139,11 @@ impl std::error::Error for ChangesFailure {}
 
 /// 判定游标能否被服务。
 ///
-/// `expired_through` 是保留窗口下沿（`<=` 它的批次不再保证可拉取），`head` 是 Root 当前头。
+/// `expired_through` 是保留窗口下沿（`<=` 它的批次不再保证可拉取），`head` 是 Vault 当前头。
 pub fn judge_cursor(
-    after: RootSeq,
-    head: RootSeq,
-    expired_through: RootSeq,
+    after: VaultSeq,
+    head: VaultSeq,
+    expired_through: VaultSeq,
 ) -> Result<(), ChangesFailure> {
     if after < expired_through {
         return Err(ChangesFailure::CursorExpired(
@@ -176,14 +176,14 @@ pub fn changes_limit(requested: Option<u64>) -> Result<u32, ChangesFailure> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageProgress {
     /// 客户端下一次应带的 `after`：本页最后一个批次的 seq；空页时是原游标。
-    pub next_after: RootSeq,
+    pub next_after: VaultSeq,
     /// 读取时头之后是否还有批次。
     pub has_more: bool,
 }
 
 /// 由本页最后一个 seq（空页为 `None`）、原游标与读取时的头算出推进信息。
 #[must_use]
-pub fn page_progress(after: RootSeq, last: Option<RootSeq>, head: RootSeq) -> PageProgress {
+pub fn page_progress(after: VaultSeq, last: Option<VaultSeq>, head: VaultSeq) -> PageProgress {
     let next_after = last.unwrap_or(after);
     PageProgress {
         next_after,
@@ -194,7 +194,7 @@ pub fn page_progress(after: RootSeq, last: Option<RootSeq>, head: RootSeq) -> Pa
 /// SSE 是否该发一条新提示：头与上次提示不同才发；还没发过时立即发当前头
 /// （新连接的客户端因此马上知道要不要拉取）。
 #[must_use]
-pub fn next_hint(last_sent: Option<RootSeq>, head: RootSeq) -> Option<RootSeq> {
+pub fn next_hint(last_sent: Option<VaultSeq>, head: VaultSeq) -> Option<VaultSeq> {
     (last_sent != Some(head)).then_some(head)
 }
 
@@ -202,8 +202,8 @@ pub fn next_hint(last_sent: Option<RootSeq>, head: RootSeq) -> Option<RootSeq> {
 mod tests {
     use super::*;
 
-    fn seq(value: u64) -> RootSeq {
-        RootSeq::new(value).expect("测试 seq 合法")
+    fn seq(value: u64) -> VaultSeq {
+        VaultSeq::new(value).expect("测试 seq 合法")
     }
 
     fn at(seconds: i64) -> UtcTimestamp {
@@ -216,7 +216,7 @@ mod tests {
         for after in [5, 6, 9, 10] {
             judge_cursor(seq(after), seq(10), seq(5)).expect("窗口内的游标必须被服务");
         }
-        judge_cursor(seq(0), seq(0), seq(0)).expect("全新 Root 的零游标合法");
+        judge_cursor(seq(0), seq(0), seq(0)).expect("全新 Vault 的零游标合法");
     }
 
     #[test]

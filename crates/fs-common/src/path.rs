@@ -1,6 +1,6 @@
 //! 跨端相对路径规则：传输中的路径只能是由 `/` 分隔、已校验的普通分量序列（design §16.1）。
 //!
-//! Root 内部条目的路径一律用相对路径表达：不含盘符、不以分隔符开头、不含 `.`/`..`、不含空
+//! Vault 内部条目的路径一律用相对路径表达：不含盘符、不以分隔符开头、不含 `.`/`..`、不含空
 //! 分量、不含 NUL、不含反斜杠，每个分量都通过 [`crate::name::validate_name`]。这样网络传输与
 //! 持久化的路径不会携带逃逸形式，也不会因平台分隔符差异出现两种写法。
 //!
@@ -13,7 +13,7 @@ use std::str::FromStr;
 
 /// 相对路径整体允许的最大 UTF-8 字节数（Linux `PATH_MAX` 留出一个字节给 NUL）。
 ///
-/// Windows 的绝对路径上限（`MAX_PATH`、长路径前缀计数）取决于 Root 的挂载前缀，属于平台层
+/// Windows 的绝对路径上限（`MAX_PATH`、长路径前缀计数）取决于 Vault 的挂载前缀，属于平台层
 /// 判定，不在这里重复。
 pub const MAX_RELATIVE_PATH_UTF8_BYTES: usize = 4095;
 
@@ -76,7 +76,7 @@ impl RelativePath {
 
     /// 前 `len` 个分量构成的祖先/自身路径。
     ///
-    /// 调用方保证 `1 <= len <= components().len()`；`0`（Root 自身）不是 `RelativePath`，
+    /// 调用方保证 `1 <= len <= components().len()`；`0`（Vault 自身）不是 `RelativePath`，
     /// 越界是调用方 bug。排除规则用它报告“命中的是哪个祖先目录”（`ignore::decide`）。
     pub(crate) fn prefix(&self, len: usize) -> RelativePath {
         debug_assert!(len > 0 && len <= self.components.len(), "前缀长度越界");
@@ -103,7 +103,7 @@ impl FromStr for RelativePath {
 /// 相对路径不合规的明确原因。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PathIssue {
-    /// 空文本；Root 自身不是可传输路径。
+    /// 空文本；Vault 自身不是可传输路径。
     Empty,
     /// 以 `/` 或 `\` 开头：绝对路径、UNC 或 Windows 设备路径（`\\?\`、`\\.\`）。
     Absolute,

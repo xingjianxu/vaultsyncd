@@ -64,7 +64,7 @@ async fn until_status(child: &mut ChildGuard, test: impl Fn(&GetStatusResult) ->
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
-fn unregister(path: &Path, binding: &str, root: &str) {
+fn unregister(path: &Path, binding: &str, vault: &str) {
     use vaultsyncd_platform_windows::cfapi::{
         adapter::{Adapter, MetadataOnly},
         catalog::Catalog,
@@ -73,7 +73,7 @@ fn unregister(path: &Path, binding: &str, root: &str) {
         path,
         Catalog::new(
             vaultsyncd_domain::ids::BindingId::from_hex(binding).unwrap(),
-            vaultsyncd_domain::ids::RootId::from_hex(root).unwrap(),
+            vaultsyncd_domain::ids::VaultId::from_hex(vault).unwrap(),
         ),
         Arc::new(MetadataOnly),
     )
@@ -86,16 +86,16 @@ fn unregister(path: &Path, binding: &str, root: &str) {
 }
 
 // Runs the *product* assembly, never shell::register from the test. Covers both
-// migration from a CFAPI-only root and binding creation through the public IPC.
+// migration from a CFAPI-only vault and binding creation through the public IPC.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_explorer_registration_and_states() {
-    use vaultsyncd_domain::ids::{BindingId, RootId};
+    use vaultsyncd_domain::ids::{BindingId, VaultId};
     use vaultsyncd_platform_windows::{
         cfapi::{
             adapter::{Adapter, MetadataOnly},
             catalog::Catalog,
         },
-        files::RootHandle,
+        files::VaultHandle,
         shell,
     };
     let fixture_path =
@@ -108,17 +108,17 @@ async fn native_explorer_registration_and_states() {
     let evidence = driver.join("explorer-evidence");
     std::fs::create_dir(&base).unwrap();
     std::fs::create_dir(&evidence).unwrap();
-    for name in ["state", "root", "cache", "new-root", "new-cache"] {
+    for name in ["state", "vault", "cache", "new-vault", "new-cache"] {
         std::fs::create_dir(base.join(name)).unwrap();
     }
     let server = identity();
     let binding = identity();
     let second = identity();
     let id = BindingId::from_hex(&binding).unwrap();
-    let root = fixture["root"].as_str().unwrap();
+    let vault = fixture["vault"].as_str().unwrap();
     let entry = fixture["entry"]["entry_id"].as_str().unwrap();
     let config_path = base.join("agent.json");
-    let config = serde_json::json!({"server":{"id":server,"url":fixture["url"],"development_http":true},"device_id":identity(),"state_dir":base.join("state"),"poll_millis":250,"bindings":[{"id":binding,"root_id":root,"path":base.join("root"),"cache":base.join("cache"),"mode":"on_demand"}]});
+    let config = serde_json::json!({"server":{"id":server,"url":fixture["url"],"development_http":true},"device_id":identity(),"state_dir":base.join("state"),"poll_millis":250,"bindings":[{"id":binding,"vault_id":vault,"path":base.join("vault"),"cache":base.join("cache"),"mode":"on_demand"}]});
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let login = serde_json::json!({"login":"s052-owner","password":"S052-Correct-Horse-Battery-9!","device_label":"S129 Explorer"});
     success(invoke(
@@ -127,11 +127,11 @@ async fn native_explorer_registration_and_states() {
         &["--login-stdin"],
         Some(&serde_json::to_vec(&login).unwrap()),
     ));
-    // Reproduce an old client root: CFAPI registered, no Shell registration.
+    // Reproduce an old client vault: CFAPI registered, no Shell registration.
     drop(
         Adapter::connect(
-            &base.join("root"),
-            Catalog::new(id, RootId::from_hex(root).unwrap()),
+            &base.join("vault"),
+            Catalog::new(id, VaultId::from_hex(vault).unwrap()),
             Arc::new(MetadataOnly),
         )
         .unwrap(),
@@ -146,10 +146,10 @@ async fn native_explorer_registration_and_states() {
     .await;
     assert!(
         shell::registered(id).unwrap(),
-        "startup must repair CFAPI-only roots"
+        "startup must repair CFAPI-only vaults"
     );
     let inspect = || {
-        RootHandle::open(&base.join("root"))
+        VaultHandle::open(&base.join("vault"))
             .unwrap()
             .inspect("file.txt")
             .unwrap()
@@ -160,8 +160,8 @@ async fn native_explorer_registration_and_states() {
         let output = Command::new("powershell.exe")
             .args(["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(driver.join("explorer-probe.ps1"))
-            .arg("-Root")
-            .arg(base.join("root"))
+            .arg("-Vault")
+            .arg(base.join("vault"))
             .arg("-Evidence")
             .arg(&evidence)
             .arg("-Phase")
@@ -179,7 +179,7 @@ async fn native_explorer_registration_and_states() {
         0,
         "Explorer browsing must not hydrate"
     );
-    ok("create_binding", serde_json::json!({"binding_id":second,"root_id":root,"local_path":base.join("new-root"),"cache_path":base.join("new-cache"),"mode":"on_demand"})).await;
+    ok("create_binding", serde_json::json!({"binding_id":second,"vault_id":vault,"local_path":base.join("new-vault"),"cache_path":base.join("new-cache"),"mode":"on_demand"})).await;
     until_status(&mut child, |s| {
         s.bindings
             .as_ref()
@@ -196,7 +196,7 @@ async fn native_explorer_registration_and_states() {
     )
     .await;
     until_file(
-        &base.join("root/file.txt"),
+        &base.join("vault/file.txt"),
         Some(fixture["payload"].as_str().unwrap().as_bytes()),
     )
     .await;
@@ -216,7 +216,7 @@ async fn native_explorer_registration_and_states() {
         downloaded.cloud.as_ref().unwrap().pin_state
     );
     assert_eq!(
-        std::fs::read(base.join("root/file.txt")).unwrap(),
+        std::fs::read(base.join("vault/file.txt")).unwrap(),
         fixture["payload"].as_str().unwrap().as_bytes()
     );
     probe("restarted-local", 2);
@@ -256,10 +256,10 @@ async fn native_explorer_registration_and_states() {
     );
     assert_eq!(inspect().cloud.as_ref().unwrap().on_disk, 0);
     // Only this run's synthetic files are explicitly removed; unregister is never used
-    // to repair a root or to remove partial placeholders.
-    for (directory, binding) in [("root", &binding), ("new-root", &second)] {
+    // to repair a vault or to remove partial placeholders.
+    for (directory, binding) in [("vault", &binding), ("new-vault", &second)] {
         std::fs::remove_file(base.join(directory).join("file.txt")).unwrap();
-        unregister(&base.join(directory), binding, root);
+        unregister(&base.join(directory), binding, vault);
         assert!(!shell::registered(BindingId::from_hex(binding).unwrap()).unwrap());
     }
     credentials::CredentialVault::new(&server)
@@ -284,12 +284,12 @@ async fn native_management_every_command() {
         .unwrap()
         .join(format!("run-management-{}", std::process::id()));
     std::fs::create_dir(&base).unwrap();
-    for p in ["state", "root", "cache"] {
+    for p in ["state", "vault", "cache"] {
         std::fs::create_dir(base.join(p)).unwrap();
     }
     let server = identity();
     let binding = identity();
-    let root = fixture["root"].as_str().unwrap();
+    let vault = fixture["vault"].as_str().unwrap();
     let entry = fixture["entry"]["entry_id"].as_str().unwrap();
     let config_path = base.join("agent.json");
     let config = serde_json::json!({"server":{"id":server,"url":fixture["url"],"development_http":true},"device_id":identity(),"state_dir":base.join("state"),"poll_millis":250,"bindings":[]});
@@ -339,15 +339,15 @@ async fn native_management_every_command() {
             .authenticated
     );
     assert!(
-        ok("list_roots", serde_json::json!({}))
+        ok("list_vaults", serde_json::json!({}))
             .await
             .items
             .unwrap()
             .iter()
-            .any(|i| i.id == root)
+            .any(|i| i.id == vault)
     );
-    bad("create_binding",serde_json::json!({"binding_id":binding,"root_id":root,"local_path":base.join("state"),"cache_path":base.join("cache"),"mode":"on_demand"})).await;
-    ok("create_binding",serde_json::json!({"binding_id":binding,"root_id":root,"local_path":base.join("root"),"cache_path":base.join("cache"),"mode":"on_demand"})).await;
+    bad("create_binding",serde_json::json!({"binding_id":binding,"vault_id":vault,"local_path":base.join("state"),"cache_path":base.join("cache"),"mode":"on_demand"})).await;
+    ok("create_binding",serde_json::json!({"binding_id":binding,"vault_id":vault,"local_path":base.join("vault"),"cache_path":base.join("cache"),"mode":"on_demand"})).await;
     until_status(&mut child, |s| {
         s.bindings
             .as_ref()
@@ -377,7 +377,7 @@ async fn native_management_every_command() {
     )
     .await;
     assert_eq!(
-        std::fs::read(base.join("root/file.txt")).unwrap(),
+        std::fs::read(base.join("vault/file.txt")).unwrap(),
         fixture["payload"].as_str().unwrap().as_bytes()
     );
     ok(
@@ -385,7 +385,7 @@ async fn native_management_every_command() {
         serde_json::json!({"binding_id":binding,"entry_id":entry,"operation_id":identity()}),
     )
     .await;
-    let native = vaultsyncd_platform_windows::files::RootHandle::open(&base.join("root"))
+    let native = vaultsyncd_platform_windows::files::VaultHandle::open(&base.join("vault"))
         .unwrap()
         .inspect("file.txt")
         .unwrap();
@@ -423,7 +423,7 @@ async fn native_management_every_command() {
     })
     .await;
     assert_eq!(
-        std::fs::read(base.join("root/file.txt")).unwrap(),
+        std::fs::read(base.join("vault/file.txt")).unwrap(),
         fixture["payload"].as_str().unwrap().as_bytes()
     );
     bad(
@@ -457,15 +457,15 @@ async fn native_management_every_command() {
         )
         .unwrap(),
     );
-    let old = listing(&client, root)
+    let old = listing(&client, vault)
         .await
         .into_iter()
         .find(|e| e.entry_id == entry)
         .unwrap();
-    let mapping = WritableMapping::open(&base.join("root/file.txt"));
+    let mapping = WritableMapping::open(&base.join("vault/file.txt"));
     remote_put(
         &client,
-        root,
+        vault,
         &old,
         b"S072 remote version behind a real writable mapping",
     )
@@ -493,7 +493,7 @@ async fn native_management_every_command() {
     )
     .await;
     until_file(
-        &base.join("root/file.txt"),
+        &base.join("vault/file.txt"),
         Some(b"S072 remote version behind a real writable mapping"),
     )
     .await;
@@ -506,7 +506,7 @@ async fn native_management_every_command() {
     .items
     .unwrap();
     assert!(history.len() >= 2);
-    let current = listing(&client, root)
+    let current = listing(&client, vault)
         .await
         .into_iter()
         .find(|e| e.entry_id == entry)
@@ -514,24 +514,24 @@ async fn native_management_every_command() {
     let original = fixture["entry"]["version_id"].as_str().unwrap();
     ok("restore_entry",serde_json::json!({"binding_id":binding,"entry_id":entry,"operation_id":identity(),"base_revision":current.revision,"version_id":original})).await;
     until_file(
-        &base.join("root/file.txt"),
+        &base.join("vault/file.txt"),
         Some(fixture["payload"].as_str().unwrap().as_bytes()),
     )
     .await;
-    let current = listing(&client, root)
+    let current = listing(&client, vault)
         .await
         .into_iter()
         .find(|e| e.entry_id == entry)
         .unwrap();
-    let (s, _) = sync::snapshot(&client, root).await.unwrap();
+    let (s, _) = sync::snapshot(&client, vault).await.unwrap();
     sync::submit(
         &client,
-        root,
+        vault,
         &namespace_request(&current, OperationKind::Delete, s.server_epoch, None),
     )
     .await
     .unwrap();
-    until_file(&base.join("root/file.txt"), None).await;
+    until_file(&base.join("vault/file.txt"), None).await;
     let trash = ok("list_trash", serde_json::json!({"binding_id":binding}))
         .await
         .items
@@ -542,13 +542,13 @@ async fn native_management_every_command() {
         .unwrap();
     ok("restore_entry",serde_json::json!({"binding_id":binding,"entry_id":entry,"operation_id":identity(),"base_revision":item.revision})).await;
     until_file(
-        &base.join("root/file.txt"),
+        &base.join("vault/file.txt"),
         Some(fixture["payload"].as_str().unwrap().as_bytes()),
     )
     .await;
     ok("pause_binding", serde_json::json!({"binding_id":binding})).await;
     std::fs::write(
-        base.join("root/unique-unconfirmed.bin"),
+        base.join("vault/unique-unconfirmed.bin"),
         b"S072 unique local recovery bytes",
     )
     .unwrap();
@@ -579,7 +579,7 @@ async fn native_management_every_command() {
     let detached = ok("detach_binding", serde_json::json!({"binding_id":binding})).await;
     assert!(detached.unconfirmed.is_some());
     assert_eq!(
-        std::fs::read(base.join("root/unique-unconfirmed.bin")).unwrap(),
+        std::fs::read(base.join("vault/unique-unconfirmed.bin")).unwrap(),
         b"S072 unique local recovery bytes"
     );
     bad("resume_binding", serde_json::json!({"binding_id":binding})).await;
@@ -625,7 +625,7 @@ async fn native_management_every_command() {
         "set_connection",
         "login",
         "logout",
-        "list_roots",
+        "list_vaults",
         "set_mode",
         "list_history",
         "list_trash",
@@ -644,13 +644,13 @@ async fn native_management_every_command() {
         .erase()
         .unwrap();
     assert_eq!(
-        std::fs::read(base.join("root/file.txt")).unwrap(),
+        std::fs::read(base.join("vault/file.txt")).unwrap(),
         fixture["payload"].as_str().unwrap().as_bytes()
     );
     for name in ["file.txt", "unique-unconfirmed.bin"] {
-        std::fs::remove_file(base.join("root").join(name)).unwrap();
+        std::fs::remove_file(base.join("vault").join(name)).unwrap();
     }
-    unregister(&base.join("root"), &binding, root);
+    unregister(&base.join("vault"), &binding, vault);
     std::fs::remove_dir_all(&base).unwrap();
     println!(
         "check=pass s072_all_21_handlers_real_agent_named_pipe_effects_errors_versions_recovery_and_credential_redaction"

@@ -8,10 +8,10 @@
 //! 3. inode 标志必须可读且不含 `FS_NOCOW_FL`（`+C`）。
 //! 4. 挂载选项不得含 `nodatacow`/`nodatasum`。
 //! 5. 扫描必须完整（受限上限未触发），否则结论是“未完成”，不是通过。
-//! 6. Root 内不得有嵌套子卷，也不得有子挂载（任何类型的挂载点都不行）。
-//! 7. 内部状态目录必须与 Root 不重叠、本身也在合规 btrfs 上；与 Root 不在同一 btrfs 文件
+//! 6. Vault 内不得有嵌套子卷，也不得有子挂载（任何类型的挂载点都不行）。
+//! 7. 内部状态目录必须与 Vault 不重叠、本身也在合规 btrfs 上；与 Vault 不在同一 btrfs 文件
 //!    系统时拒绝（design §11.5 允许“显式记录复制成本”地跨卷，这里保守拒绝并记录双方 FSID）。
-//! 8. 已注册 Root 不得是同一目录的别名，也不得与 Root 路径重叠（design §16.1）。
+//! 8. 已注册 Vault 不得是同一目录的别名，也不得与 Vault 路径重叠（design §16.1）。
 //!
 //! 别名/重叠不能只比路径或 inode：同一子卷的两个路径（bind mount、`..`、符号链接）得到的
 //! 是相同的 `(FSID, 子卷 ID)`，因此判“同一存储”；inode 只在同一子卷内比较。
@@ -245,10 +245,10 @@ impl IdentityDrift {
         }
     }
 
-    /// 对应的设计错误码：运行阶段发现变化按 `ROOT_UNAVAILABLE` 处理，不推导删除。
+    /// 对应的设计错误码：运行阶段发现变化按 `VAULT_UNAVAILABLE` 处理，不推导删除。
     #[must_use]
     pub fn design_error_code(self) -> &'static str {
-        "ROOT_UNAVAILABLE"
+        "VAULT_UNAVAILABLE"
     }
 }
 
@@ -299,7 +299,7 @@ pub enum AdmissionRejection {
     },
     /// 目录自身带 NOCOW 标志（`+C`）。
     NocowInodeFlags {
-        /// 目录路径（相对 Root；Root 自身为空路径）。
+        /// 目录路径（相对 Vault；Vault 自身为空路径）。
         path: PathBuf,
         /// 实测标志。
         flags: u32,
@@ -309,21 +309,21 @@ pub enum AdmissionRejection {
         /// 命中的选项名。
         option: String,
     },
-    /// Root 内有嵌套子卷。
+    /// Vault 内有嵌套子卷。
     NestedSubvolume {
-        /// 相对 Root 的路径。
+        /// 相对 Vault 的路径。
         relative_path: PathBuf,
         /// 实测子卷 ID。
         subvolume_id: u64,
     },
-    /// Root 内有子挂载（任何文件系统类型）。
+    /// Vault 内有子挂载（任何文件系统类型）。
     NestedMount {
         /// 挂载点路径。
         mount_point: PathBuf,
         /// 该挂载的 fstype。
         fs_type: String,
     },
-    /// 内部状态目录与 Root 路径重叠（相等或互为祖先/后代）。
+    /// 内部状态目录与 Vault 路径重叠（相等或互为祖先/后代）。
     InternalStateOverlap {
         /// 内部状态目录路径。
         path: PathBuf,
@@ -335,22 +335,22 @@ pub enum AdmissionRejection {
         /// 实际 fstype。
         fs_type: String,
     },
-    /// 内部状态目录与 Root 不在同一 btrfs 文件系统。
+    /// 内部状态目录与 Vault 不在同一 btrfs 文件系统。
     InternalStateOtherFilesystem {
         /// 内部状态目录路径。
         path: PathBuf,
         /// 内部状态目录的 FSID（UUID 文本）。
         internal_fsid: String,
-        /// Root 的 FSID（UUID 文本）。
-        root_fsid: String,
+        /// Vault 的 FSID（UUID 文本）。
+        vault_fsid: String,
     },
-    /// 已注册 Root 与候选 Root 是同一个目录（别名）。
-    DuplicateRoot {
+    /// 已注册 Vault 与候选 Vault 是同一个目录（别名）。
+    DuplicateVault {
         /// 已注册的路径。
         path: PathBuf,
     },
-    /// 已注册 Root 与候选 Root 的路径重叠。
-    OverlappingRoot {
+    /// 已注册 Vault 与候选 Vault 的路径重叠。
+    OverlappingVault {
         /// 已注册的路径。
         path: PathBuf,
     },
@@ -375,8 +375,8 @@ impl AdmissionRejection {
             AdmissionRejection::InternalStateOtherFilesystem { .. } => {
                 "internal_state_other_filesystem"
             }
-            AdmissionRejection::DuplicateRoot { .. } => "duplicate_root",
-            AdmissionRejection::OverlappingRoot { .. } => "overlapping_root",
+            AdmissionRejection::DuplicateVault { .. } => "duplicate_vault",
+            AdmissionRejection::OverlappingVault { .. } => "overlapping_vault",
         }
     }
 
@@ -418,18 +418,18 @@ impl AdmissionRejection {
                 relative_path,
                 subvolume_id,
             } => format!(
-                "Root 内存在嵌套子卷 {}（subvolid={subvolume_id}）",
+                "Vault 内存在嵌套子卷 {}（subvolid={subvolume_id}）",
                 display_path(relative_path)
             ),
             AdmissionRejection::NestedMount {
                 mount_point,
                 fs_type,
             } => format!(
-                "Root 内存在子挂载 {}（fstype={fs_type}）",
+                "Vault 内存在子挂载 {}（fstype={fs_type}）",
                 mount_point.display()
             ),
             AdmissionRejection::InternalStateOverlap { path } => {
-                format!("内部状态目录 {} 与 Root 重叠", path.display())
+                format!("内部状态目录 {} 与 Vault 重叠", path.display())
             }
             AdmissionRejection::InternalStateUnsupportedBackend { path, fs_type } => format!(
                 "内部状态目录 {} 后端为 {fs_type}，要求 btrfs",
@@ -438,17 +438,17 @@ impl AdmissionRejection {
             AdmissionRejection::InternalStateOtherFilesystem {
                 path,
                 internal_fsid,
-                root_fsid,
+                vault_fsid,
             } => format!(
-                "内部状态目录 {} 与 Root 不在同一 btrfs 文件系统（{internal_fsid} vs {root_fsid}）",
+                "内部状态目录 {} 与 Vault 不在同一 btrfs 文件系统（{internal_fsid} vs {vault_fsid}）",
                 path.display()
             ),
-            AdmissionRejection::DuplicateRoot { path } => format!(
-                "候选 Root 与已注册 Root {} 是同一目录（别名），不能重复注册",
+            AdmissionRejection::DuplicateVault { path } => format!(
+                "候选 Vault 与已注册 Vault {} 是同一目录（别名），不能重复注册",
                 path.display()
             ),
-            AdmissionRejection::OverlappingRoot { path } => {
-                format!("候选 Root 与已注册 Root {} 路径重叠", path.display())
+            AdmissionRejection::OverlappingVault { path } => {
+                format!("候选 Vault 与已注册 Vault {} 路径重叠", path.display())
             }
         }
     }
@@ -465,12 +465,12 @@ impl fmt::Display for AdmissionRejection {
 pub enum InconclusiveReason {
     /// 目录遍历达到深度上限。
     ScanDepthLimitReached {
-        /// 相对 Root 的路径。
+        /// 相对 Vault 的路径。
         relative_path: PathBuf,
     },
     /// 目录遍历达到条目上限。
     ScanEntryLimitReached {
-        /// 相对 Root 的路径。
+        /// 相对 Vault 的路径。
         relative_path: PathBuf,
     },
 }
@@ -540,32 +540,32 @@ impl AdmissionOutcome {
 
 /// 判定输入。
 pub struct AdmissionInput<'a> {
-    /// 候选 Root 的探测事实。
-    pub root: &'a StorageFacts,
+    /// 候选 Vault 的探测事实。
+    pub vault: &'a StorageFacts,
     /// 内部状态目录（数据库、对象、历史、暂存、备份）的探测事实。
     pub internal_state_dirs: &'a [StorageFacts],
-    /// 已经注册的 Root 的探测事实（别名与重叠检测）。
-    pub registered_roots: &'a [StorageFacts],
-    /// 本进程的挂载表（用于发现 Root 内的子挂载）。
+    /// 已经注册的 Vault 的探测事实（别名与重叠检测）。
+    pub registered_vaults: &'a [StorageFacts],
+    /// 本进程的挂载表（用于发现 Vault 内的子挂载）。
     pub mounts: &'a [MountEntry],
-    /// Root 目录遍历结果。
+    /// Vault 目录遍历结果。
     pub scan: &'a ScanReport,
 }
 
 /// 执行准入判定。
 #[must_use]
 pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
-    let root = input.root;
-    let backend = classify_backend(root.fs_magic, &root.fs_type);
+    let vault = input.vault;
+    let backend = classify_backend(vault.fs_magic, &vault.fs_type);
     if backend != BackendKind::Btrfs {
         return AdmissionOutcome::rejected(AdmissionRejection::UnsupportedBackend {
             backend,
-            fs_type: root.fs_type.clone(),
-            fs_magic: root.fs_magic,
+            fs_type: vault.fs_type.clone(),
+            fs_magic: vault.fs_magic,
         });
     }
 
-    let Some(identity) = storage_identity(root) else {
+    let Some(identity) = storage_identity(vault) else {
         return AdmissionOutcome::rejected(AdmissionRejection::SubvolumeIdentityUnavailable);
     };
     let mut outcome = AdmissionOutcome {
@@ -574,10 +574,10 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
     };
     outcome.push_note("fsid", fsid_text(&identity.fsid));
     outcome.push_note("subvol_id", identity.subvolume_id);
-    outcome.push_note("mount_id", root.mount.mount_id);
-    outcome.push_note("mount_id_source", root.mount_id_source.as_str());
+    outcome.push_note("mount_id", vault.mount.mount_id);
+    outcome.push_note("mount_id_source", vault.mount_id_source.as_str());
 
-    match root.inode_flags {
+    match vault.inode_flags {
         Some(flags) if has_nocow_flag(flags) => {
             return AdmissionOutcome::rejected(AdmissionRejection::NocowInodeFlags {
                 path: PathBuf::new(),
@@ -587,7 +587,7 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
         Some(_) => {}
         None => {
             return AdmissionOutcome::rejected(AdmissionRejection::InodeFlagsUnavailable {
-                detail: root
+                detail: vault
                     .inode_flags_error
                     .clone()
                     .unwrap_or_else(|| "未知原因".to_owned()),
@@ -596,7 +596,7 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
     }
 
     for option in ["nodatacow", "nodatasum"] {
-        if root.mount.has_option(option) {
+        if vault.mount.has_option(option) {
             return AdmissionOutcome::rejected(AdmissionRejection::NocowMountOption {
                 option: option.to_owned(),
             });
@@ -632,20 +632,20 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
         });
     }
 
-    if let Some(mount) = nested_mounts(input.mounts, root).into_iter().next() {
+    if let Some(mount) = nested_mounts(input.mounts, vault).into_iter().next() {
         return AdmissionOutcome::rejected(AdmissionRejection::NestedMount {
             mount_point: mount.mount_point.clone(),
             fs_type: mount.fs_type.clone(),
         });
     }
-    if let Some(notes) = stacked_mount_notes(input.mounts, root) {
+    if let Some(notes) = stacked_mount_notes(input.mounts, vault) {
         for note in notes {
             outcome.notes.push(note);
         }
     }
 
     for internal in input.internal_state_dirs {
-        if paths::relation(&root.resolved_path, &internal.resolved_path) != PathRelation::Unrelated
+        if paths::relation(&vault.resolved_path, &internal.resolved_path) != PathRelation::Unrelated
         {
             return AdmissionOutcome::rejected(AdmissionRejection::InternalStateOverlap {
                 path: internal.given_path.clone(),
@@ -668,7 +668,7 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
                         internal_identity.subvolume_id,
                     );
                 }
-                if internal.mount.mount_id != root.mount.mount_id {
+                if internal.mount.mount_id != vault.mount.mount_id {
                     outcome.push_note(
                         "internal_state_separate_mount",
                         internal.given_path.display(),
@@ -680,7 +680,7 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
                     AdmissionRejection::InternalStateOtherFilesystem {
                         path: internal.given_path.clone(),
                         internal_fsid: fsid_text(&internal_identity.fsid),
-                        root_fsid: fsid_text(&identity.fsid),
+                        vault_fsid: fsid_text(&identity.fsid),
                     },
                 );
             }
@@ -692,16 +692,16 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
         }
     }
 
-    for registered in input.registered_roots {
-        if same_directory(root, registered) {
-            return AdmissionOutcome::rejected(AdmissionRejection::DuplicateRoot {
+    for registered in input.registered_vaults {
+        if same_directory(vault, registered) {
+            return AdmissionOutcome::rejected(AdmissionRejection::DuplicateVault {
                 path: registered.given_path.clone(),
             });
         }
-        if paths::relation(&root.resolved_path, &registered.resolved_path)
+        if paths::relation(&vault.resolved_path, &registered.resolved_path)
             != PathRelation::Unrelated
         {
-            return AdmissionOutcome::rejected(AdmissionRejection::OverlappingRoot {
+            return AdmissionOutcome::rejected(AdmissionRejection::OverlappingVault {
                 path: registered.given_path.clone(),
             });
         }
@@ -710,25 +710,25 @@ pub fn evaluate(input: &AdmissionInput<'_>) -> AdmissionOutcome {
     outcome
 }
 
-/// Root 内的子挂载（不含 Root 自己所在的挂载）。
+/// Vault 内的子挂载（不含 Vault 自己所在的挂载）。
 #[must_use]
-pub fn nested_mounts<'a>(mounts: &'a [MountEntry], root: &StorageFacts) -> Vec<&'a MountEntry> {
+pub fn nested_mounts<'a>(mounts: &'a [MountEntry], vault: &StorageFacts) -> Vec<&'a MountEntry> {
     mounts
         .iter()
-        .filter(|entry| entry.mount_id != root.mount.mount_id)
+        .filter(|entry| entry.mount_id != vault.mount.mount_id)
         .filter(|entry| {
-            paths::relation(&entry.mount_point, &root.resolved_path) == PathRelation::Descendant
+            paths::relation(&entry.mount_point, &vault.resolved_path) == PathRelation::Descendant
         })
         .collect()
 }
 
-/// Root 路径上是否存在叠放的其它挂载（同一路径多个 mount id，只有最上层生效）。
-fn stacked_mount_notes(mounts: &[MountEntry], root: &StorageFacts) -> Option<Vec<String>> {
+/// Vault 路径上是否存在叠放的其它挂载（同一路径多个 mount id，只有最上层生效）。
+fn stacked_mount_notes(mounts: &[MountEntry], vault: &StorageFacts) -> Option<Vec<String>> {
     let stacked: Vec<String> = mounts
         .iter()
-        .filter(|entry| entry.mount_id != root.mount.mount_id)
-        .filter(|entry| entry.mount_point == root.resolved_path)
-        .map(|entry| format!("stacked_mount_at_root={}", entry.mount_id))
+        .filter(|entry| entry.mount_id != vault.mount.mount_id)
+        .filter(|entry| entry.mount_point == vault.resolved_path)
+        .map(|entry| format!("stacked_mount_at_vault={}", entry.mount_id))
         .collect();
     if stacked.is_empty() {
         None
@@ -739,7 +739,7 @@ fn stacked_mount_notes(mounts: &[MountEntry], root: &StorageFacts) -> Option<Vec
 
 fn display_path(path: &Path) -> String {
     if path.as_os_str().is_empty() {
-        "<Root 自身>".to_owned()
+        "<Vault 自身>".to_owned()
     } else {
         path.display().to_string()
     }
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn non_btrfs_backend_is_rejected_with_reason() {
-        let root = StorageFacts {
+        let vault = StorageFacts {
             fs_magic: TMPFS_MAGIC,
             fs_type: "tmpfs".to_owned(),
             btrfs: None,
@@ -877,9 +877,9 @@ mod tests {
         };
         let scan = empty_scan();
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -892,72 +892,72 @@ mod tests {
     }
 
     #[test]
-    fn compliant_root_is_accepted_and_alias_shares_identity() {
-        let root = facts("/data/vaultsyncd/root", FSID_A, 2506, 300);
+    fn compliant_vault_is_accepted_and_alias_shares_identity() {
+        let vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 300);
         let alias = facts("/data/vaultsyncd/bind-alias", FSID_A, 2506, 300);
         let scan = empty_scan();
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
         assert_eq!(outcome.decision, AdmissionDecision::Accepted);
         assert!(
-            same_storage(&root, &alias),
+            same_storage(&vault, &alias),
             "同一子卷的不同路径属于同一存储"
         );
-        assert!(same_directory(&root, &alias));
-        assert!(verify_unchanged(&root, &alias).is_ok());
+        assert!(same_directory(&vault, &alias));
+        assert!(verify_unchanged(&vault, &alias).is_ok());
 
         let mut moved = alias.clone();
         moved.inode = 301;
         assert_eq!(
-            verify_unchanged(&root, &moved),
+            verify_unchanged(&vault, &moved),
             Err(IdentityDrift::DirectoryChanged)
         );
     }
 
     #[test]
-    fn duplicate_and_overlapping_roots_are_rejected() {
-        let root = facts("/data/vaultsyncd/root", FSID_A, 2506, 300);
+    fn duplicate_and_overlapping_vaults_are_rejected() {
+        let vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 300);
         let duplicate = facts("/data/vaultsyncd/alias", FSID_A, 2506, 300);
         let parent = facts("/data/vaultsyncd", FSID_A, 2506, 257);
         let scan = empty_scan();
 
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[duplicate],
+            registered_vaults: &[duplicate],
             mounts: &[],
             scan: &scan,
         });
         assert_eq!(
             outcome.decision,
-            AdmissionDecision::Rejected(AdmissionRejection::DuplicateRoot {
+            AdmissionDecision::Rejected(AdmissionRejection::DuplicateVault {
                 path: PathBuf::from("/data/vaultsyncd/alias")
             })
         );
 
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[parent],
+            registered_vaults: &[parent],
             mounts: &[],
             scan: &scan,
         });
         assert!(matches!(
             outcome.decision,
-            AdmissionDecision::Rejected(AdmissionRejection::OverlappingRoot { .. })
+            AdmissionDecision::Rejected(AdmissionRejection::OverlappingVault { .. })
         ));
 
         // 同子卷内不同目录、路径不重叠：允许。
         let sibling = facts("/data/vaultsyncd/other", FSID_A, 2506, 700);
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[sibling],
+            registered_vaults: &[sibling],
             mounts: &[],
             scan: &scan,
         });
@@ -966,16 +966,16 @@ mod tests {
 
     #[test]
     fn nested_subvolume_and_submount_are_rejected() {
-        let root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
+        let vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
         let mut scan = empty_scan();
         scan.subvolumes.push(NestedSubvolume {
             relative_path: PathBuf::from("inner"),
             subvolume_id: 2510,
         });
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -987,19 +987,19 @@ mod tests {
         let scan = empty_scan();
         let mounts = vec![
             mount_entry(22, "/data", "btrfs", &["rw"]),
-            mount_entry(60, "/data/vaultsyncd/root/bind", "btrfs", &["rw"]),
+            mount_entry(60, "/data/vaultsyncd/vault/bind", "btrfs", &["rw"]),
         ];
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &mounts,
             scan: &scan,
         });
         assert_eq!(
             outcome.decision,
             AdmissionDecision::Rejected(AdmissionRejection::NestedMount {
-                mount_point: PathBuf::from("/data/vaultsyncd/root/bind"),
+                mount_point: PathBuf::from("/data/vaultsyncd/vault/bind"),
                 fs_type: "btrfs".to_owned()
             })
         );
@@ -1009,12 +1009,12 @@ mod tests {
     fn nocow_and_mount_options_are_rejected() {
         let scan = empty_scan();
 
-        let mut root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
-        root.inode_flags = Some(FS_NOCOW_FL);
+        let mut vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
+        vault.inode_flags = Some(FS_NOCOW_FL);
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -1026,12 +1026,12 @@ mod tests {
             })
         );
 
-        let mut root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
-        root.mount.super_options.push("nodatacow".to_owned());
+        let mut vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
+        vault.mount.super_options.push("nodatacow".to_owned());
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -1042,13 +1042,13 @@ mod tests {
             })
         );
 
-        let mut root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
-        root.inode_flags = None;
-        root.inode_flags_error = Some("Operation not supported (os error 95)".to_owned());
+        let mut vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
+        vault.inode_flags = None;
+        vault.inode_flags_error = Some("Operation not supported (os error 95)".to_owned());
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -1062,11 +1062,11 @@ mod tests {
             relative_path: PathBuf::from("nocow"),
             flags: FS_NOCOW_FL,
         });
-        let root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
+        let vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan_with_dir,
         });
@@ -1078,15 +1078,15 @@ mod tests {
 
     #[test]
     fn incomplete_scan_is_not_accepted() {
-        let root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
+        let vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
         let mut scan = empty_scan();
         scan.completeness = ScanCompleteness::EntryLimitReached {
             relative_path: PathBuf::from("deep"),
         };
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -1100,30 +1100,30 @@ mod tests {
 
     #[test]
     fn internal_state_directory_rules() {
-        let root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
+        let vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
         let scan = empty_scan();
 
-        let inside = facts("/data/vaultsyncd/root/db", FSID_A, 2506, 400);
+        let inside = facts("/data/vaultsyncd/vault/db", FSID_A, 2506, 400);
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[inside],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
         assert_eq!(
             outcome.decision,
             AdmissionDecision::Rejected(AdmissionRejection::InternalStateOverlap {
-                path: PathBuf::from("/data/vaultsyncd/root/db")
+                path: PathBuf::from("/data/vaultsyncd/vault/db")
             })
         );
 
         let mut sibling = facts("/data/vaultsyncd/state/db", FSID_A, 2507, 256);
         sibling.mount = mount_entry(23, "/data/state", "btrfs", &["rw"]);
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[sibling],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -1147,9 +1147,9 @@ mod tests {
 
         let other_fs = facts("/mnt/loop/state", FSID_B, 256, 256);
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[other_fs],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -1165,9 +1165,9 @@ mod tests {
             ..facts("/run/state", FSID_A, 256, 256)
         };
         let outcome = evaluate(&AdmissionInput {
-            root: &root,
+            vault: &vault,
             internal_state_dirs: &[tmpfs_state],
-            registered_roots: &[],
+            registered_vaults: &[],
             mounts: &[],
             scan: &scan,
         });
@@ -1179,13 +1179,13 @@ mod tests {
 
     #[test]
     fn nested_mount_detection_uses_components_not_prefixes() {
-        let root = facts("/data/vaultsyncd/root", FSID_A, 2506, 256);
+        let vault = facts("/data/vaultsyncd/vault", FSID_A, 2506, 256);
         let mounts = vec![
             mount_entry(22, "/data", "btrfs", &["rw"]),
-            mount_entry(61, "/data/vaultsyncd/rootx/sub", "btrfs", &["rw"]),
-            mount_entry(62, "/data/vaultsyncd/root/sub", "btrfs", &["rw"]),
+            mount_entry(61, "/data/vaultsyncd/vaultx/sub", "btrfs", &["rw"]),
+            mount_entry(62, "/data/vaultsyncd/vault/sub", "btrfs", &["rw"]),
         ];
-        let found = nested_mounts(&mounts, &root);
+        let found = nested_mounts(&mounts, &vault);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].mount_id, 62);
     }

@@ -2,13 +2,21 @@
 use super::*;
 #[path = "support.rs"]
 mod support;
-const QUERIES: &[&str] = &[
-    "SELECT json_group_array(json_array(hex(id),login,status)) FROM users",
-    "SELECT json_group_array(json_array(hex(id),hex(owner_id),absolute_path,seq,epoch)) FROM roots",
-    "SELECT json_group_array(json_array(hex(id),name,revision,hex(content_version_id),deleted_at)) FROM entries",
-    "SELECT json_group_array(json_array(hex(id),hex(object_hash),size,created_seq,superseded_at,origin)) FROM versions",
-    "SELECT json_group_array(json_array(hex(hash),size,storage_path,verified_at,gc_state)) FROM objects",
-];
+/// 状态快照查询；`roots` 表在 S140 的迁移 0016 才改名为 `vaults`。
+fn queries(table: &str) -> Vec<String> {
+    vec![
+        "SELECT json_group_array(json_array(hex(id),login,status)) FROM users".to_owned(),
+        format!("SELECT json_group_array(json_array(hex(id),hex(owner_id),absolute_path,seq,epoch)) FROM {table}"),
+        "SELECT json_group_array(json_array(hex(id),name,revision,hex(content_version_id),deleted_at)) FROM entries".to_owned(),
+        "SELECT json_group_array(json_array(hex(id),hex(object_hash),size,created_seq,superseded_at,origin)) FROM versions".to_owned(),
+        "SELECT json_group_array(json_array(hex(hash),size,storage_path,verified_at,gc_state)) FROM objects".to_owned(),
+    ]
+}
+
+/// 当前 schema 的表名。
+fn table(version: i64) -> &'static str {
+    if version >= 16 { "vaults" } else { "roots" }
+}
 #[tokio::test]
 async fn s091_server_upgrade_preserves_history_and_failure_backup() {
     let run = support::Run::new("server");
@@ -17,7 +25,7 @@ async fn s091_server_upgrade_preserves_history_and_failure_backup() {
     assert_eq!(target_version_of(&previous), 12);
     let old = Database::open_with(&path, &previous).await.unwrap();
     let owner = crate::test_support::seed_owner(&old, 0x91).await;
-    let (root, parent) = crate::test_support::register_root(&old, owner, 0x92).await;
+    let (vault, parent) = crate::test_support::register_vault_at_v12(&old, owner, 0x92).await;
     let entry = crate::test_support::entry(0x93);
     let mut tx = old.begin_write().await.unwrap();
     // 固定 profile 是 v12 schema：它还没有 `entries.modified_at`（S130 才加），所以历史装置按旧
@@ -28,29 +36,23 @@ async fn s091_server_upgrade_preserves_history_and_failure_backup() {
          VALUES (?1, ?2, ?3, 'history', 'history', 'file', 0, NULL, NULL)",
     )
     .bind(entry.as_bytes().as_slice())
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .bind(parent.as_bytes().as_slice())
     .execute(&mut *tx)
     .await
     .unwrap();
     for marker in [0x94u8, 0x95] {
-        crate::changes::append_change(
+        let seq = crate::test_support::append_change_at_v12(
             &mut tx,
             owner,
-            root,
+            vault,
             crate::test_support::tx(marker),
             "[{}]",
             crate::test_support::at(10),
         )
-        .await
-        .unwrap();
-        let seq = crate::roots::root_in_scope(&mut tx, owner, root)
-            .await
-            .unwrap()
-            .unwrap()
-            .seq;
-        sqlx::query("INSERT INTO objects(root_id,hash,size,storage_path,verified_at,gc_state) VALUES(?,?,7,?,10,'live')").bind(root.as_bytes().as_slice()).bind([marker;32].as_slice()).bind(format!("objects/{marker:02x}/fixture")).execute(&mut *tx).await.unwrap();
-        sqlx::query("INSERT INTO versions(id,root_id,entry_id,object_hash,size,created_seq,superseded_at,origin) VALUES(?,?,?,?,7,?,?,'external')").bind([marker;16].as_slice()).bind(root.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).bind([marker;32].as_slice()).bind(seq.to_db_integer()).bind(if marker==0x94{Some(20i64)}else{None}).execute(&mut *tx).await.unwrap();
+        .await;
+        sqlx::query("INSERT INTO objects(root_id,hash,size,storage_path,verified_at,gc_state) VALUES(?,?,7,?,10,'live')").bind(vault.as_bytes().as_slice()).bind([marker;32].as_slice()).bind(format!("objects/{marker:02x}/fixture")).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO versions(id,root_id,entry_id,object_hash,size,created_seq,superseded_at,origin) VALUES(?,?,?,?,7,?,?,'external')").bind([marker;16].as_slice()).bind(vault.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).bind([marker;32].as_slice()).bind(seq).bind(if marker==0x94{Some(20i64)}else{None}).execute(&mut *tx).await.unwrap();
     }
     sqlx::query("UPDATE entries SET content_version_id=?,revision=2 WHERE id=?")
         .bind([0x95u8; 16].as_slice())
@@ -60,7 +62,7 @@ async fn s091_server_upgrade_preserves_history_and_failure_backup() {
         .unwrap();
     tx.commit().await.unwrap();
     old.close().await;
-    let before = support::snapshot(&path, QUERIES).await;
+    let before = support::snapshot(&path, &queries(table(12))).await;
     let broken = support::fault_profile(
         &previous,
         &run.path,
@@ -77,15 +79,21 @@ async fn s091_server_upgrade_preserves_history_and_failure_backup() {
         } => p,
         e => panic!("must pause without writable state: {e}"),
     };
-    assert_eq!(support::snapshot(&path, QUERIES).await, before);
-    assert_eq!(support::snapshot(&backup, QUERIES).await, before);
+    assert_eq!(support::snapshot(&path, &queries(table(12))).await, before);
+    assert_eq!(
+        support::snapshot(&backup, &queries(table(12))).await,
+        before
+    );
     assert_eq!(
         support::scalar::<i64>(&path, "PRAGMA user_version").await,
         12
     );
     let current = Database::open(&path).await.unwrap();
     current.close().await;
-    assert_eq!(support::snapshot(&path, QUERIES).await, before);
+    assert_eq!(
+        support::snapshot(&path, &queries(table(target_schema_version()))).await,
+        before
+    );
     let bytes = std::fs::read(&path).unwrap();
     assert!(matches!(
         Database::open_with(&path, &previous).await.unwrap_err(),
@@ -94,7 +102,10 @@ async fn s091_server_upgrade_preserves_history_and_failure_backup() {
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let retained = run.path.join("prior-complete.sqlite");
     support::copy_file(&backup, &retained);
-    assert_eq!(support::snapshot(&retained, QUERIES).await, before);
+    assert_eq!(
+        support::snapshot(&retained, &queries(table(12))).await,
+        before
+    );
     println!(
         "S091 server fixture_schema=12 target_schema={} history_versions=2 objects=2 migration_failure=paused original_data=retained old_schema_writer=refused backup=verified",
         target_schema_version()

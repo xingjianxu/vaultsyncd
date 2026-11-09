@@ -62,22 +62,22 @@ check("health_unknown_status_rejected", () => {
 });
 
 check("error_code_closed_set", () => {
-  assert.equal(decodeErrorCode("ROOT_UNAVAILABLE"), "ROOT_UNAVAILABLE");
+  assert.equal(decodeErrorCode("VAULT_UNAVAILABLE"), "VAULT_UNAVAILABLE");
   const error = expectThrow(() => decodeErrorCode("LOCAL_CHANGED"));
   assert.match(error.message, /未知的 ErrorCode/);
 });
 
 check("error_envelope_example_decodes", () => {
   const envelope = decodeErrorEnvelope(example("error.response.json"));
-  assert.equal(envelope.error.code, "ROOT_UNAVAILABLE");
+  assert.equal(envelope.error.code, "VAULT_UNAVAILABLE");
   assert.equal(envelope.error.retryable, true);
-  assert.equal(envelope.error.root_id, "fedcba9876543210fedcba9876543210");
+  assert.equal(envelope.error.vault_id, "fedcba9876543210fedcba9876543210");
   assert.equal(envelope.error.details.reason, "mount_identity_changed");
 });
 
 check("capabilities_example_decodes", () => {
   const capabilities = decodeCapabilities(example("capabilities.response.json"));
-  assert.equal(capabilities.protocol.major, 1);
+  assert.equal(capabilities.protocol.major, 2);
   assert.equal(capabilities.server_id, "0123456789abcdef0123456789abcdef");
   assert.equal(capabilities.epoch, "9007199254740993");
   assert.ok(capabilities.features.includes("feature_from_a_newer_server"));
@@ -110,9 +110,9 @@ check("missing_required_field_rejected", () => {
 check("unknown_optional_field_allowed", () => {
   const sample = example("error.response.json");
   const envelope = decodeErrorEnvelope({
-    error: { ...sample.error, root_id: undefined, details: undefined },
+    error: { ...sample.error, vault_id: undefined, details: undefined },
   });
-  assert.equal(envelope.error.root_id, undefined);
+  assert.equal(envelope.error.vault_id, undefined);
 });
 
 if (failures.length > 0) {

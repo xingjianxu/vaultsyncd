@@ -147,8 +147,8 @@ pub async fn snapshot(db: &Database, binding: BindingId) -> Result<BindingStatus
         s.mode_pending = row.get(2);
     }
     s.unknown+=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM binding_participation WHERE binding_id=? AND state='reconcile_required'").bind(b).fetch_one(&mut *tx).await.map_err(error)? as u64;
-    let root_count:i64=sqlx::query_scalar("SELECT count(*) FROM baseline_entries WHERE binding_id=? AND parent_entry_id IS NULL AND kind='directory' AND deleted=0").bind(b).fetch_one(&mut *tx).await.map_err(error)?;
-    if root_count != 1 {
+    let vault_count:i64=sqlx::query_scalar("SELECT count(*) FROM baseline_entries WHERE binding_id=? AND parent_entry_id IS NULL AND kind='directory' AND deleted=0").bind(b).fetch_one(&mut *tx).await.map_err(error)?;
+    if vault_count != 1 {
         s.unknown += 1;
     }
     let mode: String = sqlx::query_scalar("SELECT mode FROM bindings WHERE id=?")

@@ -16,7 +16,7 @@ required-features = ["test-faults"]
 
 # 只放 Linux 服务端的集成验收：用真实文件的 inode/替换语义模拟工作目录发布，并在每个持久化边界
 # 强杀提交子进程（design §21.2、T23）；S052 起还在这里启动真实监听的服务端进程内实例，走完整
-# HTTP 闭环（登录 → Root → 上传 → finalize → 提交 → 快照 → 下载 → 外部修改 → changes）与满盘
+# HTTP 闭环（登录 → Vault → 上传 → finalize → 提交 → 快照 → 下载 → 外部修改 → changes）与满盘
 # 故障。它不进 default-members：`cargo test --locked` 只跑可移植核心，本包按需用
 # `cargo test --locked -p vaultsyncd-server-tests` 执行。
 [lints]

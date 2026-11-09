@@ -122,21 +122,21 @@ pub fn registration_id(binding: BindingId) -> io::Result<String> {
     }
     Ok(format!("vaultsyncd!{sid}!{binding}"))
 }
-/// Register an existing local NTFS root with Explorer. Call from a worker, never a UI callback.
+/// Register an existing local NTFS vault with Explorer. Call from a worker, never a UI callback.
 /// Owns its Windows Runtime thread; callers do not need to initialize COM/WinRT.
 pub fn register(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Result<()> {
     let path = path.to_owned();
-    // Shell registration needs only the durable root identity, not the file catalog.
-    let catalog = crate::cfapi::catalog::Catalog::new(catalog.binding, catalog.root);
+    // Shell registration needs only the durable vault identity, not the file catalog.
+    let catalog = crate::cfapi::catalog::Catalog::new(catalog.binding, catalog.vault);
     with_runtime(move || register_in_runtime(&path, &catalog))
 }
 fn register_in_runtime(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Result<()> {
-    let _pin = crate::files::RootHandle::open(path)?;
+    let _pin = crate::files::VaultHandle::open(path)?;
     crate::cfapi::adapter::register(path, catalog)?;
     let binding = catalog.binding;
     let path = path
         .to_str()
-        .ok_or_else(|| io::Error::other("non-Unicode root"))?;
+        .ok_or_else(|| io::Error::other("non-Unicode vault"))?;
     let folder = StorageFolder::GetFolderFromPathAsync(&HSTRING::from(path))
         .map_err(map)?
         .get()
@@ -157,7 +157,7 @@ fn register_in_runtime(path: &Path, catalog: &crate::cfapi::catalog::Catalog) ->
     info.SetPopulationPolicy(StorageProviderPopulationPolicy::AlwaysFull)
         .map_err(map)?;
     let writer = windows::Storage::Streams::DataWriter::new().map_err(map)?;
-    writer.WriteBytes(&catalog.root_blob()).map_err(map)?;
+    writer.WriteBytes(&catalog.vault_blob()).map_err(map)?;
     info.SetContext(&writer.DetachBuffer().map_err(map)?)
         .map_err(map)?;
     info.SetProviderId(windows::core::GUID::from_u128(
@@ -171,9 +171,9 @@ pub fn unregister(binding: BindingId) -> io::Result<()> {
     with_runtime(move || unregister_in_runtime(binding))
 }
 fn unregister_in_runtime(binding: BindingId) -> io::Result<()> {
-    for root in StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(map)? {
-        if root.Id().map_err(map)? == registration_id(binding)? {
-            let path = root.Path().map_err(map)?.Path().map_err(map)?.to_string();
+    for vault in StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(map)? {
+        if vault.Id().map_err(map)? == registration_id(binding)? {
+            let path = vault.Path().map_err(map)?.Path().map_err(map)?.to_string();
             crate::cfapi::adapter::ensure_no_placeholders(Path::new(&path))?;
         }
     }
@@ -186,9 +186,9 @@ pub fn registered(binding: BindingId) -> io::Result<bool> {
     with_runtime(move || registered_in_runtime(binding))
 }
 fn registered_in_runtime(binding: BindingId) -> io::Result<bool> {
-    let roots = StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(map)?;
-    for root in roots {
-        if root.Id().map_err(map)? == registration_id(binding)? {
+    let vaults = StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(map)?;
+    for vault in vaults {
+        if vault.Id().map_err(map)? == registration_id(binding)? {
             return Ok(true);
         }
     }

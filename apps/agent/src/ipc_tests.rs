@@ -5,7 +5,7 @@ use super::*;
 async fn new_binding_without_import_proof_is_unknown() {
     use vaultsyncd_client_store::bindings::{NewBinding, SyncMode, insert_binding};
     use vaultsyncd_domain::{
-        ids::{DeviceId, RootId, ServerId},
+        ids::{DeviceId, ServerId, VaultId},
         version::ServerEpoch,
     };
     let path = std::env::temp_dir().join(format!(
@@ -26,7 +26,7 @@ async fn new_binding_without_import_proof_is_unknown() {
             id: binding,
             server: ServerId::from_bytes([2; 16]),
             device: DeviceId::from_bytes([3; 16]),
-            root: RootId::from_bytes([4; 16]),
+            vault: VaultId::from_bytes([4; 16]),
             local_path: "C:/test/local".into(),
             cache_path: "C:/test/cache".into(),
             mode: SyncMode::Full,
@@ -169,7 +169,7 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     request.ipc_version.minor = 3;
     request.command.name = CommandName::ClaimNotification;
     request.command.parameters = Some(CommandParameters {
-        notification_key: Some("root:11111111111111111111111111111111:MOUNT_FAILED".into()),
+        notification_key: Some("vault:11111111111111111111111111111111:MOUNT_FAILED".into()),
         notification_generation: Some("1".into()),
         ..Default::default()
     });

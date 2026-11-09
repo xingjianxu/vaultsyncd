@@ -3,7 +3,7 @@
 
 On an already btrfs-backed lab, use its existing fixture base. On stock hosted
 Ubuntu, bind our fresh btrfs volume to the existing test suite's hard-coded
-<repo>/target/s052-lab. No production mount, root service or source file changes.
+<repo>/target/s052-lab. No production mount, vault service or source file changes.
 """
 import os
 from pathlib import Path

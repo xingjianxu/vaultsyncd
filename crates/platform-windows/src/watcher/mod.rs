@@ -21,7 +21,7 @@ pub enum RescanReason {
     Overflow,
     /// A malformed, truncated or unsafe record cannot be trusted.
     InvalidNotification,
-    /// Directory watch or root verification failed.
+    /// Directory watch or vault verification failed.
     WatchLost,
 }
 
@@ -164,7 +164,7 @@ mod tests {
         use crate::files::{FileIdentity, ScanHealth, ScanReport};
         let mut gate = ReconcileGate::new(60000);
         let mut report = ScanReport {
-            root: FileIdentity {
+            vault: FileIdentity {
                 volume: 1,
                 file: [0; 16],
             },

@@ -1,4 +1,4 @@
-//! Production remote ports; root and device are fixed by the durable binding.
+//! Production remote ports; vault and device are fixed by the durable binding.
 use std::sync::Arc;
 use vaultsyncd_agent_core::{
     bindings::import::{ImportSnapshot, SnapshotSeed},
@@ -6,8 +6,8 @@ use vaultsyncd_agent_core::{
     ports::remote::RemotePort,
 };
 use vaultsyncd_domain::{
-    ids::{BindingId, OpId, RootId},
-    version::{RootSeq, UtcTimestamp},
+    ids::{BindingId, OpId, VaultId},
+    version::{UtcTimestamp, VaultSeq},
 };
 use vaultsyncd_http_client::{
     ApiClient, ReqwestTransport, changes, content::ContentEndpoint, sync, uploads::UploadEndpoint,
@@ -18,7 +18,7 @@ use vaultsyncd_transfer::ports::{PortError, PortFuture, UploadTarget, VersionedC
 pub struct Remote {
     pub(crate) client: ApiClient<ReqwestTransport>,
     pub(crate) binding: BindingId,
-    pub(crate) root: RootId,
+    pub(crate) vault: VaultId,
 }
 impl Remote {
     fn check(&self, binding: BindingId) -> Result<(), PortError> {
@@ -35,7 +35,7 @@ impl RemotePort for Remote {
     ) -> PortFuture<'_, Result<OperationResult, PortError>> {
         let request = request.clone();
         Box::pin(async move {
-            sync::submit(&self.client, &self.root.to_string(), &request)
+            sync::submit(&self.client, &self.vault.to_string(), &request)
                 .await
                 .map_err(vaultsyncd_http_client::transfer_error)
         })
@@ -47,7 +47,7 @@ impl RemotePort for Remote {
     ) -> PortFuture<'_, Result<OperationResult, PortError>> {
         Box::pin(async move {
             self.check(binding)?;
-            sync::operation(&self.client, &self.root.to_string(), &op.to_string())
+            sync::operation(&self.client, &self.vault.to_string(), &op.to_string())
                 .await
                 .map_err(vaultsyncd_http_client::transfer_error)
         })
@@ -59,7 +59,7 @@ impl RemotePort for Remote {
         Box::pin(async move {
             self.check(binding)?;
             Ok(Arc::new(
-                UploadEndpoint::new(self.client.clone(), self.root.to_string())
+                UploadEndpoint::new(self.client.clone(), self.vault.to_string())
                     .map_err(vaultsyncd_http_client::transfer_error)?,
             ) as Arc<dyn UploadTarget>)
         })
@@ -71,19 +71,19 @@ impl RemotePort for Remote {
         Box::pin(async move {
             self.check(binding)?;
             Ok(Arc::new(
-                ContentEndpoint::new(self.client.clone(), self.root.to_string())
+                ContentEndpoint::new(self.client.clone(), self.vault.to_string())
                     .map_err(vaultsyncd_http_client::transfer_error)?,
             ) as Arc<dyn VersionedContent>)
         })
     }
 }
 impl ImportSnapshot for Remote {
-    fn begin(&self, root: RootId) -> PortFuture<'_, Result<SnapshotSeed, PortError>> {
+    fn begin(&self, vault: VaultId) -> PortFuture<'_, Result<SnapshotSeed, PortError>> {
         Box::pin(async move {
-            if root != self.root {
-                return Err(PortError::protocol("root mismatch"));
+            if vault != self.vault {
+                return Err(PortError::protocol("vault mismatch"));
             }
-            let (metadata, time) = sync::snapshot(&self.client, &root.to_string())
+            let (metadata, time) = sync::snapshot(&self.client, &vault.to_string())
                 .await
                 .map_err(vaultsyncd_http_client::transfer_error)?;
             Ok(SnapshotSeed {
@@ -97,15 +97,15 @@ impl ImportSnapshot for Remote {
     }
     fn page<'a>(
         &'a self,
-        root: RootId,
+        vault: VaultId,
         snapshot: &'a str,
         cursor: Option<&'a str>,
     ) -> PortFuture<'a, Result<SnapshotPage, PortError>> {
         Box::pin(async move {
-            if root != self.root {
-                return Err(PortError::protocol("root mismatch"));
+            if vault != self.vault {
+                return Err(PortError::protocol("vault mismatch"));
             }
-            sync::snapshot_page(&self.client, &root.to_string(), snapshot, cursor)
+            sync::snapshot_page(&self.client, &vault.to_string(), snapshot, cursor)
                 .await
                 .map_err(vaultsyncd_http_client::transfer_error)
         })
@@ -114,17 +114,17 @@ impl ImportSnapshot for Remote {
 impl ChangeSource for Remote {
     fn pull(
         &self,
-        root: RootId,
-        after: RootSeq,
+        vault: VaultId,
+        after: VaultSeq,
         limit: u32,
     ) -> PortFuture<'_, Result<ChangeList, PortError>> {
         Box::pin(async move {
-            if root != self.root {
-                return Err(PortError::protocol("root mismatch"));
+            if vault != self.vault {
+                return Err(PortError::protocol("vault mismatch"));
             }
             changes::list(
                 &self.client,
-                &root.to_string(),
+                &vault.to_string(),
                 &after.to_string(),
                 Some(limit),
             )

@@ -1,14 +1,14 @@
 //! Persistent identity format and per-binding callback validation. No paths or secrets in blobs.
 use std::collections::HashMap;
-use vaultsyncd_domain::ids::{BindingId, EntryId, RootId, VersionId};
+use vaultsyncd_domain::ids::{BindingId, EntryId, VaultId, VersionId};
 
 /// Version 2 carries full domain IDs; prototype version 1 is deliberately not accepted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Identity {
     /// Local binding, stable across process restarts.
     pub binding: BindingId,
-    /// Remote root.
-    pub root: RootId,
+    /// Remote vault.
+    pub vault: VaultId,
     /// Stable entry, independent of its path.
     pub entry: EntryId,
     /// Fixed content version; never an implicit head lookup.
@@ -23,7 +23,7 @@ impl Identity {
         b[..4].copy_from_slice(b"VS\x02\0");
         for (chunk, id) in b[4..68].chunks_exact_mut(16).zip([
             self.binding.as_bytes(),
-            self.root.as_bytes(),
+            self.vault.as_bytes(),
             self.entry.as_bytes(),
             self.version.as_bytes(),
         ]) {
@@ -43,7 +43,7 @@ impl Identity {
         }
         Ok(Self {
             binding: BindingId::from_bytes(b[4..20].try_into().expect("length")),
-            root: RootId::from_bytes(b[20..36].try_into().expect("length")),
+            vault: VaultId::from_bytes(b[20..36].try_into().expect("length")),
             entry: EntryId::from_bytes(b[36..52].try_into().expect("length")),
             version: VersionId::from_bytes(b[52..68].try_into().expect("length")),
         })
@@ -54,8 +54,8 @@ impl Identity {
 pub enum IdentityError {
     /// Bad length/schema/checksum, including prototype identities.
     Malformed,
-    /// Binding or remote root differs from the connected root.
-    WrongRoot,
+    /// Binding or remote vault differs from the connected vault.
+    WrongVault,
     /// Entry was not loaded from the persistent binding state.
     UnknownEntry,
     /// Blob refers to an older or unrecognized version.
@@ -66,23 +66,23 @@ pub enum IdentityError {
 pub struct Catalog {
     /// Binding owning the connection.
     pub binding: BindingId,
-    /// Remote root owning the connection.
-    pub root: RootId,
+    /// Remote vault owning the connection.
+    pub vault: VaultId,
     entries: HashMap<EntryId, VersionId>,
 }
 impl Catalog {
     /// Empty catalogs refuse every file callback until entries are installed.
-    pub fn new(binding: BindingId, root: RootId) -> Self {
+    pub fn new(binding: BindingId, vault: VaultId) -> Self {
         Self {
             binding,
-            root,
+            vault,
             entries: HashMap::new(),
         }
     }
     /// Publish an identity only after the corresponding platform/state transition succeeds.
     pub fn insert(&mut self, identity: Identity) -> Result<(), IdentityError> {
-        if identity.binding != self.binding || identity.root != self.root {
-            return Err(IdentityError::WrongRoot);
+        if identity.binding != self.binding || identity.vault != self.vault {
+            return Err(IdentityError::WrongVault);
         }
         self.entries.insert(identity.entry, identity.version);
         Ok(())
@@ -90,8 +90,8 @@ impl Catalog {
     /// Resolve a blob against this connection's durable expected state.
     pub fn resolve(&self, blob: &[u8]) -> Result<Identity, IdentityError> {
         let id = Identity::decode(blob)?;
-        if id.binding != self.binding || id.root != self.root {
-            return Err(IdentityError::WrongRoot);
+        if id.binding != self.binding || id.vault != self.vault {
+            return Err(IdentityError::WrongVault);
         }
         match self.entries.get(&id.entry) {
             None => Err(IdentityError::UnknownEntry),
@@ -99,11 +99,11 @@ impl Catalog {
             Some(_) => Ok(id),
         }
     }
-    /// Stable root registration identity, never based on a path.
-    pub fn root_blob(&self) -> [u8; 32] {
+    /// Stable vault registration identity, never based on a path.
+    pub fn vault_blob(&self) -> [u8; 32] {
         let mut b = [0; 32];
         b[..16].copy_from_slice(self.binding.as_bytes());
-        b[16..].copy_from_slice(self.root.as_bytes());
+        b[16..].copy_from_slice(self.vault.as_bytes());
         b
     }
 }
@@ -114,16 +114,16 @@ mod tests {
     fn reload_stale_corrupt_foreign_and_unknown() {
         let id = Identity {
             binding: BindingId::from_bytes([1; 16]),
-            root: RootId::from_bytes([2; 16]),
+            vault: VaultId::from_bytes([2; 16]),
             entry: EntryId::from_bytes([3; 16]),
             version: VersionId::from_bytes([4; 16]),
         };
         let bytes = id.encode();
-        let mut cat = Catalog::new(id.binding, id.root);
+        let mut cat = Catalog::new(id.binding, id.vault);
         assert_eq!(cat.resolve(&bytes), Err(IdentityError::UnknownEntry));
         cat.insert(id).unwrap();
         assert_eq!(cat.resolve(&bytes), Ok(id));
-        let mut restarted = Catalog::new(id.binding, id.root);
+        let mut restarted = Catalog::new(id.binding, id.vault);
         restarted.insert(Identity::decode(&bytes).unwrap()).unwrap();
         assert_eq!(restarted.resolve(&bytes), Ok(id));
         restarted
@@ -139,8 +139,8 @@ mod tests {
             assert_eq!(Identity::decode(&bad), Err(IdentityError::Malformed));
         }
         assert_eq!(
-            Catalog::new(BindingId::from_bytes([8; 16]), id.root).resolve(&bytes),
-            Err(IdentityError::WrongRoot)
+            Catalog::new(BindingId::from_bytes([8; 16]), id.vault).resolve(&bytes),
+            Err(IdentityError::WrongVault)
         );
         assert_eq!(Identity::decode(&[0; 48]), Err(IdentityError::Malformed));
     }

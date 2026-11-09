@@ -8,7 +8,7 @@ use vaultsyncd_client_store::entries::RemoteEntry;
 use vaultsyncd_client_store::{events, queue};
 use vaultsyncd_domain::error::ErrorCode;
 use vaultsyncd_domain::ids::TxId;
-use vaultsyncd_domain::version::RootSeq;
+use vaultsyncd_domain::version::VaultSeq;
 use vaultsyncd_protocol::generated::{ChangeList, SnapshotEntry};
 
 async fn import_spec(rig: &Rig) -> ApplySpec {
@@ -112,7 +112,12 @@ async fn first_full_install_uses_same_journal_and_never_overwrites_a_second_crea
 
 struct NoPull;
 impl ChangeSource for NoPull {
-    fn pull(&self, _: RootId, _: RootSeq, _: u32) -> PortFuture<'_, Result<ChangeList, PortError>> {
+    fn pull(
+        &self,
+        _: VaultId,
+        _: VaultSeq,
+        _: u32,
+    ) -> PortFuture<'_, Result<ChangeList, PortError>> {
         Box::pin(async { Err(io("只恢复已持久化事件，不请求最新 head")) })
     }
 }
@@ -212,7 +217,7 @@ async fn receive(db: &Database) {
         &mut tx,
         &events::IncomingBatch {
             binding: binding(),
-            seq: RootSeq::new(1).unwrap(),
+            seq: VaultSeq::new(1).unwrap(),
             tx: TxId::from_bytes([1; 16]),
             events_json: "[{\"test\":\"fixed-version\"}]".to_owned(),
             changes: vec![remote()],
@@ -239,7 +244,7 @@ async fn event_replay_after_publish_only_advances_applied_cursor_after_baseline_
         let db = rig.db().await;
         let receiver = EventReceiver::new(
             db.clone(),
-            RootId::from_bytes([3; 16]),
+            VaultId::from_bytes([3; 16]),
             binding(),
             Arc::new(NoPull),
             Arc::new(Decoder),
@@ -289,7 +294,7 @@ async fn obsolete_event_cannot_regress_a_newer_confirmed_baseline() {
     tx.commit().await.unwrap();
     let receiver = EventReceiver::new(
         db.clone(),
-        RootId::from_bytes([3; 16]),
+        VaultId::from_bytes([3; 16]),
         binding(),
         Arc::new(NoPull),
         Arc::new(Decoder),

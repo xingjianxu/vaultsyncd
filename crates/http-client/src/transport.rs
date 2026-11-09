@@ -207,7 +207,7 @@ impl ReqwestTransport {
             // 不跟随重定向：跨主机的 3xx 会把 Bearer 带到别处；重定向按非 2xx 显式失败。
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("vaultsyncd-client/", env!("CARGO_PKG_VERSION")));
-        for pem in config.trust().additional_roots() {
+        for pem in config.trust().additional_vaults() {
             let certificates = reqwest::Certificate::from_pem_bundle(pem).map_err(|error| {
                 ConfigError::new(
                     ConfigErrorKind::Tls,

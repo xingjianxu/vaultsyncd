@@ -10,13 +10,13 @@
 //! 1. [`ContentPublisher`] 必须把块按索引升序拼进**对象区私有暂存副本**，边写边算 SHA-256，读完
 //!    每块后核对长度；发布用不覆盖语义（内容地址上已有同内容对象时复用）。它只报告实测事实，
 //!    不得把“总量与期望不同”当成成功，也不得改写块字节来凑期望。
-//! 2. [`ContentObjectStore`] 的登记必须幂等：同一 `(root, hash)` 的相同登记返回成功，不同长度/路径
+//! 2. [`ContentObjectStore`] 的登记必须幂等：同一 `(vault, hash)` 的相同登记返回成功，不同长度/路径
 //!    报冲突（同一内容地址不能对应两份字节，I12）。
 //! 3. 两者失败都必须保留可追溯的阶段文本（`stage`），不得用空结果或默认成功代替。
 
 use std::path::PathBuf;
 
-use vaultsyncd_domain::ids::{RootId, UploadId};
+use vaultsyncd_domain::ids::{UploadId, VaultId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
 use crate::api::content::PublishedContent;
@@ -134,8 +134,8 @@ impl std::error::Error for PublishFailure {}
 pub trait ContentPublisher {
     /// 重放 finalize 时沿用发布布局（包括已登记旧路径），不重新猜测存储位置。
     ///
-    /// 默认实现只适用于全局旧布局的测试/旧适配器；按 Root 隔离写入的适配器**必须**覆写，
-    /// 否则重放响应会把已登记旧路径报成新的 Root 分区路径，登记随即冲突。
+    /// 默认实现只适用于全局旧布局的测试/旧适配器；按 Vault 隔离写入的适配器**必须**覆写，
+    /// 否则重放响应会把已登记旧路径报成新的 Vault 分区路径，登记随即冲突。
     fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
         crate::objects::ObjectLayout::relative_object_path(digest)
     }
@@ -158,14 +158,14 @@ pub trait ContentPublisher {
 /// 登记之后该内容才有持久身份：版本行可以引用它，GC 也才把它当成“已知内容”而不是未知残留。
 #[allow(async_fn_in_trait)]
 pub trait ContentObjectStore {
-    /// 登记一份已发布内容；同一 `(root, hash)` 的相同登记幂等。
+    /// 登记一份已发布内容；同一 `(vault, hash)` 的相同登记幂等。
     ///
     /// # Errors
     ///
     /// 见 [`PublishFailure`]：`ObjectConflict`（同地址不同长度/路径）、`StorageLayer`（存储层失败）。
     async fn record_published(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         content: &PublishedContent,
         verified_at: UtcTimestamp,
     ) -> Result<(), PublishFailure>;

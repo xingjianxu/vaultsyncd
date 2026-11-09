@@ -1,7 +1,7 @@
 //! 工作目录发布意图（`fs_intents` 表）：显式 phase、前后状态与恢复所需路径
 //! （`docs/design.md` §7.2、§11.2—11.3）。
 //!
-//! 边界：本模块只持久化“要对 Root 里的哪个目标做什么、依据什么现场证据、走到哪一步”。它不发布
+//! 边界：本模块只持久化“要对 Vault 里的哪个目标做什么、依据什么现场证据、走到哪一步”。它不发布
 //! 工作文件、不操作对象、不提交元数据事务，也不决定什么时候该重做还是该停下——那是提交意图状态机
 //! （S034）与启动恢复的职责。本模块给它们的是**可查询的持久证据**。
 //!
@@ -17,19 +17,19 @@
 //! - **前后状态都记录、都不为 NULL**：`expected_before` / `desired_after` 是 JSON object；
 //!   “当时不存在”必须是一个字段（例如 `{"present":false}`），而不是 NULL——`NULL` 只能表达“未知”，
 //!   把“不存在”混进未知里，恢复时就无法区分“新建”和“读不出来”。具体编码属 S034。
-//! - **目标路径受约束**：`target_path` 是 Root 内的相对路径，非空、无 NUL、不以 `/` 起始、不含空
-//!   分量与 `.`/`..` 分量。恢复会拿它去定位工作文件，把 `../` 放进数据库等于把恢复指向 Root 之外。
+//! - **目标路径受约束**：`target_path` 是 Vault 内的相对路径，非空、无 NUL、不以 `/` 起始、不含空
+//!   分量与 `.`/`..` 分量。恢复会拿它去定位工作文件，把 `../` 放进数据库等于把恢复指向 Vault 之外。
 //! - **持久化 phase 是唯一判据**（design §11.3「只重放可证明的操作，不依赖最后一条普通日志推测
-//!   事实」）：[`unfinished_intents`] 按 Root 列出所有未到 `finalized` 的意图（含 `needs_recovery`），
+//!   事实」）：[`unfinished_intents`] 按 Vault 列出所有未到 `finalized` 的意图（含 `needs_recovery`），
 //!   启动恢复先处理它们再开放写入。
-//! - **owner scope**：读写都带 [`UserId`]，经 `roots.owner_id` 判定。
+//! - **owner scope**：读写都带 [`UserId`]，经 `vaults.owner_id` 判定。
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use vaultsyncd_domain::ids::{ID_LEN, IntentId, RootId, UserId};
+use vaultsyncd_domain::ids::{ID_LEN, IntentId, UserId, VaultId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
 /// `fs_intents` 表的列顺序，读取点共用。
-const INTENT_COLUMNS: &str = "intent_id, root_id, kind, target_path, staging_path, \
+const INTENT_COLUMNS: &str = "intent_id, vault_id, kind, target_path, staging_path, \
                               expected_before, desired_after, phase, created_at, updated_at";
 
 /// 意图对应的文件系统动作种类（`fs_intents.kind`）。
@@ -42,7 +42,7 @@ pub enum FsIntentKind {
     PutContent,
     /// 创建目录。
     Create,
-    /// 同 Root 内移动。
+    /// 同 Vault 内移动。
     Move,
     /// 删除（可恢复删除，design §11.2 末段与回收站一致）。
     Delete,
@@ -80,7 +80,7 @@ pub enum FsIntentPhase {
     Published,
     /// 元数据事务已完成：意图收尾（终态）。
     Finalized,
-    /// 现场与意图都无法解释：暂停该 Root 的破坏性写入并给出恢复报告（第 6 行）。
+    /// 现场与意图都无法解释：暂停该 Vault 的破坏性写入并给出恢复报告（第 6 行）。
     NeedsRecovery,
 }
 
@@ -132,18 +132,18 @@ impl FsIntentPhase {
 
 /// 新建一条发布意图的输入。
 ///
-/// 不变量（违反时 [`begin_intent`] 报错且不写入）：Root 属于调用方；`target_path` 是 Root 内相对
+/// 不变量（违反时 [`begin_intent`] 报错且不写入）：Vault 属于调用方；`target_path` 是 Vault 内相对
 /// 路径（见模块文档）；`staging_path` 给了就必须非空；`expected_before` 与 `desired_after` 是合法
 /// JSON object；`at` 不早于任何约束下限（由调用方注入时钟，本层不读时钟）；`intent_id` 未被占用。
 #[derive(Clone, Debug)]
 pub struct NewFsIntent {
     /// 意图身份。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 动作种类。
     pub kind: FsIntentKind,
-    /// 目标在 Root 内的相对路径。
+    /// 目标在 Vault 内的相对路径。
     pub target_path: String,
     /// 发布用的暂存文件；不需要暂存的动作（删除、移动）为 `None`。
     pub staging_path: Option<String>,
@@ -158,11 +158,11 @@ pub struct NewFsIntent {
 pub struct FsIntent {
     /// 意图身份。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 动作种类。
     pub kind: FsIntentKind,
-    /// 目标在 Root 内的相对路径。
+    /// 目标在 Vault 内的相对路径。
     pub target_path: String,
     /// 发布用的暂存文件。
     pub staging_path: Option<String>,
@@ -183,7 +183,7 @@ pub struct FsIntent {
 pub enum IntentError {
     /// SQLite 层面失败。
     Db(sqlx::Error),
-    /// Root 不存在或不属于调用方的 owner scope（两种情况不区分）。
+    /// Vault 不存在或不属于调用方的 owner scope（两种情况不区分）。
     OutOfScope,
     /// 意图不存在或不在调用方的 owner scope 内。
     UnknownIntent {
@@ -195,7 +195,7 @@ pub enum IntentError {
         /// 冲突的意图。
         id: IntentId,
     },
-    /// 目标路径不是 Root 内相对路径。
+    /// 目标路径不是 Vault 内相对路径。
     InvalidTargetPath {
         /// 给出的路径。
         path: String,
@@ -246,7 +246,7 @@ impl std::fmt::Display for IntentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Db(source) => write!(f, "SQLite 操作失败：{source}"),
-            Self::OutOfScope => f.write_str("Root 不存在或不在调用方的 owner scope 内"),
+            Self::OutOfScope => f.write_str("Vault 不存在或不在调用方的 owner scope 内"),
             Self::UnknownIntent { id } => write!(f, "意图 {id} 不存在"),
             Self::DuplicateId { id } => write!(f, "意图身份 {id} 已被占用"),
             Self::InvalidTargetPath { path, reason } => {
@@ -286,7 +286,7 @@ pub async fn begin_intent(
     new: &NewFsIntent,
     at: UtcTimestamp,
 ) -> Result<FsIntent, IntentError> {
-    require_root_owner(tx, owner, new.root).await?;
+    require_vault_owner(tx, owner, new.vault).await?;
     validate_target_path(&new.target_path)?;
     if let Some(staging) = &new.staging_path {
         if staging.is_empty() {
@@ -305,12 +305,12 @@ pub async fn begin_intent(
 
     let inserted = sqlx::query(
         "INSERT INTO fs_intents \
-         (intent_id, root_id, kind, target_path, staging_path, expected_before, desired_after, \
+         (intent_id, vault_id, kind, target_path, staging_path, expected_before, desired_after, \
           phase, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
     )
     .bind(new.intent_id.as_bytes().as_slice())
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.kind.as_text())
     .bind(&new.target_path)
     .bind(new.staging_path.as_deref())
@@ -374,7 +374,7 @@ pub async fn intent_in_scope(
     id: IntentId,
 ) -> Result<Option<FsIntent>, IntentError> {
     let row = sqlx::query_as::<_, IntentRow>(&format!(
-        "SELECT {INTENT_COLUMNS} FROM fs_intents i JOIN roots r ON r.id = i.root_id \
+        "SELECT {INTENT_COLUMNS} FROM fs_intents i JOIN vaults r ON r.id = i.vault_id \
          WHERE i.intent_id = ?1 AND r.owner_id = ?2"
     ))
     .bind(id.as_bytes().as_slice())
@@ -385,21 +385,21 @@ pub async fn intent_in_scope(
     row.map(IntentRow::into_record).transpose()
 }
 
-/// 列出某个 Root 下尚未收尾的意图（`prepared`/`published`/`needs_recovery`），按写入时间升序。
+/// 列出某个 Vault 下尚未收尾的意图（`prepared`/`published`/`needs_recovery`），按写入时间升序。
 ///
 /// 这是启动恢复的入口（design §11.3：启动先恢复未完成意图，再开放写入和事件游标）。`needs_recovery`
 /// 也在列表里：它需要处理，只是不能自动推进。
 pub async fn unfinished_intents(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<Vec<FsIntent>, IntentError> {
-    require_root_owner(conn, owner, root).await?;
+    require_vault_owner(conn, owner, vault).await?;
     let rows = sqlx::query_as::<_, IntentRow>(&format!(
-        "SELECT {INTENT_COLUMNS} FROM fs_intents i WHERE i.root_id = ?1 \
+        "SELECT {INTENT_COLUMNS} FROM fs_intents i WHERE i.vault_id = ?1 \
          AND i.phase <> 'finalized' ORDER BY i.created_at, i.intent_id"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .fetch_all(conn)
     .await
     .map_err(IntentError::Db)?;
@@ -417,14 +417,14 @@ async fn require_intent(
         .ok_or(IntentError::UnknownIntent { id })
 }
 
-/// 确认 Root 属于调用方的 owner scope。
-async fn require_root_owner(
+/// 确认 Vault 属于调用方的 owner scope。
+async fn require_vault_owner(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<(), IntentError> {
-    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM roots WHERE id = ?1")
-        .bind(root.as_bytes().as_slice())
+    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM vaults WHERE id = ?1")
+        .bind(vault.as_bytes().as_slice())
         .fetch_optional(conn)
         .await
         .map_err(IntentError::Db)?;
@@ -434,7 +434,7 @@ async fn require_root_owner(
     }
 }
 
-/// 目标路径检查：Root 内相对路径，非空、无 NUL、不以 `/` 起始、无空分量与 `.`/`..` 分量。
+/// 目标路径检查：Vault 内相对路径，非空、无 NUL、不以 `/` 起始、无空分量与 `.`/`..` 分量。
 ///
 /// 不用宿主 `Path` 判断：规则必须与服务端路径语义一致，而不是与运行本 crate 的主机一致
 /// （便携检查会在 Windows 上编译并跑这些测试）。
@@ -450,7 +450,7 @@ fn validate_target_path(path: &str) -> Result<(), IntentError> {
         return Err(invalid("不能含 NUL"));
     }
     if path.starts_with('/') {
-        return Err(invalid("必须是 Root 内相对路径"));
+        return Err(invalid("必须是 Vault 内相对路径"));
     }
     for component in path.split('/') {
         if component.is_empty() {
@@ -498,7 +498,7 @@ async fn require_json_object(
 #[derive(sqlx::FromRow)]
 struct IntentRow {
     intent_id: Vec<u8>,
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     kind: String,
     target_path: String,
     staging_path: Option<String>,
@@ -513,7 +513,7 @@ impl IntentRow {
     fn into_record(self) -> Result<FsIntent, IntentError> {
         Ok(FsIntent {
             intent_id: identity(self.intent_id, "intent_id", IntentId::from_bytes)?,
-            root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+            vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
             kind: FsIntentKind::from_text(&self.kind)
                 .ok_or(IntentError::MalformedRow { column: "kind" })?,
             target_path: self.target_path,
@@ -571,16 +571,16 @@ mod tests {
 
     use crate::db::Database;
     use crate::test_support::{
-        TestDir, at, intent as intent_id, open_database, register_root, seed_owner,
+        TestDir, at, intent as intent_id, open_database, register_vault, seed_owner,
     };
 
     const BEFORE_ABSENT: &str = r#"{"present":false}"#;
     const AFTER_PUT: &str = r#"{"present":true,"object":"00112233","size":"10"}"#;
 
-    fn put(root: RootId, marker: u8) -> NewFsIntent {
+    fn put(vault: VaultId, marker: u8) -> NewFsIntent {
         NewFsIntent {
             intent_id: intent_id(marker),
-            root,
+            vault,
             kind: FsIntentKind::PutContent,
             target_path: format!("docs/note-{marker:02x}.txt"),
             staging_path: Some(format!("/srv/staging/note-{marker:02x}.txt")),
@@ -604,14 +604,14 @@ mod tests {
         let path = dir.database();
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
 
-        let first = begin(&database, owner, &put(root, 0x41)).await;
+        let first = begin(&database, owner, &put(vault, 0x41)).await;
         assert_eq!(first.phase, FsIntentPhase::Prepared);
         assert_eq!(first.created_at, at(100));
         assert_eq!(first.updated_at, at(100));
-        begin(&database, owner, &put(root, 0x42)).await;
-        let finished = begin(&database, owner, &put(root, 0x43)).await;
+        begin(&database, owner, &put(vault, 0x42)).await;
+        let finished = begin(&database, owner, &put(vault, 0x43)).await;
         let mut tx = database.begin_write().await.expect("开始写事务");
         advance_intent_phase(
             &mut tx,
@@ -637,7 +637,7 @@ mod tests {
         // 重启后：未收尾的两条按写入时间列出，已收尾的不出现在待恢复清单里。
         let database = Database::open(&path).await.expect("重启后打开库");
         let mut conn = database.pool().acquire().await.expect("取连接");
-        let unfinished = unfinished_intents(&mut conn, owner, root)
+        let unfinished = unfinished_intents(&mut conn, owner, vault)
             .await
             .expect("列出未完成意图");
         assert_eq!(
@@ -669,7 +669,7 @@ mod tests {
             None
         );
         assert!(
-            unfinished_intents(&mut conn, crate::test_support::user(0x12), root)
+            unfinished_intents(&mut conn, crate::test_support::user(0x12), vault)
                 .await
                 .expect_err("越权列清单必须报错，不能返回空列表")
                 .to_string()
@@ -684,13 +684,13 @@ mod tests {
         let dir = TestDir::new("intents-constraints");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         for (sql, expected) in [
             (
                 "INSERT INTO fs_intents \
-                 (intent_id, root_id, kind, target_path, staging_path, expected_before, \
+                 (intent_id, vault_id, kind, target_path, staging_path, expected_before, \
                   desired_after, phase, created_at, updated_at) \
                  VALUES (?1, ?2, 'put_content', 'a.txt', NULL, '{\"present\":false}', \
                          '{\"present\":true}', 'published_ish', 100, 100)",
@@ -698,7 +698,7 @@ mod tests {
             ),
             (
                 "INSERT INTO fs_intents \
-                 (intent_id, root_id, kind, target_path, staging_path, expected_before, \
+                 (intent_id, vault_id, kind, target_path, staging_path, expected_before, \
                   desired_after, phase, created_at, updated_at) \
                  VALUES (?1, ?2, 'put_content', 'a.txt', NULL, '[]', \
                          '{\"present\":true}', 'prepared', 100, 100)",
@@ -706,7 +706,7 @@ mod tests {
             ),
             (
                 "INSERT INTO fs_intents \
-                 (intent_id, root_id, kind, target_path, staging_path, expected_before, \
+                 (intent_id, vault_id, kind, target_path, staging_path, expected_before, \
                   desired_after, phase, created_at, updated_at) \
                  VALUES (?1, ?2, 'teleport', 'a.txt', NULL, '{\"present\":false}', \
                          '{\"present\":true}', 'prepared', 100, 100)",
@@ -715,7 +715,7 @@ mod tests {
         ] {
             let refused = sqlx::query(sql)
                 .bind(intent_id(0x41).as_bytes().as_slice())
-                .bind(root.as_bytes().as_slice())
+                .bind(vault.as_bytes().as_slice())
                 .execute(&mut *tx)
                 .await
                 .expect_err("绕过 Rust 的坏行必须被迁移约束拒绝");
@@ -736,8 +736,8 @@ mod tests {
         let dir = TestDir::new("intents-phases");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        begin(&database, owner, &put(root, 0x41)).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        begin(&database, owner, &put(vault, 0x41)).await;
 
         // 非法转换：不能跳过 publish 直接 finalize，也不能从终态回头。
         let mut tx = database.begin_write().await.expect("开始写事务");
@@ -816,7 +816,7 @@ mod tests {
         tx.rollback().await.expect("回滚");
 
         // 无法解释的现场走 needs_recovery，人工核对后只能直接收尾。
-        begin(&database, owner, &put(root, 0x42)).await;
+        begin(&database, owner, &put(vault, 0x42)).await;
         let mut tx = database.begin_write().await.expect("开始写事务");
         let blocked = advance_intent_phase(
             &mut tx,
@@ -856,10 +856,10 @@ mod tests {
         let dir = TestDir::new("intents-validation");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
-        // 目标路径必须留在 Root 内：恢复会拿它定位工作文件。
+        // 目标路径必须留在 Vault 内：恢复会拿它定位工作文件。
         for path in [
             "",
             "/etc/passwd",
@@ -873,7 +873,7 @@ mod tests {
                 owner,
                 &NewFsIntent {
                     target_path: path.to_owned(),
-                    ..put(root, 0x41)
+                    ..put(vault, 0x41)
                 },
                 at(100),
             )
@@ -889,7 +889,7 @@ mod tests {
             owner,
             &NewFsIntent {
                 staging_path: Some(String::new()),
-                ..put(root, 0x41)
+                ..put(vault, 0x41)
             },
             at(100),
         )
@@ -908,7 +908,7 @@ mod tests {
                 &NewFsIntent {
                     expected_before: before,
                     desired_after: after,
-                    ..put(root, 0x41)
+                    ..put(vault, 0x41)
                 },
                 at(100),
             )
@@ -924,11 +924,11 @@ mod tests {
         let error = begin_intent(
             &mut tx,
             crate::test_support::user(0x12),
-            &put(root, 0x41),
+            &put(vault, 0x41),
             at(100),
         )
         .await
-        .expect_err("别人的 Root 不能写意图");
+        .expect_err("别人的 Vault 不能写意图");
         assert!(matches!(error, IntentError::OutOfScope));
         tx.rollback().await.expect("回滚");
 
@@ -939,9 +939,9 @@ mod tests {
             .expect("计数意图");
         assert_eq!(rows, 0);
 
-        begin(&database, owner, &put(root, 0x41)).await;
+        begin(&database, owner, &put(vault, 0x41)).await;
         let mut tx = database.begin_write().await.expect("开始写事务");
-        let error = begin_intent(&mut tx, owner, &put(root, 0x41), at(100))
+        let error = begin_intent(&mut tx, owner, &put(vault, 0x41), at(100))
             .await
             .expect_err("重复身份必须拒绝");
         assert!(
@@ -983,7 +983,7 @@ mod tests {
         fn decode(stored: &FsIntent) -> PutIntent {
             PutIntent {
                 intent_id: stored.intent_id,
-                root: stored.root,
+                vault: stored.vault,
                 target_path: stored.target_path.clone(),
                 staging_path: stored.staging_path.clone().expect("put 意图必须记暂存名"),
                 before: TargetBefore::from_json(&stored.expected_before).expect("before 可还原"),
@@ -996,7 +996,7 @@ mod tests {
         let path = dir.database();
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
 
         let after = TargetAfter {
             digest: ContentDigest::from_hex(HEX_A).expect("测试摘要"),
@@ -1004,7 +1004,7 @@ mod tests {
         };
         let create = NewPutIntent {
             intent_id: intent_id(0x41),
-            root,
+            vault,
             target_path: "docs/note.txt".to_owned(),
             staging_path: "put-0041".to_owned(),
             before: TargetBefore::Absent,
@@ -1013,7 +1013,7 @@ mod tests {
         // 覆盖形态：前提带完整的现场证据（条目、revision、内容、文件身份）。
         let overwrite = NewPutIntent {
             intent_id: intent_id(0x42),
-            root,
+            vault,
             target_path: "docs/old.txt".to_owned(),
             staging_path: "put-0042".to_owned(),
             before: TargetBefore::Present(TargetSnapshot {
@@ -1037,7 +1037,7 @@ mod tests {
                 owner,
                 &NewFsIntent {
                     intent_id: new.intent_id,
-                    root,
+                    vault,
                     kind: FsIntentKind::PutContent,
                     target_path: new.target_path.clone(),
                     staging_path: Some(new.staging_path.clone()),
@@ -1105,7 +1105,7 @@ mod tests {
             .phase,
             PutPhase::Finalized
         );
-        let unfinished = unfinished_intents(&mut conn, owner, root)
+        let unfinished = unfinished_intents(&mut conn, owner, vault)
             .await
             .expect("列出未完成意图");
         assert_eq!(

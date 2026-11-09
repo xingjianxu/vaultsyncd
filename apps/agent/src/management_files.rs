@@ -12,7 +12,7 @@ use vaultsyncd_agent_core::{
 };
 use vaultsyncd_client_store::entries::{self, LocalEntry};
 use vaultsyncd_domain::{
-    ids::{EntryId, OpId, RootId, VersionId},
+    ids::{EntryId, OpId, VaultId, VersionId},
     state::{Dirty, Residency},
     version::Generation,
 };
@@ -35,16 +35,16 @@ pub(crate) async fn download(worker: &Worker, entry: EntryId, op: OpId) -> Resul
         .ok_or_else(|| error("unknown path"))?;
     let fixed = crate::importer::pin(local, row).await?;
     crate::importer::action(local,op,&serde_json::json!({"kind":"manual_download","entry":entry.to_string(),"path":path,"version":fixed.version})).await?;
-    let root = local.root.clone();
+    let vault = local.vault.clone();
     let selected = path.clone();
     let expected = Identity {
         binding: local.binding,
-        root: importer.remote.root,
+        vault: importer.remote.vault,
         entry,
         version: VersionId::from_hex(&fixed.version).map_err(error)?,
     };
     tokio::task::spawn_blocking(move || -> Result<(), PortError> {
-        let before = root.inspect(&selected).map_err(error)?;
+        let before = vault.inspect(&selected).map_err(error)?;
         if before
             .cloud
             .as_ref()
@@ -52,7 +52,7 @@ pub(crate) async fn download(worker: &Worker, entry: EntryId, op: OpId) -> Resul
         {
             return Err(error("placeholder identity changed"));
         }
-        let mut file = root.open_read(&selected).map_err(error)?;
+        let mut file = vault.open_read(&selected).map_err(error)?;
         let mut buffer = vec![0; 256 * 1024];
         loop {
             if file.read(&mut buffer).map_err(error)? == 0 {
@@ -115,10 +115,10 @@ pub(crate) async fn release(
         .iter()
         .find(|b| b.id == local.binding.to_string())
         .ok_or_else(|| error("binding missing"))?;
-    let root = RootId::from_hex(&configured.root_id).map_err(error)?;
+    let vault = VaultId::from_hex(&configured.vault_id).map_err(error)?;
     let identity = Identity {
         binding: local.binding,
-        root,
+        vault,
         entry,
         version: VersionId::from_hex(&fixed.version).map_err(error)?,
     };
@@ -133,7 +133,7 @@ pub(crate) async fn release(
         )?),
         Arc::new(crate::release::HttpReleaseRemote::new(
             client.clone(),
-            root,
+            vault,
         )?),
     )
     .release(&ReleaseSpec {
@@ -155,7 +155,7 @@ impl FullMaterializer for Materializer {
     ) -> PortFuture<'a, Result<LocalEntry, PortError>> {
         Box::pin(async move {
             let local = &self.0.importer.local;
-            let meta = local.root.inspect(&file.path.to_string()).map_err(error)?;
+            let meta = local.vault.inspect(&file.path.to_string()).map_err(error)?;
             if meta.cloud.as_ref().is_some_and(|c| c.on_disk < meta.size) {
                 if file.local.as_ref().is_some_and(|l| l.dirty != Dirty::Clean) {
                     return Err(error("unconfirmed partial content"));
@@ -166,7 +166,7 @@ impl FullMaterializer for Materializer {
             // takes its evidence oplock; the snapshot below re-reads and hashes the bytes.
             drop(
                 local
-                    .root
+                    .vault
                     .open_read(&file.path.to_string())
                     .map_err(error)?,
             );

@@ -13,7 +13,7 @@
 //! - **`SameSite=Strict` + `HttpOnly` + `Secure`**：cookie 不参与跨站请求、脚本读不到、只走 HTTPS
 //!   （design §17.2：明文公共 HTTP 不符合 C29）。
 //! - **响应不带绝对路径**：登录/刷新/注销的响应只有会话身份、凭据与时间；越权结论是固定的
-//!   `access_denied` 文本（[`crate::auth`] 的 scope 规则），不泄露 Root 是否存在。
+//!   `access_denied` 文本（[`crate::auth`] 的 scope 规则），不泄露 Vault 是否存在。
 //! - **失败映射**：凭据问题一律 401 `AUTH_EXPIRED`（design §15.4 让客户端刷新一次）；越权 403
 //!   `ACCESS_DENIED`；限流 429 `RATE_LIMITED`；存储失败 503 `NEEDS_RECOVERY`（内部错误，记日志，
 //!   不伪装成“凭据过期”让客户端白刷一次）。
@@ -32,7 +32,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
-use vaultsyncd_domain::ids::{IdSource, RootId};
+use vaultsyncd_domain::ids::{IdSource, VaultId};
 use vaultsyncd_domain::version::UtcTimestamp;
 use vaultsyncd_protocol::generated::{
     BrowserSession, ErrorBody, ErrorCode, ErrorEnvelope, LoginRequest, RefreshRequest,
@@ -43,7 +43,7 @@ use vaultsyncd_server_core::auth::account::{
 };
 use vaultsyncd_server_core::auth::login::{LoginAttempt, LoginError, authenticate};
 use vaultsyncd_server_core::auth::password::PasswordHasher;
-use vaultsyncd_server_core::auth::scope::{RootGrant, ScopeError, require_root_scope};
+use vaultsyncd_server_core::auth::scope::{ScopeError, VaultGrant, require_vault_scope};
 use vaultsyncd_server_core::auth::session::{
     self, IssuedSession, NewSessionRecord, RotationOutcome, SecretToken, SessionError,
     SessionPolicy, SessionRow, SessionStore, TokenDigest,
@@ -65,7 +65,7 @@ pub const REFRESH_COOKIE: &str = "vaultsyncd_refresh";
 
 /// 认证端点共享的进程内状态：数据库、密码散列、限流、会话策略与随机源。
 pub struct AuthContext {
-    pub(crate) root_fences: Arc<crate::root_fences::RootFences>,
+    pub(crate) vault_fences: Arc<crate::vault_fences::VaultFences>,
     database: Database,
     hasher: PasswordHasher,
     throttle: Mutex<LoginThrottle>,
@@ -76,21 +76,24 @@ pub struct AuthContext {
 }
 
 impl AuthContext {
-    pub(crate) fn with_root_fences(mut self, fences: Arc<crate::root_fences::RootFences>) -> Self {
-        self.root_fences = fences;
+    pub(crate) fn with_vault_fences(
+        mut self,
+        fences: Arc<crate::vault_fences::VaultFences>,
+    ) -> Self {
+        self.vault_fences = fences;
         self
     }
     /// 生产装配：Argon2id 生产参数、默认限流与会话有效期、OS 随机源。
     #[must_use]
     pub fn new(database: Database) -> Self {
-        let root_fences = Arc::new(crate::root_fences::RootFences::new(
+        let vault_fences = Arc::new(crate::vault_fences::VaultFences::new(
             database
                 .path()
                 .parent()
                 .unwrap_or(std::path::Path::new(".")),
         ));
         Self {
-            root_fences,
+            vault_fences,
             database,
             hasher: PasswordHasher::production(),
             throttle: Mutex::new(LoginThrottle::new(ThrottlePolicy::default())),
@@ -106,14 +109,14 @@ impl AuthContext {
         self.policy
     }
 
-    /// 数据库句柄（Root 授权与后续资源端点共用）。
+    /// 数据库句柄（Vault 授权与后续资源端点共用）。
     #[must_use]
     pub fn database(&self) -> &Database {
         &self.database
     }
 }
 
-/// OS 随机源：会话身份、凭据与 Root 身份都来自它，不用时间或计数器（design §17.1）。
+/// OS 随机源：会话身份、凭据与 Vault 身份都来自它，不用时间或计数器（design §17.1）。
 pub(crate) struct RandomIds;
 
 impl IdSource for RandomIds {
@@ -315,39 +318,39 @@ pub async fn logout(State(context): State<Arc<AuthContext>>, headers: HeaderMap)
     }
 }
 
-/// 已认证调用者访问某个 Root 前的授权检查（I15：每次资源请求都做）。
+/// 已认证调用者访问某个 Vault 前的授权检查（I15：每次资源请求都做）。
 ///
-/// 先用存储层的 `root_in_scope` 取行——它把“不是你的 Root”和“不存在的 Root”压成同一个 `None`，
-/// 因此不会泄露 Root 是否存在；再用核心的纯规则复核 owner。
+/// 先用存储层的 `vault_in_scope` 取行——它把“不是你的 Vault”和“不存在的 Vault”压成同一个 `None`，
+/// 因此不会泄露 Vault 是否存在；再用核心的纯规则复核 owner。
 ///
 /// # Errors
 ///
-/// 越权或 Root 不存在时返回 [`ScopeError::AccessDenied`]；存储失败返回 `Err(())` 之外的
+/// 越权或 Vault 不存在时返回 [`ScopeError::AccessDenied`]；存储失败返回 `Err(())` 之外的
 /// [`AuthorizeError::Storage`]。
-pub async fn authorize_root(
+pub async fn authorize_vault(
     database: &Database,
     principal: &Principal,
-    root_id: RootId,
-) -> Result<RootGrant, AuthorizeError> {
+    vault_id: VaultId,
+) -> Result<VaultGrant, AuthorizeError> {
     let mut conn = database
         .pool()
         .acquire()
         .await
         .map_err(|error| AuthorizeError::Storage(error.to_string()))?;
     let record =
-        vaultsyncd_server_store::roots::root_in_scope(&mut conn, principal.user_id, root_id)
+        vaultsyncd_server_store::vaults::vault_in_scope(&mut conn, principal.user_id, vault_id)
             .await
             .map_err(|error| AuthorizeError::Storage(error.to_string()))?;
     let record = record.ok_or(AuthorizeError::Scope(ScopeError::AccessDenied))?;
-    let grant = RootGrant {
-        root_id: record.id,
+    let grant = VaultGrant {
+        vault_id: record.id,
         owner_id: record.owner,
     };
-    require_root_scope(principal, &grant).map_err(AuthorizeError::Scope)?;
+    require_vault_scope(principal, &grant).map_err(AuthorizeError::Scope)?;
     Ok(grant)
 }
 
-/// Root 授权检查的失败。
+/// Vault 授权检查的失败。
 #[derive(Debug)]
 pub enum AuthorizeError {
     /// 越权（对外 403 `ACCESS_DENIED`）。
@@ -360,7 +363,7 @@ impl std::fmt::Display for AuthorizeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Scope(error) => write!(f, "{error}"),
-            Self::Storage(detail) => write!(f, "读取 Root 归属失败：{detail}"),
+            Self::Storage(detail) => write!(f, "读取 Vault 归属失败：{detail}"),
         }
     }
 }
@@ -587,7 +590,7 @@ fn error_response(
     request_id: &str,
     message: &str,
     retryable: bool,
-    root_id: Option<String>,
+    vault_id: Option<String>,
 ) -> Response {
     let envelope = ErrorEnvelope {
         error: ErrorBody {
@@ -596,7 +599,7 @@ fn error_response(
             message: message.to_owned(),
             request_id: request_id.to_owned(),
             retryable,
-            root_id,
+            vault_id,
         },
     };
     (status, Json(envelope)).into_response()

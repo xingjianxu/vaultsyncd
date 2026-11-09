@@ -1,4 +1,4 @@
-//! Root 工作目录的命名空间端口：观察路径现场、创建目录、同 Root 改名（design §9.5、§11.2 步骤 5—6）。
+//! Vault 工作目录的命名空间端口：观察路径现场、创建目录、同 Vault 改名（design §9.5、§11.2 步骤 5—6）。
 //!
 //! 内容 put 用 [`crate::ports::target::TargetPort`] 发布文件字节；目录创建与移动不碰内容，只改命名空间，
 //! 因此需要另一组动作：`mkdir` 与同一次 `rename`。端口只回答“这个相对路径现在是什么”并执行调用方
@@ -19,7 +19,7 @@ use std::fmt;
 
 use crate::ports::object_store::{FileKey, StorageFailure};
 
-/// Root 内某个相对路径现在的现场。
+/// Vault 内某个相对路径现在的现场。
 ///
 /// 命名空间操作只关心“存在什么种类”和“还是不是同一个 inode”，不读内容摘要：目录没有内容，文件的内容
 /// 由 put 路径负责。
@@ -155,9 +155,9 @@ impl fmt::Display for NamespaceError {
 
 impl std::error::Error for NamespaceError {}
 
-/// Root 工作目录的命名空间端口。
+/// Vault 工作目录的命名空间端口。
 pub trait NamespacePort {
-    /// 观察一个 Root 内相对路径现在的现场。
+    /// 观察一个 Vault 内相对路径现在的现场。
     ///
     /// # Errors
     ///

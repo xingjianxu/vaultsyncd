@@ -7,8 +7,8 @@
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, IntentId, TxId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp, VaultSeq};
 
 use crate::commit::intent::PutPhase;
 use crate::objects::{ContentDigest, ExpectedContent};
@@ -49,9 +49,9 @@ impl EntryKind {
     }
 }
 
-/// Root 的服务器事实（提交前要核对的 epoch）。
+/// Vault 的服务器事实（提交前要核对的 epoch）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RootFacts {
+pub struct VaultFacts {
     /// 当前服务器 epoch：恢复后更换，旧 epoch 的预期不得当成同一事实（design §7.1）。
     pub epoch: ServerEpoch,
 }
@@ -63,8 +63,8 @@ pub struct RootFacts {
 pub struct EntryBaseline {
     /// 条目身份。
     pub entry: EntryId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 当前父目录条目。
     pub parent: EntryId,
     /// 当前原始名称。
@@ -92,15 +92,15 @@ pub enum ObjectState {
 pub struct PutWrite {
     /// 已写进 `fs_intents` 且已发布到 `published` 的意图。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 被覆盖内容的条目。
     pub entry: EntryId,
     /// 调用方观察到的基线 revision；事务内按它做比较并写，已变化即拒绝。
     pub expected_revision: Revision,
     /// 新内容（发布后目标实测等于它）。
     pub content: ExpectedContent,
-    /// 目标在 Root 内的相对路径。
+    /// 目标在 Vault 内的相对路径。
     pub target_path: String,
     /// 提交时间。
     pub at: UtcTimestamp,
@@ -117,8 +117,8 @@ pub struct PutRecord {
     pub version: VersionId,
     /// 条目新 revision（严格大于 `expected_revision`）。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
     /// 该批次的事务身份。
     pub tx: TxId,
     /// 版本内容摘要（必须等于请求内容）。
@@ -135,12 +135,12 @@ pub enum PutStoreError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 或条目不在调用方的 owner scope 内。
+    /// Vault 或条目不在调用方的 owner scope 内。
     OutOfScope,
-    /// Root 不存在。
-    UnknownRoot {
-        /// 被查询的 Root。
-        root: RootId,
+    /// Vault 不存在。
+    UnknownVault {
+        /// 被查询的 Vault。
+        vault: VaultId,
     },
     /// 条目不存在。
     EntryMissing {
@@ -182,7 +182,7 @@ impl PutStoreError {
         match self {
             PutStoreError::Storage { .. } => "put_store_failed",
             PutStoreError::OutOfScope => "out_of_scope",
-            PutStoreError::UnknownRoot { .. } => "unknown_root",
+            PutStoreError::UnknownVault { .. } => "unknown_vault",
             PutStoreError::EntryMissing { .. } => "entry_missing",
             PutStoreError::RevisionChanged { .. } => "revision_changed",
             PutStoreError::IllegalIntentTransition { .. } => "illegal_intent_transition",
@@ -196,8 +196,8 @@ impl fmt::Display for PutStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PutStoreError::Storage { detail } => write!(f, "提交存储失败：{detail}"),
-            PutStoreError::OutOfScope => f.write_str("Root 或条目不在调用方的 owner scope 内"),
-            PutStoreError::UnknownRoot { root } => write!(f, "Root {root} 不存在"),
+            PutStoreError::OutOfScope => f.write_str("Vault 或条目不在调用方的 owner scope 内"),
+            PutStoreError::UnknownVault { vault } => write!(f, "Vault {vault} 不存在"),
             PutStoreError::EntryMissing { entry } => write!(f, "条目 {entry} 不存在"),
             PutStoreError::RevisionChanged { expected, actual } => {
                 write!(f, "条目 revision 已从 {expected} 变为 {actual}")
@@ -222,12 +222,12 @@ impl std::error::Error for PutStoreError {}
 // `#[allow(async_fn_in_trait)]`：本 trait 只在编排函数里以泛型参数使用，不外发、不做 dyn 对象。
 #[allow(async_fn_in_trait)]
 pub trait PutCommitStore {
-    /// 读 Root 当前事实（epoch）。
+    /// 读 Vault 当前事实（epoch）。
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在。
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, PutStoreError>;
+    /// 存储失败、越权、Vault 不存在。
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, PutStoreError>;
 
     /// 读条目当前命名空间基线。
     ///
@@ -236,7 +236,7 @@ pub trait PutCommitStore {
     /// 存储失败、越权、条目不存在、行无法还原。
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, PutStoreError>;
 
@@ -247,7 +247,7 @@ pub trait PutCommitStore {
     /// 存储失败、越权。
     async fn object_state(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         digest: ContentDigest,
     ) -> Result<ObjectState, PutStoreError>;
 

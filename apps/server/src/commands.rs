@@ -20,10 +20,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId, UserId};
+use vaultsyncd_domain::ids::{EntryId, IntentId, TxId, UserId, VaultId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 use vaultsyncd_platform_linux_server::files::{
-    FileIdentity, RestrictError, RestrictedDir, RootHandle,
+    FileIdentity, RestrictError, RestrictedDir, VaultHandle,
 };
 use vaultsyncd_server_core::api::operations::OperationFailure;
 use vaultsyncd_server_core::commit::delete::{
@@ -42,7 +42,7 @@ use vaultsyncd_server_core::ports::namespace_store::{
     NamespaceCommitStore, NamespaceRecord, NamespaceStoreError, NamespaceWrite,
 };
 use vaultsyncd_server_core::ports::object_store::{FileKey, StorageFailure};
-use vaultsyncd_server_core::ports::put_store::{EntryBaseline, EntryKind, RootFacts};
+use vaultsyncd_server_core::ports::put_store::{EntryBaseline, EntryKind, VaultFacts};
 use vaultsyncd_server_core::ports::removal::{RemovalError, RemovalPort, RemovalProgress};
 use vaultsyncd_server_core::ports::trash_store::{
     DeleteApply, DeleteRecord, DeleteStore, TrashManifestEntry, TrashStoreError,
@@ -53,8 +53,8 @@ use vaultsyncd_server_store::entries::{EntryError, NewEntry};
 use vaultsyncd_server_store::intents as store_intents;
 use vaultsyncd_server_store::intents::{FsIntent, FsIntentKind, FsIntentPhase, NewFsIntent};
 use vaultsyncd_server_store::operations as store_operations;
-use vaultsyncd_server_store::roots as store_roots;
 use vaultsyncd_server_store::trash as store_trash;
+use vaultsyncd_server_store::vaults as store_vaults;
 use vaultsyncd_server_store::versions as store_versions;
 
 use crate::uploads::random_bytes;
@@ -68,7 +68,7 @@ pub struct SqlFsIntentLog {
 }
 
 impl SqlFsIntentLog {
-    /// 以数据库与 Root 所属账号装配。
+    /// 以数据库与 Vault 所属账号装配。
     #[must_use]
     pub fn new(database: Database, owner: UserId) -> Self {
         Self {
@@ -143,7 +143,7 @@ fn namespace_intent_of(record: FsIntent) -> Result<NamespaceIntent, IntentLogErr
     })?;
     Ok(NamespaceIntent {
         intent_id: record.intent_id,
-        root: record.root,
+        vault: record.vault,
         op,
         before,
         after,
@@ -169,7 +169,7 @@ fn delete_intent_of(record: FsIntent) -> Result<DeleteIntent, IntentLogError> {
     })?;
     Ok(DeleteIntent {
         intent_id: record.intent_id,
-        root: record.root,
+        vault: record.vault,
         before,
         after,
         phase: phase_text(record.phase),
@@ -206,7 +206,7 @@ impl NamespaceIntentLog for SqlFsIntentLog {
             self.owner,
             &NewFsIntent {
                 intent_id: new.intent_id,
-                root: new.root,
+                vault: new.vault,
                 kind,
                 target_path: new.after.path.clone(),
                 staging_path: None,
@@ -274,12 +274,12 @@ impl NamespaceIntentLog for SqlFsIntentLog {
 
     async fn unfinished_namespaces(
         &mut self,
-        root: RootId,
+        vault: VaultId,
     ) -> Result<Vec<NamespaceIntent>, IntentLogError> {
         let mut conn = connect(&self.database)
             .await
             .map_err(|detail| IntentLogError::Storage { detail })?;
-        let records = store_intents::unfinished_intents(&mut conn, self.owner, root)
+        let records = store_intents::unfinished_intents(&mut conn, self.owner, vault)
             .await
             .map_err(intent_error)?;
         records
@@ -309,7 +309,7 @@ impl DeleteIntentLog for SqlFsIntentLog {
             self.owner,
             &NewFsIntent {
                 intent_id: new.intent_id,
-                root: new.root,
+                vault: new.vault,
                 kind: FsIntentKind::Delete,
                 target_path: new.before.path.clone(),
                 staging_path: None,
@@ -374,12 +374,12 @@ impl DeleteIntentLog for SqlFsIntentLog {
 
     async fn unfinished_deletes(
         &mut self,
-        root: RootId,
+        vault: VaultId,
     ) -> Result<Vec<DeleteIntent>, IntentLogError> {
         let mut conn = connect(&self.database)
             .await
             .map_err(|detail| IntentLogError::Storage { detail })?;
-        let records = store_intents::unfinished_intents(&mut conn, self.owner, root)
+        let records = store_intents::unfinished_intents(&mut conn, self.owner, vault)
             .await
             .map_err(intent_error)?;
         records
@@ -391,16 +391,16 @@ impl DeleteIntentLog for SqlFsIntentLog {
     }
 }
 
-/// 工作目录的命名空间/移除端口（同一个 Root 句柄同时实现两者）。
+/// 工作目录的命名空间/移除端口（同一个 Vault 句柄同时实现两者）。
 pub struct WorkTreeNamespace {
-    root: Arc<RootHandle>,
+    vault: Arc<VaultHandle>,
 }
 
 impl WorkTreeNamespace {
-    /// 以已核对的 Root 句柄装配。
+    /// 以已核对的 Vault 句柄装配。
     #[must_use]
-    pub fn new(root: Arc<RootHandle>) -> Self {
-        Self { root }
+    pub fn new(vault: Arc<VaultHandle>) -> Self {
+        Self { vault }
     }
 
     fn parent_dir(&self, path: &str) -> Result<(ParentDir<'_>, PathBuf), NamespaceError> {
@@ -412,9 +412,9 @@ impl WorkTreeNamespace {
             })?;
         let parent = path.parent().unwrap_or_else(|| Path::new(""));
         let dir = if parent.as_os_str().is_empty() {
-            ParentDir::Root(self.root.root_dir())
+            ParentDir::Vault(self.vault.vault_dir())
         } else {
-            match self.root.open_dir(parent) {
+            match self.vault.open_dir(parent) {
                 Ok(dir) => ParentDir::Child(dir),
                 Err(RestrictError::NotFound { .. }) => {
                     return Err(NamespaceError::Unreadable {
@@ -433,7 +433,7 @@ impl WorkTreeNamespace {
 }
 
 enum ParentDir<'a> {
-    Root(&'a RestrictedDir),
+    Vault(&'a RestrictedDir),
     Child(RestrictedDir),
 }
 
@@ -442,7 +442,7 @@ impl std::ops::Deref for ParentDir<'_> {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            ParentDir::Root(dir) => dir,
+            ParentDir::Vault(dir) => dir,
             ParentDir::Child(dir) => dir,
         }
     }
@@ -509,9 +509,9 @@ fn removal_failure_of_restrict(error: &RestrictError, stage: &'static str) -> Re
 
 fn classify_restrict(error: &RestrictError) -> StorageFailure {
     let code = match error {
-        RestrictError::OpenRoot { source, .. }
+        RestrictError::OpenVault { source, .. }
         | RestrictError::Resolve { source, .. }
-        | RestrictError::EscapesRoot { source, .. }
+        | RestrictError::EscapesVault { source, .. }
         | RestrictError::SymlinkRejected { source, .. }
         | RestrictError::NotFound { source, .. }
         | RestrictError::AlreadyExists { source, .. }
@@ -697,7 +697,7 @@ pub struct SqlNamespaceStore {
 }
 
 impl SqlNamespaceStore {
-    /// 以数据库、Root 所属账号与本次操作的幂等键装配（结果与事件在同一事务里提交）。
+    /// 以数据库、Vault 所属账号与本次操作的幂等键装配（结果与事件在同一事务里提交）。
     #[must_use]
     pub fn new(
         database: Database,
@@ -748,24 +748,24 @@ fn map_entry_error(error: EntryError) -> NamespaceStoreError {
 }
 
 impl NamespaceCommitStore for SqlNamespaceStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, NamespaceStoreError> {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, NamespaceStoreError> {
         let mut conn = connect(&self.database)
             .await
             .map_err(namespace_store_error)?;
-        match store_roots::root_in_scope(&mut conn, self.owner, root)
+        match store_vaults::vault_in_scope(&mut conn, self.owner, vault)
             .await
             .map_err(namespace_store_error)?
         {
-            Some(record) => Ok(RootFacts {
+            Some(record) => Ok(VaultFacts {
                 epoch: record.epoch,
             }),
-            None => Err(NamespaceStoreError::UnknownRoot { root }),
+            None => Err(NamespaceStoreError::UnknownVault { vault }),
         }
     }
 
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, NamespaceStoreError> {
         let mut conn = connect(&self.database)
@@ -775,7 +775,7 @@ impl NamespaceCommitStore for SqlNamespaceStore {
             .await
             .map_err(namespace_store_error)?
             .ok_or(NamespaceStoreError::EntryMissing { entry })?;
-        if record.root != root || record.deleted_at.is_some() {
+        if record.vault != vault || record.deleted_at.is_some() {
             return Err(NamespaceStoreError::EntryMissing { entry });
         }
         // 端口类型里 parent 不是可选：合成根条目用自身当“没有父目录”的哨兵。唯一读 parent 的
@@ -783,7 +783,7 @@ impl NamespaceCommitStore for SqlNamespaceStore {
         let parent = record.parent.unwrap_or(entry);
         Ok(EntryBaseline {
             entry,
-            root,
+            vault,
             parent,
             name: record.name,
             revision: record.revision,
@@ -873,7 +873,7 @@ impl NamespaceCommitStore for SqlNamespaceStore {
                     self.owner,
                     &NewEntry {
                         id: write.entry,
-                        root: write.root,
+                        vault: write.vault,
                         parent: write.to.parent,
                         name: write.to.name.clone(),
                         name_key: write.to.name.clone(),
@@ -976,7 +976,7 @@ pub struct SqlDeleteStore {
 }
 
 impl SqlDeleteStore {
-    /// 以数据库、Root 所属账号与本次操作的幂等键装配（结果与事件在同一事务里提交）。
+    /// 以数据库、Vault 所属账号与本次操作的幂等键装配（结果与事件在同一事务里提交）。
     #[must_use]
     pub fn new(
         database: Database,
@@ -1011,22 +1011,22 @@ fn trash_store_error(error: impl std::fmt::Display) -> TrashStoreError {
 }
 
 impl DeleteStore for SqlDeleteStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, TrashStoreError> {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, TrashStoreError> {
         let mut conn = connect(&self.database).await.map_err(trash_store_error)?;
-        match store_roots::root_in_scope(&mut conn, self.owner, root)
+        match store_vaults::vault_in_scope(&mut conn, self.owner, vault)
             .await
             .map_err(trash_store_error)?
         {
-            Some(record) => Ok(RootFacts {
+            Some(record) => Ok(VaultFacts {
                 epoch: record.epoch,
             }),
-            None => Err(TrashStoreError::UnknownRoot { root }),
+            None => Err(TrashStoreError::UnknownVault { vault }),
         }
     }
 
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, TrashStoreError> {
         let mut conn = connect(&self.database).await.map_err(trash_store_error)?;
@@ -1041,7 +1041,7 @@ impl DeleteStore for SqlDeleteStore {
         let parent = record.parent.unwrap_or(entry);
         Ok(EntryBaseline {
             entry,
-            root,
+            vault,
             parent,
             name: record.name,
             revision: record.revision,
@@ -1051,16 +1051,24 @@ impl DeleteStore for SqlDeleteStore {
 
     async fn subtree_image(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<SubtreeImage, TrashStoreError> {
         let mut conn = connect(&self.database).await.map_err(trash_store_error)?;
-        let root_path = store_entries::path_of(&mut conn, self.owner, entry)
+        let vault_path = store_entries::path_of(&mut conn, self.owner, entry)
             .await
             .map_err(trash_store_error)?
             .ok_or(TrashStoreError::EntryMissing { entry })?;
         let mut entries = Vec::new();
-        collect_subtree(&mut conn, self.owner, root, entry, &root_path, &mut entries).await?;
+        collect_subtree(
+            &mut conn,
+            self.owner,
+            vault,
+            entry,
+            &vault_path,
+            &mut entries,
+        )
+        .await?;
         SubtreeImage::new(entry, entries).map_err(|detail| TrashStoreError::MalformedRow { detail })
     }
 
@@ -1099,12 +1107,13 @@ impl DeleteStore for SqlDeleteStore {
             // 删除事件必须带上被删版本，否则客户端“同 revision”的已确认基线与事件事实
             // 无法相等（S074 T11/T14：本地删除 ACK 保留了版本，事件却缺字段，整批被拒）。
             if let Some(version) = item.content_version {
-                let facts = store_versions::version_facts(&mut tx, self.owner, apply.root, version)
-                    .await
-                    .map_err(trash_store_error)?
-                    .ok_or_else(|| TrashStoreError::MalformedRow {
-                        detail: format!("删除版本 {version} 缺少版本事实"),
-                    })?;
+                let facts =
+                    store_versions::version_facts(&mut tx, self.owner, apply.vault, version)
+                        .await
+                        .map_err(trash_store_error)?
+                        .ok_or_else(|| TrashStoreError::MalformedRow {
+                            detail: format!("删除版本 {version} 缺少版本事实"),
+                        })?;
                 event["version_id"] = serde_json::Value::String(version.to_hex());
                 event["hash"] = serde_json::Value::String(
                     facts
@@ -1157,14 +1166,14 @@ impl DeleteStore for SqlDeleteStore {
                     revision: item.revision,
                 })
                 .collect();
-            store_trash::soft_delete_batch(&mut tx, self.owner, apply.root, &items, apply.at)
+            store_trash::soft_delete_batch(&mut tx, self.owner, apply.vault, &items, apply.at)
                 .await
                 .map_err(trash_store_error)?;
         }
         for item in &apply.trash {
             let new = store_trash::NewTrashEntry {
                 entry: item.entry,
-                root: apply.root,
+                vault: apply.vault,
                 parent: item.parent,
                 path: item.path.clone(),
                 kind: store_kind(item.kind),
@@ -1179,7 +1188,7 @@ impl DeleteStore for SqlDeleteStore {
             store_trash::insert_tombstone(&mut tx, self.owner, &new)
                 .await
                 .map_err(trash_store_error)?;
-            sqlx::query("INSERT INTO trash_membership(entry_id,deletion_root,deletion_id) VALUES (?1,?2,?3)")
+            sqlx::query("INSERT INTO trash_membership(entry_id,deletion_vault,deletion_id) VALUES (?1,?2,?3)")
                 .bind(item.entry.as_bytes().as_slice()).bind(apply.entry.as_bytes().as_slice())
                 .bind(apply.intent_id.as_bytes().as_slice()).execute(&mut *tx).await.map_err(trash_store_error)?;
         }
@@ -1196,7 +1205,7 @@ impl DeleteStore for SqlDeleteStore {
         Ok(DeleteRecord {
             intent_id: apply.intent_id,
             phase: PutPhase::Finalized,
-            root: apply.root,
+            vault: apply.vault,
             entry: apply.entry,
             trashed: apply.trash.len() as u64,
             seq: batch.seq,
@@ -1208,7 +1217,7 @@ impl DeleteStore for SqlDeleteStore {
 async fn collect_subtree(
     conn: &mut sqlx::SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
     path: &str,
     out: &mut Vec<SubtreeEntry>,
@@ -1217,7 +1226,7 @@ async fn collect_subtree(
         .await
         .map_err(trash_store_error)?
         .ok_or(TrashStoreError::EntryMissing { entry })?;
-    if record.root != root || record.deleted_at.is_some() {
+    if record.vault != vault || record.deleted_at.is_some() {
         return Err(TrashStoreError::EntryMissing { entry });
     }
     out.push(SubtreeEntry {
@@ -1229,7 +1238,7 @@ async fn collect_subtree(
         content_version: record.content_version,
     });
     if record.kind == store_entries::EntryKind::Directory {
-        let children = store_entries::children(&mut *conn, owner, root, entry)
+        let children = store_entries::children(&mut *conn, owner, vault, entry)
             .await
             .map_err(trash_store_error)?;
         for child in children {
@@ -1237,7 +1246,7 @@ async fn collect_subtree(
             Box::pin(collect_subtree(
                 conn,
                 owner,
-                root,
+                vault,
                 child.id,
                 &child_path,
                 out,
@@ -1292,7 +1301,7 @@ pub struct CreateCommand {
     pub local_generation: Option<vaultsyncd_domain::version::Generation>,
 }
 
-/// 同 Root 移动命令。
+/// 同 Vault 移动命令。
 #[derive(Clone, Debug)]
 pub struct MoveCommand {
     /// 被移动的条目。
@@ -1343,7 +1352,7 @@ pub fn map_core_failure(
         Some(ErrorCode::InvalidName) => OperationFailure::InvalidName { detail },
         Some(ErrorCode::UnsupportedEntry) => OperationFailure::UnsupportedEntry { detail },
         Some(ErrorCode::VersionGone) => OperationFailure::VersionGone { detail },
-        Some(ErrorCode::RootUnavailable) => OperationFailure::RootUnavailable,
+        Some(ErrorCode::VaultUnavailable) => OperationFailure::VaultUnavailable,
         Some(ErrorCode::InsufficientStorage) => OperationFailure::NoSpace,
         Some(ErrorCode::NeedsRecovery) => OperationFailure::Storage { detail },
         _ => OperationFailure::Storage { detail },
@@ -1397,7 +1406,7 @@ pub fn restore_failure(
     }
 }
 
-/// 条目在 Root 内的相对路径（恢复命令也要用）。
+/// 条目在 Vault 内的相对路径（恢复命令也要用）。
 ///
 /// # Errors
 ///
@@ -1473,7 +1482,7 @@ pub async fn execute_create(
     let parent_path = entry_path(executor, owner, command.parent).await?;
     let target_path = child_path(&parent_path, &command.name);
     executor.begin_operation(owner, key, digest).await?;
-    let handle = match executor.root_handle(owner, key.root).await {
+    let handle = match executor.vault_handle(owner, key.vault).await {
         Ok(handle) => handle,
         Err(failure) => {
             executor.reject_failure(owner, key, &failure).await;
@@ -1493,7 +1502,7 @@ pub async fn execute_create(
     let request = vaultsyncd_server_core::commit::namespace::NamespaceRequest::CreateDirectory(
         vaultsyncd_server_core::commit::namespace::CreateDirectoryRequest {
             intent_id: IntentId::from_bytes(random_bytes()),
-            root: key.root,
+            vault: key.vault,
             entry: EntryId::from_bytes(random_bytes()),
             expected_epoch,
             parent: command.parent,
@@ -1502,7 +1511,7 @@ pub async fn execute_create(
         },
     );
     let mut gate = executor.commit_gate().lock().await;
-    executor.ensure_no_unfinished(owner, key.root).await?;
+    executor.ensure_no_unfinished(owner, key.vault).await?;
     let outcome = vaultsyncd_server_core::commit::namespace::commit_namespace(
         &mut gate, &mut store, &mut log, &mut ns, at, &request,
     )
@@ -1518,7 +1527,7 @@ pub async fn execute_create(
     }
 }
 
-/// 执行 move：同 Root 内改父关系与名称（EntryId 与内容不变）。
+/// 执行 move：同 Vault 内改父关系与名称（EntryId 与内容不变）。
 ///
 /// # Errors
 ///
@@ -1535,14 +1544,14 @@ pub async fn execute_move(
     let current = entry_facts(executor, owner, command.entry).await?;
     let Some(current_parent) = current.parent else {
         return Err(OperationFailure::UnsupportedEntry {
-            detail: "Root 根条目不能移动".to_owned(),
+            detail: "Vault 根条目不能移动".to_owned(),
         });
     };
     let from_path = entry_path(executor, owner, command.entry).await?;
     let parent_path = entry_path(executor, owner, command.parent).await?;
     let to_path = child_path(&parent_path, &command.name);
     executor.begin_operation(owner, key, digest).await?;
-    let handle = match executor.root_handle(owner, key.root).await {
+    let handle = match executor.vault_handle(owner, key.vault).await {
         Ok(handle) => handle,
         Err(failure) => {
             executor.reject_failure(owner, key, &failure).await;
@@ -1562,7 +1571,7 @@ pub async fn execute_move(
     let request = vaultsyncd_server_core::commit::namespace::NamespaceRequest::Move(
         vaultsyncd_server_core::commit::namespace::MoveRequest {
             intent_id: IntentId::from_bytes(random_bytes()),
-            root: key.root,
+            vault: key.vault,
             entry: command.entry,
             expected_epoch,
             expected_revision: command.base_revision,
@@ -1579,7 +1588,7 @@ pub async fn execute_move(
         },
     );
     let mut gate = executor.commit_gate().lock().await;
-    executor.ensure_no_unfinished(owner, key.root).await?;
+    executor.ensure_no_unfinished(owner, key.vault).await?;
     let outcome = vaultsyncd_server_core::commit::namespace::commit_namespace(
         &mut gate, &mut store, &mut log, &mut ns, at, &request,
     )
@@ -1611,7 +1620,7 @@ pub async fn execute_delete(
 ) -> Result<DeleteRecord, OperationFailure> {
     let path = entry_path(executor, owner, command.entry).await?;
     executor.begin_operation(owner, key, digest).await?;
-    let handle = match executor.root_handle(owner, key.root).await {
+    let handle = match executor.vault_handle(owner, key.vault).await {
         Ok(handle) => handle,
         Err(failure) => {
             executor.reject_failure(owner, key, &failure).await;
@@ -1632,7 +1641,7 @@ pub async fn execute_delete(
         executor.state_dir(),
         owner,
         &handle,
-        key.root,
+        key.vault,
         command.entry,
     )
     .await
@@ -1644,7 +1653,7 @@ pub async fn execute_delete(
     let mut ns = WorkTreeNamespace::new(handle);
     let request = vaultsyncd_server_core::commit::delete::DeleteRequest {
         intent_id: IntentId::from_bytes(random_bytes()),
-        root: key.root,
+        vault: key.vault,
         entry: command.entry,
         expected_epoch,
         expected_revision: command.base_revision,
@@ -1654,7 +1663,7 @@ pub async fn execute_delete(
         path,
     };
     let mut gate = executor.commit_gate().lock().await;
-    executor.ensure_no_unfinished(owner, key.root).await?;
+    executor.ensure_no_unfinished(owner, key.vault).await?;
     let outcome = vaultsyncd_server_core::commit::delete::commit_delete(
         &mut gate, &mut store, &mut log, &mut ns, at, &request,
     )
@@ -1686,15 +1695,15 @@ pub async fn verify_delete_scope(
     database: &Database,
     state_dir: &Path,
     owner: UserId,
-    handle: &Arc<RootHandle>,
-    root: RootId,
+    handle: &Arc<VaultHandle>,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<(), String> {
     let mut store = SqlDeleteStore::new(
         database.clone(),
         owner,
         store_operations::OperationKey {
-            root,
+            vault,
             device: vaultsyncd_domain::ids::DeviceId::from_bytes([0; 16]),
             op: vaultsyncd_domain::ids::OpId::from_bytes([0; 16]),
         },
@@ -1702,7 +1711,7 @@ pub async fn verify_delete_scope(
             .map_err(|error| error.to_string())?,
     );
     let image = store
-        .subtree_image(root, entry)
+        .subtree_image(vault, entry)
         .await
         .map_err(|error| error.to_string())?;
     let mut known = std::collections::HashMap::new();
@@ -1710,7 +1719,7 @@ pub async fn verify_delete_scope(
         let expected = match item.content_version {
             Some(version) => {
                 let mut conn = connect(database).await?;
-                let facts = store_versions::version_facts(&mut conn, owner, root, version)
+                let facts = store_versions::version_facts(&mut conn, owner, vault, version)
                     .await
                     .map_err(|error| error.to_string())?
                     .ok_or_else(|| format!("版本 {version} 的事实不可读"))?;
@@ -1720,7 +1729,7 @@ pub async fn verify_delete_scope(
         };
         known.insert(item.path.clone(), (item.kind, expected));
     }
-    let root_path = image
+    let vault_path = image
         .entries()
         .iter()
         .find(|item| item.entry == entry)
@@ -1728,7 +1737,7 @@ pub async fn verify_delete_scope(
         .ok_or_else(|| "冻结清单缺少根条目".to_owned())?;
     let mut ns = WorkTreeNamespace::new(Arc::clone(handle));
     let mut visited = 0usize;
-    let mut pending = vec![root_path];
+    let mut pending = vec![vault_path];
     while let Some(path) = pending.pop() {
         visited += 1;
         if visited > known.len() {
@@ -1761,7 +1770,7 @@ pub async fn verify_delete_scope(
                     let layout = crate::object_layout::for_digest(
                         database,
                         state_dir,
-                        root,
+                        vault,
                         vaultsyncd_server_core::objects::ContentDigest::from_bytes(
                             facts.object_hash,
                         ),
@@ -1803,7 +1812,7 @@ pub async fn verify_delete_scope(
 pub async fn subtree_image_of(
     executor: &crate::executor::ExecutorContext,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     entry: EntryId,
 ) -> Result<SubtreeImage, OperationFailure> {
     let mut conn = executor
@@ -1828,14 +1837,14 @@ pub async fn subtree_image_of(
         executor.database().clone(),
         owner,
         store_operations::OperationKey {
-            root,
+            vault,
             device: vaultsyncd_domain::ids::DeviceId::from_bytes([0; 16]),
             op: vaultsyncd_domain::ids::OpId::from_bytes([0; 16]),
         },
         store_operations::request_digest(&[("kind", b"subtree_token")]).map_err(command_storage)?,
     );
     store
-        .subtree_image(root, entry)
+        .subtree_image(vault, entry)
         .await
         .map_err(command_storage)
 }

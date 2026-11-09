@@ -7,6 +7,6 @@ import "./styles.css";
 const nonce = document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content;
 if (nonce) (globalThis as typeof globalThis & { __webpack_nonce__?: string }).__webpack_nonce__ = nonce;
 
-const root = document.getElementById("root");
-if (!root) throw new Error("应用挂载点缺失");
-createRoot(root).render(<StrictMode><App /></StrictMode>);
+const container = document.getElementById("root");
+if (!container) throw new Error("应用挂载点缺失");
+createRoot(container).render(<StrictMode><App /></StrictMode>);

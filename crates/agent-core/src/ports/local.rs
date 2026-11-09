@@ -132,7 +132,7 @@ pub struct ApplyRequest {
     pub expected_generation: Generation,
 }
 
-/// 同 Root 内的本地移动（应用远端已提交的移动）。
+/// 同 Vault 内的本地移动（应用远端已提交的移动）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MoveRequest {
     /// 触发这次改动的操作身份。
@@ -230,7 +230,7 @@ pub trait LocalPort: Send + Sync {
     /// 受控替换/安装。
     fn apply(&self, request: &ApplyRequest) -> PortFuture<'_, Result<ApplyReceipt, PortError>>;
 
-    /// 同 Root 移动。
+    /// 同 Vault 移动。
     fn move_entry(&self, request: &MoveRequest) -> PortFuture<'_, Result<ApplyReceipt, PortError>>;
 
     /// 删除本地条目（远端已提交删除后）。

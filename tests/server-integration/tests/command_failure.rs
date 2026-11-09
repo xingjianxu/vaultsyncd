@@ -2,7 +2,7 @@
 //! 重启必须补完原操作、开放写入，同一 OpId 仍返回同一条目和事件。
 mod common;
 
-use common::{Lab, Running, create_snapshot, identity, login, register_root, snapshot_entries};
+use common::{Lab, Running, create_snapshot, identity, login, register_vault, snapshot_entries};
 use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::Connection;
@@ -13,16 +13,16 @@ async fn published_namespace_failure_recovers_the_original_operation_after_resta
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动隔离实例");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
         .expect("注册");
-    let snapshot = create_snapshot(&running, &token, &root)
+    let snapshot = create_snapshot(&running, &token, &vault)
         .await
         .expect("快照");
     let entries = snapshot_entries(
         &running,
         &token,
-        &root,
+        &vault,
         snapshot["snapshot_id"].as_str().expect("快照身份"),
     )
     .await
@@ -49,7 +49,7 @@ async fn published_namespace_failure_recovers_the_original_operation_after_resta
         "name": "published-only",
         "expected_absent": true,
     });
-    let uri = format!("/v1/roots/{root}/operations");
+    let uri = format!("/v1/vaults/{vault}/operations");
     let (status, response) = running
         .json("POST", &uri, Some(&token), Some(&request))
         .await
@@ -98,7 +98,7 @@ async fn published_namespace_failure_recovers_the_original_operation_after_resta
     assert_eq!(replay["state"], "pending");
     assert!(
         replay
-            .get("root_seq")
+            .get("vault_seq")
             .is_none_or(serde_json::Value::is_null)
     );
 
@@ -122,7 +122,7 @@ async fn published_namespace_failure_recovers_the_original_operation_after_resta
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(result["state"], "committed");
     assert_eq!(result["replayed"], true);
-    assert_eq!(result["root_seq"], "1");
+    assert_eq!(result["vault_seq"], "1");
     let mut conn = sqlx::SqliteConnection::connect_with(
         &sqlx::sqlite::SqliteConnectOptions::new().filename(lab.state().join("server.sqlite")),
     )

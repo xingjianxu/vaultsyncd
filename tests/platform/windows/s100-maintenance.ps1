@@ -65,7 +65,7 @@ if($Mode-eq 'Restore'){
     if(Get-ScheduledTask -TaskName $user.task -ErrorAction SilentlyContinue){Unregister-ScheduledTask -TaskName $user.task -Confirm:$false}
   }
   if(Test-Path (Join-Path $private 'prior-lsa.bin')){Remove-Item (Join-Path $private 'prior-lsa.bin')}
-  Write-Output 'RESTORED prior automatic logon; retained user, Root/state/cache and recovery evidence preserved'
+  Write-Output 'RESTORED prior automatic logon; retained user, Vault/state/cache and recovery evidence preserved'
   exit
 }
 
@@ -120,7 +120,7 @@ public static class S100Native {
  [DllImport("cldapi.dll")]static extern int CfGetPlaceholderInfo(IntPtr h,int c,IntPtr b,uint n,out uint r);
  [DllImport("cldapi.dll",CharSet=CharSet.Unicode)]static extern int CfGetSyncRootInfoByPath(string p,int c,IntPtr b,uint n,out uint r);
  public static long[] Observe(string p){IntPtr h=CreateFileW(p,0x80,7,IntPtr.Zero,3,0x02200000,IntPtr.Zero);if(h==new IntPtr(-1))throw new System.ComponentModel.Win32Exception();IntPtr b=Marshal.AllocHGlobal(8192);try{if(!GetFileInformationByHandleEx(h,1,b,64))throw new System.ComponentModel.Win32Exception();long size=Marshal.ReadInt64(b,8);if(!GetFileInformationByHandleEx(h,9,b,64))throw new System.ComponentModel.Win32Exception();long attr=(uint)Marshal.ReadInt32(b,0),tag=(uint)Marshal.ReadInt32(b,4);uint used;int hr=CfGetPlaceholderInfo(h,1,b,8192,out used);if(hr==unchecked((int)0x80070178))return new long[]{0,0,size,tag,attr};if(hr<0)throw new Exception("CfGetPlaceholderInfo "+hr.ToString("x"));return new long[]{1,Marshal.ReadInt64(b,0),size,tag,attr};}finally{Marshal.FreeHGlobal(b);CloseHandle(h);}}
- public static int Root(string p){IntPtr b=Marshal.AllocHGlobal(8192);try{uint used;return CfGetSyncRootInfoByPath(p,0,b,8192,out used);}finally{Marshal.FreeHGlobal(b);}}
+ public static int Vault(string p){IntPtr b=Marshal.AllocHGlobal(8192);try{uint used;return CfGetSyncRootInfoByPath(p,0,b,8192,out used);}finally{Marshal.FreeHGlobal(b);}}
  delegate bool Window(IntPtr h,IntPtr p);
  [DllImport("user32.dll")]static extern bool EnumWindows(Window c,IntPtr p);
  [DllImport("user32.dll")]static extern bool EnumChildWindows(IntPtr h,Window c,IntPtr p);
@@ -155,7 +155,7 @@ public static class S100Native {
         $null=Invoke-Cli @('--json','set-connection','--server-id',$sid,'--server-url',$fixture.url,'--ca-file',(Join-Path $public 'ca.pem'))
         $login=$fixture.password|& $cli --json login --username $fixture.login;if($LASTEXITCODE-ne 0){throw 'real fixture login failed'}
         New-Item -ItemType Directory $local,$cache|Out-Null
-        $null=Invoke-Cli @('--json','create-binding','--binding-id',$binding,'--root-id',$fixture.root,'--local-path',$local,'--cache-path',$cache,'--mode','full')
+        $null=Invoke-Cli @('--json','create-binding','--binding-id',$binding,'--vault-id',$fixture.vault,'--local-path',$local,'--cache-path',$cache,'--mode','full')
         $null=Poll 'initial actual full download' {$b=@((Status).bindings|Where-Object binding_id -eq $binding);$b.Count-eq 1 -and $b[0].synchronized}
         $files=Files;$cloud=$files|Where-Object path -eq 'cloud-only.bin';if(!$cloud.entry_id){throw 'cloud entry identity absent'}
         $null=Invoke-Cli @('--json','mode','--binding-id',$binding,'--mode','on_demand')
@@ -196,8 +196,8 @@ public static class S100Native {
         $null=Poll 'program-only actual uninstall' {!(Test-Path $cli) -and !(Get-ItemProperty 'HKCU:\Software\vaultsyncd' -ErrorAction SilentlyContinue)}
         $script:uninstaller.Refresh();if(!$script:uninstaller.HasExited){$null=$script:uninstaller.CloseMainWindow();$null=$script:uninstaller.WaitForExit(15000)}
         $answer.hashes=Check-Content;$cloudPath=Join-Path $local 'cloud-only.bin';$observation=[S100Native]::Observe($cloudPath)
-        if($observation[0]-ne 1 -or $observation[1]-ne 0 -or [S100Native]::Root($local)-lt 0){throw 'program-only removal destroyed registration/placeholder'}
-        $answer.cloud_metadata=$observation;$answer.root_registered=$true
+        if($observation[0]-ne 1 -or $observation[1]-ne 0 -or [S100Native]::Vault($local)-lt 0){throw 'program-only removal destroyed registration/placeholder'}
+        $answer.cloud_metadata=$observation;$answer.vault_registered=$true
         try{$null=[IO.File]::ReadAllBytes($cloudPath);throw 'cloud-only data unexpectedly readable without provider'}catch{if($_.Exception.Message.Contains('unexpectedly')){throw};$answer.unavailable_hresult=$_.Exception.HResult;$answer.unavailable_type=$_.Exception.GetType().FullName}
         if(!(Test-Path (Join-Path $agentProfile 'state\client.sqlite')) -or !(Test-Path $cache)){throw 'default uninstall removed state/cache'}
         $answer.state_and_cache_retained=$true
@@ -209,8 +209,8 @@ public static class S100Native {
       }
       'provider-refusal' {
         $answer.exit_code=Run-Uninstall '/S /PROVIDER' 27;$null=Wait-Agent;$null=Check-Installed $fixture.source_commit
-        $answer.hashes=Check-Content;$answer.cloud_metadata=[S100Native]::Observe((Join-Path $local 'cloud-only.bin'));$answer.root_hresult=[S100Native]::Root($local)
-        if($answer.cloud_metadata[0]-ne 1 -or $answer.cloud_metadata[1]-ne 0 -or $answer.root_hresult-lt 0){throw 'provider refusal did not preserve placeholder/registration'}
+        $answer.hashes=Check-Content;$answer.cloud_metadata=[S100Native]::Observe((Join-Path $local 'cloud-only.bin'));$answer.vault_hresult=[S100Native]::Vault($local)
+        if($answer.cloud_metadata[0]-ne 1 -or $answer.cloud_metadata[1]-ne 0 -or $answer.vault_hresult-lt 0){throw 'provider refusal did not preserve placeholder/registration'}
       }
       'materialize' {
         # Full-mode tasks intentionally wait for unresolved dirty uploads. Recover a known
@@ -233,8 +233,8 @@ public static class S100Native {
       }
       'provider-uninstall' {
         $answer.exit_code=Run-Uninstall '/S /PROVIDER' 0;$answer.hashes=Check-Content
-        $answer.cloud_metadata=[S100Native]::Observe((Join-Path $local 'cloud-only.bin'));$answer.root_hresult=[S100Native]::Root($local)
-        if($answer.cloud_metadata[0]-ne 0 -or $answer.root_hresult-ge 0 -or (Test-Path $cli)){throw 'provider removal was not actual ordinary files/unregistered/program removal'}
+        $answer.cloud_metadata=[S100Native]::Observe((Join-Path $local 'cloud-only.bin'));$answer.vault_hresult=[S100Native]::Vault($local)
+        if($answer.cloud_metadata[0]-ne 0 -or $answer.vault_hresult-ge 0 -or (Test-Path $cli)){throw 'provider removal was not actual ordinary files/unregistered/program removal'}
         $answer.state_retained=Test-Path (Join-Path $agentProfile 'state\client.sqlite');$answer.cache_retained=Test-Path $cache
         $answer.provider_reports=@(Get-ChildItem (Join-Path $agentProfile 'maintenance') -Filter provider-removal.json -Recurse|ForEach-Object{Get-Content $_.FullName -Raw -Encoding UTF8|ConvertFrom-Json})
         $answer.exports=Exports

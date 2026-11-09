@@ -2,16 +2,16 @@
 mod common;
 
 use common::{
-    Lab, Running, all_changes, create_snapshot, identity, login, register_root, snapshot_entries,
+    Lab, Running, all_changes, create_snapshot, identity, login, register_vault, snapshot_entries,
     wait_for,
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-async fn snapshot(running: &Running, token: &str, root: &str) -> Vec<Value> {
-    let meta = create_snapshot(running, token, root).await.unwrap();
-    snapshot_entries(running, token, root, meta["snapshot_id"].as_str().unwrap())
+async fn snapshot(running: &Running, token: &str, vault: &str) -> Vec<Value> {
+    let meta = create_snapshot(running, token, vault).await.unwrap();
+    snapshot_entries(running, token, vault, meta["snapshot_id"].as_str().unwrap())
         .await
         .unwrap()
 }
@@ -25,16 +25,16 @@ async fn consecutive_api_directory_renames_preserve_descendants_through_observer
     lab.init_owner().await;
     let running = Running::start(&lab).await.unwrap();
     let token = login(&running).await.unwrap();
-    let root = register_root(&running, &token, &lab.work()).await.unwrap();
+    let vault = register_vault(&running, &token, &lab.work()).await.unwrap();
     wait_for("导入子文件", || async {
-        Ok(snapshot(&running, &token, &root)
+        Ok(snapshot(&running, &token, &vault)
             .await
             .iter()
             .any(|item| item["name"] == "note.txt"))
     })
     .await
     .unwrap();
-    let entries = snapshot(&running, &token, &root).await;
+    let entries = snapshot(&running, &token, &vault).await;
     let named = |name: &str| {
         entries
             .iter()
@@ -45,13 +45,13 @@ async fn consecutive_api_directory_renames_preserve_descendants_through_observer
     let original = named("note.txt");
     let parent = named("parent");
     let child = named("child");
-    let root_entry = named("");
-    let epoch = create_snapshot(&running, &token, &root).await.unwrap()["server_epoch"].clone();
+    let vault_entry = named("");
+    let epoch = create_snapshot(&running, &token, &vault).await.unwrap()["server_epoch"].clone();
     for (index, directory, destination, name, path) in [
         (
             0_u8,
             parent,
-            root_entry["entry_id"].clone(),
+            vault_entry["entry_id"].clone(),
             "parent-renamed",
             "parent-renamed/child/note.txt",
         ),
@@ -63,7 +63,7 @@ async fn consecutive_api_directory_renames_preserve_descendants_through_observer
             "parent-renamed/child-renamed/note.txt",
         ),
     ] {
-        let (status, result) = running.json("POST", &format!("/v1/roots/{root}/operations"), Some(&token), Some(&json!({
+        let (status, result) = running.json("POST", &format!("/v1/vaults/{vault}/operations"), Some(&token), Some(&json!({
             "op_id": identity(0x71 + index), "device_id": identity(0x73), "server_epoch": epoch,
             "kind": "move", "entry_id": directory["entry_id"], "base_revision": directory["revision"],
             "parent_id": destination, "name": name,
@@ -72,7 +72,7 @@ async fn consecutive_api_directory_renames_preserve_descendants_through_observer
         assert_eq!(result["state"], "committed");
         for _ in 0..4 {
             tokio::time::sleep(Duration::from_millis(1100)).await;
-            let current = snapshot(&running, &token, &root).await;
+            let current = snapshot(&running, &token, &vault).await;
             let file = current
                 .iter()
                 .find(|item| item["entry_id"] == original["entry_id"])
@@ -84,7 +84,7 @@ async fn consecutive_api_directory_renames_preserve_descendants_through_observer
             assert_eq!(std::fs::read(lab.work().join(path)).unwrap(), content);
         }
     }
-    let before = all_changes(&running, &token, &root).await.unwrap();
+    let before = all_changes(&running, &token, &vault).await.unwrap();
     assert!(!before.iter().any(|batch| {
         batch["events_json"]
             .as_str()
@@ -92,7 +92,7 @@ async fn consecutive_api_directory_renames_preserve_descendants_through_observer
     }));
     std::fs::remove_file(lab.work().join("parent-renamed/child-renamed/note.txt")).unwrap();
     wait_for("新路径真实删除被观察", || async {
-        Ok(!snapshot(&running, &token, &root)
+        Ok(!snapshot(&running, &token, &vault)
             .await
             .iter()
             .any(|item| item["entry_id"] == original["entry_id"]))
@@ -102,7 +102,7 @@ async fn consecutive_api_directory_renames_preserve_descendants_through_observer
     let (status, trash) = running
         .json(
             "GET",
-            &format!("/v1/roots/{root}/trash"),
+            &format!("/v1/vaults/{vault}/trash"),
             Some(&token),
             None,
         )

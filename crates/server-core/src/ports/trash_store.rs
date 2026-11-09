@@ -1,7 +1,7 @@
 //! 删除的存储端口：子树清单与“回收站清单 + 墓碑 + 软删除 + 事件批次 + 意图收尾”的单一事务
 //! （design §10.3、§11.2 步骤 7、§7.2 `trash`）。
 //!
-//! 与 [`crate::ports::namespace_store`] 同一套服务器事实词汇（[`RootFacts`]、[`EntryBaseline`]、
+//! 与 [`crate::ports::namespace_store`] 同一套服务器事实词汇（[`VaultFacts`]、[`EntryBaseline`]、
 //! [`EntryKind`]），但事务内容不同：删除要一次写四样东西——回收站清单（可恢复的路径与内容引用）、
 //! 墓碑（告诉旧设备“这个条目没了”）、条目的软删除与**一批**变更事件——并在同一事务里把意图收尾到
 //! `finalized`。任何一样没写进去，就不能 ACK（design §10.3 第三条）。
@@ -21,12 +21,12 @@
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, IntentId, TxId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, UtcTimestamp, VaultSeq};
 
 use crate::commit::delete::{DeleteBatch, SubtreeImage};
 use crate::commit::intent::PutPhase;
-use crate::ports::put_store::{EntryBaseline, EntryKind, RootFacts};
+use crate::ports::put_store::{EntryBaseline, EntryKind, VaultFacts};
 
 /// 回收站清单的一条：被删除条目的原位置、身份与内容引用。
 ///
@@ -36,9 +36,9 @@ use crate::ports::put_store::{EntryBaseline, EntryKind, RootFacts};
 pub struct TrashManifestEntry {
     /// 被删除的条目身份。
     pub entry: EntryId,
-    /// 原父目录；删除 Root 根条目不被允许，因此这里不出现 `None`。
+    /// 原父目录；删除 Vault 根条目不被允许，因此这里不出现 `None`。
     pub parent: EntryId,
-    /// 原位置的 Root 内相对路径（整棵子树逐条记录）。
+    /// 原位置的 Vault 内相对路径（整棵子树逐条记录）。
     pub path: String,
     /// 条目种类。
     pub kind: EntryKind,
@@ -57,8 +57,8 @@ pub struct TrashManifestEntry {
 pub struct DeleteApply {
     /// 已写进 `fs_intents` 且已推进到 `published` 的意图。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 子树根条目（被请求删除的那一个）。
     pub entry: EntryId,
     /// 有界批次：每批至多 `MAX_DELETE_BATCH_ENTRIES` 个条目，合起来就是整棵子树。
@@ -84,14 +84,14 @@ pub struct DeleteRecord {
     pub intent_id: IntentId,
     /// 事务后意图的阶段：必须是 `finalized`，否则核心不返回 ACK。
     pub phase: PutPhase,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 子树根条目。
     pub entry: EntryId,
     /// 本次写进回收站与墓碑的条目数（必须等于清单长度）。
     pub trashed: u64,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
     /// 该批次的事务身份。
     pub tx: TxId,
 }
@@ -104,12 +104,12 @@ pub enum TrashStoreError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 或条目不在调用方的 owner scope 内。
+    /// Vault 或条目不在调用方的 owner scope 内。
     OutOfScope,
-    /// Root 不存在。
-    UnknownRoot {
-        /// 被查询的 Root。
-        root: RootId,
+    /// Vault 不存在。
+    UnknownVault {
+        /// 被查询的 Vault。
+        vault: VaultId,
     },
     /// 条目不存在（含已经软删除）。
     EntryMissing {
@@ -161,7 +161,7 @@ impl TrashStoreError {
         match self {
             TrashStoreError::Storage { .. } => "trash_store_failed",
             TrashStoreError::OutOfScope => "out_of_scope",
-            TrashStoreError::UnknownRoot { .. } => "unknown_root",
+            TrashStoreError::UnknownVault { .. } => "unknown_vault",
             TrashStoreError::EntryMissing { .. } => "entry_missing",
             TrashStoreError::RevisionChanged { .. } => "revision_changed",
             TrashStoreError::IllegalIntentTransition { .. } => "illegal_intent_transition",
@@ -177,8 +177,8 @@ impl fmt::Display for TrashStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TrashStoreError::Storage { detail } => write!(f, "删除存储失败：{detail}"),
-            TrashStoreError::OutOfScope => f.write_str("Root 或条目不在调用方的 owner scope 内"),
-            TrashStoreError::UnknownRoot { root } => write!(f, "Root {root} 不存在"),
+            TrashStoreError::OutOfScope => f.write_str("Vault 或条目不在调用方的 owner scope 内"),
+            TrashStoreError::UnknownVault { vault } => write!(f, "Vault {vault} 不存在"),
             TrashStoreError::EntryMissing { entry } => write!(f, "条目 {entry} 不存在"),
             TrashStoreError::RevisionChanged { expected, actual } => {
                 write!(f, "条目 revision 已从 {expected} 变为 {actual}")
@@ -209,12 +209,12 @@ impl std::error::Error for TrashStoreError {}
 // `#[allow(async_fn_in_trait)]`：本 trait 只在编排函数里以泛型参数使用，不外发、不做 dyn 对象。
 #[allow(async_fn_in_trait)]
 pub trait DeleteStore {
-    /// 读 Root 当前事实（epoch）。
+    /// 读 Vault 当前事实（epoch）。
     ///
     /// # Errors
     ///
-    /// 存储失败、越权、Root 不存在。
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, TrashStoreError>;
+    /// 存储失败、越权、Vault 不存在。
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, TrashStoreError>;
 
     /// 读条目当前命名空间基线（活跃条目）。
     ///
@@ -223,7 +223,7 @@ pub trait DeleteStore {
     /// 存储失败、越权、条目不存在、行无法还原。
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, TrashStoreError>;
 
@@ -238,7 +238,7 @@ pub trait DeleteStore {
     /// 见 [`TrashStoreError`]：条目不存在、越权、存储失败、行无法还原。
     async fn subtree_image(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<SubtreeImage, TrashStoreError>;
 

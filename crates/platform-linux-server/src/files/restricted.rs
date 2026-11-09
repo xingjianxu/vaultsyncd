@@ -207,7 +207,7 @@ pub enum RestrictError {
     /// 相对路径不符合 §16.1 的规则。
     InvalidRelativePath(InvalidRelativePath),
     /// 打开根目录句柄失败。
-    OpenRoot {
+    OpenVault {
         /// 调用方给出的路径。
         path: PathBuf,
         /// 原始错误。
@@ -230,7 +230,7 @@ pub enum RestrictError {
         source: io::Error,
     },
     /// 路径解析结果逃出了根目录（`RESOLVE_BENEATH` 的 `EXDEV`）。
-    EscapesRoot {
+    EscapesVault {
         /// 相对路径。
         path: PathBuf,
         /// 原始错误。
@@ -317,16 +317,16 @@ pub enum RestrictError {
         /// 原始错误。
         source: io::Error,
     },
-    /// 解析结果进入了另一个挂载（bind mount、子挂载）：超出 Root 的存储边界。
+    /// 解析结果进入了另一个挂载（bind mount、子挂载）：超出 Vault 的存储边界。
     MountBoundaryCrossed {
         /// 相对路径。
         path: PathBuf,
-        /// Root 句柄所在的挂载 ID。
-        root_mount_id: u64,
+        /// Vault 句柄所在的挂载 ID。
+        vault_mount_id: u64,
         /// 实际观察到的挂载 ID。
         observed_mount_id: u64,
     },
-    /// 内核未提供挂载 ID，无法确认这是否仍在 Root 的挂载内。
+    /// 内核未提供挂载 ID，无法确认这是否仍在 Vault 的挂载内。
     MountBoundaryUnverified {
         /// 相对路径。
         path: PathBuf,
@@ -341,10 +341,10 @@ impl RestrictError {
     pub fn code(&self) -> &'static str {
         match self {
             RestrictError::InvalidRelativePath(_) => "invalid_relative_path",
-            RestrictError::OpenRoot { .. } => "open_root_failed",
+            RestrictError::OpenVault { .. } => "open_vault_failed",
             RestrictError::NotDirectory { .. } => "not_directory",
             RestrictError::Resolve { .. } => "resolve_failed",
-            RestrictError::EscapesRoot { .. } => "escape_rejected",
+            RestrictError::EscapesVault { .. } => "escape_rejected",
             RestrictError::SymlinkRejected { .. } => "symlink_rejected",
             RestrictError::NotFound { .. } => "not_found",
             RestrictError::NotRegularFile { .. } => "not_regular_file",
@@ -366,7 +366,7 @@ impl fmt::Display for RestrictError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RestrictError::InvalidRelativePath(error) => write!(f, "{error}"),
-            RestrictError::OpenRoot { path, source } => {
+            RestrictError::OpenVault { path, source } => {
                 write!(f, "无法打开根目录句柄 {}：{source}", path.display())
             }
             RestrictError::NotDirectory { path, observed } => {
@@ -377,7 +377,7 @@ impl fmt::Display for RestrictError {
                 mechanism,
                 source,
             } => write!(f, "按 {mechanism} 解析 {} 失败：{source}", path.display()),
-            RestrictError::EscapesRoot { path, source } => write!(
+            RestrictError::EscapesVault { path, source } => write!(
                 f,
                 "{} 的解析结果逃出了根目录，拒绝继续：{source}",
                 path.display()
@@ -425,16 +425,16 @@ impl fmt::Display for RestrictError {
             }
             RestrictError::MountBoundaryCrossed {
                 path,
-                root_mount_id,
+                vault_mount_id,
                 observed_mount_id,
             } => write!(
                 f,
-                "{} 进入了另一个挂载（Root 挂载 {root_mount_id}，实际 {observed_mount_id}），拒绝继续",
+                "{} 进入了另一个挂载（Vault 挂载 {vault_mount_id}，实际 {observed_mount_id}），拒绝继续",
                 path.display()
             ),
             RestrictError::MountBoundaryUnverified { path, detail } => write!(
                 f,
-                "无法确认 {} 是否仍在 Root 的挂载内（{detail}），拒绝继续",
+                "无法确认 {} 是否仍在 Vault 的挂载内（{detail}），拒绝继续",
                 path.display()
             ),
         }
@@ -445,9 +445,9 @@ impl std::error::Error for RestrictError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             RestrictError::InvalidRelativePath(_) => None,
-            RestrictError::OpenRoot { source, .. }
+            RestrictError::OpenVault { source, .. }
             | RestrictError::Resolve { source, .. }
-            | RestrictError::EscapesRoot { source, .. }
+            | RestrictError::EscapesVault { source, .. }
             | RestrictError::SymlinkRejected { source, .. }
             | RestrictError::NotFound { source, .. }
             | RestrictError::AlreadyExists { source, .. }
@@ -514,7 +514,7 @@ impl RestrictedDir {
                     path: path.to_path_buf(),
                     source,
                 },
-                _ => RestrictError::OpenRoot {
+                _ => RestrictError::OpenVault {
                     path: path.to_path_buf(),
                     source,
                 },
@@ -913,7 +913,7 @@ impl RestrictedDir {
 
     fn map_resolve_error(&self, relative: &Path, source: io::Error) -> RestrictError {
         match source.raw_os_error() {
-            Some(errno::EXDEV) => RestrictError::EscapesRoot {
+            Some(errno::EXDEV) => RestrictError::EscapesVault {
                 path: relative.to_path_buf(),
                 source,
             },
@@ -1042,7 +1042,7 @@ mod tests {
         assert_eq!(
             RestrictError::MountBoundaryCrossed {
                 path: PathBuf::from("alias"),
-                root_mount_id: 40,
+                vault_mount_id: 40,
                 observed_mount_id: 41,
             }
             .code(),

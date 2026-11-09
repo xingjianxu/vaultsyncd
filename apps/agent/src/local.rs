@@ -16,7 +16,7 @@ use vaultsyncd_domain::{
 };
 use vaultsyncd_fs_common::path::RelativePath;
 use vaultsyncd_platform_windows::files::{
-    RootHandle,
+    VaultHandle,
     controlled::{Evidence, FixedSnapshot, ObservedContent, WindowsFiles},
     staging::StagingFile,
 };
@@ -27,7 +27,7 @@ pub(crate) fn error(e: impl std::fmt::Debug) -> PortError {
 /// One binding's native adapter and immutable observation registry.
 pub struct Local {
     pub(crate) native: Arc<WindowsFiles>,
-    pub(crate) root: Arc<RootHandle>,
+    pub(crate) vault: Arc<VaultHandle>,
     pub(crate) cache: PathBuf,
     pub(crate) db: Arc<Database>,
     pub(crate) binding: BindingId,
@@ -35,12 +35,12 @@ pub struct Local {
 impl Local {
     /// Open safe, disjoint directories and seed previous evidence; no disk content is trusted as clean.
     pub async fn open(
-        root: &Path,
+        vault: &Path,
         cache: &Path,
         db: Arc<Database>,
         binding: BindingId,
     ) -> Result<Self, PortError> {
-        let native = Arc::new(WindowsFiles::open(root, cache).map_err(error)?);
+        let native = Arc::new(WindowsFiles::open(vault, cache).map_err(error)?);
         let rows:Vec<(String,String)>=sqlx::query_as("SELECT path,evidence FROM agent_evidence e WHERE binding_id=? AND generation=(SELECT max(generation) FROM agent_evidence x WHERE x.binding_id=e.binding_id AND x.path=e.path)").bind(binding.as_bytes().as_slice()).fetch_all(db.pool()).await.map_err(error)?;
         for (path, text) in rows {
             native
@@ -49,7 +49,7 @@ impl Local {
         }
         Ok(Self {
             native,
-            root: Arc::new(RootHandle::open(root).map_err(error)?),
+            vault: Arc::new(VaultHandle::open(vault).map_err(error)?),
             cache: cache.into(),
             db,
             binding,
@@ -59,7 +59,7 @@ impl Local {
         &self,
         path: &str,
     ) -> Result<Option<Arc<FixedSnapshot>>, PortError> {
-        let meta = self.root.inspect(path);
+        let meta = self.vault.inspect(path);
         if let Ok(meta) = &meta {
             if !meta.directory {
                 let mut physical = meta.identity.volume.to_le_bytes().to_vec();
@@ -243,7 +243,7 @@ impl LocalPort for Local {
     fn observe(&self, path: &RelativePath) -> PortFuture<'_, Result<LocalFacts, PortError>> {
         let path = path.clone();
         Box::pin(async move {
-            let meta = self.root.inspect(&path.to_string()).map_err(error)?;
+            let meta = self.vault.inspect(&path.to_string()).map_err(error)?;
             if meta.directory {
                 let mut physical = meta.identity.volume.to_le_bytes().to_vec();
                 physical.extend(meta.identity.file);

@@ -10,12 +10,12 @@ async fn finalized_content_create_preserves_original_result_across_restart() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.unwrap();
     let token = login(&running).await.unwrap();
-    let root = register_root(&running, &token, &lab.work()).await.unwrap();
-    let snap = create_snapshot(&running, &token, &root).await.unwrap();
+    let vault = register_vault(&running, &token, &lab.work()).await.unwrap();
+    let snap = create_snapshot(&running, &token, &vault).await.unwrap();
     let rows = snapshot_entries(
         &running,
         &token,
-        &root,
+        &vault,
         snap["snapshot_id"].as_str().unwrap(),
     )
     .await
@@ -26,14 +26,14 @@ async fn finalized_content_create_preserves_original_result_across_restart() {
     let (upload, _, _) = upload(
         &running,
         &token,
-        &root,
+        &vault,
         b"new file through real content Create",
         1024,
     )
     .await
     .unwrap();
     let body = json!({"op_id":identity(0x70),"device_id":identity(0x71),"server_epoch":snap["server_epoch"],"kind":"create","parent_id":parent,"name":"created.txt","expected_absent":true,"upload_id":upload,"local_generation":"9","conflict_policy":"preserve_both"});
-    let endpoint = format!("/v1/roots/{root}/operations");
+    let endpoint = format!("/v1/vaults/{vault}/operations");
     let (status, first) = running
         .json("POST", &endpoint, Some(&token), Some(&body))
         .await
@@ -50,7 +50,7 @@ async fn finalized_content_create_preserves_original_result_across_restart() {
         .json("POST", &endpoint, Some(&token), Some(&body))
         .await
         .unwrap();
-    for key in ["entry_id", "version_id", "revision", "root_seq"] {
+    for key in ["entry_id", "version_id", "revision", "vault_seq"] {
         assert_eq!(first[key], replayed[key]);
     }
     let mut altered = body.clone();
@@ -67,14 +67,14 @@ async fn finalized_content_create_preserves_original_result_across_restart() {
         .json("POST", &endpoint, Some(&token), Some(&body))
         .await
         .unwrap();
-    for key in ["entry_id", "version_id", "revision", "root_seq"] {
+    for key in ["entry_id", "version_id", "revision", "vault_seq"] {
         assert_eq!(first[key], after[key]);
     }
-    let s = create_snapshot(&restarted, &token, &root).await.unwrap();
+    let s = create_snapshot(&restarted, &token, &vault).await.unwrap();
     let rows = snapshot_entries(
         &restarted,
         &token,
-        &root,
+        &vault,
         s["snapshot_id"].as_str().unwrap(),
     )
     .await
@@ -104,24 +104,24 @@ async fn killed_create_publication_recovers_once_and_corrupt_context_never_repub
         lab.init_owner().await;
         let running = Running::start(&lab).await.unwrap();
         let token = login(&running).await.unwrap();
-        let root = register_root(&running, &token, &lab.work()).await.unwrap();
-        let snapshot = create_snapshot(&running, &token, &root).await.unwrap();
+        let vault = register_vault(&running, &token, &lab.work()).await.unwrap();
+        let snapshot = create_snapshot(&running, &token, &vault).await.unwrap();
         let rows = snapshot_entries(
             &running,
             &token,
-            &root,
+            &vault,
             snapshot["snapshot_id"].as_str().unwrap(),
         )
         .await
         .unwrap();
         let parent = rows.iter().find(|e| e["parent_id"].is_null()).unwrap()["entry_id"].clone();
-        let (upload, _, _) = upload(&running, &token, &root, b"fixed create crash bytes", 1024)
+        let (upload, _, _) = upload(&running, &token, &vault, b"fixed create crash bytes", 1024)
             .await
             .unwrap();
         running.stop().await;
-        let fixture = lab.root().join("create-fixture.json");
-        let marker = lab.root().join("create-boundary");
-        let value = json!({"state":lab.state(),"root":root,"parent":parent,"upload":upload,"op":identity(0x73),"device":identity(0x74),"epoch":snapshot["server_epoch"],"name":"crash.txt","phase":phase,"marker":marker});
+        let fixture = lab.vault().join("create-fixture.json");
+        let marker = lab.vault().join("create-boundary");
+        let value = json!({"state":lab.state(),"vault":vault,"parent":parent,"upload":upload,"op":identity(0x73),"device":identity(0x74),"epoch":snapshot["server_epoch"],"name":"crash.txt","phase":phase,"marker":marker});
         std::fs::write(&fixture, serde_json::to_vec(&value).unwrap()).unwrap();
         let helper = std::env::current_exe()
             .unwrap()
@@ -193,7 +193,7 @@ async fn killed_create_publication_recovers_once_and_corrupt_context_never_repub
         let (code, result) = restarted
             .json(
                 "GET",
-                &format!("/v1/roots/{root}/operations/{}", identity(0x73)),
+                &format!("/v1/vaults/{vault}/operations/{}", identity(0x73)),
                 Some(&token),
                 None,
             )
@@ -211,11 +211,11 @@ async fn killed_create_publication_recovers_once_and_corrupt_context_never_repub
                 std::fs::read(lab.work().join("crash.txt")).unwrap(),
                 b"fixed create crash bytes"
             );
-            let snap = create_snapshot(&restarted, &token, &root).await.unwrap();
+            let snap = create_snapshot(&restarted, &token, &vault).await.unwrap();
             let rows = snapshot_entries(
                 &restarted,
                 &token,
-                &root,
+                &vault,
                 snap["snapshot_id"].as_str().unwrap(),
             )
             .await

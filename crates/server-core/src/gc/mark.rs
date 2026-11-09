@@ -1,15 +1,15 @@
 //! 来自同一数据库快照的引用事实。时钟由调用方注入，不读取对象 mtime。
 use std::collections::{BTreeMap, BTreeSet};
-use vaultsyncd_domain::{ids::RootId, version::UtcTimestamp};
+use vaultsyncd_domain::{ids::VaultId, version::UtcTimestamp};
 
 /// C07 的最低保留期，不能随磁盘压力缩短。
 pub const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 
-/// 内容地址按 Root 隔离。
+/// 内容地址按 Vault 隔离。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectKey {
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 内容 SHA-256。
     pub hash: [u8; 32],
 }
@@ -77,7 +77,7 @@ mod tests {
     }
     fn object() -> ObjectKey {
         ObjectKey {
-            root: RootId::from_bytes([1; 16]),
+            vault: VaultId::from_bytes([1; 16]),
             hash: [2; 32],
         }
     }
@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(retained_until(at(i64::MAX)), at(i64::MAX));
     }
     #[test]
-    fn root_scope_and_all_lease_reasons_are_preserved() {
+    fn vault_scope_and_all_lease_reasons_are_preserved() {
         let reasons = [
             Reason::Trash,
             Reason::UnfinishedOperation,
@@ -130,7 +130,7 @@ mod tests {
         assert_eq!(mark(at(19), refs)[&object()].len(), 6);
         assert!(mark(at(20), refs).is_empty());
         let mut other = object();
-        other.root = RootId::from_bytes([3; 16]);
+        other.vault = VaultId::from_bytes([3; 16]);
         assert!(!mark(at(1), refs).contains_key(&other));
     }
 }

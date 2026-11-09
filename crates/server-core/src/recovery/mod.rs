@@ -8,7 +8,7 @@
 //! | `prepared` 且现场满足 `expected_before` | [`RecoveryDecision::Redo`]：重做发布（§11.3 第 3 行） |
 //! | 现场已是 `desired_after` 内容（`prepared` 或 `published`） | [`RecoveryDecision::Complete`]：完成同一操作（第 4 行） |
 //! | 现场是第三种状态 | [`RecoveryDecision::Reconcile`]：保留两个可读版本，等协调，不盲目覆盖 |
-//! | 拿不到可证明的现场（读不到）或意图已被标 `needs_recovery` | [`RecoveryDecision::NeedsRecovery`]：暂停该 Root 的破坏性写入 |
+//! | 拿不到可证明的现场（读不到）或意图已被标 `needs_recovery` | [`RecoveryDecision::NeedsRecovery`]：暂停该 Vault 的破坏性写入 |
 //!
 //! 三条不变量：
 //!
@@ -102,7 +102,7 @@ pub enum RecoveryDecision {
         /// 具体情形。
         reason: ReconcileReason,
     },
-    /// 没有可证明的现场：暂停该 Root 的破坏性写入，输出恢复报告。
+    /// 没有可证明的现场：暂停该 Vault 的破坏性写入，输出恢复报告。
     NeedsRecovery {
         /// 具体原因。
         reason: NeedsRecoveryReason,
@@ -122,7 +122,7 @@ impl RecoveryDecision {
         }
     }
 
-    /// 是否必须暂停该 Root 的破坏性写入（只有 `NeedsRecovery`）。
+    /// 是否必须暂停该 Vault 的破坏性写入（只有 `NeedsRecovery`）。
     #[must_use]
     pub fn pauses_writes(self) -> bool {
         matches!(self, RecoveryDecision::NeedsRecovery { .. })
@@ -200,7 +200,7 @@ pub fn classify_put(
 pub struct ClassifiedIntent {
     /// 意图身份。
     pub intent_id: IntentId,
-    /// 目标在 Root 内的相对路径。
+    /// 目标在 Vault 内的相对路径。
     pub target_path: String,
     /// 持久化阶段。
     pub phase: PutPhase,
@@ -208,16 +208,16 @@ pub struct ClassifiedIntent {
     pub decision: RecoveryDecision,
 }
 
-/// 一个 Root 的恢复计划：按写入顺序的结论 + 是否必须暂停写入。
+/// 一个 Vault 的恢复计划：按写入顺序的结论 + 是否必须暂停写入。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RootRecovery {
+pub struct VaultRecovery {
     /// 每条未完成意图的结论（保持传入顺序）。
     pub intents: Vec<ClassifiedIntent>,
-    /// 是否必须暂停该 Root 的破坏性写入（任一意图 `NeedsRecovery` 即真）。
+    /// 是否必须暂停该 Vault 的破坏性写入（任一意图 `NeedsRecovery` 即真）。
     pub pauses_writes: bool,
 }
 
-impl RootRecovery {
+impl VaultRecovery {
     /// 按身份查结论。
     #[must_use]
     pub fn decision_for(&self, id: IntentId) -> Option<&ClassifiedIntent> {
@@ -233,12 +233,12 @@ impl RootRecovery {
     }
 }
 
-/// 为一个 Root 的未完成意图生成恢复计划。
+/// 为一个 Vault 的未完成意图生成恢复计划。
 ///
 /// `intents` 必须是意图日志给出的写入顺序（[`crate::ports::intent_log::IntentLog::unfinished_puts`]）；
 /// `observe` 由调用方接到目标端口上。只要有任意一条拿不到可证明的现场，
-/// [`RootRecovery::pauses_writes`] 即为真，调用方必须保持写入关闭（design §11.3 末段）。
-pub fn plan_root<F>(intents: &[PutIntent], mut observe: F) -> RootRecovery
+/// [`VaultRecovery::pauses_writes`] 即为真，调用方必须保持写入关闭（design §11.3 末段）。
+pub fn plan_vault<F>(intents: &[PutIntent], mut observe: F) -> VaultRecovery
 where
     F: FnMut(&PutIntent) -> Result<TargetObservation, TargetError>,
 {
@@ -254,7 +254,7 @@ where
             decision,
         });
     }
-    RootRecovery {
+    VaultRecovery {
         intents: classified,
         pauses_writes,
     }
@@ -267,7 +267,7 @@ mod tests {
     use crate::commit::intent::{NewPutIntent, TargetAfter, TargetBefore};
     use crate::objects::ContentDigest;
     use crate::ports::object_store::FileKey;
-    use crate::test_support::{intent_id, root_id, target_snapshot};
+    use crate::test_support::{intent_id, target_snapshot, vault_id};
 
     const HEX_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const HEX_B: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -284,7 +284,7 @@ mod tests {
     fn intent(marker: u8, before: TargetBefore, phase: PutPhase) -> PutIntent {
         let mut intent = NewPutIntent {
             intent_id: intent_id(marker),
-            root: root_id(0x21),
+            vault: vault_id(0x21),
             target_path: format!("docs/note-{marker:02x}.txt"),
             staging_path: format!("put-{marker:02x}"),
             before,
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn root_plan_keeps_write_order_and_pauses_on_any_unreadable_target() {
+    fn vault_plan_keeps_write_order_and_pauses_on_any_unreadable_target() {
         let intents = vec![
             intent(0x41, TargetBefore::Absent, PutPhase::Prepared),
             intent(
@@ -421,7 +421,7 @@ mod tests {
             intent(0x43, TargetBefore::Absent, PutPhase::Prepared),
         ];
         let mut calls = 0;
-        let plan = plan_root(&intents, |intent| {
+        let plan = plan_vault(&intents, |intent| {
             calls += 1;
             match intent.intent_id {
                 id if id == intent_id(0x41) => Ok(TargetObservation::Absent),
@@ -460,7 +460,7 @@ mod tests {
         assert_eq!(plan.decision_for(intent_id(0x99)), None);
 
         // 全部可证明时写入可以继续开放。
-        let clean = plan_root(&intents[..2], |intent| {
+        let clean = plan_vault(&intents[..2], |intent| {
             if intent.intent_id == intent_id(0x41) {
                 Ok(TargetObservation::Absent)
             } else {

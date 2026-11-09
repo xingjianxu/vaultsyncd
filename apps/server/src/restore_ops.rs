@@ -10,7 +10,7 @@
 //! 两者都把 `operations` 的 `pending → committed` 与业务事实放在同一事务里：重试拿到同一份结果，
 //! 失败不会留下“已恢复”的假象。
 
-use vaultsyncd_domain::ids::{EntryId, RootId, TxId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, TxId, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Revision, UtcTimestamp};
 use vaultsyncd_server_core::api::operations::OperationFailure;
 use vaultsyncd_server_core::commit::namespace::{NamespaceAfter, NamespaceBefore};
@@ -22,7 +22,7 @@ use vaultsyncd_server_core::history::version::{
 };
 use vaultsyncd_server_core::objects::ExpectedContent;
 use vaultsyncd_server_core::ports::conflict_store::{OperationKey, RequestDigest};
-use vaultsyncd_server_core::ports::put_store::{EntryKind, RootFacts};
+use vaultsyncd_server_core::ports::put_store::{EntryKind, VaultFacts};
 use vaultsyncd_server_core::ports::restore_store::{
     RecordedTrashRestore, RecordedVersionRestore, RestoreBegin, RestoreStore, RestoreStoreError,
     TrashEntryFacts, TrashRestoreEntry, TrashRestoreRecord, TrashRestoreStore, TrashRestoreWrite,
@@ -33,8 +33,8 @@ use vaultsyncd_server_store::entries as store_entries;
 use vaultsyncd_server_store::intents as store_intents;
 use vaultsyncd_server_store::intents::FsIntentPhase;
 use vaultsyncd_server_store::operations as store_operations;
-use vaultsyncd_server_store::roots as store_roots;
 use vaultsyncd_server_store::trash as store_trash;
+use vaultsyncd_server_store::vaults as store_vaults;
 use vaultsyncd_server_store::versions as store_versions;
 use vaultsyncd_server_store::versions::{NewVersion, VersionOrigin};
 
@@ -68,15 +68,15 @@ fn operation_failure(error: store_operations::OperationError) -> RestoreStoreErr
     }
 }
 
-fn root_facts_of(
-    record: Option<store_roots::RootRecord>,
-    root: RootId,
-) -> Result<RootFacts, RestoreStoreError> {
+fn vault_facts_of(
+    record: Option<store_vaults::VaultRecord>,
+    vault: VaultId,
+) -> Result<VaultFacts, RestoreStoreError> {
     record
-        .map(|record| RootFacts {
+        .map(|record| VaultFacts {
             epoch: record.epoch,
         })
-        .ok_or(RestoreStoreError::UnknownRoot { root })
+        .ok_or(RestoreStoreError::UnknownVault { vault })
 }
 
 fn content_from_version(version: &store_versions::VersionFacts) -> ExpectedContent {
@@ -93,7 +93,7 @@ fn version_result_from_json(text: &str) -> Option<CommittedVersionRestore> {
     let size: u64 = value.get("size")?.as_str()?.parse().ok()?;
     Some(CommittedVersionRestore {
         op: parse_id(value.get("op_id")?.as_str()?)?,
-        root: parse_id(value.get("root_id")?.as_str()?)?,
+        vault: parse_id(value.get("vault_id")?.as_str()?)?,
         entry: parse_id(value.get("entry_id")?.as_str()?)?,
         version: parse_id(value.get("version_id")?.as_str()?)?,
         restored_from: parse_id(value.get("restored_from")?.as_str()?)?,
@@ -102,7 +102,7 @@ fn version_result_from_json(text: &str) -> Option<CommittedVersionRestore> {
             size,
         ),
         revision: Revision::from_decimal(value.get("revision")?.as_str()?).ok()?,
-        seq: vaultsyncd_domain::version::RootSeq::from_decimal(value.get("root_seq")?.as_str()?)
+        seq: vaultsyncd_domain::version::VaultSeq::from_decimal(value.get("vault_seq")?.as_str()?)
             .ok()?,
         path: value.get("path")?.as_str()?.to_owned(),
     })
@@ -113,13 +113,13 @@ fn trash_result_from_json(text: &str) -> Option<CommittedTrashRestore> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     Some(CommittedTrashRestore {
         op: parse_id(value.get("op_id")?.as_str()?)?,
-        root: parse_id(value.get("root_id")?.as_str()?)?,
+        vault: parse_id(value.get("vault_id")?.as_str()?)?,
         entry: parse_id(value.get("entry_id")?.as_str()?)?,
         path: value.get("path")?.as_str()?.to_owned(),
         name: value.get("name")?.as_str()?.to_owned(),
         renamed: value.get("renamed")?.as_bool()?,
         revision: Revision::from_decimal(value.get("revision")?.as_str()?).ok()?,
-        seq: vaultsyncd_domain::version::RootSeq::from_decimal(value.get("root_seq")?.as_str()?)
+        seq: vaultsyncd_domain::version::VaultSeq::from_decimal(value.get("vault_seq")?.as_str()?)
             .ok()?,
         entries: value.get("entries")?.as_str()?.parse().ok()?,
     })
@@ -132,7 +132,7 @@ fn parse_id<T: std::str::FromStr>(text: &str) -> Option<T> {
 /// 核心幂等键 → 存储层幂等键（字段一一对应，类型分属两个 crate）。
 fn store_key(key: OperationKey) -> store_operations::OperationKey {
     store_operations::OperationKey {
-        root: key.root,
+        vault: key.vault,
         device: key.device,
         op: key.op,
     }
@@ -149,9 +149,9 @@ pub(crate) async fn persist_result_seq(
     key: OperationKey,
     result: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE operations SET result_json = ?1 WHERE root_id = ?2 AND device_id = ?3 AND op_id = ?4 AND state = 'committed'")
+    sqlx::query("UPDATE operations SET result_json = ?1 WHERE vault_id = ?2 AND device_id = ?3 AND op_id = ?4 AND state = 'committed'")
         .bind(result)
-        .bind(key.root.as_bytes().as_slice())
+        .bind(key.vault.as_bytes().as_slice())
         .bind(key.device.as_bytes().as_slice())
         .bind(key.op.as_bytes().as_slice())
         .execute(&mut **tx).await?;
@@ -161,14 +161,14 @@ pub(crate) async fn persist_result_seq(
 fn version_result_json(result: &CommittedVersionRestore) -> String {
     serde_json::json!({
         "op_id": result.op.to_hex(),
-        "root_id": result.root.to_hex(),
+        "vault_id": result.vault.to_hex(),
         "entry_id": result.entry.to_hex(),
         "version_id": result.version.to_hex(),
         "restored_from": result.restored_from.to_hex(),
         "hash": result.content.digest.to_hex(),
         "size": result.content.bytes.to_string(),
         "revision": result.revision.to_string(),
-        "root_seq": result.seq.to_string(),
+        "vault_seq": result.seq.to_string(),
         "path": result.path,
         "state": "committed",
     })
@@ -178,13 +178,13 @@ fn version_result_json(result: &CommittedVersionRestore) -> String {
 fn trash_result_json(result: &CommittedTrashRestore) -> String {
     serde_json::json!({
         "op_id": result.op.to_hex(),
-        "root_id": result.root.to_hex(),
+        "vault_id": result.vault.to_hex(),
         "entry_id": result.entry.to_hex(),
         "path": result.path,
         "name": result.name,
         "renamed": result.renamed,
         "revision": result.revision.to_string(),
-        "root_seq": result.seq.to_string(),
+        "vault_seq": result.seq.to_string(),
         "entries": result.entries.to_string(),
         "state": "committed",
     })
@@ -230,12 +230,12 @@ impl SqlRestoreStore {
 }
 
 impl RestoreStore for SqlRestoreStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError> {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, RestoreStoreError> {
         let mut conn = connect(&self.database).await?;
-        let record = store_roots::root_in_scope(&mut conn, self.owner, root)
+        let record = store_vaults::vault_in_scope(&mut conn, self.owner, vault)
             .await
             .map_err(restore_error)?;
-        root_facts_of(record, root)
+        vault_facts_of(record, vault)
     }
 
     async fn operation(
@@ -283,7 +283,7 @@ impl RestoreStore for SqlRestoreStore {
 
     async fn version_facts(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
         version: VersionId,
     ) -> Result<Facts, RestoreStoreError> {
@@ -292,11 +292,11 @@ impl RestoreStore for SqlRestoreStore {
             .await
             .map_err(restore_error)?
             .ok_or(RestoreStoreError::EntryMissing { entry })?;
-        if record.root != root || record.deleted_at.is_some() {
+        if record.vault != vault || record.deleted_at.is_some() {
             return Err(RestoreStoreError::EntryMissing { entry });
         }
         let parent = record.parent.unwrap_or(entry);
-        let facts = store_versions::version_facts(&mut conn, self.owner, root, version)
+        let facts = store_versions::version_facts(&mut conn, self.owner, vault, version)
             .await
             .map_err(restore_error)?
             .ok_or(RestoreStoreError::VersionMissing { version })?;
@@ -313,7 +313,7 @@ impl RestoreStore for SqlRestoreStore {
         Ok(Facts {
             entry: vaultsyncd_server_core::ports::put_store::EntryBaseline {
                 entry,
-                root,
+                vault,
                 parent,
                 name: record.name,
                 revision: record.revision,
@@ -383,13 +383,13 @@ impl RestoreStore for SqlRestoreStore {
         .to_string();
         let result = CommittedVersionRestore {
             op: self.key.op,
-            root: self.key.root,
+            vault: self.key.vault,
             entry: write.entry,
             version,
             restored_from: write.restored_from,
             content: write.content,
             revision: next,
-            seq: vaultsyncd_domain::version::RootSeq::ZERO,
+            seq: vaultsyncd_domain::version::VaultSeq::ZERO,
             path: write.path.clone(),
         };
         let committed = store_operations::commit_operation(
@@ -417,7 +417,7 @@ impl RestoreStore for SqlRestoreStore {
             self.owner,
             &NewVersion {
                 id: version,
-                root: write.key.root,
+                vault: write.key.vault,
                 entry: write.entry,
                 object_hash: *write.content.digest.as_bytes(),
                 size: write.content.bytes,
@@ -625,12 +625,12 @@ pub(crate) fn plan_from_context(
 }
 
 impl TrashRestoreStore for SqlTrashRestoreStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, RestoreStoreError> {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, RestoreStoreError> {
         let mut conn = connect(&self.database).await?;
-        let record = store_roots::root_in_scope(&mut conn, self.owner, root)
+        let record = store_vaults::vault_in_scope(&mut conn, self.owner, vault)
             .await
             .map_err(restore_error)?;
-        root_facts_of(record, root)
+        vault_facts_of(record, vault)
     }
 
     async fn operation(
@@ -688,7 +688,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
                     self.owner,
                     &store_intents::NewFsIntent {
                         intent_id: *intent,
-                        root: key.root,
+                        vault: key.vault,
                         kind: store_intents::FsIntentKind::Create,
                         target_path: entry.path.clone(),
                         staging_path: None,
@@ -720,14 +720,14 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
 
     async fn trash_subtree(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<Option<TrashSubtree>, RestoreStoreError> {
         let mut conn = connect(&self.database).await?;
-        let rows = store_trash::trash_entries(&mut conn, self.owner, root)
+        let rows = store_trash::trash_entries(&mut conn, self.owner, vault)
             .await
             .map_err(restore_error)?;
-        let Some(root_row) = rows.iter().find(|row| row.entry == entry) else {
+        let Some(vault_row) = rows.iter().find(|row| row.entry == entry) else {
             return Ok(None);
         };
         // 过期的条目不在这里当成“不存在”：核心按保留期判 `VERSION_GONE`（410，历史已过期），
@@ -759,7 +759,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             }
         };
         // 沿父子身份从根向下取闭包（只在该批次里走）。
-        let mut selected: Vec<&store_trash::TrashEntry> = vec![root_row];
+        let mut selected: Vec<&store_trash::TrashEntry> = vec![vault_row];
         let mut frontier = vec![entry];
         while let Some(parent) = frontier.pop() {
             for row in rows.iter().filter(|row| {
@@ -805,7 +805,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
 
     async fn parent_path(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
     ) -> Result<Option<String>, RestoreStoreError> {
         let mut conn = connect(&self.database).await?;
@@ -813,7 +813,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             .await
             .map_err(restore_error)?;
         let Some(record) =
-            record.filter(|record| record.root == root && record.deleted_at.is_none())
+            record.filter(|record| record.vault == vault && record.deleted_at.is_none())
         else {
             return Ok(None);
         };
@@ -827,7 +827,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
 
     async fn parent_kind(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
     ) -> Result<Option<EntryKind>, RestoreStoreError> {
         let mut conn = connect(&self.database).await?;
@@ -835,7 +835,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             .await
             .map_err(restore_error)?;
         Ok(record
-            .filter(|record| record.root == root && record.deleted_at.is_none())
+            .filter(|record| record.vault == vault && record.deleted_at.is_none())
             .map(|record| match record.kind {
                 store_entries::EntryKind::File => EntryKind::File,
                 store_entries::EntryKind::Directory => EntryKind::Directory,
@@ -844,13 +844,13 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
 
     async fn name_occupant(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         parent: EntryId,
         name: &str,
     ) -> Result<Option<EntryId>, RestoreStoreError> {
         let mut conn = connect(&self.database).await?;
         let occupant =
-            store_entries::active_child_by_name(&mut conn, self.owner, root, parent, name)
+            store_entries::active_child_by_name(&mut conn, self.owner, vault, parent, name)
                 .await
                 .map_err(restore_error)?;
         Ok(occupant.map(|record| record.id))
@@ -858,11 +858,11 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
 
     async fn content_facts(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         version: VersionId,
     ) -> Result<Option<ExpectedContent>, RestoreStoreError> {
         let mut conn = connect(&self.database).await?;
-        let facts = store_versions::version_facts(&mut conn, self.owner, root, version)
+        let facts = store_versions::version_facts(&mut conn, self.owner, vault, version)
             .await
             .map_err(restore_error)?;
         Ok(facts.map(|facts| content_from_version(&facts)))
@@ -885,7 +885,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         .await
         .map_err(restore_error)?;
         // 目标名称在事务内再核对一次：并发新建在这里被唯一索引或显式检查拒绝。
-        let root_parent = write
+        let vault_parent = write
             .entries
             .first()
             .map(|entry| entry.parent)
@@ -893,8 +893,8 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         let occupant = store_entries::active_child_by_name(
             &mut tx,
             self.owner,
-            self.key.root,
-            root_parent,
+            self.key.vault,
+            vault_parent,
             &write.name,
         )
         .await
@@ -909,8 +909,8 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         for entry in &write.entries {
             let next = entry.expected_revision.next().map_err(restore_error)?;
             let content: Option<(Vec<u8>, i64)> = if let Some(version) = entry.content_version {
-                Some(sqlx::query_as("SELECT object_hash,size FROM versions WHERE root_id=? AND entry_id=? AND id=?")
-                    .bind(self.key.root.as_bytes().as_slice()).bind(entry.entry.as_bytes().as_slice()).bind(version.as_bytes().as_slice())
+                Some(sqlx::query_as("SELECT object_hash,size FROM versions WHERE vault_id=? AND entry_id=? AND id=?")
+                    .bind(self.key.vault.as_bytes().as_slice()).bind(entry.entry.as_bytes().as_slice()).bind(version.as_bytes().as_slice())
                     .fetch_one(&mut *tx).await.map_err(restore_error)?)
             } else {
                 None
@@ -926,7 +926,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
         let events = serde_json::Value::Array(restored_events).to_string();
         let result = CommittedTrashRestore {
             op: self.key.op,
-            root: self.key.root,
+            vault: self.key.vault,
             entry: write.entry,
             path: write.path.clone(),
             name: write.name.clone(),
@@ -938,7 +938,7 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
                 .unwrap_or(Revision::ZERO)
                 .next()
                 .map_err(restore_error)?,
-            seq: vaultsyncd_domain::version::RootSeq::ZERO,
+            seq: vaultsyncd_domain::version::VaultSeq::ZERO,
             entries: write.entries.len() as u64,
         };
         let committed = store_operations::commit_operation(
@@ -981,10 +981,10 @@ impl TrashRestoreStore for SqlTrashRestoreStore {
             )
             .await
             .map_err(restore_error)?;
-            store_trash::remove_trash_entry(&mut tx, self.owner, self.key.root, entry.entry)
+            store_trash::remove_trash_entry(&mut tx, self.owner, self.key.vault, entry.entry)
                 .await
                 .map_err(restore_error)?;
-            store_trash::remove_tombstone(&mut tx, self.owner, self.key.root, entry.entry)
+            store_trash::remove_tombstone(&mut tx, self.owner, self.key.vault, entry.entry)
                 .await
                 .map_err(restore_error)?;
         }
@@ -1048,7 +1048,7 @@ pub struct VersionRestoreCommand {
     pub version: VersionId,
     /// 客户端观察到的条目 revision。
     pub base_revision: Revision,
-    /// 目标在 Root 内的相对路径（最后一段是条目当前名称）。
+    /// 目标在 Vault 内的相对路径（最后一段是条目当前名称）。
     pub target_path: String,
     /// 客户端本地代际（持久回显）。
     pub local_generation: Option<vaultsyncd_domain::version::Generation>,
@@ -1068,10 +1068,10 @@ pub async fn execute_version_restore(
     expected_epoch: vaultsyncd_domain::version::ServerEpoch,
     at: UtcTimestamp,
 ) -> Result<RestoredVersion, OperationFailure> {
-    let handle = executor.root_handle(owner, key.root).await?;
-    // 恢复是低频整树操作，且要发布多个既有版本对象：解析该 Root 全部旧登记。
+    let handle = executor.vault_handle(owner, key.vault).await?;
+    // 恢复是低频整树操作，且要发布多个既有版本对象：解析该 Vault 全部旧登记。
     let layout =
-        crate::object_layout::for_root(executor.database(), executor.state_dir(), key.root)
+        crate::object_layout::for_vault(executor.database(), executor.state_dir(), key.vault)
             .await
             .map_err(|error| OperationFailure::Storage {
                 detail: error.to_string(),
@@ -1107,7 +1107,7 @@ pub async fn execute_version_restore(
         before,
     };
     let mut gate = executor.commit_gate().lock().await;
-    executor.ensure_no_unfinished(owner, key.root).await?;
+    executor.ensure_no_unfinished(owner, key.vault).await?;
     let outcome = vaultsyncd_server_core::history::version::restore_version(
         &mut gate,
         &mut store,
@@ -1163,9 +1163,9 @@ pub async fn execute_trash_restore(
             detail: "回收站恢复按冻结清单的原父目录执行；改变位置请在恢复后提交 move".to_owned(),
         });
     }
-    let handle = executor.root_handle(owner, key.root).await?;
+    let handle = executor.vault_handle(owner, key.vault).await?;
     let layout =
-        crate::object_layout::for_root(executor.database(), executor.state_dir(), key.root)
+        crate::object_layout::for_vault(executor.database(), executor.state_dir(), key.vault)
             .await
             .map_err(|error| OperationFailure::Storage {
                 detail: error.to_string(),
@@ -1194,7 +1194,7 @@ pub async fn execute_trash_restore(
         leases: &mut leases,
     };
     let mut gate = executor.commit_gate().lock().await;
-    executor.ensure_no_unfinished(owner, key.root).await?;
+    executor.ensure_no_unfinished(owner, key.vault).await?;
     let outcome =
         vaultsyncd_server_core::history::trash::restore_trash(&mut gate, &mut ports, at, &request)
             .await;

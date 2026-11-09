@@ -281,7 +281,7 @@ pub(crate) fn management_response(
                 | "INVALID_REQUEST"
                 | "INVALID_NAME"
                 | "NEEDS_RECOVERY"
-                | "ROOT_UNAVAILABLE"
+                | "VAULT_UNAVAILABLE"
                 | "INSUFFICIENT_STORAGE" => (LocalIpcErrorCode::Blocked, false),
                 "NOT_READY"
                 | "BINDING_BLOCKED"

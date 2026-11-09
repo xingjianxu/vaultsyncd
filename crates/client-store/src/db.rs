@@ -931,7 +931,7 @@ mod tests {
         // 旧 fixture：上一版客户端（只有 0001），已经带着绑定数据与队列数据。
         let previous = baseline_migrator(&dir).await;
         let old = Database::open_with(&path, &previous).await.expect("建旧库");
-        let binding = crate::test_support::seed_binding(&old, 0x21).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x21).await;
         old.close().await;
 
         // 本二进制打开旧库：真实执行 0002—0006，保留旧数据与恢复上下文。
@@ -952,8 +952,8 @@ mod tests {
                 .await
                 .expect("读游标"),
             crate::events::Cursors {
-                received: vaultsyncd_domain::version::RootSeq::ZERO,
-                applied: vaultsyncd_domain::version::RootSeq::ZERO,
+                received: vaultsyncd_domain::version::VaultSeq::ZERO,
+                applied: vaultsyncd_domain::version::VaultSeq::ZERO,
             },
             "升级后游标从 0 开始"
         );
@@ -1009,7 +1009,7 @@ mod tests {
         ]))
         .await;
         let old = Database::open_with(&path, &previous).await.expect("旧版库");
-        let binding = crate::test_support::seed_binding(&old, 0x58).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x58).await;
         let op = vaultsyncd_domain::ids::OpId::from_bytes([0x58; 16]);
         let mut tx = old.begin_write().await.expect("事务");
         crate::queue::enqueue(
@@ -1086,7 +1086,7 @@ mod tests {
         let old = Database::open_with(&path, &previous)
             .await
             .expect("0004 库");
-        let binding = crate::test_support::seed_binding(&old, 0x59).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x59).await;
         let mut tx = old.begin_write().await.expect("旧库事务");
         let intent = crate::intents::begin_intent(
             &mut tx,
@@ -1174,7 +1174,7 @@ mod tests {
         ]))
         .await;
         let old = Database::open_with(&path, &previous).await.unwrap();
-        let binding = crate::test_support::seed_binding(&old, 0x60).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x60).await;
         let op = vaultsyncd_domain::ids::OpId::from_bytes([0x60; 16]);
         let mut tx = old.begin_write().await.unwrap();
         crate::queue::enqueue(
@@ -1393,7 +1393,7 @@ mod tests {
         }
         let previous = migrator(&migration_dir).await;
         let old = Database::open_with(&path, &previous).await.unwrap();
-        let binding = crate::test_support::seed_binding(&old, 0x62).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x62).await;
         let mut tx = old.begin_write().await.unwrap();
         sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES (?, ?,9,'awaiting_commit','materialized')")
             .bind(binding.as_bytes().as_slice()).bind([4_u8;16].as_slice()).execute(&mut *tx).await.unwrap();
@@ -1490,7 +1490,7 @@ mod tests {
         }
         let previous = migrator(&prior_dir).await;
         let old = Database::open_with(&path, &previous).await.unwrap();
-        let binding = crate::test_support::seed_binding(&old, 0x70).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x70).await;
         sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES(?,?,23,'dirty','materialized')").bind(binding.as_bytes().as_slice()).bind([7u8;16].as_slice()).execute(old.pool()).await.unwrap();
         sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind,attempts) VALUES(?,?,'upload_content',1)").bind([8u8;16].as_slice()).bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
         old.close().await;
@@ -1590,7 +1590,7 @@ mod tests {
         }
         let previous = migrator(&prior).await;
         let old = Database::open_with(&path, &previous).await.unwrap();
-        let binding = crate::test_support::seed_binding(&old, 0x72).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x72).await;
         sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES(?,?,72,'awaiting_commit','materialized')").bind(binding.as_bytes().as_slice()).bind([7u8;16].as_slice()).execute(old.pool()).await.unwrap();
         sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind,attempts) VALUES(?,?,'upload_content',2)").bind([8u8;16].as_slice()).bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
         old.close().await;
@@ -1659,7 +1659,7 @@ mod tests {
         }
         let previous = migrator(&migration_dir).await;
         let old = Database::open_with(&path, &previous).await.unwrap();
-        let binding = crate::test_support::seed_binding(&old, 0x63).await;
+        let binding = crate::test_support::seed_binding_at_v1(&old, 0x63).await;
         let mut tx = old.begin_write().await.unwrap();
         sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES (?, ?,17,'awaiting_commit','materialized')")
             .bind(binding.as_bytes().as_slice()).bind([4_u8;16].as_slice()).execute(&mut *tx).await.unwrap();

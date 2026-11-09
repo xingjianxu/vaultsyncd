@@ -17,7 +17,7 @@ use vaultsyncd_platform_windows::{
         adapter::{Adapter, Callbacks},
         catalog::{Catalog, Identity},
     },
-    files::RootHandle,
+    files::VaultHandle,
 };
 use vaultsyncd_transfer::{download::DownloadOptions, ports::VersionPin};
 
@@ -43,7 +43,7 @@ impl PinnedVersion {
     }
 }
 /// One binding's live hydration configuration. Reuse the background scheduler's admission
-/// handle. The staging directory must already exist and must be outside every sync root.
+/// handle. The staging directory must already exist and must be outside every sync vault.
 pub struct HydrationConfig {
     /// Safe internal staging directory, separate from user files.
     pub staging: PathBuf,
@@ -59,7 +59,7 @@ pub struct HydrationConfig {
 /// Build production HTTP/download/SQLite wiring on a dedicated worker runtime, then connect.
 /// The returned callbacks must be retained for cancel/idle/drain during shutdown.
 pub fn connect_hydration(
-    root: &Path,
+    vault: &Path,
     catalog: Catalog,
     db: Arc<Database>,
     client: ApiClient<ReqwestTransport>,
@@ -69,15 +69,15 @@ pub fn connect_hydration(
     if config.timeout.is_zero() || config.outstanding == 0 || config.outstanding > 1024 {
         return Err(io::Error::other("invalid hydration bounds"));
     }
-    let sync = RootHandle::open(root)?;
-    let staging = RootHandle::open(&config.staging)?;
+    let sync = VaultHandle::open(vault)?;
+    let staging = VaultHandle::open(&config.staging)?;
     if sync.overlaps(&staging) {
-        return Err(io::Error::other("staging overlaps synchronization root"));
+        return Err(io::Error::other("staging overlaps synchronization vault"));
     }
     let mut pins = HashMap::new();
     for version in &config.versions {
         PinnedVersion::new(version.identity, version.pin.clone())?;
-        if version.identity.binding != catalog.binding || version.identity.root != catalog.root {
+        if version.identity.binding != catalog.binding || version.identity.vault != catalog.vault {
             return Err(io::Error::other("foreign fixed version"));
         }
         let key = version.identity.encode();
@@ -89,17 +89,17 @@ pub fn connect_hydration(
         }
     }
     let content =
-        ContentEndpoint::new(client, catalog.root.to_string()).map_err(io::Error::other)?;
+        ContentEndpoint::new(client, catalog.vault.to_string()).map_err(io::Error::other)?;
     let callbacks = HydrationCallbacks::start(
         db,
         Arc::new(content),
         reads,
         pins,
-        (catalog.binding, catalog.root),
+        (catalog.binding, catalog.vault),
         config,
     )?;
     let port: Arc<dyn Callbacks> = callbacks.clone();
-    let adapter = Adapter::connect(root, catalog, port)?;
+    let adapter = Adapter::connect(vault, catalog, port)?;
     Ok((adapter, callbacks))
 }
 /// Cancel active OS requests for an entry, for example when a user cancels a download.

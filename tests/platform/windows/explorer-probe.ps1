@@ -1,12 +1,12 @@
 param(
-  [Parameter(Mandatory=$true)][string]$Root,
+  [Parameter(Mandatory=$true)][string]$Vault,
   [Parameter(Mandatory=$true)][string]$Evidence,
   [Parameter(Mandatory=$true)][string]$Phase,
   [Parameter(Mandatory=$true)][int]$ExpectedState
 )
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-if($Root -notmatch '^C:\\vaultsyncd-lab\\s129-driver-[0-9]+\\run-explorer-[0-9]+\\root$'){throw 'isolated S129 root required'}
+if($Vault -notmatch '^C:\\vaultsyncd-lab\\s129-driver-[0-9]+\\run-explorer-[0-9]+\\vault$'){throw 'isolated S129 vault required'}
 if($Phase -notmatch '^[a-z-]+$'){throw 'unsafe evidence phase'}
 if((Get-Process -Id $PID).SessionId -eq 0){throw 'Explorer evidence requires interactive desktop'}
 $shell=New-Object -ComObject Shell.Application
@@ -23,19 +23,19 @@ public static class ExplorerEvidence {
 [void][ExplorerEvidence]::SetThreadExecutionState(0x80000003L)
 $window=$null
 try {
-  # Open only this synthetic root, and close only the window acquired below.
+  # Open only this synthetic vault, and close only the window acquired below.
   $prior=@($shell.Windows() | ForEach-Object { $_.HWND })
-  Start-Process explorer.exe -ArgumentList ('/n,"'+$Root+'"')
+  Start-Process explorer.exe -ArgumentList ('/n,"'+$Vault+'"')
   $end=(Get-Date).AddSeconds(20)
   do {
     Start-Sleep -Milliseconds 200
-    $window=$shell.Windows() | Where-Object { $_.HWND -notin $prior -and $_.Document.Folder.Self.Path -eq $Root } | Select-Object -First 1
+    $window=$shell.Windows() | Where-Object { $_.HWND -notin $prior -and $_.Document.Folder.Self.Path -eq $Vault } | Select-Object -First 1
   } while(!$window -and (Get-Date) -lt $end)
   if(!$window){throw 'could not find this run Explorer window'}
   $window.Visible=$true
   $window.Left=20;$window.Top=20;$window.Width=1100;$window.Height=700
   $window.Document.CurrentViewMode=4 # Details; preserve global Explorer settings.
-  $folder=$shell.NameSpace($Root)
+  $folder=$shell.NameSpace($Vault)
   $end=(Get-Date).AddSeconds(20)
   do {
     $item=$folder.ParseName('file.txt')

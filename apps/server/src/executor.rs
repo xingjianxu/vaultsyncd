@@ -6,7 +6,7 @@
 //! - [`SqlIntentLog`]（端口 `IntentLog`）：`fs_intents` 的读写，意图证据 JSON 直接用核心的
 //!   `TargetBefore::to_json`/`TargetAfter::to_json` 编码，阶段推进只走
 //!   [`vaultsyncd_server_store::intents::advance_intent_phase`]（非法转换由存储层拒绝）。
-//! - [`WorkTreeTarget`]（端口 `TargetPort`）：经 `RootHandle` 观察与发布。`observe` 记下这次实测的
+//! - [`WorkTreeTarget`]（端口 `TargetPort`）：经 `VaultHandle` 观察与发布。`observe` 记下这次实测的
 //!   身份，`publish` 用它作替换前提（`ExpectedTarget::Present/Absent`），因此“观察之后目标被外部
 //!   改写”会在发布前被拒绝而**不会**被硬覆盖；发布本身走
 //!   [`vaultsyncd_platform_linux_server::files::publish`]（FICLONE/校验复制 + `renameat2` + 目录刷盘
@@ -34,14 +34,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId, TxId, UserId, VersionId};
+use vaultsyncd_domain::ids::{EntryId, IntentId, TxId, UserId, VaultId, VersionId};
 use vaultsyncd_domain::version::{Generation, Revision, ServerEpoch, UtcTimestamp};
 use vaultsyncd_platform_linux_server::files::clone::StageFailure;
 use vaultsyncd_platform_linux_server::files::publish::{
     self, PublishError, PublishFailure, WORK_FILE_MODE,
 };
 use vaultsyncd_platform_linux_server::files::{
-    self, ExpectedTarget, FileIdentity, RestrictError, RestrictedDir, RootHandle,
+    self, ExpectedTarget, FileIdentity, RestrictError, RestrictedDir, VaultHandle,
 };
 use vaultsyncd_protocol::generated::{OperationResult, OperationState as WireState};
 use vaultsyncd_server_core::api::operations::OperationFailure;
@@ -49,13 +49,13 @@ use vaultsyncd_server_core::commit::intent::{
     NewPutIntent, PutFailure, PutFailureReason, PutIntent, PutPhase, TargetAfter, TargetBefore,
     TargetSnapshot,
 };
-use vaultsyncd_server_core::commit::put::{CommittedPut, PutRequest, RootCommitGate, commit_put};
+use vaultsyncd_server_core::commit::put::{CommittedPut, PutRequest, VaultCommitGate, commit_put};
 use vaultsyncd_server_core::objects::{ContentDigest, ExpectedContent, ObjectLayout};
 use vaultsyncd_server_core::ports::intent_log::{IntentLog, IntentLogError};
 use vaultsyncd_server_core::ports::object_store::{FileKey, StorageFailure};
 use vaultsyncd_server_core::ports::put_store::{
     EntryBaseline, EntryKind, ObjectState, PutCommitStore, PutRecord, PutStoreError, PutWrite,
-    RootFacts,
+    VaultFacts,
 };
 use vaultsyncd_server_core::ports::target::{
     PublishRequest, PublishedTarget, TargetError, TargetObservation, TargetPort,
@@ -65,7 +65,7 @@ use vaultsyncd_server_store::entries as store_entries;
 use vaultsyncd_server_store::intents as store_intents;
 use vaultsyncd_server_store::intents::{FsIntent, FsIntentKind, FsIntentPhase, NewFsIntent};
 use vaultsyncd_server_store::operations as store_operations;
-use vaultsyncd_server_store::roots as store_roots;
+use vaultsyncd_server_store::vaults as store_vaults;
 use vaultsyncd_server_store::versions as store_versions;
 use vaultsyncd_server_store::versions::{NewVersion, ObjectHash, VersionOrigin};
 
@@ -90,12 +90,12 @@ pub struct PutCommand {
     pub local_generation: Option<Generation>,
 }
 
-/// 执行器：数据库 + 状态目录 + Root 句柄缓存 + 进程内提交串行化。
+/// 执行器：数据库 + 状态目录 + Vault 句柄缓存 + 进程内提交串行化。
 pub struct ExecutorContext {
     database: Database,
     state_dir: PathBuf,
-    fences: Arc<crate::root_fences::RootFences>,
-    gate: tokio::sync::Mutex<RootCommitGate>,
+    fences: Arc<crate::vault_fences::VaultFences>,
+    gate: tokio::sync::Mutex<VaultCommitGate>,
     observer: Option<Arc<crate::external::ObserverRuntime>>,
 }
 
@@ -103,18 +103,18 @@ impl ExecutorContext {
     /// Register a controlled content publication with the observer's existing self-write fence.
     pub async fn note_own_content(
         &self,
-        root: RootId,
+        vault: VaultId,
         path: &str,
         identity: vaultsyncd_server_core::ports::object_store::FileKey,
         content: ExpectedContent,
     ) {
         if let Some(observer) = &self.observer {
             observer
-                .expect_own_write(root, path, identity, content)
+                .expect_own_write(vault, path, identity, content)
                 .await;
         }
     }
-    /// 以数据库与状态目录装配；Root 句柄按需打开并缓存（注册时已经通过存储准入）。
+    /// 以数据库与状态目录装配；Vault 句柄按需打开并缓存（注册时已经通过存储准入）。
     #[must_use]
     pub fn new(
         database: Database,
@@ -125,27 +125,27 @@ impl ExecutorContext {
             database,
             state_dir: state_dir.to_path_buf(),
             fences: observer.as_ref().map_or_else(
-                || Arc::new(crate::root_fences::RootFences::new(state_dir)),
+                || Arc::new(crate::vault_fences::VaultFences::new(state_dir)),
                 |o| Arc::clone(&o.fences),
             ),
-            gate: tokio::sync::Mutex::new(RootCommitGate::new()),
+            gate: tokio::sync::Mutex::new(VaultCommitGate::new()),
             observer,
         }
     }
 
-    /// 已授权 Root 的对象区布局（与上传 finalize 共用；旧路径仅按该 Root 的登记允许）。
+    /// 已授权 Vault 的对象区布局（与上传 finalize 共用；旧路径仅按该 Vault 的登记允许）。
     ///
-    /// 调用方必须先核对 Root 的 owner scope；布局选择不替代授权。
+    /// 调用方必须先核对 Vault 的 owner scope；布局选择不替代授权。
     ///
     /// # Errors
     ///
     /// 对象登记不可读时返回存储失败，不回退到磁盘探测。
     pub async fn objects(
         &self,
-        root: RootId,
+        vault: VaultId,
         digests: &[ContentDigest],
     ) -> Result<ObjectLayout, OperationFailure> {
-        crate::object_layout::for_digests(&self.database, &self.state_dir, root, digests)
+        crate::object_layout::for_digests(&self.database, &self.state_dir, vault, digests)
             .await
             .map_err(|error| storage_error(&error.to_string()))
     }
@@ -162,22 +162,22 @@ impl ExecutorContext {
         &self.database
     }
 
-    /// 按 owner scope 取 Root 的绝对路径与已缓存的 Root 句柄。
+    /// 按 owner scope 取 Vault 的绝对路径与已缓存的 Vault 句柄。
     ///
     /// # Errors
     ///
-    /// Root 不存在/越权（`RootUnavailable`）或句柄打不开（`SERVICE_NOT_READY` 之外的存储故障）。
-    pub async fn root_handle(
+    /// Vault 不存在/越权（`VaultUnavailable`）或句柄打不开（`SERVICE_NOT_READY` 之外的存储故障）。
+    pub async fn vault_handle(
         &self,
         owner: UserId,
-        root: RootId,
-    ) -> Result<Arc<RootHandle>, OperationFailure> {
+        vault: VaultId,
+    ) -> Result<Arc<VaultHandle>, OperationFailure> {
         let record = {
             let mut conn = self.pool_conn().await?;
-            store_roots::root_in_scope(&mut conn, owner, root)
+            store_vaults::vault_in_scope(&mut conn, owner, vault)
                 .await
                 .map_err(|error| storage_error(&error.to_string()))?
-                .ok_or(OperationFailure::RootUnavailable)?
+                .ok_or(OperationFailure::VaultUnavailable)?
         };
         self.handle(&record)
     }
@@ -190,7 +190,7 @@ impl ExecutorContext {
     pub async fn head_summary(
         &self,
         owner: UserId,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<(Revision, Option<ContentDigest>), OperationFailure> {
         let mut conn = self.pool_conn().await?;
@@ -200,20 +200,20 @@ impl ExecutorContext {
             .ok_or_else(|| OperationFailure::BaseMismatch {
                 detail: format!("条目 {entry} 不存在或已删除"),
             })?;
-        if record.root != root || record.deleted_at.is_some() {
+        if record.vault != vault || record.deleted_at.is_some() {
             return Err(OperationFailure::BaseMismatch {
-                detail: "条目不属于该 Root 或已删除".to_owned(),
+                detail: "条目不属于该 Vault 或已删除".to_owned(),
             });
         }
-        let digest = store_versions::current_version(&mut conn, owner, root, entry)
+        let digest = store_versions::current_version(&mut conn, owner, vault, entry)
             .await
             .map_err(|error| storage_error(&error.to_string()))?
             .map(|version| ContentDigest::from_bytes(version.object_hash));
         Ok((record.revision, digest))
     }
 
-    /// Root 提交串行化门（命名空间/删除命令与 put 共用同一把门）。
-    pub fn commit_gate(&self) -> &tokio::sync::Mutex<RootCommitGate> {
+    /// Vault 提交串行化门（命名空间/删除命令与 put 共用同一把门）。
+    pub fn commit_gate(&self) -> &tokio::sync::Mutex<VaultCommitGate> {
         self.observer
             .as_ref()
             .map_or(&self.gate, |observer| observer.commit_gate())
@@ -227,17 +227,17 @@ impl ExecutorContext {
     pub async fn ensure_no_unfinished(
         &self,
         owner: UserId,
-        root: RootId,
+        vault: VaultId,
     ) -> Result<(), OperationFailure> {
         let mut conn = self.pool_conn().await?;
-        let intents = store_intents::unfinished_intents(&mut conn, owner, root)
+        let intents = store_intents::unfinished_intents(&mut conn, owner, vault)
             .await
             .map_err(|error| storage_error(&error.to_string()))?;
         if intents.is_empty() {
             Ok(())
         } else {
             Err(storage_error(
-                "Root 有未完成的文件系统意图，暂停写入并等待恢复",
+                "Vault 有未完成的文件系统意图，暂停写入并等待恢复",
             ))
         }
     }
@@ -270,7 +270,7 @@ impl ExecutorContext {
         }
     }
 
-    /// 把一个还没有结论的操作记成稳定拒绝（不推进 RootSeq，不产生事件）。
+    /// 把一个还没有结论的操作记成稳定拒绝（不推进 VaultSeq，不产生事件）。
     pub async fn reject_failure(
         &self,
         owner: UserId,
@@ -282,11 +282,11 @@ impl ExecutorContext {
 
     fn handle(
         &self,
-        record: &store_roots::RootRecord,
-    ) -> Result<Arc<RootHandle>, OperationFailure> {
+        record: &store_vaults::VaultRecord,
+    ) -> Result<Arc<VaultHandle>, OperationFailure> {
         self.fences
             .open(record)
-            .map_err(|_| OperationFailure::RootUnavailable)
+            .map_err(|_| OperationFailure::VaultUnavailable)
     }
 
     /// 执行一条内容 put：先登记 `pending` 操作行，再走核心的提交编排。
@@ -296,7 +296,7 @@ impl ExecutorContext {
     ///
     /// # Errors
     ///
-    /// 见 [`OperationFailure`]：命令前提、存储、空间不足或 Root 不可用。
+    /// 见 [`OperationFailure`]：命令前提、存储、空间不足或 Vault 不可用。
     #[allow(clippy::too_many_lines, clippy::result_large_err)]
     pub async fn execute_put(
         &self,
@@ -307,12 +307,12 @@ impl ExecutorContext {
         at: UtcTimestamp,
     ) -> Result<CommittedPut, OperationFailure> {
         // 1. 命名空间事实：条目路径、父目录、名称与当前 revision 都从库里读（客户端只给条目身份）。
-        let root_record = {
+        let vault_record = {
             let mut conn = self.pool_conn().await?;
-            store_roots::root_in_scope(&mut conn, owner, key.root)
+            store_vaults::vault_in_scope(&mut conn, owner, key.vault)
                 .await
                 .map_err(|error| storage_error(&error.to_string()))?
-                .ok_or(OperationFailure::RootUnavailable)?
+                .ok_or(OperationFailure::VaultUnavailable)?
         };
         let (entry, path) = {
             let mut conn = self.pool_conn().await?;
@@ -322,9 +322,9 @@ impl ExecutorContext {
                 .ok_or_else(|| OperationFailure::BaseMismatch {
                     detail: format!("条目 {} 不存在或已删除", command.entry),
                 })?;
-            if entry.root != key.root {
+            if entry.vault != key.vault {
                 return Err(OperationFailure::BaseMismatch {
-                    detail: "条目不属于该 Root".to_owned(),
+                    detail: "条目不属于该 Vault".to_owned(),
                 });
             }
             if entry.kind != store_entries::EntryKind::File {
@@ -343,7 +343,7 @@ impl ExecutorContext {
         let parent = entry
             .parent
             .ok_or_else(|| OperationFailure::UnsupportedEntry {
-                detail: "Root 根条目不能承载内容".to_owned(),
+                detail: "Vault 根条目不能承载内容".to_owned(),
             })?;
 
         // 2. 先登记 pending 操作行：后续任何失败都基于这一行给出稳定结论。摘要必须与端点用来
@@ -377,21 +377,21 @@ impl ExecutorContext {
         }
 
         crate::test_faults::checkpoint("put_pending");
-        let root_handle = match self.handle(&root_record) {
+        let vault_handle = match self.handle(&vault_record) {
             Ok(handle) => handle,
             Err(failure) => {
                 self.reject(owner, key, &failure).await;
                 return Err(failure);
             }
         };
-        let layout = match self.objects(key.root, &[command.content.digest]).await {
+        let layout = match self.objects(key.vault, &[command.content.digest]).await {
             Ok(layout) => layout,
             Err(failure) => {
                 self.reject(owner, key, &failure).await;
                 return Err(failure);
             }
         };
-        let mut target = WorkTreeTarget::new(Arc::clone(&root_handle), layout.clone());
+        let mut target = WorkTreeTarget::new(Arc::clone(&vault_handle), layout.clone());
 
         // 3. 现场前提：观察目标并按实测结果构造 `before`（与客户端的基线 revision 一致才继续）。
         let observation = match target.observe(&path) {
@@ -419,7 +419,7 @@ impl ExecutorContext {
         //     返回可重试的协调结论，让观察器把它采集成版本，再按新 revision 重新规划。
         if let Some(version) = entry.content_version {
             let mut conn = self.pool_conn().await?;
-            let confirmed = store_versions::version_facts(&mut conn, owner, key.root, version)
+            let confirmed = store_versions::version_facts(&mut conn, owner, key.vault, version)
                 .await
                 .map_err(|error| storage_error(&error.to_string()))?
                 .map(|facts| ContentDigest::from_bytes(facts.object_hash));
@@ -443,7 +443,7 @@ impl ExecutorContext {
 
         let request = PutRequest {
             intent_id: IntentId::from_bytes(random_bytes()),
-            root: key.root,
+            vault: key.vault,
             entry: command.entry,
             expected_epoch: command.expected_epoch,
             expected_revision: command.base_revision,
@@ -473,7 +473,7 @@ impl ExecutorContext {
             local_generation: command.local_generation,
         };
         let mut gate = self.commit_gate().lock().await;
-        self.ensure_no_unfinished(owner, key.root).await?;
+        self.ensure_no_unfinished(owner, key.vault).await?;
         let outcome = commit_put(&mut gate, &mut store, &mut log, &mut target, at, &request).await;
 
         match outcome {
@@ -482,7 +482,7 @@ impl ExecutorContext {
                 if let Some(observer) = self.observer.as_ref() {
                     observer
                         .expect_own_write(
-                            key.root,
+                            key.vault,
                             &path,
                             committed.target.identity,
                             command.content,
@@ -500,7 +500,7 @@ impl ExecutorContext {
         }
     }
 
-    /// 把一个还没有结论的操作记成稳定拒绝（不推进 RootSeq，不产生事件）。
+    /// 把一个还没有结论的操作记成稳定拒绝（不推进 VaultSeq，不产生事件）。
     async fn reject(
         &self,
         owner: UserId,
@@ -517,7 +517,7 @@ impl ExecutorContext {
         };
         // 已经写入意图的失败不是稳定拒绝：保留 pending，恢复才有资格给出最终结论。
         // 无法读取证据同样失败关闭，不能将不确定结果写成 rejected。
-        let Ok(unfinished) = store_intents::unfinished_intents(&mut tx, owner, key.root).await
+        let Ok(unfinished) = store_intents::unfinished_intents(&mut tx, owner, key.vault).await
         else {
             return;
         };
@@ -575,7 +575,7 @@ fn operation_store_error(error: &store_operations::OperationError) -> OperationF
         store_operations::OperationError::DigestMismatch { .. } => OperationFailure::OpIdReused,
         store_operations::OperationError::OutOfScope
         | store_operations::OperationError::UnknownOperation { .. } => {
-            OperationFailure::RootUnavailable
+            OperationFailure::VaultUnavailable
         }
         other => storage_error(&other.to_string()),
     }
@@ -676,7 +676,7 @@ pub(crate) fn map_put_failure(failure: &PutFailure) -> OperationFailure {
             },
         },
         PutFailureReason::OpIdReused { .. } => OperationFailure::OpIdReused,
-        PutFailureReason::Gate(_) => storage_error("同一 Root 已有提交在进行，稍后重试"),
+        PutFailureReason::Gate(_) => storage_error("同一 Vault 已有提交在进行，稍后重试"),
         _ => OperationFailure::Storage {
             detail: failure.to_string(),
         },
@@ -708,7 +708,7 @@ fn rejection_result(failure: &OperationFailure) -> OperationResult {
         error_code: code,
         error_message: Some(failure.to_string()),
         revision: None,
-        root_seq: None,
+        vault_seq: None,
         version_id: None,
     }
 }
@@ -721,7 +721,7 @@ pub struct SqlIntentLog {
 }
 
 impl SqlIntentLog {
-    /// 以数据库与 Root 所属账号装配（内容 put 与历史版本恢复共用）。
+    /// 以数据库与 Vault 所属账号装配（内容 put 与历史版本恢复共用）。
     #[must_use]
     pub fn new(database: Database, owner: UserId) -> Self {
         Self {
@@ -794,7 +794,7 @@ pub(crate) fn put_intent_of(record: FsIntent) -> Result<PutIntent, IntentLogErro
     })?;
     Ok(PutIntent {
         intent_id: record.intent_id,
-        root: record.root,
+        vault: record.vault,
         target_path: record.target_path,
         staging_path,
         before,
@@ -822,7 +822,7 @@ impl IntentLog for SqlIntentLog {
             self.owner,
             &NewFsIntent {
                 intent_id: new.intent_id,
-                root: new.root,
+                vault: new.vault,
                 kind: FsIntentKind::PutContent,
                 target_path: new.target_path.clone(),
                 staging_path: Some(new.staging_path.clone()),
@@ -895,7 +895,7 @@ impl IntentLog for SqlIntentLog {
         }
     }
 
-    async fn unfinished_puts(&mut self, root: RootId) -> Result<Vec<PutIntent>, IntentLogError> {
+    async fn unfinished_puts(&mut self, vault: VaultId) -> Result<Vec<PutIntent>, IntentLogError> {
         let mut conn =
             self.database
                 .pool()
@@ -904,7 +904,7 @@ impl IntentLog for SqlIntentLog {
                 .map_err(|error| IntentLogError::Storage {
                     detail: error.to_string(),
                 })?;
-        let records = store_intents::unfinished_intents(&mut conn, self.owner, root)
+        let records = store_intents::unfinished_intents(&mut conn, self.owner, vault)
             .await
             .map_err(intent_error)?;
         records
@@ -915,9 +915,9 @@ impl IntentLog for SqlIntentLog {
     }
 }
 
-/// 目标文件的父目录句柄：Root 自身直接复用已核对的根句柄，子目录另开受限句柄。
+/// 目标文件的父目录句柄：Vault 自身直接复用已核对的根句柄，子目录另开受限句柄。
 enum ParentDir<'a> {
-    Root(&'a RestrictedDir),
+    Vault(&'a RestrictedDir),
     Child(RestrictedDir),
 }
 
@@ -926,26 +926,26 @@ impl std::ops::Deref for ParentDir<'_> {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            ParentDir::Root(dir) => dir,
+            ParentDir::Vault(dir) => dir,
             ParentDir::Child(dir) => dir,
         }
     }
 }
 
-/// Root 工作目录的 `TargetPort` 实现。
+/// Vault 工作目录的 `TargetPort` 实现。
 pub struct WorkTreeTarget {
-    root: Arc<RootHandle>,
+    vault: Arc<VaultHandle>,
     layout: ObjectLayout,
     /// 最近一次 `observe` 的实测身份：`publish` 拿它当替换前提，观察后被改写就拒绝。
     observed: RefCell<BTreeMap<String, ExpectedTarget>>,
 }
 
 impl WorkTreeTarget {
-    /// 以 Root 句柄与对象区布局建立端口。
+    /// 以 Vault 句柄与对象区布局建立端口。
     #[must_use]
-    pub fn new(root: Arc<RootHandle>, layout: ObjectLayout) -> Self {
+    pub fn new(vault: Arc<VaultHandle>, layout: ObjectLayout) -> Self {
         Self {
-            root,
+            vault,
             layout,
             observed: RefCell::new(BTreeMap::new()),
         }
@@ -961,10 +961,10 @@ impl WorkTreeTarget {
             .into();
         let parent = path.parent().unwrap_or_else(|| Path::new(""));
         let dir = if parent.as_os_str().is_empty() {
-            ParentDir::Root(self.root.root_dir())
+            ParentDir::Vault(self.vault.vault_dir())
         } else {
             ParentDir::Child(
-                self.root
+                self.vault
                     .open_dir(parent)
                     .map_err(|error| unreadable(&error))?,
             )
@@ -990,9 +990,9 @@ fn unreadable(error: &RestrictError) -> TargetError {
 
 fn failure_of_restrict(error: &RestrictError) -> StorageFailure {
     let os = match error {
-        RestrictError::OpenRoot { source, .. }
+        RestrictError::OpenVault { source, .. }
         | RestrictError::Resolve { source, .. }
-        | RestrictError::EscapesRoot { source, .. }
+        | RestrictError::EscapesVault { source, .. }
         | RestrictError::SymlinkRejected { source, .. }
         | RestrictError::NotFound { source, .. }
         | RestrictError::AlreadyExists { source, .. }
@@ -1067,7 +1067,7 @@ impl TargetPort for WorkTreeTarget {
             None => (TargetObservation::Absent, ExpectedTarget::Absent),
             Some(identity) => {
                 let opened = self
-                    .root
+                    .vault
                     .open_read(Path::new(target_path))
                     .map_err(|error| unreadable(&error))?;
                 let (digest, _bytes) =
@@ -1157,20 +1157,20 @@ pub struct SqlPutStore {
 }
 
 impl PutCommitStore for SqlPutStore {
-    async fn root_facts(&mut self, root: RootId) -> Result<RootFacts, PutStoreError> {
+    async fn vault_facts(&mut self, vault: VaultId) -> Result<VaultFacts, PutStoreError> {
         let mut conn = connect(&self.database).await?;
-        match store_roots::root_in_scope(&mut conn, self.owner, root).await {
-            Ok(Some(record)) => Ok(RootFacts {
+        match store_vaults::vault_in_scope(&mut conn, self.owner, vault).await {
+            Ok(Some(record)) => Ok(VaultFacts {
                 epoch: record.epoch,
             }),
-            Ok(None) => Err(PutStoreError::UnknownRoot { root }),
+            Ok(None) => Err(PutStoreError::UnknownVault { vault }),
             Err(error) => Err(store_failure(error)),
         }
     }
 
     async fn entry_baseline(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         entry: EntryId,
     ) -> Result<EntryBaseline, PutStoreError> {
         let mut conn = connect(&self.database).await?;
@@ -1188,7 +1188,7 @@ impl PutCommitStore for SqlPutStore {
             })?;
         Ok(EntryBaseline {
             entry,
-            root,
+            vault,
             parent,
             name: record.name,
             revision: record.revision,
@@ -1201,12 +1201,12 @@ impl PutCommitStore for SqlPutStore {
 
     async fn object_state(
         &mut self,
-        root: RootId,
+        vault: VaultId,
         digest: ContentDigest,
     ) -> Result<ObjectState, PutStoreError> {
         let mut conn = connect(&self.database).await?;
         let hash: ObjectHash = *digest.as_bytes();
-        match store_versions::object_in_scope(&mut conn, self.owner, root, &hash).await {
+        match store_versions::object_in_scope(&mut conn, self.owner, vault, &hash).await {
             Ok(Some(record)) => Ok(ObjectState::Persisted { bytes: record.size }),
             Ok(None) => Ok(ObjectState::Missing),
             Err(error) => Err(store_failure(error)),
@@ -1253,7 +1253,7 @@ impl PutCommitStore for SqlPutStore {
             error_code: None,
             error_message: None,
             revision: Some(revision.to_string()),
-            root_seq: None,
+            vault_seq: None,
             version_id: Some(version.to_hex()),
         };
         let result_json =
@@ -1279,7 +1279,7 @@ impl PutCommitStore for SqlPutStore {
             self.owner,
             &NewVersion {
                 id: version,
-                root: write.root,
+                vault: write.vault,
                 entry: write.entry,
                 object_hash: *write.content.digest.as_bytes(),
                 size: write.content.bytes,
@@ -1444,16 +1444,16 @@ mod tests {
     use vaultsyncd_server_store::versions::NewObject;
 
     #[tokio::test]
-    async fn executor_layout_uses_only_its_roots_registered_legacy_objects() {
+    async fn executor_layout_uses_only_its_vaults_registered_legacy_objects() {
         let state = std::env::temp_dir().join(format!(
             "vaultsyncd-s136-executor-{}",
-            RootId::from_bytes(random_bytes())
+            VaultId::from_bytes(random_bytes())
         ));
         std::fs::create_dir_all(&state).unwrap();
         let db = Database::open(state.join("server.sqlite3")).await.unwrap();
         let owner = UserId::from_bytes([1; 16]);
-        let first = RootId::from_bytes([2; 16]);
-        let second = RootId::from_bytes([3; 16]);
+        let first = VaultId::from_bytes([2; 16]);
+        let second = VaultId::from_bytes([3; 16]);
         let registered = ContentDigest::from_bytes([4; 32]);
         let unregistered = ContentDigest::from_bytes([5; 32]);
         let mut tx = db.begin_write().await.unwrap();
@@ -1462,19 +1462,19 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
-        for (root, entry) in [
+        for (vault, entry) in [
             (first, EntryId::from_bytes([6; 16])),
             (second, EntryId::from_bytes([7; 16])),
         ] {
-            store_roots::insert_root(
+            store_vaults::insert_vault(
                 &mut tx,
-                &store_roots::NewRoot {
-                    id: root,
+                &store_vaults::NewVault {
+                    id: vault,
                     entry,
                     owner,
-                    absolute_path: state.join(root.to_hex()).display().to_string(),
+                    absolute_path: state.join(vault.to_hex()).display().to_string(),
                     volume_identity: vec![1],
-                    root_file_identity: vec![2],
+                    vault_file_identity: vec![2],
                     epoch: ServerEpoch::ZERO,
                 },
             )
@@ -1485,7 +1485,7 @@ mod tests {
             &mut tx,
             owner,
             &NewObject {
-                root: first,
+                vault: first,
                 hash: *registered.as_bytes(),
                 size: 3,
                 storage_path: ObjectLayout::relative_object_path(&registered)
@@ -1521,13 +1521,13 @@ mod tests {
                     &registered
                 ))
         );
-        for (root, layout) in [(first, first_layout), (second, second_layout)] {
+        for (vault, layout) in [(first, first_layout), (second, second_layout)] {
             assert_eq!(
                 layout.object_path(&unregistered),
                 state
                     .join("objects")
                     .join(ObjectLayout::scoped_relative_object_path(
-                        root,
+                        vault,
                         &unregistered
                     ))
             );

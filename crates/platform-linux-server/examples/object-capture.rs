@@ -443,9 +443,9 @@ fn storage_failure_of_restrict(error: &RestrictError) -> StorageFailure {
 
 fn restrict_io_error(error: &RestrictError) -> Option<&io::Error> {
     match error {
-        RestrictError::OpenRoot { source, .. }
+        RestrictError::OpenVault { source, .. }
         | RestrictError::Resolve { source, .. }
-        | RestrictError::EscapesRoot { source, .. }
+        | RestrictError::EscapesVault { source, .. }
         | RestrictError::SymlinkRejected { source, .. }
         | RestrictError::NotFound { source, .. }
         | RestrictError::AlreadyExists { source, .. }

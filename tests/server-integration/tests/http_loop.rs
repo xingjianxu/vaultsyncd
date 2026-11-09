@@ -3,7 +3,7 @@
 //! 每个用例启动真实监听的服务端（真实 TCP、真实 SQLite、真实 btrfs 工作目录），按客户端的方式
 //! 走完整闭环：
 //!
-//! 1. 登录 → 注册 Root；
+//! 1. 登录 → 注册 Vault；
 //! 2. 初始外部文件被后台观察循环采纳（首次导入，产生版本与事件）；
 //! 3. 上传会话/分块 → finalize → 内容 put 操作提交（200 committed，同一事务写版本、事件与操作结果）；
 //! 4. 快照 → 按固定版本身份下载 → 内容与哈希一致；
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use common::{
     Lab, PutArgs, Running, all_changes, create_snapshot, identity, login, put_operation,
-    register_root, snapshot_entries, upload, wait_for,
+    register_vault, snapshot_entries, upload, wait_for,
 };
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -33,7 +33,7 @@ const V2: &[u8] =
 /// 第二次外部修改。
 const V3: &[u8] = b"v3: edited outside the client\n";
 
-/// 文件在 Root 内的名字。
+/// 文件在 Vault 内的名字。
 const NAME: &str = "note.txt";
 
 fn sha256(bytes: &[u8]) -> String {
@@ -70,15 +70,15 @@ fn entry_field<'a>(entries: &'a [Value], name: &str, field: &str) -> Option<&'a 
         .and_then(Value::as_str)
 }
 
-/// 在 Root 里建好初始文件并等观察循环采纳。
-async fn seed_and_adopt(running: &Running, token: &str, root: &str, lab: &Lab) {
+/// 在 Vault 里建好初始文件并等观察循环采纳。
+async fn seed_and_adopt(running: &Running, token: &str, vault: &str, lab: &Lab) {
     std::fs::write(work_file(lab), V1).expect("写初始外部文件");
     wait_for("初始导入采纳", || async {
         let entries = snapshot_entries(
             running,
             token,
-            root,
-            create_snapshot(running, token, root)
+            vault,
+            create_snapshot(running, token, vault)
                 .await?
                 .get("snapshot_id")
                 .and_then(Value::as_str)
@@ -98,13 +98,13 @@ async fn full_http_loop_is_consistent_across_restart() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
-        .expect("注册 Root");
+        .expect("注册 Vault");
 
     // 1. 初始外部文件被采纳：首个版本与事件都来自观察循环。
-    seed_and_adopt(&running, &token, &root, &lab).await;
-    let snapshot = create_snapshot(&running, &token, &root)
+    seed_and_adopt(&running, &token, &vault, &lab).await;
+    let snapshot = create_snapshot(&running, &token, &vault)
         .await
         .expect("快照");
     let epoch = snapshot
@@ -115,7 +115,7 @@ async fn full_http_loop_is_consistent_across_restart() {
     let entries = snapshot_entries(
         &running,
         &token,
-        &root,
+        &vault,
         snapshot
             .get("snapshot_id")
             .and_then(Value::as_str)
@@ -136,7 +136,7 @@ async fn full_http_loop_is_consistent_across_restart() {
     );
 
     // 2. 上传（跨 3 个块）→ finalize → put 操作。
-    let (upload_id, hash, size) = upload(&running, &token, &root, V2, 32)
+    let (upload_id, hash, size) = upload(&running, &token, &vault, V2, 32)
         .await
         .expect("上传并 finalize");
     assert_eq!(hash, sha256(V2));
@@ -150,7 +150,7 @@ async fn full_http_loop_is_consistent_across_restart() {
         revision: &revision,
         upload: &upload_id,
     };
-    let (status, result) = put_operation(&running, &token, &root, &args)
+    let (status, result) = put_operation(&running, &token, &vault, &args)
         .await
         .expect("提交操作");
     assert_eq!(status, StatusCode::OK, "put 应提交：{result}");
@@ -168,10 +168,10 @@ async fn full_http_loop_is_consistent_across_restart() {
         .and_then(Value::as_str)
         .expect("新 revision")
         .to_owned();
-    let root_seq2 = result
-        .get("root_seq")
+    let vault_seq2 = result
+        .get("vault_seq")
         .and_then(Value::as_str)
-        .expect("RootSeq")
+        .expect("VaultSeq")
         .to_owned();
     assert_eq!(
         result.get("echo_local_generation").and_then(Value::as_str),
@@ -185,25 +185,25 @@ async fn full_http_loop_is_consistent_across_restart() {
     );
 
     // 3. 响应丢失后的重试：同一 OpId 同一请求返回同一结果（T03）。
-    let (status, replay) = put_operation(&running, &token, &root, &args)
+    let (status, replay) = put_operation(&running, &token, &vault, &args)
         .await
         .expect("重试提交");
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay.get("replayed").and_then(Value::as_bool), Some(true));
-    for field in ["version_id", "revision", "root_seq"] {
+    for field in ["version_id", "revision", "vault_seq"] {
         assert_eq!(
             replay.get(field).and_then(Value::as_str),
             Some(match field {
                 "version_id" => version2.as_str(),
                 "revision" => revision2.as_str(),
-                _ => root_seq2.as_str(),
+                _ => vault_seq2.as_str(),
             }),
             "重试必须返回同一 {field}"
         );
     }
 
     // 4. 快照 → 按固定版本身份下载。
-    let snapshot = create_snapshot(&running, &token, &root)
+    let snapshot = create_snapshot(&running, &token, &vault)
         .await
         .expect("快照");
     let snapshot_id = snapshot
@@ -211,7 +211,7 @@ async fn full_http_loop_is_consistent_across_restart() {
         .and_then(Value::as_str)
         .expect("snapshot_id")
         .to_owned();
-    let entries = snapshot_entries(&running, &token, &root, &snapshot_id)
+    let entries = snapshot_entries(&running, &token, &vault, &snapshot_id)
         .await
         .expect("快照清单");
     assert_eq!(
@@ -225,7 +225,7 @@ async fn full_http_loop_is_consistent_across_restart() {
     );
     let (status, bytes, header_hash) = running
         .download(
-            &format!("/v1/roots/{root}/entries/{entry}/versions/{version2}/content"),
+            &format!("/v1/vaults/{vault}/entries/{entry}/versions/{version2}/content"),
             &token,
         )
         .await
@@ -239,7 +239,7 @@ async fn full_http_loop_is_consistent_across_restart() {
     // 5. 外部修改：观察循环采纳成 external 版本与事件。
     std::fs::write(work_file(&lab), V3).expect("外部改写");
     wait_for("外部修改采纳", || async {
-        let batches = all_changes(&running, &token, &root).await?;
+        let batches = all_changes(&running, &token, &vault).await?;
         Ok(batches.iter().any(|batch| {
             batch
                 .get("events_json")
@@ -250,16 +250,16 @@ async fn full_http_loop_is_consistent_across_restart() {
     .await
     .expect("外部修改应被采纳并进入 changes");
 
-    let batches_before = all_changes(&running, &token, &root)
+    let batches_before = all_changes(&running, &token, &vault)
         .await
         .expect("拉取 changes");
-    let snapshot_before = create_snapshot(&running, &token, &root)
+    let snapshot_before = create_snapshot(&running, &token, &vault)
         .await
         .expect("快照");
     let entries_before = snapshot_entries(
         &running,
         &token,
-        &root,
+        &vault,
         snapshot_before
             .get("snapshot_id")
             .and_then(Value::as_str)
@@ -278,7 +278,7 @@ async fn full_http_loop_is_consistent_across_restart() {
     assert!(
         batches_before
             .iter()
-            .any(|batch| batch.get("seq").and_then(Value::as_str) == Some(root_seq2.as_str())),
+            .any(|batch| batch.get("seq").and_then(Value::as_str) == Some(vault_seq2.as_str())),
         "客户端提交的批次仍在 changes 里"
     );
 
@@ -286,14 +286,14 @@ async fn full_http_loop_is_consistent_across_restart() {
     running.stop().await;
     let restarted = Running::start(&lab).await.expect("重启服务端");
     let token = login(&restarted).await.expect("重启后登录");
-    let batches_after = all_changes(&restarted, &token, &root)
+    let batches_after = all_changes(&restarted, &token, &vault)
         .await
         .expect("重启后拉取 changes");
     assert_eq!(
         batches_after, batches_before,
         "重启后 changes 批次（含 seq/events_json）逐字段一致"
     );
-    let snapshot_after = create_snapshot(&restarted, &token, &root)
+    let snapshot_after = create_snapshot(&restarted, &token, &vault)
         .await
         .expect("重启后快照");
     assert_eq!(
@@ -304,7 +304,7 @@ async fn full_http_loop_is_consistent_across_restart() {
     let entries_after = snapshot_entries(
         &restarted,
         &token,
-        &root,
+        &vault,
         snapshot_after
             .get("snapshot_id")
             .and_then(Value::as_str)
@@ -329,7 +329,7 @@ async fn full_http_loop_is_consistent_across_restart() {
     );
     let (status, bytes, _) = restarted
         .download(
-            &format!("/v1/roots/{root}/entries/{entry}/versions/{version3}/content"),
+            &format!("/v1/vaults/{vault}/entries/{entry}/versions/{version3}/content"),
             &token,
         )
         .await
@@ -395,7 +395,7 @@ fn volume_from_env(name: &str) -> Option<PathBuf> {
 /// （reflink 的 CoW 分配也要空间）或元数据事务必然失败；失败必须是 507/503，工作文件仍是旧内容，
 /// 版本/revision 不推进。
 ///
-/// 准入要求内部状态目录与 Root 在同一 btrfs 文件系统（design §11.4），因此两侧都放在专用小卷上。
+/// 准入要求内部状态目录与 Vault 在同一 btrfs 文件系统（design §11.4），因此两侧都放在专用小卷上。
 #[tokio::test]
 async fn work_volume_full_never_reports_committed() {
     let Some(volume) = volume_from_env("VAULTSYNCD_S052_WORK_VOLUME") else {
@@ -406,19 +406,19 @@ async fn work_volume_full_never_reports_committed() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
-        .expect("注册 Root");
-    seed_and_adopt(&running, &token, &root, &lab).await;
+        .expect("注册 Vault");
+    seed_and_adopt(&running, &token, &vault, &lab).await;
 
     // 大内容先上传到对象区（对象在状态侧，尚未写工作目录）。
     let big: Vec<u8> = (0..24 * 1024 * 1024)
         .map(|index| u8::try_from(index % 251).expect("字节"))
         .collect();
-    let (upload_id, _, _) = upload(&running, &token, &root, &big, 1 << 20)
+    let (upload_id, _, _) = upload(&running, &token, &vault, &big, 1 << 20)
         .await
         .expect("上传大内容");
-    let before = create_snapshot(&running, &token, &root)
+    let before = create_snapshot(&running, &token, &vault)
         .await
         .expect("快照");
     let epoch = before
@@ -429,7 +429,7 @@ async fn work_volume_full_never_reports_committed() {
     let entries = snapshot_entries(
         &running,
         &token,
-        &root,
+        &vault,
         before
             .get("snapshot_id")
             .and_then(Value::as_str)
@@ -454,7 +454,7 @@ async fn work_volume_full_never_reports_committed() {
         revision: &revision,
         upload: &upload_id,
     };
-    let (status, result) = put_operation(&running, &token, &root, &args)
+    let (status, result) = put_operation(&running, &token, &vault, &args)
         .await
         .expect("满盘时提交");
     assert!(
@@ -486,12 +486,14 @@ async fn state_volume_full_never_reports_committed() {
     lab.init_owner().await;
     let running = Running::start(&lab).await.expect("启动服务端");
     let token = login(&running).await.expect("登录");
-    let root = register_root(&running, &token, &lab.work())
+    let vault = register_vault(&running, &token, &lab.work())
         .await
-        .expect("注册 Root");
-    seed_and_adopt(&running, &token, &root, &lab).await;
-    let (upload_id, _, _) = upload(&running, &token, &root, V2, 32).await.expect("上传");
-    let before = create_snapshot(&running, &token, &root)
+        .expect("注册 Vault");
+    seed_and_adopt(&running, &token, &vault, &lab).await;
+    let (upload_id, _, _) = upload(&running, &token, &vault, V2, 32)
+        .await
+        .expect("上传");
+    let before = create_snapshot(&running, &token, &vault)
         .await
         .expect("快照");
     let epoch = before
@@ -502,7 +504,7 @@ async fn state_volume_full_never_reports_committed() {
     let entries = snapshot_entries(
         &running,
         &token,
-        &root,
+        &vault,
         before
             .get("snapshot_id")
             .and_then(Value::as_str)
@@ -528,7 +530,7 @@ async fn state_volume_full_never_reports_committed() {
         revision: &revision,
         upload: &upload_id,
     };
-    let (status, result) = put_operation(&running, &token, &root, &args)
+    let (status, result) = put_operation(&running, &token, &vault, &args)
         .await
         .expect("满盘时提交");
     assert!(
@@ -549,7 +551,7 @@ async fn state_volume_full_never_reports_committed() {
     let (status, value) = running
         .json(
             "GET",
-            &format!("/v1/roots/{root}/operations/{}", identity(0x31)),
+            &format!("/v1/vaults/{vault}/operations/{}", identity(0x31)),
             Some(&token),
             None,
         )

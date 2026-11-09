@@ -1,6 +1,6 @@
 //! CFAPI 占位符 `FileIdentity` 的编解码（纯逻辑，可在宿主测试）。
 //!
-//! `docs/design.md` §14.2 要求 `FileIdentity` 编码 schema_version、RootId、EntryId 与版本提示，
+//! `docs/design.md` §14.2 要求 `FileIdentity` 编码 schema_version、VaultId、EntryId 与版本提示，
 //! 且不得装入密码、访问令牌或服务器绝对路径。因此本模块的结构里只有定长字节数组与整数：
 //!
 //! | 偏移 | 长度 | 字段 |
@@ -8,7 +8,7 @@
 //! | 0 | 2 | magic `b"VS"` |
 //! | 2 | 1 | schema_version（当前 [`SCHEMA_VERSION`]） |
 //! | 3 | 1 | 保留字节，必须为 0 |
-//! | 4 | 16 | RootId（不透明） |
+//! | 4 | 16 | VaultId（不透明） |
 //! | 20 | 16 | EntryId（不透明；design I03：路径改变不改变 EntryId） |
 //! | 36 | 8 | 版本提示（不透明 u64，小端） |
 //! | 44 | 4 | CRC-32/IEEE（覆盖偏移 0..44，小端） |
@@ -28,7 +28,7 @@ pub const CFAPI_MAX_FILE_IDENTITY_LEN: usize = 4096;
 /// [`IdentityDecodeError::UnsupportedSchemaVersion`]，而不是把旧 blob 当新布局解释。
 pub const SCHEMA_VERSION: u8 = 1;
 
-/// 编码后的固定字节数（2 magic + 1 version + 1 reserved + 16 root + 16 entry + 8 hint + 4 crc）。
+/// 编码后的固定字节数（2 magic + 1 version + 1 reserved + 16 vault + 16 entry + 8 hint + 4 crc）。
 pub const ENCODED_LEN: usize = 48;
 
 /// 编码格式的 magic，用来尽早拒绝把别的数据当 `FileIdentity` 解码。
@@ -40,12 +40,12 @@ const _: () = assert!(ENCODED_LEN < 64);
 
 /// 同步根标识：16 字节不透明值。
 ///
-/// 原型的取值见 [`crate::cfapi::prototype_layout::PROTOTYPE_ROOT_ID`]；真实 RootId 由服务端
-/// Root 分配，本模块只负责字节级承载，不解释其语义。
+/// 原型的取值见 [`crate::cfapi::prototype_layout::PROTOTYPE_VAULT_ID`]；真实 VaultId 由服务端
+/// Vault 分配，本模块只负责字节级承载，不解释其语义。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RootId([u8; 16]);
+pub struct VaultId([u8; 16]);
 
-impl RootId {
+impl VaultId {
     /// 由 16 字节原始值构造。
     pub const fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
@@ -96,7 +96,7 @@ impl VersionHint {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileIdentity {
     /// 所属同步根。
-    pub root_id: RootId,
+    pub vault_id: VaultId,
     /// 条目身份。
     pub entry_id: EntryId,
     /// 远端版本提示。
@@ -111,7 +111,7 @@ impl FileIdentity {
         bytes[0..2].copy_from_slice(&MAGIC);
         bytes[2] = SCHEMA_VERSION;
         // bytes[3] 是保留字节，保持 0。
-        bytes[4..20].copy_from_slice(self.root_id.as_bytes());
+        bytes[4..20].copy_from_slice(self.vault_id.as_bytes());
         bytes[20..36].copy_from_slice(self.entry_id.as_bytes());
         bytes[36..44].copy_from_slice(&self.version_hint.get().to_le_bytes());
         let checksum = crc32(&bytes[..44]);
@@ -141,14 +141,14 @@ impl FileIdentity {
         if stored != computed {
             return Err(IdentityDecodeError::ChecksumMismatch { stored, computed });
         }
-        let mut root_id = [0u8; 16];
-        root_id.copy_from_slice(&bytes[4..20]);
+        let mut vault_id = [0u8; 16];
+        vault_id.copy_from_slice(&bytes[4..20]);
         let mut entry_id = [0u8; 16];
         entry_id.copy_from_slice(&bytes[20..36]);
         let mut hint = [0u8; 8];
         hint.copy_from_slice(&bytes[36..44]);
         Ok(Self {
-            root_id: RootId::from_bytes(root_id),
+            vault_id: VaultId::from_bytes(vault_id),
             entry_id: EntryId::from_bytes(entry_id),
             version_hint: VersionHint::new(u64::from_le_bytes(hint)),
         })
@@ -240,13 +240,13 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ENCODED_LEN, EntryId, FileIdentity, IdentityDecodeError, RootId, SCHEMA_VERSION,
+        ENCODED_LEN, EntryId, FileIdentity, IdentityDecodeError, SCHEMA_VERSION, VaultId,
         VersionHint, crc32,
     };
 
     fn sample() -> FileIdentity {
         FileIdentity {
-            root_id: RootId::from_bytes([
+            vault_id: VaultId::from_bytes([
                 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
                 0xEE, 0xFF,
             ]),

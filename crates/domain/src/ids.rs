@@ -5,7 +5,7 @@
 //! 十六进制字符，解析同时接受大写，因此同一个值只有一种字节表示，不存在“看起来不同”的同一身份。
 //!
 //! 长度固定为 [`ID_LEN`] = 16 字节，与 `crates/platform-windows` 的 CFAPI `FileIdentity` 编码
-//! 一致（该 48 字节 blob 中 RootId、EntryId 各占 16 字节），所以服务端分配的 ID 可以直接写进
+//! 一致（该 48 字节 blob 中 VaultId、EntryId 各占 16 字节），所以服务端分配的 ID 可以直接写进
 //! 平台身份，不需要第二套映射；`crates/domain` 仍是身份的唯一定义处。
 //!
 //! 本模块不做 I/O：随机性由调用方通过 [`IdSource`] 注入（design §5.4），因此生成过程在测试中
@@ -162,18 +162,18 @@ opaque_id! {
 opaque_id! {
     /// 所有者账号身份（design §7.2 `users.id`、§17.1）。
     ///
-    /// 每个服务端 Root 都通过 `owner_id` 归属到一个账号；数据访问必须带这个身份作 owner scope，
+    /// 每个服务端 Vault 都通过 `owner_id` 归属到一个账号；数据访问必须带这个身份作 owner scope，
     /// 不能因为“首发只有一位 owner”就省略授权边界。
     UserId
 }
 
 opaque_id! {
     /// 被管理的服务器目录身份，不等于本地路径文本。
-    RootId
+    VaultId
 }
 
 opaque_id! {
-    /// 某设备某目录与 Root 的绑定身份，持有独立同步模式与排除规则。
+    /// 某设备某目录与 Vault 的绑定身份，持有独立同步模式与排除规则。
     BindingId
 }
 
@@ -199,10 +199,10 @@ opaque_id! {
 
 opaque_id! {
     /// 服务端事务批次身份：一次提交产生的事件批次带同一个 `TxId`（design §7.2 `changes.tx_id`、
-    /// §9.3「每批含 RootSeq、TxId」）。
+    /// §9.3「每批含 VaultSeq、TxId」）。
     ///
     /// 它只用于把同一次提交的批次与日志关联起来，不承担幂等键职责——幂等由
-    /// (`RootId`, `DeviceId`, `OpId`) 决定。
+    /// (`VaultId`, `DeviceId`, `OpId`) 决定。
     TxId
 }
 
@@ -271,7 +271,7 @@ mod tests {
     fn every_identity_type_round_trips_through_canonical_hex() {
         check_identity_type!(ServerId);
         check_identity_type!(UserId);
-        check_identity_type!(RootId);
+        check_identity_type!(VaultId);
         check_identity_type!(BindingId);
         check_identity_type!(EntryId);
         check_identity_type!(VersionId);
@@ -293,7 +293,7 @@ mod tests {
             EntryId::from_bytes(SAMPLE)
         );
         assert_eq!(
-            RootId::from_hex("0011AA22bb33CC44dd55EE66ff77AA88")
+            VaultId::from_hex("0011AA22bb33CC44dd55EE66ff77AA88")
                 .unwrap()
                 .to_hex(),
             "0011aa22bb33cc44dd55ee66ff77aa88"
@@ -372,8 +372,11 @@ mod tests {
         assert_eq!(generated[0].to_hex(), "00000000000000010000000000000000");
         assert_eq!(generated[1].to_hex(), "00000000000000020000000000000000");
 
-        // 相同字节在不同身份类型里仍是不同类型：`RootId` 与 `EntryId` 不能互相赋值。
+        // 相同字节在不同身份类型里仍是不同类型：`VaultId` 与 `EntryId` 不能互相赋值。
         let mut third = CountingSource(1);
-        assert_eq!(RootId::generate(&mut third).to_hex(), generated[0].to_hex());
+        assert_eq!(
+            VaultId::generate(&mut third).to_hex(),
+            generated[0].to_hex()
+        );
     }
 }

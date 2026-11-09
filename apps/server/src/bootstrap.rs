@@ -5,8 +5,8 @@
 //!
 //! 1. 打开服务端数据库（种类/版本门禁、迁移、WAL 校验都在 `crates/server-store` 里，任一步失败
 //!    就不给可写句柄 → 本进程拒绝启动）；
-//! 2. 逐个已注册 Root 评估启动恢复（[`crate::recovery`]），把结论写进 [`Lifecycle`]；
-//! 3. 只有所有 Root 都给出“不需要停写”的结论时，readiness 才变真；
+//! 2. 逐个已注册 Vault 评估启动恢复（[`crate::recovery`]），把结论写进 [`Lifecycle`]；
+//! 3. 只有所有 Vault 都给出“不需要停写”的结论时，readiness 才变真；
 //! 4. 绑定监听地址后才开始服务请求。
 //!
 //! 停止顺序相反：先进入 `draining`（拒绝新的提交），再让 HTTP 收尾，最后统计并打印仍然保留的
@@ -32,7 +32,7 @@ use crate::content::ContentContext;
 use crate::http;
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::recovery::{self, RecoveryAssessment, RecoveryAssessmentError};
-use crate::roots::RootContext;
+use crate::vaults::VaultContext;
 
 /// 启动失败：进程必须以非零退出码结束，且从未开放写入。
 #[derive(Debug)]
@@ -110,7 +110,7 @@ pub struct Service {
     listener: TcpListener,
     admin_socket: vaultsyncd_platform_linux_server::ipc::AdminSocket,
     assessment: RecoveryAssessment,
-    fences: Arc<crate::root_fences::RootFences>,
+    fences: Arc<crate::vault_fences::VaultFences>,
 }
 
 impl Service {
@@ -170,8 +170,8 @@ impl Service {
             state_dir = %config.state_dir.display(),
             schema_version = database.schema_version(),
             phase = lifecycle.phase().as_str(),
-            open_roots = assessment.open_roots,
-            blocked_roots = assessment.blocked_roots.len(),
+            open_vaults = assessment.open_vaults,
+            blocked_vaults = assessment.blocked_vaults.len(),
             "服务端开始监听"
         );
         if !assessment.is_complete() {
@@ -182,41 +182,41 @@ impl Service {
         }
 
         let auth = Arc::new(
-            auth::AuthContext::new(database.clone()).with_root_fences(Arc::clone(&fences)),
+            auth::AuthContext::new(database.clone()).with_vault_fences(Arc::clone(&fences)),
         );
         let uploads = Arc::new(crate::uploads::UploadsContext::new(
             Arc::clone(&auth),
             &config.state_dir,
         ));
         // 允许基目录来自配置；没有配置时注册端点一律拒绝（不是“不限制”）。
-        let allowed_root_bases = config.allowed_root_bases.clone();
+        let allowed_vault_bases = config.allowed_vault_bases.clone();
         info!(
-            allowed_root_bases = allowed_root_bases.as_ref().map_or(0, |bases| bases.len()),
-            "Root 注册的允许基目录"
+            allowed_vault_bases = allowed_vault_bases.as_ref().map_or(0, |bases| bases.len()),
+            "Vault 注册的允许基目录"
         );
-        if allowed_root_bases.is_none() {
-            warn!("没有配置 [roots].allowed_bases：Root 注册端点会拒绝一切路径");
+        if allowed_vault_bases.is_none() {
+            warn!("没有配置 [vaults].allowed_bases：Vault 注册端点会拒绝一切路径");
         }
         let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
         // 操作命令端点（S047/S052）：命令走真实适配器；缺少整组证据的目录恢复仍显式未就绪。
-        // 外部观察循环（S052）：周期扫描每个健康 Root，把外部改动采纳成版本与事件。
+        // 外部观察循环（S052）：周期扫描每个健康 Vault，把外部改动采纳成版本与事件。
         let observer = Arc::new(
             crate::external::ObserverRuntime::new(
                 database.clone(),
                 &config.state_dir,
                 crate::external::ObserverRuntimeConfig::DEFAULT,
             )
-            .with_root_fences(Arc::clone(&fences)),
+            .with_vault_fences(Arc::clone(&fences)),
         );
         let executor = Arc::new(crate::executor::ExecutorContext::new(
             database.clone(),
             &config.state_dir,
             Some(Arc::clone(&observer)),
         ));
-        let roots = Arc::new(
-            RootContext::new(
+        let vaults = Arc::new(
+            VaultContext::new(
                 Arc::clone(&auth),
-                allowed_root_bases,
+                allowed_vault_bases,
                 config.state_dir.clone(),
                 ScanPolicy::default(),
             )
@@ -237,7 +237,7 @@ impl Service {
                 config.clone(),
             ))),
             database: database.clone(),
-            roots: Arc::clone(&roots),
+            vaults: Arc::clone(&vaults),
             lifecycle: Arc::clone(&lifecycle),
         });
         let backups = Arc::clone(
@@ -267,7 +267,7 @@ impl Service {
             Arc::clone(&lifecycle),
             auth,
             uploads,
-            roots,
+            vaults,
             content,
             operations,
             sync,
@@ -277,7 +277,7 @@ impl Service {
             Some(web) => router.merge(web.router()),
             None => router,
         };
-        // 观察循环用独立线程 + current-thread runtime：端口实现（`RootHandle` 与 trait 对象）不要求
+        // 观察循环用独立线程 + current-thread runtime：端口实现（`VaultHandle` 与 trait 对象）不要求
         // `Send`，而 HTTP 服务的多线程 runtime 不能承载非 `Send` 的 future。
         let stop_observer = Arc::new(tokio::sync::Notify::new());
         let observer_thread = {
@@ -384,7 +384,7 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         .await
         .map_err(|e| StartupError::Replay(e.to_string()))?;
     let fences = Arc::new(
-        crate::root_fences::RootFences::load(&database, &config.state_dir)
+        crate::vault_fences::VaultFences::load(&database, &config.state_dir)
             .await
             .map_err(StartupError::Replay)?,
     );
@@ -392,7 +392,7 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         .await
         .map_err(StartupError::Replay)?;
     let lifecycle = Arc::new(Lifecycle::new());
-    let assessment = recovery::assess_registered_roots(&database, &lifecycle)
+    let assessment = recovery::assess_registered_vaults(&database, &lifecycle)
         .await
         .map_err(|error| {
             error!(error = %error, "启动恢复无法给出结论，拒绝启动");
@@ -400,7 +400,10 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
         })?;
     if assessment.is_complete() {
         lifecycle.mark_ready();
-        info!(open_roots = assessment.open_roots, "启动恢复完成，写入开放");
+        info!(
+            open_vaults = assessment.open_vaults,
+            "启动恢复完成，写入开放"
+        );
     } else {
         lifecycle.mark_needs_recovery(assessment.detail());
     }

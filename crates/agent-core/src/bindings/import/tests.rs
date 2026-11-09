@@ -29,8 +29,8 @@ use crate::ports::remote::RemotePort;
 use crate::testing::FakeClock;
 
 const BINDING: BindingId = BindingId::from_bytes([0x11; 16]);
-const ROOT: RootId = RootId::from_bytes([0x22; 16]);
-const ROOT_ENTRY: EntryId = EntryId::from_bytes([0x01; 16]);
+const VAULT: VaultId = VaultId::from_bytes([0x22; 16]);
+const VAULT_ENTRY: EntryId = EntryId::from_bytes([0x01; 16]);
 
 struct Ids(u64);
 impl IdSource for Ids {
@@ -105,12 +105,12 @@ impl DiskLocal {
             on_demand: true,
         }
     }
-    fn root(&self) -> PathBuf {
+    fn vault(&self) -> PathBuf {
         self.base.join("local")
     }
     fn walk(&self) -> Result<Vec<LocalImportEntry>, PortError> {
         fn visit(
-            root: &Path,
+            vault: &Path,
             path: &Path,
             entries: &mut Vec<LocalImportEntry>,
         ) -> Result<(), PortError> {
@@ -127,7 +127,7 @@ impl DiskLocal {
                 };
                 entries.push(LocalImportEntry {
                     path: child
-                        .strip_prefix(root)
+                        .strip_prefix(vault)
                         .map_err(io)?
                         .to_str()
                         .expect("测试 UTF-8")
@@ -142,13 +142,13 @@ impl DiskLocal {
                     hash: bytes.as_ref().map(|b| digest_of(b)),
                 });
                 if meta.is_dir() {
-                    visit(root, &child, entries)?;
+                    visit(vault, &child, entries)?;
                 }
             }
             Ok(())
         }
         let mut entries = Vec::new();
-        visit(&self.root(), &self.root(), &mut entries)?;
+        visit(&self.vault(), &self.vault(), &mut entries)?;
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(entries)
     }
@@ -157,14 +157,14 @@ impl DiskLocal {
             return Ok(vec![(String::new(), fs::read(path).map_err(io)?)]);
         }
         fn collect(
-            root: &Path,
+            vault: &Path,
             current: &Path,
             out: &mut Vec<(String, Vec<u8>)>,
         ) -> Result<(), PortError> {
             for entry in fs::read_dir(current).map_err(io)? {
                 let path = entry.map_err(io)?.path();
                 let relative = path
-                    .strip_prefix(root)
+                    .strip_prefix(vault)
                     .map_err(io)?
                     .to_str()
                     .expect("测试路径")
@@ -173,7 +173,7 @@ impl DiskLocal {
                     out.push((relative, fs::read(&path).map_err(io)?));
                 } else {
                     out.push((format!("{relative}/"), Vec::new()));
-                    collect(root, &path, out)?;
+                    collect(vault, &path, out)?;
                 }
             }
             Ok(())
@@ -194,12 +194,12 @@ impl ImportLocal for DiskLocal {
         &'a self,
         _binding: &'a BindingRecord,
         _other: &'a [String],
-    ) -> PortFuture<'a, Result<RootAdmission, PortError>> {
+    ) -> PortFuture<'a, Result<VaultAdmission, PortError>> {
         Box::pin(async move {
-            Ok(RootAdmission {
-                identity: "test-volume:root-inode".to_owned(),
+            Ok(VaultAdmission {
+                identity: "test-volume:vault-inode".to_owned(),
                 healthy: self.admission,
-                directory: self.root().is_dir(),
+                directory: self.vault().is_dir(),
                 disjoint: self.admission,
                 representable: true,
             })
@@ -231,8 +231,8 @@ impl ImportLocal for DiskLocal {
     ) -> PortFuture<'a, Result<(), PortError>> {
         Box::pin(async move {
             assert_eq!(expected.get(), 1);
-            let from = self.root().join(from.to_string());
-            let to = self.root().join(to.to_string());
+            let from = self.vault().join(from.to_string());
+            let to = self.vault().join(to.to_string());
             let intent = self.base.join("intents").join(op.to_string());
             if !intent.exists() {
                 if to.exists() {
@@ -261,7 +261,7 @@ impl ImportLocal for DiskLocal {
         // 复制请求，避免借用临时 request 跨 future。
         let request = request.clone();
         Box::pin(async move {
-            let target = self.root().join(request.path.to_string());
+            let target = self.vault().join(request.path.to_string());
             let intent = self.base.join("intents").join(request.op.to_string());
             if !intent.exists() {
                 if target.exists() {
@@ -331,7 +331,7 @@ impl LocalPort for DiskLocal {
     fn observe(&self, path: &RelativePath) -> PortFuture<'_, Result<LocalFacts, PortError>> {
         let path = path.clone();
         Box::pin(async move {
-            let meta = fs::metadata(self.root().join(path.to_string())).map_err(io)?;
+            let meta = fs::metadata(self.vault().join(path.to_string())).map_err(io)?;
             Ok(LocalFacts {
                 path,
                 kind: if meta.is_file() {
@@ -355,7 +355,7 @@ impl LocalPort for DiskLocal {
         Box::pin(async move {
             assert_eq!(expected.get(), 1);
             Ok(Arc::new(Bytes(
-                fs::read(self.root().join(path.to_string())).map_err(io)?,
+                fs::read(self.vault().join(path.to_string())).map_err(io)?,
             )) as Arc<dyn SnapshotSource>)
         })
     }
@@ -419,9 +419,9 @@ impl DiskRemote {
     }
 }
 impl ImportSnapshot for DiskRemote {
-    fn begin(&self, root: RootId) -> PortFuture<'_, Result<SnapshotSeed, PortError>> {
+    fn begin(&self, vault: VaultId) -> PortFuture<'_, Result<SnapshotSeed, PortError>> {
         Box::pin(async move {
-            assert_eq!(root, ROOT);
+            assert_eq!(vault, VAULT);
             let pinned = self.base.join("pinned.json");
             if pinned.exists() {
                 panic!("恢复不应重新获取快照");
@@ -433,7 +433,7 @@ impl ImportSnapshot for DiskRemote {
                     entry_count: state.entries.len().to_string(),
                     expires_at: "1900000000".to_owned(),
                     high_water_seq: state.seq.to_string(),
-                    root_id: root.to_string(),
+                    vault_id: vault.to_string(),
                     server_epoch: "3".to_owned(),
                     snapshot_id: EntryId::from_bytes([0x77; 16]).to_string(),
                 },
@@ -443,7 +443,7 @@ impl ImportSnapshot for DiskRemote {
     }
     fn page<'a>(
         &'a self,
-        _: RootId,
+        _: VaultId,
         snapshot: &'a str,
         cursor: Option<&'a str>,
     ) -> PortFuture<'a, Result<SnapshotPage, PortError>> {
@@ -523,7 +523,7 @@ impl RemotePort for DiskRemote {
                 op_id: request.op_id.clone(),
                 replayed: Some(false),
                 revision: Some("1".to_owned()),
-                root_seq: Some(state.seq.to_string()),
+                vault_seq: Some(state.seq.to_string()),
                 state: OperationState::Committed,
                 version_id: version.clone(),
             };
@@ -671,9 +671,9 @@ async fn setup(base: &Path) -> Arc<Database> {
         &base.join("local/file-kind"),
         b"local file at remote directory",
     );
-    let root = SnapshotEntry {
+    let vault = SnapshotEntry {
         modified_at: None,
-        entry_id: ROOT_ENTRY.to_string(),
+        entry_id: VAULT_ENTRY.to_string(),
         hash: None,
         kind: WireKind::Directory,
         name: String::new(),
@@ -682,7 +682,7 @@ async fn setup(base: &Path) -> Arc<Database> {
         size: None,
         version_id: None,
     };
-    let mut entries = vec![root];
+    let mut entries = vec![vault];
     let mut add = |marker: u8, parent: EntryId, name: &str, bytes: Option<&[u8]>| {
         let version = bytes.map(|_| EntryId::from_bytes([marker + 0x40; 16]).to_string());
         if let (Some(version), Some(bytes)) = (&version, bytes) {
@@ -706,17 +706,17 @@ async fn setup(base: &Path) -> Arc<Database> {
         });
         id
     };
-    let shared = add(2, ROOT_ENTRY, "shared", None);
+    let shared = add(2, VAULT_ENTRY, "shared", None);
     add(3, shared, "same.txt", Some(b"identical"));
     add(4, shared, "different.txt", Some(b"server branch"));
-    add(5, ROOT_ENTRY, "z-remote.txt", Some(b"remote only"));
+    add(5, VAULT_ENTRY, "z-remote.txt", Some(b"remote only"));
     add(
         6,
-        ROOT_ENTRY,
+        VAULT_ENTRY,
         "kind",
         Some(b"remote file at local directory"),
     );
-    let directory = add(7, ROOT_ENTRY, "file-kind", None);
+    let directory = add(7, VAULT_ENTRY, "file-kind", None);
     add(8, directory, "child.txt", Some(b"remote directory child"));
     save_json(
         &base.join("server.json"),
@@ -740,7 +740,7 @@ async fn setup(base: &Path) -> Arc<Database> {
             id: BINDING,
             server: ServerId::from_bytes([0x33; 16]),
             device: DeviceId::from_bytes([0x44; 16]),
-            root: ROOT,
+            vault: VAULT,
             local_path: base.join("local").to_str().expect("路径").to_owned(),
             cache_path: base.join("cache").to_str().expect("路径").to_owned(),
             mode: SyncMode::Full,
@@ -841,7 +841,7 @@ async fn nonempty_directories_resume_across_real_process_deaths_without_deletion
     let state: RemoteDisk = read_json(&dir.0.join("server.json")).expect("读远端");
     assert!(
         state.seq > 7,
-        "上传提交了后续事件，不能用最新 root_seq 跳过高水位"
+        "上传提交了后续事件，不能用最新 vault_seq 跳过高水位"
     );
     assert_eq!(
         state.requests.len(),
@@ -905,7 +905,7 @@ async fn nonempty_directories_resume_across_real_process_deaths_without_deletion
     let catchup = Arc::new(safety_tests::DiskCatchUp(dir.0.clone()));
     let receiver = EventReceiver::new(
         database.clone(),
-        ROOT,
+        VAULT,
         BINDING,
         catchup.clone(),
         catchup.clone(),
@@ -933,8 +933,8 @@ struct AfterSeven;
 impl ChangeSource for AfterSeven {
     fn pull(
         &self,
-        root: RootId,
-        after: RootSeq,
+        vault: VaultId,
+        after: VaultSeq,
         _: u32,
     ) -> PortFuture<'_, Result<ChangeList, PortError>> {
         Box::pin(async move {
@@ -944,7 +944,7 @@ impl ChangeSource for AfterSeven {
                 has_more: false,
                 head_seq: "7".to_owned(),
                 next_after: after.to_decimal(),
-                root_id: root.to_string(),
+                vault_id: vault.to_string(),
                 server_epoch: "3".to_owned(),
             })
         })
@@ -1024,7 +1024,7 @@ async fn admission_mode_scan_and_existing_baseline_fail_closed() {
     );
     let receiver = EventReceiver::new(
         database.clone(),
-        ROOT,
+        VAULT,
         BINDING,
         Arc::new(AfterSeven),
         Arc::new(NeverDecode),
@@ -1103,7 +1103,7 @@ async fn committed_ack_maps_id_without_clearing_new_generation_and_invalid_ack_r
         op_id: item.op.clone(),
         replayed: None,
         revision: Some("1".to_owned()),
-        root_seq: Some("8".to_owned()),
+        vault_seq: Some("8".to_owned()),
         state: OperationState::Committed,
         version_id: Some(EntryId::from_bytes([0xef; 16]).to_string()),
     };
@@ -1176,7 +1176,7 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
         id: BINDING,
         server: ServerId::from_bytes([3; 16]),
         device: DeviceId::from_bytes([4; 16]),
-        root: ROOT,
+        vault: VAULT,
         local_path: "ignored".to_owned(),
         cache_path: "other".to_owned(),
         mode: SyncMode::Full,
@@ -1190,9 +1190,9 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
         size: Some(1),
         hash: Some([0; 32]),
     };
-    let root = SnapshotEntry {
+    let vault = SnapshotEntry {
         modified_at: None,
-        entry_id: ROOT_ENTRY.to_string(),
+        entry_id: VAULT_ENTRY.to_string(),
         hash: None,
         kind: WireKind::Directory,
         name: String::new(),
@@ -1206,7 +1206,7 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
     assert!(
         plan_manifest(
             &binding,
-            std::slice::from_ref(&root),
+            std::slice::from_ref(&vault),
             vec![bad],
             time,
             &names,
@@ -1224,7 +1224,7 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
     assert!(
         plan_manifest(
             &binding,
-            std::slice::from_ref(&root),
+            std::slice::from_ref(&vault),
             vec![entry.clone(), entry.clone()],
             time,
             &names,
@@ -1237,7 +1237,7 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
     assert!(
         plan_manifest(
             &binding,
-            std::slice::from_ref(&root),
+            std::slice::from_ref(&vault),
             vec![entry, capitalized],
             time,
             &names,
@@ -1245,13 +1245,13 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
         )
         .is_err()
     );
-    let mut cycle = root.clone();
+    let mut cycle = vault.clone();
     cycle.parent_id = Some(cycle.entry_id.clone());
     cycle.name = "cycle".to_owned();
-    assert!(remote_paths(&[root.clone(), cycle]).is_err());
-    let mut malformed_root = root;
-    malformed_root.version_id = Some(EntryId::from_bytes([0x99; 16]).to_string());
-    assert!(remote_paths(&[malformed_root]).is_err());
+    assert!(remote_paths(&[vault.clone(), cycle]).is_err());
+    let mut malformed_vault = vault;
+    malformed_vault.version_id = Some(EntryId::from_bytes([0x99; 16]).to_string());
+    assert!(remote_paths(&[malformed_vault]).is_err());
 }
 
 #[tokio::test]

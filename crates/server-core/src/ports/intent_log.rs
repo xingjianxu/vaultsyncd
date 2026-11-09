@@ -1,19 +1,19 @@
 //! 意图日志端口：把 `fs_intents` 的持久化能力暴露给提交状态机（design §11.2 步骤 5、§11.3）。
 //!
 //! 同一张表覆盖三类提交：[`IntentLog`] 是内容 put（`kind = 'put_content'`），[`NamespaceIntentLog`]
-//! 是目录创建与同 Root 移动（`kind = 'create'`/`'move'`），[`DeleteIntentLog`] 是删除（`kind =
+//! 是目录创建与同 Vault 移动（`kind = 'create'`/`'move'`），[`DeleteIntentLog`] 是删除（`kind =
 //! 'delete'`）。三者共用阶段取值与转换规则（[`PutPhase`]）、共用“先写 `prepared` 意图再动磁盘”的
 //! 顺序，只是证据 JSON 的形态不同：put 记内容摘要，命名空间记位置、种类与 inode，删除记子树 token 与
 //! 条目数。
 //!
-//! 端口只做“写一条 prepared 意图、推进阶段、按身份读回、按 Root 列出未完成意图”，不解释业务语义：
+//! 端口只做“写一条 prepared 意图、推进阶段、按身份读回、按 Vault 列出未完成意图”，不解释业务语义：
 //! 什么时候能推进、现场是否满足前提，都由核心判定（[`crate::commit::intent`]、
 //! [`crate::recovery`]）。适配器（服务端存储层）必须把每次写入放在自己的事务里，并如实返回行内容；
 //! 读到的行不合规要报 [`IntentLogError::MalformedIntent`]，不要猜一个阶段或一条路径。
 
 use std::fmt;
 
-use vaultsyncd_domain::ids::{IntentId, RootId};
+use vaultsyncd_domain::ids::{IntentId, VaultId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
 use crate::commit::delete::{DeleteIntent, NewDeleteIntent};
@@ -28,7 +28,7 @@ pub enum IntentLogError {
         /// 原始错误文本。
         detail: String,
     },
-    /// Root 或意图不在调用方的 owner scope 内。
+    /// Vault 或意图不在调用方的 owner scope 内。
     OutOfScope,
     /// 意图不存在。
     UnknownIntent {
@@ -81,7 +81,7 @@ impl fmt::Display for IntentLogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             IntentLogError::Storage { detail } => write!(f, "意图存储失败：{detail}"),
-            IntentLogError::OutOfScope => f.write_str("Root 或意图不在调用方的 owner scope 内"),
+            IntentLogError::OutOfScope => f.write_str("Vault 或意图不在调用方的 owner scope 内"),
             IntentLogError::UnknownIntent { id } => write!(f, "意图 {id} 不存在"),
             IntentLogError::DuplicateIntent { id } => write!(f, "意图身份 {id} 已被占用"),
             IntentLogError::IllegalTransition { from, to } => {
@@ -135,17 +135,17 @@ pub trait IntentLog {
     /// 存储失败或行无法还原。
     async fn load_put(&mut self, id: IntentId) -> Result<Option<PutIntent>, IntentLogError>;
 
-    /// 按 Root 列出尚未收尾的意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
+    /// 按 Vault 列出尚未收尾的意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
     ///
     /// 这是启动恢复的入口（design §11.3：先恢复未完成意图再开放写入）。
     ///
     /// # Errors
     ///
     /// 见 [`IntentLogError`]：越权（不能返回空列表冒充“没有未完成意图”）、存储失败。
-    async fn unfinished_puts(&mut self, root: RootId) -> Result<Vec<PutIntent>, IntentLogError>;
+    async fn unfinished_puts(&mut self, vault: VaultId) -> Result<Vec<PutIntent>, IntentLogError>;
 }
 
-/// 命名空间意图日志端口：目录创建与同 Root 移动的 `fs_intents` 行（`kind = 'create'`/`'move'`）。
+/// 命名空间意图日志端口：目录创建与同 Vault 移动的 `fs_intents` 行（`kind = 'create'`/`'move'`）。
 ///
 /// 契约与 [`IntentLog`] 一致：每次写入在自己的事务里完成，读到的行不合规报
 /// [`IntentLogError::MalformedIntent`]，不猜阶段；`target_path` 写目标路径、`staging_path` 为 NULL
@@ -186,14 +186,14 @@ pub trait NamespaceIntentLog {
         id: IntentId,
     ) -> Result<Option<NamespaceIntent>, IntentLogError>;
 
-    /// 按 Root 列出尚未收尾的命名空间意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
+    /// 按 Vault 列出尚未收尾的命名空间意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
     ///
     /// # Errors
     ///
     /// 见 [`IntentLogError`]：越权（不能返回空列表冒充“没有未完成意图”）、存储失败。
     async fn unfinished_namespaces(
         &mut self,
-        root: RootId,
+        vault: VaultId,
     ) -> Result<Vec<NamespaceIntent>, IntentLogError>;
 }
 
@@ -238,13 +238,13 @@ pub trait DeleteIntentLog {
     /// 存储失败或行无法还原。
     async fn load_delete(&mut self, id: IntentId) -> Result<Option<DeleteIntent>, IntentLogError>;
 
-    /// 按 Root 列出尚未收尾的删除意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
+    /// 按 Vault 列出尚未收尾的删除意图（`prepared`/`published`/`needs_recovery`），按写入顺序。
     ///
     /// # Errors
     ///
     /// 见 [`IntentLogError`]：越权（不能返回空列表冒充“没有未完成意图”）、存储失败。
     async fn unfinished_deletes(
         &mut self,
-        root: RootId,
+        vault: VaultId,
     ) -> Result<Vec<DeleteIntent>, IntentLogError>;
 }

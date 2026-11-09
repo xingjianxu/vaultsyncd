@@ -239,13 +239,13 @@ export function decodeCapabilityLimits(value: unknown): CapabilityLimits {
   };
 }
 
-/** 一个事务批次（design §9.3）：RootSeq、TxId 与该事务的全部条目变化。 */
+/** 一个事务批次（design §9.3）：VaultSeq、TxId 与该事务的全部条目变化。 */
 export interface ChangeBatch {
   /** 批次提交时间（UTC Unix 秒的十进制文本）。 */
   created_at: string;
   /** 该事务全部条目变化与冲突关联的 JSON 数组文本；按数据处理，客户端整批原子应用。 */
   events_json: string;
-  /** 批次序号（该 Root 的第 seq 个事务批次，十进制文本）。 */
+  /** 批次序号（该 Vault 的第 seq 个事务批次，十进制文本）。 */
   seq: string;
   /** 产生该批次的服务端事务身份，32 位小写十六进制。 */
   tx_id: string;
@@ -267,14 +267,14 @@ export interface ChangeList {
   batches: Array<ChangeBatch>;
   /** 读取时 `next_after` 之后是否还有批次。 */
   has_more: boolean;
-  /** 读取时 Root 的最新 RootSeq（十进制文本）。 */
+  /** 读取时 Vault 的最新 VaultSeq（十进制文本）。 */
   head_seq: string;
   /** 下一次拉取应带的 `after`：本页最后一个批次的 seq；本页为空时等于请求的 `after`。 */
   next_after: string;
-  /** Root 身份，32 位小写十六进制。 */
-  root_id: string;
-  /** Root 当前的服务器 epoch（十进制文本）。 */
+  /** Vault 当前的服务器 epoch（十进制文本）。 */
   server_epoch: string;
+  /** Vault 身份，32 位小写十六进制。 */
+  vault_id: string;
 }
 
 export function decodeChangeList(value: unknown): ChangeList {
@@ -284,8 +284,8 @@ export function decodeChangeList(value: unknown): ChangeList {
     has_more: expect_boolean(object.has_more, "ChangeList.has_more"),
     head_seq: expect_decimal(object.head_seq, "ChangeList.head_seq"),
     next_after: expect_decimal(object.next_after, "ChangeList.next_after"),
-    root_id: expect_string(object.root_id, "ChangeList.root_id"),
     server_epoch: expect_decimal(object.server_epoch, "ChangeList.server_epoch"),
+    vault_id: expect_string(object.vault_id, "ChangeList.vault_id"),
   };
 }
 
@@ -340,8 +340,8 @@ export interface ErrorBody {
   request_id: string;
   /** 同一请求稍后原样重试是否可能成功。 */
   retryable: boolean;
-  /** 相关 Root 的身份（32 个小写十六进制字符）；与 Root 无关时省略。 */
-  root_id?: string;
+  /** 相关 Vault 的身份（32 个小写十六进制字符）；与 Vault 无关时省略。 */
+  vault_id?: string;
 }
 
 export function decodeErrorBody(value: unknown): ErrorBody {
@@ -352,7 +352,7 @@ export function decodeErrorBody(value: unknown): ErrorBody {
     message: expect_string(object.message, "ErrorBody.message"),
     request_id: expect_string(object.request_id, "ErrorBody.request_id"),
     retryable: expect_boolean(object.retryable, "ErrorBody.retryable"),
-    root_id: object.root_id === undefined ? undefined : expect_string(object.root_id, "ErrorBody.root_id"),
+    vault_id: object.vault_id === undefined ? undefined : expect_string(object.vault_id, "ErrorBody.vault_id"),
   };
 }
 
@@ -365,9 +365,9 @@ export function decodeErrorBody(value: unknown): ErrorBody {
  * 操作命令端点），与 NEEDS_RECOVERY 的“意图无法解释、需要人工介入”不是一回事；它待与
  * docs/design.md §15.4 的表格同步。
  */
-export type ErrorCode = "AUTH_EXPIRED" | "ACCESS_DENIED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" | "OP_ID_REUSED" | "RECONCILE_REQUIRED" | "CURSOR_EXPIRED" | "EPOCH_CHANGED" | "VERSION_GONE" | "INVALID_NAME" | "INVALID_REQUEST" | "UNSUPPORTED_ENTRY" | "HASH_MISMATCH" | "PART_CONFLICT" | "UNSUPPORTED_STORAGE_BACKEND" | "SERVER_PLACEHOLDER_UNSUPPORTED" | "RATE_LIMITED" | "ROOT_UNAVAILABLE" | "NEEDS_RECOVERY" | "INSUFFICIENT_STORAGE" | "SERVICE_NOT_READY";
+export type ErrorCode = "AUTH_EXPIRED" | "ACCESS_DENIED" | "BASE_MISMATCH" | "SUBTREE_CHANGED" | "OP_ID_REUSED" | "RECONCILE_REQUIRED" | "CURSOR_EXPIRED" | "EPOCH_CHANGED" | "VERSION_GONE" | "INVALID_NAME" | "INVALID_REQUEST" | "UNSUPPORTED_ENTRY" | "HASH_MISMATCH" | "PART_CONFLICT" | "UNSUPPORTED_STORAGE_BACKEND" | "SERVER_PLACEHOLDER_UNSUPPORTED" | "RATE_LIMITED" | "VAULT_UNAVAILABLE" | "NEEDS_RECOVERY" | "INSUFFICIENT_STORAGE" | "SERVICE_NOT_READY";
 
-export const ERROR_CODE_VALUES = ["AUTH_EXPIRED", "ACCESS_DENIED", "BASE_MISMATCH", "SUBTREE_CHANGED", "OP_ID_REUSED", "RECONCILE_REQUIRED", "CURSOR_EXPIRED", "EPOCH_CHANGED", "VERSION_GONE", "INVALID_NAME", "INVALID_REQUEST", "UNSUPPORTED_ENTRY", "HASH_MISMATCH", "PART_CONFLICT", "UNSUPPORTED_STORAGE_BACKEND", "SERVER_PLACEHOLDER_UNSUPPORTED", "RATE_LIMITED", "ROOT_UNAVAILABLE", "NEEDS_RECOVERY", "INSUFFICIENT_STORAGE", "SERVICE_NOT_READY"] as const;
+export const ERROR_CODE_VALUES = ["AUTH_EXPIRED", "ACCESS_DENIED", "BASE_MISMATCH", "SUBTREE_CHANGED", "OP_ID_REUSED", "RECONCILE_REQUIRED", "CURSOR_EXPIRED", "EPOCH_CHANGED", "VERSION_GONE", "INVALID_NAME", "INVALID_REQUEST", "UNSUPPORTED_ENTRY", "HASH_MISMATCH", "PART_CONFLICT", "UNSUPPORTED_STORAGE_BACKEND", "SERVER_PLACEHOLDER_UNSUPPORTED", "RATE_LIMITED", "VAULT_UNAVAILABLE", "NEEDS_RECOVERY", "INSUFFICIENT_STORAGE", "SERVICE_NOT_READY"] as const;
 
 export function decodeErrorCode(value: unknown): ErrorCode {
   if (typeof value !== "string" || !(ERROR_CODE_VALUES as readonly string[]).includes(value)) {
@@ -402,14 +402,14 @@ export interface FinalizedContent {
   replayed: boolean;
   /** 本次新建还是复用既有对象。 */
   reuse: ObjectReuse;
-  /** 内容所属 Root 身份，32 位小写十六进制。 */
-  root_id: string;
   /** 内容字节数（十进制文本）。 */
   size: string;
   /** 对象区内的规范相对路径（服务端内部路径）。客户端只原样回传，不拼接、不解释它。 */
   storage_path: string;
   /** 上传会话身份，32 位小写十六进制。 */
   upload_id: string;
+  /** 内容所属 Vault 身份，32 位小写十六进制。 */
+  vault_id: string;
 }
 
 export function decodeFinalizedContent(value: unknown): FinalizedContent {
@@ -419,10 +419,10 @@ export function decodeFinalizedContent(value: unknown): FinalizedContent {
     part_count: expect_decimal(object.part_count, "FinalizedContent.part_count"),
     replayed: expect_boolean(object.replayed, "FinalizedContent.replayed"),
     reuse: decodeObjectReuse(object.reuse),
-    root_id: expect_string(object.root_id, "FinalizedContent.root_id"),
     size: expect_decimal(object.size, "FinalizedContent.size"),
     storage_path: expect_string(object.storage_path, "FinalizedContent.storage_path"),
     upload_id: expect_string(object.upload_id, "FinalizedContent.upload_id"),
+    vault_id: expect_string(object.vault_id, "FinalizedContent.vault_id"),
   };
 }
 
@@ -470,50 +470,50 @@ export function decodeLoginRequest(value: unknown): LoginRequest {
   };
 }
 
-/** 仅 owner 管理通道可见的 Root。 */
-export interface ManagedRoot {
+/** 仅 owner 管理通道可见的 Vault。 */
+export interface ManagedVault {
   /** 本进程采集观测 */
-  collection: RootCollection;
+  collection: VaultCollection;
   /** 现场挂载和存储状态 */
-  health: RootHealth;
+  health: VaultHealth;
   /** 可执行的修复建议 */
   next_step: string;
   /** 已注册服务器绝对路径 */
   path: string;
   /** 稳定故障原因；健康时为空 */
   reason: string;
-  /** Root 身份 */
-  root_id: string;
+  /** Vault 身份 */
+  vault_id: string;
   /** 已提交事件序号，不表示采集完成 */
-  root_seq: string;
+  vault_seq: string;
 }
 
-export function decodeManagedRoot(value: unknown): ManagedRoot {
-  const object = expect_object(value, "ManagedRoot");
+export function decodeManagedVault(value: unknown): ManagedVault {
+  const object = expect_object(value, "ManagedVault");
   return {
-    collection: decodeRootCollection(object.collection),
-    health: decodeRootHealth(object.health),
-    next_step: expect_string(object.next_step, "ManagedRoot.next_step"),
-    path: expect_string(object.path, "ManagedRoot.path"),
-    reason: expect_string(object.reason, "ManagedRoot.reason"),
-    root_id: expect_string(object.root_id, "ManagedRoot.root_id"),
-    root_seq: expect_decimal(object.root_seq, "ManagedRoot.root_seq"),
+    collection: decodeVaultCollection(object.collection),
+    health: decodeVaultHealth(object.health),
+    next_step: expect_string(object.next_step, "ManagedVault.next_step"),
+    path: expect_string(object.path, "ManagedVault.path"),
+    reason: expect_string(object.reason, "ManagedVault.reason"),
+    vault_id: expect_string(object.vault_id, "ManagedVault.vault_id"),
+    vault_seq: expect_decimal(object.vault_seq, "ManagedVault.vault_seq"),
   };
 }
 
-/** owner 管理清单；不可由普通 Root 列表推导路径。 */
-export interface ManagedRootList {
+/** owner 管理清单；不可由普通 Vault 列表推导路径。 */
+export interface ManagedVaultList {
   /** 部署预配置允许基目录；空表示未配置且禁止注册。 */
   allowed_bases: Array<string>;
-  /** owner 已注册 Root。 */
-  roots: Array<ManagedRoot>;
+  /** owner 已注册 Vault。 */
+  vaults: Array<ManagedVault>;
 }
 
-export function decodeManagedRootList(value: unknown): ManagedRootList {
-  const object = expect_object(value, "ManagedRootList");
+export function decodeManagedVaultList(value: unknown): ManagedVaultList {
+  const object = expect_object(value, "ManagedVaultList");
   return {
-    allowed_bases: expect_array(object.allowed_bases, "ManagedRootList.allowed_bases").map((item) => expect_string(item, "ManagedRootList.allowed_bases 的元素")),
-    roots: expect_array(object.roots, "ManagedRootList.roots").map((item) => decodeManagedRoot(item)),
+    allowed_bases: expect_array(object.allowed_bases, "ManagedVaultList.allowed_bases").map((item) => expect_string(item, "ManagedVaultList.allowed_bases 的元素")),
+    vaults: expect_array(object.vaults, "ManagedVaultList.vaults").map((item) => decodeManagedVault(item)),
   };
 }
 
@@ -584,7 +584,7 @@ export function decodeOperationKind(value: unknown): OperationKind {
 
 /**
  * 一次修改命令的输入（design §15.3）。`op_id` 与 `device_id` 一起构成幂等键
- * `(root, device_id, op_id)`；不同命令用不同字段（put 用 `entry_id`/`base_revision`/
+ * `(vault, device_id, op_id)`；不同命令用不同字段（put 用 `entry_id`/`base_revision`/
  * `upload_id`，create 用 `parent_id`/`name`/`expected_absent`，move 用源
  * `entry_id`/`base_revision` 与目标 `parent_id`/`name`，delete 用
  * `entry_id`/`base_revision`（目录另带 `subtree_token`），restore 用
@@ -656,7 +656,7 @@ export function decodeOperationRequest(value: unknown): OperationRequest {
 
 /**
  * 一次操作的状态与业务结果（design §15.3）。`pending` 时只有 `op_id`/`state`（可能带
- * `echo_local_generation`）：不出现 `revision`/`root_seq`/`version_id`/`entry_id` 一类
+ * `echo_local_generation`）：不出现 `revision`/`vault_seq`/`version_id`/`entry_id` 一类
  * “已完成”字段。`replayed` 由端点按本次请求填写（是否命中了已记录的结果）；`request_id`
  * 在错误信封里给出，成功响应只带操作身份。
  */
@@ -677,10 +677,10 @@ export interface OperationResult {
   replayed?: boolean;
   /** 提交后的条目 revision（只有 committed 有，十进制文本）。 */
   revision?: string;
-  /** 该批次占用的 RootSeq（只有 committed 有，十进制文本）。 */
-  root_seq?: string;
   /** 操作状态；`pending` 不代表已同步。 */
   state: OperationState;
+  /** 该批次占用的 VaultSeq（只有 committed 有，十进制文本）。 */
+  vault_seq?: string;
   /** 提交产生的新版本身份（只有 put/restore 的 committed 有），32 位小写十六进制。 */
   version_id?: string;
 }
@@ -696,14 +696,14 @@ export function decodeOperationResult(value: unknown): OperationResult {
     op_id: expect_string(object.op_id, "OperationResult.op_id"),
     replayed: object.replayed === undefined ? undefined : expect_boolean(object.replayed, "OperationResult.replayed"),
     revision: object.revision === undefined ? undefined : expect_decimal(object.revision, "OperationResult.revision"),
-    root_seq: object.root_seq === undefined ? undefined : expect_decimal(object.root_seq, "OperationResult.root_seq"),
     state: decodeOperationState(object.state),
+    vault_seq: object.vault_seq === undefined ? undefined : expect_decimal(object.vault_seq, "OperationResult.vault_seq"),
     version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "OperationResult.version_id"),
   };
 }
 
 /**
- * 操作状态闭集（`operations.state`）。`pending` 只表示已受理，不占 RootSeq、不判已同步；
+ * 操作状态闭集（`operations.state`）。`pending` 只表示已受理，不占 VaultSeq、不判已同步；
  * `committed` 与 `rejected` 是终态，同一 OpId 的结果不再改变。
  */
 export type OperationState = "pending" | "committed" | "rejected";
@@ -837,141 +837,22 @@ export function decodeRefreshRequest(value: unknown): RefreshRequest {
   };
 }
 
-/** 实际最近一轮扫描进度，不代表客户端已同步。 */
-export interface RootCollection {
-  /** 未完成原因与本进程观测范围 */
-  detail: string;
-  /** 最近一轮实际检查项数 */
-  examined: string;
-  /** 最近一轮待稳定或重试文件数 */
-  pending: string;
-  /** 采集状态 */
-  state: RootCollectionState;
-}
-
-export function decodeRootCollection(value: unknown): RootCollection {
-  const object = expect_object(value, "RootCollection");
-  return {
-    detail: expect_string(object.detail, "RootCollection.detail"),
-    examined: expect_decimal(object.examined, "RootCollection.examined"),
-    pending: expect_decimal(object.pending, "RootCollection.pending"),
-    state: decodeRootCollectionState(object.state),
-  };
-}
-
-/** 本进程观测状态；重启后不沿用旧完成标志。 */
-export type RootCollectionState = "not_scanned" | "scanning" | "pending" | "complete" | "blocked";
-
-export const ROOT_COLLECTION_STATE_VALUES = ["not_scanned", "scanning", "pending", "complete", "blocked"] as const;
-
-export function decodeRootCollectionState(value: unknown): RootCollectionState {
-  if (typeof value !== "string" || !(ROOT_COLLECTION_STATE_VALUES as readonly string[]).includes(value)) {
-    throw new Error(`未知的 RootCollectionState 取值：${JSON.stringify(value)}`);
-  }
-  return value as RootCollectionState;
-}
-
 /**
- * Root 健康状态闭集（design §7.2 `roots.health`）。`unavailable` 表示挂载、身份或权限
- * 核对失败，该 Root 暂停同步但绝不据此推导删除。
- */
-export type RootHealth = "healthy" | "unavailable";
-
-export const ROOT_HEALTH_VALUES = ["healthy", "unavailable"] as const;
-
-export function decodeRootHealth(value: unknown): RootHealth {
-  if (typeof value !== "string" || !(ROOT_HEALTH_VALUES as readonly string[]).includes(value)) {
-    throw new Error(`未知的 RootHealth 取值：${JSON.stringify(value)}`);
-  }
-  return value as RootHealth;
-}
-
-/** 授权 Root 清单（design §15.2 `GET /v1/roots`）。 */
-export interface RootList {
-  /** 当前调用者可见的 Root，按身份顺序稳定排列。 */
-  roots: Array<RootSummary>;
-}
-
-export function decodeRootList(value: unknown): RootList {
-  const object = expect_object(value, "RootList");
-  return {
-    roots: expect_array(object.roots, "RootList.roots").map((item) => decodeRootSummary(item)),
-  };
-}
-
-/**
- * 注册 Root 的输入（design §15.2 `POST /v1/admin/roots`）。这是少数接受服务器绝对路径
- * 的网络接口之一，因此必须同时受允许基目录与存储准入约束。
- */
-export interface RootRegisterRequest {
-  /** 服务端绝对路径；必须在部署配置的允许基目录内。 */
-  path: string;
-}
-
-export function decodeRootRegisterRequest(value: unknown): RootRegisterRequest {
-  const object = expect_object(value, "RootRegisterRequest");
-  return {
-    path: expect_string(object.path, "RootRegisterRequest.path"),
-  };
-}
-
-/** 注册结果（design §15.2）。 */
-export interface RootRegistered {
-  /** 注册时的健康状态。 */
-  health: RootHealth;
-  /**
-   * 该 Root 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Root 恒为
-   * true；采集完成后由后续的初始采集步骤推进。
-   */
-  pending_import: boolean;
-  /** 新 Root 的身份，32 个小写十六进制字符。 */
-  root_id: string;
-}
-
-export function decodeRootRegistered(value: unknown): RootRegistered {
-  const object = expect_object(value, "RootRegistered");
-  return {
-    health: decodeRootHealth(object.health),
-    pending_import: expect_boolean(object.pending_import, "RootRegistered.pending_import"),
-    root_id: expect_string(object.root_id, "RootRegistered.root_id"),
-  };
-}
-
-/** 一条授权 Root 的对外摘要；不含服务器绝对路径。 */
-export interface RootSummary {
-  /** 当前健康状态。 */
-  health: RootHealth;
-  /** Root 目录末级名称，不含父目录路径。旧服务端可省略；仅用于显示，身份仍使用 root_id。 */
-  name?: string;
-  /** Root 身份，32 个小写十六进制字符。 */
-  root_id: string;
-}
-
-export function decodeRootSummary(value: unknown): RootSummary {
-  const object = expect_object(value, "RootSummary");
-  return {
-    health: decodeRootHealth(object.health),
-    name: object.name === undefined ? undefined : expect_string(object.name, "RootSummary.name"),
-    root_id: expect_string(object.root_id, "RootSummary.root_id"),
-  };
-}
-
-/**
- * SSE 提示的 `data` 内容（design §9.3）：只告诉客户端 Root 的 RootSeq 已到某个值，
+ * SSE 提示的 `data` 内容（design §9.3）：只告诉客户端 Vault 的 VaultSeq 已到某个值，
  * 不携带任何批次内容。丢失、重复、乱序都由 `changes` 拉取修复。
  */
 export interface SeqHint {
-  /** Root 身份，32 位小写十六进制。 */
-  root_id: string;
-  /** 提示发出时 Root 的最新 RootSeq（十进制文本）。 */
+  /** 提示发出时 Vault 的最新 VaultSeq（十进制文本）。 */
   seq: string;
+  /** Vault 身份，32 位小写十六进制。 */
+  vault_id: string;
 }
 
 export function decodeSeqHint(value: unknown): SeqHint {
   const object = expect_object(value, "SeqHint");
   return {
-    root_id: expect_string(object.root_id, "SeqHint.root_id"),
     seq: expect_decimal(object.seq, "SeqHint.seq"),
+    vault_id: expect_string(object.vault_id, "SeqHint.vault_id"),
   };
 }
 
@@ -1017,7 +898,7 @@ export function decodeSessionRevoked(value: unknown): SessionRevoked {
 }
 
 /**
- * 一份一致性快照的元数据（design §9.3）。`high_water_seq` 是创建时刻 Root 的 RootSeq：清单恰好是
+ * 一份一致性快照的元数据（design §9.3）。`high_water_seq` 是创建时刻 Vault 的 VaultSeq：清单恰好是
  * “应用到该 seq 为止”的状态，继续追赶从 `changes?after=<high_water_seq>` 开始。
  */
 export interface Snapshot {
@@ -1025,14 +906,14 @@ export interface Snapshot {
   entry_count: string;
   /** 清单到期时间（UTC Unix 秒的十进制文本）；此刻及之后翻页返回 410。 */
   expires_at: string;
-  /** 创建快照时的 RootSeq（十进制文本）。 */
+  /** 创建快照时的 VaultSeq（十进制文本）。 */
   high_water_seq: string;
-  /** 所属 Root 身份，32 位小写十六进制。 */
-  root_id: string;
-  /** 创建快照时 Root 的服务器 epoch（十进制文本）。 */
+  /** 创建快照时 Vault 的服务器 epoch（十进制文本）。 */
   server_epoch: string;
   /** 快照身份，32 位小写十六进制。 */
   snapshot_id: string;
+  /** 所属 Vault 身份，32 位小写十六进制。 */
+  vault_id: string;
 }
 
 export function decodeSnapshot(value: unknown): Snapshot {
@@ -1041,9 +922,9 @@ export function decodeSnapshot(value: unknown): Snapshot {
     entry_count: expect_decimal(object.entry_count, "Snapshot.entry_count"),
     expires_at: expect_decimal(object.expires_at, "Snapshot.expires_at"),
     high_water_seq: expect_decimal(object.high_water_seq, "Snapshot.high_water_seq"),
-    root_id: expect_string(object.root_id, "Snapshot.root_id"),
     server_epoch: expect_decimal(object.server_epoch, "Snapshot.server_epoch"),
     snapshot_id: expect_string(object.snapshot_id, "Snapshot.snapshot_id"),
+    vault_id: expect_string(object.vault_id, "Snapshot.vault_id"),
   };
 }
 
@@ -1063,7 +944,7 @@ export interface SnapshotEntry {
   modified_at?: string;
   /** 原始名称（合成根条目为空串）；按数据处理。 */
   name: string;
-  /** 父目录条目身份；Root 的合成根条目没有。 */
+  /** 父目录条目身份；Vault 的合成根条目没有。 */
   parent_id?: string;
   /** 创建快照时的条目 revision（十进制文本）。 */
   revision: string;
@@ -1092,7 +973,7 @@ export function decodeSnapshotEntry(value: unknown): SnapshotEntry {
 export interface SnapshotPage {
   /** 本页条目，按 EntryId 升序。 */
   entries: Array<SnapshotEntry>;
-  /** 快照固定的 RootSeq（十进制文本，所有页相同）。 */
+  /** 快照固定的 VaultSeq（十进制文本，所有页相同）。 */
   high_water_seq: string;
   /** 下一页的游标（十进制文本）；缺省表示已是最后一页。 */
   next_cursor?: string;
@@ -1119,10 +1000,10 @@ export interface SubtreeToken {
   entries: string;
   /** 目录条目身份，32 位小写十六进制。 */
   entry_id: string;
-  /** Root 身份，32 位小写十六进制。 */
-  root_id: string;
   /** 子树 token，32 位小写十六进制。 */
   token: string;
+  /** Vault 身份，32 位小写十六进制。 */
+  vault_id: string;
 }
 
 export function decodeSubtreeToken(value: unknown): SubtreeToken {
@@ -1130,8 +1011,8 @@ export function decodeSubtreeToken(value: unknown): SubtreeToken {
   return {
     entries: expect_decimal(object.entries, "SubtreeToken.entries"),
     entry_id: expect_string(object.entry_id, "SubtreeToken.entry_id"),
-    root_id: expect_string(object.root_id, "SubtreeToken.root_id"),
     token: expect_string(object.token, "SubtreeToken.token"),
+    vault_id: expect_string(object.vault_id, "SubtreeToken.vault_id"),
   };
 }
 
@@ -1163,7 +1044,7 @@ export function decodeUploadPartAck(value: unknown): UploadPartAck {
   };
 }
 
-/** 创建上传会话的输入（design §15.2 `POST /v1/roots/{root}/uploads`）。 */
+/** 创建上传会话的输入（design §15.2 `POST /v1/vaults/{vault}/uploads`）。 */
 export interface UploadRequest {
   /**
    * 客户端希望的块大小（十进制文本）。0 表示由服务端按能力选择；服务端可以把它调到
@@ -1195,14 +1076,14 @@ export interface UploadSession {
   hash: string;
   /** 块数（空内容为 0）。 */
   part_count: string;
-  /** 所属 Root 身份，32 位小写十六进制。 */
-  root_id: string;
   /** 会话状态；客户端据此决定继续传块、查询结果还是放弃。 */
   state: UploadState;
   /** 快照总字节数（十进制文本）。 */
   total_size: string;
   /** 上传会话身份，32 位小写十六进制。 */
   upload_id: string;
+  /** 所属 Vault 身份，32 位小写十六进制。 */
+  vault_id: string;
 }
 
 export function decodeUploadSession(value: unknown): UploadSession {
@@ -1212,10 +1093,10 @@ export function decodeUploadSession(value: unknown): UploadSession {
     expires_at: expect_decimal(object.expires_at, "UploadSession.expires_at"),
     hash: expect_string(object.hash, "UploadSession.hash"),
     part_count: expect_decimal(object.part_count, "UploadSession.part_count"),
-    root_id: expect_string(object.root_id, "UploadSession.root_id"),
     state: decodeUploadState(object.state),
     total_size: expect_decimal(object.total_size, "UploadSession.total_size"),
     upload_id: expect_string(object.upload_id, "UploadSession.upload_id"),
+    vault_id: expect_string(object.vault_id, "UploadSession.vault_id"),
   };
 }
 
@@ -1256,6 +1137,125 @@ export function decodeUploadStatus(value: unknown): UploadStatus {
   };
 }
 
+/** 实际最近一轮扫描进度，不代表客户端已同步。 */
+export interface VaultCollection {
+  /** 未完成原因与本进程观测范围 */
+  detail: string;
+  /** 最近一轮实际检查项数 */
+  examined: string;
+  /** 最近一轮待稳定或重试文件数 */
+  pending: string;
+  /** 采集状态 */
+  state: VaultCollectionState;
+}
+
+export function decodeVaultCollection(value: unknown): VaultCollection {
+  const object = expect_object(value, "VaultCollection");
+  return {
+    detail: expect_string(object.detail, "VaultCollection.detail"),
+    examined: expect_decimal(object.examined, "VaultCollection.examined"),
+    pending: expect_decimal(object.pending, "VaultCollection.pending"),
+    state: decodeVaultCollectionState(object.state),
+  };
+}
+
+/** 本进程观测状态；重启后不沿用旧完成标志。 */
+export type VaultCollectionState = "not_scanned" | "scanning" | "pending" | "complete" | "blocked";
+
+export const VAULT_COLLECTION_STATE_VALUES = ["not_scanned", "scanning", "pending", "complete", "blocked"] as const;
+
+export function decodeVaultCollectionState(value: unknown): VaultCollectionState {
+  if (typeof value !== "string" || !(VAULT_COLLECTION_STATE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 VaultCollectionState 取值：${JSON.stringify(value)}`);
+  }
+  return value as VaultCollectionState;
+}
+
+/**
+ * Vault 健康状态闭集（design §7.2 `vaults.health`）。`unavailable` 表示挂载、身份或权限
+ * 核对失败，该 Vault 暂停同步但绝不据此推导删除。
+ */
+export type VaultHealth = "healthy" | "unavailable";
+
+export const VAULT_HEALTH_VALUES = ["healthy", "unavailable"] as const;
+
+export function decodeVaultHealth(value: unknown): VaultHealth {
+  if (typeof value !== "string" || !(VAULT_HEALTH_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 VaultHealth 取值：${JSON.stringify(value)}`);
+  }
+  return value as VaultHealth;
+}
+
+/** 授权 Vault 清单（design §15.2 `GET /v1/vaults`）。 */
+export interface VaultList {
+  /** 当前调用者可见的 Vault，按身份顺序稳定排列。 */
+  vaults: Array<VaultSummary>;
+}
+
+export function decodeVaultList(value: unknown): VaultList {
+  const object = expect_object(value, "VaultList");
+  return {
+    vaults: expect_array(object.vaults, "VaultList.vaults").map((item) => decodeVaultSummary(item)),
+  };
+}
+
+/**
+ * 注册 Vault 的输入（design §15.2 `POST /v1/admin/vaults`）。这是少数接受服务器绝对路径
+ * 的网络接口之一，因此必须同时受允许基目录与存储准入约束。
+ */
+export interface VaultRegisterRequest {
+  /** 服务端绝对路径；必须在部署配置的允许基目录内。 */
+  path: string;
+}
+
+export function decodeVaultRegisterRequest(value: unknown): VaultRegisterRequest {
+  const object = expect_object(value, "VaultRegisterRequest");
+  return {
+    path: expect_string(object.path, "VaultRegisterRequest.path"),
+  };
+}
+
+/** 注册结果（design §15.2）。 */
+export interface VaultRegistered {
+  /** 注册时的健康状态。 */
+  health: VaultHealth;
+  /**
+   * 该 Vault 的既有内容是否还没被采集。注册不导入既有文件，因此新注册的 Vault 恒为
+   * true；采集完成后由后续的初始采集步骤推进。
+   */
+  pending_import: boolean;
+  /** 新 Vault 的身份，32 个小写十六进制字符。 */
+  vault_id: string;
+}
+
+export function decodeVaultRegistered(value: unknown): VaultRegistered {
+  const object = expect_object(value, "VaultRegistered");
+  return {
+    health: decodeVaultHealth(object.health),
+    pending_import: expect_boolean(object.pending_import, "VaultRegistered.pending_import"),
+    vault_id: expect_string(object.vault_id, "VaultRegistered.vault_id"),
+  };
+}
+
+/** 一条授权 Vault 的对外摘要；不含服务器绝对路径。 */
+export interface VaultSummary {
+  /** 当前健康状态。 */
+  health: VaultHealth;
+  /** Vault 目录末级名称，不含父目录路径。旧服务端可省略；仅用于显示，身份仍使用 vault_id。 */
+  name?: string;
+  /** Vault 身份，32 个小写十六进制字符。 */
+  vault_id: string;
+}
+
+export function decodeVaultSummary(value: unknown): VaultSummary {
+  const object = expect_object(value, "VaultSummary");
+  return {
+    health: decodeVaultHealth(object.health),
+    name: object.name === undefined ? undefined : expect_string(object.name, "VaultSummary.name"),
+    vault_id: expect_string(object.vault_id, "VaultSummary.vault_id"),
+  };
+}
+
 /** 服务器持久化的固定版本保护；expires_at是UTC秒，ttl_seconds是剩余有效秒数。 */
 export interface VersionLease {
   /** 显式解除后为true，不可重新续期。 */
@@ -1266,14 +1266,14 @@ export interface VersionLease {
   expires_at: string;
   /** 请求租约身份。 */
   lease_id: string;
-  /** 固定Root身份。 */
-  root_id: string;
   /** 整份内容SHA256。 */
   sha256: string;
   /** 固定版本字节数。 */
   size: string;
   /** 响应形成时剩余秒数，最大120。 */
   ttl_seconds: string;
+  /** 固定Vault身份。 */
+  vault_id: string;
   /** 固定版本身份。 */
   version_id: string;
 }
@@ -1285,10 +1285,10 @@ export function decodeVersionLease(value: unknown): VersionLease {
     entry_id: expect_string(object.entry_id, "VersionLease.entry_id"),
     expires_at: expect_decimal(object.expires_at, "VersionLease.expires_at"),
     lease_id: expect_string(object.lease_id, "VersionLease.lease_id"),
-    root_id: expect_string(object.root_id, "VersionLease.root_id"),
     sha256: expect_string(object.sha256, "VersionLease.sha256"),
     size: expect_decimal(object.size, "VersionLease.size"),
     ttl_seconds: expect_decimal(object.ttl_seconds, "VersionLease.ttl_seconds"),
+    vault_id: expect_string(object.vault_id, "VersionLease.vault_id"),
     version_id: expect_string(object.version_id, "VersionLease.version_id"),
   };
 }

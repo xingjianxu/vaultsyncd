@@ -51,7 +51,7 @@ def configuration(repo, host):
     expression = '''c: {
       enabled = c.features.server.vaultsync.enable;
       repository = c.features.server.vaultsync.repository;
-      inherit (c.services.vaultsyncd) user group stateDir rootPaths;
+      inherit (c.services.vaultsyncd) user group stateDir vaultPaths;
       package = toString c.services.vaultsyncd.package;
       inherit (c.features.server.vaultsync) port;
       domain = if c.features.server.vaultsync.caddy.enable
@@ -86,7 +86,7 @@ def health(cfg, *, previous_id=None, verify_runtime=True):
             if Path(f'/proc/{pid}').stat().st_uid != pwd.getpwnam(cfg['user']).pw_uid:
                 raise RuntimeError('实际进程 UID 不匹配')
             uid, gid = pwd.getpwnam(cfg['user']).pw_uid, grp.getgrnam(cfg['group']).gr_gid
-            for path in [cfg['stateDir'], *cfg['rootPaths']]:
+            for path in [cfg['stateDir'], *cfg['vaultPaths']]:
                 stat = Path(path).stat()
                 if (stat.st_uid, stat.st_gid) != (uid, gid):
                     raise RuntimeError(f'{path} 所有权不匹配，需离线迁移后重试')

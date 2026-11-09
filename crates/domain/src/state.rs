@@ -98,7 +98,7 @@ pub enum Usage {
     Unknown,
 }
 
-/// 可用性：相关 Root 与服务器当前是否可达（design §8.1）。
+/// 可用性：相关 Vault 与服务器当前是否可达（design §8.1）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Availability {
     /// 在线。
@@ -106,10 +106,10 @@ pub enum Availability {
     Online,
     /// 当前断网；普通操作静默重试，状态持续可见。
     Offline,
-    /// Root 的挂载不可用（例如挂载身份改变）。
+    /// Vault 的挂载不可用（例如挂载身份改变）。
     MountFailed,
-    /// 服务器报告该 Root 不可用（需恢复）。
-    RootUnavailable,
+    /// 服务器报告该 Vault 不可用（需恢复）。
+    VaultUnavailable,
 }
 
 /// 一个条目的全部状态维度（design §8.1）。
@@ -144,7 +144,7 @@ pub struct EntryState {
 /// 详情可以同时显示多个事实（例如“已下载 · 本地修改待上传 · 当前离线”），但主状态只有一个。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EntryStatus {
-    /// 不可用：Root 挂载失败或服务器报告 Root 不可用。
+    /// 不可用：Vault 挂载失败或服务器报告 Vault 不可用。
     Unavailable,
     /// 严重失败：需用户处理的错误、内容损坏，或已停止自动推进的任务。
     Failed,
@@ -169,7 +169,7 @@ impl EntryState {
     pub fn project(&self) -> EntryStatus {
         if matches!(
             self.availability,
-            Availability::MountFailed | Availability::RootUnavailable
+            Availability::MountFailed | Availability::VaultUnavailable
         ) {
             return EntryStatus::Unavailable;
         }
@@ -286,7 +286,7 @@ mod tests {
         };
         assert_eq!(conflicted.project(), EntryStatus::Conflict);
 
-        for availability in [Availability::MountFailed, Availability::RootUnavailable] {
+        for availability in [Availability::MountFailed, Availability::VaultUnavailable] {
             let state = EntryState {
                 availability,
                 ..conflicted

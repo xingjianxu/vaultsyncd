@@ -88,7 +88,7 @@ impl WebAssets {
             index: index.into(),
         })
     }
-    /// Only root and /assets are public; unknown API paths never fall back to HTML.
+    /// Only vault and /assets are public; unknown API paths never fall back to HTML.
     pub fn router(&self) -> Router {
         let index = Arc::clone(&self.index);
         Router::new().route("/", get(move || {
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn absent_or_missing_resources_do_not_become_empty_success() {
         assert!(WebAssets::load(Path::new("relative")).is_err());
-        let root = std::env::temp_dir().join(format!(
+        let vault = std::env::temp_dir().join(format!(
             "vs-web-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -137,16 +137,16 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::create_dir_all(vault.join("assets")).unwrap();
         std::fs::write(
-            root.join("index.html"),
+            vault.join("index.html"),
             "<html><head><script src=\"./assets/app.js\"></script></head><body></body></html>",
         )
         .unwrap();
-        assert!(WebAssets::load(&root).is_err());
-        std::fs::write(root.join("assets/app.js"), "console.log('packaged')").unwrap();
-        assert!(WebAssets::load(&root).is_ok());
-        std::fs::remove_dir_all(root).unwrap();
+        assert!(WebAssets::load(&vault).is_err());
+        std::fs::write(vault.join("assets/app.js"), "console.log('packaged')").unwrap();
+        assert!(WebAssets::load(&vault).is_ok());
+        std::fs::remove_dir_all(vault).unwrap();
     }
 
     #[tokio::test]

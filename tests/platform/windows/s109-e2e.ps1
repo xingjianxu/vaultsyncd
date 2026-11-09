@@ -95,7 +95,7 @@ public static class S109Native {
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]static extern bool WaitNamedPipeW(string n,uint t);
  [DllImport("cldapi.dll",CharSet=CharSet.Unicode)]static extern int CfGetSyncRootInfoByPath(string p,int c,IntPtr b,uint n,out uint r);
  public static void RefusePipe(string name){if(WaitNamedPipeW(name,0))throw new Exception("existing SID/session IPC endpoint");int e=Marshal.GetLastWin32Error();if(e!=2)throw new Exception("SID/session IPC not demonstrably absent: "+e);}
- public static bool Root(string path){IntPtr b=Marshal.AllocHGlobal(8192);try{uint r;return CfGetSyncRootInfoByPath(path,0,b,8192,out r)>=0;}finally{Marshal.FreeHGlobal(b);}}
+ public static bool Vault(string path){IntPtr b=Marshal.AllocHGlobal(8192);try{uint r;return CfGetSyncRootInfoByPath(path,0,b,8192,out r)>=0;}finally{Marshal.FreeHGlobal(b);}}
 }
 '@
   $pipe='\\.\pipe\vaultsyncd-agent-'+$identity.User.Value+'-'+$session
@@ -108,7 +108,7 @@ public static class S109Native {
   $isolatedLocal=Join-Path $public '用户 LocalAppData'
   $isolatedRoaming=Join-Path $public '用户 AppData'
   $webview=Join-Path $public 'WebView 数据'
-  foreach($path in @($program,$local,$isolatedLocal,$isolatedRoaming,$webview)){if(Test-Path -LiteralPath $path){throw 'run program/state/root must be new'}}
+  foreach($path in @($program,$local,$isolatedLocal,$isolatedRoaming,$webview)){if(Test-Path -LiteralPath $path){throw 'run program/state/vault must be new'}}
   foreach($path in @($local,$isolatedLocal,$isolatedRoaming,$webview)){New-Item -ItemType Directory -Path $path|Out-Null}
   $env:LOCALAPPDATA=$isolatedLocal
   $env:APPDATA=$isolatedRoaming
@@ -182,7 +182,7 @@ public static class S109Native {
   function Status {Invoke-Cli @('--json','status')}
   function Binding($status){
     $items=@($status.management.bindings|Where-Object{!$_.detached})
-    if($items.Count-ne 1 -or $items[0].root_id-ne $fixture.root -or $items[0].local_path-ne $local){throw 'expected one exact Root/path binding'}
+    if($items.Count-ne 1 -or $items[0].vault_id-ne $fixture.vault -or $items[0].local_path-ne $local){throw 'expected one exact Vault/path binding'}
     return $items[0]
   }
   function Files([string]$binding){(Invoke-Cli @('--json','files','--binding-id',$binding)).management.files}
@@ -309,16 +309,16 @@ public static class S109Native {
         $loginOut=$fixture.password | & $cli --json login --username $fixture.login 2>&1
         Mark ('configure-login-exit:'+$LASTEXITCODE)
         if($LASTEXITCODE-ne 0){throw ('CLI login failed: '+(($loginOut -join ' ').Substring(0,[Math]::Min(200,($loginOut -join ' ').Length))))}
-        Mark 'configure-roots'
-        $roots=Invoke-Cli @('--json','roots')
-        Mark ('configure-roots-count:'+(@($roots.roots).Count))
-        if(@($roots.roots).Count-lt 1){throw 'no authorized Root'}
+        Mark 'configure-vaults'
+        $vaults=Invoke-Cli @('--json','vaults')
+        Mark ('configure-vaults-count:'+(@($vaults.vaults).Count))
+        if(@($vaults.vaults).Count-lt 1){throw 'no authorized Vault'}
         $binding=[Guid]::NewGuid().ToString('N')
-        # Cache and internal state must not live inside the synchronized Root itself.
+        # Cache and internal state must not live inside the synchronized Vault itself.
         $cache=Join-Path $public '缓存 目录'
         New-Item -ItemType Directory -Path $cache -Force|Out-Null
         Mark 'configure-binding'
-        $bindOut=& $cli --json create-binding --binding-id $binding --root-id $fixture.root --local-path $local --cache-path $cache --mode full 2>&1
+        $bindOut=& $cli --json create-binding --binding-id $binding --vault-id $fixture.vault --local-path $local --cache-path $cache --mode full 2>&1
         Mark ('configure-binding-exit:'+$LASTEXITCODE)
         if($LASTEXITCODE-ne 0){throw ('create-binding failed: '+(($bindOut -join ' ').Substring(0,[Math]::Min(200,($bindOut -join ' ').Length))))}
         $answer.binding_id=$binding
@@ -373,15 +373,15 @@ public static class S109Native {
         $binding=Binding $s
         $device=(Get-Content $configPath -Raw -Encoding UTF8|ConvertFrom-Json).device_id
         if($device-ne $beforeDevice -or $s.snapshot_version.Split(':')[0]-eq $beforeInstance){throw 'restart lost DeviceId or did not create a new instance'}
-        foreach($field in @('binding_id','root_id','local_path','cache_path','mode','detached')){if($binding.$field-ne $beforeBinding.$field){throw 'restart lost binding identity/control'}}
+        foreach($field in @('binding_id','vault_id','local_path','cache_path','mode','detached')){if($binding.$field-ne $beforeBinding.$field){throw 'restart lost binding identity/control'}}
         if(!$binding.paused){throw 'safe stop must retain explicit paused control'}
         $dirtyFile=Files $binding.binding_id|Where-Object path -eq 'dirty.txt'
         if(!$dirtyFile.dirty -or [long]$s.bindings[0].dirty-le 0){throw 'restart lost dirty projection'}
         $answer.dirty_sha256=Hash (Join-Path $local 'dirty.txt')
         if($answer.dirty_sha256-ne $dirtyHash){throw 'restart changed unconfirmed bytes'}
         $answer.device_id=$device;$answer.binding=$binding;$answer.status=$s;$answer.dirty_file=$dirtyFile;$answer.agent_pid=(Agent).ProcessId
-        $answer.root_registered=[S109Native]::Root($local);$answer.boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')
-        if(!$answer.root_registered -or $answer.boot-ne $boot){throw 'Root lost or unexpected OS reboot'}
+        $answer.vault_registered=[S109Native]::Vault($local);$answer.boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')
+        if(!$answer.vault_registered -or $answer.boot-ne $boot){throw 'Vault lost or unexpected OS reboot'}
         Close-Gui
       }
       'resume' {

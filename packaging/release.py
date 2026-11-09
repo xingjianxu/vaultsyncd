@@ -14,7 +14,7 @@ import sys
 import tempfile
 import tomllib
 
-ROOT = Path(__file__).resolve().parents[1]
+VAULT = Path(__file__).resolve().parents[1]
 PLATFORMS = {
     "linux-x64": ("portable", "x86_64-unknown-linux-gnu"),
     "windows-x64": (None, "x86_64-pc-windows-msvc"),
@@ -22,14 +22,14 @@ PLATFORMS = {
 
 
 def git(*args):
-    return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
+    return subprocess.check_output(["git", *args], cwd=VAULT, text=True).strip()
 
 
 def source():
     if git("status", "--porcelain", "--untracked-files=all"):
         raise ValueError("发布需要干净、已提交的源码；请先提交当前修改。")
     return {"commit": git("rev-parse", "HEAD"), "tree": git("rev-parse", "HEAD^{tree}"),
-            "version": tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]}
+            "version": tomllib.loads((VAULT / "Cargo.toml").read_text())["workspace"]["package"]["version"]}
 
 
 def sha(path):
@@ -55,7 +55,7 @@ def check_identity(record, expected, target, windows=False):
     if windows and identity["tree"] != expected["tree"]:
         raise ValueError("Windows 组件源码树不匹配")
     inputs = identity["inputs"] if windows else record["inputs"]
-    if not inputs or any(sha(ROOT / name) != digest for name, digest in inputs.items()):
+    if not inputs or any(sha(VAULT / name) != digest for name, digest in inputs.items()):
         raise ValueError("组件锁文件/协议输入不匹配")
 
 
@@ -65,7 +65,7 @@ class Builder:
         self.commands = []
         self.env = os.environ.copy()
         # Toolchain setup stays in the repository cache, never in global homes.
-        self.env.setdefault("VAULTSYNCD_WINDOWS_CACHE", str(ROOT / ".cache/windows"))
+        self.env.setdefault("VAULTSYNCD_WINDOWS_CACHE", str(VAULT / ".cache/windows"))
 
     def run(self, command, capture=False):
         number = len(self.commands) + 1
@@ -73,7 +73,7 @@ class Builder:
         self.commands.append({"argv": list(map(str, command)), "log": str(log.relative_to(self.stage))})
         print(f"[{number}] {shlex.join(list(map(str, command)))}\n    日志：{log}", flush=True)
         with log.open("wb") as output:
-            result = subprocess.run(command, cwd=ROOT, env=self.env,
+            result = subprocess.run(command, cwd=VAULT, env=self.env,
                                     stdout=subprocess.PIPE if capture else output, stderr=output)
             if capture:
                 output.write(result.stdout)
@@ -124,9 +124,9 @@ class Builder:
 
 def output_directory(value):
     directory = Path(value).expanduser().resolve()
-    if directory.is_relative_to(ROOT):
-        relative = directory.relative_to(ROOT)
-        if not relative.parts or subprocess.run(["git", "check-ignore", "-q", str(relative / "release-output")], cwd=ROOT).returncode:
+    if directory.is_relative_to(VAULT):
+        relative = directory.relative_to(VAULT)
+        if not relative.parts or subprocess.run(["git", "check-ignore", "-q", str(relative / "release-output")], cwd=VAULT).returncode:
             raise ValueError("仓库内输出目录必须已被 Git 忽略（推荐 dist/releases）。")
     return directory
 
@@ -150,7 +150,7 @@ def publish(builder, selected, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="在 Linux x64/Nix 上一键构建 Linux x64 包和 Windows ZIP。")
     parser.add_argument("--platform", nargs="+", choices=["all", *PLATFORMS], default=["all"], help="默认全部；可选择一个或多个平台")
-    parser.add_argument("--output-dir", default=str(ROOT / "dist/releases"), help="输出根目录，默认仓库 dist/releases")
+    parser.add_argument("--output-dir", default=str(VAULT / "dist/releases"), help="输出根目录，默认仓库 dist/releases")
     parser.add_argument("--plan", action="store_true", help="仅显示平台和输出根目录，不构建")
     args = parser.parse_args(argv)
     selected = list(PLATFORMS) if "all" in args.platform else list(dict.fromkeys(args.platform))
@@ -164,7 +164,7 @@ def main(argv=None):
     destination = directory / f"v{expected['version']}-{expected['commit'][:12]}"
     if destination.exists():
         raise ValueError(f"拒绝覆盖已有发布目录：{destination}；可使用 --output-dir 指定新位置。")
-    cache = ROOT / ".cache"
+    cache = VAULT / ".cache"
     cache.mkdir(exist_ok=True)
     with (cache / "release.lock").open("a") as lock:
         try:

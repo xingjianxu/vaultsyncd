@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use vaultsyncd_domain::ids::RootId;
+use vaultsyncd_domain::ids::VaultId;
 
 pub mod capture;
 pub mod error;
@@ -159,13 +159,13 @@ impl std::error::Error for InvalidStagingName {}
 
 /// 内部对象区布局。
 ///
-/// 已发布对象在 `<root>/objects/<前 2 位十六进制>/<64 位十六进制>`；未发布的暂存副本在
-/// `<root>/staging/<名字>`。两者都在对象区（内部状态目录）内，与 Root 的可变工作文件不同
+/// 已发布对象在 `<vault>/objects/<前 2 位十六进制>/<64 位十六进制>`；未发布的暂存副本在
+/// `<vault>/staging/<名字>`。两者都在对象区（内部状态目录）内，与 Vault 的可变工作文件不同
 /// 目录、不同 inode（design §11.1）。
 #[derive(Clone, Debug)]
 pub struct ObjectLayout {
-    root: PathBuf,
-    scope: Option<RootId>,
+    vault: PathBuf,
+    scope: Option<VaultId>,
     legacy: HashSet<ContentDigest>,
 }
 
@@ -173,36 +173,36 @@ impl ObjectLayout {
     /// 以对象区根目录建立**未分区**布局：任意摘要都解析成历史全局路径。
     ///
     /// 只用于旧布局测试、迁移工具与独立对象区示例；服务端新写必须用
-    /// [`ObjectLayout::for_root`]，否则不同 Root 会共用同一物理对象。
+    /// [`ObjectLayout::for_vault`]，否则不同 Vault 会共用同一物理对象。
     #[must_use]
-    pub fn new(root: impl Into<PathBuf>) -> Self {
+    pub fn new(vault: impl Into<PathBuf>) -> Self {
         ObjectLayout {
-            root: root.into(),
+            vault: vault.into(),
             scope: None,
             legacy: HashSet::new(),
         }
     }
 
-    /// Root 隔离布局；旧路径仅对 `legacy` 中显式声明的摘要开放，不探测磁盘回退。
+    /// Vault 隔离布局；旧路径仅对 `legacy` 中显式声明的摘要开放，不探测磁盘回退。
     ///
     /// **调用方义务**：`legacy` 必须覆盖本次布局将触碰的每个摘要。漏声明不会回退到旧文件，
-    /// 而是静默按 Root 分区的新路径解析：读会失败关闭，发布则先造出重复物理对象，再由
+    /// 而是静默按 Vault 分区的新路径解析：读会失败关闭，发布则先造出重复物理对象，再由
     /// `objects` 的唯一登记约束报 `ObjectConflict`（503）。因此热路径应按摘要解析
-    /// （`for_digests`），整树路径才一次读取该 Root 的全部旧登记。
+    /// （`for_digests`），整树路径才一次读取该 Vault 的全部旧登记。
     #[must_use]
-    pub fn for_root(
-        root: impl Into<PathBuf>,
-        scope: RootId,
+    pub fn for_vault(
+        vault: impl Into<PathBuf>,
+        scope: VaultId,
         legacy: impl IntoIterator<Item = ContentDigest>,
     ) -> Self {
         Self {
-            root: root.into(),
+            vault: vault.into(),
             scope: Some(scope),
             legacy: legacy.into_iter().collect(),
         }
     }
 
-    /// 对象区内该 Root 的规范位置；已有旧记录保持原身份，新对象按 Root 分区。
+    /// 对象区内该 Vault 的规范位置；已有旧记录保持原身份，新对象按 Vault 分区。
     #[must_use]
     pub fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
         match self.scope {
@@ -213,37 +213,43 @@ impl ObjectLayout {
         }
     }
 
+    /// 对象区里按 Vault 分区的物理前缀。
+    ///
+    /// 保持 S136/ADR-020 已落地的 `roots/` 目录名：它是磁盘上的数据布局，不是产品术语；
+    /// 改名要搬迁全部已发布对象，按 ADR-021 不在纯重命名范围内做。
+    pub const SCOPED_PREFIX: &'static str = "roots";
+
     /// 新对象的全局唯一登记路径，同时也是对象区内的实际物理路径。
     #[must_use]
-    pub fn scoped_relative_object_path(scope: RootId, digest: &ContentDigest) -> PathBuf {
-        Path::new("roots")
+    pub fn scoped_relative_object_path(scope: VaultId, digest: &ContentDigest) -> PathBuf {
+        Path::new(Self::SCOPED_PREFIX)
             .join(scope.to_hex())
             .join(Self::relative_object_path(digest))
     }
 
-    /// 只接纳精确匹配摘要及 Root 的新路径，或历史规范路径；拒绝任意路径和跨 Root 前缀。
+    /// 只接纳精确匹配摘要及 Vault 的新路径，或历史规范路径；拒绝任意路径和跨 Vault 前缀。
     #[must_use]
-    pub fn valid_storage_path(scope: RootId, digest: &ContentDigest, path: &str) -> bool {
+    pub fn valid_storage_path(scope: VaultId, digest: &ContentDigest, path: &str) -> bool {
         Self::relative_object_path(digest).to_str() == Some(path)
             || Self::scoped_relative_object_path(scope, digest).to_str() == Some(path)
     }
 
     /// 对象区根目录。
     #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
+    pub fn vault(&self) -> &Path {
+        &self.vault
     }
 
-    /// 暂存目录（`<root>/staging`）。
+    /// 暂存目录（`<vault>/staging`）。
     #[must_use]
     pub fn staging_dir(&self) -> PathBuf {
-        self.root.join("staging")
+        self.vault.join("staging")
     }
 
     /// 已发布对象的绝对路径。
     #[must_use]
     pub fn object_path(&self, digest: &ContentDigest) -> PathBuf {
-        self.root.join(self.storage_path(digest))
+        self.vault.join(self.storage_path(digest))
     }
 
     /// 历史全局布局的相对路径（`objects/<aa>/<hex>`，不含对象区根）。
@@ -256,7 +262,7 @@ impl ObjectLayout {
             .join(digest.to_hex())
     }
 
-    /// 暂存副本路径（`<root>/staging/<名字>`）。
+    /// 暂存副本路径（`<vault>/staging/<名字>`）。
     ///
     /// # Errors
     ///
@@ -314,13 +320,13 @@ mod tests {
     }
 
     #[test]
-    fn root_layout_only_reuses_explicitly_registered_legacy_digests() {
-        let a = RootId::from_bytes([1; 16]);
-        let b = RootId::from_bytes([2; 16]);
+    fn vault_layout_only_reuses_explicitly_registered_legacy_digests() {
+        let a = VaultId::from_bytes([1; 16]);
+        let b = VaultId::from_bytes([2; 16]);
         let digest = ContentDigest::from_hex(SAMPLE_HEX).expect("摘要");
-        let old = ObjectLayout::for_root("/state", a, [digest]);
-        let new_a = ObjectLayout::for_root("/state", a, []);
-        let new_b = ObjectLayout::for_root("/state", b, []);
+        let old = ObjectLayout::for_vault("/state", a, [digest]);
+        let new_a = ObjectLayout::for_vault("/state", a, []);
+        let new_b = ObjectLayout::for_vault("/state", b, []);
         assert_eq!(
             old.storage_path(&digest),
             ObjectLayout::relative_object_path(&digest)
@@ -359,21 +365,21 @@ mod tests {
         ));
     }
 
-    /// 漏声明旧登记时不会猜回旧文件：同一 Root 也解析成 Root 分区路径。
+    /// 漏声明旧登记时不会猜回旧文件：同一 Vault 也解析成 Vault 分区路径。
     /// 读会失败关闭；写会先造重复物理对象，再由登记唯一约束报冲突（见 store 用例）。
     #[test]
-    fn undeclared_legacy_digest_resolves_to_scoped_path_even_for_same_root() {
-        let root = RootId::from_bytes([1; 16]);
+    fn undeclared_legacy_digest_resolves_to_scoped_path_even_for_same_vault() {
+        let vault = VaultId::from_bytes([1; 16]);
         let digest = ContentDigest::from_hex(SAMPLE_HEX).expect("摘要");
-        let declared = ObjectLayout::for_root("/state", root, [digest]);
-        let omitted = ObjectLayout::for_root("/state", root, []);
+        let declared = ObjectLayout::for_vault("/state", vault, [digest]);
+        let omitted = ObjectLayout::for_vault("/state", vault, []);
         assert_eq!(
             declared.storage_path(&digest),
             ObjectLayout::relative_object_path(&digest)
         );
         assert_eq!(
             omitted.storage_path(&digest),
-            ObjectLayout::scoped_relative_object_path(root, &digest)
+            ObjectLayout::scoped_relative_object_path(vault, &digest)
         );
         assert_ne!(declared.object_path(&digest), omitted.object_path(&digest));
         assert_ne!(

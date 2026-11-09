@@ -1,12 +1,12 @@
-//! 内容 put 的 CAS 提交：Root 内串行化 → 基线复核 → 对象持久 → 意图 → 目标发布 → 元数据事务 → ACK
+//! 内容 put 的 CAS 提交：Vault 内串行化 → 基线复核 → 对象持久 → 意图 → 目标发布 → 元数据事务 → ACK
 //! （design §11.2、§12.2、I01、I04）。
 //!
 //! 本模块把 S034 的单文件意图状态机包成一次完整提交。它只在核心做判定，I/O 全部走端口：
 //!
-//! 1. **Root 内串行化**：同一 Root 同时只有一个提交持有 [`RootCommitTicket`]；另一个提交得到
-//!    `root_commit_busy` 而不是并发改同一棵树（内部锁只序列化本服务操作，不能锁住外部应用，
+//! 1. **Vault 内串行化**：同一 Vault 同时只有一个提交持有 [`VaultCommitTicket`]；另一个提交得到
+//!    `vault_commit_busy` 而不是并发改同一棵树（内部锁只序列化本服务操作，不能锁住外部应用，
 //!    design §11.2 步骤 5）。
-//! 2. **基线复核**：Root epoch 与请求预期不符 → `EPOCH_CHANGED`；条目 revision 已不是请求基线 →
+//! 2. **基线复核**：Vault epoch 与请求预期不符 → `EPOCH_CHANGED`；条目 revision 已不是请求基线 →
 //!    `BASE_MISMATCH`；父目录/名称在计划后变化 → `SUBTREE_CHANGED`；条目不是普通文件 →
 //!    `UNSUPPORTED_ENTRY`。这些都在动磁盘之前完成，过期基线绝不覆盖服务器的新事实（I04）。
 //! 3. **对象持久**：内容对象必须已按内容地址登记且长度相符，否则不开始发布（design §11.2 步骤 3）。
@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, RootId};
+use vaultsyncd_domain::ids::{EntryId, IntentId, VaultId};
 use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp};
 
 use crate::commit::intent::{
@@ -32,7 +32,7 @@ use crate::commit::intent::{
 use crate::objects::{ExpectedContent, ObjectLayout};
 use crate::ports::intent_log::IntentLog;
 use crate::ports::put_store::{
-    EntryBaseline, PutCommitStore, PutRecord, PutStoreError, PutWrite, RootFacts,
+    EntryBaseline, PutCommitStore, PutRecord, PutStoreError, PutWrite, VaultFacts,
 };
 use crate::ports::target::{PublishedTarget, TargetPort};
 
@@ -41,8 +41,8 @@ use crate::ports::target::{PublishedTarget, TargetPort};
 pub struct PutRequest {
     /// 意图身份（由调用方生成，重试必须复用同一个身份）。
     pub intent_id: IntentId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 被替换内容的条目。
     pub entry: EntryId,
     /// 客户端事实基础所属的服务器 epoch。
@@ -53,7 +53,7 @@ pub struct PutRequest {
     pub expected_parent: EntryId,
     /// 客户端计划时的名称。
     pub expected_name: String,
-    /// 目标在 Root 内的相对路径（最后一段必须等于 `expected_name`）。
+    /// 目标在 Vault 内的相对路径（最后一段必须等于 `expected_name`）。
     pub target_path: String,
     /// 目标所在子卷内的暂存文件名（单个文件名）。
     pub staging_path: String,
@@ -115,18 +115,18 @@ impl CommittedPut {
     }
 }
 
-/// 一次 Root 内提交的占用票据（只能由 [`RootCommitGate::acquire`] 产生）。
+/// 一次 Vault 内提交的占用票据（只能由 [`VaultCommitGate::acquire`] 产生）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RootCommitTicket {
-    root: RootId,
+pub struct VaultCommitTicket {
+    vault: VaultId,
     serial: u64,
 }
 
-impl RootCommitTicket {
-    /// 被串行化的 Root。
+impl VaultCommitTicket {
+    /// 被串行化的 Vault。
     #[must_use]
-    pub fn root(&self) -> RootId {
-        self.root
+    pub fn vault(&self) -> VaultId {
+        self.vault
     }
 
     /// 本次占用在该 Gate 内的序号（日志与诊断用）。
@@ -136,13 +136,13 @@ impl RootCommitTicket {
     }
 }
 
-/// Root 提交串行化冲突。
+/// Vault 提交串行化冲突。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitGateError {
-    /// 同一 Root 已有提交在进行：调用方应稍后重试，不并发改同一棵树。
+    /// 同一 Vault 已有提交在进行：调用方应稍后重试，不并发改同一棵树。
     Busy {
-        /// 被占用的 Root。
-        root: RootId,
+        /// 被占用的 Vault。
+        vault: VaultId,
         /// 正在进行的占用序号。
         serial: u64,
     },
@@ -153,7 +153,7 @@ impl CommitGateError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
-            CommitGateError::Busy { .. } => "root_commit_busy",
+            CommitGateError::Busy { .. } => "vault_commit_busy",
         }
     }
 }
@@ -161,9 +161,9 @@ impl CommitGateError {
 impl fmt::Display for CommitGateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CommitGateError::Busy { root, serial } => write!(
+            CommitGateError::Busy { vault, serial } => write!(
                 f,
-                "Root {root} 已有提交在进行（占用序号 {serial}），本请求不能并发进入"
+                "Vault {vault} 已有提交在进行（占用序号 {serial}），本请求不能并发进入"
             ),
         }
     }
@@ -171,76 +171,76 @@ impl fmt::Display for CommitGateError {
 
 impl std::error::Error for CommitGateError {}
 
-/// 进程内的 Root 提交调度锁：同一 Root 同时只允许一次提交，不同 Root 互不阻塞。
+/// 进程内的 Vault 提交调度锁：同一 Vault 同时只允许一次提交，不同 Vault 互不阻塞。
 ///
-/// 只做串行化，不做排队：第二个同 Root 提交得到 [`CommitGateError::Busy`]，由调用方退避重试，
+/// 只做串行化，不做排队：第二个同 Vault 提交得到 [`CommitGateError::Busy`]，由调用方退避重试，
 /// 避免请求在锁上无限堆积。跨进程串行化（多个服务进程共享一份数据库）需要数据库侧的锁，属服务端
 /// 组装卡的职责；本 Gate 保证单进程内不会有两个 put 同时改同一棵树。
 #[derive(Default)]
-pub struct RootCommitGate {
-    held: BTreeMap<RootId, u64>,
+pub struct VaultCommitGate {
+    held: BTreeMap<VaultId, u64>,
     next_serial: u64,
 }
 
-impl RootCommitGate {
+impl VaultCommitGate {
     /// 建立空 Gate。
     #[must_use]
     pub fn new() -> Self {
-        RootCommitGate::default()
+        VaultCommitGate::default()
     }
 
-    /// 取得某个 Root 的提交票据；该 Root 已被占用时返回 `Busy`，不阻塞。
+    /// 取得某个 Vault 的提交票据；该 Vault 已被占用时返回 `Busy`，不阻塞。
     ///
     /// # Errors
     ///
-    /// 同一 Root 已被占用时返回 [`CommitGateError::Busy`]。
-    pub fn acquire(&mut self, root: RootId) -> Result<RootCommitTicket, CommitGateError> {
-        if let Some(serial) = self.held.get(&root) {
+    /// 同一 Vault 已被占用时返回 [`CommitGateError::Busy`]。
+    pub fn acquire(&mut self, vault: VaultId) -> Result<VaultCommitTicket, CommitGateError> {
+        if let Some(serial) = self.held.get(&vault) {
             return Err(CommitGateError::Busy {
-                root,
+                vault,
                 serial: *serial,
             });
         }
         self.next_serial += 1;
-        self.held.insert(root, self.next_serial);
-        Ok(RootCommitTicket {
-            root,
+        self.held.insert(vault, self.next_serial);
+        Ok(VaultCommitTicket {
+            vault,
             serial: self.next_serial,
         })
     }
 
     /// 释放票据。
     ///
-    /// 票只能由 [`acquire`](RootCommitGate::acquire) 产生，因此释放不失败；票据与当前占用不匹配
+    /// 票只能由 [`acquire`](VaultCommitGate::acquire) 产生，因此释放不失败；票据与当前占用不匹配
     /// 说明调用方重复释放或混用了别的 Gate，属于编程错误。
-    pub fn release(&mut self, ticket: RootCommitTicket) {
-        let held = self.held.remove(&ticket.root);
+    pub fn release(&mut self, ticket: VaultCommitTicket) {
+        let held = self.held.remove(&ticket.vault);
         assert_eq!(
             held,
             Some(ticket.serial),
-            "提交票据与 Root {} 的占用不匹配",
-            ticket.root
+            "提交票据与 Vault {} 的占用不匹配",
+            ticket.vault
         );
     }
 
-    /// 该 Root 当前是否已有提交在进行。
+    /// 该 Vault 当前是否已有提交在进行。
     #[must_use]
-    pub fn is_held(&self, root: RootId) -> bool {
-        self.held.contains_key(&root)
+    pub fn is_held(&self, vault: VaultId) -> bool {
+        self.held.contains_key(&vault)
     }
 }
 
 /// 提交一次内容 put。
 ///
-/// 顺序见模块文档：请求形状 → Root 串行化 → epoch → 命名空间基线 → 对象持久 → 现场指纹 →
-/// 意图 → 目标发布 → 元数据事务 → ACK。无论成功还是失败，退出前都会释放 Root 票据。
+/// 顺序见模块文档：请求形状 → Vault 串行化 → epoch → 命名空间基线 → 对象持久 → 现场指纹 →
+/// 意图 → 目标发布 → 元数据事务 → ACK。无论成功还是失败，退出前都会释放 Vault 票据。
 ///
 /// # Errors
 ///
-/// 见 [`PutFailure`]：请求不成立、Root 忙、epoch 变化、基线过期/子树变化、对象未持久、现场不符、
+/// 见 [`PutFailure`]：请求不成立、Vault 忙、epoch 变化、基线过期/子树变化、对象未持久、现场不符、
 /// 意图/发布/存储失败、存储契约不一致。失败都不是 committed，已持久化的意图行保留为恢复证据。
 pub async fn commit_put<S, L, T>(
-    gate: &mut RootCommitGate,
+    gate: &mut VaultCommitGate,
     store: &mut S,
     log: &mut L,
     target: &mut T,
@@ -254,7 +254,7 @@ where
 {
     request.validate()?;
     let ticket = gate
-        .acquire(request.root)
+        .acquire(request.vault)
         .map_err(|error| Box::new(PutFailure::new(PutFailureReason::Gate(error))))?;
     let outcome = commit_under_ticket(store, log, target, at, request).await;
     gate.release(ticket);
@@ -275,19 +275,19 @@ where
 {
     // 1. epoch：恢复过的服务器不是同一套事实，旧预期的提交直接作废。
     let facts = store
-        .root_facts(request.root)
+        .vault_facts(request.vault)
         .await
         .map_err(store_failure)?;
     check_epoch(&facts, request)?;
 
     // 2. 命名空间基线：过期 revision 与已变化的父目录/名称都不得覆盖。
-    let baseline = match store.entry_baseline(request.root, request.entry).await {
+    let baseline = match store.entry_baseline(request.vault, request.entry).await {
         Ok(baseline) => baseline,
         Err(PutStoreError::EntryMissing { entry }) => {
             return Err(base_mismatch(format!("条目 {entry} 已不存在")));
         }
-        Err(PutStoreError::UnknownRoot { root }) => {
-            return Err(base_mismatch(format!("Root {root} 已不存在")));
+        Err(PutStoreError::UnknownVault { vault }) => {
+            return Err(base_mismatch(format!("Vault {vault} 已不存在")));
         }
         Err(error) => return Err(store_failure(error)),
     };
@@ -295,7 +295,7 @@ where
 
     // 3. 对象持久：内容还没固定成对象就没有可发布的内容。
     match store
-        .object_state(request.root, request.content.digest)
+        .object_state(request.vault, request.content.digest)
         .await
         .map_err(store_failure)?
     {
@@ -332,7 +332,7 @@ where
     // 5. 意图 → 发布：S034 的顺序，发布后实测不符时不推进阶段。
     let new = NewPutIntent {
         intent_id: request.intent_id,
-        root: request.root,
+        vault: request.vault,
         target_path: request.target_path.clone(),
         staging_path: request.staging_path.clone(),
         before: request.before.clone(),
@@ -348,7 +348,7 @@ where
     // 6. 元数据/changes/结果事务：与意图收尾同一事务，事务没提交就没有 ACK。
     let write = PutWrite {
         intent_id: request.intent_id,
-        root: request.root,
+        vault: request.vault,
         entry: request.entry,
         expected_revision: request.expected_revision,
         content: request.content,
@@ -380,7 +380,7 @@ where
     })
 }
 
-fn check_epoch(facts: &RootFacts, request: &PutRequest) -> Result<(), Box<PutFailure>> {
+fn check_epoch(facts: &VaultFacts, request: &PutRequest) -> Result<(), Box<PutFailure>> {
     if facts.epoch == request.expected_epoch {
         return Ok(());
     }
@@ -391,10 +391,10 @@ fn check_epoch(facts: &RootFacts, request: &PutRequest) -> Result<(), Box<PutFai
 }
 
 fn check_baseline(baseline: &EntryBaseline, request: &PutRequest) -> Result<(), Box<PutFailure>> {
-    if baseline.entry != request.entry || baseline.root != request.root {
+    if baseline.entry != request.entry || baseline.vault != request.vault {
         return Err(base_mismatch(format!(
-            "库里的条目 {}（Root {}）不是请求条目 {}",
-            baseline.entry, baseline.root, request.entry
+            "库里的条目 {}（Vault {}）不是请求条目 {}",
+            baseline.entry, baseline.vault, request.entry
         )));
     }
     if baseline.revision != request.expected_revision {
@@ -509,13 +509,13 @@ pub(crate) fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Root 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量。
+/// Vault 内相对路径：非空、不以 `/` 起始、无空分量与 `.`/`..` 分量。
 pub(crate) fn validate_target_path(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("目标路径不能为空".to_owned());
     }
     if path.starts_with('/') || path.contains('\\') || path.contains('\0') {
-        return Err(format!("目标路径 {path:?} 必须是 Root 内的相对路径"));
+        return Err(format!("目标路径 {path:?} 必须是 Vault 内的相对路径"));
     }
     for part in path.split('/') {
         if part.is_empty() || part == "." || part == ".." {
@@ -542,7 +542,7 @@ mod tests {
     use crate::ports::target::{TargetError, TargetObservation};
     use crate::test_support::{
         FakeIntentLog, FakePutStore, FakeTarget, Trace, entry_id, epoch, file_baseline, revision,
-        root_id, root_seq, target_snapshot, tx_id, user_time, version_id,
+        target_snapshot, tx_id, user_time, vault_id, vault_seq, version_id,
     };
 
     const OLD_HEX: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -555,7 +555,7 @@ mod tests {
     fn request(before: TargetBefore) -> PutRequest {
         PutRequest {
             intent_id: crate::test_support::intent_id(0x41),
-            root: root_id(0x21),
+            vault: vault_id(0x21),
             entry: entry_id(0x51),
             expected_epoch: epoch(3),
             expected_revision: revision(7),
@@ -572,18 +572,18 @@ mod tests {
     fn overwrite() -> (
         PutRequest,
         TargetSnapshot,
-        RootCommitGate,
+        VaultCommitGate,
         FakePutStore,
         FakeTarget,
     ) {
-        let root = root_id(0x21);
+        let vault = vault_id(0x21);
         let snapshot = target_snapshot(OLD_HEX, 9);
         let request = request(TargetBefore::Present(snapshot.clone()));
         let trace = Trace::default();
-        let mut store = FakePutStore::for_entry(file_baseline(root));
+        let mut store = FakePutStore::for_entry(file_baseline(vault));
         store.trace = trace.clone();
         let target = FakeTarget::present(&snapshot).with_trace(trace);
-        (request, snapshot, RootCommitGate::new(), store, target)
+        (request, snapshot, VaultCommitGate::new(), store, target)
     }
 
     #[tokio::test]
@@ -608,9 +608,9 @@ mod tests {
         assert_eq!(
             store.trace.entries(),
             vec![
-                format!("store root_facts {}", request.root),
-                format!("store entry_baseline {} {}", request.root, request.entry),
-                format!("store object_state {} {}", request.root, digest(NEW_HEX)),
+                format!("store vault_facts {}", request.vault),
+                format!("store entry_baseline {} {}", request.vault, request.entry),
+                format!("store object_state {} {}", request.vault, digest(NEW_HEX)),
                 // 现场观察两次：CAS 预检查一次，发布前 S034 的 publish_put 再复核一次。
                 // 这缩小但按 design §12.2 不消除外部写入的竞态窗口。
                 "target observe docs/note.txt".to_owned(),
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(store.writes[0].expected_revision, revision(7));
         // 真实适配器在同一事务里把 fs_intents 收尾（端口契约第 3 条）；假端口分开记录。
         assert_eq!(log.intents[0].phase, PutPhase::Published);
-        assert!(!gate.is_held(request.root), "退出前必须释放 Root 票据");
+        assert!(!gate.is_held(request.vault), "退出前必须释放 Vault 票据");
     }
 
     #[tokio::test]
@@ -663,7 +663,7 @@ mod tests {
         assert!(log.intents.is_empty());
         assert!(target.publishes.is_empty());
         assert!(store.writes.is_empty());
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -687,13 +687,13 @@ mod tests {
         assert!(!failure.is_committed());
         assert!(log.intents.is_empty(), "现场不符不得写意图");
         assert!(target.publishes.is_empty());
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
     async fn epoch_change_is_rejected_and_mapped_to_the_wire_code() {
         let (request, _snapshot, mut gate, mut store, mut target) = overwrite();
-        store.facts = crate::ports::put_store::RootFacts { epoch: epoch(4) };
+        store.facts = crate::ports::put_store::VaultFacts { epoch: epoch(4) };
         let mut log = FakeIntentLog::default();
         let failure = commit_put(
             &mut gate,
@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(failure.error_code(), Some(ErrorCode::EpochChanged));
         assert!(!failure.is_committed());
         assert!(target.publishes.is_empty());
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -785,7 +785,7 @@ mod tests {
         assert_eq!(failure.error_code(), None);
         assert!(log.intents.is_empty(), "没有对象就没有意图");
         assert!(target.publishes.is_empty());
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -832,7 +832,7 @@ mod tests {
         assert_eq!(failure.phase, Some(PutPhase::Prepared));
         assert_eq!(log.intents[0].phase, PutPhase::Prepared);
         assert!(store.writes.is_empty(), "发布失败不得写元数据");
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -856,7 +856,7 @@ mod tests {
         assert!(!failure.is_committed());
         assert_eq!(failure.phase, Some(PutPhase::Published));
         assert_eq!(target.publishes.len(), 1, "工作文件已发布，但元数据未提交");
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -891,7 +891,7 @@ mod tests {
             phase: PutPhase::Finalized,
             version: version_id(0x81),
             revision: revision(8),
-            seq: root_seq(11),
+            seq: vault_seq(11),
             tx: tx_id(0x71),
             digest: digest(OLD_HEX),
             size: 9,
@@ -910,7 +910,7 @@ mod tests {
         assert_eq!(failure.code(), "store_contract_violation");
         assert_eq!(failure.error_code(), Some(ErrorCode::NeedsRecovery));
         assert!(!failure.is_committed());
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -941,7 +941,7 @@ mod tests {
         assert_eq!(failure.phase, Some(PutPhase::Prepared));
         assert!(!failure.is_committed());
         assert!(store.writes.is_empty(), "发布证据不符时不得写元数据");
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -969,7 +969,7 @@ mod tests {
         assert!(!failure.is_committed());
         assert!(log.intents.is_empty(), "发布前的复核失败发生在写意图之前");
         assert!(target.publishes.is_empty());
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[tokio::test]
@@ -980,7 +980,7 @@ mod tests {
             phase: PutPhase::Published,
             version: version_id(0x81),
             revision: revision(8),
-            seq: root_seq(11),
+            seq: vault_seq(11),
             tx: tx_id(0x71),
             digest: digest(NEW_HEX),
             size: 5,
@@ -1020,7 +1020,7 @@ mod tests {
         .expect_err("暂存名逃逸");
         assert_eq!(failure.code(), "invalid_request");
         assert!(store.trace.entries().is_empty(), "形状不成立时不得调用端口");
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
 
         request.target_path = "docs/other.txt".to_owned();
         let failure = commit_put(
@@ -1054,11 +1054,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_root_commits_at_a_time_while_other_roots_proceed() {
+    async fn one_vault_commits_at_a_time_while_other_vaults_proceed() {
         let (request, _snapshot, mut gate, mut store, mut target) = overwrite();
         let mut log = FakeIntentLog::default();
 
-        let held = gate.acquire(request.root).expect("占住该 Root");
+        let held = gate.acquire(request.vault).expect("占住该 Vault");
         let failure = commit_put(
             &mut gate,
             &mut store,
@@ -1068,14 +1068,17 @@ mod tests {
             &request,
         )
         .await
-        .expect_err("同 Root 并发提交");
-        assert_eq!(failure.code(), "root_commit_busy");
+        .expect_err("同 Vault 并发提交");
+        assert_eq!(failure.code(), "vault_commit_busy");
         assert_eq!(failure.error_code(), None);
-        assert!(store.trace.entries().is_empty(), "未拿到 Root 票据不得读库");
-        assert!(gate.is_held(request.root), "别人的票据不被顺手释放");
+        assert!(
+            store.trace.entries().is_empty(),
+            "未拿到 Vault 票据不得读库"
+        );
+        assert!(gate.is_held(request.vault), "别人的票据不被顺手释放");
 
-        // 另一个 Root 不被阻塞。
-        let other = gate.acquire(root_id(0x22)).expect("另一个 Root 独立");
+        // 另一个 Vault 不被阻塞。
+        let other = gate.acquire(vault_id(0x22)).expect("另一个 Vault 独立");
         gate.release(other);
 
         gate.release(held);
@@ -1089,28 +1092,28 @@ mod tests {
         )
         .await
         .expect("释放后可以提交");
-        assert!(!gate.is_held(request.root));
+        assert!(!gate.is_held(request.vault));
     }
 
     #[test]
     fn gate_tickets_are_unique_per_acquisition() {
-        let mut gate = RootCommitGate::new();
-        let root = root_id(0x21);
-        let first = gate.acquire(root).expect("首次占用");
-        assert_eq!(first.root(), root);
+        let mut gate = VaultCommitGate::new();
+        let vault = vault_id(0x21);
+        let first = gate.acquire(vault).expect("首次占用");
+        assert_eq!(first.vault(), vault);
         assert!(matches!(
-            gate.acquire(root),
-            Err(CommitGateError::Busy { root: busy, serial }) if busy == root && serial == first.serial()
+            gate.acquire(vault),
+            Err(CommitGateError::Busy { vault: busy, serial }) if busy == vault && serial == first.serial()
         ));
         gate.release(first);
-        let second = gate.acquire(root).expect("释放后可再占用");
+        let second = gate.acquire(vault).expect("释放后可再占用");
         assert!(second.serial() > first.serial());
     }
 
     #[test]
     fn entry_baseline_defaults_describe_a_file() {
         // 测试夹具自身的不变量：改动夹具时不至于悄悄换成目录或别的 revision。
-        let baseline = file_baseline(root_id(0x21));
+        let baseline = file_baseline(vault_id(0x21));
         assert_eq!(baseline.entry, entry_id(0x51));
         assert_eq!(baseline.revision, revision(7));
         assert!(baseline.kind.is_file());

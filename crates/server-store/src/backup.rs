@@ -8,17 +8,17 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
-use vaultsyncd_domain::{ids::RootId, version::RootSeq};
-use vaultsyncd_server_core::backup::prepare::{FrozenObject, FrozenRoot, Plan};
+use vaultsyncd_domain::{ids::VaultId, version::VaultSeq};
+use vaultsyncd_server_core::backup::prepare::{FrozenObject, FrozenVault, Plan};
 
 fn err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
 /// 一致导出时读取的附加元数据；全部来自同一源连接快照。
 pub struct FrozenDatabase {
-    /// 核心可验证的对象/Root清单。
+    /// 核心可验证的对象/Vault清单。
     pub plan: Plan,
-    /// Root原始映射，包含恢复所需身份/epoch，JSON对象列表由应用层编码。
+    /// Vault原始映射，包含恢复所需身份/epoch，JSON对象列表由应用层编码。
     pub mappings: Vec<(String, String, String, String, String, String)>,
     /// ServerId，必须由应用层在屏障内先行持久化。
     pub server_id: String,
@@ -51,13 +51,13 @@ pub fn online_backup(source: &Path, destination: &Path) -> io::Result<FrozenData
     let schema: i64 = src
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(err)?;
-    let pending:i64=src.query_row("SELECT (SELECT count(*) FROM fs_intents WHERE phase<>'finalized')+(SELECT count(*) FROM operations WHERE state='pending')+(SELECT count(*) FROM objects WHERE gc_state<>'live')+(SELECT count(*) FROM entries e WHERE e.content_version_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM versions v WHERE v.id=e.content_version_id AND v.root_id=e.root_id AND v.entry_id=e.id))+(SELECT count(*) FROM trash_entries t WHERE t.content_version_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM versions v WHERE v.id=t.content_version_id AND v.root_id=t.root_id AND v.entry_id=t.entry_id))",[],|r|r.get(0)).map_err(err)?;
+    let pending:i64=src.query_row("SELECT (SELECT count(*) FROM fs_intents WHERE phase<>'finalized')+(SELECT count(*) FROM operations WHERE state='pending')+(SELECT count(*) FROM objects WHERE gc_state<>'live')+(SELECT count(*) FROM entries e WHERE e.content_version_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM versions v WHERE v.id=e.content_version_id AND v.vault_id=e.vault_id AND v.entry_id=e.id))+(SELECT count(*) FROM trash_entries t WHERE t.content_version_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM versions v WHERE v.id=t.content_version_id AND v.vault_id=t.vault_id AND v.entry_id=t.entry_id))",[],|r|r.get(0)).map_err(err)?;
     if pending != 0 {
         return Err(err("unfinished intents/operations/GC prevent backup"));
     }
-    let mut roots = Vec::new();
+    let mut vaults = Vec::new();
     let mut mappings = Vec::new();
-    let mut query=src.prepare("SELECT lower(hex(id)),seq,absolute_path,lower(hex(owner_id)),epoch,lower(hex(volume_identity)),lower(hex(root_file_identity)) FROM roots ORDER BY id").map_err(err)?;
+    let mut query=src.prepare("SELECT lower(hex(id)),seq,absolute_path,lower(hex(owner_id)),epoch,lower(hex(volume_identity)),lower(hex(vault_file_identity)) FROM vaults ORDER BY id").map_err(err)?;
     for row in query
         .query_map([], |r| {
             Ok((
@@ -73,16 +73,16 @@ pub fn online_backup(source: &Path, destination: &Path) -> io::Result<FrozenData
         .map_err(err)?
     {
         let (id, seq, path, owner, epoch, volume, identity) = row.map_err(err)?;
-        roots.push(FrozenRoot {
-            root: RootId::from_hex(&id).map_err(err)?,
-            seq: RootSeq::from_db_integer(seq).map_err(err)?,
+        vaults.push(FrozenVault {
+            vault: VaultId::from_hex(&id).map_err(err)?,
+            seq: VaultSeq::from_db_integer(seq).map_err(err)?,
         });
         mappings.push((id, path, owner, epoch.to_string(), volume, identity));
     }
     let mut objects = Vec::new();
     let mut query = src
         .prepare(
-            "SELECT lower(hex(root_id)),hash,size,storage_path FROM objects ORDER BY root_id,hash",
+            "SELECT lower(hex(vault_id)),hash,size,storage_path FROM objects ORDER BY vault_id,hash",
         )
         .map_err(err)?;
     for row in query
@@ -96,20 +96,20 @@ pub fn online_backup(source: &Path, destination: &Path) -> io::Result<FrozenData
         })
         .map_err(err)?
     {
-        let (root, hash, size, storage_path) = row.map_err(err)?;
+        let (vault, hash, size, storage_path) = row.map_err(err)?;
         objects.push(FrozenObject {
-            root: RootId::from_hex(&root).map_err(err)?,
+            vault: VaultId::from_hex(&vault).map_err(err)?,
             hash: hash.try_into().map_err(|_| err("invalid object hash"))?,
             size: u64::try_from(size).map_err(err)?,
             storage_path,
         });
     }
-    let plan = Plan { roots, objects };
+    let plan = Plan { vaults, objects };
     plan.validate().map_err(|e| err(format!("{e:?}")))?;
     let mut table_counts = std::collections::BTreeMap::new();
     for table in [
         "users",
-        "roots",
+        "vaults",
         "entries",
         "versions",
         "trash_entries",
@@ -215,7 +215,7 @@ pub fn verify_database(
     for (table, expected) in &index.table_counts {
         if ![
             "users",
-            "roots",
+            "vaults",
             "entries",
             "versions",
             "trash_entries",
@@ -234,27 +234,27 @@ pub fn verify_database(
             return Err(err("backup logical table count mismatch"));
         }
     }
-    let mut roots = std::collections::BTreeMap::new();
+    let mut vaults = std::collections::BTreeMap::new();
     let mut q = db
-        .prepare("SELECT lower(hex(id)),seq FROM roots")
+        .prepare("SELECT lower(hex(id)),seq FROM vaults")
         .map_err(err)?;
     for r in q
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .map_err(err)?
     {
         let (id, seq) = r.map_err(err)?;
-        roots.insert(
-            RootId::from_hex(&id).map_err(err)?,
+        vaults.insert(
+            VaultId::from_hex(&id).map_err(err)?,
             u64::try_from(seq).map_err(err)?,
         );
     }
-    if roots != index.root_seqs {
-        return Err(err("backup Root sequence map mismatch"));
+    if vaults != index.vault_seqs {
+        return Err(err("backup Vault sequence map mismatch"));
     }
     let mut objects = 0;
     let mut storage_paths = std::collections::BTreeSet::new();
     let mut q = db
-        .prepare("SELECT lower(hex(root_id)),hash,size,storage_path FROM objects")
+        .prepare("SELECT lower(hex(vault_id)),hash,size,storage_path FROM objects")
         .map_err(err)?;
     for r in q
         .query_map([], |r| {
@@ -267,21 +267,21 @@ pub fn verify_database(
         })
         .map_err(err)?
     {
-        let (root, hash, size, path) = r.map_err(err)?;
+        let (vault, hash, size, path) = r.map_err(err)?;
         let hash: [u8; 32] = hash
             .try_into()
             .map_err(|_| err("invalid backup object hash"))?;
-        let root = RootId::from_hex(&root).map_err(err)?;
+        let vault = VaultId::from_hex(&vault).map_err(err)?;
         let digest = vaultsyncd_server_core::objects::ContentDigest::from_bytes(hash);
-        let archive = format!("objects/{}/{}", root.to_hex(), digest.to_hex());
+        let archive = format!("objects/{}/{}", vault.to_hex(), digest.to_hex());
         let item = index
             .item(&archive)
             .ok_or_else(|| err("database object missing from manifest"))?;
         if item.hash != hash
             || item.size != u64::try_from(size).map_err(err)?
-            || !index.root_seqs.contains_key(&root)
+            || !index.vault_seqs.contains_key(&vault)
             || !vaultsyncd_server_core::objects::ObjectLayout::valid_storage_path(
-                root, &digest, &path,
+                vault, &digest, &path,
             )
             || index.object_storage_path(&archive) != Some(path.as_str())
             || !storage_paths.insert(path)
@@ -308,8 +308,8 @@ mod tests {
             backup::export::{Index, Item},
             objects::{ContentDigest, ObjectLayout},
         };
-        for root_count in [1, 3] {
-            let dir = TestDir::new(&format!("s136-backup-{root_count}"));
+        for vault_count in [1, 3] {
+            let dir = TestDir::new(&format!("s136-backup-{vault_count}"));
             let db = open_database(&dir).await;
             let owner = seed_owner(&db, 1).await;
             sqlx::query("INSERT INTO store_metadata VALUES('server_id',?)")
@@ -318,19 +318,19 @@ mod tests {
                 .await
                 .unwrap();
             let digest = ContentDigest::from_bytes([0xab; 32]);
-            for n in 0..root_count {
-                let (root, _) = register_root(&db, owner, 2 + n).await;
+            for n in 0..vault_count {
+                let (vault, _) = register_vault(&db, owner, 2 + n).await;
                 let storage_path = if n == 0 {
                     ObjectLayout::relative_object_path(&digest)
                 } else {
-                    ObjectLayout::scoped_relative_object_path(root, &digest)
+                    ObjectLayout::scoped_relative_object_path(vault, &digest)
                 };
                 let mut tx = db.begin_write().await.unwrap();
                 crate::versions::record_object(
                     &mut tx,
                     owner,
                     &crate::versions::NewObject {
-                        root,
+                        vault,
                         hash: *digest.as_bytes(),
                         size: 7,
                         storage_path: storage_path.to_str().unwrap().to_owned(),
@@ -343,7 +343,7 @@ mod tests {
             }
             let target = dir.path.join("backup.sqlite");
             let frozen = online_backup(db.path(), &target).unwrap();
-            assert_eq!(frozen.plan.objects.len(), root_count as usize);
+            assert_eq!(frozen.plan.objects.len(), vault_count as usize);
             let mut index = Index {
                 id: BackupLeaseId::from_bytes([4; 16]),
                 server: ServerId::from_hex(&frozen.server_id).unwrap(),
@@ -355,11 +355,11 @@ mod tests {
                         size: 0,
                     })
                     .to_vec(),
-                root_seqs: frozen
+                vault_seqs: frozen
                     .plan
-                    .roots
+                    .vaults
                     .iter()
-                    .map(|r| (r.root, r.seq.get()))
+                    .map(|r| (r.vault, r.seq.get()))
                     .collect(),
                 schema_version: frozen.schema,
                 table_counts: frozen
@@ -370,7 +370,7 @@ mod tests {
                 object_storage_paths: BTreeMap::new(),
             };
             for object in &frozen.plan.objects {
-                let path = format!("objects/{}/{}", object.root.to_hex(), digest.to_hex());
+                let path = format!("objects/{}/{}", object.vault.to_hex(), digest.to_hex());
                 index
                     .object_storage_paths
                     .insert(path.clone(), object.storage_path.clone());
@@ -386,11 +386,11 @@ mod tests {
             assert!(restore_plan.work.is_empty());
             let mappings: Vec<_> = frozen
                 .plan
-                .roots
+                .vaults
                 .iter()
                 .map(|r| crate::restore::Remap {
-                    root: r.root,
-                    path: format!("/restored/{}", r.root.to_hex()),
+                    vault: r.vault,
+                    path: format!("/restored/{}", r.vault.to_hex()),
                     volume: b"volume".to_vec(),
                     identity: b"identity".to_vec(),
                 })
@@ -398,11 +398,11 @@ mod tests {
             crate::restore::apply(&target, &index, &mappings, 42).unwrap();
             verify_database(&target, &index).unwrap();
             let legacy = &frozen.plan.objects[0];
-            let archive = format!("objects/{}/{}", legacy.root.to_hex(), digest.to_hex());
+            let archive = format!("objects/{}/{}", legacy.vault.to_hex(), digest.to_hex());
             // Even an otherwise valid alternate layout may not silently differ from the manifest.
             index.object_storage_paths.insert(
                 archive.clone(),
-                ObjectLayout::scoped_relative_object_path(legacy.root, &digest)
+                ObjectLayout::scoped_relative_object_path(legacy.vault, &digest)
                     .to_str()
                     .unwrap()
                     .to_owned(),
@@ -417,14 +417,14 @@ mod tests {
             assert!(
                 copied
                     .execute(
-                        "UPDATE objects SET storage_path=? WHERE root_id=?",
-                        rusqlite::params![invalid, legacy.root.as_bytes().as_slice()]
+                        "UPDATE objects SET storage_path=? WHERE vault_id=?",
+                        rusqlite::params![invalid, legacy.vault.as_bytes().as_slice()]
                     )
                     .is_err()
             );
             drop(copied);
             // 外来/损坏备份若已含非规范路径，验证必须拒绝；INSERT不受不可变触发器限制。
-            let forged = dir.path.join(format!("forged-{root_count}.sqlite"));
+            let forged = dir.path.join(format!("forged-{vault_count}.sqlite"));
             std::fs::copy(&target, &forged).unwrap();
             let forged_db = Connection::open(&forged).unwrap();
             let forged_digest = ContentDigest::from_bytes([0xcd; 32]);
@@ -432,11 +432,11 @@ mod tests {
                 "./{}",
                 ObjectLayout::relative_object_path(&forged_digest).display()
             );
-            forged_db.execute("INSERT INTO objects(root_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')",
-                rusqlite::params![legacy.root.as_bytes().as_slice(), forged_digest.as_bytes().as_slice(), forged_path]).unwrap();
+            forged_db.execute("INSERT INTO objects(vault_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')",
+                rusqlite::params![legacy.vault.as_bytes().as_slice(), forged_digest.as_bytes().as_slice(), forged_path]).unwrap();
             let forged_archive = format!(
                 "objects/{}/{}",
-                legacy.root.to_hex(),
+                legacy.vault.to_hex(),
                 forged_digest.to_hex()
             );
             index
@@ -450,14 +450,14 @@ mod tests {
             assert!(verify_database(&forged, &index).is_err());
             index.object_storage_paths.remove(&format!(
                 "objects/{}/{}",
-                legacy.root.to_hex(),
+                legacy.vault.to_hex(),
                 forged_digest.to_hex()
             ));
-            // 另一Root前缀的物理位置不得冒充本Root对象；在线备份同样必须拒绝。
+            // 另一Vault前缀的物理位置不得冒充本Vault对象；在线备份同样必须拒绝。
             let mut tx = db.begin_write().await.unwrap();
-            sqlx::query("INSERT INTO objects(root_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')")
-                .bind(legacy.root.as_bytes().as_slice()).bind(forged_digest.as_bytes().as_slice())
-                .bind(ObjectLayout::scoped_relative_object_path(RootId::from_bytes([9;16]), &forged_digest).to_str().unwrap())
+            sqlx::query("INSERT INTO objects(vault_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')")
+                .bind(legacy.vault.as_bytes().as_slice()).bind(forged_digest.as_bytes().as_slice())
+                .bind(ObjectLayout::scoped_relative_object_path(VaultId::from_bytes([9;16]), &forged_digest).to_str().unwrap())
                 .execute(&mut *tx).await.unwrap();
             tx.commit().await.unwrap();
             assert!(online_backup(db.path(), &dir.path.join("foreign.sqlite")).is_err());
@@ -469,7 +469,7 @@ mod tests {
         let dir = TestDir::new("s087-online");
         let db = open_database(&dir).await;
         let owner = seed_owner(&db, 1).await;
-        let (root, _) = register_root(&db, owner, 2).await;
+        let (vault, _) = register_vault(&db, owner, 2).await;
         let mut tx = db.begin_write().await.unwrap();
         sqlx::query("INSERT INTO store_metadata VALUES('server_id',?)")
             .bind("abababababababababababababababab")
@@ -495,7 +495,7 @@ mod tests {
         crate::changes::append_change(
             &mut tx,
             owner,
-            root,
+            vault,
             crate::test_support::tx(6),
             "[{}]",
             at(10),
@@ -511,7 +511,7 @@ mod tests {
         );
         let target = dir.path.join("backup.sqlite");
         let frozen = online_backup(db.path(), &target).unwrap();
-        assert_eq!(frozen.plan.roots[0].seq.get(), 1);
+        assert_eq!(frozen.plan.vaults[0].seq.get(), 1);
         let copied = Connection::open(&target).unwrap();
         assert_eq!(
             copied
@@ -521,7 +521,7 @@ mod tests {
         );
         assert_eq!(
             copied
-                .query_row("SELECT seq FROM roots", [], |r| r.get::<_, i64>(0))
+                .query_row("SELECT seq FROM vaults", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
             1
         );

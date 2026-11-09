@@ -4,20 +4,20 @@ use crate::cfapi::{
     adapter::{Adapter, MetadataOnly},
     catalog::Catalog,
 };
-use crate::files::RootHandle;
+use crate::files::VaultHandle;
 use std::{os::windows::fs::OpenOptionsExt, path::PathBuf, process::Command, sync::Arc};
-use vaultsyncd_domain::ids::{BindingId, RootId};
+use vaultsyncd_domain::ids::{BindingId, VaultId};
 
 #[test]
 fn native_application_namespace_keeps_content_and_refuses_collisions() {
     let lab = Lab::new();
-    let root = RootHandle::open(&lab.base.join("root")).unwrap();
-    assert!(root.ensure_directory("child").unwrap().directory);
-    assert!(root.ensure_directory("child").unwrap().directory);
+    let vault = VaultHandle::open(&lab.base.join("vault")).unwrap();
+    assert!(vault.ensure_directory("child").unwrap().directory);
+    assert!(vault.ensure_directory("child").unwrap().directory);
     std::fs::write(lab.path(), b"local-only").unwrap();
-    assert!(root.ensure_directory("a.txt").is_err());
+    assert!(vault.ensure_directory("a.txt").is_err());
     let source = lab.observe();
-    std::fs::write(lab.base.join("root/occupied"), b"user").unwrap();
+    std::fs::write(lab.base.join("vault/occupied"), b"user").unwrap();
     assert!(
         lab.files
             .preserve("a.txt", "occupied", source.evidence())
@@ -31,11 +31,11 @@ fn native_application_namespace_keeps_content_and_refuses_collisions() {
     assert_eq!(moved, *source.evidence());
     assert!(!lab.path().exists());
     assert_eq!(
-        std::fs::read(lab.base.join("root/child/kept")).unwrap(),
+        std::fs::read(lab.base.join("vault/child/kept")).unwrap(),
         b"local-only"
     );
     assert_eq!(
-        std::fs::read(lab.base.join("root/occupied")).unwrap(),
+        std::fs::read(lab.base.join("vault/occupied")).unwrap(),
         b"user"
     );
     // 腾空的原路径可以被重新写入（首次导入的 preserve-both 正是这样安装远端版本）；
@@ -49,7 +49,7 @@ fn native_application_namespace_keeps_content_and_refuses_collisions() {
         moved.generation
     );
     assert_ne!(replacement.evidence().digest, moved.digest);
-    assert!(root.ensure_directory("../escape").is_err());
+    assert!(vault.ensure_directory("../escape").is_err());
 }
 
 struct Held(Option<WindowsFiles>);
@@ -76,16 +76,16 @@ impl Lab {
         Self::at(base)
     }
     fn at(base: PathBuf) -> Self {
-        std::fs::create_dir_all(base.join("root")).unwrap();
+        std::fs::create_dir_all(base.join("vault")).unwrap();
         std::fs::create_dir_all(base.join("state")).unwrap();
-        let files = WindowsFiles::open(&base.join("root"), &base.join("state")).unwrap();
+        let files = WindowsFiles::open(&base.join("vault"), &base.join("state")).unwrap();
         Self {
             base,
             files: Held(Some(files)),
         }
     }
     fn path(&self) -> PathBuf {
-        self.base.join("root/a.txt")
+        self.base.join("vault/a.txt")
     }
     fn stage(&self) -> PathBuf {
         let p = self.base.join("incoming");
@@ -124,7 +124,7 @@ fn native_snapshots_generation_and_rename_over_are_real_content_based() {
         first.evidence().generation + 1
     );
     assert_eq!(first.read_at(0, 7).unwrap(), b"initial");
-    let temp = lab.base.join("root/editor.tmp");
+    let temp = lab.base.join("vault/editor.tmp");
     std::fs::write(&temp, b"atomic-save").unwrap();
     // The actual Win32 ReplaceFile API performs the editor's temporary+rename-over save.
     #[link(name = "kernel32")]
@@ -188,13 +188,13 @@ fn native_protection_rejects_all_shared_writers_readers_and_mapping_after_file_c
     let before = lab.observe();
     let logical = crate::cfapi::catalog::Identity {
         binding: BindingId::from_bytes([0x73; 16]),
-        root: RootId::from_bytes([0x74; 16]),
+        vault: VaultId::from_bytes([0x74; 16]),
         entry: vaultsyncd_domain::ids::EntryId::from_bytes([0x75; 16]),
         version: vaultsyncd_domain::ids::VersionId::from_bytes([0x76; 16]),
     };
     let mut adapter = Adapter::connect(
-        &lab.base.join("root"),
-        Catalog::new(logical.binding, logical.root),
+        &lab.base.join("vault"),
+        Catalog::new(logical.binding, logical.vault),
         Arc::new(MetadataOnly),
     )
     .unwrap();
@@ -341,16 +341,16 @@ fn native_real_cloud_editor_atomic_save_and_guarded_remote_update() {
     use vaultsyncd_domain::ids::{EntryId, VersionId};
     let lab = Lab::new();
     let binding = BindingId::from_bytes([0x68; 16]);
-    let root = RootId::from_bytes([0x69; 16]);
+    let vault = VaultId::from_bytes([0x69; 16]);
     let mut adapter = Adapter::connect(
-        &lab.base.join("root"),
-        Catalog::new(binding, root),
+        &lab.base.join("vault"),
+        Catalog::new(binding, vault),
         Arc::new(MetadataOnly),
     )
     .unwrap();
     let id = Identity {
         binding,
-        root,
+        vault,
         entry: EntryId::from_bytes([0x70; 16]),
         version: VersionId::from_bytes([0x71; 16]),
     };
@@ -358,7 +358,7 @@ fn native_real_cloud_editor_atomic_save_and_guarded_remote_update() {
     // A real application writes a hydrated empty placeholder, then atomically saves over it.
     std::fs::write(lab.path(), b"local-dirty").unwrap();
     let first = lab.observe();
-    let temp = lab.base.join("root/editor.tmp");
+    let temp = lab.base.join("vault/editor.tmp");
     std::fs::write(&temp, b"saved-atomic").unwrap();
     // MoveFileEx performs the same replacement namespace operation used by editor atomic saves.
     #[link(name = "kernel32")]
@@ -404,16 +404,16 @@ fn native_fully_materialized_file_rebinds_to_new_entry_but_partial_placeholder_d
     use vaultsyncd_domain::ids::{EntryId, VersionId};
     let lab = Lab::new();
     let binding = BindingId::from_bytes([0x78; 16]);
-    let root = RootId::from_bytes([0x79; 16]);
+    let vault = VaultId::from_bytes([0x79; 16]);
     let mut adapter = Adapter::connect(
-        &lab.base.join("root"),
-        Catalog::new(binding, root),
+        &lab.base.join("vault"),
+        Catalog::new(binding, vault),
         Arc::new(MetadataOnly),
     )
     .unwrap();
     let old = Identity {
         binding,
-        root,
+        vault,
         entry: EntryId::from_bytes([0x7a; 16]),
         version: VersionId::from_bytes([0x7b; 16]),
     };
@@ -428,7 +428,7 @@ fn native_fully_materialized_file_rebinds_to_new_entry_but_partial_placeholder_d
     let edited = lab.observe();
     let new = Identity {
         binding,
-        root,
+        vault,
         entry: EntryId::from_bytes([0x7c; 16]),
         version: VersionId::from_bytes([0x7d; 16]),
     };
@@ -444,7 +444,7 @@ fn native_fully_materialized_file_rebinds_to_new_entry_but_partial_placeholder_d
         new.entry
     );
     assert_eq!(std::fs::read(lab.path()).unwrap(), b"modified-after-delete");
-    // 不完整占位不能直接换成本 Root 的另一个条目：那会丢掉原条目的云状态。
+    // 不完整占位不能直接换成本 Vault 的另一个条目：那会丢掉原条目的云状态。
     adapter.catalog().write().unwrap().insert(old).unwrap();
     adapter.create("b.txt", old, 4096, false).unwrap();
     let placeholder = adapter.inspect("b.txt").unwrap();
@@ -571,7 +571,7 @@ fn native_retry_same_operation_and_restarted_generation_keep_new_saved_content()
             .is_err()
     );
     assert_eq!(std::fs::read(lab.path()).unwrap(), b"saved-later");
-    let restarted = WindowsFiles::open(&lab.base.join("root"), &lab.base.join("state")).unwrap();
+    let restarted = WindowsFiles::open(&lab.base.join("vault"), &lab.base.join("state")).unwrap();
     restarted.seed("a.txt", new.clone()).unwrap();
     let ObservedContent::File(actual) = restarted.observe("a.txt").unwrap() else {
         panic!("missing")

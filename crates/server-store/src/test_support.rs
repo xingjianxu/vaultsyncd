@@ -1,7 +1,7 @@
 //! 测试共享的临时目录与种子数据（仅 `cfg(test)` 编译）。
 //!
 //! 每个测试一个独立目录与独立 SQLite 文件，`Drop` 时连同 WAL 与迁移前备份一起删除。
-//! 种子数据只经本卡已建的 `users` 表与 [`crate::roots::insert_root`] 写入，不绕过被测代码；
+//! 种子数据只经本卡已建的 `users` 表与 [`crate::vaults::insert_vault`] 写入，不绕过被测代码；
 //! 账号本身还没有 typed API（由账号卡 S042 提供），所以测试直接写那一张表。
 
 use std::path::PathBuf;
@@ -9,14 +9,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use sqlx::{Sqlite, Transaction};
 use vaultsyncd_domain::ids::{
-    BackupLeaseId, DeviceId, EntryId, ID_LEN, IntentId, ObjectLeaseId, OpId, RootId, SessionId,
-    TxId, UploadId, UserId,
+    BackupLeaseId, DeviceId, EntryId, ID_LEN, IntentId, ObjectLeaseId, OpId, SessionId, TxId,
+    UploadId, UserId, VaultId,
 };
 use vaultsyncd_domain::version::{ServerEpoch, UtcTimestamp};
 
 use crate::db::Database;
 use crate::entries::{self, EntryKind, NewEntry};
-use crate::roots::{self, NewRoot};
+use crate::vaults::{self, NewVault};
 use crate::versions::{self, NewObject, ObjectHash};
 
 /// 测试独占的临时目录；`Drop` 时整个删除。
@@ -67,8 +67,8 @@ pub(crate) fn user(marker: u8) -> UserId {
     UserId::from_bytes([marker; ID_LEN])
 }
 
-pub(crate) fn root(marker: u8) -> RootId {
-    RootId::from_bytes([marker; ID_LEN])
+pub(crate) fn vault(marker: u8) -> VaultId {
+    VaultId::from_bytes([marker; ID_LEN])
 }
 
 pub(crate) fn entry(marker: u8) -> EntryId {
@@ -130,7 +130,7 @@ pub(crate) async fn insert_user(tx: &mut Transaction<'_, Sqlite>, id: UserId) {
     .expect("写测试账号");
 }
 
-/// 建一个测试账号并提交（调用方随后注册 Root）。
+/// 建一个测试账号并提交（调用方随后注册 Vault）。
 pub(crate) async fn seed_owner(database: &Database, marker: u8) -> UserId {
     let id = user(marker);
     let mut tx = database.begin_write().await.expect("开始写事务");
@@ -139,31 +139,97 @@ pub(crate) async fn seed_owner(database: &Database, marker: u8) -> UserId {
     id
 }
 
-/// 在同一个事务里注册 Root 与它的合成根条目，返回 `(RootId, 根条目 EntryId)`。
-pub(crate) async fn register_root(
+/// 在同一个事务里注册 Vault 与它的合成根条目，返回 `(VaultId, 根条目 EntryId)`。
+pub(crate) async fn register_vault(
     database: &Database,
     owner: UserId,
     marker: u8,
-) -> (RootId, EntryId) {
-    let root = root(marker);
-    let root_entry = entry(marker);
+) -> (VaultId, EntryId) {
+    let vault = vault(marker);
+    let vault_entry = entry(marker);
     let mut tx = database.begin_write().await.expect("开始写事务");
-    roots::insert_root(
+    vaults::insert_vault(
         &mut tx,
-        &NewRoot {
-            id: root,
-            entry: root_entry,
+        &NewVault {
+            id: vault,
+            entry: vault_entry,
             owner,
             absolute_path: format!("/srv/vaultsyncd-{marker:02x}"),
             volume_identity: vec![marker, 0x01],
-            root_file_identity: vec![marker, 0x02],
+            vault_file_identity: vec![marker, 0x02],
             epoch: ServerEpoch::ZERO,
         },
     )
     .await
-    .expect("注册测试 Root");
-    tx.commit().await.expect("提交测试 Root");
-    (root, root_entry)
+    .expect("注册测试 Vault");
+    tx.commit().await.expect("提交测试 Vault");
+    (vault, vault_entry)
+}
+
+/// 在只有 0001—0012 的旧库里注册 Vault：那一版表与列名是 `roots`/`root_id`/`root_file_identity`，
+/// S140 的迁移 0016 才改成 Vault。升级类测试要构造“旧服务端建出的库”，必须写旧名字。
+pub(crate) async fn register_vault_at_v12(
+    database: &Database,
+    owner: UserId,
+    marker: u8,
+) -> (VaultId, EntryId) {
+    let id = vault(marker);
+    let synthetic = entry(marker);
+    let mut tx = database.begin_write().await.expect("开始写事务");
+    sqlx::query(
+        "INSERT INTO roots(id,owner_id,absolute_path,volume_identity,root_file_identity,health,seq,epoch) \
+         VALUES (?1,?2,?3,?4,?5,'healthy',0,0)",
+    )
+    .bind(id.as_bytes().as_slice())
+    .bind(owner.as_bytes().as_slice())
+    .bind(format!("/srv/vaultsyncd-{marker:02x}"))
+    .bind(vec![marker, 0x01])
+    .bind(vec![marker, 0x02])
+    .execute(&mut *tx)
+    .await
+    .expect("写 0001—0012 版测试 Vault");
+    sqlx::query(
+        "INSERT INTO entries(id,root_id,parent_id,name,name_key,kind,revision) \
+         VALUES (?1,?2,NULL,'','','directory',0)",
+    )
+    .bind(synthetic.as_bytes().as_slice())
+    .bind(id.as_bytes().as_slice())
+    .execute(&mut *tx)
+    .await
+    .expect("写 0001—0012 版合成根条目");
+    tx.commit().await.expect("提交 0001—0012 版测试 Vault");
+    (id, synthetic)
+}
+
+/// 在旧库里追加一条事务批次并推进 `roots.seq`；列名仍是 `root_id`（S140 前）。
+pub(crate) async fn append_change_at_v12(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    owner: UserId,
+    id: VaultId,
+    tx_id: TxId,
+    events_json: &str,
+    at: UtcTimestamp,
+) -> i64 {
+    let seq: i64 = sqlx::query_scalar(
+        "UPDATE roots SET seq = seq + 1 WHERE id = ?1 AND owner_id = ?2 RETURNING seq",
+    )
+    .bind(id.as_bytes().as_slice())
+    .bind(owner.as_bytes().as_slice())
+    .fetch_one(&mut **tx)
+    .await
+    .expect("推进旧版 roots.seq");
+    sqlx::query(
+        "INSERT INTO changes(root_id,seq,tx_id,events_json,created_at) VALUES (?1,?2,?3,?4,?5)",
+    )
+    .bind(id.as_bytes().as_slice())
+    .bind(seq)
+    .bind(tx_id.as_bytes().as_slice())
+    .bind(events_json)
+    .bind(at.as_unix_seconds())
+    .execute(&mut **tx)
+    .await
+    .expect("写旧版 changes 批次");
+    seq
 }
 
 /// 登记一个内容对象并提交，返回它的内容哈希。
@@ -172,7 +238,7 @@ pub(crate) async fn register_root(
 pub(crate) async fn seed_object(
     database: &Database,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     marker: u8,
     size: u64,
 ) -> ObjectHash {
@@ -182,7 +248,7 @@ pub(crate) async fn seed_object(
         &mut tx,
         owner,
         &NewObject {
-            root,
+            vault,
             hash,
             size,
             storage_path: format!("/srv/objects/{marker:02x}"),
@@ -202,7 +268,7 @@ pub(crate) async fn seed_object(
 pub(crate) async fn seed_file(
     database: &Database,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     parent: EntryId,
     marker: u8,
     name: &str,
@@ -214,7 +280,7 @@ pub(crate) async fn seed_file(
         owner,
         &NewEntry {
             id,
-            root,
+            vault,
             parent,
             name: name.to_owned(),
             name_key: name.to_owned(),

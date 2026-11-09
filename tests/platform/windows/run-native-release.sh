@@ -4,11 +4,11 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$script_dir/common.sh"
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >&2; exit 1; }
-root=$(repo_root)
-cd "$root"
-artifact_dir="$root/artifacts/S069/native-$(date +%s)-$$"
+vault=$(repo_root)
+cd "$vault"
+artifact_dir="$vault/artifacts/S069/native-$(date +%s)-$$"
 mkdir -p "$artifact_dir"
-helper="${VAULTSYNCD_RELEASE_SERVER:-$root/target/debug/examples/release-native-server}"
+helper="${VAULTSYNCD_RELEASE_SERVER:-$vault/target/debug/examples/release-native-server}"
 test -x "$helper" || { echo 'build: nix develop --command cargo build --locked -p vaultsyncd-server-tests --example release-native-server' >&2; exit 1; }
 server_pid=''
 tunnel_pid=''

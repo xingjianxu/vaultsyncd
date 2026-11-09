@@ -50,7 +50,7 @@ pub fn is_within(path: &Path, base: &Path) -> bool {
 
 /// 取 `path` 相对 `base` 的路径分量；不在其下或与之相同时返回 `None`。
 ///
-/// 用 `?` 语义保持“只接受严格后代”，让调用方能区分“Root 自己”和“Root 内的东西”。
+/// 用 `?` 语义保持“只接受严格后代”，让调用方能区分“Vault 自己”和“Vault 内的东西”。
 #[must_use]
 pub fn strip_prefix(path: &Path, base: &Path) -> Option<PathBuf> {
     path.strip_prefix(base)
@@ -94,18 +94,21 @@ mod tests {
     #[test]
     fn strip_prefix_only_returns_strict_descendants() {
         assert_eq!(
-            strip_prefix(Path::new("/data/root/sub/dir"), Path::new("/data/root")),
+            strip_prefix(Path::new("/data/vault/sub/dir"), Path::new("/data/vault")),
             Some(PathBuf::from("sub/dir"))
         );
         assert_eq!(
-            strip_prefix(Path::new("/data/root"), Path::new("/data/root")),
+            strip_prefix(Path::new("/data/vault"), Path::new("/data/vault")),
             None
         );
         assert_eq!(
-            strip_prefix(Path::new("/data/rootx"), Path::new("/data/root")),
+            strip_prefix(Path::new("/data/vaultx"), Path::new("/data/vault")),
             None
         );
-        assert!(is_within(Path::new("/data/root"), Path::new("/data/root")));
-        assert!(!is_within(Path::new("/data"), Path::new("/data/root")));
+        assert!(is_within(
+            Path::new("/data/vault"),
+            Path::new("/data/vault")
+        ));
+        assert!(!is_within(Path::new("/data"), Path::new("/data/vault")));
     }
 }

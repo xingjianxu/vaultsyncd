@@ -1,7 +1,7 @@
 //! 回收站恢复：把回收站清单里的一个条目（目录则连同全部后代）放回命名空间
 //! （design §10.3、T13、I06）。
 //!
-//! 与历史版本恢复共用同一套提交协调（Root 票据、意图、受控发布、单一事务），差别在“内容从哪来”、
+//! 与历史版本恢复共用同一套提交协调（Vault 票据、意图、受控发布、单一事务），差别在“内容从哪来”、
 //! “实际位置怎么定”和“有多少个条目”：
 //!
 //! 1. **清单即事实**：恢复只按回收站清单里的原父目录、原路径、删除时 revision 与内容版本进行；
@@ -21,11 +21,11 @@
 //!
 //! 恢复不改条目身份：清单里的 `EntryId` 恢复后不变，客户端因此不会看到一个“新条目”。
 
-use vaultsyncd_domain::ids::{EntryId, IntentId, OpId, RootId, VersionId};
-use vaultsyncd_domain::version::{Revision, RootSeq, ServerEpoch, UtcTimestamp};
+use vaultsyncd_domain::ids::{EntryId, IntentId, OpId, VaultId, VersionId};
+use vaultsyncd_domain::version::{Revision, ServerEpoch, UtcTimestamp, VaultSeq};
 
 use crate::commit::intent::{NewPutIntent, TargetAfter, TargetBefore, publish_put};
-use crate::commit::put::{RootCommitGate, target_name, validate_name, validate_target_path};
+use crate::commit::put::{VaultCommitGate, target_name, validate_name, validate_target_path};
 use crate::history::{
     LeaseDisposition, RestoreFailure, RestoreFailureReason, reclassify_publish_failure,
     release_after_failure, release_all,
@@ -70,11 +70,11 @@ pub struct TrashRestoreRequest {
 pub struct CommittedTrashRestore {
     /// 产生该结果的逻辑操作身份。
     pub op: OpId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 被恢复的条目（身份不变）。
     pub entry: EntryId,
-    /// 恢复后的实际 Root 内路径（原位置被占用时与原路径不同，T13）。
+    /// 恢复后的实际 Vault 内路径（原位置被占用时与原路径不同，T13）。
     pub path: String,
     /// 恢复后的实际名称。
     pub name: String,
@@ -82,8 +82,8 @@ pub struct CommittedTrashRestore {
     pub renamed: bool,
     /// 条目的新 revision（严格大于清单里的 revision）。
     pub revision: Revision,
-    /// 该批次占用的 RootSeq。
-    pub seq: RootSeq,
+    /// 该批次占用的 VaultSeq。
+    pub seq: VaultSeq,
     /// 放回命名空间的条目数。
     pub entries: u64,
 }
@@ -114,18 +114,18 @@ pub struct TrashRestorePorts<'a, S: ?Sized, L: ?Sized, T: ?Sized, N: ?Sized, C: 
 
 /// 恢复一个回收站条目：文件放回内容，目录连同后代整棵放回位置。
 ///
-/// 顺序：Root 票据 → epoch → `OpId` 记录 → 清单与保留期 → 实际名称（根被占用则另名）→ 整棵子树
+/// 顺序：Vault 票据 → epoch → `OpId` 记录 → 清单与保留期 → 实际名称（根被占用则另名）→ 整棵子树
 /// 规划（结构不一致在这里停写）→ 登记 pending → 按深度建目录 → 逐文件租约/意图/发布 → 单一元数据
 /// 事务 → 核对证据 → 解除租约 → ACK。
 ///
 /// # Errors
 ///
-/// 见 [`RestoreFailure`]：Root 忙、epoch 变化、同一 `OpId` 不同请求、记录仍是 pending、清单不存在或
+/// 见 [`RestoreFailure`]：Vault 忙、epoch 变化、同一 `OpId` 不同请求、记录仍是 pending、清单不存在或
 /// 已过期、父目录不可用、没有可用另名、清单与事实不一致（`store_contract_violation`）、
 /// 租约/意图/命名空间/发布/存储失败。失败都不是 committed：元数据事务从未开始（或整体未提交），
 /// 已建的目录、已发布的工作文件与已持久化的意图保留为恢复证据。
 pub async fn restore_trash<S, L, T, N, C>(
-    gate: &mut RootCommitGate,
+    gate: &mut VaultCommitGate,
     ports: &mut TrashRestorePorts<'_, S, L, T, N, C>,
     at: UtcTimestamp,
     request: &TrashRestoreRequest,
@@ -138,7 +138,7 @@ where
     C: ContentLeasePort + ?Sized,
 {
     let ticket = gate
-        .acquire(request.op.root)
+        .acquire(request.op.vault)
         .map_err(|error| Box::new(RestoreFailure::new(RestoreFailureReason::Gate(error))))?;
     let outcome = restore_under_ticket(ports, at, request).await;
     gate.release(ticket);
@@ -160,7 +160,7 @@ where
     // 1. epoch：恢复过的服务器不是同一套事实。
     let facts = ports
         .store
-        .root_facts(request.op.root)
+        .vault_facts(request.op.vault)
         .await
         .map_err(store_failure)?;
     if facts.epoch != request.expected_epoch {
@@ -185,7 +185,7 @@ where
     // 3. 清单：必须还在回收站里、未过期，且与客户端看到的 revision 一致。
     let subtree = ports
         .store
-        .trash_subtree(request.op.root, request.entry)
+        .trash_subtree(request.op.vault, request.entry)
         .await
         .map_err(store_failure)?
         .ok_or_else(|| {
@@ -196,14 +196,14 @@ where
                 ),
             }))
         })?;
-    let root = subtree.root().clone();
+    let vault = subtree.vault().clone();
     check_subtree(&subtree, at, request)?;
 
     // 4. 实际位置：原父目录必须存在且是目录；根的名称被活跃条目占用就另名（T13），后代跟着移位。
     //    原父目录在删除之后可能被移动或改名：位置由它**现在**的路径决定，不使用清单里的旧路径前缀。
     let parent_kind = ports
         .store
-        .parent_kind(request.op.root, root.parent)
+        .parent_kind(request.op.vault, vault.parent)
         .await
         .map_err(store_failure)?;
     if parent_kind != Some(EntryKind::Directory) {
@@ -211,20 +211,25 @@ where
             RestoreFailureReason::SubtreeChanged {
                 detail: format!(
                     "原父目录 {} 已不存在或不是目录，不能把条目放回原位",
-                    root.parent
+                    vault.parent
                 ),
             },
         )));
     }
     let parent_path = ports
         .store
-        .parent_path(request.op.root, root.parent)
+        .parent_path(request.op.vault, vault.parent)
         .await
         .map_err(store_failure)?
-        .ok_or_else(|| contract(format!("原父目录 {} 是活跃目录却没有当前路径", root.parent)))?;
-    let (_, original_name) = split_path(&root.path);
+        .ok_or_else(|| {
+            contract(format!(
+                "原父目录 {} 是活跃目录却没有当前路径",
+                vault.parent
+            ))
+        })?;
+    let (_, original_name) = split_path(&vault.path);
     validate_name(&original_name).map_err(invalid_request)?;
-    let (name, renamed) = choose_name(ports, request, root.parent, &original_name).await?;
+    let (name, renamed) = choose_name(ports, request, vault.parent, &original_name).await?;
     let path = join_path(&parent_path, &name);
     validate_target_path(&path).map_err(invalid_request)?;
     if target_name(&path) != Some(name.as_str()) {
@@ -238,7 +243,7 @@ where
 
     // 5b. 现场核对先于任何持久化：根位置必须空缺（后代都在它之下），不把清单合并进已有内容。
     //     这一步被拒绝时没有 pending、没有意图，也没有建任何目录。
-    check_root_vacancy(ports, &plan[0])?;
+    check_vault_vacancy(ports, &plan[0])?;
 
     // 6. 在任何 mkdir/发布之前，把完整计划与 pending、目录意图原子持久化：重启后凭它补完或停写，
     //    不靠暂存文件名、mtime 或路径前缀去猜哪些条目属于这次恢复。
@@ -257,7 +262,7 @@ where
         key: request.op,
         digest: request.digest,
         entry: request.entry,
-        expected_revision: root.revision,
+        expected_revision: vault.revision,
         path: path.clone(),
         name: name.clone(),
         renamed,
@@ -351,9 +356,9 @@ where
 }
 
 /// 根位置必须空缺：目录用命名空间观察，文件用目标观察；后代都在根之下，不需要逐个核对。
-fn check_root_vacancy<S, L, T, N, C>(
+fn check_vault_vacancy<S, L, T, N, C>(
     ports: &mut TrashRestorePorts<'_, S, L, T, N, C>,
-    root: &PlannedEntry,
+    vault: &PlannedEntry,
 ) -> Result<(), Box<RestoreFailure>>
 where
     S: TrashRestoreStore + ?Sized,
@@ -362,9 +367,9 @@ where
     N: NamespacePort + ?Sized,
     C: ContentLeasePort + ?Sized,
 {
-    match root.kind {
+    match vault.kind {
         EntryKind::Directory => {
-            let observed = ports.namespace.inspect(&root.path).map_err(|error| {
+            let observed = ports.namespace.inspect(&vault.path).map_err(|error| {
                 Box::new(RestoreFailure::new(RestoreFailureReason::Namespace(error)))
             })?;
             if !matches!(observed, PathState::Absent) {
@@ -372,14 +377,14 @@ where
                     RestoreFailureReason::SubtreeChanged {
                         detail: format!(
                             "恢复目标目录 {:?} 已存在（{observed}），不把清单内容合并进现有目录",
-                            root.path
+                            vault.path
                         ),
                     },
                 )));
             }
         }
         EntryKind::File => {
-            let observed = ports.target.observe(&root.path).map_err(|error| {
+            let observed = ports.target.observe(&vault.path).map_err(|error| {
                 Box::new(RestoreFailure::new(RestoreFailureReason::TargetUnreadable(
                     error,
                 )))
@@ -474,7 +479,7 @@ where
             }),
         )));
     };
-    let content = match ports.store.content_facts(request.op.root, version).await {
+    let content = match ports.store.content_facts(request.op.vault, version).await {
         Ok(Some(content)) => content,
         Ok(None) => {
             return Err(Box::new(FilePublishFailure::before_lease(
@@ -505,7 +510,7 @@ where
     let lease = match ports
         .leases
         .acquire(&ContentLeaseRequest {
-            root: request.op.root,
+            vault: request.op.vault,
             digest: content.digest,
             purpose: ContentLeasePurpose::Download,
             expires_at,
@@ -543,7 +548,7 @@ where
 
     let new = NewPutIntent {
         intent_id: intent,
-        root: request.op.root,
+        vault: request.op.vault,
         target_path: planned.path.clone(),
         staging_path: staging_name(intent),
         before: TargetBefore::Absent,
@@ -577,7 +582,7 @@ where
 {
     let occupied = ports
         .store
-        .name_occupant(request.op.root, parent, original)
+        .name_occupant(request.op.vault, parent, original)
         .await
         .map_err(store_failure)?;
     if occupied.is_none() {
@@ -591,7 +596,7 @@ where
         }
         let occupied = ports
             .store
-            .name_occupant(request.op.root, parent, &candidate)
+            .name_occupant(request.op.vault, parent, &candidate)
             .await
             .map_err(store_failure)?;
         if occupied.is_none() {
@@ -629,7 +634,7 @@ struct PlannedEntry {
     entry: EntryId,
     /// 恢复后的父目录（根用清单里的父目录，后代用清单里的父目录）。
     parent: EntryId,
-    /// 恢复后的 Root 内相对路径。
+    /// 恢复后的 Vault 内相对路径。
     path: String,
     /// 恢复后的名称（只有根可能被另名）。
     name: String,
@@ -642,7 +647,7 @@ struct PlannedEntry {
 }
 
 impl PlannedEntry {
-    /// Root 内相对路径的深度（`a` 为 0、`a/b.txt` 为 1）。
+    /// Vault 内相对路径的深度（`a` 为 0、`a/b.txt` 为 1）。
     fn depth(&self) -> usize {
         self.path.matches('/').count()
     }
@@ -662,22 +667,22 @@ impl PlannedEntry {
 /// 清单与事实不一致时返回 [`RestoreFailureReason::StoreContract`]。
 fn plan_subtree(
     subtree: &TrashSubtree,
-    root_path: &str,
+    vault_path: &str,
 ) -> Result<Vec<PlannedEntry>, Box<RestoreFailure>> {
-    let root = subtree.root();
-    let under_root = format!("{}/", root.path);
+    let vault = subtree.vault();
+    let under_vault = format!("{}/", vault.path);
     let mut planned: Vec<PlannedEntry> = Vec::with_capacity(subtree.entries.len());
     for facts in &subtree.entries {
-        let path = if facts.entry == root.entry {
-            root_path.to_owned()
+        let path = if facts.entry == vault.entry {
+            vault_path.to_owned()
         } else {
-            let Some(rest) = facts.path.strip_prefix(&under_root) else {
+            let Some(rest) = facts.path.strip_prefix(&under_vault) else {
                 return Err(contract(format!(
                     "清单里的后代 {}（路径 {:?}）不在根路径 {:?} 之下",
-                    facts.entry, facts.path, root.path
+                    facts.entry, facts.path, vault.path
                 )));
             };
-            join_path(root_path, rest)
+            join_path(vault_path, rest)
         };
         let Some(name) = target_name(&path).map(str::to_owned) else {
             return Err(contract(format!("恢复路径 {path:?} 没有名称")));
@@ -704,10 +709,10 @@ fn plan_subtree(
             revision: facts.revision,
         });
     }
-    if root.kind == EntryKind::File && planned.len() > 1 {
+    if vault.kind == EntryKind::File && planned.len() > 1 {
         return Err(contract(format!(
             "普通文件 {} 在清单里带了 {} 个后代",
-            root.entry,
+            vault.entry,
             planned.len() - 1
         )));
     }
@@ -773,31 +778,34 @@ fn check_subtree(
     at: UtcTimestamp,
     request: &TrashRestoreRequest,
 ) -> Result<(), Box<RestoreFailure>> {
-    let root = subtree.root();
-    if root.entry != request.entry {
+    let vault = subtree.vault();
+    if vault.entry != request.entry {
         return Err(Box::new(RestoreFailure::new(
             RestoreFailureReason::StoreContract {
                 detail: format!(
                     "清单根是 {}，本次恢复请求的是 {}",
-                    root.entry, request.entry
+                    vault.entry, request.entry
                 ),
             },
         )));
     }
-    if root.revision != request.expected_revision {
+    if vault.revision != request.expected_revision {
         return Err(Box::new(RestoreFailure::new(
             RestoreFailureReason::BaseMismatch {
                 detail: format!(
                     "清单里的 revision 是 {}，请求基线是 {}（回收站事实已变化）",
-                    root.revision, request.expected_revision
+                    vault.revision, request.expected_revision
                 ),
             },
         )));
     }
-    if root.expires_at < at {
+    if vault.expires_at < at {
         return Err(Box::new(RestoreFailure::new(
             RestoreFailureReason::VersionGone {
-                detail: format!("条目 {} 的保留期已在 {} 结束", root.entry, root.expires_at),
+                detail: format!(
+                    "条目 {} 的保留期已在 {} 结束",
+                    vault.entry, vault.expires_at
+                ),
             },
         )));
     }
@@ -940,9 +948,9 @@ fn restore_failure(error: RestoreStoreError) -> RestoreFailure {
                 detail: format!("条目 {entry} 已不存在"),
             })
         }
-        RestoreStoreError::UnknownRoot { root } => {
+        RestoreStoreError::UnknownVault { vault } => {
             RestoreFailure::new(RestoreFailureReason::BaseMismatch {
-                detail: format!("Root {root} 已不存在"),
+                detail: format!("Vault {vault} 已不存在"),
             })
         }
         error => RestoreFailure::new(RestoreFailureReason::Store(error)),
@@ -1014,12 +1022,12 @@ mod tests {
     use crate::ports::target::TargetError;
     use crate::test_support::{
         FakeContentLease, FakeIntentLog, FakeNamespace, FakeTarget, FakeTrashRestoreStore, Trace,
-        device_id, digest, entry_id, epoch, intent_id, op_id, request_digest, revision, root_id,
-        root_seq, tx_id, user_time, version_id,
+        device_id, digest, entry_id, epoch, intent_id, op_id, request_digest, revision, tx_id,
+        user_time, vault_id, vault_seq, version_id,
     };
 
     struct Fixture {
-        gate: RootCommitGate,
+        gate: VaultCommitGate,
         store: FakeTrashRestoreStore,
         log: FakeIntentLog,
         target: FakeTarget,
@@ -1030,7 +1038,7 @@ mod tests {
 
     fn key() -> OperationKey {
         OperationKey {
-            root: root_id(0x21),
+            vault: vault_id(0x21),
             device: device_id(0x61),
             op: op_id(0x72),
         }
@@ -1049,12 +1057,12 @@ mod tests {
 
     /// 三文件两目录的清单：`projects` 里有一个文件和一个子目录，子目录里有两个文件。
     fn projects_subtree() -> Vec<TrashEntryFacts> {
-        let root = entry_id(0x50);
+        let vault = entry_id(0x50);
         let sub = entry_id(0x52);
         vec![
-            directory(root, entry_id(0x31), "projects", 7),
-            file(0x51, root, "projects/plan.md", 3, 0x81),
-            directory(sub, root, "projects/sub", 4),
+            directory(vault, entry_id(0x31), "projects", 7),
+            file(0x51, vault, "projects/plan.md", 3, 0x81),
+            directory(sub, vault, "projects/sub", 4),
             file(0x53, sub, "projects/sub/a.txt", 5, 0x82),
             file(0x54, sub, "projects/sub/b.txt", 6, 0x83),
         ]
@@ -1106,7 +1114,7 @@ mod tests {
         let trace = Trace::default();
         store.trace = trace.clone();
         Fixture {
-            gate: RootCommitGate::new(),
+            gate: VaultCommitGate::new(),
             store,
             log: FakeIntentLog {
                 trace: trace.clone(),
@@ -1296,7 +1304,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn existing_root_directory_is_rejected_before_any_state_is_written() {
+    async fn existing_vault_directory_is_rejected_before_any_state_is_written() {
         let mut fixture = projects_fixture();
         fixture.namespace = FakeNamespace::new()
             .with_trace(fixture.trace.clone())
@@ -1460,18 +1468,18 @@ mod tests {
         );
         assert_eq!(write.entries[3].parent, entry_id(0x52));
         assert_eq!(write.entries[3].content_version, Some(version_id(0x82)));
-        assert!(!fixture.gate.is_held(key().root));
+        assert!(!fixture.gate.is_held(key().vault));
     }
 
     #[tokio::test]
     async fn deep_nesting_creates_every_level_before_its_contents() {
-        let root = entry_id(0x40);
+        let vault = entry_id(0x40);
         let year = entry_id(0x41);
         let trip = entry_id(0x42);
         let raw = entry_id(0x43);
         let entries = vec![
-            directory(root, entry_id(0x31), "photos", 9),
-            directory(year, root, "photos/2024", 3),
+            directory(vault, entry_id(0x31), "photos", 9),
+            directory(year, vault, "photos/2024", 3),
             directory(trip, year, "photos/2024/trip", 4),
             file(0x44, trip, "photos/2024/trip/cover.jpg", 5, 0x81),
             directory(raw, trip, "photos/2024/trip/raw", 6),
@@ -1480,10 +1488,10 @@ mod tests {
         let mut fixture =
             fixture_with(FakeTrashRestoreStore::new().with_subtree(entries, entry_id(0x31)));
         let request = TrashRestoreRequest {
-            entry: root,
+            entry: vault,
             expected_revision: revision(9),
             op: OperationKey {
-                root: root_id(0x21),
+                vault: vault_id(0x21),
                 device: device_id(0x61),
                 op: op_id(0x77),
             },
@@ -1558,7 +1566,7 @@ mod tests {
 
         // 没有元数据事务：任何一个条目都没有被标成已恢复。
         assert!(fixture.store.writes.is_empty());
-        assert!(!fixture.gate.is_held(key().root));
+        assert!(!fixture.gate.is_held(key().vault));
 
         // 旧事实仍在：清单五条一条都没被拿走，条目与内容对象都还在。
         let subtree = fixture
@@ -1644,7 +1652,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn occupied_root_name_renames_the_whole_subtree() {
+    async fn occupied_vault_name_renames_the_whole_subtree() {
         let mut fixture = projects_fixture();
         fixture
             .store
@@ -1690,7 +1698,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manifest_rows_outside_the_root_path_stop_the_restore() {
+    async fn manifest_rows_outside_the_vault_path_stop_the_restore() {
         let mut entries = projects_subtree();
         entries[1].path = "other/plan.md".to_owned();
         let mut fixture =
@@ -1745,13 +1753,13 @@ mod tests {
             tx: tx_id(0x74),
             result: CommittedTrashRestore {
                 op: key().op,
-                root: key().root,
+                vault: key().vault,
                 entry: entry_id(0x50),
                 path: "projects".to_owned(),
                 name: "projects".to_owned(),
                 renamed: false,
                 revision: revision(8),
-                seq: root_seq(14),
+                seq: vault_seq(14),
                 entries: 1,
             },
         });

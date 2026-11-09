@@ -71,7 +71,7 @@ pub struct Scenario {
     pub requirements: Vec<String>,
     /// 参与者。
     pub clients: Vec<ClientSpec>,
-    /// 客户端首次导入前服务端 Root 已有的非空内容。
+    /// 客户端首次导入前服务端 Vault 已有的非空内容。
     pub server_seed: Vec<FileSpec>,
     /// 按顺序执行的场景块。
     pub blocks: Vec<Block>,

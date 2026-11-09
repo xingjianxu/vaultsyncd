@@ -1,6 +1,6 @@
 //! 上传会话与固定块片段（`uploads`/`upload_parts` 表）（`docs/design.md` §7.2、§13.1—13.2、§19.4）。
 //!
-//! 边界：本模块只记录“哪个会话为哪个 Root 的哪份不可变内容快照收了哪些块”。它不接收字节、不算哈希、
+//! 边界：本模块只记录“哪个会话为哪个 Vault 的哪份不可变内容快照收了哪些块”。它不接收字节、不算哈希、
 //! 不碰暂存文件、不发布内容对象，也不写 HTTP——流式接收、载荷上限与对象固定分别属于 S045 与 S033。
 //!
 //! 不变量：
@@ -17,20 +17,20 @@
 //!   只接受 `complete` 状态。`complete` 不是“内容已验证成版本”，后者要等 finalize 校验总哈希。
 //! - **状态由数据库给出**（design §13.2）：续传依据是库里的已收块与状态，不采信客户端位图；
 //!   `open`/`complete` 是未结束，`finalized`/`aborted` 是终态，终态不再接受块也不再改状态。
-//! - **owner scope**：所有读写都带 [`UserId`]，经 `roots.owner_id` 判定；越权上传表现为
+//! - **owner scope**：所有读写都带 [`UserId`]，经 `vaults.owner_id` 判定；越权上传表现为
 //!   [`UploadError::OutOfScope`] 或 `None`，不返回空结果。
 //!
 //! 会话身份（`session_id`）只做长度校验：`sessions` 表由会话卡（S043）建立，本卡不建它，也不假装
 //! 校验会话有效性（design §13.2 的“校验会话仍有效”由 API 层在调用本模块前完成）。
 
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-use vaultsyncd_domain::ids::{ID_LEN, RootId, SessionId, UploadId, UserId};
+use vaultsyncd_domain::ids::{ID_LEN, SessionId, UploadId, UserId, VaultId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
 use crate::versions::ObjectHash;
 
 /// `uploads` 表的列顺序，读取点共用。
-const UPLOAD_COLUMNS: &str = "u.id, u.root_id, u.session_id, u.expected_size, u.hash, \
+const UPLOAD_COLUMNS: &str = "u.id, u.vault_id, u.session_id, u.expected_size, u.hash, \
                               u.chunk_size, u.expires_at, u.state";
 
 /// `upload_parts` 表的列顺序，读取点共用。
@@ -134,14 +134,14 @@ impl UploadState {
 
 /// 创建一个上传会话的输入。
 ///
-/// 不变量（违反时 [`begin_upload`] 报错且不写入）：Root 属于调用方；`chunk_size` 大于 0；
+/// 不变量（违反时 [`begin_upload`] 报错且不写入）：Vault 属于调用方；`chunk_size` 大于 0；
 /// `expected_size` 与 `chunk_size` 不超过 SQLite `INTEGER` 上限；`id` 未被占用。
 #[derive(Clone, Debug)]
 pub struct NewUpload {
     /// 上传会话身份。
     pub id: UploadId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 签发上传的登录会话（本层只存身份，不校验有效性）。
     pub session: SessionId,
     /// 快照总大小。
@@ -159,8 +159,8 @@ pub struct NewUpload {
 pub struct UploadRecord {
     /// 上传会话身份。
     pub id: UploadId,
-    /// 所属 Root。
-    pub root: RootId,
+    /// 所属 Vault。
+    pub vault: VaultId,
     /// 签发上传的登录会话。
     pub session: SessionId,
     /// 快照总大小。
@@ -259,7 +259,7 @@ impl UploadProgress {
 pub enum UploadError {
     /// SQLite 层面失败。
     Db(sqlx::Error),
-    /// Root 不存在或不属于调用方的 owner scope（两种情况不区分）。
+    /// Vault 不存在或不属于调用方的 owner scope（两种情况不区分）。
     OutOfScope,
     /// 上传会话不存在或不在调用方的 owner scope 内。
     UnknownUpload {
@@ -341,7 +341,7 @@ impl std::fmt::Display for UploadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Db(source) => write!(f, "SQLite 操作失败：{source}"),
-            Self::OutOfScope => f.write_str("Root 不存在或不在调用方的 owner scope 内"),
+            Self::OutOfScope => f.write_str("Vault 不存在或不在调用方的 owner scope 内"),
             Self::UnknownUpload { id } => write!(f, "上传会话 {id} 不存在"),
             Self::DuplicateId { id } => write!(f, "上传会话身份 {id} 已被占用"),
             Self::InvalidChunkSize => f.write_str("块大小必须大于 0"),
@@ -393,18 +393,18 @@ pub async fn begin_upload(
     owner: UserId,
     new: &NewUpload,
 ) -> Result<UploadRecord, UploadError> {
-    require_root_owner(tx, owner, new.root).await?;
+    require_vault_owner(tx, owner, new.vault).await?;
     let expected_size = db_size(new.expected_size)?;
     let chunk_size = db_size(new.chunk_size)?;
     ChunkGeometry::new(new.expected_size, new.chunk_size)?;
 
     let inserted = sqlx::query(
         "INSERT INTO uploads \
-         (id, root_id, session_id, expected_size, hash, chunk_size, expires_at, state) \
+         (id, vault_id, session_id, expected_size, hash, chunk_size, expires_at, state) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
     .bind(new.id.as_bytes().as_slice())
-    .bind(new.root.as_bytes().as_slice())
+    .bind(new.vault.as_bytes().as_slice())
     .bind(new.session.as_bytes().as_slice())
     .bind(expected_size)
     .bind(new.hash.as_slice())
@@ -428,7 +428,7 @@ pub async fn upload_in_scope(
     id: UploadId,
 ) -> Result<Option<UploadRecord>, UploadError> {
     let row = sqlx::query_as::<_, UploadRow>(&format!(
-        "SELECT {UPLOAD_COLUMNS} FROM uploads u JOIN roots r ON r.id = u.root_id \
+        "SELECT {UPLOAD_COLUMNS} FROM uploads u JOIN vaults r ON r.id = u.vault_id \
          WHERE u.id = ?1 AND r.owner_id = ?2"
     ))
     .bind(id.as_bytes().as_slice())
@@ -439,20 +439,20 @@ pub async fn upload_in_scope(
     row.map(UploadRow::into_record).transpose()
 }
 
-/// 列出某个 Root 下尚未结束的上传会话（`open`/`complete`），按过期时间与身份排序。
+/// 列出某个 Vault 下尚未结束的上传会话（`open`/`complete`），按过期时间与身份排序。
 ///
 /// 这是重启后的续传入口：客户端凭会话身份与这里的真实已收块继续上传，而不是凭自己的位图。
 pub async fn unfinished_uploads(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<Vec<UploadRecord>, UploadError> {
-    require_root_owner(conn, owner, root).await?;
+    require_vault_owner(conn, owner, vault).await?;
     let rows = sqlx::query_as::<_, UploadRow>(&format!(
-        "SELECT {UPLOAD_COLUMNS} FROM uploads u WHERE u.root_id = ?1 \
+        "SELECT {UPLOAD_COLUMNS} FROM uploads u WHERE u.vault_id = ?1 \
          AND u.state IN ('open', 'complete') ORDER BY u.expires_at, u.id"
     ))
-    .bind(root.as_bytes().as_slice())
+    .bind(vault.as_bytes().as_slice())
     .fetch_all(conn)
     .await
     .map_err(UploadError::Db)?;
@@ -685,14 +685,14 @@ async fn part_in_upload(
     row.map(PartRow::into_part).transpose()
 }
 
-/// 确认 Root 属于调用方的 owner scope。
-async fn require_root_owner(
+/// 确认 Vault 属于调用方的 owner scope。
+async fn require_vault_owner(
     conn: &mut SqliteConnection,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
 ) -> Result<(), UploadError> {
-    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM roots WHERE id = ?1")
-        .bind(root.as_bytes().as_slice())
+    let found: Option<Vec<u8>> = sqlx::query_scalar("SELECT owner_id FROM vaults WHERE id = ?1")
+        .bind(vault.as_bytes().as_slice())
         .fetch_optional(conn)
         .await
         .map_err(UploadError::Db)?;
@@ -737,7 +737,7 @@ fn identity<T>(
 #[derive(sqlx::FromRow)]
 struct UploadRow {
     id: Vec<u8>,
-    root_id: Vec<u8>,
+    vault_id: Vec<u8>,
     session_id: Vec<u8>,
     expected_size: i64,
     hash: Vec<u8>,
@@ -756,7 +756,7 @@ impl UploadRow {
         }
         Ok(UploadRecord {
             id: identity(self.id, "id", UploadId::from_bytes)?,
-            root: identity(self.root_id, "root_id", RootId::from_bytes)?,
+            vault: identity(self.vault_id, "vault_id", VaultId::from_bytes)?,
             session: identity(self.session_id, "session_id", SessionId::from_bytes)?,
             expected_size: size_of(self.expected_size, "expected_size")?,
             hash: content_hash(self.hash)?,
@@ -835,15 +835,15 @@ mod tests {
 
     use crate::db::Database;
     use crate::test_support::{
-        TestDir, at, content_hash, open_database, register_root, seed_owner, session,
+        TestDir, at, content_hash, open_database, register_vault, seed_owner, session,
         upload as upload_id,
     };
 
     /// 一个 10 字节、块大小 4 的上传：块数与每块长度是 4、4、2。
-    fn ten_bytes(root: RootId, marker: u8) -> NewUpload {
+    fn ten_bytes(vault: VaultId, marker: u8) -> NewUpload {
         NewUpload {
             id: upload_id(marker),
-            root,
+            vault,
             session: session(0x31),
             expected_size: 10,
             hash: content_hash(0x10),
@@ -888,8 +888,8 @@ mod tests {
         let path = dir.database();
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        begin(&database, owner, &ten_bytes(root, 0x41)).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        begin(&database, owner, &ten_bytes(vault, 0x41)).await;
 
         record(&database, owner, upload_id(0x41), &part(0, 4, 0x01)).await;
         record(&database, owner, upload_id(0x41), &part(2, 2, 0x03)).await;
@@ -898,7 +898,7 @@ mod tests {
         // 重启：只靠数据库就能列出未结束的上传、已收块与缺块，不需要客户端位图。
         let database = Database::open(&path).await.expect("重启后打开库");
         let mut conn = database.pool().acquire().await.expect("取连接");
-        let open = unfinished_uploads(&mut conn, owner, root)
+        let open = unfinished_uploads(&mut conn, owner, vault)
             .await
             .expect("列出未结束上传");
         drop(conn);
@@ -938,8 +938,8 @@ mod tests {
         let dir = TestDir::new("uploads-part-identity");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        begin(&database, owner, &ten_bytes(root, 0x41)).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        begin(&database, owner, &ten_bytes(vault, 0x41)).await;
 
         let first = part(1, 4, 0x02);
         match record(&database, owner, upload_id(0x41), &first).await {
@@ -1011,8 +1011,8 @@ mod tests {
         let dir = TestDir::new("uploads-constraints");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        begin(&database, owner, &ten_bytes(root, 0x41)).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        begin(&database, owner, &ten_bytes(vault, 0x41)).await;
         record(&database, owner, upload_id(0x41), &part(0, 4, 0x01)).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
@@ -1046,11 +1046,11 @@ mod tests {
         );
         let zero_chunk = sqlx::query(
             "INSERT INTO uploads \
-             (id, root_id, session_id, expected_size, hash, chunk_size, expires_at, state) \
+             (id, vault_id, session_id, expected_size, hash, chunk_size, expires_at, state) \
              VALUES (?1, ?2, ?3, 10, ?4, 0, 1800, 'open')",
         )
         .bind(upload_id(0x47).as_bytes().as_slice())
-        .bind(root.as_bytes().as_slice())
+        .bind(vault.as_bytes().as_slice())
         .bind(session(0x31).as_bytes().as_slice())
         .bind(content_hash(0x10).as_slice())
         .execute(&mut *tx)
@@ -1088,8 +1088,8 @@ mod tests {
         let dir = TestDir::new("uploads-geometry");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        begin(&database, owner, &ten_bytes(root, 0x41)).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        begin(&database, owner, &ten_bytes(vault, 0x41)).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         for (new, expected) in [(part(3, 2, 0x04), "越界"), (part(1, 3, 0x05), "长度")] {
@@ -1133,7 +1133,7 @@ mod tests {
             id: upload_id(0x42),
             expected_size: 0,
             hash: content_hash(0x11),
-            ..ten_bytes(root, 0x42)
+            ..ten_bytes(vault, 0x42)
         };
         begin(&database, owner, &empty).await;
         let mut tx = database.begin_write().await.expect("开始写事务");
@@ -1150,8 +1150,8 @@ mod tests {
         let dir = TestDir::new("uploads-states");
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
-        begin(&database, owner, &ten_bytes(root, 0x41)).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
+        begin(&database, owner, &ten_bytes(vault, 0x41)).await;
         record(&database, owner, upload_id(0x41), &part(0, 4, 0x01)).await;
 
         // 缺块时不是 complete：部分内容不能上报为完成（design I05）。
@@ -1212,7 +1212,7 @@ mod tests {
         tx.rollback().await.expect("回滚");
 
         // 放弃是另一条终态路径，已收块保留为清理证据。
-        begin(&database, owner, &ten_bytes(root, 0x43)).await;
+        begin(&database, owner, &ten_bytes(vault, 0x43)).await;
         record(&database, owner, upload_id(0x43), &part(0, 4, 0x07)).await;
         let mut tx = database.begin_write().await.expect("开始写事务");
         let aborted = abort_upload(&mut tx, owner, upload_id(0x43))
@@ -1237,7 +1237,7 @@ mod tests {
         let database = open_database(&dir).await;
         let owner = seed_owner(&database, 0x11).await;
         let other = seed_owner(&database, 0x12).await;
-        let (root, _root_entry) = register_root(&database, owner, 0x21).await;
+        let (vault, _vault_entry) = register_vault(&database, owner, 0x21).await;
 
         let mut tx = database.begin_write().await.expect("开始写事务");
         // 块大小为 0 没有块几何。
@@ -1246,7 +1246,7 @@ mod tests {
             owner,
             &NewUpload {
                 chunk_size: 0,
-                ..ten_bytes(root, 0x44)
+                ..ten_bytes(vault, 0x44)
             },
         )
         .await
@@ -1258,7 +1258,7 @@ mod tests {
             owner,
             &NewUpload {
                 expected_size: u64::MAX,
-                ..ten_bytes(root, 0x45)
+                ..ten_bytes(vault, 0x45)
             },
         )
         .await
@@ -1269,18 +1269,18 @@ mod tests {
         );
         tx.rollback().await.expect("回滚");
 
-        begin(&database, owner, &ten_bytes(root, 0x41)).await;
+        begin(&database, owner, &ten_bytes(vault, 0x41)).await;
         let mut tx = database.begin_write().await.expect("开始写事务");
-        let error = begin_upload(&mut tx, owner, &ten_bytes(root, 0x41))
+        let error = begin_upload(&mut tx, owner, &ten_bytes(vault, 0x41))
             .await
             .expect_err("重复身份必须拒绝");
         assert!(
             matches!(error, UploadError::DuplicateId { id } if id == upload_id(0x41)),
             "实际错误 {error:?}"
         );
-        let error = begin_upload(&mut tx, other, &ten_bytes(root, 0x46))
+        let error = begin_upload(&mut tx, other, &ten_bytes(vault, 0x46))
             .await
-            .expect_err("别人的 Root 不能建上传");
+            .expect_err("别人的 Vault 不能建上传");
         assert!(matches!(error, UploadError::OutOfScope));
         let error = record_part(&mut tx, other, upload_id(0x41), &part(0, 4, 0x01))
             .await

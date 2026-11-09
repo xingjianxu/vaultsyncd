@@ -20,7 +20,7 @@ import uuid
 import zipfile
 from urllib.parse import urlparse
 
-ROOT = Path(__file__).resolve().parents[3]
+VAULT = Path(__file__).resolve().parents[3]
 HOST = os.environ.get("GUEST_HOST", "127.0.0.1")
 USER = os.environ.get("GUEST_USER", "Quickemu")
 PORT = os.environ.get("GUEST_PORT", "2222")
@@ -35,7 +35,7 @@ BASELINE = b"S109 committed dirty baseline"
 
 
 def checked(args, **kwargs):
-    result = subprocess.run([str(x) for x in args], cwd=ROOT, text=True,
+    result = subprocess.run([str(x) for x in args], cwd=VAULT, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
     if result.returncode:
         # Never echo subprocess output: fixtures/authentication can contain credentials.
@@ -109,7 +109,7 @@ def main():
     component = Path(sys.argv[1]).resolve()
     receipt, archive = verify_component(component)
     run_id = f"s109-{int(time.time())}-{uuid.uuid4().hex[:10]}"
-    run = ROOT / "artifacts/S109" / run_id
+    run = VAULT / "artifacts/S109" / run_id
     run.mkdir(parents=True)
     guest = f"C:/vaultsyncd-lab/{run_id}"
     results = guest + "/results"
@@ -179,17 +179,17 @@ def main():
 
     try:
         checked(["cargo", "build", "--locked", "-p", "vaultsyncd-server-tests", "--example", "e2e-native-server"])
-        helper = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "debug/examples/e2e-native-server"
+        helper = Path(os.environ.get("CARGO_TARGET_DIR", VAULT / "target")) / "debug/examples/e2e-native-server"
         scenario = {"server_seed": [{"path": "server-seed.txt", "content": "S109 actual server baseline"},
                                      {"path": "dirty.txt", "content": BASELINE.decode()}]}
         (run / "scenario.json").write_text(json.dumps(scenario))
         server = subprocess.Popen([str(helper), str(run / "host-fixture.json"), str(run / "stop"),
-                                   str(run / "scenario.json")], cwd=ROOT,
+                                   str(run / "scenario.json")], cwd=VAULT,
                                   stdout=(run / "server.log").open("w"), stderr=subprocess.STDOUT)
         wait("real Linux/btrfs fixture", lambda: (run / "host-fixture.json").exists() and server.poll() is None)
         fixture = json.loads((run / "host-fixture.json").read_text())
         work = Path(fixture["work_dir"]).resolve()
-        assert work.is_relative_to(ROOT / "target"), "stale helper compiled in another worktree; rebuild locally"
+        assert work.is_relative_to(VAULT / "target"), "stale helper compiled in another worktree; rebuild locally"
         assert checked(["stat", "-f", "-c", "%T", work]).strip() == "btrfs"
         backend = str(urlparse(fixture["url"]).port)
         checked(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj",
@@ -199,11 +199,11 @@ def main():
         (run / "server.ext").write_text("subjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
         checked(["openssl", "x509", "-req", "-days", "1", "-in", run / "server.csr", "-CA", run / "ca.pem",
                  "-CAkey", run / "ca.key", "-CAcreateserial", "-extfile", run / "server.ext", "-out", run / "server.pem"])
-        proxy = subprocess.Popen([sys.executable, str(ROOT / "tests/windows-integration/s100-upload-fault-proxy.py"), str(run), backend],
-                                 cwd=ROOT, stdout=(run / "proxy.log").open("w"), stderr=subprocess.STDOUT)
+        proxy = subprocess.Popen([sys.executable, str(VAULT / "tests/windows-integration/s100-upload-fault-proxy.py"), str(run), backend],
+                                 cwd=VAULT, stdout=(run / "proxy.log").open("w"), stderr=subprocess.STDOUT)
         proxy_port = wait("S100 upload fault proxy", lambda: int((run / "proxy-port").read_text()))
-        tls = subprocess.Popen([sys.executable, str(ROOT / "tests/platform/windows/s081-tls.py"), str(run), str(proxy_port)],
-                               cwd=ROOT, stdout=(run / "tls.log").open("w"), stderr=subprocess.STDOUT)
+        tls = subprocess.Popen([sys.executable, str(VAULT / "tests/platform/windows/s081-tls.py"), str(run), str(proxy_port)],
+                               cwd=VAULT, stdout=(run / "tls.log").open("w"), stderr=subprocess.STDOUT)
         tls_port = wait("S081 private TLS", lambda: int((run / "tls-port").read_text()))
         fixture.pop("issued", None)  # No server bearer tokens are needed in Windows.
         fixture.update({"url": "https://127.0.0.1:18775", "serverId": uuid.uuid4().hex,
@@ -218,7 +218,7 @@ def main():
         checked([*SCP, archive, script, run / "fixture.json", run / "hashes.json", run / "ca.pem", f"{USER}@{HOST}:{guest}/"])
         tunnel = subprocess.Popen(["ssh", "-p", PORT, *OPTIONS, "-o", "ExitOnForwardFailure=yes", "-N",
                                    "-R", f"127.0.0.1:18775:127.0.0.1:{tls_port}", f"{USER}@{HOST}"],
-                                  cwd=ROOT, stdout=(run / "tunnel.log").open("w"), stderr=subprocess.STDOUT)
+                                  cwd=VAULT, stdout=(run / "tunnel.log").open("w"), stderr=subprocess.STDOUT)
         time.sleep(1)
         assert tunnel.poll() is None, "isolated tunnel could not bind; no takeover attempted"
         prepared = True  # Cleanup is attempted even after a partially successful Prepare.
@@ -246,7 +246,7 @@ def main():
         assert cli["status"]["management"]["connection"]["server_id"] == fixture["serverId"]
         summary["gui_cli_same_instance"] = True
         summary["initial_status"] = cli["status"]
-        assert (work / "server-seed.txt").is_file(), "real server Root must stay the same instance"
+        assert (work / "server-seed.txt").is_file(), "real server Vault must stay the same instance"
         closed = action("close-gui")
         assert closed["gui_closed"] and closed["agent_pid"] == installed["agent_pid"]
         summary["background_server_sha256"] = server_hash(work, "after-gui-close.txt", BACKGROUND)
@@ -265,7 +265,7 @@ def main():
         assert restarted["status"]["snapshot_version"].split(":")[0] != dirty["status"]["snapshot_version"].split(":")[0]
         assert restarted["status"]["management"]["connection"]["authenticated"]
         assert restarted["status"]["management"]["connection"]["server_id"] == fixture["serverId"]
-        assert restarted["root_registered"] and restarted["boot"] == installed["boot"]
+        assert restarted["vault_registered"] and restarted["boot"] == installed["boot"]
         assert (work / "dirty.txt").read_bytes() == BASELINE
         (run / "block-uploads").unlink()
         action("resume")  # Safe stop intentionally persists PAUSED; no implicit resumption.
@@ -321,7 +321,7 @@ def main():
                          and not summary.get("host_cleanup_incomplete") and not summary.get("collection_error_kind"))
         checkpoint()
         print("ARTIFACTS", run, flush=True)
-        print("GUEST", guest, "(Root/state/cache/dirty/recovery retained; no OS reboot)", flush=True)
+        print("GUEST", guest, "(Vault/state/cache/dirty/recovery retained; no OS reboot)", flush=True)
     return 0 if summary["ok"] and summary.get("cleanup", {}).get("ok") and not summary.get("host_cleanup_incomplete") else 1
 
 

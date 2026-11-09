@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 use vaultsyncd_domain::{
-    ids::{BackupLeaseId, EntryId, RootId, TxId, UserId, VersionId},
+    ids::{BackupLeaseId, EntryId, TxId, UserId, VaultId, VersionId},
     version::{Revision, ServerEpoch, UtcTimestamp},
 };
 use vaultsyncd_platform_linux_server::{
@@ -32,7 +32,7 @@ use vaultsyncd_server_store::{
     db::Database,
     entries::{self, EntryKind, NewEntry},
     leases::{self, NewBackupLease, SnapshotSeqMap},
-    roots::{self, NewRoot},
+    vaults::{self, NewVault},
     versions::{self, NewObject, NewVersion, VersionOrigin},
 };
 
@@ -50,7 +50,7 @@ struct Lab {
     db: Database,
     config: Config,
     owner: UserId,
-    root: RootId,
+    vault: VaultId,
     parent: EntryId,
     base: PathBuf,
 }
@@ -65,7 +65,7 @@ impl Lab {
             listen: "127.0.0.1:0".parse()?,
             database: state.join("server.sqlite"),
             state_dir: state,
-            allowed_root_bases: None,
+            allowed_vault_bases: None,
             log: LogConfig {
                 level: tracing::Level::WARN,
                 format: LogFormat::Text,
@@ -73,22 +73,22 @@ impl Lab {
         };
         let db = Database::open(&config.database).await?;
         let owner = UserId::from_bytes([1; 16]);
-        let root = RootId::from_bytes([2; 16]);
+        let vault = VaultId::from_bytes([2; 16]);
         let parent = EntryId::from_bytes([3; 16]);
         let mut tx = db.begin_write().await?;
         sqlx::query("INSERT INTO users VALUES(?,'backup-owner','test-only','active')")
             .bind(owner.as_bytes().as_slice())
             .execute(&mut *tx)
             .await?;
-        roots::insert_root(
+        vaults::insert_vault(
             &mut tx,
-            &NewRoot {
-                id: root,
+            &NewVault {
+                id: vault,
                 entry: parent,
                 owner,
                 absolute_path: base.join("work").display().to_string(),
                 volume_identity: vec![1],
-                root_file_identity: vec![2],
+                vault_file_identity: vec![2],
                 epoch: ServerEpoch::ZERO,
             },
         )
@@ -105,7 +105,7 @@ impl Lab {
             db,
             config,
             owner,
-            root,
+            vault,
             parent,
             base,
         })
@@ -122,7 +122,7 @@ impl Lab {
             &mut tx,
             self.owner,
             &NewObject {
-                root: self.root,
+                vault: self.vault,
                 hash,
                 size: bytes.len() as u64,
                 storage_path: ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
@@ -150,7 +150,7 @@ impl Lab {
             self.owner,
             &NewEntry {
                 id: entry,
-                root: self.root,
+                vault: self.vault,
                 parent: self.parent,
                 name: "current.txt".into(),
                 name_key: "current.txt".into(),
@@ -165,7 +165,7 @@ impl Lab {
             let batch = changes::append_change(
                 &mut tx,
                 self.owner,
-                self.root,
+                self.vault,
                 TxId::from_bytes([n; 16]),
                 "[{}]",
                 now(),
@@ -176,7 +176,7 @@ impl Lab {
                 self.owner,
                 &NewVersion {
                     id: VersionId::from_bytes([n; 16]),
-                    root: self.root,
+                    vault: self.vault,
                     entry,
                     object_hash: hash,
                     size: 17,
@@ -199,7 +199,7 @@ impl Lab {
             self.owner,
             &NewEntry {
                 id: deleted,
-                root: self.root,
+                vault: self.vault,
                 parent: self.parent,
                 name: "deleted.txt".into(),
                 name_key: "deleted.txt".into(),
@@ -215,11 +215,11 @@ impl Lab {
             self.owner,
             &NewVersion {
                 id: VersionId::from_bytes([11; 16]),
-                root: self.root,
+                vault: self.vault,
                 entry: deleted,
                 object_hash: trash,
                 size: 17,
-                created_seq: vaultsyncd_domain::version::RootSeq::new(2)?,
+                created_seq: vaultsyncd_domain::version::VaultSeq::new(2)?,
                 origin: VersionOrigin::Client,
                 at: now(),
             },
@@ -234,7 +234,7 @@ impl Lab {
             .await?;
         sqlx::query("INSERT INTO trash_entries VALUES(?,?,?,'deleted.txt','file',1,?,?,?)")
             .bind(deleted.as_bytes().as_slice())
-            .bind(self.root.as_bytes().as_slice())
+            .bind(self.vault.as_bytes().as_slice())
             .bind(self.parent.as_bytes().as_slice())
             .bind([11u8; 16].as_slice())
             .bind(deleted_at)
@@ -242,7 +242,7 @@ impl Lab {
             .execute(&mut *tx)
             .await?;
         sqlx::query("INSERT INTO tombstones VALUES(?,?,'deleted.txt','file',?,?)")
-            .bind(self.root.as_bytes().as_slice())
+            .bind(self.vault.as_bytes().as_slice())
             .bind(deleted.as_bytes().as_slice())
             .bind(deleted_at)
             .bind(expiry)
@@ -320,7 +320,7 @@ async fn continuous_write_and_lease(base: &Path) -> Result<()> {
     assert!(writes.load(Ordering::Acquire) > 1);
     assert_eq!(result.manifest["state"], "prepared");
     assert_eq!(result.manifest["scope"], "confirmed_logical_state");
-    assert_eq!(result.manifest["roots"][0]["seq"], "2");
+    assert_eq!(result.manifest["vaults"][0]["seq"], "2");
     assert!(fs::write(result.snapshot.join("forbidden"), b"must fail").is_err());
     for o in result.manifest["objects"].as_array().unwrap() {
         let file = fs::File::open(result.snapshot.join(o["archive_path"].as_str().unwrap()))?;
@@ -355,7 +355,7 @@ async fn continuous_write_and_lease(base: &Path) -> Result<()> {
         .await?;
     assert_eq!(count, 1);
     assert_eq!(result.manifest["database_contents"]["trash_entries"], "1");
-    let seq: i64 = sqlx::query_scalar("SELECT seq FROM roots")
+    let seq: i64 = sqlx::query_scalar("SELECT seq FROM vaults")
         .fetch_one(&mut db)
         .await?;
     assert_eq!(seq, 2);
@@ -370,11 +370,11 @@ async fn continuous_write_and_lease(base: &Path) -> Result<()> {
     assert!(lab.object_path(old).exists());
     assert!(lab.object_path(orphan).exists());
     assert_eq!(
-        fs::read(
-            result
-                .snapshot
-                .join(format!("objects/{}/{}", lab.root.to_hex(), hex(&current)))
-        )?,
+        fs::read(result.snapshot.join(format!(
+            "objects/{}/{}",
+            lab.vault.to_hex(),
+            hex(&current)
+        )))?,
         b"confirmed-current"
     );
     assert_eq!(
@@ -458,8 +458,8 @@ async fn crash_child(state: &Path) -> Result<()> {
         &NewBackupLease {
             id,
             snapshot_seq_map: SnapshotSeqMap::new(vec![(
-                RootId::from_bytes([2; 16]),
-                vaultsyncd_domain::version::RootSeq::new(2)?,
+                VaultId::from_bytes([2; 16]),
+                vaultsyncd_domain::version::VaultSeq::new(2)?,
             )])?,
             expires_at: at(now().as_unix_seconds() + 86400),
             manifest_ref: format!("backups/{}/snapshot/manifest.json", id.to_hex()),
@@ -527,8 +527,8 @@ async fn unfinished_operation(base: &Path) -> Result<()> {
     let lab = Lab::new(base, "pending").await?;
     let (old, current) = lab.seed().await?;
     let mut tx = lab.db.begin_write().await?;
-    sqlx::query("INSERT INTO operations(root_id,device_id,op_id,request_digest,state) VALUES(?,?,?,?,'pending')")
-        .bind(lab.root.as_bytes().as_slice()).bind([31u8;16].as_slice()).bind([32u8;16].as_slice()).bind([33u8;32].as_slice()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO operations(vault_id,device_id,op_id,request_digest,state) VALUES(?,?,?,?,'pending')")
+        .bind(lab.vault.as_bytes().as_slice()).bind([31u8;16].as_slice()).bind([32u8;16].as_slice()).bind([33u8;32].as_slice()).execute(&mut *tx).await?;
     tx.commit().await?;
     assert!(
         backup::prepare(

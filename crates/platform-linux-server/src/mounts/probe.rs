@@ -184,7 +184,7 @@ pub struct ScanPolicy {
 
 impl Default for ScanPolicy {
     fn default() -> Self {
-        // 原型默认值：单 Root 两万条目、32 层深。超过即报“未完成”，由部署侧显式调大，
+        // 原型默认值：单 Vault 两万条目、32 层深。超过即报“未完成”，由部署侧显式调大，
         // 不静默当作完整扫描。
         Self {
             max_entries: 20_000,
@@ -617,12 +617,12 @@ fn resolve_mount<'a>(
     Ok((entry, MountIdSource::DeviceAndPathPrefix))
 }
 
-/// 遍历根目录，找嵌套子卷与 NOCOW 目录（只用于 btrfs Root）。
+/// 遍历根目录，找嵌套子卷与 NOCOW 目录（只用于 btrfs Vault）。
 ///
 /// 只遍历普通目录：符号链接一律不跟随（design §16.1），进入嵌套子卷前就记录并停止下降，
 /// 条目数、深度达到 [`ScanPolicy`] 上限时返回“未完成”而不假装扫完。
 ///
-/// `root_subvolume_id` 由调用方从 Root 的探测事实传入：子卷内的普通目录继承父目录的子卷 ID，
+/// `vault_subvolume_id` 由调用方从 Vault 的探测事实传入：子卷内的普通目录继承父目录的子卷 ID，
 /// 只有 inode 为 [`SUBVOLUME_ROOT_INODE`] 的候选才需要单独解析子卷 ID，解析不出来就报错，
 /// 不把“无法确认”当成“同子卷”。
 ///
@@ -630,13 +630,13 @@ fn resolve_mount<'a>(
 ///
 /// 目录读取、目录项元数据、候选子卷 ID 或目录 NOCOW 标志读取失败时返回 [`ProbeError`]；
 /// 权限问题不会被当成“没有嵌套子卷”。
-pub fn scan_root(
-    root: &Path,
-    root_subvolume_id: u64,
+pub fn scan_vault(
+    vault: &Path,
+    vault_subvolume_id: u64,
     policy: &ScanPolicy,
 ) -> Result<ScanReport, ProbeError> {
-    let root = std::fs::canonicalize(root).map_err(|source| ProbeError::Canonicalize {
-        path: root.to_path_buf(),
+    let vault = std::fs::canonicalize(vault).map_err(|source| ProbeError::Canonicalize {
+        path: vault.to_path_buf(),
         source,
     })?;
 
@@ -650,9 +650,9 @@ pub fn scan_root(
 
     while let Some((relative_dir, depth)) = pending.pop() {
         let directory = if relative_dir.as_os_str().is_empty() {
-            root.clone()
+            vault.clone()
         } else {
-            root.join(&relative_dir)
+            vault.join(&relative_dir)
         };
         let read_dir = std::fs::read_dir(&directory).map_err(|source| ProbeError::ReadDir {
             path: directory.clone(),
@@ -681,7 +681,7 @@ pub fn scan_root(
             if !metadata.is_dir() {
                 continue;
             }
-            let relative_path = paths::strip_prefix(&entry_path, &root).unwrap_or_else(|| {
+            let relative_path = paths::strip_prefix(&entry_path, &vault).unwrap_or_else(|| {
                 // canonicalize 之后仍出现非后代路径只可能是目录在遍历中被替换；按绝对路径报。
                 entry_path.clone()
             });
@@ -703,7 +703,7 @@ pub fn scan_root(
                         }),
                     });
                 };
-                if subvolume_id != root_subvolume_id {
+                if subvolume_id != vault_subvolume_id {
                     report.subvolumes.push(NestedSubvolume {
                         relative_path,
                         subvolume_id,

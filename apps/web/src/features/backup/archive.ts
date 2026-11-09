@@ -4,7 +4,7 @@ const MAX_MANIFEST = 256 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const hex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2,"0")).join("");
 type Item = { path: string; size: bigint; hash: string };
-export type ArchiveIndex = { id: string; server: string; hash: string; items: Item[]; roots: { id: string; seq: string }[] };
+export type ArchiveIndex = { id: string; server: string; hash: string; items: Item[]; vaults: { id: string; seq: string }[] };
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("清单对象无效");
   return value as Record<string,unknown>;
@@ -34,10 +34,10 @@ export function indexManifest(bytes: Uint8Array, expected: string, id: string): 
     !Number.isSafeInteger(manifest.schema_version) || Number(manifest.schema_version)<1) throw new Error("清单范围或身份不符");
   identity(id,32);
   const server=identity(text(manifest,"server_id"),32);
-  const roots=rows(manifest,"roots").map(root=>({id:identity(text(root,"root_id"),32),seq:decimal(root,"seq").toString()}));
-  const ids=new Set(roots.map(root=>root.id));if(ids.size!==roots.length) throw new Error("重复Root");
+  const vaults=rows(manifest,"vaults").map(vault=>({id:identity(text(vault,"vault_id"),32),seq:decimal(vault,"seq").toString()}));
+  const ids=new Set(vaults.map(vault=>vault.id));if(ids.size!==vaults.length) throw new Error("重复Vault");
   const counts=object(manifest.database_contents);
-  for(const table of ["users","roots","entries","versions","trash_entries","tombstones","changes","operations"]) decimal(counts,table);
+  for(const table of ["users","vaults","entries","versions","trash_entries","tombstones","changes","operations"]) decimal(counts,table);
   const items: Item[]=[];const paths=new Set<string>(),storagePaths=new Set<string>();
   function add(path: string, item: Record<string,unknown>) {
     if(paths.has(path)) throw new Error("重复归档路径");
@@ -49,15 +49,15 @@ export function indexManifest(bytes: Uint8Array, expected: string, id: string): 
   }
   if(paths.size!==2)throw new Error("缺少数据库或配置");
   for(const item of rows(manifest,"objects")) {
-    const root=identity(text(item,"root_id"),32),hash=identity(text(item,"sha256"),64);
-    const path="objects/"+root+"/"+hash;
+    const vault=identity(text(item,"vault_id"),32),hash=identity(text(item,"sha256"),64);
+    const path="objects/"+vault+"/"+hash;
     const legacy="objects/"+hash.slice(0,2)+"/"+hash;
     const storage=text(item,"storage_path");
-    if(!ids.has(root) || item.archive_path!==path || (storage!==legacy && storage!=="roots/"+root+"/"+legacy) || storagePaths.has(storage))throw new Error("对象路径越界或重复");
+    if(!ids.has(vault) || item.archive_path!==path || (storage!==legacy && storage!=="roots/"+vault+"/"+legacy) || storagePaths.has(storage))throw new Error("对象路径越界或重复");
     storagePaths.add(storage);add(path,item);
   }
   items.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
-  return {id,server,hash:expected,items,roots};
+  return {id,server,hash:expected,items,vaults};
 }
 
 /** Each take is bounded; only the separately capped manifest is materialized. */

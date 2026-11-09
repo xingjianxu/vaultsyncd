@@ -9,7 +9,7 @@ try {
  const { BrowserAuth } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
  let reads=0, posts=0, original;
  const client = new BrowserAuth({base_url:"https://test.invalid",request_id:()=>"restore-test",fetch:async(url,init)=>{
-   if(url.endsWith("/snapshots"))return Response.json({snapshot_id:"s",root_id:"root",server_epoch:"1",high_water_seq:"0",entry_count:"1",expires_at:"2000000000"});
+   if(url.endsWith("/snapshots"))return Response.json({snapshot_id:"s",vault_id:"vault",server_epoch:"1",high_water_seq:"0",entry_count:"1",expires_at:"2000000000"});
    if(url.endsWith("/operations")){posts++;original=JSON.parse(init.body);throw new Error("response lost");}
    if(url.includes("/operations/")){
      reads++;
@@ -19,11 +19,11 @@ try {
    if(url.endsWith("/recovery"))return Response.json({items:[{id:"entry",entry_id:"entry",name:"actual-restored.txt",revision:"2"}]});
    throw new Error(url);
  }});
- const session = new RestoreSession("owner","root");
+ const session = new RestoreSession("owner","vault");
  await assert.rejects(session.begin(client,{entry_id:"entry",revision:"1"},false),/response lost/);
  const saved=session.read();
  assert.equal(saved.request.op_id,original.op_id);
- const pending=await new RestoreSession("owner","root").resume(client);
+ const pending=await new RestoreSession("owner","vault").resume(client);
  assert.equal(pending.result.state,"pending"); assert.equal(pending.result.entry_id,undefined);
  await assert.rejects(session.begin(client,{entry_id:"entry",revision:"1"},false),/核对/);
  const committed=await session.resume(client);

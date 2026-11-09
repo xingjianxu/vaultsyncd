@@ -13,7 +13,7 @@
     "allow-agent-set-connection",
     "allow-agent-login",
     "allow-agent-logout",
-    "allow-agent-list-roots",
+    "allow-agent-list-vaults",
     "allow-select-local-directory",
     "allow-agent-create-binding",
     "allow-agent-pause-binding",
