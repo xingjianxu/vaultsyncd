@@ -1,10 +1,8 @@
 # 实施进度
 
-本轮：**S159 in_progress**，Vault 服务器路径直达文件浏览器、当前已提交文件容量列；实现、Rust/Web/真实浏览器验收通过，准备本机部署。[交接](tasks/S159.md)。S158 发行现场保持，下一 ready 无。
+当前：**S159 done**，Vault 服务器路径直达文件浏览器、新增当前已提交文件容量列，已部署本机并通过生产 Chromium 验收；[交接](tasks/S159.md)。运行/开机generation268、源`911449b`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确主机配置`2cfc2bf`已合main；并行全系统升级由其自身任务完成（基线`3461249`），本卡保留升级后的锁和修复。原4张blocked门禁保持。
 
-当前：**S158 done**（[v0.1.1 GitHub 预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)，同源`9aa091e`的Linux x64/Windows x64归档及8附件远端哈希通过；[交接](tasks/S158.md)）。S157 服务端保持：运行/开机generation266、源`5a71062`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确运行配置`f7d1997`（main整合`a02b61e`），未激活依赖锁升级保持；其他4张blocked门禁保持。
-
-最近部署：[S157](tasks/S157.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证共用界面、Vault工具栏/两个弹窗、历史、认证/自动连接、明暗320/1440及全量资产/CSP/cookie。正式身份、5工作文件/4对象与10服务/3应用保持。完整备份及异盘副本verified，旧generation265和GC roots保留；未实际回退生产。路径与恢复边界仍见[S151](tasks/S151.md)，此前应用部署见[S153](tasks/S153.md)。
+最近部署：S159 pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；线上容量1,698,002字节→1.6 MB，鼠标/Enter/刷新/返回、明暗320/1440、全量资产/CSP/cookie通过。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持；完整备份和异盘副本verified，旧system/boot GC roots保留，未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不包含本次Web改动；详见[S158](tasks/S158.md)。
 
 恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -29,6 +27,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S159 | Vault路径深链与当前文件容量；Rust/Web/两轮真实浏览器及generation268生产验收通过 | 实现911449b、整合18048b9；合并清理见交接 | [S159](tasks/S159.md) |
 | S158 | 首个GitHub预发布v0.1.1；同源双平台归档、Linux私有loader及8附件远端哈希通过；修复打包变量与SQLite/zlib依赖 | 源9aa091e已推送；交接f274601已ff合master，发行树/分支清理；并发同编号树保留并提示续接重新编号 | [S158](tasks/S158.md) |
 | S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |
 | S152 | 两端共用 Mantine；双端构建/Web九套/桌面布局及Windows五套原生通过，服务端已S157上线；客户端发行另验 | 实现bfdf14e、整合8c1d1d8已ff合master；任务树/分支已清理 | [S152](tasks/S152.md) |

@@ -396,3 +396,10 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 生产真实Chromium的TLS1.3、全量资产、匿名门禁、登录/自动连接/客户端页/退出、文件版本号与摘要、刷新/键盘/Escape、明暗320/1440、CSP/cookie全通过。ServerId、schema/FK、Vault路径/历史、4工作文件和3对象摘要及10既有服务/3应用保持；未写生产同步内容。完整备份`/data/vaultsyncd-temp/S152-deploy-20261109T103922Z/backups/predeploy.vsbk`及异盘`artifacts/S152/backups/`副本/收据均verified。原始脚本/结果/日志/截图、部署result及GC roots在该run的`evidence/`。本卡因并行S152桌面任务而改编号S153，既有运行目录名保留。
 
 回退入口generation264 `/nix/store/qdd7vqh5k24dwlrxwzcgsn6mp9f75k0y-nixos-system-wks-lab-26.11.20261102.7356cc7`，可按S113先`sudo nixos-rebuild test --store-path <该旧路径>`并确认HTTPS/IPC健康，再switch并同步主机pin至c20199e的旧源。此次无schema迁移，保留S151的vaults路径；若要恢复备份仍须按备份协议恢复到空目录并更换epoch。未实际回退、生产恢复或Windows/规模复验；原首发门禁保持。交接与清理见[S153](../../agent/tasks/S153.md)。
+
+
+## S159 Vault 路径与容量版部署（generation268，2026-11-09）
+
+当前服务源911449b、schema18，服务器路径可点击打开对应Vault根目录，“文件容量”统计当前已提交文件的逻辑总大小。运行/开机system为pwcp1j07c6mx6ln9a0z6n8whabhds0jk，主机配置2cfc2bf（main）纯求值复现；公网TLS/资产/浏览器、HTTPS/IPC及正式数据保持均通过。本轮期间其他主机任务已完成全系统更新和修复，当前基线3461249取代S153/S157的旧锁复现入口。
+
+完整备份、日志、截图、部署result及旧system/boot GC roots永久保留在`/data/vaultsyncd-temp/S159-20261109/`，异盘校验备份在`artifacts/S159/backups/`。本次无schema迁移；回退先按S113对旧system `/nix/store/8mjzl3ql0chn39mba7cv2529rf0h0n3n-nixos-system-wks-lab-26.11.20261109.5e6fbb3`执行test并核对HTTPS/IPC，再switch并同步主机pin至3461249。不要退回旧全系统锁而撤销另一任务的主机升级；若恢复备份仍需按备份协议恢复到空目录并换epoch。本次未实际回退，详细证据、验证及清理见[S159](../../agent/tasks/S159.md)。
