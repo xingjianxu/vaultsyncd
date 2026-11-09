@@ -1,5 +1,7 @@
 # 实施进度
 
+本轮：**S165 in_progress**，按用户确认发布 v0.1.2 预发布、非 Latest；版本同步及 bundle 9/9、上传契约 23/23、ZIP 8/8、xtask 来源围栏、fmt 与冻结 pnpm 锁检查通过，待同源双平台构建和真实发布。[交接](tasks/S165.md)。原四张 blocked 保持；本轮没有其他 ready 卡。
+
 当前：**S164 done**，123 个历史 `/data/vs-*` 目录已压缩归档到 `/data/vaultsyncd-dev/S164-archive-20261109/`，39,360 文件摘要/元数据完整解包验证通过后清理源树和验证副本；旧顶层无残留，两个旧脚本改用 dev 根，服务/VM/HTTP/HTTPS健康保持，[交接](tasks/S164.md)。所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。**下一 ready：无**，原4张blocked保持。客户端托盘自动更新已由S162验收、尚未发布新版；在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
 
 最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不含S159/S160 Web变化。

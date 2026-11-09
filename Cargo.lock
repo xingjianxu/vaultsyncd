@@ -5069,7 +5069,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vaultsyncd-admin"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rand_core 0.6.4",
  "rpassword",
@@ -5084,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rand_core 0.6.4",
  "serde",
@@ -5106,7 +5106,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-agent-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5122,7 +5122,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rand_core 0.6.4",
  "reqwest 0.12.28",
@@ -5137,7 +5137,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-client-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde_json",
  "sha2",
@@ -5148,7 +5148,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rand_core 0.6.4",
  "serde",
@@ -5164,11 +5164,11 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-domain"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "vaultsyncd-e2e"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rcgen",
  "reqwest 0.12.28",
@@ -5188,14 +5188,14 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-fs-common"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ignore",
 ]
 
 [[package]]
 name = "vaultsyncd-http-client"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "httpdate",
  "rcgen",
@@ -5211,7 +5211,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-local-ipc"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5219,7 +5219,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-planner"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "vaultsyncd-domain",
  "vaultsyncd-fs-common",
@@ -5227,7 +5227,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-platform-linux-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "tokio",
  "vaultsyncd-domain",
@@ -5236,7 +5236,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-platform-windows"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5250,7 +5250,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5259,7 +5259,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-release-client"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "reqwest 0.12.28",
  "semver",
@@ -5271,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "futures-util",
@@ -5297,7 +5297,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-server-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "argon2",
  "rand_core 0.6.4",
@@ -5311,7 +5311,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-server-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "fs2",
  "rusqlite",
@@ -5327,7 +5327,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-server-tests"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rand_core 0.6.4",
  "reqwest 0.12.28",
@@ -5346,7 +5346,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-transfer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "sha2",
  "tokio",
@@ -5354,7 +5354,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-windows-tests"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rand_core 0.6.4",
  "serde_json",
@@ -5369,7 +5369,7 @@ dependencies = [
 
 [[package]]
 name = "vaultsyncd-xtask"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
