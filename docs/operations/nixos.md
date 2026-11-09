@@ -39,7 +39,7 @@ builtins.getFlake "git+file:///wrd/prj/vaultsyncd?rev=3640f3a3f72e09ba1302ffd194
 
 状态和用户Vault分开，Vault由用户拥有并逐项ACL授权，既有资料目录没有被递归chown/chmod。服务没有sudo/CAP_SYS_ADMIN；备份准备区的子卷、只读快照和删除均由服务UID通过正常btrfs权限完成。Vault内不允许嵌套挂载/子卷，原身份/CoW/扫描准入仍由产品执行。
 
-首次初始化在服务离线、空状态上，以服务账号执行包内 `vaultsyncd-admin init --state-dir <state>`，密码经匿名stdin管道输入；没有密码参数、Nix secret选项或默认密码。本卡随机生成的密码只在受限运行时文件与初始化/登录进程内存出现；没有写进store、项目Git或证据日志。该文件保存的是**初始**凭据，之后改密需由运维同步管理；服务启动不读取它、不自动重置owner。不要将其复制到artifacts或Git。
+首次初始化在服务离线、空状态上，以服务账号执行包内 `vaultsyncd-init`（等价于 `vaultsyncd-admin init --state-dir <state> --login <adminUser>`，`adminUser` 默认等于服务用户 `xingjian`），密码经匿名stdin管道输入；没有密码参数、Nix secret选项或默认密码。本卡随机生成的密码只在受限运行时文件与初始化/登录进程内存出现；没有写进store、项目Git或证据日志。该文件保存的是**初始**凭据，之后改密需由运维同步管理；服务启动不读取它、不自动重置owner。不要将其复制到artifacts或Git。
 
 ## 已执行的发布与验收顺序
 

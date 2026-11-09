@@ -81,13 +81,8 @@ impl ContentContext {
         }
     }
 
-    async fn objects(
-        &self,
-        vault: VaultId,
-        digests: &[ContentDigest],
-    ) -> Result<ObjectLayout, sqlx::Error> {
-        crate::object_layout::for_digests(self.auth.database(), &self.state_dir, vault, digests)
-            .await
+    fn objects(&self, vault: VaultId) -> ObjectLayout {
+        crate::object_layout::layout(&self.state_dir, vault)
     }
 }
 
@@ -125,17 +120,8 @@ pub async fn finalize(
             .and_then(|hash| <[u8; 32]>::try_from(hash).ok())
             .map(|hash| vec![ContentDigest::from_bytes(hash)])
             .unwrap_or_default();
-    let layout = match context.objects(vault_id, &upload_digest).await {
-        Ok(layout) => layout,
-        Err(error) => {
-            warn!(vault_id = %vault_id, error = %error, "对象布局不可用");
-            return internal_error(
-                &caller.request_id,
-                "对象布局不可用",
-                Some(vault_id.to_string()),
-            );
-        }
-    };
+    let _ = &upload_digest;
+    let layout = context.objects(vault_id);
     let mut assembler = FsAssembler {
         state_dir: context.state_dir.clone(),
         layout,
@@ -233,20 +219,7 @@ pub async fn download(
     };
 
     crate::test_faults::checkpoint("download_open");
-    let layout = match context.objects(vault_id, &[handle.content.digest]).await {
-        Ok(layout) => layout,
-        Err(error) => {
-            if let Err(failure) = content::finish_download(&mut leases, handle).await {
-                warn!(error = %failure, "布局失败后解除下载租约失败");
-            }
-            warn!(vault_id = %vault_id, error = %error, "对象布局不可用");
-            return internal_error(
-                &caller.request_id,
-                "对象布局不可用",
-                Some(vault_id.to_string()),
-            );
-        }
-    };
+    let layout = context.objects(vault_id);
     let mut port = FsObjectPort;
     let read = content::read_download(&mut port, &layout, &handle);
     // 租约解除失败不改判已读出的字节（那些字节已经是客户端的事），但必须如实记录。

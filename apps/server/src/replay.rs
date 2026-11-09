@@ -192,9 +192,7 @@ async fn replay(
                     .await
                     .map_err(text)?;
             }
-            let layout = crate::object_layout::for_vault(db, state, binding.vault)
-                .await
-                .map_err(text)?;
+            let layout = crate::object_layout::layout(state, binding.vault);
             let mut target = WorkTreeTarget::new(handle, layout);
             match classify_put(&put, target.observe(&put.target_path)) {
                 RecoveryDecision::Redo => {
@@ -349,9 +347,7 @@ async fn replay_trash_restore(
     let mut namespace = WorkTreeNamespace::new(Arc::clone(&handle));
     let mut target = WorkTreeTarget::new(
         Arc::clone(&handle),
-        crate::object_layout::for_vault(db, state, binding.vault)
-            .await
-            .map_err(text)?,
+        crate::object_layout::layout(state, binding.vault),
     );
     let mut log = SqlIntentLog::new(db.clone(), owner).bound(Binding::linked(binding.key()));
     let mut store =

@@ -19,7 +19,7 @@ nix build .#container-deps --no-link --json
 
 将发行目录完整安装至 `/opt/vaultsyncd`，创建专用无登录用户/组 vaultsyncd（示例容器 UID/GID 8721，普通系统应先排除冲突），显式建立并授权 state/Vault。state 必须由服务用户私有持有，模式 0700。将发行目录 `share/vaultsyncd/vaultsyncd.toml` 安装至 `/etc/vaultsyncd/vaultsyncd.toml`，按实际白名单和回环监听修改。将 `share/vaultsyncd/vaultsyncd.service` 安装至 `/etc/systemd/system/vaultsyncd.service`，在修改路径时同步修改 `ReadWritePaths`/`RequiresMountsFor`。先 `systemd-analyze verify`，再 daemon-reload。
 
-离线 owner 初始化由服务 UID 执行 `vaultsyncd-admin init --state-dir /var/lib/vaultsyncd`，密码从交互 stdin 输入；不得写在 Nix、命令参数、环境变量、Git 或日志。确认离线配置后启动 unit，核验 health/capabilities、管理 socket 同 UID 准入、样本 Vault/内容/初始采集和备份，再决定 enable。服务无 sudo/CAP_SYS_ADMIN；btrfs 只读快照和删除由普通 UID 在已明确授予的卷内完成。管理 socket 仅本机私有目录，不暴露到反代。
+离线 owner 初始化由服务 UID 执行 `vaultsyncd-admin init --state-dir /var/lib/vaultsyncd --login <服务用户名>`（未给 `--login` 时默认取当前运行用户），密码从交互 stdin 输入；不得写在 Nix、命令参数、环境变量、Git 或日志。确认离线配置后启动 unit，核验 health/capabilities、管理 socket 同 UID 准入、样本 Vault/内容/初始采集和备份，再决定 enable。服务无 sudo/CAP_SYS_ADMIN；btrfs 只读快照和删除由普通 UID 在已明确授予的卷内完成。管理 socket 仅本机私有目录，不暴露到反代。
 
 停止使用 SIGTERM，等待120秒宽限后处理异常。升级前保留旧完整发行目录和清单、先按备份流程验证可恢复性；停止旧服务后原子切换完整代码目录，保留数据及配置，启动并核验 server_id/Vault ID/seq/健康。恢复数据遵守 [离线恢复流程](recovery.md)，不能在线直接改数据库。
 

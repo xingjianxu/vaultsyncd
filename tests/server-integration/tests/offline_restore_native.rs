@@ -265,7 +265,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     assert!(!work.join("trash").exists());
     let object = state
         .join("objects")
-        .join(ObjectLayout::scoped_relative_object_path(
+        .join(ObjectLayout::relative_object_path(
             vaultsyncd_domain::ids::VaultId::from_hex(&vault).unwrap(),
             &ContentDigest::from_bytes(digest(b"current committed bytes")),
         ));

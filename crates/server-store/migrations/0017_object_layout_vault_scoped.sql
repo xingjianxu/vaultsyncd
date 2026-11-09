@@ -1,0 +1,11 @@
+-- 0017_object_layout_vault_scoped.sql — 对象区物理布局改为对象区根下按 Vault 分区的语义围栏（S143、ADR-022）。
+--
+-- 新布局：`<state>/objects/<vault_id>/<摘要前 2 位>/<64 位摘要>`；暂存仍是
+-- `<state>/objects/staging/<名字>`。旧全局布局 `objects/<aa>/<hash>` 与 ADR-020 的
+-- `roots/<vault_id>/objects/<aa>/<hash>` 都不再是规范路径，读取/备份/恢复时一律失败关闭，
+-- 不再有只读兼容。
+--
+-- 本次部署按用户决定清空内部状态并用新规则重建（保留 Vault 工作目录内容、重新采集），
+-- 因此本迁移不改写行数据，只提升 schema 版本到 17 并阻止旧二进制继续写：
+-- target <= 16 的程序在返回可写句柄前拒绝启动；回退使用迁移前整套备份。
+SELECT 1;

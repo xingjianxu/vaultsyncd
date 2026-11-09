@@ -12,7 +12,6 @@
 //!
 //! 失败一律不返回可提交的结果，并报告暂存副本是否已清理；没有“默认成功”的路径。
 
-use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -159,110 +158,72 @@ impl std::error::Error for InvalidStagingName {}
 
 /// 内部对象区布局。
 ///
-/// 已发布对象在 `<vault>/objects/<前 2 位十六进制>/<64 位十六进制>`；未发布的暂存副本在
-/// `<vault>/staging/<名字>`。两者都在对象区（内部状态目录）内，与 Vault 的可变工作文件不同
-/// 目录、不同 inode（design §11.1）。
+/// 已发布对象在 `<objects>/<VaultId 32 位 hex>/<摘要前 2 位 hex>/<64 位摘要 hex>`；未发布的
+/// 暂存副本在 `<objects>/staging/<名字>`。两者都在对象区（内部状态目录）内，与 Vault 的可变工作
+/// 文件不同目录、不同 inode（design §11.1）。32 位身份与 2 位 fanout 形状不同，不会混淆层级。
 #[derive(Clone, Debug)]
 pub struct ObjectLayout {
-    vault: PathBuf,
-    scope: Option<VaultId>,
-    legacy: HashSet<ContentDigest>,
+    root: PathBuf,
+    vault: VaultId,
 }
 
 impl ObjectLayout {
-    /// 以对象区根目录建立**未分区**布局：任意摘要都解析成历史全局路径。
-    ///
-    /// 只用于旧布局测试、迁移工具与独立对象区示例；服务端新写必须用
-    /// [`ObjectLayout::for_vault`]，否则不同 Vault 会共用同一物理对象。
+    /// 某个 Vault 的对象布局；对象区根由调用方给出（服务端为 `<state>/objects`）。
     #[must_use]
-    pub fn new(vault: impl Into<PathBuf>) -> Self {
-        ObjectLayout {
-            vault: vault.into(),
-            scope: None,
-            legacy: HashSet::new(),
-        }
-    }
-
-    /// Vault 隔离布局；旧路径仅对 `legacy` 中显式声明的摘要开放，不探测磁盘回退。
-    ///
-    /// **调用方义务**：`legacy` 必须覆盖本次布局将触碰的每个摘要。漏声明不会回退到旧文件，
-    /// 而是静默按 Vault 分区的新路径解析：读会失败关闭，发布则先造出重复物理对象，再由
-    /// `objects` 的唯一登记约束报 `ObjectConflict`（503）。因此热路径应按摘要解析
-    /// （`for_digests`），整树路径才一次读取该 Vault 的全部旧登记。
-    #[must_use]
-    pub fn for_vault(
-        vault: impl Into<PathBuf>,
-        scope: VaultId,
-        legacy: impl IntoIterator<Item = ContentDigest>,
-    ) -> Self {
+    pub fn for_vault(root: impl Into<PathBuf>, vault: VaultId) -> Self {
         Self {
-            vault: vault.into(),
-            scope: Some(scope),
-            legacy: legacy.into_iter().collect(),
+            root: root.into(),
+            vault,
         }
     }
 
-    /// 对象区内该 Vault 的规范位置；已有旧记录保持原身份，新对象按 Vault 分区。
+    /// 该 Vault 内一条内容的规范相对路径，同时也是 `objects.storage_path` 的登记值。
+    ///
+    /// 其它 Vault 的同一摘要得到不同路径，因此物理对象天然按 Vault 隔离。
     #[must_use]
     pub fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
-        match self.scope {
-            Some(scope) if !self.legacy.contains(digest) => {
-                Self::scoped_relative_object_path(scope, digest)
-            }
-            _ => Self::relative_object_path(digest),
-        }
+        Self::relative_object_path(self.vault, digest)
     }
 
-    /// 对象区里按 Vault 分区的物理前缀。
-    ///
-    /// 保持 S136/ADR-020 已落地的 `roots/` 目录名：它是磁盘上的数据布局，不是产品术语；
-    /// 改名要搬迁全部已发布对象，按 ADR-021 不在纯重命名范围内做。
-    pub const SCOPED_PREFIX: &'static str = "roots";
-
-    /// 新对象的全局唯一登记路径，同时也是对象区内的实际物理路径。
+    /// 规范相对路径：`<VaultId>/<aa>/<hash>`（相对对象区根）。
     #[must_use]
-    pub fn scoped_relative_object_path(scope: VaultId, digest: &ContentDigest) -> PathBuf {
-        Path::new(Self::SCOPED_PREFIX)
-            .join(scope.to_hex())
-            .join(Self::relative_object_path(digest))
+    pub fn relative_object_path(vault: VaultId, digest: &ContentDigest) -> PathBuf {
+        PathBuf::from(vault.to_hex())
+            .join(digest.fanout())
+            .join(digest.to_hex())
     }
 
-    /// 只接纳精确匹配摘要及 Vault 的新路径，或历史规范路径；拒绝任意路径和跨 Vault 前缀。
+    /// 只接纳精确匹配该 Vault 与摘要的规范路径；拒绝任意路径、大小写与跨 Vault 前缀。
     #[must_use]
-    pub fn valid_storage_path(scope: VaultId, digest: &ContentDigest, path: &str) -> bool {
-        Self::relative_object_path(digest).to_str() == Some(path)
-            || Self::scoped_relative_object_path(scope, digest).to_str() == Some(path)
+    pub fn valid_storage_path(vault: VaultId, digest: &ContentDigest, path: &str) -> bool {
+        Self::relative_object_path(vault, digest).to_str() == Some(path)
     }
 
-    /// 对象区根目录。
+    /// 对象区根目录（不是 Vault 的工作目录）。
     #[must_use]
-    pub fn vault(&self) -> &Path {
-        &self.vault
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
-    /// 暂存目录（`<vault>/staging`）。
+    /// 这份布局所属的 Vault。
+    #[must_use]
+    pub fn vault(&self) -> VaultId {
+        self.vault
+    }
+
+    /// 暂存目录（`<objects>/staging`）。
     #[must_use]
     pub fn staging_dir(&self) -> PathBuf {
-        self.vault.join("staging")
+        self.root.join("staging")
     }
 
     /// 已发布对象的绝对路径。
     #[must_use]
     pub fn object_path(&self, digest: &ContentDigest) -> PathBuf {
-        self.vault.join(self.storage_path(digest))
+        self.root.join(self.storage_path(digest))
     }
 
-    /// 历史全局布局的相对路径（`objects/<aa>/<hex>`，不含对象区根）。
-    ///
-    /// 只用于已登记旧对象的兼容读取；新对象写 [`ObjectLayout::scoped_relative_object_path`]。
-    #[must_use]
-    pub fn relative_object_path(digest: &ContentDigest) -> PathBuf {
-        Path::new("objects")
-            .join(digest.fanout())
-            .join(digest.to_hex())
-    }
-
-    /// 暂存副本路径（`<vault>/staging/<名字>`）。
+    /// 暂存副本路径（`<objects>/staging/<名字>`）。
     ///
     /// # Errors
     ///
@@ -320,85 +281,63 @@ mod tests {
     }
 
     #[test]
-    fn vault_layout_only_reuses_explicitly_registered_legacy_digests() {
+    fn same_digest_has_distinct_paths_per_vault() {
         let a = VaultId::from_bytes([1; 16]);
         let b = VaultId::from_bytes([2; 16]);
         let digest = ContentDigest::from_hex(SAMPLE_HEX).expect("摘要");
-        let old = ObjectLayout::for_vault("/state", a, [digest]);
-        let new_a = ObjectLayout::for_vault("/state", a, []);
-        let new_b = ObjectLayout::for_vault("/state", b, []);
+        let a_layout = ObjectLayout::for_vault("/state/objects", a);
+        let b_layout = ObjectLayout::for_vault("/state/objects", b);
         assert_eq!(
-            old.storage_path(&digest),
-            ObjectLayout::relative_object_path(&digest)
+            a_layout.storage_path(&digest),
+            Path::new(&a.to_hex()).join("0a").join(SAMPLE_HEX)
         );
-        assert_ne!(new_a.object_path(&digest), new_b.object_path(&digest));
-        assert_ne!(old.object_path(&digest), new_b.object_path(&digest));
+        assert_ne!(a_layout.object_path(&digest), b_layout.object_path(&digest));
         assert!(ObjectLayout::valid_storage_path(
             a,
             &digest,
-            old.storage_path(&digest).to_str().unwrap()
-        ));
-        assert!(ObjectLayout::valid_storage_path(
-            a,
-            &digest,
-            new_a.storage_path(&digest).to_str().unwrap()
+            a_layout.storage_path(&digest).to_str().unwrap()
         ));
         assert!(!ObjectLayout::valid_storage_path(
             a,
             &digest,
-            new_b.storage_path(&digest).to_str().unwrap()
+            b_layout.storage_path(&digest).to_str().unwrap()
         ));
         assert!(!ObjectLayout::valid_storage_path(
             a,
             &digest,
-            &format!("../{}", old.storage_path(&digest).display())
+            &format!("../{}", a_layout.storage_path(&digest).display())
         ));
         assert!(!ObjectLayout::valid_storage_path(
             a,
             &digest,
-            &format!(
-                "roots/{}/objects/../objects/{}/{}",
-                a.to_hex(),
-                digest.fanout(),
-                digest
-            )
+            &format!("objects/{}/0a/{SAMPLE_HEX}", a.to_hex())
         ));
-    }
-
-    /// 漏声明旧登记时不会猜回旧文件：同一 Vault 也解析成 Vault 分区路径。
-    /// 读会失败关闭；写会先造重复物理对象，再由登记唯一约束报冲突（见 store 用例）。
-    #[test]
-    fn undeclared_legacy_digest_resolves_to_scoped_path_even_for_same_vault() {
-        let vault = VaultId::from_bytes([1; 16]);
-        let digest = ContentDigest::from_hex(SAMPLE_HEX).expect("摘要");
-        let declared = ObjectLayout::for_vault("/state", vault, [digest]);
-        let omitted = ObjectLayout::for_vault("/state", vault, []);
-        assert_eq!(
-            declared.storage_path(&digest),
-            ObjectLayout::relative_object_path(&digest)
-        );
-        assert_eq!(
-            omitted.storage_path(&digest),
-            ObjectLayout::scoped_relative_object_path(vault, &digest)
-        );
-        assert_ne!(declared.object_path(&digest), omitted.object_path(&digest));
-        assert_ne!(
-            omitted.object_path(&digest),
-            Path::new("/state").join(ObjectLayout::relative_object_path(&digest))
-        );
+        assert!(!ObjectLayout::valid_storage_path(
+            a,
+            &digest,
+            &a_layout
+                .storage_path(&digest)
+                .to_str()
+                .unwrap()
+                .to_uppercase()
+        ));
     }
 
     #[test]
     fn layout_puts_objects_and_staging_in_separate_subtrees() {
+        let vault = VaultId::from_bytes([3; 16]);
         let digest = ContentDigest::from_hex(SAMPLE_HEX).expect("合法摘要");
-        let layout = ObjectLayout::new("/srv/vaultsyncd/objects");
+        let layout = ObjectLayout::for_vault("/srv/vaultsyncd/objects", vault);
         assert_eq!(
-            ObjectLayout::relative_object_path(&digest),
-            Path::new("objects").join("0a").join(SAMPLE_HEX)
+            ObjectLayout::relative_object_path(vault, &digest),
+            Path::new(&vault.to_hex()).join("0a").join(SAMPLE_HEX)
         );
         assert_eq!(
             layout.object_path(&digest),
-            Path::new("/srv/vaultsyncd/objects/objects/0a").join(SAMPLE_HEX)
+            Path::new("/srv/vaultsyncd/objects")
+                .join(vault.to_hex())
+                .join("0a")
+                .join(SAMPLE_HEX)
         );
         assert_eq!(
             layout.staging_path("cas-123"),

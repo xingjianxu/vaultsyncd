@@ -26,6 +26,7 @@ all = { level = "deny", priority = -1 }
 # 库本身不依赖 server-core（平台适配层与核心用例不互相依赖，design §5.5）：只有
 # `examples/object-capture.rs` 这个本地组装入口用核心的端口与规则跑 S033 验收。
 [dev-dependencies]
+vaultsyncd-domain = { path = "../domain" }
 vaultsyncd-server-core = { path = "../server-core" }
 
 [dependencies]

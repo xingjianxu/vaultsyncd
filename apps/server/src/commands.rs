@@ -1767,16 +1767,10 @@ pub async fn verify_delete_scope(
                     ));
                 }
                 if image.len() == 1 {
-                    let layout = crate::object_layout::for_digest(
-                        database,
-                        state_dir,
-                        vault,
-                        vaultsyncd_server_core::objects::ContentDigest::from_bytes(
-                            facts.object_hash,
-                        ),
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    let layout = crate::object_layout::layout(state_dir, vault);
+                    let _ = vaultsyncd_server_core::objects::ContentDigest::from_bytes(
+                        facts.object_hash,
+                    );
                     let mut target =
                         crate::executor::WorkTreeTarget::new(Arc::clone(handle), layout);
                     let observed = vaultsyncd_server_core::ports::target::TargetPort::observe(

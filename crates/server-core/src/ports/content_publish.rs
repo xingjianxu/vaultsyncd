@@ -132,13 +132,10 @@ impl std::error::Error for PublishFailure {}
 /// 返回的 [`PublishedContent`] 是**实测**事实：拼装出的字节数、它的 SHA-256、对象区内的规范相对
 /// 路径，以及对象是否本次新建。核心拿它与上传会话的总大小/总哈希比较，不符即丢弃（不提交、不引用）。
 pub trait ContentPublisher {
-    /// 重放 finalize 时沿用发布布局（包括已登记旧路径），不重新猜测存储位置。
+    /// 该 Vault 内这条内容的规范相对路径；重放 finalize 时用它回报已发布位置。
     ///
-    /// 默认实现只适用于全局旧布局的测试/旧适配器；按 Vault 隔离写入的适配器**必须**覆写，
-    /// 否则重放响应会把已登记旧路径报成新的 Vault 分区路径，登记随即冲突。
-    fn storage_path(&self, digest: &ContentDigest) -> PathBuf {
-        crate::objects::ObjectLayout::relative_object_path(digest)
-    }
+    /// 没有默认实现：对象路径必须由拥有 Vault 授权的适配器给出，核心不猜全局路径。
+    fn storage_path(&self, digest: &ContentDigest) -> PathBuf;
 
     /// 按索引升序拼装 `parts` 并发布。
     ///

@@ -102,7 +102,7 @@ async fn main() {
         } else {
             let mut target = WorkTreeTarget::new(
                 executor.vault_handle(owner, vault).await.unwrap(),
-                executor.objects(vault, &[content.digest]).await.unwrap(),
+                executor.objects(vault),
             );
             publish_put(&mut log, &mut target, at, &new).await.unwrap();
         }

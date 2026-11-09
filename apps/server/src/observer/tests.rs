@@ -242,7 +242,7 @@ impl Env {
             blobs: LinuxObjectPort::new(vault, &lab.objects),
             store: MemStore::default(),
             gate: VaultCommitGate::new(),
-            layout: ObjectLayout::new(&lab.objects),
+            layout: ObjectLayout::for_vault(&lab.objects, VaultId::from_bytes(marker_id(0x11))),
             observer: ExternalObserver::new(
                 vault_id,
                 StabilityWindow::from_millis(WINDOW_MS).expect("合法"),

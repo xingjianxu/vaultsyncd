@@ -5207,6 +5207,7 @@ name = "vaultsyncd-platform-linux-server"
 version = "0.1.1"
 dependencies = [
  "tokio",
+ "vaultsyncd-domain",
  "vaultsyncd-server-core",
 ]
 

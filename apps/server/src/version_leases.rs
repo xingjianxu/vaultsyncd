@@ -105,26 +105,8 @@ async fn execute(
         digest: *digest.as_bytes(),
         size,
     };
-    // 布局解析只是本 Vault 的登记读取，放在租约事务之前：解析失败时租约尚未改变，
-    // 响应与持久事实一致。对象可读性仍在提交后核对，避免 GC 在检查后删掉未受保护的对象。
-    let layout = match crate::object_layout::for_digest(
-        c.auth.database(),
-        &c.state_dir,
-        vault,
-        digest,
-    )
-    .await
-    {
-        Ok(layout) => layout,
-        Err(error) => {
-            tracing::warn!(vault_id=%vault, error=%error, "固定版本租约对象布局不可读");
-            return internal_error(
-                &caller.request_id,
-                "固定版本对象登记不可读；不得释放本地副本",
-                Some(vault.to_string()),
-            );
-        }
-    };
+    // 布局是纯计算；对象可读性仍在租约事务之后核对，避免 GC 在检查后删掉未受保护的对象。
+    let layout = crate::object_layout::layout(&c.state_dir, vault);
     let mut tx = match c.auth.database().begin_write().await {
         Ok(tx) => tx,
         Err(_) => {

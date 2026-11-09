@@ -38,6 +38,7 @@ impl Drop for TestDir {
 
 fn admin_init(state_dir: &Path, stdin: &str, extra: &[&str]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_vaultsyncd-admin"))
+        .env("VAULTSYNCD_ADMIN_LOGIN", "owner")
         .arg("init")
         .arg("--state-dir")
         .arg(state_dir)

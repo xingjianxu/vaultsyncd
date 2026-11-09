@@ -51,9 +51,9 @@ export function indexManifest(bytes: Uint8Array, expected: string, id: string): 
   for(const item of rows(manifest,"objects")) {
     const vault=identity(text(item,"vault_id"),32),hash=identity(text(item,"sha256"),64);
     const path="objects/"+vault+"/"+hash;
-    const legacy="objects/"+hash.slice(0,2)+"/"+hash;
+    const canonical=vault+"/"+hash.slice(0,2)+"/"+hash;
     const storage=text(item,"storage_path");
-    if(!ids.has(vault) || item.archive_path!==path || (storage!==legacy && storage!=="roots/"+vault+"/"+legacy) || storagePaths.has(storage))throw new Error("对象路径越界或重复");
+    if(!ids.has(vault) || item.archive_path!==path || storage!==canonical || storagePaths.has(storage))throw new Error("对象路径越界或重复");
     storagePaths.add(storage);add(path,item);
   }
   items.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);

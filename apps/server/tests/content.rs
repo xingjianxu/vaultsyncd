@@ -58,9 +58,9 @@ impl Fixture {
         self.path.join("state")
     }
 
-    /// 对象区布局：与 `ContentContext` 用的是同一个根（`state_dir/objects`）。
-    fn objects(&self) -> ObjectLayout {
-        ObjectLayout::new(self.state_dir().join("objects"))
+    /// 某个 Vault 的对象区布局：与 `ContentContext` 用的是同一个根（`state_dir/objects`）。
+    fn objects(&self, vault: VaultId) -> ObjectLayout {
+        ObjectLayout::for_vault(self.state_dir().join("objects"), vault)
     }
 }
 
@@ -153,15 +153,15 @@ async fn seed_other_vault(fixture: &Fixture) -> Seeds {
     seeds
 }
 
-/// 兼容性种子必须同时有 legacy 字节与该 Vault 的持久登记；不是磁盘探测回退。
-async fn seed_legacy_object(fixture: &Fixture, seeds: &Seeds, bytes: &[u8]) -> String {
+/// 在规范路径写入对象字节并登记，返回该 Vault 的规范相对路径。
+async fn seed_object(fixture: &Fixture, seeds: &Seeds, bytes: &[u8]) -> String {
     let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
-    let storage_path = ObjectLayout::relative_object_path(&digest)
+    let storage_path = ObjectLayout::relative_object_path(seeds.vault, &digest)
         .display()
         .to_string();
-    let path = fixture.objects().vault().join(&storage_path);
+    let path = fixture.objects(seeds.vault).root().join(&storage_path);
     std::fs::create_dir_all(path.parent().expect("对象父目录")).expect("建对象目录");
-    std::fs::write(path, bytes).expect("写 legacy 对象");
+    std::fs::write(path, bytes).expect("写对象字节");
     let database = Database::open(fixture.database())
         .await
         .expect("打开测试库");
@@ -178,8 +178,8 @@ async fn seed_legacy_object(fixture: &Fixture, seeds: &Seeds, bytes: &[u8]) -> S
         },
     )
     .await
-    .expect("登记 legacy 对象");
-    tx.commit().await.expect("提交 legacy 对象");
+    .expect("登记对象");
+    tx.commit().await.expect("提交对象");
     database.close().await;
     storage_path
 }
@@ -439,7 +439,7 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
     let moment = UtcTimestamp::from_unix_seconds(at).expect("时间戳");
 
     // 对象区：按内容地址写两份对象，路径来自 `ObjectLayout` 的规范相对路径。
-    let layout = fixture.objects();
+    let layout = fixture.objects(seeds.vault);
     for (digest, bytes) in [(&old_digest, &old_bytes), (&current_digest, &current_bytes)] {
         let path = layout.object_path(digest);
         std::fs::create_dir_all(path.parent().expect("对象父目录")).expect("建对象目录");
@@ -481,7 +481,7 @@ async fn seed_versions(fixture: &Fixture, seeds: &Seeds, at: i64) -> SeededVersi
                 vault: seeds.vault,
                 hash: *digest.as_bytes(),
                 size: bytes.len() as u64,
-                storage_path: ObjectLayout::relative_object_path(digest)
+                storage_path: ObjectLayout::relative_object_path(seeds.vault, digest)
                     .display()
                     .to_string(),
                 verified_at: moment,
@@ -591,7 +591,7 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     assert!(!finalized.replayed);
     assert_eq!(
         finalized.storage_path,
-        ObjectLayout::scoped_relative_object_path(
+        ObjectLayout::relative_object_path(
             seeds.vault,
             &ContentDigest::from_hex(&sha256(content)).expect("内容地址")
         )
@@ -600,7 +600,10 @@ async fn finalize_publishes_content_and_only_returns_a_reference() {
     );
 
     // 对象字节真的落到了对象区，且内容与会话声明一致。
-    let object = fixture.objects().vault().join(&finalized.storage_path);
+    let object = fixture
+        .objects(seeds.vault)
+        .root()
+        .join(&finalized.storage_path);
     assert_eq!(
         std::fs::read(&object).expect("读已发布对象"),
         content.to_vec(),
@@ -639,7 +642,7 @@ async fn same_digest_in_two_vaults_has_independent_publication_reuse_and_replay(
         (first.vault, first_session, &owner),
         (second.vault, second_session, &other),
     ] {
-        let expected = ObjectLayout::scoped_relative_object_path(vault, &digest)
+        let expected = ObjectLayout::relative_object_path(vault, &digest)
             .display()
             .to_string();
         let reply = finalize(&app, vault, &session.upload_id, token).await;
@@ -650,7 +653,7 @@ async fn same_digest_in_two_vaults_has_independent_publication_reuse_and_replay(
         assert_eq!(published.reuse, ObjectReuse::FreshlyPublished);
         assert!(!published.replayed);
         assert_eq!(
-            std::fs::read(fixture.objects().vault().join(&expected)).unwrap(),
+            std::fs::read(fixture.objects(vault).root().join(&expected)).unwrap(),
             bytes
         );
 
@@ -670,10 +673,12 @@ async fn same_digest_in_two_vaults_has_independent_publication_reuse_and_replay(
         paths.push(expected);
     }
     assert_ne!(paths[0], paths[1]);
-    assert!(
-        !fixture.objects().object_path(&digest).exists(),
-        "新对象不得写入全局 legacy 路径"
-    );
+    for (vault, path) in [(first.vault, &paths[0]), (second.vault, &paths[1])] {
+        assert!(
+            fixture.objects(vault).root().join(path).is_file(),
+            "每个 Vault 的同一摘要各有一条自己的规范路径"
+        );
+    }
     let database = Database::open(fixture.database()).await.unwrap();
     let rows: Vec<(Vec<u8>, String)> = sqlx::query_as(
         "SELECT vault_id, storage_path FROM objects WHERE hash = ? ORDER BY vault_id",
@@ -693,11 +698,11 @@ async fn same_digest_in_two_vaults_has_independent_publication_reuse_and_replay(
 }
 
 #[tokio::test]
-async fn registered_legacy_object_keeps_its_path_for_new_upload_and_replay() {
-    let fixture = Fixture::new("legacy-finalize-replay");
+async fn registered_object_is_reused_at_its_canonical_path() {
+    let fixture = Fixture::new("finalize-reuse");
     let seeds = seed_accounts(&fixture).await;
-    let bytes = b"registered legacy object";
-    let legacy = seed_legacy_object(&fixture, &seeds, bytes).await;
+    let bytes = b"registered object";
+    let registered = seed_object(&fixture, &seeds, bytes).await;
     let app = open_app(&fixture).await;
     let token = login(&app, "owner").await;
     let session = upload_content(&app, seeds.vault, &token, bytes, 8, &sha256(bytes)).await;
@@ -705,58 +710,46 @@ async fn registered_legacy_object_keeps_its_path_for_new_upload_and_replay() {
         let reply = finalize(&app, seeds.vault, &session.upload_id, &token).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         let finalized: FinalizedContent = parse(&reply, "FinalizedContent");
-        assert_eq!(finalized.storage_path, legacy);
+        assert_eq!(finalized.storage_path, registered);
         assert_eq!(finalized.reuse, ObjectReuse::ExistingVerified);
         assert_eq!(finalized.replayed, replayed);
     }
     assert_eq!(
-        std::fs::read(fixture.objects().vault().join(&legacy)).unwrap(),
+        std::fs::read(fixture.objects(seeds.vault).root().join(&registered)).unwrap(),
         bytes
-    );
-    let digest = ContentDigest::from_bytes(hash::digest_of(bytes));
-    assert!(
-        !fixture
-            .objects()
-            .vault()
-            .join(ObjectLayout::scoped_relative_object_path(
-                seeds.vault,
-                &digest
-            ))
-            .exists(),
-        "不得为已登记 legacy 对象改写路径"
     );
 }
 
 #[tokio::test]
-async fn another_vaults_legacy_object_is_not_reused_for_new_publication() {
-    let fixture = Fixture::new("legacy-cross-vault");
+async fn another_vaults_object_is_not_reused_for_new_publication() {
+    let fixture = Fixture::new("cross-vault-reuse");
     let first = seed_accounts(&fixture).await;
     let second = seed_other_vault(&fixture).await;
-    let bytes = b"legacy object belonging to a different vault";
-    let legacy = seed_legacy_object(&fixture, &first, bytes).await;
+    let bytes = b"object belonging to a different vault";
+    let first_path = seed_object(&fixture, &first, bytes).await;
     let app = open_app(&fixture).await;
     let token = login(&app, "intruder").await;
     let session = upload_content(&app, second.vault, &token, bytes, 8, &sha256(bytes)).await;
-    let expected = ObjectLayout::scoped_relative_object_path(
+    let expected = ObjectLayout::relative_object_path(
         second.vault,
         &ContentDigest::from_bytes(hash::digest_of(bytes)),
     )
     .display()
     .to_string();
+    assert_ne!(expected, first_path);
     for replayed in [false, true] {
         let reply = finalize(&app, second.vault, &session.upload_id, &token).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         let finalized: FinalizedContent = parse(&reply, "FinalizedContent");
         assert_eq!(finalized.storage_path, expected);
-        assert_ne!(finalized.storage_path, legacy);
         assert_eq!(finalized.replayed, replayed);
         if !replayed {
             assert_eq!(finalized.reuse, ObjectReuse::FreshlyPublished);
         }
     }
-    for path in [&legacy, &expected] {
+    for (vault, path) in [(first.vault, &first_path), (second.vault, &expected)] {
         assert_eq!(
-            std::fs::read(fixture.objects().vault().join(path)).unwrap(),
+            std::fs::read(fixture.objects(vault).root().join(path)).unwrap(),
             bytes
         );
     }
@@ -766,7 +759,9 @@ async fn another_vaults_legacy_object_is_not_reused_for_new_publication() {
             .fetch_all(database.pool())
             .await
             .unwrap();
-    assert_eq!(rows, vec![legacy, expected]);
+    assert_eq!(rows.len(), 2);
+    assert!(rows.contains(&first_path));
+    assert!(rows.contains(&expected));
     database.close().await;
 }
 
@@ -814,7 +809,11 @@ async fn finalize_with_missing_parts_is_400_and_keeps_the_session_open() {
     let after = status(&app, seeds.vault, &session.upload_id, &token).await;
     assert_eq!(after.upload.state, UploadState::Open);
     assert!(
-        !fixture.objects().vault().join("vaults").exists(),
+        !fixture
+            .objects(seeds.vault)
+            .root()
+            .join(seeds.vault.to_hex())
+            .exists(),
         "缺块时不得发布任何对象"
     );
 }

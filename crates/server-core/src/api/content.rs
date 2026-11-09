@@ -757,6 +757,10 @@ mod tests {
     }
 
     impl ContentPublisher for FakePublisher {
+        fn storage_path(&self, digest: &ContentDigest) -> std::path::PathBuf {
+            ObjectLayout::relative_object_path(test_vault(), digest)
+        }
+
         fn publish_parts(
             &mut self,
             _upload: UploadId,
@@ -903,11 +907,16 @@ mod tests {
         UtcTimestamp::from_unix_seconds(seconds).expect("时间")
     }
 
+    /// 测试用 Vault 身份：只用于对象布局，不写库。
+    fn test_vault() -> VaultId {
+        VaultId::from_bytes([0x11; 16])
+    }
+
     fn published(bytes: &[u8]) -> PublishedContent {
         PublishedContent {
             digest: digest(bytes),
             size: bytes.len() as u64,
-            storage_path: ObjectLayout::relative_object_path(&digest(bytes))
+            storage_path: ObjectLayout::relative_object_path(test_vault(), &digest(bytes))
                 .display()
                 .to_string(),
             reuse: ReuseOutcome::FreshlyPublished,
@@ -1308,7 +1317,7 @@ mod tests {
         assert_eq!(leases.acquired[0].purpose, ContentLeasePurpose::Download);
         assert_eq!(leases.acquired[0].digest, digest(old_bytes));
 
-        let layout = ObjectLayout::new("/objects");
+        let layout = ObjectLayout::for_vault("/objects", test_vault());
         let mut port = FakeBlobPort {
             slice: Some(StoredSlice {
                 data: old_bytes.to_vec(),
@@ -1383,7 +1392,7 @@ mod tests {
         .expect("打开区间下载");
         assert_eq!(handle.slice.content_range(10), "bytes 2-5/10");
 
-        let layout = ObjectLayout::new("/objects");
+        let layout = ObjectLayout::for_vault("/objects", test_vault());
         let mut port = FakeBlobPort {
             slice: Some(StoredSlice {
                 data: bytes[2..6].to_vec(),
@@ -1433,7 +1442,7 @@ mod tests {
                 expires_at: time(1_700_000_200),
             },
         };
-        let layout = ObjectLayout::new("/objects");
+        let layout = ObjectLayout::for_vault("/objects", test_vault());
         let mut good = FakeBlobPort {
             slice: Some(StoredSlice {
                 data: bytes.to_vec(),

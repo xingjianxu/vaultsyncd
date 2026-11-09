@@ -70,7 +70,7 @@ impl FollowEnv {
             blobs: LinuxObjectPort::new(vault, &lab.objects),
             store: MemStore::default(),
             gate: VaultCommitGate::new(),
-            layout: ObjectLayout::new(&lab.objects),
+            layout: ObjectLayout::for_vault(&lab.objects, vault_id),
             driver,
             watcher,
             now_ms: 1_000,

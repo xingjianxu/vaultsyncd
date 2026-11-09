@@ -125,9 +125,12 @@ impl Lab {
                 vault: self.vault,
                 hash,
                 size: bytes.len() as u64,
-                storage_path: ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
-                    .display()
-                    .to_string(),
+                storage_path: ObjectLayout::relative_object_path(
+                    self.vault,
+                    &ContentDigest::from_bytes(hash),
+                )
+                .display()
+                .to_string(),
                 verified_at: now(),
             },
         )
@@ -136,7 +139,7 @@ impl Lab {
         Ok(hash)
     }
     fn object_path(&self, hash: [u8; 32]) -> PathBuf {
-        ObjectLayout::new(self.config.state_dir.join("objects"))
+        ObjectLayout::for_vault(self.config.state_dir.join("objects"), self.vault)
             .object_path(&ContentDigest::from_bytes(hash))
     }
     async fn seed(&self) -> Result<([u8; 32], [u8; 32])> {

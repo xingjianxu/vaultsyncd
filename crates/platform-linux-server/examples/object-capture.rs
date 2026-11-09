@@ -8,9 +8,12 @@
 //! 用法（输出为稳定 `key=value` 行，验收脚本按行断言）：
 //!
 //! ```text
-//! object-capture capture --objects <对象区目录> --source <工作文件> --staging <名字> \
-//!     --digest <64 位十六进制> --bytes <长度>
-//! object-capture read --objects <对象区目录> --digest <64 位十六进制> --bytes <长度>
+//! object-capture capture --objects <对象区目录> [--vault <32 位十六进制>] --source <工作文件> \
+//!     --staging <名字> --digest <64 位十六进制> --bytes <长度>
+//! object-capture read --objects <对象区目录> [--vault <32 位十六进制>] --digest <64 位十六进制> \
+//!     --bytes <长度>
+//!
+//! `--vault` 缺省为全零身份：对象落在 `<objects>/<vault hex>/<aa>/<hash>`。
 //! ```
 //!
 //! 退出码：0 成功；1 被拒绝（错误码写在 `code=` 行）；2 用法错误。
@@ -21,6 +24,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use vaultsyncd_domain::ids::VaultId;
 use vaultsyncd_platform_linux_server::files::clone::{StageRequest, stage_copy};
 use vaultsyncd_platform_linux_server::files::{
     self, CloneMethod as PlatformCloneMethod, CopyFallback as PlatformCopyFallback, FileIdentity,
@@ -50,8 +54,17 @@ fn main() -> ExitCode {
             source,
             staging,
             expected,
-        } => capture(&mut port, &parsed.objects, source, staging, expected),
-        Action::Read { digest, bytes } => read(&mut port, &parsed.objects, digest, bytes),
+        } => capture(
+            &mut port,
+            &parsed.objects,
+            parsed.vault,
+            source,
+            staging,
+            expected,
+        ),
+        Action::Read { digest, bytes } => {
+            read(&mut port, &parsed.objects, parsed.vault, digest, bytes)
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -62,6 +75,7 @@ fn main() -> ExitCode {
 struct Parsed {
     action: Action,
     objects: PathBuf,
+    vault: VaultId,
 }
 
 enum Action {
@@ -78,6 +92,7 @@ enum Action {
 
 fn parse(command: &str, args: Vec<String>) -> Result<Parsed, String> {
     let mut objects: Option<PathBuf> = None;
+    let mut vault = VaultId::from_bytes([0; 16]);
     let mut source: Option<PathBuf> = None;
     let mut staging: Option<String> = None;
     let mut digest: Option<ContentDigest> = None;
@@ -87,6 +102,9 @@ fn parse(command: &str, args: Vec<String>) -> Result<Parsed, String> {
         let value = iter.next().ok_or_else(|| format!("参数 {flag} 缺少取值"))?;
         match flag.as_str() {
             "--objects" => objects = Some(PathBuf::from(value)),
+            "--vault" => {
+                vault = VaultId::from_hex(&value).map_err(|error| error.to_string())?;
+            }
             "--source" => source = Some(PathBuf::from(value)),
             "--staging" => staging = Some(value),
             "--digest" => {
@@ -108,17 +126,22 @@ fn parse(command: &str, args: Vec<String>) -> Result<Parsed, String> {
         "read" => Action::Read { digest, bytes },
         other => return Err(format!("未知子命令 {other}（可用：capture、read）")),
     };
-    Ok(Parsed { action, objects })
+    Ok(Parsed {
+        action,
+        objects,
+        vault,
+    })
 }
 
 fn capture(
     port: &mut LinuxObjectPort,
     objects: &Path,
+    vault: VaultId,
     source: PathBuf,
     staging: String,
     expected: ExpectedContent,
 ) -> Result<(), String> {
-    let layout = ObjectLayout::new(objects);
+    let layout = ObjectLayout::for_vault(objects, vault);
     let request = CaptureRequest {
         source,
         staging_name: staging,
@@ -149,10 +172,11 @@ fn capture(
 fn read(
     port: &mut LinuxObjectPort,
     objects: &Path,
+    vault: VaultId,
     digest: ContentDigest,
     bytes: u64,
 ) -> Result<(), String> {
-    let layout = ObjectLayout::new(objects);
+    let layout = ObjectLayout::for_vault(objects, vault);
     match read_object(port, &layout, digest, bytes) {
         Ok(content) => {
             println!("decision=read");

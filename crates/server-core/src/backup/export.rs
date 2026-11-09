@@ -432,7 +432,7 @@ mod tests {
         Index::parse(&bytes, Sha256::digest(&bytes).into())
     }
     #[test]
-    fn scoped_and_legacy_objects_roundtrip_without_cross_vault_or_path_aliases() {
+    fn objects_roundtrip_without_cross_vault_or_path_aliases_and_reject_old_layouts() {
         let (manifest, _, _) = fixture();
         let mut value: Value = serde_json::from_slice(&manifest).unwrap();
         let vaults = [VaultId::from_bytes([3; 16]), VaultId::from_bytes([4; 16])];
@@ -443,21 +443,22 @@ mod tests {
         );
         value["objects"] = serde_json::json!(vaults.map(|vault| serde_json::json!({
             "vault_id":vault.to_hex(), "sha256":digest.to_hex(), "size":content.len().to_string(),
-            "storage_path":ObjectLayout::scoped_relative_object_path(vault,&digest).to_str().unwrap(),
+            "storage_path":ObjectLayout::relative_object_path(vault,&digest).to_str().unwrap(),
             "archive_path":format!("objects/{}/{}",vault.to_hex(),digest.to_hex())
         })));
         let index = parse_value(&value).unwrap();
         assert_eq!(index.object_storage_paths.len(), 2);
-        for item in index
+        for (item, vault) in index
             .items
             .iter()
             .filter(|i| i.path.starts_with("objects/"))
+            .zip(vaults)
         {
-            assert!(
-                index
-                    .object_storage_path(&item.path)
+            assert_eq!(
+                index.object_storage_path(&item.path).unwrap(),
+                ObjectLayout::relative_object_path(vault, &digest)
+                    .to_str()
                     .unwrap()
-                    .starts_with("roots/")
             );
         }
         // The stream format remains v1 and both same-digest archive entries are verified.
@@ -483,35 +484,54 @@ mod tests {
             index.object_storage_paths
         );
 
-        let scoped = value["objects"][0]["storage_path"].clone();
-        let legacy = ObjectLayout::relative_object_path(&digest)
-            .to_str()
-            .unwrap()
-            .to_owned();
-        value["objects"][0]["storage_path"] = legacy.clone().into();
-        assert!(parse_value(&value).is_ok());
-        value["objects"][1]["storage_path"] = legacy.clone().into();
+        let canonical = value["objects"][0]["storage_path"].clone();
+        // 旧全局布局（objects/<aa>/<hash>）与旧的 roots/ 前缀都不再是规范路径。
+        let digest_hex = digest.to_hex();
+        let old_layout = format!("objects/{}/{}", &digest_hex[..2], digest_hex).into();
+        let old_prefix = format!(
+            "roots/{}/objects/{}/{}",
+            vaults[0].to_hex(),
+            &digest_hex[..2],
+            digest_hex
+        )
+        .into();
+        value["objects"][0]["storage_path"] = old_layout;
         assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
-        // An old backup containing only the legacy record still parses.
-        value["objects"].as_array_mut().unwrap().pop();
+        value["objects"][0]["storage_path"] = old_prefix;
+        assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
+        value["objects"][0]["storage_path"] = canonical.clone();
+        value["objects"][1]["storage_path"] = value["objects"][0]["storage_path"].clone();
+        assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
+        value["objects"][1]["storage_path"] =
+            ObjectLayout::relative_object_path(vaults[1], &digest)
+                .to_str()
+                .unwrap()
+                .to_owned()
+                .into();
         let index = parse_value(&value).unwrap();
         let path = value["objects"][0]["archive_path"].as_str().unwrap();
-        assert_eq!(index.object_storage_path(path), Some(legacy.as_str()));
+        assert_eq!(
+            index.object_storage_path(path),
+            Some(value["objects"][0]["storage_path"].as_str().unwrap())
+        );
+        let canonical = value["objects"][0]["storage_path"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         for invalid in [
-            format!("./{legacy}"),
-            format!("{legacy}/"),
-            legacy.replace("objects/", "objects//"),
-            format!("roots/{}/objects/../{legacy}", vaults[0].to_hex()),
-            ObjectLayout::scoped_relative_object_path(vaults[1], &digest)
+            format!("./{canonical}"),
+            format!("{canonical}/"),
+            canonical.replace(&format!("/{}/", &canonical[33..35]), "//"),
+            ObjectLayout::relative_object_path(vaults[1], &digest)
                 .to_str()
                 .unwrap()
                 .to_owned(),
-            legacy.to_uppercase(),
+            canonical.to_uppercase(),
         ] {
             value["objects"][0]["storage_path"] = invalid.into();
             assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
         }
-        value["objects"][0]["storage_path"] = scoped;
+        value["objects"][0]["storage_path"] = canonical.into();
         value["objects"][0]["vault_id"] = VaultId::from_bytes([9; 16]).to_hex().into();
         assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
     }

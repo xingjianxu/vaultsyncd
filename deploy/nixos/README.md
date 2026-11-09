@@ -25,7 +25,7 @@
 
 对既有 Vault，管理员使用明确的目录/文件 ACL 或预先规划的组授权，并保证父路径可遍历；`extraGroups` 只把该账号加入明确的现有访问组，不授予文件权限。单个示例：`setfacl -m u:vaultsyncd:rwx /srv/vault-data/documents`，既有文件及子目录需要逐项授权或由资料拥有者明确采用组策略；这条命令不递归变更内容权限。未授权即拒绝启动/注册。服务的 `ProtectSystem=strict`、`ProtectHome=read-only`、`ReadWritePaths`、`UMask=0077`、`NoNewPrivileges` 与空 capability 集继续限制其访问，即使白名单外目录 DAC 允许写入也不可写。没有自动打开防火墙。
 
-生成的 TOML 只含监听、日志和路径，没有自由格式 secret/auth 字段，也没有初始密码选项。owner 初始化在服务离线时执行 `sudo -u vaultsyncd <package>/bin/vaultsyncd-admin init --state-dir /var/lib/vaultsyncd`，从终端或匿名 stdin 管道输入密码；不要把密码写进 Nix 表达式、环境、argv 或 store。在线管理经同 UID 的 `<state>/admin/socket`，不能直接写在线库。
+生成的 TOML 只含监听、日志和路径，没有自由格式 secret/auth 字段，也没有初始密码选项。owner 初始化在服务离线时执行 `sudo -u <服务用户> <package>/bin/vaultsyncd-init`（包装命令，默认 `--login $adminUser`，可再用 `--login` 覆盖），从终端或匿名 stdin 管道输入密码；不要把密码写进 Nix 表达式、环境、argv 或 store。在线管理经同 UID 的 `<state>/admin/socket`，不能直接写在线库。
 
 ## 隔离验收
 

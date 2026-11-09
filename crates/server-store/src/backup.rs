@@ -301,7 +301,8 @@ mod tests {
     use super::*;
     use crate::test_support::*;
     #[tokio::test]
-    async fn scoped_same_digest_and_legacy_backup_preserve_exact_database_paths() {
+    async fn scoped_same_digest_backup_preserves_exact_database_paths_and_rejects_foreign_layouts()
+    {
         use std::collections::BTreeMap;
         use vaultsyncd_domain::ids::{BackupLeaseId, ServerId};
         use vaultsyncd_server_core::{
@@ -320,11 +321,7 @@ mod tests {
             let digest = ContentDigest::from_bytes([0xab; 32]);
             for n in 0..vault_count {
                 let (vault, _) = register_vault(&db, owner, 2 + n).await;
-                let storage_path = if n == 0 {
-                    ObjectLayout::relative_object_path(&digest)
-                } else {
-                    ObjectLayout::scoped_relative_object_path(vault, &digest)
-                };
+                let storage_path = ObjectLayout::relative_object_path(vault, &digest);
                 let mut tx = db.begin_write().await.unwrap();
                 crate::versions::record_object(
                     &mut tx,
@@ -381,7 +378,7 @@ mod tests {
                 });
             }
             verify_database(&target, &index).unwrap();
-            // Restore keeps exactly the same object metadata, including legacy rows.
+            // Restore keeps exactly the same object metadata.
             let restore_plan = crate::restore::plan(&target, &index).unwrap();
             assert!(restore_plan.work.is_empty());
             let mappings: Vec<_> = frozen
@@ -397,12 +394,16 @@ mod tests {
                 .collect();
             crate::restore::apply(&target, &index, &mappings, 42).unwrap();
             verify_database(&target, &index).unwrap();
-            let legacy = &frozen.plan.objects[0];
-            let archive = format!("objects/{}/{}", legacy.vault.to_hex(), digest.to_hex());
+            let frozen_object = &frozen.plan.objects[0];
+            let archive = format!(
+                "objects/{}/{}",
+                frozen_object.vault.to_hex(),
+                digest.to_hex()
+            );
             // Even an otherwise valid alternate layout may not silently differ from the manifest.
             index.object_storage_paths.insert(
                 archive.clone(),
-                ObjectLayout::scoped_relative_object_path(legacy.vault, &digest)
+                ObjectLayout::relative_object_path(VaultId::from_bytes([8; 16]), &digest)
                     .to_str()
                     .unwrap()
                     .to_owned(),
@@ -410,15 +411,15 @@ mod tests {
             assert!(verify_database(&target, &index).is_err());
             index
                 .object_storage_paths
-                .insert(archive, legacy.storage_path.clone());
+                .insert(archive, frozen_object.storage_path.clone());
             // 已登记路径不可原地重写（即使同一份字节）；这是必须保留的不可变约束。
             let copied = Connection::open(&target).unwrap();
-            let invalid = format!("./{}", legacy.storage_path);
+            let invalid = format!("./{}", frozen_object.storage_path);
             assert!(
                 copied
                     .execute(
                         "UPDATE objects SET storage_path=? WHERE vault_id=?",
-                        rusqlite::params![invalid, legacy.vault.as_bytes().as_slice()]
+                        rusqlite::params![invalid, frozen_object.vault.as_bytes().as_slice()]
                     )
                     .is_err()
             );
@@ -430,13 +431,13 @@ mod tests {
             let forged_digest = ContentDigest::from_bytes([0xcd; 32]);
             let forged_path = format!(
                 "./{}",
-                ObjectLayout::relative_object_path(&forged_digest).display()
+                ObjectLayout::relative_object_path(frozen_object.vault, &forged_digest).display()
             );
             forged_db.execute("INSERT INTO objects(vault_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')",
-                rusqlite::params![legacy.vault.as_bytes().as_slice(), forged_digest.as_bytes().as_slice(), forged_path]).unwrap();
+                rusqlite::params![frozen_object.vault.as_bytes().as_slice(), forged_digest.as_bytes().as_slice(), forged_path]).unwrap();
             let forged_archive = format!(
                 "objects/{}/{}",
-                legacy.vault.to_hex(),
+                frozen_object.vault.to_hex(),
                 forged_digest.to_hex()
             );
             index
@@ -450,14 +451,14 @@ mod tests {
             assert!(verify_database(&forged, &index).is_err());
             index.object_storage_paths.remove(&format!(
                 "objects/{}/{}",
-                legacy.vault.to_hex(),
+                frozen_object.vault.to_hex(),
                 forged_digest.to_hex()
             ));
             // 另一Vault前缀的物理位置不得冒充本Vault对象；在线备份同样必须拒绝。
             let mut tx = db.begin_write().await.unwrap();
             sqlx::query("INSERT INTO objects(vault_id,hash,size,storage_path,verified_at,gc_state) VALUES(?1,?2,7,?3,1,'live')")
-                .bind(legacy.vault.as_bytes().as_slice()).bind(forged_digest.as_bytes().as_slice())
-                .bind(ObjectLayout::scoped_relative_object_path(VaultId::from_bytes([9;16]), &forged_digest).to_str().unwrap())
+                .bind(frozen_object.vault.as_bytes().as_slice()).bind(forged_digest.as_bytes().as_slice())
+                .bind(ObjectLayout::relative_object_path(VaultId::from_bytes([9;16]), &forged_digest).to_str().unwrap())
                 .execute(&mut *tx).await.unwrap();
             tx.commit().await.unwrap();
             assert!(online_backup(db.path(), &dir.path.join("foreign.sqlite")).is_err());

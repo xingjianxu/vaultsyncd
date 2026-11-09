@@ -133,21 +133,15 @@ impl ExecutorContext {
         }
     }
 
-    /// 已授权 Vault 的对象区布局（与上传 finalize 共用；旧路径仅按该 Vault 的登记允许）。
+    /// 已授权 Vault 的对象区布局（与上传 finalize 共用；规范路径由 Vault 身份与摘要决定）。
     ///
     /// 调用方必须先核对 Vault 的 owner scope；布局选择不替代授权。
     ///
     /// # Errors
     ///
     /// 对象登记不可读时返回存储失败，不回退到磁盘探测。
-    pub async fn objects(
-        &self,
-        vault: VaultId,
-        digests: &[ContentDigest],
-    ) -> Result<ObjectLayout, OperationFailure> {
-        crate::object_layout::for_digests(&self.database, &self.state_dir, vault, digests)
-            .await
-            .map_err(|error| storage_error(&error.to_string()))
+    pub fn objects(&self, vault: VaultId) -> ObjectLayout {
+        crate::object_layout::layout(&self.state_dir, vault)
     }
 
     /// 状态目录（对象区根；删除现场核对按摘要解析布局时使用）。
@@ -384,13 +378,7 @@ impl ExecutorContext {
                 return Err(failure);
             }
         };
-        let layout = match self.objects(key.vault, &[command.content.digest]).await {
-            Ok(layout) => layout,
-            Err(failure) => {
-                self.reject(owner, key, &failure).await;
-                return Err(failure);
-            }
-        };
+        let layout = self.objects(key.vault);
         let mut target = WorkTreeTarget::new(Arc::clone(&vault_handle), layout.clone());
 
         // 3. 现场前提：观察目标并按实测结果构造 `before`（与客户端的基线 revision 一致才继续）。
@@ -1444,9 +1432,9 @@ mod tests {
     use vaultsyncd_server_store::versions::NewObject;
 
     #[tokio::test]
-    async fn executor_layout_uses_only_its_vaults_registered_legacy_objects() {
+    async fn executor_layout_is_vault_scoped_without_disk_probing() {
         let state = std::env::temp_dir().join(format!(
-            "vaultsyncd-s136-executor-{}",
+            "vaultsyncd-s143-executor-{}",
             VaultId::from_bytes(random_bytes())
         ));
         std::fs::create_dir_all(&state).unwrap();
@@ -1488,7 +1476,7 @@ mod tests {
                 vault: first,
                 hash: *registered.as_bytes(),
                 size: 3,
-                storage_path: ObjectLayout::relative_object_path(&registered)
+                storage_path: ObjectLayout::relative_object_path(first, &registered)
                     .to_str()
                     .unwrap()
                     .to_owned(),
@@ -1498,47 +1486,29 @@ mod tests {
         .await
         .unwrap();
         tx.commit().await.unwrap();
-        let legacy = ObjectLayout::new(state.join("objects"));
-        // Both a registered legacy object and a stray old-layout file exist on disk.
-        for digest in [registered, unregistered] {
-            let path = legacy.object_path(&digest);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, b"old").unwrap();
-        }
         let executor = ExecutorContext::new(db.clone(), &state, None);
-        let first_layout = executor.objects(first, &[registered]).await.unwrap();
-        let second_layout = executor.objects(second, &[registered]).await.unwrap();
-        assert_eq!(
-            first_layout.object_path(&registered),
-            legacy.object_path(&registered)
-        );
-        assert_eq!(
-            second_layout.object_path(&registered),
-            state
-                .join("objects")
-                .join(ObjectLayout::scoped_relative_object_path(
-                    second,
-                    &registered
-                ))
-        );
-        for (vault, layout) in [(first, first_layout), (second, second_layout)] {
-            assert_eq!(
-                layout.object_path(&unregistered),
-                state
-                    .join("objects")
-                    .join(ObjectLayout::scoped_relative_object_path(
-                        vault,
-                        &unregistered
-                    ))
-            );
+        let first_layout = executor.objects(first);
+        let second_layout = executor.objects(second);
+        for (vault, layout) in [(first, &first_layout), (second, &second_layout)] {
+            for digest in [registered, unregistered] {
+                assert_eq!(
+                    layout.object_path(&digest),
+                    state
+                        .join("objects")
+                        .join(ObjectLayout::relative_object_path(vault, &digest))
+                );
+            }
         }
+        assert_ne!(
+            first_layout.object_path(&registered),
+            second_layout.object_path(&registered),
+            "同摘要必须按 Vault 分区"
+        );
+        // 布局是纯计算：关闭连接池后仍可解析，也不会从磁盘猜测其它 Vault 的字节。
         db.pool().close().await;
-        assert!(
-            matches!(
-                executor.objects(first, &[registered]).await,
-                Err(OperationFailure::Storage { .. })
-            ),
-            "unreadable registration must fail closed, not use legacy disk bytes"
+        assert_eq!(
+            executor.objects(first).object_path(&registered),
+            first_layout.object_path(&registered)
         );
         std::fs::remove_dir_all(state).unwrap();
     }

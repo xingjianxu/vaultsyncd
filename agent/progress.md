@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S142 done**（Vault 改名：文档、Web 脚本与真实浏览器验收；未部署生产）。S001—S142 共142卡：136 done、6 blocked；**无 ready 卡**。线上仍为S138源`5689be1`运行/开机generation258、schema15保持；新代码目标 schema16。验证与交接见[S142](tasks/S142.md)、[S141](tasks/S141.md)、[S140](tasks/S140.md)。
+当前：**S143 done**（对象区改为 `<vault_id>/<aa>/<hash>`、删除旧布局兼容、管理员默认名取运行用户与 NixOS `adminUser`；未部署）。S001—S143 共143卡：137 done、6 blocked；下一 ready 为 S144（清库并本机重新部署）。线上仍为S138源`5689be1`/generation258、schema15；新代码目标 schema17。验证与交接见[S143](tasks/S143.md)、[S142](tasks/S142.md)。
 
 最近部署：[S138](tasks/S138.md) 固定源`5689be16b8bc389ae3781e96c2ff734f7d6761ae`、主机pin`9930ec7`、generation258；异盘完整备份verified，pure build/dry/test/健康/switch、生产全量资产/TLS/CSP/明暗窄屏/新菜单/取消改名、legacy固定版本读取与8对象路径字节保持通过；schema15/ServerId/归属/10无关服务/3应用保持。直接回退入口为现场既有generation257（源7f50cc3，先前部署记录现已补明）；本卡15→15更新。历史已归档部署[S135](tasks/S135.md) generation256/schema14与[S131](tasks/S131.md)的13→14迁移仅描述当时现场，不作为当前回退入口。
 
@@ -28,6 +28,7 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
+| S143 | 对象区 `<vault_id>/<aa>/<hash>`；删除旧布局兼容；schema17；管理员默认登录名与 NixOS adminUser | 实现提交见交接 | [S143](tasks/S143.md) |
 | S142 | Vault 改名：design/interfaces/operations/README 等文档与 Web 测试脚本；真实 Chromium 两轮通过 | 6b7eb52已ff合master，任务树/分支已清理 | [S142](tasks/S142.md) |
 | S140 | 共享目录概念改名 Vault（代码/wire/DB/服务端/客户端通用层）；schema16 迁移、协议 major 2 | b32ce6a已ff合master，任务树/分支已清理 | [S140](tasks/S140.md) |
 | S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Vault 同摘要对象冲突（schema15 围栏、legacy 兼容） | 实现f0e0103/0346ec1、审查修复c2d06b0已ff合master；树/分支已清理 | [S136](tasks/S136.md) |

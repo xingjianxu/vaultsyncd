@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&vault.absolute_path),
         ResolveMode::Auto,
     )?);
-    let layout = ObjectLayout::new(state.join("objects"));
+    let layout = ObjectLayout::for_vault(state.join("objects"), vault.id);
     let mut target = WorkTreeTarget::new(handle.clone(), layout.clone());
     let TargetObservation::Present {
         identity,

@@ -79,7 +79,7 @@ runner默认使用本树target；若设置CARGO_TARGET_DIR，两条命令必须�
 
 ## 服务端对象登记异常（Vault 全部读写 503）
 
-适用 schema ≥15（ADR-020，按 Vault 隔离对象布局）。`objects.storage_path` 只接受两种规范值：历史全局路径 `objects/<aa>/<hex>`，或该 Vault 的 `roots/<VaultId>/objects/<aa>/<hex>`。任一行被改成 `./`、含 `..`、大小写/双斜杠变体或另一个 Vault 的前缀时，服务端会**失败关闭**：该 Vault 的读写、采集与租约返回 503/`NEEDS_RECOVERY`，但不会回退读取磁盘上的旧文件，也不会跨 Vault 复用字节。
+适用 schema ≥17（ADR-022，对象区按 Vault 分区）。`objects.storage_path` 只接受该 Vault 的规范相对路径 `<VaultId>/<aa>/<hex>`；旧全局路径 `objects/<aa>/<hex>` 与旧的 `roots/...` 前缀都不再接受。任一行被改成 `./`、含 `..`、大小写/双斜杠变体或另一个 Vault 的前缀时，服务端会**失败关闭**：该 Vault 的读写、采集与租约返回 503/`NEEDS_RECOVERY`，但不会回退读取磁盘上的旧文件，也不会跨 Vault 复用字节。
 
 处置顺序：
 

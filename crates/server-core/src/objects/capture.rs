@@ -299,6 +299,7 @@ mod tests {
         FileKey, PublishedBlob, StorageFailure, StoredBytes, StoredFacts, StoredSlice,
     };
     use std::path::{Path, PathBuf};
+    use vaultsyncd_domain::ids::VaultId;
 
     const HEX_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const HEX_B: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -442,19 +443,26 @@ mod tests {
                 bytes: 5,
                 digest: wanted,
             });
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let captured = capture_object(&mut port, &layout, &request(wanted, 5)).expect("采集成功");
         assert_eq!(captured.digest, wanted);
         assert_eq!(captured.bytes, 5);
         assert_eq!(
             captured.storage_path,
-            PathBuf::from("objects/11").join(HEX_A)
+            PathBuf::from(layout.vault().to_hex())
+                .join("11")
+                .join(HEX_A)
         );
         assert_eq!(captured.method, CopyMethod::Reflink);
         assert_eq!(captured.reuse, ReuseOutcome::FreshlyPublished);
         assert_eq!(
             port.published,
-            vec![PathBuf::from("/obj/objects/11").join(HEX_A)]
+            vec![
+                PathBuf::from("/obj")
+                    .join(layout.vault().to_hex())
+                    .join("11")
+                    .join(HEX_A)
+            ]
         );
         assert_eq!(port.verified.len(), 1, "发布后必须复核一次");
         assert!(port.discarded.is_empty(), "新建成功后没有待清理副本");
@@ -464,7 +472,7 @@ mod tests {
     fn digest_mismatch_never_publishes_and_discards_staging() {
         let wanted = digest(HEX_A);
         let mut port = FakePort::new().with_staged(staged(digest(HEX_B), 5));
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let failure =
             capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("摘要不符");
         assert_eq!(failure.code(), "digest_mismatch");
@@ -478,7 +486,7 @@ mod tests {
     fn short_write_is_a_length_mismatch_and_never_publishes() {
         let wanted = digest(HEX_A);
         let mut port = FakePort::new().with_staged(staged(wanted, 3));
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let failure = capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("短写");
         assert_eq!(failure.code(), "length_mismatch");
         assert!(port.published.is_empty());
@@ -494,7 +502,7 @@ mod tests {
             failure: StorageFailure::NoSpace,
             detail: "No space left on device".to_owned(),
         }));
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let failure = capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("满盘");
         assert_eq!(failure.code(), "no_space");
         assert_eq!(
@@ -517,7 +525,7 @@ mod tests {
         let mut aliased = staged(wanted, 5);
         aliased.staged = aliased.source;
         let mut port = FakePort::new().with_staged(aliased);
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let failure =
             capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("共享 inode");
         assert_eq!(failure.code(), "shared_writable_inode");
@@ -531,7 +539,7 @@ mod tests {
         let mut aliased = staged(wanted, 5);
         aliased.staged = key(11, 2, 5);
         let mut port = FakePort::new().with_staged(aliased);
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let failure =
             capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("硬链接别名");
         assert_eq!(failure.code(), "staging_alias");
@@ -548,7 +556,7 @@ mod tests {
                 digest: wanted,
             });
         port.publish_present = true;
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let captured =
             capture_object(&mut port, &layout, &request(wanted, 5)).expect("复用既有对象");
         assert_eq!(captured.reuse, ReuseOutcome::ExistingVerified);
@@ -576,7 +584,7 @@ mod tests {
                 bytes: 4,
                 digest: wanted,
             });
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let failure =
             capture_object(&mut port, &layout, &request(wanted, 5)).expect_err("发布后不符");
         assert_eq!(failure.code(), "post_publish_mismatch");
@@ -600,7 +608,7 @@ mod tests {
     fn invalid_staging_name_fails_before_any_io() {
         let wanted = digest(HEX_A);
         let mut port = FakePort::new();
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let mut bad = request(wanted, 5);
         bad.staging_name = "../escape".to_owned();
         let failure = capture_object(&mut port, &layout, &bad).expect_err("非法暂存名");
@@ -618,7 +626,7 @@ mod tests {
             bytes: 5,
             digest: wanted,
         }));
-        let layout = ObjectLayout::new("/obj");
+        let layout = ObjectLayout::for_vault("/obj", VaultId::from_bytes([0x0a; 16]));
         let bytes = read_object(&mut port, &layout, wanted, 5).expect("读取成功");
         assert_eq!(bytes.data, b"hello");
 

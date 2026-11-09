@@ -756,22 +756,7 @@ impl ObserverRuntime {
                     continue;
                 }
             }
-            let layout =
-                match crate::object_layout::for_vault(&self.database, &self.state_dir, vault.id)
-                    .await
-                {
-                    Ok(layout) => layout,
-                    Err(error) => {
-                        self.collection_state(
-                            vault.id,
-                            Collection::Blocked,
-                            "无法读取对象布局登记，暂停采集；请检查存储。",
-                        )
-                        .await;
-                        warn!(vault = %vault.id, error = %error, "无法读取对象布局，暂停观察采纳");
-                        continue;
-                    }
-                };
+            let layout = crate::object_layout::layout(&self.state_dir, vault.id);
             self.collection_state(
                 vault.id,
                 Collection::Scanning,
@@ -798,7 +783,7 @@ impl ObserverRuntime {
                 }
             };
             let mut work = LinuxWorkTree::new(Arc::clone(&state.handle));
-            let mut blobs = LinuxObjectPort::new(Arc::clone(&state.handle), layout.vault());
+            let mut blobs = LinuxObjectPort::new(Arc::clone(&state.handle), layout.root());
             let mut store = SqlExternalStore::new(self.database.clone(), vault.owner);
             let Ok(limits) = PassLimits::new(
                 ScanLimits::new(self.config.max_scan_entries)

@@ -13,11 +13,15 @@ let
     server = cfg.settings.server;
     log = cfg.settings.log;
     state.dir = cfg.stateDir;
-  } // lib.optionalAttrs (cfg.rootPaths != [ ]) {
-    roots.allowed_bases = cfg.rootPaths;
+  } // lib.optionalAttrs (cfg.vaultPaths != [ ]) {
+    vaults.allowed_bases = cfg.vaultPaths;
   });
+  initScript = pkgs.writeShellScriptBin "vaultsyncd-init" ''
+    exec ${cfg.package}/bin/vaultsyncd-admin init --state-dir ${cfg.stateDir} --login ${cfg.adminUser} "$@"
+  '';
   preflightConfig = pkgs.writeText "vaultsyncd-preflight.json" (builtins.toJSON {
-    inherit (cfg) stateDir rootPaths;
+    inherit (cfg) stateDir;
+    vaultPaths = cfg.vaultPaths;
   });
   preflight = pkgs.writeShellScript "vaultsyncd-preflight" ''
     exec ${pkgs.python3}/bin/python3 ${./preflight.py} ${pkgs.util-linux}/bin/findmnt ${preflightConfig}
@@ -31,7 +35,12 @@ in {
     group = mkOption { type = types.strMatching "[a-z_][a-z0-9_-]*"; default = "vaultsyncd"; description = "Non-root service group; must already exist when createUser is false."; };
     extraGroups = mkOption { type = types.listOf types.str; default = [ ]; description = "Explicit operator-managed Root access groups; no ownership changes are made to Roots."; };
     stateDir = mkOption { type = absolute; default = "/var/lib/vaultsyncd"; description = "Private btrfs internal state. Under /var/lib systemd manages StateDirectory (0700); elsewhere the operator must provision it owned by the service UID. Never point at user data."; };
-    rootPaths = mkOption { type = types.listOf absolute; default = [ ]; description = "Explicit writable Root base allowlist, disjoint from state and system paths. Registration still checks identity, nested mounts/subvolumes and CoW. Permissions must be granted separately by ACL or group."; };
+    vaultPaths = mkOption { type = types.listOf absolute; default = [ ]; description = "Explicit writable Vault base allowlist, disjoint from state and system paths. Registration still checks identity, nested mounts/subvolumes and CoW. Permissions must be granted separately by ACL or group."; };
+    adminUser = mkOption {
+      type = types.addCheck types.str (value: !(lib.hasInfix "\n" value) && !(lib.hasInfix " " value));
+      default = cfg.user;
+      description = "Login name for the first owner account created by `vaultsyncd-init`; defaults to the service user. Must be set before the offline init; it is not a password.";
+    };
     settings = {
       server.listen = mkOption { type = types.str; default = "127.0.0.1:8721"; description = "HTTP address; loopback by default. TLS proxy and firewall are managed separately."; };
       log.level = mkOption { type = types.enum [ "trace" "debug" "info" "warn" "error" ]; default = "info"; description = "Log level."; };
@@ -39,12 +48,14 @@ in {
     };
   };
   config = mkIf cfg.enable {
+    environment.systemPackages = [ initScript ];
     assertions = [
       { assertion = cfg.user != "root" && cfg.group != "root" && (config.users.users.${cfg.user}.uid or null) != 0 && (config.users.groups.${cfg.group}.gid or null) != 0; message = "vaultsyncd requires a non-root user/group"; }
       { assertion = cfg.createUser || (builtins.hasAttr cfg.user config.users.users && builtins.hasAttr cfg.group config.users.groups); message = "vaultsyncd createUser=false requires an existing user and group"; }
       { assertion = cfg.stateDir != "/" && canonical cfg.stateDir && !(builtins.any (base: within base cfg.stateDir || within cfg.stateDir base) protected); message = "vaultsyncd stateDir must be canonical, private and outside system paths"; }
-      { assertion = builtins.all safeRoot cfg.rootPaths; message = "vaultsyncd rootPaths must be canonical, disjoint from state and outside protected system paths"; }
-      { assertion = builtins.length cfg.rootPaths == builtins.length (lib.unique cfg.rootPaths); message = "vaultsyncd rootPaths must be unique"; }
+      { assertion = builtins.all safeRoot cfg.vaultPaths; message = "vaultsyncd vaultPaths must be canonical, disjoint from state and outside protected system paths"; }
+      { assertion = builtins.length cfg.vaultPaths == builtins.length (lib.unique cfg.vaultPaths); message = "vaultsyncd vaultPaths must be unique"; }
+      { assertion = cfg.adminUser != ""; message = "vaultsyncd adminUser must not be empty"; }
     ];
     users.groups = lib.optionalAttrs cfg.createUser { ${cfg.group} = { }; };
     users.users = lib.optionalAttrs cfg.createUser {
@@ -59,7 +70,7 @@ in {
       description = "vaultsyncd server";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
-      unitConfig.RequiresMountsFor = [ cfg.stateDir "${cfg.stateDir}/backups" ] ++ cfg.rootPaths;
+      unitConfig.RequiresMountsFor = [ cfg.stateDir "${cfg.stateDir}/backups" ] ++ cfg.vaultPaths;
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
@@ -75,7 +86,7 @@ in {
         AmbientCapabilities = "";
         ProtectSystem = "strict";
         ProtectHome = "read-only";
-        ReadWritePaths = [ cfg.stateDir ] ++ cfg.rootPaths;
+        ReadWritePaths = [ cfg.stateDir ] ++ cfg.vaultPaths;
         PrivateTmp = true;
         PrivateDevices = true;
         ProtectKernelTunables = true;

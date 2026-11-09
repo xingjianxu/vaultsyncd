@@ -148,7 +148,7 @@ async fn exact_version_leases_survive_restart_reject_reuse_and_release_idempoten
         vaultsyncd_server_core::objects::ContentDigest::from_hex(first["hash"].as_str().unwrap())
             .unwrap();
     let object = lab.state().join("objects").join(
-        vaultsyncd_server_core::objects::ObjectLayout::scoped_relative_object_path(
+        vaultsyncd_server_core::objects::ObjectLayout::relative_object_path(
             vaultsyncd_domain::ids::VaultId::from_hex(&vault).unwrap(),
             &digest,
         ),

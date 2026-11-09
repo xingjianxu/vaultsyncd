@@ -789,7 +789,7 @@ python3 tools/context.py --help
 
 | 项 | 契约 |
 | --- | --- |
-| 入口 | `vaultsyncd-admin init --state-dir <目录> [--login <登录名>]`，默认登录名 `owner`；无 `--password`（密码只从 stdin 读：终端下两遍且不回显，管道下一行） |
+| 入口 | `vaultsyncd-admin init --state-dir <目录> [--login <登录名>]`，未给 `--login` 时默认取运行用户（`VAULTSYNCD_ADMIN_LOGIN` → `SUDO_USER` → `USER` → `LOGNAME` → `owner` 兜底）；NixOS 模块另提供 `vaultsyncd-init`，默认 `--login $adminUser`。无 `--password`（密码只从 stdin 读：终端下两遍且不回显，管道下一行） |
 | 退出码 | `0` 成功；`1` 执行失败（状态目录不可用、数据库打不开、散列/写入失败）；`2` 用法或输入不合规（含两次密码不一致、弱密码、非法登录名）；`3` 状态目录被占用（服务端在运行或另一个 init）；`4` 已初始化过 |
 | 输出 | 只打印 `login`、账号身份（32 位十六进制）、数据库路径与“Argon2id”这一事实；不打印密码，也不打印散列 |
 | 流程 | 校验状态目录（绝对路径、已存在）→ 抢 `state_lock` → `Database::open(dir/server.sqlite)` → 一个写事务里 `prepare_owner` + 账号端口 `insert` → 提交 |
@@ -1204,7 +1204,7 @@ python3 tools/context.py --help
 | 端口报告的实测事实 | `StagedBlob { staging, source: FileKey, staged: FileKey, digest, method, fallback }`、`PublishedBlob { object, already_present }`、`StoredFacts { bytes, digest }`、`StoredBytes { data, bytes, digest }`。`FileKey { device, inode, links, bytes }` 是“同 inode/有别名”的唯一判据；`CopyMethod = reflink \| verified_copy`，`CopyFallback = exdev \| unsupported` 必须如实暴露 |
 | 端口错误 | `BlobError::{SourceUnreadable, Storage{stage, failure, detail}, Verification, ObjectMissing, InvalidRequest}`；`StorageFailure::{NoSpace, QuotaExceeded, Io, PermissionDenied, ReadOnly, Other}`，`code()` 给出稳定短名（`no_space` 等）。`EIO`/`ENOSPC`/权限错误不得报成“不支持 reflink”或成功（design §11.5） |
 | `objects::ContentDigest` | SHA-256 原始 32 字节；`from_hex` 只接受 64 位小写十六进制，`to_hex`/`fanout`（前 2 位）与 `objects.hash` 同形 |
-| `objects::ObjectLayout` | 对象区布局：暂存 `<vault>/staging/<名字>`，已发布对象新写为 `<vault>/roots/<VaultId>/objects/<aa>/<64 位 hex>`（`scoped_relative_object_path`），旧登记仍为 `<vault>/objects/<aa>/<64 位 hex>`（`relative_object_path`）。`for_vault(vault, scope, legacy_digests)`（以及只解析指定摘要的 `for_digests`）只对该 Vault 数据库中已登记的旧摘要开放旧路径，不从磁盘探测或跨 Vault fallback；`storage_path` 是新写/重放使用的相对路径，`valid_storage_path(scope,digest,path)` 只接纳该 Vault 的新路径或历史规范路径。`objects.storage_path` 仍全库唯一且不可更新；不同 Vault 同摘要必须有不同物理路径。暂存名必须是单个文件名（空、`.`/`..`、含 `/`/`\`/NUL 一律拒绝），核心在调用端口前就失败 |
+| `objects::ObjectLayout` | 对象区布局：暂存 `<objects>/staging/<名字>`，已发布对象的规范相对路径是 `<VaultId>/<aa>/<64 位 hex>`（`relative_object_path`；`for_vault(root, vault)` 按此解析 `object_path`）。`valid_storage_path(vault,digest,path)` 只接纳该 Vault 的这条规范路径，不读数据库、不探测磁盘、不做跨 Vault fallback。`objects.storage_path` 全库唯一且不可更新；不同 Vault 同摘要落在不同目录。暂存名必须是单个文件名（空、`.`/`..`、含 `/`/`\`/NUL 一律拒绝），核心在调用端口前就失败 |
 | `objects::capture_object(port, layout, CaptureRequest{source, staging_name, ExpectedContent{digest, bytes}})` | 顺序固定：建立私有副本 → 判据检查 → 按内容地址发布（不覆盖）→ 发布后复核。成功返回 `CapturedObject{digest, bytes, storage_path, method, fallback, reuse, staging}`，`ReuseOutcome = freshly_published \| existing_verified` |
 | 采集判据（顺序即错误优先级） | 1) 副本与源不同 inode（否则 `shared_writable_inode`）；2) 副本无额外硬链接（`staging_alias`）；3) 长度等于期望（`length_mismatch`）；4) SHA-256 等于期望（`digest_mismatch`）；5) 内容地址已有对象时复核既有内容（`existing_object_mismatch`）；6) 发布后复核（`post_publish_mismatch`）。任一不成立都不返回对象 |
 | 失败模型 | `CaptureFailure { reason: CaptureFailureReason, staging: DiscardOutcome }`，`staging ∈ {not_needed, discarded, failed}`；`is_committable()` 恒为 `false`。端口报错时核心不重复丢弃（端口契约要求自己清理未验证的暂存文件）；发布失败与复用路径由核心丢弃并报告结果 |
@@ -1216,7 +1216,7 @@ python3 tools/context.py --help
 | 项目 | 契约 |
 | --- | --- |
 | `examples/object-capture.rs` | 子命令 `capture --objects <dir> --source <file> --staging <name> --digest <hex> --bytes <n>` 与 `read --objects <dir> --digest <hex> --bytes <n>`；输出稳定 `key=value` 行（`decision=`、`digest=`、`method=`、`fallback=`、`reuse=`、`staging_cleanup=`、`code=`、`observed=`），成功退出 0、被拒绝 1、用法错误 2 |
-| 适配器行为 | 暂存与发布都在对象区（`<objects>/staging` → 布局给出的已发布相对路径，新写为 `<objects>/roots/<VaultId>/objects/<aa>/<hex>`，旧登记摘要沿用 `<objects>/objects/<aa>/<hex>`），发布用 `RENAME_NOREPLACE` 且不覆盖既有对象、成功后刷目录；对象权限 `0444`；`FICLONE` 优先，`EXDEV`/不支持退回 `stage_copy` 的校验复制并暴露原因 |
+| 适配器行为 | 暂存与发布都在对象区（`<objects>/staging` → 布局给出的已发布相对路径 `<objects>/<VaultId>/<aa>/<hex>`），发布用 `RENAME_NOREPLACE` 且不覆盖既有对象、成功后刷目录；对象权限 `0444`；`FICLONE` 优先，`EXDEV`/不支持退回 `stage_copy` 的校验复制并暴露原因 |
 | 验收脚本 | `VAULTSYNCD_RUN_ID=s033-… bash tests/platform/linux/run-objects.sh`：同卷 reflink 采集、改写/截断/删除工作文件后对象不变、错误摘要与长度不产生对象、跨卷 `exdev` 校验复制、小 tmpfs 满盘 `no_space`、缺失对象明确失败；结束清理样本目录并核对 |
 
 ## crates/server-core — 提交意图状态机与恢复判定（S034）
@@ -1614,7 +1614,7 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 | `POST …/uploads/{upload}/finalize` | 200 `FinalizedContent{upload_id, vault_id, hash, size, storage_path, part_count, reuse, replayed}`（可提交内容引用，**不改条目 head**）；块未收齐 400 `INVALID_REQUEST`（不改会话状态）；拼装内容与声明的总长度/总哈希不符 422 `HASH_MISMATCH`（会话转 `aborted`、不登记对象）；会话已放弃 409 `PART_CONFLICT`；重复调用 200 且 `replayed=true`（不重新发布）；缺凭据 401 `AUTH_EXPIRED`、跨 Vault 403 `ACCESS_DENIED`、会话不存在/不属于该登录会话 404 `UNSUPPORTED_ENTRY`、满盘 507 `INSUFFICIENT_STORAGE`、其余存储失败 503 `NEEDS_RECOVERY` |
 | `GET …/entries/{entry}/versions/{version}/content` | 整份 200 `application/octet-stream` + `Content-Length` + `x-content-sha256`（该版本的整份内容地址）+ `Accept-Ranges: bytes`；带 `Range: bytes=start-end`/`bytes=start-`/`bytes=-suffix` 时 206 + `Content-Range: bytes start-end/total`；区间语法非法/越界/多区间 400 `INVALID_REQUEST`；版本不存在、已清理、不属于该条目或该 Vault 410 `VERSION_GONE`（不回退成当前内容）；缺凭据 401、跨 Vault 403、读取或租约失败 503 |
 
-对象区布局（S136/ADR-020）：`state_dir/objects/roots/<VaultId>/objects/<前 2 位十六进制>/<64 位十六进制>`（新发布）或历史 `state_dir/objects/objects/<前 2 位十六进制>/<64 位十六进制>`（仅已登记旧对象）与
+对象区布局（S143/ADR-022）：`state_dir/objects/<VaultId>/<前 2 位十六进制>/<64 位十六进制>` 与
 `state_dir/objects/staging/<名字>`（未发布）；块暂存仍是 `state_dir/uploads/<upload_id>/<index>`。
 下载读取前建立 `object_leases` 的 `download` 租约（`ttl 900 s`），读完解除；解除失败只记录日志，
 不改判已读出的字节。生成侧：`MediaType.schema` 可选、成功响应折叠成 `SuccessBody::{Json,Bytes}`
@@ -2651,7 +2651,7 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 ## S136-c 服务端按 Vault 隔离对象布局（ADR-020，schema 15）
 
 - 根因：`objects` 行按 `(vault_id, hash)` 归属且 `storage_path` 全库唯一/不可更新，但旧实现把已发布对象统一放在 `state_dir/objects/objects/<aa>/<hash>`。第二个 Vault 上传相同摘要时与唯一约束冲突，finalize 503 `NEEDS_RECOVERY`；不同 Vault 共享物理文件也无法按 Vault 独立 GC。
-- 新写路径：`state_dir/objects/roots/<VaultId>/objects/<aa>/<hash>`（`ObjectLayout::scoped_relative_object_path`），登记值即物理相对路径；一 Vault 一对象行，`UNIQUE(storage_path)` 与不可变触发器保持不变。旧行 `objects/<aa>/<hash>` 不迁移、不改写，只由 `apps/server/src/object_layout.rs::for_vault(database, state_dir, vault)` 按该 Vault 已登记摘要开放；磁盘存在性、其它 Vault 前缀或不可读登记一律失败关闭，不 fallback。
+- 新写路径：`state_dir/objects/<VaultId>/<aa>/<hash>`（`ObjectLayout::relative_object_path`），登记值即物理相对路径；一 Vault 一对象行，`UNIQUE(storage_path)` 与不可变触发器保持不变。S143/ADR-022 起旧布局不再被读取或写入，非规范路径一律失败关闭。
 - 消费者：上传 finalize/重放（`ContentPublisher::storage_path` 记录实际发布路径）、下载与版本租约、create/put/conflict/delete 现场复核、外部采集、启动 replay、GC 候选路径校验、备份 prepare/export 与 server-admin 离线 restore 都按 Vault 选择布局。热路径按摘要解析（`for_digests`/`for_digest`，每条摘要一次 `(vault_id,hash)` 主键查询）；外部扫描、删除整树核对与回收站/历史恢复等需要多摘要的路径使用 `for_vault` 一次读取该 Vault 全部旧登记。`legacy` 集合必须覆盖布局将触碰的每个摘要：漏声明不会回退旧文件，读会失败关闭，写会先造重复物理对象再被唯一登记约束拒绝（`ObjectConflict`）。外部观察每轮仍做一次整 Vault 旧登记读取（摘要事先不可知），10⁵ 对象量级约 90—100 ms/轮，只影响扫描周期、不影响单文件读写。未登记摘要一律按 Vault 分区新路径处理（缺失登记只会失败关闭，不会误用其它 Vault 的字节）；备份归档成员仍是 `objects/<VaultId>/<hash>`，清单 `storage_path` 允许 legacy 或该 Vault 新路径，重复物理登记被拒。
 - 版本围栏：`crates/server-store/migrations/0015_root_scoped_objects.sql` 只提升 schema 语义版本（`user_version` 15，无表结构变化），使 target ≤14 的旧二进制在写服务前 `SchemaTooNew` 拒绝；14→15 走既有迁移前一致性备份（`server.sqlite.pre-migration-v14-to-v15.bak`），失败不返回可写句柄。回退用迁移前整套备份，不做自动降级，也不原地改写旧对象。
 - 验证入口：`cargo test -p vaultsyncd-server-store -p vaultsyncd-server-core -p vaultsyncd-server -p vaultsyncd-admin -p vaultsyncd-server-tests`、`cargo clippy --workspace --all-targets -- -D warnings`；HTTP 用例 `apps/server/tests/content.rs::same_digest_in_two_vaults_has_independent_publication_reuse_and_replay`、`registered_legacy_object_keeps_its_path_for_new_upload_and_replay`；真实浏览器 `tests/web/file-actions-browser.py` 的 `cross-Vault-copy` 检查项。
@@ -2659,7 +2659,15 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 ## S140 共享目录改名 Vault（ADR-021，schema 16）
 
 - 改名范围（唯一编辑源仍是 schema 与代码，本节只记入口）：`RootId`→`VaultId`、`RootSeq`→`VaultSeq`、`RootHandle`→`VaultHandle`；wire `root_id`/`root_seq`→`vault_id`/`vault_seq`；HTTP `/v1/roots`→`/v1/vaults`；错误码 `ROOT_UNAVAILABLE`→`VAULT_UNAVAILABLE`；capability 功能 `roots`→`vaults`；配置段 `[roots]`→`[vaults]`（段内 `allowed_bases` 键不变，Rust 字段 `allowed_vault_bases`）；本机 IPC 命令 `list_roots`→`list_vaults`、参数/结果 `root_id`→`vault_id`。远端协议 major 2、本机 IPC major 2 表示不兼容；冻结的旧协议 fixture 与历史迁移保持原名并在测试中断言被拒绝。
-- 服务端数据库：`crates/server-store/migrations/0016_vault_rename.sql` 用 `ALTER TABLE ... RENAME` 把 `roots`→`vaults`、各表 `root_id`→`vault_id`、`operations.root_seq`→`vault_seq`、`trash_membership.deletion_root`→`deletion_vault`，并重建 `entries_one_active_vault`、`uploads_open_by_vault`、`fs_intents_unfinished_by_vault`、`snapshots_by_vault` 四个索引；schema 15→16，14→15 的语义围栏行为不变，16 是最新，旧二进制在任何 `user_version` 状态都拒绝写。
+- 服务端数据库：`crates/server-store/migrations/0016_vault_rename.sql` 用 `ALTER TABLE ... RENAME` 把 `roots`→`vaults`、各表 `root_id`→`vault_id`、`operations.root_seq`→`vault_seq`、`trash_membership.deletion_root`→`deletion_vault`，并重建 `entries_one_active_vault`、`uploads_open_by_vault`、`fs_intents_unfinished_by_vault`、`snapshots_by_vault` 四个索引；schema 15→16，14→15 的语义围栏行为不变；S143 起 0017 把 schema 提升到 17，16 与更旧二进制同样拒绝写。
 - 客户端数据库：`crates/client-store/migrations/0013_vault_rename.sql` 只重命名 `bindings.root_id`→`vault_id`；升级类测试用旧列名构造 v11/v12 fixture，再断言状态快照逐项一致。
-- 磁盘布局不变：对象区仍为 `state_dir/objects/roots/<vault_id>/objects/<aa>/<hash>`（`ObjectLayout::SCOPED_PREFIX = "roots"`），备份归档仍是 `objects/<VaultId>/<hash>`、清单 `storage_path` 允许 legacy 或该前缀路径；改名不搬迁已发布对象。
+- 磁盘布局：对象区为 `state_dir/objects/<vault_id>/<aa>/<hash>`；备份归档仍是 `objects/<VaultId>/<hash>`，清单 `storage_path` 只接受该 Vault 的规范相对路径。
 - 验证入口：`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo xtask generate --check`、`pnpm --recursive run typecheck`、`pnpm --recursive --if-present run test`；真实浏览器脚本 `tests/web/vaults-browser.py` 等仍按新命名运行（S142 复验）。
+
+## S143 对象区布局 `<vault_id>/<aa>/<hash>`（ADR-022，schema 17）
+
+- 布局：`ObjectLayout::for_vault(objects_root, vault)`；规范相对路径 `relative_object_path(vault, digest)` = `<vault hex>/<fanout>/<hash>`，物理路径 `<state>/objects/<vault hex>/<fanout>/<hash>`，暂存 `<state>/objects/staging/<名字>`。`valid_storage_path(vault, digest, path)` 只接受这条路径；无 `ObjectLayout::new`、无 `legacy` 集合、无旧 `roots/` 前缀。
+- 旧兼容删除：ADR-020 的 legacy 读取、按 Vault 登记旧摘要、旧布局备份容错与相关测试分支全部移除；`apps/server/src/object_layout.rs` 只剩纯计算 `layout(state_dir, vault)`，不再读数据库。备份归档成员仍为 `objects/<VaultId>/<hash>`，清单 `storage_path` 只接受新规范相对路径。
+- 数据库：`crates/server-store/migrations/0017_object_layout_vault_scoped.sql` 是语义围栏（不改行数据），schema 16→17；部署按用户决定清空内部状态并用新规则重建。
+- 管理员：`vaultsyncd-admin init` 未给 `--login` 时默认取运行用户（`VAULTSYNCD_ADMIN_LOGIN` → `SUDO_USER` → `USER` → `LOGNAME` → `owner` 兜底）。NixOS 模块新增 `adminUser`（默认 `cfg.user`，提供 `vaultsyncd-init` 包装命令），`rootPaths` 更名为 `vaultPaths`，生成 `[vaults] allowed_bases`。
+- 验证入口：`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo xwin check --locked --workspace --all-targets`、`pnpm --recursive run typecheck`、`pnpm --recursive --if-present run test`；真实浏览器 `tests/web/vaults-browser.py`、`files-browser.py` 在重部署后另跑（S144）。

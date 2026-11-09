@@ -81,9 +81,12 @@ impl Lab {
                 vault: self.vault,
                 hash,
                 size: bytes.len() as u64,
-                storage_path: ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
-                    .display()
-                    .to_string(),
+                storage_path: ObjectLayout::relative_object_path(
+                    self.vault,
+                    &ContentDigest::from_bytes(hash),
+                )
+                .display()
+                .to_string(),
                 verified_at: at(1),
             },
         )
@@ -93,7 +96,8 @@ impl Lab {
         hash
     }
     fn path(&self, hash: [u8; 32]) -> PathBuf {
-        ObjectLayout::new(self.state.join("objects")).object_path(&ContentDigest::from_bytes(hash))
+        ObjectLayout::for_vault(self.state.join("objects"), self.vault)
+            .object_path(&ContentDigest::from_bytes(hash))
     }
     async fn current(&self, hash: [u8; 32], size: u64) {
         let mut tx = self.db.begin_write().await.unwrap();
@@ -501,19 +505,13 @@ async fn sigkill_at_all_durable_boundaries_resumes_without_deleting_current_data
     }
 }
 
-/// S136/ADR-020：两 Vault 同摘要各有独立物理对象；回收一个 Vault 的孤儿对象时，
-/// 另一个 Vault 的存活字节、对象行与登记路径都必须完好。覆盖「两 Vault 都 scoped」
-/// 与「A 为已登记 legacy、B 为 scoped」两种实际形态。
+/// 两 Vault 的同摘要各有独立物理对象；回收一个 Vault 的孤儿对象时，另一个 Vault 的
+/// 存活字节、对象行与登记路径都必须完好。
 #[tokio::test]
 async fn same_digest_objects_are_gc_isolated_between_vaults() {
     use vaultsyncd_server_store::vaults;
-    for a_legacy in [false, true] {
-        let lab = Lab::new(if a_legacy {
-            "scoped-gc-legacy-a"
-        } else {
-            "scoped-gc-scoped-both"
-        })
-        .await;
+    {
+        let lab = Lab::new("scoped-gc-both-vaults").await;
         let second_vault = VaultId::from_bytes([9; 16]);
         let second_entry = EntryId::from_bytes([10; 16]);
         let mut tx = lab.db.begin_write().await.unwrap();
@@ -536,49 +534,11 @@ async fn same_digest_objects_are_gc_isolated_between_vaults() {
         let bytes = b"same digest, two vaults";
         let hash = lab.object(bytes).await;
         let digest = ContentDigest::from_bytes(hash);
-        let first_path = if a_legacy {
-            lab.path(hash)
-        } else {
-            let path = lab
-                .state
-                .join("objects")
-                .join(ObjectLayout::scoped_relative_object_path(
-                    lab.vault, &digest,
-                ));
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, bytes).unwrap();
-            let mut tx = lab.db.begin_write().await.unwrap();
-            sqlx::query("DELETE FROM objects WHERE vault_id=? AND hash=?")
-                .bind(lab.vault.as_bytes().as_slice())
-                .bind(hash.as_slice())
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            versions::record_object(
-                &mut tx,
-                lab.owner,
-                &NewObject {
-                    vault: lab.vault,
-                    hash,
-                    size: bytes.len() as u64,
-                    storage_path: ObjectLayout::scoped_relative_object_path(lab.vault, &digest)
-                        .display()
-                        .to_string(),
-                    verified_at: at(1),
-                },
-            )
-            .await
-            .unwrap();
-            tx.commit().await.unwrap();
-            path
-        };
-        let second_path =
-            lab.state
-                .join("objects")
-                .join(ObjectLayout::scoped_relative_object_path(
-                    second_vault,
-                    &digest,
-                ));
+        let first_path = lab.path(hash);
+        let second_path = lab
+            .state
+            .join("objects")
+            .join(ObjectLayout::relative_object_path(second_vault, &digest));
         std::fs::create_dir_all(second_path.parent().unwrap()).unwrap();
         std::fs::write(&second_path, bytes).unwrap();
         let mut tx = lab.db.begin_write().await.unwrap();
@@ -589,7 +549,7 @@ async fn same_digest_objects_are_gc_isolated_between_vaults() {
                 vault: second_vault,
                 hash,
                 size: bytes.len() as u64,
-                storage_path: ObjectLayout::scoped_relative_object_path(second_vault, &digest)
+                storage_path: ObjectLayout::relative_object_path(second_vault, &digest)
                     .display()
                     .to_string(),
                 verified_at: at(1),

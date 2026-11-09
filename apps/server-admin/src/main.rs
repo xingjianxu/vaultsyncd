@@ -39,15 +39,37 @@ pub const EXIT_LOCKED: u8 = 3;
 /// 已经初始化过的退出码。
 pub const EXIT_ALREADY_INITIALIZED: u8 = 4;
 
-/// 未给出 `--login` 时使用的登录名（唯一账号的默认称呼，不是默认密码）。
-pub const DEFAULT_LOGIN: &str = "owner";
+/// 未给出 `--login` 时的兜底登录名（没有被调用的 Linux 用户可用时）。
+pub const FALLBACK_LOGIN: &str = "owner";
+
+/// 未给出 `--login` 时的登录名：默认取运行本命令的 Linux 用户，与“服务端以哪个账号运行”
+/// 对齐；经 sudo 调用时用真实用户，而不是 root。
+///
+/// 优先级：`VAULTSYNCD_ADMIN_LOGIN` → `SUDO_USER` → `USER` → `LOGNAME` → [`FALLBACK_LOGIN`]。
+/// 刚才的 shell 用户与 `--login` 都可以覆盖它；NixOS 模块通过 `adminUser` 选项显式传入。
+pub fn default_login() -> String {
+    login_from(|key| std::env::var(key).ok())
+}
+
+/// 按固定优先级取登录名；空值或纯空白视为未设置。
+fn login_from(get: impl Fn(&str) -> Option<String>) -> String {
+    for key in ["VAULTSYNCD_ADMIN_LOGIN", "SUDO_USER", "USER", "LOGNAME"] {
+        if let Some(value) = get(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return value.to_owned();
+            }
+        }
+    }
+    FALLBACK_LOGIN.to_owned()
+}
 
 const USAGE: &str = "\
 用法：vaultsyncd-admin init --state-dir <目录> [--login <登录名>]
 
   init                在服务端离线时初始化首位 owner 账号（只能成功一次）
   --state-dir <目录>   服务端的状态目录（绝对路径，与 vaultsyncd.toml 的 state_dir 相同）
-  --login <登录名>     登录名，默认 owner；不做大小写折叠
+  --login <登录名>     登录名，默认当前 Linux 用户（sudo 下取真实用户）；不做大小写折叠
   -h, --help           打印本说明
 
 密码从标准输入读取：终端下提示输入两遍且不回显；从管道读取时只读一行。密码不接受命令行参数。";
@@ -190,7 +212,7 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             let state_dir = state_dir.ok_or_else(|| "init 需要 --state-dir".to_owned())?;
             Ok(Command::Init(InitArgs {
                 state_dir,
-                login: login.unwrap_or_else(|| DEFAULT_LOGIN.to_owned()),
+                login: login.unwrap_or_else(default_login),
             }))
         }
         _ => Err("缺少子命令".to_owned()),
@@ -207,14 +229,44 @@ mod tests {
     }
 
     #[test]
-    fn init_takes_state_dir_and_defaults_the_login() {
+    fn init_takes_state_dir_and_defaults_the_login_to_the_running_user() {
+        // 测试进程里通常有 USER/LOGNAME；默认值必须等于其中一个真实用户，而不是固定字样。
+        let expected = default_login();
         match parse_args(args(&["init", "--state-dir", "/srv/vaultsyncd"])) {
             Ok(Command::Init(args)) => {
                 assert_eq!(args.state_dir, PathBuf::from("/srv/vaultsyncd"));
-                assert_eq!(args.login, DEFAULT_LOGIN);
+                assert_eq!(args.login, expected);
+                assert!(!args.login.is_empty());
             }
             _ => panic!("应解析出 init 参数"),
         }
+    }
+
+    #[test]
+    fn login_default_prefers_explicit_override_then_the_real_sudo_user() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        assert_eq!(
+            login_from(env(&[
+                ("VAULTSYNCD_ADMIN_LOGIN", "managed"),
+                ("SUDO_USER", "operator"),
+                ("USER", "shell"),
+            ])),
+            "managed"
+        );
+        assert_eq!(
+            login_from(env(&[("SUDO_USER", "operator"), ("USER", "root")])),
+            "operator"
+        );
+        assert_eq!(login_from(env(&[("USER", "alice")])), "alice");
+        assert_eq!(login_from(env(&[("USER", "  ")])), FALLBACK_LOGIN);
+        assert_eq!(login_from(env(&[])), FALLBACK_LOGIN);
     }
 
     #[test]

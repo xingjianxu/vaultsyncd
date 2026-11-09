@@ -29,7 +29,7 @@ impl Harness {
             fs,
             store: FakeExternalStore::default(),
             gate: VaultCommitGate::new(),
-            layout: ObjectLayout::new("/state/objects"),
+            layout: ObjectLayout::for_vault("/state/objects", crate::test_support::vault_id(0x0a)),
             observer: observer(limits),
             now_ms: 1_000,
             scan_budget: 5_000,

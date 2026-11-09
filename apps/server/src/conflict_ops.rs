@@ -445,9 +445,7 @@ pub async fn execute_conflict(
     at: UtcTimestamp,
 ) -> Result<CommittedConflict, OperationFailure> {
     let handle: Arc<VaultHandle> = executor.vault_handle(owner, key.vault).await?;
-    let layout = executor
-        .objects(key.vault, &[command.content.digest])
-        .await?;
+    let layout = executor.objects(key.vault);
     let mut target = WorkTreeTarget::new(Arc::clone(&handle), layout);
     let mut store = SqlConflictStore::new(executor.database().clone(), owner, key)
         .with_local_generation(command.local_generation);

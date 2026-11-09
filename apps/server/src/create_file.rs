@@ -182,10 +182,7 @@ pub async fn execute(
         }
     }
     let handle = executor.vault_handle(owner, key.vault).await?;
-    let mut target = WorkTreeTarget::new(
-        handle,
-        executor.objects(key.vault, &[content.digest]).await?,
-    );
+    let mut target = WorkTreeTarget::new(handle, executor.objects(key.vault));
     if !matches!(
         target.observe(&path).map_err(failure)?,
         vaultsyncd_server_core::ports::target::TargetObservation::Absent

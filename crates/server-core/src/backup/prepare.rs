@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn same_digest_is_vault_isolated_and_legacy_paths_remain_unique() {
+    fn same_digest_is_vault_isolated_and_only_canonical_paths_validate() {
         let vaults: Vec<_> = [1, 2]
             .into_iter()
             .map(|n| FrozenVault {
@@ -128,7 +128,7 @@ mod tests {
                     vault: r.vault,
                     hash: *digest.as_bytes(),
                     size: 1,
-                    storage_path: ObjectLayout::scoped_relative_object_path(r.vault, &digest)
+                    storage_path: ObjectLayout::relative_object_path(r.vault, &digest)
                         .to_str()
                         .unwrap()
                         .to_owned(),
@@ -140,22 +140,30 @@ mod tests {
         let scoped = plan.objects[1].storage_path.clone();
         plan.objects[1].storage_path = plan.objects[0].storage_path.clone();
         assert_eq!(plan.validate(), Err(Error::InvalidPath));
-        plan.objects[1].storage_path = scoped;
-        let legacy = ObjectLayout::relative_object_path(&digest)
-            .to_str()
-            .unwrap()
-            .to_owned();
-        plan.objects[0].storage_path = legacy.clone();
-        assert_eq!(plan.validate(), Ok(()));
-        plan.objects[1].storage_path = legacy;
+        plan.objects[1].storage_path = scoped.clone();
+        // 旧全局布局与旧的 roots/ 前缀都不再被接受。
+        let hash_text = digest.to_hex();
+        plan.objects[0].storage_path = format!("objects/{}/{}", &hash_text[..2], hash_text);
         assert_eq!(plan.validate(), Err(Error::InvalidPath));
+        plan.objects[0].storage_path = format!(
+            "roots/{}/objects/{}/{}",
+            plan.objects[0].vault.to_hex(),
+            &hash_text[..2],
+            hash_text
+        );
+        assert_eq!(plan.validate(), Err(Error::InvalidPath));
+        plan.objects[0].storage_path =
+            ObjectLayout::relative_object_path(plan.objects[0].vault, &digest)
+                .to_str()
+                .unwrap()
+                .to_owned();
         plan.objects.pop();
         assert_eq!(plan.validate(), Ok(()));
         let canonical = plan.objects[0].storage_path.clone();
         for invalid in [
             format!("./{canonical}"),
             format!("{canonical}/"),
-            canonical.replace("objects/", "objects//"),
+            canonical.replacen('/', "//", 1),
             canonical.to_uppercase(),
         ] {
             plan.objects[0].storage_path = invalid;
@@ -171,9 +179,12 @@ mod tests {
             vault,
             hash,
             size: 1,
-            storage_path: ObjectLayout::relative_object_path(&ContentDigest::from_bytes(hash))
-                .display()
-                .to_string(),
+            storage_path: ObjectLayout::relative_object_path(
+                vault,
+                &ContentDigest::from_bytes(hash),
+            )
+            .display()
+            .to_string(),
         };
         let mut plan = Plan {
             vaults: vec![],
