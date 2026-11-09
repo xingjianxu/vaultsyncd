@@ -11,7 +11,7 @@ git ls-tree -r --name-only 1fb58955152c4f8f75ae4e8c8933f1d3d81db76a -- agent/tas
 git show 1fb58955152c4f8f75ae4e8c8933f1d3d81db76a:agent/tasks/S125-batch.md
 ```
 
-旧父卡自身已有的“完整交接”固定提交继续有效。历史的环境、下一 ready、部署状态和“未部署”描述只代表当时结论；当前部署及最近一次生产浏览器与资产验收见 S128（generation253）。
+旧父卡自身已有的“完整交接”固定提交继续有效。历史的环境、下一 ready、部署状态和“未部署”描述只代表当时结论；当前部署及最近一次生产浏览器与资产验收见 [S145](S145.md)（generation261）。
 
 已完成任务的过程文件只有在结论、验证、限制、生命周期都已有父卡或规范入口，且原文已提交可恢复时才可删除；同步修正引用。未完成任务保留续接点和恢复条件，不能只留 Git 索引。日志、截图、发行产物及 VM 等 Git 外证据须独立保存，本次没有删除或重新验证这些证据。
 
@@ -27,3 +27,5 @@ S136-d 批次：合并后审查修复 `c2d06b0` 已 ff-only 合 master；确认�
 S137 批次：实现与验收`999bbee2dc941ecf3070aef8b9663e25a7032bfe`已ff合master；确认任务树干净、祖先关系和非当前目录后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S137-web-rename`、`git branch -d feat/S137-web-rename`均成功。原生创建的跨盘临时副本经925个基线文件与无额外文件核对后也已清理。所有日志保留永久`artifacts/S137/`，真实最终浏览器`/data/vs-s137-20261108T223612-3435202`，主树旧S134任务树保持。下一卡S138部署本机。
 
 S138 批次：固定源5689be16b8bc389ae3781e96c2ff734f7d6761ae已部署generation258，主机pin9930ec77046abed5744a35f1b672593270bc485e已ff main且临时主机树/分支清理。项目交接a89debb已ff master（整合点同提交）；确认干净与祖先关系后，从主树`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S138-deploy-verification`及`git branch -d chore/S138-deploy-verification`均成功。原生临时副本932基线文件核对后清理。永久`artifacts/S138/`已保留验证脚本/全部日志/生产截图/异盘verified完整归档与收据，/data/vaultsyncd-deploy/local-20261108T224057-3442489保留旧system/boot GC roots。当前无ready，5张blocked恢复条件保持。
+
+S145 批次：统一登录实现/部署源 `6e58bc26fcef09faf675229889693b593f6e9c4f`、交接 `c9b092d34f650da9ccc869fca5ffcb349adefe71` 已ff-only合master，整合点同交接提交，无额外merge commit。生产generation261、主机pin `18a7df5e9ef087ba7bc65d83f1c98b919ebbc5eb`，部署主机临时树/分支自动清理。确认任务树干净且全部提交为master祖先后，从主树成功 `git worktree remove /wrd/prj/vaultsyncd/.worktrees/S145-unified-login`、`git branch -d feat/S145-unified-login`；永久 `artifacts/S145/` 已保存脚本、日志、基线/结果和生产/离线截图，独立btrfs验收目录与旧system GC roots保留；旧S134树未触碰。验收/回退入口见S145；无ready，原5张blocked门禁保持。
