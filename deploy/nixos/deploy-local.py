@@ -51,7 +51,8 @@ def configuration(repo, host):
     expression = '''c: {
       enabled = c.features.server.vaultsync.enable;
       repository = c.features.server.vaultsync.repository;
-      inherit (c.services.vaultsyncd) user group stateDir vaultPaths;
+      inherit (c.services.vaultsyncd) user group stateDir;
+      vaultPaths = c.services.vaultsyncd.vaultPaths or c.services.vaultsyncd.rootPaths or [ ];
       package = toString c.services.vaultsyncd.package;
       inherit (c.features.server.vaultsync) port;
       domain = if c.features.server.vaultsync.caddy.enable
