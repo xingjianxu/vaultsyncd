@@ -289,7 +289,14 @@ async fn native_management_every_command() {
     for p in ["state", "vault", "cache"] {
         std::fs::create_dir(base.join(p)).unwrap();
     }
-    let server = identity();
+    let probe =
+        ApiClient::new(ClientConfig::new(fixture["url"].as_str().unwrap()).allow_plaintext_http())
+            .unwrap();
+    let capabilities: vaultsyncd_protocol::generated::Capabilities = probe
+        .send_json(vaultsyncd_http_client::ApiRequest::get("/v1/capabilities"))
+        .await
+        .unwrap();
+    let server = capabilities.server_id;
     let binding = identity();
     let vault = fixture["vault"].as_str().unwrap();
     let entry = fixture["entry"]["entry_id"].as_str().unwrap();
@@ -313,6 +320,34 @@ async fn native_management_every_command() {
             .unwrap()
             .is_empty()
     );
+    let before = ok("get_connection", serde_json::json!({}))
+        .await
+        .connection
+        .unwrap();
+    let discovered = ok(
+        "discover_connection",
+        serde_json::json!({"server_url":fixture["url"]}),
+    )
+    .await
+    .connection
+    .unwrap();
+    assert_eq!(discovered.server_id, server);
+    assert!(!discovered.authenticated);
+    assert_eq!(
+        serde_json::to_value(
+            ok("get_connection", serde_json::json!({}))
+                .await
+                .connection
+                .unwrap()
+        )
+        .unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    bad(
+        "set_connection",
+        serde_json::json!({"server_id":identity(),"server_url":fixture["url"]}),
+    )
+    .await;
     ok(
         "set_connection",
         serde_json::json!({"server_id":server,"server_url":fixture["url"]}),

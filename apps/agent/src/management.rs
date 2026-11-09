@@ -81,6 +81,66 @@ pub(crate) async fn proposed_connection(
         .map_err(|_| reject("INVALID_ARGUMENT"))?;
     Ok(proposed)
 }
+/// Read public identity using an isolated, credential-free client. Never mutate current state.
+pub(crate) async fn discover_connection(
+    config: &AgentConfig,
+    command: &Command,
+) -> Result<ManagementResult, PortError> {
+    let p = command
+        .parameters
+        .as_ref()
+        .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
+    let mut proposed = config.clone();
+    proposed.server.url = p
+        .server_url
+        .clone()
+        .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
+    proposed.server.ca_file = p.ca_file.as_ref().map(Into::into);
+    proposed
+        .validate()
+        .map_err(|_| reject("INVALID_ARGUMENT"))?;
+    let mut info = connection(&proposed, &AuthSession::default());
+    info.server_id = read_server_id(&proposed).await?;
+    Ok(ManagementResult {
+        connection: Some(info),
+        ..Default::default()
+    })
+}
+
+/// Recheck the confirmed identity before loading any credentials or changing live bindings.
+pub(crate) async fn verify_connection(config: &AgentConfig) -> Result<(), PortError> {
+    if read_server_id(config).await? != config.server.id {
+        return Err(PortError::rejected(
+            "BINDING_BLOCKED",
+            "服务器身份与确认的 Server ID 不一致，请重新读取。",
+        ));
+    }
+    Ok(())
+}
+
+async fn read_server_id(config: &AgentConfig) -> Result<String, PortError> {
+    use vaultsyncd_http_client::{ClientConfig, Timeouts, TlsTrust};
+    let mut http = ClientConfig::new(&config.server.url).with_timeouts(Timeouts::new(
+        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(2),
+    ));
+    if config.server.development_http {
+        http = http.allow_plaintext_http();
+    }
+    if let Some(ca) = &config.server.ca_file {
+        http = http.with_trust(
+            TlsTrust::system_roots_with_pem_file(ca).map_err(|_| reject("CERTIFICATE_INVALID"))?,
+        );
+    }
+    let client = ApiClient::new(http).map_err(|_| reject("INVALID_ARGUMENT"))?;
+    let value: vaultsyncd_protocol::generated::Capabilities = client
+        .send_json(ApiRequest::get("/v1/capabilities"))
+        .await
+        .map_err(connection_error)?;
+    vaultsyncd_protocol::negotiation::negotiate(&value).map_err(|_| reject("INVALID_ARGUMENT"))?;
+    Ok(value.server_id)
+}
+
 pub(crate) async fn save_connection(db: &Database, config: &AgentConfig) -> Result<(), PortError> {
     let mut tx = db.begin_write().await.map_err(error)?;
     sqlx::query("INSERT INTO agent_connection(singleton,server_id,server_url,ca_file) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET server_id=excluded.server_id,server_url=excluded.server_url,ca_file=excluded.ca_file")
@@ -226,6 +286,7 @@ pub(crate) async fn execute(
             )
             .await;
         }
+        C::DiscoverConnection => return discover_connection(config, command).await,
         C::ListBindings => result.bindings = Some(binding_list(db).await?),
         C::PauseBinding | C::ResumeBinding => {
             control

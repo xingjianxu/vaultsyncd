@@ -46,6 +46,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         C::ListProblems => (&[], &["binding_id", "search"]),
         C::RetryProblem => (&["binding_id", "operation_id"], &[]),
         C::ExportRecovery => (&["binding_id", "destination"], &[]),
+        C::DiscoverConnection => (&["server_url"], &["ca_file"]),
         C::SetConnection => (&["server_id", "server_url"], &["ca_file"]),
         C::Login => (&["username", "password"], &[]),
         C::GetRules => (&["binding_id"], &["entry_id"]),

@@ -54,7 +54,7 @@ fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments
             serde_json::json!({"extra":"ignored parameters are forbidden"});
         assert!(serde_json::from_value::<Request>(unknown).is_err());
     }
-    assert_eq!(names.len(), 25);
+    assert_eq!(names.len(), 26);
 }
 #[test]
 fn passwords_are_redacted_even_if_an_entire_generated_request_is_debugged() {
@@ -85,5 +85,29 @@ fn exclusion_rules_accept_empty_clear_but_refuse_overflow_and_extra_fields() {
     assert!(commands::validate(&command).is_err());
     command.parameters.as_mut().unwrap().rules = Some(String::new());
     command.parameters.as_mut().unwrap().rules_version = Some(String::new());
+    assert!(commands::validate(&command).is_err());
+}
+
+#[test]
+fn discovery_only_accepts_an_address_and_optional_trust_without_identity_or_credentials() {
+    use vaultsyncd_local_ipc::generated::{Command, CommandParameters as P};
+    let mut command = Command {
+        name: CommandName::DiscoverConnection,
+        parameters: Some(P {
+            server_url: Some("https://sync.example".into()),
+            ..Default::default()
+        }),
+    };
+    commands::validate(&command).unwrap();
+    for (field, value) in [
+        ("server_id", "a5".repeat(16)),
+        ("username", "owner".into()),
+        ("password", "secret".into()),
+    ] {
+        let mut wire = serde_json::to_value(&command).unwrap();
+        wire["parameters"][field] = value.into();
+        assert!(commands::validate(&serde_json::from_value(wire).unwrap()).is_err());
+    }
+    command.parameters.as_mut().unwrap().server_url = None;
     assert!(commands::validate(&command).is_err());
 }

@@ -20,8 +20,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     for(const [command,args] of [["arbitrary_command",{}],["plugin:shell|execute",{program:"cmd.exe",args:["/c","exit"]}],["plugin:fs|read_text_file",{path:"C:\\Windows\\win.ini"}],["plugin:window|set_title",{label:"main",title:"unauthorized"}],["agent_release_entry",{bindingId:"../outside",entryId:"bad",operationId:"bad"}]]){
       let denied=false;try{await invoke(command,args);}catch{denied=true;}if(!denied)throw new Error("malicious command accepted: "+command);
     }
-    await wait("connection",()=>document.querySelector('[name="server_id"]')?.value?.length===32);
-    field("server_id",fixture.serverId);field("server_url",fixture.url);field("ca_file",fixture.caFile);await click("保存连接");await wait("connection saved",confirmed);
+    await wait("connection",()=>!!document.querySelector('[name="server_url"]'));
+    field("server_url",fixture.url);field("ca_file",fixture.caFile);await wait("discovered identity",()=>document.querySelector('[name="server_id"]')?.value===fixture.serverId);await click("确认并保存连接");await wait("connection saved",confirmed);
     field("username",fixture.login);field("password",fixture.password);await click("登录");await wait("login",()=>text().includes("已登录（持有凭据"));
     await page("/bindings");await click("读取授权 Vault");await wait("vault",()=>document.querySelector(`option[value="${fixture.vault}"]`));await window.__TAURI_INTERNALS__.invoke("agent_create_binding",{input:{bindingId:crypto.randomUUID().replaceAll("-",""),vaultId:fixture.vault,localPath:fixture.localPath,mode:"on_demand"}});
     await wait("merge",async()=>{const s=await invoke("agent_get_status");const b=s.management?.bindings?.find(b=>b.local_path===fixture.localPath);if(!b)return false;report.bindingId=b.binding_id;return s.bindings.find(x=>x.binding_id===b.binding_id)?.synchronized;});

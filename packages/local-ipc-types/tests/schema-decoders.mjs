@@ -91,7 +91,7 @@ check("all_management_examples_decode_without_losing_parameters", () => {
     assert.deepEqual(reencode(decoded), sample);
     commands.add(decoded.command.name);
   }
-  assert.equal(commands.size, 25);
+  assert.equal(commands.size, 26);
 });
 
 check("response_ok_example_decodes_to_sample", () => {

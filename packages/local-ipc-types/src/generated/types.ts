@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 2;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 6;
+export const PROTOCOL_MINOR = 7;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -174,9 +174,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {

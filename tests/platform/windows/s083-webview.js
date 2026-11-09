@@ -32,8 +32,8 @@ window.addEventListener("DOMContentLoaded",async()=>{
     }else if(fixture.phase==="history"){
       function field(name,value){const el=document.querySelector(`[name="${name}"]`);if(!el)throw new Error(`field ${name}`);const p=el instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,"value").set.call(el,value);el.dispatchEvent(new Event(el instanceof HTMLSelectElement?"change":"input",{bubbles:true}));}
       const text=()=>document.body.innerText;const confirmed=()=>document.querySelector("[data-agent-feedback]")?.textContent==="操作已由 agent 确认。";
-      location.hash="/connections";await wait("connection form",()=>document.querySelector('[name="server_id"]')?.value?.length===32);
-      field("server_id",fixture.serverId);field("server_url",fixture.url);field("ca_file",fixture.caFile);await click("保存连接");await wait("saved",confirmed);
+      location.hash="/connections";await wait("connection form",()=>!!document.querySelector('[name="server_url"]'));
+      field("server_url",fixture.url);field("ca_file",fixture.caFile);await wait("discovered identity",()=>document.querySelector('[name="server_id"]')?.value===fixture.serverId);await click("确认并保存连接");await wait("saved",confirmed);
       field("username",fixture.login);field("password",fixture.password);await click("登录");await wait("logged in",()=>text().includes("已登录（持有凭据"));
       location.hash="/bindings";await click("读取授权 Vault");await wait("vault",()=>document.querySelector(`option[value="${fixture.vault}"]`));await window.__TAURI_INTERNALS__.invoke("agent_create_binding",{input:{bindingId:crypto.randomUUID().replaceAll("-",""),vaultId:fixture.vault,localPath:fixture.localPath,mode:"full"}});
       await wait("initial synchronized",async()=>{const s=await status();const b=s.management?.bindings?.find(x=>x.local_path===fixture.localPath);if(!b)return false;report.bindingId=b.binding_id;return s.bindings.find(x=>x.binding_id===b.binding_id)?.synchronized;});

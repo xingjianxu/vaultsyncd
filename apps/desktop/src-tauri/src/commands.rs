@@ -73,6 +73,26 @@ pub(crate) struct ConnectionInput {
     server_url: String,
     ca_file: Option<String>,
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ConnectionAddress {
+    server_url: String,
+    ca_file: Option<String>,
+}
+#[tauri::command]
+pub(crate) async fn agent_discover_connection(
+    input: ConnectionAddress,
+) -> Result<ManagementResult, BridgeError> {
+    manage(
+        C::DiscoverConnection,
+        Some(P {
+            server_url: Some(input.server_url),
+            ca_file: input.ca_file,
+            ..Default::default()
+        }),
+    )
+    .await
+}
 #[tauri::command]
 pub(crate) async fn agent_set_connection(
     input: ConnectionInput,

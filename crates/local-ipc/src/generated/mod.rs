@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 2;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 6;
+pub const PROTOCOL_MINOR: u32 = 7;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -137,6 +137,9 @@ pub enum CommandName {
     /// 取值 `get_connection`。
     #[serde(rename = "get_connection")]
     GetConnection,
+    /// 取值 `discover_connection`。
+    #[serde(rename = "discover_connection")]
+    DiscoverConnection,
     /// 取值 `set_connection`。
     #[serde(rename = "set_connection")]
     SetConnection,
