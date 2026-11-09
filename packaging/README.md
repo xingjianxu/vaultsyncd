@@ -42,8 +42,8 @@ nix develop --command gh auth login --hostname github.com
 
 ```sh
 # 将路径替换为实际已完成构建目录；可在任意当前目录调用脚本。
-./tools/publish-release.sh /data/vaultsyncd-temp/S156-实际run_id/releases/v0.2.0-实际提交前12位 --dry-run
-./tools/publish-release.sh /data/vaultsyncd-temp/S156-实际run_id/releases/v0.2.0-实际提交前12位
+./tools/publish-release.sh /data/vaultsyncd-dev/vaultsyncd-temp/S156-实际run_id/releases/v0.2.0-实际提交前12位 --dry-run
+./tools/publish-release.sh /data/vaultsyncd-dev/vaultsyncd-temp/S156-实际run_id/releases/v0.2.0-实际提交前12位
 ```
 
 也可直接传既有 `dist/releases/v<版本>-<提交前12位>` 目录。`--dry-run` 校验本地 Git 对象、版本、树、组件输入、所有登记文件的大小/SHA-256 和构建校验表，显示仓库、标签、附件；不联网、不上传、无需登录。脚本不要求当前 HEAD 等于包源，始终使用清单中的完整提交，避免把交接提交或新代码重标为旧包来源。默认目标取 `origin` 的 push 地址，支持 github.com HTTPS/SSH；可用 `--remote <名称>` 选择其他已配置远端。
@@ -65,7 +65,7 @@ nix develop --command gh auth login --hostname github.com
 
 附件包括实际选中平台的归档、Linux 对应运行库源码、各平台来源清单（加平台前缀避免重名）、根 `release-manifest.json`、`build-SHA256SUMS` 及 `SHA256SUMS`；不上传 `logs/`。GitHub 附件为平铺布局，下载到同一目录后执行 `sha256sum -c SHA256SUMS`。`build-SHA256SUMS` 保留原构建目录的校验表，路径包含平台目录及未上传的本地日志，不能直接用于平铺附件。清单与哈希不是数字签名。
 
-暂存默认 `/data/vaultsyncd-temp/cache/github-release/upload-*`，完成或失败后清理本次复制；原构建目录保持。其他主机可传 `--staging-root <已有授权的缓存根>`。本入口只发布已有归档，不自动编译、不启动 VM、不改变线上服务。验收入口：`nix develop --command python3 tests/contract/github_release.py`（本地 Git 与 API 契约，不写真实 GitHub）。CLI 行为依据：[创建 Release](https://cli.github.com/manual/gh_release_create)、[上传附件](https://cli.github.com/manual/gh_release_upload)、[发布草稿](https://cli.github.com/manual/gh_release_edit)。
+暂存默认 `/data/vaultsyncd-dev/vaultsyncd-temp/cache/github-release/upload-*`，完成或失败后清理本次复制；原构建目录保持。其他主机可传 `--staging-root <已有授权的缓存根>`。本入口只发布已有归档，不自动编译、不启动 VM、不改变线上服务。验收入口：`nix develop --command python3 tests/contract/github_release.py`（本地 Git 与 API 契约，不写真实 GitHub）。CLI 行为依据：[创建 Release](https://cli.github.com/manual/gh_release_create)、[上传附件](https://cli.github.com/manual/gh_release_upload)、[发布草稿](https://cli.github.com/manual/gh_release_edit)。
 
 ## 组件来源收据
 

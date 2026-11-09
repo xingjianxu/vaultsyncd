@@ -224,7 +224,7 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `VAULTSYNCD_LAB_VAULT` | 默认 `/data/vaultsyncd-lab`。必须绝对且已规范化，必须位于 `/data` 或 `/var/lib` 之下；拒绝 `/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/data/llm`、`/data/.snapshots`、`/wrd`、`/tmp` 等受保护路径及其内部，拒绝 Git 工作区与 `.worktrees` |
+| `VAULTSYNCD_LAB_VAULT` | 默认 `/data/vaultsyncd-dev/vaultsyncd-temp/volumes`。必须绝对且已规范化，必须位于 `/data/vaultsyncd-dev/vaultsyncd-temp` 之下；拒绝 `/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/data/llm`、`/data/.snapshots`、`/wrd`、`/tmp` 等受保护路径及其内部，拒绝 Git 工作区与 `.worktrees` |
 | `VAULTSYNCD_LOOP_SIZE` | loop 镜像默认大小，等价于 `create` 的可选第二参数 |
 | 派生路径 | 镜像、挂载点、子卷、meta 全部由 `run_id` 派生并逐条断言落在 `runs/<run_id>/` 内，调用者不能传任意路径 |
 | 提权 | 只用 `sudo -n`（`losetup`/`mkfs.btrfs`/`mount`/`umount`/`btrfs subvolume`）；失败立即退出，不提示密码，不回退到交互 sudo |
@@ -252,7 +252,7 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `VM_VAULT` | 默认 `/data/vaultsyncd-lab/win-lab`，必须在源码树之外；所有派生路径都相对它，不写入仓库 |
+| `VM_VAULT` | 默认 `/data/vaultsyncd-dev/vaultsyncd-lab/win-lab`，必须在源码树之外；所有派生路径都相对它，不写入仓库 |
 | `VM_NAME` / `LAB_USER` / `SSH_PORT` / `SPICE_PORT` | 默认 `windows-11` / `Quickemu` / `2222` / `5930`；第二台客体改这些值，不要复用同一 `tpm2-00.permall` 或 qcow2 |
 | 凭据 | 口令只在 `secrets/lab-credentials.txt`（0600，目录 0700）；私钥只在 `ssh/`（0600）；脚本不打印口令与私钥 |
 | 幂等性 | `prepare` 可重复执行（复用已有口令/密钥，重打 ISO 与 conf）；`fetch-iso` 以远端字节数与已记录 sha256 判定，不重复下载完整文件；`start` 不做隐式 `--kill` |
@@ -2711,3 +2711,9 @@ S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开
 - `GithubUpdates::{check,download}` 与 `ReleaseUpdate` 位于 `crates/release-client/src/lib.rs`。流式回调收到的仍是未可信片段，只有完整长度及SHA-256成功后才把 `download.part` 改为完成包。GUI在 `%LOCALAPPDATA%/vaultsyncd/updates/<nonce>/` 建新目录，解压固定11个名称、单项512MiB/合计1GiB，核对 ZIP/installed 两份同源及逐文件摘要，不执行脚本。无新增 IPC/wire/schema。
 - 候选 agent `--auto-update --program-dir <原目录>` 等待旧GUI退出、持独立更新/GUI锁，调用 `--maintenance auto-upgrade`；普通 `upgrade` 仍拒绝ZIP接管。ZIP原owner须匹配原目录与旧清单，事务备份完整ZIP及旧owner，失败整套恢复；owner通过无reparse/单硬链接的排他写句柄更新。安装版只替换原六项程序文件，保留卸载入口和Run，成功更新HKCU版本。
 - 维护返回trial备份，全部Binding暂停后启动新agent，经精确程序路径校验的IPC/版本健康检查才写 `complete.json`，再通过IPC恢复原暂停值；之后不可再回滚新状态。`auto-update.json`及 `trial-plan.json`保留中断恢复信息。候选 `--auto-update-recover --program-dir <原目录>` 对未提交trial排空/持writer锁回退，对已提交trial仅补恢复暂停；不删除Vault/缓存/凭据。程序忙、迁移失败或启动失败保留日志/程序/状态/恢复导出，必要时拒绝回退，绝不强杀writer。
+
+## S163 开发测试数据根（覆盖 S146/S161 的当前位置）
+
+所有新开发测试目录只能位于 `/data/vaultsyncd-dev`；默认沿用其内 `vaultsyncd-temp/`（任务、volumes、cache、evidence）和 `vaultsyncd-lab/`（VM、基线、关联缓存）子树。正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd` 保持。Windows客体内的本地NTFS目录不受宿主路径约定影响。
+
+旧 temp/lab 路径中的 `/data/` 替换为 `/data/vaultsyncd-dev/` 定位；更早 build/deploy 前缀先按S161映射，再按本节映射。历史原始证据不改写，不创建旧入口软链。测试卷白名单只允许 `vaultsyncd-temp` 子树，继续隔离VM；不允许把开发根/归档/备份作为一次清理目标。Windows缓存默认与共享脚本一致；覆盖环境变量也必须遵守开发根约定。协议、schema和产品接口无变化。验收见 `agent/tasks/S163.md`。

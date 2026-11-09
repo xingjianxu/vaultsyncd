@@ -107,7 +107,7 @@ def main():
     parser.add_argument('--rev', default='HEAD', help='项目已提交的 commit/tag，默认 HEAD')
     parser.add_argument('--config', type=Path, default=Path('/etc/nixos'))
     parser.add_argument('--host', default=socket.gethostname())
-    parser.add_argument('--evidence-base', type=Path, default=Path('/data/vaultsyncd-temp/evidence/deploy'))
+    parser.add_argument('--evidence-base', type=Path, default=Path('/data/vaultsyncd-dev/vaultsyncd-temp/evidence/deploy'))
     parser.add_argument('--build-only', action='store_true', help='只纯构建和保存证据，不激活或修改主机分支')
     args = parser.parse_args()
     if not re.fullmatch(r'[A-Za-z0-9_-]+', args.host):

@@ -21,7 +21,7 @@
 
 ## 3. 目录布局（全部在源码之外）
 
-VM 根：`/data/vaultsyncd-lab/win-lab/`（可在 `VM_VAULT` 环境变量覆盖）。S146 起该根及其基线、关联缓存保持原位；新临时测试卷改用 `/data/vaultsyncd-temp/volumes`，不再写入既有 VM lab。
+VM 根：`/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/`（可在 `VM_VAULT` 环境变量覆盖）。S163 已将整个 lab（含基线与关联缓存）迁入开发根，覆盖 S146 的原位保留约定；临时测试卷使用 `/data/vaultsyncd-dev/vaultsyncd-temp/volumes`，不再写入既有 VM lab。
 
 | 路径 | 内容 | 权限 |
 | --- | --- | --- |
@@ -74,7 +74,7 @@ VM 根：`/data/vaultsyncd-lab/win-lab/`（可在 `VM_VAULT` 环境变量覆盖�
 模板：`tools/windows-lab/autounattend.xml.template`（`__LAB_PASSWORD__` 由 `prepare` 用 VM 目录里的随机口令替换）。
 
 1. **删除两处 Windows 11 Pro KMS 通用密钥** `W269N-WFGWX-YVC9B-4J6C9-T83GX`：`windowsPE` 的 `UserData/ProductKey` 与 `specialize` 的 `Shell-Setup/ProductKey`。评估版 ISO 没有 Pro 版，也不需要密钥；保留会导致“版本/密钥不匹配”安装失败。`prepare` 会做负控：残留该密钥或残留占位符即失败。
-2. **账号**：保留 quickemu 的 `Quickemu`（Administrators）本地账号与 AutoLogon，但口令换成 32 位随机字母数字，只存在于 `secrets/lab-credentials.txt`（0600）与 0700 目录内的 `autounattend.xml`。获取方式：`sudo cat /data/vaultsyncd-lab/win-lab/secrets/lab-credentials.txt`（文件属主即运行 quickemu 的用户）。
+2. **账号**：保留 quickemu 的 `Quickemu`（Administrators）本地账号与 AutoLogon，但口令换成 32 位随机字母数字，只存在于 `secrets/lab-credentials.txt`（0600）与 0700 目录内的 `autounattend.xml`。获取方式：`sudo cat /data/vaultsyncd-dev/vaultsyncd-lab/win-lab/secrets/lab-credentials.txt`（文件属主即运行 quickemu 的用户）。
 3. **`DynamicUpdate` 关闭**（`<Enable>false</Enable>`）：安装期不抓 Windows Update，安装时长与结果可复现；更新由后续手动决定。
 4. **FirstLogonCommands 收敛为一条**：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File F:\provision.ps1`，其余动作（qemu-ga、SPICE msi、viogpudo、电源、SSH、WinRM）都在 `provision.ps1` 内分步执行并记录，单步失败不会中断整条链路。
 5. 保留 quickemu 的 `EnableLUA=false`（关闭 UAC）与 `LabConfig` 的 CPU/RAM/TPM/SecureBoot 检查绕过。这是上游模板的实验室取向，**与生产 Windows 行为不同**，涉及 UAC/提权的结论必须在 S010—S012 明确记录；`secureboot="off"` 同理。
@@ -122,7 +122,7 @@ nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh stop
 `start` 实际执行（等价于手工命令）：
 
 ```bash
-cd /data/vaultsyncd-lab/win-lab
+cd /data/vaultsyncd-dev/vaultsyncd-lab/win-lab
 setsid nohup quickemu --vm windows-11.conf \
   --display none --viewer none --access local --spice-port 5930 \
   --public-dir none >> logs/quickemu-start.log 2>&1 &
@@ -139,7 +139,7 @@ setsid nohup quickemu --vm windows-11.conf \
 | --- | --- |
 | 端点 | 宿主 `127.0.0.1:2222` → 客体 `22`（`ssh_port="2222"`，quickemu 生成 `hostfwd=tcp::2222-:22`） |
 | 用户 / 认证 | `Quickemu`（Administrators）+ 自动化 ed25519 私钥 `ssh/vaultsyncd-lab_ed25519`（`IdentitiesOnly=yes`） |
-| 命令 | `ssh -p 2222 -i /data/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/data/vaultsyncd-lab/win-lab/ssh/known_hosts Quickemu@127.0.0.1 'cmd /c ver'` |
+| 命令 | `ssh -p 2222 -i /data/vaultsyncd-dev/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/ssh/known_hosts Quickemu@127.0.0.1 'cmd /c ver'` |
 | 密码 | 仅在 `secrets/lab-credentials.txt`（0600），用于 SPICE 控制台登录/排障；不作为文档内容 |
 | 服务形态 | `sshd` 启动类型 Automatic；管理员公钥走 `administrators_authorized_keys`（继承已禁用，只允许 Administrators 与 SYSTEM） |
 | 认证限制 | 已实施密钥独占：`PasswordAuthentication no`、`KbdInteractiveAuthentication no`、`PubkeyAuthentication yes`；用 `ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no` 实测返回 `Permission denied (publickey).`，同密钥登录仍成功 |
@@ -168,22 +168,22 @@ nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh stop
 基线 = 未注册客户端身份、SSH 就绪、`C:` 为 NTFS 的干净状态（安装后、任何同步测试前）。必须同时备份以下**五类**内容，只备份磁盘会失去 EFI/TPM 状态，Windows 可能无法启动或 BitLocker/TPM 相关状态不一致：
 
 ```bash
-VM=/data/vaultsyncd-lab/win-lab
+VM=/data/vaultsyncd-dev/vaultsyncd-lab/win-lab
 # 客体必须已干净关机
-tar -C "$VM" -cf /data/vaultsyncd-lab/win-lab-baseline-$(date -u +%Y%m%d).tar \
+tar -C "$VM" -cf /data/vaultsyncd-dev/vaultsyncd-lab/win-lab-baseline-$(date -u +%Y%m%d).tar \
   windows-11.conf \
   windows-11/disk.qcow2 \
   windows-11/OVMF_VARS.fd \
   windows-11/tpm2-00.permall \
   windows-11/unattended.iso
-sha256sum /data/vaultsyncd-lab/win-lab-baseline-*.tar
+sha256sum /data/vaultsyncd-dev/vaultsyncd-lab/win-lab-baseline-*.tar
 ```
 
 - `windows-11.swtpm-sock` 是运行时套接字，**不入备份**；`tpm2-00.permall` 是 TPM 状态，必须入备份。
-- 本轮已生成的基线：`/data/vaultsyncd-lab/win-lab-baseline-20261105.tar`，13,082,818,560 字节（qcow2 稀疏，`--sparse` 打包），sha256 `de2fa63429617bb0eff09a1dbb0e41536220e42e3d7773599d527011c75265c6`；`tar -tvf` 列出 `windows-11.conf`、`windows-11/disk.qcow2`、`windows-11/OVMF_VARS.fd`、`windows-11/tpm2-00.permall`、`windows-11/unattended.iso` 五个条目。归档在最后一次干净关机之后生成。
+- 本轮已生成的基线：`/data/vaultsyncd-dev/vaultsyncd-lab/win-lab-baseline-20261105.tar`，13,082,818,560 字节（qcow2 稀疏，`--sparse` 打包），sha256 `de2fa63429617bb0eff09a1dbb0e41536220e42e3d7773599d527011c75265c6`；`tar -tvf` 列出 `windows-11.conf`、`windows-11/disk.qcow2`、`windows-11/OVMF_VARS.fd`、`windows-11/tpm2-00.permall`、`windows-11/unattended.iso` 五个条目。归档在最后一次干净关机之后生成。
 - 凭据与密钥（`secrets/`、`ssh/`）单独按需备份/复制，不进同一份共享归档是默认做法；第二台客体应生成**新的**密钥与口令。
 - 恢复：解包回同一 `VM_VAULT`，保持相对路径不变，再 `start`。`windows-11/disk.qcow2` 的虚拟大小固定 100 GiB，不要用 `qemu-img resize` 改成更小值。
-- 第二台（S107 并发）：从基线解包到**另一个** `VM_VAULT`（例如 `/data/vaultsyncd-lab/win-lab-2/`），改 `VM_NAME`/`ssh_port`/`spice_port`，首次启动后用新密钥与口令，并让客户端生成独立 DeviceId；不要两台共用同一个 `tpm2-00.permall` 或同一个 qcow2。
+- 第二台（S107 并发）：从基线解包到**另一个** `VM_VAULT`（例如 `/data/vaultsyncd-dev/vaultsyncd-lab/win-lab-2/`），改 `VM_NAME`/`ssh_port`/`spice_port`，首次启动后用新密钥与口令，并让客户端生成独立 DeviceId；不要两台共用同一个 `tpm2-00.permall` 或同一个 qcow2。
 
 ## 12. 宿主交叉编译、传输与客体原生执行（ADR-013 / S009）
 
@@ -201,7 +201,7 @@ sha256sum /data/vaultsyncd-lab/win-lab-baseline-*.tar
 ### 12.2 三条命令（宿主侧，均在源码树内执行）
 
 ```bash
-# 1) 首次准备：把固定 Rust 工具链与 Windows 标准库装进 .cache/windows/（幂等）
+# 1) 首次准备：把固定 Rust 工具链与 Windows 标准库装进开发根下的工具链缓存（幂等）
 nix develop .#windows --command bash tests/platform/windows/setup-toolchain.sh
 
 # 2) 交叉构建：产物写到 artifacts/windows/x86_64-pc-windows-msvc/ 并生成 SHA256SUMS
@@ -219,11 +219,11 @@ nix develop .#windows --command bash tests/platform/windows/run-on-guest.sh
 | --- | --- | --- |
 | rustup 1.29.2、cargo-xwin 0.23.1、clang/clang-cl 21.1.8、lld-link 21.1.8、llvm-lib 21.1.8 | `flake.nix` 的 `windows` devShell（`devShells.x86_64-linux.windows`） | `flake.lock` 锁定的 nixpkgs rev `1d060086d60cb76a40cf37109f979d88a5bd6396` |
 | 宿主 rustc/cargo 1.99.0 与 `x86_64-pc-windows-msvc` 标准库 | rustup 从 `static.rust-lang.org` 下载 | `rust-toolchain.toml` 的 `channel`/`targets`，`setup-toolchain.sh` 读该文件安装 |
-| MSVC CRT 14.44.17.14、Windows SDK 10.0.26100（含 `cldapi.lib`、`cfapi.h`） | `cargo-xwin` 从 Microsoft 官方 manifest 下载 | `cargo-xwin` 0.23.1 的默认版本选择，缓存到 `.cache/windows/xwin` 并留 `DONE` 标记 |
+| MSVC CRT 14.44.17.14、Windows SDK 10.0.26100（含 `cldapi.lib`、`cfapi.h`） | `cargo-xwin` 从 Microsoft 官方 manifest 下载 | `cargo-xwin` 0.23.1 的默认版本选择，缓存到 `/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows/xwin` 并留 `DONE` 标记 |
 
 - 目标三元组固定为 `x86_64-pc-windows-msvc`。**不用 GNU 目标**：锁定 nixpkgs 的 `pkgsCross.mingwW64`（mingw-w64 14.0.0）导入库中不含 `libcldapi.a`，CFAPI 无法链接；xwin 的 Windows SDK 含 `cldapi.lib`。
-- 缓存目录都在工作树根的 `.cache/windows/`，已被 `.gitignore` 的 `/.cache/` 忽略，不写入 `~/.rustup`、`~/.cargo`：`rustup/`（工具链，实测 1.7 GB）、`cargo/`（cargo home）、`xwin/`（CRT+SDK，实测 1.2 GB）。
-- 清理：`rm -rf .cache/windows`（下次 `setup-toolchain.sh` + `build-cross.sh` 会重新下载）。`artifacts/windows/` 同样在 `.gitignore` 忽略的 `artifacts/` 下，可单独删除。
+- 缓存目录都在源码外的 `/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows/`，不写入 `~/.rustup`、`~/.cargo`：`rustup/`（工具链，实测 1.7 GB）、`cargo/`（cargo home）、`xwin/`（CRT+SDK，实测 1.2 GB）。
+- 清理：`rm -rf /data/vaultsyncd-dev/vaultsyncd-temp/cache/windows`（下次 `setup-toolchain.sh` + `build-cross.sh` 会重新下载）。`artifacts/windows/` 同样在 `.gitignore` 忽略的 `artifacts/` 下，可单独删除。
 
 ### 12.4 产物与 CRT 链接方式
 
@@ -267,13 +267,13 @@ nix develop .#windows --command bash tests/platform/windows/run-on-guest.sh
 | qcow2 出现 `ERROR cluster 5 refcount=0 reference=1` | 上一次 `--kill` 强杀导致；`qemu-img` 会自动修复，之后用 `stop` 做干净关机 |
 | SPICE 端口被占 | `start` 前会检查 `ss -ltn`；用 `SPICE_PORT` 环境变量换端口并记录 |
 | 首次启动后立即 100% CPU 且长时间无 SSH | Windows Update 在首登脚本里下载 FoD；按 §13 等待，必要时用 SPICE 控制台登录看进度 |
-| 忘记口令 | `sudo cat /data/vaultsyncd-lab/win-lab/secrets/lab-credentials.txt`；密钥丢失则重新 `prepare` 后需要重装或经 SPICE 手工补 `administrators_authorized_keys` |
+| 忘记口令 | `sudo cat /data/vaultsyncd-dev/vaultsyncd-lab/win-lab/secrets/lab-credentials.txt`；密钥丢失则重新 `prepare` 后需要重装或经 SPICE 手工补 `administrators_authorized_keys` |
 | `nix develop .#windows` 提示“工具链尚未安装” | 先跑 `tests/platform/windows/setup-toolchain.sh`；`shellHook` 用 `rustup which cargo` 解析 `rust-toolchain.toml`，不做隐式下载 |
 | `cargo xwin build` 卡在 `Downloading MSVC CRT...` | 首次要取 MSVC CRT 与 Windows SDK（实测约 1.2 GB，2 分钟）；检查到 Microsoft manifest 的网络，失败后重跑即可续传 |
 | 客体执行产物立刻以退出码 `-1073741515`（`0xC0000135`）结束 | 动态 CRT 缺少 `VCRUNTIME140.dll`；用 `build-cross.sh`（带 `+crt-static`）重新构建，不要往客体装编译工具链 |
 | HRESULT/链接报找不到 `CfGetPlatformInfo` 或 `cldapi.lib` | 确认走的是 `cargo xwin build`（xwin SDK 才有 `cldapi.lib`）；`pkgsCross.mingwW64` 的 mingw-w64 14.0.0 不带该导入库 |
 | 两端哈希判定为不一致但打印值相同 | 客体输出是 CRLF；`run-on-guest.sh` 已统一 `tr -d '\r'`，自定义脚本也要去 CR 后比对 |
-| `.cache/windows` 占用过大（实测 rustup 1.7 GB + xwin 1.2 GB） | 全部可再生：`rm -rf .cache/windows` 后重跑 `setup-toolchain.sh` 与 `build-cross.sh` |
+| Windows 工具链缓存占用过大（实测 rustup 1.7 GB + xwin 1.2 GB） | 全部可再生：`rm -rf /data/vaultsyncd-dev/vaultsyncd-temp/cache/windows` 后重跑 `setup-toolchain.sh` 与 `build-cross.sh` |
 
 ## 15. 备选通道：WinRM（5985）
 
@@ -281,7 +281,7 @@ nix develop .#windows --command bash tests/platform/windows/run-on-guest.sh
 
 ```bash
 printf 'hostfwd_add nic tcp:127.0.0.1:5985-10.0.2.15:5985\n' \
-  | socat - UNIX-CONNECT:/data/vaultsyncd-lab/win-lab/windows-11/windows-11-monitor.socket
+  | socat - UNIX-CONNECT:/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/windows-11/windows-11-monitor.socket
 curl -s -i -m 10 -X POST -H 'Content-Type: application/soap+xml;charset=UTF-8' \
   --data '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"></s:Envelope>' \
   http://127.0.0.1:5985/wsman | head -3   # 期望 HTTP/1.1 401 + WWW-Authenticate: Negotiate
@@ -542,7 +542,7 @@ cfapi-prototype release --name <entry> [--vault <path>] [--expect released|refus
 - 客体**已干净关机**（`shutdown /s /t 0` 后 qemu 与 swtpm 退出，`2222`/`5930` 已关闭，无孤儿进程）。下次使用：`nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh start`，再 `wait-ssh`（实测从启动到 SSH 可用约 20 秒）。
 - 系统：Windows 11 Enterprise Evaluation 26H2 / build 26300.9457，`C:` 为 NTFS（98.6 GiB，可用约 78.7 GiB），8 vCPU / 8 GiB / 100 GiB VirtIO GPT。
 - 通道：SSH 密钥登录（`Quickemu@127.0.0.1:2222`，密钥独占认证）+ SPICE `127.0.0.1:5930` + WinRM 5985（按 §15 临时转发）。
-- 基线归档：`/data/vaultsyncd-lab/win-lab-baseline-20261105.tar`（含 conf/qcow2/OVMF_VARS/TPM 状态/unattended.iso）。
+- 基线归档：`/data/vaultsyncd-dev/vaultsyncd-lab/win-lab-baseline-20261105.tar`（含 conf/qcow2/OVMF_VARS/TPM 状态/unattended.iso）。
 - 客体未安装任何编译工具链。S009 用 `nix develop .#windows` 交叉编译 `platform-smoke.exe` / `cfapi-link-smoke.exe`，传输后客体原生执行退出码均 0、两端 SHA-256 一致（见 §12.5），因此“宿主构建 → 客体运行”通道已可用。
 - S010（2026-11-05）在客体上注册了测试同步根、创建了目录 + 12,345 B + 1 MiB 三个真实占位符、把 48 B 的 `FileIdentity` 交给系统保存，并按“只删自己的占位”完成清理与注销；`run-cfapi-prototype.sh` 退出 0、两端 SHA-256 一致（见 §16.3）。结束后已清理 `C:\vaultsyncd-test` 里的占位、注销同步根（`inspect` 退出码 3）并干净关机，没有注册残留。内容水合（S011）与释放/写保护（S012）仍未实现。
 - S011（2026-11-05）在客体上实现了真正的按需内容供给：`read` 读到的字节与 SHA-256 与宿主固定内容版本一致（12,345 B / 1 MiB / 16 MiB 三个条目，含 1 MiB 范围水合），离线读未水合条目以 `ERROR_CLOUD_FILE_NETWORK_UNAVAILABLE`(388) 在 1 ms 内明确失败、已水合条目离线可读且不再请求内容，慢源超时有界失败，传输中断开同步根后回填循环在 3/16 段停下并有界返回；`run-cfapi-hydration.sh` 退出 0（46 项 `check=pass`、0 fail，两端 4 项哈希 `MATCH`），S010 的 `run-cfapi-prototype.sh` 仍退出 0（21 项 pass）。`CANCEL_FETCH_DATA` 在该 build 上未观察到（见 §17.4）。结束后已清理探针目录、注销同步根并干净关机。
@@ -573,7 +573,7 @@ cfapi-prototype release --name <entry> [--vault <path>] [--expect released|refus
 ```bash
 cd /wrd/prj/vaultsyncd
 nix develop --command cargo build --locked -p vaultsyncd-server-tests --example e2e-native-server
-VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \
+VAULTSYNCD_WINDOWS_CACHE=/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows \
   nix develop .#windows --command bash tests/platform/windows/run-native-e2e.sh
 ```
 
@@ -591,6 +591,6 @@ VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \
 - 生产 HTTPS 反向代理部署属 S097；本卡使用测试 TLS 入口 + 认证 SSH 回环隧道，证书、主机名与校验是真实的，但不是生产代理配置。
 - `kill_boundaries`（S052 子进程强杀恢复）在 S075 加入管理 socket 后曾因 `AdminSocket` 残留 socket 报 `AddrInUse`；该回归已由 S075-c 修复（服务端持状态锁后回收合法遗留 socket，非 socket/他人属主仍明确失败），4 项已恢复通过。
 
-### S146 临时缓存位置约定（覆盖上述工作树缓存默认值）
+### S163 开发缓存位置约定（覆盖上述历史工作树缓存）
 
-新建 Windows 交叉编译工具链缓存默认使用 `/data/vaultsyncd-temp/cache/windows`，仍可用 `VAULTSYNCD_WINDOWS_CACHE` 指向该临时根下的独立缓存。首次运行前建立并授权临时根目录；已有 `.cache/windows` 或 VM lab 缓存不自动搬迁、删除或重装。历史命令和容量为当时证据，当前默认值以 `flake.nix` 为准。VM 磁盘、EFI、TPM、镜像、配置、凭据及恢复基线均不迁移。
+新建 Windows 交叉编译工具链缓存默认使用 `/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows`，仍可用 `VAULTSYNCD_WINDOWS_CACHE` 指向该临时根下的独立缓存。首次运行前建立并授权临时根目录；历史工作树缓存位置只作证据，执行上述命令前须将缓存路径替换为此默认值；当前值以 `flake.nix` 为准。S163 已将 temp 与 lab 整树迁入开发根，VM 磁盘、EFI、TPM、镜像、配置、凭据及恢复基线一并保留，详见 `agent/tasks/S163.md`。

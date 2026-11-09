@@ -60,8 +60,8 @@
 | 用途 | 约定 |
 | --- | --- |
 | 项目源码 | 用户创建的 `vaultsyncd/`；实际绝对路径在 S001 记录，代码开发使用 §2.7 的任务 worktree |
-| 临时开发状态 | `/data/vaultsyncd-temp/Sxxx-<run_id>/`，独立账号/端口/配置 |
-| 集成与故障测试 | `/data/vaultsyncd-temp/volumes/runs/<run_id>/`；每轮独立 DB、Vault、对象与进程 |
+| 临时开发状态 | `/data/vaultsyncd-dev/vaultsyncd-temp/Sxxx-<run_id>/`，独立账号/端口/配置 |
+| 集成与故障测试 | `/data/vaultsyncd-dev/vaultsyncd-temp/volumes/runs/<run_id>/`；每轮独立 DB、Vault、对象与进程 |
 | 正式试用实例 | 示例 `/var/lib/vaultsyncd/`，只在部署阶段启用，先用可丢弃样本 |
 | 用户工作目录 | 从允许基目录显式选择，与所有内部状态目录互不重叠 |
 | Windows 样本目录 | Windows 客体的独立 NTFS 目录，不使用共享文件夹模拟 NTFS |
@@ -1643,6 +1643,14 @@
 - 子步骤：S162-a 网络与校验；S162-b ZIP/安装版维护与重启；S162-c 宿主及 Windows 原生验收。属于同张用户功能卡，不展开其他 ready 工作。
 - 验收：版本/下载负例与安全解压；Windows 原生 ZIP 升级、归属/状态/暂停保持、重启与失败恢复、托盘入口/重复点击；交叉构建及受影响既有维护测试。真实 GitHub 无可访问正式 Release 时如实记录，使用受控附件验证不得称为线上升级。
 - 交接：`agent/tasks/S162.md`、progress、interfaces；全部验收后合 master 并清理；不修改服务端，不触发部署。
+
+
+### S163 — 开发测试目录统一迁入 dev 根
+
+- 依据：2026-11-09 用户要求所有 `/data/vaultsyncd-*` 目录迁入 `/data/vaultsyncd-dev`，以后开发测试目录只能位于该根；前置 S146、S161 done，design §6、§19.3、§24。本卡 ready，覆盖此前 lab 保持原位的约定。
+- 范围：同文件系统搬迁 temp/lab 两棵现有目录并保留内部布局、证据、权限、btrfs 身份；修复 GC roots、活跃引用、开发脚本默认路径与当前操作约定。正式数据与运行服务产物保持。
+- 验收：迁移前后元数据/稳定文件摘要、GC roots有效性、子卷身份与挂载、VM/SSH/socket及生产HTTP/HTTPS健康；脚本语法、受影响现有单测、真实测试卷生命周期与旧根拒绝、Windows缓存可用。历史证据只记前缀映射，不批量改写。
+- 交接：`agent/tasks/S163.md`；全部验收后合master并清理任务树，原4张blocked首发门禁保持。
 
 
 ## 7. 记录模板与续接规则

@@ -118,7 +118,7 @@ async fn s091_server_upgrade_actor() {
     let state = PathBuf::from(
         std::env::var_os("VAULTSYNCD_S091_ACTOR_STATE").expect("explicit stopped fixture state"),
     );
-    assert!(state.starts_with("/data/vaultsyncd-lab/runs/"));
+    assert!(state.starts_with("/data/vaultsyncd-dev/vaultsyncd-lab/runs/"));
     assert!(
         state
             .components()

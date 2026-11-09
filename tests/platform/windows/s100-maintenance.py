@@ -19,7 +19,7 @@ VAULT = Path(__file__).resolve().parents[3]
 HOST = os.environ.get("GUEST_HOST", "127.0.0.1")
 USER = os.environ.get("GUEST_USER", "Quickemu")
 PORT = os.environ.get("GUEST_PORT", "2222")
-KEY = os.environ.get("GUEST_SSH_KEY", "/data/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519")
+KEY = os.environ.get("GUEST_SSH_KEY", "/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519")
 OPTIONS = ["-i", KEY, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no",
            "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5"]
 SSH = ["ssh", "-p", PORT, *OPTIONS, f"{USER}@{HOST}"]
@@ -191,7 +191,7 @@ def main():
         assert upgraded["cloud_metadata"][:3] == [1, 0, 1048576]
         prompt = action("uninstall-prompt")
         assert prompt["default_no"] and "cloud-only" in prompt["text"]
-        monitor = Path(os.environ.get("VAULTSYNCD_QEMU_MONITOR", "/data/vaultsyncd-lab/win-lab/windows-11/windows-11-monitor.socket"))
+        monitor = Path(os.environ.get("VAULTSYNCD_QEMU_MONITOR", "/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/windows-11/windows-11-monitor.socket"))
         with socket.socket(socket.AF_UNIX) as connection:
             connection.settimeout(5)
             connection.connect(str(monitor))

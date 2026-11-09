@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 把 rust-toolchain.toml 固定的 Rust 工具链与 x86_64-pc-windows-msvc 标准库安装到
-# 仓库内被 .gitignore 忽略的 .cache/windows/rustup，并打印工具版本与 xwin 缓存位置。
+# /data/vaultsyncd-dev/vaultsyncd-temp/cache/windows/rustup，并打印工具版本与 xwin 缓存位置。
 # 幂等：已安装时只复核。必须在 `nix develop .#windows` 内运行。
 # 操作说明见 docs/operations/windows-lab.md §12。
 set -euo pipefail

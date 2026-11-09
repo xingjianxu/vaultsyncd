@@ -8,7 +8,7 @@ vault=$(repo_root)
 cd "$vault"
 test -f apps/desktop/dist/index.html || { echo 'build desktop frontend in default devShell first' >&2; exit 1; }
 run_id="s080-$(date +%s)-$$"
-artifact_dir="${VAULTSYNCD_NATIVE_ARTIFACTS:-/data/vaultsyncd-temp/S080-native/evidence}/$run_id"
+artifact_dir="${VAULTSYNCD_NATIVE_ARTIFACTS:-/data/vaultsyncd-dev/vaultsyncd-temp/S080-native/evidence}/$run_id"
 mkdir -p "$artifact_dir"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent -p vaultsyncd-desktop --features vaultsyncd-desktop/native-acceptance

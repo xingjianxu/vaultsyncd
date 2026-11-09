@@ -209,7 +209,7 @@ fn inspect_archive(path: &Path, manifest_hash: &str, output: &Path) -> Index {
 async fn real_export_integrity_authorization_and_release_restart() {
     let volume =
         PathBuf::from(std::env::var_os("VAULTSYNCD_S088_VOLUME").expect("dedicated run_id volume"));
-    assert!(volume.starts_with("/data/vaultsyncd-lab/runs/"));
+    assert!(volume.starts_with("/data/vaultsyncd-dev/vaultsyncd-lab/runs/"));
     let lab = Lab::new("b", Some(&volume), Some(&volume));
     lab.init_owner().await;
     std::fs::write(lab.work().join("note"), b"history-content").unwrap();

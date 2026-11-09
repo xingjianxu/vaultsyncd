@@ -5,11 +5,11 @@
 ```sh
 # 所有命令在本卡隔离树，先创建本 run 独占卷；只给本卷开启备份所需挂载选项。
 nix develop --command bash tools/test-volume/test-volume.sh create s102-1107 1G
-nix develop --command sudo -n mount -o remount,user_subvol_rm_allowed /data/vaultsyncd-temp/volumes/runs/s102-1107/mnt
-nix develop --command bash -c 'sudo -n chown "$(id -u):$(id -g)" /data/vaultsyncd-temp/volumes/runs/s102-1107/mnt'
+nix develop --command sudo -n mount -o remount,user_subvol_rm_allowed /data/vaultsyncd-dev/vaultsyncd-temp/volumes/runs/s102-1107/mnt
+nix develop --command bash -c 'sudo -n chown "$(id -u):$(id -g)" /data/vaultsyncd-dev/vaultsyncd-temp/volumes/runs/s102-1107/mnt'
 nix develop --command cargo build --locked -p vaultsyncd-server-tests --example old-device-native-server -p vaultsyncd-admin --bin vaultsyncd-admin
 VAULTSYNCD_E2E_TASK=S102 \
-VAULTSYNCD_S102_VOLUME=/data/vaultsyncd-temp/volumes/runs/s102-1107/mnt \
+VAULTSYNCD_S102_VOLUME=/data/vaultsyncd-dev/vaultsyncd-temp/volumes/runs/s102-1107/mnt \
 VAULTSYNCD_ADMIN_BIN="$PWD/target/debug/vaultsyncd-admin" \
 VAULTSYNCD_RELEASE_SERVER="$PWD/target/debug/examples/old-device-native-server" \
 VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \

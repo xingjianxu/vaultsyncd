@@ -5,7 +5,7 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1
 vault=$(repo_root);cd "$vault"
 run_id="s083-notifications-$(date +%s)-$$"
-artifact_dir="${VAULTSYNCD_NATIVE_ARTIFACTS:-/data/vaultsyncd-temp/S083-native/evidence}/$run_id";mkdir -p "$artifact_dir"
+artifact_dir="${VAULTSYNCD_NATIVE_ARTIFACTS:-/data/vaultsyncd-dev/vaultsyncd-temp/S083-native/evidence}/$run_id";mkdir -p "$artifact_dir"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent -p vaultsyncd-desktop --features vaultsyncd-desktop/native-acceptance
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent --example s083_notice_fixture

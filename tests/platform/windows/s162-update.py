@@ -18,10 +18,10 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[3]
-TEMP = Path('/data/vaultsyncd-temp/S162-client-update/evidence')
-KEY = '/data/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519'
+TEMP = Path('/data/vaultsyncd-dev/vaultsyncd-temp/S162-client-update/evidence')
+KEY = '/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519'
 OPTIONS = ['-i', KEY, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o',
-           'UserKnownHostsFile=/data/vaultsyncd-lab/win-lab/ssh/known_hosts',
+           'UserKnownHostsFile=/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/ssh/known_hosts',
            '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR']
 SSH = ['ssh', '-p', '2222', *OPTIONS, 'Quickemu@127.0.0.1']
 SCP = ['scp', '-P', '2222', *OPTIONS]

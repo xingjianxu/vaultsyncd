@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exclusive same-commit installation controller for a pre-provisioned lab.
 
-Config JSON: evidence (new absolute directory under /data/vaultsyncd-temp).
+Config JSON: evidence (new absolute directory under /data/vaultsyncd-dev/vaultsyncd-temp).
 Windows uses the documented SSH environment. Never modifies host production services.
 Run with VAULTSYNCD_CI_LAB=1; restore/cleanup failures fail the run.
 Only Linux x64 and Windows x64 are in the current platform scope.
@@ -18,7 +18,7 @@ import sys
 from run import plan
 
 ROOT = Path(__file__).resolve().parents[2]
-EVIDENCE_ROOT = Path("/data/vaultsyncd-temp")
+EVIDENCE_ROOT = Path("/data/vaultsyncd-dev/vaultsyncd-temp")
 LAB_LOCK = EVIDENCE_ROOT / "vaultsyncd-platform-lab.lock"
 
 
@@ -61,7 +61,7 @@ def main():
         (evidence/'source.json').write_text(json.dumps(source, indent=2))
         products_file = evidence/'products.json'
         component = evidence/'windows-client'
-        env = {**os.environ, 'VAULTSYNCD_WINDOWS_CACHE': os.environ.get('VAULTSYNCD_WINDOWS_CACHE', '/data/vaultsyncd-temp/cache/windows')}
+        env = {**os.environ, 'VAULTSYNCD_WINDOWS_CACHE': os.environ.get('VAULTSYNCD_WINDOWS_CACHE', '/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows')}
         if args.phase in ('build', 'all'):
             outputs = []
             for command in plan('release-linux', {}):

@@ -21,7 +21,7 @@
 - 用户明确（2026-11-09）：每次完成服务端（含服务端 Web）更改并通过相关验收后，直接部署到本机，不再等待单独部署请求；将部署、健康验证和交接纳入该卡，遇实际阻塞如实记录。纯文档或不改变服务产物的开发工具维护不触发无关部署。
 - 用户明确（2026-11-09）：移除 GitHub Actions 工作流及其专用代码、脚本和文档要求；统一使用本地 xtask 与受控实验室验证，不再以远端、Actions 或托管 runner 缺失作为首发门禁。Windows 原生能力、同源发行、性能和容量验收要求保持。
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。
-- 用户明确（2026-11-09）：今后临时任务数据、测试卷、下载及可再生缓存统一放在 `/data/vaultsyncd-temp/`，按 `Sxxx-<run_id>/` 或 `cache/<用途>/` 隔离，不在 `/data`、`/var/lib` 等位置散建任务目录；运行前确认该根目录已建立并授权。需长期保留的原始证据、备份与回退引用按用途放在其 `evidence/`、`backups/` 子目录，不自动过期删除。正式 `/data/vaultsyncd` 和 `/var/lib/vaultsyncd` 保持；同日用户另行授权 S151 将其 Vault 基目录 `/data/vaultsyncd/roots` 迁至 `/data/vaultsyncd/vaults`，已保留原数据完成迁移，当前入口见 `agent/tasks/S151.md`。`/data/vaultsyncd-lab` 整树（含 win-lab、基线和关联缓存）保持不动。历史证据路径继续可追溯，不批量改写历史记录。临时数据根不能作为一次任务的整体清理目标。
+- 用户最新明确（2026-11-09，S163）：所有开发测试相关目录（临时状态、测试卷、下载、可再生缓存、VM、基线、构建/部署证据及备份）只能放在 `/data/vaultsyncd-dev/` 下，按 `Sxxx-<run_id>/`、`cache/<用途>/` 或现有用途子树隔离；运行前确认根目录已建立并授权。现有 `/data/vaultsyncd-temp` 和 `/data/vaultsyncd-lab` 整树分别迁至该根下的同名目录，覆盖 S146 的 temp 根与 lab 原位保留决定；不得在旧位置重新建目录或兼容软链。需长期保留的原始证据、备份与回退引用不得按缓存自动删除，也不得整体清理开发根。正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd` 保持；Vault 基目录仍为 `/data/vaultsyncd/vaults`（S151）。历史证据不批量改写，通过 S163 的前缀映射追溯。
 - 纯核心与规划器不做平台 I/O；应用入口组装适配器。GUI/CLI 通过 agent IPC，Web 通过服务端 API；不直接修改在线数据库。
 - 先读现有接口再改动；schema 是 wire DTO 唯一编辑源，生成代码不手改。修改持久化/协议时补迁移、兼容和恢复验证。
 - 后续 UI 任务统一遵循 design §18.1：**Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.**
@@ -30,7 +30,7 @@
 
 ## 验证与交接
 
-- S161（2026-11-09）已将历史 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 分别迁到 `/data/vaultsyncd-temp/vaultsyncd-build`、`/data/vaultsyncd-temp/vaultsyncd-deploy`；GC roots已重新登记。历史证据路径按这两个前缀映射追溯，原始日志不改写；新位置仍为保留归档，不能按普通缓存整体删除。交接见 `agent/tasks/S161.md`。
+- 历史 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 经 S161/S163 现位于 `/data/vaultsyncd-dev/vaultsyncd-temp/vaultsyncd-build`、`/data/vaultsyncd-dev/vaultsyncd-temp/vaultsyncd-deploy`；GC roots 随迁，仍为长期归档。旧 temp/lab 路径中的 `/data/` 替换为 `/data/vaultsyncd-dev/` 即得新路径，原始日志不改写；迁移验证见 `agent/tasks/S163.md`。
 
 - 执行当前卡要求和受影响消费者的必要检查。Windows 原生能力需 Windows 运行证据；交叉编译、Wine、fake 和前端成功不能代替 CFAPI 验收。
 - 资源或环境缺失标 blocked，记录缺失项并继续无依赖任务；不降低验收目标。只报告实际执行的命令与结果。

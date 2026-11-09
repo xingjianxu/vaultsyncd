@@ -268,7 +268,7 @@ def main(argv=None):
     parser.add_argument("--stable", action="store_true", help="发布为正式版本；含 Windows x64 时设为 Latest 供客户端自动更新，默认预发布")
     parser.add_argument("--resume", action="store_true", help="校验并续传同源草稿，不覆盖已有附件")
     parser.add_argument("--dry-run", action="store_true", help="仅本地校验和显示附件，不联网、不上传")
-    parser.add_argument("--staging-root", type=Path, default=Path("/data/vaultsyncd-temp/cache/github-release"))
+    parser.add_argument("--staging-root", type=Path, default=Path("/data/vaultsyncd-dev/vaultsyncd-temp/cache/github-release"))
     args = parser.parse_args(argv)
     manifest, originals, digests = bundle(args.directory.expanduser().resolve())
     repo = repository(args.remote)

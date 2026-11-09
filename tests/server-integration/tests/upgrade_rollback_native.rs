@@ -106,7 +106,7 @@ async fn adopted(server: &Server, token: &str, vault: &str, name: &str, bytes: &
 #[ignore = "requires dedicated S091 btrfs volume and exact freshly built admin/store test helpers"]
 async fn s091_full_archive_recovers_after_partial_future_upgrade_without_losing_history() {
     let volume = PathBuf::from(std::env::var_os("VAULTSYNCD_S091_VOLUME").expect("dedicated run"));
-    assert!(volume.starts_with("/data/vaultsyncd-lab/runs/"));
+    assert!(volume.starts_with("/data/vaultsyncd-dev/vaultsyncd-lab/runs/"));
     assert!(
         volume
             .components()

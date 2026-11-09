@@ -20,7 +20,7 @@ import time
 from playwright.sync_api import expect, sync_playwright
 
 REPO = Path(__file__).resolve().parents[2]
-OUTPUT = Path(os.environ.get("VAULTSYNCD_UI_ARTIFACTS", "/data/vaultsyncd-temp/S152-desktop-mantine/evidence")) / f"desktop-ui-{time.time_ns()}"
+OUTPUT = Path(os.environ.get("VAULTSYNCD_UI_ARTIFACTS", "/data/vaultsyncd-dev/vaultsyncd-temp/S152-desktop-mantine/evidence")) / f"desktop-ui-{time.time_ns()}"
 CONFIG = json.loads((REPO / "apps/desktop/src-tauri/tauri.conf.json").read_text())
 POLICY = CONFIG["app"]["security"]["csp"]
 ROUTES = {"/connections": "连接设置", "/bindings": "同步目录", "/files": "文件状态与操作", "/history": "历史与回收站", "/problems": "问题与恢复"}

@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S162 done**，客户端托盘“自动更新”支持正式Release下载、校验、备份升级与重启；[交接](tasks/S162.md)。Windows ZIP 61断言/5单测与安装版13断言通过，尚未发布新版。**下一 ready：无**，原4张blocked保持。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
+当前：**S163 done**，temp/lab整树迁入 `/data/vaultsyncd-dev/` 下同名目录，所有新开发测试目录只允许位于该根；97 GC roots/清单/快照/服务与VM健康、工具检查通过，[交接](tasks/S163.md)。**下一 ready：无**，原4张blocked保持。客户端托盘自动更新已由S162验收、尚未发布新版；在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
 
 最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不含S159/S160 Web变化。
 
@@ -177,6 +177,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S163 | done | temp/lab同卷迁入dev；243269项/5399摘要/97 GC roots/子卷身份/健康及34单测、真实卷验证通过；提交整合待记 | [S163](tasks/S163.md) |
 | S162 | done | 实现7d5cb39、整合0ab9184/6891501、修复f5c4a24；验收交接e1fb945已ff合master，原生ZIP/安装版及宿主门通过；任务树/分支已清理 | [S162](tasks/S162.md) |
 | S161 | done | 8d92da9已ff合master；历史build/deploy迁入temp同名目录，482文件/72 GC roots/快照身份/健康通过；任务树及分支清理 | [S161](tasks/S161.md) |
 | S157 | done | 源5a71062；主机pin f7d1997/main整合a02b61e；generation266；交接3ced4a5/整合4dd1ea6已ff合master，两任务树/分支已清理 | [S157](tasks/S157.md) |

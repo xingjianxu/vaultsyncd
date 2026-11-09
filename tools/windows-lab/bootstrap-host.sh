@@ -14,12 +14,12 @@
 #   nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh stop
 #   nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh facts
 #
-# VM_VAULT 可用环境变量覆盖，默认 /data/vaultsyncd-lab/win-lab。
+# VM_VAULT 可用环境变量覆盖，默认 /data/vaultsyncd-dev/vaultsyncd-lab/win-lab。
 
 set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-VM_VAULT="${VM_VAULT:-/data/vaultsyncd-lab/win-lab}"
+VM_VAULT="${VM_VAULT:-/data/vaultsyncd-dev/vaultsyncd-lab/win-lab}"
 VM_NAME="${VM_NAME:-windows-11}"
 LAB_USER="${LAB_USER:-Quickemu}"
 SSH_PORT="${SSH_PORT:-2222}"

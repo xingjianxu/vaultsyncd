@@ -146,7 +146,7 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
     let volume = PathBuf::from(
         std::env::var_os("VAULTSYNCD_S089_VOLUME").expect("dedicated restore volume"),
     );
-    assert!(volume.starts_with("/data/vaultsyncd-lab/runs/"));
+    assert!(volume.starts_with("/data/vaultsyncd-dev/vaultsyncd-lab/runs/"));
     let volume = volume.join(format!("run-{}", std::process::id()));
     std::fs::create_dir(&volume).unwrap();
     let lab = Lab::new("r", Some(&volume), Some(&volume));

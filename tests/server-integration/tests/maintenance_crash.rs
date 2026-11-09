@@ -50,7 +50,7 @@ fn volume() -> PathBuf {
     let path = PathBuf::from(
         std::env::var_os("VAULTSYNCD_S104_VOLUME").expect("dedicated S104 btrfs volume"),
     );
-    assert!(path.starts_with("/data/vaultsyncd-lab/runs/"));
+    assert!(path.starts_with("/data/vaultsyncd-dev/vaultsyncd-lab/runs/"));
     assert!(
         path.components()
             .any(|c| c.as_os_str().to_string_lossy().starts_with("s104-"))

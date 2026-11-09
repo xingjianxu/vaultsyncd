@@ -8,7 +8,7 @@
 #
 # Usage (after `nix develop --command cargo build --locked -p vaultsyncd-server-tests \
 #   --example e2e-native-server`):
-#   VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \
+#   VAULTSYNCD_WINDOWS_CACHE=/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows \
 #     nix develop .#windows --command bash tests/platform/windows/run-native-e2e.sh
 set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

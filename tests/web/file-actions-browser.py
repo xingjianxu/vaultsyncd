@@ -7,7 +7,7 @@ After the main agent's final Web build, run from this worktree:
 
 The binary directory can be overridden; static assets always come from this
 worktree's apps/web/dist. Artifacts, screenshots, server state and input bytes
-stay under /data/vaultsyncd-temp/vs-s137-<runid>. No online SQL, production writes, fabricated
+stay under /data/vaultsyncd-dev/vaultsyncd-temp/vs-s137-<runid>. No online SQL, production writes, fabricated
 operation responses, or application/transport mocks. A scoped same-origin proxy
 can hold one real request/response or discard one real submit response.
 """
@@ -31,7 +31,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-temp")) / f"vs-s137-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-dev/vaultsyncd-temp")) / f"vs-s137-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):

@@ -1,5 +1,7 @@
 # 本机 NixOS 服务部署
 
+当前开发路径以 S163 为准：所有开发测试目录只能位于 `/data/vaultsyncd-dev/`。本文件历史 temp/lab 路径中的 `/data/` 须替换为 `/data/vaultsyncd-dev/`；更早 build/deploy 先按 S161 映射到 temp 内，再替换此前缀。历史日志与验收记录保留原文，执行旧命令前须替换路径，详见 [S163](../../agent/tasks/S163.md)。
+
 ## S157 当前共用 Mantine 与精简 Vault 版部署（generation266，2026-11-09）
 
 正式入口 **https://vsyncd.132140.xyz**。固定源`5a71062da284d4841ea6ca6ad690a5ba7d93c651`，上线S152共用Mantine及S154精简Vault工具栏；schema18、`/data/vaultsyncd/vaults`、账号与ServerId保持。运行/开机generation266，system `/nix/store/641j5vxmwbcarwgfgnvippxgmacsbf9j-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`rr1zw3qmm2qbnbdhjcyz1g0flf1pd2a2`。精确主机配置`f7d19978171cb2311e3cb9c642d0db9f480518ea`（main合并`a02b61e`），其纯求值精确复现运行系统；main待激活依赖锁保持，不用main当前锁冒充运行配置。
@@ -422,3 +424,11 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 同文件系统rename保留全部482个普通文件的SHA256/元数据和目录inode，S113只读btrfs快照仍ID2663，UUID与只读标志保持；72个GC roots先临时固定再登记新路径，验证后移除旧登记及临时根。首次核对发现67个根链接属主被登记命令改变，恢复属主后639项完整清单一致。服务进程身份、当前system及HTTP/严格TLS的HTTPS健康保持，无重启/rebuild；不触碰正式目录和lab。
 
 原始plan、前后清单、登记日志、快照/服务身份、健康结果及result.json（passed=true）在 `/data/vaultsyncd-temp/S161-relocate-20261109T124412Z/evidence/`。Nix print-roots实际识别72个新根；枚举附带移除4个既有失效auto链接及2个陈旧temproots文件，未删除store产物或实际系统回退。操作记录与限制见 [S161](../../agent/tasks/S161.md)。
+
+## S163 开发根迁移（2026-11-09）
+
+当前 `/data/vaultsyncd-*` 顶层仅保留 `/data/vaultsyncd-dev`，temp/lab整树在其同名子目录中，旧入口无兼容软链；S161中的历史build/deploy归档也随temp迁入。所有新开发测试目录（含VM、缓存、部署证据与备份）只能位于dev根，长期证据不得按cache清理。正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd` 和当前system/boot不改，无服务部署或rebuild。
+
+97个GC roots登记新路径并由Nix识别；归档只读子卷ID2663、UUID与ro=true保持，243269项清单及5399稳定文件摘要通过，服务/VM进程身份与HTTP/HTTPS、客体SSH/monitor健康保持。原始证据与检查边界见 `/data/vaultsyncd-dev/S163-relocate-20261109/evidence/` 及 [S163](../../agent/tasks/S163.md)。
+
+主机旧部署任务 `chore/S113-deploy-local-20261109T172110-662492` 的worktree现为 `/data/vaultsyncd-dev/vaultsyncd-temp/evidence/deploy/local-20261109T172110-662492/host`；已执行git worktree repair。其 `hosts/wks-lab/default.nix` 未提交修改原样保留，不代表当前运行配置，不自动合并或清理。

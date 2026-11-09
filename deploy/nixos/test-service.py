@@ -13,7 +13,7 @@ import sys
 import time
 
 REPO = Path(__file__).resolve().parents[2]
-RUN = Path('/data/vaultsyncd-temp') / f'vs-s095-{time.strftime("%Y%m%dT%H%M%S")}-{os.getpid()}'
+RUN = Path('/data/vaultsyncd-dev/vaultsyncd-temp') / f'vs-s095-{time.strftime("%Y%m%dT%H%M%S")}-{os.getpid()}'
 USER = f'vs-s095-{os.getpid()}'
 UNIT = f'{USER}.service'
 PACKAGE = Path(sys.argv[1]).resolve(strict=True)

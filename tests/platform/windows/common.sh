@@ -36,7 +36,7 @@ CFAPI_RELEASE_RENAME_VAULT="${CFAPI_RELEASE_RENAME_VAULT:-C:/vaultsyncd-test-ren
 GUEST_HOST="${GUEST_HOST:-127.0.0.1}"
 GUEST_PORT="${GUEST_PORT:-2222}"
 GUEST_USER="${GUEST_USER:-Quickemu}"
-GUEST_SSH_KEY="${GUEST_SSH_KEY:-/data/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519}"
+GUEST_SSH_KEY="${GUEST_SSH_KEY:-/data/vaultsyncd-dev/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519}"
 # 客体侧工作目录：只在 C:\vaultsyncd-lab 之下，不复制 target/ 或 node_modules/。
 GUEST_DIR="${GUEST_DIR:-C:/vaultsyncd-lab/s009}"
 
@@ -47,7 +47,7 @@ repo_root() {
 
 # 宿主侧缓存目录，与 flake.nix `windows` devShell 的 shellHook 使用同一默认值。
 windows_cache() {
-    printf '%s' "${VAULTSYNCD_WINDOWS_CACHE:-$(repo_root)/.cache/windows}"
+    printf '%s' "${VAULTSYNCD_WINDOWS_CACHE:-/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows}"
 }
 
 # 经 SSH 在客体执行一条命令；密钥独占认证，禁用交互提示。
