@@ -4,5 +4,8 @@
 export { StatusBadge } from "./StatusBadge";
 export type { StatusBadgeProps, StatusTone } from "./StatusBadge";
 
-export { Button, Dialog, EmptyState, PageShell, Table } from "./components";
-export type { NavItem, TableColumn } from "./components";
+export { Button, Dialog, EmptyState, Table } from "./components";
+export type { TableColumn } from "./components";
+export { AppProvider } from "./AppProvider";
+export { Icon, PageShell } from "./PageShell";
+export type { NavItem, PageShellProps } from "./PageShell";

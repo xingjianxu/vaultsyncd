@@ -6,6 +6,7 @@
     "@mantine/notifications": "9.7.5",
     "@noble/hashes": "2.4.0",
     "@vaultsyncd/api-client": "workspace:*",
+    "@vaultsyncd/ui": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

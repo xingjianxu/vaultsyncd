@@ -1,12 +1,16 @@
 // Executes only in the real native-acceptance WebView; production has no fixture/control command.
+const cspViolations = [];
+document.addEventListener("securitypolicyviolation", event => cspViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI }));
 window.addEventListener("DOMContentLoaded", async () => {
   const report={ok:false}; const fixture=window.__S082_FIXTURE__; const invoke=window.__TAURI_INTERNALS__.invoke;
   const delay=()=>new Promise(r=>setTimeout(r,150));
   async function wait(label,predicate,timeout=120000){const end=Date.now()+timeout;while(Date.now()<end){try{if(await predicate())return;}catch(error){report.lastPollError=JSON.stringify(error);}await delay();}throw new Error(`timeout ${label}`);}
   function field(name,value){const el=document.querySelector(`[name="${name}"]`);if(!el)throw new Error(`field ${name}`);const p=el instanceof HTMLSelectElement?HTMLSelectElement.prototype:el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,"value").set.call(el,value);el.dispatchEvent(new Event(el instanceof HTMLSelectElement?"change":"input",{bubbles:true}));}
   async function click(label,scope=document){await wait(label,()=>[...scope.querySelectorAll("button")].some(b=>b.textContent===label&&!b.disabled));[...scope.querySelectorAll("button")].find(b=>b.textContent===label&&!b.disabled).click();await delay();}
-  const text=()=>document.body.innerText;const confirmed=()=>text().includes("操作已由 agent 确认。");
+  const text=()=>document.body.innerText;const confirmed=()=>document.querySelector("[data-agent-feedback]")?.textContent==="操作已由 agent 确认。";
   const row=path=>[...document.querySelectorAll("tbody tr")].find(r=>r.querySelector("td")?.textContent===path);
+  // Mantine keeps closed modal content mounted to restore focus after its exit transition.
+  const dialog=()=>[...document.querySelectorAll('[role="dialog"]')].find(element=>element.getClientRects().length>0);
   async function listing(){return (await invoke("agent_list_files",{bindingId:report.bindingId})).files;}
   async function page(path){location.hash=path;await delay();}
   async function filePage(){await page("/files");await wait("files page",()=>document.querySelector('[name="files_binding"]'));await wait("files binding option",()=>document.querySelector(`option[value="${report.bindingId}"]`));field("files_binding",report.bindingId);await wait("listed seed",()=>row("server-seed.txt"));}
@@ -23,16 +27,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     await wait("merge",async()=>{const s=await invoke("agent_get_status");const b=s.management?.bindings?.find(b=>b.local_path===fixture.localPath);if(!b)return false;report.bindingId=b.binding_id;return s.bindings.find(x=>x.binding_id===b.binding_id)?.synchronized;});
     await filePage();await click("下载",row("server-seed.txt"));await wait("downloaded",async()=>(await listing()).find(f=>f.path==="server-seed.txt")?.residency==="materialized");report.download=true;
     // Rendered clean state is deliberately stale by confirmation time.
-    await click("刷新文件状态");await click("释放空间",row("server-seed.txt"));await wait("race dialog",()=>document.querySelector("dialog"));
-    await invoke("acceptance_file_control",{action:"hold"});await click("确认释放",document.querySelector("dialog"));
-    await wait("release rechecked",()=>!text().includes("操作正在执行，等待 agent 确认。"));
+    await click("刷新文件状态");await click("释放空间",row("server-seed.txt"));await wait("race dialog",dialog);
+    await invoke("acceptance_file_control",{action:"hold"});await click("确认释放",dialog());
+    await wait("release rechecked",()=>document.querySelector("[data-agent-feedback]")?.textContent!=="操作正在执行，等待 agent 确认。");
     if(confirmed()||(await listing()).find(f=>f.path==="server-seed.txt")?.residency!=="materialized")throw new Error("stale release confirmation removed busy content");
     report.releaseConfirmationRace=true;await invoke("acceptance_file_control",{action:"unhold"});
     await invoke("acceptance_file_control",{action:"hold"});await wait("busy",async()=>(await listing()).find(f=>f.path==="server-seed.txt")?.busy);
     await click("刷新文件状态");await wait("busy UI",()=>row("server-seed.txt")?.textContent.includes("正在使用")&&[...row("server-seed.txt").querySelectorAll("button")].find(b=>b.textContent==="释放空间")?.disabled);report.busyUi=true;
     try{await invoke("agent_release_entry",{bindingId:report.bindingId,entryId:(await listing()).find(f=>f.path==="server-seed.txt").entry_id,operationId:crypto.randomUUID().replaceAll("-","")});}catch{report.busyBackendRejects=true;}
     await invoke("acceptance_file_control",{action:"unhold"});await wait("idle",async()=>(await listing()).find(f=>f.path==="server-seed.txt")?.release_allowed);
-    await click("刷新文件状态");await click("释放空间",row("server-seed.txt"));await wait("release impact",()=>document.querySelector("dialog")?.textContent.includes("离线将不可读取"));await click("确认释放",document.querySelector("dialog"));await wait("released",async()=>(await listing()).find(f=>f.path==="server-seed.txt")?.residency==="metadata_only");report.release=true;
+    await click("刷新文件状态");await click("释放空间",row("server-seed.txt"));await wait("release impact",()=>dialog()?.textContent.includes("离线将不可读取"));await click("确认释放",dialog());await wait("released",async()=>(await listing()).find(f=>f.path==="server-seed.txt")?.residency==="metadata_only");report.release=true;
     await click("刷新文件状态");await click("下载",row("server-seed.txt"));await wait("redownload",async()=>(await listing()).find(f=>f.path==="server-seed.txt")?.residency==="materialized");
     await controlPage();await click("读取排除规则");await wait("rules editable",()=>!document.querySelector('[name="exclusion_rules"]')?.disabled);
     field("exclusion_rules","server-seed.txt\n");await click("保存排除规则");await wait("rules durable",async()=>(await invoke("agent_get_rules",{bindingId:report.bindingId})).rules==="server-seed.txt\n");
@@ -46,9 +50,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     const dirty=(await listing()).find(f=>f.path==="local-only.txt");try{await invoke("agent_release_entry",{bindingId:report.bindingId,entryId:dirty.entry_id,operationId:crypto.randomUUID().replaceAll("-","")});}catch{report.dirtyBackendRejects=true;}
     const pending=(await listing()).find(f=>f.path==="pending-only.txt");report.pendingNotGreen=pending?.pending===true&&pending.synchronized===false;
     await controlPage();field("recovery_destination",fixture.exportPath);await click("导出恢复包");await wait("export proof",()=>text().includes("恢复包已核验"));report.export=true;
-    await click("解除绑定（保留数据）");await wait("detach impact",()=>document.querySelector("dialog")?.textContent.includes("不会删除服务器文件"));await invoke("acceptance_file_control",{action:"late-dirty"});await click("确认保留数据并解除",document.querySelector("dialog"));await wait("detached",async()=>(await invoke("agent_get_status")).management.bindings.find(b=>b.binding_id===report.bindingId)?.detached);report.detach=true;
+    await click("解除绑定（保留数据）");await wait("detach impact",()=>dialog()?.textContent.includes("不会删除服务器文件"));await invoke("acceptance_file_control",{action:"late-dirty"});await click("确认保留数据并解除",dialog());await wait("detached",async()=>(await invoke("agent_get_status")).management.bindings.find(b=>b.binding_id===report.bindingId)?.detached);report.detach=true;
     await page("/problems");await click("读取问题");await wait("problems read",confirmed);report.problems=true;
-    report.ok=["maliciousWebViewDenied","releaseConfirmationRace","rulesGui","download","busyUi","busyBackendRejects","release","fullModeKeepsContent","dirtyUi","dirtyBackendRejects","pendingNotGreen","export","detach","problems"].every(k=>report[k]===true);
+    const nonce=document.querySelector('meta[name="csp-nonce"]')?.content;report.nonceStyles=/^[0-9a-f]{32}$/.test(nonce??"")&&[...document.querySelectorAll("style")].every(style=>style.nonce===nonce);report.cspViolations=cspViolations;
+    report.ok=report.nonceStyles&&report.cspViolations.length===0&&["maliciousWebViewDenied","releaseConfirmationRace","rulesGui","download","busyUi","busyBackendRejects","release","fullModeKeepsContent","dirtyUi","dirtyBackendRejects","pendingNotGreen","export","detach","problems"].every(k=>report[k]===true);
   }catch(error){report.error=typeof error==="object"?JSON.stringify(error):String(error);report.page=text();}
   await invoke("acceptance_report",{report});
 });

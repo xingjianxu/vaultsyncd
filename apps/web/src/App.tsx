@@ -1,8 +1,6 @@
 import { Component, type ReactNode, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { ActionIcon, Alert, Anchor, AppShell, Breadcrumbs, Burger, Button, Card, Container, Divider, Group, Loader, MantineProvider, NavLink, SimpleGrid, Stack, Text, ThemeIcon, Title, useComputedColorScheme, useMantineColorScheme } from "@mantine/core";
-import { useDisclosure } from "@mantine/hooks";
-import { Notifications } from "@mantine/notifications";
-import "@mantine/notifications/styles.css";
+import { Alert, Anchor, Button, Card, Divider, Group, Loader, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
+import { AppProvider, Icon, PageShell } from "@vaultsyncd/ui";
 import { showFeedback } from "./components/Feedback";
 import { FileActionsProvider } from "./features/files/FileActions";
 import { EmptyState, StatusBadge } from "./components/ui";
@@ -24,7 +22,6 @@ const items = [
   { path: "/clients", label: "客户端", description: "查看连接记录与最近活动。", icon: "M3 4h18v12H3z M8 21h8 M12 16v5" },
   { path: "/account", label: "账号与会话", description: "管理登录身份、密码与设备会话。", icon: "M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2" },
 ];
-function Icon({ path }: { path: string }) { return <svg className="app-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>; }
 class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
@@ -34,15 +31,12 @@ class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean 
   }
 }
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
-export function App() { return <MantineProvider defaultColorScheme="auto" getStyleNonce={getStyleNonce}><Notifications position="top-right" limit={3} zIndex={1100} /><AuthProvider><AuthGate><AppView /></AuthGate></AuthProvider></MantineProvider>; }
+export function App() { return <AppProvider getStyleNonce={getStyleNonce}><AuthProvider><AuthGate><AppView /></AuthGate></AuthProvider></AppProvider>; }
 function AppView() {
   const auth = useAuth();
   const location = useRoute("/overview");
   const path = location.startsWith("/files/") ? "/files" : location;
   const active = items.find(item => item.path === path);
-  const [opened, { toggle, close }] = useDisclosure();
-  const { toggleColorScheme } = useMantineColorScheme();
-  const colorScheme = useComputedColorScheme("light");
   const [status, setStatus] = useState("正在检查");
   const [detail, setDetail] = useState("正在获取服务状态。");
   const [busy, setBusy] = useState(false);
@@ -70,18 +64,10 @@ function AppView() {
     return () => { controller.current?.abort(); controller.current = null; };
   }, [connect]);
   const connection = <StatusBadge tone={status === "服务可用" ? "success" : status === "服务降级" || status === "需要恢复" ? "warning" : "neutral"}>{status}</StatusBadge>;
-  return <>
-    <a className="skip-link" href="#main-content" onClick={event => { event.preventDefault(); document.getElementById("main-content")?.focus(); }}>跳到主要内容</a>
-    <AppShell header={{ height: 48 }} navbar={{ width: 240, breakpoint: "sm", collapsed: { mobile: !opened } }} padding="md">
-      <AppShell.Header className="app-header">
-        <Group className="app-brand" h="100%" px="md" gap="sm" wrap="nowrap"><Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" aria-label="切换导航" aria-controls="main-navigation" /><Anchor href="#/overview" fw={700} c="inherit" underline="never">vaultsyncd</Anchor></Group>
-        <Group className="app-topbar" h="100%" px="md" gap="sm" wrap="nowrap">
-          <Breadcrumbs visibleFrom="sm" aria-label="页面位置"><Anchor href="#/overview" size="sm">服务管理</Anchor><Text size="sm">{active?.label ?? "页面不存在"}</Text></Breadcrumbs>
-          <Group gap="sm" wrap="nowrap"><div role="status">{connection}</div><ActionIcon aria-label="切换主题" variant="default" onClick={() => toggleColorScheme()}><Icon path={colorScheme === "dark" ? "M12 3v2 M12 19v2 M3 12h2 M19 12h2 M5.6 5.6 7 7 M17 17l1.4 1.4 M5.6 18.4 7 17 M17 7l1.4-1.4 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0" : "M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13"} /></ActionIcon><Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor></Group>
-        </Group>
-      </AppShell.Header>
-      <AppShell.Navbar p="md" id="main-navigation"><AppShell.Section grow><Text size="xs" c="dimmed" mb="sm">服务端控制台</Text><nav aria-label="主要导航">{items.map(item => <NavLink href={`#${item.path}`} key={item.path} label={item.label} leftSection={<Icon path={item.icon} />} active={path === item.path} aria-current={path === item.path ? "page" : undefined} onClick={close} />)}</nav></AppShell.Section><AppShell.Section><Divider my="md" /><Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text></AppShell.Section></AppShell.Navbar>
-      <AppShell.Main id="main-content" tabIndex={-1}><Container size={path === "/files" ? "100%" : "xl"} px={0}>
+  return <PageShell product="服务管理" items={items.map(item => ({ ...item, icon: <Icon path={item.icon} /> }))} activePath={path} status={connection}
+    sidebarTitle="服务端控制台" sidebarFooter={<Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text>}
+    headerActions={<Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor>}
+    contentWidth={path === "/files" ? "100%" : "xl"}>
         <FileActionsProvider key={auth.account?.user_id ?? "signed-out"}><Stack gap="lg" className="app-content">{path !== "/files" && path !== "/clients" && <Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title>{path !== "/vaults" && <Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text>}</Stack>}
           <PageBoundary key={path}><Suspense fallback={<Group role="status"><Loader size="sm" /><Text>正在加载管理页面…</Text></Group>}>{path === "/overview" ? <>
             <Card withBorder><Stack><Group justify="space-between"><div><Title order={2} size="h3">服务连接</Title><Text size="sm" c="dimmed">健康检查与目录采集状态分别核对</Text></div><div role="status">{connection}</div></Group><Text size="sm" aria-live="polite">{detail}</Text>{checkedAt && <Text size="xs" c="dimmed">最近成功检查 · {checkedAt}</Text>}<Divider /><Group justify="space-between"><Text size="xs" c="dimmed">{busy ? "正在获取服务状态" : "按需检查当前连接"}</Text><Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button></Group></Stack></Card>
@@ -91,7 +77,5 @@ function AppView() {
           </> : path === "/vaults" ? <VaultsPanel /> : path === "/files" ? <FilesPanel location={location} /> : path === "/recovery" ? <RecoveryPanel /> : path === "/backup" ? <BackupPanel /> : path === "/clients" ? <ClientsPanel /> : path === "/account" ? <AccountPanel /> : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}</Suspense></PageBoundary>
           {path !== "/files" && <><Divider /><Group component="footer" justify="space-between"><Text size="xs" c="dimmed">vaultsyncd</Text><Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text></Group></>}
         </Stack></FileActionsProvider>
-      </Container></AppShell.Main>
-    </AppShell>
-  </>;
+  </PageShell>;
 }

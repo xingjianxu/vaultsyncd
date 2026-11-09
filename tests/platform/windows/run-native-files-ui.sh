@@ -11,7 +11,7 @@ build_base="${CARGO_TARGET_DIR:-$vault/target}"
 helper="$build_base/debug/examples/e2e-native-server"
 test -x "$helper" || { echo 'build e2e-native-server in default devShell first' >&2; exit 1; }
 run_id="s082-$(date +%s)-$$"
-artifact_dir="$vault/artifacts/S082/$run_id"
+artifact_dir="${VAULTSYNCD_NATIVE_ARTIFACTS:-/data/vaultsyncd-temp/S082-native/evidence}/$run_id"
 mkdir -p "$artifact_dir"
 server_pid=''; tls_pid=''; tunnel_pid=''
 cleanup() {

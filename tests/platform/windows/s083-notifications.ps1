@@ -9,6 +9,17 @@ if($Worker){
   if($hadPref){Copy-Item $pref (Join-Path $PSScriptRoot 'prior-prefs')}
   if($hadShortcut){Copy-Item $shortcut (Join-Path $PSScriptRoot 'prior-shortcut.lnk')}
   try{
+    # The same laboratory user may retain notifications from an earlier real
+    # history/conflict run. Isolate this suite before any agent/UI can claim its
+    # three causes, and never clear another application's notifications.
+    $session=(Get-Process -Id $PID).SessionId
+    $existing=@(Get-Process vaultsyncd-agent,vaultsyncd-desktop -ErrorAction SilentlyContinue|Where-Object{$_.SessionId-eq $session})
+    if($existing.Count-ne 0){throw 'refuse notification setup while an existing agent or desktop is running'}
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+    $history=[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]::History
+    $priorCenterTags=@($history.GetHistory('org.vaultsyncd.desktop')|ForEach-Object{$_.Tag})
+    $history.Clear('org.vaultsyncd.desktop')
+    if(@($history.GetHistory('org.vaultsyncd.desktop')).Count-ne 0){throw 'application notification history was not cleared before fixture startup'}
     $state=Join-Path $PSScriptRoot 'state';New-Item -ItemType Directory $state|Out-Null
     & (Join-Path $PSScriptRoot 's083_notice_fixture.exe') $state seed
     if($LASTEXITCODE -ne 0){throw 'offline core fixture failed'}
@@ -41,6 +52,8 @@ if($Worker){
       }
       $report=Get-Content $env:VAULTSYNCD_S080_REPORT -Raw -Encoding UTF8|ConvertFrom-Json
       if(!$report.ok){throw ('native notification failed '+($report|ConvertTo-Json -Compress -Depth 8))}
+      $report|Add-Member -NotePropertyName priorCenterTags -NotePropertyValue $priorCenterTags
+      $report|Add-Member -NotePropertyName clearedBeforeAgent -NotePropertyValue $true
       $reports+=$report
     }
     $reports|ConvertTo-Json -Depth 8|Set-Content (Join-Path $PSScriptRoot 'result.json') -Encoding UTF8

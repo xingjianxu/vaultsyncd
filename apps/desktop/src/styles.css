@@ -1,5 +1,7 @@
-.vs-card form { display: grid; gap: 1rem; max-width: 46rem; }
-.vs-card label { display: grid; gap: .4rem; font-weight: 600; }
-.vs-card input, .vs-card select { width: 100%; min-height: 2.6rem; padding: .5rem .65rem; color: inherit; background: #fff; border: 1px solid var(--vs-border); border-radius: .4rem; font: inherit; }
-.vs-card input:focus-visible, .vs-card select:focus-visible { outline: 2px solid var(--vs-accent); outline-offset: 2px; }
-.vs-card details { padding: .5rem 0; }
+/* Mantine owns the theme and all controls; only desktop layout constraints live here. */
+.desktop-grow { flex: 1; min-width: 0; }
+.desktop-content { overflow-wrap: anywhere; }
+.desktop-content .mantine-Card-root { min-width: 0; }
+.desktop-content .mantine-Button-root { max-width: 100%; }
+.desktop-content .mantine-Button-label { white-space: normal; overflow-wrap: anywhere; }
+.desktop-content .mantine-NativeSelect-input { text-overflow: ellipsis; }

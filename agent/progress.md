@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S155 in_progress**（移除远端工作流及相关依赖）。S154目录工具栏精简已验收、未部署。S153版本历史版已部署本机。运行/开机generation265，正式源`89a9cf4`、schema18，Vault基目录保持`/data/vaultsyncd/vaults`；**下一 ready：无**。S152桌面任务由独立会话进行，S101按用户最新范围收尾，其他4张blocked门禁保持。精确运行配置`d4c5fe7`（main整合`2c96e2f`），main尚未激活的依赖锁升级保持；详见[S153](tasks/S153.md)。
+当前：**S155 in_progress**（移除远端工作流及相关依赖）。S152共用Mantine、S154目录工具栏精简均已验收、未部署；生产保持S153 generation265、源`89a9cf4`、schema18及Vault基目录`/data/vaultsyncd/vaults`。**下一 ready：无**。S101按用户最新范围收尾，其他4张blocked门禁保持；精确运行配置`d4c5fe7`（main整合`2c96e2f`），未激活的依赖锁升级保持。
 
 最近部署：[S153](tasks/S153.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证文件版本历史、刷新/键盘/明暗320/1440、认证/自动连接/CSP/cookie及全部资产一致。身份、正式文件/对象、新Vault路径及10服务/3应用保持。完整备份及异盘副本verified，旧generation264及GC roots保留；未实际回退生产。路径迁移与恢复边界见[S151](tasks/S151.md)，此前schema17→18升级及恢复演练见[S149](tasks/S149.md)。
 
@@ -28,6 +28,7 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |
+| S152 | 两端共用 Mantine；双端构建/Web九套/桌面布局及Windows五套原生通过，未部署 | 实现bfdf14e、整合8c1d1d8已ff合master；任务树/分支已清理 | [S152](tasks/S152.md) |
 | S153 | 版本历史版服务端部署generation265；真实生产浏览器/资产/数据及既有服务验收通过 | 源89a9cf4；主机pin d4c5fe7、main整合2c96e2f；生命周期见交接 | [S153](tasks/S153.md) |
 | S147 | 持久记录客户端连接；Web按账号分页查看活动/会话，schema18迁移与真实浏览器通过；未部署 | 实现5403c3c、整合S148 1e9367f、交接de1f96e已ff合master；任务树/分支已清理 | [S147](tasks/S147.md) |
 | S148 | 登录/刷新恢复会话后自动检查服务；退出取消、失败重试、真实 Chromium 验收；未部署 | 实现`3885ab4`；整合/清理见交接 | [S148](tasks/S148.md) |

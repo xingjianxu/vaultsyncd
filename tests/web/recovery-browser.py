@@ -23,7 +23,7 @@ from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data/vaultsyncd-temp") / f"vs-s079-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-temp")) / f"vs-s079-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -42,7 +42,7 @@ def main():
     candidate = vaults / "documents"; candidate.mkdir(); (candidate / "child").mkdir()
     sample = candidate / "keep.txt"; sample.write_bytes(b"S079 confirmed content is preserved\n")
     original_hash = hashlib.sha256(sample.read_bytes()).hexdigest()
-    unsupported = Path(tempfile.mkdtemp(prefix="vs-s079-unsupported-"))
+    unsupported = Path(tempfile.mkdtemp(prefix="vs-s079-unsupported-", dir=os.environ.get("VAULTSYNCD_WEB_UNSUPPORTED_ROOT")))
     alternate = RUN / "alternate"; alternate.mkdir()
     mounted = False
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)

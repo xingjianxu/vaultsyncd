@@ -11,6 +11,8 @@ mod history_commands;
 mod notifications;
 #[cfg(windows)]
 mod shell;
+#[cfg(any(windows, test))]
+mod style_csp;
 
 #[cfg(windows)]
 const DESKTOP_SCOPE: &str = "vaultsyncd-desktop";

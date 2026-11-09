@@ -1,30 +1,12 @@
 @layer theme, base, mantine, components, utilities;
 @import "tailwindcss";
-@import "@mantine/core/styles.layer.css";
+@import "@vaultsyncd/ui/styles.css";
 @source "./**/*.{ts,tsx}";
 
 /* Application-specific details; Mantine owns the theme and component styling. */
 .auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: var(--mantine-spacing-md); }
 .auth-panel { width: 100%; max-width: 400px; min-width: 0; }
 .auth-panel .mantine-Alert-message { overflow-wrap: anywhere; }
-.app-header { display: flex; }
-.app-brand { flex-shrink: 0; border-inline-end: 1px solid var(--app-shell-border-color); }
-.app-topbar { flex: 1; min-width: 0; justify-content: space-between; }
-@media (min-width: 48em) {
-  .app-brand { width: var(--app-shell-navbar-width); }
-}
-@media (max-width: 47.999em) {
-  .app-topbar { justify-content: flex-end; }
-}
-.skip-link { position: fixed; top: -100px; left: 16px; z-index: 300; padding: 10px 14px; background: var(--mantine-color-body); border: 1px solid var(--mantine-color-blue-6); border-radius: var(--mantine-radius-default); }
-.skip-link:focus { top: 12px; }
-#main-content:focus { outline: none; }
-.app-icon { width: 20px; height: 20px; flex-shrink: 0; }
-.app-content, .app-content > *, .mantine-Card-root { min-width: 0; }
-.status-badge { height: auto; min-height: 20px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-.status-badge .mantine-Badge-label { white-space: normal; overflow-wrap: anywhere; }
-.data-table td { vertical-align: top; overflow-wrap: anywhere; }
-code { overflow-wrap: anywhere; }
 .vaults-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .vaults-allowed-bases { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-inline-start: auto; min-width: 0; max-width: 100%; }
 .vaults-allowed-bases code { min-width: 0; white-space: normal; }
@@ -51,8 +33,6 @@ code { overflow-wrap: anywhere; }
 .files-entry-link > .mantine-Group-root { min-width: 0; }
 .files-entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-icon { width: 18px; height: 18px; flex-shrink: 0; }
-/* 反馈浮层不挤压列表，长路径和请求编号在窄屏内换行。 */
-.mantine-Notification-description { overflow-wrap: anywhere; }
 .files-pagination { padding: 8px; border-top: 1px solid var(--mantine-color-default-border); }
 @media (max-width: 62em) {
   .files-address { order: 1; flex-basis: 100%; }
