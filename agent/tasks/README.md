@@ -1,5 +1,7 @@
 # 任务交接与历史记录
 
+S152 批次：客户端与 Web 共用 Mantine，三项子任务及 Windows 五套原生/桌面布局/Web九套通过；实现bfdf14e，整合8c1d1d8a4e229017f7e741c63135fd2e99ec2738已ff-only合master。保留并行S153部署与S154页面精简，整合后类型/Web test/build/Vault真实浏览器/Nix Web复验通过。确认干净及祖先关系后，从主树成功remove `.worktrees/S152-desktop-mantine` 并branch-d `feat/S152-desktop-mantine`；S134/S155树未动。永久日志、截图、原生二进制及哈希保留 `/data/vaultsyncd-temp/S152-desktop-mantine/evidence/`。本卡未部署或生成正式发行包，无本卡阻塞，下一ready无；原5卡blocked门禁保持。详见[S152](S152.md)。
+
 S153 批次：版本历史版服务端源89a9cf4已部署generation265；登记970f0ed、验收交接`7b9a1b6488c8f0b4ac1bed81fa7b8742b707cef5`已ff-only合master，整合点同7b9a1b6，无额外merge commit。主机pin d4c5fe7由2c96e2f合main，未激活锁升级保留。确认两任务树干净、提交属于各目标分支且当前在主树后，worktree remove/branch -d全部成功，清理`.worktrees/S152-deploy`/`chore/S153-deploy`及`.worktrees/S152-host`/`chore/S153-host`；因并行桌面任务占用S152而改编号，原物理路径保留至清理。`.worktrees/S152-desktop-mantine`、S134及旧失败部署树未动。证据/备份/GC roots保留在`/data/vaultsyncd-temp/S152-deploy-20261109T103922Z/{evidence,backups}/`，异盘归档/收据在`artifacts/S152/backups/`。无本卡阻塞，下一ready无，原5卡blocked保持；详见[S153](S153.md)。
 
 
