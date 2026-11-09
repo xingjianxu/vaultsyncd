@@ -48,7 +48,7 @@ nix develop --command gh auth login --hostname github.com
 
 也可直接传既有 `dist/releases/v<版本>-<提交前12位>` 目录。`--dry-run` 校验本地 Git 对象、版本、树、组件输入、所有登记文件的大小/SHA-256 和构建校验表，显示仓库、标签、附件；不联网、不上传、无需登录。脚本不要求当前 HEAD 等于包源，始终使用清单中的完整提交，避免把交接提交或新代码重标为旧包来源。默认目标取 `origin` 的 push 地址，支持 github.com HTTPS/SSH；可用 `--remote <名称>` 选择其他已配置远端。
 
-实际发布前核对 GitHub 登录、源码提交存在于目标仓库、已有远端标签指向同一提交。版本标签默认为 `v<构建版本>`，不存在时由 GitHub Release 按精确源码 SHA 创建；不会推送分支或移动已有标签。默认发布为预发布且不设 Latest；S161起 `--stable` 含 Windows x64 时，在完整附件及 GitHub SHA-256 digest 核验后设为 Latest，供客户端托盘自动更新。草稿不推广；仅Linux包保持非Latest，避免切断Windows更新渠道。其他参数：
+实际发布前核对 GitHub 登录、源码提交存在于目标仓库、已有远端标签指向同一提交。版本标签默认为 `v<构建版本>`，不存在时由 GitHub Release 按精确源码 SHA 创建；不会推送分支或移动已有标签。默认发布为预发布且不设 Latest；S162起 `--stable` 含 Windows x64 时，在完整附件及 GitHub SHA-256 digest 核验后设为 Latest，供客户端托盘自动更新。草稿不推广；仅Linux包保持非Latest，避免切断Windows更新渠道。其他参数：
 
 ```sh
 ./tools/publish-release.sh /实际构建目录 --tag v0.2.0-rc.1 --notes-file /实际发布说明.md

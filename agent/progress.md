@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S161 in_progress**（客户端托盘自动更新；用户明确下载后自动升级重启；[交接](tasks/S161.md)）。最近部署：**S157 done**（最新服务端已部署本机，共用Mantine与精简Vault工具栏上线；[交接](tasks/S157.md)）。运行/开机generation266、源`5a71062`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确运行配置`f7d1997`（main整合`a02b61e`），未激活依赖锁升级保持；其他4张blocked门禁保持。 S156手工发行脚本已验收、未执行真实上传。
+当前新增：**S162 in_progress**（客户端托盘自动更新，编号已预留；[现场](tasks/S162.md)）。最近完成：**S160 done**，服务概览显示完整可选中的 Server ID，读取失败可重试；[交接](tasks/S160.md)。已部署本机，运行/开机generation269、源`85dd2bb`、schema18，Vault基目录`/data/vaultsyncd/vaults`；主机pin `a37df31`已ff合main，依赖锁保持。**下一 ready：无**，原4张blocked门禁保持。
 
-最近部署：[S157](tasks/S157.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证共用界面、Vault工具栏/两个弹窗、历史、认证/自动连接、明暗320/1440及全量资产/CSP/cookie。正式身份、5工作文件/4对象与10服务/3应用保持。完整备份及异盘副本verified，旧generation265和GC roots保留；未实际回退生产。路径与恢复边界仍见[S151](tasks/S151.md)，此前应用部署见[S153](tasks/S153.md)。
+最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不含S159/S160 Web变化。
 
 恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -27,6 +27,9 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb、交接762d71d已ff合master；主机a37df31已ff合main，项目/主机任务树及分支清理 | [S160](tasks/S160.md) |
+| S159 | Vault路径深链与当前文件容量；Rust/Web/两轮真实浏览器及generation268生产验收通过 | 实现911449b、交接0dba961已ff合master；项目/主机任务树及分支清理 | [S159](tasks/S159.md) |
+| S158 | 首个GitHub预发布v0.1.1；同源双平台归档、Linux私有loader及8附件远端哈希通过；修复打包变量与SQLite/zlib依赖 | 源9aa091e已推送；交接f274601已ff合master，发行树/分支清理；并发同编号树保留并提示续接重新编号 | [S158](tasks/S158.md) |
 | S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |
 | S152 | 两端共用 Mantine；双端构建/Web九套/桌面布局及Windows五套原生通过，服务端已S157上线；客户端发行另验 | 实现bfdf14e、整合8c1d1d8已ff合master；任务树/分支已清理 | [S152](tasks/S152.md) |
 | S153 | 版本历史版服务端部署generation265；真实生产浏览器/资产/数据及既有服务验收通过 | 源89a9cf4；主机pin d4c5fe7、main整合2c96e2f；生命周期见交接 | [S153](tasks/S153.md) |
@@ -174,6 +177,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S161 | done | 8d92da9已ff合master；历史build/deploy迁入temp同名目录，482文件/72 GC roots/快照身份/健康通过；任务树及分支清理 | [S161](tasks/S161.md) |
 | S157 | done | 源5a71062；主机pin f7d1997/main整合a02b61e；generation266；交接3ced4a5/整合4dd1ea6已ff合master，两任务树/分支已清理 | [S157](tasks/S157.md) |
 | S155 | done | 实现70983b7、整合b291440、交接41636ba已ff合master；本地5/5、xtask23/23、干净提交检查通过；任务树/分支已清理 | [S155](tasks/S155.md) |
 | S156 | done | 实现1fbe353、交接/整合06d7427已ff合master，任务树/分支已清理；19+9+8项通过；gh未登录、未真实上传 | [S156](tasks/S156.md) |

@@ -2353,6 +2353,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## Web 会话与账号管理（S077）
 
+- S160：服务概览的 `ServerIdentity` 通过 `readServerIdentity` / 生成 `getCapabilities` 读取同源 `GET /v1/capabilities` 的 `server_id`，只读显示完整值供选择复制。读取错误与健康状态独立，支持重试；离开概览或退出卸载时 abort，忽略迟到结果。不新增 wire/schema，不保存凭据或更改客户端身份配置。
+
 - 唯一 wire 源 `api/openapi.yaml`：`POST /v1/auth/browser/login` 接 LoginRequest，`POST /v1/auth/browser/refresh` 无请求体，均返回 BrowserSession（session_id/access_expires_at），令牌只在 HttpOnly/Secure/SameSite=Strict cookie。agent 原登录/带正文刷新保持兼容。全部认证响应 `Cache-Control: no-store`。
 - `GET /v1/auth/account` 返回当前 AccountInfo（user_id/login/session_id）；`POST /v1/auth/password` 接 PasswordChangeRequest，复用初始化密码规则和登录限流，旧散列 CAS 更新与全部会话撤销同一 SQLite 写事务；`POST /v1/auth/revoke-all` 撤销当前账号全部会话。后二者返回 AccountChanged 的撤销计数并清 cookie，成功后重新登录。错误当前/新密码 400 INVALID_REQUEST，失效身份 401，越权来源 403，限流 429，存储错误 503。
 - `AuthContext.account_gate` 在进程状态锁的单服务约束下串行登录、刷新、改密和全部撤销，防止旧密码已核验但晚于撤销再签发会话。`server-core::auth::manage` 仅做密码规则，`server-store::sessions::{change_password,revoke_all}` 负责原子存储，不新增 schema。
@@ -2540,6 +2542,8 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 
 S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查前返回该FD实际vault ID；256不是推断的子卷ID。Ubuntu6.8非特权实际新子卷/嵌套检测及备份链通过，所有来源均不可用仍拒绝。Podman兼容API实测忽略create_host_path:false，因此部署标准入口为deploy/compose/run.py，先核显式存在源再创建资源，服务自身仍执行完整存储预检。镜像构建--offline要求缓存的base架构/精确digest及全部.deb SHA，缺失失败；最终同源09双架构离线镜像及完整Ubuntu运行通过。普通unit源67与09仅镜像构建脚本不同，所有实际服务/Web/库/preflight文件逐SHA相同；JSON旧消费者预检字节亦相同，明确来源组合见curated矩阵。没有协议/持久格式变化，不把TCG证据说成原生性能。
 
+S158 发行修复：当前仅 Linux x64；`nix/portable.nix` 以 `runtimeLibraryRoots` 向打包器提供锁定 glibc/GCC/SQLite/zlib 的目录白名单。打包器递归收集实际 ELF 依赖（含 libsqlite3.so → libz.so.1），拒绝未知目录，清单记录对应版本和逐库摘要；无 wire 或持久化格式变化。
+
 ## S101 — 平台矩阵、同源安装与实验室资源
 
 - `cargo xtask ci <job> [--plan] [--component/--image/--evidence/--package …]`委托`tools/ci/run.py`唯一目录；portable/contracts/frontend/linux-server、Linux和Windows release、NixOS/Ubuntu/Windows install、Windows CFAPI/e2e与ci-selftest均在此编排。`--plan`不算执行；实际要求干净HEAD并记录前后porcelain、平台、逐步命令/退出码/耗时。成功0、失败非0、缺资源78、参数错误2；报告在忽略的`artifacts/S101/ci/`，release job还保存真实归档/对应源码/清单。
@@ -2583,7 +2587,7 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 
 - `windows-client`同一次fresh cross release同时生成NSIS（原四EXE）和ZIP（另含`vaultsyncd-zip.exe`、两个cmd及说明），不重复编译。ZIP清单十份文件hash，receipt递归覆盖展开文件及完整ZIP；hash不是签名，继续标unsigned-test。构建/验证及状态限制见`docs/operations/windows-zip.md`。
 - `vaultsyncd-zip.exe start|health|stop`为专用固定入口；Start在Windows11/WebView2前置、组件完整性、LocalAppData所有权验证后独立启动agent，只在认证正确EXE路径且真实GetStatus成功后开GUI。GUI关闭不停止agent，重复Start复用同实例。ZIP默认不注册Run/StartMenu，不携带状态/凭据；新ZIP profile默认关闭系统通知，用户显式开启后Toast可注册快捷方式，UI明确提示。
-- `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源/覆盖升级明确拒绝；安装器及安装维护控制器拒绝接管ZIP状态。S161起仅允许原路径的显式自动维护事务升级ZIP；仍不支持已用profile互转或删除所有权绕过S100。无DB迁移或wire新增。
+- `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源/覆盖升级明确拒绝；安装器及安装维护控制器拒绝接管ZIP状态。S162起仅允许原路径的显式自动维护事务升级ZIP；仍不支持已用profile互转或删除所有权绕过S100。无DB迁移或wire新增。
 - `Endpoint::request_verified(expected,request)`在实际发送请求的同一NamedPipeClient上认证预期EXE及SID，返回`(Response,ServerProcess)`，原`request`接口不变；ZIP每个GetStatus/PrepareMaintenance均用此入口，等待实际执行准备的对端进程，不用先探测再另连的句柄。
 - Stop复用IPC1.5 PrepareMaintenance，认证并等待确切进程退出，再取得writer锁确认停机；未确认内容导出到agent/zip-stop-*。不强杀、不注销提供程序、不删Vault/cache/dirty/state。暂停持久化，重启后须用户显式Resume；失败可能部分暂停，绝不默认成功或自动恢复所有绑定。原生入口两个：`tests/platform/windows/s109-zip.ps1`要求手工登录全新标准用户（Fresh/Live/Stop分离，Live另需真实服务端独立hash核对）；`tests/platform/windows/s109-e2e.py`在已登录会话用本run Interactive/Limited task与隔离LocalAppData/AppData/WebView，经真实CLI/IPC配置、要求一个本run程序目录启动的可见响应窗口、验证关窗后真实上传、dirty经安全停止与agent进程重启保留后resume提交，并断言默认Run/HKLM/快捷方式未变（不声称OS重启或标准用户）；两者均不改自动登录、不强杀、保留Vault/state/cache。
 - 桌面以命名互斥量`vaultsyncd-desktop`保证每用户会话单窗口：重复Start复用同一窗口，不再派生第二个GUI；该互斥量与agent的writer锁相互独立。
@@ -2598,7 +2602,7 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 ### S156：GitHub Release 本地发布
 
 - `tools/publish-release.sh <构建目录> [--dry-run] [--draft] [--resume] [--stable] [--tag <标签>] [--remote <远端>] [--title <标题>] [--notes-file <文件>] [--staging-root <缓存根>]` 自动进入 devShell，调用 `packaging/github-release.py`；消费 S110 format1 成功清单，不执行构建。成功0、校验/权限/网络/上传失败1、参数错误2。`--dry-run` 仅本地验证 Git 对象、组件来源/版本/输入与文件大小/hash，无远端操作。
-- 版本取包源 Cargo.toml 并核对清单；标签限 `v<版本>` 或对应预发布后缀。目标取配置远端的 github.com push URL；上传前查精确 commit 和已有标签，绝不移动标签或推送分支。先建草稿、逐项上传、逐项校验远端摘要（缺摘要则下载），完整后发布；默认 prerelease/非 Latest，`--draft` 保留草稿。S161起 `--stable` 含Windows时须有GitHub SHA-256 digest，发布时设Latest供自动更新；草稿和仅Linux包不推广。Release 状态不是首发验收证明。
+- 版本取包源 Cargo.toml 并核对清单；标签限 `v<版本>` 或对应预发布后缀。目标取配置远端的 github.com push URL；上传前查精确 commit 和已有标签，绝不移动标签或推送分支。先建草稿、逐项上传、逐项校验远端摘要（缺摘要则下载），完整后发布；默认 prerelease/非 Latest，`--draft` 保留草稿。S162起 `--stable` 含Windows时须有GitHub SHA-256 digest，发布时设Latest供自动更新；草稿和仅Linux包不推广。Release 状态不是首发验收证明。
 - `--resume` 只接受含同源标记、同 target SHA/类型的草稿；匹配附件跳过，异源/损坏/多余附件或已发布 Release 均拒绝，无 clobber。附件平铺，只选平台归档/对应源码与来源收据，生成平铺 `SHA256SUMS`，原构建校验表另存 `build-SHA256SUMS`，不上传日志。细节与 CLI 依据归 `packaging/README.md`。无 wire/DB/服务端产物变更。
 
 ### S111 / ADR-015：当前平台范围覆盖
@@ -2640,6 +2644,8 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 - 依据：design §5.6、§18.1、ADR-024；[Mantine nonce](https://mantine.dev/theming/mantine-provider/)、[Tauri CSP](https://v2.tauri.app/security/csp/)。验收与限制见 `agent/tasks/S152.md`。
 
 ## S122 Web Vault 文件浏览器
+
+S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开对应 Vault 根目录。管理清单 `ManagedVault.file_bytes?: decimal_u64` 为同一 SQL 读快照下、owner scope 内当前活跃文件版本 `size` 总和；空 Vault 为零，SUM 溢出/数据库失败走既有存储错误。按文件独立计数，不含历史/回收站，不是物理占用。DB schema 不变；可选新增字段保持旧消费者兼容，旧服务缺省在 Web 显示“未知”。`formatBytes` 共用于文件大小及 Vault 容量。
 
 - S150：文件 `EntryMenu` 的“版本历史”挂载 `features/files/FileHistory.tsx` Mantine Modal；生成 `listEntryHistory` 按原 VaultId/EntryId、`after` 查询每页最多100条，显示VersionId/SHA-256/大小/保留期限（当前活跃版本无到期字段）。分页保留游标栈以返回上一页，刷新回首页；错误与空结果分开，重试当前页。关闭、目录/Vault切换、会话退出卸载并abort，忽略迟到响应；目录无历史菜单。无恢复或内容写入，不改DTO/协议/schema，历史顺序沿用API身份升序，不推算版本创建时间。浏览器入口 `tests/web/file-history-browser.py`。
 - `#/files`：S124 更新为左侧目录树与顶部 Vault Select（名称与短 ID 区分，无 Vault 列表刷新按钮），右侧顶部导航工具栏（后退/前进/上级/刷新、Vault 相对地址栏、名称筛选、当前目录属性），其余区域直接显示列表，无重复标题与说明。Mantine Tree 支持展开、选中与键盘；列表仅展示直接子项，每页 100 项。属性为名称、类型、Vault 身份、相对路径、精确字节大小、目录直接子项数、revision、EntryId、VersionId 和 SHA-256；未提供的目录大小用 `—`，不推算时间/权限。
@@ -2695,7 +2701,11 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 - `server-store::clients::{list,cursor_exists,touch,set_kind}` 为持久适配器；认证通过后更新活动（UTC秒、30秒节流、时钟倒退不覆盖）。活动五分钟为recent，其余有效会话inactive，撤销/刷新期限到期优先；无心跳，不作为实时在线或同步进度。备份清除会话时以FK SET NULL保留历史，恢复后unknown。
 - Web `#/clients` 使用生成 `listClients` 和 `BrowserAuth.request`（同源cookie/401单飞刷新/全局失效门禁），支持刷新、加载更多和失败重试。设备标签按文本转义；相同标签不合并设备，不引入客户端新API或设备审批。
 
-## S161 — 客户端托盘自动更新
+## S161 历史资料路径映射
+
+历史 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 分别迁至 `/data/vaultsyncd-temp/vaultsyncd-build`、`/data/vaultsyncd-temp/vaultsyncd-deploy`，无旧入口软链。历史收据按根前缀映射查阅，不改写原始字节；72个Nix GC roots已登记新位置，资料仍为长期归档。协议/schema/应用接口不变，迁移与验证见 `agent/tasks/S161.md` 和 `docs/operations/nixos.md` 的 S161 节。
+
+## S162 — 客户端托盘自动更新
 
 - 托盘 `update` 菜单“自动更新”只在用户点击后检查 `xingjianxu/vaultsyncd` 的 `/releases/latest`；独立无凭据 HTTPS 客户端，不携带服务端认证。仅更高正式 SemVer、精确 `vaultsyncd-<version>-x64-unsigned.zip`，拒绝草稿/预发布、异常来源、缺 digest、重复/超大附件。元数据1MiB、ZIP1GiB、连接15秒/读30秒/总30分钟；GitHub CDN HTTPS重定向白名单。
 - `GithubUpdates::{check,download}` 与 `ReleaseUpdate` 位于 `crates/release-client/src/lib.rs`。流式回调收到的仍是未可信片段，只有完整长度及SHA-256成功后才把 `download.part` 改为完成包。GUI在 `%LOCALAPPDATA%/vaultsyncd/updates/<nonce>/` 建新目录，解压固定11个名称、单项512MiB/合计1GiB，核对 ZIP/installed 两份同源及逐文件摘要，不执行脚本。无新增 IPC/wire/schema。

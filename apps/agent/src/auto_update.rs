@@ -180,7 +180,7 @@ mod tests {
     use super::*;
     /// Explicit native-only fixture setup, before any agent opens this database.
     #[tokio::test]
-    #[ignore = "requires an isolated S161 native run with no online writer"]
+    #[ignore = "requires an isolated S162 native run with no online writer"]
     async fn seed_update_fixture() {
         use crate::config::AgentConfig;
         use std::sync::Arc;
@@ -194,10 +194,10 @@ mod tests {
             version::ServerEpoch,
         };
         let base =
-            PathBuf::from(std::env::var_os("VAULTSYNCD_S161_FIXTURE").expect("fixture root"));
+            PathBuf::from(std::env::var_os("VAULTSYNCD_S162_FIXTURE").expect("fixture root"));
         assert!(
             base.to_string_lossy()
-                .starts_with(r"C:\vaultsyncd-lab\s161-")
+                .starts_with(r"C:\vaultsyncd-lab\s162-")
         );
         let config = AgentConfig::load(&base.join("local/vaultsyncd/agent/agent.json")).unwrap();
         let db = Arc::new(
@@ -212,12 +212,12 @@ mod tests {
             fs::create_dir(&cache).unwrap();
             fs::write(
                 root.join("unconfirmed.txt"),
-                format!("S161 unconfirmed content {n}"),
+                format!("S162 unconfirmed content {n}"),
             )
             .unwrap();
             fs::write(
                 cache.join("keep-cache.bin"),
-                format!("S161 complete cache {n}"),
+                format!("S162 complete cache {n}"),
             )
             .unwrap();
             let id = BindingId::from_hex(&format!("{n:032x}")).unwrap();
@@ -248,13 +248,13 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires an isolated S161 native run"]
+    #[ignore = "requires an isolated S162 native run"]
     async fn stop_update_fixture() {
         let base =
-            PathBuf::from(std::env::var_os("VAULTSYNCD_S161_FIXTURE").expect("fixture root"));
+            PathBuf::from(std::env::var_os("VAULTSYNCD_S162_FIXTURE").expect("fixture root"));
         assert!(
             base.to_string_lossy()
-                .starts_with(r"C:\vaultsyncd-lab\s161-")
+                .starts_with(r"C:\vaultsyncd-lab\s162-")
         );
         let program = base.join("中文 程序");
         let destination = base.join("stop-export");
@@ -264,7 +264,7 @@ mod tests {
             .request_verified(
                 &program.join("vaultsyncd-agent.exe"),
                 &Request {
-                    request_id: "S161-fixture-stop".into(),
+                    request_id: "S162-fixture-stop".into(),
                     ipc_version: vaultsyncd_local_ipc::version::supported(),
                     command: Command {
                         name: CommandName::PrepareMaintenance,

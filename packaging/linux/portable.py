@@ -28,7 +28,7 @@ def sha(path):
         for block in iter(lambda:f.read(1024*1024),b''):digest.update(block)
     return digest.hexdigest()
 
-allowed=[Path(p).resolve() for p in os.environ['runtimeLibraryVaults'].split(':')]
+allowed=[Path(p).resolve() for p in os.environ['runtimeLibraryRoots'].split(':')]
 seen={}
 provenance=[]
 def copy_elf(source,dest):

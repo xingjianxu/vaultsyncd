@@ -93,8 +93,13 @@ export function directoryAtPath(snapshot: DirectorySnapshot, segments: readonly 
 /** 1024 进制的人类可读大小；目录没有内容大小，未采集的大小明确显示“未知”。 */
 export function fileSize(entry: SnapshotEntry): string {
   if (entry.kind === "directory") return "—";
-  if (entry.size === undefined) return "未知";
-  let value = Number(BigInt(entry.size));
+  return formatBytes(entry.size);
+}
+
+/** 当前文件与 Vault 容量共用的 1024 进制格式；缺省值不冒充零。 */
+export function formatBytes(bytes: string | undefined): string {
+  if (bytes === undefined) return "未知";
+  let value = Number(BigInt(bytes));
   if (!Number.isFinite(value)) return "未知";
   const units = ["B", "KB", "MB", "GB", "TB", "PB"];
   let unit = 0;

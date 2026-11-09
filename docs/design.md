@@ -281,7 +281,7 @@ flowchart TB
 | `crates/protocol/` | 远端 wire DTO、能力协商、协议版本与错误映射 | `generated/`、`capabilities.rs`、`versioning.rs` |
 | `crates/local-ipc/` | Windows agent 命令/状态 DTO、消息帧与协议版本 | `generated/`、`framing.rs`、`version.rs`；不包含 CFAPI |
 | `crates/http-client/` | 共用 HTTPS 客户端、认证刷新、事件拉取及固定版本内容接口 | `auth.rs`、`vaults.rs`、`changes.rs`、`uploads.rs`、`content.rs` |
-| `crates/release-client/` | S161独立公开GitHub发行查询及包流校验；无业务API、凭据、数据库或同步状态依赖 | `lib.rs` |
+| `crates/release-client/` | S162独立公开GitHub发行查询及包流校验；无业务API、凭据、数据库或同步状态依赖 | `lib.rs` |
 | `crates/transfer/` | 内容哈希、固定块、续传状态与传输端口抽象 | `hash.rs`、`chunk.rs`、`resume.rs`、`manifest.rs`、`ports.rs` |
 | `crates/fs-common/` | 路径规则、跨平台名称校验、文件事实类型、忽略规则 | `path.rs`、`name.rs`、`fingerprint.rs`、`ignore.rs`；系统调用放平台层 |
 | `crates/client-store/` | 客户端 SQLite、baseline、dirty generation、队列、事件、恢复意图 | `db.rs`、`entries.rs`、`queue.rs`、`intents.rs`、`migrations/` |
@@ -1005,7 +1005,11 @@ Tauri 只授予必要 capability；同步目录文件内容、文件名、Markdo
 
 ### 18.1 最小界面
 
+2026-11-09（S160，用户明确要求）：服务端 Web 的服务概览在服务连接卡片中显示完整 Server ID，沿用同源 capabilities 接口，提供只读可选中的编号及读取失败重试。
+
 UI 设计原则（2026-11-08 用户明确要求，适用于后续所有界面任务）：**Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.** 布局和控件本身表达用途，避免重复页内标题、次级标签、说明段落和装饰性状态文案；保留可访问名称、实际错误与影响操作决策的必要提示。
+
+2026-11-09（S159，用户明确要求并确认统计口径）：Vault 目录表格的服务器路径可点击，按 VaultId 打开文件浏览器根目录；“文件容量”列显示该 Vault 当前已提交且未删除文件的逻辑总大小，沿用文件浏览器的 1024 进制 B/KB/MB/GB/TB/PB 格式。同摘要文件分别计数，不含历史版本、回收站及未提交文件，不代表 btrfs 物理占用；旧服务缺省统计显示未知。
 
 2026-11-09（S152，用户确认执行）：Windows 客户端采用与服务端 Web 相同的 Mantine 默认主题、现成控件和 AppShell 布局；共用展示组件及样式放在 `packages/ui`，统一 48px 顶栏、240px 响应式导航、明暗切换与操作通知。客户端保留 Tauri 壳及本机 agent IPC，Web 保留服务端 API；页面按各自功能组织。主题偏好可保存，凭据仍只由原认证路径管理；持续状态和释放/解绑等必要风险提示不以临时通知替代。
 
@@ -1073,7 +1077,7 @@ Web 管理首发提供 Vault 配置/健康、账号基础管理、历史与回�
 
 ### 19.3 升级和协议兼容
 
-2026-11-09（S161，用户明确要求自动升级并重启，ADR-026）：Windows 托盘提供“自动更新”，点击后从本项目公开 GitHub 最新正式 Release 下载 Windows x64 ZIP，校验语义版本、精确仓库/附件、长度及 GitHub SHA-256；不订阅预发布、不降级。GUI 只下载并提取固定程序集合，离线维护仍由候选 agent 完成。ZIP 允许在原归属路径内通过该维护事务升级，先排空/导出、持 writer 锁备份程序及整套状态，更新完整 ZIP 和归属摘要；失败恢复旧程序、状态和归属。新 agent 在全部 Binding 暂停时通过真实 IPC 健康检查后提交，再恢复原暂停状态；提交后不回滚可能已有新提交的状态。中断保留恢复入口及备份，不允许手动覆盖、跨路径接管或删除 owner 绕过。安装版保留原安装路径、启动项及卸载入口。自动更新不更新服务端，不清缓存、Vault 或凭据。
+2026-11-09（S162，用户明确要求自动升级并重启，ADR-026）：Windows 托盘提供“自动更新”，点击后从本项目公开 GitHub 最新正式 Release 下载 Windows x64 ZIP，校验语义版本、精确仓库/附件、长度及 GitHub SHA-256；不订阅预发布、不降级。GUI 只下载并提取固定程序集合，离线维护仍由候选 agent 完成。ZIP 允许在原归属路径内通过该维护事务升级，先排空/导出、持 writer 锁备份程序及整套状态，更新完整 ZIP 和归属摘要；失败恢复旧程序、状态和归属。新 agent 在全部 Binding 暂停时通过真实 IPC 健康检查后提交，再恢复原暂停状态；提交后不回滚可能已有新提交的状态。中断保留恢复入口及备份，不允许手动覆盖、跨路径接管或删除 owner 绕过。安装版保留原安装路径、启动项及卸载入口。自动更新不更新服务端，不清缓存、Vault 或凭据。
 
 协议 major 不兼容时明确拒绝，不猜测新字段含义。minor 新字段应保持兼容，功能必须通过 capability 协商。建议测试当前与前一个受支持客户端版本。
 

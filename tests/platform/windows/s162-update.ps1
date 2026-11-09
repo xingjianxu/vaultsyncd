@@ -1,12 +1,12 @@
 param([switch]$Worker,[switch]$InstalledOnly)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
-if($PSScriptRoot-notmatch '^C:\\vaultsyncd-lab\\s161-[a-zA-Z0-9-]+$'){throw 'isolated S161 run required'}
+if($PSScriptRoot-notmatch '^C:\\vaultsyncd-lab\\s162-[a-zA-Z0-9-]+$'){throw 'isolated S162 run required'}
 function Write-Json($path,$value){[IO.File]::WriteAllText($path,($value|ConvertTo-Json -Depth 30),(New-Object Text.UTF8Encoding($false)))}
 if(!$Worker){
   $hashes=Get-Content (Join-Path $PSScriptRoot 'hashes.json') -Raw|ConvertFrom-Json
   foreach($f in $hashes.PSObject.Properties){if((Get-FileHash (Join-Path $PSScriptRoot $f.Name)).Hash.ToLowerInvariant()-ne $f.Value){throw 'transport hash mismatch'}}
-  $task='vaultsyncd-s161-'+[Guid]::NewGuid().ToString('N')
+  $task='vaultsyncd-s162-'+[Guid]::NewGuid().ToString('N')
   $workerArgs="-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker";if($InstalledOnly){$workerArgs+=' -InstalledOnly'}
   $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $workerArgs
   $principal=New-ScheduledTaskPrincipal -UserId 'Quickemu' -LogonType Interactive -RunLevel Limited
@@ -29,7 +29,7 @@ if(!$Worker){
 }
 Add-Type -TypeDefinition @'
 using System;using System.Text;using System.Runtime.InteropServices;using System.Collections.Generic;
-public static class S161Native {
+public static class S162Native {
  delegate bool Each(IntPtr w,IntPtr p);
  [DllImport("user32.dll")]static extern bool EnumWindows(Each c,IntPtr p);
  [DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
@@ -63,7 +63,7 @@ function Exe($path,$arguments,[int]$expected=0){
   if($arguments.Count){$start.ArgumentList=$args}
   $p=Start-Process @start
   $null=$p.Handle;$end=(Get-Date).AddSeconds(180)
-  while(!$p.HasExited){if([S161Native]::Dismiss($p.Id)){$script:dialogs++};if((Get-Date)-gt $end){throw ('process timeout '+$path)};Start-Sleep -Milliseconds 100;$p.Refresh()}
+  while(!$p.HasExited){if([S162Native]::Dismiss($p.Id)){$script:dialogs++};if((Get-Date)-gt $end){throw ('process timeout '+$path)};Start-Sleep -Milliseconds 100;$p.Refresh()}
   $p.WaitForExit();$p.Refresh()
   if($p.ExitCode-ne $expected){throw ('command exit '+$p.ExitCode+' expected '+$expected+'; '+(Read-Log ($stem+'.err')))}
   Read-Log ($stem+'.out')
@@ -72,16 +72,16 @@ function Status{(Exe (Join-Path $script:program 'vaultsyncd-cli.exe') @('--json'
 function Close-Desktop {
   $items=@(Get-Process|Where-Object{try{$_.Path-eq (Join-Path $script:program 'vaultsyncd-desktop.exe')}catch{$false}})
   foreach($p in $items){
-    $tray=[S161Native]::Find($p.Id,'tray_icon_app');if($tray-eq [IntPtr]::Zero){throw 'owned tray missing'}
-    [S161Native]::Popup($tray);Start-Sleep -Milliseconds 300;$popup=[S161Native]::Find(0,'#32768')
+    $tray=[S162Native]::Find($p.Id,'tray_icon_app');if($tray-eq [IntPtr]::Zero){throw 'owned tray missing'}
+    [S162Native]::Popup($tray);Start-Sleep -Milliseconds 300;$popup=[S162Native]::Find(0,'#32768')
     if($popup-eq [IntPtr]::Zero){throw 'owned quit menu missing'}
-    [S161Native]::SelectItem($tray,$popup,2,$false)
+    [S162Native]::SelectItem($tray,$popup,2,$false)
     if(!$p.WaitForExit(30000)){throw 'owned tray Quit did not exit'}
   }
 }
 function Desktop {
   $end=(Get-Date).AddSeconds(45)
-  do{$items=@(Get-Process|Where-Object{try{$_.Path-eq (Join-Path $script:program 'vaultsyncd-desktop.exe')-and $_.MainWindowHandle-ne [IntPtr]::Zero}catch{$false}});if($items.Count-eq 1-and [S161Native]::Find($items[0].Id,'tray_icon_app')-ne [IntPtr]::Zero){return $items[0]};Start-Sleep -Milliseconds 200}while((Get-Date)-lt $end)
+  do{$items=@(Get-Process|Where-Object{try{$_.Path-eq (Join-Path $script:program 'vaultsyncd-desktop.exe')-and $_.MainWindowHandle-ne [IntPtr]::Zero}catch{$false}});if($items.Count-eq 1-and [S162Native]::Find($items[0].Id,'tray_icon_app')-ne [IntPtr]::Zero){return $items[0]};Start-Sleep -Milliseconds 200}while((Get-Date)-lt $end)
   throw 'restarted real WebView window missing'
 }
 function Start-Case($name){
@@ -90,7 +90,7 @@ function Start-Case($name){
   $script:program=Join-Path $script:case '中文 程序';Expand-Archive (Join-Path $PSScriptRoot 'old.zip') $script:program
   Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('start')|Out-Null
   $null=Desktop;Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('stop')|Out-Null
-  $env:VAULTSYNCD_S161_FIXTURE=$script:case
+  $env:VAULTSYNCD_S162_FIXTURE=$script:case
   # The seeder writes only this stopped, isolated fixture database.
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('--exact','auto_update::tests::seed_update_fixture','--ignored','--nocapture')|Out-Null
   $script:configHash=(Get-FileHash (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/agent.json')).Hash
@@ -118,7 +118,7 @@ function Installed-Fixture($candidate){
   New-Item $registration -Force|Out-Null;Set-ItemProperty $registration InstallDir $script:program;Set-ItemProperty $registration Version '0.1.0'
   New-Item $uninstall -Force|Out-Null;Set-ItemProperty $uninstall DisplayVersion '0.1.0'
   Set-ItemProperty $run 'vaultsyncd-agent' $startup
-  [IO.File]::WriteAllText((Join-Path $script:program 'uninstall.exe'),'S161 retained uninstall fixture, never executed')
+  [IO.File]::WriteAllText((Join-Path $script:program 'uninstall.exe'),'S162 retained uninstall fixture, never executed')
   $uninstallHash=(Get-FileHash (Join-Path $script:program 'uninstall.exe')).Hash
   Exe (Join-Path $script:program 'vaultsyncd-session.exe') @()|Out-Null
   $end=(Get-Date).AddSeconds(30)
@@ -132,7 +132,7 @@ function Installed-Fixture($candidate){
   Check ((Get-FileHash (Join-Path $script:program 'uninstall.exe')).Hash-eq $uninstallHash) 'uninstaller retained'
   Check (!(Test-Path (Join-Path $script:program 'zip-files.json'))-and !(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'))) 'installed profile never converted to ZIP'
   Check ((Get-FileHash $config).Hash-eq $configHash) 'installed device/config identity retained'
-  Close-Desktop;$env:VAULTSYNCD_S161_FIXTURE=$script:case
+  Close-Desktop;$env:VAULTSYNCD_S162_FIXTURE=$script:case
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('--exact','auto_update::tests::stop_update_fixture','--ignored','--nocapture')|Out-Null
   Remove-ItemProperty $run 'vaultsyncd-agent';Remove-Item $registration;Remove-Item $uninstall
   Check (!(Test-Path $registration)-and !(Test-Path $uninstall)) 'only fixture registration cleaned'
@@ -159,16 +159,16 @@ try{
   $owner=Get-Content (Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json') -Raw|ConvertFrom-Json
   Check ($owner.manifest-eq (Get-FileHash (Join-Path $script:program 'zip-files.json')).Hash.ToLowerInvariant()) 'ZIP owner committed with new manifest'
   Check (!(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/maintenance.json'))-and !(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/auto-update.json'))) 'completed transaction markers cleared'
-  $tray=[S161Native]::Find($gui.Id,'tray_icon_app');Check ($tray-ne [IntPtr]::Zero) 'real native tray icon'
-  [S161Native]::Popup($tray);Start-Sleep -Milliseconds 400
-  $popup=[S161Native]::Find(0,'#32768');Check ($popup-ne [IntPtr]::Zero) 'right-click native tray menu'
-  $menu=[S161Native]::Menu($popup);Write-Json (Join-Path $script:case 'tray-menu.json') $menu
+  $tray=[S162Native]::Find($gui.Id,'tray_icon_app');Check ($tray-ne [IntPtr]::Zero) 'real native tray icon'
+  [S162Native]::Popup($tray);Start-Sleep -Milliseconds 400
+  $popup=[S162Native]::Find(0,'#32768');Check ($popup-ne [IntPtr]::Zero) 'right-click native tray menu'
+  $menu=[S162Native]::Menu($popup);Write-Json (Join-Path $script:case 'tray-menu.json') $menu
   Check ($menu.Count-eq 3-and $menu[1]-eq '自动更新') 'automatic update menu entry'
-  [S161Native]::SelectItem($tray,$popup,1,$true)
+  [S162Native]::SelectItem($tray,$popup,1,$true)
   $end=(Get-Date).AddSeconds(55);$dialog=$false
-  do{if([S161Native]::Dismiss($gui.Id)){$dialog=$true;break};Start-Sleep -Milliseconds 200}while((Get-Date)-lt $end)
+  do{if([S162Native]::Dismiss($gui.Id)){$dialog=$true;break};Start-Sleep -Milliseconds 200}while((Get-Date)-lt $end)
   Check $dialog 'tray command reaches real GitHub check and result dialog'
-  Start-Sleep -Milliseconds 500;Check (![S161Native]::Dismiss($gui.Id)) 'duplicate tray commands coalesced'
+  Start-Sleep -Milliseconds 500;Check (![S162Native]::Dismiss($gui.Id)) 'duplicate tray commands coalesced'
   Preserved 'failed GitHub check'
   Close-Desktop
   Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--maintenance','auto-upgrade','--program-dir',$script:program) 1|Out-Null

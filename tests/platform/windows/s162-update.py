@@ -18,7 +18,7 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[3]
-TEMP = Path('/data/vaultsyncd-temp/S161-client-update/evidence')
+TEMP = Path('/data/vaultsyncd-temp/S162-client-update/evidence')
 KEY = '/data/vaultsyncd-lab/win-lab/ssh/vaultsyncd-lab_ed25519'
 OPTIONS = ['-i', KEY, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o',
            'UserKnownHostsFile=/data/vaultsyncd-lab/win-lab/ssh/known_hosts',
@@ -94,21 +94,21 @@ def sha(data):
 
 
 def package(binaries, version, old=False, broken_start=False):
-    files = {name: (binaries / name).read_bytes() + (b'S161 old version fixture' if old else b'')
+    files = {name: (binaries / name).read_bytes() + (b'S162 old version fixture' if old else b'')
              for name in EXES}
     if broken_start:
         # A valid but unsuitable PE simulates a package whose launcher cannot start
         # the new agent. All manifests still match, so startup rollback is exercised.
         files['vaultsyncd-session.exe'] = files['vaultsyncd-cli.exe']
     source = {'version': version, 'commit': run(['git', 'rev-parse', 'HEAD']).strip(),
-              'acceptance_fixture': 'uncommitted S161 build; artificial version metadata',
+              'acceptance_fixture': 'uncommitted S162 build; artificial version metadata',
               'diff_sha256': sha(run(['git', 'diff']).encode())}
     def item(name):
         return {'path': name, 'bytes': len(files[name]), 'sha256': sha(files[name])}
     files['installed-files.json'] = json.dumps({
         'format': 1, 'source': source, 'signature_status': 'unsigned-test',
         'files': [item(n) for n in EXES[:4]]}).encode()
-    files['UNSIGNED-TEST.txt'] = b'Controlled S161 test fixture, not a published release.\n'
+    files['UNSIGNED-TEST.txt'] = b'Controlled S162 test fixture, not a published release.\n'
     for name in ['Start vaultsyncd.cmd', 'Stop vaultsyncd.cmd', 'README-ZIP.txt']:
         files[name] = (ROOT / 'packaging/windows/zip' / name).read_bytes()
     files['zip-files.json'] = json.dumps({
@@ -119,9 +119,9 @@ def package(binaries, version, old=False, broken_start=False):
 
 def main():
     if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--installed-only'):
-        raise SystemExit('usage: s161-update.py <Windows debug binaries directory> [--installed-only]')
+        raise SystemExit('usage: s162-update.py <Windows debug binaries directory> [--installed-only]')
     binaries = Path(sys.argv[1]).resolve()
-    run_id = 's161-' + time.strftime('%Y%m%dT%H%M%S') + '-' + str(os.getpid())
+    run_id = 's162-' + time.strftime('%Y%m%dT%H%M%S') + '-' + str(os.getpid())
     artifact = TEMP / run_id
     artifact.mkdir(parents=True)
     for name, old, version, broken in [('old.zip', True, '0.1.0', False),
@@ -134,16 +134,16 @@ def main():
                           ('vaultsyncd_platform_windows-*.exe', 'platform-tests.exe')]:
         candidates = list((binaries / 'deps').glob(pattern))
         shutil.copyfile(max(candidates, key=lambda p: p.stat().st_mtime), artifact / name)
-    script = artifact / 's161-update.ps1'
+    script = artifact / 's162-update.ps1'
     # Windows PowerShell 5.1 requires BOM for Chinese literals.
-    script.write_text((ROOT / 'tests/platform/windows/s161-update.ps1').read_text(), encoding='utf-8-sig')
+    script.write_text((ROOT / 'tests/platform/windows/s162-update.ps1').read_text(), encoding='utf-8-sig')
     hashes = {p.name: sha(p.read_bytes()) for p in artifact.iterdir() if p.is_file()}
     (artifact / 'hashes.json').write_text(json.dumps(hashes))
     guest = 'C:/vaultsyncd-lab/' + run_id
     remote(f"New-Item -ItemType Directory -Path '{guest}' | Out-Null")
     run([*SCP, *artifact.iterdir(), f'Quickemu@127.0.0.1:{guest}/'])
     try:
-        output = execute_test(f"& '{guest}/s161-update.ps1'" + (' -InstalledOnly' if len(sys.argv) == 3 else ''), artifact / 'native.log')
+        output = execute_test(f"& '{guest}/s162-update.ps1'" + (' -InstalledOnly' if len(sys.argv) == 3 else ''), artifact / 'native.log')
         (artifact / 'native.log').write_text(output)
         print(output)
     except subprocess.CalledProcessError as error:

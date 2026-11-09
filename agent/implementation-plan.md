@@ -1608,13 +1608,42 @@
 - 验收：完整备份导出并verify及异盘副本；运行配置pure求值复现，pure build→dry/test→HTTPS/IPC/身份/目录归属→switch；生产登录、共用界面、Vault工具栏/弹窗、版本历史、静态资产与既有服务及数据保持。
 - 交接：`agent/tasks/S157.md`；S156独立任务现场保持，原生/性能容量及最终发行门禁保持。
 
-### S161 — 托盘自动下载 GitHub Release 并安全升级重启
+### S158 — 构建并发布首个 GitHub 预发布版本
+
+- 依据：2026-11-09 用户明确要求“帮我发布一版”；前置 S110、S111、S152、S154、S155、S156 done，design §5.9、§24、§25。
+- 范围：从当前干净源码构建 0.1.1 的 Linux x64 服务端和 Windows x64 ZIP，通过 S156 脚本上传至 origin；默认预发布、非 Latest，源码提交推送属于本次发布授权。修复实测发现的 Linux 打包变量名不一致及 SQLite 运行库缺漏；保留旧归档，不扩大到 ARM64、不修改版本或首发门禁。
+- 验收：打包/上传契约测试、同源双平台构建及 SHA256SUMS、本地 dry-run、GitHub 草稿上传与逐附件哈希核对、最终标签/源码/预发布属性确认。未执行的 Windows/Ubuntu 原生及性能容量验收如实保留。
+- 交接：`agent/tasks/S158.md`；记录精确源、Release URL、产物/永久证据、提交及工作树合并清理；仅发行操作，不重复部署相同服务端代码。
+
+### S159 — Vault 路径跳转与文件容量
+
+- 依据：2026-11-09 用户要求点击 Vault 目录表格的服务器路径后打开对应文件浏览器；前置 S122、S154 done；design §18.1。
+- 范围：主体表格服务器路径使用原生链接，复用 filesLocation 按 VaultId 打开根目录；增加“文件容量”列。用户确认口径为当前已提交且未删除文件的逻辑总大小，按文件计数，不含历史和回收站；管理清单新增兼容可选 file_bytes 字段，旧服务缺省显示未知，不改 DB schema 或文件数据。
+- 验收：Rust 聚合/授权和协议生成一致性；Web typecheck/test/build；真实 Chromium 验证非首个 Vault、根目录、键盘和返回、刷新、容量与明暗窄屏；验收后直接部署本机并验证 HTTPS、版本及界面行为。
+- 交接：`agent/tasks/S159.md`；S158 发行现场和原 blocked 首发门禁保持。
+
+### S160 — 服务概览显示 Server ID
+
+- 状态：done；依据：2026-11-09 用户明确要求，design §18.1；前置 S076/S077/S148 done。
+- 范围：概览的服务连接卡片显示完整、只读可选中的 Server ID，沿用 GET /v1/capabilities；独立处理读取错误、重试与卸载取消，不改协议、凭据或客户端配置。
+- 验收：Web typecheck/test/build、既有认证浏览器回归；真实 Chromium 核对 API 一致性、失败/重试、退出取消、明暗窄屏；通过后部署本机并验证 HTTPS/身份/界面。
+- 交接：`agent/tasks/S160.md`；原 blocked 首发门禁保持。
+
+### S161 — 历史 build/deploy 资料迁入临时根
+
+- 依据：2026-11-09 用户要求将 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 集中到临时根；前置 S146 done，design §6、§19.3。
+- 范围：同文件系统重命名到 `/data/vaultsyncd-temp/` 下的同名目录，保留证据、备份、权限、btrfs 快照身份；迁移 Nix GC roots，历史记录通过新旧路径映射追溯。
+- 验收：运行与挂载引用检查、迁移前后文件摘要及元数据、GC roots 登记与目标存在、快照身份、服务进程/系统及 HTTP/HTTPS 健康；不触碰正式数据、lab 或重建服务。
+- 交接：`agent/tasks/S161.md`；原 blocked 首发门禁保持。
+
+### S162 — 托盘自动下载 GitHub Release 并安全升级重启
 
 - 依据：2026-11-09 用户新增并明确选择自动升级及重启；前置 S100、S109、S156 done；design §6、§18.1、§19.3、§24。
 - 范围：托盘右键“自动更新”，后台检查最新正式 Release、下载 Windows x64 ZIP 并核对版本/来源/大小/SHA-256；提取固定程序集合，复用 agent 维护屏障、排空、恢复导出、全状态/程序备份及失败回退；ZIP 归属在受控事务中更新，禁止普通覆盖/不同路径接管。
-- 子步骤：S161-a 网络与校验；S161-b ZIP/安装版维护与重启；S161-c 宿主及 Windows 原生验收。属于同张用户功能卡，不展开其他 ready 工作。
+- 子步骤：S162-a 网络与校验；S162-b ZIP/安装版维护与重启；S162-c 宿主及 Windows 原生验收。属于同张用户功能卡，不展开其他 ready 工作。
 - 验收：版本/下载负例与安全解压；Windows 原生 ZIP 升级、归属/状态/暂停保持、重启与失败恢复、托盘入口/重复点击；交叉构建及受影响既有维护测试。真实 GitHub 无可访问正式 Release 时如实记录，使用受控附件验证不得称为线上升级。
-- 交接：`agent/tasks/S161.md`、progress、interfaces；全部验收后合 master 并清理；不修改服务端，不触发部署。
+- 交接：`agent/tasks/S162.md`、progress、interfaces；全部验收后合 master 并清理；不修改服务端，不触发部署。
+
 
 ## 7. 记录模板与续接规则
 

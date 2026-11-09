@@ -30,6 +30,8 @@
 
 ## 验证与交接
 
+- S161（2026-11-09）已将历史 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 分别迁到 `/data/vaultsyncd-temp/vaultsyncd-build`、`/data/vaultsyncd-temp/vaultsyncd-deploy`；GC roots已重新登记。历史证据路径按这两个前缀映射追溯，原始日志不改写；新位置仍为保留归档，不能按普通缓存整体删除。交接见 `agent/tasks/S161.md`。
+
 - 执行当前卡要求和受影响消费者的必要检查。Windows 原生能力需 Windows 运行证据；交叉编译、Wine、fake 和前端成功不能代替 CFAPI 验收。
 - 资源或环境缺失标 blocked，记录缺失项并继续无依赖任务；不降低验收目标。只报告实际执行的命令与结果。
 - 每轮更新 `agent/tasks/Sxxx.md` 和 `agent/progress.md`：接口/路径、验证、限制、下一 ready 卡；接口变化更新 `docs/architecture/interfaces.md`。交接建议 300—600 中文字，大日志放不入 Git 的 artifacts。

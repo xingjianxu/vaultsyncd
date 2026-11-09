@@ -53,7 +53,7 @@ nix develop .#web-tests --command python3 tests/platform/windows/s099-installati
 
 ## 升级、回退与卸载
 
-S161起可右键托盘选择“自动更新”。客户端从 `xingjianxu/vaultsyncd` 的 Latest 正式版下载 Windows x64 ZIP，并核对版本、长度、GitHub SHA-256、固定文件集合和同源清单。下载不阻塞GUI，重复点击不启动第二次更新；成功后关闭界面，候选agent完成排空/导出/全量备份、程序替换和重启。全部Binding在试启动时暂停，真实IPC健康通过才提交并恢复原暂停状态。ZIP只在原归属目录升级；安装版保留原Run和卸载入口，成功后更新HKCU版本。下载、候选及apply.log留在 `%LOCALAPPDATA%\vaultsyncd\updates\<随机目录>`，程序/整套状态/ZIP owner备份留在原maintenance目录，不自动删除。发布步骤见 [packaging](../../packaging/README.md)，需更高版本的 `--stable` Windows附件；预发布不自动安装。
+S162起可右键托盘选择“自动更新”。客户端从 `xingjianxu/vaultsyncd` 的 Latest 正式版下载 Windows x64 ZIP，并核对版本、长度、GitHub SHA-256、固定文件集合和同源清单。下载不阻塞GUI，重复点击不启动第二次更新；成功后关闭界面，候选agent完成排空/导出/全量备份、程序替换和重启。全部Binding在试启动时暂停，真实IPC健康通过才提交并恢复原暂停状态。ZIP只在原归属目录升级；安装版保留原Run和卸载入口，成功后更新HKCU版本。下载、候选及apply.log留在 `%LOCALAPPDATA%\vaultsyncd\updates\<随机目录>`，程序/整套状态/ZIP owner备份留在原maintenance目录，不自动删除。发布步骤见 [packaging](../../packaging/README.md)，需更高版本的 `--stable` Windows附件；预发布不自动安装。
 
 若升级进程中断且 `agent\auto-update.json` 存在，关闭界面后在同一Windows用户的交互会话运行保留候选：`vaultsyncd-agent.exe --auto-update-recover --program-dir '原程序目录'`。未提交trial在排空/持writer锁后整套回退；已有 `complete.json` 时只补恢复暂停，不回滚可能有新提交的状态。若只有 `maintenance.json` 而无auto-update记录，沿用下文 `--maintenance recover`；不要删除屏障、owner或缓存来重试。版本相同/更低、程序忙、校验或恢复失败均明确拒绝，不强杀writer。
 

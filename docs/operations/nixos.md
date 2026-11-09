@@ -370,6 +370,8 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 ## S146 闲置目录清理与临时数据集中（2026-11-09）
 
+后续路径覆盖：S161 已将本节历史 build/deploy 目录迁入临时根，当前映射及验收见文末 S161；下文旧路径为当时证据。
+
 用户要求清理闲置目录，今后临时任务数据、测试卷、下载与缓存统一在 `/data/vaultsyncd-temp`，按任务/run_id或cache用途分目录。根目录本机为xingjian:users 0711，私密证据与备份子目录0700；不可把整个临时根当成单次任务的删除目标。新部署证据默认 `/data/vaultsyncd-temp/evidence/deploy`。历史 `vaultsyncd-build` / `vaultsyncd-deploy` 仍保留原路径的原始验收资料、备份与GC roots，后续不在这些历史目录新建任务。
 
 清理前逐项核对挂载和进程打开的路径；清理36项、`du`合计11,084,029,952字节（约10.3GiB），包括S097/S098编译缓存、退役ARM64虚拟机存储和测试镜像、6个S075测试目录、S096试用镜像与3处旧凭据/开发证书目录。S075原始材料先私密归档。历史build目录剩约18MiB、deploy约87MiB；所有原始日志/结果及发布GC roots、S113快照、S144清库前归档和当前初始化凭据保留。`df`前后未显示相应物理空间下降，/data存在Snapper快照；本次不删除系统/数据快照，不声称释放10.3GiB独占物理空间。
@@ -396,3 +398,27 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 生产真实Chromium的TLS1.3、全量资产、匿名门禁、登录/自动连接/客户端页/退出、文件版本号与摘要、刷新/键盘/Escape、明暗320/1440、CSP/cookie全通过。ServerId、schema/FK、Vault路径/历史、4工作文件和3对象摘要及10既有服务/3应用保持；未写生产同步内容。完整备份`/data/vaultsyncd-temp/S152-deploy-20261109T103922Z/backups/predeploy.vsbk`及异盘`artifacts/S152/backups/`副本/收据均verified。原始脚本/结果/日志/截图、部署result及GC roots在该run的`evidence/`。本卡因并行S152桌面任务而改编号S153，既有运行目录名保留。
 
 回退入口generation264 `/nix/store/qdd7vqh5k24dwlrxwzcgsn6mp9f75k0y-nixos-system-wks-lab-26.11.20261102.7356cc7`，可按S113先`sudo nixos-rebuild test --store-path <该旧路径>`并确认HTTPS/IPC健康，再switch并同步主机pin至c20199e的旧源。此次无schema迁移，保留S151的vaults路径；若要恢复备份仍须按备份协议恢复到空目录并更换epoch。未实际回退、生产恢复或Windows/规模复验；原首发门禁保持。交接与清理见[S153](../../agent/tasks/S153.md)。
+
+
+## S159 Vault 路径与容量版部署（generation268，2026-11-09）
+
+当前服务源911449b、schema18，服务器路径可点击打开对应Vault根目录，“文件容量”统计当前已提交文件的逻辑总大小。运行/开机system为pwcp1j07c6mx6ln9a0z6n8whabhds0jk，主机配置2cfc2bf（main）纯求值复现；公网TLS/资产/浏览器、HTTPS/IPC及正式数据保持均通过。本轮期间其他主机任务已完成全系统更新和修复，当前基线3461249取代S153/S157的旧锁复现入口。
+
+完整备份、日志、截图、部署result及旧system/boot GC roots永久保留在`/data/vaultsyncd-temp/S159-20261109/`，异盘校验备份在`artifacts/S159/backups/`。本次无schema迁移；回退先按S113对旧system `/nix/store/8mjzl3ql0chn39mba7cv2529rf0h0n3n-nixos-system-wks-lab-26.11.20261109.5e6fbb3`执行test并核对HTTPS/IPC，再switch并同步主机pin至3461249。不要退回旧全系统锁而撤销另一任务的主机升级；若恢复备份仍需按备份协议恢复到空目录并换epoch。本次未实际回退，详细证据、验证及清理见[S159](../../agent/tasks/S159.md)。
+
+
+## S160 服务概览 Server ID 部署（generation269，2026-11-09）
+
+源`85dd2bb9ed427a13ec2437bea69038f8300718ec`在概览服务连接卡片显示完整Server ID，窄屏自动换行，供选中复制。沿用GET /v1/capabilities，无wire/schema迁移。以实际主机干净main `2cfc2bf`执行既有`tools/deploy-local.sh --rev HEAD --evidence-base /data/vaultsyncd-temp/S160-20261109/evidence/deploy`，pure build、manifest、dry/test、HTTPS/IPC/身份/归属与switch通过，result的passed/cleaned=true。主机pin `a37df3131590f01e61e4cd1532f9d910d974e3ac`已ff main且任务树/分支清理；锁74319cf7…保持。运行与开机generation269，system `/nix/store/p744ig0hmksv3nw68bfb6vhiy3z1abpc-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/k33fl5g1mjfir3sn6wfb5s0cvfkgydaa-vaultsyncd-0.1.1`。
+
+生产真实Chromium验证编号与API一致、完整选择/只读、刷新、明暗320/1440完整显示与无横向溢出、严格TLS1.3/CSP/cookie/逐字节全量资产，登录退出正常，无pageerror。正式ServerId、schema18/FK、5工作文件摘要、10既有服务PID/InvocationID及3应用保持。原始脚本、日志、截图、result与部署记录永久保存`/data/vaultsyncd-temp/S160-20261109/evidence/`，部署run为`deploy/local-20261109T201823-1530268/`。完整备份及收据在该任务`backups/`，异盘`/wrd/prj/vaultsyncd/artifacts/S160/backups/`已独立verify。
+
+旧system/boot GC roots保留；直接回退入口generation268 `/nix/store/pwcp1j07c6mx6ln9a0z6n8whabhds0jk-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，按S113先test核对HTTPS/IPC再switch，并同步主机pin至2cfc2bf。本卡未实际回退、未做Windows或容量复验；原blocked首发门禁不变。项目合并清理见[S160](../../agent/tasks/S160.md)。
+
+## S161 历史 build/deploy 资料迁移（2026-11-09）
+
+当前归档位置为 `/data/vaultsyncd-temp/vaultsyncd-build`（原 `/data/vaultsyncd-build`）与 `/data/vaultsyncd-temp/vaultsyncd-deploy`（原 `/data/vaultsyncd-deploy`）；旧目录和兼容软链均不存在。历史命令、日志和收据不批量改写，查阅或恢复时仅替换这两个根前缀。这些归档仍含长期证据、备份、发布/回退 GC roots，不能按普通临时缓存删除。
+
+同文件系统rename保留全部482个普通文件的SHA256/元数据和目录inode，S113只读btrfs快照仍ID2663，UUID与只读标志保持；72个GC roots先临时固定再登记新路径，验证后移除旧登记及临时根。首次核对发现67个根链接属主被登记命令改变，恢复属主后639项完整清单一致。服务进程身份、当前system及HTTP/严格TLS的HTTPS健康保持，无重启/rebuild；不触碰正式目录和lab。
+
+原始plan、前后清单、登记日志、快照/服务身份、健康结果及result.json（passed=true）在 `/data/vaultsyncd-temp/S161-relocate-20261109T124412Z/evidence/`。Nix print-roots实际识别72个新根；枚举附带移除4个既有失效auto链接及2个陈旧temproots文件，未删除store产物或实际系统回退。操作记录与限制见 [S161](../../agent/tasks/S161.md)。

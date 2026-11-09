@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn trial_gate_requires_a_complete_valid_health_receipt() {
         let base = std::env::temp_dir().join(format!(
-            "s161-trial-gate-{}-{}",
+            "s162-trial-gate-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

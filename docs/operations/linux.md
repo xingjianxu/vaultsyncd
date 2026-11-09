@@ -11,7 +11,7 @@ nix build .#container-deps --no-link --json
 
 当前仅支持 x86_64-unknown-linux-gnu（S111/ADR-015 已移除 Linux ARM64 范围），Rust 服务端和管理 CLI 与同提交 Web 独立构建，再封装私有 ELF loader、递归解析的运行库及相对路径入口。Ubuntu 运行不需要 `/nix`、Node 或 Rust；需要发行版 Python 3.11+（tomllib）、btrfs-progs、findmnt、lsattr 和常规 POSIX shell。首发实际验收基线 Ubuntu 24.04。不支持把单个 bin wrapper 移出发行目录；可以整体移动目录。原始 Nix 动态产物不能直接复制冒充此包。
 
-`runtime/share/vaultsyncd/release-manifest.json` 记录产品版本、实际源 commit/NAR、两组件来源、锁摘要、工具链/目标和每个实际文件的长度/摘要。协议版本独立。邻接 `vaultsyncd-runtime-sources.tar.gz` 提供所封装 glibc/GCC 的对应源码及锁定 Nixpkgs 配方；分发二进制/镜像时必须同时提供此归档。私有运行库许可在 `share/vaultsyncd/licenses`。清单核验失败、dirty source、缺 Web 资源均拒绝，不重标旧包。
+`runtime/share/vaultsyncd/release-manifest.json` 记录产品版本、实际源 commit/NAR、两组件来源、锁摘要、工具链/目标和每个实际文件的长度/摘要。协议版本独立。运行库只从锁定 glibc、GCC、SQLite 和 zlib 的目录解析，包含两程序实际链接的 `libsqlite3.so` 及其 `libz.so.1` 依赖；清单记录这些库的版本与摘要。邻接 `vaultsyncd-runtime-sources.tar.gz` 提供所封装 glibc/GCC 的对应源码及锁定 Nixpkgs 配方；分发二进制/镜像时必须同时提供此归档。私有运行库许可在 `share/vaultsyncd/licenses`。清单核验失败、dirty source、缺 Web 资源均拒绝，不重标旧包。
 
 ## 普通 systemd
 

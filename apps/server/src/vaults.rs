@@ -133,14 +133,17 @@ pub async fn list_managed_vaults(
         return *response;
     }
     let records = match context.auth.database().pool().acquire().await {
-        Ok(mut conn) => match store_vaults::vaults_of_owner(&mut conn, principal.user_id).await {
-            Ok(records) => records,
-            Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
-        },
+        Ok(mut conn) => {
+            match store_vaults::vaults_with_file_bytes_of_owner(&mut conn, principal.user_id).await
+            {
+                Ok(records) => records,
+                Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
+            }
+        }
         Err(error) => return storage_failure(&next_request_id(), &error.to_string()),
     };
     let mut vaults = Vec::new();
-    for record in records {
+    for (record, file_bytes) in records {
         let reason = context.health_reason(&record);
         let reason = reason.unwrap_or_else(|| {
             if record.health == StoreVaultHealth::Unavailable {
@@ -160,6 +163,7 @@ pub async fn list_managed_vaults(
         vaults.push(ManagedVault {
             vault_id: record.id.to_hex(),
             path: record.absolute_path,
+            file_bytes: Some(file_bytes.to_string()),
             health: if reason.is_empty() {
                 VaultHealth::Healthy
             } else {
