@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S144 done**（对象区 `<vault_id>/<aa>/<hash>`、删除旧布局兼容、清库并按新规则重建；管理员默认名 xingjian）。S001—S144 共144卡：138 done、6 blocked；**无 ready 卡**。线上源 `4ed8d9b`、generation260、schema17，新 ServerId `9395d9ca…`，首账号 `xingjian`，`documents` Vault 已重新注册并采集。验证与交接见[S144](tasks/S144.md)、[S143](tasks/S143.md)。
+当前：**S141 done**（Vault 改名后的 Windows 原生复验；同时修复改名/升版遗留的原生验收故障）。S001—S144 共144卡：139 done、5 blocked；**无 ready 卡**。线上源 `4ed8d9b`、generation260、schema17，新 ServerId `9395d9ca…`，首账号 `xingjian`，`documents` Vault 已重新注册并采集。验证与交接见[S141](tasks/S141.md)、[S144](tasks/S144.md)、[S143](tasks/S143.md)。
 
 最近部署：[S144](tasks/S144.md) 源`4ed8d9b69b0b7b8c3aaa6d5f34d0c753d7b29c7c`、主机pin`629c86d`、generation260；先按旧规则部署到 schema17（迁前/清库留档在 `/data/vaultsyncd-deploy/wipe-20261109T102438-61728/`），再停服清空内部状态、`vaultsyncd-init` 建首账号 `xingjian`、注册 `documents` 并重新采集 3 个对象；严格 TLS/静态资产/CSP/登录/文件浏览/属性/暗色320与1440/退出、health/capabilities(protocol 2)、schema17 quick_check、新布局物理哈希、10服务/3应用保持均通过，新 ServerId `9395d9ca…`。直接回退需旧 generation 与清库前整套状态并同步 pin，本次未演练。历史部署记录（S138 generation258/schema15 等）仅描述当时现场。
 
@@ -19,14 +19,16 @@
 | S106 | 小文件时延与常规规模基准 | X | S101、S102、S103、S104、S105 | blocked | 基线c59ff19；独立只读前置/资源报告 `docs/reports/performance.md`，文档390cda0已cb9ed20合入，证据/树/分支已收尾 | devShell资源核查：双路6430/128线程、503.54GiB RAM、SSD可用143.05GiB、旋转btrfs21.58TiB；仅1台8GiB/8vCPU Windows，未联系客体、未跑小样本/常规档，p95/RSS/CPU/队列全未测 | S101 hosted无remote/runner/Actions证据；S105已fd896fa完成，hosted前置仍阻塞；需准备3独立Windows及SSD/RTT实证，容量本身未证不足，不降1万文件/约10GiB目标 | agent/tasks/S106.md；artifacts/S106 |
 | S107 | 正式容量与大文件续传验证 | X | S106 | blocked | 基线cb9ed20；只读正式档预算与恢复证据要求写 `docs/reports/performance.md`，文档dcadee5已0d4fb30合入，证据/树/分支已收尾 | devShell容量/挂载/btrfs/remote均exit0；data21.5808TiB，SSD142.59GiB；有限情景含余量19.54TiB，另累计五端下载stage情景25.54TiB（差约3.96TiB）；正式10万文件/1TiB/50GiB/5设备与重传字节全未测 | S106未验收，追溯S101 hosted缺口；五独立Windows及大NTFS卷未准备，须先核实内部副本/stage/历史增长再准入容量，不降目标、不以小样本替代 | agent/tasks/S107.md；artifacts/S107 |
 | S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | blocked | 35项P0索引、README/运维入口与当前限制；文档5f485a5已abdedd3整合；S105 done/代码候选fd896fa；证据、树与分支已收尾 | 两架构各24个历史runtime文件及发布/源码tar哈希核验，b263源三PE哈希/原生启动验证；当前候选全平台包未完成 | S101 hosted、S106/S107性能容量、T02三台Windows及最终同源发行证据缺失；未宣称首发完成 | agent/tasks/S108.md；docs/operations/release.md |
-| S141 | Vault 改名后的 Windows 客户端原生复验 | W | S140；需 schema16 服务端 | blocked | 无产出提交（宿主 xwin 全 workspace 类型检查 exit0） | `cargo xwin check --locked --workspace --all-targets` exit0；未取得任何原生运行证据 | Windows 客体未开机、SSH 未监听；需按 `docs/operations/windows-lab.md` §12 启动 VM、同源交叉构建并跑 bindings/files-ui/write/history/s099/s100 | agent/tasks/S141.md |
 
 ## 已完成任务
+
+本轮原生复验结论见 [S141](tasks/S141.md)：客体开机后 bindings/files-ui/write(74/74)/history/S129 Explorer 五阶段/S091 升级演练/S099 安装演练全部通过；S100 维护演练无法复跑（保留用户的 0.1.0 客户端已在历史 S100 验收中卸载，且 S140 升版后旧客户端无法登录新服务端），成对旧/新端到端升级演练需另立卡。
 
 以下沿用原验收结论；验证、限制与生命周期按需读取父卡，依赖与环境见实施手册。过程原文从固定 Git 版本查阅，Git 外 artifacts 保留。S119 的重复行已去重，未重新认定任何历史验收。
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S141 | Vault 改名后 Windows 原生复验；修复 RootElement/IPC 版本等改名与升版遗留故障；bindings/files-ui/write/history/S129/S091/S099 原生通过 | 8b82e7d、ee2c863、e2f3b9a、83bc979、bf561f8、6f0bab3 已ff合master，任务树/分支已清理 | [S141](tasks/S141.md) |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
 | S144 | 部署 `4ed8d9b` 到本机：generation260、schema17、清库重建、管理员 xingjian；生产严格 TLS/浏览器验收 | 源`4ed8d9b`；主机 pin`629c86d` | [S144](tasks/S144.md) |
 | S143 | 对象区 `<vault_id>/<aa>/<hash>`；删除旧布局兼容；schema17；管理员默认登录名与 NixOS adminUser | 19a43a3已ff合master，兼容修复4ed8d9b；树/分支已清理 | [S143](tasks/S143.md) |

@@ -49,6 +49,7 @@ nix develop .#web-tests --command python3 tests/platform/windows/s099-installati
 
 本次已验收源`cf1d174c3bd47b4babc2db053514619b2e733b07`的0.1.0未签名包，实际Runtime156.0.4314.58；新标准用户`vs_s099_4fcc1e`，run `s099-1793986849-3965593`。四个安装EXE来源/hash、AUMID、Run、真实页面绑定与GUI/CLI同实例、关闭后同步、真实重启后同步均通过；三次不同boot时间戳，最后回Quickemu且无agent后台进程。测试用户安装/状态/Vault保留给S100，测试服务和隧道已停止；完整摘要见`agent/tasks/S099.md`。交接追加提交后的新HEAD发布需重新构建，不能重标该实验receipt。
 
+复跑前提（S141 实测）：安装后的客户端只接受原生文件夹选择器写入本地目录，`s099-installation.*` 由测试用户会话内的 worker 启动 `s114-picker.ps1 -SelectOnly` 完成选择；客体会话若残留 Search/通知浮层，选择器会先 ESC 收起，仍取不到前台时点击对话框标题栏。S100 只能跑一次完整链路：它要求保留用户仍装着上一版客户端且服务端协议/数据库 schema 未变（0.1.0→0.1.1 正是该前提）；历史 S100 验收以卸载程序收尾，S140 又把远端协议升到 major 2、客户端 schema 升到 17，因此当前不能直接复跑，跨版本升级证据改由 S091 升级演练（数据库/协议层）提供，成对旧/新端到端演练需另立卡。
 
 ## 升级、回退与卸载
 
