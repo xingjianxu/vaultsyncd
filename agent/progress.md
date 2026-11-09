@@ -1,6 +1,6 @@
 # 实施进度
 
-S167 in_progress（待提交整合）：桌面启动自动复用/启动 agent，宿主7项、Windows交叉构建/两端严格clippy及Windows原生39/39通过；并行S166由父agent维护。任务树 `.worktrees/S167-desktop-agent-startup`，交接见 [S167](tasks/S167.md)。
+S167 done（待父agent整合）：桌面启动自动复用/启动 agent，实现 `401c484`；宿主7项、Windows交叉构建/两端严格clippy及Windows原生39/39通过；并行S166由父agent维护。任务树 `.worktrees/S167-desktop-agent-startup`，交接见 [S167](tasks/S167.md)。
 
 当前：**S165 done**，已发布 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，精确源 `d976376` 已推送；同源 Linux x64/Windows x64 归档、8 附件远端大小/SHA-256、标签/说明与属性核对通过，[交接](tasks/S165.md)。包含 S159/S160 Web 改进和 S162 托盘自动更新；预发布不进入自动更新渠道。**下一 ready：无**，原4张blocked保持；当前候选未复跑原生/性能容量/多机与线上升级。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
 
@@ -31,6 +31,7 @@ S167 in_progress（待提交整合）：桌面启动自动复用/启动 agent，
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S167 | 桌面冷启自动启动agent；健康同会话复用、关窗IPC存活及错误/ZIP保护原生39/39通过 | 实现401c484；待父agent组合S166后合master与清理 | [S167](tasks/S167.md) |
 | S165 | v0.1.2 预发布；双平台同源构建、8附件远端摘要/来源/非Latest核对通过 | 源d976376已推送；交接889c19f已ff合master，任务挂载/树/分支已清理 | [S165](tasks/S165.md) |
 | S164 | 123 个旧vs目录归档，39,360 文件全量恢复摘要/元数据通过后清理；开发目录仅dev根 | a57d364已ff合master；任务树/分支已清理，S134现场保留 | [S164](tasks/S164.md) |
 | S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb、交接762d71d已ff合master；主机a37df31已ff合main，项目/主机任务树及分支清理 | [S160](tasks/S160.md) |
