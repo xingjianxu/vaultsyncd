@@ -55,6 +55,12 @@ async fn health(program: &Path) -> Result<()> {
 }
 pub(crate) fn registry_version(version: &str) -> Result<()> {
     use std::os::windows::process::CommandExt;
+    let windows =
+        PathBuf::from(std::env::var_os("SystemRoot").ok_or("Windows system directory missing")?);
+    if !windows.is_absolute() {
+        return Err("Windows system directory must be absolute".into());
+    }
+    let registry = windows.join("System32/reg.exe");
     for (key, value) in [
         (r"HKCU\Software\vaultsyncd", "Version"),
         (
@@ -62,7 +68,7 @@ pub(crate) fn registry_version(version: &str) -> Result<()> {
             "DisplayVersion",
         ),
     ] {
-        if !ProcessCommand::new("reg.exe")
+        if !ProcessCommand::new(&registry)
             .args([
                 "add", key, "/v", value, "/t", "REG_SZ", "/d", version, "/f", "/reg:64",
             ])

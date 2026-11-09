@@ -35,13 +35,14 @@ def run(args):
 
 
 def remote(script):
+    script = "$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';" + script
     encoded = base64.b64encode(script.encode('utf-16-le')).decode()
     return run([*SSH, 'powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + encoded])
 
 
 def execute_test(script, log_path):
     """Stream guest progress and bound the SSH controller without killing a writer."""
-    encoded = base64.b64encode(script.encode('utf-16-le')).decode()
+    encoded = base64.b64encode(("$ProgressPreference='SilentlyContinue';" + script).encode('utf-16-le')).decode()
     command = [*SSH, 'powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + encoded]
     started = time.monotonic()
     heartbeat = started
@@ -79,7 +80,8 @@ def execute_test(script, log_path):
 
 def collect_logs(guest, artifact):
     # Full programs/state/backups stay in the VM; the input ZIPs already exist on host.
-    remote(f"""Add-Type -AssemblyName System.IO.Compression.FileSystem
+    remote(f"""Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $root='{guest}';$dest=$root+'/evidence-logs.zip'
 $zip=[IO.Compression.ZipFile]::Open($dest,[IO.Compression.ZipArchiveMode]::Create)
 try {{ Get-ChildItem $root -Recurse -File | Where-Object {{ $_.Extension -in @('.json','.log','.txt','.out','.err') -and $_.Length -lt 4194304 }} | ForEach-Object {{
@@ -124,6 +126,7 @@ def main():
     run_id = 's162-' + time.strftime('%Y%m%dT%H%M%S') + '-' + str(os.getpid())
     artifact = TEMP / run_id
     artifact.mkdir(parents=True)
+    print('Preparing native fixtures; progress will stream during validation.', flush=True)
     for name, old, version, broken in [('old.zip', True, '0.1.0', False),
                                        ('new.zip', False, '0.1.1', False),
                                        ('bad-start.zip', False, '0.1.1', True)]:
@@ -145,7 +148,6 @@ def main():
     try:
         output = execute_test(f"& '{guest}/s162-update.ps1'" + (' -InstalledOnly' if len(sys.argv) == 3 else ''), artifact / 'native.log')
         (artifact / 'native.log').write_text(output)
-        print(output)
     except subprocess.CalledProcessError as error:
         (artifact / 'native.log').write_text(error.stdout or '')
         (artifact / 'native-error.log').write_text(error.stderr or '')

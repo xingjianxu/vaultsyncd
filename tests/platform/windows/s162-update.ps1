@@ -1,5 +1,6 @@
 param([switch]$Worker,[switch]$InstalledOnly)
 $ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 if($PSScriptRoot-notmatch '^C:\\vaultsyncd-lab\\s162-[a-zA-Z0-9-]+$'){throw 'isolated S162 run required'}
 function Write-Json($path,$value){[IO.File]::WriteAllText($path,($value|ConvertTo-Json -Depth 30),(New-Object Text.UTF8Encoding($false)))}
@@ -59,7 +60,7 @@ function Exe($path,$arguments,[int]$expected=0){
   $script:sequence++;$stem=Join-Path $script:case ('command-'+$script:sequence)
   [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'phase.txt'),('Step '+$script:sequence+' '+[IO.Path]::GetFileName($path)+' '+($arguments|Select-Object -First 1)))
   $args=($arguments|ForEach-Object{'"'+$_+'"'})-join ' '
-  $start=@{FilePath=$path;PassThru=$true;RedirectStandardOutput=($stem+'.out');RedirectStandardError=($stem+'.err')}
+  $start=@{FilePath=$path;WorkingDirectory=$PWD.Path;PassThru=$true;RedirectStandardOutput=($stem+'.out');RedirectStandardError=($stem+'.err')}
   if($arguments.Count){$start.ArgumentList=$args}
   $p=Start-Process @start
   $null=$p.Handle;$end=(Get-Date).AddSeconds(180)
@@ -124,9 +125,12 @@ function Installed-Fixture($candidate){
   $end=(Get-Date).AddSeconds(30)
   do{try{$null=Status;break}catch{if((Get-Date)-ge $end){throw};Start-Sleep -Milliseconds 200}}while($true)
   $config=Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/agent.json';$configHash=(Get-FileHash $config).Hash
-  Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--auto-update','--program-dir',$script:program)|Out-Null
+  $original=$PWD;$untrusted=Join-Path $script:case 'untrusted-data';New-Item -ItemType Directory $untrusted|Out-Null
+  Copy-Item (Join-Path $script:program 'vaultsyncd-cli.exe') (Join-Path $untrusted 'reg.exe')
+  try{Set-Location $untrusted;Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--auto-update','--program-dir',$script:program)|Out-Null}finally{Set-Location $original}
   $null=Desktop;$null=Status
   Check ((Get-ItemProperty $registration).Version-eq '0.1.1') 'installed version registration upgraded'
+  Check ((Get-ItemProperty $registration).Version-eq '0.1.1') 'registry tool resolved from Windows system directory'
   Check ((Get-ItemProperty $uninstall).DisplayVersion-eq '0.1.1') 'uninstall display version upgraded'
   Check ((Get-ItemProperty $run).'vaultsyncd-agent'-eq $startup) 'startup entry retained'
   Check ((Get-FileHash (Join-Path $script:program 'uninstall.exe')).Hash-eq $uninstallHash) 'uninstaller retained'
