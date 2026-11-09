@@ -144,6 +144,13 @@ try{
     $answer=@{id=$action.id;action=$action.action;ok=$true}
     switch($action.action){
       'status' {$answer.status=Read-Status;$answer.agent_pid=(Agent-Process).ProcessId}
+      'pick-directory' {
+        # The installed GUI uses the real native folder picker (S114); drive it from this session.
+        $picker=Join-Path $public 's114-picker.ps1'
+        if(!(Test-Path $picker)){throw 'native picker automation missing'}
+        Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$picker,'-Path',('"'+$local+'"'),'-SelectOnly') | Out-Null
+        $answer.picker_started=$true
+      }
       'close-gui' {
         if(!$desktop){throw 'no owned GUI'}
         $desktop.Refresh();if(!$desktop.HasExited){$closed=$desktop.CloseMainWindow();if(!$closed){throw 'GUI close request rejected'};$null=$desktop.WaitForExit(15000);$desktop.Refresh()}

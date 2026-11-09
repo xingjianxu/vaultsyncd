@@ -153,10 +153,12 @@ def main():
         script.write_text((VAULT / "tests/platform/windows/s099-installation.ps1").read_text(), encoding="utf-8-sig")
         secret_script = run / "s099-logon-secrets.ps1"
         secret_script.write_text((VAULT / "tests/platform/windows/s099-logon-secrets.ps1").read_text(), encoding="utf-8-sig")
-        (run / "hashes.json").write_text(json.dumps({path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in [setup, script, secret_script]}))
+        picker = run / "s114-picker.ps1"
+        picker.write_text((VAULT / "tests/platform/windows/s114-picker.ps1").read_text(), encoding="utf-8-sig")
+        (run / "hashes.json").write_text(json.dumps({path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in [setup, script, secret_script, picker]}))
         checked([*SSH, f'powershell -NoProfile -Command "New-Item -ItemType Directory \'{guest}\' | Out-Null"'])
         checked([*SCP, setup, run / "fixture.json", run / "hashes.json", run / "ca.pem",
-                 script, secret_script, f"{USER}@{HOST}:{guest}/"])
+                 script, secret_script, picker, f"{USER}@{HOST}:{guest}/"])
         # The backup includes real prior logon secrets and stays ACL-protected in the guest only.
         # Restore is attempted even if Prepare partially fails.
         prepared = True
@@ -188,7 +190,11 @@ def main():
             page.get_by_role("link", name="同步目录", exact=True).click()
             page.get_by_role("button", name="读取授权 Vault", exact=True).click()
             page.locator('[name="vault_id"]').select_option(fixture["vault"])
-            page.locator('[name="local_path"]').fill(installed["local"])
+            # The installed client only accepts a path from the real native folder picker.
+            action("pick-directory")
+            page.get_by_role("button", name="选择目录…", exact=True).click()
+            wait("native directory picker",
+                 lambda: page.locator('[name="local_path"]').input_value() == installed["local"], 180)
             page.locator('[name="mode"]').select_option("full")
             page.get_by_role("button", name="创建绑定并开始合并", exact=True).click()
 

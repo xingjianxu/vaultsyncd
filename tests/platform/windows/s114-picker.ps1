@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Path)
+param([Parameter(Mandatory=$true)][string]$Path,[switch]$SelectOnly)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -45,6 +45,10 @@ Start-Sleep -Milliseconds 700
 Trace 'choosing directory'
 Click-DialogButton $dialog '1'
 Start-Sleep -Seconds 1
+if($SelectOnly){
+  @{selected=$Path;cancelled=$false} | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 'picker-result.json') -Encoding UTF8
+  exit 0
+}
 # Open a second dialog and click Cancel; the form must retain the first path.
 $dialog = Wait-Dialog
 [PickerWindow]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
