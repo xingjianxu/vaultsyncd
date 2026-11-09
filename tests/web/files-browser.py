@@ -234,7 +234,7 @@ def main():
             assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"]
             menu_box, link_box = menu.bounding_box(), file_link.bounding_box()
             assert abs(menu_box["y"] - (link_box["y"] + link_box["height"] / 2)) < 16, (menu_box, link_box)
-            notifications = page.locator(".mantine-Notification-vault")
+            notifications = page.locator(".mantine-Notification-root")
 
             def notification(message):
                 return notifications.filter(has=page.get_by_text(message, exact=True))
@@ -254,7 +254,7 @@ def main():
             expect(notice).to_have_count(1)
             expect(notice).to_have_attribute("role", "status")
             assert page.evaluate("navigator.clipboard.readText()") == "/file-0000.txt"
-            expect(page.locator('.mantine-Notifications-vault[data-position="top-right"]')).to_be_visible()
+            expect(page.locator('.mantine-Notifications-root[data-position="top-right"]')).to_be_visible()
             page.wait_for_timeout(250)
             assert [target.bounding_box() for target in layout_targets] == before_notification, "通知挤压了文件布局"
             # 相同文案再次复制创建新的完整四秒通知，不复用已经消耗的计时器。

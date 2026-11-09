@@ -163,7 +163,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   }
   return <Paper withBorder className="files-browser">
     <aside className="files-sidebar" aria-label="目录面板">
-      <div className="files-vault-picker">{vaultPicker}</div>
+      <div className="files-root-picker">{vaultPicker}</div>
       <div className="files-tree-scroll">{snapshot && <DirectoryTree snapshot={snapshot} directory={directory} vaultName={vaultName} navigate={navigate} renderMenu={(entry, child) => entryMenu(entry, child, "tree")} />}</div>
     </aside>
     <section className="files-main" aria-label="文件列表面板">

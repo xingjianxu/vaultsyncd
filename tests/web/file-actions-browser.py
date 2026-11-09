@@ -262,8 +262,8 @@ def main():
             page.goto(origin + f"/#/files/{doc_id}")
             table = page.get_by_role("table", name="文件与目录", exact=True)
             toolbar = page.get_by_role("toolbar", name="文件浏览器工具栏", exact=True)
-            notifications = page.locator(".mantine-Notification-vault")
-            error_notices = page.locator('.mantine-Notification-vault[role="alert"]')
+            notifications = page.locator(".mantine-Notification-root")
+            error_notices = page.locator('.mantine-Notification-root[role="alert"]')
 
             def row(name):
                 return table.get_by_role("button", name=name, exact=True).locator("xpath=ancestor::tr[1]")

@@ -39,7 +39,7 @@
 | T16 | 恢复旧服务端 | [S102](../../agent/tasks/S102.md) | [S104](../../agent/tasks/S104.md) | 真实备份恢复新epoch、旧pending delete隔离 |
 | T17 | 外部文件操作 | [S103](../../agent/tasks/S103.md) | [S103](../../agent/tasks/S103.md) | 真实工作目录采集、rename/截断、历史可恢复 |
 | T18 | 持续写竞争 | [S103](../../agent/tasks/S103.md) | [S103](../../agent/tasks/S103.md) | 409 RECONCILE_REQUIRED，未采集外部字节不被覆盖 |
-| T19 | 卸载露空目录 | [S103](../../agent/tasks/S103.md) | [S103](../../agent/tasks/S103.md) | 真实umount-l、ROOT_UNAVAILABLE、零删除/版本 |
+| T19 | 卸载露空目录 | [S103](../../agent/tasks/S103.md) | [S103](../../agent/tasks/S103.md) | 真实umount-l、VAULT_UNAVAILABLE、零删除/版本 |
 | T20 | 队列溢出与重启 | [S103](../../agent/tasks/S103.md) | [S103](../../agent/tasks/S103.md) | 内核inotify overflow补扫、权限失败非删除 |
 | T21 | 容量与CoW失败 | [S103](../../agent/tasks/S103.md) | [S103](../../agent/tasks/S103.md) | 独立btrfs双run的数据/元数据ENOSPC与reflink失败 |
 | T22 | 下载断线错块混版本 | [S104](../../agent/tasks/S104.md) | [S105](../../agent/tasks/S105.md) | 真实TCP补4 Range、前缀0重传；CFAPI证据分别列账 |
@@ -63,7 +63,7 @@
 
 | 任务 | 执行依据 |
 | --- | --- |
-| NixOS部署/TLS/健康/Root身份恢复 | [nixos.md](nixos.md)；先检查实际主机入口，保留恢复generation与SSH |
+| NixOS部署/TLS/健康/Vault身份恢复 | [nixos.md](nixos.md)；先检查实际主机入口，保留恢复generation与SSH |
 | 通用Linux/systemd/容器 | [linux.md](linux.md)；合规btrfs、普通文件、不要求FUSE |
 | Windows安装/升级/默认保留数据卸载 | [windows-installation.md](windows-installation.md)；完整provider注销前先验证全部内容驻留 |
 | 一致性备份与空实例恢复 | [backup.md](backup.md)；prepare→verify→export→verify→release，离线恢复至新空目录 |

@@ -105,8 +105,8 @@ def main():
                 context=browser.new_context(accept_downloads=True);page=context.new_page()
                 page.add_init_script("""window.__cspViolations=[];document.addEventListener('securitypolicyviolation',event=>{window.__cspViolations.push({directive:event.effectiveDirective,blocked:event.blockedURI});});""")
                 response=page.goto(origin+"/#/account")
-                notifications = page.locator(".mantine-Notification-vault")
-                integrity = page.locator(".mantine-Paper-vault").filter(has=page.get_by_role("heading", name="本机导出完整性", exact=True))
+                notifications = page.locator(".mantine-Notification-root")
+                integrity = page.locator(".mantine-Paper-root").filter(has=page.get_by_role("heading", name="本机导出完整性", exact=True))
                 assert response
                 nonce=page.locator('meta[name="csp-nonce"]').get_attribute("content")
                 assert nonce and f"'nonce-{nonce}'" in response.headers.get("content-security-policy", "")
@@ -125,7 +125,7 @@ def main():
                 else:raise AssertionError("observer did not capture source")
                 page.get_by_role("link",name="备份管理",exact=True).click()
                 prepare=page.get_by_role("button",name="准备一致备份（未知时重试同ID）",exact=True)
-                prepare.click();expect(page.locator('.mantine-Notification-vault[role="alert"]')).to_be_visible()
+                prepare.click();expect(page.locator('.mantine-Notification-root[role="alert"]')).to_be_visible()
                 prepare.click()
                 download=page.get_by_role("button",name="导出或重试缺失下载",exact=True)
                 expect(download).to_be_enabled(timeout=30000)
@@ -137,7 +137,7 @@ def main():
                 expect(page.get_by_role("heading",name="固定清单",exact=True)).to_be_visible()
                 fault[0]="truncate";download.click()
                 expect(page.get_by_text("未完成，不能作为有效备份",exact=True)).to_be_visible(timeout=20000)
-                expect(page.locator('.mantine-Notification-vault[role="alert"]')).to_be_visible()
+                expect(page.locator('.mantine-Notification-root[role="alert"]')).to_be_visible()
                 assert page.get_by_text("归档完整性已验证",exact=True).count()==0
                 fault[0]="slow";download.click()
                 cancel=page.get_by_role("button",name="取消下载并保留未完成状态",exact=True)

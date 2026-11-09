@@ -6,7 +6,7 @@
 
 | 范围 | 真实证据与结果 |
 | --- | --- |
-| Root/Entry/Version | TCP第二用户访问内容、历史、回收站、恢复、冲突、固定快照和版本租约均403；同owner混Root或Entry固定版本410，无字节泄漏。主体仅停服离线创建 |
+| Vault/Entry/Version | TCP第二用户访问内容、历史、回收站、恢复、冲突、固定快照和版本租约均403；同owner混Vault或Entry固定版本410，无字节泄漏。主体仅停服离线创建 |
 | 备份 | 独立btrfs loop、服务进程和实际admin CLI；既有备份的清单/状态/export/files/objects及verify/release均重新授权，第二owner403。完整归档、损坏/截断拒绝和释放/重启回归1/1 |
 | 到期与撤销 | 停服离线移动真实会话的完整有效区间后重启，access/refresh均401；新密码登录正常。Chromium改密、logout和revoke-all使其他会话及refresh实际失效 |
 | Cookie/CSRF/脱敏 | 真实Chromium11类检查：HttpOnly/Secure/Strict、no-store、响应无令牌、localStorage空、跨origin携带cookie写操作403；控制台/server日志不含测试密码/cookie值 |
@@ -17,7 +17,7 @@
 
 | 操作 | 实际入口与关键断言 |
 | --- | --- |
-| 连接/账号/Root/绑定 | GUI React→Tauri→IPC→HTTPS；CLI进程→IPC；Web账号和Root管理13类检查 |
+| 连接/账号/Vault/绑定 | GUI React→Tauri→IPC→HTTPS；CLI进程→IPC；Web账号和Vault管理13类检查 |
 | 暂停/恢复/模式/下载/释放 | GUI和CLI；full拒绝释放，on_demand保留已下载内容；pending不算committed |
 | 排除配置/解释 | IPC1.6 get_rules/set_rules、GUI完整清单、CLI UTF8文件及entry_id解释。真实重启保留；普通路径继续上传；父排除阻止子否定包含；不从含排除后代的本地缺失推导父Delete |
 | 取消排除 | 完整认证快照、事件高水位和真实本地内容核对，保留旧baseline。旧clean刷新最新远端；双方在排除期间修改的内容均可在服务端找到 |

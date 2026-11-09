@@ -9,21 +9,21 @@
     enable = true;
     # package 默认是该 flake 同源的 Linux server/admin/Web 发行包。
     stateDir = "/var/lib/vaultsyncd";
-    rootPaths = [ "/srv/vault-data/documents" ];
+    vaultPaths = [ "/srv/vault-data/documents" ];
     settings.server.listen = "127.0.0.1:8721";
     settings.log = { level = "info"; format = "json"; };
-    # extraGroups = [ "vault-documents" ]; # 管理员明确授予，模块不修改 Root。
+    # extraGroups = [ "vault-documents" ]; # 管理员明确授予，模块不修改 Vault。
   };
 }
 ```
 
-`user/group` 默认 `vaultsyncd`，是专用非 root 账号。`createUser=false` 可使用已在 NixOS 定义的普通非 root 用户及组；模块不改写其账号类型、主组、描述或附加组，`extraGroups` 仍作为服务的 SupplementaryGroups。主机 feature 默认取 `host.user` 及该账号的 NixOS 主组，本机为 `xingjian:users`。目录所有权迁移须在服务停止时由运维显式完成。`rootPaths` 是允许注册的基目录，同时成为 systemd `ReadWritePaths`；空列表拒绝全部 Root 注册。Root 与状态必须互不包含，不能选择 `/`、`/etc`、`/nix` 等系统目录。服务还要通过产品 Root 注册流程检查 FSID、身份、CoW、嵌套挂载/子卷与扫描完整性。启动 preflight 仅只读检查顶层目录，避免把合法的备份快照当作非法嵌套子卷或递归扫描用户资料；注册准入不是由路径前缀代替的。
+`user/group` 默认 `vaultsyncd`，是专用非 vault 账号。`createUser=false` 可使用已在 NixOS 定义的普通非 vault 用户及组；模块不改写其账号类型、主组、描述或附加组，`extraGroups` 仍作为服务的 SupplementaryGroups。主机 feature 默认取 `host.user` 及该账号的 NixOS 主组，本机为 `xingjian:users`。目录所有权迁移须在服务停止时由运维显式完成。`vaultPaths` 是允许注册的基目录，同时成为 systemd `ReadWritePaths`；空列表拒绝全部 Vault 注册。Vault 与状态必须互不包含，不能选择 `/`、`/etc`、`/nix` 等系统目录。服务还要通过产品 Vault 注册流程检查 FSID、身份、CoW、嵌套挂载/子卷与扫描完整性。启动 preflight 仅只读检查顶层目录，避免把合法的备份快照当作非法嵌套子卷或递归扫描用户资料；注册准入不是由路径前缀代替的。
 
-管理员须先准备真实 btrfs 挂载，开启 CoW/checksums，并为备份所在挂载明确设置 `user_subvol_rm_allowed`。普通服务 UID 用它创建、只读快照与释放备份；服务不使用 sudo，也没有 CAP_SYS_ADMIN/任何 capabilities。`RequiresMountsFor` 包括状态、内部 `backups` 与全部 Root 基目录；独立挂载必须在主机 `fileSystems` 中显式声明。模块不格式化、挂载、迁移、创建用户 Root 或递归改权。内部备份布局由产品管理：`<state>/backups/<id>/{prepared,snapshot}`，Root 内禁止嵌套挂载/子卷。不要对现有资料或快照使用 `chattr -R`，也不要把内部状态放到 Root 下。
+管理员须先准备真实 btrfs 挂载，开启 CoW/checksums，并为备份所在挂载明确设置 `user_subvol_rm_allowed`。普通服务 UID 用它创建、只读快照与释放备份；服务不使用 sudo，也没有 CAP_SYS_ADMIN/任何 capabilities。`RequiresMountsFor` 包括状态、内部 `backups` 与全部 Vault 基目录；独立挂载必须在主机 `fileSystems` 中显式声明。模块不格式化、挂载、迁移、创建用户 Vault 或递归改权。内部备份布局由产品管理：`<state>/backups/<id>/{prepared,snapshot}`，Vault 内禁止嵌套挂载/子卷。不要对现有资料或快照使用 `chattr -R`，也不要把内部状态放到 Vault 下。
 
 默认 `/var/lib/vaultsyncd` 用 `StateDirectory` 创建，模式0700，工作目录和数据库写入只在内部状态。`/var/lib/` 下的其他绝对路径也由 StateDirectory 管理，仅能指向专用内部状态；systemd 可能纠正该内部状态的所有权，不能指向用户数据。其他 `stateDir` 必须由管理员提前创建为服务 UID 所有的0700目录；preflight 不替用户修复权限、符号链接或不合规文件系统。
 
-对既有 Root，管理员使用明确的目录/文件 ACL 或预先规划的组授权，并保证父路径可遍历；`extraGroups` 只把该账号加入明确的现有访问组，不授予文件权限。单个示例：`setfacl -m u:vaultsyncd:rwx /srv/vault-data/documents`，既有文件及子目录需要逐项授权或由资料拥有者明确采用组策略；这条命令不递归变更内容权限。未授权即拒绝启动/注册。服务的 `ProtectSystem=strict`、`ProtectHome=read-only`、`ReadWritePaths`、`UMask=0077`、`NoNewPrivileges` 与空 capability 集继续限制其访问，即使白名单外目录 DAC 允许写入也不可写。没有自动打开防火墙。
+对既有 Vault，管理员使用明确的目录/文件 ACL 或预先规划的组授权，并保证父路径可遍历；`extraGroups` 只把该账号加入明确的现有访问组，不授予文件权限。单个示例：`setfacl -m u:vaultsyncd:rwx /srv/vault-data/documents`，既有文件及子目录需要逐项授权或由资料拥有者明确采用组策略；这条命令不递归变更内容权限。未授权即拒绝启动/注册。服务的 `ProtectSystem=strict`、`ProtectHome=read-only`、`ReadWritePaths`、`UMask=0077`、`NoNewPrivileges` 与空 capability 集继续限制其访问，即使白名单外目录 DAC 允许写入也不可写。没有自动打开防火墙。
 
 生成的 TOML 只含监听、日志和路径，没有自由格式 secret/auth 字段，也没有初始密码选项。owner 初始化在服务离线时执行 `sudo -u vaultsyncd <package>/bin/vaultsyncd-admin init --state-dir /var/lib/vaultsyncd`，从终端或匿名 stdin 管道输入密码；不要把密码写进 Nix 表达式、环境、argv 或 store。在线管理经同 UID 的 `<state>/admin/socket`，不能直接写在线库。
 
@@ -36,7 +36,7 @@
 nix develop --command python3 deploy/nixos/test-service.py /nix/store/…-vaultsyncd-0.1.0 /nix/store/…-source
 ```
 
-脚本只为带 `vs-s095-时间-pid` 的独立1GiB loop btrfs 进行格式化/挂载，创建并最终删除独立临时 system UID 和 `/run` test unit。需 passwordless sudo、btrfs 工具和 ACL 工具。真实服务以该 UID、零 capabilities 运行，验证 Root 授权前拒绝、CoW/挂载选项失败、可写 Root/系统拒写、注册白名单、备份只读快照/校验/释放，密码仅 stdin，资料原 owner/bytes 保留。失败也保留结果与 journal，finally 停止本 test unit、卸载、删除 loop image 和临时账号，不改正式主机配置。
+脚本只为带 `vs-s095-时间-pid` 的独立1GiB loop btrfs 进行格式化/挂载，创建并最终删除独立临时 system UID 和 `/run` test unit。需 passwordless sudo、btrfs 工具和 ACL 工具。真实服务以该 UID、零 capabilities 运行，验证 Vault 授权前拒绝、CoW/挂载选项失败、可写 Vault/系统拒写、注册白名单、备份只读快照/校验/释放，密码仅 stdin，资料原 owner/bytes 保留。失败也保留结果与 journal，finally 停止本 test unit、卸载、删除 loop image 和临时账号，不改正式主机配置。
 
 ## 本机一键更新（S113）
 

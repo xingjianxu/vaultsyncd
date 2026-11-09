@@ -1,7 +1,7 @@
 //! Durable at-most-once desktop delivery claim per active problem episode; never marks it read.
 use super::{Notification, NotificationError, notification};
 use sqlx::{Sqlite, SqliteConnection, Transaction};
-/// A vault cause and its delivery episode.
+/// A root cause and its delivery episode.
 #[derive(Debug)]
 pub struct Delivery {
     /// Existing authoritative problem record.

@@ -61,7 +61,7 @@
 | --- | --- |
 | 项目源码 | 用户创建的 `vaultsyncd/`；实际绝对路径在 S001 记录，代码开发使用 §2.7 的任务 worktree |
 | 临时开发状态 | 外部目录示例 `/var/lib/vaultsyncd-dev/`，独立账号/端口/配置 |
-| 集成与故障测试 | 外部测试卷下按 run_id 分目录；每轮独立 DB、Root、对象与进程 |
+| 集成与故障测试 | 外部测试卷下按 run_id 分目录；每轮独立 DB、Vault、对象与进程 |
 | 正式试用实例 | 示例 `/var/lib/vaultsyncd/`，只在部署阶段启用，先用可丢弃样本 |
 | 用户工作目录 | 从允许基目录显式选择，与所有内部状态目录互不重叠 |
 | Windows 样本目录 | Windows 客体的独立 NTFS 目录，不使用共享文件夹模拟 NTFS |
@@ -91,7 +91,7 @@
 4. 无桌面服务器可用 `--display spice --viewer none --access local --spice-port 5930` 启动，从操作电脑建立 `ssh -N -L 5930:127.0.0.1:5930 用户@服务器`，再用 SPICE 客户端连接 `spice://127.0.0.1:5930`。端口按占用调整，先核对安装版本的 help，不将 SPICE 直接暴露公网。
 5. 客体按实际依赖准备 WebView2 等运行时，配置受限网络上的 OpenSSH 供 PowerShell 自动测试；不默认安装 Rust、C++ Build Tools/SDK、Node/pnpm 等完整构建工具链。宿主交付同一提交构建的 Windows 可执行文件、测试程序及运行所需资源，记录目标、工具链版本与 SHA-256，传输后校验哈希；不复制整个 target/node_modules。GUI、资源管理器与托盘测试使用已登录桌面会话。
 6. CFAPI 根置于客体 NTFS，例如 `C:\vaultsyncd-test`，不用共享文件夹。默认 QEMU user 网络通常通过 `10.0.2.2` 到宿主，其他网络以实测为准；用 TCP/HTTPS 检查宿主端口，证书名称/信任必须匹配，不能禁用验证。客体 localhost 不是宿主。
-7. 客体运行时与测试连接就绪后正常关机，备份完整 VM 配置、磁盘、EFI 与 TPM 状态，作为未注册客户端身份的基线；不能只恢复磁盘却忽略其他状态。第二台从基线独立初始化 DeviceId。每次测试用独立服务端实例/Root；测试回滚与服务器状态配对，刻意陈旧客户端场景另记录。
+7. 客体运行时与测试连接就绪后正常关机，备份完整 VM 配置、磁盘、EFI 与 TPM 状态，作为未注册客户端身份的基线；不能只恢复磁盘却忽略其他状态。第二台从基线独立初始化 DeviceId。每次测试用独立服务端实例/Vault；测试回滚与服务器状态配对，刻意陈旧客户端场景另记录。
 8. 首台立即执行 S010—S012；第二台用于并发，正式规模按 S107。Wine、交叉编译、Linux fake 不能替代原生 CFAPI 结果。若已有 libvirt 环境可继续使用，不强制迁移。
 
 依据：[Quickemu Windows](https://github.com/quickemu-project/quickemu/wiki/04-Create-Windows-virtual-machines)、[配置](https://github.com/quickemu-project/quickemu/blob/master/docs/quickemu_conf.5.md)、[QEMU 网络](https://www.qemu.org/docs/master/system/devices/net.html)。
@@ -170,13 +170,13 @@
 | S035 | 内容 CAS 与现场复核 | L | S034、S028 |
 | S036 | 幂等重试与冲突内容提交 | L | S035、S021 |
 | S037 | 启动恢复与崩溃注入 | L | S036 |
-| S038 | 目录创建与同 Root 移动 | L | S037、S022 |
+| S038 | 目录创建与同 Vault 移动 | L | S037、S022 |
 | S039 | 可恢复删除与回收站 | L | S038 |
 | S040 | 历史与回收站恢复操作 | L | S039 |
 | S041 | 服务端进程与配置生命周期 | L | S037、S024 |
 | S042 | 首次 owner 初始化与密码认证 | L | S041、S026 |
-| S043 | 会话、刷新与 Root 授权 | L | S042 |
-| S044 | 管理 Root 注册与健康 API | L | S043、S032、S027 |
+| S043 | 会话、刷新与 Vault 授权 | L | S042 |
+| S044 | 管理 Vault 注册与健康 API | L | S043、S032、S027 |
 | S045 | 上传会话和固定块接收 | L | S043、S029、S033 |
 | S046 | 上传 finalize 与固定版本下载 | L | S045 |
 | S047 | 操作 HTTP 接口与错误映射 | L | S036、S038、S039、S040、S043、S046 |
@@ -210,7 +210,7 @@
 | S075 | Linux 在线管理 socket 与 CLI | L | S043、S044、S047、S048 |
 | S076 | 前端公共组件与两应用壳 | B | S005、S024、S025 |
 | S077 | Web 登录与会话管理 | B | S076、S043 |
-| S078 | Web Root 与服务健康页面 | B | S077、S044、S051 |
+| S078 | Web Vault 与服务健康页面 | B | S077、S044、S051 |
 | S079 | Web 历史、冲突与回收站 | B | S078、S040、S047 |
 | S080 | Tauri Windows 壳与最小 IPC 桥 | W | S076、S072 |
 | S081 | 桌面连接与 Binding 页面 | W | S080 |
@@ -253,7 +253,7 @@
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | B/L | S117、S118 |
 | S120 | 将 Mantine 版最新服务端部署到本机 | L | S118、S119 |
 | S121 | Web 顶栏分区与 48px 高度并部署到本机 | B/L | S119、S120 |
-| S122 | Web Root 文件浏览器与属性查看 | B/L | S048、S078、S119、S121 |
+| S122 | Web Vault 文件浏览器与属性查看 | B/L | S048、S078、S119、S121 |
 | S124 | Web 文件浏览器左右分栏与 URL 目录定位 | B | S122、S123 |
 | S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | L/B | S113、S123、S124 |
 | S126 | 精简已完成任务的过程记录 | D | 用户直接要求；独立文档维护 |
@@ -322,7 +322,7 @@
 - **环境与前置**：L；S001、S003。
 - **只读设计范围**：`docs/design.md` §11.4—11.5、§16.1；加直接前置交接及相关源文件。
 - **主要落点**：docs/environment.md；tools/test-volume/。
-- **实现要点**：检查候选目录及底层挂载；优先现有合规测试卷。必要时用小型新建普通镜像文件建立 btrfs loop，校验路径/设备归属并记录清理命令。规划 dev/test/正式实例状态与 root 的互斥路径。
+- **实现要点**：检查候选目录及底层挂载；优先现有合规测试卷。必要时用小型新建普通镜像文件建立 btrfs loop，校验路径/设备归属并记录清理命令。规划 dev/test/正式实例状态与 vault 的互斥路径。
 - **本步验收**：findmnt/statfs 证据证明实际后端；测试目录为空且与源码/用户数据无重叠；清理不触碰其他挂载。
 - **交接**：`agent/tasks/S007.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -349,7 +349,7 @@
 - **环境与前置**：W；S009。
 - **只读设计范围**：`docs/design.md` §14.1—14.2、I03/I05；加直接前置交接及相关源文件。
 - **主要落点**：crates/platform-windows/examples/；tests/platform/windows/。
-- **实现要点**：在专用 NTFS 目录注册测试 sync root，建立目录/文件真实 placeholder，将不透明 EntryId/VersionId 编码进受限 identity。实现注销与保留用户数据的清理；FFI 记录生命周期。
+- **实现要点**：在专用 NTFS 目录注册测试 sync vault，建立目录/文件真实 placeholder，将不透明 EntryId/VersionId 编码进受限 identity。实现注销与保留用户数据的清理；FFI 记录生命周期。
 - **本步验收**：系统可识别占位、文件逻辑大小正确；不是普通零字节文件；清理不删除测试内容。
 - **交接**：`agent/tasks/S010.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -394,7 +394,7 @@
 - **环境与前置**：L；S004。
 - **只读设计范围**：`docs/design.md` §7.1、§6；加直接前置交接及相关源文件。
 - **主要落点**：crates/domain/src/ids.rs；version.rs。
-- **实现要点**：实现不透明 ID newtype、Revision/RootSeq/Generation/Epoch；数据库 i64 上限检查，wire 大整数为十进制字符串；注入 ID/时间来源供确定性测试。
+- **实现要点**：实现不透明 ID newtype、Revision/VaultSeq/Generation/Epoch；数据库 i64 上限检查，wire 大整数为十进制字符串；注入 ID/时间来源供确定性测试。
 - **本步验收**：超过 JS 精度边界可往返；负数、溢出、格式不合法被拒绝。
 - **交接**：`agent/tasks/S015.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -457,8 +457,8 @@
 - **环境与前置**：L；S020、S021。
 - **只读设计范围**：`docs/design.md` §9.5、§10.1—10.3、T09—T13；加直接前置交接及相关源文件。
 - **主要落点**：crates/planner/src/rename.rs；delete.rs。
-- **实现要点**：实现移动+修改、双移动、删改和删除目录并发子项的矩阵；EntryId 不随路径变。目录环/目标冲突/旧 subtree_token 给重规划结果；跨 Root 拆目标创建确认再源删除。
-- **本步验收**：矩阵各分支有小 fixture；跨 Root 目标失败不得计划完成源删除。
+- **实现要点**：实现移动+修改、双移动、删改和删除目录并发子项的矩阵；EntryId 不随路径变。目录环/目标冲突/旧 subtree_token 给重规划结果；跨 Vault 拆目标创建确认再源删除。
+- **本步验收**：矩阵各分支有小 fixture；跨 Vault 目标失败不得计划完成源删除。
 - **交接**：`agent/tasks/S022.md`，记录实际接口、验证与下一个 ready 任务。
 
 ### S023 — 规划器操作重排验证
@@ -501,9 +501,9 @@
 
 - **环境与前置**：L；S026。
 - **只读设计范围**：`docs/design.md` §7.2—7.4；加直接前置交接及相关源文件。
-- **主要落点**：crates/server-store/src/entries.rs；roots.rs；migrations/。
-- **实现要点**：建 roots/entries 及 owner scope，活跃同父名称唯一、父子同 Root、目录环检查；提供事务内读写接口，网络代码不能随意 raw SQL。
-- **本步验收**：非法跨 Root 父项、重复名称和目录环失败，原数据保持。
+- **主要落点**：crates/server-store/src/entries.rs；vaults.rs；migrations/。
+- **实现要点**：建 vaults/entries 及 owner scope，活跃同父名称唯一、父子同 Vault、目录环检查；提供事务内读写接口，网络代码不能随意 raw SQL。
+- **本步验收**：非法跨 Vault 父项、重复名称和目录环失败，原数据保持。
 - **交接**：`agent/tasks/S027.md`，记录实际接口、验证与下一个 ready 任务。
 
 ### S028 — 版本、事件与幂等表
@@ -512,7 +512,7 @@
 - **只读设计范围**：`docs/design.md` §7.2、I06/I09；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-store/src/versions.rs；operations.rs；changes.rs。
 - **实现要点**：建 versions/objects/changes/operations，统一事务更新 seq 与操作结果；digest 基于规范化请求语义。相同 OpId 不同 digest 拒绝，紧凑结果保留规则明确。
-- **本步验收**：回滚不暴露事件；重复操作返回同结果；RootSeq 单调且事务批次不拆分。
+- **本步验收**：回滚不暴露事件；重复操作返回同结果；VaultSeq 单调且事务批次不拆分。
 - **交接**：`agent/tasks/S028.md`，记录实际接口、验证与下一个 ready 任务。
 
 ### S029 — 上传、意图与租约表
@@ -547,7 +547,7 @@
 - **环境与前置**：L；S014、S017。
 - **只读设计范围**：`docs/design.md` §11.4—11.5、§16.1、T25；加直接前置交接及相关源文件。
 - **主要落点**：crates/platform-linux-server/src/files/；mounts/。
-- **实现要点**：封装根句柄下无符号链接逃逸的遍历/打开/创建，复核文件和挂载身份；检查 Root 及内部目录的父子/别名/bind 重叠。真实 syscall 错误分类保留原因。
+- **实现要点**：封装根句柄下无符号链接逃逸的遍历/打开/创建，复核文件和挂载身份；检查 Vault 及内部目录的父子/别名/bind 重叠。真实 syscall 错误分类保留原因。
 - **本步验收**：符号链接换目标与目录别名攻击不访问外部样本；权限失败不返回空目录。
 - **交接**：`agent/tasks/S032.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -574,7 +574,7 @@
 - **环境与前置**：L；S034、S028。
 - **只读设计范围**：`docs/design.md` §11.2、§12.2、I01/I04；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-core/src/commit/put.rs。
-- **实现要点**：Root 内序列化提交，检查 epoch、revision、父目录、名称和现场指纹；现场不同返回 RECONCILE_REQUIRED。对象持久→意图→目标 staging 发布→元数据/changes/结果事务→ACK。
+- **实现要点**：Vault 内序列化提交，检查 epoch、revision、父目录、名称和现场指纹；现场不同返回 RECONCILE_REQUIRED。对象持久→意图→目标 staging 发布→元数据/changes/结果事务→ACK。
 - **本步验收**：正常内容提交字节一致；过期 revision/外部现场变化不能覆盖；发布失败保持 pending/failed。
 - **交接**：`agent/tasks/S035.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -596,7 +596,7 @@
 - **本步验收**：重启得到可证明旧/新结果或明确暂停；无“假成功”；旧对象与冲突候选保留。
 - **交接**：`agent/tasks/S037.md`，记录实际接口、验证与下一个 ready 任务。
 
-### S038 — 目录创建与同 Root 移动
+### S038 — 目录创建与同 Vault 移动
 
 - **环境与前置**：L；S037、S022。
 - **只读设计范围**：`docs/design.md` §9.5、§10.1、T09/T10；加直接前置交接及相关源文件。
@@ -641,20 +641,20 @@
 - **本步验收**：重复 init 拒绝覆盖；错误密码失败；argv/日志/Nix store 无密码；运行中 init 被锁拒绝。
 - **交接**：`agent/tasks/S042.md`，记录实际接口、验证与下一个 ready 任务。
 
-### S043 — 会话、刷新与 Root 授权
+### S043 — 会话、刷新与 Vault 授权
 
 - **环境与前置**：L；S042。
 - **只读设计范围**：`docs/design.md` §17.1、§15.2、T31；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-core/src/auth/；crates/server-store/src/sessions.rs。
-- **实现要点**：令牌只存摘要；实现到期、注销、刷新轮换和并发刷新语义；每次资源请求按 owner/root scope 检查。浏览器采用同源 HttpOnly cookie 会话并防 CSRF，agent 使用安全保管的凭据；ADR 说明两者边界。
-- **本步验收**：跨 Root、到期、撤销和旧刷新凭据拒绝；cookie 写请求校验 Origin/CSRF；响应不泄露绝对路径。
+- **实现要点**：令牌只存摘要；实现到期、注销、刷新轮换和并发刷新语义；每次资源请求按 owner/vault scope 检查。浏览器采用同源 HttpOnly cookie 会话并防 CSRF，agent 使用安全保管的凭据；ADR 说明两者边界。
+- **本步验收**：跨 Vault、到期、撤销和旧刷新凭据拒绝；cookie 写请求校验 Origin/CSRF；响应不泄露绝对路径。
 - **交接**：`agent/tasks/S043.md`，记录实际接口、验证与下一个 ready 任务。
 
-### S044 — 管理 Root 注册与健康 API
+### S044 — 管理 Vault 注册与健康 API
 
 - **环境与前置**：L；S043、S032、S027。
 - **只读设计范围**：`docs/design.md` §11.4、§15.2；加直接前置交接及相关源文件。
-- **主要落点**：crates/server-core/src/api/roots.rs；api/openapi.yaml。
+- **主要落点**：crates/server-core/src/api/vaults.rs；api/openapi.yaml。
 - **实现要点**：只接受预配置允许基目录中的普通目录；身份与重叠检查通过后注册。启动不自动以空库覆盖既有文件；返回待导入/健康状态，普通客户端看不到绝对路径。
 - **本步验收**：合规目录注册；父子/别名/FUSE/不合规内部目录拒绝；实际数据未改写。
 - **交接**：`agent/tasks/S044.md`，记录实际接口、验证与下一个 ready 任务。
@@ -664,7 +664,7 @@
 - **环境与前置**：L；S043、S029、S033。
 - **只读设计范围**：`docs/design.md` §13.1—13.2、§15.2；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-core/src/api/uploads.rs；crates/transfer/src/。
-- **实现要点**：按授权 Root 建 upload，流式接收指定索引/长度/hash 的块，写完持久化再记完成；总大小/并发有界。重复块字节不一致拒绝，状态由服务器给出。
+- **实现要点**：按授权 Vault 建 upload，流式接收指定索引/长度/hash 的块，写完持久化再记完成；总大小/并发有界。重复块字节不一致拒绝，状态由服务器给出。
 - **本步验收**：断开重连可获取真实已收块；越界索引/超大载荷/错块/跨会话访问拒绝。
 - **交接**：`agent/tasks/S045.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -673,7 +673,7 @@
 - **环境与前置**：L；S045。
 - **只读设计范围**：`docs/design.md` §13.2、I01/I05/I15；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-core/src/api/content.rs；api/openapi.yaml。
-- **实现要点**：完整拼装流式校验后发布对象，finalize 只返回可提交引用；下载按 root/entry/version 与 Range 返回固定字节，下载租约防 GC，不能按路径替换成新 head。
+- **实现要点**：完整拼装流式校验后发布对象，finalize 只返回可提交引用；下载按 vault/entry/version 与 Range 返回固定字节，下载租约防 GC，不能按路径替换成新 head。
 - **本步验收**：finalize 后尚无条目提交；下载中 head 改变仍为旧版；过期版本明确 VERSION_GONE。
 - **交接**：`agent/tasks/S046.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -727,7 +727,7 @@
 - **环境与前置**：L；S048、S051。
 - **只读设计范围**：`docs/design.md` §21、T03/T17/T21/T22/T23；加直接前置交接及相关源文件。
 - **主要落点**：tests/server-integration/；api/examples/。
-- **实现要点**：实际启动隔离 server，经登录、Root、上传、提交、快照、下载、外部修改形成闭环；补齐剩余契约示例，故障分别作用工作盘与状态盘。
+- **实现要点**：实际启动隔离 server，经登录、Vault、上传、提交、快照、下载、外部修改形成闭环；补齐剩余契约示例，故障分别作用工作盘与状态盘。
 - **本步验收**：重启后版本/hash/事件一致；两种满盘均不提前 committed；测试无需 Windows。
 - **交接**：`agent/tasks/S052.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -835,7 +835,7 @@
 - **环境与前置**：L；S060、S062、S063。
 - **只读设计范围**：`docs/design.md` §18、§19.2；加直接前置交接及相关源文件。
 - **主要落点**：crates/agent-core/src/status/；recovery/export.rs。
-- **实现要点**：汇总多维状态和子任务，问题按 root/原因去重；ExportRecovery 导出脏内容、基线和清单至指定目录，路径安全且不覆盖。日志脱敏有大小上限。
+- **实现要点**：汇总多维状态和子任务，问题按 vault/原因去重；ExportRecovery 导出脏内容、基线和清单至指定目录，路径安全且不覆盖。日志脱敏有大小上限。
 - **本步验收**：pending 不显示同步完成；断网无弹窗风暴；恢复包包含未上传字节且可校验。
 - **交接**：`agent/tasks/S064.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -934,7 +934,7 @@
 - **环境与前置**：L；S043、S044、S047、S048。
 - **只读设计范围**：`docs/design.md` §5.3、§15、§17.2；加直接前置交接及相关源文件。
 - **主要落点**：apps/server-admin/src/；crates/platform-linux-server/src/ipc/。
-- **实现要点**：受限 Unix socket 复用管理用例，校验 socket 权限和调用者身份。提供 roots/status/problems/history/trash 等命令；远程管理走已认证 HTTPS，不直接改在线 DB。
+- **实现要点**：受限 Unix socket 复用管理用例，校验 socket 权限和调用者身份。提供 vaults/status/problems/history/trash 等命令；远程管理走已认证 HTTPS，不直接改在线 DB。
 - **本步验收**：SSH 下 CLI 管理真实隔离服务；无权限用户失败；JSON 输出不含长期凭据。
 - **交接**：`agent/tasks/S075.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -956,12 +956,12 @@
 - **本步验收**：浏览器登录/改密/注销后受保护请求行为正确；token 不进入 localStorage 或页面日志。
 - **交接**：`agent/tasks/S077.md`，记录实际接口、验证与下一个 ready 任务。
 
-### S078 — Web Root 与服务健康页面
+### S078 — Web Vault 与服务健康页面
 
 - **环境与前置**：B；S077、S044、S051。
 - **只读设计范围**：`docs/design.md` §18.1；加直接前置交接及相关源文件。
-- **主要落点**：apps/web/src/features/roots/。
-- **实现要点**：显示允许基目录范围、注册校验结果、Root 状态/采集进度/错误原因；路径管理仅 owner。不能将暂未扫描显示为空目录已同步。
+- **主要落点**：apps/web/src/features/vaults/。
+- **实现要点**：显示允许基目录范围、注册校验结果、Vault 状态/采集进度/错误原因；路径管理仅 owner。不能将暂未扫描显示为空目录已同步。
 - **本步验收**：普通目录可注册；重叠/不支持后端/挂载失效页面给可执行原因。
 - **交接**：`agent/tasks/S078.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -988,7 +988,7 @@
 - **环境与前置**：W；S080。
 - **只读设计范围**：`docs/design.md` §18.1、§15.5；加直接前置交接及相关源文件。
 - **主要落点**：apps/desktop/src/features/connections/；bindings/。
-- **实现要点**：通过桥实现登录、选 Root/本地目录/模式、导入进度、暂停恢复。登录凭据由 agent 存储；页面关闭不销毁 agent。
+- **实现要点**：通过桥实现登录、选 Vault/本地目录/模式、导入进度、暂停恢复。登录凭据由 agent 存储；页面关闭不销毁 agent。
 - **本步验收**：创建绑定实际启动合并；错误路径/证书错误可见；关闭 GUI 后文件仍同步。
 - **交接**：`agent/tasks/S081.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -1042,7 +1042,7 @@
 - **环境与前置**：L；S086、S048。
 - **只读设计范围**：`docs/design.md` §19.1、T24；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-core/src/backup/prepare.rs。
-- **实现要点**：暂停本服务新提交/GC并收敛意图，选择每 Root seq，Online Backup API 导出 DB、建立完整对象清单和租约；按 §19.1 建立无嵌套子卷的备份准备区，克隆/复制清单对象并创建只读快照后恢复提交/GC，租约继续生效。覆盖准备失败、重启遗留清理与最小快照权限；不赋予服务任意挂载/格式化权限。声明外部未采集写入不在快照保证内。
+- **实现要点**：暂停本服务新提交/GC并收敛意图，选择每 Vault seq，Online Backup API 导出 DB、建立完整对象清单和租约；按 §19.1 建立无嵌套子卷的备份准备区，克隆/复制清单对象并创建只读快照后恢复提交/GC，租约继续生效。覆盖准备失败、重启遗留清理与最小快照权限；不赋予服务任意挂载/格式化权限。声明外部未采集写入不在快照保证内。
 - **本步验收**：持续外部写入时仍得到已确认一致快照；租约期间对象不被 GC；失败不会标 complete。
 - **交接**：`agent/tasks/S087.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -1051,7 +1051,7 @@
 - **环境与前置**：L；S087、S075。
 - **只读设计范围**：`docs/design.md` §19.1、§15.2；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-core/src/backup/export.rs；apps/server-admin/；api/openapi.yaml。
-- **实现要点**：实现 manifest/对象授权读取、流式导出、verify/release；包含配置/schema/Root 映射/历史回收站，认证材料受限且会话默认失效。CLI 按 prepare/export/verify/release 分步调用。
+- **实现要点**：实现 manifest/对象授权读取、流式导出、verify/release；包含配置/schema/Vault 映射/历史回收站，认证材料受限且会话默认失效。CLI 按 prepare/export/verify/release 分步调用。
 - **本步验收**：缺对象/错 hash 标 incomplete；快照释放中断可恢复且不误删对象；完整导出可逐项校验；不内置定时备份。
 - **交接**：`agent/tasks/S088.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -1060,7 +1060,7 @@
 - **环境与前置**：L；S088、S037。
 - **只读设计范围**：`docs/design.md` §19.2、T16/T32；加直接前置交接及相关源文件。
 - **主要落点**：crates/server-core/src/backup/restore.rs；apps/server-admin/。
-- **实现要点**：restore validate 检查清单、空间、兼容和新 Root 映射；停止服务并持同一独占锁才可恢复。重建 DB/普通工作文件后校验，沿用 ServerId、更换 epoch、会话失效；复用 core 而非直接任意 SQL。
+- **实现要点**：restore validate 检查清单、空间、兼容和新 Vault 映射；停止服务并持同一独占锁才可恢复。重建 DB/普通工作文件后校验，沿用 ServerId、更换 epoch、会话失效；复用 core 而非直接任意 SQL。
 - **本步验收**：恢复空测试实例字节/历史/回收站一致；非空目标和在线实例拒绝；旧客户端操作被隔离。
 - **交接**：`agent/tasks/S089.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -1114,8 +1114,8 @@
 - **环境与前置**：L；S094、S007。
 - **只读设计范围**：`docs/design.md` §17.2、§5.10；加直接前置交接及相关源文件。
 - **主要落点**：nix/modules/vaultsyncd.nix；deploy/nixos/。
-- **实现要点**：导出 services.vaultsyncd 的 enable/package/stateDir/settings 等选项；专用非 root 用户、工作目录访问白名单、StateDirectory 和必要写路径。外部 Root 目录权限显式授予，不递归改用户现有权限。核对 btrfs 挂载依赖、CoW、子卷布局和最小快照权限；不自动格式化或迁移已有目录。
-- **本步验收**：nixos 配置 evaluation/build 成功；服务用户能访问样本 root，无法任意写系统目录；凭据不进入 store。
+- **实现要点**：导出 services.vaultsyncd 的 enable/package/stateDir/settings 等选项；专用非 vault 用户、工作目录访问白名单、StateDirectory 和必要写路径。外部 Vault 目录权限显式授予，不递归改用户现有权限。核对 btrfs 挂载依赖、CoW、子卷布局和最小快照权限；不自动格式化或迁移已有目录。
+- **本步验收**：nixos 配置 evaluation/build 成功；服务用户能访问样本 vault，无法任意写系统目录；凭据不进入 store。
 - **交接**：`agent/tasks/S095.md`，记录实际接口、验证与下一个 ready 任务。
 
 ### S096 — 在本机启用隔离服务实例
@@ -1141,7 +1141,7 @@
 - **环境与前置**：L；S094、S097。
 - **只读设计范围**：`docs/design.md` §5.9、C35/C39；加直接前置交接及相关源文件。
 - **主要落点**：packaging/linux/systemd/；packaging/linux/container/；deploy/compose/。
-- **实现要点**：提供普通 Linux systemd 和容器构建，运行状态/Root bind mount 到合规后端；Nix 构建产物不可未经处理直接当 Ubuntu 可运行包，使用经验证的通用构建/依赖封装。无 /dev/fuse。
+- **实现要点**：提供普通 Linux systemd 和容器构建，运行状态/Vault bind mount 到合规后端；Nix 构建产物不可未经处理直接当 Ubuntu 可运行包，使用经验证的通用构建/依赖封装。无 /dev/fuse。
 - **本步验收**：Ubuntu 环境实际运行 server/admin/web；容器默认 overlay 状态被拒绝或用合规 bind 挂载；仅完成交叉构建不算运行通过。
 - **交接**：`agent/tasks/S098.md`，记录实际接口、验证与下一个 ready 任务。
 
@@ -1351,33 +1351,33 @@
 
 - **依据**：2026-11-07 用户要求本机服务默认使用 `/etc/nixos` 的主机 user，目录同属该用户；允许清空旧数据，版本固定 Git SHA，更新后一键 pure rebuild 部署。
 - **前置**：S112 done；独立于 S101 hosted 与性能验收。
-- **实现**：模块支持既有非 root 账号且不改写其属性；主机默认 `host.user` 和其主组；永久仓库完整 SHA 固定。`tools/deploy-local.sh` 在隔离主机配置树中更新版本，强制 pure、禁止锁更新，build/dry/test/健康/switch 后提交版本配置，保留失败现场与恢复入口。
+- **实现**：模块支持既有非 vault 账号且不改写其属性；主机默认 `host.user` 和其主组；永久仓库完整 SHA 固定。`tools/deploy-local.sh` 在隔离主机配置树中更新版本，强制 pure、禁止锁更新，build/dry/test/健康/switch 后提交版本配置，保留失败现场与恢复入口。
 - **验收**：专用及普通用户模块求值/构建，部署失败关闭契约；实际主机 pure build → test → HTTPS/同 UID IPC/目录归属/上传下载/重启/备份 → switch；锁及 SSH/既有应用健康保持，真实运行一键脚本。
 - **交接**：`agent/tasks/S113.md` 与批次记录，两仓库提交、旧 system、实际 UID/路径、更新/恢复命令及清理结果；不改变原首发门禁。
 
-### S114 — 客户端目录选择与 Root 名称显示
+### S114 — 客户端目录选择与 Vault 名称显示
 
-- **依据**：2026-11-07 用户要求本地目录通过选择器选择、远端 Root 显示目录名；design §15.1、§16.1、§18.1、§19.3，ADR-016。
+- **依据**：2026-11-07 用户要求本地目录通过选择器选择、远端 Vault 显示目录名；design §15.1、§16.1、§18.1、§19.3，ADR-016。
 - **前置**：S081、S111 done；独立于 hosted CI、性能与部署卡，本轮新增 ready。
 - **实现**：S114-a 接入仅内置窗口可调用的 Windows 原生单目录选择器，只读展示已选绝对路径，取消保留原选择；S114-b 从 OpenAPI 可选名称字段生成 DTO，服务端仅返回末级目录名，agent 传递名称，UUID 继续用于身份。
-- **验收**：前端类型/构建、生成一致性、Root 名称与旧响应兼容及身份/授权/路径隔离回归、Windows x64 交叉构建与真实 WebView/选择器选择及取消；不以 fake 或交叉编译替代原生证据。
+- **验收**：前端类型/构建、生成一致性、Vault 名称与旧响应兼容及身份/授权/路径隔离回归、Windows x64 交叉构建与真实 WebView/选择器选择及取消；不以 fake 或交叉编译替代原生证据。
 - **交接**：`agent/tasks/S114.md`；记录兼容行为、实际验证、工作树/提交/整合清理及未解决限制。原首发门禁不变。
 
 ### S115 — 服务端 Web 的 HeroUI React 完整重构
 
 - 依据：2026-11-08 用户要求；design §18.1、§17.1、§19、§24；前置 S077、S078、S079、S090、S112 已完成。
 - 结果：保持五个管理入口与现有 API/认证/恢复/备份语义，采用 HeroUI v3、Tailwind v4 与 React 重构 Web；共享桌面 UI 不迁移。
-- 子卡：S115-a 基础依赖、Web 专用组件、主题与响应式导航/概览；S115-b 账号、会话与 Root 管理；S115-c 历史、冲突与回收站；S115-d 备份与整体验收。子卡只细化本卡，不减少原验收目标。
+- 子卡：S115-a 基础依赖、Web 专用组件、主题与响应式导航/概览；S115-b 账号、会话与 Vault 管理；S115-c 历史、冲突与回收站；S115-d 备份与整体验收。子卡只细化本卡，不减少原验收目标。
 - 执行：subagent 分别负责子卡，最多同时运行 3 个；基础公共接口先约定，页面可并行，依赖锁与公共 UI 只有一个写入者，主 agent 集成、验证、提交及整合。
-- 验证：Web 原有测试/生产构建、根工作区 typecheck；真实 Chromium 账号/Root/恢复/备份流程与桌面初始渲染回归；移动布局、主题、键盘和弹层焦点验证；更新并验证 Nix pnpm 固定依赖与 Web 离线构建。
+- 验证：Web 原有测试/生产构建、根工作区 typecheck；真实 Chromium 账号/Vault/恢复/备份流程与桌面初始渲染回归；移动布局、主题、键盘和弹层焦点验证；更新并验证 Nix pnpm 固定依赖与 Web 离线构建。
 - 边界：不修改 wire DTO/数据库/同步状态机，不将 pending 或未知显示为成功；不访问正式数据、不默认部署或推送。不替代既有 hosted CI 与规模/Windows 首发门禁。
 - 交接：`agent/tasks/S115.md`；拆卡与批次原文见 `agent/tasks/README.md` 的固定 Git 归档。
 
 ### S116 — 将当前服务端部署到本机
 
 - 依据：2026-11-08 用户要求“部署服务端到本机”；design §17.2、§11.5；前置 S113、S114、S115 done。
-- 结果：通过现有一键 pure 部署入口将当前已提交版本固定到 `/etc/nixos#wks-lab`，保留现有域名、账号、ServerId、RootId 与正式数据，不更新主机依赖。
-- 验证：部署契约、固定源 manifest 与包内检查、build/dry-activate/test/HTTPS/IPC/身份/UID及目录归属/switch；真实 Chromium 新版页面/登录/Root 健康/TLS/CSP/SSE，以及既有服务、SSH、应用与主机锁核对。
+- 结果：通过现有一键 pure 部署入口将当前已提交版本固定到 `/etc/nixos#wks-lab`，保留现有域名、账号、ServerId、VaultId 与正式数据，不更新主机依赖。
+- 验证：部署契约、固定源 manifest 与包内检查、build/dry-activate/test/HTTPS/IPC/身份/UID及目录归属/switch；真实 Chromium 新版页面/登录/Vault 健康/TLS/CSP/SSE，以及既有服务、SSH、应用与主机锁核对。
 - 交接：`agent/tasks/S116.md`；记录两仓库提交、generation、证据、恢复入口与清理。仅部署本机，不改变 S101/S106—108 与 T02 首发门禁。
 
 ### S117 — Web 管理界面紧凑化与 HeroUI 控件统一
@@ -1385,58 +1385,58 @@
 - 依据：2026-11-08 用户要求美化服务端 Web，尽量采用现成 HeroUI 控件、紧凑布局和较小圆角；design §18.1、§17.1、§19.1、ADR-017；前置 S115 done。S116 部署独立进行，本卡不接管。
 - 结果：保持五个管理入口与业务语义，统一导航、面包屑、按钮、表格、表单与弹层的密度；优先使用锁定 HeroUI 3.2.7 实际提供的组件，不为布局升级依赖。
 - 分工：主 agent 负责壳、概览、公共控件及主题；subagent 负责四个业务页面的控件/间距收紧；只执行父卡 S117。
-- 验收：Web 原有测试、生产构建与根 typecheck；真实 Chromium 五路由、明暗主题、窄屏、键盘、紧凑尺寸与生产 CSP；受影响账号/Root/恢复/备份真实隔离服务浏览器流程。
+- 验收：Web 原有测试、生产构建与根 typecheck；真实 Chromium 五路由、明暗主题、窄屏、键盘、紧凑尺寸与生产 CSP；受影响账号/Vault/恢复/备份真实隔离服务浏览器流程。
 - 边界：不改协议、数据库与状态机，不接触正式数据或默认部署。交接 `agent/tasks/S117.md` 与批次记录，验收后本地提交并整合 master。
 
 ### S118 — 将最新服务端（S117 之后）部署到本机
 
 - 依据：2026-11-08 用户要求“将服务端最新版部署到本机”；design §17.2、§11.5；前置 S116、S117 done。
-- 结果：用现有一键 pure 入口把部署时 master HEAD 固定到 `/etc/nixos#wks-lab`，使 S115/S117 上线；保留域名、账号、ServerId、RootId、正式数据与主机依赖锁，不改产品代码与协议。用户要求的 dae 分流规则先单独提交并随本次部署激活。
-- 验收：clean/pure 构建/manifest/主机锁/dry-activate/test/HTTPS/IPC/身份/UID与归属/switch；线上静态文件与包内 sha256、真实 Chromium TLS/CSP/五路由响应式/登录 cookie/Root 健康/SSE；dae 重启后的服务状态与出网，以及既有服务、SSH、应用与主机锁核对。
+- 结果：用现有一键 pure 入口把部署时 master HEAD 固定到 `/etc/nixos#wks-lab`，使 S115/S117 上线；保留域名、账号、ServerId、VaultId、正式数据与主机依赖锁，不改产品代码与协议。用户要求的 dae 分流规则先单独提交并随本次部署激活。
+- 验收：clean/pure 构建/manifest/主机锁/dry-activate/test/HTTPS/IPC/身份/UID与归属/switch；线上静态文件与包内 sha256、真实 Chromium TLS/CSP/五路由响应式/登录 cookie/Vault 健康/SSE；dae 重启后的服务状态与出网，以及既有服务、SSH、应用与主机锁核对。
 - 交接：`agent/tasks/S118.md`；记录两仓库提交、generation、证据、恢复入口、记录偏差与清理。仅部署本机，不改变 S101/S106—108 与 T02 首发门禁。
 
 ### S119 — 服务端 Web 从 HeroUI 迁移到 Mantine
 
 - 依据：2026-11-08 用户要求移除 HeroUI、用 Mantine 默认主题与 AppShell 重实现服务端 Web，尽可能采用现成组件，保留 Tailwind 作少量自定义样式，并先计划、由 subagent 完成各子任务。前置 S117、S118 done；design §18.1、§17.1、§19.1、§24。
 - 结果：五个管理入口全部采用 Mantine，删除 HeroUI 及专用依赖/样式，保留 React、生成 API 与既有业务语义。Windows 桌面共享 UI 不在本卡范围。
-- 分工：S119-a 基础依赖、默认主题、AppShell/导航/概览及现成组件组合；S119-b 账号、Root、恢复、备份页面与 Mantine 表单；S119-c CSP、测试、真实浏览器与 Nix 离线构建。三个 subagent 在同一隔离树内按文件边界合作；主 agent 负责计划、ADR/接口、审查、交接与整合，只执行父卡 S119。
-- 验收：原 Web 测试、生产构建、根 typecheck、Nix Web 离线构建；必要服务端测试/fmt/clippy；真实 Chromium 五路由、明暗主题、320/390/768/1440/1920 响应式、键盘/弹层与生产 CSP，以及真实隔离 btrfs 服务的账号/Root/恢复/备份流程。测试适配组件 DOM，不删减业务断言。
+- 分工：S119-a 基础依赖、默认主题、AppShell/导航/概览及现成组件组合；S119-b 账号、Vault、恢复、备份页面与 Mantine 表单；S119-c CSP、测试、真实浏览器与 Nix 离线构建。三个 subagent 在同一隔离树内按文件边界合作；主 agent 负责计划、ADR/接口、审查、交接与整合，只执行父卡 S119。
+- 验收：原 Web 测试、生产构建、根 typecheck、Nix Web 离线构建；必要服务端测试/fmt/clippy；真实 Chromium 五路由、明暗主题、320/390/768/1440/1920 响应式、键盘/弹层与生产 CSP，以及真实隔离 btrfs 服务的账号/Vault/恢复/备份流程。测试适配组件 DOM，不删减业务断言。
 - 边界：不改 wire DTO、数据库或状态机，不接触正式数据，不默认部署。用户最新决定由 ADR-018 取代 ADR-017 的组件选择；CSP 不增加 unsafe-inline。交接 `agent/tasks/S119.md` 及三个子卡，验收提交后合入 master 并清理本地任务树/分支。
 
 ### S120 — 将 Mantine 版最新服务端部署到本机
 
 - 依据：2026-11-08 用户再次要求“将服务端最新版部署到本机”；前置 S118、S119 done；design §17.2、§11.5、§18.1。
-- 结果：用现有一键 pure 入口把部署时 master HEAD 固定到 `/etc/nixos#wks-lab`，使 S119 的 Mantine Web 与逐响应 style nonce CSP 上线；保留域名、账号、ServerId、RootId、正式数据与主机依赖锁。
-- 验收：clean/pure 构建/manifest/主机锁/dry-activate/test/HTTPS/IPC/身份/UID与归属/switch；线上 HTML（剥离 nonce 后）与主资产 sha256、CSP nonce 与无 unsafe-inline、真实 Chromium 五路由含 Burger 响应式/主题/登录 cookie/Root 健康/SSE；既有服务、SSH、应用与主机锁核对。
+- 结果：用现有一键 pure 入口把部署时 master HEAD 固定到 `/etc/nixos#wks-lab`，使 S119 的 Mantine Web 与逐响应 style nonce CSP 上线；保留域名、账号、ServerId、VaultId、正式数据与主机依赖锁。
+- 验收：clean/pure 构建/manifest/主机锁/dry-activate/test/HTTPS/IPC/身份/UID与归属/switch；线上 HTML（剥离 nonce 后）与主资产 sha256、CSP nonce 与无 unsafe-inline、真实 Chromium 五路由含 Burger 响应式/主题/登录 cookie/Vault 健康/SSE；既有服务、SSH、应用与主机锁核对。
 - 交接：`agent/tasks/S120.md`；记录两仓库提交、generation、证据、恢复入口与清理。仅部署本机，不改变 S101/S106—108 与 T02 首发门禁。
 
 ### S121 — Web 顶栏分区与 48px 高度并部署到本机
 
 - 依据：2026-11-08 用户要求 topbar 降至 48px、面包屑居左、Logo 独立分区且边线与左栏对齐，参考 Mantine UI navbars；追加要求完成后部署本机。前置 S119、S120 done；design §18.1、§17.2。
 - 结果：组合现有 AppShell 与 Group 调整布局，保留窄屏折叠菜单、主题和五路由；通过现有 pure 一键部署入口上线，保留账号/数据/身份及主机依赖锁。
-- 验收：Web test/build、根 typecheck；真实 Chromium 五路由明暗主题与 320/390/768/1440/1920 宽度，实测 48px、面包屑左对齐、Logo/侧栏分隔线、无横向溢出与导航可用；部署 build/dry/test/健康/switch、manifest/资产一致、生产 CSP/TLS/登录/Root/SSE 与既有服务核对。
+- 验收：Web test/build、根 typecheck；真实 Chromium 五路由明暗主题与 320/390/768/1440/1920 宽度，实测 48px、面包屑左对齐、Logo/侧栏分隔线、无横向溢出与导航可用；部署 build/dry/test/健康/switch、manifest/资产一致、生产 CSP/TLS/登录/Vault/SSE 与既有服务核对。
 - 交接：`agent/tasks/S121.md` 及批次；只涉及布局与本机版本 pin，不改变协议/数据库或首发门禁。
 
-### S122 — Web Root 文件浏览器与属性查看
+### S122 — Web Vault 文件浏览器与属性查看
 
-- 依据：2026-11-08 用户要求服务端 Web 浏览某个 Root 的文件目录、查看基本属性，并在文件管理器工具栏切换 Root；前置 S048、S078、S119、S121 done。design §15.1—15.2、§18.1、ADR-019。
-- 结果：Mantine 文件浏览器路由，工具栏 Root 选择、目录面包屑与返回上级、刷新、当前目录名称筛选及列表分页；文件/目录属性展示名称、类型、相对路径、大小、身份、revision、内容版本与 SHA-256。不提供内容预览或写入操作。
-- 实现边界：复用授权 Root 与固定快照 API，完整读取分页后构造目录树；取消与过期/中途错误不当成空目录，切换 Root 丢弃旧响应；单 Root 最多 100,000 条快照元数据，每页展示 100 子项，超限明确报错。不新增 wire/持久格式，不把未采集或 pending 当 committed。
-- 验收：Web test/build、根 typecheck、受影响 api-client 测试与 Nix Web 构建；Chromium 连接独立 btrfs 服务，验证多 Root 切换、嵌套/空目录、返回/面包屑、属性/精确大小/特殊文件名、筛选/分页/刷新、断网/失效/切换竞态、明暗/窄屏/CSP。单测验证分页不一致/坏游标/坏树/中途失败/取消。
+- 依据：2026-11-08 用户要求服务端 Web 浏览某个 Vault 的文件目录、查看基本属性，并在文件管理器工具栏切换 Vault；前置 S048、S078、S119、S121 done。design §15.1—15.2、§18.1、ADR-019。
+- 结果：Mantine 文件浏览器路由，工具栏 Vault 选择、目录面包屑与返回上级、刷新、当前目录名称筛选及列表分页；文件/目录属性展示名称、类型、相对路径、大小、身份、revision、内容版本与 SHA-256。不提供内容预览或写入操作。
+- 实现边界：复用授权 Vault 与固定快照 API，完整读取分页后构造目录树；取消与过期/中途错误不当成空目录，切换 Vault 丢弃旧响应；单 Vault 最多 100,000 条快照元数据，每页展示 100 子项，超限明确报错。不新增 wire/持久格式，不把未采集或 pending 当 committed。
+- 验收：Web test/build、根 typecheck、受影响 api-client 测试与 Nix Web 构建；Chromium 连接独立 btrfs 服务，验证多 Vault 切换、嵌套/空目录、返回/面包屑、属性/精确大小/特殊文件名、筛选/分页/刷新、断网/失效/切换竞态、明暗/窄屏/CSP。单测验证分页不一致/坏游标/坏树/中途失败/取消。
 - 交接：`agent/tasks/S122.md` 及批次。部署不在本卡范围；既有首发与 Windows 门禁保持。
 
 ### S124 — Web 文件浏览器左右分栏与 URL 目录定位
 
 - 依据：2026-11-08 用户要求重构文件浏览器；前置 S122、S123 done；design §18.1、ADR-019。
-- 结果：左侧 Root 选择与目录树，右侧顶部刷新/前进/后退/上级/相对地址栏/筛选/属性工具栏，下方文件列表；移除 Root 列表刷新按钮、页内重复标题和说明。路径 `#/files/<root_id>/<逐段编码的相对目录>` 可直接打开、刷新与历史导航；不存在或无权目录明确报错，不回退成根目录。
+- 结果：左侧 Vault 选择与目录树，右侧顶部刷新/前进/后退/上级/相对地址栏/筛选/属性工具栏，下方文件列表；移除 Vault 列表刷新按钮、页内重复标题和说明。路径 `#/files/<vault_id>/<逐段编码的相对目录>` 可直接打开、刷新与历史导航；不存在或无权目录明确报错，不回退成根目录。
 - 规范：将 “Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.” 写入 design §18.1 和 agent 入口，适用于后续所有 UI 任务。
-- 验收：Web test/build、根 typecheck、Nix Web 构建；真实 Chromium + 独立 btrfs 服务验证左树右列表、Root 切换、URL 深链/重载/特殊名称/错误、地址栏与历史、筛选/分页/属性、网络失败/迟到响应、明暗/窄屏/CSP；保留 S122 只读边界。
+- 验收：Web test/build、根 typecheck、Nix Web 构建；真实 Chromium + 独立 btrfs 服务验证左树右列表、Vault 切换、URL 深链/重载/特殊名称/错误、地址栏与历史、筛选/分页/属性、网络失败/迟到响应、明暗/窄屏/CSP；保留 S122 只读边界。
 - 交接：`agent/tasks/S124.md` 与批次。仅本卡，不默认部署，不改变协议/数据库或原首发门禁。
 
 ### S125 — 将最新服务端（S124 分栏文件浏览器）部署到本机
 
 - 依据：2026-11-08 用户要求“部署服务端到本机，部署完不要验证”；前置 S113（一键部署入口）、S121（generation249）、S123（generation250）、S124 done。design §17.2、§11.5。
-- 结果：用 S113 的一键入口把部署时 master HEAD 固定到本机，使 S124 的左树右列表文件浏览器与 URL 目录深链上线。只改主机版本 pin，不改产品代码、协议、schema 或数据库；域名、owner、正式数据、ServerId、RootId 与运行用户保持。
+- 结果：用 S113 的一键入口把部署时 master HEAD 固定到本机，使 S124 的左树右列表文件浏览器与 URL 目录深链上线。只改主机版本 pin，不改产品代码、协议、schema 或数据库；域名、owner、正式数据、ServerId、VaultId 与运行用户保持。
 - 范围：按用户明确要求，本轮不执行部署后验证（不跑 Chromium/浏览器矩阵、不比对线上资产哈希、不重铺服务 PID/应用/SSH/主机锁基线）。部署脚本自身的 clean 检查、pure 构建、manifest 与主机锁核对、dry-activate → test → HTTPS/IPC/身份/归属 → switch 门禁照常执行，失败即恢复旧 system。
 - 交接：`agent/tasks/S125.md` 与批次。原 S101 hosted、S106/S107 性能容量、S108 最终发行与 T02 Windows 门禁不变。
 
@@ -1450,8 +1450,8 @@
 ### S127 — 使用 Mantine Tree 重构文件浏览器目录树
 
 - 依据：2026-11-08 用户指定 https://mantine.dev/core/tree/；前置 S124 done；design §18.1。
-- 结果：将目录树整理为独立 Mantine Tree/useTree 组件，统一节点、层级线、展开图标与选中样式；目录标签导航、箭头独立展开，空目录不显示展开按钮。保持 Root、URL、历史、快照读取和只读边界。
-- 验收：Web test/build、根 typecheck；真实 Chromium + 独立 btrfs 服务验证展开/收起不导航、空目录、选中与深链/历史同步、键盘与 Root 隔离、明暗/窄屏/CSP，以及既有文件浏览器回归。
+- 结果：将目录树整理为独立 Mantine Tree/useTree 组件，统一节点、层级线、展开图标与选中样式；目录标签导航、箭头独立展开，空目录不显示展开按钮。保持 Vault、URL、历史、快照读取和只读边界。
+- 验收：Web test/build、根 typecheck；真实 Chromium + 独立 btrfs 服务验证展开/收起不导航、空目录、选中与深链/历史同步、键盘与 Vault 隔离、明暗/窄屏/CSP，以及既有文件浏览器回归。
 - 交接：`agent/tasks/S127.md`。仅重构目录树，不默认部署；原 blocked 恢复条件保持。
 
 ### S128 — 收紧文件浏览器目录树并部署生产
@@ -1471,8 +1471,8 @@
 ### S134 — 服务端 Web 统一 Mantine Notification 操作反馈
 
 - 依据：用户指定 https://mantine.dev/core/notification/，所有服务端 Web feedback（含复制路径成功）统一使用 Mantine Notification；前置 S132、S133 done；design §18.1、§6。
-- 结果：全局 Mantine 通知区与统一反馈入口，覆盖账号、连接检查、Root、文件浏览、恢复、备份的成功/失败与校验反馈；持续状态、风险说明、操作记录保留原位，不将 pending 当 committed 或下载当验证。
-- 验收：根 typecheck、Web test/build、Nix Web sandbox 构建；真实 Chromium + 隔离 btrfs 服务覆盖复制成功/失败、自动/手动关闭、页面错误清理、明暗/窄屏/长路径/CSP，以及账号/Root/文件/恢复/备份回归。
+- 结果：全局 Mantine 通知区与统一反馈入口，覆盖账号、连接检查、Vault、文件浏览、恢复、备份的成功/失败与校验反馈；持续状态、风险说明、操作记录保留原位，不将 pending 当 committed 或下载当验证。
+- 验收：根 typecheck、Web test/build、Nix Web sandbox 构建；真实 Chromium + 隔离 btrfs 服务覆盖复制成功/失败、自动/手动关闭、页面错误清理、明暗/窄屏/长路径/CSP，以及账号/Vault/文件/恢复/备份回归。
 - 交接：`agent/tasks/S134.md`。无协议/数据库变更；验收合并后由 S135 单独部署本机。
 
 ### S136 — Web 文件管理器上传与右键文件操作
@@ -1481,7 +1481,7 @@
 - 结果：沿用授权 API 的上传/finalize/create、固定版本复制、CAS 移动与回收站删除；提供文件/目录上下文菜单和当前目录粘贴入口。
 - 安全：同名不覆盖，目录不可移入自身后代；删除确认绑定 revision/子树 token；pending/未知结果保留操作身份；批量部分完成如实展示，不伪造原子性。
 - 验证：服务层单测、相关 Web 回归、typecheck/build，独立 btrfs 服务与真实 Chromium 上传/复制/移动/回收站/竞态/CSP 验收。
-- 拆分：S136-a 操作编排与单测，S136-b UI 与真实浏览器验收，S136-c 修复真实跨 Root 同摘要上传暴露的对象登记冲突，S136-d 合并后审查修复（离线恢复原生验证、布局契约与测试、租约顺序、运维处置）；统一在本卡验收和交接。不包含本机生产部署。
+- 拆分：S136-a 操作编排与单测，S136-b UI 与真实浏览器验收，S136-c 修复真实跨 Vault 同摘要上传暴露的对象登记冲突，S136-d 合并后审查修复（离线恢复原生验证、布局契约与测试、租约顺序、运维处置）；统一在本卡验收和交接。不包含本机生产部署。
 - 交接：`agent/tasks/S136.md`；如 API 限制需要显式记录，不改同步核心或降低不变量。
 
 ### S135 — 将通知版服务端部署到本机
@@ -1494,7 +1494,7 @@
 ### S137 — Web 文件列表重命名与目录树右键菜单
 
 - 依据：用户要求文件列表右键新增重命名，左侧目录树也支持右键菜单；前置 S136 done；design §6、§18.1、§24。
-- 结果：文件/目录重命名使用同 Root CAS move，保留 EntryId/VersionId，重试沿用原请求；树与列表共享打开/属性/复制路径/复制/剪切/粘贴/重命名/删除菜单，Root 禁止改名/剪切/删除，粘贴落到右键目标目录。
+- 结果：文件/目录重命名使用同 Vault CAS move，保留 EntryId/VersionId，重试沿用原请求；树与列表共享打开/属性/复制路径/复制/剪切/粘贴/重命名/删除菜单，Vault 禁止改名/剪切/删除，粘贴落到右键目标目录。
 - 验证：操作层单测、Web 回归/typecheck/build、独立 btrfs 服务与真实 Chromium，覆盖取消/无效名/同名/过期基线/未知结果、目录改名后的地址同步、键盘与 CSP。
 - 拆分：S137-a Web 操作/菜单；S137-b 真实验收暴露的观察器旧路径误删修复（连续目录改名后保留子项并恢复后续外部观察）。父卡须两项都验收，不降低 I03/I08/I14。
 - 交接：`agent/tasks/S137.md`、`S137-a.md`、`S137-b.md`。无协议/数据库变更；验收合并后执行 S138 本机部署。

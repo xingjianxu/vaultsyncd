@@ -104,7 +104,7 @@ def main():
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
-            notifications = page.locator(".mantine-Notification-vault")
+            notifications = page.locator(".mantine-Notification-root")
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):

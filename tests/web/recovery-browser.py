@@ -108,8 +108,8 @@ def main():
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/account")
-            notifications = page.locator(".mantine-Notification-vault")
-            operation = page.locator(".mantine-Paper-vault").filter(has=page.get_by_role("heading", name="恢复操作", exact=True))
+            notifications = page.locator(".mantine-Notification-root")
+            operation = page.locator(".mantine-Paper-root").filter(has=page.get_by_role("heading", name="恢复操作", exact=True))
             expect(page.get_by_text("未登录", exact=True)).to_be_visible()
 
             def login(secret):

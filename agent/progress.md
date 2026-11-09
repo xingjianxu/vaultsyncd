@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S140 done**（共享目录概念改名 Vault：核心/wire/数据库/服务端与客户端通用代码；未部署生产）。S001—S140 共140卡：135 done、5 blocked；下一 ready 为 S141（Windows 客户端原生复验），其后 S142（Web 测试、文档、部署）。线上仍为S138源`5689be1`运行/开机generation258，schema15保持。验证与交接见[S140](tasks/S140.md)、[S139](tasks/S139.md)。
+当前：**S142 done**（Vault 改名：文档、Web 脚本与真实浏览器验收；未部署生产）。S001—S142 共142卡：136 done、6 blocked；**无 ready 卡**。线上仍为S138源`5689be1`运行/开机generation258、schema15保持；新代码目标 schema16。验证与交接见[S142](tasks/S142.md)、[S141](tasks/S141.md)、[S140](tasks/S140.md)。
 
 最近部署：[S138](tasks/S138.md) 固定源`5689be16b8bc389ae3781e96c2ff734f7d6761ae`、主机pin`9930ec7`、generation258；异盘完整备份verified，pure build/dry/test/健康/switch、生产全量资产/TLS/CSP/明暗窄屏/新菜单/取消改名、legacy固定版本读取与8对象路径字节保持通过；schema15/ServerId/归属/10无关服务/3应用保持。直接回退入口为现场既有generation257（源7f50cc3，先前部署记录现已补明）；本卡15→15更新。历史已归档部署[S135](tasks/S135.md) generation256/schema14与[S131](tasks/S131.md)的13→14迁移仅描述当时现场，不作为当前回退入口。
 
@@ -19,6 +19,7 @@
 | S106 | 小文件时延与常规规模基准 | X | S101、S102、S103、S104、S105 | blocked | 基线c59ff19；独立只读前置/资源报告 `docs/reports/performance.md`，文档390cda0已cb9ed20合入，证据/树/分支已收尾 | devShell资源核查：双路6430/128线程、503.54GiB RAM、SSD可用143.05GiB、旋转btrfs21.58TiB；仅1台8GiB/8vCPU Windows，未联系客体、未跑小样本/常规档，p95/RSS/CPU/队列全未测 | S101 hosted无remote/runner/Actions证据；S105已fd896fa完成，hosted前置仍阻塞；需准备3独立Windows及SSD/RTT实证，容量本身未证不足，不降1万文件/约10GiB目标 | agent/tasks/S106.md；artifacts/S106 |
 | S107 | 正式容量与大文件续传验证 | X | S106 | blocked | 基线cb9ed20；只读正式档预算与恢复证据要求写 `docs/reports/performance.md`，文档dcadee5已0d4fb30合入，证据/树/分支已收尾 | devShell容量/挂载/btrfs/remote均exit0；data21.5808TiB，SSD142.59GiB；有限情景含余量19.54TiB，另累计五端下载stage情景25.54TiB（差约3.96TiB）；正式10万文件/1TiB/50GiB/5设备与重传字节全未测 | S106未验收，追溯S101 hosted缺口；五独立Windows及大NTFS卷未准备，须先核实内部副本/stage/历史增长再准入容量，不降目标、不以小样本替代 | agent/tasks/S107.md；artifacts/S107 |
 | S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | blocked | 35项P0索引、README/运维入口与当前限制；文档5f485a5已abdedd3整合；S105 done/代码候选fd896fa；证据、树与分支已收尾 | 两架构各24个历史runtime文件及发布/源码tar哈希核验，b263源三PE哈希/原生启动验证；当前候选全平台包未完成 | S101 hosted、S106/S107性能容量、T02三台Windows及最终同源发行证据缺失；未宣称首发完成 | agent/tasks/S108.md；docs/operations/release.md |
+| S141 | Vault 改名后的 Windows 客户端原生复验 | W | S140；需 schema16 服务端 | blocked | 无产出提交（宿主 xwin 全 workspace 类型检查 exit0） | `cargo xwin check --locked --workspace --all-targets` exit0；未取得任何原生运行证据 | Windows 客体未开机、SSH 未监听；需按 `docs/operations/windows-lab.md` §12 启动 VM、同源交叉构建并跑 bindings/files-ui/write/history/s099/s100 | agent/tasks/S141.md |
 
 ## 已完成任务
 
@@ -27,8 +28,9 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
-| S140 | 共享目录概念改名 Vault（代码/wire/DB/服务端/客户端通用层）；schema16 迁移、协议 major 2 | 实现提交见交接 | [S140](tasks/S140.md) |
-| S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Root 同摘要对象冲突（schema15 围栏、legacy 兼容） | 实现f0e0103/0346ec1、审查修复c2d06b0已ff合master；树/分支已清理 | [S136](tasks/S136.md) |
+| S142 | Vault 改名：design/interfaces/operations/README 等文档与 Web 测试脚本；真实 Chromium 两轮通过 | 随本卡文档提交 | [S142](tasks/S142.md) |
+| S140 | 共享目录概念改名 Vault（代码/wire/DB/服务端/客户端通用层）；schema16 迁移、协议 major 2 | b32ce6a已ff合master，任务树/分支已清理 | [S140](tasks/S140.md) |
+| S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Vault 同摘要对象冲突（schema15 围栏、legacy 兼容） | 实现f0e0103/0346ec1、审查修复c2d06b0已ff合master；树/分支已清理 | [S136](tasks/S136.md) |
 | S135 | 通知版服务端部署本机 generation256；线上通知与资产/健康验收通过 | 源faf7adb；主机b98e05f | [S135](tasks/S135.md) |
 | S134 | Web 操作反馈统一 Mantine Notification；五套真实浏览器验收、Nix Web 构建通过 | 实现a1d225a/交接faf7adb已ff合master；树状态见卡片 | [S134](tasks/S134.md) |
 | S133 | S132 部署到本机：generation255、pin31186c7、无迁移、生产 S132 断言 | 源b811f41；主机31186c7 | [S133](tasks/S133.md) |
@@ -72,13 +74,13 @@
 | S035 | 内容 CAS 与现场复核 | 2209f18、db04f8c、095526a… | [S035](tasks/S035.md) |
 | S036 | 幂等重试与冲突内容提交 | 8073e12、da8e4e3、a776c9f | [S036](tasks/S036.md) |
 | S037 | 启动恢复与崩溃注入 | 16820b1、808b95c、a21aabc… | [S037](tasks/S037.md) |
-| S038 | 目录创建与同 Root 移动 | 2b4bf00、fb317ad、dc34fbd… | [S038](tasks/S038.md) |
+| S038 | 目录创建与同 Vault 移动 | 2b4bf00、fb317ad、dc34fbd… | [S038](tasks/S038.md) |
 | S039 | 可恢复删除与回收站 | dd27e3a、ad675ad、280c87f… | [S039](tasks/S039.md) |
 | S040 | 历史与回收站恢复操作 | ffade51、a9ba6e7、b8bdb95… | [S040](tasks/S040.md) |
 | S041 | 服务端进程与配置生命周期 | 9508098、10a08b6、962c51c | [S041](tasks/S041.md) |
 | S042 | 首次 owner 初始化与密码认证 | c53f488、bcda69d、6ad456e… | [S042](tasks/S042.md) |
-| S043 | 会话、刷新与 Root 授权 | 011d12f、a498ba5、931ef9c… | [S043](tasks/S043.md) |
-| S044 | 管理 Root 注册与健康 API | add5d58、83e55a1、d4206f1… | [S044](tasks/S044.md) |
+| S043 | 会话、刷新与 Vault 授权 | 011d12f、a498ba5、931ef9c… | [S043](tasks/S043.md) |
+| S044 | 管理 Vault 注册与健康 API | add5d58、83e55a1、d4206f1… | [S044](tasks/S044.md) |
 | S045 | 上传会话和固定块接收 | 88cc8de、e6c8533、4a88d10… | [S045](tasks/S045.md) |
 | S046 | 上传 finalize 与固定版本下载 | f27565e、5205e73、f0c0f84… | [S046](tasks/S046.md) |
 | S047 | 操作 HTTP 接口与错误映射 | 6cc3384、ee79f3b、aacd1e0 | [S047](tasks/S047.md) |
@@ -112,7 +114,7 @@
 | S075 | Linux 在线管理 socket 与 CLI | ace6837、526bde0、1f415b8… | [S075](tasks/S075.md) |
 | S076 | 前端公共组件与两应用壳 | cb82498 | [S076](tasks/S076.md) |
 | S077 | Web 登录与会话管理 | 89c7b2d | [S077](tasks/S077.md) |
-| S078 | Web Root 与服务健康页面 | 5246a05、103a0b1 | [S078](tasks/S078.md) |
+| S078 | Web Vault 与服务健康页面 | 5246a05、103a0b1 | [S078](tasks/S078.md) |
 | S079 | Web 历史、冲突与回收站 | 4ef8174 | [S079](tasks/S079.md) |
 | S080 | Tauri Windows 壳与最小 IPC 桥 | 692e18f | [S080](tasks/S080.md) |
 | S081 | 桌面连接与 Binding 页面 | 94dc1af | [S081](tasks/S081.md) |
@@ -144,7 +146,7 @@
 | S111 | 移除 Linux ARM64 构建与验证范围 | 实现9e62b03、交接ecb21dc；master已ff整合，任务树/分支已清理 | [S111](tasks/S111.md) |
 | S112 | 本机域名部署与NixOS功能选项 | 项目4856738、c94aca4已ff合入master；主机9c2133f、56bd93b已合main，任务树均清理 | [S112](tasks/S112.md) |
 | S113 | 主机用户运行与 pure 一键部署 | 项目4071fd4/6b967bd，主机32bfeb5已ff合main；整合/清理见批次 | [S113](tasks/S113.md) |
-| S114 | 客户端目录选择与 Root 名称显示 | 实现85143c6、交接bfa5204已ff合master；任务树/分支已清理 | [S114](tasks/S114.md) |
+| S114 | 客户端目录选择与 Vault 名称显示 | 实现85143c6、交接bfa5204已ff合master；任务树/分支已清理 | [S114](tasks/S114.md) |
 | S115 | 服务端 Web HeroUI React 完整重构 | d90b385已ff合master；任务树/分支已清理；基线5c5c797 | [S115](tasks/S115.md) |
 | S116 | 将当前服务端部署到本机 | 源f3b8979、主机15cfc07；项目整合/清理见批次 | [S116](tasks/S116.md) |
 | S117 | Web 管理界面紧凑化与 HeroUI 控件统一 | 实现3631c29、交接495a04d已ff合master；任务树/分支已清理；基线f3b8979 | [S117](tasks/S117.md) |
@@ -152,7 +154,7 @@
 | S119 | 服务端 Web 从 HeroUI 迁移到 Mantine | 实现b16d9a1、交接b5e96f2已ff合master；任务树/分支已清理；基线e598106 | [S119](tasks/S119.md) |
 | S120 | 将 Mantine 版最新服务端部署到本机 | 源b5e96f2、主机0073fd6；项目整合/清理见批次 | [S120](tasks/S120.md) |
 | S121 | Web 顶栏分区与 48px 高度并部署到本机 | 实现354bbc4/交接c8d5429已ff合master，任务树/分支已清理；主机6cc497b | [S121](tasks/S121.md) |
-| S122 | Web Root 文件浏览器与属性查看 | 实现25dbf2b已ff合master，任务树/分支已清理；基线209a8a0 | [S122](tasks/S122.md) |
+| S122 | Web Vault 文件浏览器与属性查看 | 实现25dbf2b已ff合master，任务树/分支已清理；基线209a8a0 | [S122](tasks/S122.md) |
 | S123 | 将最新服务端（S122 文件浏览器）部署到本机 | 源6395dfa、主机pin207099c；项目整合/清理见批次 | [S123](tasks/S123.md) |
 | S124 | Web 文件浏览器左右分栏与 URL 目录定位 | 986c35c已ff合master；任务树/分支已清理，见批次；基线1e2d778 | [S124](tasks/S124.md) |
 | S125 | 将最新服务端（S124 分栏文件浏览器）部署到本机 | 源30daa88、主机pin dc7dd42；项目整合/清理见批次；基线2f21788 | [S125](tasks/S125.md) |

@@ -46,7 +46,7 @@ nix develop .#portable-tests --command python3 tools/ci/acceptance.py --config /
 最后复用S099安装驱动真实标准用户安装/GUI+CLI/关GUI同步/重启登录同步。
 `VAULTSYNCD_CI_CLEANUP=1`仅本run启用：logout删除本用户凭据，完整驻留门通过才revert并卸载provider；
 核对三份文件hash和普通文件属性后，恢复原Quickemu登录，删除新测试用户/配置/探针和私有密码，并仅删除该确切新SID的自动生成任务（包括Windows SoftLanding）。
-历史S099默认保留行为不变。失败不强删不完整Root，也不删除其他卡的账户或数据。
+历史S099默认保留行为不变。失败不强删不完整Vault，也不删除其他卡的账户或数据。
 
 仅非秘密结果写`artifacts/S101/public/`，可上传GitHub；完整私有现场、凭据、SQLite、VM镜像不得上传。
 本地通过不能写成hosted通过；NixOS x64、Ubuntu x64 和 Windows 原生必须分列。

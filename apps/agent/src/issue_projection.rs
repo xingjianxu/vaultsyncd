@@ -1,4 +1,4 @@
-//! Aggregate all bindings before resolving a Vault cause. Notification records are not their own cause.
+//! Aggregate all bindings before resolving a root cause. Notification records are not their own cause.
 use crate::{config::AgentConfig, local::error};
 use std::collections::{HashMap, HashSet};
 use vaultsyncd_client_store::db::Database;
@@ -104,7 +104,7 @@ pub(crate) async fn sync(
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn one_binding_success_cannot_resolve_another_bindings_vault_cause() {
+    async fn one_binding_success_cannot_resolve_another_bindings_root_cause() {
         let path = std::env::temp_dir().join(format!(
             "s083-aggregate-{}-{}",
             std::process::id(),

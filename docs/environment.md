@@ -91,7 +91,7 @@
 - 以普通用户执行 `btrfs filesystem show` 时设备路径显示 `MISSING`；以 `sudo -n` 只读复核后得到正确设备路径。工具本身可用。
 - 现有 `/wrd`、`/data` 均为带快照子卷的既有数据区；本次未创建、未删除、未格式化任何测试卷。
 - 尚无本项目专用 btrfs 测试卷/目录：`/var/lib/vaultsyncd-dev`、`/var/lib/vaultsyncd`、`/srv/vaultsyncd-test` 均不存在（`ls -ld` 退出码 2）。独立测试位置由 S007 准备。
-- `/dev/loop-control` 为 `root:disk` `660`，当前用户不在 `disk` 组；若 S007 采用 loop 测试卷，需使用已确认可用的 `sudo -n` 或另行配置权限。本轮不创建 loop 设备。
+- `/dev/loop-control` 为 `vault:disk` `660`，当前用户不在 `disk` 组；若 S007 采用 loop 测试卷，需使用已确认可用的 `sudo -n` 或另行配置权限。本轮不创建 loop 设备。
 - reflink/FICLONE 与快照隔离能力尚未实测，留给存储准入与备份相关卡片验证；不得把“文件系统为 btrfs”当成 reflink 已验收。
 
 ## 4. 系统配置入口
@@ -140,7 +140,7 @@
 
 | 项目 | 命令 | 实测结果 | 退出码 |
 | --- | --- | --- | --- |
-| KVM 设备 | `ls -l /dev/kvm` | `crw-rw-rw- 1 root kvm 10, 232` | 0 |
+| KVM 设备 | `ls -l /dev/kvm` | `crw-rw-rw- 1 vault kvm 10, 232` | 0 |
 | 当前用户 KVM 访问 | `test -r /dev/kvm -a -w /dev/kvm` | 可读写（退出码 0） | 0 |
 | kvm 组 | `getent group kvm` | `kvm:x:302:xingjian` | 0 |
 | KVM 模块 | `lsmod` | 输出含 `kvm_intel`、`kvm` 行 | 0 |
@@ -322,12 +322,12 @@ env -i HOME="$HOME" TERM=xterm PATH=/run/current-system/sw/bin:/usr/bin:/bin /ru
 ### 11.3 实际后端证据（本次 run，提取自 `verify` 与独立只读命令）
 
 ```
-$ findmnt -T /data/vaultsyncd-lab/runs/s007-run1/volume -o TARGET,SOURCE,FSTYPE,FSROOT,OPTIONS
-TARGET SOURCE            FSTYPE FSROOT OPTIONS
+$ findmnt -T /data/vaultsyncd-lab/runs/s007-run1/volume -o TARGET,SOURCE,FSTYPE,FSVAULT,OPTIONS
+TARGET SOURCE            FSTYPE FSVAULT OPTIONS
 /data  /dev/sdc1[/@data] btrfs  /@data rw,noatime,compress=zstd:1,space_cache=v2,subvolid=256,subvol=/@data
 
-$ findmnt -T /data/vaultsyncd-lab/runs/s007-run1/mnt -o TARGET,SOURCE,FSTYPE,FSROOT,OPTIONS
-TARGET                                  SOURCE     FSTYPE FSROOT OPTIONS
+$ findmnt -T /data/vaultsyncd-lab/runs/s007-run1/mnt -o TARGET,SOURCE,FSTYPE,FSVAULT,OPTIONS
+TARGET                                  SOURCE     FSTYPE FSVAULT OPTIONS
 /data/vaultsyncd-lab/runs/s007-run1/mnt /dev/loop0 btrfs  /      rw,relatime,ssd,discard=async,space_cache=v2,subvolid=5,subvol=/
 
 $ stat -f -c '%n fstype=%T fsid=%i' /data <volume> <mnt>
@@ -354,24 +354,24 @@ $ ls -A <volume> | wc -l ; ls -A <mnt> | wc -l
 
 结论：专用子卷是 `/dev/sdc1[/@data]`（btrfs，FSUUID `13eeae80-…`，subvolid 256）上的子卷 2506；loop 镜像是独立 btrfs（FSUUID `fdf39995-…`，512MiB，`/dev/loop0`，label `vaultsyncd-s007-run1`），`statfs` 身份（fsid）与主卷不同；两个目录都为空。注意 btrfs 的 `statfs f_fsid` 会随子卷变化（`bd7db9a1987d7664` vs `bd7db9a1987d7eae`），因此脚本用 **btrfs 文件系统 UUID + subvolid** 判定归属，`statfs` 只作辅助证据。
 
-### 11.4 dev / test / 正式实例与 Root 的互斥路径规划
+### 11.4 dev / test / 正式实例与 Vault 的互斥路径规划
 
 | 用途 | 路径 | 后端与容量 | 说明 |
 | --- | --- | --- | --- |
-| 临时开发实例状态与 Root | `/var/lib/vaultsyncd-dev/` | `/dev/sda2[/@]` btrfs `@` 子卷，可用 ≈344G | 独立账号、端口、DB 与 Root；只在开发时启用 |
-| 集成/故障测试实例状态与 Root | `/var/lib/vaultsyncd-test/<run_id>/` | 同上 | 每轮独立 DB、Root、对象与进程；故障注入只作用于该 run |
+| 临时开发实例状态与 Vault | `/var/lib/vaultsyncd-dev/` | `/dev/sda2[/@]` btrfs `@` 子卷，可用 ≈344G | 独立账号、端口、DB 与 Vault；只在开发时启用 |
+| 集成/故障测试实例状态与 Vault | `/var/lib/vaultsyncd-test/<run_id>/` | 同上 | 每轮独立 DB、Vault、对象与进程；故障注入只作用于该 run |
 | 满盘/ENOSPC 等容量故障的测试卷 | `/data/vaultsyncd-lab/runs/<run_id>/`（本卡脚本） | `/dev/sdc1[/@data]` btrfs + 独立 512MiB loop btrfs | 与状态目录分离，避免主卷容量语义被污染 |
-| 正式试用实例状态与 Root | `/var/lib/vaultsyncd/` | 同上（建议部署时改为专用子卷） | 只在部署阶段启用，先用可丢弃样本 |
-| 用户工作目录（Root 示例） | 由允许基目录显式选择，如 `/data/llm/` 之外的独立目录 | `/dev/sdc1[/@data]` | 不落在任何上述内部状态目录内 |
+| 正式试用实例状态与 Vault | `/var/lib/vaultsyncd/` | 同上（建议部署时改为专用子卷） | 只在部署阶段启用，先用可丢弃样本 |
+| 用户工作目录（Vault 示例） | 由允许基目录显式选择，如 `/data/llm/` 之外的独立目录 | `/dev/sdc1[/@data]` | 不落在任何上述内部状态目录内 |
 | 禁止位置 | `/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/data/.snapshots`、`/data/llm`、`/wrd`（源码）、`/tmp`（tmpfs）、`/boot`（vfat） | — | 脚本对 lab 根与 run 内部路径硬拒绝 |
 
 互斥性核对（对照 design §16.1）：
 
-- 三个 `/var/lib` 路径互不为父子：`/var/lib/vaultsyncd-test` 与 `/var/lib/vaultsyncd` 是**兄弟**目录，不是后者的子目录（正是 §16.1 用 `/data/a` 与 `/data/abc` 举出的字符串前缀陷阱）。服务端注册 Root 时仍必须按挂载/子卷/目录身份判断，不能只看路径前缀。
+- 三个 `/var/lib` 路径互不为父子：`/var/lib/vaultsyncd-test` 与 `/var/lib/vaultsyncd` 是**兄弟**目录，不是后者的子目录（正是 §16.1 用 `/data/a` 与 `/data/abc` 举出的字符串前缀陷阱）。服务端注册 Vault 时仍必须按挂载/子卷/目录身份判断，不能只看路径前缀。
 - `/var/lib/...`（`sda2[/@]`）与 `/data/vaultsyncd-lab/`（`sdc1[/@data]`）不同设备、不同文件系统，容量互不影响；与 `/wrd`（`sdb1[/@wrd]`，源码与 worktree）也不重叠。
 - 用户目录只在 `/data` 与 `/home` 上显式选择独立目录；`/data/llm` 是既有用户数据，本轮未读未写（清理前后 `stat -c '%A %i %s %Y' /data/llm` 与条目数完全一致）。
 - 现状：`/var/lib/vaultsyncd-dev`、`/var/lib/vaultsyncd-test`、`/var/lib/vaultsyncd` 均不存在（`ls -ld` 退出 2），本卡不创建它们，只做规划；创建时机见 S026（服务端迁移框架）与 S095/S097（NixOS 模块与部署）。
-- 部署建议（留给 S095/S096）：`/var/lib` 属于系统根子卷 `@`，OS 快照会覆盖这些目录；正式启用时改为专用子卷（如 `@vaultsyncd-dev`、`@vaultsyncd`）并让状态与 Root 同卷，以满足 design §11.5 的 reflink 前提。
+- 部署建议（留给 S095/S096）：`/var/lib` 属于系统根子卷 `@`，OS 快照会覆盖这些目录；正式启用时改为专用子卷（如 `@vaultsyncd-dev`、`@vaultsyncd`）并让状态与 Vault 同卷，以满足 design §11.5 的 reflink 前提。
 
 ### 11.5 `tools/test-volume/test-volume.sh` 的创建与清理
 
@@ -408,7 +408,7 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 | 元数据把 `loop_device` 改成 `/dev/loop7` | 1 | 挂载点来源为 `/dev/loop0`，不是本 run 的 `/dev/loop7`，拒绝卸载 |
 | 元数据把 `mount_point` 改成 `/data` | 1 | 元数据 mount_point 越界 |
 | 元数据缺失（`run.env` 移走） | 1 | 无法证明归属，拒绝删除 |
-| `VAULTSYNCD_LAB_ROOT=/data/llm` / `/` / `/data/.snapshots` / `/wrd/prj/vaultsyncd/lab` / `/tmp/lab` / `/srv/vaultsyncd-lab` / 相对路径 | 1 | 受保护路径 / 不在白名单父目录 / 必须绝对路径 |
+| `VAULTSYNCD_LAB_VAULT=/data/llm` / `/` / `/data/.snapshots` / `/wrd/prj/vaultsyncd/lab` / `/tmp/lab` / `/srv/vaultsyncd-lab` / 相对路径 | 1 | 受保护路径 / 不在白名单父目录 / 必须绝对路径 |
 
 补充修复记录：首轮实现用 `findmnt -R <run 目录>` 判断嵌套挂载，实测对非挂载点路径返回空，导致“无重叠”检查空转；改为 `findmnt -l -n -o TARGET` 过滤后能正确列出 `…/mnt`。首轮 `btrfs filesystem show <子卷目录>` 报 `not a valid btrfs filesystem`，改为先解析到最近挂载点（`/data`）再取 UUID。首轮 `cleanup` 把未知条目检查放在卸载之后，会导致半个 run 被清理，已移到最前面的条目校验步骤。
 
@@ -430,7 +430,7 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 - **loop ≠ 真实块设备**：512MiB loop 镜像验证了“独立容量/独立文件系统”与 ENOSPC 测试的可行性，但未验证真实 22T 卷的多设备/大文件系统行为；也未在本轮制造真实满盘（只证明工具能创建独立小卷，满盘实验留给 S013 及容量相关卡片）。
 - **未覆盖第三方占位识别**：本卡只证明后端类型与目录归属，没有能力识别云占位/回源文件；design §11.4 已声明不存在可依赖的统一判定方式，脚本不声称能识别。
 - **无 SMB/NFS/FUSE 支持**：脚本与 `verify` 只接受本地块设备 btrfs；网络文件系统、FUSE 挂载与 overlay 一律拒绝，若将来要在 NAS 上验证，需要单独卡片与实际挂载证据。
-- **依赖非交互 sudo**：`losetup`/`mkfs.btrfs`/`mount`/`umount`/`btrfs subvolume` 需要 root；当前主机 `sudo -n` 可用（`(ALL:ALL) NOPASSWD`），若换到不允许免密 sudo 的环境，脚本会立即失败并提示，不提供交互回退。
+- **依赖非交互 sudo**：`losetup`/`mkfs.btrfs`/`mount`/`umount`/`btrfs subvolume` 需要 vault；当前主机 `sudo -n` 可用（`(ALL:ALL) NOPASSWD`），若换到不允许免密 sudo 的环境，脚本会立即失败并提示，不提供交互回退。
 - **未做挂载参数持久化**：`create` 只做临时挂载，不写 `/etc/fstab`；重启后 loop 挂载与子卷不会自动恢复，需要重新 `create`。
 - **dev/test/正式实例目录仍未创建**：§11.4 只给出互斥规划与检查，实际创建属于 S026/S095/S097；`/var/lib` 上的专用子卷建议同样未实施。
 
@@ -534,7 +534,7 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 | 安装后介质状态 | 客体 `info block` / `Get-CimInstance Win32_CDROMDrive`；`Get-CimInstance Win32_LogicalDisk` | `ide2-cd0: [not inserted]`、`F:` `MediaLoaded=False`；只剩 `E:`（virtio-win CDFS）与 `C:`（NTFS）；原因见 §12.5 与 ops §5 |
 | 控制台代码页 | provision 日志 `Active codepage` | 首登会话实测 `437`（不是 936）；脚本内面向日志的错误文本统一英文，避免乱码 |
 
-宿主侧版本与设备：`quickemu --version` → `4.9.9`；`qemu-system-x86_64 --version` → `QEMU emulator version 11.1.2`；`ls -l /dev/kvm` → `crw-rw-rw- root kvm`；`getent group kvm` → `kvm:x:302:xingjian`。
+宿主侧版本与设备：`quickemu --version` → `4.9.9`；`qemu-system-x86_64 --version` → `QEMU emulator version 11.1.2`；`ls -l /dev/kvm` → `crw-rw-rw- vault kvm`；`getent group kvm` → `kvm:x:302:xingjian`。
 
 ### 12.8 限制与未核验项
 
@@ -633,9 +633,9 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 
 ### 14.2 `FileIdentity` 编码（纯逻辑，宿主实测）
 
-- 固定 48 字节：magic `b"VS"`(2) + schema_version(1) + 保留字节(1) + RootId(16) + EntryId(16) + 版本提示 u64(8) + CRC-32/IEEE(4)；`const` 断言 `ENCODED_LEN <= CFAPI_MAX_FILE_IDENTITY_LEN`(4096) 且 `< 64`。
+- 固定 48 字节：magic `b"VS"`(2) + schema_version(1) + 保留字节(1) + VaultId(16) + EntryId(16) + 版本提示 u64(8) + CRC-32/IEEE(4)；`const` 断言 `ENCODED_LEN <= CFAPI_MAX_FILE_IDENTITY_LEN`(4096) 且 `< 64`。
 - 解码校验长度、magic、schema_version、保留字节与 CRC-32，失败返回 `IdentityDecodeError` 的明确变体（`BadLength`/`BadMagic`/`UnsupportedSchemaVersion`/`ReservedByteSet`/`ChecksumMismatch`），不做“尽量解析”。
-- blob 内只有定长字节数组与整数，结构上不可能装入路径、令牌或服务器地址；原型身份来自固定 `RootId` 与按条目名派生的 `EntryId`（真实身份由服务端/客户端数据库负责）。
+- blob 内只有定长字节数组与整数，结构上不可能装入路径、令牌或服务器地址；原型身份来自固定 `VaultId` 与按条目名派生的 `EntryId`（真实身份由服务端/客户端数据库负责）。
 
 ### 14.3 FFI 布局核对（宿主侧，clang-cl `_Static_assert`）
 
@@ -653,7 +653,7 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 | 逻辑大小 | `Get-Item` `Length` 12,345 与 1,048,576，与设定值一致；`inspect` 逐条校验通过并报告 `dehydrated=true` |
 | 清理 | 3 个占位 `status=removed`；`CfDisconnectSyncRoot`/`CfUnregisterSyncRoot` 均 `0x00000000`；随后 `CfGetSyncRootInfoByPath` 返回 `0x80070186`（`ERROR_CLOUD_FILE_NOT_UNDER_SYNC_ROOT`），`inspect` 退出码 3；用户文件 `user-keep.txt`（50 B）与 `user-dir\keep-note.txt`（40 B）SHA-256 前后一致 |
 | 幂等 | 清空后再次 `cleanup` 退出码 0（`connect`/`unregister` 各自记录 `0x80070186` 并以后置查询确认）；再次 `inspect` 仍为 3 |
-| 两端哈希 | `cfapi-prototype.exe` 当次宿主与客体 SHA-256 一致（`MATCH`），客体确认 `guest_root_volume filesystem=NTFS` |
+| 两端哈希 | `cfapi-prototype.exe` 当次宿主与客体 SHA-256 一致（`MATCH`），客体确认 `guest_vault_volume filesystem=NTFS` |
 
 ### 14.5 限制与未核验项
 
@@ -674,11 +674,11 @@ tools/test-volume/test-volume.sh status                    # 只读列出 lab �
 | `statx(STATX_MNT_ID)` | 可用：`mount_id_source=statx_mnt_id`，取值与 `/proc/self/mountinfo` 的挂载 ID 一致 |
 | `statx(STATX_BTIME)` | 可用：`btime=1793881188.822826519`（`/data` 子卷） |
 | `statx(STATX_SUBVOL)` | 可用（内核 6.7+）：`subvol_id_source=statx_subvol`，`/data` 上的专用子卷 `subvol_id` 与 `test-volume.sh` 记录的 `volume_subvol_id` 一致，**且无需特权** |
-| `BTRFS_IOC_FS_INFO` | 非 root 可用，返回的 `fsid` 与 `sudo btrfs filesystem show /data` 的 UUID 完全一致（`13eeae80-1b59-4e17-ae93-172183243973`） |
-| `BTRFS_IOC_INO_LOOKUP` / btrfs 子卷 ioctl | **需要 `CAP_SYS_ADMIN`**：非 root 调用返回 `EPERM`；同一路径的非 root `btrfs subvolume show` 报 `ERROR: Could not search B-tree: Operation not permitted`，加 `sudo` 才给出 `Subvolume ID: 2538`。因此实现优先用 `statx` 的 `STATX_SUBVOL`，旧内核（无该字段）才退回需要特权的 ioctl，最后由 mountinfo 的 `subvolid=`（仅当目录本身是挂载点）兜底 |
+| `BTRFS_IOC_FS_INFO` | 非 vault 可用，返回的 `fsid` 与 `sudo btrfs filesystem show /data` 的 UUID 完全一致（`13eeae80-1b59-4e17-ae93-172183243973`） |
+| `BTRFS_IOC_INO_LOOKUP` / btrfs 子卷 ioctl | **需要 `CAP_SYS_ADMIN`**：非 vault 调用返回 `EPERM`；同一路径的非 vault `btrfs subvolume show` 报 `ERROR: Could not search B-tree: Operation not permitted`，加 `sudo` 才给出 `Subvolume ID: 2538`。因此实现优先用 `statx` 的 `STATX_SUBVOL`，旧内核（无该字段）才退回需要特权的 ioctl，最后由 mountinfo 的 `subvolid=`（仅当目录本身是挂载点）兜底 |
 | btrfs 的 `stx_dev` vs mountinfo 设备 | **不同**：子卷挂载点上 `statx_device=0:121`，而 mountinfo 的 `major:minor` 是 `0:54`（btrfs 每个子卷使用独立匿名设备号）。因此设备号不能用于身份或一致性校验，身份改用 `(FSID, 子卷 ID)`，两者都分别打印在输出里 |
 
-S098更正：上表保留S007当时内核/工具的实测历史；STATX_SUBVOL实际始于Linux6.10（不是6.7）。Ubuntu24.04 ARM64内核6.8上实测无该字段、非root INO_LOOKUP为EPERM；同fd的INO_LOOKUP使用treeid=0/objectid=256根inode查询时，在CAP检查前直接返回内核真实子卷ID；旧objectid=0才误入路径搜索。当前实现改为正确查询模式。此结论不授予服务CAP_SYS_ADMIN、不猜mountinfo之外路径的ID。
+S098更正：上表保留S007当时内核/工具的实测历史；STATX_SUBVOL实际始于Linux6.10（不是6.7）。Ubuntu24.04 ARM64内核6.8上实测无该字段、非vault INO_LOOKUP为EPERM；同fd的INO_LOOKUP使用treeid=0/objectid=256根inode查询时，在CAP检查前直接返回内核真实子卷ID；旧objectid=0才误入路径搜索。当前实现改为正确查询模式。此结论不授予服务CAP_SYS_ADMIN、不猜mountinfo之外路径的ID。
 | `FS_IOC_GETFLAGS` | 目录与文件均可读（无特权）；`chattr +C` 的目录返回 `0x00800000`（`FS_NOCOW_FL`），普通目录/文件返回 `0x00000000`。内核 7.3 的 `linux/fs.h` 没有独立的 `FS_NODATASUM_FL`，btrfs 的 nodatasum 与 nodatacow 绑定出现，因此检查项为 `FS_NOCOW_FL` + 挂载/超级块选项里的 `nodatacow`/`nodatasum` |
 | reflink（FICLONE） | 同卷跨子卷 `cp --reflink=always` 成功，`filefrag -v` 报告共享 extent；同子卷克隆同样成功；跨文件系统（`/data` → loop btrfs 镜像）失败为 `Invalid cross-device link`，未留下目标文件 |
 
@@ -694,15 +694,15 @@ S098更正：上表保留S007当时内核/工具的实测历史；STATX_SUBVOL�
 | `/proc` | 拒绝 | `backend=other`、`fs_magic=0x9fa0` |
 | run 目录内自建 overlay（`lowerdir`/`upperdir`/`workdir` 都在 run 目录） | 拒绝 | `backend=overlay`、`fs_magic=0x794c7630` |
 | run 目录内 64 MiB 稀疏镜像 + `mkfs.ext4` | 拒绝 | `backend=ext4`、`fs_magic=0xef53` |
-| 子卷内嵌套子卷（`btrfs subvolume create volume/inner`） | 拒绝 Root；`inner` 本身作为 Root 接受 | `reason=nested_subvolume`、`nested_subvolume=inner subvol_id=…` |
+| 子卷内嵌套子卷（`btrfs subvolume create volume/inner`） | 拒绝 Vault；`inner` 本身作为 Vault 接受 | `reason=nested_subvolume`、`nested_subvolume=inner subvol_id=…` |
 | 子卷内 tmpfs 子挂载 | 拒绝 | `reason=nested_mount`、`submount=… fstype=tmpfs` |
-| `chattr +C` 目录作为 Root | 拒绝 | `reason=nocow_inode_flags`、`inode_flags=0x00800000` |
-| 子卷内 `chattr +C` 子目录 | 拒绝 Root | `nocow_directory=nocow flags=0x00800000` |
-| 内部状态目录在 Root 内 | 拒绝 | `reason=internal_state_overlap` |
+| `chattr +C` 目录作为 Vault | 拒绝 | `reason=nocow_inode_flags`、`inode_flags=0x00800000` |
+| 子卷内 `chattr +C` 子目录 | 拒绝 Vault | `nocow_directory=nocow flags=0x00800000` |
+| 内部状态目录在 Vault 内 | 拒绝 | `reason=internal_state_overlap` |
 | 内部状态目录在同一 `/data` 卷的另一子卷 | 接受并记录 | `note=internal_state_separate_subvolume=…`（同 FSID、不同子卷/挂载，reflink 仍可用） |
 | 内部状态目录在 loop 镜像卷（另一文件系统） | 拒绝 | `reason=internal_state_other_filesystem`（双方 FSID 都写进 detail） |
-| 已注册 Root 的 bind 别名 | 拒绝 | `reason=duplicate_root` |
-| 与已注册 Root 路径重叠（父/子目录） | 拒绝 | `reason=overlapping_root` |
+| 已注册 Vault 的 bind 别名 | 拒绝 | `reason=duplicate_vault` |
+| 与已注册 Vault 路径重叠（父/子目录） | 拒绝 | `reason=overlapping_vault` |
 | 8 MiB 稀疏文件、写入 4 KiB 后、1 MiB 随机文件 | `content_shape=sparse`/`sparse`/`fully_allocated` | 三种都输出 `placeholder_evidence=none`：稀疏不作为占位证据 |
 | 缺路径 / 不存在路径 | 退出码 2 / 1 | 用法错误与探测错误都不静默成功 |
 
@@ -724,7 +724,7 @@ S098更正：上表保留S007当时内核/工具的实测历史；STATX_SUBVOL�
 
 - design §11.4 的“`fstatfs` 类型 + mountinfo 记录、区分挂载 ID/设备身份/目录身份、不只看路径前缀”：已按 §15.1 实现并用真实样本证明（bind 别名同存储但 mount ID 不同；`/data/a` 与 `/data/abc` 无关）。
 - design §11.5 的“准入核对 btrfs 类型、FSID、子卷 ID、mount ID 和目录身份”：`probe` 给出全部五项；FSID 与子卷 ID 都有独立来源与来源标注。
-- design §11.5 允许 Root 位于另一块合规 btrfs 卷但要求显式记录复制成本：原型对**内部状态目录**与 Root 跨文件系统时保守拒绝（`internal_state_other_filesystem`），同文件系统跨挂载/跨子卷则接受并记录 `note=`。
+- design §11.5 允许 Vault 位于另一块合规 btrfs 卷但要求显式记录复制成本：原型对**内部状态目录**与 Vault 跨文件系统时保守拒绝（`internal_state_other_filesystem`），同文件系统跨挂载/跨子卷则接受并记录 `note=`。
 - design §11.4 的“普通稀疏文件不自动等于占位”：`mounts::content` 与 `content` 子命令只输出形态与 `placeholder_evidence=none`。
 - T35 的 FUSE/NFS/SMB 拒绝：本机没有可用 FUSE 服务、NFS/SMB 服务器与客户端权限，**未建真实样本**；分类逻辑（含 `fuse.*` 子类型、`fuseblk`、`nfs`/`nfs4`、`cifs`/`smb3`/`smbfs`）由 `mounts::admission` 的单测覆盖，这一点作为限制记录在 §15.6。
 
@@ -742,10 +742,10 @@ S098更正：上表保留S007当时内核/工具的实测历史；STATX_SUBVOL�
 ### 15.6 限制与未核验项
 
 - **FUSE/NFS/SMB 无真实挂载样本**：需要 FUSE daemon、NFS server（或客户端可挂载的导出）与 SMB 服务；本轮只由纯逻辑单测覆盖分类，未做真实拒绝样本。恢复条件：提供本地 `sshfs`/`rclone` 之类的 FUSE 挂载点或本机 NFS/SMB 导出后，把路径加进 `run-storage-admission.sh`。
-- **扫描上限**：默认 20000 条目 / 32 层；更大的 Root 得到 `decision=inconclusive`（退出码 4），不当作通过。真实大目录（例如整个 `/wrd` 源码树）未做规模测试。
+- **扫描上限**：默认 20000 条目 / 32 层；更大的 Vault 得到 `decision=inconclusive`（退出码 4），不当作通过。真实大目录（例如整个 `/wrd` 源码树）未做规模测试。
 - **文件级 NOCOW**：遍历阶段只对**目录**读 `FS_IOC_GETFLAGS`；目录内单个文件的 NOCOW 由 `content` 子命令/后续扫描器报告，准入不逐文件检查（成本原因）。
 - **btrfs 设备号语义**：`statx` 的 `stx_dev` 是每子卷匿名设备号，与 mountinfo 后端设备不同；任何后续卡不能用设备号做卷身份或“同卷”判断。
-- **旧内核**：没有 `STATX_SUBVOL` 的内核（如 Ubuntu 24.04 的 6.8）上，非 root 进程无法通过 `BTRFS_IOC_INO_LOOKUP` 取子卷 ID，会得到 `subvolume_identity_unavailable`；此时需要给服务进程 `CAP_SYS_ADMIN`，或让 Root 本身就是挂载点以便用 mountinfo 的 `subvolid=` 兜底。Ubuntu 24.04 未实测（首发兼容环境仍是待验证项，见 §8.2）。
+- **旧内核**：没有 `STATX_SUBVOL` 的内核（如 Ubuntu 24.04 的 6.8）上，非 vault 进程无法通过 `BTRFS_IOC_INO_LOOKUP` 取子卷 ID，会得到 `subvolume_identity_unavailable`；此时需要给服务进程 `CAP_SYS_ADMIN`，或让 Vault 本身就是挂载点以便用 mountinfo 的 `subvolid=` 兜底。Ubuntu 24.04 未实测（首发兼容环境仍是待验证项，见 §8.2）。
 - **第三方 stub/占位**：Linux 上没有可依赖的统一判定；本轮只验证“稀疏文件不是占位证据”，没有也不能声称识别第三方 daemon 的占位/回源视图。
 - **可移植检查不覆盖本 crate**：`crates/platform-linux-server` 不在 `default-members`，`cargo xtask check`/CI 不构建它；必须显式 `cargo test --locked -p vaultsyncd-platform-linux-server` 或跑 `tests/platform/linux/` 脚本（与 `crates/platform-windows` 的分工一致）。
 
@@ -804,7 +804,7 @@ S098更正：上表保留S007当时内核/工具的实测历史；STATX_SUBVOL�
 - **替换与外部写入的窗口仍在**：`statx` 指纹无法证明外部程序不再写（C33）；特权写入者可以把 mtime/ctime 改回去。脚本用 `--race-hook` 注入竞争来验证“观察到不一致就暂停”，未做高速并发压力测试。
 - **暂存文件对观察者可见**：原型把暂存文件名放在目标目录内（`.vaultsyncd-stage.*`），用户/外部 watcher 在替换前可能看到该临时名；产品若需要隐藏，需在目标子卷内另建暂存目录（同挂载仍可原子 `rename`）。
 - **跨文件系统复制未做规模测试**：样本 4 MiB；未测大文件吞吐、`ENOSPC` 中途失败与部分写入的清理（`reflink_failed`/`staging_io_failed` 路径由单测覆盖，没有真实满盘样本）。
-- **对象只读的边界**：`0444` 只约束普通写入者；同用户仍可 `chmod`，root 可改写。真正的对象保护由部署权限/备份策略承担（design C37）。
+- **对象只读的边界**：`0444` 只约束普通写入者；同用户仍可 `chmod`，vault 可改写。真正的对象保护由部署权限/备份策略承担（design C37）。
 - **可移植检查不覆盖本 crate**：仍不在 `default-members`（同 §15.6）。
 
 ## 17. S011 CFAPI 内容供给（2026-11-05 实测）

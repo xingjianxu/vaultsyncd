@@ -2,7 +2,7 @@
 
 `vaultsyncd-agent.exe` 可在 GUI 尚未启动时独立同步；入口是用户会话进程。S071 提供受限 named pipe 状态查询，S072 提供 1.2 管理命令与持久连接，S073 提供只经该管道工作的 `vaultsyncd-cli.exe`。自动启动注册仍由后续卡提供。先创建互不重叠的普通本地 NTFS 同步目录、内部缓存目录和状态目录。
 
-最小 JSON 配置如下。所有 ID 换为真实的 32 位小写十六进制稳定身份；`root_id` 来自已授权服务端 Root，重启必须复用原身份及绑定路径。
+最小 JSON 配置如下。所有 ID 换为真实的 32 位小写十六进制稳定身份；`vault_id` 来自已授权服务端 Vault，重启必须复用原身份及绑定路径。
 
 ```json
 {
@@ -12,7 +12,7 @@
   "poll_millis": 1000,
   "bindings": [{
     "id": "33333333333333333333333333333333",
-    "root_id": "44444444444444444444444444444444",
+    "vault_id": "44444444444444444444444444444444",
     "path": "C:/Sync/Work",
     "cache": "C:/vaultsyncd/cache/work",
     "mode": "full"
@@ -37,7 +37,7 @@ vaultsyncd-agent.exe --config C:/vaultsyncd/agent.json
 
 ## Explorer 占位状态（S129）
 
-正式 agent 在启动恢复及新增绑定时注册 Explorer 同步根；旧版本仅注册 CFAPI 的目录会在新版 agent 启动时补齐，继续使用原 BindingId、RootId 和路径。注册失败明确报错，不通过注销根修复，也不重新下载或释放现有文件。退出后保留注册与占位文件。
+正式 agent 在启动恢复及新增绑定时注册 Explorer 同步根；旧版本仅注册 CFAPI 的目录会在新版 agent 启动时补齐，继续使用原 BindingId、VaultId 和路径。注册失败明确报错，不通过注销根修复，也不重新下载或释放现有文件。退出后保留注册与占位文件。
 
 在 Explorer 的同步目录查看“状态”列：未下载文件显示空心云朵；完整下载的文件显示绿色勾选；通过产品“释放空间”成功释放后恢复云朵。图标由 Windows 根据真实驻留和 pin 状态生成。切换到按需模式不会自动释放已下载内容。若列被隐藏，在详细信息视图的列标题菜单中显示“状态”；本程序不修改用户的 Explorer 全局显示设置。
 
@@ -61,7 +61,7 @@ vaultsyncd-cli.exe --json pause --binding-id <32位小写十六进制>
 vaultsyncd-cli.exe --json download --binding-id <ID> --entry-id <ID>
 vaultsyncd-cli.exe --json release --binding-id <ID> --entry-id <ID>
 vaultsyncd-cli.exe --json export-recovery --binding-id <ID> --destination C:/recovery
-vaultsyncd-cli.exe --json roots
+vaultsyncd-cli.exe --json vaults
 vaultsyncd-cli.exe --json history --binding-id <ID> --entry-id <ID>
 vaultsyncd-cli.exe --json restore --binding-id <ID> --entry-id <ID> --operation-id <ID> --base-revision <N>
 ```
@@ -77,6 +77,6 @@ vaultsyncd-cli.exe --json restore --binding-id <ID> --entry-id <ID> --operation-
 - 服务端 `delete` 事件现在携带被删版本的 `version_id`/`hash`/`size`（客户端删除与外部删除一致）。客户端同 revision 的已确认删除基线因此能与事件事实相等，不会整批拒绝或把旧条目复活。
 - 远端删除落在“本地已修改但尚未上传”的同一路径时，agent 先保留本地未确认内容；上传协调完成后可用**新 EntryId** 重新占用同名路径。旧 EntryId 不复活，原内容在回收站/历史可查。
 - 被腾空的路径代际不会清零：本地 preserve-both 改名后远端版本在原路径安装会得到更大的 generation，避免与已持久化证据冲突。
-- CFAPI `adopt_complete` 只允许把**完整本地内容**（`on_disk >= size`，同 Binding/Root）重新绑定到新条目；不完整占位仍拒绝换身份，避免丢弃另一个条目的云状态。
+- CFAPI `adopt_complete` 只允许把**完整本地内容**（`on_disk >= size`，同 Binding/Vault）重新绑定到新条目；不完整占位仍拒绝换身份，避免丢弃另一个条目的云状态。
 
 复现入口见 `docs/operations/windows-lab.md` §20 与 `tests/platform/windows/run-native-e2e.sh`；三个客户端是同一台客体的三个隔离身份、agent 顺序运行。

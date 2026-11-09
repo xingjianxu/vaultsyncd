@@ -27,23 +27,23 @@ builtins.getFlake "git+file:///wrd/prj/vaultsyncd?rev=3640f3a3f72e09ba1302ffd194
 | 服务 | `vaultsyncd.service`，enabled/active |
 | HTTP | **`127.0.0.1:18721`**，仅本机试用；未开放公网入口 |
 | ServerId | `9e9d06c5d0d371a43c2cb4043de02cd8`，回滚恢复与重启后均相同 |
-| 样本RootId | `58e698e16616ff0162055df963f9c1fa` |
-| 服务账号 | `vaultsyncd-trial`，UID/GID985，非root、零capabilities、NoNewPrivileges |
-| 新建普通镜像 | `/data/vaultsyncd-trial-s096/volume.img`，2GiB稀疏文件，root0600 |
+| 样本VaultId | `58e698e16616ff0162055df963f9c1fa` |
+| 服务账号 | `vaultsyncd-trial`，UID/GID985，非vault、零capabilities、NoNewPrivileges |
+| 新建普通镜像 | `/data/vaultsyncd-trial-s096/volume.img`，2GiB稀疏文件，vault0600 |
 | 独立 btrfs 挂载 | `/data/vaultsyncd-trial-s096/mnt`，fstab显式loop/nofail/user_subvol_rm_allowed/noatime，依赖 `/data` |
 | 内部状态 | `.../mnt/state`，服务UID0700，包含DB、对象、staging、admin/socket和backups |
-| 唯一允许Root基目录 | `.../mnt/samples`，仅可丢弃 `keep.txt` 与 `s096-test.txt`/`s096-switch.txt` |
-| owner初始密码文件 | `/var/lib/vaultsyncd-trial-credentials/owner.password`，root0600，父目录root0700 |
+| 唯一允许Vault基目录 | `.../mnt/samples`，仅可丢弃 `keep.txt` 与 `s096-test.txt`/`s096-switch.txt` |
+| owner初始密码文件 | `/var/lib/vaultsyncd-trial-credentials/owner.password`，vault0600，父目录vault0700 |
 
 镜像由本卡确认路径不存在后，以 `O_EXCL` 创建普通文件，再显式执行一次 `mkfs.btrfs`；未格式化既有设备。NixOS 声明只负责挂载，**不会创建或格式化镜像**。`/data` 原有挂载和选项完全不变，只有专用镜像允许普通UID删除备份子卷。它是容量受限的试用布局，不代表正式生产磁盘规划；已有挂载点为空不能代替验证实际镜像已挂载。
 
-状态和用户Root分开，Root由用户拥有并逐项ACL授权，既有资料目录没有被递归chown/chmod。服务没有sudo/CAP_SYS_ADMIN；备份准备区的子卷、只读快照和删除均由服务UID通过正常btrfs权限完成。Root内不允许嵌套挂载/子卷，原身份/CoW/扫描准入仍由产品执行。
+状态和用户Vault分开，Vault由用户拥有并逐项ACL授权，既有资料目录没有被递归chown/chmod。服务没有sudo/CAP_SYS_ADMIN；备份准备区的子卷、只读快照和删除均由服务UID通过正常btrfs权限完成。Vault内不允许嵌套挂载/子卷，原身份/CoW/扫描准入仍由产品执行。
 
 首次初始化在服务离线、空状态上，以服务账号执行包内 `vaultsyncd-admin init --state-dir <state>`，密码经匿名stdin管道输入；没有密码参数、Nix secret选项或默认密码。本卡随机生成的密码只在受限运行时文件与初始化/登录进程内存出现；没有写进store、项目Git或证据日志。该文件保存的是**初始**凭据，之后改密需由运维同步管理；服务启动不读取它、不自动重置owner。不要将其复制到artifacts或Git。
 
 ## 已执行的发布与验收顺序
 
-先保存旧配置diff、锁、generation列表、SSH banner与既有服务PID/InvocationID、HTTP状态，并为旧 system 建GCroot。未改动配置求值输出与运行 system 完全相同后，构建新源项目包、准备专用卷/样本/owner，新增主机文件并 `git add`（否则flake看不到新文件）。
+先保存旧配置diff、锁、generation列表、SSH banner与既有服务PID/InvocationID、HTTP状态，并为旧 system 建GC root。未改动配置求值输出与运行 system 完全相同后，构建新源项目包、准备专用卷/样本/owner，新增主机文件并 `git add`（否则flake看不到新文件）。
 
 ```sh
 # 从上述证据目录运行，result也是该目录内的构建链接。
@@ -52,7 +52,7 @@ sudo nixos-rebuild dry-activate --store-path /nix/store/2qayb90x692izny4wi4wrg6l
 sudo nixos-rebuild test --store-path /nix/store/2qayb90x692izny4wi4wrg6l0dg8dhsq-nixos-system-wks-lab-26.11.20261102.7356cc7
 ```
 
-`test` **立即激活**，不更改下次启动默认generation，也没有定时自动回滚。dry-activate确认SSH配置逐字节相同，仅新增项目单元，以及新增账号导致的polkit重启/dbus reload，没有网络/既有应用/VM重启。以下验收脚本通过真实HTTP和同UID IPC操作唯一试用Root，密码只从root受限文件读入内存：
+`test` **立即激活**，不更改下次启动默认generation，也没有定时自动回滚。dry-activate确认SSH配置逐字节相同，仅新增项目单元，以及新增账号导致的polkit重启/dbus reload，没有网络/既有应用/VM重启。以下验收脚本通过真实HTTP和同UID IPC操作唯一试用Vault，密码只从vault受限文件读入内存：
 
 ```sh
 nix develop --command python3 deploy/nixos/verify-instance.py /nix/store/fnc7wrxq8y48gza4i52l598k1k12slma-vaultsyncd-0.1.0 /data/vaultsyncd-deploy/S096-20261107T010323-3856550 test
@@ -60,7 +60,7 @@ nix develop --command python3 deploy/nixos/verify-instance.py /nix/store/fnc7wrx
 
 完成本地观察 → 上传分块与finalize → committed → 固定版本下载；重启服务后复核ServerId、内容字节、版本与同OpId幂等重放，以及无特权备份prepare/verify-source/release。`pending`不算成功。每个phase只创建一次带固定测试名的新样本；存在则拒绝，日常健康检查不反复运行该写入验收。
 
-随后实际回退旧system做 `test`：试用服务inactive、18721拒绝连接、镜像卸载；SSH及10个既有关键服务的PID/InvocationID保持。再次对新system执行 `test`，`verify-instance.py ... recovery` 核对重挂载后原ServerId/Root/固定版本SHA256与持久Op状态，才执行：
+随后实际回退旧system做 `test`：试用服务inactive、18721拒绝连接、镜像卸载；SSH及10个既有关键服务的PID/InvocationID保持。再次对新system执行 `test`，`verify-instance.py ... recovery` 核对重挂载后原ServerId/Vault/固定版本SHA256与持久Op状态，才执行：
 
 ```sh
 sudo nixos-rebuild switch --store-path /nix/store/2qayb90x692izny4wi4wrg6l0dg8dhsq-nixos-system-wks-lab-26.11.20261102.7356cc7
@@ -85,13 +85,13 @@ sudo journalctl -u vaultsyncd.service --no-pager
 sudo nixos-rebuild test --store-path /nix/store/h2wjnyc8qi268a1z6lylxmqld05y0a8n-nixos-system-wks-lab-26.11.20261102.7356cc7
 ```
 
-这是generation237的已知健康配置；旧system及准确新配置源的GCroot都保留。若健康后决定让旧配置成为持久默认，再对同一旧store路径执行 `nixos-rebuild switch --store-path ...`（该持久旧配置switch没有在本卡执行，实际演练为test回退与返回新配置）。磁盘镜像、状态和凭据不随回退删除。主机源码还包含启用声明，恢复后需明确回退/禁用 `ba1837a` 中的该声明再做普通flake rebuild；否则普通rebuild会再次启用试用实例。
+这是generation237的已知健康配置；旧system及准确新配置源的GC root都保留。若健康后决定让旧配置成为持久默认，再对同一旧store路径执行 `nixos-rebuild switch --store-path ...`（该持久旧配置switch没有在本卡执行，实际演练为test回退与返回新配置）。磁盘镜像、状态和凭据不随回退删除。主机源码还包含启用声明，恢复后需明确回退/禁用 `ba1837a` 中的该声明再做普通flake rebuild；否则普通rebuild会再次启用试用实例。
 
 SSH一直运行，回退不依赖项目服务或密码。日志/原diff/完整配置源/新旧system路径在证据目录，`rollback.sh`也保留已知旧路径。TLS、同源代理与对外入口由S097单独验收；当前HTTP例外严格限定回环试用端口。
 
 ## S097 当前 HTTPS 开发入口（generation240）
 
-S097 已在同一真实主机执行两轮 build → dry-activate → test → 严格 TLS/健康检查 → switch，第二轮修复实际服务重启的 Root 身份误报。当前主机提交 `ebd832b7bbe751bfc87cbd9b9260ec53a1a26efe`，实际运行与默认 **generation240**：
+S097 已在同一真实主机执行两轮 build → dry-activate → test → 严格 TLS/健康检查 → switch，第二轮修复实际服务重启的 Vault 身份误报。当前主机提交 `ebd832b7bbe751bfc87cbd9b9260ec53a1a26efe`，实际运行与默认 **generation240**：
 
 ```
 /nix/store/51r012i21j0i26br4319xi8k5f0sdvym-nixos-system-wks-lab-26.11.20261102.7356cc7
@@ -99,18 +99,18 @@ S097 已在同一真实主机执行两轮 build → dry-activate → test → �
 
 主机原 dirty `flake.lock` 仍为前述SHA256，未更新或提交。`hosts/wks-lab/system.nix` 的后端固定永久仓库 `git+file:///wrd/prj/vaultsyncd?rev=fd2f52d2f58978b09fccaec3ba87b2377910a1eb`，实际重新构建的包是 `/nix/store/sw8v63x3hv5hql5qfapx0qyrlgc78ikn-vaultsyncd-0.1.0`；不是旧S094产物。代理配置独立固定 `d90a263d962795000aeb2eecfd430891a94a26d0` 的 `deploy/reverse-proxy/caddy.nix`。两源已在master永久可达，均不引用任务树。构建清单保留各自真实来源；本卡PE与包是0.1.0，不能重标为S100后续0.1.1。
 
-提交后的主机配置连同原dirty锁再求值仍产生上述运行system。精确配置源`/nix/store/ky73gbi10wr9xbddjxyhf0n0df0wnk0i-source`、NAR `sha256-x0+sTSHtxF4sUhTQRZlYnzbFYbOunlktgo7+f2kLWQo=`及当前system均有证据目录中的GCroot；主机commit不能单独代替这份锁来源。
+提交后的主机配置连同原dirty锁再求值仍产生上述运行system。精确配置源`/nix/store/ky73gbi10wr9xbddjxyhf0n0df0wnk0i-source`、NAR `sha256-x0+sTSHtxF4sUhTQRZlYnzbFYbOunlktgo7+f2kLWQo=`及当前system均有证据目录中的GC root；主机commit不能单独代替这份锁来源。
 
 | 路径/入口 | 当前保证 |
 | --- | --- |
 | `https://localhost:18443`、`https://127.0.0.1:18443` | Caddy仅监听127.0.0.1，新vhost复用既有Caddy |
 | Windows `https://10.0.2.2:18443` | Quickemu NAT访问同一开发入口，实际Edge与产品PE验收 |
 | 后端 `http://127.0.0.1:18721` | 回环HTTP，仅供本机TLS反代与管理检查 |
-| TLS运行时目录 | `/var/lib/vaultsyncd-tls-s097`，root:caddy0710；ca.key root0600，server.key root:caddy0640 |
+| TLS运行时目录 | `/var/lib/vaultsyncd-tls-s097`，vault:caddy0710；ca.key vault0600，server.key vault:caddy0640 |
 | 公开开发CA | SHA256 `26:2F:E2:25:3A:8A:27:A0:5A:A2:1C:D1:B5:89:C6:81:12:EB:C4:79:9E:39:F9:80:6D:DF:E4:A8:47:E6:F5:7D` |
 | 证据 | `/data/vaultsyncd-deploy/S097-20261107T012157-3886231`；任务artifacts只含筛选的公开材料 |
 
-此入口使用显式信任私有CA：宿主浏览器只在临时NSS HOME导入；Windows在核对上述指纹后导入Quickemu当前用户Root，信任仍保留。叶证书SAN为localhost/127.0.0.1/10.0.2.2，有效30天，CA365天；到期须用同样受限运行时流程续签并reload，私钥不得复制到store、Git或证据。**没有公网域名、ACME、外网监听或公开部署验收**。正式对外前须另行配置真实域名证书、访问范围及证书续期；开发CA不能作为公网信任声明。
+此入口使用显式信任私有CA：宿主浏览器只在临时NSS HOME导入；Windows在核对上述指纹后导入Quickemu当前用户Vault，信任仍保留。叶证书SAN为localhost/127.0.0.1/10.0.2.2，有效30天，CA365天；到期须用同样受限运行时流程续签并reload，私钥不得复制到store、Git或证据。**没有公网域名、ACME、外网监听或公开部署验收**。正式对外前须另行配置真实域名证书、访问范围及证书续期；开发CA不能作为公网信任声明。
 
 Web/API保持同源；代理保留原Host，覆盖受信转发字段并去掉客户端Forwarded，不启用跨源写入。request body上限16777216字节，真实最大块成功，+1字节413；`flush_interval -1` 与5分钟stream_close_delay用于SSE，没有整个响应体超时或自动重试非幂等写。只reverse_proxy，不提供任意file_server或Unix管理socket代理。页面、管理API仍受服务端会话/owner权限；路径探测包括admin/socket、在线DB、/etc/passwd和密码路径均404。会话cookie为Secure/HttpOnly/SameSite=Strict。
 
@@ -118,21 +118,21 @@ Linux Chromium和Windows Edge实际完成HTTPS页面登录、16MiB上传、final
 
 早期Playwright异常格式曾在临时输出中带两枚本次测试cookie，已立即用对应会话logout吊销并清理原值，失败日志不归档；没有输出密码/私钥。最终脚本只记录错误类别与源码位置，finally吊销自身会话，禁止导出HAR/cookie/profile。Windows首轮外层500秒控制器在人工CA提示时超时，内层实际worker退出0且随后Edge矩阵通过；最终900秒控制器改动仅原生语法校验，不声称重跑了整条原生链。
 
-## S097 Root 身份修复与恢复限制
+## S097 Vault 身份修复与恢复限制
 
-旧注册快照含mount_id1031/dev0:128；当前服务namespace现场为mount916/dev0:110，但FSID `a3f322713ab8458f9af3666696536cf7`、subvol5、目录inode258及birth `1793984671.665929329`完全相同。原管理健康消费者直接比较历史瞬态字段而误报mount_changed；实际上传仍成功。现在启动时完整核对持久身份、CoW/访问权/嵌套准入，再为本进程建立共享RootHandle；诊断、观察、执行与启动重放均使用此表。历史blob不修改，新注册继续严格比较当前围栏，活进程bind/卸载/权限变化不会自动重新准入。目录枚举使用固定fd的openat点目录取得独立游标，避免并发扫描污染偏移造成假空目录。
+旧注册快照含mount_id1031/dev0:128；当前服务namespace现场为mount916/dev0:110，但FSID `a3f322713ab8458f9af3666696536cf7`、subvol5、目录inode258及birth `1793984671.665929329`完全相同。原管理健康消费者直接比较历史瞬态字段而误报mount_changed；实际上传仍成功。现在启动时完整核对持久身份、CoW/访问权/嵌套准入，再为本进程建立共享VaultHandle；诊断、观察、执行与启动重放均使用此表。历史blob不修改，新注册继续严格比较当前围栏，活进程bind/卸载/权限变化不会自动重新准入。目录枚举使用固定fd的openat点目录取得独立游标，避免并发扫描污染偏移造成假空目录。
 
-`fence-acceptance.py`以独立NixOS同策略单元、`/data/vs-s097-fences-*`新普通btrfs镜像验证；离线`fence-boundary`示例先取StateLock再通过真实适配器持久化边界，不往生产加故障开关。最终run `...025123-4077079`真实测得namespace4026534527→4026534585、mount1033→1170，同dev199、Root/blob/seq4/内容保持健康；活进程同目录bind blocked且4条目/seq不变，撤销覆盖恢复。Prepared同dev服务重启redo committed；卷重挂实测dev199→201后Published仅补元数据，文件inode/birth/摘要不变。旧Prepared的FileKey没有birth，dev201→199时**保持pending、Prepared和全局needs_recovery/503**，两份内容与对象保留；不能忽略旧dev冒充强身份或自动覆盖。离线未完成现场保留，单元/keeper/loop均已停止、卸载、分离。并发8线程×16轮×3000文件枚举完整。
+`fence-acceptance.py`以独立NixOS同策略单元、`/data/vs-s097-fences-*`新普通btrfs镜像验证；离线`fence-boundary`示例先取StateLock再通过真实适配器持久化边界，不往生产加故障开关。最终run `...025123-4077079`真实测得namespace4026534527→4026534585、mount1033→1170，同dev199、Vault/blob/seq4/内容保持健康；活进程同目录bind blocked且4条目/seq不变，撤销覆盖恢复。Prepared同dev服务重启redo committed；卷重挂实测dev199→201后Published仅补元数据，文件inode/birth/摘要不变。旧Prepared的FileKey没有birth，dev201→199时**保持pending、Prepared和全局needs_recovery/503**，两份内容与对象保留；不能忽略旧dev冒充强身份或自动覆盖。离线未完成现场保留，单元/keeper/loop均已停止、卸载、分离。并发8线程×16轮×3000文件枚举完整。
 
-新包部署后真实试用服务又执行一次systemctl restart，严格Chromium页面确认“挂载核对通过/本进程初始采集完成”；原ServerId/Root/seq18、历史blob、全部样本字节、先前Linux/Edge committed操作及固定版本摘要不变。服务仍UID985、零capability、NoNewPrivileges=1；10个既有服务和SSH的PID/InvocationID保持，3200/3300/15312均200。上述故障注入只作用隔离run。
+新包部署后真实试用服务又执行一次systemctl restart，严格Chromium页面确认“挂载核对通过/本进程初始采集完成”；原ServerId/Vault/seq18、历史blob、全部样本字节、先前Linux/Edge committed操作及固定版本摘要不变。服务仍UID985、零capability、NoNewPrivileges=1；10个既有服务和SSH的PID/InvocationID保持，3200/3300/15312均200。上述故障注入只作用隔离run。
 
-S097前的generation239（保留TLS、旧Root诊断行为）为 `/nix/store/bcwryfrqcc8sajf5kk7469q9j8g8r31d-nixos-system-wks-lab-26.11.20261102.7356cc7`；generation238不启用本卡TLS。S097没有再次激活239作回滚演练，S096实际旧代际回滚证据仍按上一节。需要恢复旧配置时可用明确store path执行`nixos-rebuild test --store-path ...`，它立即激活且**不定时回滚**；保留SSH和旧路径，确认健康后再决定switch。正常flake重建还要同步回退host文件固定源，不能只更改运行generation。试用卷/凭据不随配置回退删除。
+S097前的generation239（保留TLS、旧Vault诊断行为）为 `/nix/store/bcwryfrqcc8sajf5kk7469q9j8g8r31d-nixos-system-wks-lab-26.11.20261102.7356cc7`；generation238不启用本卡TLS。S097没有再次激活239作回滚演练，S096实际旧代际回滚证据仍按上一节。需要恢复旧配置时可用明确store path执行`nixos-rebuild test --store-path ...`，它立即激活且**不定时回滚**；保留SSH和旧路径，确认健康后再决定switch。正常flake重建还要同步回退host文件固定源，不能只更改运行generation。试用卷/凭据不随配置回退删除。
 
 ## S112 当前正式域名部署（2026-11-07，generation244）
 
 以下为 S112 验收时的历史快照；当前运行用户、版本和 generation 以 S113 节为准。
 
-实际入口仍为 `/etc/nixos#wks-lab`。项目固定源 **4856738641ea3421c949476e6951d0a461209223**，同源包 `/nix/store/6nx4qmvrhj1rk3aa9mrjaxky56m4r7ck-vaultsyncd-0.1.1`，构建含65项包内测试通过。主机实现 `9c2133f`，挂载修正 `56bd93b09760d87f068c7a617b8a79904d14b852` 已ff合入主机main；主机锁从干净基线 `93dfcae` 保持不变。主机准确源 `/nix/store/kdr0v41db6vcd39kp9znz5b3xky170dp-source` 与旧/新system都有显式GCroot，证据在 `/data/vaultsyncd-deploy/S112-20261107T133454/`。
+实际入口仍为 `/etc/nixos#wks-lab`。项目固定源 **4856738641ea3421c949476e6951d0a461209223**，同源包 `/nix/store/6nx4qmvrhj1rk3aa9mrjaxky56m4r7ck-vaultsyncd-0.1.1`，构建含65项包内测试通过。主机实现 `9c2133f`，挂载修正 `56bd93b09760d87f068c7a617b8a79904d14b852` 已ff合入主机main；主机锁从干净基线 `93dfcae` 保持不变。主机准确源 `/nix/store/kdr0v41db6vcd39kp9znz5b3xky170dp-source` 与旧/新system都有显式GC root，证据在 `/data/vaultsyncd-deploy/S112-20261107T133454/`。
 
 ```nix
 # /etc/nixos/hosts/wks-lab/default.nix 的 features.server 块
@@ -140,13 +140,13 @@ vaultsync = {
   enable = true;
   rev = "4856738641ea3421c949476e6951d0a461209223";
   stateDir = "/var/lib/vaultsyncd";
-  rootPaths = [ "/data/vaultsyncd/roots" ];
+  vaultPaths = [ "/data/vaultsyncd/vaults" ];
   port = 8721;
   caddy.domain = "vsyncd.132140.xyz";
 };
 ```
 
-主机 `features/server/vaultsync.nix` 条件导入该提交的项目flake模块，消费其 `lib.caddyReverseProxy`。`enable/repository/rev` 必须放在主机字面features块（imports依赖静态host.features）；rev要求40位已提交SHA，未启用主机不读取本地仓库。可配置 `user/group/extraGroups/stateDir/rootPaths/port/log.{level,format}/caddy.{enable,domain,extraConfig}`；后端固定绑定回环。关闭feature会停止服务及本域名代理，保留挂载、账号和数据；`caddy.enable=false`只撤代理。主机vhost经既有 `features.server.caddy.virtualHosts` 桥接，默认不写access log，不直接暴露管理socket或文件。
+主机 `features/server/vaultsync.nix` 条件导入该提交的项目flake模块，消费其 `lib.caddyReverseProxy`。`enable/repository/rev` 必须放在主机字面features块（imports依赖静态host.features）；rev要求40位已提交SHA，未启用主机不读取本地仓库。可配置 `user/group/extraGroups/stateDir/vaultPaths/port/log.{level,format}/caddy.{enable,domain,extraConfig}`；后端固定绑定回环。关闭feature会停止服务及本域名代理，保留挂载、账号和数据；`caddy.enable=false`只撤代理。主机vhost经既有 `features.server.caddy.virtualHosts` 桥接，默认不写access log，不直接暴露管理socket或文件。
 
 | 项目 | 当前配置 |
 | --- | --- |
@@ -156,13 +156,13 @@ vaultsync = {
 | 后端 | `127.0.0.1:8721`，`vaultsyncd.service`，UID/GID984，零capabilities、NoNewPrivileges |
 | 正式ServerId | `69dbfa9fdca2bfb8a239b88d0fd30d53`（与旧试用实例不同，客户端连接须核对） |
 | 状态 | 新btrfs子卷 `/data/vaultsyncd/state`（subvol2659），显式挂至 `/var/lib/vaultsyncd`，0700 |
-| Root白名单 | `/data/vaultsyncd/roots`，初始注册 `/data/vaultsyncd/roots/documents`，服务账号所有0700 |
-| 文档RootId | `cf8a15ace18abe4d9c3027ac25c30070` |
-| 初始登录 | `owner`；随机密码在 `/var/lib/vaultsyncd-credentials/owner.password`，root0600，父目录0700 |
+| Vault白名单 | `/data/vaultsyncd/vaults`，初始注册 `/data/vaultsyncd/vaults/documents`，服务账号所有0700 |
+| 文档VaultId | `cf8a15ace18abe4d9c3027ac25c30070` |
+| 初始登录 | `owner`；随机密码在 `/var/lib/vaultsyncd-credentials/owner.password`，vault0600，父目录0700 |
 
 在受信终端用 `sudo cat /var/lib/vaultsyncd-credentials/owner.password` 读取初始密码。服务启动不读此文件，不会重置owner；改密后需独立管理凭据，文件不代表永远有效的当前密码。初始化经离线admin匿名stdin完成，不通过argv/env/store传递。真实密码、token、cookie、私钥未进入Git或证据；运行日志、argv、生成TOML核对不含初始密码。
 
-只创建了不存在的新目录/子卷，未格式化既有设备、未递归改权既有资料。挂载CoW、数据校验与压缩保留；`user_subvol_rm_allowed`须同时配置 `/data` 首次挂载和状态挂载，这是**整个btrfs文件系统的选项**，允许普通UID在原有目录权限约束下删除自己拥有的子卷，不限于状态子卷。首次test因仅配置后续子卷挂载而被preflight拒绝，失败日志保留；修正首次挂载、实际remount并核对findmnt后重跑通过。行为依据 [btrfs挂载文档](https://btrfs.readthedocs.io/en/stable/Administration.html)。服务没有sudo/CAP_SYS_ADMIN。Root内仍禁止嵌套子卷/挂载，注册及恢复围栏未降低。
+只创建了不存在的新目录/子卷，未格式化既有设备、未递归改权既有资料。挂载CoW、数据校验与压缩保留；`user_subvol_rm_allowed`须同时配置 `/data` 首次挂载和状态挂载，这是**整个btrfs文件系统的选项**，允许普通UID在原有目录权限约束下删除自己拥有的子卷，不限于状态子卷。首次test因仅配置后续子卷挂载而被preflight拒绝，失败日志保留；修正首次挂载、实际remount并核对findmnt后重跑通过。行为依据 [btrfs挂载文档](https://btrfs.readthedocs.io/en/stable/Administration.html)。服务没有sudo/CAP_SYS_ADMIN。Vault内仍禁止嵌套子卷/挂载，注册及恢复围栏未降低。
 
 旧镜像 `/data/vaultsyncd-trial-s096/volume.img`、挂载、UID985、全部历史试用状态及 `/var/lib/vaultsyncd-trial-credentials/owner.password` 保留；正式实例不复用旧DB。旧localhost:18443 vhost已撤下，开发CA与私钥未删除，也不用于公网信任。
 
@@ -176,11 +176,11 @@ sudo nixos-rebuild test --store-path /nix/store/jg54j3w2arc95lc3asx071w2b75z95kq
 sudo nixos-rebuild switch --store-path /nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7
 ```
 
-主机构建日志在证据目录。当前运行/default system均为上述jg54j3w2路径，切换后重新核对原ServerId、Root健康、committed状态与固定版本SHA，结果见 `switch-health.json`。更新只改已构建项目提交与feature配置，依次build/test/健康/switch；不更新主机依赖。
+主机构建日志在证据目录。当前运行/default system均为上述jg54j3w2路径，切换后重新核对原ServerId、Vault健康、committed状态与固定版本SHA，结果见 `switch-health.json`。更新只改已构建项目提交与feature配置，依次build/test/健康/switch；不更新主机依赖。
 
 验收：严格系统CA/主机名的HTTPS健康和capabilities，16MiB上传→finalize→committed，固定版本下载SHA与磁盘一致；+1字节413；重启后原ServerId/版本/同OpId重放；同UID IPC及普通UID btrfs备份prepare/verify/release通过。新Chromium配置无私有CA/不忽略TLS，真实Web登录、Secure/HttpOnly/SameSite=Strict cookies、SSE初始seq及16秒心跳通过；敏感文件/DB/socket探测404。首轮脚本把16MiB按默认分块发送而失败，改为明确协商16MiB后通过；浏览器心跳等待改为真实流等待与页面观测后通过，失败日志不冒充通过。
 
-`deploy/nixos/verify-public.py` 与 `verify-public-browser.py` 为显式部署验收脚本，前者会在指定Root创建新样本并重启指定服务，**不是日常健康探测**。只对本次专用Root执行；使用新run_id，拒绝覆盖旧样本/证据。两脚本从受限运行时文件读密码，只输出公开状态、哈希及Cookie属性，并注销自身会话。证据 `acceptance-test2.json`、`browser.json`、`existing-services-test.json`。日常只用：
+`deploy/nixos/verify-public.py` 与 `verify-public-browser.py` 为显式部署验收脚本，前者会在指定Vault创建新样本并重启指定服务，**不是日常健康探测**。只对本次专用Vault执行；使用新run_id，拒绝覆盖旧样本/证据。两脚本从受限运行时文件读密码，只输出公开状态、哈希及Cookie属性，并注销自身会话。证据 `acceptance-test2.json`、`browser.json`、`existing-services-test.json`。日常只用：
 
 ```sh
 curl --fail https://vsyncd.132140.xyz/v1/health
@@ -194,9 +194,9 @@ sudo journalctl -u vaultsyncd --no-pager
 
 ## S113 主机用户运行与 pure 一键部署（2026-11-07）
 
-本机入口 `/etc/nixos#wks-lab`，feature 的 `user` 默认读主机 `host.user`，`group` 默认读 `config.users.users.<user>.group`，当前为 **xingjian:users（UID1000/GID100）**。项目模块 `createUser=false` 不更改普通用户类型/主组/描述/附加组。单元保留零 capabilities、NoNewPrivileges、0700 状态、严格系统写保护与 Root 白名单。
+本机入口 `/etc/nixos#wks-lab`，feature 的 `user` 默认读主机 `host.user`，`group` 默认读 `config.users.users.<user>.group`，当前为 **xingjian:users（UID1000/GID100）**。项目模块 `createUser=false` 不更改普通用户类型/主组/描述/附加组。单元保留零 capabilities、NoNewPrivileges、0700 状态、严格系统写保护与 Vault 白名单。
 
-正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd`（挂载源 `/data/vaultsyncd/state`）、`/data/vaultsyncd/roots` 及其 documents 目录均为 xingjian:users、0700；内部文件及原样本已离线改权。`/var/lib/vaultsyncd-credentials` 同归该用户且0700，`owner.password` 为0600，可在受信终端用 `cat /var/lib/vaultsyncd-credentials/owner.password` 读取。保留原登录及 ServerId/RootId，服务重启不会重置密码。没有删除正式数据、没有修改历史试用卷或其账号。
+正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd`（挂载源 `/data/vaultsyncd/state`）、`/data/vaultsyncd/vaults` 及其 documents 目录均为 xingjian:users、0700；内部文件及原样本已离线改权。`/var/lib/vaultsyncd-credentials` 同归该用户且0700，`owner.password` 为0600，可在受信终端用 `cat /var/lib/vaultsyncd-credentials/owner.password` 读取。保留原登录及 ServerId/VaultId，服务重启不会重置密码。没有删除正式数据、没有修改历史试用卷或其账号。
 
 主机配置仍以完整项目 Git SHA 固定 `features.server.vaultsync.rev`，永久地址 `git+file:///wrd/prj/vaultsyncd`，不依赖会清理的 worktree。更新入口：
 
@@ -214,22 +214,22 @@ cd /wrd/prj/vaultsyncd
 
 证据在 `/data/vaultsyncd-deploy/local-*`：旧运行/启动 system 的 GC root、generation、锁、pin 差异与 result.json；`--build-only` 或失败树保留，检查后按结果中的 worktree/branch 清理。每次部署只操作当前配置，既有未提交修改不会自动 stash 或搬运。`test` 立即激活，不提供定时回滚。失败会尝试恢复旧运行/启动 system；若迁移后旧程序拒绝新 schema，需要离线恢复产品备份，脚本不降级数据库。正常更新前按产品备份流程留可恢复副本。
 
-一次性账号迁移证据 `/data/vaultsyncd-deploy/S113-20261107T221130/`：停服后的只读 `state-before` btrfs 快照与 `roots-before` reflink 副本、旧归属和文件摘要均保留在 Git 外。旧运行/启动 generation244 为 `/nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7`。**回到 S112 账号配置前，先停服并把专用正式状态及 Root 的归属恢复为 UID/GID984（旧配置会重建该账号）；仅切换旧 system 不能同时恢复归属。** 备份快照不改权；不要对用户其他目录递归改权，也不要用旧程序直接写新 schema。
+一次性账号迁移证据 `/data/vaultsyncd-deploy/S113-20261107T221130/`：停服后的只读 `state-before` btrfs 快照与 `vaults-before` reflink 副本、旧归属和文件摘要均保留在 Git 外。旧运行/启动 generation244 为 `/nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7`。**回到 S112 账号配置前，先停服并把专用正式状态及 Vault 的归属恢复为 UID/GID984（旧配置会重建该账号）；仅切换旧 system 不能同时恢复归属。** 备份快照不改权；不要对用户其他目录递归改权，也不要用旧程序直接写新 schema。
 
-初次迁移固定项目4071fd4、主机75d6fb5，系统k92lxnm03xg828lzfzivp0aij810gpns先test；原正式 ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 和旧样本摘要保留。65项包内测试、普通/专用用户模块、aliweb关闭feature的pure完整求值通过。真实HTTPS16MiB上传/413/committed/固定下载/服务重启与同OpId重放、同UID IPC与普通用户备份prepare/verify/release通过；10项既有服务状态/PID/InvocationID保持。最终一键更新提交、generation与switch后证据见 [S113交接](../../agent/tasks/S113.md)。本卡不代替Windows、hosted CI及首发性能门禁。
+初次迁移固定项目4071fd4、主机75d6fb5，系统k92lxnm03xg828lzfzivp0aij810gpns先test；原正式 ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 VaultId `cf8a15ace18abe4d9c3027ac25c30070` 和旧样本摘要保留。65项包内测试、普通/专用用户模块、aliweb关闭feature的pure完整求值通过。真实HTTPS16MiB上传/413/committed/固定下载/服务重启与同OpId重放、同UID IPC与普通用户备份prepare/verify/release通过；10项既有服务状态/PID/InvocationID保持。最终一键更新提交、generation与switch后证据见 [S113交接](../../agent/tasks/S113.md)。本卡不代替Windows、hosted CI及首发性能门禁。
 
 S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3bcd72e75cf**，主机 **32bfeb54f9c76d5ed781a80800fdce86179c7d6a** 已 ff 合入 `/etc/nixos` main；运行/开机默认 **generation245**，system `/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/180dcgy5j2hx801vg59g2bk15whp3p7j-vaultsyncd-0.1.1`。该源复用已通过65项测试的相同Rust组件；本次重新构建发行provenance与主机。真实脚本从4071fd4更新pin到6b967bd，显式pure构建后dry/test/健康/switch，通过后自动提交pin并清理临时树。主机main的pure toplevel重新求值得到同一system。
 
-最终脚本证据 `/data/vaultsyncd-deploy/local-20261107T221615-1805073/`，完整日志在上方S113证据的 `one-click.log`；`switch-health.json`确认旧ServerId/RootId/committed版本及磁盘/下载摘要、全部正式文件UID1000/GID100、10项既有服务PID/InvocationID及SSH保持，3200/3300/15312跟随重定向后200、主机锁逐字节不变。10服务比较使用保留的S112历史基线，7个已启用服务另有本轮迁移前快照。最终没有注入生产失败或实际激活旧generation演练回退，也没有再次运行Windows原生/浏览器矩阵或独立外网客户端探测。
+最终脚本证据 `/data/vaultsyncd-deploy/local-20261107T221615-1805073/`，完整日志在上方S113证据的 `one-click.log`；`switch-health.json`确认旧ServerId/VaultId/committed版本及磁盘/下载摘要、全部正式文件UID1000/GID100、10项既有服务PID/InvocationID及SSH保持，3200/3300/15312跟随重定向后200、主机锁逐字节不变。10服务比较使用保留的S112历史基线，7个已启用服务另有本轮迁移前快照。最终没有注入生产失败或实际激活旧generation演练回退，也没有再次运行Windows原生/浏览器矩阵或独立外网客户端探测。
 
 
 ## S116 当前版本部署（2026-11-08，generation246）
 
-按用户要求执行 `./tools/deploy-local.sh --rev f3b8979`，固定项目完整 SHA `f3b897983087af1b6d075d89000c0a5ebc235aeb`，包含 S114 服务端 Root 名称及 S115 HeroUI Web。主机仅改版本 pin，提交 `15cfc075031ba6d9fab4bf040e1adbe5d68be939` 已 ff 合入 `/etc/nixos` main，临时主机树与分支自动清理。主工作区未提交 skills 文件保留；部署从干净任务树执行。
+按用户要求执行 `./tools/deploy-local.sh --rev f3b8979`，固定项目完整 SHA `f3b897983087af1b6d075d89000c0a5ebc235aeb`，包含 S114 服务端 Vault 名称及 S115 HeroUI Web。主机仅改版本 pin，提交 `15cfc075031ba6d9fab4bf040e1adbe5d68be939` 已 ff 合入 `/etc/nixos` main，临时主机树与分支自动清理。主工作区未提交 skills 文件保留；部署从干净任务树执行。
 
-运行与开机默认均为 **generation246**，system `/nix/store/22bvy0jasjkb02vd8j2wm6lcmgn5aci9-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/yd63mh9prpasa8f8647g076mx2m2wjdv-vaultsyncd-0.1.1`，manifest 与固定源一致。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Root 仍为 btrfs、xingjian:users、0700。密码读取方式沿用 S113。
+运行与开机默认均为 **generation246**，system `/nix/store/22bvy0jasjkb02vd8j2wm6lcmgn5aci9-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/yd63mh9prpasa8f8647g076mx2m2wjdv-vaultsyncd-0.1.1`，manifest 与固定源一致。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 VaultId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Vault 仍为 btrfs、xingjian:users、0700。密码读取方式沿用 S113。
 
-实际验收：部署契约6/6，Nix 包内66/0；完整 pure 构建及同一 store path 的 dry-activate/test/HTTPS与同UID IPC、实例身份/目录归属/switch通过。10项既有服务的PID/InvocationID、SSH配置与banner、3应用200及主机锁保持；线上HTML/JS/CSS共6文件逐字节匹配发行包。真实 Chromium 严格公共CA/TLS1.3、五路由及390/768/1440无溢出、主题、owner登录与Secure/HttpOnly/SameSite=Strict cookie、原Root健康、SSE初始seq及16秒心跳通过，无页面异常及CSP违规，敏感路径404。浏览器脚本前三轮因定位歧义、缺同源证据的APIRequestContext和字符串wait_for_function触发unsafe-eval限制失败；分别限定main、使用页面同源fetch和函数谓词后完整复验通过，未修改产品代码或放宽安全策略。
+实际验收：部署契约6/6，Nix 包内66/0；完整 pure 构建及同一 store path 的 dry-activate/test/HTTPS与同UID IPC、实例身份/目录归属/switch通过。10项既有服务的PID/InvocationID、SSH配置与banner、3应用200及主机锁保持；线上HTML/JS/CSS共6文件逐字节匹配发行包。真实 Chromium 严格公共CA/TLS1.3、五路由及390/768/1440无溢出、主题、owner登录与Secure/HttpOnly/SameSite=Strict cookie、原Vault健康、SSE初始seq及16秒心跳通过，无页面异常及CSP违规，敏感路径404。浏览器脚本前三轮因定位歧义、缺同源证据的APIRequestContext和字符串wait_for_function触发unsafe-eval限制失败；分别限定main、使用页面同源fetch和函数谓词后完整复验通过，未修改产品代码或放宽安全策略。
 
 部署证据 `/data/vaultsyncd-deploy/local-20261108T124809-2457084/` 保存 result.json、旧generation、旧system/boot GC roots、原锁和pin diff；额外核对与浏览器脚本/失败日志/成功JSON/截图在 `/data/vaultsyncd-deploy/S116-20261108-local/`。恢复入口为部署前generation245：`/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113恢复流程先test及健康检查，再决定switch并同步回退源码pin；没有实际激活旧generation演练。未运行生产上传/恢复/备份写入或故障注入、未重启宿主/Windows、未做独立外网客户端验收，原首发门禁保持。交接与任务树整合见 [S116](../../agent/tasks/S116.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
@@ -238,9 +238,9 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 
 按用户要求执行 `./tools/deploy-local.sh --rev 9da5ee8`，固定项目完整 SHA `9da5ee8f3fe3f64cf517ab6f52d6f1969b1dc353`（含 S115 服务端与 S117 Web 紧凑化）。主机侧先提交用户要求的 dae 分流规则调整 `42d99c5`（实际写法 `!dip(geoip:cn) -> proxy`；并行会话另以 `9cd3956` 记录了该语法坑），再由脚本以 `9cd3956` 为基线只改版本 pin，pin 提交 `b0ad622809158369075b0065d8dd6e1a4c8e4838` 已 ff 合入 `/etc/nixos` main，临时主机树与分支自动清理。部署从干净任务树执行，主工作区未提交 skills 文件保留。
 
-运行与开机默认均为 **generation247**，system `/nix/store/cwrpmxw805bg9nrn08a54jmny2lxcg4w-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/2vqjynvrjjxcldl9svlka49mrn3rzwk6-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Root 仍为 btrfs、xingjian:users、0700，IPC `phase=ready`。
+运行与开机默认均为 **generation247**，system `/nix/store/cwrpmxw805bg9nrn08a54jmny2lxcg4w-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/2vqjynvrjjxcldl9svlka49mrn3rzwk6-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 VaultId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Vault 仍为 btrfs、xingjian:users、0700，IPC `phase=ready`。
 
-实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html` 与两个主资产与包内文件 sha256 逐字节一致（资产名已更新为新构建）。真实 Chromium 严格公共 CA/TLS1.3、五路由 390/768/1440 无溢出、主题、owner 登录与 Secure/HttpOnly/SameSite=Strict cookie、原 Root 健康、SSE seq 与 16 秒心跳、无页面异常与 CSP 违规、敏感路径 404 均通过。10 项既有服务中 9 项 PID/InvocationID 不变，`dae` 因规则变更重启后路由集 17/1024、google 与 baidu 均 200；3 应用 200、SSH banner 与主机锁不变。
+实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html` 与两个主资产与包内文件 sha256 逐字节一致（资产名已更新为新构建）。真实 Chromium 严格公共 CA/TLS1.3、五路由 390/768/1440 无溢出、主题、owner 登录与 Secure/HttpOnly/SameSite=Strict cookie、原 Vault 健康、SSE seq 与 16 秒心跳、无页面异常与 CSP 违规、敏感路径 404 均通过。10 项既有服务中 9 项 PID/InvocationID 不变，`dae` 因规则变更重启后路由集 17/1024、google 与 baidu 均 200；3 应用 200、SSH banner 与主机锁不变。
 
 部署证据 `/data/vaultsyncd-deploy/local-20261108T133746-2533091/` 保存 result.json、旧 generation、旧 system/boot GC roots、原锁与 pin diff；本轮核对与浏览器脚本/JSON/截图/静态文件副本在 `/data/vaultsyncd-deploy/S118-20261108-local/`。恢复入口为部署前 generation246：`/nix/store/22bvy0jasjkb02vd8j2wm6lcmgn5aci9-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 流程先 test 与健康检查再决定 switch，并同步回退源码 pin；如需还原分流规则须同时回退 `42d99c5`。未实际激活旧 generation 演练回退，未运行生产上传/恢复/备份写入或故障注入，未重启宿主/Windows，原首发门禁保持。交接与整合见 [S118](../../agent/tasks/S118.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
@@ -249,9 +249,9 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 
 按用户要求执行 `./tools/deploy-local.sh --rev b5e96f2`，固定项目完整 SHA `b5e96f23268ef9dd0a34574e81bcb87718d9a552`（S119 实现提交 `b16d9a1`），使 Mantine 9.7.5 AppShell/默认主题与逐响应 style nonce CSP 上线。主机仅改版本 pin，pin 提交 `0073fd638392658eb56ef01cf30ceadc9229631a` 已 ff 合入 `/etc/nixos` main，临时主机树与分支自动清理；部署从干净任务树执行，主工作区未提交 skills 文件保留。
 
-运行与开机默认均为 **generation248**，system `/nix/store/i1ydyql7wcb0gs8q5dr1xxygm4zj18h6-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/9h1r3jvn1r1nsnrdal2h169n4h5w9hdm-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Root 仍为 btrfs、xingjian:users、0700，IPC `phase=ready`。
+运行与开机默认均为 **generation248**，system `/nix/store/i1ydyql7wcb0gs8q5dr1xxygm4zj18h6-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/9h1r3jvn1r1nsnrdal2h169n4h5w9hdm-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 VaultId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Vault 仍为 btrfs、xingjian:users、0700，IPC `phase=ready`。
 
-实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html`（剥离逐响应 nonce 后）与 `assets/index-Ckcbaj1u.js`、`assets/index-BX8_IVCu.css` 的 sha256 与包内一致；CSP 为 `style-src 'self' 'nonce-<32位hex>'`、header 与页面 meta 同值、无 `unsafe-inline`。真实 Chromium 严格公共 CA/TLS1.3、Mantine 主题切换、五路由 390/768/1440（窄屏经 Burger）无溢出、owner 登录与 Secure/HttpOnly/SameSite=Strict cookie、原 Root 健康、SSE seq 与 16 秒心跳、无页面异常与 CSP 违规、敏感路径 404 均通过。10 项既有服务 PID/InvocationID 全部不变，3 应用 200、SSH banner 与主机锁不变。
+实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html`（剥离逐响应 nonce 后）与 `assets/index-Ckcbaj1u.js`、`assets/index-BX8_IVCu.css` 的 sha256 与包内一致；CSP 为 `style-src 'self' 'nonce-<32位hex>'`、header 与页面 meta 同值、无 `unsafe-inline`。真实 Chromium 严格公共 CA/TLS1.3、Mantine 主题切换、五路由 390/768/1440（窄屏经 Burger）无溢出、owner 登录与 Secure/HttpOnly/SameSite=Strict cookie、原 Vault 健康、SSE seq 与 16 秒心跳、无页面异常与 CSP 违规、敏感路径 404 均通过。10 项既有服务 PID/InvocationID 全部不变，3 应用 200、SSH banner 与主机锁不变。
 
 部署证据 `/data/vaultsyncd-deploy/local-20261108T142445-2602881/` 保存 result.json、旧 generation、旧 system/boot GC roots、原锁与 pin diff；本轮核对与浏览器脚本/JSON/截图/响应头/静态文件副本在 `/data/vaultsyncd-deploy/S120-20261108-local/`。恢复入口为部署前 generation247：`/nix/store/cwrpmxw805bg9nrn08a54jmny2lxcg4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 流程先 test 与健康检查再决定 switch，并同步回退源码 pin。未实际激活旧 generation 演练回退，未运行生产上传/恢复/备份写入或故障注入，未重启宿主/Windows，原首发门禁保持。交接与整合见 [S120](../../agent/tasks/S120.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
@@ -260,7 +260,7 @@ S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3
 
 固定实现源`354bbc479a4ef7b68418aa061d5a7f5a4d5e488c`，部署入口与S113一致，从干净任务树执行。48px顶栏、独立Logo分区/侧栏对齐边线、居左面包屑已上线。主机pin `6cc497bd4915674b9b27a6e0e62bf1c7a6394bd7`已ff合main并清理临时主机树/分支；运行及开机system均为`/nix/store/ds2gqqb5lng9pwwjjffj2z2qf3iavy4n-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`/nix/store/v6zxzvx08p7m6lh6n6mi54y44f1yd25x-vaultsyncd-0.1.1`。
 
-pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥nonce后与包内一致，`index-ClZcVBwm.js`、`index-Mvsj7_ia.css`字节/哈希一致。真实Chromium线上50组布局和TLS/CSP/登录cookie/原Root健康/SSE/敏感路径六项通过。域名、owner、ServerId、RootId、数据与xingjian:users归属保持；10项服务PID/InvocationID、3应用200、SSH及主机锁保持。
+pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥nonce后与包内一致，`index-ClZcVBwm.js`、`index-Mvsj7_ia.css`字节/哈希一致。真实Chromium线上50组布局和TLS/CSP/登录cookie/原Vault健康/SSE/敏感路径六项通过。域名、owner、ServerId、VaultId、数据与xingjian:users归属保持；10项服务PID/InvocationID、3应用200、SSH及主机锁保持。
 
 证据`/data/vaultsyncd-deploy/local-20261108T144944-2637582/`与`/data/vaultsyncd-deploy/S121-20261108-local/`；恢复入口generation248（system `i1ydyql7wcb0gs8q5dr1xxygm4zj18h6`），先按S113 test/健康再switch并同步pin，未实际回滚。未做生产内容写入/故障或Windows/规模验收，原首发门禁保持。交接与生命周期见[S121](../../agent/tasks/S121.md)与[批次（历史归档）](../../agent/tasks/README.md)。
 
@@ -268,19 +268,19 @@ pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥no
 
 固定项目完整 SHA `6395dfaf91eae84445695484e65ee740003faec0`（部署时 master HEAD，含 S122 实现 `25dbf2b` 的只读文件浏览器 `#/files` 与 S121 顶栏），入口与 S113 相同，从干净任务树执行 `./tools/deploy-local.sh --rev HEAD`。主机仅改版本 pin，pin 提交 `207099c690eedf4d991efe9bd519a63d2e4b25c3` 已 ff 合 `/etc/nixos` main，临时主机树与分支自动清理；部署契约 6/6 通过，主工作区未提交 skills 文件保留。
 
-运行与开机默认均为 **generation250**，system `/nix/store/ivwnixw752n1n1bbk57iwrdx5p7nl25f-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/z7lcr1c1rz3ia0ixpk646594l5dk2cy9-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致，包内 Rust 组件重建时 67/67 测试通过，Web 组件与 S122 `nix build .#web` 同一 store path。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 RootId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Root 仍为 btrfs、xingjian:users（UID1000/GID100）、0700，IPC `phase=ready`、`root_count=1`。
+运行与开机默认均为 **generation250**，system `/nix/store/ivwnixw752n1n1bbk57iwrdx5p7nl25f-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/z7lcr1c1rz3ia0ixpk646594l5dk2cy9-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致，包内 Rust 组件重建时 67/67 测试通过，Web 组件与 S122 `nix build .#web` 同一 store path。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 VaultId `cf8a15ace18abe4d9c3027ac25c30070` 保持；状态与 Vault 仍为 btrfs、xingjian:users（UID1000/GID100）、0700，IPC `phase=ready`、`vault_count=1`。
 
-实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html` 剥 nonce 后与包内逐字节一致，`assets/index-DQ7KusXO.js`、`assets/index-BtUIqXZy.css` 与懒加载块 `assets/Files-V7htNGV1.js` 的 sha256 与包内一致；CSP 为逐响应 nonce、无 `unsafe-inline`。真实 Chromium 严格公共 CA/TLS1.3 七项通过：CSP/主题、六路由（含 `#/files`）在 390/768/1440 无溢出、owner 登录安全 cookie、原 Root 健康、文件浏览器在 `documents` Root 读到 2 项并打开属性弹窗/返回上级、认证 SSE seq 与 16 秒心跳、无 pageerror/CSP 违规、敏感路径 404。文件浏览器请求审计只有 `GET /v1/roots`、`POST /v1/roots/<root>/snapshots`（design §9.3 元数据快照）、`GET …/entries`、`GET …/events` 与 logout，无内容/上传/操作写入；本轮在生产 Root 生成快照 `01bf172d1156e91785681e4812faf5a3`，不修改文件内容。10 项既有服务 PID/InvocationID、3 应用 200、SSH banner 与主机锁（`1ee4edaf…`）不变。
+实际验收：clean 检查、pure 求值与构建、manifest 与主机锁核对、dry-activate/test/HTTPS/IPC/归属/switch 全部通过；线上 `index.html` 剥 nonce 后与包内逐字节一致，`assets/index-DQ7KusXO.js`、`assets/index-BtUIqXZy.css` 与懒加载块 `assets/Files-V7htNGV1.js` 的 sha256 与包内一致；CSP 为逐响应 nonce、无 `unsafe-inline`。真实 Chromium 严格公共 CA/TLS1.3 七项通过：CSP/主题、六路由（含 `#/files`）在 390/768/1440 无溢出、owner 登录安全 cookie、原 Vault 健康、文件浏览器在 `documents` Vault 读到 2 项并打开属性弹窗/返回上级、认证 SSE seq 与 16 秒心跳、无 pageerror/CSP 违规、敏感路径 404。文件浏览器请求审计只有 `GET /v1/vaults`、`POST /v1/vaults/<vault>/snapshots`（design §9.3 元数据快照）、`GET …/entries`、`GET …/events` 与 logout，无内容/上传/操作写入；本轮在生产 Vault 生成快照 `01bf172d1156e91785681e4812faf5a3`，不修改文件内容。10 项既有服务 PID/InvocationID、3 应用 200、SSH banner 与主机锁（`1ee4edaf…`）不变。
 
 证据 `/data/vaultsyncd-deploy/local-20261108T153312-2697471/`（result、旧 generation、旧 system/boot GC roots、锁、pin diff）与 `/data/vaultsyncd-deploy/S123-20261108-local/`（final-state/assets/production-smoke 脚本与 JSON、截图、web 副本）；脚本与结果另存 `artifacts/S123/`。恢复入口为部署前 generation249 `ds2gqqb5lng9pwwjjffj2z2qf3iavy4n`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。未做生产上传/恢复/备份写入、故障注入、Windows 或规模验收，原首发门禁保持。交接与生命周期见 [S123](../../agent/tasks/S123.md) 与 [批次（历史归档）](../../agent/tasks/README.md)。
 
 ## S125 最新服务端（S124 分栏文件浏览器）部署（2026-11-08，generation251）
 
-固定项目完整 SHA `30daa88febd53115b126a08cf062b37a217b117e`（部署时 master HEAD，含 S124 实现 `986c35c` 的左侧 Root/目录树、右侧工具栏/列表与 `#/files/<root_id>/<相对目录>` 深链），入口与 S113 相同，从干净任务树执行 `./tools/deploy-local.sh --rev HEAD`。主机仅改版本 pin，pin 提交 `dc7dd421dadbcf0cba11ab59f4801aefe7d4e3c5` 已 ff 合 `/etc/nixos` main，临时主机树/分支自动清理；部署契约 6/6 通过，主工作区未提交 skills 文件保留。
+固定项目完整 SHA `30daa88febd53115b126a08cf062b37a217b117e`（部署时 master HEAD，含 S124 实现 `986c35c` 的左侧 Vault/目录树、右侧工具栏/列表与 `#/files/<vault_id>/<相对目录>` 深链），入口与 S113 相同，从干净任务树执行 `./tools/deploy-local.sh --rev HEAD`。主机仅改版本 pin，pin 提交 `dc7dd421dadbcf0cba11ab59f4801aefe7d4e3c5` 已 ff 合 `/etc/nixos` main，临时主机树/分支自动清理；部署契约 6/6 通过，主工作区未提交 skills 文件保留。
 
 运行与开机默认均为 **generation251**，system `/nix/store/9nmw4ilaxg5i5q50n93fbn59q95dfv03-nixos-system-wks-lab-26.11.20261102.7356cc7`；包 `/nix/store/jd5xcmh6p5x0v7zsv844fxm70898zfy2-vaultsyncd-0.1.1`，manifest 来源与固定 SHA 一致，主机锁 `1ee4edaf…` 逐字节未变；本次重建 9 个派生（含重新构建并运行 checkPhase 的 `vaultsyncd-rust-0.1.1`）。域名、owner、ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、运行用户 `xingjian:users` 保持。
 
-**按用户明确要求，本轮不执行部署后验证**：没有 Chromium/浏览器矩阵、没有线上资产 sha256 比对、没有既有服务 PID/应用/SSH/锁基线复核，也没有生产上传/恢复/备份写入或故障注入。实际通过的门禁只有部署机制自身的 clean 检查、pure 求值与构建、manifest 与主机锁核对、`dry-activate` → `test` → HTTPS 健康（ServerId 不变）→ 同 UID IPC `phase=ready` → `stateDir`/Root 归属 → `switch` → 运行/开机 system 一致性；切换前后两次健康检查均通过。因此线上 Web 资产与 UI 的最新证据仍来自 S123（generation250），本卡不构成任何新的生产 UI/安全/服务影响结论。
+**按用户明确要求，本轮不执行部署后验证**：没有 Chromium/浏览器矩阵、没有线上资产 sha256 比对、没有既有服务 PID/应用/SSH/锁基线复核，也没有生产上传/恢复/备份写入或故障注入。实际通过的门禁只有部署机制自身的 clean 检查、pure 求值与构建、manifest 与主机锁核对、`dry-activate` → `test` → HTTPS 健康（ServerId 不变）→ 同 UID IPC `phase=ready` → `stateDir`/Vault 归属 → `switch` → 运行/开机 system 一致性；切换前后两次健康检查均通过。因此线上 Web 资产与 UI 的最新证据仍来自 S123（generation250），本卡不构成任何新的生产 UI/安全/服务影响结论。
 
 证据 `/data/vaultsyncd-deploy/local-20261108T160744-2745069/`（result、旧 generation、旧 system/boot GC roots、锁、host-before diff、pin diff）与 `/data/vaultsyncd-deploy/S125-20261108-local/`（契约测试与部署日志），筛选副本在 `artifacts/S125/`。恢复入口为部署前 generation250 `ivwnixw752n1n1bbk57iwrdx5p7nl25f`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。原首发门禁（hosted CI、性能容量、最终发行、T02 Windows）不变。
 
@@ -303,7 +303,7 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 运行与开机默认均为 **generation255**，system `/nix/store/a86anl2i29i5q3kcx9jqay6p2a2a6ngc-nixos-system-wks-lab-26.11.20261102.7356cc7`，
 包 `/nix/store/vzwp4yzlbrli90ih9avbqq39pm30zk92-vaultsyncd-0.1.1`（manifest 来源与固定源一致）。服务以 xingjian:users 运行、
-`phase=ready`、`/v1/health` 正常；ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53` 与文档 RootId 未变；库保持 `user_version=14`、
+`phase=ready`、`/v1/health` 正常；ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53` 与文档 VaultId 未变；库保持 `user_version=14`、
 14 条迁移、`entries.modified_at` 仍在（本次不迁移）。10 项无关服务 PID/InvocationID、3 个本机应用 200 与主机锁逐字节保持。
 
 生产验收（`artifacts/S133/verify-production.py`，exit0，`production.json` passed=true）：线上全量 `assets/*` 与包内逐字节一致，
@@ -311,7 +311,7 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 `名称/大小/修改日期`（无“操作”列）、`table-layout: fixed`、三列 574.1/129.6/222.3 px（份额 62/14/24 ±2%）、数据行三格、
 不存在“查看…的属性”行尾按钮；右键首行菜单在光标处打开（±12/16 px）且项为 `打开/属性/复制路径`，Esc 关闭后
 `Shift+F10` 重开同一菜单，“复制路径”写入剪贴板 `/新建文件夹` 且提示 4 秒后消失；明暗×320/1440 目录树 14px 图标、无页面溢出、
-无 CSP/页面错误。生产浏览审计只有 4 个请求（`GET /v1/roots`、`POST …/snapshots`、`GET …/entries?limit=1000`、`POST /v1/auth/logout`），
+无 CSP/页面错误。生产浏览审计只有 4 个请求（`GET /v1/vaults`、`POST …/snapshots`、`GET …/entries?limit=1000`、`POST /v1/auth/logout`），
 无内容或操作写入。
 
 证据 `/data/vaultsyncd-deploy/local-20261108T194501-3012226/`（result、旧 generation、旧 system/boot GC roots、锁、pin diff）；
@@ -325,7 +325,7 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 固定项目 `faf7adb6dc3b32e97d7384842899c307cde1464b`（S134 实现 `a1d225a` 与交接），执行现有 `tools/deploy-local.sh --rev <SHA>`：pure build、manifest、dry-activate/test、HTTPS/IPC/ServerId/归属、switch 全通过。主机仅更新版本 pin，提交 `b98e05fec08fb88e333a155a5bd9d02e98a3ea20` 已 ff main，临时主机树/分支已清理；锁 `1ee4edaf…` 不变。
 
-运行及开机默认 generation256，system `/nix/store/w9jrk25vqz0iqqzsrq1v40bn8zw9vahf-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/vmnd65vsc2ja1fblbdf36zbdr5vh3zfh-vaultsyncd-0.1.1`；无 Rust/迁移改动，库保持14，ServerId/Root/归属保持。线上资产与包内逐字节一致、index 除 nonce 外一致；严格 TLS1.3 Chromium 登录、右键/Shift+F10 复制路径的 Notification、四秒自动消失、Enter 关闭、明暗×320/1440 无溢出/布局位移/CSP错误通过。10项无关服务 PID/InvocationID 和3应用200保持。生产仅只读元数据浏览及剪贴板操作。
+运行及开机默认 generation256，system `/nix/store/w9jrk25vqz0iqqzsrq1v40bn8zw9vahf-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/vmnd65vsc2ja1fblbdf36zbdr5vh3zfh-vaultsyncd-0.1.1`；无 Rust/迁移改动，库保持14，ServerId/Vault/归属保持。线上资产与包内逐字节一致、index 除 nonce 外一致；严格 TLS1.3 Chromium 登录、右键/Shift+F10 复制路径的 Notification、四秒自动消失、Enter 关闭、明暗×320/1440 无溢出/布局位移/CSP错误通过。10项无关服务 PID/InvocationID 和3应用200保持。生产仅只读元数据浏览及剪贴板操作。
 
 证据 `artifacts/S135/` 与 `/data/vaultsyncd-deploy/local-20261108T201005-3057280/`，passed/cleaned=true，含旧system/boot GC roots。恢复入口 generation255 `/nix/store/a86anl2i29i5q3kcx9jqay6p2a2a6ngc-nixos-system-wks-lab-26.11.20261102.7356cc7`，先 `sudo nixos-rebuild test --store-path <旧路径>` 核对健康，再决定 switch，并同步回退主机 pin；无数据库迁移，不必恢复库。本次未实际回退演练、未做生产内容写入或故障注入，不替代 Windows、hosted 和规模门禁。详见 [S135](../../agent/tasks/S135.md)。
 
@@ -333,8 +333,8 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 固定源`5689be16b8bc389ae3781e96c2ff734f7d6761ae`包含S136文件操作、S137重命名/树菜单及连续目录改名观察器防误删。现场原已为源7f50cc3/generation257/schema15，纠正此前文档仍写S135的滞后；本次15→15不迁移。
 
-部署前经同UID管理socket完成完整prepare/verify-source/export/verify/release，归档`/wrd/prj/vaultsyncd/artifacts/S138/predeploy.vsbk`与0600收据10文件verified，目录0700。源/data(sdc1)与导出/wrd(sdb1)异盘、仍同主机；不宣称异地备份或实际恢复演练。原状态、Root与配置保留；历史14→15SQLite备份已只读核验，不代替整套归档。
+部署前经同UID管理socket完成完整prepare/verify-source/export/verify/release，归档`/wrd/prj/vaultsyncd/artifacts/S138/predeploy.vsbk`与0600收据10文件verified，目录0700。源/data(sdc1)与导出/wrd(sdb1)异盘、仍同主机；不宣称异地备份或实际恢复演练。原状态、Vault与配置保留；历史14→15SQLite备份已只读核验，不代替整套归档。
 
-现有脚本pure build→dry→test→健康→switch全部通过，主机pin`9930ec77046abed5744a35f1b672593270bc485e`已ff main并清理临时树/分支，锁不变。运行/开机generation258，system`/nix/store/g16gzr5crzcz29nfpjnjg3j2r7ga25pa-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`/nix/store/hr90dm2vbghdwa9vq8i62ipsn4fqa206-vaultsyncd-0.1.1`。严格TLS1.3生产Chromium全量资产、列表与树右键/键盘/取消改名/Root保护、明暗320/1440、通知与CSP通过；旧布局固定版本内容长度及SHA256匹配，8对象映射/字节、schema15/ServerId/归属与10无关服务/3应用保持。生产只读元数据/固定版本与取消弹窗，无文件操作提交。
+现有脚本pure build→dry→test→健康→switch全部通过，主机pin`9930ec77046abed5744a35f1b672593270bc485e`已ff main并清理临时树/分支，锁不变。运行/开机generation258，system`/nix/store/g16gzr5crzcz29nfpjnjg3j2r7ga25pa-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`/nix/store/hr90dm2vbghdwa9vq8i62ipsn4fqa206-vaultsyncd-0.1.1`。严格TLS1.3生产Chromium全量资产、列表与树右键/键盘/取消改名/Vault保护、明暗320/1440、通知与CSP通过；旧布局固定版本内容长度及SHA256匹配，8对象映射/字节、schema15/ServerId/归属与10无关服务/3应用保持。生产只读元数据/固定版本与取消弹窗，无文件操作提交。
 
 永久证据`artifacts/S138/`及`/data/vaultsyncd-deploy/local-20261108T224057-3442489/`（passed/cleaned=true，旧system/boot GC roots）。直接回退为generation257：`/nix/store/r3fvjjgnknna7rm5y7nc9aqifnxmbslc-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113先`sudo nixos-rebuild test --store-path <旧路径>`、健康后再switch并同步pin；本次无迁移，不降schema。未实际回退、生产恢复或故障注入；原Windows/hosted/规模门禁保持，详见[S138](../../agent/tasks/S138.md)。

@@ -20,7 +20,7 @@
 | 文件/来源 | 用途 |
 | --- | --- |
 | `manifest.json` | 格式1、绑定ID、每份文件字节数与SHA-256、来源类别/身份；不是可执行指令 |
-| `state.json` | 绑定Root/epoch/模式、baseline与remote/local条目、pending、固定上传快照、未完intent、受控应用/释放现场；用于解释与对照，不直接导入在线数据库 |
+| `state.json` | 绑定Vault/epoch/模式、baseline与remote/local条目、pending、固定上传快照、未完intent、受控应用/释放现场；用于解释与对照，不直接导入在线数据库 |
 | `current-<EntryId>.bin` | 实际当前完整本地字节；按state中的baseline条目身份、父目录和name了解原位置；可能比最后观察的generation更新 |
 | `snapshot-<OpId>.bin` | 固定上传代际内容；与upload_resumes里的摘要/大小/身份核对。当前文件后来修改时，这份旧字节也必须保留 |
 | `candidate-<身份>.bin` | 扫描发现的未入库新文件、独立暂存或冲突候选；身份文件名避免原名称冲突，不保证能从名字反推出原路径。按摘要和只读检查选择新的人工名称 |
@@ -77,20 +77,20 @@ nix develop .#windows --command bash tests/windows-integration/run-unuploaded-re
 
 runner默认使用本树target；若设置CARGO_TARGET_DIR，两条命令必须指向同一独立目录。搬旧缓存后必须在当前树重编helper；runner核对fixture工作路径，拒绝带旧树内嵌路径的helper。客体使用真实NTFS、Interactive/Limited登录态与同用户IPC；仅本run上传part断连，其他请求转发真实Linux服务，绝不在线写DB。报告和hash清单保留在artifacts/S084，实际执行结果见agent/tasks/S084.md；Windows VM保持在线。
 
-## 服务端对象登记异常（Root 全部读写 503）
+## 服务端对象登记异常（Vault 全部读写 503）
 
-适用 schema ≥15（ADR-020，按 Root 隔离对象布局）。`objects.storage_path` 只接受两种规范值：历史全局路径 `objects/<aa>/<hex>`，或该 Root 的 `roots/<RootId>/objects/<aa>/<hex>`。任一行被改成 `./`、含 `..`、大小写/双斜杠变体或另一个 Root 的前缀时，服务端会**失败关闭**：该 Root 的读写、采集与租约返回 503/`NEEDS_RECOVERY`，但不会回退读取磁盘上的旧文件，也不会跨 Root 复用字节。
+适用 schema ≥15（ADR-020，按 Vault 隔离对象布局）。`objects.storage_path` 只接受两种规范值：历史全局路径 `objects/<aa>/<hex>`，或该 Vault 的 `roots/<VaultId>/objects/<aa>/<hex>`。任一行被改成 `./`、含 `..`、大小写/双斜杠变体或另一个 Vault 的前缀时，服务端会**失败关闭**：该 Vault 的读写、采集与租约返回 503/`NEEDS_RECOVERY`，但不会回退读取磁盘上的旧文件，也不会跨 Vault 复用字节。
 
 处置顺序：
 
-1. 停止写入并保全现场。记录日志中的 `noncanonical or cross-root storage path; preserved` 与对应 Root；不要手工改在线数据库，也不要用同名文件覆盖对象。
+1. 停止写入并保全现场。记录日志中的 `noncanonical or cross-vault storage path; preserved` 与对应 Vault；不要手工改在线数据库，也不要用同名文件覆盖对象。
 2. 用只读方式定位异常行：
 
    ```sh
    sqlite3 -readonly /var/lib/vaultsyncd/server.sqlite \
-     "SELECT hex(root_id), hex(hash), storage_path FROM objects WHERE storage_path NOT LIKE 'objects/%' AND storage_path NOT LIKE 'roots/%';"
+     "SELECT hex(vault_id), hex(hash), storage_path FROM objects WHERE storage_path NOT LIKE 'objects/%' AND storage_path NOT LIKE 'vaults/%';"
    ```
 
    行仍必须与 `objects` 的唯一约束和不可变触发器一致；正常升级不会产生异常行。
 3. 若异常来自损坏或被替换的数据库，按备份/离线恢复规程用最近的一致性备份（迁移前备份为 `server.sqlite.pre-migration-v14-to-v15.bak`）整套恢复；不要只替换单行或手工补 `objects` 记录。
-4. 恢复后以新 ServerEpoch 重新开放服务，并核对受影响 Root 的当前/历史/回收站内容可读、备份可验证；未验证前不宣告恢复成功。
+4. 恢复后以新 ServerEpoch 重新开放服务，并核对受影响 Vault 的当前/历史/回收站内容可读、备份可验证；未验证前不宣告恢复成功。

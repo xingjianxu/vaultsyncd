@@ -50,14 +50,14 @@
 | C01 | 面向开发者和技术爱好者，自托管 | 单机可部署；数据和配置可导出 |
 | C02 | 服务器是权威文件库 | 服务器确认版本、命名空间和提交结果；客户端持有副本与待提交操作 |
 | C03 | 客户端提供按需文件体验 | P0：Windows CFAPI 原生占位；P1：Linux 客户端 FUSE 挂载视图 |
-| C04 | 多个独立同步目录 | 服务端 Root 与客户端 Binding 分离 |
+| C04 | 多个独立同步目录 | 服务端 Vault 与客户端 Binding 分离 |
 | C05 | 删除意味着全局删除 | 显式 Delete 操作、墓碑和回收站；释放缓存不是删除 |
 | C06 | 冲突保留两个版本，生成副本 | 基于版本前提判断，不以最后修改时间覆盖 |
 | C07 | 回收站及文件历史保留 30 天 | 历史对象、恢复 API、垃圾回收保护条件 |
 | C08 | Android 采用移动端云盘体验 | 后续做浏览、按需下载与离线缓存，不承诺任意目录后台镜像 |
 | C09 | 每个同步目录独立选择模式 | Binding 存储模式；具体模式集合见 C34 |
 | C10 | 首要对象是普通文档和个人文件 | 不把活动数据库、虚拟机磁盘当作首发一致性承诺 |
-| C11 | MVP 单用户，未来必须支持多用户与共享目录 | 首发一个所有者账号，表结构和授权边界保留 owner/root scope |
+| C11 | MVP 单用户，未来必须支持多用户与共享目录 | 首发一个所有者账号，表结构和授权边界保留 owner/vault scope |
 | C12 | 尽可能即时，通常 1—3 秒 | 小文件稳态目标；明确网络、文件大小与测量起止点 |
 | C13 | 类似 `.gitignore` 的排除规则，默认排除常见缓存和临时文件 | 显式规则集与规则解释接口；排除不生成删除事件 |
 | C14 | 服务端仅支持 Linux 部署 | server 仅构建 Linux 目标；Windows/macOS 不提供服务端 |
@@ -162,7 +162,7 @@ Linux 客户端（包含完整同步及 FUSE 按需访问）、macOS File Provid
 | 文件监视 | `notify` 候选 + 周期扫描 | 监视器用于及时发现，扫描用于修复遗漏 |
 | 排除匹配 | 经验证的 gitignore 风格匹配库 | 不自行拼写 glob 正则；规则差异需要测试 |
 | 内容校验 | SHA-256 | 统一文件及传输块校验；内容哈希不是访问凭据 |
-| 日志 | `tracing` 结构化事件 | request_id、op_id、root_id 贯穿日志；不记录令牌或文件内容 |
+| 日志 | `tracing` 结构化事件 | request_id、op_id、vault_id 贯穿日志；不记录令牌或文件内容 |
 
 Rust、Tauri 2、React/TypeScript 的主技术栈已经确认；其余配套依赖是工程建议，不是当前最新版声明。首次编码时创建 `rust-toolchain.toml`、`Cargo.lock`、前端 lockfile，记录实测版本、MSRV、许可证和平台要求。不要在长文档中虚构“最新版本号”。
 
@@ -182,7 +182,7 @@ flowchart TB
   W -->|采集与复核| S
 ```
 
-- `vaultsyncd`：只在 Linux 运行，单实例持有数据库写入权，管理多个普通存储 Root；不对同一状态目录启动多个副本，不挂载 FUSE 视图，不提供 Windows/macOS 服务端构建。
+- `vaultsyncd`：只在 Linux 运行，单实例持有数据库写入权，管理多个普通存储 Vault；不对同一状态目录启动多个副本，不挂载 FUSE 视图，不提供 Windows/macOS 服务端构建。
 - `vaultsyncd-agent`：首发只在 Windows 用户会话运行，管理本机多个 Binding；GUI 关闭后继续运行，CFAPI 回调生命周期归它或受监管的适配器进程。Linux agent 及 FUSE 生命周期管理属于 P1。
 - `vaultsyncd-cli`：首发作为 Windows 客户端命令行入口，调用同一应用服务接口，不另写同步算法。Linux 服务端另提供 `vaultsyncd-admin` 管理 CLI，只处理配置、诊断、备份和恢复，不创建客户端 Binding。
 - `vaultsyncd-desktop`：Tauri 壳与界面。Tauri Core 与 WebView 的区分不等于独立同步守护进程；需要单独实现 agent 生命周期。[R8]
@@ -272,7 +272,7 @@ flowchart TB
 | `apps/desktop/src-tauri/capabilities/` | 窗口能力权限 | 授予任意文件访问或任意命令执行 |
 | `apps/desktop/src-tauri/tauri.conf.json` | Tauri 配置、标识、构建与打包设置 | 真实账号、密码或长期令牌 |
 | `apps/desktop/src-tauri/icons/` | 桌面图标与安装资源 | 用户文件或运行时截图 |
-| `apps/web/src/` | Linux 服务端管理页面、认证状态、Root/历史/回收站/备份操作 | Windows agent 的本机路径控制 |
+| `apps/web/src/` | Linux 服务端管理页面、认证状态、Vault/历史/回收站/备份操作 | Windows agent 的本机路径控制 |
 
 ### 5.4 Rust 模块：crates
 | 目录 | 职责 | 内部文件/模块示例 |
@@ -281,7 +281,7 @@ flowchart TB
 | `crates/planner/` | Base/Local/Remote 三方比较和确定性同步计划 | `reconcile.rs`、`first_sync.rs`、`conflict.rs`、`delete.rs`、`rename.rs` |
 | `crates/protocol/` | 远端 wire DTO、能力协商、协议版本与错误映射 | `generated/`、`capabilities.rs`、`versioning.rs` |
 | `crates/local-ipc/` | Windows agent 命令/状态 DTO、消息帧与协议版本 | `generated/`、`framing.rs`、`version.rs`；不包含 CFAPI |
-| `crates/http-client/` | 共用 HTTPS 客户端、认证刷新、事件拉取及固定版本内容接口 | `auth.rs`、`roots.rs`、`changes.rs`、`uploads.rs`、`content.rs` |
+| `crates/http-client/` | 共用 HTTPS 客户端、认证刷新、事件拉取及固定版本内容接口 | `auth.rs`、`vaults.rs`、`changes.rs`、`uploads.rs`、`content.rs` |
 | `crates/transfer/` | 内容哈希、固定块、续传状态与传输端口抽象 | `hash.rs`、`chunk.rs`、`resume.rs`、`manifest.rs`、`ports.rs` |
 | `crates/fs-common/` | 路径规则、跨平台名称校验、文件事实类型、忽略规则 | `path.rs`、`name.rs`、`fingerprint.rs`、`ignore.rs`；系统调用放平台层 |
 | `crates/client-store/` | 客户端 SQLite、baseline、dirty generation、队列、事件、恢复意图 | `db.rs`、`entries.rs`、`queue.rs`、`intents.rs`、`migrations/` |
@@ -427,25 +427,25 @@ Rust/前端各自验证，协议变更同时验证双方与消费者。发布统
 7. **I07 首次合并不推导删除**：缺少共同基线时，另一端不存在不代表用户执行删除。
 8. **I08 故障不等于删除**：挂载丢失、权限拒绝、扫描中断、目录尚未枚举完均不能生成批量删除。
 9. **I09 游标可恢复**：事件与逻辑状态提交一致；客户端仅在事件已持久化到本地工作队列后推进接收游标，另记已应用进度。
-10. **I10 路径不可逃逸**：所有访问均在授权 Root 内；拒绝路径穿越、符号链接跳转及竞争替换导致的越界。
+10. **I10 路径不可逃逸**：所有访问均在授权 Vault 内；拒绝路径穿越、符号链接跳转及竞争替换导致的越界。
 11. **I11 完整缓存不自动驱逐**：允许清理可重建临时下载片段；不允许自动驱逐已完成下载文件、已下载旧内容或脏数据。
 12. **I12 历史不可变**：已提交 VersionId 对应字节不再改变；恢复历史创建新当前版本，而非改写旧版本。
 13. **I13 磁盘与 DB 可恢复**：任何步骤崩溃后均可判断重做、停止或保留冲突；不靠猜测“上次应该成功了”。
 14. **I14 服务端变更被观察**：外部变更和客户端提交进入同一个版本及事件流程，避免两套规则。
-15. **I15 权限每次检查**：所有元数据、版本、下载块、快照、恢复与备份接口验证当前账号对 Root 的权限。
+15. **I15 权限每次检查**：所有元数据、版本、下载块、快照、恢复与备份接口验证当前账号对 Vault 的权限。
 
 ## 7. 核心数据模型
 
 ### 7.1 身份、版本与时间
 
 - `ServerId`：安装实例身份；备份恢复沿用该身份，但更换 `ServerEpoch`。
-- `RootId`：一个被管理的服务器目录，不等于本地路径文本。
-- `BindingId`：某设备某目录与 Root 的绑定，持有独立同步模式和排除规则。
+- `VaultId`：一个被管理的服务器目录，不等于本地路径文本。
+- `BindingId`：某设备某目录与 Vault 的绑定，持有独立同步模式和排除规则。
 - `EntryId`：服务器命名空间条目身份，文件或目录均有；根目录也有合成 EntryId。
 - `Revision`：服务器对条目元数据/内容/位置变化分配的递增修订；无共同基线的本地新文件用临时 ID，提交时返回映射。
 - `VersionId`：某个不可变文件内容版本；目录没有文件内容 VersionId。
 - `ContentHash`：内容 SHA-256；相同内容可复用物理对象，但不能因此复用权限或条目身份。
-- `RootSeq`：Root 事务事件序号，严格递增，只有服务器分配；外部采集也使用该序列。
+- `VaultSeq`：Vault 事务事件序号，严格递增，只有服务器分配；外部采集也使用该序列。
 - `DeviceId`、`OpId`：设备与逻辑操作的随机不透明标识；不承担身份认证。
 - 所有计数器必须避免 JavaScript 53 位精度问题：API 中长整数以十进制字符串传输。SQLite INTEGER 使用有符号 64 位范围，Rust 在边界做检查。
 - 存储 UTC 时间，显示时转本地时间。保留期以服务端时间计量，不以客户端 mtime 决定。
@@ -456,17 +456,17 @@ Rust/前端各自验证，协议变更同时验证双方与消费者。发布统
 | --- | --- | --- |
 | `users` | id、login、password_hash、status | 首发仅一位 owner，但 API 不省略授权 |
 | `sessions` | id、user_id、device_id、token_digest、expires_at、revoked_at | 令牌摘要存储；到期/失效必检 |
-| `roots` | id、owner_id、absolute_path、volume_identity、root_file_identity、health、seq、epoch | 路径不重叠；身份不匹配停止同步 |
-| `entries` | id、root_id、parent_id、name、name_key、kind、revision、content_version_id、deleted_at、modified_at | 活跃同父目录名称唯一；父子必须同 Root；不允许目录环；`modified_at` 是服务端接受改动的时刻，不是文件系统 mtime |
-| `versions` | id、root_id、entry_id、object_hash、size、created_seq、superseded_at、origin | 引用已持久化内容；历史只读 |
-| `objects` | root_id、hash、size、storage_path、verified_at、gc_state | 内容地址对象；不通过哈希全局泄露存在性 |
-| `changes` | root_id、seq、tx_id、events_json、created_at | `(root_id,seq)` 唯一；一条记录是一个不可拆分事务批次 |
-| `operations` | root_id、device_id、op_id、request_digest、state、result_json、intent_path | 幂等键唯一；保留紧凑结果直到相应设备代际失效 |
-| `uploads` | id、root_id、session_id、expected_size、hash、expires_at、state | 绑定用户、Root 和不可变内容意图 |
+| `vaults` | id、owner_id、absolute_path、volume_identity、vault_file_identity、health、seq、epoch | 路径不重叠；身份不匹配停止同步 |
+| `entries` | id、vault_id、parent_id、name、name_key、kind、revision、content_version_id、deleted_at、modified_at | 活跃同父目录名称唯一；父子必须同 Vault；不允许目录环；`modified_at` 是服务端接受改动的时刻，不是文件系统 mtime |
+| `versions` | id、vault_id、entry_id、object_hash、size、created_seq、superseded_at、origin | 引用已持久化内容；历史只读 |
+| `objects` | vault_id、hash、size、storage_path、verified_at、gc_state | 内容地址对象；不通过哈希全局泄露存在性 |
+| `changes` | vault_id、seq、tx_id、events_json、created_at | `(vault_id,seq)` 唯一；一条记录是一个不可拆分事务批次 |
+| `operations` | vault_id、device_id、op_id、request_digest、state、result_json、intent_path | 幂等键唯一；保留紧凑结果直到相应设备代际失效 |
+| `uploads` | id、vault_id、session_id、expected_size、hash、expires_at、state | 绑定用户、Vault 和不可变内容意图 |
 | `upload_parts` | upload_id、part_index、length、hash、path | 索引唯一；重复内容匹配才幂等 |
-| `conflicts` | id、root_id、source_entry_id、sibling_entry_id、reason、resolved_at | 一个 OpId 的冲突结果稳定 |
-| `trash` | delete_id、root_id、entry_id、deleted_seq、expires_at、manifest_ref | 保存路径与目录子树恢复信息 |
-| `fs_intents` | intent_id、root_id、expected_before、desired_after、phase | 支持工作目录发布的崩溃恢复 |
+| `conflicts` | id、vault_id、source_entry_id、sibling_entry_id、reason、resolved_at | 一个 OpId 的冲突结果稳定 |
+| `trash` | delete_id、vault_id、entry_id、deleted_seq、expires_at、manifest_ref | 保存路径与目录子树恢复信息 |
+| `fs_intents` | intent_id、vault_id、expected_before、desired_after、phase | 支持工作目录发布的崩溃恢复 |
 | `backup_leases` | id、snapshot_seq_map、expires_at、manifest_ref | 被备份引用的对象不可被 GC |
 
 `name_key` 使用统一、版本化的跨平台可表示性检查。原始名称保留；不自动小写、不偷偷规范化重命名。确切 Windows 名称等价规则通过平台适配器校验，不能用简单 Unicode lowercase 代替所有文件系统比较。
@@ -475,7 +475,7 @@ Rust/前端各自验证，协议变更同时验证双方与消费者。发布统
 
 | 表 | 作用 |
 | --- | --- |
-| `bindings` | Root、设备本地路径/挂载点、缓存位置、模式、规则版本、服务器 epoch |
+| `bindings` | Vault、设备本地路径/挂载点、缓存位置、模式、规则版本、服务器 epoch |
 | `baseline_entries` | 最近已确认的共同基线：EntryId、Revision、VersionId、位置、删除标记 |
 | `remote_entries` | 最新收到但可能尚未落盘的远端状态；与 baseline 分开 |
 | `local_entries` | 当前指纹、generation、dirty 标志、驻留信息、平台 file identity |
@@ -502,7 +502,7 @@ Rust/前端各自验证，协议变更同时验证双方与消费者。发布统
 | 远端应用 `remote_apply` | current、pending、blocked_by_local、conflicted |
 | 任务 `transfer` | idle、queued、running、retry_wait、failed |
 | 使用保护 `usage` | idle、read_handles、write_handles、unknown |
-| 可用性 `availability` | online、offline、mount_failed、root_unavailable |
+| 可用性 `availability` | online、offline、mount_failed、vault_unavailable |
 
 `partial` 是内部下载状态，不代表完整离线可用。目录“已同步”必须按子任务、失败和冲突汇总，不可只看目录自身元数据。
 
@@ -551,7 +551,7 @@ agent 重启后先恢复 local_intents、核对文件身份和实际内容，再
 
 ### 9.2 首次同步已有内容
 
-1. 验证 Root 健康、目录无重叠、当前目录类型及名称可表示。
+1. 验证 Vault 健康、目录无重叠、当前目录类型及名称可表示。
 2. 获取服务器一致性元数据快照，记录 `snapshot_id + epoch + high_water_seq`。
 3. 扫描本地目录并保留导入清单，先元数据后必要的内容哈希。
 4. 同一规范路径、类型和内容相同：绑定服务器 EntryId，无需重复上传内容。
@@ -566,7 +566,7 @@ agent 重启后先恢复 local_intents、核对文件身份和实际内容，再
 
 采用 **HTTPS JSON 命令 + 持久事件拉取 + SSE 唤醒提示**（D）。SSE 仅减少等待，不是唯一事件来源；断线后可轮询恢复。
 
-`GET /v1/roots/{root_id}/changes?after={seq}&limit={n}` 返回有序事务批次。每批含 RootSeq、TxId、相关条目变化和冲突关联。目录级事务不能被分页拆成一半。通知重复、丢失、乱序都由拉取与去重修复。
+`GET /v1/vaults/{vault_id}/changes?after={seq}&limit={n}` 返回有序事务批次。每批含 VaultSeq、TxId、相关条目变化和冲突关联。目录级事务不能被分页拆成一半。通知重复、丢失、乱序都由拉取与去重修复。
 
 快照分页必须固定同一 `snapshot_id`，不能每页直接读取不断变化的 live 表。建议服务端生成短期只读快照清单；过期后重启快照。下载某文件内容仍须引用 VersionId，而不是“当前路径”。
 
@@ -585,7 +585,7 @@ agent 重启后先恢复 local_intents、核对文件身份和实际内容，再
 
 平台稳定文件身份和配对的 rename 事件为优先证据，内容哈希只作辅助。多个同内容文件并存时不能凭哈希猜测唯一移动关系。
 
-同 Root 内文件/目录移动保持 EntryId。移动目录只修改父目录关系，不给所有子文件重新传输内容。跨 Root 移动在首发作为“目标创建成功后再源删除”的可恢复任务，不假装是一个跨 Root 原子 rename；无法确定来源时按独立新增/删除处理，并保留历史。
+同 Vault 内文件/目录移动保持 EntryId。移动目录只修改父目录关系，不给所有子文件重新传输内容。跨 Vault 移动在首发作为“目标创建成功后再源删除”的可恢复任务，不假装是一个跨 Vault 原子 rename；无法确定来源时按独立新增/删除处理，并保留历史。
 
 ## 10. 冲突、删除与目录规则
 
@@ -646,10 +646,10 @@ reflink 可减少工作文件与当前对象的重复物理数据，但不保证
 
 ### 11.2 一次内容修改的提交步骤
 
-1. **鉴权与幂等检查**：校验账号、Root、OpId、request_digest、会话与 epoch。已完成则返回原结果。
+1. **鉴权与幂等检查**：校验账号、Vault、OpId、request_digest、会话与 epoch。已完成则返回原结果。
 2. **内容接收**：上传到内部暂存区；验证每块与总文件 SHA-256、长度，完成持久化。不得直接写当前文件。
 3. **固定内容对象**：对象落盘、校验及必要 fsync 完成；内容对象随后只读。尚未被引用的对象可以成为孤儿，不能导致损坏。
-4. **基线与现场复核**：持有 Root 提交调度锁，比较 Entry Revision、父目录/目标名称、删除前提和工作目录已观察指纹。现场已变化则先采集或返回 `RECONCILE_REQUIRED`。
+4. **基线与现场复核**：持有 Vault 提交调度锁，比较 Entry Revision、父目录/目标名称、删除前提和工作目录已观察指纹。现场已变化则先采集或返回 `RECONCILE_REQUIRED`。
 5. **准备意图**：持久写入 `fs_intent`，包含 expected_before、desired_after、前后内容引用及恢复所需路径。内部锁只能序列化本服务操作，不能锁住所有外部应用。
 6. **发布工作文件**：从不可变对象 reflink 到目标所在子卷内的 staging 文件（跨文件系统走校验复制），刷盘后使用平台受控替换，保留旧内容的不可变引用。跨文件系统不能依赖一次 rename 完成。检测到外部写入/使用冲突时停止替换并保留候选版本。
 7. **元数据完成事务**：写 entries、versions、changes、冲突信息及 operations 结果；变更事件与最终逻辑状态同一数据库事务提交。事务前的工作目录状态不可通过 API 暴露为一个假完整新版本。
@@ -666,8 +666,8 @@ reflink 可减少工作文件与当前对象的重复物理数据，但不保证
 | 意图已写，工作文件未变 | 核对 expected_before，满足前提则重做；否则进入协调 |
 | 工作文件已发布，DB 未完成 | 校验目标与 desired_after 一致后完成同一操作；若已经又被外部修改，保留两个可读版本并重新协调，不能盲目覆盖 |
 | DB 已 committed，响应丢失 | 同 OpId 返回原结果，不创建重复副本 |
-| 意图与工作目录均无法解释 | Root 标记 `NEEDS_RECOVERY`，暂停破坏性写入；输出恢复报告与候选版本 |
-| 数据库或对象损坏 | 停止相关 Root 写入，报告具体损坏；不以“全量重扫”覆盖唯一元数据证据 |
+| 意图与工作目录均无法解释 | Vault 标记 `NEEDS_RECOVERY`，暂停破坏性写入；输出恢复报告与候选版本 |
+| 数据库或对象损坏 | 停止相关 Vault 写入，报告具体损坏；不以“全量重扫”覆盖唯一元数据证据 |
 
 启动先恢复未完成意图，再开放写入和事件游标。只重放可证明的操作，不依赖最后一条普通日志推测事实。
 
@@ -677,28 +677,28 @@ reflink 可减少工作文件与当前对象的重复物理数据，但不保证
 
 | 检查位置 | 必须执行的规则 |
 | --- | --- |
-| Root 注册 | 确认目录在允许基目录内，非重叠，底层后端符合 C39；拒绝 FUSE、客户端挂载视图及已知占位/按需回源目录 |
+| Vault 注册 | 确认目录在允许基目录内，非重叠，底层后端符合 C39；拒绝 FUSE、客户端挂载视图及已知占位/按需回源目录 |
 | 内部目录初始化 | SQLite、对象、历史、暂存和备份准备目录均要求合规 btrfs；核对 CoW/校验、权限和子卷布局 |
-| 子目录遍历 | 检查跨挂载边界；拒绝 Root 内嵌套子卷及子挂载，不能以根是 btrfs 绕过限制 |
+| 子目录遍历 | 检查跨挂载边界；拒绝 Vault 内嵌套子卷及子挂载，不能以根是 btrfs 绕过限制 |
 | 内容版本确认 | 必须能从普通存储取得并验证完整字节，不能把仅存在元数据、第三方 stub 或还需云服务回源的文件认定为已持久保存 |
-| 每次启动与挂载变化 | 重新核对挂载类型、卷与目录身份；普通目录被替换为不支持后端时暂停 Root，不推导删除 |
+| 每次启动与挂载变化 | 重新核对挂载类型、卷与目录身份；普通目录被替换为不支持后端时暂停 Vault，不推导删除 |
 | 容器部署 | 在服务进程实际 mount namespace 中检查卷与 bind mount；容器内部路径不是后端类型证明 |
 
 实现建议：结合已打开目录句柄上的 `fstatfs` 类型与 `/proc/self/mountinfo` 的挂载记录核对实际后端；区分挂载 ID、设备身份和目录身份，不只看路径前缀。[R13][R14] FUSE 和 FUSE 子类型明确拒绝；普通 bind mount 只有在实际后端合规且无重叠时接受。
 
 Linux 第三方文件占位格式不存在本项目可依赖的统一判定方式。存储准入以允许的后端、已知标记和部署契约共同约束；不能声称仅凭“普通文件类型”就识别了所有云占位。普通稀疏文件不自动等于占位文件，不能仅因磁盘分配块数小于逻辑大小就判为云文件。
 
-配置阶段拒绝返回 `UNSUPPORTED_STORAGE_BACKEND` 或 `SERVER_PLACEHOLDER_UNSUPPORTED`；运行阶段发现变化返回 `ROOT_UNAVAILABLE` 并保留完整错误原因。服务端不尝试把不支持目录自动转换、下载填充或清空。
+配置阶段拒绝返回 `UNSUPPORTED_STORAGE_BACKEND` 或 `SERVER_PLACEHOLDER_UNSUPPORTED`；运行阶段发现变化返回 `VAULT_UNAVAILABLE` 并保留完整错误原因。服务端不尝试把不支持目录自动转换、下载填充或清空。
 
 客户端可连接部署于 NAS Linux 环境中的服务端。NAS 使用普通本地文件系统提供工作目录，与客户端通过 SMB 操作这些目录不是同一件事：前者由 C39 决定支持范围，后者作为普通外部写入进入第 12 节流程。
 
 ### 11.5 btrfs 布局、能力与失败边界（D；落实 C39）
 
-- 部署默认把内部状态和各 Root 放在同一 btrfs 文件系统的互不重叠目录/子卷，便于 reflink；每个 Root 内拒绝嵌套子卷及子挂载，避免遍历、快照遗漏和跨子卷 rename。允许 Root 位于另一块合规 btrfs 卷，但显式记录复制成本；服务二进制、源码及第三方备份最终目的地不受此数据存储约束。
+- 部署默认把内部状态和各 Vault 放在同一 btrfs 文件系统的互不重叠目录/子卷，便于 reflink；每个 Vault 内拒绝嵌套子卷及子挂载，避免遍历、快照遗漏和跨子卷 rename。允许 Vault 位于另一块合规 btrfs 卷，但显式记录复制成本；服务二进制、源码及第三方备份最终目的地不受此数据存储约束。
 - `ServerStorage` 增加平台内部的克隆候选能力：用已验证的句柄创建私有目标，成功后验证长度/哈希并 fsync，发布后刷目录。优先 FICLONE；跨文件系统或经分类的能力不支持可退回完整复制并暴露原因，复制期间核对源身份/变化。EIO、ENOSPC、权限错误不能伪装成能力不支持或成功；清理未发布目标，保留可恢复内容。正常同卷 CoW 样本必须通过 reflink 原生验收，不能用回退掩盖原型失败。
-- 准入核对 btrfs 类型、FSID、子卷 ID、mount ID 和目录身份；inode 只在所属子卷内解释。别名/重叠检测不能只比路径或 inode。启动及挂载变化重验；卷/子卷被替换或回滚时暂停 Root，走恢复与 ServerEpoch 流程，不把旧内容解释为新删除。
+- 准入核对 btrfs 类型、FSID、子卷 ID、mount ID 和目录身份；inode 只在所属子卷内解释。别名/重叠检测不能只比路径或 inode。启动及挂载变化重验；卷/子卷被替换或回滚时暂停 Vault，走恢复与 ServerEpoch 流程，不把旧内容解释为新删除。
 - 首发要求数据 CoW 和数据校验，拒绝相关目录/文件的 NOCOW（`+C`）及 `nodatacow`/`nodatasum` 配置；扫描后新增的不合规文件标问题且不确认版本。SQLite 也保留 CoW，先基准测试再决定调优，不能套用数据库目录 `chattr +C` 的通用建议。压缩可选，默认不由服务修改挂载参数；实际效果由 S106/S107 测量。[R20]
-- S136/ADR-020：物理对象新写入须按 Root 隔离内容地址；不能仅改变登记字符串、仍共享可被另一 Root GC 删除的物理对象。旧对象按已登记路径和 Root 归属兼容读取/重试；GC、备份/恢复与启动重放使用同一规范路径核验，格式变化设置旧二进制拒写围栏，细节见接口文档。
+- S136/ADR-020：物理对象新写入须按 Vault 隔离内容地址；不能仅改变登记字符串、仍共享可被另一 Vault GC 删除的物理对象。旧对象按已登记路径和 Vault 归属兼容读取/重试；GC、备份/恢复与启动重放使用同一规范路径核验，格式变化设置旧二进制拒写围栏，细节见接口文档。
 - 快照、压缩、校验和均不替代 SHA-256、SQLite 事务、fs_intent、fsync、CAS 或 GC 引用。首发不依赖 qgroup、自动去重或 send/receive；后者可作为未来外部备份传输优化，不改变现有协议。
 - 容量监控覆盖数据和元数据余量，处理 CoW 新分配的 ENOSPC；子卷不构成独立满盘故障域。历史/快照可能持续持有 extent，删对象不保证立即释放物理空间。不得按逻辑文件大小承诺节省比例，也不自动 defrag（可能破坏共享 extent）。校验错误停止相关写入并报告；文件系统校验不能保证无冗余时修复，独立备份仍必要。[R20][R21]
 
@@ -706,7 +706,7 @@ Linux 第三方文件占位格式不存在本项目可依赖的统一判定方�
 
 ### 12.1 自动采集流程
 
-文件系统事件 → 合并同路径事件 → 检查 Root 与挂载身份 → 等待短暂稳定窗口 → 安全打开并 reflink 到私有候选文件、对候选做哈希/长度校验 → 生成 ExternalProposal → 与客户端同一提交流程 → 事件传播。
+文件系统事件 → 合并同路径事件 → 检查 Vault 与挂载身份 → 等待短暂稳定窗口 → 安全打开并 reflink 到私有候选文件、对候选做哈希/长度校验 → 生成 ExternalProposal → 与客户端同一提交流程 → 事件传播。
 
 同文件系统的整文件 FICLONE 为采集提供相对并发写原子的字节副本；哈希读取固定候选，采集前后仍核对路径/文件身份并在变化时重排队。跨文件系统按 §11.5 校验复制。克隆可能捕获应用多次写入之间的状态，不能证明应用已保存完成，也不提供多文件事务。[R19]
 
@@ -729,7 +729,7 @@ Linux 第三方文件占位格式不存在本项目可依赖的统一判定方�
 
 ### 12.3 挂载丢失与异常批量删除
 
-每次扫描先核对 Root 的卷身份、根目录身份、访问权限和健康状态。挂载卸载后路径下出现空目录时，视为 Root 不可用，不能认为用户删除了所有文件。
+每次扫描先核对 Vault 的卷身份、根目录身份、访问权限和健康状态。挂载卸载后路径下出现空目录时，视为 Vault 不可用，不能认为用户删除了所有文件。
 
 扫描结果必须区分 `complete`、`permission_denied`、`io_error`、`mount_changed`。只有完整且健康扫描中的缺失才成为删除候选；大批量突变先进入保护队列，附上原基线、目录身份和计数供复核。该保护不是改变全局删除语义，而是防止把环境故障伪装成用户删除。
 
@@ -788,13 +788,13 @@ trait ContentSource {
 
 每次 ApplyRequest 必须包含 BindingId、EntryId、预期 local_generation、预期远端 VersionId/Revision、OpId 和取消令牌。返回的 ApplyReceipt 带实际文件身份、generation 和阶段。条件不匹配返回 `LOCAL_CHANGED`，不可强行继续。
 
-平台回调转为 `ReadDemand`、`WriteObserved`、`RenameObserved`、`UsageChanged`、`RootUnavailable` 等事件。回调不能阻塞主线程等待整个网络请求；通过有界队列、后台任务和操作完成机制衔接。
+平台回调转为 `ReadDemand`、`WriteObserved`、`RenameObserved`、`UsageChanged`、`VaultUnavailable` 等事件。回调不能阻塞主线程等待整个网络请求；通过有界队列、后台任务和操作完成机制衔接。
 
 ### 14.2 Windows：CFAPI
 
 Windows 客户端采用 Cloud Files API 创建/管理占位符，WinRT 注册同步根并集成 Explorer。官方文档说明其依赖 NTFS；API 最低版本不等于本项目承诺测试所有旧 Windows。[R1][R2]
 
-实现职责包括：注册/连接 Root，创建占位，处理内容请求及取消，向系统返回内容/错误，更新 FileIdentity 与同步状态，执行用户请求的释放。`FileIdentity` 编码 schema_version、RootId、EntryId 和版本提示，不装入密码、访问令牌或服务器绝对路径。
+实现职责包括：注册/连接 Vault，创建占位，处理内容请求及取消，向系统返回内容/错误，更新 FileIdentity 与同步状态，执行用户请求的释放。`FileIdentity` 编码 schema_version、VaultId、EntryId 和版本提示，不装入密码、访问令牌或服务器绝对路径。
 
 - 使用 CFAPI 认可的流程修改占位与状态，不直接手改 reparse point，不以截断文件伪造脱水。
 - 只在实际条件满足后标记 in-sync；系统的 in-sync 标记不能替代业务数据库基线。
@@ -829,7 +829,7 @@ FUSE 可以掌握经过本挂载的句柄；普通目录模式的跨平台“任
 
 ### 14.5 macOS 与 Android 扩展点（P1）
 
-macOS 后续使用 Swift 编写 `NSFileProviderReplicatedExtension`，Rust 复用协议与确定性逻辑；OS 扩展和 daemon 分进程，不能假定共享同一个内存对象。Domain、ItemIdentifier、同步锚点和内容获取分别映射 Root、EntryId、事件游标和版本接口。[R9]
+macOS 后续使用 Swift 编写 `NSFileProviderReplicatedExtension`，Rust 复用协议与确定性逻辑；OS 扩展和 daemon 分进程，不能假定共享同一个内存对象。Domain、ItemIdentifier、同步锚点和内容获取分别映射 Vault、EntryId、事件游标和版本接口。[R9]
 
 Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系统后台任务限制；不承诺后台永久实时同步任意外部目录。两者均需重新验证“永久保留”与系统管理存储之间的实际能力。
 
@@ -839,7 +839,7 @@ Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系
 
 以下 `/v1` 是首发协议草案，编码阶段先输出 OpenAPI，再实现处理器。所有远端接口使用 HTTPS；除健康探测和版本能力信息外均需身份认证。JSON 使用 snake_case，未知枚举不当作默认成功。
 
-请求带 request_id；修改操作带持久 OpId。超时不等于失败，客户端查询操作结果。所有清单分页有上限；文件名按数据处理，不拼接进 shell。除受限 Root 配置操作外，网络接口使用 ID 和相对名称，不接受任意服务器绝对路径。
+请求带 request_id；修改操作带持久 OpId。超时不等于失败，客户端查询操作结果。所有清单分页有上限；文件名按数据处理，不拼接进 shell。除受限 Vault 配置操作外，网络接口使用 ID 和相对名称，不接受任意服务器绝对路径。
 
 ### 15.2 核心端点
 
@@ -849,22 +849,22 @@ Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系
 | `POST /v1/auth/login` | 用户名、密码、device_label → 会话 | 限流，错误不暴露账号是否存在 |
 | `POST /v1/auth/refresh` | refresh credential → 新会话凭据 | 轮换与重复刷新处理需原子化 |
 | `POST /v1/auth/logout` | 当前会话 | 失效当前凭据；不清理本地文件 |
-| `GET /v1/roots` | 授权 Root 清单 | 普通客户端不获得服务器绝对路径 |
-| `POST /v1/admin/roots` | 预配置允许基目录下的路径 | 仅 owner 管理；重叠、卷身份、权限检查 |
-| `POST /v1/roots/{root}/snapshots` | 创建只读元数据快照 | 返回 snapshot_id、epoch、high_water_seq |
-| `GET /v1/roots/{root}/snapshots/{id}/entries` | page_token → entries | 页必须属于同一快照 |
-| `GET /v1/roots/{root}/changes` | after、limit → 事务批次 | 有序、可去重；过旧返回 410 |
-| `GET /v1/events` | SSE 唤醒 | 只通知哪些 Root 有新 seq，不替代持久日志 |
-| `POST /v1/roots/{root}/uploads` | size、hash、chunk_size → upload_id | 容量与权限检查；允许服务端选择块大小 |
-| `GET /v1/roots/{root}/uploads/{id}` | 上传状态与已收块 | 续传依据，不能只相信客户端位图 |
-| `PUT /v1/roots/{root}/uploads/{id}/parts/{index}` | 二进制块、块哈希 | 长度/位置验证，重复写入需字节一致 |
-| `POST /v1/roots/{root}/uploads/{id}/finalize` | 完成内容校验 | 只生成可提交内容引用，不修改条目 head |
-| `POST /v1/roots/{root}/operations` | Put/Create/Move/Delete/Restore 命令 | 校验基线、幂等、可能 202 pending |
-| `GET /v1/roots/{root}/operations/{op}` | 操作结果 | 用于响应丢失与重启恢复 |
-| `GET /v1/roots/{root}/entries/{entry}/versions` | 历史版本清单 | 权限检查覆盖已删除条目 |
-| `GET /v1/roots/{root}/entries/{entry}/versions/{version}/content` | 可带 Range | 固定版本、校验信息；不得按全局哈希越权获取 |
-| `GET /v1/roots/{root}/trash` | 回收站清单 | 列出到期时间与恢复限制 |
-| `GET /v1/roots/{root}/conflicts` | 冲突清单 | 与具体副本、原因关联 |
+| `GET /v1/vaults` | 授权 Vault 清单 | 普通客户端不获得服务器绝对路径 |
+| `POST /v1/admin/vaults` | 预配置允许基目录下的路径 | 仅 owner 管理；重叠、卷身份、权限检查 |
+| `POST /v1/vaults/{vault}/snapshots` | 创建只读元数据快照 | 返回 snapshot_id、epoch、high_water_seq |
+| `GET /v1/vaults/{vault}/snapshots/{id}/entries` | page_token → entries | 页必须属于同一快照 |
+| `GET /v1/vaults/{vault}/changes` | after、limit → 事务批次 | 有序、可去重；过旧返回 410 |
+| `GET /v1/events` | SSE 唤醒 | 只通知哪些 Vault 有新 seq，不替代持久日志 |
+| `POST /v1/vaults/{vault}/uploads` | size、hash、chunk_size → upload_id | 容量与权限检查；允许服务端选择块大小 |
+| `GET /v1/vaults/{vault}/uploads/{id}` | 上传状态与已收块 | 续传依据，不能只相信客户端位图 |
+| `PUT /v1/vaults/{vault}/uploads/{id}/parts/{index}` | 二进制块、块哈希 | 长度/位置验证，重复写入需字节一致 |
+| `POST /v1/vaults/{vault}/uploads/{id}/finalize` | 完成内容校验 | 只生成可提交内容引用，不修改条目 head |
+| `POST /v1/vaults/{vault}/operations` | Put/Create/Move/Delete/Restore 命令 | 校验基线、幂等、可能 202 pending |
+| `GET /v1/vaults/{vault}/operations/{op}` | 操作结果 | 用于响应丢失与重启恢复 |
+| `GET /v1/vaults/{vault}/entries/{entry}/versions` | 历史版本清单 | 权限检查覆盖已删除条目 |
+| `GET /v1/vaults/{vault}/entries/{entry}/versions/{version}/content` | 可带 Range | 固定版本、校验信息；不得按全局哈希越权获取 |
+| `GET /v1/vaults/{vault}/trash` | 回收站清单 | 列出到期时间与恢复限制 |
+| `GET /v1/vaults/{vault}/conflicts` | 冲突清单 | 与具体副本、原因关联 |
 | `POST /v1/admin/backup-snapshots` | 创建导出快照 | 见第 19 节；不创建自动调度 |
 | `GET /v1/admin/backup-snapshots/{id}/manifest` | 一致性清单 | 仅管理员，可交给第三方备份 |
 
@@ -894,7 +894,7 @@ Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系
 {
   "op_id": "op_example_001",
   "status": "committed",
-  "root_seq": "42",
+  "vault_seq": "42",
   "entry_id": "entry_example",
   "revision": "18",
   "version_id": "version_new",
@@ -910,11 +910,11 @@ Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系
 ```json
 {
   "error": {
-    "code": "ROOT_UNAVAILABLE",
+    "code": "VAULT_UNAVAILABLE",
     "message": "服务器目录当前不可用，已暂停该目录同步。",
     "retryable": true,
     "request_id": "req_example",
-    "root_id": "root_example",
+    "vault_id": "vault_example",
     "details": {"reason": "mount_identity_changed"}
   }
 }
@@ -929,11 +929,11 @@ Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系
 | 409 `RECONCILE_REQUIRED` | 等服务端采集外部变化；不强制重试覆盖 |
 | 410 `CURSOR_EXPIRED` / `EPOCH_CHANGED` | 进入保留基线的重建流程 |
 | 410 `VERSION_GONE` | 解释历史已过期，不下载同路径的新内容冒充旧版本 |
-| 422 `INVALID_NAME` / `UNSUPPORTED_ENTRY` | 标记问题条目，不拖垮整个 Root |
+| 422 `INVALID_NAME` / `UNSUPPORTED_ENTRY` | 标记问题条目，不拖垮整个 Vault |
 | 422 `HASH_MISMATCH` | 不发布内容；重新传输或报告损坏 |
 | 422 `UNSUPPORTED_STORAGE_BACKEND` / `SERVER_PLACEHOLDER_UNSUPPORTED` | 拒绝配置该服务器目录；解释只接受已支持的普通存储，不尝试回源或转换 |
 | 429 `RATE_LIMITED` | 尊重重试时间 |
-| 503 `ROOT_UNAVAILABLE` / `NEEDS_RECOVERY` | 暂停该 Root，通知并保留队列 |
+| 503 `VAULT_UNAVAILABLE` / `NEEDS_RECOVERY` | 暂停该 Vault，通知并保留队列 |
 | 507 `INSUFFICIENT_STORAGE` | 立即通知；保留脏数据；低频复查 |
 
 首发 Windows 本机错误另包含 `LOCAL_CHANGED`、`FILE_BUSY`、`MODE_REQUIRES_LOCAL_COPY`、`PLACEHOLDER_OFFLINE`；`MOUNT_FAILED` 由后续 Linux 客户端使用。内部原始 OS 错误可写诊断字段，但界面必须给出可理解原因。
@@ -950,7 +950,7 @@ Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系
 
 注册时检查规范路径、父子关系、卷身份、目录身份，以及符号链接、junction、bind mount 等别名关系。运行时依然以根句柄为边界逐层安全访问；注册时的 `canonicalize` 不能消除之后的 TOCTOU。
 
-内部数据库、缓存、备份暂存区与上传区必须位于所有受管根之外。对同一个 root 的多个客户端 Binding 是合法的；同一设备重复映射相同 root 到重叠本地目录不合法。
+内部数据库、缓存、备份暂存区与上传区必须位于所有受管根之外。对同一个 vault 的多个客户端 Binding 是合法的；同一设备重复映射相同 vault 到重叠本地目录不合法。
 
 路径字符串不能使用 `starts_with` 判断父子关系，例如 `/data/a` 不是 `/data/abc` 的父目录。网络传输名称不接受 `.`、`..`、NUL、分隔符混用、Windows 设备路径等逃逸形式。符号链接与 reparse point 默认不跟随。
 
@@ -978,7 +978,7 @@ Android 后续先实现云盘浏览、下载、上传与离线缓存，遵守系
 
 ### 17.1 单用户首发并保留未来授权边界
 
-首发通过本机管理命令初始化 owner 密码，禁止内置默认密码和公开注册。每个 Root 都有 owner_id；即使只有一个用户，数据访问也走统一授权接口，不能写死“登录成功即可访问磁盘任意路径”。后续共享目录增加成员权限表，不改变 Root/Entry 身份。
+首发通过本机管理命令初始化 owner 密码，禁止内置默认密码和公开注册。每个 Vault 都有 owner_id；即使只有一个用户，数据访问也走统一授权接口，不能写死“登录成功即可访问磁盘任意路径”。后续共享目录增加成员权限表，不改变 Vault/Entry 身份。
 
 密码使用经过维护的密码散列库，建议 Argon2id，随机独立盐；参数参考 RFC 9106 并结合目标服务器实测后写入 ADR，不自行设计密码学。[R12] 访问凭据短期、刷新凭据可轮换，服务端只保存必要摘要。设备 ID 不是秘密。
 
@@ -996,7 +996,7 @@ GUI 不保存长期凭据到前端 localStorage；优先 OS 凭据库，headless
 
 Tauri 只授予必要 capability；同步目录文件内容、文件名、Markdown、HTML 都是不可信数据，不作为 WebView 脚本或系统命令执行。文件预览后置；基础列表按文本转义。[R7]
 
-服务端对象下载不接受裸 hash 作为权限证明。上传限大小、并发和暂存寿命，检查 Root 授权与剩余空间；解包备份防路径穿越。日志不含密码、令牌、完整文件内容；详细文件路径只在受控本地诊断中使用。
+服务端对象下载不接受裸 hash 作为权限证明。上传限大小、并发和暂存寿命，检查 Vault 授权与剩余空间；解包备份防路径穿越。日志不含密码、令牌、完整文件内容；详细文件路径只在受控本地诊断中使用。
 
 ## 18. 状态界面、通知与可观测性
 
@@ -1005,32 +1005,32 @@ Tauri 只授予必要 capability；同步目录文件内容、文件名、Markdo
 UI 设计原则（2026-11-08 用户明确要求，适用于后续所有界面任务）：**Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.** 布局和控件本身表达用途，避免重复页内标题、次级标签、说明段落和装饰性状态文案；保留可访问名称、实际错误与影响操作决策的必要提示。
 
 - 连接设置：服务器地址、账号状态、连接错误与证书处理入口。
-- 目录列表：远端 Root、本地 Binding、模式、同步状态、最近成功时间。
+- 目录列表：远端 Vault、本地 Binding、模式、同步状态、最近成功时间。
 - 文件状态：仅云端、已下载、待上传、正在同步、失败、冲突；可搜索问题条目。
 - 操作入口：暂停/恢复、立即重试、下载、释放空间、历史/回收站恢复、解除绑定。
 - 问题页：原因、受影响路径、数据是否仍在本地、可执行的下一步。
 
-Web 管理首发提供 Root 配置/健康、账号基础管理、历史与回收站最小恢复入口和备份操作；不因此扩大到完整在线文件编辑器。
+Web 管理首发提供 Vault 配置/健康、账号基础管理、历史与回收站最小恢复入口和备份操作；不因此扩大到完整在线文件编辑器。
 
-2026-11-08 用户新增（ADR-019，S124 更新布局）：Web 提供只读文件浏览器，主体左侧为目录树，顶部选择授权 Root（无需刷新 Root 列表按钮）；右侧顶部为刷新、前进/后退、上级、Root 相对地址栏、筛选和属性工具栏，其余为文件列表。URL 路径可直接定位目录并支持刷新和历史导航。不重复显示页内“文件浏览器”标题及说明。展示已采集并提交的元数据，可手动刷新；暂不展示文件内容，不增加文件写入操作。
+2026-11-08 用户新增（ADR-019，S124 更新布局）：Web 提供只读文件浏览器，主体左侧为目录树，顶部选择授权 Vault（无需刷新 Vault 列表按钮）；右侧顶部为刷新、前进/后退、上级、Vault 相对地址栏、筛选和属性工具栏，其余为文件列表。URL 路径可直接定位目录并支持刷新和历史导航。不重复显示页内“文件浏览器”标题及说明。展示已采集并提交的元数据，可手动刷新；暂不展示文件内容，不增加文件写入操作。
 2026-11-08（S132）：文件列表只保留名称、大小、修改日期三列，取消行尾“操作”列；行上右键（含 Shift+F10/菜单键与触屏长按）打开 Mantine `Menu` 上下文菜单，目录含“打开”，所有条目含“属性”和“复制路径”，仍不写入服务端。
-2026-11-08（S136，用户最新决定，覆盖以上只读限制）：文件管理器支持上传文件及文件/目录右键复制、剪切、粘贴、删除；当前目录提供上传与粘贴入口。沿用授权上传、操作提交与回收站 API，同名不静默覆盖，移动保持身份，删除需确认且核对 revision/目录子树 token。复制目录与多文件上传为逐项提交，部分完成如实保留和报告；pending 或结果未知不称成功，重试复用原操作身份。本卡不增加内容编辑器。S136 技术边界：上传沿用服务端单文件 64 GiB 上限并有界分片读取；复制当前经浏览器固定版本客户端下载，单文件 64 MiB 上限，超限明确拒绝；支持跨 Root 复制，同 Root 剪切保持身份，跨 Root 剪切明确拒绝而不自动删源。后续解除复制大小或跨 Root 移动边界需独立任务和恢复验证。
-2026-11-08（S137，用户新增）：文件列表右键支持文件/目录重命名，左侧目录树提供与列表相同的上下文菜单（打开、属性、复制路径、复制、剪切、粘贴、重命名、删除），支持菜单键/Shift+F10。粘贴使用右键目标目录；Root 根节点仅允许打开/属性/复制路径/粘贴，不改 Root 配置。重命名沿用同 Root CAS move，保持 EntryId 和内容版本，名称无效/同名或基线变化不静默覆盖，未知结果复用原 OpId 核对。当前目录或祖先改名后按身份更新 URL、地址和选择；操作期间用户的新导航优先。用户同时要求验收后部署本机，由 S138 单独记录。
-2026-11-08（S134）：服务端 Web 的操作反馈统一用 Mantine `Notification`（`@mantine/notifications` 全局通知区），包括复制路径、账号、Root、恢复、备份与连接检查的成功/失败。成功及信息反馈四秒后消失，错误/警告可手动关闭；页面局部错误在状态清除或离开页面时移除。连接/加载/健康、恢复操作与备份完整性等持续状态和必要风险说明仍在原位，不以临时通知替代可恢复记录。
+2026-11-08（S136，用户最新决定，覆盖以上只读限制）：文件管理器支持上传文件及文件/目录右键复制、剪切、粘贴、删除；当前目录提供上传与粘贴入口。沿用授权上传、操作提交与回收站 API，同名不静默覆盖，移动保持身份，删除需确认且核对 revision/目录子树 token。复制目录与多文件上传为逐项提交，部分完成如实保留和报告；pending 或结果未知不称成功，重试复用原操作身份。本卡不增加内容编辑器。S136 技术边界：上传沿用服务端单文件 64 GiB 上限并有界分片读取；复制当前经浏览器固定版本客户端下载，单文件 64 MiB 上限，超限明确拒绝；支持跨 Vault 复制，同 Vault 剪切保持身份，跨 Vault 剪切明确拒绝而不自动删源。后续解除复制大小或跨 Vault 移动边界需独立任务和恢复验证。
+2026-11-08（S137，用户新增）：文件列表右键支持文件/目录重命名，左侧目录树提供与列表相同的上下文菜单（打开、属性、复制路径、复制、剪切、粘贴、重命名、删除），支持菜单键/Shift+F10。粘贴使用右键目标目录；Vault 根节点仅允许打开/属性/复制路径/粘贴，不改 Vault 配置。重命名沿用同 Vault CAS move，保持 EntryId 和内容版本，名称无效/同名或基线变化不静默覆盖，未知结果复用原 OpId 核对。当前目录或祖先改名后按身份更新 URL、地址和选择；操作期间用户的新导航优先。用户同时要求验收后部署本机，由 S138 单独记录。
+2026-11-08（S134）：服务端 Web 的操作反馈统一用 Mantine `Notification`（`@mantine/notifications` 全局通知区），包括复制路径、账号、Vault、恢复、备份与连接检查的成功/失败。成功及信息反馈四秒后消失，错误/警告可手动关闭；页面局部错误在状态清除或离开页面时移除。连接/加载/健康、恢复操作与备份完整性等持续状态和必要风险说明仍在原位，不以临时通知替代可恢复记录。
 
 释放空间前显示影响：本地内容将移除、远端数据保留、离线不可读。若文件未提交、存在冲突候选或正在写入，按钮禁用并说明原因。即使界面已检查，执行器仍须重新校验，避免点击后状态改变。
 
 ### 18.2 通知策略（D）
 
-普通断网静默重试，状态持续可见。磁盘满、权限失败、内容校验持续失败、Root 身份改变、挂载失败和需要用户处理的冲突立即进入问题页，并在前台可用时发送一次系统通知。同原因同 Root 合并提醒；恢复后更新为已恢复，不反复弹窗。
+普通断网静默重试，状态持续可见。磁盘满、权限失败、内容校验持续失败、Vault 身份改变、挂载失败和需要用户处理的冲突立即进入问题页，并在前台可用时发送一次系统通知。同原因同 Vault 合并提醒；恢复后更新为已恢复，不反复弹窗。
 
 建议关键错误在检测后 5 秒内进入状态页、30 秒内完成可用的桌面通知；通知权限被禁用时，状态页仍必须反映。离线打开失败针对该次用户行为即时说明，不被“断网静默重试”规则吞掉。
 
 ### 18.3 日志与指标
 
-结构化日志字段：timestamp、level、component、request_id、op_id、root_id、binding_id、entry_id、phase、error_code、duration。正常日志不逐块输出文件内容；诊断导出先脱敏并限制文件大小。
+结构化日志字段：timestamp、level、component、request_id、op_id、vault_id、binding_id、entry_id、phase、error_code、duration。正常日志不逐块输出文件内容；诊断导出先脱敏并限制文件大小。
 
-指标：待上传/下载数量、dirty 字节、最老待提交年龄、事件接收到应用延迟、扫描时长/溢出次数、冲突数、上传重试率、对象校验失败数、暂存/历史占用、Root 不可用时长。可选 Prometheus 端点默认仅内部管理网络或本机可访问。
+指标：待上传/下载数量、dirty 字节、最老待提交年龄、事件接收到应用延迟、扫描时长/溢出次数、冲突数、上传重试率、对象校验失败数、暂存/历史占用、Vault 不可用时长。可选 Prometheus 端点默认仅内部管理网络或本机可访问。
 
 ## 19. 备份、恢复、升级与垃圾回收
 
@@ -1039,8 +1039,8 @@ Web 管理首发提供 Root 配置/健康、账号基础管理、历史与回收
 提供 `backup prepare → export manifest/objects → verify → release` 操作，不内置定时调度、异地复制或自动备份。
 
 1. 暂停本服务新的提交和历史 GC，完成或安全隔离进行中意图；外部写入仍可能发生，不能假装已被暂停。
-2. 选择各 Root 已确认的 seq，建立备份快照；用 SQLite Online Backup API 或经验证的一致性方式导出数据库，不能只复制活动 `.db` 忽略 WAL。[R6][R11]
-3. 清单列出配置、schema/protocol 版本、ServerId、Root 映射、条目/历史/回收站及全部所需不可变内容对象，按哈希与大小验证。
+2. 选择各 Vault 已确认的 seq，建立备份快照；用 SQLite Online Backup API 或经验证的一致性方式导出数据库，不能只复制活动 `.db` 忽略 WAL。[R6][R11]
+3. 清单列出配置、schema/protocol 版本、ServerId、Vault 映射、条目/历史/回收站及全部所需不可变内容对象，按哈希与大小验证。
 4. 为清单对象建立 backup lease，在导出结束或租约失效前 GC 不得删除；失败的备份不能标为 complete。
 5. 准备完成并持久化清单/租约后恢复提交和 GC 调度；导出期间租约持续保护对象。导出校验成功后 release；过期/失败按恢复流程处理，不能把未验证备份标 complete。第三方备份程序自行安排执行频率和保存位置。
 
@@ -1052,7 +1052,7 @@ Web 管理首发提供 Root 配置/健康、账号基础管理、历史与回收
 
 ### 19.2 恢复接口
 
-恢复前执行 validate，检查清单、哈希、版本兼容、所需空间和 Root 新路径映射。默认恢复到空目标目录；不自动覆盖已有数据。需要合并已有目录时回到首次合并流程，不能把备份恢复当作批量强制覆盖。
+恢复前执行 validate，检查清单、哈希、版本兼容、所需空间和 Vault 新路径映射。默认恢复到空目标目录；不自动覆盖已有数据。需要合并已有目录时回到首次合并流程，不能把备份恢复当作批量强制覆盖。
 
 不得在线直接回滚 btrfs 子卷；离线回滚也必须校验 DB/对象整体一致性、更换 epoch，不能绕过恢复协议。恢复时离线停止同步写入，导入 DB 和内容对象、重建普通工作文件、验证一致性，再更换 ServerEpoch 并重新开放服务。确认所有对象完备后才声明恢复成功。客户端看到 epoch 变化进入第 9.4 节流程。
 
@@ -1064,7 +1064,7 @@ Web 管理首发提供 Root 配置/健康、账号基础管理、历史与回收
 
 schema 迁移在写服务启动前执行，先做可恢复的本地迁移备份；迁移失败保持旧数据，不部分启动。schema 已升级时旧二进制应拒绝写入；回退采用经过验证的整套备份恢复，不要求所有 migration 自动 down。
 
-客户端升级不注销 Root、不清空数据库、不卸载后删除缓存。Windows 回调和 Linux 挂载切换先停止新任务、保全脏数据，再进行受控重启。安装/卸载的清理选项必须区分程序文件、已下载内容和仅在线占位。
+客户端升级不注销 Vault、不清空数据库、不卸载后删除缓存。Windows 回调和 Linux 挂载切换先停止新任务、保全脏数据，再进行受控重启。安装/卸载的清理选项必须区分程序文件、已下载内容和仅在线占位。
 
 ### 19.4 GC 规则
 
@@ -1119,7 +1119,7 @@ C12 的通常 1—3 秒目标和 C36 的正式验收规模已确认；其他资�
 | T16 | 恢复旧服务器备份 | epoch 改变，旧操作不盲目重放 | 第 19 节 |
 | T17 | SSH 创建/修改/删除/rename | 稳定外部内容自动传播，已采集旧版本可恢复 | C24/I14 |
 | T18 | 外部持续写入与远端写入重叠 | 暂停危险覆盖并报告；测试报告不夸大未捕获瞬态数据保证 | C33 |
-| T19 | 根挂载卸载后露出空目录 | Root unavailable，绝不批量删除远端 | I08 |
+| T19 | 根挂载卸载后露出空目录 | Vault unavailable，绝不批量删除远端 | I08 |
 | T20 | 监视队列溢出、服务重启 | 自动补扫恢复，并区分权限失败与删除 | C24/I08 |
 | T21 | 工作盘/状态盘分别在独立 btrfs 测试卷触发数据/元数据不足，含 reflink 后 CoW 分配失败 | committed 不被提前返回，本地脏内容保留 | I01/I02 |
 | T22 | 下载断线、错块、混版本响应 | 不发布不完整内容；正确续传 | I05 |
@@ -1131,11 +1131,11 @@ C12 的通常 1—3 秒目标和 C36 的正式验收规模已确认；其他资�
 | T28 | Windows 应用打开、映射写入、原子保存、共享锁与受控替换 | 首发 Windows 语义符合声明，已保存内容不被覆盖；Linux/FUSE 扩展测试后置 | P0/V/第 14 节 |
 | T29 | 后续 Linux 客户端非空目录导入中断、mount 失败 | 原文件仍可访问、导入可重试、空挂载不传播删除；不属于首发门禁 | P1/C03/I08 |
 | T30 | full/on_demand 切换、排除变更、解除绑定 | 无隐式全局删除，无脏内容回收 | C09/C13/C17 |
-| T31 | 令牌到期、跨 Root 获取内容、恶意 WebView | 拒绝越权，日志不泄露凭据 | I15 |
+| T31 | 令牌到期、跨 Vault 获取内容、恶意 WebView | 拒绝越权，日志不泄露凭据 | I15 |
 | T32 | 完整备份恢复到空环境 | 配置、条目、历史、回收站和内容哈希一致 | C30 |
 | T33 | schema 升级失败、旧程序回退启动 | 停止写入并可恢复，不破坏旧数据 | 第 19.3 节 |
 | T34 | 1—3 秒基准与所选规模/大文件压力 | 按 C36 提供测量报告，资源有界，未误报已同步 | C12/C36 |
-| T35 | 注册非 btrfs 根/内部目录、嵌套子卷或子挂载、NOCOW 文件；替换卷/子卷及 bind 别名 | 拒绝注册或暂停 Root，返回存储类型错误，不读取占位内容、不生成删除 | C14/C15/C39 |
+| T35 | 注册非 btrfs 根/内部目录、嵌套子卷或子挂载、NOCOW 文件；替换卷/子卷及 bind 别名 | 拒绝注册或暂停 Vault，返回存储类型错误，不读取占位内容、不生成删除 | C14/C15/C39 |
 | T36 | 检查 Windows 客户端与 Linux x86_64 服务端构建、安装、运行条件 | 首发不交付 Linux 同步客户端；服务端无 FUSE/客户端占位依赖、不需 `/dev/fuse`；普通存储完成闭环 | C14/C15/C16/C35 |
 
 除明确标为 P1 的 T29 外，本表其余 35 项为首发验收。T28 的 Linux/FUSE 专用扩展在后续阶段运行；T35 的 FUSE 拒绝测试由独立测试装置提供样本挂载，不要求产品实现 Linux 客户端，也不为服务端引入 FUSE 运行依赖。首发所有多客户端场景使用 Windows 客户端。
@@ -1152,7 +1152,7 @@ btrfs 原生验收还须覆盖：克隆后改写/截断/删除源，候选字节
 
 DEV-001—014 的分解、依赖和验收映射统一维护在 `agent/implementation-plan.md`（S001—S108）。本文件只维护产品/架构/数据契约；进度与证据保存在 `agent/progress.md` 和 `agent/tasks/`。
 
-P1 的 P2P 仅优化内容来源，必须验证 Root 授权和服务器确认的固定版本/hash；peer 不可用回退服务器。服务器未持久提交的版本不得显示已同步；不引入自动穿透或中继。
+P1 的 P2P 仅优化内容来源，必须验证 Vault 授权和服务器确认的固定版本/hash；peer 不可用回退服务器。服务器未持久提交的版本不得显示已同步；不引入自动穿透或中继。
 
 ## 23. Agent 执行入口
 
@@ -1166,7 +1166,7 @@ P1 的 P2P 仅优化内容来源，必须验证 Root 授权和服务器确认的
 | ADR-002 | Linux 客户端 FUSE 与普通目录导入 | P1；不阻塞首发，后续实现时做实机验证 |
 | ADR-003 | 服务器权威、P2P 仅优化内容传输 | 已确认：首发无 P2P，P1 内容加速不改变权威 |
 | ADR-004 | Linux 普通目录 + SQLite + 不可变当前/历史对象 | 由 ADR-012 更新为强制本地 btrfs、reflink 独立 inode；普通完整文件和恢复协议不变，收益待测 |
-| ADR-005 | Revision/CAS/OpId/RootSeq/ServerEpoch | 工程建议，协议冻结前评审 |
+| ADR-005 | Revision/CAS/OpId/VaultSeq/ServerEpoch | 工程建议，协议冻结前评审 |
 | ADR-006 | 保留双副本及移动/删除冲突矩阵 | 双副本已确认；具体矩阵为建议 |
 | ADR-007 | 外部写入自动采集保证 | 已确认：保全采集版本，不保证未观察的瞬态覆盖 |
 | ADR-008 | 首发完整版本传输与分块续传 | 已确认；块级增量后置 |
@@ -1177,12 +1177,12 @@ P1 的 P2P 仅优化内容来源，必须验证 Root 授权和服务器确认的
 | ADR-013 | Windows 客户端宿主交叉编译 | 2026-11-05 用户确认：NixOS 宿主构建、Windows 客体原生运行验收；S009 落实，尚未验证 |
 | ADR-014 | Windows 免安装 ZIP，状态留本机 | 用户本轮确认新增分发形式；S109 实施与原生验收，不代替安装版或首发门禁 |
 | ADR-015 | 移除 Linux ARM64 范围 | 2026-11-07 用户确认：脚本、代码、构建、发布和测试仅覆盖 Linux x64 与 Windows x64；S111 落实 |
-| ADR-016 | 客户端目录选择与 Root 显示名 | 2026-11-07 用户确认：本地目录使用原生目录选择器，Root 显示目录末级名称；S114 实施 |
+| ADR-016 | 客户端目录选择与 Vault 显示名 | 2026-11-07 用户确认：本地目录使用原生目录选择器，Vault 显示目录末级名称；S114 实施 |
 | ADR-017 | 服务端 Web HeroUI React 重构 | S115 历史决定；组件选择已由 S119/ADR-018 替代，管理范围与数据语义不变 |
 | ADR-018 | 服务端 Web Mantine 迁移 | 2026-11-08 用户要求：移除 HeroUI，采用 Mantine 默认主题、AppShell 与现成组件；S119 实施，覆盖 ADR-017 的组件选择 |
-| ADR-019 | Web Root 文件浏览器 | 2026-11-08 用户要求：Root 切换、目录浏览与基本属性；S124 更新布局，S136 按最新要求增加上传与右键文件操作，不包含内容编辑器 |
-| ADR-020 | 按 Root 隔离对象物理布局与旧数据兼容 | 2026-11-08 S136 真实跨 Root 同摘要 finalize 暴露共享路径/全局唯一登记冲突；用户明确选择本轮一并完整修复，覆盖所有存储消费者及旧数据兼容 |
-| ADR-021 | 共享目录概念由 Root 改名为 Vault | 2026-11-08 用户要求：项目中一个共享目录称为 Vault，代码与文档同类命名一并修改；S140—S142 分阶段实施 |
+| ADR-019 | Web Vault 文件浏览器 | 2026-11-08 用户要求：Vault 切换、目录浏览与基本属性；S124 更新布局，S136 按最新要求增加上传与右键文件操作，不包含内容编辑器 |
+| ADR-020 | 按 Vault 隔离对象物理布局与旧数据兼容 | 2026-11-08 S136 真实跨 Vault 同摘要 finalize 暴露共享路径/全局唯一登记冲突；用户明确选择本轮一并完整修复，覆盖所有存储消费者及旧数据兼容 |
+| ADR-021 | 共享目录概念由 Vault 改名为 Vault | 2026-11-08 用户要求：项目中一个共享目录称为 Vault，代码与文档同类命名一并修改；S140—S142 分阶段实施 |
 
 ADR-012 决定记录：原 C39 仅允许 ext4/XFS，reflink 可选。用户本轮提出在 btrfs 能简化实现时强制采用；据 FICLONE 的写隔离能力与只读快照的固定视图能力，改为强制 btrfs，默认克隆采集/发布及备份准备。收益是减少重复数据复制、简化固定候选读取；应用一致性状态机仍保留。影响是部署卷必须迁移到 btrfs，ext4/XFS/ZFS/overlay 不再接受；现有数据须离线备份、复制、校验后切换，不自动格式化或原地转换。本仓库尚无实现，无已发布协议/数据库迁移。替代方案为保留 ext4/XFS 并完整复制，部署更宽但无法把 CoW 能力作为基线；本轮按用户方向采用 btrfs，性能不作为已证明结论。
 
@@ -1192,18 +1192,18 @@ ADR-014 决定记录：用户明确确认先提供“免安装、状态留在本
 
 ADR-015 决定记录：原 C35/ADR-009 与 T36 包含 Linux ARM64。用户明确要求不再考虑该平台，并确认要求覆盖脚本、代码与测试；因此移除对应构建目标、交叉依赖、运行适配及验收路径。保留 Linux x64 服务端与 Windows x64 客户端，Ubuntu 24.04 x64 兼容与 Windows 原生验收仍需实证。替代方案是保留 ARM64 为可选构建，但不符合本次全面移除的决定。历史 ARM64 验收与包来源作为历史证据保留，不代表当前支持；既有协议和数据库格式无变化，也不自动处理旧部署或删除外部 ARM 测试卷。
 
-ADR-016 决定记录：用户要求以目录选择器替代本地路径手填，并显示远端目录名。Windows 壳只允许内置窗口打开单目录文件系统选择器，取消不清空原选择，agent 仍执行现有路径与重叠校验。Root 摘要新增可选 `name`，只提供已授权 Root 的末级目录名，不传服务器绝对路径；既有 `root_id`、排序、权限与绑定持久化保持。旧服务端缺名称时明确提示更新，不以 UUID 伪装名称；旧客户端仍可忽略新字段。无需数据库迁移，不改变同步数据语义。
+ADR-016 决定记录：用户要求以目录选择器替代本地路径手填，并显示远端目录名。Windows 壳只允许内置窗口打开单目录文件系统选择器，取消不清空原选择，agent 仍执行现有路径与重叠校验。Vault 摘要新增可选 `name`，只提供已授权 Vault 的末级目录名，不传服务器绝对路径；既有 `vault_id`、排序、权限与绑定持久化保持。旧服务端缺名称时明确提示更新，不以 UUID 伪装名称；旧客户端仍可忽略新字段。无需数据库迁移，不改变同步数据语义。
 
 ADR-017 决定记录：用户要求完整重构服务端 Web，并使用已安装 HeroUI React skill 与官方文档。Web 独立使用 HeroUI v3/Tailwind v4，保留 React、五个 hash 管理路由与现有生成 API；不连带迁移 Windows 桌面共享 UI，不改变认证、恢复、备份状态机或持久格式。新增主题、响应式布局及可访问弹层；静态服务 CSP 只精确允许锁定 React Aria 的两段固定样式摘要，依赖升级时验证源码摘要。替代方案为继续扩展共享原生组件，但不符合本次明确的组件体系要求。
 
-ADR-018 决定记录：用户要求移除 HeroUI，以 Mantine 重新实现服务端 Web，默认主题与配色、AppShell 整体布局，尽可能直接使用现成组件。该决定取代 ADR-017 的 HeroUI 选择与其专用样式兼容机制；Tailwind 保留用于少量元素样式。React、五个 hash 路由、生成 API 和账号/Root/恢复/备份业务语义保持，Windows 桌面共享 UI 不迁移。CSP 根据实际 Mantine 样式注入机制适配并以真实浏览器验证，不增加 unsafe-inline；依赖与 Nix 离线闭包同步锁定。继续使用 HeroUI 的方案不符合用户最新决定，无需重复确认。
+ADR-018 决定记录：用户要求移除 HeroUI，以 Mantine 重新实现服务端 Web，默认主题与配色、AppShell 整体布局，尽可能直接使用现成组件。该决定取代 ADR-017 的 HeroUI 选择与其专用样式兼容机制；Tailwind 保留用于少量元素样式。React、五个 hash 路由、生成 API 和账号/Vault/恢复/备份业务语义保持，Windows 桌面共享 UI 不迁移。CSP 根据实际 Mantine 样式注入机制适配并以真实浏览器验证，不增加 unsafe-inline；依赖与 Nix 离线闭包同步锁定。继续使用 HeroUI 的方案不符合用户最新决定，无需重复确认。
 
-ADR-019 决定记录：原 Web 最小范围包含 Root 健康、恢复与备份，用户明确增加目录浏览及属性查看。沿用 Mantine、授权 Root 清单和一致性快照 API，仅展示已提交元数据；暂不提供内容预览或文件写入操作。相较新增服务器任意路径读取接口，复用快照可保持身份授权、分页一致性和提交边界，代价是外部修改须完成采集后刷新可见。S124 按用户最新决定采用左树右列表、相对地址栏与 URL 定位，并移除冗余说明（边界记录于规范；不可用与读取失败仍直接提示）。当前属性来自既有 SnapshotEntry，不伪造未提供的文件时间/权限；协议与数据库无需迁移。
+ADR-019 决定记录：原 Web 最小范围包含 Vault 健康、恢复与备份，用户明确增加目录浏览及属性查看。沿用 Mantine、授权 Vault 清单和一致性快照 API，仅展示已提交元数据；暂不提供内容预览或文件写入操作。相较新增服务器任意路径读取接口，复用快照可保持身份授权、分页一致性和提交边界，代价是外部修改须完成采集后刷新可见。S124 按用户最新决定采用左树右列表、相对地址栏与 URL 定位，并移除冗余说明（边界记录于规范；不可用与读取失败仍直接提示）。当前属性来自既有 SnapshotEntry，不伪造未提供的文件时间/权限；协议与数据库无需迁移。
 
 ADR-019 补充（S136）：用户明确将原只读范围扩展为上传及复制/剪切/粘贴/删除，故覆盖此前“不增加文件写入操作”的限制。采用现有上传/固定版本读取/操作 CAS/回收站接口，避免新增绕过授权与恢复协议的任意文件写接口；不采用直接修改工作目录或在线数据库的方案。影响是 Web 可改变同步内容，必须处理并发、删除确认、部分完成与未确认结果；保留原身份、版本、事件和回收站语义，不增加内容编辑器或自动覆盖模式。
 
-ADR-020 决定记录：S136 真实浏览器跨 Root 复制发现，旧实现 `objects` 行按 Root/摘要归属，但物理内容地址与 `storage_path` 是跨 Root 共用的，遇到第二 Root 相同摘要时与全局唯一路径约束冲突（finalize 503）。用户在获知涉及上传/读取/回收/备份/恢复约十余模块及旧数据兼容后，明确选择“一并完整修复”，而非先限制为同 Root 或仅保留方案。本轮统一 Root-qualified 新对象写入和旧路径兼容读取，保留按 Root 授权、不可变对象与引用/GC 协调，不删除唯一路径约束、不共享不同 Root 的对象行，不通过新路径 fallback 绕过归属。旧数据不做不可恢复的原地重写；持久格式变化必须增加 schema 兼容围栏和升级前备份，旧二进制拒绝新格式，回退使用整套备份。所有消费者及跨 Root 同摘要、旧对象读取/重试、单 Root GC 不影响另一 Root、备份/恢复均需验证后才验收。具体布局与迁移入口归接口文档及 S136-c。
-ADR-021 决定记录：用户明确要求把本项目“一个共享目录”的正式名称由 Root 改为 Vault，并要求代码与文档中同类命名一并修改。范围是全链路一次性改名：Rust/TypeScript 标识符（`RootId`→`VaultId`、`RootSeq`→`VaultSeq`、`RootHandle`→`VaultHandle` 等）、wire JSON 字段（`root_id`→`vault_id`、`root_seq`→`vault_seq`）、HTTP 路径（`/v1/roots`→`/v1/vaults`）、错误码（`ROOT_UNAVAILABLE`→`VAULT_UNAVAILABLE`）、配置键（`[roots]`→`[vaults]`、`allowed_root_bases`→`allowed_vault_bases`）、数据库表与列（`roots`→`vaults`、各表 `root_id`→`vault_id`）、UI 术语与文档。替代方案是只改界面文案或只在代码层映射，但那会让协议、数据库和文档长期使用两个术语，因此不采用。影响与边界：服务端数据库新增迁移 0016（重命名并保留数据，schema 15→16），客户端库新增迁移 0013；旧二进制与旧客户端只理解旧名字，必须在同一批升级，回退使用迁移前整套备份，不做自动降级；远端协议 major 升至 2、本机 IPC major 升至 2 以如实表示不兼容。物理对象区前缀 `roots/<vault_id>/objects/...` 保持 S136/ADR-020 的既落地布局不变（改名需要搬迁全部已发布对象，不属于术语重命名范围），并作为数据布局而非产品术语记录。历史迁移文件 0001—0015 保持原样（迁移校验和不可改写），旧名字只出现在其中。文件系统根、mount root、root 用户、TLS 信任根与 Windows CFAPI `SyncRoot` 等非本概念的 root 不在改名范围内。分阶段：S140 核心/wire/数据库/服务端/客户端通用代码，S141 Windows 客户端与原生验证，S142 Web、文档、部署与本机验收。
+ADR-020 决定记录：S136 真实浏览器跨 Vault 复制发现，旧实现 `objects` 行按 Vault/摘要归属，但物理内容地址与 `storage_path` 是跨 Vault 共用的，遇到第二 Vault 相同摘要时与全局唯一路径约束冲突（finalize 503）。用户在获知涉及上传/读取/回收/备份/恢复约十余模块及旧数据兼容后，明确选择“一并完整修复”，而非先限制为同 Vault 或仅保留方案。本轮统一 Vault-qualified 新对象写入和旧路径兼容读取，保留按 Vault 授权、不可变对象与引用/GC 协调，不删除唯一路径约束、不共享不同 Vault 的对象行，不通过新路径 fallback 绕过归属。旧数据不做不可恢复的原地重写；持久格式变化必须增加 schema 兼容围栏和升级前备份，旧二进制拒绝新格式，回退使用整套备份。所有消费者及跨 Vault 同摘要、旧对象读取/重试、单 Vault GC 不影响另一 Vault、备份/恢复均需验证后才验收。具体布局与迁移入口归接口文档及 S136-c。
+ADR-021 决定记录：用户明确要求把本项目“一个共享目录”的正式名称由 Root 改为 Vault，并要求代码与文档中同类命名一并修改。范围是全链路一次性改名：Rust/TypeScript 标识符（`RootId`→`VaultId`、`RootSeq`→`VaultSeq`、`RootHandle`→`VaultHandle` 等）、wire JSON 字段（`root_id`→`vault_id`、`root_seq`→`vault_seq`）、HTTP 路径（`/v1/roots`→`/v1/vaults`）、错误码（`ROOT_UNAVAILABLE`→`VAULT_UNAVAILABLE`）、配置段（`[roots]`→`[vaults]`，段内 `allowed_bases` 键不变）、数据库表与列（`roots`→`vaults`、各表 `root_id`→`vault_id`）、UI 术语与文档。替代方案是只改界面文案或只在代码层映射，但那会让协议、数据库和文档长期使用两个术语，因此不采用。影响与边界：服务端数据库新增迁移 0016（重命名并保留数据，schema 15→16），客户端库新增迁移 0013；旧二进制与旧客户端只理解旧名字，必须在同一批升级，回退使用迁移前整套备份，不做自动降级；远端协议 major 升至 2、本机 IPC major 升至 2 以如实表示不兼容。物理对象区前缀仍是 S136/ADR-020 已落地的 `roots/<vault_id>/objects/...`（改名需要搬迁全部已发布对象，不属于术语重命名范围），只作为数据布局存在。历史迁移文件与冻结的旧协议 fixture 保持原样，旧名字只出现在其中。文件系统根、mount root、root 用户、TLS 信任根与 Windows CFAPI `SyncRoot` 等非本概念的 root 不在改名范围内。分阶段：S140 核心/wire/数据库/服务端/客户端通用代码，S141 Windows 客户端与原生验证，S142 Web、文档与本机真实浏览器验收（部署需用户另行确认）。
 
 
 任何修改 C 项或 P0/P1 范围的建议必须向用户说明原决定、修改原因、影响与替代选项。D 项可以在实现中改进，但涉及数据安全、兼容性和用户体验的改变需先更新 ADR。已经冻结的产品选择不得重复提问；新发现的技术限制应报告证据，而不是擅自降低要求。
@@ -1221,7 +1221,7 @@ ADR-021 决定记录：用户明确要求把本项目“一个共享目录”的
 - [ ] 用户可从异常缓存/未上传状态导出真实数据。
 - [ ] 30 天历史策略、容量占用和外部写入边界在说明中明确。
 - [ ] 已下载文件不会被产品自动回收。
-- [ ] 所有接口均验证 Root 权限；证书验证没有默认绕过。
+- [ ] 所有接口均验证 Vault 权限；证书验证没有默认绕过。
 - [ ] 35 项 P0 场景有真实证据；T29 及 Linux 客户端专用测试仅在 P1 发布时验收。
 - [ ] 无未解释的 TODO、跳过的平台测试或仅模拟通过的原生能力。
 - [ ] 产品文案没有把“已同步”称为独立备份，也没有给大文件作不可能的固定时延承诺。

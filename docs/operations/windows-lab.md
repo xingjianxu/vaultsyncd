@@ -13,7 +13,7 @@
 
 | 项目 | 要求 / 实测值 |
 | --- | --- |
-| 架构与虚拟化 | x86_64，`/dev/kvm` 可读写（`crw-rw-rw- root kvm`），用户在 `kvm` 组；`systemd-detect-virt` = `none`（物理机） |
+| 架构与虚拟化 | x86_64，`/dev/kvm` 可读写（`crw-rw-rw- vault kvm`），用户在 `kvm` 组；`systemd-detect-virt` = `none`（物理机） |
 | 宿主容量 | 128 逻辑核、503 GiB 内存；`/data` 为本地 btrfs，可用 22 TiB（VM 目录在 `/data` 上，不在源码树内） |
 | 工具链 | `nix develop .#quickemu`（flake 输出，锁定 nixpkgs rev 与默认 devShell 相同）：quickemu 4.9.9 / QEMU 11.1.2 / xorriso 1.5.8.pl02 / wimlib-imagex 1.14.5 / p7zip 17.06 / openssh 10.6p1 / curl 8.22.0 |
 | 版本锁定 | 版本来自 `flake.lock` 固定的 nixpkgs，不装全局包、不跟随最新；换版本必须先改 flake 输入 |
@@ -21,7 +21,7 @@
 
 ## 3. 目录布局（全部在源码之外）
 
-VM 根：`/data/vaultsyncd-lab/win-lab/`（可在 `VM_ROOT` 环境变量覆盖）。`/data/vaultsyncd-lab` 同时是 S007 的测试卷 lab 根，二者用子目录隔离。
+VM 根：`/data/vaultsyncd-lab/win-lab/`（可在 `VM_VAULT` 环境变量覆盖）。`/data/vaultsyncd-lab` 同时是 S007 的测试卷 lab 根，二者用子目录隔离。
 
 | 路径 | 内容 | 权限 |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ VM 根：`/data/vaultsyncd-lab/win-lab/`（可在 `VM_ROOT` 环境变量覆盖�
 重打自动安装盘（`prepare` 内部执行，与 quickget 的 `mkisofs -quiet -J` 等价）：
 
 ```bash
-xorriso -as mkisofs -quiet -J -o "$VM_ROOT/windows-11/unattended.iso" "$VM_ROOT/windows-11/unattended/"
+xorriso -as mkisofs -quiet -J -o "$VM_VAULT/windows-11/unattended.iso" "$VM_VAULT/windows-11/unattended/"
 ```
 
 改 `autounattend.xml`/`provision.ps1` 后**必须**重打 `unattended.iso`，否则客体仍读到旧盘。
@@ -182,8 +182,8 @@ sha256sum /data/vaultsyncd-lab/win-lab-baseline-*.tar
 - `windows-11.swtpm-sock` 是运行时套接字，**不入备份**；`tpm2-00.permall` 是 TPM 状态，必须入备份。
 - 本轮已生成的基线：`/data/vaultsyncd-lab/win-lab-baseline-20261105.tar`，13,082,818,560 字节（qcow2 稀疏，`--sparse` 打包），sha256 `de2fa63429617bb0eff09a1dbb0e41536220e42e3d7773599d527011c75265c6`；`tar -tvf` 列出 `windows-11.conf`、`windows-11/disk.qcow2`、`windows-11/OVMF_VARS.fd`、`windows-11/tpm2-00.permall`、`windows-11/unattended.iso` 五个条目。归档在最后一次干净关机之后生成。
 - 凭据与密钥（`secrets/`、`ssh/`）单独按需备份/复制，不进同一份共享归档是默认做法；第二台客体应生成**新的**密钥与口令。
-- 恢复：解包回同一 `VM_ROOT`，保持相对路径不变，再 `start`。`windows-11/disk.qcow2` 的虚拟大小固定 100 GiB，不要用 `qemu-img resize` 改成更小值。
-- 第二台（S107 并发）：从基线解包到**另一个** `VM_ROOT`（例如 `/data/vaultsyncd-lab/win-lab-2/`），改 `VM_NAME`/`ssh_port`/`spice_port`，首次启动后用新密钥与口令，并让客户端生成独立 DeviceId；不要两台共用同一个 `tpm2-00.permall` 或同一个 qcow2。
+- 恢复：解包回同一 `VM_VAULT`，保持相对路径不变，再 `start`。`windows-11/disk.qcow2` 的虚拟大小固定 100 GiB，不要用 `qemu-img resize` 改成更小值。
+- 第二台（S107 并发）：从基线解包到**另一个** `VM_VAULT`（例如 `/data/vaultsyncd-lab/win-lab-2/`），改 `VM_NAME`/`ssh_port`/`spice_port`，首次启动后用新密钥与口令，并让客户端生成独立 DeviceId；不要两台共用同一个 `tpm2-00.permall` 或同一个 qcow2。
 
 ## 12. 宿主交叉编译、传输与客体原生执行（ADR-013 / S009）
 
@@ -311,14 +311,14 @@ nix develop .#windows --command bash tests/platform/windows/build-cross.sh
 nix develop .#windows --command bash tests/platform/windows/run-cfapi-prototype.sh
 ```
 
-`run-cfapi-prototype.sh` 把 exe 与 `guest-cfapi-prototype.ps1` 传到 `C:aultsyncd-lab\s010\`（`CFAPI_GUEST_DIR` 可覆盖），同步根默认 `C:aultsyncd-test`（`CFAPI_ROOT` 可覆盖）。脚本先做一次幂等 `cleanup` 清场，再放入用户内容 `user-keep.txt` 与 `user-dir\keep-note.txt`，然后逐步执行并逐项打印 `check=pass|fail`；退出码 0 才代表全部检查通过。S009 的 `run-on-guest.sh` 用法不变。
+`run-cfapi-prototype.sh` 把 exe 与 `guest-cfapi-prototype.ps1` 传到 `C:aultsyncd-lab\s010\`（`CFAPI_GUEST_DIR` 可覆盖），同步根默认 `C:aultsyncd-test`（`CFAPI_VAULT` 可覆盖）。脚本先做一次幂等 `cleanup` 清场，再放入用户内容 `user-keep.txt` 与 `user-dir\keep-note.txt`，然后逐步执行并逐项打印 `check=pass|fail`；退出码 0 才代表全部检查通过。S009 的 `run-on-guest.sh` 用法不变。
 
 ### 16.2 原型命令
 
 ```text
-cfapi-prototype create  [--root C:\vaultsyncd-test]   # 注册 → 连接 → 建占位 → 水合读取探测 → 断开
-cfapi-prototype inspect [--root C:\vaultsyncd-test]   # 只读：注册状态 + 每个条目的占位/大小/身份
-cfapi-prototype cleanup [--root C:\vaultsyncd-test]   # 只删本工具占位 → 断开 → 注销 → 列出保留内容
+cfapi-prototype create  [--vault C:\vaultsyncd-test]   # 注册 → 连接 → 建占位 → 水合读取探测 → 断开
+cfapi-prototype inspect [--vault C:\vaultsyncd-test]   # 只读：注册状态 + 每个条目的占位/大小/身份
+cfapi-prototype cleanup [--vault C:\vaultsyncd-test]   # 只删本工具占位 → 断开 → 注销 → 列出保留内容
 ```
 
 退出码：0 成功；1 失败（输出 `stage=`/`hresult=` 与原因）；2 用法错误；3 `inspect` 发现同步根未注册（cleanup 之后的预期状态）。固定条目集合在 `cfapi::prototype_layout`：目录 `vaultsyncd-proto` 先建，其下 `small-12345.bin`（12,345 B）与 `large-1mib.bin`（1,048,576 B）；EntryId 由条目名确定性派生，便于三个命令互相核对。
@@ -328,7 +328,7 @@ cfapi-prototype cleanup [--root C:\vaultsyncd-test]   # 只删本工具占位 �
 | 验收点 | 证据 |
 | --- | --- |
 | 系统识别为占位 | `inspect`：三个条目 `placeholder=true placeholder_source=placeholder_info`；`Get-Item` 属性 `4199968`（`REPARSE_POINT`+`RECALL_ON_DATA_ACCESS`+`SPARSE_FILE`+`OFFLINE`+`ARCHIVE`）；`fsutil reparsepoint query` 显示 `Reparse Tag Value : 0x9000001a`、`Reparse Data Length: 0xa8` |
-| identity 写入系统 | reparse data 里可见 `56 53 01 00`（`b"VS"`+schema 1+保留 0）+ RootId + EntryId + 版本提示 + CRC-32，共 48 B；`inspect` 解码出的 RootId/EntryId/版本提示与 `create` 日志一致，`identity_length=48` |
+| identity 写入系统 | reparse data 里可见 `56 53 01 00`（`b"VS"`+schema 1+保留 0）+ VaultId + EntryId + 版本提示 + CRC-32，共 48 B；`inspect` 解码出的 VaultId/EntryId/版本提示与 `create` 日志一致，`identity_length=48` |
 | 逻辑大小正确 | `Get-Item`：`small-12345.bin` `Length=12345`、`large-1mib.bin` `Length=1048576`；`inspect` 的 `logical_size` 与设定值逐条相等 |
 | 不是普通零字节文件 | `inspect`：`on_disk_data_size=0`、`dehydrated=true`、`in_sync_state=0`；`fsutil sparse queryflag` 报 “set as sparse”；提供方不在线时读取占位返回 `0x80131501`（provider not running），在线时 `FETCH_DATA` 回调被调用两次并以 `CfExecute` 回执 `0x0` + `STATUS_NOT_SUPPORTED` 结束，读取失败 `ERROR_CLOUD_FILE_UNSUCCESSFUL`（389），**没有返回空数据** |
 | 清理不删除测试内容 | `cleanup` 逐条删除 3 个占位（`status=removed`），`user-keep.txt` 与 `user-dir\keep-note.txt` 的 SHA-256 前后一致（`7c1b69d9…e054`、`98b12897…134c`），`cleanup.preserved` 逐条列出保留内容 |
@@ -343,7 +343,7 @@ cfapi-prototype cleanup [--root C:\vaultsyncd-test]   # 只删本工具占位 �
 | 目录占位符的 `CfGetPlaceholderStateFromFindData` 返回 `0x00000000`、`reparse_tag=0` | `FindFirstFileW` 直接查路径时读不到云占位符的 reparse tag（`Get-Item`/`fsutil` 都能看到 `0x9000001a`）。占位判定改用 `CfGetPlaceholderInfo`（非占位符返回 `ERROR_NOT_A_CLOUD_FILE`），日志里用 `placeholder_source` 标明来源 |
 | `attrib <占位符>` 报 `Path not found` | 客体上 `attrib` 不能处理云占位符；证据改用 `Get-Item` 属性、`fsutil reparsepoint query`/`sparse queryflag` 与 CFAPI 查询 |
 | 提供方进程退出后再枚举占位目录报 “The cloud file provider is not running.” | 这是 `CF_POPULATION_POLICY_FULL` 的预期行为：占位目录的枚举要提供方在线。原型只按绝对路径操作自己的条目，不依赖枚举 |
-| 注册残留（进程中途被杀） | 用 `cfapi-prototype cleanup --root C:\vaultsyncd-test` 收尾；若连清理也失败，`Remove-Item -Recurse -Force C:\vaultsyncd-test` 前先确认 `inspect` 不再报告已注册 |
+| 注册残留（进程中途被杀） | 用 `cfapi-prototype cleanup --vault C:\vaultsyncd-test` 收尾；若连清理也失败，`Remove-Item -Recurse -Force C:\vaultsyncd-test` 前先确认 `inspect` 不再报告已注册 |
 | 两端 exe 哈希与历史记录不同 | 交叉构建产物不是逐字节可复现（MSVC 链接阶段写入调试信息签名）；每个 run 都以当次宿主/客体哈希比对为准，不使用固定金样哈希 |
 
 ### 16.5 清理与边界
@@ -373,7 +373,7 @@ nix develop .#windows --command bash tests/platform/windows/run-cfapi-hydration.
 
 `run-cfapi-hydration.sh` 先把 exe 与 `guest-cfapi-hydration.ps1` 传到
 `C:\vaultsyncd-lab\s011\`（`CFAPI_HYDRATION_GUEST_DIR` 可覆盖），同步根仍默认
-`C:\vaultsyncd-test`（`CFAPI_ROOT` 可覆盖）。宿主侧期望哈希来自
+`C:\vaultsyncd-test`（`CFAPI_VAULT` 可覆盖）。宿主侧期望哈希来自
 `cargo run --example cfapi-prototype -- expect`（固定种子 ⇒ 固定内容与 SHA-256）；
 客体侧用 PowerShell `Get-FileHash` / 自算区间哈希独立计算，两端必须一致。S010 的
 `run-cfapi-prototype.sh` 保持可用（其读取探测已改为“水合读取成功且长度正确”）。
@@ -388,7 +388,7 @@ cfapi-prototype cancel  --name <entry> [--cancel-after-ms N] [--chunk-delay-ms N
                         [--require-cancel-callback]
 cfapi-prototype hydrate --name <entry> [--offset N --length M] [--cancel-after-ms N]
                         [--disconnect-after-ms N] [--chunk-delay-ms N]
-cfapi-prototype inspect [--root <path>] [--allow-hydrated]
+cfapi-prototype inspect [--vault <path>] [--allow-hydrated]
 cfapi-prototype expect  [--name <entry> --offset N --length M]
 ```
 
@@ -449,16 +449,16 @@ nix develop .#windows --command bash tests/platform/windows/run-cfapi-release.sh
 ```
 
 `run-cfapi-release.sh` 把 exe 与 `guest-cfapi-release.ps1` 传到 `C:\vaultsyncd-lab\s012\`
-（`CFAPI_RELEASE_GUEST_DIR` 可覆盖），主同步根 `C:\vaultsyncd-test`（`CFAPI_RELEASE_ROOT`），
-rename-over 专用根 `C:\vaultsyncd-test-rename`（`CFAPI_RELEASE_RENAME_ROOT`）。rename-over 会把
+（`CFAPI_RELEASE_GUEST_DIR` 可覆盖），主同步根 `C:\vaultsyncd-test`（`CFAPI_RELEASE_VAULT`），
+rename-over 专用根 `C:\vaultsyncd-test-rename`（`CFAPI_RELEASE_RENAME_VAULT`）。rename-over 会把
 目标名字留在“无法按路径打开”的状态（见 §18.6），因此单独用一个根，不污染主根后续检查。
 
 ### 18.2 原型命令（S012 追加）
 
 ```text
-cfapi-prototype protect --name <entry> [--root <path>]
+cfapi-prototype protect --name <entry> [--vault <path>]
                         # 只判定、不改状态（不释放、不写 in-sync）
-cfapi-prototype release --name <entry> [--root <path>] [--expect released|refused]
+cfapi-prototype release --name <entry> [--vault <path>] [--expect released|refused]
                         # 判定 clean 才释放；其余拒绝并保留本地内容
 ```
 
@@ -563,8 +563,8 @@ cfapi-prototype release --name <entry> [--root <path>] [--expect released|refuse
 
 - 仓库只有**一台** Windows 11 客体（第二台按计划属 S107）。S074 的三个“客户端”是同一实机上的三个隔离身份/环境：独立 DeviceId、状态目录与 `client.sqlite`、同步根、缓存和 `vaultsyncd-agent.exe` 进程。产品不变量“每个 Windows 用户会话/状态库只允许一个 agent”使三个 agent **顺序**运行；报告显式写 `physical_windows_guests=1`、`concurrent_agent_processes=1`，不把多进程冒充独立实机。
 - 每个客户端在启动前用 `--login-stdin` 登录（同一测试账号、同一 Credential Manager blob），运行配置使用测试 TLS 入口 `https://127.0.0.1:<临时端口>` 与 `server.ca_file=<run>/tls/ca.pem`；不使用 `development_http`。
-- 宿主真实服务端由 `vaultsyncd-server-tests` 的 `e2e-native-server` example 启动：隔离 btrfs Root、按 `tests/scenarios/three-clients.json` 的 `server_seed` 播种非空内容。客体经 **本次 run 私有**的 SSH 回环隧道 `127.0.0.1:18770` 访问宿主服务端；测试 TLS 入口在客体上终结 TLS，客户端仍做完整证书校验。
-- 每个客户端环境在 `C:/vaultsyncd-lab/s074-driver-<pid>/run-e2e-<pid>/clients/{alpha,bravo,charlie}/` 下（`root`、`cache`、`state`）。成功时编排器注销 CFAPI 根并删除这些目录，只保留日志/报告；失败时保留客体目录供诊断，宿主记录警告。
+- 宿主真实服务端由 `vaultsyncd-server-tests` 的 `e2e-native-server` example 启动：隔离 btrfs Vault、按 `tests/scenarios/three-clients.json` 的 `server_seed` 播种非空内容。客体经 **本次 run 私有**的 SSH 回环隧道 `127.0.0.1:18770` 访问宿主服务端；测试 TLS 入口在客体上终结 TLS，客户端仍做完整证书校验。
+- 每个客户端环境在 `C:/vaultsyncd-lab/s074-driver-<pid>/run-e2e-<pid>/clients/{alpha,bravo,charlie}/` 下（`vault`、`cache`、`state`）。成功时编排器注销 CFAPI 根并删除这些目录，只保留日志/报告；失败时保留客体目录供诊断，宿主记录警告。
 
 ### 20.2 入口与命令
 
@@ -577,7 +577,7 @@ VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows \
   nix develop .#windows --command bash tests/platform/windows/run-native-e2e.sh
 ```
 
-脚本执行顺序：启动 fixture 与反向隧道 → `cargo xwin build` 产品 `vaultsyncd-agent.exe` 与 `vaultsyncd-e2e.exe` → 校验宿主/客体 SHA-256 → 在交互用户会话的 scheduled task 中运行编排器（CFAPI/WinCred/named pipe 需要真实会话）→ 取回 `report.json`、代理事件与 agent 日志到 `artifacts/S074/e2e-<timestamp>-<pid>/` → 用 `final_entries` 复核 btrfs Root 工作目录字节 → 只删除本 run 的 `s074-driver-*`。客体保持在线。
+脚本执行顺序：启动 fixture 与反向隧道 → `cargo xwin build` 产品 `vaultsyncd-agent.exe` 与 `vaultsyncd-e2e.exe` → 校验宿主/客体 SHA-256 → 在交互用户会话的 scheduled task 中运行编排器（CFAPI/WinCred/named pipe 需要真实会话）→ 取回 `report.json`、代理事件与 agent 日志到 `artifacts/S074/e2e-<timestamp>-<pid>/` → 用 `final_entries` 复核 btrfs Vault 工作目录字节 → 只删除本 run 的 `s074-driver-*`。客体保持在线。
 
 ### 20.3 预期证据
 

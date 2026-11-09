@@ -114,8 +114,8 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `cfapi::identity` | `FileIdentity` 编解码，纯逻辑、可在宿主测试：48 B = magic `b"VS"`(2) + schema_version(1) + 保留字节(1) + `RootId`(16) + `EntryId`(16) + 版本提示 u64 LE(8) + CRC-32/IEEE LE(4)。解码校验长度/magic/版本/保留字节/CRC，错误为 `IdentityDecodeError` 的 5 个明确变体。blob 只有定长字节与整数（结构上不含路径、令牌、服务器地址），**不是**业务真相 |
-| `cfapi::prototype_layout` | 原型固定条目：`PROTOTYPE_ROOT_ID`（16 B 常量）、目录 `vaultsyncd-proto`、文件 `small-12345.bin`(12,345 B)、`large-1mib.bin`(1,048,576 B) 与 `huge-16mib.bin`(16,777,216 B，S011 增加，用于让平台发出范围请求)；`entry_id_for(name)` 由两个 FNV-1a 64 位哈希派生稳定 EntryId（原型专用，真实身份由服务端分配）；`file_identity(name)` 组装完整身份。纯逻辑，可在宿主测试 |
+| `cfapi::identity` | `FileIdentity` 编解码，纯逻辑、可在宿主测试：48 B = magic `b"VS"`(2) + schema_version(1) + 保留字节(1) + `VaultId`(16) + `EntryId`(16) + 版本提示 u64 LE(8) + CRC-32/IEEE LE(4)。解码校验长度/magic/版本/保留字节/CRC，错误为 `IdentityDecodeError` 的 5 个明确变体。blob 只有定长字节与整数（结构上不含路径、令牌、服务器地址），**不是**业务真相 |
+| `cfapi::prototype_layout` | 原型固定条目：`PROTOTYPE_VAULT_ID`（16 B 常量）、目录 `vaultsyncd-proto`、文件 `small-12345.bin`(12,345 B)、`large-1mib.bin`(1,048,576 B) 与 `huge-16mib.bin`(16,777,216 B，S011 增加，用于让平台发出范围请求)；`entry_id_for(name)` 由两个 FNV-1a 64 位哈希派生稳定 EntryId（原型专用，真实身份由服务端分配）；`file_identity(name)` 组装完整身份。纯逻辑，可在宿主测试 |
 | `cfapi::content`（S011，纯逻辑） | 固定测试内容源：`CONTENT_SEED` + 条目名派生的位置块（SplitMix64）⇒ 内容固定、版本固定；`entry_for_path` 只认 `…/vaultsyncd-proto/<固定条目>`；`check_range` 拒绝负偏移/非正长度/越界；`fill_range` 按偏移生成任意区间（与整份切片逐字节相同）；`expected_digest` 给出整份 SHA-256；自带 SHA-256（NIST 向量锁定）；`serve_range` 是按块回填循环（`ChunkSink`），每段前检查取消、下游拒绝即停。宿主测试覆盖金样本哈希、区间切片、非法范围与取消/拒绝语义 |
 | `cfapi::lifecycle` | `HResult`（`Display` 为 `0x%08X`、`succeeded()` 按符号判定）与 `StageError { stage, hr, detail }`；`format_record`/`record` 输出单行 `stage=<stage> key=value… hresult=0x…`。失败必须带阶段与原始码上报，不吞错 |
 | `cfapi::guard`（S012，纯逻辑） | 释放判定：`Verdict { Clean, Dirty, Busy, Unknown }`、`ProbeOutcome { Opened, Failed(u32), Skipped }`、`UsageProbe { exclusive_read, exclusive_write, shared_read }`、`ContentCheck { Matched, Mismatched, Unverified }`、`Observation { is_placeholder, pin_state, in_sync_state, on_disk_data_size, logical_size, modified_data_size }`、`evaluate(&Inputs) -> Decision { verdict, reason }`。规则顺序即保守程度：非占位符/已脱水/pinned/探测冲突/探测未执行/内容非全本地/内容不符/内容无法核对/内容变动依次返回，只有全部通过才是 `clean`；`reason` 是稳定拼写（`content_mismatch`、`handle_held_read`、`already_dehydrated` 等），客体脚本按它断言。宿主单测 10 个覆盖每一条 |
@@ -135,20 +135,20 @@ python3 tools/context.py --help
 
 | 子命令 | 输入 | 行为 | 退出码 |
 | --- | --- | --- | --- |
-| `create [--root <path>]` | 已存在的本地目录，默认 `C:\vaultsyncd-test` | 注册（已注册时按 `ERROR_ALREADY_EXISTS` 继续并记录）→ 连接 → 建目录占位 → 建三个文件占位（已存在且是占位则跳过；已存在但不是占位则拒绝覆盖）→ 断开。**S011 起不再做“读取必须失败”的探测**（水合已实现），内容验证交给 `read`/`hydrate` | 0 成功；1 失败（输出 `stage=`/`hresult=` 与原因） |
-| `inspect [--root <path>] [--allow-hydrated]` | 同上 | 只读：查询注册提供方；对目录与三个文件逐条校验占位、逻辑大小、本地数据量、`in_sync_state=0`、identity 解码与期望一致；默认要求仍脱水，`--allow-hydrated` 换成“本地数据不超过逻辑大小” | 0 已注册且全部校验通过；3 未注册（`NotRegistered`，cleanup 后的预期状态）；1 校验失败 |
-| `cleanup [--root <path>]` | 同上 | 连接（未注册则继续）→ 只删除确认是占位符的探针条目（`abstract`/`kept_not_placeholder` 都写日志）→ 断开 → 注销并后置确认 → 逐条打印保留内容 | 0 成功（含幂等：已清空时仍 0）；1 失败 |
-| `read --name <entry> [--root] [--offset N --length M] [--source available\|unavailable] [--latency-ms N] [--timeout-ms N] [--chunk-delay-ms N] [--expect success\|failure]` | 原型条目名（`expect` 可列出） | 自带提供方会话：读取整份或区间，与固定内容版本逐字节/哈希比对，输出 `stage=read.result`（bytes/sha256/expected_sha256/digest_match/on_disk_data_size/open_ms/read_ms/elapsed_ms/outcome）与 `provider.stats`；`--expect failure` 要求“明确失败且 0 字节” | 0 观察与 `--expect` 一致；1 相反或读取失败 |
+| `create [--vault <path>]` | 已存在的本地目录，默认 `C:\vaultsyncd-test` | 注册（已注册时按 `ERROR_ALREADY_EXISTS` 继续并记录）→ 连接 → 建目录占位 → 建三个文件占位（已存在且是占位则跳过；已存在但不是占位则拒绝覆盖）→ 断开。**S011 起不再做“读取必须失败”的探测**（水合已实现），内容验证交给 `read`/`hydrate` | 0 成功；1 失败（输出 `stage=`/`hresult=` 与原因） |
+| `inspect [--vault <path>] [--allow-hydrated]` | 同上 | 只读：查询注册提供方；对目录与三个文件逐条校验占位、逻辑大小、本地数据量、`in_sync_state=0`、identity 解码与期望一致；默认要求仍脱水，`--allow-hydrated` 换成“本地数据不超过逻辑大小” | 0 已注册且全部校验通过；3 未注册（`NotRegistered`，cleanup 后的预期状态）；1 校验失败 |
+| `cleanup [--vault <path>]` | 同上 | 连接（未注册则继续）→ 只删除确认是占位符的探针条目（`abstract`/`kept_not_placeholder` 都写日志）→ 断开 → 注销并后置确认 → 逐条打印保留内容 | 0 成功（含幂等：已清空时仍 0）；1 失败 |
+| `read --name <entry> [--vault] [--offset N --length M] [--source available\|unavailable] [--latency-ms N] [--timeout-ms N] [--chunk-delay-ms N] [--expect success\|failure]` | 原型条目名（`expect` 可列出） | 自带提供方会话：读取整份或区间，与固定内容版本逐字节/哈希比对，输出 `stage=read.result`（bytes/sha256/expected_sha256/digest_match/on_disk_data_size/open_ms/read_ms/elapsed_ms/outcome）与 `provider.stats`；`--expect failure` 要求“明确失败且 0 字节” | 0 观察与 `--expect` 一致；1 相反或读取失败 |
 | `cancel --name <entry> [--cancel-after-ms N] [--chunk-delay-ms N] [--require-cancel-callback]` | 同上 | 读线程负责打开+读取，主线程在 `FETCH_DATA` 已开始后关闭/取消它，输出 `stage=cancel.result`（cancel_code/cancel_to_return_ms/cancel_callbacks/aborted_fetches/in_flight）；默认不强制平台回调 `CANCEL_FETCH_DATA`（本 build 未观察到） | 0 取消动作已发出且读取有界返回、无在途回调；1 悬挂或未观察到水合开始 |
 | `hydrate --name <entry> [--offset N --length M] [--cancel-after-ms N] [--disconnect-after-ms N] [--chunk-delay-ms N]` | 同上 | 用只请求 `FILE_READ_ATTRIBUTES` 的句柄调 `CfHydratePlaceholder`，按**指定范围**请求水合；输出 `stage=hydrate.result`（requested/platform offset/length、hydrate_hresult、interruption、interrupt_to_return_ms、total_ms、on_disk_data_size、各计数） | 0 水合成功或中断后在 5 s 内返回且无在途回调；1 失败/悬挂 |
-| `protect --name <entry> [--root]` | 同上 | 只判定：打印 `stage=guard.observe`/`guard.probe`/`guard.content`/`guard.decision`（verdict、reason、pin/in_sync、on_disk/logical/modified、content、content_stable、local/expected SHA-256、三个探测结果）；不释放、不写 in-sync、不改内容 | 0 证据收集完成（verdict 可为 dirty/busy/unknown）；1 证据收集失败（如条目路径打不开） |
-| `release --name <entry> [--root] [--expect released\|refused]` | 同上 | 判定为 `clean` 才 `CfSetInSyncState(IN_SYNC)` + `CfDehydratePlaceholder`；其余打印 `outcome=refused` 并保留内容。日志追加 `release.in_sync`/`release.dehydrate`/`release.result`（outcome、in_sync_hresult、dehydrate_hresult、on_disk_after、dehydrated_after） | 0 结果与 `--expect` 一致（`released` ⊇ {released, already_dehydrated}，`refused` ⊇ {refused, dehydrate_failed}）；1 不一致或判定阶段失败；2 用法 |
+| `protect --name <entry> [--vault]` | 同上 | 只判定：打印 `stage=guard.observe`/`guard.probe`/`guard.content`/`guard.decision`（verdict、reason、pin/in_sync、on_disk/logical/modified、content、content_stable、local/expected SHA-256、三个探测结果）；不释放、不写 in-sync、不改内容 | 0 证据收集完成（verdict 可为 dirty/busy/unknown）；1 证据收集失败（如条目路径打不开） |
+| `release --name <entry> [--vault] [--expect released\|refused]` | 同上 | 判定为 `clean` 才 `CfSetInSyncState(IN_SYNC)` + `CfDehydratePlaceholder`；其余打印 `outcome=refused` 并保留内容。日志追加 `release.in_sync`/`release.dehydrate`/`release.result`（outcome、in_sync_hresult、dehydrate_hresult、on_disk_after、dehydrated_after） | 0 结果与 `--expect` 一致（`released` ⊇ {released, already_dehydrated}，`refused` ⊇ {refused, dehydrate_failed}）；1 不一致或判定阶段失败；2 用法 |
 | `expect [--name <entry> --offset N --length M]` | — | 平台无关：打印 `expect_entry name= size= sha256=`（或 `expect_range`），供宿主脚本与客体独立哈希比对 | 0 成功；1 内容源错误；2 用法 |
-| 用法错误 | — | 缺子命令、未知子命令/参数、`--root` 缺值、`--offset` 与 `--length` 不成对 | 2 |
+| 用法错误 | — | 缺子命令、未知子命令/参数、`--vault` 缺值、`--offset` 与 `--length` 不成对 | 2 |
 
 不变量：
 
-- 只操作 `--root` 下的 `vaultsyncd-proto` 探针子树；不枚举、不删除其它用户内容。
+- 只操作 `--vault` 下的 `vaultsyncd-proto` 探针子树；不枚举、不删除其它用户内容。
 - `cleanup` 删除前必须确认是占位符；不是占位符就保留并在日志里说明。探针目录非空时记
   `cleanup.remove status=kept_not_empty` 并**继续注销**（S012）：能注销优先于能删目录，
   否则无效名字会让同步根永久处于注册状态。
@@ -162,16 +162,16 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `common.sh` | 新增 `PLATFORM_PACKAGE=vaultsyncd-platform-windows`、`CFAPI_PROTOTYPE_BINARY=cfapi-prototype`、`CFAPI_GUEST_DIR`（默认 `C:/vaultsyncd-lab/s010`）、`CFAPI_ROOT`（默认 `C:/vaultsyncd-test`）；`guest_scp` 支持 `GUEST_TARGET_DIR` 覆盖目标目录，S009 的 `GUEST_DIR` 默认行为不变 |
+| `common.sh` | 新增 `PLATFORM_PACKAGE=vaultsyncd-platform-windows`、`CFAPI_PROTOTYPE_BINARY=cfapi-prototype`、`CFAPI_GUEST_DIR`（默认 `C:/vaultsyncd-lab/s010`）、`CFAPI_VAULT`（默认 `C:/vaultsyncd-test`）；`guest_scp` 支持 `GUEST_TARGET_DIR` 覆盖目标目录，S009 的 `GUEST_DIR` 默认行为不变 |
 | `build-cross.sh` | 先按 S009 原样构建冒烟 exe，再构建 `-p vaultsyncd-platform-windows --examples` 并把 `cfapi-prototype.exe` 复制到 `artifacts/windows/<target>/`；该步单独加 `-C link-arg=/ignore:4099` 抑制静态 CRT 缺 PDB 的 `LNK4099` |
 | `run-cfapi-prototype.sh` | 宿主 SHA-256 → 建 `CFAPI_GUEST_DIR` → scp exe 与 `guest-cfapi-prototype.ps1` → ssh 执行 → 逐项比对哈希；退出码沿用客体脚本（0 全部检查通过） |
-| `guest-cfapi-prototype.ps1` | `-Directory`/`-Root`/`-Exe`；先幂等清场，放入 `user-keep.txt` 与 `user-dir\keep-note.txt`（记录 SHA-256），依次执行 `create`/`inspect`，采集 `Get-Item` 属性/长度与 `fsutil reparsepoint query`/`sparse queryflag`，用 `read` 子命令验证水合读取成功且长度正确，执行 `cleanup`，再核对用户内容哈希不变、占位已删、`inspect` 退出码 3、再次 `cleanup` 退出码 0；逐项打印 `check=pass|fail`，最后打印 `cfapi_prototype_result: OK|FAILED` |
+| `guest-cfapi-prototype.ps1` | `-Directory`/`-Vault`/`-Exe`；先幂等清场，放入 `user-keep.txt` 与 `user-dir\keep-note.txt`（记录 SHA-256），依次执行 `create`/`inspect`，采集 `Get-Item` 属性/长度与 `fsutil reparsepoint query`/`sparse queryflag`，用 `read` 子命令验证水合读取成功且长度正确，执行 `cleanup`，再核对用户内容哈希不变、占位已删、`inspect` 退出码 3、再次 `cleanup` 退出码 0；逐项打印 `check=pass|fail`，最后打印 `cfapi_prototype_result: OK|FAILED` |
 | `common.sh`（S011 追加） | `CFAPI_HYDRATION_GUEST_DIR`（默认 `C:/vaultsyncd-lab/s011`）、`CFAPI_HYDRATION_RANGE_ENTRY/OFFSET/LENGTH`（默认 `huge-16mib.bin`、`4000000`、`1048576`），S010 的变量与 `guest_scp` 默认行为不变 |
 | `run-cfapi-hydration.sh`（S011） | 宿主 SHA-256 + `cargo run --example cfapi-prototype -- expect`（及 `expect_range`）算出期望值 → scp exe 与 `guest-cfapi-hydration.ps1` → ssh 执行 → 比对 exe 哈希、`guest_file_sha256`/`guest_range_sha256` 与宿主期望 → 统计 `check=pass|fail`；任一 fail/MISMATCH 或未报告 `cfapi_hydration_result: OK` 即非零退出 |
-| `common.sh`（S012 追加） | `CFAPI_RELEASE_GUEST_DIR`（默认 `C:/vaultsyncd-lab/s012`）、`CFAPI_RELEASE_ROOT`（默认 `C:/vaultsyncd-test`）、`CFAPI_RELEASE_RENAME_ROOT`（默认 `C:/vaultsyncd-test-rename`）；S009—S011 的变量不变 |
+| `common.sh`（S012 追加） | `CFAPI_RELEASE_GUEST_DIR`（默认 `C:/vaultsyncd-lab/s012`）、`CFAPI_RELEASE_VAULT`（默认 `C:/vaultsyncd-test`）、`CFAPI_RELEASE_RENAME_VAULT`（默认 `C:/vaultsyncd-test-rename`）；S009—S011 的变量不变 |
 | `run-cfapi-release.sh`（S012） | 宿主 SHA-256 + `cargo run --example cfapi-prototype -- expect` → scp exe 与 `guest-cfapi-release.ps1` → ssh 执行 → 比对 exe 与每个 `guest_file_sha256` → 统计 `check=pass|fail` 与 `blocked_item=`；任一 fail/MISMATCH、未报告 `cfapi_release_result: OK` 即非零退出（`blocked_item` 只打印不失败，阻塞项由交接与 §18.6 记录） |
-| `guest-cfapi-release.ps1`（S012） | `-Directory`/`-Root`/`-RenameRoot`/`-Exe`；顺序：清场 → create/inspect → 已脱水条目 protect（不为判定而水合）→ 干净样本 protect/release（`in_sync`/`dehydrate` 全 0x0、`on_disk_after=0`）→ 新进程 `inspect` 复核脱水 → 再读哈希不变 → 原地写 / 映射写 / 映射仍打开 / 独占句柄 / 共享锁五类保存（每类前后 SHA-256 与判定断言，句柄消失后可释放）→ rename-over（单独同步根，记录阻塞现象后 `cleanup`+`rd` 恢复）→ 收尾清理与用户内容哈希。逐项 `check=pass|fail`，另输出 `blocked_item=` 与 `cfapi_release_result: OK|FAILED` |
-| `guest-cfapi-hydration.ps1`（S011） | `-Directory`/`-Root`/`-Exe`；按“清场 → create → 离线未水合失败（3 条目）→ 整份读取 + 哈希 → 离线读已水合 + 未水合仍失败 → 范围水合（平台范围必须是部分区间）→ 传输中断开同步根（循环早停、有界返回）→ 重置后再取消（句柄可关闭、有界返回）→ 重置后超时（明确失败、有界）→ 超时失败后再读成功 → `inspect --allow-hydrated` → cleanup 保留用户内容/注销/幂等”顺序执行，逐项 `check=pass|fail`，最后打印 `cfapi_hydration_result: OK|FAILED` |
+| `guest-cfapi-release.ps1`（S012） | `-Directory`/`-Vault`/`-RenameVault`/`-Exe`；顺序：清场 → create/inspect → 已脱水条目 protect（不为判定而水合）→ 干净样本 protect/release（`in_sync`/`dehydrate` 全 0x0、`on_disk_after=0`）→ 新进程 `inspect` 复核脱水 → 再读哈希不变 → 原地写 / 映射写 / 映射仍打开 / 独占句柄 / 共享锁五类保存（每类前后 SHA-256 与判定断言，句柄消失后可释放）→ rename-over（单独同步根，记录阻塞现象后 `cleanup`+`rd` 恢复）→ 收尾清理与用户内容哈希。逐项 `check=pass|fail`，另输出 `blocked_item=` 与 `cfapi_release_result: OK|FAILED` |
+| `guest-cfapi-hydration.ps1`（S011） | `-Directory`/`-Vault`/`-Exe`；按“清场 → create → 离线未水合失败（3 条目）→ 整份读取 + 哈希 → 离线读已水合 + 未水合仍失败 → 范围水合（平台范围必须是部分区间）→ 传输中断开同步根（循环早停、有界返回）→ 重置后再取消（句柄可关闭、有界返回）→ 重置后超时（明确失败、有界）→ 超时失败后再读成功 → `inspect --allow-hydrated` → cleanup 保留用户内容/注销/幂等”顺序执行，逐项 `check=pass|fail`，最后打印 `cfapi_hydration_result: OK|FAILED` |
 
 ## tools/xtask — 任务编排入口
 
@@ -182,7 +182,7 @@ python3 tools/context.py --help
 | 子命令 | 行为 | 退出码 |
 | --- | --- | --- |
 | `env` | 只读诊断：定位 workspace 根；探测 `rustc/cargo/node/pnpm --version` 的实际输出（工具缺失时标「不可用」，不写死版本）；用 `cargo tree --locked --workspace --depth 0 --prefix none` 列出成员；列出 `Cargo.toml`、`Cargo.lock`、`package.json`、`pnpm-lock.yaml`、`rust-toolchain.toml`、`node_modules` 是否存在 | 0；无法定位 workspace 时 1 |
-| `check` | 先确认 `<root>/node_modules` 存在：缺失立即报错并提示 `pnpm install --frozen-lockfile`，不跳过前端检查。随后按固定顺序执行下表六步，逐步打印命令与退出码，末尾汇总失败步骤；子进程继承终端，诊断即时可见 | 全部通过 0；任一步失败 1 |
+| `check` | 先确认 `<vault>/node_modules` 存在：缺失立即报错并提示 `pnpm install --frozen-lockfile`，不跳过前端检查。随后按固定顺序执行下表六步，逐步打印命令与退出码，末尾汇总失败步骤；子进程继承终端，诊断即时可见 | 全部通过 0；任一步失败 1 |
 | `check-boundaries` | 生成一致、三目标metadata、pnpm依赖/源码门禁及前端消费者测试，最后运行 protocol/local-ipc Rust 契约；详见文末 S092 | 通过0；失败1；多余参数2 |
 | `generate` | 从 `api/openapi.yaml` 生成 `crates/protocol/src/generated/mod.rs` 与 `packages/api-client/src/generated/*`；只写有变化的文件并打印路径。`--check` 不写盘，只逐字节比对，不一致时列出文件并退出 1。配置、契约与生成器的校验规则见下文「api/ — 远端协议契约源」 | 无 diff/写入成功 0；配置漂移、未支持构造、`--check` 有 diff 1；多余参数 2 |
 | `version` | 从 Cargo workspace.package.version 核对 Rust继承和JSON镜像；--sync同步镜像，不改协议 | 成功0；失败1；参数错误2 |
@@ -236,7 +236,7 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `VAULTSYNCD_LAB_ROOT` | 默认 `/data/vaultsyncd-lab`。必须绝对且已规范化，必须位于 `/data` 或 `/var/lib` 之下；拒绝 `/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/data/llm`、`/data/.snapshots`、`/wrd`、`/tmp` 等受保护路径及其内部，拒绝 Git 工作区与 `.worktrees` |
+| `VAULTSYNCD_LAB_VAULT` | 默认 `/data/vaultsyncd-lab`。必须绝对且已规范化，必须位于 `/data` 或 `/var/lib` 之下；拒绝 `/`、`/home`、`/nix`、`/var/log`、`/.snapshots`、`/data/llm`、`/data/.snapshots`、`/wrd`、`/tmp` 等受保护路径及其内部，拒绝 Git 工作区与 `.worktrees` |
 | `VAULTSYNCD_LOOP_SIZE` | loop 镜像默认大小，等价于 `create` 的可选第二参数 |
 | 派生路径 | 镜像、挂载点、子卷、meta 全部由 `run_id` 派生并逐条断言落在 `runs/<run_id>/` 内，调用者不能传任意路径 |
 | 提权 | 只用 `sudo -n`（`losetup`/`mkfs.btrfs`/`mount`/`umount`/`btrfs subvolume`）；失败立即退出，不提示密码，不回退到交互 sudo |
@@ -264,7 +264,7 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `VM_ROOT` | 默认 `/data/vaultsyncd-lab/win-lab`，必须在源码树之外；所有派生路径都相对它，不写入仓库 |
+| `VM_VAULT` | 默认 `/data/vaultsyncd-lab/win-lab`，必须在源码树之外；所有派生路径都相对它，不写入仓库 |
 | `VM_NAME` / `LAB_USER` / `SSH_PORT` / `SPICE_PORT` | 默认 `windows-11` / `Quickemu` / `2222` / `5930`；第二台客体改这些值，不要复用同一 `tpm2-00.permall` 或 qcow2 |
 | 凭据 | 口令只在 `secrets/lab-credentials.txt`（0600，目录 0700）；私钥只在 `ssh/`（0600）；脚本不打印口令与私钥 |
 | 幂等性 | `prepare` 可重复执行（复用已有口令/密钥，重打 ISO 与 conf）；`fetch-iso` 以远端字节数与已记录 sha256 判定，不重复下载完整文件；`start` 不做隐式 `--kill` |
@@ -312,8 +312,8 @@ python3 tools/context.py --help
 | 项目 | 契约 |
 | --- | --- |
 | `mounts::raw`（crate 内可见） | `fstatfs(2)`、`statx(2)`、`ioctl(2)` 与三个**只读**请求：`FS_IOC_GETFLAGS`、`BTRFS_IOC_FS_INFO`、`BTRFS_IOC_INO_LOOKUP`。`struct statfs`/`struct statx`/两个 btrfs 结构的 LP64 布局有 `size_of`/`offset_of` `const` 断言（编译期自检）。未声明任何设置标志、清理 NOCOW、改挂载的调用 |
-| `mounts::probe` | `probe_path`：`canonicalize` → `O_PATH|O_DIRECTORY|O_NOFOLLOW` 句柄 → `fstatfs`+`statx`（`STATX_INO`/`STATX_BTIME`/`STATX_MNT_ID`/`STATX_SUBVOL`）→ 第二个 `O_RDONLY` 句柄做 `ioctl` 并核对 inode 未变 → 按挂载 ID 关联本进程 `/proc/self/mountinfo` → btrfs 上取 FSID 与子卷 ID。`scan_root`：遍历目录找嵌套子卷与 NOCOW 目录。`inode_flags_of_path`：单文件/目录的 `FS_IOC_GETFLAGS` |
-| `mounts::mountinfo` | `/proc/self/mountinfo` 解析：挂载 ID、父 ID、`major:minor`、`root`、挂载点、每挂载选项、可选字段、fstype、源、超级块选项；还原 `\040`/`\011`/`\012`/`\134` 转义。坏行报错而不是跳过 |
+| `mounts::probe` | `probe_path`：`canonicalize` → `O_PATH|O_DIRECTORY|O_NOFOLLOW` 句柄 → `fstatfs`+`statx`（`STATX_INO`/`STATX_BTIME`/`STATX_MNT_ID`/`STATX_SUBVOL`）→ 第二个 `O_RDONLY` 句柄做 `ioctl` 并核对 inode 未变 → 按挂载 ID 关联本进程 `/proc/self/mountinfo` → btrfs 上取 FSID 与子卷 ID。`scan_vault`：遍历目录找嵌套子卷与 NOCOW 目录。`inode_flags_of_path`：单文件/目录的 `FS_IOC_GETFLAGS` |
+| `mounts::mountinfo` | `/proc/self/mountinfo` 解析：挂载 ID、父 ID、`major:minor`、`vault`、挂载点、每挂载选项、可选字段、fstype、源、超级块选项；还原 `\040`/`\011`/`\012`/`\134` 转义。坏行报错而不是跳过 |
 | `mounts::paths` | 按路径分量判 `Same`/`Ancestor`/`Descendant`/`Unrelated`；`/data/a` 与 `/data/abc` 无关（design §16.1 禁止字符串前缀判断） |
 | `mounts::admission` | 纯逻辑：后端分类、判定顺序、拒绝原因、身份比较、子挂载检测 |
 | `mounts::content` | 纯逻辑：`Empty`/`Sparse`/`FullyAllocated` 内容形态；**稀疏不是占位证据** |
@@ -327,16 +327,16 @@ python3 tools/context.py --help
 | --- | --- | --- | --- |
 | 1 | `fstatfs` 幻数/fstype 必须是 btrfs；拒绝 FUSE（含 `fuse.*`、`fuseblk`）、NFS、CIFS/SMB、overlay、tmpfs、ext4/xfs/zfs 及其它后端 | `unsupported_backend` | `UNSUPPORTED_STORAGE_BACKEND` |
 | 2 | btrfs 上必须取得 FSID 与子卷 ID | `subvolume_identity_unavailable` | 同上 |
-| 3 | Root 目录自身 `FS_IOC_GETFLAGS` 必须可读且不含 `FS_NOCOW_FL`（`0x00800000`） | `nocow_inode_flags` / `inode_flags_unavailable` | 同上 |
+| 3 | Vault 目录自身 `FS_IOC_GETFLAGS` 必须可读且不含 `FS_NOCOW_FL`（`0x00800000`） | `nocow_inode_flags` / `inode_flags_unavailable` | 同上 |
 | 4 | 挂载/超级块选项不得含 `nodatacow`/`nodatasum` | `nocow_mount_option` | 同上 |
 | 5 | 目录遍历必须完整（未触发上限），否则结论是“未完成”而不是通过 | `scan_depth_limit_reached` / `scan_entry_limit_reached`（`decision=inconclusive`，退出码 4） | — |
-| 6 | Root 内不得有嵌套子卷（子卷根 inode 恒为 256，再用 subvol ID 确认） | `nested_subvolume` | `UNSUPPORTED_STORAGE_BACKEND` |
+| 6 | Vault 内不得有嵌套子卷（子卷根 inode 恒为 256，再用 subvol ID 确认） | `nested_subvolume` | `UNSUPPORTED_STORAGE_BACKEND` |
 | 7 | 遍历到的目录不得带 NOCOW | `nocow_inode_flags`（带相对路径） | 同上 |
-| 8 | Root 内不得有任何子挂载（bind mount、tmpfs、其它 fs 都算） | `nested_mount` | 同上 |
-| 9 | 内部状态目录必须与 Root 不重叠、本身是 btrfs；与 Root 不在同一 btrfs 文件系统则拒绝 | `internal_state_overlap` / `internal_state_unsupported_backend` / `internal_state_other_filesystem` | 同上 |
-| 10 | 已注册 Root：同一目录（别名）拒绝；路径重叠拒绝 | `duplicate_root` / `overlapping_root` | 同上 |
+| 8 | Vault 内不得有任何子挂载（bind mount、tmpfs、其它 fs 都算） | `nested_mount` | 同上 |
+| 9 | 内部状态目录必须与 Vault 不重叠、本身是 btrfs；与 Vault 不在同一 btrfs 文件系统则拒绝 | `internal_state_overlap` / `internal_state_unsupported_backend` / `internal_state_other_filesystem` | 同上 |
+| 10 | 已注册 Vault：同一目录（别名）拒绝；路径重叠拒绝 | `duplicate_vault` / `overlapping_vault` | 同上 |
 
-判定通过时输出 `note=` 行记录事实（`fsid`、`subvol_id`、`mount_id`、`mount_id_source`、`scan_entries`，以及内部状态目录在不同子卷/不同挂载时的 `internal_state_separate_subvolume=`/`internal_state_separate_mount=`）。运行期复核用 `admission::verify_unchanged(recorded, current)`：漂移返回 `filesystem_changed`/`subvolume_changed`/`directory_changed`，对应 `ROOT_UNAVAILABLE`；本卡只提供判定函数，重验时机属后续卡。
+判定通过时输出 `note=` 行记录事实（`fsid`、`subvol_id`、`mount_id`、`mount_id_source`、`scan_entries`，以及内部状态目录在不同子卷/不同挂载时的 `internal_state_separate_subvolume=`/`internal_state_separate_mount=`）。运行期复核用 `admission::verify_unchanged(recorded, current)`：漂移返回 `filesystem_changed`/`subvolume_changed`/`directory_changed`，对应 `VAULT_UNAVAILABLE`；本卡只提供判定函数，重验时机属后续卡。
 
 ### 身份与别名规则
 
@@ -361,7 +361,7 @@ python3 tools/context.py --help
 
 | 子命令 | 输入 | 行为 | 退出码 |
 | --- | --- | --- | --- |
-| `inspect PATH [--internal-state-dir PATH]… [--registered-root PATH]… [--max-scan-entries N] [--max-scan-depth N]` | 候选 Root 与可选上下文 | 打印探测事实（`backend`/`fstype`/`fs_magic`/`statfs_fsid`/`mount_id(_source)`/`mount_point`/`mount_root`/`statx_device`/`mount_device`/`inode`/`btime`/`fsid`/`subvol_id(_source)`/`inode_flags`/`nocow`、`scan*`、`submounts`）+ `decision`/`reason`/`error_code`/`detail`/`note` | 0 接受；3 拒绝；4 未完成；1 探测错误；2 用法错误 |
+| `inspect PATH [--internal-state-dir PATH]… [--registered-vault PATH]… [--max-scan-entries N] [--max-scan-depth N]` | 候选 Vault 与可选上下文 | 打印探测事实（`backend`/`fstype`/`fs_magic`/`statfs_fsid`/`mount_id(_source)`/`mount_point`/`mount_root`/`statx_device`/`mount_device`/`inode`/`btime`/`fsid`/`subvol_id(_source)`/`inode_flags`/`nocow`、`scan*`、`submounts`）+ `decision`/`reason`/`error_code`/`detail`/`note` | 0 接受；3 拒绝；4 未完成；1 探测错误；2 用法错误 |
 | `identity PATH` | 路径 | 只打印身份字段（挂载 ID、设备、inode、FSID、子卷 ID） | 0；1 探测错误 |
 | `same-storage PATH_A PATH_B` | 两个路径 | 打印 `same_storage=`、`same_directory=` 与两侧 mount id | 0 同一存储；3 不同；1 探测错误 |
 | `content PATH` | 文件或目录 | 打印 `logical_size`、`allocated_bytes`、`content_shape`、`inode_flags`、`nocow`、`placeholder_evidence=none` | 0；1 读元数据失败 |
@@ -372,7 +372,7 @@ python3 tools/context.py --help
 | 脚本 | 行为 | 退出码 |
 | --- | --- | --- |
 | `common.sh` | 被三个脚本 source：`repo_root`、`require_dev_shell`（缺 cargo/btrfs/findmnt/losetup 即失败）、`require_sudo_noninteractive`（`sudo -n`）、`build_admission_bin`/`build_file_publish_bin`、`run_admission`/`run_file_publish`（结果统一写入 `CMD_OUT`/`CMD_STATUS`；`run_admission` 另保留 `ADMISSION_OUT`/`ADMISSION_STATUS` 别名）、`expect_decision`/`expect_field`/`expect_line`/`expect_status`、`snapshot_mounts`/`snapshot_loops`、`umount_checked`/`umount_tolerant`。失败累加并继续，末尾 `summary` 非零 | — |
-| `run-storage-admission.sh` | 用 `tools/test-volume/test-volume.sh create <run_id>` 建立 run 目录，再在**该 run 目录内**做真实样本：btrfs 子卷与 loop 卷接受；bind mount/符号链接/`..` 别名同存储；`/tmp`、`/dev/shm`、`/run`（tmpfs）、`/proc`、自建 overlay、64 MiB 稀疏镜像上的 ext4 拒绝；嵌套子卷、子挂载、NOCOW 目录（`chattr +C`）与 NOCOW 文件拒绝；内部状态目录重叠/跨文件系统拒绝、同卷另一子卷接受并记录备注；已注册 Root 的别名与重叠拒绝；8 MiB 稀疏文件与 1 MiB 随机文件的内容形态；用法/探测错误退出码 | 0 全部通过；1 有用例失败或清理失败 |
+| `run-storage-admission.sh` | 用 `tools/test-volume/test-volume.sh create <run_id>` 建立 run 目录，再在**该 run 目录内**做真实样本：btrfs 子卷与 loop 卷接受；bind mount/符号链接/`..` 别名同存储；`/tmp`、`/dev/shm`、`/run`（tmpfs）、`/proc`、自建 overlay、64 MiB 稀疏镜像上的 ext4 拒绝；嵌套子卷、子挂载、NOCOW 目录（`chattr +C`）与 NOCOW 文件拒绝；内部状态目录重叠/跨文件系统拒绝、同卷另一子卷接受并记录备注；已注册 Vault 的别名与重叠拒绝；8 MiB 稀疏文件与 1 MiB 随机文件的内容形态；用法/探测错误退出码 | 0 全部通过；1 有用例失败或清理失败 |
 | `run-reflink.sh` | 在 `/data` 卷上建两个兄弟子卷，`cp --reflink=always`（FICLONE）同卷跨子卷与同子卷克隆必须成功、`filefrag -v` 必须报告共享 extent；跨文件系统克隆必须失败（EXDEV）且不留目标文件；源改写后副本保持旧字节 | 同上 |
 
 清理与隔离要求（这三个脚本共同）：
@@ -409,11 +409,11 @@ python3 tools/context.py --help
 
 | 子命令 | 输入 | 行为 | 退出码 |
 | --- | --- | --- | --- |
-| `identity ROOT REL` | 相对名称 | 打印 `FileIdentity::to_spec()` + `resolve=` | 0；3 拒绝（不存在按 `not_found`） |
-| `hash ROOT REL` | 相对名称 | `decision=hashed`、`sha256=`、`bytes=`、`resolve=` | 0；3 拒绝 |
-| `capture --source-root DIR --source REL --object-root DIR --object REL` | 工作文件 → 内容对象 | 按 `capture_object` 发布（`mode=0444`、`--expect absent`），输出 `decision`、`method`、`fallback`、`reflink_error`、`sha256`、`bytes`、`mode`、`source_mount_id`/`target_mount_id`/`staging_mount_id`、`source_inode`、`target_inode_before`/`target_inode_after`、`replaced`、`directory_fsynced`、`staging_name` | 0 成功；3 拒绝（对象已存在等）；1 错误 |
+| `identity VAULT REL` | 相对名称 | 打印 `FileIdentity::to_spec()` + `resolve=` | 0；3 拒绝（不存在按 `not_found`） |
+| `hash VAULT REL` | 相对名称 | `decision=hashed`、`sha256=`、`bytes=`、`resolve=` | 0；3 拒绝 |
+| `capture --source-vault DIR --source REL --object-vault DIR --object REL` | 工作文件 → 内容对象 | 按 `capture_object` 发布（`mode=0444`、`--expect absent`），输出 `decision`、`method`、`fallback`、`reflink_error`、`sha256`、`bytes`、`mode`、`source_mount_id`/`target_mount_id`/`staging_mount_id`、`source_inode`、`target_inode_before`/`target_inode_after`、`replaced`、`directory_fsynced`、`staging_name` | 0 成功；3 拒绝（对象已存在等）；1 错误 |
 | `publish ... --target-dir REL --target-name NAME (--expect absent \| --expect-from FILE) [--race-hook CMD]` | 对象 → 工作文件 | `stage_for_publish` + `commit_staged`（`mode=0644`）；拒绝时打印 `decision=paused`、`reason`、`expected`/`observed`、`changed_fields`、`candidate`/`candidate_dir`/`candidate_sha256`。`--race-hook` 在两步之间执行一条命令，**仅用于验收外部竞争**，不是产品写入路径 | 0 发布；3 暂停；1 错误；2 用法 |
-| `rename --from-root DIR --from REL --to-root DIR --to REL [--noreplace]` | 两个目录句柄 | 直接调用 `renameat2`，跨文件系统返回 `cross_device_rename`（`EXDEV`），不留目标文件 | 0 已重命名；3 拒绝；1 错误 |
+| `rename --from-vault DIR --from REL --to-vault DIR --to REL [--noreplace]` | 两个目录句柄 | 直接调用 `renameat2`，跨文件系统返回 `cross_device_rename`（`EXDEV`），不留目标文件 | 0 已重命名；3 拒绝；1 错误 |
 | 全局 `--resolve auto\|openat2\|walk` | — | 选择解析机制并写入 `resolve=` | 2 未知取值 |
 
 ### `tests/platform/linux/run-file-publish.sh`（S014）
@@ -441,19 +441,19 @@ python3 tools/context.py --help
 
 ## crates/platform-linux-server — 安全路径访问正式接口（S032）
 
-状态：S032 把 S014 的受限句柄原型升级为 Root 级正式接口 `files::root`，补目录列举、挂载边界复核、Root 身份漂移复核与 `mounts::overlap` 重叠判定。`ServerStorage` 的完整方法集（读完整版本、对象/历史/扫描）仍属后续卡（S033、S038、S049）；本卡不含占位实现。
+状态：S032 把 S014 的受限句柄原型升级为 Vault 级正式接口 `files::vault`，补目录列举、挂载边界复核、Vault 身份漂移复核与 `mounts::overlap` 重叠判定。`ServerStorage` 的完整方法集（读完整版本、对象/历史/扫描）仍属后续卡（S033、S038、S049）；本卡不含占位实现。
 
 ### 模块与契约
 
 | 模块 | 契约 |
 | --- | --- |
-| `files::root` | `RootHandle::open(path, ResolveMode)`：`probe_path` 读内核事实 → `O_DIRECTORY\|O_NOFOLLOW` 打开规范路径 → 核对句柄身份与探测事实是同一目录（否则 `root_changed_during_open`）→ 要求 `STATX_MNT_ID`（缺失即 `mount_id_unavailable`，fail-closed）。方法：`list_dir(REL)`、`open_read(REL)`、`create_exclusive(REL, mode)`、`identity()`、`verify()`、`path()`、`facts()`、`snapshot()`、`mechanism()`。空 `REL` 表示 Root 自身 |
-| `files::root` 的挂载边界 | 每次列举/打开/创建都要求对象的 `STATX_MNT_ID` 等于 Root 的挂载 ID：不同 → `mount_boundary_crossed`（bind mount/子挂载），缺失 → `mount_boundary_unverified`。创建时**先打开并核对父目录**再用该句柄建文件，不在“先按路径建、事后发现跨挂载”的情况下往外部样本写入 |
-| `files::root` 的身份复核 | `RootSnapshot{resolved_path, backend, fs_magic, fsid, subvolume_id, mount_id, dev_major, dev_minor, inode, btime}` 有 `to_spec`/`parse_spec`（缺字段、重复字段、非法值都报错）。`snapshot.compare(facts)` 按“后端 → FSID → 子卷 → 挂载 → 目录身份”返回首个 `RootDrift{backend_changed, filesystem_changed, subvolume_changed, mount_changed, directory_changed}`，`design_error_code()` 恒为 `ROOT_UNAVAILABLE`（运行期漂移暂停 Root，不推导删除）。`RootHandle::verify()` 同时复核“句柄自身仍是那个目录”和“路径仍指向同一存储单元与挂载” |
+| `files::vault` | `VaultHandle::open(path, ResolveMode)`：`probe_path` 读内核事实 → `O_DIRECTORY\|O_NOFOLLOW` 打开规范路径 → 核对句柄身份与探测事实是同一目录（否则 `vault_changed_during_open`）→ 要求 `STATX_MNT_ID`（缺失即 `mount_id_unavailable`，fail-closed）。方法：`list_dir(REL)`、`open_read(REL)`、`create_exclusive(REL, mode)`、`identity()`、`verify()`、`path()`、`facts()`、`snapshot()`、`mechanism()`。空 `REL` 表示 Vault 自身 |
+| `files::vault` 的挂载边界 | 每次列举/打开/创建都要求对象的 `STATX_MNT_ID` 等于 Vault 的挂载 ID：不同 → `mount_boundary_crossed`（bind mount/子挂载），缺失 → `mount_boundary_unverified`。创建时**先打开并核对父目录**再用该句柄建文件，不在“先按路径建、事后发现跨挂载”的情况下往外部样本写入 |
+| `files::vault` 的身份复核 | `VaultSnapshot{resolved_path, backend, fs_magic, fsid, subvolume_id, mount_id, dev_major, dev_minor, inode, btime}` 有 `to_spec`/`parse_spec`（缺字段、重复字段、非法值都报错）。`snapshot.compare(facts)` 按“后端 → FSID → 子卷 → 挂载 → 目录身份”返回首个 `VaultDrift{backend_changed, filesystem_changed, subvolume_changed, mount_changed, directory_changed}`，`design_error_code()` 恒为 `VAULT_UNAVAILABLE`（运行期漂移暂停 Vault，不推导删除）。`VaultHandle::verify()` 同时复核“句柄自身仍是那个目录”和“路径仍指向同一存储单元与挂载” |
 | `files::restricted`（S032 扩展） | `list_entries()` 用已打开目录句柄的 `getdents64(2)`（不用 `read_dir(路径)`），丢弃 `.`/`..`、按名称字节序排序、符号链接只报 `EntryKind::Symlink`；`DirEntry{name, kind, inode}`、`EntryKind{file, dir, symlink, other, unknown}`。新增错误码 `permission_denied`（`EACCES`/`EPERM`）、`read_dir_failed`、`mount_boundary_crossed`、`mount_boundary_unverified`，全部保留原始 `io::Error`。权限失败**不返回空列表** |
 | `files::raw`（S032 扩展） | `getdents64(2)`（`__NR_getdents64` 按 `x86_64=217`/`aarch64=61` 声明；其它架构返回 `Unsupported`，不静默空目录）与 `linux_dirent64` 纯解析器（长度越界、名称未 NUL 结尾都报错），`d_type` 常量与头部长度 19 有自检 |
-| `mounts::overlap` | `DirectoryRecord{role: root\|internal, facts}` + `find_overlaps(&[..])`：同一规范路径 → `same_path`；同一目录对象（设备+inode+btime）经不同路径 → `alias`（bind mount/别名，挂载 ID 不同也要报）；内部目录落在 Root 内 → `internal_inside_root`；Root 落在内部目录内 → `root_inside_internal`；其余父子关系 → `parent_child`。父子关系按路径分量（`/data/root` 与 `/data/rootx` 无关），只判定不决定是否允许 |
-| `mounts::admission`（S032 扩展） | `BackendKind::parse(&str)` 与 `as_str()` 互逆，供 Root 快照规格读回；分类规则不变 |
+| `mounts::overlap` | `DirectoryRecord{role: vault\|internal, facts}` + `find_overlaps(&[..])`：同一规范路径 → `same_path`；同一目录对象（设备+inode+btime）经不同路径 → `alias`（bind mount/别名，挂载 ID 不同也要报）；内部目录落在 Vault 内 → `internal_inside_vault`；Vault 落在内部目录内 → `vault_inside_internal`；其余父子关系 → `parent_child`。父子关系按路径分量（`/data/vault` 与 `/data/vaultx` 无关），只判定不决定是否允许 |
+| `mounts::admission`（S032 扩展） | `BackendKind::parse(&str)` 与 `as_str()` 互逆，供 Vault 快照规格读回；分类规则不变 |
 
 ### 诊断命令 `path-access`（example 目标）
 
@@ -461,35 +461,35 @@ python3 tools/context.py --help
 
 | 子命令 | 输出 |
 | --- | --- |
-| `list ROOT REL` | `decision=listed`、`root=`、`relative=`、`resolve=`、`root_mount_id=`、`entries=`、每条 `entry=NAME kind=KIND inode=N` |
-| `open ROOT REL` | `decision=opened`、`resolve=`、`root_mount_id=` + `FileIdentity::to_spec()` |
-| `create ROOT REL [--mode OCTAL]` | `decision=created`、`mount_id=`、`root_mount_id=`、`inode=`、`mode=`、`fsynced=true` |
-| `snapshot ROOT` | `decision=snapshot` + `RootSnapshot::to_spec()`（交给 `verify --expect-from`） |
-| `verify --expect-from FILE ROOT` | `decision=verified`、`verify=unchanged`；漂移时 `decision=refused`、`reason=<drift>`、`design_error=ROOT_UNAVAILABLE`，退出码 3 |
-| `overlap (--root DIR \| --internal DIR)...` | `records=`、`record=N role= path= resolved= mount_id= dev= inode=`、`overlap=`、每对 `pair=I,J kind=KIND left=ROLE:PATH right=ROLE:PATH mount_ids=A:B`、`decision=clean\|overlapping`；有重叠时退出码 3 |
+| `list VAULT REL` | `decision=listed`、`vault=`、`relative=`、`resolve=`、`vault_mount_id=`、`entries=`、每条 `entry=NAME kind=KIND inode=N` |
+| `open VAULT REL` | `decision=opened`、`resolve=`、`vault_mount_id=` + `FileIdentity::to_spec()` |
+| `create VAULT REL [--mode OCTAL]` | `decision=created`、`mount_id=`、`vault_mount_id=`、`inode=`、`mode=`、`fsynced=true` |
+| `snapshot VAULT` | `decision=snapshot` + `VaultSnapshot::to_spec()`（交给 `verify --expect-from`） |
+| `verify --expect-from FILE VAULT` | `decision=verified`、`verify=unchanged`；漂移时 `decision=refused`、`reason=<drift>`、`design_error=VAULT_UNAVAILABLE`，退出码 3 |
+| `overlap (--vault DIR \| --internal DIR)...` | `records=`、`record=N role= path= resolved= mount_id= dev= inode=`、`overlap=`、每对 `pair=I,J kind=KIND left=ROLE:PATH right=ROLE:PATH mount_ids=A:B`、`decision=clean\|overlapping`；有重叠时退出码 3 |
 
 ### `tests/platform/linux/run-path-access.sh`（S032）
 
-真实样本（`tools/test-volume/test-volume.sh create <run_id>`）：`volume/root` 作为 Root、`volume/rootx` 作为同名前缀的兄弟目录、`external` 作为 Root 之外的外部样本（内容含标记串）、`state` 作为另一个 btrfs 子卷。
+真实样本（`tools/test-volume/test-volume.sh create <run_id>`）：`volume/vault` 作为 Vault、`volume/vaultx` 作为同名前缀的兄弟目录、`external` 作为 Vault 之外的外部样本（内容含标记串）、`state` 作为另一个 btrfs 子卷。
 
 1. 列举：`openat2` 与 `--resolve walk` 条目数一致，`entry=... kind=... inode=...` 稳定。
 2. 符号链接（目录、文件、中间段）一律 `symlink_rejected`，输出没有外部样本的目录项与内容，外部样本哈希不变；按外部目录列举同样拒绝。
-3. 换目标竞态：后台持续在“Root 内真实目录（含 inside.txt）”与“指向外部样本的符号链接”之间切换，前台 40 次列举全部只能是 Root 内文件或明确拒绝（实测 26 次成功、14 次拒绝、0 次泄漏）。
-4. 目录别名：`mount --bind external root/alias` 后列举 → `mount_boundary_crossed` 且无目录项；打开别名里的文件 → 同码且不读内容；在别名里创建 → 同码且外部目录没有新文件。
-5. 权限失败：root 属主 `0700` 子目录对当前用户不可读 → `permission_denied` + 保留原始 `Permission denied`，且**没有** `entries=` 行；打开其中文件同样拒绝；Root 其余部分仍可列举。
-6. 创建：Root 内新建 `mount_id == root_mount_id`、`mode=0644`、`fsynced=true`；重复创建 `already_exists`；父目录无权限时 `permission_denied` 且不落盘。
+3. 换目标竞态：后台持续在“Vault 内真实目录（含 inside.txt）”与“指向外部样本的符号链接”之间切换，前台 40 次列举全部只能是 Vault 内文件或明确拒绝（实测 26 次成功、14 次拒绝、0 次泄漏）。
+4. 目录别名：`mount --bind external vault/alias` 后列举 → `mount_boundary_crossed` 且无目录项；打开别名里的文件 → 同码且不读内容；在别名里创建 → 同码且外部目录没有新文件。
+5. 权限失败：vault 属主 `0700` 子目录对当前用户不可读 → `permission_denied` + 保留原始 `Permission denied`，且**没有** `entries=` 行；打开其中文件同样拒绝；Vault 其余部分仍可列举。
+6. 创建：Vault 内新建 `mount_id == vault_mount_id`、`mode=0644`、`fsynced=true`；重复创建 `already_exists`；父目录无权限时 `permission_denied` 且不落盘。
 7. 身份复核：未变化 `verify=unchanged`；同目录 bind 覆盖 → `mount_changed`；换成另一个子卷 → `subvolume_changed`；换成 tmpfs → `backend_changed`；重命名后新建同名目录 → `directory_changed`；换回原目录再次 `unchanged`。
-8. 重叠：兄弟目录 `overlap=0`；同名前缀兄弟不是父子；内部目录在 Root 内 → `internal_inside_root`；两个 Root 父子 → `parent_child`；同一路径 → `same_path`；`mount --bind` 同一目录到无关路径 → `alias` 且两条路径挂载 ID 不同。
-9. 用法错误退出码 2；不存在的 Root 退出码 1 且 `decision=failed`。
+8. 重叠：兄弟目录 `overlap=0`；同名前缀兄弟不是父子；内部目录在 Vault 内 → `internal_inside_vault`；两个 Vault 父子 → `parent_child`；同一路径 → `same_path`；`mount --bind` 同一目录到无关路径 → `alias` 且两条路径挂载 ID 不同。
+9. 用法错误退出码 2；不存在的 Vault 退出码 1 且 `decision=failed`。
 
-清理与隔离同 S013/S014 脚本的共同要求（`trap cleanup`、`losetup -a` 与 `findmnt` 快照核对、`test-volume.sh cleanup` 条目白名单；`root` 属主的 `locked` 目录用非交互 sudo 删除）。
+清理与隔离同 S013/S014 脚本的共同要求（`trap cleanup`、`losetup -a` 与 `findmnt` 快照核对、`test-volume.sh cleanup` 条目白名单；`vault` 属主的 `locked` 目录用非交互 sudo 删除）。
 
 ### 不变量
 
-- 所有访问都以 Root 句柄为边界按相对名称进行；`canonicalize` 只用于注册期打开路径，运行期不重新解析路径，也不提供“改工作目录再按绝对路径访问”的入口。
-- 挂载边界是最外层拒绝条件：`STATX_MNT_ID` 不等于 Root 的挂载 ID、或内核不提供挂载 ID，都 fail-closed；创建文件前先核对父目录，避免写入 bind mount 后的外部样本。
+- 所有访问都以 Vault 句柄为边界按相对名称进行；`canonicalize` 只用于注册期打开路径，运行期不重新解析路径，也不提供“改工作目录再按绝对路径访问”的入口。
+- 挂载边界是最外层拒绝条件：`STATX_MNT_ID` 不等于 Vault 的挂载 ID、或内核不提供挂载 ID，都 fail-closed；创建文件前先核对父目录，避免写入 bind mount 后的外部样本。
 - 目录列举不返回空目录来掩盖故障：无权限、非目录、句柄失效都上报原始错误（design §11.4：权限/扫描故障不等于删除）。
-- 身份漂移一律映射 `ROOT_UNAVAILABLE` 并暂停 Root，不改写、不推导删除、不自动修复；`compare` 的顺序固定（后端 → FSID → 子卷 → 挂载 → 目录），同一输入结果稳定。
+- 身份漂移一律映射 `VAULT_UNAVAILABLE` 并暂停 Vault，不改写、不推导删除、不自动修复；`compare` 的顺序固定（后端 → FSID → 子卷 → 挂载 → 目录），同一输入结果稳定。
 - 重叠判定同时看规范路径分量、目录对象身份与角色，不只比路径或 inode；btrfs 上不同子卷的同号 inode 不算同一目录。
 
 ## crates/domain — 身份与有界计数（S015）
@@ -500,19 +500,19 @@ python3 tools/context.py --help
 
 | 模块 | 契约 |
 | --- | --- |
-| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`UserId`、`RootId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId`、`TxId`、`SessionId`、`UploadId`、`IntentId`、`ObjectLeaseId`、`BackupLeaseId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
+| `ids` | `ID_LEN = 16`、`ID_HEX_LEN = 32` 字节/字符常量；身份类型 `ServerId`、`UserId`、`VaultId`、`BindingId`、`EntryId`、`VersionId`、`DeviceId`、`OpId`、`TxId`、`SessionId`、`UploadId`、`IntentId`、`ObjectLeaseId`、`BackupLeaseId` 各为 `[u8; 16]` newtype，接口统一为 `from_bytes`（`const fn`）、`as_bytes`、`from_hex`、`to_hex`、`generate(&mut impl IdSource)`，并实现 `Display`（32 个小写十六进制）、`Debug`（`类型名(hex)`）、`FromStr`、`Ord`、`Hash` |
 | `ids::IdParseError` | `Empty` / `Length(实际字节数)` / `NonHexDigit(0 基字节位置)`；长度不符时不继续逐字符检查，故 `0x…` 与带连字符 UUID 文本报 `Length` |
 | `ids::IdSource` | 随机字节端口 `fn next_id_bytes(&mut self) -> [u8; ID_LEN]`；领域层不取随机数，生产端在应用层接线，测试端可注入计数器 |
-| `version` | `DB_INTEGER_MAX = i64::MAX`；计数类型 `Revision`、`RootSeq`、`Generation`（`local_generation`）、`ServerEpoch` 各为 `u64` newtype，取值 `0..=DB_INTEGER_MAX`；接口 `ZERO`、`new`、`from_db_integer`、`to_db_integer`、`get`、`next`、`from_decimal`、`to_decimal`（`Display`/`FromStr` 同形式） |
+| `version` | `DB_INTEGER_MAX = i64::MAX`；计数类型 `Revision`、`VaultSeq`、`Generation`（`local_generation`）、`ServerEpoch` 各为 `u64` newtype，取值 `0..=DB_INTEGER_MAX`；接口 `ZERO`、`new`、`from_db_integer`、`to_db_integer`、`get`、`next`、`from_decimal`、`to_decimal`（`Display`/`FromStr` 同形式） |
 | `version::BoundError` | `Empty` / `InvalidDigit` / `Negative` / `LeadingZero` / `AboveDbLimit`；`next` 到达 `DB_INTEGER_MAX` 返回 `AboveDbLimit`，不回绕 |
 | `version::UtcTimestamp` | Unix 秒的 `i64` newtype，负值（1970 之前）返 `Negative`；`from_unix_seconds`/`from_db_integer`/`as_unix_seconds`/`to_db_integer`/`Display` |
 | `version::Clock` | `fn now_utc(&self) -> Result<UtcTimestamp, BoundError>`；领域层不读时钟，测试注入固定序列 |
 
 ### 编码与边界规则
 
-- **身份文本**：规范形式是 32 个小写十六进制字符；解析同时接受大写，因此同一值是唯一的字节表示。不做 base64/UUID 变体，wire 与日志都用 `to_hex()`；16 字节长度与 Windows CFAPI `FileIdentity`（48 B blob 中 RootId、EntryId 各 16 字节）一致，服务端 ID 可直接写入平台身份。
+- **身份文本**：规范形式是 32 个小写十六进制字符；解析同时接受大写，因此同一值是唯一的字节表示。不做 base64/UUID 变体，wire 与日志都用 `to_hex()`；16 字节长度与 Windows CFAPI `FileIdentity`（48 B blob 中 VaultId、EntryId 各 16 字节）一致，服务端 ID 可直接写入平台身份。
 - **计数文本**：wire/JSON **只传十进制字符串**（design §7.1、§15.1），不传 JSON number；规范文本无符号、无前导零，`0` 写作 `"0"`，非法写法和超过 `i64::MAX` 的值一律拒绝，避免 JavaScript 在 2^53 以上静默丢精度。数据库读写用 `to_db_integer`/`from_db_integer`，负列值报 `Negative`。
-- 各身份/计数类型互不兼容（不同类型不能互相赋值），避免把 `RootSeq` 当 `Revision`、把 `RootId` 当 `EntryId`。
+- 各身份/计数类型互不兼容（不同类型不能互相赋值），避免把 `VaultSeq` 当 `Revision`、把 `VaultId` 当 `EntryId`。
 
 ### 不变量
 
@@ -520,9 +520,9 @@ python3 tools/context.py --help
 - 生成身份必须经 `IdSource` 注入，领域层不含随机源或时钟，同一注入序列得到同一结果。
 - 拒绝即报错：空文本、正负号、前导零、非十六进制字符、超界数值都返回明确变体，不静默取默认值或截断。
 
-`UserId` 由 S027 追加：服务端 `users.id` 与 `roots.owner_id` 的账号身份（design §7.2、§17.1），与其它身份同为 16 字节 newtype，不与 `ServerId`/`RootId` 互换。
+`UserId` 由 S027 追加：服务端 `users.id` 与 `vaults.owner_id` 的账号身份（design §7.2、§17.1），与其它身份同为 16 字节 newtype，不与 `ServerId`/`VaultId` 互换。
 
-`TxId` 由 S028 追加：一次服务端提交产生的事件批次所带的身份（design §7.2 `changes.tx_id`、§9.3），只用于把同一提交的批次与日志关联；幂等键是 (`RootId`, `DeviceId`, `OpId`)，不是 `TxId`。
+`TxId` 由 S028 追加：一次服务端提交产生的事件批次所带的身份（design §7.2 `changes.tx_id`、§9.3），只用于把同一提交的批次与日志关联；幂等键是 (`VaultId`, `DeviceId`, `OpId`)，不是 `TxId`。
 
 `SessionId`、`UploadId`、`IntentId`、`ObjectLeaseId`、`BackupLeaseId` 由 S029 追加：分别是登录会话（design §7.2 `sessions.id`、`uploads.session_id`）、上传会话（§7.2 `uploads.id`）、工作目录发布意图（§7.2 `fs_intents.intent_id`）、下载/提交对象租约（§19.4）与备份租约（§7.2 `backup_leases.id`）。`sessions` 表由会话卡（S043）建立，本卡只按长度校验 `uploads.session_id`。
 
@@ -541,7 +541,7 @@ python3 tools/context.py --help
 | `state::RemoteApply` | `Current`（默认）/ `Pending` / `BlockedByLocal` / `Conflicted` |
 | `state::Transfer` | `Idle`（默认）/ `Queued` / `Running` / `RetryWait(ErrorCode)` / `Failed(ErrorCode)`；`error_code()` 给出重试/失败原因，其余状态返回 `None` |
 | `state::Usage` | `Idle`（默认）/ `ReadHandles` / `WriteHandles` / `Unknown`；只供破坏性操作（释放、替换）准入使用，不改变主状态 |
-| `state::Availability` | `Online`（默认）/ `Offline` / `MountFailed` / `RootUnavailable` |
+| `state::Availability` | `Online`（默认）/ `Offline` / `MountFailed` / `VaultUnavailable` |
 | `state::EntryState` | 六个公开维度字段 + `Default`（仅云端、clean、current、idle、idle、online）；方法与无 I/O 投影：`project() -> EntryStatus`、`is_synced() -> bool` |
 | `state::EntryStatus` | design §8.2 优先级（声明顺序）：`Unavailable` > `Failed` > `Conflict` > `LocalChanges` > `Syncing` > `Downloaded` > `CloudOnly` |
 | `error::ErrorClass` | `Retryable` / `NeedsUserAction` / `Corrupt`；`is_severe()` 仅对后两者为真（design §8.2 严重失败、§18.2 问题页） |
@@ -549,10 +549,10 @@ python3 tools/context.py --help
 
 ### 投影与分类规则
 
-- **主状态**：挂载失败/Root 不可用 → `Unavailable`；已停止自动推进的任务或重试队列里出现严重类别 → `Failed`；`Conflicted` → `Conflict`；任一非 `Clean` 的本地变更 → `LocalChanges`；其余 `remote_apply != Current` 或任务非 `Idle` → `Syncing`；最后按 `Residency` 给 `Downloaded`/`CloudOnly`。详情可同时显示多个维度，主状态只有一个。
+- **主状态**：挂载失败/Vault 不可用 → `Unavailable`；已停止自动推进的任务或重试队列里出现严重类别 → `Failed`；`Conflicted` → `Conflict`；任一非 `Clean` 的本地变更 → `LocalChanges`；其余 `remote_apply != Current` 或任务非 `Idle` → `Syncing`；最后按 `Residency` 给 `Downloaded`/`CloudOnly`。详情可同时显示多个维度，主状态只有一个。
 - **已同步**：`is_synced()` 的成立条件是 `dirty = Clean`、`remote_apply = Current`，且任务不是 `RetryWait`/`Failed`。`Pending`/`BlockedByLocal`/`Conflicted` 与任一待上传修改都为假；`Queued`/`Running` 的下载或哈希任务不改变“基线一致”。`Residency`、`Availability` 不参与判断，界面另读维度显示“仅云端/当前离线”。
 - **错误类别只由错误码决定**：`Retryable` 允许自动重新规划或退避重试；`NeedsUserAction` 停止相关操作、保留本地内容并进入问题页；`Corrupt` 不发布未通过校验的内容。一次性的前置动作由调用方在分类前完成（例如 `AUTH_EXPIRED` 先受控刷新一次）。`from_code` 对未知代码返回 `None`，不默认归入可重试。
-- **wire `retryable` 与本分类不冲突**：`ROOT_UNAVAILABLE` 在 wire 上可为 `retryable: true`（允许低频复查），分类仍是 `NeedsUserAction`（只能由用户/管理员恢复挂载）。
+- **wire `retryable` 与本分类不冲突**：`VAULT_UNAVAILABLE` 在 wire 上可为 `retryable: true`（允许低频复查），分类仍是 `NeedsUserAction`（只能由用户/管理员恢复挂载）。
 
 ### 不变量
 
@@ -580,7 +580,7 @@ python3 tools/context.py --help
 | `path::RelativePath` | 已校验的相对路径（非空分量序列）。`RelativePath::parse(&str)`、`FromStr`、`components() -> &[String]`、`Display`（以 `/` 连接，往返不改文本）；实现 `Eq`/`Hash`/`Ord` |
 | `path::PathIssue` | `Empty` / `Absolute` / `DriveLetter(char)` / `Nul` / `Backslash` / `EmptyComponent { index }` / `Component { index, issue: NameIssue }` / `TooLong { utf8_bytes }`；实现 `Display` 与 `std::error::Error` |
 | `path::relation` / `path::is_within` | 按分量判定 `PathRelation::{Same, Ancestor, Descendant, Unrelated}` 与“等于或在之下”；不使用字符串前缀 |
-| `path::MAX_RELATIVE_PATH_UTF8_BYTES` | `4095`（Linux `PATH_MAX` 减 NUL）。Windows 绝对路径上限取决于 Root 挂载前缀，由平台层判定 |
+| `path::MAX_RELATIVE_PATH_UTF8_BYTES` | `4095`（Linux `PATH_MAX` 减 NUL）。Windows 绝对路径上限取决于 Vault 挂载前缀，由平台层判定 |
 
 ### 编码与边界规则
 
@@ -635,7 +635,7 @@ python3 tools/context.py --help
 
 ## crates/planner — 三方比较与基本计划（S019、S021）
 
-状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支；S020 增加首次合并入口 `first_sync::plan_first_sync`（design §9.2，见下一节）；S021 在 `crates/planner/src/conflict.rs` 落地 design §10.1—10.2 的内容冲突计划（服务器 head 保留主路径 + 迟到分支的稳定身份冲突副本与预算内冲突名）；S022 增加 `rename`（design §9.5、§10.1 移动行、跨 Root 两段任务）与 `delete`（design §10.1 删除行、§10.3 子树前提），见后两节。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。`reconcile` 的 `Defer(DeferReason::MissingEntry)`/`DeferReason::LocationOrKindChanged` 是转交信号：上层按缺失方向改调首次合并、移动或删除入口。没有基线的输入转交首次合并入口。
+状态：S019 在 `crates/planner/src/reconcile.rs` 落地 design §9.1 的四条基本分支；S020 增加首次合并入口 `first_sync::plan_first_sync`（design §9.2，见下一节）；S021 在 `crates/planner/src/conflict.rs` 落地 design §10.1—10.2 的内容冲突计划（服务器 head 保留主路径 + 迟到分支的稳定身份冲突副本与预算内冲突名）；S022 增加 `rename`（design §9.5、§10.1 移动行、跨 Vault 两段任务）与 `delete`（design §10.1 删除行、§10.3 子树前提），见后两节。纯规则 crate：只依赖 `domain` 与 `fs-common`，不访问文件系统、网络、数据库或时钟，也不覆盖/删除任何文件；已加入根 workspace 的 `members` 与 `default-members`。`reconcile` 的 `Defer(DeferReason::MissingEntry)`/`DeferReason::LocationOrKindChanged` 是转交信号：上层按缺失方向改调首次合并、移动或删除入口。没有基线的输入转交首次合并入口。
 
 ### 模块与契约
 
@@ -649,7 +649,7 @@ python3 tools/context.py --help
 | `reconcile::Action` | `NoOp`、`ApplyRemote { revision, version }`、`UploadLocal { base_revision, generation }`、`MergeSameResult { revision, version }`、`CreateConflictCopy { entry_id, op_id, generation }`（S021）、`ApplyRemoteMove { entry_id, revision, version, target }`、`UploadMove { entry_id, base_revision, target }`、`UploadMoveWithContent { entry_id, base_revision, target, generation }`、`ApplyRemoteDelete { entry_id, revision }`、`DeleteEntry { entry_id, base_revision, subtree }`（S022，见后两节）、`Defer(DeferReason)`；首次合并另有 `UploadNewEntry`、`CreateFromRemote`、`BindRemoteEntry`、`PreserveBoth`（S020，见下一节）。移动/删除动作携带路径或子树 token，因此 `Action` 只 `Clone` 不 `Copy` |
 | `reconcile::DeferReason` | `FirstSync`（无基线，转交 design §9.2 的首次合并入口）、`MissingEntry`（某一侧缺失，design §10.3）、`IdentityReplaced`（远端身份已非基线身份，I03）、`LocationOrKindChanged`（移动/类型互换，design §9.5、§10.1）、`ContentConflict`（双方都变且结果不同，design §10）、`IncompleteFacts`（自称内容变化却给不出文件版本） |
 | `reconcile::Prerequisite` | `BaseRevisionCurrent { expected }`（服务器修订仍等于计划基线）、`GenerationUnchanged { expected }`（本地代际未变）、`UsagePermitsChange`（无写入句柄）、`TargetPathUsable`（父目录已同步、名称可表示、无同名另一类型条目）、`ServerPathVacant`（服务器该路径仍无条目，首次合并的创建 CAS）、`LocalPathVacant`（本地该路径仍无条目，避免覆盖扫描后新建的本地内容） |
-| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }`、`ConflictCopyCommitted { entry_id }`（S021：冲突副本提交后才能替换主路径的本地字节）、`CrossRootTargetCommitted { entry_id }`（S022：跨 Root 目标创建确认后才允许删源） |
+| `reconcile::Dependency` | `DownloadVersion { version }`、`ParentDirectoryReady`、`SnapshotLocalContent { generation }`、`ConflictCopyCommitted { entry_id }`（S021：冲突副本提交后才能替换主路径的本地字节）、`CrossVaultTargetCommitted { entry_id }`（S022：跨 Vault 目标创建确认后才允许删源） |
 | `reconcile::LocalProtection` | `NotNeeded`（无操作）、`KeepLocalContent`（字节不动，只在基线写入后推进状态）、`SnapshotBeforeReplace { generation }`、`UploadSnapshot { generation }` |
 | `reconcile::reconcile(base, local, remote)` | 三项 `Option<&…>`，`None` 表示该侧没有该条目（删除事实）；返回 `Result<Plan, PlanError>`，三项都缺失返回 `PlanError::NoFacts` |
 | `reconcile::PlanError` | `NoFacts`（没有可比对的条目）、`PathMismatch`（首次合并两侧事实路径不同，调用方没有按规范路径配对） |
@@ -716,7 +716,7 @@ python3 tools/context.py --help
 
 ## crates/planner — 移动冲突计划（S022）
 
-状态：S022 在 `crates/planner/src/rename.rs` 落地 design §9.5、§10.1 移动行与 T09/T10：同 Root 移动保持 `EntryId`，只改父目录关系（目录移动不重传子项），迟到分支复用 S021 的冲突身份与命名。纯规则、无 I/O：目标位置是否为空/祖先是否还在由调用方观察后以值传入（planner 不枚举同级条目）。
+状态：S022 在 `crates/planner/src/rename.rs` 落地 design §9.5、§10.1 移动行与 T09/T10：同 Vault 移动保持 `EntryId`，只改父目录关系（目录移动不重传子项），迟到分支复用 S021 的冲突身份与命名。纯规则、无 I/O：目标位置是否为空/祖先是否还在由调用方观察后以值传入（planner 不枚举同级条目）。
 
 | 模块 | 契约 |
 | --- | --- |
@@ -725,8 +725,8 @@ python3 tools/context.py --help
 | `rename::TargetState` / `MoveTargets` | `Vacant` / `Occupied` / `AncestorMissing`；`local` 供“本地落位”的计划判定，`server` 供“上传移动/新建迟到分支”判定 |
 | `rename::LateBranch` | 迟到分支的 `entry_id`、`naming: ConflictNameRequest`、`committed: Option<&CommittedConflict>`（同一 `OpId` 重试返回原身份原路径） |
 | `rename::ReplanReason` | `DirectoryCycle`（目标落在源目录子树内）、`TargetOccupied`、`TargetAncestorMissing`、`IdentityReplaced`（I03）、`DirectoryConflictRequired`（目录迟到分支需目录级冲突记录） |
-| `rename::MoveError` | `NotAMove`（两侧位置都没变或类型互换，应走 `reconcile`/首次合并）、`LateBranchMissing`、`OpIdRequestChanged`、`IncompleteFacts`、`MissingSubtreeToken`/`UnexpectedSubtreeToken`/`SameRoot`（跨 Root 入口）、`Name(ConflictNameError)` |
-| `rename::plan_cross_root_move(&CrossRootMoveRequest)` | 返回 `Result<CrossRootOutcome, MoveError>`：`Planned(Box<CrossRootMovePlan { create_target, delete_source }>)` 或 `Replan`。`delete_source` 必带 `Dependency::CrossRootTargetCommitted`，目标创建失败或结果未知时源删除不得计划完成 |
+| `rename::MoveError` | `NotAMove`（两侧位置都没变或类型互换，应走 `reconcile`/首次合并）、`LateBranchMissing`、`OpIdRequestChanged`、`IncompleteFacts`、`MissingSubtreeToken`/`UnexpectedSubtreeToken`/`SameVault`（跨 Vault 入口）、`Name(ConflictNameError)` |
+| `rename::plan_cross_vault_move(&CrossVaultMoveRequest)` | 返回 `Result<CrossVaultOutcome, MoveError>`：`Planned(Box<CrossVaultMovePlan { create_target, delete_source }>)` 或 `Replan`。`delete_source` 必带 `Dependency::CrossVaultTargetCommitted`，目标创建失败或结果未知时源删除不得计划完成 |
 
 判定规则与不变量：
 
@@ -734,7 +734,7 @@ python3 tools/context.py --help
 - 双方都变：同位置同内容 → `MergeSameResult`（幂等归并、不造副本）；否则主条目保留已提交侧，落后一侧进入 `late`（内容与意图位置都保留）。迟到分支路径与主条目相同时才追加 §10.2 冲突后缀，不同时保留用户选定的名称。
 - 主条目计划在 `late` 存在时追加 `Dependency::ConflictCopyCommitted`：迟到分支先提交，才允许把本地身份移到已提交位置或替换其内容（I02）。
 - 目录环按路径分量判定（`docs` 与 `docs-old` 无关），只看移动目标；类型互换（文件↔目录）不是移动，返回 `NotAMove`。
-- 跨 Root 移动不保持 `EntryId`：目标 Root 的身份由服务端另分配，源删除带基线修订与（目录）子树 token；源 Root 与目标 Root 相同是调用方错误（`SameRoot`）。
+- 跨 Vault 移动不保持 `EntryId`：目标 Vault 的身份由服务端另分配，源删除带基线修订与（目录）子树 token；源 Vault 与目标 Vault 相同是调用方错误（`SameVault`）。
 - 同一输入重复计算得到完全相同的 `MoveOutcome`（含前提与依赖顺序）；交换设备 `mtime` 不改变计划。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-planner`、`cargo clippy --locked -p vaultsyncd-planner --all-targets -- -D warnings`、`cargo fmt --check`。
@@ -832,7 +832,7 @@ python3 tools/context.py --help
 
 ### `crates/server-core/src/auth/scope.rs`
 
-`RootGrant{root_id, owner_id}` + `require_root_scope(&Principal,&RootGrant) -> Result<(),ScopeError::AccessDenied>`（纯规则）。适配器必须先 `roots::root_in_scope(conn, owner, root)` 取行，因此“别人的 Root”与“不存在的 Root”都得到同一个 403 `ACCESS_DENIED`（错误码 `access_denied`），结论与日志不含绝对路径。
+`VaultGrant{vault_id, owner_id}` + `require_vault_scope(&Principal,&VaultGrant) -> Result<(),ScopeError::AccessDenied>`（纯规则）。适配器必须先 `vaults::vault_in_scope(conn, owner, vault)` 取行，因此“别人的 Vault”与“不存在的 Vault”都得到同一个 403 `ACCESS_DENIED`（错误码 `access_denied`），结论与日志不含绝对路径。
 
 ### `apps/server/src/auth.rs`：端点与载体
 
@@ -844,10 +844,10 @@ python3 tools/context.py --help
 | 认证载体 | `Authorization: Bearer <token>` 或 cookie；两者共用同一套会话与摘要 |
 | CSRF | cookie 请求要求有效同源 `Origin` authority == `Host`，或 `Sec-Fetch-Site ∈ {same-origin, none}`；S077 起带 Cookie 且两者都缺失一律拒绝；失败 403 `ACCESS_DENIED` |
 | 失败映射 | 凭据问题 401 `AUTH_EXPIRED`、越权 403 `ACCESS_DENIED`、限流 429 `RATE_LIMITED`（带 `Retry-After`）、存储失败 503 `NEEDS_RECOVERY`（记日志，不伪装成凭据过期） |
-| 复用入口 | `principal_from(&AuthContext,&HeaderMap)`（认证 + 同源）、`authorize_root(&Database,&Principal,RootId)`（I15 的每次请求授权） |
+| 复用入口 | `principal_from(&AuthContext,&HeaderMap)`（认证 + 同源）、`authorize_vault(&Database,&Principal,VaultId)`（I15 的每次请求授权） |
 | `AuthContext::new(Database)` | Argon2id 生产参数、默认限流与 `SessionPolicy::standard()`、OS 随机源；限流与随机源是进程内状态（重启清零） |
 
-未接入（后续卡）：按来源地址限流、会话/账号的运维管理端点（重置密码后失效全部会话）与 `users.status` 的其他取值；Root 级业务端点（后续卡用 `principal_from` + `authorize_root` 接入）；客户端侧凭据保管（OS 凭据库 / 受限权限文件）。
+未接入（后续卡）：按来源地址限流、会话/账号的运维管理端点（重置密码后失效全部会话）与 `users.status` 的其他取值；Vault 级业务端点（后续卡用 `principal_from` + `authorize_vault` 接入）；客户端侧凭据保管（OS 凭据库 / 受限权限文件）。
 
 ## api/ — 远端协议契约源与生成配置（S024）
 
@@ -979,35 +979,35 @@ python3 tools/context.py --help
 
 ## crates/server-store — 服务端命名空间表（S027）
 
-状态：S027 实现。表定义在 `crates/server-store/migrations/0002_namespace.sql`（`users`/`roots`/`entries`），读写接口在 `src/roots.rs`、`src/entries.rs`。不写 HTTP、不做挂载探测或路径 I/O；路径重叠与身份比较留给平台层（S032）与注册流程（S044）。
+状态：S027 实现。表定义在 `crates/server-store/migrations/0002_namespace.sql`（`users`/`vaults`/`entries`），读写接口在 `src/vaults.rs`、`src/entries.rs`。不写 HTTP、不做挂载探测或路径 I/O；路径重叠与身份比较留给平台层（S032）与注册流程（S044）。
 
 ### 模块与契约
 
 | 项 | 契约 |
 | --- | --- |
-| `roots::NewRoot` / `RootRecord` | 注册输入（`id`、`entry`、`owner`、`absolute_path`、`volume_identity`、`root_file_identity`、`epoch`）与读回记录（含 `health`、`seq`、`epoch`） |
-| `roots::RootHealth` | `Healthy` / `Unavailable`（数据库文本 `healthy` / `unavailable`）；挂载消失、身份不匹配、权限失败都是 `unavailable`，不推导删除 |
-| `roots::insert_root(tx, &NewRoot)` | 一个事务内写 `roots` 一行 + 该 Root 的合成根条目一行；返回读回的 `RootRecord` |
-| `roots::root_in_scope(conn, owner, id)` | 按 owner scope 读 Root；不属于该 owner 或不存在都返回 `None` |
-| `roots::roots_of_owner(conn, owner)` | 列出账号名下的 Root，按 `absolute_path` 排序 |
-| `roots::set_health(tx, owner, id, health)` | 只更新自己名下的 Root；0 行受影响返回 `OutOfScope` |
-| `roots::RootError` | `Db` / `InvalidPath{path,reason}` / `EmptyIdentity{field}` / `UnknownOwner{id}` / `DuplicatePath{path}` / `DuplicateId{id}` / `OutOfScope` / `Entry(EntryError)` / `MalformedRow{column}` |
-| `entries::NewEntry` / `EntryRecord` | 新建输入（`id`、`root`、`parent`、`name`、`name_key`、`kind`、`revision`、`content_version`）与读回记录（含 `deleted_at`） |
+| `vaults::NewVault` / `VaultRecord` | 注册输入（`id`、`entry`、`owner`、`absolute_path`、`volume_identity`、`vault_file_identity`、`epoch`）与读回记录（含 `health`、`seq`、`epoch`） |
+| `vaults::VaultHealth` | `Healthy` / `Unavailable`（数据库文本 `healthy` / `unavailable`）；挂载消失、身份不匹配、权限失败都是 `unavailable`，不推导删除 |
+| `vaults::insert_vault(tx, &NewVault)` | 一个事务内写 `vaults` 一行 + 该 Vault 的合成根条目一行；返回读回的 `VaultRecord` |
+| `vaults::vault_in_scope(conn, owner, id)` | 按 owner scope 读 Vault；不属于该 owner 或不存在都返回 `None` |
+| `vaults::vaults_of_owner(conn, owner)` | 列出账号名下的 Vault，按 `absolute_path` 排序 |
+| `vaults::set_health(tx, owner, id, health)` | 只更新自己名下的 Vault；0 行受影响返回 `OutOfScope` |
+| `vaults::VaultError` | `Db` / `InvalidPath{path,reason}` / `EmptyIdentity{field}` / `UnknownOwner{id}` / `DuplicatePath{path}` / `DuplicateId{id}` / `OutOfScope` / `Entry(EntryError)` / `MalformedRow{column}` |
+| `entries::NewEntry` / `EntryRecord` | 新建输入（`id`、`vault`、`parent`、`name`、`name_key`、`kind`、`revision`、`content_version`）与读回记录（含 `deleted_at`） |
 | `entries::EntryKind` | `File` / `Directory`（数据库文本 `file` / `directory`） |
 | `entries::insert_entry(tx, owner, &NewEntry)` | 检查 owner scope、父目录、名称与同父唯一性后写一行；返回读回记录 |
-| `entries::move_entry(tx, owner, id, target_parent, name, name_key, revision)` | 同 Root 内移动/改名；检查目标父目录与目录环 |
+| `entries::move_entry(tx, owner, id, target_parent, name, name_key, revision)` | 同 Vault 内移动/改名；检查目标父目录与目录环 |
 | `entries::soft_delete_entry(tx, owner, id, at)` | 写 `deleted_at`；目录仍有活跃子项时 `DirectoryNotEmpty` |
-| `entries::entry_in_scope` / `children` / `root_entry` | 只读查询（接收 `&mut SqliteConnection`，可直接用连接池）：按 owner scope 取单条（含已删）、取活跃子项（按 `name_key`、`name`、`id` 排序）、取合成根条目 |
-| `entries::EntryError` | `Db` / `OutOfScope` / `EntryNotFound{id}` / `ParentNotFound{id}` / `ParentNotDirectory{id}` / `CrossRootParent{entry_root,parent_root}` / `DuplicateName{parent,name}` / `DirectoryCycle{entry,parent}` / `DirectoryNotEmpty{id}` / `InvalidName{name,issue}` / `EmptyNameKey` / `DirectoryHasContentVersion` / `UnknownContentVersion{version}` / `DuplicateId{id}` / `MalformedRow{column}` |
+| `entries::entry_in_scope` / `children` / `vault_entry` | 只读查询（接收 `&mut SqliteConnection`，可直接用连接池）：按 owner scope 取单条（含已删）、取活跃子项（按 `name_key`、`name`、`id` 排序）、取合成根条目 |
+| `entries::EntryError` | `Db` / `OutOfScope` / `EntryNotFound{id}` / `ParentNotFound{id}` / `ParentNotDirectory{id}` / `CrossVaultParent{entry_vault,parent_vault}` / `DuplicateName{parent,name}` / `DirectoryCycle{entry,parent}` / `DirectoryNotEmpty{id}` / `InvalidName{name,issue}` / `EmptyNameKey` / `DirectoryHasContentVersion` / `UnknownContentVersion{version}` / `DuplicateId{id}` / `MalformedRow{column}` |
 
 ### 表与不变量
 
-- **owner scope**：`roots.owner_id → users(id)` 外键；每个读写接口都带 `UserId`，不属于该 owner 的 Root/条目返回 `OutOfScope` 或 `None`，不区分“不存在”与“别人的”。
-- **父子同 Root**：`entries(root_id, parent_id) → entries(root_id, id)` 复合外键（引用目标由 `UNIQUE (root_id, id)` 提供），跨 Root 父项在 SQL 层即失败；写接口先给出 `CrossRootParent`。
-- **活跃同父名称唯一**：部分唯一索引 `(root_id, parent_id, name_key) WHERE deleted_at IS NULL` 与 `(root_id, parent_id, name) WHERE deleted_at IS NULL`；`name_key` 由调用方按平台等价规则派生（design §7.2，本层不小写、不归一化），名称索引兜住“名字完全一样却给了不同键”。软删除后名称可复用。
-- **一个 Root 一个合成根条目**：`(root_id) WHERE parent_id IS NULL AND deleted_at IS NULL` 部分唯一索引；根条目名称与比较键为空字符串、类型固定目录、`revision` 从 0 起。
+- **owner scope**：`vaults.owner_id → users(id)` 外键；每个读写接口都带 `UserId`，不属于该 owner 的 Vault/条目返回 `OutOfScope` 或 `None`，不区分“不存在”与“别人的”。
+- **父子同 Vault**：`entries(vault_id, parent_id) → entries(vault_id, id)` 复合外键（引用目标由 `UNIQUE (vault_id, id)` 提供），跨 Vault 父项在 SQL 层即失败；写接口先给出 `CrossVaultParent`。
+- **活跃同父名称唯一**：部分唯一索引 `(vault_id, parent_id, name_key) WHERE deleted_at IS NULL` 与 `(vault_id, parent_id, name) WHERE deleted_at IS NULL`；`name_key` 由调用方按平台等价规则派生（design §7.2，本层不小写、不归一化），名称索引兜住“名字完全一样却给了不同键”。软删除后名称可复用。
+- **一个 Vault 一个合成根条目**：`(vault_id) WHERE parent_id IS NULL AND deleted_at IS NULL` 部分唯一索引；根条目名称与比较键为空字符串、类型固定目录、`revision` 从 0 起。
 - **目录环**：移动时从目标父项沿 `parent_id` 向上走递归 CTE（`UNION` 去重，坏环也终止），命中被移动条目即 `DirectoryCycle`；自己当父项同样拒绝。
-- **路径与身份**：`roots.absolute_path` 全库唯一，形式检查为“非空、无 NUL、以 `/` 起始、不以 `/` 结尾”（根 `/` 例外），不用宿主 `Path::is_absolute`（本 crate 在 Windows 便携检查里也跑测试）；重叠/别名属 S032/S044。`volume_identity`/`root_file_identity` 是不透明非空字节。
+- **路径与身份**：`vaults.absolute_path` 全库唯一，形式检查为“非空、无 NUL、以 `/` 起始、不以 `/` 结尾”（根 `/` 例外），不用宿主 `Path::is_absolute`（本 crate 在 Windows 便携检查里也跑测试）；重叠/别名属 S032/S044。`volume_identity`/`vault_file_identity` 是不透明非空字节。
 - **删除不级联**：本卡只软删单条并拒绝删除非空目录；子树删除与回收站属 S039。`entries.content_version_id` 的填写规则见 S028：新建时写入的内容版本必须已记录到该条目（`UnknownContentVersion`），当前版本指针只由 `versions::record_version` 改写；指向 `versions` 的外键仍待 `entries` 重建表时再加（判据见 S028 一节）。
 - **写事务**：写接口要求调用方已开 `BEGIN IMMEDIATE` 事务，检查与写入在同一次持锁事务内；只读接口不抢写锁。
 
@@ -1021,43 +1021,43 @@ python3 tools/context.py --help
 
 | 项 | 契约 |
 | --- | --- |
-| `changes::ChangeBatch` | 一条事务批次：`root`、`seq`（`RootSeq`，从 1 起）、`tx`（`TxId`）、`events_json`（非空 JSON 数组文本）、`created_at` |
-| `changes::append_change(tx, owner, root, tx_id, events_json, at)` | 读 `roots.seq` → 比较并写推进（`WHERE seq = 旧值`）→ 插入批次行；返回分配到的批次。`events_json` 不是非空 JSON 数组时 `InvalidEvents` |
-| `changes::changes_after(conn, owner, root, after, limit)` | 按 `seq > after` 升序取批次，`limit ∈ 1..=MAX_CHANGE_PAGE(500)`；每行是一整批，分页不拆批。Root 不在 owner scope 内返回 `OutOfScope`（不返回空列表） |
-| `changes::ChangeError` | `Db` / `OutOfScope` / `SeqExhausted` / `SeqConflict{root,expected}` / `InvalidEvents` / `InvalidLimit` / `MalformedRow{column}` |
-| `versions::NewObject` / `ObjectRecord` | 已持久化并校验过的内容对象：`root`、`hash`（SHA-256 32 B）、`size`、`storage_path`、`verified_at`，记录另带 `gc_state` |
+| `changes::ChangeBatch` | 一条事务批次：`vault`、`seq`（`VaultSeq`，从 1 起）、`tx`（`TxId`）、`events_json`（非空 JSON 数组文本）、`created_at` |
+| `changes::append_change(tx, owner, vault, tx_id, events_json, at)` | 读 `vaults.seq` → 比较并写推进（`WHERE seq = 旧值`）→ 插入批次行；返回分配到的批次。`events_json` 不是非空 JSON 数组时 `InvalidEvents` |
+| `changes::changes_after(conn, owner, vault, after, limit)` | 按 `seq > after` 升序取批次，`limit ∈ 1..=MAX_CHANGE_PAGE(500)`；每行是一整批，分页不拆批。Vault 不在 owner scope 内返回 `OutOfScope`（不返回空列表） |
+| `changes::ChangeError` | `Db` / `OutOfScope` / `SeqExhausted` / `SeqConflict{vault,expected}` / `InvalidEvents` / `InvalidLimit` / `MalformedRow{column}` |
+| `versions::NewObject` / `ObjectRecord` | 已持久化并校验过的内容对象：`vault`、`hash`（SHA-256 32 B）、`size`、`storage_path`、`verified_at`，记录另带 `gc_state` |
 | `versions::ObjectGcState` | `Live` / `Collectable`（数据库文本 `live` / `collectable`）；更细的 GC 阶段属对象回收卡 |
-| `versions::record_object(tx, owner, &NewObject)` | 同一 `(root, hash)` 以相同长度与路径重复登记是幂等的（返回库里记录）；长度或路径不同 `ObjectConflict`；路径被别的对象占用 `DuplicateStoragePath` |
-| `versions::object_in_scope(conn, owner, root, hash)` | 按内容哈希读对象（含已标记回收的）；owner scope 不匹配返回 `None` |
-| `versions::NewVersion` / `VersionRecord` | 新版本输入（`id`、`root`、`entry`、`object_hash`、`size`、`created_seq`、`origin`、`at`）与读回记录（含 `superseded_at`） |
+| `versions::record_object(tx, owner, &NewObject)` | 同一 `(vault, hash)` 以相同长度与路径重复登记是幂等的（返回库里记录）；长度或路径不同 `ObjectConflict`；路径被别的对象占用 `DuplicateStoragePath` |
+| `versions::object_in_scope(conn, owner, vault, hash)` | 按内容哈希读对象（含已标记回收的）；owner scope 不匹配返回 `None` |
+| `versions::NewVersion` / `VersionRecord` | 新版本输入（`id`、`vault`、`entry`、`object_hash`、`size`、`created_seq`、`origin`、`at`）与读回记录（含 `superseded_at`） |
 | `versions::VersionOrigin` | `Client` / `External`（数据库文本 `client` / `external`）；首次同步导入记 `Client`，服务端采集的外部变更记 `External`（design I14 同一流程） |
 | `versions::record_version(tx, owner, &NewVersion)` | 核对条目（活跃文件）→ 对象（存在且长度一致）→ 批次（存在）→ 取代旧当前版本 → 插入新版本 → 改写条目当前版本指针；全部在调用方事务内 |
 | `versions::current_version` / `version_history` | 当前版本（`superseded_at IS NULL`）与历史清单（新的在前，`limit ∈ 1..=MAX_VERSION_PAGE(500)`，已删除条目的历史仍可读） |
 | `versions::VersionError` | `Db` / `OutOfScope` / `EntryNotFound{id}` / `NotAFile{id}` / `UnknownObject{hash}` / `ContentSizeMismatch{version_size,object_size}` / `SeqNotRecorded{seq}` / `ObjectConflict{hash,reason}` / `EmptyStoragePath` / `DuplicateStoragePath{path}` / `CurrentVersionConflict{entry}` / `DuplicateId{id}` / `SizeAboveDbLimit{size}` / `InvalidLimit` / `MalformedRow{column}` / `Entry(EntryError)` |
-| `operations::OperationKey` | 幂等键 `root` + `device`(`DeviceId`) + `op`(`OpId`)；数据库主键 `(root_id, device_id, op_id)` |
+| `operations::OperationKey` | 幂等键 `vault` + `device`(`DeviceId`) + `op`(`OpId`)；数据库主键 `(vault_id, device_id, op_id)` |
 | `operations::request_digest(fields)` | 由语义字段算 SHA-256：拒绝空/重复字段名，按字段名排序后以长度前缀编码（值长度 `u64` BE、名长度 `u32` BE）并加固定语义版本前缀。字段顺序无关，语义不同则摘要不同。调用方传语义值（规范十进制计数、身份原始字节），**不传**原始请求字节或 JSON |
-| `operations::NewOperation` / `BeginOperation` / `OperationRecord` | 开始输入（键 + 摘要）；结果 `Started`（首次，已写 `pending`）或 `Replayed(OperationRecord)`（同键同摘要，直接返回记录）；记录含 `digest`、`state`、`result_json`、`root_seq`、`intent_path` |
+| `operations::NewOperation` / `BeginOperation` / `OperationRecord` | 开始输入（键 + 摘要）；结果 `Started`（首次，已写 `pending`）或 `Replayed(OperationRecord)`（同键同摘要，直接返回记录）；记录含 `digest`、`state`、`result_json`、`vault_seq`、`intent_path` |
 | `operations::OperationState` | `Pending` / `Committed` / `Rejected`（数据库文本 `pending` / `committed` / `rejected`）；后两者是终态且有稳定结果 |
 | `operations::begin_operation(tx, owner, &NewOperation)` | 首次写 `pending`；同键同摘要返回 `Replayed`；同键不同摘要 `DigestMismatch` |
 | `operations::attach_intent(tx, owner, &key, path)` | 记下工作目录发布意图位置（design §11.2 步骤 5）；仅 `pending` 可改，空路径 `EmptyIntentPath` |
-| `operations::commit_operation(tx, owner, &key, tx_id, events_json, result_json, at)` | design §11.2 步骤 7 的元数据完成事务：追加事件批次（推进 `RootSeq`）并把操作写成 `committed` + `result_json` + `root_seq`，同一事务提交。已终态报 `AlreadyFinished` |
-| `operations::reject_operation(tx, owner, &key, result_json)` | 稳定拒绝：写 `rejected` + 结果，不推进 `RootSeq`；重试得到同一结果 |
-| `operations::operation_in_scope(conn, owner, &key)` | 按幂等键读记录（用于 `GET /v1/roots/{root}/operations/{op}`）；owner scope 不匹配返回 `None` |
-| `operations::discard_finished_operations(tx, owner, root, device)` | 设备代际失效时删除该设备的**终态**记录，返回行数；`pending` 记录保留 |
+| `operations::commit_operation(tx, owner, &key, tx_id, events_json, result_json, at)` | design §11.2 步骤 7 的元数据完成事务：追加事件批次（推进 `VaultSeq`）并把操作写成 `committed` + `result_json` + `vault_seq`，同一事务提交。已终态报 `AlreadyFinished` |
+| `operations::reject_operation(tx, owner, &key, result_json)` | 稳定拒绝：写 `rejected` + 结果，不推进 `VaultSeq`；重试得到同一结果 |
+| `operations::operation_in_scope(conn, owner, &key)` | 按幂等键读记录（用于 `GET /v1/vaults/{vault}/operations/{op}`）；owner scope 不匹配返回 `None` |
+| `operations::discard_finished_operations(tx, owner, vault, device)` | 设备代际失效时删除该设备的**终态**记录，返回行数；`pending` 记录保留 |
 | `operations::OperationError` | `Db` / `OutOfScope` / `UnknownOperation{key}` / `DigestMismatch{key}` / `AlreadyFinished{key,state}` / `EmptyRequestField` / `DuplicateRequestField{name}` / `RequestFieldTooLong{name_len}` / `DuplicateOperation{key}` / `InvalidResult{reason}` / `EmptyIntentPath` / `Change(ChangeError)` / `MalformedRow{column}` |
 | `operations::{REQUEST_DIGEST_LEN, MAX_RESULT_BYTES}` | 请求摘要 32 字节；紧凑结果上限 4096 字节 |
 
 ### 表与不变量
 
-- **版本只引用已持久化内容**：`versions(root_id, object_hash) → objects(root_id, hash)`；`objects` 只在内容落盘且校验后才登记（`verified_at NOT NULL`），长度不一致在写入前报 `ContentSizeMismatch`（design I01/I05）。
-- **版本只属于已记录的批次**：`versions(root_id, created_seq) → changes(root_id, seq)`；`operations(root_id, root_seq) → changes(root_id, seq)`（`pending`/`rejected` 的 `root_seq` 为 NULL，复合外键对含 NULL 行不生效）。
-- **RootSeq 单调、批次不可拆**：`changes` 一行就是一批事件，`(root_id, seq)` 主键；追加时用比较并写推进 `roots.seq`，失败报 `SeqConflict` 而不是自增。回滚的事务既不暴露批次也不消耗序号（下一批仍从原 seq+1 开始）。
+- **版本只引用已持久化内容**：`versions(vault_id, object_hash) → objects(vault_id, hash)`；`objects` 只在内容落盘且校验后才登记（`verified_at NOT NULL`），长度不一致在写入前报 `ContentSizeMismatch`（design I01/I05）。
+- **版本只属于已记录的批次**：`versions(vault_id, created_seq) → changes(vault_id, seq)`；`operations(vault_id, vault_seq) → changes(vault_id, seq)`（`pending`/`rejected` 的 `vault_seq` 为 NULL，复合外键对含 NULL 行不生效）。
+- **VaultSeq 单调、批次不可拆**：`changes` 一行就是一批事件，`(vault_id, seq)` 主键；追加时用比较并写推进 `vaults.seq`，失败报 `SeqConflict` 而不是自增。回滚的事务既不暴露批次也不消耗序号（下一批仍从原 seq+1 开始）。
 - **历史只读**：触发器 `versions_history_is_immutable` 拒绝改写版本的标识与内容引用（design I12），唯一可改的是 `superseded_at`；`objects_content_reference_is_immutable` 同理拒绝改写对象的内容地址证据。恢复历史要写新版本并让它成为当前版本。
-- **每个条目至多一个当前版本**：部分唯一索引 `(root_id, entry_id) WHERE superseded_at IS NULL`；`record_version` 先取代旧当前版本再插入新行。
+- **每个条目至多一个当前版本**：部分唯一索引 `(vault_id, entry_id) WHERE superseded_at IS NULL`；`record_version` 先取代旧当前版本再插入新行。
 - **条目当前版本指针**：`entries.content_version_id` 只由 `versions::record_version` 改写（`pub(crate) entries::set_current_content_version`）；新建条目时若给了内容版本，必须先已记录到该条目（`EntryError::UnknownContentVersion`），否则会留下悬空指针。**未**重建 `entries` 加 `content_version_id → versions(id)` 外键：SQLite 追加外键只能重建表，而 `entries` 与 `versions` 互为引用（循环外键）需要在迁移事务里 `PRAGMA defer_foreign_keys`；本卡用“唯一写入路径 + 写入前存在性核对”达到同样的可见保证，待 `entries` 因其它原因重建时再补该外键。
-- **pending 不是 committed**：`operations` 的 CHECK 保证 `pending` 不带结果、不占 `root_seq`；`committed` 必须有 `root_seq` 与结果；`rejected` 有结果但无 `root_seq`。
+- **pending 不是 committed**：`operations` 的 CHECK 保证 `pending` 不带结果、不占 `vault_seq`；`committed` 必须有 `vault_seq` 与结果；`rejected` 有结果但无 `vault_seq`。
 - **紧凑结果保留规则**：只有终态保存 `result_json`，必须是 JSON object 且 ≤ 4096 字节；记录与结果保留到相应设备代际失效（design §7.2、§9.4），届时用 `discard_finished_operations` 删除终态记录；`pending` 不删，否则同一 `op_id` 会被当成新命令重新执行。
-- **owner scope**：所有接口都带 `UserId`，经 `roots.owner_id` 判定；`changes_after` 与 `version_history` 对越权 Root 报错而不是返回空列表，避免把权限失败误当成“已追平”。
+- **owner scope**：所有接口都带 `UserId`，经 `vaults.owner_id` 判定；`changes_after` 与 `version_history` 对越权 Vault 报错而不是返回空列表，避免把权限失败误当成“已追平”。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
 
@@ -1071,7 +1071,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `uploads::ChunkGeometry` | 会话块几何：`new(total_size, chunk_size)`（块大小 0 报 `InvalidChunkSize`）、`part_count()`（`ceil(total/chunk)`，空内容 0 块）、`part_length(index)`（越界 `None`） |
 | `uploads::UploadState` | `Open` / `Complete` / `Finalized` / `Aborted`（数据库文本 `open`/`complete`/`finalized`/`aborted`）；转换 `open→complete|aborted`、`complete→finalized|aborted`，后两者为终态 |
-| `uploads::NewUpload` / `UploadRecord` | 会话输入与读回：`id`(`UploadId`)、`root`、`session`(`SessionId`)、`expected_size`、`hash`(32 B)、`chunk_size`、`expires_at`、`state`；记录另有 `geometry()` |
+| `uploads::NewUpload` / `UploadRecord` | 会话输入与读回：`id`(`UploadId`)、`vault`、`session`(`SessionId`)、`expected_size`、`hash`(32 B)、`chunk_size`、`expires_at`、`state`；记录另有 `geometry()` |
 | `uploads::begin_upload(tx, owner, &NewUpload)` | 核对 owner scope 与块几何后写 `open` 会话；重复身份 `DuplicateId`，越界长度 `SizeAboveDbLimit` |
 | `uploads::NewUploadPart` / `UploadPart` / `PartOutcome` | 块输入（`index`、`length`、`hash`、`path`）与读回；结果 `Recorded`（首次）或 `AlreadyPresent`（同索引同内容重传，幂等） |
 | `uploads::record_part(tx, owner, upload, &NewUploadPart)` | 索引越界 `PartOutOfRange`、长度不符 `PartLengthMismatch`、同索引不同内容 `PartConflict`（不覆盖旧行）、空路径 `EmptyPartPath`、终态会话 `PartsClosed` |
@@ -1079,15 +1079,15 @@ python3 tools/context.py --help
 | `uploads::mark_upload_complete` / `mark_upload_finalized` / `abort_upload` | 缺块时 `IncompleteUpload{missing_parts}`；只能 `complete→finalized`；放弃保留已收块行作为清理证据；终态不再变化 |
 | `intents::FsIntentKind` | `PutContent` / `Create` / `Move` / `Delete`（文本 `put_content`/`create`/`move`/`delete`） |
 | `intents::FsIntentPhase` | `Prepared` / `Published` / `Finalized` / `NeedsRecovery`；转换 `prepared→published|needs_recovery`、`published→finalized|needs_recovery`、`needs_recovery→finalized`（唯一人工出口） |
-| `intents::NewFsIntent` / `FsIntent` | 意图输入与读回：`intent_id`(`IntentId`)、`root`、`kind`、`target_path`（Root 内相对路径）、`staging_path`（可空）、`expected_before`/`desired_after`（JSON object）、`phase`、`created_at`/`updated_at` |
-| `intents::begin_intent(tx, owner, &NewFsIntent, at)` | 校验路径形式与两个 JSON object 后写 `prepared`；路径逃出 Root、空/含 NUL 的暂存路径、非 object 状态、重复身份均拒绝且不写入 |
+| `intents::NewFsIntent` / `FsIntent` | 意图输入与读回：`intent_id`(`IntentId`)、`vault`、`kind`、`target_path`（Vault 内相对路径）、`staging_path`（可空）、`expected_before`/`desired_after`（JSON object）、`phase`、`created_at`/`updated_at` |
+| `intents::begin_intent(tx, owner, &NewFsIntent, at)` | 校验路径形式与两个 JSON object 后写 `prepared`；路径逃出 Vault、空/含 NUL 的暂存路径、非 object 状态、重复身份均拒绝且不写入 |
 | `intents::advance_intent_phase(tx, owner, id, next, at)` | 只按上表转换；时间倒退 `TimeWentBackwards`；比较并写发现绕过写入 `PhaseConflict` |
-| `intents::unfinished_intents` / `intent_in_scope` | 按 Root 列出 `phase <> 'finalized'`（含 `needs_recovery`）的意图，按 `created_at, intent_id` 升序；越权 Root 报 `OutOfScope`，不返回空列表 |
-| `leases::ObjectLeasePurpose` / `NewObjectLease` / `ObjectLease` | 对象保护租约：用途 `Download` / `Commit`，字段 `id`(`ObjectLeaseId`)、`root`、`object_hash`、`expires_at` |
+| `intents::unfinished_intents` / `intent_in_scope` | 按 Vault 列出 `phase <> 'finalized'`（含 `needs_recovery`）的意图，按 `created_at, intent_id` 升序；越权 Vault 报 `OutOfScope`，不返回空列表 |
+| `leases::ObjectLeasePurpose` / `NewObjectLease` / `ObjectLease` | 对象保护租约：用途 `Download` / `Commit`，字段 `id`(`ObjectLeaseId`)、`vault`、`object_hash`、`expires_at` |
 | `leases::lease_object` / `object_lease_in_scope` / `active_object_leases` / `release_object_lease` / `prune_expired_object_leases` | 只能保护已登记对象（`UnknownObject`），`expires_at <= now` 拒绝写入（`AlreadyExpired`）；“有效”等于 `expires_at > now`；释放幂等（第二次 `false`） |
-| `leases::SnapshotSeqMap` | 备份快照映射：按 Root 身份升序的 `(RootId, RootSeq)`，`new` 拒绝空映射与重复 Root；`to_json` 产出 `{"<root hex>":"<decimal seq>"}`，`from_json(conn, text)` 用 `json_each` 解析并要求值是文本类型 |
-| `leases::NewBackupLease` / `BackupLease` | `id`(`BackupLeaseId`)、`snapshot_seq_map`、`expires_at`、`manifest_ref`；跨 Root，无 `root_id`/owner 列 |
-| `leases::insert_backup_lease` / `backup_lease` / `active_backup_leases` / `release_backup_lease` / `prune_expired_backup_leases` | 空清单/过期/未注册 Root/重复身份均拒绝；按 `expires_at` 过滤有效租约；释放幂等 |
+| `leases::SnapshotSeqMap` | 备份快照映射：按 Vault 身份升序的 `(VaultId, VaultSeq)`，`new` 拒绝空映射与重复 Vault；`to_json` 产出 `{"<vault hex>":"<decimal seq>"}`，`from_json(conn, text)` 用 `json_each` 解析并要求值是文本类型 |
+| `leases::NewBackupLease` / `BackupLease` | `id`(`BackupLeaseId`)、`snapshot_seq_map`、`expires_at`、`manifest_ref`；跨 Vault，无 `vault_id`/owner 列 |
+| `leases::insert_backup_lease` / `backup_lease` / `active_backup_leases` / `release_backup_lease` / `prune_expired_backup_leases` | 空清单/过期/未注册 Vault/重复身份均拒绝；按 `expires_at` 过滤有效租约；释放幂等 |
 
 ### 表与不变量
 
@@ -1095,8 +1095,8 @@ python3 tools/context.py --help
 - **会话绑定不可变快照**：`uploads` 的 `expected_size`/`hash` 与 `chunk_size` 在创建时确定，块几何决定块数与每块期望长度；`state` 的 CHECK 只允许四个取值，块未齐不可能进入 `complete`（`mark_upload_complete` 核对）。`session_id` 只校验长度：`sessions` 表属 S043，追加外键需重建表，由该卡决定。
 - **意图 phase 是持久化判据**：`fs_intents.phase` 的取值由迁移 CHECK 限定，转换由 `FsIntentPhase::allows_transition_to` 唯一决定；启动恢复读 `phase` 而不是重放普通日志（design §11.3）。
 - **“当时不存在”不是 NULL**：`expected_before`/`desired_after` 都是 `NOT NULL` 的 JSON object（`json_valid` + `json_type='object'`），不存在必须写成对象字段，避免把“未知”与“不存在”混为一谈。
-- **租约只保护已登记对象**：`object_leases(root_id, object_hash) → objects(root_id, hash)`，`ON DELETE RESTRICT` 让删除仍被租约保护的对象行失败；`expires_at > now` 是唯一有效期判据。
-- **owner scope**：`uploads`/`fs_intents`/`object_leases` 的接口都带 `UserId`，经 `roots.owner_id` 判定；`backup_leases` 跨 Root（design §7.2），读接口不带 owner scope，管理 API 鉴权属 S087。
+- **租约只保护已登记对象**：`object_leases(vault_id, object_hash) → objects(vault_id, hash)`，`ON DELETE RESTRICT` 让删除仍被租约保护的对象行失败；`expires_at > now` 是唯一有效期判据。
+- **owner scope**：`uploads`/`fs_intents`/`object_leases` 的接口都带 `UserId`，经 `vaults.owner_id` 判定；`backup_leases` 跨 Vault（design §7.2），读接口不带 owner scope，管理 API 鉴权属 S087。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-server-store`、`cargo clippy --locked -p vaultsyncd-server-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-server-store`。
 
@@ -1117,7 +1117,7 @@ python3 tools/context.py --help
 | `db::Database::begin_write()` | `BEGIN IMMEDIATE` 短写事务（`sqlx::Transaction<'static, Sqlite>`），等锁上限 10 s；只允许数据库语句 |
 | `db::DbError` | `Io` / `NonUtf8Path` / `Sqlite` / `NotADatabase` / `ForeignDatabase{application_id}` / `SchemaTooNew{found,supported}` / `Backup{path,source}` / `BackupUnverified{path,detail}` / `WalUnavailable{journal_mode}` / `Migration{backup,source}`；取值与门禁规则同 S026 的服务端框架（方向相反） |
 | `bindings::SyncMode` | `Full` / `OnDemand`（数据库文本 `full` / `on_demand`，design C34；不含单向模式） |
-| `bindings::NewBinding` / `BindingRecord` | 绑定输入与读回记录：`id`(`BindingId`)、`server`(`ServerId`)、`device`(`DeviceId`)、`root`(`RootId`)、`local_path`、`cache_path`、`mode`、`rules_version`、`server_epoch` |
+| `bindings::NewBinding` / `BindingRecord` | 绑定输入与读回记录：`id`(`BindingId`)、`server`(`ServerId`)、`device`(`DeviceId`)、`vault`(`VaultId`)、`local_path`、`cache_path`、`mode`、`rules_version`、`server_epoch` |
 | `bindings::insert_binding(tx, &NewBinding)` / `binding(conn, id)` | 写入（`local_path`/`cache_path` 非空无 NUL、`rules_version` 非空、`id` 唯一）与按身份读取 |
 | `bindings::BindingError` | `Db` / `InvalidField{field,reason}` / `DuplicateId{id}` / `MalformedRow{column}` |
 | `entries::EntryKind` | `File` / `Directory`（数据库文本 `file` / `directory`） |
@@ -1126,7 +1126,7 @@ python3 tools/context.py --help
 | `entries::{put_baseline,put_remote,put_local}` | 按 `(binding_id, entry_id)` upsert；写库前检查根条目形状与空字节 |
 | `entries::{baseline_entry,remote_entry,local_entry}` | 只读查询（`&mut SqliteConnection`，可直接用连接池）；不存在返回 `None` |
 | `entries::{remove_baseline,remove_remote,remove_local}` | 删除单行，返回是否命中；不影响另外两张表 |
-| `entries::EntryError` | `Db` / `RootEntryShape{reason}` / `EmptyBytes{field}` / `MalformedRow{column}` |
+| `entries::EntryError` | `Db` / `VaultEntryShape{reason}` / `EmptyBytes{field}` / `MalformedRow{column}` |
 | `queue::NewPendingOp` / `PendingOp` | 入队输入与读回记录：`op`(`OpId`)、`binding`、`kind`、`entry: Option<EntryId>`、`baseline_revision`、`baseline_version`、`depends_on: Option<OpId>`、`pinned_version: Option<VersionId>`、`attempts: u32`、`last_error: Option<ErrorCode>` |
 | `queue::enqueue(tx, &NewPendingOp)` / `pending_op(conn, op)` / `pending_ops_for_binding(conn, binding)` | 入队（类型非空、禁止自依赖、依赖必须已在队列中）、按身份读取、按插入顺序（`rowid`）列队列 |
 | `queue::record_attempt_failure(tx, op, code)` / `complete(tx, op)` | `attempts+1` 且写最近错误码（其余字段不变）/ 成功后出队（仍有依赖方时因 `ON DELETE RESTRICT` 失败） |
@@ -1154,10 +1154,10 @@ python3 tools/context.py --help
 
 | 项 | 契约 |
 | --- | --- |
-| `events::IncomingBatch` | 一个不可拆分事务批次：`binding`、`seq`(`RootSeq`，从 1 起)、`tx`(`TxId`)、`events_json`（非空 JSON 数组文本，与 `server_store::changes::ChangeBatch` 同形）、`changes: Vec<RemoteEntry>`、`tasks: Vec<NewPendingOp>`（按依赖顺序） |
+| `events::IncomingBatch` | 一个不可拆分事务批次：`binding`、`seq`(`VaultSeq`，从 1 起)、`tx`(`TxId`)、`events_json`（非空 JSON 数组文本，与 `server_store::changes::ChangeBatch` 同形）、`changes: Vec<RemoteEntry>`、`tasks: Vec<NewPendingOp>`（按依赖顺序） |
 | `events::receive_batch(tx, &IncomingBatch)` | 同一事务内依次写 `received_changes` → `remote_entries` → `pending_ops` → 最后推进 `bindings.received_seq`，返回 `ReceivedBatch`。重复批次（同 seq + 同 tx + 同事件）返回已存记录且不重复入队；同 seq 不同内容 `ConflictingBatch`；seq 不大于游标 `StaleBatch`；seq 0 `InvalidSeq`；任务绑定与批次不一致 `TaskBindingMismatch`；绑定不存在 `UnknownBinding` |
 | `events::ReceivedBatch` / `BatchState` | 批次记录（`seq`、`tx`、`events_json`、`state`、`last_error`）与状态 `Received` / `Applied` / `Blocked`（数据库文本 `received` / `applied` / `blocked`） |
-| `events::cursors(conn, binding)` / `Cursors` | 一对游标 `received`、`applied`（`RootSeq`，0 = 还没有批次）；绑定不存在 `UnknownBinding` |
+| `events::cursors(conn, binding)` / `Cursors` | 一对游标 `received`、`applied`（`VaultSeq`，0 = 还没有批次）；绑定不存在 `UnknownBinding` |
 | `events::received_batch` / `unapplied_batches` | 按 `(binding, seq)` 读批次；列出状态不等于 `applied` 的批次（升序），即重启后的重放清单 |
 | `events::mark_batch_applied(tx, binding, seq)` / `mark_batch_blocked(tx, binding, seq, code)` | 标记应用完成（并把 `applied_seq` 推进到“连续已应用前缀”末端）/ 标记阻塞并记原因（游标停在它之前，处理后仍可转已应用）；均返回是否命中 |
 | `events::EventError` | `Db` / `UnknownBinding{binding}` / `InvalidSeq` / `InvalidEvents{reason}` / `ConflictingBatch{seq}` / `StaleBatch{seq,received}` / `TaskBindingMismatch{op}` / `Entry(EntryError)` / `Queue(QueueError)` / `MalformedRow{column}` |
@@ -1182,12 +1182,12 @@ python3 tools/context.py --help
 ### 表与不变量
 
 - **事件与游标同事务，应用游标单独**：`received_changes`、`remote_entries`、`pending_ops` 与 `bindings.received_seq` 在同一 `BEGIN IMMEDIATE` 事务写入，接收游标最后推进（design §9.3、I09）；文件落盘后才通过 `mark_batch_applied` 推进 `applied_seq`，且只越过“连续已应用前缀”。任一步失败由调用方回滚，游标不会领先于批次与任务。
-- **一个 RootSeq = 一个不可拆批次**：`received_changes` 主键 `(binding_id, seq)`，`seq > 0`（0 只是“还没有批次”的游标值）；`events_json` 与 `tx_id` 存服务端批次原形，`CHECK (json_valid(...) AND json_type(...) = 'array')` 兜住非 JSON 数组。
+- **一个 VaultSeq = 一个不可拆批次**：`received_changes` 主键 `(binding_id, seq)`，`seq > 0`（0 只是“还没有批次”的游标值）；`events_json` 与 `tx_id` 存服务端批次原形，`CHECK (json_valid(...) AND json_type(...) = 'array')` 兜住非 JSON 数组。
 - **重复批次幂等、冲突批次报错**：同 seq 同 tx 同事件列表重复到达只返回已存记录（不再入队）；同 seq 不同内容 `ConflictingBatch`，seq 不大于游标 `StaleBatch`——不静默覆盖已收位置。
 - **位图编码唯一**：`transfers.bitmap` 长度由块几何（`CHECK length = ceil(ceil(total/chunk)/8)`）约束，块数之后的 bit 必须为 0，写入前与读取时都检查；`(binding_id, version_id)` 主键，同一不可变版本只有一条进度，重启后按位图续传。
 - **完成必须已校验且完整**：`CHECK (state <> 'completed' OR verified = 1)`，`complete_transfer` 还要求位图覆盖全部块；`failed` 必须带错误码；`cancelled` 是持久状态，终态只能由 `discard_transfer` 删除。
 - **本地意图先于磁盘改动**：`local_intents` 在受控替换前写入，`intent_id` 是本地插入序（恢复顺序，不是 wire 身份），`UNIQUE (binding_id, target_path)` 保证同一路径同时只有一个期望；失败保留整条意图（路径、哈希、generation），完成才删行。
-- **通知按“原因 + Root”去重**：`dedupe_key` 主键；重复上报只加 `occurrences` 且不重置已读，`resolved` 后复发重新成为未读的 `active`（design §18.2）；`binding_id` 可为 `NULL`（全局问题），绑定解绑时级联删除。
+- **通知按“原因 + Vault”去重**：`dedupe_key` 主键；重复上报只加 `occurrences` 且不重置已读，`resolved` 后复发重新成为未读的 `active`（design §18.2）；`binding_id` 可为 `NULL`（全局问题），绑定解绑时级联删除。
 - **未做**：`received_changes` 没有保留期/GC（design §9.4 的事件保留期属拉取卡），`transfers` 只记入站内容（上传进度以服务端 `upload_parts` 为准），`local_intents` 不执行文件系统动作，通知不决定何时弹窗。
 
 验证命令（devShell 内）：`cargo test --locked -p vaultsyncd-client-store`、`cargo clippy --locked -p vaultsyncd-client-store --all-targets -- -D warnings`、`cargo fmt --check`、`RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p vaultsyncd-client-store`、`sqlite3 :memory: < crates/client-store/migrations/0002_events_transfers_intents.sql`。
@@ -1204,7 +1204,7 @@ python3 tools/context.py --help
 | 端口报告的实测事实 | `StagedBlob { staging, source: FileKey, staged: FileKey, digest, method, fallback }`、`PublishedBlob { object, already_present }`、`StoredFacts { bytes, digest }`、`StoredBytes { data, bytes, digest }`。`FileKey { device, inode, links, bytes }` 是“同 inode/有别名”的唯一判据；`CopyMethod = reflink \| verified_copy`，`CopyFallback = exdev \| unsupported` 必须如实暴露 |
 | 端口错误 | `BlobError::{SourceUnreadable, Storage{stage, failure, detail}, Verification, ObjectMissing, InvalidRequest}`；`StorageFailure::{NoSpace, QuotaExceeded, Io, PermissionDenied, ReadOnly, Other}`，`code()` 给出稳定短名（`no_space` 等）。`EIO`/`ENOSPC`/权限错误不得报成“不支持 reflink”或成功（design §11.5） |
 | `objects::ContentDigest` | SHA-256 原始 32 字节；`from_hex` 只接受 64 位小写十六进制，`to_hex`/`fanout`（前 2 位）与 `objects.hash` 同形 |
-| `objects::ObjectLayout` | 对象区布局：暂存 `<root>/staging/<名字>`，已发布对象新写为 `<root>/roots/<RootId>/objects/<aa>/<64 位 hex>`（`scoped_relative_object_path`），旧登记仍为 `<root>/objects/<aa>/<64 位 hex>`（`relative_object_path`）。`for_root(root, scope, legacy_digests)`（以及只解析指定摘要的 `for_digests`）只对该 Root 数据库中已登记的旧摘要开放旧路径，不从磁盘探测或跨 Root fallback；`storage_path` 是新写/重放使用的相对路径，`valid_storage_path(scope,digest,path)` 只接纳该 Root 的新路径或历史规范路径。`objects.storage_path` 仍全库唯一且不可更新；不同 Root 同摘要必须有不同物理路径。暂存名必须是单个文件名（空、`.`/`..`、含 `/`/`\`/NUL 一律拒绝），核心在调用端口前就失败 |
+| `objects::ObjectLayout` | 对象区布局：暂存 `<vault>/staging/<名字>`，已发布对象新写为 `<vault>/roots/<VaultId>/objects/<aa>/<64 位 hex>`（`scoped_relative_object_path`），旧登记仍为 `<vault>/objects/<aa>/<64 位 hex>`（`relative_object_path`）。`for_vault(vault, scope, legacy_digests)`（以及只解析指定摘要的 `for_digests`）只对该 Vault 数据库中已登记的旧摘要开放旧路径，不从磁盘探测或跨 Vault fallback；`storage_path` 是新写/重放使用的相对路径，`valid_storage_path(scope,digest,path)` 只接纳该 Vault 的新路径或历史规范路径。`objects.storage_path` 仍全库唯一且不可更新；不同 Vault 同摘要必须有不同物理路径。暂存名必须是单个文件名（空、`.`/`..`、含 `/`/`\`/NUL 一律拒绝），核心在调用端口前就失败 |
 | `objects::capture_object(port, layout, CaptureRequest{source, staging_name, ExpectedContent{digest, bytes}})` | 顺序固定：建立私有副本 → 判据检查 → 按内容地址发布（不覆盖）→ 发布后复核。成功返回 `CapturedObject{digest, bytes, storage_path, method, fallback, reuse, staging}`，`ReuseOutcome = freshly_published \| existing_verified` |
 | 采集判据（顺序即错误优先级） | 1) 副本与源不同 inode（否则 `shared_writable_inode`）；2) 副本无额外硬链接（`staging_alias`）；3) 长度等于期望（`length_mismatch`）；4) SHA-256 等于期望（`digest_mismatch`）；5) 内容地址已有对象时复核既有内容（`existing_object_mismatch`）；6) 发布后复核（`post_publish_mismatch`）。任一不成立都不返回对象 |
 | 失败模型 | `CaptureFailure { reason: CaptureFailureReason, staging: DiscardOutcome }`，`staging ∈ {not_needed, discarded, failed}`；`is_committable()` 恒为 `false`。端口报错时核心不重复丢弃（端口契约要求自己清理未验证的暂存文件）；发布失败与复用路径由核心丢弃并报告结果 |
@@ -1216,29 +1216,29 @@ python3 tools/context.py --help
 | 项目 | 契约 |
 | --- | --- |
 | `examples/object-capture.rs` | 子命令 `capture --objects <dir> --source <file> --staging <name> --digest <hex> --bytes <n>` 与 `read --objects <dir> --digest <hex> --bytes <n>`；输出稳定 `key=value` 行（`decision=`、`digest=`、`method=`、`fallback=`、`reuse=`、`staging_cleanup=`、`code=`、`observed=`），成功退出 0、被拒绝 1、用法错误 2 |
-| 适配器行为 | 暂存与发布都在对象区（`<objects>/staging` → 布局给出的已发布相对路径，新写为 `<objects>/roots/<RootId>/objects/<aa>/<hex>`，旧登记摘要沿用 `<objects>/objects/<aa>/<hex>`），发布用 `RENAME_NOREPLACE` 且不覆盖既有对象、成功后刷目录；对象权限 `0444`；`FICLONE` 优先，`EXDEV`/不支持退回 `stage_copy` 的校验复制并暴露原因 |
+| 适配器行为 | 暂存与发布都在对象区（`<objects>/staging` → 布局给出的已发布相对路径，新写为 `<objects>/roots/<VaultId>/objects/<aa>/<hex>`，旧登记摘要沿用 `<objects>/objects/<aa>/<hex>`），发布用 `RENAME_NOREPLACE` 且不覆盖既有对象、成功后刷目录；对象权限 `0444`；`FICLONE` 优先，`EXDEV`/不支持退回 `stage_copy` 的校验复制并暴露原因 |
 | 验收脚本 | `VAULTSYNCD_RUN_ID=s033-… bash tests/platform/linux/run-objects.sh`：同卷 reflink 采集、改写/截断/删除工作文件后对象不变、错误摘要与长度不产生对象、跨卷 `exdev` 校验复制、小 tmpfs 满盘 `no_space`、缺失对象明确失败；结束清理样本目录并核对 |
 
 ## crates/server-core — 提交意图状态机与恢复判定（S034）
 
-状态：S034 实现 `commit/`、`recovery/` 与 `ports::{intent_log, target}`；完整内容 CAS（S035）、幂等/冲突（S036）、create/move/delete（S038/S039）与全 Root 启动恢复（S037）在其上扩展。包名 `vaultsyncd-server-core`，依赖只有 `vaultsyncd-domain`（身份与时间戳的唯一来源），仍属 `members`/`default-members`。
+状态：S034 实现 `commit/`、`recovery/` 与 `ports::{intent_log, target}`；完整内容 CAS（S035）、幂等/冲突（S036）、create/move/delete（S038/S039）与全 Vault 启动恢复（S037）在其上扩展。包名 `vaultsyncd-server-core`，依赖只有 `vaultsyncd-domain`（身份与时间戳的唯一来源），仍属 `members`/`default-members`。
 
 ### 端口与模块
 
 | 项目 | 契约 |
 | --- | --- |
-| `ports::target::TargetPort` | Root 工作目录字节层端口，由平台适配器实现：`observe(target_path) -> TargetObservation`、`publish(&PublishRequest) -> PublishedTarget`。`TargetObservation::{Absent, Present{identity: FileKey, digest}}` 把“确认不存在”与“读不到”分开：读不到（权限/挂载/IO）必须报 `TargetError::Unreadable`，不得返回 `Absent`。`PublishRequest{target_path, staging_path, digest, size}` 要求先建目标子卷内暂存文件再受控替换，失败必须清理自己的暂存文件 |
+| `ports::target::TargetPort` | Vault 工作目录字节层端口，由平台适配器实现：`observe(target_path) -> TargetObservation`、`publish(&PublishRequest) -> PublishedTarget`。`TargetObservation::{Absent, Present{identity: FileKey, digest}}` 把“确认不存在”与“读不到”分开：读不到（权限/挂载/IO）必须报 `TargetError::Unreadable`，不得返回 `Absent`。`PublishRequest{target_path, staging_path, digest, size}` 要求先建目标子卷内暂存文件再受控替换，失败必须清理自己的暂存文件 |
 | `ports::target::{TargetError, PublishedTarget}` | `TargetError::{Unreadable{detail}, Storage{stage, failure: StorageFailure, detail}, InvalidRequest{detail}}`，`code()` 给稳定短名（`target_unreadable`、`no_space` 等）；`PublishedTarget{identity, digest}` 是发布后实测事实，短写不得报成功 |
-| `ports::intent_log::IntentLog` | 异步意图日志端口（`async fn`，泛型使用、不做 dyn 对象）：`begin_put(&NewPutIntent, at) -> PutIntent`、`advance_put(id, PutPhase, at) -> PutIntent`、`load_put(id) -> Option<PutIntent>`、`unfinished_puts(root) -> Vec<PutIntent>`（写入顺序，恢复入口）。实现方是服务端存储层的 `fs_intents` 适配（S035 落地），越权必须报错而不是返回空列表 |
+| `ports::intent_log::IntentLog` | 异步意图日志端口（`async fn`，泛型使用、不做 dyn 对象）：`begin_put(&NewPutIntent, at) -> PutIntent`、`advance_put(id, PutPhase, at) -> PutIntent`、`load_put(id) -> Option<PutIntent>`、`unfinished_puts(vault) -> Vec<PutIntent>`（写入顺序，恢复入口）。实现方是服务端存储层的 `fs_intents` 适配（S035 落地），越权必须报错而不是返回空列表 |
 | `ports::intent_log::IntentLogError` | `Storage{detail}` / `OutOfScope` / `UnknownIntent{id}` / `DuplicateIntent{id}` / `IllegalTransition{from,to}` / `Rejected{code,detail}` / `MalformedIntent{detail}`，`code()` 给稳定短名 |
 | `commit::intent::PutPhase` | `Prepared` / `Published` / `Finalized` / `NeedsRecovery`，文本与 `fs_intents.phase` 同一套取值；`allows_transition_to` 只允许 `prepared→published`、`published→finalized`、两个开放阶段→`needs_recovery`、`needs_recovery→finalized` |
 | `commit::intent::{TargetBefore, TargetAfter}` | 意图前提与目标：`TargetBefore::{Absent, Present(TargetSnapshot{entry, revision, digest, identity: FileKey})}`、`TargetAfter{digest, size}`。`to_json()` 是写库的唯一编码，`from_json()` 是恢复的唯一解码；键顺序固定，计数与字节一律十进制**字符串**（不用 JSON number），未知键、缺字段、类型不符、`null`、转义与非 object 顶层一律 `StateJsonError`（`state_not_object`/`state_unknown_field`/`state_missing_field`/`state_type_mismatch`/`state_invalid_value`） |
-| `commit::intent::{NewPutIntent, PutIntent}` | 意图身份、Root、`target_path`（Root 内相对路径）、`staging_path`（单文件名，核心在 I/O 前用 `ObjectLayout::validate_staging_name` 校验）、before/after；`PutIntent` 另带 `phase`，`NewPutIntent::prepared()` 给出刚写库的形态 |
+| `commit::intent::{NewPutIntent, PutIntent}` | 意图身份、Vault、`target_path`（Vault 内相对路径）、`staging_path`（单文件名，核心在 I/O 前用 `ObjectLayout::validate_staging_name` 校验）、before/after；`PutIntent` 另带 `phase`，`NewPutIntent::prepared()` 给出刚写库的形态 |
 | `commit::intent::publish_put(log, target, at, &NewPutIntent)` | 顺序固定：现场复核（前提不符 → `before_mismatch`，不写意图不动磁盘）→ 写 prepared 意图（失败不发布）→ 发布工作文件 → 发布后复核实测摘要与字节数 → 记 `published`。返回 `PublishedPut{intent, target}` |
 | `commit::intent::finalize_put(log, id, at)` | 把已发布意图推进到 `finalized`；S035 在写 entries/versions/changes 的同一事务里调用，未发布就收尾被阶段规则拒绝（`illegal_intent_transition`） |
 | `commit::intent::PutFailure` | `reason: PutFailureReason`、`intent_id`、`phase`；`is_committed()` 恒为 `false`，已写入的意图行不删除也不回退。`PutFailureReason::{InvalidRequest, TargetUnreadable, BeforeMismatch{expected, observed}, Intent(IntentLogError), Publish(TargetError), PublishedTargetMismatch{expected, observed}}`，`code()` 给稳定短名；编排函数返回 `Box<PutFailure>` |
 | `recovery::classify_put(intent, observation)` | 按持久阶段与现场给出 `RecoveryDecision::{AlreadyFinished, Redo, Complete, Reconcile{reason}, NeedsRecovery{reason}}`：`prepared`+满足前提 → `redo`；现场已是目标内容 → `complete`；第三种现场 → `prepared_target_changed`/`published_target_changed`/`published_target_reverted`（保留双方、等协调）；目标不可读或意图已标 `needs_recovery` → `needs_recovery`（`pauses_writes()` 为真） |
-| `recovery::plan_root(intents, observe)` | 按意图写入顺序产出 `RootRecovery{intents: Vec<ClassifiedIntent{intent_id, target_path, phase, decision}>, pauses_writes}`；任一意图拿不到可证明现场即 `pauses_writes = true`（写入必须保持关闭） |
+| `recovery::plan_vault(intents, observe)` | 按意图写入顺序产出 `VaultRecovery{intents: Vec<ClassifiedIntent{intent_id, target_path, phase, decision}>, pauses_writes}`；任一意图拿不到可证明现场即 `pauses_writes = true`（写入必须保持关闭） |
 
 ### 表与不变量
 
@@ -1250,20 +1250,20 @@ python3 tools/context.py --help
 
 ## crates/server-core — 内容 CAS 与现场复核（S035）
 
-状态：S035 在 S034 的意图状态机上实现单文件内容 put 的完整 CAS 与 ACK 边界（`commit::put`、`ports::put_store`）。幂等/冲突（S036）、全 Root 恢复（S037）、create/move/delete（S038/S039）仍在其上扩展；服务端存储层的真实适配（SQLite 事务 + `fs_intents` 收尾）尚未落地，见本节末的“未接入”项。
+状态：S035 在 S034 的意图状态机上实现单文件内容 put 的完整 CAS 与 ACK 边界（`commit::put`、`ports::put_store`）。幂等/冲突（S036）、全 Vault 恢复（S037）、create/move/delete（S038/S039）仍在其上扩展；服务端存储层的真实适配（SQLite 事务 + `fs_intents` 收尾）尚未落地，见本节末的“未接入”项。
 
 ### 端口与模块
 
 | 项目 | 契约 |
 | --- | --- |
-| `commit::put::RootCommitGate` | 进程内 Root 提交串行化：`acquire(root) -> RootCommitTicket`、`release(ticket)`、`is_held(root)`。同一 Root 同时只允许一次提交，第二个得到 `root_commit_busy`（不排队、不阻塞）；不同 Root 互不影响。票据只能由 `acquire` 产生，释放不失败（不匹配即编程错误）。只覆盖单进程，跨进程共享数据库的串行化属服务端组装卡 |
-| `commit::put::PutRequest` | `intent_id`、`root`、`entry`、`expected_epoch`、`expected_revision`、`expected_parent`、`expected_name`、`target_path`、`staging_path`、`content: ExpectedContent`、`before: TargetBefore`。形状校验在任何端口调用之前：暂存名必须是单个文件名（I10），`target_path` 必须是 Root 内相对路径且最后一段等于 `expected_name`，`before` 的条目/revision 必须与请求基线一致 |
-| `commit::put::commit_put(gate, store, log, target, at, &PutRequest)` | 顺序固定：请求形状 → Root 票据 → epoch → 命名空间基线 → 对象持久 → 现场指纹 → `publish_put`（意图 → 发布 → 记 published）→ `apply_put`（元数据/changes/结果事务）→ 核对事务证据 → ACK。任何出口都会释放 Root 票据。成功返回 `CommittedPut{record, target}`，`record.phase` 必须是 `finalized` |
+| `commit::put::VaultCommitGate` | 进程内 Vault 提交串行化：`acquire(vault) -> VaultCommitTicket`、`release(ticket)`、`is_held(vault)`。同一 Vault 同时只允许一次提交，第二个得到 `vault_commit_busy`（不排队、不阻塞）；不同 Vault 互不影响。票据只能由 `acquire` 产生，释放不失败（不匹配即编程错误）。只覆盖单进程，跨进程共享数据库的串行化属服务端组装卡 |
+| `commit::put::PutRequest` | `intent_id`、`vault`、`entry`、`expected_epoch`、`expected_revision`、`expected_parent`、`expected_name`、`target_path`、`staging_path`、`content: ExpectedContent`、`before: TargetBefore`。形状校验在任何端口调用之前：暂存名必须是单个文件名（I10），`target_path` 必须是 Vault 内相对路径且最后一段等于 `expected_name`，`before` 的条目/revision 必须与请求基线一致 |
+| `commit::put::commit_put(gate, store, log, target, at, &PutRequest)` | 顺序固定：请求形状 → Vault 票据 → epoch → 命名空间基线 → 对象持久 → 现场指纹 → `publish_put`（意图 → 发布 → 记 published）→ `apply_put`（元数据/changes/结果事务）→ 核对事务证据 → ACK。任何出口都会释放 Vault 票据。成功返回 `CommittedPut{record, target}`，`record.phase` 必须是 `finalized` |
 | `commit::put::CommittedPut` | `record: PutRecord` + `target: PublishedTarget`；`intent_id()` 给出已收尾的意图。只有元数据事务提交后才存在（I01：发布完成不等于 committed） |
-| `ports::put_store::PutCommitStore` | 存储端口（异步，泛型使用）：`root_facts(root) -> RootFacts{epoch}`、`entry_baseline(root, entry) -> EntryBaseline{entry, root, parent, name, revision, kind}`、`object_state(root, digest) -> ObjectState::{Persisted{bytes}, Missing}`、`apply_put(&PutWrite) -> PutRecord`。`apply_put` 必须在一个事务里做：比较并写 `expected_revision`、写 `versions`/`entries.revision`/当前版本、追加 `changes` 批次、写操作结果，并把 `fs_intents` 从 `published` 收尾到 `finalized`；意图不是 `published` 时返回 `IllegalIntentTransition` |
-| `ports::put_store::PutRecord` | `intent_id`、`phase`、`version`、`revision`、`seq: RootSeq`、`tx: TxId`、`digest`、`size`；`phase` 必须是 `finalized`、`digest`/`size` 等于请求内容、`revision` 严格大于基线，否则核心按 `store_contract_violation` 停写（不返回 ACK） |
-| `ports::put_store::PutStoreError` | `Storage{detail}` / `OutOfScope` / `UnknownRoot{root}` / `EntryMissing{entry}` / `RevisionChanged{expected, actual}` / `IllegalIntentTransition{from, to}` / `Rejected{code, detail}` / `MalformedIntent{detail}`，`code()` 给稳定短名（`revision_changed` 等） |
-| `PutFailureReason` 新增原因与 wire 映射 | `EpochChanged → epoch_changed / EPOCH_CHANGED`、`BaseMismatch → base_mismatch / BASE_MISMATCH`（过期 revision）、`SubtreeChanged → subtree_changed / SUBTREE_CHANGED`（父目录/名称变化）、`Reconcile → reconcile_required / RECONCILE_REQUIRED`（现场指纹不符）、`UnsupportedEntry → unsupported_entry / UNSUPPORTED_ENTRY`、`ObjectNotPersisted`/`ObjectSizeMismatch`（无 wire 码）、`Gate`（`root_commit_busy`）、`Store`（透传存储码）、`StoreContract → store_contract_violation / NEEDS_RECOVERY`。`PutFailure::error_code() -> Option<ErrorCode>` 是 API 层唯一的 wire 映射，不在上层重写字符串 |
+| `ports::put_store::PutCommitStore` | 存储端口（异步，泛型使用）：`vault_facts(vault) -> VaultFacts{epoch}`、`entry_baseline(vault, entry) -> EntryBaseline{entry, vault, parent, name, revision, kind}`、`object_state(vault, digest) -> ObjectState::{Persisted{bytes}, Missing}`、`apply_put(&PutWrite) -> PutRecord`。`apply_put` 必须在一个事务里做：比较并写 `expected_revision`、写 `versions`/`entries.revision`/当前版本、追加 `changes` 批次、写操作结果，并把 `fs_intents` 从 `published` 收尾到 `finalized`；意图不是 `published` 时返回 `IllegalIntentTransition` |
+| `ports::put_store::PutRecord` | `intent_id`、`phase`、`version`、`revision`、`seq: VaultSeq`、`tx: TxId`、`digest`、`size`；`phase` 必须是 `finalized`、`digest`/`size` 等于请求内容、`revision` 严格大于基线，否则核心按 `store_contract_violation` 停写（不返回 ACK） |
+| `ports::put_store::PutStoreError` | `Storage{detail}` / `OutOfScope` / `UnknownVault{vault}` / `EntryMissing{entry}` / `RevisionChanged{expected, actual}` / `IllegalIntentTransition{from, to}` / `Rejected{code, detail}` / `MalformedIntent{detail}`，`code()` 给稳定短名（`revision_changed` 等） |
+| `PutFailureReason` 新增原因与 wire 映射 | `EpochChanged → epoch_changed / EPOCH_CHANGED`、`BaseMismatch → base_mismatch / BASE_MISMATCH`（过期 revision）、`SubtreeChanged → subtree_changed / SUBTREE_CHANGED`（父目录/名称变化）、`Reconcile → reconcile_required / RECONCILE_REQUIRED`（现场指纹不符）、`UnsupportedEntry → unsupported_entry / UNSUPPORTED_ENTRY`、`ObjectNotPersisted`/`ObjectSizeMismatch`（无 wire 码）、`Gate`（`vault_commit_busy`）、`Store`（透传存储码）、`StoreContract → store_contract_violation / NEEDS_RECOVERY`。`PutFailure::error_code() -> Option<ErrorCode>` 是 API 层唯一的 wire 映射，不在上层重写字符串 |
 
 ### 不变量
 
@@ -1275,7 +1275,7 @@ python3 tools/context.py --help
 
 ### 未接入（后续卡）
 
-- `PutCommitStore` 尚无真实实现：`root_facts`/`entry_baseline`/`object_state`/`apply_put` 要接到 `crates/server-store` 的 `roots`/`entries`/`versions`/`changes`/`operations`/`intents`，并把 `IntentLog` 的真实 `fs_intents` 适配一并落地；在此之前 `apps/server` 的提交入口没有可组装的存储实现。
+- `PutCommitStore` 尚无真实实现：`vault_facts`/`entry_baseline`/`object_state`/`apply_put` 要接到 `crates/server-store` 的 `vaults`/`entries`/`versions`/`changes`/`operations`/`intents`，并把 `IntentLog` 的真实 `fs_intents` 适配一并落地；在此之前 `apps/server` 的提交入口没有可组装的存储实现。
 
 ## crates/server-core — 冲突内容提交与 `OpId` 幂等（S036）
 
@@ -1283,12 +1283,12 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `commit::conflict::ConflictRequest` | `intent_id`、`op: OperationKey{root, device, op}`、`digest: RequestDigest`、`entry`（客户端想覆盖的 head 条目）、`expected_epoch`、`expected_revision`（客户端的过期基线）、`target_path`（§10.2 冲突路径，Root 内相对）、`staging_path`（单文件名）、`content: ExpectedContent`。形状在任何端口调用前检查 |
-| `commit::conflict::commit_conflict(gate, store, log, target, ids, at, &ConflictRequest)` | 顺序固定：请求形状 → Root 票据 → `conflict_head`（epoch + 源条目现状）→ epoch → `operation` 记录（重放 / `OP_ID_REUSED` / pending 不重做）→ “过期 + 不同内容”判定 → 目标空缺预检 → `begin_conflict`（登记 pending）→ `publish_put`（意图 → 发布 → `published`）→ `apply_conflict`（条目/版本/映射/事件/批次结果/收尾）→ 核对证据 → ACK。任何出口都释放 Root 票据 |
+| `commit::conflict::ConflictRequest` | `intent_id`、`op: OperationKey{vault, device, op}`、`digest: RequestDigest`、`entry`（客户端想覆盖的 head 条目）、`expected_epoch`、`expected_revision`（客户端的过期基线）、`target_path`（§10.2 冲突路径，Vault 内相对）、`staging_path`（单文件名）、`content: ExpectedContent`。形状在任何端口调用前检查 |
+| `commit::conflict::commit_conflict(gate, store, log, target, ids, at, &ConflictRequest)` | 顺序固定：请求形状 → Vault 票据 → `conflict_head`（epoch + 源条目现状）→ epoch → `operation` 记录（重放 / `OP_ID_REUSED` / pending 不重做）→ “过期 + 不同内容”判定 → 目标空缺预检 → `begin_conflict`（登记 pending）→ `publish_put`（意图 → 发布 → `published`）→ `apply_conflict`（条目/版本/映射/事件/批次结果/收尾）→ 核对证据 → ACK。任何出口都释放 Vault 票据 |
 | `commit::conflict::CommittedConflict` | `op: OpId`、`source`、`sibling`（服务器为该 `OpId` 分配的冲突条目）、`path`、`content: ExpectedContent`、`revision`、`seq`。首次提交与重放返回同一份；它也是 `operations` 里该 `OpId` 的终态结果 |
-| `ports::conflict_store::OperationKey` / `RequestDigest` | `OperationKey{root, device, op}` 是 design §7.2 的幂等键；`RequestDigest` 是 32 字节规范化请求摘要，核心只比较不重算——规范化编码只有一处实现（`vaultsyncd_server_store::operations::request_digest`），摘要必须覆盖源条目、基线 revision、冲突路径与内容摘要/长度 |
-| `ports::conflict_store::ConflictCommitStore` | 异步存储端口（泛型使用）：`conflict_head(root, source) -> ConflictHead{epoch, source: Option<HeadSource{entry, revision, kind, content}>}`、`operation(key) -> Option<RecordedOperation{digest, result}>`、`begin_conflict(key, digest) -> ConflictBegin::{Started, Recorded}`（原子插入或读 `pending`，已存在时绝不改写摘要或结果）、`apply_conflict(&ConflictWrite) -> ConflictRecord{intent_id, phase, conflict, tx}`。`apply_conflict` 必须在同一事务里：创建 `sibling` 条目（挂在 `source` 的父目录下、名称取 `path` 最后一段）、写版本（内容等于 `content`）、写 `conflicts` 映射与 `operations` 终态结果、追加 `changes` 批次、把 `fs_intents` 从 `published` 收尾到 `finalized`；路径已被占用返回 `PathOccupied` |
-| `ports::conflict_store::ConflictStoreError` | `Storage{detail}` / `OutOfScope` / `UnknownRoot{root}` / `PathOccupied{path}` / `DuplicateOperation{op}` / `IllegalIntentTransition{from,to}` / `Rejected{code,detail}` / `MalformedRow{detail}`，`code()` 给稳定短名（`target_path_occupied`、`malformed_conflict_row` 等） |
+| `ports::conflict_store::OperationKey` / `RequestDigest` | `OperationKey{vault, device, op}` 是 design §7.2 的幂等键；`RequestDigest` 是 32 字节规范化请求摘要，核心只比较不重算——规范化编码只有一处实现（`vaultsyncd_server_store::operations::request_digest`），摘要必须覆盖源条目、基线 revision、冲突路径与内容摘要/长度 |
+| `ports::conflict_store::ConflictCommitStore` | 异步存储端口（泛型使用）：`conflict_head(vault, source) -> ConflictHead{epoch, source: Option<HeadSource{entry, revision, kind, content}>}`、`operation(key) -> Option<RecordedOperation{digest, result}>`、`begin_conflict(key, digest) -> ConflictBegin::{Started, Recorded}`（原子插入或读 `pending`，已存在时绝不改写摘要或结果）、`apply_conflict(&ConflictWrite) -> ConflictRecord{intent_id, phase, conflict, tx}`。`apply_conflict` 必须在同一事务里：创建 `sibling` 条目（挂在 `source` 的父目录下、名称取 `path` 最后一段）、写版本（内容等于 `content`）、写 `conflicts` 映射与 `operations` 终态结果、追加 `changes` 批次、把 `fs_intents` 从 `published` 收尾到 `finalized`；路径已被占用返回 `PathOccupied` |
+| `ports::conflict_store::ConflictStoreError` | `Storage{detail}` / `OutOfScope` / `UnknownVault{vault}` / `PathOccupied{path}` / `DuplicateOperation{op}` / `IllegalIntentTransition{from,to}` / `Rejected{code,detail}` / `MalformedRow{detail}`，`code()` 给稳定短名（`target_path_occupied`、`malformed_conflict_row` 等） |
 | `PutFailureReason` 新增原因与 wire 映射 | `OpIdReused → op_id_reused / OP_ID_REUSED`（同一 `OpId` 不同请求）、`OperationPending → operation_pending / NEEDS_RECOVERY`（pending 不重做）、`ConflictNotStale → conflict_not_stale / RECONCILE_REQUIRED`（head revision 仍是基线）、`ContentAlreadyCommitted → content_already_committed / RECONCILE_REQUIRED`（同结果只归并）、`ConflictStore`（透传存储码） |
 
 不变量：
@@ -1299,7 +1299,7 @@ python3 tools/context.py --help
 - **pending 不是 committed**：`begin_conflict` 在动磁盘前登记；重试看到 `pending` 返回 `operation_pending`，不重做也不新建第二份副本。目标被占用这类可重新规划的拒绝在登记之前发生，不把 `OpId` 锁死。
 - **名称不是身份**：`target_path` 由 `planner::conflict::conflict_entry_path` 生成（§10.2 只有一处实现），核心只校验形状；副本身份是 `sibling`（服务器分配）并与结果同事务持久化，重试不改名、不换 id。
 
-未接入（后续卡）：`ConflictCommitStore` 同样只有测试假实现；真实实现要接 `crates/server-store` 的 `entries`/`versions`/`changes`/`operations`/`conflicts` 与 `fs_intents` 收尾，`conflicts` 表本身也尚未建（S028 只落了 `operations`）。崩溃后 `pending` 记录的收尾依赖 S037 的全 Root 恢复；跨进程并发仍靠数据库唯一约束与 Root 票据（同 S035 限制）。
+未接入（后续卡）：`ConflictCommitStore` 同样只有测试假实现；真实实现要接 `crates/server-store` 的 `entries`/`versions`/`changes`/`operations`/`conflicts` 与 `fs_intents` 收尾，`conflicts` 表本身也尚未建（S028 只落了 `operations`）。崩溃后 `pending` 记录的收尾依赖 S037 的全 Vault 恢复；跨进程并发仍靠数据库唯一约束与 Vault 票据（同 S035 限制）。
 
 
 ## crates/server-core — 启动恢复与写入门（S037）
@@ -1308,10 +1308,10 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `recovery::startup::recover_root(log, target, store, at, root) -> Result<RecoveryReport, RecoveryError>` | 按 `IntentLog::unfinished_puts` 的写入顺序处理每条未完成 put 意图：现场 == 前 hash → 重做发布 + 补元数据事务；现场 == 后 hash（阶段 `prepared`/`published`）→ 先按现场证据补记 `published`（若还停在 `prepared`），再补元数据事务；现场是第三种内容 → 保留双方、不覆盖不提交；目标不可读/已标 `needs_recovery` → 落盘 `needs_recovery` 并停写；恢复动作失败 → 不假装完成，Root 保持关闭。`RecoveryError::Intent(IntentLogError)` 表示读不出未完成清单（越权/存储失败），调用方必须保持关闭 |
-| `recovery::startup::RecoveryReport` | `root`、`intents: Vec<RecoveredIntent{intent: PutIntent, decision: RecoveryDecision, outcome: RecoveryOutcome}>`；`pauses_writes()`（任一 `NeedsRecovery`/`Unresolved`）、`needs_reconciliation()`（任一 `Preserved`）、`committed_versions()`、`outcome_for(id)`。报告是恢复输出与候选版本证据（前 hash 在 `intent.before`，后 hash 在 `intent.after`） |
+| `recovery::startup::recover_vault(log, target, store, at, vault) -> Result<RecoveryReport, RecoveryError>` | 按 `IntentLog::unfinished_puts` 的写入顺序处理每条未完成 put 意图：现场 == 前 hash → 重做发布 + 补元数据事务；现场 == 后 hash（阶段 `prepared`/`published`）→ 先按现场证据补记 `published`（若还停在 `prepared`），再补元数据事务；现场是第三种内容 → 保留双方、不覆盖不提交；目标不可读/已标 `needs_recovery` → 落盘 `needs_recovery` 并停写；恢复动作失败 → 不假装完成，Vault 保持关闭。`RecoveryError::Intent(IntentLogError)` 表示读不出未完成清单（越权/存储失败），调用方必须保持关闭 |
+| `recovery::startup::RecoveryReport` | `vault`、`intents: Vec<RecoveredIntent{intent: PutIntent, decision: RecoveryDecision, outcome: RecoveryOutcome}>`；`pauses_writes()`（任一 `NeedsRecovery`/`Unresolved`）、`needs_reconciliation()`（任一 `Preserved`）、`committed_versions()`、`outcome_for(id)`。报告是恢复输出与候选版本证据（前 hash 在 `intent.before`，后 hash 在 `intent.after`） |
 | `recovery::startup::RecoveryOutcome` | `Redone{version, published}` / `Completed{version}` / `Preserved{reason: ReconcileReason}` / `NeedsRecovery{reason: NeedsRecoveryReason}` / `Unresolved{code, detail}`；`is_committed()` 只对前两者为真，`version()`、`pauses_writes()`、`as_str()`（稳定短名） |
-| `recovery::startup::WriteAdmission` / `RootAdmission` / `AdmissionState` / `WriteRefusal` | 逐 Root 写入门：新建时所有 Root 为 `AwaitingRecovery`（默认拒绝），只有 `record(RecoveryReport)` 能推进到 `Open` 或 `Paused(report)`，没有直接打开的入口。`admit_write(root) -> Result<(), WriteRefusal>`，拒绝码 `recovery_pending`（恢复未完成）与 `needs_recovery`（恢复暂停）；`state(root)` 给 readiness 用；`report(root)` 给诊断/API 输出暂停原因 |
+| `recovery::startup::WriteAdmission` / `VaultAdmission` / `AdmissionState` / `WriteRefusal` | 逐 Vault 写入门：新建时所有 Vault 为 `AwaitingRecovery`（默认拒绝），只有 `record(RecoveryReport)` 能推进到 `Open` 或 `Paused(report)`，没有直接打开的入口。`admit_write(vault) -> Result<(), WriteRefusal>`，拒绝码 `recovery_pending`（恢复未完成）与 `needs_recovery`（恢复暂停）；`state(vault)` 给 readiness 用；`report(vault)` 给诊断/API 输出暂停原因 |
 | `tests/server-integration/`（包 `vaultsyncd-server-tests`） | `src/lib.rs` 是文件型假端口与边界注入装置（`CrashStore`/`StoreHandle`/`Boundary`/`run_commit`/`run_recovery`/`start_with_recovery`），`src/bin/crash-child.rs` 是被强杀的子进程，`tests/recovery.rs` 是验收矩阵。不进 `default-members`，用 `cargo test --locked -p vaultsyncd-server-tests` 执行 |
 
 不变量：
@@ -1321,23 +1321,23 @@ python3 tools/context.py --help
 - **事务声称成功也要核对证据**：`apply_put` 返回的 `phase` 不是 `finalized`、内容不等于 `desired_after` 或 revision 没推进，都按 `store_contract_violation` 停写。
 - **保留旧对象与冲突候选**：`Preserved`/`NeedsRecovery` 不删除对象、不改工作文件；`Redone`/`Completed` 只新增一个版本，旧内容对象仍被旧版本引用。
 
-未接入（后续卡）：create/move/delete 的意图日志（S038/S039）要接进同一条启动顺序；`expected_before` 为 `Absent` 的意图（新建条目）当前返回 `Unresolved{code: "missing_entry_baseline"}` 并保持 Root 关闭，因为意图里没有条目身份可收尾；真实存储适配仍待落地（`apps/server` 的 readiness 组装已由 S041 落地，见下一节）；装置里的摘要不是 SHA-256（假端口），仅用于区分前后内容。
+未接入（后续卡）：create/move/delete 的意图日志（S038/S039）要接进同一条启动顺序；`expected_before` 为 `Absent` 的意图（新建条目）当前返回 `Unresolved{code: "missing_entry_baseline"}` 并保持 Vault 关闭，因为意图里没有条目身份可收尾；真实存储适配仍待落地（`apps/server` 的 readiness 组装已由 S041 落地，见下一节）；装置里的摘要不是 SHA-256（假端口），仅用于区分前后内容。
 
-## crates/server-core — 目录创建与同 Root 移动（S038）
+## crates/server-core — 目录创建与同 Vault 移动（S038）
 
-状态：S038 把目录创建与同 Root 移动接进 put 已有的“先持久意图再动磁盘”顺序（design §9.5、§11.2—11.3、T09/T10）。移动只改父关系与名称：`EntryId` 不变、不写版本行、不改内容引用、内容流量为零。真实 SQLite/文件端口适配与提交入口在进程内的装配仍未落地（S041 落的是进程生命周期与配置）。
+状态：S038 把目录创建与同 Vault 移动接进 put 已有的“先持久意图再动磁盘”顺序（design §9.5、§11.2—11.3、T09/T10）。移动只改父关系与名称：`EntryId` 不变、不写版本行、不改内容引用、内容流量为零。真实 SQLite/文件端口适配与提交入口在进程内的装配仍未落地（S041 落的是进程生命周期与配置）。
 
 | 项目 | 契约 |
 | --- | --- |
-| `commit::namespace::commit_namespace(gate, store, log, ns, at, &NamespaceRequest) -> Result<CommittedNamespace, Box<NamespaceFailure>>` | 顺序：请求形状（名称/路径/目录环/自指）→ Root 串行化 → epoch → 条目基线（新建要求身份不存在；移动要求 revision/父/名一致）→ 目标父目录存在且是目录 → 源与目标现场 → 意图 `prepared` → `mkdir`/`rename` 并复核 → `published` → 元数据事务 → ACK。失败都不是 committed，已持久化意图保留为恢复证据 |
-| `NamespaceRequest` | `CreateDirectory(CreateDirectoryRequest{intent_id, root, entry, expected_epoch, parent, name, target_path})` 或 `Move(MoveRequest{intent_id, root, entry, expected_epoch, expected_revision, from: NamespaceEndpoint, to: NamespaceEndpoint})`；`NamespaceEndpoint{parent, name, path}` 的路径最后一段必须等于名称 |
+| `commit::namespace::commit_namespace(gate, store, log, ns, at, &NamespaceRequest) -> Result<CommittedNamespace, Box<NamespaceFailure>>` | 顺序：请求形状（名称/路径/目录环/自指）→ Vault 串行化 → epoch → 条目基线（新建要求身份不存在；移动要求 revision/父/名一致）→ 目标父目录存在且是目录 → 源与目标现场 → 意图 `prepared` → `mkdir`/`rename` 并复核 → `published` → 元数据事务 → ACK。失败都不是 committed，已持久化意图保留为恢复证据 |
+| `NamespaceRequest` | `CreateDirectory(CreateDirectoryRequest{intent_id, vault, entry, expected_epoch, parent, name, target_path})` 或 `Move(MoveRequest{intent_id, vault, entry, expected_epoch, expected_revision, from: NamespaceEndpoint, to: NamespaceEndpoint})`；`NamespaceEndpoint{parent, name, path}` 的路径最后一段必须等于名称 |
 | `CommittedNamespace` | `record: NamespaceRecord`（`phase` 必须是 `finalized`、`entry` 等于意图条目、新建 revision 0、移动严格大于基线）与 `target: PathState`（提交后目标实测现场） |
-| `NamespaceFailure` / `NamespaceFailureReason` | 稳定码：`invalid_request`、`root_commit_busy`、`epoch_changed`、`base_mismatch`、`subtree_changed`、`entry_already_exists`、`target_unreadable`、`target_occupied`、`target_ancestor_missing`、`source_changed`、意图/动作错误码、`applied_state_mismatch`、存储错误码、`store_contract_violation`。wire 映射：`EPOCH_CHANGED`、`BASE_MISMATCH`、`SUBTREE_CHANGED`（占用/祖先缺失/基线变化）、`RECONCILE_REQUIRED`（源与基线不符）、`NEEDS_RECOVERY`（存储契约违约） |
+| `NamespaceFailure` / `NamespaceFailureReason` | 稳定码：`invalid_request`、`vault_commit_busy`、`epoch_changed`、`base_mismatch`、`subtree_changed`、`entry_already_exists`、`target_unreadable`、`target_occupied`、`target_ancestor_missing`、`source_changed`、意图/动作错误码、`applied_state_mismatch`、存储错误码、`store_contract_violation`。wire 映射：`EPOCH_CHANGED`、`BASE_MISMATCH`、`SUBTREE_CHANGED`（占用/祖先缺失/基线变化）、`RECONCILE_REQUIRED`（源与基线不符）、`NEEDS_RECOVERY`（存储契约违约） |
 | `commit::namespace::NamespaceBefore` / `NamespaceAfter` | `fs_intents` 的 `expected_before`/`desired_after`。before：`{"present":false}`（新建）或 `{"present":true,"entry","revision","parent","path_hex","kind","size","device","inode","links"}`；after：`{"present":true,"entry","parent","path_hex","kind"}`。路径按 UTF-8 十六进制编码（同一编码器不接受转义序列），移动的 before 记录源 inode 作为“移动已落地”的证据 |
 | `commit::namespace::classify_namespace(&NamespaceIntent, &ObservedNamespace) -> NamespaceRecoveryDecision` | `ObservedNamespace{target, source}` 原样携带观察错误。判定：现场满足前提 → `Redo`；现场已是目标（移动还要求目标 inode 与 before 相同、源已空）→ `Complete`；目标被占/祖先缺失/源与目标都不见了/`published` 却目标回退 → `Reconcile`；读不到或已标 `needs_recovery` → `NeedsRecovery` |
-| `commit::namespace::recover_namespace_root(log, ns, store, at, root) -> Result<NamespaceRecoveryReport, NamespaceRecoveryError>` | 按 `NamespaceIntentLog::unfinished_namespaces` 顺序处理：`Redo` 重做动作并补事务、`Complete` 只补事务（阶段还停在 `prepared` 时先补记 `published`）、`Reconcile` → `Preserved`（不覆盖不提交）、`NeedsRecovery` → 落盘 `needs_recovery`、动作失败 → `Unresolved` 保持关闭。报告提供 `pauses_writes()`、`needs_reconciliation()`、`committed()` |
+| `commit::namespace::recover_namespace_vault(log, ns, store, at, vault) -> Result<NamespaceRecoveryReport, NamespaceRecoveryError>` | 按 `NamespaceIntentLog::unfinished_namespaces` 顺序处理：`Redo` 重做动作并补事务、`Complete` 只补事务（阶段还停在 `prepared` 时先补记 `published`）、`Reconcile` → `Preserved`（不覆盖不提交）、`NeedsRecovery` → 落盘 `needs_recovery`、动作失败 → `Unresolved` 保持关闭。报告提供 `pauses_writes()`、`needs_reconciliation()`、`committed()` |
 | `ports::namespace::NamespacePort` | `inspect(path) -> PathState{Absent\|AncestorMissing\|File{identity}\|Directory{identity}}`、`create_directory(path)`、`rename(from, to)`。契约：不存在只在父目录可访问且确认没有该名字时报告；读不到是 `Unreadable`（不是“不存在”）；`rename` 必须是同一次改名（inode 不变），不得退化成复制再删除；目标已存在时动作必须失败，不覆盖 |
-| `ports::namespace_store::NamespaceCommitStore` | `root_facts`、`entry_baseline`（复用 `RootFacts`/`EntryBaseline`/`EntryKind`）、`apply_namespace(&NamespaceWrite) -> NamespaceRecord`。事务契约：移动只改 `parent_id`/`name`/`name_key`/`revision`，不写版本行、不改 `content_version_id`；新建只插入 `kind = directory` 且无内容版本的条目（revision 0）；比较并写 `expected_revision`，目标同父活跃名称被占返回 `SlotOccupied`；`published → finalized` 与 `entries`/`changes` 同一事务 |
+| `ports::namespace_store::NamespaceCommitStore` | `vault_facts`、`entry_baseline`（复用 `VaultFacts`/`EntryBaseline`/`EntryKind`）、`apply_namespace(&NamespaceWrite) -> NamespaceRecord`。事务契约：移动只改 `parent_id`/`name`/`name_key`/`revision`，不写版本行、不改 `content_version_id`；新建只插入 `kind = directory` 且无内容版本的条目（revision 0）；比较并写 `expected_revision`，目标同父活跃名称被占返回 `SlotOccupied`；`published → finalized` 与 `entries`/`changes` 同一事务 |
 | `ports::intent_log::NamespaceIntentLog` | `begin_namespace`、`advance_namespace`、`load_namespace`、`unfinished_namespaces`。与 `IntentLog` 共用 `fs_intents` 表与 `PutPhase` 阶段机（`kind = 'create'`/`'move'`、`staging_path` NULL、`target_path` 是目标路径） |
 
 不变量：
@@ -1346,7 +1346,7 @@ python3 tools/context.py --help
 - **移动不搬内容**：命名空间端口只有观察/`mkdir`/`rename`，没有内容方法；事务输入也没有内容字段。移动后内容版本引用必须与移动前一致（假端口测试断言）。
 - **不覆盖目标**：目标被占、祖先缺失、目标落在自己子树里（目录环）、目标父目录就是自己，一律在动磁盘之前拒绝，不动目标也不动源。
 - **动作要能复核**：`rename` 之后必须证明目标 inode 就是源那一个且源位置已空；`mkdir` 之后必须是目录。不符就不推进阶段，意图停在 `prepared`。
-- **恢复先于写入开放**：装配时必须先跑 `recover_namespace_root` 与 put 的 `recover_root`，两者的报告都不暂停，才记录 `WriteAdmission::record` 开放写入口。
+- **恢复先于写入开放**：装配时必须先跑 `recover_namespace_vault` 与 put 的 `recover_vault`，两者的报告都不暂停，才记录 `WriteAdmission::record` 开放写入口。
 
 未接入（后续卡）：真实端口适配（`NamespacePort` 的 Linux 实现、`NamespaceIntentLog`/`NamespaceCommitStore` 的 SQLx 实现）与提交入口的进程内装配；delete 的意图与回收站（S039）；`tests/server-integration/` 的强杀矩阵只覆盖 put 边界，命名空间边界目前由 `crates/server-core` 的假端口用例覆盖；目标祖先的逐级存在性由适配器报告，核心只核对目标父目录条目与端口现场。
 
@@ -1356,21 +1356,21 @@ python3 tools/context.py --help
 
 | 项目 | 契约 |
 | --- | --- |
-| `commit::delete::commit_delete(gate, store, log, ns, at, &DeleteRequest) -> Result<CommittedDelete, Box<DeleteFailure>>` | 顺序：请求形状（路径）→ Root 串行化 → epoch → 条目基线 revision → 子树忙 → 现场种类 → 冻结清单与 token → 意图 `prepared` → 有界批次移除并复核 → `published` → 单一事务公布 → ACK。`ns` 同时实现 `NamespacePort`（观察）与 `RemovalPort`（移除） |
-| `DeleteRequest` | `{intent_id, root, entry, expected_epoch, expected_revision, subtree_token: Option<SubtreeToken>, path}`。目录删除必须带服务端 token，文件删除必须不带（混用即 `invalid_request`） |
+| `commit::delete::commit_delete(gate, store, log, ns, at, &DeleteRequest) -> Result<CommittedDelete, Box<DeleteFailure>>` | 顺序：请求形状（路径）→ Vault 串行化 → epoch → 条目基线 revision → 子树忙 → 现场种类 → 冻结清单与 token → 意图 `prepared` → 有界批次移除并复核 → `published` → 单一事务公布 → ACK。`ns` 同时实现 `NamespacePort`（观察）与 `RemovalPort`（移除） |
+| `DeleteRequest` | `{intent_id, vault, entry, expected_epoch, expected_revision, subtree_token: Option<SubtreeToken>, path}`。目录删除必须带服务端 token，文件删除必须不带（混用即 `invalid_request`） |
 | `CommittedDelete` | `record: DeleteRecord`（`phase` 必须 `finalized`、`trashed` 等于清单长度）、`target`（必须是 `Absent`）、`removed`（工作目录删掉的目录项数）、`batches` |
 | `SubtreeToken` | 服务端按冻结清单算出的 128 位摘要（FNV-1a），任一条目的身份/父/名/种类/revision/内容版本变化或成员增删都会换值。`to_hex()` 是 32 个小写十六进制字符；它是并发检测，不是安全凭据 |
-| `SubtreeImage` / `SubtreeEntry` / `DeleteBatch` | `SubtreeImage::new(root, entries)` 要求非空、根条目恰好一条且带父目录、身份不重复、路径合法、非根成员的父目录在清单里。`token()`、`batches(limit)`（每批 ≤ `MAX_DELETE_BATCH_ENTRIES = 256`）、`find(entry)` |
-| `SubtreeBusy` / `check_write(root, path)` | 子树忙来自**持久事实**：未收尾的删除意图。`SubtreeBusy::from_intents(&[DeleteIntent])` 后，命中 `path == 子树路径` 或其后代的写入返回 `SubtreeBusyConflict{entry, path}`。装配层应在 put/新建/移动/恢复之前调用它 |
-| `DeleteFailure` / `DeleteFailureReason` | 稳定码：`invalid_request`、`root_commit_busy`、`epoch_changed`、`base_mismatch`、`subtree_changed`、`subtree_busy`、`target_unreadable`、移除错误码（`path_in_use`、`target_unreadable`、存储分类）、`removal_incomplete`、`manifest_mismatch`、意图/存储错误码、`store_contract_violation`。`is_committed()` 恒为 `false`。wire 映射：`EPOCH_CHANGED`、`BASE_MISMATCH`、`SUBTREE_CHANGED`（子树变化/忙/移除未完成）、`NEEDS_RECOVERY`（存储契约违约）；其余无 wire 码 |
+| `SubtreeImage` / `SubtreeEntry` / `DeleteBatch` | `SubtreeImage::new(vault, entries)` 要求非空、根条目恰好一条且带父目录、身份不重复、路径合法、非根成员的父目录在清单里。`token()`、`batches(limit)`（每批 ≤ `MAX_DELETE_BATCH_ENTRIES = 256`）、`find(entry)` |
+| `SubtreeBusy` / `check_write(vault, path)` | 子树忙来自**持久事实**：未收尾的删除意图。`SubtreeBusy::from_intents(&[DeleteIntent])` 后，命中 `path == 子树路径` 或其后代的写入返回 `SubtreeBusyConflict{entry, path}`。装配层应在 put/新建/移动/恢复之前调用它 |
+| `DeleteFailure` / `DeleteFailureReason` | 稳定码：`invalid_request`、`vault_commit_busy`、`epoch_changed`、`base_mismatch`、`subtree_changed`、`subtree_busy`、`target_unreadable`、移除错误码（`path_in_use`、`target_unreadable`、存储分类）、`removal_incomplete`、`manifest_mismatch`、意图/存储错误码、`store_contract_violation`。`is_committed()` 恒为 `false`。wire 映射：`EPOCH_CHANGED`、`BASE_MISMATCH`、`SUBTREE_CHANGED`（子树变化/忙/移除未完成）、`NEEDS_RECOVERY`（存储契约违约）；其余无 wire 码 |
 | `DeleteSnapshot` / `DeleteAfter` | `fs_intents` 的 `expected_before`/`desired_after`（`kind = 'delete'`、`staging_path` NULL）。before：`{"present":true,"entry","revision","parent","path_hex","kind","size","device","inode","links","token","entries"}`；after：`{"present":false,"entries"}` |
-| `classify_delete(&DeleteIntent, &ObservedDelete) -> DeleteRecoveryDecision` / `recover_delete_root(log, ns, store, at, root)` | 判定：`Finalized` → 无动作；`needs_recovery` → 停写；路径读不到 → `NeedsRecovery`；路径不存在 → `Complete`；现场还是前提那个条目（同种类同 inode）→ `Redo`；被换成别的条目 → `Reconcile{target_occupied}`；祖先缺失 → `Reconcile{target_unavailable}`。`Complete`/`Redo` 补事务前要求重读的清单 token 与条目数仍等于意图值，否则 `Unresolved("subtree_changed")` 停写；清单根已不存在 → `Preserved{subtree_already_deleted}` |
+| `classify_delete(&DeleteIntent, &ObservedDelete) -> DeleteRecoveryDecision` / `recover_delete_vault(log, ns, store, at, vault)` | 判定：`Finalized` → 无动作；`needs_recovery` → 停写；路径读不到 → `NeedsRecovery`；路径不存在 → `Complete`；现场还是前提那个条目（同种类同 inode）→ `Redo`；被换成别的条目 → `Reconcile{target_occupied}`；祖先缺失 → `Reconcile{target_unavailable}`。`Complete`/`Redo` 补事务前要求重读的清单 token 与条目数仍等于意图值，否则 `Unresolved("subtree_changed")` 停写；清单根已不存在 → `Preserved{subtree_already_deleted}` |
 | `ports::removal::RemovalPort` | `remove_file(path)`、`remove_directory_batch(path, max_entries) -> RemovalProgress{removed, complete}`。契约：目录按批推进、可被打断后重复调用（已删完报 `finished(0)`）；失败用 `RemovalError{Unreadable\|InUse\|Storage\|InvalidRequest}`，不得报成成功 |
-| `ports::trash_store::DeleteStore` | `root_facts`、`entry_baseline`、`subtree_image(root, entry) -> SubtreeImage`（目标自身 + 全部活跃后代，顺序稳定）、`apply_delete(&DeleteApply) -> DeleteRecord`。事务契约：按 `batches` 逐批软删除（每批 ≤ 256）、每条写回收站清单与墓碑、不写 `objects`/`versions`、不改 `content_version_id`；revision 比较并写失败 → `RevisionChanged`；清单与库不一致 → `ManifestMismatch`；`published → finalized` 与批次同一事务 |
+| `ports::trash_store::DeleteStore` | `vault_facts`、`entry_baseline`、`subtree_image(vault, entry) -> SubtreeImage`（目标自身 + 全部活跃后代，顺序稳定）、`apply_delete(&DeleteApply) -> DeleteRecord`。事务契约：按 `batches` 逐批软删除（每批 ≤ 256）、每条写回收站清单与墓碑、不写 `objects`/`versions`、不改 `content_version_id`；revision 比较并写失败 → `RevisionChanged`；清单与库不一致 → `ManifestMismatch`；`published → finalized` 与批次同一事务 |
 | `ports::trash_store::TrashManifestEntry` | `{entry, parent, path, kind, revision, content_version, deleted_at, expires_at}`；目录 `content_version` 恒为 `None`，`expires_at = deleted_at + TRASH_RETENTION_SECONDS (30 天)` |
 | `ports::intent_log::DeleteIntentLog` | `begin_delete`、`advance_delete`、`load_delete`、`unfinished_deletes`。与 put/命名空间共用 `fs_intents` 与 `PutPhase`（`kind = 'delete'`）。`unfinished_deletes` 是子树忙的事实来源 |
-| `crates/server-store::trash` | `soft_delete_batch(tx, owner, root, &[SoftDelete{entry, revision}], at) -> usize`（有界、比较并写）、`record_trash_entry`、`insert_tombstone`、`trash_entries`、`trash_entry`、`tombstones`、`tombstone`；错误码 `out_of_scope`、`already_in_trash`、`duplicate_tombstone`、`invalid_batch`、`batch_mismatch`、`invalid_path`、`directory_with_content`、`invalid_retention`、`malformed_trash_row` |
-| 迁移 `0005_trash.sql` | `trash_entries(entry_id PK, root_id, parent_id, path, kind, revision, content_version_id, deleted_at, expires_at)`（`(root_id, entry_id)` 外键指向 `entries`，目录不得带内容版本，`expires_at >= deleted_at`）；`tombstones(root_id, entry_id)` 主键 + 路径/种类/时间/保留期。schema 版本 5 |
+| `crates/server-store::trash` | `soft_delete_batch(tx, owner, vault, &[SoftDelete{entry, revision}], at) -> usize`（有界、比较并写）、`record_trash_entry`、`insert_tombstone`、`trash_entries`、`trash_entry`、`tombstones`、`tombstone`；错误码 `out_of_scope`、`already_in_trash`、`duplicate_tombstone`、`invalid_batch`、`batch_mismatch`、`invalid_path`、`directory_with_content`、`invalid_retention`、`malformed_trash_row` |
+| 迁移 `0005_trash.sql` | `trash_entries(entry_id PK, vault_id, parent_id, path, kind, revision, content_version_id, deleted_at, expires_at)`（`(vault_id, entry_id)` 外键指向 `entries`，目录不得带内容版本，`expires_at >= deleted_at`）；`tombstones(vault_id, entry_id)` 主键 + 路径/种类/时间/保留期。schema 版本 5 |
 
 不变量：
 
@@ -1410,19 +1410,19 @@ python3 tools/context.py --help
 | 项 | 契约 |
 | --- | --- |
 | `Phase` | `Starting` / `Ready` / `NeedsRecovery` / `Draining`；`as_str()`、`is_ready()`（只有 `Ready` 为真） |
-| `Lifecycle` | `new()` 起于 `Starting`，所有 Root 的写入默认关闭；`record_recovery(RecoveryReport)` 是唯一的开放入口（转调核心 `WriteAdmission`）；`mark_ready()` 只在 `Starting` 时生效；`mark_needs_recovery(detail)` 之后 `mark_ready()` 不再生效；`begin_shutdown()` 进入 `Draining` 且不复位 |
-| `Lifecycle::admit_write(root)` | 先看是否 `Draining`（`SubmissionRefusal::ShuttingDown`，码 `shutting_down`），再转调核心 `WriteAdmission::admit_write`（`recovery_pending` / `needs_recovery`） |
-| `root_state(root)` / `recovery_detail()` | 诊断与健康探测输出；`recovery_detail` 只含 Root 身份与意图条数，不含服务器绝对路径 |
+| `Lifecycle` | `new()` 起于 `Starting`，所有 Vault 的写入默认关闭；`record_recovery(RecoveryReport)` 是唯一的开放入口（转调核心 `WriteAdmission`）；`mark_ready()` 只在 `Starting` 时生效；`mark_needs_recovery(detail)` 之后 `mark_ready()` 不再生效；`begin_shutdown()` 进入 `Draining` 且不复位 |
+| `Lifecycle::admit_write(vault)` | 先看是否 `Draining`（`SubmissionRefusal::ShuttingDown`，码 `shutting_down`），再转调核心 `WriteAdmission::admit_write`（`recovery_pending` / `needs_recovery`） |
+| `vault_state(vault)` / `recovery_detail()` | 诊断与健康探测输出；`recovery_detail` 只含 Vault 身份与意图条数，不含服务器绝对路径 |
 
 ### 启动恢复编排与 HTTP（`vaultsyncd_server::{recovery,http,bootstrap}`）
 
 | 项 | 契约 |
 | --- | --- |
-| `recovery::assess_registered_roots(db, &lifecycle)` | 用 `server_store::roots::all_roots` 取全部已注册 Root（系统级查询，不依赖 owner scope），逐 Root 调 `server_store::intents::unfinished_intents`：空清单 → 记一份空 `RecoveryReport`（开放写入）；非空 → 记入 `RecoveryAssessment::blocked_roots` 并保持关闭。返回 `RecoveryAssessment{open_roots, blocked_roots, is_complete(), detail()}` |
-| `recovery::count_unfinished_intents(db)` | 全部 Root 下未收尾意图条数；停止流程用它打印 `unfinished_intents=N` 作为“证据仍保留”的账目 |
-| `RecoveryAssessmentError` | `Roots(RootError)` / `Intents{root, source}`：读不出清单就**不启动**（`IntentLog` 契约：不能假设没有未完成意图） |
+| `recovery::assess_registered_vaults(db, &lifecycle)` | 用 `server_store::vaults::all_vaults` 取全部已注册 Vault（系统级查询，不依赖 owner scope），逐 Vault 调 `server_store::intents::unfinished_intents`：空清单 → 记一份空 `RecoveryReport`（开放写入）；非空 → 记入 `RecoveryAssessment::blocked_vaults` 并保持关闭。返回 `RecoveryAssessment{open_vaults, blocked_vaults, is_complete(), detail()}` |
+| `recovery::count_unfinished_intents(db)` | 全部 Vault 下未收尾意图条数；停止流程用它打印 `unfinished_intents=N` 作为“证据仍保留”的账目 |
+| `RecoveryAssessmentError` | `Vaults(VaultError)` / `Intents{vault, source}`：读不出清单就**不启动**（`IntentLog` 契约：不能假设没有未完成意图） |
 | `bootstrap::prepare(config)` | 打开数据库（种类/版本/WAL 门禁在 `server-store`）→ 评估恢复 → 全部完成才 `mark_ready` → 绑定监听。错误为 `StartupError::{Database,Recovery,Bind}` |
-| `bootstrap::Service::{local_addr,lifecycle,assessment,serve}` | `serve(shutdown)`：打印 `listen/state_dir/schema_version/phase/open_roots/blocked_roots` → `axum::serve(...).with_graceful_shutdown(...)`；收到停止信号先 `begin_shutdown()`，服务循环结束后统计并打印未完成意图条数，再 `database.close()` |
+| `bootstrap::Service::{local_addr,lifecycle,assessment,serve}` | `serve(shutdown)`：打印 `listen/state_dir/schema_version/phase/open_vaults/blocked_vaults` → `axum::serve(...).with_graceful_shutdown(...)`；收到停止信号先 `begin_shutdown()`，服务循环结束后统计并打印未完成意图条数，再 `database.close()` |
 | `GET /v1/health` | 用 `vaultsyncd_protocol::generated::{HealthResponse,ErrorEnvelope}` 的 DTO，不手写 JSON：`Ready` → 200 `{"status":"ok"}`；`Draining` → 200 `{"status":"degraded"}`（读可用、新提交已拒绝）；`Starting` → 503 `NEEDS_RECOVERY` + `retryable=true`；`NeedsRecovery` → 503 `NEEDS_RECOVERY` + `retryable=false`。错误信封的 `request_id` 为 `srv-<pid>-<序号>` |
 
 ### 不变量与未接入
@@ -1432,58 +1432,58 @@ python3 tools/context.py --help
 - **停止不丢任务**：`Draining` 先于 HTTP 收尾；停止流程不删除意图行/暂存/已发布内容，只打印保留条数并关闭数据库。
 - **配置不猜默认**：未知键、非法地址、缺失/相对状态目录一律退出码 2，且不创建数据库。
 
-未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Root 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥由 S042 的状态目录锁提供（见「认证与账号（S042）」），两个进程不再能同时占用同一状态目录。
+未接入（后续卡）：未完成意图的真实重放需要 `PutCommitStore`/`IntentLog` 的真实存储适配（S035/S037 的已知缺口，见下）；内部状态目录与 Vault 的 btrfs 准入（`crates/platform-linux-server::mounts`）尚未接到启动路径；`GET /v1/capabilities`（需要 ServerId/epoch 的真实来源）、认证与其余业务端点属 S042—S044；跨进程单实例互斥由 S042 的状态目录锁提供（见「认证与账号（S042）」），两个进程不再能同时占用同一状态目录。
 
-## crates/server-core + apps/server — Root 注册与清单（S044）
+## crates/server-core + apps/server — Vault 注册与清单（S044）
 
-状态：S044 实现。核心侧 `vaultsyncd_server_core::api::roots`（纯规则，无 I/O），应用侧 `vaultsyncd_server::roots`（HTTP + 平台探测 + 写库装配），契约在 `api/openapi.yaml`。
+状态：S044 实现。核心侧 `vaultsyncd_server_core::api::vaults`（纯规则，无 I/O），应用侧 `vaultsyncd_server::vaults`（HTTP + 平台探测 + 写库装配），契约在 `api/openapi.yaml`。
 
-### 核心规则（`vaultsyncd_server_core::api::roots`）
+### 核心规则（`vaultsyncd_server_core::api::vaults`）
 
 | 项 | 契约 |
 | --- | --- |
 | `AllowedBases::new(iter)` | 允许基目录必须非空、绝对、不含 `..`（`AllowedBaseError::{Empty,NotAbsolute,NotNormalized}`）；重复项去重。空集合是配置错误，不是“不限制” |
-| `AllowedBases::{contains,len,is_empty}` | `contains` 按**路径分量**判断“在基目录内或就是基目录”，不用字符串前缀（`/data/root` 不含 `/data/rootx`）；相对路径、含 `..` 的路径一律不在范围内（本层不折叠路径） |
-| `CandidateFacts` | 平台层探测结论：`Accepted{volume_identity,root_identity}` / `NotADirectory{reason,detail}` / `UnsupportedStorage{reason,detail}` / `Inconclusive{reason,detail}`；核心不重复做挂载判定 |
+| `AllowedBases::{contains,len,is_empty}` | `contains` 按**路径分量**判断“在基目录内或就是基目录”，不用字符串前缀（`/data/vault` 不含 `/data/vaultx`）；相对路径、含 `..` 的路径一律不在范围内（本层不折叠路径） |
+| `CandidateFacts` | 平台层探测结论：`Accepted{volume_identity,vault_identity}` / `NotADirectory{reason,detail}` / `UnsupportedStorage{reason,detail}` / `Inconclusive{reason,detail}`；核心不重复做挂载判定 |
 | `evaluate_registration(&bases, resolved, facts)` | 先判规范路径仍在允许基目录内，再按事实给出 `RegistrationVerdict::{Accepted,Rejected}` |
 | `RegistrationRejection` | `design_error_code()`：越界 `ACCESS_DENIED`，其余（不是目录、存储准入拒绝、扫描不完整）`UNSUPPORTED_STORAGE_BACKEND`（design §11.4 的配置阶段拒绝）；`http_status()` 403/422；`reason()` 进错误信封 `details.reason`（越界为 `outside_allowed_bases`，**不回显允许目录**）；`retryable()` 恒 false |
 
-### 端点与配置（`vaultsyncd_server::{roots,config,http,bootstrap}`）
+### 端点与配置（`vaultsyncd_server::{vaults,config,http,bootstrap}`）
 
 | 项 | 契约 |
 | --- | --- |
-| `POST /v1/admin/roots` | 需要有效会话（首发只有一位 owner，没有账号注册接口，因此“仅 owner 管理”＝必须有会话）。请求 `RootRegisterRequest{path}`；成功 200 `RootRegistered{root_id,health,pending_import}`，不回显路径。顺序：允许基目录（按请求文本，越界直接 403 且**不探测**，避免成为任意路径探针）→ `RootHandle::open` + `scan_root` + `admission::evaluate`（候选 vs 内部状态目录、已注册 Root、本进程挂载表）→ 按规范路径再判一次允许基目录 → `roots::insert_root` 写行与合成根条目 |
+| `POST /v1/admin/vaults` | 需要有效会话（首发只有一位 owner，没有账号注册接口，因此“仅 owner 管理”＝必须有会话）。请求 `VaultRegisterRequest{path}`；成功 200 `VaultRegistered{vault_id,health,pending_import}`，不回显路径。顺序：允许基目录（按请求文本，越界直接 403 且**不探测**，避免成为任意路径探针）→ `VaultHandle::open` + `scan_vault` + `admission::evaluate`（候选 vs 内部状态目录、已注册 Vault、本进程挂载表）→ 按规范路径再判一次允许基目录 → `vaults::insert_vault` 写行与合成根条目 |
 | 拒绝映射 | 403 `ACCESS_DENIED`（越界/未配置基目录）；422 `UNSUPPORTED_STORAGE_BACKEND`（FUSE/占位视图、非 btrfs、NOCOW、嵌套子卷/子挂载、内部目录重叠、已注册父子/别名重叠、扫描不完整、不是目录）。存储失败 503 `NEEDS_RECOVERY` |
-| `GET /v1/roots` | 需要有效会话。`RootList{roots:[RootSummary{root_id,health,name?}]}`，含身份、健康状态和末级目录显示名（S114 新增可选 `name`）（`healthy`/`unavailable`），**不含绝对路径**；按 `root_id` 排序（库内 `ORDER BY absolute_path` 只用于运维） |
-| `[roots] allowed_bases` | 配置项（`Option<AllowedBases>`）：缺省为 `None` ＝ 所有注册 403；出现非法项时启动前报 `config_invalid_value` / `roots.allowed_bases` |
-| `RootContext` | `vaultsyncd_server::roots::RootContext{auth, bases, state_dir, scan, ids}`；内部状态目录当前取 `[state] dir`（SQLite 与后续对象/历史/暂存/备份都将在其下），挂载探测在 `spawn_blocking` 里做（`statfs`/`statx`/`getdents64` 是阻塞调用） |
-| 身份字节 | `volume_identity` = btrfs FSID 的 UUID 文本字节；`root_file_identity` = `RootSnapshot::of_facts(facts).to_spec()` 字节。两者都是平台层编码，存储层只存不解释 |
+| `GET /v1/vaults` | 需要有效会话。`VaultList{vaults:[VaultSummary{vault_id,health,name?}]}`，含身份、健康状态和末级目录显示名（S114 新增可选 `name`）（`healthy`/`unavailable`），**不含绝对路径**；按 `vault_id` 排序（库内 `ORDER BY absolute_path` 只用于运维） |
+| `[vaults] allowed_bases` | 配置项（`Option<AllowedBases>`）：缺省为 `None` ＝ 所有注册 403；出现非法项时启动前报 `config_invalid_value` / `vaults.allowed_bases` |
+| `VaultContext` | `vaultsyncd_server::vaults::VaultContext{auth, bases, state_dir, scan, ids}`；内部状态目录当前取 `[state] dir`（SQLite 与后续对象/历史/暂存/备份都将在其下），挂载探测在 `spawn_blocking` 里做（`statfs`/`statx`/`getdents64` 是阻塞调用） |
+| 身份字节 | `volume_identity` = btrfs FSID 的 UUID 文本字节；`vault_file_identity` = `VaultSnapshot::of_facts(facts).to_spec()` 字节。两者都是平台层编码，存储层只存不解释 |
 
 ### 不变量与未接入
 
 - **注册不改写目录内容**：流程只做只读探测（句柄打开、目录遍历、挂载表读取）与 SQLite 写入；既有文件不导入、不清空、不改名（端点用例断言样本字节不变）。
-- **启动不以空库覆盖既有文件**：注册是显式管理动作；启动恢复（S037）只处理未完成意图，不扫描、不写入 Root 内容。
-- **两段允许基目录检查**：符号链接不能把 Root 带出允许范围；越界路径连“是否存在”都不回答。
+- **启动不以空库覆盖既有文件**：注册是显式管理动作；启动恢复（S037）只处理未完成意图，不扫描、不写入 Vault 内容。
+- **两段允许基目录检查**：符号链接不能把 Vault 带出允许范围；越界路径连“是否存在”都不回答。
 - **普通客户端看不到绝对路径**：清单与注册响应都不含服务器路径；日志里才有 `path=`（服务端日志属运维面）。
 
-未接入（后续卡）：`pending_import` 目前恒为 `true` 且**没有持久化列**——初始采集（S049）完成时如何把“待导入”推进为“已导入”需要 `roots` 追加迁移（design §7.2 的 roots 列不含该状态，SQLite 改 CHECK 需重建表，故留给采集卡一次做对）；Root 健康状态只在注册时写入，运行期挂载漂移复核（`RootHandle::verify` + `RootSnapshot::compare` → `ROOT_UNAVAILABLE` 暂停）尚未接到后台巡检；`epoch` 写 `ServerEpoch::ZERO`（进程还没有独立的 epoch 来源，`GET /v1/capabilities` 属后续卡）；多账号角色区分（admin 与普通成员）需要账号卡先加角色列。
+未接入（后续卡）：`pending_import` 目前恒为 `true` 且**没有持久化列**——初始采集（S049）完成时如何把“待导入”推进为“已导入”需要 `vaults` 追加迁移（design §7.2 的 vaults 列不含该状态，SQLite 改 CHECK 需重建表，故留给采集卡一次做对）；Vault 健康状态只在注册时写入，运行期挂载漂移复核（`VaultHandle::verify` + `VaultSnapshot::compare` → `VAULT_UNAVAILABLE` 暂停）尚未接到后台巡检；`epoch` 写 `ServerEpoch::ZERO`（进程还没有独立的 epoch 来源，`GET /v1/capabilities` 属后续卡）；多账号角色区分（admin 与普通成员）需要账号卡先加角色列。
 
 ## apps/server + server-admin — Linux 在线管理（S075）
 
 - **契约源**：`api/admin-socket.schema.json`，动态 JSON 文档，不引入手写 wire DTO 或改动 Windows IPC。平台边界在 `platform_linux_server::ipc`，服务内管理适配器在 `apps/server/src/admin.rs`；CLI 在线模块不打开 SQLite。离线 `init` 继续独占状态锁。
-- **地址与身份**：服务启动时创建 `<state.dir>/admin/socket`；状态目录必须归服务有效 UID 且不可被组/其他用户写入；`admin` 必须是真实目录、归相同 UID、权限恰为 `0700`，socket 为 `0600`。创建/绑定/chmod/清理锚定 `O_DIRECTORY|O_NOFOLLOW` 打开的目录 fd，避免父路径替换导致操作其它位置。服务读取请求前用 Linux `SO_PEERCRED` 核验相同有效 UID；不信任请求内 UID、login、环境变量或 bearer。CLI 同样核验父目录/socket 类型、权限、所有者、连接前后 inode/dev 与对端 UID。管理员用 `sudo -u <服务账号>`，不开放管理组或 root 特例。只接受唯一 active owner；零个/多个返回 409 `OWNER_REQUIRED`，不猜账号、不签发临时或长期会话。
+- **地址与身份**：服务启动时创建 `<state.dir>/admin/socket`；状态目录必须归服务有效 UID 且不可被组/其他用户写入；`admin` 必须是真实目录、归相同 UID、权限恰为 `0700`，socket 为 `0600`。创建/绑定/chmod/清理锚定 `O_DIRECTORY|O_NOFOLLOW` 打开的目录 fd，避免父路径替换导致操作其它位置。服务读取请求前用 Linux `SO_PEERCRED` 核验相同有效 UID；不信任请求内 UID、login、环境变量或 bearer。CLI 同样核验父目录/socket 类型、权限、所有者、连接前后 inode/dev 与对端 UID。管理员用 `sudo -u <服务账号>`，不开放管理组或 vault 特例。只接受唯一 active owner；零个/多个返回 409 `OWNER_REQUIRED`，不猜账号、不签发临时或长期会话。
 - **帧与生命周期**：每连接一请求一响应；4 字节大端无符号长度 + UTF-8 JSON，长度 `1..=1048576`，分配前拒绝零长/越界；截断失败。请求为 `["v1", "命令", ...]`，未知版本、命令、参数或非规范页号返回 400。最多 16 个在途连接，每请求 10 秒，CLI 总截止 15 秒。响应 `{"status":200,"result":{...}}` 或 `{"status":4xx/5xx,"error":{"code":...,"message":...}}`；失败不伪装空清单。服务停止前收尾请求，再关数据库；仅清理自身 socket inode。崩溃恢复由启动顺序保证：`bootstrap::prepare` 先取得 `<state>/server.lock` 独占锁，之后才调用 `AdminSocket::bind_after_state_lock`，因此持锁时已存在的 `admin/socket` 只能是上一个持锁进程被 SIGKILL 后留下的 inode，可自动回收。回收仍只在 `O_DIRECTORY|O_NOFOLLOW` 锚定的 admin 目录 fd 内、经 `lstat` 确认类型为 socket 且属主为服务有效 UID 时 unlink；普通文件、符号链接、他人属主一律明确失败且不删除。 服务端 bind 经 `/proc/self/fd/<dirfd>/socket`，本身不受 AF_UNIX `sun_path` 108 字节限制；CLI `--socket` 按字面路径连接，超过 107 字节时 `ipc::connect` 返回明确的 `InvalidInput`（提示缩短状态目录或 `--socket`），不退化成内核裸 `SUN_LEN`。第二个活着的服务端在抢锁阶段即返回 `state_locked`，到不了回收路径，不会覆盖其他实例的实时 socket；绝不删除数据库或恢复证据。
 
 | `vaultsyncd-admin <命令> --socket <绝对路径> [--json]` | 真实用例与输出 |
 | --- | --- |
-| `status` | 当前 `phase`、owner 的 `root_count`（十进制字符串）、启动 `recovery_detail` |
-| `roots [页号]` | 复用 Root 清单用例；`roots` + `next_page`，只给身份与数据库健康值，不给绝对路径；store 新增 `roots_of_owner_page`，按 ID 读取至多 101 条（100 + 下一页探针） |
-| `roots register <绝对路径>` | 与 HTTP **共用** `roots::register_for_owner`；允许基目录、btrfs/NOCOW/重叠/完整扫描准入与注册事务不变。仅 ready 时接受；原样返回 `RootRegistered` 或现有错误信封，不直接写在线 DB。超时/断线结果未知，先查询 Root 清单核对，不自动重放 |
-| `history <RootId> <EntryId> [页号]` | 服务内 scope 检查后只读真实 committed `versions`，包括软删除条目；版本 ID、字节数、seq、来源、被取代时间，不读取对象内容或账号材料 |
-| `trash <RootId> [页号]` | 真实 `trash_entries`；原相对路径、种类、版本（目录为 null）、删除与到期时间；未知/越权 Root 为 403，而非空成功。恢复写操作仍走既有 operation API |
-| `problems [页号]` | 持久 conflicts 映射、数据库非健康 Root，以及逐 Root 复用 `verify_root_mount` 的**实时**卷/目录身份、挂载与可读性故障；启动恢复说明另带 `recovery_detail`。探测不更新数据库健康值、不推导删除。内部探测路径/spec 在输出前剔除；不冒称有尚未持久化的逐文件观察器问题目录 |
+| `status` | 当前 `phase`、owner 的 `vault_count`（十进制字符串）、启动 `recovery_detail` |
+| `vaults [页号]` | 复用 Vault 清单用例；`vaults` + `next_page`，只给身份与数据库健康值，不给绝对路径；store 新增 `vaults_of_owner_page`，按 ID 读取至多 101 条（100 + 下一页探针） |
+| `vaults register <绝对路径>` | 与 HTTP **共用** `vaults::register_for_owner`；允许基目录、btrfs/NOCOW/重叠/完整扫描准入与注册事务不变。仅 ready 时接受；原样返回 `VaultRegistered` 或现有错误信封，不直接写在线 DB。超时/断线结果未知，先查询 Vault 清单核对，不自动重放 |
+| `history <VaultId> <EntryId> [页号]` | 服务内 scope 检查后只读真实 committed `versions`，包括软删除条目；版本 ID、字节数、seq、来源、被取代时间，不读取对象内容或账号材料 |
+| `trash <VaultId> [页号]` | 真实 `trash_entries`；原相对路径、种类、版本（目录为 null）、删除与到期时间；未知/越权 Vault 为 403，而非空成功。恢复写操作仍走既有 operation API |
+| `problems [页号]` | 持久 conflicts 映射、数据库非健康 Vault，以及逐 Vault 复用 `verify_vault_mount` 的**实时**卷/目录身份、挂载与可读性故障；启动恢复说明另带 `recovery_detail`。探测不更新数据库健康值、不推导删除。内部探测路径/spec 在输出前剔除；不冒称有尚未持久化的逐文件观察器问题目录 |
 
-分页命令固定最多 100 条，页号 `0..=1000000`，`next_page=null` 结束；都是实时偏移分页，不提供一致性快照承诺（需要一致清单用既有 snapshots API）。`problems` 的页按候选 Root/冲突计数，健康 Root 过滤后可能空页但仍有 `next_page`，调用方须跟随游标。JSON 不含密码、PHC、access/refresh 材料；成功退出 0，执行/协议失败 1，用法错误 2。远端仅 SSH 登录主机使用本 CLI，或既有认证 HTTPS；本 socket 不是 HTTP 反代入口、不接受 TCP/URL/`--insecure`。
+分页命令固定最多 100 条，页号 `0..=1000000`，`next_page=null` 结束；都是实时偏移分页，不提供一致性快照承诺（需要一致清单用既有 snapshots API）。`problems` 的页按候选 Vault/冲突计数，健康 Vault 过滤后可能空页但仍有 `next_page`，调用方须跟随游标。JSON 不含密码、PHC、access/refresh 材料；成功退出 0，执行/协议失败 1，用法错误 2。远端仅 SSH 登录主机使用本 CLI，或既有认证 HTTPS；本 socket 不是 HTTP 反代入口、不接受 TCP/URL/`--insecure`。
 
 实机回归：`nix develop --command bash -c 'cargo build --offline -p vaultsyncd-server -p vaultsyncd-admin && python3 tests/platform/linux/run-admin-socket.py'`，在源码外独立 btrfs run_id、隔离 loopback SSH daemon 验证；不改宿主 SSH 配置、Windows VM、其它进程或卷。证据与限制见 `agent/tasks/S075.md`。
 
@@ -1497,21 +1497,21 @@ python3 tools/context.py --help
 | 项 | 契约 |
 | --- | --- |
 | `history::version::VersionRestoreRequest` | `intent_id`（重试复用）、`op: OperationKey`、`digest: RequestDigest`（覆盖条目/基线/版本/路径）、`entry`、`version`（被恢复的旧版本）、`expected_epoch`、`expected_revision`、`target_path`、`staging_path`、`before: TargetBefore` |
-| `history::version::restore_version(gate, store, log, target, leases, at, &request)` | 顺序：请求形状 → Root 票据 → epoch → `OpId` 记录 → 版本事实（归属/保留期/种类/基线/名称）→ 内容租约 → 现场指纹 → `publish_put` → `RestoreStore::apply_version_restore` → 核对证据 → 解除租约。返回 `RestoredVersion{ result, lease }` |
-| `history::version::CommittedVersionRestore` | `op`、`root`、`entry`、`version`（**新**当前版本）、`restored_from`（旧版本）、`content`、`revision`、`seq`、`path`；`version != restored_from`、`revision > 基线` 是核心核对项（I12） |
+| `history::version::restore_version(gate, store, log, target, leases, at, &request)` | 顺序：请求形状 → Vault 票据 → epoch → `OpId` 记录 → 版本事实（归属/保留期/种类/基线/名称）→ 内容租约 → 现场指纹 → `publish_put` → `RestoreStore::apply_version_restore` → 核对证据 → 解除租约。返回 `RestoredVersion{ result, lease }` |
+| `history::version::CommittedVersionRestore` | `op`、`vault`、`entry`、`version`（**新**当前版本）、`restored_from`（旧版本）、`content`、`revision`、`seq`、`path`；`version != restored_from`、`revision > 基线` 是核心核对项（I12） |
 | `history::trash::TrashRestoreRequest` | `intent_seed`（意图种子，重试复用）、`op`、`digest`、`entry`（文件或子树根）、`expected_epoch`、`expected_revision`（清单里删除时的 revision）；**不含** `staging_path`（暂存名由服务端派生） |
 | `history::trash::restore_trash(gate, &mut TrashRestorePorts{store,log,target,namespace,leases}, at, &request)` | 顺序：epoch → `OpId` 记录 → 清单（存在/逐行未过期/种类自洽/revision 一致）→ 父目录是活目录 → 根的实际名称（占用则另名）→ `plan_subtree` 规划整棵子树（结构不一致在此停写，尚未登记 pending）→ 登记 pending → 按深度 `mkdir` 目录 → 逐文件“租约 + 意图 + 发布” → `apply_trash_restore`（全量 `entries` + 全量 `intents`）→ 核对证据 → 解除全部租约。返回 `RestoredTrash{ result, lease }`；单条目就是长度为 1 的子树 |
-| `trash::plan_subtree(&TrashSubtree, root_path)`（内部纯函数） | 清单 → `Vec<PlannedEntry{entry,parent,path,name,kind,content_version,revision}>`，按（路径深度, 路径）排序；根用调用方给的实际路径，后代=“根新路径 + 清单相对后缀”（另名只换前缀）；不一致→`store_contract_violation` |
+| `trash::plan_subtree(&TrashSubtree, vault_path)`（内部纯函数） | 清单 → `Vec<PlannedEntry{entry,parent,path,name,kind,content_version,revision}>`，按（路径深度, 路径）排序；根用调用方给的实际路径，后代=“根新路径 + 清单相对后缀”（另名只换前缀）；不一致→`store_contract_violation` |
 | `history::trash::intent_for(seed, index)` | 第 `index` 个被发布文件的意图身份：`index==0` 就是种子，其后把种子最后 8 字节当大端 u64 递增；溢出→`invalid_request`（不回绕） |
 | `history::trash::staging_name(intent)` | 服务端派生的暂存文件名 `.restore-<意图十六进制>`：稳定、可重入、操作内唯一、单个文件名 |
 | `trash::create_restored_directory`（内部） | 恢复目标目录必须 `inspect` 为 `Absent` 才能 `mkdir`；已存在→`subtree_changed`（不把清单内容合并进别人的目录） |
-| `history::trash::CommittedTrashRestore` | `op`、`root`、`entry`（身份不变）、`path`、`name`（可能另名）、`renamed`、`revision`、`seq`、`entries`（本批恢复的条目数，含根与后代） |
+| `history::trash::CommittedTrashRestore` | `op`、`vault`、`entry`（身份不变）、`path`、`name`（可能另名）、`renamed`、`revision`、`seq`、`entries`（本批恢复的条目数，含根与后代） |
 | `history::trash::alternate_name` | `名称（恢复）.ext`、`名称（恢复 2）.ext`…扩展名保留；`.gitignore` 这类名称整段算原干；上限 `MAX_RESTORE_NAME_ATTEMPTS = 32` |
 | `history::RestoreFailure` / `RestoreFailureReason` | 稳定码 + `error_code()`（design §15.4）+ `intent_id`/`phase`（意图证据，发布阶段失败也带）+ `lease_expires_at`（遗留租约）；`is_committed()` 恒为 `false` |
 | `history::release_all` / `history::release_after_failure` | 整批租约的清理：成功路径报告最晚未解除的保护时刻（`LeaseDisposition::Expires{at}`），失败路径只记 `lease_expires_at`、不改判主因 |
-| `ports::content_lease::ContentLeasePort` | `acquire(&ContentLeaseRequest{root,digest,purpose,expires_at}) -> ContentLease{id,purpose,expires_at}`、`release(&lease)`；`purpose` 与 `object_leases.purpose`（`download`/`commit`）同一套取值；只保护已登记对象 |
-| `ports::restore_store::RestoreStore` | `root_facts`、`operation`、`begin_restore`、`version_facts -> VersionFacts{entry,content,retained_until}`、`apply_version_restore(&VersionRestoreWrite) -> VersionRestoreRecord` |
-| `ports::restore_store::TrashRestoreStore` | `root_facts`、`operation`、`begin_restore`、`trash_subtree -> Option<TrashSubtree>`、`parent_kind`、`name_occupant`（只算活跃条目）、`content_facts(root, version)`、`apply_trash_restore(&TrashRestoreWrite) -> TrashRestoreRecord` |
+| `ports::content_lease::ContentLeasePort` | `acquire(&ContentLeaseRequest{vault,digest,purpose,expires_at}) -> ContentLease{id,purpose,expires_at}`、`release(&lease)`；`purpose` 与 `object_leases.purpose`（`download`/`commit`）同一套取值；只保护已登记对象 |
+| `ports::restore_store::RestoreStore` | `vault_facts`、`operation`、`begin_restore`、`version_facts -> VersionFacts{entry,content,retained_until}`、`apply_version_restore(&VersionRestoreWrite) -> VersionRestoreRecord` |
+| `ports::restore_store::TrashRestoreStore` | `vault_facts`、`operation`、`begin_restore`、`trash_subtree -> Option<TrashSubtree>`、`parent_kind`、`name_occupant`（只算活跃条目）、`content_facts(vault, version)`、`apply_trash_restore(&TrashRestoreWrite) -> TrashRestoreRecord` |
 | 幂等 | `RestoreBegin::{Started, Recorded}`；同一 `OpId` 同摘要 → 重放首次结果（不再建租约、不再写事务），不同摘要 → `op_id_reused`，登记未收尾 → `operation_pending`（wire `NEEDS_RECOVERY`） |
 
 ### 不变量与未接入
@@ -1554,7 +1554,7 @@ python3 tools/context.py --help
 | `api::uploads::plan_begin(policy, &BeginRequest)` | 总大小/块大小超限分别报 `TotalTooLarge`/`ChunkTooLarge`；`chunk_size = 0` 取策略默认值；返回 `BeginPlan{chunk_size, geometry}` |
 | `api::uploads::receive_part(store, staging, upload, index, declared, bytes)` | 读会话 → 状态必须 `open` → 几何给期望长度 → 摘要核对 → 已收块比较 → `PartStaging::store_part`（返回即已 fsync）→ `record_part`；返回 `PartReceipt{write,index,length,hash,phase}` |
 | `api::uploads::UploadFailure` | `TotalTooLarge`/`ChunkTooLarge`/`IndexOutOfRange`/`LengthMismatch`/`DigestMismatch`/`PartConflict`/`PartsClosed`/`UnknownUpload`/`OutOfScope`/`MalformedSession`/`Storage{detail}`（满盘为 `detail = "no_space"`） |
-| `ports::upload_session::UploadSessionStore` | `load`/`existing_part`/`record_part`：全部限定 owner scope，`load` 对“不存在/别人的 Root/别人的上传”统一 `UnknownUpload` |
+| `ports::upload_session::UploadSessionStore` | `load`/`existing_part`/`record_part`：全部限定 owner scope，`load` 对“不存在/别人的 Vault/别人的上传”统一 `UnknownUpload` |
 | `ports::upload_session::PartStaging` | `store_part(upload,index,bytes) -> String`（返回前必须写全并 fsync；失败不得留下可登记路径） |
 
 ## crates/server-core — 上传 finalize 与固定版本下载（S046）
@@ -1563,15 +1563,15 @@ python3 tools/context.py --help
 
 | 接口 | 契约 |
 | --- | --- |
-| `api::content::finalize_upload(store, publisher, objects, upload, staging_name, now)` | 读会话 → 读块行 → `AssembledParts::verify`（块数/索引连续/长度等于几何）→ `open` 时 `mark_complete` → `publish_parts` → 核对总长度与总 SHA-256 → `record_published` → `mark_finalized`；返回 `FinalizedContent{upload, root, content: ContentReference{digest,size,storage_path}, part_count, reuse, replayed}`。**不写 entries/versions/changes/operations** |
+| `api::content::finalize_upload(store, publisher, objects, upload, staging_name, now)` | 读会话 → 读块行 → `AssembledParts::verify`（块数/索引连续/长度等于几何）→ `open` 时 `mark_complete` → `publish_parts` → 核对总长度与总 SHA-256 → `record_published` → `mark_finalized`；返回 `FinalizedContent{upload, vault, content: ContentReference{digest,size,storage_path}, part_count, reuse, replayed}`。**不写 entries/versions/changes/operations** |
 | `api::content::ContentFailure` | `Upload(UploadFailure)`/`IncompleteUpload{expected,present}`/`ContentMismatch{expected,actual,expected_size,actual_size}`（并使会话转 `aborted`）/`Publish(PublishFailure)`/`VersionGone`/`EntryUnavailable`/`RangeNotSatisfiable{size,requested}`/`InvalidRange{requested,detail}`/`Read{detail,no_space}`/`Lease(ContentLeaseError)`/`Storage{detail}` |
 | `api::content::parse_range(header, size) -> Result<ByteSlice, _>` | `bytes=start-end`/`bytes=start-`/`bytes=-suffix`；终点超出收敛到末字节、后缀长于对象等于整份；多区间/非 `bytes=`/反向/非规范十进制 → `InvalidRange`；起点越界、`-0`、空对象 → `RangeNotSatisfiable`。`ByteSlice::content_range(size)` 给 `bytes start-end/total` |
-| `api::content::open_download(store, leases, root, &DownloadRequest{entry,version,range}, lease_expires_at)` | 解析 `(root, entry, version)` 固定内容地址 → 收敛 Range → `acquire(Download)` 租约；返回 `DownloadHandle{content,slice,lease}`。版本不存在/已清理 → `VersionGone`，事实与本请求不符 → `EntryUnavailable` |
+| `api::content::open_download(store, leases, vault, &DownloadRequest{entry,version,range}, lease_expires_at)` | 解析 `(vault, entry, version)` 固定内容地址 → 收敛 Range → `acquire(Download)` 租约；返回 `DownloadHandle{content,slice,lease}`。版本不存在/已清理 → `VersionGone`，事实与本请求不符 → `EntryUnavailable` |
 | `api::content::read_download(port, layout, &handle)` | `read_object_range` 读 `slice`；短读 → `ContentMismatch`；覆盖整个对象时核对整份 SHA-256（部分切片由客户端按 design §13.2 校整文件） |
 | `api::content::finish_download(leases, handle)` | 解除下载租约；解除失败只报告，不改判已读出的字节 |
 | `ports::content_publish::ContentPublisher::publish_parts(upload, staging_name, parts)` | 按索引升序拼装进对象区暂存副本、边写边算摘要、不覆盖发布；返回 `PublishedContent{digest,size,storage_path,reuse}`（实测事实）。`PublishFailure` 含 `PartUnreadable`/`PartLength`/`PartMissing`/`Storage{stage,no_space,detail}`/`Verification`/`ObjectConflict`/`StorageLayer` |
-| `ports::content_publish::ContentObjectStore::record_published(root, &content, verified_at)` | 登记 `objects` 行；同一 `(root,hash)` 相同登记幂等，不同长度/路径 → `ObjectConflict` |
-| `ports::version_content::VersionContentStore::version_content(root, entry, version)` | 返回 `VersionContent{root,entry,version,digest,size}`；`OutOfScope`/`EntryNotFound`/`NotAFile`/`VersionGone`/`ObjectUnavailable`，owner scope 由适配器保证（I15） |
+| `ports::content_publish::ContentObjectStore::record_published(vault, &content, verified_at)` | 登记 `objects` 行；同一 `(vault,hash)` 相同登记幂等，不同长度/路径 → `ObjectConflict` |
+| `ports::version_content::VersionContentStore::version_content(vault, entry, version)` | 返回 `VersionContent{vault,entry,version,digest,size}`；`OutOfScope`/`EntryNotFound`/`NotAFile`/`VersionGone`/`ObjectUnavailable`，owner scope 由适配器保证（I15） |
 | `ports::upload_session::UploadSessionStore` 增量 | `parts(upload)`（索引升序）、`mark_complete`（适配器须先确认无缺失块）、`mark_finalized`、`abort` |
 | `ports::object_store::ObjectBlobPort::read_object_range(object, offset, length)` | 返回 `StoredSlice{data,bytes}`；短读是错误，不补零；`offset+length` 越界为错误 |
 
@@ -1587,12 +1587,12 @@ python3 tools/context.py --help
 
 | 端点 | 语义 |
 | --- | --- |
-| `POST /v1/roots/{root}/uploads` | 建会话：`principal_from` → `authorize_root` → `plan_begin` → `uploads::begin_upload`（单次写事务）；201 返回 `UploadSession`；会话绑定签发它的登录会话，到期 24 小时 |
-| `GET /v1/roots/{root}/uploads/{upload}` | 会话状态 + **服务端真实已收块** + 缺失区间；Root 不符/不属于该登录会话 → 404 `UNSUPPORTED_ENTRY`（不泄露存在性） |
-| `PUT /v1/roots/{root}/uploads/{upload}/parts/{index}` | 块体 `application/octet-stream`、块摘要头 `x-part-sha256`（64 位小写十六进制，缺失或不合法 → 400 `INVALID_REQUEST`）；载荷上限 `max_chunk_size + 1`，由上传路由上的 `DefaultBodyLimit` 按策略设置（默认 16 MiB + 1，覆盖 Axum 自带的 2 MiB——否则默认块大小 4 MiB 无法上传）；成功 200 `UploadPartAck{already_present}` |
+| `POST /v1/vaults/{vault}/uploads` | 建会话：`principal_from` → `authorize_vault` → `plan_begin` → `uploads::begin_upload`（单次写事务）；201 返回 `UploadSession`；会话绑定签发它的登录会话，到期 24 小时 |
+| `GET /v1/vaults/{vault}/uploads/{upload}` | 会话状态 + **服务端真实已收块** + 缺失区间；Vault 不符/不属于该登录会话 → 404 `UNSUPPORTED_ENTRY`（不泄露存在性） |
+| `PUT /v1/vaults/{vault}/uploads/{upload}/parts/{index}` | 块体 `application/octet-stream`、块摘要头 `x-part-sha256`（64 位小写十六进制，缺失或不合法 → 400 `INVALID_REQUEST`）；载荷上限 `max_chunk_size + 1`，由上传路由上的 `DefaultBodyLimit` 按策略设置（默认 16 MiB + 1，覆盖 Axum 自带的 2 MiB——否则默认块大小 4 MiB 无法上传）；成功 200 `UploadPartAck{already_present}` |
 
 失败映射（S045-b 的 HTTP 验收用例 `apps/server/tests/uploads.rs` 逐条实测）：401 `AUTH_EXPIRED`、
-403 `ACCESS_DENIED`、404 `UNSUPPORTED_ENTRY`（会话不存在、Root 不符或**不属于该登录会话**）、
+403 `ACCESS_DENIED`、404 `UNSUPPORTED_ENTRY`（会话不存在、Vault 不符或**不属于该登录会话**）、
 400 `INVALID_REQUEST`（形状/越界索引/长度不符/缺或错的 `x-part-sha256`/超载荷）、
 409 `PART_CONFLICT`（同索引不同字节或会话已不接收块）、422 `HASH_MISMATCH`、
 413（请求体超过策略上限，由路由层在处理器之前返回，无错误信封）、503 `NEEDS_RECOVERY`、
@@ -1605,16 +1605,16 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 
 ## apps/server — 内容端点（S046-b）
 
-`POST /v1/roots/{root}/uploads/{upload}/finalize`（JSON）与
-`GET /v1/roots/{root}/entries/{entry}/versions/{version}/content`（二进制/区间）都先
-`auth::principal_from` 再 `auth::authorize_root`，然后才动存储。
+`POST /v1/vaults/{vault}/uploads/{upload}/finalize`（JSON）与
+`GET /v1/vaults/{vault}/entries/{entry}/versions/{version}/content`（二进制/区间）都先
+`auth::principal_from` 再 `auth::authorize_vault`，然后才动存储。
 
 | 端点 | 语义与实测返回码 |
 | --- | --- |
-| `POST …/uploads/{upload}/finalize` | 200 `FinalizedContent{upload_id, root_id, hash, size, storage_path, part_count, reuse, replayed}`（可提交内容引用，**不改条目 head**）；块未收齐 400 `INVALID_REQUEST`（不改会话状态）；拼装内容与声明的总长度/总哈希不符 422 `HASH_MISMATCH`（会话转 `aborted`、不登记对象）；会话已放弃 409 `PART_CONFLICT`；重复调用 200 且 `replayed=true`（不重新发布）；缺凭据 401 `AUTH_EXPIRED`、跨 Root 403 `ACCESS_DENIED`、会话不存在/不属于该登录会话 404 `UNSUPPORTED_ENTRY`、满盘 507 `INSUFFICIENT_STORAGE`、其余存储失败 503 `NEEDS_RECOVERY` |
-| `GET …/entries/{entry}/versions/{version}/content` | 整份 200 `application/octet-stream` + `Content-Length` + `x-content-sha256`（该版本的整份内容地址）+ `Accept-Ranges: bytes`；带 `Range: bytes=start-end`/`bytes=start-`/`bytes=-suffix` 时 206 + `Content-Range: bytes start-end/total`；区间语法非法/越界/多区间 400 `INVALID_REQUEST`；版本不存在、已清理、不属于该条目或该 Root 410 `VERSION_GONE`（不回退成当前内容）；缺凭据 401、跨 Root 403、读取或租约失败 503 |
+| `POST …/uploads/{upload}/finalize` | 200 `FinalizedContent{upload_id, vault_id, hash, size, storage_path, part_count, reuse, replayed}`（可提交内容引用，**不改条目 head**）；块未收齐 400 `INVALID_REQUEST`（不改会话状态）；拼装内容与声明的总长度/总哈希不符 422 `HASH_MISMATCH`（会话转 `aborted`、不登记对象）；会话已放弃 409 `PART_CONFLICT`；重复调用 200 且 `replayed=true`（不重新发布）；缺凭据 401 `AUTH_EXPIRED`、跨 Vault 403 `ACCESS_DENIED`、会话不存在/不属于该登录会话 404 `UNSUPPORTED_ENTRY`、满盘 507 `INSUFFICIENT_STORAGE`、其余存储失败 503 `NEEDS_RECOVERY` |
+| `GET …/entries/{entry}/versions/{version}/content` | 整份 200 `application/octet-stream` + `Content-Length` + `x-content-sha256`（该版本的整份内容地址）+ `Accept-Ranges: bytes`；带 `Range: bytes=start-end`/`bytes=start-`/`bytes=-suffix` 时 206 + `Content-Range: bytes start-end/total`；区间语法非法/越界/多区间 400 `INVALID_REQUEST`；版本不存在、已清理、不属于该条目或该 Vault 410 `VERSION_GONE`（不回退成当前内容）；缺凭据 401、跨 Vault 403、读取或租约失败 503 |
 
-对象区布局（S136/ADR-020）：`state_dir/objects/roots/<RootId>/objects/<前 2 位十六进制>/<64 位十六进制>`（新发布）或历史 `state_dir/objects/objects/<前 2 位十六进制>/<64 位十六进制>`（仅已登记旧对象）与
+对象区布局（S136/ADR-020）：`state_dir/objects/roots/<VaultId>/objects/<前 2 位十六进制>/<64 位十六进制>`（新发布）或历史 `state_dir/objects/objects/<前 2 位十六进制>/<64 位十六进制>`（仅已登记旧对象）与
 `state_dir/objects/staging/<名字>`（未发布）；块暂存仍是 `state_dir/uploads/<upload_id>/<index>`。
 下载读取前建立 `object_leases` 的 `download` 租约（`ttl 900 s`），读完解除；解除失败只记录日志，
 不改判已读出的字节。生成侧：`MediaType.schema` 可选、成功响应折叠成 `SuccessBody::{Json,Bytes}`
@@ -1631,8 +1631,8 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
   `validate()` 按命令固定前提（put 要 entry+base_revision+upload；create 要 parent+name 且
   `expected_absent=true`、不得自带 entry；move 要 entry+base_revision+目标 parent/name；delete 要
   entry+base_revision；restore 要 entry+base_revision），混用两套命令语义一律 `INVALID_REQUEST`。
-- **`admit(RootFacts, &OperationRequest)`** 的固定顺序：Root 可写性 → epoch → 命令形状。因此不可写
-  Root 先得到 503 `ROOT_UNAVAILABLE`，旧 epoch 得到 410 `EPOCH_CHANGED`，都不会先去看操作日志。
+- **`admit(VaultFacts, &OperationRequest)`** 的固定顺序：Vault 可写性 → epoch → 命令形状。因此不可写
+  Vault 先得到 503 `VAULT_UNAVAILABLE`，旧 epoch 得到 410 `EPOCH_CHANGED`，都不会先去看操作日志。
 - **`digest_fields()`** 只给语义字段（种类/身份/基线/上传/本地代际/冲突策略/命名空间目标）；
   `op_id`、`device_id`（幂等键本身）与 `server_epoch`（客户端事实基础）**不参与**摘要，避免“重试时
   带来新 epoch”被误判成 `OP_ID_REUSED`。摘要编码仍由 `server-store::operations::request_digest`
@@ -1641,28 +1641,28 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
   `OP_ID_REUSED`。**`RecordedOutcome::{Committed, Pending, Rejected}`** 的 `http_status()`：200/202/200，
   `is_synced()` 只对 committed 为真（I01）。
 - **`OperationFailure`** 自带 `design_error_code()`/`http_status()`/`is_retryable()`：
-  `ROOT_UNAVAILABLE` 503(可重试)、`EPOCH_CHANGED` 410、`OP_ID_REUSED`/`BASE_MISMATCH`/`SUBTREE_CHANGED`/
+  `VAULT_UNAVAILABLE` 503(可重试)、`EPOCH_CHANGED` 410、`OP_ID_REUSED`/`BASE_MISMATCH`/`SUBTREE_CHANGED`/
   `RECONCILE_REQUIRED` 409、`INVALID_REQUEST` 400、`INVALID_NAME`/`UNSUPPORTED_ENTRY` 422、
   `UNKNOWN_OPERATION` 404、`NEEDS_RECOVERY` 503、`INSUFFICIENT_STORAGE` 507。
 
 ### 端点（`apps/server::operations`，契约 `api/openapi.yaml`）
 
-`POST /v1/roots/{root}/operations`（JSON）与 `GET /v1/roots/{root}/operations/{op}` 都先
-`auth::principal_from` 再 `auth::authorize_root`。幂等键是 `(root, device_id, op_id)`，请求里的
+`POST /v1/vaults/{vault}/operations`（JSON）与 `GET /v1/vaults/{vault}/operations/{op}` 都先
+`auth::principal_from` 再 `auth::authorize_vault`。幂等键是 `(vault, device_id, op_id)`，请求里的
 `device_id` 由客户端安装实例自报（首发没有设备注册表，不作为授权依据）。结果查询只带 OpId：
-记录里的设备由库给出（`server-store::operations::operation_of_root_in_scope`，同 Root 同 OpId 多行
+记录里的设备由库给出（`server-store::operations::operation_of_vault_in_scope`，同 Vault 同 OpId 多行
 视为坏数据）。
 
 | 情况 | 实际返回 |
 | --- | --- |
 | 首次见到该键（**本版**） | 503 `SERVICE_NOT_READY`（`retryable=true`），**不写** `operations` 行、不追加事件批次 |
-| 同键同摘要、记录 committed | 200 `OperationResult{state=committed, root_seq, revision, entry_id, version_id, echo_local_generation, replayed=true}` |
-| 同键同摘要、记录 pending | 202 `OperationResult{state=pending, replayed=true}`，**不带** `revision`/`root_seq`/`version_id`/`entry_id` |
+| 同键同摘要、记录 committed | 200 `OperationResult{state=committed, vault_seq, revision, entry_id, version_id, echo_local_generation, replayed=true}` |
+| 同键同摘要、记录 pending | 202 `OperationResult{state=pending, replayed=true}`，**不带** `revision`/`vault_seq`/`version_id`/`entry_id` |
 | 同键不同摘要 | 409 `OP_ID_REUSED`（`retryable=false`） |
-| `server_epoch` 不是 Root 当前 epoch | 410 `EPOCH_CHANGED` |
-| Root health 不是 healthy | 503 `ROOT_UNAVAILABLE`（可重试） |
+| `server_epoch` 不是 Vault 当前 epoch | 410 `EPOCH_CHANGED` |
+| Vault health 不是 healthy | 503 `VAULT_UNAVAILABLE`（可重试） |
 | 记录 rejected | 409 + 记录里的 `error_code`/`error_message`（终态结论稳定） |
-| 查询不存在/不属于该 Root/不属于该会话 | 404 `UNSUPPORTED_ENTRY`（三者不区分） |
+| 查询不存在/不属于该 Vault/不属于该会话 | 404 `UNSUPPORTED_ENTRY`（三者不区分） |
 | 形状/身份文本不合法 | 400 `INVALID_REQUEST`；名称不可用 422 `INVALID_NAME` |
 
 `SERVICE_NOT_READY` 是本卡新加的 wire 错误码（design §15.4 闭集里没有“执行器未装配”，`NEEDS_RECOVERY`
@@ -1680,29 +1680,29 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 
 ### 核心（`vaultsyncd_server_core::observer`）
 
-- **端口**：`ports::work_tree::WorkTreePort`（`list_dir`/`observe`，指纹 `FileStamp` = 设备/inode/链接数/大小 + btime/mtime/ctime；读不到是 `WorkTreeError::{Unreadable,RootUnavailable,InvalidPath}`，确认并发消失才是 `Gone`/`Absent`，**不得**把故障报告成不存在）；`ports::external_store::ExternalAdoptStore`（`lookup_path` + 一个事务 `apply_external`：登记对象/写版本/推进 revision/追加 `changes` 批次；`Update` 用比较并写，**不触碰工作目录**）。候选与对象沿用 `ObjectBlobPort`，新增 `objects::capture_observed_object`（期望内容取自候选读回值，且要求候选长度等于建副本前的源长度）。
-- **`scan::scan_tree(port, ScanLimits, ScanCursor)`**：BFS、目录内按名称字节序；预算按目录项计、可在目录中途停下并精确续扫。结论 `ScanCompletion::{Complete, Inconclusive{resume, reasons}}`：预算耗尽、目录/项读不了、Root 不可用都是 `Inconclusive`，已枚举部分**不是**完整快照；枚举不产生任何删除结论。符号链接/特殊文件/非 UTF-8 名进入 `skipped`，不静默消失。
+- **端口**：`ports::work_tree::WorkTreePort`（`list_dir`/`observe`，指纹 `FileStamp` = 设备/inode/链接数/大小 + btime/mtime/ctime；读不到是 `WorkTreeError::{Unreadable,VaultUnavailable,InvalidPath}`，确认并发消失才是 `Gone`/`Absent`，**不得**把故障报告成不存在）；`ports::external_store::ExternalAdoptStore`（`lookup_path` + 一个事务 `apply_external`：登记对象/写版本/推进 revision/追加 `changes` 批次；`Update` 用比较并写，**不触碰工作目录**）。候选与对象沿用 `ObjectBlobPort`，新增 `objects::capture_observed_object`（期望内容取自候选读回值，且要求候选长度等于建副本前的源长度）。
+- **`scan::scan_tree(port, ScanLimits, ScanCursor)`**：BFS、目录内按名称字节序；预算按目录项计、可在目录中途停下并精确续扫。结论 `ScanCompletion::{Complete, Inconclusive{resume, reasons}}`：预算耗尽、目录/项读不了、Vault 不可用都是 `Inconclusive`，已枚举部分**不是**完整快照；枚举不产生任何删除结论。符号链接/特殊文件/非 UTF-8 名进入 `skipped`，不静默消失。
 - **`scan::StabilityTracker`**：窗口默认 1000 ms（设计 500—1000 ms）；首次看到总等待完整窗口；指纹任一字段变化（含只有 ctime 变化的保留 mtime 改写）重新计时。只降低读到中间态的概率，不证明写入结束（C33）。
 - **`capture::capture_external`**：稳定指纹 → 观察前核对 → 私有候选（reflink/校验复制）+ 读回校验 → 观察后要求与观察前指纹**完全相同** → `ExternalProposal`。变化 → `Requeue(RequeueReason)`；路径消失/非普通文件单列，不是删除。
-- **`capture::adopt_external(gate, store, work, proposal, at)`**：与 put 共用 `RootCommitGate`（忙则 `RootBusy`，不阻塞）→ 采纳前再次核对指纹 → 路径查询（库里内容相同则 `UnchangedContent`，不产生版本；目录冲突 `Blocked`）→ `apply_external` → 核对证据（摘要/长度/条目/revision 推进，不符是 `StoreContract`，不当成已采纳）。
+- **`capture::adopt_external(gate, store, work, proposal, at)`**：与 put 共用 `VaultCommitGate`（忙则 `VaultBusy`，不阻塞）→ 采纳前再次核对指纹 → 路径查询（库里内容相同则 `UnchangedContent`，不产生版本；目录冲突 `Blocked`）→ `apply_external` → 核对证据（摘要/长度/条目/revision 推进，不符是 `StoreContract`，不当成已采纳）。
 - **`import::ExternalObserver::run_pass`**：一轮 = 续扫（有游标则继续，否则从起点）→ 对仍待处理但本轮未扫到的文件逐个复查 → 稳定判断 → 每轮最多 `max_captures` 个采集+采纳。`history_protected(path)` 仅在采纳成功（或库里已有相同内容）后为真；`initial_import_complete` 需要“一轮完整扫描 + 当时无待处理”，一旦为真保持。账本只是进程内报告视图，重启后靠库查询避免重复版本。
 - **采纳后的现场**：事务提交后现场仍可能再被改写，不阻止也不宣称阻止；新内容下一轮成为下一版本。放弃采纳时已发布的候选对象只是无引用的内容地址文件，由对象 GC 回收。
 
 ### Linux 适配（`vaultsyncd_server::observer`，`vaultsyncd_platform_linux_server::files`）
 
-- `LinuxWorkTree`（`RootHandle` 上的受限枚举/`identity_at`；每列一个目录先 `RootHandle::verify`，漂移 = `RootUnavailable`）与 `LinuxObjectPort`（源经 Root 句柄读取，候选建在对象区 staging，复制期间源变化映射为 `SourceUnreadable`）。
-- 平台修复：`RestrictedDir::list_entries` 现在先 `lseek` 倒回目录句柄起点；此前重复列举同一句柄（Root 句柄每轮扫描都列一次）第二次起得到空列表。新增 `RootHandle::identity_at`。
+- `LinuxWorkTree`（`VaultHandle` 上的受限枚举/`identity_at`；每列一个目录先 `VaultHandle::verify`，漂移 = `VaultUnavailable`）与 `LinuxObjectPort`（源经 Vault 句柄读取，候选建在对象区 staging，复制期间源变化映射为 `SourceUnreadable`）。
+- 平台修复：`RestrictedDir::list_entries` 现在先 `lseek` 倒回目录句柄起点；此前重复列举同一句柄（Vault 句柄每轮扫描都列一次）第二次起得到空列表。新增 `VaultHandle::identity_at`。
 
 ### 未接入（后续卡）
 
-- `ExternalAdoptStore`/`PutCommitStore` 的真实 SQLx 适配（含补建父目录条目、`changes` 事件内容）；`roots.pending_import` 仍是注册时的常量，初始导入完成标志尚未落库（需要 `roots` 迁移，与存储适配一起做）；
-- 后台调度（周期轮次、`apps/server` 里按 Root 启动观察器）已由 S050 提供可驱动的 `FollowDriver`，进程入口按 Root 起后台任务仍未做；已采纳文件被外部删除/改名的事件管线。
+- `ExternalAdoptStore`/`PutCommitStore` 的真实 SQLx 适配（含补建父目录条目、`changes` 事件内容）；`vaults.pending_import` 仍是注册时的常量，初始导入完成标志尚未落库（需要 `vaults` 迁移，与存储适配一起做）；
+- 后台调度（周期轮次、`apps/server` 里按 Vault 启动观察器）已由 S050 提供可驱动的 `FollowDriver`，进程入口按 Vault 起后台任务仍未做；已采纳文件被外部删除/改名的事件管线。
 
 ## crates/platform-linux-server::watcher + server-core::observer — inotify 与溢出补扫（S050）
 
 ### 平台（`vaultsyncd_platform_linux_server::watcher`）
 
-- **`DirWatcher::open(&RootHandle, WatchConfig) -> (DirWatcher, Vec<WatchSignal>)`**：递归登记每个目录一个 inotify watch（先登记后列目录，不留缺口）；监视对象是已打开的目录句柄（`/proc/self/fd/N`，`RootHandle::open_dir`/`proc_fd_path`），不按路径字符串重新解析。`poll(&RootHandle, timeout)`/`drain(&RootHandle)` 读取事件并整理成 `WatchSignal`：
+- **`DirWatcher::open(&VaultHandle, WatchConfig) -> (DirWatcher, Vec<WatchSignal>)`**：递归登记每个目录一个 inotify watch（先登记后列目录，不留缺口）；监视对象是已打开的目录句柄（`/proc/self/fd/N`，`VaultHandle::open_dir`/`proc_fd_path`），不按路径字符串重新解析。`poll(&VaultHandle, timeout)`/`drain(&VaultHandle)` 读取事件并整理成 `WatchSignal`：
   - `Changed{path}`：该路径（文件或目录）上发生过事件，只是“值得再看一眼”的线索，**不**表示删除/写完；同一次读取内同路径合并，一次读取最多 `max_signals_per_poll` 条；
   - `Subtree{path}`：新出现（或权限恢复后第一次可监视）的目录，监视已登记，必须补扫整个子树；
   - `Overflow`：内核队列溢出（`IN_Q_OVERFLOW`），已丢弃整张监视表并重建；消费者必须立即全量补扫；
@@ -1712,34 +1712,34 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 ### 核心（`vaultsyncd_server_core::observer`）
 
 - **`hints::{WatchHint, HintQueue, HintLimits}`**：线索（`Changed/Subtree/Overflow/Gap`）的有界去抖队列。同路径合并，静默满 `debounce_ms` 才由 `take_due(now_ms)` 交出；子树线索吸收其内的路径线索；容量满则整体退化为一次全量补扫（`FullScanCause::HintQueueFull`），不丢线索也不无限增长；**`Overflow` 不经去抖，下一次取用立即要求全量补扫**并丢弃已排队的路径线索。
-- **`intents::{OwnWriteIntent, OwnWriteLedger}`**（经 `ExternalObserver::expect_own_write/release_own_write`）：本服务写入 Root 之前登记（设备+inode+内容长度/摘要）。观察到该路径文件时 **inode 相同且内容摘要相同才忽略**（`FileState::OwnWrite`，不采纳）；inode 不同 = 不是它（意图保留，服务发布可能尚未发生）；同 inode 但内容不同 = 外部原地修改（意图作废并正常采纳）。无任何时间窗口；账本有容量上限，满了拒绝登记（`IntentError::LedgerFull`，调用方暂缓该写入），不淘汰旧意图。服务提交完成/放弃后调用方必须 `release_own_write`。
+- **`intents::{OwnWriteIntent, OwnWriteLedger}`**（经 `ExternalObserver::expect_own_write/release_own_write`）：本服务写入 Vault 之前登记（设备+inode+内容长度/摘要）。观察到该路径文件时 **inode 相同且内容摘要相同才忽略**（`FileState::OwnWrite`，不采纳）；inode 不同 = 不是它（意图保留，服务发布可能尚未发生）；同 inode 但内容不同 = 外部原地修改（意图作废并正常采纳）。无任何时间窗口；账本有容量上限，满了拒绝登记（`IntentError::LedgerFull`，调用方暂缓该写入），不淘汰旧意图。服务提交完成/放弃后调用方必须 `release_own_write`。
 - **`ExternalObserver::run_hinted_pass(ports, paths, subtrees, limits, clock)`**：只观察线索指向的路径/子树，并推进所有待处理文件（窗口要靠重新观察才推进）；观察到不存在只记入 `HintedReport.absent`，**不产生删除结论**；读不了进 `unreadable` 保持原状；子树扫描被预算截断置 `subtree_truncated`。与全量扫描共用稳定窗口、采集与采纳，不另开写入通道。
 - **`ExternalObserver::run_content_review(ports, batch, limits, clock)`**：对已采纳路径按路径顺序分批重读内容（采纳基线现含内容摘要），与基线摘要比对；不同 = 指纹没发现的改写，撤下基线按首次看到重新等待窗口（`ReviewReport.content_changed`）；读不了/不存在不动基线。`wrapped` 表示一圈走完。
-- **`follow::{FollowDriver, FollowConfig}`**：`push_hint` 记线索，`step(ports, limits, clock)` 一步 = 全量补扫（若需要）→ 线索观察（若需要）→ 内容复核（若到期）。全量补扫原因 `FullScanCause`：`Startup`（第一次 step 必做）、`QueueOverflow`、`HintQueueFull`、`SubtreeTruncated`、`Continuation`（上次预算耗尽，立即续扫）、`Retry`（上次有读不了的项/Root 不可用，`retry_interval_ms` 后）、`Periodic`（`metadata_interval_ms`）。`FollowConfig::recommended()` = 去抖 300 ms、周期元数据补扫 60 s、重试 5 s、每 10 s 复核 64 个文件（design §23）。
+- **`follow::{FollowDriver, FollowConfig}`**：`push_hint` 记线索，`step(ports, limits, clock)` 一步 = 全量补扫（若需要）→ 线索观察（若需要）→ 内容复核（若到期）。全量补扫原因 `FullScanCause`：`Startup`（第一次 step 必做）、`QueueOverflow`、`HintQueueFull`、`SubtreeTruncated`、`Continuation`（上次预算耗尽，立即续扫）、`Retry`（上次有读不了的项/Vault 不可用，`retry_interval_ms` 后）、`Periodic`（`metadata_interval_ms`）。`FollowConfig::recommended()` = 去抖 300 ms、周期元数据补扫 60 s、重试 5 s、每 10 s 复核 64 个文件（design §23）。
 
 ### Linux 适配（`vaultsyncd_server::observer`）
 
-- `hint_of(WatchSignal) -> WatchHint`（一一对应）；`RootWatcher::open(Rc<RootHandle>, WatchConfig) -> (RootWatcher, Vec<WatchHint>)` 与 `pump(&mut FollowDriver, now_ms, timeout)`：**先**建立监视、**再**让驱动器做启动补扫。进程入口按 Root 起后台任务、监视出错后的重建尚未做。
+- `hint_of(WatchSignal) -> WatchHint`（一一对应）；`VaultWatcher::open(Rc<VaultHandle>, WatchConfig) -> (VaultWatcher, Vec<WatchHint>)` 与 `pump(&mut FollowDriver, now_ms, timeout)`：**先**建立监视、**再**让驱动器做启动补扫。进程入口按 Vault 起后台任务、监视出错后的重建尚未做。
 
 ### 限制（后续卡）
 
-- 已采纳文件的外部删除/改名管线（rename 配对、回收站）不在本卡：观察到不存在只记录、不推导；自写意图尚无调用方（服务端写入发布路径接入时登记/释放）；内容复核用候选采集（reflink/复制 + 哈希 + 发布同内容对象）实现，开销较大，后续可在端口上增加只读哈希；挂载变化后需重建监视（`RootUnavailable` 之后）由进程入口负责。
+- 已采纳文件的外部删除/改名管线（rename 配对、回收站）不在本卡：观察到不存在只记录、不推导；自写意图尚无调用方（服务端写入发布路径接入时登记/释放）；内容复核用候选采集（reflink/复制 + 哈希 + 发布同内容对象）实现，开销较大，后续可在端口上增加只读哈希；挂载变化后需重建监视（`VaultUnavailable` 之后）由进程入口负责。
 
 ## crates/server-core + server-store + apps/server — 快照、changes 与 SSE（S048）
 
 契约在 `api/openapi.yaml`（生成器 format v5：`in: query` 标量参数、`text/event-stream` 成功响应）。四个端点
-都先 `auth::principal_from` 再 `auth::authorize_root`；查询串只接受声明的参数，未知/重复/非规范十进制 400。
+都先 `auth::principal_from` 再 `auth::authorize_vault`；查询串只接受声明的参数，未知/重复/非规范十进制 400。
 
 | 端点 | 语义 |
 | --- | --- |
-| `POST /v1/roots/{root}/snapshots` → 201 `Snapshot` | 同一写事务读 `roots.seq`（`high_water_seq`）并复制活跃条目成清单；TTL 600 s（`api::snapshots::SNAPSHOT_TTL_SECONDS`） |
+| `POST /v1/vaults/{vault}/snapshots` → 201 `Snapshot` | 同一写事务读 `vaults.seq`（`high_water_seq`）并复制活跃条目成清单；TTL 600 s（`api::snapshots::SNAPSHOT_TTL_SECONDS`） |
 | `GET …/snapshots/{snapshot}/entries?cursor&limit` → 200 `SnapshotPage` | **只读清单**，按 EntryId 升序；`next_cursor` 缺省=末页；`limit` 1–1000（缺省 500），越界 400；快照过期/未知/他人的 **410 `CURSOR_EXPIRED`**（`details.reason=snapshot_expired`），不返回空页 |
 | `GET …/changes?after&limit` → 200 `ChangeList` | 严格 seq 升序；`limit` 1–500（缺省 100）只决定在哪个**事务边界**截断：第 `limit` 个批次与后续批次 `tx_id` 相同且 seq 连续则延伸取完；`has_more`/`next_after`/`head_seq`/`server_epoch` 同读事务取得；`after` 早于保留窗口（默认 90 天）或晚于当前头 → **410 `CURSOR_EXPIRED`**（`details.reason=before_retention_window｜ahead_of_head` + `expired_through｜head_seq`） |
-| `GET …/events` → 200 `text/event-stream` | `event: seq`，`id`/`data`=`SeqHint{root_id,seq}`；新连接立即给当前头，之后头变化才提示（可合并跳号）；**只提示、不带事件内容**；draining 时流主动结束 |
+| `GET …/events` → 200 `text/event-stream` | `event: seq`，`id`/`data`=`SeqHint{vault_id,seq}`；新连接立即给当前头，之后头变化才提示（可合并跳号）；**只提示、不带事件内容**；draining 时流主动结束 |
 
 - **存储**：迁移 `0007_snapshots.sql`——`snapshots`（元数据）/`snapshot_entries`（创建时的值拷贝，无外键引用 `entries`，
   `ON DELETE CASCADE`）与 `changes_by_time` 索引。`server-store::snapshots::{create_snapshot,snapshot_page}`：
-  创建时回收过期快照并把每 Root 的未过期快照压到 `MAX_LIVE_SNAPSHOTS_PER_ROOT`(8)；翻页元数据与条目同一读事务。
+  创建时回收过期快照并把每 Vault 的未过期快照压到 `MAX_LIVE_SNAPSHOTS_PER_VAULT`(8)；翻页元数据与条目同一读事务。
   `server-store::changes` 增补 `change_window`（头、epoch、保留下沿 = “创建时间早于截止的最新批次”的 seq，索引寻址）与
   `changes_after_whole_transactions`（不拆事务）。`SnapshotId`（`domain::ids`）是快照身份类型。
 - **S130 修改时间**：迁移 `0014_entry_modified_at.sql` 给 `entries` 与 `snapshot_entries` 加可空 `modified_at`（UTC unix 秒）。
@@ -1750,7 +1750,7 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 - **核心规则**（纯函数，`server_core::api::{events,snapshots}`）：`judge_cursor`、`retention_cutoff`、`changes_limit`/
   `snapshot_limit`（越界拒绝而非截断）、`page_progress`、`next_hint`、`ChangesFailure`（400/410/503 + 错误码 + 可重试）。
 - **`apps/server::sync`**：`SyncContext::{new,with_config}`（`SyncConfig{event_retention_seconds, sse_poll_interval,
-  sse_keepalive}`）；`http::router` 与 `bootstrap` 增加 `SyncContext` 参数。SSE 流自己轮询 `roots.seq`（间隔默认 1 s），
+  sse_keepalive}`）；`http::router` 与 `bootstrap` 增加 `SyncContext` 参数。SSE 流自己轮询 `vaults.seq`（间隔默认 1 s），
   不依赖进程内发布者，所以任何写者推进 seq 都会被提示。
 - **客户端约定**：SSE 可丢/重/乱序，客户端以 `changes` 的游标与 seq 去重修复；断线只需轮询 `changes`；410 时重新取快照并
   保留本地基线与未上传队列（design §9.4）。`events_json` 是该事务全部条目变化的 JSON 数组文本，整批原子应用。
@@ -1759,7 +1759,7 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 
 - `events_json` 的事件内容形状由提交协调（S052 起）写入；本卡只保证“整批取出、不拆开”。
 - 事件保留期（90 天）目前只是 `SyncConfig` 默认值，尚未进入 `[config]` TOML；物理清理 `changes` 行受
-  `versions.created_seq`/`operations.root_seq` 的外键约束，保留窗口是逻辑下沿，不删行。
+  `versions.created_seq`/`operations.vault_seq` 的外键约束，保留窗口是逻辑下沿，不删行。
 - `GET …/events` 需要 `Authorization` 头，浏览器原生 `EventSource` 不能直接用（TS 客户端 `subscribeEvents` 返回原始 `Response`）。
 - 未覆盖 `ServerEpoch` 变更后旧游标的显式 410（`after` 不带 epoch；`ahead_of_head` 与 `before_retention_window` 覆盖
   回退场景的常见形态，epoch 绑定留给重建流程卡）。
@@ -1791,7 +1791,7 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 
 - 本 crate 不读时钟、不取随机数、不写数据库/文件；刷新是否能成功只由服务端判定，客户端不做“提前过期”猜测。
 - 普通网络故障的指数退避与 `Retry-After` 调度属于 `crates/agent-core`（后续卡）：这里只给 `is_retryable`/`retry_after` 结论。
-- 未接入（后续卡）：Root 清单（S054 起）、changes/SSE 拉取、上传会话、固定版本内容下载（design §5.4 的 `roots.rs`/`changes.rs`/`uploads.rs`/`content.rs`）；查询串编码；浏览器 cookie 载体（Rust 客户端只走 Bearer）。
+- 未接入（后续卡）：Vault 清单（S054 起）、changes/SSE 拉取、上传会话、固定版本内容下载（design §5.4 的 `vaults.rs`/`changes.rs`/`uploads.rs`/`content.rs`）；查询串编码；浏览器 cookie 载体（Rust 客户端只走 Bearer）。
 - 验收命令（devShell 内）：`cargo test --locked -p vaultsyncd-http-client`（36 项 + 1 doctest）、`cargo clippy --locked -p vaultsyncd-http-client --all-targets -- -D warnings`、`cargo fmt --check`。证书用例用本地 rustls 服务与自签 CA 做真实握手。
 
 ## crates/server-core + platform-linux-server — 外部移动、删除与挂载失效（S051）
@@ -1801,23 +1801,23 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 - **扫描健康结论（`scan`）**：`ScanReport::health() -> ScanHealth`，取值 `Complete` / `PermissionDenied{paths}` / `IoError{paths}` / `MountChanged{detail}` / `Incomplete{remaining_dirs}`（预算耗尽单列）。优先级：挂载 > 权限 > IO > 未走完；完整原因仍在 `ScanCompletion::Inconclusive.reasons`。`InconclusiveReason::{DirectoryUnreadable,EntryUnreadable}` 增 `failure: ReadFailure{PermissionDenied,IoError}`；`WorkTreeError::PermissionDenied{path,detail}` 与 `Unreadable` 是两个错误（`code()` 分别为 `work_tree_permission_denied` / `work_tree_unreadable`）。**只有 `ScanHealth::Complete` 允许推导删除。**
 - **移动识别（`reconcile::pair_moves`）**：证据只认文件对象身份（设备 + inode + 创建时间，`MissingEntry::same_object`），内容哈希不参与配对。一对一才配对：两份同内容文件互换名字时各自 inode 仍能正确对上；一个缺失对多个新路径（硬链接/复制）或多个缺失共用一个身份 → 歧义，不猜，按独立新增/删除处理。移动目标必须尚未采纳；目标路径在库里已有条目 → 不移动（不覆盖别人的条目）。
 - **删除与保护（`ReconcileLimits`）**：`ReconcileLimits{max_deletes_per_cycle, max_delete_percent, protection_capacity}`（`DEFAULT` = 32 / 10% / 8，`new` 拒绝 0 与 >100%）。`protection_reason` 按单轮上限与占比判定，占比规则在已保护条目 < `SHARE_MIN_TOTAL`(16) 时不生效（小集合只看数量）。命中即整批进 `ProtectedBatch{id, reason, protected_total, entries:[ProtectedEntry{path,entry,revision,identity,btime,content}], directories:[ProtectedDirectory{path,identity,error,missing_count}]}`，队列满时逐个记 `held{code=protection_queue_full}`，不静默丢弃。
-- **`ExternalObserver`**：`run_pass` 在 `scan_complete && !root_unavailable` 且扫描健康时、于 `handle_files` **之前**做核对（否则移动目标会被当成新文件建新条目），整轮持有 `RootCommitGate` 票据（忙则 `ReconcileReport::deferred`，下一轮再试）。一次完整扫描可跨多轮续扫，核对用累计的 `scan_files`。`PassReport.reconcile: ReconcileReport{health, ran, moves, ambiguous, deletions, held, protected, deferred}`。
+- **`ExternalObserver`**：`run_pass` 在 `scan_complete && !vault_unavailable` 且扫描健康时、于 `handle_files` **之前**做核对（否则移动目标会被当成新文件建新条目），整轮持有 `VaultCommitGate` 票据（忙则 `ReconcileReport::deferred`，下一轮再试）。一次完整扫描可跨多轮续扫，核对用累计的 `scan_files`。`PassReport.reconcile: ReconcileReport{health, ran, moves, ambiguous, deletions, held, protected, deferred}`。
 - **互换名字（`identity_swap_needs_review`）**：两条路径都还在、但文件对象换了位置时，单向移动表达不了，按路径重新采纳又会把两个 EntryId 绑到对方的文件上；因此保留双方基线、把现场记进 `held`/`ambiguous`，既不删除也不重绑，`handle_files` 对该路径返回 `PendingReason::Held{code}`。人工处理后才恢复。
 - **放行**：`protected_batches()` 只读查看；`release_protected(id)` 移出队列并把（路径, 条目身份）记成一次性放行，下一轮只对这些身份传播删除（路径换成别的条目时重新受保护）。`with_reconcile_limits(limits)` 设定限额。
 - **端口**：`ports::external_store::ExternalAdoptStore` 增 `apply_external_move(ExternalMove) -> ExternalMoveRecord`（只改父目录与名称、保留 EntryId、不写版本/对象）与 `apply_external_delete(ExternalDelete) -> ExternalDeleteRecord`（可恢复删除：回收站 + 墓碑 + 事件 + 保留历史），两者都比较并写 `expected_revision` 并返回提交后事实；`ports::work_tree::WorkTreePort` 增 `observe_dir(dir) -> Result<Option<DirIdentity>, _>`（保护队列取目录身份）。`AdoptOutcome::UnchangedContent` 现带回 `entry`/`revision`，写进采纳基线。
-- S137-b 补强观察基线：SQL `apply_external_move/delete` 在同一写事务核对 `root + from/path → EntryId`，再核对 revision；祖先改名后子 revision 不变，旧路径不能驱动新路径上的移动/墓碑。观察器以内部 EntryId→路径反向索引维护唯一采纳基线，新路径只有完成稳定窗口/内容核验且确认同一 EntryId 后才替换旧路径，并清旧 pending/删除放行。仍保留 inode 互换歧义与批量删除保护；不以 mtime 决胜，不新增端口/DTO/schema。
+- S137-b 补强观察基线：SQL `apply_external_move/delete` 在同一写事务核对 `vault + from/path → EntryId`，再核对 revision；祖先改名后子 revision 不变，旧路径不能驱动新路径上的移动/墓碑。观察器以内部 EntryId→路径反向索引维护唯一采纳基线，新路径只有完成稳定窗口/内容核验且确认同一 EntryId 后才替换旧路径，并清旧 pending/删除放行。仍保留 inode 互换歧义与批量删除保护；不以 mtime 决胜，不新增端口/DTO/schema。
 
 ### 平台（`vaultsyncd_platform_linux_server::mounts::health`）
 
-- `verify_root_mount(path, &RootSnapshot) -> Result<MountHealth, MountChange>`：重新 `probe_path` → 与注册快照比较（后端/FSID/子卷/挂载 ID/目录身份）→ 检查 Root 之下是否有子挂载（按路径分量，`/data/root2` 不是 `/data/root` 的子挂载）→ 确认根目录仍可列出（读一项）。`MountChange::{Probe,Drift,Submount,PermissionDenied,Unreadable,MountInfo}`，`design_error_code()` 恒为 `ROOT_UNAVAILABLE`，`detail_code()` 给出 `mount_changed`/`submount_detected`/`permission_denied` 等细分。权限不足在探测阶段也单独分类。
-- `RootHandle::verify()` 现在调用它（`RootSpecVerifyError::Mount`），因此所有共享根句柄的路径（`LinuxWorkTree::list_dir`/`observe_dir`）都受同一复核；“卸载后路径下露出空目录”命中的是 `DirectoryChanged`/`MountChanged`，即 Root 不可用。
-- `submounts_under(entries, root)` 是纯函数（可单测）；`apps/server::observer::map_restrict` 把 `RestrictError::PermissionDenied` 映射为 `WorkTreeError::PermissionDenied`。
+- `verify_vault_mount(path, &VaultSnapshot) -> Result<MountHealth, MountChange>`：重新 `probe_path` → 与注册快照比较（后端/FSID/子卷/挂载 ID/目录身份）→ 检查 Vault 之下是否有子挂载（按路径分量，`/data/vault2` 不是 `/data/vault` 的子挂载）→ 确认根目录仍可列出（读一项）。`MountChange::{Probe,Drift,Submount,PermissionDenied,Unreadable,MountInfo}`，`design_error_code()` 恒为 `VAULT_UNAVAILABLE`，`detail_code()` 给出 `mount_changed`/`submount_detected`/`permission_denied` 等细分。权限不足在探测阶段也单独分类。
+- `VaultHandle::verify()` 现在调用它（`VaultSpecVerifyError::Mount`），因此所有共享根句柄的路径（`LinuxWorkTree::list_dir`/`observe_dir`）都受同一复核；“卸载后路径下露出空目录”命中的是 `DirectoryChanged`/`MountChanged`，即 Vault 不可用。
+- `submounts_under(entries, vault)` 是纯函数（可单测）；`apps/server::observer::map_restrict` 把 `RestrictError::PermissionDenied` 映射为 `WorkTreeError::PermissionDenied`。
 
 ### 不变量与未接入
 
-- 扫描不完整（预算）或健康结论不是 `complete` 时**零删除、零移动**；Root 不可用直接中止整轮。
-- 真实 `umount` 需要特权，未在测试里执行：验收用真实目录“改名 + 原路径建空目录”复现卸载后的现场（对 Root 句柄而言与卸载等价），并在平台层用真实目录验证身份漂移与权限回收。
-- 未接入（S052 及后续）：`apply_external_move`/`apply_external_delete` 的 SQLx 适配与回收站落库；进程入口按 Root 运行后台任务；目录级移动识别（`WorkTreePort` 只提供文件指纹，目录改名时其内文件按 inode 逐个保持身份，目录条目本身由存储层补建）；硬链接去重（当前按独立条目处理）。
+- 扫描不完整（预算）或健康结论不是 `complete` 时**零删除、零移动**；Vault 不可用直接中止整轮。
+- 真实 `umount` 需要特权，未在测试里执行：验收用真实目录“改名 + 原路径建空目录”复现卸载后的现场（对 Vault 句柄而言与卸载等价），并在平台层用真实目录验证身份漂移与权限回收。
+- 未接入（S052 及后续）：`apply_external_move`/`apply_external_delete` 的 SQLx 适配与回收站落库；进程入口按 Vault 运行后台任务；目录级移动识别（`WorkTreePort` 只提供文件指纹，目录改名时其内文件按 inode 逐个保持身份，目录条目本身由存储层补建）；硬链接去重（当前按独立条目处理）。
 
 ## crates/transfer — 续传位图与上传/下载执行（S054）
 
@@ -1852,13 +1852,13 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 
 | 模块 | 契约 |
 | --- | --- |
-| `uploads::UploadEndpoint<T: Transport>` | `new(client, root)`（Root 非 32 位小写十六进制 → `ClientError::InvalidRequest`，触网前失败）、`client()`、`root()`；实现 `UploadTarget`：`POST /v1/roots/{root}/uploads`、`GET …/uploads/{upload}`、`PUT …/uploads/{upload}/parts/{index}`（`content-type: application/octet-stream` + 必发 `x-part-sha256`）、`POST …/uploads/{upload}/finalize`（无请求体）。`PART_DIGEST_HEADER = "x-part-sha256"` |
-| `content::ContentEndpoint<T: Transport>` | `new(client, root)`、`client()`、`root()`；实现 `VersionedContent`：`GET /v1/roots/{root}/entries/{entry}/versions/{version}/content` + `Range: bytes=start-end`。`CONTENT_DIGEST_HEADER = "x-content-sha256"` |
+| `uploads::UploadEndpoint<T: Transport>` | `new(client, vault)`（Vault 非 32 位小写十六进制 → `ClientError::InvalidRequest`，触网前失败）、`client()`、`vault()`；实现 `UploadTarget`：`POST /v1/vaults/{vault}/uploads`、`GET …/uploads/{upload}`、`PUT …/uploads/{upload}/parts/{index}`（`content-type: application/octet-stream` + 必发 `x-part-sha256`）、`POST …/uploads/{upload}/finalize`（无请求体）。`PART_DIGEST_HEADER = "x-part-sha256"` |
+| `content::ContentEndpoint<T: Transport>` | `new(client, vault)`、`client()`、`vault()`；实现 `VersionedContent`：`GET /v1/vaults/{vault}/entries/{entry}/versions/{version}/content` + `Range: bytes=start-end`。`CONTENT_DIGEST_HEADER = "x-content-sha256"` |
 | `content::parse_content_range` / `ContentRange` | `bytes start-end/total` → `{first,last,total}` + `length()`；非 `bytes ` 前缀、非规范十进制、起点大于终点 → 协议错误 |
 
 ### 请求与校验规则（不可绕过）
 
-- **身份只接受 32 位小写十六进制**：Root、上传会话、条目、版本在拼 URL 之前校验（`is_identity`/`require_identity`），杜绝把 `../` 之类拼进路径。
+- **身份只接受 32 位小写十六进制**：Vault、上传会话、条目、版本在拼 URL 之前校验（`is_identity`/`require_identity`），杜绝把 `../` 之类拼进路径。
 - **块摘要一定要发**：`x-part-sha256` 是 64 位小写十六进制；服务端在写盘前用它核对字节。
 - **区间响应必须自洽**：带 `Content-Range` 时起点/长度/总长都要与请求和 `VersionPin.size` 一致；整份 200 响应只接受“从 0 开始且长度等于版本大小”；缺少 `Content-Range` 的 206 是协议错误；响应体长度不等于请求长度是协议错误（短读不补零）。
 - **整份摘要提前核对**：响应带 `x-content-sha256` 且与固定版本摘要不同 → 协议错误（不用下完整份才发现是别的版本）。
@@ -1900,7 +1900,7 @@ rename → fsync 目录）；越界索引、长度不符、摘要不符与 413 �
 | `ActionHandler` | S056/S059 接入的缝：`plan_intent(op) -> Option<ActionIntent>`（不得在此改本地内容）与 `execute(ports, op, intent)`；返回 `ActionOutcome::{Completed, Pending{poll_after}}` 或 `ActionFailure{code, detail}`。顺序由执行器保证。 |
 | `Executor<H>::run(&RunRequest)` | 暂停时只返回原因、不读队列；否则按插入顺序依次过“依赖就绪 → 尝试次数 → 退避到期 → 种类可解析”闸。就绪操作先 `IntentStore::begin_intent` 再执行；成功则完成意图并出队；`Pending` 不出队（I01）并记轮询到期；失败调用 `record_failure`，可重试错误（`ErrorCode::class() == Retryable`）退避后重试，用尽或 `NeedsUserAction`/`Corrupt` 时标记意图失败并阻塞。**任何失败都不删除操作与其依赖方**。 |
 | `RetryPolicy` | 默认 `max_attempts=3`、`base=1s`、`max=60s`；`new` 拒绝 0 次、>16 次、0 延迟与上限小于起点。`delay_after(n)=min(base*2^(n-1), max)`，不加抖动（S062）。 |
-| `RunRequest` / `RunReport` | `RunRequest{binding, pause: Option<PauseReason>, max_ops, pending_poll_interval}`；`PauseReason::{UserRequested,Offline,RootUnavailable,BindingDisabled}`。`RunReport{binding, paused, ops: Vec<OpReport>, next_due}`，`OpReport{op, kind, outcome}`，`OpOutcome::{Completed, Pending{poll_after}, Retrying{code,attempts,due}, Blocked(BlockReason)}`，`BlockReason::{DependencyIncomplete{on},RetriesExhausted{code,attempts},NeedsUserAction{code},Corrupt{code},UnknownKind{kind},CyclicDependency,BackoffPending{due},RunLimitReached}`。 |
+| `RunRequest` / `RunReport` | `RunRequest{binding, pause: Option<PauseReason>, max_ops, pending_poll_interval}`；`PauseReason::{UserRequested,Offline,VaultUnavailable,BindingDisabled}`。`RunReport{binding, paused, ops: Vec<OpReport>, next_due}`，`OpReport{op, kind, outcome}`，`OpOutcome::{Completed, Pending{poll_after}, Retrying{code,attempts,due}, Blocked(BlockReason)}`，`BlockReason::{DependencyIncomplete{on},RetriesExhausted{code,attempts},NeedsUserAction{code},Corrupt{code},UnknownKind{kind},CyclicDependency,BackoffPending{due},RunLimitReached}`。 |
 | `ExecutorError` | `Port(PortError)`（本轮中止，队列原样）与 `DuplicateOp{op}`（数据损坏，不执行任何一个操作）。 |
 
 调度不使用客户端时钟排序；退避到期时间只存在进程内（`Mutex<HashMap<OpId, UtcTimestamp>>`），避免同一
@@ -1950,7 +1950,7 @@ file identity 必须仍对应固定快照，否则返回 `LOCAL_CHANGED`，不�
 ## crates/agent-core — 事件接收与应用进度（S057）
 
 `engine::events::EventReceiver<S,D,A>` 是绑定作用域的事件编排器，位于
-`crates/agent-core/src/engine/events.rs`。`ChangeSource` 只负责按 `RootId + after + limit` 拉取
+`crates/agent-core/src/engine/events.rs`。`ChangeSource` 只负责按 `VaultId + after + limit` 拉取
 协议 `ChangeList`；SSE/SeqHint 不进入持久状态，只作为唤醒参数，周期调用 `run_cycle(None)` 仍会
 执行 pull 兜底。`EventDecoder` 同时解码 wire 批次和重启后 `received_changes` 的原始
 `EventEnvelope`，不得把未知事件静默变成空任务。
@@ -1968,7 +1968,7 @@ file identity 必须仍对应固定快照，否则返回 `LOCAL_CHANGED`，不�
 ## crates/http-client — changes 拉取（S057）
 
 `crates/http-client/src/changes.rs::list` 使用生成的 `ChangeList`，通过 `ApiRequest::with_query_param`
-对 `after`/`limit` 做独立百分号编码，并强制 Bearer 会话；Root 身份和规范十进制游标在发送前校验。
+对 `after`/`limit` 做独立百分号编码，并强制 Bearer 会话；Vault 身份和规范十进制游标在发送前校验。
 `ApiRequest` 禁止调用方直接拼接查询串，查询参数按 RFC 3986 编码。SSE 仍只由上层作为唤醒来源，
 不被当作事件正文来源。
 
@@ -1978,9 +1978,9 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
 
 - **内容 put 执行链路**：`ExecutorContext::{execute_put}`。顺序是
   1. 读库确定命名空间事实：条目（必须活跃文件）、`entries::path_of` 得相对路径、父目录与名称；
-  2. `begin_operation`（`operations` 表写 `pending`，幂等键 `(root, device, op)`）；
+  2. `begin_operation`（`operations` 表写 `pending`，幂等键 `(vault, device, op)`）；
   3. `commit_put` + 端口实现：`SqlIntentLog`（`fs_intents`，证据 JSON 用核心的
-     `TargetBefore/After::to_json`）、`WorkTreeTarget`（`RootHandle` 观察 + 受控发布）、`SqlPutStore`；
+     `TargetBefore/After::to_json`）、`WorkTreeTarget`（`VaultHandle` 观察 + 受控发布）、`SqlPutStore`；
   4. `SqlPutStore::apply_put` 在一个 `BEGIN IMMEDIATE` 里 `commit_operation`（事件批次 + 终态）
      →`versions::record_version`→`entries::advance_entry_revision`→意图 `finalized`。
   ACK 只在事务提交后返回；`pending` 不是 committed。
@@ -1992,19 +1992,19 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
 - **事件内容（`changes.events_json`）**：固定为对象数组，字段
   `kind`（`put`/`external`/`move`/`delete`）、`entry_id`、`path`（有路径时）、`revision`、
   内容变化另带 `version_id`/`hash`/`size`，以及 `origin`（`client`/`external`）；全部计数与摘要都是
-  十进制/十六进制文本。一个 RootSeq = 一条完整批次，客户端整批原子应用。
+  十进制/十六进制文本。一个 VaultSeq = 一条完整批次，客户端整批原子应用。
 - **重试语义**：端点与执行器共用同一份 `request_digest` 判定重放；响应丢失后的重试返回同一
-  `revision`/`root_seq`/`version_id`。结果 JSON 里没有 `root_seq` 时以 `operations.root_seq` 补齐
+  `revision`/`vault_seq`/`version_id`。结果 JSON 里没有 `vault_seq` 时以 `operations.vault_seq` 补齐
   （执行器写结果时批次序号尚未分配）。
-- **失败与稳定拒绝**：任何失败都不返回 committed；只有读证据成功且该 Root 没有未完成意图时，才尝试
+- **失败与稳定拒绝**：任何失败都不返回 committed；只有读证据成功且该 Vault 没有未完成意图时，才尝试
   写稳定 `rejected`。已经有意图的失败保留 `pending`；读不出意图也不得推测成稳定拒绝。所有命令在共享
-  提交门内检查未完成意图，存在或读取失败即停写。观察器同样不采纳有未完成意图的 Root。
+  提交门内检查未完成意图，存在或读取失败即停写。观察器同样不采纳有未完成意图的 Vault。
 - **命令适配（S052-b）**：`commands::{SqlFsIntentLog, WorkTreeNamespace,
   SqlNamespaceStore, SqlDeleteStore}` 接入 create/move/delete；移动保持 EntryId/内容版本，删除写清单、墓碑
   并保留历史。`restore_ops::{SqlRestoreStore, SqlTrashRestoreStore}` 接入历史版本与回收站（文件/目录）恢复；
   `conflict_ops::SqlConflictStore` 在迟到 put 的 preserve_both 下提交独立副本，映射唯一键为
-  `(RootId, DeviceId, OpId)`，不覆盖 head。冲突名称复用 planner，恢复/冲突的真实 RootSeq 在同一事务内写回结果。
-- **持久操作关联（迁移 0009）**：`execution_journal(root,device,op → kind, context_json)` 在**发布前**与
+  `(VaultId, DeviceId, OpId)`，不覆盖 head。冲突名称复用 planner，恢复/冲突的真实 VaultSeq 在同一事务内写回结果。
+- **持久操作关联（迁移 0009）**：`execution_journal(vault,device,op → kind, context_json)` 在**发布前**与
   意图同一事务写入（`journal::Binding::{new,linked,persist,attach}`）；`intent_operations(intent → 完整操作键)`
   让启动补完不靠暂存名、mtime 或最新操作行推断。`kind ∈ put | namespace | delete | version_restore |
   conflict | trash_restore`；`context_json` 携带 entry/revision、restored_from、冲突 sibling 身份、
@@ -2018,9 +2018,9 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
   另名（`名称（恢复）`），不合并。`TrashRestoreWrite` 增 `directory_intents`。保留期已过 → 410 `VERSION_GONE`。
 - **启动补完（`replay::registered`，先于 `recovery::assess` 与监听）**：对每条未完成意图读取持久关联，
   put/version_restore/conflict 用 `classify_put`（前像重做 / 后像补完 / 其它停写），namespace/delete 用核心
-  `recover_*_root`，trash_restore 按持久计划逐条目补建目录/文件意图后用同一事务收尾（一次整组只补一次）。
+  `recover_*_vault`，trash_restore 按持久计划逐条目补建目录/文件意图后用同一事务收尾（一次整组只补一次）。
   无法证明的现场（第三种内容、前像被外部改动、计划外内容、意图损坏、关联缺失）返回错误：意图/证据/
-  文件原样保留，Root 保持停写；现场还原后下一次启动补完**同一**操作，不产生第二个版本/副本/事件。
+  文件原样保留，Vault 保持停写；现场还原后下一次启动补完**同一**操作，不产生第二个版本/副本/事件。
 - **删除不丢未确认内容**：`commands::verify_delete_scope`——文件现场哈希必须等于当前版本；目录现场每项必须在
   冻结清单里且种类相同、文件长度等于当前版本长度（清单有而现场没有的不算问题）。前向路径不通过 → 409
   `RECONCILE_REQUIRED`（意图之前拒绝）；重启补完不通过 → 保持停写。限制：目录内同名同长度的原地改写不被该
@@ -2038,21 +2038,21 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
   `expected_revision`）在一个事务里追加批次、幂等登记对象、写版本（`origin=external`）、推进 revision；
   `apply_external_move` 只改父目录与名称（EntryId 不变）；`apply_external_delete` 推进 revision、软删除、
   写回收站清单与墓碑（保留历史与对象），三者都不触碰工作目录。
-- **观察运行时（`external::ObserverRuntime`）**：每轮从库里枚举 Root（新注册的下一轮自动纳入），
-  为每个健康 Root 用 `RootHandle + LinuxWorkTree + LinuxObjectPort` 跑一轮
+- **观察运行时（`external::ObserverRuntime`）**：每轮从库里枚举 Vault（新注册的下一轮自动纳入），
+  为每个健康 Vault 用 `VaultHandle + LinuxWorkTree + LinuxObjectPort` 跑一轮
   `ExternalObserver::run_pass`（周期扫描是 S050 三层兜底的正确性层；**未接 inotify**，只影响时延）。
   put 发布通过 `expect_own_write` 登记（设备 + inode + 内容）；其余命令的自写关联仍待验证。
-  HTTP 执行器实际复用观察器的同一个 gate（锁序 gate → roots），不是只复用 gate 的类型。
-  运行时用独立线程 + current-thread runtime（端口与 `RootHandle` 不要求 `Send`），优雅停止时先停
+  HTTP 执行器实际复用观察器的同一个 gate（锁序 gate → vaults），不是只复用 gate 的类型。
+  运行时用独立线程 + current-thread runtime（端口与 `VaultHandle` 不要求 `Send`），优雅停止时先停
   观察循环再关闭数据库。
-- **新增存储函数**：`entries::entry_by_path(conn, owner, root, path)`、
+- **新增存储函数**：`entries::entry_by_path(conn, owner, vault, path)`、
   `entries::path_of(conn, owner, entry)`、`entries::advance_entry_revision(tx, owner, entry, expected, next)`
-  （比较并写，变化报 `EntryError::RevisionChanged`）；`RootHandle::root_dir()` 暴露已核对的根目录句柄。
+  （比较并写，变化报 `EntryError::RevisionChanged`）；`VaultHandle::vault_dir()` 暴露已核对的根目录句柄。
 - **恢复验收入口**：`cargo test -p vaultsyncd-server-tests --test {commands,restore,conflict,dir_restore,recovery_boundaries,kill_boundaries}`；`kill_boundaries` 用 `server-child` 真实子进程（触发器卡住写事务后 SIGKILL）。
 - **验收入口**：`cargo test -p vaultsyncd-server-tests --test http_loop`（真实监听 + 真实 SQLite +
   btrfs 工作目录）。满盘用例需要小型专用 btrfs 卷（`tools/test-volume/test-volume.sh create <run> 192M`），
   用 `VAULTSYNCD_S052_WORK_VOLUME` / `VAULTSYNCD_S052_STATE_VOLUME` 指定卷内可写子目录
-  （准入要求状态目录与 Root 同一 btrfs 文件系统）。
+  （准入要求状态目录与 Vault 同一 btrfs 文件系统）。
 
 ## crates/agent-core — 首次绑定与可恢复合并（S058）
 
@@ -2066,13 +2066,13 @@ S047 的操作端点在“首次见到该幂等键”时只回答 503 `SERVICE_N
 | `ImportLocal: NameEquivalence` | `validate(binding, other_paths)` 用平台规范路径/根句柄验证普通健康根、缓存/内部状态/其它绑定不重叠、名称可表示，并给跨重启根身份；`scan(binding)` 必须完整，文件含大小、SHA-256 与 generation；坏扫描报错，不能返回空清单代表失败。原生名称等价由平台注入，同目录非同拼写的等价名称明确拒绝，不静默改名。 |
 | `ImportLocal::preserve(binding, op, from, to, generation)` | 平台先持久本地意图，核对代际与目标未占用，幂等另名保留原内容；目录冲突连同子树另名，子项后续通过最终父目录身份上传。重放必须验证现场身份/内容，不能仅凭目标存在就成功。 |
 | `ImportLocal::install(&ImportInstall) -> Generation` | 输入持久 install OpId、目标、完整 `SnapshotEntry` 与模式。必须核对目标仍为空，固定 VersionId 下载/校验/发布，Full 不得降级为占位；OnDemand 才可建占位。崩溃窗口由同一持久意图核对，不覆盖扫描之后的本地新内容。该端口是 S059/Windows 适配接线点。 |
-| `ImportSnapshot::begin(root) -> SnapshotSeed` / `page(root, snapshot, cursor)` | 直接复用生成的 Snapshot/SnapshotPage；seed 另带认证响应的服务器观察时间，只用于提前固定的冲突标签，不伪造提交时间、不以客户端时钟决胜。每页检查相同 snapshot_id/high_water、严格 EntryId 顺序、前进游标、完整计数和父目录树；到期/错误不能悄悄换快照。 |
+| `ImportSnapshot::begin(vault) -> SnapshotSeed` / `page(vault, snapshot, cursor)` | 直接复用生成的 Snapshot/SnapshotPage；seed 另带认证响应的服务器观察时间，只用于提前固定的冲突标签，不伪造提交时间、不以客户端时钟决胜。每页检查相同 snapshot_id/high_water、严格 EntryId 顺序、前进游标、完整计数和父目录树；到期/错误不能悄悄换快照。 |
 | 内部 `ImportStore: UploadCommitStore` | 仅处理持久导入清单中的 OpId。文件复用 S056 固定 generation 上传，目录 create 不带内容；两者均 `expected_absent=true`、固定 server_epoch，不以旧快照覆盖新创建。committed ACK、临时→稳定 EntryId、baseline/remote、本地 generation 条件清 dirty 与日志同一事务；旧代际 ACK 保留新 dirty。pending/finalize 不算完成。 |
 
 - 同路径同内容只绑定远端 EntryId；内容/类型不同先保留本地另名并上传，再安装原路径的固定远端版本。
   首次导入没有删除动作，不以 mtime 决胜。新建服务器同名条目的并发变化仍由 create CAS 拒绝。
 - 清单执行完成后，合成根 baseline、`received_seq=applied_seq=snapshot.high_water_seq` 与 complete
-  在一个事务中发布；不是用上传回执中的较新 root_seq 初始化游标。S057 `run_cycle` 与直接
+  在一个事务中发布；不是用上传回执中的较新 vault_seq 初始化游标。S057 `run_cycle` 与直接
   `resume_pending` 在导入未完成时拒绝接收/应用，完成后继续按原 high_water 拉 changes。
 - 运行者用日志 revision 条件更新防止旧内存覆盖 ACK。应用入口应在导入期间独占该绑定的通用队列
   调度；导入自行从日志重建 UploadSpec，不能让另一 S055 执行器抢跑尚未注册规格的上传。
@@ -2193,13 +2193,13 @@ quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按�
 
 | 接口 | 输入/输出与安全契约 |
 | --- | --- |
-| `RootHandle::open(Path)`、`verify()` | 仅现有本地驱动器绝对目录；逐分量 `NtCreateFile(RootDirectory=已持有父句柄)`，`FILE_OPEN_REPARSE_POINT + FILE_OPEN_NO_RECALL`，持有祖先句柄并禁止 delete 共享。类型中性打开后核对目录；不使用本客体返回参数错误的 `FILE_DIRECTORY_FILE` 组合。verify 重新核对身份/路径及当前 ACL（无 backup intent 的相对重开），旧句柄授权不代表新 ACL 仍可访问。 |
-| `FileIdentity{volume,file}`、`RootHandle::overlaps` | 真实卷 serial + 128 位文件 ID；以祖先/自身目录身份判父子与别名，不能用文本 starts_with；subst 原生证明同一物理目录仍重叠。此身份不替代协议 EntryId。 |
+| `VaultHandle::open(Path)`、`verify()` | 仅现有本地驱动器绝对目录；逐分量 `NtCreateFile(RootDirectory=已持有父句柄)`，`FILE_OPEN_REPARSE_POINT + FILE_OPEN_NO_RECALL`，持有祖先句柄并禁止 delete 共享。类型中性打开后核对目录；不使用本客体返回参数错误的 `FILE_DIRECTORY_FILE` 组合。verify 重新核对身份/路径及当前 ACL（无 backup intent 的相对重开），旧句柄授权不代表新 ACL 仍可访问。 |
+| `FileIdentity{volume,file}`、`VaultHandle::overlaps` | 真实卷 serial + 128 位文件 ID；以祖先/自身目录身份判父子与别名，不能用文本 starts_with；subst 原生证明同一物理目录仍重叠。此身份不替代协议 EntryId。 |
 | `inspect(relative)`、`scan()` | 直接复用 fs-common `RelativePath` 和名称边界；句柄相对 no-follow，拒绝未知 reparse/junction/symlink 与跨卷；原名不改写。目录使用 `GetFileInformationByHandleEx(FileIdExtdDirectoryInfo)` 从句柄枚举，不按路径递归，不读内容；迭代扫描限制深目录持有句柄数量。 |
 | `EntryMetadata` / `CloudMetadata` | 文件 ID、逻辑/分配大小、attributes/tag、links、时间戳；CFAPI 的 on_disk/modified/pin/in_sync/provider identity 来自同一句柄 `CfGetPlaceholderInfo`。CFAPI 过滤器可能隐藏 reparse 属性，不能仅靠 tag 判断占位。identity <=4 KiB；查询失败明确报错。mtime/in_sync 不作为业务 committed 证据。 |
-| `ScanReport{root,health,entries}` | 保留局部问题；`Complete/PermissionDenied/RootUnavailable/Incomplete`。任一未知对象、硬链接、名称碰撞或枚举失败使 `permits_missing_comparison=false`；只有完整健康扫描可以进入核心的缺失核对，仍不直接授权删除。 |
+| `ScanReport{vault,health,entries}` | 保留局部问题；`Complete/PermissionDenied/VaultUnavailable/Incomplete`。任一未知对象、硬链接、名称碰撞或枚举失败使 `permits_missing_comparison=false`；只有完整健康扫描可以进入核心的缺失核对，仍不直接授权删除。 |
 | `NativeNames: NameEquivalence` | Windows `CompareStringOrdinal(ignoreCase=true)`，API 失败保守报冲突；真实 NTFS case/Unicode 创建验证。不归一化、不静默选择赢家，大小写敏感目录仍保守报问题。 |
-| `DirectoryWatcher::new(&RootHandle, buffer_bytes)` / `poll(timeout_ms)` | 用相同父句柄相对重开并核对 root，`ReadDirectoryChangesW` 原生异步监视；缓冲限16 B..64 KiB、poll <=60s，回传 `Idle/Changes/Rescan`，删除/rename 通知只是提示。溢出/失联/畸形记录均需要全量补扫；drop 取消并等待完成后才释放 OVERLAPPED/缓冲。filter 不含 last-access，避免扫描反馈。 |
+| `DirectoryWatcher::new(&VaultHandle, buffer_bytes)` / `poll(timeout_ms)` | 用相同父句柄相对重开并核对 vault，`ReadDirectoryChangesW` 原生异步监视；缓冲限16 B..64 KiB、poll <=60s，回传 `Idle/Changes/Rescan`，删除/rename 通知只是提示。溢出/失联/畸形记录均需要全量补扫；drop 取消并等待完成后才释放 OVERLAPPED/缓冲。filter 不含 last-access，避免扫描反馈。 |
 | `ReconcileGate` | 启动/非 Idle 提示即需要补扫，周期元数据扫描覆盖通知丢失和重装间隙；不健康扫描保留围栏。调度/持久基线/受控发布由 agent 入口及后续卡接线。 |
 
 原生验收入口：`VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows nix develop .#windows --command tests/platform/windows/run-native-files.sh`。仅在实验室 NTFS run_id 目录/临时盘符操作，并核对 exe 传输 SHA-256；52 个客体测试包括已 pin 空目录真正原地设置 junction、ACL 变化、真实内核缓冲溢出与三个脱水占位符扫描前后 0 本地内容字节。环境分工、VM 保持在线规则见 `docs/operations/windows-lab.md` §12、§19.1。
@@ -2225,11 +2225,11 @@ API 依据：[NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/
 metadata_only，保留内容基线与原代际，不生成远端 Delete。`controlled_releases.completed=0` 始终是未完成状态。
 原生 CFAPI 使用保护与服务器租约适配由 S069/应用入口接线；测试磁盘适配器仅 cfg(test)。
 
-## S064：状态、Root问题与恢复导出
+## S064：状态、Vault问题与恢复导出
 
 `status::snapshot(&Database, BindingId)` 在同一SQLite读事务汇总多维状态；S061 `mode_progress_in` 仅crate内部复用，public API不变。`BindingStatus::synchronized` 必须无dirty/队列/传输/事件差/未知/开放意图/恢复围栏且full证明完整。metadata_only不表示同步完成，完整缓存也不自动淘汰。
 
-`status::issues::report` 按Root+ErrorCode持久合并严重原因，第一次/恢复后复发才返回notify；不绑定单个Binding外键，解绑不删其他绑定的问题。普通网络原因不创建通知，用户打开失败仍返回explain_open。`resolve_root` 仅在Root级所有相关绑定同原因均恢复后由调用方调用。`diagnostics::bounded` 只导出类型化身份、错误码、耗时整行，限制总字节，不接受自由文本/凭据/内容。
+`status::issues::report` 按Vault+ErrorCode持久合并严重原因，第一次/恢复后复发才返回notify；不绑定单个Binding外键，解绑不删其他绑定的问题。普通网络原因不创建通知，用户打开失败仍返回explain_open。`resolve_vault` 仅在Vault级所有相关绑定同原因均恢复后由调用方调用。`diagnostics::bounded` 只导出类型化身份、错误码、耗时整行，限制总字节，不接受自由文本/凭据/内容。
 
 `recovery::export::ExportRecovery::run(binding, destination, ExportSource, ExportDestination)` 通过端口固定快照并stream导出，`Target` 区分current/candidate和snapshot；当前dirty与旧固定上传快照分别保存。源discover必须完整或报错，末尾复核新增候选/每个来源与SQLite状态。目的create_new必须使用安全目录句柄、拒绝reparse和覆盖、保持身份、拒绝同步/缓存重叠；ExportDirectory保证create_new/顺序写入/读回/fsync。核心不做平台I/O；测试磁盘适配器不构成生产Windows实现。
 
@@ -2237,16 +2237,16 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ### S066：正式 Windows CFAPI 与 Explorer 生命周期
 
-`platform-windows::cfapi::catalog::{Identity,Catalog}` 使用 domain 的 BindingId/RootId/EntryId/VersionId。
+`platform-windows::cfapi::catalog::{Identity,Catalog}` 使用 domain 的 BindingId/VaultId/EntryId/VersionId。
 正式 identity v2 固定 72 B：`VS/2/0` + 四个 16 B 身份 + CRC32；v1 原型保持独立，生产解码拒绝旧版、损坏、外根、未知 Entry 与陈旧 Version。Catalog 由应用从持久状态重建，更新后显式发布；CRC 不能代替业务授权。
 
 `cfapi::adapter::Adapter::connect(path,Catalog,Arc<dyn Callbacks>)` 为每个连接持有独立上下文，不用原型进程全局 provider。`Callbacks::fetch(ReadDemand)->Result<(),NTSTATUS>` 只入队；demand 包含完整身份、文件大小、固定范围与 `Reply`（真实 connection/transfer/request keys、拥有的 correlation vector）；`cancel(Reply)` 仅取消对应传输，`disconnect()` 发停止信号。`Reply::transfer` 只在连接存活期间回执，异步工作须由消费者在关闭前停止；下载/整份校验/有界队列由 S067 实现。`MetadataOnly` 明确返回 Unsupported，不能冒充水合成功。
 
 `create` 使用 pinned parent 相对 CREATE_NEW + CfConvertToPlaceholder + CfUpdatePlaceholder；不覆盖本地文件，不手改 reparse。创建和空占位更新用排他共享句柄；只有无本地内容、无修改/保留意图且预期物理/逻辑元数据相符时更新版本/逻辑大小。mark-in-sync 仅表示已成功安装的远端空占位元数据，不能替代核心 committed 基线；hydrated/dirty/pinned 文件保留给 S068。`move_entry` 使用 NtSetInformationFile 的目标 RootDirectory 相对 rename，拒绝覆盖，不打开内容流；Windows rename 可清除 OS in-sync，不能据此清业务基线。核心调用方负责先持久 local_intent、校验 generation，再调用平台并持久回执。失败留下实际中间状态，不能假定完成。
 
-`files::RootHandle` 只允许同步根末分量为已识别 cloud reparse；其祖先仍拒绝所有 reparse。新增 crate 内相对 create/open 工具复用 S065 身份围栏。断开的 partially-populated 目录在 Windows build 26300 可返回 FLT_INVALID_NAME_REQUEST；扫描明确 incomplete、禁止推导删除，连接存活时元数据扫描零内容供给。
+`files::VaultHandle` 只允许同步根末分量为已识别 cloud reparse；其祖先仍拒绝所有 reparse。新增 crate 内相对 create/open 工具复用 S065 身份围栏。断开的 partially-populated 目录在 Windows build 26300 可返回 FLT_INVALID_NAME_REQUEST；扫描明确 incomplete、禁止推导删除，连接存活时元数据扫描零内容供给。
 
-`platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Root。S129 起三项操作共用进程内常驻的固定 MTA 工作线程，初始化 WinRT 后保持其与 windows-rs 工厂缓存同寿命；调用者不需初始化，不跨 await 持有 apartment。正式 runtime 的共同 assemble 路径在恢复核对后、切换到内容供给前通过 spawn_blocking 注册，覆盖启动修复、重启、新增绑定及连接重建。失败明确返回，不注销/重建根，不修改文件驻留、pin 或 in-sync；PopulationPolicy=AlwaysFull，与 CFAPI adapter 一致。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
+`platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Vault。S129 起三项操作共用进程内常驻的固定 MTA 工作线程，初始化 WinRT 后保持其与 windows-rs 工厂缓存同寿命；调用者不需初始化，不跨 await 持有 apartment。正式 runtime 的共同 assemble 路径在恢复核对后、切换到内容供给前通过 spawn_blocking 注册，覆盖启动修复、重启、新增绑定及连接重建。失败明确返回，不注销/重建根，不修改文件驻留、pin 或 in-sync；PopulationPolicy=AlwaysFull，与 CFAPI adapter 一致。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
 
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
 
@@ -2254,7 +2254,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 `platform-windows::files::controlled` 是同步 blocking 平台 API，不依赖 agent-core/store。应用在 worker 中调用并映射 `ControlledLocal`/`LocalPort`，不持数据库事务：
 
-- `WindowsFiles::open(root,state)`：两个既有、同卷、不重叠的安全 pinned 目录；`seed(path,Evidence)` 从 durable local 状态载入旧代际，下一次仍重新哈希真实内容。
+- `WindowsFiles::open(vault,state)`：两个既有、同卷、不重叠的安全 pinned 目录；`seed(path,Evidence)` 从 durable local 状态载入旧代际，下一次仍重新哈希真实内容。
 - `observe(path) -> ObservedContent::{Absent,File(Arc<FixedSnapshot>)}`：健康父目录才能证明 Absent；文件在独占 RH oplock 下流式固定，`Evidence{generation,volume,file,digest,size}`；新字节或新物理身份递增代际，mtime 不授权。`FixedSnapshot::read_at` 最多 1 MiB，句柄拒绝外部修改/删除。
 - `protect(path,writable) -> (ProtectedFile,EntryMetadata)`：元数据 no-follow 后取得正式 CFAPI oplock，再核对身份。`ProtectedFile::lease -> ProtectedLease`，`lease.file()` 为借用 Win32 句柄；不得 close/duplicate。oplock 已破坏、部分内容、可写映射/使用中、未知对象均报错。S069 可在 lease 内再次复核版本/摘要后调用 CFAPI。
 - `replace(op_hex,target,staged_path,before:Option<&Evidence>,digest) -> Evidence`：调用前先持久 core local_intent。内部 stage 固定并再次在 oplock 保护中核对；平台日志绑定 OpId、目标、根物理身份及前后身份/摘要，sync 后才移动旧对象到独立 state，随后不覆盖发布。两段发布存在可恢复间隙；用户填入间隙时拒覆盖，旧内容/新stage/用户文件均保留。
@@ -2264,30 +2264,30 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S069-b 固定版本内容短租约
 
-- Wire唯一源 `api/openapi.yaml`：`POST /v1/roots/{root}/entries/{entry}/versions/{version}/leases` 与 `/{lease}/renew`、`/{lease}/release`，body为稳定 `lease_id`、整份 `sha256`、`size`。响应完整回显pin、UTC到期及剩余秒数、closed。仅Bearer/授权Root可操作。
+- Wire唯一源 `api/openapi.yaml`：`POST /v1/vaults/{vault}/entries/{entry}/versions/{version}/leases` 与 `/{lease}/renew`、`/{lease}/release`，body为稳定 `lease_id`、整份 `sha256`、`size`。响应完整回显pin、UTC到期及剩余秒数、closed。仅Bearer/授权Vault可操作。
 - `server-store::version_leases`：同BEGIN IMMEDIATE核对固定版本与live对象，使用既有`object_leases`作为GC保护；0010请求关联记住固定输入，ID复用换输入409，失效/释放410；TTL120秒，acquire重放不延长，renew仅活跃，release幂等。活跃对象租约阻止collectable标记，GC仍按既有租约与引用集工作。
-- 服务端租约已提交后才检查对象可读和长度，失败503并保留有界保护，绝不返回可释放证明；客户端`LeaseEndpoint`精确校验Root/Entry/Version/hash/size/id/TTL/closed。调用方必须保留本地副本直到有效租约及持续平台保护均成立；传输成功不代表租约有效。
+- 服务端租约已提交后才检查对象可读和长度，失败503并保留有界保护，绝不返回可释放证明；客户端`LeaseEndpoint`精确校验Vault/Entry/Version/hash/size/id/TTL/closed。调用方必须保留本地副本直到有效租约及持续平台保护均成立；传输成功不代表租约有效。
 - 平台释放与S063薄wrapper由S069-a/c完成，见下节；本子卡自身不冒充Windows原生或完整进程组装。
 
 ## S067 — CFAPI hydration 与传输/调度组装
 
 - `agent-core::engine::scheduler::{UserReads,UserReadGuard}` 由生产 `Scheduler::user_reads()` 提供，复用内容并发池、per-entry 排他及持久绑定门禁。`try_acquire(request,binding,entry)` 返回 guard/忙/明确拒绝，不写同步队列、基线或 committed。调用方有界等待且响应取消。
-- `apps/agent::bootstrap::{connect_hydration,HydrationConfig,PinnedVersion}` 真实装配 HTTP `ContentEndpoint<ReqwestTransport>`、SQLite `ClientStorePorts`、上述共享资源与 S066 `Adapter`。输入为已恢复 DB、认证客户端、Catalog、固定版本 size/SHA-256、独立内部stage目录、超时/块/在途上限。`HydrationCallbacks::register_version` 先登记不可变版本，再发布Catalog；同一版本改变事实或外来Root/Binding拒绝。在途请求持有原pin。
+- `apps/agent::bootstrap::{connect_hydration,HydrationConfig,PinnedVersion}` 真实装配 HTTP `ContentEndpoint<ReqwestTransport>`、SQLite `ClientStorePorts`、上述共享资源与 S066 `Adapter`。输入为已恢复 DB、认证客户端、Catalog、固定版本 size/SHA-256、独立内部stage目录、超时/块/在途上限。`HydrationCallbacks::register_version` 先登记不可变版本，再发布Catalog；同一版本改变事实或外来Vault/Binding拒绝。在途请求持有原pin。
 - callback只入有界队列/置取消；独立runtime先整个固定版本下载/读回SHA-256验证，再按请求范围64KiB分段 `Reply::transfer`。错误、取消、超时不返回假字节，部分进度保留；`cancel_hydration`/真实 `CANCEL_FETCH_DATA` 共用token。取消通过内容端口返回执行器，必须先落已完成位图，不能直接drop整份下载future。`disconnect`停准入并取消，`wait_idle`供启动/退出围栏，CFAPI回执键和correlation始终取S066拥有副本。
-- `platform-windows::files::staging::StagingFile` 是内部目录的安全单文件 TempContent 实现：no-follow相对句柄、普通单链接、独占读写、写后sync、剩余容量检查；拒绝与同步Root重叠。已校验stage最多保留16个独占句柄供连续范围请求复用；未命中/重启重新核对整份摘要，关闭句柄不删除内容。只丢可重建暂存，用户完整缓存不自动回收。驻留在下载开始后保持partial，不凭HTTP下载完成改写baseline或清dirty，后续扫描证明完整驻留。
+- `platform-windows::files::staging::StagingFile` 是内部目录的安全单文件 TempContent 实现：no-follow相对句柄、普通单链接、独占读写、写后sync、剩余容量检查；拒绝与同步Vault重叠。已校验stage最多保留16个独占句柄供连续范围请求复用；未命中/重启重新核对整份摘要，关闭句柄不删除内容。只丢可重建暂存，用户完整缓存不自动回收。驻留在下载开始后保持partial，不凭HTTP下载完成改写baseline或清dirty，后续扫描证明完整驻留。
 - 状态查询 `HydrationStats` 分列成功供给、取消、实际OS取消回调、失败及字节；显式应用取消验证不能替代OS回调触发证明。S011原始build26300的OS取消触发限制继续保留。进程、凭据和启动恢复由S070组装。
 
 ## S070-b0 应用组装基础适配
 
 - `http-client::sync::{snapshot,snapshot_page,submit,operation}` 仅实现既有schema端点：固定身份核对，原Op重试，pending不得携带committed事实。snapshot同时返回响应HTTP Date秒数；错误不替换快照、不取客户端时间。
-- `RootHandle::ensure_directory(relative)` 在no-follow父句柄下创建/核对普通目录，现有文件和越界拒绝。`WindowsFiles::preserve(from,to,&Evidence)` 持续保护、完整核对后按句柄不覆盖移动；调用方先落持久意图，重启核对相同物理身份。文件字节和代际不变。
+- `VaultHandle::ensure_directory(relative)` 在no-follow父句柄下创建/核对普通目录，现有文件和越界拒绝。`WindowsFiles::preserve(from,to,&Evidence)` 持续保护、完整核对后按句柄不覆盖移动；调用方先落持久意图，重启核对相同物理身份。文件字节和代际不变。
 - S070-a `InstanceGuard` 必须在DB打开前获取并保留至连接池关闭；SID来自实际token，会话mutex加state独占锁。`CredentialVault` 保存current-user WinCred blob，网络logon无库时明确失败；配置/日志不含凭据。
 
 ## S069 Windows显式释放与恢复
 
 - `files::controlled::ProtectedFile::into_owned_lease() -> OwnedProtection`：持续CfReference，Drop先release再close；`file()`仅借用Win32句柄，不能关闭或复制。S063从protect到网络校验/驻留CAS均持此对象，跨await的真实新writer原生测试被阻止。
-- `cfapi::release::verified::ReleaseHandle::open(RootHandle,path,Identity,generation,size,empty_intent)`：安全相对路径+物理/domain身份；`evidence`实际整份hash；`is_released/released_identity`只查元数据，partial/未知报错；`dehydrate(Evidence)`持续保护内再核对，CFAPI实际成功并no-recall复核后才可收尾。调用者必须先持当前固定版本GC租约，不能凭clean标记调用；失败保留核心意图，pin恢复失败也如实返回。
-- `apps/agent::release::NativeReleaseLocal::new(root,Arc<Database>,Identity,RelativePath,VersionPin)`：仅固定目标，保护前读当前代际/物理身份，供`ManualRelease`的ReleaseLocal端口。`HttpReleaseRemote::new(ApiClient<ReqwestTransport>,RootId)`：真实LeaseEndpoint，20秒heartbeat、低于30秒保守余量拒绝；失败不得清本地字节，Drop主动解除或留有界TTL。
+- `cfapi::release::verified::ReleaseHandle::open(VaultHandle,path,Identity,generation,size,empty_intent)`：安全相对路径+物理/domain身份；`evidence`实际整份hash；`is_released/released_identity`只查元数据，partial/未知报错；`dehydrate(Evidence)`持续保护内再核对，CFAPI实际成功并no-recall复核后才可收尾。调用者必须先持当前固定版本GC租约，不能凭clean标记调用；失败保留核心意图，pin恢复失败也如实返回。
+- `apps/agent::release::NativeReleaseLocal::new(vault,Arc<Database>,Identity,RelativePath,VersionPin)`：仅固定目标，保护前读当前代际/物理身份，供`ManualRelease`的ReleaseLocal端口。`HttpReleaseRemote::new(ApiClient<ReqwestTransport>,VaultId)`：真实LeaseEndpoint，20秒heartbeat、低于30秒保守余量拒绝；失败不得清本地字节，Drop主动解除或留有界TTL。
 - 验收入口：先`nix develop --command cargo build --locked -p vaultsyncd-server-tests --example release-native-server`，再Windows shell运行`tests/platform/windows/run-native-release.sh`。专用`apps/agent/tests/native_release.rs` target使用真实Linux生产bootstrap服务/真实租约/Windows NTFS；bridge manifest含短命测试token，仅0600忽略artifacts及临时客体文件，脚本清理tunnel/server/manifest/driver。宿主桥接example也可供S070真实无GUI验收复用。
 - SQLite FULL证据来自专用测试DB的真实pager容量上限，未填满系统卷；后续物理卷故障与生产GC worker仍按计划验收。S070启动必须先平台publication恢复再core apply/release恢复，之后连接同步。
 
@@ -2312,17 +2312,17 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S072 本机管理命令与授权恢复读取
 
-- `api/local-ipc.schema.json` 1.2 提供 21 项 `CommandName` 闭集：状态/订阅、绑定列举/创建/暂停/恢复/解绑/模式、问题列举与重试、文件下载/释放、恢复包导出、连接读取/设置/登录/登出、Root/历史/回收站列举与恢复。`CommandParameters` 由 `crates/local-ipc::commands::validate` 按命令复核必填项、拒绝多余参数、非规范身份、相对路径、越界文本和非规范修订；副作用仍由执行器复核，不能只信界面。`ManagementResult` 按命令只填实际结果；稳定错误码为 `invalid_argument`/`not_found`/`blocked`/`unavailable`/`unauthenticated`/`conflict`/`internal`，同步原因仍放在 `Problem.code`。
+- `api/local-ipc.schema.json` 1.2 提供 21 项 `CommandName` 闭集：状态/订阅、绑定列举/创建/暂停/恢复/解绑/模式、问题列举与重试、文件下载/释放、恢复包导出、连接读取/设置/登录/登出、Vault/历史/回收站列举与恢复。`CommandParameters` 由 `crates/local-ipc::commands::validate` 按命令复核必填项、拒绝多余参数、非规范身份、相对路径、越界文本和非规范修订；副作用仍由执行器复核，不能只信界面。`ManagementResult` 按命令只填实际结果；稳定错误码为 `invalid_argument`/`not_found`/`blocked`/`unavailable`/`unauthenticated`/`conflict`/`internal`，同步原因仍放在 `Problem.code`。
 - `GetStatusResult.snapshot_version` 为进程身份加单调计数；`subscribe_status(after_version)` 长轮询推送全量快照，进程变化或游标丢失立即返回全量，不追加增量算法。`Problem` 聚合 pending/事件/意图/传输/通知/管理恢复的真实持久原因，`retry_problem` 只恢复已持久操作并在问题已消失时幂等返回。
 - `apps/agent/src/runtime.rs` 以 SQLite `agent_connection` 和 `bindings` 为权威加载连接/绑定，允许未登录启动；管理命令进入单 mailbox 串行执行，创建/解绑/模式切换/连接切换与同步生命周期交错时重新核对执行门。登录凭据只写 current-user Credential Manager，状态/结果/日志不含 token 或口令。`FullMaterializer` 从持久 mode 取值，真实读取固定内容并核对代际/身份/摘要；恢复包导出使用不覆盖的安全目录/文件句柄。完整模式任务只在本地发现完成且无未决 pending/intent 后补齐证据，避免离线上传或删除竞争被误判。
 - `crates/client-store` 迁移 0011 增加无凭据 `agent_connection(singleton,server_id,server_url,ca_file)`；10→11 升级保留未确认内容与队列、生成备份、拒绝旧 writer，初始建库包含该表。
-- `GET /v1/roots/{root}/entries/{entry}/history` 与 `GET /v1/roots/{root}/trash` 需要 Root 授权，按稳定身份 `after` 分页、最多 100 项，返回 `RecoveryPage`；未知/重复参数 400、越权 403、条目不存在 404。回收站恢复事件携带提交后的 revision、parent、version、hash、size。`api/openapi.yaml` 与 `packages/api-client` 同步生成；`packages/local-ipc-types` 导出 1.2 类型和解码器。
+- `GET /v1/vaults/{vault}/entries/{entry}/history` 与 `GET /v1/vaults/{vault}/trash` 需要 Vault 授权，按稳定身份 `after` 分页、最多 100 项，返回 `RecoveryPage`；未知/重复参数 400、越权 403、条目不存在 404。回收站恢复事件携带提交后的 revision、parent、version、hash、size。`api/openapi.yaml` 与 `packages/api-client` 同步生成；`packages/local-ipc-types` 导出 1.2 类型和解码器。
 - 原生验收入口：`VAULTSYNCD_PROCESS_TASK=S072 tests/platform/windows/run-native-process.sh`，在真实 Windows 用户会话启动产品 agent，逐项调用 21 个命令并验证参数负例、版本拒绝、Credential Manager 登录、真实 HTTP/SQLite/文件副作用、问题重试、恢复包与凭据脱敏。S071 的 `VAULTSYNCD_PROCESS_TASK=S071` 真实进程回归继续复用。
 
 ## S073 Windows CLI 最小管理入口
 
 - 新包 `apps/cli`（`vaultsyncd-cli`，产物 `vaultsyncd-cli.exe`）只依赖 `vaultsyncd-local-ipc`、`vaultsyncd-platform-windows`、Tokio、`rpassword` 与 `rand_core`；**不依赖** `vaultsyncd-client-store`、SQLx 或 agent 核心。它无法直接打开 `client.sqlite`，也不自行判断暂停/释放/恢复是否安全，所有副作用仍由运行中的 agent 执行器复核。该包在 `members` 中、不在 `default-members`（Windows 用户会话入口，宿主只跑参数/输出单元测试）。
-- 命令映射：`status`→`get_status`，`subscribe-status`→`subscribe_status`，`connection`/`set-connection`/`login`/`logout`，`roots`，`bindings`/`create-binding`/`pause`/`resume`/`mode`/`detach`，`download`/`release`，`problems`/`retry`，`history`/`trash`/`restore`，`export-recovery`。`download`/`release` 缺省生成规范 32 位十六进制 `operation_id`；ID、路径、修订和模式仍由 `crates/local-ipc::commands::validate` 与 agent 复核。
+- 命令映射：`status`→`get_status`，`subscribe-status`→`subscribe_status`，`connection`/`set-connection`/`login`/`logout`，`vaults`，`bindings`/`create-binding`/`pause`/`resume`/`mode`/`detach`，`download`/`release`，`problems`/`retry`，`history`/`trash`/`restore`，`export-recovery`。`download`/`release` 缺省生成规范 32 位十六进制 `operation_id`；ID、路径、修订和模式仍由 `crates/local-ipc::commands::validate` 与 agent 复核。
 - 全局 `--json`/`-j` 输出单行信封：成功 `{ok:true,command,result:GetStatusResult}`，失败 `{ok:false,command,error:{code,message,retryable},exit_code}`。成功应答缺少该命令必需结果（Binding/问题/条目/连接/导出计数/状态快照）时以 `protocol_error` 失败，不把缺失字段显示成空列表或成功。输出与日志不再打印请求，不含密码、token 或命名管道 SID。
 - 稳定退出码：`0` 成功；`2` CLI 用法/本地输入错误（未知命令/选项、缺参数、`--password`、空密码）；`3` 无法连接 agent（管道不存在/拒绝/断连/超时，JSON code `agent_unavailable`）；`4` 未登录或需重新认证（agent `unauthenticated`）；`5` agent 拒绝或执行失败（其余稳定错误码）；`6` 协议版本或应答不兼容（`unsupported_version`/`protocol_error`）。
 - 登录密码只从标准输入读取：终端使用 `rpassword` 不回显，管道只读首行；`login` 不接受 `--password`，密码不进入 argv、shell 历史、JSON、stderr 或日志。请求中的瞬时密码随请求释放，agent 仅写 current-user Credential Manager。
@@ -2331,28 +2331,28 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S074 三客户端跨进程端到端场景
 
-- 新包 `tests/e2e`（`vaultsyncd-e2e`）是**跨进程场景编排器**：Windows 客体上运行，持有真实产品 `vaultsyncd-agent.exe` 子进程并通过 named pipe 读取真实状态；远端是宿主真实 Linux 服务端（真实 HTTP/SQLite/btrfs Root），中间是本机测试 TLS 入口 + 认证 SSH 回环隧道。该包在 `members`、不在 `default-members`：宿主 `cargo test -p vaultsyncd-e2e` 只执行场景数据/代理规则测试，Windows 执行用 `nix develop .#windows` 交叉编译。
-- 入口：宿主先构建 `cargo build --locked -p vaultsyncd-server-tests --example e2e-native-server`，再运行 `VAULTSYNCD_WINDOWS_CACHE=<cache> nix develop .#windows --command bash tests/platform/windows/run-native-e2e.sh`。脚本启动真实服务端 fixture（按场景 `server_seed` 播种非空 Root）、反向隧道、交叉编译 agent/编排器、校验 SHA-256、在交互用户会话的 scheduled task 中执行，并把 `report.json`/代理事件/agent 日志取回 `artifacts/S074/`。只清理本 run 的 `s074-driver-*` 与 `run-e2e-*`。
+- 新包 `tests/e2e`（`vaultsyncd-e2e`）是**跨进程场景编排器**：Windows 客体上运行，持有真实产品 `vaultsyncd-agent.exe` 子进程并通过 named pipe 读取真实状态；远端是宿主真实 Linux 服务端（真实 HTTP/SQLite/btrfs Vault），中间是本机测试 TLS 入口 + 认证 SSH 回环隧道。该包在 `members`、不在 `default-members`：宿主 `cargo test -p vaultsyncd-e2e` 只执行场景数据/代理规则测试，Windows 执行用 `nix develop .#windows` 交叉编译。
+- 入口：宿主先构建 `cargo build --locked -p vaultsyncd-server-tests --example e2e-native-server`，再运行 `VAULTSYNCD_WINDOWS_CACHE=<cache> nix develop .#windows --command bash tests/platform/windows/run-native-e2e.sh`。脚本启动真实服务端 fixture（按场景 `server_seed` 播种非空 Vault）、反向隧道、交叉编译 agent/编排器、校验 SHA-256、在交互用户会话的 scheduled task 中执行，并把 `report.json`/代理事件/agent 日志取回 `artifacts/S074/`。只清理本 run 的 `s074-driver-*` 与 `run-e2e-*`。
 - `tests/scenarios/three-clients.json` 是数据驱动描述（schema 1，`serde(deny_unknown_fields)`）：`clients`（id/label/mode）、`server_seed`、按序 `blocks`（`import`/`offline_edit`/`rename`/`delete_modify`/`lost_response`）与每块 `requirements`。编排器固定每类 block 的验收判据，JSON 只提供路径/内容/参与者；`tests/scenarios/README.md` 是形状说明。新增同类数据不改代码。
 - 拓扑与隔离：仓库只有**一台** Windows 11 客体（第二台属 S107）。三个客户端是同一实机的三个隔离身份/环境：独立 DeviceId、状态目录与 `client.sqlite`、同步根、缓存、agent 进程；产品“每用户会话单实例”不变量使 agent **顺序**执行（报告 `physical_windows_guests=1`、`concurrent_agent_processes=1`，不宣称并发实机）。每个客户端在启动前经 `--login-stdin` 登录（Credential Manager 只保存一份当前账号凭据）。
-- 客户端运行配置使用 `server.url=https://127.0.0.1:<测试入口>` 与 `server.ca_file=<run>/tls/ca.pem`（不设 `development_http`）；证书由 rcgen 现场生成，客户端仍做完整校验。测试入口按请求 `Connection: close` 转发到隧道上游，可对指定 `kind` 的 `POST /v1/roots/{root}/operations` **先转发、再丢弃响应**，并记录每个操作的 `op_id`、`status`、`state`、`replayed`、`revision`、`version_id`、`root_seq`、冲突副本与原始请求体；GET `/operations/{op}` 查询也记为 `kind=query`。响应丢失场景先验证产品按原 OpId 查询得到同一结果，再用记录的请求体按同一 OpId 重试，要求 `replayed=true` 且 revision/version/root_seq 相同。
-- 断言与报告：每份场景输入内容计算 SHA-256，必须在“当前快照条目 / 冲突副本（当前条目）/ 回收站 / 条目历史”中找到；每端最终命名空间必须与服务端快照一致，完整模式逐字节核对，按需端只允许 `on_disk=0` 占位且已水合内容仍须匹配固定版本；宿主收尾再核对 btrfs Root 工作目录字节与报告 `final_entries` 一致。报告含场景 commit/工作树是否脏、Windows/服务端/agent 版本、三端 DeviceId/Binding、拓扑、各 block 证据、代理操作事件、输入内容覆盖与收敛计数。
-- 场景暴露并修复的三处产品缺陷：① 客户端删除 ACK 保留被删版本，而服务端 delete 事件原先缺 `version_id`（`hash`/`size` 也缺），客户端按“同 revision 不同事实”拒绝整批；现 `apply_delete` 从 `version_facts` 补全三者（外部删除同样补全）。② `WindowsFiles::preserve` 曾删除被腾空路径的代际历史，首次导入 preserve-both 后远端版本在原路径安装会复用 generation 1 并撞上已有 evidence；现在保留被腾空路径的代际，路径代际只单调递增。③ `Adapter::adopt_complete` 曾拒绝把完整本地文件重新绑定到同 Binding/Root 的新条目；删除与离线修改并发时 ACK 后的 adopt 因此永远失败。现在仅当同一 Binding/Root 且 `on_disk >= size`（完整本地内容）时允许换身份，不完整占位仍拒绝。
+- 客户端运行配置使用 `server.url=https://127.0.0.1:<测试入口>` 与 `server.ca_file=<run>/tls/ca.pem`（不设 `development_http`）；证书由 rcgen 现场生成，客户端仍做完整校验。测试入口按请求 `Connection: close` 转发到隧道上游，可对指定 `kind` 的 `POST /v1/vaults/{vault}/operations` **先转发、再丢弃响应**，并记录每个操作的 `op_id`、`status`、`state`、`replayed`、`revision`、`version_id`、`vault_seq`、冲突副本与原始请求体；GET `/operations/{op}` 查询也记为 `kind=query`。响应丢失场景先验证产品按原 OpId 查询得到同一结果，再用记录的请求体按同一 OpId 重试，要求 `replayed=true` 且 revision/version/vault_seq 相同。
+- 断言与报告：每份场景输入内容计算 SHA-256，必须在“当前快照条目 / 冲突副本（当前条目）/ 回收站 / 条目历史”中找到；每端最终命名空间必须与服务端快照一致，完整模式逐字节核对，按需端只允许 `on_disk=0` 占位且已水合内容仍须匹配固定版本；宿主收尾再核对 btrfs Vault 工作目录字节与报告 `final_entries` 一致。报告含场景 commit/工作树是否脏、Windows/服务端/agent 版本、三端 DeviceId/Binding、拓扑、各 block 证据、代理操作事件、输入内容覆盖与收敛计数。
+- 场景暴露并修复的三处产品缺陷：① 客户端删除 ACK 保留被删版本，而服务端 delete 事件原先缺 `version_id`（`hash`/`size` 也缺），客户端按“同 revision 不同事实”拒绝整批；现 `apply_delete` 从 `version_facts` 补全三者（外部删除同样补全）。② `WindowsFiles::preserve` 曾删除被腾空路径的代际历史，首次导入 preserve-both 后远端版本在原路径安装会复用 generation 1 并撞上已有 evidence；现在保留被腾空路径的代际，路径代际只单调递增。③ `Adapter::adopt_complete` 曾拒绝把完整本地文件重新绑定到同 Binding/Vault 的新条目；删除与离线修改并发时 ACK 后的 adopt 因此永远失败。现在仅当同一 Binding/Vault 且 `on_disk >= size`（完整本地内容）时允许换身份，不完整占位仍拒绝。
 - 失败诊断：编排器在客户端未收敛时把当前 `bindings`/`problems`/代理事件写到 run 目录 `failure.json`，并停掉 agent 用 `--once` 复跑一次把产品 `detail` 打进日志；脚本把失败现场取回 artifacts，客体目录保留供诊断。
 
 ## S076 公共 UI 与前端应用壳
 
 - `@vaultsyncd/ui` 稳定入口导出 Button、Dialog（挂载时 showModal，onClose 由父移除）、Table<T>（columns/rows/rowKey/emptyMessage）、EmptyState、PageShell（受控 activePath/items/status）及原有 StatusBadge。`@vaultsyncd/ui/styles.css` 为独立样式入口；无 HTTP/IPC/Tauri 依赖。共享 CSS 变量 `--vs-accent`/`--vs-border`。
 - `@vaultsyncd/web`、`@vaultsyncd/desktop` 均提供 dev/typecheck/build/preview；各自 dist，Vite 8.3.6、React 19.3.1、根 pnpm 锁。开发/预览仅绑定 127.0.0.1；默认端口冲突明确失败。Hash 路由不要求服务端 history fallback。
-- Web `services/server.ts::checkServer(options?, signal?) -> Promise<HealthResponse>` 默认同源、浏览器 fetch、随机 request_id；只经 `@vaultsyncd/api-client` 稳定导出请求健康，无令牌存储。默认路由 `#/overview`，另有 `#/roots` 的未读取反馈；未知路由显式显示不存在。
+- Web `services/server.ts::checkServer(options?, signal?) -> Promise<HealthResponse>` 默认同源、浏览器 fetch、随机 request_id；只经 `@vaultsyncd/api-client` 稳定导出请求健康，无令牌存储。默认路由 `#/overview`，另有 `#/vaults` 的未读取反馈；未知路由显式显示不存在。
 - 桌面 `services/agent.ts::AgentClient.getStatus() -> Promise<GetStatusResult>` 用本机 IPC 稳定类型；S080 后默认 `nativeAgent` 调用 Tauri 固定状态桥，`disconnectedAgent` 仅保留为明确失败的测试替身。Tauri 不进入共享 UI。默认 `#/connections`，另有 `#/bindings`/`#/problems` 未读取反馈，无伪造同步完成状态。
 - 验证入口：`pnpm --filter @vaultsyncd/web test`（两应用 SSR 默认未连接与传输正负例），两应用各自 `typecheck`/`build`；无浏览器或 Windows 原生证据。
 
 ## 对象引用标记（S085）
 
-- `server-core::gc::mark::{ObjectKey, Reference, Reason}` 表达 Root 内内容地址、排他截止点与八类保护来源；`mark(now, references)` 返回每个对象的原因集合，重复引用合并，已过期原因不能抵消有效引用。`retained_until(at)` 固定加 30 天并饱和处理时间上界；不读取时钟/mtime，不做 I/O。
-- `server-store::gc::references(tx, owner, root, now)` 从调用方同一 SQLite 事务枚举：活跃当前版本永久保护，历史从取代时刻起 30 天，删除末版本从删除时刻起 30 天，回收站截止至少为删除后 30 天，未结束及 finalized 上传在会话有效期内保护总哈希，下载/提交/备份租约以 `expires_at > now` 保护。`Error::{OutOfScope,InvalidFact,Storage,Lease}` 均应中止本次回收；条目/回收站悬空版本按坏事实拒绝。
-- pending 操作或 `phase != finalized` 意图保守保护 Root 全部已登记对象；备份租约的 `SnapshotSeqMap` 涵盖本 Root 时，在冻结对象清单建立前同样保护整个 Root。此策略允许多保护，不允许遗漏；不把 seq 映射误当对象清单。store 生产依赖 core 的引用类型，core 不依赖 store。
+- `server-core::gc::mark::{ObjectKey, Reference, Reason}` 表达 Vault 内内容地址、排他截止点与八类保护来源；`mark(now, references)` 返回每个对象的原因集合，重复引用合并，已过期原因不能抵消有效引用。`retained_until(at)` 固定加 30 天并饱和处理时间上界；不读取时钟/mtime，不做 I/O。
+- `server-store::gc::references(tx, owner, vault, now)` 从调用方同一 SQLite 事务枚举：活跃当前版本永久保护，历史从取代时刻起 30 天，删除末版本从删除时刻起 30 天，回收站截止至少为删除后 30 天，未结束及 finalized 上传在会话有效期内保护总哈希，下载/提交/备份租约以 `expires_at > now` 保护。`Error::{OutOfScope,InvalidFact,Storage,Lease}` 均应中止本次回收；条目/回收站悬空版本按坏事实拒绝。
+- pending 操作或 `phase != finalized` 意图保守保护 Vault 全部已登记对象；备份租约的 `SnapshotSeqMap` 涵盖本 Vault 时，在冻结对象清单建立前同样保护整个 Vault。此策略允许多保护，不允许遗漏；不把 seq 映射误当对象清单。store 生产依赖 core 的引用类型，core 不依赖 store。
 - 本接口只产出标记事实，不改变数据库 `gc_state`，不清理历史行、临时文件或内容对象。S086 必须在宽限期后重新核对并与发布/租约使用统一协调，禁止凭过期快照直接删除。真实 SQLite 与核心共 6 项新增测试；相关包 lib 回归 311/84 通过。
 
 ## S080 Windows Tauri 壳与状态桥
@@ -2371,38 +2371,38 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - Web `BrowserAuth` 只用同源 credentials/no-store 请求；受保护调用复用 `request`，401 并发单飞刷新一次，重复 401 回登录，网络失败保留可重试错误。账号页面可登录、改密、退出、撤销全部；不使用 localStorage，不读 cookie 凭据。
 - Vite 仅回环监听、禁用 CORS，`VAULTSYNCD_DEV_API` 只接受无凭据/路径的本机 HTTP(S) 地址，保留原 Host 让后端校验浏览器 Origin。浏览器验收使用锁定 `nix develop .#web-tests` 的 Playwright Chromium；HTTP localhost 专用测试不代表 S097 生产 HTTPS 已部署。
 
-## S078 owner Root 健康与采集页面
+## S078 owner Vault 健康与采集页面
 
-- `GET /v1/admin/roots -> ManagedRootList{allowed_bases,roots}`：仅唯一 active owner，`Cache-Control:no-store`。普通 `GET /v1/roots` 保持无路径；注册也验证同一管理边界。未登录401、非唯一owner403、读取失败503，不返回假空清单。
-- `ManagedRoot{root_id,path,health,reason,next_step,root_seq,collection}`：每次请求按注册 `RootSnapshot` 现场复核挂载/身份/权限，失败 health=unavailable、collection=blocked，绝不推导删除；root_seq仅已提交序号。路径仅在该管理通道暴露。
-- `RootCollection{state,examined,pending,detail}` 来自同一 `ObserverRuntime` 的最近真实 `PassReport`；状态闭集 not_scanned/scanning/pending/complete/blocked，数量为十进制字符串。进程重启后无历史完成观测；只有完整扫描、初始采集完成、无pending/扫描故障才显示complete，不代表客户端同步。Root读取/意图读取/扫描失败会使旧完成状态失效。
-- `AllowedBases::paths()` 仅供管理员配置枚举；`RootContext::with_observer` 由入口装配。Web `RootsPanel` 使用生成API与BrowserAuth；显式刷新，注册不自动重放，网络/5xx结果未知时要求核对清单。`tests/web/roots-browser.py` 使用锁定Playwright及独立run_id btrfs服务，实际bind挂载故障与恢复均验收，测试挂载最终已卸载。
+- `GET /v1/admin/vaults -> ManagedVaultList{allowed_bases,vaults}`：仅唯一 active owner，`Cache-Control:no-store`。普通 `GET /v1/vaults` 保持无路径；注册也验证同一管理边界。未登录401、非唯一owner403、读取失败503，不返回假空清单。
+- `ManagedVault{vault_id,path,health,reason,next_step,vault_seq,collection}`：每次请求按注册 `VaultSnapshot` 现场复核挂载/身份/权限，失败 health=unavailable、collection=blocked，绝不推导删除；vault_seq仅已提交序号。路径仅在该管理通道暴露。
+- `VaultCollection{state,examined,pending,detail}` 来自同一 `ObserverRuntime` 的最近真实 `PassReport`；状态闭集 not_scanned/scanning/pending/complete/blocked，数量为十进制字符串。进程重启后无历史完成观测；只有完整扫描、初始采集完成、无pending/扫描故障才显示complete，不代表客户端同步。Vault读取/意图读取/扫描失败会使旧完成状态失效。
+- `AllowedBases::paths()` 仅供管理员配置枚举；`VaultContext::with_observer` 由入口装配。Web `VaultsPanel` 使用生成API与BrowserAuth；显式刷新，注册不自动重放，网络/5xx结果未知时要求核对清单。`tests/web/vaults-browser.py` 使用锁定Playwright及独立run_id btrfs服务，实际bind挂载故障与恢复均验收，测试挂载最终已卸载。
 
 ## 对象删除协调与过期上传清理（S086）
 
 - `server-core::gc::sweep::{GRACE_SECONDS, Decision, decide}`：固定一小时标记宽限；新引用优先 Keep，时钟回退 Wait。满盘不参与过期判据，不缩短30天保留或宽限。
-- `server-store::gc::sweep::{mark_root,candidates,authorize_delete,finish_delete}`：调用方传短事务；0011迁移新增 `gc_candidates(root_id,object_hash,marked_at,phase)`，marked仍可撤销，deleting与objects.collectable同事务持久授权且不能复活。授权前再次读取同事务全部引用；仅无保护的到期内容可移除历史/回收站/过期租约，删除末版本时清已删除条目的content指针、保留墓碑。候选每Root每轮最多100项，deleting优先；引用枚举目前读取Root全部事实。
-- `Database::{object_activity,object_maintenance}` 是克隆句柄共享的读/独占对象门。锁序：对象门 → Root commit gate → observer roots → SQLite短事务；不嵌套获取、不升级读锁、不跨文件I/O持SQLite写事务。同一实例必须复用Database克隆，服务状态独占锁仍为多进程边界。备份在S087使用同一独占对象门，不能另建平行协调器。
+- `server-store::gc::sweep::{mark_vault,candidates,authorize_delete,finish_delete}`：调用方传短事务；0011迁移新增 `gc_candidates(vault_id,object_hash,marked_at,phase)`，marked仍可撤销，deleting与objects.collectable同事务持久授权且不能复活。授权前再次读取同事务全部引用；仅无保护的到期内容可移除历史/回收站/过期租约，删除末版本时清已删除条目的content指针、保留墓碑。候选每Vault每轮最多100项，deleting优先；引用枚举目前读取Vault全部事实。
+- `Database::{object_activity,object_maintenance}` 是克隆句柄共享的读/独占对象门。锁序：对象门 → Vault commit gate → observer vaults → SQLite短事务；不嵌套获取、不升级读锁、不跨文件I/O持SQLite写事务。同一实例必须复用Database克隆，服务状态独占锁仍为多进程边界。备份在S087使用同一独占对象门，不能另建平行协调器。
 - 服务HTTP submit整体持读门（含restore/conflict/create/put），finalize/download/uploads和观察器run_once持同一读门；版本租约写入由SQLite事务与collectable触发器共同围栏。SQL同时拒绝collectable的新版本、租约、上传和备份租约，幂等对象登记不能复活deleting。过期上传status/put/finalize按不可用会话404回答，禁止重放已经失去保护的旧finalize引用。
 - `apps/server::gc::run_once(database,state_dir,now) -> io::Result<Report>` 在独占门下先清过期未完成上传，再标记/复核/删对象；外部观察后台每轮释放读门后调用。候选storage_path必须等于ObjectLayout规范路径，目录用RestrictedDir/fd锚定，拒绝符号链接；已有字节核对SHA-256与单链接，unlink+父目录fsync成功后才数据库收尾。marked/deleting/unlink边界被SIGKILL后重复继续；坏路径、坏内容、存储失败保留证据并明确报错。
-- 临时清理只处理过期aborted上传的登记块、规范未登记块、`.index.pid.tmp` 和该UploadId的`.assemble-*`/`finalize-*`暂存名。块和会话元数据在相应删除刷盘后清理，缺目录按已不存在幂等收尾；有效及finalized上传、未知名字/类型、用户Root、客户端dirty与完整缓存不参与。Report区分objects/parts/temporary_files；未匹配任何已知过期会话的孤立暂存不凭mtime猜测删除。
+- 临时清理只处理过期aborted上传的登记块、规范未登记块、`.index.pid.tmp` 和该UploadId的`.assemble-*`/`finalize-*`暂存名。块和会话元数据在相应删除刷盘后清理，缺目录按已不存在幂等收尾；有效及finalized上传、未知名字/类型、用户Vault、客户端dirty与完整缓存不参与。Report区分objects/parts/temporary_files；未匹配任何已知过期会话的孤立暂存不凭mtime猜测删除。
 
 ## S081 桌面连接与绑定管理
 
 - S114：壳新增固定 `select_local_directory()`，仅 Windows 内置 main 窗口 capability 授权。输入无路径/句柄，owner 从 Tauri 窗口取得；在独立 STA 上以 `IFileOpenDialog` + `FOS_PICKFOLDERS/FORCEFILESYSTEM/PATHMUSTEXIST/NOCHANGEDIR` 选择现有单目录，输出绝对路径 `string`，取消 `null`，失败为本地明确错误。它不属于 agent IPC；前端只读展示所选路径且未选前禁止创建，绑定仍由 agent 校验路径/重叠/卷身份。
-- S114：`GET /v1/roots` 可选 `name` 从已授权注册路径的 `file_name` 取得，只传末级名称；同名目录可共存，选择值/绑定身份仍是 `root_id`，排序不变。agent 将名称映射到既有 `RemoteItem.name`；旧服务端缺名或空名显示“未提供目录名（请更新服务器）”，不回退显示 UUID。旧客户端忽略新增字段，无 DB/IPC 迁移。
-- `apps/desktop/src-tauri/src/commands.rs` 提供八个固定 command：`agent_get_status/agent_set_connection/agent_login/agent_logout/agent_list_roots/agent_create_binding/agent_pause_binding/agent_resume_binding`。每项同时进入 AppManifest 和仅内置主窗口 capability；内部 `exchange` 先复用 IPC 参数校验，后连当前 SID/session 的固定 agent 管道。前端没有任意 command、管道、shell、文件读取或数据库入口。
-- TS `AgentClient` 对应八个类型化方法；连接和创建输入结构拒绝未知字段。`ConnectionInput` 只含 serverId/serverUrl/caFile，服务器身份由管理员提供（当前协议无公开身份发现端点）；`BindingInput` 只含规范 bindingId/rootId/localPath/mode。缓存由桥派生在 `%LOCALAPPDATA%/vaultsyncd/binding-cache/<bindingId>`，agent 复核实际物理路径与范围。密码只在瞬时登录请求内，页面提交后清空；凭据仍由 agent WinCred 保存，结果不返回 token。
-- 连接页提供地址、账号、显式附加CA；绑定页读取授权Root、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
-- agent 保留管理连接证书错误 `CERTIFICATE_INVALID`（blocked/不可自动重试）和目录错误 `LOCAL_PATH_UNAVAILABLE`（invalid_argument），返回核对名称/CA或现有NTFS目录的说明，不回显底层自由错误或凭据。Root/登录仍走现有认证用例，IPC schema 无变更。
+- S114：`GET /v1/vaults` 可选 `name` 从已授权注册路径的 `file_name` 取得，只传末级名称；同名目录可共存，选择值/绑定身份仍是 `vault_id`，排序不变。agent 将名称映射到既有 `RemoteItem.name`；旧服务端缺名或空名显示“未提供目录名（请更新服务器）”，不回退显示 UUID。旧客户端忽略新增字段，无 DB/IPC 迁移。
+- `apps/desktop/src-tauri/src/commands.rs` 提供八个固定 command：`agent_get_status/agent_set_connection/agent_login/agent_logout/agent_list_vaults/agent_create_binding/agent_pause_binding/agent_resume_binding`。每项同时进入 AppManifest 和仅内置主窗口 capability；内部 `exchange` 先复用 IPC 参数校验，后连当前 SID/session 的固定 agent 管道。前端没有任意 command、管道、shell、文件读取或数据库入口。
+- TS `AgentClient` 对应八个类型化方法；连接和创建输入结构拒绝未知字段。`ConnectionInput` 只含 serverId/serverUrl/caFile，服务器身份由管理员提供（当前协议无公开身份发现端点）；`BindingInput` 只含规范 bindingId/vaultId/localPath/mode。缓存由桥派生在 `%LOCALAPPDATA%/vaultsyncd/binding-cache/<bindingId>`，agent 复核实际物理路径与范围。密码只在瞬时登录请求内，页面提交后清空；凭据仍由 agent WinCred 保存，结果不返回 token。
+- 连接页提供地址、账号、显式附加CA；绑定页读取授权Vault、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
+- agent 保留管理连接证书错误 `CERTIFICATE_INVALID`（blocked/不可自动重试）和目录错误 `LOCAL_PATH_UNAVAILABLE`（invalid_argument），返回核对名称/CA或现有NTFS目录的说明，不回显底层自由错误或凭据。Vault/登录仍走现有认证用例，IPC schema 无变更。
 - `run-native-bindings.sh` 复用真实 Linux btrfs 实例，私有测试TLS+认证SSH回环隧道，Windows真React表单经桥/管道操作。先不信任CA而失败，再显式CA成功；验证错误目录、双方非空首合并、暂停恢复、关闭GUI后新文件上传与服务端真实字节。脚本/fixture注入仅 native-acceptance feature，正式程序不包含。生产HTTPS部署仍由S097验收。
 
 ## S079 Web 历史、冲突与回收站
 
-- 新增授权 `GET /v1/roots/{root}/recovery` 与 `/conflicts`，均返回 `RecoveryPage`，固定每页100项，规范 `after` 身份游标；复用 Root 授权，不暴露服务端绝对路径。recovery 返回活跃条目身份/相对路径/当前版本；conflicts 只接受持久映射里的活跃副本，不按名称猜测。关闭提示没有远端删除动作。
+- 新增授权 `GET /v1/vaults/{vault}/recovery` 与 `/conflicts`，均返回 `RecoveryPage`，固定每页100项，规范 `after` 身份游标；复用 Vault 授权，不暴露服务端绝对路径。recovery 返回活跃条目身份/相对路径/当前版本；conflicts 只接受持久映射里的活跃副本，不按名称猜测。关闭提示没有远端删除动作。
 - `RecoveryItem` 新增可选 `expires_at`（UTC Unix秒文本、最早可回收下限）与 `conflict_source`（原条目身份）。历史按 superseded+30天，删除后不少于delete+30天；回收站使用实际 expires_at。当前活跃版本省略到期字段。旧客户端可忽略新可选字段，无迁移。
-- Web `features/history/recovery.ts::RestoreSession` 按用户/Root 保存标签页 sessionStorage 原请求（无凭据），先保存再调用；未知/pending 不另起操作。resume 先 GET 原Op，404 才 POST 原请求，同 OpId/device/epoch/CAS/version；committed 才查询 recovery 的实际当前相对路径。不会把 pending/网络失败显示成恢复成功。
-- `#/recovery` 复用 BrowserAuth。入口按 Root 选择文件历史、冲突和回收站；按服务端返回游标翻页，到期禁用恢复；原Op持久到同标签页刷新，跨标签/清除存储不承诺自动找回。Restore 的最终安全检查继续属于服务端。
+- Web `features/history/recovery.ts::RestoreSession` 按用户/Vault 保存标签页 sessionStorage 原请求（无凭据），先保存再调用；未知/pending 不另起操作。resume 先 GET 原Op，404 才 POST 原请求，同 OpId/device/epoch/CAS/version；committed 才查询 recovery 的实际当前相对路径。不会把 pending/网络失败显示成恢复成功。
+- `#/recovery` 复用 BrowserAuth。入口按 Vault 选择文件历史、冲突和回收站；按服务端返回游标翻页，到期禁用恢复；原Op持久到同标签页刷新，跨标签/清除存储不承诺自动找回。Restore 的最终安全检查继续属于服务端。
 - 验收：`pnpm --filter @vaultsyncd/web test` 含恢复会话故障单测；`nix develop .#web-tests --command python3 tests/web/recovery-browser.py` 使用真实服务/Chromium/btrfs，丢提交响应后刷新原Op核对、同名另名恢复/目标保留、历史落盘与真实分页。pending 由注入单测覆盖，不宣称该浏览器脚本制造了真实后端pending。
 
 ## S092 构建依赖与协议消费者门禁
@@ -2423,18 +2423,18 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## 一致备份准备与租约（S087）
 
-- `server-core::backup::prepare::{Plan,FrozenRoot,FrozenObject,ready}` 约束清单身份/规范路径与全部ready证据；不做I/O。`server-store::backup::online_backup(source,destination)` 用安全rusqlite Online Backup API，在同一源读取事务取得Root序号/原映射/全部对象/逻辑表计数并导出WAL一致数据库；目标独占创建，清除导出副本会话/临时续传/租约后quick_check、foreign_key_check及fsync，源库不改。
-- `apps/server::backup::prepare(database,config,owner,id,now) -> io::Result<Prepared>` 只能从持服务状态锁的在线进程调用；唯一active owner与每次资源鉴权仍由管理入口保证。函数取共享`object_maintenance`门，完成可恢复意图，未解决pending/intent或collectable对象则明确拒绝。Root注册HTTP/管理socket共用入口现在也取`object_activity`门。禁止另开Database实例绕过该门，也不能在持读门时调用prepare。
+- `server-core::backup::prepare::{Plan,FrozenVault,FrozenObject,ready}` 约束清单身份/规范路径与全部ready证据；不做I/O。`server-store::backup::online_backup(source,destination)` 用安全rusqlite Online Backup API，在同一源读取事务取得Vault序号/原映射/全部对象/逻辑表计数并导出WAL一致数据库；目标独占创建，清除导出副本会话/临时续传/租约后quick_check、foreign_key_check及fsync，源库不改。
+- `apps/server::backup::prepare(database,config,owner,id,now) -> io::Result<Prepared>` 只能从持服务状态锁的在线进程调用；唯一active owner与每次资源鉴权仍由管理入口保证。函数取共享`object_maintenance`门，完成可恢复意图，未解决pending/intent或collectable对象则明确拒绝。Vault注册HTTP/管理socket共用入口现在也取`object_activity`门。禁止另开Database实例绕过该门，也不能在持读门时调用prepare。
 - 0012迁移 `backup_preparations(id,owner_id,phase,created_at,expires_at,snapshot_seq_map,manifest_hash,detail,cleaned_at)`，阶段preparing/ready/failed/releasing/released；ready必须有manifest_hash。`Prepared`含id、只读snapshot路径、固定manifest与其SHA-256；外部格式唯一源 `api/backup-manifest.schema.json`。ready仅表示prepare完成，不代表导出verify通过。
 - `platform-linux-server::backup::Arena::{open,create,freeze,is_read_only,remove,snapshot_path}` 只管理基目录内规范32位ID的prepared/snapshot；拒绝NoCoW/NoDataSum、非btrfs、嵌套子卷/不完整扫描、未知条目及路径逃逸。基目录为state/backups、0700；管理员预置user_subvol_rm_allowed挂载，服务本身不sudo、不挂载或格式化，不需要CAP_SYS_ADMIN。清理ro快照时须调用方先持久failed/releasing，再仅该snapshot清ro后删除。
-- 在恢复GC前安装24小时backup lease，当前按Root保守保护（包含后来新增对象，允许延后回收）。对象复制使用stage_copy（FICLONE/校验复制），复核摘要/大小、独立inode和刷盘；清单列出DB/配置摘要、schema/protocol契约版本/摘要、ServerId、原Root映射、逻辑表计数与全部对象。外部尚未采集的工作目录变化明确excluded。
+- 在恢复GC前安装24小时backup lease，当前按Vault保守保护（包含后来新增对象，允许延后回收）。对象复制使用stage_copy（FICLONE/校验复制），复核摘要/大小、独立inode和刷盘；清单列出DB/配置摘要、schema/protocol契约版本/摘要、ServerId、原Vault映射、逻辑表计数与全部对象。外部尚未采集的工作目录变化明确excluded。
 - `recover_incomplete(database,state_dir,now)` 在bootstrap独占状态锁后调用，只清持久preparing/failed未收尾ID、释放对应租约并留失败原因；ready不在此清理范围。没有遗留时不要求启用备份后端。S088负责管理命令/HTTP、导出/verify/release，不得绕过当前准备视图或把ready映射为complete。
 - 原生验收入口 `cargo run -p vaultsyncd-server --example backup-prepare-native -- <独立测试卷内尚不存在的run目录>`；测试不在服务中提权。S087独立target四包与集成共609/0，Windows MSVC core/store all-targets检查通过；实际btrfs持续写218次时固定seq2，历史/回收站/哈希/ro/租约、缺对象拒绝、嵌套拒绝、SIGKILL恢复与pending保护均通过。运维条件见 `docs/operations/backup.md`。
 
 ## S082 文件清单与桌面手动管理
 
 - 本机IPC **1.3**新增`list_files(binding_id,cursor?)`，1.2调用该命令明确UnsupportedVersion，其余既有命令保持兼容。schema唯一源生成Rust/TS `FileStatus`及`ManagementResult.files`；CLI提供`files --binding-id ID [--cursor ID]`，缺结果不是空成功。共享样本`api/examples/local-ipc.files.json`验证pending/dirty和六维信息不丢失，错误布尔值/缺维度两端拒绝。
-- `agent::management_listing::list`只经实际安全扫描与客户端持久状态读模型投影，复用domain `EntryState::project`。涵盖驻留、dirty、远端应用、任务、保护忙/未知、调度离线/Root不可用；online仅表示当前无已记录离线事实，不承诺网络连通。未知/未导入文件无entry_id，不能执行远端动作。扫描或挂载故障不作删除；缺完整内容凭据、物理修改、忙、待办、full或门禁阻塞均禁止UI释放。提示不是授权，S069执行器仍重核真实身份/完整hash/代际/版本租约与句柄。
+- `agent::management_listing::list`只经实际安全扫描与客户端持久状态读模型投影，复用domain `EntryState::project`。涵盖驻留、dirty、远端应用、任务、保护忙/未知、调度离线/Vault不可用；online仅表示当前无已记录离线事实，不承诺网络连通。未知/未导入文件无entry_id，不能执行远端动作。扫描或挂载故障不作删除；缺完整内容凭据、物理修改、忙、待办、full或门禁阻塞均禁止UI释放。提示不是授权，S069执行器仍重核真实身份/完整hash/代际/版本租约与句柄。
 - 每页最多100项，排序/游标为相对路径SHA256前16字节的规范hex，碰撞明确失败；返回next_cursor续读。实时分页不承诺跨页一致快照，刷新回第一页，界面搜索明确仅当前页。未读/失败不显示伪造空清单；旧页保留但动作禁用，慢响应不覆盖另一绑定页。
 - 桌面固定桥增加`agent_list_files/agent_download_entry/agent_release_entry/agent_list_problems/agent_retry_problem/agent_set_mode/agent_detach_binding/agent_export_recovery`，AppManifest和主窗口capability逐项授权，无通用任意命令/文件/SQL入口。副作用OpId在失败后保留供同动作重试。释放必须确认本地移除/远端保留/离线不可读；绑定管理提供模式、恢复导出和保留数据解绑的独立确认，完成只认agent返回的实际计数/报告。问题重试仅对agent标记retryable项目启用，仍调用既有执行器。
 - `run-native-files-ui.sh`在真Windows WebView操作页面，用只编译于native-acceptance的固定样本句柄/写入控制验证busy/dirty双重保护。实际下载、释放/重新下载、模式、pending不绿、导出dirty/未导入新文件hash、解绑后服务器原字节与本地数据均保留已验证。正式无测试feature构建清理两项测试自动权限，包含测试fixture/控制命令的二进制拒绝作为正式证据。VM保持在线，测试服务/隧道与本run进程清理。
@@ -2442,19 +2442,19 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ### S088 — 固定快照导出与持久长作业
 
-`backup::jobs::Context`由bootstrap唯一组装，HTTP与同UID管理socket共享。0013为源完整性（unverified/verified/incomplete）与prepare/verify/release持久队列；连接10秒截止不取消已接受的作业。启动及1秒pump重放queued/running/releasing，过期租约入队释放，不自动创建备份。重复verify重新读所有项、quick_check/FK/ServerId/schema/Root seq和逻辑表计数；ready不代表verified。释放先持久releasing，只删除该ID的Arena快照后才释放备份租约，失败保留恢复证据。
+`backup::jobs::Context`由bootstrap唯一组装，HTTP与同UID管理socket共享。0013为源完整性（unverified/verified/incomplete）与prepare/verify/release持久队列；连接10秒截止不取消已接受的作业。启动及1秒pump重放queued/running/releasing，过期租约入队释放，不自动创建备份。重复verify重新读所有项、quick_check/FK/ServerId/schema/Vault seq和逻辑表计数；ready不代表verified。释放先持久releasing，只删除该ID的Arena快照后才释放备份租约，失败保留恢复证据。
 
-锁次序：每备份ID写门（prepare/verify/release）→对象维护独占门（prepare/release）→S087 Root协调→短SQL事务；导出只持每ID读门，不持对象门。严禁在已有object_activity或object_maintenance门内调用prepare/release。不会在SQL事务持锁期间做文件复制或等待流读者。源租约在导出完成后继续存在，需release或到期清理。
+锁次序：每备份ID写门（prepare/verify/release）→对象维护独占门（prepare/release）→S087 Vault协调→短SQL事务；导出只持每ID读门，不持对象门。严禁在已有object_activity或object_maintenance门内调用prepare/release。不会在SQL事务持锁期间做文件复制或等待流读者。源租约在导出完成后继续存在，需release或到期清理。
 
-OpenAPI提供固定清单、仅清单内的DB/config/Root对象读取、整体流式export与job status/list。全部重新校验唯一active owner与请求会话，使用锚定RestrictedDir拒绝任意路径；备份包含受限PHC认证材料但sessions失效，不能公开分享。Unix协议特殊export先framed200握手再VSBK001原始字节，逐次写30秒空闲截止；普通请求仍10秒。流规则与0600收据唯一源`api/backup-export.schema.json`，CLI显式prepare/export/verify/release；本地verify不打开在线数据库。损坏或缺终止标记只能incomplete，服务源verified与客户端持久导出verified分别记录。
+OpenAPI提供固定清单、仅清单内的DB/config/Vault对象读取、整体流式export与job status/list。全部重新校验唯一active owner与请求会话，使用锚定RestrictedDir拒绝任意路径；备份包含受限PHC认证材料但sessions失效，不能公开分享。Unix协议特殊export先framed200握手再VSBK001原始字节，逐次写30秒空闲截止；普通请求仍10秒。流规则与0600收据唯一源`api/backup-export.schema.json`，CLI显式prepare/export/verify/release；本地verify不打开在线数据库。损坏或缺终止标记只能incomplete，服务源verified与客户端持久导出verified分别记录。
 
 S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包含11秒后继续完整流与release排队跨10秒后SIGKILL重放；取消verify先撤销旧verified。CLI本地verify只检查归档全部字节和固定清单，SQLite语义由verify-source及离线恢复入口检查。归档与固定摘要收据需一起保管，后续S089可复用纯`Index`/`ArchiveVerifier`和store只读`verify_database`，不可把未verified收据当成功。
 
 ## S083 桌面历史恢复与系统通知
 
-- 本机IPC **1.4**新增 `claim_notification(notification_key,notification_generation)`，1.3及之前明确拒绝该新命令；状态返回 `management.notices`（Root/原因/active或resolved/十进制代际/严重度/是否已领取）。client迁移0012增加generation与delivery_claimed，旧库原已读、次数及恢复状态保留，有迁移前备份，旧writer拒绝新schema。恢复后复发代际递增并重置claim，原GUI旧代际不能领取新通知；claim不等于已读或显示成功。
-- 严重问题复用agent-core问题端口，按Root和原因聚合全部绑定之后才解决；普通网络失败仅offline状态。真实提交冲突ACK和收到conflict变化只产生一次持久原因，现有冲突副本不会被开关/清除系统通知移除。问题快照包含持久问题和运行期投影；暂停不能证明故障已恢复。
-- 桌面新增固定 `agent_list_history/agent_list_trash/agent_restore_entry` 与通知设置命令，AppManifest及capability同步最小授权，无任意HTTP/数据库入口。历史/回收站分页含到期下限和冲突来源；恢复输入先持久到agent，再GET原Op，404才POST原请求，只有committed成功。服务端仍核对Root/权限/CAS，同名恢复保留现目标；返回授权快照内实际相对位置，位置尚未取得时明确待核对。UI未知/pending保留原操作身份供核对，不显示已恢复。
+- 本机IPC **1.4**新增 `claim_notification(notification_key,notification_generation)`，1.3及之前明确拒绝该新命令；状态返回 `management.notices`（Vault/原因/active或resolved/十进制代际/严重度/是否已领取）。client迁移0012增加generation与delivery_claimed，旧库原已读、次数及恢复状态保留，有迁移前备份，旧writer拒绝新schema。恢复后复发代际递增并重置claim，原GUI旧代际不能领取新通知；claim不等于已读或显示成功。
+- 严重问题复用agent-core问题端口，按Vault和原因聚合全部绑定之后才解决；普通网络失败仅offline状态。真实提交冲突ACK和收到conflict变化只产生一次持久原因，现有冲突副本不会被开关/清除系统通知移除。问题快照包含持久问题和运行期投影；暂停不能证明故障已恢复。
+- 桌面新增固定 `agent_list_history/agent_list_trash/agent_restore_entry` 与通知设置命令，AppManifest及capability同步最小授权，无任意HTTP/数据库入口。历史/回收站分页含到期下限和冲突来源；恢复输入先持久到agent，再GET原Op，404才POST原请求，只有committed成功。服务端仍核对Vault/权限/CAS，同名恢复保留现目标；返回授权快照内实际相对位置，位置尚未取得时明确待核对。UI未知/pending保留原操作身份供核对，不显示已恢复。
 - WinRT Toast固定AUMID `org.vaultsyncd.desktop`，只创建/更新本应用StartMenu快捷方式，拒绝同名他应用和symlink。先原子claim再尝试Show，保证同一活动代际最多尝试一次；Windows禁用/失败时问题仍完整，页面明确投递失败。布尔开关单独保存在用户应用设置，无凭据。微软[桌面AUMID要求](https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid)及[发送示例](https://learn.microsoft.com/en-us/windows/win32/shell/quickstart-sending-desktop-toast)为注册依据；首次未打包应用Setting可能缺行的[平台问题记录](https://github.com/MicrosoftDocs/windows-dev-docs/issues/1431)对应0x80070490，仅该特定错误允许实际Show，其余错误不默认成功。
 - `run-native-notifications.sh` 使用真实Windows WebView及系统History API验证中心记录、清中心/开关不清问题、重复报告与进程重启不风暴、恢复和复发。磁盘满/挂载/冲突的这组输入由离线核心端口夹具产生，只证明问题投影与真实OS投递，不冒充实际卷故障；真实冲突/恢复另由Linux btrfs服务与Windowsagent真壳验证。所有报告/fixture/Toast历史测试桥只在native-acceptance编译，正式构建清理全部四项测试权限。
 
@@ -2485,18 +2485,18 @@ S088原生最终证据：专属btrfs卷实际CLI/HTTP49.88秒矩阵通过，包�
 
 ### S089 — 离线恢复候选与启动屏障
 
-core::backup::restore只消费固定Index/字节与目录事实，验证schema/协议、全Root新空路径映射及命名空间父链，输出普通工作项和保守空间预算。平台restore::Target用锚定RestrictedDir验证真实CoW btrfs、无子卷/挂载/别名并读取fstatfs可用空间。store::restore::plan先验证源DB整体语义后交core规划；apply在短事务更新Root物理映射与全新随机恢复epoch，保留ServerId、Root seq、条目/版本/历史回收站/操作记录，会话失效。
+core::backup::restore只消费固定Index/字节与目录事实，验证schema/协议、全Vault新空路径映射及命名空间父链，输出普通工作项和保守空间预算。平台restore::Target用锚定RestrictedDir验证真实CoW btrfs、无子卷/挂载/别名并读取fstatfs可用空间。store::restore::plan先验证源DB整体语义后交core规划；apply在短事务更新Vault物理映射与全新随机恢复epoch，保留ServerId、Vault seq、条目/版本/历史回收站/操作记录，会话失效。
 
 StateLock::try_acquire_file接收平台已安全打开的同一server.lock，flock语义与服务/init相同。离线apply持锁全过程，restore.incomplete先于任何导入写入持久化；bootstrap/init持状态锁后、打开DB前拒绝该标记，不能启动半成品。全部文件与DB核验、目录刷盘后才移除标记；失败现场保留，默认非空目标拒绝重试，改用新空目标，不隐式覆盖。CLI接线和真实证据在S089-c完成后补充。
 
-S089兼容补充：先创建独立种类`RESTORE_GUARD_APPLICATION_ID=0x56535247`的server.sqlite，旧服务既有ForeignDatabase门同样拒绝；导入/更新只作用restore.candidate.sqlite。全部文件/历史/DB/新映射/epoch核验与刷盘后，确认护栏完整身份未变，再原子替换正式名称并刷盘，之后写complete报告和移除marker。不会把含旧Root路径/旧epoch的中间库暴露到正式名；即使旧程序不理解新marker，也不能开启半恢复。新恢复代际为随机63位非零值，排除所有旧Root epoch，重复恢复同一旧备份不会确定复用同一代际；逻辑ServerId、Root seq及历史保持。核心按Linux POSIX根分量解释映射，避免便携构建宿主改变路径语义。
+S089兼容补充：先创建独立种类`RESTORE_GUARD_APPLICATION_ID=0x56535247`的server.sqlite，旧服务既有ForeignDatabase门同样拒绝；导入/更新只作用restore.candidate.sqlite。全部文件/历史/DB/新映射/epoch核验与刷盘后，确认护栏完整身份未变，再原子替换正式名称并刷盘，之后写complete报告和移除marker。不会把含旧Vault路径/旧epoch的中间库暴露到正式名；即使旧程序不理解新marker，也不能开启半恢复。新恢复代际为随机63位非零值，排除所有旧Vault epoch，重复恢复同一旧备份不会确定复用同一代际；逻辑ServerId、Vault seq及历史保持。核心按Linux POSIX根分量解释映射，避免便携构建宿主改变路径语义。
 
-S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站、普通独立inode、会话失效/旧epoch操作410、重复恢复与零Root、在线同锁及非空/非法映射、坏归档与实际空间不足、SIGKILL后的当前启动屏障和既有ForeignDatabase门。护栏必须先于工作写入且候选DB不能用正式名称；完成文件写在原子发布后，marker持久移除才开放。容量预算为估算，运行时ENOSPC仍保留incomplete，源schema12的启动迁移沿用store既有迁移门；恢复不提供隐式覆盖/resume，运维入口见backup文档。
+S089最终真实证据：22.40秒矩阵覆盖完整恢复/历史下载/回收站、普通独立inode、会话失效/旧epoch操作410、重复恢复与零Vault、在线同锁及非空/非法映射、坏归档与实际空间不足、SIGKILL后的当前启动屏障和既有ForeignDatabase门。护栏必须先于工作写入且候选DB不能用正式名称；完成文件写在原子发布后，marker持久移除才开放。容量预算为估算，运行时ENOSPC仍保留incomplete，源schema12的启动迁移沿用store既有迁移门；恢复不提供隐式覆盖/resume，运维入口见backup文档。
 
 
 ### S091 — 真实远端协议协商
 
-补齐既有GET /v1/capabilities，不新增wire DTO/版本。bootstrap在状态锁/DB门后持久稳定ServerId，返回当前恢复epoch、已实现功能和真实限额；Root注册沿用restore_epoch，不在恢复后退回0。权威ServerId是服务器身份，现存agent配置server.id仍按既有客户端命名空间使用，本卡未额外收紧身份pin；URL/TLS/Root/会话授权边界照旧。
+补齐既有GET /v1/capabilities，不新增wire DTO/版本。bootstrap在状态锁/DB门后持久稳定ServerId，返回当前恢复epoch、已实现功能和真实限额；Vault注册沿用restore_epoch，不在恢复后退回0。权威ServerId是服务器身份，现存agent配置server.id仍按既有客户端命名空间使用，本卡未额外收紧身份pin；URL/TLS/Vault/会话授权边界照旧。
 
 默认Rust ApiClient（包括testing/all-features构建）在发送认证/数据请求前读取实际capabilities，拒major/不合法限额或缺已知能力；只使用已知feature交集，兼容更高minor与未知增量字段。刷新和401重试也重核，不向capability请求携带凭据/内容；本地恢复、数据库、缓存和未确认队列不由HTTP错误清理。仅cfg(test/testing)显式单元构造器with_transport_for_unit_tests可关闭这一层，生产默认构造器不受feature隐式影响。真实TCP fixture代理后接真实服务证明major拒绝不抵达login、缺uploads不创建上传，凭据保留；默认/testing各1项通过。当前没有旧正式发行客户端，固定开发profile/历史迁移校验和见tests/contract/fixtures/s091，不冒充正式版本互通。
 
@@ -2507,23 +2507,23 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 
 ## S095 NixOS 服务模块与显式存储授权
 
-- flake 导出 `nixosModules.default/vaultsyncd`、`checks.x86_64-linux.nixos-module`。`services.vaultsyncd` 提供 enable、package（默认同 flake Linux发行包）、user/group、extraGroups、stateDir、rootPaths、settings.server.listen/settings.log。settings 严格限于非敏感设置；没有 secret/auth/初始密码选项，owner 仅离线 admin stdin 初始化。生成 TOML 只含监听、路径与日志；空 rootPaths 不配置允许基目录，产品拒绝注册。
-- 专用非 root UID；User/Group、0077、NoNewPrivileges、空 capability 集、ProtectSystem=strict/ProtectHome=read-only；ReadWritePaths 仅内部 stateDir 与显式 Root 基目录。rootPaths 与状态互不包含，禁止系统路径，产品注册继续负责真实身份、嵌套 mount/subvolume/扫描准入。外部 Root 权限由管理员 ACL/组明确授予，不递归改权、不创建资料目录。
-- `/var/lib/` 内专用状态用 StateDirectory/0700；其他 stateDir 须预先由服务 UID 持有并0700。RequiresMountsFor 包括状态、backups 与 Root；read-only preflight 核对真实目录、访问权、btrfs/CoW/checksums 与 user_subvol_rm_allowed。不提供自动格式化、迁移、mount/sudo/CAP_SYS_ADMIN。备份 prepared/snapshot 为合法内部子卷；只读顶层 preflight 不误扫/改权。
-- `deploy/nixos/eval.nix` 是不激活的完整 NixOS fixture；构建 system 与 unit/config，`test-service.py` 把相同 unit 改用唯一测试名运行临时 UID/独立 btrfs，实际检查 Root 写入、白名单外/系统 EROFS、普通 UID快照/验证/删除与负例。部署及显式授权说明见 `deploy/nixos/README.md`；正式主机启用由 S096 单独验收。
+- flake 导出 `nixosModules.default/vaultsyncd`、`checks.x86_64-linux.nixos-module`。`services.vaultsyncd` 提供 enable、package（默认同 flake Linux发行包）、user/group、extraGroups、stateDir、vaultPaths、settings.server.listen/settings.log。settings 严格限于非敏感设置；没有 secret/auth/初始密码选项，owner 仅离线 admin stdin 初始化。生成 TOML 只含监听、路径与日志；空 vaultPaths 不配置允许基目录，产品拒绝注册。
+- 专用非 root UID；User/Group、0077、NoNewPrivileges、空 capability 集、ProtectSystem=strict/ProtectHome=read-only；ReadWritePaths 仅内部 stateDir 与显式 Vault 基目录。vaultPaths 与状态互不包含，禁止系统路径，产品注册继续负责真实身份、嵌套 mount/subvolume/扫描准入。外部 Vault 权限由管理员 ACL/组明确授予，不递归改权、不创建资料目录。
+- `/var/lib/` 内专用状态用 StateDirectory/0700；其他 stateDir 须预先由服务 UID 持有并0700。RequiresMountsFor 包括状态、backups 与 Vault；read-only preflight 核对真实目录、访问权、btrfs/CoW/checksums 与 user_subvol_rm_allowed。不提供自动格式化、迁移、mount/sudo/CAP_SYS_ADMIN。备份 prepared/snapshot 为合法内部子卷；只读顶层 preflight 不误扫/改权。
+- `deploy/nixos/eval.nix` 是不激活的完整 NixOS fixture；构建 system 与 unit/config，`test-service.py` 把相同 unit 改用唯一测试名运行临时 UID/独立 btrfs，实际检查 Vault 写入、白名单外/系统 EROFS、普通 UID快照/验证/删除与负例。部署及显式授权说明见 `deploy/nixos/README.md`；正式主机启用由 S096 单独验收。
 
 ## S096 主机试用实例与配置来源
 
-- 真实入口`/etc/nixos#wks-lab`，新增host-specific system.nix（主机提交ba1837a），固定永久Git仓库commit3640f3a，删除任务worktree后仍可构建。原有dirty主机flake.lock逐字节保留、不纳入提交；精确锁/NAR/来源快照和GCroot留运行时证据，不能把主机commit单独宣称为完整锁快照。
-- `vaultsyncd.service`的专用vaultsyncd-trial UID985，回环18721；新2GiB普通镜像`/data/vaultsyncd-trial-s096/volume.img`，显式loop btrfs挂载后state0700和samples互不包含。仅此挂载启用user_subvol_rm_allowed，/data原选项不变。owner仅离线CLI stdin，初始凭据root0600运行时文件，不入Git/store。
+- 真实入口`/etc/nixos#wks-lab`，新增host-specific system.nix（主机提交ba1837a），固定永久Git仓库commit3640f3a，删除任务worktree后仍可构建。原有dirty主机flake.lock逐字节保留、不纳入提交；精确锁/NAR/来源快照和GC root留运行时证据，不能把主机commit单独宣称为完整锁快照。
+- `vaultsyncd.service`的专用vaultsyncd-trial UID985，回环18721；新2GiB普通镜像`/data/vaultsyncd-trial-s096/volume.img`，显式loop btrfs挂载后state0700和samples互不包含。仅此挂载启用user_subvol_rm_allowed，/data原选项不变。owner仅离线CLI stdin，初始凭据vault0600运行时文件，不入Git/store。
 - 完整build/test/健康/实际237回滚/恢复test/switch238完成；样本上传committed、固定版本下载、服务重启和同OpId重放、普通UID备份校验释放均真实通过；SSH及既有应用进程/HTTP保持。来源、命令、实际回滚保证与限制唯一运维入口`docs/operations/nixos.md`。当前无公网HTTP；TLS与代理留S097。
 
-## S097 同源 TLS 与启动 Root 围栏
+## S097 同源 TLS 与启动 Vault 围栏
 
 - `deploy/reverse-proxy/caddy.nix`只消费运行时证书路径，回环18443→18721；原Host同源、受控转发头、16MiB请求体上限、SSE立即flush且不重试写操作，无任意文件/Unix socket暴露。证书/owner凭据无Nix选项、store或Git副本。实际Linux Chromium、Windows Edge/正式原生PE证明严格TLS；开发私有CA回环入口不等于公网部署。固定来源、证书指纹与恢复入口见operations/nixos.md。
-- `apps/server/src/root_fences.rs::RootFences`在启动replay之前只读核对历史RootSnapshot的FSID/subvol/canonical path/inode/birth和完整存储准入，再建立当前mount/device围栏；历史blob不回写，无wire/持久格式升级。Auth诊断、管理problems、observer、ExecutorContext及startup replay共享同一Arc<RootHandle>；新注册在活进程严格比对原快照，所有使用仍verify，bind/卸载/权限变化fail closed、不推导删除。缺FSID/subvol/birth的历史证据不伪装为已核实。
-- `RestrictedDir::list_entries`以openat(pinned_fd,".")取得独立open-file-description，getdents游标不共享；不使用dup或rewind共享offset。平台有效账号rwx检查只读faccessat/AT_EACCESS，不写Root探测文件。并发多缓冲完整枚举与真实systemd/bind证明围栏。
-- 旧put intent FileKey无birth，跨匿名dev变化不能重映射：Published以after内容证明只收尾不覆盖；Prepared同dev可redo，旧dev变化保留pending/内容并needs_recovery，等待显式恢复。独立边界测试示例只允许专属run且先StateLock，不修改在线DB；无测试故障开关进入正式服务。实际trial固定永久fd2f52d，重启同Root/seq18/历史版本/全内容健康。
+- `apps/server/src/vault_fences.rs::VaultFences`在启动replay之前只读核对历史VaultSnapshot的FSID/subvol/canonical path/inode/birth和完整存储准入，再建立当前mount/device围栏；历史blob不回写，无wire/持久格式升级。Auth诊断、管理problems、observer、ExecutorContext及startup replay共享同一Arc<VaultHandle>；新注册在活进程严格比对原快照，所有使用仍verify，bind/卸载/权限变化fail closed、不推导删除。缺FSID/subvol/birth的历史证据不伪装为已核实。
+- `RestrictedDir::list_entries`以openat(pinned_fd,".")取得独立open-file-description，getdents游标不共享；不使用dup或rewind共享offset。平台有效账号rwx检查只读faccessat/AT_EACCESS，不写Vault探测文件。并发多缓冲完整枚举与真实systemd/bind证明围栏。
+- 旧put intent FileKey无birth，跨匿名dev变化不能重映射：Published以after内容证明只收尾不覆盖；Prepared同dev可redo，旧dev变化保留pending/内容并needs_recovery，等待显式恢复。独立边界测试示例只允许专属run且先StateLock，不修改在线DB；无测试故障开关进入正式服务。实际trial固定永久fd2f52d，重启同Vault/seq18/历史版本/全内容健康。
 
 ### S099 — Windows每用户安装与独立会话启动
 
@@ -2536,18 +2536,18 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 
 - 唯一schema源增加IPC1.5 `prepare_maintenance(destination)`，严格限定参数；暂停全部绑定、断并排空CFAPI回调、逐绑定ExportRecovery后退出，失败同样停止，不以半断开的运行态继续执行。普通agent和session在打开DB前检查`agent/maintenance.json`；不会自行清屏障。维护导出操作有30分钟上限，普通请求/帧仍5秒，未向GUI开放通用启动/停进程能力。
 - agent固定`--maintenance <upgrade|uninstall-program|uninstall-provider|recover> --program-dir <目录>`验证程序清单和实际同用户IPC进程路径，停机后独占writer锁，固定整套state（含旧WAL）与程序hash备份先于迁移替换。明确S099开发源cf1d174可在暂停、无传输且导出后兼容停止；不猜其它旧程序。失败恢复全套旧库/程序而不再跑新迁移器，原暂停控制单独恢复；屏障/候选/plan及备份留供recover。
-- 默认卸载只删除固定程序/Run/快捷方式，Root/state/cache/dirty与云端占位保留；后者无provider时不能假称完整离线文件。显式provider模式先检查每个Root、拒绝cloud-only/partial/未知，再连续句柄锁定并比较revert前后SHA256，无任何占位才注销CFAPI/Explorer；完整和dirty字节不删，解绑沿用keep-data。沿既有ensure_no_placeholders保护，不把Windows直接注销当数据保全操作。
-- 产品版本0.1.1经S093唯一源同步；IPC1.5与远端协议/数据库schema独立，当前没有旧正式客户端。原生驱动复用S099标准用户/客体私有密码，原LSA仅私有ACL+机器DPAPI保存恢复；不reset密码、不导出秘密、不改在线DB。实际产品1794752原生八段前缀/最终续验分开记录：busy程序升级回退、正常升级、原生默认卸载重装、不完整拒绝通过；人工验证完整缓存恢复不称网络下载，四个完整占位revert后两Root注销、六文件hash与708恢复包文件独立读回通过。原dirty/state/cache保留，原登录恢复且VM在线。精确源与分段范围见S100交接及artifacts/S100/final-matrix.json、driver-provenance.json。
+- 默认卸载只删除固定程序/Run/快捷方式，Vault/state/cache/dirty与云端占位保留；后者无provider时不能假称完整离线文件。显式provider模式先检查每个Vault、拒绝cloud-only/partial/未知，再连续句柄锁定并比较revert前后SHA256，无任何占位才注销CFAPI/Explorer；完整和dirty字节不删，解绑沿用keep-data。沿既有ensure_no_placeholders保护，不把Windows直接注销当数据保全操作。
+- 产品版本0.1.1经S093唯一源同步；IPC1.5与远端协议/数据库schema独立，当前没有旧正式客户端。原生驱动复用S099标准用户/客体私有密码，原LSA仅私有ACL+机器DPAPI保存恢复；不reset密码、不导出秘密、不改在线DB。实际产品1794752原生八段前缀/最终续验分开记录：busy程序升级回退、正常升级、原生默认卸载重装、不完整拒绝通过；人工验证完整缓存恢复不称网络下载，四个完整占位revert后两Vault注销、六文件hash与708恢复包文件独立读回通过。原dirty/state/cache保留，原登录恢复且VM在线。精确源与分段范围见S100交接及artifacts/S100/final-matrix.json、driver-provenance.json。
 
 
 ### S098 — 通用 Linux 私有 loader 与目标 UAPI
 
 - flake新增portable/portable-aarch64、container-deps两架构及platform-tests-aarch64。Rust/Web同一干净Git flake组件组装；便携目录封装递归ELF库和私有loader，相对wrapper/资源，完整文件SHA256与对应运行库源码归档；runtime无需/nix或Node。镜像构建先核全文件集合/hash/来源归档，固定Ubuntu manifest与.deb摘要，安装步骤离线，不接受手工拼接的旧Web。
-- 共享preflight.py原JSON CLI保持；新增TOML配置/显式state入口，server和init在写DB前执行，真实btrfs/CoW/权限与backup删除选项不放宽。Compose预存在bind/create_host_path:false、非root/只读/无capability；普通systemd显式白名单写路径，均不自动格式化/改Root权限。
+- 共享preflight.py原JSON CLI保持；新增TOML配置/显式state入口，server和init在写DB前执行，真实btrfs/CoW/权限与backup删除选项不放宽。Compose预存在bind/create_host_path:false、非vault/只读/无capability；普通systemd显式白名单写路径，均不自动格式化/改Vault权限。
 - mounts/raw O_DIRECTORY/O_NOFOLLOW使用目标Linux UAPI（aarch64分别040000/0100000，x86_64为0200000/0400000），IPC与RestrictedDir共用；强制openat2与逐段回退的真实ARM64拒绝边界已通过。测试临时state显式0700，不以umask规避生产私有目录要求。无wire、数据库格式或版本变化。
 - OCI格式转Docker镜像曾真实丢Healthcheck，构建与传递固定Docker格式并比较转移前后配置，不把缺失健康检查当成功。Ubuntu ARM64存储完整链使用专属全系统TCG内核；QEMU-user btrfs ioctl失败保留，未替代原生能力证明。详细操作见docs/operations/linux.md；最终验收/资源清理以S098交接为准。
 
-S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查前返回该FD实际root ID；256不是推断的子卷ID。Ubuntu6.8非特权实际新子卷/嵌套检测及备份链通过，所有来源均不可用仍拒绝。Podman兼容API实测忽略create_host_path:false，因此部署标准入口为deploy/compose/run.py，先核显式存在源再创建资源，服务自身仍执行完整存储预检。镜像构建--offline要求缓存的base架构/精确digest及全部.deb SHA，缺失失败；最终同源09双架构离线镜像及完整Ubuntu运行通过。普通unit源67与09仅镜像构建脚本不同，所有实际服务/Web/库/preflight文件逐SHA相同；JSON旧消费者预检字节亦相同，明确来源组合见curated矩阵。没有协议/持久格式变化，不把TCG证据说成原生性能。
+S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查前返回该FD实际vault ID；256不是推断的子卷ID。Ubuntu6.8非特权实际新子卷/嵌套检测及备份链通过，所有来源均不可用仍拒绝。Podman兼容API实测忽略create_host_path:false，因此部署标准入口为deploy/compose/run.py，先核显式存在源再创建资源，服务自身仍执行完整存储预检。镜像构建--offline要求缓存的base架构/精确digest及全部.deb SHA，缺失失败；最终同源09双架构离线镜像及完整Ubuntu运行通过。普通unit源67与09仅镜像构建脚本不同，所有实际服务/Web/库/preflight文件逐SHA相同；JSON旧消费者预检字节亦相同，明确来源组合见curated矩阵。没有协议/持久格式变化，不把TCG证据说成原生性能。
 
 ## S101 — 平台矩阵、同源安装与实验室资源
 
@@ -2555,12 +2555,12 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - `.github/workflows/platform.yml`按保守消费者闭包触发Linux x64各job、ARM cross发行与Windows原生编译（后者不是CFAPI验收）。`platform-lab.yml`仅手工dispatch、保护环境/独占runner/concurrency；`acceptance.py --config <私有JSON> --phase build|lab`对同一干净提交构建/安装，flock串行。无remote/runner时hosted明确blocked，不把本地运行写成GitHub通过。配置与资源条件见`tools/ci/README.md`。
 - `tools/ci/linux-server.py`为stock Ubuntu创建本run专属btrfs loop/bind，拒绝覆盖非空fixture目录；服务测试仍普通用户执行。既有btrfs实验室使用私有TMPDIR。`acceptance.py`仅复制已停机S098 ARM模板，登记自己的静态无INTERP qemu handler并finally清理；完整Ubuntu ARM64内核TCG运行存储，不使用qemu-user冒充内核能力。SSH超时只重试，实际uname和本run进程退出才分别证明就绪/关机。
 - `packaging/linux/test-container.py`在既有上传/备份/重启之后，新增实际新空目标restore validate/apply、恢复服务启动/登录/固定内容下载及新epoch核对。容器UID/capability/no-FUSE约束未放宽，无wire/DB格式变化。NixOS原生闭包、Ubuntu x64容器共享内核、Ubuntu ARM完整TCG内核证据必须分列。
-- `tests/platform/windows/s099-installation.*`仅在`VAULTSYNCD_CI_CLEANUP=1`选择本run清理：真实logout，S100完整驻留门/revert/provider卸载，三份普通文件SHA核对后恢复原Quickemu登录，再删除新测试账号/profile/私有凭据/探针及**确切新SID**的系统任务。默认S099保留行为不变，不清理旧卡账号/Root/WinCred。Windows客体保持在线，宿主trial/Caddy/SSH不动。
+- `tests/platform/windows/s099-installation.*`仅在`VAULTSYNCD_CI_CLEANUP=1`选择本run清理：真实logout，S100完整驻留门/revert/provider卸载，三份普通文件SHA核对后恢复原Quickemu登录，再删除新测试账号/profile/私有凭据/探针及**确切新SID**的系统任务。默认S099保留行为不变，不清理旧卡账号/Vault/WinCred。Windows客体保持在线，宿主trial/Caddy/SSH不动。
 - S101实际产品源fcbbb93，后续装置/交接提交不重标旧receipt；原始失败与同源逐job续验范围、平台build/PE哈希见`agent/tasks/S101*.md`及curated索引。最终装置回归9项通过不替代原生平台证据；原控制器两次失败不被改写为整链成功。
 
 ## S102 — 事件提示与旧设备重建准入
 
-- `ApiClient<ReqwestTransport>::receive_hints(root,wake)` 共用命令的 TLS、禁止重定向、真实 capabilities 协商和共享会话刷新；只把合法同 Root 的 `seq` SSE 帧合并为容量1的唤醒，不写游标或命名空间。单帧64KiB上限、45秒无字节超时；中断重连与周期 changes 并存。重复/乱序通知不作为状态事实。`apps/agent::events::Hints` 的 Drop 取消本绑定流，连接切换/重建/退出都会销毁；现有 poll_millis 未改。
+- `ApiClient<ReqwestTransport>::receive_hints(vault,wake)` 共用命令的 TLS、禁止重定向、真实 capabilities 协商和共享会话刷新；只把合法同 Vault 的 `seq` SSE 帧合并为容量1的唤醒，不写游标或命名空间。单帧64KiB上限、45秒无字节超时；中断重连与周期 changes 并存。重复/乱序通知不作为状态事实。`apps/agent::events::Hints` 的 Drop 取消本绑定流，连接切换/重建/退出都会销毁；现有 poll_millis 未改。
 - `apps/agent::resync::admit` 在恢复上传、首次导入续接、scheduler 与本地发现之前检查已有基线的认证 epoch/持久 changes 窗口；`CURSOR_EXPIRED` 或新 epoch 进入既有核心 Resync，开放日志在重启后优先续接。旧 pending 永久隔离，旧 baseline/事件/本地内容保留；RetiredClean 不作为新增，RecoveryCandidate/Reconcile 仍保持 NEEDS_RECOVERY，prepared 不等于 complete。无候选的原子完成后销毁并重新装配绑定，不能复用旧 epoch 上传处理器。尚未进入重建围栏的离线时仍可持久发现本地修改，但不向未核实的 epoch 发送队列；已开放的重建即使拉快照断网，也不再根据旧事实生成新任务。装配遇到开放重建时跳过旧 apply/release 启动恢复并继续装配，把续接交给准入（否则围栏会在下次启动时永久阻塞准入本身）；隔离与破坏性动作围栏不变。
 - 原生入口 `VAULTSYNCD_E2E_TASK=S102 tests/platform/windows/run-native-e2e.sh`，详细环境见 `tests/faults/README.md`。`old-device-native-server` 仅是本 run 的回环测试控制桥，不加产品路由；时间故障在停服持 StateLock 后作用于专属 fixture，历史过期走实际 GC mark/复核/删除并跨测试时钟宽限，旧备份走真实 CLI 验证归档与新空目标恢复。客户端 SQLite 只在 agent 停止后 read_only 检查，pending Delete 必须由实际断网形成。
 - 报告逐项要求：真实 SSE loss/duplicate/reorder 的上/下游帧及远端外部写入经 changes 落到 NTFS；真实游标/固定历史版本410；clean不复活、dirty逐字节保留及正确候选分类；真实新epoch、旧Delete零自动发送且隔离跨agent重启保留。只有全部判据通过退出0。无 wire/schema/产品保留默认值变化；一台Windows实机四隔离身份顺序运行，不冒充多台并发。
@@ -2568,10 +2568,10 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 ## S103 — 文件与挂载故障集成验收
 
 - **put 的已确认内容前提（`apps/server::executor::execute_put`，T18/§12.2）**：通过 revision 基线检查后、写意图之前，按 `entries.content_version → versions.object_hash` 取已确认摘要，与工作目录实测摘要比较。不一致（含外部删除尚未被采集的 `Absent`）时不发布、不写意图，登记被拒绝操作并返回 `409 RECONCILE_REQUIRED`；观察循环把外部内容采集成新版本后，客户端按新 revision 重新规划即可提交。`publish` 原有的实测身份前提继续覆盖“观察之后又被改写”的窗口。
-- **文件故障集成入口（`tests/server-integration/tests/file_faults.rs`，无特权）**：T18 外部写先于 put、T27 编辑器 rename-over、保存期间截断与客户端提交重叠、T25 Root 内 symlink/换目标不跟随、T17 外部 rename 保持 EntryId 与外部删除进回收站并按原身份恢复。判据是对象区字节、历史/回收站与 changes 事件，不比较界面状态。Root 内含 symlink 时采集显式 `blocked`（`UnsupportedKind` 跳过），不采纳也不推导删除。
-- **真实挂载故障入口（`tests/server-integration/tests/mount_faults.rs` + `run-mount-faults.sh`）**：`test-volume.sh` 建独立 btrfs loop 卷；Root 是子卷的真实挂载（`<mnt>/rootmnt`），内部状态与 Root 同文件系统（准入要求）。服务持有 Root 目录句柄，管理员用 `umount -l` 卸载；卸载后露出空目录 → `ROOT_UNAVAILABLE`、零删除、诱饵内容不采纳，卸载期间 put 返回 `503 ROOT_UNAVAILABLE`。重新挂载（mount id 改变）或子卷替换后仍保持 `ROOT_UNAVAILABLE`（保守暂停，不重绑、不删）；恢复内容可读但恢复健康需重新准入。bind 别名按目录身份拒绝注册（`422 UNSUPPORTED_STORAGE_BACKEND`，`details.reason=duplicate_root`）；Root 内子挂载 → `submount_detected`。环境变量：`VAULTSYNCD_S103_MOUNT`/`_ROOT`/`_LOOP`/`_ROOT_SUBVOL`/`_DECOY_SUBVOL`/`_ALIAS_BASE`。
+- **文件故障集成入口（`tests/server-integration/tests/file_faults.rs`，无特权）**：T18 外部写先于 put、T27 编辑器 rename-over、保存期间截断与客户端提交重叠、T25 Vault 内 symlink/换目标不跟随、T17 外部 rename 保持 EntryId 与外部删除进回收站并按原身份恢复。判据是对象区字节、历史/回收站与 changes 事件，不比较界面状态。Vault 内含 symlink 时采集显式 `blocked`（`UnsupportedKind` 跳过），不采纳也不推导删除。
+- **真实挂载故障入口（`tests/server-integration/tests/mount_faults.rs` + `run-mount-faults.sh`）**：`test-volume.sh` 建独立 btrfs loop 卷；Vault 是子卷的真实挂载（`<mnt>/vaultmnt`），内部状态与 Vault 同文件系统（准入要求）。服务持有 Vault 目录句柄，管理员用 `umount -l` 卸载；卸载后露出空目录 → `VAULT_UNAVAILABLE`、零删除、诱饵内容不采纳，卸载期间 put 返回 `503 VAULT_UNAVAILABLE`。重新挂载（mount id 改变）或子卷替换后仍保持 `VAULT_UNAVAILABLE`（保守暂停，不重绑、不删）；恢复内容可读但恢复健康需重新准入。bind 别名按目录身份拒绝注册（`422 UNSUPPORTED_STORAGE_BACKEND`，`details.reason=duplicate_vault`）；Vault 内子挂载 → `submount_detected`。环境变量：`VAULTSYNCD_S103_MOUNT`/`_VAULT`/`_LOOP`/`_VAULT_SUBVOL`/`_DECOY_SUBVOL`/`_ALIAS_BASE`。
 - **容量故障入口（`tests/server-integration/tests/volume_exhaustion.rs` + `run-volume-faults.sh`）**：两块独立 256M loop 卷分别作工作盘（填数据）与状态盘（内联小文件压元数据，必要时用数据填满阻止新元数据块）。真实 ENOSPC 下上传返回 `507 INSUFFICIENT_STORAGE`；提交要么完整 committed，要么明确失败且无新版本、无 committed 记录（状态可为 pending/rejected）。reflink 后 CoW 写入真实返回 ENOSPC，源与克隆字节不变，失败暂存不留下未验证目标。环境变量：`VAULTSYNCD_S103_WORK_VOLUME`/`_STATE_VOLUME`。
-- **Windows 原生矩阵**：`crates/platform-windows/src/files/native_tests.rs` 新增 `native_file_symlink_and_retarget_never_expose_outside_content`（Root 内文件 symlink 不被 `open_read` 跟随，扫描不宣称完整，换目标后仍拒绝，Root 外字节不变）；与既有 junction、硬链接、映射写入/共享锁拒绝、编辑器原子保存、并发发布恢复用例一起在 `tests/platform/windows/run-native-write.sh` 的客体原生执行中覆盖。过滤运行 `files::` 为 24 passed/0 failed。
+- **Windows 原生矩阵**：`crates/platform-windows/src/files/native_tests.rs` 新增 `native_file_symlink_and_retarget_never_expose_outside_content`（Vault 内文件 symlink 不被 `open_read` 跟随，扫描不宣称完整，换目标后仍拒绝，Vault 外字节不变）；与既有 junction、硬链接、映射写入/共享锁拒绝、编辑器原子保存、并发发布恢复用例一起在 `tests/platform/windows/run-native-write.sh` 的客体原生执行中覆盖。过滤运行 `files::` 为 24 passed/0 failed。
 
 ## S104 — 维护与崩溃联合验收接口
 
@@ -2594,12 +2594,12 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - `vaultsyncd-zip.exe start|health|stop`为专用固定入口；Start在Windows11/WebView2前置、组件完整性、LocalAppData所有权验证后独立启动agent，只在认证正确EXE路径且真实GetStatus成功后开GUI。GUI关闭不停止agent，重复Start复用同实例。ZIP默认不注册Run/StartMenu，不携带状态/凭据；新ZIP profile默认关闭系统通知，用户显式开启后Toast可注册快捷方式，UI明确提示。
 - `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源/覆盖升级明确拒绝；安装器及安装维护控制器拒绝接管ZIP状态。本版本不支持ZIP升级或已用profile互转，不允许删除所有权绕过S100。无DB迁移或wire新增。
 - `Endpoint::request_verified(expected,request)`在实际发送请求的同一NamedPipeClient上认证预期EXE及SID，返回`(Response,ServerProcess)`，原`request`接口不变；ZIP每个GetStatus/PrepareMaintenance均用此入口，等待实际执行准备的对端进程，不用先探测再另连的句柄。
-- Stop复用IPC1.5 PrepareMaintenance，认证并等待确切进程退出，再取得writer锁确认停机；未确认内容导出到agent/zip-stop-*。不强杀、不注销提供程序、不删Root/cache/dirty/state。暂停持久化，重启后须用户显式Resume；失败可能部分暂停，绝不默认成功或自动恢复所有绑定。原生入口两个：`tests/platform/windows/s109-zip.ps1`要求手工登录全新标准用户（Fresh/Live/Stop分离，Live另需真实服务端独立hash核对）；`tests/platform/windows/s109-e2e.py`在已登录会话用本run Interactive/Limited task与隔离LocalAppData/AppData/WebView，经真实CLI/IPC配置、要求一个本run程序目录启动的可见响应窗口、验证关窗后真实上传、dirty经安全停止与agent进程重启保留后resume提交，并断言默认Run/HKLM/快捷方式未变（不声称OS重启或标准用户）；两者均不改自动登录、不强杀、保留Root/state/cache。
+- Stop复用IPC1.5 PrepareMaintenance，认证并等待确切进程退出，再取得writer锁确认停机；未确认内容导出到agent/zip-stop-*。不强杀、不注销提供程序、不删Vault/cache/dirty/state。暂停持久化，重启后须用户显式Resume；失败可能部分暂停，绝不默认成功或自动恢复所有绑定。原生入口两个：`tests/platform/windows/s109-zip.ps1`要求手工登录全新标准用户（Fresh/Live/Stop分离，Live另需真实服务端独立hash核对）；`tests/platform/windows/s109-e2e.py`在已登录会话用本run Interactive/Limited task与隔离LocalAppData/AppData/WebView，经真实CLI/IPC配置、要求一个本run程序目录启动的可见响应窗口、验证关窗后真实上传、dirty经安全停止与agent进程重启保留后resume提交，并断言默认Run/HKLM/快捷方式未变（不声称OS重启或标准用户）；两者均不改自动登录、不强杀、保留Vault/state/cache。
 - 桌面以命名互斥量`vaultsyncd-desktop`保证每用户会话单窗口：重复Start复用同一窗口，不再派生第二个GUI；该互斥量与agent的writer锁相互独立。
 
 ## S110 — 一键多平台发行归档
 
-- `./tools/release.sh [--platform all|linux-x64|windows-x64 ...] [--output-dir <root>] [--plan]`：Linux x64/Nix 主机入口，自动进入 devShell；默认 Linux x64 与 Windows x64 两个目标。实现和布局见 `packaging/README.md`。平台列表允许组合；默认输出 `dist/releases/v<产品版本>-<HEAD前12位>`，已有输出不覆盖。
+- `./tools/release.sh [--platform all|linux-x64|windows-x64 ...] [--output-dir <vault>] [--plan]`：Linux x64/Nix 主机入口，自动进入 devShell；默认 Linux x64 与 Windows x64 两个目标。实现和布局见 `packaging/README.md`。平台列表允许组合；默认输出 `dist/releases/v<产品版本>-<HEAD前12位>`，已有输出不覆盖。
 - Linux 复用 portable Nix 包，保留对应 runtime sources；Windows 新增 `cargo xtask release build windows-zip <new-dir>`，复用同源 fresh release/PE检查/ZIP集合验证与原receipt格式，只跳过NSIS。既有 windows-client 仍同时构建安装器和ZIP。
 - 编排在构建前后核对干净同HEAD，校验平台/版本/锁输入与Windows收据；完整来源/归档SHA256/日志随包。发布清单format1采用相对文件路径，SHA256SUMS覆盖归档、平台收据及日志；失败保留partial且不签发成功目录；仓库级非阻塞文件锁避免并发入口竞争前端dist。
 - 只构建并核对字节，不代替原生验收、不声明首发通过；无协议/持久化变化，不启动VM或改部署实例。
@@ -2612,15 +2612,15 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 ## S112 正式域名与主机 feature
 
 - 项目 flake `lib.caddyReverseProxy { upstream; certificate; privateKey; }` 导出同源 Caddy 片段；certificate/privateKey同时为null时不输出tls指令，交由主机Caddy自动ACME，单边null断言拒绝。原默认私有证书参数保持兼容；16MiB上限、SSE、Host和转发头策略不变。
-- `/etc/nixos/features/server/vaultsync.nix` 暴露 `features.server.vaultsync.{enable,repository,rev,user,group,extraGroups,stateDir,rootPaths,port,log,caddy}`；静态host.features控制不可变来源导入，关闭时不读取本地仓库。启用参数在主机字面features块声明；caddy经既有桥接管理vhost，开关已完整求值验证。
-- S112正式实例0.1.1：`https://vsyncd.132140.xyz`→`127.0.0.1:8721`，新ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`，独立btrfs状态/Root与UID984，旧试用数据保留。没有wire/DB格式修改；当前来源、凭据路径、挂载选项作用域和恢复入口唯一维护在 [运维文档](../operations/nixos.md#s112-当前正式域名部署2026-11-07generation244)。
+- `/etc/nixos/features/server/vaultsync.nix` 暴露 `features.server.vaultsync.{enable,repository,rev,user,group,extraGroups,stateDir,vaultPaths,port,log,caddy}`；静态host.features控制不可变来源导入，关闭时不读取本地仓库。启用参数在主机字面features块声明；caddy经既有桥接管理vhost，开关已完整求值验证。
+- S112正式实例0.1.1：`https://vsyncd.132140.xyz`→`127.0.0.1:8721`，新ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`，独立btrfs状态/Vault与UID984，旧试用数据保留。没有wire/DB格式修改；当前来源、凭据路径、挂载选项作用域和恢复入口唯一维护在 [运维文档](../operations/nixos.md#s112-当前正式域名部署2026-11-07generation244)。
 - `deploy/nixos/verify-public.py` 是显式有写入/重启的部署验收；browser脚本用系统公网CA与真实UI/SSE，不导出cookie/HAR。实际HTTPS16MiB/committed/固定版本/重启/备份、浏览器与switch后健康通过；不声称独立外网、Windows原生或续期时间推移已验收。
 
 ## S113 既有主机账号与 pure 本机更新
 
 `services.vaultsyncd.createUser` 默认 true，保持专用系统账号行为；false 时必须已声明非 root user/group，模块不写 users.users/groups 的账号属性。服务单元仍使用 User/Group、SupplementaryGroups、零 capability、NoNewPrivileges 和显式 ReadWritePaths。主机 feature 默认 user=host.user、group=该账号 NixOS 主组，本机 xingjian:users。目录迁移是独立的离线运维操作，不由模块递归改权。
 
-更新入口 `tools/deploy-local.sh` → `deploy/nixos/deploy-local.py`，默认 HEAD，永久仓库完整 SHA；独立 host worktree 修改唯一版本 pin。pure-eval=true、禁止依赖锁更新，构建包 sourceInfo.commit 校验后按同一 store path build/dry/test/HTTPS与IPC健康/switch，成功才以中文提交 pin 并 ff 到原主机分支。证据/GCroot、失败与 schema 恢复边界详见 `deploy/nixos/README.md`；不改变协议/数据库/Root 身份。
+更新入口 `tools/deploy-local.sh` → `deploy/nixos/deploy-local.py`，默认 HEAD，永久仓库完整 SHA；独立 host worktree 修改唯一版本 pin。pure-eval=true、禁止依赖锁更新，构建包 sourceInfo.commit 校验后按同一 store path build/dry/test/HTTPS与IPC健康/switch，成功才以中文提交 pin 并 ff 到原主机分支。证据/GC root、失败与 schema 恢复边界详见 `deploy/nixos/README.md`；不改变协议/数据库/Vault 身份。
 
 ## S119 Web 展示层：Mantine / Tailwind v4（替代 S115/S117 HeroUI 实现）
 
@@ -2628,30 +2628,38 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - 依赖 `@mantine/core`、`@mantine/hooks`、`@mantine/form` 统一锁定 9.7.5；移除 `@heroui/react`、`@heroui/styles` 与专用 `tailwind-variants`。根 pnpm lock 与 Nix `web-deps` 固定离线闭包，Vite 保留 Tailwind v4 插件，CSS 层叠不覆盖 Mantine 默认主题。
 - 页面直接组合 Mantine Button、Card、Stack/Group/Grid、TextInput/PasswordInput、Select、Alert 等组件；账号与注册表单使用 `@mantine/form`。公共 `Table<T>` 只组合 Mantine Table/ScrollContainer 与既有列渲染接口；`Dialog` 只组合 Mantine Modal，参数为 `opened/title/children/onClose`，保持挂载并通过 opened 控制显示，使 Mantine 自身管理焦点恢复；`EmptyState`/`StatusBadge` 分别组合现成面板/Badge。不再保留 HeroUI Button 兼容映射。
 - `MantineProvider` 使用默认主题/配色，AppShell 管理 Header/Navbar/Main，Burger 控制窄屏导航，NavLink/Breadcrumbs 提供导航，主题通过 Mantine color scheme API 切换。无自制组件体系或定制色板。
-- 五个原 hash 路由 `/overview`、`/roots`、`/recovery`、`/backup`、`/account` 保留；S122 增加 `/files`。主题仅属于页面展示，不保存凭据；认证、原恢复 OpId、备份状态机和远端 DTO/数据库格式不变。
+- 五个原 hash 路由 `/overview`、`/vaults`、`/recovery`、`/backup`、`/account` 保留；S122 增加 `/files`。主题仅属于页面展示，不保存凭据；认证、原恢复 OpId、备份状态机和远端 DTO/数据库格式不变。
 - 依据：用户 2026-11-08 最新决定、design ADR-018 与 [Mantine 官方索引](https://mantine.dev/llms.txt)，组件 API 通过已安装 Mantine MCP 核对；具体流程仍按 S077/S078/S079/S090 接口执行。
 
 S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 style nonce，写入 `meta[name=csp-nonce]` 并仅授权该响应的动态样式标签；`MantineProvider.getStyleNonce` 读取该 meta，使默认主题和 AppShell 响应式样式可用。外部入口 `main.tsx` 在渲染前设置 `globalThis.__webpack_nonce__`，让 Mantine Modal 依赖的 `get-nonce` 给滚动锁样式加同一 nonce。删除 React Aria 专用固定样式哈希，`script-src 'self'` 保持，不增加 unsafe-inline。Web/CSP 单测、真实 HTTP 和 Chromium 验证策略、nonce 匹配与跨响应唯一性；浏览器使用与生产一致的策略。根 HTML 比包内模板多出 nonce meta，不再要求响应体与 index.html 逐字节一致，静态 assets 保持原文件字节。
 
-## S122 Web Root 文件浏览器
+## S122 Web Vault 文件浏览器
 
-- `#/files`：S124 更新为左侧目录树与顶部 Root Select（名称与短 ID 区分，无 Root 列表刷新按钮），右侧顶部导航工具栏（后退/前进/上级/刷新、Root 相对地址栏、名称筛选、当前目录属性），其余区域直接显示列表，无重复标题与说明。Mantine Tree 支持展开、选中与键盘；列表仅展示直接子项，每页 100 项。属性为名称、类型、Root 身份、相对路径、精确字节大小、目录直接子项数、revision、EntryId、VersionId 和 SHA-256；未提供的目录大小用 `—`，不推算时间/权限。
-- S136 按最新用户决定扩展写操作：工具栏上传/当前目录粘贴、行菜单复制/剪切/粘贴/删除、空白区上传/粘贴。行上粘贴到该目录（文件行则当前目录），空白区支持菜单键/Shift+F10。`FileActionsProvider` 在页面路由之上按账号隔离，保留剪贴板/任务跨 Root 和管理页导航；`DirectoryBrowser` 在操作后刷新完整快照，不将迟到结果写到其他 Root。原 S122/S132 的“无写入请求”仅描述历史只读阶段。
-- S137：`createRenameJob(client, root, snapshot, entry, name, recovery?)` 冻结原 parent/revision/version/epoch 并提交 `move`，复用 `FileActionJob` 和账号恢复日志；同名/无效路径分量/Root/未改名在提交前拒绝，其余名称和 CAS 由服务端核验。`FileActionsProvider.rename` 展示名称输入与保存/取消；`EntryMenu` 共享列表和目录树的操作，菜单按来源与 EntryId 互斥，粘贴到右键目录，Root 禁用复制/剪切/重命名/删除。Tree 保持原选择/展开逻辑，菜单键/Shift+F10 在聚焦 treeitem 的标签打开。操作后快照刷新保留当前目录身份，目录或祖先改名以 replace 更新 URL；刷新期间已发生的新路径导航优先。没有新增 DTO、端点或数据库迁移。
-- S136 稳定 API 入口补导出既有上传、固定版本读取/租约、子树 token 函数与 DTO，不修改生成代码或 schema。上传依次完整 SHA、服务端块几何、块 SHA、finalize、`create(expected_absent=true)`；复制使用固定快照/版本逐项新建，移动走带源 revision 的 `move`；删除确认前取得目录 token，确认后不自动换新基线重删。目录复制/多文件上传非整批原子操作，必须保留已提交部分及原 OpId，pending/未知不得称已完成。`features/files/actions.ts` 提供 `createClipboard/createUploadJob/createPasteJob/prepareDelete` 与 `FileActionJob{state,progress,summary,canDiscard,run}`；只有无未确认命名空间提交时可结束后续。`createFileActionRecovery(user_id)` 在账号独立 sessionStorage 保存 `{root,request}`，提交前写入、稳定结果后清除；刷新后 query 只查询，404 保留 missing，用户明确确认 resume 才以原 request/device/op 重放。退出/改密/撤销/登录使 `BrowserAuth.sessionGeneration` 递增；文件任务请求门禁阻止旧任务在卸载或认证动作后继续提交，普通 cookie refresh 不改变该代际。上传按 1 MiB 增量摘要与分片读取，现有服务端单文件上限 64 GiB；复制因当前固定版本客户端完整缓冲限制为单文件 64 MiB；跨 Root 可复制，剪切仅同 Root，跨 Root 不自动删源。UI 状态及验证详见 S136 交接。
-- S134 统一反馈入口 `apps/web/src/components/Feedback.tsx`：`showFeedback(message, color?, id?)` 调用 `@mantine/notifications` 的 Mantine Notification；`Feedback` 将页面错误状态投递到同一通知区，状态清除或卸载时隐藏。全局仅挂载一个 `Notifications`（右上、limit=3、zIndex=1100），成功/信息 4 秒自动关闭，错误/警告手动关闭，关闭按钮名为“关闭通知”。覆盖复制路径及各管理页操作反馈；加载/Root 健康/恢复记录/备份完整性和静态风险说明保留原位。无请求、DTO、schema 或数据库变更。
-- S132 取消行尾“操作”列，列表改为名称/大小/修改日期三列（列宽份额 62/14/24，`table-layout: fixed`）。行上右键由 `Menu` + `Menu.ContextMenu` 打开上下文菜单：光标定位（`bottom-start`、offset 2）、触屏长按、同一时刻只开一个行菜单、行悬停光标 `context-menu`、打开中行 `data-expanded` 高亮；菜单项为目录“打开”（导航）、所有条目“属性”（打开属性对话框）与“复制路径”（写入剪贴板的 Root 相对路径与属性面板一致，失败如实提示，4 秒后自动清除）。名称按钮上的 Shift+F10/菜单键派发同一 `contextmenu` 事件并复用光标定位。菜单动作不新增请求、不写入服务端；行内文字因 `Menu.ContextMenu` 的 `user-select: none` 不可拖动选择。
-- S127 目录树由 `features/files/DirectoryTree.tsx` 与 CSS module 独立实现，使用 Mantine `Tree`/`useTree`、`TreeNodeData`、`withLines` 和 `classNames`；以 EntryId 标识节点，仅显示目录。节点整行选中；S128 以 14px 黄色开合文件夹图标独立控制子树且不导航、不请求快照，移除展开箭头与占位，折线末端至图标间距 4px，图标至文字 6px；没有子目录的节点仅显示闭合文件夹。URL 目录为唯一选中来源，深链/列表/历史导航展开当前目录及其祖先，保留其他分支展开状态；手动收起不改变右侧列表。沿用原生方向键和 Space，Enter 在目录节点上导航，在展开按钮上仅触发按钮。长名称在左栏内部横向滚动，明暗主题共用 Mantine 变量；Root 切换仍重新挂载隔离树状态。
-- S124 URL：`#/files/<root_id>/<逐段 encodeURIComponent 的目录名>`，根目录无尾部段，`#/files` 首次选择授权清单第一个 Root 并 replace 为规范 URL。目录树/列表/地址栏/切换 Root 使用原生 pushState，浏览器前进/后退和工具栏保持地址、树选中与列表一致；工具栏限本次打开文件浏览器后的历史，重载后从当前位置重新累计。新导航截断旧前进分支。同 Root 导航不重复读取快照，刷新保持 URL；深链启动/重载先读授权清单及完整快照。`filesLocation`/`parseFilesLocation` 逐段编码解码，`directoryAtPath` 只匹配目录；无权 Root、坏编码、路径分隔符注入、`.`/`..` 与不存在目录明确报错，不退回其他 Root/根目录。地址栏输入原始相对路径，Enter/转到提交，Escape 还原；名称中的百分号不二次解码。
-- `packages/api-client/src/index.ts` 稳定入口增加既有生成 `listSnapshotEntries` 与 `Snapshot/SnapshotEntry/SnapshotPage` 导出。仍调用 `GET /v1/roots`、`POST …/snapshots` 与 `GET …/snapshots/{id}/entries?cursor&limit=1000`；无 schema/DTO/数据库变化，无内容或文件写入请求。
-- `features/files/browser.ts::readDirectorySnapshot(client,rootId,signal)` 读同一快照所有页并校验 Root、snapshot_id/high_water_seq、计数、重复身份、前进游标及父目录树的完整可达性，成功后才返回 `DirectorySnapshot{metadata,root,entries,children}`。单 Root 最多 100,000 元数据项（含合成根），超过明确报错；目录优先、名称自然序、身份兜底排序，大小使用 BigInt 保留精度。
-- `FilesPanel` 按账号身份隔离 Root 清单，`DirectoryBrowser` 按 root_id 挂载；切换/卸载时取消请求并丢弃迟到结果。刷新失败、401/403/410 或不完整快照不显示空目录/旧列表；失效会话走既有 BrowserAuth 单飞刷新和登录流程。Root 健康异常直接提示；仅显示已采集、已提交状态，外部修改须采集后刷新（规范边界，不在正常界面重复说明）。
+- `#/files`：S124 更新为左侧目录树与顶部 Vault Select（名称与短 ID 区分，无 Vault 列表刷新按钮），右侧顶部导航工具栏（后退/前进/上级/刷新、Vault 相对地址栏、名称筛选、当前目录属性），其余区域直接显示列表，无重复标题与说明。Mantine Tree 支持展开、选中与键盘；列表仅展示直接子项，每页 100 项。属性为名称、类型、Vault 身份、相对路径、精确字节大小、目录直接子项数、revision、EntryId、VersionId 和 SHA-256；未提供的目录大小用 `—`，不推算时间/权限。
+- S136 按最新用户决定扩展写操作：工具栏上传/当前目录粘贴、行菜单复制/剪切/粘贴/删除、空白区上传/粘贴。行上粘贴到该目录（文件行则当前目录），空白区支持菜单键/Shift+F10。`FileActionsProvider` 在页面路由之上按账号隔离，保留剪贴板/任务跨 Vault 和管理页导航；`DirectoryBrowser` 在操作后刷新完整快照，不将迟到结果写到其他 Vault。原 S122/S132 的“无写入请求”仅描述历史只读阶段。
+- S137：`createRenameJob(client, vault, snapshot, entry, name, recovery?)` 冻结原 parent/revision/version/epoch 并提交 `move`，复用 `FileActionJob` 和账号恢复日志；同名/无效路径分量/Vault/未改名在提交前拒绝，其余名称和 CAS 由服务端核验。`FileActionsProvider.rename` 展示名称输入与保存/取消；`EntryMenu` 共享列表和目录树的操作，菜单按来源与 EntryId 互斥，粘贴到右键目录，Vault 禁用复制/剪切/重命名/删除。Tree 保持原选择/展开逻辑，菜单键/Shift+F10 在聚焦 treeitem 的标签打开。操作后快照刷新保留当前目录身份，目录或祖先改名以 replace 更新 URL；刷新期间已发生的新路径导航优先。没有新增 DTO、端点或数据库迁移。
+- S136 稳定 API 入口补导出既有上传、固定版本读取/租约、子树 token 函数与 DTO，不修改生成代码或 schema。上传依次完整 SHA、服务端块几何、块 SHA、finalize、`create(expected_absent=true)`；复制使用固定快照/版本逐项新建，移动走带源 revision 的 `move`；删除确认前取得目录 token，确认后不自动换新基线重删。目录复制/多文件上传非整批原子操作，必须保留已提交部分及原 OpId，pending/未知不得称已完成。`features/files/actions.ts` 提供 `createClipboard/createUploadJob/createPasteJob/prepareDelete` 与 `FileActionJob{state,progress,summary,canDiscard,run}`；只有无未确认命名空间提交时可结束后续。`createFileActionRecovery(user_id)` 在账号独立 sessionStorage 保存 `{vault,request}`，提交前写入、稳定结果后清除；刷新后 query 只查询，404 保留 missing，用户明确确认 resume 才以原 request/device/op 重放。退出/改密/撤销/登录使 `BrowserAuth.sessionGeneration` 递增；文件任务请求门禁阻止旧任务在卸载或认证动作后继续提交，普通 cookie refresh 不改变该代际。上传按 1 MiB 增量摘要与分片读取，现有服务端单文件上限 64 GiB；复制因当前固定版本客户端完整缓冲限制为单文件 64 MiB；跨 Vault 可复制，剪切仅同 Vault，跨 Vault 不自动删源。UI 状态及验证详见 S136 交接。
+- S134 统一反馈入口 `apps/web/src/components/Feedback.tsx`：`showFeedback(message, color?, id?)` 调用 `@mantine/notifications` 的 Mantine Notification；`Feedback` 将页面错误状态投递到同一通知区，状态清除或卸载时隐藏。全局仅挂载一个 `Notifications`（右上、limit=3、zIndex=1100），成功/信息 4 秒自动关闭，错误/警告手动关闭，关闭按钮名为“关闭通知”。覆盖复制路径及各管理页操作反馈；加载/Vault 健康/恢复记录/备份完整性和静态风险说明保留原位。无请求、DTO、schema 或数据库变更。
+- S132 取消行尾“操作”列，列表改为名称/大小/修改日期三列（列宽份额 62/14/24，`table-layout: fixed`）。行上右键由 `Menu` + `Menu.ContextMenu` 打开上下文菜单：光标定位（`bottom-start`、offset 2）、触屏长按、同一时刻只开一个行菜单、行悬停光标 `context-menu`、打开中行 `data-expanded` 高亮；菜单项为目录“打开”（导航）、所有条目“属性”（打开属性对话框）与“复制路径”（写入剪贴板的 Vault 相对路径与属性面板一致，失败如实提示，4 秒后自动清除）。名称按钮上的 Shift+F10/菜单键派发同一 `contextmenu` 事件并复用光标定位。菜单动作不新增请求、不写入服务端；行内文字因 `Menu.ContextMenu` 的 `user-select: none` 不可拖动选择。
+- S127 目录树由 `features/files/DirectoryTree.tsx` 与 CSS module 独立实现，使用 Mantine `Tree`/`useTree`、`TreeNodeData`、`withLines` 和 `classNames`；以 EntryId 标识节点，仅显示目录。节点整行选中；S128 以 14px 黄色开合文件夹图标独立控制子树且不导航、不请求快照，移除展开箭头与占位，折线末端至图标间距 4px，图标至文字 6px；没有子目录的节点仅显示闭合文件夹。URL 目录为唯一选中来源，深链/列表/历史导航展开当前目录及其祖先，保留其他分支展开状态；手动收起不改变右侧列表。沿用原生方向键和 Space，Enter 在目录节点上导航，在展开按钮上仅触发按钮。长名称在左栏内部横向滚动，明暗主题共用 Mantine 变量；Vault 切换仍重新挂载隔离树状态。
+- S124 URL：`#/files/<vault_id>/<逐段 encodeURIComponent 的目录名>`，根目录无尾部段，`#/files` 首次选择授权清单第一个 Vault 并 replace 为规范 URL。目录树/列表/地址栏/切换 Vault 使用原生 pushState，浏览器前进/后退和工具栏保持地址、树选中与列表一致；工具栏限本次打开文件浏览器后的历史，重载后从当前位置重新累计。新导航截断旧前进分支。同 Vault 导航不重复读取快照，刷新保持 URL；深链启动/重载先读授权清单及完整快照。`filesLocation`/`parseFilesLocation` 逐段编码解码，`directoryAtPath` 只匹配目录；无权 Vault、坏编码、路径分隔符注入、`.`/`..` 与不存在目录明确报错，不退回其他 Vault/根目录。地址栏输入原始相对路径，Enter/转到提交，Escape 还原；名称中的百分号不二次解码。
+- `packages/api-client/src/index.ts` 稳定入口增加既有生成 `listSnapshotEntries` 与 `Snapshot/SnapshotEntry/SnapshotPage` 导出。仍调用 `GET /v1/vaults`、`POST …/snapshots` 与 `GET …/snapshots/{id}/entries?cursor&limit=1000`；无 schema/DTO/数据库变化，无内容或文件写入请求。
+- `features/files/browser.ts::readDirectorySnapshot(client,vaultId,signal)` 读同一快照所有页并校验 Vault、snapshot_id/high_water_seq、计数、重复身份、前进游标及父目录树的完整可达性，成功后才返回 `DirectorySnapshot{metadata,vault,entries,children}`。单 Vault 最多 100,000 元数据项（含合成根），超过明确报错；目录优先、名称自然序、身份兜底排序，大小使用 BigInt 保留精度。
+- `FilesPanel` 按账号身份隔离 Vault 清单，`DirectoryBrowser` 按 vault_id 挂载；切换/卸载时取消请求并丢弃迟到结果。刷新失败、401/403/410 或不完整快照不显示空目录/旧列表；失效会话走既有 BrowserAuth 单飞刷新和登录流程。Vault 健康异常直接提示；仅显示已采集、已提交状态，外部修改须采集后刷新（规范边界，不在正常界面重复说明）。
 - 既有采集边界：observer 只采纳普通文件并补建其父目录，不单独登记外部空目录（`observer/scan.rs` 目录仅入扫描队列，`apps/server/src/external.rs::apply_external` 补建父目录）。浏览器可打开已提交的空目录，外部未登记空目录不在快照中；本卡不改变采集或同步语义。真实浏览器验收通过正式 create 操作准备已提交空目录，再审计浏览器无内容/操作请求。
 
-## S136-c 服务端按 Root 隔离对象布局（ADR-020，schema 15）
+## S136-c 服务端按 Vault 隔离对象布局（ADR-020，schema 15）
 
-- 根因：`objects` 行按 `(root_id, hash)` 归属且 `storage_path` 全库唯一/不可更新，但旧实现把已发布对象统一放在 `state_dir/objects/objects/<aa>/<hash>`。第二个 Root 上传相同摘要时与唯一约束冲突，finalize 503 `NEEDS_RECOVERY`；不同 Root 共享物理文件也无法按 Root 独立 GC。
-- 新写路径：`state_dir/objects/roots/<RootId>/objects/<aa>/<hash>`（`ObjectLayout::scoped_relative_object_path`），登记值即物理相对路径；一 Root 一对象行，`UNIQUE(storage_path)` 与不可变触发器保持不变。旧行 `objects/<aa>/<hash>` 不迁移、不改写，只由 `apps/server/src/object_layout.rs::for_root(database, state_dir, root)` 按该 Root 已登记摘要开放；磁盘存在性、其它 Root 前缀或不可读登记一律失败关闭，不 fallback。
-- 消费者：上传 finalize/重放（`ContentPublisher::storage_path` 记录实际发布路径）、下载与版本租约、create/put/conflict/delete 现场复核、外部采集、启动 replay、GC 候选路径校验、备份 prepare/export 与 server-admin 离线 restore 都按 Root 选择布局。热路径按摘要解析（`for_digests`/`for_digest`，每条摘要一次 `(root_id,hash)` 主键查询）；外部扫描、删除整树核对与回收站/历史恢复等需要多摘要的路径使用 `for_root` 一次读取该 Root 全部旧登记。`legacy` 集合必须覆盖布局将触碰的每个摘要：漏声明不会回退旧文件，读会失败关闭，写会先造重复物理对象再被唯一登记约束拒绝（`ObjectConflict`）。外部观察每轮仍做一次整 Root 旧登记读取（摘要事先不可知），10⁵ 对象量级约 90—100 ms/轮，只影响扫描周期、不影响单文件读写。未登记摘要一律按 Root 分区新路径处理（缺失登记只会失败关闭，不会误用其它 Root 的字节）；备份归档成员仍是 `objects/<RootId>/<hash>`，清单 `storage_path` 允许 legacy 或该 Root 新路径，重复物理登记被拒。
+- 根因：`objects` 行按 `(vault_id, hash)` 归属且 `storage_path` 全库唯一/不可更新，但旧实现把已发布对象统一放在 `state_dir/objects/objects/<aa>/<hash>`。第二个 Vault 上传相同摘要时与唯一约束冲突，finalize 503 `NEEDS_RECOVERY`；不同 Vault 共享物理文件也无法按 Vault 独立 GC。
+- 新写路径：`state_dir/objects/roots/<VaultId>/objects/<aa>/<hash>`（`ObjectLayout::scoped_relative_object_path`），登记值即物理相对路径；一 Vault 一对象行，`UNIQUE(storage_path)` 与不可变触发器保持不变。旧行 `objects/<aa>/<hash>` 不迁移、不改写，只由 `apps/server/src/object_layout.rs::for_vault(database, state_dir, vault)` 按该 Vault 已登记摘要开放；磁盘存在性、其它 Vault 前缀或不可读登记一律失败关闭，不 fallback。
+- 消费者：上传 finalize/重放（`ContentPublisher::storage_path` 记录实际发布路径）、下载与版本租约、create/put/conflict/delete 现场复核、外部采集、启动 replay、GC 候选路径校验、备份 prepare/export 与 server-admin 离线 restore 都按 Vault 选择布局。热路径按摘要解析（`for_digests`/`for_digest`，每条摘要一次 `(vault_id,hash)` 主键查询）；外部扫描、删除整树核对与回收站/历史恢复等需要多摘要的路径使用 `for_vault` 一次读取该 Vault 全部旧登记。`legacy` 集合必须覆盖布局将触碰的每个摘要：漏声明不会回退旧文件，读会失败关闭，写会先造重复物理对象再被唯一登记约束拒绝（`ObjectConflict`）。外部观察每轮仍做一次整 Vault 旧登记读取（摘要事先不可知），10⁵ 对象量级约 90—100 ms/轮，只影响扫描周期、不影响单文件读写。未登记摘要一律按 Vault 分区新路径处理（缺失登记只会失败关闭，不会误用其它 Vault 的字节）；备份归档成员仍是 `objects/<VaultId>/<hash>`，清单 `storage_path` 允许 legacy 或该 Vault 新路径，重复物理登记被拒。
 - 版本围栏：`crates/server-store/migrations/0015_root_scoped_objects.sql` 只提升 schema 语义版本（`user_version` 15，无表结构变化），使 target ≤14 的旧二进制在写服务前 `SchemaTooNew` 拒绝；14→15 走既有迁移前一致性备份（`server.sqlite.pre-migration-v14-to-v15.bak`），失败不返回可写句柄。回退用迁移前整套备份，不做自动降级，也不原地改写旧对象。
-- 验证入口：`cargo test -p vaultsyncd-server-store -p vaultsyncd-server-core -p vaultsyncd-server -p vaultsyncd-admin -p vaultsyncd-server-tests`、`cargo clippy --workspace --all-targets -- -D warnings`；HTTP 用例 `apps/server/tests/content.rs::same_digest_in_two_roots_has_independent_publication_reuse_and_replay`、`registered_legacy_object_keeps_its_path_for_new_upload_and_replay`；真实浏览器 `tests/web/file-actions-browser.py` 的 `cross-Root-copy` 检查项。
+- 验证入口：`cargo test -p vaultsyncd-server-store -p vaultsyncd-server-core -p vaultsyncd-server -p vaultsyncd-admin -p vaultsyncd-server-tests`、`cargo clippy --workspace --all-targets -- -D warnings`；HTTP 用例 `apps/server/tests/content.rs::same_digest_in_two_vaults_has_independent_publication_reuse_and_replay`、`registered_legacy_object_keeps_its_path_for_new_upload_and_replay`；真实浏览器 `tests/web/file-actions-browser.py` 的 `cross-Vault-copy` 检查项。
+
+## S140 共享目录改名 Vault（ADR-021，schema 16）
+
+- 改名范围（唯一编辑源仍是 schema 与代码，本节只记入口）：`RootId`→`VaultId`、`RootSeq`→`VaultSeq`、`RootHandle`→`VaultHandle`；wire `root_id`/`root_seq`→`vault_id`/`vault_seq`；HTTP `/v1/roots`→`/v1/vaults`；错误码 `ROOT_UNAVAILABLE`→`VAULT_UNAVAILABLE`；capability 功能 `roots`→`vaults`；配置段 `[roots]`→`[vaults]`（段内 `allowed_bases` 键不变，Rust 字段 `allowed_vault_bases`）；本机 IPC 命令 `list_roots`→`list_vaults`、参数/结果 `root_id`→`vault_id`。远端协议 major 2、本机 IPC major 2 表示不兼容；冻结的旧协议 fixture 与历史迁移保持原名并在测试中断言被拒绝。
+- 服务端数据库：`crates/server-store/migrations/0016_vault_rename.sql` 用 `ALTER TABLE ... RENAME` 把 `roots`→`vaults`、各表 `root_id`→`vault_id`、`operations.root_seq`→`vault_seq`、`trash_membership.deletion_root`→`deletion_vault`，并重建 `entries_one_active_vault`、`uploads_open_by_vault`、`fs_intents_unfinished_by_vault`、`snapshots_by_vault` 四个索引；schema 15→16，14→15 的语义围栏行为不变，16 是最新，旧二进制在任何 `user_version` 状态都拒绝写。
+- 客户端数据库：`crates/client-store/migrations/0013_vault_rename.sql` 只重命名 `bindings.root_id`→`vault_id`；升级类测试用旧列名构造 v11/v12 fixture，再断言状态快照逐项一致。
+- 磁盘布局不变：对象区仍为 `state_dir/objects/roots/<vault_id>/objects/<aa>/<hash>`（`ObjectLayout::SCOPED_PREFIX = "roots"`），备份归档仍是 `objects/<VaultId>/<hash>`、清单 `storage_path` 允许 legacy 或该前缀路径；改名不搬迁已发布对象。
+- 验证入口：`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo xtask generate --check`、`pnpm --recursive run typecheck`、`pnpm --recursive --if-present run test`；真实浏览器脚本 `tests/web/vaults-browser.py` 等仍按新命名运行（S142 复验）。
