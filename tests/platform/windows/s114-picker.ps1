@@ -14,6 +14,17 @@ public class PickerWindow {
  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool join);
  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr window);
  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr window, bool altTab);
+ [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr window, System.Text.StringBuilder text, int length);
+ [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr window, System.Text.StringBuilder text, int length);
+ public static string Describe(IntPtr window) {
+  var title = new System.Text.StringBuilder(512); GetWindowTextW(window, title, 512);
+  var cls = new System.Text.StringBuilder(256); GetClassNameW(window, cls, 256);
+  uint pid; GetWindowThreadProcessId(window, out pid);
+  string name = "?";
+  try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch {}
+  return window + "|" + pid + "|" + name + "|" + cls + "|" + title;
+ }
 }
 '@
 $root = [Windows.Automation.AutomationElement]::RootElement
@@ -32,9 +43,10 @@ function Wait-Dialog {
 # Windows blocks SetForegroundWindow from a background process; join the foreground input
 # queue before retrying so the address-bar keys really land in this dialog.
 function Set-DialogForeground([IntPtr]$target) {
+  Trace ('foreground_before='+[PickerWindow]::Describe([PickerWindow]::GetForegroundWindow()))
   if ([PickerWindow]::GetForegroundWindow() -eq $target) { return $true }
   [void][PickerWindow]::SetForegroundWindow($target)
-  if ([PickerWindow]::GetForegroundWindow() -eq $target) { return $true }
+  if ([PickerWindow]::GetForegroundWindow() -eq $target) { Trace 'foreground=set'; return $true }
   $foregroundThread = [PickerWindow]::GetWindowThreadProcessId([PickerWindow]::GetForegroundWindow(), [IntPtr]::Zero)
   $currentThread = [PickerWindow]::GetCurrentThreadId()
   [void][PickerWindow]::AttachThreadInput($currentThread, $foregroundThread, $true)
@@ -44,7 +56,12 @@ function Set-DialogForeground([IntPtr]$target) {
   } finally {
     [void][PickerWindow]::AttachThreadInput($currentThread, $foregroundThread, $false)
   }
-  return ([PickerWindow]::GetForegroundWindow() -eq $target)
+  if ([PickerWindow]::GetForegroundWindow() -eq $target) { Trace 'foreground=attached'; return $true }
+  [PickerWindow]::SwitchToThisWindow($target, $true)
+  Start-Sleep -Milliseconds 300
+  if ([PickerWindow]::GetForegroundWindow() -eq $target) { Trace 'foreground=switch'; return $true }
+  Trace ('foreground_after='+[PickerWindow]::Describe([PickerWindow]::GetForegroundWindow()))
+  return $false
 }
 function Click-DialogButton($dialog, [string]$id) {
   # This guest exposes standard Win32 controls as UIA Pane without InvokePattern.
