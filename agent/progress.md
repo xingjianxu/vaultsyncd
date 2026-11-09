@@ -1,12 +1,13 @@
 # 实施进度
 
-S167 done（待父agent整合）：桌面启动自动复用/启动 agent，实现 `401c484`；宿主7项、Windows交叉构建/两端严格clippy及Windows原生39/39通过；并行S166由父agent维护。任务树 `.worktrees/S167-desktop-agent-startup`，交接见 [S167](tasks/S167.md)。
+当前：**S166、S167 done**，客户端按地址自动读取只读 Server ID 并确认，桌面自动复用/启动 agent，关闭窗口后台继续。身份/超时保护、文件/历史与管理原生通过；组合后 Windows 生产严格 clippy/build、生成一致及启动39/39再次通过。S166实现`cbc82ff`、交接`a80d28c`已ff合master并清理；S167实现`401c484`、交接`eb2f773`，组合整合收尾。**下一 ready：无**；原四张blocked保持。
 
-当前：**S165 done**，已发布 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，精确源 `d976376` 已推送；同源 Linux x64/Windows x64 归档、8 附件远端大小/SHA-256、标签/说明与属性核对通过，[交接](tasks/S165.md)。包含 S159/S160 Web 改进和 S162 托盘自动更新；预发布不进入自动更新渠道。**下一 ready：无**，原4张blocked保持；当前候选未复跑原生/性能容量/多机与线上升级。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
+最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未发行。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。本轮仅复跑相关功能原生，性能容量/多机与线上成对升级仍未验收。
+
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
 
-最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。本轮仅发行升版，无主机部署；S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍保留，源`9aa091e`。
+最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。S165仅发行升版，本轮仅客户端改动，无主机部署；S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍保留，源`9aa091e`。
 
 恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -31,7 +32,8 @@ S167 done（待父agent整合）：桌面启动自动复用/启动 agent，实�
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
-| S167 | 桌面冷启自动启动agent；健康同会话复用、关窗IPC存活及错误/ZIP保护原生39/39通过 | 实现401c484；待父agent组合S166后合master与清理 | [S167](tasks/S167.md) |
+| S167 | 桌面自动复用或启动agent；就绪后建窗、失败可见且后台独立；Windows39/39 | 实现401c484、交接eb2f773；组合整合中 | [S167](tasks/S167.md) |
+| S166 | 地址自动读取只读Server ID并确认；超时/身份保护、IPC/桌面与Windows功能回归通过 | 实现cbc82ff、交接a80d28c已ff合master；任务树/分支已清理 | [S166](tasks/S166.md) |
 | S165 | v0.1.2 预发布；双平台同源构建、8附件远端摘要/来源/非Latest核对通过 | 源d976376已推送；交接889c19f已ff合master，任务挂载/树/分支已清理 | [S165](tasks/S165.md) |
 | S164 | 123 个旧vs目录归档，39,360 文件全量恢复摘要/元数据通过后清理；开发目录仅dev根 | a57d364已ff合master；任务树/分支已清理，S134现场保留 | [S164](tasks/S164.md) |
 | S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb、交接762d71d已ff合master；主机a37df31已ff合main，项目/主机任务树及分支清理 | [S160](tasks/S160.md) |

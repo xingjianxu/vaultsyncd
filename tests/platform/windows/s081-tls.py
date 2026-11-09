@@ -1,10 +1,11 @@
-"""Private test TLS entry: byte-for-byte forwarding to this run's real Linux server."""
+"""Private TLS test entry, with one delayed identity route for stale-result acceptance."""
 import pathlib
 import select
 import socket
 import socketserver
 import ssl
 import sys
+import time
 
 base = pathlib.Path(sys.argv[1])
 backend = int(sys.argv[2])
@@ -26,6 +27,14 @@ class Handler(socketserver.BaseRequestHandler):
                             data = source.recv(65536)
                             if not data:
                                 return
+                            if source is client and data.startswith(b"GET /delayed/v1/capabilities "):
+                                print("delayed_identity_request", flush=True)
+                                data = data.replace(b"GET /delayed/v1/capabilities ", b"GET /v1/capabilities ", 1)
+                                time.sleep(2)
+                            if source is client and data.startswith(b"GET /timeout/v1/capabilities "):
+                                print("identity_timeout_request", flush=True)
+                                data = data.replace(b"GET /timeout/v1/capabilities ", b"GET /v1/capabilities ", 1)
+                                time.sleep(6)
                             peers[source].sendall(data)
         except (OSError, ssl.SSLError):
             # An untrusted CA is an intentional negative case; never log request bytes.

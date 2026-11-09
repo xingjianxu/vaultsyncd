@@ -495,6 +495,13 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     let proposed =
                         crate::management::proposed_connection(&db, &config, &request.command)
                             .await?;
+                    crate::management::verify_connection(&proposed).await?;
+                    if command.reply.is_closed() {
+                        return Err(PortError::rejected(
+                            "UNAVAILABLE",
+                            "connection request expired",
+                        ));
+                    }
                     let next_sink = Arc::new(VaultSink {
                         vault: CredentialVault::new(&proposed.server.id).map_err(error)?,
                         failed: AtomicBool::new(false),
@@ -540,6 +547,13 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
                     hints.clear();
                     initialized.clear();
                     live.clear();
+                    if command.reply.is_closed() {
+                        // The existing durable config is kept; the next loop reassembles it.
+                        return Err(PortError::rejected(
+                            "UNAVAILABLE",
+                            "connection request expired",
+                        ));
+                    }
                     crate::management::save_connection(&db, &proposed).await?;
                     config = proposed;
                     client = next_client;

@@ -12,6 +12,7 @@
   {"request_id":"detach","ipc_version":{"major":2,"minor":2},"command":{"name":"detach_binding","parameters":{"binding_id":"11111111111111111111111111111111"}}},
   {"request_id":"export","ipc_version":{"major":2,"minor":2},"command":{"name":"export_recovery","parameters":{"binding_id":"11111111111111111111111111111111","destination":"C:\\recovery-new"}}},
   {"request_id":"connection","ipc_version":{"major":2,"minor":2},"command":{"name":"get_connection"}},
+  {"request_id":"discover-connection","ipc_version":{"major":2,"minor":7},"command":{"name":"discover_connection","parameters":{"server_url":"https://sync.example"}}},
   {"request_id":"set-connection","ipc_version":{"major":2,"minor":2},"command":{"name":"set_connection","parameters":{"server_id":"66666666666666666666666666666666","server_url":"https://sync.example","ca_file":"C:\\trust\\extra-ca.pem"}}},
   {"request_id":"login","ipc_version":{"major":2,"minor":2},"command":{"name":"login","parameters":{"username":"example-owner","password":"example-only-not-a-real-credential"}}},
   {"request_id":"logout","ipc_version":{"major":2,"minor":2},"command":{"name":"logout"}},

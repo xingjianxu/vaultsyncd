@@ -66,7 +66,8 @@ PRESENTATION_FIXTURE = r"""() => {
   window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
     window.__S152_CALLS__.push({ command, args });
     switch (command) {
-      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 6 }, snapshot_version: 'fixture:1', bindings: [state], management: { connection: { authenticated: false, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }, bindings: [binding], problems: [], notices: [] } };
+      case 'agent_discover_connection': return { connection: { authenticated: false, server_id: '7'.repeat(32), server_url: 'https://example.invalid' } };
+      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 7 }, snapshot_version: 'fixture:1', bindings: [state], management: { connection: { authenticated: false, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }, bindings: [binding], problems: [], notices: [] } };
       case 'agent_list_files': if (window.__S152_FAIL_FILES__) throw { message: 'S152 presentation: file read failed' }; return { files: [clean, dirty, longName] };
       case 'agent_list_history': case 'agent_list_trash': return { items: [item] };
       case 'agent_restore_entry': throw { message: 'PENDING: S152 presentation restore not committed' };

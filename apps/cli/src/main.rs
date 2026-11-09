@@ -626,6 +626,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::DetachBinding => "detach",
         CommandName::ExportRecovery => "export-recovery",
         CommandName::GetConnection => "connection",
+        CommandName::DiscoverConnection => "discover-connection",
         CommandName::SetConnection => "set-connection",
         CommandName::Login => "login",
         CommandName::Logout => "logout",
@@ -665,6 +666,7 @@ fn validate_result(name: CommandName, result: &GetStatusResult) -> Result<(), Fa
             .is_none()
             .then_some("远端条目列表"),
         CommandName::GetConnection
+        | CommandName::DiscoverConnection
         | CommandName::SetConnection
         | CommandName::Login
         | CommandName::Logout => management

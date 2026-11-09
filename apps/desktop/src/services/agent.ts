@@ -1,12 +1,14 @@
 import type { GetStatusResult, ManagementResult } from "@vaultsyncd/local-ipc-types";
 import { invoke } from "@tauri-apps/api/core";
 
-export interface ConnectionInput { serverId: string; serverUrl: string; caFile?: string }
+export interface ConnectionAddress { serverUrl: string; caFile?: string }
+export interface ConnectionInput extends ConnectionAddress { serverId: string }
 export interface BindingInput { bindingId: string; vaultId: string; localPath: string; mode: "full" | "on_demand" }
 export interface RestoreInput { bindingId:string;entryId:string;operationId:string;baseRevision:string;versionId?:string }
 export interface NotificationSettings { enabled:boolean;delivered:number;blocked:number;last_error?:string }
 export interface AgentClient {
   getStatus(): Promise<GetStatusResult>;
+  discoverConnection(input: ConnectionAddress): Promise<ManagementResult>;
   setConnection(input: ConnectionInput): Promise<ManagementResult>;
   login(username: string, password: string): Promise<ManagementResult>;
   logout(): Promise<ManagementResult>;
@@ -34,7 +36,7 @@ export interface AgentClient {
 const unavailable = async (): Promise<never> => { throw new Error("未连接：当前为 IPC 测试替身，尚未接入本机 agent。"); };
 // 仅供应用壳开发的明确替身；S080 替换为 Tauri command 桥，绝不返回伪造 Binding。
 export const disconnectedAgent: AgentClient = {
-  getStatus: unavailable, setConnection: unavailable, login: unavailable, logout: unavailable,
+  getStatus: unavailable, discoverConnection: unavailable, setConnection: unavailable, login: unavailable, logout: unavailable,
   listVaults: unavailable, selectDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   getRules:unavailable,setRules:unavailable,
@@ -54,6 +56,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 // A fixed command with no caller-selected pipe name, path, shell or credential access.
 export const nativeAgent: AgentClient = {
   getStatus: () => call("agent_get_status"),
+  discoverConnection: input => call("agent_discover_connection", { input }),
   setConnection: input => call("agent_set_connection", { input }),
   login: (username, password) => call("agent_login", { username, password }),
   logout: () => call("agent_logout"),

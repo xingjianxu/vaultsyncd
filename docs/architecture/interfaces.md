@@ -2384,10 +2384,12 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S081 桌面连接与绑定管理
 
+- S166：IPC minor 2.7 增加 `discover_connection(server_url,ca_file?) → ManagementResult.connection`，只读、无登录凭据，不改变当前配置或 WinCred；返回 `authenticated=false` 的候选。`agent_discover_connection` 仅内置主窗口 capability 可调。React 延迟 500ms 自动读取，地址/CA 编辑、取消、离开页面会使在途结果失效，重新读取可重试；完整 Server ID 只读，独立点击“确认并保存连接”。`set_connection` 保存前用无凭据客户端重读并核对确认的 ServerId，失败保留现有状态，已有绑定仍拒绝更换身份（`BINDING_BLOCKED`）；保留 HTTPS/附加 CA/显式回环开发 HTTP 规则。旧 GUI/CLI 的显式编号输入仍兼容，保存需能连接服务器。身份请求总期限 3 秒、连接 2 秒，低于普通 IPC 的 5 秒；过期确认在保存前复核应答通道。无远端 wire 或数据库迁移。
+
 - S114：壳新增固定 `select_local_directory()`，仅 Windows 内置 main 窗口 capability 授权。输入无路径/句柄，owner 从 Tauri 窗口取得；在独立 STA 上以 `IFileOpenDialog` + `FOS_PICKFOLDERS/FORCEFILESYSTEM/PATHMUSTEXIST/NOCHANGEDIR` 选择现有单目录，输出绝对路径 `string`，取消 `null`，失败为本地明确错误。它不属于 agent IPC；前端只读展示所选路径且未选前禁止创建，绑定仍由 agent 校验路径/重叠/卷身份。
 - S114：`GET /v1/vaults` 可选 `name` 从已授权注册路径的 `file_name` 取得，只传末级名称；同名目录可共存，选择值/绑定身份仍是 `vault_id`，排序不变。agent 将名称映射到既有 `RemoteItem.name`；旧服务端缺名或空名显示“未提供目录名（请更新服务器）”，不回退显示 UUID。旧客户端忽略新增字段，无 DB/IPC 迁移。
 - `apps/desktop/src-tauri/src/commands.rs` 提供八个固定 command：`agent_get_status/agent_set_connection/agent_login/agent_logout/agent_list_vaults/agent_create_binding/agent_pause_binding/agent_resume_binding`。每项同时进入 AppManifest 和仅内置主窗口 capability；内部 `exchange` 先复用 IPC 参数校验，后连当前 SID/session 的固定 agent 管道。前端没有任意 command、管道、shell、文件读取或数据库入口。
-- TS `AgentClient` 对应八个类型化方法；连接和创建输入结构拒绝未知字段。`ConnectionInput` 只含 serverId/serverUrl/caFile，服务器身份由管理员提供（当前协议无公开身份发现端点）；`BindingInput` 只含规范 bindingId/vaultId/localPath/mode。缓存由桥派生在 `%LOCALAPPDATA%/vaultsyncd/binding-cache/<bindingId>`，agent 复核实际物理路径与范围。密码只在瞬时登录请求内，页面提交后清空；凭据仍由 agent WinCred 保存，结果不返回 token。
+- TS `AgentClient` 对应八个类型化方法；连接和创建输入结构拒绝未知字段。`ConnectionInput` 只含 serverId/serverUrl/caFile，S166 增加 `ConnectionAddress(serverUrl,caFile?)` 与 `discoverConnection`，通过 agent 读取现有公开 capabilities 后显示身份供确认；`BindingInput` 只含规范 bindingId/vaultId/localPath/mode。缓存由桥派生在 `%LOCALAPPDATA%/vaultsyncd/binding-cache/<bindingId>`，agent 复核实际物理路径与范围。密码只在瞬时登录请求内，页面提交后清空；凭据仍由 agent WinCred 保存，结果不返回 token。
 - 连接页提供地址、账号、显式附加CA；绑定页读取授权Vault、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
 - agent 保留管理连接证书错误 `CERTIFICATE_INVALID`（blocked/不可自动重试）和目录错误 `LOCAL_PATH_UNAVAILABLE`（invalid_argument），返回核对名称/CA或现有NTFS目录的说明，不回显底层自由错误或凭据。Vault/登录仍走现有认证用例，IPC schema 无变更。
 - `run-native-bindings.sh` 复用真实 Linux btrfs 实例，私有测试TLS+认证SSH回环隧道，Windows真React表单经桥/管道操作。先不信任CA而失败，再显式CA成功；验证错误目录、双方非空首合并、暂停恢复、关闭GUI后新文件上传与服务端真实字节。脚本/fixture注入仅 native-acceptance feature，正式程序不包含。生产HTTPS部署仍由S097验收。

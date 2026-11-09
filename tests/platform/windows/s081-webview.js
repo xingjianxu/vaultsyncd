@@ -25,13 +25,54 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   const confirmed = () => document.querySelector("[data-agent-feedback]")?.textContent === "操作已由 agent 确认。";
   try {
-    await wait("React agent snapshot", () => document.querySelector('[name="server_id"]')?.value?.length === 32);
-    field("server_id", fixture.serverId); field("server_url", fixture.url); field("ca_file", "");
-    await click("保存连接"); await wait("save endpoint", confirmed);
-    field("username", fixture.login); field("password", fixture.password);
-    await click("登录"); await wait("certificate rejection", () => text().includes("CERTIFICATE_INVALID"));
-    report.certificateRejectedAndVisible = true;
-    field("ca_file", fixture.caFile); await click("保存连接"); await wait("save trust", confirmed);
+    const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
+    const currentConnection = async () => (await invoke("agent_get_status")).management.connection;
+    const saveButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "确认并保存连接");
+    const candidate = () => document.querySelector('[name="server_id"]');
+    await wait("React agent snapshot", () => !!document.querySelector('[name="server_url"]'));
+    const original = await currentConnection();
+    field("server_url", fixture.url); field("ca_file", "");
+    await wait("certificate rejection", () => text().includes("CERTIFICATE_INVALID"));
+    report.certificateRejectedAndVisible = saveButton().disabled && !candidate();
+    field("ca_file", fixture.caFile);
+    await wait("automatic discovery", () => candidate()?.value === fixture.serverId);
+    report.identityReadOnly = candidate().readOnly;
+    report.discoveryDoesNotSave = JSON.stringify(await currentConnection()) === JSON.stringify(original);
+    await click("取消");
+    report.cancelDoesNotSave = !candidate() && saveButton().disabled && JSON.stringify(await currentConnection()) === JSON.stringify(original);
+    await click("重新读取");
+    await wait("retry discovery", () => candidate()?.value === fixture.serverId);
+    field("server_url", fixture.url + "/delayed");
+    report.editedAddressInvalidatesIdentity = !candidate() && saveButton().disabled;
+    // Let a real discovery start, then edit the input. Its late reply cannot restore a candidate.
+    await new Promise(resolve => setTimeout(resolve, 900));
+    field("server_url", "");
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    report.lateDiscoveryIgnored = !candidate() && saveButton().disabled;
+    field("server_url", fixture.url);
+    await wait("identity after edit", () => candidate()?.value === fixture.serverId);
+    try {
+      await invoke("agent_set_connection", { input: { serverId: "00".repeat(16), serverUrl: fixture.url, caFile: fixture.caFile } });
+      throw new Error("mismatched identity accepted");
+    } catch (cause) {
+      report.saveRechecksIdentity = String(cause.message ?? cause).includes("BINDING_BLOCKED") && JSON.stringify(await currentConnection()) === JSON.stringify(original);
+      if (!report.saveRechecksIdentity) throw cause;
+    }
+    async function timeoutDoesNotSave(command, input) {
+      const started = Date.now();
+      try { await invoke(command, { input }); throw new Error("slow identity request accepted"); }
+      catch (cause) {
+        if (cause.code !== "agent_rejected" || !String(cause.message ?? cause).includes("UNAVAILABLE")) throw cause;
+      }
+      if (Date.now() - started >= 5000) throw new Error("identity deadline exceeded IPC budget");
+      await new Promise(resolve => setTimeout(resolve, 3500));
+      if (JSON.stringify(await currentConnection()) !== JSON.stringify(original)) throw new Error("timeout changed durable connection");
+    }
+    await timeoutDoesNotSave("agent_discover_connection", { serverUrl: fixture.url + "/timeout", caFile: fixture.caFile });
+    await timeoutDoesNotSave("agent_set_connection", { serverId: fixture.serverId, serverUrl: fixture.url + "/timeout", caFile: fixture.caFile });
+    report.identityTimeoutDoesNotSave = true;
+    await click("确认并保存连接"); await wait("save trust", confirmed);
+    report.confirmSavesIdentity = (await currentConnection()).server_id === fixture.serverId && (await currentConnection()).ca_file === fixture.caFile;
     field("username", fixture.login); field("password", fixture.password);
     await click("登录"); await wait("authenticated", () => text().includes("已登录（持有凭据"));
     report.passwordCleared = document.querySelector('[name="password"]').value === "";
@@ -71,13 +112,22 @@ window.addEventListener("DOMContentLoaded", async () => {
       return status.bindings.find(b => b.binding_id === info.binding_id)?.synchronized === true;
     });
     report.mergeCompleted = true;
+    const bound = JSON.stringify(await currentConnection());
+    try {
+      await invoke("agent_set_connection", { input: { serverId: "00".repeat(16), serverUrl: fixture.url, caFile: fixture.caFile } });
+      throw new Error("existing binding switched server");
+    } catch (cause) {
+      report.existingBindingProtectsIdentity = String(cause.message ?? cause).includes("BINDING_BLOCKED") && JSON.stringify(await currentConnection()) === bound;
+      if (!report.existingBindingProtectsIdentity) throw cause;
+    }
+
     await click("暂停"); await wait("pause visible", () => text().includes("已暂停")); report.pauseVisible = true;
     await click("恢复"); await wait("resume visible", () => !text().includes("已暂停")); report.resumeVisible = true;
     report.noBrowserCredentialStorage = Object.keys(localStorage).every(key => key === "mantine-color-scheme-value" && ["auto", "light", "dark"].includes(localStorage.getItem(key))) && sessionStorage.length === 0;
     const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
     report.nonceStyles = /^[0-9a-f]{32}$/.test(nonce ?? "") && [...document.querySelectorAll("style")].every(style => style.nonce === nonce);
     report.cspViolations = cspViolations;
-    report.ok = report.nonceStyles && report.cspViolations.length === 0 && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
+    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","existingBindingProtectsIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });
