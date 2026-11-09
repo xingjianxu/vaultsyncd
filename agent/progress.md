@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S145 in_progress**（统一 Web 登录入口与本机部署）。S001—S145 共145卡：139 done、5 blocked、1 in_progress；当前执行 [S145](tasks/S145.md)，无其他 ready 卡。S141 已完成 Vault 改名后的 Windows 原生复验。线上源 `4ed8d9b`、generation260、schema17，新 ServerId `9395d9ca…`，首账号 `xingjian`，`documents` Vault 已重新注册并采集。验证与交接见[S141](tasks/S141.md)、[S144](tasks/S144.md)、[S143](tasks/S143.md)。
+当前：**S145 done**（统一 Web 登录入口与本机部署）。S001—S145 共145卡：140 done、5 blocked；**无 ready 卡**。线上源 `6e58bc2`、generation261、schema17，ServerId `9395d9ca…`、账号 `xingjian`、`documents` Vault 保持。未登录只显示独立登录页，认证后恢复原路由，退出/确认失效收回管理壳。验证与交接见[S145](tasks/S145.md)。
 
-最近部署：[S144](tasks/S144.md) 源`4ed8d9b69b0b7b8c3aaa6d5f34d0c753d7b29c7c`、主机pin`629c86d`、generation260；先按旧规则部署到 schema17（迁前/清库留档在 `/data/vaultsyncd-deploy/wipe-20261109T102438-61728/`），再停服清空内部状态、`vaultsyncd-init` 建首账号 `xingjian`、注册 `documents` 并重新采集 3 个对象；严格 TLS/静态资产/CSP/登录/文件浏览/属性/暗色320与1440/退出、health/capabilities(protocol 2)、schema17 quick_check、新布局物理哈希、10服务/3应用保持均通过，新 ServerId `9395d9ca…`。直接回退需旧 generation 与清库前整套状态并同步 pin，本次未演练。历史部署记录（S138 generation258/schema15 等）仅描述当时现场。
+最近部署：[S145](tasks/S145.md) 源`6e58bc26fcef09faf675229889693b593f6e9c4f`、主机pin`18a7df5`、generation261；pure部署及严格TLS生产8路由匿名门禁、登录后文件浏览/刷新/退出/后退、明暗320/1440、全量资产/CSP/cookie、ServerId/schema17、10服务/3应用与主机锁均通过。不清库、不改生产内容，无schema迁移；回退入口generation260，按S113先test/健康再switch并同步pin，未实际演练。S144清库历史与留档仍见[S144](tasks/S144.md)，更早部署不代表当前现场。
 
 恢复顺序：**S101 hosted → S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -14,7 +14,6 @@
 
 | 编号 | 结果 | 环境 | 前置 | 状态 | 产出提交/工作树 | 验证摘要 | 阻塞 | 交接路径 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| S145 | 统一 Web 登录入口并部署本机 | B/L | S077、S144 | in_progress | 基线e91324c；`.worktrees/S145-unified-login` / `feat/S145-unified-login` | 原 Web 单测基线通过，实现与验收中 | 无 | [S145](tasks/S145.md) |
 | S011 | CFAPI 读取、取消与离线原型 | W | S010 | blocked | 产出提交 `efb0563`（父提交 `a6aed74`；worktree `/wrd/prj/vaultsyncd/.worktrees/s011-s012`，分支 `feat/S011-S012-cfapi-read-write`） | 新增 `cfapi::content`（确定性固定内容源 + 自带 SHA-256（NIST 向量锁定）+ `serve_range` 回填循环，宿主可测）与 `cfapi::provider`（进程级 `Arc` 上下文、`FETCH_DATA` 分段 `CfExecute(TRANSFER_DATA)`、`CANCEL_FETCH_DATA` 原子取消标志、离线/超时明确失败、`wait_idle` 断开前静默）；`examples/cfapi-prototype` 新增 `read`/`cancel`/`hydrate`/`expect`，`create` 去掉“读取必须失败”探测、`inspect` 增 `--allow-hydrated`，条目集合增 16 MiB（范围请求）；登记策略改 `PARTIAL`/`PARTIAL`；新增 `tests/platform/windows/{run-cfapi-hydration.sh,guest-cfapi-hydration.ps1}` 并更新 S010 客体脚本读取探测。宿主 `cargo test -p vaultsyncd-platform-windows`(0，28 passed)、`cargo clippy --all-targets`(0)、`cargo fmt --check`(0)、`cargo xwin clippy`(0)、`build-cross.sh`(0)、`run-cfapi-hydration.sh`(0：46 项 check=pass、0 fail，两端 4 项哈希 MATCH)、`run-cfapi-prototype.sh`(0：21 项 pass)。客体证据：整份读取 `small`/`huge` 字节与 SHA-256 与宿主一致；`hydrate` 取得真正的**范围**请求（`platform_offset=3997696 platform_length=1052672`）；离线未水合以 `0xC000CF11`→`os error 388` 在 1 ms 内失败、已水合离线可读且 `fetch_requests=0`；慢源超时有界失败；传输中断开同步根后循环在 3/16 段停止且 305 ms 返回；客体已清理探针目录并干净关机 | **部分阻塞**：`CANCEL_FETCH_DATA` 在本 build（26300）上 5 条路径均未触发（CancelSynchronousIo 成功但水合继续、CancelIoEx=1168、传输中关句柄、传输中断开、跨进程请求收不到 `FETCH_DATA`）；跨进程提供方唤醒未打通。取消语义已由宿主单测的取消分支 + 传输中断实测覆盖，严格断言入口 `--require-cancel-callback` 保留 | agent/tasks/S011.md |
 | S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | blocked | 产品源fcbbb93；任务a6bbb56；master合并f07aab2，任务树/分支已清理 | 本机同源Linux双架构与Windows安装/CFAPI/e2e完成；portable914/0、Linux633/0，CFAPI5/5；NixOS与Ubuntu分列，ARM为全系统TCG | 仅hosted：无remote/runner，未执行Actions；需配置远端、Windows编译及独占platform-lab runner后运行工作流 | agent/tasks/S101.md（+a/b）；artifacts/S101/public/acceptance-matrix.json |
 | S106 | 小文件时延与常规规模基准 | X | S101、S102、S103、S104、S105 | blocked | 基线c59ff19；独立只读前置/资源报告 `docs/reports/performance.md`，文档390cda0已cb9ed20合入，证据/树/分支已收尾 | devShell资源核查：双路6430/128线程、503.54GiB RAM、SSD可用143.05GiB、旋转btrfs21.58TiB；仅1台8GiB/8vCPU Windows，未联系客体、未跑小样本/常规档，p95/RSS/CPU/队列全未测 | S101 hosted无remote/runner/Actions证据；S105已fd896fa完成，hosted前置仍阻塞；需准备3独立Windows及SSD/RTT实证，容量本身未证不足，不降1万文件/约10GiB目标 | agent/tasks/S106.md；artifacts/S106 |
@@ -29,6 +28,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S145 | 统一 Web 登录页、匿名全路由门禁、全局会话失效；真实认证/90组布局/五业务回归及generation261线上验收 | 实现/部署源6e58bc2；主机pin18a7df5；整合/清理见卡片 | [S145](tasks/S145.md) |
 | S141 | Vault 改名后 Windows 原生复验；修复 RootElement/IPC 版本等改名与升版遗留故障；bindings/files-ui/write/history/S129/S091/S099 原生通过 | 8b82e7d、ee2c863、e2f3b9a、83bc979、bf561f8、6f0bab3 已ff合master，任务树/分支已清理 | [S141](tasks/S141.md) |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
 | S144 | 部署 `4ed8d9b` 到本机：generation260、schema17、清库重建、管理员 xingjian；生产严格 TLS/浏览器验收 | 源`4ed8d9b`；主机 pin`629c86d` | [S144](tasks/S144.md) |
