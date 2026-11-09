@@ -90,4 +90,4 @@ S101实际源`fcbbb93ecff408fedc8fbba6006c81b84a151727`的0.1.1未签名NSIS为7
 
 CI显式设置`VAULTSYNCD_CI_CLEANUP=1`时，S099驱动仅对本run新账号执行logout、完整provider卸载（复用S100实际完整驻留/revert门）、普通文件hash核对，再删除新用户/profile/私有凭据/根/探针及准确新SID的系统任务。Windows为新用户生成的SoftLanding任务也须核对SID后清理，不用任务名通配符影响其他用户。默认未设该变量仍按历史S099保留现场。S101新SID清理独立probe通过；原S099/S100账号、数据和WinCred未触碰，VM在线且agent0。
 
-`tools/ci/README.md`是矩阵操作入口。Windows hosted原生编译仍因无remote/runner blocked；本机证据为锁定Linux cross构建后的Windows客体原生运行，不能改称Windows本机编译。
+`tools/ci/README.md`是矩阵操作入口。Windows客户端由锁定Linux交叉工具链构建，在Windows客体原生运行；证据须分别记录构建与运行平台。

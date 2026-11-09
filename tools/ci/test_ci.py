@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Catalogue/consumer regression tests; no fake platform acceptance."""
-import fnmatch
 import json
 import os
 import tempfile
@@ -16,30 +15,9 @@ import run
 
 
 class CatalogueTests(unittest.TestCase):
-    def test_workflow_paths_match_catalogue(self):
-        workflow = (run.ROOT / '.github/workflows/platform.yml').read_text()
-        paths = [json.loads(line.split('paths: ', 1)[1]) for line in workflow.splitlines() if 'paths: [' in line]
-        self.assertEqual(paths, [run.PATHS, run.PATHS])
-
-    def test_workflow_jobs_match_the_supported_catalogue(self):
-        import re
-        workflow = (run.ROOT / '.github/workflows/platform.yml').read_text()
-        jobs = re.search(r'job: \[(.*?)\]', workflow).group(1).split(', ')
-        self.assertEqual(set(jobs), {'ci-selftest', 'contracts', 'frontend', 'linux-server', 'release-linux'})
-        self.assertTrue(set(jobs).issubset(run.JOBS))
+    def test_release_linux_targets_supported_packages(self):
         self.assertEqual(run.plan('release-linux', {}), [
             ['nix', 'build', '.#default', '.#portable', '.#container-deps', '--no-link', '--json']])
-
-    def test_consumers_and_shared_inputs_trigger(self):
-        for path in ['apps/desktop/src-tauri/src/main.rs', 'apps/agent/src/main.rs',
-                     'apps/web/src/main.ts', 'crates/protocol/src/generated/mod.rs',
-                     'packages/api-client/src/generated/index.ts', 'api/openapi.yaml',
-                     'tests/windows-integration/tests/cfapi.rs', 'tests/server-integration/tests/restore.rs',
-                     'packaging/windows/installer/vaultsyncd.nsi', 'deploy/compose/run.py',
-                     'tools/xtask/src/main.rs', 'nix/package.nix', 'Cargo.lock',
-                     'pnpm-workspace.yaml', 'flake.lock', '.cargo/config.toml']:
-            with self.subTest(path=path):
-                self.assertTrue(any(fnmatch.fnmatchcase(path, p) for p in run.PATHS))
 
     def test_every_job_has_real_commands(self):
         values = dict(component='/new/component', package='/nix/package', image='localhost/test',
@@ -61,14 +39,6 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertFalse(json.loads(result.stdout)['execution'])
         self.assertEqual(json.loads(result.stdout)['commands'], [['cargo', 'xtask', 'check']])
-
-    def test_lab_is_manual_and_serial(self):
-        workflow = (run.ROOT / '.github/workflows/platform-lab.yml').read_text()
-        self.assertNotIn('pull_request:', workflow)
-        self.assertIn('workflow_dispatch:', workflow)
-        self.assertIn('cancel-in-progress: false', workflow)
-        self.assertIn('environment: platform-lab', workflow)
-        self.assertIn('artifacts/S101/public/', workflow)
 
 
 class LabControllerTests(unittest.TestCase):
@@ -93,7 +63,7 @@ class LabControllerTests(unittest.TestCase):
             (evidence / 'products.json').write_text(json.dumps({
                 'commit': commit, 'outputs': [{'outputs': {'out': str(path)}}
                                             for path in (portable, nixos, deps)]}))
-            component = vault / 'artifacts/S101/windows-client'
+            component = evidence / 'windows-client'
             (component / 'payload').mkdir(parents=True)
             (component / 'payload/client.zip').write_bytes(b'controller fixture')
             (component / 'receipt.json').write_text(json.dumps({'source': {'commit': commit}}))

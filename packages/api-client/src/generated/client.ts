@@ -622,6 +622,7 @@ export async function getCapabilities(options: ClientOptions, init?: RequestInit
  * 200：一页客户端连接记录
  * 400：无效分页游标
  * 401：会话失效
+ * 403：跨源请求被拒绝
  * 503：存储不可用
  */
 export async function listClients(options: ClientOptions, query?: { after?: string }, init?: RequestInit): Promise<ClientConnectionPage> {

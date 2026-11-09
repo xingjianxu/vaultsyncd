@@ -52,6 +52,6 @@ S098最终实测：产品0.1.1、发行源09d73f9双架构便携包/离线镜像
 
 S101在干净源`fcbbb93ecff408fedc8fbba6006c81b84a151727`重建NixOS安装包、双架构便携包和匹配Ubuntu镜像，不复用旧S098收据。NixOS26.11/kernel7.3是原生包/闭包与页面验证；Ubuntu24.04.5 x64为容器用户态、共享宿主内核；ARM64为完整Ubuntu24.04.5/kernel6.8.0-147的TCG客体，不代表原生ARM性能。三类环境的os-release、kernel、来源与结果分列在`artifacts/S101/public/`。
 
-容器验收除真实普通UID8721/caps0的btrfs上传/提交/固定下载/完整备份/重启，还以归档在**另一组新空目标**执行restore validate/apply，实际启动恢复服务、重新登录、下载同一固定版本并核对新epoch。两架构均通过，不能用源verify或重启旧DB冒称恢复。入口与缺资源78语义在`tools/ci/README.md`。动态qemu解释器和TCG早期SSH单探针失败保留，后按同一命令目录逐job同源续验通过；不声称原整体控制器exit0或hosted运行成功。
+容器验收除真实普通UID8721/caps0的btrfs上传/提交/固定下载/完整备份/重启，还以归档在**另一组新空目标**执行restore validate/apply，实际启动恢复服务、重新登录、下载同一固定版本并核对新epoch。两架构均通过，不能用源verify或重启旧DB冒称恢复。入口与缺资源78语义在`tools/ci/README.md`。动态qemu解释器和TCG早期SSH单探针失败保留，后按同一命令目录逐job同源续验通过；不声称原整体控制器exit0。
 
 本run实验挂载/loop/容器/binfmt/隧道已清理；停止的ARM复制盘和钥匙已删除，原S098模板、原trial loop0及宿主服务配置不变。外部S101目录保留发行GC roots与非秘密元数据，完整来源/hash/恢复证据和限制见`agent/tasks/S101*.md`。

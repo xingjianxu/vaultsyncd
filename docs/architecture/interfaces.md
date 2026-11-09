@@ -207,18 +207,6 @@ python3 tools/context.py --help
 
 约束：`env` 不硬编码会漂移的版本与成员清单；`check` 不吞输出、失败不报成功；未实现子命令不产生副作用。
 
-## .github/workflows/checks.yml — 便携 CI
-
-状态：S006 接入，仅 Linux runner；S101平台矩阵见 `tools/ci/README.md`、`.github/workflows/platform.yml` 和 `platform-lab.yml`。仓库当前**无远端**（`git remote -v` 无输出），因此hosted明确blocked，只有本地证据，未在 CI 上真实运行。
-
-| 项目 | 契约 |
-| --- | --- |
-| 触发 | `push`（任意分支）与 `pull_request`，`permissions: contents: read` |
-| 工具链来源 | YAML 不重复写版本：Rust 取 `rust-toolchain.toml`（`rustup show` 读取并在缺失时安装，含 rustfmt/clippy 组件）；Node 取 `package.json` 的 `engines.node`（`actions/setup-node` 的 `node-version-file: package.json`）；pnpm 取 `packageManager`（`pnpm/action-setup` 默认读取） |
-| 缓存 | `actions/cache` 缓存 `~/.cargo/registry`、`~/.cargo/git`、`target`，键含 `Cargo.lock` 与 `rust-toolchain.toml` 哈希；前端用 `actions/setup-node` 的 `cache: pnpm` |
-| 检查入口 | 先 `pnpm install --frozen-lockfile`，再用单步 `cargo xtask check`；不在 YAML 重写 fmt/clippy/test/typecheck |
-| 本地验证 | `nix shell --inputs-from . nixpkgs#actionlint -c actionlint .github/workflows/checks.yml` 退出 0（actionlint 1.7.12） |
-
 ## tools/test-volume/test-volume.sh — 测试卷生命周期
 
 状态：S007 实现（`create`/`verify`/`cleanup`/`status` 可用）。Bash（`set -eu`、`pipefail`），只做主机侧测试环境准备，不属于 Rust workspace、不参与 `cargo xtask check`，也不需要 `node_modules`。实测证据与路径规划见 `docs/environment.md` §11。
@@ -2554,8 +2542,8 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 
 ## S101 — 平台矩阵、同源安装与实验室资源
 
-- `cargo xtask ci <job> [--plan] [--component/--image/--evidence/--vm/--package …]`委托`tools/ci/run.py`唯一目录；portable/contracts/frontend/linux-server、三类release、三平台install与Windows CFAPI/e2e/native-build、ci-selftest均在此编排，YAML不重写测试/发布逻辑。`--plan`不算执行；实际要求干净HEAD并记录前后porcelain、平台、逐步命令/退出码/耗时。成功0、失败非0、缺资源78、参数错误2；报告在忽略的`artifacts/S101/ci/`，release job还保存真实归档/对应源码/清单。
-- `.github/workflows/platform.yml`按保守消费者闭包触发Linux x64各job、ARM cross发行与Windows原生编译（后者不是CFAPI验收）。`platform-lab.yml`仅手工dispatch、保护环境/独占runner/concurrency；`acceptance.py --config <私有JSON> --phase build|lab`对同一干净提交构建/安装，flock串行。无remote/runner时hosted明确blocked，不把本地运行写成GitHub通过。配置与资源条件见`tools/ci/README.md`。
+- `cargo xtask ci <job> [--plan] [--component/--image/--evidence/--package …]`委托`tools/ci/run.py`唯一目录；portable/contracts/frontend/linux-server、Linux和Windows release、NixOS/Ubuntu/Windows install、Windows CFAPI/e2e与ci-selftest均在此编排。`--plan`不算执行；实际要求干净HEAD并记录前后porcelain、平台、逐步命令/退出码/耗时。成功0、失败非0、缺资源78、参数错误2；报告在忽略的`artifacts/S101/ci/`，release job还保存真实归档/对应源码/清单。
+- `acceptance.py --config <私有JSON> --phase build|lab`在本地对同一干净提交构建/安装，flock串行，报告以`execution_environment: local`标记。命令目录不含托管平台触发路径、远端执行状态或专用原生编译项；Windows由宿主交叉构建、客体原生运行验收。配置与资源条件见`tools/ci/README.md`。
 - `tools/ci/linux-server.py`为stock Ubuntu创建本run专属btrfs loop/bind，拒绝覆盖非空fixture目录；服务测试仍普通用户执行。既有btrfs实验室使用私有TMPDIR。`acceptance.py`仅复制已停机S098 ARM模板，登记自己的静态无INTERP qemu handler并finally清理；完整Ubuntu ARM64内核TCG运行存储，不使用qemu-user冒充内核能力。SSH超时只重试，实际uname和本run进程退出才分别证明就绪/关机。
 - `packaging/linux/test-container.py`在既有上传/备份/重启之后，新增实际新空目标restore validate/apply、恢复服务启动/登录/固定内容下载及新epoch核对。容器UID/capability/no-FUSE约束未放宽，无wire/DB格式变化。NixOS原生闭包、Ubuntu x64容器共享内核、Ubuntu ARM完整TCG内核证据必须分列。
 - `tests/platform/windows/s099-installation.*`仅在`VAULTSYNCD_CI_CLEANUP=1`选择本run清理：真实logout，S100完整驻留门/revert/provider卸载，三份普通文件SHA核对后恢复原Quickemu登录，再删除新测试账号/profile/私有凭据/探针及**确切新SID**的系统任务。默认S099保留行为不变，不清理旧卡账号/Vault/WinCred。Windows客体保持在线，宿主trial/Caddy/SSH不动。

@@ -228,7 +228,7 @@ cd /wrd/prj/vaultsyncd
 
 一次性账号迁移证据 `/data/vaultsyncd-deploy/S113-20261107T221130/`：停服后的只读 `state-before` btrfs 快照与 `vaults-before` reflink 副本、旧归属和文件摘要均保留在 Git 外。旧运行/启动 generation244 为 `/nix/store/jg54j3w2arc95lc3asx071w2b75z95kq-nixos-system-wks-lab-26.11.20261102.7356cc7`。**回到 S112 账号配置前，先停服并把专用正式状态及 Vault 的归属恢复为 UID/GID984（旧配置会重建该账号）；仅切换旧 system 不能同时恢复归属。** 备份快照不改权；不要对用户其他目录递归改权，也不要用旧程序直接写新 schema。
 
-初次迁移固定项目4071fd4、主机75d6fb5，系统k92lxnm03xg828lzfzivp0aij810gpns先test；原正式 ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 VaultId `cf8a15ace18abe4d9c3027ac25c30070` 和旧样本摘要保留。65项包内测试、普通/专用用户模块、aliweb关闭feature的pure完整求值通过。真实HTTPS16MiB上传/413/committed/固定下载/服务重启与同OpId重放、同UID IPC与普通用户备份prepare/verify/release通过；10项既有服务状态/PID/InvocationID保持。最终一键更新提交、generation与switch后证据见 [S113交接](../../agent/tasks/S113.md)。本卡不代替Windows、hosted CI及首发性能门禁。
+初次迁移固定项目4071fd4、主机75d6fb5，系统k92lxnm03xg828lzfzivp0aij810gpns先test；原正式 ServerId `69dbfa9fdca2bfb8a239b88d0fd30d53`、文档 VaultId `cf8a15ace18abe4d9c3027ac25c30070` 和旧样本摘要保留。65项包内测试、普通/专用用户模块、aliweb关闭feature的pure完整求值通过。真实HTTPS16MiB上传/413/committed/固定下载/服务重启与同OpId重放、同UID IPC与普通用户备份prepare/verify/release通过；10项既有服务状态/PID/InvocationID保持。最终一键更新提交、generation与switch后证据见 [S113交接](../../agent/tasks/S113.md)。本卡不代替Windows、首发性能门禁。
 
 S113 最终一键部署已通过：项目固定 **6b967bda32378da5e74e4c328fcaa3bcd72e75cf**，主机 **32bfeb54f9c76d5ed781a80800fdce86179c7d6a** 已 ff 合入 `/etc/nixos` main；运行/开机默认 **generation245**，system `/nix/store/mwra49kbdbgppwmc5p7j7rz0dbfbbk4w-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/180dcgy5j2hx801vg59g2bk15whp3p7j-vaultsyncd-0.1.1`。该源复用已通过65项测试的相同Rust组件；本次重新构建发行provenance与主机。真实脚本从4071fd4更新pin到6b967bd，显式pure构建后dry/test/健康/switch，通过后自动提交pin并清理临时树。主机main的pure toplevel重新求值得到同一system。
 
@@ -294,7 +294,7 @@ pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥no
 
 **按用户明确要求，本轮不执行部署后验证**：没有 Chromium/浏览器矩阵、没有线上资产 sha256 比对、没有既有服务 PID/应用/SSH/锁基线复核，也没有生产上传/恢复/备份写入或故障注入。实际通过的门禁只有部署机制自身的 clean 检查、pure 求值与构建、manifest 与主机锁核对、`dry-activate` → `test` → HTTPS 健康（ServerId 不变）→ 同 UID IPC `phase=ready` → `stateDir`/Vault 归属 → `switch` → 运行/开机 system 一致性；切换前后两次健康检查均通过。因此线上 Web 资产与 UI 的最新证据仍来自 S123（generation250），本卡不构成任何新的生产 UI/安全/服务影响结论。
 
-证据 `/data/vaultsyncd-deploy/local-20261108T160744-2745069/`（result、旧 generation、旧 system/boot GC roots、锁、host-before diff、pin diff）与 `/data/vaultsyncd-deploy/S125-20261108-local/`（契约测试与部署日志），筛选副本在 `artifacts/S125/`。恢复入口为部署前 generation250 `ivwnixw752n1n1bbk57iwrdx5p7nl25f`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。原首发门禁（hosted CI、性能容量、最终发行、T02 Windows）不变。
+证据 `/data/vaultsyncd-deploy/local-20261108T160744-2745069/`（result、旧 generation、旧 system/boot GC roots、锁、host-before diff、pin diff）与 `/data/vaultsyncd-deploy/S125-20261108-local/`（契约测试与部署日志），筛选副本在 `artifacts/S125/`。恢复入口为部署前 generation250 `ivwnixw752n1n1bbk57iwrdx5p7nl25f`，按 S113 先 test 与健康检查再决定 switch 并同步回退 pin；本轮未实际激活旧 generation。原首发门禁（性能容量、最终发行、T02 Windows）不变。
 
 
 ## S128 目录树间距与开合图标部署（2026-11-08，generation253）
@@ -303,7 +303,7 @@ pure构建/manifest/锁/dry/test/HTTPS/IPC/归属/switch通过；线上HTML剥no
 
 pure build、manifest 来源、dry-activate/test、HTTPS/IPC/ServerId/归属、switch 全通过；运行与开机均为 `/nix/store/q92sr3wjc5vidsafwr1n1bhvqn50syfh-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/395v9igpkc8gnh9bfnna0fgkblk821ml-vaultsyncd-0.1.1`。线上 index 剥 nonce 与全量资产逐字节匹配包内；真实 Chromium 严格 TLS1.3、owner 登录、明暗×320/1440 目录树、无页面溢出/CSP/pageerror、注销200通过。既有10服务 PID/InvocationID、3应用200、ServerId不变；只读浏览仅请求元数据，无文件内容写入。
 
-证据 `/data/vaultsyncd-deploy/local-20261108T164823-2812385/`、永久仓库 `artifacts/S128/` 与 `/data/vs-s128-20261108T164620-2810111/`。恢复入口为 generation252 `/nix/store/iqdq51l51lndpk90898kgn7cxjb8kqh1-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 先 test/健康再 switch 并同步 pin；未实际激活旧 generation。Windows、hosted、规模及原首发门禁保持，详见 [S128](../../agent/tasks/S128.md)。
+证据 `/data/vaultsyncd-deploy/local-20261108T164823-2812385/`、永久仓库 `artifacts/S128/` 与 `/data/vs-s128-20261108T164620-2810111/`。恢复入口为 generation252 `/nix/store/iqdq51l51lndpk90898kgn7cxjb8kqh1-nixos-system-wks-lab-26.11.20261102.7356cc7`，按 S113 先 test/健康再 switch 并同步 pin；未实际激活旧 generation。Windows、规模及原首发门禁保持，详见 [S128](../../agent/tasks/S128.md)。
 
 
 ## S133 S132 右键菜单服务端部署（2026-11-08，generation255）
@@ -339,7 +339,7 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 运行及开机默认 generation256，system `/nix/store/w9jrk25vqz0iqqzsrq1v40bn8zw9vahf-nixos-system-wks-lab-26.11.20261102.7356cc7`，包 `/nix/store/vmnd65vsc2ja1fblbdf36zbdr5vh3zfh-vaultsyncd-0.1.1`；无 Rust/迁移改动，库保持14，ServerId/Vault/归属保持。线上资产与包内逐字节一致、index 除 nonce 外一致；严格 TLS1.3 Chromium 登录、右键/Shift+F10 复制路径的 Notification、四秒自动消失、Enter 关闭、明暗×320/1440 无溢出/布局位移/CSP错误通过。10项无关服务 PID/InvocationID 和3应用200保持。生产仅只读元数据浏览及剪贴板操作。
 
-证据 `artifacts/S135/` 与 `/data/vaultsyncd-deploy/local-20261108T201005-3057280/`，passed/cleaned=true，含旧system/boot GC roots。恢复入口 generation255 `/nix/store/a86anl2i29i5q3kcx9jqay6p2a2a6ngc-nixos-system-wks-lab-26.11.20261102.7356cc7`，先 `sudo nixos-rebuild test --store-path <旧路径>` 核对健康，再决定 switch，并同步回退主机 pin；无数据库迁移，不必恢复库。本次未实际回退演练、未做生产内容写入或故障注入，不替代 Windows、hosted 和规模门禁。详见 [S135](../../agent/tasks/S135.md)。
+证据 `artifacts/S135/` 与 `/data/vaultsyncd-deploy/local-20261108T201005-3057280/`，passed/cleaned=true，含旧system/boot GC roots。恢复入口 generation255 `/nix/store/a86anl2i29i5q3kcx9jqay6p2a2a6ngc-nixos-system-wks-lab-26.11.20261102.7356cc7`，先 `sudo nixos-rebuild test --store-path <旧路径>` 核对健康，再决定 switch，并同步回退主机 pin；无数据库迁移，不必恢复库。本次未实际回退演练、未做生产内容写入或故障注入，不替代 Windows和规模门禁。详见 [S135](../../agent/tasks/S135.md)。
 
 ## S138 文件操作与重命名版部署（generation258，2026-11-08）
 
@@ -349,7 +349,7 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 现有脚本pure build→dry→test→健康→switch全部通过，主机pin`9930ec77046abed5744a35f1b672593270bc485e`已ff main并清理临时树/分支，锁不变。运行/开机generation258，system`/nix/store/g16gzr5crzcz29nfpjnjg3j2r7ga25pa-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`/nix/store/hr90dm2vbghdwa9vq8i62ipsn4fqa206-vaultsyncd-0.1.1`。严格TLS1.3生产Chromium全量资产、列表与树右键/键盘/取消改名/Vault保护、明暗320/1440、通知与CSP通过；旧布局固定版本内容长度及SHA256匹配，8对象映射/字节、schema15/ServerId/归属与10无关服务/3应用保持。生产只读元数据/固定版本与取消弹窗，无文件操作提交。
 
-永久证据`artifacts/S138/`及`/data/vaultsyncd-deploy/local-20261108T224057-3442489/`（passed/cleaned=true，旧system/boot GC roots）。直接回退为generation257：`/nix/store/r3fvjjgnknna7rm5y7nc9aqifnxmbslc-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113先`sudo nixos-rebuild test --store-path <旧路径>`、健康后再switch并同步pin；本次无迁移，不降schema。未实际回退、生产恢复或故障注入；原Windows/hosted/规模门禁保持，详见[S138](../../agent/tasks/S138.md)。
+永久证据`artifacts/S138/`及`/data/vaultsyncd-deploy/local-20261108T224057-3442489/`（passed/cleaned=true，旧system/boot GC roots）。直接回退为generation257：`/nix/store/r3fvjjgnknna7rm5y7nc9aqifnxmbslc-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113先`sudo nixos-rebuild test --store-path <旧路径>`、健康后再switch并同步pin；本次无迁移，不降schema。未实际回退、生产恢复或故障注入；原Windows/规模门禁保持，详见[S138](../../agent/tasks/S138.md)。
 
 ## S145 统一登录入口部署（generation261，2026-11-09）
 
@@ -357,7 +357,7 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 服务端Web未登录仅显示独立登录页，管理导航与业务页不挂载，登录后恢复原hash/目录深链；退出/改密/撤销/最终401收回整个界面。静态登录资产与公开health/capabilities端点仍开放，业务API保持服务端授权。真实生产Chromium（禁QUIC以固定TLS1.3验证，不跳过证书校验）通过8路由匿名门禁、登录后文件浏览及刷新、退出后后退仍拦截、cookie/CSP、明暗320/1440；全量线上静态资产与包逐字节匹配，无页面/CSP错误。ServerId `9395d9cacd7d3fb4b746592806a8b5cb`、schema17、管理员xingjian、10项服务/3应用及主机锁保持，不清库不改生产内容。
 
-证据 `artifacts/S145/` 与 `/data/vaultsyncd-deploy/local-20261109T145920-429779/`（passed/cleaned=true）。回退入口S144的generation260 `/nix/store/rq6p480986lr6hhv87qa0fvapr14g6yj-nixos-system-wks-lab-26.11.20261102.7356cc7`，先按S113 test/健康再switch，并同步主机pin；本卡无迁移、不需降库，未实际演练回退。S144清库历史见[交接](../../agent/tasks/S144.md)，本次不重做清库；Windows/hosted/规模门禁保持。整合与清理见[S145](../../agent/tasks/S145.md)。
+证据 `artifacts/S145/` 与 `/data/vaultsyncd-deploy/local-20261109T145920-429779/`（passed/cleaned=true）。回退入口S144的generation260 `/nix/store/rq6p480986lr6hhv87qa0fvapr14g6yj-nixos-system-wks-lab-26.11.20261102.7356cc7`，先按S113 test/健康再switch，并同步主机pin；本卡无迁移、不需降库，未实际演练回退。S144清库历史见[交接](../../agent/tasks/S144.md)，本次不重做清库；Windows/规模门禁保持。整合与清理见[S145](../../agent/tasks/S145.md)。
 
 
 ## S146 闲置目录清理与临时数据集中（2026-11-09）
@@ -387,4 +387,4 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 生产真实Chromium的TLS1.3、全量资产、匿名门禁、登录/自动连接/客户端页/退出、文件版本号与摘要、刷新/键盘/Escape、明暗320/1440、CSP/cookie全通过。ServerId、schema/FK、Vault路径/历史、4工作文件和3对象摘要及10既有服务/3应用保持；未写生产同步内容。完整备份`/data/vaultsyncd-temp/S152-deploy-20261109T103922Z/backups/predeploy.vsbk`及异盘`artifacts/S152/backups/`副本/收据均verified。原始脚本/结果/日志/截图、部署result及GC roots在该run的`evidence/`。本卡因并行S152桌面任务而改编号S153，既有运行目录名保留。
 
-回退入口generation264 `/nix/store/qdd7vqh5k24dwlrxwzcgsn6mp9f75k0y-nixos-system-wks-lab-26.11.20261102.7356cc7`，可按S113先`sudo nixos-rebuild test --store-path <该旧路径>`并确认HTTPS/IPC健康，再switch并同步主机pin至c20199e的旧源。此次无schema迁移，保留S151的vaults路径；若要恢复备份仍须按备份协议恢复到空目录并更换epoch。未实际回退、生产恢复或Windows/hosted/规模复验；原首发门禁保持。交接与清理见[S153](../../agent/tasks/S153.md)。
+回退入口generation264 `/nix/store/qdd7vqh5k24dwlrxwzcgsn6mp9f75k0y-nixos-system-wks-lab-26.11.20261102.7356cc7`，可按S113先`sudo nixos-rebuild test --store-path <该旧路径>`并确认HTTPS/IPC健康，再switch并同步主机pin至c20199e的旧源。此次无schema迁移，保留S151的vaults路径；若要恢复备份仍须按备份协议恢复到空目录并更换epoch。未实际回退、生产恢复或Windows/规模复验；原首发门禁保持。交接与清理见[S153](../../agent/tasks/S153.md)。

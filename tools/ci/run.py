@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Single command catalogue for GitHub jobs and local `cargo xtask ci` runs.
+"""Local command catalogue for `cargo xtask ci` runs.
 
 Missing lab inputs exit 78 (blocked), never a successful/empty test run.
-Only explicitly provisioned, disposable runners may execute privileged lab jobs.
+Only explicitly provisioned, disposable labs may execute privileged jobs.
 """
 import argparse
 import json
@@ -16,11 +16,6 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 CARGO = ["cargo", "xtask"]
-# Conservative consumer closure: any implementation/shared input runs the whole matrix.
-# Kept identical in platform.yml; test_ci.py guards additions and consumer examples.
-PATHS = [".github/**", ".cargo/**", "api/**", "apps/**", "crates/**", "packages/**",
-         "tests/**", "fixtures/**", "tools/**", "packaging/**", "deploy/**", "nix/**",
-         "Cargo.*", "package.json", "pnpm-*.yaml", "rust-toolchain.toml", "flake.*"]
 JOBS = {
     "ci-selftest": [["python3", "tools/ci/test_ci.py"]],
     "portable": [CARGO + ["check"]],
@@ -30,11 +25,6 @@ JOBS = {
                  ["pnpm", "--recursive", "--if-present", "run", "test"],
                  ["pnpm", "--recursive", "--if-present", "run", "build"]],
     "linux-server": [["python3", "tools/ci/linux-server.py"]],
-    "windows-build": [["pnpm", "--filter", "@vaultsyncd/desktop", "build"],
-                      ["cargo", "build", "--locked", "--release", "--target", "x86_64-pc-windows-msvc",
-                       "-p", "vaultsyncd-agent", "-p", "vaultsyncd-cli", "-p", "vaultsyncd-desktop", "--bins"],
-                      ["cargo", "test", "--locked", "--target", "x86_64-pc-windows-msvc",
-                       "-p", "vaultsyncd-windows-tests", "--no-run"]],
     "release-linux": [["nix", "build", ".#default", ".#portable", ".#container-deps", "--no-link", "--json"]],
     "release-windows": [CARGO + ["release", "build", "windows-client", "{component}"]],
     "windows-e2e": [["bash", "tests/platform/windows/run-native-e2e.sh"]],
@@ -75,9 +65,6 @@ def main():
         return 1
     if args.job in LAB and os.environ.get("VAULTSYNCD_CI_LAB") != "1":
         print(json.dumps({**report, "status": "blocked", "reason": "set VAULTSYNCD_CI_LAB=1 only in the reserved disposable lab"}))
-        return 78
-    if args.job == "windows-build" and sys.platform != "win32":
-        print(json.dumps({**report, "status": "blocked", "reason": "native Windows build requires a Windows runner; use release-windows for the locked Linux cross adapter"}))
         return 78
     directory = ROOT / "artifacts/S101/ci" / (args.job + "-" + str(time.time_ns()))
     directory.mkdir(parents=True)

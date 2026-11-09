@@ -50,7 +50,7 @@ def main():
             and evidence.resolve().is_relative_to(EVIDENCE_ROOT.resolve())
             and evidence.resolve() != EVIDENCE_ROOT.resolve())
     evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # All local controllers use the same lock; hosted workflow concurrency is additional.
+    # Serialize all local controllers sharing this lab.
     with LAB_LOCK.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
@@ -106,7 +106,7 @@ def main():
         public=ROOT/'artifacts/S101/public';public.mkdir(parents=True,exist_ok=True)
         result={'status':'passed','source':source,'linux':'NixOS x64 and Ubuntu x64 container',
                 'windows':'Linux cross build / Windows 11 native install, WebView2 and CFAPI',
-                'hosted_ci':'blocked: no git remote or configured runners','products':products,
+                'execution_environment':'local','products':products,
                 'windows_payload':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (component/'payload').iterdir() if p.is_file()}}
         (public/'installation.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
     return 0

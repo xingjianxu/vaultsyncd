@@ -2,7 +2,7 @@
 
 Windows 11 与 Linux 之间的个人文件同步工具：Linux 服务端（含管理 CLI 与 Web 管理页）与 Windows 客户端（后台 agent、CLI、桌面与 CFAPI 占位）。首发范围、不变量与数据契约见 [`docs/design.md`](docs/design.md) §2—3、§6。
 
-当前已有 Linux 服务端、管理 CLI/Web 和 Windows agent、CLI、桌面及 CFAPI 实现，处于首发验收阶段，**尚未完成首发门禁**。S101 hosted CI、S106 常规性能与 S107 正式容量仍阻塞；不能将历史安装包或单客体顺序运行结果视为当前版本发布通过。逐卡状态见 [`agent/progress.md`](agent/progress.md)，发布证据见[发布核对表](docs/operations/release.md)，平台与容量界限见[已知限制](docs/known-limitations.md)。
+当前已有 Linux 服务端、管理 CLI/Web 和 Windows agent、CLI、桌面及 CFAPI 实现，处于首发验收阶段，**尚未完成首发门禁**。S106 常规性能与 S107 正式容量仍阻塞；不能将历史安装包或单客体顺序运行结果视为当前版本发布通过。逐卡状态见 [`agent/progress.md`](agent/progress.md)，发布证据见[发布核对表](docs/operations/release.md)，平台与容量界限见[已知限制](docs/known-limitations.md)。
 
 ## 文档入口
 
@@ -31,7 +31,7 @@ python3 tools/context.py --help
 
 ## 检查入口
 
-CI（[`.github/workflows/checks.yml`](.github/workflows/checks.yml)）与本地用同一条命令；检查逻辑在 `tools/xtask`，YAML 不重复写一遍：
+本地检查统一由 `tools/xtask` 编排，平台构建和实验室验证见 [`tools/ci/README.md`](tools/ci/README.md)：
 
 ```bash
 nix develop -c cargo xtask check    # 边界/生成代码/消费者检查 + fmt + clippy + test + 前端 typecheck/test，任一步失败即非零退出

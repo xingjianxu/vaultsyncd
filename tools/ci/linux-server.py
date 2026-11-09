@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run Linux tests as the caller on btrfs; provision only a disposable CI loop.
 
-On an already btrfs-backed lab, use its existing fixture base. On stock hosted
-Ubuntu, bind our fresh btrfs volume to the existing test suite's hard-coded
+On an already btrfs-backed lab, use its existing fixture base. On a disposable
+Ubuntu lab, bind our fresh btrfs volume to the existing test suite's hard-coded
 <repo>/target/s052-lab. No production mount, vault service or source file changes.
 """
 import os

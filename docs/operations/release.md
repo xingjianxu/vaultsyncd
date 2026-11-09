@@ -1,13 +1,13 @@
 # 首发发布核对与证据索引
 
-状态：**blocked，未完成首发验收**。2026-11-07。本文汇总独立证据，不将历史交接的done叠加为当前候选35项全部通过。S101 hosted、S106/S107性能容量与T02三台Windows实证缺口未解除；T29明确P1，不算首发门禁。
+状态：**blocked，未完成首发验收**。2026-11-07。本文汇总独立证据，不将历史交接的done叠加为当前候选35项全部通过。S106/S107性能容量与T02三台Windows实证缺口未解除；T29明确P1，不算首发门禁。
 
 ## 源码与证据归属
 
 | 证据组 | 实际源与界限 |
 | --- | --- |
 | S074基础互通 | `88fb7be`，Windows单客体三身份顺序；S102在 `81699c411c6d976188a63927f55150bbc34c574b` 干净树复跑 |
-| S101历史发行/安装 | `fcbbb93ecff408fedc8fbba6006c81b84a151727`，0.1.1 unsigned-test；本机同源，hosted未执行 |
+| S101历史发行/安装 | `fcbbb93ecff408fedc8fbba6006c81b84a151727`，0.1.1 unsigned-test；本机同源；S155按修订范围收尾 |
 | S103文件/挂载故障 | 产品修复 `8e4ad2b`、装置 `42ab10d`，合并 `b36e31e`；详细源见交接，不能标成当前候选重跑 |
 | S104维护/恢复 | `c03114d3aa3757bbd116b8d2137c1d080935028e`，合并 `326b469`；默认关闭test-faults，maintenance5/0、T33额外1/0 |
 | S105修复与原生安全 | 产品源 `b26372ec8b64e7c88b6d2aa34a5258413fe15f9c`；IPC1.6/排除重协调、NoSpace与CFAPI范围key修复，debug PE无native-acceptance；交接 `8cd3a8a`，父整合候选 `fd896faee0f407b2cf3da5ed332a88f83d184a3f`，S105 done |
@@ -55,7 +55,7 @@
 | T33 | 升级失败回退 | [S091](../../agent/tasks/S091.md) | [S104](../../agent/tasks/S104.md) | 真实actor未来schema拒写与完整归档回退，合成版本明确 |
 | T34 | 时延与规模 | [S106](../../agent/tasks/S106.md) | [S107](../../agent/tasks/S107.md) | **blocked，全部性能/正式容量未测** |
 | T35 | 不合规后端拒绝 | [S013](../../agent/tasks/S013.md) | [S103](../../agent/tasks/S103.md) | 真实卸载/替换/子挂载/bind别名/NOCOW与准入 |
-| T36 | 发布平台与安装 | [S098](../../agent/tasks/S098.md) | [S101](../../agent/tasks/S101.md) | 历史同源三平台本机安装；hosted/当前候选未完成 |
+| T36 | 发布平台与安装 | [S098](../../agent/tasks/S098.md) | [S101](../../agent/tasks/S101.md) | 历史同源三平台本机安装；当前候选尚未完成 |
 
 **T29为P1**：Linux客户端/FUSE导入不在首发交付范围，不用移除P0测试来扩大通过比例。除T29外恰有35行；“已有证据”不表示该行已对当前候选通过最终门禁。
 
@@ -80,7 +80,7 @@
 | `vaultsyncd-cli.exe` | 2147328 | `1367c77b7ccbd238b3e563d2fd75a8705727514960936d1186c562ad11a17c6f` |
 | `vaultsyncd-desktop.exe` | 13698048 | `3056b72bd3344a22f0b3ce6b77d7e6ade551251c385a1175fbe00c2e85d9a2fb` |
 
-对应 `artifacts/S105/production/` 与 `provenance.json`。原生验收日志记录的是各自测试二进制的来源/哈希，不能将后来重建PE称为已通过全套安装器或hosted验收。
+对应 `artifacts/S105/production/` 与 `provenance.json`。原生验收日志记录的是各自测试二进制的来源/哈希，不能将后来重建PE称为已通过全套安装器验收。
 
 `artifacts/S108/artifact-index.json`保留S101安全公开清单文件的实际SHA-256及历史清单所声明的payload哈希，二者严格区分；旧包源固定为 `fcbbb93...`，不能用于声称当前修复已发布。0.1.1历史Windows安装器声明SHA-256为 `805a22c52ef89b9d135a775521a52c10f533579ad85462954fc98817f188aa94`；本卡不声称重新读取了该安装器字节。本卡重新读取现存历史Nix store输出：两架构各24份runtime文件hash均匹配公开manifest，两份源码归档均匹配 `23c6906f6d914f62eaf442bd9327904e7d61647b55ed5d012179380c3de87dce`。实际发布归档如下（均为历史源，非新候选）：
 
@@ -93,7 +93,7 @@
 
 ## 恢复发布验收
 
-1. 补真实远端、hosted工作流与runner证据，完成S101；保留本地/hosted平台区别。
+1. 按本地平台矩阵复核候选提交与实验室资源；S101历史验收不自动替代当前候选同源发行和安装证据。
 2. 选包含S102—S105修复的最终源码提交，记录dirty状态、锁文件和构建工具链；为Linux x64、Web、Windows包生成新的来源及payload SHA-256，不重标历史receipt。
 3. 完成S106三设备/SSD/RTT条件下的小样本及常规档，再按S107完整容量预算准备五台独立Windows设备和NTFS数据卷，执行真实10万文件/1TiB/50GiB传输并记录重传字节与资源曲线。
 4. 在同候选下复核本表35项证据缺口（含T02真实三台），安装/升级/备份恢复和安全入口；记录所有失败与恢复，不将ignored原生测试当已实跑。

@@ -1,10 +1,10 @@
 # 实施进度
 
-当前：**S154 done**（Vault目录工具栏精简已验收，未部署；[交接](tasks/S154.md)）。S153版本历史版已部署本机。运行/开机generation265，正式源`89a9cf4`、schema18，Vault基目录保持`/data/vaultsyncd/vaults`；**下一 ready：无**。S152桌面任务由独立会话进行，原5张blocked门禁不变。精确运行配置`d4c5fe7`（main整合`2c96e2f`），main尚未激活的依赖锁升级保持；详见[S153](tasks/S153.md)。
+当前：**S155 in_progress**（移除远端工作流及相关依赖）。S154目录工具栏精简已验收、未部署。S153版本历史版已部署本机。运行/开机generation265，正式源`89a9cf4`、schema18，Vault基目录保持`/data/vaultsyncd/vaults`；**下一 ready：无**。S152桌面任务由独立会话进行，S101按用户最新范围收尾，其他4张blocked门禁保持。精确运行配置`d4c5fe7`（main整合`2c96e2f`），main尚未激活的依赖锁升级保持；详见[S153](tasks/S153.md)。
 
 最近部署：[S153](tasks/S153.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证文件版本历史、刷新/键盘/明暗320/1440、认证/自动连接/CSP/cookie及全部资产一致。身份、正式文件/对象、新Vault路径及10服务/3应用保持。完整备份及异盘副本verified，旧generation264及GC roots保留；未实际回退生产。路径迁移与恢复边界见[S151](tasks/S151.md)，此前schema17→18升级及恢复演练见[S149](tasks/S149.md)。
 
-恢复顺序：**S101 hosted → S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
+恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
 当前平台仅 Linux x64 服务端、Windows 11 x64 客户端（S111/ADR-015）；历史 ARM64 证据保留但不构成恢复门禁。Windows 在宿主构建、客体原生验收；主机、容量、端口与旧工作树须现场复核。
 
@@ -15,10 +15,9 @@
 | 编号 | 结果 | 环境 | 前置 | 状态 | 产出提交/工作树 | 验证摘要 | 阻塞 | 交接路径 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | S011 | CFAPI 读取、取消与离线原型 | W | S010 | blocked | 产出提交 `efb0563`（父提交 `a6aed74`；worktree `/wrd/prj/vaultsyncd/.worktrees/s011-s012`，分支 `feat/S011-S012-cfapi-read-write`） | 新增 `cfapi::content`（确定性固定内容源 + 自带 SHA-256（NIST 向量锁定）+ `serve_range` 回填循环，宿主可测）与 `cfapi::provider`（进程级 `Arc` 上下文、`FETCH_DATA` 分段 `CfExecute(TRANSFER_DATA)`、`CANCEL_FETCH_DATA` 原子取消标志、离线/超时明确失败、`wait_idle` 断开前静默）；`examples/cfapi-prototype` 新增 `read`/`cancel`/`hydrate`/`expect`，`create` 去掉“读取必须失败”探测、`inspect` 增 `--allow-hydrated`，条目集合增 16 MiB（范围请求）；登记策略改 `PARTIAL`/`PARTIAL`；新增 `tests/platform/windows/{run-cfapi-hydration.sh,guest-cfapi-hydration.ps1}` 并更新 S010 客体脚本读取探测。宿主 `cargo test -p vaultsyncd-platform-windows`(0，28 passed)、`cargo clippy --all-targets`(0)、`cargo fmt --check`(0)、`cargo xwin clippy`(0)、`build-cross.sh`(0)、`run-cfapi-hydration.sh`(0：46 项 check=pass、0 fail，两端 4 项哈希 MATCH)、`run-cfapi-prototype.sh`(0：21 项 pass)。客体证据：整份读取 `small`/`huge` 字节与 SHA-256 与宿主一致；`hydrate` 取得真正的**范围**请求（`platform_offset=3997696 platform_length=1052672`）；离线未水合以 `0xC000CF11`→`os error 388` 在 1 ms 内失败、已水合离线可读且 `fetch_requests=0`；慢源超时有界失败；传输中断开同步根后循环在 3/16 段停止且 305 ms 返回；客体已清理探针目录并干净关机 | **部分阻塞**：`CANCEL_FETCH_DATA` 在本 build（26300）上 5 条路径均未触发（CancelSynchronousIo 成功但水合继续、CancelIoEx=1168、传输中关句柄、传输中断开、跨进程请求收不到 `FETCH_DATA`）；跨进程提供方唤醒未打通。取消语义已由宿主单测的取消分支 + 传输中断实测覆盖，严格断言入口 `--require-cancel-callback` 保留 | agent/tasks/S011.md |
-| S101 | CI 平台矩阵与安装验证 | X | S092、S098、S100 | blocked | 产品源fcbbb93；任务a6bbb56；master合并f07aab2，任务树/分支已清理 | 本机同源Linux双架构与Windows安装/CFAPI/e2e完成；portable914/0、Linux633/0，CFAPI5/5；NixOS与Ubuntu分列，ARM为全系统TCG | 仅hosted：无remote/runner，未执行Actions；需配置远端、Windows编译及独占platform-lab runner后运行工作流 | agent/tasks/S101.md（+a/b）；artifacts/S101/public/acceptance-matrix.json |
-| S106 | 小文件时延与常规规模基准 | X | S101、S102、S103、S104、S105 | blocked | 基线c59ff19；独立只读前置/资源报告 `docs/reports/performance.md`，文档390cda0已cb9ed20合入，证据/树/分支已收尾 | devShell资源核查：双路6430/128线程、503.54GiB RAM、SSD可用143.05GiB、旋转btrfs21.58TiB；仅1台8GiB/8vCPU Windows，未联系客体、未跑小样本/常规档，p95/RSS/CPU/队列全未测 | S101 hosted无remote/runner/Actions证据；S105已fd896fa完成，hosted前置仍阻塞；需准备3独立Windows及SSD/RTT实证，容量本身未证不足，不降1万文件/约10GiB目标 | agent/tasks/S106.md；artifacts/S106 |
-| S107 | 正式容量与大文件续传验证 | X | S106 | blocked | 基线cb9ed20；只读正式档预算与恢复证据要求写 `docs/reports/performance.md`，文档dcadee5已0d4fb30合入，证据/树/分支已收尾 | devShell容量/挂载/btrfs/remote均exit0；data21.5808TiB，SSD142.59GiB；有限情景含余量19.54TiB，另累计五端下载stage情景25.54TiB（差约3.96TiB）；正式10万文件/1TiB/50GiB/5设备与重传字节全未测 | S106未验收，追溯S101 hosted缺口；五独立Windows及大NTFS卷未准备，须先核实内部副本/stage/历史增长再准入容量，不降目标、不以小样本替代 | agent/tasks/S107.md；artifacts/S107 |
-| S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | blocked | 35项P0索引、README/运维入口与当前限制；文档5f485a5已abdedd3整合；S105 done/代码候选fd896fa；证据、树与分支已收尾 | 两架构各24个历史runtime文件及发布/源码tar哈希核验，b263源三PE哈希/原生启动验证；当前候选全平台包未完成 | S101 hosted、S106/S107性能容量、T02三台Windows及最终同源发行证据缺失；未宣称首发完成 | agent/tasks/S108.md；docs/operations/release.md |
+| S106 | 小文件时延与常规规模基准 | X | S101、S102、S103、S104、S105 | blocked | 基线c59ff19；独立只读前置/资源报告 `docs/reports/performance.md`，文档390cda0已cb9ed20合入，证据/树/分支已收尾 | devShell资源核查：双路6430/128线程、503.54GiB RAM、SSD可用143.05GiB、旋转btrfs21.58TiB；仅1台8GiB/8vCPU Windows，未联系客体、未跑小样本/常规档，p95/RSS/CPU/队列全未测 | S101已由S155按修订范围收尾；S105已fd896fa完成；需准备3独立Windows及SSD/RTT实证，容量本身未证不足，不降1万文件/约10GiB目标 | agent/tasks/S106.md；artifacts/S106 |
+| S107 | 正式容量与大文件续传验证 | X | S106 | blocked | 基线cb9ed20；只读正式档预算与恢复证据要求写 `docs/reports/performance.md`，文档dcadee5已0d4fb30合入，证据/树/分支已收尾 | devShell容量/挂载/btrfs/remote均exit0；data21.5808TiB，SSD142.59GiB；有限情景含余量19.54TiB，另累计五端下载stage情景25.54TiB（差约3.96TiB）；正式10万文件/1TiB/50GiB/5设备与重传字节全未测 | S106未验收；五独立Windows及大NTFS卷未准备，须先核实内部副本/stage/历史增长再准入容量，不降目标、不以小样本替代 | agent/tasks/S107.md；artifacts/S107 |
+| S108 | 发布清单与最终交接 | X | S101、S102、S103、S104、S105、S106、S107 | blocked | 35项P0索引、README/运维入口与当前限制；文档5f485a5已abdedd3整合；S105 done/代码候选fd896fa；证据、树与分支已收尾 | 两架构各24个历史runtime文件及发布/源码tar哈希核验，b263源三PE哈希/原生启动验证；当前候选全平台包未完成 | S106/S107性能容量、T02三台Windows及最终同源发行证据缺失；未宣称首发完成 | agent/tasks/S108.md；docs/operations/release.md |
 
 ## 已完成任务
 
@@ -28,6 +27,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |
 | S153 | 版本历史版服务端部署generation265；真实生产浏览器/资产/数据及既有服务验收通过 | 源89a9cf4；主机pin d4c5fe7、main整合2c96e2f；生命周期见交接 | [S153](tasks/S153.md) |
 | S147 | 持久记录客户端连接；Web按账号分页查看活动/会话，schema18迁移与真实浏览器通过；未部署 | 实现5403c3c、整合S148 1e9367f、交接de1f96e已ff合master；任务树/分支已清理 | [S147](tasks/S147.md) |
 | S148 | 登录/刷新恢复会话后自动检查服务；退出取消、失败重试、真实 Chromium 验收；未部署 | 实现`3885ab4`；整合/清理见交接 | [S148](tasks/S148.md) |
