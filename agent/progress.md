@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S147 in_progress**（客户端连接记录与查看）。下一 ready：S147（本轮执行）；原记录：**S146 done**（清理闲置目录、集中临时数据与缓存）。S001—S146共146卡：141 done、5 blocked；**无ready卡**。主机generation262，正式服务仍为S145源`6e58bc2`，ServerId/挂载/服务进程保持；整个win-lab及基线/关联缓存不动。清理清单与验证见[S146](tasks/S146.md)。
+当前：**S147 in_progress**（客户端连接记录与查看，整合 S148 后复验中）。S148 done（登录后自动连接，未部署）；S001—S148 共148卡：142 done、5 blocked、1 in_progress。下一 ready：S147（本轮执行）。主机generation262，正式服务仍为S145源`6e58bc2`，临时目录约定见[S146](tasks/S146.md)。
 
 最近部署：[S145](tasks/S145.md) 源`6e58bc26fcef09faf675229889693b593f6e9c4f`、主机pin`18a7df5`、generation261；pure部署及严格TLS生产8路由匿名门禁、登录后文件浏览/刷新/退出/后退、明暗320/1440、全量资产/CSP/cookie、ServerId/schema17、10服务/3应用与主机锁均通过。不清库、不改生产内容，无schema迁移；回退入口generation260，按S113先test/健康再switch并同步pin，未实际演练。S144清库历史与留档仍见[S144](tasks/S144.md)，更早部署不代表当前现场。
 
@@ -28,6 +28,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S148 | 登录/刷新恢复会话后自动检查服务；退出取消、失败重试、真实 Chromium 验收；未部署 | 实现`3885ab4`；整合/清理见交接 | [S148](tasks/S148.md) |
 | S145 | 统一 Web 登录页、匿名全路由门禁、全局会话失效；真实认证/90组布局/五业务回归及generation261线上验收 | 实现6e58bc2、交接c9b092d已ff合master；主机pin18a7df5；任务树/分支已清理 | [S145](tasks/S145.md) |
 | S141 | Vault 改名后 Windows 原生复验；修复 RootElement/IPC 版本等改名与升版遗留故障；bindings/files-ui/write/history/S129/S091/S099 原生通过 | 8b82e7d、ee2c863、e2f3b9a、83bc979、bf561f8、6f0bab3 已ff合master，任务树/分支已清理 | [S141](tasks/S141.md) |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |

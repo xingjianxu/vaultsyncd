@@ -2371,6 +2371,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - Web `BrowserAuth` 只用同源 credentials/no-store 请求；受保护调用复用 `request`，401 并发单飞刷新一次，重复 401 回登录，网络失败保留可重试错误。不使用 localStorage，不读 cookie 凭据。
 - S145：`AuthProvider` 启动先核验账号，`AuthGate` 在核验期间只显示 loading、匿名仅挂载独立登录页；只有已确认账号才能挂载 `AppView`、导航及所有管理消费者，不重写原 hash 深链。登录表单从 `AccountPanel` 移至此唯一入口，账号面板仅保留改密/退出/撤销。
 - S145：`BrowserAuth(options?, onSignedOut?)` 在最终401及退出/改密/撤销成功后通知整个应用退出。认证代际围栏拒绝旧请求成功及旧401回写；过期请求抛普通会话变更错误而不是 `SignedOut`，不把潜在已提交文件操作误判为确定拒绝。`AuthProvider` 另用同步操作锁/序号防重入与过时账号恢复；refresh 网络故障不伪装身份失效。初始核验失败维持门禁并提供“重新核验会话”，普通匿名首次打开不显示过期错误。UI门禁不替代服务端API授权，公开health/capabilities与静态资产边界不变。
+- S148：`AppView` 仅在 `AuthGate` 确认会话后挂载，effect 自动调用 `checkServer`（同源 `GET /v1/health`），覆盖登录及刷新恢复、任意 hash 路由。与手动检查共享请求锁/取消控制器；卸载 abort 并释放引用以兼容 StrictMode effect 重放。取消的请求不写状态或通知；健康失败不撤销已确认账号，保留手动重试，不增加轮询。
 - Vite 仅回环监听、禁用 CORS，`VAULTSYNCD_DEV_API` 只接受无凭据/路径的本机 HTTP(S) 地址，保留原 Host 让后端校验浏览器 Origin。浏览器验收使用锁定 `nix develop .#web-tests` 的 Playwright Chromium；HTTP localhost 专用测试不代表 S097 生产 HTTPS 已部署。
 
 ## S078 owner Vault 健康与采集页面

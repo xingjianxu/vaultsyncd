@@ -1,4 +1,4 @@
-import { Component, type ReactNode, lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Component, type ReactNode, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ActionIcon, Alert, Anchor, AppShell, Breadcrumbs, Burger, Button, Card, Container, Divider, Group, Loader, MantineProvider, NavLink, SimpleGrid, Stack, Text, ThemeIcon, Title, useComputedColorScheme, useMantineColorScheme } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { Notifications } from "@mantine/notifications";
@@ -43,13 +43,12 @@ function AppView() {
   const [opened, { toggle, close }] = useDisclosure();
   const { toggleColorScheme } = useMantineColorScheme();
   const colorScheme = useComputedColorScheme("light");
-  const [status, setStatus] = useState("未连接");
-  const [detail, setDetail] = useState("尚未检查服务连接。");
+  const [status, setStatus] = useState("正在检查");
+  const [detail, setDetail] = useState("正在获取服务状态。");
   const [busy, setBusy] = useState(false);
   const [checkedAt, setCheckedAt] = useState<string>();
   const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
-  async function connect() {
+  const connect = useCallback(async () => {
     if (controller.current) return;
     const current = new AbortController(); controller.current = current;
     setBusy(true); setStatus("正在检查");
@@ -57,7 +56,7 @@ function AppView() {
       const result = await checkServer(undefined, current.signal);
       if (current.signal.aborted) return;
       setStatus(result.status === "ok" ? "服务可用" : result.status === "degraded" ? "服务降级" : "需要恢复");
-      setDetail("健康检查已返回；账号与 Vault 状态需登录后查看。");
+      setDetail("健康检查已返回。");
       setCheckedAt(new Date().toLocaleTimeString("zh-CN"));
       showFeedback(result.status === "ok" ? "服务可用" : result.status === "degraded" ? "服务降级" : "需要恢复", result.status === "ok" ? "green" : "yellow");
     } catch (error) {
@@ -65,7 +64,11 @@ function AppView() {
       const message = error instanceof Error ? error.message : "连接失败，请检查服务地址。";
       setStatus("未连接"); setDetail(message); showFeedback(message, "red");
     } finally { if (!current.signal.aborted) { controller.current = null; setBusy(false); } }
-  }
+  }, []);
+  useEffect(() => {
+    void connect();
+    return () => { controller.current?.abort(); controller.current = null; };
+  }, [connect]);
   const connection = <StatusBadge tone={status === "服务可用" ? "success" : status === "服务降级" || status === "需要恢复" ? "warning" : "neutral"}>{status}</StatusBadge>;
   return <>
     <a className="skip-link" href="#main-content" onClick={event => { event.preventDefault(); document.getElementById("main-content")?.focus(); }}>跳到主要内容</a>

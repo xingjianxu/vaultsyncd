@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S077: real Chromium + React + isolated btrfs server; HTTP loopback test only.
+"""S077/S145/S148: real Chromium + isolated btrfs auth and health lifecycle.
 
 Run after the Web build and Rust server/admin build:
 nix develop .#web-tests --command python3 tests/web/auth-browser.py
@@ -21,7 +21,7 @@ from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data/vaultsyncd-temp") / f"vs-s145-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data/vaultsyncd-temp") / f"S148-auth-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -56,7 +56,9 @@ def main():
         assert address, "server did not listen"
         proxy_results = []
         account_gate = threading.Event()
-        network = {"offline": False}
+        network = {"offline": False, "health_offline": False}
+        health_requests = []
+        health_delay = {"gate": None}
 
         class Handler(CspStaticFiles):
             def log_message(self, *_): pass
@@ -68,6 +70,14 @@ def main():
                 else: super().do_GET()
 
             def forward(self):
+                if self.path == "/v1/health":
+                    health_requests.append(self.path)
+                    gate = health_delay["gate"]
+                    if gate is not None:
+                        gate.wait(timeout=10)
+                    if network["health_offline"]:
+                        self.close_connection = True
+                        return
                 if self.path == "/v1/auth/account":
                     account_gate.wait(timeout=10)
                 if network["offline"]:
@@ -85,7 +95,10 @@ def main():
                         if key.lower() not in ("connection", "transfer-encoding", "content-length"):
                             self.send_header(key, value)
                     self.send_header("content-length", str(len(payload))); self.end_headers()
-                    self.wfile.write(payload)
+                    try:
+                        self.wfile.write(payload)
+                    except (BrokenPipeError, ConnectionResetError):
+                        if self.path != "/v1/health": raise
                 finally: backend.close()
 
         factory = functools.partial(Handler, directory=str(REPO / "apps/web/dist"))
@@ -130,6 +143,7 @@ def main():
                 page.evaluate("route => { location.hash = route; }", route)
                 signed_out()
             assert not any(path.startswith("/v1/vaults") for path, *_ in proxy_results)
+            assert health_requests == [], "anonymous gate started a health check"
             # Transport failure must not expose the console; retry the real backend.
             network["offline"] = True
             page.reload()
@@ -148,6 +162,23 @@ def main():
 
             login(password)
             expect(notifications.filter(has_text="登录成功")).to_have_attribute("role", "status")
+            connection = page.locator(".app-topbar [role='status']")
+            expect(connection).to_have_text("服务可用")
+            assert len(health_requests) == 1, "login did not check health exactly once"
+            page.evaluate("location.hash = '/overview'")
+            check = page.get_by_role("button", name="检查服务连接", exact=True)
+            expect(check).to_be_enabled()
+            assert len(health_requests) == 1, "navigation repeated automatic health check"
+            network["health_offline"] = True
+            check.click()
+            expect(connection).to_have_text("未连接")
+            expect(check).to_be_enabled()
+            expect(page.locator(".mantine-AppShell-root")).to_be_visible()
+            network["health_offline"] = False
+            check.click()
+            expect(connection).to_have_text("服务可用")
+            expect(check).to_be_enabled()
+            page.evaluate("location.hash = '/account'")
             cookies = context.cookies()
             assert len(cookies) == 2 and all(c["httpOnly"] and c["secure"] and c["sameSite"] == "Strict" for c in cookies)
             assert page.evaluate("document.cookie") == ""
@@ -163,7 +194,10 @@ def main():
             # Expire only access cookie: reload must refresh using HttpOnly cookie, then restore account.
             access = next(c for c in cookies if c["name"] == "vaultsyncd_session")
             context.add_cookies([{**access, "expires": time.time() - 10}])
+            before_reload = len(health_requests)
             page.reload(); expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
+            expect(connection).to_have_text("服务可用")
+            assert len(health_requests) == before_reload + 1
             assert next(c for c in context.cookies() if c["name"] == "vaultsyncd_session")["value"] != access["value"]
 
             # Same-site different origin can send Strict cookies; server still rejects CSRF.
@@ -186,11 +220,24 @@ def main():
             expect(password_error).to_have_attribute("role", "alert")
             login(new_password)
             expect(password_error).to_have_count(0)
-            page.get_by_role("button", name="退出当前会话", exact=True).click()
+            expect(connection).to_have_text("服务可用")
+            # Logout cancels the old shell's in-flight health check.
+            pending_health = threading.Event()
+            health_delay["gate"] = pending_health
+            page.evaluate("location.hash = '/overview'")
+            check.click()
+            expect(connection).to_have_text("正在检查")
+            expect(page.get_by_role("button", name="检查中…", exact=True)).to_be_disabled()
+            page.evaluate("location.hash = '/account'")
+            with page.expect_event("requestfailed", predicate=lambda request: request.url.endswith("/v1/health")):
+                page.get_by_role("button", name="退出当前会话", exact=True).click()
             signed_out()
             assert page.evaluate("fetch('/v1/auth/account').then(r => r.status)") == 401
             assert page.evaluate("fetch('/v1/auth/browser/refresh',{method:'POST'}).then(r => r.status)") == 401
+            health_delay["gate"] = None
             login(new_password)
+            expect(connection).to_have_text("服务可用")
+            pending_health.set()
             page.get_by_role("button", name="撤销全部会话", exact=True).click()
             signed_out()
             assert page.evaluate("fetch('/v1/auth/browser/refresh',{method:'POST'}).then(r => r.status)") == 401
@@ -202,8 +249,16 @@ def main():
             page.get_by_role("button", name="登录", exact=True).click()
             expect(page.get_by_role("heading", name="Vault 目录", level=1, exact=True)).to_be_visible()
             assert page.evaluate("location.hash") == "#/vaults"
+            network["health_offline"] = True
             page.reload()
             expect(page.get_by_role("heading", name="Vault 目录", level=1, exact=True)).to_be_visible()
+            expect(connection).to_have_text("未连接")
+            assert page.evaluate("location.hash") == "#/vaults"
+            network["health_offline"] = False
+            page.evaluate("location.hash = '/overview'")
+            check.click()
+            expect(connection).to_have_text("服务可用")
+            page.screenshot(path=str(RUN / "connected.png"))
             assert page.evaluate("fetch('/v1/auth/revoke-all',{method:'POST'}).then(r => r.status)") == 200
             page.evaluate("location.hash = '/backup'")
             signed_out()
@@ -215,8 +270,8 @@ def main():
             page.screenshot(path=str(RUN / "account.png"))
             assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             second.close(); context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage", "notifications/login-success/auth-error-clears-on-retry", "CSP"], "scope":"HTTP loopback isolated real server; unified login gate S145", "gate_checks":["initial-check-no-console-flash", "all-routes-anonymous-blocked", "deep-link-preserved", "no-anonymous-feature-requests", "offline-check-retry", "server-revocation-closes-console", "authenticated-reload"]}, ensure_ascii=False, indent=2))
-        print(f"S145 auth browser acceptance passed: {RUN}")
+            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage", "notifications/login-success/auth-error-clears-on-retry", "CSP"], "scope":"HTTP loopback isolated real server; unified login gate S145 and automatic health S148", "connection_checks":["no-anonymous-health", "login-check-once", "navigation-no-repeat", "manual-network-failure-retry", "refreshed-session-auto-check", "in-flight-disabled", "logout-aborts-health", "relogin-new-health", "restored-session-health-failure-preserves-auth", "CSP"], "gate_checks":["initial-check-no-console-flash", "all-routes-anonymous-blocked", "deep-link-preserved", "no-anonymous-feature-requests", "offline-check-retry", "server-revocation-closes-console", "authenticated-reload"]}, ensure_ascii=False, indent=2))
+        print(f"S148 auth/automatic health browser acceptance passed: {RUN}")
     finally:
         for listener in [proxy, evil]:
             if listener: listener.shutdown(); listener.server_close()
