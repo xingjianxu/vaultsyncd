@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S160 done**，服务概览显示完整可选中的 Server ID，读取失败可重试；[交接](tasks/S160.md)。已部署本机，运行/开机generation269、源`85dd2bb`、schema18，Vault基目录`/data/vaultsyncd/vaults`；主机pin `a37df31`已ff合main，依赖锁保持。**下一 ready：无**，原4张blocked门禁保持。
+当前新增：**S162 in_progress**（客户端托盘自动更新，编号已预留；[现场](tasks/S162.md)）。最近完成：**S160 done**，服务概览显示完整可选中的 Server ID，读取失败可重试；[交接](tasks/S160.md)。已部署本机，运行/开机generation269、源`85dd2bb`、schema18，Vault基目录`/data/vaultsyncd/vaults`；主机pin `a37df31`已ff合main，依赖锁保持。**下一 ready：无**，原4张blocked门禁保持。
 
 最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不含S159/S160 Web变化。
 
