@@ -10,7 +10,7 @@ public class PickerWindow {
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr process);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool join);
  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr window);
  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
@@ -47,7 +47,8 @@ function Set-DialogForeground([IntPtr]$target) {
   if ([PickerWindow]::GetForegroundWindow() -eq $target) { return $true }
   [void][PickerWindow]::SetForegroundWindow($target)
   if ([PickerWindow]::GetForegroundWindow() -eq $target) { Trace 'foreground=set'; return $true }
-  $foregroundThread = [PickerWindow]::GetWindowThreadProcessId([PickerWindow]::GetForegroundWindow(), [IntPtr]::Zero)
+  [uint32]$foregroundPid = 0
+  $foregroundThread = [PickerWindow]::GetWindowThreadProcessId([PickerWindow]::GetForegroundWindow(), [ref]$foregroundPid)
   $currentThread = [PickerWindow]::GetCurrentThreadId()
   [void][PickerWindow]::AttachThreadInput($currentThread, $foregroundThread, $true)
   try {
