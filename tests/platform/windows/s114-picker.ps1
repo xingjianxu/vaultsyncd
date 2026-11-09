@@ -9,6 +9,11 @@ using System.Runtime.InteropServices;
 public class PickerWindow {
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr process);
+ [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool join);
+ [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr window);
+ [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 }
 '@
 $root = [Windows.Automation.AutomationElement]::RootElement
@@ -24,6 +29,23 @@ function Wait-Dialog {
   }
   throw 'native directory picker did not open'
 }
+# Windows blocks SetForegroundWindow from a background process; join the foreground input
+# queue before retrying so the address-bar keys really land in this dialog.
+function Set-DialogForeground([IntPtr]$target) {
+  if ([PickerWindow]::GetForegroundWindow() -eq $target) { return $true }
+  [void][PickerWindow]::SetForegroundWindow($target)
+  if ([PickerWindow]::GetForegroundWindow() -eq $target) { return $true }
+  $foregroundThread = [PickerWindow]::GetWindowThreadProcessId([PickerWindow]::GetForegroundWindow(), [IntPtr]::Zero)
+  $currentThread = [PickerWindow]::GetCurrentThreadId()
+  [void][PickerWindow]::AttachThreadInput($currentThread, $foregroundThread, $true)
+  try {
+    [void][PickerWindow]::BringWindowToTop($target)
+    [void][PickerWindow]::SetForegroundWindow($target)
+  } finally {
+    [void][PickerWindow]::AttachThreadInput($currentThread, $foregroundThread, $false)
+  }
+  return ([PickerWindow]::GetForegroundWindow() -eq $target)
+}
 function Click-DialogButton($dialog, [string]$id) {
   # This guest exposes standard Win32 controls as UIA Pane without InvokePattern.
   # Resolve the actual button handle by its observed dialog control ID, then click it.
@@ -34,7 +56,7 @@ function Click-DialogButton($dialog, [string]$id) {
 }
 # Real Common Item Dialog, no frontend or native API substitution. Select a Unicode path.
 $dialog = Wait-Dialog
-[PickerWindow]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
+if (!(Set-DialogForeground([IntPtr]$dialog.Current.NativeWindowHandle))) { throw 'native directory dialog did not reach the foreground' }
 Start-Sleep -Milliseconds 200
 Trace 'setting address'
 [Windows.Forms.SendKeys]::SendWait('^l')

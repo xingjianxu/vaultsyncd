@@ -193,8 +193,16 @@ def main():
             # The installed client only accepts a path from the real native folder picker.
             action("pick-directory")
             page.get_by_role("button", name="选择目录…", exact=True).click()
-            wait("native directory picker",
-                 lambda: page.locator('[name="local_path"]').input_value() == installed["local"], 180)
+
+            def picked():
+                value = page.locator('[name="local_path"]').input_value()
+                if value == installed["local"]:
+                    return True
+                if value:
+                    raise AssertionError(f"picker returned {value!r}, expected {installed['local']!r}")
+                return False
+
+            wait("native directory picker", picked, 180)
             page.locator('[name="mode"]').select_option("full")
             page.get_by_role("button", name="创建绑定并开始合并", exact=True).click()
 
