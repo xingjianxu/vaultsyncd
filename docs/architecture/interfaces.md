@@ -2540,6 +2540,8 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 
 S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查前返回该FD实际vault ID；256不是推断的子卷ID。Ubuntu6.8非特权实际新子卷/嵌套检测及备份链通过，所有来源均不可用仍拒绝。Podman兼容API实测忽略create_host_path:false，因此部署标准入口为deploy/compose/run.py，先核显式存在源再创建资源，服务自身仍执行完整存储预检。镜像构建--offline要求缓存的base架构/精确digest及全部.deb SHA，缺失失败；最终同源09双架构离线镜像及完整Ubuntu运行通过。普通unit源67与09仅镜像构建脚本不同，所有实际服务/Web/库/preflight文件逐SHA相同；JSON旧消费者预检字节亦相同，明确来源组合见curated矩阵。没有协议/持久格式变化，不把TCG证据说成原生性能。
 
+S158 发行修复：当前仅 Linux x64；`nix/portable.nix` 以 `runtimeLibraryRoots` 向打包器提供锁定 glibc/GCC/SQLite/zlib 的目录白名单。打包器递归收集实际 ELF 依赖（含 libsqlite3.so → libz.so.1），拒绝未知目录，清单记录对应版本和逐库摘要；无 wire 或持久化格式变化。
+
 ## S101 — 平台矩阵、同源安装与实验室资源
 
 - `cargo xtask ci <job> [--plan] [--component/--image/--evidence/--package …]`委托`tools/ci/run.py`唯一目录；portable/contracts/frontend/linux-server、Linux和Windows release、NixOS/Ubuntu/Windows install、Windows CFAPI/e2e与ci-selftest均在此编排。`--plan`不算执行；实际要求干净HEAD并记录前后porcelain、平台、逐步命令/退出码/耗时。成功0、失败非0、缺资源78、参数错误2；报告在忽略的`artifacts/S101/ci/`，release job还保存真实归档/对应源码/清单。

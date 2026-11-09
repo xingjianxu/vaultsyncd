@@ -5,8 +5,8 @@ let
 in assert sourceInfo.commit != null || throw "portable release requires a clean committed flake";
 pkgs.runCommand "vaultsyncd-portable-${version}-${target}" {
   nativeBuildInputs = with pkgs.buildPackages; [ python3 patchelf gnutar gzip ];
-  runtimeLibraryRoots = lib.makeLibraryPath [ pkgs.glibc (lib.getLib pkgs.stdenv.cc.cc) pkgs.stdenv.cc.cc.libgcc pkgs.sqlite ];
-  runtimeVersions = builtins.toJSON { glibc = pkgs.glibc.version; gcc = pkgs.stdenv.cc.cc.version; sqlite = pkgs.sqlite.version; patchelf = pkgs.buildPackages.patchelf.version; };
+  runtimeLibraryRoots = lib.makeLibraryPath [ pkgs.glibc (lib.getLib pkgs.stdenv.cc.cc) pkgs.stdenv.cc.cc.libgcc pkgs.sqlite pkgs.zlib ];
+  runtimeVersions = builtins.toJSON { glibc = pkgs.glibc.version; gcc = pkgs.stdenv.cc.cc.version; sqlite = pkgs.sqlite.version; zlib = pkgs.zlib.version; patchelf = pkgs.buildPackages.patchelf.version; };
   glibcSource = pkgs.glibc.src;
   gccSource = pkgs.stdenv.cc.cc.src;
   launchTemplate = source + "/packaging/linux/portable-launch.sh";
