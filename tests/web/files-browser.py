@@ -56,7 +56,7 @@ def main():
     long_name = "long-" + "a" * 160 + ".txt"
     (documents / long_name).write_bytes(b"")
     password = secrets.token_urlsafe(24)
-    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
+    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state, "--login", "owner"], input=password + "\n")
     config = RUN / "server.toml"
     config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
@@ -120,14 +120,13 @@ def main():
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
             page.goto(origin + "/#/files")
-            expect(page.get_by_role("heading", name="请先登录", exact=True)).to_be_visible()
-            page.goto(origin + "/#/account")
+            expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+            expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
             page.get_by_label(field_label("登录名")).fill("owner")
             page.get_by_label(field_label("密码")).fill(password)
             page.get_by_role("button", name="登录", exact=True).click()
-            expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
-            page.goto(origin + "/#/files")
             expect(page.get_by_text("尚无授权 Vault，请先在 Vault 目录页面注册目录。", exact=True)).to_be_visible()
+            assert page.url == origin + "/#/files"
 
             def api(path, body=None):
                 result = page.evaluate("""async ([path, body]) => {const r=await fetch(path,body===null?{}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,body:await r.json()}}""", [path, body])
@@ -583,9 +582,12 @@ def main():
             # Revocation is performed via the real UI; the browser route must discard its data.
             page.goto(origin + "/#/account")
             page.get_by_role("button", name="退出当前会话", exact=True).click()
-            expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+            expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+            expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
             page.goto(origin + "/#/files")
-            expect(page.get_by_role("heading", name="请先登录", exact=True)).to_be_visible()
+            expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+            expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
+            assert page.url == origin + "/#/files"
             expect(table).not_to_be_visible()
             context.close(); browser.close()
             (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-vaults", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-vault/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "notifications/top-right/limit-3/queue", "notifications/success-4s/repeated-copy-new-timer/manual-close", "notifications/native-clipboard-denied/sticky-error/keyboard-close", "notifications/no-layout-shift/long-path/narrow-light-dark", "notifications/scoped-error-state-and-unmount-cleanup", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/vault-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "vault-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "notification_layout_cases": notification_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))

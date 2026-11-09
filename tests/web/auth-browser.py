@@ -21,7 +21,7 @@ from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data") / f"vs-s077-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data") / f"vs-s145-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -38,7 +38,7 @@ def main():
     state, vaults = RUN / "state", RUN / "vaults"
     state.mkdir(mode=0o700); vaults.mkdir()
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
-    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
+    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state, "--login", "owner"], input=password + "\n")
     config = RUN / "server.toml"
     config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
@@ -55,6 +55,8 @@ def main():
             time.sleep(.2)
         assert address, "server did not listen"
         proxy_results = []
+        account_gate = threading.Event()
+        network = {"offline": False}
 
         class Handler(CspStaticFiles):
             def log_message(self, *_): pass
@@ -66,6 +68,11 @@ def main():
                 else: super().do_GET()
 
             def forward(self):
+                if self.path == "/v1/auth/account":
+                    account_gate.wait(timeout=10)
+                if network["offline"]:
+                    self.close_connection = True
+                    return
                 backend = http.client.HTTPConnection(address, timeout=10)
                 headers = {key: value for key, value in self.headers.items() if key.lower() not in ("connection", "transfer-encoding")}
                 body = self.rfile.read(int(self.headers.get("content-length", "0")))
@@ -103,9 +110,35 @@ def main():
             page = context.new_page(); console = []
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
-            page.goto(origin + "/#/account")
+            deep_link = "/files/" + "ab" * 16 + "/nested%20folder"
+            page.goto(origin + "/#" + deep_link)
+            # Delay the real account request: no console or login flash during verification.
+            expect(page.locator(".mantine-AppShell-root")).to_have_count(0)
+            expect(page.get_by_label(field_label("登录名"))).to_have_count(0)
+            account_gate.set()
             notifications = page.locator(".mantine-Notification-root")
-            expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+
+            def signed_out():
+                expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+                expect(page.locator(".mantine-AppShell-root")).to_have_count(0)
+                expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
+                expect(page.get_by_role("button", name="检查服务连接", exact=True)).to_have_count(0)
+
+            signed_out()
+            assert page.evaluate("location.hash") == "#" + deep_link
+            for route in ["/overview", "/vaults", deep_link, "/recovery", "/backup", "/account", "/missing"]:
+                page.evaluate("route => { location.hash = route; }", route)
+                signed_out()
+            assert not any(path.startswith("/v1/vaults") for path, *_ in proxy_results)
+            # Transport failure must not expose the console; retry the real backend.
+            network["offline"] = True
+            page.reload()
+            signed_out()
+            expect(page.get_by_role("button", name="重新核验会话", exact=True)).to_be_visible()
+            network["offline"] = False
+            page.get_by_role("button", name="重新核验会话", exact=True).click()
+            signed_out()
+            page.evaluate("location.hash = '/account'")
 
             def login(secret):
                 page.get_by_label(field_label("登录名")).fill("owner")
@@ -143,7 +176,7 @@ def main():
             page.get_by_label(field_label("当前密码")).fill(password)
             page.get_by_label(field_label("新密码")).fill(new_password)
             page.get_by_role("button", name="修改密码并撤销会话", exact=True).click()
-            expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+            signed_out()
             assert second.request.get(origin + "/v1/auth/account", headers={"origin":origin}).status == 401
             assert second.request.post(origin + "/v1/auth/browser/refresh", headers={"origin":origin}).status == 401
             page.get_by_label(field_label("登录名")).fill("owner")
@@ -154,22 +187,36 @@ def main():
             login(new_password)
             expect(password_error).to_have_count(0)
             page.get_by_role("button", name="退出当前会话", exact=True).click()
-            expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+            signed_out()
             assert page.evaluate("fetch('/v1/auth/account').then(r => r.status)") == 401
             assert page.evaluate("fetch('/v1/auth/browser/refresh',{method:'POST'}).then(r => r.status)") == 401
             login(new_password)
             page.get_by_role("button", name="撤销全部会话", exact=True).click()
-            expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+            signed_out()
             assert page.evaluate("fetch('/v1/auth/browser/refresh',{method:'POST'}).then(r => r.status)") == 401
             assert page.evaluate("localStorage.length") == 0
+            # Login restores the requested route; feature-level revocation closes the whole shell.
+            page.evaluate("location.hash = '/vaults'")
+            page.get_by_label(field_label("登录名")).fill("owner")
+            page.get_by_label(field_label("密码")).fill(new_password)
+            page.get_by_role("button", name="登录", exact=True).click()
+            expect(page.get_by_role("heading", name="Vault 目录", level=1, exact=True)).to_be_visible()
+            assert page.evaluate("location.hash") == "#/vaults"
+            page.reload()
+            expect(page.get_by_role("heading", name="Vault 目录", level=1, exact=True)).to_be_visible()
+            assert page.evaluate("fetch('/v1/auth/revoke-all',{method:'POST'}).then(r => r.status)") == 200
+            page.evaluate("location.hash = '/backup'")
+            signed_out()
+            assert page.evaluate("location.hash") == "#/backup"
+            assert page.evaluate("fetch('/v1/vaults').then(r => r.status)") == 401
             combined = "\n".join(console) + (RUN / "server.log").read_text()
             assert password not in combined and new_password not in combined
             assert all(cookie["value"] not in combined for cookie in cookies + old_second_cookie)
             page.screenshot(path=str(RUN / "account.png"))
             assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             second.close(); context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage", "notifications/login-success/auth-error-clears-on-retry", "CSP"], "scope":"HTTP loopback test; production HTTPS is S097"}, ensure_ascii=False, indent=2))
-        print(f"S077 browser acceptance passed: {RUN}")
+            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage", "notifications/login-success/auth-error-clears-on-retry", "CSP"], "scope":"HTTP loopback isolated real server; unified login gate S145", "gate_checks":["initial-check-no-console-flash", "all-routes-anonymous-blocked", "deep-link-preserved", "no-anonymous-feature-requests", "offline-check-retry", "server-revocation-closes-console", "authenticated-reload"]}, ensure_ascii=False, indent=2))
+        print(f"S145 auth browser acceptance passed: {RUN}")
     finally:
         for listener in [proxy, evil]:
             if listener: listener.shutdown(); listener.server_close()

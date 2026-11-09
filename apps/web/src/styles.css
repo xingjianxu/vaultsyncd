@@ -4,6 +4,9 @@
 @source "./**/*.{ts,tsx}";
 
 /* Application-specific details; Mantine owns the theme and component styling. */
+.auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: var(--mantine-spacing-md); }
+.auth-panel { width: 100%; max-width: 400px; min-width: 0; }
+.auth-panel .mantine-Alert-message { overflow-wrap: anywhere; }
 .app-header { display: flex; }
 .app-brand { flex-shrink: 0; border-inline-end: 1px solid var(--app-shell-border-color); }
 .app-topbar { flex: 1; min-width: 0; justify-content: space-between; }

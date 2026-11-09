@@ -2368,7 +2368,9 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - 唯一 wire 源 `api/openapi.yaml`：`POST /v1/auth/browser/login` 接 LoginRequest，`POST /v1/auth/browser/refresh` 无请求体，均返回 BrowserSession（session_id/access_expires_at），令牌只在 HttpOnly/Secure/SameSite=Strict cookie。agent 原登录/带正文刷新保持兼容。全部认证响应 `Cache-Control: no-store`。
 - `GET /v1/auth/account` 返回当前 AccountInfo（user_id/login/session_id）；`POST /v1/auth/password` 接 PasswordChangeRequest，复用初始化密码规则和登录限流，旧散列 CAS 更新与全部会话撤销同一 SQLite 写事务；`POST /v1/auth/revoke-all` 撤销当前账号全部会话。后二者返回 AccountChanged 的撤销计数并清 cookie，成功后重新登录。错误当前/新密码 400 INVALID_REQUEST，失效身份 401，越权来源 403，限流 429，存储错误 503。
 - `AuthContext.account_gate` 在进程状态锁的单服务约束下串行登录、刷新、改密和全部撤销，防止旧密码已核验但晚于撤销再签发会话。`server-core::auth::manage` 仅做密码规则，`server-store::sessions::{change_password,revoke_all}` 负责原子存储，不新增 schema。
-- Web `BrowserAuth` 只用同源 credentials/no-store 请求；受保护调用复用 `request`，401 并发单飞刷新一次，重复 401 回登录，网络失败保留可重试错误。账号页面可登录、改密、退出、撤销全部；不使用 localStorage，不读 cookie 凭据。
+- Web `BrowserAuth` 只用同源 credentials/no-store 请求；受保护调用复用 `request`，401 并发单飞刷新一次，重复 401 回登录，网络失败保留可重试错误。不使用 localStorage，不读 cookie 凭据。
+- S145：`AuthProvider` 启动先核验账号，`AuthGate` 在核验期间只显示 loading、匿名仅挂载独立登录页；只有已确认账号才能挂载 `AppView`、导航及所有管理消费者，不重写原 hash 深链。登录表单从 `AccountPanel` 移至此唯一入口，账号面板仅保留改密/退出/撤销。
+- S145：`BrowserAuth(options?, onSignedOut?)` 在最终401及退出/改密/撤销成功后通知整个应用退出。认证代际围栏拒绝旧请求成功及旧401回写；过期请求抛普通会话变更错误而不是 `SignedOut`，不把潜在已提交文件操作误判为确定拒绝。`AuthProvider` 另用同步操作锁/序号防重入与过时账号恢复；refresh 网络故障不伪装身份失效。初始核验失败维持门禁并提供“重新核验会话”，普通匿名首次打开不显示过期错误。UI门禁不替代服务端API授权，公开health/capabilities与静态资产边界不变。
 - Vite 仅回环监听、禁用 CORS，`VAULTSYNCD_DEV_API` 只接受无凭据/路径的本机 HTTP(S) 地址，保留原 Host 让后端校验浏览器 Origin。浏览器验收使用锁定 `nix develop .#web-tests` 的 Playwright Chromium；HTTP localhost 专用测试不代表 S097 生产 HTTPS 已部署。
 
 ## S078 owner Vault 健康与采集页面

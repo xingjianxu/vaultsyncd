@@ -8,7 +8,7 @@ import { FileActionsProvider } from "./features/files/FileActions";
 import { EmptyState, StatusBadge } from "./components/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
-import { AccountPanel, AuthProvider, useAuth } from "./features/auth/Auth";
+import { AccountPanel, AuthGate, AuthProvider, useAuth } from "./features/auth/Auth";
 const BackupPanel = lazy(() => import("./features/backup/Backup").then(module => ({ default: module.BackupPanel })));
 const RecoveryPanel = lazy(() => import("./features/history/Recovery").then(module => ({ default: module.RecoveryPanel })));
 const VaultsPanel = lazy(() => import("./features/vaults/Vaults").then(module => ({ default: module.VaultsPanel })));
@@ -32,7 +32,7 @@ class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean 
   }
 }
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
-export function App() { return <MantineProvider defaultColorScheme="auto" getStyleNonce={getStyleNonce}><Notifications position="top-right" limit={3} zIndex={1100} /><AuthProvider><AppView /></AuthProvider></MantineProvider>; }
+export function App() { return <MantineProvider defaultColorScheme="auto" getStyleNonce={getStyleNonce}><Notifications position="top-right" limit={3} zIndex={1100} /><AuthProvider><AuthGate><AppView /></AuthGate></AuthProvider></MantineProvider>; }
 function AppView() {
   const auth = useAuth();
   const location = useRoute("/overview");

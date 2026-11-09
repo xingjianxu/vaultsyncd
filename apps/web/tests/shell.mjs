@@ -14,11 +14,18 @@ try {
   for (const app of ["web", "desktop"]) {
     const { App } = await server.ssrLoadModule(`/apps/${app}/src/App.tsx`);
     const html = renderToStaticMarkup(createElement(App));
-    assert.match(html, /未连接/);
     assert.doesNotMatch(html, /同步成功|已同步|无问题/);
-    assert.match(html, /aria-current="page"/);
-    if (app === "desktop") assert.match(html, /本机命名管道/);
-    console.log(`${app}: 初始渲染明确未连接`);
+    if (app === "web") {
+      assert.match(html, /role="status"/);
+      assert.match(html, /核验/);
+      assert.doesNotMatch(html, /mantine-AppShell|主要导航|aria-current="page"|服务概览|检查服务连接|name="password"/);
+      console.log("web: 会话初始化仅显示核验状态，不渲染管理壳或登录表单");
+    } else {
+      assert.match(html, /未连接/);
+      assert.match(html, /aria-current="page"/);
+      assert.match(html, /本机命名管道/);
+      console.log("desktop: 初始渲染明确未连接，保留桌面管理壳");
+    }
   }
   const { disconnectedAgent } = await server.ssrLoadModule("/apps/desktop/src/services/agent.ts");
   await assert.rejects(disconnectedAgent.getStatus(), /IPC 测试替身/);

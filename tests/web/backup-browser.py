@@ -51,7 +51,7 @@ def main():
         (candidate/"large.bin").write_bytes(b"A"*(8*1024*1024))
         original=hashlib.sha256(sample.read_bytes()).hexdigest()
         password=secrets.token_urlsafe(24)
-        checked([BIN/"vaultsyncd-admin","init","--state-dir",state],input=password+"\n")
+        checked([BIN/"vaultsyncd-admin","init","--state-dir",state,"--login","owner"],input=password+"\n")
         config=RUN/"server.toml";config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
         log=(RUN/"server.log").open("w")
         server=subprocess.Popen([str(BIN/"vaultsyncd-server"),"--config",str(config)],stdout=log,stderr=log)
@@ -104,14 +104,17 @@ def main():
                 browser=p.chromium.launch(headless=True)
                 context=browser.new_context(accept_downloads=True);page=context.new_page()
                 page.add_init_script("""window.__cspViolations=[];document.addEventListener('securitypolicyviolation',event=>{window.__cspViolations.push({directive:event.effectiveDirective,blocked:event.blockedURI});});""")
-                response=page.goto(origin+"/#/account")
+                response=page.goto(origin+"/#/backup")
                 notifications = page.locator(".mantine-Notification-root")
                 integrity = page.locator(".mantine-Paper-root").filter(has=page.get_by_role("heading", name="本机导出完整性", exact=True))
                 assert response
                 nonce=page.locator('meta[name="csp-nonce"]').get_attribute("content")
                 assert nonce and f"'nonce-{nonce}'" in response.headers.get("content-security-policy", "")
+                expect(page.get_by_role("navigation",name="主要导航")).to_have_count(0)
                 page.get_by_label(field_label("登录名")).fill("owner");page.get_by_label(field_label("密码")).fill(password)
-                page.get_by_role("button",name="登录",exact=True).click();expect(page.get_by_text("已登录：owner",exact=True)).to_be_visible()
+                page.get_by_role("button",name="登录",exact=True).click()
+                expect(page.get_by_role("heading",name="备份管理",level=1,exact=True)).to_be_visible()
+                assert page.url == origin+"/#/backup"
                 def api(path,body=None):
                     return page.evaluate("""async ([path,body])=>{
                       const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'content-type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});

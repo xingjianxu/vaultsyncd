@@ -82,7 +82,7 @@ def main():
     }
     for name, data in upload_data.items(): (inputs / name).write_bytes(data)
     password = secrets.token_urlsafe(24)
-    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
+    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state, "--login", "owner"], input=password + "\n")
     config = RUN / "server.toml"
     config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
@@ -200,11 +200,14 @@ def main():
             page.on("pageerror", lambda error: errors.append(str(error)))
             context.expose_binding("s136CspViolation", lambda _source, directive: csp.append(directive))
             context.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>{window.__csp.push(e.effectiveDirective);window.s136CspViolation(e.effectiveDirective)});")
-            page.goto(origin + "/#/account")
+            page.goto(origin + "/#/files")
+            expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+            expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
             page.get_by_label(field_label("登录名")).fill("owner")
             page.get_by_label(field_label("密码")).fill(password)
             page.get_by_role("button", name="登录", exact=True).click()
-            expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
+            expect(page.get_by_role("navigation", name="主要导航")).to_be_visible()
+            assert page.url == origin + "/#/files"
 
             def api(path, body=None):
                 result = page.evaluate("""async ([path,body]) => {
@@ -627,7 +630,8 @@ def main():
                 page.get_by_role("link", name="账号与会话", exact=True).click()
                 expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
                 page.get_by_role("button", name="退出当前会话", exact=True).click()
-                expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+                expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+                expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
                 page.get_by_label(field_label("登录名")).fill("owner")
                 page.get_by_label(field_label("密码")).fill(password)
                 page.get_by_role("button", name="登录", exact=True).click()

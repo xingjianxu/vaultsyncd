@@ -46,7 +46,7 @@ def main():
     alternate = RUN / "alternate"; alternate.mkdir()
     mounted = False
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
-    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
+    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state, "--login", "owner"], input=password + "\n")
     config = RUN / "server.toml"
     config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}","{unsupported}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
@@ -107,16 +107,18 @@ def main():
             page = context.new_page(); console = []
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
-            page.goto(origin + "/#/account")
+            page.goto(origin + "/#/recovery")
             notifications = page.locator(".mantine-Notification-root")
             operation = page.locator(".mantine-Paper-root").filter(has=page.get_by_role("heading", name="恢复操作", exact=True))
-            expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+            expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+            expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
 
             def login(secret):
                 page.get_by_label(field_label("登录名")).fill("owner")
                 page.get_by_label(field_label("密码")).fill(secret)
                 page.get_by_role("button", name="登录", exact=True).click()
-                expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
+                expect(page.get_by_role("heading", name="历史与恢复", level=1, exact=True)).to_be_visible()
+                assert page.url == origin + "/#/recovery"
 
 
             login(password)
@@ -158,7 +160,9 @@ def main():
             conflict=api(f"/v1/vaults/{vault}/operations",{"kind":"put_content","op_id":secrets.token_hex(16),"device_id":secrets.token_hex(16),"server_epoch":epoch,"entry_id":head["entry_id"],"base_revision":original["revision"],"upload_id":upload["upload_id"]})
             assert conflict["state"]=="committed" and conflict["conflict"]
             copies=entries("conflicts"); assert len(copies)==1 and copies[0]["conflict_source"]==head["entry_id"]
-            page.get_by_role("link",name="历史与恢复",exact=True).click()
+            # Login now opens this route before the fixtures are registered;
+            # reload the preserved deep link to read the newly collected Vault.
+            page.reload()
             expect(page.get_by_role("button",name="查看历史").first).to_be_visible()
             page.get_by_role("button",name="冲突副本",exact=True).click()
             expect(page.get_by_text("冲突源：",exact=False)).to_be_visible()

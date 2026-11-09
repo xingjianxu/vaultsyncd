@@ -27,10 +27,43 @@ try {
     assert.equal(scoped.sessionGeneration, before + 1, "认证动作发出前即使旧任务失效");
     await assert.rejects(request, /offline/);
   }
-  const expired = new BrowserAuth({ ...options, fetch: async () => Response.json({ error: { code: "AUTH_EXPIRED", message: "expired", request_id: "auth", retryable: false } }, { status: 401 }) });
+  const unauthorized = () => Response.json({ error: { code: "AUTH_EXPIRED", message: "expired", request_id: "auth", retryable: false } }, { status: 401 });
+  let signedOutCount = 0;
+  const expired = new BrowserAuth({ ...options, fetch: async () => unauthorized() }, () => signedOutCount++);
   await assert.rejects(expired.account(), SignedOut);
-  const offline = new BrowserAuth({ ...options, fetch: async () => { throw new Error("offline"); } });
+  assert.equal(signedOutCount, 1, "最终401全局收回界面");
+  const offline = new BrowserAuth({ ...options, fetch: async () => { throw new Error("offline"); } }, () => signedOutCount++);
   await assert.rejects(offline.account(), /offline/);
+  const refreshOffline = new BrowserAuth({ ...options, fetch: async url => {
+    if (url.endsWith("/browser/refresh")) throw new Error("refresh offline");
+    return unauthorized();
+  } }, () => signedOutCount++);
+  await assert.rejects(refreshOffline.account(), /refresh offline/);
+  assert.equal(signedOutCount, 1, "传输失败不能冒充凭据失效");
+
+  for (const method of ["logout", "revokeAll", "changePassword"]) {
+    let called = 0;
+    const current = new BrowserAuth({ ...options, fetch: async () => Response.json({ sessions_revoked: "1", revoked_at: "1000", session_id: "session" }) }, () => called++);
+    await current[method]("old password", "new password");
+    assert.equal(called, 1, `${method}成功后立即全局退出`);
+  }
+  // An old successful request and an old 401 are both fenced after a new login.
+  for (const lateUnauthorized of [false, true]) {
+    let release;
+    const late = new Promise(resolve => { release = resolve; });
+    let first = true, callbacks = 0;
+    const racing = new BrowserAuth({ ...options, fetch: async url => {
+      if (url.endsWith("/browser/login")) return Response.json({ session_id: "new", access_expires_at: "2000" });
+      if (first) { first = false; return late; }
+      return Response.json({ user_id: "owner", login: "owner", session_id: "new" });
+    } }, () => callbacks++);
+    const oldRequest = racing.account();
+    const oldResult = assert.rejects(oldRequest, /会话已变更/);
+    assert.equal((await racing.login("owner", "password")).session_id, "new");
+    release(lateUnauthorized ? unauthorized() : Response.json({ user_id: "old", login: "old", session_id: "old" }));
+    await oldResult;
+    assert.equal(callbacks, 0, "旧请求不可注销新会话");
+  }
   const configPath = fileURLToPath(new URL("../vite.config.ts", import.meta.url));
   const oldTarget = process.env.VAULTSYNCD_DEV_API;
   try {

@@ -46,7 +46,7 @@ def main():
     alternate = RUN / "alternate"; alternate.mkdir()
     mounted = False
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
-    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state], input=password + "\n")
+    checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state, "--login", "owner"], input=password + "\n")
     config = RUN / "server.toml"
     config.write_text(f'[server]\nlisten="127.0.0.1:0"\n[state]\ndir="{state}"\n[vaults]\nallowed_bases=["{vaults}","{unsupported}"]\n[log]\nformat="json"\nlevel="info"\n')
     log = (RUN / "server.log").open("w")
@@ -100,15 +100,17 @@ def main():
             page = context.new_page(); console = []
             page.on("console", lambda message: console.append(message.text))
             page.add_init_script("window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.effectiveDirective));")
-            page.goto(origin + "/#/account")
+            page.goto(origin + "/#/vaults")
             notifications = page.locator(".mantine-Notification-root")
-            expect(page.get_by_text("未登录", exact=True)).to_be_visible()
+            expect(page.get_by_label(field_label("登录名"))).to_be_visible()
+            expect(page.get_by_role("navigation", name="主要导航")).to_have_count(0)
 
             def login(secret):
                 page.get_by_label(field_label("登录名")).fill("owner")
                 page.get_by_label(field_label("密码")).fill(secret)
                 page.get_by_role("button", name="登录", exact=True).click()
-                expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
+                expect(page.get_by_role("heading", name="Vault 目录", level=1, exact=True)).to_be_visible()
+                assert page.url == origin + "/#/vaults"
 
             login(password)
             page.get_by_role("link", name="Vault 目录", exact=True).click()
