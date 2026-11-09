@@ -177,7 +177,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
-| S163 | done | temp/lab同卷迁入dev；243269项/5399摘要/97 GC roots/子卷身份/健康及34单测、真实卷验证通过；提交整合待记 | [S163](tasks/S163.md) |
+| S163 | done | 510d70d已ff合master；temp/lab迁入dev、97 GC roots/清单/健康/34单测及真实卷通过，任务树/分支已清理 | [S163](tasks/S163.md) |
 | S162 | done | 实现7d5cb39、整合0ab9184/6891501、修复f5c4a24；验收交接e1fb945已ff合master，原生ZIP/安装版及宿主门通过；任务树/分支已清理 | [S162](tasks/S162.md) |
 | S161 | done | 8d92da9已ff合master；历史build/deploy迁入temp同名目录，482文件/72 GC roots/快照身份/健康通过；任务树及分支清理 | [S161](tasks/S161.md) |
 | S157 | done | 源5a71062；主机pin f7d1997/main整合a02b61e；generation266；交接3ced4a5/整合4dd1ea6已ff合master，两任务树/分支已清理 | [S157](tasks/S157.md) |
