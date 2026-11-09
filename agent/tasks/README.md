@@ -37,3 +37,5 @@ S146 批次：实现 `f67b8c1501d2eb928eabe8bf513f7ae75f7c3f67`、交接 `a29ee6
 
 
 S147 批次：实现 `5403c3c4d08c9affb9cd387015ccfdca17109ca0`、整合S148 `1e9367f`、交接 `de1f96ec6f9cdcf7016ced835e4403aebd118e9d` 已ff-only合master（整合点同交接提交）。schema18、Web客户端记录及共同认证/自动连接浏览器复验通过。确认任务树干净、全部任务提交为master祖先且当前在主树后，`git worktree remove /wrd/prj/vaultsyncd/.worktrees/S147-client-connections` 与 `git branch -d feat/S147-client-connections` 均成功。S134树及主树flake.lock未提交修改保持，合并前后lock哈希一致；源码外证据、缓存与限制见S147，未部署，原5卡blocked保持。
+
+S149 批次：部署源`d9cfee975ba2656feffd560b8cf0be46ba516442`（含S147/S148），登记`28860be`与验收交接`98de5a5ca134e9bc629b8f6cde804a11656522c4`已ff-only合master，整合点同98de5a5。运行/开机generation263、schema18；精确主机构建pin`f5153d8`由`fb293d5`合main，仅整合pin并保留main未激活的全量锁更新。确认两树干净、全部提交为目标分支祖先且当前在主树后，成功清理项目`/wrd/prj/vaultsyncd/.worktrees/S149-deploy`及`chore/S149-deploy`、主机`/wrd/prj/vaultsyncd/.worktrees/S149-host`及`chore/S149-host`。S134与原失败部署树保持。原始生产验收、截图、日志及旧system GC roots在`/data/vaultsyncd-temp/S149-deploy-20261109T095905Z/evidence/`，完整schema17备份在该run的backups及异盘`artifacts/S149/backups/`，均独立保留；隔离完整恢复已通过，未实际回退生产。详见S149与运维文档。无ready，原5卡blocked不变。
