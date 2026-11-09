@@ -48,7 +48,7 @@ nix develop --command gh auth login --hostname github.com
 
 也可直接传既有 `dist/releases/v<版本>-<提交前12位>` 目录。`--dry-run` 校验本地 Git 对象、版本、树、组件输入、所有登记文件的大小/SHA-256 和构建校验表，显示仓库、标签、附件；不联网、不上传、无需登录。脚本不要求当前 HEAD 等于包源，始终使用清单中的完整提交，避免把交接提交或新代码重标为旧包来源。默认目标取 `origin` 的 push 地址，支持 github.com HTTPS/SSH；可用 `--remote <名称>` 选择其他已配置远端。
 
-实际发布前核对 GitHub 登录、源码提交存在于目标仓库、已有远端标签指向同一提交。版本标签默认为 `v<构建版本>`，不存在时由 GitHub Release 按精确源码 SHA 创建；不会推送分支或移动已有标签。默认发布为预发布且不设 Latest，使用 `--stable` 明确选择正式版本（仍不自动设 Latest）。其他参数：
+实际发布前核对 GitHub 登录、源码提交存在于目标仓库、已有远端标签指向同一提交。版本标签默认为 `v<构建版本>`，不存在时由 GitHub Release 按精确源码 SHA 创建；不会推送分支或移动已有标签。默认发布为预发布且不设 Latest；S161起 `--stable` 含 Windows x64 时，在完整附件及 GitHub SHA-256 digest 核验后设为 Latest，供客户端托盘自动更新。草稿不推广；仅Linux包保持非Latest，避免切断Windows更新渠道。其他参数：
 
 ```sh
 ./tools/publish-release.sh /实际构建目录 --tag v0.2.0-rc.1 --notes-file /实际发布说明.md
@@ -58,6 +58,8 @@ nix develop --command gh auth login --hostname github.com
 ```
 
 自定义说明文件保留实际换行；工具追加源码、平台、未签名及未由本工具运行原生验收的说明。`--title` 可定制标题。正式/预发布只是 GitHub 的展示属性，不代表 S106—S108 门禁通过。
+
+客户端只检查本项目公开仓库的最新正式 Release；发布更高版本并使用 `--stable` 才会进入自动升级渠道。保留精确附件名 `vaultsyncd-<版本>-x64-unsigned.zip`，ZIP内所有程序/清单须同源，不能只上传单个EXE。客户端仍按SemVer拒绝同版/降版；没有正式Release、仅有预发布或缺少SHA-256时提示实际原因。升级前客户端自动保留程序/整套状态备份，下载校验失败不启动维护。此卡未执行真实GitHub发布。
 
 上传先创建草稿，逐项上传并核对远端大小/SHA-256，全部就绪后才发布。失败保留远端草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；已存在且哈希相符的附件跳过，缺少摘要的旧附件会下载校验。不覆盖附件，不修改已发布 Release；远端含异源/不匹配/多余附件时退出非零，需人工检查该草稿。创建响应丢失也可通过 `--resume` 找回；发布响应丢失时先查看 GitHub 页面，已发布版本不会被自动改写。
 

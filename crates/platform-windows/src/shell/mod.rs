@@ -1,4 +1,5 @@
 //! Explorer integration via Windows Runtime, separate from the CFAPI connection lifecycle.
+pub mod dialog;
 pub mod toast;
 use std::{io, path::Path};
 use vaultsyncd_domain::ids::BindingId;

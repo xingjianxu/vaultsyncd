@@ -21,12 +21,42 @@ struct Plan {
     backup: PathBuf,
     action: String,
     paused: Vec<(String, bool)>,
+    #[serde(default)]
+    zip: bool,
 }
 fn profile(config: &AgentConfig) -> Result<&Path> {
     Ok(config.state_dir.parent().ok_or("missing agent profile")?)
 }
 fn marker(config: &AgentConfig) -> Result<PathBuf> {
     Ok(profile(config)?.join("maintenance.json"))
+}
+/// Trial startup admits status/recovery only and never starts sync/CFAPI before commit.
+pub(crate) fn trial_pending(state: &Path) -> std::io::Result<bool> {
+    let pending = state
+        .parent()
+        .ok_or_else(|| std::io::Error::other("profile absent"))?
+        .join("auto-update.json");
+    let bytes = match fs::read(pending) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let plan: Plan = serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+    let committed = match fs::read(plan.backup.join("complete.json")) {
+        Ok(bytes) => {
+            let receipt: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+            if receipt["action"] != "auto-upgrade" || receipt["health"] != "verified" {
+                return Err(std::io::Error::other(
+                    "invalid automatic update commit receipt",
+                ));
+            }
+            true
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    Ok(!committed)
 }
 /// A barrier is never silently removed by normal startup, including the login launcher.
 pub fn admit_startup(config: &AgentConfig) -> std::result::Result<(), PortError> {
@@ -98,6 +128,19 @@ async fn rollback(config: &AgentConfig, plan: &Plan) -> Result<()> {
             }
         }
     }
+    if plan.zip {
+        crate::portable::replace_owner(&fs::read(plan.backup.join("zip-owner.json"))?)?;
+    } else if plan.action == "auto-upgrade"
+        && plan.backup.join("program.inventory.json").try_exists()?
+    {
+        let old: serde_json::Value =
+            serde_json::from_slice(&fs::read(plan.backup.join("program/installed-files.json"))?)?;
+        crate::auto_update::registry_version(
+            old["source"]["version"]
+                .as_str()
+                .ok_or("old version missing")?,
+        )?;
+    }
     // Do not invoke the new migrator after restoring the old whole-state snapshot.
     // Only reverse our known pre-maintenance pause controls on the restored supported schema.
     if !plan.paused.is_empty() {
@@ -143,18 +186,18 @@ fn installed_config() -> Result<AgentConfig> {
 }
 /// Execute a fixed maintenance action as the agent application, never as a GUI/CLI database consumer.
 /// The caller installer disables its own HKCU Run first and starts the fixed launcher only after return.
-pub async fn run(action: &str, program: &Path) -> Result<()> {
+pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
     if !matches!(
         action,
-        "upgrade" | "uninstall-program" | "uninstall-provider" | "recover"
+        "upgrade" | "auto-upgrade" | "uninstall-program" | "uninstall-provider" | "recover"
     ) {
         return Err("unknown maintenance action".into());
     }
     let mut config = installed_config()?;
-    if PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA absent")?)
+    let zip = PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA absent")?)
         .join("vaultsyncd/zip-owner.json")
-        .try_exists()?
-    {
+        .try_exists()?;
+    if zip && !matches!(action, "auto-upgrade" | "recover") {
         return Err("ZIP_PROFILE: installed maintenance cannot adopt ZIP state; keep original ZIP and use its safe Stop entry. ZIP upgrades are not supported by this release".into());
     }
     let program_root = VaultHandle::open(program)?;
@@ -163,6 +206,9 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
         return Err("program/state overlap".into());
     }
     let barrier = marker(&config)?;
+    if action == "auto-upgrade" && profile(&config)?.join("auto-update.json").try_exists()? {
+        return Err("interrupted auto-update exists; use retained candidate --auto-update-recover --program-dir <original program>".into());
+    }
     if action == "recover" {
         let plan: Plan = serde_json::from_slice(&fs::read(&barrier)?)?;
         if fs::canonicalize(&plan.program)? != fs::canonicalize(program)? {
@@ -189,10 +235,11 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
                 .await?;
             }
             fs::remove_file(&barrier)?;
-            return Ok(());
+            return Ok(None);
         }
         let _guard = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?;
-        return rollback(&config, &plan).await;
+        rollback(&config, &plan).await?;
+        return Ok(None);
     }
     if barrier.try_exists()? {
         return Err("MAINTENANCE_REQUIRED: recover the retained transaction before retry".into());
@@ -200,7 +247,7 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
     let installed = storage::verify_program(program)?;
     let executable = std::env::current_exe()?;
     let candidate = executable.parent().ok_or("candidate directory absent")?;
-    if action == "upgrade" {
+    if matches!(action, "upgrade" | "auto-upgrade") {
         let next = storage::verify_program(candidate)?;
         if next["source"]["version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
             return Err("candidate version mismatch".into());
@@ -225,7 +272,18 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
         if program_root.overlaps(&VaultHandle::open(candidate)?) {
             return Err("upgrade candidate must be separate from installed program".into());
         }
+        if action == "auto-upgrade" {
+            crate::portable::verify_zip(candidate)?;
+        }
     }
+    let owner = if zip {
+        Some(crate::portable::maintenance_owner(program)?)
+    } else {
+        if action == "auto-upgrade" {
+            crate::portable::installed_owner(program)?;
+        }
+        None
+    };
     let endpoint = Endpoint::current("vaultsyncd-agent")?;
     // Status 1.0 is the only negotiation request sent before learning the server's minor.
     let online = match endpoint.connect().await {
@@ -276,7 +334,17 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
         backup,
         action: action.into(),
         paused,
+        zip,
     };
+    if let Some(owner) = owner {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(plan.backup.join("zip-owner.json"))?;
+        use std::io::Write;
+        file.write_all(&owner)?;
+        file.sync_all()?;
+    }
     storage::json(&plan.backup.join("plan.json"), &plan)?;
     storage::json(&barrier, &plan)?;
     if let Some(status) = online {
@@ -375,12 +443,21 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
                     BindingControls::new(db.clone()).unbind_keep_data(id).await?;
                     reports.push(serde_json::json!({"binding_id":binding.id,"preserved_hashes":hashes,"only_complete_files":true}));
                 }storage::json(&plan.backup.join("provider-removal.json"),&reports)?;
+            }else if action=="auto-upgrade" {
+                // Trial startup must not sync against a database that may still be rolled back.
+                let controls=BindingControls::new(db.clone());
+                for binding in &config.bindings { controls.set_paused(BindingId::from_hex(&binding.id)?,true).await?; }
             }else{restore_paused(&db,&plan).await?;}
             Ok::<(),Box<dyn std::error::Error>>(())
         }.await;
         db.pool().close().await;work?;
-        if action=="upgrade"{storage::replace_program(candidate,program)?;}
-        storage::json(&plan.backup.join("complete.json"),&serde_json::json!({"action":action,"program":program,"user_data":"preserved","cloud_only":if action=="uninstall-program"{"placeholders retained; unavailable until provider reinstall; not complete files"}else{"no placeholder deletion"},"recovery":plan.backup.join("recovery")}))?;
+        if action=="auto-upgrade" { storage::json(&plan.backup.join("trial-plan.json"), &plan)?; }
+        if matches!(action,"upgrade"|"auto-upgrade") {
+            if zip { storage::replace_zip(candidate,program)?; crate::portable::upgrade_owner(program)?; }
+            else { storage::replace_program(candidate,program)?; }
+        }
+        storage::json(&plan.backup.join(if action=="auto-upgrade"{"prepared.json"}else{"complete.json"}),&serde_json::json!({"action":action,"program":program,"user_data":"preserved","cloud_only":if action=="uninstall-program"{"placeholders retained; unavailable until provider reinstall; not complete files"}else{"no placeholder deletion"},"recovery":plan.backup.join("recovery")}))?;
+        if action=="auto-upgrade" { storage::json(&profile(&config)?.join("auto-update.json"),&plan)?; }
         fs::remove_file(&barrier)?;Ok::<(),Box<dyn std::error::Error>>(())
     }.await;
     if let Err(failure) = result {
@@ -390,5 +467,145 @@ pub async fn run(action: &str, program: &Path) -> Result<()> {
         "maintenance=complete action={action} evidence={}",
         plan.backup.display()
     );
+    Ok(Some(plan.backup))
+}
+
+/// Complete trial startup over IPC; commit before resuming any original binding.
+pub(crate) async fn finish_auto(program: &Path, backup: &Path) -> Result<()> {
+    let config = installed_config()?;
+    let plan: Plan = serde_json::from_slice(&fs::read(backup.join("trial-plan.json"))?)?;
+    if plan.program != program || plan.action != "auto-upgrade" {
+        return Err("auto-update target mismatch".into());
+    }
+    let endpoint = Endpoint::current("vaultsyncd-agent")?;
+    let _process = endpoint
+        .maintenance_process(&program.join("vaultsyncd-agent.exe"))
+        .await?;
+    let status = rpc(&endpoint, CommandName::GetStatus, None, 0).await?;
+    if status.agent_version != env!("CARGO_PKG_VERSION") {
+        return Err("updated agent version mismatch".into());
+    }
+    if !plan.zip {
+        crate::auto_update::registry_version(env!("CARGO_PKG_VERSION"))?;
+    }
+    if !backup.join("complete.json").try_exists()? {
+        storage::json(
+            &backup.join("complete.json"),
+            &serde_json::json!({"action":"auto-upgrade","health":"verified","user_data":"preserved"}),
+        )?;
+    }
+    // After this durable marker there is no database rollback: resumed work can make new commits.
+    for (id, paused) in &plan.paused {
+        if !paused {
+            rpc(
+                &endpoint,
+                CommandName::ResumeBinding,
+                binding_parameters(id),
+                4,
+            )
+            .await?;
+        }
+    }
+    let pending = profile(&config)?.join("auto-update.json");
+    if pending.try_exists()? {
+        fs::remove_file(pending)?;
+    }
     Ok(())
+}
+
+/// Roll back a trial only after its authenticated agent drains and releases the writer lock.
+pub(crate) async fn recover_auto(program: &Path, backup: &Path) -> Result<()> {
+    if backup.join("complete.json").try_exists()? {
+        return Err(
+            "auto-update committed; inspect paused bindings instead of rolling back".into(),
+        );
+    }
+    let config = installed_config()?;
+    let plan: Plan = serde_json::from_slice(&fs::read(backup.join("trial-plan.json"))?)?;
+    if plan.program != program || plan.action != "auto-upgrade" {
+        return Err("auto-update target mismatch".into());
+    }
+    let endpoint = Endpoint::current("vaultsyncd-agent")?;
+    match endpoint.connect().await {
+        Ok(_) => {
+            let process = endpoint
+                .maintenance_process(&program.join("vaultsyncd-agent.exe"))
+                .await?;
+            let recovery = backup.join("trial-recovery");
+            fs::create_dir(&recovery)?;
+            rpc(
+                &endpoint,
+                CommandName::PrepareMaintenance,
+                Some(CommandParameters {
+                    destination: Some(recovery.to_string_lossy().into_owned()),
+                    ..Default::default()
+                }),
+                5,
+            )
+            .await?;
+            if !process.wait(60_000)? {
+                return Err("trial agent did not drain; rollback refused".into());
+            }
+        }
+        Err(e) if matches!(e.raw_os_error(), Some(2) | Some(3)) => {}
+        Err(e) => return Err(e.into()),
+    }
+    let _guard = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?;
+    if !marker(&config)?.try_exists()? {
+        storage::json(&marker(&config)?, &plan)?;
+    }
+    rollback(&config, &plan).await?;
+    let pending = profile(&config)?.join("auto-update.json");
+    if pending.try_exists()? {
+        fs::remove_file(pending)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn trial_gate_requires_a_complete_valid_health_receipt() {
+        let base = std::env::temp_dir().join(format!(
+            "s161-trial-gate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = base.join("state");
+        let backup = base.join("backup");
+        fs::create_dir_all(&state).unwrap();
+        fs::create_dir(&backup).unwrap();
+        assert!(!trial_pending(&state).unwrap());
+        let pending = base.join("auto-update.json");
+        fs::write(&pending, b"partial").unwrap();
+        assert!(trial_pending(&state).is_err());
+        let plan = Plan {
+            program: base.join("program"),
+            backup: backup.clone(),
+            action: "auto-upgrade".into(),
+            paused: vec![],
+            zip: false,
+        };
+        fs::write(&pending, serde_json::to_vec(&plan).unwrap()).unwrap();
+        assert!(trial_pending(&state).unwrap());
+        fs::write(backup.join("complete.json"), b"{\"action\":").unwrap();
+        assert!(trial_pending(&state).is_err());
+        fs::write(
+            backup.join("complete.json"),
+            br#"{"action":"auto-upgrade","health":"unknown"}"#,
+        )
+        .unwrap();
+        assert!(trial_pending(&state).is_err());
+        fs::write(
+            backup.join("complete.json"),
+            br#"{"action":"auto-upgrade","health":"verified"}"#,
+        )
+        .unwrap();
+        assert!(!trial_pending(&state).unwrap());
+        fs::remove_dir_all(base).unwrap();
+    }
 }

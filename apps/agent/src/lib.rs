@@ -56,6 +56,8 @@ mod work;
 pub mod release;
 
 #[cfg(windows)]
+pub mod auto_update;
+#[cfg(windows)]
 pub mod maintenance;
 #[cfg(windows)]
 mod maintenance_prepare;

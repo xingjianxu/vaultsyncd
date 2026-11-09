@@ -497,6 +497,19 @@ impl VaultHandle {
         open_child_shared(self.vault_file(), name, false, false, 0x0012_019f, true, 1)
     }
 
+    /// Open an existing ordinary single-link file for exclusive mutation without following reparses.
+    /// The caller validates the handle before truncating; no other writer/delete handle may coexist.
+    pub fn open_exclusive_write(&self, relative: &str) -> io::Result<File> {
+        self.with_parent(relative, |parent, leaf| {
+            let file = open_child_shared(parent, leaf, false, false, 0x0012_019f, false, 0)?;
+            let meta = metadata(&file)?;
+            if meta.directory || meta.links != 1 || meta.reparse_tag != 0 {
+                return Err(invalid("unsafe writable file"));
+            }
+            Ok(file)
+        })
+    }
+
     /// Vault's physical identity.
     #[must_use]
     pub fn identity(&self) -> FileIdentity {

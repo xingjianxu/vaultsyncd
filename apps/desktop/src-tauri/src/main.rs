@@ -13,6 +13,10 @@ mod notifications;
 mod shell;
 #[cfg(any(windows, test))]
 mod style_csp;
+#[cfg(any(windows, test))]
+mod update_archive;
+#[cfg(windows)]
+mod updates;
 
 #[cfg(windows)]
 const DESKTOP_SCOPE: &str = "vaultsyncd-desktop";

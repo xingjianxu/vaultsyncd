@@ -2583,7 +2583,7 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 
 - `windows-client`同一次fresh cross release同时生成NSIS（原四EXE）和ZIP（另含`vaultsyncd-zip.exe`、两个cmd及说明），不重复编译。ZIP清单十份文件hash，receipt递归覆盖展开文件及完整ZIP；hash不是签名，继续标unsigned-test。构建/验证及状态限制见`docs/operations/windows-zip.md`。
 - `vaultsyncd-zip.exe start|health|stop`为专用固定入口；Start在Windows11/WebView2前置、组件完整性、LocalAppData所有权验证后独立启动agent，只在认证正确EXE路径且真实GetStatus成功后开GUI。GUI关闭不停止agent，重复Start复用同实例。ZIP默认不注册Run/StartMenu，不携带状态/凭据；新ZIP profile默认关闭系统通知，用户显式开启后Toast可注册快捷方式，UI明确提示。
-- `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源/覆盖升级明确拒绝；安装器及安装维护控制器拒绝接管ZIP状态。本版本不支持ZIP升级或已用profile互转，不允许删除所有权绕过S100。无DB迁移或wire新增。
+- `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源/覆盖升级明确拒绝；安装器及安装维护控制器拒绝接管ZIP状态。S161起仅允许原路径的显式自动维护事务升级ZIP；仍不支持已用profile互转或删除所有权绕过S100。无DB迁移或wire新增。
 - `Endpoint::request_verified(expected,request)`在实际发送请求的同一NamedPipeClient上认证预期EXE及SID，返回`(Response,ServerProcess)`，原`request`接口不变；ZIP每个GetStatus/PrepareMaintenance均用此入口，等待实际执行准备的对端进程，不用先探测再另连的句柄。
 - Stop复用IPC1.5 PrepareMaintenance，认证并等待确切进程退出，再取得writer锁确认停机；未确认内容导出到agent/zip-stop-*。不强杀、不注销提供程序、不删Vault/cache/dirty/state。暂停持久化，重启后须用户显式Resume；失败可能部分暂停，绝不默认成功或自动恢复所有绑定。原生入口两个：`tests/platform/windows/s109-zip.ps1`要求手工登录全新标准用户（Fresh/Live/Stop分离，Live另需真实服务端独立hash核对）；`tests/platform/windows/s109-e2e.py`在已登录会话用本run Interactive/Limited task与隔离LocalAppData/AppData/WebView，经真实CLI/IPC配置、要求一个本run程序目录启动的可见响应窗口、验证关窗后真实上传、dirty经安全停止与agent进程重启保留后resume提交，并断言默认Run/HKLM/快捷方式未变（不声称OS重启或标准用户）；两者均不改自动登录、不强杀、保留Vault/state/cache。
 - 桌面以命名互斥量`vaultsyncd-desktop`保证每用户会话单窗口：重复Start复用同一窗口，不再派生第二个GUI；该互斥量与agent的writer锁相互独立。
@@ -2598,7 +2598,7 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 ### S156：GitHub Release 本地发布
 
 - `tools/publish-release.sh <构建目录> [--dry-run] [--draft] [--resume] [--stable] [--tag <标签>] [--remote <远端>] [--title <标题>] [--notes-file <文件>] [--staging-root <缓存根>]` 自动进入 devShell，调用 `packaging/github-release.py`；消费 S110 format1 成功清单，不执行构建。成功0、校验/权限/网络/上传失败1、参数错误2。`--dry-run` 仅本地验证 Git 对象、组件来源/版本/输入与文件大小/hash，无远端操作。
-- 版本取包源 Cargo.toml 并核对清单；标签限 `v<版本>` 或对应预发布后缀。目标取配置远端的 github.com push URL；上传前查精确 commit 和已有标签，绝不移动标签或推送分支。先建草稿、逐项上传、逐项校验远端摘要（缺摘要则下载），完整后发布；默认 prerelease/非 Latest，`--stable` 选择正式属性，`--draft` 保留草稿。Release 状态不是首发验收证明。
+- 版本取包源 Cargo.toml 并核对清单；标签限 `v<版本>` 或对应预发布后缀。目标取配置远端的 github.com push URL；上传前查精确 commit 和已有标签，绝不移动标签或推送分支。先建草稿、逐项上传、逐项校验远端摘要（缺摘要则下载），完整后发布；默认 prerelease/非 Latest，`--draft` 保留草稿。S161起 `--stable` 含Windows时须有GitHub SHA-256 digest，发布时设Latest供自动更新；草稿和仅Linux包不推广。Release 状态不是首发验收证明。
 - `--resume` 只接受含同源标记、同 target SHA/类型的草稿；匹配附件跳过，异源/损坏/多余附件或已发布 Release 均拒绝，无 clobber。附件平铺，只选平台归档/对应源码与来源收据，生成平铺 `SHA256SUMS`，原构建校验表另存 `build-SHA256SUMS`，不上传日志。细节与 CLI 依据归 `packaging/README.md`。无 wire/DB/服务端产物变更。
 
 ### S111 / ADR-015：当前平台范围覆盖
@@ -2694,3 +2694,10 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 - schema18 追加 `client_connections`；每次登录在会话写事务内创建记录及接入类别，刷新在原事务移动 `session_id` 并保持连接id/首次时间，注销/改密/撤销状态取最新会话。旧刷新链迁移成一次原始登录，类型和活动未知；迁移前自动一致备份。旧二进制拒绝18，回退恢复整份17备份，不能仅降二进制。
 - `server-store::clients::{list,cursor_exists,touch,set_kind}` 为持久适配器；认证通过后更新活动（UTC秒、30秒节流、时钟倒退不覆盖）。活动五分钟为recent，其余有效会话inactive，撤销/刷新期限到期优先；无心跳，不作为实时在线或同步进度。备份清除会话时以FK SET NULL保留历史，恢复后unknown。
 - Web `#/clients` 使用生成 `listClients` 和 `BrowserAuth.request`（同源cookie/401单飞刷新/全局失效门禁），支持刷新、加载更多和失败重试。设备标签按文本转义；相同标签不合并设备，不引入客户端新API或设备审批。
+
+## S161 — 客户端托盘自动更新
+
+- 托盘 `update` 菜单“自动更新”只在用户点击后检查 `xingjianxu/vaultsyncd` 的 `/releases/latest`；独立无凭据 HTTPS 客户端，不携带服务端认证。仅更高正式 SemVer、精确 `vaultsyncd-<version>-x64-unsigned.zip`，拒绝草稿/预发布、异常来源、缺 digest、重复/超大附件。元数据1MiB、ZIP1GiB、连接15秒/读30秒/总30分钟；GitHub CDN HTTPS重定向白名单。
+- `GithubUpdates::{check,download}` 与 `ReleaseUpdate` 位于 `crates/release-client/src/lib.rs`。流式回调收到的仍是未可信片段，只有完整长度及SHA-256成功后才把 `download.part` 改为完成包。GUI在 `%LOCALAPPDATA%/vaultsyncd/updates/<nonce>/` 建新目录，解压固定11个名称、单项512MiB/合计1GiB，核对 ZIP/installed 两份同源及逐文件摘要，不执行脚本。无新增 IPC/wire/schema。
+- 候选 agent `--auto-update --program-dir <原目录>` 等待旧GUI退出、持独立更新/GUI锁，调用 `--maintenance auto-upgrade`；普通 `upgrade` 仍拒绝ZIP接管。ZIP原owner须匹配原目录与旧清单，事务备份完整ZIP及旧owner，失败整套恢复；owner通过无reparse/单硬链接的排他写句柄更新。安装版只替换原六项程序文件，保留卸载入口和Run，成功更新HKCU版本。
+- 维护返回trial备份，全部Binding暂停后启动新agent，经精确程序路径校验的IPC/版本健康检查才写 `complete.json`，再通过IPC恢复原暂停值；之后不可再回滚新状态。`auto-update.json`及 `trial-plan.json`保留中断恢复信息。候选 `--auto-update-recover --program-dir <原目录>` 对未提交trial排空/持writer锁回退，对已提交trial仅补恢复暂停；不删除Vault/缓存/凭据。程序忙、迁移失败或启动失败保留日志/程序/状态/恢复导出，必要时拒绝回退，绝不强杀writer。

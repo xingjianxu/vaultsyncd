@@ -281,6 +281,7 @@ flowchart TB
 | `crates/protocol/` | 远端 wire DTO、能力协商、协议版本与错误映射 | `generated/`、`capabilities.rs`、`versioning.rs` |
 | `crates/local-ipc/` | Windows agent 命令/状态 DTO、消息帧与协议版本 | `generated/`、`framing.rs`、`version.rs`；不包含 CFAPI |
 | `crates/http-client/` | 共用 HTTPS 客户端、认证刷新、事件拉取及固定版本内容接口 | `auth.rs`、`vaults.rs`、`changes.rs`、`uploads.rs`、`content.rs` |
+| `crates/release-client/` | S161独立公开GitHub发行查询及包流校验；无业务API、凭据、数据库或同步状态依赖 | `lib.rs` |
 | `crates/transfer/` | 内容哈希、固定块、续传状态与传输端口抽象 | `hash.rs`、`chunk.rs`、`resume.rs`、`manifest.rs`、`ports.rs` |
 | `crates/fs-common/` | 路径规则、跨平台名称校验、文件事实类型、忽略规则 | `path.rs`、`name.rs`、`fingerprint.rs`、`ignore.rs`；系统调用放平台层 |
 | `crates/client-store/` | 客户端 SQLite、baseline、dirty generation、队列、事件、恢复意图 | `db.rs`、`entries.rs`、`queue.rs`、`intents.rs`、`migrations/` |
@@ -1072,6 +1073,8 @@ Web 管理首发提供 Vault 配置/健康、账号基础管理、历史与回�
 
 ### 19.3 升级和协议兼容
 
+2026-11-09（S161，用户明确要求自动升级并重启，ADR-026）：Windows 托盘提供“自动更新”，点击后从本项目公开 GitHub 最新正式 Release 下载 Windows x64 ZIP，校验语义版本、精确仓库/附件、长度及 GitHub SHA-256；不订阅预发布、不降级。GUI 只下载并提取固定程序集合，离线维护仍由候选 agent 完成。ZIP 允许在原归属路径内通过该维护事务升级，先排空/导出、持 writer 锁备份程序及整套状态，更新完整 ZIP 和归属摘要；失败恢复旧程序、状态和归属。新 agent 在全部 Binding 暂停时通过真实 IPC 健康检查后提交，再恢复原暂停状态；提交后不回滚可能已有新提交的状态。中断保留恢复入口及备份，不允许手动覆盖、跨路径接管或删除 owner 绕过。安装版保留原安装路径、启动项及卸载入口。自动更新不更新服务端，不清缓存、Vault 或凭据。
+
 协议 major 不兼容时明确拒绝，不猜测新字段含义。minor 新字段应保持兼容，功能必须通过 capability 协商。建议测试当前与前一个受支持客户端版本。
 
 schema 迁移在写服务启动前执行，先做可恢复的本地迁移备份；迁移失败保持旧数据，不部分启动。schema 已升级时旧二进制应拒绝写入；回退采用经过验证的整套备份恢复，不要求所有 migration 自动 down。
@@ -1198,6 +1201,7 @@ P1 的 P2P 仅优化内容来源，必须验证 Vault 授权和服务器确认�
 | ADR-023 | 客户端连接观测 | 2026-11-09 用户要求记录和查看客户端；S147 按登录连接持久记录并分页展示，活动采样而非实时在线；边界见 §18.1与接口文档 |
 | ADR-024 | 客户端与 Web 共用 Mantine 展示层 | 2026-11-09 用户确认按统一方案执行；S152 将主题、布局及展示组件归入 packages/ui，业务与传输入口保持独立 |
 | ADR-025 | 移除 GitHub 执行平台依赖 | 2026-11-09 用户要求：删除工作流及专用代码/文档；保留本地检查、同源发行、原生和性能容量验收 |
+| ADR-026 | 客户端托盘自动更新 | 用户要求下载后自动升级重启；公开 GitHub 正式 Release、SHA-256、固定 ZIP 集合，复用维护事务并允许原路径 ZIP 归属安全更新 |
 
 ADR-012 决定记录：原 C39 仅允许 ext4/XFS，reflink 可选。用户本轮提出在 btrfs 能简化实现时强制采用；据 FICLONE 的写隔离能力与只读快照的固定视图能力，改为强制 btrfs，默认克隆采集/发布及备份准备。收益是减少重复数据复制、简化固定候选读取；应用一致性状态机仍保留。影响是部署卷必须迁移到 btrfs，ext4/XFS/ZFS/overlay 不再接受；现有数据须离线备份、复制、校验后切换，不自动格式化或原地转换。本仓库尚无实现，无已发布协议/数据库迁移。替代方案为保留 ext4/XFS 并完整复制，部署更宽但无法把 CoW 能力作为基线；本轮按用户方向采用 btrfs，性能不作为已证明结论。
 

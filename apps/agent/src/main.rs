@@ -3,6 +3,19 @@
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        if args.len() == 4
+            && matches!(args[1].as_str(), "--auto-update" | "--auto-update-recover")
+            && args[2] == "--program-dir"
+        {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(vaultsyncd_agent::auto_update::run(
+                std::path::Path::new(&args[3]),
+                args[1] == "--auto-update-recover",
+            ))?;
+            return Ok(());
+        }
         if args.len() == 5 && args[1] == "--maintenance" && args[3] == "--program-dir" {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()

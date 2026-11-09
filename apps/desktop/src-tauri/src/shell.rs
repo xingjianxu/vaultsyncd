@@ -182,6 +182,7 @@ pub(super) fn run() {
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("vaultsyncd")
                     .inner_size(1000.0, 720.0)
+                    .visible(false)
                     .on_web_resource_request(|_request, response| {
                         // This hook only runs for Tauri's bundled asset protocol.
                         // Mint a fresh nonce for each HTML response, including reloads.
@@ -230,11 +231,13 @@ pub(super) fn run() {
             } else {
                 window.initialization_script(include_str!("../../../../tests/platform/windows/s080-webview.js"))
             };
-            window.build()?;
+            let main = window.build()?;
             let open =
                 tauri::menu::MenuItem::with_id(app, "open", "打开 vaultsyncd", true, None::<&str>)?;
             let quit = tauri::menu::MenuItem::with_id(app, "quit", "退出界面", true, None::<&str>)?;
-            let menu = tauri::menu::Menu::with_items(app, &[&open, &quit])?;
+            let update = tauri::menu::MenuItem::with_id(app, "update", "自动更新", true, None::<&str>)?;
+            let menu = tauri::menu::Menu::with_items(app, &[&open, &update, &quit])?;
+            app.manage(crate::updates::UpdateMenu(update));
             tauri::tray::TrayIconBuilder::new()
                 .icon(tauri::image::Image::new_owned(
                     [28, 120, 98, 255].repeat(16 * 16),
@@ -244,6 +247,7 @@ pub(super) fn run() {
                 .tooltip("vaultsyncd")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
+                    "update" => crate::updates::start(app, app.state::<crate::updates::UpdateMenu>().0.clone()),
                     "open" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -254,6 +258,9 @@ pub(super) fn run() {
                     _ => {}
                 })
                 .build(app)?;
+            // Publish the window only after its tray controls and managed resources are ready.
+            main.show()?;
+            main.set_focus()?;
             Ok(())
         })
         .run(tauri::generate_context!())

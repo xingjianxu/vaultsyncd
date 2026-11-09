@@ -19,10 +19,13 @@ Credential Manager. Copying the program folder to another machine does not copy 
 Local ownership: %LOCALAPPDATA%\vaultsyncd\zip-owner.json pins the original program path
 and full ZIP component manifest. Only that exact source and path may use this profile.
 Existing installed/unknown profiles and different ZIP paths/sources are explicitly refused.
-Keep the original program folder. This release does NOT support ZIP upgrades or conversion
-to/from setup-managed state. Do not delete the owner/profile/cache or overwrite binaries to
-bypass the S100 controlled maintenance and whole-state backup protections. Contact the
-operator for supported migration/recovery; leaving the original ZIP usable is required.
+Keep the original program folder. Right-click the tray and select Auto update (自动更新)
+to download the latest stable Windows ZIP from this project's GitHub Release and perform
+controlled upgrade/restart in that same folder. All bindings stay paused during trial startup;
+their original pause settings return after IPC health succeeds. Program, state and owner
+backups are retained. An interrupted update requires the retained candidate agent's
+--auto-update-recover --program-dir <original-folder> entry. Conversion to/from setup-managed
+state is unsupported. Never delete owner/profile/cache or overwrite binaries by hand.
 
 Double-click "Stop vaultsyncd.cmd" and confirm Y for safe stopping. It uses PrepareMaintenance
 IPC: pauses all bindings persistently, disconnects/drains callbacks, exports unconfirmed

@@ -92,7 +92,17 @@ pub(super) fn backup_state(state: &Path, directory: &Path) -> io::Result<()> {
 pub(super) fn backup_program(program: &Path, directory: &Path) -> io::Result<()> {
     fs::create_dir(directory)?;
     let mut items = vec![];
-    for name in PROGRAM_FILES.iter().copied().chain(["uninstall.exe"]) {
+    for name in PROGRAM_FILES
+        .iter()
+        .copied()
+        .chain(
+            crate::portable::ZIP_FILES
+                .iter()
+                .copied()
+                .filter(|name| !PROGRAM_FILES.contains(name)),
+        )
+        .chain(["zip-files.json", "uninstall.exe"])
+    {
         let from = program.join(name);
         if !from.try_exists()? {
             continue;
@@ -187,6 +197,24 @@ pub(super) fn replace_program(candidate: &Path, target: &Path) -> io::Result<()>
         OpenOptions::new().write(true).open(to)?.sync_all()?;
     }
     verify_program(target)?;
+    Ok(())
+}
+
+pub(super) fn replace_zip(candidate: &Path, target: &Path) -> io::Result<()> {
+    crate::portable::verify_zip(candidate)?;
+    for name in crate::portable::ZIP_FILES
+        .iter()
+        .copied()
+        .chain(["zip-files.json"])
+    {
+        let to = target.join(name);
+        if to.try_exists()? {
+            safe(&to)?;
+        }
+        fs::copy(candidate.join(name), &to)?;
+        OpenOptions::new().write(true).open(to)?.sync_all()?;
+    }
+    crate::portable::verify_zip(target)?;
     Ok(())
 }
 

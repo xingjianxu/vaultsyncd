@@ -190,6 +190,13 @@ class GitHubReleaseTests(unittest.TestCase):
         self.assertEqual(plan["repository"], "owner/repo")
         self.assertEqual(plan["tag"], "v0.2.0")
         self.assertTrue(plan["prerelease"])
+        self.assertFalse(plan["latest"])
+
+    def test_dry_run_discloses_client_channel_promotion(self):
+        for arguments, expected in [(["--stable"], True), (["--stable", "--draft"], False)]:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                RELEASE.main([str(self.directory), "--dry-run", *arguments])
+            self.assertEqual(json.loads(output.getvalue())["latest"], expected)
 
     def test_cli_dry_run_from_another_directory_and_bad_arguments(self):
         directory = self.repo / "packaging"
@@ -226,6 +233,48 @@ class GitHubReleaseTests(unittest.TestCase):
         self.assertIn("--prerelease", self.remote.calls[0])
         self.assertFalse(self.remote.record["draft"])
         self.assertIn("unsigned-test", self.remote.record["body"])
+        self.assertIn("--latest=false", self.remote.calls[-1])
+
+    def stable_assets(self):
+        name = "vaultsyncd-0.2.0-x64-unsigned.zip"
+        path = self.stage / name
+        path.write_bytes(b"Windows fixture bytes")
+        self.assets = {name: path}
+        self.remote = Remote(self.source, self.assets)
+        self.args.stable = True
+
+    def test_stable_windows_release_is_latest_only_after_all_assets_verified(self):
+        self.stable_assets()
+        self.publish()
+        self.assertNotIn("--prerelease", self.remote.calls[0])
+        self.assertIn("--latest=false", self.remote.calls[0])
+        self.assertIn("--latest=true", self.remote.calls[-1])
+
+    def test_stable_draft_and_linux_only_do_not_promote_client_channel(self):
+        self.stable_assets()
+        self.args.draft = True
+        self.publish()
+        self.assertTrue(self.remote.record["draft"])
+        self.assertFalse(any("--latest=true" in call for call in self.remote.calls))
+        self.args.draft = False
+        self.args.resume = True
+        self.manifest["platforms"] = ["linux-x64"]
+        self.publish()
+        self.assertIn("--latest=false", self.remote.calls[-1])
+
+    def test_stable_missing_github_digest_keeps_draft_even_if_bytes_were_verified(self):
+        self.stable_assets()
+        original = self.remote.api
+        def no_digest(suffix, missing=False):
+            value = original(suffix, missing)
+            if suffix == "releases/1":
+                value["assets"][0]["digest"] = None
+            return value
+        with patch.object(self.remote, "api", side_effect=no_digest), patch.object(self.remote, "verify_assets", return_value=set()):
+            with self.assertRaisesRegex(ValueError, "GitHub SHA-256"), contextlib.redirect_stderr(io.StringIO()):
+                self.publish()
+        self.assertTrue(self.remote.record["draft"])
+        self.assertFalse(any(call[0] == "edit" for call in self.remote.calls))
 
     def test_failed_upload_keeps_draft_and_resume_skips_matching_assets(self):
         self.remote.fail_upload = "payload.zip"

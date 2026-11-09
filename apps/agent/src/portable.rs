@@ -12,7 +12,7 @@ use vaultsyncd_local_ipc::generated::*;
 use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const DESKTOP_SCOPE: &str = "vaultsyncd-desktop";
-const ZIP_FILES: &[&str] = &[
+pub(crate) const ZIP_FILES: &[&str] = &[
     "vaultsyncd-agent.exe",
     "vaultsyncd-session.exe",
     "vaultsyncd-cli.exe",
@@ -60,8 +60,8 @@ fn mismatch() -> io::Error {
         "ZIP_OWNER_MISMATCH: this local profile belongs to another program path/source. Keep the original ZIP; moving, overwriting or switching to setup is not a supported upgrade. Do not delete zip-owner.json or state to bypass maintenance.",
     )
 }
-fn verify_zip(directory: &Path) -> io::Result<String> {
-    storage::verify_program(directory)?;
+pub(crate) fn verify_zip(directory: &Path) -> io::Result<String> {
+    let installed = storage::verify_program(directory)?;
     let vault = VaultHandle::open(directory)?;
     let _manifest_pin = vault.open_read("zip-files.json")?;
     let path = directory.join("zip-files.json");
@@ -70,6 +70,7 @@ fn verify_zip(directory: &Path) -> io::Result<String> {
     let files = manifest["files"].as_array().ok_or_else(mismatch)?;
     if manifest["format"] != 1
         || manifest["signature_status"] != "unsigned-test"
+        || manifest["source"] != installed["source"]
         || files.len() != ZIP_FILES.len()
     {
         return Err(mismatch());
@@ -91,6 +92,45 @@ fn verify_zip(directory: &Path) -> io::Result<String> {
         }
     }
     storage::hash(&path)
+}
+/// Validate the original ZIP ownership before an explicit offline upgrade.
+pub(crate) fn maintenance_owner(directory: &Path) -> io::Result<Vec<u8>> {
+    let owner = local()?.join("vaultsyncd/zip-owner.json");
+    check_owner(&owner, directory, &verify_zip(directory)?)?;
+    fs::read(owner)
+}
+pub(crate) fn installed_owner(directory: &Path) -> io::Result<()> {
+    let registered = webview::installed_directory()?
+        .ok_or_else(|| io::Error::other("installed program registration missing"))?;
+    VaultHandle::open(&registered)?;
+    VaultHandle::open(directory)?;
+    if fs::canonicalize(registered)? != fs::canonicalize(directory)? {
+        return Err(io::Error::other(
+            "installed program registration target mismatch",
+        ));
+    }
+    Ok(())
+}
+/// Only called while the writer lock and durable maintenance barrier are held.
+pub(crate) fn replace_owner(bytes: &[u8]) -> io::Result<()> {
+    let base = local()?.join("vaultsyncd");
+    let vault = VaultHandle::open(&base)?;
+    let _: Owner = serde_json::from_slice(bytes).map_err(io::Error::other)?;
+    let mut file = vault.open_exclusive_write("zip-owner.json")?;
+    file.set_len(0)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+pub(crate) fn upgrade_owner(directory: &Path) -> io::Result<()> {
+    let manifest = verify_zip(directory)?;
+    replace_owner(
+        &serde_json::to_vec_pretty(&Owner {
+            format: 1,
+            program: directory.into(),
+            manifest,
+        })
+        .map_err(io::Error::other)?,
+    )
 }
 fn check_owner(path: &Path, directory: &Path, manifest: &str) -> io::Result<()> {
     let vault = VaultHandle::open(

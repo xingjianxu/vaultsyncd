@@ -38,6 +38,9 @@ fn positive_version(value: &str) -> bool {
             .any(|part| part.parse::<u32>().is_ok_and(|n| n > 0))
 }
 pub(super) fn installed_program() -> io::Result<bool> {
+    Ok(installed_directory()?.is_some())
+}
+pub(super) fn installed_directory() -> io::Result<Option<std::path::PathBuf>> {
     let subkey = wide(r"Software\vaultsyncd");
     let name = wide("InstallDir");
     let mut data = [0u16; 32768];
@@ -54,8 +57,12 @@ pub(super) fn installed_program() -> io::Result<bool> {
         )
     };
     match status {
-        0 => Ok(size > 2),
-        2 | 3 => Ok(false),
+        0 if size > 2 && size as usize <= data.len() * 2 => {
+            let len = size as usize / 2 - 1;
+            let text = String::from_utf16(&data[..len]).map_err(io::Error::other)?;
+            Ok(Some(text.into()))
+        }
+        0 | 2 | 3 => Ok(None),
         _ => Err(io::Error::other(format!(
             "installed client registry check failed ({status})"
         ))),

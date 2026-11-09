@@ -619,7 +619,9 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             tokio::time::sleep(Duration::from_millis(150)).await;
             break;
         }
-        if session.has_credentials() {
+        if session.has_credentials()
+            && !crate::maintenance::trial_pending(&config.state_dir).map_err(error)?
+        {
             for binding in &config.bindings {
                 let id = BindingId::from_hex(&binding.id).map_err(error)?;
                 if live.iter().any(|(existing, ..)| *existing == id) {

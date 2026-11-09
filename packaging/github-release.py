@@ -238,10 +238,19 @@ def publish(api, manifest, assets, stage, args):
             if name not in seen:
                 print(f"上传：{name}", flush=True)
                 api.release("upload", tag, str(path))
-        api.verify_assets(api.api(endpoint), assets, stage, complete=True)
+        uploaded = api.api(endpoint)
+        api.verify_assets(uploaded, assets, stage, complete=True)
+        # Stable Windows releases are the tray updater's public channel. Its client
+        # requires GitHub's authenticated metadata digest before executing a ZIP.
+        client_update = args.stable and "windows-x64" in manifest["platforms"]
+        if client_update:
+            name = f"vaultsyncd-{source['version']}-x64-unsigned.zip"
+            package = next(item for item in uploaded["assets"] if item["name"] == name)
+            if package.get("digest") != "sha256:" + sha(assets[name]):
+                raise ValueError("正式客户端更新包缺少 GitHub SHA-256 digest；保留草稿，未设 Latest")
         api.tag(tag, commit)
         if not args.draft:
-            api.release("edit", tag, "--draft=false", "--latest=false")
+            api.release("edit", tag, "--draft=false", "--latest=true" if client_update else "--latest=false")
     except BaseException:
         print("上传或发布未完成；远端现场保留。用相同参数加 --resume 续传草稿。", file=sys.stderr)
         raise
@@ -256,7 +265,7 @@ def main(argv=None):
     parser.add_argument("--title")
     parser.add_argument("--notes-file", type=Path)
     parser.add_argument("--draft", action="store_true", help="附件传完后保持草稿")
-    parser.add_argument("--stable", action="store_true", help="发布为正式版本；默认预发布，均不自动设为 Latest")
+    parser.add_argument("--stable", action="store_true", help="发布为正式版本；含 Windows x64 时设为 Latest 供客户端自动更新，默认预发布")
     parser.add_argument("--resume", action="store_true", help="校验并续传同源草稿，不覆盖已有附件")
     parser.add_argument("--dry-run", action="store_true", help="仅本地校验和显示附件，不联网、不上传")
     parser.add_argument("--staging-root", type=Path, default=Path("/data/vaultsyncd-temp/cache/github-release"))
@@ -274,6 +283,7 @@ def main(argv=None):
         args.notes_file.read_text()  # Fail before any remote mutation.
     plan = {"repository": repo, "tag": args.tag, "source": manifest["source"],
             "draft": args.draft, "prerelease": not args.stable,
+            "latest": args.stable and not args.draft and "windows-x64" in manifest["platforms"],
             "assets": sorted([*originals, "build-SHA256SUMS", "SHA256SUMS"])}
     print(json.dumps(plan, ensure_ascii=False, indent=2), flush=True)
     if args.dry_run:

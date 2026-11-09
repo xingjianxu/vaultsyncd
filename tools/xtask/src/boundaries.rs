@@ -102,6 +102,9 @@ fn forbidden(consumer: &str, dependency: &str, target: &str) -> bool {
                 .contains(&dependency)
         }
         "vaultsyncd-agent" => dependency == "vaultsyncd-platform-linux-server",
+        "vaultsyncd-release-client" => {
+            database(dependency) || tauri(dependency) || dependency.starts_with("vaultsyncd-")
+        }
         "vaultsyncd-desktop" | "vaultsyncd-cli" => {
             database(dependency)
                 || [
@@ -438,6 +441,27 @@ mod tests {
             "x86_64-pc-windows-msvc"
         ));
         assert!(forbidden("vaultsyncd-desktop", "tauri", TARGETS[0]));
+        assert!(forbidden(
+            "vaultsyncd-desktop",
+            "vaultsyncd-http-client",
+            TARGETS[1]
+        ));
+        assert!(!forbidden(
+            "vaultsyncd-desktop",
+            "vaultsyncd-release-client",
+            TARGETS[1]
+        ));
+        assert!(forbidden(
+            "vaultsyncd-release-client",
+            "vaultsyncd-protocol",
+            TARGETS[1]
+        ));
+        assert!(forbidden("vaultsyncd-release-client", "sqlx", TARGETS[1]));
+        assert!(!forbidden(
+            "vaultsyncd-release-client",
+            "reqwest",
+            TARGETS[1]
+        ));
         assert!(!forbidden(
             "vaultsyncd-cli",
             "vaultsyncd-platform-windows",

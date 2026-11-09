@@ -53,6 +53,10 @@ nix develop .#web-tests --command python3 tests/platform/windows/s099-installati
 
 ## 升级、回退与卸载
 
+S161起可右键托盘选择“自动更新”。客户端从 `xingjianxu/vaultsyncd` 的 Latest 正式版下载 Windows x64 ZIP，并核对版本、长度、GitHub SHA-256、固定文件集合和同源清单。下载不阻塞GUI，重复点击不启动第二次更新；成功后关闭界面，候选agent完成排空/导出/全量备份、程序替换和重启。全部Binding在试启动时暂停，真实IPC健康通过才提交并恢复原暂停状态。ZIP只在原归属目录升级；安装版保留原Run和卸载入口，成功后更新HKCU版本。下载、候选及apply.log留在 `%LOCALAPPDATA%\vaultsyncd\updates\<随机目录>`，程序/整套状态/ZIP owner备份留在原maintenance目录，不自动删除。发布步骤见 [packaging](../../packaging/README.md)，需更高版本的 `--stable` Windows附件；预发布不自动安装。
+
+若升级进程中断且 `agent\auto-update.json` 存在，关闭界面后在同一Windows用户的交互会话运行保留候选：`vaultsyncd-agent.exe --auto-update-recover --program-dir '原程序目录'`。未提交trial在排空/持writer锁后整套回退；已有 `complete.json` 时只补恢复暂停，不回滚可能有新提交的状态。若只有 `maintenance.json` 而无auto-update记录，沿用下文 `--maintenance recover`；不要删除屏障、owner或缓存来重试。版本相同/更低、程序忙、校验或恢复失败均明确拒绝，不强杀writer。
+
 从已安装的S099未签名开发源`cf1d174c3bd47b4babc2db053514619b2e733b07`升级时，使用新版本正式同源安装器。升级目标固定为原程序目录，不允许同版/降版覆盖。关闭GUI和占用程序文件的终端；维护控制器验证已安装/候选的四EXE来源hash，删除本程序Run项以停止新登录启动，暂停所有绑定并导出每份未确认内容，再停止确切的同用户IPC对端。支持IPC1.5的agent会断开并排空回调、导出后正常退出；仅上述明确S099开发源允许在无传输、已暂停且导出成功后停止该已认证进程，不冒称旧正式客户端通用升级。
 
 agent维护入口独占writer锁后，将包括WAL的整个固定状态及原程序写入`%LOCALAPPDATA%\vaultsyncd\agent\maintenance\<事务>/`并刷盘，再打开新数据库迁移器及替换程序。保留原DeviceId、凭据、Vault注册、缓存和待办。迁移/程序替换失败时恢复整套原状态与程序；恢复后不调用新迁移器再次升级旧库，仅恢复已知暂停控制。回退不是down migration。资源不足、忙文件或备份损坏时不报告成功，保留屏障、原内容和候选程序。

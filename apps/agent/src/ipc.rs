@@ -109,6 +109,26 @@ pub(crate) fn start(
                 if let Err(error) = vaultsyncd_local_ipc::commands::validate(&request.command) {
                     return Ok(Response::error(request.request_id, error));
                 }
+                if !matches!(
+                    request.command.name,
+                    CommandName::GetStatus
+                        | CommandName::SubscribeStatus
+                        | CommandName::PrepareMaintenance
+                ) {
+                    let pending = db
+                        .path()
+                        .parent()
+                        .ok_or_else(|| io::Error::other("state absent"))
+                        .and_then(crate::maintenance::trial_pending);
+                    if !matches!(pending, Ok(false)) {
+                        return Ok(failure(
+                            &request,
+                            LocalIpcErrorCode::Unavailable,
+                            "客户端更新尚未通过启动验证，请等待更新完成或恢复该事务",
+                            true,
+                        ));
+                    }
+                }
                 if matches!(
                     request.command.name,
                     CommandName::GetStatus | CommandName::SubscribeStatus

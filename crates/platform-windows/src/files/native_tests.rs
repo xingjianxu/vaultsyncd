@@ -6,6 +6,35 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn native_exclusive_write_refuses_aliases_and_conflicting_readers_before_truncating() {
+    use std::io::Write;
+    let sandbox = Sandbox::new();
+    std::fs::write(sandbox.0.join("owner.json"), b"old owner").unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
+    let pin = vault.open_read("owner.json").unwrap();
+    assert!(vault.open_exclusive_write("owner.json").is_err());
+    drop(pin);
+    std::fs::hard_link(sandbox.0.join("owner.json"), sandbox.0.join("alias")).unwrap();
+    assert!(vault.open_exclusive_write("owner.json").is_err());
+    assert_eq!(
+        std::fs::read(sandbox.0.join("alias")).unwrap(),
+        b"old owner"
+    );
+    std::fs::remove_file(sandbox.0.join("alias")).unwrap();
+    let mut file = vault.open_exclusive_write("owner.json").unwrap();
+    assert!(vault.open_read("owner.json").is_err());
+    file.set_len(0).unwrap();
+    file.write_all(b"new owner").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    assert_eq!(
+        std::fs::read(sandbox.0.join("owner.json")).unwrap(),
+        b"new owner"
+    );
+    assert!(vault.open_exclusive_write("../outside").is_err());
+}
+
 struct Sandbox(PathBuf);
 impl Sandbox {
     fn new() -> Self {
