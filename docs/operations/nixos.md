@@ -1,6 +1,6 @@
 # 本机 NixOS 服务部署
 
-当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S138已部署源`5689be1`（文件操作、重命名、目录树菜单与观察器防误删），运行/开机generation258、schema15；全量资产/生产浏览器/旧布局版本与健康验证通过。服务及正式目录为主机用户`xingjian:users`；一键更新见S113，当前版本与直接回退见末尾S138。此前各节保留历史证据。
+当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S149已部署源`d9cfee9`（含客户端连接记录与登录后自动连接），运行/开机generation263、schema18。服务及正式目录为主机用户`xingjian:users`；一键更新见S113，准确构建配置、待启用主机锁和回退限制见末尾S149。此前各节保留历史证据。
 
 ## 实际入口和来源（S096，2026-11-07）
 
@@ -357,3 +357,13 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 主机提交 `13f0dfc` 已ff合main，撤下旧试用挂载和账号，pure build、dry、test、HTTPS/IPC健康、switch通过；运行与开机generation262、system `/nix/store/ybwlrf3l0fmir63fjz3y1inbwd3m142h-nixos-system-wks-lab-26.11.20261102.7356cc7`。项目服务pin保持 `6e58bc2`、原包/ServerId与正式挂载保持，vaultsyncd/Caddy/SSH的PID和InvocationID不变；整个 `/data/vaultsyncd-lab`（含win-lab、基线、关联缓存）不进入操作清单，VM PID1894045及启动时间保持。
 
 证据 `/data/vaultsyncd-temp/S146-cleanup/` 保存完整删除清单、脚本、验证JSON、容量记录、主机构建/激活日志及旧generation261 GC roots。新目录下真实256MiB btrfs卷create/verify/cleanup及旧lab拒绝检查通过。旧generation只用于配置排障；已删除S096试用数据不能通过切换generation恢复，旧试用恢复流程退役。正式实例/备份保留，本次未实际回退、未重跑Windows原生能力验收，原5张blocked门禁不变。详见[S146](../../agent/tasks/S146.md)。
+
+## S149 客户端连接记录与自动连接版部署（generation263，2026-11-09）
+
+固定项目源`d9cfee975ba2656feffd560b8cf0be46ba516442`，精确主机构建提交`f5153d8a4459ca17f753566ac2f9467b420a37fc`；运行/开机system `/nix/store/7h9r5qm6aw6k0931ldmxyk41xmn08ycw-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`/nix/store/56c15crxzpz7ahharpvwggpmzjl191iz-vaultsyncd-0.1.1`。本轮从13f0dfc纯求值复现旧generation262后，使用其运行依赖执行S113脚本，完成pure构建（73项包内测试）、dry/test/HTTPS/IPC/目录归属/switch；schema17→18成功，保留17迁移备份。
+
+主机main此前d87f48e已提交全量锁更新但尚未激活。为避免顺带升级整机，本轮使用隔离的旧配置，仅把新pin通过`fb293d54877ea20b0de4ab3c875d90ee7036e893`合回main；main锁逐字节保持。**准确复现本次system应引用f5153d8，当前main求值会同时带入尚未验收的主机依赖更新。** 不要把main现有锁误报为运行锁；后续整机升级需独立build/test/健康/switch。
+
+正式Chromium通过严格TLS1.3、9路由匿名门禁、客户端当前连接/浏览器类型/刷新保持身份、登录与刷新自动连接且换页不重复、文件浏览、退出/后退、CSP/cookie和全部静态资产逐字节一致；明暗320/1440无页面横向溢出。ServerId `9395d9cacd7d3fb4b746592806a8b5cb`、账号、Vault/条目/版本/对象计数及正式文件摘要保持，10服务PID/InvocationID、3应用200保持。
+
+升级前完整归档`/data/vaultsyncd-temp/S149-deploy-20261109T095905Z/backups/pre-upgrade.vsbk`已校验并在另一文件系统`/wrd/prj/vaultsyncd/artifacts/S149/backups/`保存校验副本；旧包已restore validate/apply到隔离空目录，schema17/FK及对象/工作文件摘要匹配。回退不能只切旧generation262：须按备份文档恢复整套schema17到新空状态/Vault目录、更换epoch和重新登录，再更新配置及pin。未实际回退生产。部署日志、before/final/result、截图、恢复校验与旧system GC roots保留在该run的`evidence/`；详见[S149](../../agent/tasks/S149.md)。原5张blocked卡不变，无下一ready。
