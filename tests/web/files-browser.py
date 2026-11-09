@@ -200,7 +200,7 @@ def main():
             file_row.click(button="right", position={"x": 40, "y": box["height"] / 2})
             menu = page.get_by_role("menu")
             expect(menu).to_be_visible()
-            assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"], menu.get_by_role("menuitem").all_inner_texts()
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "版本历史", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"], menu.get_by_role("menuitem").all_inner_texts()
             menu_box = menu.bounding_box()
             assert abs(menu_box["x"] - (box["x"] + 40)) < 12, (menu_box, box)
             assert abs(menu_box["y"] - (box["y"] + box["height"] / 2)) < 16, (menu_box, box)
@@ -230,7 +230,7 @@ def main():
             file_link.focus()
             page.keyboard.press("Shift+F10")
             expect(menu).to_be_visible()
-            assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"]
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["属性", "版本历史", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"]
             menu_box, link_box = menu.bounding_box(), file_link.bounding_box()
             assert abs(menu_box["y"] - (link_box["y"] + link_box["height"] / 2)) < 16, (menu_box, link_box)
             notifications = page.locator(".mantine-Notification-root")

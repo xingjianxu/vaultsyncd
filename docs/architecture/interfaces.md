@@ -2638,6 +2638,7 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 ## S122 Web Vault 文件浏览器
 
+- S150：文件 `EntryMenu` 的“版本历史”挂载 `features/files/FileHistory.tsx` Mantine Modal；生成 `listEntryHistory` 按原 VaultId/EntryId、`after` 查询每页最多100条，显示VersionId/SHA-256/大小/保留期限（当前活跃版本无到期字段）。分页保留游标栈以返回上一页，刷新回首页；错误与空结果分开，重试当前页。关闭、目录/Vault切换、会话退出卸载并abort，忽略迟到响应；目录无历史菜单。无恢复或内容写入，不改DTO/协议/schema，历史顺序沿用API身份升序，不推算版本创建时间。浏览器入口 `tests/web/file-history-browser.py`。
 - `#/files`：S124 更新为左侧目录树与顶部 Vault Select（名称与短 ID 区分，无 Vault 列表刷新按钮），右侧顶部导航工具栏（后退/前进/上级/刷新、Vault 相对地址栏、名称筛选、当前目录属性），其余区域直接显示列表，无重复标题与说明。Mantine Tree 支持展开、选中与键盘；列表仅展示直接子项，每页 100 项。属性为名称、类型、Vault 身份、相对路径、精确字节大小、目录直接子项数、revision、EntryId、VersionId 和 SHA-256；未提供的目录大小用 `—`，不推算时间/权限。
 - S136 按最新用户决定扩展写操作：工具栏上传/当前目录粘贴、行菜单复制/剪切/粘贴/删除、空白区上传/粘贴。行上粘贴到该目录（文件行则当前目录），空白区支持菜单键/Shift+F10。`FileActionsProvider` 在页面路由之上按账号隔离，保留剪贴板/任务跨 Vault 和管理页导航；`DirectoryBrowser` 在操作后刷新完整快照，不将迟到结果写到其他 Vault。原 S122/S132 的“无写入请求”仅描述历史只读阶段。
 - S137：`createRenameJob(client, vault, snapshot, entry, name, recovery?)` 冻结原 parent/revision/version/epoch 并提交 `move`，复用 `FileActionJob` 和账号恢复日志；同名/无效路径分量/Vault/未改名在提交前拒绝，其余名称和 CAS 由服务端核验。`FileActionsProvider.rename` 展示名称输入与保存/取消；`EntryMenu` 共享列表和目录树的操作，菜单按来源与 EntryId 互斥，粘贴到右键目录，Vault 禁用复制/剪切/重命名/删除。Tree 保持原选择/展开逻辑，菜单键/Shift+F10 在聚焦 treeitem 的标签打开。操作后快照刷新保留当前目录身份，目录或祖先改名以 replace 更新 URL；刷新期间已发生的新路径导航优先。没有新增 DTO、端点或数据库迁移。

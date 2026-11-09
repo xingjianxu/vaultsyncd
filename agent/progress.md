@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S149 done**（最新服务端已部署本机，含S147连接记录/S148自动连接）。S001—S149 共149卡：144 done、5 blocked；**下一 ready：无**。运行/开机generation263，正式服务源`d9cfee9`、schema18。主机main保留尚未激活的全量锁升级，精确运行配置为`f5153d8`；验收及回退见[S149](tasks/S149.md)，临时目录约定见[S146](tasks/S146.md)。
+当前：**S150 done**（文件右键查看版本历史对话框，已验收、未部署生产）。S001—S150 共150卡：145 done、5 blocked；**下一 ready：无**。运行/开机generation263，正式服务源`d9cfee9`、schema18。主机main保留尚未激活的全量锁升级，精确运行配置为`f5153d8`；验收及回退见[S149](tasks/S149.md)，临时目录约定见[S146](tasks/S146.md)。
 
 最近部署：[S149](tasks/S149.md) 源`d9cfee975ba2656feffd560b8cf0be46ba516442`、配置pin`f5153d8`（main整合`fb293d5`）、generation263。pure构建含73项包内测试，dry/test/HTTPS/IPC/switch及生产浏览器通过：9路由匿名门禁、客户端当前连接/刷新身份、登录及刷新自动连接/路由不重复、文件浏览、退出/后退、明暗320/1440、全量资产/CSP/cookie。schema17→18成功，ServerId/账号/正式文件与对象/10服务/3应用保持；完整升级前备份已导出、异盘校验并隔离恢复。回退须用schema17整套备份恢复并换epoch，不能只切旧generation262；未实际回退生产。主机main的待启用依赖锁保持。S144清库历史仍见[S144](tasks/S144.md)。
 
@@ -172,6 +172,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S150 | done | 文件菜单历史弹窗，类型/测试/构建/Nix与两组真实Chromium通过；本卡产出，整合清理见交接 | [S150](tasks/S150.md) |
 | S149 | done | 源d9cfee9；主机pin f5153d8/main整合fb293d5；交接98de5a5已ff合master，两任务树/分支已清理 | [S149](tasks/S149.md) |
 | S126 | done | d50c6ac | [S126](tasks/S126.md) |
 | S137 | done | 999bbee已ff合master，任务树/分支已清理 | [S137](tasks/S137.md) |

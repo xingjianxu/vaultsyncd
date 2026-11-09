@@ -1,8 +1,9 @@
-export function FileIcon({ name }: { name: "back" | "forward" | "up" | "refresh" | "properties" | "rename" | "copy" | "cut" | "paste" | "upload" | "delete" | "folder" | "folder-open" | "file" }) {
+export function FileIcon({ name }: { name: "back" | "forward" | "up" | "refresh" | "properties" | "history" | "rename" | "copy" | "cut" | "paste" | "upload" | "delete" | "folder" | "folder-open" | "file" }) {
   const paths = {
     back: "M15 5l-7 7 7 7", forward: "M9 5l7 7-7 7", up: "M5 14l7-7 7 7 M12 7v14",
     refresh: "M20 7v5h-5 M20 12a8 8 0 1 0-2 6", properties: "M12 11v6 M12 7v.1 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
     rename: "M4 20h4L20 8l-4-4L4 16v4 M14 6l4 4",
+    history: "M3 11a9 9 0 1 1 2 7 M3 4v7h7 M12 7v5l3 2",
     copy: "M9 9h11v11H9z M15 9V5H4v11h5",
     cut: "M5 3l14 18 M19 3L5 21 M8 17a3 3 0 1 1-6 0 3 3 0 0 1 6 0 M22 17a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
     paste: "M9 5H5v16h14V5h-4 M9 3h6v4H9z",

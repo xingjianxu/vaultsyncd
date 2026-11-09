@@ -14,10 +14,11 @@ export function openMenuByKeyboard(event: KeyboardEvent<HTMLElement>) {
   }));
 }
 
-export function EntryMenu({ children, entry, context, writable, opened, onChange, navigate, properties, copyPath }: {
+export function EntryMenu({ children, entry, context, writable, opened, onChange, navigate, properties, history, copyPath }: {
   children: ReactElement; entry: SnapshotEntry; context: ActionDirectory; writable: boolean;
   opened: boolean; onChange: (opened: boolean) => void;
   navigate: (entry: SnapshotEntry) => void; properties: (entry: SnapshotEntry) => void; copyPath: (entry: SnapshotEntry) => void;
+  history: (entry: SnapshotEntry) => void;
 }) {
   const actions = useFileActions();
   const mutable = writable && entry.entry_id !== context.snapshot.vault.entry_id;
@@ -26,6 +27,7 @@ export function EntryMenu({ children, entry, context, writable, opened, onChange
     <Menu.Dropdown onKeyDown={event => event.stopPropagation()}>
       {entry.kind === "directory" && <Menu.Item leftSection={<FileIcon name="folder-open" />} onClick={() => navigate(entry)}>打开</Menu.Item>}
       <Menu.Item leftSection={<FileIcon name="properties" />} onClick={() => properties(entry)}>属性</Menu.Item>
+      {entry.kind === "file" && <Menu.Item leftSection={<FileIcon name="history" />} onClick={() => history(entry)}>版本历史</Menu.Item>}
       <Menu.Item leftSection={<FileIcon name="copy" />} onClick={() => copyPath(entry)}>复制路径</Menu.Item>
       <Menu.Divider />
       <Menu.Item disabled={!mutable} leftSection={<FileIcon name="copy" />} onClick={() => actions.stage(context, entry, "copy")}>复制</Menu.Item>

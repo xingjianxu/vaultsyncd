@@ -5,6 +5,7 @@ import { EntryMenu, openMenuByKeyboard } from "./EntryMenu";
 import { DirectoryTree } from "./DirectoryTree";
 import { useFileActions } from "./FileActions";
 import { FileIcon } from "./FileIcon";
+import { FileHistory } from "./FileHistory";
 import { Dialog, EmptyState } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
@@ -92,6 +93,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   const uploadInput = useRef<HTMLInputElement>(null);
   const [snapshot, setSnapshot] = useState<DirectorySnapshot | null>(null);
   const [selected, setSelected] = useState<SnapshotEntry | null>(null);
+  const [historyEntry, setHistoryEntry] = useState<SnapshotEntry | null>(null);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [menuEntryId, setMenuEntryId] = useState<string | null>(null);
@@ -103,7 +105,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   pathRef.current = currentPath;
   const [address, setAddress] = useState(currentPath);
   const [addressError, setAddressError] = useState("");
-  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setMenuEntryId(null); }, [currentPath]);
+  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setHistoryEntry(null); setMenuEntryId(null); }, [currentPath]);
   useEffect(() => {
     if (!vault) return;
     const controller = new AbortController();
@@ -159,7 +161,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
     return <EntryMenu key={key} entry={entry} context={{ vaultId: vault!.vault_id, snapshot: snapshot!, parent: directory ?? snapshot!.vault }}
       writable={!loading && vault?.health !== "unavailable" && !actions.locked}
       opened={menuEntryId === key} onChange={opened => setMenuEntryId(opened ? key : null)}
-      navigate={navigate} properties={setSelected} copyPath={entry => void copyPath(entry)}>{child}</EntryMenu>;
+      navigate={navigate} properties={setSelected} history={setHistoryEntry} copyPath={entry => void copyPath(entry)}>{child}</EntryMenu>;
   }
   return <Paper withBorder className="files-browser">
     <aside className="files-sidebar" aria-label="目录面板">
@@ -215,6 +217,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
       </Menu.Dropdown></Menu>
       {children.length > 100 && <Pagination className="files-pagination" aria-label="文件列表分页" total={Math.ceil(children.length / 100)} value={page} onChange={setPage} size="sm" siblings={0} />}
     </section>
+    {vault && historyEntry && <FileHistory key={`${vault.vault_id}:${historyEntry.entry_id}`} vaultId={vault.vault_id} entry={historyEntry} onClose={() => setHistoryEntry(null)} />}
     <Dialog opened={!!snapshot && !!selected} title="文件属性" onClose={() => setSelected(null)}>
       {snapshot && selected && <Stack gap="sm">
         {[
