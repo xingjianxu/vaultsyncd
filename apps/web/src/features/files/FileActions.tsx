@@ -62,6 +62,7 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
   const [message, setMessage] = useState("");
   const [revision, setRevision] = useState(0);
   const [renaming, setRenaming] = useState<{ context: ActionDirectory; entry: SnapshotEntry } | null>(null);
+  const selectRenameName = useRef(false);
   const [name, setName] = useState("");
   const [nameError, setNameError] = useState("");
   const [deletion, setDeletion] = useState<PreparedDelete | null>(null);
@@ -124,6 +125,7 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
     paste: context => { if (clipboard) start(() => createPasteJob(client!, clipboard, context.rootId, context.snapshot, context.parent, recovery)); },
     rename(context, entry) {
       if (locked || running.current) return;
+      selectRenameName.current = true;
       setRenaming({ context, entry: { ...entry } }); setName(entry.name); setNameError("");
     },
     async remove(context, entry) {
@@ -169,7 +171,13 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
         } catch (cause) { setNameError(cause instanceof Error ? cause.message : "名称无效。"); }
       }}>
         <TextInput label="名称" value={name} error={nameError} data-autofocus
-          onFocus={event => event.currentTarget.select()}
+          onFocus={event => {
+            if (!selectRenameName.current) return;
+            selectRenameName.current = false;
+            const input = event.currentTarget;
+            const extension = input.value.lastIndexOf(".");
+            input.setSelectionRange(0, renaming?.entry.kind === "file" && extension > 0 ? extension : input.value.length);
+          }}
           onChange={event => { setName(event.currentTarget.value); setNameError(""); }} />
       </form>
     </Dialog>

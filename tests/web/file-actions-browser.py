@@ -58,6 +58,7 @@ def main():
     documents.mkdir(); archive.mkdir()
     (documents / "source/child").mkdir(parents=True)
     (documents / "destination").mkdir()
+    (documents / "s139.folder").mkdir()
     fixtures = {
         "source/keep & 文档.txt": b"S136 original, never overwrite\n",
         "source/child/deep.txt": b"S136 deep child\n",
@@ -65,6 +66,12 @@ def main():
         "cancel.txt": b"S136 cancelled delete must survive\n",
         "delete.txt": b"S136 recoverable deletion\n",
         "stale.txt": b"S136 newer namespace must survive stale delete\n",
+        "s139.folder/keep.txt": b"S139 nonempty dotted directory\n",
+        "s139.tar.gz": b"S139 multi-dot extension\n",
+        ".s139-hidden": b"S139 dotfile without extension\n",
+        ".s139-hidden.txt": b"S139 dotfile with extension\n",
+        "s139-no-extension": b"S139 extensionless file\n",
+        "s139-文档😀.txt": b"S139 Unicode filename\n",
     }
     for name, data in fixtures.items(): (documents / name).write_bytes(data)
     (archive / "archive-only.txt").write_bytes(b"S136 unrelated root\n")
@@ -661,10 +668,32 @@ def main():
             expect(rename_dialog).to_be_visible()
             name_input = rename_dialog.get_by_role("textbox", name="名称", exact=True)
             expect(name_input).to_have_value(renamed_input.name)
+            expect(name_input).to_be_focused()
+            assert name_input.evaluate("el => el.value.slice(el.selectionStart, el.selectionEnd)") == "s137-before"
+            # Typing replaces only the selected stem, leaving the extension intact.
+            name_input.press_sequentially("s139-replacement")
+            expect(name_input).to_have_value("s139-replacement.txt")
+            name_input.fill(renamed_input.name)
             expect(rename_dialog.get_by_role("button", name="保存", exact=True)).to_be_disabled()
             rename_dialog.get_by_role("button", name="取消", exact=True).click()
             expect(rename_dialog).not_to_be_visible()
             assert not submits_since(start), "rename cancellation submitted a mutation"
+            for filename, selected in (
+                ("s139.tar.gz", "s139.tar"),
+                (".s139-hidden", ".s139-hidden"),
+                (".s139-hidden.txt", ".s139-hidden"),
+                ("s139-no-extension", "s139-no-extension"),
+                ("s139-文档😀.txt", "s139-文档😀"),
+                ("s139.folder", "s139.folder"),
+            ):
+                menu_action(filename, "重命名")
+                expect(name_input).to_have_value(filename)
+                expect(name_input).to_be_focused()
+                assert name_input.evaluate("el => el.value.slice(el.selectionStart, el.selectionEnd)") == selected, filename
+                rename_dialog.get_by_role("button", name="取消", exact=True).click()
+                expect(rename_dialog).not_to_be_visible()
+            assert not submits_since(start), "selection/cancellation submitted a mutation"
+            checks.append("S139/rename-default-selection/stem-only/typing-preserves-extension/multi-dot/dotfile/no-extension/Unicode/dotted-directory")
             menu_action(renamed_input.name, "重命名")
             for invalid in ("cancel.txt", "../escape", "nested/name", "nested\\name", ".", ".."):
                 name_input.fill(invalid)
