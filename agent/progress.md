@@ -1,5 +1,7 @@
 # 实施进度
 
+S167 in_progress（待提交整合）：桌面启动自动复用/启动 agent，宿主7项、Windows交叉构建/两端严格clippy及Windows原生39/39通过；并行S166由父agent维护。任务树 `.worktrees/S167-desktop-agent-startup`，交接见 [S167](tasks/S167.md)。
+
 当前：**S165 done**，已发布 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，精确源 `d976376` 已推送；同源 Linux x64/Windows x64 归档、8 附件远端大小/SHA-256、标签/说明与属性核对通过，[交接](tasks/S165.md)。包含 S159/S160 Web 改进和 S162 托盘自动更新；预发布不进入自动更新渠道。**下一 ready：无**，原4张blocked保持；当前候选未复跑原生/性能容量/多机与线上升级。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。

@@ -2345,6 +2345,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S080 Windows Tauri 壳与状态桥
 
+- S167：桌面在单实例锁内、建窗前调用 `startup::ensure_agent()`；先用固定同用户会话 endpoint 的 `request_verified` 核对相邻 agent EXE/SID/GetStatus，已就绪直接复用，只有端点缺失才调用相邻 `vaultsyncd-agent.exe --ensure-user-session`。该有限等待入口复用 ZIP `ensure_ready`，按包类型选择已有固定用户配置或 ZIP claim，仍执行 owner/维护门禁；70 秒桌面等待上限只终止启动器，后台 agent 与 GUI 生命周期独立。失败经 `dialog::startup_error` 显示本机错误并退出1，不自动覆盖配置或强杀既有 agent。
+
 - `apps/desktop/src-tauri` 是根 Cargo workspace 的 `vaultsyncd-desktop`，共用根锁；Tauri 仅 Windows 目标构建。默认构建内嵌 `../dist`，先在默认 devShell 执行桌面 `build`，再在 windows devShell 用 `cargo xwin build --locked --target x86_64-pc-windows-msvc -p vaultsyncd-desktop` 构建。Windows shell 增加锁定 Python 供原生验收哈希清单。
 - S080 初始正式 command `agent_get_status() -> Result<GetStatusResult, {code,message}>`；无参数，仅连接 `Endpoint::current("vaultsyncd-agent")`，继承 SID/session/服务端身份核验和传输上限；不接受调用方指定路径/管道/系统命令，不直接打开 DB 或返回凭据。错误码为 `unavailable/agent_rejected/invalid_response`，消息不回显内部路径。
 - `AppManifest` 显式命令清单和 `capabilities/main.json` 仅允许内置 `main` 窗口的 `allow-agent-get-status`。无远程 capability、shell/fs/SQL 插件；CSP 与导航仅内置应用来源。托盘打开/退出仅影响 GUI，agent 不归壳进程管理。前端成功读取后显示 agent 已连接，不把它表示为文件同步成功。

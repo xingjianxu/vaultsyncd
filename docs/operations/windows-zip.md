@@ -6,7 +6,7 @@
 
 1. 从发布组件 receipt 核对 `vaultsyncd-<版本>-x64-unsigned.zip` 的完整 SHA-256，解压**全部**文件到新的本机普通目录，不能位于 `%LOCALAPPDATA%\vaultsyncd` 内。支持中文/空格路径；不支持 UNC、junction/reparse 程序目录。不要直接在 ZIP 浏览器内运行。
 2. 必须有 Microsoft Edge **WebView2 Evergreen Runtime**，不是仅有 Edge 浏览器。入口按微软[Runtime 分发文档](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)读取 Runtime 客户端 pv 版本，缺失时明确提示[微软下载页](https://developer.microsoft.com/microsoft-edge/webview2/)，退出且不开 GUI，不隐式下载。只支持 Windows 11 x64。
-3. 双击 `Start vaultsyncd.cmd`。专用 `vaultsyncd-zip.exe start` 验证组件 hash、创建无凭据初始配置，使用固定路径 CreateProcess 启动独立 agent。只有同用户、正确程序路径的实际 IPC `GetStatus` 成功且进程仍存活后，才启动 GUI；不能把 spawn 成功视为健康。出错窗口会保留诊断，不用管理员权限“修复”。
+3. 双击 `Start vaultsyncd.cmd`，也可直接打开 `vaultsyncd-desktop.exe`（S167）。桌面自动复用同会话健康 agent；未运行时通过同目录 agent 完成相同配置/ZIP归属核验与就绪等待，失败显示本机错误，重复开窗保持单实例。专用 `vaultsyncd-zip.exe start` 验证组件 hash、创建无凭据初始配置，使用固定路径 CreateProcess 启动独立 agent。只有同用户、正确程序路径的实际 IPC `GetStatus` 成功且进程仍存活后，才启动 GUI；不能把 spawn 成功视为健康。出错窗口会保留诊断，不用管理员权限“修复”。
 4. 在 GUI 配置真实服务端、登录并建立绑定。关闭 GUI **仍继续同步**。再次 Start 复用同一健康 agent，不启动第二个 writer；GUI 本身已有单实例约束。ZIP 默认不注册 Start Menu AUMID 快捷方式，通知须用户显式开启；开关及注册影响在“问题与恢复”的通知面板说明。
 
 程序文件包括原四 EXE（agent/session/CLI/desktop）、专用 ZIP EXE、`installed-files.json`、`zip-files.json`、两个双击 cmd、README 和未签名说明。不是安装器，无 `uninstall.exe`，不运行 setup。CLI 仍通过真实 IPC。

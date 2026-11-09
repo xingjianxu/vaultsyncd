@@ -26,6 +26,13 @@ fn main() {
             ))?;
             return Ok(());
         }
+        if args.len() == 2 && args[1] == "--ensure-user-session" {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(vaultsyncd_agent::portable::ensure_user_session())?;
+            return Ok(());
+        }
         if args.len() == 2 && args[1] == "--user-session" {
             vaultsyncd_agent::user_session::launch()?;
             return Ok(());

@@ -11,6 +11,8 @@ mod history_commands;
 mod notifications;
 #[cfg(windows)]
 mod shell;
+#[cfg(windows)]
+mod startup;
 #[cfg(any(windows, test))]
 mod style_csp;
 #[cfg(any(windows, test))]
@@ -33,7 +35,15 @@ fn main() {
             // One window per user session: a second Start/double-click must not open a
             // duplicate window on the same agent. The mutex lives for this process lifetime.
             match vaultsyncd_platform_windows::single::claim(DESKTOP_SCOPE) {
-                Ok(Some(_held)) => shell::run(),
+                Ok(Some(_held)) => {
+                    if let Err(error) = startup::ensure_agent() {
+                        let detail = format!("无法启动本机 agent。{error}");
+                        eprintln!("{detail}");
+                        vaultsyncd_platform_windows::shell::dialog::startup_error(&detail);
+                        std::process::exit(1);
+                    }
+                    shell::run();
+                }
                 Ok(None) => {}
                 Err(error) => {
                     eprintln!("desktop single-instance check failed: {error}");

@@ -246,6 +246,70 @@ async fn rpc(
 fn missing_pipe(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(2) | Some(3))
 }
+/// Start only when the authenticated session endpoint is absent; health, never process exit,
+/// establishes readiness. This is shared by ZIP Start and the direct desktop entry point.
+async fn ensure_ready(config_path: &Path, endpoint: &Endpoint, agent: &Path) -> Result<()> {
+    let mut child = match endpoint.connect().await {
+        Ok(_) => None,
+        Err(e) if missing_pipe(&e) => Some(user_session::spawn(config_path)?),
+        Err(e) => return Err(e.into()),
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        match rpc(endpoint, agent, CommandName::GetStatus, None).await {
+            Ok((_, process)) => {
+                if process.wait(0)? {
+                    return Err("agent exited during health check".into());
+                }
+                break;
+            }
+            Err(e)
+                if e.downcast_ref::<io::Error>().is_some_and(missing_pipe)
+                    && Instant::now() < deadline =>
+            {
+                if let Some(child) = &mut child
+                    && let Some(status) = child.try_wait()?
+                {
+                    // Another simultaneous Start may have won the writer lock. Only real IPC
+                    // health, never the spawn exit code, can establish readiness.
+                    if status.code() != Some(2) {
+                        return Err(
+                            format!("agent startup failed: {status}; inspect agent.log").into()
+                        );
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "agent IPC not healthy; no GUI opened: {e}; inspect agent.log"
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+/// Fixed sibling launcher for a direct desktop start. Preserve existing configuration and enforce
+/// ZIP ownership and maintenance barriers before starting a new background process.
+pub async fn ensure_user_session() -> Result<()> {
+    let directory = program()?;
+    let config_path = if directory.join("zip-files.json").try_exists()? {
+        webview::require()?;
+        claim()?
+    } else {
+        user_session::prepare(&local()?)?
+    };
+    let config = AgentConfig::load(&config_path)?;
+    crate::maintenance::admit_startup(&config)?;
+    let endpoint = Endpoint::current("vaultsyncd-agent")?;
+    ensure_ready(
+        &config_path,
+        &endpoint,
+        &directory.join("vaultsyncd-agent.exe"),
+    )
+    .await
+}
 /// No shell interpolation, registration, or lifetime coupling to the desktop process.
 pub async fn run(action: &str) -> Result<()> {
     if !matches!(action, "start" | "stop" | "health") {
@@ -266,46 +330,7 @@ pub async fn run(action: &str) -> Result<()> {
     let endpoint = Endpoint::current("vaultsyncd-agent")?;
     let agent = directory.join("vaultsyncd-agent.exe");
     if action == "start" {
-        let mut child = match endpoint.connect().await {
-            Ok(_) => None,
-            Err(e) if missing_pipe(&e) => Some(user_session::spawn(&config_path)?),
-            Err(e) => return Err(e.into()),
-        };
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            match rpc(&endpoint, &agent, CommandName::GetStatus, None).await {
-                Ok((_, process)) => {
-                    if process.wait(0)? {
-                        return Err("agent exited during health check".into());
-                    }
-                    break;
-                }
-                Err(e)
-                    if e.downcast_ref::<io::Error>().is_some_and(missing_pipe)
-                        && Instant::now() < deadline =>
-                {
-                    if let Some(child) = &mut child
-                        && let Some(status) = child.try_wait()?
-                    {
-                        // Another simultaneous Start may have won the writer lock. Only real IPC
-                        // health, never the spawn exit code, can establish readiness.
-                        if status.code() != Some(2) {
-                            return Err(format!(
-                                "agent startup failed: {status}; inspect agent.log"
-                            )
-                            .into());
-                        }
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "agent IPC not healthy; no GUI opened: {e}; inspect agent.log"
-                    )
-                    .into());
-                }
-            }
-        }
+        ensure_ready(&config_path, &endpoint, &agent).await?;
         // The desktop holds a per-user mutex, so a second Start reuses the open window instead
         // of creating a duplicate one on the same agent.
         if vaultsyncd_platform_windows::single::claim(DESKTOP_SCOPE)?.is_none() {

@@ -13,6 +13,10 @@ No startup registration, Windows service or Start Menu shortcut is created by de
 System notifications default to OFF for a new ZIP profile. Explicitly enabling them in
 Problems/Recovery opts into creating this application's Start Menu shortcut for Toasts.
 
+You may also open vaultsyncd-desktop.exe directly. It reuses the healthy session agent
+or starts the adjacent agent after the same ZIP ownership and maintenance checks,
+then opens the GUI only after IPC is ready. Startup failures appear in a native dialog.
+
 State remains on THIS Windows user account in %LOCALAPPDATA%\vaultsyncd\agent\
 (agent.json, state\, agent.log, zip-stop-* recovery exports). Credentials remain in Windows
 Credential Manager. Copying the program folder to another machine does not copy this profile.
