@@ -2,6 +2,7 @@ import { Component, type ReactNode, lazy, Suspense, useCallback, useEffect, useR
 import { Alert, Anchor, Button, Card, Divider, Group, Loader, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { AppProvider, Icon, PageShell } from "@vaultsyncd/ui";
 import { showFeedback } from "./components/Feedback";
+import { ServerIdentity } from "./components/ServerIdentity";
 import { FileActionsProvider } from "./features/files/FileActions";
 import { EmptyState, StatusBadge } from "./components/ui";
 import { checkServer } from "./services/server";
@@ -70,7 +71,7 @@ function AppView() {
     contentWidth={path === "/files" ? "100%" : "xl"}>
         <FileActionsProvider key={auth.account?.user_id ?? "signed-out"}><Stack gap="lg" className="app-content">{path !== "/files" && path !== "/clients" && <Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title>{path !== "/vaults" && <Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text>}</Stack>}
           <PageBoundary key={path}><Suspense fallback={<Group role="status"><Loader size="sm" /><Text>正在加载管理页面…</Text></Group>}>{path === "/overview" ? <>
-            <Card withBorder><Stack><Group justify="space-between"><div><Title order={2} size="h3">服务连接</Title><Text size="sm" c="dimmed">健康检查与目录采集状态分别核对</Text></div><div role="status">{connection}</div></Group><Text size="sm" aria-live="polite">{detail}</Text>{checkedAt && <Text size="xs" c="dimmed">最近成功检查 · {checkedAt}</Text>}<Divider /><Group justify="space-between"><Text size="xs" c="dimmed">{busy ? "正在获取服务状态" : "按需检查当前连接"}</Text><Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button></Group></Stack></Card>
+            <Card withBorder><Stack><Group justify="space-between"><div><Title order={2} size="h3">服务连接</Title><Text size="sm" c="dimmed">健康检查与目录采集状态分别核对</Text></div><div role="status">{connection}</div></Group><Text size="sm" aria-live="polite">{detail}</Text>{checkedAt && <Text size="xs" c="dimmed">最近成功检查 · {checkedAt}</Text>}<ServerIdentity /><Divider /><Group justify="space-between"><Text size="xs" c="dimmed">{busy ? "正在获取服务状态" : "按需检查当前连接"}</Text><Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button></Group></Stack></Card>
             <Group justify="space-between"><Title order={2} size="h3">管理工作空间</Title><Text size="xs" c="dimmed">{items.length - 1} 个管理入口</Text></Group>
             <SimpleGrid cols={{ base: 1, sm: 2, xl: 4 }}>{items.slice(1).map(item => <Card withBorder key={item.path}><Stack h="100%"><Group><ThemeIcon variant="light" size="lg"><Icon path={item.icon} /></ThemeIcon><Title order={3} size="h4">{item.label}</Title></Group><Text size="sm" c="dimmed" flex={1}>{item.description}</Text><Anchor href={`#${item.path}`} size="sm">进入管理 →</Anchor></Stack></Card>)}</SimpleGrid>
             <Alert>以服务端实际状态为准。连接可用不代表文件同步完成，备份下载完成后仍需重读验证。</Alert>

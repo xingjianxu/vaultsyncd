@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S159 done**，Vault 服务器路径直达文件浏览器、新增当前已提交文件容量列，已部署本机并通过生产 Chromium 验收；[交接](tasks/S159.md)。运行/开机generation268、源`911449b`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确主机配置`2cfc2bf`已合main；并行全系统升级由其自身任务完成（基线`3461249`），本卡保留升级后的锁和修复。原4张blocked门禁保持。
+当前：**S160 in_progress**（服务概览显示 Server ID）；前次 **S159 done**，Vault 服务器路径直达文件浏览器、新增当前已提交文件容量列，已部署本机并通过生产 Chromium 验收；[交接](tasks/S159.md)。运行/开机generation268、源`911449b`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：S160（本卡执行中）**。精确主机配置`2cfc2bf`已合main；并行全系统升级由其自身任务完成（基线`3461249`），本卡保留升级后的锁和修复。原4张blocked门禁保持。
 
 最近部署：S159 pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；线上容量1,698,002字节→1.6 MB，鼠标/Enter/刷新/返回、明暗320/1440、全量资产/CSP/cookie通过。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持；完整备份和异盘副本verified，旧system/boot GC roots保留，未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不包含本次Web改动；详见[S158](tasks/S158.md)。
 

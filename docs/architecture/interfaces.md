@@ -2353,6 +2353,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## Web 会话与账号管理（S077）
 
+- S160：服务概览的 `ServerIdentity` 通过 `readServerIdentity` / 生成 `getCapabilities` 读取同源 `GET /v1/capabilities` 的 `server_id`，只读显示完整值供选择复制。读取错误与健康状态独立，支持重试；离开概览或退出卸载时 abort，忽略迟到结果。不新增 wire/schema，不保存凭据或更改客户端身份配置。
+
 - 唯一 wire 源 `api/openapi.yaml`：`POST /v1/auth/browser/login` 接 LoginRequest，`POST /v1/auth/browser/refresh` 无请求体，均返回 BrowserSession（session_id/access_expires_at），令牌只在 HttpOnly/Secure/SameSite=Strict cookie。agent 原登录/带正文刷新保持兼容。全部认证响应 `Cache-Control: no-store`。
 - `GET /v1/auth/account` 返回当前 AccountInfo（user_id/login/session_id）；`POST /v1/auth/password` 接 PasswordChangeRequest，复用初始化密码规则和登录限流，旧散列 CAS 更新与全部会话撤销同一 SQLite 写事务；`POST /v1/auth/revoke-all` 撤销当前账号全部会话。后二者返回 AccountChanged 的撤销计数并清 cookie，成功后重新登录。错误当前/新密码 400 INVALID_REQUEST，失效身份 401，越权来源 403，限流 429，存储错误 503。
 - `AuthContext.account_gate` 在进程状态锁的单服务约束下串行登录、刷新、改密和全部撤销，防止旧密码已核验但晚于撤销再签发会话。`server-core::auth::manage` 仅做密码规则，`server-store::sessions::{change_password,revoke_all}` 负责原子存储，不新增 schema。

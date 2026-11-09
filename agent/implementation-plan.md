@@ -1622,6 +1622,13 @@
 - 验收：Rust 聚合/授权和协议生成一致性；Web typecheck/test/build；真实 Chromium 验证非首个 Vault、根目录、键盘和返回、刷新、容量与明暗窄屏；验收后直接部署本机并验证 HTTPS、版本及界面行为。
 - 交接：`agent/tasks/S159.md`；S158 发行现场和原 blocked 首发门禁保持。
 
+### S160 — 服务概览显示 Server ID
+
+- 状态：in_progress；依据：2026-11-09 用户明确要求，design §18.1；前置 S076/S077/S148 done。
+- 范围：概览的服务连接卡片显示完整、只读可选中的 Server ID，沿用 GET /v1/capabilities；独立处理读取错误、重试与卸载取消，不改协议、凭据或客户端配置。
+- 验收：Web typecheck/test/build、既有认证浏览器回归；真实 Chromium 核对 API 一致性、失败/重试、退出取消、明暗窄屏；通过后部署本机并验证 HTTPS/身份/界面。
+- 交接：`agent/tasks/S160.md`；原 blocked 首发门禁保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
