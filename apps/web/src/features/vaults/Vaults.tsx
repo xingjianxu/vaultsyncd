@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError, listManagedVaults, registerVault, type ManagedVault, type ManagedVaultList, type VaultCollectionState } from "@vaultsyncd/api-client";
-import { Button, Code, Grid, Group, Paper, Stack, Text, TextInput, Title } from "@mantine/core";
+import { Button, Code, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { EmptyState, StatusBadge, Table } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
@@ -14,7 +14,7 @@ export function registrationError(error: unknown): string {
   if (!(error instanceof ApiError) || error.status >= 500 || error.status === 408) return "无法确认注册结果。请先刷新清单核对路径，再决定是否重试；不要把网络失败当作未注册。";
   const reason = error.body.details?.reason ?? error.body.code;
   const steps: Record<string, string> = {
-    outside_allowed_bases: "请选择下方允许基目录内的服务器绝对路径；账号无管理权限时请联系 owner。",
+    outside_allowed_bases: "请选择允许基目录内的服务器绝对路径；账号无管理权限时请联系 owner。",
     vault_overlap: "使用与既有 Vault 无父子或别名重叠的独立目录。",
     registered_overlap: "使用与既有 Vault 无父子或别名重叠的独立目录。",
     probe_failed: "核对目录存在、服务账号读取权限和挂载，再刷新重试。",
@@ -24,13 +24,15 @@ export function registrationError(error: unknown): string {
 }
 function Collection({ vault }: { vault: ManagedVault }) {
   return <Stack gap="xs"><StatusBadge tone={vault.collection.state === "blocked" ? "warning" : "info"}>{collectionLabels[vault.collection.state]}</StatusBadge>
-    <Text size="xs" c="dimmed">最近一轮检查 {vault.collection.examined} 项 · 待处理 {vault.collection.pending} 项</Text><Text size="sm" c="dimmed">{vault.collection.detail}</Text></Stack>;
+    <Text size="xs" c="dimmed">最近一轮检查 {vault.collection.examined} 项 · 待处理 {vault.collection.pending} 项</Text>
+    {(vault.collection.state === "blocked" || vault.collection.state === "pending") && <Text size="sm" c="dimmed">{vault.collection.detail}</Text>}</Stack>;
 }
 export function VaultsPanel() {
   const auth = useAuth();
   const [data, setData] = useState<ManagedVaultList | null>(null);
   const [loading, setLoading] = useState(false);
   const [registering, setRegistering] = useState(false);
+  const [dialog, setDialog] = useState<"health" | "register" | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const client = auth.client;
@@ -57,6 +59,8 @@ export function VaultsPanel() {
     try {
       const registered = await client.request(options => registerVault(options, { path }));
       showFeedback(`已注册 Vault ${registered.vault_id}；等待初始采集，现有文件保留。`);
+      setDialog(null);
+      form.reset();
       setRevision(value => value + 1);
     } catch (cause) {
       if (cause instanceof SignedOut) auth.reportSignedOut();
@@ -65,53 +69,46 @@ export function VaultsPanel() {
   }
   if (!auth.account) return <EmptyState title="请先登录">从账号与会话页面登录 owner 后查看 Vault 配置与健康。</EmptyState>;
   return <Stack>
-    <Paper withBorder p="lg">
+    <div className="vaults-toolbar" role="group" aria-label="Vault 目录工具栏">
+      <Button variant="default" onClick={() => setDialog("health")}>Vault 健康与采集</Button>
+      <Button disabled={!data?.allowed_bases.length || loading || registering} onClick={() => setDialog("register")}>注册服务器目录</Button>
+      {data && <div className="vaults-allowed-bases">
+        <Text size="sm" c="dimmed">允许基目录</Text>
+        {data.allowed_bases.length ? data.allowed_bases.map(base => <Code key={base}>{base}</Code>)
+          : <Text size="sm" c="dimmed">未配置，无法注册</Text>}
+      </div>}
+    </div>
+    <Feedback message={error} />
+    {loading && <Text role="status" size="sm" c="dimmed">正在核验目录与采集状态…</Text>}
+    {data && <Table caption="已注册 Vault" rows={data.vaults} rowKey={vault => vault.vault_id} emptyMessage="尚未注册 Vault" columns={[
+      { key: "path", title: "服务器路径", render: vault => <Text component="code" size="sm" className="break-all">{vault.path}</Text> },
+      { key: "id", title: "Vault ID", render: vault => <Text component="code" size="sm" className="break-all">{vault.vault_id}</Text> },
+      { key: "health", title: "状态", render: vault => <StatusBadge tone={vault.health === "unavailable" ? "danger" : "success"}>{vault.health === "healthy" ? "可用" : "Vault 不可用"}</StatusBadge> },
+      { key: "seq", title: "已提交序号", render: vault => <Text component="code" size="sm">{vault.vault_seq}</Text> },
+    ]} />}
+    <Modal opened={dialog === "register"} onClose={() => { if (!registering) setDialog(null); }} title="注册服务器目录" centered
+      closeOnEscape={!registering} closeOnClickOutside={!registering} withCloseButton={!registering}>
+      <form onSubmit={form.onSubmit(register)}>
+        <Stack>
+          <TextInput name="path" label="服务器目录绝对路径" placeholder="输入已有目录的绝对路径"
+            data-autofocus required disabled={registering} maxLength={4096}
+            key={form.key("path")} {...form.getInputProps("path")} />
+          <Group justify="flex-end"><Button type="submit" disabled={registering || loading || !data?.allowed_bases.length}>{registering ? "校验并注册中…" : "校验并注册 Vault"}</Button></Group>
+        </Stack>
+      </form>
+    </Modal>
+    <Modal opened={dialog === "health"} onClose={() => setDialog(null)} title="Vault 健康与采集" size="xl" centered>
       <Stack>
-        <Group justify="space-between" align="flex-start">
-          <Stack gap="xs"><Title order={2} size="h4">Vault 健康与采集</Title>
-            <Text size="sm" c="dimmed">现场核对挂载与目录身份。采集进度只代表本次服务进程的观察结果，不等于客户端已同步。</Text></Stack>
-          <Button variant="default" disabled={loading || registering} onClick={() => setRevision(value => value + 1)}>刷新目录状态</Button>
-        </Group>
+        <Group justify="flex-end"><Button variant="default" disabled={loading || registering} onClick={() => setRevision(value => value + 1)}>刷新目录状态</Button></Group>
         {loading && <Text role="status" size="sm" c="dimmed">正在核验目录与采集状态…</Text>}
-        <Feedback message={error} />
-        {!loading && !data && !error && <Text size="sm" c="dimmed">尚未读取目录，不能判断为空或已同步。</Text>}
+        {!loading && !data && <Text size="sm" c="dimmed">未能读取目录状态，请刷新重试。</Text>}
+        {data && <Table caption="目录状态" rows={data.vaults} rowKey={vault => vault.vault_id} emptyMessage="尚未注册 Vault" columns={[
+          { key: "path", title: "服务器路径 / 身份", render: vault => <Stack gap="xs"><Text component="code" size="sm" className="break-all">{vault.path}</Text><Text size="xs" c="dimmed" className="break-all">{vault.vault_id}</Text></Stack> },
+          { key: "health", title: "现场健康", render: vault => <Stack gap="xs"><StatusBadge tone={vault.health === "unavailable" ? "danger" : "success"}>{vault.health === "healthy" ? "挂载核对通过" : "Vault 不可用"}</StatusBadge>{vault.reason && <Text role="alert" size="sm" c="red">{vault.reason}</Text>}{vault.health === "unavailable" && <Text size="sm" c="dimmed">{vault.next_step}</Text>}</Stack> },
+          { key: "collection", title: "采集进度", render: vault => <Collection vault={vault} /> },
+          { key: "seq", title: "已提交序号", render: vault => <Text component="code" size="sm">{vault.vault_seq}</Text> },
+        ]} />}
       </Stack>
-    </Paper>
-    {data && <>
-      <Grid align="flex-start">
-        <Grid.Col span={{ base: 12, lg: 8 }}>
-          <Paper withBorder p="lg">
-            <Stack>
-              <Title order={2} size="h4">注册服务器目录</Title>
-              <Text size="sm" c="dimmed">将允许基目录中的已有目录加入管理。</Text>
-              <form onSubmit={form.onSubmit(register)}>
-                <Stack>
-                  <TextInput name="path" label="服务器目录绝对路径" description="目录必须已存在；校验失败不会清空或重写文件。"
-                    placeholder="从允许基目录中选择目录" required disabled={registering} maxLength={4096}
-                    key={form.key("path")} {...form.getInputProps("path")} />
-                  <Group><Button type="submit" disabled={registering || loading || !data.allowed_bases.length}>{registering ? "校验并注册中…" : "校验并注册 Vault"}</Button></Group>
-                </Stack>
-              </form>
-            </Stack>
-          </Paper>
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 4 }}>
-          <Paper withBorder p="lg">
-            <Stack>
-              <Title order={2} size="h4">允许基目录</Title>
-              <Text size="sm" c="dimmed">仅接受以下范围内的服务器路径。</Text>
-              {data.allowed_bases.length ? <Stack gap="xs">{data.allowed_bases.map(base => <Code block key={base}>{base}</Code>)}</Stack>
-                : <Text size="sm" c="dimmed">未配置允许基目录，不能注册。请管理员设置服务端 vaults.allowed_bases。</Text>}
-            </Stack>
-          </Paper>
-        </Grid.Col>
-      </Grid>
-      <Table caption="已注册 Vault" rows={data.vaults} rowKey={vault => vault.vault_id} emptyMessage="尚未注册 Vault；这不表示服务器目录为空或客户端已同步。" columns={[
-        { key: "path", title: "服务器路径 / 身份", render: vault => <Stack gap="xs"><Text component="code" size="sm" className="break-all">{vault.path}</Text><Text size="xs" c="dimmed" className="break-all">{vault.vault_id}</Text></Stack> },
-        { key: "health", title: "现场健康", render: vault => <Stack gap="xs"><StatusBadge tone={vault.health === "unavailable" ? "danger" : "success"}>{vault.health === "healthy" ? "挂载核对通过" : "Vault 不可用"}</StatusBadge>{vault.reason && <Text role="alert" size="sm" c="red">{vault.reason}</Text>}<Text size="sm" c="dimmed">{vault.next_step}</Text></Stack> },
-        { key: "collection", title: "采集进度", render: vault => <Collection vault={vault} /> },
-        { key: "seq", title: "已提交序号", render: vault => <Text component="code" size="sm">{vault.vault_seq}</Text> },
-      ]} />
-    </>}
+    </Modal>
   </Stack>;
 }

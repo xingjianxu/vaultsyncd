@@ -1571,6 +1571,14 @@
 - 验收：部署前完整备份并verify；运行配置pure求值复现，pure build→dry→test→HTTPS/IPC/身份/归属→switch；生产版本历史只读浏览、静态资产一致及既有服务健康。
 - 交接：`agent/tasks/S153.md`；原5张blocked首发门禁保持。
 
+### S154 — 精简 Vault 目录页面
+
+- 状态：done（用户2026-11-09直接要求）；前置 S078、S119、S134 done。
+- 依据：design §18.1、§6，沿用管理 Vault API，不改数据语义。
+- 范围：健康与采集、注册目录改为工具栏按钮打开弹窗；允许基目录在工具栏右对齐；主体保留目录清单，移除重复说明，保留实际错误与恢复建议。
+- 验收：Web typecheck/test/build；真实 Chromium 注册、错误、健康刷新/挂载故障恢复、键盘焦点与明暗窄屏布局；不部署生产。
+- 交接：`agent/tasks/S154.md`，原 blocked 首发门禁保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

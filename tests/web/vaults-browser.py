@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""S078: real Chromium + React + isolated btrfs server; HTTP loopback test only.
+"""S154: compact Vault toolbar and real registration/health regression.
 
 Run after the Web build and Rust server/admin build:
-nix develop .#web-tests --command python3 tests/web/auth-browser.py
+nix develop .#web-tests --command python3 tests/web/vaults-browser.py
 No online SQL, browser mocks, global dependency installation or Windows VM changes.
 """
 import hashlib
-import tempfile
 import functools
 import http.client
 import http.server
@@ -23,7 +22,7 @@ from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path("/data/vaultsyncd-temp") / f"vs-s078-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path("/data/vaultsyncd-temp") / f"S154-vaults-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -42,9 +41,9 @@ def main():
     candidate = vaults / "documents"; candidate.mkdir(); (candidate / "child").mkdir()
     sample = candidate / "keep.txt"; sample.write_bytes(b"S078 confirmed content is preserved\n")
     original_hash = hashlib.sha256(sample.read_bytes()).hexdigest()
-    unsupported = Path(tempfile.mkdtemp(prefix="vs-s078-unsupported-"))
+    unsupported = RUN / "unsupported"; unsupported.mkdir()
     alternate = RUN / "alternate"; alternate.mkdir()
-    mounted = False
+    mounted = unsupported_mounted = False
     password, new_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
     checked([BIN / "vaultsyncd-admin", "init", "--state-dir", state, "--login", "owner"], input=password + "\n")
     config = RUN / "server.toml"
@@ -53,6 +52,8 @@ def main():
     server = subprocess.Popen([str(BIN / "vaultsyncd-server"), "--config", str(config)], stdout=log, stderr=log)
     proxy = evil = None
     try:
+        checked(["sudo", "-n", "mount", "-t", "tmpfs", "-o", "size=1m", "tmpfs", unsupported])
+        unsupported_mounted = True
         address = None
         for _ in range(150):
             for line in (RUN / "server.log").read_text().splitlines():
@@ -115,14 +116,58 @@ def main():
             login(password)
             page.get_by_role("link", name="Vault 目录", exact=True).click()
             expect(page.get_by_text(str(vaults), exact=True)).to_be_visible()
-            expect(page.get_by_text("尚未注册 Vault；这不表示服务器目录为空或客户端已同步。", exact=True)).to_be_visible()
+            expect(page.get_by_text("尚未注册 Vault", exact=True)).to_be_visible()
+            toolbar = page.get_by_role("group", name="Vault 目录工具栏", exact=True)
+            health_button = toolbar.get_by_role("button", name="Vault 健康与采集", exact=True)
+            register_button = toolbar.get_by_role("button", name="注册服务器目录", exact=True)
+            health = page.get_by_role("dialog", name="Vault 健康与采集", exact=True)
+            registration = page.get_by_role("dialog", name="注册服务器目录", exact=True)
+            expect(page.get_by_role("dialog")).to_have_count(0)
+            expect(page.get_by_label(field_label("服务器目录绝对路径"))).to_have_count(0)
+            expect(page.get_by_text("将允许基目录中的已有目录加入管理。", exact=True)).to_have_count(0)
+            expect(page.get_by_text("管理服务器目录，核对挂载健康与采集进度。", exact=True)).to_have_count(0)
+
+            evidence = RUN / "evidence"; evidence.mkdir()
+            def layouts(state):
+                for scheme in ("light", "dark"):
+                    page.emulate_media(color_scheme=scheme)
+                    for width in (320, 1440):
+                        page.set_viewport_size({"width": width, "height": 900})
+                        # Allow Mantine modal transitions and viewport reflow to settle.
+                        page.wait_for_timeout(200)
+                        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width)
+                        bases = page.locator(".vaults-allowed-bases").bounding_box()
+                        bar = toolbar.bounding_box()
+                        assert bases and bar and abs(bases["x"] + bases["width"] - bar["x"] - bar["width"]) < 2
+                        page.screenshot(path=str(evidence / f"{state}-list-{scheme}-{width}.png"), full_page=True)
+                        health_button.click()
+                        expect(health).to_be_visible()
+                        page.wait_for_timeout(250)
+                        page.screenshot(path=str(evidence / f"{state}-health-{scheme}-{width}.png"), full_page=True)
+                        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                        page.keyboard.press("Escape")
+                        expect(health).to_have_count(0)
+                        expect(health_button).to_be_focused()
+                        register_button.click()
+                        expect(registration).to_be_visible()
+                        expect(registration.get_by_label(field_label("服务器目录绝对路径"))).to_be_focused()
+                        page.wait_for_timeout(250)
+                        page.screenshot(path=str(evidence / f"{state}-register-{scheme}-{width}.png"), full_page=True)
+                        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                        page.keyboard.press("Escape")
+                        expect(registration).to_have_count(0)
+                        expect(register_button).to_be_focused()
+                page.set_viewport_size({"width": 1440, "height": 900})
+            layouts("empty")
             def register(path):
-                page.get_by_label(field_label("服务器目录绝对路径")).fill(str(path))
-                page.get_by_role("button", name="校验并注册 Vault", exact=True).click()
+                if not registration.count(): register_button.click()
+                registration.get_by_label(field_label("服务器目录绝对路径")).fill(str(path))
+                registration.get_by_role("button", name="校验并注册 Vault", exact=True).click()
             register(candidate)
             expect(notifications.filter(has_text="已注册 Vault")).to_have_attribute("role", "status")
             expect(notifications.filter(has_text="已注册 Vault")).to_contain_text("等待初始采集")
             expect(page.get_by_text(str(candidate), exact=True)).to_be_visible()
+            expect(registration).to_have_count(0)
             assert hashlib.sha256(sample.read_bytes()).hexdigest() == original_hash
             ordinary = page.evaluate("fetch('/v1/vaults').then(r => r.json())")
             assert str(candidate) not in json.dumps(ordinary)
@@ -138,6 +183,10 @@ def main():
             register("/etc")
             expect(notifications.filter(has_text="允许基目录")).to_have_attribute("role", "alert")
             expect(notifications.filter(has_text="btrfs")).to_have_count(0)
+            expect(registration.get_by_label(field_label("服务器目录绝对路径"))).to_have_value("/etc")
+            page.keyboard.press("Escape")
+            expect(registration).to_have_count(0)
+            health_button.click()
             for _ in range(30):
                 page.get_by_role("button", name="刷新目录状态", exact=True).click()
                 try:
@@ -150,8 +199,8 @@ def main():
             # Actual mount replacement, scoped only to this run; API must detect mount drift.
             checked(["sudo", "-n", "mount", "--bind", alternate, candidate]); mounted = True
             page.get_by_role("button", name="刷新目录状态", exact=True).click()
-            expect(page.get_by_text("Vault 不可用", exact=True)).to_be_visible()
-            expect(page.get_by_text("恢复原挂载", exact=False)).to_be_visible()
+            expect(health.get_by_text("Vault 不可用", exact=True)).to_be_visible()
+            expect(health.get_by_text("恢复原挂载", exact=False)).to_be_visible()
             unavailable = page.evaluate("fetch('/v1/admin/vaults').then(r => r.json())")["vaults"][0]
             assert unavailable["health"] == "unavailable" and unavailable["collection"]["state"] == "blocked"
             assert unavailable["reason"]
@@ -159,14 +208,18 @@ def main():
             page.get_by_role("button", name="刷新目录状态", exact=True).click()
             expect(page.get_by_text("挂载核对通过", exact=True)).to_be_visible()
             assert hashlib.sha256(sample.read_bytes()).hexdigest() == original_hash
-            page.screenshot(path=str(RUN / "vaults.png"), full_page=True)
+            page.screenshot(path=str(evidence / "vaults.png"), full_page=True)
+            page.keyboard.press("Escape")
+            expect(health).to_have_count(0)
+            layouts("populated")
             assert page.evaluate("localStorage.length") == 0
             assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed":True,"checks":["owner-login", "allowed-bases", "empty-is-not-synced", "register-btrfs", "existing-hash-preserved", "ordinary-list-no-path", "overlap-rejected", "unsupported-filesystem-rejected", "outside-bases-rejected", "actual-observer-progress", "real-bind-mount-drift", "restore-mount-recovers-health", "source-hash-retained", "notifications/register-success/scoped-error-replacement", "CSP"], "mount_failure":unavailable, "hash":original_hash, "scope":"HTTP loopback browser test; HTTPS deployment S097"}, ensure_ascii=False, indent=2))
-        print(f"S078 browser acceptance passed: {RUN}")
+            (evidence / "result.json").write_text(json.dumps({"passed":True,"checks":["toolbar-two-dialogs", "allowed-bases-right-aligned", "light/dark-320/1440-empty-and-populated", "dialog-autofocus-escape-return-focus", "registration-errors-retain-input", "owner-login", "allowed-bases", "empty-is-not-synced", "register-btrfs", "existing-hash-preserved", "ordinary-list-no-path", "overlap-rejected", "unsupported-filesystem-rejected", "outside-bases-rejected", "actual-observer-progress", "real-bind-mount-drift", "restore-mount-recovers-health", "source-hash-retained", "notifications/register-success/scoped-error-replacement", "CSP"], "mount_failure":unavailable, "hash":original_hash, "scope":"HTTP loopback browser test; HTTPS deployment S097"}, ensure_ascii=False, indent=2))
+        print(f"S154 browser acceptance passed: {RUN}")
     finally:
         if mounted: checked(["sudo", "-n", "umount", candidate])
+        if unsupported_mounted: checked(["sudo", "-n", "umount", unsupported])
         unsupported.rmdir()
         for listener in [proxy, evil]:
             if listener: listener.shutdown(); listener.server_close()

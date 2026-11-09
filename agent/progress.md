@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S153 done**（S150文件版本历史已部署本机）。运行/开机generation265，正式源`89a9cf4`、schema18，Vault基目录保持`/data/vaultsyncd/vaults`；**下一 ready：无**。S152桌面任务由独立会话进行，原5张blocked门禁不变。精确运行配置`d4c5fe7`（main整合`2c96e2f`），main尚未激活的依赖锁升级保持；详见[S153](tasks/S153.md)。
+当前：**S154 done**（Vault目录工具栏精简已验收，未部署；[交接](tasks/S154.md)）。S153版本历史版已部署本机。运行/开机generation265，正式源`89a9cf4`、schema18，Vault基目录保持`/data/vaultsyncd/vaults`；**下一 ready：无**。S152桌面任务由独立会话进行，原5张blocked门禁不变。精确运行配置`d4c5fe7`（main整合`2c96e2f`），main尚未激活的依赖锁升级保持；详见[S153](tasks/S153.md)。
 
 最近部署：[S153](tasks/S153.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证文件版本历史、刷新/键盘/明暗320/1440、认证/自动连接/CSP/cookie及全部资产一致。身份、正式文件/对象、新Vault路径及10服务/3应用保持。完整备份及异盘副本verified，旧generation264及GC roots保留；未实际回退生产。路径迁移与恢复边界见[S151](tasks/S151.md)，此前schema17→18升级及恢复演练见[S149](tasks/S149.md)。
 
@@ -173,6 +173,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S154 | done | 本卡产出待本地提交；合并/清理随后补记，未部署 | [S154](tasks/S154.md) |
 | S151 | done | 项目63be203已ff合master；主机c20199e/main整合a3a62a9；generation264，两任务树/分支已清理 | [S151](tasks/S151.md) |
 | S150 | done | 实现/验收65d56ae已ff合master，任务树/分支已清理；未部署生产 | [S150](tasks/S150.md) |
 | S149 | done | 源d9cfee9；主机pin f5153d8/main整合fb293d5；交接98de5a5已ff合master，两任务树/分支已清理 | [S149](tasks/S149.md) |
