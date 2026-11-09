@@ -28,7 +28,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
-| S148 | 登录/刷新恢复会话后自动检查服务；退出取消、失败重试、真实 Chromium 验收；未部署 | 本卡验收与整合见交接 | [S148](tasks/S148.md) |
+| S148 | 登录/刷新恢复会话后自动检查服务；退出取消、失败重试、真实 Chromium 验收；未部署 | 实现`3885ab4`；整合/清理见交接 | [S148](tasks/S148.md) |
 | S145 | 统一 Web 登录页、匿名全路由门禁、全局会话失效；真实认证/90组布局/五业务回归及generation261线上验收 | 实现6e58bc2、交接c9b092d已ff合master；主机pin18a7df5；任务树/分支已清理 | [S145](tasks/S145.md) |
 | S141 | Vault 改名后 Windows 原生复验；修复 RootElement/IPC 版本等改名与升版遗留故障；bindings/files-ui/write/history/S129/S091/S099 原生通过 | 8b82e7d、ee2c863、e2f3b9a、83bc979、bf561f8、6f0bab3 已ff合master，任务树/分支已清理 | [S141](tasks/S141.md) |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
