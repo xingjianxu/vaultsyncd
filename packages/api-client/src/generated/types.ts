@@ -289,6 +289,86 @@ export function decodeChangeList(value: unknown): ChangeList {
   };
 }
 
+/** 当前账号一次登录的连接记录，不代表可信设备身份或同步状态。 */
+export interface ClientConnection {
+  /** 接入类型 */
+  client_kind: ClientConnectionClientKind;
+  /** 跨凭据刷新稳定的连接身份 */
+  connection_id: string;
+  /** 首次登录UTC秒 */
+  created_at: string;
+  /** 是否为本次请求使用的连接 */
+  current: boolean;
+  /** 登录提交的非可信设备标签 */
+  device_label: string;
+  /** 最近成功认证请求UTC秒，旧记录缺省 */
+  last_seen_at?: string;
+  /** 当前刷新凭据到期UTC秒，备份恢复后缺省 */
+  refresh_expires_at?: string;
+  /** 撤销UTC秒 */
+  revoked_at?: string;
+  /** 观测时会话状态 */
+  state: ClientConnectionState;
+}
+
+export function decodeClientConnection(value: unknown): ClientConnection {
+  const object = expect_object(value, "ClientConnection");
+  return {
+    client_kind: decodeClientConnectionClientKind(object.client_kind),
+    connection_id: expect_string(object.connection_id, "ClientConnection.connection_id"),
+    created_at: expect_decimal(object.created_at, "ClientConnection.created_at"),
+    current: expect_boolean(object.current, "ClientConnection.current"),
+    device_label: expect_string(object.device_label, "ClientConnection.device_label"),
+    last_seen_at: object.last_seen_at === undefined ? undefined : expect_decimal(object.last_seen_at, "ClientConnection.last_seen_at"),
+    refresh_expires_at: object.refresh_expires_at === undefined ? undefined : expect_decimal(object.refresh_expires_at, "ClientConnection.refresh_expires_at"),
+    revoked_at: object.revoked_at === undefined ? undefined : expect_decimal(object.revoked_at, "ClientConnection.revoked_at"),
+    state: decodeClientConnectionState(object.state),
+  };
+}
+
+/** 服务端登录入口所确认的接入类型，旧记录未知。 */
+export type ClientConnectionClientKind = "unknown" | "client" | "browser";
+
+export const CLIENT_CONNECTION_CLIENT_KIND_VALUES = ["unknown", "client", "browser"] as const;
+
+export function decodeClientConnectionClientKind(value: unknown): ClientConnectionClientKind {
+  if (typeof value !== "string" || !(CLIENT_CONNECTION_CLIENT_KIND_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 ClientConnectionClientKind 取值：${JSON.stringify(value)}`);
+  }
+  return value as ClientConnectionClientKind;
+}
+
+/** 当前账号一页客户端连接记录。 */
+export interface ClientConnectionPage {
+  /** 按首次登录时间及连接身份降序，最多50条 */
+  connections: Array<ClientConnection>;
+  /** 下一页游标，末页缺省 */
+  next_cursor?: string;
+  /** 服务端观测UTC秒 */
+  observed_at: string;
+}
+
+export function decodeClientConnectionPage(value: unknown): ClientConnectionPage {
+  const object = expect_object(value, "ClientConnectionPage");
+  return {
+    connections: expect_array(object.connections, "ClientConnectionPage.connections").map((item) => decodeClientConnection(item)),
+    next_cursor: object.next_cursor === undefined ? undefined : expect_string(object.next_cursor, "ClientConnectionPage.next_cursor"),
+    observed_at: expect_decimal(object.observed_at, "ClientConnectionPage.observed_at"),
+  };
+}
+
+/** 最近活动不是在线保证；unknown 表示备份恢复后会话已清理。 */
+export type ClientConnectionState = "recent" | "inactive" | "revoked" | "expired" | "unknown";
+
+export const CLIENT_CONNECTION_STATE_VALUES = ["recent", "inactive", "revoked", "expired", "unknown"] as const;
+
+export function decodeClientConnectionState(value: unknown): ClientConnectionState {
+  if (typeof value !== "string" || !(CLIENT_CONNECTION_STATE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 ClientConnectionState 取值：${JSON.stringify(value)}`);
+  }
+  return value as ClientConnectionState;
+}
+
 /**
  * 过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
  * 都保留，绝不丢内容。

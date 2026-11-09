@@ -55,6 +55,8 @@ use vaultsyncd_server_store::db::Database;
 use vaultsyncd_server_store::sessions::{self as store_sessions, DIGEST_LEN};
 use vaultsyncd_server_store::users;
 
+/// 当前账号的客户端连接观测记录。
+pub mod clients;
 /// 账号元信息、改密和全部会话撤销。
 pub mod manage;
 
@@ -199,6 +201,7 @@ async fn login_impl(
 
     let mut sessions = DbSessions {
         database: &context.database,
+        login_browser: Some(browser),
     };
     let mut ids = context.ids.lock().await;
     let issued = session::issue(
@@ -272,6 +275,7 @@ async fn refresh_impl(
 
     let mut sessions = DbSessions {
         database: &context.database,
+        login_browser: None,
     };
     let mut ids = context.ids.lock().await;
     let renewed =
@@ -301,6 +305,7 @@ pub async fn logout(State(context): State<Arc<AuthContext>>, headers: HeaderMap)
     };
     let mut sessions = DbSessions {
         database: &context.database,
+        login_browser: None,
     };
     match sessions.revoke(principal.session_id, facts.now).await {
         Ok(_) => {
@@ -686,6 +691,7 @@ impl DbAccounts<'_> {
 /// `sessions` 表的核心端口适配器：读用连接、写用 `BEGIN IMMEDIATE` 短事务。
 struct DbSessions<'a> {
     database: &'a Database,
+    login_browser: Option<bool>,
 }
 
 #[allow(async_fn_in_trait)]
@@ -695,6 +701,11 @@ impl SessionStore for DbSessions<'_> {
         store_sessions::insert_session(&mut tx, &to_store(&new))
             .await
             .map_err(session_storage_error)?;
+        if let Some(browser) = self.login_browser {
+            vaultsyncd_server_store::clients::set_kind(&mut tx, new.id, browser)
+                .await
+                .map_err(session_db_error)?;
+        }
         tx.commit().await.map_err(session_db_error)
     }
 
@@ -865,10 +876,21 @@ async fn principal_with(
     }
     let mut sessions = DbSessions {
         database: &context.database,
+        login_browser: None,
     };
-    session::authenticate(&mut sessions, &credential.token, facts.now)
+    let principal = session::authenticate(&mut sessions, &credential.token, facts.now)
         .await
-        .map_err(|error| Box::new(session_failure(&facts.request_id, &error)))
+        .map_err(|error| Box::new(session_failure(&facts.request_id, &error)))?;
+    let mut conn = context
+        .database
+        .pool()
+        .acquire()
+        .await
+        .map_err(|_| Box::new(internal_error("记录客户端活动失败", &facts.request_id)))?;
+    vaultsyncd_server_store::clients::touch(&mut conn, principal.session_id, facts.now)
+        .await
+        .map_err(|_| Box::new(internal_error("记录客户端活动失败", &facts.request_id)))?;
+    Ok(principal)
 }
 
 #[cfg(test)]
@@ -913,6 +935,7 @@ mod tests {
             .route("/v1/auth/browser/login", post(browser_login))
             .route("/v1/auth/browser/refresh", post(browser_refresh))
             .route("/v1/auth/account", axum::routing::get(manage::account))
+            .route("/v1/clients", axum::routing::get(clients::list))
             .route("/v1/auth/password", post(manage::password))
             .route("/v1/auth/revoke-all", post(manage::revoke_all))
             .with_state(context)
@@ -1251,5 +1274,61 @@ mod tests {
         .await;
         // 没有 Host 头时同源无法确认，因此仍按拒绝处理（fail closed）。
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    }
+    #[tokio::test]
+    async fn rejected_credentials_do_not_record_activity_and_list_is_scoped() {
+        let context = context("client-activity").await;
+        let router = router_for(Arc::clone(&context));
+        let (status, _, text) = call(router.clone(), login_request(None)).await;
+        assert_eq!(status, StatusCode::OK);
+        let issued: SessionIssued = serde_json::from_str(&text).unwrap();
+        let id = vaultsyncd_domain::ids::SessionId::from_hex(&issued.session_id).unwrap();
+        sqlx::query("UPDATE client_connections SET created_at=0,last_seen_at=0 WHERE session_id=?")
+            .bind(id.as_bytes().as_slice())
+            .execute(context.database.pool())
+            .await
+            .unwrap();
+        let mut invalid = HeaderMap::new();
+        invalid.insert(
+            AUTHORIZATION,
+            format!("Bearer {}", "ab".repeat(32)).parse().unwrap(),
+        );
+        assert!(principal_from(&context, &invalid).await.is_err());
+        let before: i64 =
+            sqlx::query_scalar("SELECT last_seen_at FROM client_connections WHERE session_id=?")
+                .bind(id.as_bytes().as_slice())
+                .fetch_one(context.database.pool())
+                .await
+                .unwrap();
+        assert_eq!(before, 0);
+        let request = Request::builder()
+            .uri("/v1/clients")
+            .header(AUTHORIZATION, format!("Bearer {}", issued.access_token))
+            .body(Body::empty())
+            .unwrap();
+        let (status, headers, text) = call(router, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get("cache-control").unwrap(), "no-store");
+        let page: vaultsyncd_protocol::generated::ClientConnectionPage =
+            serde_json::from_str(&text).unwrap();
+        assert_eq!(page.connections.len(), 1);
+        assert_eq!(
+            page.connections[0].client_kind,
+            vaultsyncd_protocol::generated::ClientConnectionClientKind::Client
+        );
+        assert_eq!(
+            page.connections[0].state,
+            vaultsyncd_protocol::generated::ClientConnectionState::Recent
+        );
+        assert!(page.connections[0].current);
+        assert!(
+            page.connections[0]
+                .last_seen_at
+                .as_ref()
+                .unwrap()
+                .parse::<i64>()
+                .unwrap()
+                > 0
+        );
     }
 }

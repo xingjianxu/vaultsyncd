@@ -41,3 +41,6 @@ export type { UploadRequest, UploadSession, UploadStatus, UploadPartAck, Finaliz
 
 export { listBackupSnapshots, prepareBackupSnapshot, backupSnapshotStatus, verifyBackupSnapshot, releaseBackupSnapshot, backupSnapshotManifest, exportBackupSnapshot } from "./generated/client";
 export type { BackupSnapshotStatus, BackupSnapshotList, BackupIntegrity, BackupSnapshotPhase } from "./generated/types";
+
+export { listClients } from "./generated/client";
+export type { ClientConnection, ClientConnectionPage } from "./generated/types";

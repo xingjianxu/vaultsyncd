@@ -493,6 +493,13 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
+        sqlx::query("INSERT INTO client_connections VALUES(?1,?2,?3,'备份设备','client',1,10)")
+            .bind([4u8; 16].as_slice())
+            .bind(owner.as_bytes().as_slice())
+            .bind([5u8; 16].as_slice())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
         crate::changes::append_change(
             &mut tx,
             owner,
@@ -526,6 +533,14 @@ mod tests {
                 .unwrap(),
             1
         );
+        let history: (String, Option<Vec<u8>>) = copied
+            .query_row(
+                "SELECT device_label,session_id FROM client_connections",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(history, ("备份设备".into(), None));
         let original: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(db.pool())
             .await

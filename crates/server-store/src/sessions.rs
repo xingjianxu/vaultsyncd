@@ -246,6 +246,7 @@ pub async fn insert_session(
     .execute(&mut **tx)
     .await
     .map_err(map_write_error)?;
+    crate::clients::record_login(tx, new).await?;
     Ok(())
 }
 
@@ -366,6 +367,7 @@ pub async fn rotate_refresh(
         .bind(successor.id.as_bytes().as_slice())
         .execute(&mut **tx)
         .await?;
+    crate::clients::record_rotation(tx, current, successor.id, at).await?;
     Ok(RotationOutcome::Rotated)
 }
 

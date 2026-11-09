@@ -22,6 +22,7 @@
 
 pub mod backup;
 pub mod changes;
+pub mod clients;
 pub mod db;
 pub mod entries;
 pub mod gc;

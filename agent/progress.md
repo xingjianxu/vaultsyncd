@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S146 done**（清理闲置目录、集中临时数据与缓存）。S001—S146共146卡：141 done、5 blocked；**无ready卡**。主机generation262，正式服务仍为S145源`6e58bc2`，ServerId/挂载/服务进程保持；整个win-lab及基线/关联缓存不动。清理清单与验证见[S146](tasks/S146.md)。
+当前：**S147 in_progress**（客户端连接记录与查看）。下一 ready：S147（本轮执行）；原记录：**S146 done**（清理闲置目录、集中临时数据与缓存）。S001—S146共146卡：141 done、5 blocked；**无ready卡**。主机generation262，正式服务仍为S145源`6e58bc2`，ServerId/挂载/服务进程保持；整个win-lab及基线/关联缓存不动。清理清单与验证见[S146](tasks/S146.md)。
 
 最近部署：[S145](tasks/S145.md) 源`6e58bc26fcef09faf675229889693b593f6e9c4f`、主机pin`18a7df5`、generation261；pure部署及严格TLS生产8路由匿名门禁、登录后文件浏览/刷新/退出/后退、明暗320/1440、全量资产/CSP/cookie、ServerId/schema17、10服务/3应用与主机锁均通过。不清库、不改生产内容，无schema迁移；回退入口generation260，按S113先test/健康再switch并同步pin，未实际演练。S144清库历史与留档仍见[S144](tasks/S144.md)，更早部署不代表当前现场。
 

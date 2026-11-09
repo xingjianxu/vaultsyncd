@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   decodeCapabilities,
+  decodeClientConnectionPage,
   decodeErrorCode,
   decodeErrorEnvelope,
   decodeHealthStatus,
@@ -113,6 +114,18 @@ check("unknown_optional_field_allowed", () => {
     error: { ...sample.error, vault_id: undefined, details: undefined },
   });
   assert.equal(envelope.error.vault_id, undefined);
+});
+
+check("client_connection_page_preserves_unknown_history_and_rejects_false_online", () => {
+  const row = { connection_id: "ab".repeat(16), device_label: "<script>设备</script>", client_kind: "unknown", created_at: "1000", state: "unknown", current: false };
+  const sample = { observed_at: "2000", connections: [row] };
+  const result = decodeClientConnectionPage(sample);
+  assert.equal(result.connections[0].last_seen_at, undefined);
+  assert.equal(result.connections[0].device_label, row.device_label);
+  assert.equal(result.next_cursor, undefined);
+  for (const invalid of [{ state: "online" }, { client_kind: "guessed-device" }, { last_seen_at: 2000 }, { created_at: "-1" }, { current: "true" }]) {
+    assert.throws(() => decodeClientConnectionPage({ ...sample, connections: [{ ...row, ...invalid }] }));
+  }
 });
 
 if (failures.length > 0) {

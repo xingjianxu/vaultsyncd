@@ -182,6 +182,87 @@ pub struct ChangeList {
     pub vault_id: String,
 }
 
+/// 当前账号一次登录的连接记录，不代表可信设备身份或同步状态。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ClientConnection {
+    /// 接入类型
+    pub client_kind: ClientConnectionClientKind,
+    /// 跨凭据刷新稳定的连接身份
+    pub connection_id: String,
+    /// 首次登录UTC秒
+    #[serde(with = "crate::decimal")]
+    pub created_at: String,
+    /// 是否为本次请求使用的连接
+    pub current: bool,
+    /// 登录提交的非可信设备标签
+    pub device_label: String,
+    /// 最近成功认证请求UTC秒，旧记录缺省
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<String>,
+    /// 当前刷新凭据到期UTC秒，备份恢复后缺省
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_expires_at: Option<String>,
+    /// 撤销UTC秒
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
+    /// 观测时会话状态
+    pub state: ClientConnectionState,
+}
+
+/// 服务端登录入口所确认的接入类型，旧记录未知。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum ClientConnectionClientKind {
+    /// 取值 `unknown`。
+    #[serde(rename = "unknown")]
+    Unknown,
+    /// 取值 `client`。
+    #[serde(rename = "client")]
+    Client,
+    /// 取值 `browser`。
+    #[serde(rename = "browser")]
+    Browser,
+}
+
+/// 当前账号一页客户端连接记录。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ClientConnectionPage {
+    /// 按首次登录时间及连接身份降序，最多50条
+    pub connections: Vec<ClientConnection>,
+    /// 下一页游标，末页缺省
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    /// 服务端观测UTC秒
+    #[serde(with = "crate::decimal")]
+    pub observed_at: String,
+}
+
+/// 最近活动不是在线保证；unknown 表示备份恢复后会话已清理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum ClientConnectionState {
+    /// 取值 `recent`。
+    #[serde(rename = "recent")]
+    Recent,
+    /// 取值 `inactive`。
+    #[serde(rename = "inactive")]
+    Inactive,
+    /// 取值 `revoked`。
+    #[serde(rename = "revoked")]
+    Revoked,
+    /// 取值 `expired`。
+    #[serde(rename = "expired")]
+    Expired,
+    /// 取值 `unknown`。
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+
 /// 过期基线的冲突策略闭集（design §15.3）。首发只有 `preserve_both`：服务器主条目与冲突副本
 /// 都保留，绝不丢内容。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

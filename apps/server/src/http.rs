@@ -64,6 +64,7 @@ pub fn router(
             "/v1/auth/browser/refresh",
             post(super::auth::browser_refresh),
         )
+        .route("/v1/clients", get(super::auth::clients::list))
         .route("/v1/auth/account", get(super::auth::manage::account))
         .route("/v1/auth/password", post(super::auth::manage::password))
         .route("/v1/auth/revoke-all", post(super::auth::manage::revoke_all))

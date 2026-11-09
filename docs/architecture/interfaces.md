@@ -2681,3 +2681,11 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 - `tools/test-volume/test-volume.sh` 默认 `/data/vaultsyncd-temp/volumes`，仍按 `runs/<run_id>` 隔离；`VAULTSYNCD_LAB_VAULT` 的规范路径只允许位于临时根之下，拒绝既有 `/data/vaultsyncd-lab`。平台/故障/安全驱动同步此默认位置。
 - 本机Web、管理CLI和独立NixOS服务验收的run改在临时根内；新部署证据默认 `/data/vaultsyncd-temp/evidence/deploy/local-*`；CI验收evidence须为临时根内的子目录，独占锁也移到该根，Windows组件构建写入当次evidence。
 - Windows devShell工具链缓存默认 `/data/vaultsyncd-temp/cache/windows`；`VAULTSYNCD_WINDOWS_CACHE` 仍可指定临时根内的独立缓存。已有VM目录、基线和关联缓存不自动搬迁或清理。现有产品wire/数据库/IPC接口不变。
+
+
+## S147：客户端连接观测
+
+- `api/openapi.yaml` 为 `ClientConnection`/`ClientConnectionPage` 唯一 wire 源；`GET /v1/clients?after=<connection_id>` 鉴权后只列当前账号，按 `(created_at,id)` 降序键集分页50条，末页省略 `next_cursor`。游标要求32位小写hex，未知/其他账号/重复/多余参数400；401会话无效、403跨源、503存储错误；响应 `no-store`，不含令牌/摘要/路径/IP。
+- schema18 追加 `client_connections`；每次登录在会话写事务内创建记录及接入类别，刷新在原事务移动 `session_id` 并保持连接id/首次时间，注销/改密/撤销状态取最新会话。旧刷新链迁移成一次原始登录，类型和活动未知；迁移前自动一致备份。旧二进制拒绝18，回退恢复整份17备份，不能仅降二进制。
+- `server-store::clients::{list,cursor_exists,touch,set_kind}` 为持久适配器；认证通过后更新活动（UTC秒、30秒节流、时钟倒退不覆盖）。活动五分钟为recent，其余有效会话inactive，撤销/刷新期限到期优先；无心跳，不作为实时在线或同步进度。备份清除会话时以FK SET NULL保留历史，恢复后unknown。
+- Web `#/clients` 使用生成 `listClients` 和 `BrowserAuth.request`（同源cookie/401单飞刷新/全局失效门禁），支持刷新、加载更多和失败重试。设备标签按文本转义；相同标签不合并设备，不引入客户端新API或设备审批。
