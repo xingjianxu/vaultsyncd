@@ -27,7 +27,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
-| S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb；主机a37df31已ff合main且部署树清理；项目待ff合master/清理 | [S160](tasks/S160.md) |
+| S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb、交接762d71d已ff合master；主机a37df31已ff合main，项目/主机任务树及分支清理 | [S160](tasks/S160.md) |
 | S159 | Vault路径深链与当前文件容量；Rust/Web/两轮真实浏览器及generation268生产验收通过 | 实现911449b、交接0dba961已ff合master；项目/主机任务树及分支清理 | [S159](tasks/S159.md) |
 | S158 | 首个GitHub预发布v0.1.1；同源双平台归档、Linux私有loader及8附件远端哈希通过；修复打包变量与SQLite/zlib依赖 | 源9aa091e已推送；交接f274601已ff合master，发行树/分支清理；并发同编号树保留并提示续接重新编号 | [S158](tasks/S158.md) |
 | S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |
