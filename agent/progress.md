@@ -1,8 +1,8 @@
 # 实施进度
 
-当前：**S143 done**（对象区改为 `<vault_id>/<aa>/<hash>`、删除旧布局兼容、管理员默认名取运行用户与 NixOS `adminUser`；未部署）。S001—S143 共143卡：137 done、6 blocked；下一 ready 为 S144（清库并本机重新部署）。线上仍为S138源`5689be1`/generation258、schema15；新代码目标 schema17。验证与交接见[S143](tasks/S143.md)、[S142](tasks/S142.md)。
+当前：**S144 done**（对象区 `<vault_id>/<aa>/<hash>`、删除旧布局兼容、清库并按新规则重建；管理员默认名 xingjian）。S001—S144 共144卡：138 done、6 blocked；**无 ready 卡**。线上源 `4ed8d9b`、generation260、schema17，新 ServerId `9395d9ca…`，首账号 `xingjian`，`documents` Vault 已重新注册并采集。验证与交接见[S144](tasks/S144.md)、[S143](tasks/S143.md)。
 
-最近部署：[S138](tasks/S138.md) 固定源`5689be16b8bc389ae3781e96c2ff734f7d6761ae`、主机pin`9930ec7`、generation258；异盘完整备份verified，pure build/dry/test/健康/switch、生产全量资产/TLS/CSP/明暗窄屏/新菜单/取消改名、legacy固定版本读取与8对象路径字节保持通过；schema15/ServerId/归属/10无关服务/3应用保持。直接回退入口为现场既有generation257（源7f50cc3，先前部署记录现已补明）；本卡15→15更新。历史已归档部署[S135](tasks/S135.md) generation256/schema14与[S131](tasks/S131.md)的13→14迁移仅描述当时现场，不作为当前回退入口。
+最近部署：[S144](tasks/S144.md) 源`4ed8d9b69b0b7b8c3aaa6d5f34d0c753d7b29c7c`、主机pin`629c86d`、generation260；先按旧规则部署到 schema17（迁前/清库留档在 `/data/vaultsyncd-deploy/wipe-20261109T102438-61728/`），再停服清空内部状态、`vaultsyncd-init` 建首账号 `xingjian`、注册 `documents` 并重新采集 3 个对象；严格 TLS/静态资产/CSP/登录/文件浏览/属性/暗色320与1440/退出、health/capabilities(protocol 2)、schema17 quick_check、新布局物理哈希、10服务/3应用保持均通过，新 ServerId `9395d9ca…`。直接回退需旧 generation 与清库前整套状态并同步 pin，本次未演练。历史部署记录（S138 generation258/schema15 等）仅描述当时现场。
 
 恢复顺序：**S101 hosted → S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -28,7 +28,8 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
-| S143 | 对象区 `<vault_id>/<aa>/<hash>`；删除旧布局兼容；schema17；管理员默认登录名与 NixOS adminUser | 实现提交见交接 | [S143](tasks/S143.md) |
+| S144 | 部署 `4ed8d9b` 到本机：generation260、schema17、清库重建、管理员 xingjian；生产严格 TLS/浏览器验收 | 源`4ed8d9b`；主机 pin`629c86d` | [S144](tasks/S144.md) |
+| S143 | 对象区 `<vault_id>/<aa>/<hash>`；删除旧布局兼容；schema17；管理员默认登录名与 NixOS adminUser | 19a43a3已ff合master，兼容修复4ed8d9b；树/分支已清理 | [S143](tasks/S143.md) |
 | S142 | Vault 改名：design/interfaces/operations/README 等文档与 Web 测试脚本；真实 Chromium 两轮通过 | 6b7eb52已ff合master，任务树/分支已清理 | [S142](tasks/S142.md) |
 | S140 | 共享目录概念改名 Vault（代码/wire/DB/服务端/客户端通用层）；schema16 迁移、协议 major 2 | b32ce6a已ff合master，任务树/分支已清理 | [S140](tasks/S140.md) |
 | S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Vault 同摘要对象冲突（schema15 围栏、legacy 兼容） | 实现f0e0103/0346ec1、审查修复c2d06b0已ff合master；树/分支已清理 | [S136](tasks/S136.md) |
