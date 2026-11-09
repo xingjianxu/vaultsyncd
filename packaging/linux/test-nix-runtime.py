@@ -14,7 +14,8 @@ from playwright.sync_api import sync_playwright, expect
 
 VAULT=Path(__file__).resolve().parents[2]
 PACKAGE=Path(sys.argv[1])
-RUN=Path("/data")/f"vs-s094-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+DEV_ROOT=Path("/data/vaultsyncd-dev")
+RUN=DEV_ROOT/f"S094-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 def command(args,**kwargs):
     result=subprocess.run([str(a) for a in args],text=True,capture_output=True,timeout=120,**kwargs)
@@ -22,6 +23,8 @@ def command(args,**kwargs):
     return result.stdout
 
 def main():
+    if not DEV_ROOT.is_dir() or not os.access(DEV_ROOT, os.W_OK | os.X_OK):
+        raise RuntimeError("开发根必须已建立并授权：/data/vaultsyncd-dev")
     command(["sudo","-n","mkdir","-m","755",RUN]);command(["sudo","-n","chown",f"{os.getuid()}:{os.getgid()}",RUN])
     manifest=json.loads((PACKAGE/"share/vaultsyncd/release-manifest.json").read_text())
     assert manifest["kind"]=="nix-component-set" and manifest["sourceInfo"]["commit"]==command(["git","rev-parse","HEAD"],cwd=VAULT).strip()

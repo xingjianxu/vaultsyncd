@@ -31,6 +31,7 @@
 ## 验证与交接
 
 - 历史 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 经 S161/S163 现位于 `/data/vaultsyncd-dev/vaultsyncd-temp/vaultsyncd-build`、`/data/vaultsyncd-dev/vaultsyncd-temp/vaultsyncd-deploy`；GC roots 随迁，仍为长期归档。旧 temp/lab 路径中的 `/data/` 替换为 `/data/vaultsyncd-dev/` 即得新路径，原始日志不改写；迁移验证见 `agent/tasks/S163.md`。
+- 历史 `/data/vs-*` 测试目录经 S164 归档到 `/data/vaultsyncd-dev/S164-archive-20261109/runs.tar.zst`，成员保留原目录名，映射、SHA-256 清单及恢复说明在同目录；原始证据与 S097 离线恢复镜像长期保留。不要重建旧入口或整体清理该归档；以后也不直接在 `/data` 下创建开发目录。
 
 - 执行当前卡要求和受影响消费者的必要检查。Windows 原生能力需 Windows 运行证据；交叉编译、Wine、fake 和前端成功不能代替 CFAPI 验收。
 - 资源或环境缺失标 blocked，记录缺失项并继续无依赖任务；不降低验收目标。只报告实际执行的命令与结果。

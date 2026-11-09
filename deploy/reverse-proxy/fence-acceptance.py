@@ -17,7 +17,8 @@ import urllib.error
 
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE, NIXPKGS, HELPER, EVIDENCE = map(Path, sys.argv[1:])
-RUN = Path('/data') / f'vs-s097-fences-{time.strftime("%Y%m%dT%H%M%S")}-{os.getpid()}'
+DEV_ROOT = Path('/data/vaultsyncd-dev')
+RUN = DEV_ROOT / f'S097-fences-{time.strftime("%Y%m%dT%H%M%S")}-{os.getpid()}'
 UNIT = f'vs-s097-fences-{os.getpid()}.service'
 USER = 'vaultsyncd-trial'
 ORIGIN = 'http://127.0.0.1:18729'
@@ -85,6 +86,8 @@ def seed(state, vault, name, phase):
 
 def run():
     global TOKEN, HELPER
+    if not DEV_ROOT.is_dir() or not os.access(DEV_ROOT, os.W_OK | os.X_OK):
+        raise RuntimeError('开发根必须已建立并授权：/data/vaultsyncd-dev')
     RUN.mkdir(mode=0o755)
     RESULT['helper_sha256']=hashlib.sha256(HELPER.read_bytes()).hexdigest()
     shutil.copy2(HELPER,RUN/'fence-boundary')

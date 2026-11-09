@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S163 done**，temp/lab整树迁入 `/data/vaultsyncd-dev/` 下同名目录，所有新开发测试目录只允许位于该根；97 GC roots/清单/快照/服务与VM健康、工具检查通过，[交接](tasks/S163.md)。**下一 ready：无**，原4张blocked保持。客户端托盘自动更新已由S162验收、尚未发布新版；在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
+当前：**S164 done**，123 个历史 `/data/vs-*` 目录已压缩归档到 `/data/vaultsyncd-dev/S164-archive-20261109/`，39,360 文件摘要/元数据完整解包验证通过后清理源树和验证副本；旧顶层无残留，两个旧脚本改用 dev 根，服务/VM/HTTP/HTTPS健康保持，[交接](tasks/S164.md)。所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。**下一 ready：无**，原4张blocked保持。客户端托盘自动更新已由S162验收、尚未发布新版；在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。
 
 最近部署：S160 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对编号/API一致、只读选择、刷新、明暗320/1440完整显示、TLS/CSP/cookie与全量资产。正式身份、5工作文件摘要、schema/FK及10服务/3应用保持，完整备份与异盘副本verified，旧system/boot GC roots保留；未实际回退。S158的[v0.1.1预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)仍为源`9aa091e`，不含S159/S160 Web变化。
 
@@ -27,6 +27,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S164 | 123 个旧vs目录归档，39,360 文件全量恢复摘要/元数据通过后清理；开发目录仅dev根 | 验收完成，提交与整合收尾见交接 | [S164](tasks/S164.md) |
 | S160 | 概览显示完整Server ID；Web及真实浏览器读取/错误重试/取消与generation269生产验收通过 | 源85dd2bb、交接762d71d已ff合master；主机a37df31已ff合main，项目/主机任务树及分支清理 | [S160](tasks/S160.md) |
 | S159 | Vault路径深链与当前文件容量；Rust/Web/两轮真实浏览器及generation268生产验收通过 | 实现911449b、交接0dba961已ff合master；项目/主机任务树及分支清理 | [S159](tasks/S159.md) |
 | S158 | 首个GitHub预发布v0.1.1；同源双平台归档、Linux私有loader及8附件远端哈希通过；修复打包变量与SQLite/zlib依赖 | 源9aa091e已推送；交接f274601已ff合master，发行树/分支清理；并发同编号树保留并提示续接重新编号 | [S158](tasks/S158.md) |

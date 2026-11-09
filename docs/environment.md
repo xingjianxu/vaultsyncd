@@ -2,6 +2,8 @@
 
 当前开发路径以 S163 为准：所有开发测试目录只能位于 `/data/vaultsyncd-dev/`。本文件历史 temp/lab 路径中的 `/data/` 须替换为 `/data/vaultsyncd-dev/`；更早 build/deploy 先按 S161 映射到 temp 内，再替换此前缀。历史日志与验收记录保留原文，执行旧命令前须替换路径，详见 [S163](../agent/tasks/S163.md)。
 
+历史 `/data/vs-*` 已由 [S164](../agent/tasks/S164.md) 归档至 `/data/vaultsyncd-dev/S164-archive-20261109/runs.tar.zst`，归档成员沿用旧目录名；摘要、映射与恢复说明同目录长期保留。后续开发目录也不得直接建立在 `/data` 下。
+
 当前平台范围（2026-11-07，S111/ADR-015）：Linux ARM64 已从代码、脚本、构建与测试中移除，仅保留 Linux x64 服务端与 Windows x64 客户端。下文 S001—S101 的 ARM64 要求与实测仅保留为历史记录，不作为当前门禁。
 
 采集时间：2026-11-05T15:48—15:50 +08:00

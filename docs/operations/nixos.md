@@ -2,6 +2,8 @@
 
 当前开发路径以 S163 为准：所有开发测试目录只能位于 `/data/vaultsyncd-dev/`。本文件历史 temp/lab 路径中的 `/data/` 须替换为 `/data/vaultsyncd-dev/`；更早 build/deploy 先按 S161 映射到 temp 内，再替换此前缀。历史日志与验收记录保留原文，执行旧命令前须替换路径，详见 [S163](../../agent/tasks/S163.md)。
 
+历史 `/data/vs-*` 目录已由 [S164](../../agent/tasks/S164.md) 归档至 `/data/vaultsyncd-dev/S164-archive-20261109/runs.tar.zst`，成员保留旧目录名；该目录的 README、SHA256SUMS 和 evidence/path-map.json 提供恢复步骤、摘要与路径映射。包括 S097 离线恢复镜像在内的原始数据长期保留，不能按缓存清理；历史命令不得重新建立 `/data` 顶层开发目录。
+
 ## S157 当前共用 Mantine 与精简 Vault 版部署（generation266，2026-11-09）
 
 正式入口 **https://vsyncd.132140.xyz**。固定源`5a71062da284d4841ea6ca6ad690a5ba7d93c651`，上线S152共用Mantine及S154精简Vault工具栏；schema18、`/data/vaultsyncd/vaults`、账号与ServerId保持。运行/开机generation266，system `/nix/store/641j5vxmwbcarwgfgnvippxgmacsbf9j-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`rr1zw3qmm2qbnbdhjcyz1g0flf1pd2a2`。精确主机配置`f7d19978171cb2311e3cb9c642d0db9f480518ea`（main合并`a02b61e`），其纯求值精确复现运行系统；main待激活依赖锁保持，不用main当前锁冒充运行配置。
