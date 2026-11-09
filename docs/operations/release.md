@@ -4,6 +4,8 @@
 
 ## 源码与证据归属
 
+GitHub Release 本地上传入口为 `tools/publish-release.sh <构建目录>`，构建、登录、预检、附件布局和草稿续传步骤只维护在[统一打包入口](../../packaging/README.md#发布到-github-release)。新增上传渠道不恢复 GitHub 工作流，不改变本文首发验收状态。
+
 | 证据组 | 实际源与界限 |
 | --- | --- |
 | S074基础互通 | `88fb7be`，Windows单客体三身份顺序；S102在 `81699c411c6d976188a63927f55150bbc34c574b` 干净树复跑 |

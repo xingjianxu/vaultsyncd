@@ -87,6 +87,7 @@
 
             # 版本控制与数据库
             pkgs.git
+            pkgs.gh # 本地 GitHub Release 发布入口
             pkgs.sqlite
             pkgs.sqlite.dev # sqlite3.h 与 libsqlite3.so，供 pkg-config/链接使用
 

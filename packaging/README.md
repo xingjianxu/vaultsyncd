@@ -30,6 +30,41 @@ dist/releases/v<版本>-<提交前12位>/
 
 Windows ZIP 仍是 `unsigned-test`，解压后使用 `Start vaultsyncd.cmd`；状态留当前用户 LocalAppData，运行需要 WebView2，停止使用 `Stop vaultsyncd.cmd`。本入口只构建和校验产物，不执行 Windows/Ubuntu 原生验收，也不解除 S101/S106—S108 发布门禁；不扩展到 macOS、Windows ARM64 或 Linux 客户端。运行/数据保护说明见[Windows 安装与 ZIP](../docs/operations/windows-installation.md)和[Linux 运维](../docs/operations/linux.md)。
 
+## 发布到 GitHub Release
+
+本地发布脚本不依赖 GitHub 工作流。`gh` 已加入锁定 devShell；首次使用先登录有目标仓库写权限的账号：
+
+```sh
+nix develop --command gh auth login --hostname github.com
+```
+
+先提交版本和代码，再运行上面的 `tools/release.sh`。版本唯一源是根 `Cargo.toml`；需要升版时按下一节同步镜像和锁文件，然后提交、重新构建。将产物对应的源码提交推送到 `origin`（例如 `git push origin master`），再执行：
+
+```sh
+# 将路径替换为实际已完成构建目录；可在任意当前目录调用脚本。
+./tools/publish-release.sh /data/vaultsyncd-temp/S156-实际run_id/releases/v0.2.0-实际提交前12位 --dry-run
+./tools/publish-release.sh /data/vaultsyncd-temp/S156-实际run_id/releases/v0.2.0-实际提交前12位
+```
+
+也可直接传既有 `dist/releases/v<版本>-<提交前12位>` 目录。`--dry-run` 校验本地 Git 对象、版本、树、组件输入、所有登记文件的大小/SHA-256 和构建校验表，显示仓库、标签、附件；不联网、不上传、无需登录。脚本不要求当前 HEAD 等于包源，始终使用清单中的完整提交，避免把交接提交或新代码重标为旧包来源。默认目标取 `origin` 的 push 地址，支持 github.com HTTPS/SSH；可用 `--remote <名称>` 选择其他已配置远端。
+
+实际发布前核对 GitHub 登录、源码提交存在于目标仓库、已有远端标签指向同一提交。版本标签默认为 `v<构建版本>`，不存在时由 GitHub Release 按精确源码 SHA 创建；不会推送分支或移动已有标签。默认发布为预发布且不设 Latest，使用 `--stable` 明确选择正式版本（仍不自动设 Latest）。其他参数：
+
+```sh
+./tools/publish-release.sh /实际构建目录 --tag v0.2.0-rc.1 --notes-file /实际发布说明.md
+./tools/publish-release.sh /实际构建目录 --draft           # 上传后保留草稿
+./tools/publish-release.sh /实际构建目录 --resume          # 续传/发布同源草稿
+./tools/publish-release.sh /实际构建目录 --stable          # 正式版本；标签必须为 v<版本>
+```
+
+自定义说明文件保留实际换行；工具追加源码、平台、未签名及未由本工具运行原生验收的说明。`--title` 可定制标题。正式/预发布只是 GitHub 的展示属性，不代表 S106—S108 门禁通过。
+
+上传先创建草稿，逐项上传并核对远端大小/SHA-256，全部就绪后才发布。失败保留远端草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；已存在且哈希相符的附件跳过，缺少摘要的旧附件会下载校验。不覆盖附件，不修改已发布 Release；远端含异源/不匹配/多余附件时退出非零，需人工检查该草稿。创建响应丢失也可通过 `--resume` 找回；发布响应丢失时先查看 GitHub 页面，已发布版本不会被自动改写。
+
+附件包括实际选中平台的归档、Linux 对应运行库源码、各平台来源清单（加平台前缀避免重名）、根 `release-manifest.json`、`build-SHA256SUMS` 及 `SHA256SUMS`；不上传 `logs/`。GitHub 附件为平铺布局，下载到同一目录后执行 `sha256sum -c SHA256SUMS`。`build-SHA256SUMS` 保留原构建目录的校验表，路径包含平台目录及未上传的本地日志，不能直接用于平铺附件。清单与哈希不是数字签名。
+
+暂存默认 `/data/vaultsyncd-temp/cache/github-release/upload-*`，完成或失败后清理本次复制；原构建目录保持。其他主机可传 `--staging-root <已有授权的缓存根>`。本入口只发布已有归档，不自动编译、不启动 VM、不改变线上服务。验收入口：`nix develop --command python3 tests/contract/github_release.py`（本地 Git 与 API 契约，不写真实 GitHub）。CLI 行为依据：[创建 Release](https://cli.github.com/manual/gh_release_create)、[上传附件](https://cli.github.com/manual/gh_release_upload)、[发布草稿](https://cli.github.com/manual/gh_release_edit)。
+
 ## 组件来源收据
 
 产品版本唯一源是根 Cargo.toml 的 workspace.package.version。Rust 包继承该值；
