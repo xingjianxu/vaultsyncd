@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S158 in_progress**（按用户请求构建并发布 0.1.1 GitHub 预发布版本；[交接](tasks/S158.md)）。S157 最新服务端已部署：运行/开机generation266、源`5a71062`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确运行配置`f7d1997`（main整合`a02b61e`），未激活依赖锁升级保持；其他4张blocked门禁保持。
+当前：**S158 done**（[v0.1.1 GitHub 预发布](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.1)，同源`9aa091e`的Linux x64/Windows x64归档及8附件远端哈希通过；[交接](tasks/S158.md)）。S157 服务端保持：运行/开机generation266、源`5a71062`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确运行配置`f7d1997`（main整合`a02b61e`），未激活依赖锁升级保持；其他4张blocked门禁保持。
 
 最近部署：[S157](tasks/S157.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证共用界面、Vault工具栏/两个弹窗、历史、认证/自动连接、明暗320/1440及全量资产/CSP/cookie。正式身份、5工作文件/4对象与10服务/3应用保持。完整备份及异盘副本verified，旧generation265和GC roots保留；未实际回退生产。路径与恢复边界仍见[S151](tasks/S151.md)，此前应用部署见[S153](tasks/S153.md)。
 
@@ -27,6 +27,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S158 | 首个GitHub预发布v0.1.1；同源双平台归档、Linux私有loader及8附件远端哈希通过；修复打包变量与SQLite/zlib依赖 | 源9aa091e；登记6e67fcf、修复60ffb0e/cab4166/9aa091e已推送origin/master；生命周期见交接 | [S158](tasks/S158.md) |
 | S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |
 | S152 | 两端共用 Mantine；双端构建/Web九套/桌面布局及Windows五套原生通过，服务端已S157上线；客户端发行另验 | 实现bfdf14e、整合8c1d1d8已ff合master；任务树/分支已清理 | [S152](tasks/S152.md) |
 | S153 | 版本历史版服务端部署generation265；真实生产浏览器/资产/数据及既有服务验收通过 | 源89a9cf4；主机pin d4c5fe7、main整合2c96e2f；生命周期见交接 | [S153](tasks/S153.md) |
