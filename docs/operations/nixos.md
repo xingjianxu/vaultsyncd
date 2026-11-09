@@ -1,5 +1,13 @@
 # 本机 NixOS 服务部署
 
+## S157 当前共用 Mantine 与精简 Vault 版部署（generation266，2026-11-09）
+
+正式入口 **https://vsyncd.132140.xyz**。固定源`5a71062da284d4841ea6ca6ad690a5ba7d93c651`，上线S152共用Mantine及S154精简Vault工具栏；schema18、`/data/vaultsyncd/vaults`、账号与ServerId保持。运行/开机generation266，system `/nix/store/641j5vxmwbcarwgfgnvippxgmacsbf9j-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`rr1zw3qmm2qbnbdhjcyz1g0flf1pd2a2`。精确主机配置`f7d19978171cb2311e3cb9c642d0db9f480518ea`（main合并`a02b61e`），其纯求值精确复现运行系统；main待激活依赖锁保持，不用main当前锁冒充运行配置。
+
+一键pure构建含73项测试，dry/test/HTTPS与IPC/UID归属/switch通过。生产真实Chromium覆盖全量资产、登录门禁/自动连接/客户端刷新、共用48px顶栏/240px导航、Vault工具栏与两弹窗、历史/键盘、明暗320/1440及CSP/cookie；账号、1Vault/7条目/5版本/4对象、5工作文件和10服务/3应用保持。生产不注册样本或修改同步内容。
+
+完整备份`/data/vaultsyncd-temp/S157-deploy-20261109/backups/predeploy.vsbk`及异盘`/wrd/prj/vaultsyncd/artifacts/S157/backups/`均verify，原始证据/截图/脚本/旧system GC roots在同run的evidence永久保留。无schema迁移；回退用旧generation265的`/nix/store/0jnii77r4410z7ffq2ak1s820b021iq4-nixos-system-wks-lab-26.11.20261102.7356cc7`，按S113先test与健康核对，再switch并同步pin至d4c5fe7；备份恢复仍遵守空目标及换epoch。未实际回退或重跑Windows/性能容量，不替代剩余首发门禁。详细交接见[S157](../../agent/tasks/S157.md)。
+
 ## S151 当前正式 Vault 基目录（generation264，2026-11-09）
 
 用户授权将 `/data/vaultsyncd/roots` 改为 **`/data/vaultsyncd/vaults`**，实际采用停服同卷重命名，全部原数据保留；现有 Vault 为 `/data/vaultsyncd/vaults/documents`，旧 roots 不保留别名。此节覆盖历史部署记录的正式基目录，历史证据不改写。
@@ -12,7 +20,7 @@
 
 回退路径：先停服、独占相同状态锁并新建本次回退的完整备份；确认仍是同一目录身份且旧 roots 不存在，再将 vaults 原位改回 roots，并在当前数据库的一个事务内逆转上述两处路径前缀，保留迁移后产生的其他数据；检查完整性/FK、逐表仅路径变化、文件身份与哈希后，激活保留的旧system并核对健康。副本已实际验证逆向更新与原库28表完全一致，生产未执行回退。不能只切旧generation，也不要用旧数据库单文件覆盖当前状态；卷或目录身份已变化时，改按完整备份恢复流程处理并更换epoch。
 
-当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。应用源仍为S149部署的`d9cfee9`（含客户端连接记录与登录后自动连接），schema18；S151切换后运行/开机generation264。服务及正式目录为主机用户`xingjian:users`；一键更新见S113，当前精确配置、Vault路径及回退见上方S151，应用升级历史见末尾S149。此前各节保留历史证据。
+当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S157已部署源`5a71062`，运行/开机generation266、schema18。服务及正式目录仍为`xingjian:users`，Vault基目录保持vaults；当前构建、备份与回退见上方S157，历史章节保留当时证据。
 
 ## 实际入口和来源（S096，2026-11-07）
 
