@@ -172,7 +172,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
-| S151 | done | 主机c20199e/main整合a3a62a9；generation264，数据保留；项目整合/清理见交接 | [S151](tasks/S151.md) |
+| S151 | done | 项目63be203已ff合master；主机c20199e/main整合a3a62a9；generation264，两任务树/分支已清理 | [S151](tasks/S151.md) |
 | S150 | done | 实现/验收65d56ae已ff合master，任务树/分支已清理；未部署生产 | [S150](tasks/S150.md) |
 | S149 | done | 源d9cfee9；主机pin f5153d8/main整合fb293d5；交接98de5a5已ff合master，两任务树/分支已清理 | [S149](tasks/S149.md) |
 | S126 | done | d50c6ac | [S126](tasks/S126.md) |
