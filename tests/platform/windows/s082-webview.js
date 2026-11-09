@@ -9,7 +9,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   const row=path=>[...document.querySelectorAll("tbody tr")].find(r=>r.querySelector("td")?.textContent===path);
   async function listing(){return (await invoke("agent_list_files",{bindingId:report.bindingId})).files;}
   async function page(path){location.hash=path;await delay();}
-  async function filePage(){await page("/files");await wait("files page",()=>document.querySelector('[name="files_binding"]'));field("files_binding",report.bindingId);await wait("listed seed",()=>row("server-seed.txt"));}
+  async function filePage(){await page("/files");await wait("files page",()=>document.querySelector('[name="files_binding"]'));await wait("files binding option",()=>document.querySelector(`option[value="${report.bindingId}"]`));field("files_binding",report.bindingId);await wait("listed seed",()=>row("server-seed.txt"));}
   async function controlPage(){await page("/bindings");await wait("binding page",()=>text().includes("管理与恢复"));await click("管理与恢复");}
   try{
     report.maliciousWebViewDenied=true;

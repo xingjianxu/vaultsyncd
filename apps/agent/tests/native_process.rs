@@ -461,10 +461,10 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         &["--login-stdin"],
         Some(&serde_json::to_vec(&login).unwrap()),
     ));
-    let vault = credentials::CredentialVault::new(&server).unwrap();
-    let saved = vault.load().unwrap().expect("persisted process login");
+    let credential = credentials::CredentialVault::new(&server).unwrap();
+    let saved = credential.load().unwrap().expect("persisted process login");
     let _: SessionIssued = serde_json::from_slice(&saved).unwrap();
-    vault.store(&saved).unwrap();
+    credential.store(&saved).unwrap();
     println!("check=pass real_process_login_to_current_user_wincred");
     success(invoke(&exe, &config_path, &["--once"], None));
     assert_eq!(
@@ -875,7 +875,7 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         "stopped agent must release its pipe"
     );
     drop(native_vault);
-    vault.erase().unwrap();
+    credential.erase().unwrap();
     let vault_path = base.join("vault");
     for item in std::fs::read_dir(&vault_path).unwrap() {
         let p = item.unwrap().path();

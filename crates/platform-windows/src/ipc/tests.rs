@@ -169,7 +169,7 @@ async fn malformed_oversize_unknown_and_truncated_frames_close_only_client() {
         vec![0, 0, 0, 0],
         ((MAX_FRAME_BYTES + 1) as u32).to_be_bytes().to_vec(),
         framing::encode(b"{bad-json").unwrap(),
-        framing::encode(br#"{"request_id":"bad","ipc_version":{"major":1,"minor":0},"command":{"name":"erase_everything"}}"#).unwrap(),
+        framing::encode(serde_json::json!({"request_id":"bad","ipc_version":{"major":version::SUPPORTED_MAJOR,"minor":version::SUPPORTED_MINOR},"command":{"name":"erase_everything"}}).to_string().as_bytes()).unwrap(),
     ] {
         let mut pipe = ep.connect().await.unwrap();
         pipe.write_all(&bytes).await.unwrap();

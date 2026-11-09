@@ -52,10 +52,12 @@ async fn rpc(
     parameters: Option<CommandParameters>,
     minor: u32,
 ) -> Result<GetStatusResult> {
+    let mut ipc_version = vaultsyncd_local_ipc::version::supported();
+    ipc_version.minor = minor;
     let response = endpoint
         .request(&Request {
             request_id: format!("maintenance-{}", std::process::id()),
-            ipc_version: IpcVersion { major: 1, minor },
+            ipc_version,
             command: Command { name, parameters },
         })
         .await?;

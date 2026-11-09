@@ -11,14 +11,14 @@ public class PickerWindow {
  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
 }
 '@
-$vault = [Windows.Automation.AutomationElement]::VaultElement
+$root = [Windows.Automation.AutomationElement]::RootElement
 function Trace([string]$message) { Add-Content (Join-Path $PSScriptRoot 'picker-trace.log') $message }
 Trace 'started'
 function Wait-Dialog {
   $end = (Get-Date).AddSeconds(150)
   while ((Get-Date) -lt $end) {
     $condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, '选择本地同步目录')
-    $dialog = $vault.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+    $dialog = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
     if ($dialog) { Trace ("found handle="+$dialog.Current.NativeWindowHandle); return $dialog }
     Start-Sleep -Milliseconds 150
   }

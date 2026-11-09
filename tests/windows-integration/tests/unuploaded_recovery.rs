@@ -12,7 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 use vaultsyncd_http_client::{ApiClient, ClientConfig, Credentials, ReqwestTransport, sync};
-use vaultsyncd_local_ipc::generated::{GetStatusResult, ManagementResult, Response, ResponseKind};
+use vaultsyncd_local_ipc::generated::{
+    GetStatusResult, ManagementResult, PROTOCOL_MAJOR, PROTOCOL_MINOR, Response, ResponseKind,
+};
 use vaultsyncd_protocol::generated::{
     OperationKind, OperationRequest, SessionIssued, SnapshotEntry,
 };
@@ -81,7 +83,7 @@ impl Drop for Agent {
     }
 }
 async fn request(name: &str, parameters: Value) -> Response {
-    let request=serde_json::from_value(json!({"request_id":id(),"ipc_version":{"major":1,"minor":4},"command":{"name":name,"parameters":parameters}})).unwrap();
+    let request=serde_json::from_value(json!({"request_id":id(),"ipc_version":{"major":PROTOCOL_MAJOR,"minor":PROTOCOL_MINOR},"command":{"name":name,"parameters":parameters}})).unwrap();
     let result = vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent")
         .unwrap()
         .request(&request)
@@ -99,7 +101,7 @@ async fn status(agent: &mut Agent) -> GetStatusResult {
     let end = Instant::now() + Duration::from_secs(30);
     loop {
         agent.alive();
-        let request=serde_json::from_value(json!({"request_id":id(),"ipc_version":{"major":1,"minor":4},"command":{"name":"get_status"}})).unwrap();
+        let request=serde_json::from_value(json!({"request_id":id(),"ipc_version":{"major":PROTOCOL_MAJOR,"minor":PROTOCOL_MINOR},"command":{"name":"get_status"}})).unwrap();
         if let Ok(response) =
             vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent")
                 .unwrap()

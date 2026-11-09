@@ -1,9 +1,11 @@
 //! S072 acceptance: every operation traverses the actual product agent's authenticated named pipe.
 use super::*;
-use vaultsyncd_local_ipc::generated::{GetStatusResult, ManagementResult, Response, ResponseKind};
+use vaultsyncd_local_ipc::generated::{
+    GetStatusResult, ManagementResult, PROTOCOL_MAJOR, PROTOCOL_MINOR, Response, ResponseKind,
+};
 
 async fn request(name: &str, parameters: serde_json::Value) -> Response {
-    let wire = serde_json::json!({"request_id":identity(),"ipc_version":{"major":1,"minor":2},"command":{"name":name,"parameters":parameters}});
+    let wire = serde_json::json!({"request_id":identity(),"ipc_version":{"major":PROTOCOL_MAJOR,"minor":PROTOCOL_MINOR},"command":{"name":name,"parameters":parameters}});
     let request = serde_json::from_value(wire).unwrap();
     let response = vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent")
         .unwrap()

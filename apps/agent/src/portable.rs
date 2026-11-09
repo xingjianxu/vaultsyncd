@@ -193,7 +193,7 @@ async fn rpc(
             expected,
             &Request {
                 request_id: format!("zip-{}", std::process::id()),
-                ipc_version: IpcVersion { major: 1, minor: 5 },
+                ipc_version: vaultsyncd_local_ipc::version::supported(),
                 command: Command { name, parameters },
             },
         )

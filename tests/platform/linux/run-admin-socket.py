@@ -110,7 +110,7 @@ def main():
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         sshconfig = RUN / "sshd_config"
-        sshconfig.write_text(f'Port {port}\nListenAddress 127.0.0.1\nHostKey {RUN}/host\nPidFile {RUN}/sshd.pid\nAuthorizedKeysFile {authorized}\nAllowUsers {getpass.getuser()}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPermitVaultLogin no\nLogLevel ERROR\n')
+        sshconfig.write_text(f'Port {port}\nListenAddress 127.0.0.1\nHostKey {RUN}/host\nPidFile {RUN}/sshd.pid\nAuthorizedKeysFile {authorized}\nAllowUsers {getpass.getuser()}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPermitRootLogin no\nLogLevel ERROR\n')
         sshlog = (RUN / "sshd.log").open("w")
         sshd = subprocess.Popen(["sudo", "-n", "/run/current-system/sw/bin/sshd", "-D", "-e", "-f", str(sshconfig)], stdout=sshlog, stderr=sshlog)
         wait_for(lambda: (RUN / "sshd.pid").exists(), "isolated sshd")

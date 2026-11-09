@@ -12,7 +12,7 @@ $ErrorActionPreference='Stop'
 $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
 if((New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Use a new STANDARD user, never an existing application user or administrator'}
 if((Get-Process -Id $PID).SessionId-eq 0){throw 'Run in the manually logged-on interactive desktop, not session 0'}
-if(![IO.Path]::IsPathVaulted($RunDirectory)){throw 'absolute new run directory required'}
+if(![IO.Path]::IsPathRooted($RunDirectory)){throw 'absolute new run directory required'}
 $RunDirectory=[IO.Path]::GetFullPath($RunDirectory)
 if($RunDirectory.StartsWith((Join-Path $env:LOCALAPPDATA 'vaultsyncd'),[StringComparison]::OrdinalIgnoreCase)){throw 'run/program directory must be outside application state'}
 $program=Join-Path $RunDirectory '中文 ZIP 程序'
@@ -70,7 +70,7 @@ if($Mode-eq 'Fresh'){
   if(Test-Path 'HKCU:\Software\vaultsyncd'){throw 'setup-managed client exists: use a NEW standard test user'}
   if($ZipSha256-notmatch '^[0-9a-fA-F]{64}$'-or $ExpectedCommit-notmatch '^[0-9a-f]{40}$'){throw 'receipt-derived SHA256 and full source commit are required'}
   if((Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash-ne $ZipSha256){throw 'archive transport hash mismatch'}
-  if((Get-Volume -DriveLetter ([IO.Path]::GetPathVault($RunDirectory).Substring(0,1))).FileSystem-ne 'NTFS'){throw 'native NTFS required'}
+  if((Get-Volume -DriveLetter ([IO.Path]::GetPathRoot($RunDirectory).Substring(0,1))).FileSystem-ne 'NTFS'){throw 'native NTFS required'}
   New-Item -ItemType Directory $results|Out-Null
   $before=Registration-Snapshot
   if($before.run-or $before.setup-or $before.shortcut){throw 'fresh user has prior vaultsyncd registration; preserve it and choose another user'}

@@ -35,8 +35,20 @@ $exe = Join-Path $PSScriptRoot 's068-platform-tests.exe'
 $actual = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
 if ($actual -ne $ExpectedHash) { throw 'test binary transport hash mismatch' }
 Write-Output "guest_exe_sha256 $actual"
-& $exe --test-threads=1 --nocapture
-$testExit=$LASTEXITCODE
+# The ACL case needs an isolated second local user; create a throwaway one per run.
+$fixtureUser='s068-'+[Guid]::NewGuid().ToString('N').Substring(0,12)
+$fixturePassword='S068!'+[Guid]::NewGuid().ToString('N')+'aZ9'
+try {
+    New-LocalUser -Name $fixtureUser -Password (ConvertTo-SecureString $fixturePassword -AsPlainText -Force) -AccountNeverExpires | Out-Null
+    $env:VAULTSYNCD_IPC_TEST_USER=$fixtureUser
+    $env:VAULTSYNCD_IPC_TEST_PASSWORD=$fixturePassword
+    & $exe --test-threads=1 --nocapture
+    $testExit=$LASTEXITCODE
+} finally {
+    Remove-Item Env:\VAULTSYNCD_IPC_TEST_PASSWORD -ErrorAction SilentlyContinue
+    Remove-Item Env:\VAULTSYNCD_IPC_TEST_USER -ErrorAction SilentlyContinue
+    Remove-LocalUser -Name $fixtureUser -ErrorAction SilentlyContinue
+}
 if ($testExit -eq 0) {
     Add-Type -TypeDefinition @'
 using System;

@@ -83,13 +83,16 @@ fn main() -> std::io::Result<()> {
     holder.wait()?;
     drop(instance::InstanceGuard::acquire(&vault, &scope)?);
     println!("check=pass killed_process_releases_mutex_and_state_ownership");
-    let vault = credentials::CredentialVault::new(&format!("{:032x}", std::process::id()))?;
-    vault.erase()?;
-    assert_eq!(vault.load()?, None);
-    vault.store(b"native-test-only-not-a-real-token")?;
-    assert_eq!(vault.load()?.unwrap(), b"native-test-only-not-a-real-token");
-    vault.erase()?;
-    assert_eq!(vault.load()?, None);
+    let credential = credentials::CredentialVault::new(&format!("{:032x}", std::process::id()))?;
+    credential.erase()?;
+    assert_eq!(credential.load()?, None);
+    credential.store(b"native-test-only-not-a-real-token")?;
+    assert_eq!(
+        credential.load()?.unwrap(),
+        b"native-test-only-not-a-real-token"
+    );
+    credential.erase()?;
+    assert_eq!(credential.load()?, None);
     println!("check=pass windows_credentials_roundtrip_and_erase");
     let stop = shutdown::Shutdown::install()?;
     assert!(!stop.requested());
