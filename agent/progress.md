@@ -28,7 +28,7 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S139 | Web 重命名默认选区排除扩展名；26组真实浏览器与Web回归通过；未部署 | cfb0b11已ff合master，任务树/分支已清理 | [S139](tasks/S139.md) |
-| S142 | Vault 改名：design/interfaces/operations/README 等文档与 Web 测试脚本；真实 Chromium 两轮通过 | 随本卡文档提交 | [S142](tasks/S142.md) |
+| S142 | Vault 改名：design/interfaces/operations/README 等文档与 Web 测试脚本；真实 Chromium 两轮通过 | 6b7eb52已ff合master，任务树/分支已清理 | [S142](tasks/S142.md) |
 | S140 | 共享目录概念改名 Vault（代码/wire/DB/服务端/客户端通用层）；schema16 迁移、协议 major 2 | b32ce6a已ff合master，任务树/分支已清理 | [S140](tasks/S140.md) |
 | S136 | Web 上传/右键复制剪切粘贴删除；修复跨 Vault 同摘要对象冲突（schema15 围栏、legacy 兼容） | 实现f0e0103/0346ec1、审查修复c2d06b0已ff合master；树/分支已清理 | [S136](tasks/S136.md) |
 | S135 | 通知版服务端部署本机 generation256；线上通知与资产/健康验收通过 | 源faf7adb；主机b98e05f | [S135](tasks/S135.md) |
