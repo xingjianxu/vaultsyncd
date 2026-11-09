@@ -1,5 +1,17 @@
 # 本机 NixOS 服务部署
 
+## S151 当前正式 Vault 基目录（generation264，2026-11-09）
+
+用户授权将 `/data/vaultsyncd/roots` 改为 **`/data/vaultsyncd/vaults`**，实际采用停服同卷重命名，全部原数据保留；现有 Vault 为 `/data/vaultsyncd/vaults/documents`，旧 roots 不保留别名。此节覆盖历史部署记录的正式基目录，历史证据不改写。
+
+主机运行及开机 generation264，精确配置提交 `c20199ecf2d2db6dfceb4fe352f897aaae1fbe3f`（main合并 `a3a62a9`），system `/nix/store/qdd7vqh5k24dwlrxwzcgsn6mp9f75k0y-nixos-system-wks-lab-26.11.20261102.7356cc7`。主机 main 尚未激活的依赖锁升级继续保留；重现本次运行使用 c20199e。服务包仍为 S149 的 d9cfee9/schema18，S150 功能未随本卡部署。
+
+迁移前完成管理 IPC 的 prepare/verify-source/export/verify/release，停服并独占 `/var/lib/vaultsyncd/server.lock` 后 checkpoint，另备份整个状态和工作目录。因身份围栏包含 resolved_path，原位 rename 后同时更新 `vaults.absolute_path` 及 `vault_file_identity` 第一行；卷/子卷/inode/btime、VaultId/epoch/seq 和其余全部数据库值保持。两目录权限为 `xingjian:users 0700`，NixOS allowed_bases、ReadWritePaths 和 RequiresMountsFor 同步指向新路径。28表副本演练及正式对比、4工作文件/3对象摘要与 inode、线上健康/IPC/历史、10项其他服务身份及 pure build/dry/test/switch 均通过。
+
+证据和备份根 `/data/vaultsyncd-temp/S151-vault-base-20261109T1850/`，`backups/pre-move.vsbk` 为完整已校验归档；`backups/state` 与 `backups/roots` 为停服副本；`evidence/migrate.py` 和 offline/online/rollback-rehearsal 结果记录本次操作，旧system保留 GC root。该脚本固定旧路径和空新目标，**不可在已迁移实例重跑**。
+
+回退路径：先停服、独占相同状态锁并新建本次回退的完整备份；确认仍是同一目录身份且旧 roots 不存在，再将 vaults 原位改回 roots，并在当前数据库的一个事务内逆转上述两处路径前缀，保留迁移后产生的其他数据；检查完整性/FK、逐表仅路径变化、文件身份与哈希后，激活保留的旧system并核对健康。副本已实际验证逆向更新与原库28表完全一致，生产未执行回退。不能只切旧generation，也不要用旧数据库单文件覆盖当前状态；卷或目录身份已变化时，改按完整备份恢复流程处理并更换epoch。
+
 当前正式入口为 **https://vsyncd.132140.xyz**，后端0.1.1、仅回环8721。S149已部署源`d9cfee9`（含客户端连接记录与登录后自动连接），运行/开机generation263、schema18。服务及正式目录为主机用户`xingjian:users`；一键更新见S113，准确构建配置、待启用主机锁和回退限制见末尾S149。此前各节保留历史证据。
 
 ## 实际入口和来源（S096，2026-11-07）

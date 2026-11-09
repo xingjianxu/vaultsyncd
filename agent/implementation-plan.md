@@ -1549,6 +1549,13 @@
 - 验收：升级前完整导出并校验可恢复备份；pure build→dry-activate→test→HTTPS/IPC/身份/目录归属→switch；生产客户端连接页、登录后自动连接、认证门禁与静态资源一致性；既有应用/SSH健康保持。
 - 交接：`agent/tasks/S149.md`；原5张blocked卡恢复门禁保持。
 
+### S151 — 正式 Vault 基目录迁至 vaults
+
+- 依据：用户要求 `/data/vaultsyncd/roots` 改为 `/data/vaultsyncd/vaults`，无法迁移时允许放弃旧数据；前置 S149 done；design §11.5、§19.1、§24。优先同卷保留原数据，不扩大到主机锁升级或应用版本部署。
+- 范围：备份并短暂停服，同卷重命名基目录；离线同步登记路径及目录身份中的 resolved_path，保留 FSID/子卷/inode/btime、VaultId、epoch、历史、账号和对象；调整主机白名单、权限及挂载依赖。
+- 验收：运行配置基线复现，pure build/dry/test/健康/switch；离线数据库完整性、除两处路径外逐表一致，文件及对象哈希/目录身份一致；线上 HTTPS/IPC Vault healthy、历史可查询、新路径生效及旧路径不再存在；备份与回退证据保留。
+- 交接：`agent/tasks/S151.md`，原 blocked 首发门禁保持。
+
 ### S150 — 文件浏览器右键查看版本历史
 
 - 依据：2026-11-09 用户要求服务端 Web 文件右键菜单提供版本历史对话框；前置 S079、S137、S149 done；design §6（I03/I12/I15）、§18.1、§24。

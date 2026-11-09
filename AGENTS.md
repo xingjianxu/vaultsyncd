@@ -19,7 +19,7 @@
 - 首发仅 Windows 11 x64 客户端、Linux 服务端。Windows 客户端在本 NixOS 开发环境交叉编译，前端构建也在宿主完成，以节省虚拟机资源；Quickemu Windows NTFS 客体用于原生运行与验收，不默认安装完整编译工具链。Windows x64 交叉工具链已由 S009 落实（`nix develop .#windows`，证据见 `docs/environment.md` §13）；具体分工与步骤只维护在实施手册 §2.6 与 `docs/operations/windows-lab.md` §12。
 - 用户已授权本项目所需 NixOS 配置与 rebuild。先检查实际主机配置入口，保存 diff/旧 generation，build/test/健康检查后 switch。test 会激活配置且不自动定时回滚；保留 SSH 和恢复路径。不要把项目 flake 误当主机配置，不扩大到无关系统升级。
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。
-- 用户明确（2026-11-09）：今后临时任务数据、测试卷、下载及可再生缓存统一放在 `/data/vaultsyncd-temp/`，按 `Sxxx-<run_id>/` 或 `cache/<用途>/` 隔离，不在 `/data`、`/var/lib` 等位置散建任务目录；运行前确认该根目录已建立并授权。需长期保留的原始证据、备份与回退引用按用途放在其 `evidence/`、`backups/` 子目录，不自动过期删除。既有正式 `/data/vaultsyncd` 和 `/var/lib/vaultsyncd` 不迁移；`/data/vaultsyncd-lab` 整树（含 win-lab、基线和关联缓存）保持不动。历史证据路径继续可追溯，不批量改写历史记录。临时数据根不能作为一次任务的整体清理目标。
+- 用户明确（2026-11-09）：今后临时任务数据、测试卷、下载及可再生缓存统一放在 `/data/vaultsyncd-temp/`，按 `Sxxx-<run_id>/` 或 `cache/<用途>/` 隔离，不在 `/data`、`/var/lib` 等位置散建任务目录；运行前确认该根目录已建立并授权。需长期保留的原始证据、备份与回退引用按用途放在其 `evidence/`、`backups/` 子目录，不自动过期删除。正式 `/data/vaultsyncd` 和 `/var/lib/vaultsyncd` 保持；同日用户另行授权 S151 将其 Vault 基目录 `/data/vaultsyncd/roots` 迁至 `/data/vaultsyncd/vaults`，已保留原数据完成迁移，当前入口见 `agent/tasks/S151.md`。`/data/vaultsyncd-lab` 整树（含 win-lab、基线和关联缓存）保持不动。历史证据路径继续可追溯，不批量改写历史记录。临时数据根不能作为一次任务的整体清理目标。
 - 纯核心与规划器不做平台 I/O；应用入口组装适配器。GUI/CLI 通过 agent IPC，Web 通过服务端 API；不直接修改在线数据库。
 - 先读现有接口再改动；schema 是 wire DTO 唯一编辑源，生成代码不手改。修改持久化/协议时补迁移、兼容和恢复验证。
 - 后续 UI 任务统一遵循 design §18.1：**Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.**
