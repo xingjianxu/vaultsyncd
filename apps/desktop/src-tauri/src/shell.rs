@@ -182,6 +182,34 @@ pub(super) fn run() {
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("vaultsyncd")
                     .inner_size(1000.0, 720.0)
+                    .on_web_resource_request(|_request, response| {
+                        // This hook only runs for Tauri's bundled asset protocol.
+                        // Mint a fresh nonce for each HTML response, including reloads.
+                        if !response.headers().get("content-type").is_some_and(|value| {
+                            value.to_str().is_ok_and(|value| value.starts_with("text/html"))
+                        }) {
+                            return;
+                        }
+                        use rand_core::RngCore;
+                        let mut bytes = [0_u8; 16];
+                        let updated = rand_core::OsRng.try_fill_bytes(&mut bytes).ok().and_then(|()| {
+                            let nonce: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+                            let html = std::str::from_utf8(response.body()).ok()?;
+                            let policy = response.headers().get("content-security-policy")?.to_str().ok()?;
+                            let (html, policy) = crate::style_csp::with_style_nonce(html, policy, &nonce)?;
+                            let policy = policy.parse::<tauri::http::HeaderValue>().ok()?;
+                            Some((html, policy))
+                        });
+                        if let Some((html, policy)) = updated {
+                            *response.body_mut() = html.into_bytes().into();
+                            response.headers_mut().insert("content-security-policy", policy);
+                            response.headers_mut().remove("content-length");
+                        } else {
+                            *response.status_mut() = tauri::http::StatusCode::INTERNAL_SERVER_ERROR;
+                            *response.body_mut() = b"Desktop style policy unavailable".as_slice().into();
+                            response.headers_mut().remove("content-length");
+                        }
+                    })
                     .on_navigation(|url| {
                         (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
                             || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))

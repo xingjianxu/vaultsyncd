@@ -42,6 +42,9 @@ export const disconnectedAgent: AgentClient = {
   listHistory:unavailable,listTrash:unavailable,restoreEntry:unavailable,notificationSettings:unavailable,setNotifications:unavailable,
 };
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    throw new Error("未连接本机 agent；请从 Windows 桌面应用运行。");
+  }
   try { return await invoke<T>(command, args); }
   catch (error) {
     if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") throw new Error(error.message);

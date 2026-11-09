@@ -2627,7 +2627,7 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 
 ## S119 Web 展示层：Mantine / Tailwind v4（替代 S115/S117 HeroUI 实现）
 
-- Web 独立展示层位于 `apps/web/src/components/ui.tsx`，不再依赖 `@vaultsyncd/ui`；后者仍提供 Windows 桌面的既有组件与样式。
+- S119 当时的 Web 独立展示层位于 `apps/web/src/components/ui.tsx`；S152/ADR-024 将其与客户端统一为 `@vaultsyncd/ui`，当前接口以下方 S152 为准。
 - 依赖 `@mantine/core`、`@mantine/hooks`、`@mantine/form` 统一锁定 9.7.5；移除 `@heroui/react`、`@heroui/styles` 与专用 `tailwind-variants`。根 pnpm lock 与 Nix `web-deps` 固定离线闭包，Vite 保留 Tailwind v4 插件，CSS 层叠不覆盖 Mantine 默认主题。
 - 页面直接组合 Mantine Button、Card、Stack/Group/Grid、TextInput/PasswordInput、Select、Alert 等组件；账号与注册表单使用 `@mantine/form`。公共 `Table<T>` 只组合 Mantine Table/ScrollContainer 与既有列渲染接口；`Dialog` 只组合 Mantine Modal，参数为 `opened/title/children/onClose`，保持挂载并通过 opened 控制显示，使 Mantine 自身管理焦点恢复；`EmptyState`/`StatusBadge` 分别组合现成面板/Badge。不再保留 HeroUI Button 兼容映射。
 - `MantineProvider` 使用默认主题/配色，AppShell 管理 Header/Navbar/Main，Burger 控制窄屏导航，NavLink/Breadcrumbs 提供导航，主题通过 Mantine color scheme API 切换。无自制组件体系或定制色板。
@@ -2635,6 +2635,15 @@ S098最终：INO_LOOKUP固定treeid0/objectid256根inode查询在内核CAP检查
 - 依据：用户 2026-11-08 最新决定、design ADR-018 与 [Mantine 官方索引](https://mantine.dev/llms.txt)，组件 API 通过已安装 Mantine MCP 核对；具体流程仍按 S077/S078/S079/S090 接口执行。
 
 S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 style nonce，写入 `meta[name=csp-nonce]` 并仅授权该响应的动态样式标签；`MantineProvider.getStyleNonce` 读取该 meta，使默认主题和 AppShell 响应式样式可用。外部入口 `main.tsx` 在渲染前设置 `globalThis.__webpack_nonce__`，让 Mantine Modal 依赖的 `get-nonce` 给滚动锁样式加同一 nonce。删除 React Aria 专用固定样式哈希，`script-src 'self'` 保持，不增加 unsafe-inline。Web/CSP 单测、真实 HTTP 和 Chromium 验证策略、nonce 匹配与跨响应唯一性；浏览器使用与生产一致的策略。根 HTML 比包内模板多出 nonce meta，不再要求响应体与 index.html 逐字节一致，静态 assets 保持原文件字节。
+
+## S152 客户端与 Web 共用 Mantine 展示层
+
+- `packages/ui` 提供 `AppProvider`、`PageShell`、`Button`、`Table<T>`、`Dialog`、`EmptyState`、`StatusBadge` 及 `styles.css`，只依赖 React/Mantine，不导入 IPC、HTTP、Tauri 或 wire DTO。两端在各自根入口导入共享样式。
+- `AppProvider` 使用 Mantine 默认主题、`defaultColorScheme="auto"` 和全局通知区，可传 `getStyleNonce`。`PageShell` 提供 48px 顶栏、240px 导航、窄屏 Burger、跳转主内容与明暗切换；调用方提供路由、导航、连接状态和各端附加入口。主题偏好使用 Mantine 本机存储，不存放账号凭据。
+- `Dialog` 组合 Mantine Modal，通过 `opened` 控制并保持组件挂载，使关闭恢复焦点；`Table` 保留 caption/columns/rows/rowKey/emptyMessage，水平滚动局限表格内部。Web 的 `components/ui.tsx` 仅稳定重导出共享展示 API，业务页面继续使用自身 API 和状态机。
+- 桌面 `App` 的用户操作通过 Mantine 通知展示等待/成功/失败，四秒关闭成功通知，失败保留可关闭；轮询仍原位显示连接状态和错误，不按两秒频率刷通知。连接错误与操作反馈分开保存，首次成功读取显示已读取；业务请求拒绝后重新读取本机状态，不能据业务拒绝推断 IPC 断连。文件手动读取失败及恢复 pending/unknown/rejected 向统一反馈传播失败，保留原操作身份与状态；恢复 committed 后仅状态刷新失败不降回 unknown。`run/busy/changed` 和所有 Tauri invoke 命令不变。
+- 桌面 bundled HTML 由 `on_web_resource_request` 生成每响应 128-bit 随机 style nonce，注入 `meta[name=csp-nonce]`，并追加到 Tauri 已生成的 `style-src`；保留其 script hashes、IPC connect-src 与 capability 限制。`main.tsx` 初始化 `__webpack_nonce__` 供 Modal 滚动锁使用。缺少有效 HTML/CSP 或随机源失败则拒绝返回可执行页面，不增加 unsafe-inline。与 Web 一样，Provider 和滚动锁使用同一 nonce。
+- 依据：design §5.6、§18.1、ADR-024；[Mantine nonce](https://mantine.dev/theming/mantine-provider/)、[Tauri CSP](https://v2.tauri.app/security/csp/)。验收与限制见 `agent/tasks/S152.md`。
 
 ## S122 Web Vault 文件浏览器
 

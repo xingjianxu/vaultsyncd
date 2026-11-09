@@ -1,4 +1,6 @@
 // Real Windows notification-center verification. Cause fixtures are generated offline by core ports.
+const cspViolations = [];
+document.addEventListener("securitypolicyviolation", event => cspViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI }));
 window.addEventListener("DOMContentLoaded",async()=>{
   const report={ok:false};const fixture=window.__S083_FIXTURE__;const invoke=window.__TAURI_INTERNALS__.invoke;
   const delay=()=>new Promise(r=>setTimeout(r,150));
@@ -29,7 +31,7 @@ window.addEventListener("DOMContentLoaded",async()=>{
       report.ok=report.initialDelivered===3&&["causesVisible","noPollStorm","duplicateAndAgentRestartNoStorm","closeKeepsProblems","disabledKeepsProblems","recoveredVisible","recoveryNoNewPopup","ordinaryOfflineSilent","recurrenceOnce"].every(k=>report[k]===true);
     }else if(fixture.phase==="history"){
       function field(name,value){const el=document.querySelector(`[name="${name}"]`);if(!el)throw new Error(`field ${name}`);const p=el instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,"value").set.call(el,value);el.dispatchEvent(new Event(el instanceof HTMLSelectElement?"change":"input",{bubbles:true}));}
-      const text=()=>document.body.innerText;const confirmed=()=>text().includes("操作已由 agent 确认。");
+      const text=()=>document.body.innerText;const confirmed=()=>document.querySelector("[data-agent-feedback]")?.textContent==="操作已由 agent 确认。";
       location.hash="/connections";await wait("connection form",()=>document.querySelector('[name="server_id"]')?.value?.length===32);
       field("server_id",fixture.serverId);field("server_url",fixture.url);field("ca_file",fixture.caFile);await click("保存连接");await wait("saved",confirmed);
       field("username",fixture.login);field("password",fixture.password);await click("登录");await wait("logged in",()=>text().includes("已登录（持有凭据"));
@@ -48,6 +50,7 @@ window.addEventListener("DOMContentLoaded",async()=>{
       await click("核对原恢复操作");await wait("trash retry",confirmed);await wait("agent converged",async()=>(await status()).bindings.find(x=>x.binding_id===report.bindingId)?.synchronized);
       report.ok=["realConflictVisible","historyCommitted","sameOperationSamePath","foreignVaultHistoryRejected","foreignVaultRestoreRejected","trashNamePreserved"].every(k=>report[k]===true);
     }else{throw new Error("unknown S083 acceptance phase");}
-  }catch(e){report.error=String(e);report.settings=await settings().catch(e=>String(e));report.page=document.body.innerText;}
+  }catch(e){report.error=String(e);report.settings=await settings().catch(e=>String(e));report.centerTags=await history().catch(e=>String(e));report.page=document.body.innerText;}
+  const nonce=document.querySelector('meta[name="csp-nonce"]')?.content;report.nonceStyles=/^[0-9a-f]{32}$/.test(nonce??"")&&[...document.querySelectorAll("style")].every(style=>style.nonce===nonce);report.cspViolations=cspViolations;report.ok=report.ok&&report.nonceStyles&&report.cspViolations.length===0;
   await invoke("acceptance_report",{report});
 });

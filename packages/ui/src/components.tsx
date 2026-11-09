@@ -1,7 +1,8 @@
-import { useId, type ButtonHTMLAttributes, type ReactNode } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { Button as MantineButton, Card, Group, Modal, Stack, Table as MantineTable, Text, Title, type ButtonProps } from "@mantine/core";
 
-export function Button({ children, className = "", type = "button", ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button className={`vs-button ${className}`} type={type} {...props}>{children}</button>;
+export function Button({ type = "button", ...props }: ButtonProps & Omit<ComponentPropsWithoutRef<"button">, keyof ButtonProps>) {
+  return <MantineButton type={type} {...props} />;
 }
 
 export interface TableColumn<T> { readonly key: string; readonly title: string; readonly render: (row: T) => ReactNode }
@@ -9,44 +10,26 @@ export function Table<T>({ caption, columns, rows, rowKey, emptyMessage }: {
   caption: string; columns: readonly TableColumn<T>[]; rows: readonly T[];
   rowKey: (row: T) => string; emptyMessage: string;
 }) {
-  return <div className="vs-table-wrap"><table><caption>{caption}</caption>
-    <thead><tr>{columns.map(column => <th scope="col" key={column.key}>{column.title}</th>)}</tr></thead>
-    <tbody>{rows.length === 0
-      ? <tr><td colSpan={columns.length}>{emptyMessage}</td></tr>
-      : rows.map(row => <tr key={rowKey(row)}>{columns.map(column => <td key={column.key}>{column.render(row)}</td>)}</tr>)}
-    </tbody></table></div>;
+  return <Card component="section" withBorder padding={0} aria-label={caption}>
+    <Group justify="space-between" p="md"><Title order={3} size="h4">{caption}</Title><Text size="xs" c="dimmed">本页 {rows.length} 项</Text></Group>
+    <MantineTable.ScrollContainer minWidth={640}>
+      <MantineTable aria-label={caption} highlightOnHover verticalSpacing="sm" horizontalSpacing="md" className="data-table">
+        <MantineTable.Thead><MantineTable.Tr>{columns.map(column => <MantineTable.Th scope="col" key={column.key}>{column.title}</MantineTable.Th>)}</MantineTable.Tr></MantineTable.Thead>
+        <MantineTable.Tbody>{rows.length ? rows.map(row => <MantineTable.Tr key={rowKey(row)}>{columns.map(column => <MantineTable.Td key={column.key}>{column.render(row)}</MantineTable.Td>)}</MantineTable.Tr>) : <MantineTable.Tr><MantineTable.Td colSpan={columns.length}><Text ta="center" c="dimmed" py="md">{emptyMessage}</Text></MantineTable.Td></MantineTable.Tr>}</MantineTable.Tbody>
+      </MantineTable>
+    </MantineTable.ScrollContainer>
+  </Card>;
 }
 
-/** 原生模态提供焦点围栏和 Escape；调用者控制 open/close 和业务动作。 */
-export function Dialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  const titleId = useId();
-  return <dialog aria-labelledby={titleId} ref={element => {
-    if (element && !element.open) element.showModal();
-  }} onCancel={event => { event.preventDefault(); onClose(); }}>
-    <h2 id={titleId}>{title}</h2>{children}<Button onClick={onClose}>关闭</Button>
-  </dialog>;
-}
-
-export interface NavItem { readonly path: string; readonly label: string }
-export function PageShell({ product, items, activePath, status, children }: {
-  product: string; items: readonly NavItem[]; activePath: string; status: ReactNode; children: ReactNode;
+/** 保持组件挂载并控制 opened，使 Mantine 能恢复打开对话框前的焦点。 */
+export function Dialog({ opened = true, title, children, onClose, footer }: {
+  opened?: boolean; title: string; children: ReactNode; onClose: () => void; footer?: ReactNode;
 }) {
-  return <div className="vs-shell">
-    <a className="vs-skip" href="#main-content" onClick={event => {
-      event.preventDefault();
-      event.currentTarget.closest(".vs-shell")?.querySelector<HTMLElement>("main")?.focus();
-    }}>跳到主要内容</a>
-    <aside><div className="vs-brand">vaultsyncd<span>{product}</span></div>
-      <nav aria-label="主要导航">{items.map(item => <a href={`#${item.path}`} key={item.path}
-        aria-current={activePath === item.path ? "page" : undefined}>{item.label}</a>)}</nav>
-      <div className="vs-sidebar-note">文件有据可查，修改始终保留。</div>
-    </aside>
-    <div className="vs-workspace"><header><span>{product}</span><div role="status">{status}</div></header>
-      <main id="main-content" tabIndex={-1}>{children}</main><footer>vaultsyncd · 文件同步与恢复</footer>
-    </div>
-  </div>;
+  return <Modal opened={opened} onClose={onClose} title={title} centered>
+    <Stack>{children}{footer ?? <Group justify="flex-end"><Button data-autofocus variant="default" onClick={onClose}>关闭</Button></Group>}</Stack>
+  </Modal>;
 }
 
 export function EmptyState({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="vs-empty"><h2>{title}</h2><p>{children}</p></section>;
+  return <Card withBorder><Stack align="center" gap="sm" py="md"><Title order={2} size="h3">{title}</Title><div>{children}</div></Stack></Card>;
 }

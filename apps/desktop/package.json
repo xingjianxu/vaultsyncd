@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "@mantine/core": "9.7.5",
+    "@mantine/hooks": "9.7.5",
+    "@mantine/notifications": "9.7.5",
     "@tauri-apps/api": "2.12.4",
     "@vaultsyncd/local-ipc-types": "workspace:*",
     "@vaultsyncd/ui": "workspace:*",

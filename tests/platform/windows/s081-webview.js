@@ -1,4 +1,6 @@
 // Real WebView + real React forms + real named pipe. Test feature only.
+const cspViolations = [];
+document.addEventListener("securitypolicyviolation", event => cspViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI }));
 window.addEventListener("DOMContentLoaded", async () => {
   const report = { ok: false };
   const fixture = window.__S081_FIXTURE__;
@@ -21,7 +23,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     [...document.querySelectorAll("button")].find(b => b.textContent === label && !b.disabled).click();
     await delay();
   }
-  const confirmed = () => text().includes("操作已由 agent 确认。");
+  const confirmed = () => document.querySelector("[data-agent-feedback]")?.textContent === "操作已由 agent 确认。";
   try {
     await wait("React agent snapshot", () => document.querySelector('[name="server_id"]')?.value?.length === 32);
     field("server_id", fixture.serverId); field("server_url", fixture.url); field("ca_file", "");
@@ -71,8 +73,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     report.mergeCompleted = true;
     await click("暂停"); await wait("pause visible", () => text().includes("已暂停")); report.pauseVisible = true;
     await click("恢复"); await wait("resume visible", () => !text().includes("已暂停")); report.resumeVisible = true;
-    report.noBrowserCredentialStorage = localStorage.length === 0 && sessionStorage.length === 0;
-    report.ok = report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
+    report.noBrowserCredentialStorage = Object.keys(localStorage).every(key => key === "mantine-color-scheme-value" && ["auto", "light", "dark"].includes(localStorage.getItem(key))) && sessionStorage.length === 0;
+    const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
+    report.nonceStyles = /^[0-9a-f]{32}$/.test(nonce ?? "") && [...document.querySelectorAll("style")].every(style => style.nonce === nonce);
+    report.cspViolations = cspViolations;
+    report.ok = report.nonceStyles && report.cspViolations.length === 0 && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

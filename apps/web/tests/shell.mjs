@@ -23,7 +23,8 @@ try {
     } else {
       assert.match(html, /未连接/);
       assert.match(html, /aria-current="page"/);
-      assert.match(html, /本机命名管道/);
+      assert.match(html, /连接设置/);
+      assert.match(html, /账号/);
       console.log("desktop: 初始渲染明确未连接，保留桌面管理壳");
     }
   }

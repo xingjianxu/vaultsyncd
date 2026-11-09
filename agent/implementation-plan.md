@@ -1564,6 +1564,14 @@
 - 验收：根 typecheck、Web test/build，真实 Chromium + 独立 btrfs 服务验证多版本、特殊名称、键盘菜单、分页、空态、网络错误/重试、关闭/切换竞态、明暗窄屏及CSP；分页/空态等若用受控响应，证据须明确区分。
 - 交接：`agent/tasks/S150.md` 及批次；原5张blocked首发门禁保持。
 
+### S152 — 客户端 UI 与 Web 统一为 Mantine
+
+- 依据：2026-11-09 用户要求按已讨论方案执行，允许 subagent；S151 编号已有用途，本卡续 S152。前置 S076/S119/S141/S150 done；design §5.6、§18.1、§24。
+- 结果：客户端沿用 Tauri/agent IPC，页面采用 Mantine 默认主题及现成组件，统一 48px 顶栏、响应式导航、明暗切换、表单/表格/确认窗/通知；主题和纯展示组件由 packages/ui 提供，Web 共用。
+- 拆分：S152-a 共享层和 Web 接入、S152-b 桌面功能页、S152-c 浏览器/Windows 原生验收，主 agent 集成入口及 CSP；不改同步/认证/数据库/wire 语义，不含生产部署。
+- 验收：根 typecheck、两端 build、Web test、Nix Web 构建；真实 Chromium 明暗×320/390/768/1440/1920、五桌面路由、断开状态/键盘/确认窗；Windows 原生连接/绑定、文件及历史/通知回归，必要 Rust 检查。
+- 交接：`agent/tasks/S152.md` 和子卡；须所有验证完成后标 done、合 master 并清理。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

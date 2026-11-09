@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Badge } from "@mantine/core";
 
 /**
  * 徽章的视觉基调。它只描述展示语气，不是同步状态本身：状态与拒绝原因由 Rust 纯核心定义
@@ -16,9 +17,6 @@ export type StatusBadgeProps = {
  * 文案由调用方（desktop/web）提供，因此同一状态在两个应用里可以有不同的措辞。
  */
 export function StatusBadge({ tone = "neutral", children }: StatusBadgeProps) {
-  return (
-    <span className={`vs-status-badge vs-status-badge--${tone}`} data-tone={tone}>
-      {children}
-    </span>
-  );
+  const colors = { neutral: "gray", info: "blue", success: "green", warning: "yellow", danger: "red" } as const;
+  return <Badge color={colors[tone]} variant="light" className="status-badge" data-tone={tone}>{children}</Badge>;
 }
