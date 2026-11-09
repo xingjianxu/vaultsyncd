@@ -1527,6 +1527,13 @@
 - 验收：保存清理清单、容量、旧 generation 与 GC roots；主机撤试用挂载经 pure build → dry → test/健康 → switch；相关脚本语法/CI检查、真实独立测试卷 create/verify/cleanup；生产身份、挂载、SSH 与运行中 VM 保持。
 - 交接：`agent/tasks/S146.md`，记录保留路径、清理结果与后续位置；不改变原5张 blocked 首发门禁。
 
+### S148 — Web 登录后自动连接服务
+
+- 依据：用户要求“登录web管理端后，自动连接服务”；前置 S145 done；design §17.1、§18.1。
+- 范围：登录成功与刷新恢复会话后自动执行同源健康检查；所有管理路由显示真实连接状态，保留手动检查/重试。未登录不自动检查，退出取消在途请求，旧响应不影响新会话；不增加轮询或改变认证/同步语义。
+- 验收：Web test、根 typecheck、Web build；真实 Chromium + 隔离 btrfs 服务验证匿名无检查、登录/刷新自动检查、导航不重复、离线失败/手动恢复与退出取消/CSP。
+- 交接：`agent/tasks/S148.md`；本卡不含生产部署，保留 S147 独立工作树。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
