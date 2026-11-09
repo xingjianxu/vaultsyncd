@@ -1564,6 +1564,13 @@
 - 验收：根 typecheck、Web test/build，真实 Chromium + 独立 btrfs 服务验证多版本、特殊名称、键盘菜单、分页、空态、网络错误/重试、关闭/切换竞态、明暗窄屏及CSP；分页/空态等若用受控响应，证据须明确区分。
 - 交接：`agent/tasks/S150.md` 及批次；原5张blocked首发门禁保持。
 
+### S152 — 将版本历史版服务端部署到本机
+
+- 依据：用户2026-11-09要求“部署服务端”；前置 S150、S151 done；design §19.1—19.3。
+- 范围：固定当前已提交源89a9cf4，部署S150文件版本历史；保留正式Vault路径、数据、身份与schema18，沿用c20199e的运行依赖锁，保留main尚未激活的锁升级。
+- 验收：部署前完整备份并verify；运行配置pure求值复现，pure build→dry→test→HTTPS/IPC/身份/归属→switch；生产版本历史只读浏览、静态资产一致及既有服务健康。
+- 交接：`agent/tasks/S152.md`；原5张blocked首发门禁保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
