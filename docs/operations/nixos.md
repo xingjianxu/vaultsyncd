@@ -370,6 +370,8 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 
 ## S146 闲置目录清理与临时数据集中（2026-11-09）
 
+后续路径覆盖：S161 已将本节历史 build/deploy 目录迁入临时根，当前映射及验收见文末 S161；下文旧路径为当时证据。
+
 用户要求清理闲置目录，今后临时任务数据、测试卷、下载与缓存统一在 `/data/vaultsyncd-temp`，按任务/run_id或cache用途分目录。根目录本机为xingjian:users 0711，私密证据与备份子目录0700；不可把整个临时根当成单次任务的删除目标。新部署证据默认 `/data/vaultsyncd-temp/evidence/deploy`。历史 `vaultsyncd-build` / `vaultsyncd-deploy` 仍保留原路径的原始验收资料、备份与GC roots，后续不在这些历史目录新建任务。
 
 清理前逐项核对挂载和进程打开的路径；清理36项、`du`合计11,084,029,952字节（约10.3GiB），包括S097/S098编译缓存、退役ARM64虚拟机存储和测试镜像、6个S075测试目录、S096试用镜像与3处旧凭据/开发证书目录。S075原始材料先私密归档。历史build目录剩约18MiB、deploy约87MiB；所有原始日志/结果及发布GC roots、S113快照、S144清库前归档和当前初始化凭据保留。`df`前后未显示相应物理空间下降，/data存在Snapper快照；本次不删除系统/数据快照，不声称释放10.3GiB独占物理空间。
@@ -412,3 +414,11 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 生产真实Chromium验证编号与API一致、完整选择/只读、刷新、明暗320/1440完整显示与无横向溢出、严格TLS1.3/CSP/cookie/逐字节全量资产，登录退出正常，无pageerror。正式ServerId、schema18/FK、5工作文件摘要、10既有服务PID/InvocationID及3应用保持。原始脚本、日志、截图、result与部署记录永久保存`/data/vaultsyncd-temp/S160-20261109/evidence/`，部署run为`deploy/local-20261109T201823-1530268/`。完整备份及收据在该任务`backups/`，异盘`/wrd/prj/vaultsyncd/artifacts/S160/backups/`已独立verify。
 
 旧system/boot GC roots保留；直接回退入口generation268 `/nix/store/pwcp1j07c6mx6ln9a0z6n8whabhds0jk-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，按S113先test核对HTTPS/IPC再switch，并同步主机pin至2cfc2bf。本卡未实际回退、未做Windows或容量复验；原blocked首发门禁不变。项目合并清理见[S160](../../agent/tasks/S160.md)。
+
+## S161 历史 build/deploy 资料迁移（2026-11-09）
+
+当前归档位置为 `/data/vaultsyncd-temp/vaultsyncd-build`（原 `/data/vaultsyncd-build`）与 `/data/vaultsyncd-temp/vaultsyncd-deploy`（原 `/data/vaultsyncd-deploy`）；旧目录和兼容软链均不存在。历史命令、日志和收据不批量改写，查阅或恢复时仅替换这两个根前缀。这些归档仍含长期证据、备份、发布/回退 GC roots，不能按普通临时缓存删除。
+
+同文件系统rename保留全部482个普通文件的SHA256/元数据和目录inode，S113只读btrfs快照仍ID2663，UUID与只读标志保持；72个GC roots先临时固定再登记新路径，验证后移除旧登记及临时根。首次核对发现67个根链接属主被登记命令改变，恢复属主后639项完整清单一致。服务进程身份、当前system及HTTP/严格TLS的HTTPS健康保持，无重启/rebuild；不触碰正式目录和lab。
+
+原始plan、前后清单、登记日志、快照/服务身份、健康结果及result.json（passed=true）在 `/data/vaultsyncd-temp/S161-relocate-20261109T124412Z/evidence/`。Nix print-roots实际识别72个新根；枚举附带移除4个既有失效auto链接及2个陈旧temproots文件，未删除store产物或实际系统回退。操作记录与限制见 [S161](../../agent/tasks/S161.md)。

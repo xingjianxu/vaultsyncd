@@ -1629,6 +1629,13 @@
 - 验收：Web typecheck/test/build、既有认证浏览器回归；真实 Chromium 核对 API 一致性、失败/重试、退出取消、明暗窄屏；通过后部署本机并验证 HTTPS/身份/界面。
 - 交接：`agent/tasks/S160.md`；原 blocked 首发门禁保持。
 
+### S161 — 历史 build/deploy 资料迁入临时根
+
+- 依据：2026-11-09 用户要求将 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 集中到临时根；前置 S146 done，design §6、§19.3。
+- 范围：同文件系统重命名到 `/data/vaultsyncd-temp/` 下的同名目录，保留证据、备份、权限、btrfs 快照身份；迁移 Nix GC roots，历史记录通过新旧路径映射追溯。
+- 验收：运行与挂载引用检查、迁移前后文件摘要及元数据、GC roots 登记与目标存在、快照身份、服务进程/系统及 HTTP/HTTPS 健康；不触碰正式数据、lab 或重建服务。
+- 交接：`agent/tasks/S161.md`；原 blocked 首发门禁保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

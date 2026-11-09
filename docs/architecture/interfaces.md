@@ -2700,3 +2700,7 @@ S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开
 - schema18 追加 `client_connections`；每次登录在会话写事务内创建记录及接入类别，刷新在原事务移动 `session_id` 并保持连接id/首次时间，注销/改密/撤销状态取最新会话。旧刷新链迁移成一次原始登录，类型和活动未知；迁移前自动一致备份。旧二进制拒绝18，回退恢复整份17备份，不能仅降二进制。
 - `server-store::clients::{list,cursor_exists,touch,set_kind}` 为持久适配器；认证通过后更新活动（UTC秒、30秒节流、时钟倒退不覆盖）。活动五分钟为recent，其余有效会话inactive，撤销/刷新期限到期优先；无心跳，不作为实时在线或同步进度。备份清除会话时以FK SET NULL保留历史，恢复后unknown。
 - Web `#/clients` 使用生成 `listClients` 和 `BrowserAuth.request`（同源cookie/401单飞刷新/全局失效门禁），支持刷新、加载更多和失败重试。设备标签按文本转义；相同标签不合并设备，不引入客户端新API或设备审批。
+
+## S161 历史资料路径映射
+
+历史 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 分别迁至 `/data/vaultsyncd-temp/vaultsyncd-build`、`/data/vaultsyncd-temp/vaultsyncd-deploy`，无旧入口软链。历史收据按根前缀映射查阅，不改写原始字节；72个Nix GC roots已登记新位置，资料仍为长期归档。协议/schema/应用接口不变，迁移与验证见 `agent/tasks/S161.md` 和 `docs/operations/nixos.md` 的 S161 节。

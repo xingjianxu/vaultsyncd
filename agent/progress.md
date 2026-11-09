@@ -177,6 +177,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S161 | done | 历史build/deploy已迁入temp同名目录；482文件/72 GC roots/快照身份/服务健康核对通过；整合见交接 | [S161](tasks/S161.md) |
 | S157 | done | 源5a71062；主机pin f7d1997/main整合a02b61e；generation266；交接3ced4a5/整合4dd1ea6已ff合master，两任务树/分支已清理 | [S157](tasks/S157.md) |
 | S155 | done | 实现70983b7、整合b291440、交接41636ba已ff合master；本地5/5、xtask23/23、干净提交检查通过；任务树/分支已清理 | [S155](tasks/S155.md) |
 | S156 | done | 实现1fbe353、交接/整合06d7427已ff合master，任务树/分支已清理；19+9+8项通过；gh未登录、未真实上传 | [S156](tasks/S156.md) |
