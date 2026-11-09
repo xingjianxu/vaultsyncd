@@ -464,6 +464,11 @@ impl core::fmt::Debug for LoginRequest {
 pub struct ManagedVault {
     /// 本进程采集观测
     pub collection: VaultCollection,
+    /// 当前已提交且未删除文件的逻辑总字节数；按文件计数，不含历史与回收站，不代表物理占用。旧服务端可缺省。
+    #[serde(with = "crate::decimal::option")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_bytes: Option<String>,
     /// 现场挂载和存储状态
     pub health: VaultHealth,
     /// 可执行的修复建议

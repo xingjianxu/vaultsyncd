@@ -554,6 +554,8 @@ export function decodeLoginRequest(value: unknown): LoginRequest {
 export interface ManagedVault {
   /** 本进程采集观测 */
   collection: VaultCollection;
+  /** 当前已提交且未删除文件的逻辑总字节数；按文件计数，不含历史与回收站，不代表物理占用。旧服务端可缺省。 */
+  file_bytes?: string;
   /** 现场挂载和存储状态 */
   health: VaultHealth;
   /** 可执行的修复建议 */
@@ -572,6 +574,7 @@ export function decodeManagedVault(value: unknown): ManagedVault {
   const object = expect_object(value, "ManagedVault");
   return {
     collection: decodeVaultCollection(object.collection),
+    file_bytes: object.file_bytes === undefined ? undefined : expect_decimal(object.file_bytes, "ManagedVault.file_bytes"),
     health: decodeVaultHealth(object.health),
     next_step: expect_string(object.next_step, "ManagedVault.next_step"),
     path: expect_string(object.path, "ManagedVault.path"),

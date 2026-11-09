@@ -786,6 +786,110 @@ mod tests {
 
     const EVENTS: &str = r#"[{"kind":"content_put","entry":"01"}]"#;
 
+    #[tokio::test]
+    async fn vault_file_bytes_count_live_files_once_and_preserve_scope() {
+        use crate::vaults::vaults_with_file_bytes_of_owner;
+        let dir = TestDir::new("vault-file-bytes");
+        let database = open_database(&dir).await;
+        let owner = seed_owner(&database, 0x11).await;
+        let other = seed_owner(&database, 0x12).await;
+        let (vault, root) = register_vault(&database, owner, 0x21).await;
+        let (empty, _) = register_vault(&database, owner, 0x22).await;
+        let (foreign, _) = register_vault(&database, other, 0x23).await;
+        let first = seed_file(&database, owner, vault, root, 0x51, "first").await;
+        let copy = seed_file(&database, owner, vault, root, 0x52, "copy").await;
+        let zero = seed_file(&database, owner, vault, root, 0x53, "zero").await;
+        let mut conn = database.pool().acquire().await.unwrap();
+        let rows = vaults_with_file_bytes_of_owner(&mut conn, owner)
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(|row| row.1).sum::<u64>(), 0);
+        assert_eq!(rows.len(), 2);
+        assert!(!rows.iter().any(|row| row.0.id == foreign));
+        drop(conn);
+        for (marker, size) in [(0x41, 4096), (0x42, 1536), (0x43, 0)] {
+            record_object_ok(&database, owner, vault, marker, size).await;
+        }
+        for (id, file, object, size) in [
+            (0x61, first, 0x41, 4096),
+            (0x62, first, 0x42, 1536), // 旧版本仍保留，不能计入容量。
+            (0x63, copy, 0x42, 1536),  // 共用对象的另一个文件仍独立计数。
+            (0x64, zero, 0x43, 0),
+        ] {
+            commit_version(
+                &database,
+                owner,
+                vault,
+                NewVersion {
+                    id: version(id),
+                    vault,
+                    entry: file,
+                    object_hash: hash(object),
+                    size,
+                    created_seq: VaultSeq::ZERO,
+                    origin: VersionOrigin::Client,
+                    at: at(10),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let mut conn = database.pool().acquire().await.unwrap();
+        let rows = vaults_with_file_bytes_of_owner(&mut conn, owner)
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().find(|row| row.0.id == vault).unwrap().1, 3072);
+        assert_eq!(rows.iter().find(|row| row.0.id == empty).unwrap().1, 0);
+        drop(conn);
+        let mut tx = database.begin_write().await.unwrap();
+        entries::soft_delete_entry(&mut tx, owner, copy, at(11))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let mut conn = database.pool().acquire().await.unwrap();
+        let rows = vaults_with_file_bytes_of_owner(&mut conn, owner)
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().find(|row| row.0.id == vault).unwrap().1, 1536);
+        assert_eq!(
+            vaults_with_file_bytes_of_owner(&mut conn, other)
+                .await
+                .unwrap()[0]
+                .0
+                .id,
+            foreign
+        );
+        drop(conn);
+        record_object_ok(&database, owner, vault, 0x44, i64::MAX as u64).await;
+        commit_version(
+            &database,
+            owner,
+            vault,
+            NewVersion {
+                id: version(0x65),
+                vault,
+                entry: zero,
+                object_hash: hash(0x44),
+                size: i64::MAX as u64,
+                created_seq: VaultSeq::ZERO,
+                origin: VersionOrigin::Client,
+                at: at(12),
+            },
+        )
+        .await
+        .unwrap();
+        let mut conn = database.pool().acquire().await.unwrap();
+        assert!(
+            matches!(
+                vaults_with_file_bytes_of_owner(&mut conn, owner).await,
+                Err(crate::vaults::VaultError::Db(_))
+            ),
+            "容量求和溢出不能伪造零或截断"
+        );
+        drop(conn);
+        database.close().await;
+    }
+
     /// 在一个事务里追加批次并记录对象+版本，返回 (批次, 版本记录)。
     async fn commit_version(
         database: &Database,

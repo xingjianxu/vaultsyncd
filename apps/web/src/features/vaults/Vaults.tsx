@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { ApiError, listManagedVaults, registerVault, type ManagedVault, type ManagedVaultList, type VaultCollectionState } from "@vaultsyncd/api-client";
-import { Button, Code, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
+import { Anchor, Button, Code, Group, Modal, Stack, Text, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { EmptyState, StatusBadge, Table } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
+import { filesLocation, formatBytes } from "../files/browser";
 
 const collectionLabels: Record<VaultCollectionState, string> = {
   not_scanned: "尚未扫描", scanning: "正在采集", pending: "等待稳定或重试", complete: "本进程初始采集完成", blocked: "采集受阻",
@@ -68,7 +69,7 @@ export function VaultsPanel() {
     } finally { setRegistering(false); }
   }
   if (!auth.account) return <EmptyState title="请先登录">从账号与会话页面登录 owner 后查看 Vault 配置与健康。</EmptyState>;
-  return <Stack>
+  return <Stack className="vaults-panel">
     <div className="vaults-toolbar" role="group" aria-label="Vault 目录工具栏">
       <Button variant="default" onClick={() => setDialog("health")}>Vault 健康与采集</Button>
       <Button disabled={!data?.allowed_bases.length || loading || registering} onClick={() => setDialog("register")}>注册服务器目录</Button>
@@ -81,7 +82,8 @@ export function VaultsPanel() {
     <Feedback message={error} />
     {loading && <Text role="status" size="sm" c="dimmed">正在核验目录与采集状态…</Text>}
     {data && <Table caption="已注册 Vault" rows={data.vaults} rowKey={vault => vault.vault_id} emptyMessage="尚未注册 Vault" columns={[
-      { key: "path", title: "服务器路径", render: vault => <Text component="code" size="sm" className="break-all">{vault.path}</Text> },
+      { key: "path", title: "服务器路径", render: vault => <Anchor href={`#${filesLocation(vault.vault_id)}`} size="sm" className="break-all"><code>{vault.path}</code></Anchor> },
+      { key: "size", title: "文件容量", render: vault => <Text size="sm" title={vault.file_bytes === undefined ? undefined : `${BigInt(vault.file_bytes).toLocaleString("zh-CN")} 字节（当前已提交文件）`}>{formatBytes(vault.file_bytes)}</Text> },
       { key: "id", title: "Vault ID", render: vault => <Text component="code" size="sm" className="break-all">{vault.vault_id}</Text> },
       { key: "health", title: "状态", render: vault => <StatusBadge tone={vault.health === "unavailable" ? "danger" : "success"}>{vault.health === "healthy" ? "可用" : "Vault 不可用"}</StatusBadge> },
       { key: "seq", title: "已提交序号", render: vault => <Text component="code" size="sm">{vault.vault_seq}</Text> },

@@ -1,6 +1,6 @@
 //! 服务端 Vault 表（`vaults`）的事务内读写与 owner scope（`docs/design.md` §7.2、§17.1）。
 //!
-//! 边界：本模块只读写 `vaults` 与其合成根条目，不判挂载、不读路径元数据、不做对象或事件 I/O。
+//! 边界：本模块读写 `vaults` 与其合成根条目，并聚合已提交文件容量；不判挂载、不读路径元数据、不做对象或事件 I/O。
 //! 写函数接收调用方已开的事务；`insert_vault` 与 `entries` 的根条目写入在同一个事务里完成，
 //! 因此不存在“有 Vault 却没有根条目”的中间状态。
 //!
@@ -254,6 +254,8 @@ pub async fn vaults_of_owner(
 }
 
 /// 本机管理的有界 Vault 页：按身份排序，最多 101 条（100 条与一条 next-page 探针）。
+///
+/// 普通管理清单的文件容量见 [`vaults_with_file_bytes_of_owner`]。
 pub async fn vaults_of_owner_page(
     conn: &mut SqliteConnection,
     owner: UserId,
@@ -268,6 +270,41 @@ pub async fn vaults_of_owner_page(
     .await
     .map_err(VaultError::Db)?;
     rows.into_iter().map(VaultRow::into_record).collect()
+}
+
+/// 在同一 SQLite 读快照中返回账号的 Vault、序号与当前文件逻辑容量。
+/// 每个活跃文件只计其已提交内容版本一次；同摘要文件分别计数，不含历史与回收站。
+/// 空 Vault 为零，SQL 求和溢出及其他读取错误明确失败，不返回伪造的零。
+pub async fn vaults_with_file_bytes_of_owner(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+) -> Result<Vec<(VaultRecord, u64)>, VaultError> {
+    #[derive(sqlx::FromRow)]
+    struct UsageRow {
+        #[sqlx(flatten)]
+        vault: VaultRow,
+        file_bytes: i64,
+    }
+    let rows = sqlx::query_as::<_, UsageRow>(&format!(
+        "SELECT {VAULT_COLUMNS}, \
+         (SELECT COALESCE(SUM(v.size), 0) FROM entries e \
+          JOIN versions v ON v.id = e.content_version_id \
+            AND v.vault_id = e.vault_id AND v.entry_id = e.id \
+          WHERE e.vault_id = vaults.id AND e.kind = 'file' AND e.deleted_at IS NULL) AS file_bytes \
+         FROM vaults WHERE owner_id = ?1 ORDER BY absolute_path"
+    ))
+    .bind(owner.as_bytes().as_slice())
+    .fetch_all(conn)
+    .await
+    .map_err(VaultError::Db)?;
+    rows.into_iter()
+        .map(|row| {
+            let bytes = u64::try_from(row.file_bytes).map_err(|_| VaultError::MalformedRow {
+                column: "file_bytes",
+            })?;
+            Ok((row.vault.into_record()?, bytes))
+        })
+        .collect()
 }
 
 /// 列出全部已注册 Vault，按路径文本排序（启动恢复用）。

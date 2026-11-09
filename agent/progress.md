@@ -1,5 +1,7 @@
 # 实施进度
 
+本轮：**S159 in_progress**，Vault 服务器路径直达文件浏览器、当前已提交文件容量列；实现、Rust/Web/真实浏览器验收通过，准备本机部署。[交接](tasks/S159.md)。S158 发行现场保持，下一 ready 无。
+
 当前：**S157 done**（最新服务端已部署本机，共用Mantine与精简Vault工具栏上线；[交接](tasks/S157.md)）。运行/开机generation266、源`5a71062`、schema18，Vault基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确运行配置`f7d1997`（main整合`a02b61e`），未激活依赖锁升级保持；其他4张blocked门禁保持。 S156手工发行脚本已验收、未执行真实上传。
 
 最近部署：[S157](tasks/S157.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证共用界面、Vault工具栏/两个弹窗、历史、认证/自动连接、明暗320/1440及全量资产/CSP/cookie。正式身份、5工作文件/4对象与10服务/3应用保持。完整备份及异盘副本verified，旧generation265和GC roots保留；未实际回退生产。路径与恢复边界仍见[S151](tasks/S151.md)，此前应用部署见[S153](tasks/S153.md)。

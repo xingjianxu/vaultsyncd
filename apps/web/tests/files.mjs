@@ -5,7 +5,7 @@ import { createServer } from "vite";
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] } });
 try {
-  const { readDirectorySnapshot, ancestry, fileSize, fileSizeDetail, fileModified, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
+  const { readDirectorySnapshot, ancestry, formatBytes, fileSize, fileSizeDetail, fileModified, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
   const { BrowserAuth } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
   const folder = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
   const entries = [folder("r", undefined, ""), folder("d", "r", "文档"), folder("empty", "r", "空目录"),
@@ -52,6 +52,9 @@ try {
   assert.equal(fileSize({ kind: "file", size: "1536" }), "1.5 KB");
   assert.equal(fileSize({ kind: "file", size: "1048576" }), "1 MB");
   assert.equal(fileSize({ kind: "file" }), "未知");
+  assert.equal(formatBytes(undefined), "未知");
+  assert.equal(formatBytes("0"), "0 B");
+  assert.equal(formatBytes("1536"), "1.5 KB");
   assert.equal(fileSize(entries[0]), "—");
   assert.equal(fileSizeDetail({ kind: "file", size: "1536" }), "1.5 KB（1,536 字节）");
   assert.equal(fileSizeDetail(entries[0]), "—");

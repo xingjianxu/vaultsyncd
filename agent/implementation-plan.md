@@ -1608,6 +1608,13 @@
 - 验收：完整备份导出并verify及异盘副本；运行配置pure求值复现，pure build→dry/test→HTTPS/IPC/身份/目录归属→switch；生产登录、共用界面、Vault工具栏/弹窗、版本历史、静态资产与既有服务及数据保持。
 - 交接：`agent/tasks/S157.md`；S156独立任务现场保持，原生/性能容量及最终发行门禁保持。
 
+### S159 — Vault 路径跳转与文件容量
+
+- 依据：2026-11-09 用户要求点击 Vault 目录表格的服务器路径后打开对应文件浏览器；前置 S122、S154 done；design §18.1。
+- 范围：主体表格服务器路径使用原生链接，复用 filesLocation 按 VaultId 打开根目录；增加“文件容量”列。用户确认口径为当前已提交且未删除文件的逻辑总大小，按文件计数，不含历史和回收站；管理清单新增兼容可选 file_bytes 字段，旧服务缺省显示未知，不改 DB schema 或文件数据。
+- 验收：Rust 聚合/授权和协议生成一致性；Web typecheck/test/build；真实 Chromium 验证非首个 Vault、根目录、键盘和返回、刷新、容量与明暗窄屏；验收后直接部署本机并验证 HTTPS、版本及界面行为。
+- 交接：`agent/tasks/S159.md`；S158 发行现场和原 blocked 首发门禁保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
