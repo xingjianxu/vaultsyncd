@@ -1572,6 +1572,21 @@
 - 验收：根 typecheck、两端 build、Web test、Nix Web 构建；真实 Chromium 明暗×320/390/768/1440/1920、五桌面路由、断开状态/键盘/确认窗；Windows 原生连接/绑定、文件及历史/通知回归，必要 Rust 检查。
 - 交接：`agent/tasks/S152.md` 和子卡；须所有验证完成后标 done、合 master 并清理。
 
+### S153 — 将版本历史版服务端部署到本机
+
+- 依据：用户2026-11-09要求“部署服务端”；前置 S150、S151 done；design §19.1—19.3。
+- 范围：固定当前已提交源89a9cf4，部署S150文件版本历史；保留正式Vault路径、数据、身份与schema18，沿用c20199e的运行依赖锁，保留main尚未激活的锁升级。
+- 验收：部署前完整备份并verify；运行配置pure求值复现，pure build→dry→test→HTTPS/IPC/身份/归属→switch；生产版本历史只读浏览、静态资产一致及既有服务健康。
+- 交接：`agent/tasks/S153.md`；原5张blocked首发门禁保持。
+
+### S154 — 精简 Vault 目录页面
+
+- 状态：done（用户2026-11-09直接要求）；前置 S078、S119、S134 done。
+- 依据：design §18.1、§6，沿用管理 Vault API，不改数据语义。
+- 范围：健康与采集、注册目录改为工具栏按钮打开弹窗；允许基目录在工具栏右对齐；主体保留目录清单，移除重复说明，保留实际错误与恢复建议。
+- 验收：Web typecheck/test/build；真实 Chromium 注册、错误、健康刷新/挂载故障恢复、键盘焦点与明暗窄屏布局；不部署生产。
+- 交接：`agent/tasks/S154.md`，原 blocked 首发门禁保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

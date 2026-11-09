@@ -1,10 +1,8 @@
 # 实施进度
 
-本轮：**S152 in_progress**（客户端 UI 与 Web 统一 Mantine）；工作树 `.worktrees/S152-desktop-mantine`、分支 `feat/S152-desktop-mantine`、基线 `89a9cf4`。验收及续接见 [S152](tasks/S152.md)。下一 ready：待本卡验收；原5卡 blocked 门禁保持。
+当前：**S152 done**（客户端与 Web 共用 Mantine，Windows 原生/浏览器及整合复验通过；[交接](tasks/S152.md)）。本卡与 S154 尚未部署；生产保持 S153 generation265、源`89a9cf4`、schema18、Vault 基目录`/data/vaultsyncd/vaults`；**下一 ready：无**。精确运行配置`d4c5fe7`（main整合`2c96e2f`），未激活的依赖锁升级保持；原5张blocked门禁不变。
 
-当前：**S151 done**（正式 Vault 基目录已迁至 `/data/vaultsyncd/vaults`，原数据、身份及历史保留）。S001—S151 共151卡：146 done、5 blocked；**下一 ready：无**。运行/开机generation264，正式服务源`d9cfee9`、schema18；S150 尚未部署生产。主机main保留尚未激活的全量锁升级，精确运行配置为`c20199e`（main整合`a3a62a9`）；迁移及回退见[S151](tasks/S151.md)，上次应用部署见[S149](tasks/S149.md)，临时目录约定见[S146](tasks/S146.md)。
-
-最近部署：[S149](tasks/S149.md) 源`d9cfee975ba2656feffd560b8cf0be46ba516442`、配置pin`f5153d8`（main整合`fb293d5`）、generation263。pure构建含73项包内测试，dry/test/HTTPS/IPC/switch及生产浏览器通过：9路由匿名门禁、客户端当前连接/刷新身份、登录及刷新自动连接/路由不重复、文件浏览、退出/后退、明暗320/1440、全量资产/CSP/cookie。schema17→18成功，ServerId/账号/正式文件与对象/10服务/3应用保持；完整升级前备份已导出、异盘校验并隔离恢复。回退须用schema17整套备份恢复并换epoch，不能只切旧generation262；未实际回退生产。主机main的待启用依赖锁保持。S144清库历史仍见[S144](tasks/S144.md)。
+最近部署：[S153](tasks/S153.md) pure构建内73项测试、dry/test/HTTPS/IPC/switch通过；生产真实Chromium验证文件版本历史、刷新/键盘/明暗320/1440、认证/自动连接/CSP/cookie及全部资产一致。身份、正式文件/对象、新Vault路径及10服务/3应用保持。完整备份及异盘副本verified，旧generation264及GC roots保留；未实际回退生产。路径迁移与恢复边界见[S151](tasks/S151.md)，此前schema17→18升级及恢复演练见[S149](tasks/S149.md)。
 
 恢复顺序：**S101 hosted → S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -30,6 +28,8 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S152 | 两端共用 Mantine；双端构建/Web九套/桌面布局及Windows五套原生通过，未部署 | 实现bfdf14e；整合/清理见交接 | [S152](tasks/S152.md) |
+| S153 | 版本历史版服务端部署generation265；真实生产浏览器/资产/数据及既有服务验收通过 | 源89a9cf4；主机pin d4c5fe7、main整合2c96e2f；生命周期见交接 | [S153](tasks/S153.md) |
 | S147 | 持久记录客户端连接；Web按账号分页查看活动/会话，schema18迁移与真实浏览器通过；未部署 | 实现5403c3c、整合S148 1e9367f、交接de1f96e已ff合master；任务树/分支已清理 | [S147](tasks/S147.md) |
 | S148 | 登录/刷新恢复会话后自动检查服务；退出取消、失败重试、真实 Chromium 验收；未部署 | 实现`3885ab4`；整合/清理见交接 | [S148](tasks/S148.md) |
 | S145 | 统一 Web 登录页、匿名全路由门禁、全局会话失效；真实认证/90组布局/五业务回归及generation261线上验收 | 实现6e58bc2、交接c9b092d已ff合master；主机pin18a7df5；任务树/分支已清理 | [S145](tasks/S145.md) |
@@ -174,6 +174,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S154 | done | 实现/验收509940a已ff合master，任务树/分支已清理；未部署 | [S154](tasks/S154.md) |
 | S151 | done | 项目63be203已ff合master；主机c20199e/main整合a3a62a9；generation264，两任务树/分支已清理 | [S151](tasks/S151.md) |
 | S150 | done | 实现/验收65d56ae已ff合master，任务树/分支已清理；未部署生产 | [S150](tasks/S150.md) |
 | S149 | done | 源d9cfee9；主机pin f5153d8/main整合fb293d5；交接98de5a5已ff合master，两任务树/分支已清理 | [S149](tasks/S149.md) |

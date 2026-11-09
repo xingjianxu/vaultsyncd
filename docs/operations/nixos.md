@@ -379,3 +379,12 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 正式Chromium通过严格TLS1.3、9路由匿名门禁、客户端当前连接/浏览器类型/刷新保持身份、登录与刷新自动连接且换页不重复、文件浏览、退出/后退、CSP/cookie和全部静态资产逐字节一致；明暗320/1440无页面横向溢出。ServerId `9395d9cacd7d3fb4b746592806a8b5cb`、账号、Vault/条目/版本/对象计数及正式文件摘要保持，10服务PID/InvocationID、3应用200保持。
 
 升级前完整归档`/data/vaultsyncd-temp/S149-deploy-20261109T095905Z/backups/pre-upgrade.vsbk`已校验并在另一文件系统`/wrd/prj/vaultsyncd/artifacts/S149/backups/`保存校验副本；旧包已restore validate/apply到隔离空目录，schema17/FK及对象/工作文件摘要匹配。回退不能只切旧generation262：须按备份文档恢复整套schema17到新空状态/Vault目录、更换epoch和重新登录，再更新配置及pin。未实际回退生产。部署日志、before/final/result、截图、恢复校验与旧system GC roots保留在该run的`evidence/`；详见[S149](../../agent/tasks/S149.md)。原5张blocked卡不变，无下一ready。
+
+
+## S153 版本历史版服务端部署（generation265，2026-11-09）
+
+源`89a9cf4ef47b9b2af1ee2cedff6b82c10c082205`包含S150文件右键版本历史，生产入口 https://vsyncd.132140.xyz 。沿用S151已验收路径`/data/vaultsyncd/vaults`，schema18不变。现有deploy-local入口以c20199e隔离主机配置pure构建，73包内测试、dry/test/HTTPS/IPC/身份/归属/switch全部通过，运行与开机generation265，system `/nix/store/0jnii77r4410z7ffq2ak1s820b021iq4-nixos-system-wks-lab-26.11.20261102.7356cc7`。主机pin `d4c5fe7099f168bcdf4433da4b78a986ad730b21`已由main `2c96e2fed546f62a80d4a85623aee729b193bced`整合，main未激活依赖锁升级保留；精确复现本次运行应使用d4c5fe7，而非main当前锁。
+
+生产真实Chromium的TLS1.3、全量资产、匿名门禁、登录/自动连接/客户端页/退出、文件版本号与摘要、刷新/键盘/Escape、明暗320/1440、CSP/cookie全通过。ServerId、schema/FK、Vault路径/历史、4工作文件和3对象摘要及10既有服务/3应用保持；未写生产同步内容。完整备份`/data/vaultsyncd-temp/S152-deploy-20261109T103922Z/backups/predeploy.vsbk`及异盘`artifacts/S152/backups/`副本/收据均verified。原始脚本/结果/日志/截图、部署result及GC roots在该run的`evidence/`。本卡因并行S152桌面任务而改编号S153，既有运行目录名保留。
+
+回退入口generation264 `/nix/store/qdd7vqh5k24dwlrxwzcgsn6mp9f75k0y-nixos-system-wks-lab-26.11.20261102.7356cc7`，可按S113先`sudo nixos-rebuild test --store-path <该旧路径>`并确认HTTPS/IPC健康，再switch并同步主机pin至c20199e的旧源。此次无schema迁移，保留S151的vaults路径；若要恢复备份仍须按备份协议恢复到空目录并更换epoch。未实际回退、生产恢复或Windows/hosted/规模复验；原首发门禁保持。交接与清理见[S153](../../agent/tasks/S153.md)。
