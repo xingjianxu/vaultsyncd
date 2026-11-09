@@ -17,6 +17,10 @@ public class PickerWindow {
  [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr window, bool altTab);
  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr window, System.Text.StringBuilder text, int length);
  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr window, System.Text.StringBuilder text, int length);
+ [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out RECT rect);
+ [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+ [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+ [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
  public static string Describe(IntPtr window) {
   var title = new System.Text.StringBuilder(512); GetWindowTextW(window, title, 512);
   var cls = new System.Text.StringBuilder(256); GetClassNameW(window, cls, 256);
@@ -42,7 +46,30 @@ function Wait-Dialog {
 }
 # Windows blocks SetForegroundWindow from a background process; join the foreground input
 # queue before retrying so the address-bar keys really land in this dialog.
+# The lab desktop can leave the Start/Search flyout or a notification banner in front,
+# which keeps the foreground lock away from this process.
+function Clear-Flyout {
+  $description = [PickerWindow]::Describe([PickerWindow]::GetForegroundWindow())
+  if ($description -match '\|(SearchHost|ShellExperienceHost)\|') {
+    Trace ('dismiss_flyout='+$description)
+    [Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Start-Sleep -Milliseconds 400
+  }
+}
+# A real click on the dialog title bar activates it without needing the foreground lock.
+function Click-DialogTitle([IntPtr]$target) {
+  $rect = New-Object PickerWindow+RECT
+  if (![PickerWindow]::GetWindowRect($target, [ref]$rect)) { return $false }
+  if ($rect.Right -le $rect.Left -or $rect.Bottom -le $rect.Top) { return $false }
+  [void][PickerWindow]::SetCursorPos($rect.Left + 40, $rect.Top + 12)
+  Start-Sleep -Milliseconds 100
+  [PickerWindow]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+  [PickerWindow]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 400
+  return ([PickerWindow]::GetForegroundWindow() -eq $target)
+}
 function Set-DialogForeground([IntPtr]$target) {
+  Clear-Flyout
   Trace ('foreground_before='+[PickerWindow]::Describe([PickerWindow]::GetForegroundWindow()))
   if ([PickerWindow]::GetForegroundWindow() -eq $target) { return $true }
   [void][PickerWindow]::SetForegroundWindow($target)
@@ -61,6 +88,7 @@ function Set-DialogForeground([IntPtr]$target) {
   [PickerWindow]::SwitchToThisWindow($target, $true)
   Start-Sleep -Milliseconds 300
   if ([PickerWindow]::GetForegroundWindow() -eq $target) { Trace 'foreground=switch'; return $true }
+  if (Click-DialogTitle($target)) { Trace 'foreground=click'; return $true }
   Trace ('foreground_after='+[PickerWindow]::Describe([PickerWindow]::GetForegroundWindow()))
   return $false
 }
