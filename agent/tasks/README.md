@@ -1,5 +1,7 @@
 # 任务交接与历史记录
 
+S157批次：共用Mantine与精简Vault版服务端已上线generation266，源5a71062；pure构建73项测试及生产浏览器/资产/身份数据/10服务与3应用验收通过。主机pin f7d1997已a02b61e合main，待激活依赖锁保持。登记cb47985、验收3ced4a5及整合4dd1ea6已ff-only合master（整合点4dd1ea6）。确认各任务树干净、提交全部在目标分支且非当前目录后，已remove `.worktrees/S157-deploy`/`.worktrees/S157-host`并branch-d对应分支。S134和历史失败部署树未动，S156已验收工具保留。永久证据/备份`/data/vaultsyncd-temp/S157-deploy-20261109/{evidence,backups}/`及异盘副本保留；无本卡阻塞，下一ready无，详见[S157](S157.md)。
+
 S155批次：移除GitHub工作流及专用代码/文档要求，保留本地验证；实施`70983b7`、整合`b291440`和验收交接`41636ba`已ff-only合master，整合点同41636ba。确认全部提交可达master、任务树干净且非当前目录后，已remove `.worktrees/S155-remove-workflows`及branch-d `chore/S155-remove-workflows`。其他任务的S152/S154实现保留，S134旧树未动；永久证据`/data/vaultsyncd-temp/S155-remove-workflows-20261109/evidence/`含本地job报告。服务端改动验收后直接部署本机的持续授权已写入AGENTS.md。下一ready无，剩余4卡blocked及当前候选发行/原生/性能要求见进度和[S155](S155.md)。
 
 S152 批次：客户端与 Web 共用 Mantine，三项子任务及 Windows 五套原生/桌面布局/Web九套通过；实现bfdf14e，整合8c1d1d8a4e229017f7e741c63135fd2e99ec2738已ff-only合master。保留并行S153部署与S154页面精简，整合后类型/Web test/build/Vault真实浏览器/Nix Web复验通过。确认干净及祖先关系后，从主树成功remove `.worktrees/S152-desktop-mantine` 并branch-d `feat/S152-desktop-mantine`；S134/S155树未动。永久日志、截图、原生二进制及哈希保留 `/data/vaultsyncd-temp/S152-desktop-mantine/evidence/`。本卡未部署或生成正式发行包，无本卡阻塞，下一ready无；原5卡blocked门禁保持。详见[S152](S152.md)。

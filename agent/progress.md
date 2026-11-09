@@ -28,7 +28,7 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S101 | 本机同源平台矩阵/安装已验收；S155按用户最新范围取消远端执行阻塞后收尾，不代表当前候选发行通过 | 产品fcbbb93；任务a6bbb56、合并f07aab2；本轮范围修订见S155 | [S101](tasks/S101.md) |
-| S152 | 两端共用 Mantine；双端构建/Web九套/桌面布局及Windows五套原生通过，未部署 | 实现bfdf14e、整合8c1d1d8已ff合master；任务树/分支已清理 | [S152](tasks/S152.md) |
+| S152 | 两端共用 Mantine；双端构建/Web九套/桌面布局及Windows五套原生通过，服务端已S157上线；客户端发行另验 | 实现bfdf14e、整合8c1d1d8已ff合master；任务树/分支已清理 | [S152](tasks/S152.md) |
 | S153 | 版本历史版服务端部署generation265；真实生产浏览器/资产/数据及既有服务验收通过 | 源89a9cf4；主机pin d4c5fe7、main整合2c96e2f；生命周期见交接 | [S153](tasks/S153.md) |
 | S147 | 持久记录客户端连接；Web按账号分页查看活动/会话，schema18迁移与真实浏览器通过；未部署 | 实现5403c3c、整合S148 1e9367f、交接de1f96e已ff合master；任务树/分支已清理 | [S147](tasks/S147.md) |
 | S148 | 登录/刷新恢复会话后自动检查服务；退出取消、失败重试、真实 Chromium 验收；未部署 | 实现`3885ab4`；整合/清理见交接 | [S148](tasks/S148.md) |
@@ -174,10 +174,10 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
-| S157 | done | 源5a71062；主机pin f7d1997/main整合a02b61e；generation266；生命周期见交接 | [S157](tasks/S157.md) |
+| S157 | done | 源5a71062；主机pin f7d1997/main整合a02b61e；generation266；交接3ced4a5/整合4dd1ea6已ff合master，两任务树/分支已清理 | [S157](tasks/S157.md) |
 | S155 | done | 实现70983b7、整合b291440、交接41636ba已ff合master；本地5/5、xtask23/23、干净提交检查通过；任务树/分支已清理 | [S155](tasks/S155.md) |
 | S156 | done | 实现1fbe353、交接/整合06d7427已ff合master，任务树/分支已清理；19+9+8项通过；gh未登录、未真实上传 | [S156](tasks/S156.md) |
-| S154 | done | 实现/验收509940a已ff合master，任务树/分支已清理；未部署 | [S154](tasks/S154.md) |
+| S154 | done | 实现/验收509940a已ff合master，任务树/分支已清理；已由S157部署服务端 | [S154](tasks/S154.md) |
 | S151 | done | 项目63be203已ff合master；主机c20199e/main整合a3a62a9；generation264，两任务树/分支已清理 | [S151](tasks/S151.md) |
 | S150 | done | 实现/验收65d56ae已ff合master，任务树/分支已清理；未部署生产 | [S150](tasks/S150.md) |
 | S149 | done | 源d9cfee9；主机pin f5153d8/main整合fb293d5；交接98de5a5已ff合master，两任务树/分支已清理 | [S149](tasks/S149.md) |
