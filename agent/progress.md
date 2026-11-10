@@ -1,17 +1,15 @@
 # 实施进度
 
-当前：**S171 in_progress**，实现 Web 右键新建目录与下载；前置均done。工作树与证据见[交接](tasks/S171.md)。
-
-此前：**S170 done**，服务管理/客户端显示登录 IP 和五分钟连接状态，每30秒刷新全部已加载分页；历史IP未知。后端229 passed/1既有ignored，迁移/恢复/来源/边界、clippy/生成/消费者、Web及真实浏览器通过。已部署本机generation270、源`df8edc8`、schema19、主机pin`7787429`，线上IP/代理头覆盖/轮询及数据/服务保持通过。实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；证据`/data/vaultsyncd-dev/S170-client-ip-20261110/`。**下一 ready：无**；原四张blocked保持。
+当前：**S171 done**，Web右键新建目录与固定版本下载；根类型/Web七套测试构建、真实Chromium+btrfs30项及Nix包内74测试通过。已部署本机generation271，源`01a45f1`，主机pin`1513b07`，schema19不变；线上健康/TLS/CSP/11资产及原数据/服务保持。业务在独立实例验收，生产无当前凭据、未复跑已认证操作。交接完成待立即ff整合/清理，证据`/data/vaultsyncd-dev/S171-web-create-download-20261110/`。**下一 ready：无**；原四张blocked保持。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
-最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未发行。在线服务端为S170，运行/开机generation270、源`df8edc8`、schema19、主机pin`7787429`；Vault基目录`/data/vaultsyncd/vaults`。本轮未发行或复跑Windows，性能容量/多机与线上成对升级仍未验收。
+最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未发行。在线服务端为S171，运行/开机generation271、源`01a45f1`、schema19、主机pin`1513b07`；Vault基目录`/data/vaultsyncd/vaults`。本轮未发行或复跑Windows，性能容量/多机与线上成对升级仍未验收。
 
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
 
-最近部署：S170 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过；线上真实Chromium核对登录IP/API一致、代理覆盖伪造头、五分钟状态/30秒刷新、明暗320/1440、TLS/CSP/cookie与11资产。正式身份、5工作文件摘要、schema19/FK及10服务/3应用保持；完整备份及第二副本verified（同机同盘），迁移前18备份及旧system/boot GC roots保留，未实际回退。部署细节见docs/operations/nixos.md S170。
+最近部署：S171 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过，线上Chromium严格TLS1.3/匿名文件深链门禁/明暗320与1440、CSP及11资产通过。正式身份、5文件摘要、schema19/FK/对象及10服务/3应用保持。完整备份及第二副本验证通过（同机同盘），generation270旧system/boot GC roots保留，未实际回退。没有重置生产凭据，已认证业务仅在独立实例验证；S170迁移与历史IP实证仍见对应交接。部署细节见docs/operations/nixos.md S171。
 
 恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -36,6 +34,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S171 | Web右键新建目录/固定版本下载；真实浏览器30项与generation271部署验收 | 实现01a45f1；交接完成，待ff整合/清理 | [S171](tasks/S171.md) |
 | S170 | 登录IP、五分钟连接及分页轮询；后端/Web/真实浏览器与generation270生产验收通过 | 实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；主机pin7787429已ff main并清理 | [S170](tasks/S170.md) |
 | S169 | 便携发行/GitHub仅Windows ZIP；43项契约+更新4项、真实构建/ZIP/PE/唯一附件预检通过 | 实现91b8e7f、交接b6cde8c已ff合master；任务挂载/树/分支已清理 | [S169](tasks/S169.md) |
 | S168 | 发布不再上传运行库对应源码；本地保留并按收据核验，dry-run披露local_only；契约26/26 | 实现7b2f0b9、交接135676f已ff合master；任务树/分支已清理 | [S168](tasks/S168.md) |

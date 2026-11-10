@@ -445,3 +445,14 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 证据根`/data/vaultsyncd-dev/S170-client-ip-20261110/`：evidence/backend.log（229 passed/1既有ignored、clippy/生成/边界）、frontend.log、browser-accepted.log、auth-browser.log；客户端真实53记录与四张截图在S170-browser-20261110T092144-2202626。线上evidence/result.json passed=true，Chromium验证登录IP与API一致、Caddy覆盖伪造转发头、自动轮询、本次会话、明暗320/1440、TLS1.3/CSP/cookie及全部11资产；ServerId、5工作文件摘要、schema/FK、10既有服务与3应用保持。无生产内容写入。
 
 部署前完整备份经prepare/verify-source/export/verify/release，backups/predeploy.vsbk及backups-copy副本均verified（同一主机/data盘，不是异盘或异地），新包也能verify旧归档。自动迁移备份`/var/lib/vaultsyncd/server.sqlite.pre-migration-v18-to-v19.bak`只读核验版本18/quick_check通过。直接回退入口为generation269 `/nix/store/p744ig0hmksv3nw68bfb6vhiy3z1abpc-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，旧system/boot GC roots在本卡deploy run保留；旧二进制拒绝schema19，回退须按离线恢复流程恢复整套18归档及配对映射，不能只降二进制或替换库，再同步主机pin至a37df31。未实际回退、未做Windows/性能容量验收，原blocked门禁保持。项目提交与合并清理见[S170](../../agent/tasks/S170.md)。
+
+
+## S171 Web 右键新建目录与下载部署（generation271，2026-11-10）
+
+固定源`01a45f1edbd9b7e9b4e3a0ada4791956e41e7e9f`，执行`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S171-web-create-download-20261110/evidence/deploy`。现场主机干净main基线7787429；pure package/主机构建、dry-activate/test、HTTPS/IPC/ServerId/归属与switch通过。主机只改pin，提交`1513b07fe05f48064b51eb6c94342fdb2463be6b`已ff main并清理任务树/分支；主机锁74319cf7…保持，result passed/cleaned=true。
+
+运行/开机generation271，system `/nix/store/vgv5l88qmyj537w7xmz7pfwmzf6x5lg2-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/vi7ji8hpg8jf7sxh2b48k09x9l7gaqkz-vaultsyncd-0.1.2`。无wire/schema变化，库保持19，Vault基目录仍为`/data/vaultsyncd/vaults`。Web空白区/目录树/目录行可新建子目录，文件可下载点击时版本并在长度/SHA-256校验后按原名另存；目录不提供打包下载，最终Blob受浏览器资源约束。
+
+证据根`/data/vaultsyncd-dev/S171-web-create-download-20261110/`：基线、根类型/Web七套与构建、真实Chromium+btrfs30项（含新建取消/无效/同名/目标、丢响应原OpId查询、空/Unicode/跨4MiB下载和损坏拒绝）、四张新建明暗320/1440截图；Nix包内74项测试。`web-artifacts.json`核对Nix Web与浏览器验收dist的12文件一致；线上`evidence/result.json` passed=true，严格TLS1.3/匿名文件深链门禁/明暗窄屏、全部11资产和CSP通过，ServerId/schema19/FK/对象/5文件/10服务/3应用保持。历史凭据路径已不存在，未重置密码，生产未复跑已认证文件操作；业务经独立实例实证。
+
+部署前通过prepare/verify-source/export/verify/release取得整套19备份，`backups/predeploy.vsbk`与`backups-copy/`重读验证通过（同机同/data盘，非异地）。恢复入口为generation270 `/nix/store/z9mh48x55z908gn8fv2v8dszbd2l7ba5-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，旧system/boot GC roots在部署run长期保留；可先test旧system并核对健康，再switch及同步主机pin至7787429，无schema变化无需仅因降二进制恢复库。未实际生产回退，未做Windows/性能容量或64GiB浏览器下载；原首发门禁保持。项目整合/清理见[S171](../../agent/tasks/S171.md)。
