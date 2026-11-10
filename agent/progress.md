@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S171 done**，Web右键新建目录与固定版本下载；根类型/Web七套测试构建、真实Chromium+btrfs30项及Nix包内74测试通过。已部署本机generation271，源`01a45f1`，主机pin`1513b07`，schema19不变；线上健康/TLS/CSP/11资产及原数据/服务保持。业务在独立实例验收，生产无当前凭据、未复跑已认证操作。交接完成待立即ff整合/清理，证据`/data/vaultsyncd-dev/S171-web-create-download-20261110/`。**下一 ready：无**；原四张blocked保持。
+当前：**S171 done**，Web右键新建目录与固定版本下载；根类型/Web七套测试构建、真实Chromium+btrfs30项及Nix包内74测试通过。已部署本机generation271，源`01a45f1`，主机pin`1513b07`，schema19不变；线上健康/TLS/CSP/11资产及原数据/服务保持。业务在独立实例验收，生产无当前凭据、未复跑已认证操作。实现01a45f1、交接a84d1be已ff合master，任务挂载/树/分支已清理；证据`/data/vaultsyncd-dev/S171-web-create-download-20261110/`。**下一 ready：无**；原四张blocked保持。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
@@ -34,7 +34,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
-| S171 | Web右键新建目录/固定版本下载；真实浏览器30项与generation271部署验收 | 实现01a45f1；交接完成，待ff整合/清理 | [S171](tasks/S171.md) |
+| S171 | Web右键新建目录/固定版本下载；真实浏览器30项与generation271部署验收 | 实现01a45f1、交接a84d1be已ff合master；任务挂载/树/分支清理 | [S171](tasks/S171.md) |
 | S170 | 登录IP、五分钟连接及分页轮询；后端/Web/真实浏览器与generation270生产验收通过 | 实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；主机pin7787429已ff main并清理 | [S170](tasks/S170.md) |
 | S169 | 便携发行/GitHub仅Windows ZIP；43项契约+更新4项、真实构建/ZIP/PE/唯一附件预检通过 | 实现91b8e7f、交接b6cde8c已ff合master；任务挂载/树/分支已清理 | [S169](tasks/S169.md) |
 | S168 | 发布不再上传运行库对应源码；本地保留并按收据核验，dry-run披露local_only；契约26/26 | 实现7b2f0b9、交接135676f已ff合master；任务树/分支已清理 | [S168](tasks/S168.md) |
