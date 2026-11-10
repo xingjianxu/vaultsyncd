@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S173 done**，0.1.3 已作为 [v0.1.3](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.3) 预发布发出（非 Latest、唯一 Windows x64 ZIP `e9db7e56…`，源`d2f9e26`）；本机 master 与 origin/master 同步。同时修复发布工具在创建草稿后列表暂未可见的误报（`532ec19`，契约 28 项）。ZIP 未签名、未做 Windows 原生复验，S106/S107/S108 门禁不变；**下一 ready：无**。证据`/data/vaultsyncd-dev/S173-release-20261110/`。
+当前：**S174 done**，ZIP 同目录覆盖改为自动采纳归属（无备份/无回滚、任意版本方向，跨路径与安装版互转仍拒绝，自动更新入口不变；ADR-030）。宿主检查通过（fmt、Windows 交叉严格 clippy、测试 EXE 编译、ZIP 打包契约 8/8、生成一致）；**Windows 原生断言未执行**（无运行中客体）。已知与本卡无关的基线红：`packages/local-ipc-types` 示例命令数断言 26 而 S172 已增至 27，master 同样失败。此前 **S173 done**，0.1.3 已作为 [v0.1.3](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.3) 预发布发出（非 Latest、唯一 Windows x64 ZIP `e9db7e56…`，源`d2f9e26`）；本机 master 与 origin/master 同步。ZIP 未签名、未做 Windows 原生复验，S106/S107/S108 门禁不变；**下一 ready：无**。证据`/data/vaultsyncd-dev/S173-release-20261110/`。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
@@ -35,6 +35,7 @@
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
 | S173 | 发布 v0.1.3 预发布；Windows ZIP 唯一附件、远端 SHA-256 一致，工具列表延迟误报已修 | 版本d2f9e26、修复532ec19已ff合master并推送，任务树/分支清理 | [S173](tasks/S173.md) |
+| S174 | ZIP 同目录覆盖自动采纳归属（无备份/无回滚、任意版本方向；跨路径与安装版互转仍拒绝） | 见本卡交接；宿主检查通过，Windows 原生断言待执行 | [S174](tasks/S174.md) |
 | S172 | 两端文件同步/传输记录；原生27项、真实浏览器/完整备份恢复及generation272部署通过 | 实现d7339f0、交接fef5f83已ff合master；本卡挂载/树/分支清理 | [S172](tasks/S172.md) |
 | S171 | Web右键新建目录/固定版本下载；真实浏览器30项与generation271部署验收 | 实现01a45f1、交接a84d1be已ff合master；任务挂载/树/分支清理 | [S171](tasks/S171.md) |
 | S170 | 登录IP、五分钟连接及分页轮询；后端/Web/真实浏览器与generation270生产验收通过 | 实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；主机pin7787429已ff main并清理 | [S170](tasks/S170.md) |

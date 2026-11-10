@@ -21,15 +21,19 @@ State remains on THIS Windows user account in %LOCALAPPDATA%\vaultsyncd\agent\
 (agent.json, state\, agent.log, zip-stop-* recovery exports). Credentials remain in Windows
 Credential Manager. Copying the program folder to another machine does not copy this profile.
 Local ownership: %LOCALAPPDATA%\vaultsyncd\zip-owner.json pins the original program path
-and full ZIP component manifest. Only that exact source and path may use this profile.
-Existing installed/unknown profiles and different ZIP paths/sources are explicitly refused.
+and full ZIP component manifest. Only that exact program folder may use this profile; another
+extraction path is refused. Extracting a complete package over the same folder is accepted: the
+next start re-pins the manifest and appends one line to zip-owner-adoptions.jsonl. That adoption
+keeps NO program or state backup and does not drain transfers or export unconfirmed content, so it
+cannot be rolled back, and any version direction (including a downgrade) is accepted.
+Existing installed/unknown profiles and different ZIP paths are explicitly refused.
 Keep the original program folder. Right-click the tray and select Auto update (自动更新)
 to download the latest stable Windows ZIP from this project's GitHub Release and perform
 controlled upgrade/restart in that same folder. All bindings stay paused during trial startup;
 their original pause settings return after IPC health succeeds. Program, state and owner
 backups are retained. An interrupted update requires the retained candidate agent's
 --auto-update-recover --program-dir <original-folder> entry. Conversion to/from setup-managed
-state is unsupported. Never delete owner/profile/cache or overwrite binaries by hand.
+state is unsupported. Never delete owner/profile/cache or hand-mix binaries with a manifest.
 
 Double-click "Stop vaultsyncd.cmd" and confirm Y for safe stopping. It uses PrepareMaintenance
 IPC: pauses all bindings persistently, disconnects/drains callbacks, exports unconfirmed

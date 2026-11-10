@@ -58,23 +58,23 @@ pub(crate) fn trial_pending(state: &Path) -> std::io::Result<bool> {
     };
     Ok(!committed)
 }
-/// A barrier is never silently removed by normal startup, including the login launcher.
+/// A barrier is never silently removed by normal startup, including the login launcher. It is
+/// checked before ZIP ownership so an interrupted transaction is reported as such and is never
+/// resolved by adopting the files a half-applied update left behind.
 pub fn admit_startup(config: &AgentConfig) -> std::result::Result<(), PortError> {
-    crate::portable::admit(config).map_err(error)?;
-    if config
+    let profile = config
         .state_dir
         .parent()
-        .ok_or_else(|| error("profile absent"))?
-        .join("maintenance.json")
-        .try_exists()
-        .map_err(error)?
-    {
-        return Err(PortError::rejected(
-            "MAINTENANCE_REQUIRED",
-            "maintenance barrier exists; recover using the retained maintenance candidate",
-        ));
+        .ok_or_else(|| error("profile absent"))?;
+    for barrier in ["maintenance.json", "auto-update.json"] {
+        if profile.join(barrier).try_exists().map_err(error)? {
+            return Err(PortError::rejected(
+                "MAINTENANCE_REQUIRED",
+                "maintenance or automatic-update transaction is pending; recover it with the retained candidate before starting",
+            ));
+        }
     }
-    Ok(())
+    crate::portable::admit(config).map_err(error)
 }
 async fn rpc(
     endpoint: &Endpoint,

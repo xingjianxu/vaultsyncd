@@ -16,10 +16,13 @@
 - `%LOCALAPPDATA%\vaultsyncd\agent\agent.json`：无凭据初始连接与稳定设备身份。
 - 同目录 `state\`、`agent.log`：数据库/内部状态及诊断。`zip-stop-*\`：停止前按绑定导出的未确认内容。凭据仍在该 Windows 用户 Credential Manager；Vault/cache 仍在各绑定选择的位置。
 - `%LOCALAPPDATA%\vaultsyncd\zip-owner.json`：持久绑定规范程序路径与完整 ZIP 组件清单摘要。普通 `--config` agent 和 session launcher 也会检查所有权；writer 锁/单用户 IPC 沿用现有机制，没有新增数据库 schema 或 IPC wire 字段。
+- `%LOCALAPPDATA%\vaultsyncd\zip-owner-adoptions.jsonl`：同目录覆盖被采纳时追加的审计行（旧/新清单摘要、是否拿到 writer 锁、`program_backup=false`）。没有备份，所以这是唯一的变更痕迹。
 
-同用户的 ZIP/安装版共享固定 IPC 与默认 LocalAppData 命名空间，**不允许两版混跑**。首次 ZIP 拒绝已有安装注册，以及任何已有/未知 agent 配置或非空状态（包括离线状态）。已有 ZIP 只允许同一来源、同一原目录复用同一个实例；另一解压目录、移动/重命名目录、修改来源清单或覆盖新版均明确拒绝。安装器和安装维护控制器亦拒绝接管 ZIP 所有权。
+同用户的 ZIP/安装版共享固定 IPC 与默认 LocalAppData 命名空间，**不允许两版混跑**。首次 ZIP 拒绝已有安装注册，以及任何已有/未知 agent 配置或非空状态（包括离线状态）。已有 ZIP 在同一程序目录内复用同一个实例；**同一目录被另一份完整 ZIP 覆盖后，下次启动会按新清单自动采纳**（见下节），另一解压目录、移动/重命名目录或安装版接管仍明确拒绝。安装器和安装维护控制器亦拒绝接管 ZIP 所有权。
 
-**本版本不支持 ZIP 升级，也不支持 ZIP/安装版互转已用状态。** 不应以覆盖 EXE、删除 `zip-owner.json`、删除 profile 或“先卸载再重装”绕过 S100 的停机/未确认内容导出/整套离线备份/迁移恢复门禁。保留原 ZIP 和目录继续使用；需要升级时先联系维护者安排受支持的迁移与恢复流程。现有安装版应继续使用[安装版 S100 升级入口](windows-installation.md#升级回退与卸载)，不能把 ZIP 当候选直接替换。限制是明确拒绝，不是自动创建新 DeviceId 丢弃旧状态。
+**同目录覆盖是“自动采纳”，不是可回滚升级。** 采纳要求当前目录仍是一份自洽完整 ZIP（十项文件 hash/字节与 `zip-files.json` 一致、`source` 与 `installed-files.json` 相同），之后只重钉归属摘要并正常启动：**不排空传输、不导出未确认内容、不备份程序与状态**，所以既没有程序回滚也没有整套状态回滚，只在 `zip-owner-adoptions.jsonl` 留一行记录。任意版本方向都会被采纳（含同版本重装与降级）；降级后老二进制遇到新 schema 会被围栏拒绝，需要整套备份恢复。要可回滚的升级请走托盘“自动更新”或 `--auto-update --program-dir <原目录>` 维护事务。
+
+仍不支持 ZIP/安装版互转已用状态，也不应以删除 `zip-owner.json`、删除 profile 或“先卸载再重装”绕过 S100 的停机/未确认内容导出/整套离线备份/迁移恢复门禁。现有安装版应继续使用[安装版 S100 升级入口](windows-installation.md#升级回退与卸载)，不能把 ZIP 当候选直接替换。若存在 `agent\maintenance.json` 或 `agent\auto-update.json`，启动会先报 `MAINTENANCE_REQUIRED`，采纳流程不会顺手修改中断事务；按实际事务的恢复说明处理。限制是明确拒绝，不是自动创建新 DeviceId 丢弃旧状态。
 
 不要把状态文件复制进 ZIP 以便迁移机器。复制程序到另一台机器/另一用户后，只会产生其本机新身份，不会带走原凭据或未确认内容。原 Vault/云端占位依赖原本机提供程序。
 

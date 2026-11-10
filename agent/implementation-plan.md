@@ -1727,6 +1727,13 @@
 - 结果：0.1.3 版本镜像与工具重查修复 `d2f9e26`、`532ec19` 已推送 master；Windows ZIP `e9db7e56…` 由 `v0.1.3` 预发布发出（非 Latest、唯一附件），远端大小与 SHA-256 复核一致。未做 Windows 原生复验。
 - 交接：`agent/tasks/S173.md`；不改动已发布 Release，不触发服务端部署。
 
+### S174 — ZIP 同目录覆盖后自动采纳归属
+
+- 依据：2026-11-10 用户在实际使用中把新版本 ZIP 解压覆盖原程序目录后遇到 `ZIP_OWNER_MISMATCH` 无法启动，明确要求“不要要求这么严格，直接替换或者通过程序自动更新都允许”；知情选择为**自动采纳且不做备份**、**允许任意版本方向**、**只放宽覆盖而不改自动更新入口**。前置 S109/S162/S167 done；design §19.3、§24（ADR-030）。
+- 范围：`portable::resolve_owner`/`adopt_owner`（同目录、`verify_zip` 自洽时重钉 `zip-owner.json` 并写 `zip-owner-adoptions.jsonl`）、`maintenance::admit_startup` 屏障优先、单测与 `s109-zip.ps1` Fresh 原生断言；同步 design ADR-030、接口、ZIP 运维文档与包内 README。跨目录/安装版互转、维护事务严格前置、自动更新范围不变。
+- 验收：交叉编译 + 严格 clippy + 测试 EXE 编译通过；Windows 原生 `s109-zip.ps1 -Mode Fresh` 新增采纳断言通过（客体可用时）；不声称可回滚或无备份风险已消除。
+- 交接：`agent/tasks/S174.md`；无服务端产物变化，不触发部署。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

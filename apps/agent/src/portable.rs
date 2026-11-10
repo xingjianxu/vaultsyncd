@@ -12,6 +12,7 @@ use vaultsyncd_local_ipc::generated::*;
 use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const DESKTOP_SCOPE: &str = "vaultsyncd-desktop";
+const ADOPTIONS: &str = "zip-owner-adoptions.jsonl";
 pub(crate) const ZIP_FILES: &[&str] = &[
     "vaultsyncd-agent.exe",
     "vaultsyncd-session.exe",
@@ -57,7 +58,7 @@ fn program() -> io::Result<PathBuf> {
 }
 fn mismatch() -> io::Error {
     io::Error::other(
-        "ZIP_OWNER_MISMATCH: this local profile belongs to another program path/source. Keep the original ZIP; moving, overwriting or switching to setup is not a supported upgrade. Do not delete zip-owner.json or state to bypass maintenance.",
+        "ZIP_OWNER_MISMATCH: this local profile belongs to another program path or source. Run the original program folder that claimed it; another extraction path, a hand-edited manifest or setup taking over ZIP state is not supported. Do not delete zip-owner.json or state to bypass maintenance.",
     )
 }
 pub(crate) fn verify_zip(directory: &Path) -> io::Result<String> {
@@ -132,17 +133,105 @@ pub(crate) fn upgrade_owner(directory: &Path) -> io::Result<()> {
         .map_err(io::Error::other)?,
     )
 }
-fn check_owner(path: &Path, directory: &Path, manifest: &str) -> io::Result<()> {
+fn load_owner(path: &Path) -> io::Result<Owner> {
     let vault = VaultHandle::open(
         path.parent()
             .ok_or_else(|| io::Error::other("owner parent absent"))?,
     )?;
     let _pin = vault.open_read("zip-owner.json")?;
     let owner: Owner = serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
-    if owner.format != 1 || owner.program != directory || owner.manifest != manifest {
+    if owner.format != 1 {
+        return Err(mismatch());
+    }
+    Ok(owner)
+}
+/// Strict ownership, for transactions that replace the program and must start from the exact
+/// package that claimed the profile.
+fn check_owner(path: &Path, directory: &Path, manifest: &str) -> io::Result<()> {
+    let owner = load_owner(path)?;
+    if owner.program != directory || owner.manifest != manifest {
         return Err(mismatch());
     }
     Ok(())
+}
+/// Startup ownership. The same program directory may now hold a different complete ZIP because the
+/// user extracted a package over the folder; that is accepted and re-pinned. Another directory,
+/// a tampered package or a different local state directory is still refused.
+fn resolve_owner(owner: &Path, directory: &Path, manifest: &str, state: &Path) -> io::Result<()> {
+    let pinned = load_owner(owner)?;
+    if pinned.program != directory {
+        return Err(mismatch());
+    }
+    if pinned.manifest == manifest {
+        return Ok(());
+    }
+    adopt_owner(owner, directory, manifest, state, &pinned)
+}
+/// Re-pin the profile to the package now present in the same directory. Deliberately keeps no
+/// backup: the previous owner bytes survive only in the adoption record, so a replaced package has
+/// no program rollback. The writer lock is taken when it is free; a re-check inside the agent (which
+/// already holds it) proceeds and records that the lock was busy.
+fn adopt_owner(
+    owner: &Path,
+    directory: &Path,
+    manifest: &str,
+    state: &Path,
+    pinned: &Owner,
+) -> io::Result<()> {
+    let guard = InstanceGuard::acquire(state, "vaultsyncd-agent").ok();
+    let base = owner
+        .parent()
+        .ok_or_else(|| io::Error::other("owner parent absent"))?;
+    let entry = serde_json::json!({
+        "unix_seconds": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default(),
+        "program": directory.to_string_lossy(),
+        "previous_manifest": pinned.manifest,
+        "manifest": manifest,
+        "writer_lock_acquired": guard.is_some(),
+        "program_backup": false,
+    });
+    record_adoption(base, &entry)?;
+    let bytes = serde_json::to_vec_pretty(&Owner {
+        format: 1,
+        program: directory.into(),
+        manifest: manifest.into(),
+    })
+    .map_err(io::Error::other)?;
+    let vault = VaultHandle::open(base)?;
+    let mut file = vault.open_exclusive_write("zip-owner.json")?;
+    file.set_len(0)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(guard);
+    Ok(())
+}
+/// Durable audit line next to the owner: without a backup this is the only record of what the
+/// profile used to be pinned to.
+fn record_adoption(base: &Path, entry: &serde_json::Value) -> io::Result<()> {
+    let vault = VaultHandle::open(base)?;
+    let path = base.join(ADOPTIONS);
+    let mut text = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    text.extend_from_slice(
+        serde_json::to_string(entry)
+            .map_err(io::Error::other)?
+            .as_bytes(),
+    );
+    text.push(b'\n');
+    let mut file = match vault.open_exclusive_write(ADOPTIONS) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => vault.create_new_file(ADOPTIONS)?,
+        Err(e) => return Err(e),
+    };
+    file.set_len(0)?;
+    file.write_all(&text)?;
+    file.sync_all()
 }
 /// Also enforced by ordinary --config and installed session startup, before opening SQLite.
 pub(crate) fn admit(config: &AgentConfig) -> io::Result<()> {
@@ -154,7 +243,7 @@ pub(crate) fn admit(config: &AgentConfig) -> io::Result<()> {
             return Err(mismatch());
         }
         let manifest = verify_zip(&directory)?;
-        check_owner(&owner, &directory, &manifest)?;
+        resolve_owner(&owner, &directory, &manifest, &config.state_dir)?;
     } else if directory.join("zip-files.json").try_exists()? {
         return Err(io::Error::other(
             "Use Start vaultsyncd.cmd to initialize ZIP ownership first",
@@ -180,7 +269,7 @@ fn claim() -> Result<PathBuf> {
     }
     let owner = base.join("zip-owner.json");
     if owner.try_exists()? {
-        check_owner(&owner, &directory, &manifest)?;
+        resolve_owner(&owner, &directory, &manifest, &base.join("agent/state"))?;
         return Ok(user_session::prepare(&local)?);
     }
     // Never adopt even an offline installed/older profile. Partial first claim is recoverable only
@@ -419,6 +508,38 @@ mod tests {
         assert!(verify_zip(&base).is_err());
         fs::remove_file(base.join("vaultsyncd-zip.exe")).unwrap();
         assert!(verify_zip(&base).is_err());
+        fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn same_directory_repackage_is_adopted_and_other_path_is_not() {
+        let base = std::env::temp_dir().join(format!("s174 覆盖 ownership {}", std::process::id()));
+        fs::create_dir(&base).unwrap();
+        let state = base.join("agent/state");
+        fs::create_dir_all(&state).unwrap();
+        let owner = base.join("zip-owner.json");
+        let directory = base.join("程序 空格");
+        fs::create_dir(&directory).unwrap();
+        let pinned = Owner {
+            format: 1,
+            program: directory.clone(),
+            manifest: "old-manifest".into(),
+        };
+        fs::write(&owner, serde_json::to_vec(&pinned).unwrap()).unwrap();
+        // An unchanged package is a no-op, and another directory is still refused.
+        assert!(resolve_owner(&owner, &directory, "old-manifest", &state).is_ok());
+        assert!(resolve_owner(&owner, &base.join("other"), "new-manifest", &state).is_err());
+        assert_eq!(load_owner(&owner).unwrap().manifest, "old-manifest");
+        // A complete package extracted over the same folder re-pins the profile without a backup.
+        assert!(resolve_owner(&owner, &directory, "new-manifest", &state).is_ok());
+        let adopted = load_owner(&owner).unwrap();
+        assert_eq!(adopted.program, directory);
+        assert_eq!(adopted.manifest, "new-manifest");
+        let record = fs::read_to_string(base.join(ADOPTIONS)).unwrap();
+        assert!(record.contains("\"previous_manifest\":\"old-manifest\""));
+        assert!(record.contains("\"program_backup\":false"));
+        // A broken owner is never adopted, even for the same directory.
+        fs::write(&owner, b"broken").unwrap();
+        assert!(resolve_owner(&owner, &directory, "third-manifest", &state).is_err());
         fs::remove_dir_all(base).unwrap();
     }
     #[test]

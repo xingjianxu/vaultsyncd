@@ -112,6 +112,35 @@ if($Mode-eq 'Fresh'){
     $sourceRefused=Run-Zip $program 'start' -MayFail
     if($sourceRefused.exit-eq 0-or $sourceRefused.stderr-notmatch 'ZIP_OWNER_MISMATCH'){throw 'different source was not explicitly refused'}
   }finally{[IO.File]::WriteAllBytes($manifestPath,$saved)}
+  # S174: a complete package extracted over the same folder is adopted, not refused.
+  $installedPath=Join-Path $program 'installed-files.json'
+  $savedInstalled=[IO.File]::ReadAllBytes($installedPath)
+  $savedZipManifest=[IO.File]::ReadAllBytes($manifestPath)
+  try{
+    $newCommit='1111111111111111111111111111111111111111'
+    $installed=Get-Content -LiteralPath $installedPath -Raw -Encoding UTF8|ConvertFrom-Json
+    $installed.source.commit=$newCommit
+    Write-Json $installedPath $installed
+    $repack=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8|ConvertFrom-Json
+    $repack.source.commit=$newCommit
+    foreach($file in $repack.files){
+      if($file.path-eq 'installed-files.json'){
+        $file.bytes=(Get-Item -LiteralPath $installedPath).Length
+        $file.sha256=(Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+      }
+    }
+    Write-Json $manifestPath $repack
+    $adopted=Run-Zip $program 'start' -MayFail
+    if($adopted.exit-ne 0){throw ('in-place repackage was not adopted: '+$adopted.stderr)}
+    $adoptedManifest=(Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ownerAfter=Get-Content -LiteralPath $owner -Raw -Encoding UTF8|ConvertFrom-Json
+    if($ownerAfter.manifest-ne $adoptedManifest){throw 'adopted owner does not pin the replaced package'}
+    if(![String]::Equals($ownerAfter.program,$program,[StringComparison]::OrdinalIgnoreCase)){throw 'adopted owner changed the program path'}
+    $adoptions=Join-Path $env:LOCALAPPDATA 'vaultsyncd\zip-owner-adoptions.jsonl'
+    if(!(Test-Path -LiteralPath $adoptions)){throw 'adoption was not recorded'}
+    $last=@(Get-Content -LiteralPath $adoptions -Encoding UTF8)[-1]|ConvertFrom-Json
+    if($last.program_backup-ne $false-or $last.manifest-ne $adoptedManifest-or $last.previous_manifest-eq $adoptedManifest){throw 'adoption record is inconsistent'}
+  }finally{[IO.File]::WriteAllBytes($installedPath,$savedInstalled);[IO.File]::WriteAllBytes($manifestPath,$savedZipManifest)}
   Run-Zip $program 'start'|Out-Null
   $restarted=Status
   if($status.snapshot_version.Split(':')[0]-eq $restarted.snapshot_version.Split(':')[0]){throw 'safe stop did not exit the original instance'}
@@ -119,7 +148,7 @@ if($Mode-eq 'Fresh'){
   if($nextConfig.device_id-ne $config.device_id){throw 'ZIP restart changed device identity'}
   $after=Registration-Snapshot
   if(($before|ConvertTo-Json -Compress)-ne ($after|ConvertTo-Json -Compress)){throw 'ZIP unexpectedly registered startup/shortcut/setup'}
-  Write-Json (Join-Path $results 'fresh.json') @{ok=$true;scope='launcher smoke, NOT live sync/CFAPI acceptance';sid=$identity.User.Value;program=$program;profile=$profile;source=$ExpectedCommit;archive_sha256=$ZipSha256;first_status=$status;restarted_status=$restarted;registration=$after;device_id=$config.device_id;path_refused=$refused;source_refused=$sourceRefused}
+  Write-Json (Join-Path $results 'fresh.json') @{ok=$true;scope='launcher smoke, NOT live sync/CFAPI acceptance';sid=$identity.User.Value;program=$program;profile=$profile;source=$ExpectedCommit;archive_sha256=$ZipSha256;first_status=$status;restarted_status=$restarted;registration=$after;device_id=$config.device_id;path_refused=$refused;source_refused=$sourceRefused;repackage_adopted=$adopted}
   Write-Output 'Fresh smoke passed. Agent/GUI remain for explicit live server binding. No users/logon settings were changed.'
   exit
 }

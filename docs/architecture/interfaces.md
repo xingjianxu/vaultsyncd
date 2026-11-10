@@ -2591,7 +2591,7 @@ S158 发行修复：当前仅 Linux x64；`nix/portable.nix` 以 `runtimeLibrary
 
 - `windows-client`同一次fresh cross release同时生成NSIS（原四EXE）和ZIP（另含`vaultsyncd-zip.exe`、两个cmd及说明），不重复编译。ZIP清单十份文件hash，receipt递归覆盖展开文件及完整ZIP；hash不是签名，继续标unsigned-test。构建/验证及状态限制见`docs/operations/windows-zip.md`。
 - `vaultsyncd-zip.exe start|health|stop`为专用固定入口；Start在Windows11/WebView2前置、组件完整性、LocalAppData所有权验证后独立启动agent，只在认证正确EXE路径且真实GetStatus成功后开GUI。GUI关闭不停止agent，重复Start复用同实例。ZIP默认不注册Run/StartMenu，不携带状态/凭据；新ZIP profile默认关闭系统通知，用户显式开启后Toast可注册快捷方式，UI明确提示。
-- `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源/覆盖升级明确拒绝；安装器及安装维护控制器拒绝接管ZIP状态。S162起仅允许原路径的显式自动维护事务升级ZIP；仍不支持已用profile互转或删除所有权绕过S100。无DB迁移或wire新增。
+- `%LOCALAPPDATA%/vaultsyncd/zip-owner.json`绑定规范程序目录及完整ZIP清单hash；首次拒绝已有安装注册/配置/非空state，普通agent在writer锁前后亦检查所有权。另一目录/来源明确拒绝；S162起仅允许原路径的显式自动维护事务升级ZIP，S174起同目录完整ZIP覆盖按新清单自动采纳（无备份/无回滚，见S174节）；仍不支持已用profile互转或删除所有权绕过S100。安装器及安装维护控制器拒绝接管ZIP状态。无DB迁移或wire新增。
 - `Endpoint::request_verified(expected,request)`在实际发送请求的同一NamedPipeClient上认证预期EXE及SID，返回`(Response,ServerProcess)`，原`request`接口不变；ZIP每个GetStatus/PrepareMaintenance均用此入口，等待实际执行准备的对端进程，不用先探测再另连的句柄。
 - Stop复用IPC1.5 PrepareMaintenance，认证并等待确切进程退出，再取得writer锁确认停机；未确认内容导出到agent/zip-stop-*。不强杀、不注销提供程序、不删Vault/cache/dirty/state。暂停持久化，重启后须用户显式Resume；失败可能部分暂停，绝不默认成功或自动恢复所有绑定。原生入口两个：`tests/platform/windows/s109-zip.ps1`要求手工登录全新标准用户（Fresh/Live/Stop分离，Live另需真实服务端独立hash核对）；`tests/platform/windows/s109-e2e.py`在已登录会话用本run Interactive/Limited task与隔离LocalAppData/AppData/WebView，经真实CLI/IPC配置、要求一个本run程序目录启动的可见响应窗口、验证关窗后真实上传、dirty经安全停止与agent进程重启保留后resume提交，并断言默认Run/HKLM/快捷方式未变（不声称OS重启或标准用户）；两者均不改自动登录、不强杀、保留Vault/state/cache。
 - 桌面以命名互斥量`vaultsyncd-desktop`保证每用户会话单窗口：重复Start复用同一窗口，不再派生第二个GUI；该互斥量与agent的writer锁相互独立。
@@ -2731,3 +2731,12 @@ S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开
 所有新开发测试目录只能位于 `/data/vaultsyncd-dev`；默认沿用其内 `vaultsyncd-temp/`（任务、volumes、cache、evidence）和 `vaultsyncd-lab/`（VM、基线、关联缓存）子树。正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd` 保持。Windows客体内的本地NTFS目录不受宿主路径约定影响。
 
 旧 temp/lab 路径中的 `/data/` 替换为 `/data/vaultsyncd-dev/` 定位；更早 build/deploy 前缀先按S161映射，再按本节映射。历史原始证据不改写，不创建旧入口软链。测试卷白名单只允许 `vaultsyncd-temp` 子树，继续隔离VM；不允许把开发根/归档/备份作为一次清理目标。Windows缓存默认与共享脚本一致；覆盖环境变量也必须遵守开发根约定。协议、schema和产品接口无变化。验收见 `agent/tasks/S163.md`。
+
+## S174 — ZIP 同目录覆盖自动采纳归属
+
+- `portable::resolve_owner(owner, program, manifest, state)` 是启动期所有权判定：`Owner.program` 与当前规范程序目录不一致仍返回 `ZIP_OWNER_MISMATCH`；一致且清单摘要相同为无操作；一致但摘要不同则调用 `portable::adopt_owner` 重钉归属。`portable::admit`（`--config` agent、session launcher、ZIP 入口）与 `claim()` 的既有 owner 分支都走该函数。
+- 采纳前必须通过 `verify_zip`：`zip-files.json` 的 `format=1`、`signature_status=unsigned-test`、`source` 与 `installed-files.json` 相同、十项文件逐项 hash/字节一致。任一项不符仍拒绝，因此手工只替换部分 EXE 或只改一份清单不会生效。版本方向不参与判定（用户 2026-11-10 明确允许任意方向）；更高/同/更低版本均按同一流程采纳。
+- `adopt_owner` 先在 writer 锁空闲时获取 `InstanceGuard`（agent 自身在取得锁后的二次校验会拿到“忙”，此时继续并记录），追加一行 `%LOCALAPPDATA%/vaultsyncd/zip-owner-adoptions.jsonl`：`unix_seconds`、`program`、`previous_manifest`、`manifest`、`writer_lock_acquired`、`program_backup=false`；再用排他写句柄（无 reparse、单硬链接）重写 `zip-owner.json` 为 `{format:1,program,manifest}`。owner 格式不变，旧二进制仍能解析。
+- **不排空、不导出未确认内容、不备份程序与状态**，因此没有程序回滚也没有整套状态回滚；`program_backup=false` 如实写入审计记录。需要可回滚的升级仍走 S162 的 `--auto-update` 维护事务，其前置 `portable::maintenance_owner` 保持严格（原目录 + 旧清单）。
+- `maintenance::admit_startup` 先检查 `agent/maintenance.json` 与 `agent/auto-update.json` 事务屏障，再检查 ZIP 所有权：中断事务返回 `MAINTENANCE_REQUIRED`，不会被采纳流程顺带“修好”。
+- 无 wire/schema/迁移变化。原生断言扩展在 `tests/platform/windows/s109-zip.ps1` Fresh：把 `installed-files.json` 与 `zip-files.json` 的 `source.commit` 一致改成新值并重算该文件条目后，`start` 必须成功、owner 摘要等于新清单、审计记录 `program_backup=false`；另一解压目录与不一致清单仍必须被拒绝。
