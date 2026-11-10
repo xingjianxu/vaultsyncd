@@ -220,7 +220,11 @@ pub(super) fn run() {
                             || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
                     });
             #[cfg(feature = "native-acceptance")]
-            let window = if let Some(fixture) = std::env::var_os("VAULTSYNCD_S172_FIXTURE") {
+            let window = if let Some(fixture) = std::env::var_os("VAULTSYNCD_S176_FIXTURE") {
+                let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
+                window.initialization_script(format!("window.__S176_FIXTURE__ = {fixture};"))
+                    .initialization_script(include_str!("../../../../tests/platform/windows/s176-login.js"))
+            } else if let Some(fixture) = std::env::var_os("VAULTSYNCD_S172_FIXTURE") {
                 let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
                 window.initialization_script(format!("window.__S172_FIXTURE__ = {fixture};"))
                     .initialization_script(include_str!("../../../../tests/platform/windows/s172-activity.js"))

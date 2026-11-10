@@ -52,6 +52,19 @@ pub(crate) async fn load_connection(
         config.server.ca_file = ca_file.map(Into::into);
         config.validate().map_err(error)?;
     }
+    load_login_profile(db, config).await?;
+    Ok(())
+}
+pub(crate) async fn load_login_profile(
+    db: &Database,
+    config: &mut AgentConfig,
+) -> Result<(), PortError> {
+    config.server.username =
+        sqlx::query_scalar("SELECT username FROM agent_login_profiles WHERE server_id=?")
+            .bind(&config.server.id)
+            .fetch_optional(db.pool())
+            .await
+            .map_err(error)?;
     Ok(())
 }
 pub(crate) async fn proposed_connection(
@@ -74,6 +87,7 @@ pub(crate) async fn proposed_connection(
     }
     let mut proposed = config.clone();
     proposed.server.id = p.server_id.clone().unwrap();
+    load_login_profile(db, &mut proposed).await?;
     proposed.server.url = p.server_url.clone().unwrap();
     proposed.server.ca_file = p.ca_file.as_ref().map(Into::into);
     proposed
@@ -99,6 +113,7 @@ pub(crate) async fn discover_connection(
     proposed
         .validate()
         .map_err(|_| reject("INVALID_ARGUMENT"))?;
+    proposed.server.username = None;
     let mut info = connection(&proposed, &AuthSession::default());
     info.server_id = read_server_id(&proposed).await?;
     Ok(ManagementResult {
@@ -238,7 +253,7 @@ pub(crate) async fn binding_list(db: &Database) -> Result<Vec<BindingInfo>, Port
 
 pub(crate) async fn execute(
     db: &Arc<Database>,
-    config: &AgentConfig,
+    config: &mut AgentConfig,
     client: &ApiClient<ReqwestTransport>,
     session: &AuthSession,
     running: Running,
@@ -419,6 +434,13 @@ pub(crate) async fn execute(
                 })
                 .await
                 .map_err(connection_error)?;
+            let username = p.username.as_ref().unwrap();
+            if let Err(cause) = sqlx::query("INSERT INTO agent_login_profiles(server_id,username) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET username=excluded.username")
+                .bind(&config.server.id).bind(username).execute(db.pool()).await {
+                session.clear();
+                return Err(error(cause));
+            }
+            config.server.username = Some(username.clone());
             result.connection = Some(connection(config, session));
         }
         C::Logout => {
@@ -522,7 +544,8 @@ pub(crate) fn connection(
             .ca_file
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        authenticated: session.has_credentials(),
+        authenticated: session.has_credentials() && !session.needs_reauth(),
+        username: config.server.username.clone(),
     }
 }
 type ProblemRow = (

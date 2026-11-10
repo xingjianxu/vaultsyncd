@@ -584,7 +584,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
             } else {
                 crate::management::execute(
                     &db,
-                    &config,
+                    &mut config,
                     &client,
                     &session,
                     live.iter()

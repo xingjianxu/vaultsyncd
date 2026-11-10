@@ -51,6 +51,7 @@ pub fn prepare(local_app_data: &Path) -> io::Result<PathBuf> {
                     url: "https://localhost".into(),
                     development_http: false,
                     ca_file: None,
+                    username: None,
                 },
                 device_id: identity()?,
                 state_dir: profile_path.join("state"),

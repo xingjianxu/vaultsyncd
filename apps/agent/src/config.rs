@@ -21,6 +21,9 @@ pub struct ServerConfig {
     /// Optional additional development CA; system trust remains enabled.
     #[serde(default)]
     pub ca_file: Option<PathBuf>,
+    /// Last successful login, loaded from the private client database, never a password.
+    #[serde(skip)]
+    pub username: Option<String>,
 }
 /// A local binding must match its durable database record exactly on restart.
 #[derive(Clone, Debug, Deserialize, Serialize)]

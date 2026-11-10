@@ -2740,3 +2740,12 @@ S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开
 - **不排空、不导出未确认内容、不备份程序与状态**，因此没有程序回滚也没有整套状态回滚；`program_backup=false` 如实写入审计记录。需要可回滚的升级仍走 S162 的 `--auto-update` 维护事务，其前置 `portable::maintenance_owner` 保持严格（原目录 + 旧清单）。
 - `maintenance::admit_startup` 先检查 `agent/maintenance.json` 与 `agent/auto-update.json` 事务屏障，再检查 ZIP 所有权：中断事务返回 `MAINTENANCE_REQUIRED`，不会被采纳流程顺带“修好”。
 - 无 wire/schema/迁移变化。原生断言扩展在 `tests/platform/windows/s109-zip.ps1` Fresh：把 `installed-files.json` 与 `zip-files.json` 的 `source.commit` 一致改成新值并重算该文件条目后，`start` 必须成功、owner 摘要等于新清单、审计记录 `program_backup=false`；另一解压目录与不一致清单仍必须被拒绝。
+
+
+## S176 — 桌面登录门禁与本机登录资料（客户端schema14 / IPC2.9）
+
+- `App` 先经agent IPC读取状态。首次未确认或`connection.authenticated=false`仅挂载不可关闭的Mantine登录框；密码输入仅存组件内存，失败清空，成功卸载。成功登录及agent持久化应答后刷新状态，保留hash深链进入正式界面。退出或已确认需要重新认证时卸载整个正式界面；临时IPC/网络错误不冒充凭据失效。
+- 登录表单复用S166的公开身份发现和保存前重核；服务器地址、可选CA、只读Server ID、用户名和密码在一个表单内，由“登录”确认身份及连接后调用既有`login`。失败保留用户名并重新发现，地址/CA编辑继续使旧结果失效；已有绑定禁止换ServerId。GUI不访问在线DB或凭据库。
+- `api/local-ipc.schema.json`是唯一wire编辑源，IPC2.9仅增加可选`ConnectionInfo.username`（旧资料缺省），`authenticated`为持有凭据且`!session.needs_reauth()`，不表示服务器实时在线。发现结果不泄露当前账号；凭据或密码不进入IPC响应。
+- 客户端迁移`0014_login_profile.sql`在私有`client.sqlite`新增`agent_login_profiles(server_id PRIMARY KEY,username)`，只在服务器登录成功后写入，按ServerId恢复；原`agent_connection`继续保存地址/CA。默认文件为`%LOCALAPPDATA%\vaultsyncd\agent\state\client.sqlite`。用户名落盘失败撤下本地会话并返回错误；runtime确认Windows Credential Manager写入成功才应答。访问/刷新令牌继续保存在当前用户`vaultsyncd/session/<ServerId>`，刷新覆盖，登出删除；不保存明文密码或浏览器凭据。
+- schema13升级前沿用一致性备份与旧版拒写；全套维护备份/恢复规则保持。迁移测试覆盖旧连接及未确认本地内容保持、旧版拒写与原备份恢复。Windows真实WebView/agent/HTTPS验收和宿主浏览器证据见`agent/tasks/S176.md`。

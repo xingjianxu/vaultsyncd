@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 2;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 8;
+pub const PROTOCOL_MINOR: u32 = 9;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -378,7 +378,7 @@ impl core::fmt::Debug for CommandParameters {
 /// 不含 token 的连接与证书配置。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ConnectionInfo {
-    /// 持有凭据；不等于服务器在线。
+    /// 持有凭据且未确认需要重新登录；不等于服务器在线。
     pub authenticated: bool,
     /// 附加信任 CA 路径。
     #[serde(default)]
@@ -388,6 +388,10 @@ pub struct ConnectionInfo {
     pub server_id: String,
     /// 服务器地址。
     pub server_url: String,
+    /// 本服务上次成功登录的用户名；旧资料缺省，不含密码或令牌。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 /// 错误应答主体：协议级失败的原因。带 vault_id/details 的同步问题由问题页命令返回，不在本契约里。

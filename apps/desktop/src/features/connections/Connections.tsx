@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Alert, Card, Group, PasswordInput, SimpleGrid, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Alert, Card, Group, SimpleGrid, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
 import { Button } from "@vaultsyncd/ui";
 import type { ConnectionInfo } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient, ConnectionInput } from "../../services/agent";
@@ -8,13 +8,6 @@ export function Connections({ agent, connection, changed, run, busy }: {
   agent: AgentClient; connection?: ConnectionInfo; changed(): Promise<void>;
   run(action: () => Promise<void>): void; busy: boolean;
 }) {
-  const [password, setPassword] = useState("");
-  function login(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const form = new FormData(event.currentTarget);
-    const username = String(form.get("username")); const secret = password;
-    setPassword("");
-    run(async () => { await agent.login(username, secret); await changed(); });
-  }
   return <Stack gap="lg">
     <Title order={1} size="h2">连接设置</Title>
     <SimpleGrid cols={{ base: 1, lg: 2 }}>
@@ -29,14 +22,8 @@ export function Connections({ agent, connection, changed, run, busy }: {
         <Stack>
           <Title order={2} size="h3">账号</Title>
           <Text size="sm">当前账号：{connection ? connection.authenticated ? "已登录（持有凭据，连接仍需核验）" : "未登录" : "尚未读取"}</Text>
-          <form onSubmit={login} autoComplete="off"><Stack>
-            <TextInput label="账号" required name="username" autoComplete="username" />
-            <PasswordInput label="密码" required name="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} />
-            <Group>
-              <Button type="submit" disabled={busy}>登录</Button>
-              <Button type="button" variant="default" disabled={busy || !connection?.authenticated} onClick={() => run(async () => { await agent.logout(); await changed(); })}>退出登录</Button>
-            </Group>
-          </Stack></form>
+          {connection?.username && <Text size="sm">{connection.username}</Text>}
+          <Group><Button type="button" variant="default" disabled={busy || !connection?.authenticated} onClick={() => run(async () => { await agent.logout(); await changed(); })}>退出登录</Button></Group>
           <Text size="sm" c="dimmed">登录凭据由本机 agent 保存；关闭界面后同步继续。</Text>
         </Stack>
       </Card>
@@ -44,9 +31,10 @@ export function Connections({ agent, connection, changed, run, busy }: {
   </Stack>;
 }
 
-function ConnectionForm({ agent, connection, changed, run, busy }: {
+export function ConnectionForm({ agent, connection, changed, run, busy, children, authenticate }: {
   agent: AgentClient; connection: ConnectionInfo; changed(): Promise<void>;
-  run(action: () => Promise<void>): void; busy: boolean;
+  run(action: () => Promise<void>): void; busy: boolean; children?: ReactNode;
+  authenticate?(): Promise<void>;
 }) {
   const [serverUrl, setServerUrl] = useState(connection.server_url);
   const [caFile, setCaFile] = useState(connection.ca_file ?? "");
@@ -81,8 +69,8 @@ function ConnectionForm({ agent, connection, changed, run, busy }: {
     if (!candidate || reading || busy) return;
     const confirmed = candidate;
     run(async () => {
-      try { await agent.setConnection(confirmed); await changed(); }
-      finally { invalidate(); }
+      try { await agent.setConnection(confirmed); if (authenticate) await authenticate(); await changed(); }
+      finally { invalidate(); if (authenticate) setRetry(value => value + 1); }
     });
   }
   return <form onSubmit={configure}><Stack>
@@ -99,8 +87,9 @@ function ConnectionForm({ agent, connection, changed, run, busy }: {
     {reading && <Text size="sm" role="status">正在读取 Server ID…</Text>}
     {error && <Alert color="red" role="alert">{error}</Alert>}
     {candidate && <Textarea label="Server ID" name="server_id" readOnly autosize minRows={1} value={candidate.serverId} />}
+    {children}
     <Group>
-      <Button type="submit" disabled={busy || reading || !candidate}>确认并保存连接</Button>
+      <Button type="submit" disabled={busy || reading || !candidate}>{authenticate ? "登录" : "确认并保存连接"}</Button>
       <Button type="button" variant="default" disabled={busy || reading || !serverUrl} onClick={() => { invalidate(); setRetry(value => value + 1); }}>重新读取</Button>
       {candidate && <Button type="button" variant="subtle" disabled={busy} onClick={invalidate}>取消</Button>}
     </Group>

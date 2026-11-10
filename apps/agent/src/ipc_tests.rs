@@ -42,6 +42,7 @@ async fn new_binding_without_import_proof_is_unknown() {
         server_url: "https://example.invalid".into(),
         ca_file: None,
         authenticated: false,
+        username: None,
     });
     let (_problems, problems) = watch::channel(Vec::new());
     let (updates, _) = watch::channel(0);
@@ -103,6 +104,7 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
         server_url: "https://sync.example".into(),
         ca_file: None,
         authenticated: false,
+        username: None,
     });
     let (_problems, problems) = watch::channel(Vec::new());
     let (_offline, offline) = watch::channel(std::collections::HashSet::new());

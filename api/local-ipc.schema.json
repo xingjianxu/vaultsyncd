@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 2,
-      "minor": 8
+      "minor": 9
     },
     "frame": {
       "header_bytes": 4,
@@ -189,7 +189,8 @@
         "server_id":{"type":"string","description":"服务器身份。"},
         "server_url":{"type":"string","description":"服务器地址。"},
         "ca_file":{"type":"string","description":"附加信任 CA 路径。"},
-        "authenticated":{"type":"boolean","description":"持有凭据；不等于服务器在线。"}
+        "authenticated":{"type":"boolean","description":"持有凭据且未确认需要重新登录；不等于服务器在线。"},
+        "username":{"type":"string","description":"本服务上次成功登录的用户名；旧资料缺省，不含密码或令牌。"}
       }
     },
     "RemoteItem": {

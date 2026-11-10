@@ -1,6 +1,8 @@
 # 实施进度
 
-当前：**S175 done**，0.1.4 已作为 [v0.1.4](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.4) 预发布发出（非 Latest、唯一 Windows x64 ZIP `041b293a…`，源`fe273d3`，含 S174 ZIP 归属采纳）；本机 master 与 origin/master 同步。此前 **S174 done**，ZIP 同目录覆盖改为自动采纳归属（无备份/无回滚、任意版本方向，跨路径与安装版互转仍拒绝，自动更新入口不变；ADR-030），宿主检查通过（fmt、Windows 交叉严格 clippy、测试 EXE 编译、ZIP 打包契约 8/8、生成一致），**Windows 原生断言未执行**（无运行中客体）。已知与本卡无关的基线红：`packages/local-ipc-types` 示例命令数断言 26 而 S172 已增至 27，master 同样失败。ZIP 未签名、未做 Windows 原生复验，S106/S107/S108 门禁不变；**下一 ready：无**。证据`/data/vaultsyncd-dev/S175-release-20261110/`（0.1.3 证据保留在 `S173-release-20261110/`）。
+当前：**S176 done**，桌面启动未登录只显示地址/用户名/密码登录框，持久化确认后进入正式界面；登出与重新认证收回主界面，重启自动恢复。用户名/地址保存私有client.sqlite，令牌沿用Windows凭据管理器，无明文密码/浏览器凭据。schema14/IPC2.9；host91项、根typecheck/build、Windows生产及验收严格clippy与交叉build、Chromium登录/布局、真实Windows三阶段26项及S080/S081回归通过。证据`/data/vaultsyncd-dev/S176-desktop-login-20261110/`，交接[S176](tasks/S176.md)。本地提交/合并清理收尾中；未发行或推送，无服务端更改。**下一ready：无**，原四张blocked门禁不变。
+
+此前 **S175 done**，0.1.4 已作为 [v0.1.4](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.4) 预发布发出（非 Latest、唯一 Windows x64 ZIP `041b293a…`，源`fe273d3`，含 S174 ZIP 归属采纳）；本机 master 与 origin/master 同步。此前 **S174 done**，ZIP 同目录覆盖改为自动采纳归属（无备份/无回滚、任意版本方向，跨路径与安装版互转仍拒绝，自动更新入口不变；ADR-030），宿主检查通过（fmt、Windows 交叉严格 clippy、测试 EXE 编译、ZIP 打包契约 8/8、生成一致），**Windows 原生断言未执行**（无运行中客体）。S175时的基线红（IPC示例命令数断言26、实际27）已由S176修正并通过12项。ZIP 未签名、未做 Windows 原生复验，S106/S107/S108 门禁不变；**下一 ready：无**。证据`/data/vaultsyncd-dev/S175-release-20261110/`（0.1.3 证据保留在 `S173-release-20261110/`）。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
@@ -34,6 +36,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S176 | 桌面启动登录框、持久化登录资料及重启会话恢复 | 通过宿主/交叉检查与真实Windows26项及S080/S081回归；提交/合并收尾 | [S176](tasks/S176.md) |
 | S175 | 发布 v0.1.4 预发布（含 S174）；Windows ZIP 唯一附件、远端 digest 与本地一致，一次上传成功 | 版本fe273d3已ff合master并推送，任务树/分支清理 | [S175](tasks/S175.md) |
 | S173 | 发布 v0.1.3 预发布；Windows ZIP 唯一附件、远端 SHA-256 一致，工具列表延迟误报已修 | 版本d2f9e26、修复532ec19已ff合master并推送，任务树/分支清理 | [S173](tasks/S173.md) |
 | S174 | ZIP 同目录覆盖自动采纳归属（无备份/无回滚、任意版本方向；跨路径与安装版互转仍拒绝） | 实现7870992已ff合master，任务树/分支已清理；宿主检查通过，Windows 原生断言待执行 | [S174](tasks/S174.md) |

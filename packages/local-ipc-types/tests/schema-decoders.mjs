@@ -91,7 +91,8 @@ check("all_management_examples_decode_without_losing_parameters", () => {
     assert.deepEqual(reencode(decoded), sample);
     commands.add(decoded.command.name);
   }
-  assert.equal(commands.size, 26);
+  assert.equal(commands.size, 27);
+  assert.ok(commands.has("list_activity"));
 });
 
 check("response_ok_example_decodes_to_sample", () => {
@@ -139,6 +140,17 @@ check("version_numbers_must_be_integers", () => {
   const request = example("local-ipc.request.json");
   request.ipc_version.major = "1";
   expectThrow(() => decodeRequest(request));
+});
+
+
+check("connection_username_is_optional_non_secret_metadata", () => {
+  const sample = example("local-ipc.response.json");
+  sample.result.management = { connection: { server_id: "76".repeat(16), server_url: "https://sync.example", authenticated: false, username: "用户甲" } };
+  assert.equal(decodeResponse(sample).result.management.connection.username, "用户甲");
+  delete sample.result.management.connection.username;
+  assert.equal(decodeResponse(sample).result.management.connection.username, undefined);
+  sample.result.management.connection.username = 42;
+  expectThrow(() => decodeResponse(sample));
 });
 
 if (failures.length > 0) {

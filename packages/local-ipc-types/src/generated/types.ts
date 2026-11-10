@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 2;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 8;
+export const PROTOCOL_MINOR = 9;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -333,7 +333,7 @@ export function decodeCommandParameters(value: unknown): CommandParameters {
 
 /** 不含 token 的连接与证书配置。 */
 export interface ConnectionInfo {
-  /** 持有凭据；不等于服务器在线。 */
+  /** 持有凭据且未确认需要重新登录；不等于服务器在线。 */
   authenticated: boolean;
   /** 附加信任 CA 路径。 */
   ca_file?: string;
@@ -341,6 +341,8 @@ export interface ConnectionInfo {
   server_id: string;
   /** 服务器地址。 */
   server_url: string;
+  /** 本服务上次成功登录的用户名；旧资料缺省，不含密码或令牌。 */
+  username?: string;
 }
 
 export function decodeConnectionInfo(value: unknown): ConnectionInfo {
@@ -350,6 +352,7 @@ export function decodeConnectionInfo(value: unknown): ConnectionInfo {
     ca_file: object.ca_file === undefined ? undefined : expect_string(object.ca_file, "ConnectionInfo.ca_file"),
     server_id: expect_string(object.server_id, "ConnectionInfo.server_id"),
     server_url: expect_string(object.server_url, "ConnectionInfo.server_url"),
+    username: object.username === undefined ? undefined : expect_string(object.username, "ConnectionInfo.username"),
   };
 }
 

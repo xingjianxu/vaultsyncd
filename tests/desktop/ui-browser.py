@@ -66,8 +66,8 @@ PRESENTATION_FIXTURE = r"""() => {
   window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
     window.__S152_CALLS__.push({ command, args });
     switch (command) {
-      case 'agent_discover_connection': return { connection: { authenticated: false, server_id: '7'.repeat(32), server_url: 'https://example.invalid' } };
-      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 7 }, snapshot_version: 'fixture:1', bindings: [state], management: { connection: { authenticated: false, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }, bindings: [binding], problems: [], notices: [] } };
+      case 'agent_discover_connection': return { connection: { authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' } };
+      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 7 }, snapshot_version: 'fixture:1', bindings: [state], management: { connection: { authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }, bindings: [binding], problems: [], notices: [] } };
       case 'agent_list_files': if (window.__S152_FAIL_FILES__) throw { message: 'S152 presentation: file read failed' }; return { files: [clean, dirty, longName] };
       case 'agent_list_history': case 'agent_list_trash': return { items: [item] };
       case 'agent_restore_entry': throw { message: 'PENDING: S152 presentation restore not committed' };
@@ -80,10 +80,16 @@ PRESENTATION_FIXTURE = r"""() => {
 
 
 def nonce_and_layout(page, scheme, width, route):
-    expect(page.get_by_role("heading", level=1, name=ROUTES[route], exact=True)).to_be_visible()
+    if page.locator(".mantine-AppShell-root").count():
+        expect(page.get_by_role("heading", level=1, name=ROUTES[route], exact=True)).to_be_visible()
+    else:
+        expect(page.get_by_role("dialog", name="登录", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="重试", exact=True)).to_be_visible()
+        assert page.get_by_role("navigation").count() == 0
     expect(page.locator("html")).to_have_attribute("data-mantine-color-scheme", scheme)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, route, "document overflow")
-    assert page.locator(".mantine-AppShell-header").bounding_box()["height"] == 48
+    if page.locator(".mantine-AppShell-header").count():
+        assert page.locator(".mantine-AppShell-header").bounding_box()["height"] == 48
     nonce = page.locator('meta[name="csp-nonce"]').get_attribute("content")
     assert re.fullmatch(r"[0-9a-f]{32}", nonce), nonce
     assert page.evaluate("nonce => [...document.querySelectorAll('style')].every(style => style.nonce === nonce)", nonce)
@@ -125,23 +131,13 @@ def main():
                         page.goto(origin + "/#" + route)
                         page.reload()
                         nonce_and_layout(page, scheme, width, route)
-                        expect(page.locator(".mantine-AppShell-header").get_by_text("未连接", exact=True)).to_be_visible()
-                        expect(page.locator("[data-agent-feedback]")).not_to_have_text("未连接本机 agent。")
+                        assert not page.locator(".mantine-AppShell-root").count()
                         assert not page.get_by_text("已同步", exact=True).count()
                         assert not page.evaluate("window.__S152_CSP__"), page.evaluate("window.__S152_CSP__")
-                        if width < 768:
-                            page.get_by_role("button", name="切换导航", exact=True).click()
-                            nav = page.get_by_role("navigation", name="主要导航", exact=True)
-                            expect(nav).to_be_visible()
-                            link = nav.get_by_role("link", name=ROUTES[route] if route != "/files" else "文件与操作", exact=True)
-                            if route == "/history":
-                                link = nav.get_by_role("link", name="历史与回收站", exact=True)
-                            link.click()
-                            page.wait_for_timeout(250)
-                            assert not page.evaluate("document.querySelector('.mantine-AppShell-navbar').getBoundingClientRect().right > 0"), "mobile navigation stayed open"
                         cases.append({"theme": scheme, "width": width, "route": route})
                         page.screenshot(path=str(OUTPUT / f"{route[1:]}-{scheme}-{width}.png"), full_page=True)
             page.set_viewport_size({"width": 1440, "height": 1000})
+            page.add_init_script("(" + PRESENTATION_FIXTURE + ")()")
             page.goto(origin + "/#/connections")
             page.reload()
             expect(page.get_by_role("heading", level=1, name="连接设置", exact=True)).to_be_visible()
@@ -155,7 +151,7 @@ def main():
             expect(page.locator("html")).to_have_attribute("data-mantine-color-scheme", scheme_after)
             page.reload()
             expect(page.locator("html")).to_have_attribute("data-mantine-color-scheme", scheme_after)
-            expect(page.locator('[name="password"]')).to_have_value("")
+            expect(page.locator('[name="password"]')).to_have_count(0)
             assert page.evaluate("Object.keys(localStorage).every(key => key === 'mantine-color-scheme-value') && sessionStorage.length === 0")
             page.goto(origin + "/#/missing")
             expect(page.get_by_role("heading", name="页面不存在", exact=True)).to_be_visible()

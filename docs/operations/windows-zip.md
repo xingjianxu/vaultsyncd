@@ -7,14 +7,14 @@
 1. 从发布组件 receipt 核对 `vaultsyncd-<版本>-x64-unsigned.zip` 的完整 SHA-256，解压**全部**文件到新的本机普通目录，不能位于 `%LOCALAPPDATA%\vaultsyncd` 内。支持中文/空格路径；不支持 UNC、junction/reparse 程序目录。不要直接在 ZIP 浏览器内运行。
 2. 必须有 Microsoft Edge **WebView2 Evergreen Runtime**，不是仅有 Edge 浏览器。入口按微软[Runtime 分发文档](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)读取 Runtime 客户端 pv 版本，缺失时明确提示[微软下载页](https://developer.microsoft.com/microsoft-edge/webview2/)，退出且不开 GUI，不隐式下载。只支持 Windows 11 x64。
 3. 双击 `Start vaultsyncd.cmd`，也可直接打开 `vaultsyncd-desktop.exe`（S167）。桌面自动复用同会话健康 agent；未运行时通过同目录 agent 完成相同配置/ZIP归属核验与就绪等待，失败显示本机错误，重复开窗保持单实例。专用 `vaultsyncd-zip.exe start` 验证组件 hash、创建无凭据初始配置，使用固定路径 CreateProcess 启动独立 agent。只有同用户、正确程序路径的实际 IPC `GetStatus` 成功且进程仍存活后，才启动 GUI；不能把 spawn 成功视为健康。出错窗口会保留诊断，不用管理员权限“修复”。
-4. 在 GUI 配置真实服务端、登录并建立绑定。关闭 GUI **仍继续同步**。再次 Start 复用同一健康 agent，不启动第二个 writer；GUI 本身已有单实例约束。ZIP 默认不注册 Start Menu AUMID 快捷方式，通知须用户显式开启；开关及注册影响在“问题与恢复”的通知面板说明。
+4. 首次打开 GUI 时填写登录框中的服务端地址、用户名和密码；读取并确认服务端身份后点击“登录”，成功后进入正式界面并建立绑定。后续打开自动恢复已保存会话；退出登录后重新显示登录框。关闭 GUI **仍继续同步**。再次 Start 复用同一健康 agent，不启动第二个 writer；GUI 本身已有单实例约束。ZIP 默认不注册 Start Menu AUMID 快捷方式，通知须用户显式开启；开关及注册影响在“问题与恢复”的通知面板说明。
 
 程序文件包括原四 EXE（agent/session/CLI/desktop）、专用 ZIP EXE、`installed-files.json`、`zip-files.json`、两个双击 cmd、README 和未签名说明。不是安装器，无 `uninstall.exe`，不运行 setup。CLI 仍通过真实 IPC。
 
 ## 本机状态、同实例及升级限制
 
 - `%LOCALAPPDATA%\vaultsyncd\agent\agent.json`：无凭据初始连接与稳定设备身份。
-- 同目录 `state\`、`agent.log`：数据库/内部状态及诊断。`zip-stop-*\`：停止前按绑定导出的未确认内容。凭据仍在该 Windows 用户 Credential Manager；Vault/cache 仍在各绑定选择的位置。
+- 同目录 `state\`、`agent.log`：数据库/内部状态及诊断。S176起`state\client.sqlite`保存已确认的服务器地址/CA与按ServerId隔离的上次成功登录用户名；登录成功后持久化，退出保留地址及用户名。`zip-stop-*\`：停止前按绑定导出的未确认内容。凭据仍在该 Windows 用户 Credential Manager；Vault/cache 仍在各绑定选择的位置。
 - `%LOCALAPPDATA%\vaultsyncd\zip-owner.json`：持久绑定规范程序路径与完整 ZIP 组件清单摘要。普通 `--config` agent 和 session launcher 也会检查所有权；writer 锁/单用户 IPC 沿用现有机制，没有新增数据库 schema 或 IPC wire 字段。
 - `%LOCALAPPDATA%\vaultsyncd\zip-owner-adoptions.jsonl`：同目录覆盖被采纳时追加的审计行（旧/新清单摘要、是否拿到 writer 锁、`program_backup=false`）。没有备份，所以这是唯一的变更痕迹。
 

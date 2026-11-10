@@ -696,6 +696,7 @@ mod tests {
                 "agent_actions".to_owned(),
                 "agent_connection".to_owned(),
                 "agent_evidence".to_owned(),
+                "agent_login_profiles".to_owned(),
                 "agent_versions".to_owned(),
                 "baseline_entries".to_owned(),
                 "binding_controls".to_owned(),
@@ -1517,6 +1518,90 @@ mod tests {
         );
         assert_eq!(
             scalar::<i64>(&path, "SELECT generation FROM local_entries").await,
+            23
+        );
+    }
+
+    #[tokio::test]
+    async fn login_profile_upgrade_preserves_connection_and_pending_data_and_restores_backup() {
+        let dir = TestDir::new("s176-login-profile");
+        let path = dir.database();
+        let prior = dir.path.join("v13");
+        std::fs::create_dir(&prior).unwrap();
+        for migration in MIGRATOR.iter().filter(|m| m.version <= 13) {
+            std::fs::write(
+                prior.join(format!(
+                    "{:04}_{}.sql",
+                    migration.version, migration.description
+                )),
+                migration.sql.as_bytes(),
+            )
+            .unwrap();
+        }
+        let previous = migrator(&prior).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = crate::test_support::seed_binding(&old, 0x76).await;
+        sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES(?,?,23,'dirty','materialized')").bind(binding.as_bytes().as_slice()).bind([7u8;16].as_slice()).execute(old.pool()).await.unwrap();
+        sqlx::query("INSERT INTO agent_connection VALUES(1,?,'https://sync.example',NULL)")
+            .bind("76".repeat(16))
+            .execute(old.pool())
+            .await
+            .unwrap();
+        old.close().await;
+        let db = Database::open(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_login_profiles")
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT dirty FROM local_entries")
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            "dirty"
+        );
+        sqlx::query("INSERT INTO agent_login_profiles VALUES(?,?)")
+            .bind("76".repeat(16))
+            .bind("用户甲")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        db.close().await;
+        let db = Database::open(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT username FROM agent_login_profiles WHERE server_id=?"
+            )
+            .bind("76".repeat(16))
+            .fetch_one(db.pool())
+            .await
+            .unwrap(),
+            "用户甲"
+        );
+        db.close().await;
+        assert!(matches!(
+            Database::open_with(&path, &previous).await.unwrap_err(),
+            DbError::SchemaTooNew { supported: 13, .. }
+        ));
+        let backup = migration_backup_path(&path, 13, target_schema_version());
+        let restored = dir.path.join("restored.sqlite");
+        std::fs::copy(backup, &restored).unwrap();
+        let restored = Database::open_with(&restored, &previous).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT server_url FROM agent_connection")
+                .fetch_one(restored.pool())
+                .await
+                .unwrap(),
+            "https://sync.example"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT generation FROM local_entries")
+                .fetch_one(restored.pool())
+                .await
+                .unwrap(),
             23
         );
     }

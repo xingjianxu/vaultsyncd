@@ -5,6 +5,7 @@ import { notifications } from "@mantine/notifications";
 import type { GetStatusResult } from "@vaultsyncd/local-ipc-types";
 import { nativeAgent, type AgentClient } from "./services/agent";
 import { Connections } from "./features/connections/Connections";
+import { Login } from "./features/connections/Login";
 import { Files } from "./features/files/Files";
 import { History } from "./features/history/History";
 import { Activity } from "./features/activity/Activity";
@@ -27,6 +28,7 @@ function AppView({ agent }: { agent: AgentClient }) {
   const path = useRoute("/connections");
   const [message, setMessage] = useState("");
   const [connectionError, setConnectionError] = useState("");
+  const [operationError, setOperationError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const [snapshot, setSnapshot] = useState<GetStatusResult>();
@@ -39,7 +41,7 @@ function AppView({ agent }: { agent: AgentClient }) {
   function failure(error: unknown) { if (mounted.current) { setConnected(false); setConnectionError(error instanceof Error ? error.message : "本机 agent 请求失败。"); } }
   function run(action: () => Promise<void>) {
     if (executing.current) return;
-    executing.current = true; setBusy(true); setMessage("操作正在执行，等待 agent 确认。");
+    executing.current = true; setBusy(true); setOperationError(""); setMessage("操作正在执行，等待 agent 确认。");
     const notification = notifications.show({ message: "操作正在执行，等待 agent 确认。", loading: true, autoClose: false, withCloseButton: false });
     void action().then(() => {
       if (mounted.current) {
@@ -49,7 +51,7 @@ function AppView({ agent }: { agent: AgentClient }) {
     }).catch(async error => {
       if (!mounted.current) return;
       const detail = error instanceof Error ? error.message : "本机 agent 请求失败。";
-      setMessage(detail);
+      setMessage(detail); setOperationError(detail);
       notifications.update({ id: notification, message: detail, color: "red", loading: false, autoClose: false, withCloseButton: true });
       // A rejected business operation can still have a live local IPC connection.
       try { await refresh(); } catch (connectionError) { failure(connectionError); }
@@ -61,6 +63,9 @@ function AppView({ agent }: { agent: AgentClient }) {
     void poll(); const timer = window.setInterval(() => void poll(), 2000);
     return () => { mounted.current = false; window.clearInterval(timer); };
   }, [refresh]);
+  if (snapshot?.management?.connection?.authenticated !== true) return <Login
+    agent={agent} connection={snapshot?.management?.connection} changed={refresh} run={run} busy={busy}
+    error={connectionError || operationError} retry={() => run(refresh)} />;
   return <PageShell product="桌面客户端" items={items} activePath={path} homePath="/connections" status={<StatusBadge tone={connected ? "success" : "neutral"}>{connected ? "agent 已连接" : "未连接"}</StatusBadge>}><Stack gap="lg" className="app-content desktop-content">
     <Group justify="space-between" align="center"><Text size="sm" c="dimmed" role="status" data-agent-feedback>{connectionError || message || (connected ? "本机 agent 状态已读取。" : "正在读取本机 agent 状态。")}</Text><Button disabled={busy} onClick={() => run(refresh)}>检查本机连接</Button></Group>
     {path === "/connections" ? <Connections agent={agent} connection={snapshot?.management?.connection} changed={refresh} run={run} busy={busy} />

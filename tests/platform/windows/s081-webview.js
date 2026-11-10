@@ -27,7 +27,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
     const currentConnection = async () => (await invoke("agent_get_status")).management.connection;
-    const saveButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "确认并保存连接");
+    const saveButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "登录");
     const candidate = () => document.querySelector('[name="server_id"]');
     await wait("React agent snapshot", () => !!document.querySelector('[name="server_url"]'));
     const original = await currentConnection();
@@ -71,11 +71,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     await timeoutDoesNotSave("agent_discover_connection", { serverUrl: fixture.url + "/timeout", caFile: fixture.caFile });
     await timeoutDoesNotSave("agent_set_connection", { serverId: fixture.serverId, serverUrl: fixture.url + "/timeout", caFile: fixture.caFile });
     report.identityTimeoutDoesNotSave = true;
-    await click("确认并保存连接"); await wait("save trust", confirmed);
-    report.confirmSavesIdentity = (await currentConnection()).server_id === fixture.serverId && (await currentConnection()).ca_file === fixture.caFile;
     field("username", fixture.login); field("password", fixture.password);
     await click("登录"); await wait("authenticated", () => text().includes("已登录（持有凭据"));
-    report.passwordCleared = document.querySelector('[name="password"]').value === "";
+    report.confirmSavesIdentity = (await currentConnection()).server_id === fixture.serverId && (await currentConnection()).ca_file === fixture.caFile;
+    report.passwordCleared = !document.querySelector('[name="password"]');
     location.hash = "/bindings";
     await wait("binding page", () => !!document.querySelector('[name="vault_id"]'));
     await click("读取授权 Vault"); await wait("authorized vaults", () => document.querySelector(`option[value="${fixture.vault}"]`));
