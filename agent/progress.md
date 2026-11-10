@@ -1,6 +1,8 @@
 # 实施进度
 
-当前：**S180 done**，桌面自动更新提供独立原生进度窗口：下载真实百分比/字节，校验、安装、健康与回退活动条；登录框显示构建版本。同步修复S174屏障误拦截更新trial，保留普通启动屏障及未commit写入/同步门禁。根typecheck/build、host54项、Windows严格clippy/构建、浏览器及真实Windows进度/登录、ZIP与安装版更新/回退/门禁75项通过，交接[S180](tasks/S180.md)。实现`d1d47ea`、整合`afd7bcf`已ff合master，任务树/分支清理；保留并行S181及其部署记录；**未发行**，当前正式0.1.6不含本卡；无服务端更改。**下一ready：无**，原S011/S106/S107/S108门禁保持。
+当前：**S182 done**，0.1.7 已作为 [v0.1.7](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.7) **正式版**发出（非草稿、非预发布、`releases/latest` 指向本版，唯一 Windows x64 ZIP `afddce55…`、16,062,202 字节，源`9a873c8`，携带 S180 桌面更新进度/登录版本与 S181 口令策略放宽）；远端 digest 与本地逐字节一致，标签指向同一提交。版本镜像`9a873c8`已推送 master；证据`/data/vaultsyncd-dev/S182-release-20261110/`，交接[S182](tasks/S182.md)。**下一ready：无**，S011/S106/S107/S108门禁不变；Latest 属发布渠道属性，不代表首发验收完成。
+
+此前 **S180 done**，桌面自动更新提供独立原生进度窗口：下载真实百分比/字节，校验、安装、健康与回退活动条；登录框显示构建版本。同步修复S174屏障误拦截更新trial，保留普通启动屏障及未commit写入/同步门禁。根typecheck/build、host54项、Windows严格clippy/构建、浏览器及真实Windows进度/登录、ZIP与安装版更新/回退/门禁75项通过，交接[S180](tasks/S180.md)。实现`d1d47ea`、整合`afd7bcf`已ff合master，任务树/分支清理；无服务端更改，现已由0.1.7携带。**下一ready：无**，原S011/S106/S107/S108门禁保持。
 
 并行完成：**S181 done**，按用户要求取消密码最短长度限制（`MIN_PASSWORD_CHARS=1`，只要求非空；ADR-031），并把本机服务端管理员密码离线重置为 `1`、撤销全部旧会话；新包已在 generation 273 上线，loopback 与公网 HTTPS 均验证用 `1` 登录成功。**下一ready：无**，S011/S106/S107/S108 门禁不变。
 
@@ -16,7 +18,7 @@
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
-最近发行是 [v0.1.6](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.6) **正式版/Latest**，源`1e073de`，附件 `vaultsyncd-0.1.6-x64-unsigned.zip`（`21b2c2ab…`）；此前 v0.1.5 预发布源`7077fc9`、v0.1.4 源`fe273d3`、v0.1.3 源`d2f9e26`、v0.1.2 源`d976376`保持。在线服务端为S181，运行/开机generation273、源`afbbc78`、schema20、主机pin`a6a335b`，管理员密码已按用户要求重置为弱口令`1`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收；0.1.6 进入托盘自动更新渠道，但未做端到端原生升级演练且包未签名。
+最近发行是 [v0.1.7](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.7) **正式版/Latest**，源`9a873c8`，附件 `vaultsyncd-0.1.7-x64-unsigned.zip`（`afddce55…`）；此前 v0.1.6 正式版源`1e073de`、v0.1.5 预发布源`7077fc9`、v0.1.4 源`fe273d3`、v0.1.3 源`d2f9e26`、v0.1.2 源`d976376`保持。在线服务端为S181，运行/开机generation273、源`afbbc78`、schema20、主机pin`a6a335b`，管理员密码已按用户要求重置为弱口令`1`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收；0.1.7 进入托盘自动更新渠道，但未做端到端原生升级演练且包未签名。
 
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
@@ -46,8 +48,9 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S182 | 发布 v0.1.7 正式版（含 S180/S181）；Windows ZIP 唯一附件、远端 digest 与本地一致，设为 Latest | 版本9a873c8已ff合master并推送，任务树/分支清理 | [S182](tasks/S182.md) |
 | S181 | 取消密码最短长度限制（只要求非空，ADR-031）；本机管理员密码离线重置为 `1` 并撤销全部会话 | 实现afbbc78已ff合master；包在generation273上线，宿主/Web检查与HTTPS登录验证通过 | [S181](tasks/S181.md) |
-| S180 | 桌面更新原生进度、登录版本及受控trial启动修复；Windows升级/回退75项通过 | 实现d1d47ea、整合afd7bcf已ff合master；任务树/分支清理，未发行 | [S180](tasks/S180.md) |
+| S180 | 桌面更新原生进度、登录版本及受控trial启动修复；Windows升级/回退75项通过 | 实现d1d47ea、整合afd7bcf已ff合master；任务树/分支清理，现已由0.1.7携带 | [S180](tasks/S180.md) |
 | S179 | 发布 v0.1.6 正式版（含 S178）；Windows ZIP 唯一附件、远端 digest 与本地一致，设为 Latest | 版本1e073de已ff合master并推送，任务树/分支清理 | [S179](tasks/S179.md) |
 | S178 | Vault选择框每次打开自动读取授权清单，加载/错误与选择失效处理 | 实现42edf8e已ff合master，树/分支清理；宿主及真实Windows S081通过 | [S178](tasks/S178.md) |
 | S177 | 发布 v0.1.5 预发布（含 S176）；Windows ZIP 唯一附件、远端 digest 与本地一致，一次上传成功 | 版本7077fc9已ff合master并推送，任务树/分支清理 | [S177](tasks/S177.md) |

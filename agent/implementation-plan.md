@@ -1823,3 +1823,11 @@ S001 初始化完整编号；S002 以后工具可以仅输出未完成行及直�
 - 范围：S180-a 共用 Windows 原生进度窗口与下载/校验/维护/重启阶段；S180-b 登录框构建版本；S180-c 修复组合验收暴露的 S174 屏障拦截更新 trial 回归并整体验收。同卡顺序实施，保留普通启动屏障、更新来源校验、事务与回退。
 - 验收：根 typecheck/desktop build；受影响 Rust 宿主测试与 Windows 严格 clippy/交叉构建；浏览器登录/明暗窄宽布局；真实 Windows 进度条及自动更新成功/失败恢复回归。百分比仅取下载实际字节，无总量阶段用活动条，下载完成不冒充安装完成。
 - 交接：`agent/tasks/S180.md`；验收交接后合 master 并清理；无服务端改动、无发行推送。
+
+
+### S182 — 发布 0.1.7 正式版 GitHub Release
+
+- 依据：2026-11-10 用户要求“发布到 github release”，明确版本号 0.1.7 且按正式版发布（`--stable`、设为 Latest）；前置 S180、S181 done，`v0.1.6` 已占用且不含这两项。
+- 范围：同步根 Cargo、前端/Tauri 镜像与 Cargo.lock（不改协议/schema/生成器版本与业务代码）；推送 master；用 `tools/release.sh` 构建 Windows x64 便携 ZIP；`tools/publish-release.sh --stable` 上传唯一 ZIP 并设 Latest，成为托盘自动更新渠道的正式版来源。
+- 验收：`cargo xtask version --check`、`cargo fmt --check`、`cargo xtask generate --check`、`pnpm install --frozen-lockfile --offline`、真实构建的 SHA256SUMS 校验、`--dry-run` 计划与远端附件大小/digest、Latest 归属及标签指向核对；不声称 Windows 原生复验或首发门禁通过。
+- 交接：`agent/tasks/S182.md`；不改动已发布 Release，不触发服务端部署。
