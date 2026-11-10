@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Card, Group, NativeSelect, SimpleGrid, Stack, Text, TextInput, Title } from "@mantine/core";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Card, Group, Loader, NativeSelect, Select, SimpleGrid, Stack, Text, TextInput, Title } from "@mantine/core";
 import { Button, Table } from "@vaultsyncd/ui";
 import type { BindingInfo, BindingStatus, RemoteItem } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
@@ -10,13 +10,39 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
   changed(): Promise<void>; run(action: () => Promise<void>): void; busy: boolean;
 }) {
   const [vaults, setVaults] = useState<RemoteItem[]>();
+  const [vaultId, setVaultId] = useState<string | null>(null);
+  const [vaultsLoading, setVaultsLoading] = useState(false);
+  const [vaultsError, setVaultsError] = useState("");
+  const readingVaults = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  async function readVaults() {
+    if (readingVaults.current) return;
+    readingVaults.current = true; setVaultsLoading(true); setVaultsError("");
+    try {
+      const result = await agent.listVaults();
+      const items = result.items;
+      if (!items) throw new Error("agent 未返回 Vault 清单。");
+      if (mounted.current) {
+        setVaults(items);
+        setVaultId(current => items.some(vault => vault.id === current) ? current : null);
+      }
+    } catch (error) {
+      if (mounted.current) {
+        setVaults(undefined);
+        setVaultsError(error instanceof Error ? error.message : "读取 Vault 失败，请重新打开选择框重试。");
+      }
+    } finally {
+      readingVaults.current = false;
+      if (mounted.current) setVaultsLoading(false);
+    }
+  }
   const [notice, setNotice] = useState("");
   const [localPath, setLocalPath] = useState("");
   const [managing, setManaging] = useState<string>();
   function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
-    const vaultId = String(form.get("vault_id"));
-    if (!localPath) return;
+    if (!localPath || !vaultId || vaultsLoading || vaultsError || !vaults?.some(vault => vault.id === vaultId)) return;
     const mode = form.get("mode") === "full" ? "full" : "on_demand";
     run(async () => {
       await agent.createBinding({ bindingId: crypto.randomUUID().replaceAll("-", ""), vaultId, localPath, mode });
@@ -35,20 +61,19 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
     <Title order={1} size="h2">同步目录</Title>
     <Card component="section" withBorder>
       <Stack>
-        <Group justify="space-between">
-          <Title order={2} size="h3">添加同步目录</Title>
-          <Button variant="default" disabled={busy} onClick={() => run(async () => { const result = await agent.listVaults(); if (!result.items) throw new Error("agent 未返回 Vault 清单。"); setVaults(result.items); })}>读取授权 Vault</Button>
-        </Group>
+        <Title order={2} size="h3">添加同步目录</Title>
         <form onSubmit={create}><Stack>
           <SimpleGrid cols={{ base: 1, sm: 2 }}>
-            <NativeSelect label="远端 Vault" name="vault_id" required defaultValue="">
-              <option value="">请选择 Vault</option>{vaults?.map(vault => <option key={vault.id} value={vault.id}>{vault.name}</option>)}
-            </NativeSelect>
+            <Select label="远端 Vault" name="vault_id" required placeholder="请选择 Vault"
+              value={vaultId} onChange={setVaultId} allowDeselect={false} disabled={busy}
+              data={vaultsLoading || vaultsError ? [] : vaults?.map(vault => ({ value: vault.id, label: vault.name })) ?? []}
+              onDropdownOpen={() => void readVaults()} aria-busy={vaultsLoading} error={vaultsError}
+              rightSection={vaultsLoading ? <Loader size="xs" /> : undefined}
+              nothingFoundMessage={vaultsLoading ? "正在读取 Vault…" : vaultsError ? "读取失败，请重新打开重试。" : "服务器当前没有已授权 Vault，请联系管理员。"} />
             <NativeSelect label="模式" name="mode" defaultValue="full">
               <option value="full">完整同步（保留离线内容）</option><option value="on_demand">按需下载（仅完整内容可离线读取）</option>
             </NativeSelect>
           </SimpleGrid>
-          {vaults?.length === 0 && <Text size="sm">服务器当前没有已授权 Vault，请联系管理员。</Text>}
           <Group align="flex-end" wrap="nowrap">
             <TextInput className="desktop-grow" label="本地目录" readOnly name="local_path" value={localPath} placeholder="请选择本地同步目录" />
             <Button variant="default" disabled={busy} onClick={() => run(async () => {
@@ -57,7 +82,7 @@ export function Bindings({ agent, bindings, states, read, changed, run, busy }: 
             })}>选择目录…</Button>
           </Group>
           <Text size="sm" c="dimmed">首次合并保留双方内容，不根据“缺少文件”推导删除。</Text>
-          <Group><Button type="submit" disabled={busy || !vaults?.length || !localPath}>创建绑定并开始合并</Button></Group>
+          <Group><Button type="submit" disabled={busy || vaultsLoading || !!vaultsError || !vaultId || !vaults?.length || !localPath}>创建绑定并开始合并</Button></Group>
         </Stack></form>
         {notice && <Text size="sm" role="status">{notice}</Text>}
       </Stack>

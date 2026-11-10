@@ -188,8 +188,8 @@ def main():
             page.get_by_role("button", name="登录", exact=True).click()
             page.get_by_text(re.compile("已登录（持有凭据")).wait_for(state="visible")
             page.get_by_role("link", name="同步目录", exact=True).click()
-            page.get_by_role("button", name="读取授权 Vault", exact=True).click()
-            page.locator('[name="vault_id"]').select_option(fixture["vault"])
+            page.get_by_role("combobox", name="远端 Vault").click()
+            page.locator(f'[role="option"][value="{fixture["vault"]}"]').click()
             # The installed client only accepts a path from the real native folder picker.
             action("pick-directory")
             page.get_by_role("button", name="选择目录…", exact=True).click()

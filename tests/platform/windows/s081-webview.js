@@ -77,13 +77,20 @@ window.addEventListener("DOMContentLoaded", async () => {
     report.passwordCleared = !document.querySelector('[name="password"]');
     location.hash = "/bindings";
     await wait("binding page", () => !!document.querySelector('[name="vault_id"]'));
-    await click("读取授权 Vault"); await wait("authorized vaults", () => document.querySelector(`option[value="${fixture.vault}"]`));
-    const option = document.querySelector(`option[value="${fixture.vault}"]`);
+    const vaultPicker = () => document.querySelector('[role="combobox"]');
+    report.noManualVaultRead = ![...document.querySelectorAll("button")].some(b => b.textContent === "读取授权 Vault");
+    vaultPicker().click();
+    await wait("authorized vaults", () => document.querySelector(`[role="option"][value="${fixture.vault}"]`));
+    const option = document.querySelector(`[role="option"][value="${fixture.vault}"]`);
     report.vaultNameDisplayed = option.textContent === fixture.vaultName && option.textContent !== fixture.vault;
     const pathInput = () => document.querySelector('[name="local_path"]');
     report.pathReadOnly = pathInput().readOnly;
     report.noSelectionCannotSubmit = [...document.querySelectorAll("button")].find(b => b.textContent === "创建绑定并开始合并").disabled;
-    field("vault_id", fixture.vault);
+    option.click(); await delay();
+    vaultPicker().click();
+    await wait("refreshed vaults", () => vaultPicker().getAttribute("aria-busy") === "false" && document.querySelector(`[role="option"][value="${fixture.vault}"]`));
+    report.vaultSelectionSurvivesRefresh = document.querySelector('[name="vault_id"]').value === fixture.vault;
+    vaultPicker().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await click("选择目录…");
     await wait("native selection", () => pathInput().value === fixture.localPath);
     report.nativeDirectorySelected = true;
@@ -126,7 +133,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
     report.nonceStyles = /^[0-9a-f]{32}$/.test(nonce ?? "") && [...document.querySelectorAll("style")].every(style => style.nonce === nonce);
     report.cspViolations = cspViolations;
-    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","existingBindingProtectsIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
+    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","existingBindingProtectsIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

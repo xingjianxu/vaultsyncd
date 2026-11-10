@@ -1757,6 +1757,13 @@
 - 结果：版本镜像 `7077fc9` 已推送 master；Windows ZIP `a25d6391…`（15,981,059 字节）由 `v0.1.5` 预发布发出（非 Latest、唯一附件），远端 digest 一致，标签指向 `7077fc9`；`releases/latest` 404，无正式版渠道条目。
 - 交接：`agent/tasks/S177.md`；不改动已发布 Release，不触发服务端部署。
 
+### S178 — Vault 选择框每次打开自动读取授权清单
+
+- 依据：2026-11-10 用户要求取消 Windows 客户端手动“读取授权 Vault”，每次使用选择控件自动读取；前置 S081/S114/S152/S176 done，design §6（I15）、§18.1。本卡 ready。
+- 范围：同步目录页使用 Mantine Select 的打开事件读取，移除单独读取按钮；加载、错误、空清单、重复打开与选择失效处理；更新直接消费者验收脚本。无 IPC/schema/服务端变更。
+- 验收：桌面 typecheck/build、Chromium 鼠标/键盘打开与刷新、错误重试/空清单/授权变化/重复请求保护；真实 Windows S081 WebView/agent/HTTPS 绑定回归。无服务端部署或发行。
+- 交接：`agent/tasks/S178.md`；完成后合 master 并清理任务工作树。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
