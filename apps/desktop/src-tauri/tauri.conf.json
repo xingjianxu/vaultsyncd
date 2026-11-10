@@ -14,7 +14,8 @@
     "frontendDist": "../dist"
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "icon": ["icons/icon.ico"]
   },
   "identifier": "org.vaultsyncd.desktop",
   "productName": "vaultsyncd",

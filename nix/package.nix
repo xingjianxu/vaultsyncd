@@ -18,7 +18,7 @@ let
     [ "Cargo.toml" "Cargo.lock" "rust-toolchain.toml" ];
   webSource = clean "vaultsyncd-web-source"
     [ "apps/web" "packages" ]
-    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "apps/desktop/package.json" ];
+    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "apps/desktop/package.json" "logo.svg" ];
   rust = pkgs.rustPlatform.buildRustPackage {
     pname = "vaultsyncd-rust";
     inherit version;

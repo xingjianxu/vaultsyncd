@@ -251,11 +251,7 @@ pub(super) fn run() {
             let menu = tauri::menu::Menu::with_items(app, &[&open, &update, &quit])?;
             app.manage(crate::updates::UpdateMenu(update));
             tauri::tray::TrayIconBuilder::new()
-                .icon(tauri::image::Image::new_owned(
-                    [28, 120, 98, 255].repeat(16 * 16),
-                    16,
-                    16,
-                ))
+                .icon(app.default_window_icon().expect("configured app icon").clone())
                 .tooltip("vaultsyncd")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {

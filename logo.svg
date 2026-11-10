@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="128" height="128" viewBox="0 0 128 128"
+     fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">vaultsyncd</title>
+  <desc id="desc">Two blue and aqua ribbons form a continuous synchronization loop around a centered, upright ice-blue letter V on a midnight-blue rounded tile.</desc>
+  <rect x="4" y="4" width="120" height="120" rx="29" fill="#111e33"/>
+  <g transform="rotate(-30 64 64)">
+    <path fill="#5277ff"
+          d="M60 24H48A24 24 0 0 0 24 48V80A24 24 0 0 0 48 104H60L68 86H48A6 6 0 0 1 42 80V48A6 6 0 0 1 48 42H52Z"/>
+    <path fill="#37d4c6" transform="rotate(180 64 64)"
+          d="M60 24H48A24 24 0 0 0 24 48V80A24 24 0 0 0 48 104H60L68 86H48A6 6 0 0 1 42 80V48A6 6 0 0 1 48 42H52Z"/>
+  </g>
+  <path fill="#B6D7FF"
+        d="M50 51H58L64 70L70 51H78L68 79H60Z"/>
+</svg>

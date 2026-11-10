@@ -1771,6 +1771,13 @@
 - 验收：`cargo xtask version --check`、`cargo fmt --check`、`cargo xtask generate --check`、`pnpm install --frozen-lockfile`、真实构建的 SHA256SUMS 校验、`--dry-run` 计划与远端附件大小/digest、Latest 归属及标签指向核对；不声称 Windows 原生复验或首发门禁通过。
 - 交接：`agent/tasks/S179.md`；不改动已发布 Release，不触发服务端部署。
 
+### S183 — 统一客户端应用图标与服务端网页品牌图标
+
+- 依据：2026-11-10 用户要求将根目录 `logo.svg` 用作客户端 app icon、服务端网页 favicon 与 logo；前置 S180、S182 done；design §18.1。
+- 范围：保留 SVG 为唯一矢量源，生成 Windows 多尺寸 ICO；替换 Tauri EXE/窗口/托盘图标；Web 登录与顶栏展示同源 SVG，favicon 与 logo 共用构建资源；补齐 Nix Web 源过滤。
+- 验收：根 typecheck、Web/desktop build、Web 现有测试、fmt、Windows 严格 clippy/构建；Chromium 明暗/窄宽屏图标与 favicon 取源核对，真实 Windows EXE/窗口图标核验；验收后本机部署及公网健康/资源核对。
+- 交接：`agent/tasks/S183.md`；不新增发行或改变同步/认证协议，既有首发门禁保持。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

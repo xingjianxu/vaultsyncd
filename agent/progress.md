@@ -1,5 +1,7 @@
 # 实施进度
 
+当前：**S183 in_progress**，按用户要求统一根 `logo.svg` 为 Windows 客户端应用/窗口/托盘图标及 Web favicon/登录/顶栏 logo；前端、Windows 构建与 Chromium 验证通过，原生图标与本机部署核验进行中，交接 [S183](tasks/S183.md)。**下一 ready：无**，S011/S106/S107/S108 门禁保持。
+
 当前：**S182 done**，0.1.7 已作为 [v0.1.7](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.7) **正式版**发出（非草稿、非预发布、`releases/latest` 指向本版，唯一 Windows x64 ZIP `afddce55…`、16,062,202 字节，源`9a873c8`，携带 S180 桌面更新进度/登录版本与 S181 口令策略放宽）；远端 digest 与本地逐字节一致，标签指向同一提交。版本镜像`9a873c8`已推送 master；证据`/data/vaultsyncd-dev/S182-release-20261110/`，交接[S182](tasks/S182.md)。**下一ready：无**，S011/S106/S107/S108门禁不变；Latest 属发布渠道属性，不代表首发验收完成。
 
 此前 **S180 done**，桌面自动更新提供独立原生进度窗口：下载真实百分比/字节，校验、安装、健康与回退活动条；登录框显示构建版本。同步修复S174屏障误拦截更新trial，保留普通启动屏障及未commit写入/同步门禁。根typecheck/build、host54项、Windows严格clippy/构建、浏览器及真实Windows进度/登录、ZIP与安装版更新/回退/门禁75项通过，交接[S180](tasks/S180.md)。实现`d1d47ea`、整合`afd7bcf`已ff合master，任务树/分支清理；无服务端更改，现已由0.1.7携带。**下一ready：无**，原S011/S106/S107/S108门禁保持。

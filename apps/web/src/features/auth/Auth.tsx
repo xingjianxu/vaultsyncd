@@ -5,6 +5,7 @@ import { useForm } from "@mantine/form";
 import { StatusBadge } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { BrowserAuth, SignedOut } from "../../services/auth";
+import logoUrl from "../../../../../logo.svg?no-inline";
 
 type AuthState = { account: AccountInfo | null; client: BrowserAuth | null; initializing: boolean; busy: boolean; error: string; verify: () => Promise<void>; reportSignedOut: () => void; run: (action: (client: BrowserAuth) => Promise<AccountInfo | null>) => Promise<void> };
 const AuthContext = createContext<AuthState | null>(null);
@@ -85,7 +86,7 @@ function LoginPage() {
   return <main className="auth-screen">
     <Paper withBorder p="xl" radius="md" className="auth-panel">
       <Stack gap="lg">
-        <Title order={1} size="h2">登录 vaultsyncd</Title>
+        <Group gap="sm"><img src={logoUrl} alt="" width={40} height={40} /><Title order={1} size="h2">登录 vaultsyncd</Title></Group>
         {error && <Alert color="red" role="alert">{error}</Alert>}
         <form onSubmit={form.onSubmit(submitLogin)} aria-busy={busy}>
           <Stack>

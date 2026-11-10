@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -7,6 +8,7 @@ import { createServer } from "vite";
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const server = await createServer({
   root, configFile: false,
+  define: { __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(new URL("../../desktop/package.json", import.meta.url), "utf8")).version) },
   server: { middlewareMode: true, hmr: false },
   ssr: { noExternal: ["@vaultsyncd/ui"] },
 });
@@ -21,11 +23,8 @@ try {
       assert.doesNotMatch(html, /mantine-AppShell|主要导航|aria-current="page"|服务概览|检查服务连接|name="password"/);
       console.log("web: 会话初始化仅显示核验状态，不渲染管理壳或登录表单");
     } else {
-      assert.match(html, /未连接/);
-      assert.match(html, /aria-current="page"/);
-      assert.match(html, /连接设置/);
-      assert.match(html, /账号/);
-      console.log("desktop: 初始渲染明确未连接，保留桌面管理壳");
+      assert.doesNotMatch(html, /mantine-AppShell|主要导航|aria-current="page"/);
+      console.log("desktop: 服务端静态渲染不提前挂载管理壳（登录对话框使用浏览器 Portal）");
     }
   }
   const { disconnectedAgent } = await server.ssrLoadModule("/apps/desktop/src/services/agent.ts");

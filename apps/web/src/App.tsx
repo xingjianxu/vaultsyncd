@@ -1,6 +1,7 @@
 import { Component, type ReactNode, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Anchor, Button, Card, Divider, Group, Loader, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { AppProvider, Icon, PageShell } from "@vaultsyncd/ui";
+import logoUrl from "../../../logo.svg?no-inline";
 import { showFeedback } from "./components/Feedback";
 import { ServerIdentity } from "./components/ServerIdentity";
 import { FileActionsProvider } from "./features/files/FileActions";
@@ -67,7 +68,7 @@ function AppView() {
     return () => { controller.current?.abort(); controller.current = null; };
   }, [connect]);
   const connection = <StatusBadge tone={status === "服务可用" ? "success" : status === "服务降级" || status === "需要恢复" ? "warning" : "neutral"}>{status}</StatusBadge>;
-  return <PageShell product="服务管理" items={items.map(item => ({ ...item, icon: <Icon path={item.icon} /> }))} activePath={path} status={connection}
+  return <PageShell product="服务管理" brandIcon={<img src={logoUrl} alt="" width={28} height={28} />} items={items.map(item => ({ ...item, icon: <Icon path={item.icon} /> }))} activePath={path} status={connection}
     sidebarTitle="服务端控制台" sidebarFooter={<Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text>}
     headerActions={<Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor>}
     contentWidth={path === "/files" ? "100%" : "xl"}>

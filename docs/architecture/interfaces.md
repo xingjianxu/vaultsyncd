@@ -2639,6 +2639,8 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 ## S152 客户端与 Web 共用 Mantine 展示层
 
+2026-11-10 S183：`PageShellProps.brandIcon?: ReactNode` 由应用注入顶栏品牌图标；Web 登录与顶栏直接引用根 `logo.svg?no-inline`，HTML favicon 引用同一 SVG，经 Vite 输出同一个带摘要 `/assets/logo-*.svg`，沿用同源 CSP 与已有静态路由。Nix `webSource` 包含根 `logo.svg`。Windows `bundle.icon` 显式指定 `icons/icon.ico`（16/24/32/48/64/128/256），EXE/默认窗口共用；托盘克隆 `default_window_icon`，不再生成纯色占位图。ICO 由根 SVG 派生，命令及证据见 S183 交接；无 wire/schema 变化。
+
 - `packages/ui` 提供 `AppProvider`、`PageShell`、`Button`、`Table<T>`、`Dialog`、`EmptyState`、`StatusBadge` 及 `styles.css`，只依赖 React/Mantine，不导入 IPC、HTTP、Tauri 或 wire DTO。两端在各自根入口导入共享样式。
 - `AppProvider` 使用 Mantine 默认主题、`defaultColorScheme="auto"` 和全局通知区，可传 `getStyleNonce`。`PageShell` 提供 48px 顶栏、240px 导航、窄屏 Burger、跳转主内容与明暗切换；调用方提供路由、导航、连接状态和各端附加入口。主题偏好使用 Mantine 本机存储，不存放账号凭据。
 - `Dialog` 组合 Mantine Modal，通过 `opened` 控制并保持组件挂载，使关闭恢复焦点；`Table` 保留 caption/columns/rows/rowKey/emptyMessage，水平滚动局限表格内部。Web 的 `components/ui.tsx` 仅稳定重导出共享展示 API，业务页面继续使用自身 API 和状态机。
