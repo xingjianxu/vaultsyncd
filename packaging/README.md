@@ -37,7 +37,7 @@ ZIP 仍是 `unsigned-test`，解压后使用 `Start vaultsyncd.cmd`；状态留�
 ./tools/build.sh
 ```
 
-脚本自动进入 `nix develop .#windows`，冻结锁离线准备前端、交叉编译 `x86_64-pc-windows-msvc` release（静态 CRT），每次先清空 `dist/` 再写入。产物就是无版本号 ZIP 的解压结果，可整目录拷到 Windows 11 本机普通路径后运行 `Start vaultsyncd.cmd`：
+脚本自动进入 `nix develop .#windows`，冻结锁离线准备前端、交叉编译 `x86_64-pc-windows-msvc` release（静态 CRT），进入 devShell 前先清空 `dist/` 与暂存目录 `target/dev-build-stage`，产物齐套后才一次性搬入 `dist/`；构建失败或中断时 `dist/` 不存在，不留上一轮或半成品。产物就是无版本号 ZIP 的解压结果，可整目录拷到 Windows 11 本机普通路径后运行 `Start vaultsyncd.cmd`：
 
 ```text
 dist/   四份 EXE（agent/session/CLI/desktop）、installed-files.json、zip-files.json、

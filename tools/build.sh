@@ -10,20 +10,35 @@
 set -euo pipefail
 
 vault=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+out=$vault/dist
+# 暂存区放在 target/ 下（尊重调用方的 CARGO_TARGET_DIR）：全部产物先在暂存区组装、
+# 复核通过后才整体搬入 dist，构建失败时 dist 连目录都不会建立。
+stage_root=${CARGO_TARGET_DIR:-$vault/target}
+case $stage_root in /*) ;; *) stage_root=$vault/$stage_root ;; esac
+stage=$stage_root/dev-build-stage
 
 if [ "$#" -gt 0 ]; then
-    echo "build: 不接受参数；产物固定为 $vault/dist" >&2
+    echo "build: 不接受参数；产物固定为 $out" >&2
     exit 2
 fi
+
+# 构建前先清空：dist 是构造成果，不是需要保留的现场；这一步在进入 .#windows 之前，
+# 因此即使 devShell 或编译失败，也不会留下上一轮的旧产物。重入时不再重复清空。
+if [ "${VAULTSYNCD_BUILD_CLEARED:-}" != "1" ]; then
+    echo "== 清空 $out 与暂存区 $stage"
+    rm -rf "$out" "$stage"
+fi
+# 暂存区只属于本次构建：任何退出路径（包括失败）都清掉，不污染 target/。
+trap 'rm -rf "$stage"' EXIT
 
 # 交叉工具链只在 .#windows shell 内提供（rustup 官方 toolchain + cargo-xwin）。
 if [ "${VAULTSYNCD_WINDOWS_SHELL:-}" != "1" ]; then
     cd "$vault"
-    exec nix develop .#windows --command bash "$vault/tools/build.sh" "$@"
+    exec nix develop .#windows --command \
+        env VAULTSYNCD_BUILD_CLEARED=1 bash "$vault/tools/build.sh" "$@"
 fi
 
 cd "$vault"
-out=$vault/dist
 target=x86_64-pc-windows-msvc
 # 与 cargo xtask release build 相同：静态 CRT（客体无 VCRUNTIME140.dll），忽略静态库
 # 预编译 obj 的 LNK4099 调试信息警告。
@@ -36,11 +51,6 @@ zip_files=(
     "Start vaultsyncd.cmd" "Stop vaultsyncd.cmd" README-ZIP.txt
 )
 
-# 端点目录先整体清空：dist 是构造成果，不是需要保留的现场。
-echo "== 清空 $out"
-rm -rf "$out"
-mkdir -p "$out"
-stage=$out/.stage
 mkdir -p "$stage/payload"
 
 echo "== pnpm：锁定依赖离线准备"
@@ -54,9 +64,7 @@ echo "== Rust：交叉编译 $target release（静态 CRT）"
 env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS="$rustflags" \
     cargo xwin build --locked --release --target "$target" \
     -p vaultsyncd-agent -p vaultsyncd-cli -p vaultsyncd-desktop --bins
-# 尊重调用方的 CARGO_TARGET_DIR（相对路径按仓库根解析），默认用仓库 target/ 以复用缓存。
-built=${CARGO_TARGET_DIR:-$vault/target}/$target/release
-case $built in /*) ;; *) built=$vault/$built ;; esac
+built=$stage_root/$target/release
 for binary in "${product_executables[@]}"; do
     if [ ! -f "$built/$binary" ]; then
         echo "build: 缺少交叉编译产物 $built/$binary" >&2
@@ -107,12 +115,11 @@ echo "== 便携清单与整包复核"
 python3 packaging/windows/zip/build.py \
     "$stage/payload" "$vault/packaging/windows/zip" \
     "$stage/unsigned.zip"
-mv "$stage/payload/zip"/* "$out"/
-rm -rf "$stage"
 
+# 齐套检查在暂存区完成：dist 只在全部要求文件就位后一次性接收产物。
 for name in "${zip_files[@]}"; do
-    if [ ! -f "$out/$name" ]; then
-        echo "build: 缺少产物 $out/$name" >&2
+    if [ ! -f "$stage/payload/zip/$name" ]; then
+        echo "build: 缺少产物 $stage/payload/zip/$name" >&2
         exit 1
     fi
 done
@@ -130,7 +137,13 @@ done
     echo "cargo：$(cargo --version)"
     echo "node：$(node --version)"
     echo "pnpm：$(pnpm --version)"
-} >"$out/build-info.txt"
+} >"$stage/build-info.txt"
+
+# 全部产物齐套：dist 到这一步才建立并一次性接收产物（此前一直不存在）。
+echo "== 搬入产物 $out"
+mkdir -p "$out"
+mv "$stage/payload/zip"/* "$stage/build-info.txt" "$out"/
+rm -rf "$stage"
 
 echo "== 产物（$out）"
 ls -l "$out"

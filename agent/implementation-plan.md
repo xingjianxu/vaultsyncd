@@ -1849,6 +1849,13 @@ S001 初始化完整编号；S002 以后工具可以仅输出未完成行及直�
 - 验收：ZIP 打包契约、xtask/自动更新消费者测试、Windows 严格 clippy/交叉构建和真实 Windows 上跨目录/无清单/旧 owner/移动重启/安全停止；按实际结果记录，不声称可执行损坏或缺依赖的 EXE。
 - 交接：`agent/tasks/S185.md`；验收与交接后合 master 并清理本卡工作树；重建开发 dist，不推送/发行，不触发服务端部署。
 
+### S186 — 开发构建先清空 dist 且失败不留残骸
+
+- 依据：2026-11-11 用户要求“build.sh 构建产物前，先清空 dist 目录”；前置 S184/S185 done，`agent/tasks/S185.md` 的后缀构建留下 `dist/.stage` 证明现有清空位置与暂存位置不够严。
+- 范围：`tools/build.sh` 在进入 `.#windows` 之前就清空 `dist/` 与暂存目录（`$CARGO_TARGET_DIR/dev-build-stage`，默认 `target/dev-build-stage`），全部产物与清单在暂存目录组装、齐套后才一次性搬入 `dist/`，暂存目录由 `EXIT` trap 清理；不改发布链（`tools/release.sh`、`packaging/release.py`、`cargo xtask release`）与任何 wire/schema/产物内容。
+- 验收：任务树内实跑构建退出 0 且 `dist/` 只剩预期 11 个文件（无 `.stage`、无 `unsigned.zip`）；预置 `dist/` 旧文件与暂存目录残留后重跑，旧文件与残留均消失；模拟早期失败（pnpm shim 退出 3）时退出码透传、`dist/` 不存在、暂存目录被清掉。
+- 交接：`agent/tasks/S186.md`；开发构建仍不是发布产物，不触发服务端部署与发行推送。
+
 ### S182 — 发布 0.1.7 正式版 GitHub Release
 
 - 依据：2026-11-10 用户要求“发布到 github release”，明确版本号 0.1.7 且按正式版发布（`--stable`、设为 Latest）；前置 S180、S181 done，`v0.1.6` 已占用且不含这两项。

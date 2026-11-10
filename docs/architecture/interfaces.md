@@ -2758,8 +2758,9 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 
 ## S184 — 开发构建到 dist/（不改变发布链）
 
-- `./tools/build.sh` 供本机与客体测试：不接受参数，自动执行 `nix develop .#windows --command bash tools/build.sh`；在 `.#windows` 内用 `pnpm install --frozen-lockfile --offline` + `pnpm --filter @vaultsyncd/desktop build` 重建前端，再以静态 CRT（`-C target-feature=+crt-static -C link-arg=/ignore:4099`）交叉编译 `x86_64-pc-windows-msvc` release 的 `vaultsyncd-agent`/`vaultsyncd-cli`/`vaultsyncd-desktop` 全部 bin。参数错误退出 2，缺产物或缺文件退出 1，成功 0。
-- 输出固定为仓库 `dist/`：四个 EXE（S185 删除 ZIP 专用 EXE）、`installed-files.json`（四 EXE + `source`）、`zip-files.json`、`UNSIGNED-TEST.txt`、`Start`/`Stop vaultsyncd.cmd`、`README-ZIP.txt`、`build-info.txt`。每次先整目录清空，无版本号子目录。清单由 `packaging/windows/zip/build.py` 生成并逐文件复核，`source` 在两份清单间相同，`signature_status=unsigned-test`；`source` 在发布收据字段之外多记 `dirty`，仅描述开发构建，不是发布身份。
+- `./tools/build.sh` 供本机与客体测试：不接受参数，自动执行 `nix develop .#windows --command env VAULTSYNCD_BUILD_CLEARED=1 bash tools/build.sh`；在 `.#windows` 内用 `pnpm install --frozen-lockfile --offline` + `pnpm --filter @vaultsyncd/desktop build` 重建前端，再以静态 CRT（`-C target-feature=+crt-static -C link-arg=/ignore:4099`）交叉编译 `x86_64-pc-windows-msvc` release 的 `vaultsyncd-agent`/`vaultsyncd-cli`/`vaultsyncd-desktop` 全部 bin。参数错误退出 2，缺产物或缺文件退出 1，成功 0。
+- 清空与暂存（S186）：进入 `.#windows` 之前就 `rm -rf` 仓库 `dist/` 与暂存目录 `$CARGO_TARGET_DIR/dev-build-stage`（默认 `target/dev-build-stage`，相对路径按仓库根解析）；全部产物、两份清单、ZIP 复核与 `build-info.txt` 都在暂存目录组装，齐套后才 `mkdir -p dist` 并一次性 `mv` 进去，暂存目录由 `EXIT` trap 清理。因此构建失败或中断时 `dist/` 不存在（不会留下上一轮或半成品），重入 `.#windows` 时不重复清空。
+- 输出固定为仓库 `dist/`：四个 EXE（S185 删除 ZIP 专用 EXE）、`installed-files.json`（四 EXE + `source`）、`zip-files.json`、`UNSIGNED-TEST.txt`、`Start`/`Stop vaultsyncd.cmd`、`README-ZIP.txt`、`build-info.txt`；无版本号子目录，不残留 `unsigned.zip`。清单由 `packaging/windows/zip/build.py` 生成并逐文件复核，`source` 在两份清单间相同，`signature_status=unsigned-test`；`source` 在发布收据字段之外多记 `dirty`，仅描述开发构建，不是发布身份。
 - 不写 `receipt.json`、`SHA256SUMS`、`release-manifest.json`，不要求干净提交，也不参与 `cargo xtask release assemble/verify`。发布与 GitHub Release 仍只消费 `tools/release.sh`/`cargo xtask release build` 的收据目录；因此开发构建不能当发布候选；S185 已取消普通启动 ZIP 所有权门禁，维护事务与原生验收要求保持。
 
 ## S185 — 任意目录直开与统一用户会话入口（ADR-032）
