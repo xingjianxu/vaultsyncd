@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S183 in_progress**，按用户要求统一根 `logo.svg` 为 Windows 客户端应用/窗口/托盘图标及 Web favicon/登录/顶栏 logo；前端、Windows 构建与 Chromium 验证通过，原生图标与本机部署核验进行中，交接 [S183](tasks/S183.md)。**下一 ready：无**，S011/S106/S107/S108 门禁保持。
+当前：**S183 done**，根 `logo.svg` 已统一为 Windows 客户端 EXE/窗口/托盘图标及 Web favicon/登录/顶栏 logo。根 typecheck、两端 build、Web 七组测试、Windows 严格 clippy/构建、真实 Windows 图标像素/窗口及 Chromium 品牌/两端布局验证通过；实现 `c37760f` 已在本机 generation 274 上线，公网与 loopback 健康、SVG 字节/MIME/CSP 核对通过。交接 [S183](tasks/S183.md)；客户端新图标未发行，现有 v0.1.7 附件不变。**下一 ready：无**，S011/S106/S107/S108 门禁保持。
 
 当前：**S182 done**，0.1.7 已作为 [v0.1.7](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.7) **正式版**发出（非草稿、非预发布、`releases/latest` 指向本版，唯一 Windows x64 ZIP `afddce55…`、16,062,202 字节，源`9a873c8`，携带 S180 桌面更新进度/登录版本与 S181 口令策略放宽）；远端 digest 与本地逐字节一致，标签指向同一提交。版本镜像`9a873c8`已推送 master；证据`/data/vaultsyncd-dev/S182-release-20261110/`，交接[S182](tasks/S182.md)。**下一ready：无**，S011/S106/S107/S108门禁不变；Latest 属发布渠道属性，不代表首发验收完成。
 
@@ -50,6 +50,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S183 | 根 SVG 统一 Windows 应用/窗口/托盘及 Web favicon/登录/顶栏品牌；Windows 原生与 Chromium 通过，generation274 部署健康 | 实现 c37760f，验收后 ff 合 master 并清理结果见交接；未发行客户端 | [S183](tasks/S183.md) |
 | S182 | 发布 v0.1.7 正式版（含 S180/S181）；Windows ZIP 唯一附件、远端 digest 与本地一致，设为 Latest | 版本9a873c8已ff合master并推送，任务树/分支清理 | [S182](tasks/S182.md) |
 | S181 | 取消密码最短长度限制（只要求非空，ADR-031）；本机管理员密码离线重置为 `1` 并撤销全部会话 | 实现afbbc78已ff合master；包在generation273上线，宿主/Web检查与HTTPS登录验证通过 | [S181](tasks/S181.md) |
 | S180 | 桌面更新原生进度、登录版本及受控trial启动修复；Windows升级/回退75项通过 | 实现d1d47ea、整合afd7bcf已ff合master；任务树/分支清理，现已由0.1.7携带 | [S180](tasks/S180.md) |
