@@ -1682,6 +1682,13 @@
 - 验收：宿主相关单测、Windows x64 交叉编译与严格 clippy；Windows 原生桌面冷启动、已有 agent 复用、重复启动、GUI退出后 agent存活，以及启动失败/配置与维护保护。
 - 交接：`agent/tasks/S167.md`；客户端更改不触发无关服务端部署，原四张 blocked 首发门禁保持。
 
+### S168 — GitHub 发布不再上传运行库对应源码归档
+
+- 依据：2026-11-09 用户明确要求发布 Release 时不上传 sources 包，并确认所指为 `vaultsyncd-runtime-sources.tar.gz`、该归档仅留在本地构建目录；前置 S156、S165 done；无 design 接口改变（§25 发行只限制产物，不要求该附件上网）。本卡 ready。
+- 范围：`packaging/github-release.py` 只上传平台归档、平台来源清单、根清单与两校验表；Linux 运行库对应源码仍随构建目录保留、继续按组件收据核验，dry-run 明确披露为 `local_only`，发布说明注明另行提供。同步发布契约测试、`packaging/README.md`、`docs/operations/linux.md` 与 `docs/architecture/interfaces.md`。
+- 验收：`tests/contract/github_release.py` 全绿（含“不上传对应源码”“本地哈希不符拒绝”“说明披露按平台区分”负例/正例）；`release.py`、`nix/portable.nix` 与容器入口构建/校验对应源码的既有行为不变；不改线上服务、不改已发布 Release。
+- 交接：`agent/tasks/S168.md`；通过后合 master 并清理。许可说明为“对应源码不再作为 GitHub 附件，分发二进制者须另行提供本地归档”。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
