@@ -133,9 +133,28 @@ impl CredentialSink for VaultSink {
     }
 }
 /// Run in the actual interactive user session. Authentication input is transient stdin only.
-pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(), PortError> {
+pub async fn run(config: AgentConfig, login: bool, once: bool) -> Result<(), PortError> {
+    run_mode(config, login, once, false).await
+}
+/// Start a controller-owned update trial; synchronization and write IPC remain commit-gated.
+pub async fn run_update_trial(config: AgentConfig) -> Result<(), PortError> {
+    run_mode(config, false, false, true).await
+}
+fn admit(config: &AgentConfig, trial: bool) -> Result<(), PortError> {
+    if trial {
+        crate::maintenance::admit_update_trial(config)
+    } else {
+        crate::maintenance::admit_startup(config)
+    }
+}
+async fn run_mode(
+    mut config: AgentConfig,
+    login: bool,
+    once: bool,
+    trial: bool,
+) -> Result<(), PortError> {
     config.validate().map_err(error)?;
-    crate::maintenance::admit_startup(&config)?;
+    admit(&config, trial)?;
     let state = VaultHandle::open(&config.state_dir).map_err(error)?;
     let mut vaults = Vec::new();
     let mut caches = Vec::new();
@@ -165,7 +184,7 @@ pub async fn run(mut config: AgentConfig, login: bool, once: bool) -> Result<(),
         }
     })?;
     // Recheck after ownership acquisition: a concurrent ZIP claim must not be bypassed.
-    crate::maintenance::admit_startup(&config)?;
+    admit(&config, trial)?;
     let db = Arc::new(
         Database::open(config.state_dir.join("client.sqlite"))
             .await

@@ -70,17 +70,32 @@ pub fn prepare(local_app_data: &Path) -> io::Result<PathBuf> {
 /// The startup entry spawns this installed executable with a fixed config and redirects diagnostics.
 /// Arguments are passed directly through CreateProcess; no shell or user-selected executable.
 pub fn launch() -> io::Result<()> {
+    launch_mode(false)
+}
+/// Start only the controller-owned update trial, with the ordinary startup barrier preserved.
+pub fn launch_update_trial() -> io::Result<()> {
+    launch_mode(true)
+}
+fn launch_mode(trial: bool) -> io::Result<()> {
     let local = PathBuf::from(
         std::env::var_os("LOCALAPPDATA").ok_or_else(|| io::Error::other("missing LOCALAPPDATA"))?,
     );
     let config = prepare(&local)?;
-    spawn(&config)?;
+    spawn_mode(&config, trial)?;
     Ok(())
 }
 /// Shared process adapter for installed and ZIP entry points. The caller owns readiness checks.
 pub(crate) fn spawn(config: &Path) -> io::Result<std::process::Child> {
+    spawn_mode(config, false)
+}
+fn spawn_mode(config: &Path, trial: bool) -> io::Result<std::process::Child> {
     let parsed = AgentConfig::load(config)?;
-    crate::maintenance::admit_startup(&parsed).map_err(|e| io::Error::other(e.to_string()))?;
+    if trial {
+        crate::maintenance::admit_update_trial(&parsed)
+    } else {
+        crate::maintenance::admit_startup(&parsed)
+    }
+    .map_err(|e| io::Error::other(e.to_string()))?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -94,9 +109,12 @@ pub(crate) fn spawn(config: &Path) -> io::Result<std::process::Child> {
         .parent()
         .ok_or_else(|| io::Error::other("installed program directory missing"))?
         .join("vaultsyncd-agent.exe");
-    Command::new(agent)
-        .arg("--config")
-        .arg(config)
+    let mut command = Command::new(agent);
+    command.arg("--config").arg(config);
+    if trial {
+        command.arg("--update-trial");
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log)

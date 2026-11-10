@@ -2524,7 +2524,7 @@ S091最终实测：Windows NT10.0.26300.0/NTFS四独立夹具各1项通过，源
 
 ### S099 — Windows每用户安装与独立会话启动
 
-- `vaultsyncd-session.exe`为无窗口固定入口，不接受附加参数，初始化`%LOCALAPPDATA%/vaultsyncd/agent/{agent.json,state/,agent.log}`后直接CreateProcess同目录agent `--config <固定路径>`；已有配置先验证且不覆盖，身份随机，初始无凭据/绑定。GUI关闭不拥有agent生命周期，既有CLI/GUI IPC无新增wire或通用启动能力。
+- `vaultsyncd-session.exe`为无窗口固定入口，普通启动不接受附加参数（S180仅增加下文受控内部`--update-trial`入口），初始化`%LOCALAPPDATA%/vaultsyncd/agent/{agent.json,state/,agent.log}`后直接CreateProcess同目录agent `--config <固定路径>`；已有配置先验证且不覆盖，身份随机，初始无凭据/绑定。GUI关闭不拥有agent生命周期，既有CLI/GUI IPC无新增wire或通用启动能力。
 - desktop精确`--register-shortcut`仅注册自身AUMID `org.vaultsyncd.desktop`再退出；NSIS用户权限写HKCU Run `vaultsyncd-agent`为带引号的固定session路径。程序与状态分离，Windows11 x64/WebView2 pv前置，当前仅未签名首装测试；已有安装/不满足目录拒绝，不清数据。升级卸载由S100。
 - `cargo xtask release build windows-client <new-dir>`扩展S093来源收据：实际全新target cross release四PE，冻结锁前端，实测NSIS与Rust/Node/pnpm工具，PE/验收入口检查，installed-files.json与每个payload hash。合并/交接后的新HEAD不能重用旧来源收据，须真实重建。操作见`docs/operations/windows-installation.md`。
 - 原生驱动`tests/platform/windows/s099-installation.py`只协调独立测试用户与可恢复登录，原LSA备份使用客体私有ACL+机器DPAPI，不进入宿主证据。正式源cf1d174真实新标准用户安装、GUI/CLI同instance、WM_CLOSE后上传、重启登录Run启动及再次上传hash均过；原Quickemu登录恢复且VM在线。原生公开结果与页面截图在忽略artifacts/S099。
@@ -2711,6 +2711,10 @@ S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开
 历史 `/data/vaultsyncd-build`、`/data/vaultsyncd-deploy` 分别迁至 `/data/vaultsyncd-temp/vaultsyncd-build`、`/data/vaultsyncd-temp/vaultsyncd-deploy`，无旧入口软链。历史收据按根前缀映射查阅，不改写原始字节；72个Nix GC roots已登记新位置，资料仍为长期归档。协议/schema/应用接口不变，迁移与验证见 `agent/tasks/S161.md` 和 `docs/operations/nixos.md` 的 S161 节。
 
 ## S162 — 客户端托盘自动更新
+
+S180：`platform-windows::shell::progress::UpdateProgress` 使用独立COM线程/Windows Shell进度窗口，`new(stage, detail)`/`stage`显示活动条，`download(version, received, total)`显示实际下载比例和字节，拒绝零总量/超总量，u128计算百分比防溢出；Drop关闭并回收线程。可计量/活动模式切换必须新建Shell实例，不能复用已Stop的实例。桌面从托盘检查即显示，校验及解压为活动条；候选agent接管后显示等待关闭、排空/备份/安装、健康检查、恢复同步及失败回退/重启，窗口不依赖WebView。下载阶段窗口失败明确报错且复位托盘；维护已开始后的显示失败写日志，不能打断事务。登录框版本由Vite从desktop/package.json注入（发行统一版本源镜像），初次加载/失败/退出仍可见。无wire/schema/更新来源或数据语义变化。
+S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。候选改用固定agent配置的`--update-trial`；runtime持锁前后均要求同会话`vaultsyncd-update-apply`控制器存活、固定状态和当前程序、维护子树内配对plan/prepared及有效commit收据、当前版本逐文件校验、严格ZIP owner或安装注册。普通启动入口保持拒绝屏障；未提交trial继续由既有`trial_pending`围栏禁止同步及写IPC。session接受内部`--update-trial`并转交agent同名flag；launcher诊断继承apply日志、agent沿用agent.log，健康通过才commit，恢复后沿用普通session入口。无额外writer、无屏障删除或schema变化。
+
 
 - 托盘 `update` 菜单“自动更新”只在用户点击后检查 `xingjianxu/vaultsyncd` 的 `/releases/latest`；独立无凭据 HTTPS 客户端，不携带服务端认证。仅更高正式 SemVer、精确 `vaultsyncd-<version>-x64-unsigned.zip`，拒绝草稿/预发布、异常来源、缺 digest、重复/超大附件。元数据1MiB、ZIP1GiB、连接15秒/读30秒/总30分钟；GitHub CDN HTTPS重定向白名单。
 - `GithubUpdates::{check,download}` 与 `ReleaseUpdate` 位于 `crates/release-client/src/lib.rs`。流式回调收到的仍是未可信片段，只有完整长度及SHA-256成功后才把 `download.part` 改为完成包。GUI在 `%LOCALAPPDATA%/vaultsyncd/updates/<nonce>/` 建新目录，解压固定11个名称、单项512MiB/合计1GiB，核对 ZIP/installed 两份同源及逐文件摘要，不执行脚本。无新增 IPC/wire/schema。

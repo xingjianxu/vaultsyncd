@@ -33,6 +33,7 @@ using System;using System.Text;using System.Runtime.InteropServices;using System
 public static class S162Native {
  delegate bool Each(IntPtr w,IntPtr p);
  [DllImport("user32.dll")]static extern bool EnumWindows(Each c,IntPtr p);
+ [DllImport("user32.dll")]static extern bool EnumChildWindows(IntPtr h,Each c,IntPtr p);
  [DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetClassNameW(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetWindowTextW(IntPtr h,StringBuilder s,int n);
@@ -47,13 +48,15 @@ public static class S162Native {
  [DllImport("user32.dll")]static extern void mouse_event(uint f,uint x,uint y,uint d,UIntPtr e);
  [StructLayout(LayoutKind.Sequential)]struct Rect{public int left,top,right,bottom;}
  public static IntPtr Find(uint process,string kind){IntPtr found=IntPtr.Zero;EnumWindows((h,p)=>{uint pid;GetWindowThreadProcessId(h,out pid);var s=new StringBuilder(256);GetClassNameW(h,s,256);if((process==0||pid==process)&&s.ToString()==kind){found=h;return false;}return true;},IntPtr.Zero);return found;}
- public static bool Dismiss(uint process){var h=Find(process,"#32770");if(h==IntPtr.Zero)return false;var button=GetDlgItem(h,1);if(button!=IntPtr.Zero)PostMessageW(button,0xf5,IntPtr.Zero,IntPtr.Zero);else PostMessageW(h,0x10,IntPtr.Zero,IntPtr.Zero);return true;}
+ public static bool HasProgress(uint process){return Progress(Find(process,"#32770"));}
+ static bool Progress(IntPtr h){bool found=false;if(h==IntPtr.Zero)return false;EnumChildWindows(h,(child,p)=>{var kind=new StringBuilder(128);GetClassNameW(child,kind,128);if(kind.ToString()=="msctls_progress32")found=true;return true;},IntPtr.Zero);return found;}
+ public static bool Dismiss(uint process){var h=Find(process,"#32770");if(h==IntPtr.Zero||Progress(h))return false;var button=GetDlgItem(h,1);if(button!=IntPtr.Zero)PostMessageW(button,0xf5,IntPtr.Zero,IntPtr.Zero);else PostMessageW(h,0x10,IntPtr.Zero,IntPtr.Zero);return true;}
  public static void Popup(IntPtr h){SetCursorPos(650,500);PostMessageW(h,6002,IntPtr.Zero,(IntPtr)0x205);}
  public static string[] Menu(IntPtr popup){var menu=SendMessageW(popup,0x1e1,IntPtr.Zero,IntPtr.Zero);var list=new List<string>();for(int i=0;i<GetMenuItemCount(menu);i++){var s=new StringBuilder(256);GetMenuStringW(menu,(uint)i,s,256,0x400);list.Add(s.ToString());}return list.ToArray();}
  public static void SelectItem(IntPtr tray,IntPtr popup,uint position,bool duplicate){var menu=SendMessageW(popup,0x1e1,IntPtr.Zero,IntPtr.Zero);uint id=GetMenuItemID(menu,(int)position);Rect r;if(!GetMenuItemRect(IntPtr.Zero,menu,position,out r))throw new Exception("menu item rectangle missing");SetCursorPos((r.left+r.right)/2,(r.top+r.bottom)/2);mouse_event(2,0,0,0,UIntPtr.Zero);mouse_event(4,0,0,0,UIntPtr.Zero);if(duplicate)PostMessageW(tray,0x111,(IntPtr)id,IntPtr.Zero);}
 }
 '@
-$script:sequence=0;$script:checks=@();$script:dialogs=0
+$script:sequence=0;$script:checks=@();$script:dialogs=0;$script:progress=0
 function Check($value,$name){if(!$value){throw $name};$script:checks+=$name}
 function Read-Log($path){$stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);$reader=New-Object IO.StreamReader($stream);try{$reader.ReadToEnd()}finally{$reader.Dispose()}}
 function Exe($path,$arguments,[int]$expected=0){
@@ -64,7 +67,7 @@ function Exe($path,$arguments,[int]$expected=0){
   if($arguments.Count){$start.ArgumentList=$args}
   $p=Start-Process @start
   $null=$p.Handle;$end=(Get-Date).AddSeconds(180)
-  while(!$p.HasExited){if([S162Native]::Dismiss($p.Id)){$script:dialogs++};if((Get-Date)-gt $end){throw ('process timeout '+$path)};Start-Sleep -Milliseconds 100;$p.Refresh()}
+  while(!$p.HasExited){if([S162Native]::HasProgress($p.Id)){$script:progress++};if([S162Native]::Dismiss($p.Id)){$script:dialogs++};if((Get-Date)-gt $end){throw ('process timeout '+$path)};Start-Sleep -Milliseconds 100;$p.Refresh()}
   $p.WaitForExit();$p.Refresh()
   if($p.ExitCode-ne $expected){throw ('command exit '+$p.ExitCode+' expected '+$expected+'; '+(Read-Log ($stem+'.err')))}
   Read-Log ($stem+'.out')
@@ -129,9 +132,9 @@ function Installed-Fixture($candidate){
   Copy-Item (Join-Path $script:program 'vaultsyncd-cli.exe') (Join-Path $untrusted 'reg.exe')
   try{Set-Location $untrusted;Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--auto-update','--program-dir',$script:program)|Out-Null}finally{Set-Location $original}
   $null=Desktop;$null=Status
-  Check ((Get-ItemProperty $registration).Version-eq '0.1.1') 'installed version registration upgraded'
-  Check ((Get-ItemProperty $registration).Version-eq '0.1.1') 'registry tool resolved from Windows system directory'
-  Check ((Get-ItemProperty $uninstall).DisplayVersion-eq '0.1.1') 'uninstall display version upgraded'
+  Check ((Get-ItemProperty $registration).Version-eq $script:candidateVersion) 'installed version registration upgraded'
+  Check ((Get-ItemProperty $registration).Version-eq $script:candidateVersion) 'registry tool resolved from Windows system directory'
+  Check ((Get-ItemProperty $uninstall).DisplayVersion-eq $script:candidateVersion) 'uninstall display version upgraded'
   Check ((Get-ItemProperty $run).'vaultsyncd-agent'-eq $startup) 'startup entry retained'
   Check ((Get-FileHash (Join-Path $script:program 'uninstall.exe')).Hash-eq $uninstallHash) 'uninstaller retained'
   Check (!(Test-Path (Join-Path $script:program 'zip-files.json'))-and !(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'))) 'installed profile never converted to ZIP'
@@ -147,6 +150,7 @@ try{
   Check ($existing.Count-eq 0) 'no existing user agent touched'
   Check (!(Test-Path 'HKCU:\Software\vaultsyncd')) 'no setup registration modified by ZIP tests'
   $candidate=Join-Path $PSScriptRoot 'candidate';Expand-Archive (Join-Path $PSScriptRoot 'new.zip') $candidate
+  $script:candidateVersion=(Get-Content (Join-Path $candidate 'installed-files.json') -Raw|ConvertFrom-Json).source.version
   if($InstalledOnly){
     Installed-Fixture $candidate
     Write-Json (Join-Path $PSScriptRoot 'result.json') @{ok=$true;checks=$script:checks;scope='controlled installed-registration fixture; not NSIS release acceptance'}
@@ -194,11 +198,31 @@ try{
   # Stop at the durable prepared-trial boundary, then use the actual recovery entry.
   Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--maintenance','auto-upgrade','--program-dir',$script:program)|Out-Null
   Check (Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/auto-update.json')) 'interrupted trial keeps recovery plan'
-  Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('start')|Out-Null;$null=Desktop
-  $trial=Status;Check (@($trial.result.management.bindings|Where-Object{!$_.paused}).Count-eq 0) 'trial startup keeps all bindings paused'
-  Exe (Join-Path $script:program 'vaultsyncd-cli.exe') @('--json','resume','--binding-id','00000000000000000000000000000001') 5|Out-Null
-  $trial=Status;Check (@($trial.result.management.bindings|Where-Object{!$_.paused}).Count-eq 0) 'trial refuses writes before health commit'
-  Close-Desktop
+  Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('start') 1|Out-Null
+  $trialConfig=Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/agent.json'
+  Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--config',$trialConfig,'--update-trial') 1|Out-Null
+  Check ((Read-Log (Join-Path $script:case ('command-'+$script:sequence+'.err'))).Contains('active update controller')) 'ordinary startup blocked; explicit trial refuses absent controller'
+  $controller=Start-Process -FilePath (Join-Path $PSScriptRoot 'agent-tests.exe') -ArgumentList @('--exact','auto_update::tests::hold_update_controller','--ignored','--nocapture') -PassThru -RedirectStandardOutput (Join-Path $script:case 'controller.out') -RedirectStandardError (Join-Path $script:case 'controller.err')
+  $null=$controller.Handle
+  try{
+    $end=(Get-Date).AddSeconds(15)
+    while(!(Test-Path (Join-Path $script:case 'controller-ready'))){if((Get-Date)-gt $end){throw 'test controller missing'};Start-Sleep -Milliseconds 100}
+    Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--config',$trialConfig,'--update-trial') 1|Out-Null
+    Check ((Read-Log (Join-Path $script:case ('command-'+$script:sequence+'.err'))).Contains('update trial program mismatch')) 'explicit trial refuses candidate outside installed target'
+    $trialArgs='--config "'+$trialConfig+'" --update-trial'
+    $trialAgent=Start-Process -FilePath (Join-Path $script:program 'vaultsyncd-agent.exe') -ArgumentList $trialArgs -PassThru -RedirectStandardError (Join-Path $script:case 'trial-agent.err')
+    $null=$trialAgent.Handle
+    $end=(Get-Date).AddSeconds(30)
+    do{try{$trial=Status;break}catch{if((Get-Date)-gt $end){throw};Start-Sleep -Milliseconds 200}}while($true)
+    Check (@($trial.result.management.bindings|Where-Object{!$_.paused}).Count-eq 0) 'trial startup keeps all bindings paused'
+    Exe (Join-Path $script:program 'vaultsyncd-cli.exe') @('--json','resume','--binding-id','00000000000000000000000000000001') 5|Out-Null
+    $trial=Status;Check (@($trial.result.management.bindings|Where-Object{!$_.paused}).Count-eq 0) 'trial refuses writes before health commit'
+    Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('--exact','auto_update::tests::stop_update_fixture','--ignored','--nocapture')|Out-Null
+    Check ($trialAgent.WaitForExit(10000)) 'trial drains before recovery'
+  }finally{
+    'release'|Set-Content (Join-Path $script:case 'controller-release')
+    $null=$controller.WaitForExit(10000)
+  }
   Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--auto-update-recover','--program-dir',$script:program)|Out-Null
   $null=Desktop;Preserved 'interrupted trial recovery'
   Check ([IO.File]::ReadAllText((Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'))-eq $script:ownerBefore) 'interrupted trial restores owner'
@@ -207,7 +231,9 @@ try{
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('maintenance::storage::tests::','--nocapture')|Out-Null
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('maintenance::tests::','--nocapture')|Out-Null
   Exe (Join-Path $PSScriptRoot 'platform-tests.exe') @('native_exclusive_write','--nocapture')|Out-Null
-  Write-Json (Join-Path $PSScriptRoot 'result.json') @{ok=$true;checks=$script:checks;dialogs=$script:dialogs;scope='controlled version fixtures, real production Windows PE/NTFS/IPC/WebView; not published release validation'}
+  Installed-Fixture $candidate
+  Check ($script:progress-gt 0) 'native maintenance progress visible during real update'
+  Write-Json (Join-Path $PSScriptRoot 'result.json') @{ok=$true;checks=$script:checks;dialogs=$script:dialogs;progressObservations=$script:progress;scope='controlled version fixtures, real production Windows PE/NTFS/IPC/WebView; not published release validation'}
   '0'|Set-Content (Join-Path $PSScriptRoot 'exit.txt')
 }catch{
   $_|Out-String|Set-Content (Join-Path $PSScriptRoot 'error.txt')

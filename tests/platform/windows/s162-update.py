@@ -127,9 +127,10 @@ def main():
     artifact = TEMP / run_id
     artifact.mkdir(parents=True)
     print('Preparing native fixtures; progress will stream during validation.', flush=True)
+    current = json.loads((ROOT / 'package.json').read_text())['version']
     for name, old, version, broken in [('old.zip', True, '0.1.0', False),
-                                       ('new.zip', False, '0.1.1', False),
-                                       ('bad-start.zip', False, '0.1.1', True)]:
+                                       ('new.zip', False, current, False),
+                                       ('bad-start.zip', False, current, True)]:
         with zipfile.ZipFile(artifact / name, 'x', zipfile.ZIP_DEFLATED) as target:
             for filename, data in package(binaries, version, old, broken).items():
                 target.writestr(filename, data)

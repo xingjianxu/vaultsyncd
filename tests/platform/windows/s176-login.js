@@ -28,6 +28,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   try {
     if (fixture.phase === "fresh") {
+      await wait("login version", () => /^vaultsyncd \d+\.\d+\.\d+/.test(document.querySelector('[data-client-version]')?.textContent ?? ""));
+      assert(document.querySelector('[data-client-version]').closest('[role="dialog"]'), "loginShowsClientVersion");
       location.hash = "/bindings";
       await wait("login form", () => !!document.querySelector('[name="username"]'));
       assert(!main(), "unauthenticatedHasNoMain");

@@ -15,7 +15,7 @@ use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 use vaultsyncd_transfer::ports::PortError;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const LEGACY_SOURCE: &str = "cf1d174c3bd47b4babc2db053514619b2e733b07";
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Plan {
     program: PathBuf,
     backup: PathBuf,
@@ -75,6 +75,60 @@ pub fn admit_startup(config: &AgentConfig) -> std::result::Result<(), PortError>
         }
     }
     crate::portable::admit(config).map_err(error)
+}
+/// Admit only the installed trial executable while its same-session update controller is alive.
+/// Ordinary launchers retain the unconditional maintenance barrier above.
+pub(crate) fn admit_update_trial(config: &AgentConfig) -> std::result::Result<(), PortError> {
+    let validate = || -> Result<()> {
+        if vaultsyncd_platform_windows::single::claim("vaultsyncd-update-apply")?.is_some() {
+            return Err("update trial requires an active update controller".into());
+        }
+        let installed = installed_config()?;
+        if fs::canonicalize(&installed.state_dir)? != fs::canonicalize(&config.state_dir)? {
+            return Err("update trial state mismatch".into());
+        }
+        let profile = profile(config)?;
+        if profile.join("maintenance.json").try_exists()? {
+            return Err("offline maintenance is still in progress".into());
+        }
+        let plan: Plan = serde_json::from_slice(&fs::read(profile.join("auto-update.json"))?)?;
+        let executable = std::env::current_exe()?;
+        let program = executable
+            .parent()
+            .ok_or("trial executable directory absent")?;
+        if plan.action != "auto-upgrade"
+            || fs::canonicalize(&plan.program)? != fs::canonicalize(program)?
+        {
+            return Err("update trial program mismatch".into());
+        }
+        let backups = fs::canonicalize(profile.join("maintenance"))?;
+        let backup = fs::canonicalize(&plan.backup)?;
+        if backup.parent() != Some(backups.as_path()) {
+            return Err("update trial backup outside maintenance directory".into());
+        }
+        let saved: Plan = serde_json::from_slice(&fs::read(backup.join("trial-plan.json"))?)?;
+        let prepared: serde_json::Value =
+            serde_json::from_slice(&fs::read(backup.join("prepared.json"))?)?;
+        if saved != plan
+            || prepared["action"] != "auto-upgrade"
+            || prepared["program"] != serde_json::to_value(&plan.program)?
+        {
+            return Err("update trial plan/receipt mismatch".into());
+        }
+        let manifest = storage::verify_program(program)?;
+        if manifest["source"]["version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
+            return Err("update trial version mismatch".into());
+        }
+        if plan.zip {
+            crate::portable::maintenance_owner(program)?;
+        } else {
+            crate::portable::installed_owner(program)?;
+        }
+        // Validate the commit receipt too. An uncommitted trial stays read-only and paused.
+        trial_pending(&config.state_dir)?;
+        Ok(())
+    };
+    validate().map_err(|e| PortError::rejected("MAINTENANCE_REQUIRED", e.to_string()))
 }
 async fn rpc(
     endpoint: &Endpoint,

@@ -1,6 +1,8 @@
 # 实施进度
 
-当前：**S179 done**，0.1.6 已作为 [v0.1.6](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.6) **正式版**发出（非草稿、非预发布、`releases/latest` 指向本版，唯一 Windows x64 ZIP `21b2c2ab…`、16,003,520 字节，源`1e073de`，含 S178 选择框自动读取）；远端 digest 与本地逐字节一致，标签指向同一提交。版本镜像`1e073de`已推送 master；证据`/data/vaultsyncd-dev/S179-release-20261110/`，交接[S179](tasks/S179.md)。**下一ready：无**，S011/S106/S107/S108门禁不变；Latest 属发布渠道属性，不代表首发验收完成。
+当前：**S180 done**，桌面自动更新提供独立原生进度窗口：下载真实百分比/字节，校验、安装、健康与回退活动条；登录框显示构建版本。同步修复S174屏障误拦截更新trial，保留普通启动屏障及未commit写入/同步门禁。根typecheck/build、host54项、Windows严格clippy/构建、浏览器及真实Windows进度/登录、ZIP与安装版更新/回退/门禁75项通过，交接[S180](tasks/S180.md)。产出/合并/清理待记录；**未发行**，当前正式0.1.6不含本卡；无服务端更改。**下一ready：无**，原S011/S106/S107/S108门禁保持。
+
+此前 **S179 done**，0.1.6 已作为 [v0.1.6](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.6) **正式版**发出（非草稿、非预发布、`releases/latest` 指向本版，唯一 Windows x64 ZIP `21b2c2ab…`、16,003,520 字节，源`1e073de`，含 S178 选择框自动读取）；远端 digest 与本地逐字节一致，标签指向同一提交。版本镜像`1e073de`已推送 master；证据`/data/vaultsyncd-dev/S179-release-20261110/`，交接[S179](tasks/S179.md)。**下一ready：无**，S011/S106/S107/S108门禁不变；Latest 属发布渠道属性，不代表首发验收完成。
 
 此前 **S178 done**，Windows Vault 选择框每次打开自动读取授权清单，移除手动按钮；加载/错误/空清单、撤权清选与重开重试均覆盖。桌面build、根typecheck、Chromium14组及原布局、真实Windows S081绑定回归通过，交接[S178](tasks/S178.md)。实现`42edf8e`已ff合master，任务树/分支清理；无服务端更改，现已由0.1.6携带。
 
@@ -42,6 +44,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S180 | 桌面更新原生进度、登录版本及受控trial启动修复；Windows升级/回退75项通过 | 待记录产出/合并与清理；未发行 | [S180](tasks/S180.md) |
 | S179 | 发布 v0.1.6 正式版（含 S178）；Windows ZIP 唯一附件、远端 digest 与本地一致，设为 Latest | 版本1e073de已ff合master并推送，任务树/分支清理 | [S179](tasks/S179.md) |
 | S178 | Vault选择框每次打开自动读取授权清单，加载/错误与选择失效处理 | 实现42edf8e已ff合master，树/分支清理；宿主及真实Windows S081通过 | [S178](tasks/S178.md) |
 | S177 | 发布 v0.1.5 预发布（含 S176）；Windows ZIP 唯一附件、远端 digest 与本地一致，一次上传成功 | 版本7077fc9已ff合master并推送，任务树/分支清理 | [S177](tasks/S177.md) |

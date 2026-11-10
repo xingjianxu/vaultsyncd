@@ -7,15 +7,20 @@ use std::{
     time::{Duration, Instant},
 };
 use vaultsyncd_local_ipc::generated::*;
+use vaultsyncd_platform_windows::shell::progress::UpdateProgress;
 use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint, single};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn launch_agent(program: &Path) -> Result<()> {
+fn launch_agent(program: &Path, trial: bool) -> Result<()> {
     use std::os::windows::process::CommandExt;
-    ProcessCommand::new(program.join("vaultsyncd-session.exe"))
+    let mut command = ProcessCommand::new(program.join("vaultsyncd-session.exe"));
+    if trial {
+        command.arg("--update-trial");
+    }
+    command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .creation_flags(0x0800_0000)
         .spawn()?;
     Ok(())
@@ -84,14 +89,26 @@ pub(crate) fn registry_version(version: &str) -> Result<()> {
     }
     Ok(())
 }
-async fn apply(program: &Path) -> Result<()> {
+fn stage(progress: &Option<UpdateProgress>, text: &str) {
+    if let Some(progress) = progress {
+        if let Err(error) = progress.stage(text, &format!("目标版本 {}", env!("CARGO_PKG_VERSION")))
+        {
+            eprintln!("update progress: {error}");
+        }
+    }
+}
+async fn apply(program: &Path, progress: &Option<UpdateProgress>) -> Result<()> {
+    stage(progress, "正在校验安装目录…");
     storage::verify_program(program)?;
+    stage(progress, "正在排空同步、备份并安装更新…");
     let backup = maintenance::run("auto-upgrade", program)
         .await?
         .ok_or("missing update backup")?;
     let trial = async {
-        launch_agent(program)?;
+        stage(progress, "正在启动并检查新版客户端…");
+        launch_agent(program, true)?;
         health(program).await?;
+        stage(progress, "正在确认更新并恢复同步任务…");
         maintenance::finish_auto(program, &backup).await
     }
     .await;
@@ -102,6 +119,7 @@ async fn apply(program: &Path) -> Result<()> {
             )
             .into());
         }
+        stage(progress, "更新启动失败，正在恢复旧程序与状态…");
         maintenance::recover_auto(program, &backup).await?;
         return Err(format!("更新启动失败，已恢复旧程序及整套状态：{failure}").into());
     }
@@ -114,6 +132,17 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
     VaultHandle::open(program)?;
     let _updating =
         single::claim("vaultsyncd-update-apply")?.ok_or("another update is already applying")?;
+    // A display failure must never interrupt an in-flight maintenance/recovery transaction.
+    let progress = match UpdateProgress::new(
+        "正在等待客户端关闭…",
+        &format!("目标版本 {}", env!("CARGO_PKG_VERSION")),
+    ) {
+        Ok(progress) => Some(progress),
+        Err(error) => {
+            eprintln!("update progress: {error}");
+            None
+        }
+    };
     let deadline = Instant::now() + Duration::from_secs(60);
     let desktop = loop {
         if let Some(held) = single::claim("vaultsyncd-desktop")? {
@@ -126,6 +155,7 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
     };
     let result = async {
         if recover {
+            stage(&progress, "正在恢复中断的更新…");
             let local =
                 PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA absent")?);
             let pending = local.join("vaultsyncd/agent/auto-update.json");
@@ -137,7 +167,7 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
                     .await
                     .is_err()
                 {
-                    launch_agent(program)?;
+                    launch_agent(program, true)?;
                 }
                 health(program).await?;
                 maintenance::finish_auto(program, &backup).await
@@ -145,14 +175,15 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
                 maintenance::recover_auto(program, &backup).await
             }
         } else {
-            apply(program).await
+            apply(program, &progress).await
         }
     }
     .await;
     // The session launcher validates the remaining barrier/ownership; never force a writer open.
     let restarted = if result.is_err() || recover {
+        stage(&progress, "正在重启并检查恢复后的客户端…");
         async {
-            launch_agent(program)?;
+            launch_agent(program, false)?;
             health(program).await
         }
         .await
@@ -160,6 +191,7 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
         Ok(())
     };
     drop(desktop);
+    stage(&progress, "正在打开客户端…");
     ProcessCommand::new(program.join("vaultsyncd-desktop.exe"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -172,6 +204,7 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
     };
+    drop(progress);
     if let Err(error) = outcome {
         vaultsyncd_platform_windows::shell::dialog::update_result(&format!(
             "自动更新未完成：{error}\n\n日志与恢复备份已保留。"
@@ -184,6 +217,25 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires an isolated S162 controller-owned trial run"]
+    fn hold_update_controller() {
+        let base =
+            PathBuf::from(std::env::var_os("VAULTSYNCD_S162_FIXTURE").expect("fixture root"));
+        assert!(
+            base.to_string_lossy()
+                .starts_with(r"C:\vaultsyncd-lab\s162-")
+        );
+        let _controller = single::claim("vaultsyncd-update-apply")
+            .unwrap()
+            .expect("no active updater");
+        fs::write(base.join("controller-ready"), b"ready").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while !base.join("controller-release").exists() {
+            assert!(Instant::now() < deadline, "test controller release missing");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
     /// Explicit native-only fixture setup, before any agent opens this database.
     #[tokio::test]
     #[ignore = "requires an isolated S162 native run with no online writer"]

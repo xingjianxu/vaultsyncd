@@ -4,6 +4,8 @@ import type { ConnectionInfo } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
 import { ConnectionForm } from "./Connections";
 
+declare const __APP_VERSION__: string;
+
 type LoginProps = {
   agent: AgentClient; connection?: ConnectionInfo; changed(): Promise<void>;
   run(action: () => Promise<void>): void; busy: boolean; error: string; retry(): void;
@@ -16,6 +18,7 @@ export function Login(props: LoginProps) {
         <Text role="status">{props.error ? "无法读取登录状态。" : "正在读取登录状态…"}</Text>
         {props.error && <Button disabled={props.busy} onClick={props.retry}>重试</Button>}
       </>}
+      <Text size="xs" c="dimmed" ta="center" data-client-version>vaultsyncd {__APP_VERSION__}</Text>
     </Stack>
   </Modal>;
 }

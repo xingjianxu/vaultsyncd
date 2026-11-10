@@ -37,11 +37,12 @@ fn main() {
             vaultsyncd_agent::user_session::launch()?;
             return Ok(());
         }
+        let update_trial = args.len() == 4 && args[3] == "--update-trial";
         if args.len() < 3
             || args[1] != "--config"
             || args[3..]
                 .iter()
-                .any(|a| a != "--login-stdin" && a != "--once")
+                .any(|a| a != "--login-stdin" && a != "--once" && !update_trial)
         {
             return Err(
                 "usage: vaultsyncd-agent --config <file.json> [--login-stdin|--once]".into(),
@@ -51,11 +52,18 @@ fn main() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-        runtime.block_on(vaultsyncd_agent::runtime::run(
-            config,
-            args.iter().any(|a| a == "--login-stdin"),
-            args.iter().any(|a| a == "--once"),
-        ))?;
+        runtime.block_on(async {
+            if update_trial {
+                vaultsyncd_agent::runtime::run_update_trial(config).await
+            } else {
+                vaultsyncd_agent::runtime::run(
+                    config,
+                    args.iter().any(|a| a == "--login-stdin"),
+                    args.iter().any(|a| a == "--once"),
+                )
+                .await
+            }
+        })?;
         Ok(())
     })();
     if let Err(error) = result {

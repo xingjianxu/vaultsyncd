@@ -7,6 +7,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use vaultsyncd_platform_windows::files::VaultHandle;
+use vaultsyncd_platform_windows::shell::progress::UpdateProgress;
 use vaultsyncd_release_client::GithubUpdates;
 static RUNNING: AtomicBool = AtomicBool::new(false);
 // Keep native menu resources outside the tray event callback: Tauri drops tray
@@ -52,9 +53,24 @@ pub(crate) fn start(app: &tauri::AppHandle, item: tauri::menu::MenuItem<tauri::W
     let _ = item.set_enabled(false);
     let _ = item.set_text("正在检查更新…");
     tauri::async_runtime::spawn(async move {
-        let result = download(&item).await;
+        let progress = UpdateProgress::new(
+            "正在检查更新…",
+            &format!("当前版本 {}", env!("CARGO_PKG_VERSION")),
+        );
+        let result = match &progress {
+            Ok(progress) => download(&item, progress).await,
+            Err(error) => Err(format!("无法显示更新进度：{error}")),
+        };
         match result {
             Ok(Some(candidate)) => {
+                if let Ok(progress) = &progress {
+                    if let Err(error) = progress.stage(
+                        "正在启动安装程序…",
+                        "客户端即将关闭，安装进度将在独立窗口继续显示。",
+                    ) {
+                        eprintln!("update progress: {error}");
+                    }
+                }
                 let program = std::env::current_exe()
                     .ok()
                     .and_then(|p| p.parent().map(PathBuf::from));
@@ -80,28 +96,42 @@ pub(crate) fn start(app: &tauri::AppHandle, item: tauri::menu::MenuItem<tauri::W
                         Ok(())
                     });
                 if let Err(error) = launched {
+                    drop(progress);
                     message(&error);
                 } else {
+                    drop(progress);
                     app.exit(0);
                     return;
                 }
             }
-            Ok(None) => message(&format!(
-                "当前已是最新正式版本（{}）",
-                env!("CARGO_PKG_VERSION")
-            )),
-            Err(error) => message(&error),
+            Ok(None) => {
+                drop(progress);
+                message(&format!(
+                    "当前已是最新正式版本（{}）",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            Err(error) => {
+                drop(progress);
+                message(&error);
+            }
         }
         let _ = item.set_text("自动更新");
         let _ = item.set_enabled(true);
         RUNNING.store(false, Ordering::Release);
     });
 }
-async fn download(item: &tauri::menu::MenuItem<tauri::Wry>) -> Result<Option<PathBuf>, String> {
+async fn download(
+    item: &tauri::menu::MenuItem<tauri::Wry>,
+    progress: &UpdateProgress,
+) -> Result<Option<PathBuf>, String> {
     let client = GithubUpdates::new()?;
     let Some(update) = client.check(env!("CARGO_PKG_VERSION")).await? else {
         return Ok(None);
     };
+    progress
+        .stage("正在连接下载…", &format!("版本 {}", update.version()))
+        .map_err(|e| e.to_string())?;
     let directory = staging()?;
     let partial = directory.join("download.part");
     let mut file = fs::OpenOptions::new()
@@ -118,6 +148,9 @@ async fn download(item: &tauri::menu::MenuItem<tauri::Wry>) -> Result<Option<Pat
             if next != percent {
                 percent = next;
                 let _ = item.set_text(format!("正在下载更新… {percent}%"));
+                progress
+                    .download(update.version(), received, total)
+                    .map_err(|e| e.to_string())?;
             }
             Ok(())
         })
@@ -135,6 +168,9 @@ async fn download(item: &tauri::menu::MenuItem<tauri::Wry>) -> Result<Option<Pat
     let version = update.version().to_owned();
     let output = candidate.clone();
     let _ = item.set_text("正在校验更新…");
+    progress
+        .stage("正在校验并解压更新…", &format!("版本 {}", update.version()))
+        .map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::update_archive::extract(&archive, &output, &version)
     })

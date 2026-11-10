@@ -1,12 +1,18 @@
 //! Windowless installed session launcher; the agent retains its console/control-signal contract.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 fn main() {
-    if std::env::args_os().nth(1).is_some() {
-        eprintln!("vaultsyncd session launcher accepts no arguments");
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let trial = args.as_slice() == ["--update-trial"];
+    if !args.is_empty() && !trial {
+        eprintln!("vaultsyncd session launcher accepts only the internal --update-trial option");
         std::process::exit(2);
     }
     #[cfg(windows)]
-    if let Err(error) = vaultsyncd_agent::user_session::launch() {
+    if let Err(error) = if trial {
+        vaultsyncd_agent::user_session::launch_update_trial()
+    } else {
+        vaultsyncd_agent::user_session::launch()
+    } {
         eprintln!("user session startup failed: {error}");
         std::process::exit(1);
     }
