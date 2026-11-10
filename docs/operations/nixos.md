@@ -434,3 +434,14 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 97个GC roots登记新路径并由Nix识别；归档只读子卷ID2663、UUID与ro=true保持，243269项清单及5399稳定文件摘要通过，服务/VM进程身份与HTTP/HTTPS、客体SSH/monitor健康保持。原始证据与检查边界见 `/data/vaultsyncd-dev/S163-relocate-20261109/evidence/` 及 [S163](../../agent/tasks/S163.md)。
 
 主机旧部署任务 `chore/S113-deploy-local-20261109T172110-662492` 的worktree现为 `/data/vaultsyncd-dev/vaultsyncd-temp/evidence/deploy/local-20261109T172110-662492/host`；已执行git worktree repair。其 `hosts/wks-lab/default.nix` 未提交修改原样保留，不代表当前运行配置，不自动合并或清理。
+
+
+## S170 登录 IP 与五分钟连接状态部署（generation270，2026-11-10）
+
+源`df8edc893d370f4a843c922f4222b45a36215d32`，沿用`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S170-client-ip-20261110/evidence/deploy`。主机现场基线a37df31、generation269，主机锁74319cf7…保持；pure package/主机build、dry-activate/test、HTTPS/IPC/身份/归属及switch均通过。主机仅更新pin，提交`7787429ac677dbe335a1e693c599f5e2f25c71eb`已ff main，主机树/分支清理；result passed/cleaned=true。
+
+运行与开机generation270，system `/nix/store/z9mh48x55z908gn8fv2v8dszbd2l7ba5-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/g7mm5zrdzv2y98xyfd45p42dmz612r23-vaultsyncd-0.1.2`。schema18→19新增首次登录IP；已有连接IP保持未知，重新登录记录新连接来源。既有Caddy显式覆盖X-Forwarded-For为remote_host，后端仅信任loopback提供的单个合法地址，其他直连用TCP来源；IP不用于授权。有效会话五分钟内（含300秒）认证活动显示已连接，否则未连接，每30秒刷新已加载分页，不表示同步完成。
+
+证据根`/data/vaultsyncd-dev/S170-client-ip-20261110/`：evidence/backend.log（229 passed/1既有ignored、clippy/生成/边界）、frontend.log、browser-accepted.log、auth-browser.log；客户端真实53记录与四张截图在S170-browser-20261110T092144-2202626。线上evidence/result.json passed=true，Chromium验证登录IP与API一致、Caddy覆盖伪造转发头、自动轮询、本次会话、明暗320/1440、TLS1.3/CSP/cookie及全部11资产；ServerId、5工作文件摘要、schema/FK、10既有服务与3应用保持。无生产内容写入。
+
+部署前完整备份经prepare/verify-source/export/verify/release，backups/predeploy.vsbk及backups-copy副本均verified（同一主机/data盘，不是异盘或异地），新包也能verify旧归档。自动迁移备份`/var/lib/vaultsyncd/server.sqlite.pre-migration-v18-to-v19.bak`只读核验版本18/quick_check通过。直接回退入口为generation269 `/nix/store/p744ig0hmksv3nw68bfb6vhiy3z1abpc-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，旧system/boot GC roots在本卡deploy run保留；旧二进制拒绝schema19，回退须按离线恢复流程恢复整套18归档及配对映射，不能只降二进制或替换库，再同步主机pin至a37df31。未实际回退、未做Windows/性能容量验收，原blocked门禁保持。项目提交与合并清理见[S170](../../agent/tasks/S170.md)。
