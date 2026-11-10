@@ -92,7 +92,7 @@ default-members = [
 # edition 2024 在 Rust 1.85.0 稳定，据此把 rust-version 定为 1.85.0（实测见 agent/tasks/S004.md）。
 edition = "2024"
 rust-version = "1.85.0"
-version = "0.1.4"
+version = "0.1.5"
 publish = false
 
 [workspace.lints.rust]
