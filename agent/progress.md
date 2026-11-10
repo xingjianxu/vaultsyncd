@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S168 done**，GitHub 发布不再上传 Linux 运行库对应源码归档，该归档只留本地构建目录并继续按组件收据核验；契约 26/26、真实产物 dry-run 7 附件通过（未发行、未上传）。此前 **S166、S167 done**，客户端按地址自动读取只读 Server ID 并确认，桌面自动复用/启动 agent，关闭窗口后台继续。身份/超时保护、文件/历史与管理原生通过；组合后 Windows 生产严格 clippy/build、生成一致及启动39/39再次通过。S166实现`cbc82ff`、交接`a80d28c`已ff合master并清理；S167实现`401c484`、交接`eb2f773`、组合`8c7ad69`已ff合master，任务树/分支已清理。**下一 ready：无**；原四张blocked保持。
+当前：**S168 done**，GitHub 发布不再上传 Linux 运行库对应源码归档，该归档只留本地构建目录并继续按组件收据核验；契约 26/26、真实产物 dry-run 7 附件通过（未发行、未上传）；实现`7b2f0b9`、交接`135676f`已ff合master，任务树/分支已清理。此前 **S166、S167 done**，客户端按地址自动读取只读 Server ID 并确认，桌面自动复用/启动 agent，关闭窗口后台继续。身份/超时保护、文件/历史与管理原生通过；组合后 Windows 生产严格 clippy/build、生成一致及启动39/39再次通过。S166实现`cbc82ff`、交接`a80d28c`已ff合master并清理；S167实现`401c484`、交接`eb2f773`、组合`8c7ad69`已ff合master，任务树/分支已清理。**下一 ready：无**；原四张blocked保持。
 
 最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未发行。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。本轮仅复跑相关功能原生，性能容量/多机与线上成对升级仍未验收。
 
@@ -32,7 +32,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
-| S168 | 发布不再上传运行库对应源码；本地保留并按收据核验，dry-run披露local_only | 实现与本交接提交已ff合master；任务树/分支已清理 | [S168](tasks/S168.md) |
+| S168 | 发布不再上传运行库对应源码；本地保留并按收据核验，dry-run披露local_only；契约26/26 | 实现7b2f0b9、交接135676f已ff合master；任务树/分支已清理 | [S168](tasks/S168.md) |
 | S167 | 桌面自动复用或启动agent；就绪后建窗、失败可见且后台独立；Windows39/39 | 实现401c484、交接eb2f773、组合8c7ad69已ff合master；任务树/分支已清理 | [S167](tasks/S167.md) |
 | S166 | 地址自动读取只读Server ID并确认；超时/身份保护、IPC/桌面与Windows功能回归通过 | 实现cbc82ff、交接a80d28c已ff合master；任务树/分支已清理 | [S166](tasks/S166.md) |
 | S165 | v0.1.2 预发布；双平台同源构建、8附件远端摘要/来源/非Latest核对通过 | 源d976376已推送；交接889c19f已ff合master，任务挂载/树/分支已清理 | [S165](tasks/S165.md) |
