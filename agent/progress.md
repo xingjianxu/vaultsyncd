@@ -2,6 +2,8 @@
 
 当前：**S180 done**，桌面自动更新提供独立原生进度窗口：下载真实百分比/字节，校验、安装、健康与回退活动条；登录框显示构建版本。同步修复S174屏障误拦截更新trial，保留普通启动屏障及未commit写入/同步门禁。根typecheck/build、host54项、Windows严格clippy/构建、浏览器及真实Windows进度/登录、ZIP与安装版更新/回退/门禁75项通过，交接[S180](tasks/S180.md)。产出/合并/清理待记录；**未发行**，当前正式0.1.6不含本卡；无服务端更改。**下一ready：无**，原S011/S106/S107/S108门禁保持。
 
+并行完成：**S181 done**，按用户要求取消密码最短长度限制（`MIN_PASSWORD_CHARS=1`，只要求非空；ADR-031），并把本机服务端管理员密码离线重置为 `1`、撤销全部旧会话；新包已在 generation 273 上线，loopback 与公网 HTTPS 均验证用 `1` 登录成功。**下一ready：无**，S011/S106/S107/S108 门禁不变。
+
 此前 **S179 done**，0.1.6 已作为 [v0.1.6](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.6) **正式版**发出（非草稿、非预发布、`releases/latest` 指向本版，唯一 Windows x64 ZIP `21b2c2ab…`、16,003,520 字节，源`1e073de`，含 S178 选择框自动读取）；远端 digest 与本地逐字节一致，标签指向同一提交。版本镜像`1e073de`已推送 master；证据`/data/vaultsyncd-dev/S179-release-20261110/`，交接[S179](tasks/S179.md)。**下一ready：无**，S011/S106/S107/S108门禁不变；Latest 属发布渠道属性，不代表首发验收完成。
 
 此前 **S178 done**，Windows Vault 选择框每次打开自动读取授权清单，移除手动按钮；加载/错误/空清单、撤权清选与重开重试均覆盖。桌面build、根typecheck、Chromium14组及原布局、真实Windows S081绑定回归通过，交接[S178](tasks/S178.md)。实现`42edf8e`已ff合master，任务树/分支清理；无服务端更改，现已由0.1.6携带。
@@ -14,12 +16,12 @@
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
-最近发行是 [v0.1.6](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.6) **正式版/Latest**，源`1e073de`，附件 `vaultsyncd-0.1.6-x64-unsigned.zip`（`21b2c2ab…`）；此前 v0.1.5 预发布源`7077fc9`、v0.1.4 源`fe273d3`、v0.1.3 源`d2f9e26`、v0.1.2 源`d976376`保持。在线服务端为S172，运行/开机generation272、源`d7339f0`、schema20、主机pin`7a74069`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收；0.1.6 进入托盘自动更新渠道，但未做端到端原生升级演练且包未签名。
+最近发行是 [v0.1.6](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.6) **正式版/Latest**，源`1e073de`，附件 `vaultsyncd-0.1.6-x64-unsigned.zip`（`21b2c2ab…`）；此前 v0.1.5 预发布源`7077fc9`、v0.1.4 源`fe273d3`、v0.1.3 源`d2f9e26`、v0.1.2 源`d976376`保持。在线服务端为S181，运行/开机generation273、源`afbbc78`、schema20、主机pin`a6a335b`，管理员密码已按用户要求重置为弱口令`1`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收；0.1.6 进入托盘自动更新渠道，但未做端到端原生升级演练且包未签名。
 
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
 
-最近部署：S172 pure build、dry/test、HTTPS/IPC/身份/归属/switch通过；线上Chromium严格TLS1.3/匿名记录深链门禁/明暗320与1440、CSP及13资产与index保持。schema19→20有一致性备份，原5文件/FK/对象及10服务/3应用保持；无历史伪补录。完整19归档及第二同盘副本验证、隔离恢复升20验证通过，generation271旧system/boot GC roots保留；回退须整套19恢复，不能只降二进制。未重置生产凭据，已认证业务在独立实例验收；部署细节见docs/operations/nixos.md S172。
+最近部署：S181（源`afbbc78`，generation273、包`5azvb3s`、主机pin`a6a335b`）pure/dry/test/健康/IPC/归属/switch通过，服务端密码策略改为只要求非空；停服后离线改散列并撤销全部37条会话，线上loopback与HTTPS用`1`登录均200、错密码401。旧system`x0sx0d9c`已留GC root；回退需恢复`/data/vaultsyncd-dev/S181-password-reset-20261110T180259/server.sqlite.before`或旧代际。细节见`docs/operations/nixos.md` S181。更早：S172 pure build、dry/test、HTTPS/IPC/身份/归属/switch通过；线上Chromium严格TLS1.3/匿名记录深链门禁/明暗320与1440、CSP及13资产与index保持。schema19→20有一致性备份，原5文件/FK/对象及10服务/3应用保持；无历史伪补录。完整19归档及第二同盘副本验证、隔离恢复升20验证通过，generation271旧system/boot GC roots保留；回退须整套19恢复，不能只降二进制。部署细节见docs/operations/nixos.md S172。
 
 恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -44,6 +46,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S181 | 取消密码最短长度限制（只要求非空，ADR-031）；本机管理员密码离线重置为 `1` 并撤销全部会话 | 实现afbbc78已ff合master；包在generation273上线，宿主/Web检查与HTTPS登录验证通过 | [S181](tasks/S181.md) |
 | S180 | 桌面更新原生进度、登录版本及受控trial启动修复；Windows升级/回退75项通过 | 待记录产出/合并与清理；未发行 | [S180](tasks/S180.md) |
 | S179 | 发布 v0.1.6 正式版（含 S178）；Windows ZIP 唯一附件、远端 digest 与本地一致，设为 Latest | 版本1e073de已ff合master并推送，任务树/分支清理 | [S179](tasks/S179.md) |
 | S178 | Vault选择框每次打开自动读取授权清单，加载/错误与选择失效处理 | 实现42edf8e已ff合master，树/分支清理；宿主及真实Windows S081通过 | [S178](tasks/S178.md) |

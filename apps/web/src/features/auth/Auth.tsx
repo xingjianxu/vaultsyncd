@@ -136,7 +136,7 @@ export function AccountPanel() {
               <Stack maw={480}>
                 <PasswordInput name="current_password" label="当前密码" required disabled={busy} autoComplete="current-password" maxLength={1024}
                   key={passwordForm.key("current_password")} {...passwordForm.getInputProps("current_password")} />
-                <PasswordInput name="new_password" label="新密码" description="至少 12 个字符，请使用独立密码。" required disabled={busy} autoComplete="new-password" minLength={12} maxLength={1024}
+                <PasswordInput name="new_password" label="新密码" description="请使用独立密码。" required disabled={busy} autoComplete="new-password" minLength={1} maxLength={1024}
                   key={passwordForm.key("new_password")} {...passwordForm.getInputProps("new_password")} />
                 <Group><Button disabled={busy} type="submit">修改密码并撤销会话</Button></Group>
               </Stack>

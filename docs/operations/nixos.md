@@ -467,3 +467,13 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 证据根`/data/vaultsyncd-dev/S172-sync-records-20261110/`：两端测试、真实浏览器活动/OPFS备份、Windows26300原生27项及IPC版本门禁；原生628源码输入与提交树一致但候选是在dirty基线上构建，未公开发行。schema20非空账本真实导出与独立1GiB btrfs故障恢复通过，loop已卸载且原始镜像保留。线上`evidence/result.json` passed=true：严格TLS1.3、匿名记录深链门禁/接口401、明暗320/1440、CSP、13资产及index，Nix与验收Web14文件逐字节一致；schema20/FK/对象、5工作文件及10服务/3应用保持。生产无当前凭据，未重置账号，已认证业务只在独立实例验收；生产活动表初始0，未伪补旧记录。
 
 升级前prepare/verify-source/export/verify/release取得整套schema19归档`backups/predeploy.vsbk`及第二同盘副本并重读verify；另隔离恢复该归档、升级20、健康/FK/5文件摘要通过（`evidence/restore19-preview.json`）。正式库自动一致备份`server.sqlite.pre-migration-v19-to-v20.bak`自检与版本19通过，但不能代替整套恢复。generation271旧system/boot GC roots在deploy run保留；旧system为`/nix/store/vgv5l88qmyj537w7xmz7pfwmzf6x5lg2-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，旧pin1513b07。旧二进制拒绝schema20，回退须停服、按离线恢复流程将已验证19归档恢复到新空状态/Vault映射并换epoch，再配置旧pin/路径、test健康后switch；不能只降二进制或手改schema。未实际生产回退，原性能容量/多机/首发门禁保持。项目整合与清理见[S172](../../agent/tasks/S172.md)。
+
+## S181 密码策略放宽与管理员密码重置部署（generation273，2026-11-10）
+
+用户要求取消密码最短长度限制并把本机管理员密码重置为 `1`。固定源`afbbc78e48059d8f504673c7d315beed99c7f15d`，执行现有`tools/deploy-local.sh --rev afbbc78`：pure 构建、manifest 来源核对、dry-activate/test/健康/IPC/UID归属/switch 通过，主机仅改版本 pin（提交`a6a335b`，`/etc/nixos` main ff 合入，锁保持`74319cf7…`）。
+
+运行/开机generation273，system `/nix/store/60mnizya7nhgbn8v88ybhbjj8v5kxpw6-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/5azvb3s7bfnm2aimsygjabh8w8c8sps8-vaultsyncd-0.1.6`（`sourceInfo.commit=afbbc78`）。无 wire/schema 变化，库保持schema20；ServerId `9395d9ca…`、Vault 基目录与既有业务数据不变。部署证据`/data/vaultsyncd-dev/vaultsyncd-temp/evidence/deploy/local-20261110T180022-2783874/`（`passed=true`、`cleaned=true`，旧 system `x0sx0d9c…` 已留GC root）。
+
+密码重置按用户选择的一次性离线改库执行，证据`/data/vaultsyncd-dev/S181-password-reset-20261110T180259/`：用新包内`vaultsyncd-admin init`在隔离状态目录生成 `1` 的 Argon2id 散列（生产参数`m=19456,t=2,p=1`，临时库不参与生产），停服后整库备份`server.sqlite.before`（sha256`c6579c3c…`），单事务改写1条账号散列并把37条有效会话置`revoked_at`；`PRAGMA integrity_check=ok`，改后 sha256`46ecd34e…`。启动后`/v1/health`在loopback与`https://vsyncd.132140.xyz`均200，错密码401，用`1`登录200并`/v1/auth/account`返回`xingjian`，验证会话已logout，最终无有效会话。
+
+限制：该决定有意接受弱口令风险，不替代首发安全门禁；如需可审计的在线重置入口须另立卡。回退用旧代际`x0sx0d9c…`（先test/健康再switch并同步pin）或上述停服备份，二者都不降级数据库。

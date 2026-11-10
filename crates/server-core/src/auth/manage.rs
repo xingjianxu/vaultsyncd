@@ -46,9 +46,12 @@ mod tests {
             Err(ChangeError::InvalidCurrent)
         );
         assert_eq!(
-            prepare_change(&hasher, &stored, "old-password-long", "short"),
+            prepare_change(&hasher, &stored, "old-password-long", ""),
             Err(ChangeError::InvalidNew)
         );
+        let single = prepare_change(&hasher, &stored, "old-password-long", "1")
+            .expect("单字符新密码不再是弱密码");
+        assert_eq!(hasher.verify(&single, "1"), PasswordVerdict::Matched);
         assert_eq!(
             prepare_change(&hasher, "broken", "old-password-long", "new-password-long"),
             Err(ChangeError::Unavailable)

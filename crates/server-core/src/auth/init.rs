@@ -19,10 +19,10 @@ use crate::auth::password::{PasswordError, PasswordHasher};
 
 /// 密码的最小字符数。
 ///
-/// design 没有给出数值，这里取工程基线：12 个字符（高于 NIST SP 800-63B 的 8 字符下限），并把它
-/// 集中成常量，等实测与 ADR 结论落地时只改这里。判定按 Unicode 标量值个数，不按字节——中文
-/// 口令不该因为编码变长而被要求更短。
-pub const MIN_PASSWORD_CHARS: usize = 12;
+/// 用户明确要求（2026-11-10，S181）：取消密码的最短长度限制，只要求非空。这里保留常量而不是删掉校验，
+/// 是为了让“空密码”仍被拒绝——空串在终端与表单里无法区分“没填”和“填了空值”，散列它也只会得到
+/// 一个谁都能猜到的口令。判定按 Unicode 标量值个数，不按字节。
+pub const MIN_PASSWORD_CHARS: usize = 1;
 
 /// 密码的最大字节数：Argon2 本身的限制远大于此，这里挡住明显的“把文件当密码喂进来”。
 pub const MAX_PASSWORD_BYTES: usize = 1024;
@@ -143,10 +143,13 @@ pub fn validate_login(login: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// 校验密码形态：字符数下限与字节数上限。
+/// 校验密码形态：只要求非空，另有字节数上限。
+///
+/// 不再有最短长度（用户决定，见 [`MIN_PASSWORD_CHARS`]）；长度、强度与复用由用户自行负责，本层
+/// 不替用户判断口令强弱。
 pub fn validate_password(password: &str) -> Result<(), &'static str> {
     if password.chars().count() < MIN_PASSWORD_CHARS {
-        return Err("密码至少需要 12 个字符");
+        return Err("密码不能为空");
     }
     if password.len() > MAX_PASSWORD_BYTES {
         return Err("密码超过 1024 字节");
@@ -271,7 +274,7 @@ mod tests {
                 "correct horse battery staple",
                 "invalid_login",
             ),
-            ("owner", "short", "weak_password"),
+            ("owner", "", "weak_password"),
         ] {
             let error = prepare_owner(
                 &mut accounts,
@@ -290,10 +293,11 @@ mod tests {
         assert!(validate_login("owner").is_ok());
         assert!(validate_login(&"a".repeat(MAX_LOGIN_CHARS)).is_ok());
         assert!(validate_login(&"a".repeat(MAX_LOGIN_CHARS + 1)).is_err());
-        assert!(validate_password(&"a".repeat(MIN_PASSWORD_CHARS)).is_ok());
-        assert!(validate_password(&"a".repeat(MIN_PASSWORD_CHARS - 1)).is_err());
-        // 中文口令按字符数判定，不按字节：12 个汉字通过，11 个不通过。
-        assert!(validate_password("口令口令口令口令口令口令").is_ok());
-        assert!(validate_password("口令口令口令口令口令").is_err());
+        assert!(validate_password("a").is_ok(), "单字符密码不再是弱密码");
+        assert!(validate_password("1").is_ok());
+        assert!(validate_password("").is_err(), "空密码仍然拒绝");
+        // 中文口令按字符数判定，不按字节：1 个汉字就满足下限。
+        assert!(validate_password("口").is_ok());
+        assert!(validate_password(&"a".repeat(MAX_PASSWORD_BYTES + 1)).is_err());
     }
 }

@@ -92,7 +92,7 @@ pub async fn password(
                 StatusCode::BAD_REQUEST,
                 ErrorCode::InvalidRequest,
                 "password",
-                "新密码至少 12 字符且不超过 1024 字节",
+                "新密码不能为空且不超过 1024 字节",
                 false,
                 None,
             );
