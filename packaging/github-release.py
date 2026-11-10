@@ -13,10 +13,7 @@ import tomllib
 from urllib.parse import quote
 
 VAULT = Path(__file__).resolve().parents[1]
-TARGETS = {"linux-x64": "x86_64-unknown-linux-gnu", "windows-x64": "x86_64-pc-windows-msvc"}
-# 运行库对应源码归档随本地构建目录保留并核验，但不作为 Release 附件上传
-# （用户 2026-11-09 决定，见 S168）。
-LOCAL_ONLY = "vaultsyncd-runtime-sources.tar.gz"
+TARGETS = {"windows-x64": "x86_64-pc-windows-msvc"}
 
 
 def run(*args, **kwargs):
@@ -71,8 +68,8 @@ def bundle(directory):
             or tomllib.loads(run("git", "show", f"{commit}:Cargo.toml").decode())["workspace"]["package"]["version"] != version):
         raise ValueError("清单的源码树或版本与 Git 提交不符")
     platforms = manifest["platforms"]
-    if not platforms or len(platforms) != len(set(platforms)) or set(platforms) - TARGETS.keys():
-        raise ValueError("清单平台必须是 Linux x64 或 Windows x64")
+    if platforms != ["windows-x64"]:
+        raise ValueError("发布仅接受 Windows x64 便携 ZIP；请用 tools/release.sh 重新生成单平台构建目录")
     if manifest["signature_status"] != "unsigned-test" or manifest["native_acceptance"] != "not-run-by-this-tool":
         raise ValueError("不支持的签名或验收状态")
     listed = {}
@@ -86,45 +83,33 @@ def bundle(directory):
     expected = "".join(f"{item['sha256']}  {item['path']}\n" for item in manifest["files"])
     if checksum != expected:
         raise ValueError("构建 SHA256SUMS 与清单不符")
-    assets = {"release-manifest.json": manifest_path}
+    assets = {}
     for name in platforms:
-        windows = name == "windows-x64"
-        receipt_name = f"{name}/" + ("receipt.json" if windows else "release-manifest.json")
+        receipt_name = f"{name}/receipt.json"
         receipt = json.loads(regular(directory, receipt_name).read_text())
-        identity = receipt["source"] if windows else receipt["sourceInfo"]
-        component_version = identity["version"] if windows else receipt["version"]
+        identity = receipt["source"]
+        component_version = identity["version"]
         if identity["commit"] != commit or component_version != version or receipt["target"] != TARGETS[name]:
             raise ValueError("组件来源、版本或目标不符")
-        if windows and (identity["tree"] != source["tree"] or receipt["component"] != "windows-zip"):
+        if identity["tree"] != source["tree"] or receipt["component"] != "windows-zip":
             raise ValueError("Windows 组件类型或源码树不符")
-        inputs = identity["inputs"] if windows else receipt["inputs"]
+        inputs = identity["inputs"]
         if not inputs:
             raise ValueError("组件缺少构建输入")
         for path, digest in inputs.items():
             if hashlib.sha256(run("git", "show", f"{commit}:{path}")).hexdigest() != digest:
                 raise ValueError(f"组件输入与 Git 提交不符：{path}")
-        archive = (f"vaultsyncd-{version}-x64-unsigned.zip" if windows
-                   else f"vaultsyncd-{version}-{TARGETS[name]}.tar.gz")
-        if windows:
-            entries = [item for item in receipt["files"] if item["path"] == archive]
-            path = regular(directory, f"{name}/{archive}")
-            if len(entries) != 1 or entries[0]["bytes"] != path.stat().st_size or entries[0]["sha256"] != sha(path):
-                raise ValueError("Windows ZIP 与组件收据不符")
-        selected = {archive: f"{name}/{archive}", f"{name}-{Path(receipt_name).name}": receipt_name}
-        if not windows:
-            sources = receipt["corresponding_source_archive"]
-            if sources["name"] != LOCAL_ONLY:
-                raise ValueError("Linux 对应源码名称不符")
-            # 仍核对本地归档与组件收据一致，但不上传：发布不含该附件。
-            if sha(regular(directory, f"{name}/{sources['name']}")) != sources["sha256"]:
-                raise ValueError("Linux 对应源码哈希不符")
-        for upload_name, relative in selected.items():
+        archive = f"vaultsyncd-{version}-x64-unsigned.zip"
+        entries = [item for item in receipt["files"] if item["path"] == archive]
+        path = regular(directory, f"{name}/{archive}")
+        if len(entries) != 1 or entries[0]["bytes"] != path.stat().st_size or entries[0]["sha256"] != sha(path):
+            raise ValueError("Windows ZIP 与组件收据不符")
+        for relative in (receipt_name, f"{name}/{archive}"):
             if relative not in listed:
-                raise ValueError(f"上传文件未登记在构建清单：{relative}")
-            assets[upload_name] = regular(directory, relative)
+                raise ValueError(f"组件文件未登记在构建清单：{relative}")
+        assets[archive] = path
     digests = {name: listed[str(path.relative_to(directory))]["sha256"]
-               for name, path in assets.items() if name != "release-manifest.json"}
-    digests["release-manifest.json"] = hashlib.sha256(manifest_bytes).hexdigest()
+               for name, path in assets.items()}
     return manifest, assets, digests
 
 
@@ -201,6 +186,8 @@ class GitHub:
 
 
 def publish(api, manifest, assets, stage, args):
+    if manifest["platforms"] != ["windows-x64"]:
+        raise ValueError("发布仅接受 Windows x64 便携 ZIP")
     source = manifest["source"]
     commit, tag = source["commit"], args.tag
     run("gh", "auth", "status", "--hostname", "github.com")
@@ -218,13 +205,12 @@ def publish(api, manifest, assets, stage, args):
         if args.resume:
             raise ValueError("--resume 未找到可续传的草稿")
         notes = args.notes_file.read_text() if args.notes_file else ""
-        disclosure = ("本页不含 Linux 运行库对应源码归档，随二进制分发时另行提供。\n"
-                      if "linux-x64" in manifest["platforms"] else "")
+        checksums = "".join(f"`{sha(path)}  {name}`\n" for name, path in assets.items())
         notes += (f"\n\n版本：{source['version']}\n\n源码：`{commit}`\n\n"
                   f"平台：{', '.join(manifest['platforms'])}\n\n"
                   "产物未签名（unsigned-test）。本工具未执行原生验收，不代表首发门禁通过。\n"
-                  "SHA256SUMS 校验本页附件；build-SHA256SUMS 对应原始构建目录（包含本地日志）。\n"
-                  + disclosure + marker + "\n")
+                  "仅提供 Windows x64 便携 ZIP；来源收据、日志及构建校验表保留在本地。\n\n"
+                  "ZIP SHA-256：\n\n" + checksums + "\n" + marker + "\n")
         notes_path = stage / "notes.md"
         notes_path.write_text(notes)
         command = ["create", tag, "--target", commit, "--title", args.title or f"vaultsyncd {tag}",
@@ -246,7 +232,7 @@ def publish(api, manifest, assets, stage, args):
         api.verify_assets(uploaded, assets, stage, complete=True)
         # Stable Windows releases are the tray updater's public channel. Its client
         # requires GitHub's authenticated metadata digest before executing a ZIP.
-        client_update = args.stable and "windows-x64" in manifest["platforms"]
+        client_update = args.stable
         if client_update:
             name = f"vaultsyncd-{source['version']}-x64-unsigned.zip"
             package = next(item for item in uploaded["assets"] if item["name"] == name)
@@ -262,14 +248,14 @@ def publish(api, manifest, assets, stage, args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="校验并上传 tools/release.sh 的构建目录到 GitHub Release。")
+    parser = argparse.ArgumentParser(description="校验本地构建目录，仅上传 Windows x64 便携 ZIP 到 GitHub Release。")
     parser.add_argument("directory", type=Path, help="含 release-manifest.json 的已完成构建目录")
     parser.add_argument("--remote", default="origin", help="目标 Git 远端，默认 origin")
     parser.add_argument("--tag", help="默认 v<构建版本>；也接受 v<版本>-<预发布后缀>")
     parser.add_argument("--title")
     parser.add_argument("--notes-file", type=Path)
     parser.add_argument("--draft", action="store_true", help="附件传完后保持草稿")
-    parser.add_argument("--stable", action="store_true", help="发布为正式版本；含 Windows x64 时设为 Latest 供客户端自动更新，默认预发布")
+    parser.add_argument("--stable", action="store_true", help="发布为正式版本并设为 Latest 供客户端自动更新，默认预发布")
     parser.add_argument("--resume", action="store_true", help="校验并续传同源草稿，不覆盖已有附件")
     parser.add_argument("--dry-run", action="store_true", help="仅本地校验和显示附件，不联网、不上传")
     parser.add_argument("--staging-root", type=Path, default=Path("/data/vaultsyncd-dev/vaultsyncd-temp/cache/github-release"))
@@ -287,9 +273,11 @@ def main(argv=None):
         args.notes_file.read_text()  # Fail before any remote mutation.
     plan = {"repository": repo, "tag": args.tag, "source": manifest["source"],
             "draft": args.draft, "prerelease": not args.stable,
-            "latest": args.stable and not args.draft and "windows-x64" in manifest["platforms"],
-            "assets": sorted([*originals, "build-SHA256SUMS", "SHA256SUMS"]),
-            "local_only": [f"linux-x64/{LOCAL_ONLY}"] if "linux-x64" in manifest["platforms"] else []}
+            "latest": args.stable and not args.draft,
+            "assets": sorted(originals),
+            "local_only": sorted(({"release-manifest.json", "SHA256SUMS"} |
+                                   {item["path"] for item in manifest["files"]}) -
+                                  {str(path.relative_to(args.directory.expanduser().resolve())) for path in originals.values()})}
     print(json.dumps(plan, ensure_ascii=False, indent=2), flush=True)
     if args.dry_run:
         return
@@ -305,13 +293,6 @@ def main(argv=None):
             if sha(path) != digests[name]:
                 raise ValueError("暂存复制校验失败")
             assets[name] = path
-        # Preserve build checksums separately: the public asset layout is flat.
-        assets["build-SHA256SUMS"] = stage / "build-SHA256SUMS"
-        assets["build-SHA256SUMS"].write_text("".join(
-            f"{item['sha256']}  {item['path']}\n" for item in manifest["files"]))
-        checksum = stage / "SHA256SUMS"
-        checksum.write_text("".join(f"{sha(path)}  {name}\n" for name, path in sorted(assets.items())))
-        assets[checksum.name] = checksum
         publish(GitHub(repo), manifest, assets, stage, args)
 
 

@@ -2598,16 +2598,15 @@ S158 发行修复：当前仅 Linux x64；`nix/portable.nix` 以 `runtimeLibrary
 
 ## S110 — 一键多平台发行归档
 
-- `./tools/release.sh [--platform all|linux-x64|windows-x64 ...] [--output-dir <vault>] [--plan]`：Linux x64/Nix 主机入口，自动进入 devShell；默认 Linux x64 与 Windows x64 两个目标。实现和布局见 `packaging/README.md`。平台列表允许组合；默认输出 `dist/releases/v<产品版本>-<HEAD前12位>`，已有输出不覆盖。
-- Linux 复用 portable Nix 包，保留对应 runtime sources；Windows 新增 `cargo xtask release build windows-zip <new-dir>`，复用同源 fresh release/PE检查/ZIP集合验证与原receipt格式，只跳过NSIS。既有 windows-client 仍同时构建安装器和ZIP。
-- 编排在构建前后核对干净同HEAD，校验平台/版本/锁输入与Windows收据；完整来源/归档SHA256/日志随包。发布清单format1采用相对文件路径，SHA256SUMS覆盖归档、平台收据及日志；失败保留partial且不签发成功目录；仓库级非阻塞文件锁避免并发入口竞争前端dist。
-- 只构建并核对字节，不代替原生验收、不声明首发通过；无协议/持久化变化，不启动VM或改部署实例。
+- S169 覆盖 S110 的多平台便携交付：`./tools/release.sh [--platform all|windows-x64 ...] [--output-dir <目录>] [--plan]` 在 Linux x64/Nix 宿主仅构建 Windows x64 ZIP；`all` 为同义参数，Linux 参数拒绝。默认输出 `/data/vaultsyncd-dev/releases/v<版本>-<HEAD前12位>`，锁与缓存也在开发根内。Linux 服务端仍使用 Nix/NixOS；旧 portable/container 仅供历史受控实验室复验。
+- `cargo xtask release build windows-zip <new-dir>` 复用 fresh release、PE/ZIP 集合及同源 receipt assemble/verify，跳过 NSIS；既有 `windows-client` 受控安装验收入口保持。清单 format1、日志、SHA256SUMS 仅保留本地，构建前后须同一干净 HEAD，失败保留 partial、不签发成功目录，不覆盖旧输出。
 
-### S156：GitHub Release 本地发布
+### S156 / S169：GitHub Release 本地发布
 
-- `tools/publish-release.sh <构建目录> [--dry-run] [--draft] [--resume] [--stable] [--tag <标签>] [--remote <远端>] [--title <标题>] [--notes-file <文件>] [--staging-root <缓存根>]` 自动进入 devShell，调用 `packaging/github-release.py`；消费 S110 format1 成功清单，不执行构建。成功0、校验/权限/网络/上传失败1、参数错误2。`--dry-run` 仅本地验证 Git 对象、组件来源/版本/输入与文件大小/hash，无远端操作。
-- 版本取包源 Cargo.toml 并核对清单；标签限 `v<版本>` 或对应预发布后缀。目标取配置远端的 github.com push URL；上传前查精确 commit 和已有标签，绝不移动标签或推送分支。先建草稿、逐项上传、逐项校验远端摘要（缺摘要则下载），完整后发布；默认 prerelease/非 Latest，`--draft` 保留草稿。S162起 `--stable` 含Windows时须有GitHub SHA-256 digest，发布时设Latest供自动更新；草稿和仅Linux包不推广。Release 状态不是首发验收证明。
-- `--resume` 只接受含同源标记、同 target SHA/类型的草稿；匹配附件跳过，异源/损坏/多余附件或已发布 Release 均拒绝，无 clobber。附件平铺，只选平台归档与来源收据，生成平铺 `SHA256SUMS`，原构建校验表另存 `build-SHA256SUMS`，不上传日志。S168 起 Linux 运行库对应源码 `vaultsyncd-runtime-sources.tar.gz` 不再上传：仍随构建目录保留、按组件收据核对哈希，并在 `--dry-run` 的 `local_only` 中披露；分发二进制者需另行为其提供该归档。细节与 CLI 依据归 `packaging/README.md`。无 wire/DB/服务端产物变更。
+- `tools/publish-release.sh <构建目录> [--dry-run] [--draft] [--resume] [--stable] [--tag <标签>] [--remote <远端>] [--title <标题>] [--notes-file <文件>] [--staging-root <缓存根>]` 消费 format1 成功清单，只接受 `platforms=["windows-x64"]`；旧 Linux 或混合目录在任何远端操作前拒绝。核对 Git 对象、版本、目标、组件输入、收据及全部本地文件摘要，组件 ZIP 与收据必须一致。成功0、校验/远端失败1、参数错误2。
+- 上传集合严格只有 `vaultsyncd-<版本>-x64-unsigned.zip`；不上传来源收据、根清单、校验表、日志、Linux 包或 runtime sources。`--dry-run` 显示唯一 `assets` 及其余文件 `local_only`；Release 说明内记录 ZIP SHA-256。来源收据与 SHA256SUMS 仍留本地并参与发布前校验。
+- 版本来自包源 Cargo.toml；标签限对应 `v<版本>` 或预发布后缀，目标为配置 GitHub 远端，精确提交必须已推送；脚本不推分支、不移动标签。先草稿、上传及摘要校验后发布，默认预发布/非 Latest；`--stable` 必须有 GitHub ZIP SHA-256 digest 后才设 Latest 供 S162 更新。`--draft` 保留草稿。
+- `--resume` 只续传同源、同 target SHA/类型草稿，已有匹配 ZIP 跳过；异源、损坏、多余附件或已发布 Release 拒绝，不 clobber。旧草稿含任何额外附件均须人工处理，不自动删除远端资产。旧发行及源码归档保留；本卡不发行、不改服务端产物、wire 或数据库格式。细节归 `packaging/README.md`。
 
 ### S111 / ADR-015：当前平台范围覆盖
 

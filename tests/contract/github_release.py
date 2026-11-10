@@ -78,21 +78,14 @@ class GitHubReleaseTests(unittest.TestCase):
         self.source = {"commit": git("rev-parse", "HEAD"), "tree": git("rev-parse", "HEAD^{tree}"), "version": "0.2.0"}
         self.directory = self.root / "bundle"
         self.directory.mkdir()
-        self.manifest = {"format": 1, "source": self.source, "platforms": ["linux-x64", "windows-x64"],
+        self.manifest = {"format": 1, "source": self.source, "platforms": ["windows-x64"],
                          "signature_status": "unsigned-test", "native_acceptance": "not-run-by-this-tool", "files": []}
         inputs = {"Cargo.lock": RELEASE.sha(self.repo / "Cargo.lock")}
-        self.write("linux-x64/vaultsyncd-0.2.0-x86_64-unknown-linux-gnu.tar.gz", b"Linux fixture bytes")
-        self.write("linux-x64/vaultsyncd-runtime-sources.tar.gz", b"Runtime source fixture bytes")
         self.write("windows-x64/vaultsyncd-0.2.0-x64-unsigned.zip", b"Windows fixture bytes")
-        linux = {"version": "0.2.0", "sourceInfo": {"commit": self.source["commit"]}, "inputs": inputs,
-                 "target": RELEASE.TARGETS["linux-x64"], "corresponding_source_archive": {
-                     "name": "vaultsyncd-runtime-sources.tar.gz",
-                     "sha256": RELEASE.sha(self.directory / "linux-x64/vaultsyncd-runtime-sources.tar.gz")}}
         zip_path = self.directory / "windows-x64/vaultsyncd-0.2.0-x64-unsigned.zip"
         windows = {"component": "windows-zip", "source": {**self.source, "inputs": inputs},
                    "target": RELEASE.TARGETS["windows-x64"], "files": [
                        {"path": zip_path.name, "bytes": zip_path.stat().st_size, "sha256": RELEASE.sha(zip_path)}]}
-        self.write("linux-x64/release-manifest.json", json.dumps(linux).encode())
         self.write("windows-x64/receipt.json", json.dumps(windows).encode())
         self.write("logs/01.log", b"local build log, must not be uploaded")
         self.save()
@@ -129,28 +122,29 @@ class GitHubReleaseTests(unittest.TestCase):
     def test_bundle_checks_real_git_source_and_selects_only_public_assets(self):
         manifest, assets, digests = RELEASE.bundle(self.directory)
         self.assertEqual(manifest["source"], self.source)
-        self.assertEqual(len(assets), 5)
+        self.assertEqual(set(assets), {"vaultsyncd-0.2.0-x64-unsigned.zip"})
         self.assertNotIn("logs/01.log", assets)
         self.assertNotIn("vaultsyncd-runtime-sources.tar.gz", assets)
         self.assertEqual(set(assets), set(digests))
-        self.assertIn("linux-x64-release-manifest.json", assets)
-        self.assertIn("windows-x64-receipt.json", assets)
+        self.assertNotIn("release-manifest.json", assets)
+        self.assertNotIn("windows-x64-receipt.json", assets)
 
-    def test_linux_runtime_sources_are_verified_locally_but_never_uploaded(self):
-        receipt = self.directory / "linux-x64/release-manifest.json"
-        data = json.loads(receipt.read_text())
-        data["corresponding_source_archive"]["sha256"] = "0" * 64
-        receipt.write_text(json.dumps(data))
-        self.save()
-        with self.assertRaisesRegex(ValueError, "对应源码哈希"):
-            RELEASE.bundle(self.directory)
+    def test_linux_only_mixed_empty_and_duplicate_platforms_are_refused_before_gh(self):
+        for platforms in (["linux-x64"], ["linux-x64", "windows-x64"], [], ["windows-x64"] * 2):
+            with self.subTest(platforms=platforms):
+                self.manifest["platforms"] = platforms
+                self.save()
+                with patch.object(RELEASE, "GitHub") as api, contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(ValueError, "仅接受 Windows"):
+                        RELEASE.main([str(self.directory), "--dry-run"])
+                api.assert_not_called()
 
-    def test_dry_run_discloses_linux_runtime_sources_as_local_only(self):
+    def test_dry_run_discloses_receipts_checksums_and_logs_as_local_only(self):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             RELEASE.main([str(self.directory), "--dry-run"])
         plan = json.loads(output.getvalue())
-        self.assertEqual(plan["local_only"], ["linux-x64/vaultsyncd-runtime-sources.tar.gz"])
-        self.assertNotIn("vaultsyncd-runtime-sources.tar.gz", plan["assets"])
+        self.assertEqual(plan["assets"], ["vaultsyncd-0.2.0-x64-unsigned.zip"])
+        self.assertEqual(plan["local_only"], ["SHA256SUMS", "logs/01.log", "release-manifest.json", "windows-x64/receipt.json"])
 
     def test_tampered_bytes_missing_files_and_checksum_are_refused(self):
         path = self.directory / "logs/01.log"
@@ -170,16 +164,16 @@ class GitHubReleaseTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 RELEASE.regular(self.directory, name)
         link = self.directory / "link"
-        link.symlink_to(self.directory / "linux-x64", target_is_directory=True)
+        link.symlink_to(self.directory / "windows-x64", target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "符号链接"):
-            RELEASE.regular(self.directory, "link/release-manifest.json")
+            RELEASE.regular(self.directory, "link/receipt.json")
         self.manifest["files"].append(self.manifest["files"][0])
         (self.directory / "release-manifest.json").write_text(json.dumps(self.manifest))
         with self.assertRaisesRegex(ValueError, "重复路径"):
             RELEASE.bundle(self.directory)
         self.manifest["platforms"] = ["linux-arm64"]
         self.save()
-        with self.assertRaisesRegex(ValueError, "清单平台"):
+        with self.assertRaisesRegex(ValueError, "仅接受 Windows"):
             RELEASE.bundle(self.directory)
 
     def test_changed_version_tree_and_mixed_component_sources_are_refused(self):
@@ -252,13 +246,11 @@ class GitHubReleaseTests(unittest.TestCase):
         self.assertIn("unsigned-test", self.remote.record["body"])
         self.assertIn("--latest=false", self.remote.calls[-1])
 
-    def test_release_notes_disclose_missing_runtime_sources_only_for_linux_bundles(self):
+    def test_release_notes_include_zip_checksum_without_claiming_checksum_attachments(self):
         self.publish()
-        self.assertIn("本页不含 Linux 运行库对应源码归档", self.remote.record["body"])
-        self.remote = Remote(self.source, self.assets)
-        self.manifest["platforms"] = ["windows-x64"]
-        self.publish()
-        self.assertNotIn("本页不含 Linux 运行库对应源码归档", self.remote.record["body"])
+        self.assertIn("Windows x64 便携 ZIP", self.remote.record["body"])
+        self.assertIn(RELEASE.sha(self.assets["payload.zip"]), self.remote.record["body"])
+        self.assertNotIn("SHA256SUMS", self.remote.record["body"])
 
     def stable_assets(self):
         name = "vaultsyncd-0.2.0-x64-unsigned.zip"
@@ -275,7 +267,7 @@ class GitHubReleaseTests(unittest.TestCase):
         self.assertIn("--latest=false", self.remote.calls[0])
         self.assertIn("--latest=true", self.remote.calls[-1])
 
-    def test_stable_draft_and_linux_only_do_not_promote_client_channel(self):
+    def test_stable_draft_only_promotes_client_channel_when_resumed(self):
         self.stable_assets()
         self.args.draft = True
         self.publish()
@@ -283,9 +275,8 @@ class GitHubReleaseTests(unittest.TestCase):
         self.assertFalse(any("--latest=true" in call for call in self.remote.calls))
         self.args.draft = False
         self.args.resume = True
-        self.manifest["platforms"] = ["linux-x64"]
         self.publish()
-        self.assertIn("--latest=false", self.remote.calls[-1])
+        self.assertIn("--latest=true", self.remote.calls[-1])
 
     def test_stable_missing_github_digest_keeps_draft_even_if_bytes_were_verified(self):
         self.stable_assets()
@@ -405,18 +396,19 @@ class GitHubReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ZIP 与组件收据"):
             RELEASE.bundle(self.directory)
 
-    def test_staged_public_checksums_are_flat_and_original_build_checksums_are_preserved(self):
+    def test_staging_contains_only_zip_and_preserves_local_receipts_and_checksums(self):
+        original_checksums = (self.directory / "SHA256SUMS").read_bytes()
         def inspect(api, manifest, assets, stage, args):
-            self.assertEqual(len(assets), 7)
-            self.assertEqual(assets["build-SHA256SUMS"].read_bytes(), (self.directory / "SHA256SUMS").read_bytes())
-            for line in assets["SHA256SUMS"].read_text().splitlines():
-                digest, name = line.split("  ")
-                self.assertNotIn("/", name)
-                self.assertEqual(digest, RELEASE.sha(assets[name]))
+            name = "vaultsyncd-0.2.0-x64-unsigned.zip"
+            self.assertEqual(set(assets), {name})
+            self.assertEqual(list(stage.iterdir()), [stage / name])
+            self.assertEqual(RELEASE.sha(assets[name]), RELEASE.sha(self.directory / "windows-x64" / name))
         with patch.object(RELEASE, "publish", side_effect=inspect) as publish, contextlib.redirect_stdout(io.StringIO()):
             RELEASE.main([str(self.directory), "--staging-root", str(self.root / "staging")])
         publish.assert_called_once()
         self.assertEqual(list((self.root / "staging").iterdir()), [])
+        self.assertEqual((self.directory / "SHA256SUMS").read_bytes(), original_checksums)
+        self.assertTrue((self.directory / "windows-x64/receipt.json").is_file())
 
 
 if __name__ == "__main__":

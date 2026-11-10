@@ -2,33 +2,32 @@
 
 ## 一键生成发行归档
 
-在 Linux x86_64 主机安装并启用 Nix flakes 后，从干净的已提交源码运行：
+在 Linux x86_64/Nix 宿主上，从干净的已提交源码构建 Windows x64 便携 ZIP：
 
 ```sh
-./tools/release.sh                                      # 默认 Linux x64 与 Windows x64
-./tools/release.sh --platform windows-x64                # 只构建 Windows ZIP
-./tools/release.sh --platform linux-x64                  # 只构建 Linux x64
-./tools/release.sh --output-dir /绝对路径/releases       # 自定义输出根目录
+./tools/release.sh                                      # 仅 Windows x64 ZIP
+./tools/release.sh --platform windows-x64                # 显式选择同一目标
+./tools/release.sh --output-dir /data/vaultsyncd-dev/S169-实际run_id/releases
 ./tools/release.sh --plan                               # 只显示计划，不构建
 ```
 
-脚本自动进入锁定 devShell，Linux 使用 `nix build .#portable`，包含 server、admin、Web、私有 loader/库、示例配置及 systemd 单元；运行时源码归档随包保留（不上传 GitHub Release，见下文发布一节）。Windows 在宿主使用锁定 Rust/MSVC 交叉工具链和冻结前端依赖，走 `windows-zip` 组件，不调用 NSIS、不生成安装器。默认输出：
+`--platform all` 保留为 Windows x64 的同义参数；Linux 平台参数直接拒绝。脚本自动进入锁定 devShell，使用 Rust/MSVC 交叉工具链和冻结前端依赖，构建 `windows-zip` 组件，不调用 NSIS。统一发行入口不构建 Linux 便携包、容器或 glibc/GCC runtime sources；Linux 服务端继续通过 Nix/NixOS 部署。原 Linux 便携包与容器脚本仅保留供既有受控实验室和历史证据复验，不属于本入口或 GitHub 交付。
+
+默认输出：
 
 ```text
-dist/releases/v<版本>-<提交前12位>/
-  linux-x64/     vaultsyncd-<版本>-x86_64-unknown-linux-gnu.tar.gz
-                 vaultsyncd-runtime-sources.tar.gz、release-manifest.json
+/data/vaultsyncd-dev/releases/v<版本>-<提交前12位>/
   windows-x64/   vaultsyncd-<版本>-x64-unsigned.zip、receipt.json
   logs/          各步骤完整日志
   SHA256SUMS
   release-manifest.json
 ```
 
-只选择部分平台时仅包含实际构建的平台。首次运行需要联网下载 Nix、Rust、Windows SDK/CRT 与 pnpm 依赖；后续复用 Nix store、仓库 `.cache/windows/` 和 pnpm 缓存，Windows 每次仍使用全新 release target。可用 `VAULTSYNCD_WINDOWS_CACHE=/实际缓存目录` 指定已有工具链缓存。不会安装全局依赖或启动 Windows VM。
+首次运行需要联网下载 Nix、Rust、Windows SDK/CRT 与 pnpm 依赖；缓存、构建目录和证据统一位于 `/data/vaultsyncd-dev/`，Windows 工具链默认复用该根下的 `vaultsyncd-temp/cache/windows`。每次使用全新 release target，不安装全局依赖、不启动 Windows VM。自定义输出与缓存仍须位于开发根下。
 
-版本来自根 Cargo.toml；每个平台核对同一完整源码提交、版本、目标和锁/协议输入，Windows 还执行既有 receipt assemble/verify。成功后整体发布目录；已有目录拒绝覆盖，需要重复构建时指定另一输出根目录。失败退出非零，保留 `.partial-*` 现场和日志，不生成成功发布目录；不自动删除旧包。仓库内自定义输出目录须已被 Git 忽略。进入产物目录执行 `sha256sum -c SHA256SUMS` 可校验归档、平台来源记录与日志。
+版本来自根 Cargo.toml；构建前后检查干净同一 HEAD，核对版本、目标和锁/协议输入，再执行 Windows receipt assemble/verify。已有输出拒绝覆盖；失败保留 `.partial-*` 和日志，不签发成功目录。进入本地构建目录执行 `sha256sum -c SHA256SUMS` 可校验 ZIP、收据及日志。
 
-Windows ZIP 仍是 `unsigned-test`，解压后使用 `Start vaultsyncd.cmd`；状态留当前用户 LocalAppData，运行需要 WebView2，停止使用 `Stop vaultsyncd.cmd`。本入口只构建和校验产物，不执行 Windows/Ubuntu 原生验收，也不解除 S101/S106—S108 发布门禁；不扩展到 macOS、Windows ARM64 或 Linux 客户端。运行/数据保护说明见[Windows 安装与 ZIP](../docs/operations/windows-installation.md)和[Linux 运维](../docs/operations/linux.md)。
+ZIP 仍是 `unsigned-test`，解压后使用 `Start vaultsyncd.cmd`；状态留当前用户 LocalAppData，运行需要 WebView2，停止使用 `Stop vaultsyncd.cmd`。本入口不执行 Windows 原生验收，也不解除性能、容量、多机和同源候选门禁。运行/数据保护见[Windows 安装与 ZIP](../docs/operations/windows-installation.md)。
 
 ## 发布到 GitHub Release
 
@@ -61,9 +60,9 @@ nix develop --command gh auth login --hostname github.com
 
 客户端只检查本项目公开仓库的最新正式 Release；发布更高版本并使用 `--stable` 才会进入自动升级渠道。保留精确附件名 `vaultsyncd-<版本>-x64-unsigned.zip`，ZIP内所有程序/清单须同源，不能只上传单个EXE。客户端仍按SemVer拒绝同版/降版；没有正式Release、仅有预发布或缺少SHA-256时提示实际原因。升级前客户端自动保留程序/整套状态备份，下载校验失败不启动维护。此卡未执行真实GitHub发布。
 
-上传先创建草稿，逐项上传并核对远端大小/SHA-256，全部就绪后才发布。失败保留远端草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；已存在且哈希相符的附件跳过，缺少摘要的旧附件会下载校验。不覆盖附件，不修改已发布 Release；远端含异源/不匹配/多余附件时退出非零，需人工检查该草稿（S168 之前创建的草稿仍带对应源码归档，`--resume` 会因多余附件拒绝，需先人工删除该附件或重开草稿）。创建响应丢失也可通过 `--resume` 找回；发布响应丢失时先查看 GitHub 页面，已发布版本不会被自动改写。
+GitHub Release 只上传一个附件：`vaultsyncd-<版本>-x64-unsigned.zip`。来源收据、根清单、`SHA256SUMS` 和日志保留在本地；`--dry-run` 的 `assets` 列出唯一 ZIP，`local_only` 列出其余本地文件。发布说明记录 ZIP 的 SHA-256，远端上传仍逐字节摘要校验；哈希不是数字签名。GitHub 页面自动生成的仓库源码下载链接不属于脚本上传附件。
 
-附件包括实际选中平台的归档、各平台来源清单（加平台前缀避免重名）、根 `release-manifest.json`、`build-SHA256SUMS` 及 `SHA256SUMS`；不上传 `logs/`。Linux 运行库对应源码 `vaultsyncd-runtime-sources.tar.gz` 不再作为 GitHub 附件上传（S168 用户决定），只保留在本地构建目录并按组件收据继续核对哈希；分发 Linux 二进制/镜像者须自行随包提供该归档以满足许可要求。`--dry-run` 计划的 `local_only` 字段列出该本地上传排除项。GitHub 附件为平铺布局，下载到同一目录后执行 `sha256sum -c SHA256SUMS`。`build-SHA256SUMS` 保留原构建目录的校验表，路径包含平台目录、未上传的本地日志及该对应源码归档，不能直接用于平铺附件。清单与哈希不是数字签名。
+上传先创建草稿，核对远端大小/SHA-256，完成后才发布。失败保留草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；匹配 ZIP 跳过，缺摘要的旧附件下载校验。只接受 Windows 单平台构建目录；旧 Linux/混合构建目录需要重新构建，不删文件或手改来源清单冒充。旧草稿若带清单、校验表或 Linux 等额外附件，续传会拒绝，需人工核对后另开草稿或移除额外附件。已发布 Release 不改写，旧发行与对应源码归档继续保留。
 
 暂存默认 `/data/vaultsyncd-dev/vaultsyncd-temp/cache/github-release/upload-*`，完成或失败后清理本次复制；原构建目录保持。其他主机可传 `--staging-root <已有授权的缓存根>`。本入口只发布已有归档，不自动编译、不启动 VM、不改变线上服务。验收入口：`nix develop --command python3 tests/contract/github_release.py`（本地 Git 与 API 契约，不写真实 GitHub）。CLI 行为依据：[创建 Release](https://cli.github.com/manual/gh_release_create)、[上传附件](https://cli.github.com/manual/gh_release_upload)、[发布草稿](https://cli.github.com/manual/gh_release_edit)。
 

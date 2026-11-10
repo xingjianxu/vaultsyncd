@@ -56,17 +56,17 @@ nix develop -c pnpm --recursive --if-present run test
 
 ## 构建与运行
 
-一键生成全部支持平台的 release 归档（Linux x64、Windows x64 ZIP）：
+一键生成 Windows x64 便携 ZIP：
 
 ```bash
 ./tools/release.sh
 ```
 
 在 Linux x64/Nix 主机运行，自动进入锁定环境并准备依赖。产物写入
-`dist/releases/v<版本>-<提交前12位>/`，包含校验和、来源清单和日志；Windows 只生成免安装 ZIP。
-单平台选择、目录设置和首次下载说明见[统一打包入口](packaging/README.md#一键生成发行归档)。
+`/data/vaultsyncd-dev/releases/v<版本>-<提交前12位>/`，包含本地校验和、来源收据和日志。
+目录设置和首次下载说明见[统一打包入口](packaging/README.md#一键生成发行归档)。
 
-上传已有构建目录到 GitHub Release：`./tools/publish-release.sh <构建目录>`；
+GitHub Release 仅上传 Windows ZIP，来源收据与校验表保留本地。上传已有构建目录：`./tools/publish-release.sh <构建目录>`；
 先加 `--dry-run` 可做本地校验。登录、源码推送、草稿续传和正式版参数见[发布说明](packaging/README.md#发布到-github-release)。
 
 锁定开发工具链由 `flake.nix` 与 `flake.lock` 提供。服务端只支持 Linux、本地合规 btrfs 与完整普通文件；Windows 客户端只支持 Windows 11 x64/NTFS，原生 CFAPI 必须在 Windows 验证。Linux/macOS/Android 同步客户端、P2P 和增量传输不在首发范围。

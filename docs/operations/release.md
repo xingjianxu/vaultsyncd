@@ -4,7 +4,7 @@
 
 ## 源码与证据归属
 
-GitHub Release 本地上传入口为 `tools/publish-release.sh <构建目录>`，构建、登录、预检、附件布局和草稿续传步骤只维护在[统一打包入口](../../packaging/README.md#发布到-github-release)。新增上传渠道不恢复 GitHub 工作流，不改变本文首发验收状态。
+GitHub Release 本地上传入口为 `tools/publish-release.sh <构建目录>`，构建、登录、预检、附件布局和草稿续传步骤只维护在[统一打包入口](../../packaging/README.md#发布到-github-release)。S169 起仅构建及上传 Windows x64 便携 ZIP，来源收据/校验表保留本地，Linux 服务端走 Nix/NixOS。新增上传渠道不恢复 GitHub 工作流，不改变本文首发验收状态。
 
 | 证据组 | 实际源与界限 |
 | --- | --- |

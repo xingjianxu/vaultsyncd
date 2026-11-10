@@ -1689,6 +1689,13 @@
 - 验收：`tests/contract/github_release.py` 全绿（含“不上传对应源码”“本地哈希不符拒绝”“说明披露按平台区分”负例/正例）；`release.py`、`nix/portable.nix` 与容器入口构建/校验对应源码的既有行为不变；不改线上服务、不改已发布 Release。
 - 交接：`agent/tasks/S168.md`；通过后合 master 并清理。许可说明为“对应源码不再作为 GitHub 附件，分发二进制者须另行提供本地归档”。
 
+### S169 — 便携发行与 GitHub 附件收敛为 Windows ZIP
+
+- 依据：2026-11-10 用户明确要求便携部署只考虑 Windows，GitHub Release 只发布 Windows 便携 ZIP；前置 S110/S156/S168 done，design §5.9/24/25、ADR-027。本卡 ready。
+- 范围：统一 release 仅构建 Windows x64 ZIP，拒绝 Linux 参数；上传仅接受 Windows 单平台目录、只传 ZIP，来源/日志/校验表留本地并核验。Linux 服务端继续 Nix/NixOS，历史 Linux 实验室入口/发行保留；不修改已发布 Release。
+- 验收：release_bundle、github_release、windows_zip 契约及包装入口通过，核对默认/显式/all 仅 Windows、Linux/混合拒绝、唯一附件及来源/完整性/续传/Latest 保护；真实同源 Windows ZIP 构建及本地 dry-run。无新 CFAPI 行为，不以编排测试声称原生验收。
+- 交接：`agent/tasks/S169.md`；验收后合 master 并清理，本卡不发新版，不触发无关服务端部署。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

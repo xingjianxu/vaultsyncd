@@ -1,5 +1,7 @@
 # 通用 Linux 发行包与容器
 
+S169 起，便携发行仅 Windows x64，GitHub Release 只发布 Windows ZIP。Linux 服务端当前部署入口为 [NixOS](nixos.md)。下文保留既有 Linux 便携/容器的受控实验室复验和历史发行说明，不由 `tools/release.sh` 构建或上传；历史二进制及对应源码继续保留。
+
 ## 构建与来源
 
 从干净、已提交的 Git flake 构建，不使用工作树内已有 target/dist：

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the supported release archives from one clean commit on Linux x64."""
+"""Build the Windows x64 portable ZIP from one clean commit on Linux x64."""
 import argparse
 import fcntl
 import hashlib
@@ -16,7 +16,6 @@ import tomllib
 
 VAULT = Path(__file__).resolve().parents[1]
 PLATFORMS = {
-    "linux-x64": ("portable", "x86_64-unknown-linux-gnu"),
     "windows-x64": (None, "x86_64-pc-windows-msvc"),
 }
 
@@ -47,14 +46,14 @@ def copy_file(source, destination):
         raise ValueError(f"复制校验失败：{destination}")
 
 
-def check_identity(record, expected, target, windows=False):
-    identity = record["source"] if windows else record["sourceInfo"]
-    version = identity["version"] if windows else record["version"]
+def check_identity(record, expected, target):
+    identity = record["source"]
+    version = identity["version"]
     if identity["commit"] != expected["commit"] or version != expected["version"] or record["target"] != target:
         raise ValueError("组件来源、版本或平台不匹配")
-    if windows and identity["tree"] != expected["tree"]:
+    if identity["tree"] != expected["tree"]:
         raise ValueError("Windows 组件源码树不匹配")
-    inputs = identity["inputs"] if windows else record["inputs"]
+    inputs = identity["inputs"]
     if not inputs or any(sha(VAULT / name) != digest for name, digest in inputs.items()):
         raise ValueError("组件锁文件/协议输入不匹配")
 
@@ -64,8 +63,7 @@ class Builder:
         self.stage, self.expected = stage, expected
         self.commands = []
         self.env = os.environ.copy()
-        # Toolchain setup stays in the repository cache, never in global homes.
-        self.env.setdefault("VAULTSYNCD_WINDOWS_CACHE", str(VAULT / ".cache/windows"))
+        self.env.setdefault("VAULTSYNCD_WINDOWS_CACHE", "/data/vaultsyncd-dev/vaultsyncd-temp/cache/windows")
 
     def run(self, command, capture=False):
         number = len(self.commands) + 1
@@ -81,26 +79,6 @@ class Builder:
             raise RuntimeError(f"步骤 {number} 失败（退出码 {result.returncode}），日志：{log}")
         return result.stdout if capture else None
 
-    def linux(self, name):
-        attribute, target = PLATFORMS[name]
-        outputs = json.loads(self.run(["nix", "build", f".#{attribute}",
-                                       "--no-link", "--json"], capture=True))
-        if len(outputs) != 1:
-            raise ValueError("Nix 输出数量异常")
-        directory = Path(outputs[0]["outputs"]["out"])
-        manifest = directory / "runtime/share/vaultsyncd/release-manifest.json"
-        record = json.loads(manifest.read_text())
-        check_identity(record, self.expected, target)
-        destination = self.stage / name
-        destination.mkdir()
-        archive = f"vaultsyncd-{self.expected['version']}-{target}.tar.gz"
-        copy_file(directory / archive, destination / archive)
-        sources = record["corresponding_source_archive"]
-        if sources["name"] != "vaultsyncd-runtime-sources.tar.gz" or sha(directory / sources["name"]) != sources["sha256"]:
-            raise ValueError("Linux 运行库对应源码校验失败")
-        copy_file(directory / sources["name"], destination / sources["name"])
-        copy_file(manifest, destination / "release-manifest.json")
-
     def windows(self):
         prefix = ["nix", "develop", ".#windows", "--command"]
         self.run(prefix + ["bash", "tests/platform/windows/setup-toolchain.sh"])
@@ -112,7 +90,7 @@ class Builder:
         self.run(prefix + ["cargo", "xtask", "release", "assemble", str(manifest), str(directory)])
         self.run(prefix + ["cargo", "xtask", "release", "verify", str(manifest)])
         record = json.loads((directory / "receipt.json").read_text())
-        check_identity(record, self.expected, PLATFORMS["windows-x64"][1], windows=True)
+        check_identity(record, self.expected, PLATFORMS["windows-x64"][1])
         if record["component"] != "windows-zip" or list((directory / "payload").glob("*setup.exe")):
             raise ValueError("Windows ZIP 组件异常：包含安装器或类型错误")
         destination = self.stage / "windows-x64"
@@ -148,9 +126,9 @@ def publish(builder, selected, destination):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="在 Linux x64/Nix 上一键构建 Linux x64 包和 Windows ZIP。")
-    parser.add_argument("--platform", nargs="+", choices=["all", *PLATFORMS], default=["all"], help="默认全部；可选择一个或多个平台")
-    parser.add_argument("--output-dir", default=str(VAULT / "dist/releases"), help="输出根目录，默认仓库 dist/releases")
+    parser = argparse.ArgumentParser(description="在 Linux x64/Nix 上构建 Windows x64 便携 ZIP。")
+    parser.add_argument("--platform", nargs="+", choices=["all", *PLATFORMS], default=["windows-x64"], help="仅 Windows x64；all 保留为同义参数")
+    parser.add_argument("--output-dir", default="/data/vaultsyncd-dev/releases", help="输出根目录，默认 /data/vaultsyncd-dev/releases")
     parser.add_argument("--plan", action="store_true", help="仅显示平台和输出根目录，不构建")
     args = parser.parse_args(argv)
     selected = list(PLATFORMS) if "all" in args.platform else list(dict.fromkeys(args.platform))
@@ -159,13 +137,13 @@ def main(argv=None):
         print(json.dumps({"platforms": selected, "output_dir": str(directory), "windows": "ZIP only; unsigned-test"}, indent=2))
         return
     if platform.system() != "Linux" or platform.machine() != "x86_64":
-        raise ValueError("此入口需要 Linux x86_64 主机和 Nix，目标支持 Linux x64 与 Windows x64。")
+        raise ValueError("此入口需要 Linux x86_64 主机和 Nix，目标仅支持 Windows x64。")
     expected = source()
     destination = directory / f"v{expected['version']}-{expected['commit'][:12]}"
     if destination.exists():
         raise ValueError(f"拒绝覆盖已有发布目录：{destination}；可使用 --output-dir 指定新位置。")
-    cache = VAULT / ".cache"
-    cache.mkdir(exist_ok=True)
+    cache = Path("/data/vaultsyncd-dev/cache/release")
+    cache.mkdir(parents=True, exist_ok=True)
     with (cache / "release.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -177,8 +155,7 @@ def main(argv=None):
             (stage / name).mkdir()
         builder = Builder(stage, expected)
         try:
-            for name in selected:
-                builder.windows() if name == "windows-x64" else builder.linux(name)
+            builder.windows()
             publish(builder, selected, destination)
         except BaseException:
             print(f"构建未完成，现场与日志保留在：{stage}", file=sys.stderr)

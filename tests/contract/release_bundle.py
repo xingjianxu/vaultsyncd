@@ -27,23 +27,24 @@ class ReleaseBundleTests(unittest.TestCase):
         self.identity = {"commit": "a" * 40, "tree": "b" * 40, "version": "0.1.1"}
         self.builder = RELEASE.Builder(self.stage, self.identity)
 
-    def test_default_and_all_plan_select_only_supported_x64_platforms(self):
+    def test_default_and_all_plan_select_only_windows_x64(self):
         for arguments in [[], ["--platform", "all"],
-                          ["--platform", "windows-x64", "linux-x64", "windows-x64"]]:
+                          ["--platform", "windows-x64", "windows-x64"]]:
             with self.subTest(arguments=arguments):
                 result = subprocess.run([sys.executable, str(VAULT / "packaging/release.py"),
                                          "--plan", *arguments], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 platforms = json.loads(result.stdout)["platforms"]
-                self.assertEqual(set(platforms), {"linux-x64", "windows-x64"})
-                self.assertEqual(len(platforms), 2)
+                self.assertEqual(platforms, ["windows-x64"])
 
     def test_removed_platform_is_rejected_before_building(self):
-        result = subprocess.run([sys.executable, str(VAULT / "packaging/release.py"),
-                                 "--platform", "linux-arm64", "--plan"], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("invalid choice", result.stderr)
-        self.assertEqual(result.stdout, "")
+        for platform in ("linux-x64", "linux-arm64"):
+            with self.subTest(platform=platform):
+                result = subprocess.run([sys.executable, str(VAULT / "packaging/release.py"),
+                                         "--platform", platform, "--plan"], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid choice", result.stderr)
+                self.assertEqual(result.stdout, "")
 
     def test_failed_command_preserves_log_without_success_manifest(self):
         with self.assertRaisesRegex(RuntimeError, "退出码 7"):
@@ -54,7 +55,7 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_changed_source_refuses_publication(self):
         with patch.object(RELEASE, "source", return_value={**self.identity, "commit": "c" * 40}):
             with self.assertRaisesRegex(ValueError, "源码发生变化"):
-                RELEASE.publish(self.builder, ["linux-x64"], self.vault / "published")
+                RELEASE.publish(self.builder, ["windows-x64"], self.vault / "published")
         self.assertFalse((self.vault / "published").exists())
 
     def test_publication_is_self_contained_with_hashes_and_no_work_directory(self):
@@ -91,13 +92,13 @@ class ReleaseBundleTests(unittest.TestCase):
         lock.write_text("locked")
         record = {"source": {**self.identity, "inputs": {"Cargo.lock": RELEASE.sha(lock)}}, "target": "windows"}
         with patch.object(RELEASE, "VAULT", self.vault):
-            RELEASE.check_identity(record, self.identity, "windows", windows=True)
+            RELEASE.check_identity(record, self.identity, "windows")
             for expected, target in [({**self.identity, "commit": "c" * 40}, "windows"), (self.identity, "linux")]:
                 with self.assertRaises(ValueError):
-                    RELEASE.check_identity(record, expected, target, windows=True)
+                    RELEASE.check_identity(record, expected, target)
             lock.write_text("changed")
             with self.assertRaisesRegex(ValueError, "输入不匹配"):
-                RELEASE.check_identity(record, self.identity, "windows", windows=True)
+                RELEASE.check_identity(record, self.identity, "windows")
 
     def test_output_inside_tracked_source_and_symlink_payload_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "Git 忽略"):

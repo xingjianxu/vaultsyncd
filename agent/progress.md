@@ -1,5 +1,7 @@
 # 实施进度
 
+当前新增：**S169 in_progress**；便携发行与 GitHub 附件收敛为 Windows x64 ZIP，工作树 `.worktrees/S169-windows-release`，分支 `build/S169-windows-release`，基线 `47144d1`。验收与交接完成后整合；本卡不发行、不部署服务端。
+
 当前：**S168 done**，GitHub 发布不再上传 Linux 运行库对应源码归档，该归档只留本地构建目录并继续按组件收据核验；契约 26/26、真实产物 dry-run 7 附件通过（未发行、未上传）；实现`7b2f0b9`、交接`135676f`已ff合master，任务树/分支已清理。此前 **S166、S167 done**，客户端按地址自动读取只读 Server ID 并确认，桌面自动复用/启动 agent，关闭窗口后台继续。身份/超时保护、文件/历史与管理原生通过；组合后 Windows 生产严格 clippy/build、生成一致及启动39/39再次通过。S166实现`cbc82ff`、交接`a80d28c`已ff合master并清理；S167实现`401c484`、交接`eb2f773`、组合`8c7ad69`已ff合master，任务树/分支已清理。**下一 ready：无**；原四张blocked保持。
 
 最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未发行。在线服务端仍为S160，运行/开机generation269、源`85dd2bb`、schema18、主机pin`a37df31`；Vault基目录`/data/vaultsyncd/vaults`。本轮仅复跑相关功能原生，性能容量/多机与线上成对升级仍未验收。
