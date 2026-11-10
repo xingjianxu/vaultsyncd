@@ -26,6 +26,10 @@ export function EntryMenu({ children, entry, context, writable, opened, onChange
     <Menu.ContextMenu>{children}</Menu.ContextMenu>
     <Menu.Dropdown onKeyDown={event => event.stopPropagation()}>
       {entry.kind === "directory" && <Menu.Item leftSection={<FileIcon name="folder-open" />} onClick={() => navigate(entry)}>打开</Menu.Item>}
+      {entry.kind === "directory" && <Menu.Item disabled={!writable} leftSection={<FileIcon name="folder-new" />}
+        onClick={() => actions.createDirectory({ ...context, parent: entry })}>新建目录</Menu.Item>}
+      {entry.kind === "file" && <Menu.Item disabled={!writable || !entry.version_id || !entry.hash || entry.size === undefined}
+        leftSection={<FileIcon name="download" />} onClick={() => actions.download(context, entry)}>下载</Menu.Item>}
       <Menu.Item leftSection={<FileIcon name="properties" />} onClick={() => properties(entry)}>属性</Menu.Item>
       {entry.kind === "file" && <Menu.Item leftSection={<FileIcon name="history" />} onClick={() => history(entry)}>版本历史</Menu.Item>}
       <Menu.Item leftSection={<FileIcon name="copy" />} onClick={() => copyPath(entry)}>复制路径</Menu.Item>

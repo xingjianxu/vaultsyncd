@@ -284,6 +284,16 @@ export function createClipboard(mode: "copy" | "cut", vault: string, snapshot: D
   return Object.freeze({ mode, vault, serverEpoch: snapshot.metadata.server_epoch, entry: entries[0]!, entries: Object.freeze(entries) });
 }
 
+/** 新建目录沿用命名空间日志、原 OpId 查询与 expected_absent 防覆盖。 */
+export function createDirectoryJob(client: BrowserAuth, vault: string, snapshot: DirectorySnapshot, parent: SnapshotEntry, name: string, recovery?: FileActionRecovery): FileActionJob {
+  const scope = new OperationScope(recovery);
+  checkTarget(vault, snapshot, parent, [name]);
+  const request: OperationRequest = { kind: "create", op_id: identity(), device_id: identity(), server_epoch: snapshot.metadata.server_epoch,
+    parent_id: parent.entry_id, name, expected_absent: true };
+  const commit = operation(client, vault, scope, () => request);
+  return new ActionJob("新建目录", [{ name, run: async () => !!await commit() }], scope);
+}
+
 export function createUploadJob(client: BrowserAuth, vault: string, snapshot: DirectorySnapshot, parent: SnapshotEntry, files: readonly File[], recovery?: FileActionRecovery): FileActionJob {
   const scope = new OperationScope(recovery);
   if (!files.length) throw new Error("请选择上传文件。");

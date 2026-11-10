@@ -90,7 +90,7 @@ def main():
     proxy = browser = context = page = None
     requests, checks, errors, csp = [], [], [], []
     lock = threading.Lock()
-    fault = {"mode": None, "vault": None, "kind": None, "record": None}
+    fault = {"mode": None, "vault": None, "kind": None, "record": None, "corrupt_download": False}
     triggered, release = threading.Event(), threading.Event()
 
     def save_result(passed, failure=None):
@@ -175,6 +175,9 @@ def main():
                         triggered.set()
                         self.close_connection = True
                         return  # Backend really processed it; Chromium receives no success.
+                    if path.endswith("/content") and fault["corrupt_download"] and payload:
+                        payload = payload[:-1] + bytes([payload[-1] ^ 1])
+                        record["corrupted_download"] = True
                     self.send_response(response.status)
                     for key, value in response.getheaders():
                         if key.lower() not in ("connection", "transfer-encoding", "content-length"):
@@ -369,6 +372,92 @@ def main():
             assert len(sessions) == 3 and any(len(items) >= 2 for items in parts.values()), parts
             assert all(item["status"] in (200, 201, 204) for items in parts.values() for item in items), parts
             checks.append("I01/I05/multi-upload/empty-bytes/cross-chunk/real-PUT/hash-size-disk")
+
+            # S171: 新建目录使用真实create与恢复流程，目标取右键目录而非当前目录。
+            def create_dialog(name):
+                dialog = page.get_by_role("dialog", name="新建目录", exact=True)
+                expect(dialog).to_be_visible()
+                dialog.get_by_role("textbox", name=field_label("目录名称")).fill(name)
+                return dialog
+
+            background = page.get_by_label("当前目录空白区域", exact=True)
+            background.focus(); background.press("Shift+F10")
+            page.get_by_role("menuitem", name="新建目录", exact=True).click()
+            dialog = create_dialog("cancelled-s171")
+            for scheme in ("light", "dark"):
+                page.emulate_media(color_scheme=scheme)
+                for width in (320, 1440):
+                    page.set_viewport_size({"width": width, "height": 900}); page.wait_for_timeout(300)
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, "create dialog")
+                    page.screenshot(path=str(RUN / f"s171-create-{scheme}-{width}.png"), full_page=True)
+            page.emulate_media(color_scheme="light")
+            page.set_viewport_size({"width":1440,"height":1000})
+            start = len(requests); dialog.get_by_role("button", name="取消", exact=True).click()
+            assert not submits_since(start) and entry_at("cancelled-s171") is None
+            background.focus(); background.press("Shift+F10")
+            page.get_by_role("menuitem", name="新建目录", exact=True).click()
+            dialog = create_dialog("bad/name")
+            dialog.get_by_role("button", name="创建", exact=True).click()
+            expect(dialog.get_by_text("文件名无效。", exact=True)).to_be_visible()
+            dialog.get_by_role("textbox", name=field_label("目录名称")).fill("S171 新目录 😀")
+            dialog.get_by_role("textbox", name=field_label("目录名称")).press("Enter")
+            root_created = settled_entry("S171 新目录 😀")
+            assert root_created["kind"] == "directory" and (documents / "S171 新目录 😀").is_dir()
+            menu_action("S171 新目录 😀", "新建目录")
+            dialog = create_dialog("inside")
+            dialog.get_by_role("button", name="创建", exact=True).click()
+            wait_for(lambda: entry_at("S171 新目录 😀/inside"), "new directory target was not honored")
+            assert entry_at("inside") is None
+            clear_notices()
+            tree = page.get_by_role("tree", name="目录树", exact=True)
+            # 根节点同样允许新建，不允许改动Vault本身。
+            tree.locator("[role=treeitem]").first.locator(":scope > div").click(button="right")
+            page.get_by_role("menuitem", name="新建目录", exact=True).click()
+            dialog = create_dialog("S171 新目录 😀")
+            dialog.get_by_role("button", name="创建", exact=True).click()
+            expect(dialog.get_by_text(re.compile("目标已存在同名条目"))).to_be_visible()
+            dialog.get_by_role("button", name="取消", exact=True).click()
+            checks.append("S171/create/cancel/invalid/Unicode/background-keyboard/row-directory-target/tree-root/duplicate")
+
+            # 丢真实create响应后只能核对原OpId，不重复创建目录。
+            background.focus(); background.press("Shift+F10")
+            page.get_by_role("menuitem", name="新建目录", exact=True).click()
+            dialog = create_dialog("s171-lost-response")
+            arm("drop-after", "create")
+            dialog.get_by_role("button", name="创建", exact=True).click()
+            original = await_fault()
+            release.set()
+            expect(page.get_by_role("button", name="继续操作", exact=True)).to_be_visible(timeout=15000)
+            clear_notices()
+            page.get_by_role("button", name="继续操作", exact=True).click()
+            settled_entry("s171-lost-response")
+            assert len([r for r in requests if r.get("operation", {}).get("op_id") == original["operation"]["op_id"]]) == 1
+            checks.append("S171/create/lost-real-response/query-original-opid")
+
+            # 实际浏览器另存，原始名称、空内容与跨4MiB分段字节/摘要一致。
+            for name, data in upload_data.items():
+                with page.expect_download() as pending_download:
+                    menu_action(name, "下载")
+                saved = pending_download.value
+                assert saved.suggested_filename == name and saved.failure() is None
+                target = RUN / "downloads" / name
+                target.parent.mkdir(exist_ok=True)
+                saved.save_as(target)
+                assert target.read_bytes() == data and sha(target.read_bytes()) == sha(data)
+                expect(page.get_by_role("button", name="取消下载", exact=True)).to_have_count(0)
+            downloads_seen = []
+            page.on("download", lambda download: downloads_seen.append(download.suggested_filename))
+            fault["corrupt_download"] = True
+            menu_action("cross-chunk.bin", "下载")
+            expect(error_notices.get_by_text("下载 SHA-256 校验失败，未保存文件。", exact=True)).to_be_visible(timeout=15000)
+            assert not downloads_seen, "corrupt content reached browser save"
+            fault["corrupt_download"] = False
+            clear_notices()
+            checks.append("S171/download/corrupted-real-range/hash-error/no-save")
+            row("S171 新目录 😀").click(button="right")
+            expect(page.get_by_role("menuitem", name="下载", exact=True)).to_have_count(0)
+            page.keyboard.press("Escape")
+            checks.append("S171/download/original-Unicode-name/empty/multiple-ranges/SHA256/no-directory-download")
 
             keep_name = "keep & 文档.txt"
             at("/source")

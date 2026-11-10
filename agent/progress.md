@@ -1,6 +1,8 @@
 # 实施进度
 
-当前：**S170 done**，服务管理/客户端显示登录 IP 和五分钟连接状态，每30秒刷新全部已加载分页；历史IP未知。后端229 passed/1既有ignored，迁移/恢复/来源/边界、clippy/生成/消费者、Web及真实浏览器通过。已部署本机generation270、源`df8edc8`、schema19、主机pin`7787429`，线上IP/代理头覆盖/轮询及数据/服务保持通过。实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；证据`/data/vaultsyncd-dev/S170-client-ip-20261110/`。**下一 ready：无**；原四张blocked保持。
+当前：**S171 in_progress**，实现 Web 右键新建目录与下载；前置均done。工作树与证据见[交接](tasks/S171.md)。
+
+此前：**S170 done**，服务管理/客户端显示登录 IP 和五分钟连接状态，每30秒刷新全部已加载分页；历史IP未知。后端229 passed/1既有ignored，迁移/恢复/来源/边界、clippy/生成/消费者、Web及真实浏览器通过。已部署本机generation270、源`df8edc8`、schema19、主机pin`7787429`，线上IP/代理头覆盖/轮询及数据/服务保持通过。实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；证据`/data/vaultsyncd-dev/S170-client-ip-20261110/`。**下一 ready：无**；原四张blocked保持。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 

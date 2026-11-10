@@ -8,7 +8,7 @@ globalThis.crypto ??= webcrypto;
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] } });
 try {
-  const { createClipboard, createUploadJob, createPasteJob, createRenameJob, prepareDelete, createFileActionRecovery, MAX_FILE_ACTION_BYTES, MAX_UPLOAD_BYTES } = await server.ssrLoadModule("/apps/web/src/features/files/actions.ts");
+  const { createClipboard, createDirectoryJob, createUploadJob, createPasteJob, createRenameJob, prepareDelete, createFileActionRecovery, MAX_FILE_ACTION_BYTES, MAX_UPLOAD_BYTES } = await server.ssrLoadModule("/apps/web/src/features/files/actions.ts");
   const { BrowserAuth, SignedOut } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
   const hash = bytes => createHash("sha256").update(bytes).digest("hex");
   const directory = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
@@ -79,6 +79,72 @@ try {
       throw new Error(`unexpected ${init.method} ${url}`);
     } });
     return { client, uploads, operations, submissions, queries, calls, downloads };
+  }
+
+  // S171: 目录create无upload_id，同名/非法名拒绝；pending与未知响应仍用原OpId。
+  for (const config of [{}, { loseOperation: true }, { loseOperation: true, notRecorded: true }]) {
+    const source = snapshot(), api = transport(source, config);
+    const job = createDirectoryJob(api.client, "vault", source, source.entries.get("d"), "新建 😀", undefined);
+    if (config.loseOperation) { await assert.rejects(job.run(), /lost operation/); assert.equal(job.canDiscard, false); }
+    await job.run(); await job.run();
+    assert.equal(job.state, "completed"); assert.equal(job.progress.completed, 1);
+    const request = api.submissions[0].request;
+    assert.equal(request.kind, "create"); assert.equal(request.parent_id, "d"); assert.equal(request.name, "新建 😀");
+    assert.equal(request.expected_absent, true); assert.equal(request.upload_id, undefined);
+    assert.equal(api.uploads.size, 0);
+    if (config.notRecorded) assert.deepEqual(api.submissions[0], api.submissions[1]);
+  }
+  {
+    const source = snapshot(), api = transport(source, { result: request => ({ op_id: request.op_id, state: "pending" }) });
+    for (const name of ["", ".", "..", "a/b", "a\\b", "a\0b", "a.txt", "empty"])
+      assert.throws(() => createDirectoryJob(api.client, "vault", source, source.entries.get("d"), name), /无效|同名/);
+    assert.throws(() => createDirectoryJob(api.client, "other", source, source.vault, "name"), /不匹配/);
+    const job = createDirectoryJob(api.client, "vault", source, source.vault, "pending");
+    await job.run(); await job.run();
+    assert.equal(job.state, "pending"); assert.equal(job.progress.completed, 0); assert.equal(api.submissions.length, 1);
+    const request = api.submissions[0].request;
+    api.operations.set(request.op_id, { op_id: request.op_id, state: "committed", entry_id: "created-directory" });
+    await job.run(); assert.equal(job.state, "completed"); assert.equal(api.submissions.length, 1);
+  }
+  // S171: 分段固定版本下载、空文件、摘要/长度/区间负例及取消，不回退新head。
+  {
+    const { downloadFile } = await server.ssrLoadModule("/apps/web/src/features/files/download.ts");
+    function downloadApi(data, fault) {
+      const calls = [];
+      const client = new BrowserAuth({ base_url: "https://test.invalid", request_id: () => "download-test", fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (fault === "gone") return error(410, "VERSION_GONE");
+        const range = new Headers(init.headers).get("range"), match = range?.match(/^bytes=(\d+)-(\d+)$/);
+        const start = match ? Number(match[1]) : 0, end = match ? Number(match[2]) : data.length - 1;
+        let bytes = data.subarray(start, end + 1);
+        if (fault === "hash") bytes = Buffer.alloc(bytes.length, 1);
+        if (fault === "short") bytes = bytes.subarray(0, bytes.length - 1);
+        if (fault === "long") bytes = Buffer.concat([bytes, Buffer.from("x")]);
+        return new Response(bytes, { status: range && fault !== "ignored-range" ? 206 : 200,
+          headers: range ? { "content-range": `bytes ${fault === "range" ? start + 1 : start}-${end}/${data.length}` } : {} });
+      } });
+      return { client, calls };
+    }
+    for (const data of [Buffer.alloc(0), Buffer.from("abcdef"), Buffer.alloc(4 * 1024 * 1024 + 33, 7)]) {
+      const entry = file("f", "d", "文档 & 😀.bin", data), api = downloadApi(data), progress = [];
+      const running = downloadFile(api.client, "vault", entry, new AbortController().signal, (...value) => progress.push(value));
+      entry.version_id = "new-head"; entry.name = "renamed";
+      const result = await running;
+      assert.equal(result.name, "文档 & 😀.bin"); assert.deepEqual(Buffer.from(await result.blob.arrayBuffer()), data);
+      assert.equal(api.calls.length, Math.max(1, Math.ceil(data.length / (4 * 1024 * 1024))));
+      assert.ok(api.calls.every(call => call.url.includes("/versions/v-f/content")));
+      assert.deepEqual(progress.at(-1), [data.length, data.length]);
+    }
+    for (const fault of ["gone", "hash", "short", "long", "ignored-range", "range"]) {
+      const data = fault === "ignored-range" ? Buffer.alloc(4 * 1024 * 1024 + 1) : Buffer.from("abcdef"), api = downloadApi(data, fault);
+      await assert.rejects(downloadFile(api.client, "vault", file("f", "d", "a", data), new AbortController().signal, () => {}));
+    }
+    const data = Buffer.alloc(4 * 1024 * 1024 + 1), api = downloadApi(data), controller = new AbortController();
+    await assert.rejects(downloadFile(api.client, "vault", file("f", "d", "a", data), controller.signal, bytes => {
+      if (bytes) controller.abort();
+    }), { name: "AbortError" });
+    assert.equal(api.calls.length, 1);
+    await assert.rejects(downloadFile(api.client, "vault", directory("d", "r", "folder"), new AbortController().signal, () => {}), /版本/);
   }
 
   // I05/I06: 多文件、分块摘要、空文件 0 块也 finalize，提交前不可见；重复 run 不重复创建。

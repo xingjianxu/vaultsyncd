@@ -212,6 +212,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
         </Table>}
       </div></Menu.ContextMenu>
       <Menu.Dropdown>
+        <Menu.Item disabled={!writable} leftSection={<FileIcon name="folder-new" />} onClick={() => { if (context) actions.createDirectory(context); }}>新建目录</Menu.Item>
         <Menu.Item disabled={!writable} leftSection={<FileIcon name="upload" />} onClick={() => uploadInput.current?.click()}>上传文件</Menu.Item>
         <Menu.Item disabled={!writable || !actions.clipboard} leftSection={<FileIcon name="paste" />} onClick={() => pasteInto()}>粘贴</Menu.Item>
       </Menu.Dropdown></Menu>

@@ -5,8 +5,9 @@ import { Dialog } from "../../components/ui";
 import { showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { BrowserAuth, SignedOut } from "../../services/auth";
-import type { DirectorySnapshot } from "./browser";
-import { createClipboard, createRenameJob, createFileActionRecovery, createUploadJob, createPasteJob, prepareDelete, type RecoverableOperation, type RecoveredOperation, type PreparedDelete, type FileActionJob, type FileClipboard } from "./actions";
+import { formatBytes, type DirectorySnapshot } from "./browser";
+import { createClipboard, createDirectoryJob, createRenameJob, createFileActionRecovery, createUploadJob, createPasteJob, prepareDelete, type RecoverableOperation, type RecoveredOperation, type PreparedDelete, type FileActionJob, type FileClipboard } from "./actions";
+import { downloadFile, saveDownload } from "./download";
 
 export interface ActionDirectory { vaultId: string; snapshot: DirectorySnapshot; parent: SnapshotEntry }
 type Actions = {
@@ -16,6 +17,8 @@ type Actions = {
   paste: (context: ActionDirectory) => void;
   rename: (context: ActionDirectory, entry: SnapshotEntry) => void;
   remove: (context: ActionDirectory, entry: SnapshotEntry) => void;
+  createDirectory: (context: ActionDirectory) => void;
+  download: (context: ActionDirectory, entry: SnapshotEntry) => void;
 };
 const Context = createContext<Actions | null>(null);
 export function useFileActions() { return useContext(Context)!; }
@@ -66,13 +69,17 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
   const [name, setName] = useState("");
   const [nameError, setNameError] = useState("");
   const [deletion, setDeletion] = useState<PreparedDelete | null>(null);
+  const [creating, setCreating] = useState<ActionDirectory | null>(null);
+  const [downloading, setDownloading] = useState<{ name: string; bytes: number; total: number } | null>(null);
+  const downloadController = useRef<AbortController | null>(null);
+  useEffect(() => () => downloadController.current?.abort(), []);
   useEffect(() => {
-    if (!job) return;
+    if (!job && !downloading) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [job]);
-  const locked = auth.busy || busy || !!job || !!deletion || !!renaming || !!replay || records.length > 0 || !!recoveryError;
+  }, [job, !!downloading]);
+  const locked = auth.busy || busy || !!job || !!deletion || !!renaming || !!creating || !!replay || records.length > 0 || !!recoveryError;
   function syncRecords() {
     try { setRecords(recovery?.list() ?? []); }
     catch (cause) { setRecoveryError(cause instanceof Error ? cause.message : "恢复日志读取失败。"); }
@@ -123,6 +130,29 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
     },
     upload: (context, files) => start(() => createUploadJob(client!, context.vaultId, context.snapshot, context.parent, files, recovery)),
     paste: context => { if (clipboard) start(() => createPasteJob(client!, clipboard, context.vaultId, context.snapshot, context.parent, recovery)); },
+    createDirectory(context) {
+      if (locked || running.current) return;
+      setCreating(context); setName(""); setNameError("");
+    },
+    async download(context, entry) {
+      if (locked || running.current || !client) return;
+      const controller = new AbortController();
+      downloadController.current = controller;
+      client.resume(); running.current = true; setBusy(true);
+      const generation = auth.client!.sessionGeneration;
+      try {
+        const result = await downloadFile(client, context.vaultId, entry, controller.signal,
+          (bytes, total) => { if (mounted.current) setDownloading({ name: entry.name, bytes, total }); });
+        if (!mounted.current || auth.client!.sessionGeneration !== generation) throw new FileActionPaused();
+        controller.signal.throwIfAborted();
+        saveDownload(result);
+        showFeedback(`已校验 ${result.name}，已交给浏览器下载。`);
+      } catch (cause) { if (!controller.signal.aborted) failure(cause); }
+      finally {
+        downloadController.current = null; running.current = false;
+        if (mounted.current) { setDownloading(null); setBusy(false); }
+      }
+    },
     rename(context, entry) {
       if (locked || running.current) return;
       selectRenameName.current = true;
@@ -141,6 +171,10 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
   };
   return <Context.Provider value={actions}>
     {children}
+    {downloading && <Alert color="blue" title="下载" role="status"><Group justify="space-between">
+      <Text size="sm" className="break-all">{downloading.name} · {formatBytes(String(downloading.bytes))} / {formatBytes(String(downloading.total))}</Text>
+      <Button size="xs" variant="default" onClick={() => downloadController.current?.abort()}>取消下载</Button>
+    </Group></Alert>}
     {job && <Alert color={message ? "yellow" : "blue"} title="文件操作" role="status">
       <Stack gap="xs">
         <Text size="sm">{busy ? `${job.label}正在处理，请勿关闭页面…` : message}</Text>
@@ -158,6 +192,21 @@ export function FileActionsProvider({ children }: { children: ReactNode }) {
         </Group>
       </Stack>
     </Alert>}
+    <Dialog opened={!!creating} title="新建目录" onClose={() => setCreating(null)}
+      footer={<Group justify="flex-end"><Button variant="default" onClick={() => setCreating(null)}>取消</Button>
+        <Button type="submit" form="create-directory" disabled={auth.busy || !name}>创建</Button></Group>}>
+      <form id="create-directory" onSubmit={event => {
+        event.preventDefault();
+        if (!creating || running.current || auth.busy) return;
+        try {
+          const next = createDirectoryJob(client!, creating.vaultId, creating.snapshot, creating.parent, name, recovery);
+          setCreating(null); void run(next);
+        } catch (cause) { setNameError(cause instanceof Error ? cause.message : "目录名称无效。"); }
+      }}>
+        <TextInput label="目录名称" value={name} error={nameError} data-autofocus
+          onChange={event => { setName(event.currentTarget.value); setNameError(""); }} />
+      </form>
+    </Dialog>
     <Dialog opened={!!renaming} title="重命名" onClose={() => setRenaming(null)}
       footer={<Group justify="flex-end"><Button variant="default" onClick={() => setRenaming(null)}>取消</Button>
         <Button type="submit" form="rename-entry" disabled={auth.busy || !name || name === renaming?.entry.name}>保存</Button></Group>}>
