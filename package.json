@@ -12,5 +12,5 @@
   "scripts": {
     "typecheck": "pnpm --recursive run typecheck"
   },
-  "version": "0.1.5"
+  "version": "0.1.6"
 }
