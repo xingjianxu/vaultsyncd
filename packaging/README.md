@@ -62,7 +62,7 @@ nix develop --command gh auth login --hostname github.com
 
 GitHub Release 只上传一个附件：`vaultsyncd-<版本>-x64-unsigned.zip`。来源收据、根清单、`SHA256SUMS` 和日志保留在本地；`--dry-run` 的 `assets` 列出唯一 ZIP，`local_only` 列出其余本地文件。发布说明记录 ZIP 的 SHA-256，远端上传仍逐字节摘要校验；哈希不是数字签名。GitHub 页面自动生成的仓库源码下载链接不属于脚本上传附件。
 
-上传先创建草稿，核对远端大小/SHA-256，完成后才发布。失败保留草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；匹配 ZIP 跳过，缺摘要的旧附件下载校验。只接受 Windows 单平台构建目录；旧 Linux/混合构建目录需要重新构建，不删文件或手改来源清单冒充。旧草稿若带清单、校验表或 Linux 等额外附件，续传会拒绝，需人工核对后另开草稿或移除额外附件。已发布 Release 不改写，旧发行与对应源码归档继续保留。
+上传先创建草稿，核对远端大小/SHA-256，完成后才发布。创建草稿后若 Release 列表尚未可见（实测 GitHub 有短暂延迟），脚本退避重查最多 10 次、间隔 1 秒再报错；失败保留草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；匹配 ZIP 跳过，缺摘要的旧附件下载校验。只接受 Windows 单平台构建目录；旧 Linux/混合构建目录需要重新构建，不删文件或手改来源清单冒充。旧草稿若带清单、校验表或 Linux 等额外附件，续传会拒绝，需人工核对后另开草稿或移除额外附件。已发布 Release 不改写，旧发行与对应源码归档继续保留。
 
 暂存默认 `/data/vaultsyncd-dev/vaultsyncd-temp/cache/github-release/upload-*`，完成或失败后清理本次复制；原构建目录保持。其他主机可传 `--staging-root <已有授权的缓存根>`。本入口只发布已有归档，不自动编译、不启动 VM、不改变线上服务。验收入口：`nix develop --command python3 tests/contract/github_release.py`（本地 Git 与 API 契约，不写真实 GitHub）。CLI 行为依据：[创建 Release](https://cli.github.com/manual/gh_release_create)、[上传附件](https://cli.github.com/manual/gh_release_upload)、[发布草稿](https://cli.github.com/manual/gh_release_edit)。
 

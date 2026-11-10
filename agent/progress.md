@@ -1,10 +1,10 @@
 # 实施进度
 
-当前：**S172 done**，客户端与服务端可查看文件同步/传输记录，含时间、认证客户端、当时路径、方向、版本、大小、下载区间及结果；只记录启用后的服务端事实。两端测试/构建、Windows原生27项、真实浏览器活动/备份、完整btrfs导出恢复和Nix包内75测试通过。实现`d7339f0`已部署本机generation272，schema20，主机pin`7a74069`；线上健康/TLS/CSP/14文件资产与原数据/服务保持。实现d7339f0、交接fef5f83已ff合master，本卡挂载/工作树/分支正常清理，S134保持。**下一 ready：无**；原四张blocked保持。证据`/data/vaultsyncd-dev/S172-sync-records-20261110/`。
+当前：**S173 done**，0.1.3 已作为 [v0.1.3](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.3) 预发布发出（非 Latest、唯一 Windows x64 ZIP `e9db7e56…`，源`d2f9e26`）；本机 master 与 origin/master 同步。同时修复发布工具在创建草稿后列表暂未可见的误报（`532ec19`，契约 28 项）。ZIP 未签名、未做 Windows 原生复验，S106/S107/S108 门禁不变；**下一 ready：无**。证据`/data/vaultsyncd-dev/S173-release-20261110/`。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
-最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未公开发行。在线服务端为S172，运行/开机generation272、源`d7339f0`、schema20、主机pin`7a74069`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收。
+最近发行是 [v0.1.3](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.3) 预发布、非 Latest，源`d2f9e26`，附件 `vaultsyncd-0.1.3-x64-unsigned.zip`；历史 v0.1.2 源`d976376`保持。在线服务端为S172，运行/开机generation272、源`d7339f0`、schema20、主机pin`7a74069`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收。
 
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
@@ -34,6 +34,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S173 | 发布 v0.1.3 预发布；Windows ZIP 唯一附件、远端 SHA-256 一致，工具列表延迟误报已修 | 版本d2f9e26、修复532ec19已ff合master并推送，任务树/分支清理 | [S173](tasks/S173.md) |
 | S172 | 两端文件同步/传输记录；原生27项、真实浏览器/完整备份恢复及generation272部署通过 | 实现d7339f0、交接fef5f83已ff合master；本卡挂载/树/分支清理 | [S172](tasks/S172.md) |
 | S171 | Web右键新建目录/固定版本下载；真实浏览器30项与generation271部署验收 | 实现01a45f1、交接a84d1be已ff合master；任务挂载/树/分支清理 | [S171](tasks/S171.md) |
 | S170 | 登录IP、五分钟连接及分页轮询；后端/Web/真实浏览器与generation270生产验收通过 | 实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；主机pin7787429已ff main并清理 | [S170](tasks/S170.md) |
@@ -193,6 +194,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S173 | done | 版本`d2f9e26`、工具修复`532ec19`已ff合master并推送；v0.1.3预发布上传、远端摘要核对与两任务树/分支清理完成 | [S173](tasks/S173.md) |
 | S163 | done | 510d70d已ff合master；temp/lab迁入dev、97 GC roots/清单/健康/34单测及真实卷通过，任务树/分支已清理 | [S163](tasks/S163.md) |
 | S162 | done | 实现7d5cb39、整合0ab9184/6891501、修复f5c4a24；验收交接e1fb945已ff合master，原生ZIP/安装版及宿主门通过；任务树/分支已清理 | [S162](tasks/S162.md) |
 | S161 | done | 8d92da9已ff合master；历史build/deploy迁入temp同名目录，482文件/72 GC roots/快照身份/健康通过；任务树及分支清理 | [S161](tasks/S161.md) |
