@@ -14,6 +14,9 @@ from urllib.parse import quote
 
 VAULT = Path(__file__).resolve().parents[1]
 TARGETS = {"linux-x64": "x86_64-unknown-linux-gnu", "windows-x64": "x86_64-pc-windows-msvc"}
+# 运行库对应源码归档随本地构建目录保留并核验，但不作为 Release 附件上传
+# （用户 2026-11-09 决定，见 S168）。
+LOCAL_ONLY = "vaultsyncd-runtime-sources.tar.gz"
 
 
 def run(*args, **kwargs):
@@ -110,12 +113,11 @@ def bundle(directory):
         selected = {archive: f"{name}/{archive}", f"{name}-{Path(receipt_name).name}": receipt_name}
         if not windows:
             sources = receipt["corresponding_source_archive"]
-            if sources["name"] != "vaultsyncd-runtime-sources.tar.gz":
+            if sources["name"] != LOCAL_ONLY:
                 raise ValueError("Linux 对应源码名称不符")
-            source_name = f"{name}/{sources['name']}"
-            if sha(regular(directory, source_name)) != sources["sha256"]:
+            # 仍核对本地归档与组件收据一致，但不上传：发布不含该附件。
+            if sha(regular(directory, f"{name}/{sources['name']}")) != sources["sha256"]:
                 raise ValueError("Linux 对应源码哈希不符")
-            selected[sources["name"]] = source_name
         for upload_name, relative in selected.items():
             if relative not in listed:
                 raise ValueError(f"上传文件未登记在构建清单：{relative}")
@@ -216,11 +218,13 @@ def publish(api, manifest, assets, stage, args):
         if args.resume:
             raise ValueError("--resume 未找到可续传的草稿")
         notes = args.notes_file.read_text() if args.notes_file else ""
+        disclosure = ("本页不含 Linux 运行库对应源码归档，随二进制分发时另行提供。\n"
+                      if "linux-x64" in manifest["platforms"] else "")
         notes += (f"\n\n版本：{source['version']}\n\n源码：`{commit}`\n\n"
                   f"平台：{', '.join(manifest['platforms'])}\n\n"
                   "产物未签名（unsigned-test）。本工具未执行原生验收，不代表首发门禁通过。\n"
                   "SHA256SUMS 校验本页附件；build-SHA256SUMS 对应原始构建目录（包含本地日志）。\n"
-                  + marker + "\n")
+                  + disclosure + marker + "\n")
         notes_path = stage / "notes.md"
         notes_path.write_text(notes)
         command = ["create", tag, "--target", commit, "--title", args.title or f"vaultsyncd {tag}",
@@ -284,7 +288,8 @@ def main(argv=None):
     plan = {"repository": repo, "tag": args.tag, "source": manifest["source"],
             "draft": args.draft, "prerelease": not args.stable,
             "latest": args.stable and not args.draft and "windows-x64" in manifest["platforms"],
-            "assets": sorted([*originals, "build-SHA256SUMS", "SHA256SUMS"])}
+            "assets": sorted([*originals, "build-SHA256SUMS", "SHA256SUMS"]),
+            "local_only": [f"linux-x64/{LOCAL_ONLY}"] if "linux-x64" in manifest["platforms"] else []}
     print(json.dumps(plan, ensure_ascii=False, indent=2), flush=True)
     if args.dry_run:
         return

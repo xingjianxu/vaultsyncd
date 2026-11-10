@@ -129,11 +129,28 @@ class GitHubReleaseTests(unittest.TestCase):
     def test_bundle_checks_real_git_source_and_selects_only_public_assets(self):
         manifest, assets, digests = RELEASE.bundle(self.directory)
         self.assertEqual(manifest["source"], self.source)
-        self.assertEqual(len(assets), 6)
+        self.assertEqual(len(assets), 5)
         self.assertNotIn("logs/01.log", assets)
+        self.assertNotIn("vaultsyncd-runtime-sources.tar.gz", assets)
         self.assertEqual(set(assets), set(digests))
         self.assertIn("linux-x64-release-manifest.json", assets)
         self.assertIn("windows-x64-receipt.json", assets)
+
+    def test_linux_runtime_sources_are_verified_locally_but_never_uploaded(self):
+        receipt = self.directory / "linux-x64/release-manifest.json"
+        data = json.loads(receipt.read_text())
+        data["corresponding_source_archive"]["sha256"] = "0" * 64
+        receipt.write_text(json.dumps(data))
+        self.save()
+        with self.assertRaisesRegex(ValueError, "对应源码哈希"):
+            RELEASE.bundle(self.directory)
+
+    def test_dry_run_discloses_linux_runtime_sources_as_local_only(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            RELEASE.main([str(self.directory), "--dry-run"])
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan["local_only"], ["linux-x64/vaultsyncd-runtime-sources.tar.gz"])
+        self.assertNotIn("vaultsyncd-runtime-sources.tar.gz", plan["assets"])
 
     def test_tampered_bytes_missing_files_and_checksum_are_refused(self):
         path = self.directory / "logs/01.log"
@@ -234,6 +251,14 @@ class GitHubReleaseTests(unittest.TestCase):
         self.assertFalse(self.remote.record["draft"])
         self.assertIn("unsigned-test", self.remote.record["body"])
         self.assertIn("--latest=false", self.remote.calls[-1])
+
+    def test_release_notes_disclose_missing_runtime_sources_only_for_linux_bundles(self):
+        self.publish()
+        self.assertIn("本页不含 Linux 运行库对应源码归档", self.remote.record["body"])
+        self.remote = Remote(self.source, self.assets)
+        self.manifest["platforms"] = ["windows-x64"]
+        self.publish()
+        self.assertNotIn("本页不含 Linux 运行库对应源码归档", self.remote.record["body"])
 
     def stable_assets(self):
         name = "vaultsyncd-0.2.0-x64-unsigned.zip"
@@ -382,7 +407,7 @@ class GitHubReleaseTests(unittest.TestCase):
 
     def test_staged_public_checksums_are_flat_and_original_build_checksums_are_preserved(self):
         def inspect(api, manifest, assets, stage, args):
-            self.assertEqual(len(assets), 8)
+            self.assertEqual(len(assets), 7)
             self.assertEqual(assets["build-SHA256SUMS"].read_bytes(), (self.directory / "SHA256SUMS").read_bytes())
             for line in assets["SHA256SUMS"].read_text().splitlines():
                 digest, name = line.split("  ")

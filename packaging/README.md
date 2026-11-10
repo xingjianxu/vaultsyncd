@@ -12,7 +12,7 @@
 ./tools/release.sh --plan                               # 只显示计划，不构建
 ```
 
-脚本自动进入锁定 devShell，Linux 使用 `nix build .#portable`，包含 server、admin、Web、私有 loader/库、示例配置及 systemd 单元；运行时源码归档随包保留。Windows 在宿主使用锁定 Rust/MSVC 交叉工具链和冻结前端依赖，走 `windows-zip` 组件，不调用 NSIS、不生成安装器。默认输出：
+脚本自动进入锁定 devShell，Linux 使用 `nix build .#portable`，包含 server、admin、Web、私有 loader/库、示例配置及 systemd 单元；运行时源码归档随包保留（不上传 GitHub Release，见下文发布一节）。Windows 在宿主使用锁定 Rust/MSVC 交叉工具链和冻结前端依赖，走 `windows-zip` 组件，不调用 NSIS、不生成安装器。默认输出：
 
 ```text
 dist/releases/v<版本>-<提交前12位>/
@@ -61,9 +61,9 @@ nix develop --command gh auth login --hostname github.com
 
 客户端只检查本项目公开仓库的最新正式 Release；发布更高版本并使用 `--stable` 才会进入自动升级渠道。保留精确附件名 `vaultsyncd-<版本>-x64-unsigned.zip`，ZIP内所有程序/清单须同源，不能只上传单个EXE。客户端仍按SemVer拒绝同版/降版；没有正式Release、仅有预发布或缺少SHA-256时提示实际原因。升级前客户端自动保留程序/整套状态备份，下载校验失败不启动维护。此卡未执行真实GitHub发布。
 
-上传先创建草稿，逐项上传并核对远端大小/SHA-256，全部就绪后才发布。失败保留远端草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；已存在且哈希相符的附件跳过，缺少摘要的旧附件会下载校验。不覆盖附件，不修改已发布 Release；远端含异源/不匹配/多余附件时退出非零，需人工检查该草稿。创建响应丢失也可通过 `--resume` 找回；发布响应丢失时先查看 GitHub 页面，已发布版本不会被自动改写。
+上传先创建草稿，逐项上传并核对远端大小/SHA-256，全部就绪后才发布。失败保留远端草稿，用相同构建目录、标签及 `--stable` 类型参数加 `--resume` 恢复；已存在且哈希相符的附件跳过，缺少摘要的旧附件会下载校验。不覆盖附件，不修改已发布 Release；远端含异源/不匹配/多余附件时退出非零，需人工检查该草稿（S168 之前创建的草稿仍带对应源码归档，`--resume` 会因多余附件拒绝，需先人工删除该附件或重开草稿）。创建响应丢失也可通过 `--resume` 找回；发布响应丢失时先查看 GitHub 页面，已发布版本不会被自动改写。
 
-附件包括实际选中平台的归档、Linux 对应运行库源码、各平台来源清单（加平台前缀避免重名）、根 `release-manifest.json`、`build-SHA256SUMS` 及 `SHA256SUMS`；不上传 `logs/`。GitHub 附件为平铺布局，下载到同一目录后执行 `sha256sum -c SHA256SUMS`。`build-SHA256SUMS` 保留原构建目录的校验表，路径包含平台目录及未上传的本地日志，不能直接用于平铺附件。清单与哈希不是数字签名。
+附件包括实际选中平台的归档、各平台来源清单（加平台前缀避免重名）、根 `release-manifest.json`、`build-SHA256SUMS` 及 `SHA256SUMS`；不上传 `logs/`。Linux 运行库对应源码 `vaultsyncd-runtime-sources.tar.gz` 不再作为 GitHub 附件上传（S168 用户决定），只保留在本地构建目录并按组件收据继续核对哈希；分发 Linux 二进制/镜像者须自行随包提供该归档以满足许可要求。`--dry-run` 计划的 `local_only` 字段列出该本地上传排除项。GitHub 附件为平铺布局，下载到同一目录后执行 `sha256sum -c SHA256SUMS`。`build-SHA256SUMS` 保留原构建目录的校验表，路径包含平台目录、未上传的本地日志及该对应源码归档，不能直接用于平铺附件。清单与哈希不是数字签名。
 
 暂存默认 `/data/vaultsyncd-dev/vaultsyncd-temp/cache/github-release/upload-*`，完成或失败后清理本次复制；原构建目录保持。其他主机可传 `--staging-root <已有授权的缓存根>`。本入口只发布已有归档，不自动编译、不启动 VM、不改变线上服务。验收入口：`nix develop --command python3 tests/contract/github_release.py`（本地 Git 与 API 契约，不写真实 GitHub）。CLI 行为依据：[创建 Release](https://cli.github.com/manual/gh_release_create)、[上传附件](https://cli.github.com/manual/gh_release_upload)、[发布草稿](https://cli.github.com/manual/gh_release_edit)。
 

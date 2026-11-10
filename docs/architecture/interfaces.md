@@ -2607,7 +2607,7 @@ S158 发行修复：当前仅 Linux x64；`nix/portable.nix` 以 `runtimeLibrary
 
 - `tools/publish-release.sh <构建目录> [--dry-run] [--draft] [--resume] [--stable] [--tag <标签>] [--remote <远端>] [--title <标题>] [--notes-file <文件>] [--staging-root <缓存根>]` 自动进入 devShell，调用 `packaging/github-release.py`；消费 S110 format1 成功清单，不执行构建。成功0、校验/权限/网络/上传失败1、参数错误2。`--dry-run` 仅本地验证 Git 对象、组件来源/版本/输入与文件大小/hash，无远端操作。
 - 版本取包源 Cargo.toml 并核对清单；标签限 `v<版本>` 或对应预发布后缀。目标取配置远端的 github.com push URL；上传前查精确 commit 和已有标签，绝不移动标签或推送分支。先建草稿、逐项上传、逐项校验远端摘要（缺摘要则下载），完整后发布；默认 prerelease/非 Latest，`--draft` 保留草稿。S162起 `--stable` 含Windows时须有GitHub SHA-256 digest，发布时设Latest供自动更新；草稿和仅Linux包不推广。Release 状态不是首发验收证明。
-- `--resume` 只接受含同源标记、同 target SHA/类型的草稿；匹配附件跳过，异源/损坏/多余附件或已发布 Release 均拒绝，无 clobber。附件平铺，只选平台归档/对应源码与来源收据，生成平铺 `SHA256SUMS`，原构建校验表另存 `build-SHA256SUMS`，不上传日志。细节与 CLI 依据归 `packaging/README.md`。无 wire/DB/服务端产物变更。
+- `--resume` 只接受含同源标记、同 target SHA/类型的草稿；匹配附件跳过，异源/损坏/多余附件或已发布 Release 均拒绝，无 clobber。附件平铺，只选平台归档与来源收据，生成平铺 `SHA256SUMS`，原构建校验表另存 `build-SHA256SUMS`，不上传日志。S168 起 Linux 运行库对应源码 `vaultsyncd-runtime-sources.tar.gz` 不再上传：仍随构建目录保留、按组件收据核对哈希，并在 `--dry-run` 的 `local_only` 中披露；分发二进制者需另行为其提供该归档。细节与 CLI 依据归 `packaging/README.md`。无 wire/DB/服务端产物变更。
 
 ### S111 / ADR-015：当前平台范围覆盖
 
