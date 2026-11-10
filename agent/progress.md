@@ -1,6 +1,8 @@
 # 实施进度
 
-当前：**S185 done**，删除 `vaultsyncd-zip.exe` 和普通启动归属/清单/程序来源校验，完整客户端下载后可放任意本机普通目录直接执行；Start/Stop/health 并入 agent，旧 owner 忽略且保留，跨目录复用同用户健康实例。ZIP 契约8、xtask23、desktop宿主5、Windows原生单测19、真实启动62、受控更新/回退102项通过，严格clippy/构建和复审通过；原状态/身份、单 writer 与维护屏障不变。交接 [S185](tasks/S185.md)，实现 `4027a93` 已 ff-only 合 master，任务树/分支清理、S134 保留；根 `dist/` 已更新为本卡干净构建（四 EXE，无 ZIP EXE）。不发行/推送、无服务端部署。**旧v0.1.7更新器拒绝新包集合，首次新布局发行须明确一次性手工下载迁移**，不得宣称旧托盘能直接升级。下一 ready：无，S011/S106/S107/S108 门禁保持。
+当前：**S186 done**（工具维护），`tools/build.sh` 在进入 `.#windows` 前先清空 `dist/` 与暂存目录，产物齐套才一次性搬入，构建失败或中断时 `dist/` 不存在；实现 `764e93e`、交接 `589ffae` 已 ff-only 合 master，任务树/分支已清理，主工作区 `dist/` 已用新脚本重建（四 EXE，无 `.stage`/`unsigned.zip`）。**下一 ready：无**，S011/S106/S107/S108 门禁保持。
+
+此前：**S185 done**，删除 `vaultsyncd-zip.exe` 和普通启动归属/清单/程序来源校验，完整客户端下载后可放任意本机普通目录直接执行；Start/Stop/health 并入 agent，旧 owner 忽略且保留，跨目录复用同用户健康实例。ZIP 契约8、xtask23、desktop宿主5、Windows原生单测19、真实启动62、受控更新/回退102项通过，严格clippy/构建和复审通过；原状态/身份、单 writer 与维护屏障不变。交接 [S185](tasks/S185.md)，实现 `4027a93` 已 ff-only 合 master，任务树/分支清理、S134 保留；根 `dist/` 已更新为本卡干净构建（四 EXE，无 ZIP EXE）。不发行/推送、无服务端部署。**旧v0.1.7更新器拒绝新包集合，首次新布局发行须明确一次性手工下载迁移**，不得宣称旧托盘能直接升级。下一 ready：无，S011/S106/S107/S108 门禁保持。
 
 此前：**S183 done**，根 `logo.svg` 已统一为 Windows 客户端 EXE/窗口/托盘图标及 Web favicon/登录/顶栏 logo。根 typecheck、两端 build、Web 七组测试、Windows 严格 clippy/构建、真实 Windows 图标像素/窗口及 Chromium 品牌/两端布局验证通过；实现 `c37760f` 已在本机 generation 274 上线，公网与 loopback 健康、SVG 字节/MIME/CSP 核对通过。交接 [S183](tasks/S183.md)；客户端新图标未发行，现有 v0.1.7 附件不变。**下一 ready：无**，S011/S106/S107/S108 门禁保持。
 
