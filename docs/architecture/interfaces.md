@@ -769,7 +769,7 @@ python3 tools/context.py --help
 | --- | --- |
 | `auth::password::PasswordHasher` | `production()` 用 Argon2id v19、`m=19456 KiB, t=2, p=1`（常量 `M_COST_KIB`/`T_COST`/`P_COST`，RFC 9106 方向的工程基线，实测与 ADR 未做）；`hash(&str) -> PHC 文本`（每次独立随机盐）；`verify(stored,&str) -> PasswordVerdict{Matched,Mismatched,Malformed}`，只接受 `argon2id`（白名单），校验按散列自带参数；`dummy_verify` 用于不存在账号的等代价计算 |
 | `auth::account::OwnerAccounts` | 端口：`count` / `find_by_login` / `insert`（均 `&mut self`，适配器可持一次写事务）；`StoredAccount{id,login,password_hash,active}`、`NewAccount`、`AccountError{Storage,DuplicateLogin,Malformed}` |
-| `auth::init::prepare_owner(accounts, hasher, ids, NewOwnerRequest{login,password})` | 顺序固定：账号数为 0（否则 `AlreadyInitialized{existing}`）→ 登录名/密码形态（`MIN_PASSWORD_CHARS=12`、`MAX_PASSWORD_BYTES=1024`、登录名 ≤64 字符且无控制字符）→ Argon2id 散列 → 返回 `PreparedOwner{id,login,password_hash}`。**不写库**：写入由调用方在与 `count` 同一事务里完成 |
+| `auth::init::prepare_owner(accounts, hasher, ids, NewOwnerRequest{login,password})` | 顺序固定：账号数为 0（否则 `AlreadyInitialized{existing}`）→ 登录名/密码形态（`MIN_PASSWORD_CHARS=1`：只要求非空；`MAX_PASSWORD_BYTES=1024`；登录名 ≤64 字符且无控制字符）→ Argon2id 散列 → 返回 `PreparedOwner{id,login,password_hash}`。**不写库**：写入由调用方在与 `count` 同一事务里完成 |
 | `auth::login::authenticate(accounts, hasher, throttle, LoginAttempt{login,password,now})` | 先限流、再查账号、再比密码；账号不存在/密码错/账号未启用一律 `InvalidCredentials`（不存在账号也做等值代价计算）；`RateLimited{retry_after_seconds}`；`AccountBroken` 只用于已存散列损坏。成功返回 `AuthenticatedAccount{id,login}`，不发放凭据 |
 | `auth::throttle::{LoginThrottle,ThrottlePolicy}` | 进程内、按登录名、按服务端时间：默认 5 次失败/300 秒窗口/锁定 300 秒；不存在的登录名同样计数；`MAX_TRACKED_LOGINS=1024` 上限（超出先清理过期条目，再淘汰最久未出现的一条） |
 

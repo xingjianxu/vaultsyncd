@@ -130,9 +130,9 @@ fn a_second_init_is_refused_and_keeps_the_existing_hash() {
 }
 
 #[test]
-fn a_short_password_is_refused_and_creates_no_account() {
+fn an_empty_password_is_refused_and_creates_no_account() {
     let dir = TestDir::new("init-weak");
-    let output = admin_init(&dir.path, "too-short\n", &[]);
+    let output = admin_init(&dir.path, "\n", &[]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
     assert!(
         text(&output.stderr).contains("密码不合规"),
@@ -143,6 +143,15 @@ fn a_short_password_is_refused_and_creates_no_account() {
         stored_hash(&dir.path).is_none(),
         "输入不合规时不得写入任何账号"
     );
+}
+
+#[test]
+fn a_single_character_password_is_accepted() {
+    let dir = TestDir::new("init-single");
+    let output = admin_init(&dir.path, "1\n", &[]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let hash = stored_hash(&dir.path).expect("单字符密码也要写入账号");
+    assert!(hash.starts_with("$argon2id$"), "{hash}");
 }
 
 #[test]
