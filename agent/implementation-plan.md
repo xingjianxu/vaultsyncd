@@ -1719,6 +1719,13 @@
 - 验收：升级备份与旧库门禁、授权隔离/严格分页、提交幂等/恢复/失败及固定版本Range；两端类型/构建与界面错误/空态/筛选/分页；Windows原生IPC及桌面验证；本机部署、健康与旧数据保持。
 - 交接：`agent/tasks/S172.md`，记录分工、实际命令与证据、源提交、部署、合并及工作树清理；原四张blocked门禁保持。
 
+### S173 — 发布 0.1.3 预发布 GitHub Release
+
+- 依据：2026-11-10 用户要求发布新的 GitHub Release 并确认按预发布上传；前置 S169/S172 done。`v0.1.2` 标签与 Release 已指向旧提交 `889c19f`，本卡升版 0.1.3 后发布。
+- 范围：同步根 Cargo、前端/Tauri 镜像与 Cargo.lock（不改协议/schema/生成器版本）；推送 master；用 `tools/release.sh` 构建 Windows x64 便携 ZIP；`tools/publish-release.sh` 以预发布上传唯一 ZIP，不设 Latest。
+- 验收：`cargo xtask version --check`、`pnpm install --frozen-lockfile`、真实构建的 SHA256SUMS 校验、`--dry-run` 计划与远端附件大小/SHA-256 核对；不声称 Windows 原生复验或首发门禁通过。
+- 交接：`agent/tasks/S173.md`；不改动已发布 Release，不触发服务端部署。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
