@@ -1,6 +1,148 @@
 //! Real native transport and SQLite errors must never become successful empty snapshots.
 use super::*;
 
+#[test]
+fn connection_identity_errors_distinguish_saved_binding_from_changed_server_and_redact_details() {
+    let request = Request {
+        request_id: "s187-identity".into(),
+        ipc_version: version::supported(),
+        command: Command {
+            name: CommandName::SetConnection,
+            parameters: None,
+        },
+    };
+    let saved = "01".repeat(16);
+    let target = "02".repeat(16);
+    for (code, label) in [
+        ("CONNECTION_BINDING_MISMATCH", "保存的 Server ID"),
+        ("CONNECTION_SERVER_MISMATCH", "确认的 Server ID"),
+    ] {
+        let response = management_response(
+            &request,
+            Err(PortError::rejected(code, format!("{saved}:{target}"))),
+        );
+        let error = response.error.unwrap();
+        assert_eq!(error.code, LocalIpcErrorCode::Blocked);
+        assert!(!error.retryable);
+        assert!(error.message.contains(label));
+        assert!(error.message.contains(&saved));
+        assert!(error.message.contains(&target));
+        assert!(error.message.contains("BINDING_BLOCKED"));
+        assert!(!error.message.contains(code));
+        if code == "CONNECTION_BINDING_MISMATCH" {
+            assert!(!error.message.contains("请重新读取"));
+        }
+        for private in [
+            "https://user:password@example.invalid/private".to_owned(),
+            format!("{saved}:{target}:private-secret"),
+            format!("{saved}:C:/private-secret"),
+        ] {
+            let response = management_response(&request, Err(PortError::rejected(code, &private)));
+            let error = response.error.unwrap();
+            assert_eq!(error.code, LocalIpcErrorCode::Blocked);
+            assert!(!error.message.contains("private"));
+            assert!(!error.message.contains("password"));
+        }
+    }
+    let response = management_response(
+        &request,
+        Err(PortError::rejected("BINDING_BLOCKED", "private-secret")),
+    );
+    assert!(!response.error.unwrap().message.contains("private-secret"));
+}
+
+#[tokio::test]
+async fn matching_server_id_with_saved_binding_is_allowed_and_different_server_preserves_connection()
+ {
+    use crate::config::AgentConfig;
+    use vaultsyncd_client_store::bindings::{NewBinding, SyncMode, insert_binding};
+    use vaultsyncd_domain::{
+        ids::{DeviceId, ServerId, VaultId},
+        version::ServerEpoch,
+    };
+    let path = std::env::temp_dir().join(format!(
+        "s187-identity-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&path).unwrap();
+    let db = Database::open(path.join("client.sqlite")).await.unwrap();
+    let saved = "02".repeat(16);
+    let target = "03".repeat(16);
+    let mut config: AgentConfig = serde_json::from_value(serde_json::json!({
+        "server": {"id": saved, "url": "https://old.example.invalid"},
+        "device_id": "04".repeat(16), "state_dir": path, "poll_millis": 2000, "bindings": []
+    }))
+    .unwrap();
+    config.validate().unwrap();
+    crate::management::save_connection(&db, &config)
+        .await
+        .unwrap();
+    let mut tx = db.begin_write().await.unwrap();
+    insert_binding(
+        &mut tx,
+        &NewBinding {
+            id: BindingId::from_bytes([1; 16]),
+            server: ServerId::from_hex(&saved).unwrap(),
+            device: DeviceId::from_bytes([4; 16]),
+            vault: VaultId::from_bytes([5; 16]),
+            local_path: "C:/s187/local".into(),
+            cache_path: "C:/s187/cache".into(),
+            mode: SyncMode::Full,
+            rules_version: "1".into(),
+            server_epoch: ServerEpoch::new(1).unwrap(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let command = |id: &str| {
+        serde_json::from_value::<Command>(serde_json::json!({
+        "name": "set_connection", "parameters": {"server_id": id, "server_url": "https://new.example.invalid"}
+    })).unwrap()
+    };
+    let proposed = crate::management::proposed_connection(&db, &config, &command(&saved))
+        .await
+        .unwrap();
+    assert_eq!(proposed.server.id, saved);
+    assert_eq!(proposed.server.url, "https://new.example.invalid");
+    let error = crate::management::proposed_connection(&db, &config, &command(&target))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Some("CONNECTION_BINDING_MISMATCH"));
+    let request = Request {
+        request_id: "s187-bound".into(),
+        ipc_version: version::supported(),
+        command: command(&target),
+    };
+    let message = management_response(&request, Err(error))
+        .error
+        .unwrap()
+        .message;
+    assert!(message.contains(&saved) && message.contains(&target));
+    crate::management::load_connection(&db, &mut config)
+        .await
+        .unwrap();
+    assert_eq!(config.server.id, saved);
+    assert_eq!(config.server.url, "https://old.example.invalid");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM bindings")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    db.close().await;
+    for attempt in 0..100 {
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => break,
+            Err(error) if attempt == 99 => panic!("cleanup failed: {error}"),
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+        }
+    }
+}
+
 #[tokio::test]
 async fn new_binding_without_import_proof_is_unknown() {
     use vaultsyncd_client_store::bindings::{NewBinding, SyncMode, insert_binding};

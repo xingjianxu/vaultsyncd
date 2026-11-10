@@ -2384,6 +2384,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S081 桌面连接与绑定管理
 
+- S187：`set_connection` 的身份失败仍映射 IPC `blocked`、`retryable=false` 和文案中的 `BINDING_BLOCKED`；明确区分“本机保存的 ID / 本次读取的 ID”（已有绑定保护）与“确认的 ID / 服务器返回的 ID”（保存前远端复核）。内部原因 `CONNECTION_BINDING_MISMATCH` / `CONNECTION_SERVER_MISMATCH` 不作为新 wire 错误码暴露；仅允许两个规范小写 32 位 ServerId 进入提示，其他详情使用通用文案。已有绑定的同 ID 地址调整仍允许，异 ID 仍拒绝且不更改连接或绑定；无数据库/协议版本变化。
+
 - S166：IPC minor 2.7 增加 `discover_connection(server_url,ca_file?) → ManagementResult.connection`，只读、无登录凭据，不改变当前配置或 WinCred；返回 `authenticated=false` 的候选。`agent_discover_connection` 仅内置主窗口 capability 可调。React 延迟 500ms 自动读取，地址/CA 编辑、取消、离开页面会使在途结果失效，重新读取可重试；完整 Server ID 只读，独立点击“确认并保存连接”。`set_connection` 保存前用无凭据客户端重读并核对确认的 ServerId，失败保留现有状态，已有绑定仍拒绝更换身份（`BINDING_BLOCKED`）；保留 HTTPS/附加 CA/显式回环开发 HTTP 规则。旧 GUI/CLI 的显式编号输入仍兼容，保存需能连接服务器。身份请求总期限 3 秒、连接 2 秒，低于普通 IPC 的 5 秒；过期确认在保存前复核应答通道。无远端 wire 或数据库迁移。
 
 - S114：壳新增固定 `select_local_directory()`，仅 Windows 内置 main 窗口 capability 授权。输入无路径/句柄，owner 从 Tauri 窗口取得；在独立 STA 上以 `IFileOpenDialog` + `FOS_PICKFOLDERS/FORCEFILESYSTEM/PATHMUSTEXIST/NOCHANGEDIR` 选择现有单目录，输出绝对路径 `string`，取消 `null`，失败为本地明确错误。它不属于 agent IPC；前端只读展示所选路径且未选前禁止创建，绑定仍由 agent 校验路径/重叠/卷身份。

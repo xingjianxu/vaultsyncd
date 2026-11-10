@@ -303,7 +303,14 @@ pub(crate) fn management_response(
             } else if error.needs_reauth() {
                 "REAUTH_REQUIRED"
             } else {
-                error.code().unwrap_or("UNAVAILABLE")
+                match error.code() {
+                    Some("CONNECTION_BINDING_MISMATCH" | "CONNECTION_SERVER_MISMATCH")
+                        if request.command.name == CommandName::SetConnection =>
+                    {
+                        "BINDING_BLOCKED"
+                    }
+                    code => code.unwrap_or("UNAVAILABLE"),
+                }
             };
             let (code, retryable) = match source_code {
                 "NOT_FOUND" => (LocalIpcErrorCode::NotFound, false),
@@ -363,12 +370,39 @@ pub(crate) fn management_response(
                 "CERTIFICATE_INVALID" => "服务器证书验证失败（CERTIFICATE_INVALID）；请核对服务器地址与名称，或在连接设置中选择管理员提供的附加 CA。证书验证未被关闭。".to_owned(),
                 "LOCAL_PATH_UNAVAILABLE" => "本地目录无法访问（LOCAL_PATH_UNAVAILABLE）；请选择现有本机 NTFS 目录，并检查路径、权限与卷状态。".to_owned(),
                 "INSUFFICIENT_STORAGE" => "本地磁盘或状态库空间不足（INSUFFICIENT_STORAGE）；完整缓存、未确认内容与恢复现场保留，请腾出空间后重试。".to_owned(),
-                "BINDING_BLOCKED" if request.command.name == CommandName::SetConnection => "服务器身份不一致（BINDING_BLOCKED）；请重新读取 Server ID，已有同步绑定时不能切换到另一台服务器。".to_owned(),
+                "BINDING_BLOCKED" if request.command.name == CommandName::SetConnection => connection_identity_message(&error)
+                    .unwrap_or_else(|| "连接被本机绑定保护阻止（BINDING_BLOCKED）；请核对本机原有连接与目标服务器的 Server ID。".to_owned()),
                 "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),
                 _ => format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
             };
             failure(request, code, &message, retryable)
         }
+    }
+}
+// Only canonical public identities from our two local checks may reach the UI. Never forward
+// arbitrary PortError details: remote errors can contain credentials, URLs or filesystem paths.
+fn connection_identity_message(error: &PortError) -> Option<String> {
+    let PortError::Rejected { code, detail } = error else {
+        return None;
+    };
+    let (expected, actual) = detail.split_once(':')?;
+    for id in [expected, actual] {
+        if vaultsyncd_domain::ids::ServerId::from_hex(id)
+            .ok()?
+            .to_string()
+            != id
+        {
+            return None;
+        }
+    }
+    match code.as_str() {
+        "CONNECTION_BINDING_MISMATCH" => Some(format!(
+            "本机已有同步绑定，保存的 Server ID：{expected}；本次读取的 Server ID：{actual}（BINDING_BLOCKED）。连接未更改；即使本次 ID 与 Web 一致，也不能直接替换原有服务器身份。"
+        )),
+        "CONNECTION_SERVER_MISMATCH" => Some(format!(
+            "服务器本次返回的身份与确认值不同（BINDING_BLOCKED）；确认的 Server ID：{expected}；服务器返回：{actual}。请重新读取并核对服务器入口。"
+        )),
+        _ => None,
     }
 }
 fn failure(request: &Request, code: LocalIpcErrorCode, message: &str, retryable: bool) -> Response {

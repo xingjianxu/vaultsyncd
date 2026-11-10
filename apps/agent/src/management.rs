@@ -83,7 +83,14 @@ pub(crate) async fn proposed_connection(
     if (count != 0 || !config.bindings.is_empty())
         && p.server_id.as_deref() != Some(&config.server.id)
     {
-        return Err(reject("BINDING_BLOCKED"));
+        return Err(PortError::rejected(
+            "CONNECTION_BINDING_MISMATCH",
+            format!(
+                "{}:{}",
+                config.server.id,
+                p.server_id.as_deref().unwrap_or("")
+            ),
+        ));
     }
     let mut proposed = config.clone();
     proposed.server.id = p.server_id.clone().unwrap();
@@ -124,10 +131,11 @@ pub(crate) async fn discover_connection(
 
 /// Recheck the confirmed identity before loading any credentials or changing live bindings.
 pub(crate) async fn verify_connection(config: &AgentConfig) -> Result<(), PortError> {
-    if read_server_id(config).await? != config.server.id {
+    let actual = read_server_id(config).await?;
+    if actual != config.server.id {
         return Err(PortError::rejected(
-            "BINDING_BLOCKED",
-            "服务器身份与确认的 Server ID 不一致，请重新读取。",
+            "CONNECTION_SERVER_MISMATCH",
+            format!("{}:{actual}", config.server.id),
         ));
     }
     Ok(())
