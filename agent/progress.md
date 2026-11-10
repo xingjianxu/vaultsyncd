@@ -1,10 +1,10 @@
 # 实施进度
 
-当前：**S174 done**，ZIP 同目录覆盖改为自动采纳归属（无备份/无回滚、任意版本方向，跨路径与安装版互转仍拒绝，自动更新入口不变；ADR-030）。宿主检查通过（fmt、Windows 交叉严格 clippy、测试 EXE 编译、ZIP 打包契约 8/8、生成一致）；**Windows 原生断言未执行**（无运行中客体）。已知与本卡无关的基线红：`packages/local-ipc-types` 示例命令数断言 26 而 S172 已增至 27，master 同样失败。此前 **S173 done**，0.1.3 已作为 [v0.1.3](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.3) 预发布发出（非 Latest、唯一 Windows x64 ZIP `e9db7e56…`，源`d2f9e26`）；本机 master 与 origin/master 同步。ZIP 未签名、未做 Windows 原生复验，S106/S107/S108 门禁不变；**下一 ready：无**。证据`/data/vaultsyncd-dev/S173-release-20261110/`。
+当前：**S175 done**，0.1.4 已作为 [v0.1.4](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.4) 预发布发出（非 Latest、唯一 Windows x64 ZIP `041b293a…`，源`fe273d3`，含 S174 ZIP 归属采纳）；本机 master 与 origin/master 同步。此前 **S174 done**，ZIP 同目录覆盖改为自动采纳归属（无备份/无回滚、任意版本方向，跨路径与安装版互转仍拒绝，自动更新入口不变；ADR-030），宿主检查通过（fmt、Windows 交叉严格 clippy、测试 EXE 编译、ZIP 打包契约 8/8、生成一致），**Windows 原生断言未执行**（无运行中客体）。已知与本卡无关的基线红：`packages/local-ipc-types` 示例命令数断言 26 而 S172 已增至 27，master 同样失败。ZIP 未签名、未做 Windows 原生复验，S106/S107/S108 门禁不变；**下一 ready：无**。证据`/data/vaultsyncd-dev/S175-release-20261110/`（0.1.3 证据保留在 `S173-release-20261110/`）。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
-最近发行是 [v0.1.3](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.3) 预发布、非 Latest，源`d2f9e26`，附件 `vaultsyncd-0.1.3-x64-unsigned.zip`；历史 v0.1.2 源`d976376`保持。在线服务端为S172，运行/开机generation272、源`d7339f0`、schema20、主机pin`7a74069`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收。
+最近发行是 [v0.1.4](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.4) 预发布、非 Latest，源`fe273d3`，附件 `vaultsyncd-0.1.4-x64-unsigned.zip`；历史 v0.1.3 源`d2f9e26`、v0.1.2 源`d976376`保持。在线服务端为S172，运行/开机generation272、源`d7339f0`、schema20、主机pin`7a74069`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收。
 
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
@@ -34,6 +34,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S175 | 发布 v0.1.4 预发布（含 S174）；Windows ZIP 唯一附件、远端 digest 与本地一致，一次上传成功 | 版本fe273d3已ff合master并推送，任务树/分支清理 | [S175](tasks/S175.md) |
 | S173 | 发布 v0.1.3 预发布；Windows ZIP 唯一附件、远端 SHA-256 一致，工具列表延迟误报已修 | 版本d2f9e26、修复532ec19已ff合master并推送，任务树/分支清理 | [S173](tasks/S173.md) |
 | S174 | ZIP 同目录覆盖自动采纳归属（无备份/无回滚、任意版本方向；跨路径与安装版互转仍拒绝） | 实现7870992已ff合master，任务树/分支已清理；宿主检查通过，Windows 原生断言待执行 | [S174](tasks/S174.md) |
 | S172 | 两端文件同步/传输记录；原生27项、真实浏览器/完整备份恢复及generation272部署通过 | 实现d7339f0、交接fef5f83已ff合master；本卡挂载/树/分支清理 | [S172](tasks/S172.md) |

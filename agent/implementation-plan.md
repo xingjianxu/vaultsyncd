@@ -1734,6 +1734,14 @@
 - 验收：交叉编译 + 严格 clippy + 测试 EXE 编译通过；Windows 原生 `s109-zip.ps1 -Mode Fresh` 新增采纳断言通过（客体可用时）；不声称可回滚或无备份风险已消除。
 - 交接：`agent/tasks/S174.md`；无服务端产物变化，不触发部署。
 
+### S175 — 发布 0.1.4 预发布 GitHub Release
+
+- 依据：2026-11-10 用户要求发布新的 GitHub Release 并确认按预发布上传；前置 S174 done。`v0.1.3` 标签与 Release 已指向旧提交 `d2f9e26`，且 master 领先 `origin/master` 两个提交，本卡升版 0.1.4 后发布。
+- 范围：同步根 Cargo、前端/Tauri 镜像与 Cargo.lock（不改协议/schema/生成器版本与业务代码）；推送 master；用 `tools/release.sh` 构建 Windows x64 便携 ZIP；`tools/publish-release.sh` 以预发布上传唯一 ZIP，不设 Latest。
+- 验收：`cargo xtask version --check`、`pnpm install --frozen-lockfile`、真实构建的 SHA256SUMS 校验、`--dry-run` 计划与远端附件大小/digest 核对；不声称 Windows 原生复验或首发门禁通过。
+- 结果：版本镜像 `fe273d3` 已推送 master；Windows ZIP `041b293a…` 由 `v0.1.4` 预发布发出（非 Latest、唯一附件），远端大小与 digest 复核一致，标签指向 `fe273d3`。未做 Windows 原生复验。
+- 交接：`agent/tasks/S175.md`；不改动已发布 Release，不触发服务端部署。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
