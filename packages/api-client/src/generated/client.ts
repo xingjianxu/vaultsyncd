@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeAccountChanged, decodeAccountInfo, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeClientConnectionPage, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedVaultList, decodeOperationResult, decodeRecoveryPage, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVaultList, decodeVaultRegistered, decodeVersionLease } from "./types";
-import type { AccountChanged, AccountInfo, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ClientConnectionPage, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedVaultList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VaultList, VaultRegisterRequest, VaultRegistered, VersionLease, VersionLeaseRequest } from "./types";
+import { decodeAccountChanged, decodeAccountInfo, decodeActivityPage, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeClientConnectionPage, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedVaultList, decodeOperationResult, decodeRecoveryPage, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVaultList, decodeVaultRegistered, decodeVersionLease } from "./types";
+import type { AccountChanged, AccountInfo, ActivityPage, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ClientConnectionPage, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedVaultList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VaultList, VaultRegisterRequest, VaultRegistered, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -687,6 +687,44 @@ export async function listVaults(options: ClientOptions, init?: RequestInit): Pr
     throw api_error(response.status, payload);
   }
   return decodeVaultList(payload);
+}
+
+/**
+ * 查看文件同步与传输记录
+ *
+ * 仅记录启用后的活动，按记录身份倒序每页最多50条；served表示服务端已读取并准备响应，不表示客户端已收到或应用。
+ *
+ * 参数 `vault`（/v1/vaults/{vault}/activity）：路径参数
+ * 查询参数 `before`（可选）：查询参数
+ * 查询参数 `direction`（可选）：upload或download
+ *
+ * 200：一页同步与传输记录
+ * 400：无效游标或方向
+ * 401：会话失效
+ * 403：Vault不在授权范围
+ * 503：存储不可用
+ */
+export async function listActivity(options: ClientOptions, vault: string, query?: { before?: string; direction?: string }, init?: RequestInit): Promise<ActivityPage> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/activity`;
+  const search = new URLSearchParams();
+  if (query?.before !== undefined) {
+    search.set("before", query.before);
+  }
+  if (query?.direction !== undefined) {
+    search.set("direction", query.direction);
+  }
+  const query_string = search.toString();
+  const target = query_string === "" ? path : `${path}?${query_string}`;
+  const response = await options.fetch(join_url(options.base_url, target), {
+    ...init,
+    method: "GET",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeActivityPage(payload);
 }
 
 /**

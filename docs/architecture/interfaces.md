@@ -2717,6 +2717,15 @@ S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开
 - 候选 agent `--auto-update --program-dir <原目录>` 等待旧GUI退出、持独立更新/GUI锁，调用 `--maintenance auto-upgrade`；普通 `upgrade` 仍拒绝ZIP接管。ZIP原owner须匹配原目录与旧清单，事务备份完整ZIP及旧owner，失败整套恢复；owner通过无reparse/单硬链接的排他写句柄更新。安装版只替换原六项程序文件，保留卸载入口和Run，成功更新HKCU版本。
 - 维护返回trial备份，全部Binding暂停后启动新agent，经精确程序路径校验的IPC/版本健康检查才写 `complete.json`，再通过IPC恢复原暂停值；之后不可再回滚新状态。`auto-update.json`及 `trial-plan.json`保留中断恢复信息。候选 `--auto-update-recover --program-dir <原目录>` 对未提交trial排空/持writer锁回退，对已提交trial仅补恢复暂停；不删除Vault/缓存/凭据。程序忙、迁移失败或启动失败保留日志/程序/状态/恢复导出，必要时拒绝回退，绝不强杀writer。
 
+## S172 文件同步与传输记录（schema20 / IPC2.8）
+
+- wire唯一源为`api/openapi.yaml`的`ActivityRecord/ActivityPage`与`api/local-ipc.schema.json`的`ActivityRecord`、`list_activity`及`ManagementResult.activity`；通过`cargo xtask generate`更新两端类型，不手改生成文件。远端major2保持，capabilities新增`file_activity`；旧服务缺少端点时明确报错。本机命令只允许IPC minor>=8，旧minor明确拒绝，不返回空成功。
+- `GET /v1/vaults/{vault}/activity?before=<id>&direction=upload|download`逐次认证并校验Vault归属，按递增SQLite记录id倒序，每页50条；`before`为正i64规范十进制文本，重复/未知/越界/非规范参数400。方向可省略，`next_cursor`只在还有记录时返回；响应`Cache-Control: no-store`。身份/时间/大小/字节/偏移在wire保留字符串，JS不经浮点计数转换。
+- `file_activity`保存启用后的事实，`operation_activity_sources`在受理前记录稳定登录连接归属、首次标签/接入类型、请求摘要及upload_id。连接快照由认证会话解析，同账号刷新链仍对应稳定client_id；声明的DeviceId单独保存，不用于认证。source与请求摘要匹配才随`commit_operation`同事务写`sync_commit/committed`，重试/恢复不重复；source已保留而操作尚未建立时，同键不同请求仍409 `OP_ID_REUSED`。只记关联upload的内容事件，无内容传输的目录/移动/删除/历史恢复不伪装上传。
+- `upload_finalize/ready`与uploads终态同事务，表示内容已校验，可以尚无文件名；按上传身份去重，逻辑size不冒充实际网络bytes。随后`sync_commit/committed`携带当时路径、EntryId/VersionId/OpId和大小。`download/served`在读出固定版本后记录当时路径、整份size及实际区间offset/bytes，再准备响应；不证明客户端已接收/校验/落盘，重复Range请求逐请求记录。finalize/download处理失败记录`failed`与实际分类错误码；未授权或无法解析身份的请求不进入账本。写账本失败显式报错，不吞错伪造记录。
+- 客户端`list_activity(binding_id,cursor?,direction?)`由agent核验Binding的Server/Device与当前配置，使用自身认证HTTP读取该Vault账本，再转换为本机DTO；GUI经Tauri允许列表桥调用，不访问在线数据库。客户端与Web均可查看所选Vault所有客户端，分页、方向、刷新、详情及空/错误态独立；会话/筛选/绑定变化忽略迟到结果。记录不是客户端本地离线失败、未上传内容或本地应用结果日志。
+- schema19→20沿用启动前一致备份/新schema旧二进制拒写；备份清凭据时保留两张新表及快照，完整备份计数/恢复校验包含它们。回退使用整套schema19归档和配对路径/新epoch，不能只切回旧二进制或改版本标记；不从旧版本/日志回填历史，不自动清理活动记录。
+
 ## S163 开发测试数据根（覆盖 S146/S161 的当前位置）
 
 所有新开发测试目录只能位于 `/data/vaultsyncd-dev`；默认沿用其内 `vaultsyncd-temp/`（任务、volumes、cache、evidence）和 `vaultsyncd-lab/`（VM、基线、关联缓存）子树。正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd` 保持。Windows客体内的本地NTFS目录不受宿主路径约定影响。

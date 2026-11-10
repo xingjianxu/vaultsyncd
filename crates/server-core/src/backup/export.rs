@@ -123,6 +123,11 @@ impl Index {
         ] {
             table_counts.insert(table.to_owned(), decimal(&v["database_contents"], table)?);
         }
+        for table in ["file_activity", "operation_activity_sources"] {
+            if schema_version >= 20 || v["database_contents"].get(table).is_some() {
+                table_counts.insert(table.to_owned(), decimal(&v["database_contents"], table)?);
+            }
+        }
         let mut items = Vec::new();
         let mut names = BTreeSet::new();
         for f in v["files"].as_array().ok_or(Error::Invalid)? {
@@ -430,6 +435,22 @@ mod tests {
     fn parse_value(value: &Value) -> Result<Index, Error> {
         let bytes = serde_json::to_vec(value).unwrap();
         Index::parse(&bytes, Sha256::digest(&bytes).into())
+    }
+    #[test]
+    fn activity_counts_are_required_for_schema20_and_legacy_manifests_remain_readable() {
+        let (manifest, _, _) = fixture();
+        let mut value: Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(parse_value(&value).unwrap().table_counts.len(), 8);
+        value["schema_version"] = 20.into();
+        assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
+        value["database_contents"]["file_activity"] = "12".into();
+        assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
+        value["database_contents"]["operation_activity_sources"] = "3".into();
+        let index = parse_value(&value).unwrap();
+        assert_eq!(index.table_counts["file_activity"], 12);
+        assert_eq!(index.table_counts["operation_activity_sources"], 3);
+        value["database_contents"]["file_activity"] = "012".into();
+        assert_eq!(parse_value(&value).unwrap_err(), Error::Invalid);
     }
     #[test]
     fn objects_roundtrip_without_cross_vault_or_path_aliases_and_reject_old_layouts() {

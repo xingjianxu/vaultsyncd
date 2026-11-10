@@ -828,8 +828,8 @@ mod tests {
         );
 
         // user_version 已写回和迁移提交后尚未写回几种状态，都不得向旧二进制暴露可写句柄。
-        for marker in [19, 18, 17, 16, 15, 14] {
-            if marker != 19 {
+        for marker in [20, 19, 18, 17, 16, 15, 14] {
+            if marker != 20 {
                 let mut conn = connect_options(&path).connect().await.unwrap();
                 sqlx::query(&format!("PRAGMA user_version = {marker}"))
                     .execute(&mut conn)
@@ -841,7 +841,7 @@ mod tests {
             assert!(matches!(
                 Database::open_with(&path, &previous).await,
                 Err(DbError::SchemaTooNew {
-                    found: 19,
+                    found: 20,
                     supported: 14
                 })
             ));
@@ -924,15 +924,15 @@ mod tests {
         assert_eq!(database.schema_version(), target_schema_version());
         assert_eq!(
             target_schema_version(),
-            19,
-            "内嵌迁移应当是 0001—0019 十九版"
+            20,
+            "内嵌迁移应当是 0001—0020 二十版"
         );
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 19);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 20);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -943,7 +943,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            19
+            20
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -955,7 +955,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 19);
+        assert_eq!(reopened.schema_version(), 20);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1276,17 +1276,17 @@ mod tests {
         insert_metadata(&old, "server_id", "abcd").await;
         old.close().await;
 
-        // 0020 成功、0021 失败：迁移集只完成了前半段。
+        // 0021 成功、0022 失败：迁移集只完成了前半段。
         let partial_dir = dir.migrations(&[
             (BASELINE_FILE, BASELINE_SQL),
             (NAMESPACE_FILE, NAMESPACE_SQL),
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0020_probe.sql",
+                "0021_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
-            ("0021_broken.sql", "CREATE TABLE broken ("),
+            ("0022_broken.sql", "CREATE TABLE broken ("),
         ]);
         let partial = migrator(&partial_dir).await;
         let error = Database::open_with(&path, &partial)
@@ -1309,7 +1309,7 @@ mod tests {
             matches!(
                 refused,
                 DbError::SchemaTooNew {
-                    found: 20,
+                    found: 21,
                     supported: 5
                 }
             ),
@@ -1320,12 +1320,12 @@ mod tests {
                 .await
                 .expect_err("本二进制同样不得写更新过的 schema")
                 .to_string()
-                .contains("schema 版本 20"),
+                .contains("schema 版本 21"),
             "错误信息应给出实际版本"
         );
 
-        // 拒绝写入时不改动库：0020 的 probe 表与记账仍在，数据完好。`PRAGMA user_version`
-        // 由 SQLx 记“成功应用的迁移个数”（5 个），而版本门禁看的是迁移记账里的最大版本（0020）。
+        // 拒绝写入时不改动库：0021 的 probe 表与记账仍在，数据完好。`PRAGMA user_version`
+        // 由 SQLx 记“成功应用的迁移个数”（5 个），而版本门禁看的是迁移记账里的最大版本（0021）。
         assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 5);
         assert_eq!(
             metadata(&path).await,
@@ -1362,7 +1362,7 @@ mod tests {
             (EVENTS_FILE, EVENTS_SQL),
             (TRANSFERS_FILE, TRANSFERS_SQL),
             (
-                "0020_probe.sql",
+                "0021_probe.sql",
                 "CREATE TABLE probe (id INTEGER PRIMARY KEY) STRICT;",
             ),
         ]);
@@ -1378,13 +1378,13 @@ mod tests {
             matches!(
                 error,
                 DbError::SchemaTooNew {
-                    found: 20,
-                    supported: 19
+                    found: 21,
+                    supported: 20
                 }
             ),
             "实际错误 {error:?}"
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 20);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 21);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "abcd".to_owned())]
@@ -1549,7 +1549,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 19,
+                found: 20,
                 supported: 9
             }
         ));
@@ -1590,7 +1590,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 19,
+                found: 20,
                 supported: 10
             }
         ));
@@ -1631,7 +1631,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 19,
+                found: 20,
                 supported: 11
             }
         ));
@@ -1682,7 +1682,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &old_migrator).await,
             Err(DbError::SchemaTooNew {
-                found: 19,
+                found: 20,
                 supported: 12
             })
         ));
@@ -1696,3 +1696,7 @@ mod s091;
 #[cfg(test)]
 #[path = "clients/migration_tests.rs"]
 mod client_migration_tests;
+
+#[cfg(test)]
+#[path = "activity/migration_tests.rs"]
+mod activity_migration_tests;

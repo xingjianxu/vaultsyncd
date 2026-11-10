@@ -1,0 +1,66 @@
+param([switch]$Worker)
+$ErrorActionPreference = 'Stop'
+if ($Worker) {
+  $agent = $null
+  $desktop = $null
+  try {
+    $session = (Get-Process -Id $PID).SessionId
+    $existing = @(Get-Process vaultsyncd-agent,vaultsyncd-desktop -ErrorAction SilentlyContinue | Where-Object {$_.SessionId -eq $session})
+    if ($existing.Count -ne 0) { throw 'preserve existing native client processes; close them before this isolated run' }
+    $fixture = Get-Content (Join-Path $PSScriptRoot 'fixture.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $state = Join-Path $PSScriptRoot 'state'
+    $local = Join-Path $PSScriptRoot '同步目录'
+    $empty = Join-Path $PSScriptRoot '空目录'
+    New-Item -ItemType Directory -Path $state,$local,$empty | Out-Null
+    [IO.File]::WriteAllText((Join-Path $local 'local-only.txt'), 'S172-native-upload', (New-Object Text.UTF8Encoding($false)))
+    $fixture | Add-Member -NotePropertyName localPath -NotePropertyValue $local
+    $fixture | Add-Member -NotePropertyName emptyPath -NotePropertyValue $empty
+    $fixture | Add-Member -NotePropertyName caFile -NotePropertyValue (Join-Path $PSScriptRoot 'ca.pem')
+    [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'fixture-runtime.json'), ($fixture | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false)))
+    $config = @{server=@{id=$fixture.serverId;url=$fixture.url};device_id=[Guid]::NewGuid().ToString('N');state_dir=$state;poll_millis=250;bindings=@()}
+    [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'agent.json'), ($config | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
+    $agent = Start-Process -FilePath (Join-Path $PSScriptRoot 'vaultsyncd-agent.exe') -ArgumentList @('--config', (Join-Path $PSScriptRoot 'agent.json')) -PassThru -RedirectStandardError (Join-Path $PSScriptRoot 'agent.log')
+    Start-Sleep -Seconds 3
+    if ($agent.HasExited) { throw 'agent failed before activity test' }
+    $env:VAULTSYNCD_S080_REPORT = Join-Path $PSScriptRoot 'webview-report.json'
+    $env:VAULTSYNCD_S172_FIXTURE = Join-Path $PSScriptRoot 'fixture-runtime.json'
+    $desktop = Start-Process -FilePath (Join-Path $PSScriptRoot 'vaultsyncd-desktop.exe') -PassThru -RedirectStandardError (Join-Path $PSScriptRoot 'desktop.log')
+    if (!$desktop.WaitForExit(360000)) { throw 'real activity WebView timeout' }
+    $report = Get-Content $env:VAULTSYNCD_S080_REPORT -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (!$report.ok) { throw ('activity acceptance failed: '+($report | ConvertTo-Json -Compress -Depth 8)) }
+    if ($agent.HasExited) { throw 'closing activity GUI stopped agent' }
+    if ((Get-Content (Join-Path $local 'server-seed.txt') -Raw) -ne 'S172-native-server-seed') { throw 'native downloaded bytes mismatch' }
+    $report | Add-Member -NotePropertyName guiExitKeepsAgent -NotePropertyValue $true
+    $report | Add-Member -NotePropertyName windowsVersion -NotePropertyValue ([Environment]::OSVersion.VersionString)
+    $report | ConvertTo-Json -Compress -Depth 8 | Set-Content (Join-Path $PSScriptRoot 'result.json') -Encoding UTF8
+    '0' | Set-Content (Join-Path $PSScriptRoot 'exit.txt')
+  } catch {
+    $_ | Out-String | Set-Content (Join-Path $PSScriptRoot 'error.txt')
+    '1' | Set-Content (Join-Path $PSScriptRoot 'exit.txt')
+  } finally {
+    if ($desktop -and !$desktop.HasExited) { Stop-Process -Id $desktop.Id }
+    if ($agent -and !$agent.HasExited) { Stop-Process -Id $agent.Id }
+  }
+  exit
+}
+$hashes = Get-Content (Join-Path $PSScriptRoot 'hashes.json') -Raw | ConvertFrom-Json
+foreach ($item in $hashes.PSObject.Properties) {
+  if ((Get-FileHash (Join-Path $PSScriptRoot $item.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $item.Value) { throw 'native binary transport hash mismatch' }
+}
+$task = 'vaultsyncd-s172-'+[Guid]::NewGuid().ToString('N')
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Worker"
+$principal = New-ScheduledTaskPrincipal -UserId 'Quickemu' -LogonType Interactive -RunLevel Limited
+try {
+  Register-ScheduledTask -TaskName $task -Action $action -Principal $principal | Out-Null
+  Start-ScheduledTask -TaskName $task
+  $end = (Get-Date).AddSeconds(400)
+  while (!(Test-Path (Join-Path $PSScriptRoot 'exit.txt'))) {
+    if ((Get-Date) -ge $end) { throw 'interactive native activity worker timeout' }
+    Start-Sleep -Milliseconds 200
+  }
+  if ((Get-Content (Join-Path $PSScriptRoot 'exit.txt')) -ne '0') {
+    Get-Content (Join-Path $PSScriptRoot 'error.txt')
+    exit 1
+  }
+  Get-Content (Join-Path $PSScriptRoot 'result.json')
+} finally { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }

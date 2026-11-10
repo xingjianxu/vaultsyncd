@@ -1,6 +1,23 @@
 use crate::commands::{BridgeError, manage};
 use vaultsyncd_local_ipc::generated::{CommandName as C, CommandParameters as P, ManagementResult};
 #[tauri::command]
+pub(crate) async fn agent_list_activity(
+    binding_id: String,
+    cursor: Option<String>,
+    direction: Option<String>,
+) -> Result<ManagementResult, BridgeError> {
+    manage(
+        C::ListActivity,
+        Some(P {
+            binding_id: Some(binding_id),
+            cursor,
+            direction,
+            ..Default::default()
+        }),
+    )
+    .await
+}
+#[tauri::command]
 pub(crate) async fn agent_list_history(
     binding_id: String,
     entry_id: String,

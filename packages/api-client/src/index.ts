@@ -44,3 +44,6 @@ export type { BackupSnapshotStatus, BackupSnapshotList, BackupIntegrity, BackupS
 
 export { listClients } from "./generated/client";
 export type { ClientConnection, ClientConnectionPage } from "./generated/types";
+
+export { listActivity } from "./generated/client";
+export type { ActivityRecord, ActivityPage } from "./generated/types";

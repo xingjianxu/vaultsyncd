@@ -38,6 +38,9 @@ export function indexManifest(bytes: Uint8Array, expected: string, id: string): 
   const ids=new Set(vaults.map(vault=>vault.id));if(ids.size!==vaults.length) throw new Error("重复Vault");
   const counts=object(manifest.database_contents);
   for(const table of ["users","vaults","entries","versions","trash_entries","tombstones","changes","operations"]) decimal(counts,table);
+  for(const table of ["file_activity","operation_activity_sources"]) {
+    if(Number(manifest.schema_version)>=20 || table in counts) decimal(counts,table);
+  }
   const items: Item[]=[];const paths=new Set<string>(),storagePaths=new Set<string>();
   function add(path: string, item: Record<string,unknown>) {
     if(paths.has(path)) throw new Error("重复归档路径");

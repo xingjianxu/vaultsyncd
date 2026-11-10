@@ -11,6 +11,7 @@ export {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   RESPONSE_KIND_VALUES,
+  decodeActivityRecord,
   decodeBindingInfo,
   decodeFileStatus,
   decodeBindingStatus,
@@ -30,6 +31,7 @@ export {
   decodeResponseKind,
 } from "./generated/types";
 export type {
+  ActivityRecord,
   BindingInfo,
   FileStatus,
   Notice,

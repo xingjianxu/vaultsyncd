@@ -44,7 +44,7 @@ async fn schema17_upgrade_preserves_refresh_chain_and_backup() {
     tx.commit().await.unwrap();
     db.close().await;
     let db = Database::open(dir.database()).await.unwrap();
-    assert_eq!(db.schema_version(), 19);
+    assert_eq!(db.schema_version(), 20);
     let mut conn = db.pool().acquire().await.unwrap();
     let rows = list(&mut conn, user(1), session(2), None).await.unwrap();
     assert_eq!(rows.len(), 1);
@@ -53,11 +53,11 @@ async fn schema17_upgrade_preserves_refresh_chain_and_backup() {
     assert_eq!(rows[0].last_seen_at, None);
     assert_eq!(rows[0].client_kind, "unknown");
     assert_eq!(rows[0].login_ip, None);
-    assert!(crate::db::migration_backup_path(&dir.database(), 17, 19).exists());
+    assert!(crate::db::migration_backup_path(&dir.database(), 17, 20).exists());
     drop(conn);
     db.close().await;
     let backup = Database::open_with(
-        &crate::db::migration_backup_path(&dir.database(), 17, 19),
+        &crate::db::migration_backup_path(&dir.database(), 17, 20),
         &previous,
     )
     .await
@@ -105,11 +105,11 @@ async fn schema18_upgrade_preserves_history_and_recoverable_backup() {
     assert!(matches!(
         Database::open_with(&dir.database(), &previous).await,
         Err(crate::db::DbError::SchemaTooNew {
-            found: 19,
+            found: 20,
             supported: 18
         })
     ));
-    let backup = crate::db::migration_backup_path(&dir.database(), 18, 19);
+    let backup = crate::db::migration_backup_path(&dir.database(), 18, 20);
     let restored = dir.path.join("restored.sqlite");
     std::fs::copy(&backup, &restored).unwrap();
     let old = Database::open_with(&restored, &previous).await.unwrap();
@@ -118,6 +118,6 @@ async fn schema18_upgrade_preserves_history_and_recoverable_backup() {
     assert_eq!(count, 1);
     old.close().await;
     let new = Database::open(&restored).await.unwrap();
-    assert_eq!(new.schema_version(), 19);
+    assert_eq!(new.schema_version(), 20);
     new.close().await;
 }

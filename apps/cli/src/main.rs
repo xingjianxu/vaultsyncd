@@ -638,6 +638,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::GetRules => "rules",
         CommandName::SetRules => "set-rules",
         CommandName::ListHistory => "history",
+        CommandName::ListActivity => "activity",
         CommandName::ListTrash => "trash",
         CommandName::RestoreEntry => "restore",
     }
@@ -657,6 +658,10 @@ fn validate_result(name: CommandName, result: &GetStatusResult) -> Result<(), Fa
             .and_then(|m| m.files.as_ref())
             .is_none()
             .then_some("文件列表"),
+        CommandName::ListActivity => management
+            .and_then(|m| m.activity.as_ref())
+            .is_none()
+            .then_some("同步与传输记录"),
         CommandName::ListProblems => management
             .and_then(|m| m.problems.as_ref())
             .is_none()

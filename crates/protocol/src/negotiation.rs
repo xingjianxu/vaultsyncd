@@ -20,6 +20,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "version_leases",
     "vault_admin",
     "backup_snapshots",
+    "file_activity",
 ];
 /// 协商失败不能发送登录凭据或数据请求。
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -28,6 +28,8 @@ pub mod local;
 #[cfg(windows)]
 mod management;
 #[cfg(windows)]
+mod management_activity;
+#[cfg(windows)]
 mod management_export;
 #[cfg(windows)]
 mod management_files;

@@ -19,11 +19,74 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 2;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 7;
+pub const PROTOCOL_MINOR: u32 = 8;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
 pub const MAX_FRAME_BYTES: usize = 1048576;
+
+/// 服务端观察到的同步与传输事实；served 仅证明服务端提供内容，不证明客户端收到、校验或应用。时间为服务端UTC秒，方向相对于客户端。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ActivityRecord {
+    /// upload_finalize、sync_commit 或 download。
+    pub action: String,
+    /// 本次提供的内容长度（字节）；不代表客户端已接收。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<String>,
+    /// 认证连接身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// 当时接入类型。
+    pub client_kind: String,
+    /// 当时客户端名称。
+    pub client_label: String,
+    /// 操作携带的设备身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// upload 或 download，相对于客户端。
+    pub direction: String,
+    /// 条目身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 失败原因码。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// 递增记录ID，规范正十进制。
+    pub id: String,
+    /// 服务端观察时间，UTC秒。
+    pub occurred_at: String,
+    /// 下载区间起点（字节）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<String>,
+    /// 同步操作身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// 事件时文件相对路径；未提交内容可能没有路径。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// 完整内容长度（字节）。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// ready、committed、served 或 failed；不得把 ready/served 当同步完成。
+    pub status: String,
+    /// 上传会话身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_id: Option<String>,
+    /// 固定版本身份。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
+}
 
 /// 持久 Binding 配置与控制事实，包括解绑记录。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -179,6 +242,9 @@ pub enum CommandName {
     /// 取值 `set_rules`。
     #[serde(rename = "set_rules")]
     SetRules,
+    /// 取值 `list_activity`。
+    #[serde(rename = "list_activity")]
+    ListActivity,
 }
 
 /// 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。
@@ -205,7 +271,7 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_path: Option<String>,
-    /// 历史或回收站分页的 after 身份。
+    /// 历史/回收站/文件分页的 after 身份；list_activity 为规范正十进制 before 记录ID。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
@@ -213,6 +279,10 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
+    /// list_activity 的方向筛选，仅 upload 或 download；相对于客户端。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
     /// 条目身份，不接受调用方自选相对文件路径。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -285,6 +355,7 @@ impl core::fmt::Debug for CommandParameters {
         value.field("cache_path", &self.cache_path);
         value.field("cursor", &self.cursor);
         value.field("destination", &self.destination);
+        value.field("direction", &self.direction);
         value.field("entry_id", &self.entry_id);
         value.field("local_path", &self.local_path);
         value.field("mode", &self.mode);
@@ -425,6 +496,10 @@ pub enum LocalIpcErrorCode {
 /// 每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, Default)]
 pub struct ManagementResult {
+    /// 所选绑定授权Vault的所有客户端服务端记录当前页。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<Vec<ActivityRecord>>,
     /// 持久绑定列表。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,7 +528,7 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_remaining: Option<String>,
-    /// 历史或回收站清单下一页游标。
+    /// 文件/历史/回收站/同步与传输记录下一页游标；list_activity 为 before 记录ID。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,

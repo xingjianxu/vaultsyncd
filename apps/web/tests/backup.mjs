@@ -40,6 +40,23 @@ try {
  scoped.vaults.push({vault_id:another,seq:"1"});
  scoped.objects.push({...scoped.objects[0],vault_id:another,archive_path:"objects/"+another+"/"+hash,storage_path:another+"/"+hash.slice(0,2)+"/"+hash});
  const inspect=value=>{const encoded=Buffer.from(JSON.stringify(value));return ()=>indexManifest(encoded,digest(encoded),id);};
+ // S172/schema20：两张持久记录表必须在清单中计数，不能因解析器忽略新表而报告完整验证。
+ const historical=structuredClone(manifest);historical.schema_version=19;
+ assert.equal(inspect(historical)().items.length,3,"schema19无活动表计数保持兼容");
+ const activity=structuredClone(historical);activity.schema_version=20;
+ assert.throws(inspect(activity),/file_activity/);
+ activity.database_contents.file_activity="55";
+ assert.throws(inspect(activity),/operation_activity_sources/);
+ activity.database_contents.operation_activity_sources="2";
+ assert.equal(inspect(activity)().items.length,3);
+ for(const table of ["file_activity","operation_activity_sources"]) {
+   for(const value of ["01","-1","1.5","9223372036854775808",1,null]) {
+     const invalid=structuredClone(activity);invalid.database_contents[table]=value;
+     assert.throws(inspect(invalid),/清单计数无效|清单字段缺失/);
+   }
+   const optional=structuredClone(historical);optional.database_contents[table]="invalid";
+   assert.throws(inspect(optional),/清单计数无效/,"旧schema若提供新表计数也必须合法");
+ }
  assert.equal(inspect(scoped)().items.length,4,"两Vault同摘要不能被当作同一个物理对象");
  for(const invalid of ["objects/"+hash.slice(0,2)+"/"+hash,"roots/"+vault+"/objects/"+hash.slice(0,2)+"/"+hash,vault+"/../"+hash.slice(0,2)+"/"+hash,vault+"//"+hash.slice(0,2)+"/"+hash]){
    const changed=structuredClone(scoped);changed.objects[0].storage_path=invalid;assert.throws(inspect(changed),/对象路径/);

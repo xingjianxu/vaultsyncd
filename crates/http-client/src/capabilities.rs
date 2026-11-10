@@ -17,6 +17,7 @@ pub(crate) fn feature(path: &str) -> Result<&'static str, ClientError> {
         ["v1", "vaults", _, "uploads", ..] => Ok("uploads"),
         ["v1", "vaults", _, "operations", ..] => Ok("operations"),
         ["v1", "vaults", _, "trash", ..] => Ok("trash"),
+        ["v1", "vaults", _, "activity"] => Ok("file_activity"),
         ["v1", "vaults", _, "entries", _, "history", ..] => Ok("history"),
         ["v1", "vaults", _, "entries", _, "versions", _, "content"] => Ok("content"),
         ["v1", "vaults", _, "entries", _, "versions", _, "leases", ..] => Ok("version_leases"),
@@ -25,6 +26,73 @@ pub(crate) fn feature(path: &str) -> Result<&'static str, ClientError> {
         _ => Err(ClientError::invalid_request(
             "endpoint has no known negotiated capability",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activity_requires_the_explicit_server_capability() {
+        let path = "/v1/vaults/11111111111111111111111111111111/activity";
+        assert_eq!(feature(path).unwrap(), "file_activity");
+        let mut capabilities: Capabilities = serde_json::from_str(include_str!(
+            "../../../api/examples/capabilities.response.json"
+        ))
+        .unwrap();
+        capabilities.features.push("file_activity".into());
+        admit(&capabilities, path).unwrap();
+        capabilities
+            .features
+            .retain(|feature| feature != "file_activity");
+        assert!(admit(&capabilities, path).is_err());
+        assert!(feature(&format!("{path}/unknown")).is_err());
+    }
+
+    #[tokio::test]
+    async fn unsupported_activity_does_not_send_the_business_request() {
+        use crate::{
+            ApiClient, ApiRequest, ClientConfig,
+            testing::{FakeTransport, json_response},
+            transport::TransportRequest,
+        };
+        use std::sync::Arc;
+        for supported in [false, true] {
+            let transport = Arc::new(FakeTransport::new(move |request: TransportRequest| {
+                Box::pin(async move {
+                    if request.url().ends_with("/v1/capabilities") {
+                        let mut capabilities: Capabilities = serde_json::from_str(include_str!(
+                            "../../../api/examples/capabilities.response.json"
+                        ))
+                        .unwrap();
+                        capabilities
+                            .features
+                            .retain(|feature| feature != "file_activity");
+                        if supported {
+                            capabilities.features.push("file_activity".into());
+                        }
+                        Ok(json_response(200, &capabilities))
+                    } else {
+                        assert!(supported, "unsupported capability leaked business request");
+                        assert!(request.url().ends_with("/activity"));
+                        Ok(json_response(200, &serde_json::json!({"items":[]})))
+                    }
+                })
+            }));
+            let client = ApiClient::with_transport(
+                ClientConfig::new("https://vault.invalid"),
+                transport.clone(),
+            )
+            .unwrap();
+            let result = client
+                .send_json::<vaultsyncd_protocol::generated::ActivityPage>(ApiRequest::get(
+                    "/v1/vaults/11111111111111111111111111111111/activity",
+                ))
+                .await;
+            assert_eq!(result.is_ok(), supported);
+            assert_eq!(transport.call_count(), if supported { 2 } else { 1 });
+        }
     }
 }
 pub(crate) fn admit(value: &Capabilities, path: &str) -> Result<(), ClientError> {

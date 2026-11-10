@@ -28,6 +28,7 @@ export interface AgentClient {
   detachBinding(bindingId: string): Promise<ManagementResult>;
   exportRecovery(bindingId: string, destination: string): Promise<ManagementResult>;
   listHistory(bindingId:string,entryId:string,cursor?:string):Promise<ManagementResult>;
+  listActivity(bindingId:string,cursor?:string,direction?:"upload"|"download"):Promise<ManagementResult>;
   listTrash(bindingId:string,cursor?:string):Promise<ManagementResult>;
   restoreEntry(input:RestoreInput):Promise<ManagementResult>;
   notificationSettings():Promise<NotificationSettings>;
@@ -41,7 +42,7 @@ export const disconnectedAgent: AgentClient = {
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   getRules:unavailable,setRules:unavailable,
   retryProblem: unavailable, setMode: unavailable, detachBinding: unavailable, exportRecovery: unavailable,
-  listHistory:unavailable,listTrash:unavailable,restoreEntry:unavailable,notificationSettings:unavailable,setNotifications:unavailable,
+  listHistory:unavailable,listActivity:unavailable,listTrash:unavailable,restoreEntry:unavailable,notificationSettings:unavailable,setNotifications:unavailable,
 };
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
@@ -76,6 +77,7 @@ export const nativeAgent: AgentClient = {
   detachBinding: bindingId => call("agent_detach_binding", { bindingId }),
   exportRecovery: (bindingId, destination) => call("agent_export_recovery", { bindingId, destination }),
   listHistory:(bindingId,entryId,cursor)=>call("agent_list_history",{bindingId,entryId,cursor}),
+  listActivity:(bindingId,cursor,direction)=>call("agent_list_activity",{bindingId,cursor,direction}),
   listTrash:(bindingId,cursor)=>call("agent_list_trash",{bindingId,cursor}),
   restoreEntry:input=>call("agent_restore_entry",{input}),
   notificationSettings:()=>call("agent_notification_settings"),

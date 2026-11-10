@@ -1031,6 +1031,121 @@ async fn download_serves_the_requested_version_and_range_slices() {
         );
         assert_eq!(reply.envelope().error.code, ErrorCode::InvalidRequest);
     }
+    let activity_uri = format!("/v1/vaults/{}/activity?direction=download", seeds.vault);
+    let reply = app.call(get(&activity_uri, Some(&token))).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.header("cache-control").as_deref(), Some("no-store"));
+    let page: vaultsyncd_protocol::generated::ActivityPage = parse(&reply, "ActivityPage");
+    assert_eq!(page.items.len(), 7);
+    assert_eq!(
+        page.items
+            .iter()
+            .filter(|item| item.status == "served")
+            .count(),
+        3
+    );
+    assert_eq!(
+        page.items
+            .iter()
+            .filter(|item| item.status == "failed"
+                && item.error_code.as_deref() == Some("INVALID_REQUEST"))
+            .count(),
+        4
+    );
+    let range = page
+        .items
+        .iter()
+        .find(|item| item.offset.as_deref() == Some("2"))
+        .unwrap();
+    assert_eq!(range.bytes.as_deref(), Some("4"));
+    assert_eq!(
+        range.version_id.as_deref(),
+        Some(current_version.to_hex().as_str())
+    );
+    assert_eq!(
+        range.entry_id.as_deref(),
+        Some(seeded.entry.to_hex().as_str())
+    );
+    assert!(range.path.is_some());
+    assert!(range.client_id.is_some());
+}
+
+#[tokio::test]
+async fn activity_requires_scope_validates_query_and_keeps_finalize_replay_unique() {
+    let fixture = Fixture::new("activity-scope");
+    let seeds = seed_accounts(&fixture).await;
+    let app = open_app(&fixture).await;
+    let token = login(&app, "owner").await;
+    let intruder = login(&app, "intruder").await;
+    let uri = format!("/v1/vaults/{}/activity", seeds.vault);
+    assert_eq!(
+        app.call(get(&uri, None)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.call(get(&uri, Some(&intruder))).await.status,
+        StatusCode::FORBIDDEN
+    );
+    for query in [
+        "before=0",
+        "before=01",
+        "before=-1",
+        "before=9223372036854775808",
+        "before=1&before=2",
+        "direction=none",
+        "direction=upload&direction=download",
+        "unknown=1",
+    ] {
+        let reply = app.call(get(&format!("{uri}?{query}"), Some(&token))).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(reply.header("cache-control").as_deref(), Some("no-store"));
+    }
+    let session = upload_content(&app, seeds.vault, &token, b"abc", 4, &sha256(b"abc")).await;
+    for _ in 0..2 {
+        assert_eq!(
+            finalize(&app, seeds.vault, &session.upload_id, &token)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+    let reply = app.call(get(&uri, Some(&token))).await;
+    let page: vaultsyncd_protocol::generated::ActivityPage = parse(&reply, "ActivityPage");
+    assert_eq!(page.items.len(), 1);
+    let item = &page.items[0];
+    assert_eq!(item.status, "ready");
+    assert_eq!(item.action, "upload_finalize");
+    assert_eq!(item.size.as_deref(), Some("3"));
+    assert_eq!(item.upload_id.as_deref(), Some(session.upload_id.as_str()));
+    assert!(item.bytes.is_none());
+    assert!(item.path.is_none());
+    assert!(item.client_id.is_some());
+    assert!(item.device_id.is_none());
+    let text = reply.text();
+    assert!(!text.contains(&token));
+    assert!(!text.contains("storage_path"));
+
+    // 认证归属已落盘而executor尚未创建operations行时，也必须拒绝不同语义复用。
+    let operation_uri = format!("/v1/vaults/{}/operations", seeds.vault);
+    let mut operation = serde_json::json!({"kind":"put_content","op_id":"d1".repeat(16),"device_id":"d2".repeat(16),"server_epoch":"1","entry_id":seeds.vault_entry.to_hex(),"base_revision":"0","upload_id":"d3".repeat(16)});
+    let first = app
+        .call(post_json(
+            &operation_uri,
+            Some(&token),
+            &operation.to_string(),
+        ))
+        .await;
+    assert_eq!(first.status, StatusCode::BAD_REQUEST, "{}", first.text());
+    operation["upload_id"] = serde_json::Value::String("d4".repeat(16));
+    let reused = app
+        .call(post_json(
+            &operation_uri,
+            Some(&token),
+            &operation.to_string(),
+        ))
+        .await;
+    assert_eq!(reused.status, StatusCode::CONFLICT, "{}", reused.text());
+    assert_eq!(reused.envelope().error.code, ErrorCode::OpIdReused);
 }
 
 #[tokio::test]

@@ -54,7 +54,7 @@ fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments
             serde_json::json!({"extra":"ignored parameters are forbidden"});
         assert!(serde_json::from_value::<Request>(unknown).is_err());
     }
-    assert_eq!(names.len(), 26);
+    assert_eq!(names.len(), 27);
 }
 #[test]
 fn passwords_are_redacted_even_if_an_entire_generated_request_is_debugged() {
@@ -110,4 +110,67 @@ fn discovery_only_accepts_an_address_and_optional_trust_without_identity_or_cred
     }
     command.parameters.as_mut().unwrap().server_url = None;
     assert!(commands::validate(&command).is_err());
+}
+
+#[test]
+fn activity_cursors_are_positive_decimal_and_filters_are_exact() {
+    use vaultsyncd_local_ipc::generated::{Command, CommandParameters as P};
+    let mut command = Command {
+        name: CommandName::ListActivity,
+        parameters: Some(P {
+            binding_id: Some("11".repeat(16)),
+            cursor: Some("9007199254740993".into()),
+            direction: Some("download".into()),
+            ..Default::default()
+        }),
+    };
+    commands::validate(&command).unwrap();
+    for cursor in [
+        "0",
+        "01",
+        "-1",
+        "+1",
+        " 1",
+        "1.0",
+        "1e2",
+        "9223372036854775808",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        command.parameters.as_mut().unwrap().cursor = Some(cursor.into());
+        assert!(
+            commands::validate(&command).is_err(),
+            "accepted cursor {cursor}"
+        );
+    }
+    command.parameters.as_mut().unwrap().cursor = Some(i64::MAX.to_string());
+    commands::validate(&command).unwrap();
+    command.parameters.as_mut().unwrap().direction = Some("upload".into());
+    commands::validate(&command).unwrap();
+    for direction in ["", "UPLOAD", "both", "upload&before=1"] {
+        command.parameters.as_mut().unwrap().direction = Some(direction.into());
+        assert!(commands::validate(&command).is_err());
+    }
+    command.parameters.as_mut().unwrap().direction = None;
+    command.parameters.as_mut().unwrap().cursor = None;
+    commands::validate(&command).unwrap();
+    command.parameters.as_mut().unwrap().binding_id = None;
+    assert!(commands::validate(&command).is_err());
+}
+
+#[test]
+fn activity_records_round_trip_with_lossless_counts_and_require_observed_facts() {
+    use vaultsyncd_local_ipc::generated::ManagementResult;
+    let sample = serde_json::json!({"activity":[{
+        "id":"9007199254740993", "occurred_at":"1794300000", "client_label":"客体A", "client_kind":"native",
+        "direction":"download", "action":"download", "status":"served", "path":"文件.txt",
+        "size":"9007199254740993", "bytes":"4", "offset":"9007199254740989"
+    }],"next_cursor":"9007199254740993"});
+    let result: ManagementResult = serde_json::from_value(sample.clone()).unwrap();
+    assert_eq!(serde_json::to_value(result).unwrap(), sample);
+    let mut missing = sample;
+    missing["activity"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("status");
+    assert!(serde_json::from_value::<ManagementResult>(missing).is_err());
 }

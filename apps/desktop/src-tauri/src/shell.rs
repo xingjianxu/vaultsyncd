@@ -128,6 +128,7 @@ pub(super) fn run() {
         agent_detach_binding,
         agent_export_recovery,
         agent_list_history,
+        agent_list_activity,
         agent_list_trash,
         agent_restore_entry,
         agent_notification_settings,
@@ -156,6 +157,7 @@ pub(super) fn run() {
         agent_detach_binding,
         agent_export_recovery,
         agent_list_history,
+        agent_list_activity,
         agent_list_trash,
         agent_restore_entry,
         agent_notification_settings,
@@ -218,7 +220,11 @@ pub(super) fn run() {
                             || (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
                     });
             #[cfg(feature = "native-acceptance")]
-            let window = if let Some(fixture)=std::env::var_os("VAULTSYNCD_S083_FIXTURE"){
+            let window = if let Some(fixture) = std::env::var_os("VAULTSYNCD_S172_FIXTURE") {
+                let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture)?)?;
+                window.initialization_script(format!("window.__S172_FIXTURE__ = {fixture};"))
+                    .initialization_script(include_str!("../../../../tests/platform/windows/s172-activity.js"))
+            } else if let Some(fixture)=std::env::var_os("VAULTSYNCD_S083_FIXTURE"){
                 let fixture:serde_json::Value=serde_json::from_slice(&std::fs::read(fixture)?)?;
                 window.initialization_script(format!("window.__S083_FIXTURE__ = {fixture};"))
                     .initialization_script(include_str!("../../../../tests/platform/windows/s083-webview.js"))

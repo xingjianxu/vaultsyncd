@@ -1,6 +1,8 @@
 # 实施进度
 
-当前：**S171 done**，Web右键新建目录与固定版本下载；根类型/Web七套测试构建、真实Chromium+btrfs30项及Nix包内74测试通过。已部署本机generation271，源`01a45f1`，主机pin`1513b07`，schema19不变；线上健康/TLS/CSP/11资产及原数据/服务保持。业务在独立实例验收，生产无当前凭据、未复跑已认证操作。实现01a45f1、交接a84d1be已ff合master，任务挂载/树/分支已清理；证据`/data/vaultsyncd-dev/S171-web-create-download-20261110/`。**下一 ready：无**；原四张blocked保持。
+当前：**S172 in_progress**，新增客户端与服务端文件同步及传输记录。服务端schema20与只读API、两端页面已实现；根类型、Web七套/构建与真实Chromium+btrfs通过，旧schema19整套备份已在隔离目录恢复升级20并核对5文件/FK/健康。正在完成审查修复、Windows原生和本机部署；实现、提交及合并清理未完成，不标done。证据`/data/vaultsyncd-dev/S172-sync-records-20261110/`；下一ready为本卡剩余子项，原四张blocked保持。
+
+此前：**S171 done**，Web右键新建目录与固定版本下载；根类型/Web七套测试构建、真实Chromium+btrfs30项及Nix包内74测试通过。已部署本机generation271，源`01a45f1`，主机pin`1513b07`，schema19不变；线上健康/TLS/CSP/11资产及原数据/服务保持。业务在独立实例验收，生产无当前凭据、未复跑已认证操作。实现01a45f1、交接a84d1be已ff合master，任务挂载/树/分支已清理；证据`/data/vaultsyncd-dev/S171-web-create-download-20261110/`。下一ready已由S172覆盖；原四张blocked保持。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 

@@ -92,6 +92,92 @@ export function decodeAccountInfo(value: unknown): AccountInfo {
   };
 }
 
+/** 按记录身份倒序的一页活动，最多50条。 */
+export interface ActivityPage {
+  /** 本页活动 */
+  items: Array<ActivityRecord>;
+  /** 下一页before游标，末页缺省 */
+  next_cursor?: string;
+}
+
+export function decodeActivityPage(value: unknown): ActivityPage {
+  const object = expect_object(value, "ActivityPage");
+  if (Object.keys(object).some((key) => !["items", "next_cursor"].includes(key))) {
+    throw new Error("ActivityPage contains unknown fields");
+  }
+  return {
+    items: expect_array(object.items, "ActivityPage.items").map((item) => decodeActivityRecord(item)),
+    next_cursor: object.next_cursor === undefined ? undefined : expect_string(object.next_cursor, "ActivityPage.next_cursor"),
+  };
+}
+
+/** 启用记录后的文件同步与传输证据，不代表客户端下载完成。 */
+export interface ActivityRecord {
+  /** upload_finalize或sync_commit或download */
+  action: string;
+  /** 本次内容字节数 */
+  bytes?: string;
+  /** 稳定登录连接身份 */
+  client_id?: string;
+  /** 登录入口client或browser或unknown */
+  client_kind: string;
+  /** 客户端登录标签快照 */
+  client_label: string;
+  /** 操作声明的设备身份，不代表认证设备 */
+  device_id?: string;
+  /** upload或download，按客户端方向 */
+  direction: string;
+  /** 条目身份 */
+  entry_id?: string;
+  /** 失败分类 */
+  error_code?: string;
+  /** 记录身份，正十进制文本 */
+  id: string;
+  /** 观测UTC秒 */
+  occurred_at: string;
+  /** 本次下载起始偏移 */
+  offset?: string;
+  /** 幂等操作身份 */
+  operation_id?: string;
+  /** 事件发生时相对路径快照 */
+  path?: string;
+  /** 完整文件字节数 */
+  size?: string;
+  /** ready或committed或served或failed */
+  status: string;
+  /** 上传会话身份 */
+  upload_id?: string;
+  /** 固定内容版本 */
+  version_id?: string;
+}
+
+export function decodeActivityRecord(value: unknown): ActivityRecord {
+  const object = expect_object(value, "ActivityRecord");
+  if (Object.keys(object).some((key) => !["action", "bytes", "client_id", "client_kind", "client_label", "device_id", "direction", "entry_id", "error_code", "id", "occurred_at", "offset", "operation_id", "path", "size", "status", "upload_id", "version_id"].includes(key))) {
+    throw new Error("ActivityRecord contains unknown fields");
+  }
+  return {
+    action: expect_string(object.action, "ActivityRecord.action"),
+    bytes: object.bytes === undefined ? undefined : expect_string(object.bytes, "ActivityRecord.bytes"),
+    client_id: object.client_id === undefined ? undefined : expect_string(object.client_id, "ActivityRecord.client_id"),
+    client_kind: expect_string(object.client_kind, "ActivityRecord.client_kind"),
+    client_label: expect_string(object.client_label, "ActivityRecord.client_label"),
+    device_id: object.device_id === undefined ? undefined : expect_string(object.device_id, "ActivityRecord.device_id"),
+    direction: expect_string(object.direction, "ActivityRecord.direction"),
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "ActivityRecord.entry_id"),
+    error_code: object.error_code === undefined ? undefined : expect_string(object.error_code, "ActivityRecord.error_code"),
+    id: expect_string(object.id, "ActivityRecord.id"),
+    occurred_at: expect_string(object.occurred_at, "ActivityRecord.occurred_at"),
+    offset: object.offset === undefined ? undefined : expect_string(object.offset, "ActivityRecord.offset"),
+    operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "ActivityRecord.operation_id"),
+    path: object.path === undefined ? undefined : expect_string(object.path, "ActivityRecord.path"),
+    size: object.size === undefined ? undefined : expect_string(object.size, "ActivityRecord.size"),
+    status: expect_string(object.status, "ActivityRecord.status"),
+    upload_id: object.upload_id === undefined ? undefined : expect_string(object.upload_id, "ActivityRecord.upload_id"),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "ActivityRecord.version_id"),
+  };
+}
+
 /** 固定源内容的完整性，不能代表客户端目标已持久导出。 */
 export type BackupIntegrity = "unverified" | "verified" | "incomplete";
 

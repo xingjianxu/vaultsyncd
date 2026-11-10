@@ -166,6 +166,43 @@ pub async fn submit(
         };
     }
 
+    // 认证归属先于发布持久化；恢复完成仍使用首次受理客户端，而不是恢复进程。
+    let capture = async {
+        let mut tx = context
+            .auth
+            .database()
+            .begin_write()
+            .await
+            .map_err(|error| error.to_string())?;
+        let matched = vaultsyncd_server_store::activity::bind_operation(
+            &mut tx,
+            caller.principal.user_id,
+            caller.principal.session_id,
+            &key,
+            &digest,
+            if matches!(
+                request.kind,
+                OperationKind::Create | OperationKind::PutContent
+            ) {
+                request.upload
+            } else {
+                None
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        tx.commit().await.map_err(|error| error.to_string())?;
+        Ok::<bool, String>(matched)
+    }
+    .await;
+    if matches!(capture, Ok(false)) {
+        return failure_response(&caller.request_id, &OperationFailure::OpIdReused, vault_id);
+    }
+    if let Err(error) = capture {
+        warn!(request_id=%caller.request_id,error=%error,"持久化文件活动归属失败");
+        return internal_error(&caller.request_id, "记录同步请求失败", Some(vault_id));
+    }
+
     // 新命令：put 走 executor 的发布链路，其余命令走 commands/restore_ops/conflict_ops；两者都是
     // 先登记 pending、再由执行器写终态，不写状态就当没受理。
     let at = match crate::executor::server_now() {

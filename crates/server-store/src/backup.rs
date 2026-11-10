@@ -116,6 +116,8 @@ pub fn online_backup(source: &Path, destination: &Path) -> io::Result<FrozenData
         "tombstones",
         "changes",
         "operations",
+        "file_activity",
+        "operation_activity_sources",
     ] {
         let count: i64 = src
             .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
@@ -222,6 +224,8 @@ pub fn verify_database(
             "tombstones",
             "changes",
             "operations",
+            "file_activity",
+            "operation_activity_sources",
         ]
         .contains(&table.as_str())
         {
@@ -500,6 +504,45 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
+        let key = crate::operations::OperationKey {
+            vault,
+            device: crate::test_support::device(8),
+            op: crate::test_support::op(9),
+        };
+        let digest = crate::operations::request_digest(&[("kind", b"put")]).unwrap();
+        crate::activity::bind_operation(
+            &mut tx,
+            owner,
+            crate::test_support::session(5),
+            &key,
+            &digest,
+            None,
+        )
+        .await
+        .unwrap();
+        let client = crate::activity::client(&mut tx, owner, crate::test_support::session(5))
+            .await
+            .unwrap();
+        crate::activity::record(
+            &mut tx,
+            &crate::activity::Transfer {
+                vault,
+                at: at(10),
+                client: &client,
+                action: "download",
+                status: "served",
+                entry: None,
+                version: None,
+                path: Some("文档.txt"),
+                size: Some(4),
+                bytes: Some(4),
+                offset: Some(0),
+                upload: None,
+                error: None,
+            },
+        )
+        .await
+        .unwrap();
         crate::changes::append_change(
             &mut tx,
             owner,
@@ -541,6 +584,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(history, ("备份设备".into(), None, Some("192.0.2.5".into())));
+        let activity: (String, String, i64) = copied
+            .query_row(
+                "SELECT client_label,path,bytes FROM file_activity",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(activity, ("备份设备".into(), "文档.txt".into(), 4));
+        assert_eq!(
+            copied
+                .query_row(
+                    "SELECT count(*) FROM operation_activity_sources",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(frozen.table_counts["file_activity"], "1");
+        assert_eq!(frozen.table_counts["operation_activity_sources"], "1");
         let original: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(db.pool())
             .await

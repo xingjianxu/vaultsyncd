@@ -426,6 +426,10 @@ pub async fn commit_operation(
         });
     }
 
+    crate::activity::committed(tx, key, events_json)
+        .await
+        .map_err(OperationError::Db)?;
+
     Ok(CommittedOperation {
         key: *key,
         batch,

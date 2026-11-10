@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 2;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 7;
+export const PROTOCOL_MINOR = 8;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -60,6 +60,70 @@ function expect_number(value: unknown, what: string): number {
     throw new Error(`期望 ${what} 是整数`);
   }
   return value;
+}
+
+/** 服务端观察到的同步与传输事实；served 仅证明服务端提供内容，不证明客户端收到、校验或应用。时间为服务端UTC秒，方向相对于客户端。 */
+export interface ActivityRecord {
+  /** upload_finalize、sync_commit 或 download。 */
+  action: string;
+  /** 本次提供的内容长度（字节）；不代表客户端已接收。 */
+  bytes?: string;
+  /** 认证连接身份。 */
+  client_id?: string;
+  /** 当时接入类型。 */
+  client_kind: string;
+  /** 当时客户端名称。 */
+  client_label: string;
+  /** 操作携带的设备身份。 */
+  device_id?: string;
+  /** upload 或 download，相对于客户端。 */
+  direction: string;
+  /** 条目身份。 */
+  entry_id?: string;
+  /** 失败原因码。 */
+  error_code?: string;
+  /** 递增记录ID，规范正十进制。 */
+  id: string;
+  /** 服务端观察时间，UTC秒。 */
+  occurred_at: string;
+  /** 下载区间起点（字节）。 */
+  offset?: string;
+  /** 同步操作身份。 */
+  operation_id?: string;
+  /** 事件时文件相对路径；未提交内容可能没有路径。 */
+  path?: string;
+  /** 完整内容长度（字节）。 */
+  size?: string;
+  /** ready、committed、served 或 failed；不得把 ready/served 当同步完成。 */
+  status: string;
+  /** 上传会话身份。 */
+  upload_id?: string;
+  /** 固定版本身份。 */
+  version_id?: string;
+}
+
+export function decodeActivityRecord(value: unknown): ActivityRecord {
+  const object = expect_object(value, "ActivityRecord");
+  return {
+    action: expect_string(object.action, "ActivityRecord.action"),
+    bytes: object.bytes === undefined ? undefined : expect_string(object.bytes, "ActivityRecord.bytes"),
+    client_id: object.client_id === undefined ? undefined : expect_string(object.client_id, "ActivityRecord.client_id"),
+    client_kind: expect_string(object.client_kind, "ActivityRecord.client_kind"),
+    client_label: expect_string(object.client_label, "ActivityRecord.client_label"),
+    device_id: object.device_id === undefined ? undefined : expect_string(object.device_id, "ActivityRecord.device_id"),
+    direction: expect_string(object.direction, "ActivityRecord.direction"),
+    entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "ActivityRecord.entry_id"),
+    error_code: object.error_code === undefined ? undefined : expect_string(object.error_code, "ActivityRecord.error_code"),
+    id: expect_string(object.id, "ActivityRecord.id"),
+    occurred_at: expect_string(object.occurred_at, "ActivityRecord.occurred_at"),
+    offset: object.offset === undefined ? undefined : expect_string(object.offset, "ActivityRecord.offset"),
+    operation_id: object.operation_id === undefined ? undefined : expect_string(object.operation_id, "ActivityRecord.operation_id"),
+    path: object.path === undefined ? undefined : expect_string(object.path, "ActivityRecord.path"),
+    size: object.size === undefined ? undefined : expect_string(object.size, "ActivityRecord.size"),
+    status: expect_string(object.status, "ActivityRecord.status"),
+    upload_id: object.upload_id === undefined ? undefined : expect_string(object.upload_id, "ActivityRecord.upload_id"),
+    version_id: object.version_id === undefined ? undefined : expect_string(object.version_id, "ActivityRecord.version_id"),
+  };
 }
 
 /** 持久 Binding 配置与控制事实，包括解绑记录。 */
@@ -174,9 +238,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules" | "list_activity";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -197,10 +261,12 @@ export interface CommandParameters {
   ca_file?: string;
   /** 专属且与所有同步根/状态目录分离的缓存。 */
   cache_path?: string;
-  /** 历史或回收站分页的 after 身份。 */
+  /** 历史/回收站/文件分页的 after 身份；list_activity 为规范正十进制 before 记录ID。 */
   cursor?: string;
   /** 新的恢复导出目录；不可覆盖。 */
   destination?: string;
+  /** list_activity 的方向筛选，仅 upload 或 download；相对于客户端。 */
+  direction?: string;
   /** 条目身份，不接受调用方自选相对文件路径。 */
   entry_id?: string;
   /** 用户显式选定的本机绝对目录。 */
@@ -235,7 +301,7 @@ export interface CommandParameters {
 
 export function decodeCommandParameters(value: unknown): CommandParameters {
   const object = expect_object(value, "CommandParameters");
-  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "entry_id", "local_path", "mode", "notification_generation", "notification_key", "operation_id", "password", "rules", "rules_version", "search", "server_id", "server_url", "username", "vault_id", "version_id"].includes(key))) {
+  if (Object.keys(object).some((key) => !["after_version", "base_revision", "binding_id", "ca_file", "cache_path", "cursor", "destination", "direction", "entry_id", "local_path", "mode", "notification_generation", "notification_key", "operation_id", "password", "rules", "rules_version", "search", "server_id", "server_url", "username", "vault_id", "version_id"].includes(key))) {
     throw new Error("CommandParameters contains unknown fields");
   }
   return {
@@ -246,6 +312,7 @@ export function decodeCommandParameters(value: unknown): CommandParameters {
     cache_path: object.cache_path === undefined ? undefined : expect_string(object.cache_path, "CommandParameters.cache_path"),
     cursor: object.cursor === undefined ? undefined : expect_string(object.cursor, "CommandParameters.cursor"),
     destination: object.destination === undefined ? undefined : expect_string(object.destination, "CommandParameters.destination"),
+    direction: object.direction === undefined ? undefined : expect_string(object.direction, "CommandParameters.direction"),
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "CommandParameters.entry_id"),
     local_path: object.local_path === undefined ? undefined : expect_string(object.local_path, "CommandParameters.local_path"),
     mode: object.mode === undefined ? undefined : expect_string(object.mode, "CommandParameters.mode"),
@@ -409,6 +476,8 @@ export function decodeLocalIpcErrorCode(value: unknown): LocalIpcErrorCode {
 
 /** 每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。 */
 export interface ManagementResult {
+  /** 所选绑定授权Vault的所有客户端服务端记录当前页。 */
+  activity?: Array<ActivityRecord>;
   /** 持久绑定列表。 */
   bindings?: Array<BindingInfo>;
   /** 连接事实。 */
@@ -423,7 +492,7 @@ export interface ManagementResult {
   items?: Array<RemoteItem>;
   /** 模式任务仍需真实核对/补齐的条目数。 */
   mode_remaining?: string;
-  /** 历史或回收站清单下一页游标。 */
+  /** 文件/历史/回收站/同步与传输记录下一页游标；list_activity 为 before 记录ID。 */
   next_cursor?: string;
   /** 问题生命周期与投递事实 */
   notices?: Array<Notice>;
@@ -448,6 +517,7 @@ export interface ManagementResult {
 export function decodeManagementResult(value: unknown): ManagementResult {
   const object = expect_object(value, "ManagementResult");
   return {
+    activity: object.activity === undefined ? undefined : expect_array(object.activity, "ManagementResult.activity").map((item) => decodeActivityRecord(item)),
     bindings: object.bindings === undefined ? undefined : expect_array(object.bindings, "ManagementResult.bindings").map((item) => decodeBindingInfo(item)),
     connection: object.connection === undefined ? undefined : decodeConnectionInfo(object.connection),
     exported_files: object.exported_files === undefined ? undefined : expect_string(object.exported_files, "ManagementResult.exported_files"),

@@ -29,6 +29,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         ("notification_key", &p.notification_key),
         ("notification_generation", &p.notification_generation),
         ("cursor", &p.cursor),
+        ("direction", &p.direction),
         ("search", &p.search),
     ];
     let (required, optional): (&[&str], &[&str]) = match command.name {
@@ -36,6 +37,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         C::PrepareMaintenance => (&["destination"], &[]),
         C::SubscribeStatus => (&[], &["after_version"]),
         C::ListFiles => (&["binding_id"], &["cursor"]),
+        C::ListActivity => (&["binding_id"], &["cursor", "direction"]),
         C::ClaimNotification => (&["notification_key", "notification_generation"], &[]),
         C::CreateBinding => (
             &["binding_id", "vault_id", "local_path", "cache_path", "mode"],
@@ -73,7 +75,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         if (value.is_empty() && name != "rules") || value.len() > 4096 || value.contains('\0') {
             return Err(invalid());
         }
-        if (name.ends_with("_id") || name == "cursor")
+        if (name.ends_with("_id") || name == "cursor" && command.name != C::ListActivity)
             && (value.len() != 32
                 || !value
                     .bytes()
@@ -81,6 +83,22 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         {
             return Err(invalid());
         }
+    }
+    if command.name == C::ListActivity
+        && p.cursor.as_deref().is_some_and(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .is_none_or(|number| number <= 0 || number.to_string() != value)
+        })
+    {
+        return Err(invalid());
+    }
+    if p.direction
+        .as_deref()
+        .is_some_and(|direction| !matches!(direction, "upload" | "download"))
+    {
+        return Err(invalid());
     }
     if p.mode
         .as_deref()

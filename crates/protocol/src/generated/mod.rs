@@ -29,6 +29,82 @@ pub struct AccountInfo {
     pub user_id: String,
 }
 
+/// 按记录身份倒序的一页活动，最多50条。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityPage {
+    /// 本页活动
+    pub items: Vec<ActivityRecord>,
+    /// 下一页before游标，末页缺省
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// 启用记录后的文件同步与传输证据，不代表客户端下载完成。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityRecord {
+    /// upload_finalize或sync_commit或download
+    pub action: String,
+    /// 本次内容字节数
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<String>,
+    /// 稳定登录连接身份
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// 登录入口client或browser或unknown
+    pub client_kind: String,
+    /// 客户端登录标签快照
+    pub client_label: String,
+    /// 操作声明的设备身份，不代表认证设备
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// upload或download，按客户端方向
+    pub direction: String,
+    /// 条目身份
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    /// 失败分类
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// 记录身份，正十进制文本
+    pub id: String,
+    /// 观测UTC秒
+    pub occurred_at: String,
+    /// 本次下载起始偏移
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<String>,
+    /// 幂等操作身份
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// 事件发生时相对路径快照
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// 完整文件字节数
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// ready或committed或served或failed
+    pub status: String,
+    /// 上传会话身份
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_id: Option<String>,
+    /// 固定内容版本
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
+}
+
 /// 固定源内容的完整性，不能代表客户端目标已持久导出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum BackupIntegrity {

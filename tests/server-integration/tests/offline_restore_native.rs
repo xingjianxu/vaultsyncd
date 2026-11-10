@@ -215,6 +215,18 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(!trash.is_null(), "real observer must have collected trash");
+    let (code, activity) = source
+        .http
+        .json(
+            "GET",
+            &format!("/v1/vaults/{vault}/activity"),
+            Some(&token),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(code, 200);
+    assert_eq!(activity["items"].as_array().unwrap().len(), 2);
     let id = "89030000000000000000000000000003";
     let prepared = backup(&lab, &["prepare", "--id", id]).await;
     let archive = volume.join("restore.vsbk");
@@ -289,6 +301,21 @@ async fn real_empty_restore_preserves_bytes_history_and_isolates_old_epoch() {
         401
     );
     let fresh = login(&running.http).await.unwrap();
+    let (code, restored_activity) = running
+        .http
+        .json(
+            "GET",
+            &format!("/v1/vaults/{vault}/activity"),
+            Some(&fresh),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(code, 200);
+    assert_eq!(
+        restored_activity, activity,
+        "恢复后保留原客户端、路径、时间和提交/传输阶段，不将原会话失效当账本丢失"
+    );
     let epoch = common::epoch_of(&running.http, &fresh, &vault).await;
     assert_eq!(restored["epoch"], epoch);
     let (code, body) = common::put_operation(&running.http, &fresh, &vault, &args)

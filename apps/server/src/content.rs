@@ -153,7 +153,32 @@ pub async fn finalize(
             );
             (StatusCode::OK, Json(to_wire(&finalized))).into_response()
         }
-        Err(failure) => content_failure_response(&caller.request_id, &failure, vault_id),
+        Err(failure) => {
+            if crate::activity::transfer(
+                context.auth.database(),
+                &caller,
+                vault_id,
+                "upload_finalize",
+                "failed",
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(upload_id),
+                Some(failure_code(&failure)),
+            )
+            .await
+            .is_err()
+            {
+                return crate::uploads::internal_error(
+                    &caller.request_id,
+                    "记录上传失败",
+                    Some(vault_id.to_string()),
+                );
+            }
+            content_failure_response(&caller.request_id, &failure, vault_id)
+        }
     }
 }
 
@@ -215,7 +240,32 @@ pub async fn download(
     .await
     {
         Ok(handle) => handle,
-        Err(failure) => return content_failure_response(&caller.request_id, &failure, vault_id),
+        Err(failure) => {
+            if crate::activity::transfer(
+                context.auth.database(),
+                &caller,
+                vault_id,
+                "download",
+                "failed",
+                Some(&entry),
+                Some(&version),
+                None,
+                None,
+                None,
+                None,
+                Some(failure_code(&failure)),
+            )
+            .await
+            .is_err()
+            {
+                return crate::uploads::internal_error(
+                    &caller.request_id,
+                    "记录下载失败",
+                    Some(vault_id.to_string()),
+                );
+            }
+            return content_failure_response(&caller.request_id, &failure, vault_id);
+        }
     };
 
     crate::test_faults::checkpoint("download_open");
@@ -236,6 +286,29 @@ pub async fn download(
                 offset: bytes.offset,
                 length: bytes.data.len() as u64,
             };
+            if crate::activity::transfer(
+                context.auth.database(),
+                &caller,
+                vault_id,
+                "download",
+                "served",
+                Some(&entry),
+                Some(&version),
+                Some(bytes.content.size),
+                Some(slice.length),
+                Some(slice.offset),
+                None,
+                None,
+            )
+            .await
+            .is_err()
+            {
+                return crate::uploads::internal_error(
+                    &caller.request_id,
+                    "记录下载内容失败",
+                    Some(vault_id.to_string()),
+                );
+            }
             info!(
                 request_id = %caller.request_id,
                 entry_id = %entry_id,
@@ -252,7 +325,32 @@ pub async fn download(
                 &caller.request_id,
             )
         }
-        Err(failure) => content_failure_response(&caller.request_id, &failure, vault_id),
+        Err(failure) => {
+            if crate::activity::transfer(
+                context.auth.database(),
+                &caller,
+                vault_id,
+                "download",
+                "failed",
+                Some(&entry),
+                Some(&version),
+                None,
+                None,
+                None,
+                None,
+                Some(failure_code(&failure)),
+            )
+            .await
+            .is_err()
+            {
+                return crate::uploads::internal_error(
+                    &caller.request_id,
+                    "记录下载失败",
+                    Some(vault_id.to_string()),
+                );
+            }
+            content_failure_response(&caller.request_id, &failure, vault_id)
+        }
     }
 }
 
@@ -309,6 +407,32 @@ fn to_wire(finalized: &content::FinalizedContent) -> FinalizedContent {
             ReuseOutcome::ExistingVerified => ObjectReuse::ExistingVerified,
         },
         replayed: finalized.replayed,
+    }
+}
+
+/// 与HTTP错误相同的公开分类，账本不保存原始存储错误或内部路径。
+fn failure_code(failure: &ContentFailure) -> &'static str {
+    use vaultsyncd_server_core::api::uploads::UploadFailure;
+    match failure {
+        ContentFailure::Upload(failure) => match failure {
+            UploadFailure::DigestMismatch { .. } => "HASH_MISMATCH",
+            UploadFailure::PartConflict { .. } | UploadFailure::PartsClosed { .. } => {
+                "PART_CONFLICT"
+            }
+            UploadFailure::UnknownUpload => "UNSUPPORTED_ENTRY",
+            UploadFailure::OutOfScope => "ACCESS_DENIED",
+            UploadFailure::Storage { detail } if detail == "no_space" => "INSUFFICIENT_STORAGE",
+            UploadFailure::Storage { .. } | UploadFailure::MalformedSession => "NEEDS_RECOVERY",
+            _ => "INVALID_REQUEST",
+        },
+        ContentFailure::IncompleteUpload { .. }
+        | ContentFailure::RangeNotSatisfiable { .. }
+        | ContentFailure::InvalidRange { .. } => "INVALID_REQUEST",
+        ContentFailure::ContentMismatch { .. } => "HASH_MISMATCH",
+        ContentFailure::VersionGone | ContentFailure::EntryUnavailable => "VERSION_GONE",
+        ContentFailure::Publish(error) if error.is_no_space() => "INSUFFICIENT_STORAGE",
+        ContentFailure::Read { no_space: true, .. } => "INSUFFICIENT_STORAGE",
+        _ => "NEEDS_RECOVERY",
     }
 }
 

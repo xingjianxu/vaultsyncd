@@ -215,8 +215,39 @@
         "operations": {
           "type": "string",
           "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "file_activity": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "description": "schema20起的活动账本元数据计数"
+        },
+        "operation_activity_sources": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "description": "schema20起的活动账本元数据计数"
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "minimum": 20
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "database_contents": {
+            "required": [
+              "file_activity",
+              "operation_activity_sources"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

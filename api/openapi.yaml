@@ -111,6 +111,26 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/ErrorEnvelope"}
 
+  /v1/vaults/{vault}/activity:
+    get:
+      operationId: listActivity
+      summary: 查看文件同步与传输记录
+      description: 仅记录启用后的活动，按记录身份倒序每页最多50条；served表示服务端已读取并准备响应，不表示客户端已收到或应用。
+      parameters:
+        - {name: vault, in: path, required: true, schema: {type: string}}
+        - {name: before, in: query, required: false, schema: {type: string}}
+        - {name: direction, in: query, required: false, description: upload或download, schema: {type: string}}
+      responses:
+        "200":
+          description: 一页同步与传输记录
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ActivityPage"}
+        "400": {description: 无效游标或方向, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorEnvelope"}}}}
+        "401": {description: 会话失效, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorEnvelope"}}}}
+        "403": {description: Vault不在授权范围, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorEnvelope"}}}}
+        "503": {description: 存储不可用, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorEnvelope"}}}}
+
   /v1/auth/account:
     get:
       operationId: getAccount
@@ -2291,6 +2311,38 @@ components:
       description: 有效会话五分钟内（含300秒）有认证活动为recent（已连接），其余inactive（未连接）；unknown为会话已清理。
       enum: [recent, inactive, revoked, expired, unknown]
 
+    ActivityRecord:
+      description: 启用记录后的文件同步与传输证据，不代表客户端下载完成。
+      type: object
+      additionalProperties: false
+      required: [id, occurred_at, client_label, client_kind, direction, action, status]
+      properties:
+        id: {type: string, description: 记录身份，正十进制文本}
+        occurred_at: {type: string, description: 观测UTC秒}
+        client_label: {type: string, description: 客户端登录标签快照}
+        client_kind: {type: string, description: 登录入口client或browser或unknown}
+        direction: {type: string, description: upload或download，按客户端方向}
+        action: {type: string, description: upload_finalize或sync_commit或download}
+        status: {type: string, description: ready或committed或served或failed}
+        client_id: {type: string, description: 稳定登录连接身份}
+        device_id: {type: string, description: 操作声明的设备身份，不代表认证设备}
+        entry_id: {type: string, description: 条目身份}
+        version_id: {type: string, description: 固定内容版本}
+        path: {type: string, description: 事件发生时相对路径快照}
+        size: {type: string, description: 完整文件字节数}
+        bytes: {type: string, description: 本次内容字节数}
+        offset: {type: string, description: 本次下载起始偏移}
+        operation_id: {type: string, description: 幂等操作身份}
+        upload_id: {type: string, description: 上传会话身份}
+        error_code: {type: string, description: 失败分类}
+    ActivityPage:
+      description: 按记录身份倒序的一页活动，最多50条。
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, description: 本页活动, items: {$ref: "#/components/schemas/ActivityRecord"}}
+        next_cursor: {type: string, description: 下一页before游标，末页缺省}
     ClientConnection:
       type: object
       description: 当前账号一次登录的连接记录，不代表可信设备身份或同步状态。

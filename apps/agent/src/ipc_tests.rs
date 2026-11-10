@@ -198,6 +198,31 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
             LocalIpcErrorCode::UnsupportedVersion
         );
     }
+    request.ipc_version = version::supported();
+    request.ipc_version.minor = 7;
+    request.command.name = CommandName::ListActivity;
+    request.command.parameters = None;
+    assert_eq!(
+        endpoint
+            .request(&request)
+            .await
+            .unwrap()
+            .error
+            .unwrap()
+            .code,
+        LocalIpcErrorCode::UnsupportedVersion
+    );
+    request.ipc_version.minor = 8;
+    assert_eq!(
+        endpoint
+            .request(&request)
+            .await
+            .unwrap()
+            .error
+            .unwrap()
+            .code,
+        LocalIpcErrorCode::InvalidArgument
+    );
     server.shutdown().await.unwrap();
     db.pool().close().await;
     std::fs::remove_dir_all(path).unwrap();

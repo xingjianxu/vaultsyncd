@@ -535,7 +535,42 @@ impl DbUploads<'_> {
                 store_uploads::mark_upload_complete(&mut tx, self.owner, upload).await
             }
             Transition::Finalized => {
-                store_uploads::mark_upload_finalized(&mut tx, self.owner, upload).await
+                let record = store_uploads::upload_in_scope(&mut tx, self.owner, upload)
+                    .await
+                    .map_err(store_failure)?
+                    .ok_or(UploadFailure::UnknownUpload)?;
+                let client =
+                    vaultsyncd_server_store::activity::client(&mut tx, self.owner, self.session)
+                        .await
+                        .map_err(|error| UploadFailure::Storage {
+                            detail: error.to_string(),
+                        })?;
+                store_uploads::mark_upload_finalized(&mut tx, self.owner, upload)
+                    .await
+                    .map_err(store_failure)?;
+                vaultsyncd_server_store::activity::record(
+                    &mut tx,
+                    &vaultsyncd_server_store::activity::Transfer {
+                        vault: self.vault,
+                        at: server_now(),
+                        client: &client,
+                        action: "upload_finalize",
+                        status: "ready",
+                        entry: None,
+                        version: None,
+                        path: None,
+                        size: Some(record.expected_size),
+                        bytes: None,
+                        offset: None,
+                        upload: Some(upload),
+                        error: None,
+                    },
+                )
+                .await
+                .map_err(|error| UploadFailure::Storage {
+                    detail: error.to_string(),
+                })?;
+                Ok(record)
             }
             Transition::Aborted => store_uploads::abort_upload(&mut tx, self.owner, upload).await,
         };

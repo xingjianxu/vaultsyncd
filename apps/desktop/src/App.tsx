@@ -7,6 +7,7 @@ import { nativeAgent, type AgentClient } from "./services/agent";
 import { Connections } from "./features/connections/Connections";
 import { Files } from "./features/files/Files";
 import { History } from "./features/history/History";
+import { Activity } from "./features/activity/Activity";
 import { Problems } from "./features/problems/Problems";
 import { Bindings } from "./features/bindings/Bindings";
 import { useRoute } from "./route";
@@ -15,6 +16,7 @@ const items = [
   { path: "/bindings", label: "同步目录", icon: <Icon path="M3 7h6l2 2h10v11H3z M3 7V4h6l2 3" /> },
   { path: "/files", label: "文件与操作", icon: <Icon path="M3 7h6l2 2h10v11H3z M8 13h8 M8 16h5" /> },
   { path: "/history", label: "历史与回收站", icon: <Icon path="M3 11a9 9 0 1 1 2 7 M3 4v7h7 M12 7v5l3 2" /> },
+  { path: "/activity", label: "同步与传输记录", icon: <Icon path="M3 6h18 M3 12h18 M3 18h18 M7 3v6 M17 9v6 M7 15v6" /> },
   { path: "/problems", label: "问题与恢复", icon: <Icon path="M12 3 2 21h20z M12 9v5 M12 17v1" /> },
 ];
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
@@ -65,6 +67,7 @@ function AppView({ agent }: { agent: AgentClient }) {
     : path === "/bindings" ? <Bindings agent={agent} bindings={snapshot?.management?.bindings} states={snapshot?.bindings} read={connected} changed={refresh} run={run} busy={busy} />
     : path === "/files" ? <Files agent={agent} bindings={snapshot?.management?.bindings} changed={refresh} run={run} busy={busy} />
     : path === "/history" ? <History agent={agent} bindings={snapshot?.management?.bindings} changed={refresh} run={run} busy={busy} />
+    : path === "/activity" ? <Activity key={`${connected}:${snapshot?.management?.connection?.server_id}:${snapshot?.management?.connection?.server_url}:${snapshot?.management?.connection?.authenticated}`} agent={agent} bindings={snapshot?.management?.bindings} authenticated={connected && snapshot?.management?.connection?.authenticated === true} />
     : path === "/problems" ? <Problems agent={agent} current={snapshot?.management?.problems} notices={snapshot?.management?.notices} run={run} busy={busy} />
     : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
   </Stack></PageShell>;

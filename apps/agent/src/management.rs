@@ -499,6 +499,9 @@ pub(crate) async fn execute(
                     .to_string(),
             );
         }
+        C::ListActivity => {
+            return crate::management_activity::execute(db, config, client, command).await;
+        }
         C::ListHistory | C::ListTrash | C::RestoreEntry => {
             return crate::management_history::execute(db, config, client, command).await;
         }

@@ -116,6 +116,16 @@ pub(crate) fn start(
                         false,
                     ));
                 }
+                if request.command.name == CommandName::ListActivity
+                    && request.ipc_version.minor < 8
+                {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "同步与传输记录需要本机 IPC 2.8",
+                        false,
+                    ));
+                }
                 if let Err(error) = vaultsyncd_local_ipc::commands::validate(&request.command) {
                     return Ok(Response::error(request.request_id, error));
                 }

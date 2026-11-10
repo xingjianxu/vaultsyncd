@@ -248,6 +248,43 @@ async fn real_export_integrity_authorization_and_release_restart() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    // S172：真实内容上传/提交/下载形成非空账本，备份不得只保留空表结构。
+    let entries = common::snapshot(&s.http, &token, &vault).await;
+    let note = common::entry_named(&entries, "note");
+    let epoch = common::epoch_of(&s.http, &token, &vault).await;
+    let (upload, _, _) = common::upload(&s.http, &token, &vault, b"S172 backup activity", 8)
+        .await
+        .unwrap();
+    let (code, put) = common::put_operation(
+        &s.http,
+        &token,
+        &vault,
+        &common::PutArgs {
+            op_id: "17210000000000000000000000000001",
+            device_id: "17220000000000000000000000000002",
+            epoch: &epoch,
+            entry: note["entry_id"].as_str().unwrap(),
+            revision: note["revision"].as_str().unwrap(),
+            upload: &upload,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(code, 200, "{put}");
+    let (code, bytes, _) = s
+        .http
+        .download(
+            &format!(
+                "/v1/vaults/{vault}/entries/{}/versions/{}/content",
+                note["entry_id"].as_str().unwrap(),
+                put["version_id"].as_str().unwrap()
+            ),
+            &token,
+        )
+        .await
+        .unwrap();
+    assert_eq!(code, 200);
+    assert_eq!(bytes, b"S172 backup activity");
     let id = "88010000000000000000000000000001";
     let prepared = cli(&lab, &["prepare", "--id", id], true, true).await;
     assert_eq!(prepared["phase"], "ready");
@@ -286,6 +323,12 @@ async fn real_export_integrity_authorization_and_release_restart() {
             >= 1
     );
     assert_eq!(manifest["sessions"], "invalidated");
+    assert_eq!(manifest["schema_version"], 20);
+    assert_eq!(manifest["database_contents"]["file_activity"], "3");
+    assert_eq!(
+        manifest["database_contents"]["operation_activity_sources"],
+        "1"
+    );
     assert_eq!(manifest["vaults"][0]["vault_id"], vault);
     let objects = source_objects(&lab, &manifest);
     assert!(objects.len() >= 4);
@@ -367,6 +410,49 @@ async fn real_export_integrity_authorization_and_release_restart() {
         &unpack,
     );
     assert_eq!(index.items.len(), objects.len() + 2);
+    {
+        use sqlx::Connection;
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(unpack.join("database.sqlite"))
+            .read_only(true);
+        let mut copied = sqlx::SqliteConnection::connect_with(&options)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sessions")
+                .fetch_one(&mut copied)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM file_activity WHERE client_id IS NOT NULL"
+            )
+            .fetch_one(&mut copied)
+            .await
+            .unwrap(),
+            3
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM operation_activity_sources WHERE client_id IS NOT NULL"
+            )
+            .fetch_one(&mut copied)
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT path FROM file_activity WHERE status='committed'"
+            )
+            .fetch_one(&mut copied)
+            .await
+            .unwrap(),
+            "note"
+        );
+    }
     // 真实CLI进程中断：重新verify先撤销旧verified，SIGKILL后可再verify。
     let mut verifier = Command::new(std::env::var_os("VAULTSYNCD_ADMIN_BIN").unwrap())
         .args(["backup", "verify", archive.to_str().unwrap(), "--json"])
