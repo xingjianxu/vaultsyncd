@@ -9,11 +9,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from urllib.parse import quote
 
 VAULT = Path(__file__).resolve().parents[1]
 TARGETS = {"windows-x64": "x86_64-pc-windows-msvc"}
+
+# 新建草稿后 GitHub 的 Release 列表会出现短暂延迟；先按退避重查，再提示人工恢复。
+CREATE_LOOKUP_ATTEMPTS = 10
+CREATE_LOOKUP_DELAY = 1.0
 
 
 def run(*args, **kwargs):
@@ -147,6 +152,15 @@ class GitHub:
             raise ValueError("同一标签存在多个 Release，需人工检查")
         return matches[0] if matches else None
 
+    def await_release(self, tag, attempts=CREATE_LOOKUP_ATTEMPTS, delay=CREATE_LOOKUP_DELAY):
+        for attempt in range(attempts):
+            found = self.find_release(tag)
+            if found is not None:
+                return found
+            if attempt + 1 < attempts:
+                time.sleep(delay)
+        return None
+
     def tag(self, tag, commit):
         ref = self.api(f"git/ref/tags/{quote(tag, safe='')}", missing=True)
         if ref is None:
@@ -218,7 +232,7 @@ def publish(api, manifest, assets, stage, args):
         if not args.stable:
             command.append("--prerelease")
         api.release(*command)
-        existing = api.find_release(tag)
+        existing = api.await_release(tag)
         if existing is None:
             raise ValueError("未查询到新建草稿；请检查远端后用 --resume 恢复")
     endpoint = f"releases/{existing['id']}"

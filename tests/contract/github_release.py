@@ -390,6 +390,35 @@ class GitHubReleaseTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in query.call_args_list],
                          ["releases?per_page=100&page=1", "releases?per_page=100&page=2"])
 
+    def test_new_draft_is_retried_while_release_listing_is_eventually_consistent(self):
+        listings = []
+        original = self.remote.api
+
+        def api(suffix, missing=False):
+            if suffix.startswith("releases?per_page="):
+                listings.append(suffix)
+                if len(listings) < 3:
+                    return []
+            return original(suffix, missing)
+
+        with patch.object(self.remote, "api", side_effect=api), patch.object(RELEASE.time, "sleep") as sleep:
+            self.publish()
+        # 第一次查询来自创建前检查；创建后前一次列表为空，靠退避重查拿到草稿。
+        self.assertEqual(len(listings), 3)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertEqual([call[0] for call in self.remote.calls], ["create", "upload", "edit"])
+
+    def test_missing_draft_after_create_requires_resume_and_keeps_no_upload(self):
+        original = self.remote.api
+
+        def api(suffix, missing=False):
+            return [] if suffix.startswith("releases?per_page=") else original(suffix, missing)
+
+        with patch.object(self.remote, "api", side_effect=api), patch.object(RELEASE.time, "sleep"):
+            with self.assertRaisesRegex(ValueError, "未查询到新建草稿"):
+                self.publish()
+        self.assertEqual([call[0] for call in self.remote.calls], ["create"])
+
     def test_recomputed_outer_manifest_does_not_hide_stale_windows_receipt(self):
         self.write("windows-x64/vaultsyncd-0.2.0-x64-unsigned.zip", b"changed archive")
         self.save()
