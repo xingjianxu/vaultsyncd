@@ -220,7 +220,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
-| S184 | done | 实现`82dcddd`；新增`tools/build.sh`（无版本号、输出根`dist/`便携程序目录），`release.sh`发布链未改；任务树/分支清理见后续记录 | [S184](tasks/S184.md) |
+| S184 | done | 实现`82dcddd`、交接`0ff8684`已ff合master；新增`tools/build.sh`（无版本号、输出根`dist/`便携程序目录），`release.sh`发布链未改；任务树/分支已清理 | [S184](tasks/S184.md) |
 | S173 | done | 版本`d2f9e26`、工具修复`532ec19`已ff合master并推送；v0.1.3预发布上传、远端摘要核对与两任务树/分支清理完成 | [S173](tasks/S173.md) |
 | S163 | done | 510d70d已ff合master；temp/lab迁入dev、97 GC roots/清单/健康/34单测及真实卷通过，任务树/分支已清理 | [S163](tasks/S163.md) |
 | S162 | done | 实现7d5cb39、整合0ab9184/6891501、修复f5c4a24；验收交接e1fb945已ff合master，原生ZIP/安装版及宿主门通过；任务树/分支已清理 | [S162](tasks/S162.md) |
