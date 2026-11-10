@@ -58,9 +58,8 @@ pub(crate) fn trial_pending(state: &Path) -> std::io::Result<bool> {
     };
     Ok(!committed)
 }
-/// A barrier is never silently removed by normal startup, including the login launcher. It is
-/// checked before ZIP ownership so an interrupted transaction is reported as such and is never
-/// resolved by adopting the files a half-applied update left behind.
+/// A barrier is never silently removed by normal startup, including the login launcher.
+/// Program metadata and legacy owner files do not admit or reject ordinary startup.
 pub fn admit_startup(config: &AgentConfig) -> std::result::Result<(), PortError> {
     let profile = config
         .state_dir
@@ -74,7 +73,7 @@ pub fn admit_startup(config: &AgentConfig) -> std::result::Result<(), PortError>
             ));
         }
     }
-    crate::portable::admit(config).map_err(error)
+    Ok(())
 }
 /// Admit only the installed trial executable while its same-session update controller is alive.
 /// Ordinary launchers retain the unconditional maintenance barrier above.
@@ -120,9 +119,9 @@ pub(crate) fn admit_update_trial(config: &AgentConfig) -> std::result::Result<()
             return Err("update trial version mismatch".into());
         }
         if plan.zip {
-            crate::portable::maintenance_owner(program)?;
+            crate::portable::verify_zip(program)?;
         } else {
-            crate::portable::installed_owner(program)?;
+            crate::portable::require_installed_target(program)?;
         }
         // Validate the commit receipt too. An uncommitted trial stays read-only and paused.
         trial_pending(&config.state_dir)?;
@@ -182,9 +181,10 @@ async fn rollback(config: &AgentConfig, plan: &Plan) -> Result<()> {
             }
         }
     }
-    if plan.zip {
-        crate::portable::replace_owner(&fs::read(plan.backup.join("zip-owner.json"))?)?;
-    } else if plan.action == "auto-upgrade"
+    // Older ZIP transactions may retain an owner backup. It is inert compatibility evidence:
+    // never restore or rewrite it, and never require it to recover the program/state snapshot.
+    if !plan.zip
+        && plan.action == "auto-upgrade"
         && plan.backup.join("program.inventory.json").try_exists()?
     {
         let old: serde_json::Value =
@@ -248,12 +248,7 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
         return Err("unknown maintenance action".into());
     }
     let mut config = installed_config()?;
-    let zip = PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA absent")?)
-        .join("vaultsyncd/zip-owner.json")
-        .try_exists()?;
-    if zip && !matches!(action, "auto-upgrade" | "recover") {
-        return Err("ZIP_PROFILE: installed maintenance cannot adopt ZIP state; keep original ZIP and use its safe Stop entry. ZIP upgrades are not supported by this release".into());
-    }
+    let zip = !crate::portable::is_installed(program)?;
     let program_root = VaultHandle::open(program)?;
     let state = VaultHandle::open(&config.state_dir)?;
     if program_root.overlaps(&state) {
@@ -330,14 +325,6 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
             crate::portable::verify_zip(candidate)?;
         }
     }
-    let owner = if zip {
-        Some(crate::portable::maintenance_owner(program)?)
-    } else {
-        if action == "auto-upgrade" {
-            crate::portable::installed_owner(program)?;
-        }
-        None
-    };
     let endpoint = Endpoint::current("vaultsyncd-agent")?;
     // Status 1.0 is the only negotiation request sent before learning the server's minor.
     let online = match endpoint.connect().await {
@@ -390,15 +377,6 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
         paused,
         zip,
     };
-    if let Some(owner) = owner {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(plan.backup.join("zip-owner.json"))?;
-        use std::io::Write;
-        file.write_all(&owner)?;
-        file.sync_all()?;
-    }
     storage::json(&plan.backup.join("plan.json"), &plan)?;
     storage::json(&barrier, &plan)?;
     if let Some(status) = online {
@@ -507,7 +485,7 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
         db.pool().close().await;work?;
         if action=="auto-upgrade" { storage::json(&plan.backup.join("trial-plan.json"), &plan)?; }
         if matches!(action,"upgrade"|"auto-upgrade") {
-            if zip { storage::replace_zip(candidate,program)?; crate::portable::upgrade_owner(program)?; }
+            if zip { storage::replace_zip(candidate,program)?; }
             else { storage::replace_program(candidate,program)?; }
         }
         storage::json(&plan.backup.join(if action=="auto-upgrade"{"prepared.json"}else{"complete.json"}),&serde_json::json!({"action":action,"program":program,"user_data":"preserved","cloud_only":if action=="uninstall-program"{"placeholders retained; unavailable until provider reinstall; not complete files"}else{"no placeholder deletion"},"recovery":plan.backup.join("recovery")}))?;
@@ -619,6 +597,55 @@ pub(crate) async fn recover_auto(program: &Path, backup: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn legacy_zip_rollback_ignores_missing_or_corrupt_owner_backups() {
+        let base = std::env::temp_dir().join(format!(
+            "s185-legacy-rollback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&base).unwrap();
+        let config_path = crate::user_session::prepare(&base).unwrap();
+        let config = AgentConfig::load(&config_path).unwrap();
+        let owner = base.join("vaultsyncd/zip-owner.json");
+        fs::write(&owner, b"legacy owner must remain untouched").unwrap();
+        let backup = base.join("backup");
+        fs::create_dir(&backup).unwrap();
+        fs::write(
+            config.state_dir.join("unconfirmed.bin"),
+            b"retained unconfirmed content",
+        )
+        .unwrap();
+        storage::backup_state(&config.state_dir, &backup.join("state")).unwrap();
+        let plan = Plan {
+            program: base.join("arbitrary program directory"),
+            backup: backup.clone(),
+            action: "auto-upgrade".into(),
+            paused: vec![],
+            zip: true,
+        };
+        for legacy_backup in [None, Some(b"corrupt historical owner bytes".as_slice())] {
+            if let Some(bytes) = legacy_backup {
+                fs::write(backup.join("zip-owner.json"), bytes).unwrap();
+            }
+            fs::write(config.state_dir.join("unconfirmed.bin"), b"trial state").unwrap();
+            storage::json(&marker(&config).unwrap(), &plan).unwrap();
+            rollback(&config, &plan).await.unwrap();
+            assert_eq!(
+                fs::read(config.state_dir.join("unconfirmed.bin")).unwrap(),
+                b"retained unconfirmed content"
+            );
+            assert_eq!(
+                fs::read(&owner).unwrap(),
+                b"legacy owner must remain untouched"
+            );
+            assert!(!marker(&config).unwrap().exists());
+        }
+        fs::remove_dir_all(base).unwrap();
+    }
     #[test]
     fn trial_gate_requires_a_complete_valid_health_receipt() {
         let base = std::env::temp_dir().join(format!(

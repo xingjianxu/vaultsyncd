@@ -2759,5 +2759,16 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 ## S184 — 开发构建到 dist/（不改变发布链）
 
 - `./tools/build.sh` 供本机与客体测试：不接受参数，自动执行 `nix develop .#windows --command bash tools/build.sh`；在 `.#windows` 内用 `pnpm install --frozen-lockfile --offline` + `pnpm --filter @vaultsyncd/desktop build` 重建前端，再以静态 CRT（`-C target-feature=+crt-static -C link-arg=/ignore:4099`）交叉编译 `x86_64-pc-windows-msvc` release 的 `vaultsyncd-agent`/`vaultsyncd-cli`/`vaultsyncd-desktop` 全部 bin。参数错误退出 2，缺产物或缺文件退出 1，成功 0。
-- 输出固定为仓库 `dist/`：五个 EXE、`installed-files.json`（四 EXE + `source`）、`zip-files.json`、`UNSIGNED-TEST.txt`、`Start`/`Stop vaultsyncd.cmd`、`README-ZIP.txt`、`build-info.txt`。每次先整目录清空，无版本号子目录。清单由 `packaging/windows/zip/build.py` 生成并逐文件复核，`source` 在两份清单间相同，`signature_status=unsigned-test`；`source` 在发布收据字段之外多记 `dirty`，仅描述开发构建，不是发布身份。
-- 不写 `receipt.json`、`SHA256SUMS`、`release-manifest.json`，不要求干净提交，也不参与 `cargo xtask release assemble/verify`。发布与 GitHub Release 仍只消费 `tools/release.sh`/`cargo xtask release build` 的收据目录；因此开发构建不能当发布候选，也不改变 ZIP 所有权、维护门禁与原生验收要求。
+- 输出固定为仓库 `dist/`：四个 EXE（S185 删除 ZIP 专用 EXE）、`installed-files.json`（四 EXE + `source`）、`zip-files.json`、`UNSIGNED-TEST.txt`、`Start`/`Stop vaultsyncd.cmd`、`README-ZIP.txt`、`build-info.txt`。每次先整目录清空，无版本号子目录。清单由 `packaging/windows/zip/build.py` 生成并逐文件复核，`source` 在两份清单间相同，`signature_status=unsigned-test`；`source` 在发布收据字段之外多记 `dirty`，仅描述开发构建，不是发布身份。
+- 不写 `receipt.json`、`SHA256SUMS`、`release-manifest.json`，不要求干净提交，也不参与 `cargo xtask release assemble/verify`。发布与 GitHub Release 仍只消费 `tools/release.sh`/`cargo xtask release build` 的收据目录；因此开发构建不能当发布候选；S185 已取消普通启动 ZIP 所有权门禁，维护事务与原生验收要求保持。
+
+## S185 — 任意目录直开与统一用户会话入口（ADR-032）
+
+- `vaultsyncd-zip.exe` bin 已删除，发布/开发打包与更新包集合均移除它。四 EXE + installed/unsigned + Start/Stop/README 为九项清单，连同 `zip-files.json` 共十文件；开发 dist 另有 build-info。`build.py <payload> <resources> <new-zip>` 不再接受单独 launcher。
+- `vaultsyncd-agent.exe --user-session start|stop|health` 接替脚本与自动化入口；无动作 `--user-session`、`--ensure-user-session` 保留既有用途。Start 确保真实健康 agent 后开桌面；health 返回真实 GetStatus；stop 同连接发 PrepareMaintenance、保全/导出/排空并等固定进程退出，最后确认 writer 锁。导出目录为 profile 下 `session-stop-<纳秒>-<pid>`，绑定继续保持 PAUSED，失败不强杀。
+- `portable::ensure_user_session` / `maintenance::admit_startup` 不读 ZIP/installed 清单、owner、程序来源/hash，不认领/重钉路径。固定 LOCALAPPDATA profile 与配置/身份沿用，旧 owner/采纳日志保持不动。`startup::ready` 与 session 健康复用允许不同程序目录。
+- `Endpoint::request_authenticated(&Request) -> io::Result<(Response,ServerProcess)>` 在发送请求前固定同一连接真实对端的进程句柄、校验 token 用户，返回经 wire 验证的响应；不比较 EXE 路径，不申请终止权限。`request_verified` / `maintenance_process` 对显式维护目标保持精确路径认证，未改变 pipe SID/session/ACL 或远端拒绝。
+- `Plan.zip` 为兼容旧事务继续保留，现根据真实安装注册目录识别而不读 owner；portable 路径不写安装注册版本。旧 owner 备份缺失/损坏不影响整套程序/状态恢复，也不重写 owner。旧 launcher 只在既有程序备份/恢复中兼容保存，新更新替换会移除它。普通启动仍保留未完成事务屏障、单 writer、schema/Vault/未确认内容保护。
+- 程序清单只用于发布/显式自动更新：`verify_program` / `verify_zip` 不再位于普通启动链；更新下载、候选归档安全与备份/恢复完整性仍验证。GUI 与后台来自不同目录时，托盘更新在联网和退出 GUI 前提示安全 Stop/重开目标目录，避免用 B 的目标去恢复 A 的进程。
+- 旧 v0.1.7 解包器实测拒绝新十文件包，无法靠新二进制修复已安装的更新器；首次新布局发行必须声明一次性手工迁移（旧版安全停止，手工下载完整新包后任意目录直开，状态保留）。本卡不发行/改写旧附件，不承诺旧托盘能直接升级。此后新客户端自动更新使用新集合。
+- 通知初始化不再读取程序清单，未保存设置时统一默认关闭，保留显式开关；WebView2 需求由实际 WebView 创建决定，不再另做 ZIP 专属注册表前置检查。无 wire/schema/同步语义或服务端产物变化。

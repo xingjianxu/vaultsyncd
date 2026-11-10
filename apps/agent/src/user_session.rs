@@ -1,4 +1,5 @@
-//! Fixed per-user installed entry point. The GUI never owns the agent process lifetime.
+//! Per-user entry point shared by directly runnable and legacy installed clients.
+//! The GUI never owns the agent process lifetime.
 use crate::config::{AgentConfig, ServerConfig};
 use rand_core::{OsRng, RngCore};
 use std::{
@@ -84,7 +85,7 @@ fn launch_mode(trial: bool) -> io::Result<()> {
     spawn_mode(&config, trial)?;
     Ok(())
 }
-/// Shared process adapter for installed and ZIP entry points. The caller owns readiness checks.
+/// Shared process adapter for all session entry points. The caller owns readiness checks.
 pub(crate) fn spawn(config: &Path) -> io::Result<std::process::Child> {
     spawn_mode(config, false)
 }
@@ -125,6 +126,49 @@ fn spawn_mode(config: &Path, trial: bool) -> io::Result<std::process::Child> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_owner_and_package_metadata_are_inert_but_maintenance_barriers_remain() {
+        let base = std::env::temp_dir().join(format!(
+            "s185-owner-ignored-{}-{}",
+            std::process::id(),
+            identity().unwrap()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        let path = prepare(&base).unwrap();
+        let initial = std::fs::read(&path).unwrap();
+        let product = base.join("vaultsyncd");
+        let owner = product.join("zip-owner.json");
+        assert!(!owner.exists());
+        assert!(!product.join("zip-owner-adoptions.jsonl").exists());
+        std::fs::write(&owner, b"corrupt owner from an unrelated program directory").unwrap();
+        // Inaccessible/malformed metadata must not become a runtime input, including legacy
+        // first-start ownership/adoption data. Existing identity/state is always reused.
+        for name in [
+            "zip-files.json",
+            "installed-files.json",
+            "zip-owner-adoptions.jsonl",
+        ] {
+            std::fs::create_dir(product.join(name)).unwrap();
+        }
+        assert_eq!(prepare(&base).unwrap(), path);
+        assert_eq!(std::fs::read(&path).unwrap(), initial);
+        let config = AgentConfig::load(&path).unwrap();
+        crate::maintenance::admit_startup(&config).unwrap();
+        let profile = path.parent().unwrap();
+        for name in ["maintenance.json", "auto-update.json"] {
+            let barrier = profile.join(name);
+            std::fs::write(&barrier, b"interrupted transaction").unwrap();
+            let error = crate::maintenance::admit_startup(&config).unwrap_err();
+            assert_eq!(error.code(), Some("MAINTENANCE_REQUIRED"));
+            std::fs::remove_file(barrier).unwrap();
+        }
+        crate::maintenance::admit_startup(&config).unwrap();
+        assert_eq!(
+            std::fs::read(owner).unwrap(),
+            b"corrupt owner from an unrelated program directory"
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
     #[test]
     fn installed_profile_preserves_identity_and_refuses_to_replace_invalid_existing_config() {
         let base = std::env::temp_dir().join(format!(

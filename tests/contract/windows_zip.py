@@ -20,16 +20,14 @@ class WindowsZip(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.payload = self.base / "payload"
         self.payload.mkdir()
-        for name in ZIP.EXECUTABLES[:-1]:
+        for name in ZIP.EXECUTABLES:
             (self.payload / name).write_bytes(b"fake packaging input, NOT a PE: " + name.encode())
         (self.payload / "installed-files.json").write_text(json.dumps({"source": {"commit": "test-only"}}))
         (self.payload / "UNSIGNED-TEST.txt").write_text("unsigned-test\n")
-        self.launcher = self.base / "fresh.exe"
-        self.launcher.write_bytes(b"test-only launcher")
         self.archive = self.payload / "unsigned.zip"
 
     def build(self):
-        ZIP.build(self.payload, self.launcher, VAULT / "packaging/windows/zip", self.archive)
+        ZIP.build(self.payload, VAULT / "packaging/windows/zip", self.archive)
 
     def test_complete_archive_and_every_file_hash(self):
         self.build()
@@ -37,19 +35,20 @@ class WindowsZip(unittest.TestCase):
         with zipfile.ZipFile(self.archive) as archive:
             self.assertEqual(set(archive.namelist()), {*ZIP.FILES, "zip-files.json"})
             self.assertNotIn("uninstall.exe", archive.namelist())
+            self.assertNotIn("vaultsyncd-zip.exe", archive.namelist())
         manifest = json.loads((self.payload / "zip/zip-files.json").read_text())
         self.assertEqual(manifest["signature_status"], "unsigned-test")
         self.assertEqual(manifest["source"]["commit"], "test-only")
-        self.assertEqual(len(manifest["files"]), 10)
+        self.assertEqual(len(manifest["files"]), 9)
 
     def test_same_bytes_produce_identical_zip_despite_output_path(self):
         self.build()
         second = self.base / "second 输出"
         second.mkdir()
-        for name in (*ZIP.EXECUTABLES[:-1], "installed-files.json", "UNSIGNED-TEST.txt"):
+        for name in (*ZIP.EXECUTABLES, "installed-files.json", "UNSIGNED-TEST.txt"):
             (second / name).write_bytes((self.payload / name).read_bytes())
         archive = second / "unsigned.zip"
-        ZIP.build(second, self.launcher, VAULT / "packaging/windows/zip", archive)
+        ZIP.build(second, VAULT / "packaging/windows/zip", archive)
         self.assertEqual(archive.read_bytes(), self.archive.read_bytes())
 
     def test_missing_input_never_becomes_valid_archive(self):
@@ -95,7 +94,8 @@ class WindowsZip(unittest.TestCase):
         resources = VAULT / "packaging/windows/zip"
         for name in ("Start vaultsyncd.cmd", "Stop vaultsyncd.cmd"):
             text = (resources / name).read_text()
-            self.assertIn('"%~dp0vaultsyncd-zip.exe"', text)
+            self.assertIn('"%~dp0vaultsyncd-agent.exe" --user-session ', text)
+            self.assertNotIn("vaultsyncd-zip.exe", text)
             self.assertNotIn("taskkill", text.lower())
             self.assertNotIn("powershell", text.lower())
             self.assertNotIn("start ", text.lower().splitlines()[2])

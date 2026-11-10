@@ -40,9 +40,11 @@ ZIP 仍是 `unsigned-test`，解压后使用 `Start vaultsyncd.cmd`；状态留�
 脚本自动进入 `nix develop .#windows`，冻结锁离线准备前端、交叉编译 `x86_64-pc-windows-msvc` release（静态 CRT），每次先清空 `dist/` 再写入。产物就是无版本号 ZIP 的解压结果，可整目录拷到 Windows 11 本机普通路径后运行 `Start vaultsyncd.cmd`：
 
 ```text
-dist/   五份 EXE（agent/session/CLI/desktop/zip）、installed-files.json、zip-files.json、
+dist/   四份 EXE（agent/session/CLI/desktop）、installed-files.json、zip-files.json、
         UNSIGNED-TEST.txt、Start/Stop vaultsyncd.cmd、README-ZIP.txt、build-info.txt
 ```
+
+S185 起删除 `vaultsyncd-zip.exe`；任意本机普通目录直接运行 `vaultsyncd-desktop.exe` 或 Start 脚本即可。普通启动不校验 owner、程序路径、hash 或清单；旧 owner 留存忽略，状态保留在当前用户 LocalAppData。Start/Stop 调用 `vaultsyncd-agent.exe --user-session start|stop`，跨目录复用健康 agent；要切换版本先安全 Stop。清单仅供发布和显式自动更新使用，维护屏障/单 writer/IPC 用户认证保留。
 
 `build-info.txt` 记录构建时的提交/树/版本/脏树状态与工具链版本。本入口不生成收据、不写 `SHA256SUMS`、不做干净提交检查，因此**不是发布产物**：不能用于 GitHub Release，也不改变 `unsigned-test` 语义与客户端首发门禁（仍需 Windows 原生验收）。
 
@@ -74,6 +76,8 @@ nix develop --command gh auth login --hostname github.com
 ```
 
 自定义说明文件保留实际换行；工具追加源码、平台、未签名及未由本工具运行原生验收的说明。`--title` 可定制标题。正式/预发布只是 GitHub 的展示属性，不代表 S106—S108 门禁通过。
+
+S185 新布局删除 ZIP 专用 EXE 后，旧 v0.1.7 更新器会拒绝新十文件包，首次发布该布局必须在发行说明写明一次性手工下载、旧版安全停止、从任意新目录直开并保留原状态；不得宣称旧 Latest 能直接托盘升级。既有发行和标签不改写，本卡不发行；新客户端后续自动更新使用新集合。若 GUI 与现有 agent 来自不同目录，托盘更新先提示安全 Stop 后重开目标目录，不下载或进入错误目标恢复。
 
 客户端只检查本项目公开仓库的最新正式 Release；发布更高版本并使用 `--stable` 才会进入自动升级渠道。保留精确附件名 `vaultsyncd-<版本>-x64-unsigned.zip`，ZIP内所有程序/清单须同源，不能只上传单个EXE。客户端仍按SemVer拒绝同版/降版；没有正式Release、仅有预发布或缺少SHA-256时提示实际原因。升级前客户端自动保留程序/整套状态备份，下载校验失败不启动维护。此卡未执行真实GitHub发布。
 

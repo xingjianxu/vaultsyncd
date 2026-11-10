@@ -179,7 +179,7 @@ pub async fn run(program: &Path, recover: bool) -> Result<()> {
         }
     }
     .await;
-    // The session launcher validates the remaining barrier/ownership; never force a writer open.
+    // The session launcher validates the remaining maintenance barrier; never force a writer open.
     let restarted = if result.is_err() || recover {
         stage(&progress, "正在重启并检查恢复后的客户端…");
         async {

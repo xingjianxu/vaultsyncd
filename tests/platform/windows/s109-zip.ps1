@@ -21,19 +21,19 @@ $owner=Join-Path $env:LOCALAPPDATA 'vaultsyncd\zip-owner.json'
 $results=Join-Path $RunDirectory 'results'
 $script:sequence=0
 function Write-Json($path,$value){[IO.File]::WriteAllText($path,($value|ConvertTo-Json -Depth 30),(New-Object Text.UTF8Encoding($false)))}
-function Run-Zip($directory,$action,[switch]$MayFail){
+function Run-Session($directory,$action){
   $script:sequence++
   $out=Join-Path $results ($Mode+'-'+$script:sequence+'-'+$action+'.stdout.txt')
   $err=Join-Path $results ($Mode+'-'+$script:sequence+'-'+$action+'.stderr.txt')
-  $process=Start-Process -FilePath (Join-Path $directory 'vaultsyncd-zip.exe') -ArgumentList $action -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+  $process=Start-Process -FilePath (Join-Path $directory 'vaultsyncd-agent.exe') -ArgumentList @('--user-session',$action) -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
   $null=$process.Handle
-  if(!$process.WaitForExit(180000)){throw 'ZIP command timeout; no process was killed; preserve logs and use safe Stop'}
+  if(!$process.WaitForExit(180000)){throw 'user-session command timeout; no process was killed; preserve logs and use safe Stop'}
   $process.WaitForExit();$process.Refresh()
   $value=@{exit=$process.ExitCode;stdout=[IO.File]::ReadAllText($out);stderr=[IO.File]::ReadAllText($err)}
-  if(!$MayFail-and $value.exit-ne 0){throw ('ZIP '+$action+' failed: '+$value.stderr)}
+  if($value.exit-ne 0){throw ('user-session '+$action+' failed: '+$value.stderr)}
   $value
 }
-function Status { (Run-Zip $program 'health').stdout|ConvertFrom-Json }
+function Status { (Run-Session $program 'health').stdout|ConvertFrom-Json }
 function Agent {
   $items=@(Get-CimInstance Win32_Process -Filter "Name='vaultsyncd-agent.exe'"|Where-Object{$_.ExecutablePath-eq (Join-Path $program 'vaultsyncd-agent.exe') -and $_.SessionId-eq (Get-Process -Id $PID).SessionId})
   if($items.Count-ne 1){throw 'expected one exact ZIP agent in current session'}
@@ -77,7 +77,8 @@ if($Mode-eq 'Fresh'){
   Expand-Archive -LiteralPath $ZipPath -DestinationPath $program
   $manifest=Get-Content -LiteralPath (Join-Path $program 'zip-files.json') -Raw -Encoding UTF8|ConvertFrom-Json
   if($manifest.source.commit-ne $ExpectedCommit-or $manifest.signature_status-ne 'unsigned-test'){throw 'ZIP source/signature label mismatch'}
-  if(@($manifest.files).Count-ne 10-or @(Get-ChildItem -LiteralPath $program -File).Count-ne 11){throw 'unexpected ZIP inventory'}
+  if(@($manifest.files).Count-ne 9-or @(Get-ChildItem -LiteralPath $program -File).Count-ne 10){throw 'unexpected ZIP inventory'}
+  if(Test-Path (Join-Path $program 'vaultsyncd-zip.exe')){throw 'removed ZIP launcher must not be shipped'}
   foreach($file in $manifest.files){
     if($file.path-match '[/\\:]'-or $file.path-eq '.'-or $file.path-eq '..'){throw 'unsafe ZIP manifest path'}
     $path=Join-Path $program $file.path
@@ -90,74 +91,75 @@ if($Mode-eq 'Fresh'){
   if(!$entry.WaitForExit(120000)){throw 'double-click Start timed out; inspect the visible error; nothing was force killed'}
   $entry.WaitForExit();$entry.Refresh();if($entry.ExitCode-ne 0){throw 'double-click entry failed'}
   $status=Status;$pidBefore=(Agent).ProcessId
-  Run-Zip $program 'start'|Out-Null
+  Run-Session $program 'start'|Out-Null
   if((Agent).ProcessId-ne $pidBefore){throw 'repeat Start did not reuse existing agent'}
   Close-Desktop -RequireWindow
   if((Agent).ProcessId-ne $pidBefore){throw 'GUI close changed the agent'}
   $afterGui=Status
   if($status.snapshot_version.Split(':')[0]-ne $afterGui.snapshot_version.Split(':')[0]){throw 'GUI close changed IPC instance'}
   $config=Get-Content -LiteralPath (Join-Path $profile 'agent.json') -Raw -Encoding UTF8|ConvertFrom-Json
-  Run-Zip $program 'stop'|Out-Null
-  Run-Zip $program 'stop'|Out-Null # offline idempotence still verifies writer ownership
-  $copy=Join-Path $RunDirectory '另一份 ZIP'
-  Copy-Item -LiteralPath $program -Destination $copy -Recurse
-  $refused=Run-Zip $copy 'start' -MayFail
-  if($refused.exit-eq 0-or $refused.stderr-notmatch 'ZIP_OWNER_MISMATCH'){throw 'different program path was not explicitly refused'}
+  Run-Session $program 'stop'|Out-Null
+  Run-Session $program 'stop'|Out-Null # offline idempotence still verifies writer ownership
+  if(Test-Path $owner){throw 'fresh startup must not create a ZIP owner'}
+  # An old, even invalid owner is inert historical data, not a program/state adoption gate.
+  $legacyOwner='S185 legacy invalid owner; preserve these exact bytes'
+  [IO.File]::WriteAllText($owner,$legacyOwner,(New-Object Text.UTF8Encoding($false)))
+  $legacyOwnerHash=(Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash
   $manifestPath=Join-Path $program 'zip-files.json'
-  $saved=[IO.File]::ReadAllBytes($manifestPath)
-  try{
-    $changed=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8|ConvertFrom-Json
-    $changed.source.commit='0000000000000000000000000000000000000000'
-    Write-Json $manifestPath $changed
-    $sourceRefused=Run-Zip $program 'start' -MayFail
-    if($sourceRefused.exit-eq 0-or $sourceRefused.stderr-notmatch 'ZIP_OWNER_MISMATCH'){throw 'different source was not explicitly refused'}
-  }finally{[IO.File]::WriteAllBytes($manifestPath,$saved)}
-  # S174: a complete package extracted over the same folder is adopted, not refused.
   $installedPath=Join-Path $program 'installed-files.json'
+  $savedManifest=[IO.File]::ReadAllBytes($manifestPath)
   $savedInstalled=[IO.File]::ReadAllBytes($installedPath)
-  $savedZipManifest=[IO.File]::ReadAllBytes($manifestPath)
+  $originalProgram=$program
+  $copy=Join-Path $RunDirectory '另一份 ZIP'
   try{
-    $newCommit='1111111111111111111111111111111111111111'
-    $installed=Get-Content -LiteralPath $installedPath -Raw -Encoding UTF8|ConvertFrom-Json
-    $installed.source.commit=$newCommit
-    Write-Json $installedPath $installed
-    $repack=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8|ConvertFrom-Json
-    $repack.source.commit=$newCommit
-    foreach($file in $repack.files){
-      if($file.path-eq 'installed-files.json'){
-        $file.bytes=(Get-Item -LiteralPath $installedPath).Length
-        $file.sha256=(Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash.ToLowerInvariant()
-      }
-    }
-    Write-Json $manifestPath $repack
-    $adopted=Run-Zip $program 'start' -MayFail
-    if($adopted.exit-ne 0){throw ('in-place repackage was not adopted: '+$adopted.stderr)}
-    $adoptedManifest=(Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $ownerAfter=Get-Content -LiteralPath $owner -Raw -Encoding UTF8|ConvertFrom-Json
-    if($ownerAfter.manifest-ne $adoptedManifest){throw 'adopted owner does not pin the replaced package'}
-    if(![String]::Equals($ownerAfter.program,$program,[StringComparison]::OrdinalIgnoreCase)){throw 'adopted owner changed the program path'}
-    $adoptions=Join-Path $env:LOCALAPPDATA 'vaultsyncd\zip-owner-adoptions.jsonl'
-    if(!(Test-Path -LiteralPath $adoptions)){throw 'adoption was not recorded'}
-    $last=@(Get-Content -LiteralPath $adoptions -Encoding UTF8)[-1]|ConvertFrom-Json
-    if($last.program_backup-ne $false-or $last.manifest-ne $adoptedManifest-or $last.previous_manifest-eq $adoptedManifest){throw 'adoption record is inconsistent'}
-  }finally{[IO.File]::WriteAllBytes($installedPath,$savedInstalled);[IO.File]::WriteAllBytes($manifestPath,$savedZipManifest)}
-  Run-Zip $program 'start'|Out-Null
+    # Neither manifest participates in ordinary startup, even when present but malformed.
+    [IO.File]::WriteAllText($manifestPath,'invalid legacy ZIP manifest')
+    [IO.File]::WriteAllText($installedPath,'invalid legacy installed manifest')
+    Run-Session $program 'start'|Out-Null
+    $livePid=(Agent).ProcessId
+    Close-Desktop -RequireWindow
+    Copy-Item -LiteralPath $program -Destination $copy -Recurse
+    Run-Session $copy 'start'|Out-Null
+    if((Agent).ProcessId-ne $livePid){throw 'another folder did not reuse the running agent'}
+    $program=$copy
+    Close-Desktop -RequireWindow
+    Run-Session $program 'stop'|Out-Null
+    # Cold start from another folder must keep the original user's config and state.
+    Remove-Item -LiteralPath (Join-Path $copy 'zip-files.json')
+    Remove-Item -LiteralPath (Join-Path $copy 'installed-files.json')
+    Run-Session $program 'start'|Out-Null
+    $null=Agent
+    $null=Status
+    $copyConfig=Get-Content -LiteralPath (Join-Path $profile 'agent.json') -Raw -Encoding UTF8|ConvertFrom-Json
+    if($copyConfig.device_id-ne $config.device_id){throw 'cross-directory start changed device identity'}
+    if((Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash-ne $legacyOwnerHash){throw 'startup changed inert legacy owner'}
+    Close-Desktop -RequireWindow
+    Run-Session $program 'stop'|Out-Null
+  }finally{
+    $program=$originalProgram
+    [IO.File]::WriteAllBytes($manifestPath,$savedManifest)
+    [IO.File]::WriteAllBytes($installedPath,$savedInstalled)
+  }
+  Run-Session $program 'start'|Out-Null
   $restarted=Status
   if($status.snapshot_version.Split(':')[0]-eq $restarted.snapshot_version.Split(':')[0]){throw 'safe stop did not exit the original instance'}
   $nextConfig=Get-Content -LiteralPath (Join-Path $profile 'agent.json') -Raw -Encoding UTF8|ConvertFrom-Json
   if($nextConfig.device_id-ne $config.device_id){throw 'ZIP restart changed device identity'}
+  if((Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash-ne $legacyOwnerHash){throw 'restart changed inert legacy owner bytes'}
   $after=Registration-Snapshot
   if(($before|ConvertTo-Json -Compress)-ne ($after|ConvertTo-Json -Compress)){throw 'ZIP unexpectedly registered startup/shortcut/setup'}
-  Write-Json (Join-Path $results 'fresh.json') @{ok=$true;scope='launcher smoke, NOT live sync/CFAPI acceptance';sid=$identity.User.Value;program=$program;profile=$profile;source=$ExpectedCommit;archive_sha256=$ZipSha256;first_status=$status;restarted_status=$restarted;registration=$after;device_id=$config.device_id;path_refused=$refused;source_refused=$sourceRefused;repackage_adopted=$adopted}
+  Write-Json (Join-Path $results 'fresh.json') @{ok=$true;scope='launcher smoke, NOT live sync/CFAPI acceptance';sid=$identity.User.Value;program=$program;profile=$profile;source=$ExpectedCommit;archive_sha256=$ZipSha256;first_status=$status;restarted_status=$restarted;registration=$after;device_id=$config.device_id;cross_directory_reuse=$true;cross_directory_cold_start=$true;manifests_not_required=$true;legacy_owner_sha256=(Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()}
   Write-Output 'Fresh smoke passed. Agent/GUI remain for explicit live server binding. No users/logon settings were changed.'
   exit
 }
-if(!(Test-Path $owner)-or !(Test-Path (Join-Path $results 'fresh.json'))){throw 'only this script Fresh-owned run may be continued'}
+if(!(Test-Path (Join-Path $results 'fresh.json'))){throw 'only this script Fresh-owned run may be continued'}
 $fresh=Get-Content (Join-Path $results 'fresh.json') -Raw -Encoding UTF8|ConvertFrom-Json
 if($fresh.sid-ne $identity.User.Value-or $fresh.program-ne $program){throw 'wrong run/user'}
+if(!(Test-Path $owner)-or (Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()-ne $fresh.legacy_owner_sha256){throw 'owned run legacy owner fixture was changed'}
 if($Mode-eq 'Stop'){
   Close-Desktop
-  Run-Zip $program 'stop'|Out-Null
+  Run-Session $program 'stop'|Out-Null
+  if((Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()-ne $fresh.legacy_owner_sha256){throw 'safe Stop changed legacy owner bytes'}
   Write-Json (Join-Path $results 'stopped.json') @{ok=$true;state_preserved=(Test-Path $profile);owner_preserved=(Test-Path $owner)}
   exit
 }
@@ -187,11 +189,12 @@ do{
 }while($observed.Count-ne 1-or !$observed[0].synchronized)
 if((Agent).ProcessId-ne $agentPid){throw 'agent was replaced after GUI close'}
 $hash=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-Run-Zip $program 'stop'|Out-Null
+Run-Session $program 'stop'|Out-Null
 if(!(Test-Path $path)-or !(Test-Path $binding.cache_path)-or !(Test-Path (Join-Path $profile 'state\client.sqlite'))){throw 'safe Stop removed user content/cache/state'}
 if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()-ne $hash){throw 'safe Stop changed file bytes'}
-Run-Zip $program 'start'|Out-Null
+Run-Session $program 'start'|Out-Null
 $status=Status
 foreach($item in $status.bindings){if(!$item.paused){throw 'PrepareMaintenance pause was not retained on restart'}}
-Write-Json (Join-Path $results 'live.json') @{ok=$true;host_server_hash_verification='REQUIRED separately; not asserted by guest';filename=$name;sha256=$hash;bytes=(Get-Item -LiteralPath $path).Length;binding_id=$BindingId;vault=$binding.local_path;cache=$binding.cache_path;status_after_restart=$status;exports=@(Get-ChildItem -LiteralPath $profile -Directory -Filter 'zip-stop-*'|Select-Object -ExpandProperty FullName)}
+if((Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()-ne $fresh.legacy_owner_sha256){throw 'live stop/restart changed legacy owner bytes'}
+Write-Json (Join-Path $results 'live.json') @{ok=$true;host_server_hash_verification='REQUIRED separately; not asserted by guest';filename=$name;sha256=$hash;bytes=(Get-Item -LiteralPath $path).Length;binding_id=$BindingId;vault=$binding.local_path;cache=$binding.cache_path;status_after_restart=$status;exports=@(Get-ChildItem -LiteralPath $profile -Directory -Filter 'session-stop-*'|Select-Object -ExpandProperty FullName)}
 Write-Output 'Live guest checks passed. Independently compare real server bytes/hash; bindings remain paused. Use Stop mode to leave this owned run safely stopped.'

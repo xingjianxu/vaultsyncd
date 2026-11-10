@@ -162,6 +162,49 @@ async fn verified_request_checks_actual_peer_before_running_handler() {
     );
 }
 #[tokio::test]
+async fn authenticated_session_request_pins_peer_without_an_expected_program_path() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let ep = endpoint();
+    let handled = Arc::new(AtomicU32::new(0));
+    let count = handled.clone();
+    let server = Server::bind(ep.clone(), move |r| {
+        count.fetch_add(1, Ordering::SeqCst);
+        async move { Ok(Service::new("native-s185").handle(&r)) }
+    })
+    .unwrap();
+    let mut wrong_user = ep.clone();
+    wrong_user.sid = "S-1-5-7".into();
+    let error = wrong_user
+        .request_authenticated(&request("wrong-session-user"))
+        .await
+        .err()
+        .expect("another user cannot send an authenticated session request");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(handled.load(Ordering::SeqCst), 0);
+    // This peer is the native test executable, not a sibling vaultsyncd-agent.exe. No program
+    // directory/hash/provenance is needed for same-user session control.
+    let (response, process) = ep
+        .request_authenticated(&request("authenticated-session"))
+        .await
+        .unwrap();
+    assert_eq!(response.request_id, "authenticated-session");
+    assert_eq!(response.result.unwrap().agent_version, "native-s185");
+    assert_eq!(handled.load(Ordering::SeqCst), 1);
+    assert!(!process.wait(0).unwrap());
+    server.shutdown().await.unwrap();
+    let replacement = serve(ep.clone());
+    // Closing/rebinding the endpoint does not invalidate or replace the original peer handle.
+    assert!(!process.wait(0).unwrap());
+    assert!(
+        ep.request(&request("replacement"))
+            .await
+            .unwrap()
+            .result
+            .is_some()
+    );
+    replacement.shutdown().await.unwrap();
+}
+#[tokio::test]
 async fn malformed_oversize_unknown_and_truncated_frames_close_only_client() {
     let ep = endpoint();
     let server = serve(ep.clone());

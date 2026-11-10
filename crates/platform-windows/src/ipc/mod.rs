@@ -101,6 +101,18 @@ impl Endpoint {
         let mut pipe = self.connect().await?;
         request_on(&mut pipe, request).await
     }
+    /// Authenticate the token user on this exact connection and retain its original process.
+    /// Ordinary session start/stop/health can reuse an agent from another program directory.
+    /// File-replacing maintenance must still use `request_verified` or `maintenance_process`.
+    pub async fn request_authenticated(
+        &self,
+        request: &Request,
+    ) -> io::Result<(Response, ServerProcess)> {
+        let mut pipe = self.connect().await?;
+        let process = ServerProcess::capture_authenticated(&pipe, &self.sid)?;
+        let response = request_on(&mut pipe, request).await?;
+        Ok((response, process))
+    }
     /// Verify the executable and token user on the request's connection before sending any bytes.
     /// Returns the original peer's pinned process handle only after validating its response.
     pub async fn request_verified(

@@ -17,6 +17,7 @@
 - 项目 devShell 由根 `flake.nix` 提供，工具链来自 `flake.lock` 锁定的 nixpkgs：进入用 `nix develop`，非交互校验用 `nix develop --command bash -c 'rustc --version; cargo --version; node --version; pnpm --version; python3 --version; sqlite3 --version'`。不为项目安装全局依赖；实测版本与限制见 `docs/environment.md` §10。
 - 用户已明确（2026-11-07）：脚本、代码、发布、编译与测试均不再考虑 `linux-arm64`（`aarch64-linux`）；仅保留 Linux x64 服务端和 Windows x64 客户端，不将 ARM64 证据缺失列为阻塞，历史证据仍保留。
 - 用户明确（2026-11-10，S169）：便携发行只考虑 Windows x64；`tools/release.sh` 仅构建 Windows ZIP，GitHub Release 仅上传该 ZIP。来源收据、日志及校验表保留本地，统一发行不构建 Linux 便携包、容器或 runtime sources；Linux 服务端继续 Nix/NixOS 部署。历史 Linux 实验室入口与长期发行证据保留。
+- 用户明确（2026-11-10，S185）：删除 `vaultsyncd-zip.exe`，完整客户端下载到任意本机普通目录即可直接运行；普通启动不校验程序路径归属、来源/hash、ZIP/installed 清单或旧 owner，也不创建/重写 owner。保留固定本机状态、用户 IPC 认证、单 writer、schema/Vault 和维护事务保护；清单仅供发布/显式自动更新使用。旧 v0.1.7 更新器不接受新包集合，首次新布局发行必须提示一次性手工下载迁移，不恢复专用 EXE 来兼容。
 - 首发仅 Windows 11 x64 客户端、Linux 服务端。Windows 客户端在本 NixOS 开发环境交叉编译，前端构建也在宿主完成，以节省虚拟机资源；Quickemu Windows NTFS 客体用于原生运行与验收，不默认安装完整编译工具链。Windows x64 交叉工具链已由 S009 落实（`nix develop .#windows`，证据见 `docs/environment.md` §13）；具体分工与步骤只维护在实施手册 §2.6 与 `docs/operations/windows-lab.md` §12。
 - 用户已授权本项目所需 NixOS 配置与 rebuild。先检查实际主机配置入口，保存 diff/旧 generation，build/test/健康检查后 switch。test 会激活配置且不自动定时回滚；保留 SSH 和恢复路径。不要把项目 flake 误当主机配置，不扩大到无关系统升级。
 - 用户明确（2026-11-09）：每次完成服务端（含服务端 Web）更改并通过相关验收后，直接部署到本机，不再等待单独部署请求；将部署、健康验证和交接纳入该卡，遇实际阻塞如实记录。纯文档或不改变服务产物的开发工具维护不触发无关部署。

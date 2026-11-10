@@ -20,7 +20,7 @@ fn fixture() -> Fixture {
     Fixture(root)
 }
 fn files() -> BTreeMap<String, Vec<u8>> {
-    let mut files: BTreeMap<_, _> = FILES[..10]
+    let mut files: BTreeMap<_, _> = FILES[..FILES.len() - 1]
         .iter()
         .map(|&name| (name.to_owned(), name.as_bytes().to_vec()))
         .collect();
@@ -48,6 +48,8 @@ fn archive(path: &Path, files: &BTreeMap<String, Vec<u8>>) {
 fn exact_inventory_extracts_without_overwriting_and_checks_version() {
     let f = fixture();
     let path = f.0.join("update.zip");
+    assert!(!FILES.contains(&"vaultsyncd-zip.exe"));
+    assert_eq!(FILES.len(), 10);
     archive(&path, &files());
     extract(&path, &f.0.join("中文 程序"), "0.2.0").unwrap();
     assert!(extract(&path, &f.0.join("中文 程序"), "0.2.0").is_err());
@@ -115,7 +117,8 @@ fn duplicate_central_directory_entries_cannot_be_hidden_by_the_zip_index() {
     bytes.splice(end..end, repeated);
     let end = end + size;
     for offset in [8, 10] {
-        bytes[end + offset..end + offset + 2].copy_from_slice(&12u16.to_le_bytes());
+        bytes[end + offset..end + offset + 2]
+            .copy_from_slice(&((FILES.len() + 1) as u16).to_le_bytes());
     }
     bytes[end + 12..end + 16].copy_from_slice(&(old_size + size as u32).to_le_bytes());
     fs::write(&path, bytes).unwrap();

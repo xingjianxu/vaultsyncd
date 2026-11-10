@@ -125,6 +125,22 @@ async fn download(
     item: &tauri::menu::MenuItem<tauri::Wry>,
     progress: &UpdateProgress,
 ) -> Result<Option<PathBuf>, String> {
+    // Cross-directory GUI reuse is supported for ordinary use, but replacing B while its
+    // active writer still runs from A is not an update transaction for the same program.
+    // Reject before any network/download or GUI exit; never attempt recovery against A.
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let program = executable.parent().ok_or("无法定位当前程序目录")?;
+    let endpoint = vaultsyncd_platform_windows::ipc::Endpoint::current("vaultsyncd-agent")
+        .map_err(|e| e.to_string())?;
+    {
+        let process = endpoint
+            .maintenance_process(&program.join("vaultsyncd-agent.exe"))
+            .await
+            .map_err(|e| format!("当前后台 agent 可能来自另一程序目录，暂不能更新此副本。请关闭界面，运行 Stop vaultsyncd.cmd 安全停止，再从要更新的目录重新打开。未下载更新、未停止进程或修改状态。详情：{e}"))?;
+        if process.wait(0).map_err(|e| e.to_string())? {
+            return Err("后台 agent 已退出；请从要更新的目录重新打开客户端再更新。".into());
+        }
+    }
     let client = GithubUpdates::new()?;
     let Some(update) = client.check(env!("CARGO_PKG_VERSION")).await? else {
         return Ok(None);

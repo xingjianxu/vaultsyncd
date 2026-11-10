@@ -69,7 +69,7 @@ def verify_component(component):
     assert len(archives) == 1, "one formal unsigned ZIP required"
     archive = archives[0]
     expected = {"vaultsyncd-agent.exe", "vaultsyncd-session.exe", "vaultsyncd-cli.exe",
-                "vaultsyncd-desktop.exe", "vaultsyncd-zip.exe", "installed-files.json",
+                "vaultsyncd-desktop.exe", "installed-files.json",
                 "UNSIGNED-TEST.txt", "Start vaultsyncd.cmd", "Stop vaultsyncd.cmd", "README-ZIP.txt"}
     with zipfile.ZipFile(archive) as source:
         names = source.namelist()

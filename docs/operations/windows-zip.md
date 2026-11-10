@@ -1,129 +1,65 @@
 # Windows 11 x64 免安装 ZIP
 
-本入口是**程序免安装、状态留在本机**，不是携带用户资料的便携版。当前仅提供 `unsigned-test` 未签名测试包；hash/来源清单不是数字签名。默认不添加 HKCU Run、Windows 服务或 Start Menu 快捷方式；未登录该用户或重启机器后不会自行同步。ZIP 新配置的系统通知默认关闭；用户在界面明确开启通知后，Toast 投递会注册本应用的 Start Menu 快捷方式，关闭通知不会清除问题与待办。
+本入口是**程序免安装、状态留在本机**，不是携带用户资料的便携版。S185/ADR-032 起删除 `vaultsyncd-zip.exe`，取消普通启动的程序归属、清单和来源校验，覆盖 S109/S174 的对应限制。当前仅提供 `unsigned-test` 未签名测试包；发布清单不是数字签名。
 
 ## 启动与前置
 
-1. 从发布组件 receipt 核对 `vaultsyncd-<版本>-x64-unsigned.zip` 的完整 SHA-256，解压**全部**文件到新的本机普通目录，不能位于 `%LOCALAPPDATA%\vaultsyncd` 内。支持中文/空格路径；不支持 UNC、junction/reparse 程序目录。不要直接在 ZIP 浏览器内运行。
-2. 必须有 Microsoft Edge **WebView2 Evergreen Runtime**，不是仅有 Edge 浏览器。入口按微软[Runtime 分发文档](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)读取 Runtime 客户端 pv 版本，缺失时明确提示[微软下载页](https://developer.microsoft.com/microsoft-edge/webview2/)，退出且不开 GUI，不隐式下载。只支持 Windows 11 x64。
-3. 双击 `Start vaultsyncd.cmd`，也可直接打开 `vaultsyncd-desktop.exe`（S167）。桌面自动复用同会话健康 agent；未运行时通过同目录 agent 完成相同配置/ZIP归属核验与就绪等待，失败显示本机错误，重复开窗保持单实例。专用 `vaultsyncd-zip.exe start` 验证组件 hash、创建无凭据初始配置，使用固定路径 CreateProcess 启动独立 agent。只有同用户、正确程序路径的实际 IPC `GetStatus` 成功且进程仍存活后，才启动 GUI；不能把 spawn 成功视为健康。出错窗口会保留诊断，不用管理员权限“修复”。
-4. 首次打开 GUI 时填写登录框中的服务端地址、用户名和密码；读取并确认服务端身份后点击“登录”，成功后进入正式界面并建立绑定。后续打开自动恢复已保存会话；退出登录后重新显示登录框。关闭 GUI **仍继续同步**。再次 Start 复用同一健康 agent，不启动第二个 writer；GUI 本身已有单实例约束。ZIP 默认不注册 Start Menu AUMID 快捷方式，通知须用户显式开启；开关及注册影响在“问题与恢复”的通知面板说明。
-
-程序文件包括原四 EXE（agent/session/CLI/desktop）、专用 ZIP EXE、`installed-files.json`、`zip-files.json`、两个双击 cmd、README 和未签名说明。不是安装器，无 `uninstall.exe`，不运行 setup。CLI 仍通过真实 IPC。
+1. 将下载的完整 ZIP 解压到**任意本机普通目录**，直接运行 `vaultsyncd-desktop.exe` 或 `Start vaultsyncd.cmd`。可移动、改名或换解压目录，不需要保持旧路径，也不需要管理员权限。不要在 ZIP 浏览器内运行；缺少真正需要的程序/DLL、Windows 不兼容或权限不足仍会有实际运行错误。
+2. 运行环境为 Windows 11 x64 与 Microsoft Edge **WebView2 Evergreen Runtime**。客户端不隐式安装依赖；缺失时按错误提示安装 Runtime。
+3. 普通启动**不读取/验证** `zip-owner.json`、`zip-files.json`、`installed-files.json`，不验证程序文件 hash、source 或清单版本。旧 owner 即使指向另一目录或损坏也不影响启动，保留即可，不要为解决启动问题删除任何状态。
+4. 首次打开在登录框填写服务端地址、用户名与密码，确认服务器身份后登录。已有配置、DeviceId、会话与内容继续沿用，程序移动不会创建新 profile。新 ZIP 不默认注册开机自启、服务或 Start Menu；关闭窗口后后台仍同步。通知由用户明确开启后注册所需快捷方式。
 
 ## 本机状态、同实例及升级限制
 
-- `%LOCALAPPDATA%\vaultsyncd\agent\agent.json`：无凭据初始连接与稳定设备身份。
-- 同目录 `state\`、`agent.log`：数据库/内部状态及诊断。S176起`state\client.sqlite`保存已确认的服务器地址/CA与按ServerId隔离的上次成功登录用户名；登录成功后持久化，退出保留地址及用户名。`zip-stop-*\`：停止前按绑定导出的未确认内容。凭据仍在该 Windows 用户 Credential Manager；Vault/cache 仍在各绑定选择的位置。
-- `%LOCALAPPDATA%\vaultsyncd\zip-owner.json`：持久绑定规范程序路径与完整 ZIP 组件清单摘要。普通 `--config` agent 和 session launcher 也会检查所有权；writer 锁/单用户 IPC 沿用现有机制，没有新增数据库 schema 或 IPC wire 字段。
-- `%LOCALAPPDATA%\vaultsyncd\zip-owner-adoptions.jsonl`：同目录覆盖被采纳时追加的审计行（旧/新清单摘要、是否拿到 writer 锁、`program_backup=false`）。没有备份，所以这是唯一的变更痕迹。
+- `%LOCALAPPDATA%\vaultsyncd\agent\agent.json`：配置与稳定设备身份。
+- 同目录 `state\`、`agent.log`：数据库/内部状态与日志。地址、CA 与上次成功登录名保存在客户端数据库；凭据沿用 Windows Credential Manager。Vault/cache 仍在绑定指定的位置，不随程序目录迁移。
+- 历史 `%LOCALAPPDATA%\vaultsyncd\zip-owner.json` 与 `zip-owner-adoptions.jsonl`：不再参与启动，也不会被新启动流程重写或自动删除。
+- `installed-files.json`、`zip-files.json`：发布与**显式自动更新**使用的清单，普通启动可没有这些文件；保留它们便于走自动更新，但不能将其恢复或完整性要求变成启动门禁。
 
-同用户的 ZIP/安装版共享固定 IPC 与默认 LocalAppData 命名空间，**不允许两版混跑**。首次 ZIP 拒绝已有安装注册，以及任何已有/未知 agent 配置或非空状态（包括离线状态）。已有 ZIP 在同一程序目录内复用同一个实例；**同一目录被另一份完整 ZIP 覆盖后，下次启动会按新清单自动采纳**（见下节），另一解压目录、移动/重命名目录或安装版接管仍明确拒绝。安装器和安装维护控制器亦拒绝接管 ZIP 所有权。
+同用户会话保持单实例和单 writer。已有健康 agent 时，从另一目录启动桌面也会复用它，而不是拒绝路径或启动第二个 writer。因此移动后仍运行的是旧进程版本时，应先关窗口、安全 Stop，再从所需目录重开。IPC 仍校验真实用户身份，数据/schema/Vault 的保护仍在。
 
-**同目录覆盖是“自动采纳”，不是可回滚升级。** 采纳要求当前目录仍是一份自洽完整 ZIP（十项文件 hash/字节与 `zip-files.json` 一致、`source` 与 `installed-files.json` 相同），之后只重钉归属摘要并正常启动：**不排空传输、不导出未确认内容、不备份程序与状态**，所以既没有程序回滚也没有整套状态回滚，只在 `zip-owner-adoptions.jsonl` 留一行记录。任意版本方向都会被采纳（含同版本重装与降级）；降级后老二进制遇到新 schema 会被围栏拒绝，需要整套备份恢复。要可回滚的升级请走托盘“自动更新”或 `--auto-update --program-dir <原目录>` 维护事务。
+手工替换和移动没有程序或整套状态的备份/回滚，启动也不再替用户发现混搭清单或篡改程序。可从任何方向替换文件，但旧二进制可能不能打开新 schema。托盘“自动更新”仍为 Latest 正式版下载与候选校验、排空/导出、离线程序/状态备份和恢复事务；无需先认领 ZIP owner。安装版的卸载注册表只由真实安装路径维护，不因从另一个目录运行免安装版而接管。若 GUI 来自 B、后台仍在 A，托盘更新会在联网下载/退出 GUI 前说明原因并要求安全 Stop 后从要更新的目录重新打开，不尝试更新 B 后再错误恢复 A。
 
-仍不支持 ZIP/安装版互转已用状态，也不应以删除 `zip-owner.json`、删除 profile 或“先卸载再重装”绕过 S100 的停机/未确认内容导出/整套离线备份/迁移恢复门禁。现有安装版应继续使用[安装版 S100 升级入口](windows-installation.md#升级回退与卸载)，不能把 ZIP 当候选直接替换。若存在 `agent\maintenance.json` 或 `agent\auto-update.json`，启动会先报 `MAINTENANCE_REQUIRED`，采纳流程不会顺手修改中断事务；按实际事务的恢复说明处理。限制是明确拒绝，不是自动创建新 DeviceId 丢弃旧状态。
-
-不要把状态文件复制进 ZIP 以便迁移机器。复制程序到另一台机器/另一用户后，只会产生其本机新身份，不会带走原凭据或未确认内容。原 Vault/云端占位依赖原本机提供程序。
+`agent\maintenance.json` / `agent\auto-update.json` 表示未完成事务，仍会阻止普通启动，不能删除屏障绕过。按实际事务的[恢复说明](windows-installation.md#升级回退与卸载)恢复；取消程序归属校验不等于允许在线覆盖状态或丢弃未确认内容。
 
 ## 安全停止与移除程序
 
-双击 `Stop vaultsyncd.cmd` 并选择 Y。或者在同一用户终端运行：
+双击 `Stop vaultsyncd.cmd` 并选择 Y，或在终端运行：
 
 ```powershell
-& 'D:\中文 空格\vaultsyncd-zip.exe' health
-& 'D:\中文 空格\vaultsyncd-zip.exe' stop
+& 'D:\任意目录\vaultsyncd-agent.exe' --user-session health
+& 'D:\任意目录\vaultsyncd-agent.exe' --user-session stop
 ```
 
-停止入口在实际发送请求的同一条 IPC 连接上认证对端路径，并保留执行维护准备的确切进程句柄，复用 `PrepareMaintenance`：持久暂停全部绑定、断开/排空回调、导出每份未确认内容，然后等待该 agent 正常退出并验证 writer 锁已释放。已经离线时也需成功取得锁才报告已停。绝不 `taskkill /IM`，不强杀，不注销 CFAPI，不删除 Vault/cache/dirty/state。导出不足、回调忙、权限/锁/IPC 失败都返回失败且保留诊断；可能已经部分暂停/断开，不要把失败误当“仍全部正常同步”。
+Start/Stop 脚本都调用同目录 agent，不再调用 ZIP 专用 EXE。stop 在同次 IPC 连接上认证真实对端用户并固定进程句柄，执行 `PrepareMaintenance`，暂停绑定、保全未确认内容、排空回调，等该 agent 退出并确认 writer 锁释放；可以从另一解压目录安全停止正在运行的实例。不按进程名强杀，不注销 CFAPI、不删除 Vault/cache/dirty/state。失败时保留诊断，不将部分暂停误报为仍在正常同步。
 
-**重新 Start 后，绑定保持 PAUSED。** 这是沿用维护准备语义，不自动恢复可能原先就由用户暂停的绑定。用户确认后在 GUI 或 CLI 对需要的绑定逐一 Resume：
+**重新 Start 后绑定保持 PAUSED**。在 GUI 或 CLI 对需要的绑定明确 Resume：
 
 ```powershell
-& 'D:\中文 空格\vaultsyncd-cli.exe' --json bindings
-& 'D:\中文 空格\vaultsyncd-cli.exe' --json resume --binding-id '<绑定ID>'
+& 'D:\任意目录\vaultsyncd-cli.exe' --json bindings
+& 'D:\任意目录\vaultsyncd-cli.exe' --json resume --binding-id '<绑定ID>'
 ```
 
-停止后仅云端/部分占位不是完整离线文件；不能因为仍显示名称/逻辑大小就认为已下载，需重启原 ZIP 提供程序并适当 Resume。若只移除程序：关闭 GUI、完成安全 Stop 后，仅删除该解压程序目录，保留本机状态、Vault/cache/dirty/提供程序注册；建议保留原 ZIP 以便恢复原目录运行。再次需要同步前必须恢复原始程序目录。ZIP 没有数据清理或提供程序注销选项，不能用它绕过安装版的完整驻留/revert/hash 注销保护。
-
-自动化调用 `vaultsyncd-zip.exe` 时把输出重定向到**文件**，不要接管道：入口派生并长期运行的 GUI/agent 子进程会继承调用方的标准句柄，管道要到它们退出才收到 EOF，看似 `start` 不返回（双击 cmd 与文件重定向不受影响）。这是当前已实测的限制，等待句柄继承收敛后再评估是否移除。
-
-若存在 `agent\maintenance.json`，普通 Start/Stop 都不删除屏障或默认成功。保留原程序、状态与诊断，按实际事务的[受控恢复说明](windows-installation.md#升级回退与卸载)处理；不要混用安装事务候选接管 ZIP profile。
+仅删除程序目录不会删除状态，也不等于安全停用；只有安全停止后才移除不用的程序目录。仅在线占位仍依赖客户端，不能误认完整离线文件。复制程序到另一机器/用户不会携带原状态与凭据，不要复制状态绕过恢复。自动化调用 start/health/stop 时将输出重定向到文件，避免长期子进程继承管道句柄造成等待 EOF。
 
 ## 同源构建、收据及宿主检查
 
-在已提交、干净的任务树内，准备 S009 锁定交叉工具链缓存后：
-
-```sh
-nix develop .#windows --command cargo xtask release build windows-client artifacts/S109/client-new
-nix develop --command cargo xtask release assemble artifacts/S109/release-new.json artifacts/S109/client-new
-nix develop --command cargo xtask release verify artifacts/S109/release-new.json
-```
-
-同一次 fresh release cross-build 生成五 EXE：NSIS 仍消费原四 EXE；额外 ZIP EXE 只进入 ZIP。不重复全新编译、不从开发 target 借 PE。`packaging/windows/zip/build.py` 使用 Python 标准库固定文件清单、归档时间与每文件 hash，并在生成后读回全部 ZIP 字节核对。`zip-files.json` 包含五 EXE、installed 清单、cmd/README/unsigned 说明的十份摘要；receipt 递归覆盖展开的十一份文件及**完整 ZIP 自身 hash**，assemble/verify 沿用同一 HEAD/全部文件完整性检查。原四 EXE 在两种包中是同一字节来源。unsigned 标记不是签名，也不保证整个 cross-build 逐字节可重现。
-
-针对性检查：
+开发目录用 `./tools/build.sh`，输出根 `dist/`，四份 EXE（agent/session/CLI/desktop）、两份清单、两个 cmd、README、unsigned 说明和 build-info。发布从已提交干净树走 `./tools/release.sh`，生成四 EXE 同源 Windows ZIP；保留本地收据、完整 ZIP SHA-256、构建日志与发布校验。构建/下载候选检查不是客户端普通启动前置。
 
 ```sh
 nix develop --command python3 tests/contract/windows_zip.py
 nix develop --command cargo test -p vaultsyncd-xtask
-nix develop .#windows --command cargo xwin clippy --locked --target x86_64-pc-windows-msvc -p vaultsyncd-agent --all-targets -- -D warnings
-nix develop .#windows --command cargo xwin test --locked --target x86_64-pc-windows-msvc -p vaultsyncd-agent --lib --no-run
+nix develop .#windows --command cargo xwin clippy --locked --target x86_64-pc-windows-msvc -p vaultsyncd-agent -p vaultsyncd-desktop --all-targets -- -D warnings
 ```
 
-Windows 测试 EXE 内有 `portable::tests::*` 和 `portable::webview::tests::*`。交叉编译/宿主打包测试不代表原生通过。脏树不能生成正式收据；父审查提交后才能执行最终 fresh build，不能为出包放宽该门禁。
+打包集合为九项文件加 `zip-files.json` 本身（共十文件），无 `vaultsyncd-zip.exe`。宿主打包契约检查字节/清单/确定性；自动更新解压与候选校验同步适配此集合，仍拒绝路径穿越、链接、重复条目或危险归档。**格式迁移（明确的一次性手工步骤）：已发布 v0.1.7 及更早的旧更新器硬编码旧 11 文件集合，会拒绝本卡新的 10 文件包，不能直接通过旧托盘升级到新布局。** 复现证据见 S185 的 `review-legacy-update/`。不要为兼容旧更新器重新放回用户要求删除的 EXE；从发布页手工下载新完整包，关闭旧界面并安全停止旧 agent（旧 Stop 脚本仍调用其旧专用入口），再从任意新目录打开新 desktop；本机原状态继续沿用。旧发行包/标签不改写，本卡不发布新 Release；未来首次发行新布局必须在发布说明明确提示此次手工迁移，不得宣称旧 Latest 可直接托盘升级。迁移后的新客户端恢复使用新集合进行后续托盘自动更新。
 
 ## 自动化真实 GUI / dirty 重启验收
 
-宿主已有 Windows 交互桌面且该会话没有旧 agent 时，可使用同源组件执行（不改登录、不重启操作系统）：
+`tests/platform/windows/run-native-startup.sh` 现在运行 `s185-direct-startup.ps1`，在已登录的实验室 Windows 桌面、隔离 LOCALAPPDATA 下验证：无清单首次直开、旧损坏 owner 与清单不影响启动、第二目录复用健康实例、跨目录安全停止、冷启动与移动改名保留身份、Start cmd、单实例、无效配置与维护屏障保留。不得用交叉编译替代这份原生结果。
 
-```sh
-nix develop --command python3 tests/platform/windows/s109-e2e.py artifacts/S109/client
-```
-
-脚本创建本 run 无登录触发器的 Limited/Interactive task，同 worker 内运行 ZIP/GUI/CLI，隔离 LocalAppData/AppData/WebView，并用真实 Linux btrfs fixture、TLS 与上传断链代理。覆盖：
-
-- ZIP 同源与逐文件 hash、`zip-files.json`/installed 清单来源、未签名状态；
-- `start` 退出码 0、真实 agent IPC 健康、恰好一个由本 run 程序目录启动且可见/有主窗口句柄/响应的窗口；**重复 start 复用同一 agent 与同一窗口**；
-- 通过同一会话的真实 CLI 完成连接/登录/Vault/绑定（不依赖调试端口），首次非空合并 synchronized，GUI 窗口与 CLI 为同一 agent 实例；
-- 关闭窗口（WM_CLOSE）后 agent PID 不变，随后新建文件由后台真实上传，宿主从 Linux fixture 的 Vault 目录独立核对字节与 SHA-256；
-- 上传断链代理阻止 begin 造成真实 dirty：安全 `stop` 后 agent 正常退出、未确认字节保留，重新 `start` 后 DeviceId/Vault/绑定不变、绑定仍 PAUSED、dirty 仍存在且服务端仍是旧内容；显式 `resume` 后服务端字节变为新内容并独立核对 hash；
-- 默认状态快照（HKCU Run、HKLM、开始菜单/桌面快捷方式）在全程不变，通知默认关闭；`finish` 只对本 run 随机 `server_id` 做 IPC logout。
-
-`result.json` 的 `restart_kind` 明确写“仅 agent 进程重启”，`boot` 不变，**不代表 OS 重启或登录自启动**。本机 Quickemu 关闭 UAC，Limited 任务仍是提升令牌，结果同时记录 `elevated_session=true`、`standard_user_proven=false`，不冒充标准用户；标准用户路径由下面的手工入口覆盖。
-
-真实原生结果（`3512865`，unsigned-test ZIP `8c1dc94b…2b5`）：全部动作通过，关窗后上传、dirty 保留与 resume 后提交的宿主独立 hash 一致，默认 Run/HKLM/快捷方式未变，agent 安全停止、无强制结束；Vault/state/cache/recovery 保留在客体。
-
-WebView2 157 起本机不再应用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`：直接启动桌面也不出现 `--remote-debugging-port`，因此自动化不依赖 CDP，也不再操作页面表单；GUI 表单交互的原生证据仍由安装版 S099 验收覆盖，本卡不重复声明。另一个已实测限制是入口派生并长期运行的 GUI/agent 子进程会继承调用方标准句柄，自动化调用应把输出重定向到文件而不是管道。
+同步内容/CFAPI 仍使用既有真实绑定验收入口，不因本卡启动改动宣称已经同步：S167/S080/S081 的绑定与文件验证要求仍保留；需真实隔离服务端与客体本地 NTFS Vault。标准用户长期 Fresh/Live/Stop 入口为 `tests/platform/windows/s109-zip.ps1`（已按新 agent CLI 更新），Live 必须配置绑定并由宿主独立核验文件哈希。所有故障与导出只在带 run_id 的实验室实例进行，不清理用户状态。
 
 ## 手工标准用户原生验收入口
 
-先协调 Windows 独占窗口。由操作者**手工登录新的独立标准用户**，安装好 WebView2；不得使用旧用户、不重置旧密码、不改 LSA/自动登录、不重启 VM。把同源 ZIP、receipt 和 `tests/platform/windows/s109-zip.ps1` 交给该用户可读目录，receipt 中对应完整 ZIP 项给出 SHA-256 与完整源提交。
-
-在该用户的真实桌面 PowerShell 执行（示例路径须替换）：
-
-```powershell
-& 'C:\lab\s109-zip.ps1' -Mode Fresh `
-  -RunDirectory "$env:USERPROFILE\Documents\s109-run-001" `
-  -ZipPath 'C:\lab\vaultsyncd-0.1.1-x64-unsigned.zip' `
-  -ZipSha256 '<receipt中完整ZIP的SHA256>' -ExpectedCommit '<完整40位commit>'
-```
-
-Fresh 要求目标目录全新、当前用户没有任何 vaultsyncd 状态/安装注册，遇到已有内容直接停止而不删除。验证完整 archive/展开文件来源、真实 cmd 中文空格路径、重复 Start 同 PID/IPC、关闭 GUI 后 IPC 存活、安全 Stop、停止幂等、另一目录拒绝、来源变化拒绝、重新启动身份稳定、无 Run/StartMenu/安装注册变化。保留原目录与另一份拒绝样本，最后 agent/GUI 留作真实服务配置；结果在该 run 的 `results/fresh.json`，它明确只是 launcher smoke。
-
-通过真实 GUI/CLI 配置**隔离的真实服务端与独立 NTFS Vault/cache**，完成登录/绑定后，再执行 Live（不接受空配置冒充同步成功）：
-
-```powershell
-& 'C:\lab\s109-zip.ps1' -Mode Live `
-  -RunDirectory "$env:USERPROFILE\Documents\s109-run-001" -BindingId '<活动绑定ID>'
-```
-
-Live 关闭确切路径的 GUI、确认同一 agent 仍运行，写入唯一内容并等待该绑定真实 synchronized；安全 Stop 后核对文件 hash、Vault/cache/state 保留，重新 Start 后验证绑定仍暂停。`results/live.json` 给出唯一文件名、字节数及 SHA-256；**宿主必须另从真实服务端读取并比对这份内容**，guest 的 synchronized 不替代独立 hash 证据。未确认 dirty/导出完整性、缺 WebView2、旧安装状态拒绝、维护屏障故障仍需原生矩阵补齐，不能以 Fresh 的空绑定 Stop 代替。
-
-最后安全停止本 run：
-
-```powershell
-& 'C:\lab\s109-zip.ps1' -Mode Stop -RunDirectory "$env:USERPROFILE\Documents\s109-run-001"
-```
-
-脚本不注销提供程序、不删用户/profile/Vault/cache、不按进程名结束任务；失败保留所有现场。原生执行与最终交接由父协调，本说明本身不声称 Windows 验收已完成。
+在手工登录的独立标准用户桌面，解压完整包到带空格/中文目录，直接打开桌面、关闭窗口后确认同步继续；安全停止后移动目录再开，核对原 DeviceId/绑定/未确认内容。另开一个解压副本验证复用同一健康 agent，不应报 `ZIP_OWNER_MISMATCH`。验证新程序不创建 owner，已有 owner 保持原字节；测试只改隔离样本，不编辑真实在线状态。原生 CFAPI、多机、性能容量与最终同源发行仍为独立首发门禁。

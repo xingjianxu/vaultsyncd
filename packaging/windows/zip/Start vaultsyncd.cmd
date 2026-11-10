@@ -1,6 +1,6 @@
 @echo off
 setlocal
-"%~dp0vaultsyncd-zip.exe" start
+"%~dp0vaultsyncd-agent.exe" --user-session start
 if errorlevel 1 (
   echo Start failed. State and user content were preserved. See the error above and local agent.log.
   pause

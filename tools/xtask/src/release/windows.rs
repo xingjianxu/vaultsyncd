@@ -176,15 +176,12 @@ pub(super) fn build(root: &Path, directory: &Path, component: &str) -> Result<()
         run(&command, root, None)?;
         preparation.push(command.clone());
     }
-    let launcher = build.join(TARGET).join("release/vaultsyncd-zip.exe");
-    production_pe(&launcher)?;
     let zip_command = vec![
         "python3".into(),
         root.join("packaging/windows/zip/build.py")
             .display()
             .to_string(),
         payload.display().to_string(),
-        launcher.display().to_string(),
         root.join("packaging/windows/zip").display().to_string(),
         payload
             .join(format!("vaultsyncd-{}-x64-unsigned.zip", before.version))

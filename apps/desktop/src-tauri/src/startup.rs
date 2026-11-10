@@ -13,7 +13,7 @@ use vaultsyncd_platform_windows::ipc::Endpoint;
 fn missing_pipe(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(2) | Some(3))
 }
-fn ready(agent: &Path) -> io::Result<bool> {
+fn ready() -> io::Result<bool> {
     tauri::async_runtime::block_on(async {
         let endpoint = Endpoint::current("vaultsyncd-agent")?;
         let mut identity = [0_u8; 16];
@@ -28,7 +28,7 @@ fn ready(agent: &Path) -> io::Result<bool> {
                 parameters: None,
             },
         };
-        match endpoint.request_verified(agent, &request).await {
+        match endpoint.request_authenticated(&request).await {
             Ok((response, process)) => {
                 if response.kind != ResponseKind::Ok || response.result.is_none() {
                     return Err(io::Error::other(
@@ -96,11 +96,11 @@ pub(super) fn ensure_agent() -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::other("无法定位客户端目录。"))?
         .join("vaultsyncd-agent.exe");
-    if ready(&agent)? {
+    if ready()? {
         return Ok(());
     }
     launch(&agent)?;
-    if !ready(&agent)? {
+    if !ready()? {
         return Err(io::Error::other(
             "agent 启动后 IPC 尚未就绪，请检查 agent.log。",
         ));

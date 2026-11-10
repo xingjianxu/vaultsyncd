@@ -194,14 +194,8 @@ impl ServerProcess {
         sid: &str,
         expected: &std::path::Path,
     ) -> io::Result<Self> {
-        let mut pid = 0;
-        checked(unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) })?;
-        let process = Handle(unsafe { OpenProcess(0x0010_1001, 0, pid) });
-        if process.0.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let token = process_token(process.0)?;
-        same_user(&token_user(token.0)?, sid)?;
+        let pinned = Self::pin(pipe, sid, 0x0010_1001)?;
+        let process = &pinned.process;
         let mut text = vec![0u16; 32768];
         let mut length = text.len() as u32;
         checked(unsafe {
@@ -215,6 +209,22 @@ impl ServerProcess {
                 "IPC server is not the registered installed agent",
             ));
         }
+        Ok(pinned)
+    }
+    /// Ordinary session control authenticates the peer user without binding it to an extraction
+    /// directory. Query/synchronize rights deliberately exclude forced process termination.
+    pub(super) fn capture_authenticated(pipe: &NamedPipeClient, sid: &str) -> io::Result<Self> {
+        Self::pin(pipe, sid, 0x0010_1000)
+    }
+    fn pin(pipe: &NamedPipeClient, sid: &str, access: u32) -> io::Result<Self> {
+        let mut pid = 0;
+        checked(unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) })?;
+        let process = Handle(unsafe { OpenProcess(access, 0, pid) });
+        if process.0.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let token = process_token(process.0)?;
+        same_user(&token_user(token.0)?, sid)?;
         Ok(Self { process })
     }
     /// Wait for the prepared server to drain and exit, retaining the original process handle.

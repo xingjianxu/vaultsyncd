@@ -9,7 +9,7 @@ import zipfile
 
 EXECUTABLES = (
     "vaultsyncd-agent.exe", "vaultsyncd-session.exe", "vaultsyncd-cli.exe",
-    "vaultsyncd-desktop.exe", "vaultsyncd-zip.exe",
+    "vaultsyncd-desktop.exe",
 )
 RESOURCES = ("Start vaultsyncd.cmd", "Stop vaultsyncd.cmd", "README-ZIP.txt")
 FILES = (*EXECUTABLES, "installed-files.json", "UNSIGNED-TEST.txt", *RESOURCES)
@@ -37,14 +37,13 @@ def verify(archive, directory):
             raise ValueError(f"ZIP manifest hash mismatch: {item['path']}")
 
 
-def build(payload, launcher, resources, archive):
+def build(payload, resources, archive):
     directory = payload / "zip"
     if directory.exists() or archive.exists():
         raise ValueError("ZIP output exists; use a new component directory")
     directory.mkdir()
-    for name in EXECUTABLES[:-1]:
+    for name in EXECUTABLES:
         shutil.copyfile(payload / name, directory / name)
-    shutil.copyfile(launcher, directory / EXECUTABLES[-1])
     for name in ("installed-files.json", "UNSIGNED-TEST.txt"):
         shutil.copyfile(payload / name, directory / name)
     for name in RESOURCES:
@@ -64,6 +63,6 @@ def build(payload, launcher, resources, archive):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        raise SystemExit("usage: build.py <payload> <fresh-zip-exe> <resources> <new-zip>")
+    if len(sys.argv) != 4:
+        raise SystemExit("usage: build.py <payload> <resources> <new-zip>")
     build(*(Path(value) for value in sys.argv[1:]))

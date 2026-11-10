@@ -87,7 +87,7 @@ try{
   foreach($explorer in $explorers){if((Invoke-CimMethod -InputObject $explorer -MethodName GetOwnerSid).Sid-ne $identity.User.Value){throw 'Explorer SID differs'}}
   # LOCALAPPDATA is NOT IPC isolation: endpoints are scoped to the token SID + SessionId.
   # Refuse all old session clients before changing env, calling CLI, or touching any profile.
-  $prior=@(Get-CimInstance Win32_Process|Where-Object{$_.SessionId-eq $session -and $_.Name-in @('vaultsyncd-agent.exe','vaultsyncd-session.exe','vaultsyncd-zip.exe','vaultsyncd-desktop.exe')})
+  $prior=@(Get-CimInstance Win32_Process|Where-Object{$_.SessionId-eq $session -and $_.Name-in @('vaultsyncd-agent.exe','vaultsyncd-session.exe','vaultsyncd-desktop.exe')})
   if($prior.Count){throw 'old session client present; preserved without stopping or connecting'}
   Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;
@@ -117,7 +117,7 @@ public static class S109Native {
   $profile=Join-Path $isolatedLocal 'vaultsyncd\agent'
   $configPath=Join-Path $profile 'agent.json'
   $cli=Join-Path $program 'vaultsyncd-cli.exe'
-  $zipEntry=Join-Path $program 'vaultsyncd-zip.exe'
+  $zipEntry=Join-Path $program 'vaultsyncd-agent.exe'
   $boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')
 
   function Registry-Snapshot([string]$path){
@@ -194,7 +194,7 @@ public static class S109Native {
   function Invoke-Zip([string]$operation){
     # Health is short-lived and spawns nothing, so a pipeline is safe and gives its JSON.
     if($operation-eq 'health'){
-      $text=& $zipEntry health 2>&1
+      $text=& $zipEntry --user-session health 2>&1
       if($LASTEXITCODE-ne 0){throw 'product ZIP health failed'}
       return ($text -join "`n")
     }
@@ -202,7 +202,7 @@ public static class S109Native {
     # them would block until those children exit. Do not redirect: only the real exit code of
     # this process matters here, and success is re-verified through IPC/CLI below.
     $info=New-Object Diagnostics.ProcessStartInfo
-    $info.FileName=$zipEntry;$info.Arguments=$operation;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
+    $info.FileName=$zipEntry;$info.Arguments='--user-session '+$operation;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
     $process=[Diagnostics.Process]::Start($info)
     if(!$process.WaitForExit(180000)){throw ('product ZIP entry did not return: '+$operation)}
     $process.WaitForExit()
@@ -352,7 +352,7 @@ public static class S109Native {
         if($answer.dirty_sha256-ne $dirtyHash){throw 'safe stop changed dirty bytes'}
         # Independently read actual product recovery exports, including unconfirmed bytes.
         $exports=@();$foundDirty=$false
-        foreach($directory in @(Get-ChildItem -LiteralPath $profile -Directory -Filter 'zip-stop-*')){
+        foreach($directory in @(Get-ChildItem -LiteralPath $profile -Directory -Filter 'session-stop-*')){
           foreach($manifestPath in @(Get-ChildItem -LiteralPath $directory.FullName -File -Filter manifest.json -Recurse)){
             $export=Get-Content $manifestPath.FullName -Raw -Encoding UTF8|ConvertFrom-Json
             foreach($file in $export.files){

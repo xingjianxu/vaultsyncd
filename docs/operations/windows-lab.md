@@ -213,7 +213,7 @@ nix develop .#windows --command bash tests/platform/windows/run-on-guest.sh
 
 客体侧前置：`nix develop .#quickemu --command tools/windows-lab/bootstrap-host.sh start` 与 `wait-ssh`（实测 6 s 可用），结束后 `stop` 干净关机。`run-on-guest.sh` 把产物与 `guest-run.ps1` 传到 `C:\vaultsyncd-lab\s009\`，由 PowerShell 核对校验和、依次运行并采集退出码与输出；脚本退出码 0 才代表“客体原生执行成功且两端哈希一致”。
 
-产品客户端（agent/session/CLI/desktop/ZIP 入口）不走上面三条只服务冒烟产物的命令：在任意目录运行 `./tools/build.sh` 会在 `.#windows` 内交叉编译当前工作树到仓库 `dist/`，产物是免安装程序目录（五个 EXE、两份清单、两个 cmd、README 与 `build-info.txt`），可整目录拷到客体运行；无版本号目录、无收据、不要求干净提交。发布用的同源 ZIP 仍由 `tools/release.sh` / `cargo xtask release build` 生成，两者不能互相代替。
+产品客户端（agent/session/CLI/desktop）不走上面三条只服务冒烟产物的命令：在任意目录运行 `./tools/build.sh` 会在 `.#windows` 内交叉编译当前工作树到仓库 `dist/`，产物是免安装程序目录（四个 EXE、两份清单、两个 cmd、README 与 `build-info.txt`），可整目录拷到任意客体本机普通目录，直接打开 desktop 或 Start；无版本号目录、无收据、不要求干净提交。S185 删除 ZIP 专用 EXE，普通启动不读取/校验 owner 或程序清单，跨目录复用同用户健康 agent；安全停止用 `agent --user-session stop`。原生启动回归用 `tests/platform/windows/run-native-startup.sh`（`s185-direct-startup.ps1`），覆盖无清单、损坏旧 owner、跨目录与移动、真实窗口、单实例及事务屏障。发布用的同源 ZIP 仍由 `tools/release.sh` / `cargo xtask release build` 生成，两者不能互相代替。
 
 ### 12.3 工具链来源与版本固定
 

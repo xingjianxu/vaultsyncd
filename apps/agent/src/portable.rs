@@ -1,9 +1,7 @@
-//! ZIP is program-only, with one persistent local owner; it is not an upgrade bypass.
+//! Independent per-user session control. Program directories never own the local profile.
 use crate::{config::AgentConfig, instance::InstanceGuard, maintenance::storage, user_session};
-use serde::{Deserialize, Serialize};
 use std::{
-    fs,
-    io::{self, Write},
+    fs, io,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -12,55 +10,30 @@ use vaultsyncd_local_ipc::generated::*;
 use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const DESKTOP_SCOPE: &str = "vaultsyncd-desktop";
-const ADOPTIONS: &str = "zip-owner-adoptions.jsonl";
 pub(crate) const ZIP_FILES: &[&str] = &[
     "vaultsyncd-agent.exe",
     "vaultsyncd-session.exe",
     "vaultsyncd-cli.exe",
     "vaultsyncd-desktop.exe",
-    "vaultsyncd-zip.exe",
     "installed-files.json",
     "UNSIGNED-TEST.txt",
     "Start vaultsyncd.cmd",
     "Stop vaultsyncd.cmd",
     "README-ZIP.txt",
 ];
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Owner {
-    format: u32,
-    program: PathBuf,
-    manifest: String,
-}
 fn local() -> io::Result<PathBuf> {
-    let path = PathBuf::from(
+    Ok(PathBuf::from(
         std::env::var_os("LOCALAPPDATA").ok_or_else(|| io::Error::other("LOCALAPPDATA absent"))?,
-    );
-    VaultHandle::open(&path)?;
-    Ok(path)
+    ))
 }
 fn program() -> io::Result<PathBuf> {
     let executable = std::env::current_exe()?;
-    let directory = executable
+    Ok(executable
         .parent()
-        .ok_or_else(|| io::Error::other("program directory absent"))?;
-    // Validate before canonicalizing: canonicalize must not silently follow a junction.
-    VaultHandle::open(directory)?;
-    let canonical = fs::canonicalize(directory)?;
-    // Windows canonicalize returns a verbatim DOS path, while VaultHandle deliberately accepts
-    // only ordinary absolute drive paths. Revalidate after removing that API-only prefix.
-    let text = canonical
-        .to_str()
-        .ok_or_else(|| io::Error::other("program path is not Unicode"))?;
-    let directory = PathBuf::from(text.strip_prefix("\\\\?\\").unwrap_or(text));
-    VaultHandle::open(&directory)?;
-    Ok(directory)
+        .ok_or_else(|| io::Error::other("program directory absent"))?
+        .to_path_buf())
 }
-fn mismatch() -> io::Error {
-    io::Error::other(
-        "ZIP_OWNER_MISMATCH: this local profile belongs to another program path or source. Run the original program folder that claimed it; another extraction path, a hand-edited manifest or setup taking over ZIP state is not supported. Do not delete zip-owner.json or state to bypass maintenance.",
-    )
-}
+/// Candidate verification belongs only to explicit update transactions, never ordinary startup.
 pub(crate) fn verify_zip(directory: &Path) -> io::Result<String> {
     let installed = storage::verify_program(directory)?;
     let vault = VaultHandle::open(directory)?;
@@ -68,13 +41,15 @@ pub(crate) fn verify_zip(directory: &Path) -> io::Result<String> {
     let path = directory.join("zip-files.json");
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&path)?).map_err(io::Error::other)?;
-    let files = manifest["files"].as_array().ok_or_else(mismatch)?;
+    let files = manifest["files"]
+        .as_array()
+        .ok_or_else(|| io::Error::other("missing update package inventory"))?;
     if manifest["format"] != 1
         || manifest["signature_status"] != "unsigned-test"
         || manifest["source"] != installed["source"]
         || files.len() != ZIP_FILES.len()
     {
-        return Err(mismatch());
+        return Err(io::Error::other("update package inventory mismatch"));
     }
     let mut pins = Vec::new();
     for &name in ZIP_FILES {
@@ -88,229 +63,36 @@ pub(crate) fn verify_zip(directory: &Path) -> io::Result<String> {
             || entries[0]["bytes"].as_u64() != Some(fs::metadata(directory.join(name))?.len())
         {
             return Err(io::Error::other(format!(
-                "ZIP file hash/size mismatch: {name}"
+                "update package file hash/size mismatch: {name}"
             )));
         }
     }
     storage::hash(&path)
 }
-/// Validate the original ZIP ownership before an explicit offline upgrade.
-pub(crate) fn maintenance_owner(directory: &Path) -> io::Result<Vec<u8>> {
-    let owner = local()?.join("vaultsyncd/zip-owner.json");
-    check_owner(&owner, directory, &verify_zip(directory)?)?;
-    fs::read(owner)
+/// Installed maintenance retains its real registered target; portable folders need no owner file.
+pub(crate) fn is_installed(directory: &Path) -> io::Result<bool> {
+    let Some(registered) = registration::installed_directory()? else {
+        return Ok(false);
+    };
+    same_program(&registered, directory)
 }
-pub(crate) fn installed_owner(directory: &Path) -> io::Result<()> {
-    let registered = webview::installed_directory()?
-        .ok_or_else(|| io::Error::other("installed program registration missing"))?;
-    VaultHandle::open(&registered)?;
-    VaultHandle::open(directory)?;
-    if fs::canonicalize(registered)? != fs::canonicalize(directory)? {
+fn same_program(registered: &Path, directory: &Path) -> io::Result<bool> {
+    match fs::canonicalize(registered) {
+        Ok(registered) => Ok(registered == fs::canonicalize(directory)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+pub(crate) fn require_installed_target(directory: &Path) -> io::Result<()> {
+    if !is_installed(directory)? {
         return Err(io::Error::other(
             "installed program registration target mismatch",
         ));
     }
     Ok(())
 }
-/// Only called while the writer lock and durable maintenance barrier are held.
-pub(crate) fn replace_owner(bytes: &[u8]) -> io::Result<()> {
-    let base = local()?.join("vaultsyncd");
-    let vault = VaultHandle::open(&base)?;
-    let _: Owner = serde_json::from_slice(bytes).map_err(io::Error::other)?;
-    let mut file = vault.open_exclusive_write("zip-owner.json")?;
-    file.set_len(0)?;
-    file.write_all(bytes)?;
-    file.sync_all()
-}
-pub(crate) fn upgrade_owner(directory: &Path) -> io::Result<()> {
-    let manifest = verify_zip(directory)?;
-    replace_owner(
-        &serde_json::to_vec_pretty(&Owner {
-            format: 1,
-            program: directory.into(),
-            manifest,
-        })
-        .map_err(io::Error::other)?,
-    )
-}
-fn load_owner(path: &Path) -> io::Result<Owner> {
-    let vault = VaultHandle::open(
-        path.parent()
-            .ok_or_else(|| io::Error::other("owner parent absent"))?,
-    )?;
-    let _pin = vault.open_read("zip-owner.json")?;
-    let owner: Owner = serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
-    if owner.format != 1 {
-        return Err(mismatch());
-    }
-    Ok(owner)
-}
-/// Strict ownership, for transactions that replace the program and must start from the exact
-/// package that claimed the profile.
-fn check_owner(path: &Path, directory: &Path, manifest: &str) -> io::Result<()> {
-    let owner = load_owner(path)?;
-    if owner.program != directory || owner.manifest != manifest {
-        return Err(mismatch());
-    }
-    Ok(())
-}
-/// Startup ownership. The same program directory may now hold a different complete ZIP because the
-/// user extracted a package over the folder; that is accepted and re-pinned. Another directory,
-/// a tampered package or a different local state directory is still refused.
-fn resolve_owner(owner: &Path, directory: &Path, manifest: &str, state: &Path) -> io::Result<()> {
-    let pinned = load_owner(owner)?;
-    if pinned.program != directory {
-        return Err(mismatch());
-    }
-    if pinned.manifest == manifest {
-        return Ok(());
-    }
-    adopt_owner(owner, directory, manifest, state, &pinned)
-}
-/// Re-pin the profile to the package now present in the same directory. Deliberately keeps no
-/// backup: the previous owner bytes survive only in the adoption record, so a replaced package has
-/// no program rollback. The writer lock is taken when it is free; a re-check inside the agent (which
-/// already holds it) proceeds and records that the lock was busy.
-fn adopt_owner(
-    owner: &Path,
-    directory: &Path,
-    manifest: &str,
-    state: &Path,
-    pinned: &Owner,
-) -> io::Result<()> {
-    let guard = InstanceGuard::acquire(state, "vaultsyncd-agent").ok();
-    let base = owner
-        .parent()
-        .ok_or_else(|| io::Error::other("owner parent absent"))?;
-    let entry = serde_json::json!({
-        "unix_seconds": SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default(),
-        "program": directory.to_string_lossy(),
-        "previous_manifest": pinned.manifest,
-        "manifest": manifest,
-        "writer_lock_acquired": guard.is_some(),
-        "program_backup": false,
-    });
-    record_adoption(base, &entry)?;
-    let bytes = serde_json::to_vec_pretty(&Owner {
-        format: 1,
-        program: directory.into(),
-        manifest: manifest.into(),
-    })
-    .map_err(io::Error::other)?;
-    let vault = VaultHandle::open(base)?;
-    let mut file = vault.open_exclusive_write("zip-owner.json")?;
-    file.set_len(0)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    drop(guard);
-    Ok(())
-}
-/// Durable audit line next to the owner: without a backup this is the only record of what the
-/// profile used to be pinned to.
-fn record_adoption(base: &Path, entry: &serde_json::Value) -> io::Result<()> {
-    let vault = VaultHandle::open(base)?;
-    let path = base.join(ADOPTIONS);
-    let mut text = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(e),
-    };
-    text.extend_from_slice(
-        serde_json::to_string(entry)
-            .map_err(io::Error::other)?
-            .as_bytes(),
-    );
-    text.push(b'\n');
-    let mut file = match vault.open_exclusive_write(ADOPTIONS) {
-        Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => vault.create_new_file(ADOPTIONS)?,
-        Err(e) => return Err(e),
-    };
-    file.set_len(0)?;
-    file.write_all(&text)?;
-    file.sync_all()
-}
-/// Also enforced by ordinary --config and installed session startup, before opening SQLite.
-pub(crate) fn admit(config: &AgentConfig) -> io::Result<()> {
-    let base = local()?.join("vaultsyncd");
-    let owner = base.join("zip-owner.json");
-    let directory = program()?;
-    if owner.try_exists()? {
-        if fs::canonicalize(&config.state_dir)? != fs::canonicalize(base.join("agent/state"))? {
-            return Err(mismatch());
-        }
-        let manifest = verify_zip(&directory)?;
-        resolve_owner(&owner, &directory, &manifest, &config.state_dir)?;
-    } else if directory.join("zip-files.json").try_exists()? {
-        return Err(io::Error::other(
-            "Use Start vaultsyncd.cmd to initialize ZIP ownership first",
-        ));
-    }
-    Ok(())
-}
-fn claim() -> Result<PathBuf> {
-    let local = local()?;
-    let directory = program()?;
-    let manifest = verify_zip(&directory)?;
-    if webview::installed_program()? {
-        return Err("ZIP_INSTALLED_CLIENT: a setup-managed client is registered for this user; use its S100 maintenance path, not ZIP".into());
-    }
-    let base = local.join("vaultsyncd");
-    let local_vault = VaultHandle::open(&local)?;
-    if !base.try_exists()? {
-        local_vault.create_new_directory("vaultsyncd")?;
-    }
-    let base_vault = VaultHandle::open(&base)?;
-    if base_vault.overlaps(&VaultHandle::open(&directory)?) {
-        return Err("ZIP program/state directories must not overlap".into());
-    }
-    let owner = base.join("zip-owner.json");
-    if owner.try_exists()? {
-        resolve_owner(&owner, &directory, &manifest, &base.join("agent/state"))?;
-        return Ok(user_session::prepare(&local)?);
-    }
-    // Never adopt even an offline installed/older profile. Partial first claim is recoverable only
-    // when all that exists is our empty directory/lock scaffolding, not configuration or data.
-    let profile = base.join("agent");
-    if !profile.try_exists()? {
-        base_vault.create_new_directory("agent")?;
-    }
-    let profile_root = VaultHandle::open(&profile)?;
-    let state = profile.join("state");
-    if !state.try_exists()? {
-        profile_root.create_new_directory("state")?;
-    }
-    VaultHandle::open(&state)?;
-    let _guard = InstanceGuard::acquire(&state, "vaultsyncd-agent")?;
-    if owner.try_exists()? {
-        check_owner(&owner, &directory, &manifest)?;
-    } else {
-        for entry in fs::read_dir(&profile)? {
-            if entry?.file_name() != "state" {
-                return Err("ZIP_EXISTING_PROFILE: existing installed/unknown profile is preserved; ZIP cannot adopt it".into());
-            }
-        }
-        for entry in fs::read_dir(&state)? {
-            if entry?.file_name() != "agent.writer.lock" {
-                return Err("ZIP_EXISTING_STATE: existing local state is preserved".into());
-            }
-        }
-        let mut file = base_vault.create_new_file("zip-owner.json")?;
-        file.write_all(&serde_json::to_vec_pretty(&Owner {
-            format: 1,
-            program: directory,
-            manifest,
-        })?)?;
-        file.sync_all()?;
-    }
-    Ok(user_session::prepare(&local)?)
-}
 async fn rpc(
     endpoint: &Endpoint,
-    expected: &Path,
     name: CommandName,
     parameters: Option<CommandParameters>,
 ) -> Result<(
@@ -318,26 +100,23 @@ async fn rpc(
     vaultsyncd_platform_windows::ipc::ServerProcess,
 )> {
     let (response, process) = endpoint
-        .request_verified(
-            expected,
-            &Request {
-                request_id: format!("zip-{}", std::process::id()),
-                ipc_version: vaultsyncd_local_ipc::version::supported(),
-                command: Command { name, parameters },
-            },
-        )
+        .request_authenticated(&Request {
+            request_id: format!("session-{}", std::process::id()),
+            ipc_version: vaultsyncd_local_ipc::version::supported(),
+            command: Command { name, parameters },
+        })
         .await?;
     if let Some(error) = response.error {
-        return Err(format!("ZIP IPC {:?}: {}", error.code, error.message).into());
+        return Err(format!("session IPC {:?}: {}", error.code, error.message).into());
     }
     Ok((response.result.ok_or("missing IPC health result")?, process))
 }
 fn missing_pipe(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(2) | Some(3))
 }
-/// Start only when the authenticated session endpoint is absent; health, never process exit,
-/// establishes readiness. This is shared by ZIP Start and the direct desktop entry point.
-async fn ensure_ready(config_path: &Path, endpoint: &Endpoint, agent: &Path) -> Result<()> {
+/// Only spawn when the authenticated endpoint is absent. A same-user agent from another folder
+/// is reusable; an unhealthy/busy endpoint never permits starting a competing writer.
+async fn ensure_ready(config_path: &Path, endpoint: &Endpoint) -> Result<()> {
     let mut child = match endpoint.connect().await {
         Ok(_) => None,
         Err(e) if missing_pipe(&e) => Some(user_session::spawn(config_path)?),
@@ -345,12 +124,12 @@ async fn ensure_ready(config_path: &Path, endpoint: &Endpoint, agent: &Path) -> 
     };
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        match rpc(endpoint, agent, CommandName::GetStatus, None).await {
+        match rpc(endpoint, CommandName::GetStatus, None).await {
             Ok((_, process)) => {
                 if process.wait(0)? {
                     return Err("agent exited during health check".into());
                 }
-                break;
+                return Ok(());
             }
             Err(e)
                 if e.downcast_ref::<io::Error>().is_some_and(missing_pipe)
@@ -359,8 +138,8 @@ async fn ensure_ready(config_path: &Path, endpoint: &Endpoint, agent: &Path) -> 
                 if let Some(child) = &mut child
                     && let Some(status) = child.try_wait()?
                 {
-                    // Another simultaneous Start may have won the writer lock. Only real IPC
-                    // health, never the spawn exit code, can establish readiness.
+                    // A simultaneous Start may have won the writer lock; only real IPC health,
+                    // never a launcher's exit code, can establish readiness.
                     if status.code() != Some(2) {
                         return Err(
                             format!("agent startup failed: {status}; inspect agent.log").into()
@@ -377,56 +156,36 @@ async fn ensure_ready(config_path: &Path, endpoint: &Endpoint, agent: &Path) -> 
             }
         }
     }
-    Ok(())
 }
-/// Fixed sibling launcher for a direct desktop start. Preserve existing configuration and enforce
-/// ZIP ownership and maintenance barriers before starting a new background process.
+/// No package manifests, program provenance, or legacy owner files participate in startup.
+/// WebView2 is required by the desktop's actual WebView creation, not by background session IPC.
 pub async fn ensure_user_session() -> Result<()> {
-    let directory = program()?;
-    let config_path = if directory.join("zip-files.json").try_exists()? {
-        webview::require()?;
-        claim()?
-    } else {
-        user_session::prepare(&local()?)?
-    };
+    let config_path = user_session::prepare(&local()?)?;
     let config = AgentConfig::load(&config_path)?;
     crate::maintenance::admit_startup(&config)?;
-    let endpoint = Endpoint::current("vaultsyncd-agent")?;
-    ensure_ready(
-        &config_path,
-        &endpoint,
-        &directory.join("vaultsyncd-agent.exe"),
-    )
-    .await
+    ensure_ready(&config_path, &Endpoint::current("vaultsyncd-agent")?).await
 }
 /// No shell interpolation, registration, or lifetime coupling to the desktop process.
 pub async fn run(action: &str) -> Result<()> {
     if !matches!(action, "start" | "stop" | "health") {
-        return Err("usage: vaultsyncd-zip start|stop|health".into());
-    }
-    if action == "start" {
-        webview::require()?;
+        return Err("usage: vaultsyncd-agent --user-session start|stop|health".into());
     }
     let config_path = if action == "start" {
-        claim()?
+        user_session::prepare(&local()?)?
     } else {
         local()?.join("vaultsyncd/agent/agent.json")
     };
     let config = AgentConfig::load(&config_path)?;
-    admit(&config)?;
     crate::maintenance::admit_startup(&config)?;
-    let directory = program()?;
     let endpoint = Endpoint::current("vaultsyncd-agent")?;
-    let agent = directory.join("vaultsyncd-agent.exe");
     if action == "start" {
-        ensure_ready(&config_path, &endpoint, &agent).await?;
-        // The desktop holds a per-user mutex, so a second Start reuses the open window instead
-        // of creating a duplicate one on the same agent.
+        ensure_ready(&config_path, &endpoint).await?;
+        // The desktop itself takes the mutex; this probe avoids launching a duplicate window.
         if vaultsyncd_platform_windows::single::claim(DESKTOP_SCOPE)?.is_none() {
             println!("Agent IPC healthy; the desktop window is already open in this session.");
             return Ok(());
         }
-        ProcessCommand::new(directory.join("vaultsyncd-desktop.exe"))
+        ProcessCommand::new(program()?.join("vaultsyncd-desktop.exe"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -436,7 +195,7 @@ pub async fn run(action: &str) -> Result<()> {
         );
         return Ok(());
     }
-    let (status, _) = match rpc(&endpoint, &agent, CommandName::GetStatus, None).await {
+    let (status, _) = match rpc(&endpoint, CommandName::GetStatus, None).await {
         Ok(verified) => verified,
         Err(e) if e.downcast_ref::<io::Error>().is_some_and(missing_pipe) && action == "stop" => {
             let _guard = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?;
@@ -449,21 +208,20 @@ pub async fn run(action: &str) -> Result<()> {
         println!("{}", serde_json::to_string(&status)?);
         return Ok(());
     }
-    // PrepareMaintenance persists pause controls before exporting and exiting. They deliberately
-    // remain paused on next start; never auto-resume a binding the user had already paused.
+    // Preparation pauses, exports and exits; never auto-resume a user's paused bindings.
     let base = config_path.parent().ok_or("profile absent")?;
     let vault = VaultHandle::open(base)?;
     let name = format!(
-        "zip-stop-{}-{}",
+        "session-stop-{}-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
         std::process::id()
     );
     vault.create_new_directory(&name)?;
     let destination = base.join(name);
-    // Retain the process from the very connection that executes preparation, not a prior probe.
+    // Wait on the process from the exact authenticated connection that prepared maintenance,
+    // not a prior health probe, path lookup, arbitrary PID, or replacement pipe instance.
     let (_, process) = rpc(
         &endpoint,
-        &agent,
         CommandName::PrepareMaintenance,
         Some(CommandParameters {
             destination: Some(destination.to_str().ok_or("invalid export path")?.into()),
@@ -481,15 +239,17 @@ pub async fn run(action: &str) -> Result<()> {
     );
     Ok(())
 }
-mod webview;
+mod registration;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn zip_inventory_refuses_missing_duplicate_and_changed_files() {
-        let base = std::env::temp_dir().join(format!("s109 ZIP 清单 {}", std::process::id()));
+    fn update_inventory_refuses_missing_duplicate_and_changed_files_without_a_launcher() {
+        let base =
+            std::env::temp_dir().join(format!("s185-update-inventory-{}", std::process::id()));
         fs::create_dir(&base).unwrap();
+        assert!(!ZIP_FILES.contains(&"vaultsyncd-zip.exe"));
         for &name in ZIP_FILES {
             fs::write(base.join(name), name.as_bytes()).unwrap();
         }
@@ -504,65 +264,22 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&duplicate).unwrap()).unwrap();
         assert!(verify_zip(&base).is_err());
         fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        fs::write(base.join("vaultsyncd-zip.exe"), b"changed launcher").unwrap();
+        fs::write(base.join("Start vaultsyncd.cmd"), b"changed launcher").unwrap();
         assert!(verify_zip(&base).is_err());
-        fs::remove_file(base.join("vaultsyncd-zip.exe")).unwrap();
+        fs::remove_file(base.join("Start vaultsyncd.cmd")).unwrap();
         assert!(verify_zip(&base).is_err());
         fs::remove_dir_all(base).unwrap();
     }
     #[test]
-    fn same_directory_repackage_is_adopted_and_other_path_is_not() {
-        let base = std::env::temp_dir().join(format!("s174 覆盖 ownership {}", std::process::id()));
-        fs::create_dir(&base).unwrap();
-        let state = base.join("agent/state");
-        fs::create_dir_all(&state).unwrap();
-        let owner = base.join("zip-owner.json");
-        let directory = base.join("程序 空格");
-        fs::create_dir(&directory).unwrap();
-        let pinned = Owner {
-            format: 1,
-            program: directory.clone(),
-            manifest: "old-manifest".into(),
-        };
-        fs::write(&owner, serde_json::to_vec(&pinned).unwrap()).unwrap();
-        // An unchanged package is a no-op, and another directory is still refused.
-        assert!(resolve_owner(&owner, &directory, "old-manifest", &state).is_ok());
-        assert!(resolve_owner(&owner, &base.join("other"), "new-manifest", &state).is_err());
-        assert_eq!(load_owner(&owner).unwrap().manifest, "old-manifest");
-        // A complete package extracted over the same folder re-pins the profile without a backup.
-        assert!(resolve_owner(&owner, &directory, "new-manifest", &state).is_ok());
-        let adopted = load_owner(&owner).unwrap();
-        assert_eq!(adopted.program, directory);
-        assert_eq!(adopted.manifest, "new-manifest");
-        let record = fs::read_to_string(base.join(ADOPTIONS)).unwrap();
-        assert!(record.contains("\"previous_manifest\":\"old-manifest\""));
-        assert!(record.contains("\"program_backup\":false"));
-        // A broken owner is never adopted, even for the same directory.
-        fs::write(&owner, b"broken").unwrap();
-        assert!(resolve_owner(&owner, &directory, "third-manifest", &state).is_err());
-        fs::remove_dir_all(base).unwrap();
-    }
-    #[test]
-    fn ownership_is_exact_and_corruption_is_not_adopted() {
-        let base = std::env::temp_dir().join(format!("s109 中文 ownership {}", std::process::id()));
-        fs::create_dir(&base).unwrap();
-        let owner = base.join("zip-owner.json");
-        let directory = base.join("程序 空格");
-        fs::write(
-            &owner,
-            serde_json::to_vec(&Owner {
-                format: 1,
-                program: directory.clone(),
-                manifest: "source-a".into(),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        assert!(check_owner(&owner, &directory, "source-a").is_ok());
-        assert!(check_owner(&owner, &base.join("other"), "source-a").is_err());
-        assert!(check_owner(&owner, &directory, "source-b").is_err());
-        fs::write(&owner, b"broken").unwrap();
-        assert!(check_owner(&owner, &directory, "source-a").is_err());
+    fn installed_target_classification_does_not_claim_other_program_folders() {
+        let base = std::env::temp_dir().join(format!("s185-program-target-{}", std::process::id()));
+        let installed = base.join("installed");
+        let portable = base.join("portable");
+        fs::create_dir_all(&installed).unwrap();
+        fs::create_dir(&portable).unwrap();
+        assert!(same_program(&installed, &installed).unwrap());
+        assert!(!same_program(&installed, &portable).unwrap());
+        assert!(!same_program(&base.join("removed-installed"), &portable).unwrap());
         fs::remove_dir_all(base).unwrap();
     }
 }

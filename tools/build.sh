@@ -28,12 +28,11 @@ target=x86_64-pc-windows-msvc
 # 与 cargo xtask release build 相同：静态 CRT（客体无 VCRUNTIME140.dll），忽略静态库
 # 预编译 obj 的 LNK4099 调试信息警告。
 rustflags="-C target-feature=+crt-static -C link-arg=/ignore:4099"
-# PRODUCT_EXECUTABLES 是 installed-files.json 记录的四个已安装程序；
-# 专用 ZIP 入口 vaultsyncd-zip.exe 由 packaging/windows/zip/build.py 单独纳入清单。
+# 四个程序直接运行；清单仅供发布与显式维护使用，不作为普通启动门禁。
 product_executables=(vaultsyncd-agent.exe vaultsyncd-session.exe vaultsyncd-cli.exe vaultsyncd-desktop.exe)
 zip_files=(
     vaultsyncd-agent.exe vaultsyncd-session.exe vaultsyncd-cli.exe vaultsyncd-desktop.exe
-    vaultsyncd-zip.exe installed-files.json UNSIGNED-TEST.txt
+    installed-files.json UNSIGNED-TEST.txt
     "Start vaultsyncd.cmd" "Stop vaultsyncd.cmd" README-ZIP.txt
 )
 
@@ -42,7 +41,7 @@ echo "== 清空 $out"
 rm -rf "$out"
 mkdir -p "$out"
 stage=$out/.stage
-mkdir -p "$stage/payload" "$stage/build"
+mkdir -p "$stage/payload"
 
 echo "== pnpm：锁定依赖离线准备"
 pnpm install --frozen-lockfile --offline
@@ -58,14 +57,13 @@ env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS="$rustflags" \
 # 尊重调用方的 CARGO_TARGET_DIR（相对路径按仓库根解析），默认用仓库 target/ 以复用缓存。
 built=${CARGO_TARGET_DIR:-$vault/target}/$target/release
 case $built in /*) ;; *) built=$vault/$built ;; esac
-for binary in "${product_executables[@]}" vaultsyncd-zip.exe; do
+for binary in "${product_executables[@]}"; do
     if [ ! -f "$built/$binary" ]; then
         echo "build: 缺少交叉编译产物 $built/$binary" >&2
         exit 1
     fi
 done
 install -m 0644 "${product_executables[@]/#/$built/}" "$stage/payload/"
-install -m 0644 "$built/vaultsyncd-zip.exe" "$stage/build/vaultsyncd-zip.exe"
 
 echo "== 来源与程序清单（installed-files.json / zip-files.json）"
 commit=$(git rev-parse HEAD)
@@ -107,7 +105,7 @@ PY
 # 复用发布链同一段清单代码：它写 zip-files.json、打无版本号 ZIP 并立即逐文件复核。
 echo "== 便携清单与整包复核"
 python3 packaging/windows/zip/build.py \
-    "$stage/payload" "$stage/build/vaultsyncd-zip.exe" "$vault/packaging/windows/zip" \
+    "$stage/payload" "$vault/packaging/windows/zip" \
     "$stage/unsigned.zip"
 mv "$stage/payload/zip"/* "$out"/
 rm -rf "$stage"

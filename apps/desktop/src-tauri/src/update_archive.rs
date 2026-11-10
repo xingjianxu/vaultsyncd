@@ -12,7 +12,6 @@ const FILES: &[&str] = &[
     "vaultsyncd-session.exe",
     "vaultsyncd-cli.exe",
     "vaultsyncd-desktop.exe",
-    "vaultsyncd-zip.exe",
     "installed-files.json",
     "UNSIGNED-TEST.txt",
     "Start vaultsyncd.cmd",
@@ -26,7 +25,7 @@ const MAX_TOTAL: u64 = 1024 * 1024 * 1024;
 pub(crate) fn extract(archive: &Path, destination: &Path, version: &str) -> io::Result<()> {
     let mut input = File::open(archive)?;
     // zip-rs indexes names in a map, which hides duplicate central-directory entries.
-    // Our bounded eleven-file release format never needs multi-disk or ZIP64 counts.
+    // Our bounded fixed-file release format never needs multi-disk or ZIP64 counts.
     let length = input.metadata()?.len().min(65557);
     input.seek(SeekFrom::End(-(length as i64)))?;
     let mut tail = vec![0; length as usize];
@@ -108,7 +107,7 @@ fn verify(directory: &Path, version: &str) -> io::Result<()> {
     {
         return Err(io::Error::other("更新包版本或同源清单不符"));
     }
-    for (manifest, names) in [(&zip, &FILES[..10]), (&installed, &FILES[..4])] {
+    for (manifest, names) in [(&zip, &FILES[..FILES.len() - 1]), (&installed, &FILES[..4])] {
         let entries = manifest["files"]
             .as_array()
             .ok_or_else(|| io::Error::other("更新包缺少文件清单"))?;

@@ -101,7 +101,9 @@ pub(super) fn backup_program(program: &Path, directory: &Path) -> io::Result<()>
                 .copied()
                 .filter(|name| !PROGRAM_FILES.contains(name)),
         )
-        .chain(["zip-files.json", "uninstall.exe"])
+        // Preserve the removed launcher only when backing up a pre-S185 package, so old
+        // program inventories remain fully recoverable without executing that launcher.
+        .chain(["zip-files.json", "uninstall.exe", "vaultsyncd-zip.exe"])
     {
         let from = program.join(name);
         if !from.try_exists()? {
@@ -215,6 +217,11 @@ pub(super) fn replace_zip(candidate: &Path, target: &Path) -> io::Result<()> {
         OpenOptions::new().write(true).open(to)?.sync_all()?;
     }
     crate::portable::verify_zip(target)?;
+    let obsolete = target.join("vaultsyncd-zip.exe");
+    if obsolete.try_exists()? {
+        safe(&obsolete)?;
+        fs::remove_file(obsolete)?;
+    }
     Ok(())
 }
 
@@ -235,6 +242,30 @@ pub(super) fn require_program_idle(program: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_launcher_is_retained_only_as_program_rollback_data() {
+        let base = std::env::temp_dir().join(format!(
+            "s185-legacy-program-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let program = base.join("program");
+        let backup = base.join("backup");
+        fs::create_dir_all(&program).unwrap();
+        fs::write(program.join("vaultsyncd-zip.exe"), b"legacy rollback bytes").unwrap();
+        backup_program(&program, &backup).unwrap();
+        fs::remove_file(program.join("vaultsyncd-zip.exe")).unwrap();
+        restore(&backup, &program).unwrap();
+        assert_eq!(
+            fs::read(program.join("vaultsyncd-zip.exe")).unwrap(),
+            b"legacy rollback bytes"
+        );
+        assert!(!crate::portable::ZIP_FILES.contains(&"vaultsyncd-zip.exe"));
+        fs::remove_dir_all(base).unwrap();
+    }
     #[test]
     fn corrupted_backup_refuses_restore_before_changing_any_destination() {
         let base = std::env::temp_dir().join(format!(

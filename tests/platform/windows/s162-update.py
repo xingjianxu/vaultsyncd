@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Controlled version fixtures exercising production update PE on native Windows.
 
-Does not publish a release or claim previous-version compatibility. Uses real ZIP
-ownership, per-run LOCALAPPDATA, NTFS, IPC, WebView and the candidate maintenance
-entry. Requires the existing Quickemu desktop and no agent in that user session.
+Does not publish a release or claim previous-version compatibility. Uses real
+candidate verification, inert legacy owner fixtures, per-run LOCALAPPDATA, NTFS,
+IPC, WebView and the candidate maintenance entry. Requires the existing Quickemu desktop and no agent in that user session.
 """
 import base64
 import hashlib
@@ -26,7 +26,7 @@ OPTIONS = ['-i', KEY, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o',
 SSH = ['ssh', '-p', '2222', *OPTIONS, 'Quickemu@127.0.0.1']
 SCP = ['scp', '-P', '2222', *OPTIONS]
 EXES = ['vaultsyncd-agent.exe', 'vaultsyncd-session.exe', 'vaultsyncd-cli.exe',
-        'vaultsyncd-desktop.exe', 'vaultsyncd-zip.exe']
+        'vaultsyncd-desktop.exe']
 
 
 def run(args):
@@ -140,7 +140,9 @@ def main():
         shutil.copyfile(max(candidates, key=lambda p: p.stat().st_mtime), artifact / name)
     script = artifact / 's162-update.ps1'
     # Windows PowerShell 5.1 requires BOM for Chinese literals.
-    script.write_text((ROOT / 'tests/platform/windows/s162-update.ps1').read_text(), encoding='utf-8-sig')
+    script.write_text(
+        (ROOT / 'tests/platform/windows/s162-update.ps1').read_text(encoding='utf-8-sig'),
+        encoding='utf-8-sig')
     hashes = {p.name: sha(p.read_bytes()) for p in artifact.iterdir() if p.is_file()}
     (artifact / 'hashes.json').write_text(json.dumps(hashes))
     guest = 'C:/vaultsyncd-lab/' + run_id

@@ -1,4 +1,4 @@
-param([switch]$Worker,[switch]$InstalledOnly)
+﻿param([switch]$Worker,[switch]$InstalledOnly)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
@@ -92,19 +92,23 @@ function Start-Case($name){
   $script:case=Join-Path $PSScriptRoot $name;New-Item -ItemType Directory $script:case|Out-Null
   $env:LOCALAPPDATA=Join-Path $script:case 'local';New-Item -ItemType Directory $env:LOCALAPPDATA|Out-Null
   $script:program=Join-Path $script:case '中文 程序';Expand-Archive (Join-Path $PSScriptRoot 'old.zip') $script:program
-  Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('start')|Out-Null
-  $null=Desktop;Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('stop')|Out-Null
+  Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','start')|Out-Null
+  $null=Desktop;Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','stop')|Out-Null
   $env:VAULTSYNCD_S162_FIXTURE=$script:case
   # The seeder writes only this stopped, isolated fixture database.
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('--exact','auto_update::tests::seed_update_fixture','--ignored','--nocapture')|Out-Null
   $script:configHash=(Get-FileHash (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/agent.json')).Hash
-  $script:ownerBefore=[IO.File]::ReadAllText((Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'))
+  $script:ownerPath=Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'
+  Check (!(Test-Path $script:ownerPath)) ($name+' startup creates no owner')
+  [IO.File]::WriteAllText($script:ownerPath,'S185 inert invalid legacy owner; do not adopt or rewrite')
+  $script:ownerBefore=(Get-FileHash -LiteralPath $script:ownerPath).Hash
   $script:before=@{};foreach($p in @(Get-ChildItem $script:case -Recurse -File|Where-Object{$_.Name-in @('unconfirmed.txt','keep-cache.bin')})){$script:before[$p.FullName]=(Get-FileHash $p.FullName).Hash}
-  Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('start')|Out-Null;$null=Desktop
+  Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','start')|Out-Null;$null=Desktop
   $status=Status;Check ($status.result.management.bindings.Count-eq 2) ($name+' two native bindings')
   Close-Desktop
 }
 function Preserved($name){
+  Check ((Get-FileHash -LiteralPath $script:ownerPath).Hash-eq $script:ownerBefore) ($name+' inert legacy owner bytes untouched')
   Check ((Get-FileHash (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/agent.json')).Hash-eq $script:configHash) ($name+' device/config identity')
   foreach($p in $script:before.Keys){Check ((Get-FileHash $p).Hash-eq $script:before[$p]) ($name+' local/cache bytes '+[IO.Path]::GetFileName($p))}
   $status=Status;$bindings=@($status.result.management.bindings|Sort-Object binding_id)
@@ -114,7 +118,7 @@ function Installed-Fixture($candidate){
   $script:case=Join-Path $PSScriptRoot 'installed';New-Item -ItemType Directory $script:case|Out-Null
   $env:LOCALAPPDATA=Join-Path $script:case 'local';New-Item -ItemType Directory $env:LOCALAPPDATA|Out-Null
   $script:program=Join-Path $script:case '中文 程序';Expand-Archive (Join-Path $PSScriptRoot 'old.zip') $script:program
-  foreach($name in @('vaultsyncd-zip.exe','zip-files.json','README-ZIP.txt','Start vaultsyncd.cmd','Stop vaultsyncd.cmd')){Remove-Item -LiteralPath (Join-Path $script:program $name)}
+  foreach($name in @('zip-files.json','README-ZIP.txt','Start vaultsyncd.cmd','Stop vaultsyncd.cmd')){Remove-Item -LiteralPath (Join-Path $script:program $name)}
   $registration='HKCU:\Software\vaultsyncd';$uninstall='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\vaultsyncd';$run='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
   Check (!(Test-Path $uninstall)) 'no existing uninstall registration'
   Check (!$((Get-ItemProperty $run -ErrorAction SilentlyContinue).'vaultsyncd-agent')) 'no existing startup value'
@@ -151,6 +155,9 @@ try{
   Check (!(Test-Path 'HKCU:\Software\vaultsyncd')) 'no setup registration modified by ZIP tests'
   $candidate=Join-Path $PSScriptRoot 'candidate';Expand-Archive (Join-Path $PSScriptRoot 'new.zip') $candidate
   $script:candidateVersion=(Get-Content (Join-Path $candidate 'installed-files.json') -Raw|ConvertFrom-Json).source.version
+  $candidateManifest=Get-Content (Join-Path $candidate 'zip-files.json') -Raw|ConvertFrom-Json
+  Check (@($candidateManifest.files).Count-eq 9-and @(Get-ChildItem -LiteralPath $candidate -File).Count-eq 10) 'latest candidate contains nine inventoried files plus ZIP manifest'
+  Check (!(Test-Path (Join-Path $candidate 'vaultsyncd-zip.exe'))) 'latest candidate has no ZIP launcher'
   if($InstalledOnly){
     Installed-Fixture $candidate
     Write-Json (Join-Path $PSScriptRoot 'result.json') @{ok=$true;checks=$script:checks;scope='controlled installed-registration fixture; not NSIS release acceptance'}
@@ -158,15 +165,32 @@ try{
   }
   Start-Case 'success'
   $oldPid=(Get-CimInstance Win32_Process|Where-Object{$_.ExecutablePath-eq (Join-Path $script:program 'vaultsyncd-agent.exe')}).ProcessId
+  # Ordinary startup ignores manifests; an explicit update must still reject tampered candidates.
+  $tampered=Join-Path $PSScriptRoot 'tampered-candidate'
+  Copy-Item -LiteralPath $candidate -Destination $tampered -Recurse
+  Add-Content -LiteralPath (Join-Path $tampered 'README-ZIP.txt') -Value 'S185 candidate integrity fault'
+  Exe (Join-Path $tampered 'vaultsyncd-agent.exe') @('--maintenance','auto-upgrade','--program-dir',$script:program) 1|Out-Null
+  Check ((Read-Log (Join-Path $script:case ('command-'+$script:sequence+'.err'))).Contains('hash/size mismatch')) 'explicit update rejects tampered candidate inventory'
+  Check (!(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/maintenance.json'))-and !(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/auto-update.json'))) 'candidate rejection leaves no transaction barrier'
+  Check ((Get-CimInstance Win32_Process|Where-Object{$_.ExecutablePath-eq (Join-Path $script:program 'vaultsyncd-agent.exe')}).ProcessId-eq $oldPid) 'candidate rejection preserves original live agent'
+  Preserved 'candidate integrity rejection'
+
   Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--auto-update','--program-dir',$script:program)|Out-Null
   $gui=Desktop;Preserved 'upgrade'
   $newPid=(Get-CimInstance Win32_Process|Where-Object{$_.ExecutablePath-eq (Join-Path $script:program 'vaultsyncd-agent.exe')}).ProcessId
   Check ($oldPid-ne $newPid) 'agent process restarted'
   $manifest=Get-Content (Join-Path $script:program 'zip-files.json') -Raw|ConvertFrom-Json
   foreach($f in $manifest.files){Check ((Get-FileHash (Join-Path $script:program $f.path)).Hash.ToLowerInvariant()-eq $f.sha256) ('updated ZIP hash '+$f.path)}
-  $owner=Get-Content (Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json') -Raw|ConvertFrom-Json
-  Check ($owner.manifest-eq (Get-FileHash (Join-Path $script:program 'zip-files.json')).Hash.ToLowerInvariant()) 'ZIP owner committed with new manifest'
+  Check ((Get-FileHash -LiteralPath $script:ownerPath).Hash-eq $script:ownerBefore) 'update leaves legacy owner untouched'
   Check (!(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/maintenance.json'))-and !(Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/auto-update.json'))) 'completed transaction markers cleared'
+  $backups=@(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/maintenance') -Directory)
+  Check ($backups.Count-eq 1) 'successful update retains one controlled transaction backup'
+  $backup=$backups[0].FullName
+  foreach($receipt in @('program.inventory.json','state.inventory.json','trial-plan.json','prepared.json','complete.json')){Check (Test-Path (Join-Path $backup $receipt)) ('durable update evidence '+$receipt)}
+  $commit=Get-Content (Join-Path $backup 'complete.json') -Raw|ConvertFrom-Json
+  Check ($commit.action-eq 'auto-upgrade'-and $commit.health-eq 'verified') 'trial commits only with durable verified health receipt'
+  Check (!(Test-Path (Join-Path $backup 'zip-owner.json'))) 'new transaction does not back up or adopt legacy owner'
+
   $tray=[S162Native]::Find($gui.Id,'tray_icon_app');Check ($tray-ne [IntPtr]::Zero) 'real native tray icon'
   [S162Native]::Popup($tray);Start-Sleep -Milliseconds 400
   $popup=[S162Native]::Find(0,'#32768');Check ($popup-ne [IntPtr]::Zero) 'right-click native tray menu'
@@ -180,25 +204,25 @@ try{
   Preserved 'failed GitHub check'
   Close-Desktop
   Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--maintenance','auto-upgrade','--program-dir',$script:program) 1|Out-Null
-  Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('stop')|Out-Null
+  Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','stop')|Out-Null
   Start-Case 'busy'
   $held=[IO.File]::Open((Join-Path $script:program 'vaultsyncd-cli.exe'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
   try{Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--auto-update','--program-dir',$script:program) 1|Out-Null}finally{$held.Dispose()}
   $null=Desktop;Preserved 'busy rollback'
-  Check ([IO.File]::ReadAllText((Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'))-eq $script:ownerBefore) 'rollback original ZIP ownership'
+  Check ((Get-FileHash -LiteralPath $script:ownerPath).Hash-eq $script:ownerBefore) 'busy rollback leaves legacy owner untouched'
   $m=Get-Content (Join-Path $script:program 'installed-files.json') -Raw|ConvertFrom-Json
   Check ($m.source.version-eq '0.1.0') 'rollback original program manifest'
-  Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('stop')|Out-Null
+  Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','stop')|Out-Null
   Start-Case 'startup-failure'
   $broken=Join-Path $PSScriptRoot 'bad-candidate';Expand-Archive (Join-Path $PSScriptRoot 'bad-start.zip') $broken
   Exe (Join-Path $broken 'vaultsyncd-agent.exe') @('--auto-update','--program-dir',$script:program) 1|Out-Null
   $null=Desktop;Preserved 'startup failure rollback'
-  Check ([IO.File]::ReadAllText((Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'))-eq $script:ownerBefore) 'startup failure restores owner'
+  Check ((Get-FileHash -LiteralPath $script:ownerPath).Hash-eq $script:ownerBefore) 'startup failure leaves legacy owner untouched'
   Close-Desktop
   # Stop at the durable prepared-trial boundary, then use the actual recovery entry.
   Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--maintenance','auto-upgrade','--program-dir',$script:program)|Out-Null
   Check (Test-Path (Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/auto-update.json')) 'interrupted trial keeps recovery plan'
-  Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('start') 1|Out-Null
+  Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','start') 1|Out-Null
   $trialConfig=Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent/agent.json'
   Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--config',$trialConfig,'--update-trial') 1|Out-Null
   Check ((Read-Log (Join-Path $script:case ('command-'+$script:sequence+'.err'))).Contains('active update controller')) 'ordinary startup blocked; explicit trial refuses absent controller'
@@ -225,8 +249,8 @@ try{
   }
   Exe (Join-Path $candidate 'vaultsyncd-agent.exe') @('--auto-update-recover','--program-dir',$script:program)|Out-Null
   $null=Desktop;Preserved 'interrupted trial recovery'
-  Check ([IO.File]::ReadAllText((Join-Path $env:LOCALAPPDATA 'vaultsyncd/zip-owner.json'))-eq $script:ownerBefore) 'interrupted trial restores owner'
-  Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('stop')|Out-Null
+  Check ((Get-FileHash -LiteralPath $script:ownerPath).Hash-eq $script:ownerBefore) 'interrupted trial leaves legacy owner untouched'
+  Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','stop')|Out-Null
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('portable::tests::','--nocapture')|Out-Null
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('maintenance::storage::tests::','--nocapture')|Out-Null
   Exe (Join-Path $PSScriptRoot 'agent-tests.exe') @('maintenance::tests::','--nocapture')|Out-Null
@@ -238,7 +262,7 @@ try{
 }catch{
   $_|Out-String|Set-Content (Join-Path $PSScriptRoot 'error.txt')
   if($script:program-and (Test-Path $script:program)){
-    try{Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-zip.exe') @('stop')|Out-Null}catch{$_|Out-String|Set-Content (Join-Path $PSScriptRoot 'cleanup-error.txt')}
+    try{Close-Desktop;Exe (Join-Path $script:program 'vaultsyncd-agent.exe') @('--user-session','stop')|Out-Null}catch{$_|Out-String|Set-Content (Join-Path $PSScriptRoot 'cleanup-error.txt')}
   }
   '1'|Set-Content (Join-Path $PSScriptRoot 'exit.txt')
 }

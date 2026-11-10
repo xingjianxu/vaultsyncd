@@ -8,7 +8,7 @@ if errorlevel 2 exit /b 0
 if errorlevel 1 goto stop
 exit /b 1
 :stop
-"%~dp0vaultsyncd-zip.exe" stop
+"%~dp0vaultsyncd-agent.exe" --user-session stop
 if errorlevel 1 (
   echo Stop failed. No force kill was attempted. Bindings may already be paused. Inspect agent.log.
   pause
