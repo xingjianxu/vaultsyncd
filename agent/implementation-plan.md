@@ -1764,6 +1764,13 @@
 - 验收：桌面 typecheck/build、Chromium 鼠标/键盘打开与刷新、错误重试/空清单/授权变化/重复请求保护；真实 Windows S081 WebView/agent/HTTPS 绑定回归。无服务端部署或发行。
 - 交接：`agent/tasks/S178.md`；完成后合 master 并清理任务工作树。
 
+### S179 — 发布 0.1.6 正式版 GitHub Release
+
+- 依据：2026-11-10 用户要求“github release 发版”，明确版本号 0.1.6 且按正式版发布（`--stable`、设为 Latest）；前置 S178 done，master 领先 `origin/master` 两个提交。
+- 范围：同步根 Cargo、前端/Tauri 镜像与 Cargo.lock（不改协议/schema/生成器版本与业务代码）；推送 master；用 `tools/release.sh` 构建 Windows x64 便携 ZIP；`tools/publish-release.sh --stable` 上传唯一 ZIP 并设 Latest，成为托盘自动更新渠道的正式版来源。
+- 验收：`cargo xtask version --check`、`cargo fmt --check`、`cargo xtask generate --check`、`pnpm install --frozen-lockfile`、真实构建的 SHA256SUMS 校验、`--dry-run` 计划与远端附件大小/digest、Latest 归属及标签指向核对；不声称 Windows 原生复验或首发门禁通过。
+- 交接：`agent/tasks/S179.md`；不改动已发布 Release，不触发服务端部署。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
