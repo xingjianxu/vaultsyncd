@@ -2755,3 +2755,9 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 - `api/local-ipc.schema.json`是唯一wire编辑源，IPC2.9仅增加可选`ConnectionInfo.username`（旧资料缺省），`authenticated`为持有凭据且`!session.needs_reauth()`，不表示服务器实时在线。发现结果不泄露当前账号；凭据或密码不进入IPC响应。
 - 客户端迁移`0014_login_profile.sql`在私有`client.sqlite`新增`agent_login_profiles(server_id PRIMARY KEY,username)`，只在服务器登录成功后写入，按ServerId恢复；原`agent_connection`继续保存地址/CA。默认文件为`%LOCALAPPDATA%\vaultsyncd\agent\state\client.sqlite`。用户名落盘失败撤下本地会话并返回错误；runtime确认Windows Credential Manager写入成功才应答。访问/刷新令牌继续保存在当前用户`vaultsyncd/session/<ServerId>`，刷新覆盖，登出删除；不保存明文密码或浏览器凭据。
 - schema13升级前沿用一致性备份与旧版拒写；全套维护备份/恢复规则保持。迁移测试覆盖旧连接及未确认本地内容保持、旧版拒写与原备份恢复。Windows真实WebView/agent/HTTPS验收和宿主浏览器证据见`agent/tasks/S176.md`。
+
+## S184 — 开发构建到 dist/（不改变发布链）
+
+- `./tools/build.sh` 供本机与客体测试：不接受参数，自动执行 `nix develop .#windows --command bash tools/build.sh`；在 `.#windows` 内用 `pnpm install --frozen-lockfile --offline` + `pnpm --filter @vaultsyncd/desktop build` 重建前端，再以静态 CRT（`-C target-feature=+crt-static -C link-arg=/ignore:4099`）交叉编译 `x86_64-pc-windows-msvc` release 的 `vaultsyncd-agent`/`vaultsyncd-cli`/`vaultsyncd-desktop` 全部 bin。参数错误退出 2，缺产物或缺文件退出 1，成功 0。
+- 输出固定为仓库 `dist/`：五个 EXE、`installed-files.json`（四 EXE + `source`）、`zip-files.json`、`UNSIGNED-TEST.txt`、`Start`/`Stop vaultsyncd.cmd`、`README-ZIP.txt`、`build-info.txt`。每次先整目录清空，无版本号子目录。清单由 `packaging/windows/zip/build.py` 生成并逐文件复核，`source` 在两份清单间相同，`signature_status=unsigned-test`；`source` 在发布收据字段之外多记 `dirty`，仅描述开发构建，不是发布身份。
+- 不写 `receipt.json`、`SHA256SUMS`、`release-manifest.json`，不要求干净提交，也不参与 `cargo xtask release assemble/verify`。发布与 GitHub Release 仍只消费 `tools/release.sh`/`cargo xtask release build` 的收据目录；因此开发构建不能当发布候选，也不改变 ZIP 所有权、维护门禁与原生验收要求。

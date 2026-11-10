@@ -1778,6 +1778,13 @@
 - 验收：根 typecheck、Web/desktop build、Web 现有测试、fmt、Windows 严格 clippy/构建；Chromium 明暗/窄宽屏图标与 favicon 取源核对，真实 Windows EXE/窗口图标核验；验收后本机部署及公网健康/资源核对。
 - 交接：`agent/tasks/S183.md`；不新增发行或改变同步/认证协议，既有首发门禁保持。
 
+### S184 — 开发构建脚本 `tools/build.sh` 输出到 `dist/`
+
+- 依据：2026-11-10 用户要求清空根 `dist/`，把 `./tools/release.sh` 产物路径设为 `dist/` 且不带版本号、只编译当前代码；并允许在 release.sh 必须保留版本号时另建 build 脚本。用户选定产物为完整便携程序目录。
+- 范围：新增 `tools/build.sh`（自动进入 `.#windows`、重建前端、静态 CRT 交叉编译五个 EXE、复用 `packaging/windows/zip/build.py` 生成两份同源清单、先清空 `dist/`）；不改 `tools/release.sh`、`packaging/release.py` 与任何 wire/schema/发布语义；同步 `packaging/README.md`、`docs/operations/windows-lab.md` §12.2 与 interfaces S184。
+- 验收：任务树内实跑退出 0；五份 PE32+ x64 导入表无 MSVC 运行库；`installed-files.json`/`zip-files.json` 同源且逐文件 hash/字节一致；Windows 原生运行不在本卡范围。
+- 交接：`agent/tasks/S184.md`；开发构建不是发布产物，不改动已发布 Release 与首发门禁。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md

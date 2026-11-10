@@ -29,6 +29,23 @@
 
 ZIP 仍是 `unsigned-test`，解压后使用 `Start vaultsyncd.cmd`；状态留当前用户 LocalAppData，运行需要 WebView2，停止使用 `Stop vaultsyncd.cmd`。本入口不执行 Windows 原生验收，也不解除性能、容量、多机和同源候选门禁。运行/数据保护见[Windows 安装与 ZIP](../docs/operations/windows-installation.md)。
 
+## 开发构建（无版本号，直接写 dist/）
+
+`tools/release.sh` 属发布链：要求干净已提交的源码，产物按 `v<版本>-<HEAD前12位>` 归档并带收据、校验表和版本号命名的 ZIP。只想把当前代码编译成可运行的程序目录时用另一个入口：
+
+```sh
+./tools/build.sh
+```
+
+脚本自动进入 `nix develop .#windows`，冻结锁离线准备前端、交叉编译 `x86_64-pc-windows-msvc` release（静态 CRT），每次先清空 `dist/` 再写入。产物就是无版本号 ZIP 的解压结果，可整目录拷到 Windows 11 本机普通路径后运行 `Start vaultsyncd.cmd`：
+
+```text
+dist/   五份 EXE（agent/session/CLI/desktop/zip）、installed-files.json、zip-files.json、
+        UNSIGNED-TEST.txt、Start/Stop vaultsyncd.cmd、README-ZIP.txt、build-info.txt
+```
+
+`build-info.txt` 记录构建时的提交/树/版本/脏树状态与工具链版本。本入口不生成收据、不写 `SHA256SUMS`、不做干净提交检查，因此**不是发布产物**：不能用于 GitHub Release，也不改变 `unsigned-test` 语义与客户端首发门禁（仍需 Windows 原生验收）。
+
 ## 发布到 GitHub Release
 
 本地发布脚本不依赖 GitHub 工作流。`gh` 已加入锁定 devShell；首次使用先登录有目标仓库写权限的账号：
