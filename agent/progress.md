@@ -1,17 +1,15 @@
 # 实施进度
 
-当前：**S172 in_progress**，新增客户端与服务端文件同步及传输记录。服务端schema20与只读API、两端页面已实现；根类型、Web七套/构建与真实Chromium+btrfs通过，旧schema19整套备份已在隔离目录恢复升级20并核对5文件/FK/健康。正在完成审查修复、Windows原生和本机部署；实现、提交及合并清理未完成，不标done。证据`/data/vaultsyncd-dev/S172-sync-records-20261110/`；下一ready为本卡剩余子项，原四张blocked保持。
-
-此前：**S171 done**，Web右键新建目录与固定版本下载；根类型/Web七套测试构建、真实Chromium+btrfs30项及Nix包内74测试通过。已部署本机generation271，源`01a45f1`，主机pin`1513b07`，schema19不变；线上健康/TLS/CSP/11资产及原数据/服务保持。业务在独立实例验收，生产无当前凭据、未复跑已认证操作。实现01a45f1、交接a84d1be已ff合master，任务挂载/树/分支已清理；证据`/data/vaultsyncd-dev/S171-web-create-download-20261110/`。下一ready已由S172覆盖；原四张blocked保持。
+当前：**S172 done**，客户端与服务端可查看文件同步/传输记录，含时间、认证客户端、当时路径、方向、版本、大小、下载区间及结果；只记录启用后的服务端事实。两端测试/构建、Windows原生27项、真实浏览器活动/备份、完整btrfs导出恢复和Nix包内75测试通过。实现`d7339f0`已部署本机generation272，schema20，主机pin`7a74069`；线上健康/TLS/CSP/14文件资产与原数据/服务保持。源/交接合并清理随后按本卡生命周期记录。**下一 ready：无**；原四张blocked保持。证据`/data/vaultsyncd-dev/S172-sync-records-20261110/`。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 
-最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未发行。在线服务端为S171，运行/开机generation271、源`01a45f1`、schema19、主机pin`1513b07`；Vault基目录`/data/vaultsyncd/vaults`。本轮未发行或复跑Windows，性能容量/多机与线上成对升级仍未验收。
+最近发行仍为 [v0.1.2](https://github.com/xingjianxu/vaultsyncd/releases/tag/v0.1.2) 预发布、非 Latest，源`d976376`；本轮客户端改动未公开发行。在线服务端为S172，运行/开机generation272、源`d7339f0`、schema20、主机pin`7a74069`；Vault基目录`/data/vaultsyncd/vaults`。本轮Windows功能已原生验收，性能容量/多机与最终同源发行、线上成对升级门禁仍未验收。
 
 
 所有新开发测试目录只允许位于 `/data/vaultsyncd-dev/`；S163 的 temp/lab 迁移及97个GC roots保持。S164 已归档123个旧vs目录、39,360文件完整解包验证后清理；长期归档在 `/data/vaultsyncd-dev/S164-archive-20261109/`，不作缓存删除。
 
-最近部署：S171 pure build、dry/test、HTTPS/IPC/身份/归属及switch通过，线上Chromium严格TLS1.3/匿名文件深链门禁/明暗320与1440、CSP及11资产通过。正式身份、5文件摘要、schema19/FK/对象及10服务/3应用保持。完整备份及第二副本验证通过（同机同盘），generation270旧system/boot GC roots保留，未实际回退。没有重置生产凭据，已认证业务仅在独立实例验证；S170迁移与历史IP实证仍见对应交接。部署细节见docs/operations/nixos.md S171。
+最近部署：S172 pure build、dry/test、HTTPS/IPC/身份/归属/switch通过；线上Chromium严格TLS1.3/匿名记录深链门禁/明暗320与1440、CSP及13资产与index保持。schema19→20有一致性备份，原5文件/FK/对象及10服务/3应用保持；无历史伪补录。完整19归档及第二同盘副本验证、隔离恢复升20验证通过，generation271旧system/boot GC roots保留；回退须整套19恢复，不能只降二进制。未重置生产凭据，已认证业务在独立实例验收；部署细节见docs/operations/nixos.md S172。
 
 恢复顺序：**S106 → S107 → S108**；须补 T02 三台独立 Windows 与当前候选同源发行证据。S011 的 OS 取消回调仍需原生触发证据；首发验收未完成。各卡的历史“下一 ready”不代表当前待办。
 
@@ -36,6 +34,7 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S172 | 两端文件同步/传输记录；原生27项、真实浏览器/完整备份恢复及generation272部署通过 | 实现d7339f0；本卡整合/清理见交接 | [S172](tasks/S172.md) |
 | S171 | Web右键新建目录/固定版本下载；真实浏览器30项与generation271部署验收 | 实现01a45f1、交接a84d1be已ff合master；任务挂载/树/分支清理 | [S171](tasks/S171.md) |
 | S170 | 登录IP、五分钟连接及分页轮询；后端/Web/真实浏览器与generation270生产验收通过 | 实现df8edc8、交接4fd79e1已ff合master，任务挂载/树/分支已清理；主机pin7787429已ff main并清理 | [S170](tasks/S170.md) |
 | S169 | 便携发行/GitHub仅Windows ZIP；43项契约+更新4项、真实构建/ZIP/PE/唯一附件预检通过 | 实现91b8e7f、交接b6cde8c已ff合master；任务挂载/树/分支已清理 | [S169](tasks/S169.md) |

@@ -456,3 +456,14 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 证据根`/data/vaultsyncd-dev/S171-web-create-download-20261110/`：基线、根类型/Web七套与构建、真实Chromium+btrfs30项（含新建取消/无效/同名/目标、丢响应原OpId查询、空/Unicode/跨4MiB下载和损坏拒绝）、四张新建明暗320/1440截图；Nix包内74项测试。`web-artifacts.json`核对Nix Web与浏览器验收dist的12文件一致；线上`evidence/result.json` passed=true，严格TLS1.3/匿名文件深链门禁/明暗窄屏、全部11资产和CSP通过，ServerId/schema19/FK/对象/5文件/10服务/3应用保持。历史凭据路径已不存在，未重置密码，生产未复跑已认证文件操作；业务经独立实例实证。
 
 部署前通过prepare/verify-source/export/verify/release取得整套19备份，`backups/predeploy.vsbk`与`backups-copy/`重读验证通过（同机同/data盘，非异地）。恢复入口为generation270 `/nix/store/z9mh48x55z908gn8fv2v8dszbd2l7ba5-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，旧system/boot GC roots在部署run长期保留；可先test旧system并核对健康，再switch及同步主机pin至7787429，无schema变化无需仅因降二进制恢复库。未实际生产回退，未做Windows/性能容量或64GiB浏览器下载；原首发门禁保持。项目整合/清理见[S171](../../agent/tasks/S171.md)。
+
+
+## S172 同步与传输记录部署（generation272，2026-11-10）
+
+固定源`d7339f06f89527c03c150bc69a1d316cbcdd9605`，以`tools/deploy-local.sh --rev <完整SHA> --evidence-base /data/vaultsyncd-dev/S172-sync-records-20261110/evidence/deploy`完成pure build/dry-activate/test/HTTPS与IPC/身份/归属/switch。主机基线1513b07，pin提交`7a74069b3641d83172322864161e86a05878a406`已ff main并清理任务树/分支；锁74319cf7…保持，结果passed/cleaned=true。未更新全系统依赖。
+
+运行及开机generation272，system `/nix/store/x0sx0d9cp8dmr43z64318ry53nam1l3d-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/s3ampibvg57zdd274z0k1dcjx6lxdy6b-vaultsyncd-0.1.2`，内含75测试通过。schema19→20新增活动与受理来源，IPC2.8，capabilities新增file_activity；Vault基目录和身份保持。Web `#/activity`及客户端对应入口可看时间/客户端/路径/方向/版本/大小/区间/结果，仅从本版开始记录，不把served当客户端已收到。
+
+证据根`/data/vaultsyncd-dev/S172-sync-records-20261110/`：两端测试、真实浏览器活动/OPFS备份、Windows26300原生27项及IPC版本门禁；原生628源码输入与提交树一致但候选是在dirty基线上构建，未公开发行。schema20非空账本真实导出与独立1GiB btrfs故障恢复通过，loop已卸载且原始镜像保留。线上`evidence/result.json` passed=true：严格TLS1.3、匿名记录深链门禁/接口401、明暗320/1440、CSP、13资产及index，Nix与验收Web14文件逐字节一致；schema20/FK/对象、5工作文件及10服务/3应用保持。生产无当前凭据，未重置账号，已认证业务只在独立实例验收；生产活动表初始0，未伪补旧记录。
+
+升级前prepare/verify-source/export/verify/release取得整套schema19归档`backups/predeploy.vsbk`及第二同盘副本并重读verify；另隔离恢复该归档、升级20、健康/FK/5文件摘要通过（`evidence/restore19-preview.json`）。正式库自动一致备份`server.sqlite.pre-migration-v19-to-v20.bak`自检与版本19通过，但不能代替整套恢复。generation271旧system/boot GC roots在deploy run保留；旧system为`/nix/store/vgv5l88qmyj537w7xmz7pfwmzf6x5lg2-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，旧pin1513b07。旧二进制拒绝schema20，回退须停服、按离线恢复流程将已验证19归档恢复到新空状态/Vault映射并换epoch，再配置旧pin/路径、test健康后switch；不能只降二进制或手改schema。未实际生产回退，原性能容量/多机/首发门禁保持。项目整合与清理见[S172](../../agent/tasks/S172.md)。
