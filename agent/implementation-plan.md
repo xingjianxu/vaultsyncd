@@ -1749,6 +1749,14 @@
 - 验收：前端检查、IPC生成一致、客户端迁移恢复与旧版拒写、Windows交叉严格检查；真实Windows WebView/agent/HTTPS登录失败与成功、登出门禁、重启恢复和凭据不进入浏览器存储。不改变服务端，无部署。
 - 交接：`agent/tasks/S176.md`；验收与交接完成后合master并清理。
 
+### S177 — 发布 0.1.5 预发布 GitHub Release
+
+- 依据：2026-11-10 用户要求“github release 发版”，确认版本号 0.1.5、按预发布上传（非 Latest）、推送 master 到 origin；前置 S176 done，master 领先 `origin/master` 两个提交。
+- 范围：同步根 Cargo、前端/Tauri 镜像与 Cargo.lock（不改协议/schema/生成器版本与业务代码）；推送 master；用 `tools/release.sh` 构建 Windows x64 便携 ZIP；`tools/publish-release.sh` 以预发布上传唯一 ZIP，不设 Latest。
+- 验收：`cargo xtask version --check`、`pnpm install --frozen-lockfile`、真实构建的 SHA256SUMS 校验、`--dry-run` 计划与远端附件大小/digest 及标签指向核对；不声称 Windows 原生复验或首发门禁通过。
+- 结果：版本镜像 `7077fc9` 已推送 master；Windows ZIP `a25d6391…`（15,981,059 字节）由 `v0.1.5` 预发布发出（非 Latest、唯一附件），远端 digest 一致，标签指向 `7077fc9`；`releases/latest` 404，无正式版渠道条目。
+- 交接：`agent/tasks/S177.md`；不改动已发布 Release，不触发服务端部署。
+
 ## 7. 记录模板与续接规则
 
 ### 7.1 agent/progress.md
