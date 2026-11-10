@@ -44,7 +44,7 @@ async fn schema17_upgrade_preserves_refresh_chain_and_backup() {
     tx.commit().await.unwrap();
     db.close().await;
     let db = Database::open(dir.database()).await.unwrap();
-    assert_eq!(db.schema_version(), 18);
+    assert_eq!(db.schema_version(), 19);
     let mut conn = db.pool().acquire().await.unwrap();
     let rows = list(&mut conn, user(1), session(2), None).await.unwrap();
     assert_eq!(rows.len(), 1);
@@ -52,11 +52,12 @@ async fn schema17_upgrade_preserves_refresh_chain_and_backup() {
     assert!(rows[0].current);
     assert_eq!(rows[0].last_seen_at, None);
     assert_eq!(rows[0].client_kind, "unknown");
-    assert!(crate::db::migration_backup_path(&dir.database(), 17, 18).exists());
+    assert_eq!(rows[0].login_ip, None);
+    assert!(crate::db::migration_backup_path(&dir.database(), 17, 19).exists());
     drop(conn);
     db.close().await;
     let backup = Database::open_with(
-        &crate::db::migration_backup_path(&dir.database(), 17, 18),
+        &crate::db::migration_backup_path(&dir.database(), 17, 19),
         &previous,
     )
     .await
@@ -67,4 +68,56 @@ async fn schema17_upgrade_preserves_refresh_chain_and_backup() {
         .await
         .unwrap();
     assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn schema18_upgrade_preserves_history_and_recoverable_backup() {
+    use sqlx::migrate::Migrator;
+    let dir = TestDir::new("clients-ip-upgrade");
+    let previous = Migrator {
+        migrations: std::borrow::Cow::Owned(
+            crate::db::MIGRATOR
+                .iter()
+                .filter(|m| m.version <= 18)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    };
+    let old = Database::open_with(&dir.database(), &previous)
+        .await
+        .unwrap();
+    let mut tx = old.begin_write().await.unwrap();
+    insert_user(&mut tx, user(1)).await;
+    sqlx::query("INSERT INTO client_connections(id,user_id,device_label,client_kind,created_at,last_seen_at) VALUES(?1,?2,'旧客户端','client',100,200)")
+        .bind(session(1).as_bytes().as_slice()).bind(user(1).as_bytes().as_slice())
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    old.close().await;
+    let new = Database::open(dir.database()).await.unwrap();
+    let mut conn = new.pool().acquire().await.unwrap();
+    let rows = list(&mut conn, user(1), session(1), None).await.unwrap();
+    assert_eq!(rows[0].login_ip, None);
+    assert_eq!(rows[0].last_seen_at, Some(200));
+    assert_eq!(rows[0].device_label, "旧客户端");
+    drop(conn);
+    new.close().await;
+    assert!(matches!(
+        Database::open_with(&dir.database(), &previous).await,
+        Err(crate::db::DbError::SchemaTooNew {
+            found: 19,
+            supported: 18
+        })
+    ));
+    let backup = crate::db::migration_backup_path(&dir.database(), 18, 19);
+    let restored = dir.path.join("restored.sqlite");
+    std::fs::copy(&backup, &restored).unwrap();
+    let old = Database::open_with(&restored, &previous).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM client_connections WHERE device_label='旧客户端' AND last_seen_at=200")
+        .fetch_one(old.pool()).await.unwrap();
+    assert_eq!(count, 1);
+    old.close().await;
+    let new = Database::open(&restored).await.unwrap();
+    assert_eq!(new.schema_version(), 19);
+    new.close().await;
 }

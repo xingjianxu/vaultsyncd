@@ -828,8 +828,8 @@ mod tests {
         );
 
         // user_version 已写回和迁移提交后尚未写回几种状态，都不得向旧二进制暴露可写句柄。
-        for marker in [18, 17, 16, 15, 14] {
-            if marker != 18 {
+        for marker in [19, 18, 17, 16, 15, 14] {
+            if marker != 19 {
                 let mut conn = connect_options(&path).connect().await.unwrap();
                 sqlx::query(&format!("PRAGMA user_version = {marker}"))
                     .execute(&mut conn)
@@ -841,7 +841,7 @@ mod tests {
             assert!(matches!(
                 Database::open_with(&path, &previous).await,
                 Err(DbError::SchemaTooNew {
-                    found: 18,
+                    found: 19,
                     supported: 14
                 })
             ));
@@ -924,15 +924,15 @@ mod tests {
         assert_eq!(database.schema_version(), target_schema_version());
         assert_eq!(
             target_schema_version(),
-            18,
-            "内嵌迁移应当是 0001—0018 十八版"
+            19,
+            "内嵌迁移应当是 0001—0019 十九版"
         );
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
             SERVER_APPLICATION_ID
         );
-        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 18);
+        assert_eq!(scalar::<i32>(&path, "PRAGMA user_version").await, 19);
         assert_eq!(
             scalar::<i64>(&path, "SELECT count(*) FROM store_metadata").await,
             0
@@ -943,7 +943,7 @@ mod tests {
                 "SELECT count(*) FROM _sqlx_migrations WHERE success = 1"
             )
             .await,
-            18
+            19
         );
         // 空库没有可丢的数据，因此不产生迁移前备份。
         assert!(
@@ -955,7 +955,7 @@ mod tests {
         insert_metadata(&database, "server_id", "0000").await;
         database.close().await;
         let reopened = Database::open(&path).await.expect("重新打开");
-        assert_eq!(reopened.schema_version(), 18);
+        assert_eq!(reopened.schema_version(), 19);
         assert_eq!(
             metadata(&path).await,
             vec![("server_id".to_owned(), "0000".to_owned())]
@@ -1379,7 +1379,7 @@ mod tests {
                 error,
                 DbError::SchemaTooNew {
                     found: 20,
-                    supported: 18
+                    supported: 19
                 }
             ),
             "实际错误 {error:?}"
@@ -1549,7 +1549,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 18,
+                found: 19,
                 supported: 9
             }
         ));
@@ -1590,7 +1590,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 18,
+                found: 19,
                 supported: 10
             }
         ));
@@ -1631,7 +1631,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &previous).await.unwrap_err(),
             DbError::SchemaTooNew {
-                found: 18,
+                found: 19,
                 supported: 11
             }
         ));
@@ -1682,7 +1682,7 @@ mod tests {
         assert!(matches!(
             Database::open_with(&path, &old_migrator).await,
             Err(DbError::SchemaTooNew {
-                found: 18,
+                found: 19,
                 supported: 12
             })
         ));

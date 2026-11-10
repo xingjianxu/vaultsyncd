@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S169 done**，统一便携发行仅 Windows x64 ZIP，GitHub 严格一个 ZIP 附件，来源/日志/校验表本地保留；Linux 服务端继续 Nix/NixOS。43项发布契约、更新消费者4项、干净源`91b8e7f`真实五步构建、7项文件摘要、ZIP11条目/5个x64 PE与唯一附件dry-run通过；旧混合目录拒绝。实现91b8e7f、交接b6cde8c已ff合master；任务挂载/树/分支已清理，dev根构建源快照及证据保留。本轮未发行。**下一 ready：无**；原四张blocked保持。
+当前：**S170 in_progress**，服务管理/客户端增加登录 IP 与五分钟连接状态。后端schema19迁移/备份恢复、IP来源与活动边界及受影响消费者检查已通过，前端typecheck/test/build通过；真实Chromium和本机部署待验收。任务树`.worktrees/S170-client-ip`（feat/S170-client-ip），基线c1d6577，证据`/data/vaultsyncd-dev/S170-client-ip-20261110/`。**下一 ready：无**；原四张blocked保持。
 
 此前 S168（对应源码仅留本地）已由本卡发行范围覆盖；S166身份确认、S167桌面自动复用/启动agent已验收整合，具体原生及组合验证见对应交接。
 

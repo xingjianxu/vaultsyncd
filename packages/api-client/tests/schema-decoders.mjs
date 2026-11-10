@@ -121,9 +121,13 @@ check("client_connection_page_preserves_unknown_history_and_rejects_false_online
   const sample = { observed_at: "2000", connections: [row] };
   const result = decodeClientConnectionPage(sample);
   assert.equal(result.connections[0].last_seen_at, undefined);
+  assert.equal(result.connections[0].login_ip, undefined);
+  for (const login_ip of ["192.0.2.1", "2001:db8::1"]) {
+    assert.equal(decodeClientConnectionPage({ ...sample, connections: [{ ...row, login_ip }] }).connections[0].login_ip, login_ip);
+  }
   assert.equal(result.connections[0].device_label, row.device_label);
   assert.equal(result.next_cursor, undefined);
-  for (const invalid of [{ state: "online" }, { client_kind: "guessed-device" }, { last_seen_at: 2000 }, { created_at: "-1" }, { current: "true" }]) {
+  for (const invalid of [{ login_ip: 123 }, { state: "online" }, { client_kind: "guessed-device" }, { last_seen_at: 2000 }, { created_at: "-1" }, { current: "true" }]) {
     assert.throws(() => decodeClientConnectionPage({ ...sample, connections: [{ ...row, ...invalid }] }));
   }
 });

@@ -1,6 +1,7 @@
 //! 连接观测记录，不参与认证决策；不持有令牌或凭据摘要。
 use crate::sessions::NewSession;
 use sqlx::{Row, Sqlite, SqliteConnection, Transaction};
+use std::net::IpAddr;
 use vaultsyncd_domain::ids::{SessionId, UserId};
 use vaultsyncd_domain::version::UtcTimestamp;
 
@@ -16,6 +17,8 @@ pub struct ClientConnection {
     pub device_label: String,
     /// 服务端登录入口类别。
     pub client_kind: String,
+    /// 首次成功登录来源；旧记录未知。
+    pub login_ip: Option<String>,
     /// 首次登录时间。
     pub created_at: i64,
     /// 最近认证请求时间；历史记录可未知。
@@ -50,14 +53,16 @@ pub(crate) async fn record_rotation(
 }
 
 /// 成功登录的实际入口决定接入类型，设备标签不用于推断。
-pub async fn set_kind(
+pub async fn set_login_details(
     conn: &mut SqliteConnection,
     session: SessionId,
     browser: bool,
+    login_ip: Option<IpAddr>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE client_connections SET client_kind=?2 WHERE session_id=?1")
+    sqlx::query("UPDATE client_connections SET client_kind=?2,login_ip=?3 WHERE session_id=?1")
         .bind(session.as_bytes().as_slice())
         .bind(if browser { "browser" } else { "client" })
+        .bind(login_ip.map(|ip| ip.to_string()))
         .execute(conn)
         .await?;
     Ok(())
@@ -81,7 +86,7 @@ pub async fn list(
     current: SessionId,
     after: Option<SessionId>,
 ) -> Result<Vec<ClientConnection>, sqlx::Error> {
-    let rows = sqlx::query("SELECT lower(hex(c.id)) AS id,c.device_label,c.client_kind,c.created_at,c.last_seen_at,s.refresh_expires_at,s.revoked_at,c.session_id=?2 AS current FROM client_connections c LEFT JOIN sessions s ON s.id=c.session_id WHERE c.user_id=?1 AND (?3 IS NULL OR (c.created_at,c.id)<(SELECT created_at,id FROM client_connections WHERE id=?3 AND user_id=?1)) ORDER BY c.created_at DESC,c.id DESC LIMIT 51")
+    let rows = sqlx::query("SELECT lower(hex(c.id)) AS id,c.device_label,c.client_kind,c.login_ip,c.created_at,c.last_seen_at,s.refresh_expires_at,s.revoked_at,c.session_id=?2 AS current FROM client_connections c LEFT JOIN sessions s ON s.id=c.session_id WHERE c.user_id=?1 AND (?3 IS NULL OR (c.created_at,c.id)<(SELECT created_at,id FROM client_connections WHERE id=?3 AND user_id=?1)) ORDER BY c.created_at DESC,c.id DESC LIMIT 51")
         .bind(user.as_bytes().as_slice()).bind(current.as_bytes().as_slice()).bind(after.map(|id| id.as_bytes().to_vec())).fetch_all(conn).await?;
     rows.into_iter()
         .map(|row| {
@@ -89,6 +94,7 @@ pub async fn list(
                 id: row.try_get("id")?,
                 device_label: row.try_get("device_label")?,
                 client_kind: row.try_get("client_kind")?,
+                login_ip: row.try_get("login_ip")?,
                 created_at: row.try_get("created_at")?,
                 last_seen_at: row.try_get("last_seen_at")?,
                 refresh_expires_at: row.try_get("refresh_expires_at")?,

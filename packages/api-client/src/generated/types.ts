@@ -303,6 +303,8 @@ export interface ClientConnection {
   device_label: string;
   /** 最近成功认证请求UTC秒，旧记录缺省 */
   last_seen_at?: string;
+  /** 首次成功登录的IPv4或IPv6来源地址，旧记录缺省 */
+  login_ip?: string;
   /** 当前刷新凭据到期UTC秒，备份恢复后缺省 */
   refresh_expires_at?: string;
   /** 撤销UTC秒 */
@@ -320,6 +322,7 @@ export function decodeClientConnection(value: unknown): ClientConnection {
     current: expect_boolean(object.current, "ClientConnection.current"),
     device_label: expect_string(object.device_label, "ClientConnection.device_label"),
     last_seen_at: object.last_seen_at === undefined ? undefined : expect_decimal(object.last_seen_at, "ClientConnection.last_seen_at"),
+    login_ip: object.login_ip === undefined ? undefined : expect_string(object.login_ip, "ClientConnection.login_ip"),
     refresh_expires_at: object.refresh_expires_at === undefined ? undefined : expect_decimal(object.refresh_expires_at, "ClientConnection.refresh_expires_at"),
     revoked_at: object.revoked_at === undefined ? undefined : expect_decimal(object.revoked_at, "ClientConnection.revoked_at"),
     state: decodeClientConnectionState(object.state),
@@ -357,7 +360,7 @@ export function decodeClientConnectionPage(value: unknown): ClientConnectionPage
   };
 }
 
-/** 最近活动不是在线保证；unknown 表示备份恢复后会话已清理。 */
+/** 有效会话五分钟内（含300秒）有认证活动为recent（已连接），其余inactive（未连接）；unknown为会话已清理。 */
 export type ClientConnectionState = "recent" | "inactive" | "revoked" | "expired" | "unknown";
 
 export const CLIENT_CONNECTION_STATE_VALUES = ["recent", "inactive", "revoked", "expired", "unknown"] as const;

@@ -57,6 +57,7 @@ use vaultsyncd_server_store::users;
 
 /// 当前账号的客户端连接观测记录。
 pub mod clients;
+mod login_ip;
 /// 账号元信息、改密和全部会话撤销。
 pub mod manage;
 
@@ -153,18 +154,20 @@ impl RequestFacts {
 pub async fn login(
     State(context): State<Arc<AuthContext>>,
     headers: HeaderMap,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    login_impl(context, headers, body, false).await
+    login_impl(context, headers, body, false, peer.map(|value| value.0.0)).await
 }
 
 /// 浏览器登录：令牌只写 HttpOnly cookie。
 pub async fn browser_login(
     State(context): State<Arc<AuthContext>>,
     headers: HeaderMap,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    login_impl(context, headers, body, true).await
+    login_impl(context, headers, body, true, peer.map(|value| value.0.0)).await
 }
 
 async fn login_impl(
@@ -172,6 +175,7 @@ async fn login_impl(
     headers: HeaderMap,
     body: LoginRequest,
     browser: bool,
+    peer: Option<std::net::SocketAddr>,
 ) -> Response {
     let _gate = context.account_gate.lock().await;
     let facts = match RequestFacts::collect(headers) {
@@ -202,6 +206,7 @@ async fn login_impl(
     let mut sessions = DbSessions {
         database: &context.database,
         login_browser: Some(browser),
+        login_ip: login_ip::source(peer, &facts.headers),
     };
     let mut ids = context.ids.lock().await;
     let issued = session::issue(
@@ -276,6 +281,7 @@ async fn refresh_impl(
     let mut sessions = DbSessions {
         database: &context.database,
         login_browser: None,
+        login_ip: None,
     };
     let mut ids = context.ids.lock().await;
     let renewed =
@@ -306,6 +312,7 @@ pub async fn logout(State(context): State<Arc<AuthContext>>, headers: HeaderMap)
     let mut sessions = DbSessions {
         database: &context.database,
         login_browser: None,
+        login_ip: None,
     };
     match sessions.revoke(principal.session_id, facts.now).await {
         Ok(_) => {
@@ -692,6 +699,7 @@ impl DbAccounts<'_> {
 struct DbSessions<'a> {
     database: &'a Database,
     login_browser: Option<bool>,
+    login_ip: Option<std::net::IpAddr>,
 }
 
 #[allow(async_fn_in_trait)]
@@ -702,9 +710,14 @@ impl SessionStore for DbSessions<'_> {
             .await
             .map_err(session_storage_error)?;
         if let Some(browser) = self.login_browser {
-            vaultsyncd_server_store::clients::set_kind(&mut tx, new.id, browser)
-                .await
-                .map_err(session_db_error)?;
+            vaultsyncd_server_store::clients::set_login_details(
+                &mut tx,
+                new.id,
+                browser,
+                self.login_ip,
+            )
+            .await
+            .map_err(session_db_error)?;
         }
         tx.commit().await.map_err(session_db_error)
     }
@@ -877,6 +890,7 @@ async fn principal_with(
     let mut sessions = DbSessions {
         database: &context.database,
         login_browser: None,
+        login_ip: None,
     };
     let principal = session::authenticate(&mut sessions, &credential.token, facts.now)
         .await
@@ -942,6 +956,12 @@ mod tests {
     }
 
     async fn call(router: axum::Router, request: Request<Body>) -> (StatusCode, HeaderMap, String) {
+        let mut request = request;
+        request.extensions_mut().insert(axum::extract::ConnectInfo(
+            "[2001:db8::5]:12345"
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+        ));
         let response = router.oneshot(request).await.expect("调用处理器");
         let status = response.status();
         let headers = response.headers().clone();
@@ -1312,6 +1332,7 @@ mod tests {
         let page: vaultsyncd_protocol::generated::ClientConnectionPage =
             serde_json::from_str(&text).unwrap();
         assert_eq!(page.connections.len(), 1);
+        assert_eq!(page.connections[0].login_ip.as_deref(), Some("2001:db8::5"));
         assert_eq!(
             page.connections[0].client_kind,
             vaultsyncd_protocol::generated::ClientConnectionClientKind::Client

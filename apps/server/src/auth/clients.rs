@@ -83,7 +83,7 @@ fn summarize(row: store::ClientConnection, now: i64) -> ClientConnection {
         ClientConnectionState::Expired
     } else if row
         .last_seen_at
-        .is_some_and(|at| at <= now && at > now.saturating_sub(300))
+        .is_some_and(|at| at <= now && at >= now.saturating_sub(300))
     {
         ClientConnectionState::Recent
     } else {
@@ -97,6 +97,7 @@ fn summarize(row: store::ClientConnection, now: i64) -> ClientConnection {
             "client" => ClientConnectionClientKind::Client,
             _ => ClientConnectionClientKind::Unknown,
         },
+        login_ip: row.login_ip,
         created_at: row.created_at.to_string(),
         last_seen_at: row.last_seen_at.map(|at| at.to_string()),
         refresh_expires_at: row.refresh_expires_at.map(|at| at.to_string()),
@@ -129,6 +130,7 @@ mod tests {
             id: "11".repeat(16),
             device_label: "设备".into(),
             client_kind: "unknown".into(),
+            login_ip: None,
             created_at: 100,
             last_seen_at: seen,
             refresh_expires_at: expiry,
@@ -142,7 +144,11 @@ mod tests {
             summarize(record(Some(701), Some(2000), None), 1000).state,
             ClientConnectionState::Recent
         );
-        for seen in [None, Some(700), Some(1001)] {
+        assert_eq!(
+            summarize(record(Some(700), Some(2000), None), 1000).state,
+            ClientConnectionState::Recent
+        );
+        for seen in [None, Some(699), Some(1001)] {
             assert_eq!(
                 summarize(record(seen, Some(2000), None), 1000).state,
                 ClientConnectionState::Inactive

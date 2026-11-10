@@ -77,7 +77,14 @@ async fn login_rotation_touch_scope_pagination_and_restart() {
     assert!(list(&mut conn, user(1), session(53), None).await.unwrap()[0].current);
     drop(conn);
     let mut tx = db.begin_write().await.unwrap();
-    set_kind(&mut tx, session(53), false).await.unwrap();
+    set_login_details(
+        &mut tx,
+        session(53),
+        false,
+        Some("2001:db8::1".parse().unwrap()),
+    )
+    .await
+    .unwrap();
     sessions::rotate_refresh(&mut tx, session(53), &successor, at(1100))
         .await
         .unwrap();
@@ -95,6 +102,7 @@ async fn login_rotation_touch_scope_pagination_and_restart() {
     assert_eq!(rows[0].last_seen_at, Some(1100));
     assert_eq!(rows[0].revoked_at, Some(1200));
     assert_eq!(rows[0].client_kind, "client");
+    assert_eq!(rows[0].login_ip.as_deref(), Some("2001:db8::1"));
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM client_connections WHERE user_id=?")
         .bind(user(1).as_bytes().as_slice())
         .fetch_one(&mut *conn)

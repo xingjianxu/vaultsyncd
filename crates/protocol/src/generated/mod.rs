@@ -201,6 +201,10 @@ pub struct ClientConnection {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<String>,
+    /// 首次成功登录的IPv4或IPv6来源地址，旧记录缺省
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_ip: Option<String>,
     /// 当前刷新凭据到期UTC秒，备份恢复后缺省
     #[serde(with = "crate::decimal::option")]
     #[serde(default)]
@@ -243,7 +247,7 @@ pub struct ClientConnectionPage {
     pub observed_at: String,
 }
 
-/// 最近活动不是在线保证；unknown 表示备份恢复后会话已清理。
+/// 有效会话五分钟内（含300秒）有认证活动为recent（已连接），其余inactive（未连接）；unknown为会话已清理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum ClientConnectionState {
     /// 取值 `recent`。

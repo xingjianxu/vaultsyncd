@@ -311,9 +311,12 @@ impl Service {
             );
         };
 
-        let serve_result = axum::serve(listener, router)
-            .with_graceful_shutdown(graceful)
-            .await;
+        let serve_result = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(graceful)
+        .await;
 
         let admin_result = admin_task
             .await

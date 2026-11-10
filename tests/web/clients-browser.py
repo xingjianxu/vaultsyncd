@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import sqlite3
 import subprocess
 import threading
 import time
@@ -15,7 +16,7 @@ from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-dev/vaultsyncd-temp")) / f"S147-browser-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-dev/vaultsyncd-temp")) / f"S170-browser-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -70,12 +71,14 @@ def main():
         assert status == 200 and len(first["connections"]) == 1
         connection_id = first["connections"][0]["connection_id"]
         assert first["connections"][0]["client_kind"] == "client"
+        assert first["connections"][0]["login_ip"] == "127.0.0.1"
         assert "access_token" not in json.dumps(first) and "digest" not in json.dumps(first)
         status, renewed = api("/v1/auth/refresh", {"refresh_token": session["refresh_token"]})
         assert status == 200
         token = renewed["access_token"]
         rows = api("/v1/clients", token=token)[1]["connections"]
         assert len(rows) == 1 and rows[0]["connection_id"] == connection_id and rows[0]["current"]
+        assert rows[0]["login_ip"] == "127.0.0.1"
         assert api("/v1/clients", token=session["access_token"])[0] == 401
         assert api("/v1/clients?after=broken", token=token)[0] == 400
         assert api("/v1/clients?after=" + "00" * 16, token=token)[0] == 400
@@ -85,7 +88,7 @@ def main():
         for index in range(51):
             status, _ = api("/v1/auth/login", {"login": "owner", "password": password, "device_label": f"分页设备 {index:02}"})
             assert status == 200
-        network = {"offline": False}
+        network = {"offline": False, "requests": 0}
 
         class Handler(CspStaticFiles):
             def log_message(self, *_): pass
@@ -97,8 +100,10 @@ def main():
                 if network["offline"] and self.path.startswith("/v1/clients"):
                     self.close_connection = True
                     return
+                if self.path.startswith("/v1/clients"): network["requests"] += 1
                 backend = http.client.HTTPConnection(backend_address["value"], timeout=15)
                 headers = {key: value for key, value in self.headers.items() if key.lower() not in ("connection", "transfer-encoding")}
+                headers["X-Forwarded-For"] = "2001:db8::170"
                 body = self.rfile.read(int(self.headers.get("content-length", "0")))
                 try:
                     backend.request(self.command, self.path, body=body, headers=headers)
@@ -128,12 +133,23 @@ def main():
             table = page.get_by_role("table", name="客户端连接记录")
             expect(table).to_be_visible()
             expect(table.locator("tbody tr")).to_have_count(50)
-            expect(table.get_by_text("当前连接", exact=True)).to_have_count(1)
+            expect(table.get_by_text("本次会话", exact=True)).to_have_count(1)
             expect(table.get_by_text("Web 浏览器", exact=True)).to_be_visible()
+            expect(table.get_by_role("columnheader", name="登录 IP", exact=True)).to_be_visible()
+            expect(table.get_by_text("2001:db8::170", exact=True)).to_be_visible()
+            expect(table.get_by_text("已连接", exact=True)).to_have_count(50)
             expect(table.get_by_text("浏览器", exact=True)).to_be_visible()
             page.get_by_role("button", name="加载更多", exact=True).click()
             expect(table.locator("tbody tr")).to_have_count(53)
             expect(table.get_by_text("已撤销", exact=True)).to_be_visible()
+            requests = network["requests"]
+            # Actual timer, including the second loaded page; no synthetic clock.
+            page.wait_for_function("() => !document.hidden")
+            deadline = time.monotonic() + 40
+            while network["requests"] < requests + 2 and time.monotonic() < deadline:
+                page.wait_for_timeout(250)
+            assert network["requests"] >= requests + 2
+            expect(table.locator("tbody tr")).to_have_count(53)
             expect(table.get_by_text("<img src=x onerror=alert(1)> 测试设备", exact=True)).to_be_visible()
             expect(table.locator("img")).to_have_count(0)
             assert page.evaluate("fetch('/v1/clients').then(r=>r.headers.get('cache-control'))") == "no-store"
@@ -144,6 +160,7 @@ def main():
                 page.emulate_media(color_scheme=scheme)
                 for width in [320, 1440]:
                     page.set_viewport_size({"width": width, "height": 900})
+                    page.wait_for_timeout(300)
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                     page.evaluate("scrollTo(0,0)")
                     page.screenshot(path=str(RUN / f"clients-{scheme}-{width}.png"))
@@ -157,11 +174,28 @@ def main():
             expect(page.get_by_role("button", name="重试", exact=True)).to_have_count(0)
             # Restart actual process; browser cookie and history survive.
             server.terminate(); server.wait(timeout=15)
+            # Offline test fixture only: old history without IP, stale activity and expiry.
+            with sqlite3.connect(state / "server.sqlite") as db:
+                cutoff = int(time.time()) - 301
+                db.execute("UPDATE client_connections SET created_at=?,last_seen_at=?,login_ip=NULL WHERE device_label='分页设备 00'", (cutoff, cutoff))
+                db.execute("UPDATE sessions SET created_at=?,access_expires_at=?,refresh_expires_at=? WHERE device_label='分页设备 01'", (cutoff, cutoff, cutoff))
             server = start()
             page.reload()
             expect(table).to_be_visible()
             next_current = page.evaluate("fetch('/v1/clients').then(r=>r.json()).then(p=>p.connections.find(c=>c.current))")
             assert next_current["connection_id"] == current["connection_id"]
+            assert next_current["login_ip"] == "2001:db8::170"
+            page.get_by_role("button", name="加载更多", exact=True).click()
+            expect(table.get_by_text("已过期", exact=True)).to_be_visible()
+            expect(table.get_by_text("未连接", exact=True)).to_be_visible()
+            expect(table.get_by_text("未知", exact=True)).to_be_visible()
+            # Navigation clears the timer and in-flight work.
+            page.goto(origin + "/#/vaults")
+            requests = network["requests"]
+            page.wait_for_timeout(31_000)
+            assert network["requests"] == requests
+            page.goto(origin + "/#/clients")
+            expect(table).to_be_visible()
             # All-session revocation removes the page through the normal auth gate.
             result = page.evaluate("fetch('/v1/auth/revoke-all',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.status)")
             assert result == 200
@@ -171,8 +205,8 @@ def main():
             assert page.evaluate("window.__csp") == []
             assert errors == [], errors
             browser.close()
-        (RUN / "result.json").write_text(json.dumps({"status": "pass", "connections": 53, "screenshots": 4, "checks": ["auth gate", "rotation identity", "revocation", "pagination", "escaping", "network retry", "restart", "CSP", "320/1440 light/dark"]}, ensure_ascii=False, indent=2))
-        print(f"S147 browser PASS: {RUN}")
+        (RUN / "result.json").write_text(json.dumps({"status": "pass", "connections": 53, "screenshots": 4, "checks": ["auth gate", "rotation identity/IP", "IPv4/IPv6", "unknown IP", "disconnected/expired", "30s all-page polling", "navigation cleanup", "revocation", "pagination", "escaping", "network retry", "restart", "CSP", "320/1440 light/dark"]}, ensure_ascii=False, indent=2))
+        print(f"S170 browser PASS: {RUN}")
     finally:
         if proxy: proxy.shutdown(); proxy.server_close()
         if server and server.poll() is None: server.terminate(); server.wait(timeout=15)

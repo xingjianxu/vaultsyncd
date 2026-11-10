@@ -493,7 +493,7 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO client_connections VALUES(?1,?2,?3,'备份设备','client',1,10)")
+        sqlx::query("INSERT INTO client_connections(id,user_id,session_id,device_label,client_kind,created_at,last_seen_at,login_ip) VALUES(?1,?2,?3,'备份设备','client',1,10,'192.0.2.5')")
             .bind([4u8; 16].as_slice())
             .bind(owner.as_bytes().as_slice())
             .bind([5u8; 16].as_slice())
@@ -533,14 +533,14 @@ mod tests {
                 .unwrap(),
             1
         );
-        let history: (String, Option<Vec<u8>>) = copied
+        let history: (String, Option<Vec<u8>>, Option<String>) = copied
             .query_row(
-                "SELECT device_label,session_id FROM client_connections",
+                "SELECT device_label,session_id,login_ip FROM client_connections",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!(history, ("备份设备".into(), None));
+        assert_eq!(history, ("备份设备".into(), None, Some("192.0.2.5".into())));
         let original: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(db.pool())
             .await

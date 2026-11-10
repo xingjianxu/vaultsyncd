@@ -2699,10 +2699,11 @@ S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开
 
 ## S147：客户端连接观测
 
-- `api/openapi.yaml` 为 `ClientConnection`/`ClientConnectionPage` 唯一 wire 源；`GET /v1/clients?after=<connection_id>` 鉴权后只列当前账号，按 `(created_at,id)` 降序键集分页50条，末页省略 `next_cursor`。游标要求32位小写hex，未知/其他账号/重复/多余参数400；401会话无效、403跨源、503存储错误；响应 `no-store`，不含令牌/摘要/路径/IP。
+- `api/openapi.yaml` 为 `ClientConnection`/`ClientConnectionPage` 唯一 wire 源；`GET /v1/clients?after=<connection_id>` 鉴权后只列当前账号，按 `(created_at,id)` 降序键集分页50条，末页省略 `next_cursor`。游标要求32位小写hex，未知/其他账号/重复/多余参数400；401会话无效、403跨源、503存储错误；响应 `no-store`，不含令牌/摘要/路径；S170增加可选login_ip。
 - schema18 追加 `client_connections`；每次登录在会话写事务内创建记录及接入类别，刷新在原事务移动 `session_id` 并保持连接id/首次时间，注销/改密/撤销状态取最新会话。旧刷新链迁移成一次原始登录，类型和活动未知；迁移前自动一致备份。旧二进制拒绝18，回退恢复整份17备份，不能仅降二进制。
-- `server-store::clients::{list,cursor_exists,touch,set_kind}` 为持久适配器；认证通过后更新活动（UTC秒、30秒节流、时钟倒退不覆盖）。活动五分钟为recent，其余有效会话inactive，撤销/刷新期限到期优先；无心跳，不作为实时在线或同步进度。备份清除会话时以FK SET NULL保留历史，恢复后unknown。
-- Web `#/clients` 使用生成 `listClients` 和 `BrowserAuth.request`（同源cookie/401单飞刷新/全局失效门禁），支持刷新、加载更多和失败重试。设备标签按文本转义；相同标签不合并设备，不引入客户端新API或设备审批。
+- `server-store::clients::{list,cursor_exists,touch,set_login_details}` 为持久适配器；认证通过后更新活动（UTC秒、30秒节流、时钟倒退不覆盖）。活动五分钟内（含300秒）为recent（已连接），其余有效会话inactive（未连接），撤销/刷新期限到期优先；无心跳，不作为实时在线或同步进度。备份清除会话时以FK SET NULL保留历史，恢复后unknown。
+- S170/schema19增加nullable `login_ip`，HTTP登录同事务记录规范IPv4/IPv6（不含端口），刷新保持首次来源，历史不回填。入口通过Axum ConnectInfo取TCP地址，仅loopback来源允许单个合法X-Forwarded-For（现有Caddy显式覆盖为remote_host）；远端直连和无效/重复/列表转发头退回TCP来源，没有TCP上下文时未知。仅记录成功登录，不使用IP授权。新增wire字段可选兼容旧消费者；迁移前一致备份，旧二进制拒绝19，回退恢复整套18备份，备份清凭据时保留IP历史。
+- Web `#/clients` 使用生成 `listClients` 和 `BrowserAuth.request`（同源cookie/401单飞刷新/全局失效门禁），显示登录IP、已连接/未连接及本次会话，支持刷新、加载更多和失败重试；每30秒原子刷新全部已加载分页，后台页暂停、回到前台立即刷新，离开取消请求及定时器。失败保留带观测时间的旧记录并提示，不能解释为未连接。设备标签按文本转义；相同标签不合并设备，不引入客户端新API或设备审批。
 
 ## S161 历史资料路径映射
 
