@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S193 done**：Windows 客户端「连接设置」可移除已保存服务器。仍有正在管理的绑定时拒绝（提示先解除绑定），已解除绑定的恢复记录不阻止移除也不被删除；移除总是删除本机连接、登录资料与 WinCred 凭据，并尽力注销服务器会话，未确认时保留不自动消失的提示。IPC 2.11 新增 `remove_connection` 与 `session_revoked`，客户端 schema 16 新增移除留痕。验证：宿主 store 59/local-ipc 30/typecheck/desktop build+activity、交叉严格 clippy、真实 Windows 交互会话 WinCred 删除与拒绝路径、真实 WebView S081 全套（`removalBlockedByBinding=true`）、Chromium 7 组及既有桌面回归。证据 `/data/vaultsyncd-dev/S193-remove-server-20261111/`。未部署（无服务端产物）。
+当前 **S193 done**：Windows 客户端「连接设置」可移除已保存服务器。仍有正在管理的绑定时拒绝（提示先解除绑定），已解除绑定的恢复记录不阻止移除也不被删除；移除总是删除本机连接、登录资料与 WinCred 凭据，并尽力注销服务器会话，未确认时保留不自动消失的提示。IPC 2.11 新增 `remove_connection` 与 `session_revoked`，客户端 schema 16 新增移除留痕。验证：宿主 store 59/local-ipc 30/typecheck/desktop build+activity、交叉严格 clippy、真实 Windows 交互会话 WinCred 删除与拒绝路径、真实 WebView S081 全套（`removalBlockedByBinding=true`）、Chromium 7 组及既有桌面回归。证据 `/data/vaultsyncd-dev/S193-remove-server-20261111/`。实现`c587d78`、交接`ffd9433`已ff合master，任务树/分支已清理；未部署（无服务端产物）。下一 ready：无。
 
 当前 **S192 done**：Windows 解除本地 Binding 后从同步目录及文件/历史/传输记录选择器移除，保留恢复记录和解绑风险报告。根 typecheck、桌面 build/activity、Chromium7组与既有绑定/UI回归、真实 Windows S082 列表及数据保护、独立复审通过。实现 `a7dca9b`，干净来源开发客户端构建与四 EXE/11文件清单复核通过，永久副本 `/data/vaultsyncd-dev/S192-detached-binding-lists-20261111/product/`；交接 `2057f72` 已 ff 合 master，任务树/分支清理，根 dist 已交付并与永久副本一致，旧 dist 已备份。交接 [S192](tasks/S192.md)。无服务端产物变化，不部署/发行；下一 ready 无，原 S011/S106/S107/S108 门禁保持。
 
