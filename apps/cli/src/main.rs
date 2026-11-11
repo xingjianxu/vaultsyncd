@@ -660,6 +660,9 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::ListActivity => "activity",
         CommandName::ListTrash => "trash",
         CommandName::RestoreEntry => "restore",
+        // CLI 尚未提供该子命令（目前仅桌面端发起）；保留名称映射以便闭集新增命令时
+        // 编译期即暴露漏写，而不是静默落空。
+        CommandName::RemoveConnection => "remove-connection",
     }
 }
 
