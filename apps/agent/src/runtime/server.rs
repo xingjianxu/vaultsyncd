@@ -345,7 +345,24 @@ impl Server {
         if matches!(command.name, CommandName::Login | CommandName::Logout) {
             self.hints.clear();
         }
-        let mut result = if let Some((binding, complete)) = create {
+        let quiesced = if command.name == CommandName::DetachBinding {
+            match command
+                .parameters
+                .as_ref()
+                .and_then(|p| p.binding_id.as_deref())
+            {
+                Some(id) => match BindingId::from_hex(id).map_err(error) {
+                    Ok(id) => self.quiesce_binding(id).await,
+                    Err(cause) => Err(cause),
+                },
+                None => Err(reject("INVALID_ARGUMENT")),
+            }
+        } else {
+            Ok(())
+        };
+        let mut result = if let Err(cause) = quiesced {
+            Err(cause)
+        } else if let Some((binding, complete)) = create {
             let result = self.create(db, &config.device_id, binding).await;
             let _ = complete.send(());
             result
@@ -436,6 +453,35 @@ impl Server {
         }
         self.live.push(result?);
         Ok(ManagementResult::default())
+    }
+
+    /// Release the old native writer before publishing detached=1. The coordinator may
+    /// admit a new binding as soon as it observes that durable flag, even on another server.
+    async fn quiesce_binding(&mut self, id: BindingId) -> Result<(), PortError> {
+        if let Some(index) = self.live.iter().position(|item| item.0 == id) {
+            let worker = &self.live[index].3;
+            worker.importer.callbacks.disconnect();
+            worker
+                .importer
+                .adapter
+                .lock()
+                .map_err(error)?
+                .disconnect()
+                .map_err(error)?;
+            worker
+                .importer
+                .callbacks
+                .wait_idle(Duration::from_secs(5))
+                .await
+                .map_err(error)?;
+            self.live.remove(index);
+        }
+        self.receivers.remove(&id);
+        self.hints.remove(&id);
+        self.startup.remove(&id);
+        self.cycles.remove(&id);
+        self.offline.remove(&id);
+        Ok(())
     }
 
     async fn disconnect(&mut self) -> Result<(), PortError> {

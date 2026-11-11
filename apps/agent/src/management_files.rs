@@ -97,8 +97,8 @@ pub(crate) async fn release(
     entry: EntryId,
     op: OpId,
 ) -> Result<(), PortError> {
-    admit(config)?;
     let local = &worker.importer.local;
+    admit(&local.db, config).await?;
     let rows = metadata(&worker.importer).await?;
     let row = rows
         .get(&entry.to_string())

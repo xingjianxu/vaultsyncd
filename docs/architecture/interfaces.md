@@ -2797,3 +2797,11 @@ Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与
 `AppView` 从 `management.bindings` 统一筛选 `!detached`，供本地 Binding 表、管理卡片和文件/历史/传输记录的绑定选择器使用。绑定 ID 集合变化时重置后三页的 React scope，丢弃失效选择、页面缓存与迟到读取的展示；不改写持久恢复作业或 agent 状态。失败/取消按既有 agent 结果保留绑定。
 
 `BindingActions` 在 agent 返回保留报告后，通过全局 Notification 展示未确认与非完整项数；存在待恢复内容时不自动关闭，避免列表移除后丢失数据风险提示。IPC/schema/CLI 的已解除记录与恢复导出入口保持，解绑仍不发送服务器 Delete、不清本地内容或缓存。Chromium 入口 `tests/desktop/detach-browser.py`；Windows 原生列表与数据保护回归纳入 S082。
+
+## S195 解绑后的同步根交接（无 wire/schema 变化）
+
+`management::{admit,new_binding}` 增加数据库参数并异步读取 `binding_controls.detached`；`config.bindings` 和 assignments 仍保留全量恢复记录。活动根互斥，暂停不释放预留；detached 仅允许精确物理根重用，父子嵌套仍拒绝。所有历史缓存与 agent 状态继续参与物理重叠校验，不复用旧缓存执行发布日志。历史根已删除可跳过，未知权限/扫描故障和内部目录不可用 fail closed。
+
+`client-store::bindings::protected_paths(db, binding)` 为首次导入和 resync 提供“其他活动根＋全部保留缓存”的统一持久集合；不把 detached 根重新当成互斥路径，也不因暂停而释放根。物理身份、精确根重用和父子限制仍由 agent 的平台准入执行。
+
+`Server::quiesce_binding` 在持久 detached 提交前取消回调、断开 CFAPI、等待 idle 并释放 live/receiver/hints。`management_paths::prepare_reuse` 在新绑定落库前核对 `maintenance::registered_identity` 与旧占位身份，完整内容调用既有 `revert_materialized` 校验身份/哈希后变为普通文件，再注销旧 CFAPI/Explorer 注册；旧缓存、队列、恢复记录不删。不完整内容返回 `MODE_REQUIRES_LOCAL_COPY` 且不创建新绑定；外来身份拒绝接管。旧 `RestoreEntry` 与 `retry_restore` 在持久 detached 围栏下拒绝重新写远端。启动、手动释放和离线维护共用 durable 准入，provider 卸载按实际注册身份选择：解绑但仍持有注册的旧根继续完整性预检/无损移除，已交接的旧记录不再次注销新绑定。fallback 解绑遇到被围栏或尚未证明安全退出的服务器任务时拒绝写 detached。

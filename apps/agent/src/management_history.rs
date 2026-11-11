@@ -70,6 +70,7 @@ pub(crate) async fn execute(
         );
         result.next_cursor = page.next_cursor;
     } else {
+        require_attached(db, binding).await?;
         let op = OpId::from_hex(p.operation_id.as_deref().unwrap()).map_err(error)?;
         let request = OperationRequest {
             device_id: config.device_id.clone(),
@@ -124,12 +125,27 @@ pub(crate) async fn execute(
     Ok(result)
 }
 
+pub(crate) async fn require_attached(db: &Database, binding: BindingId) -> Result<(), PortError> {
+    let detached: bool = sqlx::query_scalar(
+        "SELECT coalesce((SELECT detached FROM binding_controls WHERE binding_id=?),0)",
+    )
+    .bind(binding.as_bytes().as_slice())
+    .fetch_one(db.pool())
+    .await
+    .map_err(error)?;
+    if detached {
+        return Err(crate::management::reject("BINDING_BLOCKED"));
+    }
+    Ok(())
+}
+
 pub(crate) async fn retry_restore(
     db: &Arc<Database>,
     binding: BindingId,
     op: OpId,
     client: &ApiClient<ReqwestTransport>,
 ) -> Result<ManagementResult, PortError> {
+    require_attached(db, binding).await?;
     let text:Option<String>=sqlx::query_scalar("SELECT specification FROM agent_actions WHERE op_id=? AND binding_id=? AND json_extract(specification,'$.kind')='management_restore'")
         .bind(op.as_bytes().as_slice()).bind(binding.as_bytes().as_slice()).fetch_optional(db.pool()).await.map_err(error)?;
     let text =

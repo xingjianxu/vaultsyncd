@@ -1,7 +1,8 @@
 //! 客户端绑定表（`bindings`）的事务内读写（`docs/design.md` §7.1、§7.3）。
 //!
 //! 边界：本模块只读写“本设备某个目录绑定到某个 Vault”这一行。它不注册 Vault（那是服务端与
-//! 绑定卡片的事）、不读文件系统、不判挂载，也不生成身份（身份由应用层经 `IdSource` 生成）。
+//! 绑定卡片的事）；路径保护集合只读关联持久控制状态，不读文件系统、不判挂载，也不生成身份
+//! （身份由应用层经 `IdSource` 生成）。
 //!
 //! 不变量：
 //!
@@ -17,6 +18,18 @@
 use sqlx::{Sqlite, SqliteConnection, Transaction};
 use vaultsyncd_domain::ids::{BindingId, DeviceId, ID_LEN, ServerId, VaultId};
 use vaultsyncd_domain::version::ServerEpoch;
+
+/// Paths protected from another binding's import/resync. Detached roots are recovery
+/// records, not active reservations; every historical cache (including our own) stays protected.
+/// Physical identity/ancestry and exact-root handover remain the platform admission's job.
+pub async fn protected_paths(
+    database: &crate::db::Database,
+    binding: BindingId,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT b.local_path FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id<>? AND coalesce(c.detached,0)=0 UNION ALL SELECT cache_path FROM bindings")
+        .bind(binding.as_bytes().as_slice())
+        .fetch_all(database.pool()).await
+}
 
 /// 绑定的同步模式（design C34：`full` 与 `on_demand`，不含单向模式）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +295,35 @@ mod tests {
     use super::*;
 
     use crate::test_support::{TestDir, binding_id, device_id, open_database, server_id, vault_id};
+
+    #[tokio::test]
+    async fn protected_paths_release_detached_roots_but_keep_paused_roots_and_every_cache() {
+        let dir = TestDir::new("s195-protected-paths");
+        let database = open_database(&dir).await;
+        let mut tx = database.begin_write().await.unwrap();
+        for marker in 1..=3 {
+            let mut binding = new_binding(marker);
+            binding.local_path = format!("C:\\root-{marker}");
+            binding.cache_path = format!("C:\\cache-{marker}");
+            insert_binding(&mut tx, &binding).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+        sqlx::query(
+            "INSERT INTO binding_controls(binding_id,paused,detached) VALUES(?,1,1),(?,1,0)",
+        )
+        .bind(binding_id(1).as_bytes().as_slice())
+        .bind(binding_id(2).as_bytes().as_slice())
+        .execute(database.pool())
+        .await
+        .unwrap();
+        let mut paths = protected_paths(&database, binding_id(3)).await.unwrap();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![r"C:\cache-1", r"C:\cache-2", r"C:\cache-3", r"C:\root-2"]
+        );
+        database.pool().close().await;
+    }
 
     fn new_binding(marker: u8) -> NewBinding {
         NewBinding {

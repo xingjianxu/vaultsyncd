@@ -408,7 +408,8 @@ pub(crate) fn management_response(
                 "CONNECTION_SERVER_MISMATCH" => identity_mismatch_message(&error),
                 "SERVER_REQUIRED" => "客户端有多个服务器连接，请明确选择目标服务器（SERVER_REQUIRED）。".to_owned(),
                 "CONNECTION_IN_USE" => "该服务器仍有正在管理的本地绑定（CONNECTION_IN_USE）；请先在「同步目录」解除绑定并确认保留的数据，再移除服务器。".to_owned(),
-                "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),
+                "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他正在管理的绑定、保留缓存和 agent 状态目录分离，不能嵌套旧同步根。".to_owned(),
+                "MODE_REQUIRES_LOCAL_COPY" => "目录仍有未完整下载或无法确认的内容（MODE_REQUIRES_LOCAL_COPY）；重新绑定前须先恢复并下载完整内容。旧文件、缓存与恢复记录均已保留。".to_owned(),
                 _ => format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
             };
             failure(request, code, &message, retryable)

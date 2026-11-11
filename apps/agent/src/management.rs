@@ -19,7 +19,6 @@ use vaultsyncd_http_client::{ApiClient, ApiRequest, AuthSession, Method, Reqwest
 use vaultsyncd_local_ipc::generated::{
     BindingInfo, Command, CommandName as C, ConnectionInfo, ManagementResult, Problem, RemoteItem,
 };
-use vaultsyncd_platform_windows::files::VaultHandle;
 use vaultsyncd_transfer::ports::PortError;
 
 pub(crate) type Running = HashMap<BindingId, (Worker, Arc<Scheduler<Dispatch>>)>;
@@ -271,23 +270,12 @@ pub(crate) async fn load_bindings(
     Ok(assignments)
 }
 
-/// Recheck physical ancestry, including drive aliases; neither a GUI check nor string prefixes suffice.
-pub(crate) fn admit(config: &AgentConfig) -> Result<(), PortError> {
-    config.validate().map_err(error)?;
-    let state = VaultHandle::open(&config.state_dir).map_err(error)?;
-    let mut vaults = vec![state];
-    for b in &config.bindings {
-        for path in [&b.path, &b.cache] {
-            let vault = VaultHandle::open(path).map_err(|_| reject("LOCAL_PATH_UNAVAILABLE"))?;
-            if vaults.iter().any(|old| old.overlaps(&vault)) {
-                return Err(reject("PATH_OVERLAP"));
-            }
-            vaults.push(vault);
-        }
-    }
-    Ok(())
+/// Recheck physical ancestry against durable activity; recovery records do not own sync roots.
+pub(crate) async fn admit(db: &Database, config: &AgentConfig) -> Result<(), PortError> {
+    crate::management_paths::admit(db, config).await
 }
 pub(crate) async fn new_binding(
+    db: &Database,
     config: &AgentConfig,
     command: &Command,
 ) -> Result<BindingConfig, PortError> {
@@ -307,7 +295,8 @@ pub(crate) async fn new_binding(
     }
     let mut proposed = config.clone();
     proposed.bindings.push(binding.clone());
-    admit(&proposed)?;
+    admit(db, &proposed).await?;
+    crate::management_paths::prepare_reuse(db, config, &binding.path).await?;
     Ok(binding)
 }
 type BindingRow = (String, String, String, String, String, String, bool, bool);
@@ -486,6 +475,7 @@ pub(crate) async fn execute(
         }
         C::RetryProblem => {
             let binding = binding.unwrap();
+            crate::management_history::require_attached(db, binding).await?;
             let op = OpId::from_hex(p.operation_id.as_deref().unwrap()).map_err(error)?;
             // OpId is not authority: a different binding's operation is never resumed.
             if let Some((_, scheduler)) = running.get(&binding)

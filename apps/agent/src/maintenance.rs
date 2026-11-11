@@ -24,6 +24,33 @@ struct Plan {
     #[serde(default)]
     zip: bool,
 }
+pub(crate) async fn export_offline_recovery(
+    db: &Arc<Database>,
+    config: &AgentConfig,
+    destination: &Path,
+    prepared_online: bool,
+) -> Result<()> {
+    if prepared_online {
+        return Ok(());
+    }
+    for binding in &config.bindings {
+        let id = BindingId::from_hex(&binding.id)?;
+        let local = Arc::new(
+            crate::local::Local::open(&binding.path, &binding.cache, db.clone(), id).await?,
+        );
+        crate::management_export::export(
+            local,
+            config,
+            destination
+                .join(&binding.id)
+                .to_str()
+                .ok_or("invalid recovery destination")?,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 fn profile(config: &AgentConfig) -> Result<&Path> {
     Ok(config.state_dir.parent().ok_or("missing agent profile")?)
 }
@@ -366,6 +393,7 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
         .map(|items| {
             items
                 .iter()
+                .filter(|b| !b.detached)
                 .map(|b| (b.binding_id.clone(), b.paused))
                 .collect()
         })
@@ -379,6 +407,9 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
     };
     storage::json(&plan.backup.join("plan.json"), &plan)?;
     storage::json(&barrier, &plan)?;
+    // An empty active/paused list is valid when all rows are detached. It does not mean
+    // online recovery export was skipped.
+    let recovery_prepared_online = online.is_some();
     if let Some(status) = online {
         if status.ipc_protocol.minor >= 5 {
             rpc(
@@ -460,15 +491,18 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
     let result=async{
         let db=Arc::new(Database::open(config.state_dir.join("client.sqlite")).await?);
         let work=async{
-            crate::management::load_bindings(&db,&mut config).await?;crate::management::admit(&config)?;
-            if plan.paused.is_empty(){plan.paused=crate::management::binding_list(&db).await?.iter().map(|b|(b.binding_id.clone(),b.paused)).collect();
-                for binding in &config.bindings{let id=BindingId::from_hex(&binding.id)?;let local=Arc::new(crate::local::Local::open(&binding.path,&binding.cache,db.clone(),id).await?);crate::management_export::export(local,&config,plan.backup.join("recovery").join(&binding.id).to_str().ok_or("invalid recovery destination")?).await?;}}
+            crate::management::load_bindings(&db,&mut config).await?;crate::management::admit(&db,&config).await?;
+            let detached=crate::management_paths::detached(&db).await?;
+            if !recovery_prepared_online { plan.paused=crate::management::binding_list(&db).await?.iter().filter(|b| !b.detached).map(|b|(b.binding_id.clone(),b.paused)).collect(); }
+            export_offline_recovery(&db,&config,&plan.backup.join("recovery"),recovery_prepared_online).await?;
             if action.starts_with("uninstall-"){storage::require_program_idle(program)?;}
             if action=="uninstall-provider"{
-                // Preflight every Vault before converting any file. Never unregister partial placeholders.
-                for binding in &config.bindings{vaultsyncd_platform_windows::cfapi::maintenance::check_materialized(&binding.path)?;}
+                // Include detached roots which still own their registration, but never unregister
+                // a successor through the old recovery record. Preflight all before any conversion.
+                let providers=crate::management_paths::provider_bindings(&db,&config).await?;
+                for binding in &providers{vaultsyncd_platform_windows::cfapi::maintenance::check_materialized(&binding.path)?;}
                 let mut reports=vec![];
-                for binding in &config.bindings{
+                for binding in &providers{
                     let hashes=vaultsyncd_platform_windows::cfapi::maintenance::revert_materialized(&binding.path)?;
                     vaultsyncd_platform_windows::cfapi::maintenance::unregister_materialized(&binding.path)?;
                     let id=BindingId::from_hex(&binding.id)?;if vaultsyncd_platform_windows::shell::registered(id)? { vaultsyncd_platform_windows::shell::unregister(id)?; }
@@ -478,7 +512,7 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
             }else if action=="auto-upgrade" {
                 // Trial startup must not sync against a database that may still be rolled back.
                 let controls=BindingControls::new(db.clone());
-                for binding in &config.bindings { controls.set_paused(BindingId::from_hex(&binding.id)?,true).await?; }
+                for binding in config.bindings.iter().filter(|b| !detached.contains(&b.id)) { controls.set_paused(BindingId::from_hex(&binding.id)?,true).await?; }
             }else{restore_paused(&db,&plan).await?;}
             Ok::<(),Box<dyn std::error::Error>>(())
         }.await;

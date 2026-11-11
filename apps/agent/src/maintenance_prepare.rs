@@ -20,7 +20,7 @@ pub(crate) async fn prepare(
 ) -> Result<ManagementResult, PortError> {
     let bindings = crate::management::binding_list(db).await?;
     let control = BindingControls::new(db.clone());
-    for binding in &bindings {
+    for binding in bindings.iter().filter(|binding| !binding.detached) {
         control
             .set_paused(
                 BindingId::from_hex(&binding.binding_id).map_err(error)?,

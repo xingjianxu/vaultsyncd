@@ -19,6 +19,43 @@ unsafe extern "system" {
     ) -> i32;
     fn CfUnregisterSyncRoot(path: *const u16) -> i32;
 }
+/// Read an existing provider identity without registering or modifying the directory.
+/// Unknown/foreign layouts and API failures are never treated as an absent registration.
+pub fn registered_identity(path: &Path) -> io::Result<Option<[u8; 32]>> {
+    let mut buffer = vec![0u64; 1024];
+    let mut returned = 0;
+    let result = unsafe {
+        super::raw::CfGetSyncRootInfoByPath(
+            super::prototype::wide(path).as_ptr(),
+            1,
+            buffer.as_mut_ptr().cast(),
+            (buffer.len() * 8) as u32,
+            &mut returned,
+        )
+    };
+    if result < 0 {
+        if [
+            0x80070186u32 as i32,
+            0x80070178u32 as i32,
+            0x80070002u32 as i32,
+        ]
+        .contains(&result)
+        {
+            return Ok(None);
+        }
+        return Err(io::Error::other(format!(
+            "registration HRESULT {result:08x}"
+        )));
+    }
+    let bytes =
+        unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), buffer.len() * 8) };
+    if returned < 1088 || bytes[1052..1056] != 32u32.to_le_bytes() {
+        return Err(io::Error::other("foreign vault registration"));
+    }
+    Ok(Some(
+        bytes[1056..1088].try_into().map_err(io::Error::other)?,
+    ))
+}
 fn hash(file: &mut File) -> io::Result<String> {
     file.rewind()?;
     let mut h = ContentHasher::new();

@@ -32,9 +32,7 @@ impl ImportStore {
             .ok_or_else(|| invalid("绑定不存在"))
     }
     pub async fn other_paths(&self, id: BindingId) -> Result<Vec<String>, PortError> {
-        sqlx::query_scalar("SELECT local_path FROM bindings WHERE id <> ?1 UNION ALL SELECT cache_path FROM bindings WHERE id <> ?1")
-            .bind(id.as_bytes().as_slice())
-            .fetch_all(self.database.pool())
+        bindings::protected_paths(&self.database, id)
             .await
             .map_err(db)
     }

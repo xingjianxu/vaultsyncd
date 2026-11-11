@@ -54,13 +54,15 @@ use vaultsyncd_platform_windows::{
         adapter::Callbacks,
         catalog::{Catalog, Identity},
     },
-    files::{VaultHandle, controlled::RecoveryOutcome},
+    files::controlled::RecoveryOutcome,
 };
 use vaultsyncd_protocol::generated::SessionIssued;
 use vaultsyncd_transfer::{
     download::DownloadOptions,
     ports::{PortError, VersionPin},
 };
+#[cfg(test)]
+mod rebind_tests;
 mod server;
 
 type StoredPin = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
@@ -164,24 +166,8 @@ async fn run_mode(
 ) -> Result<(), PortError> {
     config.validate().map_err(error)?;
     admit(&config, trial)?;
-    let state = VaultHandle::open(&config.state_dir).map_err(error)?;
-    let mut vaults = Vec::new();
-    let mut caches = Vec::new();
-    for b in &config.bindings {
-        vaults.push(VaultHandle::open(&b.path).map_err(error)?);
-        caches.push(VaultHandle::open(&b.cache).map_err(error)?);
-    }
-    for (i, vault) in vaults.iter().enumerate() {
-        if vault.overlaps(&state)
-            || caches.iter().any(|c| vault.overlaps(c))
-            || vaults
-                .iter()
-                .enumerate()
-                .any(|(j, r)| i != j && vault.overlaps(r))
-        {
-            return Err(error("binding/state/cache overlap"));
-        }
-    }
+    // Durable detached controls are loaded under the writer lock before path admission.
+    // Checking the legacy configuration alone would revive its historical reservations.
     let _instance = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent").map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists || e.raw_os_error() == Some(32) {
             PortError::rejected(
@@ -201,7 +187,7 @@ async fn run_mode(
     );
     let servers = management::load_connections(&db, &config).await?;
     let assignments = management::load_bindings(&db, &mut config).await?;
-    management::admit(&config)?;
+    management::admit(&db, &config).await?;
     let (report_wake, mut reports) = mpsc::channel(1);
     let (connection_updates, connections) = watch::channel(Vec::new());
     let (completed, mut completions) = mpsc::unbounded_channel();
@@ -647,6 +633,20 @@ impl Runtime {
                 if let Some(id) = binding {
                     match management::binding_server(&self.db, id, &self.config.device_id).await {
                         Ok(Some(server))
+                            if command.name == CommandName::DetachBinding
+                                && (self.blocked_servers.contains(&server)
+                                    || self
+                                        .servers
+                                        .get(&server)
+                                        .is_some_and(|worker| worker.task_finished())) =>
+                        {
+                            let _ = request.reply.send(crate::ipc::management_response(
+                                &request.request,
+                                Err(reject("NEEDS_RECOVERY")),
+                            ));
+                            return;
+                        }
+                        Ok(Some(server))
                             if self
                                 .servers
                                 .get(&server)
@@ -736,7 +736,7 @@ impl Runtime {
         if self.blocked_servers.contains(&server) {
             return Err(reject("NEEDS_RECOVERY"));
         }
-        let binding = management::new_binding(&self.config, command).await?;
+        let binding = management::new_binding(&self.db, &self.config, command).await?;
         let id = BindingId::from_hex(&binding.id).map_err(error)?;
         if self.assignments.contains_key(&id)
             || management::binding_server(&self.db, id, &self.config.device_id)
