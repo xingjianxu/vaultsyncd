@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 2;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 10;
+pub const PROTOCOL_MINOR: u32 = 11;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -252,6 +252,9 @@ pub enum CommandName {
     /// 取值 `list_activity`。
     #[serde(rename = "list_activity")]
     ListActivity,
+    /// 取值 `remove_connection`。
+    #[serde(rename = "remove_connection")]
+    RemoveConnection,
 }
 
 /// 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。
@@ -579,6 +582,10 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules_version: Option<String>,
+    /// remove_connection 是否已确认服务器会话被撤销；false 时本地连接、登录资料与凭据仍已删除。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_revoked: Option<bool>,
     /// 解绑时保留的未确认条目。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

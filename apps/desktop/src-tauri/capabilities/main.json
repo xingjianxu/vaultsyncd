@@ -12,6 +12,7 @@
     "allow-agent-get-status",
     "allow-agent-discover-connection",
     "allow-agent-set-connection",
+    "allow-agent-remove-connection",
     "allow-agent-login",
     "allow-agent-logout",
     "allow-agent-list-vaults",

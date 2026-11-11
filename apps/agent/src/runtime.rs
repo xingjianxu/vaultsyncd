@@ -516,6 +516,69 @@ impl Runtime {
         })
     }
 
+    /// Forget a saved server. Bindings must be detached first; the local entry always goes away.
+    async fn remove_connection(
+        &mut self,
+        request: &crate::ipc::CommandRequest,
+    ) -> Result<ManagementResult, PortError> {
+        use vaultsyncd_client_store::connections::{self, Removal};
+        let parameters = request
+            .request
+            .command
+            .parameters
+            .as_ref()
+            .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
+        let id = ServerId::from_hex(
+            parameters
+                .server_id
+                .as_deref()
+                .ok_or_else(|| reject("INVALID_ARGUMENT"))?,
+        )
+        .map_err(error)?;
+        if self.blocked_servers.contains(&id) {
+            // A failed native disconnect cannot prove the old callbacks are gone.
+            return Err(reject("NEEDS_RECOVERY"));
+        }
+        let config = management::load_connections(&self.db, &self.config)
+            .await?
+            .into_iter()
+            .find(|server| server.id == id.to_string())
+            .ok_or_else(|| reject("NOT_FOUND"))?;
+        // Refuse before stopping anything so a rejected removal has no side effect.
+        if connections::in_use(&self.db, &id).await.map_err(error)? {
+            return Err(reject("CONNECTION_IN_USE"));
+        }
+        if let Some(worker) = self.servers.remove(&id) {
+            let stopped = worker.stop().await.map_err(error).and_then(|result| result);
+            self.complete_server_bindings(id).await;
+            if let Err(cause) = stopped {
+                self.fence_server(id);
+                return Err(cause);
+            }
+        }
+        // Revocation is best-effort: an offline server must still be removable, but the
+        // caller needs to know the remote session was not confirmed revoked.
+        let session = server::Connection::open(config)?;
+        let revoked = session.revoke_session().await;
+        session.erase_credentials();
+        match connections::remove(&self.db, &id).await.map_err(error)? {
+            Removal::Removed => {}
+            Removal::HasBindings => {
+                self.reload_server(id).await?;
+                return Err(reject("CONNECTION_IN_USE"));
+            }
+        }
+        self.connection_updates.send_if_modified(|connections| {
+            let before = connections.len();
+            connections.retain(|connection| connection.server_id != id.to_string());
+            connections.len() != before
+        });
+        Ok(ManagementResult {
+            session_revoked: Some(revoked),
+            ..Default::default()
+        })
+    }
+
     async fn reload_server(&mut self, id: ServerId) -> Result<(), PortError> {
         let servers = management::load_connections(&self.db, &self.config).await?;
         if let Some(config) = servers
@@ -547,6 +610,7 @@ impl Runtime {
                 ..Default::default()
             }),
             CommandName::SetConnection => self.set_connection(&request).await,
+            CommandName::RemoveConnection => self.remove_connection(&request).await,
             CommandName::Login | CommandName::Logout | CommandName::ListVaults => {
                 match self.selected_server(command) {
                     Ok(id) => return self.send_job(id, request, None),

@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 2,
-      "minor": 10
+      "minor": 11
     },
     "frame": {
       "header_bytes": 4,
@@ -84,7 +84,7 @@
     "CommandName": {
       "type": "string",
       "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
-      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity"]
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity", "remove_connection"]
     },
     "ErrorBody": {
       "type": "object",
@@ -255,7 +255,8 @@
         "incomplete":{"type":"array","items":{"type":"string"},"description":"解绑后不保证离线可读的条目。"},
         "exported_files":{"type":"string","description":"已完整核验的恢复包文件数。"},
         "mode_remaining":{"type":"string","description":"模式任务仍需真实核对/补齐的条目数。"},
-        "next_cursor":{"type":"string","description":"文件/历史/回收站/同步与传输记录下一页游标；list_activity 为 before 记录ID。"}
+        "next_cursor":{"type":"string","description":"文件/历史/回收站/同步与传输记录下一页游标；list_activity 为 before 记录ID。"},
+        "session_revoked":{"type":"boolean","description":"remove_connection 是否已确认服务器会话被撤销；false 时本地连接、登录资料与凭据仍已删除。"}
       }
     },
     "IpcVersion": {

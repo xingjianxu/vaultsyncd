@@ -92,7 +92,7 @@ check("all_management_examples_decode_without_losing_parameters", () => {
     assert.deepEqual(reencode(decoded), sample);
     commands.add(decoded.command.name);
   }
-  assert.equal(commands.size, 28);
+  assert.equal(commands.size, 29);
   assert.ok(commands.has("list_activity"));
 });
 

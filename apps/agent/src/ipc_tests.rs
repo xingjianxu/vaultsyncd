@@ -225,6 +225,25 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
             .code,
         LocalIpcErrorCode::InvalidArgument
     );
+    // Removing a saved server is only offered from IPC 2.11; older callers are refused
+    // before the command reaches the executor.
+    request.ipc_version = version::supported();
+    request.ipc_version.minor = 10;
+    request.command.name = CommandName::RemoveConnection;
+    request.command.parameters = Some(CommandParameters {
+        server_id: Some("11".repeat(16)),
+        ..Default::default()
+    });
+    assert_eq!(
+        endpoint
+            .request(&request)
+            .await
+            .unwrap()
+            .error
+            .unwrap()
+            .code,
+        LocalIpcErrorCode::UnsupportedVersion
+    );
     server.shutdown().await.unwrap();
     db.pool().close().await;
     std::fs::remove_dir_all(path).unwrap();

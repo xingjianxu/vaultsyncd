@@ -109,6 +109,19 @@ pub(crate) async fn agent_set_connection(
     .await
 }
 #[tauri::command]
+pub(crate) async fn agent_remove_connection(
+    server_id: String,
+) -> Result<ManagementResult, BridgeError> {
+    manage(
+        C::RemoveConnection,
+        Some(P {
+            server_id: Some(server_id),
+            ..Default::default()
+        }),
+    )
+    .await
+}
+#[tauri::command]
 pub(crate) async fn agent_login(
     server_id: String,
     username: String,

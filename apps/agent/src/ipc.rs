@@ -148,6 +148,16 @@ pub(crate) fn start(
                         false,
                     ));
                 }
+                if request.command.name == CommandName::RemoveConnection
+                    && request.ipc_version.minor < 11
+                {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "移除服务器需要本机 IPC 2.11",
+                        false,
+                    ));
+                }
                 if let Err(error) = vaultsyncd_local_ipc::commands::validate(&request.command) {
                     return Ok(Response::error(request.request_id, error));
                 }
@@ -353,6 +363,7 @@ pub(crate) fn management_response(
                 | "INSUFFICIENT_STORAGE" => (LocalIpcErrorCode::Blocked, false),
                 "NOT_READY"
                 | "BINDING_BLOCKED"
+                | "CONNECTION_IN_USE"
                 | "BINDING_UNBOUND"
                 | "MODE_REQUIRES_LOCAL_COPY"
                 | "LOCAL_CHANGED"
@@ -370,6 +381,7 @@ pub(crate) fn management_response(
                         | "ALREADY_EXISTS"
                         | "NOT_READY"
                         | "BINDING_BLOCKED"
+                        | "CONNECTION_IN_USE"
                         | "BINDING_UNBOUND"
                         | "LOCAL_IN_USE"
                         | "UNKNOWN_LOCAL_STATE"
@@ -395,6 +407,7 @@ pub(crate) fn management_response(
                 "INSUFFICIENT_STORAGE" => "本地磁盘或状态库空间不足（INSUFFICIENT_STORAGE）；完整缓存、未确认内容与恢复现场保留，请腾出空间后重试。".to_owned(),
                 "CONNECTION_SERVER_MISMATCH" => identity_mismatch_message(&error),
                 "SERVER_REQUIRED" => "客户端有多个服务器连接，请明确选择目标服务器（SERVER_REQUIRED）。".to_owned(),
+                "CONNECTION_IN_USE" => "该服务器仍有正在管理的本地绑定（CONNECTION_IN_USE）；请先在「同步目录」解除绑定并确认保留的数据，再移除服务器。".to_owned(),
                 "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),
                 _ => format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
             };

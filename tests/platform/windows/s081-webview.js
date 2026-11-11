@@ -141,11 +141,26 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     await click("暂停"); await wait("pause visible", () => text().includes("已暂停")); report.pauseVisible = true;
     await click("恢复"); await wait("resume visible", () => !text().includes("已暂停")); report.resumeVisible = true;
+    // S193: a managed binding blocks server removal; the refusal must leave the connection intact.
+    location.hash = "/connections";
+    const removeButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "移除服务器" && !b.disabled);
+    await wait("remove button", removeButton);
+    const beforeRemoval = JSON.stringify(await connections());
+    removeButton().click();
+    const removalDialog = () => document.querySelector('[role="dialog"]');
+    await wait("remove dialog", () => removalDialog()?.textContent.includes("确认移除服务器"));
+    [...removalDialog().querySelectorAll("button")].find(b => b.textContent === "移除服务器").click();
+    await wait("removal refusal", () => text().includes("CONNECTION_IN_USE"));
+    report.removalBlockedByBinding = JSON.stringify(await connections()) === beforeRemoval
+      && (await connections()).some(c => c.server_id === fixture.serverId)
+      && !text().includes("已移除本地连接");
+    if (!report.removalBlockedByBinding) throw new Error("bound server removal was not refused");
+    location.hash = "/bindings";
     report.noBrowserCredentialStorage = Object.keys(localStorage).every(key => key === "mantine-color-scheme-value" && ["auto", "light", "dark"].includes(localStorage.getItem(key))) && sessionStorage.length === 0;
     const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
     report.nonceStyles = /^[0-9a-f]{32}$/.test(nonce ?? "") && [...document.querySelectorAll("style")].every(style => style.nonce === nonce);
     report.cspViolations = cspViolations;
-    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","bindingKeepsPinnedIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
+    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","bindingKeepsPinnedIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible && report.removalBlockedByBinding;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

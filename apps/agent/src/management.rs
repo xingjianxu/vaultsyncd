@@ -57,7 +57,10 @@ pub(crate) async fn load_connections(
         .fetch_one(db.pool())
         .await
         .map_err(error)?;
-        if !placeholder || legacy_state {
+        // A server the user removed must not reappear from agent.json, even when that
+        // file-only endpoint was the only durable copy of the connection.
+        let removed = connections::removed(db, &legacy_id).await.map_err(error)?;
+        if (!placeholder || legacy_state) && !removed {
             stored.push(connection_record(&config.server)?);
         }
     }

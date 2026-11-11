@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 2;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 10;
+export const PROTOCOL_MINOR = 11;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -241,9 +241,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "list_connections" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules" | "list_activity";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "list_connections" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules" | "list_activity" | "remove_connection";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity", "remove_connection"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -518,6 +518,8 @@ export interface ManagementResult {
   rules_explanation?: string;
   /** 当前持久规则版本。 */
   rules_version?: string;
+  /** remove_connection 是否已确认服务器会话被撤销；false 时本地连接、登录资料与凭据仍已删除。 */
+  session_revoked?: boolean;
   /** 解绑时保留的未确认条目。 */
   unconfirmed?: Array<string>;
 }
@@ -543,6 +545,7 @@ export function decodeManagementResult(value: unknown): ManagementResult {
     rules: object.rules === undefined ? undefined : expect_string(object.rules, "ManagementResult.rules"),
     rules_explanation: object.rules_explanation === undefined ? undefined : expect_string(object.rules_explanation, "ManagementResult.rules_explanation"),
     rules_version: object.rules_version === undefined ? undefined : expect_string(object.rules_version, "ManagementResult.rules_version"),
+    session_revoked: object.session_revoked === undefined ? undefined : expect_boolean(object.session_revoked, "ManagementResult.session_revoked"),
     unconfirmed: object.unconfirmed === undefined ? undefined : expect_array(object.unconfirmed, "ManagementResult.unconfirmed").map((item) => expect_string(item, "ManagementResult.unconfirmed 的元素")),
   };
 }

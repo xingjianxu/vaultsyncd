@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S193 done**：Windows 客户端「连接设置」可移除已保存服务器。仍有正在管理的绑定时拒绝（提示先解除绑定），已解除绑定的恢复记录不阻止移除也不被删除；移除总是删除本机连接、登录资料与 WinCred 凭据，并尽力注销服务器会话，未确认时保留不自动消失的提示。IPC 2.11 新增 `remove_connection` 与 `session_revoked`，客户端 schema 16 新增移除留痕。验证：宿主 store 59/local-ipc 30/typecheck/desktop build+activity、交叉严格 clippy、真实 Windows 交互会话 WinCred 删除与拒绝路径、真实 WebView S081 全套（`removalBlockedByBinding=true`）、Chromium 7 组及既有桌面回归。证据 `/data/vaultsyncd-dev/S193-remove-server-20261111/`。未部署（无服务端产物）。
+
 当前 **S192 done**：Windows 解除本地 Binding 后从同步目录及文件/历史/传输记录选择器移除，保留恢复记录和解绑风险报告。根 typecheck、桌面 build/activity、Chromium7组与既有绑定/UI回归、真实 Windows S082 列表及数据保护、独立复审通过。实现 `a7dca9b`，干净来源开发客户端构建与四 EXE/11文件清单复核通过，永久副本 `/data/vaultsyncd-dev/S192-detached-binding-lists-20261111/product/`；交接 `2057f72` 已 ff 合 master，任务树/分支清理，根 dist 已交付并与永久副本一致，旧 dist 已备份。交接 [S192](tasks/S192.md)。无服务端产物变化，不部署/发行；下一 ready 无，原 S011/S106/S107/S108 门禁保持。
 
 当前 **S188—S191 done**。Windows 客户端直接打开同步目录，单 agent 按 ServerId 隔离连接、凭据和同步循环，不同目录可绑定不同服务器的 Vault。Mantine 保持，schema14→15 原位迁移及 IPC2.10/CLI/Tauri 已同步。实现 d13b705，最终 S191 同源 Windows 双 HTTPS/CFAPI/上传历史恢复/故障隔离/独立登出/重启/旧版迁移与原生单测12项通过，S176 主动登录三阶段30项及 Chromium 通过。干净源码生产开发构建通过，四 EXE/11文件清单复核通过，长期副本在 /data/vaultsyncd-dev/S188-S191-multi-server-20261111/product/。交接 [S188](tasks/S188.md)、[S189](tasks/S189.md)、[S190](tasks/S190.md)、[S191](tasks/S191.md)，交接28213ad已ff合master，任务树及分支已清理，根dist已更新并与永久副本逐文件一致，旧根dist备份保留。下一 ready 无，S011/S106/S107/S108 门禁保持。第二轮隔离云端样本保留恢复现场，见S191。S134/S187旧工作树保持，S187单连接诊断范围已由本次重构取代。
@@ -234,6 +236,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S193 | done | 实现提交见交接；IPC2.11移除服务器与schema16移除留痕 | [S193](tasks/S193.md) |
 | S186 | done | 实现`764e93e`；`tools/build.sh` 在进入 devShell 前清空 `dist/` 与暂存区，产物齐套才搬入、失败时 `dist/` 不存在；交接已ff合master，任务树/分支已清理 | [S186](tasks/S186.md) |
 | S184 | done | 实现`82dcddd`、交接`0ff8684`已ff合master；新增`tools/build.sh`（无版本号、输出根`dist/`便携程序目录），`release.sh`发布链未改；任务树/分支已清理 | [S184](tasks/S184.md) |
 | S173 | done | 版本`d2f9e26`、工具修复`532ec19`已ff合master并推送；v0.1.3预发布上传、远端摘要核对与两任务树/分支清理完成 | [S173](tasks/S173.md) |

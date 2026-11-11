@@ -10,6 +10,7 @@ export interface AgentClient {
   getStatus(): Promise<GetStatusResult>;
   discoverConnection(input: ConnectionAddress): Promise<ManagementResult>;
   setConnection(input: ConnectionInput): Promise<ManagementResult>;
+  removeConnection(serverId: string): Promise<ManagementResult>;
   login(serverId: string, username: string, password: string): Promise<ManagementResult>;
   logout(serverId: string): Promise<ManagementResult>;
   listVaults(serverId: string): Promise<ManagementResult>;
@@ -37,7 +38,8 @@ export interface AgentClient {
 const unavailable = async (): Promise<never> => { throw new Error("未连接：当前为 IPC 测试替身，尚未接入本机 agent。"); };
 // 仅供应用壳开发的明确替身；S080 替换为 Tauri command 桥，绝不返回伪造 Binding。
 export const disconnectedAgent: AgentClient = {
-  getStatus: unavailable, discoverConnection: unavailable, setConnection: unavailable, login: unavailable, logout: unavailable,
+  getStatus: unavailable, discoverConnection: unavailable, setConnection: unavailable, removeConnection: unavailable,
+  login: unavailable, logout: unavailable,
   listVaults: unavailable, selectDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   getRules:unavailable,setRules:unavailable,
@@ -59,6 +61,7 @@ export const nativeAgent: AgentClient = {
   getStatus: () => call("agent_get_status"),
   discoverConnection: input => call("agent_discover_connection", { input }),
   setConnection: input => call("agent_set_connection", { input }),
+  removeConnection: serverId => call("agent_remove_connection", { serverId }),
   login: (serverId, username, password) => call("agent_login", { serverId, username, password }),
   logout: serverId => call("agent_logout", { serverId }),
   listVaults: serverId => call("agent_list_vaults", { serverId }),

@@ -40,6 +40,78 @@ pub async fn list(db: &Database) -> Result<Vec<ConnectionRecord>, DbError> {
         .collect()
 }
 
+/// 移除一台服务器的本地配置时区分：该身份是否仍被持久绑定引用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Removal {
+    /// 连接、登录资料已删除，并留存移除证据。
+    Removed,
+    /// 仍有绑定（含已解除绑定）引用该服务器；本次没有改动任何行。
+    HasBindings,
+}
+
+/// 该身份是否已被用户移除过。用于阻止 `agent.json` 里的旧单连接被当作后备入口复活。
+pub async fn removed(db: &Database, server: &ServerId) -> Result<bool, DbError> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agent_connection_removals WHERE server_id=?)")
+        .bind(server.to_string())
+        .fetch_one(db.pool())
+        .await
+        .map_err(DbError::Sqlite)
+}
+
+/// 该身份是否仍被正在管理的绑定引用；移除连接的前置条件。
+///
+/// 已解除绑定的记录保留恢复证据，不阻止移除服务器，也不会被移除操作删除。
+pub async fn in_use(db: &Database, server: &ServerId) -> Result<bool, DbError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM bindings b LEFT JOIN binding_controls c \
+         ON c.binding_id = b.id WHERE b.server_id = ? AND coalesce(c.detached, 0) = 0)",
+    )
+    .bind(server.as_bytes().as_slice())
+    .fetch_one(db.pool())
+    .await
+    .map_err(DbError::Sqlite)
+}
+
+/// 删除已保存的连接与登录资料，并在同一事务里留存移除证据。
+///
+/// 仍有绑定时返回 [`Removal::HasBindings`] 且不改动任何行：调用方须先解除绑定，
+/// 由独立命令保留本地内容与恢复记录。凭据由 agent 在 Windows 凭据库中单独删除。
+pub async fn remove(db: &Database, server: &ServerId) -> Result<Removal, DbError> {
+    let mut tx = db.begin_write().await?;
+    // bindings.server_id 是 16 字节 BLOB，身份文本不能直接比较。已解除绑定的记录保留。
+    let in_use: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM bindings b LEFT JOIN binding_controls c \
+         ON c.binding_id = b.id WHERE b.server_id = ? AND coalesce(c.detached, 0) = 0)",
+    )
+    .bind(server.as_bytes().as_slice())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(DbError::Sqlite)?;
+    if in_use {
+        return Ok(Removal::HasBindings);
+    }
+    sqlx::query("DELETE FROM agent_login_profiles WHERE server_id=?")
+        .bind(server.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Sqlite)?;
+    sqlx::query(
+        "INSERT INTO agent_connection_removals (server_id) VALUES (?1) \
+         ON CONFLICT(server_id) DO NOTHING",
+    )
+    .bind(server.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::Sqlite)?;
+    sqlx::query("DELETE FROM agent_connections WHERE server_id=?")
+        .bind(server.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::Sqlite)?;
+    tx.commit().await.map_err(DbError::Sqlite)?;
+    Ok(Removal::Removed)
+}
+
 /// 写入一台服务器的已确认配置。重复写入同一身份只更新该入口。
 pub async fn upsert(db: &Database, record: &ConnectionRecord) -> Result<(), DbError> {
     let mut tx = db.begin_write().await?;

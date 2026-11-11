@@ -113,6 +113,25 @@ impl Connection {
         management::connection(&self.server, self.client.is_ok().then_some(&self.session))
     }
 
+    /// Best-effort remote revocation before the local connection is forgotten.
+    ///
+    /// Returns `true` only when no local session existed or the server confirmed it.
+    pub async fn revoke_session(&self) -> bool {
+        if !self.session.has_credentials() {
+            return true;
+        }
+        match &self.client {
+            Ok(client) => client.logout().await.is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// Remove this server's stored session. Called even when revocation could not be confirmed.
+    pub fn erase_credentials(&self) {
+        // Clearing the session notifies the credential sink, which erases the Windows entry.
+        self.session.clear();
+    }
+
     pub async fn login_stdin(&self) -> Result<(), PortError> {
         use std::io::Read;
         let mut bytes = Vec::new();
@@ -1161,6 +1180,218 @@ mod tests {
                 Err(cause) => {
                     panic!("cannot clean the closed creation-recovery test database: {cause}")
                 }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn removing_a_saved_server_is_refused_while_managed_and_erases_its_windows_credential() {
+        use crate::config::ServerConfig;
+        use crate::credentials::CredentialVault;
+        use vaultsyncd_client_store::connections;
+        use vaultsyncd_protocol::generated::SessionIssued;
+
+        let path = std::env::temp_dir().join(format!(
+            "s193-remove-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let db = Arc::new(Database::open(path.join("client.sqlite")).await.unwrap());
+        let bound = ServerId::from_bytes([6; 16]);
+        let other = ServerId::from_bytes([7; 16]);
+        let device_id = DeviceId::from_bytes([8; 16]);
+        let binding_id = BindingId::from_bytes([9; 16]);
+        let config: AgentConfig = serde_json::from_value(serde_json::json!({
+            "server": { "id": bound.to_string(), "url": "https://example.invalid" },
+            "device_id": device_id.to_string(),
+            "state_dir": path,
+            "poll_millis": 250,
+            "bindings": [],
+        }))
+        .unwrap();
+        let mut tx = db.begin_write().await.unwrap();
+        bindings::insert_binding(
+            &mut tx,
+            &NewBinding {
+                id: binding_id,
+                server: bound,
+                device: device_id,
+                vault: VaultId::from_bytes([10; 16]),
+                local_path: path.join("vault").to_string_lossy().into_owned(),
+                cache_path: path.join("cache").to_string_lossy().into_owned(),
+                mode: SyncMode::Full,
+                rules_version: "1".into(),
+                server_epoch: ServerEpoch::new(1).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        for (id, url) in [
+            (bound, "https://bound.example"),
+            (other, "https://other.example"),
+        ] {
+            management::save_connection(
+                &db,
+                &ServerConfig {
+                    id: id.to_string(),
+                    url: url.into(),
+                    ca_file: None,
+                    development_http: false,
+                    username: None,
+                },
+            )
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO agent_login_profiles(server_id,username) VALUES(?,?)")
+                .bind(id.to_string())
+                .bind("原账号")
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        let (report_wake, _wake) = mpsc::channel(1);
+        let (connection_updates, _connections) = watch::channel(Vec::new());
+        let (completed, _completed) = mpsc::unbounded_channel();
+        let mut runtime = Runtime {
+            db: db.clone(),
+            config: config.clone(),
+            assignments: HashMap::new(),
+            servers: BTreeMap::new(),
+            blocked_servers: HashSet::new(),
+            pending: HashMap::new(),
+            report_wake,
+            connection_updates,
+            completed,
+        };
+        for id in [bound, other] {
+            let (commands, _requests) = mpsc::channel(1);
+            let (adopt, _adoptions) = mpsc::channel(1);
+            let (stop, stopped) = oneshot::channel();
+            let (_report, report) = watch::channel(Report {
+                connection: ConnectionInfo {
+                    server_id: id.to_string(),
+                    server_url: "https://example.invalid".into(),
+                    ca_file: None,
+                    username: None,
+                    authenticated: false,
+                },
+                startup: HashMap::new(),
+                cycles: HashMap::new(),
+                offline: HashSet::new(),
+            });
+            let task = tokio::spawn(async move {
+                let _ = stopped.await;
+                Ok(())
+            });
+            runtime.servers.insert(
+                id,
+                Handle {
+                    commands,
+                    adopt,
+                    stop,
+                    report,
+                    task,
+                },
+            );
+        }
+        // A stored session for the removable server: removal must erase this Windows entry even
+        // though the unreachable endpoint cannot confirm revocation.
+        let issued = SessionIssued {
+            session_id: "ab".repeat(16),
+            access_token: "access-for-s193".into(),
+            refresh_token: "refresh-for-s193".into(),
+            access_expires_at: "2000000000".into(),
+            refresh_expires_at: "2000000100".into(),
+        };
+        let vault = CredentialVault::new(&other.to_string()).unwrap();
+        vault.store(&serde_json::to_vec(&issued).unwrap()).unwrap();
+        assert!(vault.load().unwrap().is_some());
+        let bound_info = runtime.servers[&bound].report.borrow().connection.clone();
+        let other_info = runtime.servers[&other].report.borrow().connection.clone();
+        runtime
+            .connection_updates
+            .send_replace(vec![bound_info, other_info]);
+        let request = |id: ServerId| {
+            let (reply, _response) = oneshot::channel();
+            crate::ipc::CommandRequest {
+                request: vaultsyncd_local_ipc::generated::Request {
+                    request_id: "remove-server".into(),
+                    ipc_version: vaultsyncd_local_ipc::version::supported(),
+                    command: Command {
+                        name: CommandName::RemoveConnection,
+                        parameters: Some(vaultsyncd_local_ipc::generated::CommandParameters {
+                            server_id: Some(id.to_string()),
+                            ..Default::default()
+                        }),
+                    },
+                },
+                reply,
+            }
+        };
+
+        // A server with a durable binding (even a detached one) can only be removed after
+        // unbinding; the refusal must not stop its worker or touch stored state.
+        assert_eq!(
+            runtime
+                .remove_connection(&request(bound))
+                .await
+                .unwrap_err()
+                .code(),
+            Some("CONNECTION_IN_USE")
+        );
+        assert!(runtime.servers.contains_key(&bound));
+        assert_eq!(connections::list(&db).await.unwrap().len(), 2);
+
+        let result = runtime.remove_connection(&request(other)).await.unwrap();
+        // The server is unreachable, so revocation is unconfirmed; the local entry still goes away.
+        assert_eq!(result.session_revoked, Some(false));
+        assert!(vault.load().unwrap().is_none());
+        assert!(!runtime.servers.contains_key(&other));
+        assert!(
+            runtime
+                .connections()
+                .iter()
+                .all(|connection| connection.server_id != other.to_string())
+        );
+        assert_eq!(
+            connections::list(&db)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|record| record.server_id)
+                .collect::<Vec<_>>(),
+            vec![bound]
+        );
+        assert!(connections::removed(&db, &other).await.unwrap());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_login_profiles")
+                .fetch_one(db.pool())
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .remove_connection(&request(ServerId::from_bytes([11; 16])))
+                .await
+                .unwrap_err()
+                .code(),
+            Some("NOT_FOUND")
+        );
+
+        runtime.stop_servers().await.unwrap();
+        drop(runtime);
+        db.pool().close().await;
+        for attempt in 0..100 {
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => return,
+                Err(_) if attempt < 99 => tokio::time::sleep(Duration::from_millis(20)).await,
+                Err(cause) => panic!("cannot clean the removed-connection database: {cause}"),
             }
         }
     }

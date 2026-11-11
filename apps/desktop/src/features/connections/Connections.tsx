@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Alert, Button as LinkButton, Card, Group, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
-import { Button, StatusBadge } from "@vaultsyncd/ui";
+import { notifications } from "@mantine/notifications";
+import { Button, Dialog, StatusBadge } from "@vaultsyncd/ui";
 import type { ConnectionInfo } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient, ConnectionInput } from "../../services/agent";
 import { Login } from "./Login";
@@ -12,6 +13,9 @@ export function Connections({ agent, connections, adding, read, changed, run, bu
   run(action: () => Promise<void>): void; busy: boolean;
 }) {
   const [editor, setEditor] = useState<Editor>();
+  const [removing, setRemoving] = useState<string>();
+  const [confirmRemoval, setConfirmRemoval] = useState(false);
+  const removeTarget = connections.find(connection => connection.server_id === removing);
   const cancel = () => setEditor(undefined);
   const closeAdd = () => { window.location.hash = "/connections"; };
   return <Stack gap="lg">
@@ -63,9 +67,28 @@ export function Connections({ agent, connections, adding, read, changed, run, bu
                 })}>退出登录</Button>
                 : <Button variant="default" disabled={busy || !read || adding} onClick={() => setEditor({ kind: "login", serverId: connection.server_id })}>登录</Button>}
               <Button variant="default" disabled={busy || !read || adding} onClick={() => setEditor({ kind: "edit", serverId: connection.server_id })}>修改地址</Button>
+              <Button color="red" variant="light" disabled={busy || !read || adding} onClick={() => { setRemoving(connection.server_id); setConfirmRemoval(true); }}>移除服务器</Button>
             </Group>}
       </Stack>
     </Card>)}
+    {/* Always mounted so Mantine can return focus to the card button after closing. */}
+    <Dialog opened={confirmRemoval && !!removeTarget} title="确认移除服务器" onClose={() => setConfirmRemoval(false)}
+      footer={removeTarget && <Group justify="flex-end">
+        <Button data-autofocus variant="default" disabled={busy} onClick={() => setConfirmRemoval(false)}>取消</Button>
+        <Button color="red" disabled={busy} onClick={() => {
+          const serverId = removeTarget.server_id;
+          setConfirmRemoval(false);
+          run(async () => {
+            const result = await agent.removeConnection(serverId);
+            await changed();
+            // The card is gone after this refresh; keep an unconfirmed revocation visible.
+            if (result.session_revoked === false) notifications.show({ message: "已移除本地连接、登录资料与凭据；服务器未确认会话已撤销。", color: "yellow", autoClose: false, withCloseButton: true });
+            else if (result.session_revoked !== true) throw new Error("agent 未返回移除结果。");
+          });
+        }}>移除服务器</Button>
+      </Group>}>
+      {removeTarget && <Text>移除后本机不再保留此服务器的地址、登录资料与凭据；不删除服务器文件或本地目录内容。仍有正在管理的绑定时不能移除，请先在「同步目录」解除绑定。</Text>}
+    </Dialog>
   </Stack>;
 }
 

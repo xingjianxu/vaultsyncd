@@ -54,7 +54,7 @@ fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments
             serde_json::json!({"extra":"ignored parameters are forbidden"});
         assert!(serde_json::from_value::<Request>(unknown).is_err());
     }
-    assert_eq!(names.len(), 28);
+    assert_eq!(names.len(), 29);
 }
 #[test]
 fn passwords_are_redacted_even_if_an_entire_generated_request_is_debugged() {

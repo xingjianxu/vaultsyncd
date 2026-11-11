@@ -708,6 +708,7 @@ mod tests {
             tables.into_iter().map(|(name,)| name).collect::<Vec<_>>(),
             vec![
                 "agent_actions".to_owned(),
+                "agent_connection_removals".to_owned(),
                 "agent_connections".to_owned(),
                 "agent_evidence".to_owned(),
                 "agent_login_profiles".to_owned(),
@@ -1729,6 +1730,95 @@ mod tests {
             scalar::<String>(restored.path(), "SELECT lower(hex(op_id)) FROM pending_ops").await,
             op_id(0x42).to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn connection_removal_is_refused_while_managed_and_durable_afterwards() {
+        use crate::connections::{self, ConnectionRecord, Removal};
+        use crate::test_support::{seed_binding, server_id};
+
+        let dir = TestDir::new("s193-remove-connection");
+        let database = Database::open(dir.database()).await.unwrap();
+        let bound = server_id(0x01);
+        let other = server_id(0x02);
+        seed_binding(&database, 0x31).await;
+        for (id, url) in [
+            (bound, "https://first.example"),
+            (other, "https://second.example"),
+        ] {
+            connections::upsert(
+                &database,
+                &ConnectionRecord {
+                    server_id: id,
+                    server_url: url.into(),
+                    ca_file: None,
+                    development_http: false,
+                },
+            )
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO agent_login_profiles VALUES (?, '原账号')")
+                .bind(id.to_string())
+                .execute(database.pool())
+                .await
+                .unwrap();
+        }
+
+        // 正在管理的绑定阻止移除，且被拒绝时不动连接、登录资料或移除证据。
+        assert!(connections::in_use(&database, &bound).await.unwrap());
+        assert_eq!(
+            connections::remove(&database, &bound).await.unwrap(),
+            Removal::HasBindings
+        );
+        assert_eq!(connections::list(&database).await.unwrap().len(), 2);
+        assert!(!connections::removed(&database, &bound).await.unwrap());
+        assert_eq!(
+            scalar::<i64>(&dir.database(), "SELECT count(*) FROM agent_login_profiles").await,
+            2
+        );
+
+        // 解除绑定保留恢复记录，但不属于“正在管理”；此后允许移除服务器。
+        sqlx::query(
+            "INSERT INTO binding_controls (binding_id, detached) VALUES (?, 1) \
+             ON CONFLICT(binding_id) DO UPDATE SET detached = 1",
+        )
+        .bind(crate::test_support::binding_id(0x31).as_bytes().as_slice())
+        .execute(database.pool())
+        .await
+        .unwrap();
+        assert!(!connections::in_use(&database, &bound).await.unwrap());
+        assert_eq!(
+            connections::remove(&database, &bound).await.unwrap(),
+            Removal::Removed
+        );
+        // 移除服务器不删除已解除绑定的恢复记录。
+        assert_eq!(
+            scalar::<i64>(&dir.database(), "SELECT count(*) FROM bindings").await,
+            1
+        );
+        assert_eq!(
+            scalar::<i64>(&dir.database(), "SELECT count(*) FROM binding_controls").await,
+            1
+        );
+
+        // 未被绑定的服务器移除后，只保留另一台的连接与登录资料。
+        assert_eq!(
+            connections::remove(&database, &other).await.unwrap(),
+            Removal::Removed
+        );
+        assert!(connections::list(&database).await.unwrap().is_empty());
+        assert!(connections::removed(&database, &other).await.unwrap());
+        assert_eq!(
+            scalar::<i64>(&dir.database(), "SELECT count(*) FROM agent_login_profiles").await,
+            0
+        );
+        // 重复移除幂等：连接已不存在时仍保留同一份持久证据。
+        assert_eq!(
+            connections::remove(&database, &other).await.unwrap(),
+            Removal::Removed
+        );
+        assert!(connections::removed(&database, &other).await.unwrap());
+        database.close().await;
     }
 
     #[tokio::test]
