@@ -195,13 +195,15 @@ public static class S200Window {
     Save-Settings 'exit' $true
     $profile=Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent'
     $exportsBefore=@(Get-ChildItem $profile -Directory -Filter 'session-stop-*').Count
+    $stopTimer=[Diagnostics.Stopwatch]::StartNew()
     Close-Main
     Close-Main
     Close-Main
     Expect-Exited 'complete exit with safe agent stop'
+    Check ($stopTimer.Elapsed.TotalSeconds -lt 15) 'idle orderly exit completes within 15 seconds'
     Check (Wait-Until { (Agents).Count -eq 0 }) 'complete exit stops the authenticated original writer'
     $profile=Join-Path $env:LOCALAPPDATA 'vaultsyncd/agent'
-    Check (@(Get-ChildItem $profile -Directory -Filter 'session-stop-*').Count -eq ($exportsBefore+1)) 'repeated close creates exactly one safe-stop recovery export'
+    Check (@(Get-ChildItem $profile -Directory -Filter 'session-stop-*').Count -eq $exportsBefore) 'ordinary stop retains recovery state in place without a full export'
     Write-Settings 'tray' $true
     Launch 'tray-safe-exit'
     Close-Main
@@ -253,7 +255,50 @@ public static class S200Window {
     Close-Main
     Expect-Exited 'retry after restoring stop helper'
     Check (Wait-Until { (Agents).Count -eq 0 }) 'retry safely stops original agent'
-    @{ok=$true;checks=$checks.ToArray();count=$checks.Count;session=$session;native='Windows 11 x64';scope='production WebView settings, window close, real tray and authenticated session stop; no CFAPI payload claim'} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot 'result.json') -Encoding UTF8
+    if(Test-Path (Join-Path $PSScriptRoot 'fixture.json')) {
+      $fixture=Get-Content (Join-Path $PSScriptRoot 'fixture.json') -Raw | ConvertFrom-Json
+      $cli=Join-Path $program 'vaultsyncd-cli.exe'
+      function Invoke-S203Cli([string[]]$arguments) {
+        $raw=& $cli --json @arguments 2>&1
+        if($LASTEXITCODE -ne 0) { throw ('S203 CLI '+$arguments[0]+' failed with exit '+$LASTEXITCODE) }
+        return (($raw -join "`n" | ConvertFrom-Json).result)
+      }
+      Launch 'binding-shutdown'
+      $null=Invoke-S203Cli @('set-connection','--server-id',$fixture.serverId,'--server-url',$fixture.url,'--ca-file',(Join-Path $PSScriptRoot 'ca.pem'))
+      $loginRaw=$fixture.password | & $cli --json login --username $fixture.login 2>&1
+      Check ($LASTEXITCODE -eq 0) 'real isolated server login succeeds'
+      $binding=[Guid]::NewGuid().ToString('N')
+      $local=Join-Path $PSScriptRoot 'bound-content'
+      $cache=Join-Path $PSScriptRoot 'binding-cache'
+      New-Item -ItemType Directory -Path $local,$cache | Out-Null
+      $null=Invoke-S203Cli @('create-binding','--binding-id',$binding,'--vault-id',$fixture.vault,'--local-path',$local,'--cache-path',$cache,'--mode','full')
+      Check (Wait-Until { $s=Invoke-S203Cli @('status'); @($s.bindings | Where-Object { $_.binding_id -eq $binding -and $_.synchronized }).Count -eq 1 } 120) 'real CFAPI full binding reaches committed baseline'
+      $null=Invoke-S203Cli @('pause','--binding-id',$binding)
+      $unconfirmed=Join-Path $local 'server-seed.txt'
+      [IO.File]::WriteAllText($unconfirmed,'S203 unconfirmed bytes must survive ordinary exit')
+      $beforeHash=(Get-FileHash $unconfirmed -Algorithm SHA256).Hash
+      $locked=[IO.File]::Open($unconfirmed,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+      $beforeExports=@(Get-ChildItem $profile -Directory -Filter 'session-stop-*').Count
+      $timer=[Diagnostics.Stopwatch]::StartNew()
+      try {
+        Close-Main
+        Expect-Exited 'ordinary exit with a locked unconfirmed bound file'
+        $timer.Stop()
+        Check ($timer.Elapsed.TotalSeconds -lt 15) 'locked bound file does not trigger recovery scan or copy'
+        Check ((Agents).Count -eq 0) 'bound writer actually exits after native callback drain'
+      } finally { $locked.Dispose() }
+      Check ((Get-FileHash $unconfirmed -Algorithm SHA256).Hash -eq $beforeHash) 'unconfirmed bytes survive exact native shutdown'
+      Check ((Test-Path $cache) -and (Test-Path (Join-Path $profile 'state/client.sqlite'))) 'cache and durable state remain in place'
+      Check (@(Get-ChildItem $profile -Directory -Filter 'session-stop-*').Count -eq $beforeExports) 'bound ordinary exit makes no maintenance export'
+      Launch 'binding-restart'
+      $s=Invoke-S203Cli @('status')
+      Check (@($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.paused }).Count -eq 1) 'restart retains binding identity and explicit pause'
+      Check ((Get-FileHash $unconfirmed -Algorithm SHA256).Hash -eq $beforeHash) 'restart preserves unconfirmed bytes'
+      Close-Main
+      Expect-Exited 'restarted binding closes safely'
+      @{exit_seconds=$timer.Elapsed.TotalSeconds;unconfirmed_sha256=$beforeHash;binding=$binding;maintenance_export_created=$false} | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 's203-binding.json') -Encoding UTF8
+    }
+    @{ok=$true;checks=$checks.ToArray();count=$checks.Count;session=$session;native='Windows 11 x64';scope='production WebView settings, window close, real tray and authenticated session stop; optional S203 real CFAPI binding and locked unconfirmed file'} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot 'result.json') -Encoding UTF8
     $resultCode = '0'
   } catch {
     $_ | Out-String | Set-Content (Join-Path $PSScriptRoot 'error.txt')
@@ -266,6 +311,7 @@ public static class S200Window {
     } catch {}
     $resultCode = '1'
   } finally {
+    Remove-Item (Join-Path $PSScriptRoot 'fixture.json') -ErrorAction SilentlyContinue
     if(Test-Path $agentMoved) { Move-Item -LiteralPath $agentMoved -Destination $agentFile }
     # Only act on this isolated run. Failure evidence and user data remain on disk.
     try { if($desktop -and !$desktop.HasExited) { $dialog=[S200Window]::Find($desktop.Id,'#32770'); if($dialog -ne [IntPtr]::Zero) { Dismiss-Dialog $dialog }; Tray 2; Expect-Exited 'cleanup tray Quit' } } catch { $_ | Out-String | Set-Content (Join-Path $PSScriptRoot 'gui-cleanup-error.txt') }

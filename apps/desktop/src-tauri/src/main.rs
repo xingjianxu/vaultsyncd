@@ -18,6 +18,8 @@ mod shell;
 #[cfg(windows)]
 mod startup;
 #[cfg(any(windows, test))]
+mod stop_process;
+#[cfg(any(windows, test))]
 mod style_csp;
 #[cfg(any(windows, test))]
 mod update_archive;

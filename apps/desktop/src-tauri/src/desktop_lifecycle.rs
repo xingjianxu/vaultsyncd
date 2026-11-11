@@ -2,7 +2,7 @@
 use crate::desktop_settings::{CloseAction, DesktopSettings, Settings};
 use std::{
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Command,
     sync::atomic::{AtomicBool, Ordering},
 };
 use tauri::Manager;
@@ -89,7 +89,7 @@ pub(crate) fn exit(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
-    // Keep the WebView and tray alive during maintenance. No OS kill or fallback exit is used.
+    // Keep the WebView and tray alive until orderly agent shutdown is confirmed.
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(stop_agent).await;
@@ -118,23 +118,15 @@ fn stop_agent() -> Result<(), String> {
         .parent()
         .ok_or("无法定位程序目录")?
         .join("vaultsyncd-agent.exe");
-    let output = Command::new(agent)
-        .args(["--user-session", "stop"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(0x0800_0000)
-        .output()
-        .map_err(|e| format!("无法执行同目录 agent 停止入口：{e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "agent 停止入口返回 {}。\n{}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-            String::from_utf8_lossy(&output.stdout)
-        ));
-    }
-    Ok(())
+    let log = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or("LOCALAPPDATA 不可用")?
+        .join("vaultsyncd/desktop-stop.log");
+    let mut command = Command::new(agent);
+    command
+        .args(["--user-session", "shutdown"])
+        .creation_flags(0x0800_0000);
+    crate::stop_process::run(&mut command, &log, std::time::Duration::from_secs(90))
 }
 pub(crate) fn load() -> DesktopSettings {
     let path = std::env::var_os("LOCALAPPDATA")

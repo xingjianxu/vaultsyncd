@@ -26,6 +26,9 @@ guest_dir="C:/vaultsyncd-lab/$run_id"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Path '$guest_dir/program' | Out-Null\""
 GUEST_TARGET_DIR="$guest_dir/program" guest_scp "$artifact_dir/program/"*
 GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/s200-desktop-settings.ps1" "$artifact_dir/hashes.json"
+if [ -n "${VAULTSYNCD_S203_FIXTURE_DIR:-}" ]; then
+  GUEST_TARGET_DIR="$guest_dir" guest_scp "$VAULTSYNCD_S203_FIXTURE_DIR/fixture.json" "$VAULTSYNCD_S203_FIXTURE_DIR/ca.pem"
+fi
 status=0
 guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/s200-desktop-settings.ps1" | tee "$artifact_dir/native.log" || status=$?
 # Preserve the failed run as well as successful evidence.

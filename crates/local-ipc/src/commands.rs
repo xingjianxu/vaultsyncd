@@ -35,6 +35,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
     let (required, optional): (&[&str], &[&str]) = match command.name {
         C::GetStatus | C::ListBindings | C::GetConnection | C::ListConnections => (&[], &[]),
         C::Logout | C::ListVaults => (&[], &["server_id"]),
+        C::StopAgent => (&[], &[]),
         C::PrepareMaintenance => (&["destination"], &[]),
         C::SubscribeStatus => (&[], &["after_version"]),
         C::ListFiles => (&["binding_id"], &["cursor"]),

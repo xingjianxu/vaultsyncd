@@ -2,7 +2,8 @@
 //!
 //! Each connection executes requests sequentially; connections execute concurrently. A whole
 //! request (including partial header/body) and write have a five-second deadline. Ordinary handlers
-//! also have five seconds; the explicit maintenance export is bounded by thirty minutes.
+//! also have five seconds; orderly stop has sixty seconds and explicit maintenance export
+//! is bounded by thirty minutes.
 //! Malformed frames/JSON, peer mismatches and disconnects close only that connection.
 mod security;
 pub use security::ServerProcess;
@@ -231,6 +232,8 @@ where
 fn operation_duration(request: &Request) -> Duration {
     if request.command.name == vaultsyncd_local_ipc::generated::CommandName::PrepareMaintenance {
         Duration::from_secs(1800)
+    } else if request.command.name == vaultsyncd_local_ipc::generated::CommandName::StopAgent {
+        Duration::from_secs(60)
     } else {
         IO_TIMEOUT
     }

@@ -898,7 +898,7 @@ python3 tools/context.py --help
 
 ## api/ — 本机 IPC 契约源（S025）
 
-状态：S025 建立最小契约与生成通路；S071 增加 1.1 状态快照，S072 扩展至 1.2 管理命令（详见文末 S072）。**S196 当前本机 IPC 为 3.0**：绑定 `rules` 改为默认清单之后的附加文本，空字符串不关闭默认排除；3.x 拒绝 2.x，避免「完整/额外清单」含义混用，旧版桌面与 agent 必须一起更新。远端 HTTP 仍保持现有版本。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
+状态：S025 建立最小契约与生成通路；S071 增加 1.1 状态快照，S072 扩展至 1.2 管理命令（详见文末 S072）。**S203 当前本机 IPC 为 3.1**（新增 `stop_agent`，3.0 调用方兼容）：绑定 `rules` 改为默认清单之后的附加文本，空字符串不关闭默认排除；3.x 拒绝 2.x，避免「完整/额外清单」含义混用，旧版桌面与 agent 必须一起更新。远端 HTTP 仍保持现有版本。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
 
 | 文件 | 契约 |
 | --- | --- |
@@ -2355,6 +2355,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S080 Windows Tauri 壳与状态桥
 
+- S203 覆盖桌面普通停止路径：IPC3.1 新增无参数 `stop_agent`（未知/额外参数拒绝），`agent --user-session shutdown` 在同一认证连接固定原进程，等待排空/断开 CFAPI/持久暂停/关闭库，进程退出后再确认 writer 锁；不创建恢复导出，不改内容/缓存/上传快照/恢复队列。StopAgent handler/read 的上限60秒，进程等待15秒，桌面监督90秒并把诊断保存至 `%LOCALAPPDATA%/vaultsyncd/desktop-stop.log`；超时恢复主窗，只回收自己创建的 RPC helper、不终止 agent。显式 `--user-session stop`、升级卸载继续 PrepareMaintenance 完整恢复导出；旧3.0 agent 拒绝新客户端，须先用旧程序有序停止再更新完整客户端。
 - S200 覆盖默认关闭行为：桌面壳独立 `get_desktop_settings() -> {close_action:"tray"|"exit",stop_agent_on_exit:bool}`、`set_desktop_settings({settings:同DTO}) -> 同DTO`，仅 bundled main 的 ACL 授权，与 agent IPC/schema 无关。默认 `tray/true`，本机 `%LOCALAPPDATA%/vaultsyncd/desktop-settings.json` 持久保存；读取损坏明确报错并保守留托盘，保存成功后才发布运行时设置。主窗 CloseRequested 按设置隐藏或请求退出；托盘「退出程序」强制退出界面并遵循停止 agent 偏好，重复请求由门禁合并。停止复用同目录 `agent --user-session stop` 的用户认证、PrepareMaintenance、恢复导出及确切进程/writer 等待；失败保留界面与诊断，不强杀。自动更新继续调用原有受控退出。安全停止会持久暂停绑定，重启需显式 Resume。
 
 - S167：桌面在单实例锁内、建窗前调用 `startup::ensure_agent()`；先用固定同用户会话 endpoint 的 `request_verified` 核对相邻 agent EXE/SID/GetStatus，已就绪直接复用，只有端点缺失才调用相邻 `vaultsyncd-agent.exe --ensure-user-session`。该有限等待入口复用 ZIP `ensure_ready`，按包类型选择已有固定用户配置或 ZIP claim，仍执行 owner/维护门禁；70 秒桌面等待上限只终止启动器，后台 agent 与 GUI 生命周期独立。失败经 `dialog::startup_error` 显示本机错误并退出1，不自动覆盖配置或强杀既有 agent。
