@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S203 done**：普通桌面退出改用IPC3.1独立认证有序停止，保留原地数据/缓存/队列与暂停策略，不再每次全量扫描复制恢复内容；维护stop/升级/卸载仍完整导出。增加90秒桌面监督，失败恢复主窗且不强杀agent。宿主desktop13/agent2/IPC32、生成/根类型/构建及Windows严格clippy通过；真实Windows124项、干净提交精确字节再次124项通过，独占未确认文件0.374秒退出，重启字节/身份/暂停保留。实现d1bd891；根dist11文件已交付，旧dist/原始证据保留 `/data/vaultsyncd-dev/S203-agent-exit-20261111/`，交接 [S203](tasks/S203.md)。验收交接已完成，随后合master并清理本卡树/分支；无服务端部署、远端发行或本卡阻塞。下一ready：S199。
+当前 **S203 done**：普通桌面退出改用IPC3.1独立认证有序停止，保留原地数据/缓存/队列与暂停策略，不再每次全量扫描复制恢复内容；维护stop/升级/卸载仍完整导出。增加90秒桌面监督，失败恢复主窗且不强杀agent。宿主desktop13/agent2/IPC32、生成/根类型/构建及Windows严格clippy通过；真实Windows124项、干净提交精确字节再次124项通过，独占未确认文件0.374秒退出，重启字节/身份/暂停保留。实现d1bd891；根dist11文件已交付，旧dist/原始证据保留 `/data/vaultsyncd-dev/S203-agent-exit-20261111/`，交接 [S203](tasks/S203.md)。验收交接9c49b88已ff合master，5挂载卸载、本卡树/分支已清理；无服务端部署、远端发行或本卡阻塞。下一ready：S199。
 
 当前 **S201 done**：Windows 默认服务器、挂载即读授权 Vault 并选首项，文件/历史/传输默认活动绑定；保留有效手选、空/错误与跨服务器围栏。Web清单就绪即选首项，已有恢复/传输默认复验通过。根类型、两端构建/前端、Chromium绑定/解绑/布局及真实files/recovery/activity、Windows S081默认Vault/三页绑定与首次合并完整验收通过。实现bf1ec13/夹具b800d0c，generation277上线、健康/身份/两源26资源核对通过；主机f7ee4dd已ff合main并清树。干净来源客户端四EXE/双清单/11文件已交付根dist，旧dist与证据保留 `/data/vaultsyncd-dev/S201-default-vault-20261111/`；交接 [S201](tasks/S201.md)，实现/夹具/交接1453ad2已ff合master，8挂载卸载、任务树/分支清理。无本卡阻塞，不发行推送；下一 ready：S199。
 
