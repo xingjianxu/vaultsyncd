@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S197 in_progress**：同步与传输记录按运行主机名显示客户端，操作系统/首次登录来源IP作为属性；交接 [S197](tasks/S197.md)。
+当前 **S197 done**：同步与传输记录客户端显示运行主机名，系统/登录来源IP作为详情属性；旧记录未知，显式扩展兼容旧DTO。宿主/Chromium及Windows31项通过；实现6557d22/72c25ca，generation275已上线、schema21/HTTPS/15资源健康验证通过；干净来源开发客户端已交付根dist，旧dist/完整备份及证据保留于 `/data/vaultsyncd-dev/S197-client-hostname-20261111/`。验收交接 [S197](tasks/S197.md)，随后合master清树；无本卡阻塞，下一ready无。
 
 当前 **S195 done**：已解绑 Windows 目录可同根重新绑定，同时修复首次导入/resync 第二层准入。解绑先排空原生 writer，完整旧占位落库前无损交接；旧缓存/恢复记录保留、活动/内部隔离及部分内容保护不变。宿主 store60/首次导入9/resync14/control11/IPC30、typecheck/desktop build/activity、交叉严格clippy、Windows新增12+既有9项及真实HTTPS三代重绑/上传/重启通过，复审APPROVED。实现 `485f763`，干净来源开发客户端四EXE/11文件与清单复核通过，根dist已交付、旧dist已备份；实现485f763与交接da762f4已ff合master，任务树/分支已清理。证据 `/data/vaultsyncd-dev/S195-detached-path-reuse-20261111/`，交接 [S195](tasks/S195.md)。无服务端部署/发行；下一ready无，原S011/S106/S107/S108门禁不变。
 
@@ -240,6 +240,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S197 | 客户端主机名/系统/首次登录来源IP；严格旧DTO扩展协商，Windows31项、Chromium及generation275验收 | 实现6557d22/72c25ca；干净开发dist已交付，验收后合master清树 | [S197](tasks/S197.md) |
 | S195 | done | 实现485f763；真实三代重绑/重启与12项原生通过，干净来源根dist交付，da762f4已ff合master/清树 | [S195](tasks/S195.md) |
 | S194 | done | 修复`abac3bf`；补齐 CLI `command_label` 的 `remove_connection` 映射，恢复 `tools/build.sh` 交叉编译 | [S194](tasks/S194.md) |
 | S193 | done | 实现`c587d78`；IPC2.11移除服务器、schema16移除留痕与WinCred/A会话尽力注销 | [S193](tasks/S193.md) |

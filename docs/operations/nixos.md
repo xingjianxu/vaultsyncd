@@ -4,6 +4,10 @@
 
 历史 `/data/vs-*` 目录已由 [S164](../../agent/tasks/S164.md) 归档至 `/data/vaultsyncd-dev/S164-archive-20261109/runs.tar.zst`，成员保留旧目录名；该目录的 README、SHA256SUMS 和 evidence/path-map.json 提供恢复步骤、摘要与路径映射。包括 S097 离线恢复镜像在内的原始数据长期保留，不能按缓存清理；历史命令不得重新建立 `/data` 顶层开发目录。
 
+## S197 当前客户端主机属性版部署（generation275，2026-11-11）
+
+固定源72c25ca，主机pin295ed47已ff合main；schema20→21，显式请求扩展保持旧严格DTO兼容。部署pure/dry/test/健康/身份/归属/switch及公网15资源、匿名门禁、DB完整性/FK通过，ServerId/Vault路径保持。迁移前schema20完整归档已verify，备份/旧system/boot GC roots在 `/data/vaultsyncd-dev/S197-client-hostname-20261111/` 长期保留；同盘归档不代表独立故障域。回退须整套配对恢复及新epoch，未执行生产回退。部署及客户端验证入口见[S197](../../agent/tasks/S197.md)，历史小节保留当时证据。
+
 ## S157 当前共用 Mantine 与精简 Vault 版部署（generation266，2026-11-09）
 
 正式入口 **https://vsyncd.132140.xyz**。固定源`5a71062da284d4841ea6ca6ad690a5ba7d93c651`，上线S152共用Mantine及S154精简Vault工具栏；schema18、`/data/vaultsyncd/vaults`、账号与ServerId保持。运行/开机generation266，system `/nix/store/641j5vxmwbcarwgfgnvippxgmacsbf9j-nixos-system-wks-lab-26.11.20261102.7356cc7`，包`rr1zw3qmm2qbnbdhjcyz1g0flf1pd2a2`。精确主机配置`f7d19978171cb2311e3cb9c642d0db9f480518ea`（main合并`a02b61e`），其纯求值精确复现运行系统；main待激活依赖锁保持，不用main当前锁冒充运行配置。
