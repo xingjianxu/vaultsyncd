@@ -80,15 +80,18 @@ function AppView({ agent }: { agent: AgentClient }) {
   }, [refresh]);
   const management = snapshot?.management;
   const connections = management?.connections ?? [];
-  const bindings = management?.bindings;
+  // Detachment keeps recovery records in the agent, not active desktop entries.
+  const bindings = management?.bindings?.filter(binding => !binding.detached);
+  // Reset selected bindings, cached pages and in-flight reads when membership changes.
+  const bindingScope = JSON.stringify(bindings?.map(binding => binding.binding_id).sort());
   return <PageShell product="桌面客户端" items={items} activePath={path} homePath="/bindings"
     sidebarFooter={<Text size="xs" c="dimmed" data-client-version>vaultsyncd {__APP_VERSION__}</Text>} status={<StatusBadge tone={connected ? "success" : "neutral"}>{connected ? "agent 已连接" : "未连接"}</StatusBadge>}><Stack gap="lg" className="app-content desktop-content">
     <Group justify="space-between" align="center"><Text size="sm" c="dimmed" role="status" data-agent-feedback>{connectionError || message || (connected ? "本机 agent 状态已读取。" : "正在读取本机 agent 状态。")}</Text><Button disabled={busy} onClick={() => run(refresh)}>检查本机连接</Button></Group>
     {path === "/connections" ? <Connections agent={agent} connections={connections} adding={addingServer} read={connected} changed={refresh} run={run} busy={busy} />
     : path === "/bindings" ? <Bindings agent={agent} connections={connections} bindings={bindings} states={snapshot?.bindings} read={connected} changed={refresh} run={run} busy={busy} />
-    : path === "/files" ? <Files agent={agent} bindings={bindings} connections={connected ? connections : []} changed={refresh} run={run} busy={busy} />
-    : path === "/history" ? <History agent={agent} bindings={bindings} connections={connected ? connections : []} changed={refresh} run={run} busy={busy} />
-    : path === "/activity" ? <Activity agent={agent} bindings={bindings} connections={connected ? connections : []} />
+    : path === "/files" ? <Files key={bindingScope} agent={agent} bindings={bindings} connections={connected ? connections : []} changed={refresh} run={run} busy={busy} />
+    : path === "/history" ? <History key={bindingScope} agent={agent} bindings={bindings} connections={connected ? connections : []} changed={refresh} run={run} busy={busy} />
+    : path === "/activity" ? <Activity key={bindingScope} agent={agent} bindings={bindings} connections={connected ? connections : []} />
     : path === "/problems" ? <Problems agent={agent} current={management?.problems} notices={management?.notices} run={run} busy={busy} />
     : <EmptyState title="页面不存在">请从导航选择页面。</EmptyState>}
   </Stack></PageShell>;

@@ -2789,3 +2789,9 @@ Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与
 `ApiClient::with_expected_server` 在登录、令牌刷新、业务请求和 SSE 前使用公开 capabilities 复核身份。错配经 `ServerIdentityMismatch` 转为 `NEEDS_RECOVERY`。恢复代际检查用无凭据请求核对持久绑定的 ServerId，其他服务器的会话继续运行。
 
 新远端事件的本地 OpId 包含 BindingId，避免同一事件在不同绑定碰撞。重启处理旧未完成批次时，只复用确实属于当前绑定的历史 pending/action 身份，保留重试和恢复证据。`tests/platform/windows/run-native-multi-server.sh` 是双 HTTPS 实例与单 Windows agent 的受控验证入口。
+
+## S192 解绑后的桌面活动列表投影
+
+`AppView` 从 `management.bindings` 统一筛选 `!detached`，供本地 Binding 表、管理卡片和文件/历史/传输记录的绑定选择器使用。绑定 ID 集合变化时重置后三页的 React scope，丢弃失效选择、页面缓存与迟到读取的展示；不改写持久恢复作业或 agent 状态。失败/取消按既有 agent 结果保留绑定。
+
+`BindingActions` 在 agent 返回保留报告后，通过全局 Notification 展示未确认与非完整项数；存在待恢复内容时不自动关闭，避免列表移除后丢失数据风险提示。IPC/schema/CLI 的已解除记录与恢复导出入口保持，解绑仍不发送服务器 Delete、不清本地内容或缓存。Chromium 入口 `tests/desktop/detach-browser.py`；Windows 原生列表与数据保护回归纳入 S082。

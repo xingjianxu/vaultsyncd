@@ -51,9 +51,17 @@ window.addEventListener("DOMContentLoaded", async () => {
     const pending=(await listing()).find(f=>f.path==="pending-only.txt");report.pendingNotGreen=pending?.pending===true&&pending.synchronized===false;
     await controlPage();field("recovery_destination",fixture.exportPath);await click("导出恢复包");await wait("export proof",()=>text().includes("恢复包已核验"));report.export=true;
     await click("解除绑定（保留数据）");await wait("detach impact",()=>dialog()?.textContent.includes("不会删除服务器文件"));await invoke("acceptance_file_control",{action:"late-dirty"});await click("确认保留数据并解除",dialog());await wait("detached",async()=>(await invoke("agent_get_status")).management.bindings.find(b=>b.binding_id===report.bindingId)?.detached);report.detach=true;
+    await wait("detached row removed",()=>!row(fixture.localPath)&&!text().includes(`绑定管理：${fixture.localPath}`));
+    await wait("detach report retained",()=>text().includes("已停止管理，保留未确认"));
+    for(const [path,name] of [["/files","files_binding"],["/history","history_binding"],["/activity","activity_binding"]]){
+      await page(path);await wait("related selector",()=>document.querySelector(`[name="${name}"]`));
+      if(document.querySelector(`[name="${name}"] option[value="${report.bindingId}"]`))throw new Error(`detached binding remains in ${path}`);
+    }
+    await page("/bindings");await wait("binding list revisited",()=>text().includes("本地 Binding"));
+    if(row(fixture.localPath))throw new Error("detached binding returned after navigation");report.detachLists=true;
     await page("/problems");await click("读取问题");await wait("problems read",confirmed);report.problems=true;
     const nonce=document.querySelector('meta[name="csp-nonce"]')?.content;report.nonceStyles=/^[0-9a-f]{32}$/.test(nonce??"")&&[...document.querySelectorAll("style")].every(style=>style.nonce===nonce);report.cspViolations=cspViolations;
-    report.ok=report.nonceStyles&&report.cspViolations.length===0&&["maliciousWebViewDenied","releaseConfirmationRace","rulesGui","download","busyUi","busyBackendRejects","release","fullModeKeepsContent","dirtyUi","dirtyBackendRejects","pendingNotGreen","export","detach","problems"].every(k=>report[k]===true);
+    report.ok=report.nonceStyles&&report.cspViolations.length===0&&["maliciousWebViewDenied","releaseConfirmationRace","rulesGui","download","busyUi","busyBackendRejects","release","fullModeKeepsContent","dirtyUi","dirtyBackendRejects","pendingNotGreen","export","detach","detachLists","problems"].every(k=>report[k]===true);
   }catch(error){report.error=typeof error==="object"?JSON.stringify(error):String(error);report.page=text();}
   await invoke("acceptance_report",{report});
 });

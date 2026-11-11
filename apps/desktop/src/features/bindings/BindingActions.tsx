@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card, Divider, Group, NativeSelect, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
 import { Button, Dialog } from "@vaultsyncd/ui";
+import { notifications } from "@mantine/notifications";
 import type { BindingInfo, BindingStatus } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
 
@@ -53,7 +54,13 @@ export function BindingActions({ agent, binding, status, run, busy, changed }: {
       <Group><Button color="red" disabled={busy} onClick={() => {
         setConfirm(false); run(async () => {
           const result = await agent.detachBinding(binding.binding_id); if (!result.unconfirmed || !result.incomplete) throw new Error("agent 未返回解绑保留报告。");
-          setMessage(`已停止管理，保留未确认 ${result.unconfirmed.length} 项；非完整内容 ${result.incomplete.length} 项仍不能保证离线读取。`); await changed();
+          const needsRecovery = result.unconfirmed.length > 0 || result.incomplete.length > 0;
+          // This card disappears after refresh; keep the data-preservation report visible.
+          notifications.show({
+            message: `已停止管理，保留未确认 ${result.unconfirmed.length} 项；非完整内容 ${result.incomplete.length} 项仍不能保证离线读取。`,
+            color: needsRecovery ? "yellow" : "green", autoClose: needsRecovery ? false : 4000,
+          });
+          await changed();
         });
       }}>确认保留数据并解除</Button></Group>
     </Dialog>
