@@ -11,6 +11,7 @@ use vaultsyncd_transfer::ports::PortError;
 pub(crate) async fn execute(
     db: &Arc<Database>,
     config: &AgentConfig,
+    server_id: &str,
     client: &ApiClient<ReqwestTransport>,
     command: &Command,
 ) -> Result<ManagementResult, PortError> {
@@ -31,9 +32,7 @@ pub(crate) async fn execute(
         .map_err(error)?
         .ok_or_else(|| PortError::rejected("NOT_FOUND", "binding missing"))?;
     drop(connection);
-    if record.server.to_string() != config.server.id
-        || record.device.to_string() != config.device_id
-    {
+    if record.server.to_string() != server_id || record.device.to_string() != config.device_id {
         return Err(PortError::rejected(
             "BINDING_BLOCKED",
             "binding identity differs",

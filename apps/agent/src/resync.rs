@@ -9,7 +9,7 @@ use vaultsyncd_agent_core::{
 };
 use vaultsyncd_client_store::{bindings, db::Database};
 use vaultsyncd_domain::ids::BindingId;
-use vaultsyncd_http_client::{ApiRequest, AuthMode};
+use vaultsyncd_http_client::ApiRequest;
 use vaultsyncd_protocol::generated::Capabilities;
 use vaultsyncd_transfer::ports::PortError;
 
@@ -52,9 +52,15 @@ pub(crate) async fn admit(
     }
     let capabilities: Capabilities = remote
         .client
-        .send_json(ApiRequest::get("/v1/capabilities").with_auth(AuthMode::Bearer))
+        .send_json(ApiRequest::get("/v1/capabilities"))
         .await
         .map_err(vaultsyncd_http_client::transfer_error)?;
+    if capabilities.server_id != bound.server.to_string() {
+        return Err(PortError::rejected(
+            "NEEDS_RECOVERY",
+            "remote server identity differs from the binding",
+        ));
+    }
     let epoch = vaultsyncd_domain::version::ServerEpoch::from_decimal(&capabilities.epoch)
         .map_err(error)?;
     let reason = if epoch != bound.server_epoch {

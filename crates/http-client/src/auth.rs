@@ -203,6 +203,15 @@ impl AuthSession {
     ///
     /// 返回新代际的快照，并通知保管端口。
     pub fn install(&self, credentials: Credentials) -> CredentialSnapshot {
+        let snapshot = self.restore(credentials);
+        if let Some(sink) = &self.sink {
+            sink.credentials_stored(snapshot.credentials());
+        }
+        snapshot
+    }
+
+    /// Restore already persisted credentials into memory without rewriting the credential store.
+    pub fn restore(&self, credentials: Credentials) -> CredentialSnapshot {
         let generation = {
             let mut state = self.write();
             state.generation = state.generation.saturating_add(1);
@@ -210,14 +219,10 @@ impl AuthSession {
             state.credentials = Some(credentials.clone());
             state.generation
         };
-        let snapshot = CredentialSnapshot {
+        CredentialSnapshot {
             credentials,
             generation,
-        };
-        if let Some(sink) = &self.sink {
-            sink.credentials_stored(snapshot.credentials());
         }
-        snapshot
     }
 
     /// 清除本地凭据（注销成功后调用）。
@@ -447,6 +452,17 @@ mod tests {
         let stored = sink.stored.lock().expect("记录锁");
         assert_eq!(stored.len(), 2);
         assert_eq!(*sink.erased.lock().expect("记录锁"), 1);
+    }
+
+    #[test]
+    fn restoring_persisted_credentials_does_not_rewrite_the_sink() {
+        let sink = Arc::new(RecordingSink::default());
+        let session = AuthSession::with_sink(sink.clone());
+        let snapshot = session.restore(credentials("saved-access", "saved-refresh"));
+        assert_eq!(snapshot.generation(), 1);
+        assert_eq!(session.snapshot().unwrap().access_token(), "saved-access");
+        assert!(sink.stored.lock().unwrap().is_empty());
+        assert_eq!(*sink.erased.lock().unwrap(), 0);
     }
 
     #[tokio::test]

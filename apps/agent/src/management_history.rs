@@ -2,7 +2,10 @@
 use crate::{config::AgentConfig, local::error};
 use std::sync::Arc;
 use vaultsyncd_client_store::{bindings, db::Database};
-use vaultsyncd_domain::ids::{BindingId, OpId};
+use vaultsyncd_domain::{
+    error::ErrorCode,
+    ids::{BindingId, OpId, ServerId, VaultId},
+};
 use vaultsyncd_http_client::{ApiClient, ApiRequest, AuthMode, ReqwestTransport};
 use vaultsyncd_local_ipc::generated::{Command, CommandName as C, ManagementResult, RemoteItem};
 use vaultsyncd_protocol::generated::{
@@ -246,6 +249,7 @@ async fn location(
 pub(crate) async fn report_existing_conflicts(
     db: &Database,
     client: &ApiClient<ReqwestTransport>,
+    server: ServerId,
     vault: &str,
 ) -> Result<(), PortError> {
     let page: RecoveryPage = client
@@ -255,9 +259,12 @@ pub(crate) async fn report_existing_conflicts(
         .await
         .map_err(vaultsyncd_http_client::transfer_error)?;
     if !page.items.is_empty() {
-        vaultsyncd_agent_core::status::issues::report_conflict(
+        crate::management_notices::raise(
             db,
-            vaultsyncd_domain::ids::VaultId::from_hex(vault).map_err(error)?,
+            server,
+            VaultId::from_hex(vault).map_err(error)?,
+            ErrorCode::NeedsRecovery,
+            "CONFLICT_COPY",
         )
         .await?;
     }

@@ -15,7 +15,11 @@ use vaultsyncd_agent_core::{
     recovery::{self, ContentEvidence},
 };
 use vaultsyncd_client_store::entries;
-use vaultsyncd_domain::{ids::OpId, version::Generation};
+use vaultsyncd_domain::{
+    error::ErrorCode,
+    ids::{OpId, ServerId, VaultId},
+    version::Generation,
+};
 use vaultsyncd_protocol::generated::{OperationResult, OperationState, SnapshotEntry};
 use vaultsyncd_transfer::download::DownloadOptions;
 
@@ -60,17 +64,22 @@ pub(crate) async fn record_ack(
         .map_err(error)?;
     }
     if first_ack && result.conflict.is_some() {
-        let vault: Vec<u8> = sqlx::query_scalar("SELECT vault_id FROM bindings WHERE id=?")
-            .bind(local.binding.as_bytes().as_slice())
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(error)?;
-        let vault = vaultsyncd_domain::ids::VaultId::from_bytes(
-            vault.try_into().map_err(|_| error("invalid vault"))?,
-        );
+        let (server, vault): (Vec<u8>, Vec<u8>) =
+            sqlx::query_as("SELECT server_id,vault_id FROM bindings WHERE id=?")
+                .bind(local.binding.as_bytes().as_slice())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(error)?;
+        let server = ServerId::from_bytes(server.try_into().map_err(|_| error("invalid server"))?);
+        let vault = VaultId::from_bytes(vault.try_into().map_err(|_| error("invalid vault"))?);
         vaultsyncd_client_store::notifications::raise(
             &mut tx,
-            &vaultsyncd_agent_core::status::issues::conflict_problem(vault),
+            &crate::management_notices::problem(
+                server,
+                vault,
+                ErrorCode::NeedsRecovery,
+                "CONFLICT_COPY",
+            ),
         )
         .await
         .map_err(error)?;

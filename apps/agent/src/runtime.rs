@@ -7,13 +7,14 @@ use crate::{
     importer::{Importer, pin},
     instance::InstanceGuard,
     local::{Local, error},
+    management::{self, reject},
     remote::Remote,
     shutdown::Shutdown,
     work::{Commits, Dispatch, Worker, metadata},
 };
 use rand_core::{OsRng, RngCore};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
     sync::{
         Arc, Mutex, OnceLock,
@@ -21,6 +22,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::{mpsc, oneshot, watch};
 use vaultsyncd_agent_core::{
     adapters::ClientStorePorts,
     bindings::{control::BindingControls, import::FirstImport},
@@ -42,7 +44,10 @@ use vaultsyncd_domain::{
     version::{BoundError, Clock, ServerEpoch, UtcTimestamp},
 };
 use vaultsyncd_http_client::{
-    ApiClient, AuthSession, ClientConfig, CredentialSink, Credentials, ReqwestTransport, TlsTrust,
+    ApiClient, AuthSession, CredentialSink, Credentials, ReqwestTransport,
+};
+use vaultsyncd_local_ipc::generated::{
+    Command, CommandName, ConnectionInfo, ManagementResult, Problem,
 };
 use vaultsyncd_platform_windows::{
     cfapi::{
@@ -56,6 +61,8 @@ use vaultsyncd_transfer::{
     download::DownloadOptions,
     ports::{PortError, VersionPin},
 };
+mod server;
+
 type StoredPin = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
 type LiveBinding = (
     BindingId,
@@ -127,9 +134,11 @@ impl CredentialSink for VaultSink {
         }
     }
     fn credentials_erased(&self) {
-        if self.vault.erase().is_err() {
-            self.failed.store(true, Ordering::Release);
-        }
+        let erased = self.pending.lock().is_ok_and(|mut pending| {
+            *pending = None;
+            self.vault.erase().is_ok()
+        });
+        self.failed.store(!erased, Ordering::Release);
     }
 }
 /// Run in the actual interactive user session. Authentication input is transient stdin only.
@@ -190,760 +199,596 @@ async fn run_mode(
             .await
             .map_err(error)?,
     );
-    crate::management::load_connection(&db, &mut config).await?;
-    let mut sink = Arc::new(VaultSink {
-        vault: CredentialVault::new(&config.server.id).map_err(error)?,
-        failed: AtomicBool::new(false),
-        pending: Mutex::new(None),
-    });
-    let mut session = AuthSession::with_sink(sink.clone());
-    let mut http = ClientConfig::new(&config.server.url);
-    if config.server.development_http {
-        http = http.allow_plaintext_http();
-    }
-    if let Some(ca) = &config.server.ca_file {
-        http = http.with_trust(TlsTrust::system_roots_with_pem_file(ca).map_err(error)?);
-    }
-    let mut client = ApiClient::new(http)
-        .map_err(error)?
-        .with_auth_session(session.clone());
-    if login {
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        std::io::stdin()
-            .take(16 * 1024)
-            .read_to_end(&mut bytes)
-            .map_err(error)?;
-        let request = serde_json::from_slice(&bytes).map_err(error)?;
-        client
-            .login(&request)
-            .await
-            .map_err(vaultsyncd_http_client::transfer_error)?;
-        sink.persist()?;
-        eprintln!("event=login-stored");
-        return Ok(());
-    }
-    if let Some(stored) = sink.vault.load().map_err(error)? {
-        let issued: SessionIssued =
-            serde_json::from_slice(&stored).map_err(|_| error("invalid stored credential"))?;
-        session.install(
-            Credentials::from_issued(&issued).map_err(vaultsyncd_http_client::transfer_error)?,
-        );
-    }
-    sink.persist()?;
-    let shutdown = Shutdown::install().map_err(error)?;
-    // DB is the authority for dynamically created bindings and mutable modes on restart.
-    crate::management::load_bindings(&db, &mut config).await?;
-    crate::management::admit(&config)?;
-    let assemble = |config: AgentConfig,
-                    binding: crate::config::BindingConfig,
-                    db: Arc<Database>,
-                    client: ApiClient<ReqwestTransport>| async move {
-        let id = BindingId::from_hex(&binding.id).map_err(error)?;
-        let vault = VaultId::from_hex(&binding.vault_id).map_err(error)?;
-        let mode = if binding.mode == "full" {
-            SyncMode::Full
-        } else {
-            SyncMode::OnDemand
-        };
-        let mut conn = db.pool().acquire().await.map_err(error)?;
-        let old = bindings::binding(&mut conn, id).await.map_err(error)?;
-        drop(conn);
-        let epoch = if let Some(old) = &old {
-            if old.server.to_string() != config.server.id
-                || old.device.to_string() != config.device_id
-                || old.vault != vault
-                || old.local_path != binding.path.to_string_lossy()
-                || old.cache_path != binding.cache.to_string_lossy()
-            {
-                return Err(error("configuration differs from durable binding"));
-            }
-            old.server_epoch
-        } else {
-            let (snapshot, _) = vaultsyncd_http_client::sync::snapshot(&client, &vault.to_string())
-                .await
-                .map_err(vaultsyncd_http_client::transfer_error)?;
-            let epoch = ServerEpoch::from_decimal(&snapshot.server_epoch).map_err(error)?;
-            let mut tx = db.begin_write().await.map_err(error)?;
-            bindings::insert_binding(
-                &mut tx,
-                &NewBinding {
-                    id,
-                    server: ServerId::from_hex(&config.server.id).map_err(error)?,
-                    device: DeviceId::from_hex(&config.device_id).map_err(error)?,
-                    vault,
-                    local_path: binding.path.to_string_lossy().into_owned(),
-                    cache_path: binding.cache.to_string_lossy().into_owned(),
-                    mode,
-                    rules_version: "1".into(),
-                    server_epoch: epoch,
-                },
-            )
-            .await
-            .map_err(error)?;
-            tx.commit().await.map_err(error)?;
-            epoch
-        };
-        // Metadata-only connection keeps offline CFAPI directory queries usable; content requests
-        // remain explicitly unavailable until platform and core recovery have both completed.
-        // An open rebuild quarantines old operations from its first transaction; assembly must still
-        // continue, otherwise admission could never resume the durable journal (and the fence itself
-        // would block startup forever). Old operation recovery is deferred to the post-rebuild assembly.
-        let rebuilding = rebuild_open(&db, id).await?;
-        let mut recovery_connection =
-            vaultsyncd_platform_windows::cfapi::adapter::Adapter::connect(
-                &binding.path,
-                Catalog::new(id, vault),
-                Arc::new(vaultsyncd_platform_windows::cfapi::adapter::MetadataOnly),
-            )
-            .map_err(error)?;
-        let local = Arc::new(Local::open(&binding.path, &binding.cache, db.clone(), id).await?);
-        for outcome in local.native.recover_publications().map_err(error)? {
-            if matches!(outcome, RecoveryOutcome::Blocked(_)) {
-                return Err(error("platform publication requires recovery"));
-            }
-        }
-        if rebuilding {
-            eprintln!("event=rebuild-open binding={id} old-operations=quarantined");
-        } else {
-            recover_releases(&db, &binding.path, id, vault, &client).await?;
-        }
-        crate::namespace::recover(&local, &recovery_connection).await?;
-        if !rebuilding {
-            let recovered = ControlledApply::new(db.clone(), local.clone())
-                .recover(id)
-                .await?;
-            for (op, result) in recovered {
-                result?;
-                local
-                    .native
-                    .acknowledge_publication(&op.to_string())
-                    .map_err(error)?;
-            }
-        }
-        // Release recovery is per persisted target/version and runs before any new scheduler work.
-        let remote = Arc::new(Remote {
-            client: client.clone(),
-            binding: id,
-            vault,
-        });
-        let ports_store = Arc::new(ClientStorePorts::new(db.clone()));
-        let ports = Ports::new(
-            local.clone(),
-            Arc::new(SystemClock),
-            remote.clone(),
-            ports_store.clone(),
-            ports_store.clone(),
-            ports_store,
-        );
-        let deferred = Dispatch(Arc::new(OnceLock::new()));
-        let scheduler = Arc::new(Scheduler::new(
-            db.clone(),
-            ports.clone(),
-            deferred.clone(),
-            Arc::new(crate::exclusions::Gate(db.clone())),
-            Arc::new(Random),
-            Limits::default(),
-        )?);
-        let mut catalog = Catalog::new(id, vault);
-        let mut versions = Vec::new();
-        let pins: Vec<StoredPin> = sqlx::query_as(
-            "SELECT entry_id,version_id,digest,size FROM agent_versions WHERE binding_id=?",
-        )
-        .bind(id.as_bytes().as_slice())
-        .fetch_all(db.pool())
-        .await
-        .map_err(error)?;
-        for (entry, version, digest, size) in pins {
-            let identity = Identity {
-                binding: id,
-                vault,
-                entry: EntryId::from_bytes(entry.try_into().map_err(|_| error("bad entry id"))?),
-                version: VersionId::from_bytes(
-                    version.try_into().map_err(|_| error("bad version id"))?,
-                ),
-            };
-            let fixed = VersionPin::new(
-                id.to_string(),
-                identity.entry.to_string(),
-                identity.version.to_string(),
-                digest.try_into().map_err(|_| error("bad digest"))?,
-                size as u64,
-            )
-            .map_err(error)?;
-            versions.push(PinnedVersion::new(identity, fixed).map_err(error)?);
-        }
-        let placeholders = local.vault.scan();
-        if !placeholders.permits_missing_comparison() {
-            return Err(error("incomplete startup metadata scan"));
-        }
-        for entry in placeholders.entries {
-            if let Some(cloud) = entry.metadata.and_then(|m| m.cloud) {
-                let identity = Identity::decode(&cloud.identity).map_err(error)?;
-                if identity.binding != id || identity.vault != vault {
-                    return Err(error("foreign placeholder"));
-                }
-                catalog.insert(identity).map_err(error)?;
-            }
-        }
-        // Both startup and create_binding use this assembly path. Repair older CFAPI-only
-        // vaults without unregistering or changing any file's hydration/pin/in-sync state.
-        // Keep the metadata connection live while WinRT resolves the existing folder.
-        let shell_path = binding.path.clone();
-        tokio::task::spawn_blocking(move || {
-            vaultsyncd_platform_windows::shell::register(&shell_path, &Catalog::new(id, vault))
-        })
-        .await
-        .map_err(error)?
-        .map_err(error)?;
-        recovery_connection.disconnect().map_err(error)?;
-        let (adapter, callbacks) = connect_hydration(
-            &binding.path,
-            catalog,
-            db.clone(),
-            client.clone(),
-            scheduler.user_reads(),
-            HydrationConfig {
-                staging: binding.cache.clone(),
-                versions,
-                download: DownloadOptions::new(1024 * 1024),
-                timeout: Duration::from_secs(30),
-                outstanding: 32,
-            },
-        )
-        .map_err(error)?;
-        let importer = Arc::new(Importer {
-            remote: remote.clone(),
-            local,
-            adapter: Arc::new(Mutex::new(adapter)),
-            callbacks,
-            content: vaultsyncd_agent_core::ports::remote::RemotePort::content(&*remote, id)
-                .await?,
-        });
-        let uploads = Arc::new(UploadActionHandler::new(
-            &config.device_id,
-            epoch,
-            Arc::new(Commits {
-                importer: importer.clone(),
-            }),
-        ));
-        let worker = Worker {
-            importer: importer.clone(),
-            uploads,
-        };
-        deferred
-            .0
-            .set(worker.clone())
-            .map_err(|_| error("handler already installed"))?;
-        eprintln!("event=recovery-complete binding={id}");
-        Ok::<_, PortError>((
-            id,
-            vault,
-            FirstImport::new(db.clone(), ports, importer.clone(), remote.clone()),
-            worker,
-            scheduler,
-            remote,
-        ))
+    let servers = management::load_connections(&db, &config).await?;
+    let assignments = management::load_bindings(&db, &mut config).await?;
+    management::admit(&config)?;
+    let (report_wake, mut reports) = mpsc::channel(1);
+    let (connection_updates, connections) = watch::channel(Vec::new());
+    let (completed, mut completions) = mpsc::unbounded_channel();
+    let mut runtime = Runtime {
+        db: db.clone(),
+        config,
+        assignments,
+        servers: BTreeMap::new(),
+        blocked_servers: HashSet::new(),
+        pending: HashMap::new(),
+        report_wake,
+        connection_updates,
+        completed,
     };
-    let mut live: Vec<LiveBinding> = Vec::new();
-    let (commands, mut requests) = tokio::sync::mpsc::channel::<crate::ipc::CommandRequest>(8);
-    let (connection_updates, connection) =
-        tokio::sync::watch::channel(crate::management::connection(&config, &session));
-    let (problem_updates, problems) = tokio::sync::watch::channel(Vec::new());
-    let mut startup_problems: HashMap<BindingId, vaultsyncd_local_ipc::generated::Problem> =
-        HashMap::new();
-    let (offline_updates, offline) = tokio::sync::watch::channel(std::collections::HashSet::new());
-    let mut offline_bindings = std::collections::HashSet::new();
-    let mut cycle_problems: HashMap<BindingId, vaultsyncd_local_ipc::generated::Problem> =
-        HashMap::new();
+    if login {
+        let [server] = servers.as_slice() else {
+            return Err(reject(if servers.is_empty() {
+                "NOT_FOUND"
+            } else {
+                "SERVER_REQUIRED"
+            }));
+        };
+        return server::Connection::open(server.clone())?
+            .login_stdin()
+            .await;
+    }
+    for server in servers {
+        let id = ServerId::from_hex(&server.id).map_err(error)?;
+        let connection = server::Connection::open(server)?;
+        runtime.start_server(id, connection, once);
+    }
+    if once {
+        if runtime.servers.is_empty() {
+            return Err(reject("REAUTH_REQUIRED"));
+        }
+        let tasks: Vec<_> = std::mem::take(&mut runtime.servers)
+            .into_values()
+            .map(server::Handle::into_task)
+            .collect();
+        return wait_for_servers(tasks).await;
+    }
+
+    let shutdown = Shutdown::install().map_err(error)?;
+    let (commands, mut requests) = mpsc::channel::<crate::ipc::CommandRequest>(8);
+    let (problem_updates, problems) = watch::channel(Vec::new());
+    let (offline_updates, offline) = watch::channel(runtime.offline());
     let ipc =
-        crate::ipc::start(db.clone(), commands, connection, problems, offline).map_err(error)?;
+        crate::ipc::start(db.clone(), commands, connections, problems, offline).map_err(error)?;
     eprintln!(
         "event=management-ready configured={}",
-        config.bindings.len()
+        runtime.config.bindings.len()
     );
-    let mut initialized = HashMap::new();
-    let mut receivers = HashMap::new();
-    let mut hints = HashMap::new();
-    let (hint_wake, mut hint_woken) = tokio::sync::mpsc::channel(1);
-    let mut maintenance_stop = false;
-    loop {
+    let result = loop {
         if shutdown.requested() {
-            break;
+            break Ok(());
         }
         if ipc.is_finished() {
-            return Err(error("IPC listener stopped unexpectedly"));
+            break Err(error("IPC listener stopped unexpectedly"));
         }
-        sink.persist()?;
-        connection_updates.send_replace(crate::management::connection(&config, &session));
-        if sink.failed.load(Ordering::Acquire) {
-            return Err(error("credential persistence failed"));
-        }
-        while let Ok(command) = requests.try_recv() {
-            if command.reply.is_closed() {
-                continue;
-            }
-            let request = command.request;
-            let mut result = if request.command.name
-                == vaultsyncd_local_ipc::generated::CommandName::PrepareMaintenance
-            {
-                let result = crate::maintenance_prepare::prepare(
-                    &db,
-                    &config,
-                    live.iter()
-                        .map(|(id, _, _, worker, scheduler, _)| {
-                            (*id, (worker.clone(), scheduler.clone()))
-                        })
-                        .collect(),
-                    request
-                        .command
-                        .parameters
-                        .as_ref()
-                        .unwrap()
-                        .destination
-                        .as_deref()
-                        .unwrap(),
-                )
-                .await;
-                maintenance_stop = true;
-                result
-            } else if request.command.name
-                == vaultsyncd_local_ipc::generated::CommandName::SetConnection
-            {
-                async {
-                    let proposed =
-                        crate::management::proposed_connection(&db, &config, &request.command)
-                            .await?;
-                    crate::management::verify_connection(&proposed).await?;
-                    if command.reply.is_closed() {
-                        return Err(PortError::rejected(
-                            "UNAVAILABLE",
-                            "connection request expired",
-                        ));
-                    }
-                    let next_sink = Arc::new(VaultSink {
-                        vault: CredentialVault::new(&proposed.server.id).map_err(error)?,
-                        failed: AtomicBool::new(false),
-                        pending: Mutex::new(None),
-                    });
-                    let next_session = AuthSession::with_sink(next_sink.clone());
-                    let mut http = ClientConfig::new(&proposed.server.url);
-                    if proposed.server.development_http {
-                        http = http.allow_plaintext_http();
-                    }
-                    if let Some(ca) = &proposed.server.ca_file {
-                        http = http
-                            .with_trust(TlsTrust::system_roots_with_pem_file(ca).map_err(error)?);
-                    }
-                    let next_client = ApiClient::new(http)
-                        .map_err(error)?
-                        .with_auth_session(next_session.clone());
-                    if let Some(bytes) = next_sink.vault.load().map_err(error)? {
-                        let issued: SessionIssued = serde_json::from_slice(&bytes)
-                            .map_err(|_| error("invalid stored credential"))?;
-                        next_session.install(
-                            Credentials::from_issued(&issued)
-                                .map_err(vaultsyncd_http_client::transfer_error)?,
-                        );
-                    }
-                    for (_, _, _, worker, _, _) in &live {
-                        worker.importer.callbacks.disconnect();
-                        worker
-                            .importer
-                            .adapter
-                            .lock()
-                            .map_err(error)?
-                            .disconnect()
-                            .map_err(error)?;
-                        worker
-                            .importer
-                            .callbacks
-                            .wait_idle(Duration::from_secs(5))
-                            .await
-                            .map_err(error)?;
-                    }
-                    receivers.clear();
-                    hints.clear();
-                    initialized.clear();
-                    live.clear();
-                    if command.reply.is_closed() {
-                        // The existing durable config is kept; the next loop reassembles it.
-                        return Err(PortError::rejected(
-                            "UNAVAILABLE",
-                            "connection request expired",
-                        ));
-                    }
-                    crate::management::save_connection(&db, &proposed).await?;
-                    config = proposed;
-                    client = next_client;
-                    session = next_session;
-                    sink = next_sink;
-                    Ok(vaultsyncd_local_ipc::generated::ManagementResult {
-                        connection: Some(crate::management::connection(&config, &session)),
-                        ..Default::default()
-                    })
+        tokio::select! {
+            _ = async {
+                while !shutdown.requested() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-                .await
-            } else if request.command.name
-                == vaultsyncd_local_ipc::generated::CommandName::CreateBinding
-            {
-                async {
-                    if !session.has_credentials() {
-                        return Err(PortError::rejected("REAUTH_REQUIRED", "login required"));
-                    }
-                    let binding = crate::management::new_binding(&config, &request.command).await?;
-                    let value =
-                        assemble(config.clone(), binding.clone(), db.clone(), client.clone())
-                            .await?;
-                    config.bindings.push(binding);
-                    live.push(value);
-                    Ok(vaultsyncd_local_ipc::generated::ManagementResult::default())
-                }
-                .await
-            } else {
-                crate::management::execute(
-                    &db,
-                    &mut config,
-                    &client,
-                    &session,
-                    live.iter()
-                        .map(|(id, _, _, worker, scheduler, _)| {
-                            (*id, (worker.clone(), scheduler.clone()))
-                        })
-                        .collect(),
-                    &request.command,
-                )
-                .await
-            };
-            if request.command.name == vaultsyncd_local_ipc::generated::CommandName::ListProblems
-                && let Ok(result) = &mut result
-            {
-                let parameters = request.command.parameters.as_ref();
-                result.problems.get_or_insert_default().extend(
-                    startup_problems
-                        .values()
-                        .filter(|p| {
-                            parameters
-                                .and_then(|p| p.binding_id.as_ref())
-                                .is_none_or(|b| b == &p.binding_id)
-                                && parameters.and_then(|p| p.search.as_ref()).is_none_or(|s| {
-                                    p.code.to_lowercase().contains(&s.to_lowercase())
-                                })
-                        })
-                        .cloned(),
-                );
-            }
-            if result.is_ok() {
-                sink.persist()?;
-                if sink.failed.load(Ordering::Acquire) {
-                    return Err(error("credential persistence failed"));
-                }
-            }
-            connection_updates.send_replace(crate::management::connection(&config, &session));
-            let _ = command
-                .reply
-                .send(crate::ipc::management_response(&request, result));
-            if maintenance_stop {
-                break;
-            }
-        }
-        if maintenance_stop {
-            // Let the bounded transport flush the successful preparation acknowledgment.
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            break;
-        }
-        if session.has_credentials()
-            && !crate::maintenance::trial_pending(&config.state_dir).map_err(error)?
-        {
-            for binding in &config.bindings {
-                let id = BindingId::from_hex(&binding.id).map_err(error)?;
-                if live.iter().any(|(existing, ..)| *existing == id) {
+            } => break Ok(()),
+            job = requests.recv() => {
+                let Some(job) = job else { break Err(error("IPC command channel closed")); };
+                if job.reply.is_closed() {
                     continue;
                 }
-                let mut conn = db.pool().acquire().await.map_err(error)?;
-                let detached: Option<bool> =
-                    sqlx::query_scalar("SELECT detached FROM binding_controls WHERE binding_id=?")
-                        .bind(id.as_bytes().as_slice())
-                        .fetch_optional(&mut *conn)
-                        .await
-                        .map_err(error)?;
-                drop(conn);
-                if detached == Some(true) {
-                    continue;
+                if job.request.command.name == CommandName::PrepareMaintenance {
+                    let result = runtime.prepare_maintenance(&job.request.command).await;
+                    let _ = job.reply.send(crate::ipc::management_response(&job.request, result));
+                    // Let the bounded transport flush the preparation acknowledgment.
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    break Ok(());
                 }
-                match assemble(config.clone(), binding.clone(), db.clone(), client.clone()).await {
-                    Ok(value) => {
-                        live.push(value);
-                        startup_problems.remove(&id);
-                    }
-                    Err(e) if e.is_retryable() => {
-                        offline_bindings.insert(id);
-                        if once {
-                            return Err(e);
-                        }
-                    }
-                    Err(e) => {
-                        let code = e
-                            .code()
-                            .filter(|s| vaultsyncd_domain::error::ErrorCode::from_code(s).is_some())
-                            .unwrap_or("NEEDS_RECOVERY");
-                        startup_problems.insert(
-                            id,
-                            vaultsyncd_local_ipc::generated::Problem {
-                                binding_id: id.to_string(),
-                                problem_id: format!("startup:{id}"),
-                                entry_id: None,
-                                path: Some(String::new()),
-                                code: code.into(),
-                                reason: "绑定尚未完成恢复或连接，不能显示为同步完成".into(),
-                                local_data: "本地目录、缓存与待办保留；尚未取得安全恢复证明".into(),
-                                next_step:
-                                    "核对连接、证书、目录权限和恢复现场，恢复后 agent 会重新检查"
-                                        .into(),
-                                retryable: false,
-                            },
-                        );
-                        if once {
-                            return Err(e);
-                        }
-                        eprintln!(
-                            "event=binding-start-blocked binding={id} code={}",
-                            e.code().unwrap_or("UNAVAILABLE")
-                        );
-                    }
+                runtime.dispatch(job).await;
+            }
+            id = completions.recv() => {
+                if let Some(id) = id {
+                    if let Some(pending) = runtime.pending.get_mut(&id) { pending.completed = true; }
+                    runtime.complete_binding(id).await;
                 }
             }
+            _ = reports.recv() => {}
+            _ = tokio::time::sleep(Duration::from_millis(runtime.config.poll_millis)) => {}
         }
-        problem_updates.send_replace(startup_problems.values().cloned().collect());
-        let mut rebuilt = Vec::new();
-        for (id, vault, first, worker, scheduler, remote) in &live {
-            let mut observed = false;
-            let result: Result<(), PortError> = async {
-                if !session.has_credentials()
-                    || !crate::exclusions::Rules::load(&db, *id).await?.active
-                {
-                    return Ok(());
-                }
-                observed = true;
-                hints.entry(*id).or_insert_with(|| {
-                    crate::events::Hints::start(remote.clone(), hint_wake.clone())
-                });
-                worker.importer.local.vault.verify().map_err(|_| {
-                    PortError::rejected("VAULT_UNAVAILABLE", "vault identity changed or unavailable")
-                })?;
-                match crate::resync::admit(db.clone(), *id, worker, remote.clone()).await {
-                    Ok(true) => {
-                        rebuilt.push(*id);
-                        return Ok(());
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        // Preserve offline discovery, but do not dispatch any remote command until
-                        // the authenticated epoch and durable event window have been checked.
-                        if e.is_retryable() {
-                            let fenced: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM binding_resyncs WHERE binding_id=? AND complete=0)")
-                                .bind(id.as_bytes().as_slice()).fetch_one(db.pool()).await.map_err(error)?;
-                            if !fenced {
-                                worker.discover().await?;
-                            }
-                        }
-                        return Err(e);
-                    }
-                }
-                if !initialized.contains_key(id) {
-                    let report = first.run(*id, &mut Random, 128).await?;
-                    if !report.complete {
-                        return Ok(());
-                    }
-                    crate::management_history::report_existing_conflicts(
-                        &db,
-                        &client,
-                        &vault.to_string(),
-                    )
-                    .await?;
-                    seed_uploaded_facts(&worker.importer).await?;
-                    worker.restore_uploads().await?;
-                    let decoder = Arc::new(Decoder {
-                        rows: Mutex::new(metadata(&worker.importer).await?),
-                        specifications: Mutex::new(HashMap::new()),
-                    });
-                    let bridge = Arc::new(Bridge {
-                        worker: worker.clone(),
-                        scheduler: scheduler.clone(),
-                        decoder: decoder.clone(),
-                    });
-                    let receiver = EventReceiver::new(
-                        db.clone(),
-                        *vault,
-                        *id,
-                        remote.clone(),
-                        decoder,
-                        bridge,
-                        128,
-                    )
-                    .map_err(error)?;
-                    receivers.insert(*id, receiver);
-                    initialized.insert(*id, true);
-                }
-                scheduler.run_round(*id).await?;
-                let received = receivers
-                    .get(id)
-                    .ok_or_else(|| error("receiver missing"))?
-                    .run_cycle(None)
-                    .await
-                    .map_err(error);
-                // An unavailable pull must not suppress durable local discovery. Conversely,
-                // a local scan failure must not prevent already received work from progressing.
-                if received.is_ok() { crate::exclusions::reconcile(worker).await?; }
-                let discovered = worker.discover().await;
-                scheduler.run_round(*id).await?;
-                received?;
-                discovered?;
-                // Full-mode proof runs only after durable local discovery and once no
-                // upload/intent is unsettled: an unreachable server must not hide new local
-                // content, and a dirty edit must not be mistaken for an unapplied remote version.
-                let unsettled: i64 = sqlx::query_scalar(
-                    "SELECT (SELECT count(*) FROM pending_ops WHERE binding_id=?) + \
-                     (SELECT count(*) FROM local_intents WHERE binding_id=?)",
-                )
-                .bind(id.as_bytes().as_slice())
-                .bind(id.as_bytes().as_slice())
-                .fetch_one(db.pool())
-                .await
-                .map_err(error)?;
-                if unsettled == 0 {
-                    let mode = BindingControls::new(db.clone()).mode_progress(*id).await?;
-                    if mode.mode == SyncMode::Full && !mode.complete {
-                        BindingControls::new(db.clone())
-                            .resume_mode(
-                                *id,
-                                &crate::management_files::Materializer(worker.clone()),
-                                16,
-                            )
-                            .await?;
-                    }
-                }
-                Ok(())
-            }
-            .await;
-            match result {
-                Ok(()) => {
-                    if observed {
-                        cycle_problems.remove(id);
-                        offline_bindings.remove(id);
-                    }
-                    eprintln!("event=cycle binding={id}");
-                }
-                Err(e) => {
-                    if e.is_retryable() {
-                        offline_bindings.insert(*id);
-                    } else if let Some(code) = e
-                        .code()
-                        .and_then(vaultsyncd_domain::error::ErrorCode::from_code)
-                        .filter(|c| c.class().is_severe())
-                    {
-                        cycle_problems.insert(
-                            *id,
-                            vaultsyncd_local_ipc::generated::Problem {
-                                binding_id: id.to_string(),
-                                problem_id: format!("cycle:{id}:{code}"),
-                                entry_id: None,
-                                path: None,
-                                code: code.to_string(),
-                                reason: format!("同步受阻（{code}）"),
-                                local_data: "本地内容、队列、缓存和恢复现场保留".into(),
-                                next_step: "恢复存储、挂载或权限后重新核对；不要删除未确认内容"
-                                    .into(),
-                                retryable: false,
-                            },
-                        );
-                    }
-                    eprintln!(
-                        "event=cycle-blocked binding={id} code={}",
-                        e.code().unwrap_or("UNAVAILABLE")
-                    );
-                    if once {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        for id in rebuilt {
-            initialized.remove(&id);
-            receivers.remove(&id);
-            hints.remove(&id);
-            if let Some(index) = live.iter().position(|item| item.0 == id) {
-                let (_, _, _, worker, _, _) = live.remove(index);
-                worker.importer.callbacks.disconnect();
-                worker
-                    .importer
-                    .adapter
-                    .lock()
-                    .map_err(error)?
-                    .disconnect()
-                    .map_err(error)?;
-                worker
-                    .importer
-                    .callbacks
-                    .wait_idle(Duration::from_secs(5))
-                    .await
-                    .map_err(error)?;
-            }
-        }
-        offline_updates.send_replace(offline_bindings.clone());
-        match crate::issue_projection::sync(&db, &config, &startup_problems, &cycle_problems).await
-        {
-            Ok(problems) => {
-                problem_updates.send_replace(problems);
-            }
-            Err(_) => {
-                problem_updates.send_replace(
-                    startup_problems
-                        .values()
-                        .chain(cycle_problems.values())
-                        .cloned()
-                        .collect(),
-                );
-                eprintln!("event=problem-persistence-unavailable code=NEEDS_RECOVERY");
-            }
-        }
-        if once {
-            if !session.has_credentials() {
-                return Err(PortError::rejected("REAUTH_REQUIRED", "login required"));
-            }
-            break;
-        }
-        let end = std::time::Instant::now() + Duration::from_millis(config.poll_millis);
-        while !shutdown.requested() && requests.is_empty() && std::time::Instant::now() < end {
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
-                _ = hint_woken.recv() => break,
-            }
-        }
-    }
-    drop(hints);
-    for (_, _, _, worker, _, _) in &live {
-        worker.importer.callbacks.disconnect();
-        worker
-            .importer
-            .adapter
-            .lock()
-            .map_err(error)?
-            .disconnect()
-            .map_err(error)?;
-        worker
-            .importer
-            .callbacks
-            .wait_idle(Duration::from_secs(5))
+        runtime.retry_completed_bindings().await;
+        offline_updates.send_if_modified(|previous| update(previous, runtime.offline()));
+        let (startup, cycles) = runtime.problems();
+        let projected = crate::issue_projection::sync(&db, &runtime.config, &startup, &cycles)
             .await
-            .map_err(error)?;
-    }
-    ipc.shutdown().await.map_err(error)?;
-    drop(receivers);
-    drop(live);
+            .unwrap_or_else(|_| {
+                eprintln!("event=problem-persistence-unavailable code=NEEDS_RECOVERY");
+                startup.into_values().chain(cycles.into_values()).collect()
+            });
+        problem_updates.send_if_modified(|previous| update(previous, projected));
+    };
+    let stopped = runtime.stop_servers().await;
+    let closed = ipc.shutdown().await.map_err(error);
     db.pool().close().await;
     eprintln!("event=stopped");
-    Ok(())
+    result.and(stopped).and(closed)
+}
+
+fn update<T: PartialEq>(previous: &mut T, value: T) -> bool {
+    if *previous == value {
+        return false;
+    }
+    *previous = value;
+    true
+}
+
+struct PendingBinding {
+    server: ServerId,
+    completed: bool,
+}
+
+struct Runtime {
+    db: Arc<Database>,
+    config: AgentConfig,
+    assignments: HashMap<BindingId, ServerId>,
+    servers: BTreeMap<ServerId, server::Handle>,
+    blocked_servers: HashSet<ServerId>,
+    pending: HashMap<BindingId, PendingBinding>,
+    report_wake: mpsc::Sender<()>,
+    connection_updates: watch::Sender<Vec<ConnectionInfo>>,
+    completed: mpsc::UnboundedSender<BindingId>,
+}
+
+impl Runtime {
+    fn start_server(&mut self, id: ServerId, connection: server::Connection, once: bool) {
+        let bindings = self
+            .config
+            .bindings
+            .iter()
+            .filter(|binding| {
+                BindingId::from_hex(&binding.id)
+                    .ok()
+                    .and_then(|id| self.assignments.get(&id))
+                    == Some(&id)
+            })
+            .cloned()
+            .collect();
+        self.servers.insert(
+            id,
+            server::start(
+                self.db.clone(),
+                self.config.clone(),
+                connection,
+                bindings,
+                self.report_wake.clone(),
+                self.connection_updates.clone(),
+                once,
+            ),
+        );
+    }
+
+    fn connections(&self) -> Vec<ConnectionInfo> {
+        self.connection_updates.borrow().clone()
+    }
+
+    fn offline(&self) -> HashSet<BindingId> {
+        let mut offline = self
+            .servers
+            .values()
+            .flat_map(|worker| {
+                worker
+                    .report
+                    .borrow()
+                    .offline
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .collect::<HashSet<_>>();
+        offline.extend(self.assignments.iter().filter_map(|(binding, server)| {
+            self.servers
+                .get(server)
+                .is_none_or(|worker| worker.task_finished())
+                .then_some(*binding)
+        }));
+        offline
+    }
+
+    fn problems(&self) -> (HashMap<BindingId, Problem>, HashMap<BindingId, Problem>) {
+        let mut startup = HashMap::new();
+        let mut cycles = HashMap::new();
+        for server in self.servers.values() {
+            let report = server.report.borrow();
+            startup.extend(report.startup.iter().map(|(id, p)| (*id, p.clone())));
+            cycles.extend(report.cycles.iter().map(|(id, p)| (*id, p.clone())));
+        }
+        for (&binding, server) in &self.assignments {
+            if self.blocked_servers.contains(server) {
+                startup.insert(
+                    binding,
+                    Problem {
+                        binding_id: binding.to_string(),
+                        problem_id: format!("disconnect:{binding}"),
+                        entry_id: None,
+                        path: None,
+                        code: "NEEDS_RECOVERY".into(),
+                        reason: "该服务器的原生连接尚未完成安全断开".into(),
+                        local_data: "原有连接、绑定、目录、缓存与待办保留".into(),
+                        next_step: "退出并重新启动客户端 agent 后重试".into(),
+                        retryable: false,
+                    },
+                );
+            }
+        }
+        (startup, cycles)
+    }
+
+    fn selected_server(&self, command: &Command) -> Result<ServerId, PortError> {
+        let connections = self.connections();
+        if let Some(id) = command
+            .parameters
+            .as_ref()
+            .and_then(|p| p.server_id.as_deref())
+        {
+            let id = ServerId::from_hex(id).map_err(error)?;
+            return connections
+                .iter()
+                .any(|connection| connection.server_id == id.to_string())
+                .then_some(id)
+                .ok_or_else(|| reject("NOT_FOUND"));
+        }
+        let [connection] = connections.as_slice() else {
+            return Err(reject(if connections.is_empty() {
+                "NOT_FOUND"
+            } else {
+                "SERVER_REQUIRED"
+            }));
+        };
+        ServerId::from_hex(&connection.server_id).map_err(error)
+    }
+
+    fn fence_server(&mut self, id: ServerId) {
+        self.blocked_servers.insert(id);
+        self.connection_updates.send_if_modified(|connections| {
+            connections
+                .iter_mut()
+                .find(|connection| connection.server_id == id.to_string())
+                .is_some_and(|connection| update(&mut connection.authenticated, false))
+        });
+    }
+
+    async fn set_connection(
+        &mut self,
+        request: &crate::ipc::CommandRequest,
+    ) -> Result<ManagementResult, PortError> {
+        let proposed =
+            management::proposed_connection(&self.db, &self.config, &request.request.command)
+                .await?;
+        let id = ServerId::from_hex(&proposed.id).map_err(error)?;
+        if self.blocked_servers.contains(&id) {
+            return Err(reject("NEEDS_RECOVERY"));
+        }
+        management::verify_connection(&proposed).await?;
+        if request.reply.is_closed() {
+            return Err(reject("UNAVAILABLE"));
+        }
+        // A legacy file-only connection remains available after adding another server.
+        if !self.servers.contains_key(&id)
+            && self.servers.len() == 1
+            && vaultsyncd_client_store::connections::list(&self.db)
+                .await
+                .map_err(error)?
+                .is_empty()
+            && let [legacy] = management::load_connections(&self.db, &self.config)
+                .await?
+                .as_slice()
+        {
+            management::save_connection(&self.db, legacy).await?;
+        }
+        // Stop the matching server before replacing its transport. Other servers keep running.
+        // If the caller times out while it drains, reload the unchanged durable endpoint.
+        let old = self.servers.remove(&id);
+        if let Some(worker) = old {
+            let stopped = worker.stop().await.map_err(error).and_then(|result| result);
+            self.complete_server_bindings(id).await;
+            if let Err(cause) = stopped {
+                // A failed native disconnect/drain cannot prove the old callbacks are gone.
+                // Preserve the saved endpoint and block recreation until this process exits.
+                self.fence_server(id);
+                return Err(cause);
+            }
+        }
+        let change = async {
+            if request.reply.is_closed() {
+                return Err(reject("UNAVAILABLE"));
+            }
+            let connection = server::Connection::open(proposed.clone())?;
+            management::save_connection(&self.db, &proposed).await?;
+            Ok::<_, PortError>(connection)
+        }
+        .await;
+        let connection = match change {
+            Ok(connection) => connection,
+            Err(cause) => {
+                self.reload_server(id).await?;
+                return Err(cause);
+            }
+        };
+        let result = connection.info();
+        self.start_server(id, connection, false);
+        Ok(ManagementResult {
+            connection: Some(result),
+            ..Default::default()
+        })
+    }
+
+    async fn reload_server(&mut self, id: ServerId) -> Result<(), PortError> {
+        let servers = management::load_connections(&self.db, &self.config).await?;
+        if let Some(config) = servers
+            .into_iter()
+            .find(|server| server.id == id.to_string())
+        {
+            let connection = server::Connection::open(config)?;
+            self.start_server(id, connection, false);
+        }
+        Ok(())
+    }
+
+    async fn dispatch(&mut self, request: crate::ipc::CommandRequest) {
+        let command = &request.request.command;
+        let result = match command.name {
+            CommandName::GetConnection => self.selected_server(command).and_then(|id| {
+                let connection = self
+                    .connections()
+                    .into_iter()
+                    .find(|connection| connection.server_id == id.to_string())
+                    .ok_or_else(|| reject("NOT_FOUND"))?;
+                Ok(ManagementResult {
+                    connection: Some(connection),
+                    ..Default::default()
+                })
+            }),
+            CommandName::ListConnections => Ok(ManagementResult {
+                connections: Some(self.connections()),
+                ..Default::default()
+            }),
+            CommandName::SetConnection => self.set_connection(&request).await,
+            CommandName::Login | CommandName::Logout | CommandName::ListVaults => {
+                match self.selected_server(command) {
+                    Ok(id) => return self.send_job(id, request, None),
+                    Err(cause) => Err(cause),
+                }
+            }
+            CommandName::CreateBinding => match self.prepare_binding(command).await {
+                Ok((server, id, binding)) => {
+                    let (complete, completion) = oneshot::channel();
+                    self.pending.insert(
+                        id,
+                        PendingBinding {
+                            server,
+                            completed: false,
+                        },
+                    );
+                    self.config.bindings.push(binding.clone());
+                    self.send_job(server, request, Some((binding, complete)));
+                    let completed = self.completed.clone();
+                    tokio::spawn(async move {
+                        let _ = completion.await;
+                        let _ = completed.send(id);
+                    });
+                    return;
+                }
+                Err(cause) => Err(cause),
+            },
+            _ => {
+                let binding = command
+                    .parameters
+                    .as_ref()
+                    .and_then(|p| p.binding_id.as_deref())
+                    .and_then(|id| BindingId::from_hex(id).ok());
+                if let Some(id) = binding {
+                    match management::binding_server(&self.db, id, &self.config.device_id).await {
+                        Ok(Some(server))
+                            if self
+                                .servers
+                                .get(&server)
+                                .is_some_and(|worker| !worker.task_finished()) =>
+                        {
+                            return self.send_job(server, request, None);
+                        }
+                        Err(cause) => {
+                            let _ = request.reply.send(crate::ipc::management_response(
+                                &request.request,
+                                Err(cause),
+                            ));
+                            return;
+                        }
+                        Ok(_) => {}
+                    }
+                }
+                let mut result =
+                    management::execute(&self.db, &self.config, None, HashMap::new(), command)
+                        .await;
+                if command.name == CommandName::ListProblems
+                    && let Ok(result) = &mut result
+                {
+                    let (startup, _) = self.problems();
+                    let search = command
+                        .parameters
+                        .as_ref()
+                        .and_then(|p| p.search.as_deref())
+                        .map(str::to_lowercase);
+                    result
+                        .problems
+                        .get_or_insert_default()
+                        .extend(startup.into_iter().filter_map(|(id, problem)| {
+                            (binding.is_none_or(|b| b == id)
+                                && search
+                                    .as_ref()
+                                    .is_none_or(|s| problem.code.to_lowercase().contains(s)))
+                            .then_some(problem)
+                        }));
+                }
+                result
+            }
+        };
+        let _ = request
+            .reply
+            .send(crate::ipc::management_response(&request.request, result));
+    }
+
+    fn send_job(
+        &self,
+        id: ServerId,
+        request: crate::ipc::CommandRequest,
+        create: Option<(crate::config::BindingConfig, oneshot::Sender<()>)>,
+    ) {
+        let job = server::Job {
+            request,
+            config: self.config.clone(),
+            create,
+        };
+        let Some(server) = self
+            .servers
+            .get(&id)
+            .filter(|_| !self.blocked_servers.contains(&id))
+        else {
+            let request = job.request;
+            let _ = request.reply.send(crate::ipc::management_response(
+                &request.request,
+                Err(reject("NEEDS_RECOVERY")),
+            ));
+            return;
+        };
+        if let Err(failure) = server.commands.try_send(job) {
+            let request = failure.into_inner().request;
+            let cause = PortError::unavailable("server worker unavailable", None);
+            let _ = request.reply.send(crate::ipc::management_response(
+                &request.request,
+                Err(cause),
+            ));
+        }
+    }
+
+    async fn prepare_binding(
+        &self,
+        command: &Command,
+    ) -> Result<(ServerId, BindingId, crate::config::BindingConfig), PortError> {
+        let server = self.selected_server(command)?;
+        if self.blocked_servers.contains(&server) {
+            return Err(reject("NEEDS_RECOVERY"));
+        }
+        let binding = management::new_binding(&self.config, command).await?;
+        let id = BindingId::from_hex(&binding.id).map_err(error)?;
+        if self.assignments.contains_key(&id)
+            || management::binding_server(&self.db, id, &self.config.device_id)
+                .await?
+                .is_some()
+        {
+            return Err(reject("ALREADY_EXISTS"));
+        }
+        Ok((server, id, binding))
+    }
+
+    async fn complete_binding(&mut self, binding: BindingId) {
+        let Some(pending) = self
+            .pending
+            .get(&binding)
+            .filter(|pending| pending.completed)
+        else {
+            return;
+        };
+        let server = pending.server;
+        match management::binding_server(&self.db, binding, &self.config.device_id).await {
+            Ok(Some(owner)) if owner == server => {
+                self.assignments.insert(binding, server);
+                if let Some(worker) = self
+                    .servers
+                    .get(&server)
+                    .filter(|worker| !worker.task_finished())
+                    && let Some(configured) = self
+                        .config
+                        .bindings
+                        .iter()
+                        .find(|configured| configured.id == binding.to_string())
+                    && worker.adopt.try_send(configured.clone()).is_err()
+                {
+                    // The durable outcome is known, but the replacement worker still needs it.
+                    return;
+                }
+            }
+            Ok(None) => self
+                .config
+                .bindings
+                .retain(|config| config.id != binding.to_string()),
+            _ => {
+                // Keep the local paths reserved if the durable outcome could not be proved.
+                eprintln!("event=binding-reservation-failed binding={binding}");
+                return;
+            }
+        }
+        self.pending.remove(&binding);
+    }
+
+    async fn complete_server_bindings(&mut self, server: ServerId) {
+        let bindings = self
+            .pending
+            .iter()
+            .filter_map(|(&binding, pending)| (pending.server == server).then_some(binding))
+            .collect::<Vec<_>>();
+        for binding in bindings {
+            if let Some(pending) = self.pending.get_mut(&binding) {
+                pending.completed = true;
+            }
+            self.complete_binding(binding).await;
+        }
+    }
+
+    async fn retry_completed_bindings(&mut self) {
+        let bindings = self
+            .pending
+            .iter()
+            .filter_map(|(&binding, pending)| pending.completed.then_some(binding))
+            .collect::<Vec<_>>();
+        for binding in bindings {
+            self.complete_binding(binding).await;
+        }
+    }
+
+    async fn prepare_maintenance(
+        &mut self,
+        command: &Command,
+    ) -> Result<ManagementResult, PortError> {
+        let destination = command
+            .parameters
+            .as_ref()
+            .and_then(|p| p.destination.as_deref())
+            .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
+        self.stop_servers().await?;
+        for pending in self.pending.values_mut() {
+            pending.completed = true;
+        }
+        self.retry_completed_bindings().await;
+        if !self.pending.is_empty() {
+            return Err(error("binding persistence not resolved before maintenance"));
+        }
+        crate::maintenance_prepare::prepare(&self.db, &self.config, HashMap::new(), destination)
+            .await
+    }
+
+    async fn stop_servers(&mut self) -> Result<(), PortError> {
+        let tasks = std::mem::take(&mut self.servers)
+            .into_values()
+            .map(server::Handle::stop)
+            .collect();
+        wait_for_servers(tasks).await
+    }
+}
+
+async fn wait_for_servers(
+    tasks: Vec<tokio::task::JoinHandle<Result<(), PortError>>>,
+) -> Result<(), PortError> {
+    let mut failure = None;
+    for task in tasks {
+        if let Err(cause) = task.await.map_err(error).and_then(|result| result) {
+            failure.get_or_insert(cause);
+        }
+    }
+    failure.map_or(Ok(()), Err)
 }
 async fn seed_uploaded_facts(importer: &Importer) -> Result<(), PortError> {
     let rows = metadata(importer).await?;

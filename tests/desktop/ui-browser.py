@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 OUTPUT = Path(os.environ.get("VAULTSYNCD_UI_ARTIFACTS", "/data/vaultsyncd-dev/vaultsyncd-temp/S152-desktop-mantine/evidence")) / f"desktop-ui-{time.time_ns()}"
 CONFIG = json.loads((REPO / "apps/desktop/src-tauri/tauri.conf.json").read_text())
 POLICY = CONFIG["app"]["security"]["csp"]
-ROUTES = {"/connections": "连接设置", "/bindings": "同步目录", "/files": "文件状态与操作", "/history": "历史与回收站", "/problems": "问题与恢复"}
+ROUTES = {"/connections": "连接设置", "/bindings": "同步目录", "/files": "文件状态与操作", "/history": "历史与回收站", "/problems": "问题与恢复", "/activity": "同步与传输记录"}
 
 
 class DesktopStaticFiles(http.server.SimpleHTTPRequestHandler):
@@ -56,7 +56,7 @@ class DesktopStaticFiles(http.server.SimpleHTTPRequestHandler):
 
 
 PRESENTATION_FIXTURE = r"""() => {
-  const binding = { binding_id: '1'.repeat(32), vault_id: '2'.repeat(32), cache_path: 'C:\\S152\\cache', local_path: 'C:\\S152\\同步目录', mode: 'on_demand', paused: false, detached: false };
+  const binding = { binding_id: '1'.repeat(32), server_id: '7'.repeat(32), vault_id: '2'.repeat(32), cache_path: 'C:\\S152\\cache', local_path: 'C:\\S152\\同步目录', mode: 'on_demand', paused: false, detached: false };
   const state = { binding_id: binding.binding_id, detached: false, paused: false, synchronized: false, dirty: '1', pending: '1', event_lag: '0', failed: '0', intents: '0', materialized: '1', metadata_only: '1', mode_pending: false, offline: '0', partial: '0', recovery: '0', transfers: '0', unknown: '0' };
   const clean = { availability: 'online', busy: false, dirty: false, entry_id: '3'.repeat(32), path: 'clean.txt', pending: false, release_allowed: true, release_reason: '远端已确认，本地内容可手动释放', remote_apply: 'current', residency: 'materialized', status: 'downloaded', synchronized: true, transfer: 'idle' };
   const dirty = { ...clean, entry_id: '4'.repeat(32), path: 'pending.txt', pending: true, dirty: true, release_allowed: false, release_reason: '本地内容尚未确认', synchronized: false, status: 'local_changes' };
@@ -67,7 +67,7 @@ PRESENTATION_FIXTURE = r"""() => {
     window.__S152_CALLS__.push({ command, args });
     switch (command) {
       case 'agent_discover_connection': return { connection: { authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' } };
-      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 7 }, snapshot_version: 'fixture:1', bindings: [state], management: { connection: { authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }, bindings: [binding], problems: [], notices: [] } };
+      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 10 }, snapshot_version: 'fixture:1', bindings: [state], management: { connections: [{ authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }], bindings: [binding], problems: [], notices: [] } };
       case 'agent_list_files': if (window.__S152_FAIL_FILES__) throw { message: 'S152 presentation: file read failed' }; return { files: [clean, dirty, longName] };
       case 'agent_list_history': case 'agent_list_trash': return { items: [item] };
       case 'agent_restore_entry': throw { message: 'PENDING: S152 presentation restore not committed' };
@@ -80,12 +80,8 @@ PRESENTATION_FIXTURE = r"""() => {
 
 
 def nonce_and_layout(page, scheme, width, route):
-    if page.locator(".mantine-AppShell-root").count():
-        expect(page.get_by_role("heading", level=1, name=ROUTES[route], exact=True)).to_be_visible()
-    else:
-        expect(page.get_by_role("dialog", name="登录", exact=True)).to_be_visible()
-        expect(page.get_by_role("button", name="重试", exact=True)).to_be_visible()
-        assert page.get_by_role("navigation").count() == 0
+    expect(page.get_by_role("heading", level=1, name=ROUTES[route], exact=True)).to_be_visible()
+    expect(page.get_by_role("dialog", name="登录", exact=True)).to_have_count(0)
     expect(page.locator("html")).to_have_attribute("data-mantine-color-scheme", scheme)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, route, "document overflow")
     if page.locator(".mantine-AppShell-header").count():
@@ -131,7 +127,7 @@ def main():
                         page.goto(origin + "/#" + route)
                         page.reload()
                         nonce_and_layout(page, scheme, width, route)
-                        assert not page.locator(".mantine-AppShell-root").count()
+                        expect(page.locator(".mantine-AppShell-root")).to_be_visible()
                         assert not page.get_by_text("已同步", exact=True).count()
                         assert not page.evaluate("window.__S152_CSP__"), page.evaluate("window.__S152_CSP__")
                         cases.append({"theme": scheme, "width": width, "route": route})
@@ -212,7 +208,7 @@ def main():
             assert not fixture.evaluate("window.__S152_CSP__"), fixture.evaluate("window.__S152_CSP__")
             assert not errors, errors
             browser.close()
-        result = {"passed": True, "scope": "Chromium presentation; native IPC/CFAPI separately verified by Windows suites", "presentation_only": presentation_only, "cases": cases, "checks": (["50 disconnected route/theme/width layouts", "mobile navigation"] if cases else []) + ["48px header", "no document overflow", "strict nonce CSP", "no fabricated sync success", "initial connected badge and feedback agree", "downloaded/local_changes status labels", "theme persistence", "keyboard skip", "release/detach/restore modal focus trap/Escape/return", "dirty/pending action guards", "modal cancellation sends no mutation", "failed file read cannot report success", "pending restore cannot report success", "no browser credential storage", "no page errors"]}
+        result = {"passed": True, "scope": "Chromium presentation; native IPC/CFAPI separately verified by Windows suites", "presentation_only": presentation_only, "cases": cases, "checks": (["60 disconnected route/theme/width layouts", "mobile navigation"] if cases else []) + ["48px header", "no document overflow", "strict nonce CSP", "no fabricated sync success", "initial connected badge and feedback agree", "downloaded/local_changes status labels", "theme persistence", "keyboard skip", "release/detach/restore modal focus trap/Escape/return", "dirty/pending action guards", "modal cancellation sends no mutation", "failed file read cannot report success", "pending restore cannot report success", "no browser credential storage", "no page errors"]}
         (OUTPUT / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2))
         print(f"S152 desktop UI passed: {OUTPUT}")
     finally:

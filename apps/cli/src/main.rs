@@ -40,14 +40,15 @@ const USAGE: &str = "\
   subscribe-status [--after-version <版本>]
                                  长轮询一次状态；游标过期时返回全量
   connection                     查看连接与证书配置（不返回凭据）
+  connections                    列出本机配置的全部服务器
   set-connection --server-id <ID> --server-url <URL> [--ca-file <文件>]
-  login --username <账号>         从标准输入读取密码后登录
-  logout
-  vaults                          列出已授权 Vault
+  login --username <账号> [--server-id <ID>]  从标准输入读取密码后登录
+  logout [--server-id <ID>]
+  vaults [--server-id <ID>]       列出已授权 Vault
   bindings                       列出持久 Binding
   files --binding-id <ID> [--cursor <ID>]  读取文件状态当前页
   create-binding --binding-id <ID> --vault-id <ID> --local-path <目录>
-                 --cache-path <目录> --mode <full|on_demand>
+                 --cache-path <目录> --mode <full|on_demand> [--server-id <ID>]
   pause --binding-id <ID>
   resume --binding-id <ID>
   mode --binding-id <ID> --mode <full|on_demand>
@@ -193,7 +194,7 @@ async fn run(
         Some(CommandParameters {
             username: Some(username),
             password: Some(password),
-            ..Default::default()
+            ..parameters.unwrap_or_default()
         })
     } else {
         parameters
@@ -320,6 +321,7 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
             )
         }
         "connection" => no_options(rest, CommandName::GetConnection)?,
+        "connections" => no_options(rest, CommandName::ListConnections)?,
         "set-connection" => {
             let opts = parse_options(rest, &["--server-id", "--server-url", "--ca-file"])?;
             (
@@ -334,12 +336,19 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
             )
         }
         "login" => {
-            let opts = parse_options(rest, &["--username"])?;
+            let opts = parse_options(rest, &["--username", "--server-id"])?;
             let username = required(&opts, "--username")?;
-            (CommandName::Login, None, Some(username))
+            (CommandName::Login, server_parameters(&opts), Some(username))
         }
-        "logout" => no_options(rest, CommandName::Logout)?,
-        "vaults" => no_options(rest, CommandName::ListVaults)?,
+        "logout" | "vaults" => {
+            let opts = parse_options(rest, &["--server-id"])?;
+            let name = if command == "logout" {
+                CommandName::Logout
+            } else {
+                CommandName::ListVaults
+            };
+            (name, server_parameters(&opts), None)
+        }
         "bindings" => no_options(rest, CommandName::ListBindings)?,
         "files" => {
             let opts = parse_options(rest, &["--binding-id", "--cursor"])?;
@@ -362,11 +371,13 @@ fn parse(args: &[String]) -> Result<Action, Failure> {
                     "--local-path",
                     "--cache-path",
                     "--mode",
+                    "--server-id",
                 ],
             )?;
             (
                 CommandName::CreateBinding,
                 Some(CommandParameters {
+                    server_id: optional(&opts, "--server-id"),
                     binding_id: Some(required(&opts, "--binding-id")?),
                     vault_id: Some(required(&opts, "--vault-id")?),
                     local_path: Some(required(&opts, "--local-path")?),
@@ -607,6 +618,13 @@ fn required(values: &HashMap<&'static str, String>, key: &'static str) -> Result
         .ok_or_else(|| Failure::usage(format!("缺少 {key}")))
 }
 
+fn server_parameters(values: &HashMap<&'static str, String>) -> Option<CommandParameters> {
+    optional(values, "--server-id").map(|server_id| CommandParameters {
+        server_id: Some(server_id),
+        ..Default::default()
+    })
+}
+
 fn optional(values: &HashMap<&'static str, String>, key: &'static str) -> Option<String> {
     values.get(key).cloned()
 }
@@ -626,6 +644,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::DetachBinding => "detach",
         CommandName::ExportRecovery => "export-recovery",
         CommandName::GetConnection => "connection",
+        CommandName::ListConnections => "connections",
         CommandName::DiscoverConnection => "discover-connection",
         CommandName::SetConnection => "set-connection",
         CommandName::Login => "login",
@@ -670,6 +689,10 @@ fn validate_result(name: CommandName, result: &GetStatusResult) -> Result<(), Fa
             .and_then(|m| m.items.as_ref())
             .is_none()
             .then_some("远端条目列表"),
+        CommandName::ListConnections => management
+            .and_then(|m| m.connections.as_ref())
+            .is_none()
+            .then_some("服务器列表"),
         CommandName::GetConnection
         | CommandName::DiscoverConnection
         | CommandName::SetConnection
@@ -734,7 +757,14 @@ fn render_success(json: bool, name: CommandName, result: &GetStatusResult) {
             );
         }
     }
-    if let Some(connection) = management.connection.as_ref() {
+    let connections = management
+        .connections
+        .as_deref()
+        .unwrap_or(management.connection.as_slice());
+    if management.connections.is_some() && connections.is_empty() {
+        println!("连接：(无)");
+    }
+    for connection in connections {
         println!(
             "连接：server={} url={} 登录={}",
             connection.server_id,
@@ -752,8 +782,9 @@ fn render_success(json: bool, name: CommandName, result: &GetStatusResult) {
         }
         for binding in bindings {
             println!(
-                "Binding {} vault={} path={} cache={} mode={}{}{}",
+                "Binding {} server={} vault={} path={} cache={} mode={}{}{}",
                 binding.binding_id,
+                binding.server_id.as_deref().unwrap_or("未知"),
                 binding.vault_id,
                 binding.local_path,
                 binding.cache_path,
@@ -976,6 +1007,7 @@ mod tests {
             CommandName::ExportRecovery
         );
         assert_eq!(ipc(&["connection"]).0, CommandName::GetConnection);
+        assert_eq!(ipc(&["connections"]).0, CommandName::ListConnections);
         assert_eq!(
             ipc(&[
                 "set-connection",
@@ -994,6 +1026,36 @@ mod tests {
         assert_eq!(login.0, CommandName::Login);
         assert_eq!(login.2.as_deref(), Some("owner"));
         assert!(login.1.is_none());
+    }
+
+    #[test]
+    fn parses_explicit_server_for_each_connection_operation() {
+        let id = "a5".repeat(16);
+        for args in [
+            vec!["login", "--username", "owner", "--server-id", &id],
+            vec!["logout", "--server-id", &id],
+            vec!["vaults", "--server-id", &id],
+            vec![
+                "create-binding",
+                "--binding-id",
+                "b",
+                "--vault-id",
+                "v",
+                "--local-path",
+                "C:/sync",
+                "--cache-path",
+                "C:/cache",
+                "--mode",
+                "full",
+                "--server-id",
+                &id,
+            ],
+        ] {
+            assert_eq!(
+                ipc(&args).1.unwrap().server_id.as_deref(),
+                Some(id.as_str())
+            );
+        }
     }
 
     #[test]

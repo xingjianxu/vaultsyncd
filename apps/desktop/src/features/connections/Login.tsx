@@ -1,38 +1,38 @@
-import { useState } from "react";
-import { Alert, Button, Modal, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
+import { useState, type FormEvent } from "react";
+import { Group, PasswordInput, Stack, TextInput } from "@mantine/core";
+import { Button } from "@vaultsyncd/ui";
 import type { ConnectionInfo } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
-import { ConnectionForm } from "./Connections";
 
-declare const __APP_VERSION__: string;
-
-type LoginProps = {
-  agent: AgentClient; connection?: ConnectionInfo; changed(): Promise<void>;
-  run(action: () => Promise<void>): void; busy: boolean; error: string; retry(): void;
-};
-export function Login(props: LoginProps) {
-  return <Modal opened onClose={() => {}} title="登录" centered size="sm" withCloseButton={false} closeOnEscape={false} closeOnClickOutside={false}>
-    <Stack>
-      {props.error && <Alert color="red" role="alert">{props.error}</Alert>}
-      {props.connection ? <LoginForm {...props} connection={props.connection} /> : <>
-        <Text role="status">{props.error ? "无法读取登录状态。" : "正在读取登录状态…"}</Text>
-        {props.error && <Button disabled={props.busy} onClick={props.retry}>重试</Button>}
-      </>}
-      <Text size="xs" c="dimmed" ta="center" data-client-version>vaultsyncd {__APP_VERSION__}</Text>
-    </Stack>
-  </Modal>;
-}
-function LoginForm({ agent, connection, changed, run, busy }: LoginProps & { connection: ConnectionInfo }) {
-  const [username, setUsername] = useState(connection.username ?? "");
+export function Login({ agent, connection, run, busy, onSaved, onCancel }: {
+  agent: AgentClient; connection: ConnectionInfo; run(action: () => Promise<void>): void;
+  busy: boolean; onSaved(): Promise<void>; onCancel(): void;
+}) {
   const [password, setPassword] = useState("");
-  async function authenticate() {
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const username = new FormData(event.currentTarget).get("username");
+    if (typeof username !== "string" || !username || !password) return;
     const secret = password;
     setPassword("");
-    const result = await agent.login(username, secret);
-    if (!result.connection?.authenticated) throw new Error("登录未确认，请重新登录。");
+    run(async () => {
+      const result = await agent.login(connection.server_id, username, secret);
+      if (result.connection?.server_id !== connection.server_id || !result.connection.authenticated) {
+        throw new Error("登录未确认，请重新登录。");
+      }
+      await onSaved();
+    });
   }
-  return <ConnectionForm agent={agent} connection={connection} changed={changed} run={run} busy={busy} authenticate={authenticate}>
-    <TextInput label="用户名" name="username" autoComplete="username" required value={username} disabled={busy} onChange={event => setUsername(event.currentTarget.value)} />
-    <PasswordInput label="密码" name="password" autoComplete="current-password" required value={password} disabled={busy} onChange={event => setPassword(event.currentTarget.value)} />
-  </ConnectionForm>;
+
+  return <form onSubmit={submit}><Stack>
+    <TextInput label="用户名" name="username" autoComplete="username" required defaultValue={connection.username} disabled={busy} />
+    <PasswordInput label="密码" name="password" autoComplete="current-password" required value={password}
+      disabled={busy} onChange={event => setPassword(event.currentTarget.value)} />
+    <Group>
+      <Button type="submit" disabled={busy}>登录</Button>
+      <Button variant="default" disabled={busy} onClick={onCancel}>取消</Button>
+    </Group>
+  </Stack></form>;
 }

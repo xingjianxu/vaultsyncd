@@ -33,7 +33,8 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         ("search", &p.search),
     ];
     let (required, optional): (&[&str], &[&str]) = match command.name {
-        C::GetStatus | C::ListBindings | C::GetConnection | C::Logout | C::ListVaults => (&[], &[]),
+        C::GetStatus | C::ListBindings | C::GetConnection | C::ListConnections => (&[], &[]),
+        C::Logout | C::ListVaults => (&[], &["server_id"]),
         C::PrepareMaintenance => (&["destination"], &[]),
         C::SubscribeStatus => (&[], &["after_version"]),
         C::ListFiles => (&["binding_id"], &["cursor"]),
@@ -41,7 +42,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         C::ClaimNotification => (&["notification_key", "notification_generation"], &[]),
         C::CreateBinding => (
             &["binding_id", "vault_id", "local_path", "cache_path", "mode"],
-            &[],
+            &["server_id"],
         ),
         C::PauseBinding | C::ResumeBinding | C::DetachBinding => (&["binding_id"], &[]),
         C::DownloadEntry | C::ReleaseEntry => (&["binding_id", "entry_id", "operation_id"], &[]),
@@ -50,7 +51,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
         C::ExportRecovery => (&["binding_id", "destination"], &[]),
         C::DiscoverConnection => (&["server_url"], &["ca_file"]),
         C::SetConnection => (&["server_id", "server_url"], &["ca_file"]),
-        C::Login => (&["username", "password"], &[]),
+        C::Login => (&["username", "password"], &["server_id"]),
         C::GetRules => (&["binding_id"], &["entry_id"]),
         C::SetRules => (&["binding_id", "rules", "rules_version"], &[]),
         C::SetMode => (&["binding_id", "mode"], &[]),

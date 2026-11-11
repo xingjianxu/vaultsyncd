@@ -26,5 +26,6 @@
   {"request_id":"claim-notice","ipc_version":{"major":2,"minor":4},"command":{"name":"claim_notification","parameters":{"notification_key":"vault:11111111111111111111111111111111:MOUNT_FAILED","notification_generation":"1"}}},
   {"request_id":"s105-get_rules","ipc_version":{"major":2,"minor":6},"command":{"name":"get_rules","parameters":{"binding_id":"a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"}}},
   {"request_id":"s105-set_rules","ipc_version":{"major":2,"minor":6},"command":{"name":"set_rules","parameters":{"binding_id":"a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5","rules_version":"s105-example","rules":""}}},
-  {"request_id":"activity","ipc_version":{"major":2,"minor":8},"command":{"name":"list_activity","parameters":{"binding_id":"11111111111111111111111111111111","cursor":"9007199254740993","direction":"download"}}}
+  {"request_id":"activity","ipc_version":{"major":2,"minor":8},"command":{"name":"list_activity","parameters":{"binding_id":"11111111111111111111111111111111","cursor":"9007199254740993","direction":"download"}}},
+  {"request_id":"connections","ipc_version":{"major":2,"minor":10},"command":{"name":"list_connections"}}
 ]

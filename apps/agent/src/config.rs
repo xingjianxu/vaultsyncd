@@ -8,7 +8,7 @@ use std::{
 use vaultsyncd_domain::ids::{BindingId, DeviceId, ServerId, VaultId};
 
 /// One authenticated server endpoint and its explicit development trust additions.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Stable server identity; it scopes Credential Manager and existing bindings.
@@ -69,6 +69,36 @@ fn windows_absolute(path: &Path) -> bool {
         && matches!(value[2], b'\\' | b'/')
         && !value.contains(&0)
 }
+impl ServerConfig {
+    pub(crate) fn validate(&self) -> io::Result<()> {
+        if ServerId::from_hex(&self.id)
+            .map_err(|_| invalid())?
+            .to_string()
+            != self.id
+        {
+            return Err(invalid());
+        }
+        let url = url::Url::parse(&self.url).map_err(|_| invalid())?;
+        let loopback = matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        );
+        if !url.has_host()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !(url.scheme() == "https"
+                || (url.scheme() == "http" && self.development_http && loopback))
+        {
+            return Err(invalid());
+        }
+        if self.ca_file.as_ref().is_some_and(|p| !windows_absolute(p)) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+}
 impl AgentConfig {
     /// Read at most 1 MiB. Unknown keys (including plaintext credential fields) are errors.
     pub fn load(path: &Path) -> io::Result<Self> {
@@ -90,38 +120,15 @@ impl AgentConfig {
     }
     /// Fail before acquiring database access when any supplied setting is unsupported.
     pub fn validate(&self) -> io::Result<()> {
-        if ServerId::from_hex(&self.server.id)
+        self.server.validate()?;
+        if DeviceId::from_hex(&self.device_id)
             .map_err(|_| invalid())?
             .to_string()
-            != self.server.id
-            || DeviceId::from_hex(&self.device_id)
-                .map_err(|_| invalid())?
-                .to_string()
-                != self.device_id
-        {
-            return Err(invalid());
-        }
-        let url = url::Url::parse(&self.server.url).map_err(|_| invalid())?;
-        let loopback = matches!(
-            url.host_str(),
-            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-        );
-        if !url.has_host()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || !(url.scheme() == "https"
-                || (url.scheme() == "http" && self.server.development_http && loopback))
+            != self.device_id
         {
             return Err(invalid());
         }
         if !windows_absolute(&self.state_dir)
-            || self
-                .server
-                .ca_file
-                .as_ref()
-                .is_some_and(|p| !windows_absolute(p))
             || !(250..=60000).contains(&self.poll_millis)
             || self.bindings.len() > 1024
         {

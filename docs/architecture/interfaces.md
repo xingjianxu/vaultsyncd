@@ -2384,6 +2384,9 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S081 桌面连接与绑定管理
 
+- S188—S191 将本机 IPC 升为 2.10， `list_connections` 和状态应答提供 `ManagementResult.connections`，空配置返回空数组。`get_connection` 和省略 `server_id` 的旧连接命令只在有一条连接时适用。`set_connection` 以确认的 ServerId 保存连接；变更现有地址须通过 capabilities 身份复核。`login/logout/list_vaults/create_binding` 可显式携带 `server_id`。新增绑定必须解析到已配置服务器；`BindingInfo.server_id` 由持久绑定提供。绑定范围的命令从持久 BindingId 解析服务器，调用者不能覆盖路由。
+- 客户端 schema 15 的 `agent_connections` 按 ServerId 保存 URL/CA/回环开发传输标记。`agent_login_profiles` 和 `vaultsyncd/session/{ServerId}` 保留现有凭据键。一个用户 agent 维护同一个 writer/维护协调器，按服务器隔离 HTTP 及同步运行状态。
+
 - S166：IPC minor 2.7 增加 `discover_connection(server_url,ca_file?) → ManagementResult.connection`，只读、无登录凭据，不改变当前配置或 WinCred；返回 `authenticated=false` 的候选。`agent_discover_connection` 仅内置主窗口 capability 可调。React 延迟 500ms 自动读取，地址/CA 编辑、取消、离开页面会使在途结果失效，重新读取可重试；完整 Server ID 只读，独立点击“确认并保存连接”。`set_connection` 保存前用无凭据客户端重读并核对确认的 ServerId，失败保留现有状态，已有绑定仍拒绝更换身份（`BINDING_BLOCKED`）；保留 HTTPS/附加 CA/显式回环开发 HTTP 规则。旧 GUI/CLI 的显式编号输入仍兼容，保存需能连接服务器。身份请求总期限 3 秒、连接 2 秒，低于普通 IPC 的 5 秒；过期确认在保存前复核应答通道。无远端 wire 或数据库迁移。
 
 - S114：壳新增固定 `select_local_directory()`，仅 Windows 内置 main 窗口 capability 授权。输入无路径/句柄，owner 从 Tauri 窗口取得；在独立 STA 上以 `IFileOpenDialog` + `FOS_PICKFOLDERS/FORCEFILESYSTEM/PATHMUSTEXIST/NOCHANGEDIR` 选择现有单目录，输出绝对路径 `string`，取消 `null`，失败为本地明确错误。它不属于 agent IPC；前端只读展示所选路径且未选前禁止创建，绑定仍由 agent 校验路径/重叠/卷身份。
@@ -2750,6 +2753,8 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 
 ## S176 — 桌面登录门禁与本机登录资料（客户端schema14 / IPC2.9）
 
+S188—S191 已取代本节的启动登录门禁和单连接交互。以下保留 schema14 与 IPC2.9 的历史验收入口。当前契约见本文件 S081 中的 IPC2.10 增量及下一节。
+
 - `App` 先经agent IPC读取状态。首次未确认或`connection.authenticated=false`仅挂载不可关闭的Mantine登录框；密码输入仅存组件内存，失败清空，成功卸载。成功登录及agent持久化应答后刷新状态，保留hash深链进入正式界面。退出或已确认需要重新认证时卸载整个正式界面；临时IPC/网络错误不冒充凭据失效。
 - 登录表单复用S166的公开身份发现和保存前重核；服务器地址、可选CA、只读Server ID、用户名和密码在一个表单内，由“登录”确认身份及连接后调用既有`login`。失败保留用户名并重新发现，地址/CA编辑继续使旧结果失效；已有绑定禁止换ServerId。GUI不访问在线DB或凭据库。
 - `api/local-ipc.schema.json`是唯一wire编辑源，IPC2.9仅增加可选`ConnectionInfo.username`（旧资料缺省），`authenticated`为持有凭据且`!session.needs_reauth()`，不表示服务器实时在线。发现结果不泄露当前账号；凭据或密码不进入IPC响应。
@@ -2773,3 +2778,14 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 - 程序清单只用于发布/显式自动更新：`verify_program` / `verify_zip` 不再位于普通启动链；更新下载、候选归档安全与备份/恢复完整性仍验证。GUI 与后台来自不同目录时，托盘更新在联网和退出 GUI 前提示安全 Stop/重开目标目录，避免用 B 的目标去恢复 A 的进程。
 - 旧 v0.1.7 解包器实测拒绝新十文件包，无法靠新二进制修复已安装的更新器；首次新布局发行必须声明一次性手工迁移（旧版安全停止，手工下载完整新包后任意目录直开，状态保留）。本卡不发行/改写旧附件，不承诺旧托盘能直接升级。此后新客户端自动更新使用新集合。
 - 通知初始化不再读取程序清单，未保存设置时统一默认关闭，保留显式开关；WebView2 需求由实际 WebView 创建决定，不再另做 ZIP 专属注册表前置检查。无 wire/schema/同步语义或服务端产物变化。
+
+
+## S188—S191 多服务器运行与状态迁移
+
+客户端 schema15 将单连接迁入 `agent_connections`。旧 `vault:<VaultId>:<cause>` 通知按绑定身份、原单连接或唯一 Vault 所属服务器补成 `server:<ServerId>:vault:<VaultId>:<cause>`，保留发生次数、恢复/已读、活动代际与领取状态。来源不明确的历史行保留原键，界面显示，按绑定查询时不归到任意服务器。`Notice.server_id` 是可选字段。
+
+Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与维护屏障。每台服务器的独立任务管理凭据、HTTP、SSE 提示、同步循环及命令队列。创建绑定先保留全局路径，完成后核对持久结果，调用方超时也保留已落库绑定。维护准备等待所有服务器任务排空，再执行原有恢复导出。实际 CFAPI 断开/排空失败时保留旧持久入口及可见连接，将该服务器置为离线/NEEDS_RECOVERY，并围栏本进程内的再次组装；重启后重核。
+
+`ApiClient::with_expected_server` 在登录、令牌刷新、业务请求和 SSE 前使用公开 capabilities 复核身份。错配经 `ServerIdentityMismatch` 转为 `NEEDS_RECOVERY`。恢复代际检查用无凭据请求核对持久绑定的 ServerId，其他服务器的会话继续运行。
+
+新远端事件的本地 OpId 包含 BindingId，避免同一事件在不同绑定碰撞。重启处理旧未完成批次时，只复用确实属于当前绑定的历史 pending/action 身份，保留重试和恢复证据。`tests/platform/windows/run-native-multi-server.sh` 是双 HTTPS 实例与单 Windows agent 的受控验证入口。

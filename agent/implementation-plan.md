@@ -1862,3 +1862,28 @@ S001 初始化完整编号；S002 以后工具可以仅输出未完成行及直�
 - 范围：同步根 Cargo、前端/Tauri 镜像与 Cargo.lock（不改协议/schema/生成器版本与业务代码）；推送 master；用 `tools/release.sh` 构建 Windows x64 便携 ZIP；`tools/publish-release.sh --stable` 上传唯一 ZIP 并设 Latest，成为托盘自动更新渠道的正式版来源。
 - 验收：`cargo xtask version --check`、`cargo fmt --check`、`cargo xtask generate --check`、`pnpm install --frozen-lockfile --offline`、真实构建的 SHA256SUMS 校验、`--dry-run` 计划与远端附件大小/digest、Latest 归属及标签指向核对；不声称 Windows 原生复验或首发门禁通过。
 - 交接：`agent/tasks/S182.md`；不改动已发布 Release，不触发服务端部署。
+
+### S188 — 多服务器连接存储与迁移
+
+- 用户要求 Windows 客户端同时连接不同服务器，见 design §17.3/§18.1/§24 ADR-033。
+- 按 ServerId 保存连接；从 schema 14 单连接迁移，复用现有 Windows Credential Manager 键和账号资料，保留已有绑定、游标与待办。
+- 验收覆盖空库、旧库迁移、重复启动、故障重试、旧版写入围栏与备份恢复。
+- 交接记录在 `agent/tasks/S188.md`。
+
+### S189 — 按服务器运行同步并路由命令
+
+- 同用户 agent 内按 ServerId 管理连接、会话及同步循环；连接命令显式选定服务器，文件、历史、恢复等由 BindingId 路由；本机 IPC 2.10 与 CLI/Tauri 桥同步更新。
+- 验收覆盖身份复核、服务器故障与认证隔离、全局目录重叠、绑定身份不变；生成一致、宿主测试、Windows 严格检查。
+- 交接记录在 `agent/tasks/S189.md`。
+
+### S190 — 桌面直接打开绑定列表
+
+- Mantine 主界面始终可用，连接设置按服务器添加/登录/退出/编辑，绑定选择服务器与已授权 Vault。
+- 验收覆盖零连接启动、两台服务器选择、认证过期不退回登录、切换后丢弃迟到结果；桌面构建、浏览器及真实 WebView 验证。
+- 交接记录在 `agent/tasks/S190.md`。
+
+### S191 — Windows 双服务器原生验收
+
+- 同一 agent 与两个隔离 HTTPS 服务端使用独立 NTFS 目录，覆盖双向同步、按需 CFAPI、重启、单服务器离线和登出。
+- 验收按字节验证各服务器与本机的来源隔离，验证单服务器故障时另一台仍同步，核对旧状态迁移与正常路径。
+- 交接记录在 `agent/tasks/S191.md`。

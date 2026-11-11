@@ -3,16 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface ConnectionAddress { serverUrl: string; caFile?: string }
 export interface ConnectionInput extends ConnectionAddress { serverId: string }
-export interface BindingInput { bindingId: string; vaultId: string; localPath: string; mode: "full" | "on_demand" }
+export interface BindingInput { bindingId: string; serverId: string; vaultId: string; localPath: string; mode: "full" | "on_demand" }
 export interface RestoreInput { bindingId:string;entryId:string;operationId:string;baseRevision:string;versionId?:string }
 export interface NotificationSettings { enabled:boolean;delivered:number;blocked:number;last_error?:string }
 export interface AgentClient {
   getStatus(): Promise<GetStatusResult>;
   discoverConnection(input: ConnectionAddress): Promise<ManagementResult>;
   setConnection(input: ConnectionInput): Promise<ManagementResult>;
-  login(username: string, password: string): Promise<ManagementResult>;
-  logout(): Promise<ManagementResult>;
-  listVaults(): Promise<ManagementResult>;
+  login(serverId: string, username: string, password: string): Promise<ManagementResult>;
+  logout(serverId: string): Promise<ManagementResult>;
+  listVaults(serverId: string): Promise<ManagementResult>;
   selectDirectory(): Promise<string | null>;
   createBinding(input: BindingInput): Promise<ManagementResult>;
   pauseBinding(bindingId: string): Promise<ManagementResult>;
@@ -59,9 +59,9 @@ export const nativeAgent: AgentClient = {
   getStatus: () => call("agent_get_status"),
   discoverConnection: input => call("agent_discover_connection", { input }),
   setConnection: input => call("agent_set_connection", { input }),
-  login: (username, password) => call("agent_login", { username, password }),
-  logout: () => call("agent_logout"),
-  listVaults: () => call("agent_list_vaults"),
+  login: (serverId, username, password) => call("agent_login", { serverId, username, password }),
+  logout: serverId => call("agent_logout", { serverId }),
+  listVaults: serverId => call("agent_list_vaults", { serverId }),
   selectDirectory: () => call("select_local_directory"),
   createBinding: input => call("agent_create_binding", { input }),
   pauseBinding: bindingId => call("agent_pause_binding", { bindingId }),

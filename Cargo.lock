@@ -5205,6 +5205,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-rustls",
+ "vaultsyncd-domain",
  "vaultsyncd-protocol",
  "vaultsyncd-transfer",
 ]

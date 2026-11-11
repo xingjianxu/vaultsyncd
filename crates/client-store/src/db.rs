@@ -605,6 +605,14 @@ mod tests {
         migrator(&dir.migrations(&[(BASELINE_FILE, BASELINE_SQL)])).await
     }
 
+    fn write_migrations_through(dir: &Path, version: i64) {
+        std::fs::create_dir(dir).unwrap();
+        for migration in MIGRATOR.iter().filter(|m| m.version <= version) {
+            let name = format!("{:04}_{}.sql", migration.version, migration.description);
+            std::fs::write(dir.join(name), migration.sql.as_bytes()).unwrap();
+        }
+    }
+
     /// 比本二进制多一版迁移的合成集合：验证“schema 比二进制新”的拒绝，而不是提前发布假迁移。
     async fn next_migrator(dir: &TestDir) -> Migrator {
         let migration_dir = dir.path.join("next-migrations");
@@ -656,6 +664,12 @@ mod tests {
 
         assert_eq!(database.schema_version(), target_schema_version());
         assert!(target_schema_version() >= 9, "必须包含受控释放迁移");
+        assert!(
+            crate::connections::list(&database)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(database.path(), path.as_path());
         assert_eq!(
             scalar::<i32>(&path, "PRAGMA application_id").await,
@@ -694,7 +708,7 @@ mod tests {
             tables.into_iter().map(|(name,)| name).collect::<Vec<_>>(),
             vec![
                 "agent_actions".to_owned(),
-                "agent_connection".to_owned(),
+                "agent_connections".to_owned(),
                 "agent_evidence".to_owned(),
                 "agent_login_profiles".to_owned(),
                 "agent_versions".to_owned(),
@@ -1527,17 +1541,7 @@ mod tests {
         let dir = TestDir::new("s176-login-profile");
         let path = dir.database();
         let prior = dir.path.join("v13");
-        std::fs::create_dir(&prior).unwrap();
-        for migration in MIGRATOR.iter().filter(|m| m.version <= 13) {
-            std::fs::write(
-                prior.join(format!(
-                    "{:04}_{}.sql",
-                    migration.version, migration.description
-                )),
-                migration.sql.as_bytes(),
-            )
-            .unwrap();
-        }
+        write_migrations_through(&prior, 13);
         let previous = migrator(&prior).await;
         let old = Database::open_with(&path, &previous).await.unwrap();
         let binding = crate::test_support::seed_binding(&old, 0x76).await;
@@ -1549,6 +1553,15 @@ mod tests {
             .unwrap();
         old.close().await;
         let db = Database::open(&path).await.unwrap();
+        assert_eq!(
+            crate::connections::list(&db).await.unwrap(),
+            [crate::connections::ConnectionRecord {
+                server_id: crate::test_support::server_id(0x76),
+                server_url: "https://sync.example".into(),
+                ca_file: None,
+                development_http: false,
+            }]
+        );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_login_profiles")
                 .fetch_one(db.pool())
@@ -1603,6 +1616,231 @@ mod tests {
                 .await
                 .unwrap(),
             23
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_server_upgrade_preserves_legacy_connection_and_binding_state() {
+        use crate::connections::{self, ConnectionRecord};
+        use crate::test_support::{enqueue_op, op_id, seed_binding, server_id};
+
+        let dir = TestDir::new("s188-upgrade-v14");
+        let path = dir.database();
+        let prior = dir.path.join("v14");
+        write_migrations_through(&prior, 14);
+        let previous = migrator(&prior).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = seed_binding(&old, 0x31).await;
+        let old_connection = ConnectionRecord {
+            server_id: server_id(0x01),
+            server_url: "http://localhost:4321".into(),
+            ca_file: Some(r"C:\test\trusted-ca.pem".into()),
+            development_http: true,
+        };
+        let mut tx = old.begin_write().await.unwrap();
+        sqlx::query("INSERT INTO agent_connection VALUES (1, ?, ?, ?)")
+            .bind(old_connection.server_id.to_string())
+            .bind(&old_connection.server_url)
+            .bind(&old_connection.ca_file)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO agent_login_profiles VALUES (?, '原账号')")
+            .bind(old_connection.server_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE bindings SET received_seq = 12, applied_seq = 9 WHERE id = ?")
+            .bind(binding.as_bytes().as_slice())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        enqueue_op(&mut tx, binding, op_id(0x42)).await;
+        tx.commit().await.unwrap();
+        old.close().await;
+
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(
+            connections::list(&upgraded).await.unwrap().as_slice(),
+            std::slice::from_ref(&old_connection)
+        );
+        let second = ConnectionRecord {
+            server_id: server_id(0x02),
+            server_url: "https://second.example".into(),
+            ca_file: None,
+            development_http: false,
+        };
+        let updated_first = ConnectionRecord {
+            server_url: "https://first.example".into(),
+            ca_file: None,
+            development_http: false,
+            ..old_connection
+        };
+        connections::upsert(&upgraded, &second).await.unwrap();
+        connections::upsert(&upgraded, &updated_first)
+            .await
+            .unwrap();
+        connections::upsert(&upgraded, &second).await.unwrap();
+        upgraded.close().await;
+
+        let reopened = Database::open(&path).await.unwrap();
+        assert_eq!(
+            connections::list(&reopened).await.unwrap(),
+            [updated_first, second]
+        );
+        assert_eq!(
+            scalar::<String>(&path, "SELECT username FROM agent_login_profiles").await,
+            "原账号"
+        );
+        assert_eq!(
+            scalar::<String>(&path, "SELECT lower(hex(server_id)) FROM bindings").await,
+            server_id(0x01).to_string()
+        );
+        assert_eq!(
+            scalar::<i64>(&path, "SELECT received_seq FROM bindings").await,
+            12
+        );
+        assert_eq!(
+            scalar::<i64>(&path, "SELECT applied_seq FROM bindings").await,
+            9
+        );
+        assert_eq!(
+            scalar::<String>(&path, "SELECT lower(hex(op_id)) FROM pending_ops").await,
+            op_id(0x42).to_string()
+        );
+        reopened.close().await;
+        assert!(matches!(
+            Database::open_with(&path, &previous).await.unwrap_err(),
+            DbError::SchemaTooNew { supported: 14, .. }
+        ));
+
+        let restored = dir.path.join("restored.sqlite");
+        std::fs::copy(
+            migration_backup_path(&path, 14, target_schema_version()),
+            &restored,
+        )
+        .unwrap();
+        let restored = Database::open_with(&restored, &previous).await.unwrap();
+        assert_eq!(
+            scalar::<String>(restored.path(), "SELECT server_url FROM agent_connection").await,
+            "http://localhost:4321"
+        );
+        assert_eq!(
+            scalar::<String>(restored.path(), "SELECT lower(hex(op_id)) FROM pending_ops").await,
+            op_id(0x42).to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_server_migration_scopes_notifications_without_repeating_claimed_episodes() {
+        for origin in ["singleton", "unique-binding", "ambiguous"] {
+            let singleton = origin == "singleton";
+            let dir = TestDir::new("s188-notification-scope");
+            let path = dir.database();
+            let prior = dir.path.join("v14");
+            write_migrations_through(&prior, 14);
+            let previous = migrator(&prior).await;
+            let old = Database::open_with(&path, &previous).await.unwrap();
+            crate::test_support::seed_binding(&old, 0x31).await;
+            if origin == "ambiguous" {
+                let other = crate::test_support::seed_binding(&old, 0x32).await;
+                sqlx::query("UPDATE bindings SET server_id=? WHERE id=?")
+                    .bind([2u8; 16].as_slice())
+                    .bind(other.as_bytes().as_slice())
+                    .execute(old.pool())
+                    .await
+                    .unwrap();
+            }
+            if singleton {
+                sqlx::query(
+                    "INSERT INTO agent_connection VALUES (1, ?, 'https://first.example', NULL)",
+                )
+                .bind("01".repeat(16))
+                .execute(old.pool())
+                .await
+                .unwrap();
+            }
+            let key = format!("vault:{}:CONFLICT_COPY", "03".repeat(16));
+            let orphan = format!("vault:{}:MOUNT_FAILED", "99".repeat(16));
+            for name in [&key, &orphan] {
+                sqlx::query("INSERT INTO notifications(dedupe_key,code,state,is_read,occurrences,generation,delivery_claimed) VALUES(?,'NEEDS_RECOVERY','resolved',1,7,3,1)")
+                    .bind(name).execute(old.pool()).await.unwrap();
+            }
+            old.close().await;
+            let upgraded = Database::open(&path).await.unwrap();
+            let scoped = if origin == "ambiguous" {
+                key
+            } else {
+                format!("server:{}:{key}", "01".repeat(16))
+            };
+            let record: (String, bool, i64, i64, bool) = sqlx::query_as(
+                "SELECT state,is_read,occurrences,generation,delivery_claimed FROM notifications WHERE dedupe_key=?"
+            ).bind(&scoped).fetch_one(upgraded.pool()).await.unwrap();
+            assert_eq!(record, ("resolved".into(), true, 7, 3, true));
+            let orphan_key: String = sqlx::query_scalar(
+                "SELECT dedupe_key FROM notifications WHERE dedupe_key LIKE '%MOUNT_FAILED'",
+            )
+            .fetch_one(upgraded.pool())
+            .await
+            .unwrap();
+            assert_eq!(
+                orphan_key,
+                if singleton {
+                    format!("server:{}:{orphan}", "01".repeat(16))
+                } else {
+                    orphan
+                }
+            );
+            let mut tx = upgraded.begin_write().await.unwrap();
+            assert!(
+                !crate::notifications::delivery::claim(&mut tx, &scoped, 3)
+                    .await
+                    .unwrap()
+            );
+            tx.commit().await.unwrap();
+            upgraded.close().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_connection_migration_rolls_back_and_retries() {
+        let dir = TestDir::new("s188-migration-retry");
+        let path = dir.database();
+        let prior = dir.path.join("v14");
+        write_migrations_through(&prior, 14);
+        let previous = migrator(&prior).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        sqlx::query("INSERT INTO agent_connection VALUES (1, ?, 'https://first.example', NULL)")
+            .bind("01".repeat(16))
+            .execute(old.pool())
+            .await
+            .unwrap();
+        old.close().await;
+
+        let broken = dir.path.join("failed-v15");
+        write_migrations_through(&broken, 14);
+        let v15 = MIGRATOR.iter().find(|m| m.version == 15).unwrap();
+        std::fs::write(
+            broken.join("0015_failed.sql"),
+            format!("{}\nSELECT * FROM missing_table;", v15.sql),
+        )
+        .unwrap();
+        let broken = migrator(&broken).await;
+        let backup = migration_backup_path(&path, 14, 15);
+        assert!(matches!(
+            Database::open_with(&path, &broken).await.unwrap_err(),
+            DbError::Migration { backup: Some(saved), .. } if saved == backup
+        ));
+        assert_eq!(scalar::<i64>(&path, "PRAGMA user_version").await, 14);
+        assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 14);
+        assert_eq!(
+            scalar::<String>(&path, "SELECT server_url FROM agent_connection").await,
+            "https://first.example"
+        );
+        let retried = Database::open(&path).await.unwrap();
+        assert_eq!(
+            crate::connections::list(&retried).await.unwrap()[0].server_url,
+            "https://first.example"
         );
     }
 
@@ -1680,11 +1918,17 @@ mod tests {
         sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind,attempts) VALUES(?,?,'upload_content',2)").bind([8u8;16].as_slice()).bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
         old.close().await;
         let db = Database::open(&path).await.unwrap();
-        sqlx::query("INSERT INTO agent_connection VALUES(1,?,'https://sync.example',NULL)")
-            .bind("72".repeat(16))
-            .execute(db.pool())
-            .await
-            .unwrap();
+        crate::connections::upsert(
+            &db,
+            &crate::connections::ConnectionRecord {
+                server_id: crate::test_support::server_id(0x72),
+                server_url: "https://sync.example".into(),
+                ca_file: None,
+                development_http: false,
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT dirty FROM local_entries")
                 .fetch_one(db.pool())
@@ -1708,10 +1952,7 @@ mod tests {
         ));
         let reopened = Database::open(&path).await.unwrap();
         assert_eq!(
-            sqlx::query_scalar::<_, String>("SELECT server_url FROM agent_connection")
-                .fetch_one(reopened.pool())
-                .await
-                .unwrap(),
+            crate::connections::list(&reopened).await.unwrap()[0].server_url,
             "https://sync.example"
         );
         reopened.close().await;

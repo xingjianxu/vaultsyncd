@@ -11,12 +11,15 @@ window.addEventListener("DOMContentLoaded", async () => {
     while (Date.now() < end) { if (await predicate()) return; await pause(100); }
     throw new Error(`timeout ${label}`);
   };
-  const status = async () => (await invoke("agent_get_status")).management.connection;
+  const status = async () => (await invoke("agent_get_status")).management.connections.find(c => c.server_id === fixture.serverId);
   const main = () => !!document.querySelector(".mantine-AppShell-root");
   const dialog = () => document.querySelector('[role="dialog"]');
+  const input = name => document.querySelector(`input[name="${name}"]`);
+  const feedback = () => document.querySelector("[data-agent-feedback]")?.textContent;
+  const ready = () => feedback() === "本机 agent 状态已读取。";
   function assert(value, label) { if (!value) throw new Error(label); report[label] = true; }
   function field(name, value) {
-    const node = document.querySelector(`[name="${name}"]`);
+    const node = input(name);
     if (!node) throw new Error(`missing ${name}`);
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(node, value);
     node.dispatchEvent(new Event("input", { bubbles: true }));
@@ -27,46 +30,51 @@ window.addEventListener("DOMContentLoaded", async () => {
     await pause(150);
   }
   try {
+    await wait("initial shell and IPC", () => main() && ready());
+    assert(!dialog() && !input("password"), "startupDoesNotPromptForLogin");
+    assert(/^vaultsyncd \d+\.\d+\.\d+/.test(document.querySelector("[data-client-version]")?.textContent ?? ""), "shellShowsClientVersion");
     if (fixture.phase === "fresh") {
-      await wait("login version", () => /^vaultsyncd \d+\.\d+\.\d+/.test(document.querySelector('[data-client-version]')?.textContent ?? ""));
-      assert(document.querySelector('[data-client-version]').closest('[role="dialog"]'), "loginShowsClientVersion");
-      location.hash = "/bindings";
-      await wait("login form", () => !!document.querySelector('[name="username"]'));
-      assert(!main(), "unauthenticatedHasNoMain");
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await pause(200);
-      assert(!!dialog() && !main(), "loginCannotBeDismissed");
+      assert(document.querySelector("main h1")?.textContent === "同步目录", "freshStartupShowsBindings");
+      await wait("add server action", () => document.querySelector('a[href="#/connections/add"]'));
+      document.querySelector('a[href="#/connections/add"]').click();
+      await wait("add form", () => input("server_url"));
+      assert(!dialog() && !input("password"), "discoveryPrecedesCredentials");
       field("server_url", fixture.url);
       await wait("certificate error", () => document.body.innerText.includes("CERTIFICATE_INVALID"));
-      assert(!(await status()).authenticated && !main(), "certificateFailureStaysInLogin");
+      assert(!(await status()) && main() && !input("password"), "certificateFailureLeavesConnectionUnsaved");
       field("ca_file", fixture.caFile);
-      await wait("server identity", () => document.querySelector('[name="server_id"]')?.value === fixture.serverId);
-      assert(document.querySelector('[name="server_id"]').readOnly, "serverIdentityReadOnly");
+      const identity = () => document.querySelector('textarea[name="server_id"]');
+      await wait("server identity", () => identity()?.value === fixture.serverId);
+      assert(identity().readOnly, "serverIdentityReadOnly");
+      await click("确认并保存连接");
+      await wait("explicit login form", () => input("password"));
       field("username", fixture.login); field("password", fixture.password + "wrong");
       await click("登录");
-      await wait("failed login", () => document.querySelector('[role="alert"]') && !document.querySelector('[name="password"]').value);
-      assert(!main() && !(await status()).authenticated, "wrongPasswordStaysInLogin");
-      assert(document.querySelector('[name="username"]').value === fixture.login, "failedLoginKeepsUsername");
+      await wait("failed login", () => feedback() && !["操作已由 agent 确认。", "操作正在执行，等待 agent 确认。"].includes(feedback()) && !input("password")?.value);
+      assert(main() && !(await status())?.authenticated, "wrongPasswordPreservesMain");
+      assert(input("username")?.value === fixture.login, "failedLoginKeepsUsername");
       field("password", fixture.password);
-      await click("登录"); await wait("main after login", main);
-      assert(location.hash === "#/bindings", "loginPreservesRoute");
-      assert(!document.querySelector('[name="password"]'), "passwordFormUnmounted");
+      await click("登录");
+      await wait("login confirmed", async () => !input("password") && (await status())?.authenticated);
+      assert(location.hash === "#/connections", "loginRemainsInConnectionSettings");
       assert((await status()).username === fixture.login && (await status()).authenticated, "loginMetadataReturned");
     } else if (fixture.phase === "restored") {
-      await wait("restored main", main);
       const connection = await status();
-      assert(connection.authenticated && connection.username === fixture.login && connection.server_url === fixture.url && connection.server_id === fixture.serverId, "restartRestoresSessionAndMetadata");
-      assert(!dialog() && !document.querySelector('[name="password"]'), "restartSkipsLogin");
+      assert(connection?.authenticated && connection.username === fixture.login && connection.server_url === fixture.url, "restartRestoresSessionAndMetadata");
+      location.hash = "/connections";
       await click("退出登录");
-      await wait("logout login form", () => !!document.querySelector('[name="username"]'));
-      assert(!main() && !(await status()).authenticated, "logoutRemovesMain");
-      assert(document.querySelector('[name="username"]').value === fixture.login && document.querySelector('[name="server_url"]').value === fixture.url, "logoutRetainsMetadata");
-      assert(document.querySelector('[name="password"]').value === "", "logoutPasswordEmpty");
+      await wait("logout status", async () => (await status())?.authenticated === false);
+      assert(main() && !dialog() && !input("password"), "logoutPreservesMainWithoutLoginPrompt");
+      assert((await status()).username === fixture.login && (await status()).server_url === fixture.url, "logoutRetainsMetadata");
     } else {
-      await wait("logged out restart", () => !!document.querySelector('[name="username"]'));
-      assert(!main() && !(await status()).authenticated, "logoutSurvivesRestart");
-      assert(document.querySelector('[name="username"]').value === fixture.login && document.querySelector('[name="server_url"]').value === fixture.url, "metadataSurvivesLogoutAndRestart");
-      assert(document.querySelector('[name="password"]').value === "", "restartPasswordEmpty");
+      const connection = await status();
+      assert(main() && connection?.authenticated === false, "logoutSurvivesRestart");
+      assert(connection.username === fixture.login && connection.server_url === fixture.url, "metadataSurvivesLogoutAndRestart");
+      location.hash = "/connections";
+      await click("登录");
+      assert(input("username")?.value === fixture.login && input("password")?.value === "", "explicitReloginPrefillsUsernameOnly");
+      await click("取消");
+      assert(main() && !input("password"), "explicitLoginCanBeDismissed");
     }
     const serialized = JSON.stringify(await invoke("agent_get_status"));
     assert(!/access_token|refresh_token|password/.test(serialized), "statusContainsNoCredentials");

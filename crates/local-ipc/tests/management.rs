@@ -54,7 +54,7 @@ fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments
             serde_json::json!({"extra":"ignored parameters are forbidden"});
         assert!(serde_json::from_value::<Request>(unknown).is_err());
     }
-    assert_eq!(names.len(), 27);
+    assert_eq!(names.len(), 28);
 }
 #[test]
 fn passwords_are_redacted_even_if_an_entire_generated_request_is_debugged() {
@@ -173,4 +173,23 @@ fn activity_records_round_trip_with_lossless_counts_and_require_observed_facts()
         .unwrap()
         .remove("status");
     assert!(serde_json::from_value::<ManagementResult>(missing).is_err());
+}
+
+#[test]
+fn server_scopes_are_canonical_and_cannot_override_a_bindings_server() {
+    use vaultsyncd_local_ipc::generated::{Command, CommandParameters as P};
+    let mut command = Command {
+        name: CommandName::ListVaults,
+        parameters: Some(P {
+            server_id: Some("a5".repeat(16)),
+            ..Default::default()
+        }),
+    };
+    commands::validate(&command).unwrap();
+    command.parameters.as_mut().unwrap().server_id = Some("A5".repeat(16));
+    assert!(commands::validate(&command).is_err());
+    command.parameters.as_mut().unwrap().server_id = Some("a5".repeat(16));
+    command.parameters.as_mut().unwrap().binding_id = Some("b6".repeat(16));
+    command.name = CommandName::ListFiles;
+    assert!(commands::validate(&command).is_err());
 }

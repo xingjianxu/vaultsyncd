@@ -24,7 +24,7 @@ struct Hub {
     state: Mutex<(u64, Option<GetStatusResult>)>,
     updates: watch::Sender<u64>,
     instance: String,
-    connection: watch::Receiver<ConnectionInfo>,
+    connections: watch::Receiver<Vec<ConnectionInfo>>,
     problems: watch::Receiver<Vec<Problem>>,
     offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 }
@@ -32,7 +32,7 @@ struct Hub {
 pub(crate) fn start(
     db: Arc<Database>,
     commands: mpsc::Sender<CommandRequest>,
-    connection: watch::Receiver<ConnectionInfo>,
+    connections: watch::Receiver<Vec<ConnectionInfo>>,
     problems: watch::Receiver<Vec<Problem>>,
     offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 ) -> io::Result<Server> {
@@ -41,7 +41,7 @@ pub(crate) fn start(
     OsRng.fill_bytes(&mut nonce);
     let hub = Arc::new(Hub {
         state: Mutex::new((0, None)),
-        connection,
+        connections,
         problems,
         offline,
         updates,
@@ -123,6 +123,28 @@ pub(crate) fn start(
                         &request,
                         LocalIpcErrorCode::UnsupportedVersion,
                         "同步与传输记录需要本机 IPC 2.8",
+                        false,
+                    ));
+                }
+                if (request.command.name == CommandName::ListConnections
+                    || (matches!(
+                        request.command.name,
+                        CommandName::GetConnection
+                            | CommandName::Login
+                            | CommandName::Logout
+                            | CommandName::ListVaults
+                            | CommandName::CreateBinding
+                    ) && request
+                        .command
+                        .parameters
+                        .as_ref()
+                        .is_some_and(|p| p.server_id.is_some())))
+                    && request.ipc_version.minor < 10
+                {
+                    return Ok(failure(
+                        &request,
+                        LocalIpcErrorCode::UnsupportedVersion,
+                        "多服务器连接需要本机 IPC 2.10",
                         false,
                     ));
                 }
@@ -258,6 +280,8 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
         }
     }
     let notices = crate::management_notices::list(db).await?;
+    let connections = hub.connections.borrow().clone();
+    let connection = (connections.len() == 1).then(|| connections[0].clone());
     let mut value = GetStatusResult {
         agent_version: env!("CARGO_PKG_VERSION").into(),
         ipc_protocol: version::supported(),
@@ -265,7 +289,8 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
         snapshot_version: None,
         management: Some(ManagementResult {
             bindings: Some(info),
-            connection: Some(hub.connection.borrow().clone()),
+            connection,
+            connections: Some(connections),
             problems: Some(problems),
             notices: Some(notices),
             ..Default::default()
@@ -307,10 +332,13 @@ pub(crate) fn management_response(
             };
             let (code, retryable) = match source_code {
                 "NOT_FOUND" => (LocalIpcErrorCode::NotFound, false),
-                "INVALID_ARGUMENT" | "PATH_OVERLAP" | "LOCAL_PATH_UNAVAILABLE" => {
-                    (LocalIpcErrorCode::InvalidArgument, false)
+                "INVALID_ARGUMENT"
+                | "PATH_OVERLAP"
+                | "LOCAL_PATH_UNAVAILABLE"
+                | "SERVER_REQUIRED" => (LocalIpcErrorCode::InvalidArgument, false),
+                "CERTIFICATE_INVALID" | "CONNECTION_SERVER_MISMATCH" => {
+                    (LocalIpcErrorCode::Blocked, false)
                 }
-                "CERTIFICATE_INVALID" => (LocalIpcErrorCode::Blocked, false),
                 "REAUTH_REQUIRED" | "UNAUTHORIZED" | "AUTH_EXPIRED" => {
                     (LocalIpcErrorCode::Unauthenticated, false)
                 }
@@ -350,6 +378,8 @@ pub(crate) fn management_response(
                         | "INVALID_REQUEST"
                         | "SERVICE_NOT_READY"
                         | "CERTIFICATE_INVALID"
+                        | "SERVER_REQUIRED"
+                        | "CONNECTION_SERVER_MISMATCH"
                         | "LOCAL_PATH_UNAVAILABLE"
                 );
             let stable = if known { source_code } else { "UNAVAILABLE" };
@@ -363,7 +393,8 @@ pub(crate) fn management_response(
                 "CERTIFICATE_INVALID" => "服务器证书验证失败（CERTIFICATE_INVALID）；请核对服务器地址与名称，或在连接设置中选择管理员提供的附加 CA。证书验证未被关闭。".to_owned(),
                 "LOCAL_PATH_UNAVAILABLE" => "本地目录无法访问（LOCAL_PATH_UNAVAILABLE）；请选择现有本机 NTFS 目录，并检查路径、权限与卷状态。".to_owned(),
                 "INSUFFICIENT_STORAGE" => "本地磁盘或状态库空间不足（INSUFFICIENT_STORAGE）；完整缓存、未确认内容与恢复现场保留，请腾出空间后重试。".to_owned(),
-                "BINDING_BLOCKED" if request.command.name == CommandName::SetConnection => "服务器身份不一致（BINDING_BLOCKED）；请重新读取 Server ID，已有同步绑定时不能切换到另一台服务器。".to_owned(),
+                "CONNECTION_SERVER_MISMATCH" => identity_mismatch_message(&error),
+                "SERVER_REQUIRED" => "客户端有多个服务器连接，请明确选择目标服务器（SERVER_REQUIRED）。".to_owned(),
                 "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),
                 _ => format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
             };
@@ -371,6 +402,21 @@ pub(crate) fn management_response(
         }
     }
 }
+fn identity_mismatch_message(error: &PortError) -> String {
+    use vaultsyncd_domain::ids::ServerId;
+    if let PortError::Rejected { detail, .. } = error
+        && let Some((expected, actual)) = detail.split_once(':')
+        && [expected, actual]
+            .into_iter()
+            .all(|id| ServerId::from_hex(id).is_ok_and(|server| server.to_string() == id))
+    {
+        return format!(
+            "服务器返回的 ID 与确认值不同。确认值 {expected}，服务器返回 {actual}。请重新读取 Server ID。"
+        );
+    }
+    "服务器返回的 ID 与确认值不同，请重新读取 Server ID。".into()
+}
+
 fn failure(request: &Request, code: LocalIpcErrorCode, message: &str, retryable: bool) -> Response {
     Response::error(
         request.request_id.clone(),

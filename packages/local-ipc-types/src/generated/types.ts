@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 2;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 9;
+export const PROTOCOL_MINOR = 10;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -140,6 +140,8 @@ export interface BindingInfo {
   mode: string;
   /** 已暂停。 */
   paused: boolean;
+  /** 绑定所属服务器的稳定身份；旧 agent 省略。 */
+  server_id?: string;
   /** Vault 身份。 */
   vault_id: string;
 }
@@ -153,6 +155,7 @@ export function decodeBindingInfo(value: unknown): BindingInfo {
     local_path: expect_string(object.local_path, "BindingInfo.local_path"),
     mode: expect_string(object.mode, "BindingInfo.mode"),
     paused: expect_boolean(object.paused, "BindingInfo.paused"),
+    server_id: object.server_id === undefined ? undefined : expect_string(object.server_id, "BindingInfo.server_id"),
     vault_id: expect_string(object.vault_id, "BindingInfo.vault_id"),
   };
 }
@@ -238,9 +241,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules" | "list_activity";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "list_connections" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules" | "list_activity";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -483,8 +486,10 @@ export interface ManagementResult {
   activity?: Array<ActivityRecord>;
   /** 持久绑定列表。 */
   bindings?: Array<BindingInfo>;
-  /** 连接事实。 */
+  /** 当前操作涉及的连接；状态应答仅在恰有一条连接时提供。 */
   connection?: ConnectionInfo;
+  /** 本机已配置的服务器；未配置时为空列表。 */
+  connections?: Array<ConnectionInfo>;
   /** 已完整核验的恢复包文件数。 */
   exported_files?: string;
   /** list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。 */
@@ -523,6 +528,7 @@ export function decodeManagementResult(value: unknown): ManagementResult {
     activity: object.activity === undefined ? undefined : expect_array(object.activity, "ManagementResult.activity").map((item) => decodeActivityRecord(item)),
     bindings: object.bindings === undefined ? undefined : expect_array(object.bindings, "ManagementResult.bindings").map((item) => decodeBindingInfo(item)),
     connection: object.connection === undefined ? undefined : decodeConnectionInfo(object.connection),
+    connections: object.connections === undefined ? undefined : expect_array(object.connections, "ManagementResult.connections").map((item) => decodeConnectionInfo(item)),
     exported_files: object.exported_files === undefined ? undefined : expect_string(object.exported_files, "ManagementResult.exported_files"),
     files: object.files === undefined ? undefined : expect_array(object.files, "ManagementResult.files").map((item) => decodeFileStatus(item)),
     incomplete: object.incomplete === undefined ? undefined : expect_array(object.incomplete, "ManagementResult.incomplete").map((item) => expect_string(item, "ManagementResult.incomplete 的元素")),
@@ -555,6 +561,8 @@ export interface Notice {
   generation: string;
   /** 稳定去重键 */
   key: string;
+  /** 关联服务器身份；全局或来源未知的历史通知省略 */
+  server_id?: string;
   /** active或resolved */
   state: string;
   /** 关联Vault，非绑定身份 */
@@ -570,6 +578,7 @@ export function decodeNotice(value: unknown): Notice {
     critical: expect_boolean(object.critical, "Notice.critical"),
     generation: expect_string(object.generation, "Notice.generation"),
     key: expect_string(object.key, "Notice.key"),
+    server_id: object.server_id === undefined ? undefined : expect_string(object.server_id, "Notice.server_id"),
     state: expect_string(object.state, "Notice.state"),
     vault_id: object.vault_id === undefined ? undefined : expect_string(object.vault_id, "Notice.vault_id"),
   };

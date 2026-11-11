@@ -35,18 +35,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     catch (error) { report.lastStatusError = JSON.stringify(error); return false; }
   }
   try {
-    await wait("React initial snapshot", () => !!document.querySelector('[name="server_url"]'));
+    await wait("React initial snapshot", () => document.querySelector("[data-agent-feedback]")?.textContent === "本机 agent 状态已读取。");
     await invoke("agent_set_connection", { input: { serverId: fixture.serverId, serverUrl: fixture.url, caFile: fixture.caFile } });
     check(true, "confirmed identity and private CA configured");
-    await invoke("agent_login", { username: fixture.login, password: fixture.password });
+    await invoke("agent_login", { serverId: fixture.serverId, username: fixture.login, password: fixture.password });
     check(true, "native agent authenticated with real server");
     const bindingId = crypto.randomUUID().replaceAll("-", "");
-    await invoke("agent_create_binding", { input: { bindingId, vaultId: fixture.vault, localPath: fixture.localPath, mode: "full" } });
+    await invoke("agent_create_binding", { input: { bindingId, serverId: fixture.serverId, vaultId: fixture.vault, localPath: fixture.localPath, mode: "full" } });
     check(true, "native binding created through real IPC");
     await wait("actual first merge", () => synchronized(bindingId));
     check(true, "full first merge uses actual Windows NTFS upload and download");
     const emptyBinding = crypto.randomUUID().replaceAll("-", "");
-    await invoke("agent_create_binding", { input: { bindingId: emptyBinding, vaultId: fixture.emptyVault, localPath: fixture.emptyPath, mode: "full" } });
+    await invoke("agent_create_binding", { input: { bindingId: emptyBinding, serverId: fixture.serverId, vaultId: fixture.emptyVault, localPath: fixture.emptyPath, mode: "full" } });
     await wait("empty merge", () => synchronized(emptyBinding));
     const page = await invoke("agent_list_activity", { bindingId });
     check(Array.isArray(page.activity) && page.activity.length > 0 && !!page.next_cursor, "real IPC forwards authenticated activity and pagination");
@@ -99,12 +99,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     select("activity_binding", bindingId);
     select("activity_direction", "upload");
     await wait("upload rows restored", () => directions().length > 0 && directions().every(value => value === "上传"));
-    await invoke("agent_logout");
+    await invoke("agent_logout", { serverId: fixture.serverId });
     await rejected("authenticated API rejects query after logout", { bindingId }, "AUTH");
-    await wait("logout observed by desktop", () => text().includes("请先登录服务端后查看记录。"));
-    check(directions().length === 0 && text().includes("尚未登录服务端。"), "logout clears prior records and invalidates pending requests");
-    await invoke("agent_login", { username: fixture.login, password: fixture.password });
-    await wait("login context reset", () => !text().includes("请先登录服务端后查看记录。"));
+    await wait("logout observed by desktop", () => text().includes("请先登录此绑定的服务器。"));
+    check(directions().length === 0 && text().includes("尚未登录此绑定的服务器。"), "logout clears prior records and invalidates pending requests");
+    await invoke("agent_login", { serverId: fixture.serverId, username: fixture.login, password: fixture.password });
+    await wait("login context reset", () => !text().includes("请先登录此绑定的服务器。"));
     select("activity_binding", bindingId);
     await wait("records after login", () => directions().length > 0);
     check(!document.querySelector('[role="alert"]'), "page recovers after reauthentication");

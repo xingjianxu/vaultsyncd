@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 2;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 9;
+pub const PROTOCOL_MINOR: u32 = 10;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -103,6 +103,10 @@ pub struct BindingInfo {
     pub mode: String,
     /// 已暂停。
     pub paused: bool,
+    /// 绑定所属服务器的稳定身份；旧 agent 省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
     /// Vault 身份。
     pub vault_id: String,
 }
@@ -200,6 +204,9 @@ pub enum CommandName {
     /// 取值 `get_connection`。
     #[serde(rename = "get_connection")]
     GetConnection,
+    /// 取值 `list_connections`。
+    #[serde(rename = "list_connections")]
+    ListConnections,
     /// 取值 `discover_connection`。
     #[serde(rename = "discover_connection")]
     DiscoverConnection,
@@ -508,10 +515,14 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bindings: Option<Vec<BindingInfo>>,
-    /// 连接事实。
+    /// 当前操作涉及的连接；状态应答仅在恰有一条连接时提供。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionInfo>,
+    /// 本机已配置的服务器；未配置时为空列表。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connections: Option<Vec<ConnectionInfo>>,
     /// 已完整核验的恢复包文件数。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -589,6 +600,10 @@ pub struct Notice {
     pub generation: String,
     /// 稳定去重键
     pub key: String,
+    /// 关联服务器身份；全局或来源未知的历史通知省略
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
     /// active或resolved
     pub state: String,
     /// 关联Vault，非绑定身份

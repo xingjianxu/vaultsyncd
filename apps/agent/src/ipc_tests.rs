@@ -37,13 +37,13 @@ async fn new_binding_without_import_proof_is_unknown() {
     .await
     .unwrap();
     tx.commit().await.unwrap();
-    let (_connection, connection) = watch::channel(ConnectionInfo {
+    let (_connection, connections) = watch::channel(vec![ConnectionInfo {
         server_id: "02".repeat(16),
         server_url: "https://example.invalid".into(),
         ca_file: None,
         authenticated: false,
         username: None,
-    });
+    }]);
     let (_problems, problems) = watch::channel(Vec::new());
     let (updates, _) = watch::channel(0);
     let (_offline, offline) = watch::channel(std::collections::HashSet::new());
@@ -51,7 +51,7 @@ async fn new_binding_without_import_proof_is_unknown() {
         state: Mutex::new((0, None)),
         updates,
         instance: "test".into(),
-        connection,
+        connections,
         problems,
         offline,
     };
@@ -99,16 +99,16 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     std::fs::create_dir(&path).unwrap();
     let db = Arc::new(Database::open(path.join("client.sqlite")).await.unwrap());
     let (commands, _requests) = mpsc::channel(8);
-    let (_connection, connection) = watch::channel(ConnectionInfo {
+    let (_connection, connections) = watch::channel(vec![ConnectionInfo {
         server_id: "11".repeat(16),
         server_url: "https://sync.example".into(),
         ca_file: None,
         authenticated: false,
         username: None,
-    });
+    }]);
     let (_problems, problems) = watch::channel(Vec::new());
     let (_offline, offline) = watch::channel(std::collections::HashSet::new());
-    let server = start(db.clone(), commands, connection, problems, offline).unwrap();
+    let server = start(db.clone(), commands, connections, problems, offline).unwrap();
     let endpoint = Endpoint::current("vaultsyncd-agent").unwrap();
     let mut request = Request {
         request_id: "actual-snapshot".into(),

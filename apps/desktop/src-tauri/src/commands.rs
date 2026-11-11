@@ -110,12 +110,14 @@ pub(crate) async fn agent_set_connection(
 }
 #[tauri::command]
 pub(crate) async fn agent_login(
+    server_id: String,
     username: String,
     password: String,
 ) -> Result<ManagementResult, BridgeError> {
     manage(
         C::Login,
         Some(P {
+            server_id: Some(server_id),
             username: Some(username),
             password: Some(password),
             ..Default::default()
@@ -124,12 +126,26 @@ pub(crate) async fn agent_login(
     .await
 }
 #[tauri::command]
-pub(crate) async fn agent_logout() -> Result<ManagementResult, BridgeError> {
-    manage(C::Logout, None).await
+pub(crate) async fn agent_logout(server_id: String) -> Result<ManagementResult, BridgeError> {
+    manage(
+        C::Logout,
+        Some(P {
+            server_id: Some(server_id),
+            ..Default::default()
+        }),
+    )
+    .await
 }
 #[tauri::command]
-pub(crate) async fn agent_list_vaults() -> Result<ManagementResult, BridgeError> {
-    manage(C::ListVaults, None).await
+pub(crate) async fn agent_list_vaults(server_id: String) -> Result<ManagementResult, BridgeError> {
+    manage(
+        C::ListVaults,
+        Some(P {
+            server_id: Some(server_id),
+            ..Default::default()
+        }),
+    )
+    .await
 }
 
 // Window handle comes from Tauri, never from caller parameters. The picker performs no sync I/O.
@@ -152,6 +168,7 @@ pub(crate) async fn select_local_directory(
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BindingInput {
+    server_id: String,
     binding_id: String,
     vault_id: String,
     local_path: String,
@@ -177,6 +194,7 @@ pub(crate) async fn agent_create_binding(
         .join("binding-cache")
         .join(&input.binding_id);
     let parameters = P {
+        server_id: Some(input.server_id),
         binding_id: Some(input.binding_id),
         vault_id: Some(input.vault_id),
         local_path: Some(input.local_path),
@@ -188,7 +206,9 @@ pub(crate) async fn agent_create_binding(
         name: C::CreateBinding,
         parameters: Some(parameters.clone()),
     })
-    .map_err(|_| BridgeError::local("本地目录须为现有绝对路径，Vault 身份及模式须有效。"))?;
+    .map_err(|_| {
+        BridgeError::local("本地目录须为现有绝对路径，服务器、Vault 身份及模式须有效。")
+    })?;
     std::fs::create_dir_all(&cache)
         .map_err(|_| BridgeError::local("无法创建应用缓存目录，请检查本机权限与空间。"))?;
     manage(C::CreateBinding, Some(parameters)).await

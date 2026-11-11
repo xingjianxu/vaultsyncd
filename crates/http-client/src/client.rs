@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use vaultsyncd_domain::ids::ServerId;
 use vaultsyncd_protocol::generated::{
     ErrorEnvelope, LoginRequest, RefreshRequest, SessionIssued, SessionRevoked,
 };
@@ -249,6 +250,7 @@ pub struct ApiClient<T: Transport> {
     transport: Arc<T>,
     auth: AuthSession,
     protocol_negotiation: bool,
+    expected_server: Option<ServerId>,
 }
 
 impl<T: Transport> Clone for ApiClient<T> {
@@ -259,6 +261,7 @@ impl<T: Transport> Clone for ApiClient<T> {
             transport: Arc::clone(&self.transport),
             auth: self.auth.clone(),
             protocol_negotiation: self.protocol_negotiation,
+            expected_server: self.expected_server,
         }
     }
 }
@@ -379,6 +382,12 @@ impl<T: Transport> ApiClient<T> {
         self
     }
 
+    /// Pin the server identity checked by the public probe before sending business requests.
+    pub fn with_expected_server(mut self, server: ServerId) -> Self {
+        self.expected_server = Some(server);
+        self
+    }
+
     /// 服务端根地址。
     pub fn base_url(&self) -> &reqwest::Url {
         &self.base_url
@@ -495,9 +504,9 @@ impl<T: Transport> ApiClient<T> {
     }
 
     async fn check_capabilities(&self, request: &ApiRequest) -> Result<(), ClientError> {
-        if !self.protocol_negotiation
-            || request.path == crate::capabilities::PATH
-            || request.path == "/v1/health"
+        if (!self.protocol_negotiation && self.expected_server.is_none())
+            || (request.auth == AuthMode::None
+                && (request.path == crate::capabilities::PATH || request.path == "/v1/health"))
         {
             return Ok(());
         }
@@ -506,6 +515,12 @@ impl<T: Transport> ApiClient<T> {
         probe.cancellation = request.cancellation.clone();
         let response = self.dispatch(&probe, None, TimeoutPhase::Request).await?;
         let value: vaultsyncd_protocol::generated::Capabilities = classify(response)?.json()?;
+        if self
+            .expected_server
+            .is_some_and(|id| value.server_id != id.to_string())
+        {
+            return Err(ClientError::ServerIdentityMismatch);
+        }
         crate::capabilities::admit(&value, &request.path)?;
         if request.path.contains("/parts/")
             && let Some(RequestBody::Bytes { bytes, .. }) = &request.body
@@ -540,6 +555,7 @@ impl<T: Transport> ApiClient<T> {
             transport,
             auth: AuthSession::new(),
             protocol_negotiation: true,
+            expected_server: None,
         }
     }
 

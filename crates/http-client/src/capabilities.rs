@@ -29,6 +29,16 @@ pub(crate) fn feature(path: &str) -> Result<&'static str, ClientError> {
     }
 }
 
+pub(crate) fn admit(value: &Capabilities, path: &str) -> Result<(), ClientError> {
+    negotiation::negotiate(value)
+        .and_then(|n| n.require(feature(path).map_err(|_| negotiation::Error::Malformed)?))
+        .map_err(|e| {
+            ClientError::Protocol(ProtocolError::new(format!(
+                "remote protocol negotiation rejected: {e}"
+            )))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,6 +58,64 @@ mod tests {
             .retain(|feature| feature != "file_activity");
         assert!(admit(&capabilities, path).is_err());
         assert!(feature(&format!("{path}/unknown")).is_err());
+    }
+
+    #[tokio::test]
+    async fn wrong_server_never_receives_login_or_bearer_requests() {
+        use crate::{
+            ApiClient, ApiRequest, AuthMode, ClientConfig, Credentials,
+            testing::{FakeTransport, json_response},
+            transport::TransportRequest,
+        };
+        use std::sync::Arc;
+        use vaultsyncd_domain::ids::ServerId;
+        use vaultsyncd_protocol::generated::{LoginRequest, SessionIssued};
+
+        let transport = Arc::new(FakeTransport::new(move |request: TransportRequest| {
+            Box::pin(async move {
+                assert!(request.url().ends_with("/v1/capabilities"));
+                let value: Capabilities = serde_json::from_str(include_str!(
+                    "../../../api/examples/capabilities.response.json"
+                ))
+                .unwrap();
+                Ok(json_response(200, &value))
+            })
+        }));
+        let client = ApiClient::with_transport(
+            ClientConfig::new("https://vault.invalid"),
+            transport.clone(),
+        )
+        .unwrap()
+        .with_expected_server(ServerId::from_bytes([255; 16]))
+        .clone();
+        let cause = client
+            .login(&LoginRequest {
+                login: "user".into(),
+                password: "test-password".into(),
+                device_label: "test".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(cause, crate::ClientError::ServerIdentityMismatch));
+        assert_eq!(crate::transfer_error(cause).code(), Some("NEEDS_RECOVERY"));
+        client.auth().install(
+            Credentials::from_issued(&SessionIssued {
+                session_id: "11".repeat(16),
+                access_token: "access".into(),
+                refresh_token: "refresh".into(),
+                access_expires_at: "10000000000".into(),
+                refresh_expires_at: "10000000001".into(),
+            })
+            .unwrap(),
+        );
+        assert!(
+            client
+                .send(ApiRequest::get("/v1/vaults").with_auth(AuthMode::Bearer))
+                .await
+                .is_err()
+        );
+        assert_eq!(transport.call_count(), 2);
+        assert!(client.auth().has_credentials());
     }
 
     #[tokio::test]
@@ -94,13 +162,4 @@ mod tests {
             assert_eq!(transport.call_count(), if supported { 2 } else { 1 });
         }
     }
-}
-pub(crate) fn admit(value: &Capabilities, path: &str) -> Result<(), ClientError> {
-    negotiation::negotiate(value)
-        .and_then(|n| n.require(feature(path).map_err(|_| negotiation::Error::Malformed)?))
-        .map_err(|e| {
-            ClientError::Protocol(ProtocolError::new(format!(
-                "remote protocol negotiation rejected: {e}"
-            )))
-        })
 }

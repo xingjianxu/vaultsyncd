@@ -1,53 +1,91 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Alert, Card, Group, SimpleGrid, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
-import { Button } from "@vaultsyncd/ui";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Alert, Button as LinkButton, Card, Group, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
+import { Button, StatusBadge } from "@vaultsyncd/ui";
 import type { ConnectionInfo } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient, ConnectionInput } from "../../services/agent";
+import { Login } from "./Login";
 
-export function Connections({ agent, connection, changed, run, busy }: {
-  agent: AgentClient; connection?: ConnectionInfo; changed(): Promise<void>;
+type Editor = { kind: "edit" | "login"; serverId: string };
+
+export function Connections({ agent, connections, adding, read, changed, run, busy }: {
+  agent: AgentClient; connections: ConnectionInfo[]; adding: boolean; read: boolean; changed(): Promise<void>;
   run(action: () => Promise<void>): void; busy: boolean;
 }) {
+  const [editor, setEditor] = useState<Editor>();
+  const cancel = () => setEditor(undefined);
+  const closeAdd = () => { window.location.hash = "/connections"; };
   return <Stack gap="lg">
-    <Title order={1} size="h2">连接设置</Title>
-    <SimpleGrid cols={{ base: 1, lg: 2 }}>
-      <Card component="section" withBorder>
-        <Stack>
-          <Title order={2} size="h3">服务器</Title>
-          {connection && <ConnectionForm key={`${connection.server_id}:${connection.server_url}:${connection.ca_file ?? ""}`}
-            agent={agent} connection={connection} changed={changed} run={run} busy={busy} />}
-        </Stack>
-      </Card>
-      <Card component="section" withBorder>
-        <Stack>
-          <Title order={2} size="h3">账号</Title>
-          <Text size="sm">当前账号：{connection ? connection.authenticated ? "已登录（持有凭据，连接仍需核验）" : "未登录" : "尚未读取"}</Text>
-          {connection?.username && <Text size="sm">{connection.username}</Text>}
-          <Group><Button type="button" variant="default" disabled={busy || !connection?.authenticated} onClick={() => run(async () => { await agent.logout(); await changed(); })}>退出登录</Button></Group>
-          <Text size="sm" c="dimmed">登录凭据由本机 agent 保存；关闭界面后同步继续。</Text>
-        </Stack>
-      </Card>
-    </SimpleGrid>
+    <Group justify="space-between">
+      <Title order={1} size="h2">连接设置</Title>
+      {!adding && (busy || !read
+        ? <Button disabled>添加服务器</Button>
+        : <LinkButton component="a" href="#/connections/add" onClick={cancel}>添加服务器</LinkButton>)}
+    </Group>
+    {adding && <Card component="section" withBorder>
+      <Stack>
+        <Title order={2} size="h3">添加服务器</Title>
+        <ConnectionForm agent={agent} run={run} busy={busy || !read} onCancel={closeAdd} onSave={async candidate => {
+          if (connections.some(connection => connection.server_id === candidate.serverId)) {
+            throw new Error("此服务器已添加，请在现有连接中修改地址或登录。");
+          }
+          await agent.setConnection(candidate);
+          await changed();
+          setEditor({ kind: "login", serverId: candidate.serverId });
+          closeAdd();
+        }} />
+      </Stack>
+    </Card>}
+    {read && !connections.length && !adding && <Text c="dimmed">尚未添加服务器。</Text>}
+    {connections.map(connection => <Card component="section" withBorder key={connection.server_id}>
+      <Stack>
+        <Group justify="space-between">
+          <Title order={2} size="h3">{connection.server_url}</Title>
+          <StatusBadge tone={connection.authenticated ? "success" : "neutral"}>{connection.authenticated ? "已登录" : "未登录"}</StatusBadge>
+        </Group>
+        {connection.username && <Text size="sm">{connection.username}</Text>}
+        <Text size="sm" c="dimmed">Server ID {connection.server_id}</Text>
+        {!adding && editor?.kind === "edit" && editor.serverId === connection.server_id
+          ? <ConnectionForm agent={agent} connection={connection} run={run} busy={busy || !read} onCancel={cancel} onSave={async candidate => {
+            await agent.setConnection(candidate);
+            await changed();
+            cancel();
+          }} />
+          : !adding && editor?.kind === "login" && editor.serverId === connection.server_id
+            ? <Login agent={agent} connection={connection} run={run} busy={busy || !read} onCancel={cancel} onSaved={async () => {
+              await changed();
+              cancel();
+            }} />
+            : <Group>
+              {connection.authenticated
+                ? <Button variant="default" disabled={busy || !read || adding} onClick={() => run(async () => {
+                  await agent.logout(connection.server_id);
+                  await changed();
+                })}>退出登录</Button>
+                : <Button variant="default" disabled={busy || !read || adding} onClick={() => setEditor({ kind: "login", serverId: connection.server_id })}>登录</Button>}
+              <Button variant="default" disabled={busy || !read || adding} onClick={() => setEditor({ kind: "edit", serverId: connection.server_id })}>修改地址</Button>
+            </Group>}
+      </Stack>
+    </Card>)}
   </Stack>;
 }
 
-export function ConnectionForm({ agent, connection, changed, run, busy, children, authenticate }: {
-  agent: AgentClient; connection: ConnectionInfo; changed(): Promise<void>;
-  run(action: () => Promise<void>): void; busy: boolean; children?: ReactNode;
-  authenticate?(): Promise<void>;
+function ConnectionForm({ agent, connection, onSave, onCancel, run, busy }: {
+  agent: AgentClient; connection?: ConnectionInfo; onSave(input: ConnectionInput): Promise<void>;
+  onCancel(): void; run(action: () => Promise<void>): void; busy: boolean;
 }) {
-  const [serverUrl, setServerUrl] = useState(connection.server_url);
-  const [caFile, setCaFile] = useState(connection.ca_file ?? "");
+  const [serverUrl, setServerUrl] = useState(connection?.server_url ?? "");
+  const [caFile, setCaFile] = useState(connection?.ca_file ?? "");
   const [candidate, setCandidate] = useState<ConnectionInput>();
   const [reading, setReading] = useState(false);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const generation = useRef(0);
+  const expectedServerId = connection?.server_id;
+  const mismatch = !!(candidate && expectedServerId && candidate.serverId !== expectedServerId);
   function invalidate() { generation.current++; setCandidate(undefined); setError(""); setReading(false); }
   useEffect(() => {
     const current = ++generation.current;
-    setCandidate(undefined); setError("");
-    if (!serverUrl || !URL.canParse(serverUrl)) { setReading(false); return; }
+    if (!serverUrl || !URL.canParse(serverUrl)) return;
     setReading(true);
     const input = { serverUrl, caFile: caFile || undefined };
     const timer = window.setTimeout(() => {
@@ -64,34 +102,28 @@ export function ConnectionForm({ agent, connection, changed, run, busy, children
     }, 500);
     return () => { generation.current++; window.clearTimeout(timer); };
   }, [agent, serverUrl, caFile, retry]);
-  function configure(event: FormEvent<HTMLFormElement>) {
+
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!candidate || reading || busy) return;
-    const confirmed = candidate;
-    run(async () => {
-      try { await agent.setConnection(confirmed); if (authenticate) await authenticate(); await changed(); }
-      finally { invalidate(); if (authenticate) setRetry(value => value + 1); }
-    });
+    if (!candidate || mismatch || reading || busy) return;
+    run(() => onSave(candidate));
   }
-  return <form onSubmit={configure}><Stack>
+  return <form onSubmit={submit}><Stack>
     <TextInput label="服务器地址" required name="server_url" type="url" value={serverUrl}
       disabled={busy} onChange={event => { invalidate(); setServerUrl(event.currentTarget.value); }} placeholder="https://sync.example.com" />
     <details>
       <Text component="summary" size="sm">开发证书</Text>
-      <Stack gap="xs" mt="sm">
-        <TextInput label="附加 CA 文件（本机绝对路径）" name="ca_file" value={caFile} disabled={busy}
-          onChange={event => { invalidate(); setCaFile(event.currentTarget.value); }} />
-        <Text size="sm" c="dimmed">仅添加明确选择的 CA，始终校验证书和服务器名称。</Text>
-      </Stack>
+      <TextInput mt="sm" label="附加 CA 文件（本机绝对路径）" name="ca_file" value={caFile} disabled={busy}
+        onChange={event => { invalidate(); setCaFile(event.currentTarget.value); }} />
     </details>
     {reading && <Text size="sm" role="status">正在读取 Server ID…</Text>}
     {error && <Alert color="red" role="alert">{error}</Alert>}
     {candidate && <Textarea label="Server ID" name="server_id" readOnly autosize minRows={1} value={candidate.serverId} />}
-    {children}
+    {mismatch && <Alert color="red" role="alert">此地址返回了不同的 Server ID。请核对地址，或将其添加为另一台服务器。</Alert>}
     <Group>
-      <Button type="submit" disabled={busy || reading || !candidate}>{authenticate ? "登录" : "确认并保存连接"}</Button>
-      <Button type="button" variant="default" disabled={busy || reading || !serverUrl} onClick={() => { invalidate(); setRetry(value => value + 1); }}>重新读取</Button>
-      {candidate && <Button type="button" variant="subtle" disabled={busy} onClick={invalidate}>取消</Button>}
+      <Button type="submit" disabled={busy || reading || !candidate || mismatch}>确认并保存连接</Button>
+      <Button variant="default" disabled={busy || reading || !serverUrl} onClick={() => { invalidate(); setRetry(value => value + 1); }}>重新读取</Button>
+      <Button variant="subtle" disabled={busy} onClick={onCancel}>取消</Button>
     </Group>
   </Stack></form>;
 }

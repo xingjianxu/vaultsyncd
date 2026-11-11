@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, Group, NativeSelect, SimpleGrid, Stack, Text, TextInput, Title } from "@mantine/core";
 import { Button, Dialog, StatusBadge, Table } from "@vaultsyncd/ui";
-import type { BindingInfo, FileStatus } from "@vaultsyncd/local-ipc-types";
+import type { BindingInfo, ConnectionInfo, FileStatus } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
 
 const labels: Record<string, string> = { unavailable: "不可用", failed: "失败", conflict: "冲突", local_changes: "待上传本地修改", syncing: "正在同步", downloaded: "已下载", cloud_only: "仅云端" };
-export function Files({ agent, bindings = [], run, busy, changed }: { agent: AgentClient; bindings?: BindingInfo[]; run(action: () => Promise<void>): void; busy: boolean; changed(): Promise<void> }) {
+export function Files({ agent, bindings = [], connections, run, busy, changed }: { agent: AgentClient; bindings?: BindingInfo[]; connections: ConnectionInfo[]; run(action: () => Promise<void>): void; busy: boolean; changed(): Promise<void> }) {
   const [binding, select] = useState(""); const [rows, setRows] = useState<FileStatus[]>();
   const [cursor, setCursor] = useState<string>(); const [next, setNext] = useState<string>();
   const [message, setMessage] = useState("请选择绑定后读取实际状态。"); const [fresh, setFresh] = useState(false);
   const [selected, setSelected] = useState<FileStatus>(); const [search, setSearch] = useState("");
   const sequence = useRef(0); const reading = useRef(false); const operations = useRef(new Map<string, string>());
   const current = bindings.find(b => b.binding_id === binding);
+  const authenticated = connections.some(server => server.server_id === current?.server_id && server.authenticated);
   const load = useCallback(async (propagateError = false) => {
     if (!binding || reading.current) return; reading.current = true; const version = sequence.current;
     try {
@@ -56,7 +57,7 @@ export function Files({ agent, bindings = [], run, busy, changed }: { agent: Age
       </Stack> },
       { key: "actions", title: "操作", render: row => <Stack gap="xs">
         <Group gap="xs">
-          <Button size="xs" disabled={busy || !fresh || !row.entry_id || row.dirty || current?.paused || current?.detached} onClick={() => run(() => action(row, "download"))}>下载</Button>
+          <Button size="xs" disabled={busy || !authenticated || !fresh || !row.entry_id || row.dirty || current?.paused || current?.detached} onClick={() => run(() => action(row, "download"))}>下载</Button>
           <Button size="xs" variant="default" disabled={busy || !fresh || !row.release_allowed || current?.detached} onClick={() => setSelected(row)}>释放空间</Button>
         </Group>
         {row.release_reason && <Text size="xs" c="dimmed">{row.release_reason}</Text>}

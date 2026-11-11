@@ -1,6 +1,6 @@
 //! Shared management executor. All user-facing operations resolve identities from durable state.
 use crate::{
-    config::{AgentConfig, BindingConfig},
+    config::{AgentConfig, BindingConfig, ServerConfig},
     local::error,
     work::{Dispatch, Worker},
 };
@@ -11,21 +11,22 @@ use vaultsyncd_agent_core::{
 };
 use vaultsyncd_client_store::{
     bindings::{self, SyncMode},
+    connections::{self, ConnectionRecord},
     db::Database,
 };
-use vaultsyncd_domain::ids::{BindingId, EntryId, OpId};
+use vaultsyncd_domain::ids::{BindingId, DeviceId, EntryId, OpId, ServerId};
 use vaultsyncd_http_client::{ApiClient, ApiRequest, AuthSession, Method, ReqwestTransport};
 use vaultsyncd_local_ipc::generated::{
-    BindingInfo, Command, CommandName as C, ManagementResult, Problem, RemoteItem,
+    BindingInfo, Command, CommandName as C, ConnectionInfo, ManagementResult, Problem, RemoteItem,
 };
 use vaultsyncd_platform_windows::files::VaultHandle;
 use vaultsyncd_transfer::ports::PortError;
 
 pub(crate) type Running = HashMap<BindingId, (Worker, Arc<Scheduler<Dispatch>>)>;
-fn reject(code: &str) -> PortError {
+pub(crate) fn reject(code: &str) -> PortError {
     PortError::rejected(code, "management command rejected")
 }
-fn connection_error(error: vaultsyncd_http_client::ClientError) -> PortError {
+pub(crate) fn connection_error(error: vaultsyncd_http_client::ClientError) -> PortError {
     if error.certificate_problem().is_some() {
         PortError::rejected(
             "CERTIFICATE_INVALID",
@@ -36,66 +37,85 @@ fn connection_error(error: vaultsyncd_http_client::ClientError) -> PortError {
     }
 }
 
-pub(crate) async fn load_connection(
+pub(crate) async fn load_connections(
     db: &Database,
-    config: &mut AgentConfig,
-) -> Result<(), PortError> {
-    let stored: Option<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT server_id,server_url,ca_file FROM agent_connection WHERE singleton=1",
-    )
-    .fetch_optional(db.pool())
-    .await
-    .map_err(error)?;
-    if let Some((id, url, ca_file)) = stored {
-        config.server.id = id;
-        config.server.url = url;
-        config.server.ca_file = ca_file.map(Into::into);
-        config.validate().map_err(error)?;
+    config: &AgentConfig,
+) -> Result<Vec<ServerConfig>, PortError> {
+    let mut stored = connections::list(db).await.map_err(error)?;
+    if stored.is_empty() {
+        let legacy_id = ServerId::from_hex(&config.server.id).map_err(error)?;
+        let placeholder = config.server.url == "https://localhost"
+            && !config.server.development_http
+            && config.server.ca_file.is_none()
+            && config.bindings.is_empty();
+        let legacy_state: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM bindings WHERE server_id=?)
+                 OR EXISTS(SELECT 1 FROM agent_login_profiles WHERE server_id=?)",
+        )
+        .bind(legacy_id.as_bytes().as_slice())
+        .bind(&config.server.id)
+        .fetch_one(db.pool())
+        .await
+        .map_err(error)?;
+        if !placeholder || legacy_state {
+            stored.push(connection_record(&config.server)?);
+        }
     }
-    load_login_profile(db, config).await?;
-    Ok(())
+    let mut servers = Vec::with_capacity(stored.len());
+    for record in stored {
+        let mut server = ServerConfig {
+            id: record.server_id.to_string(),
+            url: record.server_url,
+            ca_file: record.ca_file.map(Into::into),
+            development_http: record.development_http && config.server.development_http,
+            username: None,
+        };
+        load_login_profile(db, &mut server).await?;
+        servers.push(server);
+    }
+    Ok(servers)
 }
-pub(crate) async fn load_login_profile(
-    db: &Database,
-    config: &mut AgentConfig,
-) -> Result<(), PortError> {
-    config.server.username =
+
+async fn load_login_profile(db: &Database, server: &mut ServerConfig) -> Result<(), PortError> {
+    server.username =
         sqlx::query_scalar("SELECT username FROM agent_login_profiles WHERE server_id=?")
-            .bind(&config.server.id)
+            .bind(&server.id)
             .fetch_optional(db.pool())
             .await
             .map_err(error)?;
     Ok(())
 }
+
 pub(crate) async fn proposed_connection(
     db: &Database,
     config: &AgentConfig,
     command: &Command,
-) -> Result<AgentConfig, PortError> {
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM bindings")
-        .fetch_one(db.pool())
-        .await
-        .map_err(error)?;
+) -> Result<ServerConfig, PortError> {
     let p = command
         .parameters
         .as_ref()
         .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
-    if (count != 0 || !config.bindings.is_empty())
-        && p.server_id.as_deref() != Some(&config.server.id)
-    {
-        return Err(reject("BINDING_BLOCKED"));
-    }
-    let mut proposed = config.clone();
-    proposed.server.id = p.server_id.clone().unwrap();
-    load_login_profile(db, &mut proposed).await?;
-    proposed.server.url = p.server_url.clone().unwrap();
-    proposed.server.ca_file = p.ca_file.as_ref().map(Into::into);
+    let mut proposed = ServerConfig {
+        id: p
+            .server_id
+            .clone()
+            .ok_or_else(|| reject("INVALID_ARGUMENT"))?,
+        url: p
+            .server_url
+            .clone()
+            .ok_or_else(|| reject("INVALID_ARGUMENT"))?,
+        ca_file: p.ca_file.as_ref().map(Into::into),
+        development_http: config.server.development_http,
+        username: None,
+    };
     proposed
         .validate()
         .map_err(|_| reject("INVALID_ARGUMENT"))?;
+    load_login_profile(db, &mut proposed).await?;
     Ok(proposed)
 }
-/// Read public identity using an isolated, credential-free client. Never mutate current state.
+
+/// Read public identity using an isolated, credential-free client.
 pub(crate) async fn discover_connection(
     config: &AgentConfig,
     command: &Command,
@@ -104,49 +124,68 @@ pub(crate) async fn discover_connection(
         .parameters
         .as_ref()
         .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
-    let mut proposed = config.clone();
-    proposed.server.url = p
+    let mut proposed = config.server.clone();
+    proposed.url = p
         .server_url
         .clone()
         .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
-    proposed.server.ca_file = p.ca_file.as_ref().map(Into::into);
+    proposed.ca_file = p.ca_file.as_ref().map(Into::into);
+    proposed.username = None;
     proposed
         .validate()
         .map_err(|_| reject("INVALID_ARGUMENT"))?;
-    proposed.server.username = None;
-    let mut info = connection(&proposed, &AuthSession::default());
-    info.server_id = read_server_id(&proposed).await?;
+    proposed.id = read_server_id(&proposed).await?;
     Ok(ManagementResult {
-        connection: Some(info),
+        connection: Some(connection(&proposed, None)),
         ..Default::default()
     })
 }
 
-/// Recheck the confirmed identity before loading any credentials or changing live bindings.
-pub(crate) async fn verify_connection(config: &AgentConfig) -> Result<(), PortError> {
-    if read_server_id(config).await? != config.server.id {
+/// Recheck the confirmed identity before loading any credentials or updating the endpoint.
+pub(crate) async fn verify_connection(server: &ServerConfig) -> Result<(), PortError> {
+    let actual = read_server_id(server).await?;
+    if actual != server.id {
         return Err(PortError::rejected(
-            "BINDING_BLOCKED",
-            "服务器身份与确认的 Server ID 不一致，请重新读取。",
+            "CONNECTION_SERVER_MISMATCH",
+            format!("{}:{actual}", server.id),
         ));
     }
     Ok(())
 }
 
-async fn read_server_id(config: &AgentConfig) -> Result<String, PortError> {
-    use vaultsyncd_http_client::{ClientConfig, Timeouts, TlsTrust};
-    let mut http = ClientConfig::new(&config.server.url).with_timeouts(Timeouts::new(
-        std::time::Duration::from_secs(3),
-        std::time::Duration::from_secs(2),
-    ));
-    if config.server.development_http {
+fn http_config(server: &ServerConfig) -> Result<vaultsyncd_http_client::ClientConfig, PortError> {
+    use vaultsyncd_http_client::{ClientConfig, TlsTrust};
+    let mut http = ClientConfig::new(&server.url);
+    if server.development_http {
         http = http.allow_plaintext_http();
     }
-    if let Some(ca) = &config.server.ca_file {
+    if let Some(ca) = &server.ca_file {
         http = http.with_trust(
             TlsTrust::system_roots_with_pem_file(ca).map_err(|_| reject("CERTIFICATE_INVALID"))?,
         );
     }
+    Ok(http)
+}
+
+pub(crate) fn server_client(
+    server: &ServerConfig,
+    session: AuthSession,
+) -> Result<ApiClient<ReqwestTransport>, PortError> {
+    server.validate().map_err(|_| reject("INVALID_ARGUMENT"))?;
+    let id = ServerId::from_hex(&server.id).map_err(error)?;
+    Ok(ApiClient::new(http_config(server)?)
+        .map_err(|_| reject("INVALID_ARGUMENT"))?
+        .with_expected_server(id)
+        .with_auth_session(session))
+}
+
+async fn read_server_id(server: &ServerConfig) -> Result<String, PortError> {
+    use std::time::Duration;
+    use vaultsyncd_http_client::Timeouts;
+    let http = http_config(server)?.with_timeouts(Timeouts::new(
+        Duration::from_secs(3),
+        Duration::from_secs(2),
+    ));
     let client = ApiClient::new(http).map_err(|_| reject("INVALID_ARGUMENT"))?;
     let value: vaultsyncd_protocol::generated::Capabilities = client
         .send_json(ApiRequest::get("/v1/capabilities"))
@@ -156,24 +195,59 @@ async fn read_server_id(config: &AgentConfig) -> Result<String, PortError> {
     Ok(value.server_id)
 }
 
-pub(crate) async fn save_connection(db: &Database, config: &AgentConfig) -> Result<(), PortError> {
-    let mut tx = db.begin_write().await.map_err(error)?;
-    sqlx::query("INSERT INTO agent_connection(singleton,server_id,server_url,ca_file) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET server_id=excluded.server_id,server_url=excluded.server_url,ca_file=excluded.ca_file")
-        .bind(&config.server.id).bind(&config.server.url).bind(config.server.ca_file.as_ref().map(|p|p.to_string_lossy().into_owned())).execute(&mut *tx).await.map_err(error)?;
-    tx.commit().await.map_err(error)
+fn connection_record(server: &ServerConfig) -> Result<ConnectionRecord, PortError> {
+    Ok(ConnectionRecord {
+        server_id: ServerId::from_hex(&server.id).map_err(error)?,
+        server_url: server.url.clone(),
+        ca_file: server
+            .ca_file
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        development_http: server.development_http,
+    })
+}
+
+pub(crate) async fn save_connection(db: &Database, server: &ServerConfig) -> Result<(), PortError> {
+    connections::upsert(db, &connection_record(server)?)
+        .await
+        .map_err(error)
+}
+
+pub(crate) async fn binding_server(
+    db: &Database,
+    binding: BindingId,
+    device: &str,
+) -> Result<Option<ServerId>, PortError> {
+    let mut conn = db.pool().acquire().await.map_err(error)?;
+    let record = bindings::binding(&mut conn, binding).await.map_err(error)?;
+    match record {
+        Some(record) if record.device.to_string() == device => Ok(Some(record.server)),
+        Some(_) => Err(reject("BINDING_BLOCKED")),
+        None => Ok(None),
+    }
 }
 
 pub(crate) async fn load_bindings(
     db: &Database,
     config: &mut AgentConfig,
-) -> Result<(), PortError> {
-    let rows: Vec<(String,String,String,String,String)> = sqlx::query_as("SELECT lower(hex(id)),lower(hex(vault_id)),local_path,cache_path,mode FROM bindings WHERE server_id=? AND device_id=? ORDER BY id")
-        .bind(vaultsyncd_domain::ids::ServerId::from_hex(&config.server.id).map_err(error)?.as_bytes().as_slice())
-        .bind(vaultsyncd_domain::ids::DeviceId::from_hex(&config.device_id).map_err(error)?.as_bytes().as_slice())
+) -> Result<HashMap<BindingId, ServerId>, PortError> {
+    let legacy_server = ServerId::from_hex(&config.server.id).map_err(error)?;
+    let mut assignments = HashMap::new();
+    for binding in &config.bindings {
+        assignments.insert(
+            BindingId::from_hex(&binding.id).map_err(error)?,
+            legacy_server,
+        );
+    }
+    let rows: Vec<(String,String,String,String,String,String)> = sqlx::query_as("SELECT lower(hex(id)),lower(hex(server_id)),lower(hex(vault_id)),local_path,cache_path,mode FROM bindings WHERE device_id=? ORDER BY id")
+        .bind(DeviceId::from_hex(&config.device_id).map_err(error)?.as_bytes().as_slice())
         .fetch_all(db.pool()).await.map_err(error)?;
-    for (id, vault_id, path, cache, mode) in rows {
+    for (id, server_id, vault_id, path, cache, mode) in rows {
+        let binding = BindingId::from_hex(&id).map_err(error)?;
+        let server = ServerId::from_hex(&server_id).map_err(error)?;
         if let Some(existing) = config.bindings.iter_mut().find(|b| b.id == id) {
-            if existing.vault_id != vault_id
+            if server != legacy_server
+                || existing.vault_id != vault_id
                 || existing.path != Path::new(&path)
                 || existing.cache != Path::new(&cache)
             {
@@ -189,8 +263,9 @@ pub(crate) async fn load_bindings(
                 mode,
             });
         }
+        assignments.insert(binding, server);
     }
-    Ok(())
+    Ok(assignments)
 }
 
 /// Recheck physical ancestry, including drive aliases; neither a GUI check nor string prefixes suffice.
@@ -232,20 +307,25 @@ pub(crate) async fn new_binding(
     admit(&proposed)?;
     Ok(binding)
 }
+type BindingRow = (String, String, String, String, String, String, bool, bool);
+
 pub(crate) async fn binding_list(db: &Database) -> Result<Vec<BindingInfo>, PortError> {
-    let rows: Vec<(String,String,String,String,String,bool,bool)> = sqlx::query_as("SELECT lower(hex(b.id)),lower(hex(b.vault_id)),b.local_path,b.cache_path,b.mode,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id ORDER BY b.id")
+    let rows: Vec<BindingRow> = sqlx::query_as("SELECT lower(hex(b.id)),lower(hex(b.server_id)),lower(hex(b.vault_id)),b.local_path,b.cache_path,b.mode,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id ORDER BY b.id")
         .fetch_all(db.pool()).await.map_err(error)?;
     Ok(rows
         .into_iter()
         .map(
-            |(binding_id, vault_id, local_path, cache_path, mode, paused, detached)| BindingInfo {
-                binding_id,
-                vault_id,
-                local_path,
-                cache_path,
-                mode,
-                paused,
-                detached,
+            |(binding_id, server_id, vault_id, local_path, cache_path, mode, paused, detached)| {
+                BindingInfo {
+                    binding_id,
+                    server_id: Some(server_id),
+                    vault_id,
+                    local_path,
+                    cache_path,
+                    mode,
+                    paused,
+                    detached,
+                }
             },
         )
         .collect())
@@ -253,9 +333,12 @@ pub(crate) async fn binding_list(db: &Database) -> Result<Vec<BindingInfo>, Port
 
 pub(crate) async fn execute(
     db: &Arc<Database>,
-    config: &mut AgentConfig,
-    client: &ApiClient<ReqwestTransport>,
-    session: &AuthSession,
+    config: &AgentConfig,
+    server: Option<(
+        &mut ServerConfig,
+        &ApiClient<ReqwestTransport>,
+        &AuthSession,
+    )>,
     running: Running,
     command: &Command,
 ) -> Result<ManagementResult, PortError> {
@@ -420,12 +503,13 @@ pub(crate) async fn execute(
                 {
                     result.operation_id = Some(op.to_string());
                 } else {
+                    let (_, client, _) = server.ok_or_else(|| reject("REAUTH_REQUIRED"))?;
                     return crate::management_history::retry_restore(db, binding, op, client).await;
                 }
             }
         }
-        C::GetConnection => result.connection = Some(connection(config, session)),
         C::Login => {
+            let (server, client, session) = server.ok_or_else(|| reject("NOT_READY"))?;
             client
                 .login(&vaultsyncd_protocol::generated::LoginRequest {
                     login: p.username.clone().unwrap(),
@@ -436,21 +520,23 @@ pub(crate) async fn execute(
                 .map_err(connection_error)?;
             let username = p.username.as_ref().unwrap();
             if let Err(cause) = sqlx::query("INSERT INTO agent_login_profiles(server_id,username) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET username=excluded.username")
-                .bind(&config.server.id).bind(username).execute(db.pool()).await {
+                .bind(&server.id).bind(username).execute(db.pool()).await {
                 session.clear();
                 return Err(error(cause));
             }
-            config.server.username = Some(username.clone());
-            result.connection = Some(connection(config, session));
+            server.username = Some(username.clone());
+            result.connection = Some(connection(server, Some(session)));
         }
         C::Logout => {
+            let (server, client, session) = server.ok_or_else(|| reject("NOT_READY"))?;
             client
                 .logout()
                 .await
                 .map_err(vaultsyncd_http_client::transfer_error)?;
-            result.connection = Some(connection(config, session));
+            result.connection = Some(connection(server, Some(session)));
         }
         C::ListVaults => {
+            let (_, client, _) = server.ok_or_else(|| reject("REAUTH_REQUIRED"))?;
             let vaults: vaultsyncd_protocol::generated::VaultList = client
                 .send_json(
                     ApiRequest::new(Method::Get, "/v1/vaults")
@@ -491,6 +577,7 @@ pub(crate) async fn execute(
             if command.name == C::DownloadEntry {
                 crate::management_files::download(worker, entry, op).await?;
             } else {
+                let (_, client, _) = server.ok_or_else(|| reject("REAUTH_REQUIRED"))?;
                 crate::management_files::release(worker, config, client, entry, op).await?;
             }
             result.operation_id = Some(op.to_string());
@@ -522,9 +609,12 @@ pub(crate) async fn execute(
             );
         }
         C::ListActivity => {
-            return crate::management_activity::execute(db, config, client, command).await;
+            let (server, client, _) = server.ok_or_else(|| reject("REAUTH_REQUIRED"))?;
+            return crate::management_activity::execute(db, config, &server.id, client, command)
+                .await;
         }
         C::ListHistory | C::ListTrash | C::RestoreEntry => {
+            let (_, client, _) = server.ok_or_else(|| reject("REAUTH_REQUIRED"))?;
             return crate::management_history::execute(db, config, client, command).await;
         }
         // Connection changes are applied by the runtime, which owns the Credential Manager scope.
@@ -532,20 +622,16 @@ pub(crate) async fn execute(
     }
     Ok(result)
 }
-pub(crate) fn connection(
-    config: &AgentConfig,
-    session: &AuthSession,
-) -> vaultsyncd_local_ipc::generated::ConnectionInfo {
-    vaultsyncd_local_ipc::generated::ConnectionInfo {
-        server_id: config.server.id.clone(),
-        server_url: config.server.url.clone(),
-        ca_file: config
-            .server
+pub(crate) fn connection(server: &ServerConfig, session: Option<&AuthSession>) -> ConnectionInfo {
+    ConnectionInfo {
+        server_id: server.id.clone(),
+        server_url: server.url.clone(),
+        ca_file: server
             .ca_file
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        authenticated: session.has_credentials() && !session.needs_reauth(),
-        username: config.server.username.clone(),
+        authenticated: session.is_some_and(|s| s.has_credentials() && !s.needs_reauth()),
+        username: server.username.clone(),
     }
 }
 type ProblemRow = (
@@ -568,7 +654,7 @@ pub(crate) async fn problems(
          UNION ALL SELECT binding_id,'event:'||seq,NULL,last_error_code,0,NULL FROM received_changes WHERE state='blocked'
          UNION ALL SELECT binding_id,'intent:'||intent_id,entry_id,last_error_code,0,target_path FROM local_intents WHERE state='failed'
          UNION ALL SELECT t.binding_id,'transfer:'||lower(hex(t.version_id)),v.entry_id,t.last_error_code,0,NULL FROM transfers t LEFT JOIN agent_versions v ON v.binding_id=t.binding_id AND v.version_id=t.version_id WHERE t.state='failed'
-         UNION ALL SELECT b.id,'notification:'||n.dedupe_key,n.entry_id,n.code,0,NULL FROM notifications n JOIN bindings b ON n.binding_id=b.id OR (n.binding_id IS NULL AND (n.dedupe_key LIKE 'vault:'||lower(hex(b.vault_id))||':%' OR n.dedupe_key NOT LIKE 'vault:%')) WHERE n.state='active'
+         UNION ALL SELECT b.id,'notification:'||n.dedupe_key,n.entry_id,n.code,0,NULL FROM notifications n JOIN bindings b ON n.binding_id=b.id OR (n.binding_id IS NULL AND (n.dedupe_key LIKE 'server:'||lower(hex(b.server_id))||':vault:'||lower(hex(b.vault_id))||':%' OR (n.dedupe_key NOT LIKE 'vault:%' AND n.dedupe_key NOT LIKE 'server:%'))) WHERE n.state='active'
          UNION ALL SELECT a.binding_id,lower(hex(a.op_id)),NULL,'MANAGEMENT_PENDING',1,NULL FROM agent_actions a WHERE json_extract(a.specification,'$.kind')='management_restore' AND a.result IS NULL
         ) SELECT lower(hex(o.binding_id)),o.problem_id,CASE WHEN o.entry_id IS NOT NULL THEN lower(hex(o.entry_id)) END,o.code,l.dirty,l.residency,o.retryable,o.path FROM origins o LEFT JOIN local_entries l ON l.binding_id=o.binding_id AND l.entry_id=o.entry_id WHERE (? IS NULL OR o.binding_id=?) ORDER BY o.binding_id,o.problem_id")
         .bind(binding.map(|b|b.as_bytes().to_vec())).bind(binding.map(|b|b.as_bytes().to_vec())).fetch_all(db.pool()).await.map_err(error)?;
@@ -577,7 +663,7 @@ pub(crate) async fn problems(
     let mut seen = std::collections::HashSet::new();
     let mut result = vec![];
     for (binding_id, problem_id, entry_id, code, dirty, residency, retryable, path) in rows {
-        if !seen.insert(problem_id.clone()) {
+        if !seen.insert((binding_id.clone(), problem_id.clone())) {
             continue;
         }
         if vaultsyncd_domain::error::ErrorCode::from_code(&code).is_none()

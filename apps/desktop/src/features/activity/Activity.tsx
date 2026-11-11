@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Card, Group, NativeSelect, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import { Button, Dialog, StatusBadge, Table } from "@vaultsyncd/ui";
-import type { ActivityRecord, BindingInfo } from "@vaultsyncd/local-ipc-types";
+import type { ActivityRecord, BindingInfo, ConnectionInfo } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
 
 type Direction = "" | "upload" | "download";
@@ -24,7 +24,7 @@ export function activityFile(row: ActivityRecord): string {
   return row.path ?? (row.action === "upload_finalize" ? "待提交的上传内容" : row.entry_id ?? "文件路径未知");
 }
 
-export function Activity({ agent, bindings = [], authenticated = false }: { agent: AgentClient; bindings?: BindingInfo[]; authenticated?: boolean }) {
+export function Activity({ agent, bindings = [], connections = [] }: { agent: AgentClient; bindings?: BindingInfo[]; connections?: ConnectionInfo[] }) {
   const [binding, setBinding] = useState("");
   const [direction, setDirection] = useState<Direction>("");
   const [rows, setRows] = useState<ActivityRecord[]>();
@@ -36,6 +36,9 @@ export function Activity({ agent, bindings = [], authenticated = false }: { agen
   const sequence = useRef(0);
   const current = bindings.find(item => item.binding_id === binding);
   const available = !!current;
+  const server = connections.find(item => item.server_id === current?.server_id);
+  const authenticated = server?.authenticated === true;
+  const endpoint = server?.server_url;
   const load = useCallback(async (before?: string) => {
     const request = ++sequence.current;
     setRows(undefined); setNext(undefined); setError(""); setSelected(undefined);
@@ -51,7 +54,7 @@ export function Activity({ agent, bindings = [], authenticated = false }: { agen
         setError(failure instanceof Error ? failure.message : "同步与传输记录读取失败。");
       }
     } finally { if (request === sequence.current) setLoading(false); }
-  }, [agent, binding, direction, available, authenticated]);
+  }, [agent, binding, direction, available, authenticated, endpoint]);
   useEffect(() => {
     void load();
     return () => { sequence.current++; };
@@ -79,11 +82,11 @@ export function Activity({ agent, bindings = [], authenticated = false }: { agen
       </Group>
       {current && <Text size="xs" c="dimmed">Vault {current.vault_id}</Text>}
     </Stack></Card>
-    {!authenticated && <Alert color="yellow">请先登录服务端后查看记录。</Alert>}
+    {server && !authenticated && <Alert color="yellow">请先登录此绑定的服务器。</Alert>}
     {error && <Alert color="red" role="alert">{error}</Alert>}
     {loading && <Text role="status">正在读取记录…</Text>}
     <Table<ActivityRecord> caption="同步与传输记录当前页" rows={rows ?? []} rowKey={row => row.id}
-      emptyMessage={!authenticated ? "尚未登录服务端。" : loading ? "正在读取记录…" : error ? "记录读取失败。" : rows ? "当前筛选没有记录。" : "请选择绑定。"} columns={[
+      emptyMessage={!available ? "请选择绑定。" : !authenticated ? server ? "尚未登录此绑定的服务器。" : "尚未读取记录。" : loading ? "正在读取记录…" : error ? "记录读取失败。" : rows ? "当前筛选没有记录。" : "请选择绑定。"} columns={[
         { key: "time", title: "时间", render: row => activityTime(row.occurred_at) },
         { key: "client", title: "客户端", render: row => row.client_label },
         { key: "file", title: "文件", render: row => <Text size="sm" style={{ overflowWrap: "anywhere" }}>{activityFile(row)}</Text> },

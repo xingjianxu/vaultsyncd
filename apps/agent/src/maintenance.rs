@@ -460,7 +460,7 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
     let result=async{
         let db=Arc::new(Database::open(config.state_dir.join("client.sqlite")).await?);
         let work=async{
-            crate::management::load_connection(&db,&mut config).await?;crate::management::load_bindings(&db,&mut config).await?;crate::management::admit(&config)?;
+            crate::management::load_bindings(&db,&mut config).await?;crate::management::admit(&config)?;
             if plan.paused.is_empty(){plan.paused=crate::management::binding_list(&db).await?.iter().map(|b|(b.binding_id.clone(),b.paused)).collect();
                 for binding in &config.bindings{let id=BindingId::from_hex(&binding.id)?;let local=Arc::new(crate::local::Local::open(&binding.path,&binding.cache,db.clone(),id).await?);crate::management_export::export(local,&config,plan.backup.join("recovery").join(&binding.id).to_str().ok_or("invalid recovery destination")?).await?;}}
             if action.starts_with("uninstall-"){storage::require_program_idle(program)?;}
