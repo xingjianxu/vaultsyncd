@@ -12,6 +12,10 @@ use vaultsyncd_release_client::GithubUpdates;
 static RUNNING: AtomicBool = AtomicBool::new(false);
 // Keep native menu resources outside the tray event callback: Tauri drops tray
 // callbacks while clearing its icon registry during exit.
+pub(crate) fn is_running() -> bool {
+    RUNNING.load(Ordering::Acquire)
+}
+
 pub(crate) struct UpdateMenu(pub(crate) tauri::menu::MenuItem<tauri::Wry>);
 
 fn message(text: &str) {
@@ -43,6 +47,9 @@ fn staging() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn start(app: &tauri::AppHandle, item: tauri::menu::MenuItem<tauri::Wry>) {
+    if crate::desktop_lifecycle::is_exiting(app) {
+        return;
+    }
     if RUNNING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()

@@ -22,7 +22,11 @@ or change the device identity. Do not copy local state to another machine.
 Only one agent writes a user's state. Opening another copy reuses the healthy
 agent already running for this user; it does not replace the running version.
 Close the desktop, safely stop the agent, then open the desired copy to switch
-versions. Closing the desktop alone leaves background synchronization running.
+versions. By default, closing the desktop hides it in the tray and keeps syncing.
+Program Settings can instead exit the desktop, optionally stopping the agent
+(enabled by default). Tray Exit follows the same agent-stop preference. Safe
+stop preserves recovery exports and pauses bindings; resume them after restart.
+If safe stop fails, the desktop stays open and shows the reason.
 
 Stop vaultsyncd.cmd asks for confirmation, pauses bindings, exports unconfirmed
 content and safely stops the agent. Bindings remain PAUSED after restart;

@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S200 done**：桌面新增「程序配置」，默认关闭主窗留托盘；完全退出/托盘退出可选有序关闭 agent（默认开），设置按用户原子持久化、损坏可修复，失败留窗不强杀。宿主desktop11/agent2、根类型/桌面构建、Chromium6组及既有UI/bindings/remove-server、生成/ZIP8、Windows严格clippy与生产构建通过；真实Windows S200 **106项**及S185启动 **62项**通过。交接 [S200](tasks/S200.md)，证据 `/data/vaultsyncd-dev/S200-desktop-settings-20261111/`。等待本地提交、干净来源开发构建及合并清理；无服务端产物变化不部署、不发行。下一 ready：S199（现有维护停止围栏保持）。
+
 当前 **S196 done**：按用户要求统一「内置默认排除 + 绑定额外规则」，桌面原「完整排除清单」改为「额外排除规则」，空文本仍自动排除 `~$*` 等临时文件，`!` 可重新包含。内置清单只维护在 fs-common，运行时/解释/保存校验/首次导入统一叠加；迁移 0017 与幂等默认策略采用使已有绑定安全升级，排除停放的操作不再阻塞 full 补齐，远端-only 条目受控恢复，已跟踪缺失文件保持围栏。本机 IPC 升 3.0（远端 HTTP 不变），桌面文案与生成代码同步。验证：agent-core 135、client-store 61、fs-common 33、local-ipc 20+2+9+1、generate/fmt/typecheck/desktop build 与 activity、新浏览器 7 组及 UI/bindings/detach 回归、Windows 交叉严格 clippy；真实 Windows 原生 `run-native-exclusions.sh` exit=0 覆盖默认/附加/清空/否定/重启/协调/冲突保留/full 完成，宿主按服务端字节复核。证据 `/data/vaultsyncd-dev/S196-default-exclusions-20261111/`，交接 [S196](tasks/S196.md)。限制：排除条目被本地删除时的有序停止/导出返回 LOCAL_CHANGED，按需绑定的部分占位保持围栏，已建 [S199](tasks/S199.md)（未开始）。实现 `01583ce` 已 ff 合 master（基线 master 308f5b1），任务树/分支已清理；无服务端产物更改，不部署、不发行；S011/S106/S107/S108 门禁不变。
 
 当前 **S198 done**：引入锁定 Lucide React，保留 FileIcon 文件/目录，统一两端通用操作、导航/主题与上传下载方向。根类型/两端构建/前端测试、Chromium传输/文件浏览/30组真实文件操作与桌面60组布局通过，Nix纯构建及generation276上线，HTTPS/IPC/ServerId及两源28静态资源核对通过；实现ed6d60b/8f4c07b及交接211fe8f已ff合master，8挂载已卸载、任务树/分支清理；交接 [S198](tasks/S198.md)。未原生复测/重打包客户端；下一ready无，原平台门禁保持。

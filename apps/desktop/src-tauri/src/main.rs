@@ -4,6 +4,10 @@
 #[cfg(windows)]
 mod commands;
 #[cfg(windows)]
+mod desktop_lifecycle;
+#[cfg(any(windows, test))]
+mod desktop_settings;
+#[cfg(windows)]
 mod file_commands;
 #[cfg(windows)]
 mod history_commands;

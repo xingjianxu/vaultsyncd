@@ -191,7 +191,7 @@ pub async fn run(action: &str) -> Result<()> {
             .stderr(Stdio::null())
             .spawn()?;
         println!(
-            "Agent IPC healthy; desktop opened. Closing the desktop does not stop synchronization."
+            "Agent IPC healthy; desktop opened. Window-close and agent-stop behavior follow the desktop's Program Settings."
         );
         return Ok(());
     }

@@ -2355,6 +2355,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S080 Windows Tauri 壳与状态桥
 
+- S200 覆盖默认关闭行为：桌面壳独立 `get_desktop_settings() -> {close_action:"tray"|"exit",stop_agent_on_exit:bool}`、`set_desktop_settings({settings:同DTO}) -> 同DTO`，仅 bundled main 的 ACL 授权，与 agent IPC/schema 无关。默认 `tray/true`，本机 `%LOCALAPPDATA%/vaultsyncd/desktop-settings.json` 持久保存；读取损坏明确报错并保守留托盘，保存成功后才发布运行时设置。主窗 CloseRequested 按设置隐藏或请求退出；托盘「退出程序」强制退出界面并遵循停止 agent 偏好，重复请求由门禁合并。停止复用同目录 `agent --user-session stop` 的用户认证、PrepareMaintenance、恢复导出及确切进程/writer 等待；失败保留界面与诊断，不强杀。自动更新继续调用原有受控退出。安全停止会持久暂停绑定，重启需显式 Resume。
+
 - S167：桌面在单实例锁内、建窗前调用 `startup::ensure_agent()`；先用固定同用户会话 endpoint 的 `request_verified` 核对相邻 agent EXE/SID/GetStatus，已就绪直接复用，只有端点缺失才调用相邻 `vaultsyncd-agent.exe --ensure-user-session`。该有限等待入口复用 ZIP `ensure_ready`，按包类型选择已有固定用户配置或 ZIP claim，仍执行 owner/维护门禁；70 秒桌面等待上限只终止启动器，后台 agent 与 GUI 生命周期独立。失败经 `dialog::startup_error` 显示本机错误并退出1，不自动覆盖配置或强杀既有 agent。
 
 - `apps/desktop/src-tauri` 是根 Cargo workspace 的 `vaultsyncd-desktop`，共用根锁；Tauri 仅 Windows 目标构建。默认构建内嵌 `../dist`，先在默认 devShell 执行桌面 `build`，再在 windows devShell 用 `cargo xwin build --locked --target x86_64-pc-windows-msvc -p vaultsyncd-desktop` 构建。Windows shell 增加锁定 Python 供原生验收哈希清单。

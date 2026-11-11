@@ -18,6 +18,7 @@ if($RunDirectory.StartsWith((Join-Path $env:LOCALAPPDATA 'vaultsyncd'),[StringCo
 $program=Join-Path $RunDirectory '中文 ZIP 程序'
 $profile=Join-Path $env:LOCALAPPDATA 'vaultsyncd\agent'
 $owner=Join-Path $env:LOCALAPPDATA 'vaultsyncd\zip-owner.json'
+$desktopSettings=Join-Path $env:LOCALAPPDATA 'vaultsyncd\desktop-settings.json'
 $results=Join-Path $RunDirectory 'results'
 $script:sequence=0
 function Write-Json($path,$value){[IO.File]::WriteAllText($path,($value|ConvertTo-Json -Depth 30),(New-Object Text.UTF8Encoding($false)))}
@@ -84,6 +85,11 @@ if($Mode-eq 'Fresh'){
     $path=Join-Path $program $file.path
     if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()-ne $file.sha256-or (Get-Item -LiteralPath $path).Length-ne $file.bytes){throw ('ZIP file hash mismatch: '+$file.path)}
   }
+  # Fresh refused all pre-existing application state. Pin only this test user's close
+  # policy so the launcher suite can reopen windows; S200 verifies default tray behavior.
+  New-Item -ItemType Directory -Path (Split-Path $desktopSettings -Parent)|Out-Null
+  Write-Json $desktopSettings @{close_action='exit';stop_agent_on_exit=$false}
+  $desktopSettingsHash=(Get-FileHash -LiteralPath $desktopSettings -Algorithm SHA256).Hash.ToLowerInvariant()
   # Exercise the real double-click cmd path, with spaces and Chinese characters.
   $start=Join-Path $program 'Start vaultsyncd.cmd'
   $entry=Start-Process -FilePath $env:ComSpec -ArgumentList ('/d /s /c ""'+$start+'""') -PassThru
@@ -148,19 +154,23 @@ if($Mode-eq 'Fresh'){
   if((Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash-ne $legacyOwnerHash){throw 'restart changed inert legacy owner bytes'}
   $after=Registration-Snapshot
   if(($before|ConvertTo-Json -Compress)-ne ($after|ConvertTo-Json -Compress)){throw 'ZIP unexpectedly registered startup/shortcut/setup'}
-  Write-Json (Join-Path $results 'fresh.json') @{ok=$true;scope='launcher smoke, NOT live sync/CFAPI acceptance';sid=$identity.User.Value;program=$program;profile=$profile;source=$ExpectedCommit;archive_sha256=$ZipSha256;first_status=$status;restarted_status=$restarted;registration=$after;device_id=$config.device_id;cross_directory_reuse=$true;cross_directory_cold_start=$true;manifests_not_required=$true;legacy_owner_sha256=(Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()}
+  Write-Json (Join-Path $results 'fresh.json') @{ok=$true;scope='launcher smoke, NOT live sync/CFAPI acceptance';sid=$identity.User.Value;program=$program;profile=$profile;source=$ExpectedCommit;archive_sha256=$ZipSha256;desktop_settings_sha256=$desktopSettingsHash;first_status=$status;restarted_status=$restarted;registration=$after;device_id=$config.device_id;cross_directory_reuse=$true;cross_directory_cold_start=$true;manifests_not_required=$true;legacy_owner_sha256=(Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()}
   Write-Output 'Fresh smoke passed. Agent/GUI remain for explicit live server binding. No users/logon settings were changed.'
   exit
 }
 if(!(Test-Path (Join-Path $results 'fresh.json'))){throw 'only this script Fresh-owned run may be continued'}
 $fresh=Get-Content (Join-Path $results 'fresh.json') -Raw -Encoding UTF8|ConvertFrom-Json
 if($fresh.sid-ne $identity.User.Value-or $fresh.program-ne $program){throw 'wrong run/user'}
+if(!$fresh.desktop_settings_sha256-or !(Test-Path -LiteralPath $desktopSettings)-or (Get-FileHash -LiteralPath $desktopSettings -Algorithm SHA256).Hash.ToLowerInvariant()-ne $fresh.desktop_settings_sha256){throw 'owned desktop preference fixture changed; preserve it and inspect this run'}
 if(!(Test-Path $owner)-or (Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()-ne $fresh.legacy_owner_sha256){throw 'owned run legacy owner fixture was changed'}
 if($Mode-eq 'Stop'){
   Close-Desktop
   Run-Session $program 'stop'|Out-Null
   if((Get-FileHash -LiteralPath $owner -Algorithm SHA256).Hash.ToLowerInvariant()-ne $fresh.legacy_owner_sha256){throw 'safe Stop changed legacy owner bytes'}
-  Write-Json (Join-Path $results 'stopped.json') @{ok=$true;state_preserved=(Test-Path $profile);owner_preserved=(Test-Path $owner)}
+  # Restore the original absence only while the exact Fresh-created bytes are retained.
+  if((Get-FileHash -LiteralPath $desktopSettings -Algorithm SHA256).Hash.ToLowerInvariant()-ne $fresh.desktop_settings_sha256){throw 'desktop preferences changed during Stop; leave them untouched'}
+  Remove-Item -LiteralPath $desktopSettings
+  Write-Json (Join-Path $results 'stopped.json') @{ok=$true;state_preserved=(Test-Path $profile);owner_preserved=(Test-Path $owner);desktop_preferences_restored=$true}
   exit
 }
 # Live requires explicit GUI/CLI enrollment against a real isolated server FIRST. It is never

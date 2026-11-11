@@ -4,6 +4,8 @@ fn main() {
         let commands: &'static [&'static str] =
             if std::env::var_os("CARGO_FEATURE_NATIVE_ACCEPTANCE").is_some() {
                 &[
+                    "get_desktop_settings",
+                    "set_desktop_settings",
                     "agent_list_files",
                     "agent_download_entry",
                     "agent_release_entry",
@@ -52,6 +54,8 @@ fn main() {
                     }
                 }
                 &[
+                    "get_desktop_settings",
+                    "set_desktop_settings",
                     "agent_list_files",
                     "agent_download_entry",
                     "agent_release_entry",

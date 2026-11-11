@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Folder, FolderSearch, History as HistoryIcon, Link, TriangleAlert } from "lucide-react";
+import { ArrowLeftRight, Folder, FolderSearch, History as HistoryIcon, Link, Settings as SettingsIcon, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppProvider, EmptyState, Icon, PageShell, StatusBadge } from "@vaultsyncd/ui";
 import { Button, Group, Stack, Text } from "@mantine/core";
@@ -12,6 +12,8 @@ import { Activity } from "./features/activity/Activity";
 import { Problems } from "./features/problems/Problems";
 import { Bindings } from "./features/bindings/Bindings";
 import { useRoute } from "./route";
+import { Settings } from "./features/settings/Settings";
+import { nativeDesktopSettings, type DesktopSettingsClient } from "./services/desktop";
 
 declare const __APP_VERSION__: string;
 
@@ -22,12 +24,13 @@ const items = [
   { path: "/history", label: "历史与回收站", icon: <Icon icon={HistoryIcon} /> },
   { path: "/activity", label: "同步与传输记录", icon: <Icon icon={ArrowLeftRight} /> },
   { path: "/problems", label: "问题与恢复", icon: <Icon icon={TriangleAlert} /> },
+  { path: "/settings", label: "程序配置", icon: <Icon icon={SettingsIcon} /> },
 ];
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
-export function App({ agent = nativeAgent }: { agent?: AgentClient }) {
-  return <AppProvider getStyleNonce={getStyleNonce}><AppView agent={agent} /></AppProvider>;
+export function App({ agent = nativeAgent, desktopSettings = nativeDesktopSettings }: { agent?: AgentClient; desktopSettings?: DesktopSettingsClient }) {
+  return <AppProvider getStyleNonce={getStyleNonce}><AppView agent={agent} desktopSettings={desktopSettings} /></AppProvider>;
 }
-function AppView({ agent }: { agent: AgentClient }) {
+function AppView({ agent, desktopSettings }: { agent: AgentClient; desktopSettings: DesktopSettingsClient }) {
   const route = useRoute("/bindings");
   const addingServer = route === "/connections/add";
   const path = addingServer ? "/connections" : route;
@@ -87,8 +90,9 @@ function AppView({ agent }: { agent: AgentClient }) {
   const bindingScope = JSON.stringify(bindings?.map(binding => binding.binding_id).sort());
   return <PageShell product="桌面客户端" items={items} activePath={path} homePath="/bindings"
     sidebarFooter={<Text size="xs" c="dimmed" data-client-version>vaultsyncd {__APP_VERSION__}</Text>} status={<StatusBadge tone={connected ? "success" : "neutral"}>{connected ? "agent 已连接" : "未连接"}</StatusBadge>}><Stack gap="lg" className="app-content desktop-content">
-    <Group justify="space-between" align="center"><Text size="sm" c="dimmed" role="status" data-agent-feedback>{connectionError || message || (connected ? "本机 agent 状态已读取。" : "正在读取本机 agent 状态。")}</Text><Button disabled={busy} onClick={() => run(refresh)}>检查本机连接</Button></Group>
-    {path === "/connections" ? <Connections agent={agent} connections={connections} adding={addingServer} read={connected} changed={refresh} run={run} busy={busy} />
+    {path !== "/settings" && <Group justify="space-between" align="center"><Text size="sm" c="dimmed" role="status" data-agent-feedback>{connectionError || message || (connected ? "本机 agent 状态已读取。" : "正在读取本机 agent 状态。")}</Text><Button disabled={busy} onClick={() => run(refresh)}>检查本机连接</Button></Group>}
+    {path === "/settings" ? <Settings client={desktopSettings} />
+    : path === "/connections" ? <Connections agent={agent} connections={connections} adding={addingServer} read={connected} changed={refresh} run={run} busy={busy} />
     : path === "/bindings" ? <Bindings agent={agent} connections={connections} bindings={bindings} states={snapshot?.bindings} read={connected} changed={refresh} run={run} busy={busy} />
     : path === "/files" ? <Files key={bindingScope} agent={agent} bindings={bindings} connections={connected ? connections : []} changed={refresh} run={run} busy={busy} />
     : path === "/history" ? <History key={bindingScope} agent={agent} bindings={bindings} connections={connected ? connections : []} changed={refresh} run={run} busy={busy} />

@@ -1,4 +1,5 @@
 use crate::commands::*;
+use crate::desktop_lifecycle::*;
 use crate::file_commands::*;
 use crate::history_commands::*;
 use crate::notifications::*;
@@ -117,6 +118,8 @@ pub(super) fn run() {
     let builder = tauri::Builder::default();
     #[cfg(not(feature = "native-acceptance"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        get_desktop_settings,
+        set_desktop_settings,
         agent_list_files,
         agent_download_entry,
         agent_release_entry,
@@ -147,6 +150,8 @@ pub(super) fn run() {
     ]);
     #[cfg(feature = "native-acceptance")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        get_desktop_settings,
+        set_desktop_settings,
         agent_list_files,
         agent_download_entry,
         agent_release_entry,
@@ -182,6 +187,8 @@ pub(super) fn run() {
     builder
         .setup(|app| {
             app.manage(crate::notifications::Notifications::load());
+            app.manage(crate::desktop_lifecycle::load());
+            app.manage(crate::desktop_lifecycle::ExitState::default());
             #[cfg(feature = "native-acceptance")]
             app.add_capability(r#"{"identifier":"native-acceptance","windows":["main"],"permissions":["allow-acceptance-report","allow-acceptance-file-control","allow-acceptance-fixture-phase","allow-acceptance-toast-history"]}"#)?;
             let window =
@@ -256,7 +263,7 @@ pub(super) fn run() {
             let main = window.build()?;
             let open =
                 tauri::menu::MenuItem::with_id(app, "open", "打开 vaultsyncd", true, None::<&str>)?;
-            let quit = tauri::menu::MenuItem::with_id(app, "quit", "退出界面", true, None::<&str>)?;
+            let quit = tauri::menu::MenuItem::with_id(app, "quit", "退出程序", true, None::<&str>)?;
             let update = tauri::menu::MenuItem::with_id(app, "update", "自动更新", true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&open, &update, &quit])?;
             app.manage(crate::updates::UpdateMenu(update));
@@ -272,14 +279,20 @@ pub(super) fn run() {
                             let _ = window.set_focus();
                         }
                     }
-                    "quit" => app.exit(0),
+                    "quit" => crate::desktop_lifecycle::exit(app),
                     _ => {}
                 })
                 .build(app)?;
             // Publish the window only after its tray controls and managed resources are ready.
             main.show()?;
             main.set_focus()?;
+            if let Err(error) = app.state::<crate::desktop_settings::DesktopSettings>().get() {
+                tauri::async_runtime::spawn_blocking(move || { vaultsyncd_platform_windows::shell::dialog::desktop_error(&error); });
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" { crate::desktop_lifecycle::close_main(window, event); }
         })
         .run(tauri::generate_context!())
         .expect("desktop runtime failed");

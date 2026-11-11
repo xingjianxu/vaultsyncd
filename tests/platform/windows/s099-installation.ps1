@@ -80,6 +80,7 @@ try{
   $phase=[IO.File]::ReadAllText((Join-Path $results 'phase.txt'))
   $program=Join-Path $env:LOCALAPPDATA 'Programs\同步 客户端'
   $agentProfile=Join-Path $env:LOCALAPPDATA 'vaultsyncd\agent'
+  $desktopSettings=Join-Path $env:LOCALAPPDATA 'vaultsyncd\desktop-settings.json'
   $local=Join-Path $env:USERPROFILE 'Documents\同步 样本'
   $cli=Join-Path $program 'vaultsyncd-cli.exe'
   function Read-Status {
@@ -99,6 +100,7 @@ try{
   if($phase-eq 'install'){
     if(Test-Path $program){throw 'program directory was not clean'}
     if(Test-Path $agentProfile){throw 'profile directory was not clean'}
+    if(Test-Path -LiteralPath $desktopSettings){throw 'new test user has existing desktop preferences; preserve them'}
     if(Get-ItemProperty 'HKCU:\Software\vaultsyncd' -ErrorAction SilentlyContinue){throw 'installation registration was not clean'}
     $hashes=Get-Content (Join-Path $public 'hashes.json') -Raw|ConvertFrom-Json
     foreach($item in $hashes.PSObject.Properties){if((Get-FileHash (Join-Path $public $item.Name) -Algorithm SHA256).Hash.ToLowerInvariant()-ne $item.Value){throw 'installer transport hash mismatch'}}
@@ -118,6 +120,8 @@ try{
     $folder=$shell.NameSpace((Split-Path $shortcut -Parent));$item=$folder.ParseName((Split-Path $shortcut -Leaf))
     if($item.ExtendedProperty('System.AppUserModel.ID')-ne 'org.vaultsyncd.desktop'){throw 'shortcut AUMID mismatch'}
     Wait-Agent
+    # Only this run-created standard user is changed; S200 tests the default tray behavior.
+    Write-Json $desktopSettings @{close_action='exit';stop_agent_on_exit=$false}
     $firstAgentId=$agent.ProcessId
     New-Item -ItemType Directory -Path $local|Out-Null
     $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=19299 --remote-debugging-address=127.0.0.1'

@@ -9,6 +9,8 @@
     "windows"
   ],
   "permissions": [
+    "allow-get-desktop-settings",
+    "allow-set-desktop-settings",
     "allow-agent-get-status",
     "allow-agent-discover-connection",
     "allow-agent-set-connection",
