@@ -92,7 +92,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     await wait("default vault selected without opening picker", () => document.querySelector('[name="vault_id"]').value === fixture.vault);
     report.defaultVaultSelected = true;
     report.noManualVaultRead = ![...document.querySelectorAll("button")].some(b => b.textContent === "读取授权 Vault");
-    vaultPicker().click();
+    vaultPicker().click(); await delay();
     await wait("authorized vaults", () => document.querySelector(`[role="option"][value="${fixture.vault}"]`));
     const option = document.querySelector(`[role="option"][value="${fixture.vault}"]`);
     report.vaultNameDisplayed = option.textContent === fixture.vaultName && option.textContent !== fixture.vault;
@@ -100,7 +100,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     report.pathReadOnly = pathInput().readOnly;
     report.noSelectionCannotSubmit = [...document.querySelectorAll("button")].find(b => b.textContent === "创建绑定并开始合并").disabled;
     option.click(); await delay();
-    vaultPicker().click();
+    vaultPicker().click(); await delay();
     await wait("refreshed vaults", () => vaultPicker().getAttribute("aria-busy") === "false" && document.querySelector(`[role="option"][value="${fixture.vault}"]`));
     report.vaultSelectionSurvivesRefresh = document.querySelector('[name="vault_id"]').value === fixture.vault;
     vaultPicker().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
