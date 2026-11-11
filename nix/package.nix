@@ -36,7 +36,7 @@ let
     pname = "vaultsyncd-web";
     src = webSource;
     fetcherVersion = 5;
-    hash = "sha256-+PUWu57iIW8DFbB4ctDKPqx26Wym3fiA9+P4DdDhYtY=";
+    hash = "sha256-MzJOE40FZGAXw1hY7e/1eHEaybQb7bwTB5l3h5seNQg=";
   };
   web = pkgs.stdenvNoCC.mkDerivation {
     pname = "vaultsyncd-web";

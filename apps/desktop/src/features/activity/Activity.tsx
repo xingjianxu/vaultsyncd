@@ -1,3 +1,4 @@
+import { TransferDirection } from "@vaultsyncd/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Card, Group, NativeSelect, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import { Button, Dialog, StatusBadge, Table } from "@vaultsyncd/ui";
@@ -92,7 +93,7 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
         { key: "time", title: "时间", render: row => activityTime(row.occurred_at) },
         { key: "client", title: "客户端", render: row => row.client_hostname || "未知主机" },
         { key: "file", title: "文件", render: row => <Text size="sm" style={{ overflowWrap: "anywhere" }}>{activityFile(row)}</Text> },
-        { key: "direction", title: "方向", render: row => row.direction === "upload" ? "上传" : row.direction === "download" ? "下载" : row.direction },
+        { key: "direction", title: "方向", render: row => <TransferDirection direction={row.direction} /> },
         { key: "result", title: "结果", render: row => <StatusBadge tone={row.status === "failed" ? "danger" : "neutral"}>{activityResult(row)}</StatusBadge> },
         { key: "size", title: "文件大小", render: row => row.size === undefined ? "—" : `${row.size} 字节` },
         { key: "details", title: "详情", render: row => <Button variant="default" size="xs" onClick={() => setSelected(row)}>查看详情</Button> },

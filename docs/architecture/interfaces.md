@@ -2644,9 +2644,11 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 ## S152 客户端与 Web 共用 Mantine 展示层
 
+2026-11-11 S198：共享 `Icon({ icon: LucideIcon, ...LucideProps })` 使用静态具名 Lucide 导入，替代旧 `path` 参数；现有两端消费者已迁移。`TransferDirection({ direction: string })` 将 upload/download 显示为带中文 `role="img"`、`aria-label` 和 title 的非交互图标，未知方向保留原值。FileIcon 入口及 file/folder/folder-open 几何保持，通用操作委托 Lucide。只新增展示依赖，无 wire/schema/IPC 变更。
+
 2026-11-10 S183：`PageShellProps.brandIcon?: ReactNode` 由应用注入顶栏品牌图标；Web 登录与顶栏直接引用根 `logo.svg?no-inline`，HTML favicon 引用同一 SVG，经 Vite 输出同一个带摘要 `/assets/logo-*.svg`，沿用同源 CSP 与已有静态路由。Nix `webSource` 包含根 `logo.svg`。Windows `bundle.icon` 显式指定 `icons/icon.ico`（16/24/32/48/64/128/256），EXE/默认窗口共用；托盘克隆 `default_window_icon`，不再生成纯色占位图。ICO 由根 SVG 派生，命令及证据见 S183 交接；无 wire/schema 变化。
 
-- `packages/ui` 提供 `AppProvider`、`PageShell`、`Button`、`Table<T>`、`Dialog`、`EmptyState`、`StatusBadge` 及 `styles.css`，只依赖 React/Mantine，不导入 IPC、HTTP、Tauri 或 wire DTO。两端在各自根入口导入共享样式。
+- `packages/ui` 提供 `AppProvider`、`PageShell`、`Button`、`Table<T>`、`Dialog`、`EmptyState`、`StatusBadge` 及 `styles.css`，只依赖 React/Mantine/Lucide，不导入 IPC、HTTP、Tauri 或 wire DTO。两端在各自根入口导入共享样式。
 - `AppProvider` 使用 Mantine 默认主题、`defaultColorScheme="auto"` 和全局通知区，可传 `getStyleNonce`。`PageShell` 提供 48px 顶栏、240px 导航、窄屏 Burger、跳转主内容与明暗切换；调用方提供路由、导航、连接状态和各端附加入口。主题偏好使用 Mantine 本机存储，不存放账号凭据。
 - `Dialog` 组合 Mantine Modal，通过 `opened` 控制并保持组件挂载，使关闭恢复焦点；`Table` 保留 caption/columns/rows/rowKey/emptyMessage，水平滚动局限表格内部。Web 的 `components/ui.tsx` 仅稳定重导出共享展示 API，业务页面继续使用自身 API 和状态机。
 - 桌面 `App` 的用户操作通过 Mantine 通知展示等待/成功/失败，四秒关闭成功通知，失败保留可关闭；轮询仍原位显示连接状态和错误，不按两秒频率刷通知。连接错误与操作反馈分开保存，首次成功读取显示已读取；业务请求拒绝后重新读取本机状态，不能据业务拒绝推断 IPC 断连。文件手动读取失败及恢复 pending/unknown/rejected 向统一反馈传播失败，保留原操作身份与状态；恢复 committed 后仅状态刷新失败不降回 unknown。`run/busy/changed` 和所有 Tauri invoke 命令不变。

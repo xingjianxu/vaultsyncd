@@ -1,3 +1,4 @@
+import { ArrowLeftRight, Folder, FolderSearch, History as HistoryIcon, Link, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppProvider, EmptyState, Icon, PageShell, StatusBadge } from "@vaultsyncd/ui";
 import { Button, Group, Stack, Text } from "@mantine/core";
@@ -15,12 +16,12 @@ import { useRoute } from "./route";
 declare const __APP_VERSION__: string;
 
 const items = [
-  { path: "/bindings", label: "同步目录", icon: <Icon path="M3 7h6l2 2h10v11H3z M3 7V4h6l2 3" /> },
-  { path: "/connections", label: "连接设置", icon: <Icon path="M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-2 2 M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l2-2" /> },
-  { path: "/files", label: "文件与操作", icon: <Icon path="M3 7h6l2 2h10v11H3z M8 13h8 M8 16h5" /> },
-  { path: "/history", label: "历史与回收站", icon: <Icon path="M3 11a9 9 0 1 1 2 7 M3 4v7h7 M12 7v5l3 2" /> },
-  { path: "/activity", label: "同步与传输记录", icon: <Icon path="M3 6h18 M3 12h18 M3 18h18 M7 3v6 M17 9v6 M7 15v6" /> },
-  { path: "/problems", label: "问题与恢复", icon: <Icon path="M12 3 2 21h20z M12 9v5 M12 17v1" /> },
+  { path: "/bindings", label: "同步目录", icon: <Icon icon={Folder} /> },
+  { path: "/connections", label: "连接设置", icon: <Icon icon={Link} /> },
+  { path: "/files", label: "文件与操作", icon: <Icon icon={FolderSearch} /> },
+  { path: "/history", label: "历史与回收站", icon: <Icon icon={HistoryIcon} /> },
+  { path: "/activity", label: "同步与传输记录", icon: <Icon icon={ArrowLeftRight} /> },
+  { path: "/problems", label: "问题与恢复", icon: <Icon icon={TriangleAlert} /> },
 ];
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
 export function App({ agent = nativeAgent }: { agent?: AgentClient }) {

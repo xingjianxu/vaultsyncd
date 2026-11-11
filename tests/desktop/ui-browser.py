@@ -68,6 +68,7 @@ PRESENTATION_FIXTURE = r"""() => {
     switch (command) {
       case 'agent_discover_connection': return { connection: { authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' } };
       case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 11 }, snapshot_version: 'fixture:1', bindings: [state], management: { connections: [{ authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }], bindings: [binding], problems: [], notices: [] } };
+      case 'agent_list_activity': return { activity: ['upload', 'download'].map((direction, index) => ({ id: String(index + 1), vault_id: binding.vault_id, occurred_at: '1794300000', direction, action: direction === 'upload' ? 'sync_commit' : 'download', status: direction === 'upload' ? 'committed' : 'served', path: clean.path })) };
       case 'agent_list_files': if (window.__S152_FAIL_FILES__) throw { message: 'S152 presentation: file read failed' }; return { files: [clean, dirty, longName] };
       case 'agent_list_history': case 'agent_list_trash': return { items: [item] };
       case 'agent_restore_entry': throw { message: 'PENDING: S152 presentation restore not committed' };
@@ -157,6 +158,13 @@ def main():
             fixture.on("pageerror", lambda error: errors.append(str(error)))
             fixture.add_init_script("(" + PRESENTATION_FIXTURE + ")()")
             fixture.add_init_script("window.__S152_CSP__ = []; document.addEventListener('securitypolicyviolation', e => window.__S152_CSP__.push({directive:e.effectiveDirective, blocked:e.blockedURI}));")
+            fixture.goto(origin + "/#/activity")
+            fixture.locator('[name="activity_binding"]').select_option("1" * 32)
+            expect(fixture.get_by_role("img", name="上传", exact=True)).to_have_count(1)
+            expect(fixture.get_by_role("img", name="下载", exact=True)).to_have_count(1)
+            expect(fixture.locator("svg.lucide-upload")).to_have_count(1)
+            expect(fixture.locator("svg.lucide-download")).to_have_count(1)
+            fixture.screenshot(path=str(OUTPUT / "activity-icons-presentation.png"))
             fixture.goto(origin + "/#/files")
             expect(fixture.locator("[data-agent-feedback]")).to_have_text("本机 agent 状态已读取。")
             expect(fixture.locator(".mantine-AppShell-header").get_by_text("agent 已连接", exact=True)).to_be_visible()
@@ -168,6 +176,8 @@ def main():
             expect(dirty.get_by_text("待上传本地修改", exact=True)).to_be_visible()
             expect(dirty.get_by_role("button", name="释放空间", exact=True)).to_be_disabled()
             expect(dirty.get_by_role("button", name="下载", exact=True)).to_be_disabled()
+            expect(dirty.get_by_role("button", name="下载", exact=True).locator("svg.lucide-download")).to_have_count(1)
+            expect(dirty.get_by_role("button", name="下载", exact=True)).to_have_attribute("title", "下载")
             for scheme, width in (("light", 320), ("dark", 1440)):
                 fixture.emulate_media(color_scheme=scheme)
                 fixture.set_viewport_size({"width": width, "height": 900})

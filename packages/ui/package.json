@@ -2,7 +2,8 @@
   "dependencies": {
     "@mantine/core": "9.7.5",
     "@mantine/hooks": "9.7.5",
-    "@mantine/notifications": "9.7.5"
+    "@mantine/notifications": "9.7.5",
+    "lucide-react": "1.71.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

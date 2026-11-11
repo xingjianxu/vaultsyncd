@@ -7,6 +7,7 @@
     "@noble/hashes": "2.4.0",
     "@vaultsyncd/api-client": "workspace:*",
     "@vaultsyncd/ui": "workspace:*",
+    "lucide-react": "1.71.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

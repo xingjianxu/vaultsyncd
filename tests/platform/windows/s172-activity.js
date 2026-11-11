@@ -29,7 +29,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     catch (error) { check(String(error.message ?? error).includes(expected), label); }
   }
   const tableRows = () => [...document.querySelectorAll('table[aria-label="同步与传输记录当前页"] tbody tr')];
-  const directions = () => tableRows().filter(row => row.children.length === 7).map(row => row.children[3].textContent);
+  const directions = () => tableRows().filter(row => row.children.length === 7).map(row => row.children[3].querySelector('[role="img"]')?.getAttribute("aria-label") ?? row.children[3].textContent);
   async function synchronized(bindingId) {
     try { return (await invoke("agent_get_status")).bindings?.find(item => item.binding_id === bindingId)?.synchronized === true; }
     catch (error) { report.lastStatusError = JSON.stringify(error); return false; }

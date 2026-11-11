@@ -1,3 +1,4 @@
+import { TransferDirection } from "@vaultsyncd/ui";
 import { useEffect, useState } from "react";
 import { Alert, Badge, Button, Group, Loader, Modal, NativeSelect, ScrollArea, Stack, Table, Text } from "@mantine/core";
 import { listActivity, listVaults, type ActivityPage, type ActivityRecord, type VaultSummary } from "@vaultsyncd/api-client";
@@ -98,7 +99,7 @@ export function ActivityPanel() {
         <Table.Td><Text size="sm" style={{ whiteSpace: "nowrap" }}>{timestamp(row.occurred_at)}</Text></Table.Td>
         <Table.Td><Text size="sm" style={{ overflowWrap: "anywhere", maxWidth: 200 }}>{row.client_hostname || "未知主机"}</Text></Table.Td>
         <Table.Td><Text size="sm" style={{ overflowWrap: "anywhere", maxWidth: 320 }}>{row.path ?? (row.action === "upload_finalize" ? "上传内容（尚未关联文件）" : "路径未知")}</Text></Table.Td>
-        <Table.Td>{row.direction === "upload" ? "上传" : row.direction === "download" ? "下载" : row.direction}</Table.Td>
+        <Table.Td>{<TransferDirection direction={row.direction} />}</Table.Td>
         <Table.Td><Badge variant="light" color={row.status === "failed" ? "red" : row.status === "committed" ? "green" : "blue"}>{outcome(row)}</Badge></Table.Td>
         <Table.Td><Text size="sm" style={{ whiteSpace: "nowrap" }}>{bytes(row.size)}</Text></Table.Td>
         <Table.Td><Button variant="subtle" size="compact-xs" aria-label={`查看记录 ${row.id} 详情`} onClick={() => setChosen(row)}>详情</Button></Table.Td>
