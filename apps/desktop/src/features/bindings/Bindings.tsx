@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Button as LinkButton, Card, Group, Loader, NativeSelect, Select, Stack, Text, TextInput, Title } from "@mantine/core";
 import { Button, Table } from "@vaultsyncd/ui";
 import type { BindingInfo, BindingStatus, ConnectionInfo, RemoteItem } from "@vaultsyncd/local-ipc-types";
@@ -14,7 +14,7 @@ export function Bindings({ agent, bindings, connections, states, read, changed, 
 }) {
   const [serverId, setServerId] = useState("");
   const [managing, setManaging] = useState<string>();
-  const selected = connections.find(item => item.server_id === serverId);
+  const selected = connections.find(item => item.server_id === serverId) ?? connections[0];
   function serverLabel(serverId?: string) {
     const server = connections.find(item => item.server_id === serverId);
     if (!server) return serverId ?? "—";
@@ -41,7 +41,6 @@ export function Bindings({ agent, bindings, connections, states, read, changed, 
         <Title order={2} size="h3">添加同步目录</Title>
         <NativeSelect label="服务器" name="server_id" value={selected?.server_id ?? ""} disabled={busy}
           onChange={event => setServerId(event.target.value)}>
-          <option value="">请选择服务器</option>
           {connections.map(server => <option key={server.server_id} value={server.server_id}>
             {serverLabel(server.server_id)}{server.authenticated ? "" : "（未登录）"}
           </option>)}
@@ -84,9 +83,9 @@ function BindingForm({ agent, serverId, changed, run, busy }: Actions & { server
   const [localPath, setLocalPath] = useState("");
   const readingVaults = useRef(false);
   const request = useRef(0);
+  const mounted = useRef(false);
 
-  useEffect(() => () => { request.current++; }, []);
-  async function readVaults() {
+  const readVaults = useCallback(async () => {
     if (readingVaults.current) return;
     const generation = ++request.current;
     readingVaults.current = true;
@@ -96,21 +95,26 @@ function BindingForm({ agent, serverId, changed, run, busy }: Actions & { server
       const result = await agent.listVaults(serverId);
       const items = result.items;
       if (!items) throw new Error("agent 未返回 Vault 清单。");
-      if (generation === request.current) {
+      if (mounted.current && generation === request.current) {
         setVaults(items);
-        setVaultId(current => items.some(vault => vault.id === current) ? current : null);
+        setVaultId(current => items.some(vault => vault.id === current) ? current : items[0]?.id ?? null);
       }
     } catch (error) {
-      if (generation === request.current) {
+      if (mounted.current && generation === request.current) {
         setVaults(undefined);
         setVaultId(null);
         setVaultsError(error instanceof Error ? error.message : "读取 Vault 失败，请重新打开选择框重试。");
       }
     } finally {
       readingVaults.current = false;
-      if (generation === request.current) setVaultsLoading(false);
+      if (mounted.current && generation === request.current) setVaultsLoading(false);
     }
-  }
+  }, [agent, serverId]);
+  useEffect(() => {
+    mounted.current = true;
+    void readVaults();
+    return () => { mounted.current = false; };
+  }, [readVaults]);
   const vaultSelected = !vaultsLoading && !vaultsError && !!vaultId && !!vaults?.some(vault => vault.id === vaultId);
 
   function create(event: FormEvent<HTMLFormElement>) {

@@ -89,6 +89,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     field("server_id", fixture.serverId);
     await wait("binding page", () => !!document.querySelector('[name="vault_id"]'));
     const vaultPicker = () => document.querySelector('[role="combobox"]');
+    await wait("default vault selected without opening picker", () => document.querySelector('[name="vault_id"]').value === fixture.vault);
+    report.defaultVaultSelected = true;
     report.noManualVaultRead = ![...document.querySelectorAll("button")].some(b => b.textContent === "读取授权 Vault");
     vaultPicker().click();
     await wait("authorized vaults", () => document.querySelector(`[role="option"][value="${fixture.vault}"]`));
@@ -141,6 +143,11 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     await click("暂停"); await wait("pause visible", () => text().includes("已暂停")); report.pauseVisible = true;
     await click("恢复"); await wait("resume visible", () => !text().includes("已暂停")); report.resumeVisible = true;
+    for (const [route, name] of [["/files", "files_binding"], ["/history", "history_binding"], ["/activity", "activity_binding"]]) {
+      location.hash = route;
+      await wait(`default binding ${route}`, () => document.querySelector(`[name="${name}"]`)?.value === report.bindingId);
+    }
+    report.defaultBindingsSelected = true;
     // S193: a managed binding blocks server removal; the refusal must leave the connection intact.
     location.hash = "/connections";
     const removeButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "移除服务器" && !b.disabled);
@@ -160,7 +167,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
     report.nonceStyles = /^[0-9a-f]{32}$/.test(nonce ?? "") && [...document.querySelectorAll("style")].every(style => style.nonce === nonce);
     report.cspViolations = cspViolations;
-    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","bindingKeepsPinnedIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible && report.removalBlockedByBinding;
+    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","bindingKeepsPinnedIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.defaultVaultSelected && report.defaultBindingsSelected && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible && report.removalBlockedByBinding;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

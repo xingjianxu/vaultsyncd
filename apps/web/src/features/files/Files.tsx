@@ -67,7 +67,7 @@ function VaultBrowser({ location }: { location: string }) {
   useEffect(() => {
     if (!loading && !error && !route.vaultId && !route.error && vaults.length) navigation.navigate(filesLocation(vaults[0].vault_id), true);
   }, [loading, error, route.vaultId, route.error, vaults, location]);
-  const vault = vaults.find(item => item.vault_id === route.vaultId);
+  const vault = route.vaultId ? vaults.find(item => item.vault_id === route.vaultId) : route.error ? undefined : vaults[0];
   const vaultError = route.error || error || (!loading && route.vaultId && !vault ? "Vault 不存在或未获授权。" : "");
   const vaultPicker = <Select aria-label="浏览 Vault" placeholder="选择 Vault" value={vault?.vault_id ?? null} allowDeselect={false} searchable
     nothingFoundMessage="没有匹配的 Vault" disabled={loading || !vaults.length}

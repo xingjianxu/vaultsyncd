@@ -26,7 +26,7 @@ export function activityFile(row: ActivityRecord): string {
 }
 
 export function Activity({ agent, bindings = [], connections = [] }: { agent: AgentClient; bindings?: BindingInfo[]; connections?: ConnectionInfo[] }) {
-  const [binding, setBinding] = useState("");
+  const [binding, setBinding] = useState(bindings[0]?.binding_id ?? "");
   const [direction, setDirection] = useState<Direction>("");
   const [rows, setRows] = useState<ActivityRecord[]>();
   const [cursor, setCursor] = useState<string>();
@@ -73,7 +73,7 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
     <Card withBorder><Stack>
       <SimpleGrid cols={{ base: 1, sm: 2 }}>
         <NativeSelect label="绑定" name="activity_binding" value={binding} onChange={event => chooseBinding(event.target.value)}>
-          <option value="">请选择绑定</option>{bindings.map(item => <option key={item.binding_id} value={item.binding_id}>{item.local_path}{item.detached ? "（已解除）" : ""}</option>)}
+          {!bindings.length && <option value="">暂无绑定</option>}{bindings.map(item => <option key={item.binding_id} value={item.binding_id}>{item.local_path}{item.detached ? "（已解除）" : ""}</option>)}
         </NativeSelect>
         <NativeSelect label="方向" name="activity_direction" value={direction} onChange={event => chooseDirection(event.target.value as Direction)}>
           <option value="">全部</option><option value="upload">上传</option><option value="download">下载</option>

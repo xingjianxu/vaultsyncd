@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Card, Group, NativeSelect, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import { Button, Dialog, Table } from "@vaultsyncd/ui";
 import type { BindingInfo, ConnectionInfo, FileStatus, RemoteItem } from "@vaultsyncd/local-ipc-types";
@@ -7,7 +7,7 @@ import type { AgentClient, RestoreInput } from "../../services/agent";
 interface Job { input: RestoreInput; state: "unknown" | "pending" | "committed" | "rejected"; path?: string }
 const key = (binding: string) => `vaultsyncd.desktop.restore.${binding}`;
 export function History({ agent, bindings = [], connections, run, busy, changed }: { agent: AgentClient; bindings?: BindingInfo[]; connections: ConnectionInfo[]; run(action: () => Promise<void>): void; busy: boolean; changed(): Promise<void> }) {
-  const [binding, setBinding] = useState(""); const [source, setSource] = useState<"history" | "trash">("history");
+  const [binding, setBinding] = useState(bindings[0]?.binding_id ?? ""); const [source, setSource] = useState<"history" | "trash">("history");
   const [files, setFiles] = useState<FileStatus[]>(); const [filesNext, setFilesNext] = useState<string>(); const [entry, setEntry] = useState("");
   const [items, setItems] = useState<RemoteItem[]>(); const [cursor, setCursor] = useState<string>(); const [next, setNext] = useState<string>();
   const [chosen, setChosen] = useState<RemoteItem>(); const [job, setJob] = useState<Job>(); const [message, setMessage] = useState("请选择绑定与历史或回收站。");
@@ -18,9 +18,12 @@ export function History({ agent, bindings = [], connections, run, busy, changed 
   function selectBinding(value: string) {
     setBinding(value); setItems(undefined); setFiles(undefined); setFilesNext(undefined); setEntry(""); setChosen(undefined);
     setMessage("请选择来源并读取当前清单。"); setCursor(undefined); setNext(undefined); setJob(undefined);
-    try { const text = sessionStorage.getItem(key(value)); if (text) { const saved = JSON.parse(text) as Job; if (saved.input?.bindingId === value) setJob(saved); } }
-    catch { setMessage("恢复记录无法读取，请到问题页核对agent保留的原操作。"); }
   }
+  useEffect(() => {
+    if (!binding) return;
+    try { const text = sessionStorage.getItem(key(binding)); if (text) { const saved = JSON.parse(text) as Job; if (saved.input?.bindingId === binding) setJob(saved); } }
+    catch { setMessage("恢复记录无法读取，请到问题页核对agent保留的原操作。"); }
+  }, [binding]);
   async function load(after?: string) {
     const result = source === "history" ? await agent.listHistory(binding, entry, after) : await agent.listTrash(binding, after);
     if (!result.items) throw new Error("agent 未返回恢复清单。"); setItems(result.items); setNext(result.next_cursor); setCursor(after);
@@ -48,7 +51,7 @@ export function History({ agent, bindings = [], connections, run, busy, changed 
       <Stack>
         <SimpleGrid cols={{ base: 1, sm: 2 }}>
           <NativeSelect label="绑定" name="history_binding" disabled={busy} value={binding} onChange={event => selectBinding(event.target.value)}>
-            <option value="">请选择绑定</option>{bindings.map(b => <option key={b.binding_id} value={b.binding_id}>{b.local_path}</option>)}
+            {!bindings.length && <option value="">暂无绑定</option>}{bindings.map(b => <option key={b.binding_id} value={b.binding_id}>{b.local_path}</option>)}
           </NativeSelect>
           <NativeSelect label="来源" name="recovery_source" disabled={busy} value={source} onChange={event => {
             setSource(event.target.value === "trash" ? "trash" : "history"); setItems(undefined); setCursor(undefined); setNext(undefined); setChosen(undefined);

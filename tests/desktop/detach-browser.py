@@ -39,6 +39,7 @@ FIXTURE = r"""() => {
     if (command === 'agent_list_files') {
       f.reads.push(args.bindingId);
       if (f.hold) await new Promise(resolve => f.pending.push(resolve));
+      if (args.bindingId === '9'.repeat(32)) return { files: [] };
     }
     return original(command, args);
   };
@@ -100,6 +101,7 @@ def main():
                 selector = page.locator(f'[name="{name}"]')
                 expect(selector.locator(f'option[value="{BINDING}"]')).to_have_count(0)
                 expect(selector.locator(f'option[value="{OTHER}"]')).to_have_count(1)
+                expect(selector).to_have_value(OTHER)
             page.evaluate("location.hash='/bindings'")
             page.get_by_role("button", name="检查本机连接", exact=True).click()
             expect(row).to_have_count(0)
@@ -123,16 +125,16 @@ def main():
                     # Polling, not an action, observes the external detach while the file read waits.
                 page.evaluate("detachFixture.detached=true")
                 expect(selector.locator(f'option[value="{BINDING}"]')).to_have_count(0)
-                expect(selector).to_have_value("")
+                expect(selector).to_have_value(OTHER)
                 if route == "/files":
                     page.evaluate("detachFixture.hold=false;detachFixture.pending.splice(0).forEach(resolve=>resolve())")
                     expect(page.get_by_role("cell", name="clean.txt", exact=True)).to_have_count(0)
-                    expect(page.get_by_role("button", name="刷新文件状态", exact=True)).to_be_disabled()
+                    expect(page.get_by_role("button", name="刷新文件状态", exact=True)).to_be_enabled()
                 elif route == "/history":
-                    expect(page.get_by_role("button", name="读取文件当前页", exact=True)).to_be_disabled()
+                    expect(page.get_by_role("button", name="读取文件当前页", exact=True)).to_be_enabled()
                 else:
-                    expect(page.get_by_role("button", name="刷新记录", exact=True)).to_be_disabled()
-            checks.append("external detach clears every active selection; late file reads cannot repopulate removed scope")
+                    expect(page.get_by_role("button", name="刷新记录", exact=True)).to_be_enabled()
+            checks.append("external detach selects remaining binding; late file reads cannot repopulate removed scope")
             assert not errors, errors
             assert not page.evaluate("window.csp")
             checks.append("no page errors or CSP violations")

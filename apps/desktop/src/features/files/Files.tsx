@@ -7,7 +7,7 @@ import type { AgentClient } from "../../services/agent";
 
 const labels: Record<string, string> = { unavailable: "不可用", failed: "失败", conflict: "冲突", local_changes: "待上传本地修改", syncing: "正在同步", downloaded: "已下载", cloud_only: "仅云端" };
 export function Files({ agent, bindings = [], connections, run, busy, changed }: { agent: AgentClient; bindings?: BindingInfo[]; connections: ConnectionInfo[]; run(action: () => Promise<void>): void; busy: boolean; changed(): Promise<void> }) {
-  const [binding, select] = useState(""); const [rows, setRows] = useState<FileStatus[]>();
+  const [binding, select] = useState(bindings[0]?.binding_id ?? ""); const [rows, setRows] = useState<FileStatus[]>();
   const [cursor, setCursor] = useState<string>(); const [next, setNext] = useState<string>();
   const [message, setMessage] = useState("请选择绑定后读取实际状态。"); const [fresh, setFresh] = useState(false);
   const [selected, setSelected] = useState<FileStatus>(); const [search, setSearch] = useState("");
@@ -38,7 +38,7 @@ export function Files({ agent, bindings = [], connections, run, busy, changed }:
       <Stack>
         <SimpleGrid cols={{ base: 1, sm: 2 }}>
           <NativeSelect label="绑定" name="files_binding" value={binding} onChange={event => { select(event.target.value); setCursor(undefined); setSelected(undefined); }}>
-            <option value="">请选择绑定</option>{bindings.map(b => <option key={b.binding_id} value={b.binding_id}>{b.local_path}{b.detached ? "（已解除）" : ""}</option>)}
+            {!bindings.length && <option value="">暂无绑定</option>}{bindings.map(b => <option key={b.binding_id} value={b.binding_id}>{b.local_path}{b.detached ? "（已解除）" : ""}</option>)}
           </NativeSelect>
           <TextInput label="搜索当前页" name="file_search" value={search} onChange={event => setSearch(event.target.value)} />
         </SimpleGrid>

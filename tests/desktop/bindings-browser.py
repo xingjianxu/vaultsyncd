@@ -22,7 +22,7 @@ FIXTURE = r"""() => {
     { server_id: b, server_url: 'https://two.example.invalid', authenticated: true },
   ];
   const bindings = [];
-  window.fixture = { calls: [], items: [{ id: '2'.repeat(32), name: '共享资料' }], fail: false, pending: [], connections };
+  window.fixture = { calls: [], items: [{ id: '2'.repeat(32), name: '共享资料' }, { id: '5'.repeat(32), name: '另一个 Vault' }], fail: false, pending: [], connections };
   const f = window.fixture;
   window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
     if (command === 'agent_get_status') return { bindings: [], management: { connections: structuredClone(connections), bindings: structuredClone(bindings) } };
@@ -62,11 +62,11 @@ def main():
             submit = page.get_by_role("button", name="创建绑定并开始合并")
             server_select = page.get_by_label("服务器", exact=True)
             expect(server_select).to_be_visible()
-            expect(picker).to_have_count(0)
-            server_select.select_option(SERVER_A)
+            expect(server_select).to_have_value(SERVER_A)
             expect(picker).to_be_visible()
             expect(page.get_by_role("button", name="读取授权 Vault", exact=True)).to_have_count(0)
-            assert page.evaluate("fixture.calls.length") == 0
+            page.wait_for_function("fixture.calls.length===1")
+            expect(picker).to_have_attribute("aria-busy", "true")
 
             def open_picker(count, keyboard=False):
                 if keyboard:
@@ -88,20 +88,21 @@ def main():
             picker.click()
             assert page.evaluate("fixture.calls.length") == 1  # reopen while pending shares the request
             resolve()
-            page.get_by_role("option", name="共享资料", exact=True).click()
+            expect(picker).to_have_value("共享资料")
+            page.get_by_role("option", name="另一个 Vault", exact=True).click()
             page.get_by_role("button", name="选择目录…", exact=True).click()
             expect(submit).to_be_enabled()
 
             open_picker(2, keyboard=True)
             resolve()
-            expect(picker).to_have_value("共享资料")
+            expect(picker).to_have_value("另一个 Vault")
             picker.press("Escape")
 
             page.evaluate("fixture.items=[{ id:'3'.repeat(32), name:'新增 Vault' }]")
             open_picker(3)
             resolve()
-            expect(picker).to_have_value("")
-            expect(submit).to_be_disabled()
+            expect(picker).to_have_value("新增 Vault")
+            expect(submit).to_be_enabled()
             expect(page.get_by_role("option", name="共享资料", exact=True)).to_have_count(0)
             page.get_by_role("option", name="新增 Vault", exact=True).click()
 
@@ -143,15 +144,14 @@ def main():
             resolve_pending = "fixture.pending.splice(0).forEach(request=>request.resolve())"
             page.evaluate(resolve_pending)
             page.evaluate("location.hash='/bindings'")
-            server_select.select_option(SERVER_A)
-            open_picker(9)
+            page.wait_for_function("fixture.calls.length===9")
             resolve()
-            expect(page.get_by_role("option", name="回到页面的新清单", exact=True)).to_be_visible()
-            picker.press("Escape")
+            expect(picker).to_have_value("回到页面的新清单")
             open_picker(10)
             server_select.select_option(SERVER_B)
             expect(picker).to_have_value("")
-            open_picker(11)
+            page.wait_for_function("fixture.calls.length===11")
+            picker.click()
             assert page.evaluate("fixture.calls.slice(-2)") == [SERVER_A, SERVER_B]
             page.evaluate("fixture.pending.pop().resolve()")
             option = page.get_by_role("option", name="服务器二的 Vault", exact=True)
@@ -175,8 +175,7 @@ def main():
             selector = page.locator('[name="activity_binding"]')
             selector.select_option(binding_b)
             expect(page.get_by_text("请先登录此绑定的服务器。", exact=True)).to_be_visible()
-            assert page.evaluate("fixture.activityBinding") is None
-            selector.select_option(index=1)
+            selector.select_option(index=0)
             expect(page.get_by_role("button", name="刷新记录", exact=True)).to_be_enabled()
             page.wait_for_function("fixture.activityBinding !== undefined")
             assert page.evaluate("fixture.activityBinding") != binding_b
@@ -192,7 +191,7 @@ def main():
                     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth"), page.evaluate("[...document.querySelectorAll('*')].filter(e=>e.getBoundingClientRect().right>innerWidth).map(e=>({tag:e.tagName,cls:e.className,right:e.getBoundingClientRect().right})).slice(-10)")
             assert not errors, errors
             assert not page.evaluate("window.csp")
-            (OUTPUT / "result.json").write_text(json.dumps({"ok": True, "checks": ["mouse open", "keyboard open", "deduplicated pending reopen", "selection retained", "revoked selection cleared", "failure blocks stale options", "retry", "binding submits selected identity", "empty", "malformed", "unmount", "fresh mount", "stale response after server switch", "two servers create and display", "per-server auth gate", "activity auth follows binding", "light/dark 320/1440", "CSP"]}))
+            (OUTPUT / "result.json").write_text(json.dumps({"ok": True, "checks": ["default server and Vault without opening", "mouse open", "keyboard open", "deduplicated pending reopen", "selection retained", "revoked selection falls back to first", "failure blocks stale options", "retry", "binding submits selected identity", "empty", "malformed", "unmount", "fresh mount", "stale response after server switch", "two servers create and display", "per-server auth gate", "activity auth follows binding", "light/dark 320/1440", "CSP"]}))
             browser.close()
     finally:
         server.shutdown()

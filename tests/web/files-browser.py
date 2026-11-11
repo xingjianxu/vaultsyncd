@@ -157,6 +157,8 @@ def main():
             assert made["state"] == "committed", made
             browsing_start = len(requests)
             page.reload()
+            first = api("/v1/vaults")["vaults"][0]
+            expect(page.get_by_role("combobox", name="浏览 Vault", exact=True)).to_have_value(f"{first['name']} · {first['vault_id'][:8]}")
 
             def choose(name, vault_id):
                 page.get_by_role("combobox", name="浏览 Vault", exact=True).click()
