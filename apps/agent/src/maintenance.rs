@@ -14,7 +14,6 @@ use vaultsyncd_local_ipc::generated::*;
 use vaultsyncd_platform_windows::{files::VaultHandle, ipc::Endpoint};
 use vaultsyncd_transfer::ports::PortError;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const LEGACY_SOURCE: &str = "cf1d174c3bd47b4babc2db053514619b2e733b07";
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Plan {
     program: PathBuf,
@@ -160,21 +159,22 @@ async fn rpc(
     endpoint: &Endpoint,
     name: CommandName,
     parameters: Option<CommandParameters>,
-    minor: u32,
 ) -> Result<GetStatusResult> {
-    let mut ipc_version = vaultsyncd_local_ipc::version::supported();
-    ipc_version.minor = minor;
     let response = endpoint
         .request(&Request {
             request_id: format!("maintenance-{}", std::process::id()),
-            ipc_version,
+            ipc_version: vaultsyncd_local_ipc::version::supported(),
             command: Command { name, parameters },
         })
         .await?;
     if let Some(e) = response.error {
         return Err(format!("maintenance IPC {:?}: {}", e.code, e.message).into());
     }
-    Ok(response.result.ok_or("missing management result")?)
+    let result = response.result.ok_or("missing management result")?;
+    if result.ipc_protocol.major != PROTOCOL_MAJOR {
+        return Err("maintenance IPC major mismatch; existing agent preserved".into());
+    }
+    Ok(result)
 }
 fn binding_parameters(id: &str) -> Option<CommandParameters> {
     Some(CommandParameters {
@@ -306,7 +306,6 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
                         CommandName::ResumeBinding
                     },
                     binding_parameters(id),
-                    4,
                 )
                 .await?;
             }
@@ -353,9 +352,10 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
         }
     }
     let endpoint = Endpoint::current("vaultsyncd-agent")?;
-    // Status 1.0 is the only negotiation request sent before learning the server's minor.
+    // IPC 3.0 already includes maintenance. Never negotiate old 2.x rule semantics.
+    // An incompatible running agent must be stopped/migrated explicitly, not replaced here.
     let online = match endpoint.connect().await {
-        Ok(_) => Some(rpc(&endpoint, CommandName::GetStatus, None, 0).await?),
+        Ok(_) => Some(rpc(&endpoint, CommandName::GetStatus, None).await?),
         Err(e) if matches!(e.raw_os_error(), Some(2) | Some(3)) => None,
         Err(e) => return Err(e.into()),
     };
@@ -410,74 +410,18 @@ pub async fn run(action: &str, program: &Path) -> Result<Option<PathBuf>> {
     // An empty active/paused list is valid when all rows are detached. It does not mean
     // online recovery export was skipped.
     let recovery_prepared_online = online.is_some();
-    if let Some(status) = online {
-        if status.ipc_protocol.minor >= 5 {
-            rpc(
-                &endpoint,
-                CommandName::PrepareMaintenance,
-                Some(CommandParameters {
-                    destination: Some(plan.backup.join("recovery").to_string_lossy().into_owned()),
-                    ..Default::default()
-                }),
-                5,
-            )
-            .await?;
-            if !process.as_ref().unwrap().wait(15_000)? {
-                return Err("prepared agent did not drain; no files replaced".into());
-            }
-        } else {
-            if installed["source"]["commit"].as_str() != Some(LEGACY_SOURCE)
-                || status.agent_version != "0.1.0"
-            {
-                return Err("legacy maintenance is supported only for the identified S099 unsigned development source".into());
-            }
-            for (id, _) in &plan.paused {
-                rpc(
-                    &endpoint,
-                    CommandName::PauseBinding,
-                    binding_parameters(id),
-                    4,
-                )
-                .await?;
-            }
-            let paused_status = rpc(&endpoint, CommandName::GetStatus, None, 0).await?;
-            if paused_status
-                .bindings
-                .as_ref()
-                .is_none_or(|items| items.iter().any(|b| !b.paused || b.transfers != "0"))
-            {
-                return Err(
-                    "legacy agent still has transfers; preserve/recover and retry after they drain"
-                        .into(),
-                );
-            }
-            for (id, _) in &plan.paused {
-                rpc(
-                    &endpoint,
-                    CommandName::ExportRecovery,
-                    Some(CommandParameters {
-                        binding_id: Some(id.clone()),
-                        destination: Some(
-                            plan.backup
-                                .join("recovery")
-                                .join(id)
-                                .to_string_lossy()
-                                .into_owned(),
-                        ),
-                        ..Default::default()
-                    }),
-                    4,
-                )
-                .await?;
-            }
-            storage::json(
-                &plan.backup.join("legacy-development-stop.json"),
-                &serde_json::json!({"source":LEGACY_SOURCE,"paused":true,"transfers":0,"recovery_exported":true,"not_a_formal_previous_release":true}),
-            )?;
-            process
-                .as_ref()
-                .unwrap()
-                .stop_preserved_development_build()?;
+    if online.is_some() {
+        rpc(
+            &endpoint,
+            CommandName::PrepareMaintenance,
+            Some(CommandParameters {
+                destination: Some(plan.backup.join("recovery").to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?;
+        if !process.as_ref().unwrap().wait(15_000)? {
+            return Err("prepared agent did not drain; no files replaced".into());
         }
     }
     let _guard = if let Some(guard) = offline_guard {
@@ -547,7 +491,7 @@ pub(crate) async fn finish_auto(program: &Path, backup: &Path) -> Result<()> {
     let _process = endpoint
         .maintenance_process(&program.join("vaultsyncd-agent.exe"))
         .await?;
-    let status = rpc(&endpoint, CommandName::GetStatus, None, 0).await?;
+    let status = rpc(&endpoint, CommandName::GetStatus, None).await?;
     if status.agent_version != env!("CARGO_PKG_VERSION") {
         return Err("updated agent version mismatch".into());
     }
@@ -567,7 +511,6 @@ pub(crate) async fn finish_auto(program: &Path, backup: &Path) -> Result<()> {
                 &endpoint,
                 CommandName::ResumeBinding,
                 binding_parameters(id),
-                4,
             )
             .await?;
         }
@@ -606,7 +549,6 @@ pub(crate) async fn recover_auto(program: &Path, backup: &Path) -> Result<()> {
                     destination: Some(recovery.to_string_lossy().into_owned()),
                     ..Default::default()
                 }),
-                5,
             )
             .await?;
             if !process.wait(60_000)? {
@@ -631,6 +573,82 @@ pub(crate) async fn recover_auto(program: &Path, backup: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn maintenance_rpc_uses_current_version_and_refuses_old_major_responses() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let endpoint = Endpoint::current(&format!(
+            "s196-maintenance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+        .unwrap();
+        let old_response = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        // Explicit RPC assembly fixture; no files, processes or maintenance side effects.
+        let server = vaultsyncd_platform_windows::ipc::Server::bind(endpoint.clone(), {
+            let old_response = old_response.clone();
+            let calls = calls.clone();
+            move |request| {
+                assert_eq!(
+                    request.ipc_version,
+                    vaultsyncd_local_ipc::version::supported()
+                );
+                assert!(matches!(
+                    request.command.name,
+                    CommandName::GetStatus | CommandName::PrepareMaintenance
+                ));
+                calls.fetch_add(1, Ordering::SeqCst);
+                let mut response = vaultsyncd_local_ipc::service::Service::new("S196-rpc-probe")
+                    .handle(&Request {
+                        command: Command {
+                            name: CommandName::GetStatus,
+                            parameters: None,
+                        },
+                        ..request
+                    });
+                if old_response.load(Ordering::SeqCst) {
+                    response.result.as_mut().unwrap().ipc_protocol = IpcVersion {
+                        major: 2,
+                        minor: 11,
+                    };
+                }
+                async move { Ok(response) }
+            }
+        })
+        .unwrap();
+        assert_eq!(
+            rpc(&endpoint, CommandName::GetStatus, None)
+                .await
+                .unwrap()
+                .ipc_protocol,
+            vaultsyncd_local_ipc::version::supported()
+        );
+        rpc(
+            &endpoint,
+            CommandName::PrepareMaintenance,
+            Some(CommandParameters {
+                destination: Some("C:/S196/recovery".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        old_response.store(true, Ordering::SeqCst);
+        assert!(
+            rpc(&endpoint, CommandName::GetStatus, None)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("major mismatch")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        server.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn legacy_zip_rollback_ignores_missing_or_corrupt_owner_backups() {
         let base = std::env::temp_dir().join(format!(

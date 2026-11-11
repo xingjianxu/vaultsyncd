@@ -16,10 +16,10 @@
 // 界面不会拿到“看起来可用”的默认值。
 
 /** agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。 */
-export const PROTOCOL_MAJOR = 2;
+export const PROTOCOL_MAJOR = 3;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 11;
+export const PROTOCOL_MINOR = 0;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -293,7 +293,7 @@ export interface CommandParameters {
   operation_id?: string;
   /** 瞬时登录密码；不能日志输出整个请求。 */
   password?: string;
-  /** 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。 */
+  /** 绑定级额外排除规则，追加在始终加载的内置默认规则之后；空文本表示仅使用默认规则，! 可重新包含默认排除项，最多4096字节；保存不删除任何内容。 */
   rules?: string;
   /** 不可复用的规则版本；同版本同文本幂等。 */
   rules_version?: string;
@@ -521,7 +521,7 @@ export interface ManagementResult {
   problems?: Array<Problem>;
   /** committed后按条目身份重新查询的当前位置 */
   restored_path?: string;
-  /** 当前完整排除清单，空字符串表示无排除规则。 */
+  /** 当前绑定级额外排除规则原文，不含内置默认规则；空字符串表示仅使用默认规则，! 可重新包含默认排除项。 */
   rules?: string;
   /** get_rules携带entry_id时，按持久身份解析路径并返回命中的规则/行号或包含原因。 */
   rules_explanation?: string;

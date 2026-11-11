@@ -314,6 +314,21 @@ impl Commits {
         Ok(disposition)
     }
 }
+pub(crate) async fn load_spec_optional(
+    local: &crate::local::Local,
+    op: OpId,
+) -> Result<Option<serde_json::Value>, PortError> {
+    let text: Option<String> = sqlx::query_scalar(
+        "SELECT specification FROM agent_actions WHERE op_id=? AND binding_id=?",
+    )
+    .bind(op.as_bytes().as_slice())
+    .bind(local.binding.as_bytes().as_slice())
+    .fetch_optional(local.db.pool())
+    .await
+    .map_err(error)?;
+    text.map(|text| serde_json::from_str(&text).map_err(error))
+        .transpose()
+}
 pub(crate) async fn load_spec(
     local: &crate::local::Local,
     op: OpId,
@@ -449,7 +464,27 @@ impl Worker {
         drop(conn);
         for op in queued {
             if op.kind.starts_with("upload_") {
-                let spec = load_spec(local, op.op).await?;
+                let Some(spec) = load_spec_optional(local, op.op).await? else {
+                    // First-import uploads are owned by the import journal and carry no
+                    // action spec. While the journal is unfinished its own pass decides
+                    // (and now drops excluded rows); a completed journal leaves only a
+                    // stale residue that must not keep failing every restore round.
+                    let importing: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM binding_imports WHERE binding_id=? AND complete=0)",
+                    )
+                    .bind(local.binding.as_bytes().as_slice())
+                    .fetch_one(local.db.pool())
+                    .await
+                    .map_err(error)?;
+                    if !importing {
+                        let mut tx = local.db.begin_write().await.map_err(error)?;
+                        vaultsyncd_client_store::queue::complete(&mut tx, op.op)
+                            .await
+                            .map_err(error)?;
+                        tx.commit().await.map_err(error)?;
+                    }
+                    continue;
+                };
                 if spec["kind"] != "upload" {
                     continue;
                 }

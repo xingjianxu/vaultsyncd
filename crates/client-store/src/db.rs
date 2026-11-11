@@ -1893,6 +1893,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_policy_upgrade_backs_up_v16_and_fences_old_binaries_without_changing_data() {
+        let dir = TestDir::new("s196-default-policy");
+        let path = dir.database();
+        let prior = dir.path.join("v16");
+        write_migrations_through(&prior, 16);
+        let previous = migrator(&prior).await;
+        let old = Database::open_with(&path, &previous).await.unwrap();
+        let binding = crate::test_support::seed_binding(&old, 0x31).await;
+        sqlx::query("INSERT INTO binding_controls(binding_id,rules,paused,revision) VALUES(?, '!~$keep.xlsx',1,7)")
+            .bind(binding.as_bytes().as_slice()).execute(old.pool()).await.unwrap();
+        old.close().await;
+        let upgraded = Database::open(&path).await.unwrap();
+        assert_eq!(upgraded.schema_version(), 17);
+        let state: (String, bool, i64, i64) = sqlx::query_as(
+            "SELECT rules,paused,revision,default_rules_version FROM binding_controls WHERE binding_id=?",
+        ).bind(binding.as_bytes().as_slice()).fetch_one(upgraded.pool()).await.unwrap();
+        assert_eq!(state, ("!~$keep.xlsx".into(), true, 7, 0));
+        let backup = migration_backup_path(&path, 16, 17);
+        assert_eq!(scalar::<i64>(&backup, "PRAGMA user_version").await, 16);
+        assert_eq!(
+            scalar::<String>(&backup, "SELECT rules FROM binding_controls").await,
+            "!~$keep.xlsx"
+        );
+        upgraded.close().await;
+        assert!(matches!(
+            Database::open_with(&path, &previous).await.unwrap_err(),
+            DbError::SchemaTooNew { .. }
+        ));
+        assert_eq!(scalar::<i64>(&path, "PRAGMA user_version").await, 17);
+        let reopened = Database::open(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM bindings")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap(),
+            1
+        );
+        reopened.close().await;
+        // Downgrade is an explicit whole-backup restore, never reinterpretation in place.
+        let restored = dir.path.join("restored.sqlite");
+        std::fs::copy(&backup, &restored).unwrap();
+        let restored = Database::open_with(&restored, &previous).await.unwrap();
+        assert_eq!(restored.schema_version(), 16);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT rules FROM binding_controls")
+                .fetch_one(restored.pool())
+                .await
+                .unwrap(),
+            "!~$keep.xlsx"
+        );
+        restored.close().await;
+    }
+
+    #[tokio::test]
     async fn failed_connection_migration_rolls_back_and_retries() {
         let dir = TestDir::new("s188-migration-retry");
         let path = dir.database();

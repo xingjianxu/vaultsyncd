@@ -67,7 +67,7 @@ PRESENTATION_FIXTURE = r"""() => {
     window.__S152_CALLS__.push({ command, args });
     switch (command) {
       case 'agent_discover_connection': return { connection: { authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' } };
-      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 2, minor: 11 }, snapshot_version: 'fixture:1', bindings: [state], management: { connections: [{ authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }], bindings: [binding], problems: [], notices: [] } };
+      case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 3, minor: 0 }, snapshot_version: 'fixture:1', bindings: [state], management: { connections: [{ authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }], bindings: [binding], problems: [], notices: [] } };
       case 'agent_list_activity': return { activity: ['upload', 'download'].map((direction, index) => ({ id: String(index + 1), vault_id: binding.vault_id, occurred_at: '1794300000', direction, action: direction === 'upload' ? 'sync_commit' : 'download', status: direction === 'upload' ? 'committed' : 'served', path: clean.path })) };
       case 'agent_list_files': if (window.__S152_FAIL_FILES__) throw { message: 'S152 presentation: file read failed' }; return { files: [clean, dirty, longName] };
       case 'agent_list_history': case 'agent_list_trash': return { items: [item] };

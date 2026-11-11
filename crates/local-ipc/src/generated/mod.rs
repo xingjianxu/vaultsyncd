@@ -17,9 +17,9 @@
 //! socket）不在本 crate。
 
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
-pub const PROTOCOL_MAJOR: u32 = 2;
+pub const PROTOCOL_MAJOR: u32 = 3;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 11;
+pub const PROTOCOL_MINOR: u32 = 0;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -333,7 +333,7 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    /// 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。
+    /// 绑定级额外排除规则，追加在始终加载的内置默认规则之后；空文本表示仅使用默认规则，! 可重新包含默认排除项，最多4096字节；保存不删除任何内容。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<String>,
@@ -582,7 +582,7 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub restored_path: Option<String>,
-    /// 当前完整排除清单，空字符串表示无排除规则。
+    /// 当前绑定级额外排除规则原文，不含内置默认规则；空字符串表示仅使用默认规则，! 可重新包含默认排除项。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<String>,

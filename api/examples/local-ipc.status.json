@@ -3,7 +3,7 @@
   "kind": "ok",
   "result": {
     "agent_version": "0.1.0",
-    "ipc_protocol": {"major": 2, "minor": 1},
+    "ipc_protocol": {"major": 3, "minor": 0},
     "bindings": [{
       "binding_id": "01010101010101010101010101010101",
       "dirty": "9007199254740993",

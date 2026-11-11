@@ -187,6 +187,22 @@ async fn run_mode(
     );
     let servers = management::load_connections(&db, &config).await?;
     let assignments = management::load_bindings(&db, &mut config).await?;
+    // Policy adoption is local and must also run without credentials or network access.
+    // Include detached bindings: retained state must not change meaning after a restart.
+    let bindings: Vec<Vec<u8>> = sqlx::query_scalar("SELECT id FROM bindings")
+        .fetch_all(db.pool())
+        .await
+        .map_err(error)?;
+    let controls = BindingControls::new(db.clone());
+    for binding in bindings {
+        controls
+            .adopt_default_policy(BindingId::from_bytes(
+                binding
+                    .try_into()
+                    .map_err(|_| error("invalid binding identity"))?,
+            ))
+            .await?;
+    }
     management::admit(&db, &config).await?;
     let (report_wake, mut reports) = mpsc::channel(1);
     let (connection_updates, connections) = watch::channel(Vec::new());

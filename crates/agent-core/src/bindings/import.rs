@@ -14,6 +14,7 @@ use vaultsyncd_client_store::db::Database;
 use vaultsyncd_client_store::entries::{BaselineEntry, EntryKind as StoreKind};
 use vaultsyncd_domain::ids::{BindingId, EntryId, IdSource, OpId, VaultId};
 use vaultsyncd_domain::version::{Generation, Revision, UtcTimestamp, VaultSeq};
+use vaultsyncd_fs_common::ignore::IgnoreRules;
 use vaultsyncd_fs_common::name::NameEquivalence;
 use vaultsyncd_fs_common::path::RelativePath;
 use vaultsyncd_planner::conflict::{
@@ -235,6 +236,10 @@ impl FirstImport {
             }
             self.store.save(binding_id, &mut journal).await?;
         }
+        if journal.entries.len() as u64 != number(&journal.snapshot.entry_count)? {
+            return Err(invalid("固定快照条目数不符"));
+        }
+        let rules = self.store.rules(binding_id).await?;
         if journal.items.is_none() {
             let local = self.local.scan(binding_id).await?;
             journal.items = Some(plan_manifest(
@@ -245,13 +250,24 @@ impl FirstImport {
                     .map_err(|e| invalid(e.to_string()))?,
                 self.local.as_ref(),
                 ids,
+                &rules,
             )?);
             self.store.prepare(&binding, &mut journal).await?;
         }
+        // Old journals may contain actions for newly excluded paths. Retain their identities,
+        // bytes and ACKs, but never replay those actions. Keep remote facts independently of the
+        // manifest so rule removal needs no new remote event.
+        self.store.apply_exclusions(&binding, &mut journal).await?;
         let mut completed = 0;
         let count = journal.items.as_ref().expect("已准备清单").len();
         for index in 0..count {
-            if journal.items.as_ref().expect("清单")[index].complete {
+            let current = &journal.items.as_ref().expect("清单")[index];
+            if current.complete || current.excluded {
+                continue;
+            }
+            let rules = self.store.rules(binding_id).await?;
+            if current.is_excluded(&rules)? {
+                self.store.apply_exclusions(&binding, &mut journal).await?;
                 continue;
             }
             if completed >= max_items {
@@ -272,6 +288,10 @@ impl FirstImport {
                     journal.items.as_mut().expect("清单")[index].preserved = true;
                     self.store.save(binding_id, &mut journal).await?;
                 }
+                if item.is_excluded(&self.store.rules(binding_id).await?)? {
+                    self.store.apply_exclusions(&binding, &mut journal).await?;
+                    continue;
+                }
                 if item.upload {
                     self.upload(&binding, &item).await?;
                     // ACK 事务可能已由上传处理器提交；重新读持久日志，不能用旧内存覆盖 ACK。
@@ -289,6 +309,10 @@ impl FirstImport {
                         ));
                     }
                 }
+            }
+            if item.is_excluded(&self.store.rules(binding_id).await?)? {
+                self.store.apply_exclusions(&binding, &mut journal).await?;
+                continue;
             }
             let installed = if item.remote.is_some() && (item.local.is_none() || item.upload) {
                 Some(
@@ -315,7 +339,7 @@ impl FirstImport {
             .as_ref()
             .expect("清单")
             .iter()
-            .all(|item| item.complete)
+            .all(|item| item.complete || item.excluded)
         {
             self.store.finish(&binding, &mut journal).await?;
         }
@@ -422,6 +446,28 @@ pub(super) struct Item {
     pub preserved: bool,
     pub result: Option<OperationResult>,
     pub complete: bool,
+    /// Sticky: reopening requires current reconciliation, not replay of this old plan.
+    #[serde(default)]
+    pub excluded: bool,
+}
+
+impl Item {
+    pub(super) fn is_excluded(&self, rules: &IgnoreRules) -> Result<bool, PortError> {
+        for kind in self
+            .local
+            .as_ref()
+            .map(|e| e.kind)
+            .into_iter()
+            .chain(self.remote.as_ref().map(|e| e.kind))
+        {
+            for value in [&self.path, &self.source, &self.target] {
+                if rules.is_excluded(&path(value)?, kind == WireKind::Directory) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
 }
 
 fn plan_manifest(
@@ -431,6 +477,7 @@ fn plan_manifest(
     server_time: UtcTimestamp,
     names: &dyn NameEquivalence,
     ids: &mut impl IdSource,
+    rules: &IgnoreRules,
 ) -> Result<Vec<Item>, PortError> {
     let remote = remote_paths(entries)?;
     let mut locals = BTreeMap::new();
@@ -456,6 +503,19 @@ fn plan_manifest(
             .filter(|_| local.is_none() || source == original)
             .cloned();
         if local.is_none() && matching_remote.is_none() {
+            continue;
+        }
+        if local.as_ref().is_some_and(|entry| {
+            rules.is_excluded(
+                &path(&original).expect("validated local path"),
+                entry.kind == WireKind::Directory,
+            )
+        }) || matching_remote.as_ref().is_some_and(|entry| {
+            rules.is_excluded(
+                &path(&original).expect("validated remote path"),
+                entry.kind == WireKind::Directory,
+            )
+        }) {
             continue;
         }
         let lf = local.as_ref().map(local_fact).transpose()?;
@@ -491,6 +551,23 @@ fn plan_manifest(
         let upload = match plan.action {
             Action::UploadNewEntry { .. } => true,
             Action::PreserveBoth(_) => {
+                if local
+                    .as_ref()
+                    .is_some_and(|entry| entry.kind == WireKind::Directory)
+                {
+                    for child in locals
+                        .values()
+                        .filter(|entry| entry.path.starts_with(&format!("{original}/")))
+                    {
+                        if rules.is_excluded(&path(&child.path)?, child.kind == WireKind::Directory)
+                        {
+                            return Err(PortError::rejected(
+                                "EXCLUDED",
+                                "首次保留改名会移动被排除的子项，需恢复现场",
+                            ));
+                        }
+                    }
+                }
                 // 首次导入提前固定服务器观察时间作为标签；真正的去重身份是完整 OpId。
                 // 检查扫描/快照中的所有名称，仍有并发撞名则由 create CAS 拒绝。
                 target = conflict_entry_path(
@@ -532,6 +609,7 @@ fn plan_manifest(
             preserved: false,
             result: None,
             complete: false,
+            excluded: false,
         });
     }
     for item in &items {

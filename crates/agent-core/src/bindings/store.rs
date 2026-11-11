@@ -9,6 +9,7 @@ use vaultsyncd_client_store::queue::{self, NewPendingOp, PendingOp};
 use vaultsyncd_domain::ids::{BindingId, EntryId, OpId, VersionId};
 use vaultsyncd_domain::state::{Dirty, Residency};
 use vaultsyncd_domain::version::{Generation, Revision};
+use vaultsyncd_fs_common::ignore::IgnoreRules;
 use vaultsyncd_protocol::generated::{EntryKind as WireKind, OperationResult, OperationState};
 use vaultsyncd_transfer::ports::{LocalErrorKind, PortError, PortFuture};
 
@@ -30,6 +31,71 @@ impl ImportStore {
             .await
             .map_err(db)?
             .ok_or_else(|| invalid("绑定不存在"))
+    }
+    pub async fn rules(&self, binding: BindingId) -> Result<IgnoreRules, PortError> {
+        let mut conn = self.database.pool().acquire().await.map_err(db)?;
+        rules(&mut conn, binding).await
+    }
+    /// Preserve the complete authenticated namespace, not just the actionable manifest. Excluded
+    /// remote identities must be discoverable by change_rules even without a subsequent event.
+    pub async fn apply_exclusions(
+        &self,
+        binding: &BindingRecord,
+        journal: &mut Journal,
+    ) -> Result<(), PortError> {
+        let mut tx = self.database.begin_write().await.map_err(db)?;
+        let rules = rules(&mut tx, binding.id).await?;
+        retain_remote(&mut tx, binding.id, journal, &rules).await?;
+        let mut changed = false;
+        for item in journal.items.as_mut().ok_or_else(|| invalid("缺清单"))? {
+            if item.is_excluded(&rules)? {
+                if !item.excluded {
+                    item.excluded = true;
+                    changed = true;
+                }
+                // An ACK may already have mapped a temporary upload to a stable identity. Keep
+                // the receipt/baseline/dirty generation unchanged, but gate that identity too.
+                if let Some(result) = &item.result {
+                    if let Some(id) = result
+                        .conflict
+                        .as_ref()
+                        .map(|c| c.conflict_entry_id.as_str())
+                        .or(result.entry_id.as_deref())
+                    {
+                        exclude(&mut tx, binding.id, entry_id(id)?).await?;
+                    }
+                }
+                // An upload that has not run yet is owned by this journal, not by the
+                // background worker: `prepare` enqueued it without an action spec. Keeping
+                // the row would make `restore_uploads` load nothing and block unrelated
+                // work forever. The intent, bytes, remote facts and ACK receipt all stay in
+                // the journal; re-inclusion replans instead of replaying this old op.
+                if !item.complete && item.result.is_none() {
+                    sqlx::query("DELETE FROM pending_ops WHERE binding_id=? AND op_id=?")
+                        .bind(binding.id.as_bytes().as_slice())
+                        .bind(op_id(&item.op)?.as_bytes().as_slice())
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(db)?;
+                    // `prepare` also staged a dirty local row under the temporary identity so
+                    // the first upload could be journaled. Nothing references it once the item
+                    // is excluded and never uploaded; leaving it reports the excluded file as
+                    // unconfirmed local work and blocks maintenance preparation.
+                    if let Some(temporary) = &item.temporary {
+                        sqlx::query("DELETE FROM local_entries WHERE binding_id=? AND entry_id=?")
+                            .bind(binding.id.as_bytes().as_slice())
+                            .bind(entry_id(temporary)?.as_bytes().as_slice())
+                            .execute(&mut *tx)
+                            .await
+                            .map_err(db)?;
+                    }
+                }
+            }
+        }
+        if changed {
+            save(&mut tx, binding.id, journal).await?;
+        }
+        tx.commit().await.map_err(db)
     }
     pub async fn other_paths(&self, id: BindingId) -> Result<Vec<String>, PortError> {
         bindings::protected_paths(&self.database, id)
@@ -76,7 +142,14 @@ impl ImportStore {
         journal: &mut Journal,
     ) -> Result<(), PortError> {
         let mut tx = self.database.begin_write().await.map_err(db)?;
+        let rules = rules(&mut tx, binding.id).await?;
+        retain_remote(&mut tx, binding.id, journal, &rules).await?;
         for item in journal.items.as_ref().ok_or_else(|| invalid("缺少清单"))? {
+            if item.excluded {
+                // Selected out by the effective rules: no local write and no worker queue
+                // entry is created. Remote facts are already retained above.
+                continue;
+            }
             if let (Some(local), Some(temporary)) = (&item.local, &item.temporary) {
                 entries::put_local(
                     &mut tx,
@@ -92,9 +165,6 @@ impl ImportStore {
                 )
                 .await
                 .map_err(db)?;
-            }
-            if let Some(remote) = &item.remote {
-                put_remote(&mut tx, binding.id, &baseline(remote)?).await?;
             }
             if item.upload {
                 queue::enqueue(
@@ -437,6 +507,73 @@ impl UploadCommitStore for ImportStore {
         })
     }
 }
+async fn rules(
+    conn: &mut sqlx::SqliteConnection,
+    binding: BindingId,
+) -> Result<IgnoreRules, PortError> {
+    let (text, paused, detached): (String, bool, bool) = sqlx::query_as(
+        "SELECT coalesce(c.rules,''),coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?",
+    ).bind(binding.as_bytes().as_slice()).fetch_one(conn).await.map_err(db)?;
+    if paused || detached {
+        return Err(PortError::rejected(
+            "BINDING_PAUSED",
+            "绑定已暂停或停止管理，导入现场保留",
+        ));
+    }
+    IgnoreRules::parse_with_defaults(&text).map_err(|e| invalid(e.to_string()))
+}
+async fn exclude(
+    tx: &mut Transaction<'_, Sqlite>,
+    binding: BindingId,
+    entry: EntryId,
+) -> Result<(), PortError> {
+    sqlx::query("INSERT INTO binding_participation(binding_id,entry_id,state) VALUES (?,?,'excluded') ON CONFLICT(binding_id,entry_id) DO UPDATE SET state='excluded'")
+        .bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice())
+        .execute(&mut **tx).await.map_err(db)?;
+    Ok(())
+}
+async fn retain_remote(
+    tx: &mut Transaction<'_, Sqlite>,
+    binding: BindingId,
+    journal: &Journal,
+    rules: &IgnoreRules,
+) -> Result<(), PortError> {
+    // Validate the complete tree, including excluded entries, before persisting any facts.
+    let paths = remote_paths(&journal.entries)?;
+    for remote in &journal.entries {
+        let base = baseline(remote)?;
+        let previous = entries::remote_entry(tx, binding, base.entry)
+            .await
+            .map_err(db)?;
+        if let Some(previous) = &previous {
+            if previous.revision == base.revision
+                && (previous.parent != base.parent
+                    || previous.name != base.name
+                    || previous.kind != base.kind
+                    || previous.content_version != base.content_version
+                    || previous.deleted)
+            {
+                return Err(invalid("固定快照与已保存远端事实身份不符"));
+            }
+        }
+        if previous
+            .as_ref()
+            .is_none_or(|old| old.revision < base.revision)
+        {
+            put_remote(tx, binding, &base).await?;
+        }
+    }
+    for (value, entry) in paths {
+        if rules.is_excluded(
+            &super::import::path(&value)?,
+            entry.kind == WireKind::Directory,
+        ) {
+            exclude(tx, binding, entry_id(&entry.entry_id)?).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn ensure_fresh(
     tx: &mut Transaction<'_, Sqlite>,
     binding: BindingId,

@@ -20,6 +20,43 @@ const BYTES: &[u8] = b"unconfirmed source bytes kept after no-space";
 #[tokio::test]
 async fn real_binding_pause_and_unbind_close_scheduler_gate_without_deleting_queue() {
     let rig = Rig::new().await;
+    // Defaults are always active: this lifecycle test must use located, included
+    // identities rather than relying on the former empty-rules unknown-target bypass.
+    let vault = EntryId::from_bytes([0xaa; 16]);
+    let mut tx = rig.db.begin_write().await.unwrap();
+    entries::put_baseline(
+        &mut tx,
+        rig.binding,
+        &BaselineEntry {
+            entry: vault,
+            parent: None,
+            name: String::new(),
+            kind: EntryKind::Directory,
+            revision: Revision::new(1).unwrap(),
+            content_version: None,
+            deleted: false,
+        },
+    )
+    .await
+    .unwrap();
+    for marker in [1, 2] {
+        entries::put_baseline(
+            &mut tx,
+            rig.binding,
+            &BaselineEntry {
+                entry: EntryId::from_bytes([marker; 16]),
+                parent: Some(vault),
+                name: format!("ordinary-{marker}.txt"),
+                kind: EntryKind::File,
+                revision: Revision::new(1).unwrap(),
+                content_version: Some(VersionId::from_bytes([marker; 16])),
+                deleted: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
     let op = rig.enqueue(1, "apply_remote", 1, None).await;
     let controls = Arc::new(BindingControls::new(rig.db.clone()));
     let mut scheduler = rig.scheduler();

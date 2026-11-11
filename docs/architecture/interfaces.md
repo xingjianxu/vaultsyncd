@@ -595,9 +595,9 @@ python3 tools/context.py --help
 
 | 项 | 契约 |
 | --- | --- |
-| `ignore::DEFAULT_RULES` | 内置默认排除清单文本，**可直接编辑**。只列编辑器交换/锁文件（`*~`、`*.swp`、`.*#`…、`~$*`、`*.tmp`、`*.temp`）、下载中间文件（`*.part`、`*.partial`、`*.crdownload`）与桌面缓存元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）。不排除整个 `.git`、不排除任意隐藏文件、不排除 `.syncignore` 自身 |
+| `ignore::DEFAULT_RULES` | 内置默认排除清单文本，**唯一编辑源**。只列编辑器交换/锁文件（`*~`、`*.swp`、`.*#`…、`~$*`、`*.tmp`、`*.temp`）、下载中间文件（`*.part`、`*.partial`、`*.crdownload`）与桌面缓存元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）。不排除整个 `.git`、不排除任意隐藏文件、不排除 `.syncignore` 自身。S196 起所有绑定自动加载，不向前端复制列表 |
 | `IgnoreRules::parse_with_defaults(&str)` | 默认清单在前、调用方文本在后（后者优先，可用 `!` 覆盖默认排除）；返回 `Result<IgnoreRules, RuleIssue>` |
-| `IgnoreRules::parse(&str)` | 只用给定文本，内置默认清单不参与（绑定提供完整清单时用） |
+| `IgnoreRules::parse(&str)` | 只用给定文本，内置默认清单不参与；保留作纯规则解析/fixture 用，不作为绑定有效规则入口（S196） |
 | `IgnoreRules::decide(&RelativePath, is_dir) -> Decision` | 给出裁决与解释；祖先目录按从浅到深检查 |
 | `IgnoreRules::is_excluded(&RelativePath, is_dir) -> bool` | 只要布尔结果时的入口，与 `decide` 判定一致 |
 | `ignore::Decision` | `Included { reinclude: Option<Hit> }` / `Excluded(Exclusion)`；实现 `Display`（中文解释，供“为什么被排除”查询） |
@@ -610,7 +610,7 @@ python3 tools/context.py --help
 - **语义等同 Git gitignore**：`#` 整行注释、空行、`!` 否定、`*`/`?`/`**`/字符类、前导 `/` 根锚定、尾部 `/` 只匹配目录；首行 UTF-8 BOM 与 CRLF 按 Git 习惯处理。
 - **父目录排除后不能重新包含子项**：`secrets/` 排除后 `!secrets/public.txt` 不生效，解释里给出被阻断的规则；`ignore` crate 的 `matched_path_or_any_parents` 是叶子优先（ripgrep 遍历视角），与 Git 的限制相反，因此本模块自己按祖先自浅到深遍历、只借用该库的 glob 匹配。
 - **规则顺序决定结果**：同一路径的多条规则取最后的匹配；目录被 `!` 重新包含后子项可正常参与同步（`Included.reinclude` 记录命中的否定规则，可能位于祖先目录）。
-- **默认清单可编辑、可替换**：改 `DEFAULT_RULES` 即改所有绑定默认；绑定可用 `parse_with_defaults` 追加或在 `parse` 里给完整清单。默认规则文件本身不能落到“被自己排除而无法更新”的循环（design §10.4）。
+- **内置默认 + 绑定附加（S196）**：改 `DEFAULT_RULES` 即改所有绑定默认；运行时、模式任务、保存校验与解释统一用 `parse_with_defaults`。绑定持久文本/桌面「额外排除规则」只含附加规则，空文本仍有默认排除；后置 `!` 可重新包含，父目录限制不变。默认规则文件本身不能落到“被自己排除而无法更新”的循环（design §10.4）。
 - 行号按来源分别计数：叠加默认清单后，绑定文本的解析错误仍报绑定文本自己的行号。
 
 ### 不变量
@@ -898,7 +898,7 @@ python3 tools/context.py --help
 
 ## api/ — 本机 IPC 契约源（S025）
 
-状态：S025 建立最小契约与生成通路；S071 增加 1.1 状态快照，S072 扩展至 1.2 管理命令（详见文末 S072）。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
+状态：S025 建立最小契约与生成通路；S071 增加 1.1 状态快照，S072 扩展至 1.2 管理命令（详见文末 S072）。**S196 当前本机 IPC 为 3.0**：绑定 `rules` 改为默认清单之后的附加文本，空字符串不关闭默认排除；3.x 拒绝 2.x，避免「完整/额外清单」含义混用，旧版桌面与 agent 必须一起更新。远端 HTTP 仍保持现有版本。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
 
 | 文件 | 契约 |
 | --- | --- |
@@ -2155,8 +2155,18 @@ quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按�
 | `execution_gate(binding, Option<EntryId>) -> ExecutionGate` | 启动新动作前调用；仅 `Ready` 可执行，`Paused/Unbound/Excluded/ReconcileRequired` 保留队列。含 excluded/reconcile 后代的目录也阻塞，不能从本地缺项推导父目录 Delete。存在规则但目标位置未知时保守要求协调。 |
 | `change_mode` / `resume_mode(..., &dyn FullMaterializer, budget)` | full→on_demand 只改配置；on_demand→full 先落持久任务，按预算核对/补齐。逐文件保存与远端版本、路径、本地 generation/dirty/驻留/身份/摘要绑定的证据；全部未排除文件通过才 complete。新本地/远端事实使旧证据失效。 |
 | `FullMaterializer::ensure_full(&FullFile) -> LocalEntry` | 入口适配器用 S059 下载/受控安装固定版本，已有完整内容也须实际核对内容/身份/代际。脏内容只能核对保留。返回后复核数据库相同事实与已应用基线；仅下载、旧 clean 或未应用新远端版本都不能完成。 |
-| `change_rules(binding, version, text)` | 接收完整规则文本，复用 S018 gitignore 解析。记录已有条目 excluded；取消排除变为 reconcile_required。规则版本永不复用，当前相同请求幂等；旧版本 ACK 不放开新规则。协调完成后调用 `acknowledge_reconciled`。 |
+| `change_rules(binding, version, text)` | S196 起接收绑定附加文本，统一叠加内置默认规则后校验和比较。空文本不关闭默认排除，后置 `!` 可覆盖。记录已有条目 excluded；取消排除变为 reconcile_required。规则版本永不复用，当前相同请求幂等；旧版本 ACK 不放开新规则。协调完成后调用 `acknowledge_reconciled`。 |
 | `UnbindReport` / `unbind_keep_data` | 提示 unconfirmed 条目、incomplete 驻留及恢复导出选择；仅 detached+paused，不删除 bindings/本地行/基线/队列/文件，不发全局 Delete。恢复不能隐式重新绑定。 |
+
+S196 的客户端迁移 **0017** 为 `binding_controls` 增加 `default_rules_version`（0 表示待采用，1 表示已采用内置默认），持久语义围栏防止旧二进制重解释附加文本。迁移前沿 Database 框架创建一致性备份，回退恢复整套 schema16 备份，不只降级程序；原附加文本、队列及数据不删除。
+
+| 接口/结果 | 契约 |
+| --- | --- |
+| `BindingControls::adopt_default_policy(binding)` | 幂等采用内置默认策略：首次标记 `default_rules_version=1`、把旧规则版本记入历史、签发新规则版本并使 full 证明失效；随后按当前有效规则刷新 `binding_participation`（命中→`excluded`，不再命中且曾 excluded→`reconcile_required`）。启动加载、创建绑定与每次快照前调用，重复调用不产生新版本。 |
+| 首次导入的排除 | `ImportStore::prepare`/`apply_exclusions` 保留完整认证远端事实（含 excluded 身份，供无新事件时重新包含恢复），但不为 excluded 条目创建本地 staging 行；已入队但未执行的首次导入上传行被移除（意图、OpId、ACK 收据与字节留在 journal），以免后台 worker 加载不存在的动作规格并永久阻塞绑定。 |
+| `exclusions::unsettled(db, binding)` | full 模式补齐前的未决计数：只有当前参与同步的队列行/本地意图计入；被排除而停放的行保留字节、基线与队列位置但不阻塞无关文件的补齐。 |
+| 规则重协调恢复 | 取消排除要求完整认证快照、epoch/高水位/接收序一致；远端从未跟踪的条目按固定版本受控安装（on_demand 绑定只建占位），已跟踪目录按父先子后恢复；**被跟踪文件在排除期间被本地删除时保持协调围栏**，不自动重下也不推导删除。脏、部分驻留或远端已改的记录一律保持围栏。 |
+
 
 客户端迁移 **0007**：`binding_controls`、`binding_participation`、`binding_full_proofs`、
 `binding_rules_history`，旧迁移不变。中断后原任务/证据保留；独立进程退出 101/102/103

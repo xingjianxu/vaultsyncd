@@ -98,7 +98,24 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     let path = std::env::temp_dir().join(format!("s072-ipc-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&path).unwrap();
     let db = Arc::new(Database::open(path.join("client.sqlite")).await.unwrap());
-    let (commands, _requests) = mpsc::channel(8);
+    let (commands, mut requests) = mpsc::channel::<CommandRequest>(8);
+    let (forwarded, mut dispatched) = mpsc::unbounded_channel();
+    // Exercise the real authenticated transport and IPC adapter independently of
+    // command side effects. This explicit executor probe proves exact forwarding;
+    // product rule persistence is covered by the native exclusions acceptance.
+    let executor = tokio::spawn(async move {
+        while let Some(command) = requests.recv().await {
+            forwarded.send(command.request.clone()).unwrap();
+            let _ = command.reply.send(Response::error(
+                command.request.request_id,
+                ErrorBody {
+                    code: LocalIpcErrorCode::Blocked,
+                    message: "S196 executor dispatch probe".into(),
+                    retryable: false,
+                },
+            ));
+        }
+    });
     let (_connection, connections) = watch::channel(vec![ConnectionInfo {
         server_id: "11".repeat(16),
         server_url: "https://sync.example".into(),
@@ -121,6 +138,93 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     let value = endpoint.request(&request).await.unwrap().result.unwrap();
     assert_eq!(value.bindings, Some(vec![]));
     assert!(value.snapshot_version.is_some());
+    assert_eq!(value.ipc_protocol, IpcVersion { major: 3, minor: 0 });
+    let mut current: Vec<Request> = serde_json::from_str(include_str!(
+        "../../../api/examples/local-ipc.management.json"
+    ))
+    .unwrap();
+    current.push(Request {
+        request_id: "prepare-maintenance".into(),
+        ipc_version: version::supported(),
+        command: Command {
+            name: CommandName::PrepareMaintenance,
+            parameters: Some(CommandParameters {
+                destination: Some("C:/S196/recovery".into()),
+                ..Default::default()
+            }),
+        },
+    });
+    // Also cover explicit server-scoped operations added in the old 2.10 minor.
+    for name in [
+        CommandName::GetConnection,
+        CommandName::Login,
+        CommandName::Logout,
+        CommandName::ListVaults,
+        CommandName::CreateBinding,
+    ] {
+        let mut scoped = current
+            .iter()
+            .find(|r| r.command.name == name)
+            .unwrap()
+            .clone();
+        scoped.request_id.push_str("-server-scoped");
+        scoped.command.parameters.get_or_insert_default().server_id = Some("66".repeat(16));
+        current.push(scoped);
+    }
+    let mut extra = current
+        .iter()
+        .find(|r| r.command.name == CommandName::SetRules)
+        .unwrap()
+        .clone();
+    extra.request_id = "set-extra-text".into();
+    extra.command.parameters.as_mut().unwrap().rules =
+        Some("# 额外规则\n草稿/**\n!~$保留.docx\n".into());
+    current.push(extra);
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../api/local-ipc.schema.json")).unwrap();
+    let expected: std::collections::HashSet<_> = schema["$defs"]["CommandName"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap().to_owned())
+        .collect();
+    let actual: std::collections::HashSet<_> = current
+        .iter()
+        .map(|r| {
+            serde_json::to_value(r.command.name)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "every current command must traverse the 3.0 adapter"
+    );
+    for current_request in &current {
+        assert_eq!(current_request.ipc_version, version::supported());
+        vaultsyncd_local_ipc::commands::validate(&current_request.command).unwrap();
+        let response = endpoint.request(current_request).await.unwrap();
+        response.validate().unwrap();
+        assert_eq!(response.request_id, current_request.request_id);
+        if matches!(
+            current_request.command.name,
+            CommandName::GetStatus | CommandName::SubscribeStatus
+        ) {
+            assert_eq!(response.kind, ResponseKind::Ok);
+            assert_eq!(response.result.unwrap().ipc_protocol, version::supported());
+        } else {
+            let error = response.error.unwrap();
+            assert_eq!(error.code, LocalIpcErrorCode::Blocked);
+            assert_eq!(error.message, "S196 executor dispatch probe");
+            let forwarded = dispatched.try_recv().unwrap();
+            assert_eq!(
+                serde_json::to_value(forwarded).unwrap(),
+                serde_json::to_value(current_request).unwrap()
+            );
+        }
+    }
     sqlx::query("DROP TABLE bindings")
         .execute(db.pool())
         .await
@@ -128,93 +232,48 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     let response = endpoint.request(&request).await.unwrap();
     assert!(response.result.is_none());
     assert_eq!(response.error.unwrap().code, LocalIpcErrorCode::Unavailable);
-    request.ipc_version.major += 1;
-    assert_eq!(
-        endpoint
-            .request(&request)
-            .await
-            .unwrap()
-            .error
-            .unwrap()
-            .code,
-        LocalIpcErrorCode::UnsupportedVersion
-    );
-    request.ipc_version.major = 1;
-    request.ipc_version.minor = 1;
-    request.command.name = CommandName::ListBindings;
-    assert_eq!(
-        endpoint
-            .request(&request)
-            .await
-            .unwrap()
-            .error
-            .unwrap()
-            .code,
-        LocalIpcErrorCode::UnsupportedVersion
-    );
-    request.ipc_version.minor = 2;
-    request.command.name = CommandName::ListFiles;
-    request.command.parameters = Some(CommandParameters {
-        binding_id: Some("11".repeat(16)),
-        ..Default::default()
-    });
-    assert_eq!(
-        endpoint
-            .request(&request)
-            .await
-            .unwrap()
-            .error
-            .unwrap()
-            .code,
-        LocalIpcErrorCode::UnsupportedVersion
-    );
-    request.ipc_version.minor = 3;
-    request.command.name = CommandName::ClaimNotification;
-    request.command.parameters = Some(CommandParameters {
-        notification_key: Some("vault:11111111111111111111111111111111:MOUNT_FAILED".into()),
-        notification_generation: Some("1".into()),
-        ..Default::default()
-    });
-    assert_eq!(
-        endpoint
-            .request(&request)
-            .await
-            .unwrap()
-            .error
-            .unwrap()
-            .code,
-        LocalIpcErrorCode::UnsupportedVersion
-    );
-    request.ipc_version.minor = 5;
-    for name in [CommandName::GetRules, CommandName::SetRules] {
-        request.command.name = name;
-        request.command.parameters = None;
-        assert_eq!(
-            endpoint
-                .request(&request)
-                .await
-                .unwrap()
-                .error
-                .unwrap()
-                .code,
-            LocalIpcErrorCode::UnsupportedVersion
-        );
+    // All 2.x commands, including empty/text rule writes, must be refused before
+    // store reads or executor dispatch, not interpreted under the new defaults.
+    for current_request in &current {
+        for minor in [0, 6, 11] {
+            let mut old = current_request.clone();
+            old.ipc_version = IpcVersion { major: 2, minor };
+            let response = endpoint.request(&old).await.unwrap();
+            assert_eq!(response.request_id, old.request_id);
+            assert!(response.result.is_none());
+            let error = response.error.unwrap();
+            assert_eq!(error.code, LocalIpcErrorCode::UnsupportedVersion);
+            assert!(!error.retryable);
+        }
+    }
+    for incompatible in [
+        IpcVersion {
+            major: 1,
+            minor: 11,
+        },
+        IpcVersion {
+            major: version::SUPPORTED_MAJOR + 1,
+            minor: 0,
+        },
+        IpcVersion {
+            major: version::SUPPORTED_MAJOR,
+            minor: version::SUPPORTED_MINOR + 1,
+        },
+    ] {
+        request.ipc_version = incompatible;
+        request.command = Command {
+            name: CommandName::SetRules,
+            parameters: None,
+        };
+        let error = endpoint.request(&request).await.unwrap().error.unwrap();
+        assert_eq!(error.code, LocalIpcErrorCode::UnsupportedVersion);
+        assert!(!error.retryable);
     }
     request.ipc_version = version::supported();
-    request.ipc_version.minor = 7;
-    request.command.name = CommandName::ListActivity;
-    request.command.parameters = None;
-    assert_eq!(
-        endpoint
-            .request(&request)
-            .await
-            .unwrap()
-            .error
-            .unwrap()
-            .code,
-        LocalIpcErrorCode::UnsupportedVersion
-    );
-    request.ipc_version.minor = 8;
+    request.command = Command {
+        name: CommandName::SetRules,
+        parameters: None,
+    };
     assert_eq!(
         endpoint
             .request(&request)
@@ -225,26 +284,12 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
             .code,
         LocalIpcErrorCode::InvalidArgument
     );
-    // Removing a saved server is only offered from IPC 2.11; older callers are refused
-    // before the command reaches the executor.
-    request.ipc_version = version::supported();
-    request.ipc_version.minor = 10;
-    request.command.name = CommandName::RemoveConnection;
-    request.command.parameters = Some(CommandParameters {
-        server_id: Some("11".repeat(16)),
-        ..Default::default()
-    });
-    assert_eq!(
-        endpoint
-            .request(&request)
-            .await
-            .unwrap()
-            .error
-            .unwrap()
-            .code,
-        LocalIpcErrorCode::UnsupportedVersion
+    assert!(
+        dispatched.try_recv().is_err(),
+        "incompatible or invalid requests reached the executor"
     );
     server.shutdown().await.unwrap();
+    executor.await.unwrap();
     db.pool().close().await;
     std::fs::remove_dir_all(path).unwrap();
 }

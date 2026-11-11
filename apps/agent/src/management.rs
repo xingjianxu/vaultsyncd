@@ -399,8 +399,10 @@ pub(crate) async fn execute(
                 if importing {
                     return Err(reject("BINDING_BLOCKED"));
                 }
-                vaultsyncd_fs_common::ignore::IgnoreRules::parse(p.rules.as_deref().unwrap())
-                    .map_err(|_| reject("INVALID_ARGUMENT"))?;
+                vaultsyncd_fs_common::ignore::IgnoreRules::parse_with_defaults(
+                    p.rules.as_deref().unwrap(),
+                )
+                .map_err(|_| reject("INVALID_ARGUMENT"))?;
                 control
                     .change_rules(
                         binding,
@@ -416,6 +418,7 @@ pub(crate) async fn execute(
                         }
                     })?;
             }
+            control.adopt_default_policy(binding).await?;
             let (version, rules): (String, String) = sqlx::query_as("SELECT b.rules_version,coalesce(c.rules,'') FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?")
                 .bind(binding.as_bytes().as_slice()).fetch_one(db.pool()).await.map_err(error)?;
             if let Some(entry) = p.entry_id.as_deref() {
@@ -428,7 +431,8 @@ pub(crate) async fn execute(
                     .remove(entry)
                     .ok_or_else(|| reject("NOT_FOUND"))?;
                 let decision =
-                    vaultsyncd_fs_common::ignore::IgnoreRules::parse(&rules).map_err(error)?;
+                    vaultsyncd_fs_common::ignore::IgnoreRules::parse_with_defaults(&rules)
+                        .map_err(error)?;
                 result.rules_explanation = Some(if path.is_empty() {
                     "Vault 本身始终保留".into()
                 } else {
@@ -481,7 +485,22 @@ pub(crate) async fn execute(
             if let Some((_, scheduler)) = running.get(&binding)
                 && scheduler.status(binding).await?.iter().any(|t| t.op == op)
             {
-                if control.execution_gate(binding, None).await? != ExecutionGate::Ready {
+                let queued = {
+                    let mut conn = db.pool().acquire().await.map_err(error)?;
+                    vaultsyncd_client_store::queue::pending_op(&mut conn, op)
+                        .await
+                        .map_err(error)?
+                        .ok_or_else(|| reject("NOT_FOUND"))?
+                };
+                // Resolve the durable target, including new entries whose authority is the
+                // validated action path. None is never a binding-wide permission to retry.
+                if queued.binding != binding
+                    || !vaultsyncd_agent_core::engine::scheduler::DispatchGate::allowed(
+                        &crate::exclusions::Gate(db.clone()),
+                        &queued,
+                    )
+                    .await?
+                {
                     return Err(reject("BINDING_BLOCKED"));
                 }
                 scheduler.resume(op).await?;

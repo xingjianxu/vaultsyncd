@@ -1,7 +1,7 @@
 //! Shared command examples and executor parameter validation, independent of transport/platform.
 use vaultsyncd_local_ipc::{
     commands,
-    generated::{CommandName, LocalIpcErrorCode, Request},
+    generated::{CommandName, LocalIpcErrorCode, PROTOCOL_MAJOR, PROTOCOL_MINOR, Request},
 };
 
 #[test]
@@ -33,6 +33,9 @@ fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments
     let mut names = std::collections::HashSet::new();
     for example in examples {
         let request: Request = serde_json::from_value(example.clone()).unwrap();
+        assert!(vaultsyncd_local_ipc::version::is_compatible(
+            &request.ipc_version
+        ));
         commands::validate(&request.command).unwrap();
         assert_eq!(serde_json::to_value(&request).unwrap(), example);
         names.insert(
@@ -58,14 +61,14 @@ fn every_management_handler_has_a_round_trip_example_and_rejects_extra_arguments
 }
 #[test]
 fn passwords_are_redacted_even_if_an_entire_generated_request_is_debugged() {
-    let request:Request=serde_json::from_value(serde_json::json!({"request_id":"redact","ipc_version":{"major":2,"minor":6},"command":{"name":"login","parameters":{"username":"owner","password":"unique-transient-password"}}})).unwrap();
+    let request:Request=serde_json::from_value(serde_json::json!({"request_id":"redact","ipc_version":{"major":PROTOCOL_MAJOR,"minor":PROTOCOL_MINOR},"command":{"name":"login","parameters":{"username":"owner","password":"unique-transient-password"}}})).unwrap();
     assert!(!format!("{request:?}").contains("unique-transient-password"));
     assert!(format!("{request:?}").contains("REDACTED"));
     assert_eq!(request.command.name, CommandName::Login);
 }
 #[test]
 fn canonical_ids_and_counts_do_not_accept_lossy_or_ambiguous_inputs() {
-    let mut request:Request=serde_json::from_value(serde_json::json!({"request_id":"bounds","ipc_version":{"major":2,"minor":6},"command":{"name":"restore_entry","parameters":{"binding_id":"11111111111111111111111111111111","entry_id":"22222222222222222222222222222222","operation_id":"33333333333333333333333333333333","base_revision":"9007199254740993"}}})).unwrap();
+    let mut request:Request=serde_json::from_value(serde_json::json!({"request_id":"bounds","ipc_version":{"major":PROTOCOL_MAJOR,"minor":PROTOCOL_MINOR},"command":{"name":"restore_entry","parameters":{"binding_id":"11111111111111111111111111111111","entry_id":"22222222222222222222222222222222","operation_id":"33333333333333333333333333333333","base_revision":"9007199254740993"}}})).unwrap();
     commands::validate(&request.command).unwrap();
     request.command.parameters.as_mut().unwrap().base_revision = Some("09007199254740993".into());
     assert!(commands::validate(&request.command).is_err());
@@ -78,7 +81,7 @@ fn canonical_ids_and_counts_do_not_accept_lossy_or_ambiguous_inputs() {
 }
 
 #[test]
-fn exclusion_rules_accept_empty_clear_but_refuse_overflow_and_extra_fields() {
+fn extra_exclusion_rules_accept_empty_text_but_refuse_overflow_and_empty_version() {
     let mut command: vaultsyncd_local_ipc::generated::Command=serde_json::from_value(serde_json::json!({"name":"set_rules","parameters":{"binding_id":"a5".repeat(16),"rules_version":"s105","rules":""}})).unwrap();
     commands::validate(&command).unwrap();
     command.parameters.as_mut().unwrap().rules = Some("x".repeat(4097));

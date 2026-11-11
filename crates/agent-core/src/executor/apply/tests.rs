@@ -544,6 +544,109 @@ async fn sqlite_and_disk_recover_independent_processes_at_each_publish_boundary(
 }
 
 #[tokio::test]
+async fn reinclude_restores_missing_clean_baseline_or_remote_only_but_never_missing_unconfirmed() {
+    for state in [
+        "clean",
+        "remote-only",
+        "dirty",
+        "snapshotting",
+        "awaiting_commit",
+    ] {
+        let rig = Rig::new().await;
+        let database = rig.db().await;
+        let mut request = rig.spec();
+        request.expected = ContentEvidence::Absent;
+        fs::remove_file(rig.path.join("work/file.txt")).unwrap();
+        if state == "remote-only" {
+            let mut tx = database.begin_write().await.unwrap();
+            sqlx::query("DELETE FROM baseline_entries WHERE binding_id=? AND entry_id=?")
+                .bind(binding().as_bytes().as_slice())
+                .bind(entry().as_bytes().as_slice())
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM local_entries WHERE binding_id=? AND entry_id=?")
+                .bind(binding().as_bytes().as_slice())
+                .bind(entry().as_bytes().as_slice())
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            request.baseline_before = None;
+        } else {
+            sqlx::query("UPDATE local_entries SET dirty=? WHERE binding_id=? AND entry_id=?")
+                .bind(state)
+                .bind(binding().as_bytes().as_slice())
+                .bind(entry().as_bytes().as_slice())
+                .execute(database.pool())
+                .await
+                .unwrap();
+        }
+        let result = ControlledApply::new(database.clone(), rig.local())
+            .apply(
+                &request,
+                &Remote {
+                    path: rig.path.join("server/version-two"),
+                    wrong: false,
+                },
+                &DiskTemp(
+                    rig.path
+                        .join("stage/reinclude.part")
+                        .to_str()
+                        .unwrap()
+                        .into(),
+                ),
+                &ClientStorePorts::new(database.clone()),
+                &DownloadOptions::new(5),
+            )
+            .await;
+        if state == "clean" || state == "remote-only" {
+            result.unwrap();
+            assert_eq!(fs::read(rig.path.join("work/file.txt")).unwrap(), NEW);
+            let mut conn = database.pool().acquire().await.unwrap();
+            assert_eq!(
+                entries::baseline_entry(&mut conn, binding(), entry())
+                    .await
+                    .unwrap(),
+                Some(base(2))
+            );
+            assert_eq!(
+                entries::local_entry(&mut conn, binding(), entry())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .dirty,
+                Dirty::Clean
+            );
+        } else {
+            assert!(result.is_err(), "{state}");
+            assert!(!rig.path.join("work/file.txt").exists());
+            let mut conn = database.pool().acquire().await.unwrap();
+            assert_eq!(
+                entries::baseline_entry(&mut conn, binding(), entry())
+                    .await
+                    .unwrap(),
+                Some(base(1))
+            );
+            let retained = entries::local_entry(&mut conn, binding(), entry())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_ne!(retained.dirty, Dirty::Clean);
+            assert_eq!(retained.fingerprint, Some(digest_of(OLD).to_vec()));
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM local_intents")
+                    .fetch_one(&mut *conn)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+        database.pool().close().await;
+    }
+}
+
+#[tokio::test]
 async fn second_edit_during_download_or_platform_guard_never_gets_overwritten() {
     let rig = Rig::new().await;
     let local = Arc::new(DiskLocal {

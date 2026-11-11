@@ -27,15 +27,16 @@ export function BindingActions({ agent, binding, status, run, busy, changed }: {
       <Group justify="space-between">
         <Title order={3} size="h4">排除规则</Title>
         <Button variant="default" disabled={busy || binding.detached} onClick={() => run(async () => {
-          const result = await agent.getRules(binding.binding_id); if (result.rules === undefined) throw new Error("未取得当前排除清单");
+          const result = await agent.getRules(binding.binding_id); if (result.rules === undefined) throw new Error("未取得当前额外排除规则");
           setRules(result.rules); setRulesLoaded(true);
         })}>读取排除规则</Button>
       </Group>
-      <Text size="sm" c="dimmed">排除路径停止新同步，保留两端内容；取消排除后先重新核对。支持 # 注释、*、**、! 与目录规则，父目录被排除时不能仅重新包含子文件。</Text>
-      <Textarea label="完整排除清单" name="exclusion_rules" minRows={4} autosize value={rules} onChange={event => setRules(event.target.value)} disabled={!rulesLoaded || busy || binding.detached} />
+      <Text size="sm" c="dimmed">自动排除常见临时文件（含 ~$*）；留空仅使用默认规则，可用 ! 重新包含默认排除的文件。排除不删除两端内容，取消排除后先重新核对。</Text>
+      <Text size="sm" c="dimmed">每行一条，支持 # 注释、*、** 与目录规则；父目录被排除时需先重新包含父目录。</Text>
+      <Textarea label="额外排除规则" name="exclusion_rules" minRows={4} autosize value={rules} onChange={event => setRules(event.target.value)} disabled={!rulesLoaded || busy || binding.detached} />
       <Group><Button disabled={!rulesLoaded || busy || binding.detached} onClick={() => run(async () => {
         await agent.setRules(binding.binding_id, rules, crypto.randomUUID().replaceAll("-", ""));
-        setMessage("排除清单已保存；未删除本地或服务器内容，取消排除的条目正在重新协调。"); await changed();
+        setMessage("额外排除规则已保存；未删除本地或服务器内容，取消排除的条目正在重新协调。"); await changed();
       })}>保存排除规则</Button></Group>
       <Divider />
       <Title order={3} size="h4">恢复与解绑</Title>

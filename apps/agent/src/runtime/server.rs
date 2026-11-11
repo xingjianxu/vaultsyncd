@@ -679,15 +679,9 @@ impl Server {
                 // Full-mode proof runs only after durable local discovery and once no
                 // upload/intent is unsettled: an unreachable server must not hide new local
                 // content, and a dirty edit must not be mistaken for an unapplied remote version.
-                let unsettled: i64 = sqlx::query_scalar(
-                    "SELECT (SELECT count(*) FROM pending_ops WHERE binding_id=?) + \
-                     (SELECT count(*) FROM local_intents WHERE binding_id=?)",
-                )
-                .bind(id.as_bytes().as_slice())
-                .bind(id.as_bytes().as_slice())
-                .fetch_one(db.pool())
-                .await
-                .map_err(error)?;
+                // Entries parked by an exclusion stay queued but are never dispatched until
+                // re-inclusion is reconciled; they must not block unrelated full-mode work.
+                let unsettled = crate::exclusions::unsettled(db, *id).await?;
                 if unsettled == 0 {
                     let mode = BindingControls::new(db.clone()).mode_progress(*id).await?;
                     if mode.mode == SyncMode::Full && !mode.complete {
@@ -821,6 +815,10 @@ async fn assemble(
         tx.commit().await.map_err(error)?;
         epoch
     };
+    // Adopt the schema-fenced effective policy before recovery or any new worker activity.
+    BindingControls::new(db.clone())
+        .adopt_default_policy(id)
+        .await?;
     // Metadata-only connection keeps offline CFAPI directory queries usable; content requests
     // remain explicitly unavailable until platform and core recovery have both completed.
     // An open rebuild quarantines old operations from its first transaction; assembly must still

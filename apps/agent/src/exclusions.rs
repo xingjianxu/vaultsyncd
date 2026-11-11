@@ -3,13 +3,13 @@
 //! ordinary revision/generation-fenced event and upload executors then perform reconciliation.
 use crate::{
     local::error,
-    work::{Worker, metadata, paths},
+    work::{Worker, paths},
 };
 use std::sync::Arc;
 use vaultsyncd_agent_core::{
     bindings::{
         control::{BindingControls, ExecutionGate},
-        import::ImportSnapshot,
+        import::{ImportLocal, ImportSnapshot},
     },
     engine::scheduler::DispatchGate,
     ports::state::QueuedOperation,
@@ -32,12 +32,15 @@ pub(crate) struct Rules {
     pub active: bool,
 }
 impl Rules {
-    pub async fn load(db: &Database, binding: BindingId) -> Result<Self, PortError> {
+    pub async fn load(db: &Arc<Database>, binding: BindingId) -> Result<Self, PortError> {
+        BindingControls::new(db.clone())
+            .adopt_default_policy(binding)
+            .await?;
         let (version,text,paused,detached):(String,String,bool,bool)=sqlx::query_as("SELECT b.rules_version,coalesce(c.rules,''),coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?")
             .bind(binding.as_bytes().as_slice()).fetch_one(db.pool()).await.map_err(error)?;
         Ok(Self {
             version,
-            rules: IgnoreRules::parse(&text).map_err(error)?,
+            rules: IgnoreRules::parse_with_defaults(&text).map_err(error)?,
             active: !paused && !detached,
         })
     }
@@ -47,6 +50,75 @@ impl Rules {
                 .rules
                 .is_excluded(&RelativePath::parse(path).map_err(error)?, directory))
     }
+}
+
+/// Whether a durable action specification still participates under the effective rules.
+/// Directory matching is conservative for namespace/new tasks whose final kind is unknown.
+fn spec_included(rules: &Rules, spec: &serde_json::Value) -> Result<bool, PortError> {
+    let directory = spec["remote"]["kind"] != "file" && spec["kind"] != "upload";
+    for field in ["path", "from"] {
+        if let Some(path) = spec[field].as_str() {
+            if !rules.includes(path, directory)? {
+                return Ok(false);
+            }
+        } else if field == "path" {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Queue and intent rows that still owe controlled work. Rows parked by an exclusion keep
+/// their bytes, baseline and queue position, but they cannot be dispatched until re-inclusion
+/// is reconciled; they must not hold back unrelated full-mode progress on the same binding.
+/// A row without a durable specification is first-import residue; the journal owns it.
+pub(crate) async fn unsettled(db: &Arc<Database>, binding: BindingId) -> Result<i64, PortError> {
+    let rules = Rules::load(db, binding).await?;
+    let mut count = 0i64;
+    let ops: Vec<Vec<u8>> = sqlx::query_scalar("SELECT op_id FROM pending_ops WHERE binding_id=?")
+        .bind(binding.as_bytes().as_slice())
+        .fetch_all(db.pool())
+        .await
+        .map_err(error)?;
+    for raw in ops {
+        let op = vaultsyncd_domain::ids::OpId::from_bytes(
+            raw.try_into()
+                .map_err(|_| error("invalid queued identity"))?,
+        );
+        let text: Option<String> = sqlx::query_scalar(
+            "SELECT specification FROM agent_actions WHERE op_id=? AND binding_id=?",
+        )
+        .bind(op.as_bytes().as_slice())
+        .bind(binding.as_bytes().as_slice())
+        .fetch_optional(db.pool())
+        .await
+        .map_err(error)?;
+        match text {
+            Some(text) => {
+                let spec: serde_json::Value = serde_json::from_str(&text).map_err(error)?;
+                if spec_included(&rules, &spec)? {
+                    count += 1;
+                }
+            }
+            None => count += 1,
+        }
+    }
+    let intents: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT target_path,source_path FROM local_intents WHERE binding_id=?")
+            .bind(binding.as_bytes().as_slice())
+            .fetch_all(db.pool())
+            .await
+            .map_err(error)?;
+    for (target, source) in intents {
+        let mut included = rules.includes(&target, false)?;
+        if let Some(source) = &source {
+            included = included && rules.includes(source, false)?;
+        }
+        if included {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 pub(crate) struct Gate(pub Arc<Database>);
@@ -75,16 +147,8 @@ impl DispatchGate for Gate {
                 return Ok(false);
             };
             let spec: serde_json::Value = serde_json::from_str(&text).map_err(error)?;
-            // Directory matching is conservative for namespace/new tasks whose final kind is unknown.
-            let directory = spec["remote"]["kind"] != "file" && spec["kind"] != "upload";
-            for field in ["path", "from"] {
-                if let Some(path) = spec[field].as_str() {
-                    if !rules.includes(path, directory)? {
-                        return Ok(false);
-                    }
-                } else if field == "path" {
-                    return Ok(false);
-                }
+            if !spec_included(&rules, &spec)? {
+                return Ok(false);
             }
             if let Some(entry) = op.entry {
                 let gate = BindingControls::new(self.0.clone())
@@ -109,12 +173,13 @@ impl DispatchGate for Gate {
 /// Called after the event receiver has refreshed durable remote facts, before new local discovery.
 pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
     let local = &worker.importer.local;
+    // Refresh first: a remote rename can turn a persisted exclusion into a reconciliation.
+    let rules = Rules::load(&local.db, local.binding).await?;
     let pending:Vec<Vec<u8>>=sqlx::query_scalar("SELECT entry_id FROM binding_participation WHERE binding_id=? AND state='reconcile_required'")
         .bind(local.binding.as_bytes().as_slice()).fetch_all(local.db.pool()).await.map_err(error)?;
     if pending.is_empty() {
         return Ok(());
     }
-    let rules = Rules::load(&local.db, local.binding).await?;
     if !rules.active {
         return Ok(());
     }
@@ -163,11 +228,20 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
         .await
         .map_err(error)?;
     // A write racing the preceding pull must be received before any excluded operation is reopened.
-    if (received as u64) < seed.metadata.high_water_seq.parse::<u64>().map_err(error)? {
+    if (received as u64) != seed.metadata.high_water_seq.parse::<u64>().map_err(error)? {
         return Ok(());
     }
-    let rows = metadata(&worker.importer).await?;
-    let names = paths(&rows)?;
+    // The authenticated remote namespace includes excluded entries that never had a local
+    // baseline. Baseline-only metadata cannot resolve those paths or authorize restoration.
+    let names = paths(&current)?;
+    // Parents first: a restored directory must exist before its children are restored.
+    let mut pending = pending;
+    pending.sort_by_key(|raw| {
+        names
+            .get(&EntryId::from_bytes(raw[..].try_into().unwrap_or_default()).to_string())
+            .map(|path| path.matches('/').count())
+            .unwrap_or(usize::MAX)
+    });
     for raw in pending {
         let entry = EntryId::from_bytes(
             raw.try_into()
@@ -184,26 +258,27 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
                 .map_err(error)?;
             if observed_remote
                 .as_ref()
-                .is_none_or(|r| r.revision < revision)
+                .is_none_or(|r| r.revision != revision)
             {
+                // A snapshot newer OR older than the received view cannot authorize an ACK.
                 continue;
             }
-            if let Some(observed) = &observed_remote {
-                if observed.revision == revision
-                    && (observed.deleted
-                        || observed.content_version.map(|v| v.to_string()) != fixed.version_id
-                        || observed.name != fixed.name)
-                {
-                    return Err(error("rule reconciliation remote identity mismatch"));
-                }
+            let expected = crate::work::baseline(fixed)?;
+            if observed_remote.as_ref().is_some_and(|r| {
+                r.deleted
+                    || r.parent != expected.parent
+                    || r.name != expected.name
+                    || r.kind != expected.kind
+                    || r.content_version != expected.content_version
+            }) {
+                return Err(error("rule reconciliation remote identity mismatch"));
             }
-        } else if observed_remote.as_ref().is_none_or(|r| !r.deleted) {
-            // Missing snapshot rows are deletions only with an authenticated received tombstone.
+        } else {
+            // A remote tombstone is not permission to discard retained or missing local
+            // unconfirmed content. Leave deletion/conflict recovery explicitly blocked.
             continue;
         }
-        let Some(row) = rows.get(&entry.to_string()) else {
-            continue;
-        };
+        let row = &current[&entry.to_string()];
         let path = &names[&entry.to_string()];
         if !rules.includes(
             path,
@@ -211,13 +286,72 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
         )? {
             continue;
         }
+        let mut conn = local.db.pool().acquire().await.map_err(error)?;
+        let before = entries::baseline_entry(&mut conn, local.binding, entry)
+            .await
+            .map_err(error)?;
+        let previous = entries::local_entry(&mut conn, local.binding, entry)
+            .await
+            .map_err(error)?;
+        drop(conn);
+        if before.as_ref().is_some_and(|base| {
+            base.parent.map(|id| id.to_string()) != row.parent_id || base.name != row.name
+        }) {
+            // Never abandon the old path of a renamed entry; its retained bytes need
+            // namespace/conflict recovery before this new location can participate.
+            continue;
+        }
         let meta = match local.vault.inspect(path) {
             Ok(m) => Some(m),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(error(e)),
         };
+        let restoring = meta.is_none();
+        let after_local;
         if let Some(meta) = meta {
-            if !meta.directory && !meta.cloud.as_ref().is_some_and(|c| c.on_disk < meta.size) {
+            if meta.directory != (row.kind == vaultsyncd_protocol::generated::EntryKind::Directory)
+                || before.is_none()
+            {
+                // Unknown/occupied paths are never proof of absence or an acknowledged
+                // baseline. Keep the participation fence intact.
+                continue;
+            }
+            if meta.cloud.as_ref().is_some_and(|c| c.on_disk < meta.size) {
+                // Placeholder or interrupted hydration. Re-inclusion must not deadlock the
+                // binding: a clean tracked row whose baseline is still the fixed remote
+                // version resumes participation unchanged, and a later read completes that
+                // same version. A dirty row or a remote change while excluded stays fenced.
+                let same_version = before
+                    .as_ref()
+                    .and_then(|b| b.content_version)
+                    .map(|v| v.to_string())
+                    == row.version_id.clone();
+                if !same_version || previous.as_ref().is_none_or(|p| p.dirty != Dirty::Clean) {
+                    continue;
+                }
+                let pin = crate::importer::pin(local, row).await?;
+                let id = vaultsyncd_platform_windows::cfapi::catalog::Identity {
+                    binding: local.binding,
+                    vault: worker
+                        .importer
+                        .adapter
+                        .lock()
+                        .map_err(error)?
+                        .catalog()
+                        .read()
+                        .map_err(error)?
+                        .vault,
+                    entry,
+                    version: vaultsyncd_domain::ids::VersionId::from_hex(&pin.version)
+                        .map_err(error)?,
+                };
+                worker
+                    .importer
+                    .callbacks
+                    .register_version(crate::bootstrap::PinnedVersion::new(id, pin).map_err(error)?)
+                    .map_err(error)?;
+                after_local = previous.clone();
+            } else if !meta.directory {
                 let snapshot = local
                     .observe_snapshot(path)
                     .await?
@@ -227,34 +361,180 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
                 let old = entries::local_entry(&mut tx, local.binding, entry)
                     .await
                     .map_err(error)?;
-                let unchanged = row.hash.as_deref()
-                    == Some(vaultsyncd_transfer::hash::to_hex(&evidence.digest).as_str())
-                    && row.size.as_deref() == Some(evidence.size.to_string().as_str());
-                entries::put_local(
-                    &mut tx,
-                    local.binding,
-                    &LocalEntry {
-                        entry,
-                        generation: Generation::new(evidence.generation).map_err(error)?,
-                        dirty: if unchanged && old.as_ref().is_none_or(|o| o.dirty == Dirty::Clean)
-                        {
-                            Dirty::Clean
-                        } else {
-                            Dirty::Dirty
-                        },
-                        residency: Residency::Materialized,
-                        fingerprint: Some(evidence.digest.to_vec()),
-                        file_identity: Some(evidence.identity()),
+                if old != previous {
+                    continue;
+                }
+                // Compare against the common baseline, not the server head: equality with
+                // a newer remote head does not prove an unconfirmed local edit committed.
+                let unchanged: bool = if let Some(version) =
+                    before.as_ref().and_then(|b| b.content_version)
+                {
+                    let facts: Option<(Vec<u8>, i64)> = sqlx::query_as("SELECT digest,size FROM agent_versions WHERE binding_id=? AND version_id=?")
+                        .bind(local.binding.as_bytes().as_slice()).bind(version.as_bytes().as_slice())
+                        .fetch_optional(&mut *tx).await.map_err(error)?;
+                    facts.is_some_and(|(digest, size)| {
+                        digest == evidence.digest && size as u64 == evidence.size
+                    })
+                } else {
+                    false
+                };
+                after_local = Some(LocalEntry {
+                    entry,
+                    generation: Generation::new(evidence.generation).map_err(error)?,
+                    dirty: match old.as_ref().map(|o| o.dirty) {
+                        Some(dirty) if dirty != Dirty::Clean => dirty,
+                        _ if unchanged => Dirty::Clean,
+                        _ => Dirty::Dirty,
                     },
-                )
+                    residency: Residency::Materialized,
+                    fingerprint: Some(evidence.digest.to_vec()),
+                    file_identity: Some(evidence.identity()),
+                });
+                entries::put_local(&mut tx, local.binding, after_local.as_ref().unwrap())
+                    .await
+                    .map_err(error)?;
+                tx.commit().await.map_err(error)?;
+            } else {
+                after_local = previous;
+            }
+        } else {
+            // Missing while excluded means restore the fixed remote entry, NOT local Delete.
+            // Unknown/dirty/partial history stays blocked and is never silently overwritten.
+            if previous
+                .as_ref()
+                .is_some_and(|p| p.dirty != Dirty::Clean || p.residency == Residency::Partial)
+            {
+                continue;
+            }
+            let mode: String = sqlx::query_scalar("SELECT mode FROM bindings WHERE id=?")
+                .bind(local.binding.as_bytes().as_slice())
+                .fetch_one(local.db.pool())
                 .await
                 .map_err(error)?;
+            if before.is_some() {
+                // A tracked file that disappeared while excluded is a user-side deletion, not
+                // proof that the server copy should be re-downloaded or deleted. Keep the
+                // fence: explicit recovery decides, and nothing is silently restored or lost.
+                continue;
+            }
+            if row.kind == vaultsyncd_protocol::generated::EntryKind::Directory {
+                // Restore the directory itself first; children are ordered parent-first.
+                worker
+                    .importer
+                    .install(&vaultsyncd_agent_core::bindings::import::ImportInstall {
+                        op: crate::work::new_op(),
+                        binding: local.binding,
+                        path: RelativePath::parse(path).map_err(error)?,
+                        remote: row.clone(),
+                        mode: vaultsyncd_client_store::bindings::SyncMode::Full,
+                    })
+                    .await?;
+                let mut conn = local.db.pool().acquire().await.map_err(error)?;
+                after_local = entries::local_entry(&mut conn, local.binding, entry)
+                    .await
+                    .map_err(error)?;
+                drop(conn);
+            } else if mode == "on_demand" {
+                // An on-demand binding keeps a restored entry as a placeholder; exclusion
+                // must not turn into an unexpected full download.
+                worker
+                    .importer
+                    .install(&vaultsyncd_agent_core::bindings::import::ImportInstall {
+                        op: crate::work::new_op(),
+                        binding: local.binding,
+                        path: RelativePath::parse(path).map_err(error)?,
+                        remote: row.clone(),
+                        mode: vaultsyncd_client_store::bindings::SyncMode::OnDemand,
+                    })
+                    .await?;
+                let mut tx = local.db.begin_write().await.map_err(error)?;
+                entries::put_baseline(&mut tx, local.binding, &crate::work::baseline(row)?)
+                    .await
+                    .map_err(error)?;
                 tx.commit().await.map_err(error)?;
+                let mut conn = local.db.pool().acquire().await.map_err(error)?;
+                after_local = entries::local_entry(&mut conn, local.binding, entry)
+                    .await
+                    .map_err(error)?;
+                drop(conn);
+            } else {
+                let spec = vaultsyncd_agent_core::executor::apply::ApplySpec {
+                    op: crate::work::new_op(),
+                    binding: local.binding,
+                    target: RelativePath::parse(path).map_err(error)?,
+                    baseline_before: before.clone(),
+                    baseline_after: crate::work::baseline(row)?,
+                    pin: crate::importer::pin(local, row).await?,
+                    expected: vaultsyncd_agent_core::recovery::ContentEvidence::Absent,
+                };
+                vaultsyncd_agent_core::executor::apply::ControlledApply::new(
+                    local.db.clone(),
+                    local.clone(),
+                )
+                .apply(
+                    &spec,
+                    &*worker.importer.content,
+                    &crate::local::DiskTemp::new(&local.cache, spec.op),
+                    &vaultsyncd_agent_core::adapters::ClientStorePorts::new(local.db.clone()),
+                    &vaultsyncd_transfer::download::DownloadOptions::new(1024 * 1024),
+                )
+                .await?;
+                worker.importer.adopt(path, &spec.pin)?;
+                if local
+                    .native
+                    .publication_present(&spec.op.to_string())
+                    .map_err(error)?
+                {
+                    local
+                        .native
+                        .acknowledge_publication(&spec.op.to_string())
+                        .map_err(error)?;
+                }
+                let mut conn = local.db.pool().acquire().await.map_err(error)?;
+                after_local = entries::local_entry(&mut conn, local.binding, entry)
+                    .await
+                    .map_err(error)?;
+                drop(conn);
             }
         }
-        BindingControls::new(local.db.clone())
-            .acknowledge_reconciled(local.binding, entry, &rules.version)
-            .await?;
+        // Final CAS includes namespace and local evidence, not only the rule text/version.
+        // It is a short DB transaction; no platform or network operation holds its write lock.
+        let mut tx = local.db.begin_write().await.map_err(error)?;
+        let fence: (String, String, i64, bool, bool) = sqlx::query_as("SELECT b.rules_version,cast(b.server_epoch AS TEXT),b.received_seq,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?")
+            .bind(local.binding.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
+        if fence.0 != rules.version
+            || fence.1 != epoch
+            || fence.2 != received
+            || fence.3
+            || fence.4
+            || entries::remote_entry(&mut tx, local.binding, entry)
+                .await
+                .map_err(error)?
+                != observed_remote
+            || entries::local_entry(&mut tx, local.binding, entry)
+                .await
+                .map_err(error)?
+                != after_local
+        {
+            continue;
+        }
+        // Restoration intentionally advances the baseline; existing retained bytes do not.
+        let expected_base = if restoring {
+            Some(crate::work::baseline(row)?)
+        } else {
+            before
+        };
+        if entries::baseline_entry(&mut tx, local.binding, entry)
+            .await
+            .map_err(error)?
+            != expected_base
+        {
+            continue;
+        }
+        sqlx::query("DELETE FROM binding_participation WHERE binding_id=? AND entry_id=? AND state='reconcile_required'")
+            .bind(local.binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice())
+            .execute(&mut *tx).await.map_err(error)?;
+        tx.commit().await.map_err(error)?;
     }
     Ok(())
 }

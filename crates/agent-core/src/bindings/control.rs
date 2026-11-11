@@ -108,7 +108,13 @@ impl BindingControls {
         self.store.change_mode(binding, mode).await
     }
 
-    /// 每次启动新传输/命令前查询；entry=None 且存在排除规则时保守阻塞，调用方必须解析目标。
+    /// 采用内置默认策略并持久记录已跟踪的排除项；不触碰文件、基线、队列或缓存。
+    /// schema 17 阻止旧程序重释附加文本，首次采用会轮换规则版本以拒绝旧协调结果。
+    pub async fn adopt_default_policy(&self, binding: BindingId) -> Result<(), PortError> {
+        self.store.adopt_default_policy(binding).await
+    }
+
+    /// 每次启动新传输/命令前查询；entry=None 或身份未知时保守阻塞，调用方必须解析目标。
     pub async fn execution_gate(
         &self,
         binding: BindingId,
@@ -122,13 +128,7 @@ impl BindingControls {
             return Ok(ExecutionGate::Paused);
         }
         let Some(entry) = entry else {
-            return Ok(
-                if snapshot.control.rules.is_empty() && snapshot.participation.is_empty() {
-                    ExecutionGate::Ready
-                } else {
-                    ExecutionGate::ReconcileRequired
-                },
-            );
+            return Ok(ExecutionGate::ReconcileRequired);
         };
         if let Some(item) = snapshot
             .items
@@ -158,7 +158,7 @@ impl BindingControls {
                     }
                 }
             }
-        } else if !snapshot.control.rules.is_empty() {
+        } else {
             return Ok(ExecutionGate::ReconcileRequired);
         }
         Ok(match snapshot.participation.get(entry.as_bytes()) {
@@ -168,7 +168,7 @@ impl BindingControls {
         })
     }
 
-    /// 替换完整的绑定级规则文本（可编辑默认规则由调用方显式传入）。先解析再事务保存；
+    /// 替换绑定附加规则文本（内置默认规则始终在前，空文本表示仅默认）。先解析再事务保存；
     /// 取消排除标记 reconcile_required，必须通过最新远端/本地/基线三方核对才能清除。
     pub async fn change_rules(
         &self,
@@ -176,7 +176,7 @@ impl BindingControls {
         version: &str,
         text: &str,
     ) -> Result<(), PortError> {
-        IgnoreRules::parse(text).map_err(db)?;
+        IgnoreRules::parse_with_defaults(text).map_err(db)?;
         if version.is_empty() || version.chars().any(char::is_control) {
             return Err(rejected("INVALID_RULES", "规则版本必须非空且不含控制字符"));
         }
@@ -276,7 +276,7 @@ fn excluded(rules: &str, item: &Item) -> Result<bool, PortError> {
         return Ok(false);
     }
     let path = RelativePath::parse(&item.path).map_err(db)?;
-    Ok(IgnoreRules::parse(rules)
+    Ok(IgnoreRules::parse_with_defaults(rules)
         .map_err(db)?
         .is_excluded(&path, !item.file))
 }

@@ -4,8 +4,8 @@
   "description": "Windows agent 与本机 GUI/CLI 之间的最小命令契约（docs/design.md §15.5、§5.6）。\n本文件是本机 IPC 的唯一编辑源；`cargo xtask generate` 据此生成\ncrates/local-ipc 的 Rust DTO 与 packages/local-ipc-types 的 TypeScript 类型。\n本契约与服务器管理 API 分开：它不经网络传输，也不复用 api/openapi.yaml。\n消息按帧编码：FRAME_HEADER_BYTES 字节的大端长度头（不含头自身）加该长度的\nUTF-8 JSON 负载，单帧负载上限为 MAX_FRAME_BYTES；两个常量由 x-vaultsyncd 生成。\n请求方按 Request 编码，agent 按 Response 应答；request_id 原样回显，\n调用方据此把并发应答配对，agent 不解析它的内容。\n未知命令、未知闭集取值与畸形 JSON 一律拒绝，不当作默认成功：\n解码失败发生在产生应答之前，由传输层结束该连接。",
   "x-vaultsyncd": {
     "protocol": {
-      "major": 2,
-      "minor": 11
+      "major": 3,
+      "minor": 0
     },
     "frame": {
       "header_bytes": 4,
@@ -56,7 +56,7 @@
       "additionalProperties": false,
       "type": "object", "description": "可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。",
       "properties": {
-        "rules": {"type":"string","description":"完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。"},
+        "rules": {"type":"string","description":"绑定级额外排除规则，追加在始终加载的内置默认规则之后；空文本表示仅使用默认规则，! 可重新包含默认排除项，最多4096字节；保存不删除任何内容。"},
         "rules_version": {"type":"string","description":"不可复用的规则版本；同版本同文本幂等。"},
         "binding_id": {"type":"string","description":"Binding 身份。"},
         "vault_id": {"type":"string","description":"授权 Vault 身份。"},
@@ -240,7 +240,7 @@
     "ManagementResult": {
       "type":"object","description":"每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。",
       "properties":{
-        "rules":{"type":"string","description":"当前完整排除清单，空字符串表示无排除规则。"},
+        "rules":{"type":"string","description":"当前绑定级额外排除规则原文，不含内置默认规则；空字符串表示仅使用默认规则，! 可重新包含默认排除项。"},
         "rules_version":{"type":"string","description":"当前持久规则版本。"},
         "rules_explanation":{"type":"string","description":"get_rules携带entry_id时，按持久身份解析路径并返回命中的规则/行号或包含原因。"},
         "bindings":{"type":"array","items":{"$ref":"#/$defs/BindingInfo"},"description":"持久绑定列表。"},

@@ -29,6 +29,55 @@ use vaultsyncd_transfer::{
     ports::{PortError, PortFuture, VersionPin, VersionedContent},
 };
 
+// Kept independent of CFAPI registration so the actual scan/hash ordering can also be tested
+// against an ordinary native NTFS directory with an open Office-style lock file.
+async fn scan_local(local: &Local, binding: BindingId) -> Result<Vec<LocalImportEntry>, PortError> {
+    if binding != local.binding {
+        return Err(error("binding mismatch"));
+    }
+    let rules = crate::exclusions::Rules::load(&local.db, binding).await?;
+    if !rules.active {
+        return Err(error("binding paused or detached"));
+    }
+    let scan = local.vault.scan();
+    if !scan.permits_missing_comparison() {
+        return Err(error("incomplete scan"));
+    }
+    let mut result = Vec::new();
+    for entry in scan.entries {
+        let meta = entry
+            .metadata
+            .ok_or_else(|| error("unknown scan metadata"))?;
+        // Decide participation before observe_snapshot opens/hashes any file content.
+        if !rules.includes(&entry.path, meta.directory)? {
+            continue;
+        }
+        if meta.directory {
+            result.push(LocalImportEntry {
+                path: entry.path,
+                kind: EntryKind::Directory,
+                generation: 0,
+                size: None,
+                hash: None,
+            });
+        } else {
+            let snapshot = local
+                .observe_snapshot(&entry.path)
+                .await?
+                .ok_or_else(|| error("scan changed"))?;
+            let e = snapshot.evidence();
+            result.push(LocalImportEntry {
+                path: entry.path,
+                kind: EntryKind::File,
+                generation: e.generation,
+                size: Some(e.size),
+                hash: Some(e.digest),
+            });
+        }
+    }
+    Ok(result)
+}
+
 pub(crate) async fn pin(local: &Local, row: &SnapshotEntry) -> Result<VersionPin, PortError> {
     let entry = EntryId::from_hex(&row.entry_id).map_err(error)?;
     let version = VersionId::from_hex(
@@ -173,45 +222,7 @@ impl ImportLocal for Importer {
         })
     }
     fn scan(&self, binding: BindingId) -> PortFuture<'_, Result<Vec<LocalImportEntry>, PortError>> {
-        Box::pin(async move {
-            if binding != self.local.binding {
-                return Err(error("binding mismatch"));
-            }
-            let scan = self.local.vault.scan();
-            if !scan.permits_missing_comparison() {
-                return Err(error("incomplete scan"));
-            }
-            let mut result = Vec::new();
-            for entry in scan.entries {
-                let meta = entry
-                    .metadata
-                    .ok_or_else(|| error("unknown scan metadata"))?;
-                if meta.directory {
-                    result.push(LocalImportEntry {
-                        path: entry.path,
-                        kind: EntryKind::Directory,
-                        generation: 0,
-                        size: None,
-                        hash: None,
-                    });
-                } else {
-                    let snapshot = self
-                        .local
-                        .observe_snapshot(&entry.path)
-                        .await?
-                        .ok_or_else(|| error("scan changed"))?;
-                    let e = snapshot.evidence();
-                    result.push(LocalImportEntry {
-                        path: entry.path,
-                        kind: EntryKind::File,
-                        generation: e.generation,
-                        size: Some(e.size),
-                        hash: Some(e.digest),
-                    });
-                }
-            }
-            Ok(result)
-        })
+        Box::pin(scan_local(&self.local, binding))
     }
     fn preserve<'a>(
         &'a self,
@@ -224,6 +235,30 @@ impl ImportLocal for Importer {
         Box::pin(async move {
             if binding != self.local.binding {
                 return Err(error("binding mismatch"));
+            }
+            let rules = crate::exclusions::Rules::load(&self.local.db, binding).await?;
+            let source = from.to_string();
+            if !rules.active
+                || !rules.includes(&source, false)?
+                || !rules.includes(&to.to_string(), false)?
+            {
+                return Err(error("excluded or inactive import preserve"));
+            }
+            // Renaming a directory also moves its excluded children. Never let the filtered
+            // first-import manifest authorize such an implicit action on retained user content.
+            let scan = self.local.vault.scan();
+            if !scan.permits_missing_comparison() {
+                return Err(error("incomplete preserve scan"));
+            }
+            for entry in scan.entries {
+                if entry.path == source || entry.path.starts_with(&format!("{source}/")) {
+                    let meta = entry
+                        .metadata
+                        .ok_or_else(|| error("unknown preserve metadata"))?;
+                    if !rules.includes(&entry.path, meta.directory)? {
+                        return Err(error("import preserve contains excluded content"));
+                    }
+                }
             }
             let text:String=sqlx::query_scalar("SELECT evidence FROM agent_evidence WHERE binding_id=? AND path=? AND generation=?").bind(binding.as_bytes().as_slice()).bind(from.to_string()).bind(generation.to_db_integer()).fetch_one(self.local.db.pool()).await.map_err(error)?;
             let expected: vaultsyncd_platform_windows::files::controlled::Evidence =
