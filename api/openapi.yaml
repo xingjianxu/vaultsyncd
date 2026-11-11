@@ -2320,6 +2320,9 @@ components:
         id: {type: string, description: 记录身份，正十进制文本}
         occurred_at: {type: string, description: 观测UTC秒}
         client_label: {type: string, description: 客户端登录标签快照}
+        client_hostname: {type: string, description: 客户端登录时声明的主机名，旧记录或浏览器未知}
+        client_os: {type: string, description: 客户端登录时声明的操作系统}
+        client_ip: {type: string, description: 服务端观察的客户端首次登录来源IP，不代表本机内网IP或实时地址}
         client_kind: {type: string, description: 登录入口client或browser或unknown}
         direction: {type: string, description: upload或download，按客户端方向}
         action: {type: string, description: upload_finalize或sync_commit或download}
@@ -2410,6 +2413,12 @@ components:
         device_label:
           type: string
           description: 设备的人类可读标签（不是设备身份，首发没有设备注册表）。
+        hostname:
+          type: string
+          description: 客户端运行主机名，可选非可信声明，最多255字节，未知时省略。
+        operating_system:
+          type: string
+          description: 客户端操作系统，可选非可信声明，最多255字节，未知时省略。
 
     RefreshRequest:
       description: 刷新请求（design §15.2 `POST /v1/auth/refresh` 的输入）。

@@ -117,12 +117,18 @@ export interface ActivityRecord {
   action: string;
   /** 本次内容字节数 */
   bytes?: string;
+  /** 客户端登录时声明的主机名，旧记录或浏览器未知 */
+  client_hostname?: string;
   /** 稳定登录连接身份 */
   client_id?: string;
+  /** 服务端观察的客户端首次登录来源IP，不代表本机内网IP或实时地址 */
+  client_ip?: string;
   /** 登录入口client或browser或unknown */
   client_kind: string;
   /** 客户端登录标签快照 */
   client_label: string;
+  /** 客户端登录时声明的操作系统 */
+  client_os?: string;
   /** 操作声明的设备身份，不代表认证设备 */
   device_id?: string;
   /** upload或download，按客户端方向 */
@@ -153,15 +159,18 @@ export interface ActivityRecord {
 
 export function decodeActivityRecord(value: unknown): ActivityRecord {
   const object = expect_object(value, "ActivityRecord");
-  if (Object.keys(object).some((key) => !["action", "bytes", "client_id", "client_kind", "client_label", "device_id", "direction", "entry_id", "error_code", "id", "occurred_at", "offset", "operation_id", "path", "size", "status", "upload_id", "version_id"].includes(key))) {
+  if (Object.keys(object).some((key) => !["action", "bytes", "client_hostname", "client_id", "client_ip", "client_kind", "client_label", "client_os", "device_id", "direction", "entry_id", "error_code", "id", "occurred_at", "offset", "operation_id", "path", "size", "status", "upload_id", "version_id"].includes(key))) {
     throw new Error("ActivityRecord contains unknown fields");
   }
   return {
     action: expect_string(object.action, "ActivityRecord.action"),
     bytes: object.bytes === undefined ? undefined : expect_string(object.bytes, "ActivityRecord.bytes"),
+    client_hostname: object.client_hostname === undefined ? undefined : expect_string(object.client_hostname, "ActivityRecord.client_hostname"),
     client_id: object.client_id === undefined ? undefined : expect_string(object.client_id, "ActivityRecord.client_id"),
+    client_ip: object.client_ip === undefined ? undefined : expect_string(object.client_ip, "ActivityRecord.client_ip"),
     client_kind: expect_string(object.client_kind, "ActivityRecord.client_kind"),
     client_label: expect_string(object.client_label, "ActivityRecord.client_label"),
+    client_os: object.client_os === undefined ? undefined : expect_string(object.client_os, "ActivityRecord.client_os"),
     device_id: object.device_id === undefined ? undefined : expect_string(object.device_id, "ActivityRecord.device_id"),
     direction: expect_string(object.direction, "ActivityRecord.direction"),
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "ActivityRecord.entry_id"),
@@ -624,8 +633,12 @@ export function decodeHealthStatus(value: unknown): HealthStatus {
 export interface LoginRequest {
   /** 设备的人类可读标签（不是设备身份，首发没有设备注册表）。 */
   device_label: string;
+  /** 客户端运行主机名，可选非可信声明，最多255字节，未知时省略。 */
+  hostname?: string;
   /** 登录名（原样比较，不做大小写折叠）。 */
   login: string;
+  /** 客户端操作系统，可选非可信声明，最多255字节，未知时省略。 */
+  operating_system?: string;
   /** 明文密码；只在本次请求内存在，服务端不记录。 */
   password: string;
 }
@@ -634,7 +647,9 @@ export function decodeLoginRequest(value: unknown): LoginRequest {
   const object = expect_object(value, "LoginRequest");
   return {
     device_label: expect_string(object.device_label, "LoginRequest.device_label"),
+    hostname: object.hostname === undefined ? undefined : expect_string(object.hostname, "LoginRequest.hostname"),
     login: expect_string(object.login, "LoginRequest.login"),
+    operating_system: object.operating_system === undefined ? undefined : expect_string(object.operating_system, "LoginRequest.operating_system"),
     password: expect_string(object.password, "LoginRequest.password"),
   };
 }

@@ -51,14 +51,26 @@ pub struct ActivityRecord {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<String>,
+    /// 客户端登录时声明的主机名，旧记录或浏览器未知
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_hostname: Option<String>,
     /// 稳定登录连接身份
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// 服务端观察的客户端首次登录来源IP，不代表本机内网IP或实时地址
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
     /// 登录入口client或browser或unknown
     pub client_kind: String,
     /// 客户端登录标签快照
     pub client_label: String,
+    /// 客户端登录时声明的操作系统
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_os: Option<String>,
     /// 操作声明的设备身份，不代表认证设备
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -523,8 +535,16 @@ pub enum HealthStatus {
 pub struct LoginRequest {
     /// 设备的人类可读标签（不是设备身份，首发没有设备注册表）。
     pub device_label: String,
+    /// 客户端运行主机名，可选非可信声明，最多255字节，未知时省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
     /// 登录名（原样比较，不做大小写折叠）。
     pub login: String,
+    /// 客户端操作系统，可选非可信声明，最多255字节，未知时省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operating_system: Option<String>,
     /// 明文密码；只在本次请求内存在，服务端不记录。
     pub password: String,
 }
@@ -533,7 +553,9 @@ impl core::fmt::Debug for LoginRequest {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut value = f.debug_struct("LoginRequest");
         value.field("device_label", &self.device_label);
+        value.field("hostname", &self.hostname);
         value.field("login", &self.login);
+        value.field("operating_system", &self.operating_system);
         value.field("password", &"[REDACTED]");
         value.finish()
     }

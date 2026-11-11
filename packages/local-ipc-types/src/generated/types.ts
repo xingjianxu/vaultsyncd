@@ -68,12 +68,18 @@ export interface ActivityRecord {
   action: string;
   /** 本次提供的内容长度（字节）；不代表客户端已接收。 */
   bytes?: string;
+  /** 客户端登录时声明的主机名；缺省未知。 */
+  client_hostname?: string;
   /** 认证连接身份。 */
   client_id?: string;
+  /** 服务端观察的客户端首次登录来源IP；缺省未知。 */
+  client_ip?: string;
   /** 当时接入类型。 */
   client_kind: string;
   /** 当时客户端名称。 */
   client_label: string;
+  /** 客户端登录时声明的操作系统；缺省未知。 */
+  client_os?: string;
   /** 操作携带的设备身份。 */
   device_id?: string;
   /** upload 或 download，相对于客户端。 */
@@ -107,9 +113,12 @@ export function decodeActivityRecord(value: unknown): ActivityRecord {
   return {
     action: expect_string(object.action, "ActivityRecord.action"),
     bytes: object.bytes === undefined ? undefined : expect_string(object.bytes, "ActivityRecord.bytes"),
+    client_hostname: object.client_hostname === undefined ? undefined : expect_string(object.client_hostname, "ActivityRecord.client_hostname"),
     client_id: object.client_id === undefined ? undefined : expect_string(object.client_id, "ActivityRecord.client_id"),
+    client_ip: object.client_ip === undefined ? undefined : expect_string(object.client_ip, "ActivityRecord.client_ip"),
     client_kind: expect_string(object.client_kind, "ActivityRecord.client_kind"),
     client_label: expect_string(object.client_label, "ActivityRecord.client_label"),
+    client_os: object.client_os === undefined ? undefined : expect_string(object.client_os, "ActivityRecord.client_os"),
     device_id: object.device_id === undefined ? undefined : expect_string(object.device_id, "ActivityRecord.device_id"),
     direction: expect_string(object.direction, "ActivityRecord.direction"),
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "ActivityRecord.entry_id"),

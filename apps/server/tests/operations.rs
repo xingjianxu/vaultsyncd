@@ -261,6 +261,8 @@ fn send(method: &str, uri: &str, token: Option<&str>, body: Option<String>) -> R
 
 async fn login(app: &App, account: &str) -> String {
     let request = LoginRequest {
+        hostname: None,
+        operating_system: None,
         device_label: "S047 验收".to_owned(),
         login: account.to_owned(),
         password: PASSWORD.to_owned(),

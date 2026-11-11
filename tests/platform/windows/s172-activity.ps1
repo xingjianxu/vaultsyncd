@@ -13,6 +13,7 @@ if ($Worker) {
     $empty = Join-Path $PSScriptRoot '空目录'
     New-Item -ItemType Directory -Path $state,$local,$empty | Out-Null
     [IO.File]::WriteAllText((Join-Path $local 'local-only.txt'), 'S172-native-upload', (New-Object Text.UTF8Encoding($false)))
+    $fixture | Add-Member -NotePropertyName hostname -NotePropertyValue ([System.Net.Dns]::GetHostName())
     $fixture | Add-Member -NotePropertyName localPath -NotePropertyValue $local
     $fixture | Add-Member -NotePropertyName emptyPath -NotePropertyValue $empty
     $fixture | Add-Member -NotePropertyName caFile -NotePropertyValue (Join-Path $PSScriptRoot 'ca.pem')

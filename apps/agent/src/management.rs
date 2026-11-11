@@ -503,11 +503,14 @@ pub(crate) async fn execute(
         }
         C::Login => {
             let (server, client, session) = server.ok_or_else(|| reject("NOT_READY"))?;
+            let hostname = vaultsyncd_platform_windows::host::hostname().ok();
             client
                 .login(&vaultsyncd_protocol::generated::LoginRequest {
                     login: p.username.clone().unwrap(),
                     password: p.password.clone().unwrap(),
-                    device_label: "Windows agent".into(),
+                    device_label: hostname.clone().unwrap_or_else(|| "未知主机".into()),
+                    hostname,
+                    operating_system: vaultsyncd_platform_windows::host::operating_system().ok(),
                 })
                 .await
                 .map_err(connection_error)?;

@@ -24,7 +24,7 @@ async fn schema19_upgrade_does_not_invent_history_and_preserves_backup_and_old_b
     tx.commit().await.unwrap();
     old.close().await;
     let new = Database::open(dir.database()).await.unwrap();
-    assert_eq!(new.schema_version(), 20);
+    assert_eq!(new.schema_version(), 21);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_activity")
             .fetch_one(new.pool())
@@ -44,12 +44,12 @@ async fn schema19_upgrade_does_not_invent_history_and_preserves_backup_and_old_b
     assert!(matches!(
         Database::open_with(&dir.database(), &previous).await,
         Err(crate::db::DbError::SchemaTooNew {
-            found: 20,
+            found: 21,
             supported: 19
         })
     ));
     assert_eq!(std::fs::read(dir.database()).unwrap(), before);
-    let backup = crate::db::migration_backup_path(&dir.database(), 19, 20);
+    let backup = crate::db::migration_backup_path(&dir.database(), 19, 21);
     let restored = dir.path.join("restored.sqlite");
     std::fs::copy(backup, &restored).unwrap();
     let recovered = Database::open_with(&restored, &previous).await.unwrap();
@@ -62,5 +62,76 @@ async fn schema19_upgrade_does_not_invent_history_and_preserves_backup_and_old_b
     );
     recovered.close().await;
     let upgraded = Database::open(restored).await.unwrap();
-    assert_eq!(upgraded.schema_version(), 20);
+    assert_eq!(upgraded.schema_version(), 21);
+}
+
+#[tokio::test]
+async fn schema20_host_properties_migration_preserves_unknown_history_backup_and_fence() {
+    let dir = TestDir::new("host-properties-upgrade");
+    let previous = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            crate::db::MIGRATOR
+                .iter()
+                .filter(|m| m.version <= 20)
+                .cloned()
+                .collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let old = Database::open_with(&dir.database(), &previous)
+        .await
+        .unwrap();
+    let mut tx = old.begin_write().await.unwrap();
+    insert_user(&mut tx, user(1)).await;
+    sqlx::query("INSERT INTO client_connections(id,user_id,device_label,client_kind,created_at,login_ip) VALUES(?1,?2,'Windows agent','client',100,'192.0.2.197')")
+        .bind([2u8;16].as_slice()).bind(user(1).as_bytes().as_slice()).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    old.close().await;
+    let current = Database::open(dir.database()).await.unwrap();
+    let attributes: (Option<String>, Option<String>, String, String) = sqlx::query_as(
+        "SELECT hostname,operating_system,login_ip,device_label FROM client_connections",
+    )
+    .fetch_one(current.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        attributes,
+        (None, None, "192.0.2.197".into(), "Windows agent".into())
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_activity")
+            .fetch_one(current.pool())
+            .await
+            .unwrap(),
+        0
+    );
+    current.close().await;
+    let bytes = std::fs::read(dir.database()).unwrap();
+    assert!(matches!(
+        Database::open_with(&dir.database(), &previous).await,
+        Err(crate::db::DbError::SchemaTooNew {
+            found: 21,
+            supported: 20
+        })
+    ));
+    assert_eq!(std::fs::read(dir.database()).unwrap(), bytes);
+    let restored = dir.path.join("schema20-restored.sqlite");
+    std::fs::copy(
+        crate::db::migration_backup_path(&dir.database(), 20, 21),
+        &restored,
+    )
+    .unwrap();
+    let recovered = Database::open_with(&restored, &previous).await.unwrap();
+    assert_eq!(recovered.schema_version(), 20);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT login_ip FROM client_connections")
+            .fetch_one(recovered.pool())
+            .await
+            .unwrap(),
+        "192.0.2.197"
+    );
+    recovered.close().await;
+    let upgraded = Database::open(restored).await.unwrap();
+    assert_eq!(upgraded.schema_version(), 21);
+    upgraded.close().await;
 }

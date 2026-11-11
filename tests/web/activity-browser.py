@@ -69,7 +69,7 @@ def main():
             body = json.dumps(body)
         connection.request(method or ("POST" if body is not None else "GET"), path, body, request_headers)
         response = connection.getresponse(); payload = response.read()
-        result = (response.status, payload if binary else json.loads(payload), dict(response.getheaders()))
+        result = (response.status, payload if binary else json.loads(payload) if payload.startswith((b"{", b"[")) else payload.decode(), dict(response.getheaders()))
         connection.close()
         return result
 
@@ -85,7 +85,9 @@ def main():
 
     try:
         service = start()
-        status, session, _ = request("/v1/auth/login", {"login": "owner", "password": password, "device_label": "<img src=x onerror=alert(1)> 同步客户端"})
+        for invalid in ["", "bad\nname", "a" * 256]:
+            assert request("/v1/auth/login", {"login": "owner", "password": password, "device_label": "bad", "hostname": invalid})[0] == 400
+        status, session, _ = request("/v1/auth/login", {"login": "owner", "password": password, "device_label": "旧应用标签", "hostname": "<img src=x onerror=alert(1)> 客户端主机", "operating_system": "Windows 11 (10.0.26300) x64"})
         assert status == 200
         token = session["access_token"]
         doc_id = api("/v1/admin/vaults", {"path": str(documents)}, token)["vault_id"]
@@ -183,7 +185,7 @@ def main():
             table = page.get_by_role("table", name="同步与传输记录", exact=True)
             expect(table.locator("tbody tr")).to_have_count(50)
             expect(table.get_by_text("已提供下载内容", exact=True)).to_have_count(50)
-            expect(table.get_by_text("<img src=x onerror=alert(1)> 同步客户端", exact=True)).to_have_count(50)
+            expect(table.get_by_text("<img src=x onerror=alert(1)> 客户端主机", exact=True)).to_have_count(50)
             expect(table.locator("img")).to_have_count(0)
             expect(table.get_by_text(renamed_name, exact=True)).to_have_count(1)
             table.locator("tbody tr").first.get_by_role("button", name="详情", exact=False).click()
@@ -191,6 +193,9 @@ def main():
             expect(dialog.get_by_text("范围起点", exact=True)).to_be_visible()
             expect(dialog.get_by_text("3 B", exact=True)).to_be_visible()
             expect(dialog.get_by_text("版本", exact=True)).to_be_visible()
+            expect(dialog.get_by_text("Windows 11 (10.0.26300) x64", exact=True)).to_be_visible()
+            expect(dialog.get_by_text("登录来源 IP", exact=True)).to_be_visible()
+            expect(dialog.get_by_text("127.0.0.1", exact=True)).to_be_visible()
             page.keyboard.press("Escape")
             page.get_by_role("button", name="下一页", exact=True).click()
             expect(table.get_by_text("同步已提交", exact=True)).to_have_count(1)

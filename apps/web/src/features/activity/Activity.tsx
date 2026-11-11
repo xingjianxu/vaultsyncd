@@ -71,7 +71,7 @@ export function ActivityPanel() {
 
   function refresh() { setBefore(undefined); setRevision(value => value + 1); }
   const details: Array<[string, string | undefined]> = chosen ? [
-    ["记录", chosen.id], ["时间", timestamp(chosen.occurred_at)], ["客户端", chosen.client_label],
+    ["记录", chosen.id], ["时间", timestamp(chosen.occurred_at)], ["客户端", chosen.client_hostname || "未知主机"], ["操作系统", chosen.client_os || "未知"], ["登录来源 IP", chosen.client_ip || "未知"],
     ["客户端类型", chosen.client_kind === "browser" ? "浏览器" : chosen.client_kind === "client" ? "客户端" : "未知"], ["连接身份", chosen.client_id], ["设备声明身份", chosen.device_id],
     ["文件", chosen.path], ["条目", chosen.entry_id], ["版本", chosen.version_id],
     ["文件大小", chosen.size === undefined ? undefined : bytes(chosen.size)],
@@ -96,7 +96,7 @@ export function ActivityPanel() {
       <Table.Thead><Table.Tr>{["时间", "客户端", "文件", "方向", "结果", "文件大小", "详情"].map(title => <Table.Th key={title}>{title}</Table.Th>)}</Table.Tr></Table.Thead>
       <Table.Tbody>{page.items.map(row => <Table.Tr key={row.id}>
         <Table.Td><Text size="sm" style={{ whiteSpace: "nowrap" }}>{timestamp(row.occurred_at)}</Text></Table.Td>
-        <Table.Td><Text size="sm" style={{ overflowWrap: "anywhere", maxWidth: 200 }}>{row.client_label || "未知客户端"}</Text></Table.Td>
+        <Table.Td><Text size="sm" style={{ overflowWrap: "anywhere", maxWidth: 200 }}>{row.client_hostname || "未知主机"}</Text></Table.Td>
         <Table.Td><Text size="sm" style={{ overflowWrap: "anywhere", maxWidth: 320 }}>{row.path ?? (row.action === "upload_finalize" ? "上传内容（尚未关联文件）" : "路径未知")}</Text></Table.Td>
         <Table.Td>{row.direction === "upload" ? "上传" : row.direction === "download" ? "下载" : row.direction}</Table.Td>
         <Table.Td><Badge variant="light" color={row.status === "failed" ? "red" : row.status === "committed" ? "green" : "blue"}>{outcome(row)}</Badge></Table.Td>

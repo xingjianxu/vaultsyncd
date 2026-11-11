@@ -90,6 +90,8 @@ mod tests {
         .clone();
         let cause = client
             .login(&LoginRequest {
+                hostname: None,
+                operating_system: None,
                 login: "user".into(),
                 password: "test-password".into(),
                 device_label: "test".into(),

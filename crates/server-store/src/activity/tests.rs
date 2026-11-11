@@ -29,6 +29,22 @@ async fn commit_records_are_transactional_idempotent_scoped_and_keep_snapshots()
         .unwrap();
     sqlx::query("INSERT INTO client_connections(id,session_id,user_id,device_label,client_kind,created_at) VALUES(?1,?1,?2,'客户端旧标签','client',1)")
         .bind(session(6).as_bytes().as_slice()).bind(owner.as_bytes().as_slice()).execute(&mut *tx).await.unwrap();
+    crate::clients::set_host_properties(
+        &mut tx,
+        session(6),
+        Some("DESKTOP-真实主机"),
+        Some("Windows 11 (10.0.26300) x64"),
+    )
+    .await
+    .unwrap();
+    crate::clients::set_login_details(
+        &mut tx,
+        session(6),
+        false,
+        Some("2001:db8::197".parse().unwrap()),
+    )
+    .await
+    .unwrap();
     // An unresolved pre-execution capture survives a process restart independently of credentials.
     bind_operation(&mut tx, owner, session(6), &key, &digest, Some(upload(11)))
         .await
@@ -64,6 +80,17 @@ async fn commit_records_are_transactional_idempotent_scoped_and_keep_snapshots()
     assert_eq!(inflight.id, Some(session(6).as_bytes().to_vec()));
     assert_eq!(inflight.label, "客户端旧标签");
     assert_eq!(inflight.kind, "client");
+    let (host, os, ip): (String, String, String) = sqlx::query_as(
+        "SELECT hostname,operating_system,login_ip FROM client_connections WHERE id=?1",
+    )
+    .bind(session(6).as_bytes().as_slice())
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(host, "DESKTOP-真实主机");
+    assert!(os.starts_with("Windows 11"));
+    assert_eq!(ip, "2001:db8::197");
+
     let wrong_digest = operations::request_digest(&[("kind", b"different")]).unwrap();
     assert!(
         !bind_operation(&mut tx, owner, session(6), &key, &wrong_digest, None)
@@ -172,6 +199,12 @@ async fn commit_records_are_transactional_idempotent_scoped_and_keep_snapshots()
         .unwrap();
     assert!(rows[0].occurred_at > 100 && rows[0].occurred_at <= observed);
     assert_eq!(rows[0].client_id, Some(session(6).to_string()));
+    assert_eq!(rows[0].client_hostname.as_deref(), Some("DESKTOP-真实主机"));
+    assert_eq!(
+        rows[0].client_os.as_deref(),
+        Some("Windows 11 (10.0.26300) x64")
+    );
+    assert_eq!(rows[0].client_ip.as_deref(), Some("2001:db8::197"));
     assert_eq!(rows[0].client_label, "客户端旧标签");
     assert_eq!(rows[0].client_kind, "client");
     assert!(
@@ -243,6 +276,9 @@ async fn transfers_page_by_identity_and_finalize_deduplicates_without_losing_dow
         .unwrap();
     assert_eq!(first.len(), 51);
     assert_eq!(first[0].offset, Some(12));
+    assert_eq!(first[0].client_hostname, None);
+    assert_eq!(first[0].client_os, None);
+    assert_eq!(first[0].client_ip, None);
     assert_eq!(first[0].bytes, Some(4));
     let second = list(
         &mut conn,

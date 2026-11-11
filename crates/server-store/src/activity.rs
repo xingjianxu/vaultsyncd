@@ -126,6 +126,12 @@ pub struct Record {
     pub client_id: Option<String>,
     /// 标签快照。
     pub client_label: String,
+    /// 登录时声明的主机名；旧记录未知。
+    pub client_hostname: Option<String>,
+    /// 登录时声明的操作系统。
+    pub client_os: Option<String>,
+    /// 首次登录来源IP；不代表实时地址。
+    pub client_ip: Option<String>,
     /// 登录入口类别。
     pub client_kind: String,
     /// 操作声明的设备身份。
@@ -164,7 +170,7 @@ pub async fn list(
     before: Option<i64>,
     direction: Option<&str>,
 ) -> Result<Vec<Record>, sqlx::Error> {
-    sqlx::query_as("SELECT a.id,a.occurred_at,CASE WHEN a.client_id IS NOT NULL THEN lower(hex(a.client_id)) END client_id,a.client_label,a.client_kind,CASE WHEN a.device_id IS NOT NULL THEN lower(hex(a.device_id)) END device_id,a.direction,a.action,a.status,a.entry_id,a.version_id,a.path,a.size,a.bytes,a.offset,CASE WHEN a.operation_id IS NOT NULL THEN lower(hex(a.operation_id)) END operation_id,CASE WHEN a.upload_id IS NOT NULL THEN lower(hex(a.upload_id)) END upload_id,a.error_code FROM file_activity a JOIN vaults v ON v.id=a.vault_id WHERE v.owner_id=?1 AND a.vault_id=?2 AND (?3 IS NULL OR a.id<?3) AND (?4 IS NULL OR a.direction=?4) ORDER BY a.id DESC LIMIT 51")
+    sqlx::query_as("SELECT a.id,a.occurred_at,CASE WHEN a.client_id IS NOT NULL THEN lower(hex(a.client_id)) END client_id,a.client_label,c.hostname AS client_hostname,c.operating_system AS client_os,c.login_ip AS client_ip,a.client_kind,CASE WHEN a.device_id IS NOT NULL THEN lower(hex(a.device_id)) END device_id,a.direction,a.action,a.status,a.entry_id,a.version_id,a.path,a.size,a.bytes,a.offset,CASE WHEN a.operation_id IS NOT NULL THEN lower(hex(a.operation_id)) END operation_id,CASE WHEN a.upload_id IS NOT NULL THEN lower(hex(a.upload_id)) END upload_id,a.error_code FROM file_activity a JOIN vaults v ON v.id=a.vault_id LEFT JOIN client_connections c ON c.id=a.client_id AND c.user_id=v.owner_id WHERE v.owner_id=?1 AND a.vault_id=?2 AND (?3 IS NULL OR a.id<?3) AND (?4 IS NULL OR a.direction=?4) ORDER BY a.id DESC LIMIT 51")
         .bind(owner.as_bytes().as_slice()).bind(vault.as_bytes().as_slice()).bind(before).bind(direction).fetch_all(conn).await
 }
 

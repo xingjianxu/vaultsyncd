@@ -1252,6 +1252,8 @@ mod tests {
 
         let issued_session = client
             .login(&LoginRequest {
+                hostname: None,
+                operating_system: None,
                 device_label: "test-device".to_owned(),
                 login: "owner".to_owned(),
                 password: "correct horse battery staple".to_owned(),

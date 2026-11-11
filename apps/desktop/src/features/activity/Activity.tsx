@@ -88,7 +88,7 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
     <Table<ActivityRecord> caption="同步与传输记录当前页" rows={rows ?? []} rowKey={row => row.id}
       emptyMessage={!available ? "请选择绑定。" : !authenticated ? server ? "尚未登录此绑定的服务器。" : "尚未读取记录。" : loading ? "正在读取记录…" : error ? "记录读取失败。" : rows ? "当前筛选没有记录。" : "请选择绑定。"} columns={[
         { key: "time", title: "时间", render: row => activityTime(row.occurred_at) },
-        { key: "client", title: "客户端", render: row => row.client_label },
+        { key: "client", title: "客户端", render: row => row.client_hostname || "未知主机" },
         { key: "file", title: "文件", render: row => <Text size="sm" style={{ overflowWrap: "anywhere" }}>{activityFile(row)}</Text> },
         { key: "direction", title: "方向", render: row => row.direction === "upload" ? "上传" : row.direction === "download" ? "下载" : row.direction },
         { key: "result", title: "结果", render: row => <StatusBadge tone={row.status === "failed" ? "danger" : "neutral"}>{activityResult(row)}</StatusBadge> },
@@ -107,7 +107,7 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
         {selected.action === "upload_finalize" && <Text size="sm">内容已上传并校验，文件同步提交结果见后续记录。</Text>}
         <dl style={{ margin: 0, overflowWrap: "anywhere" }}>
           {([
-            ["记录", selected.id], ["时间", activityTime(selected.occurred_at)], ["客户端", selected.client_label],
+            ["记录", selected.id], ["时间", activityTime(selected.occurred_at)], ["客户端", selected.client_hostname || "未知主机"], ["操作系统", selected.client_os || "未知"], ["登录来源 IP", selected.client_ip || "未知"],
             ["接入类型", selected.client_kind], ["连接身份", selected.client_id], ["设备", selected.device_id],
             ["条目", selected.entry_id], ["版本", selected.version_id], ["操作", selected.operation_id],
             ["上传会话", selected.upload_id], ["文件大小（字节）", selected.size], ["本次提供（字节）", selected.bytes],

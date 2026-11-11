@@ -34,14 +34,26 @@ pub struct ActivityRecord {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<String>,
+    /// 客户端登录时声明的主机名；缺省未知。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_hostname: Option<String>,
     /// 认证连接身份。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// 服务端观察的客户端首次登录来源IP；缺省未知。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
     /// 当时接入类型。
     pub client_kind: String,
     /// 当时客户端名称。
     pub client_label: String,
+    /// 客户端登录时声明的操作系统；缺省未知。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_os: Option<String>,
     /// 操作携带的设备身份。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]

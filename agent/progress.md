@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S197 in_progress**：同步与传输记录按运行主机名显示客户端，操作系统/首次登录来源IP作为属性；交接 [S197](tasks/S197.md)。
+
 当前 **S195 done**：已解绑 Windows 目录可同根重新绑定，同时修复首次导入/resync 第二层准入。解绑先排空原生 writer，完整旧占位落库前无损交接；旧缓存/恢复记录保留、活动/内部隔离及部分内容保护不变。宿主 store60/首次导入9/resync14/control11/IPC30、typecheck/desktop build/activity、交叉严格clippy、Windows新增12+既有9项及真实HTTPS三代重绑/上传/重启通过，复审APPROVED。实现 `485f763`，干净来源开发客户端四EXE/11文件与清单复核通过，根dist已交付、旧dist已备份；实现485f763与交接da762f4已ff合master，任务树/分支已清理。证据 `/data/vaultsyncd-dev/S195-detached-path-reuse-20261111/`，交接 [S195](tasks/S195.md)。无服务端部署/发行；下一ready无，原S011/S106/S107/S108门禁不变。
 
 当前 **S193 done**：Windows 客户端「连接设置」可移除已保存服务器。仍有正在管理的绑定时拒绝（提示先解除绑定），已解除绑定的恢复记录不阻止移除也不被删除；移除总是删除本机连接、登录资料与 WinCred 凭据，并尽力注销服务器会话，未确认时保留不自动消失的提示。IPC 2.11 新增 `remove_connection` 与 `session_revoked`，客户端 schema 16 新增移除留痕。验证：宿主 store 59/local-ipc 30/typecheck/desktop build+activity、交叉严格 clippy、真实 Windows 交互会话 WinCred 删除与拒绝路径、真实 WebView S081 全套（`removalBlockedByBinding=true`）、Chromium 7 组及既有桌面回归。证据 `/data/vaultsyncd-dev/S193-remove-server-20261111/`。实现`c587d78`、交接`ffd9433`已ff合master，任务树/分支已清理；未部署（无服务端产物）。下一 ready：无。

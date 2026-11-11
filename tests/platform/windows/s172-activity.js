@@ -50,8 +50,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     await wait("empty merge", () => synchronized(emptyBinding));
     const page = await invoke("agent_list_activity", { bindingId });
     check(Array.isArray(page.activity) && page.activity.length > 0 && !!page.next_cursor, "real IPC forwards authenticated activity and pagination");
-    check(page.activity.some(row => row.client_label === "Windows agent"), "native client's identity is recorded");
-    check(page.activity.some(row => row.client_label !== "Windows agent"), "authorized Vault includes another client's records");
+    check(page.activity.some(row => row.client_hostname === fixture.hostname), "native client's identity is recorded");
+    check(page.activity.some(row => row.client_hostname !== fixture.hostname), "authorized Vault includes another client's records");
     check(page.activity.some(row => row.action === "sync_commit" && row.status === "committed" && row.path === "local-only.txt"), "upload sync committed with original file path");
     check(page.activity.some(row => row.action === "upload_finalize" && row.status === "ready"), "upload validation is separate from sync commit");
     const served = page.activity.find(row => row.action === "download" && row.status === "served");
@@ -63,6 +63,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     const uploads = await invoke("agent_list_activity", { bindingId, direction: "upload" });
     check(downloads.activity.length > 0 && downloads.activity.every(row => row.direction === "download"), "download filter reaches actual API");
     check(uploads.activity.length > 0 && uploads.activity.every(row => row.direction === "upload"), "upload filter reaches actual API");
+    check(uploads.activity.every(row => row.client_hostname === fixture.hostname), "activity hostname comes from the running Windows client");
+    check(uploads.activity.every(row => row.client_os?.startsWith("Windows 11 (10.0.") && row.client_ip === "127.0.0.1"), "operating system and observed login IP survive HTTPS and IPC");
+    report.clientProperties = uploads.activity.map(({client_hostname, client_os, client_ip}) => ({client_hostname, client_os, client_ip}));
     await rejected("IPC rejects noncanonical activity cursor", { bindingId, cursor: "01" }, "输入无效");
     await rejected("IPC rejects unknown activity direction", { bindingId, direction: "both" }, "输入无效");
     await rejected("unknown local binding cannot query another Vault", { bindingId: "00".repeat(16) }, "NOT_FOUND");
@@ -107,6 +110,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     await wait("login context reset", () => !text().includes("请先登录此绑定的服务器。"));
     select("activity_binding", bindingId);
     await wait("records after login", () => directions().length > 0);
+    check(text().includes(fixture.hostname), "client column shows hostname");
+    await click("查看详情");
+    await wait("client properties details", () => text().includes("登录来源 IP") && text().includes("Windows 11 (10.0."));
+    check(text().includes("操作系统"), "operating system is a client property");
+    await click("关闭");
     check(!document.querySelector('[role="alert"]'), "page recovers after reauthentication");
     check(document.documentElement.scrollWidth <= innerWidth, "native desktop page fits window");
     check(cspViolations.length === 0, "native activity page has no CSP violations");

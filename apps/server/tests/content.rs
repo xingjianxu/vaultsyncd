@@ -348,6 +348,8 @@ fn sha256(bytes: &[u8]) -> String {
 
 async fn login(app: &App, account: &str) -> String {
     let request = vaultsyncd_protocol::generated::LoginRequest {
+        hostname: None,
+        operating_system: None,
         device_label: "S046-b 验收".to_owned(),
         login: account.to_owned(),
         password: PASSWORD.to_owned(),

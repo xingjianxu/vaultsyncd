@@ -288,6 +288,8 @@ impl App {
 
     async fn login(&self, account: &str) -> String {
         let request = LoginRequest {
+            hostname: None,
+            operating_system: None,
             device_label: "S048 验收".to_owned(),
             login: account.to_owned(),
             password: PASSWORD.to_owned(),
