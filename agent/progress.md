@@ -236,6 +236,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
+| S194 | done | 修复`abac3bf`；补齐 CLI `command_label` 的 `remove_connection` 映射，恢复 `tools/build.sh` 交叉编译 | [S194](tasks/S194.md) |
 | S193 | done | 实现`c587d78`；IPC2.11移除服务器、schema16移除留痕与WinCred/A会话尽力注销 | [S193](tasks/S193.md) |
 | S186 | done | 实现`764e93e`；`tools/build.sh` 在进入 devShell 前清空 `dist/` 与暂存区，产物齐套才搬入、失败时 `dist/` 不存在；交接已ff合master，任务树/分支已清理 | [S186](tasks/S186.md) |
 | S184 | done | 实现`82dcddd`、交接`0ff8684`已ff合master；新增`tools/build.sh`（无版本号、输出根`dist/`便携程序目录），`release.sh`发布链未改；任务树/分支已清理 | [S184](tasks/S184.md) |
