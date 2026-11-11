@@ -212,7 +212,7 @@ def main():
             expect(page.get_by_role("menu")).to_have_count(1)
             folder_row.click(button="right")
             expect(page.get_by_role("menu")).to_have_count(1)
-            assert menu.get_by_role("menuitem").all_inner_texts() == ["打开", "属性", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"], menu.get_by_role("menuitem").all_inner_texts()
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["打开", "新建目录", "属性", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"], menu.get_by_role("menuitem").all_inner_texts()
             page.wait_for_timeout(150)
             page.screenshot(path=str(RUN / "context-menu-light-1440.png"))
             page.emulate_media(color_scheme="dark")
