@@ -1,6 +1,6 @@
 # 实施进度
 
-当前：**S188—S191 并行进行**。Windows 桌面启动取消全局登录门禁，单 agent 支持不同目录绑定不同服务器的 Vault。见 [S188](tasks/S188.md)、[S189](tasks/S189.md)、[S190](tasks/S190.md)、[S191](tasks/S191.md)。schema 15 存储、IPC 2.10 与 CLI 验证已通过；集成及 Windows 原生验收进行中。
+当前 **S188—S191 done**。Windows 客户端直接打开同步目录，单 agent 按 ServerId 隔离连接、凭据和同步循环，不同目录可绑定不同服务器的 Vault。Mantine 保持，schema14→15 原位迁移及 IPC2.10/CLI/Tauri 已同步。实现 d13b705，最终 S191 同源 Windows 双 HTTPS/CFAPI/上传历史恢复/故障隔离/独立登出/重启/旧版迁移与原生单测12项通过，S176 主动登录三阶段30项及 Chromium 通过。干净源码生产开发构建通过，四 EXE/11文件清单复核通过，长期副本在 /data/vaultsyncd-dev/S188-S191-multi-server-20261111/product/。交接 [S188](tasks/S188.md)、[S189](tasks/S189.md)、[S190](tasks/S190.md)、[S191](tasks/S191.md)，待本批交接提交立即ff合master及清理。下一 ready 无，S011/S106/S107/S108 门禁保持。第二轮隔离云端样本保留恢复现场，见S191。S134/S187旧工作树保持，S187单连接诊断范围已由本次重构取代。
 
 此前：**S186 done**（工具维护），`tools/build.sh` 在进入 `.#windows` 前先清空 `dist/` 与暂存目录，产物齐套才一次性搬入，构建失败或中断时 `dist/` 不存在；实现 `764e93e`、交接 `589ffae` 已 ff-only 合 master，任务树/分支已清理，主工作区 `dist/` 已用新脚本重建（四 EXE，无 `.stage`/`unsigned.zip`）。**下一 ready：无**，S011/S106/S107/S108 门禁保持。
 
@@ -56,6 +56,10 @@
 
 | 编号 | 结果 | 产出提交/整合 | 交接 |
 | --- | --- | --- | --- |
+| S191 | done，双服务器 Windows 原生同源验收、CFAPI/恢复/故障隔离/迁移及12项单测通过 | d13b705，干净生产开发构建通过，待ff整合与任务树清理 | [S191](tasks/S191.md) |
+| S190 | done，Mantine主界面启动、独立服务器表单、绑定选择及按服务器认证 | d13b705，Chromium与真实WebView/S176通过 | [S190](tasks/S190.md) |
+| S189 | done，按服务器运行时、IPC2.10及绑定路由，持久恢复与身份围栏 | d13b705，严格检查及真实Windows通过 | [S189](tasks/S189.md) |
+| S188 | done，连接schema15迁移并保留既有绑定、待办与通知领取 | d13b705，存储58项及Windows旧版升级通过 | [S188](tasks/S188.md) |
 | S185 | 删除 ZIP 专用 EXE 与普通启动归属/清单 gate，任意目录直开；原生启动62/更新回退102项通过 | 4027a93 已ff合master，任务树/分支清理；干净来源开发dist已交付，不发行/推送 | [S185](tasks/S185.md) |
 | S183 | 根 SVG 统一 Windows 应用/窗口/托盘及 Web favicon/登录/顶栏品牌；Windows 原生与 Chromium 通过，generation274 部署健康 | 实现 c37760f、交接6772251已ff合master，任务树/分支清理；未发行客户端 | [S183](tasks/S183.md) |
 | S182 | 发布 v0.1.7 正式版（含 S180/S181）；Windows ZIP 唯一附件、远端 digest 与本地一致，设为 Latest | 版本9a873c8已ff合master并推送，任务树/分支清理 | [S182](tasks/S182.md) |
