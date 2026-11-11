@@ -25,6 +25,9 @@ pub async fn list(
         Ok(value) => value,
         Err(response) => return response,
     };
+    let properties = headers
+        .get("x-vaultsyncd-client-properties")
+        .is_some_and(|value| value == "1");
     let (before, direction) = match parse_query(query.as_deref()) {
         Ok(value) => value,
         Err(()) => return bad_request(&caller.request_id, "无效的记录分页游标或方向"),
@@ -67,9 +70,9 @@ pub async fn list(
             occurred_at: row.occurred_at.to_string(),
             client_id: row.client_id,
             client_label: row.client_label,
-            client_hostname: row.client_hostname,
-            client_os: row.client_os,
-            client_ip: row.client_ip,
+            client_hostname: properties.then_some(row.client_hostname).flatten(),
+            client_os: properties.then_some(row.client_os).flatten(),
+            client_ip: properties.then_some(row.client_ip).flatten(),
             client_kind: row.client_kind,
             device_id: row.device_id,
             direction: row.direction,

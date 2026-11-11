@@ -39,7 +39,8 @@ pub(crate) async fn execute(
         ));
     }
     let mut request = ApiRequest::get(format!("/v1/vaults/{}/activity", record.vault))
-        .with_auth(AuthMode::Bearer);
+        .with_auth(AuthMode::Bearer)
+        .with_header("x-vaultsyncd-client-properties", "1");
     for (name, value) in [
         ("before", parameters.cursor.as_ref()),
         ("direction", parameters.direction.as_ref()),

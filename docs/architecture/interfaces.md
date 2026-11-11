@@ -2810,5 +2810,5 @@ Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与
 
 - 登录请求增加可选 `hostname`、`operating_system`，最多255字节、非空、无控制字符；客户端声明仅供展示，不能作为授权依据。Windows agent 从 GetComputerNameExW/RtlGetVersion 采集，device_label 同时使用主机名兼容旧服务。
 - `client_connections.hostname/operating_system` 在登录事务中保存，刷新只推进 session_id。活动按稳定 client_id 和 owner 读取这两个不可变属性与已有 login_ip，保留文件/标签原快照；旧库迁移为 NULL，不伪造旧主机名。
-- ActivityRecord 增加可选 `client_hostname/client_os/client_ip`；旧端可省略/忽略，新两端客户端列使用主机名，缺省“未知主机”，详情显示系统和“登录来源 IP”。IP 沿用 S170 TCP/loopback 代理规则，不代表实时IP。
+- ActivityRecord 增加可选 `client_hostname/client_os/client_ip`；旧版远端ActivityRecord严格拒绝未知字段，因此仅请求头 `X-Vaultsyncd-Client-Properties: 1` 返回扩展属性；未请求时保持旧形状，新两端显式请求，旧服务忽略该头。新两端客户端列使用主机名，缺省“未知主机”，详情显示系统和“登录来源 IP”。IP 沿用 S170 TCP/loopback 代理规则，不代表实时IP。
 - schema20→21 自动迁移前一致性备份，旧二进制拒写；回退须整套配对备份，不执行 down migration。IPC 主次版本不变，可选字段兼容既有消费者。

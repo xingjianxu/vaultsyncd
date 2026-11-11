@@ -60,9 +60,11 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
     return () => { sequence.current++; };
   }, [load]);
   function chooseBinding(value: string) {
+    if (value === binding) return;
     sequence.current++; setRows(undefined); setNext(undefined); setCursor(undefined); setSelected(undefined); setError(""); setBinding(value);
   }
   function chooseDirection(value: Direction) {
+    if (value === direction) return;
     sequence.current++; setRows(undefined); setNext(undefined); setCursor(undefined); setSelected(undefined); setError(""); setDirection(value);
   }
   return <Stack gap="lg">

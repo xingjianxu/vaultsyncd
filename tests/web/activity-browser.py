@@ -132,6 +132,10 @@ def main():
         upload_rows = api(f"/v1/vaults/{doc_id}/activity?direction=upload", token=token)["items"]
         assert len([item for item in upload_rows if item["action"] == "sync_commit"]) == 1
         assert next(item for item in upload_rows if item["action"] == "sync_commit")["path"] == original_name
+        assert all(not ({"client_hostname", "client_os", "client_ip"} & row.keys()) for row in upload_rows)
+        _, extended, _ = request(f"/v1/vaults/{doc_id}/activity?direction=upload", token=token, headers={"X-Vaultsyncd-Client-Properties": "1"})
+        assert all(row["client_hostname"] == "<img src=x onerror=alert(1)> 客户端主机" and row["client_os"].startswith("Windows 11") and row["client_ip"] == "127.0.0.1" for row in extended["items"])
+        checks.append("legacy-strict-shape/opt-in-client-properties")
         checks.append("real-upload/finalize/commit-idempotency/range/historical-path")
 
         class Handler(CspStaticFiles):

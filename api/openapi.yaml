@@ -115,7 +115,7 @@ paths:
     get:
       operationId: listActivity
       summary: 查看文件同步与传输记录
-      description: 仅记录启用后的活动，按记录身份倒序每页最多50条；served表示服务端已读取并准备响应，不表示客户端已收到或应用。
+      description: 仅记录启用后的活动，按记录身份倒序每页最多50条；served表示服务端已读取并准备响应，不表示客户端已收到或应用。可选请求头 X-Vaultsyncd-Client-Properties 为 1 时返回客户端主机名、系统和IP扩展属性，缺省保持旧版严格DTO形状。
       parameters:
         - {name: vault, in: path, required: true, schema: {type: string}}
         - {name: before, in: query, required: false, schema: {type: string}}

@@ -60,7 +60,7 @@ export function ActivityPanel() {
     let active = true;
     const controller = new AbortController();
     setBusy(true);
-    client.request(options => listActivity(options, vault, { before, direction: direction || undefined }, { signal: controller.signal })).then(result => {
+    client.request(options => listActivity(options, vault, { before, direction: direction || undefined }, { signal: controller.signal, headers: { "x-vaultsyncd-client-properties": "1" } })).then(result => {
       if (!active) return;
       setLoaded({ key, value: result });
     }).catch(cause => {
