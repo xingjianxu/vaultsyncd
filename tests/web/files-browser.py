@@ -229,9 +229,10 @@ def main():
             page.get_by_role("button", name="按修改日期排序", exact=True).focus(); page.keyboard.press("Space")
             expect(heads.nth(2)).to_have_attribute("aria-sort", "descending")
             assert row_names() == ["sort1.txt", "sort2.txt", "sort10.txt"], row_names()
-            page.get_by_role("button", name="刷新文件列表", exact=True).click()
+            with page.expect_response(lambda response: "/snapshots/" in response.url and "/entries" in response.url and "cursor=" in response.url and response.ok):
+                page.get_by_role("button", name="刷新文件列表", exact=True).click()
+            expect(table.locator("tbody .files-entry-name")).to_have_text(["sort1.txt", "sort2.txt", "sort10.txt"])
             expect(heads.nth(2)).to_have_attribute("aria-sort", "descending", timeout=15000)
-            assert row_names() == ["sort1.txt", "sort2.txt", "sort10.txt"], row_names()
             page.get_by_role("button", name="按名称排序", exact=True).click()
             expect(heads.nth(0)).to_have_attribute("aria-sort", "ascending")
             assert row_names() == ["sort1.txt", "sort2.txt", "sort10.txt"], row_names()

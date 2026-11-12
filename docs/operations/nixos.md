@@ -556,3 +556,9 @@ dev经管理器stop/configure-office/start配置同包，保留账号/Vault/身�
 回退：证据根 `evidence/old-system-root` 保留原generation285/system `hyqksj0k5r3iwzarnap6wm35wxgjvwp7`；deploy子目录另留补丁过渡test system `1p31kwwy...` 与原boot root。先对明确旧system执行test并核对SSH/prod健康，再设回启动profile/switch，同步主机源pin。回退到S211须在dev停止后 `configure-office --disable-office` 再启动旧包，旧二进制严格拒绝新[office]配置；仅功能/协议增加，无须修改或回退同步数据库。旧OnlyOffice系统会撤掉本次文档网络补丁，回退时同时关闭Office功能；保留服务数据/密钥。未实际执行回退。
 
 S213收尾：项目实现43ae33d/交接50fc007已ff合master，主机53c2db0/429b1cb已ff合main；六挂载与双任务树/分支正常清理，既有其他任务树保持。清理后prod/dev/OnlyOffice健康通过，恢复与原始证据独立保留。
+
+## S214 文件列表列排序部署（generation287）
+
+源 `bf8acc627387523a203d9d105bd1776f87141076`，主机pin `e5caced011456cb5ca682640c2e3f04df25655eb` 已ff合main。既有 `tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S214-file-sorting-20261112/deploy` 完成pure/dry/test/HTTPS、IPC、ServerId及归属核对/switch，result passed/cleaned=true，主机锁不变。运行/开机generation287，system `/nix/store/mdy6yg7jvhnyjprg39lbg8fc9smh6v74-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/inp5h2n5fa8kp5j0i445ya3wsq9qjva7-vaultsyncd-0.1.7`。仅展示排序，无数据库迁移、文件写入或协议变化。
+
+根类型/Web九套/构建、独立复审、Nix包内80项与精确包Chromium全套文件浏览器通过。dev经永久入口有序restart同包，原数据/身份和prod隔离保持；三源136文件/408次字节核对、严格TLS/匿名401/CSP及最终双环境health=ok。未向持久实例写测试样本。完整证据及旧generation286 system/boot GC roots在任务根，回退可使用其中previous-system/previous-boot；dev按管理器restart指定原S213包，保留现有数据，不重置配置。交接见 [S214](../../agent/tasks/S214.md)。
