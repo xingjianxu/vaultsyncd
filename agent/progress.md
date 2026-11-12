@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S214 done**：Web文件列表名称/大小/修改日期切换升降序，默认名称自然升序，目录优先/未知后置/精确整数，完整目录筛选排序后分页，树隔离。实现bf8acc6已部署generation287，主机e5caced已ff合main；根类型/Web九套/构建、独立复审、Nix包内80项和精确包Chromium全套文件浏览回归通过。prod/dev同包，136文件/408次字节、严格TLS/匿名门禁/CSP与健康/身份保持；dev由永久入口restart，不引用任务树。证据 `/data/vaultsyncd-dev/S214-file-sorting-20261112/`，交接 [S214](tasks/S214.md)。项目整合清理待收尾补记，S134/S187及并行S215保持；无本卡阻塞，不发行/推送或重打包Windows。下一ready无（S215并行执行），原四张blocked保持。
+当前 **S214 done**：Web文件列表名称/大小/修改日期切换升降序，默认名称自然升序，目录优先/未知后置/精确整数，完整目录筛选排序后分页，树隔离。实现bf8acc6已部署generation287，主机e5caced已ff合main；根类型/Web九套/构建、独立复审、Nix包内80项和精确包Chromium全套文件浏览回归通过。prod/dev同包，136文件/408次字节、严格TLS/匿名门禁/CSP与健康/身份保持；dev由永久入口restart，不引用任务树。证据 `/data/vaultsyncd-dev/S214-file-sorting-20261112/`，交接 [S214](tasks/S214.md)。实现/交接6327b64已ff合master，五挂载及本卡树/分支正常清理，S134/S187及并行S215保持；无本卡阻塞，不发行/推送或重打包Windows。下一ready无（S215并行执行），原四张blocked保持。
 
 当前 **S213 done**：Office固定版本→OnlyOffice→PDF只读预览，实现43ae33d已部署generation286，prod/dev同包及身份保持；server117项、根类型/Web九套/构建、生成器21项、dev管理器11项、Nix包内80项及最终精确包Chromium14组通过。独立复审APPROVED，136文件/408字节与线上HTTPS/CSP/匿名门禁及凭据验证通过。交接 [S213](tasks/S213.md)，证据 `/data/vaultsyncd-dev/S213-office-preview-20261112/`；实现43ae33d/交接50fc007已ff合master，主机53c2db0/429b1cb已ff合main；dev已由永久入口restart，六挂载与双树/分支正常清理，S134/S187保持。无本卡阻塞。下一ready无，原四张blocked保持。
 
