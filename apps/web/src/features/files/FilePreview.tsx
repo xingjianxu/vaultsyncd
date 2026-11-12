@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
-import { Alert, Button, Group, Modal, Progress, Stack, Text } from "@mantine/core";
+import { ActionIcon, Alert, Button, Group, Modal, Progress, Stack, Text } from "@mantine/core";
 import type { SnapshotEntry } from "@vaultsyncd/api-client";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 import { decodePreviewText, downloadPreview, previewKind } from "./preview";
 import { saveDownload } from "./download";
+import { FileIcon } from "./FileIcon";
 import { openOfficeViewer, type OfficeViewer } from "./office-preview";
 import { OfficePreview } from "./OfficePreview";
 import type { PreviewRenderer } from "./preview-renderer";
@@ -120,15 +121,20 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
   }, []);
   function close() { request.current?.abort(); onClose(); }
   const busy = !!status || rendering;
-  return <Modal opened={!!entry} onClose={close} title={`预览 · ${entry?.name ?? ""}`} size="min(1100px, 95vw)" centered
-    closeButtonProps={{ "aria-label": "关闭预览" }} closeOnEscape returnFocus>
+  return <Modal.Root opened={!!entry} onClose={close} size="min(1100px, 95vw)" centered closeOnEscape returnFocus>
+    <Modal.Overlay />
+    <Modal.Content>
+      <Modal.Header>
+        <Modal.Title style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          title={`预览 · ${entry?.name ?? ""}`}>预览 · {entry?.name ?? ""}</Modal.Title>
+        <ActionIcon variant="subtle" color="gray" aria-label="下载原文件" title="下载原文件" mr="xs"
+          disabled={!download || auth.busy} onClick={() => { if (download) saveDownload(download); }}>
+          <FileIcon name="download" />
+        </ActionIcon>
+        <Modal.CloseButton data-autofocus aria-label="关闭预览" />
+      </Modal.Header>
+      <Modal.Body>
     <Stack gap="sm">
-      <Group justify="flex-end">
-        <Group gap="xs">
-          <Button variant="default" disabled={!download || auth.busy} onClick={() => { if (download) saveDownload(download); }}>下载原文件</Button>
-          <Button data-autofocus variant="default" onClick={close}>关闭</Button>
-        </Group>
-      </Group>
       {status && <><Text role="status">{status}</Text><Progress value={progress} aria-label="文件读取进度" /></>}
       {rendering && <Text role="status">正在渲染页面…</Text>}
       {error && <Alert color="red" role="alert">{error}</Alert>}
@@ -146,5 +152,7 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
         <canvas ref={canvas} role="img" aria-label={entry?.name} hidden={!!error} />
       </div>}
     </Stack>
-  </Modal>;
+      </Modal.Body>
+    </Modal.Content>
+  </Modal.Root>;
 }

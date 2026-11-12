@@ -249,7 +249,7 @@ def main():
                 expect(page.get_by_role("dialog", name=f"预览 · {name}", exact=True)).to_be_visible()
 
             def close_preview():
-                preview.get_by_role("button", name="关闭", exact=True).click()
+                preview.get_by_role("button", name="关闭预览", exact=True).click()
                 expect(preview).not_to_be_visible()
 
             def source_ready(text):

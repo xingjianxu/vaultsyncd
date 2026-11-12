@@ -381,12 +381,19 @@ def main():
                     link(name).click()
                 expect(preview).to_be_visible()
                 expect(page.get_by_role("dialog", name=f"预览 · {name}", exact=True)).to_be_visible()
+                expect(preview.get_by_role("button", name="关闭", exact=True)).to_have_count(0)
+                header = preview.locator(".mantine-Modal-header")
+                download = header.get_by_role("button", name="下载原文件", exact=True)
+                expect(download).to_have_attribute("title", "下载原文件")
+                expect(download).to_have_text("")
+                expect(download.locator("svg.lucide-cloud-download")).to_have_count(1)
+                expect(header.get_by_role("button", name="关闭预览", exact=True)).to_be_focused()
 
             def close_preview(escape=False):
                 if escape:
                     page.keyboard.press("Escape")
                 else:
-                    preview.get_by_role("button", name="关闭", exact=True).click()
+                    preview.get_by_role("button", name="关闭预览", exact=True).click()
                 expect(preview).not_to_be_visible()
 
             def pixels():
@@ -440,6 +447,18 @@ def main():
                     box = preview.bounding_box()
                     assert box and box["x"] >= -1 and box["x"] + box["width"] <= width + 1, box
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"horizontal overflow at {scheme}/{width}"
+                    header = preview.locator(".mantine-Modal-header")
+                    title = header.get_by_role("heading")
+                    original_title = title.inner_text()
+                    title.evaluate("node => node.textContent = '长文件名称'.repeat(40) + '.png'")
+                    download_box = header.get_by_role("button", name="下载原文件", exact=True).bounding_box()
+                    close_box = header.get_by_role("button", name="关闭预览", exact=True).bounding_box()
+                    title_box = title.bounding_box()
+                    assert title_box and download_box and close_box
+                    assert title_box["x"] + title_box["width"] <= download_box["x"] + 1
+                    assert download_box["x"] + download_box["width"] <= close_box["x"] + 1
+                    assert close_box["x"] + close_box["width"] <= width + 1
+                    title.evaluate("(node, value) => node.textContent = value", original_title)
                     page.wait_for_timeout(250)  # Capture after Mantine's enter transition.
                     page.screenshot(path=str(evidence / f"image-{scheme}-{width}.png"))
             page.set_viewport_size({"width": 1440, "height": 900})
