@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { CloudDownload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActionIcon, Card, Group, NativeSelect, SimpleGrid, Stack, Text, TextInput, Title } from "@mantine/core";
 import { Button, Dialog, StatusBadge, Table } from "@vaultsyncd/ui";
@@ -58,7 +58,7 @@ export function Files({ agent, bindings = [], connections, run, busy, changed }:
       </Stack> },
       { key: "actions", title: "操作", render: row => <Stack gap="xs">
         <Group gap="xs">
-          <ActionIcon variant="filled" size="md" aria-label="下载" title="下载" disabled={busy || !authenticated || !fresh || !row.entry_id || row.dirty || current?.paused || current?.detached} onClick={() => run(() => action(row, "download"))}><Download aria-hidden="true" size={18} strokeWidth={1.6} /></ActionIcon>
+          <ActionIcon variant="filled" size="md" aria-label="下载" title="下载" disabled={busy || !authenticated || !fresh || !row.entry_id || row.dirty || current?.paused || current?.detached} onClick={() => run(() => action(row, "download"))}><CloudDownload aria-hidden="true" size={18} strokeWidth={1.6} /></ActionIcon>
           <Button size="xs" variant="default" disabled={busy || !fresh || !row.release_allowed || current?.detached} onClick={() => setSelected(row)}>释放空间</Button>
         </Group>
         {row.release_reason && <Text size="xs" c="dimmed">{row.release_reason}</Text>}

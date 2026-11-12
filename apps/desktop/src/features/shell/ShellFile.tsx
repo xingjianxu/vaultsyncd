@@ -1,4 +1,4 @@
-import { Download, History, HardDriveDownload, RefreshCw } from "lucide-react";
+import { CloudDownload, HardDriveDownload, History, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Card, Group, Stack, Text, Title } from "@mantine/core";
 import { Button, Dialog, Icon, StatusBadge, Table } from "@vaultsyncd/ui";
@@ -8,7 +8,7 @@ import { nativeShellFile, type ShellFileClient, type ShellFileStatus, type Shell
 
 const labels: Record<string, string> = { unavailable: "不可用", failed: "失败", conflict: "冲突", local_changes: "待上传本地修改", syncing: "正在同步", downloaded: "已下载", cloud_only: "仅云端" };
 const titles = { history: "查看文件历史", download: "下载到本地", release: "释放空间" };
-const icons = { history: History, download: Download, release: HardDriveDownload };
+const icons = { history: History, download: CloudDownload, release: HardDriveDownload };
 function detail(error: unknown) { return error instanceof Error ? error.message : "文件操作失败，请重试。"; }
 
 export function ShellFile({ client = nativeShellFile, agent = nativeAgent }: { client?: ShellFileClient; agent?: AgentClient }) {

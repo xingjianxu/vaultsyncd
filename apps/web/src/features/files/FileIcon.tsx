@@ -1,9 +1,9 @@
-import { ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, Copy, Download, FolderPlus, History, Info, Pencil, RefreshCw, Scissors, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, CloudDownload, CloudUpload, Copy, FolderPlus, History, Info, Pencil, RefreshCw, Scissors, Trash2 } from "lucide-react";
 
 const actions = {
   back: ArrowLeft, forward: ArrowRight, up: ArrowUp, refresh: RefreshCw,
   properties: Info, history: History, rename: Pencil, copy: Copy, cut: Scissors,
-  paste: ClipboardPaste, upload: Upload, download: Download, "folder-new": FolderPlus, delete: Trash2,
+  paste: ClipboardPaste, upload: CloudUpload, download: CloudDownload, "folder-new": FolderPlus, delete: Trash2,
 };
 const files = {
   folder: "M3 7h6l2 2h10v11H3z M3 7V4h6l2 3",
