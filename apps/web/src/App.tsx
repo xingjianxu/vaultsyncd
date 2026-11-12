@@ -3,10 +3,9 @@ import { Component, type ReactNode, lazy, Suspense, useCallback, useEffect, useR
 import { Alert, Anchor, Button, Card, Divider, Group, Loader, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { AppProvider, Icon, PageShell } from "@vaultsyncd/ui";
 import logoUrl from "../../../logo.svg?no-inline";
-import { showFeedback } from "./components/Feedback";
 import { ServerIdentity } from "./components/ServerIdentity";
 import { FileActionsProvider } from "./features/files/FileActions";
-import { EmptyState, StatusBadge } from "./components/ui";
+import { EmptyState } from "./components/ui";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
 import { AccountPanel, AuthGate, AuthProvider, useAuth } from "./features/auth/Auth";
@@ -42,40 +41,38 @@ function AppView() {
   const location = useRoute("/overview");
   const path = location.startsWith("/files/") ? "/files" : location;
   const active = items.find(item => item.path === path);
-  const [status, setStatus] = useState("正在检查");
-  const [detail, setDetail] = useState("正在获取服务状态。");
+  const [issue, setIssue] = useState<{ title: string; detail: string; color: "yellow" | "red" } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [checkedAt, setCheckedAt] = useState<string>();
   const controller = useRef<AbortController | null>(null);
   const connect = useCallback(async () => {
     if (controller.current) return;
     const current = new AbortController(); controller.current = current;
-    setBusy(true); setStatus("正在检查");
+    setBusy(true);
     try {
       const result = await checkServer(undefined, current.signal);
       if (current.signal.aborted) return;
-      setStatus(result.status === "ok" ? "服务可用" : result.status === "degraded" ? "服务降级" : "需要恢复");
-      setDetail("健康检查已返回。");
-      setCheckedAt(new Date().toLocaleTimeString("zh-CN"));
-      showFeedback(result.status === "ok" ? "服务可用" : result.status === "degraded" ? "服务降级" : "需要恢复", result.status === "ok" ? "green" : "yellow");
+      setIssue(result.status === "ok" ? null : {
+        title: result.status === "degraded" ? "服务降级" : "需要恢复",
+        detail: "请检查服务与 Vault 健康状态。连接可用不代表文件同步完成。",
+        color: "yellow",
+      });
     } catch (error) {
       if (current.signal.aborted) return;
       const message = error instanceof Error ? error.message : "连接失败，请检查服务地址。";
-      setStatus("未连接"); setDetail(message); showFeedback(message, "red");
+      setIssue({ title: "无法连接服务", detail: message, color: "red" });
     } finally { if (!current.signal.aborted) { controller.current = null; setBusy(false); } }
   }, []);
   useEffect(() => {
     void connect();
     return () => { controller.current?.abort(); controller.current = null; };
   }, [connect]);
-  const connection = <StatusBadge tone={status === "服务可用" ? "success" : status === "服务降级" || status === "需要恢复" ? "warning" : "neutral"}>{status}</StatusBadge>;
-  return <PageShell product="服务管理" brandIcon={<img src={logoUrl} alt="" width={28} height={28} />} items={items.map(item => ({ ...item, icon: <Icon icon={item.icon} /> }))} activePath={path} status={connection}
+  return <PageShell product="服务管理" brandIcon={<img src={logoUrl} alt="" width={28} height={28} />} items={items.map(item => ({ ...item, icon: <Icon icon={item.icon} /> }))} activePath={path}
     sidebarTitle="服务端控制台" sidebarFooter={<Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text>}
     headerActions={<Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor>}
     contentWidth={path === "/files" ? "100%" : "xl"}>
-        <FileActionsProvider key={auth.account?.user_id ?? "signed-out"}><Stack gap="lg" className="app-content">{path !== "/files" && path !== "/clients" && <Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title>{path !== "/vaults" && path !== "/activity" && <Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text>}</Stack>}
+        <FileActionsProvider key={auth.account?.user_id ?? "signed-out"}><Stack gap="lg" className="app-content">{issue && <Alert role="alert" data-service-connection title={issue.title} color={issue.color}><Group justify="space-between"><Text size="sm">{issue.detail}</Text><Button variant="light" color={issue.color} loading={busy} onClick={() => void connect()}>重新检查</Button></Group></Alert>}{path !== "/files" && path !== "/clients" && <Stack gap={4}><Title order={1} size="h2">{active?.label ?? "页面不存在"}</Title>{path !== "/vaults" && path !== "/activity" && <Text c="dimmed" size="sm">{active?.description ?? "请从导航选择页面。"}</Text>}</Stack>}
           <PageBoundary key={path}><Suspense fallback={<Group role="status"><Loader size="sm" /><Text>正在加载管理页面…</Text></Group>}>{path === "/overview" ? <>
-            <Card withBorder><Stack><Group justify="space-between"><div><Title order={2} size="h3">服务连接</Title><Text size="sm" c="dimmed">健康检查与目录采集状态分别核对</Text></div><div role="status">{connection}</div></Group><Text size="sm" aria-live="polite">{detail}</Text>{checkedAt && <Text size="xs" c="dimmed">最近成功检查 · {checkedAt}</Text>}<ServerIdentity /><Divider /><Group justify="space-between"><Text size="xs" c="dimmed">{busy ? "正在获取服务状态" : "按需检查当前连接"}</Text><Button disabled={busy} onClick={() => void connect()}>{busy ? "检查中…" : "检查服务连接"}</Button></Group></Stack></Card>
+            <Card withBorder><Stack><Title order={2} size="h3">服务器</Title><ServerIdentity /></Stack></Card>
             <Group justify="space-between"><Title order={2} size="h3">管理工作空间</Title><Text size="xs" c="dimmed">{items.length - 1} 个管理入口</Text></Group>
             <SimpleGrid cols={{ base: 1, sm: 2, xl: 4 }}>{items.slice(1).map(item => <Card withBorder key={item.path}><Stack h="100%"><Group><ThemeIcon variant="light" size="lg"><Icon icon={item.icon} /></ThemeIcon><Title order={3} size="h4">{item.label}</Title></Group><Text size="sm" c="dimmed" flex={1}>{item.description}</Text><Anchor href={`#${item.path}`} size="sm">进入管理 →</Anchor></Stack></Card>)}</SimpleGrid>
             <Alert>以服务端实际状态为准。连接可用不代表文件同步完成，备份下载完成后仍需重读验证。</Alert>
