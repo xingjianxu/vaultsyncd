@@ -72,3 +72,5 @@ printf '1\n' | ./tools/dev-server.sh init --login dev
 Windows 11 测试机程序在 `C:\vaultsyncd-dev-client`，默认用户配置已连接 dev，运行该目录的 `Start vaultsyncd.cmd` 可打开；常规测试绑定及客户端 agent 保持运行。初始化其他测试机可在 devShell 中使用 `tests/platform/windows/run-dev-server.sh <完整客户端目录> <fixture目录> <证据目录>`；fixture格式与恢复边界见脚本，已有非 dev 配置须显式迁移，不覆盖。
 
 S210（2026-11-12）已再次有序restart到与生产generation283同包 `/nix/store/c9xkfn6c1gm7lzd86pkab669gk5vj1yx-vaultsyncd-0.1.7`，提供只读文本/代码与Markdown预览；原dev账号/Vault/ServerId保持，三源136文件/408字节及部署包文本13组/PDF图片17组通过，证据见 [S210交接](../../agent/tasks/S210.md)。
+
+S211（2026-11-12）已通过 `restart --package` 有序切换至与生产generation284同包 `/nix/store/6liszy33b10wzpq4xn9aqn7rjamak7i0-vaultsyncd-0.1.7`，管理页面加载失败自动局部恢复；dev原账号/Vault/ServerId保持，与prod身份隔离。三源136文件/408字节及HTTPS/匿名门禁/CSP通过；证据见 [S211交接](../../agent/tasks/S211.md)。

@@ -526,3 +526,7 @@ prod/dev HTTPS及prod loopback的15文件共45次字节核对、health/capabilit
 prod/dev HTTPS及prod loopback 136文件/408次精确字节核对、健康/身份隔离、匿名401/CSP/nonce/nosniff与线上Chromium深链320/1440通过；部署包独立btrfs文本13组、PDF/图片17组全部通过。未登录或修改生产文件。dev管理器有序restart至同包，原数据库/Vault/账号/ServerId保持。证据同任务根 `evidence/` 与 `deploy/local-20261112T161807-1493237/result.json`（passed/cleaned=true），边界和完整验收见 [S210交接](../../agent/tasks/S210.md)。
 
 旧generation282的system/boot GC roots保留；回退先test上节system `xhnglrd8swyda39xqifl83a3sqqji441`、验证健康后switch，并同步主机pin至 `bf4857d`；dev可显式restart至上节旧包。未实际回退。
+
+## S211 管理页面自动恢复部署（generation284，2026-11-12）
+
+项目源 `5a85e64db1e31dc7a11c99120c34b84bfd191347`，沿用 `tools/deploy-local.sh`，pure构建/包内75项/dry/test/HTTPS/IPC/身份与归属/switch通过。主机pin `716e45384da7c91f50ce7239e540b3a5695d1a37` 已ff main并清树，依赖锁保持；运行/开机generation284，system `/nix/store/q08fphxvymbbv91gygcmsfigs1zbszwf-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/6liszy33b10wzpq4xn9aqn7rjamak7i0-vaultsyncd-0.1.7`。无wire/schema变化。prod/dev同包，136文件/408字节、健康/身份隔离/匿名401/CSP与严格HTTPS Chromium320/1440通过；原generation283的system/boot GC roots保留，未实际回退。证据及恢复策略见 [S211交接](../../agent/tasks/S211.md)。
