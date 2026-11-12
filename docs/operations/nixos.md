@@ -481,3 +481,9 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 密码重置按用户选择的一次性离线改库执行，证据`/data/vaultsyncd-dev/S181-password-reset-20261110T180259/`：用新包内`vaultsyncd-admin init`在隔离状态目录生成 `1` 的 Argon2id 散列（生产参数`m=19456,t=2,p=1`，临时库不参与生产），停服后整库备份`server.sqlite.before`（sha256`c6579c3c…`），单事务改写1条账号散列并把37条有效会话置`revoked_at`；`PRAGMA integrity_check=ok`，改后 sha256`46ecd34e…`。启动后`/v1/health`在loopback与`https://vsyncd.132140.xyz`均200，错密码401，用`1`登录200并`/v1/auth/account`返回`xingjian`，验证会话已logout，最终无有效会话。
 
 限制：该决定有意接受弱口令风险，不替代首发安全门禁；如需可审计的在线重置入口须另立卡。回退用旧代际`x0sx0d9c…`（先test/健康再switch并同步pin）或上述停服备份，二者都不降级数据库。
+
+## S202 记录自动刷新部署（generation278，2026-11-12）
+
+固定项目源`50b518584f69cd59ad2e27e945ad5dd967c97823`，主机pin`9e948a484ec0d4f1ca63fdd2fd6107625dfccb57`已ff合main并清树。沿用`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S202-activity-live-20261111/deploy`完成pure build/dry/test/HTTPS与IPC/身份和归属/switch；运行及开机generation278，system`/nix/store/k4bxgcd0yflgd1l7zx2nkpbmfkm3cjp1-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/bbqjq3qd0adjdj6x6z5r5sxsav18lsp2-vaultsyncd-0.1.7`。本卡无服务端schema变化，锁、ServerId、Vault路径保持。
+
+两源health/capabilities及28项静态资产/index比对通过；index按实际CSP nonce精确复原，资源原始字节/SHA256一致。匿名活动页门禁、CSP/style nonce及nosniff通过，未登录或修改生产文件。证据及截图见该开发根下`result.json`、`verification/`、`deploy/local-20261112T081942-881429/`（passed/cleaned=true）。旧generation277的system/boot GC roots保留；直接回退可先test `/nix/store/f4w0a9j1al2ssfjpqc7i839khi91aaqz-nixos-system-wks-lab-26.11.20261109.5e6fbb3`、核对健康后switch并同步主机pin至f7ee4dd；本次未实际回退。完整验收与客户端交付见`agent/tasks/S202.md`。
