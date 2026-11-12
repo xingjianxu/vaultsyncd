@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S211 in_progress**：管理页面加载失败自动恢复，前置S205/S210；交接 [S211](tasks/S211.md)。下一ready无，原四张blocked保持。
+
 当前 **S210 done**：React CodeMirror4.25.12只读文本高亮、Markdown默认GFM渲染与源码切换；文本2MiB/严格UTF编码、Markdown复杂度及活动内容隔离保持。根类型、Web八套/构建、真实Chromium文本13组和PDF/图片17组、独立复审、Nix纯构建/包内75项通过。实现e79299a已部署generation283，dev同包保留身份；三源136文件/408字节、HTTPS/匿名门禁/CSP和部署精确包13+17组复验通过。交接 [S210](tasks/S210.md)，证据 `/data/vaultsyncd-dev/S210-text-preview-20261112/`；实现e79299a/交接04c703e已ff合master，六挂载卸载、本卡树/分支清理，S134/S187保持，无本卡阻塞，不发行或重打包Windows。下一ready无，原四张blocked保持。
 
 当前 **S209 done**：浏览器内置PDF阅读器替代PDF.js及专用资源，固定版本/摘要与图片预算保持；根类型、Web八套/构建、Rust Web两项与真实Chromium17组通过。实现23d5c7c已部署generation282，dev同包保留身份；三源15文件/45字节核对、HTTPS/健康/CSP/匿名门禁和部署精确包17组复验通过。实现23d5c7c/交接ac0243d已ff合master，7挂载卸载、本卡树/分支清理，S134/S187保持。交接 [S209](tasks/S209.md)，证据 `/data/vaultsyncd-dev/S209-native-pdf-20261112/`；无本卡阻塞，不发行推送或重打包Windows。下一ready无，原四张blocked保持。

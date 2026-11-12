@@ -2368,6 +2368,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## Web 会话与账号管理（S077）
 
+- S211：`components/PageBoundary` 自动重挂当前管理路由，2/4/8/16/30秒退避，隐藏/离线暂停、可见/online后按退避恢复，导航/退出清理计时与监听。`recoverableLazy` 按boundary恢复代际用WeakMap缓存lazy Promise，兼顾Suspense未提交重试稳定及失败缓存清除；仅模块加载错误连续失败允许sessionStorage标签页五分钟一次document reload，保留hash/cookie，存储不可用不整页重载。错误提示自动重连无手动重载按钮；不重放文件/账号写操作，无wire/schema变化。
+
 - S160：服务概览的 `ServerIdentity` 通过 `readServerIdentity` / 生成 `getCapabilities` 读取同源 `GET /v1/capabilities` 的 `server_id`，只读显示完整值供选择复制。读取错误与健康状态独立，支持重试；离开概览或退出卸载时 abort，忽略迟到结果。不新增 wire/schema，不保存凭据或更改客户端身份配置。
 
 - 唯一 wire 源 `api/openapi.yaml`：`POST /v1/auth/browser/login` 接 LoginRequest，`POST /v1/auth/browser/refresh` 无请求体，均返回 BrowserSession（session_id/access_expires_at），令牌只在 HttpOnly/Secure/SameSite=Strict cookie。agent 原登录/带正文刷新保持兼容。全部认证响应 `Cache-Control: no-store`。

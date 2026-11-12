@@ -1,20 +1,21 @@
 import { Archive, ArrowLeftRight, Folder, FolderSearch, History, LayoutDashboard, Monitor, UserRound } from "lucide-react";
-import { Component, type ReactNode, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Anchor, Button, Card, Divider, Group, Loader, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { AppProvider, Icon, PageShell } from "@vaultsyncd/ui";
 import logoUrl from "../../../logo.svg?no-inline";
 import { ServerIdentity } from "./components/ServerIdentity";
 import { FileActionsProvider } from "./features/files/FileActions";
 import { EmptyState } from "./components/ui";
+import { PageBoundary, recoverableLazy } from "./components/PageBoundary";
 import { checkServer } from "./services/server";
 import { useRoute } from "./route";
 import { AccountPanel, AuthGate, AuthProvider, useAuth } from "./features/auth/Auth";
-const ClientsPanel = lazy(() => import("./features/clients/Clients").then(module => ({ default: module.ClientsPanel })));
-const ActivityPanel = lazy(() => import("./features/activity/Activity").then(module => ({ default: module.ActivityPanel })));
-const BackupPanel = lazy(() => import("./features/backup/Backup").then(module => ({ default: module.BackupPanel })));
-const RecoveryPanel = lazy(() => import("./features/history/Recovery").then(module => ({ default: module.RecoveryPanel })));
-const VaultsPanel = lazy(() => import("./features/vaults/Vaults").then(module => ({ default: module.VaultsPanel })));
-const FilesPanel = lazy(() => import("./features/files/Files").then(module => ({ default: module.FilesPanel })));
+const ClientsPanel = recoverableLazy(() => import("./features/clients/Clients").then(module => ({ default: module.ClientsPanel })));
+const ActivityPanel = recoverableLazy(() => import("./features/activity/Activity").then(module => ({ default: module.ActivityPanel })));
+const BackupPanel = recoverableLazy(() => import("./features/backup/Backup").then(module => ({ default: module.BackupPanel })));
+const RecoveryPanel = recoverableLazy(() => import("./features/history/Recovery").then(module => ({ default: module.RecoveryPanel })));
+const VaultsPanel = recoverableLazy(() => import("./features/vaults/Vaults").then(module => ({ default: module.VaultsPanel })));
+const FilesPanel = recoverableLazy(() => import("./features/files/Files").then(module => ({ default: module.FilesPanel })));
 
 const items = [
   { path: "/overview", label: "服务概览", description: "服务状态与管理入口，一目了然。", icon: LayoutDashboard },
@@ -26,14 +27,6 @@ const items = [
   { path: "/activity", label: "同步与传输记录", description: "查看客户端上传、同步提交与下载内容记录。", icon: ArrowLeftRight },
   { path: "/account", label: "账号与会话", description: "管理登录身份、密码与设备会话。", icon: UserRound },
 ];
-class PageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() {
-    if (this.state.failed) return <EmptyState title="管理页面加载失败"><Stack><Text>请检查连接后重新加载页面。</Text><Button onClick={() => window.location.reload()}>重新加载页面</Button></Stack></EmptyState>;
-    return this.props.children;
-  }
-}
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
 export function App() { return <AppProvider getStyleNonce={getStyleNonce}><AuthProvider><AuthGate><AppView /></AuthGate></AuthProvider></AppProvider>; }
 function AppView() {
