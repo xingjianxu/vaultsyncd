@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S204 in_progress（独立验收完成，追加S202整合）**：Windows绑定文件统一「显示更多选项 → vaultsyncd → 查看文件历史/下载文件/释放空间」，用户已明确选择免安装方案。按目录边界筛选、固定目标/正式身份与物理核验、释放确认、unknown同ID及独立最小权限窗口；关专窗不停止agent。实现e7514ac，夹具a53b8a0/f840e78；宿主15/IPC基线32、根类型/构建/严格clippy、Chromium8组及既有界面、Windows原生路径4项通过，干净f840交付字节 **98项**通过并独立审计清理。根dist11文件与永久product/实测PE/双清单一致，旧dist保留；证据 `/data/vaultsyncd-dev/S204-explorer-menu-20261112/`，交接 [S204](tasks/S204.md)。验收交接完成，接续合master/清理本卡6挂载和树分支；无本卡阻塞，不部署/发行，下一ready：S199。
+当前 **S204 done**：绑定文件统一「显示更多选项 → vaultsyncd → 查看文件历史/下载文件/释放空间」，用户已选免安装方案。固定目标/正式身份/物理核验、释放确认和unknown同ID，关专窗不停止agent。实现e7514ac，夹具a53b8a0/f840e78；合并并发S202为a56d8e3，保留其全部提交和已部署服务。宿主15/IPC基线32、根类型/构建/严格clippy、原生路径4项、既有界面及组合调度14项/activity与shell各8组Chromium通过；干净a56交付字节Windows **98项**通过，四PE/hash/双清单/root dist11文件和永久product一致，旧dist/失败证据保留。交接 [S204](tasks/S204.md)，证据 `/data/vaultsyncd-dev/S204-explorer-menu-20261112/`。原生独立清理审计通过；接续合master/清理本卡6挂载和树分支，无本卡阻塞，不重复部署/发行，下一ready：S199。
 
 当前 **S202 done**：两端同步与传输记录可见时按当前页串行2秒自动刷新，隐藏暂停、可见/聚焦即刷新，保留详情/失败前结果与迟到围栏。调度14项、类型/两端构建及前端回归、真实Web Chromium11组、桌面浏览器8组和Windows原生40项通过；实现31375ef/整合50b5185已包含S203退出修复，干净生产客户端四EXE/11文件交付根dist，旧dist完整备份。generation278已上线，pure/dry/test/健康/身份及两源28项资源、匿名门禁/CSP通过；主机9e948a4已ff合main并清树。证据 `/data/vaultsyncd-dev/S202-activity-live-20261111/`，交接 [S202](tasks/S202.md)。实现/整合/交接246291a已ff合master，8挂载卸载、本卡树/分支清理；无本卡阻塞，不发行推送，下一ready S199（S204由其他任务处理）。
 
