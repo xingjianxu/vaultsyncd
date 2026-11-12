@@ -1,5 +1,5 @@
-import { TransferDirection } from "@vaultsyncd/ui";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { TransferDirection, useLiveRefresh } from "@vaultsyncd/ui";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Card, Group, NativeSelect, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import { Button, Dialog, StatusBadge, Table } from "@vaultsyncd/ui";
 import type { ActivityRecord, BindingInfo, ConnectionInfo } from "@vaultsyncd/local-ipc-types";
@@ -28,45 +28,46 @@ export function activityFile(row: ActivityRecord): string {
 export function Activity({ agent, bindings = [], connections = [] }: { agent: AgentClient; bindings?: BindingInfo[]; connections?: ConnectionInfo[] }) {
   const [binding, setBinding] = useState(bindings[0]?.binding_id ?? "");
   const [direction, setDirection] = useState<Direction>("");
-  const [rows, setRows] = useState<ActivityRecord[]>();
+  const [loaded, setLoaded] = useState<{ key: string; rows: ActivityRecord[]; next?: string }>();
   const [cursor, setCursor] = useState<string>();
-  const [next, setNext] = useState<string>();
+  const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<ActivityRecord>();
-  const sequence = useRef(0);
   const current = bindings.find(item => item.binding_id === binding);
   const available = !!current;
   const server = connections.find(item => item.server_id === current?.server_id);
   const authenticated = server?.authenticated === true;
   const endpoint = server?.server_url;
-  const load = useCallback(async (before?: string) => {
-    const request = ++sequence.current;
-    setRows(undefined); setNext(undefined); setError(""); setSelected(undefined);
-    if (!binding || !available || !authenticated) { setLoading(false); setCursor(undefined); return; }
-    setLoading(true);
+  const key = JSON.stringify([binding, current?.server_id, current?.vault_id, direction, cursor, available, authenticated, endpoint, server?.username]);
+  const rows = loaded?.key === key ? loaded.rows : undefined;
+  const next = loaded?.key === key ? loaded.next : undefined;
+  useEffect(() => {
+    setError(""); setSelected(undefined); setLoading(false);
+  }, [agent, key]);
+  const load = useCallback(async (signal: AbortSignal, background: boolean) => {
+    if (!binding || !available || !authenticated) return;
+    if (!background) setLoading(true);
     try {
-      const result = await agent.listActivity(binding, before, direction || undefined);
+      const result = await agent.listActivity(binding, cursor, direction || undefined);
       if (!result.activity) throw new Error("agent 未返回同步与传输记录。");
-      if (request !== sequence.current) return;
-      setRows(result.activity); setNext(result.next_cursor); setCursor(before);
+      if (signal.aborted) return;
+      setLoaded({ key, rows: result.activity, next: result.next_cursor }); setError("");
     } catch (failure) {
-      if (request === sequence.current) {
+      if (!signal.aborted) {
         setError(failure instanceof Error ? failure.message : "同步与传输记录读取失败。");
       }
-    } finally { if (request === sequence.current) setLoading(false); }
-  }, [agent, binding, direction, available, authenticated, endpoint]);
-  useEffect(() => {
-    void load();
-    return () => { sequence.current++; };
-  }, [load]);
+    } finally { if (!signal.aborted) setLoading(false); }
+  }, [agent, binding, direction, cursor, available, authenticated, endpoint, key, revision]);
+  useLiveRefresh(load, !!binding && available && authenticated);
+  function refresh() { setCursor(undefined); setRevision(value => value + 1); }
   function chooseBinding(value: string) {
     if (value === binding) return;
-    sequence.current++; setRows(undefined); setNext(undefined); setCursor(undefined); setSelected(undefined); setError(""); setBinding(value);
+    setCursor(undefined); setBinding(value);
   }
   function chooseDirection(value: Direction) {
     if (value === direction) return;
-    sequence.current++; setRows(undefined); setNext(undefined); setCursor(undefined); setSelected(undefined); setError(""); setDirection(value);
+    setCursor(undefined); setDirection(value);
   }
   return <Stack gap="lg">
     <Title order={1} size="h2">同步与传输记录</Title>
@@ -81,7 +82,7 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
       </SimpleGrid>
       <Group justify="space-between">
         <Text size="sm" c="dimmed">服务端记录 · 所选 Vault 的所有客户端</Text>
-        <Button variant="default" disabled={loading || !available || !authenticated} onClick={() => void load()}>刷新记录</Button>
+        <Button variant="default" disabled={loading || !available || !authenticated} onClick={refresh}>刷新记录</Button>
       </Group>
       {current && <Text size="xs" c="dimmed">Vault {current.vault_id}</Text>}
     </Stack></Card>
@@ -99,8 +100,8 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
         { key: "details", title: "详情", render: row => <Button variant="default" size="xs" onClick={() => setSelected(row)}>查看详情</Button> },
       ]} />
     <Group justify="flex-end">
-      <Button variant="default" disabled={loading || !cursor} onClick={() => void load()}>第一页</Button>
-      <Button variant="default" disabled={loading || !next || !!error} onClick={() => void load(next)}>下一页</Button>
+      <Button variant="default" disabled={loading || !cursor} onClick={() => setCursor(undefined)}>第一页</Button>
+      <Button variant="default" disabled={loading || !next || !!error} onClick={() => setCursor(next)}>下一页</Button>
     </Group>
     <Dialog opened={!!selected} title="记录详情" onClose={() => setSelected(undefined)}>
       {selected && <Stack gap="sm">

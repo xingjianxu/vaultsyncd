@@ -1,5 +1,5 @@
-import { TransferDirection } from "@vaultsyncd/ui";
-import { useEffect, useState } from "react";
+import { TransferDirection, useLiveRefresh } from "@vaultsyncd/ui";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Badge, Button, Group, Loader, Modal, NativeSelect, ScrollArea, Stack, Table, Text } from "@mantine/core";
 import { listActivity, listVaults, type ActivityPage, type ActivityRecord, type VaultSummary } from "@vaultsyncd/api-client";
 import { useAuth } from "../auth/Auth";
@@ -37,7 +37,7 @@ export function ActivityPanel() {
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState<LoadedPage>();
   const [chosen, setChosen] = useState<ActivityRecord>();
-  const key = JSON.stringify([user, vault, direction, before, revision]);
+  const key = JSON.stringify([user, vault, direction, before]);
   const page = loaded?.key === key ? loaded.value : undefined;
 
   useEffect(() => {
@@ -56,19 +56,21 @@ export function ActivityPanel() {
   }, [client, user, vaultRevision]);
 
   useEffect(() => {
-    setError(""); setChosen(undefined);
-    if (!client || !user || !vault) { setBusy(false); return; }
-    let active = true;
-    const controller = new AbortController();
-    setBusy(true);
-    client.request(options => listActivity(options, vault, { before, direction: direction || undefined }, { signal: controller.signal, headers: { "x-vaultsyncd-client-properties": "1" } })).then(result => {
-      if (!active) return;
-      setLoaded({ key, value: result });
-    }).catch(cause => {
-      if (active) setError(cause instanceof Error ? cause.message : "读取记录失败");
-    }).finally(() => { if (active) setBusy(false); });
-    return () => { active = false; controller.abort(); };
-  }, [client, user, vault, direction, before, revision]);
+    setError(""); setChosen(undefined); setBusy(false);
+  }, [client, key]);
+
+  const load = useCallback(async (signal: AbortSignal, background: boolean) => {
+    if (!client || !user || !vault) return;
+    if (!background) setBusy(true);
+    try {
+      const result = await client.request(options => listActivity(options, vault, { before, direction: direction || undefined }, { signal, headers: { "x-vaultsyncd-client-properties": "1" } }));
+      if (signal.aborted) return;
+      setLoaded({ key, value: result }); setError("");
+    } catch (cause) {
+      if (!signal.aborted) setError(cause instanceof Error ? cause.message : "读取记录失败");
+    } finally { if (!signal.aborted) setBusy(false); }
+  }, [client, user, vault, direction, before, key, revision]);
+  useLiveRefresh(load, !!client && !!user && !!vault);
 
   function refresh() { setBefore(undefined); setRevision(value => value + 1); }
   const details: Array<[string, string | undefined]> = chosen ? [

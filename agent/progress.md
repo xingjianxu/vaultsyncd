@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S202 in_progress**：按用户要求让两端同步与传输记录可见时自动刷新，保留当前页/详情和失败前记录；本轮优先于 S199。隔离 `.worktrees/S202-activity-live`、`fix/S202-activity-live`，基线 fb23ecd；根类型基线通过，证据 `/data/vaultsyncd-dev/S202-activity-live-20261111/`。实现及验收进行中，交接 [S202](tasks/S202.md)。
+
 当前 **S201 done**：Windows 默认服务器、挂载即读授权 Vault 并选首项，文件/历史/传输默认活动绑定；保留有效手选、空/错误与跨服务器围栏。Web清单就绪即选首项，已有恢复/传输默认复验通过。根类型、两端构建/前端、Chromium绑定/解绑/布局及真实files/recovery/activity、Windows S081默认Vault/三页绑定与首次合并完整验收通过。实现bf1ec13/夹具b800d0c，generation277上线、健康/身份/两源26资源核对通过；主机f7ee4dd已ff合main并清树。干净来源客户端四EXE/双清单/11文件已交付根dist，旧dist与证据保留 `/data/vaultsyncd-dev/S201-default-vault-20261111/`；交接 [S201](tasks/S201.md)，实现/夹具/交接1453ad2已ff合master，8挂载卸载、任务树/分支清理。无本卡阻塞，不发行推送；下一 ready：S199。
 
 当前 **S200 done**：桌面新增「程序配置」，默认关闭主窗留托盘；完全退出/托盘退出可选有序关闭 agent（默认开），设置按用户原子持久化、损坏可修复，失败留窗不强杀。宿主desktop11/agent2、根类型/桌面构建、Chromium6组及既有UI/bindings/remove-server、生成/ZIP8、Windows严格clippy与生产构建通过；真实Windows S200 **106项**及S185启动 **62项**通过。交接 [S200](tasks/S200.md)，证据 `/data/vaultsyncd-dev/S200-desktop-settings-20261111/`。实现 `ff76c76` 已ff合master，任务树/分支已清理；干净来源开发客户端精确字节再次通过106+62项，根dist已交付并与永久product副本一致，旧dist保留previous-dist。无服务端产物变化不部署、不发行；无本卡阻塞。下一 ready：S199（现有维护停止围栏保持）。

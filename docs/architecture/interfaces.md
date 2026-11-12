@@ -2749,6 +2749,7 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 - `file_activity`保存启用后的事实，`operation_activity_sources`在受理前记录稳定登录连接归属、首次标签/接入类型、请求摘要及upload_id。连接快照由认证会话解析，同账号刷新链仍对应稳定client_id；声明的DeviceId单独保存，不用于认证。source与请求摘要匹配才随`commit_operation`同事务写`sync_commit/committed`，重试/恢复不重复；source已保留而操作尚未建立时，同键不同请求仍409 `OP_ID_REUSED`。只记关联upload的内容事件，无内容传输的目录/移动/删除/历史恢复不伪装上传。
 - `upload_finalize/ready`与uploads终态同事务，表示内容已校验，可以尚无文件名；按上传身份去重，逻辑size不冒充实际网络bytes。随后`sync_commit/committed`携带当时路径、EntryId/VersionId/OpId和大小。`download/served`在读出固定版本后记录当时路径、整份size及实际区间offset/bytes，再准备响应；不证明客户端已接收/校验/落盘，重复Range请求逐请求记录。finalize/download处理失败记录`failed`与实际分类错误码；未授权或无法解析身份的请求不进入账本。写账本失败显式报错，不吞错伪造记录。
 - 客户端`list_activity(binding_id,cursor?,direction?)`由agent核验Binding的Server/Device与当前配置，使用自身认证HTTP读取该Vault账本，再转换为本机DTO；GUI经Tauri允许列表桥调用，不访问在线数据库。客户端与Web均可查看所选Vault所有客户端，分页、方向、刷新、详情及空/错误态独立；会话/筛选/绑定变化忽略迟到结果。记录不是客户端本地离线失败、未上传内容或本地应用结果日志。
+- S202 两端通过 `packages/ui` 的 `useLiveRefresh(load, enabled, interval=2000)` 调度：首次立即读取，后续请求结束后等待间隔，可见时串行刷新当前游标；隐藏暂停、恢复可见/聚焦立即刷新，后台不清空表格和详情，失败保留结果并自动重试。回调负责业务错误展示；cleanup 中止 signal，Web 实际取消 HTTP，桌面 IPC 不支持物理取消但以 signal 拒绝迟到结果。查询作用域变化重建调度，手动刷新仍回第一页；API/IPC/schema 不变。
 - schema19→20沿用启动前一致备份/新schema旧二进制拒写；备份清凭据时保留两张新表及快照，完整备份计数/恢复校验包含它们。回退使用整套schema19归档和配对路径/新epoch，不能只切回旧二进制或改版本标记；不从旧版本/日志回填历史，不自动清理活动记录。
 
 ## S163 开发测试数据根（覆盖 S146/S161 的当前位置）
