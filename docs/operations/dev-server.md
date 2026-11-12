@@ -54,6 +54,19 @@ dev 后端仅监听 `127.0.0.1:18741`，独立代理监听 HTTPS 15401，禁用�
 
 Vault 注册使用运行实例的受限管理 socket，通过 `vaultsyncd-admin vaults register`，不能直接修改在线数据库。Windows 测试机只保存 dev 的 URL/ServerId，通过认证 IPC 管理连接与绑定；不得将 prod 的绑定直接指向新服务器，也不为正常连接安装自签CA或禁用 TLS 验证。
 
-现场验收、客户端位置、实际 ServerId/VaultId 和证据索引在 [S207交接](../../agent/tasks/S207.md)。密码只保存在 Git 外的受限文件，不写入本文、命令参数或日志。
+现场验收、客户端位置、实际 ServerId/VaultId 和证据索引在 [S207交接](../../agent/tasks/S207.md)。
 
-本机 dev 账号为 `dev`，受限密码文件在 `/data/vaultsyncd-dev/S207-prod-dev-20261112/credentials/password`（0600）。Windows 11 测试机程序在 `C:\vaultsyncd-dev-client`，默认用户配置已连接 dev，运行该目录的 `Start vaultsyncd.cmd` 可打开；常规测试绑定及客户端 agent 保持运行。初始化其他测试机可在 devShell 中使用 `tests/platform/windows/run-dev-server.sh <完整客户端目录> <fixture目录> <证据目录>`；fixture格式与恢复边界见脚本，已有非 dev 配置须显式迁移，不覆盖。
+本机 dev 账号为 `dev`，密码固定为 `1`（用户 2026-11-12 决定：开发环境即使重置，密码也是 `1`）。因此 dev 密码可写入本文；prod 密码仍只保存在 Git 外的受限文件，不写入文档、命令参数或日志。dev 受限密码文件在 `/data/vaultsyncd-dev/S207-prod-dev-20261112/credentials/password`（0600，内容已同步为 `1`）。
+
+重建（重置）dev 实例后，`init` 的密码从非终端 stdin 读取单行，可用管道保持固定密码，不必交互输入：
+
+```bash
+./tools/dev-server.sh stop
+# 停服后移除 /data/vaultsyncd-dev/dev-server（含 state/vaults），即产生新的 ServerId、数据库与账号
+printf '1\n' | ./tools/dev-server.sh init --login dev
+./tools/dev-server.sh start
+```
+
+重置会更换 ServerId 与 VaultId，Windows 测试机需按新 ServerId 重新绑定，不能沿用旧连接记录。
+
+Windows 11 测试机程序在 `C:\vaultsyncd-dev-client`，默认用户配置已连接 dev，运行该目录的 `Start vaultsyncd.cmd` 可打开；常规测试绑定及客户端 agent 保持运行。初始化其他测试机可在 devShell 中使用 `tests/platform/windows/run-dev-server.sh <完整客户端目录> <fixture目录> <证据目录>`；fixture格式与恢复边界见脚本，已有非 dev 配置须显式迁移，不覆盖。
