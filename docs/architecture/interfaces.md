@@ -2867,3 +2867,13 @@ S199 补充边界：ControlledApply 仅对 `expected=Absent` 且完整 `baseline
 `/etc/nixos/features/onlyoffilce.nix` 提供 `features.onlyoffilce.*`，wks-lab开启独立 Document Server：外部HTTPS `https://wlab.132140.xyz:15402`，API脚本 `/web-apps/apps/api/documents/api.js`，内部nginx `127.0.0.1:15403`、docservice `127.0.0.1:15404`，JWT运行时文件 `/var/lib/onlyoffice-secrets/jwt`。配置/密钥生命周期见主机README，部署及回退见 `docs/operations/nixos.md` S212。
 
 本卡未改变wire DTO/schema、BrowserAuth下载或CSP。现有Web仍将Office视为不支持预览；未来应用接入须另卡实现只读配置/JWT、Document Server可访问的受限固定版本内容入口及资源限制，不能传浏览器Blob URL或裸露管理员凭据，也不能直接开放现有需BrowserAuth的下载端点。
+
+## S213 Office 固定版本预览（覆盖S212应用待接入状态）
+
+唯一wire编辑源 `api/openapi.yaml`：新增 `OfficeFileType` 九格式闭集、`OfficePreviewRequest {file_type,hash,size}` 与 `POST /v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview`（生成 `previewOfficeVersion`）。请求需BrowserAuth/CSRF或现有Bearer授权；先核对Vault/固定版本/预期摘要与大小，在GC租约下完整读取、SHA256校验并释放对象活动锁，再交给OnlyOffice。输入/PDF各50MiB，每进程最多两个准入，原始deadline120秒。随机256位本机回环临时源按原会话/Vault逐次重查权限；Source析构关闭监听和已接受连接，源URL/JWT不返回浏览器。后台worker持有准入直到转换返回或deadline，取消HTTP不提前释放；不能撤回OnlyOffice已经入队的工作，deadline后上游仍可能继续。
+
+响应200为application/pdf，Content-Length、X-Content-Sha256是PDF摘要，X-Preview-Source-Sha256/Version绑定原始源；no-store/nosniff，返回前再次校验会话/Vault。转换下载只接受配置同origin的 `/cache/files/`，不跟重定向、不用环境代理，结果流有界并检验PDF头。401/403/410保持身份/权限/版本语义，400不合法请求，413超限，422校验或转换失败，503未配置/繁忙/不可用/超时；错误仍为既有信封。未增加匿名公网源端点、持久表或迁移，旧消费者保持原端点行为。
+
+`[office] document_server_url/jwt_secret_file` 是可选启动配置；URL仅HTTPS或字面回环HTTP根，未知字段/非法URL/密钥不合规拒绝启动。NixOS `services.vaultsyncd.office` 用LoadCredential代读，TOML仅指 `/run/credentials/vaultsyncd.service/office-jwt`；具体部署见nixos运维S213。Web先经现有downloadPreview验证原件并保留下载，再通过生成客户端有界读取PDF并核对源头、长度及完整SHA256，使用既有Blob/PDF查看器。关闭/导航/Vault/认证代际均取消并拒绝迟到结果，CSP不放宽。OnlyOffice自动修复得到合法PDF不意味着源修改，外链资源不随文档加载，排版/分页及PDF动作由转换器/浏览器负责。
+
+生成器format7/version0.3.0新增application/pdf成功字节及对应Accept；五份生成文件重建，本机IPC版本/DTO/数据语义不变（仅生成器来源头更新）。

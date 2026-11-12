@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S213 in_progress**：接入Web Office只读预览，使用S212 OnlyOffice将固定版本转换PDF，保留现有认证与CSP；隔离树 `.worktrees/S213-office-preview`，证据 `/data/vaultsyncd-dev/S213-office-preview-20261112/`，原四张blocked保持。
+
 当前 **S212 done**：`/etc/nixos` 新增 `features.onlyoffilce.*`，wks-lab启用OnlyOffice Document Server，HTTPS `wlab.132140.xyz:15402`、运行时JWT/nonce与回环内部服务。主机229efe4已ff合main并清树，generation285；纯构建/dry/test/switch、三类Office→PDF真实转换及鉴权/下载、管理路径/重定向/密钥重启与prod/dev健康通过。交接 [S212](tasks/S212.md)，证据 `/data/vaultsyncd-dev/S212-onlyoffice-20261112/`；项目仅文档，Web Office预览尚未接入，无本卡阻塞。下一ready无，原四张blocked保持。
 
 当前 **S211 done**：管理页失败自动局部重挂/懒加载缓存恢复，2至30秒退避、隐藏/离线暂停，仅持续模块错误允许标签页五分钟一次整页恢复，无手动重载按钮。根类型/Web九套/构建、Chromium七组故障与真实后端会话回归、Nix Web及包内75项通过；实现5a85e64已部署generation284，dev同包保留身份，三源136文件/408字节与HTTPS浏览器/匿名门禁/CSP通过。交接 [S211](tasks/S211.md)，证据 `/data/vaultsyncd-dev/S211-web-auto-recovery-20261112/`；实现5a85e64/验收交接b340c77已ff合master，六挂载卸载、本卡树/分支已清理，S134/S187保持；本卡无阻塞，不发行推送或重打包Windows。下一ready无，原四张blocked保持。

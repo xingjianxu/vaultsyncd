@@ -1,6 +1,6 @@
 //! 本文件由 `cargo xtask generate` 从 `api/local-ipc.schema.json` 生成，禁止手改。
 //!
-//! 契约：vaultsyncd 本机 IPC（api/local-ipc.schema.json）；生成器：vaultsyncd-xtask 0.2.0
+//! 契约：vaultsyncd 本机 IPC（api/local-ipc.schema.json）；生成器：vaultsyncd-xtask 0.3.0
 //! Windows agent 与本机 GUI/CLI 之间的最小命令契约（docs/design.md §15.5、§5.6）。
 //! 本文件是本机 IPC 的唯一编辑源；`cargo xtask generate` 据此生成
 //! crates/local-ipc 的 Rust DTO 与 packages/local-ipc-types 的 TypeScript 类型。

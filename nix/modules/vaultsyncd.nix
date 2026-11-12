@@ -15,6 +15,9 @@ let
     state.dir = cfg.stateDir;
   } // lib.optionalAttrs (cfg.vaultPaths != [ ]) {
     vaults.allowed_bases = cfg.vaultPaths;
+  } // lib.optionalAttrs cfg.office.enable {
+    office.document_server_url = cfg.office.documentServerUrl;
+    office.jwt_secret_file = "/run/credentials/vaultsyncd.service/office-jwt";
   });
   initScript = pkgs.writeShellScriptBin "vaultsyncd-init" ''
     exec ${cfg.package}/bin/vaultsyncd-admin init --state-dir ${cfg.stateDir} --login ${cfg.adminUser} "$@"
@@ -40,6 +43,11 @@ in {
       type = types.addCheck types.str (value: !(lib.hasInfix "\n" value) && !(lib.hasInfix " " value));
       default = cfg.user;
       description = "Login name for the first owner account created by `vaultsyncd-init`; defaults to the service user. Must be set before the offline init; it is not a password.";
+    };
+    office = {
+      enable = mkEnableOption "OnlyOffice conversion for read-only Office previews";
+      documentServerUrl = mkOption { type = types.str; example = "https://office.example.com"; description = "Document Server root URL. HTTPS or a literal loopback HTTP address; no credentials, query or path."; };
+      jwtSecretFile = mkOption { type = absolute; description = "Runtime JWT key source, read by systemd LoadCredential. Never put its contents in Nix/store."; };
     };
     settings = {
       server.listen = mkOption { type = types.str; default = "127.0.0.1:8721"; description = "HTTP address; loopback by default. TLS proxy and firewall are managed separately."; };
@@ -80,6 +88,8 @@ in {
         ExecStart = "${cfg.package}/bin/vaultsyncd-server --config ${toml}";
         Restart = "on-failure";
         RestartSec = "5s";
+        # Office handlers drain within 120s; allow cleanup before systemd's stop deadline.
+        TimeoutStopSec = "150s";
         UMask = "0077";
         NoNewPrivileges = true;
         CapabilityBoundingSet = "";
@@ -97,6 +107,8 @@ in {
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         LockPersonality = true;
         WorkingDirectory = cfg.stateDir;
+      } // lib.optionalAttrs cfg.office.enable {
+        LoadCredential = [ "office-jwt:${cfg.office.jwtSecretFile}" ];
       } // lib.optionalAttrs managedState {
         StateDirectory = lib.removePrefix "/var/lib/" cfg.stateDir;
         StateDirectoryMode = "0700";

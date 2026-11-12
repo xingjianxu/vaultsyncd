@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 DEV_BASE = Path("/data/vaultsyncd-dev")
 DEFAULT_ROOT = DEV_BASE / "dev-server"
@@ -133,9 +134,64 @@ def discover_package(value):
 
 
 def server_config(root):
-    return (f'[server]\nlisten = "127.0.0.1:{BACKEND}"\n[state]\ndir = {json.dumps(str(root / "state"))}\n'
+    text = (f'[server]\nlisten = "127.0.0.1:{BACKEND}"\n[state]\ndir = {json.dumps(str(root / "state"))}\n'
             f'[vaults]\nallowed_bases = [{json.dumps(str(root / "vaults"))}]\n'
             '[log]\nlevel = "info"\nformat = "json"\n')
+    office = (read_json(root / "config/instance.json") or {}).get("office")
+    if office:
+        require(set(office) == {"document_server_url", "jwt_secret_file"}, "Office 配置字段不合法")
+        require(office["jwt_secret_file"] == str(root / "config/office-jwt"), "Office 密钥必须为本实例私有副本")
+        text += ('[office]\ndocument_server_url = ' + json.dumps(office["document_server_url"])
+                 + '\njwt_secret_file = ' + json.dumps(office["jwt_secret_file"]) + '\n')
+    return text
+
+
+def configure_office(root, url, source, disable=False):
+    data = settings(root)
+    require(data.get("initialized"), "owner 尚未初始化")
+    require(not any(alive(runtime(root).get(name)) for name in ("supervisor", "server", "caddy")),
+            "请先停止开发服务再配置 Office")
+    previous = dict(data)
+    if disable:
+        require(not url and not source, "关闭 Office 时不接受地址或密钥参数")
+        data.pop("office", None)
+    else:
+        require(url and source, "需要 --office-url 和 --office-jwt-file")
+        parsed = urlsplit(url)
+        import ipaddress
+        try:
+            loopback = ipaddress.ip_address(parsed.hostname or "").is_loopback
+        except ValueError:
+            loopback = False
+        require((parsed.scheme == "https" or parsed.scheme == "http" and loopback)
+                and parsed.hostname and not parsed.username and not parsed.password
+                and parsed.path in ("", "/") and not parsed.query and not parsed.fragment,
+                "Office 需要 HTTPS 或字面回环 HTTP 根 URL")
+        key = canonical(source)
+        info = key.stat()
+        require(stat.S_ISREG(info.st_mode) and not stat.S_IMODE(info.st_mode) & 0o077,
+                "Office 密钥来源必须是私有普通文件")
+        with key.open("rb") as stream:
+            secret = stream.read(4097)
+        key_bytes = secret.rstrip(b"\r\n")
+        require(len(secret) <= 4096 and len(key_bytes) >= 32
+                and all(33 <= byte <= 126 for byte in key_bytes),
+                "Office 密钥须为32至4096字节的非空白ASCII文本")
+        target = root / "config/office-jwt"
+        temporary = target.with_suffix(".new")
+        require(not temporary.is_symlink(), "拒绝密钥临时软链")
+        with temporary.open("wb") as stream:
+            os.chmod(temporary, 0o600)
+            stream.write(secret)
+        temporary.replace(target)
+        data["office"] = {"document_server_url": url, "jwt_secret_file": str(target)}
+    try:
+        write_json(root / "config/instance.json", data)
+        (root / "config/server.toml").write_text(server_config(root))
+    except OSError:
+        write_json(root / "config/instance.json", previous)
+        raise
+
 
 
 def caddy_config():
@@ -164,7 +220,7 @@ https://{HOST}:{PORT} {{
     header_up X-Real-IP {{remote_host}}
     transport http {{
       dial_timeout 5s
-      response_header_timeout 30s
+      response_header_timeout 130s
     }}
   }}
 }}
@@ -376,9 +432,12 @@ def supervise(args):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description="prod 保持 NixOS 部署；本脚本仅管理独立的临时 dev 服务")
-    parser.add_argument("command", choices=("init", "start", "stop", "restart", "status", "logs", "_supervise"))
+    parser.add_argument("command", choices=("init", "start", "stop", "restart", "status", "logs", "configure-office", "_supervise"))
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--package", help="包含 bin/vaultsyncd-server 和 bin/vaultsyncd-admin 的目录，或该 bin 目录")
+    parser.add_argument("--office-url", help="configure-office: Document Server 根 URL")
+    parser.add_argument("--office-jwt-file", type=Path, help="configure-office: 私有JWT来源，复制到本实例config/office-jwt")
+    parser.add_argument("--disable-office", action="store_true", help="configure-office: 关闭预览并保留私有密钥副本")
     parser.add_argument("--login", default=os.environ.get("USER", "owner"))
     parser.add_argument("--service", choices=("server", "caddy", "supervisor", "all"), default="all")
     parser.add_argument("--follow", action="store_true")
@@ -398,6 +457,11 @@ def main():
         os.execvp("tail", ["tail", "-n", str(args.lines)] + (["-F"] if args.follow else []) + files)
     with (root / "runtime" / "operation.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.command in ("start", "restart", "configure-office"):
+            proxy = root / "config/Caddyfile"
+            # 仅迁移此前生成的精确模板，不接受任意代理或状态配置变化。
+            if proxy.is_file() and proxy.read_text() == caddy_config().replace("response_header_timeout 130s", "response_header_timeout 30s"):
+                proxy.write_text(caddy_config())
         if args.command == "init":
             require(not alive(runtime(root).get("supervisor")), "请先停止开发服务")
             existing = read_json(root / "config" / "instance.json")
@@ -413,6 +477,9 @@ def main():
             data["initialized"] = True
             write_json(root / "config" / "instance.json", data)
             print(f"dev 已初始化：{root}；运行 start 后台启动")
+        elif args.command == "configure-office":
+            configure_office(root, args.office_url, args.office_jwt_file, args.disable_office)
+            print("dev Office 配置已保存；运行 start 后生效")
         elif args.command in ("start", "restart"):
             require(settings(root).get("initialized"), "owner 尚未初始化")
             if args.command == "restart":

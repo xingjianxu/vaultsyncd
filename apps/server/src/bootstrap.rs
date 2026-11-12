@@ -39,6 +39,8 @@ use crate::vaults::VaultContext;
 pub enum StartupError {
     /// Explicit Web directory is missing or incomplete.
     Web(io::Error),
+    /// Office 配置或运行时密钥不可用，拒绝启动。
+    Office(io::Error),
     /// 状态目录已被另一个进程占用（另一个服务端，或正在执行的离线 init）。
     StateLock(StateLockError),
     /// 数据库打开/迁移失败（含种类与版本门禁）。
@@ -61,6 +63,7 @@ pub enum StartupError {
 impl fmt::Display for StartupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StartupError::Office(error) => write!(f, "Office 转换配置不可用：{error}"),
             StartupError::Web(error) => write!(f, "Web resource configuration failed: {error}"),
             StartupError::StateLock(error) => write!(f, "{error}"),
             StartupError::Database(error) => write!(f, "打开服务端数据库失败：{error}"),
@@ -102,6 +105,7 @@ impl From<io::Error> for RunError {
 /// 已准备好对外服务的进程状态。
 pub struct Service {
     web: Option<crate::web::WebAssets>,
+    office: Option<Arc<crate::office::OfficeRuntime>>,
     config: Config,
     database: Database,
     /// 状态目录锁：活到进程停止为止，让离线 init 与第二个服务端都无法同时进入同一状态目录。
@@ -154,6 +158,7 @@ impl Service {
     ) -> Result<(), RunError> {
         let Service {
             web,
+            office,
             config,
             database,
             _state_lock,
@@ -197,7 +202,8 @@ impl Service {
         if allowed_vault_bases.is_none() {
             warn!("没有配置 [vaults].allowed_bases：Vault 注册端点会拒绝一切路径");
         }
-        let content = Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir));
+        let content =
+            Arc::new(ContentContext::new(Arc::clone(&auth), &config.state_dir).with_office(office));
         // 操作命令端点（S047/S052）：命令走真实适配器；缺少整组证据的目录恢复仍显式未就绪。
         // 外部观察循环（S052）：周期扫描每个健康 Vault，把外部改动采纳成版本与事件。
         let observer = Arc::new(
@@ -360,6 +366,13 @@ impl Service {
 /// 非零退出码结束，不能降级成“没恢复也先接写入”。
 pub async fn prepare(config: Config) -> Result<Service, StartupError> {
     let web = crate::web::WebAssets::configured().map_err(StartupError::Web)?;
+    let office = config
+        .office
+        .as_ref()
+        .map(crate::office::OfficeRuntime::load)
+        .transpose()
+        .map_err(StartupError::Office)?
+        .map(Arc::new);
     // 先抢状态目录锁，再开数据库：顺序反了就会出现“两个进程都已经打开数据库、再去争锁”的窗口，
     // 而 init 也正好会在这个窗口里看到“没有锁”就动手改账号表。
     let state_lock = StateLock::try_acquire_exclusive(&config.state_dir).map_err(|error| {
@@ -429,6 +442,7 @@ pub async fn prepare(config: Config) -> Result<Service, StartupError> {
 
     Ok(Service {
         web,
+        office,
         config,
         database,
         _state_lock: state_lock,

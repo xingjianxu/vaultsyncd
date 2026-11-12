@@ -190,6 +190,13 @@ struct App {
 }
 
 async fn open_app(fixture: &Fixture) -> App {
+    open_app_office(fixture, None).await
+}
+
+async fn open_app_office(
+    fixture: &Fixture,
+    office: Option<Arc<vaultsyncd_server::office::OfficeRuntime>>,
+) -> App {
     let database = Database::open(fixture.database())
         .await
         .expect("打开测试库");
@@ -204,10 +211,9 @@ async fn open_app(fixture: &Fixture) -> App {
         fixture.state_dir(),
         Default::default(),
     ));
-    let content = Arc::new(ContentContext::new(
-        Arc::clone(&auth),
-        fixture.state_dir().as_path(),
-    ));
+    let content = Arc::new(
+        ContentContext::new(Arc::clone(&auth), fixture.state_dir().as_path()).with_office(office),
+    );
     let lifecycle = Arc::new(Lifecycle::new());
     lifecycle.mark_ready();
     let executor = Arc::new(vaultsyncd_server::executor::ExecutorContext::new(
@@ -1239,4 +1245,447 @@ async fn content_endpoints_require_credentials_and_vault_scope() {
     let reply = finalize(&app, seeds.vault, &session.upload_id, &intruder).await;
     assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text());
     assert_eq!(reply.envelope().error.code, ErrorCode::AccessDenied);
+}
+
+/// The fake service speaks OnlyOffice's real JWT/URL protocol; authorization and disk reads stay real.
+struct OfficeFixture {
+    runtime: Arc<vaultsyncd_server::office::OfficeRuntime>,
+    task: tokio::task::JoinHandle<()>,
+    mode: Arc<std::sync::atomic::AtomicU8>,
+    sources: Arc<std::sync::Mutex<Vec<String>>>,
+    inputs: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+    arrived: Arc<tokio::sync::Notify>,
+    gate: Arc<tokio::sync::Semaphore>,
+}
+impl Drop for OfficeFixture {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+impl OfficeFixture {
+    async fn new(fixture: &Fixture, initial_mode: u8) -> Self {
+        use axum::response::IntoResponse;
+        use base64::Engine;
+        use std::sync::atomic::{AtomicU8, Ordering};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let secret = fixture.path.join("office-jwt");
+        std::fs::write(&secret, "x".repeat(64)).unwrap();
+        let runtime = Arc::new(
+            vaultsyncd_server::office::OfficeRuntime::load(
+                &vaultsyncd_server::config::OfficeConfig {
+                    document_server_url: base.clone(),
+                    jwt_secret_file: secret,
+                },
+            )
+            .unwrap(),
+        );
+        let mode = Arc::new(AtomicU8::new(initial_mode));
+        let sources = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let arrived = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let (server_mode, server_sources, server_inputs, server_arrived, server_gate) = (
+            Arc::clone(&mode),
+            Arc::clone(&sources),
+            Arc::clone(&inputs),
+            Arc::clone(&arrived),
+            Arc::clone(&gate),
+        );
+        let file_mode = Arc::clone(&mode);
+        let router = Router::new()
+            .route(
+                "/converter",
+                axum::routing::post(move |axum::Json(request): axum::Json<serde_json::Value>| {
+                    let (mode, sources, inputs, arrived, gate) = (
+                        Arc::clone(&server_mode),
+                        Arc::clone(&server_sources),
+                        Arc::clone(&server_inputs),
+                        Arc::clone(&server_arrived),
+                        Arc::clone(&server_gate),
+                    );
+                    let base = base.clone();
+                    async move {
+                        let token = request["token"].as_str().unwrap();
+                        let pieces: Vec<_> = token.split('.').collect();
+                        let payload: serde_json::Value = serde_json::from_slice(
+                            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                .decode(pieces[1])
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        let source = payload["url"].as_str().unwrap().to_owned();
+                        sources.lock().unwrap().push(source.clone());
+                        let current = mode.load(Ordering::SeqCst);
+                        if current == 3 {
+                            arrived.notify_one();
+                            let permit = gate.acquire().await.unwrap();
+                            permit.forget();
+                        }
+                        let response = match reqwest::Client::builder()
+                            .no_proxy()
+                            .build()
+                            .unwrap()
+                            .get(&source)
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(_) => {
+                                return axum::Json(serde_json::json!({"error":-4})).into_response();
+                            }
+                        };
+                        if !response.status().is_success() {
+                            assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+                            return axum::Json(serde_json::json!({"error":-4})).into_response();
+                        }
+                        let input = response.bytes().await.unwrap().to_vec();
+                        inputs.lock().unwrap().push(input);
+                        if current == 4 {
+                            arrived.notify_one();
+                            let permit = gate.acquire().await.unwrap();
+                            permit.forget();
+                        }
+                        let file = if current == 1 {
+                            "https://foreign.invalid/cache/files/result.pdf".to_owned()
+                        } else {
+                            format!("{base}cache/files/result.pdf")
+                        };
+                        axum::Json(serde_json::json!({"endConvert":true,"fileUrl":file}))
+                            .into_response()
+                    }
+                }),
+            )
+            .route(
+                "/cache/files/result.pdf",
+                axum::routing::get(move || {
+                    let mode = Arc::clone(&file_mode);
+                    async move {
+                        if mode.load(Ordering::SeqCst) == 2 {
+                            "<html>invalid output</html>"
+                        } else {
+                            "%PDF-1.4\nS213 converted fixture"
+                        }
+                    }
+                }),
+            );
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        Self {
+            runtime,
+            task,
+            mode,
+            sources,
+            inputs,
+            arrived,
+            gate,
+        }
+    }
+}
+fn office_request(
+    vault: VaultId,
+    entry: EntryId,
+    version: VersionId,
+    bytes: &[u8],
+    token: Option<&str>,
+) -> Request<Body> {
+    post_json(&download_uri(vault,entry,version).replace("/content","/office-preview"),token,
+        &serde_json::json!({"file_type":"docx","hash":sha256(bytes),"size":bytes.len().to_string()}).to_string())
+}
+
+#[tokio::test]
+async fn office_preview_preserves_fixed_version_scope_integrity_and_closes_source_channel() {
+    let fixture = Fixture::new("office-fixed-scope");
+    let seeds = seed_accounts(&fixture).await;
+    let versions = seed_versions(&fixture, &seeds, 1_700_000_000).await;
+    let office = OfficeFixture::new(&fixture, 0).await;
+    let app = open_app_office(&fixture, Some(Arc::clone(&office.runtime))).await;
+    let owner = login(&app, "owner").await;
+    let intruder = login(&app, "intruder").await;
+    assert_eq!(
+        app.call(office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.old.1,
+            None
+        ))
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.call(office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.old.1,
+            Some(&intruder)
+        ))
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.call(office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.current.1,
+            Some(&owner)
+        ))
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.call(office_request(
+            seeds.vault,
+            versions.entry,
+            VersionId::from_bytes([0x73; ID_LEN]),
+            &versions.old.1,
+            Some(&owner)
+        ))
+        .await
+        .status,
+        StatusCode::GONE
+    );
+    let uri = download_uri(seeds.vault, versions.entry, versions.old.0)
+        .replace("/content", "/office-preview");
+    let anonymous = app.call(post_json(&uri, None, "{")).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    let malformed = app.call(post_json(&uri, Some(&owner), "{")).await;
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        parse::<ErrorEnvelope>(&malformed, "Office malformed envelope")
+            .error
+            .code,
+        ErrorCode::InvalidRequest
+    );
+    let oversized=app.call(post_json(&uri,Some(&owner),&serde_json::json!({"file_type":"docx","hash":sha256(&versions.old.1),"size":(vaultsyncd_server::office::MAX_OFFICE_BYTES+1).to_string()}).to_string())).await;
+    assert_eq!(oversized.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(office.inputs.lock().unwrap().is_empty());
+    let reply = app
+        .call(office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.old.1,
+            Some(&owner),
+        ))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(
+        reply.header("content-type").as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(reply.header("cache-control").as_deref(), Some("no-store"));
+    assert_eq!(
+        reply.header("x-preview-source-sha256").as_deref(),
+        Some(sha256(&versions.old.1).as_str())
+    );
+    assert_eq!(
+        reply.header("x-preview-source-version").as_deref(),
+        Some(versions.old.0.to_hex().as_str())
+    );
+    assert_eq!(
+        reply.header("x-content-sha256").as_deref(),
+        Some(sha256(&reply.body).as_str())
+    );
+    assert_eq!(*office.inputs.lock().unwrap(), vec![versions.old.1.clone()]);
+    let source = office.sources.lock().unwrap()[0].clone();
+    assert!(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(source)
+            .send()
+            .await
+            .is_err(),
+        "source listener must close after conversion"
+    );
+    let path = fixture
+        .objects(seeds.vault)
+        .object_path(&ContentDigest::from_bytes(hash::digest_of(&versions.old.1)));
+    std::fs::write(path, vec![b'x'; versions.old.1.len()]).unwrap();
+    assert_eq!(
+        app.call(office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.old.1,
+            Some(&owner)
+        ))
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        office.inputs.lock().unwrap().len(),
+        1,
+        "tampered content must not reach OnlyOffice"
+    );
+}
+
+#[tokio::test]
+async fn office_preview_does_not_return_foreign_urls_nonpdf_or_unconfigured_results() {
+    use std::sync::atomic::Ordering;
+    let fixture = Fixture::new("office-output-rejections");
+    let seeds = seed_accounts(&fixture).await;
+    let versions = seed_versions(&fixture, &seeds, 1_700_000_000).await;
+    let office = OfficeFixture::new(&fixture, 1).await;
+    let app = open_app_office(&fixture, Some(Arc::clone(&office.runtime))).await;
+    let owner = login(&app, "owner").await;
+    for mode in [1, 2] {
+        office.mode.store(mode, Ordering::SeqCst);
+        assert_eq!(
+            app.call(office_request(
+                seeds.vault,
+                versions.entry,
+                versions.old.0,
+                &versions.old.1,
+                Some(&owner)
+            ))
+            .await
+            .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    let disabled = open_app(&fixture).await;
+    let token = login(&disabled, "owner").await;
+    assert_eq!(
+        disabled
+            .call(office_request(
+                seeds.vault,
+                versions.entry,
+                versions.old.0,
+                &versions.old.1,
+                Some(&token)
+            ))
+            .await
+            .status,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
+async fn office_preview_rechecks_revocation_before_source_and_before_pdf_response() {
+    for mode in [3, 4] {
+        let fixture = Fixture::new(&format!("office-revoke-{mode}"));
+        let seeds = seed_accounts(&fixture).await;
+        let versions = seed_versions(&fixture, &seeds, 1_700_000_000).await;
+        let office = OfficeFixture::new(&fixture, mode).await;
+        let app = open_app_office(&fixture, Some(Arc::clone(&office.runtime))).await;
+        let owner = login(&app, "owner").await;
+        let request = office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.old.1,
+            Some(&owner),
+        );
+        let router = app.router.clone();
+        let pending = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            office.arrived.notified(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            app.call(post("/v1/auth/logout", Some(&owner))).await.status,
+            StatusCode::OK
+        );
+        office.gate.add_permits(1);
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(10), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        if mode == 3 {
+            assert_eq!(reply.status(), StatusCode::UNAUTHORIZED);
+            assert!(
+                office.inputs.lock().unwrap().is_empty(),
+                "revoked source request must not expose bytes"
+            );
+        } else {
+            assert_eq!(
+                reply.status(),
+                StatusCode::UNAUTHORIZED,
+                "revocation after source read must deny final PDF"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn office_cancelling_http_does_not_free_slots_before_upstream_workers_finish() {
+    use std::sync::atomic::Ordering;
+    let fixture = Fixture::new("office-cancel-slots");
+    let seeds = seed_accounts(&fixture).await;
+    let versions = seed_versions(&fixture, &seeds, 1_700_000_000).await;
+    let office = OfficeFixture::new(&fixture, 3).await;
+    let app = open_app_office(&fixture, Some(Arc::clone(&office.runtime))).await;
+    let owner = login(&app, "owner").await;
+    let mut pending = Vec::new();
+    for _ in 0..2 {
+        let router = app.router.clone();
+        let request = office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.old.1,
+            Some(&owner),
+        );
+        pending.push(tokio::spawn(async move {
+            router.oneshot(request).await.unwrap()
+        }));
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            office.arrived.notified(),
+        )
+        .await
+        .unwrap();
+    }
+    for task in pending {
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    let reply = app
+        .call(office_request(
+            seeds.vault,
+            versions.entry,
+            versions.old.0,
+            &versions.old.1,
+            Some(&owner),
+        ))
+        .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "cancelled callers cannot bypass in-flight worker capacity"
+    );
+    assert_eq!(office.sources.lock().unwrap().len(), 2);
+    office.mode.store(0, Ordering::SeqCst);
+    office.gate.add_permits(2);
+    let mut restored = false;
+    for _ in 0..30 {
+        let reply = app
+            .call(office_request(
+                seeds.vault,
+                versions.entry,
+                versions.old.0,
+                &versions.old.1,
+                Some(&owner),
+            ))
+            .await;
+        if reply.status == StatusCode::OK {
+            restored = true;
+            break;
+        }
+        assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(restored, "completed worker capacity must be released");
 }

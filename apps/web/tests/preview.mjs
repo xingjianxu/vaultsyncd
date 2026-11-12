@@ -7,7 +7,7 @@ const server = await createServer({ root: fileURLToPath(new URL("../../..", impo
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] },
 });
 try {
-  const { previewKind, downloadPreview, boundedCanvas, rasterDimensions, decodePreviewText, MAX_TEXT_PREVIEW_BYTES, MAX_PREVIEW_BYTES, MAX_CANVAS_PIXELS } = await server.ssrLoadModule("/apps/web/src/features/files/preview.ts");
+  const { previewKind, officeFileType, downloadPreview, boundedCanvas, rasterDimensions, decodePreviewText, MAX_TEXT_PREVIEW_BYTES, MAX_PREVIEW_BYTES, MAX_CANVAS_PIXELS } = await server.ssrLoadModule("/apps/web/src/features/files/preview.ts");
   const { remarkPreviewBudget, MAX_MARKDOWN_NODES, MAX_MARKDOWN_CODE_BLOCKS, MAX_MARKDOWN_DEPTH, MARKDOWN_BUDGET_MESSAGE } =
     await server.ssrLoadModule("/apps/web/src/features/files/TextPreview.tsx");
   const transform = remarkPreviewBudget();
@@ -29,6 +29,11 @@ try {
   const data = Buffer.from("immutable content");
   const entry = { kind: "file", entry_id: "entry", name: "文档.PDF", revision: "3", version_id: "old-version", size: String(data.length), hash: createHash("sha256").update(data).digest("hex") };
   for (const name of ["a.pdf", "a.PNG", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.avif"]) assert.ok(previewKind({ ...entry, name }));
+  for (const extension of ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"]) {
+    assert.equal(previewKind({ ...entry, name: `中文 ${extension.toUpperCase()}.${extension.toUpperCase()}` }), "office");
+    assert.equal(officeFileType(`文档.${extension.toUpperCase()}`), extension);
+  }
+  assert.equal(officeFileType("wrong.docx.exe"), null);
   for (const name of ["a.exe", "a.zip", "a.mp4", "a.woff2", "a.sqlite"])
     assert.equal(previewKind({ ...entry, name }), null);
   assert.equal(previewKind({ ...entry, kind: "directory" }), null);
@@ -89,6 +94,100 @@ try {
   assert.deepEqual(rasterDimensions(avif, "avif"), { width: 2, height: 3 });
   avif.writeUInt32BE(9999999, avif.length - 8); assert.throws(() => rasterDimensions(avif, "avif"), /超限/);
 
+  const { downloadOfficePreview } = await server.ssrLoadModule("/apps/web/src/features/files/office-preview.ts");
+  const pdf = Buffer.from("%PDF-1.7\nOffice converted immutable preview\n%%EOF");
+  const pdfHash = createHash("sha256").update(pdf).digest("hex");
+  const officeEntry = { ...entry, name: "中文.DOCX" };
+  const officeRequests = [];
+  const previewHeaders = {
+    "content-type": "application/pdf", "content-length": String(pdf.length), "x-content-sha256": pdfHash,
+    "x-preview-source-sha256": entry.hash, "x-preview-source-version": entry.version_id,
+  };
+  const makeClient = fetch => new BrowserAuth({ base_url: "https://test.invalid", request_id: () => "office-test", fetch });
+  const officeClient = makeClient(async (url, init) => {
+    officeRequests.push({ url, init });
+    assert.equal(init.credentials, "same-origin");
+    assert.equal(init.method, "POST");
+    assert.equal(new Headers(init.headers).get("accept"), "application/pdf");
+    return new Response(pdf, { headers: previewHeaders });
+  });
+  for (const invalid of [{ name: "wrong.docx.exe" }, { kind: "directory" }, { hash: "bad" }, { hash: undefined },
+    { version_id: undefined }, { size: "01" }, { size: "-1" }, { size: "1.5" }, { size: String(MAX_PREVIEW_BYTES + 1) }]) {
+    await assert.rejects(downloadOfficePreview(officeClient, "vault", { ...officeEntry, ...invalid }, new AbortController().signal));
+    assert.equal(officeRequests.length, 0, "Office 非法元数据或输入超限在网络前拒绝");
+  }
+  const officeMutable = { ...officeEntry };
+  const officePending = downloadOfficePreview(officeClient, "vault", officeMutable, new AbortController().signal);
+  officeMutable.name = "changed.xlsx"; officeMutable.hash = "b".repeat(64); officeMutable.version_id = "new-head";
+  const officeResult = await officePending;
+  assert.equal(officeResult.type, "application/pdf");
+  assert.equal(await officeResult.text(), pdf.toString());
+  assert.match(officeRequests[0].url, /\/versions\/old-version\/office-preview$/);
+  assert.deepEqual(JSON.parse(officeRequests[0].init.body), { file_type: "docx", hash: entry.hash, size: entry.size });
+  await assert.rejects(downloadOfficePreview(officeClient, "vault", officeEntry, canceled.signal), { name: "AbortError" });
+  assert.equal(officeRequests.length, 1);
+
+  for (const [changes, message] of [
+    [{ "content-type": "text/html" }, /不是 PDF/], [{ "content-type": null }, /不是 PDF/],
+    [{ "x-preview-source-sha256": "c".repeat(64) }, /源版本或摘要不匹配/],
+    [{ "x-preview-source-version": "new-head" }, /源版本或摘要不匹配/],
+    [{ "content-length": null }, /大小无效/], [{ "content-length": "0" }, /大小无效/],
+    [{ "content-length": "01" }, /大小无效/], [{ "content-length": String(MAX_PREVIEW_BYTES + 1) }, /超过 50 MiB/],
+    [{ "x-content-sha256": null }, /缺少有效/], [{ "x-content-sha256": "not-a-hash" }, /缺少有效/],
+  ]) {
+    let bodyCanceled = false;
+    const headers = new Headers(previewHeaders);
+    for (const [key, value] of Object.entries(changes)) value === null ? headers.delete(key) : headers.set(key, value);
+    const badClient = makeClient(async () => new Response(new ReadableStream({ cancel() { bodyCanceled = true; } }), { headers }));
+    await assert.rejects(downloadOfficePreview(badClient, "vault", officeEntry, new AbortController().signal), message);
+    assert.equal(bodyCanceled, true, "错误响应头须立即取消内容流");
+  }
+  for (const [bytes, headers, message] of [
+    [pdf.subarray(1), previewHeaders, /长度不匹配/],
+    [Buffer.concat([pdf, Buffer.from("extra")]), previewHeaders, /超出声明长度/],
+    [Buffer.from(pdf.toString().replace("Office", "office")), previewHeaders, /SHA-256/],
+    [Buffer.from("<!doctype html>"), { ...previewHeaders, "content-length": "15", "x-content-sha256": createHash("sha256").update("<!doctype html>").digest("hex") }, /不是有效的 PDF/],
+  ]) {
+    const badClient = makeClient(async () => new Response(bytes, { headers }));
+    await assert.rejects(downloadOfficePreview(badClient, "vault", officeEntry, new AbortController().signal), message);
+  }
+  const noBody = makeClient(async () => new Response(null, { headers: previewHeaders }));
+  await assert.rejects(downloadOfficePreview(noBody, "vault", officeEntry, new AbortController().signal), /缺少内容流/);
+  const partial = makeClient(async () => new Response(pdf, { status: 206, headers: previewHeaders }));
+  await assert.rejects(downloadOfficePreview(partial, "vault", officeEntry, new AbortController().signal), /不是 PDF/);
+  const unavailable = makeClient(async () => Response.json({ error: { code: "SERVICE_NOT_READY", message: "尚未配置 Office 预览，请下载原文件。", request_id: "office-test", retryable: true } }, { status: 503 }));
+  await assert.rejects(downloadOfficePreview(unavailable, "vault", officeEntry, new AbortController().signal), /尚未配置 Office/);
+
+  // fetch 不响应取消时，迟到响应仍必须丢弃并关闭其内容流。
+  let releaseLate, lateCanceled = false;
+  const lateResponse = new Promise(resolve => { releaseLate = resolve; });
+  const lateAbort = new AbortController();
+  const lateClient = makeClient(async () => lateResponse);
+  const lateOffice = downloadOfficePreview(lateClient, "vault", officeEntry, lateAbort.signal);
+  const lateRejected = assert.rejects(lateOffice, { name: "AbortError" });
+  lateAbort.abort();
+  releaseLate(new Response(new ReadableStream({ cancel() { lateCanceled = true; } }), { headers: previewHeaders }));
+  await lateRejected; assert.equal(lateCanceled, true);
+
+  // 读取中的取消必须主动关闭 reader；不能等待永不完成的伪造内容流。
+  const readingAbort = new AbortController();
+  let readingCanceled = false, readingStarted;
+  const started = new Promise(resolve => { readingStarted = resolve; });
+  const blocked = makeClient(async () => new Response(new ReadableStream({
+    cancel() { readingCanceled = true; },
+  }), { headers: previewHeaders }));
+  const readingOffice = downloadOfficePreview(blocked, "vault", officeEntry, readingAbort.signal, () => readingStarted());
+  const readingRejected = assert.rejects(readingOffice, { name: "AbortError" });
+  await started; readingAbort.abort(); await readingRejected; assert.equal(readingCanceled, true);
+
+  let releaseSession;
+  const sessionResponse = new Promise(resolve => { releaseSession = resolve; });
+  const changing = makeClient(async url => url.endsWith("/logout")
+    ? Response.json({ session_id: "session", revoked_at: "1000" }) : sessionResponse);
+  const oldOffice = downloadOfficePreview(changing, "vault", officeEntry, new AbortController().signal);
+  const oldRejected = assert.rejects(oldOffice, /会话已变更/);
+  await changing.logout(); releaseSession(new Response(pdf, { headers: previewHeaders })); await oldRejected;
+
   const { createPreviewRenderer } = await server.ssrLoadModule("/apps/web/src/features/files/preview-renderer.ts");
   let bitmapClosed = 0;
   globalThis.createImageBitmap = async () => ({ width: 2, height: 3, close: () => { bitmapClosed++; } });
@@ -100,5 +199,5 @@ try {
   globalThis.createImageBitmap = async () => { decoding.abort(); return { width: 2, height: 3, close: () => { bitmapClosed++; } }; };
   await assert.rejects(createPreviewRenderer(new Blob([png(2, 3)]), "png", decoding.signal), { name: "AbortError" });
   assert.equal(bitmapClosed, 2, "迟到的原生解码结果必须关闭");
-  console.log("在线预览：文本分类/严格编码/2MiB 与图片PDF50MiB 网络前门禁、固定版本校验、栅格签名/尺寸、画布预算、取消/迟到结果与资源释放均通过");
+  console.log("在线预览：Office 类型/固定版本转换、PDF 有界流/源身份/摘要/取消校验、文本分类/严格编码/2MiB 与图片PDF50MiB 网络前门禁、固定版本校验、栅格签名/尺寸、画布预算、取消/迟到结果与资源释放均通过");
 } finally { await server.close(); }

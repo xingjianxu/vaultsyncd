@@ -1,6 +1,6 @@
 // 本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。
 //
-// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.2.0
+// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.3.0
 // 服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
 // 不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
 // 在对应功能卡加入。
@@ -9,7 +9,7 @@
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
 import { decodeAccountChanged, decodeAccountInfo, decodeActivityPage, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeClientConnectionPage, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedVaultList, decodeOperationResult, decodeRecoveryPage, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVaultList, decodeVaultRegistered, decodeVersionLease } from "./types";
-import type { AccountChanged, AccountInfo, ActivityPage, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ClientConnectionPage, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedVaultList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VaultList, VaultRegisterRequest, VaultRegistered, VersionLease, VersionLeaseRequest } from "./types";
+import type { AccountChanged, AccountInfo, ActivityPage, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ClientConnectionPage, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedVaultList, OfficePreviewRequest, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VaultList, VaultRegisterRequest, VaultRegistered, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -1020,6 +1020,43 @@ export async function renewVersionLease(options: ClientOptions, vault: string, e
     throw api_error(response.status, payload);
   }
   return decodeVersionLease(payload);
+}
+
+/**
+ * 将固定版本Office文件转换为只读PDF预览
+ *
+ * 使用当前会话及Vault授权，将请求指定版本的已提交内容交给本机OnlyOffice转换。
+ * hash/size必须匹配固定版本，输入和输出各不超过50MiB，全链路120秒、每实例最多2并发。
+ * 源内容完整核验后仅经随机回环临时通道供转换器获取；JWT及源URL不返回浏览器。
+ * 返回application/pdf及Content-Length、X-Content-Sha256（PDF自身摘要）、
+ * X-Preview-Source-Sha256（原文件摘要）、X-Preview-Source-Version（原VersionId），
+ * 并带no-store/nosniff。转换前后均验证当前权限，不创建版本或修改同步内容。
+ *
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview）：授权Vault身份。
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview）：固定条目身份。
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview）：固定已提交版本身份。
+ *
+ * 200：完整PDF预览字节；源身份及PDF摘要响应头见端点说明，不能将PDF摘要当作源摘要。
+ * 400：请求格式或预期内容元数据不合法
+ * 401：会话已失效
+ * 403：Vault未获授权
+ * 410：固定版本已过期或已清理
+ * 413：预览输入或输出超过50MiB
+ * 422：内容校验失败、损坏、密码保护或无法转换
+ * 503：Office预览未配置、暂不可用、并发已满或超时
+ */
+export async function previewOfficeVersion(options: ClientOptions, vault: string, entry: string, version: string, body: OfficePreviewRequest, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/office-preview`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/pdf"),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return await read_bytes(response);
 }
 
 /**

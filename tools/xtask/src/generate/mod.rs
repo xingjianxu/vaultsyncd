@@ -27,9 +27,10 @@ mod local_ipc;
 /// v5：参数可以是 `in: query`（标量 `string`/`decimal_u64`，必填或可选），成功响应可以是
 /// `text/event-stream`（SSE，无 schema，TypeScript 侧返回原始 `Response` 由调用方读流）。
 // v6: explicit binary Response streaming for bounded consumers (S090).
-const FORMAT_VERSION: u32 = 6;
+// v7: explicit PDF bytes with an accurate application/pdf Accept header (S213).
+const FORMAT_VERSION: u32 = 7;
 /// 生成器名；与 `api/generation.toml` 的 `generator` 核对。
-pub(crate) const GENERATOR_VERSION: &str = "0.2.0";
+pub(crate) const GENERATOR_VERSION: &str = "0.3.0";
 const GENERATOR: &str = "vaultsyncd-xtask";
 /// 生成配置文件（相对 workspace 根）。
 const CONFIG_PATH: &str = "api/generation.toml";
@@ -547,6 +548,8 @@ pub(crate) enum SuccessBody {
     Json(String),
     /// `application/octet-stream`：原始字节，不解码、没有生成类型。
     Bytes,
+    /// `application/pdf`: PDF bytes, bounded and verified by the consumer.
+    PdfBytes,
     /// Binary response handed to an incremental consumer.
     ByteStream,
     /// `text/event-stream`（SSE）：长连接事件流，不解码；TypeScript 侧交回原始 `Response`。
@@ -1138,6 +1141,15 @@ fn build_success_body(
                 SuccessBody::Bytes
             })
         }
+        "application/pdf" => {
+            if media.schema.is_some() {
+                return Err(format!(
+                    "端点 {} 的PDF二进制响应不声明 schema",
+                    operation.operation_id
+                ));
+            }
+            Ok(SuccessBody::PdfBytes)
+        }
         "text/event-stream" => {
             if media.schema.is_some() {
                 return Err(format!(
@@ -1148,7 +1160,7 @@ fn build_success_body(
             Ok(SuccessBody::EventStream)
         }
         other => Err(format!(
-            "端点 {} 的状态码 {code} 的媒体类型 `{other}` 未支持；只支持 application/json、application/octet-stream 与 text/event-stream",
+            "端点 {} 的状态码 {code} 的媒体类型 `{other}` 未支持；只支持 application/json、application/octet-stream、application/pdf 与 text/event-stream",
             operation.operation_id
         )),
     }
@@ -1647,6 +1659,22 @@ components:
 
     const JSON_THING: &str = "            application/json:\n              schema: {$ref: \"#/components/schemas/Thing\"}\n";
     const OCTETS: &str = "            application/octet-stream: {}\n";
+
+    #[test]
+    fn pdf_success_declares_pdf_accept_and_bytes() {
+        let operation = responses("200", "            application/pdf: {}\n");
+        let model = model_with(&operation).expect("PDF响应应被接受");
+        assert_eq!(model.operations[0].success, SuccessBody::PdfBytes);
+        let invalid = responses(
+            "200",
+            "            application/pdf:\n              schema: {$ref: '#/components/schemas/Thing'}\n",
+        );
+        assert!(
+            model_with(&invalid)
+                .unwrap_err()
+                .contains("PDF二进制响应不声明 schema")
+        );
+    }
 
     #[test]
     fn binary_success_body_needs_no_schema() {

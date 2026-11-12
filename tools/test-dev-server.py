@@ -102,6 +102,45 @@ class DevServerTests(unittest.TestCase):
                 self.assertEqual(client.recv(1), b"")
         manager.ensure_port_available("127.0.0.1", port)
 
+    def office_fixture(self):
+        (self.root / "config/server.toml").write_text(manager.server_config(self.root))
+        (self.root / "config/Caddyfile").write_text(manager.caddy_config())
+        manager.write_json(self.root / "config/instance.json", {
+            "environment": "dev", "root": str(self.root), "initialized": True})
+        key = self.root / "source-jwt"
+        key.write_text("a" * 64)
+        key.chmod(0o600)
+        return key
+
+    def test_office_configuration_copies_private_key_and_preserves_identity(self):
+        key = self.office_fixture()
+        manager.configure_office(self.root, "https://office.example.test", key)
+        data = manager.settings(self.root)
+        self.assertTrue(data["initialized"])
+        self.assertEqual(data["office"]["jwt_secret_file"], str(self.root / "config/office-jwt"))
+        self.assertEqual((self.root / "config/office-jwt").read_bytes(), key.read_bytes())
+        self.assertEqual((self.root / "config/office-jwt").stat().st_mode & 0o777, 0o600)
+        self.assertIn("[office]", (self.root / "config/server.toml").read_text())
+        manager.configure_office(self.root, None, None, disable=True)
+        self.assertNotIn("office", manager.settings(self.root))
+        self.assertTrue((self.root / "config/office-jwt").is_file())
+
+    def test_office_configuration_rejects_remote_http_and_running_instance(self):
+        key = self.office_fixture()
+        before = (self.root / "config/server.toml").read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "根 URL"):
+            manager.configure_office(self.root, "http://192.0.2.1", key)
+        self.assertEqual((self.root / "config/server.toml").read_bytes(), before)
+        key.write_text("short")
+        with self.assertRaisesRegex(RuntimeError, "32至4096"):
+            manager.configure_office(self.root, "https://office.example.test", key)
+        key.write_text("a" * 64)
+        child = self.child()
+        manager.write_json(self.root / "runtime/processes.json", {"server": manager.process_identity(child.pid)})
+        with self.assertRaisesRegex(RuntimeError, "停止"):
+            manager.configure_office(self.root, "https://office.example.test", key)
+        self.assertEqual((self.root / "config/server.toml").read_bytes(), before)
+
     def test_failed_proxy_start_cleans_up_other_child(self):
         package = self.root / "test-package"
         (package / "bin").mkdir(parents=True)

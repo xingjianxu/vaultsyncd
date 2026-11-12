@@ -74,3 +74,19 @@ Windows 11 测试机程序在 `C:\vaultsyncd-dev-client`，默认用户配置已
 S210（2026-11-12）已再次有序restart到与生产generation283同包 `/nix/store/c9xkfn6c1gm7lzd86pkab669gk5vj1yx-vaultsyncd-0.1.7`，提供只读文本/代码与Markdown预览；原dev账号/Vault/ServerId保持，三源136文件/408字节及部署包文本13组/PDF图片17组通过，证据见 [S210交接](../../agent/tasks/S210.md)。
 
 S211（2026-11-12）已通过 `restart --package` 有序切换至与生产generation284同包 `/nix/store/6liszy33b10wzpq4xn9aqn7rjamak7i0-vaultsyncd-0.1.7`，管理页面加载失败自动局部恢复；dev原账号/Vault/ServerId保持，与prod身份隔离。三源136文件/408字节及HTTPS/匿名门禁/CSP通过；证据见 [S211交接](../../agent/tasks/S211.md)。
+
+## S213 Office 预览配置
+
+开发实例可使用本机 S212 Document Server。先停止 dev，将共享 JWT 从受限来源交给配置命令；命令只保存本实例 `config/office-jwt` 的0600副本和非机密地址，不重建账号、ServerId、Vault或数据库。
+
+```bash
+tools/dev-server.sh stop
+tools/dev-server.sh configure-office \
+  --office-url https://wlab.132140.xyz:15402 \
+  --office-jwt-file /data/vaultsyncd-dev/<受限来源>/office-jwt
+tools/dev-server.sh start --package /nix/store/<本次验收包>
+```
+
+来源须为当前用户可读的私有普通文件，原始长度最多4096字节，去末尾CR/LF后至少32字节且仅可打印非空白ASCII；内容不进Git/store或日志。命令只能在本实例全部进程停止后执行，并验证原有状态/代理配置。先前生成的精确30秒反代模板在start/restart/configure-office时迁移到130秒，以覆盖120秒转换deadline；任意手改仍拒绝。关闭时stop后执行 `configure-office --disable-office`，保留密钥副本，再start。密钥轮换需同步重启OnlyOffice和vaultsyncd，并重新配置dev副本。
+
+Office预览为PDF，原文件下载保持；支持doc/docx/xls/xlsx/ppt/pptx/odt/ods/odp。输入和PDF各限50MiB，两项活动转换准入，120秒超时；关闭界面撤销交付和临时源，不代表能撤回OnlyOffice已经读取的内容或已入队工作。取消不提前释放转换worker的准入；超时后上游仍可能继续，其执行并发由OnlyOffice自身配置约束。OnlyOffice可能修复部分损坏文件并产出合法PDF，这不改写原件，也不是修复提交。排版、分页、字体和浏览器PDF行为保持第三方边界，不提供交互工作表或在线保存。

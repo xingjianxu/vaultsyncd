@@ -543,7 +543,7 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
     params.push("init?: RequestInit".to_string());
     let success_type = match &operation.success {
         SuccessBody::Json(name) => name.clone(),
-        SuccessBody::Bytes => "Uint8Array".to_string(),
+        SuccessBody::Bytes | SuccessBody::PdfBytes => "Uint8Array".to_string(),
         SuccessBody::EventStream | SuccessBody::ByteStream => "Response".to_string(),
     };
     out.push_str(&format!(
@@ -601,6 +601,7 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
     let accept = match &operation.success {
         SuccessBody::Json(_) => "application/json",
         SuccessBody::Bytes | SuccessBody::ByteStream => "application/octet-stream",
+        SuccessBody::PdfBytes => "application/pdf",
         SuccessBody::EventStream => "text/event-stream",
     };
     let headers_line = if operation.header_params.is_empty() {
@@ -630,7 +631,7 @@ fn push_client_operation(out: &mut String, operation: &ApiOperation) {
             );
             out.push_str(&format!("  return decode{name}(payload);\n}}\n\n"));
         }
-        SuccessBody::Bytes => {
+        SuccessBody::Bytes | SuccessBody::PdfBytes => {
             // 非 2xx 仍然是 JSON 错误信封；2xx 才是字节体。
             out.push_str(
                 "  if (!response.ok) {\n    throw api_error(response.status, await read_json(response));\n  }\n",

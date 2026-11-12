@@ -6,6 +6,7 @@ import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 import { decodePreviewText, downloadPreview, previewKind } from "./preview";
 import { saveDownload } from "./download";
+import { downloadOfficePreview } from "./office-preview";
 import type { PreviewRenderer } from "./preview-renderer";
 import "./FilePreview.css";
 
@@ -56,13 +57,22 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
           setText(decoded); setTextViewer(() => TextPreview); setStatus("");
           return;
         }
-        if (kind === "pdf") {
-          const header = await result.blob.slice(0, 1024).text();
+        let previewBlob = result.blob;
+        if (kind === "office") {
+          if (navigator.pdfViewerEnabled === false) throw new Error("浏览器未启用 PDF 预览，请下载后打开。");
+          setStatus("正在转换 Office 文件…"); setProgress(0);
+          previewBlob = await downloadOfficePreview(client, vaultId, entry, controller.signal, (bytes, total) => {
+            if (current()) setProgress(Math.round(bytes / total * 100));
+          });
+          if (!current()) return;
+        }
+        if (kind === "pdf" || kind === "office") {
+          const header = await previewBlob.slice(0, 1024).text();
           if (!current()) return;
           if (!header.includes("%PDF-")) throw new Error("文件不是有效的 PDF。");
           if (navigator.pdfViewerEnabled === false) throw new Error("浏览器未启用 PDF 预览，请下载后打开。");
           // 固定 MIME，避免文件内容被当作同源 HTML 执行；只嵌入已校验的本地 Blob。
-          objectUrl = URL.createObjectURL(result.blob.slice(0, result.blob.size, "application/pdf"));
+          objectUrl = URL.createObjectURL(previewBlob.slice(0, previewBlob.size, "application/pdf"));
           setPdfUrl(objectUrl); setStatus("");
           return;
         }
@@ -124,7 +134,7 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
         }}>取消预览</Button>}
         {error && <Button variant="default" disabled={auth.busy} onClick={() => setAttempt(value => value + 1)}>重试预览</Button>}
       </Group>
-      {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`PDF 预览 · ${entry?.name ?? ""}`} />}
+      {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`${kind === "office" ? "Office" : "PDF"} 预览 · ${entry?.name ?? ""}`} />}
       {TextViewer && text !== null && entry && <TextViewer key={`${entry.entry_id}:${entry.version_id}:${attempt}`} text={text} name={entry.name} markdown={kind === "markdown"} />}
       {renderer && <div className="file-preview-viewport" aria-busy={rendering}>
         <canvas ref={canvas} role="img" aria-label={entry?.name} hidden={!!error} />

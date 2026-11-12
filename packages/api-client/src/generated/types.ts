@@ -1,6 +1,6 @@
 // 本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。
 //
-// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.2.0
+// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.3.0
 // 服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
 // 不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
 // 在对应功能卡加入。
@@ -733,6 +733,37 @@ export function decodeObjectReuse(value: unknown): ObjectReuse {
     throw new Error(`未知的 ObjectReuse 取值：${JSON.stringify(value)}`);
   }
   return value as ObjectReuse;
+}
+
+/** Office只读预览支持的源扩展名闭集；不执行宏或启用在线编辑。 */
+export type OfficeFileType = "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp";
+
+export const OFFICE_FILE_TYPE_VALUES = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"] as const;
+
+export function decodeOfficeFileType(value: unknown): OfficeFileType {
+  if (typeof value !== "string" || !(OFFICE_FILE_TYPE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 OfficeFileType 取值：${JSON.stringify(value)}`);
+  }
+  return value as OfficeFileType;
+}
+
+/** 快照固定版本的预期内容与Office格式，不能指向任意源URL。 */
+export interface OfficePreviewRequest {
+  /** 已选文件扩展名，对应转换器输入格式。 */
+  file_type: OfficeFileType;
+  /** 原始固定版本完整SHA256，小写十六进制。 */
+  hash: string;
+  /** 原始固定版本字节数。 */
+  size: string;
+}
+
+export function decodeOfficePreviewRequest(value: unknown): OfficePreviewRequest {
+  const object = expect_object(value, "OfficePreviewRequest");
+  return {
+    file_type: decodeOfficeFileType(object.file_type),
+    hash: expect_string(object.hash, "OfficePreviewRequest.hash"),
+    size: expect_decimal(object.size, "OfficePreviewRequest.size"),
+  };
 }
 
 /**

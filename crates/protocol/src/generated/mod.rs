@@ -1,6 +1,6 @@
 //! 本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。
 //!
-//! 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.2.0
+//! 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.3.0
 //! 服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
 //! 不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
 //! 在对应功能卡加入。
@@ -616,6 +616,50 @@ pub enum ObjectReuse {
     /// 取值 `existing_verified`。
     #[serde(rename = "existing_verified")]
     ExistingVerified,
+}
+
+/// Office只读预览支持的源扩展名闭集；不执行宏或启用在线编辑。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum OfficeFileType {
+    /// 取值 `doc`。
+    #[serde(rename = "doc")]
+    Doc,
+    /// 取值 `docx`。
+    #[serde(rename = "docx")]
+    Docx,
+    /// 取值 `xls`。
+    #[serde(rename = "xls")]
+    Xls,
+    /// 取值 `xlsx`。
+    #[serde(rename = "xlsx")]
+    Xlsx,
+    /// 取值 `ppt`。
+    #[serde(rename = "ppt")]
+    Ppt,
+    /// 取值 `pptx`。
+    #[serde(rename = "pptx")]
+    Pptx,
+    /// 取值 `odt`。
+    #[serde(rename = "odt")]
+    Odt,
+    /// 取值 `ods`。
+    #[serde(rename = "ods")]
+    Ods,
+    /// 取值 `odp`。
+    #[serde(rename = "odp")]
+    Odp,
+}
+
+/// 快照固定版本的预期内容与Office格式，不能指向任意源URL。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OfficePreviewRequest {
+    /// 已选文件扩展名，对应转换器输入格式。
+    pub file_type: OfficeFileType,
+    /// 原始固定版本完整SHA256，小写十六进制。
+    pub hash: String,
+    /// 原始固定版本字节数。
+    #[serde(with = "crate::decimal")]
+    pub size: String,
 }
 
 /// 已提交操作附带的冲突信息（design §15.3）：服务器主条目、新建的冲突副本与原因。内容都在

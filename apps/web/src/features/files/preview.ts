@@ -1,4 +1,4 @@
-import type { SnapshotEntry } from "@vaultsyncd/api-client";
+import type { OfficeFileType, SnapshotEntry } from "@vaultsyncd/api-client";
 import type { BrowserAuth } from "../../services/auth";
 import { downloadFile } from "./download";
 
@@ -7,15 +7,22 @@ export const MAX_PREVIEW_PIXELS = 16 * 1024 * 1024;
 export const MAX_CANVAS_PIXELS = 8 * 1024 * 1024;
 export const MAX_CANVAS_EDGE = 8192;
 export type RasterKind = "png" | "jpeg" | "gif" | "webp" | "bmp" | "avif";
-export type PreviewKind = "pdf" | RasterKind | "text" | "markdown";
+export type PreviewKind = "office" | "pdf" | RasterKind | "text" | "markdown";
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024;
-const binaryExtensions = new Set("zip 7z rar gz bz2 xz zst tar tgz exe dll msi wasm bin iso db sqlite sqlite3 woff woff2 ttf otf mp3 mp4 wav ogg flac webm mov avi doc docx xls xlsx ppt pptx odt ods psd ico heic tiff tif class pyc jar parquet pdf".split(" "));
+const binaryExtensions = new Set("zip 7z rar gz bz2 xz zst tar tgz exe dll msi wasm bin iso db sqlite sqlite3 woff woff2 ttf otf mp3 mp4 wav ogg flac webm mov avi psd ico heic tiff tif class pyc jar parquet pdf".split(" "));
+const officeExtensions: readonly OfficeFileType[] = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"];
 const extensions: Record<string, PreviewKind> = { pdf: "pdf", png: "png", jpg: "jpeg", jpeg: "jpeg", gif: "gif", webp: "webp", bmp: "bmp", avif: "avif" };
+
+export function officeFileType(name: string): OfficeFileType | null {
+  const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
+  return officeExtensions.find(value => value === extension) ?? null;
+}
 
 /** 扩展名决定查看器；未知类型尝试严格文本解码。HTML/SVG 只展示源码。 */
 export function previewKind(entry: SnapshotEntry): PreviewKind | null {
   const extension = entry.name.split(".").at(-1)?.toLowerCase() ?? "";
   if (entry.kind !== "file") return null;
+  if (officeFileType(entry.name)) return "office";
   if (Object.hasOwn(extensions, extension)) return extensions[extension];
   if (binaryExtensions.has(extension)) return null;
   return ["md", "markdown", "mdown", "mkd"].includes(extension) ? "markdown" : "text";

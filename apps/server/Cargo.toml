@@ -24,7 +24,7 @@ test-faults = []
 tower-http = { version = "0.6", features = ["fs"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "fs", "io-util"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "fs", "io-util", "sync"] }
 # SSE 提示流用 `stream::unfold` 把“轮询 VaultSeq”的异步循环变成事件流（design §9.3）；与 axum 用同一条 futures 线。
 futures-util = { version = "0.3", default-features = false }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
@@ -42,6 +42,12 @@ vaultsyncd-planner = { path = "../../crates/planner" }
 vaultsyncd-protocol = { path = "../../crates/protocol" }
 vaultsyncd-server-core = { path = "../../crates/server-core" }
 vaultsyncd-server-store = { path = "../../crates/server-store" }
+
+# OnlyOffice 转换仅由服务端请求，JWT 使用已维护的 HMAC/SHA-256 实现。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 # HTTP 处理器与上传端点的验收用 `tower::ServiceExt::oneshot` 直接调用 router，不启动真实监听。

@@ -62,6 +62,7 @@ impl Lab {
         fs::DirBuilder::new().mode(0o700).create(&state)?;
         fs::create_dir(base.join("work"))?;
         let config = Config {
+            office: None,
             listen: "127.0.0.1:0".parse()?,
             database: state.join("server.sqlite"),
             state_dir: state,

@@ -22,7 +22,7 @@ assert (certificate == null) == (privateKey == null);
     header_up X-Real-IP {remote_host}
     transport http {
       dial_timeout 5s
-      response_header_timeout 30s
+      response_header_timeout 130s
     }
   }
 ''
