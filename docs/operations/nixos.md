@@ -530,3 +530,13 @@ prod/dev HTTPS及prod loopback 136文件/408次精确字节核对、健康/身�
 ## S211 管理页面自动恢复部署（generation284，2026-11-12）
 
 项目源 `5a85e64db1e31dc7a11c99120c34b84bfd191347`，沿用 `tools/deploy-local.sh`，pure构建/包内75项/dry/test/HTTPS/IPC/身份与归属/switch通过。主机pin `716e45384da7c91f50ce7239e540b3a5695d1a37` 已ff main并清树，依赖锁保持；运行/开机generation284，system `/nix/store/q08fphxvymbbv91gygcmsfigs1zbszwf-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/6liszy33b10wzpq4xn9aqn7rjamak7i0-vaultsyncd-0.1.7`。无wire/schema变化。prod/dev同包，136文件/408字节、健康/身份隔离/匿名401/CSP与严格HTTPS Chromium320/1440通过；原generation283的system/boot GC roots保留，未实际回退。证据及恢复策略见 [S211交接](../../agent/tasks/S211.md)。
+
+## S212 OnlyOffice 基础服务（generation285，2026-11-12）
+
+主机 `/etc/nixos` 新增 `features.onlyoffilce.*`，实现提交 `229efe4190bcb2f37f5fe8bbf24ee1d8d66feeac` 已ff合main，任务树/分支正常清理；初始化忽略规则提交 `7b3c1f2`。选项及日常维护唯一入口为 `/etc/nixos/README.md` 的「wks-lab：OnlyOffice Document Server」。运行/开机generation285，system `/nix/store/hyqksj0k5r3iwzarnap6wm35wxgjvwp7-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，主机锁和原vaultsyncd的S211源/包保持。
+
+Document Server 为 `https://wlab.132140.xyz:15402`，健康路径 `/healthcheck`，API `/web-apps/apps/api/documents/api.js`，复用wlab证书；内部nginx15403、docservice15404与RabbitMQ/epmd均限回环。JWT为运行时 `/var/lib/onlyoffice-secrets/jwt`，nonce同目录，0640 root:onlyoffice；仅供后端签发授权请求，不把密钥交给前端。默认首次生成并保留，停用feature不删除服务数据。示例服务关闭，根地址的welcome跳转不代表提供可上传的Office网站。
+
+纯构建/dry/test/健康/switch通过；生成的最小DOCX及官方DOCX/XLSX/PPTX样本均完成PDF转换和HTTPS下载，无签名/错误签名拒绝，管理路径大小写/版本前缀/编码403、相对重定向、资源加载、重启密钥稳定与prod/dev健康通过。补齐上游忽略监听host和缺失字体索引配置；首次失败的构建/启动/转换日志及两份core保留在 `/data/vaultsyncd-dev/S212-onlyoffice-20261112/`，不作缓存清理。应用Web尚未接入Office预览，也未进行浏览器Office渲染验收。
+
+回退目标为generation284/system `/nix/store/q08fphxvymbbv91gygcmsfigs1zbszwf-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，其GC root为证据根的 `old-system-root`。先运行该system的 `bin/switch-to-configuration test`，确认SSH与prod/dev健康后将 `/nix/var/nix/profiles/system` 设回旧system并执行其switch；同步撤销主机OnlyOffice配置，避免下次rebuild重新开启。此卡未改项目协议/数据库，不需回退项目数据；新建的OnlyOffice数据库/缓存/密钥仍应保留。未实际执行回退。

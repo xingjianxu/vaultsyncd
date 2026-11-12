@@ -858,6 +858,13 @@
 - **本步验收**：根类型、Web单测/构建、真实Chromium内置查看器及图片/取消/校验/授权/CSP回归；Nix纯构建、本机prod/dev部署与健康/静态资产核对；交接、合master、清理任务树。
 - **交接**：[S209](tasks/S209.md)；实现23d5c7c已部署generation282，prod/dev同包与精确包17组复验通过；实现/交接ac0243d已ff合master，7挂载及本卡树/分支已清理。
 
+### S212 — 本机 OnlyOffice Document Server 基础服务
+
+- **状态与前置**：done（用户2026-11-12新增）；S112/S113/S207，design §17.2。
+- **范围**：在 `/etc/nixos` 引入用户指定的 `features.onlyoffilce.*`，wks-lab启用 Document Server；复用TLS、隔离内部监听、运行时JWT/secure_link密钥。不包含项目Web预览应用接入。
+- **验收**：主机纯求值与build/dry/test/健康/switch、HTTPS API与真实文档转换、未签名请求拒绝、内部管理路径保护、密钥重启稳定及prod/dev健康保持；中文提交、交接和任务树清理。
+- **交接**：[S212](tasks/S212.md)；主机229efe4已ff合main并清树，generation285；项目仅记录基础服务，未改Web应用。
+
 ## 6. 里程碑与覆盖关系
 
 S001—S014 环境/平台；S015—S031 模型/持久化；S032—S052 服务端闭环；S053—S074 核心/Windows；S075—S091 管理/数据保护；S092—S105 部署与综合验收；S106—S108 性能、容量和最终交付。DEV 与 T01—T36 原始归属见上文固定归档及 design §21/§23；局部测试不得替代真实集成证据。S011 的 OS 取消回调、S106/S107 性能容量、T02 多台独立 Windows 和当前候选同源发行证据未补齐前，不宣称首发验收完成。

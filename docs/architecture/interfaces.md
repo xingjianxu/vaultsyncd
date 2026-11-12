@@ -2861,3 +2861,9 @@ S199 补充边界：ControlledApply 仅对 `expected=Absent` 且完整 `baseline
 水合暂存句柄：`HydrationCallbacks::close_idle_staging` 在 idle 后关闭已验证远端暂存的独占引用，磁盘字节/bitmap/水合范围均保留；ExportRecovery先wait_idle再关闭，disconnect同锁clear，下载完成在同锁下复核cancel/closed后才insert，避免退出后重新pin。重新读取必须重新打开安全StagingFile并整份核验，不跳过扫描错误。原生range夹具提供当前协议能力与真实基线，不再借用历史v1 wire。
 
 原生负例以CfSetInSyncState撤回真实partial的确认，验证拒绝与独立唯一未确认字节/驻留量保持；不伪造in-sync ack，清理通过CFAPI实际读回原固定版本并整份hash。physical modified>0 partial在本Windows路径会要求先整份召回，未取得该组合原生证据；dirty/awaiting partial由真实SQLite矩阵覆盖，原生full双改保留另有实测。异步CF保护句柄的release读统一复用controlled::read_at（保持event/OVERLAPPED/buffer至完成），不使用FileExt同步wrapper；官方句柄语义见 https://learn.microsoft.com/windows/win32/api/cfapi/nf-cfapi-cfopenfilewithoplock 。
+
+## S212 OnlyOffice 部署接口（应用待接入）
+
+`/etc/nixos/features/onlyoffilce.nix` 提供 `features.onlyoffilce.*`，wks-lab开启独立 Document Server：外部HTTPS `https://wlab.132140.xyz:15402`，API脚本 `/web-apps/apps/api/documents/api.js`，内部nginx `127.0.0.1:15403`、docservice `127.0.0.1:15404`，JWT运行时文件 `/var/lib/onlyoffice-secrets/jwt`。配置/密钥生命周期见主机README，部署及回退见 `docs/operations/nixos.md` S212。
+
+本卡未改变wire DTO/schema、BrowserAuth下载或CSP。现有Web仍将Office视为不支持预览；未来应用接入须另卡实现只读配置/JWT、Document Server可访问的受限固定版本内容入口及资源限制，不能传浏览器Blob URL或裸露管理员凭据，也不能直接开放现有需BrowserAuth的下载端点。
