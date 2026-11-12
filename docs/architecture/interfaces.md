@@ -2670,6 +2670,8 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 ## S122 Web Vault 文件浏览器
 
+- S208：受支持 PDF/图片的文件名与行菜单「预览」打开原页只读查看器，不改变 URL、EntryId/VersionId 或服务器内容；其他格式仍显示属性。复用 S171 `downloadFile` 的固定版本、Range 长度与完整 SHA-256 校验，沿用 BrowserAuth，会话失效收回管理页。PDF 采用随包同源 worker 与 canvas，关闭脚本/XFA/eval；图片由浏览器解码为静态画面后 canvas 展示，不嵌入 SVG/HTML、iframe/object 或外部文档资源，不放宽生产 CSP。关闭/导航/切换 Vault/退出取消读取与渲染，旧响应不恢复对话框。`preview.ts` 在网络前限制50 MiB，栅格头/实际解码限制16 Mi像素及单边8192，`boundedCanvas` 限制画布8 Mi像素。`patches/pdfjs-dist@6.5.438.patch` 由根 `pnpm-workspace.yaml` 精确应用到锁定worker，补齐 PDF 图像/掩码/合成尺寸及解码前检查，`stopAtErrors` 下向查看器传递失败而非显示缺图页面；依赖升级须重新审计并跑真实worker回归，Nix Web源包含patches。错误重试、下载和实际验证见 `agent/tasks/S208.md`；无新端点、DTO、schema 或迁移。
+
 S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开对应 Vault 根目录。管理清单 `ManagedVault.file_bytes?: decimal_u64` 为同一 SQL 读快照下、owner scope 内当前活跃文件版本 `size` 总和；空 Vault 为零，SUM 溢出/数据库失败走既有存储错误。按文件独立计数，不含历史/回收站，不是物理占用。DB schema 不变；可选新增字段保持旧消费者兼容，旧服务缺省在 Web 显示“未知”。`formatBytes` 共用于文件大小及 Vault 容量。
 
 - S150：文件 `EntryMenu` 的“版本历史”挂载 `features/files/FileHistory.tsx` Mantine Modal；生成 `listEntryHistory` 按原 VaultId/EntryId、`after` 查询每页最多100条，显示VersionId/SHA-256/大小/保留期限（当前活跃版本无到期字段）。分页保留游标栈以返回上一页，刷新回首页；错误与空结果分开，重试当前页。关闭、目录/Vault切换、会话退出卸载并abort，忽略迟到响应；目录无历史菜单。无恢复或内容写入，不改DTO/协议/schema，历史顺序沿用API身份升序，不推算版本创建时间。浏览器入口 `tests/web/file-history-browser.py`。

@@ -332,7 +332,7 @@ def main():
                 assert not submits_since(start), "ending a rejected job submitted a mutation"
 
             def upload(paths):
-                expect(toolbar.get_by_role("button", name="上传文件", exact=True).locator("svg.lucide-upload")).to_have_count(1)
+                expect(toolbar.get_by_role("button", name="上传文件", exact=True).locator("svg.lucide-cloud-upload")).to_have_count(1)
                 expect(toolbar.get_by_role("button", name="上传文件", exact=True)).to_have_attribute("title", "上传文件")
                 clear_notices()
                 with page.expect_file_chooser() as chooser:

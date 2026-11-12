@@ -1,0 +1,152 @@
+diff --git a/build/pdf.mjs b/build/pdf.mjs
+index b3300439a5c0e7ef36c13d19794d172326169e24..f34fb6c5a4ac093eddadd8ef0f3f62ab8aaeb8bc 100644
+--- a/build/pdf.mjs
++++ b/build/pdf.mjs
+@@ -16965,7 +16965,9 @@ class PDFPageProxy {
+         if (intentState.operatorList) {
+           intentState.operatorList.lastChunk = true;
+           for (const internalRenderTask of intentState.renderTasks) {
+-            internalRenderTask.operatorListChanged();
++            // A failed image decode must not complete a partial operator list
++            // successfully. Reject the live render even if display is ready.
++            internalRenderTask.cancel?.(reason);
+           }
+           this.#tryCleanup();
+         }
+diff --git a/build/pdf.worker.mjs b/build/pdf.worker.mjs
+index e33f30991d4e81617c2fec43e4eec96de095a39d..e2a802ca03a3e6e5251965e04e1262e95f9bb0c8 100644
+--- a/build/pdf.worker.mjs
++++ b/build/pdf.worker.mjs
+@@ -4784,7 +4784,19 @@ function findNextFileMarker(data, view, currentPos, startPos = currentPos) {
+     offset: newPos
+   };
+ }
++// vaultsyncd online-preview policy. Check decoded/mask dimensions before pixel
++// allocations, not just the parent PDF image dictionary (which may be 1x1).
++const VAULTSYNCD_MAX_IMAGE_PIXELS = 16 * 1024 * 1024;
++const VAULTSYNCD_MAX_IMAGE_EDGE = 8192;
++function assertVaultsyncdImageDimensions(width, height) {
++  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
++      width <= 0 || height <= 0 || width > VAULTSYNCD_MAX_IMAGE_EDGE ||
++      height > VAULTSYNCD_MAX_IMAGE_EDGE || width * height > VAULTSYNCD_MAX_IMAGE_PIXELS) {
++    throw new FormatError("PDF image resource limit exceeded (16 Mi pixels, 8192 per edge).");
++  }
++}
+ function prepareComponents(frame) {
++  assertVaultsyncdImageDimensions(frame.samplesPerLine, frame.scanLines);
+   const mcusPerLine = Math.ceil(frame.samplesPerLine / 8 / frame.maxH);
+   const mcusPerColumn = Math.ceil(frame.scanLines / 8 / frame.maxV);
+   for (const component of frame.components) {
+@@ -5392,6 +5404,7 @@ class JpegStream extends DecodeStream {
+         width: frameWidth,
+         height: frameHeight
+       } = useImageDecoder;
++      assertVaultsyncdImageDimensions(frameWidth, frameHeight);
+       const reducePower = ImageResizer.getReducePower(frameWidth, frameHeight);
+       if ((frameWidth !== width || frameHeight !== height) && (reducePower || !frameHeight)) {
+         return null;
+@@ -33213,6 +33226,7 @@ class PDFImage {
+           bitsPerComponent: image.bitsPerComponent
+         } = JpxImage.parseImageProperties(image.stream));
+         image.stream.reset();
++        assertVaultsyncdImageDimensions(image.width, image.height);
+         const reducePower = ImageResizer.getReducePowerForJPX(image.width, image.height, image.numComps);
+         this.jpxDecoderOptions = {
+           numComponents: 0,
+@@ -33253,6 +33267,9 @@ class PDFImage {
+         }
+       }
+     }
++    // Includes recursive SMask/Mask images and fallback dimensions, before
++    // decoding, component arrays, or native image allocations are requested.
++    assertVaultsyncdImageDimensions(width, height);
+     this.width = width;
+     this.height = height;
+     this.interpolate = dict.get("I", "Interpolate");
+@@ -33428,6 +33445,7 @@ class PDFImage {
+     } = image;
+     const width = dict.get("W", "Width");
+     const height = dict.get("H", "Height");
++    assertVaultsyncdImageDimensions(width, height);
+     const interpolate = dict.get("I", "Interpolate");
+     const decode = dict.getArray("D", "Decode");
+     const inverseDecode = decode?.[0] > 0;
+@@ -33680,6 +33698,9 @@ class PDFImage {
+   async createImageData(forceRGBA = false, isOffscreenCanvasSupported = false) {
+     const drawWidth = this.drawWidth;
+     const drawHeight = this.drawHeight;
++    // Individually valid parent/mask rectangles can still have an oversized
++    // combined bounding rectangle, e.g. 8192x1 plus 1x8192.
++    assertVaultsyncdImageDimensions(drawWidth, drawHeight);
+     const imgData = {
+       width: drawWidth,
+       height: drawHeight,
+@@ -33874,6 +33895,7 @@ class PDFImage {
+     }
+     const srcWidth = this.width;
+     const srcHeight = this.height;
++    assertVaultsyncdImageDimensions(destWidth ?? srcWidth, destHeight ?? srcHeight);
+     const bpc = this.bpc;
+     const rowBytes = srcWidth * numComps * bpc + 7 >> 3;
+     const imgArray = await this.getImageBytes(srcHeight * rowBytes, {
+@@ -34152,6 +34174,7 @@ class PDFImage {
+     this.image.reset();
+     this.image.drawWidth = drawWidth || this.width;
+     this.image.drawHeight = drawHeight || this.height;
++    assertVaultsyncdImageDimensions(this.image.drawWidth, this.image.drawHeight);
+     this.image.forceRGBA = !!forceRGBA;
+     this.image.forceRGB = !!forceRGB;
+     const imageBytes = await this.image.getImageData(length, this.jpxDecoderOptions);
+@@ -34598,6 +34621,7 @@ class PartialEvaluator {
+       warn("Image dimensions are missing, or not numbers.");
+       return;
+     }
++    assertVaultsyncdImageDimensions(w, h);
+     if (maxImageSize !== -1 && w * h > maxImageSize) {
+       const msg = "Image exceeded maximum allowed size and was removed.";
+       if (!ignoreErrors) {
+@@ -34747,7 +34771,7 @@ class PartialEvaluator {
+         }
+       }
+     }
+-    PDFImage.buildImage({
++    const imagePromise = PDFImage.buildImage({
+       xref: this.xref,
+       res: resources,
+       image,
+@@ -34766,12 +34790,20 @@ class PartialEvaluator {
+       }
+       return this._sendImgData(objId, imgData, cacheGlobally);
+     }).catch(reason => {
++      // stopAtErrors=true must reject rendering, not silently substitute a
++      // missing image after a resource-budget or decoder failure.
++      if (!ignoreErrors) {
++        throw reason;
++      }
+       warn(`Unable to decode image "${objId}": "${reason}".`);
+       if (imageRef) {
+         this.globalImageCache.addDecodeFailed(imageRef);
+       }
+       return this._sendImgData(objId, null, cacheGlobally);
+     });
++    if (!ignoreErrors) {
++      await imagePromise;
++    }
+     if (cacheKey) {
+       const cacheData = {
+         objId,
+diff --git a/legacy/build/pdf.mjs b/legacy/build/pdf.mjs
+index 443668ffb47acfa7a1341d360aa575b96b6c7f51..3e934da75abc9046836c1cfe9e7e7d894c0d9594 100644
+--- a/legacy/build/pdf.mjs
++++ b/legacy/build/pdf.mjs
+@@ -23363,7 +23363,9 @@ class PDFPageProxy {
+         if (intentState.operatorList) {
+           intentState.operatorList.lastChunk = true;
+           for (const internalRenderTask of intentState.renderTasks) {
+-            internalRenderTask.operatorListChanged();
++            // A failed image decode must not complete a partial operator list
++            // successfully. Reject the live render even if display is ready.
++            internalRenderTask.cancel?.(reason);
+           }
+           this.#tryCleanup();
+         }

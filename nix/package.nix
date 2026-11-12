@@ -17,7 +17,7 @@ let
       "apps/desktop/src-tauri" "crates" "fixtures" "tests" "tools" ]
     [ "Cargo.toml" "Cargo.lock" "rust-toolchain.toml" ];
   webSource = clean "vaultsyncd-web-source"
-    [ "apps/web" "packages" ]
+    [ "apps/web" "packages" "patches" ]
     [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "apps/desktop/package.json" "logo.svg" ];
   rust = pkgs.rustPlatform.buildRustPackage {
     pname = "vaultsyncd-rust";
@@ -36,7 +36,7 @@ let
     pname = "vaultsyncd-web";
     src = webSource;
     fetcherVersion = 5;
-    hash = "sha256-MzJOE40FZGAXw1hY7e/1eHEaybQb7bwTB5l3h5seNQg=";
+    hash = "sha256-M2KwIsIKOh7fWh4vzjRc/6vfwTq97szrlutr+aYZIlI=";
   };
   web = pkgs.stdenvNoCC.mkDerivation {
     pname = "vaultsyncd-web";

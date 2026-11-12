@@ -8,6 +8,7 @@
     "@vaultsyncd/api-client": "workspace:*",
     "@vaultsyncd/ui": "workspace:*",
     "lucide-react": "1.71.0",
+    "pdfjs-dist": "6.5.438",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
@@ -24,7 +25,7 @@
     "build": "tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs && node tests/backup.mjs && node tests/files.mjs && node tests/file-actions.mjs && node tests/csp.mjs",
+    "test": "node tests/shell.mjs && node tests/auth.mjs && node tests/recovery.mjs && node tests/backup.mjs && node tests/files.mjs && node tests/file-actions.mjs && node tests/preview.mjs && node tests/pdf-image-budget.mjs && node tests/csp.mjs",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",

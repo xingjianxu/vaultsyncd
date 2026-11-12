@@ -6,6 +6,8 @@ import { DirectoryTree } from "./DirectoryTree";
 import { useFileActions } from "./FileActions";
 import { FileIcon } from "./FileIcon";
 import { FileHistory } from "./FileHistory";
+import { FilePreview } from "./FilePreview";
+import { previewKind } from "./preview";
 import { Dialog, EmptyState } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
@@ -94,6 +96,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   const [snapshot, setSnapshot] = useState<DirectorySnapshot | null>(null);
   const [selected, setSelected] = useState<SnapshotEntry | null>(null);
   const [historyEntry, setHistoryEntry] = useState<SnapshotEntry | null>(null);
+  const [previewEntry, setPreviewEntry] = useState<SnapshotEntry | null>(null);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [menuEntryId, setMenuEntryId] = useState<string | null>(null);
@@ -105,13 +108,13 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   pathRef.current = currentPath;
   const [address, setAddress] = useState(currentPath);
   const [addressError, setAddressError] = useState("");
-  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setHistoryEntry(null); setMenuEntryId(null); }, [currentPath]);
+  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setHistoryEntry(null); setPreviewEntry(null); setMenuEntryId(null); }, [currentPath]);
   useEffect(() => {
     if (!vault) return;
     const controller = new AbortController();
     const previousDirectory = snapshot ? directoryAtPath(snapshot, segments) : undefined;
     const previousPath = currentPath;
-    setLoading(true); setSnapshot(null); setSelected(null); setError(""); setPage(1);
+    setLoading(true); setSnapshot(null); setSelected(null); setPreviewEntry(null); setError(""); setPage(1);
     readDirectorySnapshot(client, vault.vault_id, controller.signal).then(result => {
       if (!controller.signal.aborted) {
         setSnapshot(result);
@@ -161,7 +164,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
     return <EntryMenu key={key} entry={entry} context={{ vaultId: vault!.vault_id, snapshot: snapshot!, parent: directory ?? snapshot!.vault }}
       writable={!loading && vault?.health !== "unavailable" && !actions.locked}
       opened={menuEntryId === key} onChange={opened => setMenuEntryId(opened ? key : null)}
-      navigate={navigate} properties={setSelected} history={setHistoryEntry} copyPath={entry => void copyPath(entry)}>{child}</EntryMenu>;
+      navigate={navigate} properties={setSelected} preview={entry => setPreviewEntry({ ...entry })} history={setHistoryEntry} copyPath={entry => void copyPath(entry)}>{child}</EntryMenu>;
   }
   return <Paper withBorder className="files-browser">
     <aside className="files-sidebar" aria-label="目录面板">
@@ -206,7 +209,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
           <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry =>
             entryMenu(entry, <Table.Tr onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
                   <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onKeyDown={openMenuByKeyboard}
-                    onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
+                    onClick={() => entry.kind === "directory" ? navigate(entry) : previewKind(entry) ? setPreviewEntry({ ...entry }) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
                   <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
                 </Table.Tr>)) : <Table.Tr><Table.Td colSpan={3}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
         </Table>}
@@ -218,6 +221,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
       </Menu.Dropdown></Menu>
       {children.length > 100 && <Pagination className="files-pagination" aria-label="文件列表分页" total={Math.ceil(children.length / 100)} value={page} onChange={setPage} size="sm" siblings={0} />}
     </section>
+    <FilePreview entry={previewEntry} vaultId={vault?.vault_id ?? ""} onClose={() => setPreviewEntry(null)} />
     {vault && historyEntry && <FileHistory key={`${vault.vault_id}:${historyEntry.entry_id}`} vaultId={vault.vault_id} entry={historyEntry} onClose={() => setHistoryEntry(null)} />}
     <Dialog opened={!!snapshot && !!selected} title="文件属性" onClose={() => setSelected(null)}>
       {snapshot && selected && <Stack gap="sm">

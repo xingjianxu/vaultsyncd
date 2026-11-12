@@ -6,3 +6,5 @@ packages:
   - packages/ui
   - apps/web
   - apps/desktop
+patchedDependencies:
+  pdfjs-dist@6.5.438: patches/pdfjs-dist@6.5.438.patch

@@ -3,6 +3,7 @@ import { Menu } from "@mantine/core";
 import type { SnapshotEntry } from "@vaultsyncd/api-client";
 import { useFileActions, type ActionDirectory } from "./FileActions";
 import { FileIcon } from "./FileIcon";
+import { previewKind } from "./preview";
 
 /** 名称按钮或目录树标签通过菜单键/Shift+F10 使用同一右键入口。 */
 export function openMenuByKeyboard(event: KeyboardEvent<HTMLElement>) {
@@ -14,11 +15,11 @@ export function openMenuByKeyboard(event: KeyboardEvent<HTMLElement>) {
   }));
 }
 
-export function EntryMenu({ children, entry, context, writable, opened, onChange, navigate, properties, history, copyPath }: {
+export function EntryMenu({ children, entry, context, writable, opened, onChange, navigate, properties, preview, history, copyPath }: {
   children: ReactElement; entry: SnapshotEntry; context: ActionDirectory; writable: boolean;
   opened: boolean; onChange: (opened: boolean) => void;
   navigate: (entry: SnapshotEntry) => void; properties: (entry: SnapshotEntry) => void; copyPath: (entry: SnapshotEntry) => void;
-  history: (entry: SnapshotEntry) => void;
+  history: (entry: SnapshotEntry) => void; preview: (entry: SnapshotEntry) => void;
 }) {
   const actions = useFileActions();
   const mutable = writable && entry.entry_id !== context.snapshot.vault.entry_id;
@@ -28,6 +29,7 @@ export function EntryMenu({ children, entry, context, writable, opened, onChange
       {entry.kind === "directory" && <Menu.Item leftSection={<FileIcon name="folder-open" />} onClick={() => navigate(entry)}>打开</Menu.Item>}
       {entry.kind === "directory" && <Menu.Item disabled={!writable} leftSection={<FileIcon name="folder-new" />}
         onClick={() => actions.createDirectory({ ...context, parent: entry })}>新建目录</Menu.Item>}
+      {previewKind(entry) && <Menu.Item leftSection={<FileIcon name="file" />} onClick={() => preview(entry)}>预览</Menu.Item>}
       {entry.kind === "file" && <Menu.Item disabled={!writable || !entry.version_id || !entry.hash || entry.size === undefined}
         leftSection={<FileIcon name="download" />} onClick={() => actions.download(context, entry)}>下载</Menu.Item>}
       <Menu.Item leftSection={<FileIcon name="properties" />} onClick={() => properties(entry)}>属性</Menu.Item>
