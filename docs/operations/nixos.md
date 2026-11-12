@@ -517,3 +517,12 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 项目源 `23d5c7c2ffb0195245f106bea6115b1fffcf5ac9`，主机pin `bf4857dd4bfc0d4b90449de65911a5174775ad92` 已ff main并清树；主机锁不变。`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S209-native-pdf-20261112/deploy` 的pure构建、dry-activate、test、HTTPS/IPC/身份/归属与switch通过。运行/开机generation282，system `/nix/store/xhnglrd8swyda39xqifl83a3sqqji441-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/dil3kh3r7iphfsiqbgzxv6wkq21kx35x-vaultsyncd-0.1.7`；无wire/schema迁移。PDF.js/字体/补丁已删除，PDF由浏览器处理，Web CSP仅新增 `frame-src blob:`；行为与限制见 [S209交接](../../agent/tasks/S209.md)。
 
 prod/dev HTTPS及prod loopback的15文件共45次字节核对、health/capabilities身份保持、CSP/nonce/nosniff、匿名401通过，prod/dev Chromium匿名深链320/1440通过；部署精确包独立btrfs再次通过17组预览验收。dev经管理器restart至同包，原数据库/Vault/账号/ServerId保持。证据同任务根，`deploy/local-20261112T155408-1442682/result.json` 的passed/cleaned=true；未登录或修改生产文件。旧generation281的system/boot GC roots保留；回退先test上节system `lv1k5g2vd5sb6al22ac12c8kr6nxdidv`、验证健康再switch，同步主机pin至 `3597d0b`，dev可restart至上节旧包。未实际回退。
+
+
+## S210 文本与 Markdown 预览部署（generation283，2026-11-12）
+
+固定源 `e79299a2c88edde05e76a85131268aa94c717f48`，主机pin `aae429264a71479b336ebf3c288b6ff382a94c3f` 已ff main并清树、主机锁不变。`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S210-text-preview-20261112/deploy` pure构建/dry/test/HTTPS/IPC/身份与归属/switch全部通过，Nix包内75项测试通过。运行/开机generation283，system `/nix/store/y37pxj5akkip23jmc79qbiy74ycl4q7z-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/c9xkfn6c1gm7lzd86pkab669gk5vj1yx-vaultsyncd-0.1.7`。无wire/schema变化，生产ServerId保持，CSP策略未放宽；CodeMirror样式携带已有nonce。
+
+prod/dev HTTPS及prod loopback 136文件/408次精确字节核对、健康/身份隔离、匿名401/CSP/nonce/nosniff与线上Chromium深链320/1440通过；部署包独立btrfs文本13组、PDF/图片17组全部通过。未登录或修改生产文件。dev管理器有序restart至同包，原数据库/Vault/账号/ServerId保持。证据同任务根 `evidence/` 与 `deploy/local-20261112T161807-1493237/result.json`（passed/cleaned=true），边界和完整验收见 [S210交接](../../agent/tasks/S210.md)。
+
+旧generation282的system/boot GC roots保留；回退先test上节system `xhnglrd8swyda39xqifl83a3sqqji441`、验证健康后switch，并同步主机pin至 `bf4857d`；dev可显式restart至上节旧包。未实际回退。
