@@ -54,7 +54,7 @@ dev 后端仅监听 `127.0.0.1:18741`，独立代理监听 HTTPS 15401，禁用�
 
 Vault 注册使用运行实例的受限管理 socket，通过 `vaultsyncd-admin vaults register`，不能直接修改在线数据库。Windows 测试机只保存 dev 的 URL/ServerId，通过认证 IPC 管理连接与绑定；不得将 prod 的绑定直接指向新服务器，也不为正常连接安装自签CA或禁用 TLS 验证。
 
-现场验收、客户端位置、实际 ServerId/VaultId 和证据索引在 [S207交接](../../agent/tasks/S207.md)。
+现场验收、客户端位置、实际 ServerId/VaultId 和证据索引在 [S207交接](../../agent/tasks/S207.md)。S208（2026-11-12）已用管理脚本有序 restart 到与生产 generation281 同源的预览版包 `/nix/store/9kn3cqsqrcnyqfd7pmmhd13kahc53hd2-vaultsyncd-0.1.7`；原 dev 数据库/Vault/ServerId 保留，未重置账号或绑定。HTTPS健康、201项Web字节及身份隔离通过，详见 [S208交接](../../agent/tasks/S208.md)。
 
 本机 dev 账号为 `dev`，密码固定为 `1`（用户 2026-11-12 决定：开发环境即使重置，密码也是 `1`）。因此 dev 密码可写入本文；prod 密码仍只保存在 Git 外的受限文件，不写入文档、命令参数或日志。dev 受限密码文件在 `/data/vaultsyncd-dev/S207-prod-dev-20261112/credentials/password`（0600，内容已同步为 `1`）。
 
