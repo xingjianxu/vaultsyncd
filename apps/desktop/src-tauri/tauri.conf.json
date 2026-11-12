@@ -3,7 +3,8 @@
   "app": {
     "security": {
       "capabilities": [
-        "main"
+        "main",
+        "shell-file"
       ],
       "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"
     },

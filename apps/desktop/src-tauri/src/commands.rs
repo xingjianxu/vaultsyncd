@@ -8,10 +8,10 @@ use vaultsyncd_platform_windows::ipc::Endpoint;
 #[derive(serde::Serialize)]
 pub(crate) struct BridgeError {
     code: &'static str,
-    message: String,
+    pub(crate) message: String,
 }
 impl BridgeError {
-    fn local(message: &str) -> Self {
+    pub(crate) fn local(message: &str) -> Self {
         Self {
             code: "unavailable",
             message: message.into(),
@@ -63,7 +63,10 @@ pub(crate) async fn manage(
 pub(crate) async fn agent_get_status(
     app: tauri::AppHandle,
 ) -> Result<GetStatusResult, BridgeError> {
-    crate::notifications::status(app).await
+    let status = crate::notifications::status(app).await?;
+    let menu_error = crate::shell_actions::sync_menu(&status).await.err();
+    crate::shell_actions::report_menu_error(menu_error);
+    Ok(status)
 }
 
 #[derive(serde::Deserialize)]

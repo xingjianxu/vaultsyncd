@@ -14,6 +14,7 @@ import { Bindings } from "./features/bindings/Bindings";
 import { useRoute } from "./route";
 import { Settings } from "./features/settings/Settings";
 import { nativeDesktopSettings, type DesktopSettingsClient } from "./services/desktop";
+import { ShellFile } from "./features/shell/ShellFile";
 
 declare const __APP_VERSION__: string;
 
@@ -28,7 +29,8 @@ const items = [
 ];
 const getStyleNonce = () => typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? "";
 export function App({ agent = nativeAgent, desktopSettings = nativeDesktopSettings }: { agent?: AgentClient; desktopSettings?: DesktopSettingsClient }) {
-  return <AppProvider getStyleNonce={getStyleNonce}><AppView agent={agent} desktopSettings={desktopSettings} /></AppProvider>;
+  const route = useRoute("/bindings");
+  return <AppProvider getStyleNonce={getStyleNonce}>{route === "/shell" ? <main className="app-content desktop-content"><ShellFile agent={agent} /></main> : <AppView agent={agent} desktopSettings={desktopSettings} />}</AppProvider>;
 }
 function AppView({ agent, desktopSettings }: { agent: AgentClient; desktopSettings: DesktopSettingsClient }) {
   const route = useRoute("/bindings");

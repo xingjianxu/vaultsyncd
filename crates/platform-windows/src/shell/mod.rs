@@ -1,4 +1,5 @@
 //! Explorer integration via Windows Runtime, separate from the CFAPI connection lifecycle.
+pub mod context_menu;
 pub mod dialog;
 pub mod progress;
 pub mod toast;

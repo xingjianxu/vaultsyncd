@@ -5,6 +5,15 @@ vaultsyncd-desktop.exe or Start vaultsyncd.cmd. Do not run inside the ZIP browse
 No administrator access or installer is required. Microsoft Edge WebView2
 Evergreen Runtime must be available for the desktop UI.
 
+While the main window is open, active bindings register a current-user Explorer
+file menu: Show more options > vaultsyncd > File history / Download / Free space.
+Each verb opens a window for the selected file. Closing that window leaves the
+agent running. Free space requires confirmation and retains server content.
+After moving the program folder, reopen the main window to refresh menu paths.
+To remove the menu manually, exit the main desktop first, then run:
+  vaultsyncd-desktop.exe --unregister-shell-menu
+This removes only the menu; bindings, files, credentials and state stay intact.
+
 There is no vaultsyncd-zip.exe. Normal startup does not read or verify
 zip-files.json, installed-files.json, zip-owner.json, program hashes or sources.
 You can move/rename the program folder or replace its files. Existing legacy

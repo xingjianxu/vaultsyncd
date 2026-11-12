@@ -2827,3 +2827,10 @@ Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与
 - `client_connections.hostname/operating_system` 在登录事务中保存，刷新只推进 session_id。活动按稳定 client_id 和 owner 读取这两个不可变属性与已有 login_ip，保留文件/标签原快照；旧库迁移为 NULL，不伪造旧主机名。
 - ActivityRecord 增加可选 `client_hostname/client_os/client_ip`；旧版远端ActivityRecord严格拒绝未知字段，因此仅请求头 `X-Vaultsyncd-Client-Properties: 1` 返回扩展属性；未请求时保持旧形状，新两端显式请求，旧服务忽略该头。新两端客户端列使用主机名，缺省“未知主机”，详情显示系统和“登录来源 IP”。IP 沿用 S170 TCP/loopback 代理规则，不代表实时IP。
 - schema20→21 自动迁移前一致性备份，旧二进制拒写；回退须整套配对备份，不执行 down migration。IPC 主次版本不变，可选字段兼容既有消费者。
+
+## S204 绑定文件 Explorer 菜单（无 wire/schema 变化）
+
+- `platform-windows::shell::context_menu::{sync,unregister}` 仅维护带本软件 Owner 标记的 `HKCU\Software\Classes\*\shell\vaultsyncd`，拒绝覆盖/删除同名外来键。顶层 `MUIVerb=vaultsyncd`、`ExtendedSubCommandsKey=*\shell\vaultsyncd`、单选；直接嵌套 history/download/release，更新时删除旧 SubCommands 并通知 Shell 刷新。命令固定为当前 `vaultsyncd-desktop.exe --shell-action <verb> -- "%1"`，使用 REG_SZ，不经 cmd/PowerShell。AQS `System.ItemPathDisplay:~<"<binding>\"` 按活动根边界筛选；最后一个活动根移除即删除自家键。主窗认证状态轮询驱动幂等协调，注册失败单独可见且不使已连接 agent 被误报离线。依据：[Microsoft 级联菜单](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-create-cascading-menus-with-the-extendedsubcommandskey-registry-entry)、[AQS](https://learn.microsoft.com/en-us/windows/win32/search/-search-3x-advancedquerysyntax)。Windows 11 位于「显示更多选项」。
+- `relative_file`/`same_file_path` 按 Windows Ordinal 分量比较，拒绝 UNC/device/点分量/ADS；仅作词法解析，授权由桌面 `shell_actions::resolve` 重新从认证 IPC 活动清单取得。连续祖先句柄与无回源 `VaultHandle::inspect` 核对单链接文件、绑定根及物理身份；正式72字节 `catalog::Identity` 再核对 BindingId/VaultId/EntryId。不匹配、移动替换、解绑或未确认身份都显式拒绝，不回退到其他文件。
+- 新 Tauri 桥 `get_shell_target -> {action,binding_id,entry_id,path}`（path为agent相对路径）、`shell_file_status -> {file,binding}`、`shell_file_action({operationId}) -> ManagementResult`。路径/动作/目标只来自启动时原生参数，JS不能改选目标。一个窗口只准入一个操作编号，应答丢失保留该编号核对，不把释放后 release_allowed=false 当作原操作未执行；后端安全核验与持久幂等保持。
+- `#/shell` 文件窗口标签 `shell-file`，独立 capability 只开放三个固定目标命令和只读历史；不可调用主窗通用下载/释放/恢复/配置等写桥。文件窗口独立于主窗单例，历史只读分页；下载显式按钮，释放二次确认；关闭文件窗口不停止agent、不留托盘。`--unregister-shell-menu` 只清自家菜单，先退出主窗防止轮询重新注册；不改绑定/状态/凭据。程序目录移动后重新启动主窗刷新目标；没有新增包、应用身份、数据库迁移或服务端改动。

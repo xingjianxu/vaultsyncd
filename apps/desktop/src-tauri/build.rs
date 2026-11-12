@@ -6,6 +6,9 @@ fn main() {
                 &[
                     "get_desktop_settings",
                     "set_desktop_settings",
+                    "get_shell_target",
+                    "shell_file_status",
+                    "shell_file_action",
                     "agent_list_files",
                     "agent_download_entry",
                     "agent_release_entry",
@@ -56,6 +59,9 @@ fn main() {
                 &[
                     "get_desktop_settings",
                     "set_desktop_settings",
+                    "get_shell_target",
+                    "shell_file_status",
+                    "shell_file_action",
                     "agent_list_files",
                     "agent_download_entry",
                     "agent_release_entry",

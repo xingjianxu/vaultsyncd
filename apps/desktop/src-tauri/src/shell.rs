@@ -3,6 +3,7 @@ use crate::desktop_lifecycle::*;
 use crate::file_commands::*;
 use crate::history_commands::*;
 use crate::notifications::*;
+use crate::shell_actions::*;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 // Compiled only for the native acceptance binary; no test report command in production.
@@ -114,12 +115,16 @@ fn acceptance_toast_history(clear: bool) -> Result<Vec<String>, String> {
     toast::history_tags().map_err(|e| e.to_string())
 }
 
-pub(super) fn run() {
+pub(super) fn run(selection: Option<crate::shell_request::ShellRequest>) {
+    let file_window = selection.is_some();
     let builder = tauri::Builder::default();
     #[cfg(not(feature = "native-acceptance"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         get_desktop_settings,
         set_desktop_settings,
+        get_shell_target,
+        shell_file_status,
+        shell_file_action,
         agent_list_files,
         agent_download_entry,
         agent_release_entry,
@@ -152,6 +157,9 @@ pub(super) fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         get_desktop_settings,
         set_desktop_settings,
+        get_shell_target,
+        shell_file_status,
+        shell_file_action,
         agent_list_files,
         agent_download_entry,
         agent_release_entry,
@@ -185,15 +193,18 @@ pub(super) fn run() {
         acceptance_toast_history
     ]);
     builder
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(request) = selection {
+                app.manage(ShellState::new(request));
+            }
             app.manage(crate::notifications::Notifications::load());
             app.manage(crate::desktop_lifecycle::load());
             app.manage(crate::desktop_lifecycle::ExitState::default());
             #[cfg(feature = "native-acceptance")]
             app.add_capability(r#"{"identifier":"native-acceptance","windows":["main"],"permissions":["allow-acceptance-report","allow-acceptance-file-control","allow-acceptance-fixture-phase","allow-acceptance-toast-history"]}"#)?;
             let window =
-                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                    .title("vaultsyncd")
+                WebviewWindowBuilder::new(app, if file_window { "shell-file" } else { "main" }, WebviewUrl::App(if file_window { "index.html#/shell" } else { "index.html" }.into()))
+                    .title(if file_window { "vaultsyncd · 文件操作" } else { "vaultsyncd" })
                     .inner_size(1000.0, 720.0)
                     .visible(false)
                     .on_web_resource_request(|_request, response| {
@@ -261,6 +272,11 @@ pub(super) fn run() {
                 window.initialization_script(include_str!("../../../../tests/platform/windows/s080-webview.js"))
             };
             let main = window.build()?;
+            if file_window {
+                main.show()?;
+                main.set_focus()?;
+                return Ok(());
+            }
             let open =
                 tauri::menu::MenuItem::with_id(app, "open", "打开 vaultsyncd", true, None::<&str>)?;
             let quit = tauri::menu::MenuItem::with_id(app, "quit", "退出程序", true, None::<&str>)?;
@@ -291,8 +307,8 @@ pub(super) fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if window.label() == "main" { crate::desktop_lifecycle::close_main(window, event); }
+        .on_window_event(move |window, event| {
+            if !file_window && window.label() == "main" { crate::desktop_lifecycle::close_main(window, event); }
         })
         .run(tauri::generate_context!())
         .expect("desktop runtime failed");
