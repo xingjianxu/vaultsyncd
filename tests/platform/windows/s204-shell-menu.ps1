@@ -258,7 +258,7 @@ public static class S204Window {
     $null=Invoke-Cli @('detach','--binding-id',$binding)
     Check (Wait-Until {!(Test-Path -LiteralPath $psRegistry)} 60) 'last binding detachment removes menu registration'
     Open-File 'history' $renamed
-    Check (Wait-Until {(Window-Text)-match '绑定|无法|失败|未确认'} 60) 'detached path cannot be used by a stale menu invocation'
+    Check (Wait-Until {(Window-Text).Contains('此文件不在活动的同步目录中')} 60) 'detached path cannot be used by a stale menu invocation'
     Close-File
     [void][S204Window]::PostMessageW([S204Window]::Find($main.Id,'Tauri Window'),0x10,[IntPtr]::Zero,[IntPtr]::Zero)
     Check ($main.WaitForExit(15000)) 'main exits with keep-agent preference'
