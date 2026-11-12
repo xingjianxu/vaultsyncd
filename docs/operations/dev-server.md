@@ -90,3 +90,5 @@ tools/dev-server.sh start --package /nix/store/<本次验收包>
 来源须为当前用户可读的私有普通文件，原始长度最多4096字节，去末尾CR/LF后至少32字节且仅可打印非空白ASCII；内容不进Git/store或日志。命令只能在本实例全部进程停止后执行，并验证原有状态/代理配置。先前生成的精确30秒反代模板在start/restart/configure-office时迁移到130秒，以覆盖120秒转换deadline；任意手改仍拒绝。关闭时stop后执行 `configure-office --disable-office`，保留密钥副本，再start。密钥轮换需同步重启OnlyOffice和vaultsyncd，并重新配置dev副本。
 
 Office预览为PDF，原文件下载保持；支持doc/docx/xls/xlsx/ppt/pptx/odt/ods/odp。输入和PDF各限50MiB，两项活动转换准入，120秒超时；关闭界面撤销交付和临时源，不代表能撤回OnlyOffice已经读取的内容或已入队工作。取消不提前释放转换worker的准入；超时后上游仍可能继续，其执行并发由OnlyOffice自身配置约束。OnlyOffice可能修复部分损坏文件并产出合法PDF，这不改写原件，也不是修复提交。排版、分页、字体和浏览器PDF行为保持第三方边界，不提供交互工作表或在线保存。
+
+S213（2026-11-12）已通过stop/configure-office/start将持久dev切换为与生产generation286同包 `8qfvjkalrkdhfdhpig9zh7liix6kwsp8-vaultsyncd-0.1.7`，使用同机OnlyOffice；原dev身份/账号/Vault和Windows连接配置保持，应用CSP不变。最终精确包Chromium14组及prod/dev资源、密钥和HTTPS验证通过。合并清理结果见 [S213交接](../../agent/tasks/S213.md)。

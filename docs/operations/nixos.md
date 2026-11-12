@@ -540,3 +540,17 @@ Document Server 为 `https://wlab.132140.xyz:15402`，健康路径 `/healthcheck
 纯构建/dry/test/健康/switch通过；生成的最小DOCX及官方DOCX/XLSX/PPTX样本均完成PDF转换和HTTPS下载，无签名/错误签名拒绝，管理路径大小写/版本前缀/编码403、相对重定向、资源加载、重启密钥稳定与prod/dev健康通过。补齐上游忽略监听host和缺失字体索引配置；首次失败的构建/启动/转换日志及两份core保留在 `/data/vaultsyncd-dev/S212-onlyoffice-20261112/`，不作缓存清理。应用Web尚未接入Office预览，也未进行浏览器Office渲染验收。
 
 回退目标为generation284/system `/nix/store/q08fphxvymbbv91gygcmsfigs1zbszwf-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，其GC root为证据根的 `old-system-root`。先运行该system的 `bin/switch-to-configuration test`，确认SSH与prod/dev健康后将 `/nix/var/nix/profiles/system` 设回旧system并执行其switch；同步撤销主机OnlyOffice配置，避免下次rebuild重新开启。此卡未改项目协议/数据库，不需回退项目数据；新建的OnlyOffice数据库/缓存/密钥仍应保留。未实际执行回退。
+
+## S213 Office 预览部署（generation286，2026-11-12）
+
+项目源 `43ae33dfccbfe1ffcabf5303caf13811dd9d33a4`，主机功能提交 `53c2db05eb1e7386ec0966f9135c67bb1c3cfde5`、pin `429b1cbda7c8644637757aa823032bf6160fc6cc`。`tools/deploy-local.sh --rev <SHA> --config /etc/nixos/.worktrees/S213-office-preview --evidence-base /data/vaultsyncd-dev/S213-office-preview-20261112/deploy` pure构建/dry/test/HTTPS及IPC/身份/归属/switch通过，result passed/cleaned=true。运行/开机generation286，system `/nix/store/4k7a8grgpv5c2d0pij0yliz86gz1cch6-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/8qfvjkalrkdhfdhpig9zh7liix6kwsp8-vaultsyncd-0.1.7`，Rust `494y5s1...`、Web `kj1iy2h...`；主机和项目依赖锁未更新版本（Cargo仅新增服务端直接依赖接线），无数据库迁移或IPC版本变化。
+
+wks-lab通过 `features.server.vaultsync.office.enable` 桥接项目 `services.vaultsyncd.office`，使用既有 `https://wlab.132140.xyz:15402`。systemd LoadCredential代读 `/var/lib/onlyoffice-secrets/jwt`，TOML只指 `/run/credentials/vaultsyncd.service/office-jwt`，Requires/After保证生成完成；没有扩大服务用户组或秘密ACL。生产进程命名空间中的凭据、dev私有副本与实际OnlyOffice密钥均一致。反代头超时130秒、服务停止期限150秒覆盖转换120秒deadline。
+
+OnlyOffice独立与内嵌FileConverter均以失败即停止构建的最小补丁关闭文档network/privateIP，并将allowList置空；Node仍可读取应用的随机回环源。真实旧serializeOptions可信JWT输出true/true、新双副本false/false的调用对照通过。七种外链样本未获阳性对照（FHS缺curl），不能用零请求声称完整网络阻断实证；补丁策略与此证据边界已独立复审。OnlyOffice已入队转换不能撤回，HTTP关闭不会提前释放worker准入，deadline后上游仍可能继续。
+
+server117项、包内80项、根类型/Web九套/构建、生成器21项/生成一致、dev管理器11项、模块credential fixture和最终精确包Chromium14组全部通过。三类真实Office→原生PDF、原件精确下载、授权/固定旧版/故障/重试/取消/CSP/窄屏证据在任务根，最终run `S213-office-20261112T210937-1816154`。prod/dev同包且各自原ServerId保持，136文件在prod/dev HTTPS及prod loopback共408字节比较、匿名新API401、严格TLS浏览器320/1440与CSP通过。没有向生产/持久dev写入验收文档或直接修改在线数据库。
+
+dev经管理器stop/configure-office/start配置同包，保留账号/Vault/身份与本机普通目录；收尾将由永久master入口再次有序启动，避免引用已清理的任务脚本。完整日志、截图、样本、core映射及GC roots在 `/data/vaultsyncd-dev/S213-office-preview-20261112/`，不按缓存删除。
+
+回退：证据根 `evidence/old-system-root` 保留原generation285/system `hyqksj0k5r3iwzarnap6wm35wxgjvwp7`；deploy子目录另留补丁过渡test system `1p31kwwy...` 与原boot root。先对明确旧system执行test并核对SSH/prod健康，再设回启动profile/switch，同步主机源pin。回退到S211须在dev停止后 `configure-office --disable-office` 再启动旧包，旧二进制严格拒绝新[office]配置；仅功能/协议增加，无须修改或回退同步数据库。旧OnlyOffice系统会撤掉本次文档网络补丁，回退时同时关闭Office功能；保留服务数据/密钥。未实际执行回退。
