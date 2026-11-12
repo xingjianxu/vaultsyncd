@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S214 in_progress**：用户要求服务端 Web 文件列表按列排序，默认名称升序。隔离树 `feat/S214-file-sorting`，基线4fda1ee；Web九套基线通过，实施/验收/部署待完成，见 [S214](tasks/S214.md)。既有四张blocked保持。
+
 当前 **S213 done**：Office固定版本→OnlyOffice→PDF只读预览，实现43ae33d已部署generation286，prod/dev同包及身份保持；server117项、根类型/Web九套/构建、生成器21项、dev管理器11项、Nix包内80项及最终精确包Chromium14组通过。独立复审APPROVED，136文件/408字节与线上HTTPS/CSP/匿名门禁及凭据验证通过。交接 [S213](tasks/S213.md)，证据 `/data/vaultsyncd-dev/S213-office-preview-20261112/`；实现43ae33d/交接50fc007已ff合master，主机53c2db0/429b1cb已ff合main；dev已由永久入口restart，六挂载与双树/分支正常清理，S134/S187保持。无本卡阻塞。下一ready无，原四张blocked保持。
 
 当前 **S212 done**：`/etc/nixos` 新增 `features.onlyoffilce.*`，wks-lab启用OnlyOffice Document Server，HTTPS `wlab.132140.xyz:15402`、运行时JWT/nonce与回环内部服务。主机229efe4已ff合main并清树，generation285；纯构建/dry/test/switch、三类Office→PDF真实转换及鉴权/下载、管理路径/重定向/密钥重启与prod/dev健康通过。交接 [S212](tasks/S212.md)，证据 `/data/vaultsyncd-dev/S212-onlyoffice-20261112/`；项目仅文档，Web Office预览尚未接入，无本卡阻塞。下一ready无，原四张blocked保持。

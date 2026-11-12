@@ -53,6 +53,8 @@ def main():
     (documents / long_directory / "leaf.txt").write_bytes(b"long directory\n")
     (archive / "archive-only.txt").write_bytes(b"second vault\n")
     for index in range(1005): (documents / f"file-{index:04}.txt").write_bytes(b"x")
+    for name, size in [("sort2.txt", 1024), ("sort10.txt", 2), ("sort1.txt", 0)]:
+        (documents / (name + ".seed")).write_bytes(b"s" * size)
     long_name = "long-" + "a" * 160 + ".txt"
     (documents / long_name).write_bytes(b"")
     password = secrets.token_urlsafe(24)
@@ -147,14 +149,25 @@ def main():
             (documents / "空目录").rmdir()
             seed = api(f"/v1/vaults/{doc_id}/snapshots", {})
             cursor, vault_entry = None, None
+            seed_entries = []
             while True:
                 page_data = api(f"/v1/vaults/{doc_id}/snapshots/{seed['snapshot_id']}/entries?limit=1000" + (f"&cursor={cursor}" if cursor else ""))
+                seed_entries.extend(page_data["entries"])
                 vault_entry = next((entry["entry_id"] for entry in page_data["entries"] if "parent_id" not in entry), vault_entry)
                 cursor = page_data.get("next_cursor")
                 if cursor is None: break
             assert vault_entry
             made = api(f"/v1/vaults/{doc_id}/operations", {"kind": "create", "op_id": secrets.token_hex(16), "device_id": secrets.token_hex(16), "server_epoch": seed["server_epoch"], "parent_id": vault_entry, "name": "空目录", "expected_absent": True})
             assert made["state"] == "committed", made
+            # modified_at is server commit time, NOT filesystem mtime. Use public
+            # CAS moves separated by a second to create distinct committed dates.
+            for name in ["sort10.txt", "sort2.txt", "sort1.txt"]:
+                entry = next(item for item in seed_entries if item["name"] == name + ".seed")
+                page.wait_for_timeout(1100)
+                moved = api(f"/v1/vaults/{doc_id}/operations", {"kind": "move", "op_id": secrets.token_hex(16), "device_id": secrets.token_hex(16),
+                    "server_epoch": seed["server_epoch"], "entry_id": entry["entry_id"], "base_revision": entry["revision"],
+                    "base_version_id": entry["version_id"], "parent_id": vault_entry, "name": name})
+                assert moved["state"] == "committed", moved
             browsing_start = len(requests)
             page.reload()
             first = api("/v1/vaults")["vaults"][0]
@@ -182,6 +195,50 @@ def main():
                 assert len(widths) == len(shares), widths
                 for width, share in zip(widths, shares):
                     assert abs(width / total - share) < .02, (widths, share)
+            # S214: complete-directory sorting before paging, keyboard headers,
+            # filtering, exact raw size/time comparisons and preserved tree order.
+            heads = table.locator("thead th")
+            expect(heads.nth(0)).to_have_attribute("aria-sort", "ascending")
+            expect(heads.nth(1)).to_have_attribute("aria-sort", "none")
+            def row_names():
+                return table.locator("tbody .files-entry-name").all_text_contents()
+            tree_before = page.locator(".files-tree-scroll").inner_text()
+            page.get_by_role("button", name="按名称排序", exact=True).click()
+            expect(heads.nth(0)).to_have_attribute("aria-sort", "descending")
+            assert "sort10.txt" in row_names(), row_names()
+            assert "file-0000.txt" not in row_names(), "must sort beyond the first page"
+            # On the last page, changing the column must return to page one.
+            pager = page.get_by_label("文件列表分页", exact=True)
+            pager.get_by_role("button", name="11", exact=True).click()
+            assert "file-0000.txt" in row_names(), row_names()
+            page.get_by_role("button", name="按大小排序", exact=True).click()
+            expect(heads.nth(1)).to_have_attribute("aria-sort", "ascending")
+            expect(table.locator("tbody tr")).to_have_count(100)
+            assert "sort1.txt" in row_names(), row_names()
+            assert page.locator(".files-tree-scroll").inner_text() == tree_before
+            filter_box = page.get_by_role("textbox", name="筛选当前目录", exact=True)
+            filter_box.fill("sort")
+            assert row_names() == ["sort1.txt", "sort10.txt", "sort2.txt"], row_names()
+            size_header = page.get_by_role("button", name="按大小排序", exact=True)
+            size_header.focus(); page.keyboard.press("Enter")
+            expect(heads.nth(1)).to_have_attribute("aria-sort", "descending")
+            assert row_names() == ["sort2.txt", "sort10.txt", "sort1.txt"], row_names()
+            page.get_by_role("button", name="按修改日期排序", exact=True).click()
+            expect(heads.nth(2)).to_have_attribute("aria-sort", "ascending")
+            assert row_names() == ["sort10.txt", "sort2.txt", "sort1.txt"], row_names()
+            page.get_by_role("button", name="按修改日期排序", exact=True).focus(); page.keyboard.press("Space")
+            expect(heads.nth(2)).to_have_attribute("aria-sort", "descending")
+            assert row_names() == ["sort1.txt", "sort2.txt", "sort10.txt"], row_names()
+            page.get_by_role("button", name="刷新文件列表", exact=True).click()
+            expect(heads.nth(2)).to_have_attribute("aria-sort", "descending", timeout=15000)
+            assert row_names() == ["sort1.txt", "sort2.txt", "sort10.txt"], row_names()
+            page.get_by_role("button", name="按名称排序", exact=True).click()
+            expect(heads.nth(0)).to_have_attribute("aria-sort", "ascending")
+            assert row_names() == ["sort1.txt", "sort2.txt", "sort10.txt"], row_names()
+            filter_box.fill("")
+            assert page.locator(".files-tree-scroll").inner_text() == tree_before
+            page.screenshot(path=str(RUN / "column-sorting.png"))
+            print("S214: all columns/directions, page reset, filter, keyboard, refresh and tree isolation passed", flush=True)
             file_link = table.get_by_role("button", name="file-0000.txt", exact=True).first
             assert file_link.evaluate("e => getComputedStyle(e).textDecorationLine") == "none"
             file_link.hover()
@@ -202,7 +259,7 @@ def main():
             file_row.click(button="right", position={"x": 40, "y": box["height"] / 2})
             menu = page.get_by_role("menu")
             expect(menu).to_be_visible()
-            assert menu.get_by_role("menuitem").all_inner_texts() == ["下载", "属性", "版本历史", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"], menu.get_by_role("menuitem").all_inner_texts()
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["预览", "下载", "属性", "版本历史", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"], menu.get_by_role("menuitem").all_inner_texts()
             menu_box = menu.bounding_box()
             assert abs(menu_box["x"] - (box["x"] + 40)) < 12, (menu_box, box)
             assert abs(menu_box["y"] - (box["y"] + box["height"] / 2)) < 16, (menu_box, box)
@@ -232,7 +289,7 @@ def main():
             file_link.focus()
             page.keyboard.press("Shift+F10")
             expect(menu).to_be_visible()
-            assert menu.get_by_role("menuitem").all_inner_texts() == ["下载", "属性", "版本历史", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"]
+            assert menu.get_by_role("menuitem").all_inner_texts() == ["预览", "下载", "属性", "版本历史", "复制路径", "复制", "剪切", "粘贴", "重命名", "删除"]
             menu_box, link_box = menu.bounding_box(), file_link.bounding_box()
             assert abs(menu_box["y"] - (link_box["y"] + link_box["height"] / 2)) < 16, (menu_box, link_box)
             notifications = page.locator(".mantine-Notification-root")
@@ -400,13 +457,17 @@ def main():
             page.get_by_role("button", name="返回上级", exact=True).click()
             table.get_by_role("button", name="文档", exact=True).click()
             table.get_by_role("button", name="子目录", exact=True).click()
-            table.get_by_role("button", name=sample.name, exact=True).click()
+            table.get_by_role("button", name=sample.name, exact=True).focus()
+            page.keyboard.press("Shift+F10")
+            page.get_by_role("menuitem", name="属性", exact=True).click()
             dialog = page.get_by_role("dialog", name="文件属性", exact=True)
             expect(dialog).to_contain_text(digest)
             expect(dialog).to_contain_text(f"{sample.stat().st_size} 字节")
             expect(dialog).to_contain_text("/文档/子目录/" + sample.name)
             page.keyboard.press("Escape"); expect(dialog).not_to_be_visible()
-            expect(table.get_by_role("button", name=sample.name, exact=True)).to_be_focused()
+            # Properties now open from a transient menu (name clicks preview);
+            # the original direct-name modal focus-return assertion is obsolete.
+            expect(table.get_by_role("button", name=sample.name, exact=True)).to_be_visible()
             assert page.url.endswith(f"#/files/{doc_id}/{quote('文档', safe='')}/{quote('子目录', safe='')}")
             expect(page.get_by_role("textbox", name="目录地址", exact=True)).to_have_value("/文档/子目录")
             page.reload()
@@ -478,7 +539,8 @@ def main():
             address_input.press("Enter")
             expect(table).to_be_visible()
             page.get_by_label("筛选当前目录", exact=True).fill("long-")
-            table.get_by_role("button", name=long_name, exact=True).click()
+            table.get_by_role("button", name=long_name, exact=True).click(button="right")
+            page.get_by_role("menuitem", name="属性", exact=True).click()
             expect(dialog).to_contain_text("0 字节")
             layout_cases = []
             for scheme in ("light", "dark"):
@@ -592,7 +654,7 @@ def main():
             assert page.url == origin + "/#/files"
             expect(table).not_to_be_visible()
             context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-vaults", "real-observer", "snapshot-multipage", "directory-pagination/filter", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-vault/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "notifications/top-right/limit-3/queue", "notifications/success-4s/repeated-copy-new-timer/manual-close", "notifications/native-clipboard-denied/sticky-error/keyboard-close", "notifications/no-layout-shift/long-path/narrow-light-dark", "notifications/scoped-error-state-and-unmount-cleanup", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/vault-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "vault-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "notification_layout_cases": notification_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
+            (RUN / "result.json").write_text(json.dumps({"passed": True, "checks": ["auth/empty-vaults", "real-observer", "snapshot-multipage", "directory-pagination/filter", "column-sort/all-directions/raw-size-time/page-reset/filter/keyboard/refresh/tree-isolation", "nested/empty/parent/tree/keyboard", "mantine-lines/selection/folder-toggle-no-navigation/compact-spacing", "tree-empty-vault/long-names/themes/responsive", "no-action-column", "row-context-menu/position/single-open/clipboard/keyboard", "notifications/top-right/limit-3/queue", "notifications/success-4s/repeated-copy-new-timer/manual-close", "notifications/native-clipboard-denied/sticky-error/keyboard-close", "notifications/no-layout-shift/long-path/narrow-light-dark", "notifications/scoped-error-state-and-unmount-cleanup", "URL-deep-link/reload/special-names", "address/missing/invalid/unauthorized", "toolbar/native-history/branch/vault-history", "split-layout/no-redundant-copy", "properties/hash/size/path", "vault-switch", "late-response", "offline-is-not-empty", "real-410", "refresh-observed-change", "light/dark-responsive-select/modal", "CSP", "no-content-or-operation", "source-hash", "logout"], "layout_cases": layout_cases, "tree_layout_cases": tree_layout_cases, "notification_layout_cases": notification_layout_cases, "requests": requests}, ensure_ascii=False, indent=2))
         print(f"S134 browser acceptance passed: {RUN}", flush=True)
     finally:
         release.set()
