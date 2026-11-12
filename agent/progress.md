@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S216 in_progress**：预览正文关闭按钮已删除，原件下载改为标题栏云图标，标题X自动聚焦；根类型/Web九套/build、隔离btrfs Chromium图片/PDF17组/文本13组/Office16组、独立复审APPROVED通过。待prod/dev部署与精确包核验，交接 [S216](tasks/S216.md)，证据 `/data/vaultsyncd-dev/S216-preview-header-20261112/`。无wire/schema变化，不发行或重打包Windows；下一ready无，原四张blocked保持。
+当前 **S216 done**：预览正文关闭按钮已删除，原件下载改为标题栏云图标，标题X自动聚焦；根类型/Web九套/build、独立复审APPROVED和Chromium图片/PDF17组/文本13组/Office16组通过，最终精确部署包三套再次全部通过。实现b62e45c已部署generation289，主机pin4e06276已ff合main并清树；prod/dev同包、原身份/账号/Vault/配置保持，线上136文件三源408次字节、严格TLS/匿名门禁/CSP与320/1440通过。交接 [S216](tasks/S216.md)，证据 `/data/vaultsyncd-dev/S216-preview-header-20261112/`；本卡无阻塞，不发行或重打包Windows，下一ready无，原四张blocked保持。项目合并及本地树/分支清理收尾即行补记。
 
 当前 **S215 done**：ONLYOFFICE原生只读Office查看器已验收部署generation288，发布源6a99df4包含S214排序，主机65316dc已ff合main并自动清树。server121项、根类型/Web九套/构建、生成器21项及一致性、独立复审APPROVED、纯Nix包内81项、最终精确包Office16组及PDF图片17组/文本13组通过。prod/dev同包与原身份保持，136文件三源408字节、HTTPS/匿名门禁/CSP及凭据验证通过；功能182bfe1/组合源6a99df4/交接65aae2b已ff合master，六挂载与本卡树/分支正常清理，S134/S187保持。交接 [S215](tasks/S215.md)，证据 `/data/vaultsyncd-dev/S215-office-viewer-20261112/`；无本卡功能/部署阻塞，下一ready无，原四张blocked保持。
 

@@ -95,6 +95,10 @@ Office预览为PDF，原文件下载保持；支持doc/docx/xls/xlsx/ppt/pptx/od
 
 S213（2026-11-12）已通过stop/configure-office/start将持久dev切换为与生产generation286同包 `8qfvjkalrkdhfdhpig9zh7liix6kwsp8-vaultsyncd-0.1.7`，使用同机OnlyOffice；原dev身份/账号/Vault和Windows连接配置保持，应用CSP不变。最终精确包Chromium14组及prod/dev资源、密钥和HTTPS验证通过。合并清理结果见 [S213交接](../../agent/tasks/S213.md)。
 
+## S216 预览标题栏操作
+
+S216（2026-11-12）dev由永久主树入口有序restart至与生产generation289同包 `/nix/store/lb4av1rszg555rdkcfhp8baz5s7dbcs3-vaultsyncd-0.1.7`（源b62e45c）。预览删除正文关闭按钮，下载原件改为标题栏图标；原ServerId/账号/Vault/schema21与Office配置保持。最终精确包图片/PDF17组、文本13组、Office16组及线上408次资源字节/TLS/CSP验证通过，无持久测试样本。旧包保留，回退只需管理器restart至S215包，不重置数据；交接见 [S216](../../agent/tasks/S216.md)。
+
 ## S215 原生Office只读查看器
 
 S215（2026-11-12）dev已由永久入口有序restart至与生产generation288同包 `/nix/store/v5x74fbkhv7wk1xqmhvkd61xfl1r49ca-vaultsyncd-0.1.7`，发布源6a99df4包含S214排序。原ServerId/账号/Vault保持，Office运行时配置和密钥副本沿用S213；不重置实例、不写入测试样本。
