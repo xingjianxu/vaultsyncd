@@ -372,3 +372,133 @@ async fn late_candidate_prevents_complete_package() {
     );
     assert!(!p.join("manifest.json").exists());
 }
+
+struct Observed {
+    state: CurrentContent,
+    changes: bool,
+    calls: std::sync::atomic::AtomicUsize,
+}
+impl ExportSource for Observed {
+    fn current<'a>(&'a self, _: &'a Target) -> PortFuture<'a, Result<CurrentContent, PortError>> {
+        Box::pin(async move {
+            if self.changes && self.calls.fetch_add(1, Ordering::SeqCst) > 0 {
+                Ok(CurrentContent::Complete)
+            } else {
+                Ok(self.state.clone())
+            }
+        })
+    }
+    fn discover(&self, _: BindingId) -> PortFuture<'_, Result<Vec<Target>, PortError>> {
+        Box::pin(async { Ok(vec![]) })
+    }
+    fn open<'a>(
+        &'a self,
+        _: &'a Target,
+    ) -> PortFuture<'a, Result<Box<dyn SnapshotSource>, PortError>> {
+        Box::pin(async { Err(io("unexpected content omission")) })
+    }
+    fn verify<'a>(&'a self, _: &'a Target) -> PortFuture<'a, Result<(), PortError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+// I02/I05/I08: actual absence is not deletion, and partial bytes are never a complete file.
+#[tokio::test]
+async fn excluded_absence_and_fixed_partial_are_explicit_but_unconfirmed_content_is_required() {
+    for (dirty, residency, participation, partial, valid_pin, changes, success) in [
+        ("clean", "materialized", true, false, true, false, true),
+        ("clean", "materialized", false, false, true, false, false),
+        ("dirty", "materialized", true, false, true, false, false),
+        ("awaiting_commit", "partial", true, true, true, false, false),
+        ("clean", "partial", true, false, true, false, false),
+        ("clean", "partial", true, true, true, false, true),
+        ("clean", "metadata_only", false, true, true, false, true),
+        ("clean", "partial", true, true, false, false, false),
+        ("clean", "materialized", true, false, true, true, false),
+        ("clean", "partial", true, true, true, true, false),
+    ] {
+        let dir = Dir::new();
+        let db = setup(&dir).await;
+        let binding = B.as_bytes().as_slice();
+        let entry = [7u8; 16];
+        let root = [6u8; 16];
+        let version = [8u8; 16];
+        sqlx::query("INSERT INTO baseline_entries(binding_id,entry_id,name,kind,revision) VALUES (?,?,'','directory',1)")
+            .bind(binding).bind(root.as_slice()).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO baseline_entries(binding_id,entry_id,parent_entry_id,name,kind,revision,content_version_id) VALUES (?,?,?,'retained','file',1,?)")
+            .bind(binding).bind(entry.as_slice()).bind(root.as_slice()).bind(version.as_slice()).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES (?,?,1,?,?)")
+            .bind(binding).bind(entry.as_slice()).bind(dirty).bind(residency).execute(db.pool()).await.unwrap();
+        sqlx::query("INSERT INTO agent_versions VALUES (?,?,?,?,16)")
+            .bind(binding)
+            .bind(entry.as_slice())
+            .bind(version.as_slice())
+            .bind([1u8; 32].as_slice())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        if participation {
+            sqlx::query("INSERT INTO binding_participation VALUES (?,?,'reconcile_required')")
+                .bind(binding)
+                .bind(entry.as_slice())
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        let source = Observed {
+            state: if partial {
+                CurrentContent::RemotePartial {
+                    version: if valid_pin {
+                        "08".repeat(16)
+                    } else {
+                        "09".repeat(16)
+                    },
+                    size: 16,
+                    on_disk: 4,
+                    identity: "native-id".into(),
+                }
+            } else {
+                CurrentContent::Absent
+            },
+            changes,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let output = dir.0.join("recovery");
+        let result = ExportRecovery::new(db.clone())
+            .run(
+                B,
+                output.to_str().unwrap(),
+                &source,
+                &Destination {
+                    allowed: dir.0.clone(),
+                    corrupt: false,
+                },
+            )
+            .await;
+        assert_eq!(
+            result.is_ok(),
+            success,
+            "{dirty}/{residency}/{participation}/{partial}/{valid_pin}/{changes}: {result:?}"
+        );
+        if success {
+            let state: Value =
+                serde_json::from_slice(&fs::read(output.join("state.json")).unwrap()).unwrap();
+            assert_eq!(state["current_observations"].as_array().unwrap().len(), 1);
+            assert!(
+                !output
+                    .join(format!("current-{}.bin", "07".repeat(16)))
+                    .exists()
+            );
+            assert_eq!(state["local_entries"][0]["dirty"], dirty);
+            assert_eq!(
+                sqlx::query_scalar::<_, String>("SELECT dirty FROM local_entries")
+                    .fetch_one(db.pool())
+                    .await
+                    .unwrap(),
+                dirty
+            );
+        } else {
+            assert!(!output.join("manifest.json").exists());
+        }
+    }
+}

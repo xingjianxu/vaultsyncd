@@ -728,6 +728,9 @@ impl Server {
                             },
                         );
                     }
+                    if e.code() == Some("LOCAL_CHANGED") {
+                        eprintln!("event=cycle-local-refused binding={id} reason={e:?}");
+                    }
                     eprintln!(
                         "event=cycle-blocked binding={id} code={}",
                         e.code().unwrap_or("UNAVAILABLE")

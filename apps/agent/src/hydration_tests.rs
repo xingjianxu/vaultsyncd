@@ -202,11 +202,14 @@ impl Server {
                         .to_owned();
                     if path == "/v1/capabilities" {
                         assert!(!header.to_lowercase().contains("authorization:"));
-                        let body = include_bytes!(
-                            "../../../tests/contract/fixtures/s091/remote-v1.0.json"
-                        );
+                        let body = serde_json::to_vec(&serde_json::json!({
+                            "protocol": { "major": vaultsyncd_protocol::negotiation::MAJOR, "minor": vaultsyncd_protocol::negotiation::MINOR },
+                            "server_id": ServerId::from_bytes([5;16]).to_string(), "epoch": "1",
+                            "features": ["content"],
+                            "limits": { "max_page_size": 500, "max_upload_part_bytes": "16777216" }
+                        })).unwrap();
                         write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
-                        socket.write_all(body).unwrap();
+                        socket.write_all(&body).unwrap();
                         return;
                     }
                     assert!(
@@ -408,6 +411,33 @@ impl Rig {
     }
     async fn local(&self, entry: u8) {
         let mut tx = self.db.begin_write().await.unwrap();
+        // The scheduler's real binding gate requires an authenticated baseline path.
+        // This fixture serves this exact immutable version through its local HTTP peer.
+        let root = EntryId::from_bytes([9; 16]);
+        for baseline in [
+            entries::BaselineEntry {
+                entry: root,
+                parent: None,
+                name: String::new(),
+                kind: entries::EntryKind::Directory,
+                revision: vaultsyncd_domain::version::Revision::new(1).unwrap(),
+                content_version: None,
+                deleted: false,
+            },
+            entries::BaselineEntry {
+                entry: id(entry).entry,
+                parent: Some(root),
+                name: "file.bin".into(),
+                kind: entries::EntryKind::File,
+                revision: vaultsyncd_domain::version::Revision::new(1).unwrap(),
+                content_version: Some(id(entry).version),
+                deleted: false,
+            },
+        ] {
+            entries::put_baseline(&mut tx, id(entry).binding, &baseline)
+                .await
+                .unwrap();
+        }
         entries::put_local(
             &mut tx,
             id(entry).binding,
@@ -621,12 +651,20 @@ async fn native_verified_whole_download_only_supplies_requested_range() {
     ));
     let external = std::fs::OpenOptions::new()
         .write(true)
-        .open(sealed)
+        .open(&sealed)
         .unwrap_err();
     assert_eq!(
         external.raw_os_error(),
         Some(32),
         "verified staging must remain write-protected"
+    );
+    // S199: recovery may close an idle exclusive lease, without evicting bytes or
+    // changing the live file's range residency. A later read must revalidate/reuse it.
+    callbacks.close_idle_staging().unwrap();
+    assert_eq!(std::fs::read(&sealed).unwrap(), *rig.server.bytes);
+    assert_eq!(
+        adapter.inspect("file.bin").unwrap().cloud.unwrap().on_disk,
+        local
     );
     let requests_before = rig.server.requests.lock().unwrap().len();
     let path = rig.vault.join("file.bin");

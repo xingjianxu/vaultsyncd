@@ -174,6 +174,13 @@ pub(crate) async fn list(
         let gate = controls.execution_gate(binding, Some(entry)).await?;
         let reason = if !complete {
             "扫描未完成，文件可能正在使用或不可访问，不能释放"
+        } else if actual.is_none()
+            && (gate == ExecutionGate::Excluded || gate == ExecutionGate::ReconcileRequired)
+        {
+            "已跟踪文件在排除期间被本地删除；不会传播删除。取消排除后点击下载显式恢复"
+        } else if gate == ExecutionGate::ReconcileRequired && state.residency == Residency::Partial
+        {
+            "部分占位仍需按原固定版本核对；点击下载恢复，已修改内容不会被覆盖"
         } else if actual.is_none() {
             "实际文件可能正在使用、不可访问或尚未核对"
         } else if state.dirty != Dirty::Clean {
@@ -242,6 +249,7 @@ pub(crate) async fn list(
                 && !pending
                 && !transferring
                 && actual.is_some()
+                && gate == ExecutionGate::Ready
                 && complete,
             release_allowed: reason.is_empty(),
             release_reason: if reason.is_empty() {

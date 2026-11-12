@@ -130,10 +130,17 @@ impl DispatchGate for Gate {
                 return Ok(false);
             }
             if op.kind == "user_read" {
-                return Ok(BindingControls::new(self.0.clone())
+                let gate = BindingControls::new(self.0.clone())
                     .execution_gate(op.binding, op.entry)
-                    .await?
-                    == ExecutionGate::Ready);
+                    .await?;
+                // Reads of the already pinned old version may complete retained partial bytes.
+                // This grants no upload, replacement, release or baseline ACK.
+                if gate == ExecutionGate::ReconcileRequired {
+                    return sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM local_entries l JOIN baseline_entries b USING(binding_id,entry_id) WHERE l.binding_id=? AND l.entry_id=? AND l.dirty='clean' AND b.deleted=0 AND b.content_version_id IS NOT NULL)")
+                        .bind(op.binding.as_bytes().as_slice()).bind(op.entry.map(|id| id.as_bytes().to_vec()))
+                        .fetch_one(self.0.pool()).await.map_err(error);
+                }
+                return Ok(gate == ExecutionGate::Ready);
             }
             let text: Option<String> = sqlx::query_scalar(
                 "SELECT specification FROM agent_actions WHERE op_id=? AND binding_id=?",
@@ -172,6 +179,34 @@ impl DispatchGate for Gate {
 
 /// Called after the event receiver has refreshed durable remote facts, before new local discovery.
 pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
+    reconcile_selected(worker, None, None).await
+}
+
+/// Existing DownloadEntry is the explicit recovery entry point; exclusion alone never restores a deleted file.
+pub(crate) async fn recover(
+    worker: &Worker,
+    entry: EntryId,
+    operation: vaultsyncd_domain::ids::OpId,
+) -> Result<(), PortError> {
+    reconcile_selected(worker, Some(entry), Some(operation)).await?;
+    if BindingControls::new(worker.importer.local.db.clone())
+        .execution_gate(worker.importer.local.binding, Some(entry))
+        .await?
+        != ExecutionGate::Ready
+    {
+        return Err(PortError::rejected(
+            "RECONCILE_REQUIRED",
+            "恢复未完成：请检查远端连接、规则及本地未确认内容；现场与围栏保留",
+        ));
+    }
+    Ok(())
+}
+
+async fn reconcile_selected(
+    worker: &Worker,
+    explicit: Option<EntryId>,
+    operation: Option<vaultsyncd_domain::ids::OpId>,
+) -> Result<(), PortError> {
     let local = &worker.importer.local;
     // Refresh first: a remote rename can turn a persisted exclusion into a reconciliation.
     let rules = Rules::load(&local.db, local.binding).await?;
@@ -247,6 +282,9 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
             raw.try_into()
                 .map_err(|_| error("invalid participation identity"))?,
         );
+        if explicit.is_some_and(|selected| selected != entry) {
+            continue;
+        }
         let mut connection = local.db.pool().acquire().await.map_err(error)?;
         let observed_remote = entries::remote_entry(&mut connection, local.binding, entry)
             .await
@@ -279,6 +317,12 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
             continue;
         }
         let row = &current[&entry.to_string()];
+        if explicit.is_some() && row.kind != vaultsyncd_protocol::generated::EntryKind::File {
+            return Err(PortError::rejected(
+                "INVALID_ARGUMENT",
+                "显式下载恢复只接受文件",
+            ));
+        }
         let path = &names[&entry.to_string()];
         if !rules.includes(
             path,
@@ -301,14 +345,88 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
             // namespace/conflict recovery before this new location can participate.
             continue;
         }
-        let meta = match local.vault.inspect(path) {
+        let mut meta = match local.vault.inspect(path) {
             Ok(m) => Some(m),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(error(e)),
         };
+        if let Some(op) = operation {
+            // Retained bytes still belong to the common baseline; explicit missing-file
+            // restoration installs the authenticated snapshot head instead.
+            let version = if meta.is_none() {
+                row.version_id.clone()
+            } else {
+                before
+                    .as_ref()
+                    .and_then(|b| b.content_version)
+                    .map(|v| v.to_string())
+            };
+            crate::importer::action(local, op, &serde_json::json!({"kind":"manual_download","entry":entry.to_string(),"path":path,"version":version})).await?;
+        }
+        if let Some(observed) = meta
+            .as_ref()
+            .filter(|m| m.cloud.as_ref().is_some_and(|c| c.on_disk < m.size))
+        {
+            let cloud = observed.cloud.as_ref().expect("partial");
+            let identity =
+                vaultsyncd_platform_windows::cfapi::catalog::Identity::decode(&cloud.identity)
+                    .map_err(error)?;
+            let old_version = before.as_ref().and_then(|b| b.content_version);
+            let vault = worker.importer.remote.vault;
+            let facts: Option<(Vec<u8>, i64)> = sqlx::query_as("SELECT digest,size FROM agent_versions WHERE binding_id=? AND entry_id=? AND version_id=?")
+                .bind(local.binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice()).bind(identity.version.as_bytes().as_slice())
+                .fetch_optional(local.db.pool()).await.map_err(error)?;
+            let mut physical = observed.identity.volume.to_le_bytes().to_vec();
+            physical.extend(observed.identity.file);
+            if identity.binding != local.binding
+                || identity.vault != vault
+                || identity.entry != entry
+                || Some(identity.version) != old_version
+                || cloud.modified != 0
+                || cloud.in_sync_state != 1
+                || previous.as_ref().is_none_or(|p| {
+                    p.dirty != Dirty::Clean || p.file_identity.as_ref() != Some(&physical)
+                })
+                || facts
+                    .as_ref()
+                    .is_none_or(|(_, size)| *size as u64 != observed.size)
+            {
+                if explicit.is_some() {
+                    return Err(PortError::rejected(
+                        "LOCAL_CONTENT_PENDING",
+                        "部分占位身份、固定版本或未确认范围不符；保留内容，不能恢复覆盖",
+                    ));
+                }
+                continue;
+            }
+            if row.version_id.as_deref() != Some(&identity.version.to_string()) {
+                // Preserve downloaded old ranges by completing their original immutable version.
+                // Never dehydrate or retag a partial file to the new server head.
+                let (digest, size) = facts.expect("checked");
+                let fixed = vaultsyncd_transfer::ports::VersionPin::new(
+                    local.binding.to_string(),
+                    entry.to_string(),
+                    identity.version.to_string(),
+                    digest
+                        .try_into()
+                        .map_err(|_| error("invalid fixed digest"))?,
+                    size as u64,
+                )
+                .map_err(error)?;
+                worker
+                    .importer
+                    .callbacks
+                    .register_version(
+                        crate::bootstrap::PinnedVersion::new(identity, fixed).map_err(error)?,
+                    )
+                    .map_err(error)?;
+                crate::management_files::read_pinned(local, path, identity).await?;
+                meta = Some(local.vault.inspect(path).map_err(error)?);
+            }
+        }
         let restoring = meta.is_none();
         let after_local;
-        if let Some(meta) = meta {
+        if let Some(meta) = meta.clone() {
             if meta.directory != (row.kind == vaultsyncd_protocol::generated::EntryKind::Directory)
                 || before.is_none()
             {
@@ -411,7 +529,7 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
                 .fetch_one(local.db.pool())
                 .await
                 .map_err(error)?;
-            if before.is_some() {
+            if before.is_some() && explicit != Some(entry) {
                 // A tracked file that disappeared while excluded is a user-side deletion, not
                 // proof that the server copy should be re-downloaded or deleted. Keep the
                 // fence: explicit recovery decides, and nothing is silently restored or lost.
@@ -434,7 +552,7 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
                     .await
                     .map_err(error)?;
                 drop(conn);
-            } else if mode == "on_demand" {
+            } else if mode == "on_demand" && explicit != Some(entry) {
                 // An on-demand binding keeps a restored entry as a placeholder; exclusion
                 // must not turn into an unexpected full download.
                 worker
@@ -459,7 +577,7 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
                 drop(conn);
             } else {
                 let spec = vaultsyncd_agent_core::executor::apply::ApplySpec {
-                    op: crate::work::new_op(),
+                    op: operation.unwrap_or_else(crate::work::new_op),
                     binding: local.binding,
                     target: RelativePath::parse(path).map_err(error)?,
                     baseline_before: before.clone(),
@@ -495,6 +613,18 @@ pub(crate) async fn reconcile(worker: &Worker) -> Result<(), PortError> {
                     .await
                     .map_err(error)?;
                 drop(conn);
+            }
+        }
+        if let Some(initial) = meta
+            .as_ref()
+            .filter(|m| m.cloud.as_ref().is_some_and(|c| c.on_disk < m.size))
+        {
+            let fresh = local.vault.inspect(path).map_err(error)?;
+            if fresh.identity != initial.identity
+                || fresh.size != initial.size
+                || fresh.cloud != initial.cloud
+            {
+                continue;
             }
         }
         // Final CAS includes namespace and local evidence, not only the rule text/version.

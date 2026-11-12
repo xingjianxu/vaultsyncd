@@ -416,7 +416,9 @@ pub(super) fn validate(spec: &ApplySpec) -> Result<(), PortError> {
                 || before.kind != EntryKind::File
                 || (before.deleted && spec.expected != ContentEvidence::Absent)
                 || before.parent.is_none()
-                || before.revision >= after.revision
+                || before.revision > after.revision
+                || (before.revision == after.revision
+                    && (before != after || spec.expected != ContentEvidence::Absent))
         })
     {
         return Err(invalid(

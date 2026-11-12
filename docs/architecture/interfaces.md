@@ -2841,3 +2841,17 @@ Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与
 - prod=`https://vsyncd.132140.xyz`，原 `tools/deploy-local.sh` + NixOS 部署、8721后端与生产目录保持。dev=`https://wlab.132140.xyz:15401`，后端仅回环18741；证书复用本机 ACME fullchain/key，独立 Caddy 不启用管理API或自动签发。
 - `tools/dev-server.sh init|start|stop|restart|status|logs` 自动进入 devShell；`--root` 默认 `/data/vaultsyncd-dev/dev-server` 且只能在开发根下，无软链/越界，数据为独立 btrfs。`init --login` 从stdin读密码，`--package` 选择服务包；`logs --service server|caddy|supervisor|all --lines N --follow` 查看文件日志，普通start脱离终端、无开机自启。运行信息记录boot/starttime/UID，stop借助pidfd保护，禁止按名称强杀或删除数据。
 - dev 初始化产生独立 ServerId/owner，持续重启保持该身份；Windows 测试机按此ServerId保存唯一dev连接，经认证IPC/WinCred登录，不移植生产数据库或绑定。配置入口与现场证据见 `docs/operations/dev-server.md`、`agent/tasks/S207.md`。
+
+## S199 排除缺失恢复与部分占位维护（无 wire/schema 变化）
+
+- `ExportSource::current(Target) -> CurrentContent` 默认 `Complete`，原生源以健康根扫描证明 `Absent`，或以 CFAPI binding/vault/entry/version、原生in_sync=1且无修改范围证明 `RemotePartial {version,size,on_disk,identity}`。core 只允许 clean 已跟踪且 excluded/reconcile_required 的非 partial 缺失条目，或与共同基线及 `agent_versions` 大小/身份一致的 clean 部分占位；dirty/awaiting_commit、未知身份/扫描、缺少固定版本均拒绝 `RECOVERY_CONTENT_REQUIRED`。上传快照独立导出，不以远端字节替代。
+- 恢复包仍为 format 1：manifest/files 与完整字节校验不变，`state.json` 增加 `current_observations`（`[Target, CurrentContent]` 元组数组）及 controls/participation/agent_versions/agent_actions。每项明确缺失或部分水合及固定版本，不为它们创建虚假完整 `.bin`；这是可加字段的状态快照，旧读取器不能据缺少 `.bin` 推断用户数据已删除或完整离线。完成前重新核对分类、来源、扫描及整个 SQLite 状态；导出不改 dirty、围栏或队列。PrepareMaintenance 暂停并排空后使用相同出口，失败退出且无成功清单。
+- 既有 `DownloadEntry`/CLI `download` 是显式恢复入口：取消排除后缺失的已跟踪 clean 文件仍不自动恢复、不传播删除；显式操作用当前认证固定快照、原路径/本地/规则/remote CAS 与 ControlledApply 的不覆盖创建恢复完整内容。复用 operation_id 的输入在副作用前登记；未确认/被占目标拒绝。文件列表给具体原因与“取消排除后点击下载”入口，围栏期间不显示 synchronized。
+- 部分占位重新包含先核对原身份、逻辑长度、物理身份、DB clean 和 cloud.modified=0；同版本只恢复参与，保留 residency；远端改版时先按原不可变 pin 补齐已下载旧范围，再由普通三方协调处理新版本，不能把 partial retag/dehydrate 到新 head。协调中的 user_read 仅对 clean 共同基线开放旧 pin 读取，不开放上传/替换/释放授权；最终元数据与 DB CAS 变化保留围栏。
+- 原生入口：`VAULTSYNCD_NATIVE_EXCLUSIONS_TASK=S199 VAULTSYNCD_NATIVE_ARTIFACTS=<开发根证据目录> tests/platform/windows/run-native-exclusions.sh`（windows devShell；宿主 helper 必须当前树构建，保留现有产品进程预检）。S196 默认回归入口保持。
+
+S199 补充边界：ControlledApply 仅对 `expected=Absent` 且完整 `baseline_before == baseline_after` 允许相同 revision 的显式恢复，不能以相同 revision 改版本/位置；本地 dirty/CAS 与平台不覆盖条件不变。caller op 复用同一持久 journal，已完成请求不得重建后来再次删除的文件。此类新 journal 不需要新增字段或 schema，但旧版本的校验器会安全拒绝相同 revision；存在未完成事务时先用本版完成恢复，回退不能让旧版继续该事务。恢复包/整套状态备份保留，不能只降二进制并宣称兼容。ExportRecovery/DownloadEntry/ReleaseEntry 的操作及响应等待为有界 30 分钟；收请求帧、写响应帧仍 5 秒，StopAgent 仍 60 秒。
+
+水合暂存句柄：`HydrationCallbacks::close_idle_staging` 在 idle 后关闭已验证远端暂存的独占引用，磁盘字节/bitmap/水合范围均保留；ExportRecovery先wait_idle再关闭，disconnect同锁clear，下载完成在同锁下复核cancel/closed后才insert，避免退出后重新pin。重新读取必须重新打开安全StagingFile并整份核验，不跳过扫描错误。原生range夹具提供当前协议能力与真实基线，不再借用历史v1 wire。
+
+原生负例以CfSetInSyncState撤回真实partial的确认，验证拒绝与独立唯一未确认字节/驻留量保持；不伪造in-sync ack，清理通过CFAPI实际读回原固定版本并整份hash。physical modified>0 partial在本Windows路径会要求先整份召回，未取得该组合原生证据；dirty/awaiting partial由真实SQLite矩阵覆盖，原生full双改保留另有实测。异步CF保护句柄的release读统一复用controlled::read_at（保持event/OVERLAPPED/buffer至完成），不使用FileExt同步wrapper；官方句柄语义见 https://learn.microsoft.com/windows/win32/api/cfapi/nf-cfapi-cfopenfilewithoplock 。

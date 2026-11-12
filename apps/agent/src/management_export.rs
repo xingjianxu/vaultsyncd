@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use vaultsyncd_agent_core::recovery::export::{
-    ExportDestination, ExportDirectory, ExportRecovery, ExportSource, Target,
+    CurrentContent, ExportDestination, ExportDirectory, ExportRecovery, ExportSource, Target,
 };
 use vaultsyncd_domain::ids::BindingId;
 use vaultsyncd_platform_windows::files::VaultHandle;
@@ -102,17 +102,73 @@ impl Source {
     }
 }
 impl ExportSource for Source {
+    fn current<'a>(
+        &'a self,
+        target: &'a Target,
+    ) -> PortFuture<'a, Result<CurrentContent, PortError>> {
+        Box::pin(async move {
+            let path = self
+                .paths
+                .get(&target.id)
+                .ok_or_else(|| error("current path unknown"))?;
+            let meta = match self.local.vault.inspect(path) {
+                Ok(meta) => meta,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // A missing leaf is evidence only after a complete scan of the healthy root.
+                    let report = self.local.vault.scan();
+                    if !report.permits_missing_comparison()
+                        || report.entries.iter().any(|e| &e.path == path)
+                    {
+                        return Err(error("recovery absence cannot be established"));
+                    }
+                    return Ok(CurrentContent::Absent);
+                }
+                Err(e) => return Err(error(e)),
+            };
+            if let Some(cloud) = meta.cloud.as_ref().filter(|c| c.on_disk < meta.size) {
+                let id =
+                    vaultsyncd_platform_windows::cfapi::catalog::Identity::decode(&cloud.identity)
+                        .map_err(error)?;
+                let vault: Vec<u8> = sqlx::query_scalar("SELECT vault_id FROM bindings WHERE id=?")
+                    .bind(self.local.binding.as_bytes().as_slice())
+                    .fetch_one(self.local.db.pool())
+                    .await
+                    .map_err(error)?;
+                if cloud.modified != 0
+                    || cloud.in_sync_state != 1
+                    || id.binding != self.local.binding
+                    || id.entry.to_string() != target.id
+                    || id.vault.as_bytes().as_slice() != vault
+                {
+                    return Err(PortError::rejected(
+                        "RECOVERY_CONTENT_REQUIRED",
+                        "部分占位尚未确认、存在修改范围或身份不符，不能省略恢复内容",
+                    ));
+                }
+                return Ok(CurrentContent::RemotePartial {
+                    version: id.version.to_string(),
+                    size: meta.size,
+                    on_disk: cloud.on_disk,
+                    identity: format!("{}:{:02x?}", meta.identity.volume, meta.identity.file),
+                });
+            }
+            Ok(CurrentContent::Complete)
+        })
+    }
     fn discover(&self, binding: BindingId) -> PortFuture<'_, Result<Vec<Target>, PortError>> {
         Box::pin(async move {
             if binding != self.local.binding {
                 return Err(error("export binding mismatch"));
             }
             let local = &self.local;
-            let ids:Vec<String>=sqlx::query_scalar("SELECT lower(hex(entry_id)) FROM local_entries WHERE binding_id=? AND (residency!='metadata_only' OR dirty!='clean')")
-            .bind(binding.as_bytes().as_slice()).fetch_all(local.db.pool()).await.map_err(error)?;
+            let ids: Vec<String> = sqlx::query_scalar(
+                "SELECT lower(hex(entry_id)) FROM local_entries WHERE binding_id=?",
+            )
+            .bind(binding.as_bytes().as_slice())
+            .fetch_all(local.db.pool())
+            .await
+            .map_err(error)?;
             let known: Vec<&String> = ids.iter().filter_map(|id| self.paths.get(id)).collect();
-            let cloud_ids: Vec<String> = sqlx::query_scalar("SELECT lower(hex(entry_id)) FROM local_entries WHERE binding_id=? AND residency='metadata_only' AND dirty='clean'")
-                .bind(binding.as_bytes().as_slice()).fetch_all(local.db.pool()).await.map_err(error)?;
             let versions: Vec<(String,String)> = sqlx::query_as("SELECT lower(hex(entry_id)),lower(hex(version_id)) FROM agent_versions WHERE binding_id=?")
                 .bind(binding.as_bytes().as_slice()).fetch_all(local.db.pool()).await.map_err(error)?;
             let reconstructible: Vec<String> = versions
@@ -134,27 +190,6 @@ impl ExportSource for Source {
                     }
                     if kind == "cache" && reconstructible.contains(&entry.path) {
                         // This live staging file contains only a fixed, recoverable remote download.
-                        continue;
-                    }
-                    if kind == "local"
-                        && let Some(cloud) = meta.cloud.as_ref().filter(|c| c.on_disk < meta.size)
-                    {
-                        let identity =
-                            vaultsyncd_platform_windows::cfapi::catalog::Identity::decode(
-                                &cloud.identity,
-                            )
-                            .map_err(error)?;
-                        if cloud.modified != 0
-                            || identity.binding != binding
-                            || !cloud_ids.iter().any(|id| {
-                                id == &identity.entry.to_string()
-                                    && self.paths.get(id) == Some(&entry.path)
-                            })
-                        {
-                            return Err(error(
-                                "unconfirmed or unknown partial content cannot be omitted",
-                            ));
-                        }
                         continue;
                     }
                     let id = to_hex(&digest_of(format!("{kind}:{}", entry.path).as_bytes()))[..32]
@@ -353,6 +388,13 @@ pub(crate) async fn export(
             &source,
             &Destination { protected },
         )
-        .await?;
+        .await
+        .map_err(|failure| {
+            eprintln!(
+                "event=recovery-export-failed code={} reason={failure:?}",
+                failure.code().unwrap_or("UNKNOWN")
+            );
+            failure
+        })?;
     Ok(manifest.files.len())
 }

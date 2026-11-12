@@ -18,7 +18,10 @@ artifact_base=$(realpath -m "${VAULTSYNCD_NATIVE_ARTIFACTS:-$dev_root/S196-defau
 export TMPDIR="${TMPDIR:-$dev_root/S196-default-exclusions-20261111/tmp}"
 [[ $(realpath -m "$TMPDIR") == "$dev_root/"* ]] || { echo 'tmp must stay below /data/vaultsyncd-dev' >&2; exit 1; }
 mkdir -p "$TMPDIR"
-run_id="S196-$(date +%s)-$$"
+task="${VAULTSYNCD_NATIVE_EXCLUSIONS_TASK:-S196}"
+[[ $task == S196 || $task == S199 ]] || exit 1
+export VAULTSYNCD_NATIVE_EXCLUSIONS_TASK="$task"
+run_id="$task-$(date +%s)-$$"
 artifact_dir="$artifact_base/$run_id"
 guest_dir="C:/vaultsyncd-lab/$run_id"
 mkdir -p "$artifact_dir"
@@ -45,6 +48,13 @@ cleanup() {
     for pattern in '*.log' '*.json' 'exit.txt' 'error.txt' 'rules.txt'; do
       scp -P "$GUEST_PORT" -i "$GUEST_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
         -o BatchMode=yes -o LogLevel=ERROR "$GUEST_USER@$GUEST_HOST:$guest_dir/$pattern" "$artifact_dir/" \
+        >> "$artifact_dir/evidence-copy.log" 2>&1
+    done
+  fi
+  if (( guest_started )) && [[ $task == S199 ]]; then
+    for bundle in export-missing prepare-missing export-partial prepare-partial export-unconfirmed-partial; do
+      scp -r -P "$GUEST_PORT" -i "$GUEST_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
+        -o BatchMode=yes -o LogLevel=ERROR "$GUEST_USER@$GUEST_HOST:$guest_dir/$bundle" "$artifact_dir/" \
         >> "$artifact_dir/evidence-copy.log" 2>&1
     done
   fi
@@ -95,9 +105,12 @@ fi
 for name in agent cli; do cp "$build_base/$TARGET_TRIPLE/debug/vaultsyncd-$name.exe" "$artifact_dir/"; done
 python3 - "$artifact_dir" <<'PY'
 import json, pathlib, sys
+import os
 out = pathlib.Path(sys.argv[1])
 seeds = {"server.xlsx": "S196-server-workbook", "~$remote-default.xlsx": "S196-remote-lock",
          "~$reconcile.xlsx": "S196-remote-original"}
+if os.environ["VAULTSYNCD_NATIVE_EXCLUSIONS_TASK"] == "S199":
+    seeds["~$partial-large.bin"] = "p" * (16 * 1024 * 1024)
 (out / "scenario.json").write_text(json.dumps({"server_seed": [{"path": k, "content": v} for k, v in seeds.items()]}))
 PY
 "$helper" "$artifact_dir/host-fixture.json" "$artifact_dir/stop" "$artifact_dir/scenario.json" > "$artifact_dir/server.log" 2>&1 &
@@ -125,7 +138,7 @@ tunnel_pid=$!
 sleep .5
 kill -0 "$tunnel_pid"
 python3 - "$artifact_dir" "$script_dir" <<'PY'
-import base64, hashlib, json, pathlib, subprocess, sys, urllib.request
+import base64, hashlib, json, os, pathlib, subprocess, sys, urllib.request
 out, scripts = map(pathlib.Path, sys.argv[1:])
 host = json.loads((out / "host-fixture.json").read_text())
 assert pathlib.Path(host["work_dir"]).resolve().is_relative_to("/data/vaultsyncd-dev")
@@ -134,7 +147,7 @@ with urllib.request.urlopen(host["url"].rstrip("/") + "/v1/capabilities", timeou
 (out / "fixture.json").write_text(json.dumps({"serverId": server_id, "vault": host["vault"],
     "url": "https://127.0.0.1:18796", "login": host["login"], "password": host["password"],
     "token": host["issued"]["access_token"], "apiUrl": "http://127.0.0.1:18797"}))
-script = out / "s196-exclusions.ps1"
+script = out / (os.environ["VAULTSYNCD_NATIVE_EXCLUSIONS_TASK"].lower() + "-exclusions.ps1")
 script.write_text((scripts / script.name).read_text(), encoding="utf-8-sig")
 paths = [*out.glob("*.exe"), out / "ca.pem", script]
 (out / "hashes.json").write_text(json.dumps({p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}))
@@ -142,20 +155,34 @@ PY
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Path '$guest_dir' | Out-Null; icacls '$guest_dir' /inheritance:r /grant:r '${GUEST_USER}:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' | Out-Null; exit \$LASTEXITCODE\""
 guest_started=1
 GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/"*.exe "$artifact_dir/ca.pem" \
-  "$artifact_dir/fixture.json" "$artifact_dir/hashes.json" "$artifact_dir/s196-exclusions.ps1"
+  "$artifact_dir/fixture.json" "$artifact_dir/hashes.json" "$artifact_dir/${task,,}-exclusions.ps1"
 worker_status=0
-guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/s196-exclusions.ps1" > "$artifact_dir/native.log" 2>&1 || worker_status=$?
+phase_args=''
+if [[ $task == S199 && ${VAULTSYNCD_NATIVE_EXCLUSIONS_PARTIAL_ONLY:-0} == 1 ]]; then phase_args=' -PartialOnly'; fi
+guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/${task,,}-exclusions.ps1$phase_args" > "$artifact_dir/native.log" 2>&1 || worker_status=$?
 printf '%s\n' "$worker_status" > "$artifact_dir/ssh-exit.txt"
 (( worker_status == 0 )) || exit "$worker_status"
 scp -P "$GUEST_PORT" -i "$GUEST_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
   -o BatchMode=yes -o LogLevel=ERROR "$GUEST_USER@$GUEST_HOST:$guest_dir/result.json" "$artifact_dir/result.json"
 python3 - "$artifact_dir" <<'PY'
-import hashlib, json, pathlib, sys
+import hashlib, json, os, pathlib, sys
 out = pathlib.Path(sys.argv[1])
 receipt = json.loads((out / "result.json").read_text(encoding="utf-8-sig"))
+if os.environ.get("VAULTSYNCD_NATIVE_EXCLUSIONS_PARTIAL_ONLY") == "1":
+    assert receipt["partialOnly"] is True
+    for key in ("ok", "partialSameVersion", "partialChangedVersion", "partialMaintenance", "unconfirmedPartialRefused"):
+        assert receipt[key] is True, key
+    work = pathlib.Path(json.loads((out / "host-fixture.json").read_text())["work_dir"])
+    assert (work / "~$partial-large.bin").read_bytes() == b"p" * (16 * 1024 * 1024)
+    assert (work / "barrier-partial-remote-edited.txt").read_bytes() == b"S196-partial-remote-edited"
+    print("PASS S199 partial-only fixed versions, residency, maintenance, unconfirmed-state refusal and server bytes")
+    sys.exit(0)
 for key in ("ok", "defaults", "additional", "cleared", "negation", "restart", "reconciliation", "retained", "cfapi", "fullMode",
             "initialRemoteOnly", "deletedTrackedStaysFenced", "bothEditsPreserved"):
     assert receipt[key] is True, key
+if os.environ["VAULTSYNCD_NATIVE_EXCLUSIONS_TASK"] == "S199":
+    for key in ("maintenanceMissing", "explicitRestore", "partialSameVersion", "partialChangedVersion", "partialMaintenance", "unconfirmedPartialRefused", "operationReuseRefused"):
+        assert receipt[key] is True, key
 work = pathlib.Path(json.loads((out / "host-fixture.json").read_text())["work_dir"])
 expected = {"server.xlsx": b"S196-server-workbook", "local.xlsx": b"S196-local-workbook",
     "~$remote-default.xlsx": b"S196-remote-lock", "~$include-local.xlsx": b"S196-included-local-lock",
@@ -176,4 +203,8 @@ for content in (b"S196-unique-local-edit-while-excluded", b"S196-concurrent-remo
 (out / "server-verification.json").write_text(json.dumps(summary, indent=2))
 print("PASS exact server bytes", json.dumps(summary))
 PY
-echo "PASS S196 native defaults/additional/clear/negation/restart/reconcile/deletion/conflict-preservation, guest $guest_dir"
+if [[ $task == S199 && ${VAULTSYNCD_NATIVE_EXCLUSIONS_PARTIAL_ONLY:-0} == 1 ]]; then
+  echo "PASS S199 partial-only maintenance/reinclude/old-pin/unconfirmed-refusal, guest $guest_dir"
+else
+  echo "PASS $task native defaults/additional/clear/negation/restart/reconcile/deletion/conflict-preservation, guest $guest_dir"
+fi

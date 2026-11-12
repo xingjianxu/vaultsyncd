@@ -366,7 +366,15 @@ impl VersionedContent for Remote {
         length: u64,
     ) -> PortFuture<'a, Result<Vec<u8>, PortError>> {
         Box::pin(async move {
-            assert_eq!(pin.version, base(2).content_version.unwrap().to_string());
+            let expected = if self.path.ends_with("version-one") {
+                1
+            } else {
+                2
+            };
+            assert_eq!(
+                pin.version,
+                base(expected).content_version.unwrap().to_string()
+            );
             let mut bytes = fs::read(&self.path).map_err(io)?
                 [offset as usize..(offset + length) as usize]
                 .to_vec();
@@ -757,4 +765,118 @@ async fn restart_with_unknown_or_third_content_retains_both_evidence_and_baselin
     assert_eq!(fs::read(rig.path.join("stage/remote.part")).unwrap(), NEW);
     db.pool().close().await;
     rig.assert_state(EDIT, 1, 1).await;
+}
+
+// S199/I02/I06: explicit restoration may reinstall the identical fixed baseline,
+// but a completed operation cannot restore a second later deletion.
+#[tokio::test]
+async fn same_version_missing_restore_is_fenced_and_old_operation_never_recreates_a_second_deletion()
+ {
+    for state in [
+        "clean",
+        "prepared",
+        "dirty",
+        "awaiting_commit",
+        "occupied",
+        "changed-version",
+    ] {
+        let rig = Rig::new().await;
+        let db = rig.db().await;
+        let mut request = rig.spec();
+        request.expected = ContentEvidence::Absent;
+        request.baseline_after = base(1);
+        request.pin = VersionPin::new(
+            binding().to_string(),
+            entry().to_string(),
+            base(1).content_version.unwrap().to_string(),
+            digest_of(OLD),
+            OLD.len() as u64,
+        )
+        .unwrap();
+        if state == "changed-version" {
+            request.baseline_after.content_version = base(2).content_version;
+            request.pin.version = base(2).content_version.unwrap().to_string();
+        }
+        fs::remove_file(rig.path.join("work/file.txt")).unwrap();
+        persist(&rig.path.join("server/version-one"), OLD);
+        if state == "occupied" {
+            persist(&rig.path.join("work/file.txt"), EDIT);
+        }
+        if state == "dirty" || state == "awaiting_commit" {
+            sqlx::query("UPDATE local_entries SET dirty=?")
+                .bind(state)
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        let local = rig.local();
+        let apply = ControlledApply::new(db.clone(), local);
+        let remote = Remote {
+            path: rig.path.join("server/version-one"),
+            wrong: false,
+        };
+        let temp = DiskTemp(
+            rig.path
+                .join("stage/same-version.part")
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+        let ports = ClientStorePorts::new(db.clone());
+        let options = DownloadOptions::new(5);
+        if state == "prepared" {
+            persist(Path::new(temp.path()), OLD);
+            store::ApplyStore::new(db.clone())
+                .prepare(&request, temp.path().into(), None)
+                .await
+                .unwrap();
+            // Simulate a new executor after the durable intent but before publication.
+            let recovered = ControlledApply::new(db.clone(), rig.local())
+                .recover(binding())
+                .await
+                .unwrap();
+            assert_eq!(recovered.len(), 1);
+            assert!(recovered[0].1.is_ok());
+        }
+        let result = apply
+            .apply(&request, &remote, &temp, &ports, &options)
+            .await;
+        if state == "clean" || state == "prepared" {
+            result.unwrap();
+            apply
+                .apply(&request, &remote, &temp, &ports, &options)
+                .await
+                .unwrap();
+            assert_eq!(fs::read(rig.path.join("work/file.txt")).unwrap(), OLD);
+            fs::remove_file(rig.path.join("work/file.txt")).unwrap();
+            assert!(
+                apply
+                    .apply(&request, &remote, &temp, &ports, &options)
+                    .await
+                    .is_err()
+            );
+            assert!(!rig.path.join("work/file.txt").exists());
+            request.op = OpId::from_bytes([0x06; 16]);
+            let fresh_temp = DiskTemp(
+                rig.path
+                    .join("stage/new-operation.part")
+                    .to_str()
+                    .unwrap()
+                    .into(),
+            );
+            apply
+                .apply(&request, &remote, &fresh_temp, &ports, &options)
+                .await
+                .unwrap();
+            assert_eq!(fs::read(rig.path.join("work/file.txt")).unwrap(), OLD);
+        } else {
+            assert!(result.is_err(), "{state}");
+            if state == "occupied" {
+                assert_eq!(fs::read(rig.path.join("work/file.txt")).unwrap(), EDIT);
+            } else {
+                assert!(!rig.path.join("work/file.txt").exists());
+            }
+        }
+        db.pool().close().await;
+    }
 }

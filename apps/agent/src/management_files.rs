@@ -35,34 +35,13 @@ pub(crate) async fn download(worker: &Worker, entry: EntryId, op: OpId) -> Resul
         .ok_or_else(|| error("unknown path"))?;
     let fixed = crate::importer::pin(local, row).await?;
     crate::importer::action(local,op,&serde_json::json!({"kind":"manual_download","entry":entry.to_string(),"path":path,"version":fixed.version})).await?;
-    let vault = local.vault.clone();
-    let selected = path.clone();
     let expected = Identity {
         binding: local.binding,
         vault: importer.remote.vault,
         entry,
         version: VersionId::from_hex(&fixed.version).map_err(error)?,
     };
-    tokio::task::spawn_blocking(move || -> Result<(), PortError> {
-        let before = vault.inspect(&selected).map_err(error)?;
-        if before
-            .cloud
-            .as_ref()
-            .is_some_and(|c| c.identity != expected.encode())
-        {
-            return Err(error("placeholder identity changed"));
-        }
-        let mut file = vault.open_read(&selected).map_err(error)?;
-        let mut buffer = vec![0; 256 * 1024];
-        loop {
-            if file.read(&mut buffer).map_err(error)? == 0 {
-                break;
-            }
-        }
-        Ok(())
-    })
-    .await
-    .map_err(error)??;
+    read_pinned(local, &path, expected).await?;
     // Observe actual complete bytes; preserve dirty/awaiting_commit instead of clearing it.
     let observed = local
         .observe_snapshot(&path)
@@ -88,6 +67,36 @@ pub(crate) async fn download(worker: &Worker, entry: EntryId, op: OpId) -> Resul
         .await
         .map_err(error)?;
     tx.commit().await.map_err(error)?;
+    Ok(())
+}
+/// Complete the original pinned version without changing any synchronization state.
+pub(crate) async fn read_pinned(
+    local: &crate::local::Local,
+    path: &str,
+    expected: Identity,
+) -> Result<(), PortError> {
+    let vault = local.vault.clone();
+    let selected = path.to_owned();
+    tokio::task::spawn_blocking(move || -> Result<(), PortError> {
+        let before = vault.inspect(&selected).map_err(error)?;
+        if before
+            .cloud
+            .as_ref()
+            .is_some_and(|c| c.identity != expected.encode())
+        {
+            return Err(error("placeholder identity changed"));
+        }
+        let mut file = vault.open_read(&selected).map_err(error)?;
+        let mut buffer = vec![0; 256 * 1024];
+        loop {
+            if file.read(&mut buffer).map_err(error)? == 0 {
+                break;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(error)??;
     Ok(())
 }
 pub(crate) async fn release(

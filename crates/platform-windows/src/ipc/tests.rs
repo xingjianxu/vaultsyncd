@@ -395,3 +395,34 @@ async fn native_acl_other_local_user_and_token_identity_checks() {
         "check=pass native_other_local_user_acl_denied_client_token_checked_server_token_checked"
     );
 }
+
+// S199: export and explicit restoration may stream GiB; their response deadline
+// must not cancel them at the ordinary five-second framing/management limit.
+#[tokio::test]
+async fn native_recovery_and_download_wait_past_the_ordinary_deadline() {
+    let ep = endpoint();
+    let server = Server::bind(ep.clone(), |r| async move {
+        tokio::time::sleep(IO_TIMEOUT + Duration::from_millis(300)).await;
+        Ok(Service::new("native-s199").handle(&r))
+    })
+    .unwrap();
+    let mut tasks = JoinSet::new();
+    for command in [
+        CommandName::PrepareMaintenance,
+        CommandName::ExportRecovery,
+        CommandName::DownloadEntry,
+        CommandName::ReleaseEntry,
+    ] {
+        let ep = ep.clone();
+        tasks.spawn(async move {
+            let mut r = request("s199-long-recovery");
+            r.command.name = command;
+            let answer = ep.request(&r).await.unwrap();
+            assert_eq!(answer.request_id, r.request_id);
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap();
+    }
+    server.shutdown().await.unwrap();
+}

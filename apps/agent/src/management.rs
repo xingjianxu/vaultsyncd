@@ -586,8 +586,18 @@ pub(crate) async fn execute(
             let (worker, _) = running.get(&binding).ok_or_else(|| reject("NOT_READY"))?;
             let entry = EntryId::from_hex(p.entry_id.as_deref().unwrap()).map_err(error)?;
             let op = OpId::from_hex(p.operation_id.as_deref().unwrap()).map_err(error)?;
-            if control.execution_gate(binding, Some(entry)).await? != ExecutionGate::Ready {
-                return Err(reject("BINDING_BLOCKED"));
+            let gate = control.execution_gate(binding, Some(entry)).await?;
+            if command.name == C::DownloadEntry && gate == ExecutionGate::ReconcileRequired {
+                crate::exclusions::recover(worker, entry, op).await?;
+            } else if gate != ExecutionGate::Ready {
+                return Err(PortError::rejected(
+                    "BINDING_BLOCKED",
+                    if gate == ExecutionGate::Excluded {
+                        "文件仍被排除；先取消排除，再点击下载以显式恢复"
+                    } else {
+                        "绑定暂停、已解除或尚未完成核对"
+                    },
+                ));
             }
             if command.name == C::DownloadEntry {
                 crate::management_files::download(worker, entry, op).await?;
@@ -600,6 +610,17 @@ pub(crate) async fn execute(
         C::ExportRecovery => {
             let binding = binding.unwrap();
             let local = if let Some((worker, _)) = running.get(&binding) {
+                worker
+                    .importer
+                    .callbacks
+                    .wait_idle(std::time::Duration::from_secs(5))
+                    .await
+                    .map_err(error)?;
+                worker
+                    .importer
+                    .callbacks
+                    .close_idle_staging()
+                    .map_err(error)?;
                 worker.importer.local.clone()
             } else {
                 let configured = config

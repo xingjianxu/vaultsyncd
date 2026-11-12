@@ -24,8 +24,35 @@ pub struct Target {
     /// 固定上传内容已知大小。
     pub size: Option<u64>,
 }
+/// 无法作为完整本地文件导出的实际观察；不表示数据已确认或授权删除。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum CurrentContent {
+    /// 必须保全实际完整字节。
+    Complete,
+    /// 健康根中缺失；仅允许已排除/待重新包含且无未确认本地状态的条目。
+    Absent,
+    /// 原生身份、未修改范围与固定版本均已核对的可恢复占位。
+    RemotePartial {
+        /// 固定版本身份。
+        version: String,
+        /// 逻辑长度。
+        size: u64,
+        /// 当前已水合字节，绝不冒充完整文件。
+        on_disk: u64,
+        /// 平台文件身份，最终核对时必须一致。
+        identity: String,
+    },
+}
 /// 平台源：固定快照/原生安全文件句柄，禁止回源下载替代未上传字节。
 pub trait ExportSource: Send + Sync {
+    /// 分类 current 目标；默认必须导出字节。实现不得靠数据库 clean 推断实际完整性。
+    fn current<'a>(
+        &'a self,
+        _target: &'a Target,
+    ) -> PortFuture<'a, Result<CurrentContent, PortError>> {
+        Box::pin(async { Ok(CurrentContent::Complete) })
+    }
     /// 补充尚未入库的本地文件、冲突候选/临时上传快照；调用方需扫描完成或明确报错。
     fn discover(&self, binding: BindingId) -> PortFuture<'_, Result<Vec<Target>, PortError>>;
     /// 返回不可变快照，核对target身份/generation；未知/部分且不能完整恢复必须失败。
@@ -104,7 +131,7 @@ impl ExportRecovery {
         source: &dyn ExportSource,
         sink: &dyn ExportDestination,
     ) -> Result<Manifest, PortError> {
-        let (state, mut targets) = catalog(&self.db, binding).await?;
+        let (original_state, mut targets) = catalog(&self.db, binding).await?;
         let discovered = source.discover(binding).await?;
         targets.extend(discovered.clone());
         let mut seen = std::collections::HashSet::new();
@@ -117,6 +144,21 @@ impl ExportRecovery {
                 return Err(PortError::protocol("恢复来源身份重复或无效"));
             }
         }
+        let mut observations = vec![];
+        for target in &targets {
+            if target.kind != "current" {
+                continue;
+            }
+            let observation = source.current(target).await?;
+            if observation != CurrentContent::Complete {
+                authorize_noncontent(&original_state, target, &observation)?;
+                observations.push((target.clone(), observation));
+            }
+        }
+        targets.retain(|t| !observations.iter().any(|(other, _)| other == t));
+        let mut state = original_state.clone();
+        // state.json 如实列明缺失/部分占位及固定版本，不为它们伪造 .bin 文件。
+        state["current_observations"] = serde_json::to_value(&observations).map_err(error)?;
         let directory = sink.create_new(destination).await?;
         let mut manifest = Manifest {
             format: 1,
@@ -168,11 +210,16 @@ impl ExportRecovery {
             });
         }
         // 数据库中的generation/队列/固定快照变化也使旧目录不能被标为完整。
-        if catalog(&self.db, binding).await?.0 != state {
+        if catalog(&self.db, binding).await?.0 != original_state {
             return Err(super::changed());
         }
         for target in &targets {
             source.verify(target).await?;
+        }
+        for (target, expected) in &observations {
+            if source.current(target).await? != *expected {
+                return Err(super::changed());
+            }
         }
         if source.discover(binding).await? != discovered {
             return Err(super::changed());
@@ -196,6 +243,46 @@ impl ExportRecovery {
         directory.finish().await?;
         validate(&*directory, &manifest).await?;
         Ok(manifest)
+    }
+}
+fn authorize_noncontent(
+    state: &Value,
+    target: &Target,
+    actual: &CurrentContent,
+) -> Result<(), PortError> {
+    let rows = |table: &str| state[table].as_array().into_iter().flatten();
+    let local = rows("local_entries").find(|r| r["entry_id"] == target.id);
+    let base = rows("baseline_entries").find(|r| r["entry_id"] == target.id && r["deleted"] == 0);
+    if local.is_none_or(|r| r["dirty"] != "clean") || base.is_none() {
+        return Err(PortError::rejected(
+            "RECOVERY_CONTENT_REQUIRED",
+            "未确认内容缺失或不完整，保留现场；不能用远端下载替代恢复字节",
+        ));
+    }
+    match actual {
+        CurrentContent::Absent
+            if rows("binding_participation").any(|r| r["entry_id"] == target.id)
+                && local.is_some_and(|r| r["residency"] != "partial") =>
+        {
+            Ok(())
+        }
+        CurrentContent::RemotePartial {
+            version,
+            size,
+            on_disk,
+            ..
+        } if *on_disk < *size
+            && base.unwrap()["content_version_id"] == *version
+            && rows("agent_versions").any(|r| {
+                r["entry_id"] == target.id && r["version_id"] == *version && r["size"] == *size
+            }) =>
+        {
+            Ok(())
+        }
+        _ => Err(PortError::rejected(
+            "RECOVERY_CONTENT_REQUIRED",
+            "缺少排除停放或固定版本占位证明；不能省略恢复内容",
+        )),
     }
 }
 async fn write(d: &dyn ExportDirectory, name: &str, bytes: &[u8]) -> Result<(), PortError> {
@@ -306,6 +393,10 @@ async fn catalog(db: &Database, binding: BindingId) -> Result<(Value, Vec<Target
         serde_json::from_str(&binding_json).map_err(error)?,
     );
     for table in [
+        "binding_controls",
+        "binding_participation",
+        "agent_versions",
+        "agent_actions",
         "baseline_entries",
         "local_entries",
         "remote_entries",
@@ -357,10 +448,7 @@ async fn catalog(db: &Database, binding: BindingId) -> Result<(Value, Vec<Target
                             base["entry_id"] == object["entry_id"] && base["kind"] == "directory"
                         })
                     });
-            if table == "local_entries"
-                && !directory
-                && (object["residency"] != "metadata_only" || object["dirty"] != "clean")
-            {
+            if table == "local_entries" && !directory {
                 targets.push(Target {
                     id: object["entry_id"]
                         .as_str()

@@ -83,6 +83,7 @@ pub struct HydrationCallbacks {
     shared: Arc<Shared>,
     limit: usize,
     pins: Arc<RwLock<HashMap<[u8; 72], VersionPin>>>,
+    verified: Arc<Mutex<HashMap<[u8; 72], Arc<StagingFile>>>>,
     binding: BindingId,
     vault: VaultId,
 }
@@ -98,6 +99,8 @@ impl HydrationCallbacks {
         let limit = config.outstanding;
         let pins = Arc::new(RwLock::new(pins));
         let worker_pins = pins.clone();
+        let verified = Arc::new(Mutex::new(HashMap::new()));
+        let worker_verified = verified.clone();
         let (sender, mut receiver) = mpsc::channel::<ReadDemand>(config.outstanding);
         let shared = Arc::new(Shared::default());
         let state = shared.clone();
@@ -107,7 +110,7 @@ impl HydrationCallbacks {
             match runtime {Err(error)=>{let _=started.send(Err(error));},Ok(runtime)=>{
                 let _=started.send(Ok(()));
                 runtime.block_on(async move {
-                    let worker=Arc::new(Worker{db,content,reads,pins:worker_pins,config,shared:state.clone(),verified:Mutex::new(HashMap::new())});
+                    let worker=Arc::new(Worker{db,content,reads,pins:worker_pins,config,shared:state.clone(),verified:worker_verified});
                     let mut tasks=tokio::task::JoinSet::new();
                     loop {
                         tokio::select! {
@@ -125,6 +128,7 @@ impl HydrationCallbacks {
             shared,
             limit,
             pins,
+            verified,
             binding: owner.0,
             vault: owner.1,
         }))
@@ -145,6 +149,24 @@ impl HydrationCallbacks {
             return Err(io::Error::other("immutable version facts changed"));
         }
         pins.insert(key, version.pin);
+        Ok(())
+    }
+    /// Close idle remote staging leases before recovery scans; keep every cached byte.
+    /// Active readers retain their own Arc, so a race can only make the scan refuse.
+    pub fn close_idle_staging(&self) -> io::Result<()> {
+        if !self
+            .shared
+            .active
+            .lock()
+            .map_err(|_| io::Error::other("hydration requests poisoned"))?
+            .is_empty()
+        {
+            return Err(io::Error::other("recovery scan requires idle hydration"));
+        }
+        self.verified
+            .lock()
+            .map_err(|_| io::Error::other("verified staging poisoned"))?
+            .clear();
         Ok(())
     }
     /// Current counters. No file or database reads on the caller thread.
@@ -237,6 +259,9 @@ impl Callbacks for HydrationCallbacks {
         {
             active.cancel.cancel();
         }
+        // Do not leave exclusive staging handles alive while the worker runtime retires.
+        // In-flight requests own separate references and must still reach wait_idle.
+        self.verified.lock().expect("verified staging").clear();
     }
 }
 impl Drop for HydrationCallbacks {
@@ -250,7 +275,7 @@ struct Worker {
     reads: UserReads,
     pins: Arc<RwLock<HashMap<[u8; 72], VersionPin>>>,
     config: HydrationConfig,
-    verified: Mutex<HashMap<[u8; 72], Arc<StagingFile>>>,
+    verified: Arc<Mutex<HashMap<[u8; 72], Arc<StagingFile>>>>,
     shared: Arc<Shared>,
 }
 impl Worker {
@@ -397,6 +422,11 @@ impl Worker {
             })?;
 
             let mut verified = self.verified.lock().map_err(|_| CORRUPT)?;
+            // Serialize with disconnect's clear: a finishing download cannot repin
+            // its exclusive staging handle after maintenance has closed admission.
+            if cancel.is_cancelled() || self.shared.closed.load(Ordering::SeqCst) {
+                return Err(CANCELLED);
+            }
             if verified.len() >= 16 {
                 if let Some(key) = verified.keys().next().copied() {
                     verified.remove(&key);

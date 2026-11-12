@@ -910,6 +910,9 @@ impl Worker {
     }
 }
 fn failure(e: PortError) -> ActionFailure {
+    if e.code() == Some("LOCAL_CHANGED") {
+        eprintln!("event=local-action-refused reason={e:?}");
+    }
     use vaultsyncd_agent_core::executor::FailureScheduling;
     use vaultsyncd_domain::error::ErrorCode;
     let (code, scheduling) = match &e {
