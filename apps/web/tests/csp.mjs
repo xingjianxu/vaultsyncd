@@ -12,6 +12,9 @@ assert.ok(policy.includes("script-src 'self';"), "style nonce must never grant i
 assert.ok(policy.includes("style-src 'self' 'nonce-__STYLE_NONCE__';"));
 assert.ok(!policy.includes("sha256-"), "removed React Aria style exceptions must not survive");
 
+assert.ok(policy.includes("frame-src blob:;"), "only verified local PDF blobs may be framed");
+assert.ok(policy.includes("object-src 'none';"), "do not allow general plugin embeds");
+
 const nonce = "test-response-specific-nonce";
 const markup = renderToStaticMarkup(createElement(MantineProvider, { getStyleNonce: () => nonce },
   createElement(AppShell, { header: { height: 60 }, navbar: { width: 240, breakpoint: "sm", collapsed: { mobile: true } }, padding: "md" },

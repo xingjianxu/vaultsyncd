@@ -4,10 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
-  server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client", "pdfjs-dist"] },
-  plugins: [{ name: "preview-pdf-test-double", enforce: "pre", resolveId(id) { if (id === "pdfjs-dist") return "\0test-pdf"; },
-    load(id) { if (id === "\0test-pdf") return `export const GlobalWorkerOptions = {}; export const AnnotationMode = { DISABLE: 0 };
-      export const state = {}; export function getDocument(options) { state.options = options; return state.task; }`; } }],
+  server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] },
 });
 try {
   const { previewKind, downloadPreview, boundedCanvas, rasterDimensions, MAX_PREVIEW_BYTES, MAX_CANVAS_PIXELS } = await server.ssrLoadModule("/apps/web/src/features/files/preview.ts");
@@ -64,37 +61,16 @@ try {
   assert.deepEqual(rasterDimensions(avif, "avif"), { width: 2, height: 3 });
   avif.writeUInt32BE(9999999, avif.length - 8); assert.throws(() => rasterDimensions(avif, "avif"), /超限/);
 
-  // 渲染器用受控 PDF 适配器验证安全选项、取消、页面清理和文档释放；真实 worker/canvas 另做浏览器验收。
-  globalThis.window = { location: { href: "https://test.invalid/" } };
   const { createPreviewRenderer } = await server.ssrLoadModule("/apps/web/src/features/files/preview-renderer.ts");
-  const { state } = await server.ssrLoadModule("\0test-pdf");
-  let cleaned = 0, destroyed = 0, renderOptions, rejectRender;
-  const page = { getViewport: ({ scale }) => ({ width: 600 * scale, height: 800 * scale }), cleanup: () => { cleaned++; },
-    render: options => { renderOptions = options; return { promise: new Promise((_resolve, reject) => { rejectRender = reject; }), cancel: () => rejectRender(new Error("render canceled")) }; } };
-  state.task = { promise: Promise.resolve({ numPages: 2, getPage: async number => { assert.equal(number, 2); return page; } }), destroy: async () => { destroyed++; } };
-  const renderer = await createPreviewRenderer(new Blob(["%PDF-test"]), "pdf", new AbortController().signal);
-  for (const flag of ["isEvalSupported", "enableXfa", "useWasm", "useSystemFonts"]) assert.equal(state.options[flag], false);
-  assert.equal(state.options.disableFontFace, true); assert.equal(state.options.stopAtErrors, true);
-  assert.match(state.options.cMapUrl, /^https:\/\/test.invalid\/assets\/pdfjs\/cmaps\/$/);
-  assert.equal(renderer.pages, 2);
-  const controller = new AbortController();
-  const rendering = renderer.render({ getContext: () => ({}) }, 2, 2, controller.signal);
-  await new Promise(resolve => setTimeout(resolve, 0)); controller.abort();
-  await assert.rejects(rendering, /canceled/); assert.equal(cleaned, 1); assert.equal(renderOptions.annotationMode, 0);
-  await renderer.destroy(); assert.equal(destroyed, 1);
-  const password = new Error("password"); password.name = "PasswordException";
-  state.task = { promise: Promise.reject(password), destroy: async () => { destroyed++; } };
-  await assert.rejects(createPreviewRenderer(new Blob(["%PDF-encrypted"]), "pdf", new AbortController().signal), { name: "PasswordException" });
-  assert.equal(destroyed, 2);
   let bitmapClosed = 0;
   globalThis.createImageBitmap = async () => ({ width: 2, height: 3, close: () => { bitmapClosed++; } });
   const raster = await createPreviewRenderer(new Blob([png(2, 3)]), "png", new AbortController().signal);
   let drawn = false;
-  await raster.render({ getContext: () => ({ drawImage: () => { drawn = true; } }) }, 1, 1, new AbortController().signal);
+  await raster.render({ getContext: () => ({ drawImage: () => { drawn = true; } }) }, new AbortController().signal);
   assert.ok(drawn); await raster.destroy(); assert.equal(bitmapClosed, 1);
   const decoding = new AbortController();
   globalThis.createImageBitmap = async () => { decoding.abort(); return { width: 2, height: 3, close: () => { bitmapClosed++; } }; };
   await assert.rejects(createPreviewRenderer(new Blob([png(2, 3)]), "png", decoding.signal), { name: "AbortError" });
   assert.equal(bitmapClosed, 2, "迟到的原生解码结果必须关闭");
-  console.log("在线预览：白名单、50MiB 网络前门禁、固定版本校验、栅格签名/尺寸、画布预算、PDF 安全选项、取消/迟到结果与资源释放均通过");
+  console.log("在线预览：白名单、50MiB 网络前门禁、固定版本校验、栅格签名/尺寸、画布预算、取消/迟到结果与资源释放均通过");
 } finally { await server.close(); }

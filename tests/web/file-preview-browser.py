@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""S208: built Web + Chromium + real isolated btrfs preview integration.
+"""S209: built Web + Chromium + real isolated btrfs preview integration.
 
 Run in `nix develop` after building Web. VAULTSYNCD_TEST_BIN_DIR and
 VAULTSYNCD_TEST_WEB_DIR can select the exact deployed binaries/assets instead.
 VAULTSYNCD_WEB_RUN_ROOT selects an existing writable directory beneath
 /data/vaultsyncd-dev (default: /data/vaultsyncd-dev). All generated files,
-browser profiles, downloads and caches stay in a unique S208 run directory.
+browser profiles, downloads and caches stay in a unique S209 run directory.
 
 Only explicitly armed proxy faults alter real responses: bad hash/oversize
 snapshot metadata, corrupt/truncated content, or delayed content delivery.
 Fixtures enter the service via real filesystem writes and the observer; no SQL,
-production state, external network, iframe, or browser API mocks are used.
+production state, external network, browser API mocks are used.
 `--check-fixtures` validates the deterministic PNG/PDF construction only; it is
 NOT a substitute for the integration run or a claim that previews rendered.
 """
@@ -26,6 +26,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import struct
 import subprocess
 import threading
@@ -33,7 +34,7 @@ import time
 from urllib.parse import urlsplit
 import zlib
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import Error, expect, sync_playwright
 from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,7 +42,7 @@ BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug")).res
 WEB = Path(os.environ.get("VAULTSYNCD_TEST_WEB_DIR", REPO / "apps/web/dist")).resolve()
 DEV = Path("/data/vaultsyncd-dev").resolve()
 RUN_PARENT = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", str(DEV))).resolve()
-RUN = RUN_PARENT / f"S208-file-preview-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = RUN_PARENT / f"S209-native-pdf-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 PDF_NAME = "two pages & '文档'.pdf"
 PNG_NAME = "bands & '图片'.png"
 
@@ -78,11 +79,11 @@ def raster_fixtures():
 
 
 def pdf_fixture(active=False):
-    """ASCII PDF with a real xref, two colored pages, and optional inert probe.
+    """ASCII PDF with a real xref, two colored pages, and an optional action probe.
 
     The optional document action only assigns a marker, has no links/network,
-    dialogs, filesystem actions or application commands. The viewer must ignore
-    PDF JavaScript; do not run this fixture in a general-purpose PDF application.
+    dialogs, filesystem actions or application commands. The native viewer owns
+    document actions; the integration test only checks host-page isolation.
     """
     def stream(data):
         return f"<< /Length {len(data)} >>\nstream\n".encode() + data + b"\nendstream"
@@ -112,60 +113,6 @@ def pdf_fixture(active=False):
 
 
 
-def pdf_mask_fixture(kind):
-    """Tiny image with an over-budget mask, without dangerous huge allocations.
-
-    4097 * 4096 is just above the 16 Mi-pixel limit and below the edge limit.
-    The original unpatched worker expanded a 17 KiB SMask PDF into a 64 MiB
-    RGBA buffer despite maxImageSize; keep this as a real-worker regression.
-    The nested variant puts the oversized SMask behind a second 1x1 image.
-    """
-    if kind not in ("SMask", "Mask", "nested", "composite", "normal"):
-        raise ValueError(kind)
-
-    def stream(header, data):
-        return header + f" /Length {len(data)} >>\nstream\n".encode() + data + b"\nendstream"
-
-    width, height = (96, 64) if kind == "normal" else (1, 4096) if kind == "composite" else (4097, 4096)
-    parent_width = 4097 if kind == "composite" else 1
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >>",
-        stream(b"<<", b"q 10 0 0 10 0 0 cm /Im Do Q"),
-        stream(f"<< /Type /XObject /Subtype /Image /Width {parent_width} /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /".encode()
-               + (b"Mask" if kind == "Mask" else b"SMask") + b" 6 0 R", b"\xff\0\0" * parent_width),
-    ]
-    if kind == "nested":
-        objects.append(stream(b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 7 0 R", b"\xff"))
-    mask_header = f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /Filter /FlateDecode".encode()
-    if kind == "Mask":
-        mask_header += b" /ImageMask true /BitsPerComponent 1"
-        size = ((width + 7) // 8) * height
-    else:
-        mask_header += b" /ColorSpace /DeviceGray /BitsPerComponent 8"
-        size = width * height
-    objects.append(stream(mask_header, zlib.compress(b"\xff" * size)))
-    result = bytearray(b"%PDF-1.4\n")
-    offsets = [0]
-    for index, body in enumerate(objects, 1):
-        offsets.append(len(result))
-        result.extend(f"{index} 0 obj\n".encode() + body + b"\nendobj\n")
-    start = len(result)
-    result.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
-    for offset in offsets[1:]:
-        result.extend(f"{offset:010d} 00000 n \n".encode())
-    result.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n".encode())
-    return bytes(result)
-
-
-def mask_fixtures():
-    return {"overbudget-smask.pdf": pdf_mask_fixture("SMask"),
-            "overbudget-mask.pdf": pdf_mask_fixture("Mask"),
-            "overbudget-nested-smask.pdf": pdf_mask_fixture("nested"),
-            "overbudget-composite.pdf": pdf_mask_fixture("composite")}
-
-
 def check_fixtures():
     for active in (False, True):
         data = pdf_fixture(active)
@@ -178,25 +125,6 @@ def check_fixtures():
             assert data[offset:].startswith(f"{index} 0 obj\n".encode())
         assert b"/Count 2" in data
         assert (b"/JavaScript" in data) == active
-    for name, data in mask_fixtures().items():
-        start = int(re.search(rb"startxref\n(\d+)\n", data).group(1))
-        assert data[start:].startswith(b"xref\n"), name
-        table = data[start:].splitlines()
-        count = int(table[1].split()[1])
-        for index, line in enumerate(table[3:count + 2], 1):
-            assert data[int(line.split()[0]):].startswith(f"{index} 0 obj\n".encode()), name
-        if name == "overbudget-composite.pdf":
-            assert b"/Width 4097 /Height 1" in data and b"/Width 1 /Height 4096" in data, name
-        else:
-            assert b"/Width 1 /Height 1" in data and b"/Width 4097 /Height 4096" in data, name
-        assert 4097 * 4096 > 16 * 1024 * 1024 and len(data) < 20 * 1024, name
-        mask_stream = re.search(rb"/Filter /FlateDecode[^>]* /Length (\d+) >>\nstream\n", data)
-        assert mask_stream, name
-        payload = data[mask_stream.end():mask_stream.end() + int(mask_stream[1])]
-        expected = ((4097 + 7) // 8) * 4096 if name == "overbudget-mask.pdf" else 4096 if name == "overbudget-composite.pdf" else 4097 * 4096
-        assert len(zlib.decompress(payload)) == expected, name
-        if name == "overbudget-nested-smask.pdf":
-            assert b"/SMask 6 0 R" in data and b"/SMask 7 0 R" in data
     data = png_fixture()
     position, rows = 8, None
     while position < len(data):
@@ -209,7 +137,7 @@ def check_fixtures():
         position += 12 + length
     assert len(rows) == 64 * (1 + 96 * 3)
     assert rows[:4] == b"\0\xff\0\0" and rows[32 * 289:32 * 289 + 4] == b"\0\0\0\xff"
-    print("S208 fixtures: PNG CRC/scanlines, PDF xrefs and over-budget SMask/Mask/nested-mask fixtures verified", flush=True)
+    print("S209 fixtures: PNG CRC/scanlines and PDF xrefs verified", flush=True)
 
 
 def checked(args, **kwargs):
@@ -227,16 +155,19 @@ def main():
     RUN.mkdir(mode=0o700)
     for name in ("tmp", "cache", "downloads", "evidence", "vaults", "state"):
         (RUN / name).mkdir(mode=0o700)
-    os.environ.update(TMPDIR=str(RUN / "tmp"), XDG_CACHE_HOME=str(RUN / "cache"))
+    # Full Chromium's singleton socket must fit the Unix 108-byte path limit.
+    browser_tmp = DEV / "cache/tmp" / f"S209-{os.getpid()}"
+    browser_tmp.mkdir(mode=0o700)
+    os.environ.update(TMPDIR=str(browser_tmp), XDG_CACHE_HOME=str(RUN / "cache"))
     assert checked(["findmnt", "-no", "FSTYPE", "-T", RUN]).strip() == "btrfs"
     evidence = RUN / "evidence"
-    print(f"S208 artifacts: {RUN}", flush=True)
+    print(f"S209 artifacts: {RUN}", flush=True)
     documents, archive = RUN / "vaults/documents", RUN / "vaults/archive"
     documents.mkdir(); archive.mkdir(); (documents / "child").mkdir()
     fixtures = {
-        PDF_NAME: pdf_fixture(), PNG_NAME: png_fixture(), "active.pdf": pdf_fixture(active=True), **raster_fixtures(), **mask_fixtures(),
-        "normal-smask.pdf": pdf_mask_fixture("normal"),
-        "broken.pdf": b"%PDF-1.4\nnot a valid document\n",
+        PDF_NAME: pdf_fixture(), PNG_NAME: png_fixture(), "active.pdf": pdf_fixture(active=True), **raster_fixtures(),
+        "broken.pdf": b"not a PDF document\n",
+        "malformed.pdf": b"%PDF-1.4\nnot a valid document\n",
         "broken.png": b"\x89PNG\r\n\x1a\nnot a valid image\n",
         "unsupported.html": b"<!doctype html><script>globalThis.__s208UntrustedExecuted=true</script>",
         "unsupported.svg": b'<svg xmlns="http://www.w3.org/2000/svg" onload="globalThis.__s208UntrustedExecuted=true"><rect width="20" height="20"/></svg>',
@@ -377,7 +308,7 @@ def main():
         with browser_runtime() as playwright:
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir=str(RUN / "browser-profile"), downloads_path=str(RUN / "downloads"),
-                headless=True, accept_downloads=True, viewport={"width": 1440, "height": 900})
+                executable_path=shutil.which("chromium"), headless=True, accept_downloads=True, viewport={"width": 1440, "height": 900})
             context.expose_binding("s208CspViolation", lambda _source, detail: violations.append(detail))
             context.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
                 window.s208CspViolation({directive:e.effectiveDirective, blocked:e.blockedURI}));""")
@@ -517,40 +448,60 @@ def main():
             checks.append("preview/keyboard-context-menu/Escape/light-dark-320-1440")
 
             open_preview(PDF_NAME, menu=True)
-            first = rendered(red=True, blue=False)
-            expect(preview.locator("iframe, object, embed")).to_have_count(0)
-            preview.get_by_role("button", name="下一页", exact=True).click()
-            second = rendered(red=False, blue=True)
-            assert second["blue"] > second["red"]
-            expect(preview.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
-            preview.get_by_role("button", name="上一页", exact=True).click()
-            rendered(red=True, blue=False)
-            expect(preview.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
-            preview.get_by_role("combobox", name="PDF 缩放", exact=True).click()
-            page.get_by_role("option", name="150%", exact=True).click()
-            zoomed = wait_for(lambda: (value if (value := pixels()) and value["width"] > first["width"] else None), "PDF zoom did not increase rendered resolution")
-            preview.get_by_role("combobox", name="PDF 缩放", exact=True).click()
-            page.get_by_role("option", name="100%", exact=True).click()
-            wait_for(lambda: pixels()["width"] < zoomed["width"], "PDF zoom out did not reduce rendered resolution")
+            def native_pdf():
+                expect(preview.locator("iframe.file-preview-pdf")).to_be_visible(timeout=20000)
+                expect(preview.locator("canvas, object, embed")).to_have_count(0)
+                frame = wait_for(lambda: next((f for f in page.frames if f.url.startswith("chrome-extension://") and f.locator("pdf-viewer").count()), None), "browser PDF viewer did not load")
+                expect(frame.locator("pdf-viewer")).to_be_visible(timeout=20000)
+                wait_for(lambda: frame.locator("pdf-viewer").evaluate("v => v.loadProgress === 100 || v.loadProgress_ === 100"), "browser PDF did not finish loading")
+                return frame
+
+            native = native_pdf()
+            # Browser-owned toolbar and plugin are inspected through Playwright;
+            # the application never reaches into the extension or parses pages.
+            native_state = native.locator("pdf-viewer").evaluate("v => ({dimensions:v.documentDimensions, progress:v.loadProgress_, html:v.shadowRoot.innerHTML})")
+            assert len(native_state["dimensions"]["pageDimensions"]) == 2, native_state
+            selector = native.locator("input#pageSelector")
+            selector.fill("2"); selector.press("Enter")
+            expect(selector).to_have_value("2")
+            selector.fill("1"); selector.press("Enter")
+            expect(selector).to_have_value("1")
+            zoom = native.locator("viewer-toolbar input").first
+            zoom.fill("150%"); zoom.press("Enter")
+            expect(zoom).to_have_value("150%")
+            wait_for(lambda: native.locator("pdf-viewer").evaluate("v => v.viewport_.getZoom() > 1"), "native zoom did not take effect")
+            zoom.fill("100%"); zoom.press("Enter")
+            expect(zoom).to_have_value("100%")
+            (evidence / "native-viewer.json").write_text(json.dumps(native_state, ensure_ascii=False, indent=2))
+            page.screenshot(path=str(evidence / "native-pdf.png"))
             for scheme in ("light", "dark"):
                 page.emulate_media(color_scheme=scheme)
                 for width in (320, 1440):
                     page.set_viewport_size({"width": width, "height": 900})
-                    rendered(red=True, blue=False)
+                    native_pdf()
                     box = preview.bounding_box()
                     assert box and box["x"] >= -1 and box["x"] + box["width"] <= width + 1, box
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                     page.wait_for_timeout(250)  # Capture after Mantine's enter transition.
                     page.screenshot(path=str(evidence / f"pdf-{scheme}-{width}.png"))
             page.set_viewport_size({"width": 1440, "height": 900})
+            revoked_url = preview.locator("iframe.file-preview-pdf").get_attribute("src")
             close_preview()
-            assert any("/assets/pdfjs/standard_fonts/" in url for url in resources), "bundled PDF standard font was not requested"
-            checks.append("PDF/two-real-pages/previous-next/zoom/canvas/local-font/CSP-layout")
+            revoked = context.new_page()
+            try:
+                revoked.goto(revoked_url)
+                raise AssertionError("closed PDF Blob URL is still readable")
+            except Error as error:
+                assert "ERR_FILE_NOT_FOUND" in str(error), error
+            finally:
+                revoked.close()
+            assert not any("pdfjs" in url for url in resources), "application PDF.js assets must be removed"
+            checks.append("PDF/browser-native-viewer/two-pages/toolbar-page-and-zoom/closed-Blob-revoked/CSP-layout")
 
-            open_preview("active.pdf"); rendered(red=True, blue=False)
+            open_preview("active.pdf"); native_pdf()
             assert not page.evaluate("Boolean(window.__s208PdfExecuted || window.__s208UntrustedExecuted)")
             close_preview()
-            checks.append("PDF/OpenAction-harmless-marker-not-executed")
+            checks.append("PDF/browser-owned-document-actions/do-not-affect-host-page")
             for name in ("unsupported.html", "unsupported.svg"):
                 link(name).click(button="right")
                 expect(page.get_by_role("menuitem", name="预览", exact=True)).to_have_count(0)
@@ -579,7 +530,8 @@ def main():
                 assert target.read_bytes() == fixtures[name], name
 
             for name in (PDF_NAME, PNG_NAME):
-                open_preview(name); rendered(red=True, blue=name == PNG_NAME)
+                open_preview(name)
+                native_pdf() if name == PDF_NAME else rendered()
                 download_exact(name); close_preview()
             for name in ("broken.pdf", "broken.png"):
                 open_preview(name)
@@ -589,25 +541,12 @@ def main():
                 download_exact(name); close_preview()
             checks.append("corrupt-PDF-image/error/retry/download-original-bytes")
 
-            open_preview("normal-smask.pdf"); rendered(red=True, blue=False); close_preview()
-            # PDF.js only decodes the immediate mask; a mask's own /SMask is
-            # ignored upstream, so it cannot trigger the oversized allocation.
-            # Do not demand an error for bytes the decoder never consumes.
-            open_preview("overbudget-nested-smask.pdf"); rendered(red=True, blue=False)
-            expect(preview.get_by_role("alert")).to_have_count(0)
-            download_exact("overbudget-nested-smask.pdf"); close_preview()
-            for name in mask_fixtures():
-                if name == "overbudget-nested-smask.pdf":
-                    continue
-                open_preview(name)
-                alert = preview.get_by_role("alert")
-                expect(alert).to_be_visible(timeout=20000)
-                expect(alert).to_contain_text(re.compile(
-                    r"(尺寸|像素|资源).*(超限|上限|限制)|(image|pixel|resource).*(exceed|limit|budget)|maximum allowed size", re.I))
-                expect(preview.locator("canvas")).not_to_be_visible()
-                download_exact(name)
-                close_preview()
-            checks.append("PDF/real-worker/overbudget-SMask-Mask-composite-rejected/unused-nested-mask-ignored/normal-mask-rendered/exact-original-download")
+            open_preview("malformed.pdf")
+            expect(preview.locator("iframe.file-preview-pdf")).to_be_visible(timeout=20000)
+            # A valid signature is enough to hand off; errors inside the native
+            # reader belong to the browser, while original download stays usable.
+            download_exact("malformed.pdf"); close_preview()
+            checks.append("PDF/malformed-document/handed-to-native-reader/download-original")
 
             for mode in ("corrupt", "truncate"):
                 arm(mode, by_name[PNG_NAME]["entry_id"])
@@ -670,6 +609,32 @@ def main():
             open_preview("other.png"); rendered(); close_preview()
             checks.append("directory-navigation/in-flight-close/vault-change/unmount")
 
+            # Disable Chromium's viewer with a real browser preference, not a JS
+            # test double, and verify that the application retains its download.
+            disabled_profile = RUN / "browser-pdf-disabled"
+            (disabled_profile / "Default").mkdir(parents=True)
+            (disabled_profile / "Default/Preferences").write_text(json.dumps({"plugins": {"always_open_pdf_externally": True}}))
+            disabled = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(disabled_profile), executable_path=shutil.which("chromium"), headless=True,
+                downloads_path=str(RUN / "downloads"), accept_downloads=True)
+            disabled_page = disabled.pages[0]
+            disabled_page.goto(origin + f"/#/files/{vault}")
+            assert disabled_page.evaluate("navigator.pdfViewerEnabled") is False
+            disabled_page.get_by_label(field_label("登录名")).fill("owner")
+            disabled_page.get_by_label(field_label("密码")).fill(password)
+            disabled_page.get_by_role("button", name="登录", exact=True).click()
+            disabled_page.get_by_role("table", name="文件与目录", exact=True).get_by_role("button", name=PDF_NAME, exact=True).click()
+            fallback = disabled_page.get_by_role("dialog", name=f"预览 · {PDF_NAME}", exact=True)
+            expect(fallback.get_by_role("alert")).to_contain_text("浏览器未启用 PDF 预览", timeout=20000)
+            expect(fallback.locator("iframe")).to_have_count(0)
+            with disabled_page.expect_download() as pending:
+                fallback.get_by_role("button", name="下载原文件", exact=True).click()
+            target = RUN / "downloads/disabled-viewer.pdf"
+            pending.value.save_as(target)
+            assert target.read_bytes() == fixtures[PDF_NAME]
+            disabled.close()
+            checks.append("PDF/native-viewer-disabled/real-browser-preference/fallback-and-original-download")
+
             page.evaluate("path => { location.hash = path; }", f"/files/{vault}")
             _, release, finished = delayed_preview()
             arm()
@@ -689,7 +654,7 @@ def main():
             assert not [item for item in requests if item.get("proxy_error")], requests
             assert not [item for item in requests if item["method"] != "GET" and ("/operations" in item["path"] or "/uploads" in item["path"])], "preview wrote file content"
             checks.append("no-pageerrors/CSP-violations/external-network/script-dialogs/content-writes")
-            (evidence / "pixels.json").write_text(json.dumps({"png": png_pixels, "pdf_first": first, "pdf_second": second, "pdf_zoomed": zoomed}, indent=2))
+            (evidence / "pixels.json").write_text(json.dumps({"png": png_pixels}, indent=2))
     except Exception as cause:
         failure = f"{type(cause).__name__}: {cause}"
         raise
@@ -711,9 +676,9 @@ def main():
             "pageerrors": errors, "csp": violations, "external_requests": external, "dialogs": dialogs, "asset_requests": resources,
             "limitations": ["Animated image playback is not tested; previews show a static frame.",
                             "Oversize and bad-hash metadata are controlled proxy responses, not huge real files.",
-                            "Only the harmless PDF JavaScript marker is tested; no hostile action/network payload is executed."],
+                            "PDF rendering, actions, passwords and decoder budgets are browser-owned; only Chromium native viewer is exercised."],
         }, ensure_ascii=False, indent=2))
-    print(f"S208 preview: {len(checks)} check groups passed; evidence: {evidence}", flush=True)
+    print(f"S209 preview: {len(checks)} check groups passed; evidence: {evidence}", flush=True)
 
 
 if __name__ == "__main__":

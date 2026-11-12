@@ -18,7 +18,7 @@ use tower_http::services::ServeDir;
 pub const WEB_DIR_ENV: &str = "VAULTSYNCD_WEB_DIR";
 /// A fresh nonce permits Mantine's generated style elements, never inline scripts.
 /// Browser/CSP tests read this single policy template; only the nonce is replaced.
-pub const WEB_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'nonce-__STYLE_NONCE__'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+pub const WEB_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'nonce-__STYLE_NONCE__'; img-src 'self' data:; connect-src 'self'; frame-src blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 /// Validated static resources for the Web control plane.
 pub struct WebAssets {
     directory: PathBuf,
@@ -102,7 +102,7 @@ impl WebAssets {
                 // HTML already carries its per-response nonce. Static resources
                 // have no style elements and use the same policy without a nonce.
                 response.headers_mut().entry(header::CONTENT_SECURITY_POLICY).or_insert_with(||
-                    HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+                    HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
                 response
             }))
     }
