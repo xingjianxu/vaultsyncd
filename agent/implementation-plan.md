@@ -886,4 +886,4 @@ S001—S014 环境/平台；S015—S031 模型/持久化；S032—S052 服务端
 - **主要落点**：Web文件查看器、React CodeMirror/语言加载、Markdown渲染、依赖锁与对应验收。
 - **实现要点**：最新版 @uiw/react-codemirror 精确锁定、默认只读与按文件名语法高亮；Markdown默认GFM渲染可切代码，HTML/SVG源码不执行；沿用固定版本/长度/摘要与会话取消围栏。文本2MiB门禁，UTF-8/带BOM UTF-16严格解码，二进制拒绝；Markdown原始HTML跳过、链接与图片只显示文字不请求资源。无在线保存及wire/schema变化。
 - **本步验收**：根类型、Web测试/构建、真实Chromium文本与Markdown/高亮/只读/安全/取消/布局及PDF图片回归，Nix纯构建、本机prod/dev部署、健康与静态资源核对；交接、合master与任务树清理。
-- **交接**：[S210](tasks/S210.md)；实现e79299a已部署generation283，prod/dev同包、136文件/408字节与精确包13+17组通过；合master与清理收尾。
+- **交接**：[S210](tasks/S210.md)；实现e79299a已部署generation283，prod/dev同包、136文件/408字节与精确包13+17组通过；实现/交接04c703e已ff合master，六挂载及本卡树/分支已清理。
