@@ -562,3 +562,13 @@ S213收尾：项目实现43ae33d/交接50fc007已ff合master，主机53c2db0/429
 源 `bf8acc627387523a203d9d105bd1776f87141076`，主机pin `e5caced011456cb5ca682640c2e3f04df25655eb` 已ff合main。既有 `tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S214-file-sorting-20261112/deploy` 完成pure/dry/test/HTTPS、IPC、ServerId及归属核对/switch，result passed/cleaned=true，主机锁不变。运行/开机generation287，system `/nix/store/mdy6yg7jvhnyjprg39lbg8fc9smh6v74-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/inp5h2n5fa8kp5j0i445ya3wsq9qjva7-vaultsyncd-0.1.7`。仅展示排序，无数据库迁移、文件写入或协议变化。
 
 根类型/Web九套/构建、独立复审、Nix包内80项与精确包Chromium全套文件浏览器通过。dev经永久入口有序restart同包，原数据/身份和prod隔离保持；三源136文件/408次字节核对、严格TLS/匿名401/CSP及最终双环境health=ok。未向持久实例写测试样本。完整证据及旧generation286 system/boot GC roots在任务根，回退可使用其中previous-system/previous-boot；dev按管理器restart指定原S213包，保留现有数据，不重置配置。交接见 [S214](../../agent/tasks/S214.md)。
+
+## S215 ONLYOFFICE原生只读查看器部署（generation288）
+
+发布源 `6a99df4158bab3c3fcc3dca5f2f9196b3df0a2dd`（功能182bfe1，含S214排序），主机pin `65316dc4d48ee0dbedfde0846f0ccd39f537db3e` 已ff合main。既有部署脚本完成pure/dry/test/HTTPS、IPC、ServerId及UID/归属核对/switch，result passed/cleaned=true；主机锁不变。运行/开机generation288，system `/nix/store/38xqv31y8xxgpha1qikk9bia2i29xzh9-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/v5x74fbkhv7wk1xqmhvkd61xfl1r49ca-vaultsyncd-0.1.7`。只增加内存viewer会话与HTTP契约，无数据库或IPC迁移。
+
+最终精确包Office真实Chromium16组（含XLSX工作表0→1→0、签名与明文提权真实拒绝）和包内81项通过，server121项/根类型/Web九套/构建/生成一致及21项生成器/独立复审通过；PDF图片17组、文本13组回归通过。prod/dev同二进制，原账号/Vault/ServerId保持；136文件三源408次字节、严格TLS/匿名POST及DELETE401/精确CSP与凭据接线通过。dev使用永久入口restart，无任务路径依赖。没有向持久实例写测试文档。
+
+Office默认直接DocEditor只读浏览；CSP按配置精确加入OnlyOffice来源，API.js为受信任代码，仅空事件体哈希例外兼容上游Safari属性，不允许非空inline/eval。临时源120秒/两准入，关闭撤销，但已取得的副本/上游缓存不可收回，源准入不等于上游执行并发。旧PDF转换API继续兼容。
+
+证据 `/data/vaultsyncd-dev/S215-office-viewer-20261112/`，最终精确包run `S215-office-20261112T215042-1928363`；部署 `deploy/local-20261112T215205-1930595/` 保存generation287的previous-system/previous-boot GC roots。回退先对该旧system执行test并核对SSH/prod健康，再恢复启动profile/switch及主机pin；dev由管理器restart至S214包 `/nix/store/inp5h2n5fa8kp5j0i445ya3wsq9qjva7-vaultsyncd-0.1.7`，保留账号/Vault/配置，无需回退数据库。未实际执行回退；不删除旧roots或实验原始证据。交接见 [S215](../../agent/tasks/S215.md)。

@@ -94,3 +94,9 @@ tools/dev-server.sh start --package /nix/store/<本次验收包>
 Office预览为PDF，原文件下载保持；支持doc/docx/xls/xlsx/ppt/pptx/odt/ods/odp。输入和PDF各限50MiB，两项活动转换准入，120秒超时；关闭界面撤销交付和临时源，不代表能撤回OnlyOffice已经读取的内容或已入队工作。取消不提前释放转换worker的准入；超时后上游仍可能继续，其执行并发由OnlyOffice自身配置约束。OnlyOffice可能修复部分损坏文件并产出合法PDF，这不改写原件，也不是修复提交。排版、分页、字体和浏览器PDF行为保持第三方边界，不提供交互工作表或在线保存。
 
 S213（2026-11-12）已通过stop/configure-office/start将持久dev切换为与生产generation286同包 `8qfvjkalrkdhfdhpig9zh7liix6kwsp8-vaultsyncd-0.1.7`，使用同机OnlyOffice；原dev身份/账号/Vault和Windows连接配置保持，应用CSP不变。最终精确包Chromium14组及prod/dev资源、密钥和HTTPS验证通过。合并清理结果见 [S213交接](../../agent/tasks/S213.md)。
+
+## S215 原生Office只读查看器
+
+S215（2026-11-12）dev已由永久入口有序restart至与生产generation288同包 `/nix/store/v5x74fbkhv7wk1xqmhvkd61xfl1r49ca-vaultsyncd-0.1.7`，发布源6a99df4包含S214排序。原ServerId/账号/Vault保持，Office运行时配置和密钥副本沿用S213；不重置实例、不写入测试样本。
+
+覆盖S213的默认Office→PDF路径：九格式按固定版本直接以ONLYOFFICE只读查看，保留原件下载，XLSX可切工作表；不提供原件编辑/保存。配置签名、权限/源完整校验、50MiB门禁保持；临时源120秒、两准入、关闭撤销，已取得副本和上游已入队任务不能硬收回。CSP精确信任配置服务API.js/frame，空事件体哈希例外不允许任意inline/eval。最终精确包Office16组与prod/dev身份、健康、资源、匿名门禁/CSP核验通过，完整证据见 [S215](../../agent/tasks/S215.md)。

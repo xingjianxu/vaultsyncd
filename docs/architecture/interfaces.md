@@ -2882,6 +2882,6 @@ S199 补充边界：ControlledApply 仅对 `expected=Absent` 且完整 `baseline
 
 `api/openapi.yaml` 为唯一wire编辑源：新增 `POST /v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer`（`createOfficeViewer`），复用 `OfficePreviewRequest` 的九格式/hash/size输入；返回 `OfficeViewerSession {session_id,document_server_url,config_json,source_hash,source_version}`。`config_json`承载第三方完整签名配置，不将其camelCase DTO复制到本机IPC/schema。配对 `DELETE .../office-viewer/{session}`（`closeOfficeViewer`）只撤销发起认证会话自己的源通道；成功200为`OfficeViewerClosed {closed:true}`。接口沿用BrowserAuth/CSRF或Bearer与当前Vault授权、固定身份/预期摘要大小及GC租约下完整SHA256校验；50MiB、最多2项源准入与120秒过期，关闭释放，失联/丢响应自动收尾。会话仅驻内存，无持久化迁移。
 
-签名配置固定 `editorConfig.mode=view`、`coEditing={mode:strict,change:false}` 与不可编辑/批注/审阅/填表权限；禁宏/插件、不提供原件保存回调。每次创建独立随机document key及源capability，源地址仅回环、每次读取重查原会话/Vault；浏览器得到特定文档的限时URL及JWT，得不到共享JWT密钥或管理员凭据。撤销/到期不能收回ONLYOFFICE或浏览器已获取的副本；上游缓存/字体/格式兼容属第三方边界。
+签名配置固定 `editorConfig.mode=view`、`coEditing={mode:strict,change:false}` 与不可编辑/批注/审阅/填表权限；禁宏/插件、不提供原件保存回调。每次创建独立随机document key及源capability，源地址仅回环、每次读取重查原会话/Vault；浏览器得到特定文档的限时URL及JWT，得不到共享JWT密钥或管理员凭据。撤销/到期不能收回ONLYOFFICE或浏览器已获取的副本，也不硬取消上游已入队任务；源准入不是上游执行并发上限，缓存/字体/格式兼容属第三方边界。
 
 Web保留原件完整读取与下载，Office不再请求PDF转换，改为已配置Document Server的固定API.js及DocEditor。关闭/取消/导航/Vault或认证代际变化销毁iframe并撤销临时源，拒绝迟到结果；脚本30秒、文档120秒失败可重试。主HTML CSP仅按启动配置增加精确origin到script-src/frame-src，connect/object及非空inline限制保持；仅Office启用时用`script-src-attr`与SHA256(empty)精确许可上游Safari兼容用的空事件体，不允许任意inline/eval；无Office配置时原策略保持，API.js运行于主应用上下文，配置服务属于受信任代码。旧S213 PDF端点与原PDF/图片/文本路径继续兼容。实际验收及限制见 `agent/tasks/S215.md`。
