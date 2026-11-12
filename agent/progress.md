@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S199 done**：排除缺失/部分占位维护导出与显式下载恢复已完成，未确认内容/固定版本/CAS/不覆盖保护保持；修复水合暂存独占句柄和CFAPI异步读取。core137/store61/宿主IPC32、Windows原生IPC8+range1+pending-read1及完整CFAPI→HTTPS run19通过，四恢复包哈希审计、独立复审APPROVED；原客户端原路径/session1/dev身份与unpaused同步状态已恢复。实施计划约70%压缩，193卡与四张blocked验收/追溯保持。实现bf69569、压缩2c6a9bc；证据/限制/合并清理见 [S199](tasks/S199.md)。无本卡阻塞，无服务端变化不部署，不发行或替换永久客户端；**下一ready：无**，S011/S106/S107/S108门禁不变。
+当前 **S199 done**：排除缺失/部分占位维护导出与显式下载恢复已完成，未确认内容/固定版本/CAS/不覆盖保护保持；修复水合暂存独占句柄和CFAPI异步读取。core137/store61/宿主IPC32、Windows原生IPC8+range1+pending-read1及完整CFAPI→HTTPS run19通过，四恢复包哈希审计、独立复审APPROVED；原客户端原路径/session1/dev身份与unpaused同步状态已恢复。实施计划约70%压缩，193卡与四张blocked验收/追溯保持。实现bf69569、压缩2c6a9bc与验收交接058f67f已ff合master，本卡工作树/分支正常清理，S134/S187保持；证据/限制/合并清理见 [S199](tasks/S199.md)。无本卡阻塞，无服务端变化不部署，不发行或替换永久客户端；**下一ready：无**，S011/S106/S107/S108门禁不变。
 
 当前 **S207 done**：区分prod（vsyncd，原NixOS部署保持）与dev（wlab:15401，用户已确认端口），新增临时后台管理脚本init/start/stop/restart/status/logs；独立btrfs数据在 `/data/vaultsyncd-dev/dev-server/`，复用本机ACME DNS-01证书，独立ServerId/owner/后端与代理。管理器9项、真实启停/重复/故障/日志/HTTPS与Web字节、Windows session1唯一dev连接/full双向2文件及restart后同步保持通过；生产PID/身份/system/pin前后相等，无生产部署或客户端重建。交接 [S207](tasks/S207.md)，证据 `/data/vaultsyncd-dev/S207-prod-dev-20261112/`；首轮wrapper清理误报及修复审计如实保留。实现/验收交接92f529e已ff合master，任务树/分支清理，清理后双环境health及dev状态复核通过；桌面与agent、dev服务保持运行，无本卡阻塞，不发行推送；下一ready S199。
 
