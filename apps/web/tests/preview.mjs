@@ -7,13 +7,41 @@ const server = await createServer({ root: fileURLToPath(new URL("../../..", impo
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] },
 });
 try {
-  const { previewKind, downloadPreview, boundedCanvas, rasterDimensions, MAX_PREVIEW_BYTES, MAX_CANVAS_PIXELS } = await server.ssrLoadModule("/apps/web/src/features/files/preview.ts");
+  const { previewKind, downloadPreview, boundedCanvas, rasterDimensions, decodePreviewText, MAX_TEXT_PREVIEW_BYTES, MAX_PREVIEW_BYTES, MAX_CANVAS_PIXELS } = await server.ssrLoadModule("/apps/web/src/features/files/preview.ts");
+  const { remarkPreviewBudget, MAX_MARKDOWN_NODES, MAX_MARKDOWN_CODE_BLOCKS, MAX_MARKDOWN_DEPTH, MARKDOWN_BUDGET_MESSAGE } =
+    await server.ssrLoadModule("/apps/web/src/features/files/TextPreview.tsx");
+  const transform = remarkPreviewBudget();
+  const normal = { type: "root", children: [{ type: "code", lang: "js", value: "const x = 1;" }] };
+  transform(normal); assert.equal(normal.children[0].type, "code");
+  for (const tree of [
+    { type: "root", children: Array.from({ length: MAX_MARKDOWN_CODE_BLOCKS + 1 }, () => ({ type: "code", lang: "js", value: "x" })) },
+    { type: "root", children: Array.from({ length: MAX_MARKDOWN_NODES }, () => ({ type: "text", value: "x" })) },
+  ]) {
+    transform(tree); assert.equal(tree.children.length, 1);
+    assert.equal(tree.children[0].children[0].value, MARKDOWN_BUDGET_MESSAGE);
+  }
+  const deep = { type: "root", children: [] };
+  let branch = deep;
+  for (let depth = 0; depth <= MAX_MARKDOWN_DEPTH; depth++) {
+    const child = { type: "blockquote", children: [] }; branch.children.push(child); branch = child;
+  }
+  transform(deep); assert.equal(deep.children[0].children[0].value, MARKDOWN_BUDGET_MESSAGE);
   const data = Buffer.from("immutable content");
   const entry = { kind: "file", entry_id: "entry", name: "文档.PDF", revision: "3", version_id: "old-version", size: String(data.length), hash: createHash("sha256").update(data).digest("hex") };
   for (const name of ["a.pdf", "a.PNG", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.avif"]) assert.ok(previewKind({ ...entry, name }));
-  for (const name of ["a.svg", "a.html", "a.htm", "a.js", "a.pdf.html", "a.txt", "no-extension", "__proto__", "constructor"])
+  for (const name of ["a.exe", "a.zip", "a.mp4", "a.woff2", "a.sqlite"])
     assert.equal(previewKind({ ...entry, name }), null);
   assert.equal(previewKind({ ...entry, kind: "directory" }), null);
+  for (const name of ["a.svg", "a.html", "a.htm", "a.js", "a.tsx", "a.py", "a.rs", "a.txt", ".env", "Dockerfile", "a.custom", "__proto__", "constructor"])
+    assert.equal(previewKind({ ...entry, name }), "text");
+  assert.equal(previewKind({ ...entry, name: "README.MD" }), "markdown");
+  assert.equal(await decodePreviewText(new Blob(["中文🙂\r\nconst n = 1;\t"])), "中文🙂\r\nconst n = 1;\t");
+  assert.equal(await decodePreviewText(new Blob([])), "");
+  assert.equal(await decodePreviewText(new Blob([Uint8Array.of(0xff, 0xfe, 0x2d, 0x4e)])), "中");
+  assert.equal(await decodePreviewText(new Blob([Uint8Array.of(0xfe, 0xff, 0x4e, 0x2d)])), "中");
+  for (const bytes of [Uint8Array.of(0xc3, 0x28), Uint8Array.of(0xff, 0xfe, 0x42), Uint8Array.of(0x61, 0, 0x62)])
+    await assert.rejects(decodePreviewText(new Blob([bytes])));
+  await assert.rejects(decodePreviewText(new Blob([new Uint8Array(MAX_TEXT_PREVIEW_BYTES + 1)])), /2 MiB/);
   const requests = [];
   const { BrowserAuth } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
   const client = new BrowserAuth({ base_url: "https://test.invalid", request_id: () => "preview-test", fetch: async (url, init) => {
@@ -21,7 +49,7 @@ try {
     return new Response(data, { status: 206, headers: { "content-range": `bytes 0-${data.length - 1}/${data.length}` } });
   } });
   for (const invalid of [{ size: undefined }, { size: "" }, { size: "-1" }, { size: "1.5" }, { size: "01" }, { size: "9".repeat(100) },
-    { size: String(MAX_PREVIEW_BYTES + 1) }, { version_id: undefined }, { hash: undefined }, { hash: "bad" }, { name: "script.svg" }]) {
+    { size: String(MAX_PREVIEW_BYTES + 1) }, { version_id: undefined }, { hash: undefined }, { hash: "bad" }, { name: "archive.zip" }, { name: "large.txt", size: String(MAX_TEXT_PREVIEW_BYTES + 1) }]) {
     await assert.rejects(downloadPreview(client, "vault", { ...entry, ...invalid }, new AbortController().signal, () => {}));
     assert.equal(requests.length, 0, "非法元数据/超限不得发网络请求");
   }
@@ -72,5 +100,5 @@ try {
   globalThis.createImageBitmap = async () => { decoding.abort(); return { width: 2, height: 3, close: () => { bitmapClosed++; } }; };
   await assert.rejects(createPreviewRenderer(new Blob([png(2, 3)]), "png", decoding.signal), { name: "AbortError" });
   assert.equal(bitmapClosed, 2, "迟到的原生解码结果必须关闭");
-  console.log("在线预览：白名单、50MiB 网络前门禁、固定版本校验、栅格签名/尺寸、画布预算、取消/迟到结果与资源释放均通过");
+  console.log("在线预览：文本分类/严格编码/2MiB 与图片PDF50MiB 网络前门禁、固定版本校验、栅格签名/尺寸、画布预算、取消/迟到结果与资源释放均通过");
 } finally { await server.close(); }

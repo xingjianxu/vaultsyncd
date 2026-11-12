@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import type { ComponentType } from "react";
 import { Alert, Button, Group, Modal, Progress, Stack, Text } from "@mantine/core";
 import type { SnapshotEntry } from "@vaultsyncd/api-client";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
-import { downloadPreview, previewKind } from "./preview";
+import { decodePreviewText, downloadPreview, previewKind } from "./preview";
 import { saveDownload } from "./download";
 import type { PreviewRenderer } from "./preview-renderer";
 import "./FilePreview.css";
@@ -17,6 +18,8 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
   const [renderer, setRenderer] = useState<PreviewRenderer | null>(null);
   const [download, setDownload] = useState<{ name: string; blob: Blob } | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(null);
+  const [TextViewer, setTextViewer] = useState<ComponentType<{ text: string; name: string; markdown: boolean }> | null>(null);
   const [rendering, setRendering] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null);
   const request = useRef<AbortController | null>(null);
@@ -25,7 +28,7 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
   const generation = client?.sessionGeneration;
   // 同一 Modal 保持挂载以恢复焦点；内容和资源在关闭时立即释放，不等退场动画。
   useEffect(() => {
-    setRenderer(null); setDownload(null); setError(""); setPdfUrl(null); setProgress(0); setRendering(false);
+    setRenderer(null); setDownload(null); setError(""); setPdfUrl(null); setText(null); setTextViewer(null); setProgress(0); setRendering(false);
     if (!entry || !client || !kind || auth.busy) { setStatus(""); return; }
     const controller = new AbortController();
     request.current = controller;
@@ -45,6 +48,14 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
         });
         if (!current()) return;
         setDownload(result); setStatus("正在解析文件…");
+        if (kind === "text" || kind === "markdown") {
+          const decoded = await decodePreviewText(result.blob);
+          if (!current()) return;
+          const { TextPreview } = await import("./TextPreview");
+          if (!current()) return;
+          setText(decoded); setTextViewer(() => TextPreview); setStatus("");
+          return;
+        }
         if (kind === "pdf") {
           const header = await result.blob.slice(0, 1024).text();
           if (!current()) return;
@@ -109,11 +120,12 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
       {error && <Alert color="red" role="alert">{error}</Alert>}
       <Group>
         {busy && <Button variant="default" onClick={() => {
-          request.current?.abort(); setRenderer(null); setPdfUrl(null); setStatus(""); setRendering(false); setError("已取消预览，可重试。");
+          request.current?.abort(); setRenderer(null); setPdfUrl(null); setText(null); setTextViewer(null); setStatus(""); setRendering(false); setError("已取消预览，可重试。");
         }}>取消预览</Button>}
         {error && <Button variant="default" disabled={auth.busy} onClick={() => setAttempt(value => value + 1)}>重试预览</Button>}
       </Group>
       {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`PDF 预览 · ${entry?.name ?? ""}`} />}
+      {TextViewer && text !== null && entry && <TextViewer key={`${entry.entry_id}:${entry.version_id}:${attempt}`} text={text} name={entry.name} markdown={kind === "markdown"} />}
       {renderer && <div className="file-preview-viewport" aria-busy={rendering}>
         <canvas ref={canvas} role="img" aria-label={entry?.name} hidden={!!error} />
       </div>}

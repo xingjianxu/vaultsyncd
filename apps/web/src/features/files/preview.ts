@@ -6,23 +6,46 @@ export const MAX_PREVIEW_BYTES = 50 * 1024 * 1024;
 export const MAX_PREVIEW_PIXELS = 16 * 1024 * 1024;
 export const MAX_CANVAS_PIXELS = 8 * 1024 * 1024;
 export const MAX_CANVAS_EDGE = 8192;
-export type PreviewKind = "pdf" | "png" | "jpeg" | "gif" | "webp" | "bmp" | "avif";
+export type RasterKind = "png" | "jpeg" | "gif" | "webp" | "bmp" | "avif";
+export type PreviewKind = "pdf" | RasterKind | "text" | "markdown";
+export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024;
+const binaryExtensions = new Set("zip 7z rar gz bz2 xz zst tar tgz exe dll msi wasm bin iso db sqlite sqlite3 woff woff2 ttf otf mp3 mp4 wav ogg flac webm mov avi doc docx xls xlsx ppt pptx odt ods psd ico heic tiff tif class pyc jar parquet pdf".split(" "));
 const extensions: Record<string, PreviewKind> = { pdf: "pdf", png: "png", jpg: "jpeg", jpeg: "jpeg", gif: "gif", webp: "webp", bmp: "bmp", avif: "avif" };
 
-/** 扩展名仅决定入口；实际解码前还检查内容签名和尺寸。SVG/HTML 永不进入渲染器。 */
+/** 扩展名决定查看器；未知类型尝试严格文本解码。HTML/SVG 只展示源码。 */
 export function previewKind(entry: SnapshotEntry): PreviewKind | null {
   const extension = entry.name.split(".").at(-1)?.toLowerCase() ?? "";
-  return entry.kind === "file" && Object.hasOwn(extensions, extension) ? extensions[extension] : null;
+  if (entry.kind !== "file") return null;
+  if (Object.hasOwn(extensions, extension)) return extensions[extension];
+  if (binaryExtensions.has(extension)) return null;
+  return ["md", "markdown", "mdown", "mkd"].includes(extension) ? "markdown" : "text";
 }
 
 export async function downloadPreview(client: BrowserAuth, vaultId: string, source: SnapshotEntry, signal: AbortSignal,
   progress: (bytes: number, total: number) => void) {
   const entry = { ...source };
-  if (!previewKind(entry)) throw new Error("此文件类型不支持在线预览。");
+  const kind = previewKind(entry);
+  if (!kind) throw new Error("此文件类型不支持在线预览。");
   // 必须在任何网络请求之前拒绝缺失/非法元数据与超限文件；downloadFile 继续校验固定版本、长度和 SHA-256。
   if (!entry.size || !/^(0|[1-9][0-9]*)$/.test(entry.size)) throw new Error("文件缺少有效大小，请刷新。");
+  if ((kind === "text" || kind === "markdown") && BigInt(entry.size) > BigInt(MAX_TEXT_PREVIEW_BYTES))
+    throw new Error("文本预览仅支持不超过 2 MiB 的文件，请下载后查看。");
   if (BigInt(entry.size) > BigInt(MAX_PREVIEW_BYTES)) throw new Error("在线预览仅支持不超过 50 MiB 的文件，请下载后查看。");
   return downloadFile(client, vaultId, entry, signal, progress);
+}
+
+/** 不猜测旧编码或以替换字符掩盖损坏；原始下载字节始终保持。 */
+export async function decodePreviewText(blob: Blob): Promise<string> {
+  if (blob.size > MAX_TEXT_PREVIEW_BYTES) throw new Error("文本预览仅支持不超过 2 MiB 的文件，请下载后查看。");
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le"
+    : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : "utf-8";
+  let text: string;
+  try { text = new TextDecoder(encoding, { fatal: true }).decode(bytes); }
+  catch { throw new Error("文件不是有效的 UTF-8 或带 BOM 的 UTF-16 文本，请下载后查看。"); }
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text))
+    throw new Error("文件包含二进制控制字符，请下载后查看。");
+  return text;
 }
 
 export function boundedCanvas(width: number, height: number, zoom = 1) {
@@ -32,7 +55,7 @@ export function boundedCanvas(width: number, height: number, zoom = 1) {
 }
 
 /** 先解析栅格头，避免把压缩体积很小的超大图片交给原生解码器。AVIF 只接受含标准 ispe 尺寸的文件。 */
-export function rasterDimensions(bytes: Uint8Array, kind: Exclude<PreviewKind, "pdf">) {
+export function rasterDimensions(bytes: Uint8Array, kind: RasterKind) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const text = (offset: number, length: number) => String.fromCharCode(...bytes.subarray(offset, offset + length));
   const fits = (offset: number, length: number) => offset >= 0 && offset + length <= bytes.length;

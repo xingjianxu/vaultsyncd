@@ -1,4 +1,4 @@
-import { boundedCanvas, MAX_PREVIEW_PIXELS, rasterDimensions, type PreviewKind } from "./preview";
+import { boundedCanvas, MAX_PREVIEW_PIXELS, rasterDimensions, type RasterKind } from "./preview";
 
 export interface PreviewRenderer {
   render: (canvas: HTMLCanvasElement, signal: AbortSignal) => Promise<void>;
@@ -6,7 +6,7 @@ export interface PreviewRenderer {
 }
 
 /** 图片维持有界的静态画布预览。PDF 由浏览器内置查看器处理。 */
-export async function createPreviewRenderer(blob: Blob, kind: Exclude<PreviewKind, "pdf">, signal: AbortSignal): Promise<PreviewRenderer> {
+export async function createPreviewRenderer(blob: Blob, kind: RasterKind, signal: AbortSignal): Promise<PreviewRenderer> {
   signal.throwIfAborted();
   const bytes = new Uint8Array(await blob.arrayBuffer());
   signal.throwIfAborted();

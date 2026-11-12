@@ -503,22 +503,15 @@ def main():
             close_preview()
             checks.append("PDF/browser-owned-document-actions/do-not-affect-host-page")
             for name in ("unsupported.html", "unsupported.svg"):
-                link(name).click(button="right")
-                expect(page.get_by_role("menuitem", name="预览", exact=True)).to_have_count(0)
-                page.keyboard.press("Escape")
-                link(name).click()
-                properties = page.get_by_role("dialog", name="文件属性", exact=True)
-                expect(properties).to_be_visible()
-                expect(properties.get_by_text(name, exact=True)).to_be_visible()
-                expect(properties.locator("canvas, iframe, object, embed")).to_have_count(0)
-                properties.get_by_role("button", name="关闭", exact=True).click()
+                open_preview(name, menu=True)
+                expect(preview.locator(".cm-content")).to_contain_text("globalThis.__s208UntrustedExecuted=true")
+                expect(preview.locator("canvas, iframe, object, embed, script, img")).to_have_count(0)
+                close_preview()
             assert not page.evaluate("Boolean(window.__s208UntrustedExecuted)")
-            for name in ("unsupported.html", "unsupported.svg"):
-                assert not any(f"/entries/{by_name[name]['entry_id']}/" in item["path"] and item["path"].endswith("/content") for item in requests), f"unsupported content was fetched: {name}"
             link("child").click(button="right")
             expect(page.get_by_role("menuitem", name="预览", exact=True)).to_have_count(0)
             page.keyboard.press("Escape")
-            checks.append("HTML-SVG/unsupported-properties-only/no-active-content/directory-no-preview")
+            checks.append("HTML-SVG/source-only/no-active-content/directory-no-preview")
 
             def download_exact(name):
                 with page.expect_download() as pending:

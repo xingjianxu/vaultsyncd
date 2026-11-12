@@ -877,3 +877,13 @@ S001—S014 环境/平台；S015—S031 模型/持久化；S032—S052 服务端
 ## 8. 本手册采用的官方环境依据
 
 当前工具链与环境事实见 `flake.lock`、`docs/environment.md`、`docs/operations/windows-lab.md`；历史外部依据及当时版本链接见固定归档，不重复维护。
+
+
+### S210 — Web 文本与 Markdown 在线预览
+
+- **状态与前置**：in_progress（用户2026-11-12明确要求）；S209。
+- **只读设计范围**：design §18.1/24 ADR-019，S209交接及文件预览/CSP接口。
+- **主要落点**：Web文件查看器、React CodeMirror/语言加载、Markdown渲染、依赖锁与对应验收。
+- **实现要点**：最新版 @uiw/react-codemirror 精确锁定、默认只读与按文件名语法高亮；Markdown默认GFM渲染可切代码，HTML/SVG源码不执行；沿用固定版本/长度/摘要与会话取消围栏。文本2MiB门禁，UTF-8/带BOM UTF-16严格解码，二进制拒绝；Markdown原始HTML跳过、链接与图片只显示文字不请求资源。无在线保存及wire/schema变化。
+- **本步验收**：根类型、Web测试/构建、真实Chromium文本与Markdown/高亮/只读/安全/取消/布局及PDF图片回归，Nix纯构建、本机prod/dev部署、健康与静态资源核对；交接、合master与任务树清理。
+- **交接**：[S210](tasks/S210.md)。

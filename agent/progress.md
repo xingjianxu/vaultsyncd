@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S210 in_progress**：按用户2026-11-12要求增加React CodeMirror文本只读高亮与Markdown渲染/源码切换，前置S209；本卡范围/验收见实施手册与 [S210](tasks/S210.md)。原四张blocked门禁保持。
+
 当前 **S209 done**：浏览器内置PDF阅读器替代PDF.js及专用资源，固定版本/摘要与图片预算保持；根类型、Web八套/构建、Rust Web两项与真实Chromium17组通过。实现23d5c7c已部署generation282，dev同包保留身份；三源15文件/45字节核对、HTTPS/健康/CSP/匿名门禁和部署精确包17组复验通过。实现23d5c7c/交接ac0243d已ff合master，7挂载卸载、本卡树/分支清理，S134/S187保持。交接 [S209](tasks/S209.md)，证据 `/data/vaultsyncd-dev/S209-native-pdf-20261112/`；无本卡阻塞，不发行推送或重打包Windows。下一ready无，原四张blocked保持。
 
 当前 **S208 done**：Web PDF与PNG/JPEG/GIF/WebP/BMP/AVIF在线预览、翻页缩放/取消重试/原文件下载完成；固定版本/摘要、50MiB及像素门禁，patched PDF.js仅canvas不放宽CSP。根类型、Web九套/构建、真实Chromium16组与既有文件/历史/操作回归、独立复审APPROVED；实现4770492已部署generation281，主机3597d0b已ff main并清树。prod/dev同包、身份隔离保持，三源201文件共603次精确字节核对与HTTPS匿名门禁/健康/CSP通过，部署精确包独立btrfs再次16组通过。实现4770492/交接598b407已ff合master，5挂载卸载、本卡树/分支清理完成，S134/S187保持。交接 [S208](tasks/S208.md)，证据 `/data/vaultsyncd-dev/S208-file-preview-20261112/`；无本卡阻塞，不发行推送或重打包Windows；下一ready无，原四张blocked门禁保持。
