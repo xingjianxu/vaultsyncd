@@ -551,6 +551,8 @@ OnlyOffice独立与内嵌FileConverter均以失败即停止构建的最小补丁
 
 server117项、包内80项、根类型/Web九套/构建、生成器21项/生成一致、dev管理器11项、模块credential fixture和最终精确包Chromium14组全部通过。三类真实Office→原生PDF、原件精确下载、授权/固定旧版/故障/重试/取消/CSP/窄屏证据在任务根，最终run `S213-office-20261112T210937-1816154`。prod/dev同包且各自原ServerId保持，136文件在prod/dev HTTPS及prod loopback共408字节比较、匿名新API401、严格TLS浏览器320/1440与CSP通过。没有向生产/持久dev写入验收文档或直接修改在线数据库。
 
-dev经管理器stop/configure-office/start配置同包，保留账号/Vault/身份与本机普通目录；收尾将由永久master入口再次有序启动，避免引用已清理的任务脚本。完整日志、截图、样本、core映射及GC roots在 `/data/vaultsyncd-dev/S213-office-preview-20261112/`，不按缓存删除。
+dev经管理器stop/configure-office/start配置同包，保留账号/Vault/身份与本机普通目录；收尾已由永久master入口再次有序启动，原身份和健康保持，supervisor不再引用任务路径。完整日志、截图、样本、core映射及GC roots在 `/data/vaultsyncd-dev/S213-office-preview-20261112/`，不按缓存删除。
 
 回退：证据根 `evidence/old-system-root` 保留原generation285/system `hyqksj0k5r3iwzarnap6wm35wxgjvwp7`；deploy子目录另留补丁过渡test system `1p31kwwy...` 与原boot root。先对明确旧system执行test并核对SSH/prod健康，再设回启动profile/switch，同步主机源pin。回退到S211须在dev停止后 `configure-office --disable-office` 再启动旧包，旧二进制严格拒绝新[office]配置；仅功能/协议增加，无须修改或回退同步数据库。旧OnlyOffice系统会撤掉本次文档网络补丁，回退时同时关闭Office功能；保留服务数据/密钥。未实际执行回退。
+
+S213收尾：项目实现43ae33d/交接50fc007已ff合master，主机53c2db0/429b1cb已ff合main；六挂载与双任务树/分支正常清理，既有其他任务树保持。清理后prod/dev/OnlyOffice健康通过，恢复与原始证据独立保留。
