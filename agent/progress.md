@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S215 in_progress**：ONLYOFFICE原生只读Office查看器已验收部署generation288，发布源6a99df4包含S214排序，主机65316dc已ff合main并自动清树。server121项、根类型/Web九套/构建、生成器21项及一致性、独立复审APPROVED、纯Nix包内81项、最终精确包Office16组及PDF图片17组/文本13组通过。prod/dev同包与原身份保持，136文件三源408字节、HTTPS/匿名门禁/CSP及凭据验证通过；待项目交接合master和六挂载/本卡树清理。交接 [S215](tasks/S215.md)，证据 `/data/vaultsyncd-dev/S215-office-viewer-20261112/`；无本卡功能/部署阻塞，下一ready无，原四张blocked保持。
+当前 **S215 done**：ONLYOFFICE原生只读Office查看器已验收部署generation288，发布源6a99df4包含S214排序，主机65316dc已ff合main并自动清树。server121项、根类型/Web九套/构建、生成器21项及一致性、独立复审APPROVED、纯Nix包内81项、最终精确包Office16组及PDF图片17组/文本13组通过。prod/dev同包与原身份保持，136文件三源408字节、HTTPS/匿名门禁/CSP及凭据验证通过；功能182bfe1/组合源6a99df4/交接65aae2b已ff合master，六挂载与本卡树/分支正常清理，S134/S187保持。交接 [S215](tasks/S215.md)，证据 `/data/vaultsyncd-dev/S215-office-viewer-20261112/`；无本卡功能/部署阻塞，下一ready无，原四张blocked保持。
 
 当前 **S214 done**：Web文件列表名称/大小/修改日期切换升降序，默认名称自然升序，目录优先/未知后置/精确整数，完整目录筛选排序后分页，树隔离。实现bf8acc6已部署generation287，主机e5caced已ff合main；根类型/Web九套/构建、独立复审、Nix包内80项和精确包Chromium全套文件浏览回归通过。prod/dev同包，136文件/408次字节、严格TLS/匿名门禁/CSP与健康/身份保持；dev由永久入口restart，不引用任务树。证据 `/data/vaultsyncd-dev/S214-file-sorting-20261112/`，交接 [S214](tasks/S214.md)。实现/交接6327b64已ff合master，五挂载及本卡树/分支正常清理，S134/S187及并行S215保持；无本卡阻塞，不发行/推送或重打包Windows。下一ready无（S215并行执行），原四张blocked保持。
 

@@ -572,3 +572,5 @@ S213收尾：项目实现43ae33d/交接50fc007已ff合master，主机53c2db0/429
 Office默认直接DocEditor只读浏览；CSP按配置精确加入OnlyOffice来源，API.js为受信任代码，仅空事件体哈希例外兼容上游Safari属性，不允许非空inline/eval。临时源120秒/两准入，关闭撤销，但已取得的副本/上游缓存不可收回，源准入不等于上游执行并发。旧PDF转换API继续兼容。
 
 证据 `/data/vaultsyncd-dev/S215-office-viewer-20261112/`，最终精确包run `S215-office-20261112T215042-1928363`；部署 `deploy/local-20261112T215205-1930595/` 保存generation287的previous-system/previous-boot GC roots。回退先对该旧system执行test并核对SSH/prod健康，再恢复启动profile/switch及主机pin；dev由管理器restart至S214包 `/nix/store/inp5h2n5fa8kp5j0i445ya3wsq9qjva7-vaultsyncd-0.1.7`，保留账号/Vault/配置，无需回退数据库。未实际执行回退；不删除旧roots或实验原始证据。交接见 [S215](../../agent/tasks/S215.md)。
+
+S215收尾：项目功能182bfe1/组合源6a99df4/交接65aae2b已ff合master；六挂载与本地S215树/分支正常清理，主机pin65316dc已ff合main并自动清理本次部署树。永久dev入口及runtime supervisor保留，证据和generation287回退roots长期保留。

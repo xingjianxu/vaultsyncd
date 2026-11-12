@@ -920,7 +920,7 @@ S001—S014 环境/平台；S015—S031 模型/持久化；S032—S052 服务端
 
 ### S215 — ONLYOFFICE 原生只读 Office 查看器
 
-- **状态与前置**：in_progress（用户2026-11-12授权执行）；S213/S212/S209/S210，design §6/17.1/17.2/18.1/24，ADR-019补充。
+- **状态与前置**：done（用户2026-11-12授权执行）；S213/S212/S209/S210，design §6/17.1/17.2/18.1/24，ADR-019补充。
 - **范围**：Office默认用ONLYOFFICE DocEditor原生只读浏览，固定版本、授权/完整摘要/原件下载保持；无原件保存，旧PDF端点兼容。受限临时源与服务端只读JWT；CSP仅新增配置服务origin的script/frame信任。
 - **验收**：相关Rust/Web及生成一致性、真实OnlyOffice+Chromium+btrfs三格式/多工作表/权限/固定旧版/生命周期/故障/CSP、独立复审、纯Nix构建、prod/dev部署健康/身份/资产一致，交接合master清树。
-- **交接**：[S215](tasks/S215.md)。
+- **交接**：[S215](tasks/S215.md)；功能182bfe1/组合发布源6a99df4/交接65aae2b已ff合master，generation288及prod/dev同包验收通过，六挂载与任务树/分支正常清理。
