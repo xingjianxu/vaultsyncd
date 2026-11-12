@@ -1,5 +1,9 @@
 # 本机 NixOS 服务部署
 
+## S207 环境入口（2026-11-12）
+
+本文描述 **prod**：`https://vsyncd.132140.xyz`，既有 NixOS 部署方式、状态与 Vault 路径保持。**dev** 与 Windows 测试机改用 `https://wlab.132140.xyz:15401`，临时后台服务由 `tools/dev-server.sh` 管理，数据在 `/data/vaultsyncd-dev/dev-server/`，不注册 NixOS unit。证书与操作见 [开发测试服务](dev-server.md)，实际验收见 [S207](../../agent/tasks/S207.md)。
+
 当前开发路径以 S163 为准：所有开发测试目录只能位于 `/data/vaultsyncd-dev/`。本文件历史 temp/lab 路径中的 `/data/` 须替换为 `/data/vaultsyncd-dev/`；更早 build/deploy 先按 S161 映射到 temp 内，再替换此前缀。历史日志与验收记录保留原文，执行旧命令前须替换路径，详见 [S163](../../agent/tasks/S163.md)。
 
 历史 `/data/vs-*` 目录已由 [S164](../../agent/tasks/S164.md) 归档至 `/data/vaultsyncd-dev/S164-archive-20261109/runs.tar.zst`，成员保留旧目录名；该目录的 README、SHA256SUMS 和 evidence/path-map.json 提供恢复步骤、摘要与路径映射。包括 S097 离线恢复镜像在内的原始数据长期保留，不能按缓存清理；历史命令不得重新建立 `/data` 顶层开发目录。

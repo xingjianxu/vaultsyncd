@@ -2835,3 +2835,9 @@ Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与
 - `relative_file`/`same_file_path` 按 Windows Ordinal 分量比较，拒绝 UNC/device/点分量/ADS；仅作词法解析，授权由桌面 `shell_actions::resolve` 重新从认证 IPC 活动清单取得。连续祖先句柄与无回源 `VaultHandle::inspect` 核对单链接文件、绑定根及物理身份；正式72字节 `catalog::Identity` 再核对 BindingId/VaultId/EntryId。不匹配、移动替换、解绑或未确认身份都显式拒绝，不回退到其他文件。
 - 新 Tauri 桥 `get_shell_target -> {action,binding_id,entry_id,path}`（path为agent相对路径）、`shell_file_status -> {file,binding}`、`shell_file_action({operationId}) -> ManagementResult`。路径/动作/目标只来自启动时原生参数，JS不能改选目标。一个窗口只准入一个操作编号，应答丢失保留该编号核对，不把释放后 release_allowed=false 当作原操作未执行；后端安全核验与持久幂等保持。
 - `#/shell` 文件窗口标签 `shell-file`，独立 capability 只开放三个固定目标命令和只读历史；不可调用主窗通用下载/释放/恢复/配置等写桥。文件窗口独立于主窗单例，历史只读分页；下载显式按钮，释放二次确认；关闭文件窗口不停止agent、不留托盘。`--unregister-shell-menu` 只清自家菜单，先退出主窗防止轮询重新注册；不改绑定/状态/凭据。程序目录移动后重新启动主窗刷新目标；没有新增包、应用身份、数据库迁移或服务端改动。
+
+## S207 prod/dev 运维接口（无 wire/schema 变化）
+
+- prod=`https://vsyncd.132140.xyz`，原 `tools/deploy-local.sh` + NixOS 部署、8721后端与生产目录保持。dev=`https://wlab.132140.xyz:15401`，后端仅回环18741；证书复用本机 ACME fullchain/key，独立 Caddy 不启用管理API或自动签发。
+- `tools/dev-server.sh init|start|stop|restart|status|logs` 自动进入 devShell；`--root` 默认 `/data/vaultsyncd-dev/dev-server` 且只能在开发根下，无软链/越界，数据为独立 btrfs。`init --login` 从stdin读密码，`--package` 选择服务包；`logs --service server|caddy|supervisor|all --lines N --follow` 查看文件日志，普通start脱离终端、无开机自启。运行信息记录boot/starttime/UID，stop借助pidfd保护，禁止按名称强杀或删除数据。
+- dev 初始化产生独立 ServerId/owner，持续重启保持该身份；Windows 测试机按此ServerId保存唯一dev连接，经认证IPC/WinCred登录，不移植生产数据库或绑定。配置入口与现场证据见 `docs/operations/dev-server.md`、`agent/tasks/S207.md`。

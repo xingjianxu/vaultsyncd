@@ -21,6 +21,7 @@
 - 首发仅 Windows 11 x64 客户端、Linux 服务端。Windows 客户端在本 NixOS 开发环境交叉编译，前端构建也在宿主完成，以节省虚拟机资源；Quickemu Windows NTFS 客体用于原生运行与验收，不默认安装完整编译工具链。Windows x64 交叉工具链已由 S009 落实（`nix develop .#windows`，证据见 `docs/environment.md` §13）；具体分工与步骤只维护在实施手册 §2.6 与 `docs/operations/windows-lab.md` §12。
 - 用户已授权本项目所需 NixOS 配置与 rebuild。先检查实际主机配置入口，保存 diff/旧 generation，build/test/健康检查后 switch。test 会激活配置且不自动定时回滚；保留 SSH 和恢复路径。不要把项目 flake 误当主机配置，不扩大到无关系统升级。
 - 用户明确（2026-11-09）：每次完成服务端（含服务端 Web）更改并通过相关验收后，直接部署到本机，不再等待单独部署请求；将部署、健康验证和交接纳入该卡，遇实际阻塞如实记录。纯文档或不改变服务产物的开发工具维护不触发无关部署。
+- 用户明确（2026-11-12，S207）：prod 为 `https://vsyncd.132140.xyz`，既有 NixOS 生产部署方式保持；开发测试与 Windows 测试机使用 `https://wlab.132140.xyz:15401`。临时 dev 由 `tools/dev-server.sh` 管理，不注册 NixOS 服务；数据默认 `/data/vaultsyncd-dev/dev-server/`，不得复用生产数据库、Vault 或 ServerId。证书复用本机 ACME 的 wlab fullchain/key，细节见 `docs/operations/dev-server.md`。
 - 用户明确（2026-11-09）：移除 GitHub Actions 工作流及其专用代码、脚本和文档要求；统一使用本地 xtask 与受控实验室验证，不再以远端、Actions 或托管 runner 缺失作为首发门禁。Windows 原生能力、同源发行、性能和容量验收要求保持。
 - 代码、开发服务、正式实例、故障测试卷隔离。Windows VM 的磁盘/TPM/EFI/镜像在源码外；测试故障只作用于带 run_id 的实例。服务端工作目录及内部状态使用合规 btrfs，不使用 FUSE/占位回源。
 - 用户最新明确（2026-11-09，S163）：所有开发测试相关目录（临时状态、测试卷、下载、可再生缓存、VM、基线、构建/部署证据及备份）只能放在 `/data/vaultsyncd-dev/` 下，按 `Sxxx-<run_id>/`、`cache/<用途>/` 或现有用途子树隔离；运行前确认根目录已建立并授权。现有 `/data/vaultsyncd-temp` 和 `/data/vaultsyncd-lab` 整树分别迁至该根下的同名目录，覆盖 S146 的 temp 根与 lab 原位保留决定；不得在旧位置重新建目录或兼容软链。需长期保留的原始证据、备份与回退引用不得按缓存自动删除，也不得整体清理开发根。正式 `/data/vaultsyncd`、`/var/lib/vaultsyncd` 保持；Vault 基目录仍为 `/data/vaultsyncd/vaults`（S151）。历史证据不批量改写，通过 S163 的前缀映射追溯。

@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S207 done**：区分prod（vsyncd，原NixOS部署保持）与dev（wlab:15401，用户已确认端口），新增临时后台管理脚本init/start/stop/restart/status/logs；独立btrfs数据在 `/data/vaultsyncd-dev/dev-server/`，复用本机ACME DNS-01证书，独立ServerId/owner/后端与代理。管理器9项、真实启停/重复/故障/日志/HTTPS与Web字节、Windows session1唯一dev连接/full双向2文件及restart后同步保持通过；生产PID/身份/system/pin前后相等，无生产部署或客户端重建。交接 [S207](tasks/S207.md)，证据 `/data/vaultsyncd-dev/S207-prod-dev-20261112/`；首轮wrapper清理误报及修复审计如实保留。桌面与agent、dev服务保持运行，无本卡阻塞，不发行推送；下一ready S199。提交合并清理随后补记。
+
 当前 **S206 done**：按用户要求把网页与客户端的上传/下载图标换成 lucide `cloud-upload`/`cloud-download`，覆盖 Web 文件工具栏与两处右键菜单、两端传输方向列、桌面文件状态下载按钮及 Explorer 下载窗口标题图标；尺寸/描边/可访问名称未变，无协议与 schema 变化。根类型、Web 七组与 desktop activity、两端构建通过，SSR 断言四类入口均输出云图标；真实 Chromium 用已部署包精确字节 Web + 同包后端登录后核对工具栏/空白菜单上传为 cloud-upload、行菜单下载为 cloud-download，无 pageerror/CSP 违规。实现 13dbfa7 已部署 generation280，主机 652f474 已 ff main 并清树，健康/ServerId/主机锁与 13 项资产字节核对通过。交接 [S206](tasks/S206.md)，证据 `/data/vaultsyncd-dev/S206-cloud-transfer-icons-20261112094306/`。限制：桌面外观未在 Windows 原生截图确认，本轮不重打包/交付客户端；无本卡阻塞，不发行，下一 ready：S199。
 
 当前 **S205 done**：Web正常不显示「服务可用」徽标/通知/连接按钮，登录与刷新恢复自动检查；仅异常显示全路由持久提示与可选重试，保持单请求/退出取消。根类型、Web七组/两端构建/desktop activity、Chromium认证/健康/异常/取消/CSP及明暗320/1440通过，独立复审APPROVED；实现5e33611已部署generation279，主机71c9af4已ff main并清树，健康/IPC/身份与两源28项资源/匿名门禁通过，部署包精确字节再跑完整浏览器验收通过。交接[S205](tasks/S205.md)，证据`/data/vaultsyncd-dev/S205-web-connection-20261112/`。实现5e33611/交接322b2a5已ff合master，6挂载卸载、任务树/分支已清理，S134/S187/并行S206保持。无阻塞，不发行、不改Windows交付；下一ready：S199。

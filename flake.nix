@@ -79,6 +79,7 @@
             pkgs.nodejs
             pkgs.pnpm
             pkgs.python3
+            pkgs.caddy # S207：临时 dev HTTPS 代理，独立于生产 NixOS 服务
 
             # S013：存储准入验收需要 mkfs.ext4（拒绝样本）、chattr/lsattr（NOCOW 标志样本）
             # 与 filefrag（reflink 共享 extent 证据）。只用于 tests/platform/linux/ 下的脚本，
