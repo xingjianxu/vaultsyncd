@@ -511,3 +511,9 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 生产 HTTPS、开发 HTTPS 与生产 loopback 的201文件共603次逐字节核对通过（index只移除实际nonce meta）；health、身份隔离、CSP/nonce/nosniff、匿名Vault 401及prod/dev真实Chromium匿名深链/窄屏均通过。部署包精确Web+同包后端在独立btrfs再次通过全部16组预览浏览器验收；未登录或修改生产文件。dev 经管理脚本有序 restart 到同包，保留原数据库/Vault/ServerId `fe616633a01bb594d574b8d08626efc3`，不重置账号或重建绑定；生产仍为既有NixOS部署，dev仍非NixOS服务。
 
 证据 `/data/vaultsyncd-dev/S208-file-preview-20261112/`：`deploy/local-20261112T151823-1391598/result.json`（passed/cleaned=true）、`evidence/online-verification.json`、`evidence/online-browser/`、`S208-file-preview-20261112T152147-1404072/evidence/`。旧generation280的system/boot GC roots保留；回退先test `/nix/store/ffw13m972vxi7flkz7hipjy9i1vlx86r-nixos-system-wks-lab-26.11.20261109.5e6fbb3`、健康再switch，并同步主机pin至 `652f474`；dev可显式restart至旧包。未实际回退，完整交接与50MiB/像素限制见 `agent/tasks/S208.md`。
+
+## S209 浏览器内置 PDF 部署（generation282，2026-11-12）
+
+项目源 `23d5c7c2ffb0195245f106bea6115b1fffcf5ac9`，主机pin `bf4857dd4bfc0d4b90449de65911a5174775ad92` 已ff main并清树；主机锁不变。`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S209-native-pdf-20261112/deploy` 的pure构建、dry-activate、test、HTTPS/IPC/身份/归属与switch通过。运行/开机generation282，system `/nix/store/xhnglrd8swyda39xqifl83a3sqqji441-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/dil3kh3r7iphfsiqbgzxv6wkq21kx35x-vaultsyncd-0.1.7`；无wire/schema迁移。PDF.js/字体/补丁已删除，PDF由浏览器处理，Web CSP仅新增 `frame-src blob:`；行为与限制见 [S209交接](../../agent/tasks/S209.md)。
+
+prod/dev HTTPS及prod loopback的15文件共45次字节核对、health/capabilities身份保持、CSP/nonce/nosniff、匿名401通过，prod/dev Chromium匿名深链320/1440通过；部署精确包独立btrfs再次通过17组预览验收。dev经管理器restart至同包，原数据库/Vault/账号/ServerId保持。证据同任务根，`deploy/local-20261112T155408-1442682/result.json` 的passed/cleaned=true；未登录或修改生产文件。旧generation281的system/boot GC roots保留；回退先test上节system `lv1k5g2vd5sb6al22ac12c8kr6nxdidv`、验证健康再switch，同步主机pin至 `3597d0b`，dev可restart至上节旧包。未实际回退。
