@@ -22,6 +22,7 @@
   },
   "private": true,
   "scripts": {
+    "test": "node --test tests/live-refresh.mjs",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",

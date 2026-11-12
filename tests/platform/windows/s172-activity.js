@@ -4,6 +4,21 @@ document.addEventListener("securitypolicyviolation", event => cspViolations.push
 window.addEventListener("DOMContentLoaded", async () => {
   const report = { ok: false, checks: [] };
   const fixture = window.__S172_FIXTURE__;
+  // Observe, never replace, real WebView -> named pipe -> TLS activity queries.
+  // Store only activity arguments/timings: login arguments contain credentials.
+  // Tauri defines invoke as non-writable/non-configurable. Observe its actual
+  // custom-protocol fetch instead of silently failing to replace that property.
+  const nativeFetch = window.fetch.bind(window);
+  const activityUrl = window.__TAURI_INTERNALS__.convertFileSrc("agent_list_activity", "ipc");
+  const activityCalls = [];
+  window.fetch = async (input, options) => {
+    if (String(input) !== activityUrl) return nativeFetch(input, options);
+    const args = JSON.parse(options.body);
+    const call = { bindingId: args.bindingId, cursor: args.cursor, direction: args.direction, started: performance.now() };
+    activityCalls.push(call);
+    try { return await nativeFetch(input, options); }
+    finally { call.finished = performance.now(); }
+  };
   const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
   const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
   const text = () => document.body.innerText;
@@ -77,8 +92,30 @@ window.addEventListener("DOMContentLoaded", async () => {
     check(text().includes("服务端记录") && text().includes("所有客户端"), "desktop identifies server-observed scope");
     await click("下一页");
     await wait("second UI page", () => directions().length > 0 && !text().includes("local-only.txt"));
-    await click("第一页");
-    await wait("first UI page", () => text().includes("local-only.txt") && directions().length > 0);
+    const secondPageCall = activityCalls.at(-1);
+    check(!!secondPageCall.cursor, "native UI second page uses an actual cursor");
+    const secondPageRows = tableRows().map(row => row.innerText);
+    await click("查看详情");
+    await wait("second-page record details", () => !!document.querySelector('[role="dialog"]'));
+    const details = document.querySelector('[role="dialog"]').innerText;
+    let flashedEmpty = false;
+    const observer = new MutationObserver(() => { if (!directions().length) flashedEmpty = true; });
+    observer.observe(document.querySelector("main"), { childList: true, subtree: true });
+    const baseline = activityCalls.length;
+    await wait("native automatic second-page poll completes", () => activityCalls.length > baseline && activityCalls.at(-1).finished !== undefined, 15000);
+    const automatic = activityCalls.slice(baseline);
+    observer.disconnect();
+    check(automatic.length > 0 && automatic.every(call => call.cursor === secondPageCall.cursor && call.bindingId === bindingId), "native automatic refresh remains on current page");
+    check(automatic[0].started - secondPageCall.finished >= 1800, "native polling waits 2 seconds after previous response completes");
+    check(automatic.every((call, index) => index === 0 || call.started - automatic[index - 1].finished >= 1800), "native automatic requests are serial and completion-spaced");
+    check(document.querySelector('[role="dialog"]')?.innerText === details, "native details stay open across an actual polling cycle");
+    check(JSON.stringify(tableRows().map(row => row.innerText)) === JSON.stringify(secondPageRows) && !flashedEmpty, "native automatic refresh never clears or resets the loaded page");
+    await click("关闭");
+    check([...document.querySelectorAll("button")].some(button => button.textContent === "第一页" && !button.disabled), "native second page remains selected after closing details");
+    // Manual refresh intentionally differs from the background cursor-preserving poll.
+    await click("刷新记录");
+    await wait("manual refresh returns first UI page", () => text().includes("local-only.txt") && directions().length > 0);
+    check(activityCalls.at(-1).cursor === undefined, "native manual refresh resets to first page");
     select("activity_direction", "download");
     await wait("UI download filter", () => directions().length > 0 && directions().every(value => value === "下载"));
     check(text().includes("已提供下载内容") && !text().includes("下载完成"), "provided content is never called client download completion");
@@ -115,9 +152,22 @@ window.addEventListener("DOMContentLoaded", async () => {
     await wait("client properties details", () => text().includes("登录来源 IP") && text().includes("Windows 11 (10.0."));
     check(text().includes("操作系统"), "operating system is a client property");
     await click("关闭");
+    // A real in-flight query is abandoned on route leave; the page must not keep
+    // a background timer alive after its UI has unmounted.
+    select("activity_direction", "download");
+    await sleep(200);
+    location.hash = "/problems";
+    await wait("leave activity route", () => document.querySelector('main h1')?.textContent === "问题与恢复");
+    await sleep(2000); // let the TLS-delayed old reply arrive
+    const leftRouteCalls = activityCalls.length;
+    await sleep(2600);
+    check(activityCalls.length === leftRouteCalls, "native route leave stops activity polling despite delayed reply");
+    location.hash = "/activity";
+    await wait("native activity remount loads automatically", () => directions().length > 0);
     check(!document.querySelector('[role="alert"]'), "page recovers after reauthentication");
     check(document.documentElement.scrollWidth <= innerWidth, "native desktop page fits window");
     check(cspViolations.length === 0, "native activity page has no CSP violations");
+    report.liveRefresh = { secondPageCursor: secondPageCall.cursor, automaticCycles: automatic.length, firstPollDelayMs: Math.round(automatic[0].started - secondPageCall.finished), rowsRetained: !flashedEmpty };
     report.bindingId = bindingId;
     report.sample = page.activity.slice(0, 6);
     report.cspViolations = cspViolations;
