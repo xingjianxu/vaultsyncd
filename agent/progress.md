@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S205 in_progress**：Web正常连接不显示徽标/通知/连接按钮，认证通过与刷新恢复自动检查；仅异常显示全路由持久提示与可选重试，保持请求锁/退出取消。根类型、Web七组/两端构建/desktop activity与真实Chromium认证/健康/异常/取消/CSP、明暗320/1440无溢出通过，独立复审APPROVED；待本机部署及交接合并。交接[S205](tasks/S205.md)，证据`/data/vaultsyncd-dev/S205-web-connection-20261112/`。下一ready：S199。
+当前 **S205 done**：Web正常不显示「服务可用」徽标/通知/连接按钮，登录与刷新恢复自动检查；仅异常显示全路由持久提示与可选重试，保持单请求/退出取消。根类型、Web七组/两端构建/desktop activity、Chromium认证/健康/异常/取消/CSP及明暗320/1440通过，独立复审APPROVED；实现5e33611已部署generation279，主机71c9af4已ff main并清树，健康/IPC/身份与两源28项资源/匿名门禁通过，部署包精确字节再跑完整浏览器验收通过。交接[S205](tasks/S205.md)，证据`/data/vaultsyncd-dev/S205-web-connection-20261112/`。无阻塞，不发行、不改Windows交付；立即合并master并清理本卡树/分支，下一ready：S199。
 
 当前 **S204 done**：绑定文件统一「显示更多选项 → vaultsyncd → 查看文件历史/下载文件/释放空间」，用户已选免安装方案。固定目标/正式身份/物理核验、释放确认和unknown同ID，关专窗不停止agent。实现e7514ac，夹具a53b8a0/f840e78；合并并发S202为a56d8e3，保留其全部提交和已部署服务。宿主15/IPC基线32、根类型/构建/严格clippy、原生路径4项、既有界面及组合调度14项/activity与shell各8组Chromium通过；干净a56交付字节Windows **98项**通过，四PE/hash/双清单/root dist11文件和永久product一致，旧dist/失败证据保留。交接 [S204](tasks/S204.md)，证据 `/data/vaultsyncd-dev/S204-explorer-menu-20261112/`。原生独立清理审计通过；验收交接d528197已ff合master，本卡6挂载卸载、树/分支清理完成，S134/S187保持；无本卡阻塞，不重复部署/发行，下一ready：S199。
 
