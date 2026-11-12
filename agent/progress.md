@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S208 in_progress（验收/部署完成，待交接合并清理）**：Web PDF与PNG/JPEG/GIF/WebP/BMP/AVIF在线预览、翻页缩放/取消重试/原文件下载完成；固定版本/摘要、50MiB及像素门禁，patched PDF.js仅canvas不放宽CSP。根类型、Web九套/构建、真实Chromium16组与既有文件/历史/操作回归、独立复审APPROVED；实现4770492已部署generation281，主机3597d0b已ff main并清树。prod/dev同包、身份隔离保持，三源201文件共603次精确字节核对与HTTPS匿名门禁/健康/CSP通过，部署精确包独立btrfs再次16组通过。任务树 `.worktrees/S208-file-preview`，交接 [S208](tasks/S208.md)，证据 `/data/vaultsyncd-dev/S208-file-preview-20261112/`；无功能/部署阻塞，下一ready无，原四张blocked门禁保持。
+当前 **S208 done**：Web PDF与PNG/JPEG/GIF/WebP/BMP/AVIF在线预览、翻页缩放/取消重试/原文件下载完成；固定版本/摘要、50MiB及像素门禁，patched PDF.js仅canvas不放宽CSP。根类型、Web九套/构建、真实Chromium16组与既有文件/历史/操作回归、独立复审APPROVED；实现4770492已部署generation281，主机3597d0b已ff main并清树。prod/dev同包、身份隔离保持，三源201文件共603次精确字节核对与HTTPS匿名门禁/健康/CSP通过，部署精确包独立btrfs再次16组通过。实现4770492/交接598b407已ff合master，5挂载卸载、本卡树/分支清理完成，S134/S187保持。交接 [S208](tasks/S208.md)，证据 `/data/vaultsyncd-dev/S208-file-preview-20261112/`；无本卡阻塞，不发行推送或重打包Windows；下一ready无，原四张blocked门禁保持。
 
 当前 **S199 done**：排除缺失/部分占位维护导出与显式下载恢复已完成，未确认内容/固定版本/CAS/不覆盖保护保持；修复水合暂存独占句柄和CFAPI异步读取。core137/store61/宿主IPC32、Windows原生IPC8+range1+pending-read1及完整CFAPI→HTTPS run19通过，四恢复包哈希审计、独立复审APPROVED；原客户端原路径/session1/dev身份与unpaused同步状态已恢复。实施计划约70%压缩，193卡与四张blocked验收/追溯保持。实现bf69569、压缩2c6a9bc与验收交接058f67f已ff合master，本卡工作树/分支正常清理，S134/S187保持；证据/限制/合并清理见 [S199](tasks/S199.md)。无本卡阻塞，无服务端变化不部署，不发行或替换永久客户端；**下一ready：无**，S011/S106/S107/S108门禁不变。
 
