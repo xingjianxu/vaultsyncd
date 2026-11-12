@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { listVaults, type VaultSummary, type SnapshotEntry } from "@vaultsyncd/api-client";
-import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select, Stack, Table, Text, TextInput } from "@mantine/core";
+import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select, Stack, Table, Text, TextInput, UnstyledButton } from "@mantine/core";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { EntryMenu, openMenuByKeyboard } from "./EntryMenu";
 import { DirectoryTree } from "./DirectoryTree";
 import { useFileActions } from "./FileActions";
@@ -12,7 +13,7 @@ import { Dialog, EmptyState } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
-import { ancestry, directoryAtPath, filesLocation, fileModified, fileSize, fileSizeDetail, parseFilesLocation, readDirectorySnapshot, type DirectorySnapshot } from "./browser";
+import { ancestry, DEFAULT_FILE_SORT, directoryAtPath, filesLocation, fileModified, fileSize, fileSizeDetail, parseFilesLocation, readDirectorySnapshot, sortDirectoryEntries, type DirectorySnapshot, type FileSort, type FileSortColumn } from "./browser";
 
 export function FilesPanel({ location }: { location: string }) {
   const auth = useAuth();
@@ -99,6 +100,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   const [previewEntry, setPreviewEntry] = useState<SnapshotEntry | null>(null);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<FileSort>(DEFAULT_FILE_SORT);
   const [menuEntryId, setMenuEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!vault);
   const [error, setError] = useState("");
@@ -132,8 +134,18 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   const directory = snapshot ? directoryAtPath(snapshot, segments) : undefined;
   const children = useMemo(() => {
     const term = query.trim().toLocaleLowerCase("zh-CN");
-    return (snapshot?.children.get(directory?.entry_id ?? "") ?? []).filter(entry => entry.name.toLocaleLowerCase("zh-CN").includes(term));
-  }, [snapshot, directory?.entry_id, query]);
+    return sortDirectoryEntries((snapshot?.children.get(directory?.entry_id ?? "") ?? []).filter(entry => entry.name.toLocaleLowerCase("zh-CN").includes(term)), sort);
+  }, [snapshot, directory?.entry_id, query, sort]);
+  function sortHeader(column: FileSortColumn, label: string) {
+    const active = sort.column === column;
+    const next = active && sort.direction === "ascending" ? "descending" : "ascending";
+    const Icon = active ? sort.direction === "ascending" ? ArrowUp : ArrowDown : ArrowUpDown;
+    return <Table.Th aria-sort={active ? sort.direction : "none"}>
+      <UnstyledButton className="files-sort-button" aria-label={`按${label}排序`} title={`${label}：切换为${next === "ascending" ? "升序" : "降序"}`} onClick={() => {
+        setSort({ column, direction: next }); setPage(1); setMenuEntryId(null);
+      }}>{label}<Icon size={14} aria-hidden="true" /></UnstyledButton>
+    </Table.Th>;
+  }
   function navigate(entry: SnapshotEntry) {
     navigation.navigate(filesLocation(vault!.vault_id, ancestry(snapshot!, entry).slice(1).map(item => item.name)));
   }
@@ -205,7 +217,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
       <Menu opened={menuEntryId === "background"} onChange={opened => setMenuEntryId(opened ? "background" : null)} shadow="md" width={180}>
       <Menu.ContextMenu><div className="files-list" tabIndex={0} aria-label="当前目录空白区域" onKeyDown={event => { if (event.target === event.currentTarget) openMenuByKeyboard(event); }}>
         {snapshot && directory && <Table aria-label="文件与目录" highlightOnHover verticalSpacing="xs" horizontalSpacing="sm" className="files-table">
-          <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th></Table.Tr></Table.Thead>
+          <Table.Thead><Table.Tr>{sortHeader("name", "名称")}{sortHeader("size", "大小")}{sortHeader("modified_at", "修改日期")}</Table.Tr></Table.Thead>
           <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry =>
             entryMenu(entry, <Table.Tr onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
                   <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onKeyDown={openMenuByKeyboard}

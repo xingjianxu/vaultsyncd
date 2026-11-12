@@ -73,6 +73,8 @@ Windows 11 测试机程序在 `C:\vaultsyncd-dev-client`，默认用户配置已
 
 S210（2026-11-12）已再次有序restart到与生产generation283同包 `/nix/store/c9xkfn6c1gm7lzd86pkab669gk5vj1yx-vaultsyncd-0.1.7`，提供只读文本/代码与Markdown预览；原dev账号/Vault/ServerId保持，三源136文件/408字节及部署包文本13组/PDF图片17组通过，证据见 [S210交接](../../agent/tasks/S210.md)。
 
+S214已通过永久master入口 `restart --package /nix/store/inp5h2n5fa8kp5j0i445ya3wsq9qjva7-vaultsyncd-0.1.7` 与生产generation287同包，支持文件列表名称/大小/修改日期排序，默认名称升序。原账号/Vault/ServerId保持、与prod隔离，健康、三源136文件/408次字节及HTTPS/CSP通过；无持久测试样本，恢复证据见 [S214交接](../../agent/tasks/S214.md)。
+
 S211（2026-11-12）已通过 `restart --package` 有序切换至与生产generation284同包 `/nix/store/6liszy33b10wzpq4xn9aqn7rjamak7i0-vaultsyncd-0.1.7`，管理页面加载失败自动局部恢复；dev原账号/Vault/ServerId保持，与prod身份隔离。三源136文件/408字节及HTTPS/匿名门禁/CSP通过；证据见 [S211交接](../../agent/tasks/S211.md)。
 
 ## S213 Office 预览配置

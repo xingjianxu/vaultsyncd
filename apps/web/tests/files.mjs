@@ -5,7 +5,7 @@ import { createServer } from "vite";
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] } });
 try {
-  const { readDirectorySnapshot, ancestry, formatBytes, fileSize, fileSizeDetail, fileModified, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
+  const { sortDirectoryEntries, DEFAULT_FILE_SORT, readDirectorySnapshot, ancestry, formatBytes, fileSize, fileSizeDetail, fileModified, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
   const { BrowserAuth } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
   const folder = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
   const entries = [folder("r", undefined, ""), folder("d", "r", "文档"), folder("empty", "r", "空目录"),
@@ -29,6 +29,30 @@ try {
     } });
     return readDirectorySnapshot(client, "vault", signal);
   }
+  const file = (entry_id, name, size, modified_at) => ({ entry_id, name, kind: "file", revision: "1", size, modified_at });
+  const sortable = [file("b", "file10", "9007199254740993", "1700000002"), file("a", "file2", "9007199254740992", "1700000001"),
+    file("z", "zero", "0", "0"), file("u", "unknown"), folder("d2", "r", "目录10"), folder("d1", "r", "目录2")];
+  const original = [...sortable];
+  const ids = (column, direction = "ascending", items = sortable) => sortDirectoryEntries(items, { column, direction }).map(item => item.entry_id);
+  assert.deepEqual(DEFAULT_FILE_SORT, { column: "name", direction: "ascending" });
+  assert.deepEqual(sortDirectoryEntries(sortable).map(item => item.entry_id), ["d1", "d2", "a", "b", "u", "z"]);
+  assert.deepEqual(ids("name", "descending"), ["d2", "d1", "z", "u", "b", "a"]);
+  assert.deepEqual(ids("size"), ["d1", "d2", "z", "a", "b", "u"]);
+  assert.deepEqual(ids("size", "descending"), ["d1", "d2", "b", "a", "z", "u"]);
+  assert.deepEqual(ids("modified_at"), ["d1", "d2", "z", "a", "b", "u"]);
+  assert.deepEqual(ids("modified_at", "descending"), ["d1", "d2", "b", "a", "z", "u"]);
+  const tied = [file("z", "file2", "1", "1"), file("a", "file2", "1", "1"), file("f", "file10", "1", "1")];
+  for (const column of ["size", "modified_at"]) for (const direction of ["ascending", "descending"]) {
+    assert.deepEqual(ids(column, direction, tied), ["a", "z", "f"]);
+    assert.deepEqual(ids(column, direction, [file("b", "file10"), file("a", "file2")]), ["a", "b"]);
+  }
+  const dates = [file("a", "a", "1", "9007199254740993"), file("z", "z", "1", "9007199254740992")];
+  assert.deepEqual(ids("modified_at", "ascending", dates), ["z", "a"]);
+  const dirs = [{ ...folder("a", "r", "a"), size: "999", modified_at: "2" }, { ...folder("b", "r", "b"), size: "1", modified_at: "1" }];
+  assert.deepEqual(ids("size", "descending", dirs), ["a", "b"]); // Directory sizes are not file lengths.
+  assert.deepEqual(ids("modified_at", "ascending", dirs), ["b", "a"]);
+  assert.deepEqual(sortable, original, "sorting must not mutate snapshot children/tree order");
+  assert.deepEqual(sortDirectoryEntries([]), []);
   const snapshot = await load();
   assert.equal(snapshot.entries.size, 4);
   const names = ["中文 # ? % & +", "%2F", "尾部 空格 "];

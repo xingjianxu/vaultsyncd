@@ -22,6 +22,9 @@
 .files-list { flex: 1; min-height: 0; overflow: auto; }
 .files-table { min-width: 420px; table-layout: fixed; }
 .files-table th { white-space: nowrap; }
+.files-sort-button { display: inline-flex; align-items: center; gap: 4px; width: 100%; font: inherit; }
+.files-sort-button svg { flex-shrink: 0; }
+.files-sort-button:hover { color: var(--mantine-primary-color-filled); }
 .files-table td { vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .files-table th:nth-child(1) { width: 62%; }
 .files-table th:nth-child(2) { width: 14%; }
