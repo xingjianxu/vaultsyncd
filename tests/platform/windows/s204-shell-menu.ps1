@@ -24,6 +24,7 @@ public static class S204Window {
  [DllImport("user32.dll")]static extern void mouse_event(uint f,uint x,uint y,uint d,UIntPtr e);
  [DllImport("kernel32.dll")]public static extern uint SetThreadExecutionState(uint f);
  public static IntPtr Find(uint process,string kind){IntPtr found=IntPtr.Zero;EnumWindows((h,p)=>{uint pid;GetWindowThreadProcessId(h,out pid);var s=new StringBuilder(256);GetClassNameW(h,s,256);if((process==0||pid==process)&&s.ToString()==kind&&IsWindowVisible(h)){found=h;return false;}return true;},IntPtr.Zero);return found;}
+ public static void Hover(int x,int y){SetCursorPos(x,y);}
  public static void Click(int x,int y){SetCursorPos(x,y);mouse_event(2,0,0,0,UIntPtr.Zero);mouse_event(4,0,0,0,UIntPtr.Zero);}
 }
 '@
@@ -65,6 +66,11 @@ public static class S204Window {
     return $null
   }
   function Invoke-Control($control) {
+    if($control.Current.ControlType -eq [Windows.Automation.ControlType]::MenuItem){
+      $rect=$control.Current.BoundingRectangle
+      if($rect.IsEmpty){throw 'menu item has no clickable rectangle'}
+      [S204Window]::Click([int]($rect.X+$rect.Width/2),[int]($rect.Y+$rect.Height/2));return
+    }
     $pattern=$null
     if($control.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke();return}
     $rect=$control.Current.BoundingRectangle
@@ -116,8 +122,11 @@ public static class S204Window {
     Check (Wait-Until {[S204Window]::Find(0,'#32768') -ne [IntPtr]::Zero}) ($phase+' opens native classic context menu')
     if($expected) {
       Check (Wait-Until {$null -ne (Find-Menu 'vaultsyncd')}) ($phase+' contains one vaultsyncd parent')
-      $parent=Find-Menu 'vaultsyncd'; $pattern=$null
-      if($parent.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)){$pattern.Expand()}else{Invoke-Control $parent}
+      # Physical hover lets Explorer send WM_INITMENUPOPUP. UIA ExpandCollapse can
+      # expose an uninitialized empty flyout even for a correctly registered cascade.
+      $parent=Find-Menu 'vaultsyncd';$rect=$parent.Current.BoundingRectangle
+      [S204Window]::Hover([int]($rect.X+$rect.Width/2),[int]($rect.Y+$rect.Height/2))
+      if(!(Wait-Until {$null -ne (Find-Menu '查看文件历史')} 3)){Invoke-Control $parent}
       foreach($label in @('查看文件历史','下载文件','释放空间')){Check (Wait-Until {$null -ne (Find-Menu $label)}) ($phase+' has child '+$label)}
     }else {
       Start-Sleep -Milliseconds 400
@@ -240,8 +249,11 @@ public static class S204Window {
     Check (Wait-Until {(Window-Text)-match '变化|失败|无法|核对原操作'} 60) 'path move after confirmation is rejected during operation recheck'
     Close-File
     Check (Wait-Until {$s=Invoke-Cli @('status');@($s.bindings | Where-Object {$_.binding_id -eq $binding -and $_.synchronized}).Count -eq 1} 90) 'moved file is reconciled before detachment'
-    $movedRows=(Invoke-Cli @('files','--binding-id',$binding)).management.files
-    Check (@($movedRows | Where-Object {$_.path -eq 'moved-after-confirmation.txt' -and $_.residency -eq 'materialized'}).Count -eq 1) 'stale release leaves moved file resident before any content read'
+    Check (Wait-Until {
+      $movedRows=(Invoke-Cli @('files','--binding-id',$binding)).management.files
+      $movedRows | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $PSScriptRoot 'moved-before-read-result.json') -Encoding UTF8
+      @($movedRows | Where-Object {$_.path -eq 'moved-after-confirmation.txt' -and $_.residency -eq 'materialized' -and !$_.pending -and !$_.dirty}).Count -eq 1
+    } 90) 'stale release leaves moved file resident before any content read'
     Check ((Get-FileHash -LiteralPath $renamed -Algorithm SHA256).Hash -eq $dirtyHash) 'moved file bytes survive stale release action'
     $null=Invoke-Cli @('detach','--binding-id',$binding)
     Check (Wait-Until {!(Test-Path -LiteralPath $psRegistry)} 60) 'last binding detachment removes menu registration'

@@ -402,8 +402,9 @@ pub fn sync(executable: &Path, bindings: &[PathBuf]) -> io::Result<()> {
     root.set("Owner", OWNER)?;
     // Do not expose partially updated verbs. A failed update remains hidden for retry.
     root.set("LegacyDisable", "")?;
-    // S204's initial SubCommands="" selects the empty CommandStore-list mode and must
-    // not survive migration to ExtendedSubCommandsKey + our local shell subtree.
+    // Normalize the previous cascade selector to the explicit ExtendedSubCommandsKey
+    // layout; never retain competing selectors. Native probes confirmed that empty
+    // SubCommands with a local shell subtree is also supported by Explorer.
     // The parent also has no default verb, as required for a static cascade.
     for name in OBSOLETE_VALUES {
         root.remove_value(name)?;
