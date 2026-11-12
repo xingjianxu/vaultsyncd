@@ -52,7 +52,7 @@ fn main() {
                 .any(|a| a != "--login-stdin" && a != "--once" && !update_trial)
         {
             return Err(
-                "usage: vaultsyncd-agent --user-session start|stop|health, or --config <file.json> [--login-stdin|--once]".into(),
+                "usage: vaultsyncd-agent --user-session start|stop|shutdown|health, or --config <file.json> [--login-stdin|--once]".into(),
             );
         }
         let config = vaultsyncd_agent::config::AgentConfig::load(std::path::Path::new(&args[2]))?;

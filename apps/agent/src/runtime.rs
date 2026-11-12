@@ -274,8 +274,12 @@ async fn run_mode(
                 if job.reply.is_closed() {
                     continue;
                 }
-                if job.request.command.name == CommandName::PrepareMaintenance {
-                    let result = runtime.prepare_maintenance(&job.request.command).await;
+                if matches!(job.request.command.name, CommandName::PrepareMaintenance | CommandName::StopAgent) {
+                    let result = if job.request.command.name == CommandName::StopAgent {
+                        runtime.stop_agent().await
+                    } else {
+                        runtime.prepare_maintenance(&job.request.command).await
+                    };
                     let _ = job.reply.send(crate::ipc::management_response(&job.request, result));
                     // Let the bounded transport flush the preparation acknowledgment.
                     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -829,6 +833,26 @@ impl Runtime {
         }
     }
 
+    // Ordinary exit keeps durable queues, snapshots and local bytes in place. Exporting a
+    // second copy of all materialized content is reserved for explicit maintenance.
+    async fn stop_agent(&mut self) -> Result<ManagementResult, PortError> {
+        self.quiesce().await?;
+        crate::maintenance_prepare::pause_bindings(&self.db).await?;
+        Ok(ManagementResult::default())
+    }
+
+    async fn quiesce(&mut self) -> Result<(), PortError> {
+        self.stop_servers().await?;
+        for pending in self.pending.values_mut() {
+            pending.completed = true;
+        }
+        self.retry_completed_bindings().await;
+        if !self.pending.is_empty() {
+            return Err(error("binding persistence not resolved before maintenance"));
+        }
+        Ok(())
+    }
+
     async fn prepare_maintenance(
         &mut self,
         command: &Command,
@@ -838,14 +862,7 @@ impl Runtime {
             .as_ref()
             .and_then(|p| p.destination.as_deref())
             .ok_or_else(|| reject("INVALID_ARGUMENT"))?;
-        self.stop_servers().await?;
-        for pending in self.pending.values_mut() {
-            pending.completed = true;
-        }
-        self.retry_completed_bindings().await;
-        if !self.pending.is_empty() {
-            return Err(error("binding persistence not resolved before maintenance"));
-        }
+        self.quiesce().await?;
         crate::maintenance_prepare::prepare(&self.db, &self.config, HashMap::new(), destination)
             .await
     }

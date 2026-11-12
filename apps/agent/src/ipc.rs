@@ -68,6 +68,7 @@ pub(crate) fn start(
                     CommandName::GetStatus
                         | CommandName::SubscribeStatus
                         | CommandName::PrepareMaintenance
+                        | CommandName::StopAgent
                 ) {
                     let pending = db
                         .path()

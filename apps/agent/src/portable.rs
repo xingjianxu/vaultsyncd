@@ -167,8 +167,8 @@ pub async fn ensure_user_session() -> Result<()> {
 }
 /// No shell interpolation, registration, or lifetime coupling to the desktop process.
 pub async fn run(action: &str) -> Result<()> {
-    if !matches!(action, "start" | "stop" | "health") {
-        return Err("usage: vaultsyncd-agent --user-session start|stop|health".into());
+    if !matches!(action, "start" | "stop" | "shutdown" | "health") {
+        return Err("usage: vaultsyncd-agent --user-session start|stop|shutdown|health".into());
     }
     let config_path = if action == "start" {
         user_session::prepare(&local()?)?
@@ -197,7 +197,10 @@ pub async fn run(action: &str) -> Result<()> {
     }
     let (status, _) = match rpc(&endpoint, CommandName::GetStatus, None).await {
         Ok(verified) => verified,
-        Err(e) if e.downcast_ref::<io::Error>().is_some_and(missing_pipe) && action == "stop" => {
+        Err(e)
+            if e.downcast_ref::<io::Error>().is_some_and(missing_pipe)
+                && matches!(action, "stop" | "shutdown") =>
+        {
             let _guard = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?;
             println!("Agent is already stopped; writer lock is free. No state was changed.");
             return Ok(());
@@ -206,6 +209,21 @@ pub async fn run(action: &str) -> Result<()> {
     };
     if action == "health" {
         println!("{}", serde_json::to_string(&status)?);
+        return Ok(());
+    }
+    if action == "shutdown" {
+        // Ordinary desktop exit does not replace or remove files. Preserve durable state
+        // in place rather than making a full maintenance recovery copy on every exit.
+        let (_, process) = rpc(&endpoint, CommandName::StopAgent, None).await?;
+        if !process.wait(15_000)? {
+            return Err(
+                "orderly stop did not exit; no force kill attempted; inspect agent.log".into(),
+            );
+        }
+        let _guard = InstanceGuard::acquire(&config.state_dir, "vaultsyncd-agent")?;
+        println!(
+            "Stopped safely; writer lock released. Vault, cache, dirty content and recovery state retained in place. Bindings remain PAUSED after restart; explicitly Resume each desired binding."
+        );
         return Ok(());
     }
     // Preparation pauses, exports and exits; never auto-resume a user's paused bindings.

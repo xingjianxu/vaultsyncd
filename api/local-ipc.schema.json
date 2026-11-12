@@ -5,7 +5,7 @@
   "x-vaultsyncd": {
     "protocol": {
       "major": 3,
-      "minor": 0
+      "minor": 1
     },
     "frame": {
       "header_bytes": 4,
@@ -84,7 +84,7 @@
     "CommandName": {
       "type": "string",
       "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
-      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity", "remove_connection"]
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity", "remove_connection", "stop_agent"]
     },
     "ErrorBody": {
       "type": "object",

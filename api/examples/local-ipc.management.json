@@ -29,5 +29,6 @@
   {"request_id":"activity","ipc_version":{"major":3,"minor":0},"command":{"name":"list_activity","parameters":{"binding_id":"11111111111111111111111111111111","cursor":"9007199254740993","direction":"download"}}},
   {"request_id":"connections","ipc_version":{"major":3,"minor":0},"command":{"name":"list_connections"}}
 ,
-  {"request_id":"remove-connection","ipc_version":{"major":3,"minor":0},"command":{"name":"remove_connection","parameters":{"server_id":"66666666666666666666666666666666"}}}
+  {"request_id":"remove-connection","ipc_version":{"major":3,"minor":0},"command":{"name":"remove_connection","parameters":{"server_id":"66666666666666666666666666666666"}}},
+  {"request_id":"stop-agent","ipc_version":{"major":3,"minor":1},"command":{"name":"stop_agent"}}
 ]

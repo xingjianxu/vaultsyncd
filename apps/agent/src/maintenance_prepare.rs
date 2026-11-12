@@ -19,15 +19,7 @@ pub(crate) async fn prepare(
     destination: &str,
 ) -> Result<ManagementResult, PortError> {
     let bindings = crate::management::binding_list(db).await?;
-    let control = BindingControls::new(db.clone());
-    for binding in bindings.iter().filter(|binding| !binding.detached) {
-        control
-            .set_paused(
-                BindingId::from_hex(&binding.binding_id).map_err(error)?,
-                true,
-            )
-            .await?;
-    }
+    pause_bindings(db).await?;
     // No further hydration is admitted; do not unregister, release caches or clear queues.
     for (worker, _) in running.values() {
         worker.importer.callbacks.disconnect();
@@ -73,4 +65,19 @@ pub(crate) async fn prepare(
         exported_files: Some(count.to_string()),
         ..Default::default()
     })
+}
+
+/// Persist the existing stop policy without scanning or copying user content.
+pub(crate) async fn pause_bindings(db: &Arc<Database>) -> Result<(), PortError> {
+    let bindings = crate::management::binding_list(db).await?;
+    let control = BindingControls::new(db.clone());
+    for binding in bindings.iter().filter(|binding| !binding.detached) {
+        control
+            .set_paused(
+                BindingId::from_hex(&binding.binding_id).map_err(error)?,
+                true,
+            )
+            .await?;
+    }
+    Ok(())
 }

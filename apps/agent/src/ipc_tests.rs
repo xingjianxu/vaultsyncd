@@ -138,7 +138,7 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     let value = endpoint.request(&request).await.unwrap().result.unwrap();
     assert_eq!(value.bindings, Some(vec![]));
     assert!(value.snapshot_version.is_some());
-    assert_eq!(value.ipc_protocol, IpcVersion { major: 3, minor: 0 });
+    assert_eq!(value.ipc_protocol, version::supported());
     let mut current: Vec<Request> = serde_json::from_str(include_str!(
         "../../../api/examples/local-ipc.management.json"
     ))
@@ -200,7 +200,7 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
         .collect();
     assert_eq!(
         actual, expected,
-        "every current command must traverse the 3.0 adapter"
+        "every current command must traverse the current adapter"
     );
     for current_request in &current {
         assert_eq!(current_request.ipc_version, version::supported());

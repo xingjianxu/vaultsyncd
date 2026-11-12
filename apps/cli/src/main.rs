@@ -652,6 +652,7 @@ fn command_label(name: CommandName) -> &'static str {
         CommandName::ListVaults => "vaults",
         CommandName::ListFiles => "files",
         CommandName::ClaimNotification => "claim-notification",
+        CommandName::StopAgent => "stop-agent",
         CommandName::PrepareMaintenance => "prepare-maintenance",
         CommandName::SetMode => "mode",
         CommandName::GetRules => "rules",
