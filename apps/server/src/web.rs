@@ -23,6 +23,7 @@ pub const WEB_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'sel
 pub struct WebAssets {
     directory: PathBuf,
     index: Arc<str>,
+    policy: Arc<str>,
 }
 impl WebAssets {
     /// Read explicit environment configuration; absent means API-only.
@@ -86,14 +87,34 @@ impl WebAssets {
         Ok(Self {
             directory,
             index: index.into(),
+            policy: WEB_CSP.into(),
         })
+    }
+    /// Trust only the configured Document Server for its API script and viewer frames.
+    /// This script runs in the control plane origin; deployment owns this trust decision.
+    pub fn with_office_url(mut self, url: &str) -> io::Result<Self> {
+        let url = crate::office::parse_document_server_url(url)?;
+        let origin = url.origin().ascii_serialization();
+        self.policy = WEB_CSP
+            .replace(
+                "script-src 'self';",
+                &format!("script-src 'self' {origin};"),
+            )
+            .replace("frame-src blob:;", &format!("frame-src blob: {origin};"))
+            .into();
+        // ONLYOFFICE API.js sets an empty onmousewheel handler for legacy Safari.
+        // Permit precisely the empty body, without authorizing any inline script.
+        self.policy = format!("{}; script-src-attr 'unsafe-hashes' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='", self.policy).into();
+        Ok(self)
     }
     /// Only vault and /assets are public; unknown API paths never fall back to HTML.
     pub fn router(&self) -> Router {
         let index = Arc::clone(&self.index);
+        let policy = Arc::clone(&self.policy);
         Router::new().route("/", get(move || {
             let index = Arc::clone(&index);
-            async move { index_response(&index) }
+            let policy = Arc::clone(&policy);
+            async move { index_response(&index, &policy) }
         }))
             .nest_service("/assets",ServeDir::new(self.directory.join("assets")).append_index_html_on_directories(false))
             .layer(middleware::map_response(|mut response:Response| async move{
@@ -108,7 +129,7 @@ impl WebAssets {
     }
 }
 
-fn index_response(index: &str) -> Result<Response, StatusCode> {
+fn index_response(index: &str, policy: &str) -> Result<Response, StatusCode> {
     let mut bytes = [0u8; 16];
     OsRng
         .try_fill_bytes(&mut bytes)
@@ -116,7 +137,7 @@ fn index_response(index: &str) -> Result<Response, StatusCode> {
     let nonce: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let meta = format!("<meta name=\"csp-nonce\" content=\"{nonce}\"></head>");
     let mut response = Html(index.replacen("</head>", &meta, 1)).into_response();
-    let policy = HeaderValue::from_str(&WEB_CSP.replace("__STYLE_NONCE__", &nonce))
+    let policy = HeaderValue::from_str(&policy.replace("__STYLE_NONCE__", &nonce))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     response
         .headers_mut()
@@ -149,6 +170,43 @@ mod tests {
         std::fs::remove_dir_all(vault).unwrap();
     }
 
+    #[test]
+    fn office_policy_trusts_only_the_configured_origin() {
+        let assets = || WebAssets {
+            directory: std::env::temp_dir(),
+            index: "<head></head>".into(),
+            policy: WEB_CSP.into(),
+        };
+        let web = assets()
+            .with_office_url("https://office.example:15402/")
+            .unwrap();
+        assert!(
+            web.policy
+                .contains("script-src 'self' https://office.example:15402;")
+        );
+        assert!(
+            web.policy
+                .contains("frame-src blob: https://office.example:15402;")
+        );
+        assert!(web.policy.contains("connect-src 'self';"));
+        assert!(web.policy.contains(
+            "script-src-attr 'unsafe-hashes' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='"
+        ));
+        assert!(!web.policy.contains("unsafe-inline"));
+        assert!(!web.policy.contains("unsafe-eval"));
+        for bad in [
+            "https://office.example/path",
+            "https://office.example/?policy=*",
+            "http://office.example",
+            "https://user:secret@office.example",
+            "https://office.example;script-src/",
+            "https://*.office.example/",
+        ] {
+            assert!(assets().with_office_url(bad).is_err());
+        }
+        assert_eq!(&*assets().policy, WEB_CSP);
+    }
+
     #[tokio::test]
     async fn html_nonces_match_the_policy_and_change_per_response() {
         use axum::{
@@ -161,6 +219,7 @@ mod tests {
         let web = WebAssets {
             directory: std::env::temp_dir(),
             index: index.into(),
+            policy: WEB_CSP.into(),
         };
         let router = web.router();
         let mut previous = None;

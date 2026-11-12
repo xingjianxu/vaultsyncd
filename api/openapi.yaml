@@ -993,6 +993,158 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/ErrorEnvelope"}
 
+  /v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer:
+    post:
+      operationId: createOfficeViewer
+      summary: 创建固定版本Office只读查看器
+      description: |
+        完整校验固定版本SHA256与大小，签发仅查看模式JWT配置；源经随机回环通道供OnlyOffice读取。
+        临时源与签名120秒到期，每实例共享最多2个源或转换准入，输入限50MiB。
+        返回完整配置JSON文本、Document Server根URL和固定源身份；不接受保存回调或写入内容。
+        JWT与随机源URL是限时能力，不是管理员凭据；响应no-store。
+      parameters:
+        - name: vault
+          in: path
+          required: true
+          description: 授权Vault身份。
+          schema: {type: string}
+        - name: entry
+          in: path
+          required: true
+          description: 固定条目身份。
+          schema: {type: string}
+        - name: version
+          in: path
+          required: true
+          description: 固定已提交版本身份。
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OfficePreviewRequest"}
+      responses:
+        "200":
+          description: 签名的只读配置与临时源会话。
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OfficeViewerSession"}
+        "400":
+          description: 请求身份或元数据不合法
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "401":
+          description: 会话失效
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: Vault未获授权
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "404":
+          description: 查看器不属于当前会话或路径
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "410":
+          description: 固定版本已过期
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "413":
+          description: 源文件超过50MiB
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "422":
+          description: 固定版本内容校验失败
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "503":
+          description: 未配置、繁忙、超时或源读取失败
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
+  /v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer/{session}:
+    delete:
+      operationId: closeOfficeViewer
+      summary: 撤销当前登录会话创建的Office临时源
+      description: |
+        必须与原Vault、Entry、Version及登录会话匹配；已过期或已关闭返回closed=true。
+        关闭不会撤回OnlyOffice已读取或已在浏览器呈现的数据，不写入任何文档。
+      parameters:
+        - name: vault
+          in: path
+          required: true
+          description: 授权Vault身份。
+          schema: {type: string}
+        - name: entry
+          in: path
+          required: true
+          description: 固定条目身份。
+          schema: {type: string}
+        - name: version
+          in: path
+          required: true
+          description: 固定已提交版本身份。
+          schema: {type: string}
+        - name: session
+          in: path
+          required: true
+          description: 创建时返回的64位小写十六进制随机身份。
+          schema: {type: string}
+      responses:
+        "200":
+          description: 源已关闭或已过期。
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OfficeViewerClosed"}
+        "400":
+          description: 请求身份或元数据不合法
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "401":
+          description: 会话失效
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "403":
+          description: Vault未获授权
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "404":
+          description: 查看器不属于当前会话或路径
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "410":
+          description: 固定版本已过期
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "413":
+          description: 源文件超过50MiB
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "422":
+          description: 固定版本内容校验失败
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+        "503":
+          description: 未配置、繁忙、超时或源读取失败
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorEnvelope"}
+
   /v1/vaults/{vault}/entries/{entry}/versions/{version}/content:
     get:
       operationId: downloadVersionContent
@@ -1730,6 +1882,34 @@ components:
           type: string
           format: decimal_u64
           description: 原始固定版本字节数。
+    OfficeViewerClosed:
+      description: 临时源关闭确认，不意味着撤回上游已缓存内容。
+      type: object
+      required: [closed]
+      properties:
+        closed:
+          type: boolean
+          description: 临时源已关闭或已过期。
+    OfficeViewerSession:
+      description: 绑定固定版本与当前登录会话的OnlyOffice只读配置；不得记录配置中的限时JWT与源地址。
+      type: object
+      required: [session_id, document_server_url, config_json, source_hash, source_version]
+      properties:
+        session_id:
+          type: string
+          description: 64位小写十六进制临时源撤销身份。
+        document_server_url:
+          type: string
+          description: 配置并校验过的Document Server根URL。
+        config_json:
+          type: string
+          description: 完整已签名OnlyOffice配置JSON文本；第三方配置不纳入本项目wire DTO。
+        source_hash:
+          type: string
+          description: 已核验原始固定版本完整SHA256。
+        source_version:
+          type: string
+          description: 已核验的固定VersionId。
     BackupPrepareRequest: {"type": "object", "required": ["backup_id"], "properties": {"backup_id": {"type": "string", "description": "调用方稳定请求身份；重试复用。"}}, "description": "备份管理的BackupPrepareRequest契约"}
     BackupSnapshotPhase: {"type": "string", "enum": ["preparing", "ready", "failed", "releasing", "released", "expired"], "description": "源快照准备/释放阶段；不会把pending当complete。"}
     BackupIntegrity: {"type": "string", "enum": ["unverified", "verified", "incomplete"], "description": "固定源内容的完整性，不能代表客户端目标已持久导出。"}

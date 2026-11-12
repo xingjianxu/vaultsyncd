@@ -50,6 +50,7 @@ hmac = "0.12"
 sha2 = "0.10"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 # HTTP 处理器与上传端点的验收用 `tower::ServiceExt::oneshot` 直接调用 router，不启动真实监听。
 tower = { version = "0.5", features = ["util"] }
 # 验收用例按生成 DTO 解析响应体（不手写 JSON 字面量比对），并按契约形状断言已收块/缺块区间；

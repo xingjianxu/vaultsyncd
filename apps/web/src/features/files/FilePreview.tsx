@@ -6,7 +6,8 @@ import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
 import { decodePreviewText, downloadPreview, previewKind } from "./preview";
 import { saveDownload } from "./download";
-import { downloadOfficePreview } from "./office-preview";
+import { openOfficeViewer, type OfficeViewer } from "./office-preview";
+import { OfficePreview } from "./OfficePreview";
 import type { PreviewRenderer } from "./preview-renderer";
 import "./FilePreview.css";
 
@@ -19,6 +20,7 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
   const [renderer, setRenderer] = useState<PreviewRenderer | null>(null);
   const [download, setDownload] = useState<{ name: string; blob: Blob } | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [office, setOffice] = useState<OfficeViewer | null>(null);
   const [text, setText] = useState<string | null>(null);
   const [TextViewer, setTextViewer] = useState<ComponentType<{ text: string; name: string; markdown: boolean }> | null>(null);
   const [rendering, setRendering] = useState(false);
@@ -29,14 +31,17 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
   const generation = client?.sessionGeneration;
   // 同一 Modal 保持挂载以恢复焦点；内容和资源在关闭时立即释放，不等退场动画。
   useEffect(() => {
-    setRenderer(null); setDownload(null); setError(""); setPdfUrl(null); setText(null); setTextViewer(null); setProgress(0); setRendering(false);
+    setRenderer(null); setDownload(null); setError(""); setPdfUrl(null); setOffice(null); setText(null); setTextViewer(null); setProgress(0); setRendering(false);
     if (!entry || !client || !kind || auth.busy) { setStatus(""); return; }
     const controller = new AbortController();
     request.current = controller;
     let resource: PreviewRenderer | null = null;
     let objectUrl: string | null = null;
+    let officeViewer: OfficeViewer | null = null;
     controller.signal.addEventListener("abort", () => {
       if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+      const previousOffice = officeViewer; officeViewer = null;
+      void previousOffice?.destroy().catch(() => undefined);
       const previous = resource; resource = null;
       void previous?.destroy().catch(() => undefined);
     }, { once: true });
@@ -57,16 +62,15 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
           setText(decoded); setTextViewer(() => TextPreview); setStatus("");
           return;
         }
-        let previewBlob = result.blob;
         if (kind === "office") {
-          if (navigator.pdfViewerEnabled === false) throw new Error("浏览器未启用 PDF 预览，请下载后打开。");
-          setStatus("正在转换 Office 文件…"); setProgress(0);
-          previewBlob = await downloadOfficePreview(client, vaultId, entry, controller.signal, (bytes, total) => {
-            if (current()) setProgress(Math.round(bytes / total * 100));
-          });
-          if (!current()) return;
+          setStatus("正在打开 Office 文档…"); setProgress(0);
+          const viewer = await openOfficeViewer(client, vaultId, entry, controller.signal);
+          if (!current()) { void viewer.destroy().catch(() => undefined); return; }
+          officeViewer = viewer; setOffice(viewer);
+          return;
         }
-        if (kind === "pdf" || kind === "office") {
+        const previewBlob = result.blob;
+        if (kind === "pdf") {
           const header = await previewBlob.slice(0, 1024).text();
           if (!current()) return;
           if (!header.includes("%PDF-")) throw new Error("文件不是有效的 PDF。");
@@ -130,11 +134,13 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
       {error && <Alert color="red" role="alert">{error}</Alert>}
       <Group>
         {busy && <Button variant="default" onClick={() => {
-          request.current?.abort(); setRenderer(null); setPdfUrl(null); setText(null); setTextViewer(null); setStatus(""); setRendering(false); setError("已取消预览，可重试。");
+          request.current?.abort(); setRenderer(null); setPdfUrl(null); setOffice(null); setText(null); setTextViewer(null); setStatus(""); setRendering(false); setError("已取消预览，可重试。");
         }}>取消预览</Button>}
         {error && <Button variant="default" disabled={auth.busy} onClick={() => setAttempt(value => value + 1)}>重试预览</Button>}
       </Group>
-      {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`${kind === "office" ? "Office" : "PDF"} 预览 · ${entry?.name ?? ""}`} />}
+      {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`PDF 预览 · ${entry?.name ?? ""}`} />}
+      {office && <OfficePreview viewer={office} onReady={() => { if (!request.current?.signal.aborted) setStatus(""); }}
+        onError={message => { request.current?.abort(); setOffice(null); setStatus(""); setError(`预览失败：${message}`); }} />}
       {TextViewer && text !== null && entry && <TextViewer key={`${entry.entry_id}:${entry.version_id}:${attempt}`} text={text} name={entry.name} markdown={kind === "markdown"} />}
       {renderer && <div className="file-preview-viewport" aria-busy={rendering}>
         <canvas ref={canvas} role="img" aria-label={entry?.name} hidden={!!error} />

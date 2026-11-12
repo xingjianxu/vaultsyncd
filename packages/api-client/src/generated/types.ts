@@ -766,6 +766,44 @@ export function decodeOfficePreviewRequest(value: unknown): OfficePreviewRequest
   };
 }
 
+/** 临时源关闭确认，不意味着撤回上游已缓存内容。 */
+export interface OfficeViewerClosed {
+  /** 临时源已关闭或已过期。 */
+  closed: boolean;
+}
+
+export function decodeOfficeViewerClosed(value: unknown): OfficeViewerClosed {
+  const object = expect_object(value, "OfficeViewerClosed");
+  return {
+    closed: expect_boolean(object.closed, "OfficeViewerClosed.closed"),
+  };
+}
+
+/** 绑定固定版本与当前登录会话的OnlyOffice只读配置；不得记录配置中的限时JWT与源地址。 */
+export interface OfficeViewerSession {
+  /** 完整已签名OnlyOffice配置JSON文本；第三方配置不纳入本项目wire DTO。 */
+  config_json: string;
+  /** 配置并校验过的Document Server根URL。 */
+  document_server_url: string;
+  /** 64位小写十六进制临时源撤销身份。 */
+  session_id: string;
+  /** 已核验原始固定版本完整SHA256。 */
+  source_hash: string;
+  /** 已核验的固定VersionId。 */
+  source_version: string;
+}
+
+export function decodeOfficeViewerSession(value: unknown): OfficeViewerSession {
+  const object = expect_object(value, "OfficeViewerSession");
+  return {
+    config_json: expect_string(object.config_json, "OfficeViewerSession.config_json"),
+    document_server_url: expect_string(object.document_server_url, "OfficeViewerSession.document_server_url"),
+    session_id: expect_string(object.session_id, "OfficeViewerSession.session_id"),
+    source_hash: expect_string(object.source_hash, "OfficeViewerSession.source_hash"),
+    source_version: expect_string(object.source_version, "OfficeViewerSession.source_version"),
+  };
+}
+
 /**
  * 已提交操作附带的冲突信息（design §15.3）：服务器主条目、新建的冲突副本与原因。内容都在
  * 服务器上，客户端据此把本地迟到修改对到副本身份上。

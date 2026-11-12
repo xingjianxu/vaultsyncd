@@ -365,7 +365,16 @@ impl Service {
 /// 见 [`StartupError`]：数据库打不开、恢复读不出结论或监听地址绑不上时返回错误，调用方必须以
 /// 非零退出码结束，不能降级成“没恢复也先接写入”。
 pub async fn prepare(config: Config) -> Result<Service, StartupError> {
-    let web = crate::web::WebAssets::configured().map_err(StartupError::Web)?;
+    let web = crate::web::WebAssets::configured()
+        .and_then(|assets| {
+            assets
+                .map(|assets| match config.office.as_ref() {
+                    Some(office) => assets.with_office_url(&office.document_server_url),
+                    None => Ok(assets),
+                })
+                .transpose()
+        })
+        .map_err(StartupError::Web)?;
     let office = config
         .office
         .as_ref()

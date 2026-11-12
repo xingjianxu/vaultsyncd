@@ -48,5 +48,5 @@ export type { ClientConnection, ClientConnectionPage } from "./generated/types";
 export { listActivity } from "./generated/client";
 export type { ActivityRecord, ActivityPage } from "./generated/types";
 
-export { previewOfficeVersion } from "./generated/client";
-export type { OfficeFileType, OfficePreviewRequest } from "./generated/types";
+export { previewOfficeVersion, createOfficeViewer, closeOfficeViewer } from "./generated/client";
+export type { OfficeFileType, OfficePreviewRequest, OfficeViewerSession, OfficeViewerClosed } from "./generated/types";

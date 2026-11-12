@@ -1,11 +1,12 @@
-//! Authenticated, fixed-version Office-to-PDF previews through a configured local service.
+//! Authenticated fixed-version Office viewing, signed read-only sessions and legacy PDF conversion.
 use std::{
+    collections::BTreeMap,
     future::{Future, IntoFuture},
     io,
     net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll},
@@ -29,11 +30,13 @@ use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
-    sync::{Semaphore, watch},
+    sync::{OwnedSemaphorePermit, Semaphore, watch},
     task::JoinHandle,
 };
-use vaultsyncd_domain::ids::{EntryId, VersionId};
-use vaultsyncd_protocol::generated::{ErrorCode, OfficeFileType, OfficePreviewRequest};
+use vaultsyncd_domain::ids::{EntryId, SessionId, VersionId};
+use vaultsyncd_protocol::generated::{
+    ErrorCode, OfficeFileType, OfficePreviewRequest, OfficeViewerClosed, OfficeViewerSession,
+};
 use vaultsyncd_server_core::objects::ContentDigest;
 
 use crate::{
@@ -53,6 +56,16 @@ pub struct OfficeRuntime {
     client: Client,
     secret: Vec<u8>,
     slots: Arc<Semaphore>,
+    viewers: Arc<Mutex<BTreeMap<String, ViewerLease>>>,
+}
+
+/// Only the initiating login session may revoke its source capability.
+/// The source and its memory/slot expire independently of browser cleanup.
+struct ViewerLease {
+    owner: SessionId,
+    target: (String, String, String),
+    _source: Source,
+    _slot: OwnedSemaphorePermit,
 }
 
 pub(crate) fn parse_document_server_url(text: &str) -> io::Result<Url> {
@@ -64,6 +77,11 @@ pub(crate) fn parse_document_server_url(text: &str) -> io::Result<Url> {
                 .is_ok_and(|ip| ip.is_loopback())
         });
     if !(url.scheme() == "https" || local_http)
+        || !url.host_str().is_some_and(|host| {
+            host.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
+            })
+        })
         || url.host().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -82,6 +100,11 @@ fn invalid(message: &str) -> io::Error {
 }
 
 impl OfficeRuntime {
+    /// Validated deployment origin for the Web viewer's precise CSP allowance.
+    pub fn document_server_url(&self) -> &str {
+        self.base.as_str()
+    }
+
     /// Load the bounded runtime secret before startup opens application state.
     ///
     /// # Errors
@@ -118,6 +141,7 @@ impl OfficeRuntime {
             client,
             secret: bytes,
             slots: Arc::new(Semaphore::new(2)),
+            viewers: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -415,6 +439,230 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Create a signed view-only configuration, with no storage write-back capability.
+pub async fn create_viewer(
+    State(context): State<Arc<ContentContext>>,
+    Path(target): Path<(String, String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<OfficePreviewRequest>, JsonRejection>,
+) -> Response {
+    match tokio::time::timeout(TIMEOUT, create_viewer_inner(context, target, headers, body)).await {
+        Ok(response) => response,
+        Err(_) => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::NeedsRecovery,
+            &hex(&nonce()),
+            "Office 查看器准备超时，请稍后重试",
+            true,
+            None,
+        ),
+    }
+}
+
+async fn create_viewer_inner(
+    context: Arc<ContentContext>,
+    target: (String, String, String),
+    headers: HeaderMap,
+    body: Result<Json<OfficePreviewRequest>, JsonRejection>,
+) -> Response {
+    let (vault, entry, version) = &target;
+    let (caller, vault_id) = match Caller::resolve(&context.auth, &headers, vault).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(_) => {
+            return bad_request(
+                &caller.request_id,
+                "Office 查看器请求不是合法 JSON 或格式不受支持",
+            );
+        }
+    };
+    let (Some(entry_id), Some(version_id)) = (
+        parse_identity::<EntryId>(entry),
+        parse_identity::<VersionId>(version),
+    ) else {
+        return bad_request(&caller.request_id, "Office 查看器条目或版本身份不合法");
+    };
+    let (Ok(hash), Ok(size)) = (
+        ContentDigest::from_hex(&body.hash),
+        body.size.parse::<u64>(),
+    ) else {
+        return bad_request(&caller.request_id, "Office 查看器摘要或大小不合法");
+    };
+    if body.size != size.to_string() {
+        return bad_request(&caller.request_id, "Office 查看器大小不是规范十进制文本");
+    }
+    if size > MAX_OFFICE_BYTES as u64 {
+        return office_error(
+            &caller,
+            vault,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Office 查看器仅支持不超过 50 MiB 的文件",
+            false,
+        );
+    }
+    let Some(office) = &context.office else {
+        return office_error(
+            &caller,
+            vault,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "服务端尚未配置 Office 预览",
+            true,
+        );
+    };
+    let Ok(slot) = Arc::clone(&office.slots).try_acquire_owned() else {
+        return office_error(
+            &caller,
+            vault,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Office 预览繁忙，请稍后重试",
+            true,
+        );
+    };
+    let bytes = match crate::content::read_office_source(
+        &context, &caller, vault_id, entry_id, version_id, hash, size,
+    )
+    .await
+    {
+        Ok(bytes) => bytes,
+        Err(response) => return *response,
+    };
+    let source =
+        match Source::open(Arc::clone(&context), headers.clone(), vault.clone(), bytes).await {
+            Ok(source) => source,
+            Err(_) => {
+                return office_error(
+                    &caller,
+                    vault,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Office 预览源服务不可用",
+                    true,
+                );
+            }
+        };
+    if let Err(response) = Caller::resolve(&context.auth, &headers, vault).await {
+        return response;
+    }
+    let (file_type, document_type) = match body.file_type {
+        OfficeFileType::Doc => ("doc", "word"),
+        OfficeFileType::Docx => ("docx", "word"),
+        OfficeFileType::Odt => ("odt", "word"),
+        OfficeFileType::Xls => ("xls", "cell"),
+        OfficeFileType::Xlsx => ("xlsx", "cell"),
+        OfficeFileType::Ods => ("ods", "cell"),
+        OfficeFileType::Ppt => ("ppt", "slide"),
+        OfficeFileType::Pptx => ("pptx", "slide"),
+        OfficeFileType::Odp => ("odp", "slide"),
+    };
+    let session_id = hex(&nonce());
+    let mut config = serde_json::json!({
+        "documentType": document_type,
+        "type": "desktop",
+        "document": {
+            "key": session_id, "fileType": file_type, "title": format!("preview.{file_type}"),
+            "url": source.url,
+            "permissions": {"edit": false, "review": false, "comment": false, "fillForms": false,
+                "download": false, "print": false, "chat": false, "modifyContentControl": false, "modifyFilter": false},
+        },
+        "editorConfig": {"mode": "view", "lang": "zh-CN", "coEditing": {"mode": "strict", "change": false},
+            "user": {"id": session_id, "name": "查看者"},
+            "customization": {"autosave": false, "forcesave": false, "macros": false, "macrosMode": "disable", "plugins": false},
+            "plugins": {"autostart": [], "pluginsData": []},
+        },
+        "exp": caller.now.as_unix_seconds().saturating_add(120),
+    });
+    let token = match office.token(&config) {
+        Ok(token) => token,
+        Err(_) => {
+            return office_error(
+                &caller,
+                vault,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Office 查看器签名失败",
+                true,
+            );
+        }
+    };
+    config["token"] = serde_json::Value::String(token);
+    let response_body = OfficeViewerSession {
+        session_id: session_id.clone(),
+        document_server_url: office.base.to_string(),
+        config_json: config.to_string(),
+        source_hash: hash.to_hex(),
+        source_version: version.clone(),
+    };
+    office.viewers.lock().expect("viewer leases").insert(
+        session_id.clone(),
+        ViewerLease {
+            owner: caller.principal.session_id,
+            target: target.clone(),
+            _source: source,
+            _slot: slot,
+        },
+    );
+    let viewers = Arc::downgrade(&office.viewers);
+    tokio::spawn(async move {
+        tokio::time::sleep(TIMEOUT).await;
+        if let Some(viewers) = viewers.upgrade() {
+            viewers.lock().expect("viewer leases").remove(&session_id);
+        }
+    });
+    let mut response = Json(response_body).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+/// Revoke the initiating session's temporary source; already rendered upstream data cannot be recalled.
+pub async fn close_viewer(
+    State(context): State<Arc<ContentContext>>,
+    Path((vault, entry, version, session)): Path<(String, String, String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    let (caller, _) = match Caller::resolve(&context.auth, &headers, &vault).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if parse_identity::<EntryId>(&entry).is_none()
+        || parse_identity::<VersionId>(&version).is_none()
+        || session.len() != 64
+        || !session
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return bad_request(&caller.request_id, "Office 查看器身份不合法");
+    }
+    if let Some(office) = &context.office {
+        let mut viewers = office.viewers.lock().expect("viewer leases");
+        if let Some(viewer) = viewers.get(&session) {
+            if viewer.owner != caller.principal.session_id
+                || viewer.target != (vault.clone(), entry, version)
+            {
+                return office_error(
+                    &caller,
+                    &vault,
+                    StatusCode::NOT_FOUND,
+                    "Office 查看器不存在",
+                    false,
+                );
+            }
+            viewers.remove(&session);
+        }
+    }
+    let mut response = Json(OfficeViewerClosed { closed: true }).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
 /// Return a PDF derived from exactly the authenticated entry/version and expected snapshot metadata.
 pub async fn preview(
     State(context): State<Arc<ContentContext>>,
@@ -686,6 +934,7 @@ mod tests {
                 .unwrap(),
             secret: vec![b'x'; 64],
             slots: Arc::new(Semaphore::new(2)),
+            viewers: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 

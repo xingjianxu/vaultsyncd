@@ -128,6 +128,14 @@ pub fn router(
             "/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview",
             post(super::office::preview),
         )
+        .route(
+            "/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer",
+            post(super::office::create_viewer),
+        )
+        .route(
+            "/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer/{session}",
+            axum::routing::delete(super::office::close_viewer),
+        )
         .with_state(content);
     // 操作命令与结果查询（S047）：幂等键与结果都来自 `operations` 表，`pending` 用 202。
     let operations_router = Router::new()

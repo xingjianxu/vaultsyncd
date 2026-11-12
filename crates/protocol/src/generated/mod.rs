@@ -662,6 +662,28 @@ pub struct OfficePreviewRequest {
     pub size: String,
 }
 
+/// 临时源关闭确认，不意味着撤回上游已缓存内容。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OfficeViewerClosed {
+    /// 临时源已关闭或已过期。
+    pub closed: bool,
+}
+
+/// 绑定固定版本与当前登录会话的OnlyOffice只读配置；不得记录配置中的限时JWT与源地址。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OfficeViewerSession {
+    /// 完整已签名OnlyOffice配置JSON文本；第三方配置不纳入本项目wire DTO。
+    pub config_json: String,
+    /// 配置并校验过的Document Server根URL。
+    pub document_server_url: String,
+    /// 64位小写十六进制临时源撤销身份。
+    pub session_id: String,
+    /// 已核验原始固定版本完整SHA256。
+    pub source_hash: String,
+    /// 已核验的固定VersionId。
+    pub source_version: String,
+}
+
 /// 已提交操作附带的冲突信息（design §15.3）：服务器主条目、新建的冲突副本与原因。内容都在
 /// 服务器上，客户端据此把本地迟到修改对到副本身份上。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
