@@ -1982,3 +1982,12 @@ S001 初始化完整编号；S002 以后工具可以仅输出未完成行及直�
 - 交接：`agent/tasks/S204.md`；本地中文提交，验收交接后合 master 并清理本卡树/分支；仅客户端改动，无服务端部署、远端发行。
 
 - S204状态：done；保留并发S202后，最终干净a56d8e3组合字节Windows98项、原生路径4项、调度14项及两套各8组Chromium等通过，证据及限制见交接；开发dist已交付，不远端发行/部署。
+
+### S206 — 两端上传下载图标改用 lucide 云传输图标
+
+- 依据：用户2026-11-12要求网页与客户端的上传、下载图标改为 lucide `cloud-upload` 与 `cloud-download`；前置 S198（引入锁定 Lucide）/S205 done，本轮明确请求优先。
+- 范围：统一 Web 文件工具栏与两处右键菜单、两端「同步与传输记录」方向列、桌面文件状态与 Explorer 下载窗口入口的图标；不新增文案，不改尺寸/描边/可访问名称，无协议/schema/IPC 变化。
+- 验收：根 typecheck、Web 七组与 desktop activity、两端构建；SSR 与真实 Chromium（部署包精确字节 Web + 同包后端）核对云图标实际渲染、无 pageerror/CSP 违规；完成本机部署、健康/ServerId 与线上资产字节核对。
+- 交接：`agent/tasks/S206.md`；仅前端资产变化，不发行、不重打包 Windows 客户端；下一 ready 仍为 S199。
+
+- S206状态：done；实现13dbfa7已部署generation280（主机pin 652f474），SSR 与 Chromium 云图标断言及线上13项资产核对通过；桌面外观未在 Windows 原生截图确认，证据与限制见交接。
