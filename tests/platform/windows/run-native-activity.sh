@@ -78,7 +78,11 @@ def operation(action,path,**fields):
     expected.append({'action':action,'path':path,'operation_id':body['op_id']})
     return result
 made=operation('create_directory','S225-new-directory',kind='create',parent_id=root['entry_id'],name='S225-new-directory',expected_absent=True)
-operation('move','S225-moved-directory',kind='move',entry_id=made['entry_id'],base_revision=made['revision'],parent_id=root['entry_id'],name='S225-moved-directory')
+moved=operation('move','S225-moved-directory',kind='move',entry_id=made['entry_id'],base_revision=made['revision'],parent_id=root['entry_id'],name='S225-moved-directory')
+subtree=request('GET',f"/v1/vaults/{vault}/entries/{made['entry_id']}/subtree")
+# Return the fixture to its original two-file first-merge shape, while keeping
+# both the directory creation/move history and a real subtree deletion record.
+operation('delete','S225-moved-directory',kind='delete',entry_id=made['entry_id'],base_revision=moved['revision'],subtree_token=subtree['token'])
 metadata,rows=snapshot(); seed=next(row for row in rows if row['name']=='server-seed.txt')
 restored=operation('restore_version','server-seed.txt',kind='restore',entry_id=seed['entry_id'],base_revision=seed['revision'],version_id=seed['version_id'])
 deleted=operation('delete','server-seed.txt',kind='delete',entry_id=seed['entry_id'],base_revision=restored['revision'])

@@ -179,7 +179,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     await sleep(2600);
     check(activityCalls.length === leftRouteCalls, "native route leave stops activity polling despite delayed reply");
     location.hash = "/activity";
-    await wait("native activity remount loads automatically", () => directions().length > 0);
+    await wait("native activity remount binding snapshot", () => !!document.querySelector(`[name="activity_binding"] option[value="${bindingId}"]`));
+    const bindingSelect = document.querySelector('[name="activity_binding"]');
+    check(bindingSelect.value === bindingSelect.options[0].value, "native remount defaults to the first available binding");
+    await wait("native remount default binding read completes", () => activityCalls.some(call => call.started > activityCalls[leftRouteCalls - 1].started && call.bindingId === bindingSelect.value && call.finished !== undefined));
+    if (bindingSelect.value === emptyBinding) {
+      await wait("native remount empty default Vault", () => text().includes("当前筛选没有记录。"));
+      check(directions().length === 0, "native empty default binding is represented by its actual empty records");
+    }
+    select("activity_binding", bindingId);
+    await wait("native selected binding loads automatically after remount", () => directions().length > 0);
     check(!document.querySelector('[role="alert"]'), "page recovers after reauthentication");
     check(document.documentElement.scrollWidth <= innerWidth, "native desktop page fits window");
     check(cspViolations.length === 0, "native activity page has no CSP violations");
