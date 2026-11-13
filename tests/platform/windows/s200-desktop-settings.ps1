@@ -344,7 +344,7 @@ public static class S200Window {
       Expect-Exited 'restarted binding closes safely'
       Check (Wait-Until { (Agents).Count -eq 0 }) 'S231 detached writer exits before restart'
       Launch 'detached-binding-restart'
-      Check (Wait-Until { (Read-Dialog $main).Contains('agent 已连接') } 60) 'S231 reopened desktop reads the real agent state'
+      Check (Wait-Until { (Read-Dialog $main) -match 'agent 已连接' } 60) 'S231 reopened desktop reads the real agent state'
       $s=Invoke-S203Cli @('status')
       Check (@($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.detached -and $_.paused }).Count -eq 1) 'S231 restart retains detached recovery record without auto-resuming it'
       Check (@($s.bindings | Where-Object { $_.binding_id -eq $binding -and $_.detached -and $_.paused }).Count -eq 1) 'S231 restart runtime status agrees with durable detached controls'
