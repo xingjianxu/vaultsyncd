@@ -15,6 +15,7 @@ import { useRoute } from "./route";
 import { Settings } from "./features/settings/Settings";
 import { nativeDesktopSettings, type DesktopSettingsClient } from "./services/desktop";
 import { ShellFile } from "./features/shell/ShellFile";
+import { restoreStartupBindings } from "./services/startup-bindings";
 
 declare const __APP_VERSION__: string;
 
@@ -43,12 +44,29 @@ function AppView({ agent, desktopSettings }: { agent: AgentClient; desktopSettin
   const [snapshot, setSnapshot] = useState<GetStatusResult>();
   const executing = useRef(false); const mounted = useRef(true);
   const statusRead = useRef(0);
+  const startupRecovery = useRef<Promise<void> | undefined>(undefined);
+  const startupReady = useRef(false);
   const refresh = useCallback(async () => {
     const request = ++statusRead.current;
     try {
-      const result = await agent.getStatus();
+      let result = await agent.getStatus();
       if (!result.management?.connections || !result.management.bindings || !result.bindings) {
         throw new Error("agent 未返回完整连接与绑定状态。");
+      }
+      if (!mounted.current || request !== statusRead.current) return;
+      if (!startupReady.current) {
+        startupRecovery.current ??= restoreStartupBindings(agent, result.management.bindings).then(failures => {
+          if (mounted.current && failures.length) notifications.show({
+            title: "部分同步目录未能自动恢复", message: failures.join("\n"), color: "red", autoClose: false,
+          });
+        });
+        await startupRecovery.current;
+        // Resume acknowledgements only change the control gate; read actual current state.
+        result = await agent.getStatus();
+        if (!result.management?.connections || !result.management.bindings || !result.bindings) {
+          throw new Error("agent 未返回完整连接与绑定状态。");
+        }
+        startupReady.current = true;
       }
       if (mounted.current && request === statusRead.current) {
         setSnapshot(result);

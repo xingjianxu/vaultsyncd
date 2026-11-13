@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Anchor, Button as LinkButton, Group, Loader, Modal, NativeSelect, Select, Stack, Text, TextInput, Title } from "@mantine/core";
+import { Anchor, Button as LinkButton, Group, HoverCard, Loader, Modal, NativeSelect, Select, Stack, Text, TextInput, Title } from "@mantine/core";
 import { Button, Table } from "@vaultsyncd/ui";
 import type { BindingInfo, BindingStatus, ConnectionInfo, RemoteItem } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
@@ -80,8 +80,20 @@ export function Bindings({ agent, bindings, connections, states, read, changed, 
         { key: "path", title: "本地目录", render: row => <Anchor component="button" type="button" ta="left"
           disabled={busy || !read || row.detached} title="在文件管理器中打开"
           onClick={() => run(() => agent.openBindingDirectory(row.binding_id))}>{row.local_path}</Anchor> },
-        { key: "server", title: "服务器", render: row => serverLabel(row.server_id) },
-        { key: "vault", title: "Vault", render: row => row.vault_id },
+        { key: "server", title: "服务器", render: row => {
+          const server = connections.find(item => item.server_id === row.server_id);
+          return <HoverCard width={360} shadow="md" withArrow openDelay={250}>
+            <HoverCard.Target><Text component="span" tabIndex={0} size="sm">{serverLabel(row.server_id)}</Text></HoverCard.Target>
+            <HoverCard.Dropdown style={{ maxWidth: "calc(100vw - 24px)", overflowWrap: "anywhere" }}>
+              <Stack gap={4}>
+                <Text size="sm">服务器地址：{server?.server_url ?? "未知"}</Text>
+                <Text size="sm">Server ID：{row.server_id ?? "未知"}</Text>
+                <Text size="sm">Vault ID：{row.vault_id}</Text>
+                <Text size="sm">登录状态：{server ? server.authenticated ? "已登录" : "未登录" : "未知"}</Text>
+              </Stack>
+            </HoverCard.Dropdown>
+          </HoverCard>;
+        } },
         { key: "mode", title: "模式", render: row => row.mode === "full" ? "完整同步" : "按需下载" },
         { key: "state", title: "状态与合并进度", render: state },
         { key: "controls", title: "操作", render: row => <Group gap="xs">

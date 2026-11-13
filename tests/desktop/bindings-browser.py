@@ -278,7 +278,11 @@ def main():
             table = page.get_by_role("table", name="本地 Binding")
             for url, vault, binding_id in (("https://one.example.invalid", "3" * 32, binding_a), ("https://two.example.invalid", "4" * 32, binding_b)):
                 row = table.get_by_role("row").filter(has=page.get_by_role("cell", name=url, exact=True))
-                expect(row.get_by_role("cell", name=vault, exact=True)).to_be_visible()
+                server_cell = row.get_by_role("cell", name=url, exact=True)
+                server_cell.hover()
+                expect(page.get_by_text("Vault ID：" + vault, exact=True)).to_be_visible()
+                page.mouse.move(0, 0)
+                expect(page.get_by_text("Vault ID：" + vault, exact=True)).not_to_be_visible()
                 directory = row.get_by_role("button", name=LOCAL_PATH, exact=True)
                 expect(directory).to_have_js_property("tagName", "BUTTON")
                 directory.click()

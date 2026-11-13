@@ -5,6 +5,44 @@ use std::path::PathBuf;
 use vaultsyncd_platform_windows::cfapi::maintenance;
 
 #[test]
+#[ignore = "requires the stopped S200/S226 startup fixture and its explicit run root"]
+fn cleanup_only_fully_materialized_startup_fixture() {
+    let root = PathBuf::from(
+        std::env::var_os("VAULTSYNCD_STARTUP_CLEANUP_ROOT")
+            .expect("set this stopped startup fixture's explicit run root"),
+    );
+    assert!(root.is_absolute());
+    assert_eq!(
+        root.parent(),
+        Some(std::path::Path::new(r"C:\vaultsyncd-lab"))
+    );
+    assert!(
+        root.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("s200-"))
+    );
+    assert!(
+        root.join("local/vaultsyncd/agent/state/client.sqlite")
+            .is_file()
+    );
+    let path = root.join("bound-content");
+    assert_eq!(
+        std::fs::read(path.join("server-seed.txt")).expect("preserved startup fixture bytes"),
+        b"S203 unconfirmed bytes must survive ordinary exit"
+    );
+    maintenance::check_materialized(&path).expect("refuse incomplete startup fixture cleanup");
+    let hashes = maintenance::revert_materialized(&path)
+        .expect("convert complete placeholders while preserving file identity and bytes");
+    maintenance::unregister_materialized(&path).expect("unregister only fully materialized root");
+    std::fs::write(
+        root.join("startup-provider-cleanup.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({"path": path, "preserved_hashes": hashes}))
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
 #[ignore = "requires the stopped native activity fixture and an explicit run root"]
 fn cleanup_only_fully_materialized_activity_fixture() {
     let root = PathBuf::from(

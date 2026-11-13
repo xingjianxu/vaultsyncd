@@ -55,4 +55,21 @@ PYFIXTURE
 export VAULTSYNCD_S203_FIXTURE_DIR="$artifact_dir"
 export VAULTSYNCD_NATIVE_ARTIFACTS="$artifact_dir/native"
 bash "$script_dir/run-native-desktop-settings.sh" "$program"
+python3 - "$artifact_dir" <<'PYVERIFY'
+import hashlib, json, pathlib, sys, urllib.request
+p = pathlib.Path(sys.argv[1]); fixture = json.loads((p/'host-fixture.json').read_text())
+def read(path, raw=False, body=None):
+    request = urllib.request.Request(fixture['url'].rstrip('/')+path, data=body,
+        headers={'authorization': 'Bearer '+fixture['issued']['access_token'], 'content-type': 'application/json'})
+    with urllib.request.urlopen(request) as response:
+        data = response.read()
+        return data if raw else json.loads(data)
+vault = fixture['vault']
+snapshot = read(f'/v1/vaults/{vault}/snapshots', body=b'{}')['snapshot_id']
+rows = read(f'/v1/vaults/{vault}/snapshots/{snapshot}/entries?limit=100')['entries']
+seed = next(row for row in rows if row['name'] == 'server-seed.txt')
+data = read(f"/v1/vaults/{vault}/entries/{seed['entry_id']}/versions/{seed['version_id']}/content", raw=True)
+assert data == b'S203 unconfirmed bytes must survive ordinary exit', 'S226 restart did not commit the preserved local content'
+(p/'restart-upload-verified.json').write_text(json.dumps({'ok': True, 'sha256': hashlib.sha256(data).hexdigest()}))
+PYVERIFY
 echo "ARTIFACTS $artifact_dir"

@@ -1,5 +1,8 @@
 # 已实现接口摘要
 
+2026-11-13 S226：主桌面首次完整 GetStatus 后，以现有 ResumeBinding 逐个恢复未解绑的暂停目录；每次桌面启动只尝试一轮（含旧版停止和此前手动暂停），轮询/导航不重复恢复。单项失败显示本地路径与实际错误并继续其余目录；恢复后重新读取真实状态，不推导同步成功。Explorer独立shell窗口不执行全局恢复，普通StopAgent/维护/认证/未确认数据围栏保持。无schema或IPC版本变化。本地Binding取消Vault列，服务器列用Mantine HoverCard展示服务器地址、Server ID、Vault ID、登录状态；键盘focus也可查看。
+
+
 本文件只记录已经实现、可被后续卡复用的工具与接口契约；产品语义、数据模型与 wire 协议以 `docs/design.md` 和 `api/` 中的契约文件为准，不在此复制规格正文。接口形态变化时同步更新本文件，并在对应 `agent/tasks/Sxxx.md` 记录原因。
 
 ## tools/context.py — 规格上下文提取

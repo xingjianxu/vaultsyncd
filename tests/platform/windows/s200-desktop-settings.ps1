@@ -25,6 +25,7 @@ public static class S200Window {
  public static IntPtr Find(uint process,string kind){IntPtr found=IntPtr.Zero;EnumWindows((h,p)=>{uint pid;GetWindowThreadProcessId(h,out pid);var s=new StringBuilder(256);GetClassNameW(h,s,256);if((process==0||pid==process)&&s.ToString()==kind){found=h;return false;}return true;},IntPtr.Zero);return found;}
  public static void Popup(IntPtr h){SetCursorPos(650,500);PostMessageW(h,6002,IntPtr.Zero,(IntPtr)0x205);}
  public static void Click(int x,int y){SetCursorPos(x,y);mouse_event(2,0,0,0,UIntPtr.Zero);mouse_event(4,0,0,0,UIntPtr.Zero);}
+ public static void Hover(int x,int y){SetCursorPos(x,y);}
  public static void Select(IntPtr popup,uint position){var menu=SendMessageW(popup,0x1e1,IntPtr.Zero,IntPtr.Zero);Rect r;if(!GetMenuItemRect(IntPtr.Zero,menu,position,out r))throw new Exception("menu item missing");Click((r.left+r.right)/2,(r.top+r.bottom)/2);}
 }
 '@
@@ -291,9 +292,24 @@ public static class S200Window {
       Check ((Test-Path $cache) -and (Test-Path (Join-Path $profile 'state/client.sqlite'))) 'cache and durable state remain in place'
       Check (@(Get-ChildItem $profile -Directory -Filter 'session-stop-*').Count -eq $beforeExports) 'bound ordinary exit makes no maintenance export'
       Launch 'binding-restart'
-      $s=Invoke-S203Cli @('status')
-      Check (@($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.paused }).Count -eq 1) 'restart retains binding identity and explicit pause'
+      Check (Wait-Until { $s=Invoke-S203Cli @('status'); @($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and !$_.paused }).Count -eq 1 } 60) 'S226 desktop startup automatically resumes the same durable binding'
       Check ((Get-FileHash $unconfirmed -Algorithm SHA256).Hash -eq $beforeHash) 'restart preserves unconfirmed bytes'
+      Check (Wait-Until { $s=Invoke-S203Cli @('status'); @($s.bindings | Where-Object { $_.binding_id -eq $binding -and $_.synchronized }).Count -eq 1 } 120) 'S226 resumed real CFAPI binding uploads unconfirmed content and reaches committed baseline'
+      $root=[Windows.Automation.AutomationElement]::FromHandle($main)
+      $names=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,$fixture.url)
+      Check (Wait-Until { $null -ne $root.FindFirst([Windows.Automation.TreeScope]::Descendants,$names) }) 'S226 server address is exposed in production binding table'
+      $serverCell=$root.FindFirst([Windows.Automation.TreeScope]::Descendants,$names)
+      $rect=$serverCell.Current.BoundingRectangle
+      Check (!$rect.IsEmpty -and $rect.Width -gt 0) 'S226 production server cell has a real hover target'
+      [S200Window]::Hover([int]($rect.X+$rect.Width/2),[int]($rect.Y+$rect.Height/2))
+      # WebView exposes JSX label/value text as separate UIA nodes, joined by Read-Dialog.
+      Check (Wait-Until { (Read-Dialog $main).Contains('Vault ID： '+$fixture.vault) }) 'S226 native WebView hover reveals actual Vault ID'
+      $details=Read-Dialog $main
+      Check ($details.Contains('Server ID： '+$fixture.serverId) -and $details.Contains('服务器地址： '+$fixture.url) -and $details.Contains('登录状态： 已登录')) 'S226 native HoverCard shows authenticated server details'
+      $null=Invoke-S203Cli @('pause','--binding-id',$binding)
+      Start-Sleep -Seconds 5
+      $s=Invoke-S203Cli @('status')
+      Check (@($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.paused }).Count -eq 1) 'S226 ordinary desktop polling preserves a new manual pause'
       Close-Main
       Expect-Exited 'restarted binding closes safely'
       @{exit_seconds=$timer.Elapsed.TotalSeconds;unconfirmed_sha256=$beforeHash;binding=$binding;maintenance_export_created=$false} | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 's203-binding.json') -Encoding UTF8
