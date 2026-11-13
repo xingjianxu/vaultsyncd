@@ -28,3 +28,6 @@ dist/
 # 环境与凭据
 .env
 .env.local
+
+# 根 Windows 构建入口也允许指向开发根内产物的符号链接。
+/dist

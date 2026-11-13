@@ -127,3 +127,8 @@ S215（2026-11-12）dev已由永久入口有序restart至与生产generation288�
 ## S223 透明品牌图标（仅 dev 更新）
 
 S223（2026-11-13）经永久入口 `restart --package /nix/store/zxn0vlr9yha8p2b2259rpsjvcrdrv90y-vaultsyncd-0.1.7` 更新dev（源87e61a3）。Web登录、顶栏及favicon使用透明Logo，原黑底资源保留在源码 `assets/branding/`。136项HTTPS资源字节/严格TLS/CSP/MIME、真实登录退出及明暗320/1440八组透明度通过。原ServerId/账号/Vault/Office配置保持，仅instance包引用变化；prod PID/启动时间/system保持，不更新生产。回退仅需restart至S220包 `/nix/store/alvghhrpzscsa2f6v0hl0169x9lm8ch6-vaultsyncd-0.1.7`，不重置数据。Windows永久客户端未替换；证据与交接见 [S223](../../agent/tasks/S223.md)。
+
+
+## S224 深色 V 与紧凑 Logo（仅 dev 更新）
+
+S224（2026-11-13）经永久入口 `restart --package /nix/store/5z68d5bq95w566ahfyvc9kz9lg553jvl-vaultsyncd-0.1.7` 更新dev（源8b112ef）。中央V使用深石板蓝，主体占比约98%；136资源字节/TLS/CSP/MIME与真实登录退出、明暗320/1440八组颜色和边界通过。原身份/账号/Vault/Office保持，仅instance包引用变化；生产进程与system保持，不部署生产。回退可restart到S223包 `/nix/store/zxn0vlr9yha8p2b2259rpsjvcrdrv90y-vaultsyncd-0.1.7`，不重置数据。完整Windows客户端已编译交付根dist，客体永久客户端未替换；交接 [S224](../../agent/tasks/S224.md)。
