@@ -1,5 +1,9 @@
 # 本机 NixOS 服务部署
 
+## S218 文件预览关闭动画修复（2026-11-13）
+
+源 `a6a23dea700231c731bed8727491cbb603c8d6da` 已经pure build/dry/test/健康/switch部署generation291，包 `/nix/store/9l4my652gyr3bqlr6sq0z7nrsxhc1297-vaultsyncd-0.1.7`，system `9gshvkd3kwf5xb18wzjgr9wzqn5z20f0`，主机pin `6a90aa5c3d7b674e940b00c688509489a8392655` 已ff合main并清部署树。仅关闭生命周期修复，无schema迁移；主机锁、prod/dev原身份/账号/Vault/schema21与Office配置保持，dev同步同包。精确包52组、18退场/重开109帧及408次资产字节/TLS/CSP/匿名门禁通过。旧generation290 system/boot GC roots在 `/data/vaultsyncd-dev/S218-preview-exit-20261113/deploy/local-20261113T090049-2686437/` 保留，未实际回滚；交接与限制见 [S218](../../agent/tasks/S218.md)。
+
 ## S207 环境入口（2026-11-12）
 
 本文描述 **prod**：`https://vsyncd.132140.xyz`，既有 NixOS 部署方式、状态与 Vault 路径保持。**dev** 与 Windows 测试机改用 `https://wlab.132140.xyz:15401`，临时后台服务由 `tools/dev-server.sh` 管理，数据在 `/data/vaultsyncd-dev/dev-server/`，不注册 NixOS unit。证书与操作见 [开发测试服务](dev-server.md)，实际验收见 [S207](../../agent/tasks/S207.md)。
