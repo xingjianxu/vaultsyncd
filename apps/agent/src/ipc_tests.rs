@@ -156,7 +156,6 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     });
     // Also cover explicit server-scoped operations added in the old 2.10 minor.
     for name in [
-        CommandName::GetConnection,
         CommandName::Login,
         CommandName::Logout,
         CommandName::ListVaults,
@@ -171,6 +170,36 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
         scoped.command.parameters.get_or_insert_default().server_id = Some("66".repeat(16));
         current.push(scoped);
     }
+    // get_connection retains its parameter-free, single-connection contract. A caller
+    // selecting a server must use the explicit scoped commands above, not add an
+    // unrecognized argument to this legacy convenience read.
+    let mut invalid_scoped = current
+        .iter()
+        .find(|r| r.command.name == CommandName::GetConnection)
+        .unwrap()
+        .clone();
+    invalid_scoped.request_id = "get-connection-rejects-server-scope".into();
+    invalid_scoped
+        .command
+        .parameters
+        .get_or_insert_default()
+        .server_id = Some("66".repeat(16));
+    assert_eq!(
+        vaultsyncd_local_ipc::commands::validate(&invalid_scoped.command)
+            .unwrap_err()
+            .code,
+        LocalIpcErrorCode::InvalidArgument
+    );
+    assert_eq!(
+        endpoint
+            .request(&invalid_scoped)
+            .await
+            .unwrap()
+            .error
+            .unwrap()
+            .code,
+        LocalIpcErrorCode::InvalidArgument
+    );
     let mut extra = current
         .iter()
         .find(|r| r.command.name == CommandName::SetRules)
@@ -204,7 +233,14 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     );
     for current_request in &current {
         assert_eq!(current_request.ipc_version, version::supported());
-        vaultsyncd_local_ipc::commands::validate(&current_request.command).unwrap();
+        vaultsyncd_local_ipc::commands::validate(&current_request.command).unwrap_or_else(
+            |error| {
+                panic!(
+                    "current command {:?} ({}) must validate: {error:?}",
+                    current_request.command.name, current_request.request_id
+                )
+            },
+        );
         let response = endpoint.request(current_request).await.unwrap();
         response.validate().unwrap();
         assert_eq!(response.request_id, current_request.request_id);
