@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S222 done**：Windows Explorer云文件夹入口显示绑定目录名及软件Logo；ICO持久保存Known Folder，不依赖便携程序位置；原位更新并通知Shell刷新，身份/驻留/未确认内容保持。实现5571e2e，宿主43项/严格检查、Windows静态CRT严格检查及agent构建、原生图标注册7项/CFAPI2项和最终精确代码三绑定/旧属性刷新/移动程序/真实导航名称与Logo通过，独立补审APPROVED。原客户端PID/原路径/session1及62注册保持，早期失败日志保留；证据 `/data/vaultsyncd-dev/S222-explorer-branding-20261113/`，交接 [S222](tasks/S222.md)。未替换永久客户端/根dist、不改服务端、不部署或发行；无本卡阻塞，下一ready无，原四张blocked保持。
+
 当前 **S221 done**：桌面添加同步目录改按钮弹窗，失败/断连保留输入；Binding首列路径可鼠标/键盘打开本机默认文件管理器，按认证BindingId解析、主窗最小授权。实现78d0110/ACL修复55f2217；根类型/desktop build/activity与原生命令闭集guard、宿主15项、Windows两模式严格检查/构建、Chromium专项9组及完整布局/解绑7/移除8/排除8、独立补审通过。真实Windows S081第4次exit0，Explorer新窗口精确打开Unicode目录，完整绑定/合并/暂停恢复/GUI退出后上传与宿主hash通过；前三次失败保留，原客户端原路径/session1、配置/二进制hash/身份及paused=false恢复。证据 `/data/vaultsyncd-dev/S221-binding-dialog-20261113/`，交接 [S221](tasks/S221.md)；实现/ACL/验收交接0bbf1ae已ff合master，5挂载及本卡树/分支正常清理，S134/S187保持，不改服务端、不部署/发行或替换永久客户端/根dist。无本卡阻塞；下一ready无，原四张blocked保持。
 
 当前 **S220 done**：Web文件列表按后缀显示十四类/152常见后缀图标，未知/无后缀回退，目录和操作保持；实现e29c134、测试2821833。根类型/Web九套/build、独立复审APPROVED、纯Nix包、精确包完整浏览器及专项七组37文件/明暗320/1440通过。仅dev经永久入口更新至alvghhr包，136资源字节/严格TLS/CSP/匿名门禁及真实登录图标/退出通过；原身份/账号/Vault/schema21/Office保持，prod PID/启动时间/system291/主机pin未变，无生产更新或重启。证据 `/data/vaultsyncd-dev/S220-file-type-icons-20261113/`，交接 [S220](tasks/S220.md)；实现/测试/验收交接a2e5ae7已ff合master，五个bind及本卡树/分支正常清理，S134/S187保持，清理后双环境健康ok。无本卡阻塞、不发行/重打包Windows；下一ready无，S011/S106/S107/S108原blocked保持。
