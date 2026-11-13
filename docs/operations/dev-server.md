@@ -122,3 +122,8 @@ S216（2026-11-12）dev由永久主树入口有序restart至与生产generation2
 S215（2026-11-12）dev已由永久入口有序restart至与生产generation288同包 `/nix/store/v5x74fbkhv7wk1xqmhvkd61xfl1r49ca-vaultsyncd-0.1.7`，发布源6a99df4包含S214排序。原ServerId/账号/Vault保持，Office运行时配置和密钥副本沿用S213；不重置实例、不写入测试样本。
 
 覆盖S213的默认Office→PDF路径：九格式按固定版本直接以ONLYOFFICE只读查看，保留原件下载，XLSX可切工作表；不提供原件编辑/保存。配置签名、权限/源完整校验、50MiB门禁保持；临时源120秒、两准入、关闭撤销，已取得副本和上游已入队任务不能硬收回。CSP精确信任配置服务API.js/frame，空事件体哈希例外不允许任意inline/eval。最终精确包Office16组与prod/dev身份、健康、资源、匿名门禁/CSP核验通过，完整证据见 [S215](../../agent/tasks/S215.md)。
+
+
+## S223 透明品牌图标（仅 dev 更新）
+
+S223（2026-11-13）经永久入口 `restart --package /nix/store/zxn0vlr9yha8p2b2259rpsjvcrdrv90y-vaultsyncd-0.1.7` 更新dev（源87e61a3）。Web登录、顶栏及favicon使用透明Logo，原黑底资源保留在源码 `assets/branding/`。136项HTTPS资源字节/严格TLS/CSP/MIME、真实登录退出及明暗320/1440八组透明度通过。原ServerId/账号/Vault/Office配置保持，仅instance包引用变化；prod PID/启动时间/system保持，不更新生产。回退仅需restart至S220包 `/nix/store/alvghhrpzscsa2f6v0hl0169x9lm8ch6-vaultsyncd-0.1.7`，不重置数据。Windows永久客户端未替换；证据与交接见 [S223](../../agent/tasks/S223.md)。
