@@ -114,7 +114,9 @@ fn parse_query(query: Option<&str>) -> Result<(Option<i64>, Option<&str>), ()> {
             {
                 before = Some(value.parse::<i64>().ok().filter(|v| *v > 0).ok_or(())?)
             }
-            "direction" if direction.is_none() && matches!(value, "upload" | "download") => {
+            "direction"
+                if direction.is_none() && matches!(value, "upload" | "download" | "operation") =>
+            {
                 direction = Some(value)
             }
             _ => return Err(()),
@@ -180,6 +182,10 @@ mod tests {
         assert_eq!(
             parse_query(Some("direction=download&before=55")),
             Ok((Some(55), Some("download")))
+        );
+        assert_eq!(
+            parse_query(Some("direction=operation")),
+            Ok((None, Some("operation")))
         );
         for query in [
             "before=0",

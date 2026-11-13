@@ -92,8 +92,22 @@ check("all_management_examples_decode_without_losing_parameters", () => {
     assert.deepEqual(reencode(decoded), sample);
     commands.add(decoded.command.name);
   }
-  assert.equal(commands.size, 29);
+  assert.equal(commands.size, 30);
   assert.ok(commands.has("list_activity"));
+  assert.ok(commands.has("stop_agent"));
+});
+
+check("activity_operations_preserve_actions_and_absent_transfer_fields", () => {
+  const activity = ["create_directory", "move", "delete", "restore_version", "restore_deleted"].map((action, index) => ({
+    id: String(index + 1), occurred_at: "1794300000", client_label: "操作来源", client_kind: "client",
+    direction: "operation", action, status: "committed", path: "目录/文档.txt", operation_id: "a".repeat(32),
+  }));
+  const sample = { activity };
+  assert.deepEqual(reencode(decodeManagementResult(sample)), sample);
+  const request = { request_id: "operation-filter", ipc_version: { major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR }, command: {
+    name: "list_activity", parameters: { binding_id: "b".repeat(32), direction: "operation" },
+  }};
+  assert.deepEqual(reencode(decodeRequest(request)), request);
 });
 
 check("multiple_connections_and_binding_server_identity_round_trip", () => {

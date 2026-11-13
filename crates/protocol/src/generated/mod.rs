@@ -45,7 +45,7 @@ pub struct ActivityPage {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActivityRecord {
-    /// upload_finalize或sync_commit或download
+    /// upload_finalize或sync_commit或download或create_directory或move或delete或restore_version或restore_deleted
     pub action: String,
     /// 本次内容字节数
     #[serde(default)]
@@ -75,7 +75,7 @@ pub struct ActivityRecord {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
-    /// upload或download，按客户端方向
+    /// upload或download或operation，上传下载按客户端方向，文件操作不表示传输
     pub direction: String,
     /// 条目身份
     #[serde(default)]

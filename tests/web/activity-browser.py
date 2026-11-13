@@ -142,6 +142,23 @@ def main():
         assert api(f"/v1/vaults/{doc_id}/operations", operation, token)["state"] == "committed"
         metadata, entries = snapshot(doc_id, token)
         entry = next(item for item in entries if item["name"] == original_name)
+        # S225: real metadata commits are distinct from file transfers.
+        def commit(kind, **fields):
+            command = {"kind": kind, "op_id": secrets.token_hex(16), "device_id": operation["device_id"], "server_epoch": metadata["server_epoch"], **fields}
+            result = api(f"/v1/vaults/{doc_id}/operations", command, token)
+            while result["state"] == "pending":
+                time.sleep(.1)
+                result = api(f"/v1/vaults/{doc_id}/operations/{command['op_id']}", token=token)
+            assert result["state"] == "committed", result
+            assert api(f"/v1/vaults/{doc_id}/operations", command, token)["state"] == "committed"
+            return result
+
+        commit("create", parent_id=parent["entry_id"], name="新建目录", expected_absent=True)
+        restored = commit("restore", entry_id=entry["entry_id"], base_revision=entry["revision"], version_id=entry["version_id"])
+        removed = commit("delete", entry_id=entry["entry_id"], base_revision=restored["revision"])
+        commit("restore", entry_id=entry["entry_id"], base_revision=removed["revision"])
+        metadata, entries = snapshot(doc_id, token)
+        entry = next(item for item in entries if item["name"] == original_name)
         download_path = f"/v1/vaults/{doc_id}/entries/{entry['entry_id']}/versions/{entry['version_id']}/content"
         for _ in range(54):
             status, payload, _ = request(download_path, token=token, binary=True)
@@ -162,6 +179,13 @@ def main():
         assert all(row["client_hostname"] == "<img src=x onerror=alert(1)> 客户端主机" and row["client_os"].startswith("Windows 11") and row["client_ip"] == "127.0.0.1" for row in extended["items"])
         checks.append("legacy-strict-shape/opt-in-client-properties")
         checks.append("real-upload/finalize/commit-idempotency/range/historical-path")
+        operation_rows = api(f"/v1/vaults/{doc_id}/activity?direction=operation", token=token)["items"]
+        assert {row["action"] for row in operation_rows} == {"create_directory", "move", "delete", "restore_version", "restore_deleted"}
+        assert len(operation_rows) == 5, operation_rows
+        assert all(row["direction"] == "operation" and row["status"] == "committed" and "upload_id" not in row and "bytes" not in row for row in operation_rows)
+        assert next(row for row in operation_rows if row["action"] == "delete")["path"] == original_name
+        assert next(row for row in operation_rows if row["action"] == "move")["path"] == renamed_name
+        checks.append("five-real-metadata-actions/operation-filter/idempotency/path-snapshots/no-transfer-masquerade")
 
         class Handler(CspStaticFiles):
             def log_message(self, *_): pass
@@ -193,7 +217,7 @@ def main():
                 except (BrokenPipeError, ConnectionResetError): pass
                 finally: connection.close()
 
-        proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(REPO / "apps/web/dist")))
+        proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(Path(os.environ.get("VAULTSYNCD_WEB_DIST", REPO / "apps/web/dist")))))
         proxy.daemon_threads = True
         threading.Thread(target=proxy.serve_forever, daemon=True).start()
         origin = f"http://localhost:{proxy.server_port}"
@@ -218,10 +242,11 @@ def main():
             expect(page.get_by_role("heading", name="同步与传输记录", exact=True)).to_be_visible()
             page.get_by_label("Vault", exact=True).select_option(doc_id)
             table = page.get_by_role("table", name="同步与传输记录", exact=True)
+            page.get_by_label("类型", exact=True).select_option("download")
             expect(table.locator("tbody tr")).to_have_count(50)
             expect(table.get_by_text("已提供下载内容", exact=True)).to_have_count(50)
             expect(table.get_by_role("img", name="下载", exact=True)).to_have_count(50)
-            expect(table.locator(".lucide-download")).to_have_count(50)
+            expect(table.locator(".lucide-cloud-download")).to_have_count(50)
             expect(table.get_by_text("<img src=x onerror=alert(1)> 客户端主机", exact=True)).to_have_count(50)
             expect(table.locator("img")).to_have_count(0)
             expect(table.get_by_text(renamed_name, exact=True)).to_have_count(1)
@@ -235,23 +260,45 @@ def main():
             expect(dialog.get_by_text("127.0.0.1", exact=True)).to_be_visible()
             page.keyboard.press("Escape")
             page.get_by_role("button", name="下一页", exact=True).click()
-            expect(table.get_by_text("同步已提交", exact=True)).to_have_count(1)
-            expect(table.get_by_text("上传内容已校验", exact=True)).to_have_count(1)
+            expect(table.locator("tbody tr")).to_have_count(5)
+            expect(table.get_by_text("已提供下载内容", exact=True)).to_have_count(5)
             page.get_by_role("button", name="第一页", exact=True).click()
             expect(table.locator("tbody tr")).to_have_count(50)
-            page.get_by_label("传输方向", exact=True).select_option("upload")
+            page.get_by_label("类型", exact=True).select_option("upload")
             expect(table.locator("tbody tr")).to_have_count(2)
             expect(table.get_by_role("img", name="上传", exact=True)).to_have_count(2)
-            expect(table.locator(".lucide-upload")).to_have_count(2)
+            expect(table.locator(".lucide-cloud-upload")).to_have_count(2)
             expect(table.get_by_text("同步已提交", exact=True)).to_have_count(1)
             expect(page.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
             assert "客户端已下载" not in table.inner_text()
             assert page.evaluate("path => fetch(path).then(r=>r.headers.get('cache-control'))", f"/v1/vaults/{doc_id}/activity") == "no-store"
             checks.append("auth-gate/client-escaping/direction/pagination/record-details/no-store")
+            page.get_by_label("类型", exact=True).select_option("operation")
+            expect(table.locator("tbody tr")).to_have_count(5)
+            for label in ["新建目录", "移动/重命名", "删除", "恢复历史版本", "从回收站恢复"]:
+                expect(table.get_by_role("img", name=label, exact=True)).to_have_count(1)
+            for result in ["目录已创建", "移动/重命名已提交", "删除已提交", "历史版本已恢复", "回收站条目已恢复"]:
+                expect(table.get_by_text(result, exact=True)).to_have_count(1)
+            expect(table.get_by_role("img", name="上传", exact=True)).to_have_count(0)
+            expect(table.get_by_role("img", name="下载", exact=True)).to_have_count(0)
+            table.get_by_role("row").filter(has=page.get_by_text("删除已提交", exact=True)).get_by_role("button", name="详情", exact=False).click()
+            expect(dialog.get_by_text("删除已提交", exact=True)).to_be_visible()
+            expect(dialog.get_by_text(original_name, exact=True)).to_be_visible()
+            expect(dialog.get_by_text("上传会话", exact=True)).to_have_count(0)
+            page.keyboard.press("Escape")
+            for scheme in ["light", "dark"]:
+                page.emulate_media(color_scheme=scheme)
+                for width in [320, 1440]:
+                    page.set_viewport_size({"width": width, "height": 1000})
+                    page.screenshot(path=str(RUN / f"operations-{scheme}-{width}.png"))
+            page.emulate_media(color_scheme="light")
+            page.set_viewport_size({"width": 1440, "height": 1000})
+            checks.append("operation-filter/five-action-icons/results/deletion-detail/light-dark-320-1440")
+
 
             # S202: a real immutable-version download appends a server-observed row.
             # No click, navigation, reload or fake ledger is used to reveal it.
-            page.get_by_label("传输方向", exact=True).select_option("download")
+            page.get_by_label("类型", exact=True).select_option("download")
             expect(table.locator("tbody tr")).to_have_count(50)
             old_latest = int(api(f"/v1/vaults/{doc_id}/activity?direction=download", token=token)["items"][0]["id"])
             status, payload, _ = request(download_path, token=token, headers={"Range": "bytes=0-1"}, binary=True)
@@ -346,13 +393,13 @@ def main():
             checks.append("hidden-pauses/visible-and-focus-immediate/manual-refresh-first-page")
 
             # A real old upload response cannot replace the newer download filter.
-            page.get_by_label("传输方向", exact=True).select_option("download")
+            page.get_by_label("类型", exact=True).select_option("download")
             expect(table.locator("tbody tr")).to_have_count(50)
             triggered.clear(); release.clear()
             network.update(hold_direction="upload", hold_vault=doc_id)
-            page.get_by_label("传输方向", exact=True).select_option("upload")
+            page.get_by_label("类型", exact=True).select_option("upload")
             assert triggered.wait(timeout=10)
-            page.get_by_label("传输方向", exact=True).select_option("download")
+            page.get_by_label("类型", exact=True).select_option("download")
             expect(table.locator("tbody tr")).to_have_count(50)
             release.set(); page.wait_for_timeout(250)
             expect(table.get_by_text("同步已提交", exact=True)).to_have_count(0)

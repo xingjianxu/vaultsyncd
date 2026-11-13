@@ -7,7 +7,8 @@ test "${VAULTSYNCD_WINDOWS_SHELL:-}" = 1 || { echo 'use nix develop .#windows' >
 vault=$(repo_root)
 cd "$vault"
 run_id="S172-native-$(date -u +%Y%m%dT%H%M%S)-$$"
-artifact_dir="/data/vaultsyncd-dev/S172-sync-records-20261110/$run_id"
+artifact_dir="${VAULTSYNCD_NATIVE_ARTIFACTS:-/data/vaultsyncd-dev/S172-sync-records-20261110}/$run_id"
+case "$artifact_dir" in /data/vaultsyncd-dev/*) ;; *) echo 'artifacts must be under /data/vaultsyncd-dev' >&2; exit 2 ;; esac
 mkdir -p "$artifact_dir"
 chmod 700 "$artifact_dir"
 target_dir=${CARGO_TARGET_DIR:-$vault/target}
@@ -40,7 +41,7 @@ for _ in $(seq 1 600); do
 done
 test -f "$artifact_dir/host-fixture.json"
 host_port=$(python3 - "$artifact_dir" <<'PY'
-import json,pathlib,sys,urllib.request,urllib.parse
+import json,pathlib,secrets,sys,time,urllib.request,urllib.parse
 p=pathlib.Path(sys.argv[1]);fixture=json.loads((p/'host-fixture.json').read_text());base=fixture['url'].rstrip('/');token=fixture['issued']['access_token'];vault=fixture['vault']
 def request(method,path,body=None,raw=False):
     req=urllib.request.Request(base+path,data=json.dumps(body).encode() if body is not None else None,method=method,headers={'authorization':'Bearer '+token,'content-type':'application/json'})
@@ -55,9 +56,42 @@ seed=next(row for row in rows if row['name']=='server-seed.txt')
 path=f"/v1/vaults/{vault}/entries/{seed['entry_id']}/versions/{seed['version_id']}/content"
 for _ in range(105):
     assert request('GET',path,raw=True)==b'S172-native-server-seed'
-guest={'serverId':identity,'url':'https://127.0.0.1:18872','vault':vault,'emptyVault':empty_vault,'login':fixture['login'],'password':fixture['password']}
+# S225: real committed operations, not invented activity rows or direct SQL.
+# Keep the final seed bytes and identity unchanged for the Windows first merge.
+device=secrets.token_hex(16)
+def snapshot():
+    metadata=request('POST',f'/v1/vaults/{vault}/snapshots',{})
+    entries=request('GET',f"/v1/vaults/{vault}/snapshots/{metadata['snapshot_id']}/entries?limit=100")['entries']
+    return metadata,entries
+metadata,rows=snapshot()
+root=next(row for row in rows if 'parent_id' not in row)
+expected=[]
+def operation(action,path,**fields):
+    body={'device_id':device,'op_id':secrets.token_hex(16),'server_epoch':metadata['server_epoch'],**fields}
+    result=request('POST',f'/v1/vaults/{vault}/operations',body)
+    deadline=time.monotonic()+30
+    while result['state']=='pending' and time.monotonic()<deadline:
+        time.sleep(.1)
+        result=request('GET',f"/v1/vaults/{vault}/operations/{body['op_id']}?device_id={device}")
+    assert result['state']=='committed',result
+    assert request('POST',f'/v1/vaults/{vault}/operations',body)['state']=='committed'
+    expected.append({'action':action,'path':path,'operation_id':body['op_id']})
+    return result
+made=operation('create_directory','S225-new-directory',kind='create',parent_id=root['entry_id'],name='S225-new-directory',expected_absent=True)
+operation('move','S225-moved-directory',kind='move',entry_id=made['entry_id'],base_revision=made['revision'],parent_id=root['entry_id'],name='S225-moved-directory')
+metadata,rows=snapshot(); seed=next(row for row in rows if row['name']=='server-seed.txt')
+restored=operation('restore_version','server-seed.txt',kind='restore',entry_id=seed['entry_id'],base_revision=seed['revision'],version_id=seed['version_id'])
+deleted=operation('delete','server-seed.txt',kind='delete',entry_id=seed['entry_id'],base_revision=restored['revision'])
+operation('restore_deleted','server-seed.txt',kind='restore',entry_id=seed['entry_id'],base_revision=deleted['revision'])
+records=request('GET',f'/v1/vaults/{vault}/activity?direction=operation')['items']
+assert len(records)==len(expected),records
+for item in expected:
+    matches=[row for row in records if row.get('operation_id')==item['operation_id']]
+    assert len(matches)==1 and all(matches[0].get(key)==value for key,value in item.items()),(item,matches)
+    assert matches[0]['status']=='committed' and 'bytes' not in matches[0] and 'offset' not in matches[0]
+guest={'serverId':identity,'url':'https://127.0.0.1:18872','vault':vault,'emptyVault':empty_vault,'login':fixture['login'],'password':fixture['password'],'operations':expected}
 (p/'fixture.json').write_text(json.dumps(guest))
-(p/'server-evidence.json').write_text(json.dumps({'source':'real btrfs server','seed':seed,'primed_downloads':105}))
+(p/'server-evidence.json').write_text(json.dumps({'source':'real btrfs server','seed':seed,'primed_downloads':105,'operations':records}))
 print(urllib.parse.urlparse(base).port)
 PY
 )
@@ -75,7 +109,19 @@ sleep .5
 kill -0 "$tunnel_pid"
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static -C link-arg=/ignore:4099"
 cargo xwin build --locked --target "$TARGET_TRIPLE" -p vaultsyncd-agent -p vaultsyncd-desktop --features vaultsyncd-desktop/native-acceptance > "$artifact_dir/build.log" 2>&1
-cp "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-desktop.exe" "$script_dir/s172-activity.ps1" "$artifact_dir/"
+cargo xwin test --locked --target "$TARGET_TRIPLE" -p vaultsyncd-windows-tests --test activity_cleanup --no-run --message-format=json > "$artifact_dir/cleanup-build.jsonl" 2> "$artifact_dir/cleanup-build.log"
+python3 - "$artifact_dir" <<'PY'
+import json,pathlib,shutil,sys
+p=pathlib.Path(sys.argv[1])
+artifacts=[json.loads(line) for line in (p/'cleanup-build.jsonl').read_text().splitlines() if line.startswith('{')]
+binary=next(item['executable'] for item in artifacts if item.get('reason')=='compiler-artifact' and item.get('target',{}).get('name')=='activity_cleanup' and item.get('executable'))
+shutil.copy2(binary,p/'activity-cleanup.exe')
+PY
+cp "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-agent.exe" "$target_dir/$TARGET_TRIPLE/debug/vaultsyncd-desktop.exe" "$artifact_dir/"
+python3 - "$script_dir/s172-activity.ps1" "$artifact_dir/s172-activity.ps1" <<'PY'
+import pathlib,sys
+pathlib.Path(sys.argv[2]).write_text(pathlib.Path(sys.argv[1]).read_text(),encoding='utf-8-sig')
+PY
 python3 - "$artifact_dir" "$helper" <<'PY'
 import hashlib,json,pathlib,subprocess,sys
 p=pathlib.Path(sys.argv[1]);hashes={f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob('*.exe')};(p/'hashes.json').write_text(json.dumps(hashes))
@@ -87,7 +133,7 @@ inputs={name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for nam
 PY
 guest_dir="C:/vaultsyncd-lab/$run_id"
 guest_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Path '$guest_dir' | Out-Null\""
-GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/vaultsyncd-agent.exe" "$artifact_dir/vaultsyncd-desktop.exe" "$artifact_dir/s172-activity.ps1" "$artifact_dir/hashes.json" "$artifact_dir/fixture.json" "$artifact_dir/ca.pem"
+GUEST_TARGET_DIR="$guest_dir" guest_scp "$artifact_dir/vaultsyncd-agent.exe" "$artifact_dir/vaultsyncd-desktop.exe" "$artifact_dir/activity-cleanup.exe" "$artifact_dir/s172-activity.ps1" "$artifact_dir/hashes.json" "$artifact_dir/fixture.json" "$artifact_dir/ca.pem"
 set +e
 guest_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File $guest_dir/s172-activity.ps1" > "$artifact_dir/native.log" 2>&1
 result=$?

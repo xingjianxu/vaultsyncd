@@ -696,7 +696,7 @@ export async function listVaults(options: ClientOptions, init?: RequestInit): Pr
  *
  * 参数 `vault`（/v1/vaults/{vault}/activity）：路径参数
  * 查询参数 `before`（可选）：查询参数
- * 查询参数 `direction`（可选）：upload或download
+ * 查询参数 `direction`（可选）：upload或download或operation
  *
  * 200：一页同步与传输记录
  * 400：无效游标或方向

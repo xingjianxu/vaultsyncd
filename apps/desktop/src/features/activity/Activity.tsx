@@ -1,11 +1,11 @@
-import { TransferDirection, useLiveRefresh } from "@vaultsyncd/ui";
+import { ActivityAction, activityOutcome, useLiveRefresh } from "@vaultsyncd/ui";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Card, Group, NativeSelect, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import { Button, Dialog, StatusBadge, Table } from "@vaultsyncd/ui";
 import type { ActivityRecord, BindingInfo, ConnectionInfo } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
 
-type Direction = "" | "upload" | "download";
+type Direction = "" | "upload" | "download" | "operation";
 
 export function activityTime(value: string): string {
   if (!/^(0|[1-9][0-9]*)$/.test(value)) return `UTC秒 ${value}`;
@@ -15,11 +15,7 @@ export function activityTime(value: string): string {
     ? date.toLocaleString("zh-CN", { hour12: false }) : `UTC秒 ${value}`;
 }
 export function activityResult(row: ActivityRecord): string {
-  if (row.status === "failed") return "失败";
-  if (row.action === "sync_commit" && row.status === "committed") return "同步已提交";
-  if (row.action === "upload_finalize" && row.status === "ready") return "上传内容已校验";
-  if (row.action === "download" && row.status === "served") return "已提供下载内容";
-  return `${row.action} · ${row.status}`;
+  return activityOutcome(row);
 }
 export function activityFile(row: ActivityRecord): string {
   return row.path ?? (row.action === "upload_finalize" ? "待提交的上传内容" : row.entry_id ?? "文件路径未知");
@@ -76,8 +72,8 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
         <NativeSelect label="绑定" name="activity_binding" value={binding} onChange={event => chooseBinding(event.target.value)}>
           {!bindings.length && <option value="">暂无绑定</option>}{bindings.map(item => <option key={item.binding_id} value={item.binding_id}>{item.local_path}{item.detached ? "（已解除）" : ""}</option>)}
         </NativeSelect>
-        <NativeSelect label="方向" name="activity_direction" value={direction} onChange={event => chooseDirection(event.target.value as Direction)}>
-          <option value="">全部</option><option value="upload">上传</option><option value="download">下载</option>
+        <NativeSelect label="类型" name="activity_direction" value={direction} onChange={event => chooseDirection(event.target.value as Direction)}>
+          <option value="">全部</option><option value="upload">上传</option><option value="download">下载</option><option value="operation">文件操作</option>
         </NativeSelect>
       </SimpleGrid>
       <Group justify="space-between">
@@ -94,7 +90,7 @@ export function Activity({ agent, bindings = [], connections = [] }: { agent: Ag
         { key: "time", title: "时间", render: row => activityTime(row.occurred_at) },
         { key: "client", title: "客户端", render: row => row.client_hostname || "未知主机" },
         { key: "file", title: "文件", render: row => <Text size="sm" style={{ overflowWrap: "anywhere" }}>{activityFile(row)}</Text> },
-        { key: "direction", title: "方向", render: row => <TransferDirection direction={row.direction} /> },
+        { key: "direction", title: "操作", render: row => <ActivityAction direction={row.direction} action={row.action} /> },
         { key: "result", title: "结果", render: row => <StatusBadge tone={row.status === "failed" ? "danger" : "neutral"}>{activityResult(row)}</StatusBadge> },
         { key: "size", title: "文件大小", render: row => row.size === undefined ? "—" : `${row.size} 字节` },
         { key: "details", title: "详情", render: row => <Button variant="default" size="xs" onClick={() => setSelected(row)}>查看详情</Button> },

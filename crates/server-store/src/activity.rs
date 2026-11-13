@@ -65,7 +65,28 @@ pub(crate) async fn committed(
     key: &OperationKey,
     events: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO file_activity(vault_id,occurred_at,client_id,client_label,client_kind,device_id,direction,action,status,entry_id,version_id,path,size,operation_id,upload_id) SELECT s.vault_id,unixepoch(),s.client_id,s.client_label,s.client_kind,s.device_id,'upload','sync_commit','committed',json_extract(e.value,'$.entry_id'),json_extract(e.value,'$.version_id'),json_extract(e.value,'$.path'),CAST(json_extract(e.value,'$.size') AS INTEGER),s.op_id,s.upload_id FROM operation_activity_sources s JOIN operations o USING(vault_id,device_id,op_id),json_each(?4) e WHERE s.vault_id=?1 AND s.device_id=?2 AND s.op_id=?3 AND s.request_digest=o.request_digest AND o.state='committed' AND s.upload_id IS NOT NULL AND json_extract(e.value,'$.version_id') IS NOT NULL")
+    // 元数据事件与上传提交共享业务事务，但不将删除/移动/恢复伪装成传输。
+    // kind=create 且无内容版本只来自目录创建；文件创建（含冲突副本）有上传和版本。
+    sqlx::query(r#"WITH facts AS (
+        SELECT s.*, e.value AS event, json_extract(e.value,'$.kind') AS kind
+        FROM operation_activity_sources s JOIN operations o USING(vault_id,device_id,op_id),json_each(?4) e
+        WHERE s.vault_id=?1 AND s.device_id=?2 AND s.op_id=?3
+          AND s.request_digest=o.request_digest AND o.state='committed'
+    )
+    INSERT INTO file_activity(vault_id,occurred_at,client_id,client_label,client_kind,device_id,direction,action,status,entry_id,version_id,path,size,operation_id,upload_id)
+    SELECT vault_id,unixepoch(),client_id,client_label,client_kind,device_id,
+        CASE WHEN kind IN ('put','create') AND upload_id IS NOT NULL THEN 'upload' ELSE 'operation' END,
+        CASE WHEN kind IN ('put','create') AND upload_id IS NOT NULL THEN 'sync_commit'
+             WHEN kind='create' THEN 'create_directory'
+             WHEN kind='restore' AND json_extract(event,'$.restored_from') IS NOT NULL THEN 'restore_version'
+             WHEN kind='restore' THEN 'restore_deleted'
+             ELSE kind END,
+        'committed',json_extract(event,'$.entry_id'),json_extract(event,'$.version_id'),
+        json_extract(event,'$.path'),CAST(json_extract(event,'$.size') AS INTEGER),op_id,upload_id
+    FROM facts WHERE json_extract(event,'$.entry_id') IS NOT NULL AND (
+        (kind IN ('put','create') AND upload_id IS NOT NULL AND json_extract(event,'$.version_id') IS NOT NULL)
+        OR (kind='create' AND upload_id IS NULL AND json_extract(event,'$.version_id') IS NULL)
+        OR kind IN ('move','delete','restore'))"#)
         .bind(key.vault.as_bytes().as_slice()).bind(key.device.as_bytes().as_slice()).bind(key.op.as_bytes().as_slice()).bind(events).execute(&mut **tx).await?;
     Ok(())
 }
@@ -136,7 +157,7 @@ pub struct Record {
     pub client_kind: String,
     /// 操作声明的设备身份。
     pub device_id: Option<String>,
-    /// upload/download。
+    /// upload/download/operation。
     pub direction: String,
     /// 动作。
     pub action: String,

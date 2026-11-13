@@ -99,7 +99,7 @@ pub fn validate(command: &Command) -> Result<(), ErrorBody> {
     }
     if p.direction
         .as_deref()
-        .is_some_and(|direction| !matches!(direction, "upload" | "download"))
+        .is_some_and(|direction| !matches!(direction, "upload" | "download" | "operation"))
     {
         return Err(invalid());
     }

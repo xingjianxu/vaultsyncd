@@ -19,7 +19,7 @@
 export const PROTOCOL_MAJOR = 3;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 1;
+export const PROTOCOL_MINOR = 2;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -64,7 +64,7 @@ function expect_number(value: unknown, what: string): number {
 
 /** 服务端观察到的同步与传输事实；served 仅证明服务端提供内容，不证明客户端收到、校验或应用。时间为服务端UTC秒，方向相对于客户端。 */
 export interface ActivityRecord {
-  /** upload_finalize、sync_commit 或 download。 */
+  /** upload_finalize、sync_commit、download、create_directory、move、delete、restore_version 或 restore_deleted。 */
   action: string;
   /** 本次提供的内容长度（字节）；不代表客户端已接收。 */
   bytes?: string;
@@ -82,7 +82,7 @@ export interface ActivityRecord {
   client_os?: string;
   /** 操作携带的设备身份。 */
   device_id?: string;
-  /** upload 或 download，相对于客户端。 */
+  /** upload、download 或 operation；文件操作不表示内容传输。 */
   direction: string;
   /** 条目身份。 */
   entry_id?: string;
@@ -277,7 +277,7 @@ export interface CommandParameters {
   cursor?: string;
   /** 新的恢复导出目录；不可覆盖。 */
   destination?: string;
-  /** list_activity 的方向筛选，仅 upload 或 download；相对于客户端。 */
+  /** list_activity 的类型筛选：upload、download 或 operation；上传下载相对于客户端。 */
   direction?: string;
   /** 条目身份，不接受调用方自选相对文件路径。 */
   entry_id?: string;

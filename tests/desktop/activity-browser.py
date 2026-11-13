@@ -49,6 +49,10 @@ FIXTURE = r"""() => {
         action:direction==='download'?'download':'sync_commit',status:direction==='download'?'served':'committed',
         path,client_hostname:'S202 fixture client',version_id:'9'.repeat(32),offset:'0',bytes:'8',size:'8'});
       const call={args:structuredClone(args),started:Date.now(),result:{activity:[row(second?'49':'100',second?'second-page.txt':'first-page.txt'),row(second?'48':'99','retained.txt')],...(second?{}:{next_cursor:'50'})}};
+      if (direction==='operation') {
+        call.result.activity=['create_directory','move','delete','restore_version','restore_deleted'].map((action,index)=>({...row(String(100-index),`operation-${action}`),action,status:'committed',version_id:undefined,bytes:undefined,offset:undefined,size:undefined}));
+        delete call.result.next_cursor;
+      }
       f.calls.push(call);
       return new Promise((resolve,reject)=>Object.assign(call,{resolve,reject}));
     }
@@ -262,6 +266,39 @@ def main():
             expect(table.get_by_text("fresh-route.txt", exact=True)).to_be_visible()
             expect(table.get_by_text("late-unmounted.txt", exact=True)).to_have_count(0)
             checks.append("route leave stops polling and invalidates pending responses; remount loads immediately")
+            direction.select_option("operation")
+            calls(22)
+            assert page.evaluate("fixture.calls[21].args.direction") == "operation"
+            reply(21)
+            expect(table.locator("tbody tr")).to_have_count(5)
+            for label in ["新建目录", "移动/重命名", "删除", "恢复历史版本", "从回收站恢复"]:
+                expect(table.get_by_role("img", name=label, exact=True)).to_have_count(1)
+            for result in ["目录已创建", "移动/重命名已提交", "删除已提交", "历史版本已恢复", "回收站条目已恢复"]:
+                expect(table.get_by_text(result, exact=True)).to_have_count(1)
+            expect(table.get_by_role("img", name="上传", exact=True)).to_have_count(0)
+            expect(table.get_by_role("img", name="下载", exact=True)).to_have_count(0)
+            table.get_by_role("row").filter(has=page.get_by_text("operation-delete", exact=True)).get_by_role("button", name="查看详情").click()
+            tick(250)
+            expect(dialog.get_by_text("operation-delete", exact=True)).to_be_visible()
+            expect(dialog.get_by_text("删除已提交", exact=True)).to_be_visible()
+            expect(dialog.get_by_text("上传会话", exact=True)).to_have_count(0)
+            page.keyboard.press("Escape")
+            tick(250)
+            for scheme in ["light", "dark"]:
+                page.emulate_media(color_scheme=scheme)
+                for width in [320, 1440]:
+                    page.set_viewport_size({"width": width, "height": 1000})
+                    page.screenshot(path=str(OUTPUT / f"operations-{scheme}-{width}.png"))
+            tick(2000)
+            calls(23)
+            direction.select_option("upload")
+            calls(24)
+            reply(23)
+            reply(22, marker="late-operation.txt")
+            expect(table.get_by_text("late-operation.txt", exact=True)).to_have_count(0)
+            expect(table.get_by_role("img", name="删除", exact=True)).to_have_count(0)
+            expect(table.get_by_role("img", name="上传", exact=True)).to_have_count(2)
+            checks.append("five committed file operations use distinct actions/results; operation IPC filter/detail; no upload/download masquerade; late operation response discarded; light/dark 320/1440")
             assert errors == [], errors
             assert page.evaluate("fixture.csp") == []
             page.screenshot(path=str(OUTPUT / "activity-live.png"))

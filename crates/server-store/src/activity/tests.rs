@@ -292,3 +292,216 @@ async fn transfers_page_by_identity_and_finalize_deduplicates_without_losing_dow
     assert_eq!(second.len(), 5);
     assert!(second.iter().all(|r| r.id < first[49].id));
 }
+
+#[tokio::test]
+async fn metadata_commits_keep_paths_and_versions_without_becoming_uploads() {
+    let dir = TestDir::new("activity-metadata");
+    let db = open_database(&dir).await;
+    let owner = seed_owner(&db, 1).await;
+    let other = seed_owner(&db, 2).await;
+    let (vault, _) = register_vault(&db, owner, 3).await;
+    let cases = [
+        ("create", None, "create_directory"),
+        ("move", None, "move"),
+        ("delete", None, "delete"),
+        ("restore", Some("旧版本"), "restore_version"),
+        ("restore", None, "restore_deleted"),
+    ];
+    for (index, (kind, restored_from, expected_action)) in cases.iter().enumerate() {
+        let key = OperationKey {
+            vault,
+            device: device(4),
+            op: op(10 + index as u8),
+        };
+        let digest = operations::request_digest(&[("kind", kind.as_bytes())]).unwrap();
+        let events = format!(
+            r#"[{{"kind":"{kind}","entry_id":"{entry}","path":"目录/已删除\\重命名.txt","version_id":{version},"size":{size},"restored_from":{restored}}}]"#,
+            entry = entry(20 + index as u8),
+            version = if *kind == "create" {
+                "null"
+            } else {
+                "\"固定版本\""
+            },
+            size = if *kind == "create" { "null" } else { "\"123\"" },
+            restored = restored_from
+                .map(|v| format!("\"{v}\""))
+                .unwrap_or("null".into())
+        );
+        let mut tx = db.begin_write().await.unwrap();
+        bind_operation(&mut tx, owner, session(5), &key, &digest, None)
+            .await
+            .unwrap();
+        operations::begin_operation(&mut tx, owner, &operations::NewOperation { key, digest })
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        // Pending and rolled-back commits cannot leak a successful record.
+        let mut conn = db.pool().acquire().await.unwrap();
+        assert_eq!(
+            list(&mut conn, owner, vault, None, None)
+                .await
+                .unwrap()
+                .len(),
+            index
+        );
+        drop(conn);
+        let mut tx = db.begin_write().await.unwrap();
+        operations::commit_operation(
+            &mut tx,
+            owner,
+            &key,
+            crate::test_support::tx(30 + index as u8),
+            &events,
+            r#"{"state":"committed"}"#,
+            at(),
+        )
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
+        let mut conn = db.pool().acquire().await.unwrap();
+        assert_eq!(
+            list(&mut conn, owner, vault, None, None)
+                .await
+                .unwrap()
+                .len(),
+            index
+        );
+        drop(conn);
+        let mut tx = db.begin_write().await.unwrap();
+        operations::commit_operation(
+            &mut tx,
+            owner,
+            &key,
+            crate::test_support::tx(30 + index as u8),
+            &events,
+            r#"{"state":"committed"}"#,
+            at(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let mut conn = db.pool().acquire().await.unwrap();
+        let rows = list(&mut conn, owner, vault, None, Some("operation"))
+            .await
+            .unwrap();
+        let row = &rows[0];
+        assert_eq!(rows.len(), index + 1);
+        assert_eq!(row.action, *expected_action);
+        assert_eq!(row.direction, "operation");
+        assert_eq!(row.status, "committed");
+        assert_eq!(row.path.as_deref(), Some("目录/已删除\\重命名.txt"));
+        assert_eq!(
+            row.device_id.as_deref(),
+            Some(device(4).to_string()).as_deref()
+        );
+        assert_eq!(
+            row.operation_id.as_deref(),
+            Some(key.op.to_string()).as_deref()
+        );
+        assert!(row.upload_id.is_none() && row.bytes.is_none() && row.offset.is_none());
+        if *kind != "create" {
+            assert_eq!(row.version_id.as_deref(), Some("固定版本"));
+            assert_eq!(row.size, Some(123));
+        }
+        assert!(
+            list(&mut conn, owner, vault, None, Some("upload"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            list(&mut conn, other, vault, None, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        drop(conn);
+        // Replaying an already-committed operation does not append again.
+        let mut tx = db.begin_write().await.unwrap();
+        assert!(
+            operations::commit_operation(
+                &mut tx,
+                owner,
+                &key,
+                crate::test_support::tx(50 + index as u8),
+                &events,
+                r#"{"state":"committed"}"#,
+                at()
+            )
+            .await
+            .is_err()
+        );
+        tx.rollback().await.unwrap();
+    }
+    // A pre-existing external operation without authenticated capture is never invented.
+    let key = OperationKey {
+        vault,
+        device: device(4),
+        op: op(90),
+    };
+    let digest = operations::request_digest(&[("kind", b"delete")]).unwrap();
+    let mut tx = db.begin_write().await.unwrap();
+    operations::begin_operation(&mut tx, owner, &operations::NewOperation { key, digest })
+        .await
+        .unwrap();
+    operations::commit_operation(
+        &mut tx,
+        owner,
+        &key,
+        crate::test_support::tx(91),
+        r#"[{"kind":"delete","entry_id":"external","path":"外部.txt"}]"#,
+        r#"{"state":"committed"}"#,
+        at(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let mut conn = db.pool().acquire().await.unwrap();
+    assert_eq!(
+        list(&mut conn, owner, vault, None, None)
+            .await
+            .unwrap()
+            .len(),
+        cases.len()
+    );
+}
+
+#[tokio::test]
+async fn subtree_delete_records_each_entry_in_one_commit_with_its_own_snapshot() {
+    let dir = TestDir::new("activity-subtree");
+    let db = open_database(&dir).await;
+    let owner = seed_owner(&db, 1).await;
+    let (vault, _) = register_vault(&db, owner, 2).await;
+    let key = OperationKey {
+        vault,
+        device: device(3),
+        op: op(4),
+    };
+    let digest = operations::request_digest(&[("kind", b"delete")]).unwrap();
+    let mut tx = db.begin_write().await.unwrap();
+    bind_operation(&mut tx, owner, session(5), &key, &digest, None)
+        .await
+        .unwrap();
+    operations::begin_operation(&mut tx, owner, &operations::NewOperation { key, digest })
+        .await
+        .unwrap();
+    operations::commit_operation(&mut tx, owner, &key, crate::test_support::tx(6), r#"[{"kind":"delete","entry_id":"directory","path":"删除目录"},{"kind":"delete","entry_id":"child","path":"删除目录/子文件","version_id":"历史版本","size":"12"}]"#, r#"{"state":"committed"}"#, at()).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut conn = db.pool().acquire().await.unwrap();
+    let rows = list(&mut conn, owner, vault, None, Some("operation"))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r.action == "delete"
+        && r.operation_id.as_deref() == Some(key.op.to_string()).as_deref()));
+    assert!(
+        rows.iter()
+            .any(|r| r.path.as_deref() == Some("删除目录") && r.version_id.is_none())
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.path.as_deref() == Some("删除目录/子文件")
+                && r.version_id.as_deref() == Some("历史版本")
+                && r.size == Some(12))
+    );
+}

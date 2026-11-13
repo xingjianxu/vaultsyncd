@@ -2894,3 +2894,11 @@ S199 补充边界：ControlledApply 仅对 `expected=Absent` 且完整 `baseline
 签名配置固定 `editorConfig.mode=view`、`coEditing={mode:strict,change:false}` 与不可编辑/批注/审阅/填表权限；禁宏/插件、不提供原件保存回调。每次创建独立随机document key及源capability，源地址仅回环、每次读取重查原会话/Vault；浏览器得到特定文档的限时URL及JWT，得不到共享JWT密钥或管理员凭据。撤销/到期不能收回ONLYOFFICE或浏览器已获取的副本，也不硬取消上游已入队任务；源准入不是上游执行并发上限，缓存/字体/格式兼容属第三方边界。
 
 Web保留原件完整读取与下载，Office不再请求PDF转换，改为已配置Document Server的固定API.js及DocEditor。关闭/取消/导航/Vault或认证代际变化销毁iframe并撤销临时源，拒绝迟到结果；脚本30秒、文档120秒失败可重试。主HTML CSP仅按启动配置增加精确origin到script-src/frame-src，connect/object及非空inline限制保持；仅Office启用时用`script-src-attr`与SHA256(empty)精确许可上游Safari兼容用的空事件体，不允许任意inline/eval；无Office配置时原策略保持，API.js运行于主应用上下文，配置服务属于受信任代码。旧S213 PDF端点与原PDF/图片/文本路径继续兼容。实际验收及限制见 `agent/tasks/S215.md`。
+
+
+## S225 文件操作活动（schema22 / IPC3.2）
+
+- 补充并覆盖 S172 的仅上传/下载活动范围：`direction` 接受 `upload|download|operation`；省略仍读取全部，分页/授权/失败语义保持。`operation` 仅表示服务端已提交操作，不表示内容传输。新增 `action=create_directory|move|delete|restore_version|restore_deleted`、`status=committed`，移动与重命名同 `move`。
+- 事件与已捕获认证来源按 Vault/DeviceId/OpId/请求摘要关联，在 `commit_operation` 的同一事务落库；目录新建、移动记录目标路径，删除记录删除前路径，恢复记录恢复目标路径；不读未来名称推算历史。上传仍为 `sync_commit`，下载 `served` 仍不证明客户端接收/落盘。
+- 迁移0022扩展 `file_activity` 约束，保留全部旧列/ID/索引与 `sqlite_sequence` 高水位，不从旧 `changes` 或版本补造活动；schema21→22自动一致备份、旧二进制拒写，回退用停机后的整套21备份。完整备份继续包含账本与操作来源两表。
+- 唯一wire源继续为 `api/openapi.yaml`、`api/local-ipc.schema.json`，生成器更新类型。本机IPC minor3.2明确新增筛选能力；新GUI需配套agent，旧3.1请求仍兼容。agent按绑定身份和认证HTTP授权转发新筛选，两端以操作图标/中文动作显示，支持文件操作筛选；未知字符串仍可显示，不当作成功。

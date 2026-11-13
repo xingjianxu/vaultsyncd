@@ -119,7 +119,7 @@ paths:
       parameters:
         - {name: vault, in: path, required: true, schema: {type: string}}
         - {name: before, in: query, required: false, schema: {type: string}}
-        - {name: direction, in: query, required: false, description: upload或download, schema: {type: string}}
+        - {name: direction, in: query, required: false, description: upload或download或operation, schema: {type: string}}
       responses:
         "200":
           description: 一页同步与传输记录
@@ -2596,8 +2596,8 @@ components:
         client_os: {type: string, description: 客户端登录时声明的操作系统}
         client_ip: {type: string, description: 服务端观察的客户端首次登录来源IP，不代表本机内网IP或实时地址}
         client_kind: {type: string, description: 登录入口client或browser或unknown}
-        direction: {type: string, description: upload或download，按客户端方向}
-        action: {type: string, description: upload_finalize或sync_commit或download}
+        direction: {type: string, description: upload或download或operation，上传下载按客户端方向，文件操作不表示传输}
+        action: {type: string, description: upload_finalize或sync_commit或download或create_directory或move或delete或restore_version或restore_deleted}
         status: {type: string, description: ready或committed或served或failed}
         client_id: {type: string, description: 稳定登录连接身份}
         device_id: {type: string, description: 操作声明的设备身份，不代表认证设备}

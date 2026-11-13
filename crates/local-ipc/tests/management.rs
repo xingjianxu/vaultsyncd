@@ -149,7 +149,9 @@ fn activity_cursors_are_positive_decimal_and_filters_are_exact() {
     commands::validate(&command).unwrap();
     command.parameters.as_mut().unwrap().direction = Some("upload".into());
     commands::validate(&command).unwrap();
-    for direction in ["", "UPLOAD", "both", "upload&before=1"] {
+    command.parameters.as_mut().unwrap().direction = Some("operation".into());
+    commands::validate(&command).unwrap();
+    for direction in ["", "UPLOAD", "Operation", "both", "upload&before=1"] {
         command.parameters.as_mut().unwrap().direction = Some(direction.into());
         assert!(commands::validate(&command).is_err());
     }

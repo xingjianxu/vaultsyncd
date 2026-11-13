@@ -7,7 +7,7 @@ use vaultsyncd_local_ipc::{
 
 #[test]
 fn extra_rules_contract_remains_in_ipc_3() {
-    assert_eq!(version::supported(), IpcVersion { major: 3, minor: 1 });
+    assert_eq!(version::supported(), IpcVersion { major: 3, minor: 2 });
 }
 
 #[test]

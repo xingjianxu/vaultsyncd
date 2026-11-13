@@ -826,8 +826,16 @@ impl NamespaceCommitStore for SqlNamespaceStore {
         } else {
             "create"
         };
+        let parent_path = store_entries::path_of(&mut tx, self.owner, write.to.parent)
+            .await
+            .map_err(namespace_store_error)?
+            .ok_or(NamespaceStoreError::EntryMissing {
+                entry: write.to.parent,
+            })?;
+        let target_path = child_path(&parent_path, &write.to.name);
         let events = serde_json::json!([{
             "kind": kind_text,
+            "path": target_path,
             "entry_id": write.entry.to_hex(),
             "parent_id": write.to.parent.to_hex(),
             "name": write.to.name,

@@ -30,7 +30,7 @@ export interface AgentClient {
   detachBinding(bindingId: string): Promise<ManagementResult>;
   exportRecovery(bindingId: string, destination: string): Promise<ManagementResult>;
   listHistory(bindingId:string,entryId:string,cursor?:string):Promise<ManagementResult>;
-  listActivity(bindingId:string,cursor?:string,direction?:"upload"|"download"):Promise<ManagementResult>;
+  listActivity(bindingId:string,cursor?:string,direction?:"upload"|"download"|"operation"):Promise<ManagementResult>;
   listTrash(bindingId:string,cursor?:string):Promise<ManagementResult>;
   restoreEntry(input:RestoreInput):Promise<ManagementResult>;
   notificationSettings():Promise<NotificationSettings>;

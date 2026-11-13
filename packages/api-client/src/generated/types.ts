@@ -113,7 +113,7 @@ export function decodeActivityPage(value: unknown): ActivityPage {
 
 /** 启用记录后的文件同步与传输证据，不代表客户端下载完成。 */
 export interface ActivityRecord {
-  /** upload_finalize或sync_commit或download */
+  /** upload_finalize或sync_commit或download或create_directory或move或delete或restore_version或restore_deleted */
   action: string;
   /** 本次内容字节数 */
   bytes?: string;
@@ -131,7 +131,7 @@ export interface ActivityRecord {
   client_os?: string;
   /** 操作声明的设备身份，不代表认证设备 */
   device_id?: string;
-  /** upload或download，按客户端方向 */
+  /** upload或download或operation，上传下载按客户端方向，文件操作不表示传输 */
   direction: string;
   /** 条目身份 */
   entry_id?: string;

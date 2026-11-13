@@ -76,10 +76,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     check(second.activity.length > 0 && BigInt(second.activity[0].id) < BigInt(page.activity.at(-1).id), "descending cursor pagination has no overlap");
     const downloads = await invoke("agent_list_activity", { bindingId, direction: "download" });
     const uploads = await invoke("agent_list_activity", { bindingId, direction: "upload" });
+    const operations = await invoke("agent_list_activity", { bindingId, direction: "operation" });
     check(downloads.activity.length > 0 && downloads.activity.every(row => row.direction === "download"), "download filter reaches actual API");
     check(uploads.activity.length > 0 && uploads.activity.every(row => row.direction === "upload"), "upload filter reaches actual API");
     check(uploads.activity.every(row => row.client_hostname === fixture.hostname), "activity hostname comes from the running Windows client");
     check(uploads.activity.every(row => row.client_os?.startsWith("Windows 11 (10.0.") && row.client_ip === "127.0.0.1"), "operating system and observed login IP survive HTTPS and IPC");
+    check(operations.activity.length === fixture.operations.length && operations.activity.every(row => row.direction === "operation" && row.status === "committed" && row.bytes === undefined && row.offset === undefined), "operation filter reaches actual API without invented transfer bytes");
+    for (const expected of fixture.operations) {
+      const matches = operations.activity.filter(row => row.operation_id === expected.operation_id);
+      check(matches.length === 1 && matches[0].action === expected.action && matches[0].path === expected.path, `real ${expected.action} operation keeps original path and is idempotent`);
+    }
     report.clientProperties = uploads.activity.map(({client_hostname, client_os, client_ip}) => ({client_hostname, client_os, client_ip}));
     await rejected("IPC rejects noncanonical activity cursor", { bindingId, cursor: "01" }, "输入无效");
     await rejected("IPC rejects unknown activity direction", { bindingId, direction: "both" }, "输入无效");
@@ -116,6 +122,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     await click("刷新记录");
     await wait("manual refresh returns first UI page", () => text().includes("local-only.txt") && directions().length > 0);
     check(activityCalls.at(-1).cursor === undefined, "native manual refresh resets to first page");
+    select("activity_direction", "operation");
+    const operationLabels = ["新建目录", "移动/重命名", "删除", "恢复历史版本", "从回收站恢复"];
+    await wait("UI operation filter", () => directions().length === fixture.operations.length && operationLabels.every(label => directions().includes(label)));
+    check(directions().every(label => operationLabels.includes(label)), "native operation filter displays all five actions separately from upload and download");
+    check(text().includes("S225-new-directory") && text().includes("S225-moved-directory") && text().includes("删除已提交"), "native operation table preserves historical paths and committed results");
+    const deleteRow = tableRows().find(row => row.children[3].querySelector('[role="img"]')?.getAttribute("aria-label") === "删除");
+    deleteRow.querySelector("button").click();
+    await wait("deleted record details", () => document.querySelector('[role="dialog"]')?.textContent.includes("删除已提交"));
+    check(document.querySelector('[role="dialog"]').textContent.includes("server-seed.txt") && !document.querySelector('[role="dialog"]').textContent.includes("本次提供（字节）"), "native delete details show the actual path without transfer evidence");
+    await click("关闭");
     select("activity_direction", "download");
     await wait("UI download filter", () => directions().length > 0 && directions().every(value => value === "下载"));
     check(text().includes("已提供下载内容") && !text().includes("下载完成"), "provided content is never called client download completion");
@@ -170,6 +186,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     report.liveRefresh = { secondPageCursor: secondPageCall.cursor, automaticCycles: automatic.length, firstPollDelayMs: Math.round(automatic[0].started - secondPageCall.finished), rowsRetained: !flashedEmpty };
     report.bindingId = bindingId;
     report.sample = page.activity.slice(0, 6);
+    report.operations = operations.activity;
     report.cspViolations = cspViolations;
     report.ok = true;
   } catch (error) { report.error = error instanceof Error ? String(error) : JSON.stringify(error); }

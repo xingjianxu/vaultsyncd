@@ -10,4 +10,5 @@ export { AppProvider } from "./AppProvider";
 export { useLiveRefresh } from "./useLiveRefresh";
 export { PageShell } from "./PageShell";
 export { Icon, TransferDirection } from "./Icons";
+export { ActivityAction, activityOutcome } from "./ActivityAction";
 export type { NavItem, PageShellProps } from "./PageShell";

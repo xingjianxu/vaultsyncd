@@ -19,7 +19,7 @@
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
 pub const PROTOCOL_MAJOR: u32 = 3;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 1;
+pub const PROTOCOL_MINOR: u32 = 2;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -28,7 +28,7 @@ pub const MAX_FRAME_BYTES: usize = 1048576;
 /// 服务端观察到的同步与传输事实；served 仅证明服务端提供内容，不证明客户端收到、校验或应用。时间为服务端UTC秒，方向相对于客户端。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ActivityRecord {
-    /// upload_finalize、sync_commit 或 download。
+    /// upload_finalize、sync_commit、download、create_directory、move、delete、restore_version 或 restore_deleted。
     pub action: String,
     /// 本次提供的内容长度（字节）；不代表客户端已接收。
     #[serde(default)]
@@ -58,7 +58,7 @@ pub struct ActivityRecord {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
-    /// upload 或 download，相对于客户端。
+    /// upload、download 或 operation；文件操作不表示内容传输。
     pub direction: String,
     /// 条目身份。
     #[serde(default)]
@@ -304,7 +304,7 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
-    /// list_activity 的方向筛选，仅 upload 或 download；相对于客户端。
+    /// list_activity 的类型筛选：upload、download 或 operation；上传下载相对于客户端。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
