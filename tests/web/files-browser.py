@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """S134: built Web + real Chromium + isolated btrfs service, no API fixtures.
 
-VAULTSYNCD_TEST_BIN_DIR=... nix develop .#web-tests --command python3 tests/web/files-browser.py
+VAULTSYNCD_TEST_BIN_DIR=... VAULTSYNCD_TEST_WEB_DIR=... nix develop .#web-tests --command python3 tests/web/files-browser.py
 Network faults only affect this run's proxy; no online SQL or production writes.
 """
 import functools
@@ -23,6 +23,7 @@ from csp_support import CspStaticFiles, field_label
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
+WEB = Path(os.environ.get("VAULTSYNCD_TEST_WEB_DIR", REPO / "apps/web/dist")).resolve()
 RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-dev/vaultsyncd-temp")) / f"vs-s134-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
@@ -111,7 +112,7 @@ def main():
                     pass  # Browser cancellation is the intended network fault in the race case.
                 finally: backend.close()
 
-        proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(REPO / "apps/web/dist")))
+        proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(WEB)))
         threading.Thread(target=proxy.serve_forever, daemon=True).start()
         origin = f"http://localhost:{proxy.server_port}"
         with sync_playwright() as playwright:
