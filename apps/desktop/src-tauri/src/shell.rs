@@ -149,6 +149,7 @@ pub(super) fn run(selection: Option<crate::shell_request::ShellRequest>) {
         agent_logout,
         agent_list_vaults,
         select_local_directory,
+        open_binding_directory,
         agent_create_binding,
         agent_pause_binding,
         agent_resume_binding
@@ -184,6 +185,7 @@ pub(super) fn run(selection: Option<crate::shell_request::ShellRequest>) {
         agent_logout,
         agent_list_vaults,
         select_local_directory,
+        open_binding_directory,
         agent_create_binding,
         agent_pause_binding,
         agent_resume_binding,

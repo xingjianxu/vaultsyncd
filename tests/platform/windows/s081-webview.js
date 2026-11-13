@@ -20,7 +20,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   async function click(label) {
     await wait(label, () => [...document.querySelectorAll("button")].some(b => b.textContent === label && !b.disabled));
-    [...document.querySelectorAll("button")].find(b => b.textContent === label && !b.disabled).click();
+    const button = [...document.querySelectorAll("button")].find(b => b.textContent === label && !b.disabled);
+    // HTMLElement.click() does not focus like a real mouse/keyboard activation.
+    button.focus();
+    button.click();
     await delay();
   }
   const confirmed = () => document.querySelector("[data-agent-feedback]")?.textContent === "操作已由 agent 确认。";
@@ -85,6 +88,28 @@ window.addEventListener("DOMContentLoaded", async () => {
     report.confirmSavesIdentity = saved?.ca_file === fixture.caFile;
     report.passwordCleared = !document.querySelector('[name="password"]');
     location.hash = "/bindings";
+    const bindingDialog = () => [...document.querySelectorAll('[role="dialog"]')].find(dialog => dialog.textContent.includes("添加同步目录"));
+    const addButton = () => [...document.querySelectorAll("button")].find(button => button.textContent === "添加同步目录");
+    await wait("lazy add-binding button", () => addButton() && !addButton().disabled);
+    report.bindingFormInitiallyUnmounted = !bindingDialog() && !document.querySelector('[name="vault_id"], [name="local_path"], [name="server_id"]');
+    await click("添加同步目录");
+    await wait("initial add dialog", bindingDialog);
+    field("mode", "on_demand");
+    await click("取消");
+    await wait("cancel unmounts add form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    report.bindingCancelReturnsFocus = document.activeElement === addButton();
+    await click("添加同步目录");
+    await wait("fresh binding form", () => document.querySelector('[name="mode"]')?.value === "full");
+    report.bindingReopenResetsForm = document.querySelector('[name="local_path"]').value === "";
+    bindingDialog().querySelector(".mantine-Modal-close").click();
+    await wait("X unmounts add form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    await click("添加同步目录");
+    await wait("dialog before Escape", bindingDialog);
+    // Mantine inspects the event target as an Element, just like a real key event.
+    bindingDialog().querySelector("button").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait("Escape unmounts add form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    report.bindingIdleCloseMethods = true;
+    await click("添加同步目录");
     await wait("server option", () => document.querySelector(`select[name="server_id"] option[value="${fixture.serverId}"]`));
     field("server_id", fixture.serverId);
     await wait("binding page", () => !!document.querySelector('[name="vault_id"]'));
@@ -103,7 +128,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     vaultPicker().click(); await delay();
     await wait("refreshed vaults", () => vaultPicker().getAttribute("aria-busy") === "false" && document.querySelector(`[role="option"][value="${fixture.vault}"]`));
     report.vaultSelectionSurvivesRefresh = document.querySelector('[name="vault_id"]').value === fixture.vault;
-    vaultPicker().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    pathInput().click(); await delay();
     await click("选择目录…");
     await wait("native selection", () => pathInput().value === fixture.localPath);
     report.nativeDirectorySelected = true;
@@ -118,7 +143,9 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (!report.invalidPathVisible) throw error;
     }
     field("mode", "full");
-    await click("创建绑定并开始合并"); await wait("binding created", () => text().includes("绑定已建立"));
+    await click("创建绑定并开始合并");
+    await wait("successful create closes and unmounts form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    report.bindingSuccessClosesDialog = true;
     await wait("first merge", async () => {
       let status;
       try { status = await window.__TAURI_INTERNALS__.invoke("agent_get_status"); }
@@ -132,6 +159,33 @@ window.addEventListener("DOMContentLoaded", async () => {
       return status.bindings.find(b => b.binding_id === info.binding_id)?.synchronized === true;
     });
     report.mergeCompleted = true;
+    const directoryButton = [...document.querySelectorAll("button")].find(button => button.textContent === fixture.localPath);
+    if (!directoryButton) throw new Error("local directory is not a keyboard button");
+    // Observe, but do not replace, the real Tauri command and native result.
+    // s081-desktop.ps1 independently checks a real Explorer window for localPath.
+    const originalInvoke = window.__TAURI_INTERNALS__.invoke;
+    let opened;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      const result = await originalInvoke(command, args);
+      if (command === "open_binding_directory") opened = structuredClone(args);
+      return result;
+    };
+    try {
+      directoryButton.focus();
+      report.directoryKeyboardFocusable = document.activeElement === directoryButton;
+      directoryButton.click();
+      await wait("real directory command acknowledgment", () => opened !== undefined);
+      report.directoryOpenAcknowledged = opened.bindingId === report.bindingId && Object.keys(opened).length === 1;
+    } finally {
+      window.__TAURI_INTERNALS__.invoke = originalInvoke;
+    }
+    try {
+      await invoke("open_binding_directory", { bindingId: "0".repeat(32) });
+      throw new Error("unknown binding directory was accepted");
+    } catch (cause) {
+      report.unknownDirectoryRejected = String(cause.message ?? cause).length > 0 && String(cause.message ?? cause) !== "unknown binding directory was accepted";
+      if (!report.unknownDirectoryRejected) throw cause;
+    }
     const bound = JSON.stringify(await connections());
     try {
       await invoke("agent_set_connection", { input: { serverId: "00".repeat(16), serverUrl: fixture.url, caFile: fixture.caFile } });
@@ -167,7 +221,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
     report.nonceStyles = /^[0-9a-f]{32}$/.test(nonce ?? "") && [...document.querySelectorAll("style")].every(style => style.nonce === nonce);
     report.cspViolations = cspViolations;
-    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","bindingKeepsPinnedIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.defaultVaultSelected && report.defaultBindingsSelected && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible && report.removalBlockedByBinding;
+    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","bindingKeepsPinnedIdentity","identityTimeoutDoesNotSave","bindingFormInitiallyUnmounted","bindingCancelReturnsFocus","bindingReopenResetsForm","bindingIdleCloseMethods","bindingSuccessClosesDialog","directoryKeyboardFocusable","directoryOpenAcknowledged","unknownDirectoryRejected"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.defaultVaultSelected && report.defaultBindingsSelected && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible && report.removalBlockedByBinding;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

@@ -198,6 +198,32 @@ fn registered_in_runtime(binding: BindingId) -> io::Result<bool> {
     Ok(false)
 }
 
+/// Open an existing folder in the user's default file manager, never as a command/file.
+/// Resolving a StorageFolder before launching prevents paths from being interpreted as URLs
+/// or executable targets. The caller must obtain the path from an authenticated binding.
+pub fn open_directory(path: &Path) -> io::Result<()> {
+    let path = path
+        .to_str()
+        .filter(|value| path.is_absolute() && !value.contains('\0'))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid directory path"))?
+        .to_owned();
+    with_runtime(move || {
+        let folder = StorageFolder::GetFolderFromPathAsync(&HSTRING::from(path))
+            .map_err(map)?
+            .get()
+            .map_err(map)?;
+        if windows::System::Launcher::LaunchFolderAsync(&folder)
+            .map_err(map)?
+            .get()
+            .map_err(map)?
+        {
+            Ok(())
+        } else {
+            Err(io::Error::other("file manager rejected directory launch"))
+        }
+    })
+}
+
 /// Open the Windows single-folder picker owned by the desktop window.
 /// Must run on a blocking worker; cancellation returns `None` and never changes files.
 pub fn select_directory(owner: isize) -> io::Result<Option<String>> {

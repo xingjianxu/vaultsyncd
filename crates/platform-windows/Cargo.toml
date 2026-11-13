@@ -40,4 +40,4 @@ path = "examples/cfapi_prototype.rs"
 [target.'cfg(windows)'.dependencies]
 vaultsyncd-local-ipc = { path = "../local-ipc" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
-windows = { version = "0.61", features = ["Foundation", "Storage", "Storage_Search", "Storage_Provider", "Storage_Streams", "Win32_System_WinRT","Data_Xml_Dom","UI_Notifications","Win32_System_Com","Win32_System_Com_StructuredStorage","Win32_System_Variant","Win32_UI_Shell","Win32_UI_Shell_PropertiesSystem","Win32_Storage_EnhancedStorage"] }
+windows = { version = "0.61", features = ["Foundation", "System", "Storage", "Storage_Search", "Storage_Provider", "Storage_Streams", "Win32_System_WinRT","Data_Xml_Dom","UI_Notifications","Win32_System_Com","Win32_System_Com_StructuredStorage","Win32_System_Variant","Win32_UI_Shell","Win32_UI_Shell_PropertiesSystem","Win32_Storage_EnhancedStorage"] }

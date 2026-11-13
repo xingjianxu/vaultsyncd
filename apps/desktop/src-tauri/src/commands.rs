@@ -181,6 +181,31 @@ pub(crate) async fn select_local_directory(
     .map_err(|_| BridgeError::local("目录选择器运行失败，请重试。"))?
 }
 
+// The webview supplies only a binding identity, never an arbitrary shell target.
+#[tauri::command]
+pub(crate) async fn open_binding_directory(binding_id: String) -> Result<(), BridgeError> {
+    let status = exchange(C::GetStatus, None).await?;
+    let binding = status
+        .management
+        .and_then(|management| management.bindings)
+        .and_then(|bindings| {
+            bindings
+                .into_iter()
+                .find(|binding| binding.binding_id == binding_id && !binding.detached)
+        })
+        .ok_or_else(|| BridgeError::local("同步目录已不存在或已解除绑定，请重新读取状态。"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        vaultsyncd_platform_windows::shell::open_directory(std::path::Path::new(
+            &binding.local_path,
+        ))
+        .map_err(|_| {
+            BridgeError::local("无法打开本地目录，请检查目录是否存在、访问权限及默认文件管理器。")
+        })
+    })
+    .await
+    .map_err(|_| BridgeError::local("文件管理器启动失败，请重试。"))?
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BindingInput {

@@ -15,6 +15,7 @@ export interface AgentClient {
   logout(serverId: string): Promise<ManagementResult>;
   listVaults(serverId: string): Promise<ManagementResult>;
   selectDirectory(): Promise<string | null>;
+  openBindingDirectory(bindingId: string): Promise<void>;
   createBinding(input: BindingInput): Promise<ManagementResult>;
   pauseBinding(bindingId: string): Promise<ManagementResult>;
   resumeBinding(bindingId: string): Promise<ManagementResult>;
@@ -40,7 +41,7 @@ const unavailable = async (): Promise<never> => { throw new Error("未连接：�
 export const disconnectedAgent: AgentClient = {
   getStatus: unavailable, discoverConnection: unavailable, setConnection: unavailable, removeConnection: unavailable,
   login: unavailable, logout: unavailable,
-  listVaults: unavailable, selectDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
+  listVaults: unavailable, selectDirectory: unavailable, openBindingDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   getRules:unavailable,setRules:unavailable,
   retryProblem: unavailable, setMode: unavailable, detachBinding: unavailable, exportRecovery: unavailable,
@@ -66,6 +67,7 @@ export const nativeAgent: AgentClient = {
   logout: serverId => call("agent_logout", { serverId }),
   listVaults: serverId => call("agent_list_vaults", { serverId }),
   selectDirectory: () => call("select_local_directory"),
+  openBindingDirectory: bindingId => call("open_binding_directory", { bindingId }),
   createBinding: input => call("agent_create_binding", { input }),
   pauseBinding: bindingId => call("agent_pause_binding", { bindingId }),
   resumeBinding: bindingId => call("agent_resume_binding", { bindingId }),

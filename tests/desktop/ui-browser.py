@@ -68,6 +68,7 @@ PRESENTATION_FIXTURE = r"""() => {
     switch (command) {
       case 'agent_discover_connection': return { connection: { authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' } };
       case 'agent_get_status': return { agent_version: 'S152 presentation fixture', ipc_protocol: { major: 3, minor: 0 }, snapshot_version: 'fixture:1', bindings: [state], management: { connections: [{ authenticated: true, server_id: '7'.repeat(32), server_url: 'https://example.invalid' }], bindings: [binding], problems: [], notices: [] } };
+      case 'agent_list_vaults': return { items: [{ id: binding.vault_id, name: 'S221 授权 Vault' }] };
       case 'agent_list_activity': return { activity: ['upload', 'download'].map((direction, index) => ({ id: String(index + 1), vault_id: binding.vault_id, occurred_at: '1794300000', direction, action: direction === 'upload' ? 'sync_commit' : 'download', status: direction === 'upload' ? 'committed' : 'served', path: clean.path })) };
       case 'agent_list_files': if (window.__S152_FAIL_FILES__) throw { message: 'S152 presentation: file read failed' }; return { files: [clean, dirty, longName] };
       case 'agent_list_history': case 'agent_list_trash': return { items: [item] };
@@ -83,6 +84,9 @@ PRESENTATION_FIXTURE = r"""() => {
 def nonce_and_layout(page, scheme, width, route):
     expect(page.get_by_role("heading", level=1, name=ROUTES[route], exact=True)).to_be_visible()
     expect(page.get_by_role("dialog", name="登录", exact=True)).to_have_count(0)
+    if route == "/bindings":
+        expect(page.get_by_role("dialog", name="添加同步目录", exact=True)).to_have_count(0)
+        expect(page.locator('[name="vault_id"], [name="local_path"]')).to_have_count(0)
     expect(page.locator("html")).to_have_attribute("data-mantine-color-scheme", scheme)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (scheme, width, route, "document overflow")
     if page.locator(".mantine-AppShell-header").count():
@@ -162,8 +166,8 @@ def main():
             fixture.locator('[name="activity_binding"]').select_option("1" * 32)
             expect(fixture.get_by_role("img", name="上传", exact=True)).to_have_count(1)
             expect(fixture.get_by_role("img", name="下载", exact=True)).to_have_count(1)
-            expect(fixture.locator("svg.lucide-upload")).to_have_count(1)
-            expect(fixture.locator("svg.lucide-download")).to_have_count(1)
+            expect(fixture.locator("svg.lucide-cloud-upload")).to_have_count(1)
+            expect(fixture.locator("svg.lucide-cloud-download")).to_have_count(1)
             fixture.screenshot(path=str(OUTPUT / "activity-icons-presentation.png"))
             fixture.goto(origin + "/#/files")
             expect(fixture.locator("[data-agent-feedback]")).to_have_text("本机 agent 状态已读取。")
@@ -176,7 +180,7 @@ def main():
             expect(dirty.get_by_text("待上传本地修改", exact=True)).to_be_visible()
             expect(dirty.get_by_role("button", name="释放空间", exact=True)).to_be_disabled()
             expect(dirty.get_by_role("button", name="下载", exact=True)).to_be_disabled()
-            expect(dirty.get_by_role("button", name="下载", exact=True).locator("svg.lucide-download")).to_have_count(1)
+            expect(dirty.get_by_role("button", name="下载", exact=True).locator("svg.lucide-cloud-download")).to_have_count(1)
             expect(dirty.get_by_role("button", name="下载", exact=True)).to_have_attribute("title", "下载")
             for scheme, width in (("light", 320), ("dark", 1440)):
                 fixture.emulate_media(color_scheme=scheme)
@@ -197,6 +201,16 @@ def main():
             expect(clean.get_by_role("button", name="释放空间", exact=True)).to_be_disabled()
             fixture.evaluate("window.__S152_FAIL_FILES__ = false")
             fixture.goto(origin + "/#/bindings")
+            add_binding = fixture.get_by_role("button", name="添加同步目录", exact=True)
+            expect(add_binding).to_be_enabled()
+            expect(fixture.locator('[name="vault_id"], [name="local_path"]')).to_have_count(0)
+            assert fixture.evaluate("!window.__S152_CALLS__.some(call => call.command === 'agent_list_vaults')")
+            directory = fixture.get_by_role("table", name="本地 Binding").get_by_role("button", name="C:\\S152\\同步目录", exact=True)
+            expect(directory).to_have_js_property("tagName", "BUTTON")
+            for width in (320, 1440):
+                fixture.set_viewport_size({"width": width, "height": 1000})
+                trap_and_cancel(fixture, add_binding, "添加同步目录")
+                expect(fixture.locator('[name="vault_id"], [name="local_path"]')).to_have_count(0)
             fixture.get_by_role("button", name="管理与恢复", exact=True).click()
             trap_and_cancel(fixture, fixture.get_by_role("button", name="解除绑定（保留数据）", exact=True), "确认解除绑定")
             fixture.goto(origin + "/#/history")
@@ -218,7 +232,7 @@ def main():
             assert not fixture.evaluate("window.__S152_CSP__"), fixture.evaluate("window.__S152_CSP__")
             assert not errors, errors
             browser.close()
-        result = {"passed": True, "scope": "Chromium presentation; native IPC/CFAPI separately verified by Windows suites", "presentation_only": presentation_only, "cases": cases, "checks": (["60 disconnected route/theme/width layouts", "mobile navigation"] if cases else []) + ["48px header", "no document overflow", "strict nonce CSP", "no fabricated sync success", "initial connected badge and feedback agree", "downloaded/local_changes status labels", "theme persistence", "keyboard skip", "release/detach/restore modal focus trap/Escape/return", "dirty/pending action guards", "modal cancellation sends no mutation", "failed file read cannot report success", "pending restore cannot report success", "no browser credential storage", "no page errors"]}
+        result = {"passed": True, "scope": "Chromium presentation; native IPC/CFAPI separately verified by Windows suites", "presentation_only": presentation_only, "cases": cases, "checks": (["60 disconnected route/theme/width layouts", "mobile navigation"] if cases else []) + ["48px header", "no document overflow", "strict nonce CSP", "no fabricated sync success", "initial connected badge and feedback agree", "downloaded/local_changes status labels", "theme persistence", "keyboard skip", "add-binding/release/detach/restore modal focus trap/Escape/return", "binding form stays unmounted until add; no default Vault read; directory renders as keyboard button", "dirty/pending action guards", "modal cancellation sends no mutation", "failed file read cannot report success", "pending restore cannot report success", "no browser credential storage", "no page errors"]}
         (OUTPUT / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2))
         print(f"S152 desktop UI passed: {OUTPUT}")
     finally:

@@ -2399,6 +2399,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S081 桌面连接与绑定管理
 
+S221（2026-11-13）：添加绑定表单改为按钮打开的 Mantine Modal，创建成功关闭，失败保留输入，忙时关闭/重复操作禁用。桌面 `AgentClient.openBindingDirectory(bindingId): Promise<void>` 调用 Tauri `open_binding_directory {bindingId}`；原生通过既有认证 `GetStatus` 读取 `management.bindings`，只接受仍活动的绑定，再由 `platform-windows::shell::open_directory` 将其绝对路径解析为 WinRT `StorageFolder`，交由 `Launcher::LaunchFolderAsync` 打开默认文件管理器。无任意路径/命令透传，不启动目录内文件；不存在、已解绑、文件管理器拒绝或 IPC 错误如实返回。仅壳桥新增，远端协议/本机 IPC/schema 不变。
+
 - S188—S191 将本机 IPC 升为 2.10， `list_connections` 和状态应答提供 `ManagementResult.connections`，空配置返回空数组。`get_connection` 和省略 `server_id` 的旧连接命令只在有一条连接时适用。`set_connection` 以确认的 ServerId 保存连接；变更现有地址须通过 capabilities 身份复核。`login/logout/list_vaults/create_binding` 可显式携带 `server_id`。新增绑定必须解析到已配置服务器；`BindingInfo.server_id` 由持久绑定提供。绑定范围的命令从持久 BindingId 解析服务器，调用者不能覆盖路由。
 - 客户端 schema 15 的 `agent_connections` 按 ServerId 保存 URL/CA/回环开发传输标记。`agent_login_profiles` 和 `vaultsyncd/session/{ServerId}` 保留现有凭据键。一个用户 agent 维护同一个 writer/维护协调器，按服务器隔离 HTTP 及同步运行状态。
 

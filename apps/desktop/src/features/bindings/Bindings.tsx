@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Button as LinkButton, Card, Group, Loader, NativeSelect, Select, Stack, Text, TextInput, Title } from "@mantine/core";
+import { Anchor, Button as LinkButton, Group, Loader, Modal, NativeSelect, Select, Stack, Text, TextInput, Title } from "@mantine/core";
 import { Button, Table } from "@vaultsyncd/ui";
 import type { BindingInfo, BindingStatus, ConnectionInfo, RemoteItem } from "@vaultsyncd/local-ipc-types";
 import type { AgentClient } from "../../services/agent";
@@ -14,6 +14,14 @@ export function Bindings({ agent, bindings, connections, states, read, changed, 
 }) {
   const [serverId, setServerId] = useState("");
   const [managing, setManaging] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const [formSession, setFormSession] = useState(0);
+  const [notice, setNotice] = useState("");
+  const canAdd = read && !!connections.length;
+  useEffect(() => { if (!connections.length) setAdding(false); }, [connections.length]);
+  function closeAdd() {
+    if (!busy) setAdding(false);
+  }
   const selected = connections.find(item => item.server_id === serverId) ?? connections[0];
   function serverLabel(serverId?: string) {
     const server = connections.find(item => item.server_id === serverId);
@@ -34,12 +42,20 @@ export function Bindings({ agent, bindings, connections, states, read, changed, 
   return <Stack gap="lg">
     <Group justify="space-between">
       <Title order={1} size="h2">同步目录</Title>
+      {canAdd && <Button disabled={busy} onClick={() => {
+        setNotice(""); setServerId(""); setFormSession(current => current + 1); setAdding(true);
+      }}>添加同步目录</Button>}
       {read && !connections.length && <LinkButton component="a" href="#/connections/add">添加服务器</LinkButton>}
     </Group>
-    {read && !!connections.length && <Card component="section" withBorder>
-      <Stack>
-        <Title order={2} size="h3">添加同步目录</Title>
-        <NativeSelect label="服务器" name="server_id" value={selected?.server_id ?? ""} disabled={busy}
+    {notice && <Text size="sm" role="status">{notice}</Text>}
+    <Modal opened={adding && !!connections.length} onClose={closeAdd} title="添加同步目录" centered size="lg"
+      closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}>
+      {!!connections.length && <Stack key={formSession}>
+        {!read && <Group>
+          <Text size="sm" role="alert">本机 agent 未连接，已保留填写内容。</Text>
+          <Button variant="default" disabled={busy} onClick={() => run(changed)}>检查本机连接</Button>
+        </Group>}
+        <NativeSelect label="服务器" name="server_id" value={selected?.server_id ?? ""} disabled={busy || !read}
           onChange={event => setServerId(event.target.value)}>
           {connections.map(server => <option key={server.server_id} value={server.server_id}>
             {serverLabel(server.server_id)}{server.authenticated ? "" : "（未登录）"}
@@ -47,16 +63,23 @@ export function Bindings({ agent, bindings, connections, states, read, changed, 
         </NativeSelect>
         {selected && (selected.authenticated
           ? <BindingForm key={JSON.stringify([selected.server_id, selected.server_url, selected.ca_file])}
-            agent={agent} serverId={selected.server_id} changed={changed} run={run} busy={busy} />
+            agent={agent} serverId={selected.server_id} changed={changed} run={run} busy={busy || !read}
+            created={() => {
+              setAdding(false);
+              setNotice("绑定已建立，正在核对并合并内容。");
+            }} />
           : <Group>
             <Text size="sm">登录此服务器后可选择 Vault。</Text>
             <LinkButton component="a" href="#/connections" variant="default">连接设置</LinkButton>
           </Group>)}
-      </Stack>
-    </Card>}
+        <Group justify="flex-end"><Button variant="default" disabled={busy} onClick={closeAdd}>取消</Button></Group>
+      </Stack>}
+    </Modal>
     <Table<BindingInfo> caption="本地 Binding" rows={bindings ?? []} rowKey={row => row.binding_id}
       emptyMessage={read ? "尚无同步目录。" : "尚未读取同步目录。"} columns={[
-        { key: "path", title: "本地目录", render: row => row.local_path },
+        { key: "path", title: "本地目录", render: row => <Anchor component="button" type="button" ta="left"
+          disabled={busy || !read || row.detached} title="在文件管理器中打开"
+          onClick={() => run(() => agent.openBindingDirectory(row.binding_id))}>{row.local_path}</Anchor> },
         { key: "server", title: "服务器", render: row => serverLabel(row.server_id) },
         { key: "vault", title: "Vault", render: row => row.vault_id },
         { key: "mode", title: "模式", render: row => row.mode === "full" ? "完整同步" : "按需下载" },
@@ -74,12 +97,11 @@ export function Bindings({ agent, bindings, connections, states, read, changed, 
   </Stack>;
 }
 
-function BindingForm({ agent, serverId, changed, run, busy }: Actions & { serverId: string }) {
+function BindingForm({ agent, serverId, changed, run, busy, created }: Actions & { serverId: string; created(): void }) {
   const [vaults, setVaults] = useState<RemoteItem[]>();
   const [vaultId, setVaultId] = useState<string | null>(null);
   const [vaultsLoading, setVaultsLoading] = useState(false);
   const [vaultsError, setVaultsError] = useState("");
-  const [notice, setNotice] = useState("");
   const [localPath, setLocalPath] = useState("");
   const readingVaults = useRef(false);
   const request = useRef(0);
@@ -123,8 +145,7 @@ function BindingForm({ agent, serverId, changed, run, busy }: Actions & { server
     const mode = new FormData(event.currentTarget).get("mode") === "on_demand" ? "on_demand" : "full";
     run(async () => {
       await agent.createBinding({ bindingId: crypto.randomUUID().replaceAll("-", ""), serverId, vaultId, localPath, mode });
-      setLocalPath("");
-      setNotice("绑定已建立，正在核对并合并内容。");
+      created();
       await changed();
     });
   }
@@ -147,6 +168,5 @@ function BindingForm({ agent, serverId, changed, run, busy }: Actions & { server
       <option value="full">完整同步（保留离线内容）</option><option value="on_demand">按需下载（仅完整内容可离线读取）</option>
     </NativeSelect>
     <Group><Button type="submit" disabled={busy || !vaultSelected || !localPath}>创建绑定并开始合并</Button></Group>
-    {notice && <Text size="sm" role="status">{notice}</Text>}
   </Stack></form>;
 }

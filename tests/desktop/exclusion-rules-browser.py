@@ -52,6 +52,12 @@ def main():
             page.add_init_script(f"({ui.PRESENTATION_FIXTURE})();({FIXTURE})()")
             page.add_init_script("window.csp=[];document.addEventListener('securitypolicyviolation',e=>csp.push(e.effectiveDirective))")
             page.goto(f"http://localhost:{server.server_port}/#/bindings")
+            add_binding = page.get_by_role("button", name="添加同步目录", exact=True)
+            expect(add_binding).to_be_enabled()
+            expect(page.locator('[name="vault_id"], [name="local_path"]')).to_have_count(0)
+            assert page.evaluate("!window.__S152_CALLS__.some(call=>call.command==='agent_list_vaults')")
+            directory = page.get_by_role("table", name="本地 Binding").get_by_role("button", name="C:\\S152\\同步目录", exact=True)
+            expect(directory).to_be_enabled()
             page.get_by_role("button", name="管理与恢复", exact=True).click()
             rules = page.get_by_role("textbox", name="额外排除规则", exact=True)
             read = page.get_by_role("button", name="读取排除规则", exact=True)
@@ -109,6 +115,11 @@ def main():
 
             draft = extra + "未保存的修改.txt\n"
             rules.fill(draft)
+            ui.trap_and_cancel(page, add_binding, "添加同步目录")
+            expect(rules).to_have_value(draft)
+            expect(save).to_be_enabled()
+            assert len(page.evaluate("rulesFixture.writes")) == 1
+            checks.append("add dialog is lazy and cancellation leaves existing binding's unsaved rules intact")
             page.evaluate("rulesFixture.failRead=true")
             start_read()
             expect(rules).to_have_value(draft)
