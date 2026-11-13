@@ -59,7 +59,7 @@ function AppView() {
     void connect();
     return () => { controller.current?.abort(); controller.current = null; };
   }, [connect]);
-  return <PageShell product="服务管理" brandIcon={<img src={logoUrl} alt="" width={28} height={28} />} items={items.map(item => ({ ...item, icon: <Icon icon={item.icon} /> }))} activePath={path}
+  return <PageShell product="服务管理" brandIcon={<img src={logoUrl} alt="" width={36} height={36} />} items={items.map(item => ({ ...item, icon: <Icon icon={item.icon} /> }))} activePath={path}
     sidebarTitle="服务端控制台" sidebarFooter={<Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text>}
     headerActions={<Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor>}
     contentWidth={path === "/files" ? "100%" : "xl"}>

@@ -86,7 +86,7 @@ function LoginPage() {
   return <main className="auth-screen">
     <Paper withBorder p="xl" radius="md" className="auth-panel">
       <Stack gap="lg">
-        <Group gap="sm"><img src={logoUrl} alt="" width={40} height={40} /><Title order={1} size="h2">登录 vaultsyncd</Title></Group>
+        <Group gap="sm"><img src={logoUrl} alt="" width={48} height={48} /><Title order={1} size="h2">登录 vaultsyncd</Title></Group>
         {error && <Alert color="red" role="alert">{error}</Alert>}
         <form onSubmit={form.onSubmit(submitLogin)} aria-busy={busy}>
           <Stack>
