@@ -124,7 +124,7 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
   return <Modal.Root opened={!!entry} onClose={close} size="min(1100px, 95vw)" centered closeOnEscape returnFocus>
     <Modal.Overlay />
     <Modal.Content>
-      <Modal.Header>
+      <Modal.Header pb={4} mih={0}>
         <Modal.Title style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
           title={`预览 · ${entry?.name ?? ""}`}>预览 · {entry?.name ?? ""}</Modal.Title>
         <ActionIcon variant="subtle" color="gray" aria-label="下载原文件" title="下载原文件" mr="xs"
@@ -138,12 +138,12 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
       {status && <><Text role="status">{status}</Text><Progress value={progress} aria-label="文件读取进度" /></>}
       {rendering && <Text role="status">正在渲染页面…</Text>}
       {error && <Alert color="red" role="alert">{error}</Alert>}
-      <Group>
+      {(busy || error) && <Group>
         {busy && <Button variant="default" onClick={() => {
           request.current?.abort(); setRenderer(null); setPdfUrl(null); setOffice(null); setText(null); setTextViewer(null); setStatus(""); setRendering(false); setError("已取消预览，可重试。");
         }}>取消预览</Button>}
         {error && <Button variant="default" disabled={auth.busy} onClick={() => setAttempt(value => value + 1)}>重试预览</Button>}
-      </Group>
+      </Group>}
       {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`PDF 预览 · ${entry?.name ?? ""}`} />}
       {office && <OfficePreview viewer={office} onReady={() => { if (!request.current?.signal.aborted) setStatus(""); }}
         onError={message => { request.current?.abort(); setOffice(null); setStatus(""); setError(`预览失败：${message}`); }} />}

@@ -389,6 +389,22 @@ def main():
                 expect(download.locator("svg.lucide-cloud-download")).to_have_count(1)
                 expect(header.get_by_role("button", name="关闭预览", exact=True)).to_be_focused()
 
+            def compact_spacing(selector):
+                content = preview.locator(selector)
+                expect(content).to_be_visible()
+                # Measure the actual title-to-content distance; an empty action
+                # row must not reserve a Stack gap after loading completes.
+                wait_for(lambda: not preview.get_by_role("status").count(), "preview still loading")
+                spacing = content.evaluate("""node => {
+                    const dialog = node.closest('[role="dialog"]');
+                    const title = dialog.querySelector('.mantine-Modal-title').getBoundingClientRect();
+                    const content = node.getBoundingClientRect();
+                    return {gap: content.top - title.bottom,
+                        emptyGroups: [...dialog.querySelectorAll('.mantine-Group-root')].filter(n => !n.children.length).length};
+                }""")
+                assert 0 <= spacing["gap"] <= 12, spacing
+                assert spacing["emptyGroups"] == 0, spacing
+
             def close_preview(escape=False):
                 if escape:
                     page.keyboard.press("Escape")
@@ -444,6 +460,7 @@ def main():
                 for width in (320, 1440):
                     page.set_viewport_size({"width": width, "height": 900})
                     rendered()
+                    compact_spacing(".file-preview-viewport")
                     box = preview.bounding_box()
                     assert box and box["x"] >= -1 and box["x"] + box["width"] <= width + 1, box
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"horizontal overflow at {scheme}/{width}"
@@ -498,6 +515,7 @@ def main():
                 for width in (320, 1440):
                     page.set_viewport_size({"width": width, "height": 900})
                     native_pdf()
+                    compact_spacing(".file-preview-pdf")
                     box = preview.bounding_box()
                     assert box and box["x"] >= -1 and box["x"] + box["width"] <= width + 1, box
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
