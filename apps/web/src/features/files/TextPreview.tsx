@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Alert, SegmentedControl, Stack, useComputedColorScheme } from "@mantine/core";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
@@ -34,14 +34,17 @@ export function remarkPreviewBudget() {
   };
 }
 
-function ReadOnlyCode({ text, name, language, embedded = false }: {
-  text: string; name: string; language?: string; embedded?: boolean;
+function ReadOnlyCode({ text, name, signal, language, embedded = false }: {
+  text: string; name: string; signal: AbortSignal; language?: string; embedded?: boolean;
 }) {
   const theme = useComputedColorScheme("light");
   const [support, setSupport] = useState<LanguageSupport | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
+    if (signal.aborted) return;
     let current = true;
+    const stop = () => { current = false; };
+    signal.addEventListener("abort", stop, { once: true });
     setSupport(null); setError("");
     const description = language
       ? LanguageDescription.matchLanguageName(languages, language, true)
@@ -51,8 +54,8 @@ function ReadOnlyCode({ text, name, language, embedded = false }: {
     }).catch(() => {
       if (current) setError("语法高亮加载失败，正在显示纯文本。");
     });
-    return () => { current = false; };
-  }, [name, language]);
+    return () => { stop(); signal.removeEventListener("abort", stop); };
+  }, [name, language, signal]);
   const extensions = useMemo(() => [
     EditorView.cspNonce.of(typeof document === "undefined" ? "" : document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? ""),
     EditorView.contentAttributes.of({ "aria-label": `文件代码 · ${name}`, "aria-readonly": "true", tabindex: "0" }),
@@ -69,7 +72,8 @@ function ReadOnlyCode({ text, name, language, embedded = false }: {
   </>;
 }
 
-export function TextPreview({ text, name, markdown }: { text: string; name: string; markdown: boolean }) {
+// 保持相同的 Markdown renderer/CodeMirror 实例，关闭时不重建已渲染正文。
+export const TextPreview = memo(function TextPreview({ text, name, markdown, signal }: { text: string; name: string; markdown: boolean; signal: AbortSignal }) {
   const [mode, setMode] = useState("preview");
   return <Stack gap="sm">
     {markdown && <SegmentedControl aria-label="Markdown 显示模式" value={mode} onChange={setMode}
@@ -82,10 +86,10 @@ export function TextPreview({ text, name, markdown }: { text: string; name: stri
         pre: ({ children }) => <div className="file-preview-markdown-pre">{children}</div>,
         code: ({ children, className }) => {
           const language = /(?:^|\s)language-([^\s]+)/.exec(className ?? "")?.[1];
-          return language ? <ReadOnlyCode text={String(children).replace(/\n$/, "")} name={name} language={language} embedded />
+          return language ? <ReadOnlyCode text={String(children).replace(/\n$/, "")} name={name} signal={signal} language={language} embedded />
             : <code className={className}>{children}</code>;
         },
       }}>{text}</Markdown>
-    </article> : <ReadOnlyCode text={text} name={name} />}
+    </article> : <ReadOnlyCode text={text} name={name} signal={signal} />}
   </Stack>;
-}
+});

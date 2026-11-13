@@ -31,6 +31,7 @@ import zipfile
 
 from playwright.sync_api import expect, sync_playwright
 from csp_support import field_label
+from preview_exit_support import PreviewExit
 
 REPO = Path(__file__).resolve().parents[2]
 DEV = Path("/data/vaultsyncd-dev").resolve()
@@ -339,6 +340,7 @@ def main():
             checks.append("wrong-snapshot-digest-422/oversize-request-413")
             page.goto(origin + f"/#/files/{vault}"); page.reload()
             table, preview = page.get_by_role("table", name="文件与目录", exact=True), page.get_by_role("dialog")
+            exits = PreviewExit(page, evidence)
             def link(name):
                 return table.get_by_role("button", name=name, exact=True)
             def open_preview(name, menu=False):
@@ -404,9 +406,17 @@ def main():
                     viewer_states[extension]["sheet_tabs"] = {"names": [first.inner_text(), second.inner_text()], "active_indices": [0,1,0], "bounds": boxes}
                 download_exact(name)
                 page.screenshot(path=str(evidence / f"office-{extension}.png"))
-                close_preview()
+                if extension == "docx":
+                    exits.reopen(".file-preview-office", name, "Office/rapid-same-file-reopen")
+                    frame, _ = native_office()
+                delete_start = len(exits.deletes)
+                exits.close(".file-preview-office", f"Office-{extension}/frame-session-title-geometry-retained",
+                            {"docx": "x", "xlsx": "escape", "pptx": "overlay"}[extension])
+                wait_for(lambda: len(exits.deletes) > delete_start, "Office session was not revoked after exit")
                 expect(preview.locator(".file-preview-office")).to_have_count(0)
+                wait_for(frame.is_detached, "Office editor frame survived modal exit")
             checks.append("DOCX-XLSX-PPTX/real-OnlyOffice-readonly-canvas/XLSX-two-interactive-sheets/exact-original-download")
+            checks.append("exit-animation/Office-X-Escape-overlay/real-intermediate-frames/DOM-frame-session-title-geometry/rapid-reopen/exit-revokes-and-destroys")
 
             # The deployment permits only ONLYOFFICE's empty onmousewheel compatibility attribute.
             # A nonempty attribute remains blocked by CSP and cannot run in the authenticated page.
@@ -526,11 +536,19 @@ def main():
             preview.get_by_role("button", name="取消预览", exact=True).click()
             expect(preview.get_by_role("alert")).to_contain_text("已取消")
             expect(preview.locator("iframe")).to_have_count(0)
-            close_preview(); arm(); open_preview(NAMES["pptx"]); native_office()
+            exits.close(".mantine-Stack-root", "cancelled-Office-X/error-title-geometry-retained")
+            arm(); open_preview(NAMES["pptx"]); native_office()
             release.set(); wait_for(finished.is_set, "late viewer response did not finish")
             expect(page.get_by_role("dialog", name=f"预览 · {NAMES['pptx']}", exact=True)).to_be_visible()
             close_preview()
             checks.append("cancel-close/late-viewer-cannot-replace-new-preview")
+            _, release, finished = delayed()
+            exits.reopen(".mantine-Stack-root", NAMES["pptx"], "delayed-Office/rapid-different-file-reopen", require_abort=True)
+            arm(); native_office()
+            release.set(); wait_for(finished.is_set, "close-delayed viewer response did not finish")
+            expect(page.get_by_role("dialog", name=f"预览 · {NAMES['pptx']}", exact=True)).to_be_visible()
+            native_office(); close_preview()
+            checks.append("exit-animation/delayed-Office/abort-during-exit/rapid-different-file-reopen/no-late-update")
             _, release, finished = delayed()
             arm(); page.evaluate("path=>location.hash=path", f"/files/{vault}/child")
             expect(preview).not_to_be_visible()

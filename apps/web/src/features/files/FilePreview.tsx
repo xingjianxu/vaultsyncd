@@ -23,29 +23,51 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [office, setOffice] = useState<OfficeViewer | null>(null);
   const [text, setText] = useState<string | null>(null);
-  const [TextViewer, setTextViewer] = useState<ComponentType<{ text: string; name: string; markdown: boolean }> | null>(null);
+  const [TextViewer, setTextViewer] = useState<ComponentType<{ text: string; name: string; markdown: boolean; signal: AbortSignal }> | null>(null);
   const [rendering, setRendering] = useState(false);
+  const [displayedEntry, setDisplayedEntry] = useState(entry);
   const canvas = useRef<HTMLCanvasElement>(null);
   const request = useRef<AbortController | null>(null);
+  const renderRequest = useRef<AbortController | null>(null);
   const kind = entry && previewKind(entry);
   const client = auth.client;
   const generation = client?.sessionGeneration;
-  // 同一 Modal 保持挂载以恢复焦点；内容和资源在关闭时立即释放，不等退场动画。
+  const resources = useRef<{ dispose: () => void } | null>(null);
+  const previewId = useRef(0);
+  const context = useRef({ vaultId, client, generation, busy: auth.busy });
+  const latestEntry = useRef(entry);
+  latestEntry.current = entry;
+  function clearContent() {
+    setDisplayedEntry(null); setRenderer(null); setDownload(null); setError(""); setPdfUrl(null); setOffice(null); setText(null); setTextViewer(null); setProgress(0); setRendering(false); setStatus("");
+  }
+  function release() {
+    resources.current?.dispose(); resources.current = null;
+  }
+  // 关闭只停止工作，保留退场画面；新预览或认证/Vault 变化则立即释放旧资源。
   useEffect(() => {
-    setRenderer(null); setDownload(null); setError(""); setPdfUrl(null); setOffice(null); setText(null); setTextViewer(null); setProgress(0); setRendering(false);
-    if (!entry || !client || !kind || auth.busy) { setStatus(""); return; }
+    const previous = context.current;
+    context.current = { vaultId, client, generation, busy: auth.busy };
+    if (!entry && previous.vaultId === vaultId && previous.client === client
+      && previous.generation === generation && previous.busy === auth.busy) return;
+    previewId.current++;
+    release(); clearContent();
+    if (!entry || !client || !kind || auth.busy) return;
+    setDisplayedEntry(entry);
     const controller = new AbortController();
     request.current = controller;
     let resource: PreviewRenderer | null = null;
     let objectUrl: string | null = null;
     let officeViewer: OfficeViewer | null = null;
-    controller.signal.addEventListener("abort", () => {
+    resources.current = { dispose: () => {
+      controller.abort();
+      if (request.current === controller) request.current = null;
       if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
       const previousOffice = officeViewer; officeViewer = null;
       void previousOffice?.destroy().catch(() => undefined);
       const previous = resource; resource = null;
       void previous?.destroy().catch(() => undefined);
-    }, { once: true });
+    } };
+    controller.signal.addEventListener("abort", () => renderRequest.current?.abort(), { once: true });
     const current = () => !controller.signal.aborted && client.sessionGeneration === generation;
     setStatus("正在读取并校验文件…");
     void (async () => {
@@ -93,40 +115,50 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
         setError(cause instanceof Error ? `预览失败：${cause.message}` : "文件无法解析，请下载后查看。");
       }
     })();
-    return () => {
-      controller.abort();
-      if (request.current === controller) request.current = null;
-    };
+    return () => controller.abort();
   }, [entry, vaultId, client, generation, auth.busy, attempt]);
 
+  useEffect(() => () => release(), []);
+
   useEffect(() => {
-    if (!renderer || !canvas.current) return;
+    if (!renderer || !canvas.current || request.current?.signal.aborted) return;
     const target = canvas.current;
     const controller = new AbortController();
+    renderRequest.current = controller;
     setRendering(true); setError("");
     void renderer.render(target, controller.signal).catch(cause => {
       if (!controller.signal.aborted) setError(cause instanceof Error ? `预览失败：${cause.message}` : "页面渲染失败。");
     }).finally(() => { if (!controller.signal.aborted) setRendering(false); });
-    return () => { controller.abort(); target.width = 0; target.height = 0; };
+    return () => {
+      controller.abort(); target.width = 0; target.height = 0;
+      if (renderRequest.current === controller) renderRequest.current = null;
+    };
   }, [renderer]);
 
   // hash 路由离开、切换目录/Vault 时，事件发生即停止网络与解析（包括未完成的动态模块加载）。
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
-    const leave = () => { request.current?.abort(); closeRef.current(); };
+    const leave = () => { request.current?.abort(); release(); clearContent(); closeRef.current(); };
     window.addEventListener("hashchange", leave);
     window.addEventListener("popstate", leave);
     return () => { window.removeEventListener("hashchange", leave); window.removeEventListener("popstate", leave); };
   }, []);
   function close() { request.current?.abort(); onClose(); }
   const busy = !!status || rendering;
-  return <Modal.Root opened={!!entry} onClose={close} size="min(1100px, 95vw)" centered closeOnEscape returnFocus>
+  const exiting = previewId.current;
+  const shownEntry = entry ?? displayedEntry;
+  return <Modal.Root opened={!!entry} onClose={close} size="min(1100px, 95vw)" centered closeOnEscape returnFocus
+    onExitTransitionEnd={() => {
+      // 被快速重开替换的退出回调不得清理新一轮预览。
+      if (latestEntry.current || previewId.current !== exiting) return;
+      release(); clearContent();
+    }}>
     <Modal.Overlay />
     <Modal.Content>
       <Modal.Header pb={4} mih={0}>
         <Modal.Title style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          title={`预览 · ${entry?.name ?? ""}`}>预览 · {entry?.name ?? ""}</Modal.Title>
+          title={`预览 · ${shownEntry?.name ?? ""}`}>预览 · {shownEntry?.name ?? ""}</Modal.Title>
         <ActionIcon variant="subtle" color="gray" aria-label="下载原文件" title="下载原文件" mr="xs"
           disabled={!download || auth.busy} onClick={() => { if (download) saveDownload(download); }}>
           <FileIcon name="download" />
@@ -140,16 +172,20 @@ export function FilePreview({ entry, vaultId, onClose }: { entry: SnapshotEntry 
       {error && <Alert color="red" role="alert">{error}</Alert>}
       {(busy || error) && <Group>
         {busy && <Button variant="default" onClick={() => {
-          request.current?.abort(); setRenderer(null); setPdfUrl(null); setOffice(null); setText(null); setTextViewer(null); setStatus(""); setRendering(false); setError("已取消预览，可重试。");
+          request.current?.abort(); release(); setRenderer(null); setPdfUrl(null); setOffice(null); setText(null); setTextViewer(null); setStatus(""); setRendering(false); setError("已取消预览，可重试。");
         }}>取消预览</Button>}
         {error && <Button variant="default" disabled={auth.busy} onClick={() => setAttempt(value => value + 1)}>重试预览</Button>}
       </Group>}
-      {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`PDF 预览 · ${entry?.name ?? ""}`} />}
-      {office && <OfficePreview viewer={office} onReady={() => { if (!request.current?.signal.aborted) setStatus(""); }}
-        onError={message => { request.current?.abort(); setOffice(null); setStatus(""); setError(`预览失败：${message}`); }} />}
-      {TextViewer && text !== null && entry && <TextViewer key={`${entry.entry_id}:${entry.version_id}:${attempt}`} text={text} name={entry.name} markdown={kind === "markdown"} />}
+      {pdfUrl && <iframe className="file-preview-pdf" src={pdfUrl} title={`PDF 预览 · ${shownEntry?.name ?? ""}`} />}
+      {office && request.current && <OfficePreview viewer={office} signal={request.current.signal}
+        onReady={() => { if (!request.current?.signal.aborted) setStatus(""); }}
+        onError={message => {
+          if (request.current?.signal.aborted) return;
+          request.current?.abort(); release(); setOffice(null); setStatus(""); setError(`预览失败：${message}`);
+        }} />}
+      {TextViewer && text !== null && shownEntry && request.current && <TextViewer key={`${shownEntry.entry_id}:${shownEntry.version_id}:${attempt}`} text={text} name={shownEntry.name} markdown={previewKind(shownEntry) === "markdown"} signal={request.current.signal} />}
       {renderer && <div className="file-preview-viewport" aria-busy={rendering}>
-        <canvas ref={canvas} role="img" aria-label={entry?.name} hidden={!!error} />
+        <canvas ref={canvas} role="img" aria-label={shownEntry?.name} hidden={!!error} />
       </div>}
     </Stack>
       </Modal.Body>

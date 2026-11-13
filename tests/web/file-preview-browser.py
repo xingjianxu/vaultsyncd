@@ -36,6 +36,7 @@ import zlib
 
 from playwright.sync_api import Error, expect, sync_playwright
 from csp_support import CspStaticFiles, field_label
+from preview_exit_support import PreviewExit
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug")).resolve()
@@ -365,6 +366,7 @@ def main():
             page.goto(origin + f"/#/files/{vault}"); page.reload()
             table = page.get_by_role("table", name="文件与目录", exact=True)
             preview = page.get_by_role("dialog")
+            exits = PreviewExit(page, evidence)
 
             def link(name):
                 return table.get_by_role("button", name=name, exact=True)
@@ -448,7 +450,12 @@ def main():
             assert page.url == baseline
             expect(preview.locator("iframe, object, embed")).to_have_count(0)
             checks.append("PNG/click/in-place/decoded-canvas-pixels")
-            close_preview()
+            exits.close("canvas", "image-X/pixels-title-geometry-retained")
+            open_preview(PNG_NAME); rendered()
+            exits.reopen("canvas", PNG_NAME, "image/rapid-same-file-reopen")
+            rendered()
+            exits.close("canvas", "image-overlay/pixels-title-geometry-retained", "overlay")
+            checks.append("exit-animation/image-X-overlay/real-intermediate-frames/pixels-title-geometry/rapid-same-file-reopen")
             for name in raster_fixtures():
                 open_preview(name)
                 rendered()
@@ -523,7 +530,8 @@ def main():
                     page.screenshot(path=str(evidence / f"pdf-{scheme}-{width}.png"))
             page.set_viewport_size({"width": 1440, "height": 900})
             revoked_url = preview.locator("iframe.file-preview-pdf").get_attribute("src")
-            close_preview()
+            exits.close("iframe.file-preview-pdf", "PDF-Escape/frame-Blob-title-geometry-retained", "escape")
+            checks.append("exit-animation/PDF-Escape/real-intermediate-frames/live-Blob-stable-frame-title-geometry")
             revoked = context.new_page()
             try:
                 revoked.goto(revoked_url)
@@ -615,8 +623,8 @@ def main():
                 return events
 
             _, release, finished = delayed_preview()
-            close_preview(escape=True); arm()
-            open_preview(PNG_NAME); rendered()
+            exits.reopen(".mantine-Stack-root", PNG_NAME, "delayed-PDF/rapid-different-file-reopen", require_abort=True)
+            arm(); rendered()
             release.set()
             wait_for(finished.is_set, "late response did not finish")
             # Let the browser process the delivered response/abort before checking

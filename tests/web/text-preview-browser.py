@@ -14,6 +14,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 from csp_support import CspStaticFiles, field_label
+from preview_exit_support import PreviewExit
 
 REPO = Path(__file__).resolve().parents[2]
 DEV = Path("/data/vaultsyncd-dev").resolve()
@@ -85,6 +87,12 @@ def main():
         (documents / name).write_bytes(data)
     (documents / "child/leaf.txt").write_text("child leaf text\n")
     assets = {str(path.relative_to(WEB)): sha(path.read_bytes()) for path in sorted(WEB.rglob("*")) if path.is_file()}
+    # Vite names several language entry chunks "dist-<hash>" rather than
+    # "rust-<hash>". Resolve the real lazy Rust import from this exact build.
+    rust_modules = [name for module in (WEB / "assets").glob("TextPreview-*.js")
+                    for name in re.findall(r'import\([`"]\./([^`"]+)[`"]\)\.then\(\w+=>\w+\.rust\(\)\)', module.read_text())]
+    assert len(rust_modules) == 1, rust_modules
+    rust_path = "/assets/" + rust_modules[0]
     (evidence / "inputs.json").write_text(json.dumps({
         "binary_directory": str(BIN), "web_directory": str(WEB), "assets_sha256": assets,
         "binaries": {name: sha((BIN / name).read_bytes()) for name in ("vaultsyncd-admin", "vaultsyncd-server")},
@@ -106,7 +114,7 @@ def main():
     def arm(mode=None, entry_id=None):
         with lock:
             fault.clear(); fault.update(mode=mode, entry_id=entry_id)
-            if mode == "delay":
+            if mode in ("delay", "language-delay"):
                 events = [threading.Event() for _ in range(3)]
                 fault.update(started=events[0], release=events[1], finished=events[2])
                 holds.append(events[1])
@@ -150,7 +158,20 @@ def main():
                 self.forward()
 
             def do_GET(self):
-                self.forward() if self.path.startswith("/v1/") else super().do_GET()
+                if self.path.startswith("/v1/"):
+                    self.forward()
+                    return
+                with lock:
+                    current = dict(fault)
+                if current["mode"] == "language-delay" and self.path == rust_path:
+                    current["started"].set()
+                    assert current["release"].wait(45), "language module delay never released"
+                    try:
+                        super().do_GET()
+                    finally:
+                        current["finished"].set()
+                else:
+                    super().do_GET()
 
             def forward(self):
                 backend = http.client.HTTPConnection(address, timeout=30)
@@ -235,6 +256,7 @@ def main():
             checks.append("fixed-version-text/anonymous-401")
             page.goto(origin + f"/#/files/{vault}"); page.reload()
             table, preview = page.get_by_role("table", name="文件与目录", exact=True), page.get_by_role("dialog")
+            exits = PreviewExit(page, evidence)
 
             def link(name):
                 return table.get_by_role("button", name=name, exact=True)
@@ -270,6 +292,31 @@ def main():
                 saved = RUN / "downloads" / name
                 download.save_as(saved)
                 assert saved.read_bytes() == fixtures[name]
+
+            # Delay an actual lazily loaded parser module, then deliver it
+            # while the old source is visibly exiting. It must not reconfigure
+            # CodeMirror or replace the retained plain-text DOM after abort.
+            started, release, finished = arm("language-delay")
+            open_preview("example.rs"); source_ready(fixtures["example.rs"].decode())
+            wait_for(started.is_set, "Rust parser module was not held")
+            exits.arm(".cm-content"); exits.trigger("escape")
+            page.wait_for_function("() => window.__previewExit.frames.length > 0")
+            release.set(); wait_for(finished.is_set, "late parser module was not delivered")
+            exits.verify("source/delayed-parser-module/no-late-highlight-DOM-update")
+            arm()
+            checks.append("exit-animation/delayed-real-language-module/no-late-highlight-or-DOM-replacement")
+
+            open_preview("example.js"); source_ready(fixtures["example.js"].decode())
+            exits.close(".cm-content", "source-X/DOM-title-geometry-retained")
+            open_preview("document.md")
+            expect(preview.locator(".file-preview-markdown").get_by_role("heading", name="Preview heading")).to_be_visible(timeout=20000)
+            exits.reopen(".file-preview-markdown", "example.js", "Markdown/rapid-different-file-reopen")
+            source_ready(fixtures["example.js"].decode())
+            exits.close(".cm-content", "source-Escape/DOM-title-geometry-retained", "escape")
+            open_preview("document.md")
+            expect(preview.locator(".file-preview-markdown").get_by_role("heading", name="Preview heading")).to_be_visible(timeout=20000)
+            exits.close(".file-preview-markdown", "Markdown-overlay/DOM-title-geometry-retained", "overlay")
+            checks.append("exit-animation/source-Markdown/X-Escape-overlay/real-intermediate-frames/DOM-title-geometry/rapid-reopen")
 
             highlights = {}
             for name in ("example.js", "example.ts", "example.py", "example.rs", "example.json"):
@@ -370,9 +417,9 @@ def main():
             arm(); release.set(); wait_for(finished.is_set, "cancel response did not finish")
             page.wait_for_timeout(200)
             assert preview.locator(".cm-editor").count() == 0
-            close_preview()
+            exits.close(".mantine-Stack-root", "cancelled-source-X/error-and-title-retained")
             _, release, finished = delayed()
-            page.keyboard.press("Escape"); expect(preview).not_to_be_visible()
+            exits.close(".mantine-Stack-root", "delayed-source-Escape/loading-and-title-retained", "escape", require_abort=True)
             arm(); open_preview("document.md")
             expect(rendered.get_by_role("heading", name="Preview heading")).to_be_visible(timeout=20000)
             release.set(); wait_for(finished.is_set, "late response did not finish")

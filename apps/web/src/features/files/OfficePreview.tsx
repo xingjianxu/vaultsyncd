@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { loadOfficeApi, type OfficeEditor, type OfficeViewer } from "./office-preview";
 
-/** The third-party frame is removed immediately on close, navigation, retry or session change. */
-export function OfficePreview({ viewer, onReady, onError }: { viewer: OfficeViewer; onReady: () => void; onError: (message: string) => void }) {
+/** Abort stops initialization/callbacks; unmount releases the frame after the modal exits. */
+export function OfficePreview({ viewer, signal, onReady, onError }: { viewer: OfficeViewer; signal: AbortSignal; onReady: () => void; onError: (message: string) => void }) {
   const [loading, setLoading] = useState(true);
   const container = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ viewer, onReady, onError });
   callbacks.current = { viewer, onReady, onError };
   useEffect(() => {
     const target = container.current;
-    if (!target) return;
+    if (!target || signal.aborted) return;
     const controller = new AbortController();
     setLoading(true);
     let editor: OfficeEditor | null = null;
@@ -23,6 +23,8 @@ export function OfficePreview({ viewer, onReady, onError }: { viewer: OfficeView
       callbacks.current.onError(message);
     };
     const timer = setTimeout(() => fail("Office 文档打开超时，请重试或下载原文件。"), 120000);
+    const stop = () => { controller.abort(); clearTimeout(timer); };
+    signal.addEventListener("abort", stop, { once: true });
     void loadOfficeApi(viewer.documentServer, controller.signal).then(api => {
       if (controller.signal.aborted) return;
       const placeholder = document.createElement("div");
@@ -50,10 +52,10 @@ export function OfficePreview({ viewer, onReady, onError }: { viewer: OfficeView
       if (!controller.signal.aborted) fail("Office 查看器加载失败，请重试或下载原文件。");
     });
     return () => {
-      controller.abort(); clearTimeout(timer);
+      stop(); signal.removeEventListener("abort", stop);
       try { editor?.destroyEditor(); } catch { /* The iframe must still be removed if the upstream cleanup fails. */ }
       finally { editor = null; target.replaceChildren(); }
     };
-  }, [viewer]);
+  }, [viewer, signal]);
   return <div ref={container} className="file-preview-office" aria-busy={loading} aria-label="Office 只读预览" />;
 }
