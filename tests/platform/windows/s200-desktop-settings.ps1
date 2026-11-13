@@ -319,14 +319,14 @@ public static class S200Window {
       function Invoke-S231Button([string]$name) {
         $byName=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,$name)
         $byType=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button)
-        $condition=[Windows.Automation.AndCondition]::new($byName,$byType)
+        $s231ButtonCondition=[Windows.Automation.AndCondition]::new($byName,$byType)
         Check (Wait-Until {
           $root=[Windows.Automation.AutomationElement]::FromHandle($main)
-          $buttons=$root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)
+          $buttons=$root.FindAll([Windows.Automation.TreeScope]::Descendants,$s231ButtonCondition)
           $buttons.Count -eq 1 -and $buttons[0].Current.IsEnabled
         }) ('S231 production WebView exposes one enabled button: '+$name)
         $root=[Windows.Automation.AutomationElement]::FromHandle($main)
-        $button=$root.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
+        $button=$root.FindFirst([Windows.Automation.TreeScope]::Descendants,$s231ButtonCondition)
         $invoke=$null
         Check ($button.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$invoke)) ('S231 production button supports native InvokePattern: '+$name)
         $invoke.Invoke()
