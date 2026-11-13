@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="35 45 1180 1180" role="img" aria-labelledby="logo-title logo-description">
   <title id="logo-title">文件云同步 Logo</title>
-  <desc id="logo-description">透明背景的蓝色渐变云朵，内含浅冰蓝与薄荷绿渐变双箭头。箭头尖端、肩部与圆弧衔接均使用小幅圆角及相切曲线，指向另一段尾部中点。纯矢量路径。</desc>
+  <desc id="logo-description">透明背景的浅蓝色渐变云朵，内含浅冰蓝与薄荷绿渐变双箭头。箭头尖端、肩部与圆弧衔接均使用小幅圆角及相切曲线，指向另一段尾部中点。纯矢量路径。</desc>
   <defs>
     <linearGradient id="cloud-gradient" gradientUnits="userSpaceOnUse" x1="260" y1="244" x2="1050" y2="1026">
-      <stop offset="0" stop-color="#2E77F2"/>
-      <stop offset="0.5" stop-color="#1457DF"/>
-      <stop offset="1" stop-color="#0731B8"/>
+      <stop offset="0" stop-color="#8ACFFF"/>
+      <stop offset="0.5" stop-color="#66BDF4"/>
+      <stop offset="1" stop-color="#47A7E9"/>
     </linearGradient>
     <linearGradient id="ice-blue-gradient" gradientUnits="userSpaceOnUse" x1="380" y1="530" x2="730" y2="950">
       <stop offset="0" stop-color="#DFF7FF"/>
