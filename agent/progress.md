@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S225 in_progress**：核实并补齐两端活动账本缺失的删除、新建目录、移动及恢复操作，用户明确使用subagent；隔离及检查点见 [S225](tasks/S225.md)。仅更新dev，保留prod与其他任务现场。
+当前 **S225 done**：补齐新建目录、移动/重命名、删除及两类恢复的独立operation账本，两端中文动作/筛选/详情，schema22保留旧记录/分页身份，IPC3.2。实现91bd3b5、整合最新S224品牌7335ab0、夹具75698d4；store111/server121/IPC32/备份10、严格检查与两端构建、Web13/桌面9组通过；Windows原生51+清理1通过，673输入对应且原客户端配置/hash/paused及62注册ID保持。最终纯包81项/同包Web13+品牌8通过，仅dev更新ig2vap2包，137资源/90旧活动/身份与Office保持、线上6项通过，prod进程/system不变。证据 `/data/vaultsyncd-dev/S225-activity-events-20261113/`，交接 [S225](tasks/S225.md)。不发行/替换永久客户端或根dist，无本卡阻塞，下一ready无，原四张blocked保持；准备自动合master与清理本卡树。
 
 当前 **S224 done**：透明Logo中央V改深石板蓝#1E293B，主体占比约72%→98%，完整轮廓/透明与黑底备用保持，七尺寸ICO重生。实现8b112ef；颜色/边界/原版字节、纯Nix81项、精确包浏览器八组及Windows原生七尺寸/EXE像素通过。完整Windows release四EXE/11文件干净来源构建与清单/x64核验通过，根dist链接至开发根产物，旧dist完整备份；未替换客体客户端或发行。仅dev更新5z68d5b包，136资源/TLS/CSP/真实登录退出及八组颜色边界通过，原身份/账号/Vault/Office及生产进程/system保持。交接 [S224](tasks/S224.md)，证据 `/data/vaultsyncd-dev/S224-logo-fill-20261113/`。无本卡阻塞，下一ready无，原四张blocked保持。实现/验收96b7830已ff合master，五挂载/本卡树及分支正常清理，S134/S187保持；清理后根dist哈希一致、双环境健康、dev ready和生产进程保持。
 

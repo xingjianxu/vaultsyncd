@@ -132,3 +132,10 @@ S223（2026-11-13）经永久入口 `restart --package /nix/store/zxn0vlr9yha8p2
 ## S224 深色 V 与紧凑 Logo（仅 dev 更新）
 
 S224（2026-11-13）经永久入口 `restart --package /nix/store/5z68d5bq95w566ahfyvc9kz9lg553jvl-vaultsyncd-0.1.7` 更新dev（源8b112ef）。中央V使用深石板蓝，主体占比约98%；136资源字节/TLS/CSP/MIME与真实登录退出、明暗320/1440八组颜色和边界通过。原身份/账号/Vault/Office保持，仅instance包引用变化；生产进程与system保持，不部署生产。回退可restart到S223包 `/nix/store/zxn0vlr9yha8p2b2259rpsjvcrdrv90y-vaultsyncd-0.1.7`，不重置数据。完整Windows客户端已编译交付根dist，客体永久客户端未替换；交接 [S224](../../agent/tasks/S224.md)。
+
+
+## S225 文件操作记录升级（2026-11-13）
+
+仅 dev 已更新到 `/nix/store/ig2vap2j3dymx5hypfjd228fvnkpfac2-vaultsyncd-0.1.7`，来源整合提交 `7335ab0`，包含 S224 最新品牌与 S225 五类已提交文件操作；通过永久主树 `tools/dev-server.sh restart --package` 启动，运行不依赖任务工作树。schema21→22；原 ServerId、账号、Vault、Office配置和90条旧活动记录保持，137资源字节与严格TLS/CSP、真实登录退出/四类型筛选通过。生产进程及system保持，未更新生产。两端操作记录说明见接口 S225、交接 [S225](../../agent/tasks/S225.md)。
+
+升级前停机整套备份在 `/data/vaultsyncd-dev/S225-activity-events-20261113/predeploy-backup/`（state/vaults/config、70文件SHA256），自动迁移前数据库备份另在dev state内。由于schema已升22，**不能只重启S224旧包回退**；须有序停机、保留当前22整套状态后，按该备份恢复配套schema21状态/内容/配置，再用S224包启动并核验。此操作会回到备份时点，升级后新增事实需先独立保留；本卡未实际回退或重置实例，备份为长期证据，不按缓存清理。
