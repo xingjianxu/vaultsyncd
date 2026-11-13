@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S230 done**：云朵Logo改为浅蓝#8ACFFF/#66BDF4/#47A7E9，SVG/Web/favicon/Windows/Explorer共用；双箭头/透明背景/路径/放大尺寸及黑底备用保持。实现3fd5104；根类型/Web构建、七尺寸颜色与alpha逐像素保持、完整Windows四EXE/双清单、Win32/EXE像素差0、Shell原生11项和真实Explorer三绑定通过，原62注册/客户端保持。纯Nix81项、宿主/精确包各八组浏览器、仅dev更新后的137资源/健康身份和真实登录八组颜色/透明度/尺寸通过，prod保持。根dist交付，永久Windows客户端未替换；证据 `/data/vaultsyncd-dev/S230-light-blue-branding-20261113/`，交接 [S230](tasks/S230.md)。无本卡阻塞，待合并清理；下一ready无，原四张blocked保持。
+当前 **S230 done**：云朵Logo改为浅蓝#8ACFFF/#66BDF4/#47A7E9，SVG/Web/favicon/Windows/Explorer共用；双箭头/透明背景/路径/放大尺寸及黑底备用保持。实现3fd5104；根类型/Web构建、七尺寸颜色与alpha逐像素保持、完整Windows四EXE/双清单、Win32/EXE像素差0、Shell原生11项和真实Explorer三绑定通过，原62注册/客户端保持。纯Nix81项、宿主/精确包各八组浏览器、仅dev更新后的137资源/健康身份和真实登录八组颜色/透明度/尺寸通过，prod保持。根dist交付，永久Windows客户端未替换；证据 `/data/vaultsyncd-dev/S230-light-blue-branding-20261113/`，交接 [S230](tasks/S230.md)。实现3fd5104/验收交接01ca8d4已ff合master，五bind及本卡树/分支正常清理，S187及新出现的S231工作树保持；清理后137资源/双环境健康身份、dev ready和根dist哈希复核通过。无本卡阻塞；下一ready无，原四张blocked保持。
 
 当前 **S229 done**：默认SVG主体横向93%→99%，等比放大约6%，重生七尺寸ICO；Web顶栏28→36px、登录40→48px，透明/完整轮廓/比例及备用黑底保持。实现c90af28；根类型/Web构建、纯Nix81项、完整Windows四EXE/双清单、Win32七尺寸/EXE像素差0、Shell原生11项与真实Explorer三绑定通过，原62注册/客户端保持。宿主/精确包各八组浏览器及仅dev更新后的137资源/健康身份、真实登录八组尺寸/透明度通过，生产保持；根dist交付，永久客体客户端未替换。证据 `/data/vaultsyncd-dev/S229-larger-branding-20261113/`，交接 [S229](tasks/S229.md)。实现c90af28/验收交接95616fd已ff合master，五bind及本卡树/分支正常清理，S187保持；清理后137资源/双环境健康身份、dev ready和根dist哈希复核通过。无本卡阻塞；下一ready无，原四张blocked保持。
 
