@@ -1,5 +1,7 @@
 # 已实现接口摘要
 
+2026-11-13 S231：PauseBinding/ResumeBinding在设备归属核验后由本机协调器直接提交controls，不排入服务器网络worker；解绑仍先原生安全断开，DetachBinding双端执行预算与显式恢复操作同为30分钟，帧读写仍5秒。GetStatus管理列表与业务状态的paused/detached采用同一绑定读事务结果，恢复记录继续保留。桌面桥传递retryable及真实传输错误，首次启动对可重试恢复失败最多尝试3次（500/1000ms间隔），重试前重读状态，已恢复/解绑/消失不重放；永久失败或耗尽保留路径与实际错误。启动完成后的轮询/导航不恢复本次手动暂停，无schema/IPC版本变化。完整四EXE需一起更新，旧agent不支持新执行预算。
+
 2026-11-13 S226：主桌面首次完整 GetStatus 后，以现有 ResumeBinding 逐个恢复未解绑的暂停目录；每次桌面启动只尝试一轮（含旧版停止和此前手动暂停），轮询/导航不重复恢复。单项失败显示本地路径与实际错误并继续其余目录；恢复后重新读取真实状态，不推导同步成功。Explorer独立shell窗口不执行全局恢复，普通StopAgent/维护/认证/未确认数据围栏保持。无schema或IPC版本变化。本地Binding取消Vault列，服务器列用Mantine HoverCard展示服务器地址、Server ID、Vault ID、登录状态；键盘focus也可查看。
 
 

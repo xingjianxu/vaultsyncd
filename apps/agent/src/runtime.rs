@@ -666,6 +666,16 @@ impl Runtime {
                             ));
                             return;
                         }
+                        // Pause/resume only change the durable local control gate. A server
+                        // worker may be recovering or waiting for its network timeout; putting
+                        // these controls behind that work can expire their IPC request before
+                        // the worker even starts it. Keep ownership validation above, then
+                        // execute locally without touching the worker's native resources.
+                        Ok(Some(_))
+                            if matches!(
+                                command.name,
+                                CommandName::PauseBinding | CommandName::ResumeBinding
+                            ) => {}
                         Ok(Some(server))
                             if self
                                 .servers

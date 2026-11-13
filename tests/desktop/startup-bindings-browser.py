@@ -24,7 +24,7 @@ FIXTURE = r"""() => {
     cache_path: `C:\\S226\\cache${n}`, local_path: `C:\\S226\\folder${n}`,
     mode: 'full', paused: n !== 4, detached: n === 5,
   }));
-  const f = window.fixture = {bindings, reads: 0, resumes: [], pauses: [], failReads: 1, failResume: true};
+  const f = window.fixture = {bindings, reads: 0, resumes: [], pauses: [], failReads: 1, failResume: true, transientResume: true};
   window.__TAURI_INTERNALS__ = {invoke: async (command,args) => {
     if (command === 'agent_get_status') {
       f.reads++;
@@ -40,6 +40,10 @@ FIXTURE = r"""() => {
     if (command === 'agent_resume_binding') {
       f.resumes.push(args.bindingId);
       if (args.bindingId === '2'.repeat(32) && f.failResume) throw {message: 'S226 binding recovery rejected'};
+      if (args.bindingId === '3'.repeat(32) && f.transientResume) {
+        f.transientResume = false;
+        throw {message: 'S231 temporary IPC loss', retryable: true};
+      }
       bindings.find(b=>b.binding_id===args.bindingId).paused = false;
       return {};
     }
@@ -69,10 +73,10 @@ def main():
             url = f"http://localhost:{server.server_port}/#/bindings"
             page.goto(url)
             expect(page.get_by_text("S226 IPC temporarily unavailable", exact=True)).to_be_visible()
-            page.wait_for_function("() => fixture.resumes.length === 3")
+            page.wait_for_function("() => fixture.resumes.length === 4")
             expect(page.get_by_role("button", name="添加同步目录", exact=True)).to_be_enabled()
-            assert page.evaluate("fixture.resumes") == [str(n) * 32 for n in [1, 2, 3]]
-            checks.append("transient first IPC failure retries; resumes paused active bindings across individual failure, skips running and detached")
+            assert page.evaluate("fixture.resumes") == [str(n) * 32 for n in [1, 2, 3, 3]]
+            checks.append("transient first IPC and Resume failures retry automatically; permanent rejection stays visible; skips running and detached")
             expect(page.get_by_text("部分同步目录未能自动恢复", exact=True)).to_be_visible()
             expect(page.get_by_text(r"C:\S226\folder2：S226 binding recovery rejected", exact=True)).to_be_visible()
             table = page.get_by_role("table", name="本地 Binding")
@@ -107,12 +111,12 @@ def main():
             page.get_by_role("link", name="同步目录", exact=True).click()
             page.wait_for_timeout(4500)
             expect(row.get_by_role("button", name="恢复", exact=True)).to_be_enabled()
-            assert len(page.evaluate("fixture.resumes")) == 3
+            assert len(page.evaluate("fixture.resumes")) == 4
             # A newly added paused binding is not part of the startup snapshot either.
             page.evaluate("fixture.bindings.push({...fixture.bindings[0],binding_id:'a'.repeat(32),local_path:'C:\\\\S226\\\\later',paused:true})")
             page.get_by_role("button", name="检查本机连接", exact=True).click()
             expect(table.locator("tbody tr")).to_have_count(5)
-            assert len(page.evaluate("fixture.resumes")) == 3
+            assert len(page.evaluate("fixture.resumes")) == 4
             checks.append("manual pause, navigation, repeated polls and later binding membership never rerun startup recovery")
             # Unknown server metadata still exposes durable IDs without inventing a URL/auth state.
             page.evaluate("fixture.bindings[0].server_id='9'.repeat(32)")

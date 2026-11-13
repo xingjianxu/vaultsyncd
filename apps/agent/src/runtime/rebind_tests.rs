@@ -189,6 +189,114 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn local_pause_and_resume_do_not_wait_for_a_busy_server_worker() {
+    let mut fixture = Fixture::new().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    fixture.runtime.config.server.url = format!("http://{}", listener.local_addr().unwrap());
+    fixture.runtime.config.server.development_http = true;
+    let server = ServerId::from_hex(&fixture.runtime.config.server.id).unwrap();
+    fixture.runtime.start_server(
+        server,
+        server::Connection::open(fixture.runtime.config.server.clone()).unwrap(),
+        false,
+    );
+    let request = |name, parameters| vaultsyncd_local_ipc::generated::Request {
+        request_id: format!("s231-{name:?}"),
+        ipc_version: vaultsyncd_local_ipc::version::supported(),
+        command: Command { name, parameters },
+    };
+    // A real login reaches this local HTTP peer, which deliberately withholds its
+    // response. The worker is now occupied by network I/O rather than a test stub.
+    let (reply, login_response) = oneshot::channel();
+    fixture
+        .runtime
+        .dispatch(crate::ipc::CommandRequest {
+            request: request(
+                CommandName::Login,
+                Some(CommandParameters {
+                    username: Some("s231-isolated-user".into()),
+                    password: Some("s231-isolated-password".into()),
+                    ..Default::default()
+                }),
+            ),
+            reply,
+        })
+        .await;
+    let (connection, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+        .await
+        .expect("server worker must reach the deliberately stalled peer")
+        .unwrap();
+    for (name, expected_paused) in [
+        (CommandName::PauseBinding, true),
+        (CommandName::ResumeBinding, false),
+    ] {
+        let (reply, response) = oneshot::channel();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            fixture.runtime.dispatch(crate::ipc::CommandRequest {
+                request: request(
+                    name,
+                    Some(CommandParameters {
+                        binding_id: Some(OLD.to_string()),
+                        ..Default::default()
+                    }),
+                ),
+                reply,
+            }),
+        )
+        .await
+        .expect("local binding controls must not wait for the server worker");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), response)
+                .await
+                .expect("local control reply must arrive while the peer is stalled")
+                .unwrap()
+                .kind,
+            vaultsyncd_local_ipc::generated::ResponseKind::Ok
+        );
+        assert_eq!(
+            management::binding_list(&fixture.runtime.db).await.unwrap()[0].paused,
+            expected_paused
+        );
+    }
+    fixture.detach().await;
+    let (reply, response) = oneshot::channel();
+    fixture
+        .runtime
+        .dispatch(crate::ipc::CommandRequest {
+            request: request(
+                CommandName::ResumeBinding,
+                Some(CommandParameters {
+                    binding_id: Some(OLD.to_string()),
+                    ..Default::default()
+                }),
+            ),
+            reply,
+        })
+        .await;
+    let result = tokio::time::timeout(Duration::from_secs(2), response)
+        .await
+        .expect("detached rejection must also remain local")
+        .unwrap();
+    assert!(result.error.unwrap().message.contains("BINDING_UNBOUND"));
+    let state = &management::binding_list(&fixture.runtime.db).await.unwrap()[0];
+    assert!(state.detached && state.paused);
+    // Release only this test's stalled peer and wait for its worker before closing SQLite.
+    drop(connection);
+    drop(listener);
+    drop(login_response);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.runtime.servers.remove(&server).unwrap().stop(),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn maintenance_retains_detached_exports_without_trying_to_pause_old_binding() {
     let fixture = Fixture::new().await;
     fixture.detach().await;

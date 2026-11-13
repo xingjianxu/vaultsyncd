@@ -310,8 +310,32 @@ public static class S200Window {
       Start-Sleep -Seconds 5
       $s=Invoke-S203Cli @('status')
       Check (@($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.paused }).Count -eq 1) 'S226 ordinary desktop polling preserves a new manual pause'
+      # Exercise the production WebView detach command, then reopen the real SQLite
+      # state through a fresh desktop/agent. Detached records remain for recovery.
+      [S200Window]::Hover(0,0)
+      Click-Control '管理与恢复'
+      Click-Control '解除绑定（保留数据）'
+      Click-Control '确认保留数据并解除'
+      Check (Wait-Until {
+        $s=Invoke-S203Cli @('status')
+        @($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.detached -and $_.paused }).Count -eq 1 -and
+        @($s.bindings | Where-Object { $_.binding_id -eq $binding -and $_.detached -and $_.paused }).Count -eq 1
+      } 60) 'S231 production detach persists matching management and runtime controls'
+      Check (Wait-Until { !(Read-Dialog $main).Contains($local) }) 'S231 detached directory disappears from the native binding table'
+      Check ((Get-FileHash $unconfirmed -Algorithm SHA256).Hash -eq $beforeHash) 'S231 detach preserves local file bytes'
       Close-Main
       Expect-Exited 'restarted binding closes safely'
+      Check (Wait-Until { (Agents).Count -eq 0 }) 'S231 detached writer exits before restart'
+      Launch 'detached-binding-restart'
+      Check (Wait-Until { (Read-Dialog $main).Contains('agent 已连接') } 60) 'S231 reopened desktop reads the real agent state'
+      $s=Invoke-S203Cli @('status')
+      Check (@($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.detached -and $_.paused }).Count -eq 1) 'S231 restart retains detached recovery record without auto-resuming it'
+      Check (@($s.bindings | Where-Object { $_.binding_id -eq $binding -and $_.detached -and $_.paused }).Count -eq 1) 'S231 restart runtime status agrees with durable detached controls'
+      Check (!(Read-Dialog $main).Contains($local)) 'S231 detached directory stays absent from the reopened native binding table'
+      Check ((Get-FileHash $unconfirmed -Algorithm SHA256).Hash -eq $beforeHash) 'S231 detached directory bytes survive desktop and agent restart'
+      @{binding=$binding;detached=$true;paused=$true;local_sha256=$beforeHash;recovery_record_retained=$true} | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 's231-detach-restart.json') -Encoding UTF8
+      Close-Main
+      Expect-Exited 'detached binding restart closes safely'
       @{exit_seconds=$timer.Elapsed.TotalSeconds;unconfirmed_sha256=$beforeHash;binding=$binding;maintenance_export_created=$false} | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 's203-binding.json') -Encoding UTF8
     }
     @{ok=$true;checks=$checks.ToArray();count=$checks.Count;session=$session;native='Windows 11 x64';scope='production WebView settings, window close, real tray and authenticated session stop; optional S203 real CFAPI binding and locked unconfirmed file'} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $PSScriptRoot 'result.json') -Encoding UTF8

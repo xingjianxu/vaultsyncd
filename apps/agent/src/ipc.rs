@@ -152,15 +152,21 @@ async fn refresh(db: Arc<Database>, hub: Weak<Hub>) {
         let _ = snapshot(&db, &hub).await;
     }
 }
-async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError> {
-    // Serialize refresh/query so an older observation cannot overwrite a newer published version.
-    let mut state = hub.state.lock().await;
-    let info = crate::management::binding_list(db).await?;
+async fn binding_statuses(
+    db: &Database,
+    info: &mut [BindingInfo],
+    offline: &std::collections::HashSet<BindingId>,
+) -> Result<Vec<BindingStatus>, PortError> {
     let mut bindings = Vec::with_capacity(info.len());
-    for b in &info {
+    for b in info {
         let binding = BindingId::from_hex(&b.binding_id).map_err(crate::local::error)?;
         let mut s = status::snapshot(db, binding).await?;
-        if hub.offline.borrow().contains(&binding) {
+        // Controls may commit after the earlier management-list read. Publish the
+        // same, later transactional control facts in both projections, so desktop
+        // filtering/startup recovery cannot revive a row already reported unbound.
+        b.paused = s.paused;
+        b.detached = s.detached;
+        if offline.contains(&binding) {
             s.offline += 1;
         }
         bindings.push(BindingStatus {
@@ -183,6 +189,14 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
             unknown: s.unknown.to_string(),
         });
     }
+    Ok(bindings)
+}
+async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError> {
+    // Serialize refresh/query so an older observation cannot overwrite a newer published version.
+    let mut state = hub.state.lock().await;
+    let mut info = crate::management::binding_list(db).await?;
+    let offline = hub.offline.borrow().clone();
+    let bindings = binding_statuses(db, &mut info, &offline).await?;
     let mut problems = crate::management::problems(db, None).await?;
     for problem in hub.problems.borrow().iter() {
         if !problems

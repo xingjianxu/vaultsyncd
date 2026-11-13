@@ -9,12 +9,14 @@ use vaultsyncd_platform_windows::ipc::Endpoint;
 pub(crate) struct BridgeError {
     code: &'static str,
     pub(crate) message: String,
+    retryable: bool,
 }
 impl BridgeError {
     pub(crate) fn local(message: &str) -> Self {
         Self {
             code: "unavailable",
             message: message.into(),
+            retryable: false,
         }
     }
 }
@@ -36,12 +38,26 @@ pub(crate) async fn exchange(
         .map_err(|_| BridgeError::local("无法连接同一用户会话的本机 agent。"))?
         .request(&request)
         .await
-        .map_err(|_| BridgeError::local("本机 agent 无响应；请检查后台进程后重新读取状态。"))?;
+        .map_err(|error| BridgeError {
+            code: "unavailable",
+            message: format!("本机 agent 请求未完成：{error}"),
+            retryable: matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::WouldBlock
+            ),
+        })?;
     if response.kind != ResponseKind::Ok {
+        let error = response.error;
         return Err(BridgeError {
             code: "agent_rejected",
-            message: response
-                .error
+            retryable: error.as_ref().is_some_and(|e| e.retryable),
+            message: error
                 .map(|e| e.message)
                 .unwrap_or_else(|| "agent 返回无效错误应答。".into()),
         });

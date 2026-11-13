@@ -412,6 +412,7 @@ async fn native_recovery_and_download_wait_past_the_ordinary_deadline() {
         CommandName::ExportRecovery,
         CommandName::DownloadEntry,
         CommandName::ReleaseEntry,
+        CommandName::DetachBinding,
     ] {
         let ep = ep.clone();
         tasks.spawn(async move {

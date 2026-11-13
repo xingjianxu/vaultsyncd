@@ -317,3 +317,120 @@ fn storage_exhaustion_has_actionable_redacted_gui_cli_error() {
     assert!(error.message.contains("INSUFFICIENT_STORAGE"));
     assert!(!error.message.contains("private path"));
 }
+
+#[tokio::test]
+async fn control_changes_during_status_read_do_not_restore_detached_management_rows() {
+    use vaultsyncd_agent_core::bindings::control::{BindingControls, ExecutionGate};
+    use vaultsyncd_client_store::bindings::{NewBinding, SyncMode, insert_binding};
+    use vaultsyncd_domain::{
+        ids::{DeviceId, ServerId, VaultId},
+        version::ServerEpoch,
+    };
+    let path = std::env::temp_dir().join(format!(
+        "s231-control-snapshot-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    std::fs::create_dir(&path).unwrap();
+    let database = path.join("client.sqlite");
+    let db = Arc::new(Database::open(&database).await.unwrap());
+    let binding = BindingId::from_bytes([31; 16]);
+    let mut tx = db.begin_write().await.unwrap();
+    insert_binding(
+        &mut tx,
+        &NewBinding {
+            id: binding,
+            server: ServerId::from_bytes([32; 16]),
+            device: DeviceId::from_bytes([33; 16]),
+            vault: VaultId::from_bytes([34; 16]),
+            local_path: "C:/s231/local".into(),
+            cache_path: "C:/s231/cache".into(),
+            mode: SyncMode::OnDemand,
+            rules_version: "1".into(),
+            server_epoch: ServerEpoch::new(1).unwrap(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let controls = BindingControls::new(db.clone());
+    // Model an authenticated mutation committing after GetStatus has read the management
+    // list, but before its per-binding transactional state read. Both control projections
+    // must agree, including the Resume direction rather than only monotone detachment.
+    for paused in [true, false] {
+        let mut info = crate::management::binding_list(&db).await.unwrap();
+        assert_ne!(info[0].paused, paused);
+        controls.set_paused(binding, paused).await.unwrap();
+        let states = binding_statuses(&db, &mut info, &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(states[0].paused, paused);
+        assert_eq!(info[0].paused, states[0].paused);
+        assert_eq!(info[0].detached, states[0].detached);
+    }
+    let mut info = crate::management::binding_list(&db).await.unwrap();
+    assert!(!info[0].detached);
+    controls.unbind_keep_data(binding).await.unwrap();
+    let states = binding_statuses(&db, &mut info, &Default::default())
+        .await
+        .unwrap();
+    assert!(states[0].detached && states[0].paused);
+    assert!(info[0].detached && info[0].paused);
+    assert!(!states[0].synchronized);
+    drop(controls);
+    db.pool().close().await;
+    drop(db);
+    // Reopen the actual SQLite file and adopt startup rules, rather than relying on an
+    // in-memory flag. Detached recovery state survives; Resume cannot revive the row.
+    let db = Arc::new(Database::open(&database).await.unwrap());
+    let mut legacy: crate::config::AgentConfig = serde_json::from_value(serde_json::json!({
+        "server": { "id": "20".repeat(16), "url": "https://example.invalid" },
+        "device_id": "21".repeat(16),
+        "state_dir": "C:/s231/state",
+        "poll_millis": 2000,
+        "bindings": [{
+            "id": binding.to_string(), "vault_id": "22".repeat(16),
+            "path": "C:/s231/local", "cache": "C:/s231/cache", "mode": "on_demand",
+        }],
+    }))
+    .unwrap();
+    legacy.validate().unwrap();
+    let assignments = crate::management::load_bindings(&db, &mut legacy)
+        .await
+        .unwrap();
+    assert_eq!(legacy.bindings.len(), 1);
+    assert_eq!(
+        assignments.get(&binding),
+        Some(&ServerId::from_bytes([32; 16]))
+    );
+    let controls = BindingControls::new(db.clone());
+    controls.adopt_default_policy(binding).await.unwrap();
+    assert_eq!(
+        controls.execution_gate(binding, None).await.unwrap(),
+        ExecutionGate::Unbound,
+    );
+    assert_eq!(
+        controls
+            .set_paused(binding, false)
+            .await
+            .unwrap_err()
+            .code(),
+        Some("BINDING_UNBOUND"),
+    );
+    let info = crate::management::binding_list(&db).await.unwrap();
+    assert_eq!(info.len(), 1, "the recovery record remains durable");
+    assert!(info[0].detached && info[0].paused);
+    drop(controls);
+    db.pool().close().await;
+    drop(db);
+    for attempt in 0..100 {
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => return,
+            Err(_) if attempt < 99 => tokio::time::sleep(Duration::from_millis(20)).await,
+            Err(error) => panic!("cannot clean this test's closed database: {error}"),
+        }
+    }
+}
