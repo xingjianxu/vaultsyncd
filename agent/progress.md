@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S217 done**：预览标题栏底部4px并解除默认最低高度，加载完成后移除空操作行，取消/重试/下载/关闭保持。根类型/Web九套/build、独立初审及补审APPROVED、精确部署包Chromium图片/PDF17组/文本13组/Office16组通过；实现df87e02已部署generation290，主机pin9b88c98已ff合main并清树，prod/dev同包及原身份/账号/Vault/Office配置保持，线上136文件三源408次字节、严格TLS/匿名门禁/CSP与320/1440通过。交接 [S217](tasks/S217.md)，证据 `/data/vaultsyncd-dev/S217-preview-spacing-20261112/`（实际2026-11-13）；无本卡阻塞，不发行或重打包Windows，下一ready无，原四张blocked保持。项目交接提交后ff合master并清理本卡树/分支，S134/S187保持，实际结果见收尾补记。
+当前 **S217 done**：预览标题栏底部4px并解除默认最低高度，加载完成后移除空操作行，取消/重试/下载/关闭保持。根类型/Web九套/build、独立初审及补审APPROVED、精确部署包Chromium图片/PDF17组/文本13组/Office16组通过；实现df87e02已部署generation290，主机pin9b88c98已ff合main并清树，prod/dev同包及原身份/账号/Vault/Office配置保持，线上136文件三源408次字节、严格TLS/匿名门禁/CSP与320/1440通过。交接 [S217](tasks/S217.md)，证据 `/data/vaultsyncd-dev/S217-preview-spacing-20261112/`（实际2026-11-13）；无本卡阻塞，不发行或重打包Windows，下一ready无，原四张blocked保持。实现df87e02/交接f7664d6已ff合master，五挂载及本卡树/分支正常清理，清理后双环境健康ok，S134/S187保持。
 
 当前 **S216 done**：预览正文关闭按钮已删除，原件下载改为标题栏云图标，标题X自动聚焦；根类型/Web九套/build、独立复审APPROVED和Chromium图片/PDF17组/文本13组/Office16组通过，最终精确部署包三套再次全部通过。实现b62e45c已部署generation289，主机pin4e06276已ff合main并清树；prod/dev同包、原身份/账号/Vault/配置保持，线上136文件三源408次字节、严格TLS/匿名门禁/CSP与320/1440通过。交接 [S216](tasks/S216.md)，证据 `/data/vaultsyncd-dev/S216-preview-header-20261112/`；本卡无阻塞，不发行或重打包Windows，下一ready无，原四张blocked保持。实现b62e45c/交接10cab3f已ff合master，六挂载及本地S216树/分支正常清理，S134/S187保持。
 
