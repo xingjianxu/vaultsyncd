@@ -314,8 +314,25 @@ public static class S200Window {
       # state through a fresh desktop/agent. Detached records remain for recovery.
       [S200Window]::Hover(0,0)
       Click-Control '管理与恢复'
-      Click-Control '解除绑定（保留数据）'
-      Click-Control '确认保留数据并解除'
+      # The management card extends below the viewport. Invoke its exact native
+      # accessibility button rather than treating IsOffscreen as absent.
+      function Invoke-S231Button([string]$name) {
+        $byName=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,$name)
+        $byType=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button)
+        $condition=[Windows.Automation.AndCondition]::new($byName,$byType)
+        Check (Wait-Until {
+          $root=[Windows.Automation.AutomationElement]::FromHandle($main)
+          $buttons=$root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)
+          $buttons.Count -eq 1 -and $buttons[0].Current.IsEnabled
+        }) ('S231 production WebView exposes one enabled button: '+$name)
+        $root=[Windows.Automation.AutomationElement]::FromHandle($main)
+        $button=$root.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
+        $invoke=$null
+        Check ($button.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern,[ref]$invoke)) ('S231 production button supports native InvokePattern: '+$name)
+        $invoke.Invoke()
+      }
+      Invoke-S231Button '解除绑定（保留数据）'
+      Invoke-S231Button '确认保留数据并解除'
       Check (Wait-Until {
         $s=Invoke-S203Cli @('status')
         @($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and $_.detached -and $_.paused }).Count -eq 1 -and
