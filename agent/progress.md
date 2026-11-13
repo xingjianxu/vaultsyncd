@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S220 done**：Web文件列表按后缀显示十四类/152常见后缀图标，未知/无后缀回退，目录和操作保持；实现e29c134、测试2821833。根类型/Web九套/build、独立复审APPROVED、纯Nix包、精确包完整浏览器及专项七组37文件/明暗320/1440通过。仅dev经永久入口更新至alvghhr包，136资源字节/严格TLS/CSP/匿名门禁及真实登录图标/退出通过；原身份/账号/Vault/schema21/Office保持，prod PID/启动时间/system291/主机pin未变，无生产更新或重启。证据 `/data/vaultsyncd-dev/S220-file-type-icons-20261113/`，交接 [S220](tasks/S220.md)；待本交接提交后立即ff合master清树。无本卡阻塞、不发行/重打包Windows；下一ready无，S011/S106/S107/S108原blocked保持。
+
 当前 **S219 done（纯文档）**：用户最新决定（2026-11-13）已写入 `AGENTS.md`、实施手册 §2.5 和 prod/dev 运维文档：服务端（含 Web）代码更新验收后只自动更新 dev `https://wlab.132140.xyz:15401`，prod `https://vsyncd.132140.xyz` 仅在用户另行明确要求时部署；覆盖旧自动本机部署及 prod/dev 同包要求，历史事实保留。已核对文档一致性及 diff，无代码或运行实例变更，本轮不部署。交接 [S219](tasks/S219.md)；下一 ready 无，S011/S106/S107/S108 原 blocked 保持。
 
 当前 **S218 done**：预览关闭立即取消工作，标题/正文及展示资源保留至Mantine退场结束，导航/认证/卸载即时清理与快速重开围栏保持。根类型/Web九套/build、独立复审APPROVED，最终精确包图片/PDF19+文本15+Office18组及18退出/重开109帧通过，S217旧包反证明确失败。实现a6a23de已部署generation291，主机pin6a90aa5已ff合main并清部署树；prod/dev同包与原身份/账号/Vault/schema21/Office配置保持，408次资源字节、严格TLS/CSP/匿名门禁与320/1440通过。交接 [S218](tasks/S218.md)，证据 `/data/vaultsyncd-dev/S218-preview-exit-20261113/`。无本卡阻塞，不发行或重打包Windows；下一ready无，S011/S106/S107/S108原blocked保持。实现a6a23de/交接6e8c3b7已ff合master，五挂载/任务树及本地分支正常清理，清理后双环境健康ok，S134/S187保持。

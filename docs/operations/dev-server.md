@@ -101,6 +101,10 @@ Office预览为PDF，原文件下载保持；支持doc/docx/xls/xlsx/ppt/pptx/od
 
 S213（2026-11-12）已通过stop/configure-office/start将持久dev切换为与生产generation286同包 `8qfvjkalrkdhfdhpig9zh7liix6kwsp8-vaultsyncd-0.1.7`，使用同机OnlyOffice；原dev身份/账号/Vault和Windows连接配置保持，应用CSP不变。最终精确包Chromium14组及prod/dev资源、密钥和HTTPS验证通过。合并清理结果见 [S213交接](../../agent/tasks/S213.md)。
 
+## S220 文件类型图标（仅 dev 更新）
+
+S220（2026-11-13）按S219约定仅通过永久主树入口 `restart --package /nix/store/alvghhrpzscsa2f6v0hl0169x9lm8ch6-vaultsyncd-0.1.7` 更新dev（源e29c134）；文件列表按后缀展示十四类图标，未知类型回退。原dev ServerId/账号/Vault/schema21及Office配置不变；精确包完整浏览器与专项七组、136文件线上字节、严格TLS/CSP/匿名门禁及登录后明暗320/1440通过，无持久测试样本。prod进程/启动时间/system291/主机pin未变，未更新或重启生产。回退只需dev restart至S218包，不重置数据；交接 [S220](../../agent/tasks/S220.md)。
+
 ## S218 预览关闭动画
 
 S218（2026-11-13）dev经永久主树入口restart至与生产generation291同包 `/nix/store/9l4my652gyr3bqlr6sq0z7nrsxhc1297-vaultsyncd-0.1.7`（源a6a23de）。关闭立即取消工作，已渲染正文/资源保留到退出动画结束，不先缩成空壳；导航/认证/卸载保护与快速重开保持。原ServerId、账号/Vault/schema21、Office与dev配置不变；精确包52组及18退出/重开109帧、三源408次字节与TLS/CSP/健康通过。无持久样本，回退只需restart至S217包，不重置数据；证据及限制见 [S218](../../agent/tasks/S218.md)。
