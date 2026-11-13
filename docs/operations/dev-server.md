@@ -95,6 +95,10 @@ Office预览为PDF，原文件下载保持；支持doc/docx/xls/xlsx/ppt/pptx/od
 
 S213（2026-11-12）已通过stop/configure-office/start将持久dev切换为与生产generation286同包 `8qfvjkalrkdhfdhpig9zh7liix6kwsp8-vaultsyncd-0.1.7`，使用同机OnlyOffice；原dev身份/账号/Vault和Windows连接配置保持，应用CSP不变。最终精确包Chromium14组及prod/dev资源、密钥和HTTPS验证通过。合并清理结果见 [S213交接](../../agent/tasks/S213.md)。
 
+## S217 预览间距
+
+S217（2026-11-13）dev由永久主树入口restart至与生产generation290同包 `/nix/store/8wkqy5gnqfkfsj389x5vd7ip0p2k6k9d-vaultsyncd-0.1.7`（源df87e02），缩紧预览标题至正文间距，下载/关闭/取消/重试保持。原ServerId/账号/Vault/schema21及Office配置不变，与prod隔离；精确包三套预览17+13+16组、三源408次字节/TLS/CSP/匿名门禁与健康通过。无持久样本，回退仅restart至S216包，不重置数据；证据与限制见 [S217](../../agent/tasks/S217.md)。
+
 ## S216 预览标题栏操作
 
 S216（2026-11-12）dev由永久主树入口有序restart至与生产generation289同包 `/nix/store/lb4av1rszg555rdkcfhp8baz5s7dbcs3-vaultsyncd-0.1.7`（源b62e45c）。预览删除正文关闭按钮，下载原件改为标题栏图标；原ServerId/账号/Vault/schema21与Office配置保持。最终精确包图片/PDF17组、文本13组、Office16组及线上408次资源字节/TLS/CSP验证通过，无持久测试样本。旧包保留，回退只需管理器restart至S215包，不重置数据；交接见 [S216](../../agent/tasks/S216.md)。

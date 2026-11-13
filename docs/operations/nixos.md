@@ -575,6 +575,12 @@ Office默认直接DocEditor只读浏览；CSP按配置精确加入OnlyOffice来�
 
 S215收尾：项目功能182bfe1/组合源6a99df4/交接65aae2b已ff合master；六挂载与本地S215树/分支正常清理，主机pin65316dc已ff合main并自动清理本次部署树。永久dev入口及runtime supervisor保留，证据和generation287回退roots长期保留。
 
+## S217 文件预览间距部署（generation290，2026-11-13）
+
+源 `df87e02bff7231aa19dc686b0905f5a18736404b`，主机pin `9b88c9846a3d55cfd46aeeb0abd05befdf92b174` 已ff合main且部署树/分支清理，锁未变。运行及开机generation290，system `/nix/store/bspn2gwq18a3q25cn3ikil180m93zhac-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/8wkqy5gnqfkfsj389x5vd7ip0p2k6k9d-vaultsyncd-0.1.7`。pure/dry/test/HTTPS/IPC/UID归属/switch通过；dev由永久入口restart同包，原ServerId/账号/Vault/schema21与Office配置保持。精确包图片/PDF17组、文本13组、Office16组及136文件三源408次字节、TLS/匿名门禁/CSP与320/1440通过，无持久验收样本。
+
+证据 `/data/vaultsyncd-dev/S217-preview-spacing-20261112/`（实际2026-11-13），部署目录 `deploy/local-20261113T082210-2590107/` 的previous-system/previous-boot保留generation289。回退可先test旧system `yaiwki5p97qn9x5889vp392vj6hlff5y`，核验SSH/健康后switch，主机pin恢复4e06276；dev通过永久管理器restart到S216包 `lb4av1rszg555rdkcfhp8baz5s7dbcs3`，不回退数据库或重置身份。本轮未实际回退/重启宿主，不发行推送或重打包Windows；交接 [S217](../../agent/tasks/S217.md)。
+
 ## S216 文件预览标题栏部署（generation289）
 
 源 `b62e45c7589e2dd157a6a186eab1ccbb89b148ba`，主机pin `4e06276bdbd7dad45f38309c5466eb4e4490a00c` 已ff合main且临时树/分支清理。运行/开机generation289，system `/nix/store/yaiwki5p97qn9x5889vp392vj6hlff5y-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/lb4av1rszg555rdkcfhp8baz5s7dbcs3-vaultsyncd-0.1.7`；主机锁未变，无schema迁移。pure build/dry/test/HTTPS/IPC/UID归属/switch通过。dev从永久入口restart同包，各自ServerId/账号/Vault与dev Office配置保持；136文件三源408次字节、严格TLS/匿名门禁/CSP及最终精确包三套预览17+13+16组通过。
