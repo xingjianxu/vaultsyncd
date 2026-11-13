@@ -1,6 +1,9 @@
 //! Explorer integration via Windows Runtime, separate from the CFAPI connection lifecycle.
+mod branding;
 pub mod context_menu;
 pub mod dialog;
+#[cfg(test)]
+mod native_tests;
 pub mod progress;
 pub mod toast;
 use std::{io, path::Path};
@@ -134,7 +137,9 @@ pub fn register(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Re
     with_runtime(move || register_in_runtime(&path, &catalog))
 }
 fn register_in_runtime(path: &Path, catalog: &crate::cfapi::catalog::Catalog) -> io::Result<()> {
-    let _pin = crate::files::VaultHandle::open(path)?;
+    let display_name = branding::display_name(path)?;
+    let pin = crate::files::VaultHandle::open(path)?;
+    let icon = branding::persistent_icon(&pin)?;
     crate::cfapi::adapter::register(path, catalog)?;
     let binding = catalog.binding;
     let path = path
@@ -149,10 +154,9 @@ fn register_in_runtime(path: &Path, catalog: &crate::cfapi::catalog::Catalog) ->
     info.SetId(&HSTRING::from(registration_id(binding)?))
         .map_err(map)?;
     info.SetPath(&folder).map_err(map)?;
-    info.SetDisplayNameResource(&HSTRING::from("vaultsyncd"))
+    info.SetDisplayNameResource(&HSTRING::from(display_name))
         .map_err(map)?;
-    info.SetIconResource(&HSTRING::from("%SystemRoot%\\system32\\imageres.dll,-1040"))
-        .map_err(map)?;
+    info.SetIconResource(&HSTRING::from(icon)).map_err(map)?;
     info.SetHydrationPolicy(StorageProviderHydrationPolicy::Partial)
         .map_err(map)?;
     // Names are maintained by snapshots/events, with no FETCH_PLACEHOLDERS callback.
@@ -167,7 +171,24 @@ fn register_in_runtime(path: &Path, catalog: &crate::cfapi::catalog::Catalog) ->
         0x7a5c1f01_5eed_4a31_9b2e_001122334455,
     ))
     .map_err(map)?;
-    StorageProviderSyncRootManager::Register(&info).map_err(map)
+    StorageProviderSyncRootManager::Register(&info).map_err(map)?;
+    // Existing Explorer windows cache namespace names/icons independently of the
+    // persisted WinRT registration. Refresh presentation without unregistering.
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHChangeNotify(
+            event: i32,
+            flags: u32,
+            first: *const std::ffi::c_void,
+            second: *const std::ffi::c_void,
+        );
+    }
+    let path = crate::cfapi::prototype::wide(Path::new(path));
+    unsafe {
+        SHChangeNotify(0x0000_2000, 0x0005, path.as_ptr().cast(), std::ptr::null());
+        SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null());
+    }
+    Ok(())
 }
 /// Remove Explorer registration only. Existing files are never deleted by this function.
 pub fn unregister(binding: BindingId) -> io::Result<()> {

@@ -2246,6 +2246,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 `platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Vault。S129 起三项操作共用进程内常驻的固定 MTA 工作线程，初始化 WinRT 后保持其与 windows-rs 工厂缓存同寿命；调用者不需初始化，不跨 await 持有 apartment。正式 runtime 的共同 assemble 路径在恢复核对后、切换到内容供给前通过 spawn_blocking 注册，覆盖启动修复、重启、新增绑定及连接重建。失败明确返回，不注销/重建根，不修改文件驻留、pin 或 in-sync；PopulationPolicy=AlwaysFull，与 CFAPI adapter 一致。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
 
+S222：同步根 `DisplayNameResource` 派生自绑定路径末级名称，`IconResource` 使用与桌面 EXE 相同的 ICO，内容寻址持久保存在 Windows Known Folder LocalAppData 下 `vaultsyncd/shell-icons/`；引用为带引号的绝对 ICO 路径及索引 0，支持 Unicode/逗号用户目录，不依赖程序所在位置。图标完整写入并原子发布，已存在正确内容复用、损坏副本修复，旧内容版本保留；图标目录与当前同步根重叠时明确拒绝，绝不写入同步目录。正常 assemble 的同 ID Register 同时刷新旧显示名/图标，成功后发出 Shell UPDATEITEM/PATHW 与 ASSOCCHANGED 通知，刷新已开窗口的名称/图标缓存，不注销 CFAPI，不改变 ProviderId/Context/文件身份、驻留及 pin；同名不同路径依旧按 BindingId 独立。认证或恢复未完成的绑定尚未进入 assemble 时不会刷新。原生展示夹具为 `tests/windows-integration/tests/shell_branding.rs` 与 `tests/platform/windows/s222-shell-branding.ps1`：隔离三绑定、旧属性覆盖、移动程序位置及同窗刷新，通过实际 namespace tree 的 MSAA 子项与截图核验（该 Windows 11 的 UIA 不提供树 descendants）；不触碰在线 agent 或其他注册。
+
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
 
 ### S068：Windows 内容观察、持续保护与可恢复发布
