@@ -48,6 +48,12 @@
 
 ## 5. 逐步任务卡
 
+### S228 — 新 Logo 与关联图标统一透明背景
+
+- **状态与前置**：in_progress（用户2026-11-13新增）；S227，design §18.1。
+- **范围与验收**：仅删除默认云朵双箭头SVG白底并更新描述，保留画布/路径/渐变；重生透明七尺寸ICO，覆盖Web favicon/品牌与桌面程序/窗口/托盘/Explorer。验证SVG图形保持、各尺寸alpha、完整Windows构建与原生EXE/Explorer消费、真实Chromium；交付根dist，仅更新dev并核验健康/身份/资源。交接后合master清理本卡树。
+- **交接**：[S228](tasks/S228.md)。
+
 ### S227 — 同步用户新 Logo 到 Web 与 Windows 图标
 
 - **状态与前置**：done（用户2026-11-13新增）；S183/S222/S223/S224。

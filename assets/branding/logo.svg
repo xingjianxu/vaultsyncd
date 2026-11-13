@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254" role="img" aria-labelledby="logo-title logo-description">
   <title id="logo-title">文件云同步 Logo</title>
-  <desc id="logo-description">蓝色渐变云朵，内含浅冰蓝与薄荷绿渐变双箭头。箭头尖端、肩部与圆弧衔接均使用小幅圆角及相切曲线，指向另一段尾部中点。纯矢量路径，删除 background 矩形可获得透明背景。</desc>
+  <desc id="logo-description">透明背景的蓝色渐变云朵，内含浅冰蓝与薄荷绿渐变双箭头。箭头尖端、肩部与圆弧衔接均使用小幅圆角及相切曲线，指向另一段尾部中点。纯矢量路径。</desc>
   <defs>
     <linearGradient id="cloud-gradient" gradientUnits="userSpaceOnUse" x1="260" y1="244" x2="1050" y2="1026">
       <stop offset="0" stop-color="#2E77F2"/>
@@ -19,7 +19,6 @@
       <stop offset="1" stop-color="#2CC79B"/>
     </linearGradient>
   </defs>
-  <rect id="background" width="1254" height="1254" fill="#FFFFFF"/>
   <g id="cloud-sync-logo">
     <path id="cloud" fill="url(#cloud-gradient)" d="M 251,1026 H 999 C 1115,1026 1208,940 1208,825 C 1208,752 1168,687 1108,651 C 1108,543 1020,455 912,455 C 902,455 893,455 883,457 C 862,336 754,244 626,244 C 497,244 389,334 367,457 C 358,456 349,455 340,455 C 234,455 148,542 148,651 C 84,687 42,753 42,825 C 42,936 137,1026 251,1026 Z"/>
     <g id="clockwise-sync-arrows">

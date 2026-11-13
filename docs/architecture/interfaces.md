@@ -2683,6 +2683,8 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 2026-11-13 S227：默认 SVG 替换为用户提供的蓝色云朵双箭头 Logo（1254×1254，白色背景逐字节保留），七尺寸 `icon.ico` 从该源重生；覆盖 S223 默认透明背景的外观描述。所有共用路径、Shell 内容寻址刷新及新 agent 启用条件保持，备用黑底资源不变。
 
+2026-11-13 S228：按用户最新要求移除默认SVG背景矩形，七尺寸ICO同步改为透明背景，覆盖S227白底外观；图形、渐变、1254×1254画布及所有消费路径保持。黑底备用资源仍保留，新agent恢复绑定时发布新的内容寻址图标并刷新Explorer。
+
 ## S122 Web Vault 文件浏览器
 
 - S208（历史，PDF技术边界由下条S209覆盖）：受支持 PDF/图片的文件名与行菜单「预览」打开原页只读查看器，不改变 URL、EntryId/VersionId 或服务器内容；其他格式仍显示属性。复用 S171 `downloadFile` 的固定版本、Range 长度与完整 SHA-256 校验，沿用 BrowserAuth，会话失效收回管理页。PDF 采用随包同源 worker 与 canvas，关闭脚本/XFA/eval；图片由浏览器解码为静态画面后 canvas 展示，不嵌入 SVG/HTML、iframe/object 或外部文档资源，不放宽生产 CSP。关闭/导航/切换 Vault/退出取消读取与渲染，旧响应不恢复对话框。`preview.ts` 在网络前限制50 MiB，栅格头/实际解码限制16 Mi像素及单边8192，`boundedCanvas` 限制画布8 Mi像素。`patches/pdfjs-dist@6.5.438.patch` 由根 `pnpm-workspace.yaml` 精确应用到锁定worker，补齐 PDF 图像/掩码/合成尺寸及解码前检查，`stopAtErrors` 下向查看器传递失败而非显示缺图页面；依赖升级须重新审计并跑真实worker回归，Nix Web源包含patches。错误重试、下载和实际验证见 `agent/tasks/S208.md`；无新端点、DTO、schema 或迁移。
