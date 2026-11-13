@@ -10,15 +10,16 @@ let
           belongs = prefix: rel == prefix || lib.hasPrefix (prefix + "/") rel
             || (type == "directory" && lib.hasPrefix (rel + "/") prefix);
       in rel == "" || (!(lib.any (part: builtins.elem part [ "target" "node_modules" "dist" ".cache" ".git" ]) parts)
-        && (builtins.elem rel files || lib.any belongs roots));
+        && (builtins.elem rel files || lib.any belongs roots
+          || (type == "directory" && lib.any (file: lib.hasPrefix (rel + "/") file) files)));
   };
   rustSource = clean "vaultsyncd-rust-source"
     [ ".cargo" "api" "apps/agent" "apps/cli" "apps/server" "apps/server-admin"
       "apps/desktop/src-tauri" "crates" "fixtures" "tests" "tools" ]
-    [ "Cargo.toml" "Cargo.lock" "rust-toolchain.toml" ];
+    [ "Cargo.toml" "Cargo.lock" "rust-toolchain.toml" "assets/branding/icon.ico" ];
   webSource = clean "vaultsyncd-web-source"
     [ "apps/web" "packages" ]
-    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "apps/desktop/package.json" "logo.svg" ];
+    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "apps/desktop/package.json" "assets/branding/logo.svg" ];
   rust = pkgs.rustPlatform.buildRustPackage {
     pname = "vaultsyncd-rust";
     inherit version;

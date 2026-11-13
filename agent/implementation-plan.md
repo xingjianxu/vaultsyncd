@@ -48,6 +48,12 @@
 
 ## 5. 逐步任务卡
 
+### S223 — 统一透明背景品牌并保留黑底版本
+
+- **状态与前置**：in_progress（用户新增，ready）；S183/S222，design §18.1。
+- **范围与验收**：品牌集中 `assets/branding/`，保留原黑底 SVG/ICO；Web/favicon 与 Windows EXE/窗口/托盘/Explorer 使用透明资源。验证七尺寸 alpha、原版字节保留、两端构建与真实浏览器及 Windows 消费；按 S219 仅更新 dev 并验证。
+- **交接**：[S223](tasks/S223.md)。
+
 ### S222 — Explorer 云文件夹入口显示绑定目录名与软件图标
 
 - **状态与前置**：done（用户新增）；S129/S183，design §14.2、§18.1。

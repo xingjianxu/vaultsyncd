@@ -15,7 +15,7 @@ use windows::Win32::{
     UI::Shell::{FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG, SHGetKnownFolderPath},
 };
 
-const ICON: &[u8] = include_bytes!("../../../../apps/desktop/src-tauri/icons/icon.ico");
+const ICON: &[u8] = include_bytes!("../../../../assets/branding/icon.ico");
 
 pub(super) fn display_name(path: &Path) -> io::Result<&str> {
     path.file_name()

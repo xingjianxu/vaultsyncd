@@ -162,7 +162,7 @@ fn native_shell_existing_registration_refresh_and_restart() {
         assert!(icon.parent().unwrap().ends_with("vaultsyncd\\shell-icons"));
         assert_eq!(
             std::fs::read(icon).unwrap(),
-            include_bytes!("../../../../apps/desktop/src-tauri/icons/icon.ico")
+            include_bytes!("../../../../assets/branding/icon.ico")
         );
         expected.push((keep, remote, current));
         adapter.disconnect().unwrap();

@@ -2,7 +2,7 @@ import { Archive, ArrowLeftRight, Folder, FolderSearch, History, LayoutDashboard
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Anchor, Button, Card, Divider, Group, Loader, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { AppProvider, Icon, PageShell } from "@vaultsyncd/ui";
-import logoUrl from "../../../logo.svg?no-inline";
+import logoUrl from "../../../assets/branding/logo.svg?no-inline";
 import { ServerIdentity } from "./components/ServerIdentity";
 import { FileActionsProvider } from "./features/files/FileActions";
 import { EmptyState } from "./components/ui";

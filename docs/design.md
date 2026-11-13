@@ -270,7 +270,7 @@ flowchart TB
 | `apps/desktop/src-tauri/src/` | Tauri 壳、托盘、窗口、最小 command、IPC 桥接 | 取代独立 agent 运行同步引擎 |
 | `apps/desktop/src-tauri/capabilities/` | 窗口能力权限 | 授予任意文件访问或任意命令执行 |
 | `apps/desktop/src-tauri/tauri.conf.json` | Tauri 配置、标识、构建与打包设置 | 真实账号、密码或长期令牌 |
-| `apps/desktop/src-tauri/icons/` | 桌面图标与安装资源 | 用户文件或运行时截图 |
+| `assets/branding/` | 透明品牌 SVG/Windows ICO 与保留的黑底版本 | 用户文件或运行时截图 |
 | `apps/web/src/` | Linux 服务端管理页面、认证状态、Vault/历史/回收站/备份操作 | Windows agent 的本机路径控制 |
 
 ### 5.4 Rust 模块：crates
@@ -1008,6 +1008,8 @@ Tauri 只授予必要 capability；同步目录文件内容、文件名、Markdo
 ## 18. 状态界面、通知与可观测性
 
 ### 18.1 最小界面
+
+2026-11-13（S223，用户明确要求）：软件 Logo 及 Web favicon/登录/顶栏、Windows 应用/窗口/托盘和 Explorer 同步根统一使用透明背景；原黑底 SVG 与 ICO 保留备用。资源集中在 `assets/branding/`，不改变原缎带与 V 图形。
 
 2026-11-13（S222，用户明确要求）：Windows Explorer 侧边栏的云文件夹入口显示各绑定本地目录名称，不再统一显示 vaultsyncd，使用软件 Logo 图标。已有绑定随正常启动原位更新展示元数据，不注销重建同步根，不改变 Binding/Vault/占位文件身份、驻留状态或未确认内容；图标不依赖便携程序所在目录。
 

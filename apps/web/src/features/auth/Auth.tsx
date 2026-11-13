@@ -5,7 +5,7 @@ import { useForm } from "@mantine/form";
 import { StatusBadge } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { BrowserAuth, SignedOut } from "../../services/auth";
-import logoUrl from "../../../../../logo.svg?no-inline";
+import logoUrl from "../../../../../assets/branding/logo.svg?no-inline";
 
 type AuthState = { account: AccountInfo | null; client: BrowserAuth | null; initializing: boolean; busy: boolean; error: string; verify: () => Promise<void>; reportSignedOut: () => void; run: (action: (client: BrowserAuth) => Promise<AccountInfo | null>) => Promise<void> };
 const AuthContext = createContext<AuthState | null>(null);

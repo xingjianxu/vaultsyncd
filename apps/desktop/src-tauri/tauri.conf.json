@@ -16,7 +16,7 @@
   },
   "bundle": {
     "active": false,
-    "icon": ["icons/icon.ico"]
+    "icon": ["../../../assets/branding/icon.ico"]
   },
   "identifier": "org.vaultsyncd.desktop",
   "productName": "vaultsyncd",

@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S223 in_progress**：透明品牌及备用黑底统一在 `assets/branding/`，原版字节与七尺寸透明度通过；前端/Windows/浏览器与仅dev更新进行中。交接 [S223](tasks/S223.md)。
+
 当前 **S222 done**：Windows Explorer云文件夹入口显示绑定目录名及软件Logo；ICO持久保存Known Folder，不依赖便携程序位置；原位更新并通知Shell刷新，身份/驻留/未确认内容保持。实现5571e2e，宿主43项/严格检查、Windows静态CRT严格检查及agent构建、原生图标注册7项/CFAPI2项和最终精确代码三绑定/旧属性刷新/移动程序/真实导航名称与Logo通过，独立补审APPROVED。原客户端PID/原路径/session1及62注册保持，早期失败日志保留；证据 `/data/vaultsyncd-dev/S222-explorer-branding-20261113/`，交接 [S222](tasks/S222.md)；实现及验收交接bd0a2a2已ff合master，本卡树/分支正常清理，S134/S187保持。未替换永久客户端/根dist、不改服务端、不部署或发行；无本卡阻塞，下一ready无，原四张blocked保持。
 
 当前 **S221 done**：桌面添加同步目录改按钮弹窗，失败/断连保留输入；Binding首列路径可鼠标/键盘打开本机默认文件管理器，按认证BindingId解析、主窗最小授权。实现78d0110/ACL修复55f2217；根类型/desktop build/activity与原生命令闭集guard、宿主15项、Windows两模式严格检查/构建、Chromium专项9组及完整布局/解绑7/移除8/排除8、独立补审通过。真实Windows S081第4次exit0，Explorer新窗口精确打开Unicode目录，完整绑定/合并/暂停恢复/GUI退出后上传与宿主hash通过；前三次失败保留，原客户端原路径/session1、配置/二进制hash/身份及paused=false恢复。证据 `/data/vaultsyncd-dev/S221-binding-dialog-20261113/`，交接 [S221](tasks/S221.md)；实现/ACL/验收交接0bbf1ae已ff合master，5挂载及本卡树/分支正常清理，S134/S187保持，不改服务端、不部署/发行或替换永久客户端/根dist。无本卡阻塞；下一ready无，原四张blocked保持。
