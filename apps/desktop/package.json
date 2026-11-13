@@ -22,6 +22,7 @@
     "dev": "vite --host 127.0.0.1",
     "preview": "vite preview --host 127.0.0.1",
     "test:activity": "node tests/activity.mjs",
+    "test:native-commands": "node tests/native-commands.mjs",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",

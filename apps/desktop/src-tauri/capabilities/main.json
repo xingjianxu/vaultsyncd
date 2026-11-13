@@ -19,6 +19,7 @@
     "allow-agent-logout",
     "allow-agent-list-vaults",
     "allow-select-local-directory",
+    "allow-open-binding-directory",
     "allow-agent-create-binding",
     "allow-agent-pause-binding",
     "allow-agent-resume-binding",

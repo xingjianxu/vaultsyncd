@@ -161,23 +161,27 @@ window.addEventListener("DOMContentLoaded", async () => {
     report.mergeCompleted = true;
     const directoryButton = [...document.querySelectorAll("button")].find(button => button.textContent === fixture.localPath);
     if (!directoryButton) throw new Error("local directory is not a keyboard button");
-    // Observe, but do not replace, the real Tauri command and native result.
-    // s081-desktop.ps1 independently checks a real Explorer window for localPath.
-    const originalInvoke = window.__TAURI_INTERNALS__.invoke;
-    let opened;
-    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
-      const result = await originalInvoke(command, args);
-      if (command === "open_binding_directory") opened = structuredClone(args);
-      return result;
-    };
+    // Tauri's invoke property is read-only. Observe the real UI acknowledgment,
+    // not an attempted monkey-patch; PowerShell independently observes Explorer.
+    directoryButton.focus();
+    report.directoryKeyboardFocusable = document.activeElement === directoryButton;
+    if (directoryButton.disabled) throw new Error("directory action is disabled after merge");
+    directoryButton.click();
+    await delay();
     try {
-      directoryButton.focus();
-      report.directoryKeyboardFocusable = document.activeElement === directoryButton;
-      directoryButton.click();
-      await wait("real directory command acknowledgment", () => opened !== undefined);
-      report.directoryOpenAcknowledged = opened.bindingId === report.bindingId && Object.keys(opened).length === 1;
-    } finally {
-      window.__TAURI_INTERNALS__.invoke = originalInvoke;
+      await wait("real directory command acknowledgment", () => {
+        const feedback = document.querySelector("[data-agent-feedback]")?.textContent;
+        if (feedback && !["操作正在执行，等待 agent 确认。", "操作已由 agent 确认。"].includes(feedback)) {
+          throw new Error(`directory action failed: ${feedback}`);
+        }
+        return confirmed() && !directoryButton.disabled;
+      }, 20000);
+      report.directoryOpenAcknowledged = true;
+    } catch (error) {
+      // Preserve the raw native rejection, which the product UI may normalize.
+      try { await invoke("open_binding_directory", { bindingId: report.bindingId }); }
+      catch (cause) { report.directoryCommandError = typeof cause === "string" ? cause : JSON.stringify(cause); }
+      throw error;
     }
     try {
       await invoke("open_binding_directory", { bindingId: "0".repeat(32) });
