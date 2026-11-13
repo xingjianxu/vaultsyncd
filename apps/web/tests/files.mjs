@@ -1,12 +1,46 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const server = await createServer({ root: fileURLToPath(new URL("../../..", import.meta.url)), configFile: false,
   server: { middlewareMode: true, hmr: false }, ssr: { noExternal: ["@vaultsyncd/api-client"] } });
 try {
   const { sortDirectoryEntries, DEFAULT_FILE_SORT, readDirectorySnapshot, ancestry, formatBytes, fileSize, fileSizeDetail, fileModified, filesLocation, parseFilesLocation, directoryAtPath } = await server.ssrLoadModule("/apps/web/src/features/files/browser.ts");
   const { BrowserAuth } = await server.ssrLoadModule("/apps/web/src/services/auth.ts");
+  const { FileIcon, fileTypeIcon } = await server.ssrLoadModule("/apps/web/src/features/files/FileIcon.tsx");
+  const icon = (filename, name = "file") => renderToStaticMarkup(createElement(FileIcon, { name, filename }));
+  const types = [
+    ["报告.DOCX", "text", "file-text"], ["notes.md", "text", "file-text"],
+    ["扫描.PDF", "pdf", "file-type"], ["预算.xlsx", "spreadsheet", "file-spreadsheet"],
+    ["data.CSV", "spreadsheet", "file-spreadsheet"], ["演示.pptx", "presentation", "file-chart-column"],
+    ["图片.JpEg", "image", "file-image"], ["vector.svg", "image", "file-image"],
+    ["music.flac", "audio", "file-audio"], ["movie.mp4", "video", "file-video"],
+    ["backup.tar.GZ", "archive", "file-archive"], ["archive.7z", "archive", "file-archive"],
+    ["main.ts", "code", "file-code-2"], ["main.rs", "code", "file-code-2"],
+    [".config.JSON", "json", "file-json"], ["config.toml", "config", "file-cog"],
+    ["install.PS1", "script", "file-terminal"], ["字体.woff2", "font", "file-type-2"],
+    ["state.sqlite3", "database", "database"], ["<img src=x onerror=alert(1)>.png", "image", "file-image"],
+  ];
+  for (const [filename, type, lucide] of types) {
+    assert.equal(fileTypeIcon(filename), type, filename);
+    const html = icon(filename);
+    assert.match(html, new RegExp(`lucide-${lucide}(?: |\")`), filename);
+    assert.match(html, /aria-hidden="true"/);
+    assert.match(html, /files-icon/);
+    assert.match(html, /stroke-width="1.6"/);
+    assert.doesNotMatch(html, /onerror|<img|filename=|title=/);
+  }
+  const fallback = icon(undefined);
+  for (const filename of ["README", ".gitignore", ".pdf", "file.", "file.unknown", "document.pdf.exe", "photo.jpg.tmp", "", "__proto__", "constructor", "file.constructor", "file.toString"]) {
+    assert.equal(fileTypeIcon(filename), undefined, filename);
+    assert.equal(icon(filename), fallback, filename);
+  }
+  for (const name of ["folder", "folder-open", "download", "upload", "properties"]) {
+    assert.equal(icon("looks-like-a-file.pdf", name), icon(undefined, name), name);
+  }
+  console.log("文件图标：14类常见后缀、大小写/多后缀/隐藏文件/未知回退、安全文件名、目录和操作图标保持通过");
   const folder = (entry_id, parent_id, name) => ({ entry_id, parent_id, name, kind: "directory", revision: "1" });
   const entries = [folder("r", undefined, ""), folder("d", "r", "文档"), folder("empty", "r", "空目录"),
     { entry_id: "f", parent_id: "d", name: "<img src=x onerror=alert(1)>.txt", kind: "file", revision: "3", size: "9007199254740993", hash: "a".repeat(64), version_id: "v" }];

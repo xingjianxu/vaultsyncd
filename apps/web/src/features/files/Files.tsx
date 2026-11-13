@@ -221,7 +221,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
           <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry =>
             entryMenu(entry, <Table.Tr onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
                   <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onKeyDown={openMenuByKeyboard}
-                    onClick={() => entry.kind === "directory" ? navigate(entry) : previewKind(entry) ? setPreviewEntry({ ...entry }) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
+                    onClick={() => entry.kind === "directory" ? navigate(entry) : previewKind(entry) ? setPreviewEntry({ ...entry }) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} filename={entry.name} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
                   <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
                 </Table.Tr>)) : <Table.Tr><Table.Td colSpan={3}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
         </Table>}

@@ -2659,6 +2659,8 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 ## S152 客户端与 Web 共用 Mantine 展示层
 
+2026-11-13 S220：Web `FileIcon({ name, filename? })` 保留原调用；`name="file"` 且给定文件名时通过纯函数 `fileTypeIcon(filename)` 按最后一个大小写不敏感后缀选择静态具名 Lucide 图标，覆盖文本/Office文档、PDF、表格、演示、图片、音视频、压缩包、代码、JSON、配置、脚本、字体与数据库。未知/无后缀/单独点文件回退原通用路径，目录及操作忽略 `filename`。仅列表传入条目名称，不读取内容、不改变预览分类与操作准入；尺寸、currentColor、aria-hidden 保持，无 wire/schema/IPC 变化。
+
 2026-11-11 S198：共享 `Icon({ icon: LucideIcon, ...LucideProps })` 使用静态具名 Lucide 导入，替代旧 `path` 参数；现有两端消费者已迁移。`TransferDirection({ direction: string })` 将 upload/download 显示为带中文 `role="img"`、`aria-label` 和 title 的非交互图标，未知方向保留原值。FileIcon 入口及 file/folder/folder-open 几何保持，通用操作委托 Lucide。只新增展示依赖，无 wire/schema/IPC 变更。
 
 2026-11-10 S183：`PageShellProps.brandIcon?: ReactNode` 由应用注入顶栏品牌图标；Web 登录与顶栏直接引用根 `logo.svg?no-inline`，HTML favicon 引用同一 SVG，经 Vite 输出同一个带摘要 `/assets/logo-*.svg`，沿用同源 CSP 与已有静态路由。Nix `webSource` 包含根 `logo.svg`。Windows `bundle.icon` 显式指定 `icons/icon.ico`（16/24/32/48/64/128/256），EXE/默认窗口共用；托盘克隆 `default_window_icon`，不再生成纯色占位图。ICO 由根 SVG 派生，命令及证据见 S183 交接；无 wire/schema 变化。
