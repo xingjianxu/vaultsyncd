@@ -151,3 +151,7 @@ S224（2026-11-13）经永久入口 `restart --package /nix/store/5z68d5bq95w566
 ## S229 放大品牌图标（2026-11-13）
 
 仅dev经永久主树入口更新到 `/nix/store/rnbz64qyy7ak79ndn56qzrig9yy6j89m-vaultsyncd-0.1.7`（源c90af28）。SVG主体横向约99%、等比放大约6%，Web顶栏36px、登录48px，透明背景保持；七尺寸Windows ICO同步重生，完整客户端已交付根dist。137资源/严格TLS/CSP/MIME、真实登录退出及明暗320/1440八组尺寸/透明度通过；原prod/dev身份健康、dev账号/Vault/Office配置保持，instance仅包引用变化，生产进程/system保持。回退可restart至S228包 `/nix/store/5h9igr23zl2if3kqrl6cx51gxg756p1s-vaultsyncd-0.1.7`，不重置schema22实例。永久Windows客户端未替换；详见 [S229](../../agent/tasks/S229.md)。
+
+## S230 浅蓝色品牌 Logo（2026-11-13）
+
+仅dev经永久主树入口更新到 `/nix/store/wz9vmywir3wqp4qbhg2xw4pv65qnd30z-vaultsyncd-0.1.7`（源3fd5104）。云朵改为浅蓝#8ACFFF/#66BDF4/#47A7E9，双箭头/透明背景/放大尺寸保持；七尺寸Windows ICO同步重生，完整客户端已交付根dist。137资源/严格TLS/CSP/MIME、真实登录退出及明暗320/1440八组浅蓝/透明度/尺寸通过；prod/dev身份健康、dev账号/Vault/Office配置保持，instance仅包引用变化，生产进程/system保持。回退可restart至S229包 `/nix/store/rnbz64qyy7ak79ndn56qzrig9yy6j89m-vaultsyncd-0.1.7`，不重置schema22实例。永久Windows客户端未替换；详见 [S230](../../agent/tasks/S230.md)。
