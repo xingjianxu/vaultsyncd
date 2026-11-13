@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S230 in_progress**：按用户要求将云朵Logo改为浅蓝渐变并同步SVG/Web/favicon/Windows/Explorer，保留双箭头、透明背景与已放大尺寸。工作树 `.worktrees/S230-light-blue-branding`，证据 `/data/vaultsyncd-dev/S230-light-blue-branding-20261113/`；待颜色/构建/原生/浏览器、仅dev部署、根dist交付与收尾。下一ready无，原四张blocked保持。
+
 当前 **S229 done**：默认SVG主体横向93%→99%，等比放大约6%，重生七尺寸ICO；Web顶栏28→36px、登录40→48px，透明/完整轮廓/比例及备用黑底保持。实现c90af28；根类型/Web构建、纯Nix81项、完整Windows四EXE/双清单、Win32七尺寸/EXE像素差0、Shell原生11项与真实Explorer三绑定通过，原62注册/客户端保持。宿主/精确包各八组浏览器及仅dev更新后的137资源/健康身份、真实登录八组尺寸/透明度通过，生产保持；根dist交付，永久客体客户端未替换。证据 `/data/vaultsyncd-dev/S229-larger-branding-20261113/`，交接 [S229](tasks/S229.md)。实现c90af28/验收交接95616fd已ff合master，五bind及本卡树/分支正常清理，S187保持；清理后137资源/双环境健康身份、dev ready和根dist哈希复核通过。无本卡阻塞；下一ready无，原四张blocked保持。
 
 当前 **S228 done**：新SVG及Web/桌面/Explorer统一透明背景，仅移除白底，图形/渐变/尺寸和黑底备用保持，七尺寸ICO重生。实现d7e3e2e；根类型/Web构建、七尺寸alpha、完整Windows四EXE/双清单、Win32/EXE像素、Shell原生11项及真实Explorer三绑定通过，原62注册/客户端保持。纯Nix包81项与宿主/精确包各八组浏览器通过；仅dev更新5h9igr包，137资源/身份/健康、真实登录与八组透明度通过，prod保持。根dist交付，永久Windows客户端未替换；证据 `/data/vaultsyncd-dev/S228-transparent-branding-20261113/`，交接 [S228](tasks/S228.md)。实现d7e3e2e/验收交接d91560e已ff合master，五bind及本卡树/分支正常清理，S187保持；清理后137资源/双环境健康身份、dev ready与根dist哈希复核保持。无本卡阻塞；下一ready无，原四张blocked保持。
