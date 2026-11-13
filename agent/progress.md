@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S223 done**：透明SVG/七尺寸ICO与原黑底备用集中 `assets/branding/`，Web/favicon、Windows EXE/窗口/托盘/Explorer统一引用透明版。实现c0cf31b/修正87e61a3；原版字节/图形与alpha、根类型/Web九套/两端构建、Windows静态CRT严格检查/构建、原生Win32七尺寸/EXE像素差0及真实Explorer刷新移动通过。纯包81项与精确包浏览器八组通过；仅dev更新至zxn0vlr包，136资源字节/TLS/CSP/真实登录退出及八组alpha通过，原身份/账号/Vault/Office保持，prod进程/system未变。交接 [S223](tasks/S223.md)，证据 `/data/vaultsyncd-dev/S223-transparent-logo-20261113/`。未替换永久客户端/根dist或发行，新客户端由后续构建交付；无本卡阻塞，下一ready无，原四张blocked保持；合并清理结果随收尾补充。
+当前 **S223 done**：透明SVG/七尺寸ICO与原黑底备用集中 `assets/branding/`，Web/favicon、Windows EXE/窗口/托盘/Explorer统一引用透明版。实现c0cf31b/修正87e61a3；原版字节/图形与alpha、根类型/Web九套/两端构建、Windows静态CRT严格检查/构建、原生Win32七尺寸/EXE像素差0及真实Explorer刷新移动通过。纯包81项与精确包浏览器八组通过；仅dev更新至zxn0vlr包，136资源字节/TLS/CSP/真实登录退出及八组alpha通过，原身份/账号/Vault/Office保持，prod进程/system未变。交接 [S223](tasks/S223.md)，证据 `/data/vaultsyncd-dev/S223-transparent-logo-20261113/`。未替换永久客户端/根dist或发行，新客户端由后续构建交付；无本卡阻塞，下一ready无，原四张blocked保持。实现及验收afbd69c已ff合master，六挂载/本卡树和分支正常清理，S134/S187保持；清理后双环境健康、dev ready且生产进程不变。
 
 当前 **S222 done**：Windows Explorer云文件夹入口显示绑定目录名及软件Logo；ICO持久保存Known Folder，不依赖便携程序位置；原位更新并通知Shell刷新，身份/驻留/未确认内容保持。实现5571e2e，宿主43项/严格检查、Windows静态CRT严格检查及agent构建、原生图标注册7项/CFAPI2项和最终精确代码三绑定/旧属性刷新/移动程序/真实导航名称与Logo通过，独立补审APPROVED。原客户端PID/原路径/session1及62注册保持，早期失败日志保留；证据 `/data/vaultsyncd-dev/S222-explorer-branding-20261113/`，交接 [S222](tasks/S222.md)；实现及验收交接bd0a2a2已ff合master，本卡树/分支正常清理，S134/S187保持。未替换永久客户端/根dist、不改服务端、不部署或发行；无本卡阻塞，下一ready无，原四张blocked保持。
 
