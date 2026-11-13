@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S227 done**：逐字节采用用户新云朵双箭头SVG并保留白底，重生七尺寸ICO，沿用Web favicon/品牌与桌面EXE/窗口/托盘/Explorer共用路径。实现b176726；根类型/Web构建、完整Windows四EXE/11文件双清单、Win32七尺寸/EXE像素相同、Windows原生11项和真实Explorer三绑定通过，原62注册/运行客户端保持。纯Nix包81项与精确包浏览器八组、仅dev更新后的137资源/健康/身份及真实登录八组通过；生产保持。根dist已交付，永久客体客户端未替换；证据 `/data/vaultsyncd-dev/S227-logo-sync-20261113/`，交接 [S227](tasks/S227.md)。无本卡阻塞，待合并清理；下一ready无，原四张blocked保持。
+当前 **S227 done**：逐字节采用用户新云朵双箭头SVG并保留白底，重生七尺寸ICO，沿用Web favicon/品牌与桌面EXE/窗口/托盘/Explorer共用路径。实现b176726；根类型/Web构建、完整Windows四EXE/11文件双清单、Win32七尺寸/EXE像素相同、Windows原生11项和真实Explorer三绑定通过，原62注册/运行客户端保持。纯Nix包81项与精确包浏览器八组、仅dev更新后的137资源/健康/身份及真实登录八组通过；生产保持。根dist已交付，永久客体客户端未替换；证据 `/data/vaultsyncd-dev/S227-logo-sync-20261113/`，交接 [S227](tasks/S227.md)。实现b176726/验收交接cd68302已ff合master，五bind及本卡树/分支正常清理，S134/S187保持；清理后137资源/双环境身份健康、dev ready及根dist保持。无本卡阻塞；下一ready无，原四张blocked保持。
 
 当前 **S226 done**：主桌面启动自动恢复未解绑暂停目录，轮询/导航保留运行中手动暂停；Binding删除Vault列，以Mantine HoverCard展示服务器地址/Server ID/Vault ID/登录状态及键盘支持。实现71df0ab；根类型/桌面单测与构建、Chromium专项6组/绑定9组/布局、Windows交叉严格检查与四EXE、原生130项和服务器上传字节核对通过。两个测试根无损注销、原62注册及永久客户端配置/hash/暂停恢复通过。证据 `/data/vaultsyncd-dev/S226-startup-bindings-20261113/`，交接 [S226](tasks/S226.md)。不改服务端、不部署，不替换永久客户端或根dist；无本卡阻塞，下一ready无，原四张blocked保持；实现71df0ab/验收交接44e214e已ff合master，6挂载及本卡树/分支正常清理，S134/S187保持。
 
