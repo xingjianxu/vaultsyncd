@@ -139,3 +139,7 @@ S224（2026-11-13）经永久入口 `restart --package /nix/store/5z68d5bq95w566
 仅 dev 已更新到 `/nix/store/ig2vap2j3dymx5hypfjd228fvnkpfac2-vaultsyncd-0.1.7`，来源整合提交 `7335ab0`，包含 S224 最新品牌与 S225 五类已提交文件操作；通过永久主树 `tools/dev-server.sh restart --package` 启动，运行不依赖任务工作树。schema21→22；原 ServerId、账号、Vault、Office配置和90条旧活动记录保持，137资源字节与严格TLS/CSP、真实登录退出/四类型筛选通过。生产进程及system保持，未更新生产。两端操作记录说明见接口 S225、交接 [S225](../../agent/tasks/S225.md)。
 
 升级前停机整套备份在 `/data/vaultsyncd-dev/S225-activity-events-20261113/predeploy-backup/`（state/vaults/config、70文件SHA256），自动迁移前数据库备份另在dev state内。由于schema已升22，**不能只重启S224旧包回退**；须有序停机、保留当前22整套状态后，按该备份恢复配套schema21状态/内容/配置，再用S224包启动并核验。此操作会回到备份时点，升级后新增事实需先独立保留；本卡未实际回退或重置实例，备份为长期证据，不按缓存清理。
+
+## S227 新云同步 Logo（2026-11-13）
+
+经永久主树管理入口仅dev更新到 `/nix/store/hk86ijg337lsmz6y89a46jlk2d5v7rhl-vaultsyncd-0.1.7`（源b176726）。Web favicon/登录/顶栏采用用户新云朵双箭头SVG，保留源图白底。137项HTTPS资源字节/严格TLS/CSP/MIME、真实登录退出及明暗320/1440八组通过；原ServerId/账号/Vault/Office配置保持，instance仅包引用变化，生产进程/system保持。回退可restart至S225包 `/nix/store/ig2vap2j3dymx5hypfjd228fvnkpfac2-vaultsyncd-0.1.7`，schema22保持，不重置数据。完整Windows客户端已交付根dist，客体永久客户端未替换；交接 [S227](../../agent/tasks/S227.md)。
