@@ -1,6 +1,6 @@
 # 品牌资源
 
-- `logo.svg`：默认透明背景矢量 Logo，Web 登录、顶栏与 favicon 共用。
+- `logo.svg`：默认透明背景矢量 Logo（V 为深石板蓝 `#1E293B`，`viewBox="17 17 94 94"` 使主体接近画布边缘），Web 登录、顶栏与 favicon 共用。
 - `icon.ico`：透明 SVG 派生的 Windows 16/24/32/48/64/128/256 图标，应用、窗口、托盘与 Explorer 同步根共用。
 - `logo-dark.svg`、`icon-dark.ico`：S223 以前的原黑底版本，逐字节保留，供以后选用。
 
