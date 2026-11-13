@@ -17,9 +17,10 @@ let
     [ ".cargo" "api" "apps/agent" "apps/cli" "apps/server" "apps/server-admin"
       "apps/desktop/src-tauri" "crates" "fixtures" "tests" "tools" ]
     [ "Cargo.toml" "Cargo.lock" "rust-toolchain.toml" "assets/branding/icon.ico" ];
+  # Web 独立构建不纳入桌面工作区 manifest，避免安装未在 Web 离线依赖集中收录的 Tauri。
   webSource = clean "vaultsyncd-web-source"
     [ "apps/web" "packages" ]
-    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "apps/desktop/package.json" "assets/branding/logo.svg" ];
+    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "assets/branding/logo.svg" ];
   rust = pkgs.rustPlatform.buildRustPackage {
     pname = "vaultsyncd-rust";
     inherit version;
