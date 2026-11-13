@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S218 done**：预览关闭立即取消工作，标题/正文及展示资源保留至Mantine退场结束，导航/认证/卸载即时清理与快速重开围栏保持。根类型/Web九套/build、独立复审APPROVED，最终精确包图片/PDF19+文本15+Office18组及18退出/重开109帧通过，S217旧包反证明确失败。实现a6a23de已部署generation291，主机pin6a90aa5已ff合main并清部署树；prod/dev同包与原身份/账号/Vault/schema21/Office配置保持，408次资源字节、严格TLS/CSP/匿名门禁与320/1440通过。交接 [S218](tasks/S218.md)，证据 `/data/vaultsyncd-dev/S218-preview-exit-20261113/`。无本卡阻塞，不发行或重打包Windows；下一ready无，S011/S106/S107/S108原blocked保持。
+当前 **S218 done**：预览关闭立即取消工作，标题/正文及展示资源保留至Mantine退场结束，导航/认证/卸载即时清理与快速重开围栏保持。根类型/Web九套/build、独立复审APPROVED，最终精确包图片/PDF19+文本15+Office18组及18退出/重开109帧通过，S217旧包反证明确失败。实现a6a23de已部署generation291，主机pin6a90aa5已ff合main并清部署树；prod/dev同包与原身份/账号/Vault/schema21/Office配置保持，408次资源字节、严格TLS/CSP/匿名门禁与320/1440通过。交接 [S218](tasks/S218.md)，证据 `/data/vaultsyncd-dev/S218-preview-exit-20261113/`。无本卡阻塞，不发行或重打包Windows；下一ready无，S011/S106/S107/S108原blocked保持。实现a6a23de/交接6e8c3b7已ff合master，五挂载/任务树及本地分支正常清理，清理后双环境健康ok，S134/S187保持。
 
 当前 **S217 done**：预览标题栏底部4px并解除默认最低高度，加载完成后移除空操作行，取消/重试/下载/关闭保持。根类型/Web九套/build、独立初审及补审APPROVED、精确部署包Chromium图片/PDF17组/文本13组/Office16组通过；实现df87e02已部署generation290，主机pin9b88c98已ff合main并清树，prod/dev同包及原身份/账号/Vault/Office配置保持，线上136文件三源408次字节、严格TLS/匿名门禁/CSP与320/1440通过。交接 [S217](tasks/S217.md)，证据 `/data/vaultsyncd-dev/S217-preview-spacing-20261112/`（实际2026-11-13）；无本卡阻塞，不发行或重打包Windows，下一ready无，原四张blocked保持。实现df87e02/交接f7664d6已ff合master，五挂载及本卡树/分支正常清理，清理后双环境健康ok，S134/S187保持。
 
