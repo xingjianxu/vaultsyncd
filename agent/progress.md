@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S231 in_progress**：核查用户报告的Windows启动无响应/无法自动恢复与解绑重现；隔离树修复本机控制排队、解绑IPC预算及状态一致性，保留历史恢复记录，待真实Windows和完整客户端交付。交接 [S231](tasks/S231.md)。
+当前 **S231 done**：本机暂停/恢复脱离网络worker、解绑长操作预算及一致controls投影，启动暂时失败有限重试；真实Windows状态竞态负对照明确失败，修复后IPC8+5/重绑13、真实WebView/HTTPS/CFAPI151项及服务端固定版本SHA256通过，根类型/桌面测试构建、浏览器6+7+9/最终包复验和严格clippy通过。实现509f7fb，整合S230为03b2a4c；干净四EXE/双清单来源91fb4fb，根dist交付且原dist备份。永久Windows旧客户端原路径/身份/hash/暂停策略已恢复，五测试根无损注销且原62注册保持。证据 `/data/vaultsyncd-dev/S231-startup-binding-recovery-20261113/`，交接 [S231](tasks/S231.md)。无本卡阻塞、不改服务端或部署；下一ready无，原四张blocked保持；待立即合master及正常清理本卡树/分支。
 
 当前 **S230 done**：云朵Logo改为浅蓝#8ACFFF/#66BDF4/#47A7E9，SVG/Web/favicon/Windows/Explorer共用；双箭头/透明背景/路径/放大尺寸及黑底备用保持。实现3fd5104；根类型/Web构建、七尺寸颜色与alpha逐像素保持、完整Windows四EXE/双清单、Win32/EXE像素差0、Shell原生11项和真实Explorer三绑定通过，原62注册/客户端保持。纯Nix81项、宿主/精确包各八组浏览器、仅dev更新后的137资源/健康身份和真实登录八组颜色/透明度/尺寸通过，prod保持。根dist交付，永久Windows客户端未替换；证据 `/data/vaultsyncd-dev/S230-light-blue-branding-20261113/`，交接 [S230](tasks/S230.md)。实现3fd5104/验收交接01ca8d4已ff合master，五bind及本卡树/分支正常清理，S187及新出现的S231工作树保持；清理后137资源/双环境健康身份、dev ready和根dist哈希复核通过。无本卡阻塞；下一ready无，原四张blocked保持。
 
