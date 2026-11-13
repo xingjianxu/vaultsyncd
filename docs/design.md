@@ -270,7 +270,7 @@ flowchart TB
 | `apps/desktop/src-tauri/src/` | Tauri 壳、托盘、窗口、最小 command、IPC 桥接 | 取代独立 agent 运行同步引擎 |
 | `apps/desktop/src-tauri/capabilities/` | 窗口能力权限 | 授予任意文件访问或任意命令执行 |
 | `apps/desktop/src-tauri/tauri.conf.json` | Tauri 配置、标识、构建与打包设置 | 真实账号、密码或长期令牌 |
-| `assets/branding/` | 透明品牌 SVG/Windows ICO 与保留的黑底版本 | 用户文件或运行时截图 |
+| `assets/branding/` | 默认品牌 SVG/Windows ICO 与保留的黑底版本 | 用户文件或运行时截图 |
 | `apps/web/src/` | Linux 服务端管理页面、认证状态、Vault/历史/回收站/备份操作 | Windows agent 的本机路径控制 |
 
 ### 5.4 Rust 模块：crates
@@ -1008,6 +1008,8 @@ Tauri 只授予必要 capability；同步目录文件内容、文件名、Markdo
 ## 18. 状态界面、通知与可观测性
 
 ### 18.1 最小界面
+
+2026-11-13（S227，用户提供新源图）：Web favicon/登录/顶栏与 Windows 应用/窗口/托盘/Explorer 统一采用 `assets/branding/logo.svg` 的新云朵双箭头图形，保留用户源图白色背景并重生七尺寸 ICO。覆盖 S223/S224 的默认透明缎带与 V 外观，原黑底备用资源与既有品牌消费路径保持。
 
 2026-11-13（S226，用户明确要求）：主桌面每次启动首次取得完整本机状态后，自动恢复所有未解绑的暂停绑定（包括此前手动暂停的绑定），通过既有认证IPC ResumeBinding执行。此决定覆盖S203“重启保持暂停”的桌面默认，普通停止与显式维护围栏保持；本次运行的手动暂停不被状态轮询或页面切换覆盖。单个恢复失败保留实际错误并继续其它目录，不把恢复请求当作同步完成。独立Explorer文件窗口不自动恢复其它目录。本地Binding表格删除Vault列，服务器列悬停使用Mantine HoverCard展示地址、Server ID、Vault ID和登录状态，支持键盘查看。
 

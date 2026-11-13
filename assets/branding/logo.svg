@@ -1,14 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="128" height="128" viewBox="17 17 94 94"
-     fill="none" role="img" aria-labelledby="title desc">
-  <title id="title">vaultsyncd</title>
-  <desc id="desc">Two blue and aqua ribbons form a continuous synchronization loop around a centered, upright deep slate-blue letter V on a transparent background.</desc>
-  <g transform="rotate(-30 64 64)">
-    <path fill="#5277ff"
-          d="M60 24H48A24 24 0 0 0 24 48V80A24 24 0 0 0 48 104H60L68 86H48A6 6 0 0 1 42 80V48A6 6 0 0 1 48 42H52Z"/>
-    <path fill="#37d4c6" transform="rotate(180 64 64)"
-          d="M60 24H48A24 24 0 0 0 24 48V80A24 24 0 0 0 48 104H60L68 86H48A6 6 0 0 1 42 80V48A6 6 0 0 1 48 42H52Z"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254" role="img" aria-labelledby="logo-title logo-description">
+  <title id="logo-title">文件云同步 Logo</title>
+  <desc id="logo-description">蓝色渐变云朵，内含浅冰蓝与薄荷绿渐变双箭头。箭头尖端、肩部与圆弧衔接均使用小幅圆角及相切曲线，指向另一段尾部中点。纯矢量路径，删除 background 矩形可获得透明背景。</desc>
+  <defs>
+    <linearGradient id="cloud-gradient" gradientUnits="userSpaceOnUse" x1="260" y1="244" x2="1050" y2="1026">
+      <stop offset="0" stop-color="#2E77F2"/>
+      <stop offset="0.5" stop-color="#1457DF"/>
+      <stop offset="1" stop-color="#0731B8"/>
+    </linearGradient>
+    <linearGradient id="ice-blue-gradient" gradientUnits="userSpaceOnUse" x1="380" y1="530" x2="730" y2="950">
+      <stop offset="0" stop-color="#DFF7FF"/>
+      <stop offset="0.5" stop-color="#A8DFF8"/>
+      <stop offset="1" stop-color="#66B4E6"/>
+    </linearGradient>
+    <linearGradient id="mint-green-gradient" gradientUnits="userSpaceOnUse" x1="520" y1="445" x2="865" y2="880">
+      <stop offset="0" stop-color="#C4FFEB"/>
+      <stop offset="0.5" stop-color="#77EBC6"/>
+      <stop offset="1" stop-color="#2CC79B"/>
+    </linearGradient>
+  </defs>
+  <rect id="background" width="1254" height="1254" fill="#FFFFFF"/>
+  <g id="cloud-sync-logo">
+    <path id="cloud" fill="url(#cloud-gradient)" d="M 251,1026 H 999 C 1115,1026 1208,940 1208,825 C 1208,752 1168,687 1108,651 C 1108,543 1020,455 912,455 C 902,455 893,455 883,457 C 862,336 754,244 626,244 C 497,244 389,334 367,457 C 358,456 349,455 340,455 C 234,455 148,542 148,651 C 84,687 42,753 42,825 C 42,936 137,1026 251,1026 Z"/>
+    <g id="clockwise-sync-arrows">
+      <path id="arrow-ice-blue" fill="url(#ice-blue-gradient)" d="M 721.429,930.643 A 253,253 0 0 1 385.241,608.814 C 386.417,605.691 384.953,602.227 381.859,600.977 L 371.660,596.856 C 369.540,595.999 369.703,592.944 371.903,592.318 L 502.969,555.012 C 508.917,553.319 514.914,557.530 515.343,563.698 L 521.379,650.559 C 521.603,653.785 518.372,656.132 515.374,654.920 L 505.175,650.800 C 502.144,649.575 498.577,651.081 497.491,654.164 A 132,132 0 0 0 671.225,820.478 C 674.340,819.226 677.836,820.520 679.228,823.575 L 724.429,922.760 C 725.794,925.755 724.454,929.350 721.429,930.643 Z"/>
+      <path id="arrow-mint-green" fill="url(#mint-green-gradient)" d="M 522.571,465.357 A 253,253 0 0 1 858.759,787.186 C 857.583,790.309 859.047,793.773 862.141,795.023 L 872.340,799.144 C 874.460,800.001 874.297,803.056 872.097,803.682 L 741.031,840.988 C 735.083,842.681 729.086,838.470 728.657,832.302 L 722.621,745.441 C 722.397,742.215 725.628,739.868 728.626,741.080 L 738.825,745.200 C 741.856,746.425 745.423,744.919 746.509,741.836 A 132,132 0 0 0 572.775,575.522 C 569.660,576.774 566.164,575.480 564.772,572.425 L 519.571,473.240 C 518.206,470.245 519.546,466.650 522.571,465.357 Z"/>
+    </g>
   </g>
-  <path fill="#1E293B"
-        d="M50 51H58L64 70L70 51H78L68 79H60Z"/>
 </svg>
