@@ -147,3 +147,7 @@ S224（2026-11-13）经永久入口 `restart --package /nix/store/5z68d5bq95w566
 ## S228 新 Logo 透明背景（2026-11-13）
 
 仅dev经永久主树入口更新到 `/nix/store/5h9igr23zl2if3kqrl6cx51gxg756p1s-vaultsyncd-0.1.7`（源d7e3e2e）。默认SVG移除白底，Web favicon/登录/顶栏透明；图形/渐变/画布保持，Windows七尺寸ICO同步透明。137资源字节/严格TLS/CSP/MIME、真实登录退出与明暗320/1440八组透明度通过；prod/dev身份健康与原配置保持，instance仅包引用变化，生产进程/system保持。回退可restart至原dev包 `/nix/store/3793434gfaxdyb6pc5fvdsc7bvfy3g4b-vaultsyncd-0.1.7`，不重置schema22实例。新完整Windows客户端已交付根dist，永久客体客户端未替换；详见 [S228](../../agent/tasks/S228.md)。
+
+## S229 放大品牌图标（2026-11-13）
+
+仅dev经永久主树入口更新到 `/nix/store/rnbz64qyy7ak79ndn56qzrig9yy6j89m-vaultsyncd-0.1.7`（源c90af28）。SVG主体横向约99%、等比放大约6%，Web顶栏36px、登录48px，透明背景保持；七尺寸Windows ICO同步重生，完整客户端已交付根dist。137资源/严格TLS/CSP/MIME、真实登录退出及明暗320/1440八组尺寸/透明度通过；原prod/dev身份健康、dev账号/Vault/Office配置保持，instance仅包引用变化，生产进程/system保持。回退可restart至S228包 `/nix/store/5h9igr23zl2if3kqrl6cx51gxg756p1s-vaultsyncd-0.1.7`，不重置schema22实例。永久Windows客户端未替换；详见 [S229](../../agent/tasks/S229.md)。
