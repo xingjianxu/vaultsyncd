@@ -30,5 +30,5 @@
   {"request_id":"connections","ipc_version":{"major":3,"minor":2},"command":{"name":"list_connections"}}
 ,
   {"request_id":"remove-connection","ipc_version":{"major":3,"minor":2},"command":{"name":"remove_connection","parameters":{"server_id":"66666666666666666666666666666666"}}},
-  {"request_id":"stop-agent","ipc_version":{"major":3,"minor":1},"command":{"name":"stop_agent"}}
+  {"request_id":"stop-agent","ipc_version":{"major":3,"minor":2},"command":{"name":"stop_agent"}}
 ]
