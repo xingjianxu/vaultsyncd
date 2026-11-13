@@ -295,6 +295,15 @@ public static class S200Window {
       Check (Wait-Until { $s=Invoke-S203Cli @('status'); @($s.management.bindings | Where-Object { $_.binding_id -eq $binding -and !$_.paused }).Count -eq 1 } 60) 'S226 desktop startup automatically resumes the same durable binding'
       Check ((Get-FileHash $unconfirmed -Algorithm SHA256).Hash -eq $beforeHash) 'restart preserves unconfirmed bytes'
       Check (Wait-Until { $s=Invoke-S203Cli @('status'); @($s.bindings | Where-Object { $_.binding_id -eq $binding -and $_.synchronized }).Count -eq 1 } 120) 'S226 resumed real CFAPI binding uploads unconfirmed content and reaches committed baseline'
+      # A status read may precede the worker's next scan. Wait for this modified
+      # file's server-side commit before the later manual pause and detachment.
+      $seedFiles=Invoke-S203Cli @('files','--binding-id',$binding)
+      $seedEntry=@($seedFiles.management.files | Where-Object { $_.path -eq 'server-seed.txt' })[0].entry_id
+      Check (![string]::IsNullOrEmpty($seedEntry)) 'S231 resumed file exposes its durable EntryId'
+      Check (Wait-Until {
+        $history=Invoke-S203Cli @('history','--binding-id',$binding,'--entry-id',$seedEntry)
+        @($history.management.items | Where-Object { $_.hash -eq $beforeHash }).Count -gt 0
+      } 120) 'S231 restored binding reaches the actual server commit before pause or detach'
       $root=[Windows.Automation.AutomationElement]::FromHandle($main)
       $names=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,$fixture.url)
       Check (Wait-Until { $null -ne $root.FindFirst([Windows.Automation.TreeScope]::Descendants,$names) }) 'S226 server address is exposed in production binding table'
