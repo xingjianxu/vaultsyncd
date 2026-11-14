@@ -2678,6 +2678,8 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 2026-11-13 S223：品牌源集中到 `assets/branding/`，默认 `logo.svg`/`icon.ico` 为透明背景，原黑底源与七尺寸 ICO 逐字节保留为 `logo-dark.svg`/`icon-dark.ico`。覆盖 S183 的根 SVG 和 `src-tauri/icons` 路径：Web 三处引用默认 SVG，Tauri `bundle.icon` 与 Windows Shell `include_bytes!` 共用默认 ICO；Nix Web/Rust 源过滤分别包含 SVG/ICO，黑底备用不进入默认 Web 资源。重生方法见该目录 README。S222 内容寻址自然生成新的持久图标并刷新既有绑定；须新客户端构建/新 agent 恢复绑定才生效，不改身份、协议或数据库。
 
+2026-11-14 S235：用户新版 `logo.svg` 为横向画布 1260×900（`viewBox="-25 159 1260 900"`）。Web 新增 `apps/web/src/components/BrandLogo.tsx`，登录页与顶栏统一按 `height`（48/36）等比渲染（`width:auto`、`aspect-ratio:1260 / 900`、`object-fit:contain`），不再写死方形 `width/height`，避免拉伸；favicon 仍直接引用同一 SVG，无第二份品牌文件。`icon.ico` 重生时先居中补透明正方形再缩放，七个帧均为正方形且云朵比例保持；Tauri `bundle.icon`、Windows Shell `include_bytes!` 与 Nix 源过滤路径不变。无 wire/schema/IPC 变更。
+
 - `packages/ui` 提供 `AppProvider`、`PageShell`、`Button`、`Table<T>`、`Dialog`、`EmptyState`、`StatusBadge` 及 `styles.css`，只依赖 React/Mantine/Lucide，不导入 IPC、HTTP、Tauri 或 wire DTO。两端在各自根入口导入共享样式。
 - `AppProvider` 使用 Mantine 默认主题、`defaultColorScheme="auto"` 和全局通知区，可传 `getStyleNonce`。`PageShell` 提供 48px 顶栏、240px 导航、窄屏 Burger、跳转主内容与明暗切换；调用方提供路由、导航、连接状态和各端附加入口。主题偏好使用 Mantine 本机存储，不存放账号凭据。
 - `Dialog` 组合 Mantine Modal，通过 `opened` 控制并保持组件挂载，使关闭恢复焦点；`Table` 保留 caption/columns/rows/rowKey/emptyMessage，水平滚动局限表格内部。Web 的 `components/ui.tsx` 仅稳定重导出共享展示 API，业务页面继续使用自身 API 和状态机。

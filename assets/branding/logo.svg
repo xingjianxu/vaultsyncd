@@ -1,29 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="35 45 1180 1180" role="img" aria-labelledby="logo-title logo-description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="900" viewBox="-25 159 1260 900" role="img" aria-labelledby="logo-title logo-description">
   <title id="logo-title">文件云同步 Logo</title>
-  <desc id="logo-description">透明背景的浅蓝色渐变云朵，内含浅冰蓝与薄荷绿渐变双箭头。箭头尖端、肩部与圆弧衔接均使用小幅圆角及相切曲线，指向另一段尾部中点。纯矢量路径。</desc>
+  <desc id="logo-description">以参考图鲜亮蓝色为基调的渐变云朵，配一层向左上方明显错位展开的浅蓝云朵叠层，中央为珍珠白与浅柠檬色渐变双箭头。圆环与箭头使用小圆角及相切曲线，保持顺时针方向和尾部对齐。横向矩形画布，减少上下留白。透明背景，所有形状均为可编辑纯矢量路径，云朵和双箭头均保留渐变。</desc>
   <defs>
     <linearGradient id="cloud-gradient" gradientUnits="userSpaceOnUse" x1="260" y1="244" x2="1050" y2="1026">
-      <stop offset="0" stop-color="#76C7FF"/>
-      <stop offset="0.5" stop-color="#53B5F3"/>
-      <stop offset="1" stop-color="#359EE7"/>
+      <stop offset="0" stop-color="#0C60F1"/>
+      <stop offset="0.5" stop-color="#004DE5"/>
+      <stop offset="1" stop-color="#0039CA"/>
     </linearGradient>
-    <linearGradient id="ice-blue-gradient" gradientUnits="userSpaceOnUse" x1="380" y1="530" x2="730" y2="950">
-      <stop offset="0" stop-color="#DFF7FF"/>
-      <stop offset="0.5" stop-color="#A8DFF8"/>
-      <stop offset="1" stop-color="#66B4E6"/>
+    <linearGradient id="pearl-gradient" gradientUnits="userSpaceOnUse" x1="380" y1="530" x2="730" y2="950">
+      <stop offset="0" stop-color="#FFFDF6"/>
+      <stop offset="0.5" stop-color="#F2F6FA"/>
+      <stop offset="1" stop-color="#E1EBF6"/>
     </linearGradient>
-    <linearGradient id="mint-green-gradient" gradientUnits="userSpaceOnUse" x1="520" y1="445" x2="865" y2="880">
-      <stop offset="0" stop-color="#C4FFEB"/>
-      <stop offset="0.5" stop-color="#77EBC6"/>
-      <stop offset="1" stop-color="#2CC79B"/>
+    <linearGradient id="lemon-gradient" gradientUnits="userSpaceOnUse" x1="520" y1="445" x2="865" y2="880">
+      <stop offset="0" stop-color="#FBFFE2"/>
+      <stop offset="0.5" stop-color="#ECF9C6"/>
+      <stop offset="1" stop-color="#DCF0A5"/>
+    </linearGradient>
+    <linearGradient id="cloud-depth-gradient" gradientUnits="userSpaceOnUse" x1="260" y1="244" x2="1050" y2="1044">
+      <stop offset="0" stop-color="#5794FA"/>
+      <stop offset="1" stop-color="#2E60D8"/>
     </linearGradient>
   </defs>
   <g id="cloud-sync-logo">
+    <path id="cloud-depth-layer" fill="url(#cloud-depth-gradient)" transform="translate(-40 -52)" d="M 251,1026 H 999 C 1115,1026 1208,940 1208,825 C 1208,752 1168,687 1108,651 C 1108,543 1020,455 912,455 C 902,455 893,455 883,457 C 862,336 754,244 626,244 C 497,244 389,334 367,457 C 358,456 349,455 340,455 C 234,455 148,542 148,651 C 84,687 42,753 42,825 C 42,936 137,1026 251,1026 Z"/>
     <path id="cloud" fill="url(#cloud-gradient)" d="M 251,1026 H 999 C 1115,1026 1208,940 1208,825 C 1208,752 1168,687 1108,651 C 1108,543 1020,455 912,455 C 902,455 893,455 883,457 C 862,336 754,244 626,244 C 497,244 389,334 367,457 C 358,456 349,455 340,455 C 234,455 148,542 148,651 C 84,687 42,753 42,825 C 42,936 137,1026 251,1026 Z"/>
     <g id="clockwise-sync-arrows">
-      <path id="arrow-ice-blue" fill="url(#ice-blue-gradient)" d="M 721.429,930.643 A 253,253 0 0 1 385.241,608.814 C 386.417,605.691 384.953,602.227 381.859,600.977 L 371.660,596.856 C 369.540,595.999 369.703,592.944 371.903,592.318 L 502.969,555.012 C 508.917,553.319 514.914,557.530 515.343,563.698 L 521.379,650.559 C 521.603,653.785 518.372,656.132 515.374,654.920 L 505.175,650.800 C 502.144,649.575 498.577,651.081 497.491,654.164 A 132,132 0 0 0 671.225,820.478 C 674.340,819.226 677.836,820.520 679.228,823.575 L 724.429,922.760 C 725.794,925.755 724.454,929.350 721.429,930.643 Z"/>
-      <path id="arrow-mint-green" fill="url(#mint-green-gradient)" d="M 522.571,465.357 A 253,253 0 0 1 858.759,787.186 C 857.583,790.309 859.047,793.773 862.141,795.023 L 872.340,799.144 C 874.460,800.001 874.297,803.056 872.097,803.682 L 741.031,840.988 C 735.083,842.681 729.086,838.470 728.657,832.302 L 722.621,745.441 C 722.397,742.215 725.628,739.868 728.626,741.080 L 738.825,745.200 C 741.856,746.425 745.423,744.919 746.509,741.836 A 132,132 0 0 0 572.775,575.522 C 569.660,576.774 566.164,575.480 564.772,572.425 L 519.571,473.240 C 518.206,470.245 519.546,466.650 522.571,465.357 Z"/>
+      <path id="arrow-pearl" fill="url(#pearl-gradient)" d="M 721.429,930.643 A 253,253 0 0 1 385.241,608.814 C 386.417,605.691 384.953,602.227 381.859,600.977 L 375.369,598.355 C 373.050,597.418 373.080,594.124 375.416,593.229 L 498.743,546.008 C 503.846,544.054 509.203,548.210 508.579,553.639 L 498.557,640.848 C 498.155,644.346 494.531,646.499 491.267,645.180 L 484.777,642.558 C 481.740,641.331 478.183,642.834 477.075,645.916 A 154,154 0 0 0 680.356,840.515 C 683.457,839.245 686.961,840.545 688.351,843.594 L 724.429,922.760 C 725.794,925.755 724.454,929.350 721.429,930.643 Z"/>
+      <path id="arrow-lemon" fill="url(#lemon-gradient)" d="M 522.571,465.357 A 253,253 0 0 1 858.759,787.186 C 857.583,790.309 859.047,793.773 862.141,795.023 L 868.631,797.645 C 870.950,798.582 870.920,801.876 868.584,802.771 L 745.257,849.992 C 740.154,851.946 734.797,847.790 735.421,842.361 L 745.443,755.152 C 745.845,751.654 749.469,749.501 752.733,750.820 L 759.223,753.442 C 762.260,754.669 765.817,753.166 766.925,750.084 A 154,154 0 0 0 563.644,555.485 C 560.543,556.755 557.039,555.455 555.649,552.406 L 519.571,473.240 C 518.206,470.245 519.546,466.650 522.571,465.357 Z"/>
     </g>
   </g>
 </svg>
