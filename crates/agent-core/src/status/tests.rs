@@ -159,3 +159,75 @@ async fn unknown_materialized_content_and_initial_binding_are_visible() {
     sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES (?,?,0,'clean','materialized')").bind(B.as_bytes().as_slice()).bind([7u8;16].as_slice()).execute(db.pool()).await.unwrap();
     assert_eq!(snapshot(&db, B).await.unwrap().unknown, 2);
 }
+
+#[tokio::test]
+async fn local_aggregate_preserves_empty_null_and_empty_evidence_semantics() {
+    let d = Dir::new();
+    let db = setup(&d).await;
+    let empty = snapshot(&db, B).await.unwrap();
+    assert_eq!(empty.residency, [0; 3]);
+    assert_eq!(empty.dirty, 0);
+    assert_eq!(empty.unknown, 1, "missing vault root remains unknown");
+    let mut tx = db.begin_write().await.unwrap();
+    // Legacy/corrupt empty evidence must still be unknown, even though current
+    // writers enforce nonempty blobs. Never relax constraints on the production pool.
+    sqlx::query("PRAGMA ignore_check_constraints=ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let mut id = 0u8;
+    for dirty in ["clean", "dirty", "snapshotting", "awaiting_commit"] {
+        for residency in ["metadata_only", "partial", "materialized"] {
+            for fingerprint in [None, Some(&[][..]), Some(&[1u8][..])] {
+                for identity in [None, Some(&[][..]), Some(&[2u8][..])] {
+                    id += 1;
+                    sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency,fingerprint,file_identity) VALUES (?,?,0,?,?,?,?)")
+                        .bind(B.as_bytes().as_slice()).bind([id;16].as_slice())
+                        .bind(dirty).bind(residency).bind(fingerprint).bind(identity)
+                        .execute(&mut *tx).await.unwrap();
+                }
+            }
+        }
+    }
+    sqlx::query("PRAGMA ignore_check_constraints=OFF")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot(&db, B).await.unwrap(),
+        empty,
+        "uncommitted facts stay invisible"
+    );
+    tx.commit().await.unwrap();
+    let state = snapshot(&db, B).await.unwrap();
+    assert_eq!(state.residency, [36; 3]);
+    assert_eq!(state.dirty, 81);
+    assert_eq!(
+        state.unknown, 33,
+        "only full residency requires both evidence blobs"
+    );
+    assert!(!state.synchronized());
+}
+
+#[tokio::test]
+async fn invalid_residency_remains_an_error_instead_of_disappearing_from_totals() {
+    let d = Dir::new();
+    let db = setup(&d).await;
+    let mut tx = db.begin_write().await.unwrap();
+    sqlx::query("PRAGMA ignore_check_constraints=ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO local_entries(binding_id,entry_id,generation,dirty,residency) VALUES (?,?,0,'clean','invalid')")
+        .bind(B.as_bytes().as_slice()).bind([7u8;16].as_slice())
+        .execute(&mut *tx).await.unwrap();
+    sqlx::query("PRAGMA ignore_check_constraints=OFF")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        snapshot(&db, B).await.unwrap_err(),
+        PortError::protocol("未知驻留")
+    );
+}

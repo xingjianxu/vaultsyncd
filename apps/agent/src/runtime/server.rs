@@ -25,6 +25,7 @@ pub(super) struct Report {
     pub startup: HashMap<BindingId, Problem>,
     pub cycles: HashMap<BindingId, Problem>,
     pub offline: HashSet<BindingId>,
+    pub verifying: HashSet<BindingId>,
 }
 
 pub(super) struct Handle {
@@ -32,6 +33,7 @@ pub(super) struct Handle {
     pub adopt: mpsc::Sender<BindingConfig>,
     pub report: watch::Receiver<Report>,
     stop: oneshot::Sender<()>,
+    cancelled: Arc<AtomicBool>,
     task: JoinHandle<Result<(), PortError>>,
 }
 
@@ -48,17 +50,20 @@ impl Handle {
             report,
             stop,
             task,
+            cancelled,
         } = self;
         tokio::spawn(async move {
             let _commands = commands;
             let _adopt = adopt;
             let _report = report;
             let _stop = stop;
+            let _cancelled = cancelled;
             task.await.map_err(error)?
         })
     }
 
     pub fn stop(self) -> JoinHandle<Result<(), PortError>> {
+        self.cancelled.store(true, Ordering::Release);
         let _ = self.stop.send(());
         self.task
     }
@@ -172,11 +177,16 @@ pub(super) fn start(
     let (commands, mut requests) = mpsc::channel::<Job>(8);
     let (adopt, mut adoptions) = mpsc::channel::<BindingConfig>(1024);
     let (stop, mut stopping) = oneshot::channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
     let (reporting, report) = watch::channel(Report {
         connection: connection.info(),
         startup: HashMap::new(),
         cycles: HashMap::new(),
         offline: HashSet::new(),
+        verifying: bindings
+            .iter()
+            .filter_map(|b| BindingId::from_hex(&b.id).ok())
+            .collect(),
     });
     let (hint_wake, mut hint_woken) = mpsc::channel(1);
     let mut server = Server {
@@ -190,11 +200,14 @@ pub(super) fn start(
         startup: HashMap::new(),
         cycles: HashMap::new(),
         offline: HashSet::new(),
+        cancelled: cancelled.clone(),
+        assembly_cursor: 0,
     };
     publish_connection(&connections, report.borrow().connection.clone());
     let task = tokio::spawn(async move {
         let result = async {
             let mut next = tokio::time::Instant::now();
+            let mut next_local = next + Duration::from_millis(250);
             loop {
                 let response = tokio::select! {
                     biased;
@@ -227,6 +240,13 @@ pub(super) fn start(
                     }
                     _ = hint_woken.recv() => {
                         next = tokio::time::Instant::now();
+                        None
+                    }
+                    _ = tokio::time::sleep_until(next_local) => {
+                        if !crate::maintenance::trial_pending(&config.state_dir).map_err(error)? {
+                            server.discover_local().await;
+                        }
+                        next_local = tokio::time::Instant::now() + Duration::from_millis(250);
                         None
                     }
                 };
@@ -264,6 +284,7 @@ pub(super) fn start(
         report,
         stop,
         task,
+        cancelled,
     }
 }
 
@@ -291,6 +312,8 @@ struct Server {
     startup: HashMap<BindingId, Problem>,
     cycles: HashMap<BindingId, Problem>,
     offline: HashSet<BindingId>,
+    cancelled: Arc<AtomicBool>,
+    assembly_cursor: usize,
 }
 
 impl Server {
@@ -315,6 +338,17 @@ impl Server {
             startup: self.startup.clone(),
             cycles: self.cycles.clone(),
             offline,
+            verifying: self
+                .bindings
+                .iter()
+                .filter_map(|b| BindingId::from_hex(&b.id).ok())
+                .filter(|id| {
+                    self.live
+                        .iter()
+                        .find(|item| item.0 == *id)
+                        .is_none_or(|item| item.3.discovery.pending())
+                })
+                .collect(),
         }
     }
 
@@ -435,7 +469,7 @@ impl Server {
         let id = BindingId::from_hex(&binding.id).map_err(error)?;
         let server = ServerId::from_hex(&self.connection.server.id).map_err(error)?;
         let client = self.connection.client.as_ref().map_err(Clone::clone)?;
-        let result = assemble(device, server, &binding, db, client).await;
+        let result = assemble(device, server, &binding, db, client, self.cancelled.clone()).await;
         if result.is_ok() {
             self.bindings.push(binding);
         } else {
@@ -460,6 +494,7 @@ impl Server {
     async fn quiesce_binding(&mut self, id: BindingId) -> Result<(), PortError> {
         if let Some(index) = self.live.iter().position(|item| item.0 == id) {
             let worker = &self.live[index].3;
+            worker.discovery.shutdown().await;
             worker.importer.callbacks.disconnect();
             worker
                 .importer
@@ -487,6 +522,7 @@ impl Server {
     async fn disconnect(&mut self) -> Result<(), PortError> {
         self.hints.clear();
         for (_, _, _, worker, _, _) in &self.live {
+            worker.discovery.shutdown().await;
             worker.importer.callbacks.disconnect();
             worker
                 .importer
@@ -528,6 +564,27 @@ impl Server {
         Ok(())
     }
 
+    async fn discover_local(&self) {
+        if !self.authenticated() {
+            return;
+        }
+        for (id, _, _, worker, _, _) in &self.live {
+            if self.cancelled.load(Ordering::Acquire) {
+                break;
+            }
+            // Initial import and rebuild admission retain their existing ordering.
+            if !self.receivers.contains_key(id) {
+                continue;
+            }
+            if let Err(e) = worker.discover().await {
+                eprintln!(
+                    "event=local-discovery-blocked binding={id} code={}",
+                    e.code().unwrap_or("UNAVAILABLE")
+                );
+            }
+        }
+    }
+
     async fn round(
         &mut self,
         db: &Arc<Database>,
@@ -541,7 +598,13 @@ impl Server {
         }
         let client = self.connection.client.as_ref().map_err(Clone::clone)?;
         let server = ServerId::from_hex(&self.connection.server.id).map_err(error)?;
-        for binding in &self.bindings {
+        let count = self.bindings.len();
+        for offset in 0..count {
+            if self.cancelled.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let index = (self.assembly_cursor + offset) % count;
+            let binding = &self.bindings[index];
             let id = BindingId::from_hex(&binding.id).map_err(error)?;
             if self.live.iter().any(|(existing, ..)| *existing == id) {
                 continue;
@@ -555,7 +618,7 @@ impl Server {
             if detached == Some(true) {
                 continue;
             }
-            match assemble(device, server, binding, db, client).await {
+            match assemble(device, server, binding, db, client, self.cancelled.clone()).await {
                 Ok(value) => {
                     self.live.push(value);
                     self.startup.remove(&id);
@@ -594,9 +657,17 @@ impl Server {
                     );
                 }
             }
+            if !once {
+                // One binding per admission turn; failed bindings do not starve later ones.
+                self.assembly_cursor = (index + 1) % count;
+                break;
+            }
         }
         let mut rebuilt = Vec::new();
         for (id, vault, first, worker, scheduler, remote) in &self.live {
+            if self.cancelled.load(Ordering::Acquire) {
+                return Ok(());
+            }
             let mut observed = false;
             let result: Result<(), PortError> = async {
                 if self.connection.session.needs_reauth() || !self.connection.session.has_credentials()
@@ -662,7 +733,10 @@ impl Server {
                     .map_err(error)?;
                     self.receivers.insert(*id, receiver);
                 }
-                scheduler.run_round(*id).await?;
+                if self.cancelled.load(Ordering::Acquire) { return Ok(()); }
+                if !scheduler.run_round(*id).await?.tasks.is_empty() {
+                    worker.discovery.invalidate().await;
+                }
                 let received = self.receivers
                     .get(id)
                     .ok_or_else(|| error("receiver missing"))?
@@ -671,9 +745,15 @@ impl Server {
                     .map_err(error);
                 // An unavailable pull must not suppress durable local discovery. Conversely,
                 // a local scan failure must not prevent already received work from progressing.
+                if received.as_ref().is_ok_and(|report| report.applied > 0) {
+                    worker.discovery.invalidate().await;
+                }
                 if received.is_ok() { crate::exclusions::reconcile(worker).await?; }
                 let discovered = worker.discover().await;
-                scheduler.run_round(*id).await?;
+                if self.cancelled.load(Ordering::Acquire) { return Ok(()); }
+                if !scheduler.run_round(*id).await?.tasks.is_empty() {
+                    worker.discovery.invalidate().await;
+                }
                 received?;
                 discovered?;
                 // Full-mode proof runs only after durable local discovery and once no
@@ -682,9 +762,9 @@ impl Server {
                 // Entries parked by an exclusion stay queued but are never dispatched until
                 // re-inclusion is reconciled; they must not block unrelated full-mode work.
                 let unsettled = crate::exclusions::unsettled(db, *id).await?;
-                if unsettled == 0 {
+                if unsettled == 0 && !worker.discovery.pending() && !self.cancelled.load(Ordering::Acquire) {
                     let mode = BindingControls::new(db.clone()).mode_progress(*id).await?;
-                    if mode.mode == SyncMode::Full && !mode.complete {
+                    if mode.mode == SyncMode::Full && !mode.complete && !self.cancelled.load(Ordering::Acquire) {
                         BindingControls::new(db.clone())
                             .resume_mode(
                                 *id,
@@ -746,6 +826,7 @@ impl Server {
             self.hints.remove(&id);
             if let Some(index) = self.live.iter().position(|item| item.0 == id) {
                 let (_, _, _, worker, _, _) = self.live.remove(index);
+                worker.discovery.shutdown().await;
                 worker.importer.callbacks.disconnect();
                 worker
                     .importer
@@ -772,6 +853,7 @@ async fn assemble(
     binding: &BindingConfig,
     db: &Arc<Database>,
     client: &ApiClient<ReqwestTransport>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<LiveBinding, PortError> {
     let id = BindingId::from_hex(&binding.id).map_err(error)?;
     let vault = VaultId::from_hex(&binding.vault_id).map_err(error)?;
@@ -835,7 +917,10 @@ async fn assemble(
     )
     .map_err(error)?;
     let local = Arc::new(Local::open(&binding.path, &binding.cache, db.clone(), id).await?);
-    for outcome in local.native.recover_publications().map_err(error)? {
+    let native = local.native.clone();
+    let publications =
+        crate::local::blocking(move || native.recover_publications().map_err(error)).await?;
+    for outcome in publications {
         if matches!(outcome, RecoveryOutcome::Blocked(_)) {
             return Err(error("platform publication requires recovery"));
         }
@@ -910,7 +995,8 @@ async fn assemble(
         .map_err(error)?;
         versions.push(PinnedVersion::new(identity, fixed).map_err(error)?);
     }
-    let placeholders = local.vault.scan();
+    let root = local.vault.clone();
+    let placeholders = crate::local::blocking(move || Ok(root.scan())).await?;
     if !placeholders.permits_missing_comparison() {
         return Err(error("incomplete startup metadata scan"));
     }
@@ -966,6 +1052,11 @@ async fn assemble(
     let worker = Worker {
         importer: importer.clone(),
         uploads,
+        discovery: Arc::new(
+            crate::discovery::Discovery::new(importer.local.vault.clone(), cancelled.clone())
+                .map_err(error)?,
+        ),
+        cancelled,
     };
     deferred
         .0
@@ -1091,6 +1182,8 @@ mod tests {
             startup: HashMap::new(),
             cycles: HashMap::new(),
             offline: HashSet::new(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            assembly_cursor: 0,
         };
         sqlx::query("ALTER TABLE bindings RENAME TO s189_unavailable_bindings")
             .execute(db.pool())
@@ -1137,6 +1230,7 @@ mod tests {
         runtime.servers.insert(
             server_id,
             Handle {
+                cancelled: Arc::new(AtomicBool::new(false)),
                 commands,
                 adopt,
                 stop,
@@ -1330,6 +1424,7 @@ mod tests {
                 startup: HashMap::new(),
                 cycles: HashMap::new(),
                 offline: HashSet::new(),
+                verifying: HashSet::new(),
             });
             let task = tokio::spawn(async move {
                 let _ = stopped.await;
@@ -1338,6 +1433,7 @@ mod tests {
             runtime.servers.insert(
                 id,
                 Handle {
+                    cancelled: Arc::new(AtomicBool::new(false)),
                     commands,
                     adopt,
                     stop,
@@ -1444,6 +1540,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopping_a_busy_worker_cancels_native_observation_before_it_reads_the_stop_channel() {
+        let (commands, _requests) = mpsc::channel::<Job>(1);
+        let (adopt, _adoptions) = mpsc::channel(1);
+        let (stop, stopped) = oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let native_cancel = cancelled.clone();
+        let (_report, report) = watch::channel(Report {
+            connection: ConnectionInfo {
+                server_id: "11".repeat(16),
+                server_url: "https://example.invalid".into(),
+                ca_file: None,
+                username: None,
+                authenticated: false,
+            },
+            startup: HashMap::new(),
+            cycles: HashMap::new(),
+            offline: HashSet::new(),
+            verifying: HashSet::new(),
+        });
+        let task = tokio::spawn(async move {
+            // Model a round awaiting native work: it cannot select the stop receiver yet.
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !native_cancel.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .map_err(error)?;
+            stopped.await.map_err(error)?;
+            Ok(())
+        });
+        let stopped = Handle {
+            commands,
+            adopt,
+            report,
+            stop,
+            task,
+            cancelled: cancelled.clone(),
+        }
+        .stop();
+        assert!(cancelled.load(Ordering::Acquire));
+        stopped.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn a_single_round_handle_keeps_its_command_and_stop_channels_alive() {
         let (commands, mut requests) = mpsc::channel::<Job>(1);
         let (adopt, _adoptions) = mpsc::channel(1);
@@ -1459,6 +1600,7 @@ mod tests {
             startup: HashMap::new(),
             cycles: HashMap::new(),
             offline: HashSet::new(),
+            verifying: HashSet::new(),
         });
         let task = tokio::spawn(async move {
             tokio::select! {
@@ -1468,6 +1610,7 @@ mod tests {
             }
         });
         Handle {
+            cancelled: Arc::new(AtomicBool::new(false)),
             commands,
             adopt,
             report,

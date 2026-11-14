@@ -67,3 +67,6 @@ pub mod maintenance;
 mod maintenance_prepare;
 #[cfg(windows)]
 pub mod portable;
+
+#[cfg(windows)]
+mod discovery;

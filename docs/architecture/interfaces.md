@@ -2261,6 +2261,7 @@ S222：同步根 `DisplayNameResource` 派生自绑定路径末级名称，`Icon
 
 - `WindowsFiles::open(vault,state)`：两个既有、同卷、不重叠的安全 pinned 目录；`seed(path,Evidence)` 从 durable local 状态载入旧代际，下一次仍重新哈希真实内容。
 - `observe(path) -> ObservedContent::{Absent,File(Arc<FixedSnapshot>)}`：健康父目录才能证明 Absent；文件在独占 RH oplock 下流式固定，`Evidence{generation,volume,file,digest,size}`；新字节或新物理身份递增代际，mtime 不授权。`FixedSnapshot::read_at` 最多 1 MiB，句柄拒绝外部修改/删除。
+- S234：`observe_evidence(path)` / `observe_evidence_cancellable(path,&AtomicBool) -> Option<Evidence>` 复用相同持续保护、完整哈希和身份代际规则，但不创建快照或刷盘；每256 KiB检查取消，取消返回Interrupted且不发布半份证据。上传/受控保全仍使用固定快照。`VaultHandle::publication_journals()` 完整枚举内部根，仅对严格匹配的发布日志深入检查；快照文件不递归、不读内容，坏日志/候选权限或身份故障仍阻止恢复。
 - `protect(path,writable) -> (ProtectedFile,EntryMetadata)`：元数据 no-follow 后取得正式 CFAPI oplock，再核对身份。`ProtectedFile::lease -> ProtectedLease`，`lease.file()` 为借用 Win32 句柄；不得 close/duplicate。oplock 已破坏、部分内容、可写映射/使用中、未知对象均报错。S069 可在 lease 内再次复核版本/摘要后调用 CFAPI。
 - `replace(op_hex,target,staged_path,before:Option<&Evidence>,digest) -> Evidence`：调用前先持久 core local_intent。内部 stage 固定并再次在 oplock 保护中核对；平台日志绑定 OpId、目标、根物理身份及前后身份/摘要，sync 后才移动旧对象到独立 state，随后不覆盖发布。两段发布存在可恢复间隙；用户填入间隙时拒覆盖，旧内容/新stage/用户文件均保留。
 - `recover_publications() -> Vec<RecoveryOutcome>` 必须先于 core recovery 和同步；后像须身份及摘要同时匹配才 Published，原对象完整且目标不存在才 Restored；第三种内容 Blocked，损坏日志/路径/根身份错误报错且保留。`acknowledge_publication(op)` 仅在 core baseline 事务完成后清对应日志；preserved 原对象及快照由显式恢复/保留策略处理，不自动清除。
@@ -2299,6 +2300,7 @@ S222：同步根 `DisplayNameResource` 派生自绑定路径末级名称，`Icon
 ## S070 Windows 用户会话生产进程
 
 - `vaultsyncd-agent --config <JSON> [--login-stdin|--once]` 组装真实 HTTP/store/core/Windows；凭据来自 current-user WinCred，GUI 不参与同步。配置和实际命令见 `docs/operations/windows-agent.md`。`--once` 不代表所有 pending 已完成；后台轮询复用原 OpId、续传与调度状态。
+- S234：本地发现由原生通知/周期补扫驱动，普通核验按64项、8 MiB或40ms的文件间预算推进，单文件内每256 KiB检查退出；`--once`也只推进有界批次，不代表内容全部核验。核验、扫描和恢复观察共用一个阻塞任务槽；未完成的本地核验计入unknown，不提前驱动完整模式补齐。通知与定时核对不改变删除/发布所需的持久证明。
 - 恢复顺序：SID mutex/state 独占锁先于 DB；平台 publication → 实际存在的受控 release → 应用所有权可证明的 Move/Import → core ControlledApply → 新同步。应用 namespace 恢复核对固定动作、物理身份、generation/hash、目标不覆盖，并在短事务一起写 baseline、完成意图及解除该动作依赖；未知/失败/歧义意图停写。
 - client 0010 的 `agent_evidence` 保存不可变物理内容证据，`agent_versions` 保存固定版本 pin，`agent_actions` 保存原 Op 规格及 ACK；baseline/local/remote/queue 仍是各自当前状态唯一事实来源。新版升级有备份，旧 v9 writer 在写前拒绝；derived event spec 可由持久 received_changes 重建。
 - namespace 与内容发现共用单次健康 metadata scan。收到完整确认删除时 `WindowsFiles::quarantine` 只把同一真实对象保留到内部状态；dirty 内容不被替换。目录删除需真实 subtree token 且前后固定快照与已知子树一致。历史自 ACK/旧事件不重新安装用户已移动或删除的文件。dirty 等待本身上传协调是 Pending，不作永久 halted。
@@ -2319,6 +2321,7 @@ S222：同步根 `DisplayNameResource` 派生自绑定路径末级名称，`Icon
 
 - `api/local-ipc.schema.json` 1.2 提供 21 项 `CommandName` 闭集：状态/订阅、绑定列举/创建/暂停/恢复/解绑/模式、问题列举与重试、文件下载/释放、恢复包导出、连接读取/设置/登录/登出、Vault/历史/回收站列举与恢复。`CommandParameters` 由 `crates/local-ipc::commands::validate` 按命令复核必填项、拒绝多余参数、非规范身份、相对路径、越界文本和非规范修订；副作用仍由执行器复核，不能只信界面。`ManagementResult` 按命令只填实际结果；稳定错误码为 `invalid_argument`/`not_found`/`blocked`/`unavailable`/`unauthenticated`/`conflict`/`internal`，同步原因仍放在 `Problem.code`。
 - `GetStatusResult.snapshot_version` 为进程身份加单调计数；`subscribe_status(after_version)` 长轮询推送全量快照，进程变化或游标丢失立即返回全量，不追加增量算法。`Problem` 聚合 pending/事件/意图/传输/通知/管理恢复的真实持久原因，`retry_problem` 只恢复已持久操作并在问题已消失时幂等返回。
+- S234：只有存在等待中的状态订阅才每250ms刷新；GetStatus按需读取，同时到达且尚未开始读取的请求可合并。内容不变保持snapshot_version，桌面跳过相同版本的状态替换。启动/文件通知/补扫尚未完成时计入现有unknown，不能据旧指纹显示同步完成；不改变wire/schema。
 - `apps/agent/src/runtime.rs` 以 SQLite `agent_connection` 和 `bindings` 为权威加载连接/绑定，允许未登录启动；管理命令进入单 mailbox 串行执行，创建/解绑/模式切换/连接切换与同步生命周期交错时重新核对执行门。登录凭据只写 current-user Credential Manager，状态/结果/日志不含 token 或口令。`FullMaterializer` 从持久 mode 取值，真实读取固定内容并核对代际/身份/摘要；恢复包导出使用不覆盖的安全目录/文件句柄。完整模式任务只在本地发现完成且无未决 pending/intent 后补齐证据，避免离线上传或删除竞争被误判。
 - `crates/client-store` 迁移 0011 增加无凭据 `agent_connection(singleton,server_id,server_url,ca_file)`；10→11 升级保留未确认内容与队列、生成备份、拒绝旧 writer，初始建库包含该表。
 - `GET /v1/vaults/{vault}/entries/{entry}/history` 与 `GET /v1/vaults/{vault}/trash` 需要 Vault 授权，按稳定身份 `after` 分页、最多 100 项，返回 `RecoveryPage`；未知/重复参数 400、越权 403、条目不存在 404。回收站恢复事件携带提交后的 revision、parent、version、hash、size。`api/openapi.yaml` 与 `packages/api-client` 同步生成；`packages/local-ipc-types` 导出 1.2 类型和解码器。

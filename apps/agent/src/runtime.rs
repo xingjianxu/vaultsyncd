@@ -250,8 +250,16 @@ async fn run_mode(
     let (commands, mut requests) = mpsc::channel::<crate::ipc::CommandRequest>(8);
     let (problem_updates, problems) = watch::channel(Vec::new());
     let (offline_updates, offline) = watch::channel(runtime.offline());
-    let ipc =
-        crate::ipc::start(db.clone(), commands, connections, problems, offline).map_err(error)?;
+    let (verifying_updates, verifying) = watch::channel(runtime.verifying());
+    let ipc = crate::ipc::start(
+        db.clone(),
+        commands,
+        connections,
+        problems,
+        offline,
+        verifying,
+    )
+    .map_err(error)?;
     eprintln!(
         "event=management-ready configured={}",
         runtime.config.bindings.len()
@@ -298,6 +306,7 @@ async fn run_mode(
         }
         runtime.retry_completed_bindings().await;
         offline_updates.send_if_modified(|previous| update(previous, runtime.offline()));
+        verifying_updates.send_if_modified(|previous| update(previous, runtime.verifying()));
         let (startup, cycles) = runtime.problems();
         let projected = crate::issue_projection::sync(&db, &runtime.config, &startup, &cycles)
             .await
@@ -392,6 +401,29 @@ impl Runtime {
                 .then_some(*binding)
         }));
         offline
+    }
+
+    fn verifying(&self) -> HashSet<BindingId> {
+        let mut verifying: HashSet<_> = self
+            .servers
+            .values()
+            .flat_map(|worker| {
+                worker
+                    .report
+                    .borrow()
+                    .verifying
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        verifying.extend(self.assignments.iter().filter_map(|(binding, server)| {
+            self.servers
+                .get(server)
+                .is_none_or(|worker| worker.task_finished())
+                .then_some(*binding)
+        }));
+        verifying
     }
 
     fn problems(&self) -> (HashMap<BindingId, Problem>, HashMap<BindingId, Problem>) {

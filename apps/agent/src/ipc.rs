@@ -5,7 +5,10 @@ mod tests;
 use rand_core::{OsRng, RngCore};
 use std::{
     io,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
@@ -21,12 +24,62 @@ pub(crate) struct CommandRequest {
     pub reply: oneshot::Sender<Response>,
 }
 struct Hub {
-    state: Mutex<(u64, Option<GetStatusResult>)>,
-    updates: watch::Sender<u64>,
+    state: Mutex<SnapshotState>,
+    requests: AtomicU64,
+    updates: watch::Sender<Option<Result<GetStatusResult, PortError>>>,
+    waiters: watch::Sender<usize>,
     instance: String,
     connections: watch::Receiver<Vec<ConnectionInfo>>,
     problems: watch::Receiver<Vec<Problem>>,
     offline: watch::Receiver<std::collections::HashSet<BindingId>>,
+    verifying: watch::Receiver<std::collections::HashSet<BindingId>>,
+    #[cfg(test)]
+    reads: AtomicU64,
+}
+#[derive(Default)]
+struct SnapshotState {
+    version: u64,
+    value: Option<GetStatusResult>,
+    read_through: u64,
+    result: Option<Result<GetStatusResult, PortError>>,
+}
+impl Hub {
+    fn new(
+        connections: watch::Receiver<Vec<ConnectionInfo>>,
+        problems: watch::Receiver<Vec<Problem>>,
+        offline: watch::Receiver<std::collections::HashSet<BindingId>>,
+        verifying: watch::Receiver<std::collections::HashSet<BindingId>>,
+    ) -> Self {
+        let mut nonce = [0; 16];
+        OsRng.fill_bytes(&mut nonce);
+        Self {
+            state: Mutex::new(SnapshotState::default()),
+            requests: AtomicU64::new(0),
+            updates: watch::channel(None).0,
+            waiters: watch::channel(0).0,
+            instance: nonce.iter().map(|b| format!("{b:02x}")).collect(),
+            connections,
+            problems,
+            offline,
+            verifying,
+            #[cfg(test)]
+            reads: AtomicU64::new(0),
+        }
+    }
+}
+// watch's synchronous update makes registration and cancellation atomic even when
+// the caller is dropped at an await point. No detached cleanup task can race a new waiter.
+struct StatusWaiter<'a>(&'a Hub);
+impl<'a> StatusWaiter<'a> {
+    fn new(hub: &'a Hub) -> Self {
+        hub.waiters.send_modify(|count| *count += 1);
+        Self(hub)
+    }
+}
+impl Drop for StatusWaiter<'_> {
+    fn drop(&mut self) {
+        self.0.waiters.send_modify(|count| *count -= 1);
+    }
 }
 
 pub(crate) fn start(
@@ -35,18 +88,9 @@ pub(crate) fn start(
     connections: watch::Receiver<Vec<ConnectionInfo>>,
     problems: watch::Receiver<Vec<Problem>>,
     offline: watch::Receiver<std::collections::HashSet<BindingId>>,
+    verifying: watch::Receiver<std::collections::HashSet<BindingId>>,
 ) -> io::Result<Server> {
-    let (updates, _) = watch::channel(0);
-    let mut nonce = [0; 16];
-    OsRng.fill_bytes(&mut nonce);
-    let hub = Arc::new(Hub {
-        state: Mutex::new((0, None)),
-        connections,
-        problems,
-        offline,
-        updates,
-        instance: nonce.iter().map(|b| format!("{b:02x}")).collect(),
-    });
+    let hub = Arc::new(Hub::new(connections, problems, offline, verifying));
     let server = Server::bind(Endpoint::current("vaultsyncd-agent")?, {
         let db = db.clone();
         let hub = hub.clone();
@@ -88,27 +132,15 @@ pub(crate) fn start(
                     request.command.name,
                     CommandName::GetStatus | CommandName::SubscribeStatus
                 ) {
-                    let mut receiver = hub.updates.subscribe();
-                    let result = snapshot(&db, &hub).await;
                     let result = if request.command.name == CommandName::SubscribeStatus {
                         let after = request
                             .command
                             .parameters
                             .as_ref()
                             .and_then(|p| p.after_version.as_ref());
-                        if result
-                            .as_ref()
-                            .is_ok_and(|s| s.snapshot_version.as_ref() == after)
-                        {
-                            let _ =
-                                tokio::time::timeout(Duration::from_secs(3), receiver.changed())
-                                    .await;
-                            snapshot(&db, &hub).await
-                        } else {
-                            result
-                        }
+                        subscribe_status(&db, &hub, after).await
                     } else {
-                        result
+                        snapshot(&db, &hub).await
                     };
                     return Ok(match result {
                         Ok(s) => Response::ok(request.request_id, s),
@@ -141,21 +173,72 @@ pub(crate) fn start(
             }
         }
     })?;
-    tokio::spawn(refresh(db, Arc::downgrade(&hub)));
+    tokio::spawn(refresh(db, Arc::downgrade(&hub), hub.waiters.subscribe()));
     Ok(server)
 }
-async fn refresh(db: Arc<Database>, hub: Weak<Hub>) {
+async fn refresh(db: Arc<Database>, hub: Weak<Hub>, mut demand: watch::Receiver<usize>) {
     loop {
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if demand.wait_for(|count| *count != 0).await.is_err() {
+            break;
+        }
+        // While idle there is no timer and no SQLite read. Cancellation can also
+        // interrupt an in-flight refresh, including a wait for the snapshot mutex.
+        tokio::select! {
+            biased;
+            _ = demand.wait_for(|count| *count == 0) => continue,
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {},
+        }
         let Some(hub) = hub.upgrade() else { break };
-        // A failed read never publishes a green replacement; next query receives the real failure.
-        let _ = snapshot(&db, &hub).await;
+        tokio::select! {
+            biased;
+            _ = demand.wait_for(|count| *count == 0) => {},
+            _ = snapshot(&db, &hub) => {},
+        }
+    }
+}
+async fn subscribe_status(
+    db: &Database,
+    hub: &Hub,
+    after: Option<&String>,
+) -> Result<GetStatusResult, PortError> {
+    // Register before the initial read; a publication between that read and
+    // waiting must not be lost. Only matching-version long polls demand refreshes.
+    let mut updates = hub.updates.subscribe();
+    let current = snapshot(db, hub).await?;
+    if current.snapshot_version.as_ref() != after {
+        return Ok(current);
+    }
+    let waited = {
+        let _waiter = StatusWaiter::new(hub);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let latest = updates.borrow_and_update().clone();
+                match latest {
+                    Some(Err(error)) => return Err(error),
+                    Some(Ok(value)) if value.snapshot_version.as_ref() != after => {
+                        return Ok(value);
+                    }
+                    _ => {}
+                }
+                updates
+                    .changed()
+                    .await
+                    .map_err(|_| PortError::protocol("status publisher stopped"))?;
+            }
+        })
+        .await
+    };
+    match waited {
+        Ok(result) => result,
+        // Stop demanding periodic reads before the final, fresh timeout response.
+        Err(_) => snapshot(db, hub).await,
     }
 }
 async fn binding_statuses(
     db: &Database,
     info: &mut [BindingInfo],
     offline: &std::collections::HashSet<BindingId>,
+    verifying: &std::collections::HashSet<BindingId>,
 ) -> Result<Vec<BindingStatus>, PortError> {
     let mut bindings = Vec::with_capacity(info.len());
     for b in info {
@@ -168,6 +251,9 @@ async fn binding_statuses(
         b.detached = s.detached;
         if offline.contains(&binding) {
             s.offline += 1;
+        }
+        if verifying.contains(&binding) {
+            s.unknown += 1;
         }
         bindings.push(BindingStatus {
             binding_id: b.binding_id.clone(),
@@ -192,11 +278,64 @@ async fn binding_statuses(
     Ok(bindings)
 }
 async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError> {
-    // Serialize refresh/query so an older observation cannot overwrite a newer published version.
+    // Keep the declared MSRV without depending on the newer Atomic::try_update.
+    let mut previous = hub.requests.load(Ordering::SeqCst);
+    let request = loop {
+        let next = previous
+            .checked_add(1)
+            .ok_or_else(|| PortError::protocol("status request sequence exhausted"))?;
+        match hub
+            .requests
+            .compare_exchange_weak(previous, next, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => break next,
+            Err(current) => previous = current,
+        }
+    };
     let mut state = hub.state.lock().await;
+    if state.read_through >= request {
+        return state
+            .result
+            .as_ref()
+            .expect("completed status read")
+            .clone();
+    }
+    // Only requests registered BEFORE this observation starts can share its result.
+    // A later request may follow a committed write, even while this read is in flight;
+    // it must get a new read, never a time-based or previously published cache.
+    let read_through = hub.requests.load(Ordering::SeqCst);
+    #[cfg(test)]
+    hub.reads.fetch_add(1, Ordering::SeqCst);
+    let result = read_snapshot(db, hub).await.and_then(|mut value| {
+        if state.value.as_ref() != Some(&value) {
+            state.version = state
+                .version
+                .checked_add(1)
+                .ok_or_else(|| PortError::protocol("status version exhausted"))?;
+            state.value = Some(value.clone());
+        }
+        value.snapshot_version = Some(format!("{}:{}", hub.instance, state.version));
+        Ok(value)
+    });
+    state.read_through = read_through;
+    state.result = Some(result.clone());
+    // Errors wake existing subscriptions too, rather than leaving a successful
+    // cached value visible until their timeout. Recovery republishes the real state.
+    hub.updates.send_if_modified(|latest| {
+        if latest.as_ref() == Some(&result) {
+            false
+        } else {
+            *latest = Some(result.clone());
+            true
+        }
+    });
+    result
+}
+async fn read_snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError> {
     let mut info = crate::management::binding_list(db).await?;
     let offline = hub.offline.borrow().clone();
-    let bindings = binding_statuses(db, &mut info, &offline).await?;
+    let verifying = hub.verifying.borrow().clone();
+    let bindings = binding_statuses(db, &mut info, &offline, &verifying).await?;
     let mut problems = crate::management::problems(db, None).await?;
     for problem in hub.problems.borrow().iter() {
         if !problems
@@ -209,7 +348,7 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
     let notices = crate::management_notices::list(db).await?;
     let connections = hub.connections.borrow().clone();
     let connection = (connections.len() == 1).then(|| connections[0].clone());
-    let mut value = GetStatusResult {
+    Ok(GetStatusResult {
         agent_version: env!("CARGO_PKG_VERSION").into(),
         ipc_protocol: version::supported(),
         bindings: Some(bindings),
@@ -222,17 +361,7 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
             notices: Some(notices),
             ..Default::default()
         }),
-    };
-    if state.1.as_ref() != Some(&value) {
-        state.0 = state
-            .0
-            .checked_add(1)
-            .ok_or_else(|| PortError::protocol("status version exhausted"))?;
-        state.1 = Some(value.clone());
-        hub.updates.send_replace(state.0);
-    }
-    value.snapshot_version = Some(format!("{}:{}", hub.instance, state.0));
-    Ok(value)
+    })
 }
 pub(crate) fn management_response(
     request: &Request,

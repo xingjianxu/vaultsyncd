@@ -86,16 +86,9 @@ async fn new_binding_without_import_proof_is_unknown() {
         username: None,
     }]);
     let (_problems, problems) = watch::channel(Vec::new());
-    let (updates, _) = watch::channel(0);
     let (_offline, offline) = watch::channel(std::collections::HashSet::new());
-    let hub = Hub {
-        state: Mutex::new((0, None)),
-        updates,
-        instance: "test".into(),
-        connections,
-        problems,
-        offline,
-    };
+    let (_verifying, verifying) = watch::channel(std::collections::HashSet::new());
+    let hub = Hub::new(connections, problems, offline, verifying);
     let result = snapshot(&db, &hub).await.unwrap();
     let row = &result.bindings.unwrap()[0];
     assert_eq!(row.unknown, "1");
@@ -166,7 +159,16 @@ async fn snapshot_failure_is_explicit_and_version_checks_precede_store_reads() {
     }]);
     let (_problems, problems) = watch::channel(Vec::new());
     let (_offline, offline) = watch::channel(std::collections::HashSet::new());
-    let server = start(db.clone(), commands, connections, problems, offline).unwrap();
+    let (_verifying, verifying) = watch::channel(std::collections::HashSet::new());
+    let server = start(
+        db.clone(),
+        commands,
+        connections,
+        problems,
+        offline,
+        verifying,
+    )
+    .unwrap();
     let endpoint = Endpoint::current("vaultsyncd-agent").unwrap();
     let mut request = Request {
         request_id: "actual-snapshot".into(),
@@ -441,7 +443,7 @@ async fn control_changes_during_status_read_do_not_restore_detached_management_r
         let mut info = crate::management::binding_list(&db).await.unwrap();
         assert_ne!(info[0].paused, paused);
         controls.set_paused(binding, paused).await.unwrap();
-        let states = binding_statuses(&db, &mut info, &Default::default())
+        let states = binding_statuses(&db, &mut info, &Default::default(), &Default::default())
             .await
             .unwrap();
         assert_eq!(states[0].paused, paused);
@@ -451,7 +453,7 @@ async fn control_changes_during_status_read_do_not_restore_detached_management_r
     let mut info = crate::management::binding_list(&db).await.unwrap();
     assert!(!info[0].detached);
     controls.unbind_keep_data(binding).await.unwrap();
-    let states = binding_statuses(&db, &mut info, &Default::default())
+    let states = binding_statuses(&db, &mut info, &Default::default(), &Default::default())
         .await
         .unwrap();
     assert!(states[0].detached && states[0].paused);
@@ -510,4 +512,381 @@ async fn control_changes_during_status_read_do_not_restore_detached_management_r
             Err(error) => panic!("cannot clean this test's closed database: {error}"),
         }
     }
+}
+
+struct StatusFixture {
+    path: std::path::PathBuf,
+    db: Arc<Database>,
+    hub: Arc<Hub>,
+    binding: BindingId,
+    verifying: watch::Sender<std::collections::HashSet<BindingId>>,
+    refresher: tokio::task::JoinHandle<()>,
+}
+impl StatusFixture {
+    async fn new() -> Self {
+        use vaultsyncd_client_store::bindings::{NewBinding, SyncMode, insert_binding};
+        use vaultsyncd_domain::{
+            ids::{DeviceId, ServerId, VaultId},
+            version::ServerEpoch,
+        };
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "s234-status-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let db = Arc::new(Database::open(path.join("state.sqlite")).await.unwrap());
+        let binding = BindingId::from_bytes([61; 16]);
+        let mut tx = db.begin_write().await.unwrap();
+        insert_binding(
+            &mut tx,
+            &NewBinding {
+                id: binding,
+                server: ServerId::from_bytes([62; 16]),
+                device: DeviceId::from_bytes([63; 16]),
+                vault: VaultId::from_bytes([64; 16]),
+                local_path: "C:/s234/local".into(),
+                cache_path: "C:/s234/cache".into(),
+                mode: SyncMode::OnDemand,
+                rules_version: "1".into(),
+                server_epoch: ServerEpoch::new(1).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO baseline_entries(binding_id,entry_id,name,kind,revision) VALUES (?,?,'','directory',1)")
+            .bind(binding.as_bytes().as_slice()).bind([65u8;16].as_slice())
+            .execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let (_, connections) = watch::channel(Vec::new());
+        let (_, problems) = watch::channel(Vec::new());
+        let (_, offline) = watch::channel(Default::default());
+        let (verifying, verifying_rx) = watch::channel(Default::default());
+        let hub = Arc::new(Hub::new(connections, problems, offline, verifying_rx));
+        let refresher = tokio::spawn(refresh(
+            db.clone(),
+            Arc::downgrade(&hub),
+            hub.waiters.subscribe(),
+        ));
+        Self {
+            path,
+            db,
+            hub,
+            binding,
+            verifying,
+            refresher,
+        }
+    }
+    fn subscribe(
+        &self,
+        after: Option<String>,
+    ) -> tokio::task::JoinHandle<Result<GetStatusResult, PortError>> {
+        let db = self.db.clone();
+        let hub = self.hub.clone();
+        tokio::spawn(async move { subscribe_status(&db, &hub, after.as_ref()).await })
+    }
+    async fn waiters(&self, count: usize) {
+        let mut demand = self.hub.waiters.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), demand.wait_for(|n| *n == count))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    async fn close(self) {
+        self.refresher.abort();
+        let _ = self.refresher.await;
+        drop(self.hub);
+        self.db.pool().close().await;
+        drop(self.db);
+        for attempt in 0..100 {
+            match std::fs::remove_dir_all(&self.path) {
+                Ok(()) => return,
+                Err(_) if attempt < 99 => tokio::time::sleep(Duration::from_millis(20)).await,
+                Err(error) => panic!("cannot clean status fixture: {error}"),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn status_without_consumers_does_not_aggregate_or_reuse_completed_cache() {
+    let f = StatusFixture::new().await;
+    tokio::time::sleep(Duration::from_millis(550)).await;
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), 0);
+    let first = snapshot(&f.db, &f.hub).await.unwrap();
+    assert!(first.bindings.as_ref().unwrap()[0].synchronized);
+    tokio::time::sleep(Duration::from_millis(550)).await;
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), 1);
+    let controls = vaultsyncd_agent_core::bindings::control::BindingControls::new(f.db.clone());
+    controls.set_paused(f.binding, true).await.unwrap();
+    let second = snapshot(&f.db, &f.hub).await.unwrap();
+    assert!(second.bindings.as_ref().unwrap()[0].paused);
+    assert!(
+        second
+            .management
+            .as_ref()
+            .unwrap()
+            .bindings
+            .as_ref()
+            .unwrap()[0]
+            .paused
+    );
+    assert_ne!(first.snapshot_version, second.snapshot_version);
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), 2);
+    drop(controls);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn status_concurrent_queued_reads_share_one_fresh_observation() {
+    let f = StatusFixture::new().await;
+    let guard = f.hub.state.lock().await;
+    let mut requests = Vec::new();
+    for _ in 0..8 {
+        let db = f.db.clone();
+        let hub = f.hub.clone();
+        requests.push(tokio::spawn(async move { snapshot(&db, &hub).await }));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while f.hub.requests.load(Ordering::SeqCst) != 8 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // Cancellation of the first registered request cannot strand the remaining batch.
+    let cancelled = requests.remove(0);
+    cancelled.abort();
+    assert!(cancelled.await.unwrap_err().is_cancelled());
+    drop(guard);
+    for request in requests {
+        let result = request.await.unwrap().unwrap();
+        assert_eq!(
+            result.snapshot_version,
+            Some(format!("{}:1", f.hub.instance))
+        );
+    }
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), 1);
+    // A subsequent request is a new observation, even if the value stays identical.
+    snapshot(&f.db, &f.hub).await.unwrap();
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), 2);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn status_subscribers_share_refresh_and_verification_prevents_green() {
+    let f = StatusFixture::new().await;
+    let first = snapshot(&f.db, &f.hub).await.unwrap();
+    let a = f.subscribe(first.snapshot_version.clone());
+    let b = f.subscribe(first.snapshot_version.clone());
+    f.waiters(2).await;
+    let reads = f.hub.reads.load(Ordering::SeqCst);
+    f.verifying.send_replace([f.binding].into_iter().collect());
+    let a = tokio::time::timeout(Duration::from_secs(2), a)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let b = tokio::time::timeout(Duration::from_secs(2), b)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(a, b);
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), reads + 1);
+    let state = &a.bindings.as_ref().unwrap()[0];
+    assert!(!state.synchronized);
+    assert_eq!(state.unknown, "1");
+    assert_eq!(a.snapshot_version, Some(format!("{}:2", f.hub.instance)));
+    f.waiters(0).await;
+    f.verifying.send_replace(Default::default());
+    let complete = snapshot(&f.db, &f.hub).await.unwrap();
+    assert!(complete.bindings.as_ref().unwrap()[0].synchronized);
+    assert_eq!(
+        complete.snapshot_version,
+        Some(format!("{}:3", f.hub.instance))
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn status_cancellation_stops_refresh_and_new_waiter_is_not_lost() {
+    let f = StatusFixture::new().await;
+    let current = snapshot(&f.db, &f.hub).await.unwrap();
+    let a = f.subscribe(current.snapshot_version.clone());
+    let b = f.subscribe(current.snapshot_version.clone());
+    f.waiters(2).await;
+    a.abort();
+    assert!(a.await.unwrap_err().is_cancelled());
+    f.waiters(1).await;
+    let before = f.hub.reads.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(550)).await;
+    assert!(f.hub.reads.load(Ordering::SeqCst) > before);
+    b.abort();
+    assert!(b.await.unwrap_err().is_cancelled());
+    f.waiters(0).await;
+    drop(f.hub.state.lock().await);
+    let idle = f.hub.reads.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(550)).await;
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), idle);
+    // Rapid remove/add must not let an old asynchronous cleanup stop a new subscriber.
+    for _ in 0..8 {
+        let waiting = f.subscribe(current.snapshot_version.clone());
+        f.waiters(1).await;
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+    }
+    let waiting = f.subscribe(current.snapshot_version.clone());
+    f.waiters(1).await;
+    f.verifying.send_replace([f.binding].into_iter().collect());
+    let changed = tokio::time::timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_ne!(changed.snapshot_version, current.snapshot_version);
+    f.waiters(0).await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn status_subscription_timeout_and_restart_return_complete_state() {
+    let f = StatusFixture::new().await;
+    let current = snapshot(&f.db, &f.hub).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let waiting = f.subscribe(current.snapshot_version.clone());
+    f.waiters(1).await;
+    let timeout = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(2900));
+    assert_eq!(timeout, current);
+    f.waiters(0).await;
+    let (_, connections) = watch::channel(Vec::new());
+    let (_, problems) = watch::channel(Vec::new());
+    let (_, offline) = watch::channel(Default::default());
+    let (_, verifying) = watch::channel(Default::default());
+    let restarted = Hub::new(connections, problems, offline, verifying);
+    let new = tokio::time::timeout(
+        Duration::from_secs(1),
+        subscribe_status(&f.db, &restarted, current.snapshot_version.as_ref()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_ne!(new.snapshot_version, current.snapshot_version);
+    assert_eq!(new.bindings, current.bindings);
+    assert_eq!(*restarted.waiters.borrow(), 0);
+    drop(restarted);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn status_read_errors_wake_subscribers_and_never_return_cached_green() {
+    let f = StatusFixture::new().await;
+    let current = snapshot(&f.db, &f.hub).await.unwrap();
+    let waiting = f.subscribe(current.snapshot_version.clone());
+    f.waiters(1).await;
+    sqlx::query("ALTER TABLE local_entries RENAME TO unavailable_entries")
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    assert!(snapshot(&f.db, &f.hub).await.is_err());
+    f.waiters(0).await;
+    sqlx::query("ALTER TABLE unavailable_entries RENAME TO local_entries")
+        .execute(f.db.pool())
+        .await
+        .unwrap();
+    let recovered = snapshot(&f.db, &f.hub).await.unwrap();
+    assert_eq!(recovered, current);
+    assert!(f.hub.updates.borrow().as_ref().unwrap().is_ok());
+    f.close().await;
+}
+
+#[tokio::test]
+async fn status_last_waiter_cancels_an_inflight_refresh() {
+    let f = StatusFixture::new().await;
+    let current = snapshot(&f.db, &f.hub).await.unwrap();
+    // Hold every real SQLite connection so the refresh is suspended inside a read,
+    // rather than merely between timer ticks. Cancellation must release its mutex.
+    let mut connections = Vec::new();
+    for _ in 0..f.db.pool().options().get_max_connections() {
+        connections.push(f.db.pool().acquire().await.unwrap());
+    }
+    let waiter = StatusWaiter::new(&f.hub);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while f.hub.reads.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(waiter);
+    drop(
+        tokio::time::timeout(Duration::from_secs(1), f.hub.state.lock())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(f.hub.updates.borrow().as_ref().unwrap(), &Ok(current));
+    let reads = f.hub.reads.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(550)).await;
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), reads);
+    drop(connections);
+    f.verifying.send_replace([f.binding].into_iter().collect());
+    assert!(!snapshot(&f.db, &f.hub).await.unwrap().bindings.unwrap()[0].synchronized);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn status_request_after_a_write_does_not_share_an_earlier_inflight_read() {
+    let f = StatusFixture::new().await;
+    let mut connections = Vec::new();
+    for _ in 0..f.db.pool().options().get_max_connections() {
+        connections.push(f.db.pool().acquire().await.unwrap());
+    }
+    let db = f.db.clone();
+    let hub = f.hub.clone();
+    let earlier = tokio::spawn(async move { snapshot(&db, &hub).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while f.hub.reads.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // The writer commits while the first observation is in progress. Requests
+    // arriving after its acknowledgement need their own observation boundary.
+    sqlx::query("INSERT INTO pending_ops(op_id,binding_id,kind) VALUES (?,?,'apply_remote')")
+        .bind([66u8; 16].as_slice())
+        .bind(f.binding.as_bytes().as_slice())
+        .execute(&mut *connections[0])
+        .await
+        .unwrap();
+    let db = f.db.clone();
+    let hub = f.hub.clone();
+    let later = tokio::spawn(async move { snapshot(&db, &hub).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while f.hub.requests.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(connections);
+    earlier.await.unwrap().unwrap();
+    let value = later.await.unwrap().unwrap();
+    assert_eq!(value.bindings.as_ref().unwrap()[0].pending, "1");
+    assert!(!value.bindings.as_ref().unwrap()[0].synchronized);
+    assert_eq!(f.hub.reads.load(Ordering::SeqCst), 2);
+    f.close().await;
 }

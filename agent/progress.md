@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **S234 in_progress（实现）**：用户批准执行修订方案并允许subagent，复用单卡落实扫描、内容核验/快照、状态查询及启动事件调度；不恢复旧五张计划或profile前置。工作树 `.worktrees/S234-startup-cpu`、分支 `perf/S234-startup-cpu`，基线67efec0，证据 `/data/vaultsyncd-dev/S234-startup-cpu-20261114/`。相关正确性验证与Windows原生回归后交付、合master清树；无服务端部署。
+
 当前 **S234 done（方案修订）**：按用户最新要求删除旧五张后续卡、依赖链及ready引用，改为直接基于代码分析的[解决方案](../docs/reports/performance.md#重新设计直接消除重复工作)：优化平方级扫描/恢复日志枚举与批量SQL/按需状态，再分离内容观察和快照，接入本地事件、轮转核验及有界启动队列。保留内容/身份/代际保护，取消独立profile/ETW/多轮基准门槛，只保留必要正确性与Windows原生回归。交接 [S234](tasks/S234.md)，初版28d00fb/5766fac及Git外证据保留追溯；在5b4ffa3基线上复核热点代码无变化。纯文档，无产品修改/构建/部署，S187已合并清理结果保持。方案无阻塞；下一ready无，原四张blocked保持。S234提取/旧五卡拒绝/残留引用清零、编号链接和diff检查通过，历史报告及其他任务进度保持；方案修订79b3598已直接本地提交master，提交后工作区干净。
 
 当前 **维护/合并（用户请求，2026-11-14）**：按用户要求合并 `.worktrees/S187-binding-identity`。冲突处理以 master 现行为准：master 的多服务器连接（S188—S191）已允许不同 ServerId 作为独立连接并存，原卡“已有绑定不得切换 Server ID”的 `CONNECTION_BINDING_MISMATCH` 拒绝已无触发条件，合并时不再恢复；保留并补测保存前远端复核诊断（`CONNECTION_SERVER_MISMATCH` → IPC blocked/非重试，仅输出两个规范 ServerId，URL/凭据/路径详情不进入提示）。S187 原卡用户现场根因未取得，本次不声称已修复。验证：`apps/agent/src/ipc.rs`、`management.rs` 与 master 无差异，新增身份提示与详情过滤单测。合并提交 `a8d654d`，因 master 在此期间推进到 S234 再次合并为 `e998e7e` 并 ff 合 master；`.worktrees/S187-binding-identity` 与本地分支 `fix/S187-binding-identity` 已清理，客体临时测试目录 `C:\vaultsyncd-lab\S187` 已删除。

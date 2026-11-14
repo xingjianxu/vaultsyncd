@@ -60,12 +60,12 @@ async fn stage(
 pub(crate) async fn discover(
     worker: &Worker,
     scan: &HashMap<String, EntryMetadata>,
+    rows: &HashMap<String, SnapshotEntry>,
 ) -> Result<bool, PortError> {
     let local = &worker.importer.local;
     let rules = crate::exclusions::Rules::load(&local.db, local.binding).await?;
     let controls = vaultsyncd_agent_core::bindings::control::BindingControls::new(local.db.clone());
-    let rows = metadata(&worker.importer).await?;
-    let locations = paths(&rows)?;
+    let locations = paths(rows)?;
     let by_path: HashMap<_, _> = locations
         .iter()
         .map(|(id, p)| (p.clone(), id.clone()))
@@ -85,15 +85,16 @@ pub(crate) async fn discover(
     });
     'known: for row in order {
         let from = &locations[&row.entry_id];
+        // Present entries require no namespace operation or policy adoption.
+        if scan.contains_key(from) {
+            continue;
+        }
         let known_entry = EntryId::from_hex(&row.entry_id).map_err(error)?;
         if controls
             .execution_gate(local.binding, Some(known_entry))
             .await?
             != vaultsyncd_agent_core::bindings::control::ExecutionGate::Ready
         {
-            continue;
-        }
-        if scan.contains_key(from) {
             continue;
         }
         let entry = EntryId::from_hex(&row.entry_id).map_err(error)?;
@@ -146,7 +147,7 @@ pub(crate) async fn discover(
                         }
                     }
                 }
-                Some(directory_token(worker, row, &rows, &locations).await?)
+                Some(directory_token(worker, row, rows, &locations).await?)
             } else {
                 None
             };
@@ -243,6 +244,9 @@ async fn enqueue(
     let op = OpId::from_hex(&request.op_id).map_err(error)?;
     let spec = serde_json::json!({"kind":"namespace","request":request,"path":path,"from":from,"before":before,"physical":identity});
     let mut tx = local.db.begin_write().await.map_err(error)?;
+    if crate::work::resync_fenced(&mut tx, local.binding).await? {
+        return Err(error("binding rebuild started during namespace discovery"));
+    }
     queue::enqueue(
         &mut tx,
         &NewPendingOp {

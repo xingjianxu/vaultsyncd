@@ -1,8 +1,12 @@
 //! Windows content adapters. No path-based replacement bypasses the platform protection.
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
+use tokio::sync::Semaphore;
 use vaultsyncd_agent_core::{
     executor::apply::{ContentObservation, ControlledLocal},
     ports::local::*,
@@ -24,6 +28,26 @@ use vaultsyncd_transfer::ports::{PortError, PortFuture, SnapshotSource, TempCont
 pub(crate) fn error(e: impl std::fmt::Debug) -> PortError {
     PortError::rejected("LOCAL_CHANGED", format!("{e:?}"))
 }
+
+static BLOCKING: Semaphore = Semaphore::const_new(1);
+
+/// Bound native scans, opens, recovery and content observation across all bindings.
+/// The closure owns the permit: cancelling its async waiter cannot admit a second job
+/// while the first is still running. Never call this recursively from a blocking job.
+pub(crate) async fn blocking<T, F>(work: F) -> Result<T, PortError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, PortError> + Send + 'static,
+{
+    let permit = BLOCKING.acquire().await.map_err(error)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(error)?
+}
+
 /// One binding's native adapter and immutable observation registry.
 pub struct Local {
     pub(crate) native: Arc<WindowsFiles>,
@@ -40,26 +64,36 @@ impl Local {
         db: Arc<Database>,
         binding: BindingId,
     ) -> Result<Self, PortError> {
-        let native = Arc::new(WindowsFiles::open(vault, cache).map_err(error)?);
         let rows:Vec<(String,String)>=sqlx::query_as("SELECT path,evidence FROM agent_evidence e WHERE binding_id=? AND generation=(SELECT max(generation) FROM agent_evidence x WHERE x.binding_id=e.binding_id AND x.path=e.path)").bind(binding.as_bytes().as_slice()).fetch_all(db.pool()).await.map_err(error)?;
-        for (path, text) in rows {
-            native
-                .seed(&path, serde_json::from_str(&text).map_err(error)?)
-                .map_err(error)?;
-        }
+        let vault_path = vault.to_owned();
+        let cache_path = cache.to_owned();
+        let (native, vault) = blocking(move || {
+            let native = Arc::new(WindowsFiles::open(&vault_path, &cache_path).map_err(error)?);
+            for (path, text) in rows {
+                native
+                    .seed(&path, serde_json::from_str(&text).map_err(error)?)
+                    .map_err(error)?;
+            }
+            let vault = Arc::new(VaultHandle::open(&vault_path).map_err(error)?);
+            Ok((native, vault))
+        })
+        .await?;
         Ok(Self {
             native,
-            vault: Arc::new(VaultHandle::open(vault).map_err(error)?),
+            vault,
             cache: cache.into(),
             db,
             binding,
         })
     }
-    pub(crate) async fn observe_snapshot(
-        &self,
-        path: &str,
-    ) -> Result<Option<Arc<FixedSnapshot>>, PortError> {
-        let meta = self.vault.inspect(path);
+    /// Recover a moved object's generation by physical identity, never trusting
+    /// metadata as content evidence. The native observation must still hash it.
+    async fn prior_evidence(&self, path: &str) -> Result<Option<Evidence>, PortError> {
+        let vault = self.vault.clone();
+        let owned_path = path.to_owned();
+        let meta = blocking(move || Ok(vault.inspect(&owned_path))).await?;
+        // Native observation below decides whether inspection failure is a healthy
+        // absence or an error; failed metadata inspection alone never proves deletion.
         if let Ok(meta) = &meta {
             if !meta.directory {
                 let mut physical = meta.identity.volume.to_le_bytes().to_vec();
@@ -69,45 +103,148 @@ impl Local {
                     let digest: [u8; 32] = digest
                         .try_into()
                         .map_err(|_| error("invalid persisted fingerprint"))?;
-                    self.native
-                        .seed_if_unknown(
-                            path,
-                            Evidence {
-                                generation: generation as u64,
-                                volume: meta.identity.volume,
-                                file: meta.identity.file,
-                                digest,
-                                size: meta.size,
-                            },
-                        )
-                        .map_err(error)?;
+                    return Ok(Some(Evidence {
+                        generation: Generation::from_db_integer(generation)
+                            .map_err(error)?
+                            .get(),
+                        volume: meta.identity.volume,
+                        file: meta.identity.file,
+                        digest,
+                        size: meta.size,
+                    }));
                 }
             }
         }
-        match self.native.observe(path).map_err(error)? {
+        Ok(None)
+    }
+
+    async fn observe_native<T, F>(&self, path: &str, observe: F) -> Result<T, PortError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&WindowsFiles, &str) -> Result<T, PortError> + Send + 'static,
+    {
+        let prior = self.prior_evidence(path).await?;
+        let native = self.native.clone();
+        let path = path.to_owned();
+        blocking(move || {
+            if let Some(prior) = prior {
+                native.seed_if_unknown(&path, prior).map_err(error)?;
+            }
+            observe(&native, &path)
+        })
+        .await
+    }
+
+    /// Observe protected, fully hashed contents without creating a fixed snapshot.
+    pub(crate) async fn observe_evidence(&self, path: &str) -> Result<Option<Evidence>, PortError> {
+        self.observe_evidence_cancellable(path, Arc::new(AtomicBool::new(false)))
+            .await
+    }
+
+    /// Share the worker's shutdown flag with native hashing. Interrupted observations
+    /// return cancellation without persisting evidence or synthesizing absence.
+    pub(crate) async fn observe_evidence_cancellable(
+        &self,
+        path: &str,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<Option<Evidence>, PortError> {
+        if cancel.load(Ordering::Acquire) {
+            return Err(PortError::Cancelled);
+        }
+        let worker_cancel = cancel.clone();
+        let observed = self
+            .observe_native(path, move |native, path| {
+                if worker_cancel.load(Ordering::Acquire) {
+                    return Err(PortError::Cancelled);
+                }
+                native
+                    .observe_evidence_cancellable(path, &worker_cancel)
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::Interrupted
+                            && worker_cancel.load(Ordering::Acquire)
+                        {
+                            PortError::Cancelled
+                        } else {
+                            error(e)
+                        }
+                    })
+            })
+            .await?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(PortError::Cancelled);
+        }
+        if let Some(evidence) = &observed {
+            persist_evidence(&self.db, self.binding, path, evidence).await?;
+        }
+        Ok(observed)
+    }
+
+    pub(crate) async fn observe_snapshot(
+        &self,
+        path: &str,
+    ) -> Result<Option<Arc<FixedSnapshot>>, PortError> {
+        match self
+            .observe_native(path, |native, path| native.observe(path).map_err(error))
+            .await?
+        {
             ObservedContent::Absent => Ok(None),
             ObservedContent::File(snapshot) => {
-                let evidence = snapshot.evidence();
-                let text = serde_json::to_string(evidence).map_err(error)?;
-                let mut tx = self.db.begin_write().await.map_err(error)?;
-                let old:Option<String>=sqlx::query_scalar("SELECT evidence FROM agent_evidence WHERE binding_id=? AND path=? AND generation=?").bind(self.binding.as_bytes().as_slice()).bind(path).bind(evidence.generation as i64).fetch_optional(&mut *tx).await.map_err(error)?;
-                if old.as_ref().is_some_and(|v| v != &text) {
-                    return Err(error("immutable observation changed"));
-                }
-                sqlx::query("INSERT OR IGNORE INTO agent_evidence VALUES(?,?,?,?)")
-                    .bind(self.binding.as_bytes().as_slice())
-                    .bind(path)
-                    .bind(evidence.generation as i64)
-                    .bind(text)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(error)?;
-                tx.commit().await.map_err(error)?;
+                persist_evidence(&self.db, self.binding, path, snapshot.evidence()).await?;
                 Ok(Some(snapshot))
             }
         }
     }
 }
+
+async fn persist_evidence(
+    db: &Database,
+    binding: BindingId,
+    path: &str,
+    evidence: &Evidence,
+) -> Result<(), PortError> {
+    let text = serde_json::to_string(evidence).map_err(error)?;
+    let generation = Generation::new(evidence.generation)
+        .map_err(error)?
+        .to_db_integer();
+    let read = || {
+        sqlx::query_scalar::<_, String>(
+            "SELECT evidence FROM agent_evidence WHERE binding_id=? AND path=? AND generation=?",
+        )
+        .bind(binding.as_bytes().as_slice())
+        .bind(path)
+        .bind(generation)
+    };
+    if let Some(old) = read().fetch_optional(db.pool()).await.map_err(error)? {
+        return same_evidence(&old, &text);
+    }
+    // Another observer may have inserted this generation since the unlocked read.
+    // Recheck under the short write transaction before inserting immutable evidence.
+    let mut tx = db.begin_write().await.map_err(error)?;
+    if let Some(old) = read().fetch_optional(&mut *tx).await.map_err(error)? {
+        same_evidence(&old, &text)?;
+    } else {
+        sqlx::query(
+            "INSERT INTO agent_evidence(binding_id,path,generation,evidence) VALUES(?,?,?,?)",
+        )
+        .bind(binding.as_bytes().as_slice())
+        .bind(path)
+        .bind(generation)
+        .bind(text)
+        .execute(&mut *tx)
+        .await
+        .map_err(error)?;
+    }
+    tx.commit().await.map_err(error)?;
+    Ok(())
+}
+
+fn same_evidence(old: &str, observed: &str) -> Result<(), PortError> {
+    if old != observed {
+        return Err(error("immutable observation changed"));
+    }
+    Ok(())
+}
+
 pub(crate) fn facts(path: RelativePath, e: &Evidence) -> Result<LocalFacts, PortError> {
     Ok(LocalFacts {
         path,
@@ -243,7 +380,9 @@ impl LocalPort for Local {
     fn observe(&self, path: &RelativePath) -> PortFuture<'_, Result<LocalFacts, PortError>> {
         let path = path.clone();
         Box::pin(async move {
-            let meta = self.vault.inspect(&path.to_string()).map_err(error)?;
+            let vault = self.vault.clone();
+            let owned_path = path.to_string();
+            let meta = blocking(move || vault.inspect(&owned_path).map_err(error)).await?;
             if meta.directory {
                 let mut physical = meta.identity.volume.to_le_bytes().to_vec();
                 physical.extend(meta.identity.file);
@@ -256,11 +395,11 @@ impl LocalPort for Local {
                     usage: Usage::Idle,
                 });
             }
-            let snapshot = self
-                .observe_snapshot(&path.to_string())
+            let evidence = self
+                .observe_evidence(&path.to_string())
                 .await?
                 .ok_or_else(|| error("missing local file"))?;
-            facts(path, snapshot.evidence())
+            facts(path, &evidence)
         })
     }
     fn snapshot(
@@ -346,3 +485,7 @@ impl TempContent for DiskTemp {
         Box::pin(async move { self.open()?.discard().await })
     }
 }
+
+#[cfg(test)]
+#[path = "local_startup_tests.rs"]
+mod startup_tests;

@@ -4,6 +4,7 @@ use crate::{
     local::{DiskTemp, error},
 };
 use rand_core::{OsRng, RngCore};
+use sqlx::Row;
 use std::{collections::HashMap, sync::Arc};
 use vaultsyncd_agent_core::{
     adapters::ClientStorePorts,
@@ -22,15 +23,17 @@ use vaultsyncd_agent_core::{
     },
 };
 use vaultsyncd_client_store::{
+    db::Database,
     entries::{self, BaselineEntry, EntryKind, LocalEntry},
     queue::{self, NewPendingOp},
 };
 use vaultsyncd_domain::{
-    ids::{EntryId, OpId, VersionId},
+    ids::{BindingId, EntryId, OpId, VersionId},
     state::{Dirty, Residency},
     version::{Generation, Revision},
 };
 use vaultsyncd_fs_common::path::RelativePath;
+use vaultsyncd_platform_windows::files::{EntryMetadata, controlled::Evidence};
 use vaultsyncd_protocol::generated::{EntryKind as WireKind, SnapshotEntry};
 use vaultsyncd_transfer::{download::DownloadOptions, ports::VersionPin};
 
@@ -72,65 +75,200 @@ pub(crate) async fn metadata(
 pub(crate) async fn local_metadata(
     local: &crate::local::Local,
 ) -> Result<HashMap<String, SnapshotEntry>, PortError> {
-    let db = &local.db;
-    let binding = local.binding;
-    let ids: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT entry_id FROM baseline_entries WHERE binding_id=? AND deleted=0",
-    )
-    .bind(binding.as_bytes().as_slice())
-    .fetch_all(db.pool())
-    .await
-    .map_err(error)?;
+    metadata_rows(&local.db, local.binding).await
+}
+
+/// Immutable namespace view for one complete scan and its remaining audit batches.
+/// Every mutation still rechecks the persisted baseline inside its write transaction.
+pub(crate) struct AuditSnapshot {
+    pub(crate) rows: HashMap<String, SnapshotEntry>,
+    pub(crate) by_path: HashMap<String, String>,
+    rules: Arc<crate::exclusions::Rules>,
+}
+
+async fn metadata_rows(
+    db: &Database,
+    binding: BindingId,
+) -> Result<HashMap<String, SnapshotEntry>, PortError> {
+    let mut tx = db.pool().begin().await.map_err(error)?;
+    let mut after: Vec<u8> = Vec::new();
     let mut result = HashMap::new();
-    let mut conn = db.pool().acquire().await.map_err(error)?;
-    for raw in ids {
-        let id = EntryId::from_bytes(raw.try_into().map_err(|_| error("bad entry id"))?);
-        let base = entries::baseline_entry(&mut conn, binding, id)
-            .await
-            .map_err(error)?
-            .ok_or_else(|| error("baseline missing"))?;
-        let version = if let Some(version) = base.content_version {
-            let row: Option<(Vec<u8>, i64)> = sqlx::query_as(
-                "SELECT digest,size FROM agent_versions WHERE binding_id=? AND version_id=?",
-            )
-            .bind(binding.as_bytes().as_slice())
-            .bind(version.as_bytes().as_slice())
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(error)?;
-            row
-        } else {
-            None
-        };
-        result.insert(
-            id.to_string(),
-            SnapshotEntry {
-                modified_at: None,
-                entry_id: id.to_string(),
-                parent_id: base.parent.map(|p| p.to_string()),
-                name: base.name,
-                kind: if base.kind == EntryKind::File {
-                    WireKind::File
-                } else {
-                    WireKind::Directory
+    loop {
+        let page = sqlx::query("SELECT b.entry_id,b.parent_entry_id,b.name,b.kind,b.revision,b.content_version_id,v.digest,v.size FROM baseline_entries b LEFT JOIN agent_versions v ON v.binding_id=b.binding_id AND v.version_id=b.content_version_id WHERE b.binding_id=? AND b.deleted=0 AND b.entry_id>? ORDER BY b.entry_id LIMIT 256")
+            .bind(binding.as_bytes().as_slice()).bind(&after)
+            .fetch_all(&mut *tx).await.map_err(error)?;
+        if page.is_empty() {
+            break;
+        }
+        for row in page {
+            after = row.try_get("entry_id").map_err(error)?;
+            let id = EntryId::from_bytes(
+                after
+                    .clone()
+                    .try_into()
+                    .map_err(|_| error("bad entry id"))?,
+            );
+            let parent: Option<Vec<u8>> = row.try_get("parent_entry_id").map_err(error)?;
+            let version: Option<Vec<u8>> = row.try_get("content_version_id").map_err(error)?;
+            let digest: Option<Vec<u8>> = row.try_get("digest").map_err(error)?;
+            let size: Option<i64> = row.try_get("size").map_err(error)?;
+            let kind: String = row.try_get("kind").map_err(error)?;
+            let name: String = row.try_get("name").map_err(error)?;
+            if parent.is_none() && (kind != "directory" || !name.is_empty()) {
+                return Err(error("invalid baseline root"));
+            }
+            result.insert(
+                id.to_string(),
+                SnapshotEntry {
+                    modified_at: None,
+                    entry_id: id.to_string(),
+                    parent_id: parent
+                        .map(|v| {
+                            v.try_into()
+                                .map(EntryId::from_bytes)
+                                .map(|id| id.to_string())
+                                .map_err(|_| error("invalid parent id"))
+                        })
+                        .transpose()?,
+                    name,
+                    kind: match kind.as_str() {
+                        "file" => WireKind::File,
+                        "directory" => WireKind::Directory,
+                        _ => return Err(error("invalid entry kind")),
+                    },
+                    revision: Revision::from_db_integer(row.try_get("revision").map_err(error)?)
+                        .map_err(error)?
+                        .to_string(),
+                    version_id: version
+                        .map(|v| {
+                            v.try_into()
+                                .map(VersionId::from_bytes)
+                                .map(|id| id.to_string())
+                                .map_err(|_| error("invalid version id"))
+                        })
+                        .transpose()?,
+                    hash: digest
+                        .map(|v| {
+                            v.try_into()
+                                .map(|h| vaultsyncd_transfer::hash::to_hex(&h))
+                                .map_err(|_| error("invalid immutable digest"))
+                        })
+                        .transpose()?,
+                    size: size
+                        .map(|size| {
+                            u64::try_from(size)
+                                .map(|n| n.to_string())
+                                .map_err(|_| error("invalid immutable size"))
+                        })
+                        .transpose()?,
                 },
-                revision: base.revision.to_string(),
-                version_id: base.content_version.map(|v| v.to_string()),
-                hash: version
-                    .as_ref()
-                    .map(|(h, _)| {
-                        h.clone()
-                            .try_into()
-                            .map(|h| vaultsyncd_transfer::hash::to_hex(&h))
-                            .map_err(|_| error("invalid immutable digest"))
-                    })
-                    .transpose()?,
-                size: version.map(|(_, s)| s.to_string()),
-            },
-        );
+            );
+        }
     }
+    tx.commit().await.map_err(error)?;
     Ok(result)
 }
+
+pub(crate) async fn resync_fenced(
+    conn: &mut sqlx::SqliteConnection,
+    binding: BindingId,
+) -> Result<bool, PortError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM binding_resyncs WHERE binding_id=? AND complete=0)",
+    )
+    .bind(binding.as_bytes().as_slice())
+    .fetch_one(conn)
+    .await
+    .map_err(error)
+}
+
+fn resident_file(meta: &EntryMetadata) -> bool {
+    !meta.directory
+        && !meta
+            .cloud
+            .as_ref()
+            .is_some_and(|cloud| cloud.on_disk < meta.size)
+}
+
+async fn unsettled_entry(
+    conn: &mut sqlx::SqliteConnection,
+    binding: BindingId,
+    entry: EntryId,
+) -> Result<bool, PortError> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pending_ops WHERE binding_id=? AND entry_id=?) OR EXISTS(SELECT 1 FROM local_intents WHERE binding_id=? AND entry_id=?)")
+        .bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice())
+        .bind(binding.as_bytes().as_slice()).bind(entry.as_bytes().as_slice())
+        .fetch_one(conn).await.map_err(error)
+}
+
+/// Only a complete observation of this same baseline may mark an idle entry clean.
+/// No write transaction is needed for identical state or a still-pending operation.
+async fn record_clean_observation(
+    db: &Database,
+    binding: BindingId,
+    row: &SnapshotEntry,
+    observed: &Evidence,
+    rules_version: &str,
+) -> Result<(), PortError> {
+    let expected = baseline(row)?;
+    let desired = LocalEntry {
+        entry: expected.entry,
+        generation: Generation::new(observed.generation).map_err(error)?,
+        dirty: Dirty::Clean,
+        residency: Residency::Materialized,
+        fingerprint: Some(observed.digest.to_vec()),
+        file_identity: Some(observed.identity()),
+    };
+    let mut conn = db.pool().acquire().await.map_err(error)?;
+    let old = entries::local_entry(&mut conn, binding, expected.entry)
+        .await
+        .map_err(error)?;
+    if old.as_ref() == Some(&desired)
+        || old
+            .as_ref()
+            .is_some_and(|old| matches!(old.dirty, Dirty::Snapshotting | Dirty::AwaitingCommit))
+        || unsettled_entry(&mut conn, binding, expected.entry).await?
+    {
+        return Ok(());
+    }
+    drop(conn);
+    let mut tx = db.begin_write().await.map_err(error)?;
+    if resync_fenced(&mut tx, binding).await? {
+        return Err(error("binding rebuild started during observation"));
+    }
+    let (version, paused, detached): (String, bool, bool) = sqlx::query_as("SELECT b.rules_version,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?")
+        .bind(binding.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
+    if version != rules_version || paused || detached {
+        return Err(error("binding controls changed during observation"));
+    }
+    if unsettled_entry(&mut tx, binding, expected.entry).await? {
+        return Ok(());
+    }
+    let current = entries::local_entry(&mut tx, binding, expected.entry)
+        .await
+        .map_err(error)?;
+    let current_baseline = entries::baseline_entry(&mut tx, binding, expected.entry)
+        .await
+        .map_err(error)?;
+    if current != old
+        || current_baseline.as_ref() != Some(&expected)
+        || current
+            .as_ref()
+            .is_some_and(|current| current.generation > desired.generation)
+    {
+        return Err(error(
+            "baseline or local generation changed during observation",
+        ));
+    }
+    if current.as_ref() != Some(&desired) {
+        entries::put_local(&mut tx, binding, &desired)
+            .await
+            .map_err(error)?;
+    }
+    tx.commit().await.map_err(error)?;
+    Ok(())
+}
+
 pub(crate) fn paths(
     rows: &HashMap<String, SnapshotEntry>,
 ) -> Result<HashMap<String, String>, PortError> {
@@ -348,6 +486,8 @@ pub(crate) async fn load_spec(
 pub(crate) struct Worker {
     pub importer: Arc<Importer>,
     pub uploads: Arc<UploadActionHandler>,
+    pub discovery: Arc<crate::discovery::Discovery>,
+    pub cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
 #[derive(Clone)]
 pub(crate) struct Dispatch(pub Arc<std::sync::OnceLock<Worker>>);
@@ -522,46 +662,131 @@ impl Worker {
         Ok(())
     }
     pub async fn discover(&self) -> Result<(), PortError> {
+        let mut plan = self.discovery.plan.lock().await;
+        let Some((scan_due, hints)) = self.discovery.due(&plan) else {
+            return Ok(());
+        };
         let local = &self.importer.local;
-        let rules = crate::exclusions::Rules::load(&local.db, local.binding).await?;
-        let rows = metadata(&self.importer).await?;
-        let by_id = paths(&rows)?;
-        let by_path: HashMap<_, _> = by_id
-            .iter()
-            .map(|(id, path)| (path.clone(), id.clone()))
-            .collect();
-        let report = local.vault.scan();
-        if !report.permits_missing_comparison() {
-            return Err(error("incomplete local scan"));
-        }
-        let scan: HashMap<_, _> = report
-            .entries
-            .into_iter()
-            .map(|item| {
-                Ok((
-                    item.path,
-                    item.metadata.ok_or_else(|| error("missing metadata"))?,
-                ))
-            })
-            .collect::<Result<_, PortError>>()?;
-        if crate::namespace::discover(self, &scan).await? {
+        let mut conn = local.db.pool().acquire().await.map_err(error)?;
+        if resync_fenced(&mut conn, local.binding).await? {
+            plan.force = true;
             return Ok(());
         }
-        for (path, meta) in scan {
-            if !rules.includes(&path, meta.directory)? {
+        drop(conn);
+        let rules = match plan.snapshot.as_ref().filter(|_| !scan_due) {
+            Some(snapshot) => snapshot.rules.clone(),
+            None => Arc::new(crate::exclusions::Rules::load(&local.db, local.binding).await?),
+        };
+        if !rules.active || self.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
+        if scan_due || plan.snapshot.is_none() {
+            // Do not clear the obligation when enumeration or namespace reconciliation fails.
+            plan.force = true;
+            let rows = metadata(&self.importer).await?;
+            let by_path = paths(&rows)?
+                .into_iter()
+                .map(|(id, path)| (path, id))
+                .collect();
+            let vault = local.vault.clone();
+            let report = crate::local::blocking(move || Ok(vault.scan())).await?;
+            if !report.permits_missing_comparison() {
+                return Err(error("incomplete local scan"));
+            }
+            let scan: HashMap<_, _> = report
+                .entries
+                .into_iter()
+                .map(|item| {
+                    Ok((
+                        item.path,
+                        item.metadata.ok_or_else(|| error("missing metadata"))?,
+                    ))
+                })
+                .collect::<Result<_, PortError>>()?;
+            if crate::namespace::discover(self, &scan, &rows).await? {
+                return Ok(());
+            }
+            plan.install(scan, &hints);
+            plan.snapshot = Some(Arc::new(AuditSnapshot {
+                rows,
+                by_path,
+                rules: rules.clone(),
+            }));
+        }
+        let snapshot = plan
+            .snapshot
+            .as_ref()
+            .ok_or_else(|| error("missing audit snapshot"))?
+            .clone();
+        let rows = &snapshot.rows;
+        let by_path = &snapshot.by_path;
+        let started = std::time::Instant::now();
+        let mut bytes = 0u64;
+        let mut count = 0;
+        let mut failure = None;
+        while let Some(path) = plan.next().map(str::to_owned) {
+            if count >= 64
+                || bytes >= 8 * 1024 * 1024
+                || (count > 0 && started.elapsed() >= std::time::Duration::from_millis(40))
+            {
+                break;
+            }
+            if self.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            count += 1;
+            // Rules::load also adopts the default policy over the whole binding.
+            // Read the current control/version per candidate, and only reload when changed.
+            let (version, paused, detached): (String, bool, bool) = sqlx::query_as("SELECT b.rules_version,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?")
+                .bind(local.binding.as_bytes().as_slice()).fetch_one(local.db.pool()).await.map_err(error)?;
+            if paused || detached {
+                break;
+            }
+            if version != rules.version {
+                plan.force = true;
+                break;
+            }
+            if !rules.active {
+                break;
+            }
+            if !rules.includes(&path, false)? {
+                plan.complete();
                 continue;
             }
-            if meta.directory {
-                continue;
+            // A queued complete file may have been released since the last scan.
+            // Inspect without recall before entering the content observer.
+            let vault = local.vault.clone();
+            let candidate = path.clone();
+            match crate::local::blocking(move || vault.inspect(&candidate).map_err(error)).await {
+                Ok(meta) if !resident_file(&meta) => {
+                    plan.complete();
+                    continue;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    failure = Some(e);
+                    plan.force = true;
+                    plan.complete();
+                    continue;
+                }
             }
-            if meta.cloud.as_ref().is_some_and(|c| c.on_disk < meta.size) {
-                continue;
-            }
-            let snapshot = local
-                .observe_snapshot(&path)
-                .await?
-                .ok_or_else(|| error("file vanished during scan"))?;
-            let e = snapshot.evidence();
+            let e = match local
+                .observe_evidence_cancellable(&path, self.cancelled.clone())
+                .await
+            {
+                Ok(Some(e)) => e,
+                result => {
+                    // A locked/vanished file cannot starve all other paths. Keep a full rescan due.
+                    failure = Some(match result {
+                        Err(e) => e,
+                        _ => error("file vanished during scan"),
+                    });
+                    plan.force = true;
+                    plan.complete();
+                    continue;
+                }
+            };
+            bytes = bytes.saturating_add(e.size);
             let known = by_path.get(&path).and_then(|id| rows.get(id));
             let id = known
                 .map(|r| EntryId::from_hex(&r.entry_id).map_err(error))
@@ -570,22 +795,14 @@ impl Worker {
                 if row.hash.as_deref() == Some(&vaultsyncd_transfer::hash::to_hex(&e.digest))
                     && row.size.as_deref() == Some(&e.size.to_string())
                 {
-                    let mut tx = local.db.begin_write().await.map_err(error)?;
-                    entries::put_local(
-                        &mut tx,
-                        local.binding,
-                        &LocalEntry {
-                            entry: id.unwrap(),
-                            generation: Generation::new(e.generation).map_err(error)?,
-                            dirty: Dirty::Clean,
-                            residency: Residency::Materialized,
-                            fingerprint: Some(e.digest.to_vec()),
-                            file_identity: Some(e.identity()),
-                        },
-                    )
-                    .await
-                    .map_err(error)?;
-                    tx.commit().await.map_err(error)?;
+                    if let Err(e) =
+                        record_clean_observation(&local.db, local.binding, row, &e, &rules.version)
+                            .await
+                    {
+                        plan.force = true;
+                        return Err(e);
+                    }
+                    plan.complete();
                     continue;
                 }
             }
@@ -595,6 +812,10 @@ impl Worker {
             let parent = by_path
                 .get(parent_path)
                 .ok_or_else(|| error("new parent requires namespace reconciliation"))?;
+            let expected_parent = baseline(
+                rows.get(parent)
+                    .ok_or_else(|| error("missing audit parent"))?,
+            )?;
             let existing:Vec<String>=sqlx::query_scalar("SELECT a.specification FROM agent_actions a JOIN pending_ops p ON p.op_id=a.op_id WHERE p.binding_id=? AND p.kind IN ('upload_content','upload_new_entry')").bind(local.binding.as_bytes().as_slice()).fetch_all(local.db.pool()).await.map_err(error)?;
             if existing.iter().any(|s| {
                 serde_json::from_str::<serde_json::Value>(s)
@@ -603,12 +824,65 @@ impl Worker {
                         v["path"] == path && v["generation"].as_u64() == Some(e.generation)
                     })
             }) {
+                plan.complete();
                 continue;
             }
             let op = new_op();
             let value = serde_json::json!({"kind":"upload","path":path,"generation":e.generation,"parent":parent,"name":name,"new":known.is_none()});
             let text = serde_json::to_string(&value).map_err(error)?;
+            let mut conn = local.db.pool().acquire().await.map_err(error)?;
+            let old = match id {
+                Some(id) => entries::local_entry(&mut conn, local.binding, id)
+                    .await
+                    .map_err(error)?,
+                None => None,
+            };
+            drop(conn);
             let mut tx = local.db.begin_write().await.map_err(error)?;
+            if resync_fenced(&mut tx, local.binding).await? {
+                plan.force = true;
+                return Err(error("binding rebuild started during discovery"));
+            }
+            let (version, paused, detached): (String, bool, bool) = sqlx::query_as("SELECT b.rules_version,coalesce(c.paused,0),coalesce(c.detached,0) FROM bindings b LEFT JOIN binding_controls c ON c.binding_id=b.id WHERE b.id=?")
+                .bind(local.binding.as_bytes().as_slice()).fetch_one(&mut *tx).await.map_err(error)?;
+            if version != rules.version || paused || detached {
+                plan.force = true;
+                return Err(error("binding controls changed during discovery"));
+            }
+            let current_parent =
+                entries::baseline_entry(&mut tx, local.binding, expected_parent.entry)
+                    .await
+                    .map_err(error)?;
+            if current_parent.as_ref() != Some(&expected_parent) {
+                plan.force = true;
+                return Err(error("parent baseline changed during discovery"));
+            }
+            if let Some(row) = known {
+                let expected = baseline(row)?;
+                let current = entries::baseline_entry(&mut tx, local.binding, expected.entry)
+                    .await
+                    .map_err(error)?;
+                let current_local = entries::local_entry(&mut tx, local.binding, expected.entry)
+                    .await
+                    .map_err(error)?;
+                if current.as_ref() != Some(&expected)
+                    || current_local != old
+                    || current_local
+                        .as_ref()
+                        .is_some_and(|state| state.generation.get() > e.generation)
+                {
+                    plan.force = true;
+                    return Err(error("baseline or generation changed during discovery"));
+                }
+            } else {
+                let now_known: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM baseline_entries WHERE binding_id=? AND parent_entry_id=? AND name=? AND deleted=0)")
+                    .bind(local.binding.as_bytes().as_slice()).bind(expected_parent.entry.as_bytes().as_slice()).bind(name)
+                    .fetch_one(&mut *tx).await.map_err(error)?;
+                if now_known {
+                    plan.force = true;
+                    return Err(error("new entry acquired a baseline during discovery"));
+                }
+            }
             if let Some(id) = id {
                 entries::put_local(
                     &mut tx,
@@ -659,8 +933,17 @@ impl Worker {
                 .await
                 .map_err(error)?;
             tx.commit().await.map_err(error)?;
+            plan.complete();
         }
-        self.restore_uploads().await
+        if failure.is_some() {
+            plan.force = true;
+        }
+        self.restore_uploads().await?;
+        self.discovery.finished(&plan);
+        match failure {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
     async fn apply(&self, op: OpId, cancel: &Cancellation) -> Result<(), PortError> {
         let local = &self.importer.local;
@@ -1022,3 +1305,7 @@ impl ScheduledHandler for Worker {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "work_startup_tests.rs"]
+mod startup_tests;

@@ -8,6 +8,8 @@ use crate::files::VaultHandle;
 use std::{os::windows::fs::OpenOptionsExt, path::PathBuf, process::Command, sync::Arc};
 use vaultsyncd_domain::ids::{BindingId, VaultId};
 
+mod evidence;
+
 #[test]
 fn native_application_namespace_keeps_content_and_refuses_collisions() {
     let lab = Lab::new();
@@ -65,8 +67,11 @@ struct Lab {
 }
 impl Lab {
     fn new() -> Self {
-        let base = PathBuf::from(format!(
-            "C:/vaultsyncd-lab/s068/run-{}-{}",
+        let root = std::env::var_os("VAULTSYNCD_CONTROLLED_TEST_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:/vaultsyncd-lab/s068"));
+        let base = root.join(format!(
+            "run-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -207,6 +212,7 @@ fn native_protection_rejects_all_shared_writers_readers_and_mapping_after_file_c
             .open(lab.path())
             .unwrap();
         assert!(lab.files.observe("a.txt").is_err());
+        assert!(lab.files.observe_evidence("a.txt").is_err());
         assert!(
             lab.files
                 .replace(
@@ -273,6 +279,10 @@ fn native_protection_rejects_all_shared_writers_readers_and_mapping_after_file_c
         lab.files.observe("a.txt").is_err(),
         "live writable section must refuse even after the creating file handle closes"
     );
+    assert!(
+        lab.files.observe_evidence("a.txt").is_err(),
+        "read-only evidence must also refuse a live writable section"
+    );
     unsafe {
         std::ptr::copy_nonoverlapping(b"mapped!!".as_ptr(), view.cast::<u8>(), 8);
         assert_ne!(UnmapViewOfFile(view), 0);
@@ -327,10 +337,17 @@ fn native_publish_preserves_old_object_and_verifies_stage() {
         std::fs::read(lab.base.join(format!("state/preserved-{OP}.data"))).unwrap(),
         b"original"
     );
+    let snapshots = evidence::snapshot_names(&lab);
     assert_eq!(
         lab.files.recover_publications().unwrap(),
         vec![RecoveryOutcome::Published(OP.into())]
     );
+    assert_eq!(evidence::snapshot_names(&lab), snapshots);
+    assert_eq!(
+        lab.files.recover_publications().unwrap(),
+        vec![RecoveryOutcome::Published(OP.into())]
+    );
+    assert_eq!(evidence::snapshot_names(&lab), snapshots);
     lab.files.acknowledge_publication(OP).unwrap();
     assert!(lab.files.recover_publications().unwrap().is_empty());
 }
@@ -449,6 +466,7 @@ fn native_fully_materialized_file_rebinds_to_new_entry_but_partial_placeholder_d
     adapter.create("b.txt", old, 4096, false).unwrap();
     let placeholder = adapter.inspect("b.txt").unwrap();
     assert_eq!(placeholder.cloud.as_ref().unwrap().on_disk, 0);
+    assert!(lab.files.observe_evidence("b.txt").is_err());
     assert!(
         adapter
             .adopt_complete("b.txt", &placeholder, new, digest(b"x"), 4096)
@@ -499,7 +517,9 @@ fn native_restart_after_each_publication_boundary_preserves_saved_bytes() {
             .status()
             .unwrap();
         assert_eq!(status.code(), Some(code));
+        let snapshots = evidence::snapshot_names(&lab);
         let result = lab.files.recover_publications().unwrap();
+        assert_eq!(evidence::snapshot_names(&lab), snapshots);
         if point == "preserved" {
             assert_eq!(result, vec![RecoveryOutcome::Restored(OP.into())]);
             assert_eq!(std::fs::read(lab.path()).unwrap(), b"original");
@@ -546,6 +566,7 @@ fn native_retry_same_operation_and_restarted_generation_keep_new_saved_content()
             digest(b"remote-new"),
         )
         .unwrap();
+    let snapshots = evidence::snapshot_names(&lab);
     assert_eq!(
         lab.files
             .replace(
@@ -558,6 +579,7 @@ fn native_retry_same_operation_and_restarted_generation_keep_new_saved_content()
             .unwrap(),
         new
     );
+    assert_eq!(evidence::snapshot_names(&lab), snapshots);
     std::fs::write(lab.path(), b"saved-later").unwrap();
     assert!(
         lab.files

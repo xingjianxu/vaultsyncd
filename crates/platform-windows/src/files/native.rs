@@ -2,6 +2,7 @@
 //! FILE_OPEN_REPARSE_POINT. An in-place junction change cannot redirect traversal.
 
 use super::{CloudMetadata, EntryMetadata, FileIdentity, ScanEntry, ScanHealth, ScanReport};
+use std::cmp::Ordering as NameOrdering;
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -209,8 +210,13 @@ pub(crate) fn open_child_shared(
     Ok(file)
 }
 
+struct DirectoryEntry {
+    name: String,
+    file: [u8; 16],
+}
+
 // FILE_ID_EXTD_DIR_INFO has a fixed 88-byte header followed by UTF-16 FileName.
-fn directory_names(file: &File) -> io::Result<Vec<String>> {
+fn directory_entries(file: &File) -> io::Result<Vec<DirectoryEntry>> {
     let mut buffer = vec![0u64; 8192];
     let mut names = vec![];
     let mut restart = true;
@@ -254,7 +260,10 @@ fn directory_names(file: &File) -> io::Result<Vec<String>> {
                 .collect();
             let name = String::from_utf16(&wide).map_err(invalid)?;
             if name != "." && name != ".." {
-                names.push(name);
+                names.push(DirectoryEntry {
+                    name,
+                    file: header[72..88].try_into().expect("sixteen bytes"),
+                });
             }
             if next == 0 {
                 break;
@@ -377,15 +386,102 @@ impl NameEquivalence for NativeNames {
     fn equivalent(&self, left: &str, right: &str) -> bool {
         let left: Vec<u16> = left.encode_utf16().collect();
         let right: Vec<u16> = right.encode_utf16().collect();
-        let (Ok(ll), Ok(rl)) = (left.len().try_into(), right.len().try_into()) else {
-            return true;
-        };
-        // Fail closed on API error (0): report a collision rather than permit overwrite.
-        matches!(
-            unsafe { CompareStringOrdinal(left.as_ptr(), ll, right.as_ptr(), rl, 1) },
-            0 | 2
+        // Fail closed on API errors: report a collision rather than permit overwrite.
+        !matches!(
+            compare_native_names(&left, &right),
+            Ok(NameOrdering::Less | NameOrdering::Greater)
         )
     }
+}
+
+fn compare_native_names(left: &[u16], right: &[u16]) -> io::Result<NameOrdering> {
+    let ll = left.len().try_into().map_err(invalid)?;
+    let rl = right.len().try_into().map_err(invalid)?;
+    match unsafe { CompareStringOrdinal(left.as_ptr(), ll, right.as_ptr(), rl, 1) } {
+        1 => Ok(NameOrdering::Less),
+        2 => Ok(NameOrdering::Equal),
+        3 => Ok(NameOrdering::Greater),
+        0 => Err(io::Error::last_os_error()),
+        _ => Err(invalid("unexpected native name comparison result")),
+    }
+}
+
+// Stable, fallible merge sort keeps the first enumerated spelling in each equivalence
+// group. Encode each name once, sort indices in O(N log N), then check only neighbors.
+// Do not substitute Equal on API failure inside an infallible sort: that could violate
+// its ordering contract or hide a collision. An error invalidates the entire listing.
+fn name_collision_flags(
+    names: &[impl AsRef<str>],
+    mut compare: impl FnMut(&[u16], &[u16]) -> io::Result<NameOrdering>,
+) -> io::Result<Vec<bool>> {
+    let wide: Vec<Vec<u16>> = names
+        .iter()
+        .map(|name| name.as_ref().encode_utf16().collect())
+        .collect();
+    let mut order: Vec<usize> = (0..names.len()).collect();
+    let mut merged = order.clone();
+    let mut width = 1;
+    while width < order.len() {
+        for start in (0..order.len()).step_by(width * 2) {
+            let middle = (start + width).min(order.len());
+            let end = (middle + width).min(order.len());
+            let (mut left, mut right) = (start, middle);
+            for slot in &mut merged[start..end] {
+                if left < middle
+                    && (right == end
+                        || compare(&wide[order[left]], &wide[order[right]])?
+                            != NameOrdering::Greater)
+                {
+                    *slot = order[left];
+                    left += 1;
+                } else {
+                    *slot = order[right];
+                    right += 1;
+                }
+            }
+        }
+        std::mem::swap(&mut order, &mut merged);
+        width *= 2;
+    }
+    let mut collisions = vec![false; names.len()];
+    for pair in order.windows(2) {
+        if compare(&wide[pair[0]], &wide[pair[1]])? == NameOrdering::Equal {
+            collisions[pair[1]] = true;
+        }
+    }
+    Ok(collisions)
+}
+
+fn publication_journal_name(name: &str) -> io::Result<bool> {
+    const PREFIX: &str = "publication-";
+    let Some((prefix, _)) = name.split_once('-') else {
+        return Ok(false);
+    };
+    let publication = if prefix.is_ascii() {
+        prefix.eq_ignore_ascii_case("publication")
+    } else {
+        // Ordinal aliases (for example a dotless i on Windows) must not hide a
+        // noncanonical journal. The boolean API also fails closed on compare errors.
+        NativeNames.equivalent(prefix, "publication")
+    };
+    if !publication {
+        return Ok(false);
+    }
+    let Some(tail) = name.strip_prefix(PREFIX) else {
+        return Err(invalid("noncanonical publication prefix"));
+    };
+    let (op, journal) = if let Some(op) = tail.strip_suffix(".json") {
+        (op, true)
+    } else if let Some(op) = tail.strip_suffix(".data") {
+        // Publication stages share the prefix, but are not recovery journals.
+        (op, false)
+    } else {
+        return Err(invalid("invalid publication suffix"));
+    };
+    if op.len() != 32 || !op.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(invalid("invalid publication operation identity"));
+    }
+    Ok(journal)
 }
 
 /// Pinned local vault and all of its ancestors. Only local drive paths are supported.
@@ -623,6 +719,62 @@ impl VaultHandle {
         self.walk(relative, false).map(|(_, meta)| meta)
     }
 
+    /// List root-level `publication-<32 hex digits>.json` recovery journals.
+    /// Enumerates the pinned root completely, then inspects only journal candidates;
+    /// ordinary snapshots, valid `.data` stages and unrelated subdirectories are not opened.
+    /// The caller must still protect and validate each journal when reading its contents.
+    ///
+    /// # Errors
+    /// Rejects incomplete enumeration, changed root or journal identities, inaccessible or
+    /// nonordinary journals, native name collisions and malformed publication-prefixed names.
+    pub fn publication_journals(&self) -> io::Result<Vec<String>> {
+        self.verify()?;
+        let mut candidates = Vec::new();
+        for entry in directory_entries(self.vault_file())? {
+            if publication_journal_name(&entry.name)
+                .map_err(|error| invalid(format!("{}: {error}", entry.name)))?
+            {
+                candidates.push(entry);
+            }
+        }
+        let names: Vec<_> = candidates.iter().map(|entry| entry.name.as_str()).collect();
+        let collisions = name_collision_flags(&names, compare_native_names)?;
+        let mut journals = Vec::with_capacity(candidates.len());
+        for (entry, collision) in candidates.into_iter().zip(collisions) {
+            if collision {
+                return Err(invalid(format!(
+                    "native journal name collision: {}",
+                    entry.name
+                )));
+            }
+            self.verify_publication_journal(&entry)?;
+            journals.push(entry.name);
+        }
+        self.verify()?;
+        Ok(journals)
+    }
+
+    fn verify_publication_journal(&self, entry: &DirectoryEntry) -> io::Result<()> {
+        let file = open_relative(self.vault_file(), &entry.name, false)?;
+        let meta = metadata(&file)?;
+        let expected = FileIdentity {
+            volume: self.identity.volume,
+            file: entry.file,
+        };
+        if meta.identity != expected
+            || meta.directory
+            || meta.links != 1
+            || meta.reparse_tag != 0
+            || meta.cloud.is_some()
+        {
+            return Err(invalid(format!(
+                "unsafe or changed publication journal: {}",
+                entry.name
+            )));
+        }
+        Ok(())
+    }
+
     /// Create a normal directory relative to pinned no-follow parents.
     /// An existing directory is accepted only after the same safety validation; files are never replaced.
     pub fn ensure_directory(&self, relative: &str) -> io::Result<EntryMetadata> {
@@ -724,27 +876,29 @@ impl VaultHandle {
             .as_ref()
             .and_then(|(pins, _)| pins.last())
             .unwrap_or_else(|| self.pins.last().expect("vault pin"));
-        let listing = match directory_names(directory) {
+        let listing: Vec<_> = match directory_entries(directory) {
+            Ok(value) => value.into_iter().map(|entry| entry.name).collect(),
+            Err(error) => {
+                record_error(report, relative, error);
+                return subdirectories;
+            }
+        };
+        let collisions = match name_collision_flags(&listing, compare_native_names) {
             Ok(value) => value,
             Err(error) => {
                 record_error(report, relative, error);
                 return subdirectories;
             }
         };
-        let mut names = Vec::new();
-        for name in listing {
+        for (name, collision) in listing.into_iter().zip(collisions) {
             let child = if relative.is_empty() {
                 name.clone()
             } else {
                 format!("{relative}/{name}")
             };
-            if names
-                .iter()
-                .any(|previous: &String| NativeNames.equivalent(previous, &name))
-            {
+            if collision {
                 record_error(report, &child, invalid("native name collision"));
             }
-            names.push(name);
             match self.walk(&child, false) {
                 Ok((_child_pins, meta)) => {
                     let issue = if !meta.directory && meta.links > 1 {

@@ -102,6 +102,286 @@ fn native_names_match_real_case_and_unicode_creation_without_normalization() {
 }
 
 #[test]
+fn native_sorted_name_collisions_match_ordinal_equivalence_and_keep_first_spelling() {
+    let mut names = vec![
+        "z.txt",
+        "Ä.txt",
+        "a.txt",
+        "é.txt",
+        "A.TXT",
+        "e\u{301}.txt",
+        "ä.TXT",
+        "Z.TXT",
+        "ß.txt",
+        "SS.TXT",
+        "σ.txt",
+        "ς.txt",
+        "Σ.TXT",
+        "I.txt",
+        "ı.TXT",
+        "😀.txt",
+        "a.txt",
+    ];
+    assert_eq!(
+        name_collision_flags(&Vec::<String>::new(), compare_native_names).unwrap(),
+        Vec::<bool>::new()
+    );
+    for _ in 0..names.len() {
+        for length in 1..=names.len() {
+            let names = &names[..length];
+            let expected: Vec<_> = names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    names[..index]
+                        .iter()
+                        .any(|previous| NativeNames.equivalent(previous, name))
+                })
+                .collect();
+            assert_eq!(
+                name_collision_flags(names, compare_native_names).unwrap(),
+                expected,
+                "{names:?}"
+            );
+        }
+        names.rotate_left(1);
+    }
+}
+
+#[test]
+fn native_name_collision_comparisons_are_bounded_and_errors_fail_closed() {
+    let names: Vec<_> = (0..1024)
+        .map(|index| format!("{:08x}.txt", (index * 397) % 1024))
+        .collect();
+    let mut calls = 0;
+    let collisions = name_collision_flags(&names, |left, right| {
+        calls += 1;
+        compare_native_names(left, right)
+    })
+    .unwrap();
+    assert!(collisions.iter().all(|collision| !collision));
+    // An operation-count bound, not a wall-clock/profile threshold: N log2(N) + N.
+    assert!(calls <= 1024 * 11, "{calls} comparisons");
+    // Two names require one sort comparison and one adjacent comparison. Either
+    // error must invalidate the result, never return a successful unique listing.
+    for failure_at in [1, 2] {
+        let mut calls = 0;
+        let error = name_collision_flags(&["a", "A"], |left, right| {
+            calls += 1;
+            if calls == failure_at {
+                Err(io::Error::from_raw_os_error(87))
+            } else {
+                compare_native_names(left, right)
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(87));
+    }
+}
+
+#[test]
+fn native_publication_name_filter_rejects_malformed_and_noncanonical_journals() {
+    let op = "0123456789abcdefABCDEF0123456789";
+    assert!(publication_journal_name(&format!("publication-{op}.json")).unwrap());
+    for name in [
+        format!("publication-{op}.data"),
+        format!("snapshot-{op}.data"),
+        format!("preserved-{op}.data"),
+        "unrelated".into(),
+    ] {
+        assert!(!publication_journal_name(&name).unwrap(), "{name}");
+    }
+    for name in [
+        "publication-bad.json".into(),
+        format!("publication-{}.json", "a".repeat(31)),
+        format!("publication-{}.json", "a".repeat(33)),
+        format!("publication-{}.json", "g".repeat(32)),
+        format!("publication-{op}.JSON"),
+        format!("Publication-{op}.json"),
+        format!("PUBLICATION-{op}.data"),
+        format!("publication-{op}.json.bak"),
+        format!("publication-{op}.json "),
+        format!("publication-{op}.json."),
+        format!("publication-{op}"),
+        "publication-bad.data".into(),
+        "publication-".into(),
+    ] {
+        assert!(publication_journal_name(&name).is_err(), "{name}");
+    }
+    let alias = format!("publıcation-{op}.json");
+    if NativeNames.equivalent("publıcation", "publication") {
+        assert!(publication_journal_name(&alias).is_err());
+    } else {
+        assert!(!publication_journal_name(&alias).unwrap());
+    }
+}
+
+#[test]
+fn native_publication_journals_and_scan_complete_multiple_enumeration_batches() {
+    let sandbox = Sandbox::new();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
+    assert!(vault.publication_journals().unwrap().is_empty());
+    // These FILE_ID_EXTD_DIR_INFO records exceed the enumeration buffer's 64 KiB.
+    for index in 0..512 {
+        std::fs::write(
+            sandbox.0.join(format!("snapshot-{index:032x}.data")),
+            b"kept",
+        )
+        .unwrap();
+    }
+    let journals: Vec<_> = [0u128, 0xabcde, u128::MAX]
+        .into_iter()
+        .map(|op| format!("publication-{op:032x}.json"))
+        .collect();
+    for name in &journals {
+        std::fs::write(
+            sandbox.0.join(name),
+            b"journal contents validated by caller",
+        )
+        .unwrap();
+    }
+    assert_eq!(directory_entries(vault.vault_file()).unwrap().len(), 515);
+    let mut actual = vault.publication_journals().unwrap();
+    actual.sort();
+    assert_eq!(actual, journals);
+    let report = vault.scan();
+    assert!(report.permits_missing_comparison(), "{:?}", report.entries);
+    assert_eq!(report.entries.len(), 515);
+}
+
+// Restore deny ACEs even when a negative assertion fails, so test data stays removable.
+struct DenyRead(PathBuf);
+impl DenyRead {
+    fn new(path: &Path) -> Self {
+        let result = Command::new("icacls")
+            .arg(path)
+            .args(["/deny", "*S-1-1-0:(RX)"])
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        Self(path.to_owned())
+    }
+}
+impl Drop for DenyRead {
+    fn drop(&mut self) {
+        let result = Command::new("icacls")
+            .arg(&self.0)
+            .args(["/remove:d", "*S-1-1-0"])
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+    }
+}
+
+#[test]
+fn native_publication_journals_skip_unrelated_entries_but_reject_denied_journals_and_root() {
+    let sandbox = Sandbox::new();
+    let op = "0123456789abcdef0123456789abcdef";
+    let journal = format!("publication-{op}.json");
+    let stage = format!("publication-{op}.data");
+    for name in [&journal, &stage, "snapshot.data"] {
+        std::fs::write(sandbox.0.join(name), b"kept").unwrap();
+    }
+    let nested = sandbox.0.join("unrelated");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("publication-bad.json"), b"not a root journal").unwrap();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
+    let _denied_snapshot = DenyRead::new(&sandbox.0.join("snapshot.data"));
+    let _denied_stage = DenyRead::new(&sandbox.0.join(stage));
+    let _denied_subdirectory = DenyRead::new(&nested);
+    assert!(vault.inspect("snapshot.data").is_err());
+    assert!(vault.inspect("unrelated").is_err());
+    assert_eq!(vault.publication_journals().unwrap(), vec![journal.clone()]);
+    let denied_journal = DenyRead::new(&sandbox.0.join(&journal));
+    assert_eq!(
+        vault.publication_journals().unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    drop(denied_journal);
+    let denied_root = DenyRead::new(&sandbox.0);
+    // I08/I15: an already-held handle does not authorize an empty successful result.
+    assert!(vault.publication_journals().is_err());
+    drop(denied_root);
+    assert_eq!(vault.publication_journals().unwrap(), vec![journal]);
+}
+
+#[test]
+fn native_publication_journals_reject_malformed_root_names_without_ignoring_them() {
+    let sandbox = Sandbox::new();
+    let vault = VaultHandle::open(&sandbox.0).unwrap();
+    for name in [
+        "publication-bad.json",
+        "publication-0123456789abcdef0123456789abcdef.JSON",
+        "Publication-0123456789abcdef0123456789abcdef.json",
+        "publication-0123456789abcdef0123456789abcdef.json.bak",
+        "publication-bad.data",
+    ] {
+        std::fs::write(sandbox.0.join(name), b"must remain visible").unwrap();
+        assert!(vault.publication_journals().is_err(), "{name}");
+        std::fs::remove_file(sandbox.0.join(name)).unwrap();
+    }
+    assert!(vault.publication_journals().unwrap().is_empty());
+}
+
+#[test]
+fn native_publication_journals_reject_directories_links_and_identity_changes() {
+    let sandbox = Sandbox::new();
+    let name = "publication-0123456789abcdef0123456789abcdef.json";
+    let path = sandbox.0.join(name);
+    let mut vault = VaultHandle::open(&sandbox.0).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(vault.publication_journals().is_err());
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::write(&path, b"original").unwrap();
+    std::fs::hard_link(&path, sandbox.0.join("alias")).unwrap();
+    assert!(vault.publication_journals().is_err());
+    std::fs::remove_file(sandbox.0.join("alias")).unwrap();
+    assert_eq!(vault.publication_journals().unwrap(), vec![name]);
+    let entry = directory_entries(vault.vault_file()).unwrap().remove(0);
+    // Keep both objects alive before replacement, so NTFS cannot reuse the first ID.
+    std::fs::write(sandbox.0.join("replacement"), b"different object").unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(sandbox.0.join("replacement"), &path).unwrap();
+    assert!(vault.verify_publication_journal(&entry).is_err());
+    assert_eq!(vault.publication_journals().unwrap(), vec![name]);
+    // I03/I08: a root identity mismatch cannot turn into a successful empty scan.
+    vault.identity.file[0] ^= 1;
+    assert!(vault.publication_journals().is_err());
+}
+
+#[test]
+fn native_publication_journals_refuse_reparse_candidates_without_following_them() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir(sandbox.0.join("state")).unwrap();
+    std::fs::create_dir(sandbox.0.join("outside")).unwrap();
+    std::fs::write(sandbox.0.join("outside/kept"), b"external content").unwrap();
+    let path = sandbox
+        .0
+        .join("state/publication-0123456789abcdef0123456789abcdef.json");
+    let result = Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(path.to_string_lossy().replace('/', "\\"))
+        .arg(
+            sandbox
+                .0
+                .join("outside")
+                .to_string_lossy()
+                .replace('/', "\\"),
+        )
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let vault = VaultHandle::open(&sandbox.0.join("state")).unwrap();
+    let result = vault.publication_journals();
+    std::fs::remove_dir(path).unwrap();
+    assert!(result.is_err());
+    assert_eq!(
+        std::fs::read(sandbox.0.join("outside/kept")).unwrap(),
+        b"external content"
+    );
+}
+
+#[test]
 fn native_overlap_is_identity_and_component_based_and_pins_prevent_rename() {
     let sandbox = Sandbox::new();
     for dir in ["a/child", "abc"] {

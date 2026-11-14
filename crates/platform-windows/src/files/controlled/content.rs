@@ -1,6 +1,6 @@
 use super::{ProtectedFile, rename};
 use crate::files::{
-    FileIdentity, VaultHandle,
+    EntryMetadata, FileIdentity, VaultHandle,
     native::{metadata, open_child_shared},
 };
 use serde::{Deserialize, Serialize};
@@ -9,12 +9,25 @@ use std::{
     fs::File,
     io::{self, Read, Write},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use vaultsyncd_domain::version::Generation;
 use vaultsyncd_fs_common::path::RelativePath;
 use vaultsyncd_transfer::hash::ContentHasher;
+
+const HASH_CHUNK_SIZE: u64 = 256 * 1024;
+static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+std::thread_local! {
+    // One-shot, per-thread fault injection at a real inter-chunk oplock admission boundary.
+    pub(super) static AFTER_OBSERVATION_CHUNK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 /// Content evidence derived under a continuous exclusive oplock, never from mtime.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,10 +171,58 @@ impl WindowsFiles {
         let _gate = self.gate.lock().map_err(poison)?;
         self.observe_inner(path)
     }
+    /// Hash active contents under the same continuous protection as [`Self::observe`],
+    /// without creating or syncing a snapshot. No bytes are retained for later upload.
+    /// `None` means absence in a verified healthy parent; protection failures remain errors.
+    /// Evidence shares the snapshot observer's identity/content-based generation history.
+    pub fn observe_evidence(&self, path: &str) -> io::Result<Option<Evidence>> {
+        self.observe_evidence_cancellable(path, &NEVER_CANCELLED)
+    }
+    /// Observe without a snapshot, checking cancellation at every 256 KiB hash block.
+    /// Cancellation returns [`io::ErrorKind::Interrupted`] without recording partial evidence
+    /// or advancing the generation. The caller must retain the flag until this call returns.
+    pub fn observe_evidence_cancellable(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> io::Result<Option<Evidence>> {
+        check_cancelled(cancel)?;
+        let _gate = self.gate.lock().map_err(poison)?;
+        self.observe_evidence_inner(path, cancel)
+    }
+    fn observe_evidence_inner(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> io::Result<Option<Evidence>> {
+        check_cancelled(cancel)?;
+        let Some((guard, first)) = self.observation_guard(path)? else {
+            check_cancelled(cancel)?;
+            return Ok(None);
+        };
+        self.observation_evidence(path, &guard, &first, None, cancel)
+            .map(Some)
+    }
     fn observe_inner(&self, path: &str) -> io::Result<ObservedContent> {
+        let Some((guard, first)) = self.observation_guard(path)? else {
+            return Ok(ObservedContent::Absent);
+        };
+        let name = self.fresh("snapshot");
+        let mut output = self
+            .new_state(&name)
+            .map_err(|e| io::Error::other(format!("snapshot create: {e}")))?;
+        let evidence =
+            self.observation_evidence(path, &guard, &first, Some(&mut output), &NEVER_CANCELLED)?;
+        Ok(ObservedContent::File(Arc::new(FixedSnapshot {
+            file: output,
+            evidence,
+            name,
+        })))
+    }
+    fn observation_guard(&self, path: &str) -> io::Result<Option<(ProtectedFile, EntryMetadata)>> {
         self.vault.with_parent(path, |_, _| Ok(()))?;
         match self.vault.inspect(path) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ObservedContent::Absent),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
             Ok(meta) => {
                 if meta.directory || meta.links != 1 || !meta.supported() {
@@ -169,30 +230,55 @@ impl WindowsFiles {
                 }
             }
         }
-        let (guard, first) = self.protect(path, false)?;
-        let name = self.fresh("snapshot");
-        let mut output = self
-            .new_state(&name)
-            .map_err(|e| io::Error::other(format!("snapshot create: {e}")))?;
+        self.protect(path, false).map(Some)
+    }
+    fn observation_evidence(
+        &self,
+        path: &str,
+        guard: &ProtectedFile,
+        first: &EntryMetadata,
+        mut output: Option<&mut File>,
+        cancel: &AtomicBool,
+    ) -> io::Result<Evidence> {
         let mut hasher = ContentHasher::new();
         let mut offset = 0;
+        let mut buffer = vec![0; first.size.min(HASH_CHUNK_SIZE) as usize];
         while offset < first.size {
+            check_cancelled(cancel)?;
             let lease = guard.lease()?;
-            let mut bytes = vec![0; (first.size - offset).min(256 * 1024) as usize];
-            read_exact_at(lease.file(), &mut bytes, offset)
-                .map_err(|e| io::Error::other(format!("snapshot read: {e}")))?;
-            drop(lease);
-            hasher.update(&bytes);
-            output.write_all(&bytes)?;
+            let bytes = &mut buffer[..(first.size - offset).min(HASH_CHUNK_SIZE) as usize];
+            read_exact_at(lease.file(), bytes, offset)
+                .map_err(|e| io::Error::other(format!("content observation read: {e}")))?;
+            hasher.update(bytes);
+            if let Some(file) = output.as_mut() {
+                file.write_all(bytes)?;
+            }
             offset += bytes.len() as u64;
+            if offset < first.size {
+                // Cooperate on large files without releasing the current protection lease.
+                std::thread::yield_now();
+            }
+            drop(lease);
+            #[cfg(test)]
+            AFTER_OBSERVATION_CHUNK.with(|hook| {
+                let callback = hook.borrow_mut().take();
+                if let Some(callback) = callback {
+                    callback();
+                }
+            });
         }
+        // Never reopen/reacquire a new oplock after a break: the same guard must still admit
+        // this final lease before publishing evidence or advancing the local generation.
+        check_cancelled(cancel)?;
         let lease = guard.lease()?;
         let end = metadata(lease.file())
-            .map_err(|e| io::Error::other(format!("snapshot metadata: {e}")))?;
+            .map_err(|e| io::Error::other(format!("content observation metadata: {e}")))?;
         if end.identity != first.identity || end.size != first.size {
             return Err(changed());
         }
-        output.sync_all()?;
+        if let Some(file) = output {
+            file.sync_all()?;
+        }
         let mut evidence = Evidence {
             generation: 0,
             volume: first.identity.volume,
@@ -200,13 +286,9 @@ impl WindowsFiles {
             digest: hasher.finish(),
             size: first.size,
         };
+        check_cancelled(cancel)?;
         evidence.generation = self.generation(path, &evidence)?;
-        let file = output;
-        Ok(ObservedContent::File(Arc::new(FixedSnapshot {
-            file,
-            evidence,
-            name,
-        })))
+        Ok(evidence)
     }
     fn generation(&self, path: &str, evidence: &Evidence) -> io::Result<u64> {
         let mut map = self.generations.lock().map_err(poison)?;
@@ -365,9 +447,9 @@ impl WindowsFiles {
         };
         let size = record.size;
         if already_logged {
-            if let ObservedContent::File(snapshot) = self.observe_inner(target)? {
-                if published(&record, snapshot.evidence()) {
-                    return Ok(snapshot.evidence().clone());
+            if let Some(evidence) = self.observe_evidence_inner(target, &NEVER_CANCELLED)? {
+                if published(&record, &evidence) {
+                    return Ok(evidence);
                 }
             }
         }
@@ -453,36 +535,28 @@ impl WindowsFiles {
     /// Third-party target contents are never overwritten, even if an old move was interrupted.
     pub fn recover_publications(&self) -> io::Result<Vec<RecoveryOutcome>> {
         let _gate = self.gate.lock().map_err(poison)?;
-        let report = self.state.scan();
-        if !report.permits_missing_comparison() {
-            return Err(invalid("internal state scan incomplete"));
-        }
+        let journals = self.state.publication_journals()?;
         let mut results = vec![];
-        for item in report.entries {
-            if !item.path.starts_with("publication-") || !item.path.ends_with(".json") {
-                continue;
-            }
-            let mut file = self.read_state(&item.path)?;
+        for name in journals {
+            let mut file = self.read_state(&name)?;
             if file.metadata()?.len() > 64 * 1024 {
                 return Err(invalid("publication journal too large"));
             }
             let mut bytes = vec![];
             file.read_to_end(&mut bytes)?;
             let p: Publication = serde_json::from_slice(&bytes).map_err(invalid)?;
-            validate_record(&p, &item.path)?;
+            validate_record(&p, &name)?;
             self.check_vault(&p)?;
-            let state = match self.observe_inner(&p.target) {
-                Ok(ObservedContent::File(snapshot)) if published(&p, snapshot.evidence()) => {
-                    RecoveryOutcome::Published(p.op)
-                }
-                Ok(ObservedContent::File(snapshot))
+            let state = match self.observe_evidence_inner(&p.target, &NEVER_CANCELLED) {
+                Ok(Some(evidence)) if published(&p, &evidence) => RecoveryOutcome::Published(p.op),
+                Ok(Some(evidence))
                     if p.before
                         .as_ref()
-                        .is_some_and(|old| old.same_content(&snapshot.evidence)) =>
+                        .is_some_and(|old| old.same_content(&evidence)) =>
                 {
                     RecoveryOutcome::Prepared(p.op)
                 }
-                Ok(ObservedContent::Absent) => {
+                Ok(None) => {
                     if let Some(before) = &p.before {
                         match protect_under(&self.state, &p.backup, true) {
                             Ok((protected, meta)) => {
@@ -603,13 +677,14 @@ impl WindowsFiles {
             })?;
             let mut h = ContentHasher::new();
             let mut offset = 0;
+            let mut buffer = vec![0; initial.size.min(HASH_CHUNK_SIZE) as usize];
             while offset < initial.size {
                 let lease = protected.lease()?;
-                let mut bytes = vec![0; (initial.size - offset).min(256 * 1024) as usize];
-                read_exact_at(lease.file(), &mut bytes, offset)?;
+                let bytes = &mut buffer[..(initial.size - offset).min(HASH_CHUNK_SIZE) as usize];
+                read_exact_at(lease.file(), bytes, offset)?;
                 drop(lease);
-                h.update(&bytes);
-                output.write_all(&bytes)?;
+                h.update(bytes);
+                output.write_all(bytes)?;
                 offset += bytes.len() as u64;
             }
             let _lease = protected.lease()?;
@@ -667,10 +742,11 @@ fn hash_file(file: &File) -> io::Result<([u8; 32], u64)> {
     let size = metadata(file)?.size;
     let mut h = ContentHasher::new();
     let mut offset = 0;
+    let mut buffer = vec![0; size.min(HASH_CHUNK_SIZE) as usize];
     while offset < size {
-        let mut bytes = vec![0; (size - offset).min(256 * 1024) as usize];
-        read_exact_at(file, &mut bytes, offset)?;
-        h.update(&bytes);
+        let bytes = &mut buffer[..(size - offset).min(HASH_CHUNK_SIZE) as usize];
+        read_exact_at(file, bytes, offset)?;
+        h.update(bytes);
         offset += bytes.len() as u64;
     }
     Ok((h.finish(), size))
@@ -708,6 +784,15 @@ fn validate_record(p: &Publication, name: &str) -> io::Result<()> {
 }
 fn invalid(e: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, e.to_string())
+}
+fn check_cancelled(cancel: &AtomicBool) -> io::Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "content observation cancelled",
+        ));
+    }
+    Ok(())
 }
 fn poison<T>(e: std::sync::PoisonError<T>) -> io::Error {
     io::Error::other(e.to_string())

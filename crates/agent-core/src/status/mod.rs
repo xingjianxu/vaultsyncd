@@ -71,35 +71,36 @@ pub async fn snapshot(db: &Database, binding: BindingId) -> Result<BindingStatus
         event_lag: (received - applied) as u64,
         ..Default::default()
     };
-    for row in sqlx::query(
-        "SELECT dirty,residency,fingerprint,file_identity FROM local_entries WHERE binding_id=?",
+    // Count in SQLite without copying every entry and its evidence blobs into Rust.
+    // COUNT (rather than SUM) also preserves the zero-row case without NULL totals.
+    let local = sqlx::query(
+        "SELECT
+            count(CASE WHEN dirty <> 'clean' THEN 1 END) AS dirty,
+            count(CASE WHEN residency = 'metadata_only' THEN 1 END) AS metadata_only,
+            count(CASE WHEN residency = 'partial' THEN 1 END) AS partial,
+            count(CASE WHEN residency = 'materialized' THEN 1 END) AS materialized,
+            count(CASE WHEN residency IS NULL OR residency NOT IN
+                ('metadata_only', 'partial', 'materialized') THEN 1 END) AS invalid_residency,
+            count(CASE WHEN residency = 'materialized' AND
+                (fingerprint IS NULL OR length(fingerprint) = 0 OR
+                 file_identity IS NULL OR length(file_identity) = 0) THEN 1 END) AS unknown
+         FROM local_entries WHERE binding_id=?",
     )
     .bind(b)
-    .fetch_all(&mut *tx)
+    .fetch_one(&mut *tx)
     .await
-    .map_err(error)?
+    .map_err(error)?;
+    if local
+        .try_get::<i64, _>("invalid_residency")
+        .map_err(error)?
+        != 0
     {
-        if row.get::<String, _>("dirty") != "clean" {
-            s.dirty += 1;
-        }
-        let index = match row.get::<&str, _>("residency") {
-            "metadata_only" => 0,
-            "partial" => 1,
-            "materialized" => 2,
-            _ => return Err(PortError::protocol("未知驻留")),
-        };
-        s.residency[index] += 1;
-        if index == 2
-            && (row
-                .get::<Option<Vec<u8>>, _>("fingerprint")
-                .is_none_or(|v| v.is_empty())
-                || row
-                    .get::<Option<Vec<u8>>, _>("file_identity")
-                    .is_none_or(|v| v.is_empty()))
-        {
-            s.unknown += 1;
-        }
+        return Err(PortError::protocol("未知驻留"));
     }
+    s.dirty = local.try_get::<i64, _>("dirty").map_err(error)? as u64;
+    s.residency = ["metadata_only", "partial", "materialized"]
+        .map(|column| local.get::<i64, _>(column) as u64);
+    s.unknown = local.try_get::<i64, _>("unknown").map_err(error)? as u64;
     for (table, filter, target) in [
         ("pending_ops", "1", &mut s.pending),
         ("transfers", "state<>'completed'", &mut s.transfers),

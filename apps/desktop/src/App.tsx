@@ -44,6 +44,7 @@ function AppView({ agent, desktopSettings }: { agent: AgentClient; desktopSettin
   const [snapshot, setSnapshot] = useState<GetStatusResult>();
   const executing = useRef(false); const mounted = useRef(true);
   const statusRead = useRef(0);
+  const displayedSnapshot = useRef<GetStatusResult | undefined>(undefined);
   const startupRecovery = useRef<Promise<void> | undefined>(undefined);
   const startupReady = useRef(false);
   const refresh = useCallback(async () => {
@@ -69,7 +70,12 @@ function AppView({ agent, desktopSettings }: { agent: AgentClient; desktopSettin
         startupReady.current = true;
       }
       if (mounted.current && request === statusRead.current) {
-        setSnapshot(result);
+        // Legacy responses without versions must still refresh. Connection feedback
+        // and native notification claiming continue even when content is unchanged.
+        if (result.snapshot_version === undefined || result.snapshot_version !== displayedSnapshot.current?.snapshot_version) {
+          displayedSnapshot.current = result;
+          setSnapshot(result);
+        }
         setConnected(true);
         setConnectionError("");
       }
