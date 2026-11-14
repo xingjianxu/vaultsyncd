@@ -10,15 +10,17 @@ let
           belongs = prefix: rel == prefix || lib.hasPrefix (prefix + "/") rel
             || (type == "directory" && lib.hasPrefix (rel + "/") prefix);
       in rel == "" || (!(lib.any (part: builtins.elem part [ "target" "node_modules" "dist" ".cache" ".git" ]) parts)
-        && (builtins.elem rel files || lib.any belongs roots));
+        && (builtins.elem rel files || lib.any belongs roots
+          || (type == "directory" && lib.any (file: lib.hasPrefix (rel + "/") file) files)));
   };
   rustSource = clean "vaultsyncd-rust-source"
     [ ".cargo" "api" "apps/agent" "apps/cli" "apps/server" "apps/server-admin"
       "apps/desktop/src-tauri" "crates" "fixtures" "tests" "tools" ]
-    [ "Cargo.toml" "Cargo.lock" "rust-toolchain.toml" ];
+    [ "Cargo.toml" "Cargo.lock" "rust-toolchain.toml" "assets/branding/icon.ico" ];
+  # Web 独立构建不纳入桌面工作区 manifest，避免安装未在 Web 离线依赖集中收录的 Tauri。
   webSource = clean "vaultsyncd-web-source"
     [ "apps/web" "packages" ]
-    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "apps/desktop/package.json" "logo.svg" ];
+    [ "package.json" "pnpm-lock.yaml" "pnpm-workspace.yaml" "tsconfig.base.json" "assets/branding/logo.svg" ];
   rust = pkgs.rustPlatform.buildRustPackage {
     pname = "vaultsyncd-rust";
     inherit version;
@@ -36,7 +38,7 @@ let
     pname = "vaultsyncd-web";
     src = webSource;
     fetcherVersion = 5;
-    hash = "sha256-+PUWu57iIW8DFbB4ctDKPqx26Wym3fiA9+P4DdDhYtY=";
+    hash = "sha256-bJy3JHJER9HjHE14tEtpTaj2BcdVbbTLduh1z+onL0g=";
   };
   web = pkgs.stdenvNoCC.mkDerivation {
     pname = "vaultsyncd-web";

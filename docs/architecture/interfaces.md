@@ -1,5 +1,10 @@
 # 已实现接口摘要
 
+2026-11-13 S231：PauseBinding/ResumeBinding在设备归属核验后由本机协调器直接提交controls，不排入服务器网络worker；解绑仍先原生安全断开，DetachBinding双端执行预算与显式恢复操作同为30分钟，帧读写仍5秒。GetStatus管理列表与业务状态的paused/detached采用同一绑定读事务结果，恢复记录继续保留。桌面桥传递retryable及真实传输错误，首次启动对可重试恢复失败最多尝试3次（500/1000ms间隔），重试前重读状态，已恢复/解绑/消失不重放；永久失败或耗尽保留路径与实际错误。启动完成后的轮询/导航不恢复本次手动暂停，无schema/IPC版本变化。完整四EXE需一起更新，旧agent不支持新执行预算。
+
+2026-11-13 S226：主桌面首次完整 GetStatus 后，以现有 ResumeBinding 逐个恢复未解绑的暂停目录；每次桌面启动只尝试一轮（含旧版停止和此前手动暂停），轮询/导航不重复恢复。单项失败显示本地路径与实际错误并继续其余目录；恢复后重新读取真实状态，不推导同步成功。Explorer独立shell窗口不执行全局恢复，普通StopAgent/维护/认证/未确认数据围栏保持。无schema或IPC版本变化。本地Binding取消Vault列，服务器列用Mantine HoverCard展示服务器地址、Server ID、Vault ID、登录状态；键盘focus也可查看。
+
+
 本文件只记录已经实现、可被后续卡复用的工具与接口契约；产品语义、数据模型与 wire 协议以 `docs/design.md` 和 `api/` 中的契约文件为准，不在此复制规格正文。接口形态变化时同步更新本文件，并在对应 `agent/tasks/Sxxx.md` 记录原因。
 
 ## tools/context.py — 规格上下文提取
@@ -595,9 +600,9 @@ python3 tools/context.py --help
 
 | 项 | 契约 |
 | --- | --- |
-| `ignore::DEFAULT_RULES` | 内置默认排除清单文本，**可直接编辑**。只列编辑器交换/锁文件（`*~`、`*.swp`、`.*#`…、`~$*`、`*.tmp`、`*.temp`）、下载中间文件（`*.part`、`*.partial`、`*.crdownload`）与桌面缓存元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）。不排除整个 `.git`、不排除任意隐藏文件、不排除 `.syncignore` 自身 |
+| `ignore::DEFAULT_RULES` | 内置默认排除清单文本，**唯一编辑源**。只列编辑器交换/锁文件（`*~`、`*.swp`、`.*#`…、`~$*`、`*.tmp`、`*.temp`）、下载中间文件（`*.part`、`*.partial`、`*.crdownload`）与桌面缓存元数据（`.DS_Store`、`Thumbs.db`、`desktop.ini`）。不排除整个 `.git`、不排除任意隐藏文件、不排除 `.syncignore` 自身。S196 起所有绑定自动加载，不向前端复制列表 |
 | `IgnoreRules::parse_with_defaults(&str)` | 默认清单在前、调用方文本在后（后者优先，可用 `!` 覆盖默认排除）；返回 `Result<IgnoreRules, RuleIssue>` |
-| `IgnoreRules::parse(&str)` | 只用给定文本，内置默认清单不参与（绑定提供完整清单时用） |
+| `IgnoreRules::parse(&str)` | 只用给定文本，内置默认清单不参与；保留作纯规则解析/fixture 用，不作为绑定有效规则入口（S196） |
 | `IgnoreRules::decide(&RelativePath, is_dir) -> Decision` | 给出裁决与解释；祖先目录按从浅到深检查 |
 | `IgnoreRules::is_excluded(&RelativePath, is_dir) -> bool` | 只要布尔结果时的入口，与 `decide` 判定一致 |
 | `ignore::Decision` | `Included { reinclude: Option<Hit> }` / `Excluded(Exclusion)`；实现 `Display`（中文解释，供“为什么被排除”查询） |
@@ -610,7 +615,7 @@ python3 tools/context.py --help
 - **语义等同 Git gitignore**：`#` 整行注释、空行、`!` 否定、`*`/`?`/`**`/字符类、前导 `/` 根锚定、尾部 `/` 只匹配目录；首行 UTF-8 BOM 与 CRLF 按 Git 习惯处理。
 - **父目录排除后不能重新包含子项**：`secrets/` 排除后 `!secrets/public.txt` 不生效，解释里给出被阻断的规则；`ignore` crate 的 `matched_path_or_any_parents` 是叶子优先（ripgrep 遍历视角），与 Git 的限制相反，因此本模块自己按祖先自浅到深遍历、只借用该库的 glob 匹配。
 - **规则顺序决定结果**：同一路径的多条规则取最后的匹配；目录被 `!` 重新包含后子项可正常参与同步（`Included.reinclude` 记录命中的否定规则，可能位于祖先目录）。
-- **默认清单可编辑、可替换**：改 `DEFAULT_RULES` 即改所有绑定默认；绑定可用 `parse_with_defaults` 追加或在 `parse` 里给完整清单。默认规则文件本身不能落到“被自己排除而无法更新”的循环（design §10.4）。
+- **内置默认 + 绑定附加（S196）**：改 `DEFAULT_RULES` 即改所有绑定默认；运行时、模式任务、保存校验与解释统一用 `parse_with_defaults`。绑定持久文本/桌面「额外排除规则」只含附加规则，空文本仍有默认排除；后置 `!` 可重新包含，父目录限制不变。默认规则文件本身不能落到“被自己排除而无法更新”的循环（design §10.4）。
 - 行号按来源分别计数：叠加默认清单后，绑定文本的解析错误仍报绑定文本自己的行号。
 
 ### 不变量
@@ -898,7 +903,7 @@ python3 tools/context.py --help
 
 ## api/ — 本机 IPC 契约源（S025）
 
-状态：S025 建立最小契约与生成通路；S071 增加 1.1 状态快照，S072 扩展至 1.2 管理命令（详见文末 S072）。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
+状态：S025 建立最小契约与生成通路；S071 增加 1.1 状态快照，S072 扩展至 1.2 管理命令（详见文末 S072）。**S203 当前本机 IPC 为 3.1**（新增 `stop_agent`，3.0 调用方兼容）：绑定 `rules` 改为默认清单之后的附加文本，空字符串不关闭默认排除；3.x 拒绝 2.x，避免「完整/额外清单」含义混用，旧版桌面与 agent 必须一起更新。远端 HTTP 仍保持现有版本。本机 IPC 与远端 HTTP 契约**分开**：`api/local-ipc.schema.json` 是 JSON Schema（design §5.6、§15.5），不走网络、不复用 `api/openapi.yaml`；服务器管理 API 不能借这条通路控制客户端本地路径。生成代码提交入库，`cargo xtask generate --check` 逐字节比对。
 
 | 文件 | 契约 |
 | --- | --- |
@@ -2155,8 +2160,18 @@ quarantine 旧操作、完成日志。历史 tombstone 与同路径新身份按�
 | `execution_gate(binding, Option<EntryId>) -> ExecutionGate` | 启动新动作前调用；仅 `Ready` 可执行，`Paused/Unbound/Excluded/ReconcileRequired` 保留队列。含 excluded/reconcile 后代的目录也阻塞，不能从本地缺项推导父目录 Delete。存在规则但目标位置未知时保守要求协调。 |
 | `change_mode` / `resume_mode(..., &dyn FullMaterializer, budget)` | full→on_demand 只改配置；on_demand→full 先落持久任务，按预算核对/补齐。逐文件保存与远端版本、路径、本地 generation/dirty/驻留/身份/摘要绑定的证据；全部未排除文件通过才 complete。新本地/远端事实使旧证据失效。 |
 | `FullMaterializer::ensure_full(&FullFile) -> LocalEntry` | 入口适配器用 S059 下载/受控安装固定版本，已有完整内容也须实际核对内容/身份/代际。脏内容只能核对保留。返回后复核数据库相同事实与已应用基线；仅下载、旧 clean 或未应用新远端版本都不能完成。 |
-| `change_rules(binding, version, text)` | 接收完整规则文本，复用 S018 gitignore 解析。记录已有条目 excluded；取消排除变为 reconcile_required。规则版本永不复用，当前相同请求幂等；旧版本 ACK 不放开新规则。协调完成后调用 `acknowledge_reconciled`。 |
+| `change_rules(binding, version, text)` | S196 起接收绑定附加文本，统一叠加内置默认规则后校验和比较。空文本不关闭默认排除，后置 `!` 可覆盖。记录已有条目 excluded；取消排除变为 reconcile_required。规则版本永不复用，当前相同请求幂等；旧版本 ACK 不放开新规则。协调完成后调用 `acknowledge_reconciled`。 |
 | `UnbindReport` / `unbind_keep_data` | 提示 unconfirmed 条目、incomplete 驻留及恢复导出选择；仅 detached+paused，不删除 bindings/本地行/基线/队列/文件，不发全局 Delete。恢复不能隐式重新绑定。 |
+
+S196 的客户端迁移 **0017** 为 `binding_controls` 增加 `default_rules_version`（0 表示待采用，1 表示已采用内置默认），持久语义围栏防止旧二进制重解释附加文本。迁移前沿 Database 框架创建一致性备份，回退恢复整套 schema16 备份，不只降级程序；原附加文本、队列及数据不删除。
+
+| 接口/结果 | 契约 |
+| --- | --- |
+| `BindingControls::adopt_default_policy(binding)` | 幂等采用内置默认策略：首次标记 `default_rules_version=1`、把旧规则版本记入历史、签发新规则版本并使 full 证明失效；随后按当前有效规则刷新 `binding_participation`（命中→`excluded`，不再命中且曾 excluded→`reconcile_required`）。启动加载、创建绑定与每次快照前调用，重复调用不产生新版本。 |
+| 首次导入的排除 | `ImportStore::prepare`/`apply_exclusions` 保留完整认证远端事实（含 excluded 身份，供无新事件时重新包含恢复），但不为 excluded 条目创建本地 staging 行；已入队但未执行的首次导入上传行被移除（意图、OpId、ACK 收据与字节留在 journal），以免后台 worker 加载不存在的动作规格并永久阻塞绑定。 |
+| `exclusions::unsettled(db, binding)` | full 模式补齐前的未决计数：只有当前参与同步的队列行/本地意图计入；被排除而停放的行保留字节、基线与队列位置但不阻塞无关文件的补齐。 |
+| 规则重协调恢复 | 取消排除要求完整认证快照、epoch/高水位/接收序一致；远端从未跟踪的条目按固定版本受控安装（on_demand 绑定只建占位），已跟踪目录按父先子后恢复；**被跟踪文件在排除期间被本地删除时保持协调围栏**，不自动重下也不推导删除。脏、部分驻留或远端已改的记录一律保持围栏。 |
+
 
 客户端迁移 **0007**：`binding_controls`、`binding_participation`、`binding_full_proofs`、
 `binding_rules_history`，旧迁移不变。中断后原任务/证据保留；独立进程退出 101/102/103
@@ -2235,6 +2250,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 `files::VaultHandle` 只允许同步根末分量为已识别 cloud reparse；其祖先仍拒绝所有 reparse。新增 crate 内相对 create/open 工具复用 S065 身份围栏。断开的 partially-populated 目录在 Windows build 26300 可返回 FLT_INVALID_NAME_REQUEST；扫描明确 incomplete、禁止推导删除，连接存活时元数据扫描零内容供给。
 
 `platform-windows::shell::{register,registered,unregister}` 通过 WinRT StorageProviderSyncRootManager 管理 Explorer；ID 为 `vaultsyncd!当前SID!BindingId`，Context 为 Binding+Vault。S129 起三项操作共用进程内常驻的固定 MTA 工作线程，初始化 WinRT 后保持其与 windows-rs 工厂缓存同寿命；调用者不需初始化，不跨 await 持有 apartment。正式 runtime 的共同 assemble 路径在恢复核对后、切换到内容供给前通过 spawn_blocking 注册，覆盖启动修复、重启、新增绑定及连接重建。失败明确返回，不注销/重建根，不修改文件驻留、pin 或 in-sync；PopulationPolicy=AlwaysFull，与 CFAPI adapter 一致。注册先核对 CFAPI 根身份，拒绝接管外根。注销与 Adapter 同样先拒绝任意占位/不完整扫描。**CfUnregisterSyncRoot 本身会永久删除未水合文件和未完全填充目录**（[微软行为契约](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfunregistersyncroot)）；生产适配器要求先显式物化并 revert 全部占位，当前卡不实现该流程，不能把拒绝当已注销。`Drop`/`disconnect` 从不注销、不删文件；连接断开失败保留回调存储，避免悬垂。
+
+S222：同步根 `DisplayNameResource` 派生自绑定路径末级名称，`IconResource` 使用与桌面 EXE 相同的 ICO，内容寻址持久保存在 Windows Known Folder LocalAppData 下 `vaultsyncd/shell-icons/`；引用为带引号的绝对 ICO 路径及索引 0，支持 Unicode/逗号用户目录，不依赖程序所在位置。图标完整写入并原子发布，已存在正确内容复用、损坏副本修复，旧内容版本保留；图标目录与当前同步根重叠时明确拒绝，绝不写入同步目录。正常 assemble 的同 ID Register 同时刷新旧显示名/图标，成功后发出 Shell UPDATEITEM/PATHW 与 ASSOCCHANGED 通知，刷新已开窗口的名称/图标缓存，不注销 CFAPI，不改变 ProviderId/Context/文件身份、驻留及 pin；同名不同路径依旧按 BindingId 独立。认证或恢复未完成的绑定尚未进入 assemble 时不会刷新。原生展示夹具为 `tests/windows-integration/tests/shell_branding.rs` 与 `tests/platform/windows/s222-shell-branding.ps1`：隔离三绑定、旧属性覆盖、移动程序位置及同窗刷新，通过实际 namespace tree 的 MSAA 子项与截图核验（该 Windows 11 的 UIA 不提供树 descendants）；不触碰在线 agent 或其他注册。
 
 原生入口 `tests/platform/windows/run-native-adapter.sh` 在 Windows devShell 交叉构建包内测试、校验两端 SHA-256、在真实 Windows NTFS 运行；日志只落 `artifacts/S066/`。S066-a/b 是本卡内身份/适配器与原生/Explorer 验收拆分，父卡全部验收后才 done。
 
@@ -2345,6 +2362,9 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S080 Windows Tauri 壳与状态桥
 
+- S203 覆盖桌面普通停止路径：IPC3.1 新增无参数 `stop_agent`（未知/额外参数拒绝），`agent --user-session shutdown` 在同一认证连接固定原进程，等待排空/断开 CFAPI/持久暂停/关闭库，进程退出后再确认 writer 锁；不创建恢复导出，不改内容/缓存/上传快照/恢复队列。StopAgent handler/read 的上限60秒，进程等待15秒，桌面监督90秒并把诊断保存至 `%LOCALAPPDATA%/vaultsyncd/desktop-stop.log`；超时恢复主窗，只回收自己创建的 RPC helper、不终止 agent。显式 `--user-session stop`、升级卸载继续 PrepareMaintenance 完整恢复导出；旧3.0 agent 拒绝新客户端，须先用旧程序有序停止再更新完整客户端。
+- S200 覆盖默认关闭行为：桌面壳独立 `get_desktop_settings() -> {close_action:"tray"|"exit",stop_agent_on_exit:bool}`、`set_desktop_settings({settings:同DTO}) -> 同DTO`，仅 bundled main 的 ACL 授权，与 agent IPC/schema 无关。默认 `tray/true`，本机 `%LOCALAPPDATA%/vaultsyncd/desktop-settings.json` 持久保存；读取损坏明确报错并保守留托盘，保存成功后才发布运行时设置。主窗 CloseRequested 按设置隐藏或请求退出；托盘「退出程序」强制退出界面并遵循停止 agent 偏好，重复请求由门禁合并。停止复用同目录 `agent --user-session stop` 的用户认证、PrepareMaintenance、恢复导出及确切进程/writer 等待；失败保留界面与诊断，不强杀。自动更新继续调用原有受控退出。安全停止会持久暂停绑定，重启需显式 Resume。
+
 - S167：桌面在单实例锁内、建窗前调用 `startup::ensure_agent()`；先用固定同用户会话 endpoint 的 `request_verified` 核对相邻 agent EXE/SID/GetStatus，已就绪直接复用，只有端点缺失才调用相邻 `vaultsyncd-agent.exe --ensure-user-session`。该有限等待入口复用 ZIP `ensure_ready`，按包类型选择已有固定用户配置或 ZIP claim，仍执行 owner/维护门禁；70 秒桌面等待上限只终止启动器，后台 agent 与 GUI 生命周期独立。失败经 `dialog::startup_error` 显示本机错误并退出1，不自动覆盖配置或强杀既有 agent。
 
 - `apps/desktop/src-tauri` 是根 Cargo workspace 的 `vaultsyncd-desktop`，共用根锁；Tauri 仅 Windows 目标构建。默认构建内嵌 `../dist`，先在默认 devShell 执行桌面 `build`，再在 windows devShell 用 `cargo xwin build --locked --target x86_64-pc-windows-msvc -p vaultsyncd-desktop` 构建。Windows shell 增加锁定 Python 供原生验收哈希清单。
@@ -2355,6 +2375,8 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## Web 会话与账号管理（S077）
 
+- S211：`components/PageBoundary` 自动重挂当前管理路由，2/4/8/16/30秒退避，隐藏/离线暂停、可见/online后按退避恢复，导航/退出清理计时与监听。`recoverableLazy` 按boundary恢复代际用WeakMap缓存lazy Promise，兼顾Suspense未提交重试稳定及失败缓存清除；仅模块加载错误连续失败允许sessionStorage标签页五分钟一次document reload，保留hash/cookie，存储不可用不整页重载。错误提示自动重连无手动重载按钮；不重放文件/账号写操作，无wire/schema变化。
+
 - S160：服务概览的 `ServerIdentity` 通过 `readServerIdentity` / 生成 `getCapabilities` 读取同源 `GET /v1/capabilities` 的 `server_id`，只读显示完整值供选择复制。读取错误与健康状态独立，支持重试；离开概览或退出卸载时 abort，忽略迟到结果。不新增 wire/schema，不保存凭据或更改客户端身份配置。
 
 - 唯一 wire 源 `api/openapi.yaml`：`POST /v1/auth/browser/login` 接 LoginRequest，`POST /v1/auth/browser/refresh` 无请求体，均返回 BrowserSession（session_id/access_expires_at），令牌只在 HttpOnly/Secure/SameSite=Strict cookie。agent 原登录/带正文刷新保持兼容。全部认证响应 `Cache-Control: no-store`。
@@ -2363,7 +2385,7 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 - Web `BrowserAuth` 只用同源 credentials/no-store 请求；受保护调用复用 `request`，401 并发单飞刷新一次，重复 401 回登录，网络失败保留可重试错误。不使用 localStorage，不读 cookie 凭据。
 - S145：`AuthProvider` 启动先核验账号，`AuthGate` 在核验期间只显示 loading、匿名仅挂载独立登录页；只有已确认账号才能挂载 `AppView`、导航及所有管理消费者，不重写原 hash 深链。登录表单从 `AccountPanel` 移至此唯一入口，账号面板仅保留改密/退出/撤销。
 - S145：`BrowserAuth(options?, onSignedOut?)` 在最终401及退出/改密/撤销成功后通知整个应用退出。认证代际围栏拒绝旧请求成功及旧401回写；过期请求抛普通会话变更错误而不是 `SignedOut`，不把潜在已提交文件操作误判为确定拒绝。`AuthProvider` 另用同步操作锁/序号防重入与过时账号恢复；refresh 网络故障不伪装身份失效。初始核验失败维持门禁并提供“重新核验会话”，普通匿名首次打开不显示过期错误。UI门禁不替代服务端API授权，公开health/capabilities与静态资产边界不变。
-- S148：`AppView` 仅在 `AuthGate` 确认会话后挂载，effect 自动调用 `checkServer`（同源 `GET /v1/health`），覆盖登录及刷新恢复、任意 hash 路由。与手动检查共享请求锁/取消控制器；卸载 abort 并释放引用以兼容 StrictMode effect 重放。取消的请求不写状态或通知；健康失败不撤销已确认账号，保留手动重试，不增加轮询。
+- S148/S205：`AppView` 仅在 `AuthGate` 确认会话后挂载，effect 自动调用 `checkServer`（同源 `GET /v1/health`），覆盖登录及刷新恢复、任意 hash 路由。S205 正常静默，无徽标、成功通知或手动连接入口；仅非 ok/请求失败显示全路由持久异常与可选重试，检查期间保留错误，成功清除。自动检查与重试共享请求锁/取消控制器；卸载 abort 并释放引用以兼容 StrictMode effect 重放。取消的请求不写状态；健康失败不撤销已确认账号，不增加轮询。共享 `PageShell.status` 改为可选，缺省不渲染空的 status 区域，桌面已有状态展示保持。无 wire/schema 变化。
 - Vite 仅回环监听、禁用 CORS，`VAULTSYNCD_DEV_API` 只接受无凭据/路径的本机 HTTP(S) 地址，保留原 Host 让后端校验浏览器 Origin。浏览器验收使用锁定 `nix develop .#web-tests` 的 Playwright Chromium；HTTP localhost 专用测试不代表 S097 生产 HTTPS 已部署。
 
 ## S078 owner Vault 健康与采集页面
@@ -2384,15 +2406,22 @@ metadata_only，保留内容基线与原代际，不生成远端 Delete。`contr
 
 ## S081 桌面连接与绑定管理
 
-- S187：`set_connection` 的身份失败仍映射 IPC `blocked`、`retryable=false` 和文案中的 `BINDING_BLOCKED`；明确区分“本机保存的 ID / 本次读取的 ID”（已有绑定保护）与“确认的 ID / 服务器返回的 ID”（保存前远端复核）。内部原因 `CONNECTION_BINDING_MISMATCH` / `CONNECTION_SERVER_MISMATCH` 不作为新 wire 错误码暴露；仅允许两个规范小写 32 位 ServerId 进入提示，其他详情使用通用文案。已有绑定的同 ID 地址调整仍允许，异 ID 仍拒绝且不更改连接或绑定；无数据库/协议版本变化。
+S221（2026-11-13）：添加绑定表单改为按钮打开的 Mantine Modal，创建成功关闭，失败保留输入，忙时关闭/重复操作禁用。桌面 `AgentClient.openBindingDirectory(bindingId): Promise<void>` 调用 Tauri `open_binding_directory {bindingId}`；原生通过既有认证 `GetStatus` 读取 `management.bindings`，只接受仍活动的绑定，再由 `platform-windows::shell::open_directory` 将其绝对路径解析为 WinRT `StorageFolder`，交由 `Launcher::LaunchFolderAsync` 打开默认文件管理器。无任意路径/命令透传，不启动目录内文件；不存在、已解绑、文件管理器拒绝或 IPC 错误如实返回。仅壳桥新增，远端协议/本机 IPC/schema 不变。`build.rs` 两模式 command manifest 与 `shell.rs` 两模式 handler 必须同源覆盖；`capabilities/main.json` 仅授权本地主窗打开绑定目录，`shell-file` 无此权限，`pnpm --filter @vaultsyncd/desktop test:native-commands` 检查该闭集及权限边界。
+
+- S188—S191 将本机 IPC 升为 2.10， `list_connections` 和状态应答提供 `ManagementResult.connections`，空配置返回空数组。`get_connection` 和省略 `server_id` 的旧连接命令只在有一条连接时适用。`set_connection` 以确认的 ServerId 保存连接；变更现有地址须通过 capabilities 身份复核。`login/logout/list_vaults/create_binding` 可显式携带 `server_id`。新增绑定必须解析到已配置服务器；`BindingInfo.server_id` 由持久绑定提供。绑定范围的命令从持久 BindingId 解析服务器，调用者不能覆盖路由。
+- 客户端 schema 15 的 `agent_connections` 按 ServerId 保存 URL/CA/回环开发传输标记。`agent_login_profiles` 和 `vaultsyncd/session/{ServerId}` 保留现有凭据键。一个用户 agent 维护同一个 writer/维护协调器，按服务器隔离 HTTP 及同步运行状态。
+
+- S187：`set_connection` 保存前的远端身份复核失败映射 IPC `blocked`、`retryable=false`；内部原因 `CONNECTION_SERVER_MISMATCH` 不作为新 wire 错误码暴露，提示同时给出确认值与服务器返回的两个规范小写 32 位 ServerId，URL、凭据、路径等其他详情不得进入提示，无法规范校验时回退通用文案。原卡中“已有绑定不得切换到另一 Server ID”的 `CONNECTION_BINDING_MISMATCH` 拒绝已被 S188—S191 多服务器连接取代（不同 ServerId 作为独立连接并存，不再与单一旧基线比较），合并时未恢复该拒绝；无数据库/协议版本变化。
 
 - S166：IPC minor 2.7 增加 `discover_connection(server_url,ca_file?) → ManagementResult.connection`，只读、无登录凭据，不改变当前配置或 WinCred；返回 `authenticated=false` 的候选。`agent_discover_connection` 仅内置主窗口 capability 可调。React 延迟 500ms 自动读取，地址/CA 编辑、取消、离开页面会使在途结果失效，重新读取可重试；完整 Server ID 只读，独立点击“确认并保存连接”。`set_connection` 保存前用无凭据客户端重读并核对确认的 ServerId，失败保留现有状态，已有绑定仍拒绝更换身份（`BINDING_BLOCKED`）；保留 HTTPS/附加 CA/显式回环开发 HTTP 规则。旧 GUI/CLI 的显式编号输入仍兼容，保存需能连接服务器。身份请求总期限 3 秒、连接 2 秒，低于普通 IPC 的 5 秒；过期确认在保存前复核应答通道。无远端 wire 或数据库迁移。
+
+- S193：IPC minor 2.11 增加 `remove_connection(server_id) → ManagementResult.session_revoked`。agent 先按持久连接解析身份，仍被任一绑定（含已解除绑定）引用时返回 `CONNECTION_IN_USE` 且不改动任何状态；随后停止该服务器的工作者、用无绑定客户端尽力调用 `POST /v1/auth/logout`，无论结果删除 Windows 凭据、`agent_login_profiles` 与 `agent_connections`。`session_revoked=false` 只表示服务器未确认撤销，本地连接已删除。客户端 schema 16 新增 `agent_connection_removals` 留痕，`load_connections` 据此不再把 `agent.json` 的旧单连接当后备入口复活。桥新增固定 `agent_remove_connection`，前端确认框取消不发命令；未确认撤销用不自动消失的通知保留。无远端 wire 变更。
 
 - S114：壳新增固定 `select_local_directory()`，仅 Windows 内置 main 窗口 capability 授权。输入无路径/句柄，owner 从 Tauri 窗口取得；在独立 STA 上以 `IFileOpenDialog` + `FOS_PICKFOLDERS/FORCEFILESYSTEM/PATHMUSTEXIST/NOCHANGEDIR` 选择现有单目录，输出绝对路径 `string`，取消 `null`，失败为本地明确错误。它不属于 agent IPC；前端只读展示所选路径且未选前禁止创建，绑定仍由 agent 校验路径/重叠/卷身份。
 - S114：`GET /v1/vaults` 可选 `name` 从已授权注册路径的 `file_name` 取得，只传末级名称；同名目录可共存，选择值/绑定身份仍是 `vault_id`，排序不变。agent 将名称映射到既有 `RemoteItem.name`；旧服务端缺名或空名显示“未提供目录名（请更新服务器）”，不回退显示 UUID。旧客户端忽略新增字段，无 DB/IPC 迁移。
 - `apps/desktop/src-tauri/src/commands.rs` 提供八个固定 command：`agent_get_status/agent_set_connection/agent_login/agent_logout/agent_list_vaults/agent_create_binding/agent_pause_binding/agent_resume_binding`。每项同时进入 AppManifest 和仅内置主窗口 capability；内部 `exchange` 先复用 IPC 参数校验，后连当前 SID/session 的固定 agent 管道。前端没有任意 command、管道、shell、文件读取或数据库入口。
 - TS `AgentClient` 对应八个类型化方法；连接和创建输入结构拒绝未知字段。`ConnectionInput` 只含 serverId/serverUrl/caFile，S166 增加 `ConnectionAddress(serverUrl,caFile?)` 与 `discoverConnection`，通过 agent 读取现有公开 capabilities 后显示身份供确认；`BindingInput` 只含规范 bindingId/vaultId/localPath/mode。缓存由桥派生在 `%LOCALAPPDATA%/vaultsyncd/binding-cache/<bindingId>`，agent 复核实际物理路径与范围。密码只在瞬时登录请求内，页面提交后清空；凭据仍由 agent WinCred 保存，结果不返回 token。
-- 连接页提供地址、账号、显式附加CA；绑定页每次打开 Vault 选择框自动调用 `agent.listVaults`（S178，无单独读取按钮；防重叠、加载/错误明确，刷新后失效选择清空、失败禁止创建）、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
+- 连接页提供地址、账号、显式附加CA；绑定页默认首台服务器，表单挂载及每次打开 Vault 选择框自动调用 `agent.listVaults`（S178/S201，无单独读取按钮；防重叠、加载/错误明确，刷新保留有效选择、首次或失效时选首个授权项，空清单/失败禁止创建，跨服务器迟到响应丢弃）、选择现有本机目录与full/on_demand、创建合并、暂停恢复。每两秒获取全量真实快照（防重叠），操作串行；读取失败保留旧快照并明确错误，未读取不冒充空清单。同步完成只看核心 synchronized，多维dirty/pending/transfers/unknown/failed/event_lag直接展示。
 - agent 保留管理连接证书错误 `CERTIFICATE_INVALID`（blocked/不可自动重试）和目录错误 `LOCAL_PATH_UNAVAILABLE`（invalid_argument），返回核对名称/CA或现有NTFS目录的说明，不回显底层自由错误或凭据。Vault/登录仍走现有认证用例，IPC schema 无变更。
 - `run-native-bindings.sh` 复用真实 Linux btrfs 实例，私有测试TLS+认证SSH回环隧道，Windows真React表单经桥/管道操作。先不信任CA而失败，再显式CA成功；验证错误目录、双方非空首合并、暂停恢复、关闭GUI后新文件上传与服务端真实字节。脚本/fixture注入仅 native-acceptance feature，正式程序不包含。生产HTTPS部署仍由S097验收。
 
@@ -2641,16 +2670,37 @@ S119 CSP 兼容：`apps/server/src/web.rs` 为每个根 HTML 响应生成随机 
 
 ## S152 客户端与 Web 共用 Mantine 展示层
 
+2026-11-13 S220：Web `FileIcon({ name, filename? })` 保留原调用；`name="file"` 且给定文件名时通过纯函数 `fileTypeIcon(filename)` 按最后一个大小写不敏感后缀选择静态具名 Lucide 图标，覆盖文本/Office文档、PDF、表格、演示、图片、音视频、压缩包、代码、JSON、配置、脚本、字体与数据库。未知/无后缀/单独点文件回退原通用路径，目录及操作忽略 `filename`。仅列表传入条目名称，不读取内容、不改变预览分类与操作准入；尺寸、currentColor、aria-hidden 保持，无 wire/schema/IPC 变化。
+
+2026-11-11 S198：共享 `Icon({ icon: LucideIcon, ...LucideProps })` 使用静态具名 Lucide 导入，替代旧 `path` 参数；现有两端消费者已迁移。`TransferDirection({ direction: string })` 将 upload/download 显示为带中文 `role="img"`、`aria-label` 和 title 的非交互图标，未知方向保留原值。FileIcon 入口及 file/folder/folder-open 几何保持，通用操作委托 Lucide。只新增展示依赖，无 wire/schema/IPC 变更。
+
 2026-11-10 S183：`PageShellProps.brandIcon?: ReactNode` 由应用注入顶栏品牌图标；Web 登录与顶栏直接引用根 `logo.svg?no-inline`，HTML favicon 引用同一 SVG，经 Vite 输出同一个带摘要 `/assets/logo-*.svg`，沿用同源 CSP 与已有静态路由。Nix `webSource` 包含根 `logo.svg`。Windows `bundle.icon` 显式指定 `icons/icon.ico`（16/24/32/48/64/128/256），EXE/默认窗口共用；托盘克隆 `default_window_icon`，不再生成纯色占位图。ICO 由根 SVG 派生，命令及证据见 S183 交接；无 wire/schema 变化。
 
-- `packages/ui` 提供 `AppProvider`、`PageShell`、`Button`、`Table<T>`、`Dialog`、`EmptyState`、`StatusBadge` 及 `styles.css`，只依赖 React/Mantine，不导入 IPC、HTTP、Tauri 或 wire DTO。两端在各自根入口导入共享样式。
+2026-11-13 S223：品牌源集中到 `assets/branding/`，默认 `logo.svg`/`icon.ico` 为透明背景，原黑底源与七尺寸 ICO 逐字节保留为 `logo-dark.svg`/`icon-dark.ico`。覆盖 S183 的根 SVG 和 `src-tauri/icons` 路径：Web 三处引用默认 SVG，Tauri `bundle.icon` 与 Windows Shell `include_bytes!` 共用默认 ICO；Nix Web/Rust 源过滤分别包含 SVG/ICO，黑底备用不进入默认 Web 资源。重生方法见该目录 README。S222 内容寻址自然生成新的持久图标并刷新既有绑定；须新客户端构建/新 agent 恢复绑定才生效，不改身份、协议或数据库。
+
+- `packages/ui` 提供 `AppProvider`、`PageShell`、`Button`、`Table<T>`、`Dialog`、`EmptyState`、`StatusBadge` 及 `styles.css`，只依赖 React/Mantine/Lucide，不导入 IPC、HTTP、Tauri 或 wire DTO。两端在各自根入口导入共享样式。
 - `AppProvider` 使用 Mantine 默认主题、`defaultColorScheme="auto"` 和全局通知区，可传 `getStyleNonce`。`PageShell` 提供 48px 顶栏、240px 导航、窄屏 Burger、跳转主内容与明暗切换；调用方提供路由、导航、连接状态和各端附加入口。主题偏好使用 Mantine 本机存储，不存放账号凭据。
 - `Dialog` 组合 Mantine Modal，通过 `opened` 控制并保持组件挂载，使关闭恢复焦点；`Table` 保留 caption/columns/rows/rowKey/emptyMessage，水平滚动局限表格内部。Web 的 `components/ui.tsx` 仅稳定重导出共享展示 API，业务页面继续使用自身 API 和状态机。
 - 桌面 `App` 的用户操作通过 Mantine 通知展示等待/成功/失败，四秒关闭成功通知，失败保留可关闭；轮询仍原位显示连接状态和错误，不按两秒频率刷通知。连接错误与操作反馈分开保存，首次成功读取显示已读取；业务请求拒绝后重新读取本机状态，不能据业务拒绝推断 IPC 断连。文件手动读取失败及恢复 pending/unknown/rejected 向统一反馈传播失败，保留原操作身份与状态；恢复 committed 后仅状态刷新失败不降回 unknown。`run/busy/changed` 和所有 Tauri invoke 命令不变。
 - 桌面 bundled HTML 由 `on_web_resource_request` 生成每响应 128-bit 随机 style nonce，注入 `meta[name=csp-nonce]`，并追加到 Tauri 已生成的 `style-src`；保留其 script hashes、IPC connect-src 与 capability 限制。`main.tsx` 初始化 `__webpack_nonce__` 供 Modal 滚动锁使用。缺少有效 HTML/CSP 或随机源失败则拒绝返回可执行页面，不增加 unsafe-inline。与 Web 一样，Provider 和滚动锁使用同一 nonce。
 - 依据：design §5.6、§18.1、ADR-024；[Mantine nonce](https://mantine.dev/theming/mantine-provider/)、[Tauri CSP](https://v2.tauri.app/security/csp/)。验收与限制见 `agent/tasks/S152.md`。
 
+2026-11-13 S227：默认 SVG 替换为用户提供的蓝色云朵双箭头 Logo（1254×1254，白色背景逐字节保留），七尺寸 `icon.ico` 从该源重生；覆盖 S223 默认透明背景的外观描述。所有共用路径、Shell 内容寻址刷新及新 agent 启用条件保持，备用黑底资源不变。
+
+2026-11-13 S228：按用户最新要求移除默认SVG背景矩形，七尺寸ICO同步改为透明背景，覆盖S227白底外观；图形、渐变、1254×1254画布及所有消费路径保持。黑底备用资源仍保留，新agent恢复绑定时发布新的内容寻址图标并刷新Explorer。
+
+2026-11-13 S229：SVG的viewBox改为`35 45 1180 1180`，居中等比放大主体约6%，透明与完整轮廓保持；七尺寸ICO同步重生。Web顶栏28→36px、登录40→48px；共用资源路径、Shell持久图标内容寻址与新agent启用条件保持，黑底备用不变。
+
+2026-11-13 S230：默认SVG的cloud-gradient改为浅蓝`#8ACFFF`/`#66BDF4`/`#47A7E9`，七尺寸ICO同步重生。其余渐变、路径、透明度、viewBox及展示尺寸保持；所有共用路径、Shell图标内容寻址与新agent启用条件不变，黑底备用不变。
+
+2026-11-14 S232：默认SVG的cloud-gradient在S230基础上略加深为`#76C7FF`/`#53B5F3`/`#359EE7`，七尺寸ICO同步重生。其余渐变、路径、透明区域、viewBox、展示尺寸、共用路径及新agent启用条件保持；黑底备用不变。
+
 ## S122 Web Vault 文件浏览器
+
+- S208（历史，PDF技术边界由下条S209覆盖）：受支持 PDF/图片的文件名与行菜单「预览」打开原页只读查看器，不改变 URL、EntryId/VersionId 或服务器内容；其他格式仍显示属性。复用 S171 `downloadFile` 的固定版本、Range 长度与完整 SHA-256 校验，沿用 BrowserAuth，会话失效收回管理页。PDF 采用随包同源 worker 与 canvas，关闭脚本/XFA/eval；图片由浏览器解码为静态画面后 canvas 展示，不嵌入 SVG/HTML、iframe/object 或外部文档资源，不放宽生产 CSP。关闭/导航/切换 Vault/退出取消读取与渲染，旧响应不恢复对话框。`preview.ts` 在网络前限制50 MiB，栅格头/实际解码限制16 Mi像素及单边8192，`boundedCanvas` 限制画布8 Mi像素。`patches/pdfjs-dist@6.5.438.patch` 由根 `pnpm-workspace.yaml` 精确应用到锁定worker，补齐 PDF 图像/掩码/合成尺寸及解码前检查，`stopAtErrors` 下向查看器传递失败而非显示缺图页面；依赖升级须重新审计并跑真实worker回归，Nix Web源包含patches。错误重试、下载和实际验证见 `agent/tasks/S208.md`；无新端点、DTO、schema 或迁移。
+- S209（2026-11-12，覆盖S208的PDF技术边界）：固定版本/Range/完整SHA-256校验、读取前50 MiB门禁保持。校验后确认PDF签名，将Blob MIME固定为 `application/pdf`，以 `iframe.file-preview-pdf` 交给浏览器内置查看器；翻页/缩放/搜索/密码/损坏文档UI与PDF资源及动作行为由浏览器负责，不再使用应用PDF.js/worker/字体/补丁或PDF像素预算。仅Web CSP增加 `frame-src blob:`，脚本策略、`object-src 'none'`和外部frame禁用保持；不嵌入HTML/SVG。未启用原生PDF能力时保留下载提示。关闭/取消/导航/换Vault/会话卸载均撤销对象URL并拒绝迟到结果。图片继续原有解码/尺寸/画布限制。无新端点、DTO、schema或迁移；验收见 `agent/tasks/S209.md`。
+- S218（2026-11-13，覆盖上述主动关闭的展示清理时机）：FilePreview将工作取消与展示资源释放分离。X/Escape/遮罩关闭立即abort下载、渲染和Office/语法模块迟到回调，保留标题/正文/布局、canvas像素、PDF Blob和Office iframe至Mantine `onExitTransitionEnd`，之后撤销URL、销毁renderer/editor及Office临时会话。导航、Vault/认证变化和卸载仍立即释放；独立预览代号/最新entry围栏避免旧退出回调清掉快速重开的内容。取消按钮仍立即释放并可重试。无wire/DTO/schema变化；逐帧反证及三套真实Chromium验收见 `agent/tasks/S218.md`。
+- S210（2026-11-12）：新增 text/markdown 只读查看器。未知扩展名尝试文本、已知二进制保持属性；HTML/SVG源码进入CodeMirror不嵌入文档。`preview.ts` 网络前文本2MiB、`decodePreviewText`严格UTF-8/带BOM UTF-16及控制字节拒绝，保留固定版本/长度/SHA-256与原下载。`TextPreview.tsx` 使用精确锁定React CodeMirror6，只读/不可编辑、文件名语言按需加载、CSP nonce样式；Markdown渲染前限制10000 AST节点/32代码块/128层，超限提示切源码；默认GFM渲染可切源码，raw HTML跳过、链接和图片文字化，无外部资源请求。关闭/导航/退出清除内容并防迟到恢复；无新端点/DTO/schema或在线保存。验收见 `agent/tasks/S210.md`。
 
 S159：Vault 主表路径为 `#${filesLocation(vault_id)}` 原生深链，打开对应 Vault 根目录。管理清单 `ManagedVault.file_bytes?: decimal_u64` 为同一 SQL 读快照下、owner scope 内当前活跃文件版本 `size` 总和；空 Vault 为零，SUM 溢出/数据库失败走既有存储错误。按文件独立计数，不含历史/回收站，不是物理占用。DB schema 不变；可选新增字段保持旧消费者兼容，旧服务缺省在 Web 显示“未知”。`formatBytes` 共用于文件大小及 Vault 容量。
 
@@ -2732,6 +2782,7 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 - `file_activity`保存启用后的事实，`operation_activity_sources`在受理前记录稳定登录连接归属、首次标签/接入类型、请求摘要及upload_id。连接快照由认证会话解析，同账号刷新链仍对应稳定client_id；声明的DeviceId单独保存，不用于认证。source与请求摘要匹配才随`commit_operation`同事务写`sync_commit/committed`，重试/恢复不重复；source已保留而操作尚未建立时，同键不同请求仍409 `OP_ID_REUSED`。只记关联upload的内容事件，无内容传输的目录/移动/删除/历史恢复不伪装上传。
 - `upload_finalize/ready`与uploads终态同事务，表示内容已校验，可以尚无文件名；按上传身份去重，逻辑size不冒充实际网络bytes。随后`sync_commit/committed`携带当时路径、EntryId/VersionId/OpId和大小。`download/served`在读出固定版本后记录当时路径、整份size及实际区间offset/bytes，再准备响应；不证明客户端已接收/校验/落盘，重复Range请求逐请求记录。finalize/download处理失败记录`failed`与实际分类错误码；未授权或无法解析身份的请求不进入账本。写账本失败显式报错，不吞错伪造记录。
 - 客户端`list_activity(binding_id,cursor?,direction?)`由agent核验Binding的Server/Device与当前配置，使用自身认证HTTP读取该Vault账本，再转换为本机DTO；GUI经Tauri允许列表桥调用，不访问在线数据库。客户端与Web均可查看所选Vault所有客户端，分页、方向、刷新、详情及空/错误态独立；会话/筛选/绑定变化忽略迟到结果。记录不是客户端本地离线失败、未上传内容或本地应用结果日志。
+- S202 两端通过 `packages/ui` 的 `useLiveRefresh(load, enabled, interval=2000)` 调度：首次立即读取，后续请求结束后等待间隔，可见时串行刷新当前游标；隐藏暂停、恢复可见/聚焦立即刷新，后台不清空表格和详情，失败保留结果并自动重试。回调负责业务错误展示；cleanup 中止 signal，Web 实际取消 HTTP，桌面 IPC 不支持物理取消但以 signal 拒绝迟到结果。查询作用域变化重建调度，手动刷新仍回第一页；API/IPC/schema 不变。
 - schema19→20沿用启动前一致备份/新schema旧二进制拒写；备份清凭据时保留两张新表及快照，完整备份计数/恢复校验包含它们。回退使用整套schema19归档和配对路径/新epoch，不能只切回旧二进制或改版本标记；不从旧版本/日志回填历史，不自动清理活动记录。
 
 ## S163 开发测试数据根（覆盖 S146/S161 的当前位置）
@@ -2751,6 +2802,8 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 
 
 ## S176 — 桌面登录门禁与本机登录资料（客户端schema14 / IPC2.9）
+
+S188—S191 已取代本节的启动登录门禁和单连接交互。以下保留 schema14 与 IPC2.9 的历史验收入口。当前契约见本文件 S081 中的 IPC2.10 增量及下一节。
 
 - `App` 先经agent IPC读取状态。首次未确认或`connection.authenticated=false`仅挂载不可关闭的Mantine登录框；密码输入仅存组件内存，失败清空，成功卸载。成功登录及agent持久化应答后刷新状态，保留hash深链进入正式界面。退出或已确认需要重新认证时卸载整个正式界面；临时IPC/网络错误不冒充凭据失效。
 - 登录表单复用S166的公开身份发现和保存前重核；服务器地址、可选CA、只读Server ID、用户名和密码在一个表单内，由“登录”确认身份及连接后调用既有`login`。失败保留用户名并重新发现，地址/CA编辑继续使旧结果失效；已有绑定禁止换ServerId。GUI不访问在线DB或凭据库。
@@ -2775,3 +2828,94 @@ S180-c：S174普通启动屏障曾连带拦截更新事务内部session启动。
 - 程序清单只用于发布/显式自动更新：`verify_program` / `verify_zip` 不再位于普通启动链；更新下载、候选归档安全与备份/恢复完整性仍验证。GUI 与后台来自不同目录时，托盘更新在联网和退出 GUI 前提示安全 Stop/重开目标目录，避免用 B 的目标去恢复 A 的进程。
 - 旧 v0.1.7 解包器实测拒绝新十文件包，无法靠新二进制修复已安装的更新器；首次新布局发行必须声明一次性手工迁移（旧版安全停止，手工下载完整新包后任意目录直开，状态保留）。本卡不发行/改写旧附件，不承诺旧托盘能直接升级。此后新客户端自动更新使用新集合。
 - 通知初始化不再读取程序清单，未保存设置时统一默认关闭，保留显式开关；WebView2 需求由实际 WebView 创建决定，不再另做 ZIP 专属注册表前置检查。无 wire/schema/同步语义或服务端产物变化。
+
+
+## S188—S191 多服务器运行与状态迁移
+
+客户端 schema15 将单连接迁入 `agent_connections`。旧 `vault:<VaultId>:<cause>` 通知按绑定身份、原单连接或唯一 Vault 所属服务器补成 `server:<ServerId>:vault:<VaultId>:<cause>`，保留发生次数、恢复/已读、活动代际与领取状态。来源不明确的历史行保留原键，界面显示，按绑定查询时不归到任意服务器。`Notice.server_id` 是可选字段。
+
+Agent 的主协调器保持用户 IPC、单 writer、全局目录重叠检查与维护屏障。每台服务器的独立任务管理凭据、HTTP、SSE 提示、同步循环及命令队列。创建绑定先保留全局路径，完成后核对持久结果，调用方超时也保留已落库绑定。维护准备等待所有服务器任务排空，再执行原有恢复导出。实际 CFAPI 断开/排空失败时保留旧持久入口及可见连接，将该服务器置为离线/NEEDS_RECOVERY，并围栏本进程内的再次组装；重启后重核。
+
+`ApiClient::with_expected_server` 在登录、令牌刷新、业务请求和 SSE 前使用公开 capabilities 复核身份。错配经 `ServerIdentityMismatch` 转为 `NEEDS_RECOVERY`。恢复代际检查用无凭据请求核对持久绑定的 ServerId，其他服务器的会话继续运行。
+
+新远端事件的本地 OpId 包含 BindingId，避免同一事件在不同绑定碰撞。重启处理旧未完成批次时，只复用确实属于当前绑定的历史 pending/action 身份，保留重试和恢复证据。`tests/platform/windows/run-native-multi-server.sh` 是双 HTTPS 实例与单 Windows agent 的受控验证入口。
+
+## S192 解绑后的桌面活动列表投影
+
+`AppView` 从 `management.bindings` 统一筛选 `!detached`，供本地 Binding 表、管理卡片和文件/历史/传输记录的绑定选择器使用。绑定 ID 集合变化时重置后三页的 React scope，丢弃失效选择、页面缓存与迟到读取的展示；不改写持久恢复作业或 agent 状态。失败/取消按既有 agent 结果保留绑定。
+
+`BindingActions` 在 agent 返回保留报告后，通过全局 Notification 展示未确认与非完整项数；存在待恢复内容时不自动关闭，避免列表移除后丢失数据风险提示。IPC/schema/CLI 的已解除记录与恢复导出入口保持，解绑仍不发送服务器 Delete、不清本地内容或缓存。Chromium 入口 `tests/desktop/detach-browser.py`；Windows 原生列表与数据保护回归纳入 S082。
+
+## S195 解绑后的同步根交接（无 wire/schema 变化）
+
+`management::{admit,new_binding}` 增加数据库参数并异步读取 `binding_controls.detached`；`config.bindings` 和 assignments 仍保留全量恢复记录。活动根互斥，暂停不释放预留；detached 仅允许精确物理根重用，父子嵌套仍拒绝。所有历史缓存与 agent 状态继续参与物理重叠校验，不复用旧缓存执行发布日志。历史根已删除可跳过，未知权限/扫描故障和内部目录不可用 fail closed。
+
+`client-store::bindings::protected_paths(db, binding)` 为首次导入和 resync 提供“其他活动根＋全部保留缓存”的统一持久集合；不把 detached 根重新当成互斥路径，也不因暂停而释放根。物理身份、精确根重用和父子限制仍由 agent 的平台准入执行。
+
+`Server::quiesce_binding` 在持久 detached 提交前取消回调、断开 CFAPI、等待 idle 并释放 live/receiver/hints。`management_paths::prepare_reuse` 在新绑定落库前核对 `maintenance::registered_identity` 与旧占位身份，完整内容调用既有 `revert_materialized` 校验身份/哈希后变为普通文件，再注销旧 CFAPI/Explorer 注册；旧缓存、队列、恢复记录不删。不完整内容返回 `MODE_REQUIRES_LOCAL_COPY` 且不创建新绑定；外来身份拒绝接管。旧 `RestoreEntry` 与 `retry_restore` 在持久 detached 围栏下拒绝重新写远端。启动、手动释放和离线维护共用 durable 准入，provider 卸载按实际注册身份选择：解绑但仍持有注册的旧根继续完整性预检/无损移除，已交接的旧记录不再次注销新绑定。fallback 解绑遇到被围栏或尚未证明安全退出的服务器任务时拒绝写 detached。
+
+## S197 客户端主机属性（服务端 schema21，可选 wire/IPC 字段）
+
+- 登录请求增加可选 `hostname`、`operating_system`，最多255字节、非空、无控制字符；客户端声明仅供展示，不能作为授权依据。Windows agent 从 GetComputerNameExW/RtlGetVersion 采集，device_label 同时使用主机名兼容旧服务。
+- `client_connections.hostname/operating_system` 在登录事务中保存，刷新只推进 session_id。活动按稳定 client_id 和 owner 读取这两个不可变属性与已有 login_ip，保留文件/标签原快照；旧库迁移为 NULL，不伪造旧主机名。
+- ActivityRecord 增加可选 `client_hostname/client_os/client_ip`；旧版远端ActivityRecord严格拒绝未知字段，因此仅请求头 `X-Vaultsyncd-Client-Properties: 1` 返回扩展属性；未请求时保持旧形状，新两端显式请求，旧服务忽略该头。新两端客户端列使用主机名，缺省“未知主机”，详情显示系统和“登录来源 IP”。IP 沿用 S170 TCP/loopback 代理规则，不代表实时IP。
+- schema20→21 自动迁移前一致性备份，旧二进制拒写；回退须整套配对备份，不执行 down migration。IPC 主次版本不变，可选字段兼容既有消费者。
+
+## S204 绑定文件 Explorer 菜单（无 wire/schema 变化）
+
+- `platform-windows::shell::context_menu::{sync,unregister}` 仅维护带本软件 Owner 标记的 `HKCU\Software\Classes\*\shell\vaultsyncd`，拒绝覆盖/删除同名外来键。顶层 `MUIVerb=vaultsyncd`、`ExtendedSubCommandsKey=*\shell\vaultsyncd`、单选；直接嵌套 history/download/release，更新时删除旧 SubCommands 并通知 Shell 刷新。命令固定为当前 `vaultsyncd-desktop.exe --shell-action <verb> -- "%1"`，使用 REG_SZ，不经 cmd/PowerShell。AQS `System.ItemPathDisplay:~<"<binding>\"` 按活动根边界筛选；最后一个活动根移除即删除自家键。主窗认证状态轮询驱动幂等协调，注册失败单独可见且不使已连接 agent 被误报离线。依据：[Microsoft 级联菜单](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-create-cascading-menus-with-the-extendedsubcommandskey-registry-entry)、[AQS](https://learn.microsoft.com/en-us/windows/win32/search/-search-3x-advancedquerysyntax)。Windows 11 位于「显示更多选项」。
+- `relative_file`/`same_file_path` 按 Windows Ordinal 分量比较，拒绝 UNC/device/点分量/ADS；仅作词法解析，授权由桌面 `shell_actions::resolve` 重新从认证 IPC 活动清单取得。连续祖先句柄与无回源 `VaultHandle::inspect` 核对单链接文件、绑定根及物理身份；正式72字节 `catalog::Identity` 再核对 BindingId/VaultId/EntryId。不匹配、移动替换、解绑或未确认身份都显式拒绝，不回退到其他文件。
+- 新 Tauri 桥 `get_shell_target -> {action,binding_id,entry_id,path}`（path为agent相对路径）、`shell_file_status -> {file,binding}`、`shell_file_action({operationId}) -> ManagementResult`。路径/动作/目标只来自启动时原生参数，JS不能改选目标。一个窗口只准入一个操作编号，应答丢失保留该编号核对，不把释放后 release_allowed=false 当作原操作未执行；后端安全核验与持久幂等保持。
+- `#/shell` 文件窗口标签 `shell-file`，独立 capability 只开放三个固定目标命令和只读历史；不可调用主窗通用下载/释放/恢复/配置等写桥。文件窗口独立于主窗单例，历史只读分页；下载显式按钮，释放二次确认；关闭文件窗口不停止agent、不留托盘。`--unregister-shell-menu` 只清自家菜单，先退出主窗防止轮询重新注册；不改绑定/状态/凭据。程序目录移动后重新启动主窗刷新目标；没有新增包、应用身份、数据库迁移或服务端改动。
+
+## S207 prod/dev 运维接口（无 wire/schema 变化）
+
+- prod=`https://vsyncd.132140.xyz`，原 `tools/deploy-local.sh` + NixOS 部署、8721后端与生产目录保持。dev=`https://wlab.132140.xyz:15401`，后端仅回环18741；证书复用本机 ACME fullchain/key，独立 Caddy 不启用管理API或自动签发。
+- `tools/dev-server.sh init|start|stop|restart|status|logs` 自动进入 devShell；`--root` 默认 `/data/vaultsyncd-dev/dev-server` 且只能在开发根下，无软链/越界，数据为独立 btrfs。`init --login` 从stdin读密码，`--package` 选择服务包；`logs --service server|caddy|supervisor|all --lines N --follow` 查看文件日志，普通start脱离终端、无开机自启。运行信息记录boot/starttime/UID，stop借助pidfd保护，禁止按名称强杀或删除数据。
+- dev 初始化产生独立 ServerId/owner，持续重启保持该身份；Windows 测试机按此ServerId保存唯一dev连接，经认证IPC/WinCred登录，不移植生产数据库或绑定。配置入口与现场证据见 `docs/operations/dev-server.md`、`agent/tasks/S207.md`。
+
+## S199 排除缺失恢复与部分占位维护（无 wire/schema 变化）
+
+- `ExportSource::current(Target) -> CurrentContent` 默认 `Complete`，原生源以健康根扫描证明 `Absent`，或以 CFAPI binding/vault/entry/version、原生in_sync=1且无修改范围证明 `RemotePartial {version,size,on_disk,identity}`。core 只允许 clean 已跟踪且 excluded/reconcile_required 的非 partial 缺失条目，或与共同基线及 `agent_versions` 大小/身份一致的 clean 部分占位；dirty/awaiting_commit、未知身份/扫描、缺少固定版本均拒绝 `RECOVERY_CONTENT_REQUIRED`。上传快照独立导出，不以远端字节替代。
+- 恢复包仍为 format 1：manifest/files 与完整字节校验不变，`state.json` 增加 `current_observations`（`[Target, CurrentContent]` 元组数组）及 controls/participation/agent_versions/agent_actions。每项明确缺失或部分水合及固定版本，不为它们创建虚假完整 `.bin`；这是可加字段的状态快照，旧读取器不能据缺少 `.bin` 推断用户数据已删除或完整离线。完成前重新核对分类、来源、扫描及整个 SQLite 状态；导出不改 dirty、围栏或队列。PrepareMaintenance 暂停并排空后使用相同出口，失败退出且无成功清单。
+- 既有 `DownloadEntry`/CLI `download` 是显式恢复入口：取消排除后缺失的已跟踪 clean 文件仍不自动恢复、不传播删除；显式操作用当前认证固定快照、原路径/本地/规则/remote CAS 与 ControlledApply 的不覆盖创建恢复完整内容。复用 operation_id 的输入在副作用前登记；未确认/被占目标拒绝。文件列表给具体原因与“取消排除后点击下载”入口，围栏期间不显示 synchronized。
+- 部分占位重新包含先核对原身份、逻辑长度、物理身份、DB clean 和 cloud.modified=0；同版本只恢复参与，保留 residency；远端改版时先按原不可变 pin 补齐已下载旧范围，再由普通三方协调处理新版本，不能把 partial retag/dehydrate 到新 head。协调中的 user_read 仅对 clean 共同基线开放旧 pin 读取，不开放上传/替换/释放授权；最终元数据与 DB CAS 变化保留围栏。
+- 原生入口：`VAULTSYNCD_NATIVE_EXCLUSIONS_TASK=S199 VAULTSYNCD_NATIVE_ARTIFACTS=<开发根证据目录> tests/platform/windows/run-native-exclusions.sh`（windows devShell；宿主 helper 必须当前树构建，保留现有产品进程预检）。S196 默认回归入口保持。
+
+S199 补充边界：ControlledApply 仅对 `expected=Absent` 且完整 `baseline_before == baseline_after` 允许相同 revision 的显式恢复，不能以相同 revision 改版本/位置；本地 dirty/CAS 与平台不覆盖条件不变。caller op 复用同一持久 journal，已完成请求不得重建后来再次删除的文件。此类新 journal 不需要新增字段或 schema，但旧版本的校验器会安全拒绝相同 revision；存在未完成事务时先用本版完成恢复，回退不能让旧版继续该事务。恢复包/整套状态备份保留，不能只降二进制并宣称兼容。ExportRecovery/DownloadEntry/ReleaseEntry 的操作及响应等待为有界 30 分钟；收请求帧、写响应帧仍 5 秒，StopAgent 仍 60 秒。
+
+水合暂存句柄：`HydrationCallbacks::close_idle_staging` 在 idle 后关闭已验证远端暂存的独占引用，磁盘字节/bitmap/水合范围均保留；ExportRecovery先wait_idle再关闭，disconnect同锁clear，下载完成在同锁下复核cancel/closed后才insert，避免退出后重新pin。重新读取必须重新打开安全StagingFile并整份核验，不跳过扫描错误。原生range夹具提供当前协议能力与真实基线，不再借用历史v1 wire。
+
+原生负例以CfSetInSyncState撤回真实partial的确认，验证拒绝与独立唯一未确认字节/驻留量保持；不伪造in-sync ack，清理通过CFAPI实际读回原固定版本并整份hash。physical modified>0 partial在本Windows路径会要求先整份召回，未取得该组合原生证据；dirty/awaiting partial由真实SQLite矩阵覆盖，原生full双改保留另有实测。异步CF保护句柄的release读统一复用controlled::read_at（保持event/OVERLAPPED/buffer至完成），不使用FileExt同步wrapper；官方句柄语义见 https://learn.microsoft.com/windows/win32/api/cfapi/nf-cfapi-cfopenfilewithoplock 。
+
+## S212 OnlyOffice 部署接口（应用待接入）
+
+`/etc/nixos/features/onlyoffilce.nix` 提供 `features.onlyoffilce.*`，wks-lab开启独立 Document Server：外部HTTPS `https://wlab.132140.xyz:15402`，API脚本 `/web-apps/apps/api/documents/api.js`，内部nginx `127.0.0.1:15403`、docservice `127.0.0.1:15404`，JWT运行时文件 `/var/lib/onlyoffice-secrets/jwt`。配置/密钥生命周期见主机README，部署及回退见 `docs/operations/nixos.md` S212。
+
+本卡未改变wire DTO/schema、BrowserAuth下载或CSP。现有Web仍将Office视为不支持预览；未来应用接入须另卡实现只读配置/JWT、Document Server可访问的受限固定版本内容入口及资源限制，不能传浏览器Blob URL或裸露管理员凭据，也不能直接开放现有需BrowserAuth的下载端点。
+
+## S213 Office 固定版本预览（覆盖S212应用待接入状态）
+
+唯一wire编辑源 `api/openapi.yaml`：新增 `OfficeFileType` 九格式闭集、`OfficePreviewRequest {file_type,hash,size}` 与 `POST /v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview`（生成 `previewOfficeVersion`）。请求需BrowserAuth/CSRF或现有Bearer授权；先核对Vault/固定版本/预期摘要与大小，在GC租约下完整读取、SHA256校验并释放对象活动锁，再交给OnlyOffice。输入/PDF各50MiB，每进程最多两个准入，原始deadline120秒。随机256位本机回环临时源按原会话/Vault逐次重查权限；Source析构关闭监听和已接受连接，源URL/JWT不返回浏览器。后台worker持有准入直到转换返回或deadline，取消HTTP不提前释放；不能撤回OnlyOffice已经入队的工作，deadline后上游仍可能继续。
+
+响应200为application/pdf，Content-Length、X-Content-Sha256是PDF摘要，X-Preview-Source-Sha256/Version绑定原始源；no-store/nosniff，返回前再次校验会话/Vault。转换下载只接受配置同origin的 `/cache/files/`，不跟重定向、不用环境代理，结果流有界并检验PDF头。401/403/410保持身份/权限/版本语义，400不合法请求，413超限，422校验或转换失败，503未配置/繁忙/不可用/超时；错误仍为既有信封。未增加匿名公网源端点、持久表或迁移，旧消费者保持原端点行为。
+
+`[office] document_server_url/jwt_secret_file` 是可选启动配置；URL仅HTTPS或字面回环HTTP根，未知字段/非法URL/密钥不合规拒绝启动。NixOS `services.vaultsyncd.office` 用LoadCredential代读，TOML仅指 `/run/credentials/vaultsyncd.service/office-jwt`；具体部署见nixos运维S213。Web先经现有downloadPreview验证原件并保留下载，再通过生成客户端有界读取PDF并核对源头、长度及完整SHA256，使用既有Blob/PDF查看器。关闭/导航/Vault/认证代际均取消并拒绝迟到结果，CSP不放宽。OnlyOffice自动修复得到合法PDF不意味着源修改，外链资源不随文档加载，排版/分页及PDF动作由转换器/浏览器负责。
+
+生成器format7/version0.3.0新增application/pdf成功字节及对应Accept；五份生成文件重建，本机IPC版本/DTO/数据语义不变（仅生成器来源头更新）。
+
+## S215 ONLYOFFICE 原生只读查看器（覆盖S213默认预览路径）
+
+`api/openapi.yaml` 为唯一wire编辑源：新增 `POST /v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer`（`createOfficeViewer`），复用 `OfficePreviewRequest` 的九格式/hash/size输入；返回 `OfficeViewerSession {session_id,document_server_url,config_json,source_hash,source_version}`。`config_json`承载第三方完整签名配置，不将其camelCase DTO复制到本机IPC/schema。配对 `DELETE .../office-viewer/{session}`（`closeOfficeViewer`）只撤销发起认证会话自己的源通道；成功200为`OfficeViewerClosed {closed:true}`。接口沿用BrowserAuth/CSRF或Bearer与当前Vault授权、固定身份/预期摘要大小及GC租约下完整SHA256校验；50MiB、最多2项源准入与120秒过期，关闭释放，失联/丢响应自动收尾。会话仅驻内存，无持久化迁移。
+
+签名配置固定 `editorConfig.mode=view`、`coEditing={mode:strict,change:false}` 与不可编辑/批注/审阅/填表权限；禁宏/插件、不提供原件保存回调。每次创建独立随机document key及源capability，源地址仅回环、每次读取重查原会话/Vault；浏览器得到特定文档的限时URL及JWT，得不到共享JWT密钥或管理员凭据。撤销/到期不能收回ONLYOFFICE或浏览器已获取的副本，也不硬取消上游已入队任务；源准入不是上游执行并发上限，缓存/字体/格式兼容属第三方边界。
+
+Web保留原件完整读取与下载，Office不再请求PDF转换，改为已配置Document Server的固定API.js及DocEditor。关闭/取消/导航/Vault或认证代际变化销毁iframe并撤销临时源，拒绝迟到结果；脚本30秒、文档120秒失败可重试。主HTML CSP仅按启动配置增加精确origin到script-src/frame-src，connect/object及非空inline限制保持；仅Office启用时用`script-src-attr`与SHA256(empty)精确许可上游Safari兼容用的空事件体，不允许任意inline/eval；无Office配置时原策略保持，API.js运行于主应用上下文，配置服务属于受信任代码。旧S213 PDF端点与原PDF/图片/文本路径继续兼容。实际验收及限制见 `agent/tasks/S215.md`。
+
+
+## S225 文件操作活动（schema22 / IPC3.2）
+
+- 补充并覆盖 S172 的仅上传/下载活动范围：`direction` 接受 `upload|download|operation`；省略仍读取全部，分页/授权/失败语义保持。`operation` 仅表示服务端已提交操作，不表示内容传输。新增 `action=create_directory|move|delete|restore_version|restore_deleted`、`status=committed`，移动与重命名同 `move`。
+- 事件与已捕获认证来源按 Vault/DeviceId/OpId/请求摘要关联，在 `commit_operation` 的同一事务落库；目录新建、移动记录目标路径，删除记录删除前路径，恢复记录恢复目标路径；不读未来名称推算历史。上传仍为 `sync_commit`，下载 `served` 仍不证明客户端接收/落盘。
+- 迁移0022扩展 `file_activity` 约束，保留全部旧列/ID/索引与 `sqlite_sequence` 高水位，不从旧 `changes` 或版本补造活动；schema21→22自动一致备份、旧二进制拒写，回退用停机后的整套21备份。完整备份继续包含账本与操作来源两表。
+- 唯一wire源继续为 `api/openapi.yaml`、`api/local-ipc.schema.json`，生成器更新类型。本机IPC minor3.2明确新增筛选能力；新GUI需配套agent，旧3.1请求仍兼容。agent按绑定身份和认证HTTP授权转发新筛选，两端以操作图标/中文动作显示，支持文件操作筛选；未知字符串仍可显示，不当作成功。

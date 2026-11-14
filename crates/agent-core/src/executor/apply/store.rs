@@ -199,7 +199,11 @@ impl ApplyStore {
         if let Some(local) = &local {
             if (local.dirty != Dirty::Clean && copy.is_none())
                 || match &spec.expected {
-                    ContentEvidence::Absent => true,
+                    // Re-inclusion can restore a clean tracked file that disappeared
+                    // while excluded. Keep its baseline/local CAS in the journal; dirty
+                    // (including awaiting_commit) remains rejected above. Initial import
+                    // still requires there to be no pre-existing local identity.
+                    ContentEvidence::Absent => spec.baseline_before.is_none(),
                     ContentEvidence::File {
                         generation,
                         identity,
@@ -412,7 +416,9 @@ pub(super) fn validate(spec: &ApplySpec) -> Result<(), PortError> {
                 || before.kind != EntryKind::File
                 || (before.deleted && spec.expected != ContentEvidence::Absent)
                 || before.parent.is_none()
-                || before.revision >= after.revision
+                || before.revision > after.revision
+                || (before.revision == after.revision
+                    && (before != after || spec.expected != ContentEvidence::Absent))
         })
     {
         return Err(invalid(

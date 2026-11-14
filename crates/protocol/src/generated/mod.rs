@@ -1,6 +1,6 @@
 //! 本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。
 //!
-//! 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.2.0
+//! 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.3.0
 //! 服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
 //! 不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
 //! 在对应功能卡加入。
@@ -45,25 +45,37 @@ pub struct ActivityPage {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActivityRecord {
-    /// upload_finalize或sync_commit或download
+    /// upload_finalize或sync_commit或download或create_directory或move或delete或restore_version或restore_deleted
     pub action: String,
     /// 本次内容字节数
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<String>,
+    /// 客户端登录时声明的主机名，旧记录或浏览器未知
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_hostname: Option<String>,
     /// 稳定登录连接身份
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// 服务端观察的客户端首次登录来源IP，不代表本机内网IP或实时地址
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
     /// 登录入口client或browser或unknown
     pub client_kind: String,
     /// 客户端登录标签快照
     pub client_label: String,
+    /// 客户端登录时声明的操作系统
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_os: Option<String>,
     /// 操作声明的设备身份，不代表认证设备
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
-    /// upload或download，按客户端方向
+    /// upload或download或operation，上传下载按客户端方向，文件操作不表示传输
     pub direction: String,
     /// 条目身份
     #[serde(default)]
@@ -523,8 +535,16 @@ pub enum HealthStatus {
 pub struct LoginRequest {
     /// 设备的人类可读标签（不是设备身份，首发没有设备注册表）。
     pub device_label: String,
+    /// 客户端运行主机名，可选非可信声明，最多255字节，未知时省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
     /// 登录名（原样比较，不做大小写折叠）。
     pub login: String,
+    /// 客户端操作系统，可选非可信声明，最多255字节，未知时省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operating_system: Option<String>,
     /// 明文密码；只在本次请求内存在，服务端不记录。
     pub password: String,
 }
@@ -533,7 +553,9 @@ impl core::fmt::Debug for LoginRequest {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut value = f.debug_struct("LoginRequest");
         value.field("device_label", &self.device_label);
+        value.field("hostname", &self.hostname);
         value.field("login", &self.login);
+        value.field("operating_system", &self.operating_system);
         value.field("password", &"[REDACTED]");
         value.finish()
     }
@@ -594,6 +616,72 @@ pub enum ObjectReuse {
     /// 取值 `existing_verified`。
     #[serde(rename = "existing_verified")]
     ExistingVerified,
+}
+
+/// Office只读预览支持的源扩展名闭集；不执行宏或启用在线编辑。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum OfficeFileType {
+    /// 取值 `doc`。
+    #[serde(rename = "doc")]
+    Doc,
+    /// 取值 `docx`。
+    #[serde(rename = "docx")]
+    Docx,
+    /// 取值 `xls`。
+    #[serde(rename = "xls")]
+    Xls,
+    /// 取值 `xlsx`。
+    #[serde(rename = "xlsx")]
+    Xlsx,
+    /// 取值 `ppt`。
+    #[serde(rename = "ppt")]
+    Ppt,
+    /// 取值 `pptx`。
+    #[serde(rename = "pptx")]
+    Pptx,
+    /// 取值 `odt`。
+    #[serde(rename = "odt")]
+    Odt,
+    /// 取值 `ods`。
+    #[serde(rename = "ods")]
+    Ods,
+    /// 取值 `odp`。
+    #[serde(rename = "odp")]
+    Odp,
+}
+
+/// 快照固定版本的预期内容与Office格式，不能指向任意源URL。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OfficePreviewRequest {
+    /// 已选文件扩展名，对应转换器输入格式。
+    pub file_type: OfficeFileType,
+    /// 原始固定版本完整SHA256，小写十六进制。
+    pub hash: String,
+    /// 原始固定版本字节数。
+    #[serde(with = "crate::decimal")]
+    pub size: String,
+}
+
+/// 临时源关闭确认，不意味着撤回上游已缓存内容。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OfficeViewerClosed {
+    /// 临时源已关闭或已过期。
+    pub closed: bool,
+}
+
+/// 绑定固定版本与当前登录会话的OnlyOffice只读配置；不得记录配置中的限时JWT与源地址。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct OfficeViewerSession {
+    /// 完整已签名OnlyOffice配置JSON文本；第三方配置不纳入本项目wire DTO。
+    pub config_json: String,
+    /// 配置并校验过的Document Server根URL。
+    pub document_server_url: String,
+    /// 64位小写十六进制临时源撤销身份。
+    pub session_id: String,
+    /// 已核验原始固定版本完整SHA256。
+    pub source_hash: String,
+    /// 已核验的固定VersionId。
+    pub source_version: String,
 }
 
 /// 已提交操作附带的冲突信息（design §15.3）：服务器主条目、新建的冲突副本与原因。内容都在

@@ -23,10 +23,18 @@ try {
       assert.doesNotMatch(html, /mantine-AppShell|主要导航|aria-current="page"|服务概览|检查服务连接|name="password"/);
       console.log("web: 会话初始化仅显示核验状态，不渲染管理壳或登录表单");
     } else {
-      assert.doesNotMatch(html, /mantine-AppShell|主要导航|aria-current="page"/);
-      console.log("desktop: 服务端静态渲染不提前挂载管理壳（登录对话框使用浏览器 Portal）");
+      assert.match(html, /mantine-AppShell|主要导航/);
+      assert.match(html, /同步目录/);
+      assert.doesNotMatch(html, /name="password"/);
+      console.log("desktop: 启动直接显示同步目录，登录对话框按连接操作打开");
     }
   }
+  const { AppProvider, PageShell } = await server.ssrLoadModule("/packages/ui/src/index.ts");
+  const shell = { product: "管理", items: [{ path: "/", label: "首页" }], activePath: "/", children: "页面" };
+  const renderShell = props => renderToStaticMarkup(createElement(AppProvider, null, createElement(PageShell, props)));
+  assert.doesNotMatch(renderShell(shell), /<div role="status">/);
+  assert.match(renderShell({ ...shell, status: "既有状态" }), /<div role="status">既有状态<\/div>/);
+  console.log("共享壳：省略状态时无空播报区，已有消费者状态保持");
   const { disconnectedAgent } = await server.ssrLoadModule("/apps/desktop/src/services/agent.ts");
   await assert.rejects(disconnectedAgent.getStatus(), /IPC 测试替身/);
   const { checkServer } = await server.ssrLoadModule("/apps/web/src/services/server.ts");

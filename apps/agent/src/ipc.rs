@@ -24,7 +24,7 @@ struct Hub {
     state: Mutex<(u64, Option<GetStatusResult>)>,
     updates: watch::Sender<u64>,
     instance: String,
-    connection: watch::Receiver<ConnectionInfo>,
+    connections: watch::Receiver<Vec<ConnectionInfo>>,
     problems: watch::Receiver<Vec<Problem>>,
     offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 }
@@ -32,7 +32,7 @@ struct Hub {
 pub(crate) fn start(
     db: Arc<Database>,
     commands: mpsc::Sender<CommandRequest>,
-    connection: watch::Receiver<ConnectionInfo>,
+    connections: watch::Receiver<Vec<ConnectionInfo>>,
     problems: watch::Receiver<Vec<Problem>>,
     offline: watch::Receiver<std::collections::HashSet<BindingId>>,
 ) -> io::Result<Server> {
@@ -41,7 +41,7 @@ pub(crate) fn start(
     OsRng.fill_bytes(&mut nonce);
     let hub = Arc::new(Hub {
         state: Mutex::new((0, None)),
-        connection,
+        connections,
         problems,
         offline,
         updates,
@@ -58,74 +58,8 @@ pub(crate) fn start(
                 if !version::is_compatible(&request.ipc_version) {
                     return Ok(Service::new(env!("CARGO_PKG_VERSION")).handle(&request));
                 }
-                if request.command.name != CommandName::GetStatus && request.ipc_version.minor < 2 {
-                    return Ok(failure(
-                        &request,
-                        LocalIpcErrorCode::UnsupportedVersion,
-                        "此命令需要本机 IPC 1.2",
-                        false,
-                    ));
-                }
-                if request.command.name == CommandName::ListFiles && request.ipc_version.minor < 3 {
-                    return Ok(failure(
-                        &request,
-                        LocalIpcErrorCode::UnsupportedVersion,
-                        "文件清单需要本机 IPC 1.3",
-                        false,
-                    ));
-                }
-                if request.command.name == CommandName::ClaimNotification
-                    && request.ipc_version.minor < 4
-                {
-                    return Ok(failure(
-                        &request,
-                        LocalIpcErrorCode::UnsupportedVersion,
-                        "通知投递领取需要本机 IPC 1.4",
-                        false,
-                    ));
-                }
-                if request.command.name == CommandName::PrepareMaintenance
-                    && request.ipc_version.minor < 5
-                {
-                    return Ok(failure(
-                        &request,
-                        LocalIpcErrorCode::UnsupportedVersion,
-                        "维护准备需要本机 IPC 1.5",
-                        false,
-                    ));
-                }
-                if matches!(
-                    request.command.name,
-                    CommandName::GetRules | CommandName::SetRules
-                ) && request.ipc_version.minor < 6
-                {
-                    return Ok(failure(
-                        &request,
-                        LocalIpcErrorCode::UnsupportedVersion,
-                        "排除规则需要本机 IPC 1.6",
-                        false,
-                    ));
-                }
-                if request.command.name == CommandName::DiscoverConnection
-                    && request.ipc_version.minor < 7
-                {
-                    return Ok(failure(
-                        &request,
-                        LocalIpcErrorCode::UnsupportedVersion,
-                        "服务器身份发现需要本机 IPC 2.7",
-                        false,
-                    ));
-                }
-                if request.command.name == CommandName::ListActivity
-                    && request.ipc_version.minor < 8
-                {
-                    return Ok(failure(
-                        &request,
-                        LocalIpcErrorCode::UnsupportedVersion,
-                        "同步与传输记录需要本机 IPC 2.8",
-                        false,
-                    ));
-                }
+                // IPC 3.0 includes all current commands. Old 2.x minor gates do not
+                // carry across the incompatible extra-rules semantic boundary above.
                 if let Err(error) = vaultsyncd_local_ipc::commands::validate(&request.command) {
                     return Ok(Response::error(request.request_id, error));
                 }
@@ -134,6 +68,7 @@ pub(crate) fn start(
                     CommandName::GetStatus
                         | CommandName::SubscribeStatus
                         | CommandName::PrepareMaintenance
+                        | CommandName::StopAgent
                 ) {
                     let pending = db
                         .path()
@@ -217,15 +152,21 @@ async fn refresh(db: Arc<Database>, hub: Weak<Hub>) {
         let _ = snapshot(&db, &hub).await;
     }
 }
-async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError> {
-    // Serialize refresh/query so an older observation cannot overwrite a newer published version.
-    let mut state = hub.state.lock().await;
-    let info = crate::management::binding_list(db).await?;
+async fn binding_statuses(
+    db: &Database,
+    info: &mut [BindingInfo],
+    offline: &std::collections::HashSet<BindingId>,
+) -> Result<Vec<BindingStatus>, PortError> {
     let mut bindings = Vec::with_capacity(info.len());
-    for b in &info {
+    for b in info {
         let binding = BindingId::from_hex(&b.binding_id).map_err(crate::local::error)?;
         let mut s = status::snapshot(db, binding).await?;
-        if hub.offline.borrow().contains(&binding) {
+        // Controls may commit after the earlier management-list read. Publish the
+        // same, later transactional control facts in both projections, so desktop
+        // filtering/startup recovery cannot revive a row already reported unbound.
+        b.paused = s.paused;
+        b.detached = s.detached;
+        if offline.contains(&binding) {
             s.offline += 1;
         }
         bindings.push(BindingStatus {
@@ -248,6 +189,14 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
             unknown: s.unknown.to_string(),
         });
     }
+    Ok(bindings)
+}
+async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError> {
+    // Serialize refresh/query so an older observation cannot overwrite a newer published version.
+    let mut state = hub.state.lock().await;
+    let mut info = crate::management::binding_list(db).await?;
+    let offline = hub.offline.borrow().clone();
+    let bindings = binding_statuses(db, &mut info, &offline).await?;
     let mut problems = crate::management::problems(db, None).await?;
     for problem in hub.problems.borrow().iter() {
         if !problems
@@ -258,6 +207,8 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
         }
     }
     let notices = crate::management_notices::list(db).await?;
+    let connections = hub.connections.borrow().clone();
+    let connection = (connections.len() == 1).then(|| connections[0].clone());
     let mut value = GetStatusResult {
         agent_version: env!("CARGO_PKG_VERSION").into(),
         ipc_protocol: version::supported(),
@@ -265,7 +216,8 @@ async fn snapshot(db: &Database, hub: &Hub) -> Result<GetStatusResult, PortError
         snapshot_version: None,
         management: Some(ManagementResult {
             bindings: Some(info),
-            connection: Some(hub.connection.borrow().clone()),
+            connection,
+            connections: Some(connections),
             problems: Some(problems),
             notices: Some(notices),
             ..Default::default()
@@ -303,21 +255,17 @@ pub(crate) fn management_response(
             } else if error.needs_reauth() {
                 "REAUTH_REQUIRED"
             } else {
-                match error.code() {
-                    Some("CONNECTION_BINDING_MISMATCH" | "CONNECTION_SERVER_MISMATCH")
-                        if request.command.name == CommandName::SetConnection =>
-                    {
-                        "BINDING_BLOCKED"
-                    }
-                    code => code.unwrap_or("UNAVAILABLE"),
-                }
+                error.code().unwrap_or("UNAVAILABLE")
             };
             let (code, retryable) = match source_code {
                 "NOT_FOUND" => (LocalIpcErrorCode::NotFound, false),
-                "INVALID_ARGUMENT" | "PATH_OVERLAP" | "LOCAL_PATH_UNAVAILABLE" => {
-                    (LocalIpcErrorCode::InvalidArgument, false)
+                "INVALID_ARGUMENT"
+                | "PATH_OVERLAP"
+                | "LOCAL_PATH_UNAVAILABLE"
+                | "SERVER_REQUIRED" => (LocalIpcErrorCode::InvalidArgument, false),
+                "CERTIFICATE_INVALID" | "CONNECTION_SERVER_MISMATCH" => {
+                    (LocalIpcErrorCode::Blocked, false)
                 }
-                "CERTIFICATE_INVALID" => (LocalIpcErrorCode::Blocked, false),
                 "REAUTH_REQUIRED" | "UNAUTHORIZED" | "AUTH_EXPIRED" => {
                     (LocalIpcErrorCode::Unauthenticated, false)
                 }
@@ -332,6 +280,7 @@ pub(crate) fn management_response(
                 | "INSUFFICIENT_STORAGE" => (LocalIpcErrorCode::Blocked, false),
                 "NOT_READY"
                 | "BINDING_BLOCKED"
+                | "CONNECTION_IN_USE"
                 | "BINDING_UNBOUND"
                 | "MODE_REQUIRES_LOCAL_COPY"
                 | "LOCAL_CHANGED"
@@ -349,6 +298,7 @@ pub(crate) fn management_response(
                         | "ALREADY_EXISTS"
                         | "NOT_READY"
                         | "BINDING_BLOCKED"
+                        | "CONNECTION_IN_USE"
                         | "BINDING_UNBOUND"
                         | "LOCAL_IN_USE"
                         | "UNKNOWN_LOCAL_STATE"
@@ -357,6 +307,8 @@ pub(crate) fn management_response(
                         | "INVALID_REQUEST"
                         | "SERVICE_NOT_READY"
                         | "CERTIFICATE_INVALID"
+                        | "SERVER_REQUIRED"
+                        | "CONNECTION_SERVER_MISMATCH"
                         | "LOCAL_PATH_UNAVAILABLE"
                 );
             let stable = if known { source_code } else { "UNAVAILABLE" };
@@ -370,41 +322,32 @@ pub(crate) fn management_response(
                 "CERTIFICATE_INVALID" => "服务器证书验证失败（CERTIFICATE_INVALID）；请核对服务器地址与名称，或在连接设置中选择管理员提供的附加 CA。证书验证未被关闭。".to_owned(),
                 "LOCAL_PATH_UNAVAILABLE" => "本地目录无法访问（LOCAL_PATH_UNAVAILABLE）；请选择现有本机 NTFS 目录，并检查路径、权限与卷状态。".to_owned(),
                 "INSUFFICIENT_STORAGE" => "本地磁盘或状态库空间不足（INSUFFICIENT_STORAGE）；完整缓存、未确认内容与恢复现场保留，请腾出空间后重试。".to_owned(),
-                "BINDING_BLOCKED" if request.command.name == CommandName::SetConnection => connection_identity_message(&error)
-                    .unwrap_or_else(|| "连接被本机绑定保护阻止（BINDING_BLOCKED）；请核对本机原有连接与目标服务器的 Server ID。".to_owned()),
-                "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他绑定、缓存和 agent 状态目录分离。".to_owned(),
+                "CONNECTION_SERVER_MISMATCH" => identity_mismatch_message(&error),
+                "SERVER_REQUIRED" => "客户端有多个服务器连接，请明确选择目标服务器（SERVER_REQUIRED）。".to_owned(),
+                "CONNECTION_IN_USE" => "该服务器仍有正在管理的本地绑定（CONNECTION_IN_USE）；请先在「同步目录」解除绑定并确认保留的数据，再移除服务器。".to_owned(),
+                "PATH_OVERLAP" => "目录重叠（PATH_OVERLAP）；同步目录须与其他正在管理的绑定、保留缓存和 agent 状态目录分离，不能嵌套旧同步根。".to_owned(),
+                "MODE_REQUIRES_LOCAL_COPY" => "目录仍有未完整下载或无法确认的内容（MODE_REQUIRES_LOCAL_COPY）；重新绑定前须先恢复并下载完整内容。旧文件、缓存与恢复记录均已保留。".to_owned(),
                 _ => format!("操作未完成（{stable}）；本地内容、待办与恢复现场已保留"),
             };
             failure(request, code, &message, retryable)
         }
     }
 }
-// Only canonical public identities from our two local checks may reach the UI. Never forward
-// arbitrary PortError details: remote errors can contain credentials, URLs or filesystem paths.
-fn connection_identity_message(error: &PortError) -> Option<String> {
-    let PortError::Rejected { code, detail } = error else {
-        return None;
-    };
-    let (expected, actual) = detail.split_once(':')?;
-    for id in [expected, actual] {
-        if vaultsyncd_domain::ids::ServerId::from_hex(id)
-            .ok()?
-            .to_string()
-            != id
-        {
-            return None;
-        }
+fn identity_mismatch_message(error: &PortError) -> String {
+    use vaultsyncd_domain::ids::ServerId;
+    if let PortError::Rejected { detail, .. } = error
+        && let Some((expected, actual)) = detail.split_once(':')
+        && [expected, actual]
+            .into_iter()
+            .all(|id| ServerId::from_hex(id).is_ok_and(|server| server.to_string() == id))
+    {
+        return format!(
+            "服务器返回的 ID 与确认值不同。确认值 {expected}，服务器返回 {actual}。请重新读取 Server ID。"
+        );
     }
-    match code.as_str() {
-        "CONNECTION_BINDING_MISMATCH" => Some(format!(
-            "本机已有同步绑定，保存的 Server ID：{expected}；本次读取的 Server ID：{actual}（BINDING_BLOCKED）。连接未更改；即使本次 ID 与 Web 一致，也不能直接替换原有服务器身份。"
-        )),
-        "CONNECTION_SERVER_MISMATCH" => Some(format!(
-            "服务器本次返回的身份与确认值不同（BINDING_BLOCKED）；确认的 Server ID：{expected}；服务器返回：{actual}。请重新读取并核对服务器入口。"
-        )),
-        _ => None,
-    }
+    "服务器返回的 ID 与确认值不同，请重新读取 Server ID。".into()
 }
+
 fn failure(request: &Request, code: LocalIpcErrorCode, message: &str, retryable: bool) -> Response {
     Response::error(
         request.request_id.clone(),

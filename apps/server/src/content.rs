@@ -69,6 +69,7 @@ use crate::uploads::{
 pub struct ContentContext {
     pub(crate) auth: Arc<AuthContext>,
     pub(crate) state_dir: PathBuf,
+    pub(crate) office: Option<Arc<crate::office::OfficeRuntime>>,
 }
 
 impl ContentContext {
@@ -78,12 +79,91 @@ impl ContentContext {
         Self {
             auth,
             state_dir: state_dir.to_path_buf(),
+            office: None,
         }
+    }
+
+    /// 注入可选的进程级 Office 转换器；默认构造仍保持关闭。
+    #[must_use]
+    pub fn with_office(mut self, office: Option<Arc<crate::office::OfficeRuntime>>) -> Self {
+        self.office = office;
+        self
     }
 
     fn objects(&self, vault: VaultId) -> ObjectLayout {
         crate::object_layout::layout(&self.state_dir, vault)
     }
+}
+
+/// Office 预览只读完整固定版本，先限制元数据，再建立受 GC 保护的完整校验读取。
+pub(crate) async fn read_office_source(
+    context: &ContentContext,
+    caller: &Caller,
+    vault: VaultId,
+    entry: EntryId,
+    version: VersionId,
+    expected_hash: ContentDigest,
+    expected_size: u64,
+) -> Result<Vec<u8>, Box<Response>> {
+    let _objects = context.auth.database().object_activity().await;
+    let mut versions = DbVersionContent {
+        database: context.auth.database(),
+        owner: caller.principal.user_id,
+    };
+    let mut leases = DbLeases::new(
+        context.auth.database(),
+        caller.principal.user_id,
+        caller.now,
+    );
+    let request = DownloadRequest {
+        entry,
+        version,
+        range: None,
+    };
+    let expires = UtcTimestamp::from_unix_seconds(
+        caller
+            .now
+            .as_unix_seconds()
+            .saturating_add(DOWNLOAD_LEASE_TTL_SECONDS),
+    )
+    .unwrap_or(caller.now);
+    let handle = content::open_download(&mut versions, &mut leases, vault, &request, expires)
+        .await
+        .map_err(|failure| {
+            Box::new(content_failure_response(
+                &caller.request_id,
+                &failure,
+                vault,
+            ))
+        })?;
+    let result = if handle.content.size > crate::office::MAX_OFFICE_BYTES as u64 {
+        Err(error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorCode::InvalidRequest,
+            &caller.request_id,
+            "Office 预览仅支持不超过 50 MiB 的文件",
+            false,
+            Some(vault.to_string()),
+        ))
+    } else if handle.content.size != expected_size || handle.content.digest != expected_hash {
+        Err(error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::HashMismatch,
+            &caller.request_id,
+            "固定版本与所选文件的大小或摘要不一致，请刷新",
+            false,
+            Some(vault.to_string()),
+        ))
+    } else {
+        let mut port = FsObjectPort;
+        content::read_download(&mut port, &context.objects(vault), &handle)
+            .map(|bytes| bytes.data)
+            .map_err(|failure| content_failure_response(&caller.request_id, &failure, vault))
+    };
+    if let Err(failure) = content::finish_download(&mut leases, handle).await {
+        warn!(request_id=%caller.request_id, error=%failure, "解除 Office 源内容租约失败；保留至到期清理");
+    }
+    result.map_err(Box::new)
 }
 
 /// `POST /v1/vaults/{vault}/uploads/{upload}/finalize`：核对块齐、发布内容、返回可提交引用。

@@ -20,26 +20,32 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   async function click(label) {
     await wait(label, () => [...document.querySelectorAll("button")].some(b => b.textContent === label && !b.disabled));
-    [...document.querySelectorAll("button")].find(b => b.textContent === label && !b.disabled).click();
+    const button = [...document.querySelectorAll("button")].find(b => b.textContent === label && !b.disabled);
+    // HTMLElement.click() does not focus like a real mouse/keyboard activation.
+    button.focus();
+    button.click();
     await delay();
   }
   const confirmed = () => document.querySelector("[data-agent-feedback]")?.textContent === "操作已由 agent 确认。";
   try {
     const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
-    const currentConnection = async () => (await invoke("agent_get_status")).management.connection;
-    const saveButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "登录");
-    const candidate = () => document.querySelector('[name="server_id"]');
-    await wait("React agent snapshot", () => !!document.querySelector('[name="server_url"]'));
-    const original = await currentConnection();
+    const connections = async () => (await invoke("agent_get_status")).management.connections;
+    const saveButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "确认并保存连接");
+    const candidate = () => document.querySelector('textarea[name="server_id"]');
+    location.hash = "/connections";
+    await click("修改地址");
+    const original = await connections();
     field("server_url", fixture.url); field("ca_file", "");
     await wait("certificate rejection", () => text().includes("CERTIFICATE_INVALID"));
     report.certificateRejectedAndVisible = saveButton().disabled && !candidate();
     field("ca_file", fixture.caFile);
     await wait("automatic discovery", () => candidate()?.value === fixture.serverId);
     report.identityReadOnly = candidate().readOnly;
-    report.discoveryDoesNotSave = JSON.stringify(await currentConnection()) === JSON.stringify(original);
+    report.discoveryDoesNotSave = JSON.stringify(await connections()) === JSON.stringify(original);
     await click("取消");
-    report.cancelDoesNotSave = !candidate() && saveButton().disabled && JSON.stringify(await currentConnection()) === JSON.stringify(original);
+    report.cancelDoesNotSave = !candidate() && !saveButton() && JSON.stringify(await connections()) === JSON.stringify(original);
+    await click("修改地址");
+    field("ca_file", fixture.caFile);
     await click("重新读取");
     await wait("retry discovery", () => candidate()?.value === fixture.serverId);
     field("server_url", fixture.url + "/delayed");
@@ -55,7 +61,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       await invoke("agent_set_connection", { input: { serverId: "00".repeat(16), serverUrl: fixture.url, caFile: fixture.caFile } });
       throw new Error("mismatched identity accepted");
     } catch (cause) {
-      report.saveRechecksIdentity = String(cause.message ?? cause).includes("BINDING_BLOCKED") && JSON.stringify(await currentConnection()) === JSON.stringify(original);
+      report.saveRechecksIdentity = String(cause.message ?? cause).includes("确认值") && String(cause.message ?? cause).includes("00".repeat(16)) && String(cause.message ?? cause).includes(fixture.serverId) && JSON.stringify(await connections()) === JSON.stringify(original);
       if (!report.saveRechecksIdentity) throw cause;
     }
     async function timeoutDoesNotSave(command, input) {
@@ -66,20 +72,52 @@ window.addEventListener("DOMContentLoaded", async () => {
       }
       if (Date.now() - started >= 5000) throw new Error("identity deadline exceeded IPC budget");
       await new Promise(resolve => setTimeout(resolve, 3500));
-      if (JSON.stringify(await currentConnection()) !== JSON.stringify(original)) throw new Error("timeout changed durable connection");
+      if (JSON.stringify(await connections()) !== JSON.stringify(original)) throw new Error("timeout changed durable connection");
     }
     await timeoutDoesNotSave("agent_discover_connection", { serverUrl: fixture.url + "/timeout", caFile: fixture.caFile });
     await timeoutDoesNotSave("agent_set_connection", { serverId: fixture.serverId, serverUrl: fixture.url + "/timeout", caFile: fixture.caFile });
     report.identityTimeoutDoesNotSave = true;
+    await click("确认并保存连接");
+    await wait("saved connection", confirmed);
+    await click("登录");
     field("username", fixture.login); field("password", fixture.password);
-    await click("登录"); await wait("authenticated", () => text().includes("已登录（持有凭据"));
-    report.confirmSavesIdentity = (await currentConnection()).server_id === fixture.serverId && (await currentConnection()).ca_file === fixture.caFile;
+    await click("登录");
+    await wait("authenticated", async () => !document.querySelector('[name="password"]')
+      && (await connections()).find(c => c.server_id === fixture.serverId)?.authenticated);
+    const saved = (await connections()).find(c => c.server_id === fixture.serverId);
+    report.confirmSavesIdentity = saved?.ca_file === fixture.caFile;
     report.passwordCleared = !document.querySelector('[name="password"]');
     location.hash = "/bindings";
+    const bindingDialog = () => [...document.querySelectorAll('[role="dialog"]')].find(dialog => dialog.textContent.includes("添加同步目录"));
+    const addButton = () => [...document.querySelectorAll("button")].find(button => button.textContent === "添加同步目录");
+    await wait("lazy add-binding button", () => addButton() && !addButton().disabled);
+    report.bindingFormInitiallyUnmounted = !bindingDialog() && !document.querySelector('[name="vault_id"], [name="local_path"], [name="server_id"]');
+    await click("添加同步目录");
+    await wait("initial add dialog", bindingDialog);
+    field("mode", "on_demand");
+    await click("取消");
+    await wait("cancel unmounts add form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    report.bindingCancelReturnsFocus = document.activeElement === addButton();
+    await click("添加同步目录");
+    await wait("fresh binding form", () => document.querySelector('[name="mode"]')?.value === "full");
+    report.bindingReopenResetsForm = document.querySelector('[name="local_path"]').value === "";
+    bindingDialog().querySelector(".mantine-Modal-close").click();
+    await wait("X unmounts add form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    await click("添加同步目录");
+    await wait("dialog before Escape", bindingDialog);
+    // Mantine inspects the event target as an Element, just like a real key event.
+    bindingDialog().querySelector("button").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait("Escape unmounts add form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    report.bindingIdleCloseMethods = true;
+    await click("添加同步目录");
+    await wait("server option", () => document.querySelector(`select[name="server_id"] option[value="${fixture.serverId}"]`));
+    field("server_id", fixture.serverId);
     await wait("binding page", () => !!document.querySelector('[name="vault_id"]'));
     const vaultPicker = () => document.querySelector('[role="combobox"]');
+    await wait("default vault selected without opening picker", () => document.querySelector('[name="vault_id"]').value === fixture.vault);
+    report.defaultVaultSelected = true;
     report.noManualVaultRead = ![...document.querySelectorAll("button")].some(b => b.textContent === "读取授权 Vault");
-    vaultPicker().click();
+    vaultPicker().click(); await delay();
     await wait("authorized vaults", () => document.querySelector(`[role="option"][value="${fixture.vault}"]`));
     const option = document.querySelector(`[role="option"][value="${fixture.vault}"]`);
     report.vaultNameDisplayed = option.textContent === fixture.vaultName && option.textContent !== fixture.vault;
@@ -87,10 +125,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     report.pathReadOnly = pathInput().readOnly;
     report.noSelectionCannotSubmit = [...document.querySelectorAll("button")].find(b => b.textContent === "创建绑定并开始合并").disabled;
     option.click(); await delay();
-    vaultPicker().click();
+    vaultPicker().click(); await delay();
     await wait("refreshed vaults", () => vaultPicker().getAttribute("aria-busy") === "false" && document.querySelector(`[role="option"][value="${fixture.vault}"]`));
     report.vaultSelectionSurvivesRefresh = document.querySelector('[name="vault_id"]').value === fixture.vault;
-    vaultPicker().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    pathInput().click(); await delay();
     await click("选择目录…");
     await wait("native selection", () => pathInput().value === fixture.localPath);
     report.nativeDirectorySelected = true;
@@ -98,14 +136,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     await wait("native cancellation", () => ![...document.querySelectorAll("button")].find(b => b.textContent === "选择目录…").disabled);
     report.cancelKeepsSelection = pathInput().value === fixture.localPath;
     try {
-      await window.__TAURI_INTERNALS__.invoke("agent_create_binding", {input:{bindingId:crypto.randomUUID().replaceAll("-",""),vaultId:fixture.vault,localPath:"Z:\\vaultsyncd-S081-missing",mode:"full"}});
+      await window.__TAURI_INTERNALS__.invoke("agent_create_binding", {input:{bindingId:crypto.randomUUID().replaceAll("-",""),serverId:fixture.serverId,vaultId:fixture.vault,localPath:"Z:\\vaultsyncd-S081-missing",mode:"full"}});
       throw new Error("missing path was accepted");
     } catch (error) {
       report.invalidPathVisible = String(error.message ?? error).includes("LOCAL_PATH_UNAVAILABLE");
       if (!report.invalidPathVisible) throw error;
     }
     field("mode", "full");
-    await click("创建绑定并开始合并"); await wait("binding created", () => text().includes("绑定已建立"));
+    await click("创建绑定并开始合并");
+    await wait("successful create closes and unmounts form", () => !bindingDialog() && !document.querySelector('[name="local_path"]'));
+    report.bindingSuccessClosesDialog = true;
     await wait("first merge", async () => {
       let status;
       try { status = await window.__TAURI_INTERNALS__.invoke("agent_get_status"); }
@@ -114,26 +154,78 @@ window.addEventListener("DOMContentLoaded", async () => {
       const info = status.management?.bindings?.find(b => b.local_path === fixture.localPath);
       if (!info) return false;
       report.bindingId = info.binding_id;
+      report.bindingServer = info.server_id;
       report.tokenFreeResult = !/access_token|refresh_token|password/.test(JSON.stringify(status));
       return status.bindings.find(b => b.binding_id === info.binding_id)?.synchronized === true;
     });
     report.mergeCompleted = true;
-    const bound = JSON.stringify(await currentConnection());
+    const directoryButton = [...document.querySelectorAll("button")].find(button => button.textContent === fixture.localPath);
+    if (!directoryButton) throw new Error("local directory is not a keyboard button");
+    // Tauri's invoke property is read-only. Observe the real UI acknowledgment,
+    // not an attempted monkey-patch; PowerShell independently observes Explorer.
+    directoryButton.focus();
+    report.directoryKeyboardFocusable = document.activeElement === directoryButton;
+    if (directoryButton.disabled) throw new Error("directory action is disabled after merge");
+    directoryButton.click();
+    await delay();
+    try {
+      await wait("real directory command acknowledgment", () => {
+        const feedback = document.querySelector("[data-agent-feedback]")?.textContent;
+        if (feedback && !["操作正在执行，等待 agent 确认。", "操作已由 agent 确认。"].includes(feedback)) {
+          throw new Error(`directory action failed: ${feedback}`);
+        }
+        return confirmed() && !directoryButton.disabled;
+      }, 20000);
+      report.directoryOpenAcknowledged = true;
+    } catch (error) {
+      // Preserve the raw native rejection, which the product UI may normalize.
+      try { await invoke("open_binding_directory", { bindingId: report.bindingId }); }
+      catch (cause) { report.directoryCommandError = typeof cause === "string" ? cause : JSON.stringify(cause); }
+      throw error;
+    }
+    try {
+      await invoke("open_binding_directory", { bindingId: "0".repeat(32) });
+      throw new Error("unknown binding directory was accepted");
+    } catch (cause) {
+      report.unknownDirectoryRejected = String(cause.message ?? cause).length > 0 && String(cause.message ?? cause) !== "unknown binding directory was accepted";
+      if (!report.unknownDirectoryRejected) throw cause;
+    }
+    const bound = JSON.stringify(await connections());
     try {
       await invoke("agent_set_connection", { input: { serverId: "00".repeat(16), serverUrl: fixture.url, caFile: fixture.caFile } });
-      throw new Error("existing binding switched server");
+      throw new Error("invalid identity accepted with a binding");
     } catch (cause) {
-      report.existingBindingProtectsIdentity = String(cause.message ?? cause).includes("BINDING_BLOCKED") && JSON.stringify(await currentConnection()) === bound;
-      if (!report.existingBindingProtectsIdentity) throw cause;
+      report.bindingKeepsPinnedIdentity = String(cause.message ?? cause).includes("确认值") && String(cause.message ?? cause).includes("00".repeat(16)) && String(cause.message ?? cause).includes(fixture.serverId) && JSON.stringify(await connections()) === bound && report.bindingServer === fixture.serverId;
+      if (!report.bindingKeepsPinnedIdentity) throw cause;
     }
 
     await click("暂停"); await wait("pause visible", () => text().includes("已暂停")); report.pauseVisible = true;
     await click("恢复"); await wait("resume visible", () => !text().includes("已暂停")); report.resumeVisible = true;
+    for (const [route, name] of [["/files", "files_binding"], ["/history", "history_binding"], ["/activity", "activity_binding"]]) {
+      location.hash = route;
+      await wait(`default binding ${route}`, () => document.querySelector(`[name="${name}"]`)?.value === report.bindingId);
+    }
+    report.defaultBindingsSelected = true;
+    // S193: a managed binding blocks server removal; the refusal must leave the connection intact.
+    location.hash = "/connections";
+    const removeButton = () => [...document.querySelectorAll("button")].find(b => b.textContent === "移除服务器" && !b.disabled);
+    await wait("remove button", removeButton);
+    const beforeRemoval = JSON.stringify(await connections());
+    removeButton().click();
+    const removalDialog = () => document.querySelector('[role="dialog"]');
+    await wait("remove dialog", () => removalDialog()?.textContent.includes("确认移除服务器"));
+    [...removalDialog().querySelectorAll("button")].find(b => b.textContent === "移除服务器").click();
+    await wait("removal refusal", () => text().includes("CONNECTION_IN_USE"));
+    report.removalBlockedByBinding = JSON.stringify(await connections()) === beforeRemoval
+      && (await connections()).some(c => c.server_id === fixture.serverId)
+      && !text().includes("已移除本地连接");
+    if (!report.removalBlockedByBinding) throw new Error("bound server removal was not refused");
+    location.hash = "/bindings";
     report.noBrowserCredentialStorage = Object.keys(localStorage).every(key => key === "mantine-color-scheme-value" && ["auto", "light", "dark"].includes(localStorage.getItem(key))) && sessionStorage.length === 0;
     const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
     report.nonceStyles = /^[0-9a-f]{32}$/.test(nonce ?? "") && [...document.querySelectorAll("style")].every(style => style.nonce === nonce);
     report.cspViolations = cspViolations;
-    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","existingBindingProtectsIdentity","identityTimeoutDoesNotSave"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible;
+    report.ok = ["identityReadOnly","discoveryDoesNotSave","cancelDoesNotSave","editedAddressInvalidatesIdentity","lateDiscoveryIgnored","saveRechecksIdentity","confirmSavesIdentity","bindingKeepsPinnedIdentity","identityTimeoutDoesNotSave","bindingFormInitiallyUnmounted","bindingCancelReturnsFocus","bindingReopenResetsForm","bindingIdleCloseMethods","bindingSuccessClosesDialog","directoryKeyboardFocusable","directoryOpenAcknowledged","unknownDirectoryRejected"].every(key => report[key] === true) && report.nonceStyles && report.cspViolations.length === 0 && report.defaultVaultSelected && report.defaultBindingsSelected && report.noManualVaultRead && report.vaultSelectionSurvivesRefresh && report.vaultNameDisplayed && report.pathReadOnly && report.noSelectionCannotSubmit && report.nativeDirectorySelected && report.cancelKeepsSelection && report.passwordCleared && report.tokenFreeResult && report.noBrowserCredentialStorage && report.certificateRejectedAndVisible && report.invalidPathVisible && report.mergeCompleted && report.pauseVisible && report.resumeVisible && report.removalBlockedByBinding;
   } catch (error) { report.error = String(error?.message ?? error); report.page = text(); }
   await window.__TAURI_INTERNALS__.invoke("acceptance_report", { report });
 });

@@ -4,6 +4,11 @@ fn main() {
         let commands: &'static [&'static str] =
             if std::env::var_os("CARGO_FEATURE_NATIVE_ACCEPTANCE").is_some() {
                 &[
+                    "get_desktop_settings",
+                    "set_desktop_settings",
+                    "get_shell_target",
+                    "shell_file_status",
+                    "shell_file_action",
                     "agent_list_files",
                     "agent_download_entry",
                     "agent_release_entry",
@@ -23,10 +28,12 @@ fn main() {
                     "agent_get_status",
                     "agent_discover_connection",
                     "agent_set_connection",
+                    "agent_remove_connection",
                     "agent_login",
                     "agent_logout",
                     "agent_list_vaults",
                     "select_local_directory",
+                    "open_binding_directory",
                     "agent_create_binding",
                     "agent_pause_binding",
                     "agent_resume_binding",
@@ -51,6 +58,11 @@ fn main() {
                     }
                 }
                 &[
+                    "get_desktop_settings",
+                    "set_desktop_settings",
+                    "get_shell_target",
+                    "shell_file_status",
+                    "shell_file_action",
                     "agent_list_files",
                     "agent_download_entry",
                     "agent_release_entry",
@@ -70,10 +82,12 @@ fn main() {
                     "agent_get_status",
                     "agent_discover_connection",
                     "agent_set_connection",
+                    "agent_remove_connection",
                     "agent_login",
                     "agent_logout",
                     "agent_list_vaults",
                     "select_local_directory",
+                    "open_binding_directory",
                     "agent_create_binding",
                     "agent_pause_binding",
                     "agent_resume_binding",

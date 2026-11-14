@@ -447,7 +447,14 @@ async fn native_headless_import_real_sync_queue_restart_and_single_instance() {
         std::fs::create_dir(base.join(p)).unwrap();
     }
     std::fs::write(base.join("vault/local.txt"), b"local-first-import").unwrap();
-    let server = identity();
+    let identity_client =
+        ApiClient::new(ClientConfig::new(fixture["url"].as_str().unwrap()).allow_plaintext_http())
+            .unwrap();
+    let server_identity: vaultsyncd_protocol::generated::Capabilities = identity_client
+        .send_json(vaultsyncd_http_client::ApiRequest::get("/v1/capabilities"))
+        .await
+        .unwrap();
+    let server = server_identity.server_id;
     let device = identity();
     let binding = identity();
     let vault = fixture["vault"].as_str().unwrap();

@@ -252,6 +252,10 @@ pub(crate) fn map_error(error: ClientError) -> PortError {
             detail: "本地没有可用的会话凭据".to_owned(),
         },
         ClientError::InvalidRequest { message } => PortError::protocol(message),
+        ClientError::ServerIdentityMismatch => PortError::rejected(
+            "NEEDS_RECOVERY",
+            "remote server identity differs from the pinned server",
+        ),
         ClientError::Protocol(inner) => PortError::protocol(inner.message().to_owned()),
     }
 }

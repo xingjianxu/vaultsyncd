@@ -68,6 +68,24 @@ pub async fn set_login_details(
     Ok(())
 }
 
+/// 登录事务中保存客户端声明属性；刷新和请求活动不改写此快照。
+pub async fn set_host_properties(
+    conn: &mut SqliteConnection,
+    session: SessionId,
+    hostname: Option<&str>,
+    operating_system: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE client_connections SET hostname=?2,operating_system=?3 WHERE session_id=?1",
+    )
+    .bind(session.as_bytes().as_slice())
+    .bind(hostname)
+    .bind(operating_system)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 /// 仅成功认证后调用；每连接最多30秒更新一次，倒退时钟不覆盖较新证据。
 pub async fn touch(
     conn: &mut SqliteConnection,

@@ -1,8 +1,22 @@
 # 本机 NixOS 服务部署
 
+> **最新部署边界（2026-11-13，S219）**：服务端（含服务端 Web）代码更新任务验收后只自动更新开发服务器 `https://wlab.132140.xyz:15401`，操作见 [开发测试服务](dev-server.md)。生产服务器 `https://vsyncd.132140.xyz` 不自动更新，仅在用户另行明确要求生产部署时使用本文 NixOS 流程；不得因任务完成或既有 rebuild 授权而更新生产 pin、激活或重启生产服务。以下 prod/dev 同包及 generation 记录为历史事实，不构成后续自动生产部署授权。
+
+## S218 文件预览关闭动画修复（2026-11-13）
+
+源 `a6a23dea700231c731bed8727491cbb603c8d6da` 已经pure build/dry/test/健康/switch部署generation291，包 `/nix/store/9l4my652gyr3bqlr6sq0z7nrsxhc1297-vaultsyncd-0.1.7`，system `9gshvkd3kwf5xb18wzjgr9wzqn5z20f0`，主机pin `6a90aa5c3d7b674e940b00c688509489a8392655` 已ff合main并清部署树。仅关闭生命周期修复，无schema迁移；主机锁、prod/dev原身份/账号/Vault/schema21与Office配置保持，dev同步同包。精确包52组、18退场/重开109帧及408次资产字节/TLS/CSP/匿名门禁通过。旧generation290 system/boot GC roots在 `/data/vaultsyncd-dev/S218-preview-exit-20261113/deploy/local-20261113T090049-2686437/` 保留，未实际回滚；交接与限制见 [S218](../../agent/tasks/S218.md)。
+
+## S207 环境入口（2026-11-12）
+
+本文描述 **prod**：`https://vsyncd.132140.xyz`，既有 NixOS 部署方式、状态与 Vault 路径保持。**dev** 与 Windows 测试机改用 `https://wlab.132140.xyz:15401`，临时后台服务由 `tools/dev-server.sh` 管理，数据在 `/data/vaultsyncd-dev/dev-server/`，不注册 NixOS unit。证书与操作见 [开发测试服务](dev-server.md)，实际验收见 [S207](../../agent/tasks/S207.md)。
+
 当前开发路径以 S163 为准：所有开发测试目录只能位于 `/data/vaultsyncd-dev/`。本文件历史 temp/lab 路径中的 `/data/` 须替换为 `/data/vaultsyncd-dev/`；更早 build/deploy 先按 S161 映射到 temp 内，再替换此前缀。历史日志与验收记录保留原文，执行旧命令前须替换路径，详见 [S163](../../agent/tasks/S163.md)。
 
 历史 `/data/vs-*` 目录已由 [S164](../../agent/tasks/S164.md) 归档至 `/data/vaultsyncd-dev/S164-archive-20261109/runs.tar.zst`，成员保留旧目录名；该目录的 README、SHA256SUMS 和 evidence/path-map.json 提供恢复步骤、摘要与路径映射。包括 S097 离线恢复镜像在内的原始数据长期保留，不能按缓存清理；历史命令不得重新建立 `/data` 顶层开发目录。
+
+## S197 当前客户端主机属性版部署（generation275，2026-11-11）
+
+固定源72c25ca，主机pin295ed47已ff合main；schema20→21，显式请求扩展保持旧严格DTO兼容。部署pure/dry/test/健康/身份/归属/switch及公网15资源、匿名门禁、DB完整性/FK通过，ServerId/Vault路径保持。迁移前schema20完整归档已verify，备份/旧system/boot GC roots在 `/data/vaultsyncd-dev/S197-client-hostname-20261111/` 长期保留；同盘归档不代表独立故障域。回退须整套配对恢复及新epoch，未执行生产回退。部署及客户端验证入口见[S197](../../agent/tasks/S197.md)，历史小节保留当时证据。
 
 ## S157 当前共用 Mantine 与精简 Vault 版部署（generation266，2026-11-09）
 
@@ -477,3 +491,104 @@ pin 提交 `31186c77525206a78bd3256c611d8a8142e16649` 已 ff 合 `/etc/nixos` ma
 密码重置按用户选择的一次性离线改库执行，证据`/data/vaultsyncd-dev/S181-password-reset-20261110T180259/`：用新包内`vaultsyncd-admin init`在隔离状态目录生成 `1` 的 Argon2id 散列（生产参数`m=19456,t=2,p=1`，临时库不参与生产），停服后整库备份`server.sqlite.before`（sha256`c6579c3c…`），单事务改写1条账号散列并把37条有效会话置`revoked_at`；`PRAGMA integrity_check=ok`，改后 sha256`46ecd34e…`。启动后`/v1/health`在loopback与`https://vsyncd.132140.xyz`均200，错密码401，用`1`登录200并`/v1/auth/account`返回`xingjian`，验证会话已logout，最终无有效会话。
 
 限制：该决定有意接受弱口令风险，不替代首发安全门禁；如需可审计的在线重置入口须另立卡。回退用旧代际`x0sx0d9c…`（先test/健康再switch并同步pin）或上述停服备份，二者都不降级数据库。
+
+## S202 记录自动刷新部署（generation278，2026-11-12）
+
+固定项目源`50b518584f69cd59ad2e27e945ad5dd967c97823`，主机pin`9e948a484ec0d4f1ca63fdd2fd6107625dfccb57`已ff合main并清树。沿用`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S202-activity-live-20261111/deploy`完成pure build/dry/test/HTTPS与IPC/身份和归属/switch；运行及开机generation278，system`/nix/store/k4bxgcd0yflgd1l7zx2nkpbmfkm3cjp1-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/bbqjq3qd0adjdj6x6z5r5sxsav18lsp2-vaultsyncd-0.1.7`。本卡无服务端schema变化，锁、ServerId、Vault路径保持。
+
+两源health/capabilities及28项静态资产/index比对通过；index按实际CSP nonce精确复原，资源原始字节/SHA256一致。匿名活动页门禁、CSP/style nonce及nosniff通过，未登录或修改生产文件。证据及截图见该开发根下`result.json`、`verification/`、`deploy/local-20261112T081942-881429/`（passed/cleaned=true）。旧generation277的system/boot GC roots保留；直接回退可先test `/nix/store/f4w0a9j1al2ssfjpqc7i839khi91aaqz-nixos-system-wks-lab-26.11.20261109.5e6fbb3`、核对健康后switch并同步主机pin至f7ee4dd；本次未实际回退。完整验收与客户端交付见`agent/tasks/S202.md`。
+
+## S205 Web 正常连接静默部署（generation279，2026-11-12）
+
+固定项目源`5e33611e6256d8654e15b2645c4aaebd2545693d`，主机pin`71c9af4dc2bac7896e2ad87fdc55f68b6c1f5797`已ff main并清树。执行`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S205-web-connection-20261112/deploy`，pure构建/dry-activate/test/HTTPS与IPC/身份/归属/switch全部通过；运行及开机generation279，system`/nix/store/4ncbab1h79c32kv4yqq240l4vq5kmmhz-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/jgpaa4vv914is74akx8bdpw878226lyz-vaultsyncd-0.1.7`。本次无wire/schema迁移，主机锁、ServerId、Vault路径保持。
+
+两源health/capabilities与14项资产/index共28次精确字节比对通过（index只剥离实际CSP nonce meta），匿名活动页门禁/CSP/style nonce/nosniff通过；未登录或修改生产文件。部署包Web精确字节配合同包后端，隔离btrfs上再次通过完整Chromium认证/自动健康检查/静默/异常重试/退出取消/明暗窄屏验收。证据`/data/vaultsyncd-dev/S205-web-connection-20261112/verification/`、`S205-auth-20261112T093812-1016812/`及`deploy/local-20261112T093441-1002616/`（passed/cleaned=true）。旧generation278的system/boot GC roots保留；如需回退，先test `/nix/store/k4bxgcd0yflgd1l7zx2nkpbmfkm3cjp1-nixos-system-wks-lab-26.11.20261109.5e6fbb3`、验证健康再switch，并同步主机pin至9e948a4；本次未实际回退。完整交接见`agent/tasks/S205.md`。
+
+## S206 云传输图标部署（generation280，2026-11-12）
+
+固定项目源`13dbfa776286f4014acc51d522a0ed9222818c4c`，主机pin`652f4744bca7a31c8b9267c76adbbcafff2048f5`已ff main并清树。执行`tools/deploy-local.sh --rev HEAD --evidence-base /data/vaultsyncd-dev/S206-cloud-transfer-icons-20261112094306/deploy`，pure构建/dry-activate/test/HTTPS与IPC/身份/归属/switch全部通过；运行及开机generation280，system`/nix/store/ffw13m972vxi7flkz7hipjy9i1vlx86r-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包`/nix/store/pp9w0qwapqcjap4yincym58kh6wx80pl-vaultsyncd-0.1.7`。本次仅前端图标资产变化，无wire/schema迁移，主机锁、ServerId`9395d9cacd7d3fb4b746592806a8b5cb`、Vault路径保持。
+
+健康/`vaultsyncd-admin status`（phase=ready）、13项Web资产抽查（index JS/CSS与Files分块）线上与包内SHA-256一致，CSP/style nonce、nosniff正常，匿名`/v1/vaults`仍返回401，未登录或修改生产文件。证据`/data/vaultsyncd-dev/S206-cloud-transfer-icons-20261112094306/deploy/local-20261112T094622-1031794/`（passed/cleaned=true）及同根`icon-browser-20261112T095936-1047003/`（部署包精确字节Web+同包后端Chromium云图标断言与截图）。旧generation279的system/boot GC roots保留；如需回退，先test `/nix/store/4ncbab1h79c32kv4yqq240l4vq5kmmhz-nixos-system-wks-lab-26.11.20261109.5e6fbb3`、验证健康再switch，并同步主机pin至`71c9af4`；本次未实际回退。完整交接见`agent/tasks/S206.md`。
+
+## S208 PDF 与图片预览部署（generation281，2026-11-12）
+
+项目源 `4770492975d61b045d64090da77d05ec4ab36207`，主机 pin `3597d0b1aa9e5d879df7a73ac1c935bf4444a4c7` 已 ff 合 `/etc/nixos` main 并清树；主机依赖锁不变。`tools/deploy-local.sh --rev <完整SHA> --evidence-base /data/vaultsyncd-dev/S208-file-preview-20261112/deploy` 完成 pure 构建、dry-activate、test、HTTPS/IPC/ServerId/目录归属核对及 switch。运行/开机 generation281，system `/nix/store/lv1k5g2vd5sb6al22ac12c8kr6nxdidv-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/9kn3cqsqrcnyqfd7pmmhd13kahc53hd2-vaultsyncd-0.1.7`；无 wire/schema 变化，生产 ServerId `9395d9cacd7d3fb4b746592806a8b5cb` 保持。
+
+生产 HTTPS、开发 HTTPS 与生产 loopback 的201文件共603次逐字节核对通过（index只移除实际nonce meta）；health、身份隔离、CSP/nonce/nosniff、匿名Vault 401及prod/dev真实Chromium匿名深链/窄屏均通过。部署包精确Web+同包后端在独立btrfs再次通过全部16组预览浏览器验收；未登录或修改生产文件。dev 经管理脚本有序 restart 到同包，保留原数据库/Vault/ServerId `fe616633a01bb594d574b8d08626efc3`，不重置账号或重建绑定；生产仍为既有NixOS部署，dev仍非NixOS服务。
+
+证据 `/data/vaultsyncd-dev/S208-file-preview-20261112/`：`deploy/local-20261112T151823-1391598/result.json`（passed/cleaned=true）、`evidence/online-verification.json`、`evidence/online-browser/`、`S208-file-preview-20261112T152147-1404072/evidence/`。旧generation280的system/boot GC roots保留；回退先test `/nix/store/ffw13m972vxi7flkz7hipjy9i1vlx86r-nixos-system-wks-lab-26.11.20261109.5e6fbb3`、健康再switch，并同步主机pin至 `652f474`；dev可显式restart至旧包。未实际回退，完整交接与50MiB/像素限制见 `agent/tasks/S208.md`。
+
+## S209 浏览器内置 PDF 部署（generation282，2026-11-12）
+
+项目源 `23d5c7c2ffb0195245f106bea6115b1fffcf5ac9`，主机pin `bf4857dd4bfc0d4b90449de65911a5174775ad92` 已ff main并清树；主机锁不变。`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S209-native-pdf-20261112/deploy` 的pure构建、dry-activate、test、HTTPS/IPC/身份/归属与switch通过。运行/开机generation282，system `/nix/store/xhnglrd8swyda39xqifl83a3sqqji441-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/dil3kh3r7iphfsiqbgzxv6wkq21kx35x-vaultsyncd-0.1.7`；无wire/schema迁移。PDF.js/字体/补丁已删除，PDF由浏览器处理，Web CSP仅新增 `frame-src blob:`；行为与限制见 [S209交接](../../agent/tasks/S209.md)。
+
+prod/dev HTTPS及prod loopback的15文件共45次字节核对、health/capabilities身份保持、CSP/nonce/nosniff、匿名401通过，prod/dev Chromium匿名深链320/1440通过；部署精确包独立btrfs再次通过17组预览验收。dev经管理器restart至同包，原数据库/Vault/账号/ServerId保持。证据同任务根，`deploy/local-20261112T155408-1442682/result.json` 的passed/cleaned=true；未登录或修改生产文件。旧generation281的system/boot GC roots保留；回退先test上节system `lv1k5g2vd5sb6al22ac12c8kr6nxdidv`、验证健康再switch，同步主机pin至 `3597d0b`，dev可restart至上节旧包。未实际回退。
+
+
+## S210 文本与 Markdown 预览部署（generation283，2026-11-12）
+
+固定源 `e79299a2c88edde05e76a85131268aa94c717f48`，主机pin `aae429264a71479b336ebf3c288b6ff382a94c3f` 已ff main并清树、主机锁不变。`tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S210-text-preview-20261112/deploy` pure构建/dry/test/HTTPS/IPC/身份与归属/switch全部通过，Nix包内75项测试通过。运行/开机generation283，system `/nix/store/y37pxj5akkip23jmc79qbiy74ycl4q7z-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/c9xkfn6c1gm7lzd86pkab669gk5vj1yx-vaultsyncd-0.1.7`。无wire/schema变化，生产ServerId保持，CSP策略未放宽；CodeMirror样式携带已有nonce。
+
+prod/dev HTTPS及prod loopback 136文件/408次精确字节核对、健康/身份隔离、匿名401/CSP/nonce/nosniff与线上Chromium深链320/1440通过；部署包独立btrfs文本13组、PDF/图片17组全部通过。未登录或修改生产文件。dev管理器有序restart至同包，原数据库/Vault/账号/ServerId保持。证据同任务根 `evidence/` 与 `deploy/local-20261112T161807-1493237/result.json`（passed/cleaned=true），边界和完整验收见 [S210交接](../../agent/tasks/S210.md)。
+
+旧generation282的system/boot GC roots保留；回退先test上节system `xhnglrd8swyda39xqifl83a3sqqji441`、验证健康后switch，并同步主机pin至 `bf4857d`；dev可显式restart至上节旧包。未实际回退。
+
+## S211 管理页面自动恢复部署（generation284，2026-11-12）
+
+项目源 `5a85e64db1e31dc7a11c99120c34b84bfd191347`，沿用 `tools/deploy-local.sh`，pure构建/包内75项/dry/test/HTTPS/IPC/身份与归属/switch通过。主机pin `716e45384da7c91f50ce7239e540b3a5695d1a37` 已ff main并清树，依赖锁保持；运行/开机generation284，system `/nix/store/q08fphxvymbbv91gygcmsfigs1zbszwf-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/6liszy33b10wzpq4xn9aqn7rjamak7i0-vaultsyncd-0.1.7`。无wire/schema变化。prod/dev同包，136文件/408字节、健康/身份隔离/匿名401/CSP与严格HTTPS Chromium320/1440通过；原generation283的system/boot GC roots保留，未实际回退。证据及恢复策略见 [S211交接](../../agent/tasks/S211.md)。
+
+## S212 OnlyOffice 基础服务（generation285，2026-11-12）
+
+主机 `/etc/nixos` 新增 `features.onlyoffilce.*`，实现提交 `229efe4190bcb2f37f5fe8bbf24ee1d8d66feeac` 已ff合main，任务树/分支正常清理；初始化忽略规则提交 `7b3c1f2`。选项及日常维护唯一入口为 `/etc/nixos/README.md` 的「wks-lab：OnlyOffice Document Server」。运行/开机generation285，system `/nix/store/hyqksj0k5r3iwzarnap6wm35wxgjvwp7-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，主机锁和原vaultsyncd的S211源/包保持。
+
+Document Server 为 `https://wlab.132140.xyz:15402`，健康路径 `/healthcheck`，API `/web-apps/apps/api/documents/api.js`，复用wlab证书；内部nginx15403、docservice15404与RabbitMQ/epmd均限回环。JWT为运行时 `/var/lib/onlyoffice-secrets/jwt`，nonce同目录，0640 root:onlyoffice；仅供后端签发授权请求，不把密钥交给前端。默认首次生成并保留，停用feature不删除服务数据。示例服务关闭，根地址的welcome跳转不代表提供可上传的Office网站。
+
+纯构建/dry/test/健康/switch通过；生成的最小DOCX及官方DOCX/XLSX/PPTX样本均完成PDF转换和HTTPS下载，无签名/错误签名拒绝，管理路径大小写/版本前缀/编码403、相对重定向、资源加载、重启密钥稳定与prod/dev健康通过。补齐上游忽略监听host和缺失字体索引配置；首次失败的构建/启动/转换日志及两份core保留在 `/data/vaultsyncd-dev/S212-onlyoffice-20261112/`，不作缓存清理。应用Web尚未接入Office预览，也未进行浏览器Office渲染验收。
+
+回退目标为generation284/system `/nix/store/q08fphxvymbbv91gygcmsfigs1zbszwf-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，其GC root为证据根的 `old-system-root`。先运行该system的 `bin/switch-to-configuration test`，确认SSH与prod/dev健康后将 `/nix/var/nix/profiles/system` 设回旧system并执行其switch；同步撤销主机OnlyOffice配置，避免下次rebuild重新开启。此卡未改项目协议/数据库，不需回退项目数据；新建的OnlyOffice数据库/缓存/密钥仍应保留。未实际执行回退。
+
+## S213 Office 预览部署（generation286，2026-11-12）
+
+项目源 `43ae33dfccbfe1ffcabf5303caf13811dd9d33a4`，主机功能提交 `53c2db05eb1e7386ec0966f9135c67bb1c3cfde5`、pin `429b1cbda7c8644637757aa823032bf6160fc6cc`。`tools/deploy-local.sh --rev <SHA> --config /etc/nixos/.worktrees/S213-office-preview --evidence-base /data/vaultsyncd-dev/S213-office-preview-20261112/deploy` pure构建/dry/test/HTTPS及IPC/身份/归属/switch通过，result passed/cleaned=true。运行/开机generation286，system `/nix/store/4k7a8grgpv5c2d0pij0yliz86gz1cch6-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/8qfvjkalrkdhfdhpig9zh7liix6kwsp8-vaultsyncd-0.1.7`，Rust `494y5s1...`、Web `kj1iy2h...`；主机和项目依赖锁未更新版本（Cargo仅新增服务端直接依赖接线），无数据库迁移或IPC版本变化。
+
+wks-lab通过 `features.server.vaultsync.office.enable` 桥接项目 `services.vaultsyncd.office`，使用既有 `https://wlab.132140.xyz:15402`。systemd LoadCredential代读 `/var/lib/onlyoffice-secrets/jwt`，TOML只指 `/run/credentials/vaultsyncd.service/office-jwt`，Requires/After保证生成完成；没有扩大服务用户组或秘密ACL。生产进程命名空间中的凭据、dev私有副本与实际OnlyOffice密钥均一致。反代头超时130秒、服务停止期限150秒覆盖转换120秒deadline。
+
+OnlyOffice独立与内嵌FileConverter均以失败即停止构建的最小补丁关闭文档network/privateIP，并将allowList置空；Node仍可读取应用的随机回环源。真实旧serializeOptions可信JWT输出true/true、新双副本false/false的调用对照通过。七种外链样本未获阳性对照（FHS缺curl），不能用零请求声称完整网络阻断实证；补丁策略与此证据边界已独立复审。OnlyOffice已入队转换不能撤回，HTTP关闭不会提前释放worker准入，deadline后上游仍可能继续。
+
+server117项、包内80项、根类型/Web九套/构建、生成器21项/生成一致、dev管理器11项、模块credential fixture和最终精确包Chromium14组全部通过。三类真实Office→原生PDF、原件精确下载、授权/固定旧版/故障/重试/取消/CSP/窄屏证据在任务根，最终run `S213-office-20261112T210937-1816154`。prod/dev同包且各自原ServerId保持，136文件在prod/dev HTTPS及prod loopback共408字节比较、匿名新API401、严格TLS浏览器320/1440与CSP通过。没有向生产/持久dev写入验收文档或直接修改在线数据库。
+
+dev经管理器stop/configure-office/start配置同包，保留账号/Vault/身份与本机普通目录；收尾已由永久master入口再次有序启动，原身份和健康保持，supervisor不再引用任务路径。完整日志、截图、样本、core映射及GC roots在 `/data/vaultsyncd-dev/S213-office-preview-20261112/`，不按缓存删除。
+
+回退：证据根 `evidence/old-system-root` 保留原generation285/system `hyqksj0k5r3iwzarnap6wm35wxgjvwp7`；deploy子目录另留补丁过渡test system `1p31kwwy...` 与原boot root。先对明确旧system执行test并核对SSH/prod健康，再设回启动profile/switch，同步主机源pin。回退到S211须在dev停止后 `configure-office --disable-office` 再启动旧包，旧二进制严格拒绝新[office]配置；仅功能/协议增加，无须修改或回退同步数据库。旧OnlyOffice系统会撤掉本次文档网络补丁，回退时同时关闭Office功能；保留服务数据/密钥。未实际执行回退。
+
+S213收尾：项目实现43ae33d/交接50fc007已ff合master，主机53c2db0/429b1cb已ff合main；六挂载与双任务树/分支正常清理，既有其他任务树保持。清理后prod/dev/OnlyOffice健康通过，恢复与原始证据独立保留。
+
+## S214 文件列表列排序部署（generation287）
+
+源 `bf8acc627387523a203d9d105bd1776f87141076`，主机pin `e5caced011456cb5ca682640c2e3f04df25655eb` 已ff合main。既有 `tools/deploy-local.sh --rev <SHA> --evidence-base /data/vaultsyncd-dev/S214-file-sorting-20261112/deploy` 完成pure/dry/test/HTTPS、IPC、ServerId及归属核对/switch，result passed/cleaned=true，主机锁不变。运行/开机generation287，system `/nix/store/mdy6yg7jvhnyjprg39lbg8fc9smh6v74-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/inp5h2n5fa8kp5j0i445ya3wsq9qjva7-vaultsyncd-0.1.7`。仅展示排序，无数据库迁移、文件写入或协议变化。
+
+根类型/Web九套/构建、独立复审、Nix包内80项与精确包Chromium全套文件浏览器通过。dev经永久入口有序restart同包，原数据/身份和prod隔离保持；三源136文件/408次字节核对、严格TLS/匿名401/CSP及最终双环境health=ok。未向持久实例写测试样本。完整证据及旧generation286 system/boot GC roots在任务根，回退可使用其中previous-system/previous-boot；dev按管理器restart指定原S213包，保留现有数据，不重置配置。交接见 [S214](../../agent/tasks/S214.md)。
+
+## S215 ONLYOFFICE原生只读查看器部署（generation288）
+
+发布源 `6a99df4158bab3c3fcc3dca5f2f9196b3df0a2dd`（功能182bfe1，含S214排序），主机pin `65316dc4d48ee0dbedfde0846f0ccd39f537db3e` 已ff合main。既有部署脚本完成pure/dry/test/HTTPS、IPC、ServerId及UID/归属核对/switch，result passed/cleaned=true；主机锁不变。运行/开机generation288，system `/nix/store/38xqv31y8xxgpha1qikk9bia2i29xzh9-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/v5x74fbkhv7wk1xqmhvkd61xfl1r49ca-vaultsyncd-0.1.7`。只增加内存viewer会话与HTTP契约，无数据库或IPC迁移。
+
+最终精确包Office真实Chromium16组（含XLSX工作表0→1→0、签名与明文提权真实拒绝）和包内81项通过，server121项/根类型/Web九套/构建/生成一致及21项生成器/独立复审通过；PDF图片17组、文本13组回归通过。prod/dev同二进制，原账号/Vault/ServerId保持；136文件三源408次字节、严格TLS/匿名POST及DELETE401/精确CSP与凭据接线通过。dev使用永久入口restart，无任务路径依赖。没有向持久实例写测试文档。
+
+Office默认直接DocEditor只读浏览；CSP按配置精确加入OnlyOffice来源，API.js为受信任代码，仅空事件体哈希例外兼容上游Safari属性，不允许非空inline/eval。临时源120秒/两准入，关闭撤销，但已取得的副本/上游缓存不可收回，源准入不等于上游执行并发。旧PDF转换API继续兼容。
+
+证据 `/data/vaultsyncd-dev/S215-office-viewer-20261112/`，最终精确包run `S215-office-20261112T215042-1928363`；部署 `deploy/local-20261112T215205-1930595/` 保存generation287的previous-system/previous-boot GC roots。回退先对该旧system执行test并核对SSH/prod健康，再恢复启动profile/switch及主机pin；dev由管理器restart至S214包 `/nix/store/inp5h2n5fa8kp5j0i445ya3wsq9qjva7-vaultsyncd-0.1.7`，保留账号/Vault/配置，无需回退数据库。未实际执行回退；不删除旧roots或实验原始证据。交接见 [S215](../../agent/tasks/S215.md)。
+
+S215收尾：项目功能182bfe1/组合源6a99df4/交接65aae2b已ff合master；六挂载与本地S215树/分支正常清理，主机pin65316dc已ff合main并自动清理本次部署树。永久dev入口及runtime supervisor保留，证据和generation287回退roots长期保留。
+
+## S217 文件预览间距部署（generation290，2026-11-13）
+
+源 `df87e02bff7231aa19dc686b0905f5a18736404b`，主机pin `9b88c9846a3d55cfd46aeeb0abd05befdf92b174` 已ff合main且部署树/分支清理，锁未变。运行及开机generation290，system `/nix/store/bspn2gwq18a3q25cn3ikil180m93zhac-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/8wkqy5gnqfkfsj389x5vd7ip0p2k6k9d-vaultsyncd-0.1.7`。pure/dry/test/HTTPS/IPC/UID归属/switch通过；dev由永久入口restart同包，原ServerId/账号/Vault/schema21与Office配置保持。精确包图片/PDF17组、文本13组、Office16组及136文件三源408次字节、TLS/匿名门禁/CSP与320/1440通过，无持久验收样本。
+
+证据 `/data/vaultsyncd-dev/S217-preview-spacing-20261112/`（实际2026-11-13），部署目录 `deploy/local-20261113T082210-2590107/` 的previous-system/previous-boot保留generation289。回退可先test旧system `yaiwki5p97qn9x5889vp392vj6hlff5y`，核验SSH/健康后switch，主机pin恢复4e06276；dev通过永久管理器restart到S216包 `lb4av1rszg555rdkcfhp8baz5s7dbcs3`，不回退数据库或重置身份。本轮未实际回退/重启宿主，不发行推送或重打包Windows；交接 [S217](../../agent/tasks/S217.md)。
+
+## S216 文件预览标题栏部署（generation289）
+
+源 `b62e45c7589e2dd157a6a186eab1ccbb89b148ba`，主机pin `4e06276bdbd7dad45f38309c5466eb4e4490a00c` 已ff合main且临时树/分支清理。运行/开机generation289，system `/nix/store/yaiwki5p97qn9x5889vp392vj6hlff5y-nixos-system-wks-lab-26.11.20261109.5e6fbb3`，包 `/nix/store/lb4av1rszg555rdkcfhp8baz5s7dbcs3-vaultsyncd-0.1.7`；主机锁未变，无schema迁移。pure build/dry/test/HTTPS/IPC/UID归属/switch通过。dev从永久入口restart同包，各自ServerId/账号/Vault与dev Office配置保持；136文件三源408次字节、严格TLS/匿名门禁/CSP及最终精确包三套预览17+13+16组通过。
+
+证据 `/data/vaultsyncd-dev/S216-preview-header-20261112/`；`deploy/local-20261112T223357-1987644/previous-system` 与 `previous-boot` 保留generation288 system `38xqv31y8xxgpha1qikk9bia2i29xzh9`。需回退时先对该旧system执行test，核对SSH/健康后再switch并将主机pin回65316dc；dev通过永久管理器restart至S215包 `v5x74fbkhv7wk1xqmhvkd61xfl1r49ca`，不回退数据库或重置身份。本轮未实际回退。交接 [S216](../../agent/tasks/S216.md)，无本卡部署阻塞，不发行推送或重打包Windows。

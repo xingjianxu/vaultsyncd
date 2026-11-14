@@ -1,0 +1,13 @@
+{
+  "identifier": "shell-file",
+  "description": "Bundled Explorer file window: fixed native selection actions and read-only history.",
+  "local": true,
+  "windows": ["shell-file"],
+  "platforms": ["windows"],
+  "permissions": [
+    "allow-get-shell-target",
+    "allow-shell-file-status",
+    "allow-shell-file-action",
+    "allow-agent-list-history"
+  ]
+}

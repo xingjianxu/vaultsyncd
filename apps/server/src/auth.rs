@@ -186,6 +186,23 @@ async fn login_impl(
         return denied(&facts.request_id, "跨源登录请求被拒绝");
     }
 
+    if [body.hostname.as_deref(), body.operating_system.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|value| {
+            value.trim().is_empty() || value.len() > 255 || value.chars().any(char::is_control)
+        })
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            &facts.request_id,
+            "客户端主机属性无效",
+            false,
+            None,
+        );
+    }
+
     let mut accounts = DbAccounts {
         database: &context.database,
     };
@@ -207,6 +224,7 @@ async fn login_impl(
         database: &context.database,
         login_browser: Some(browser),
         login_ip: login_ip::source(peer, &facts.headers),
+        host_properties: Some((body.hostname.clone(), body.operating_system.clone())),
     };
     let mut ids = context.ids.lock().await;
     let issued = session::issue(
@@ -282,6 +300,7 @@ async fn refresh_impl(
         database: &context.database,
         login_browser: None,
         login_ip: None,
+        host_properties: None,
     };
     let mut ids = context.ids.lock().await;
     let renewed =
@@ -313,6 +332,7 @@ pub async fn logout(State(context): State<Arc<AuthContext>>, headers: HeaderMap)
         database: &context.database,
         login_browser: None,
         login_ip: None,
+        host_properties: None,
     };
     match sessions.revoke(principal.session_id, facts.now).await {
         Ok(_) => {
@@ -700,6 +720,7 @@ struct DbSessions<'a> {
     database: &'a Database,
     login_browser: Option<bool>,
     login_ip: Option<std::net::IpAddr>,
+    host_properties: Option<(Option<String>, Option<String>)>,
 }
 
 #[allow(async_fn_in_trait)]
@@ -715,6 +736,16 @@ impl SessionStore for DbSessions<'_> {
                 new.id,
                 browser,
                 self.login_ip,
+            )
+            .await
+            .map_err(session_db_error)?;
+        }
+        if let Some((hostname, os)) = &self.host_properties {
+            vaultsyncd_server_store::clients::set_host_properties(
+                &mut tx,
+                new.id,
+                hostname.as_deref(),
+                os.as_deref(),
             )
             .await
             .map_err(session_db_error)?;
@@ -891,6 +922,7 @@ async fn principal_with(
         database: &context.database,
         login_browser: None,
         login_ip: None,
+        host_properties: None,
     };
     let principal = session::authenticate(&mut sessions, &credential.token, facts.now)
         .await

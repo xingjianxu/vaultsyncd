@@ -111,6 +111,11 @@ public static class S185Tray {
     Check (!(Test-Path (Join-Path $program 'vaultsyncd-zip.exe'))) 'removed ZIP executable is absent'
     $env:LOCALAPPDATA = Join-Path $PSScriptRoot 'local'
     New-Item -ItemType Directory -Path $env:LOCALAPPDATA | Out-Null
+    # S200 owns default tray/stop acceptance. Keep this startup/provenance suite's
+    # explicit GUI-only lifetime so its existing writer-reuse checks remain valid.
+    $desktopProfile = Join-Path $env:LOCALAPPDATA 'vaultsyncd'
+    New-Item -ItemType Directory -Path $desktopProfile | Out-Null
+    [IO.File]::WriteAllText((Join-Path $desktopProfile 'desktop-settings.json'), '{"close_action":"exit","stop_agent_on_exit":false}')
     # Neither a manifest nor an owner is required for the very first startup.
     foreach ($file in @('zip-files.json','installed-files.json')) {
       if (Test-Path (Join-Path $program $file)) { Remove-Item (Join-Path $program $file) }

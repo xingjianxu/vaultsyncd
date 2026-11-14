@@ -5,6 +5,15 @@ vaultsyncd-desktop.exe or Start vaultsyncd.cmd. Do not run inside the ZIP browse
 No administrator access or installer is required. Microsoft Edge WebView2
 Evergreen Runtime must be available for the desktop UI.
 
+While the main window is open, active bindings register a current-user Explorer
+file menu: Show more options > vaultsyncd > File history / Download / Free space.
+Each verb opens a window for the selected file. Closing that window leaves the
+agent running. Free space requires confirmation and retains server content.
+After moving the program folder, reopen the main window to refresh menu paths.
+To remove the menu manually, exit the main desktop first, then run:
+  vaultsyncd-desktop.exe --unregister-shell-menu
+This removes only the menu; bindings, files, credentials and state stay intact.
+
 There is no vaultsyncd-zip.exe. Normal startup does not read or verify
 zip-files.json, installed-files.json, zip-owner.json, program hashes or sources.
 You can move/rename the program folder or replace its files. Existing legacy
@@ -22,7 +31,11 @@ or change the device identity. Do not copy local state to another machine.
 Only one agent writes a user's state. Opening another copy reuses the healthy
 agent already running for this user; it does not replace the running version.
 Close the desktop, safely stop the agent, then open the desired copy to switch
-versions. Closing the desktop alone leaves background synchronization running.
+versions. By default, closing the desktop hides it in the tray and keeps syncing.
+Program Settings can instead exit the desktop, optionally stopping the agent
+(enabled by default). Tray Exit follows the same agent-stop preference. Safe
+stop preserves recovery exports and pauses bindings; resume them after restart.
+If safe stop fails, the desktop stays open and shows the reason.
 
 Stop vaultsyncd.cmd asks for confirmation, pauses bindings, exports unconfirmed
 content and safely stops the agent. Bindings remain PAUSED after restart;

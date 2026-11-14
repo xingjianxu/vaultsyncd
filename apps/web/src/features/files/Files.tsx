@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { listVaults, type VaultSummary, type SnapshotEntry } from "@vaultsyncd/api-client";
-import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select, Stack, Table, Text, TextInput } from "@mantine/core";
+import { ActionIcon, Alert, Anchor, Code, Group, Menu, Pagination, Paper, Select, Stack, Table, Text, TextInput, UnstyledButton } from "@mantine/core";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { EntryMenu, openMenuByKeyboard } from "./EntryMenu";
 import { DirectoryTree } from "./DirectoryTree";
 import { useFileActions } from "./FileActions";
 import { FileIcon } from "./FileIcon";
 import { FileHistory } from "./FileHistory";
+import { FilePreview } from "./FilePreview";
+import { previewKind } from "./preview";
 import { Dialog, EmptyState } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { useAuth } from "../auth/Auth";
 import { SignedOut } from "../../services/auth";
-import { ancestry, directoryAtPath, filesLocation, fileModified, fileSize, fileSizeDetail, parseFilesLocation, readDirectorySnapshot, type DirectorySnapshot } from "./browser";
+import { ancestry, DEFAULT_FILE_SORT, directoryAtPath, filesLocation, fileModified, fileSize, fileSizeDetail, parseFilesLocation, readDirectorySnapshot, sortDirectoryEntries, type DirectorySnapshot, type FileSort, type FileSortColumn } from "./browser";
 
 export function FilesPanel({ location }: { location: string }) {
   const auth = useAuth();
@@ -67,7 +70,7 @@ function VaultBrowser({ location }: { location: string }) {
   useEffect(() => {
     if (!loading && !error && !route.vaultId && !route.error && vaults.length) navigation.navigate(filesLocation(vaults[0].vault_id), true);
   }, [loading, error, route.vaultId, route.error, vaults, location]);
-  const vault = vaults.find(item => item.vault_id === route.vaultId);
+  const vault = route.vaultId ? vaults.find(item => item.vault_id === route.vaultId) : route.error ? undefined : vaults[0];
   const vaultError = route.error || error || (!loading && route.vaultId && !vault ? "Vault 不存在或未获授权。" : "");
   const vaultPicker = <Select aria-label="浏览 Vault" placeholder="选择 Vault" value={vault?.vault_id ?? null} allowDeselect={false} searchable
     nothingFoundMessage="没有匹配的 Vault" disabled={loading || !vaults.length}
@@ -94,8 +97,10 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   const [snapshot, setSnapshot] = useState<DirectorySnapshot | null>(null);
   const [selected, setSelected] = useState<SnapshotEntry | null>(null);
   const [historyEntry, setHistoryEntry] = useState<SnapshotEntry | null>(null);
+  const [previewEntry, setPreviewEntry] = useState<SnapshotEntry | null>(null);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<FileSort>(DEFAULT_FILE_SORT);
   const [menuEntryId, setMenuEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!vault);
   const [error, setError] = useState("");
@@ -105,13 +110,13 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   pathRef.current = currentPath;
   const [address, setAddress] = useState(currentPath);
   const [addressError, setAddressError] = useState("");
-  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setHistoryEntry(null); setMenuEntryId(null); }, [currentPath]);
+  useEffect(() => { setAddress(currentPath); setAddressError(""); setQuery(""); setPage(1); setSelected(null); setHistoryEntry(null); setPreviewEntry(null); setMenuEntryId(null); }, [currentPath]);
   useEffect(() => {
     if (!vault) return;
     const controller = new AbortController();
     const previousDirectory = snapshot ? directoryAtPath(snapshot, segments) : undefined;
     const previousPath = currentPath;
-    setLoading(true); setSnapshot(null); setSelected(null); setError(""); setPage(1);
+    setLoading(true); setSnapshot(null); setSelected(null); setPreviewEntry(null); setError(""); setPage(1);
     readDirectorySnapshot(client, vault.vault_id, controller.signal).then(result => {
       if (!controller.signal.aborted) {
         setSnapshot(result);
@@ -129,8 +134,18 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
   const directory = snapshot ? directoryAtPath(snapshot, segments) : undefined;
   const children = useMemo(() => {
     const term = query.trim().toLocaleLowerCase("zh-CN");
-    return (snapshot?.children.get(directory?.entry_id ?? "") ?? []).filter(entry => entry.name.toLocaleLowerCase("zh-CN").includes(term));
-  }, [snapshot, directory?.entry_id, query]);
+    return sortDirectoryEntries((snapshot?.children.get(directory?.entry_id ?? "") ?? []).filter(entry => entry.name.toLocaleLowerCase("zh-CN").includes(term)), sort);
+  }, [snapshot, directory?.entry_id, query, sort]);
+  function sortHeader(column: FileSortColumn, label: string) {
+    const active = sort.column === column;
+    const next = active && sort.direction === "ascending" ? "descending" : "ascending";
+    const Icon = active ? sort.direction === "ascending" ? ArrowUp : ArrowDown : ArrowUpDown;
+    return <Table.Th aria-sort={active ? sort.direction : "none"}>
+      <UnstyledButton className="files-sort-button" aria-label={`按${label}排序`} title={`${label}：切换为${next === "ascending" ? "升序" : "降序"}`} onClick={() => {
+        setSort({ column, direction: next }); setPage(1); setMenuEntryId(null);
+      }}>{label}<Icon size={14} aria-hidden="true" /></UnstyledButton>
+    </Table.Th>;
+  }
   function navigate(entry: SnapshotEntry) {
     navigation.navigate(filesLocation(vault!.vault_id, ancestry(snapshot!, entry).slice(1).map(item => item.name)));
   }
@@ -161,7 +176,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
     return <EntryMenu key={key} entry={entry} context={{ vaultId: vault!.vault_id, snapshot: snapshot!, parent: directory ?? snapshot!.vault }}
       writable={!loading && vault?.health !== "unavailable" && !actions.locked}
       opened={menuEntryId === key} onChange={opened => setMenuEntryId(opened ? key : null)}
-      navigate={navigate} properties={setSelected} history={setHistoryEntry} copyPath={entry => void copyPath(entry)}>{child}</EntryMenu>;
+      navigate={navigate} properties={setSelected} preview={entry => setPreviewEntry({ ...entry })} history={setHistoryEntry} copyPath={entry => void copyPath(entry)}>{child}</EntryMenu>;
   }
   return <Paper withBorder className="files-browser">
     <aside className="files-sidebar" aria-label="目录面板">
@@ -202,11 +217,11 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
       <Menu opened={menuEntryId === "background"} onChange={opened => setMenuEntryId(opened ? "background" : null)} shadow="md" width={180}>
       <Menu.ContextMenu><div className="files-list" tabIndex={0} aria-label="当前目录空白区域" onKeyDown={event => { if (event.target === event.currentTarget) openMenuByKeyboard(event); }}>
         {snapshot && directory && <Table aria-label="文件与目录" highlightOnHover verticalSpacing="xs" horizontalSpacing="sm" className="files-table">
-          <Table.Thead><Table.Tr><Table.Th>名称</Table.Th><Table.Th>大小</Table.Th><Table.Th>修改日期</Table.Th></Table.Tr></Table.Thead>
+          <Table.Thead><Table.Tr>{sortHeader("name", "名称")}{sortHeader("size", "大小")}{sortHeader("modified_at", "修改日期")}</Table.Tr></Table.Thead>
           <Table.Tbody>{children.length ? children.slice((page - 1) * 100, page * 100).map(entry =>
             entryMenu(entry, <Table.Tr onContextMenu={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()}>
                   <Table.Td><Anchor component="button" ta="left" underline="never" className="files-entry-link" title={entry.name} onKeyDown={openMenuByKeyboard}
-                    onClick={() => entry.kind === "directory" ? navigate(entry) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
+                    onClick={() => entry.kind === "directory" ? navigate(entry) : previewKind(entry) ? setPreviewEntry({ ...entry }) : setSelected(entry)}><Group gap="xs" wrap="nowrap"><FileIcon name={entry.kind === "directory" ? "folder" : "file"} filename={entry.name} /><span className="files-entry-name">{entry.name}</span></Group></Anchor></Table.Td>
                   <Table.Td className="files-size">{fileSize(entry)}</Table.Td><Table.Td className="files-modified">{fileModified(entry)}</Table.Td>
                 </Table.Tr>)) : <Table.Tr><Table.Td colSpan={3}><Text ta="center" c="dimmed" py="md">{query.trim() ? "当前目录没有匹配的名称。" : "此目录在已提交快照中为空。"}</Text></Table.Td></Table.Tr>}</Table.Tbody>
         </Table>}
@@ -218,6 +233,7 @@ function DirectoryBrowser({ vault, vaultPicker, segments, navigation, vaultError
       </Menu.Dropdown></Menu>
       {children.length > 100 && <Pagination className="files-pagination" aria-label="文件列表分页" total={Math.ceil(children.length / 100)} value={page} onChange={setPage} size="sm" siblings={0} />}
     </section>
+    <FilePreview entry={previewEntry} vaultId={vault?.vault_id ?? ""} onClose={() => setPreviewEntry(null)} />
     {vault && historyEntry && <FileHistory key={`${vault.vault_id}:${historyEntry.entry_id}`} vaultId={vault.vault_id} entry={historyEntry} onClose={() => setHistoryEntry(null)} />}
     <Dialog opened={!!snapshot && !!selected} title="文件属性" onClose={() => setSelected(null)}>
       {snapshot && selected && <Stack gap="sm">

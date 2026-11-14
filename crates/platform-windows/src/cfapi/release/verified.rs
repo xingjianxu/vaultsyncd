@@ -14,7 +14,7 @@ use crate::{
 };
 use std::{
     io,
-    os::windows::{fs::FileExt, io::AsRawHandle},
+    os::windows::io::AsRawHandle,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -111,10 +111,11 @@ impl ReleaseHandle {
         let mut b = vec![0; length as usize];
         let mut n = 0;
         while n < b.len() {
-            let count = self
-                .guard
-                .file()
-                .seek_read(&mut b[n..], offset + n as u64)?;
+            let count = crate::files::controlled::read_at(
+                self.guard.file(),
+                &mut b[n..],
+                offset + n as u64,
+            )?;
             if count == 0 {
                 return Err(failure("LOCAL_CHANGED: short read"));
             }

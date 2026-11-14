@@ -248,6 +248,8 @@ async fn download_tcp_cut_resumes_only_missing_ranges_and_rejects_corruption_or_
             .unwrap();
     client
         .login(&vaultsyncd_protocol::generated::LoginRequest {
+            hostname: None,
+            operating_system: None,
             login: common::LOGIN.into(),
             password: common::PASSWORD.into(),
             device_label: "S104 TCP download".into(),

@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bindings;
+pub mod connections;
 pub mod db;
 pub mod entries;
 pub mod events;

@@ -126,6 +126,8 @@ async fn s091_default_real_tcp_refuses_major_or_missing_capability_before_auth_a
     lab.init_owner().await;
     let running = Running::start(&lab).await.unwrap();
     let login = LoginRequest {
+        hostname: None,
+        operating_system: None,
         login: common::LOGIN.into(),
         password: common::PASSWORD.into(),
         device_label: "S091-wire".into(),

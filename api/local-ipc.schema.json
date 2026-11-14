@@ -4,8 +4,8 @@
   "description": "Windows agent 与本机 GUI/CLI 之间的最小命令契约（docs/design.md §15.5、§5.6）。\n本文件是本机 IPC 的唯一编辑源；`cargo xtask generate` 据此生成\ncrates/local-ipc 的 Rust DTO 与 packages/local-ipc-types 的 TypeScript 类型。\n本契约与服务器管理 API 分开：它不经网络传输，也不复用 api/openapi.yaml。\n消息按帧编码：FRAME_HEADER_BYTES 字节的大端长度头（不含头自身）加该长度的\nUTF-8 JSON 负载，单帧负载上限为 MAX_FRAME_BYTES；两个常量由 x-vaultsyncd 生成。\n请求方按 Request 编码，agent 按 Response 应答；request_id 原样回显，\n调用方据此把并发应答配对，agent 不解析它的内容。\n未知命令、未知闭集取值与畸形 JSON 一律拒绝，不当作默认成功：\n解码失败发生在产生应答之前，由传输层结束该连接。",
   "x-vaultsyncd": {
     "protocol": {
-      "major": 2,
-      "minor": 9
+      "major": 3,
+      "minor": 2
     },
     "frame": {
       "header_bytes": 4,
@@ -56,7 +56,7 @@
       "additionalProperties": false,
       "type": "object", "description": "可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。",
       "properties": {
-        "rules": {"type":"string","description":"完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。"},
+        "rules": {"type":"string","description":"绑定级额外排除规则，追加在始终加载的内置默认规则之后；空文本表示仅使用默认规则，! 可重新包含默认排除项，最多4096字节；保存不删除任何内容。"},
         "rules_version": {"type":"string","description":"不可复用的规则版本；同版本同文本幂等。"},
         "binding_id": {"type":"string","description":"Binding 身份。"},
         "vault_id": {"type":"string","description":"授权 Vault 身份。"},
@@ -77,14 +77,14 @@
         "notification_generation":{"type":"string","description":"当前活动代际正整数字符串，旧GUI不能领取新复发。"},
         "after_version": {"type":"string","description":"订阅最后看到的 instance:counter；缺省或不匹配立即返回全量。"},
         "cursor": {"type":"string","description":"历史/回收站/文件分页的 after 身份；list_activity 为规范正十进制 before 记录ID。"},
-        "direction": {"type":"string","description":"list_activity 的方向筛选，仅 upload 或 download；相对于客户端。"},
+        "direction": {"type":"string","description":"list_activity 的类型筛选：upload、download 或 operation；上传下载相对于客户端。"},
         "search": {"type":"string","description":"问题路径或原因的大小写不敏感子串筛选。"}
       }
     },
     "CommandName": {
       "type": "string",
       "description": "本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。",
-      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity"]
+      "enum": ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity", "remove_connection", "stop_agent"]
     },
     "ErrorBody": {
       "type": "object",
@@ -134,7 +134,7 @@
         "management": {"$ref":"#/$defs/ManagementResult","description":"1.2 管理命令的类型化结果。"}
       }
     },
-    "Notice": {"type":"object","description":"核心Vault原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。","required":["key","cause","code","state","generation","critical","claimed"],"properties":{"key":{"type":"string","description":"稳定去重键"},"vault_id":{"type":"string","description":"关联Vault，非绑定身份"},"cause":{"type":"string","description":"Vault原因，冲突副本为CONFLICT_COPY"},"code":{"type":"string","description":"已分类错误码"},"state":{"type":"string","description":"active或resolved"},"generation":{"type":"string","description":"活动代际"},"critical":{"type":"boolean","description":"可信核心分类需用户处理"},"claimed":{"type":"boolean","description":"本代际已领取系统投递"}}},
+    "Notice": {"type":"object","description":"核心Vault原因与恢复/投递状态；claim不等于用户已读或Windows实际展示。","required":["key","cause","code","state","generation","critical","claimed"],"properties":{"key":{"type":"string","description":"稳定去重键"},"server_id":{"type":"string","description":"关联服务器身份；全局或来源未知的历史通知省略"},"vault_id":{"type":"string","description":"关联Vault，非绑定身份"},"cause":{"type":"string","description":"Vault原因，冲突副本为CONFLICT_COPY"},"code":{"type":"string","description":"已分类错误码"},"state":{"type":"string","description":"active或resolved"},"generation":{"type":"string","description":"活动代际"},"critical":{"type":"boolean","description":"可信核心分类需用户处理"},"claimed":{"type":"boolean","description":"本代际已领取系统投递"}}},
     "FileStatus": {
       "type":"object", "description":"agent安全扫描及持久状态的文件投影；不是释放授权，动作时必须重新核验。无条目身份的本地新文件不能执行远端动作。",
       "required":["path","status","residency","dirty","busy","pending","synchronized","release_allowed","release_reason","availability","remote_apply","transfer"],
@@ -159,6 +159,7 @@
       "required":["binding_id","vault_id","local_path","cache_path","mode","paused","detached"],
       "properties":{
         "binding_id":{"type":"string","description":"Binding 身份。"},
+        "server_id":{"type":"string","description":"绑定所属服务器的稳定身份；旧 agent 省略。"},
         "vault_id":{"type":"string","description":"Vault 身份。"},
         "local_path":{"type":"string","description":"用户选择的目录。"},
         "cache_path":{"type":"string","description":"保留的缓存。"},
@@ -216,9 +217,12 @@
         "id":{"type":"string","description":"递增记录ID，规范正十进制。"},
         "occurred_at":{"type":"string","description":"服务端观察时间，UTC秒。"},
         "client_label":{"type":"string","description":"当时客户端名称。"},
+        "client_hostname":{"type":"string","description":"客户端登录时声明的主机名；缺省未知。"},
+        "client_os":{"type":"string","description":"客户端登录时声明的操作系统；缺省未知。"},
+        "client_ip":{"type":"string","description":"服务端观察的客户端首次登录来源IP；缺省未知。"},
         "client_kind":{"type":"string","description":"当时接入类型。"},
-        "direction":{"type":"string","description":"upload 或 download，相对于客户端。"},
-        "action":{"type":"string","description":"upload_finalize、sync_commit 或 download。"},
+        "direction":{"type":"string","description":"upload、download 或 operation；文件操作不表示内容传输。"},
+        "action":{"type":"string","description":"upload_finalize、sync_commit、download、create_directory、move、delete、restore_version 或 restore_deleted。"},
         "status":{"type":"string","description":"ready、committed、served 或 failed；不得把 ready/served 当同步完成。"},
         "client_id":{"type":"string","description":"认证连接身份。"},
         "device_id":{"type":"string","description":"操作携带的设备身份。"},
@@ -236,13 +240,14 @@
     "ManagementResult": {
       "type":"object","description":"每命令只填实际取得的结果；不以空列表代替失败。副作用 ok 代表实际完成，不是提交已排队。",
       "properties":{
-        "rules":{"type":"string","description":"当前完整排除清单，空字符串表示无排除规则。"},
+        "rules":{"type":"string","description":"当前绑定级额外排除规则原文，不含内置默认规则；空字符串表示仅使用默认规则，! 可重新包含默认排除项。"},
         "rules_version":{"type":"string","description":"当前持久规则版本。"},
         "rules_explanation":{"type":"string","description":"get_rules携带entry_id时，按持久身份解析路径并返回命中的规则/行号或包含原因。"},
         "bindings":{"type":"array","items":{"$ref":"#/$defs/BindingInfo"},"description":"持久绑定列表。"},
         "files":{"type":"array","items":{"$ref":"#/$defs/FileStatus"},"description":"list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。"},
         "problems":{"type":"array","items":{"$ref":"#/$defs/Problem"},"description":"持久问题列表。"},
-        "connection":{"$ref":"#/$defs/ConnectionInfo","description":"连接事实。"},
+        "connection":{"$ref":"#/$defs/ConnectionInfo","description":"当前操作涉及的连接；状态应答仅在恰有一条连接时提供。"},
+        "connections":{"type":"array","items":{"$ref":"#/$defs/ConnectionInfo"},"description":"本机已配置的服务器；未配置时为空列表。"},
         "notices":{"type":"array","items":{"$ref":"#/$defs/Notice"},"description":"问题生命周期与投递事实"},
         "notification_claimed":{"type":"boolean","description":"是否成功领取本活动代际"},
         "restored_path":{"type":"string","description":"committed后按条目身份重新查询的当前位置"},
@@ -253,7 +258,8 @@
         "incomplete":{"type":"array","items":{"type":"string"},"description":"解绑后不保证离线可读的条目。"},
         "exported_files":{"type":"string","description":"已完整核验的恢复包文件数。"},
         "mode_remaining":{"type":"string","description":"模式任务仍需真实核对/补齐的条目数。"},
-        "next_cursor":{"type":"string","description":"文件/历史/回收站/同步与传输记录下一页游标；list_activity 为 before 记录ID。"}
+        "next_cursor":{"type":"string","description":"文件/历史/回收站/同步与传输记录下一页游标；list_activity 为 before 记录ID。"},
+        "session_revoked":{"type":"boolean","description":"remove_connection 是否已确认服务器会话被撤销；false 时本地连接、登录资料与凭据仍已删除。"}
       }
     },
     "IpcVersion": {

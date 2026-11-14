@@ -19,6 +19,7 @@ import {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   decodeCommandName,
+  decodeManagementResult,
   decodeRequest,
   decodeResponse,
   decodeResponseKind,
@@ -91,8 +92,41 @@ check("all_management_examples_decode_without_losing_parameters", () => {
     assert.deepEqual(reencode(decoded), sample);
     commands.add(decoded.command.name);
   }
-  assert.equal(commands.size, 27);
+  assert.equal(commands.size, 30);
   assert.ok(commands.has("list_activity"));
+  assert.ok(commands.has("stop_agent"));
+});
+
+check("activity_operations_preserve_actions_and_absent_transfer_fields", () => {
+  const activity = ["create_directory", "move", "delete", "restore_version", "restore_deleted"].map((action, index) => ({
+    id: String(index + 1), occurred_at: "1794300000", client_label: "操作来源", client_kind: "client",
+    direction: "operation", action, status: "committed", path: "目录/文档.txt", operation_id: "a".repeat(32),
+  }));
+  const sample = { activity };
+  assert.deepEqual(reencode(decodeManagementResult(sample)), sample);
+  const request = { request_id: "operation-filter", ipc_version: { major: PROTOCOL_MAJOR, minor: PROTOCOL_MINOR }, command: {
+    name: "list_activity", parameters: { binding_id: "b".repeat(32), direction: "operation" },
+  }};
+  assert.deepEqual(reencode(decodeRequest(request)), request);
+});
+
+check("multiple_connections_and_binding_server_identity_round_trip", () => {
+  const server = index => ({ server_id: String(index).repeat(32), server_url: `https://server${index}.invalid`, authenticated: index === 1 });
+  const sample = { connections: [server(1), server(2)], bindings: [{
+    binding_id: "a".repeat(32), server_id: server(2).server_id, vault_id: "b".repeat(32),
+    local_path: "C:/sync", cache_path: "C:/cache", mode: "on_demand", paused: false, detached: false,
+  }] };
+  assert.deepEqual(reencode(decodeManagementResult(sample)), sample);
+  assert.deepEqual(reencode(decodeManagementResult({ connections: [] })), { connections: [] });
+  expectThrow(() => decodeManagementResult({ connections: [server(1), { ...server(2), authenticated: "no" }] }));
+});
+
+check("notice_server_scope_is_optional_and_validated", () => {
+  const notice = { key: "legacy", cause: "CONFLICT_COPY", code: "NEEDS_RECOVERY", state: "active", generation: "3", critical: true, claimed: true };
+  for (const value of [notice, { ...notice, server_id: "1".repeat(32), vault_id: "2".repeat(32) }]) {
+    assert.deepEqual(reencode(decodeManagementResult({ notices: [value] })), { notices: [value] });
+  }
+  expectThrow(() => decodeManagementResult({ notices: [{ ...notice, server_id: 12 }] }));
 });
 
 check("response_ok_example_decodes_to_sample", () => {

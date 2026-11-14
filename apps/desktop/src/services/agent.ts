@@ -3,17 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface ConnectionAddress { serverUrl: string; caFile?: string }
 export interface ConnectionInput extends ConnectionAddress { serverId: string }
-export interface BindingInput { bindingId: string; vaultId: string; localPath: string; mode: "full" | "on_demand" }
+export interface BindingInput { bindingId: string; serverId: string; vaultId: string; localPath: string; mode: "full" | "on_demand" }
 export interface RestoreInput { bindingId:string;entryId:string;operationId:string;baseRevision:string;versionId?:string }
 export interface NotificationSettings { enabled:boolean;delivered:number;blocked:number;last_error?:string }
 export interface AgentClient {
   getStatus(): Promise<GetStatusResult>;
   discoverConnection(input: ConnectionAddress): Promise<ManagementResult>;
   setConnection(input: ConnectionInput): Promise<ManagementResult>;
-  login(username: string, password: string): Promise<ManagementResult>;
-  logout(): Promise<ManagementResult>;
-  listVaults(): Promise<ManagementResult>;
+  removeConnection(serverId: string): Promise<ManagementResult>;
+  login(serverId: string, username: string, password: string): Promise<ManagementResult>;
+  logout(serverId: string): Promise<ManagementResult>;
+  listVaults(serverId: string): Promise<ManagementResult>;
   selectDirectory(): Promise<string | null>;
+  openBindingDirectory(bindingId: string): Promise<void>;
   createBinding(input: BindingInput): Promise<ManagementResult>;
   pauseBinding(bindingId: string): Promise<ManagementResult>;
   resumeBinding(bindingId: string): Promise<ManagementResult>;
@@ -28,7 +30,7 @@ export interface AgentClient {
   detachBinding(bindingId: string): Promise<ManagementResult>;
   exportRecovery(bindingId: string, destination: string): Promise<ManagementResult>;
   listHistory(bindingId:string,entryId:string,cursor?:string):Promise<ManagementResult>;
-  listActivity(bindingId:string,cursor?:string,direction?:"upload"|"download"):Promise<ManagementResult>;
+  listActivity(bindingId:string,cursor?:string,direction?:"upload"|"download"|"operation"):Promise<ManagementResult>;
   listTrash(bindingId:string,cursor?:string):Promise<ManagementResult>;
   restoreEntry(input:RestoreInput):Promise<ManagementResult>;
   notificationSettings():Promise<NotificationSettings>;
@@ -37,20 +39,26 @@ export interface AgentClient {
 const unavailable = async (): Promise<never> => { throw new Error("未连接：当前为 IPC 测试替身，尚未接入本机 agent。"); };
 // 仅供应用壳开发的明确替身；S080 替换为 Tauri command 桥，绝不返回伪造 Binding。
 export const disconnectedAgent: AgentClient = {
-  getStatus: unavailable, discoverConnection: unavailable, setConnection: unavailable, login: unavailable, logout: unavailable,
-  listVaults: unavailable, selectDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
+  getStatus: unavailable, discoverConnection: unavailable, setConnection: unavailable, removeConnection: unavailable,
+  login: unavailable, logout: unavailable,
+  listVaults: unavailable, selectDirectory: unavailable, openBindingDirectory: unavailable, createBinding: unavailable, pauseBinding: unavailable, resumeBinding: unavailable,
   listFiles: unavailable, downloadEntry: unavailable, releaseEntry: unavailable, listProblems: unavailable,
   getRules:unavailable,setRules:unavailable,
   retryProblem: unavailable, setMode: unavailable, detachBinding: unavailable, exportRecovery: unavailable,
   listHistory:unavailable,listActivity:unavailable,listTrash:unavailable,restoreEntry:unavailable,notificationSettings:unavailable,setNotifications:unavailable,
 };
+export class AgentRequestError extends Error {
+  constructor(message: string, public readonly retryable: boolean) { super(message); }
+}
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
     throw new Error("未连接本机 agent；请从 Windows 桌面应用运行。");
   }
   try { return await invoke<T>(command, args); }
   catch (error) {
-    if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") throw new Error(error.message);
+    if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
+      throw new AgentRequestError(error.message, "retryable" in error && error.retryable === true);
+    }
     throw new Error("无法连接本机 agent；请从 Windows 桌面应用运行。");
   }
 }
@@ -59,10 +67,12 @@ export const nativeAgent: AgentClient = {
   getStatus: () => call("agent_get_status"),
   discoverConnection: input => call("agent_discover_connection", { input }),
   setConnection: input => call("agent_set_connection", { input }),
-  login: (username, password) => call("agent_login", { username, password }),
-  logout: () => call("agent_logout"),
-  listVaults: () => call("agent_list_vaults"),
+  removeConnection: serverId => call("agent_remove_connection", { serverId }),
+  login: (serverId, username, password) => call("agent_login", { serverId, username, password }),
+  logout: serverId => call("agent_logout", { serverId }),
+  listVaults: serverId => call("agent_list_vaults", { serverId }),
   selectDirectory: () => call("select_local_directory"),
+  openBindingDirectory: bindingId => call("open_binding_directory", { bindingId }),
   createBinding: input => call("agent_create_binding", { input }),
   pauseBinding: bindingId => call("agent_pause_binding", { bindingId }),
   resumeBinding: bindingId => call("agent_resume_binding", { bindingId }),

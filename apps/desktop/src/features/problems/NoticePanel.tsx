@@ -23,8 +23,9 @@ export function NoticePanel({ agent, notices, run, busy }: { agent: AgentClient;
       </Group>
       <Text size="sm" role="status">{value ? `系统通知${value.enabled ? "已开启" : "已关闭"}；本次界面提交给Windows ${value.delivered} 条，失败或策略禁用 ${value.blocked} 条。` : "尚未读取通知设置。"}</Text>
       {(error || value?.last_error) && <Alert color="red" role="alert">{error || value?.last_error}</Alert>}
-      <Text size="sm" c="dimmed">开启会注册开始菜单快捷方式；关闭或清除通知不会清理问题、待办或冲突副本。同一 Vault 的同原因每个活动代际仅领取一次。</Text>
+      <Text size="sm" c="dimmed">开启会注册开始菜单快捷方式；关闭或清除通知不会清理问题、待办或冲突副本。同一服务器、Vault 的同原因每个活动代际仅领取一次。</Text>
       <Table<Notice> caption="Vault问题生命周期" rows={notices ?? []} rowKey={notice => notice.key} emptyMessage={notices ? "未记录需处理的Vault问题。" : "尚未取得问题生命周期。"} columns={[
+        { key: "server", title: "Server ID", render: notice => notice.server_id ?? "—" },
         { key: "vault", title: "Vault", render: notice => notice.vault_id ?? "全局" },
         { key: "cause", title: "原因", render: notice => notice.cause === "CONFLICT_COPY" ? "冲突副本待检查" : notice.cause },
         { key: "state", title: "状态", render: notice => <StatusBadge tone={notice.state === "resolved" ? "success" : "warning"}>{notice.state === "resolved" ? "已恢复" : `仍需处理 · 活动代际 ${notice.generation}`}</StatusBadge> },

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S077/S145/S148: real Chromium + isolated btrfs auth and health lifecycle.
+"""S077/S145/S148/S205: real Chromium + isolated btrfs auth and quiet health lifecycle.
 
 Run after the Web build and Rust server/admin build:
 nix develop .#web-tests --command python3 tests/web/auth-browser.py
@@ -21,7 +21,7 @@ from playwright.sync_api import sync_playwright, expect
 
 REPO = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("VAULTSYNCD_TEST_BIN_DIR", REPO / "target/debug"))
-RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-dev/vaultsyncd-temp")) / f"S148-auth-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+RUN = Path(os.environ.get("VAULTSYNCD_WEB_RUN_ROOT", "/data/vaultsyncd-dev/vaultsyncd-temp")) / f"S205-auth-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
 
 
 def checked(args, **kwargs):
@@ -56,7 +56,7 @@ def main():
         assert address, "server did not listen"
         proxy_results = []
         account_gate = threading.Event()
-        network = {"offline": False, "health_offline": False}
+        network = {"offline": False, "health_offline": False, "health_status": None}
         health_requests = []
         health_delay = {"gate": None}
 
@@ -77,6 +77,14 @@ def main():
                         gate.wait(timeout=10)
                     if network["health_offline"]:
                         self.close_connection = True
+                        return
+                    # Controlled health-response faults only; auth still uses the real server.
+                    if network["health_status"] is not None:
+                        payload = json.dumps({"status": network["health_status"]}).encode()
+                        self.send_response(200)
+                        self.send_header("content-type", "application/json")
+                        self.send_header("content-length", str(len(payload)))
+                        self.end_headers(); self.wfile.write(payload)
                         return
                 if self.path == "/v1/auth/account":
                     account_gate.wait(timeout=10)
@@ -162,22 +170,56 @@ def main():
 
             login(password)
             expect(notifications.filter(has_text="登录成功")).to_have_attribute("role", "status")
-            connection = page.locator(".app-topbar [role='status']")
-            expect(connection).to_have_text("服务可用")
+            connection = page.locator("[data-service-connection][role='alert']")
+            check = connection.get_by_role("button", name="重新检查", exact=True)
+
+            def quiet():
+                # Wait for a completed real health request, not just an absent label.
+                deadline = time.monotonic() + 5
+                while not any(path == "/v1/health" for path, *_ in proxy_results):
+                    assert time.monotonic() < deadline, "automatic health did not complete"
+                    page.wait_for_timeout(50)
+                expect(connection).to_have_count(0)
+                expect(page.get_by_text("服务可用", exact=True)).to_have_count(0)
+                expect(notifications.filter(has_text="服务可用")).to_have_count(0)
+                expect(page.locator(".app-topbar [role='status']")).to_have_count(0)
+                expect(page.get_by_role("button", name="检查服务连接", exact=True)).to_have_count(0)
+
+            quiet()
             assert len(health_requests) == 1, "login did not check health exactly once"
             page.evaluate("location.hash = '/overview'")
-            check = page.get_by_role("button", name="检查服务连接", exact=True)
-            expect(check).to_be_enabled()
+            expect(page.get_by_role("heading", name="服务器", exact=True)).to_be_visible()
+            quiet()
             assert len(health_requests) == 1, "navigation repeated automatic health check"
             network["health_offline"] = True
-            check.click()
-            expect(connection).to_have_text("未连接")
+            page.reload()
+            expect(connection).to_contain_text("无法连接服务")
             expect(check).to_be_enabled()
             expect(page.locator(".mantine-AppShell-root")).to_be_visible()
             network["health_offline"] = False
+            retry_gate = threading.Event()
+            health_delay["gate"] = retry_gate
+            before_retry = len(health_requests)
             check.click()
-            expect(connection).to_have_text("服务可用")
-            expect(check).to_be_enabled()
+            expect(check).to_be_disabled()
+            # Keep the real error visible until a successful result, including navigation.
+            expect(connection).to_contain_text("无法连接服务")
+            page.evaluate("location.hash = '/account'")
+            expect(connection).to_contain_text("无法连接服务")
+            page.wait_for_timeout(200)
+            assert len(health_requests) == before_retry + 1, "retry requests overlapped"
+            health_delay["gate"] = None
+            retry_gate.set()
+            quiet()
+            for status, title in [("degraded", "服务降级"), ("needs_recovery", "需要恢复")]:
+                network["health_status"] = status
+                page.reload()
+                expect(connection).to_contain_text(title)
+                expect(check).to_be_enabled()
+                page.screenshot(path=str(RUN / f"{status}.png"))
+                network["health_status"] = None
+                check.click()
+                quiet()
             page.evaluate("location.hash = '/account'")
             cookies = context.cookies()
             assert len(cookies) == 2 and all(c["httpOnly"] and c["secure"] and c["sameSite"] == "Strict" for c in cookies)
@@ -196,7 +238,7 @@ def main():
             context.add_cookies([{**access, "expires": time.time() - 10}])
             before_reload = len(health_requests)
             page.reload(); expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
-            expect(connection).to_have_text("服务可用")
+            quiet()
             assert len(health_requests) == before_reload + 1
             assert next(c for c in context.cookies() if c["name"] == "vaultsyncd_session")["value"] != access["value"]
 
@@ -220,15 +262,18 @@ def main():
             expect(password_error).to_have_attribute("role", "alert")
             login(new_password)
             expect(password_error).to_have_count(0)
-            expect(connection).to_have_text("服务可用")
-            # Logout cancels the old shell's in-flight health check.
+            quiet()
+            # Reload starts a check automatically; logout cancels the in-flight request.
             pending_health = threading.Event()
             health_delay["gate"] = pending_health
-            page.evaluate("location.hash = '/overview'")
-            check.click()
-            expect(connection).to_have_text("正在检查")
-            expect(page.get_by_role("button", name="检查中…", exact=True)).to_be_disabled()
-            page.evaluate("location.hash = '/account'")
+            before_pending = len(health_requests)
+            page.reload()
+            expect(page.get_by_text("已登录：owner", exact=True)).to_be_visible()
+            deadline = time.monotonic() + 5
+            while len(health_requests) == before_pending:
+                assert time.monotonic() < deadline, "reload did not start health automatically"
+                page.wait_for_timeout(50)
+            quiet()
             with page.expect_event("requestfailed", predicate=lambda request: request.url.endswith("/v1/health")):
                 page.get_by_role("button", name="退出当前会话", exact=True).click()
             signed_out()
@@ -236,7 +281,7 @@ def main():
             assert page.evaluate("fetch('/v1/auth/browser/refresh',{method:'POST'}).then(r => r.status)") == 401
             health_delay["gate"] = None
             login(new_password)
-            expect(connection).to_have_text("服务可用")
+            quiet()
             pending_health.set()
             page.get_by_role("button", name="撤销全部会话", exact=True).click()
             signed_out()
@@ -252,13 +297,28 @@ def main():
             network["health_offline"] = True
             page.reload()
             expect(page.get_by_role("heading", name="Vault 目录", level=1, exact=True)).to_be_visible()
-            expect(connection).to_have_text("未连接")
+            expect(connection).to_contain_text("无法连接服务")
             assert page.evaluate("location.hash") == "#/vaults"
+            # The persistent failure and retry stay available on every route.
+            for scheme in ("light", "dark"):
+                page.emulate_media(color_scheme=scheme)
+                for width in (320, 1440):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    expect(connection).to_be_visible()
+                    expect(check).to_be_enabled()
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                    page.screenshot(path=str(RUN / f"unavailable-{scheme}-{width}.png"))
             network["health_offline"] = False
             page.evaluate("location.hash = '/overview'")
             check.click()
-            expect(connection).to_have_text("服务可用")
-            page.screenshot(path=str(RUN / "connected.png"))
+            quiet()
+            for scheme in ("light", "dark"):
+                page.emulate_media(color_scheme=scheme)
+                for width in (320, 1440):
+                    page.set_viewport_size({"width": width, "height": 900})
+                    quiet()
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                    page.screenshot(path=str(RUN / f"connected-{scheme}-{width}.png"))
             assert page.evaluate("fetch('/v1/auth/revoke-all',{method:'POST'}).then(r => r.status)") == 200
             page.evaluate("location.hash = '/backup'")
             signed_out()
@@ -270,8 +330,8 @@ def main():
             page.screenshot(path=str(RUN / "account.png"))
             assert page.evaluate("window.__csp") == [], page.evaluate("window.__csp")
             second.close(); context.close(); browser.close()
-            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage", "notifications/login-success/auth-error-clears-on-retry", "CSP"], "scope":"HTTP loopback isolated real server; unified login gate S145 and automatic health S148", "connection_checks":["no-anonymous-health", "login-check-once", "navigation-no-repeat", "manual-network-failure-retry", "refreshed-session-auto-check", "in-flight-disabled", "logout-aborts-health", "relogin-new-health", "restored-session-health-failure-preserves-auth", "CSP"], "gate_checks":["initial-check-no-console-flash", "all-routes-anonymous-blocked", "deep-link-preserved", "no-anonymous-feature-requests", "offline-check-retry", "server-revocation-closes-console", "authenticated-reload"]}, ensure_ascii=False, indent=2))
-        print(f"S148 auth/automatic health browser acceptance passed: {RUN}")
+            (RUN / "result.json").write_text(json.dumps({"passed":True, "browser":playwright.chromium.name, "checks":["login", "httponly-secure-strict", "no-token-response", "no-store", "refresh-expired-access", "csrf-cross-origin", "password-revokes-all", "old-password-rejected", "logout", "revoke-all", "no-secret-logs-storage", "notifications/login-success/auth-error-clears-on-retry", "CSP"], "scope":"HTTP loopback isolated real server; unified login gate S145 and automatic health S148", "connection_checks":["no-anonymous-health", "login-check-once", "navigation-no-repeat", "automatic-network-failure-manual-retry", "refreshed-session-auto-check", "healthy-no-badge-toast-or-connect-button", "degraded-and-recovery-alerts", "light-dark-320-1440-healthy-and-unavailable-no-overflow", "retry-single-flight-retains-error", "logout-aborts-health", "relogin-new-health", "restored-session-health-failure-preserves-auth", "CSP"], "gate_checks":["initial-check-no-console-flash", "all-routes-anonymous-blocked", "deep-link-preserved", "no-anonymous-feature-requests", "offline-check-retry", "server-revocation-closes-console", "authenticated-reload"]}, ensure_ascii=False, indent=2))
+        print(f"S205 auth/quiet automatic health browser acceptance passed: {RUN}")
     finally:
         for listener in [proxy, evil]:
             if listener: listener.shutdown(); listener.server_close()

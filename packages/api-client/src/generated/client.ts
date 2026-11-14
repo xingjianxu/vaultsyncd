@@ -1,6 +1,6 @@
 // 本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。
 //
-// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.2.0
+// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.3.0
 // 服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
 // 不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
 // 在对应功能卡加入。
@@ -8,8 +8,8 @@
 // 传输细节（fetch、request_id）由调用方注入，客户端不直接读全局对象；非 2xx 响应按错误
 // 信封解码成 ApiError，未知错误码与畸形响应抛 ProtocolError。
 
-import { decodeAccountChanged, decodeAccountInfo, decodeActivityPage, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeClientConnectionPage, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedVaultList, decodeOperationResult, decodeRecoveryPage, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVaultList, decodeVaultRegistered, decodeVersionLease } from "./types";
-import type { AccountChanged, AccountInfo, ActivityPage, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ClientConnectionPage, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedVaultList, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VaultList, VaultRegisterRequest, VaultRegistered, VersionLease, VersionLeaseRequest } from "./types";
+import { decodeAccountChanged, decodeAccountInfo, decodeActivityPage, decodeBackupSnapshotList, decodeBackupSnapshotStatus, decodeBrowserSession, decodeCapabilities, decodeChangeList, decodeClientConnectionPage, decodeErrorEnvelope, decodeFinalizedContent, decodeHealthResponse, decodeManagedVaultList, decodeOfficeViewerClosed, decodeOfficeViewerSession, decodeOperationResult, decodeRecoveryPage, decodeSessionIssued, decodeSessionRevoked, decodeSnapshot, decodeSnapshotPage, decodeSubtreeToken, decodeUploadPartAck, decodeUploadSession, decodeUploadStatus, decodeVaultList, decodeVaultRegistered, decodeVersionLease } from "./types";
+import type { AccountChanged, AccountInfo, ActivityPage, BackupPrepareRequest, BackupSnapshotList, BackupSnapshotStatus, BrowserSession, Capabilities, ChangeList, ClientConnectionPage, ErrorBody, FinalizedContent, HealthResponse, LoginRequest, ManagedVaultList, OfficePreviewRequest, OfficeViewerClosed, OfficeViewerSession, OperationRequest, OperationResult, PasswordChangeRequest, RecoveryPage, RefreshRequest, SessionIssued, SessionRevoked, Snapshot, SnapshotPage, SubtreeToken, UploadPartAck, UploadRequest, UploadSession, UploadStatus, VaultList, VaultRegisterRequest, VaultRegistered, VersionLease, VersionLeaseRequest } from "./types";
 
 /** 注入的 fetch 形状：浏览器/Node 的全局 fetch 或测试替身。 */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -692,11 +692,11 @@ export async function listVaults(options: ClientOptions, init?: RequestInit): Pr
 /**
  * 查看文件同步与传输记录
  *
- * 仅记录启用后的活动，按记录身份倒序每页最多50条；served表示服务端已读取并准备响应，不表示客户端已收到或应用。
+ * 仅记录启用后的活动，按记录身份倒序每页最多50条；served表示服务端已读取并准备响应，不表示客户端已收到或应用。可选请求头 X-Vaultsyncd-Client-Properties 为 1 时返回客户端主机名、系统和IP扩展属性，缺省保持旧版严格DTO形状。
  *
  * 参数 `vault`（/v1/vaults/{vault}/activity）：路径参数
  * 查询参数 `before`（可选）：查询参数
- * 查询参数 `direction`（可选）：upload或download
+ * 查询参数 `direction`（可选）：upload或download或operation
  *
  * 200：一页同步与传输记录
  * 400：无效游标或方向
@@ -1020,6 +1020,115 @@ export async function renewVersionLease(options: ClientOptions, vault: string, e
     throw api_error(response.status, payload);
   }
   return decodeVersionLease(payload);
+}
+
+/**
+ * 将固定版本Office文件转换为只读PDF预览
+ *
+ * 使用当前会话及Vault授权，将请求指定版本的已提交内容交给本机OnlyOffice转换。
+ * hash/size必须匹配固定版本，输入和输出各不超过50MiB，全链路120秒、每实例最多2并发。
+ * 源内容完整核验后仅经随机回环临时通道供转换器获取；JWT及源URL不返回浏览器。
+ * 返回application/pdf及Content-Length、X-Content-Sha256（PDF自身摘要）、
+ * X-Preview-Source-Sha256（原文件摘要）、X-Preview-Source-Version（原VersionId），
+ * 并带no-store/nosniff。转换前后均验证当前权限，不创建版本或修改同步内容。
+ *
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview）：授权Vault身份。
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview）：固定条目身份。
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-preview）：固定已提交版本身份。
+ *
+ * 200：完整PDF预览字节；源身份及PDF摘要响应头见端点说明，不能将PDF摘要当作源摘要。
+ * 400：请求格式或预期内容元数据不合法
+ * 401：会话已失效
+ * 403：Vault未获授权
+ * 410：固定版本已过期或已清理
+ * 413：预览输入或输出超过50MiB
+ * 422：内容校验失败、损坏、密码保护或无法转换
+ * 503：Office预览未配置、暂不可用、并发已满或超时
+ */
+export async function previewOfficeVersion(options: ClientOptions, vault: string, entry: string, version: string, body: OfficePreviewRequest, init?: RequestInit): Promise<Uint8Array> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/office-preview`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/pdf"),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw api_error(response.status, await read_json(response));
+  }
+  return await read_bytes(response);
+}
+
+/**
+ * 创建固定版本Office只读查看器
+ *
+ * 完整校验固定版本SHA256与大小，签发仅查看模式JWT配置；源经随机回环通道供OnlyOffice读取。
+ * 临时源与签名120秒到期，每实例共享最多2个源或转换准入，输入限50MiB。
+ * 返回完整配置JSON文本、Document Server根URL和固定源身份；不接受保存回调或写入内容。
+ * JWT与随机源URL是限时能力，不是管理员凭据；响应no-store。
+ *
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer）：授权Vault身份。
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer）：固定条目身份。
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer）：固定已提交版本身份。
+ *
+ * 200：签名的只读配置与临时源会话。
+ * 400：请求身份或元数据不合法
+ * 401：会话失效
+ * 403：Vault未获授权
+ * 404：查看器不属于当前会话或路径
+ * 410：固定版本已过期
+ * 413：源文件超过50MiB
+ * 422：固定版本内容校验失败
+ * 503：未配置、繁忙、超时或源读取失败
+ */
+export async function createOfficeViewer(options: ClientOptions, vault: string, entry: string, version: string, body: OfficePreviewRequest, init?: RequestInit): Promise<OfficeViewerSession> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/office-viewer`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "POST",
+    headers: request_headers(options, init, "application/json", "application/json"),
+    body: JSON.stringify(body),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeOfficeViewerSession(payload);
+}
+
+/**
+ * 撤销当前登录会话创建的Office临时源
+ *
+ * 必须与原Vault、Entry、Version及登录会话匹配；已过期或已关闭返回closed=true。
+ * 关闭不会撤回OnlyOffice已读取或已在浏览器呈现的数据，不写入任何文档。
+ *
+ * 参数 `vault`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer/{session}）：授权Vault身份。
+ * 参数 `entry`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer/{session}）：固定条目身份。
+ * 参数 `version`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer/{session}）：固定已提交版本身份。
+ * 参数 `session`（/v1/vaults/{vault}/entries/{entry}/versions/{version}/office-viewer/{session}）：创建时返回的64位小写十六进制随机身份。
+ *
+ * 200：源已关闭或已过期。
+ * 400：请求身份或元数据不合法
+ * 401：会话失效
+ * 403：Vault未获授权
+ * 404：查看器不属于当前会话或路径
+ * 410：固定版本已过期
+ * 413：源文件超过50MiB
+ * 422：固定版本内容校验失败
+ * 503：未配置、繁忙、超时或源读取失败
+ */
+export async function closeOfficeViewer(options: ClientOptions, vault: string, entry: string, version: string, session: string, init?: RequestInit): Promise<OfficeViewerClosed> {
+  const path = `/v1/vaults/${encodeURIComponent(vault)}/entries/${encodeURIComponent(entry)}/versions/${encodeURIComponent(version)}/office-viewer/${encodeURIComponent(session)}`;
+  const response = await options.fetch(join_url(options.base_url, path), {
+    ...init,
+    method: "DELETE",
+    headers: request_headers(options, init, null, "application/json"),
+  });
+  const payload = await read_json(response);
+  if (!response.ok) {
+    throw api_error(response.status, payload);
+  }
+  return decodeOfficeViewerClosed(payload);
 }
 
 /**

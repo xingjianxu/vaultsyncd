@@ -39,6 +39,8 @@ vaultsyncd-agent.exe --config C:/vaultsyncd/agent.json
 
 正式 agent 在启动恢复及新增绑定时注册 Explorer 同步根；旧版本仅注册 CFAPI 的目录会在新版 agent 启动时补齐，继续使用原 BindingId、VaultId 和路径。注册失败明确报错，不通过注销根修复，也不重新下载或释放现有文件。退出后保留注册与占位文件。
 
+S222：Explorer 侧边栏入口使用绑定本地目录的末级名称和软件 Logo；不同路径末级同名时允许显示同名入口，仍按独立 BindingId 隔离。旧入口在新版 agent 成功认证、恢复并组装该绑定时原位更新；仅打开桌面但复用仍在运行的旧 agent、未认证或恢复被阻塞时不会立即刷新。图标持久保存于本机用户目录，不依赖便携程序所在位置，也不写入同步目录；无需解绑、删除占位或重建目录。
+
 在 Explorer 的同步目录查看“状态”列：未下载文件显示空心云朵；完整下载的文件显示绿色勾选；通过产品“释放空间”成功释放后恢复云朵。图标由 Windows 根据真实驻留和 pin 状态生成。切换到按需模式不会自动释放已下载内容。若列被隐藏，在详细信息视图的列标题菜单中显示“状态”；本程序不修改用户的 Explorer 全局显示设置。
 
 原生复验：默认 devShell 构建 Linux helper 后，Windows devShell 执行 `VAULTSYNCD_PROCESS_TASK=S129 tests/platform/windows/run-native-process.sh`。脚本要求已登录桌面，仅打开/关闭本轮隔离根的 Explorer 窗口；证据保存在 `artifacts/S129/native-*/explorer-evidence/`。验收使用正式 agent 的启动和管理 IPC，不由测试代注册；覆盖 CFAPI-only 修复、新增绑定、下载/释放、重启、文件身份及浏览不回源。Shell 属性 `System.StorageProviderState` 按锁定 SDK 的 sparse=1、in-sync=2 核对，并保留实际 Explorer 截图。

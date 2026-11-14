@@ -1,6 +1,6 @@
 // 本文件由 `cargo xtask generate` 从 `api/openapi.yaml` 生成，禁止手改。
 //
-// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.2.0
+// 契约：vaultsyncd remote API 0.1.0；生成器：vaultsyncd-xtask 0.3.0
 // 服务端远端接口的首发草案（/v1）。JSON 使用 snake_case；所有清单分页有上限；未知枚举
 // 不当作默认成功。健康探测与能力协商不需要身份认证，其余端点需要会话，按 design §15.2
 // 在对应功能卡加入。
@@ -113,19 +113,25 @@ export function decodeActivityPage(value: unknown): ActivityPage {
 
 /** 启用记录后的文件同步与传输证据，不代表客户端下载完成。 */
 export interface ActivityRecord {
-  /** upload_finalize或sync_commit或download */
+  /** upload_finalize或sync_commit或download或create_directory或move或delete或restore_version或restore_deleted */
   action: string;
   /** 本次内容字节数 */
   bytes?: string;
+  /** 客户端登录时声明的主机名，旧记录或浏览器未知 */
+  client_hostname?: string;
   /** 稳定登录连接身份 */
   client_id?: string;
+  /** 服务端观察的客户端首次登录来源IP，不代表本机内网IP或实时地址 */
+  client_ip?: string;
   /** 登录入口client或browser或unknown */
   client_kind: string;
   /** 客户端登录标签快照 */
   client_label: string;
+  /** 客户端登录时声明的操作系统 */
+  client_os?: string;
   /** 操作声明的设备身份，不代表认证设备 */
   device_id?: string;
-  /** upload或download，按客户端方向 */
+  /** upload或download或operation，上传下载按客户端方向，文件操作不表示传输 */
   direction: string;
   /** 条目身份 */
   entry_id?: string;
@@ -153,15 +159,18 @@ export interface ActivityRecord {
 
 export function decodeActivityRecord(value: unknown): ActivityRecord {
   const object = expect_object(value, "ActivityRecord");
-  if (Object.keys(object).some((key) => !["action", "bytes", "client_id", "client_kind", "client_label", "device_id", "direction", "entry_id", "error_code", "id", "occurred_at", "offset", "operation_id", "path", "size", "status", "upload_id", "version_id"].includes(key))) {
+  if (Object.keys(object).some((key) => !["action", "bytes", "client_hostname", "client_id", "client_ip", "client_kind", "client_label", "client_os", "device_id", "direction", "entry_id", "error_code", "id", "occurred_at", "offset", "operation_id", "path", "size", "status", "upload_id", "version_id"].includes(key))) {
     throw new Error("ActivityRecord contains unknown fields");
   }
   return {
     action: expect_string(object.action, "ActivityRecord.action"),
     bytes: object.bytes === undefined ? undefined : expect_string(object.bytes, "ActivityRecord.bytes"),
+    client_hostname: object.client_hostname === undefined ? undefined : expect_string(object.client_hostname, "ActivityRecord.client_hostname"),
     client_id: object.client_id === undefined ? undefined : expect_string(object.client_id, "ActivityRecord.client_id"),
+    client_ip: object.client_ip === undefined ? undefined : expect_string(object.client_ip, "ActivityRecord.client_ip"),
     client_kind: expect_string(object.client_kind, "ActivityRecord.client_kind"),
     client_label: expect_string(object.client_label, "ActivityRecord.client_label"),
+    client_os: object.client_os === undefined ? undefined : expect_string(object.client_os, "ActivityRecord.client_os"),
     device_id: object.device_id === undefined ? undefined : expect_string(object.device_id, "ActivityRecord.device_id"),
     direction: expect_string(object.direction, "ActivityRecord.direction"),
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "ActivityRecord.entry_id"),
@@ -624,8 +633,12 @@ export function decodeHealthStatus(value: unknown): HealthStatus {
 export interface LoginRequest {
   /** 设备的人类可读标签（不是设备身份，首发没有设备注册表）。 */
   device_label: string;
+  /** 客户端运行主机名，可选非可信声明，最多255字节，未知时省略。 */
+  hostname?: string;
   /** 登录名（原样比较，不做大小写折叠）。 */
   login: string;
+  /** 客户端操作系统，可选非可信声明，最多255字节，未知时省略。 */
+  operating_system?: string;
   /** 明文密码；只在本次请求内存在，服务端不记录。 */
   password: string;
 }
@@ -634,7 +647,9 @@ export function decodeLoginRequest(value: unknown): LoginRequest {
   const object = expect_object(value, "LoginRequest");
   return {
     device_label: expect_string(object.device_label, "LoginRequest.device_label"),
+    hostname: object.hostname === undefined ? undefined : expect_string(object.hostname, "LoginRequest.hostname"),
     login: expect_string(object.login, "LoginRequest.login"),
+    operating_system: object.operating_system === undefined ? undefined : expect_string(object.operating_system, "LoginRequest.operating_system"),
     password: expect_string(object.password, "LoginRequest.password"),
   };
 }
@@ -718,6 +733,75 @@ export function decodeObjectReuse(value: unknown): ObjectReuse {
     throw new Error(`未知的 ObjectReuse 取值：${JSON.stringify(value)}`);
   }
   return value as ObjectReuse;
+}
+
+/** Office只读预览支持的源扩展名闭集；不执行宏或启用在线编辑。 */
+export type OfficeFileType = "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp";
+
+export const OFFICE_FILE_TYPE_VALUES = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"] as const;
+
+export function decodeOfficeFileType(value: unknown): OfficeFileType {
+  if (typeof value !== "string" || !(OFFICE_FILE_TYPE_VALUES as readonly string[]).includes(value)) {
+    throw new Error(`未知的 OfficeFileType 取值：${JSON.stringify(value)}`);
+  }
+  return value as OfficeFileType;
+}
+
+/** 快照固定版本的预期内容与Office格式，不能指向任意源URL。 */
+export interface OfficePreviewRequest {
+  /** 已选文件扩展名，对应转换器输入格式。 */
+  file_type: OfficeFileType;
+  /** 原始固定版本完整SHA256，小写十六进制。 */
+  hash: string;
+  /** 原始固定版本字节数。 */
+  size: string;
+}
+
+export function decodeOfficePreviewRequest(value: unknown): OfficePreviewRequest {
+  const object = expect_object(value, "OfficePreviewRequest");
+  return {
+    file_type: decodeOfficeFileType(object.file_type),
+    hash: expect_string(object.hash, "OfficePreviewRequest.hash"),
+    size: expect_decimal(object.size, "OfficePreviewRequest.size"),
+  };
+}
+
+/** 临时源关闭确认，不意味着撤回上游已缓存内容。 */
+export interface OfficeViewerClosed {
+  /** 临时源已关闭或已过期。 */
+  closed: boolean;
+}
+
+export function decodeOfficeViewerClosed(value: unknown): OfficeViewerClosed {
+  const object = expect_object(value, "OfficeViewerClosed");
+  return {
+    closed: expect_boolean(object.closed, "OfficeViewerClosed.closed"),
+  };
+}
+
+/** 绑定固定版本与当前登录会话的OnlyOffice只读配置；不得记录配置中的限时JWT与源地址。 */
+export interface OfficeViewerSession {
+  /** 完整已签名OnlyOffice配置JSON文本；第三方配置不纳入本项目wire DTO。 */
+  config_json: string;
+  /** 配置并校验过的Document Server根URL。 */
+  document_server_url: string;
+  /** 64位小写十六进制临时源撤销身份。 */
+  session_id: string;
+  /** 已核验原始固定版本完整SHA256。 */
+  source_hash: string;
+  /** 已核验的固定VersionId。 */
+  source_version: string;
+}
+
+export function decodeOfficeViewerSession(value: unknown): OfficeViewerSession {
+  const object = expect_object(value, "OfficeViewerSession");
+  return {
+    config_json: expect_string(object.config_json, "OfficeViewerSession.config_json"),
+    document_server_url: expect_string(object.document_server_url, "OfficeViewerSession.document_server_url"),
+    session_id: expect_string(object.session_id, "OfficeViewerSession.session_id"),
+    source_hash: expect_string(object.source_hash, "OfficeViewerSession.source_hash"),
+    source_version: expect_string(object.source_version, "OfficeViewerSession.source_version"),
+  };
 }
 
 /**

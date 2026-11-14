@@ -40,6 +40,8 @@ mod management_listing;
 #[cfg(windows)]
 mod management_notices;
 #[cfg(windows)]
+mod management_paths;
+#[cfg(windows)]
 mod namespace;
 #[cfg(windows)]
 pub mod remote;

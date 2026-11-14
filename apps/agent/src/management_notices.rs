@@ -2,10 +2,42 @@
 use crate::local::error;
 use vaultsyncd_client_store::{
     db::Database,
-    notifications::{self, delivery},
+    notifications::{self, NewNotification, delivery},
+};
+use vaultsyncd_domain::{
+    error::ErrorCode,
+    ids::{ServerId, VaultId},
 };
 use vaultsyncd_local_ipc::generated::{ManagementResult, Notice};
 use vaultsyncd_transfer::ports::PortError;
+
+pub(crate) fn problem(
+    server: ServerId,
+    vault: VaultId,
+    code: ErrorCode,
+    cause: &str,
+) -> NewNotification {
+    NewNotification {
+        dedupe_key: format!("server:{server}:vault:{vault}:{cause}"),
+        binding: None,
+        entry: None,
+        code,
+    }
+}
+
+pub(crate) async fn raise(
+    db: &Database,
+    server: ServerId,
+    vault: VaultId,
+    code: ErrorCode,
+    cause: &str,
+) -> Result<(), PortError> {
+    let mut tx = db.begin_write().await.map_err(error)?;
+    notifications::raise(&mut tx, &problem(server, vault, code, cause))
+        .await
+        .map_err(error)?;
+    tx.commit().await.map_err(error)
+}
 
 pub(crate) async fn list(db: &Database) -> Result<Vec<Notice>, PortError> {
     let mut conn = db.pool().acquire().await.map_err(error)?;
@@ -15,14 +47,11 @@ pub(crate) async fn list(db: &Database) -> Result<Vec<Notice>, PortError> {
         .into_iter()
         .map(|d| {
             let n = d.notification;
-            let pieces: Vec<_> = n.dedupe_key.splitn(3, ':').collect();
+            let (server_id, vault_id, cause) = scope(&n.dedupe_key);
             Notice {
-                vault_id: if pieces.len() == 3 && pieces[0] == "vault" {
-                    Some(pieces[1].into())
-                } else {
-                    None
-                },
-                cause: pieces.get(2).copied().unwrap_or(n.code.as_str()).into(),
+                server_id: server_id.map(|server| server.to_string()),
+                vault_id: vault_id.map(|vault| vault.to_string()),
+                cause: cause.unwrap_or(n.code.as_str()).into(),
                 code: n.code.to_string(),
                 state: n.state.as_text().into(),
                 generation: d.generation.to_string(),
@@ -52,4 +81,30 @@ pub(crate) async fn claim(
         notification_claimed: Some(claimed),
         ..Default::default()
     })
+}
+
+// Historical orphan records can remain vault-scoped. Their delivery claim and lifecycle remain
+// readable, while application writers always supply the complete remote identity.
+fn scope(key: &str) -> (Option<ServerId>, Option<VaultId>, Option<&str>) {
+    let pieces: Vec<_> = key.split(':').collect();
+    match pieces.as_slice() {
+        ["server", server, "vault", vault, cause] => {
+            let server_id = ServerId::from_hex(server).ok();
+            let vault_id = VaultId::from_hex(vault).ok();
+            if server_id.is_some_and(|id| id.to_string() == *server)
+                && vault_id.is_some_and(|id| id.to_string() == *vault)
+            {
+                (server_id, vault_id, Some(cause))
+            } else {
+                (None, None, None)
+            }
+        }
+        ["vault", vault, cause] => {
+            let vault_id = VaultId::from_hex(vault)
+                .ok()
+                .filter(|id| id.to_string() == *vault);
+            (None, vault_id, vault_id.map(|_| *cause))
+        }
+        _ => (None, None, None),
+    }
 }

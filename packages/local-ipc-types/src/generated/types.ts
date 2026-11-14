@@ -1,6 +1,6 @@
 // 本文件由 `cargo xtask generate` 从 `api/local-ipc.schema.json` 生成，禁止手改。
 //
-// 契约：vaultsyncd 本机 IPC（api/local-ipc.schema.json）；生成器：vaultsyncd-xtask 0.2.0
+// 契约：vaultsyncd 本机 IPC（api/local-ipc.schema.json）；生成器：vaultsyncd-xtask 0.3.0
 // Windows agent 与本机 GUI/CLI 之间的最小命令契约（docs/design.md §15.5、§5.6）。
 // 本文件是本机 IPC 的唯一编辑源；`cargo xtask generate` 据此生成
 // crates/local-ipc 的 Rust DTO 与 packages/local-ipc-types 的 TypeScript 类型。
@@ -16,10 +16,10 @@
 // 界面不会拿到“看起来可用”的默认值。
 
 /** agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。 */
-export const PROTOCOL_MAJOR = 2;
+export const PROTOCOL_MAJOR = 3;
 
 /** agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。 */
-export const PROTOCOL_MINOR = 9;
+export const PROTOCOL_MINOR = 2;
 
 /** 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。 */
 export const FRAME_HEADER_BYTES = 4;
@@ -64,19 +64,25 @@ function expect_number(value: unknown, what: string): number {
 
 /** 服务端观察到的同步与传输事实；served 仅证明服务端提供内容，不证明客户端收到、校验或应用。时间为服务端UTC秒，方向相对于客户端。 */
 export interface ActivityRecord {
-  /** upload_finalize、sync_commit 或 download。 */
+  /** upload_finalize、sync_commit、download、create_directory、move、delete、restore_version 或 restore_deleted。 */
   action: string;
   /** 本次提供的内容长度（字节）；不代表客户端已接收。 */
   bytes?: string;
+  /** 客户端登录时声明的主机名；缺省未知。 */
+  client_hostname?: string;
   /** 认证连接身份。 */
   client_id?: string;
+  /** 服务端观察的客户端首次登录来源IP；缺省未知。 */
+  client_ip?: string;
   /** 当时接入类型。 */
   client_kind: string;
   /** 当时客户端名称。 */
   client_label: string;
+  /** 客户端登录时声明的操作系统；缺省未知。 */
+  client_os?: string;
   /** 操作携带的设备身份。 */
   device_id?: string;
-  /** upload 或 download，相对于客户端。 */
+  /** upload、download 或 operation；文件操作不表示内容传输。 */
   direction: string;
   /** 条目身份。 */
   entry_id?: string;
@@ -107,9 +113,12 @@ export function decodeActivityRecord(value: unknown): ActivityRecord {
   return {
     action: expect_string(object.action, "ActivityRecord.action"),
     bytes: object.bytes === undefined ? undefined : expect_string(object.bytes, "ActivityRecord.bytes"),
+    client_hostname: object.client_hostname === undefined ? undefined : expect_string(object.client_hostname, "ActivityRecord.client_hostname"),
     client_id: object.client_id === undefined ? undefined : expect_string(object.client_id, "ActivityRecord.client_id"),
+    client_ip: object.client_ip === undefined ? undefined : expect_string(object.client_ip, "ActivityRecord.client_ip"),
     client_kind: expect_string(object.client_kind, "ActivityRecord.client_kind"),
     client_label: expect_string(object.client_label, "ActivityRecord.client_label"),
+    client_os: object.client_os === undefined ? undefined : expect_string(object.client_os, "ActivityRecord.client_os"),
     device_id: object.device_id === undefined ? undefined : expect_string(object.device_id, "ActivityRecord.device_id"),
     direction: expect_string(object.direction, "ActivityRecord.direction"),
     entry_id: object.entry_id === undefined ? undefined : expect_string(object.entry_id, "ActivityRecord.entry_id"),
@@ -140,6 +149,8 @@ export interface BindingInfo {
   mode: string;
   /** 已暂停。 */
   paused: boolean;
+  /** 绑定所属服务器的稳定身份；旧 agent 省略。 */
+  server_id?: string;
   /** Vault 身份。 */
   vault_id: string;
 }
@@ -153,6 +164,7 @@ export function decodeBindingInfo(value: unknown): BindingInfo {
     local_path: expect_string(object.local_path, "BindingInfo.local_path"),
     mode: expect_string(object.mode, "BindingInfo.mode"),
     paused: expect_boolean(object.paused, "BindingInfo.paused"),
+    server_id: object.server_id === undefined ? undefined : expect_string(object.server_id, "BindingInfo.server_id"),
     vault_id: expect_string(object.vault_id, "BindingInfo.vault_id"),
   };
 }
@@ -238,9 +250,9 @@ export function decodeCommand(value: unknown): Command {
 }
 
 /** 本机管理命令闭集；新增命令自协议 1.2 起提供，旧版本只支持 get_status。 */
-export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules" | "list_activity";
+export type CommandName = "get_status" | "subscribe_status" | "list_bindings" | "create_binding" | "pause_binding" | "resume_binding" | "download_entry" | "release_entry" | "list_problems" | "retry_problem" | "detach_binding" | "export_recovery" | "get_connection" | "list_connections" | "discover_connection" | "set_connection" | "login" | "logout" | "list_vaults" | "set_mode" | "list_history" | "list_trash" | "restore_entry" | "list_files" | "claim_notification" | "prepare_maintenance" | "get_rules" | "set_rules" | "list_activity" | "remove_connection" | "stop_agent";
 
-export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity"] as const;
+export const COMMAND_NAME_VALUES = ["get_status", "subscribe_status", "list_bindings", "create_binding", "pause_binding", "resume_binding", "download_entry", "release_entry", "list_problems", "retry_problem", "detach_binding", "export_recovery", "get_connection", "list_connections", "discover_connection", "set_connection", "login", "logout", "list_vaults", "set_mode", "list_history", "list_trash", "restore_entry", "list_files", "claim_notification", "prepare_maintenance", "get_rules", "set_rules", "list_activity", "remove_connection", "stop_agent"] as const;
 
 export function decodeCommandName(value: unknown): CommandName {
   if (typeof value !== "string" || !(COMMAND_NAME_VALUES as readonly string[]).includes(value)) {
@@ -265,7 +277,7 @@ export interface CommandParameters {
   cursor?: string;
   /** 新的恢复导出目录；不可覆盖。 */
   destination?: string;
-  /** list_activity 的方向筛选，仅 upload 或 download；相对于客户端。 */
+  /** list_activity 的类型筛选：upload、download 或 operation；上传下载相对于客户端。 */
   direction?: string;
   /** 条目身份，不接受调用方自选相对文件路径。 */
   entry_id?: string;
@@ -281,7 +293,7 @@ export interface CommandParameters {
   operation_id?: string;
   /** 瞬时登录密码；不能日志输出整个请求。 */
   password?: string;
-  /** 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。 */
+  /** 绑定级额外排除规则，追加在始终加载的内置默认规则之后；空文本表示仅使用默认规则，! 可重新包含默认排除项，最多4096字节；保存不删除任何内容。 */
   rules?: string;
   /** 不可复用的规则版本；同版本同文本幂等。 */
   rules_version?: string;
@@ -483,8 +495,10 @@ export interface ManagementResult {
   activity?: Array<ActivityRecord>;
   /** 持久绑定列表。 */
   bindings?: Array<BindingInfo>;
-  /** 连接事实。 */
+  /** 当前操作涉及的连接；状态应答仅在恰有一条连接时提供。 */
   connection?: ConnectionInfo;
+  /** 本机已配置的服务器；未配置时为空列表。 */
+  connections?: Array<ConnectionInfo>;
   /** 已完整核验的恢复包文件数。 */
   exported_files?: string;
   /** list_files当前页，最多100项；next_cursor可继续，不是全目录原子快照。 */
@@ -507,12 +521,14 @@ export interface ManagementResult {
   problems?: Array<Problem>;
   /** committed后按条目身份重新查询的当前位置 */
   restored_path?: string;
-  /** 当前完整排除清单，空字符串表示无排除规则。 */
+  /** 当前绑定级额外排除规则原文，不含内置默认规则；空字符串表示仅使用默认规则，! 可重新包含默认排除项。 */
   rules?: string;
   /** get_rules携带entry_id时，按持久身份解析路径并返回命中的规则/行号或包含原因。 */
   rules_explanation?: string;
   /** 当前持久规则版本。 */
   rules_version?: string;
+  /** remove_connection 是否已确认服务器会话被撤销；false 时本地连接、登录资料与凭据仍已删除。 */
+  session_revoked?: boolean;
   /** 解绑时保留的未确认条目。 */
   unconfirmed?: Array<string>;
 }
@@ -523,6 +539,7 @@ export function decodeManagementResult(value: unknown): ManagementResult {
     activity: object.activity === undefined ? undefined : expect_array(object.activity, "ManagementResult.activity").map((item) => decodeActivityRecord(item)),
     bindings: object.bindings === undefined ? undefined : expect_array(object.bindings, "ManagementResult.bindings").map((item) => decodeBindingInfo(item)),
     connection: object.connection === undefined ? undefined : decodeConnectionInfo(object.connection),
+    connections: object.connections === undefined ? undefined : expect_array(object.connections, "ManagementResult.connections").map((item) => decodeConnectionInfo(item)),
     exported_files: object.exported_files === undefined ? undefined : expect_string(object.exported_files, "ManagementResult.exported_files"),
     files: object.files === undefined ? undefined : expect_array(object.files, "ManagementResult.files").map((item) => decodeFileStatus(item)),
     incomplete: object.incomplete === undefined ? undefined : expect_array(object.incomplete, "ManagementResult.incomplete").map((item) => expect_string(item, "ManagementResult.incomplete 的元素")),
@@ -537,6 +554,7 @@ export function decodeManagementResult(value: unknown): ManagementResult {
     rules: object.rules === undefined ? undefined : expect_string(object.rules, "ManagementResult.rules"),
     rules_explanation: object.rules_explanation === undefined ? undefined : expect_string(object.rules_explanation, "ManagementResult.rules_explanation"),
     rules_version: object.rules_version === undefined ? undefined : expect_string(object.rules_version, "ManagementResult.rules_version"),
+    session_revoked: object.session_revoked === undefined ? undefined : expect_boolean(object.session_revoked, "ManagementResult.session_revoked"),
     unconfirmed: object.unconfirmed === undefined ? undefined : expect_array(object.unconfirmed, "ManagementResult.unconfirmed").map((item) => expect_string(item, "ManagementResult.unconfirmed 的元素")),
   };
 }
@@ -555,6 +573,8 @@ export interface Notice {
   generation: string;
   /** 稳定去重键 */
   key: string;
+  /** 关联服务器身份；全局或来源未知的历史通知省略 */
+  server_id?: string;
   /** active或resolved */
   state: string;
   /** 关联Vault，非绑定身份 */
@@ -570,6 +590,7 @@ export function decodeNotice(value: unknown): Notice {
     critical: expect_boolean(object.critical, "Notice.critical"),
     generation: expect_string(object.generation, "Notice.generation"),
     key: expect_string(object.key, "Notice.key"),
+    server_id: object.server_id === undefined ? undefined : expect_string(object.server_id, "Notice.server_id"),
     state: expect_string(object.state, "Notice.state"),
     vault_id: object.vault_id === undefined ? undefined : expect_string(object.vault_id, "Notice.vault_id"),
   };

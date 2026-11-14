@@ -17,6 +17,10 @@ pub fn update_result(text: &str) {
 pub fn startup_error(text: &str) {
     show("vaultsyncd 启动失败", text, 0x10);
 }
+/// Show desktop settings and orderly-exit failures without depending on the WebView.
+pub fn desktop_error(text: &str) {
+    show("vaultsyncd 程序配置", text, 0x10);
+}
 fn show(title: &str, text: &str, flags: u32) {
     let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
     let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();

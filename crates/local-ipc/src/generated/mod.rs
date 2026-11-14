@@ -1,6 +1,6 @@
 //! 本文件由 `cargo xtask generate` 从 `api/local-ipc.schema.json` 生成，禁止手改。
 //!
-//! 契约：vaultsyncd 本机 IPC（api/local-ipc.schema.json）；生成器：vaultsyncd-xtask 0.2.0
+//! 契约：vaultsyncd 本机 IPC（api/local-ipc.schema.json）；生成器：vaultsyncd-xtask 0.3.0
 //! Windows agent 与本机 GUI/CLI 之间的最小命令契约（docs/design.md §15.5、§5.6）。
 //! 本文件是本机 IPC 的唯一编辑源；`cargo xtask generate` 据此生成
 //! crates/local-ipc 的 Rust DTO 与 packages/local-ipc-types 的 TypeScript 类型。
@@ -17,9 +17,9 @@
 //! socket）不在本 crate。
 
 /// agent 支持的 IPC 协议 major 版本（major 不同即不兼容）。
-pub const PROTOCOL_MAJOR: u32 = 2;
+pub const PROTOCOL_MAJOR: u32 = 3;
 /// agent 支持的 IPC 协议 minor 版本（高于此值的调用方被拒绝）。
-pub const PROTOCOL_MINOR: u32 = 9;
+pub const PROTOCOL_MINOR: u32 = 2;
 /// 帧长度头的字节数：大端无符号整数，表示后续 JSON 负载的字节数。
 pub const FRAME_HEADER_BYTES: usize = 4;
 /// 单帧负载上限（字节）：超过即在读帧阶段拒绝，不为坏帧扩容。
@@ -28,25 +28,37 @@ pub const MAX_FRAME_BYTES: usize = 1048576;
 /// 服务端观察到的同步与传输事实；served 仅证明服务端提供内容，不证明客户端收到、校验或应用。时间为服务端UTC秒，方向相对于客户端。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ActivityRecord {
-    /// upload_finalize、sync_commit 或 download。
+    /// upload_finalize、sync_commit、download、create_directory、move、delete、restore_version 或 restore_deleted。
     pub action: String,
     /// 本次提供的内容长度（字节）；不代表客户端已接收。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<String>,
+    /// 客户端登录时声明的主机名；缺省未知。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_hostname: Option<String>,
     /// 认证连接身份。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// 服务端观察的客户端首次登录来源IP；缺省未知。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<String>,
     /// 当时接入类型。
     pub client_kind: String,
     /// 当时客户端名称。
     pub client_label: String,
+    /// 客户端登录时声明的操作系统；缺省未知。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_os: Option<String>,
     /// 操作携带的设备身份。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
-    /// upload 或 download，相对于客户端。
+    /// upload、download 或 operation；文件操作不表示内容传输。
     pub direction: String,
     /// 条目身份。
     #[serde(default)]
@@ -103,6 +115,10 @@ pub struct BindingInfo {
     pub mode: String,
     /// 已暂停。
     pub paused: bool,
+    /// 绑定所属服务器的稳定身份；旧 agent 省略。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
     /// Vault 身份。
     pub vault_id: String,
 }
@@ -200,6 +216,9 @@ pub enum CommandName {
     /// 取值 `get_connection`。
     #[serde(rename = "get_connection")]
     GetConnection,
+    /// 取值 `list_connections`。
+    #[serde(rename = "list_connections")]
+    ListConnections,
     /// 取值 `discover_connection`。
     #[serde(rename = "discover_connection")]
     DiscoverConnection,
@@ -245,6 +264,12 @@ pub enum CommandName {
     /// 取值 `list_activity`。
     #[serde(rename = "list_activity")]
     ListActivity,
+    /// 取值 `remove_connection`。
+    #[serde(rename = "remove_connection")]
+    RemoveConnection,
+    /// 取值 `stop_agent`。
+    #[serde(rename = "stop_agent")]
+    StopAgent,
 }
 
 /// 可选字段的组合由处理器按命令校验；所有身份规范小写十六进制，所有路径由 Windows 安全句柄复核。登录凭据仅请求中瞬时使用，不返回、不记录日志。
@@ -279,7 +304,7 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
-    /// list_activity 的方向筛选，仅 upload 或 download；相对于客户端。
+    /// list_activity 的类型筛选：upload、download 或 operation；上传下载相对于客户端。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
@@ -311,7 +336,7 @@ pub struct CommandParameters {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    /// 完整绑定级排除清单，允许空文本，最多4096字节；保存不删除任何内容。
+    /// 绑定级额外排除规则，追加在始终加载的内置默认规则之后；空文本表示仅使用默认规则，! 可重新包含默认排除项，最多4096字节；保存不删除任何内容。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<String>,
@@ -508,10 +533,14 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bindings: Option<Vec<BindingInfo>>,
-    /// 连接事实。
+    /// 当前操作涉及的连接；状态应答仅在恰有一条连接时提供。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionInfo>,
+    /// 本机已配置的服务器；未配置时为空列表。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connections: Option<Vec<ConnectionInfo>>,
     /// 已完整核验的恢复包文件数。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -556,7 +585,7 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub restored_path: Option<String>,
-    /// 当前完整排除清单，空字符串表示无排除规则。
+    /// 当前绑定级额外排除规则原文，不含内置默认规则；空字符串表示仅使用默认规则，! 可重新包含默认排除项。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<String>,
@@ -568,6 +597,10 @@ pub struct ManagementResult {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules_version: Option<String>,
+    /// remove_connection 是否已确认服务器会话被撤销；false 时本地连接、登录资料与凭据仍已删除。
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_revoked: Option<bool>,
     /// 解绑时保留的未确认条目。
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -589,6 +622,10 @@ pub struct Notice {
     pub generation: String,
     /// 稳定去重键
     pub key: String,
+    /// 关联服务器身份；全局或来源未知的历史通知省略
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
     /// active或resolved
     pub state: String,
     /// 关联Vault，非绑定身份

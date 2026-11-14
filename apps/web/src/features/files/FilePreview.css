@@ -1,0 +1,24 @@
+.file-preview-viewport {
+  overflow: auto;
+  max-height: 68vh;
+  background: var(--mantine-color-default-hover);
+  padding: var(--mantine-spacing-sm);
+  text-align: center;
+}
+
+.file-preview-viewport canvas {
+  display: block;
+  margin: auto;
+  max-width: 100%;
+  height: auto;
+  background: white;
+}
+
+.file-preview-pdf,
+.file-preview-office {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: 0;
+}
+.file-preview-viewport canvas[hidden] { display: none; }

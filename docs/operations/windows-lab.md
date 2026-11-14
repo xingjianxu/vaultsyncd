@@ -1,5 +1,9 @@
 # Windows 11 实验室客体操作说明
 
+## S207 持久开发测试连接（2026-11-12）
+
+Windows 测试机的常规连接使用 `https://wlab.132140.xyz:15401`（dev），生产 `https://vsyncd.132140.xyz` 仍走原 NixOS 部署；不同 ServerId 不能原地改绑。临时 dev 的启动、停止、日志及证书见 [开发测试服务](dev-server.md)，本次原生连接与文件闭环证据见 [S207](../../agent/tasks/S207.md)。下述历史卡的临时 HTTPS/SSH tunnel 仅用于原来的隔离故障场景，不是当前持久测试入口。
+
 本文件是 Windows 原生验收环境的唯一操作入口，来源事实见 `docs/environment.md` §12，模板与引导脚本在 `tools/windows-lab/`。平台与交付边界以 `docs/design.md` §2.1 为准，构建分工见 design ADR-013 与实施手册 §2.6。
 
 ## 1. 目的与边界

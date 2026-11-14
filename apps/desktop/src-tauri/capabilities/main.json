@@ -9,13 +9,17 @@
     "windows"
   ],
   "permissions": [
+    "allow-get-desktop-settings",
+    "allow-set-desktop-settings",
     "allow-agent-get-status",
     "allow-agent-discover-connection",
     "allow-agent-set-connection",
+    "allow-agent-remove-connection",
     "allow-agent-login",
     "allow-agent-logout",
     "allow-agent-list-vaults",
     "allow-select-local-directory",
+    "allow-open-binding-directory",
     "allow-agent-create-binding",
     "allow-agent-pause-binding",
     "allow-agent-resume-binding",

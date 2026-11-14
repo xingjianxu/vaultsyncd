@@ -113,7 +113,14 @@ async fn native_explorer_registration_and_states() {
     for name in ["state", "vault", "cache", "new-vault", "new-cache"] {
         std::fs::create_dir(base.join(name)).unwrap();
     }
-    let server = identity();
+    let identity_client =
+        ApiClient::new(ClientConfig::new(fixture["url"].as_str().unwrap()).allow_plaintext_http())
+            .unwrap();
+    let server_identity: vaultsyncd_protocol::generated::Capabilities = identity_client
+        .send_json(vaultsyncd_http_client::ApiRequest::get("/v1/capabilities"))
+        .await
+        .unwrap();
+    let server = server_identity.server_id;
     let binding = identity();
     let second = identity();
     let id = BindingId::from_hex(&binding).unwrap();

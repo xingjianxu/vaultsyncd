@@ -8,6 +8,31 @@ export interface DirectorySnapshot {
   children: Map<string, SnapshotEntry[]>;
 }
 const MAX_ENTRIES = 100_000;
+const nameCollator = new Intl.Collator("zh-CN", { numeric: true });
+export type FileSortColumn = "name" | "size" | "modified_at";
+export interface FileSort { column: FileSortColumn; direction: "ascending" | "descending" }
+export const DEFAULT_FILE_SORT: FileSort = { column: "name", direction: "ascending" };
+
+function compareNames(a: SnapshotEntry, b: SnapshotEntry): number {
+  return nameCollator.compare(a.name, b.name) || a.entry_id.localeCompare(b.entry_id);
+}
+
+/** 只排序副本；目录优先、未知值后置不随方向反转，整数不经过浮点数。 */
+export function sortDirectoryEntries(entries: readonly SnapshotEntry[], sort: FileSort = DEFAULT_FILE_SORT): SnapshotEntry[] {
+  const direction = sort.direction === "ascending" ? 1 : -1;
+  return [...entries].sort((a, b) => {
+    const kinds = Number(b.kind === "directory") - Number(a.kind === "directory");
+    if (kinds) return kinds;
+    if (sort.column === "name") return direction * compareNames(a, b);
+    const left = sort.column === "size" && a.kind === "directory" ? undefined : a[sort.column];
+    const right = sort.column === "size" && b.kind === "directory" ? undefined : b[sort.column];
+    if (left === undefined || right === undefined) {
+      return Number(left === undefined) - Number(right === undefined) || compareNames(a, b);
+    }
+    const l = BigInt(left), r = BigInt(right);
+    return direction * (l < r ? -1 : l > r ? 1 : 0) || compareNames(a, b);
+  });
+}
 
 /** 只有全部分页及父目录树核验完成后才发布；中途错误不得表现成空目录。 */
 export async function readDirectorySnapshot(client: BrowserAuth, vaultId: string, signal: AbortSignal): Promise<DirectorySnapshot> {
@@ -51,9 +76,7 @@ export async function readDirectorySnapshot(client: BrowserAuth, vaultId: string
     for (const child of children.get(entry.entry_id) ?? []) pending.push(child);
   }
   if (reachable.size !== entries.size) throw new Error("快照目录不可达，请刷新重试。");
-  const collator = new Intl.Collator("zh-CN", { numeric: true });
-  for (const siblings of children.values()) siblings.sort((a, b) =>
-    Number(b.kind === "directory") - Number(a.kind === "directory") || collator.compare(a.name, b.name) || a.entry_id.localeCompare(b.entry_id));
+  for (const [parent, siblings] of children) children.set(parent, sortDirectoryEntries(siblings));
   return { metadata, vault, entries, children };
 }
 

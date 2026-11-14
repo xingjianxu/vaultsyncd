@@ -33,6 +33,7 @@ pub mod lifecycle;
 pub mod logging;
 mod object_layout;
 pub mod observer;
+pub mod office;
 pub mod operations;
 pub mod recovery;
 pub mod replay;

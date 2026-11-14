@@ -67,6 +67,18 @@ pub struct Config {
     pub allowed_vault_bases: Option<AllowedBases>,
     /// 日志配置。
     pub log: LogConfig,
+    /// 可选的只读 Office 转换服务；缺省不开放 Office 预览。
+    pub office: Option<OfficeConfig>,
+}
+
+/// 部署提供的 Office 转换服务地址与运行时密钥路径。
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OfficeConfig {
+    /// Document Server 的根 URL；只允许 HTTPS 或字面回环 HTTP。
+    pub document_server_url: String,
+    /// JWT 共享密钥的绝对运行时路径，内容不写入配置或日志。
+    pub jwt_secret_file: PathBuf,
 }
 
 /// 配置加载失败。
@@ -139,6 +151,8 @@ struct RawConfig {
     vaults: RawVaults,
     #[serde(default)]
     log: RawLog,
+    #[serde(default)]
+    office: Option<OfficeConfig>,
 }
 
 /// `[vaults]` 段：Vault 注册的部署契约。
@@ -277,12 +291,28 @@ impl Config {
             }
         };
 
+        if let Some(office) = &raw.office {
+            crate::office::parse_document_server_url(&office.document_server_url).map_err(
+                |error| ConfigError::InvalidValue {
+                    field: "office.document_server_url",
+                    detail: error.to_string(),
+                },
+            )?;
+            if !office.jwt_secret_file.is_absolute() {
+                return Err(ConfigError::InvalidValue {
+                    field: "office.jwt_secret_file",
+                    detail: "密钥必须使用绝对运行时路径".to_owned(),
+                });
+            }
+        }
+
         Ok(Config {
             listen,
             state_dir,
             database,
             allowed_vault_bases,
             log: LogConfig { level, format },
+            office: raw.office,
         })
     }
 }
@@ -431,6 +461,33 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn office_configuration_is_optional_closed_and_requires_a_safe_origin_and_secret_path() {
+        let dir = temp_dir("office");
+        assert!(
+            Config::parse(&valid_text(&dir), "test.toml")
+                .unwrap()
+                .office
+                .is_none()
+        );
+        let valid = format!(
+            "{}\n[office]\ndocument_server_url = \"https://office.example:15402\"\njwt_secret_file = \"/run/credentials/office-jwt\"\n",
+            valid_text(&dir)
+        );
+        assert!(Config::parse(&valid, "test.toml").unwrap().office.is_some());
+        for text in [
+            valid.replace(
+                "https://office.example:15402",
+                "http://office.example:15402",
+            ),
+            valid.replace("/run/credentials/office-jwt", "relative"),
+            valid.replace("jwt_secret_file", "jwt_secret"),
+        ] {
+            assert!(Config::parse(&text, "test.toml").is_err());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

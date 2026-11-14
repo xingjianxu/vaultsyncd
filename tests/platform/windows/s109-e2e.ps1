@@ -113,6 +113,9 @@ public static class S109Native {
   $env:LOCALAPPDATA=$isolatedLocal
   $env:APPDATA=$isolatedRoaming
   $env:WEBVIEW2_USER_DATA_FOLDER=$webview
+  # This suite checks GUI-independent synchronization; S200 covers the default tray policy.
+  New-Item -ItemType Directory -Path (Join-Path $isolatedLocal 'vaultsyncd')|Out-Null
+  Write-Json (Join-Path $isolatedLocal 'vaultsyncd\desktop-settings.json') @{close_action='exit';stop_agent_on_exit=$false}
   # No notification setting file is written. Exercise ZIP's actual opt-in default honestly.
   $profile=Join-Path $isolatedLocal 'vaultsyncd\agent'
   $configPath=Join-Path $profile 'agent.json'

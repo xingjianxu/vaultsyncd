@@ -569,6 +569,281 @@ async fn independent_process_exit_recovers_mode_intent_file_progress_and_complet
 }
 
 #[tokio::test]
+async fn default_office_files_are_persistently_excluded_at_root_and_nested_without_data_loss() {
+    for nested in [false, true] {
+        let dir = Dir::new();
+        let database = setup(&dir).await;
+        let folder = EntryId::from_bytes([9; 16]);
+        let mut tx = database.begin_write().await.unwrap();
+        if nested {
+            let mut directory = base(folder, "office");
+            directory.kind = EntryKind::Directory;
+            directory.content_version = None;
+            entries::put_baseline(&mut tx, B, &directory).await.unwrap();
+            entries::put_remote(
+                &mut tx,
+                B,
+                &entries::RemoteEntry {
+                    entry: folder,
+                    parent: directory.parent,
+                    name: directory.name,
+                    kind: directory.kind,
+                    revision: directory.revision,
+                    content_version: None,
+                    deleted: false,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        for (entry, name) in [(DIRTY, "~$budget.xlsx"), (COLD, "budget.xlsx")] {
+            for table in ["baseline_entries", "remote_entries"] {
+                sqlx::query(&format!(
+                    "UPDATE {table} SET name=?,parent_entry_id=? WHERE binding_id=? AND entry_id=?"
+                ))
+                .bind(name)
+                .bind(
+                    if nested { folder } else { VAULT_ENTRY }
+                        .as_bytes()
+                        .as_slice(),
+                )
+                .bind(B.as_bytes().as_slice())
+                .bind(entry.as_bytes().as_slice())
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+        }
+        tx.commit().await.unwrap();
+        fs::create_dir(dir.0.join("cache")).unwrap();
+        fs::write(dir.0.join("cache/retained"), b"cached unconfirmed content").unwrap();
+        let controls = BindingControls::new(database.clone());
+        controls.adopt_default_policy(B).await.unwrap();
+        assert_eq!(
+            controls.execution_gate(B, Some(DIRTY)).await.unwrap(),
+            ExecutionGate::Excluded
+        );
+        assert_eq!(
+            controls.execution_gate(B, Some(COLD)).await.unwrap(),
+            ExecutionGate::Ready
+        );
+        assert_eq!(
+            controls.execution_gate(B, Some(VAULT_ENTRY)).await.unwrap(),
+            ExecutionGate::ReconcileRequired
+        );
+        if nested {
+            assert_eq!(
+                controls.execution_gate(B, Some(folder)).await.unwrap(),
+                ExecutionGate::ReconcileRequired
+            );
+        }
+        assert_eq!(
+            controls.execution_gate(B, None).await.unwrap(),
+            ExecutionGate::ReconcileRequired
+        );
+        assert_eq!(
+            controls
+                .execution_gate(B, Some(EntryId::from_bytes([99; 16])))
+                .await
+                .unwrap(),
+            ExecutionGate::ReconcileRequired
+        );
+        controls.change_mode(B, SyncMode::Full).await.unwrap();
+        assert_eq!(controls.mode_progress(B).await.unwrap().remaining, 1);
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM binding_participation WHERE entry_id=?")
+                .bind(DIRTY.as_bytes().as_slice())
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(state, "excluded");
+        let version: String = sqlx::query_scalar("SELECT rules_version FROM bindings WHERE id=?")
+            .bind(B.as_bytes().as_slice())
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_ne!(version, "initial");
+        assert!(
+            controls
+                .acknowledge_reconciled(B, DIRTY, "initial")
+                .await
+                .is_err()
+        );
+        assert!(controls.change_rules(B, "initial", "!~$*").await.is_err());
+        drop(controls);
+        drop(database);
+        let reopened = Arc::new(Database::open(dir.0.join("state.sqlite")).await.unwrap());
+        let controls = BindingControls::new(reopened.clone());
+        controls.adopt_default_policy(B).await.unwrap();
+        let after: String = sqlx::query_scalar("SELECT rules_version FROM bindings WHERE id=?")
+            .bind(B.as_bytes().as_slice())
+            .fetch_one(reopened.pool())
+            .await
+            .unwrap();
+        assert_eq!(after, version, "adoption must be idempotent across restart");
+        assert_eq!(
+            fs::read(dir.0.join("files/draft.txt")).unwrap(),
+            b"unconfirmed"
+        );
+        assert_eq!(
+            fs::read(dir.0.join("cache/retained")).unwrap(),
+            b"cached unconfirmed content"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pending_ops")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT dirty FROM local_entries WHERE entry_id=?")
+                .bind(DIRTY.as_bytes().as_slice())
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap(),
+            "dirty"
+        );
+    }
+}
+
+#[tokio::test]
+async fn additional_rules_override_defaults_but_reinclude_still_requires_fresh_three_way_ack() {
+    let dir = Dir::new();
+    let database = setup(&dir).await;
+    for table in ["baseline_entries", "remote_entries"] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET name='~$budget.xlsx' WHERE entry_id=?"
+        ))
+        .bind(DIRTY.as_bytes().as_slice())
+        .execute(database.pool())
+        .await
+        .unwrap();
+    }
+    let controls = BindingControls::new(database.clone());
+    controls.adopt_default_policy(B).await.unwrap();
+    controls
+        .change_rules(B, "extras", "cold.txt\n!~$*\n")
+        .await
+        .unwrap();
+    assert_eq!(
+        controls.execution_gate(B, Some(COLD)).await.unwrap(),
+        ExecutionGate::Excluded
+    );
+    assert_eq!(
+        controls.execution_gate(B, Some(DIRTY)).await.unwrap(),
+        ExecutionGate::ReconcileRequired
+    );
+    controls.change_rules(B, "newer", "!~$*\n").await.unwrap();
+    assert!(
+        controls
+            .acknowledge_reconciled(B, DIRTY, "extras")
+            .await
+            .is_err()
+    );
+    controls
+        .acknowledge_reconciled(B, DIRTY, "newer")
+        .await
+        .unwrap();
+    assert_eq!(
+        controls.execution_gate(B, Some(DIRTY)).await.unwrap(),
+        ExecutionGate::Ready
+    );
+    controls.change_rules(B, "defaults-only", "").await.unwrap();
+    assert_eq!(
+        controls.execution_gate(B, Some(DIRTY)).await.unwrap(),
+        ExecutionGate::Excluded
+    );
+    preserved(&database, &dir).await;
+}
+
+#[tokio::test]
+async fn legacy_additional_negation_is_preserved_and_remote_rename_reopens_only_for_reconciliation()
+{
+    let dir = Dir::new();
+    let database = setup(&dir).await;
+    sqlx::query("INSERT INTO binding_controls(binding_id,rules) VALUES(?, '!~$keep.xlsx')")
+        .bind(B.as_bytes().as_slice())
+        .execute(database.pool())
+        .await
+        .unwrap();
+    for table in ["baseline_entries", "remote_entries"] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET name='~$keep.xlsx' WHERE entry_id=?"
+        ))
+        .bind(DIRTY.as_bytes().as_slice())
+        .execute(database.pool())
+        .await
+        .unwrap();
+        sqlx::query(&format!(
+            "UPDATE {table} SET name='~$drop.xlsx' WHERE entry_id=?"
+        ))
+        .bind(COLD.as_bytes().as_slice())
+        .execute(database.pool())
+        .await
+        .unwrap();
+    }
+    let controls = BindingControls::new(database.clone());
+    assert_eq!(
+        controls.execution_gate(B, Some(DIRTY)).await.unwrap(),
+        ExecutionGate::Ready
+    );
+    assert_eq!(
+        controls.execution_gate(B, Some(COLD)).await.unwrap(),
+        ExecutionGate::Excluded
+    );
+    sqlx::query("UPDATE remote_entries SET name='final.xlsx',revision=revision+1 WHERE entry_id=?")
+        .bind(COLD.as_bytes().as_slice())
+        .execute(database.pool())
+        .await
+        .unwrap();
+    controls.adopt_default_policy(B).await.unwrap();
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM binding_participation WHERE entry_id=?")
+            .bind(COLD.as_bytes().as_slice())
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(state, "reconcile_required");
+    assert_eq!(
+        controls.execution_gate(B, Some(COLD)).await.unwrap(),
+        ExecutionGate::ReconcileRequired
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT rules FROM binding_controls WHERE binding_id=?")
+            .bind(B.as_bytes().as_slice())
+            .fetch_one(database.pool())
+            .await
+            .unwrap(),
+        "!~$keep.xlsx"
+    );
+}
+
+#[tokio::test]
+async fn parent_exclusion_blocks_default_negation_until_parent_is_explicitly_reincluded() {
+    let dir = Dir::new();
+    let database = setup(&dir).await;
+    let controls = BindingControls::new(database.clone());
+    controls
+        .change_rules(B, "parent", "draft.txt\n!draft.txt/child\n")
+        .await
+        .unwrap();
+    assert_eq!(
+        controls.execution_gate(B, Some(DIRTY)).await.unwrap(),
+        ExecutionGate::Excluded
+    );
+    controls
+        .change_rules(B, "parent-open", "draft.txt\n!draft.txt\n")
+        .await
+        .unwrap();
+    assert_eq!(
+        controls.execution_gate(B, Some(DIRTY)).await.unwrap(),
+        ExecutionGate::ReconcileRequired
+    );
+    preserved(&database, &dir).await;
+}
+
+#[tokio::test]
 async fn dirty_complete_bytes_cannot_substitute_for_unapplied_new_remote_version() {
     let dir = Dir::new();
     let db = setup(&dir).await;

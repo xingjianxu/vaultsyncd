@@ -21,3 +21,9 @@ dir = "/var/lib/vaultsyncd"
 # trace / debug / info / warn / error；text 便于 journalctl 阅读，json 便于采集。
 level = "info"
 format = "text"
+
+# 可选：同机 OnlyOffice 将固定版本 Office 内容转换为只读 PDF。
+# 只接受 HTTPS 根 URL 或字面回环 HTTP。密钥内容不得写入本配置或 Nix store。
+# [office]
+# document_server_url = "https://office.example.com"
+# jwt_secret_file = "/run/credentials/vaultsyncd.service/office-jwt"

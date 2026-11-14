@@ -141,7 +141,68 @@ pub(super) struct Store {
     pub database: Arc<Database>,
 }
 impl Store {
+    pub async fn adopt_default_policy(&self, binding: BindingId) -> Result<(), PortError> {
+        let mut tx = self.database.begin_write().await.map_err(db)?;
+        let current = snapshot(&mut tx, binding).await?;
+        let policy: Option<i64> = sqlx::query_scalar(
+            "SELECT default_rules_version FROM binding_controls WHERE binding_id=?",
+        )
+        .bind(binding.as_bytes().as_slice())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+        if policy != Some(1) {
+            init(&mut tx, binding).await?;
+            // A delayed acknowledgement from the former complete-text semantics must not
+            // authorize this policy, even when the binding's additional text is unchanged.
+            sqlx::query(
+                "INSERT OR IGNORE INTO binding_rules_history(binding_id,version) VALUES (?,?)",
+            )
+            .bind(binding.as_bytes().as_slice())
+            .bind(&current.rules_version)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+            let version: String =
+                sqlx::query_scalar("SELECT 'defaults-v1:' || lower(hex(randomblob(16)))")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(db)?;
+            sqlx::query("INSERT INTO binding_rules_history(binding_id,version) VALUES (?,?)")
+                .bind(binding.as_bytes().as_slice())
+                .bind(&version)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+            sqlx::query("UPDATE bindings SET rules_version=? WHERE id=?")
+                .bind(version)
+                .bind(binding.as_bytes().as_slice())
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+            sqlx::query("UPDATE binding_controls SET default_rules_version=1,revision=revision+1,mode_pending=CASE WHEN (SELECT mode FROM bindings WHERE id=?)='full' THEN 1 ELSE 0 END WHERE binding_id=?")
+                .bind(binding.as_bytes().as_slice()).bind(binding.as_bytes().as_slice())
+                .execute(&mut *tx).await.map_err(db)?;
+        }
+        // Also cover entries imported/received after initial adoption. A remote rename
+        // out of an excluded path still needs three-way reconciliation, just like ! rules.
+        for item in &current.items {
+            let now = excluded(&current.control.rules, item)?;
+            let previous = current.participation.get(&item.id).map(String::as_str);
+            if now && previous != Some("excluded") {
+                sqlx::query("INSERT INTO binding_participation(binding_id,entry_id,state) VALUES (?,?,'excluded') ON CONFLICT(binding_id,entry_id) DO UPDATE SET state='excluded'")
+                    .bind(binding.as_bytes().as_slice()).bind(item.id.as_slice())
+                    .execute(&mut *tx).await.map_err(db)?;
+            } else if !now && previous == Some("excluded") {
+                sqlx::query("UPDATE binding_participation SET state='reconcile_required' WHERE binding_id=? AND entry_id=?")
+                    .bind(binding.as_bytes().as_slice()).bind(item.id.as_slice())
+                    .execute(&mut *tx).await.map_err(db)?;
+            }
+        }
+        tx.commit().await.map_err(db)
+    }
     pub async fn snapshot(&self, binding: BindingId) -> Result<Snapshot, PortError> {
+        self.adopt_default_policy(binding).await?;
         let mut tx = self.database.pool().begin().await.map_err(db)?;
         let value = snapshot(&mut tx, binding).await?;
         tx.commit().await.map_err(db)?;
@@ -199,6 +260,7 @@ impl Store {
         version: &str,
         rules: &str,
     ) -> Result<(), PortError> {
+        self.adopt_default_policy(binding).await?;
         let mut tx = self.database.begin_write().await.map_err(db)?;
         let current = snapshot(&mut tx, binding).await?;
         if current.control.detached {
@@ -260,6 +322,7 @@ impl Store {
         entry: EntryId,
         version: &str,
     ) -> Result<(), PortError> {
+        self.adopt_default_policy(binding).await?;
         let mut tx = self.database.begin_write().await.map_err(db)?;
         let current = snapshot(&mut tx, binding).await?;
         current.ensure_active()?;

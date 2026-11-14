@@ -497,7 +497,7 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO client_connections(id,user_id,session_id,device_label,client_kind,created_at,last_seen_at,login_ip) VALUES(?1,?2,?3,'备份设备','client',1,10,'192.0.2.5')")
+        sqlx::query("INSERT INTO client_connections(id,user_id,session_id,device_label,client_kind,created_at,last_seen_at,login_ip,hostname,operating_system) VALUES(?1,?2,?3,'备份设备','client',1,10,'192.0.2.5','DESKTOP-BACKUP','Windows 11')")
             .bind([4u8; 16].as_slice())
             .bind(owner.as_bytes().as_slice())
             .bind([5u8; 16].as_slice())
@@ -584,6 +584,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(history, ("备份设备".into(), None, Some("192.0.2.5".into())));
+        let properties: (String, String) = copied
+            .query_row(
+                "SELECT hostname,operating_system FROM client_connections",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(properties, ("DESKTOP-BACKUP".into(), "Windows 11".into()));
         let activity: (String, String, i64) = copied
             .query_row(
                 "SELECT client_label,path,bytes FROM file_activity",

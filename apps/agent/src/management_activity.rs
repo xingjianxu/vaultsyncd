@@ -11,6 +11,7 @@ use vaultsyncd_transfer::ports::PortError;
 pub(crate) async fn execute(
     db: &Arc<Database>,
     config: &AgentConfig,
+    server_id: &str,
     client: &ApiClient<ReqwestTransport>,
     command: &Command,
 ) -> Result<ManagementResult, PortError> {
@@ -31,16 +32,15 @@ pub(crate) async fn execute(
         .map_err(error)?
         .ok_or_else(|| PortError::rejected("NOT_FOUND", "binding missing"))?;
     drop(connection);
-    if record.server.to_string() != config.server.id
-        || record.device.to_string() != config.device_id
-    {
+    if record.server.to_string() != server_id || record.device.to_string() != config.device_id {
         return Err(PortError::rejected(
             "BINDING_BLOCKED",
             "binding identity differs",
         ));
     }
     let mut request = ApiRequest::get(format!("/v1/vaults/{}/activity", record.vault))
-        .with_auth(AuthMode::Bearer);
+        .with_auth(AuthMode::Bearer)
+        .with_header("x-vaultsyncd-client-properties", "1");
     for (name, value) in [
         ("before", parameters.cursor.as_ref()),
         ("direction", parameters.direction.as_ref()),
@@ -63,6 +63,9 @@ pub(crate) async fn execute(
                     id: item.id,
                     occurred_at: item.occurred_at,
                     client_label: item.client_label,
+                    client_hostname: item.client_hostname,
+                    client_os: item.client_os,
+                    client_ip: item.client_ip,
                     client_kind: item.client_kind,
                     direction: item.direction,
                     action: item.action,

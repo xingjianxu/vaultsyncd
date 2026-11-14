@@ -300,6 +300,8 @@ pub enum ClientError {
         /// 面向诊断的消息。
         message: String,
     },
+    /// Public capabilities returned a different stable server identity.
+    ServerIdentityMismatch,
     /// 2xx 响应不是契约允许的形状。
     Protocol(ProtocolError),
 }
@@ -325,7 +327,8 @@ impl ClientError {
             | Self::InvalidRequest { .. }
             | Self::NotAuthenticated
             | Self::ReauthRequired { .. }
-            | Self::Protocol(_) => false,
+            | Self::Protocol(_)
+            | Self::ServerIdentityMismatch => false,
         }
     }
 
@@ -368,6 +371,7 @@ impl fmt::Display for ClientError {
                 write!(f, "非 2xx 响应不是错误信封（HTTP {status}）：{message}")
             }
             Self::Protocol(error) => write!(f, "{error}"),
+            Self::ServerIdentityMismatch => f.write_str("服务器身份与已保存的 Server ID 不一致"),
         }
     }
 }

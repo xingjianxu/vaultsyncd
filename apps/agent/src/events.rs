@@ -5,7 +5,7 @@ use crate::{
     work::{Worker, paths},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 use vaultsyncd_agent_core::{
@@ -29,6 +29,50 @@ use vaultsyncd_protocol::generated::{EntryKind, SnapshotEntry};
 pub(crate) struct Decoder {
     pub rows: Mutex<HashMap<String, SnapshotEntry>>,
     pub specifications: Mutex<HashMap<OpId, serde_json::Value>>,
+    legacy_operations: HashSet<OpId>,
+}
+impl Decoder {
+    pub async fn open(
+        database: &vaultsyncd_client_store::db::Database,
+        binding: BindingId,
+        rows: HashMap<String, SnapshotEntry>,
+    ) -> Result<Self, vaultsyncd_transfer::ports::PortError> {
+        let stored: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT op_id FROM pending_ops WHERE binding_id=?
+             UNION SELECT op_id FROM agent_actions WHERE binding_id=?",
+        )
+        .bind(binding.as_bytes().as_slice())
+        .bind(binding.as_bytes().as_slice())
+        .fetch_all(database.pool())
+        .await
+        .map_err(error)?;
+        let legacy_operations = stored
+            .into_iter()
+            .map(|bytes| {
+                bytes
+                    .try_into()
+                    .map(OpId::from_bytes)
+                    .map_err(|_| error("invalid stored event operation"))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            rows: Mutex::new(rows),
+            specifications: Mutex::new(HashMap::new()),
+            legacy_operations,
+        })
+    }
+
+    fn operation(&self, binding: BindingId, seed: &[u8]) -> OpId {
+        let legacy = vaultsyncd_transfer::hash::digest_of(seed);
+        let legacy = OpId::from_bytes(legacy[..16].try_into().expect("digest has sixteen bytes"));
+        if self.legacy_operations.contains(&legacy) {
+            return legacy;
+        }
+        let mut scoped = binding.as_bytes().to_vec();
+        scoped.extend(seed);
+        let digest = vaultsyncd_transfer::hash::digest_of(&scoped);
+        OpId::from_bytes(digest[..16].try_into().expect("digest has sixteen bytes"))
+    }
 }
 impl EventDecoder for Decoder {
     fn decode(
@@ -131,8 +175,7 @@ impl EventDecoder for Decoder {
             let mut seed = envelope.tx.as_bytes().to_vec();
             seed.extend(entry.as_bytes());
             seed.extend((index as u64).to_le_bytes());
-            let digest = vaultsyncd_transfer::hash::digest_of(&seed);
-            let op = OpId::from_bytes(digest[..16].try_into().map_err(|e| invalid(&e))?);
+            let op = self.operation(binding, &seed);
             specs.insert(op,serde_json::json!({"kind":"apply","path":path,"remote":row,"deleted":kind=="delete"}));
             changes.push(RemoteEntry {
                 entry,
@@ -294,6 +337,94 @@ impl Drop for Hints {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn decoder_restores_legacy_operations_only_from_its_own_durable_binding() {
+        use vaultsyncd_client_store::{
+            bindings::{NewBinding, SyncMode, insert_binding},
+            db::Database,
+        };
+        use vaultsyncd_domain::{
+            ids::{DeviceId, ServerId, VaultId},
+            version::ServerEpoch,
+        };
+        let path = std::env::temp_dir().join(format!(
+            "s189-event-replay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let db = Database::open(path.join("client.sqlite")).await.unwrap();
+        let first = BindingId::from_bytes([1; 16]);
+        let second = BindingId::from_bytes([2; 16]);
+        let seed = [9; 40];
+        let digest = vaultsyncd_transfer::hash::digest_of(&seed);
+        let legacy = OpId::from_bytes(digest[..16].try_into().unwrap());
+        let mut tx = db.begin_write().await.unwrap();
+        for binding in [first, second] {
+            insert_binding(
+                &mut tx,
+                &NewBinding {
+                    id: binding,
+                    server: ServerId::from_bytes([3; 16]),
+                    device: DeviceId::from_bytes([4; 16]),
+                    vault: VaultId::from_bytes([5; 16]),
+                    local_path: format!("C:/local-{binding}"),
+                    cache_path: format!("C:/cache-{binding}"),
+                    mode: SyncMode::Full,
+                    rules_version: "1".into(),
+                    server_epoch: ServerEpoch::new(1).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO agent_actions(op_id,binding_id,specification) VALUES(?,?,?)")
+            .bind(legacy.as_bytes().as_slice())
+            .bind(first.as_bytes().as_slice())
+            .bind("{}")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let original = Decoder::open(&db, first, HashMap::new()).await.unwrap();
+        let independent = Decoder::open(&db, second, HashMap::new()).await.unwrap();
+        assert_eq!(original.operation(first, &seed), legacy);
+        assert_ne!(independent.operation(second, &seed), legacy);
+        db.close().await;
+        for attempt in 0..100 {
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => return,
+                Err(_) if attempt < 99 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await
+                }
+                Err(cause) => panic!("cannot clean the closed event-replay test database: {cause}"),
+            }
+        }
+    }
+
+    #[test]
+    fn operation_ids_are_binding_scoped_and_owned_legacy_operations_are_replayed() {
+        let seed = [7; 40];
+        let first = BindingId::from_bytes([1; 16]);
+        let second = BindingId::from_bytes([2; 16]);
+        let mut decoder = Decoder {
+            rows: Mutex::new(HashMap::new()),
+            specifications: Mutex::new(HashMap::new()),
+            legacy_operations: HashSet::new(),
+        };
+        let first_op = decoder.operation(first, &seed);
+        let second_op = decoder.operation(second, &seed);
+        assert_ne!(first_op, second_op);
+        let digest = vaultsyncd_transfer::hash::digest_of(&seed);
+        let legacy = OpId::from_bytes(digest[..16].try_into().unwrap());
+        assert_ne!(first_op, legacy);
+        decoder.legacy_operations.insert(legacy);
+        assert_eq!(decoder.operation(first, &seed), legacy);
+    }
+
     #[test]
     fn malformed_tail_and_unpersisted_good_batch_never_publish_namespace() {
         let vault = "11111111111111111111111111111111";
@@ -313,6 +444,7 @@ mod tests {
         let decoder = Decoder {
             rows: Mutex::new(initial.clone()),
             specifications: Mutex::new(HashMap::new()),
+            legacy_operations: HashSet::new(),
         };
         let mut envelope=EventEnvelope{seq:vaultsyncd_domain::version::VaultSeq::new(1).unwrap(),tx:vaultsyncd_domain::ids::TxId::from_bytes([3;16]),events_json:serde_json::json!([{"kind":"create","entry_id":child,"parent_id":vault,"name":"newdir","revision":"0"},{"kind":"create","parent_id":vault,"name":"bad","revision":"0"}]).to_string()};
         assert!(

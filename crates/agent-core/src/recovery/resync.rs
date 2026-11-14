@@ -160,8 +160,9 @@ impl Resync {
         if binding.server_epoch.get() != journal.old_epoch {
             return Err(error("重建期间绑定 epoch 被修改"));
         }
-        let other_paths: Vec<String> = sqlx::query_scalar("SELECT local_path FROM bindings WHERE id <> ? UNION ALL SELECT cache_path FROM bindings")
-            .bind(binding.id.as_bytes().as_slice()).fetch_all(self.database.pool()).await.map_err(error)?;
+        let other_paths = bindings::protected_paths(&self.database, binding.id)
+            .await
+            .map_err(error)?;
         let admission = self.local.validate(&binding, &other_paths).await?;
         if !admission.healthy
             || !admission.directory

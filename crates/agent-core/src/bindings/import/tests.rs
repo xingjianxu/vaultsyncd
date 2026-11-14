@@ -1,5 +1,7 @@
 //! 仅测试编译的真实磁盘适配：客户端库、远端账本、上传块、固定内容与本地意图均跨进程保留。
 //! 不是 Linux 客户端产品，也不是 Windows CFAPI 验收。
+#[path = "exclusions_tests.rs"]
+mod exclusions_tests;
 #[path = "safety_tests.rs"]
 mod safety_tests;
 
@@ -1210,7 +1212,8 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
             vec![bad],
             time,
             &names,
-            &mut Ids(0)
+            &mut Ids(0),
+            &IgnoreRules::parse_with_defaults("").unwrap()
         )
         .is_err()
     );
@@ -1228,7 +1231,8 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
             vec![entry.clone(), entry.clone()],
             time,
             &names,
-            &mut Ids(0)
+            &mut Ids(0),
+            &IgnoreRules::parse_with_defaults("").unwrap()
         )
         .is_err()
     );
@@ -1241,7 +1245,8 @@ fn malformed_duplicate_and_native_colliding_inventory_is_rejected() {
             vec![entry, capitalized],
             time,
             &names,
-            &mut Ids(0)
+            &mut Ids(0),
+            &IgnoreRules::parse_with_defaults("").unwrap()
         )
         .is_err()
     );
