@@ -1,5 +1,57 @@
 # 性能与容量测量报告
 
+## S234：桌面启动 CPU 峰值分析与实施计划
+
+2026-11-14，用户确认现象为“启动阶段短暂升高，随后恢复”。本节是源码分析、有限现场取证和后续方案，不是启动性能验收；没有采到用户故障现场的启动调用栈，尚不能给出各热点的CPU占比或判定唯一根因。源码基线 `4e32297c4157dde5318ad81586eca8398f7c2e17`，依据design §6/18.1/20，任务交接[S234](../../agent/tasks/S234.md)。
+
+### 当前判断与已取得的证据
+
+优先怀疑agent启动时的缓存/目录扫描与首次内容核验。扫描存在明确的平方级文件名比较；运行中不断生成的快照会扩大下次启动的缓存枚举量。多绑定恢复、数据库逐项查询和WebView初始化可能叠加。短暂峰值本身不证明异常：需同时测峰值持续时间、累计CPU时间、界面可操作时间和同步收敛时间。
+
+在已有Windows客体上只读采样，未重启或替换常驻客户端、未触发同步操作、未清理缓存。客体8逻辑CPU，常驻包来源为 `a56d8e3a3122e74e423f596fc139ecdbc4899669`、version=0.1.7、dirty=false，早于S226/S231；不能当作当前源码或用户机器的启动复现。
+
+- 三个约5秒稳态窗口中，agent占整机CPU分别约 **0.429%、0.234%、0.273%**，desktop约0.039%、0.039%、0.117%；该desktop子树内WebView合计约0.078%、0.039%、0%。计算口径为 `Δ进程CPU秒 / 实际采样秒 / 8 × 100%`，不是进程启动以来的累计CPU秒，也不直接等同不同版本任务管理器的显示值。
+- 用户应用数据下有67个缓存子目录（包含历史/解绑目录，不代表67个活动绑定）；最大者有4,615个普通文件，其中4,614个snapshot共232,967字节，publication日志0个。若该目录进入当前通用扫描，唯一文件名比较次数为 `4615×4614/2=10,646,805`；这是代码复杂度推导，不是采样得到的调用计数。没有核实此目录是否仍活动。
+- `agent.json.bindings`为空；当前动态绑定由SQLite持久化并由 `management::load_bindings` 合并，不能因此判断没有同步目录。本轮没有查询在线数据库或取活动绑定状态。
+- 原始JSON与stderr在 `/data/vaultsyncd-dev/S234-desktop-startup-analysis-20261114/evidence/`。缓存清单初次取证在宿主解码阶段失败，重试显式UTF-8后成功；记录见 `inventory-first-attempt.txt`。
+
+### 源码定位与原因链
+
+| 优先级 / 证据 | 位置（上述基线） | 机制与适用条件 |
+| --- | --- | --- |
+| P1：确定存在，启动贡献待测 | [native.rs](../../crates/platform-windows/src/files/native.rs) `scan_directory`约710行、`NativeNames::equivalent`约377行 | 每个文件名与此前所有名字逐一比较，单目录N项为O(N²)；每次比较还分配两个UTF-16向量并调用CompareStringOrdinal。10,000项约4,999.5万次。缓存中大量小文件也可能成为CPU热点，不能只看字节总量。 |
+| P1：确定启动执行 | [server.rs](../../apps/agent/src/runtime/server.rs) `assemble`约769行；[content.rs](../../crates/platform-windows/src/files/controlled/content.rs) `recover_publications`约453行 | 已认证服务器下，每个未解绑绑定启动时打开本地证据、恢复publication/release/namespace/apply，再扫描同步目录重建占位catalog、注册Shell和连接CFAPI。publication恢复先扫描整个内部状态目录，之后才筛选日志，因此没有publication日志仍会枚举snapshot。必要恢复不能省略。 |
+| P1：确定存在，完整驻留内容越多越重 | [work.rs](../../apps/agent/src/work.rs) `discover`约521行；[local.rs](../../apps/agent/src/local.rs) `observe_snapshot`约58行；[content.rs](../../crates/platform-windows/src/files/controlled/content.rs) `observe_inner`约161行 | 全目录扫描后，对纳入同步且完整驻留的文件逐个保护、读全文、SHA-256、写新snapshot并sync_all，再判断内容是否与基线相同。相同内容仍写证据事务和clean状态。每轮完成后默认等待2秒，再运行新一轮；不是严格每2秒完成一轮。启动第一轮会与恢复/UI启动接近，常态也会重复。snapshot保留供恢复，现有路径没有随FixedSnapshot释放自动删除。 |
+| P1/P2：确定重复放大 | [work.rs](../../apps/agent/src/work.rs) `local_metadata`约73行；[server.rs](../../apps/agent/src/runtime/server.rs) `round`约531行 | 元数据先读取所有ID，再逐条查baseline和版本，存在N+1查询；首次receiver初始化、namespace发现和普通发现重复调用。多服务器各有worker，可能同时启动重工作；同服务器绑定当前主要串行。 |
+| P2：确定存在，偏持续性负担 | [ipc.rs](../../apps/agent/src/ipc.rs) `refresh`约147行；[status/mod.rs](../../crates/agent-core/src/status/mod.rs) `snapshot`约57行 | 即使没有GUI订阅者，每次完整状态查询结束后250ms又聚合一次；每绑定fetch_all全部local_entries及多表统计。GUI每2秒GetStatus另外聚合一遍并替换React状态。当前SubscribeStatus也使用同一聚合器，单改成订阅不能自动消除成本。 |
+| P2：启动与显示层，需先量占比 | [App.tsx](../../apps/desktop/src/App.tsx) `refresh`约49行；[startup-bindings.ts](../../apps/desktop/src/services/startup-bindings.ts)；[shell/mod.rs](../../crates/platform-windows/src/shell/mod.rs) `register_in_runtime` | S226/S231首次完整状态后恢复全部未解绑暂停绑定；这使重工作集中出现。已有绑定启动仍刷新WinRT注册并通知Explorer。WebView初始化/前端首屏的正常成本需与agent分开归因。 |
+
+启动健康检查通过认证IPC并复用现有agent，等待循环有sleep；普通启动不做发行包hash/owner检查，没有依据建议关闭这些已移除的步骤。恢复绑定最多3次且仅启动一轮，未发现前端无限恢复循环。已完成的首次导入日志会直接返回，不应描述为每次启动都重新做首次全量导入。右键菜单sync会先比较注册值，不是每次状态轮询都重写注册表或广播Shell变更。
+
+Windows平台已有 `DirectoryWatcher` 与 `ReconcileGate`（`crates/platform-windows/src/watcher/`），但当前agent/agent-core没有使用这两个类型；远端SSE提示不替代本地文件事件。可以复用原生能力，仍须处理通知丢失、重启和保护边界。
+
+### 分期方案与任务依赖
+
+本轮只完成S234分析卡。下列卡为待执行方案，**下一ready S235**；性能优化顺序允许根据S235真实调用栈调整，并记录原因。每张代码卡按worktree规则隔离、验证、交接、提交合master后清理，不批量提前标done。
+
+| 卡 / 顺序 | 具体工作 | 验收重点 |
+| --- | --- | --- |
+| S235 / P0 | 固定当前四EXE同源包和原生测量夹具；增加启动阶段耗时/计数：IPC就绪、恢复日志、目录枚举、文件名比较、哈希/快照字节、SQL次数、CFAPI/Shell、首次状态与首屏。采集desktop/agent/WebView进程树CPU和I/O，形成可重复基线。 | 至少覆盖无绑定、仅重新打开UI且agent已运行、完全重启、有绑定/多绑定、按需/完整驻留、大量历史snapshot；每场景至少5次报告中位数/max及原始序列，不用5次冒充稳定p95。确定最重的实际调用栈与该硬件的预算。 |
+| S236 / P1 | 消除单目录O(N²)重名比较：UTF-16每名字转换一次，使用与Windows ordinal-ignore-case一致的排序/比较，再检查相邻碰撞；API错误继续fail-closed。将N+1元数据读取改为有界分页/JOIN，避免重复加载。 | 同一数据集1k/10k目录比较次数呈O(N log N)；Unicode、大小写冲突、长路径、扫描中断/权限/根替换不误删；Windows原生扫描和状态语义保持，报告CPU与SQL次数。 |
+| S237 / P1 | 将网络拉取与本地内容发现解耦；接入已有DirectoryWatcher，合并变化路径、200—500ms防抖，元数据周期补扫初值60秒，内容按字节/时间预算轮转。重启/溢出/失联要求完整补扫；启动内容核验分批推进。分离只读核验与上传固定快照，减少未变化文件的重复snapshot和无效写事务。 | 保留mtime/size的改写、原子替换、事件丢失、离线写入、重启、锁住文件、上传中再改写均被发现且不丢字节；部分占位不能被后台核验误hydration。快照重用/新建须有有效内容/代际保护，不能只凭mtime/size标clean。不自动清旧完整缓存/恢复快照。 |
+| S238 / P2 | 状态聚合先SQL计数代替整行搬运；再明确持久状态提交和连接状态变化的失效源，合并并发GetStatus、缓存同版本结果、事件唤醒加低频兜底。桌面相同snapshot_version避免整页替换，隐藏页降低非必要轮询。 | 版本单调、暂停/解绑同一事务投影、未知/pending不变绿；订阅无丢失、失败不返回过期成功。托盘通知与自动恢复仍工作，隐藏UI不能直接停掉关键通知读取。 |
+| S239 / P2 | 按S235结果控制重工作并发（初始建议全局1个重扫描/哈希任务），多绑定分批恢复，给UI/IPC与用户读取让路；同步阻塞I/O放到有界阻塞工作队列。只有测得Shell/首屏占比显著才优化重复注册或前端加载；最终同源Windows整包复验。 | CPU峰值、累计CPU、启动可操作/绑定就绪/全收敛时间一起对比；不以单纯sleep或把工作挪到采样窗口外宣布优化。启动自动恢复全部绑定及本次手动暂停保护保持，完整CFAPI/离线/重启/解绑回归通过。 |
+
+### 取证与验收边界
+
+1. 优先在隔离的Windows用户/状态/测试根复现，采样前记录实际二进制hash、WebView版本、vCPU、存储、绑定数量、文件总量/最大目录项数、驻留比例、历史snapshot与未完成日志数。固定测试内容与状态；实验室旧包不替代当前候选。代码与工具改动进入任务worktree；宿主证据、缓存、VM和备份均在 `/data/vaultsyncd-dev/Sxxx-<run_id>/` 下，Windows证据归档到该宿主根。
+2. 用Windows WPR/ETW采CPU采样栈、Disk I/O及File I/O；先核实客体可用工具/profile和符号，不臆造入口。微软说明这些是WPR内置资源分析项：[Built-in Recording Profiles](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/built-in-recording-profiles)。缺调用栈时保留进程CPU增量和应用阶段计数，明确不能据此完成函数级归因。此工具建议不意味着本轮已运行WPR。
+3. 明确区分“agent/desktop进程冷启动”“agent复用”“操作系统文件缓存冷/热”；不以反复启动后热缓存的改善冒充算法收益。采样从启动前开始，覆盖恢复和首轮同步全部完成，再加至少60秒稳态；同时单列前30/60秒资源。出现长任务则延长至完成或如实记录超时，防止将峰值简单后移。
+4. 稳态1万条目agent平均CPU≤1%、RSS≤200MiB仍是design §20工程建议，不含WebView；本轮15秒旧包采样不能宣告达标。小文件p95≤3秒沿用规定SSD/局域网RTT≤10ms等前提，不能把补扫60秒当正常事件检测延迟；不满足条件时仍须在同条件前后比较并记录限制。S106/S107的三机/五机与正式容量验收不由本计划替代。
+5. 所有优化保留I02/I03/I05/I08/I09/I11/I13/I15：未确认文件和恢复副本保留、身份不变、部分内容不冒充完整、扫描不完整不推导删除、游标与队列事务一致。任何新增持久索引/表或布局需迁移/兼容/恢复验证；旧快照治理若涉及数据保留语义，另按design §24决策，本计划没有授权自动清理。
+
+本轮未执行当前版本启动ETW、产品构建或性能修复；S234分析范围无阻塞，实际热点占比及优化收益待S235以后验收。服务端、开发实例、生产实例与实验室常驻客户端保持。
+
 ## S106：前置与资源核查，尚未运行基准
 
 状态：**blocked**。截至 2026-11-07 06:22 UTC，仅完成宿主只读核查，未执行小样本时延或常规规模基准。设计依据为 `docs/design.md` §20、T34；目标仍为稳定小文件 p95 ≤ 3 秒（限规定条件）及 1 万文件、约 10 GiB、3 台 Windows 设备。没有调整验收规模，也没有判断目标达成。
