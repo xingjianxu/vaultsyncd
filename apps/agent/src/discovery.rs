@@ -247,11 +247,12 @@ impl Discovery {
                             p.store(true, Ordering::Release);
                             watcher
                         }
-                        Err(_) => {
+                        Err(cause) => {
                             {
                                 let mut state = h.lock().unwrap_or_else(|e| e.into_inner());
                                 state.ready = true;
                                 if !state.lost {
+                                    eprintln!("event=local-watch-unavailable reason={cause}");
                                     state.request_full(Instant::now());
                                 }
                                 state.lost = true;

@@ -943,8 +943,13 @@ impl VaultHandle {
                 .open(&self.path)?
         };
         let observed = metadata(&file)?;
-        if observed.identity != self.identity || observed.reparse_tag != 0 {
-            return Err(io::Error::other("watch vault identity changed"));
+        // Use the same Cloud Files whitelist as open/verify. Registration can
+        // legitimately add a cloud reparse tag without changing the pinned root.
+        // The fresh handle is still rooted, no-follow, and identity-checked.
+        if observed.identity != self.identity || !observed.directory || !observed.supported() {
+            return Err(io::Error::other(
+                "watch vault identity changed or unsupported root",
+            ));
         }
         Ok(file)
     }

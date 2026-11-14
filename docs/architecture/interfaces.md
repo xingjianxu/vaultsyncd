@@ -2202,7 +2202,7 @@ S196 的客户端迁移 **0017** 为 `binding_controls` 增加 `default_rules_ve
 | `EntryMetadata` / `CloudMetadata` | 文件 ID、逻辑/分配大小、attributes/tag、links、时间戳；CFAPI 的 on_disk/modified/pin/in_sync/provider identity 来自同一句柄 `CfGetPlaceholderInfo`。CFAPI 过滤器可能隐藏 reparse 属性，不能仅靠 tag 判断占位。identity <=4 KiB；查询失败明确报错。mtime/in_sync 不作为业务 committed 证据。 |
 | `ScanReport{vault,health,entries}` | 保留局部问题；`Complete/PermissionDenied/VaultUnavailable/Incomplete`。任一未知对象、硬链接、名称碰撞或枚举失败使 `permits_missing_comparison=false`；只有完整健康扫描可以进入核心的缺失核对，仍不直接授权删除。 |
 | `NativeNames: NameEquivalence` | Windows `CompareStringOrdinal(ignoreCase=true)`，API 失败保守报冲突；真实 NTFS case/Unicode 创建验证。不归一化、不静默选择赢家，大小写敏感目录仍保守报问题。 |
-| `DirectoryWatcher::new(&VaultHandle, buffer_bytes)` / `poll(timeout_ms)` | 用相同父句柄相对重开并核对 vault，`ReadDirectoryChangesW` 原生异步监视；缓冲限16 B..64 KiB、poll <=60s，回传 `Idle/Changes/Rescan`，删除/rename 通知只是提示。溢出/失联/畸形记录均需要全量补扫；drop 取消并等待完成后才释放 OVERLAPPED/缓冲。filter 不含 last-access，避免扫描反馈。 |
+| `DirectoryWatcher::new(&VaultHandle, buffer_bytes)` / `poll(timeout_ms)` | 用相同父句柄相对重开并核对 vault，身份/目录类型与普通或受支持Cloud Files根白名单同 `VaultHandle::open/verify`，保留no-follow；CFAPI注册增加合法cloud tag不视为根替换。`ReadDirectoryChangesW` 原生异步监视；缓冲限16 B..64 KiB、poll <=60s，回传 `Idle/Changes/Rescan`，删除/rename 通知只是提示。溢出/失联/畸形记录均需要全量补扫；drop 取消并等待完成后才释放 OVERLAPPED/缓冲。filter 不含 last-access，避免扫描反馈。 |
 | `ReconcileGate` | 启动/非 Idle 提示即需要补扫，周期元数据扫描覆盖通知丢失和重装间隙；不健康扫描保留围栏。调度/持久基线/受控发布由 agent 入口及后续卡接线。 |
 
 原生验收入口：`VAULTSYNCD_WINDOWS_CACHE=/wrd/prj/vaultsyncd/.cache/windows nix develop .#windows --command tests/platform/windows/run-native-files.sh`。仅在实验室 NTFS run_id 目录/临时盘符操作，并核对 exe 传输 SHA-256；52 个客体测试包括已 pin 空目录真正原地设置 junction、ACL 变化、真实内核缓冲溢出与三个脱水占位符扫描前后 0 本地内容字节。环境分工、VM 保持在线规则见 `docs/operations/windows-lab.md` §12、§19.1。

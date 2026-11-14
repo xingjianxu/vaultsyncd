@@ -802,6 +802,81 @@ fn native_watch_reports_hints_real_overflow_and_drop_cancels_pending_io() {
 }
 
 #[test]
+fn native_watch_accepts_registered_cloud_root_without_hydrating_children() {
+    use crate::cfapi::{
+        prototype,
+        prototype_layout::{PROBE_DIRECTORY, PROBE_FILES},
+    };
+    let sandbox = Sandbox::new();
+    prototype::create(&sandbox.0).unwrap();
+    struct Registration<'a>(&'a Path);
+    impl Drop for Registration<'_> {
+        fn drop(&mut self) {
+            prototype::cleanup(self.0).unwrap();
+        }
+    }
+    let _registration = Registration(&sandbox.0);
+    let session =
+        crate::cfapi::provider::ProviderSession::open(&sandbox.0, Default::default()).unwrap();
+    // ProviderSession needs an explicit close. Even a negative assertion must
+    // disconnect and drain it before Registration::drop tries to unregister.
+    let outcome = std::panic::catch_unwind(|| {
+        let vault = VaultHandle::open(&sandbox.0).unwrap();
+        let root = metadata(vault.vault_file()).unwrap();
+        assert!(root.directory && root.supported());
+        assert_ne!(
+            root.reparse_tag, 0,
+            "the registered root must exercise the Cloud Files reparse path"
+        );
+        eprintln!("registered watch root tag={:08x}", root.reparse_tag);
+        let opened = vault.watch_file().unwrap();
+        assert_eq!(metadata(&opened).unwrap().identity, vault.identity());
+        drop(opened);
+        let mut watcher = DirectoryWatcher::new(&vault, 65536).unwrap();
+        std::fs::write(sandbox.0.join("watch-proof.txt"), b"local watch proof").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut observed = false;
+        while Instant::now() < deadline {
+            match watcher.poll(100) {
+                WatchBatch::Changes(changes) => {
+                    if changes
+                        .iter()
+                        .any(|change| change.path == "watch-proof.txt")
+                    {
+                        observed = true;
+                        break;
+                    }
+                }
+                WatchBatch::Idle => {}
+                other => panic!("registered cloud root watch lost: {other:?}"),
+            }
+        }
+        assert!(
+            observed,
+            "registered root must deliver real directory changes"
+        );
+        drop(watcher);
+        std::fs::remove_file(sandbox.0.join("watch-proof.txt")).unwrap();
+        vault.verify().unwrap();
+        assert_eq!(
+            metadata(vault.vault_file()).unwrap().identity,
+            root.identity
+        );
+        assert_eq!(session.context().stats().bytes_served, 0);
+        for (name, _) in PROBE_FILES {
+            assert_eq!(
+                prototype::on_disk_data_size(&sandbox.0.join(PROBE_DIRECTORY).join(name)).unwrap(),
+                0
+            );
+        }
+    });
+    session.close().unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
 fn native_cloud_scan_does_not_hydrate_any_placeholder() {
     use crate::cfapi::{
         prototype,
