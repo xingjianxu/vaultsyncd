@@ -2,10 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type { AccountInfo } from "@vaultsyncd/api-client";
 import { Alert, Button, Grid, Loader, Paper, PasswordInput, Stack, Text, TextInput, Title, Group } from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { BrandLogo } from "../../components/BrandLogo";
 import { StatusBadge } from "../../components/ui";
 import { Feedback, showFeedback } from "../../components/Feedback";
 import { BrowserAuth, SignedOut } from "../../services/auth";
-import logoUrl from "../../../../../assets/branding/logo.svg?no-inline";
 
 type AuthState = { account: AccountInfo | null; client: BrowserAuth | null; initializing: boolean; busy: boolean; error: string; verify: () => Promise<void>; reportSignedOut: () => void; run: (action: (client: BrowserAuth) => Promise<AccountInfo | null>) => Promise<void> };
 const AuthContext = createContext<AuthState | null>(null);
@@ -86,7 +86,7 @@ function LoginPage() {
   return <main className="auth-screen">
     <Paper withBorder p="xl" radius="md" className="auth-panel">
       <Stack gap="lg">
-        <Group gap="sm"><img src={logoUrl} alt="" width={48} height={48} /><Title order={1} size="h2">登录 vaultsyncd</Title></Group>
+        <Group gap="sm"><BrandLogo height={48} /><Title order={1} size="h2">登录 vaultsyncd</Title></Group>
         {error && <Alert color="red" role="alert">{error}</Alert>}
         <form onSubmit={form.onSubmit(submitLogin)} aria-busy={busy}>
           <Stack>

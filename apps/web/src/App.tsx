@@ -2,7 +2,7 @@ import { Archive, ArrowLeftRight, Folder, FolderSearch, History, LayoutDashboard
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Anchor, Button, Card, Divider, Group, Loader, SimpleGrid, Stack, Text, ThemeIcon, Title } from "@mantine/core";
 import { AppProvider, Icon, PageShell } from "@vaultsyncd/ui";
-import logoUrl from "../../../assets/branding/logo.svg?no-inline";
+import { BrandLogo } from "./components/BrandLogo";
 import { ServerIdentity } from "./components/ServerIdentity";
 import { FileActionsProvider } from "./features/files/FileActions";
 import { EmptyState } from "./components/ui";
@@ -59,7 +59,7 @@ function AppView() {
     void connect();
     return () => { controller.current?.abort(); controller.current = null; };
   }, [connect]);
-  return <PageShell product="服务管理" brandIcon={<img src={logoUrl} alt="" width={36} height={36} />} items={items.map(item => ({ ...item, icon: <Icon icon={item.icon} /> }))} activePath={path}
+  return <PageShell product="服务管理" brandIcon={<BrandLogo height={36} />} items={items.map(item => ({ ...item, icon: <Icon icon={item.icon} /> }))} activePath={path}
     sidebarTitle="服务端控制台" sidebarFooter={<Text size="xs" c="dimmed">文件同步与恢复 · 服务管理</Text>}
     headerActions={<Anchor href="#/account" size="sm" visibleFrom="xs">{auth.account?.login ?? "登录账号"}</Anchor>}
     contentWidth={path === "/files" ? "100%" : "xl"}>
