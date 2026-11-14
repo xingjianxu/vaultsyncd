@@ -537,7 +537,7 @@ Tauri最小capability；文件名/内容/Markdown/HTML均为不可信数据，�
 
 **Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.** 避免重复标题/说明与装饰状态，保留可访问名称、真实错误和操作影响提示。两端共用Mantine默认主题/AppShell（48px顶栏、240px响应式导航）、明暗切换与展示组件；通用图标使用Lucide，上传/下载保留可访问名称、键盘/提示及禁用条件。持续状态和风险确认不能被临时通知代替。
 
-**品牌。** `assets/branding/logo.svg`为透明云朵双箭头，主体约99%占宽、viewBox=`35 45 1180 1180`；当前蓝色渐变`#76C7FF`/`#53B5F3`/`#359EE7`，Web顶栏36px、登录48px。favicon/登录/顶栏共用SVG，Windows EXE/窗口/托盘/Explorer共用其16/24/32/48/64/128/256 ICO；备用黑底SVG/ICO保留，重生方法见资源README。
+**品牌。** `assets/branding/logo.svg`为用户提供的横向透明云朵双箭头（1260×900，`viewBox="-25 159 1260 900"`，四周约2%留白）；鲜亮蓝云朵渐变`#0C60F1`/`#004DE5`/`#0039CA`、向左上错位的浅蓝叠层`#5794FA`/`#2E60D8`，中央为珍珠白与浅柠檬渐变双箭头。Web顶栏36px、登录48px，按`1260 / 900`等比显示，不放进方形槽位。favicon/登录/顶栏共用SVG，Windows EXE/窗口/托盘/Explorer共用其16/24/32/48/64/128/256 ICO（生成时居中补透明正方形，保持云朵比例）；备用黑底SVG/ICO保留，重生方法见资源README。
 
 **Windows主界面与连接。** 打开直接进入同步目录，复用同用户健康agent，否则启动同目录agent并等认证IPC就绪；启动失败明确显示。每ServerId一个本机会话/凭据，连接离线/登出不影响其他服务器。添加地址/可选CA后由无凭据capabilities发现完整只读ServerId，用户确认前后重新核对，取消不保存、迟到结果不恢复旧候选；已有绑定不迁往新ServerId。创建绑定先服务器、授权Vault、本地原生选目录、模式；列表就绪默认首个可用项，保留已有有效选择，空/错误真实呈现。
 
