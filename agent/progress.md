@@ -1,5 +1,7 @@
 # 实施进度
 
+当前 **维护（用户请求，2026-11-14）**：清理无用工作树。`git worktree list` 仅剩 `.worktrees/S187-binding-identity`（`fix/S187-binding-identity`，9532ed2），工作区干净但含 2 个未进入 master 的提交（b15a975 身份门禁实现、9532ed2 原生验证记录，改动涉及 `apps/agent/src/ipc.rs`、`ipc_tests.rs`、`management.rs`、`agent/tasks/S187.md`），按规则保留现场未删。已删除非工作树的空壳目录 `.worktrees/S221-binding-dialog`（无 `.git`、0 文件）与遗留空锁文件 `.worktrees/.merge.lock`；`git worktree prune -v` 未发现其他失效登记，本地仅 `master` 与 `fix/S187-binding-identity` 两条分支，主工作区无未提交修改。未改代码，无需部署。
+
 当前 **S231 done**：本机暂停/恢复脱离网络worker、解绑长操作预算及一致controls投影，启动暂时失败有限重试；真实Windows状态竞态负对照明确失败，修复后IPC8+5/重绑13、真实WebView/HTTPS/CFAPI151项及服务端固定版本SHA256通过，根类型/桌面测试构建、浏览器6+7+9/最终包复验和严格clippy通过。实现509f7fb，整合S230为03b2a4c；干净四EXE/双清单来源91fb4fb，根dist交付且原dist备份。永久Windows旧客户端原路径/身份/hash/暂停策略已恢复，五测试根无损注销且原62注册保持。证据 `/data/vaultsyncd-dev/S231-startup-binding-recovery-20261113/`，交接 [S231](tasks/S231.md)。无本卡阻塞、不改服务端或部署；下一ready无，原四张blocked保持；验收交接79db96a已ff合master，六bind及本卡树/分支正常清理，S187保持；根dist最终字节/清单复核通过。
 
 当前 **S230 done**：云朵Logo改为浅蓝#8ACFFF/#66BDF4/#47A7E9，SVG/Web/favicon/Windows/Explorer共用；双箭头/透明背景/路径/放大尺寸及黑底备用保持。实现3fd5104；根类型/Web构建、七尺寸颜色与alpha逐像素保持、完整Windows四EXE/双清单、Win32/EXE像素差0、Shell原生11项和真实Explorer三绑定通过，原62注册/客户端保持。纯Nix81项、宿主/精确包各八组浏览器、仅dev更新后的137资源/健康身份和真实登录八组颜色/透明度/尺寸通过，prod保持。根dist交付，永久Windows客户端未替换；证据 `/data/vaultsyncd-dev/S230-light-blue-branding-20261113/`，交接 [S230](tasks/S230.md)。实现3fd5104/验收交接01ca8d4已ff合master，五bind及本卡树/分支正常清理，S187及新出现的S231工作树保持；清理后137资源/双环境健康身份、dev ready和根dist哈希复核通过。无本卡阻塞；下一ready无，原四张blocked保持。
