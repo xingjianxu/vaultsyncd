@@ -4,9 +4,9 @@
   <desc id="logo-description">透明背景的浅蓝色渐变云朵，内含浅冰蓝与薄荷绿渐变双箭头。箭头尖端、肩部与圆弧衔接均使用小幅圆角及相切曲线，指向另一段尾部中点。纯矢量路径。</desc>
   <defs>
     <linearGradient id="cloud-gradient" gradientUnits="userSpaceOnUse" x1="260" y1="244" x2="1050" y2="1026">
-      <stop offset="0" stop-color="#8ACFFF"/>
-      <stop offset="0.5" stop-color="#66BDF4"/>
-      <stop offset="1" stop-color="#47A7E9"/>
+      <stop offset="0" stop-color="#76C7FF"/>
+      <stop offset="0.5" stop-color="#53B5F3"/>
+      <stop offset="1" stop-color="#359EE7"/>
     </linearGradient>
     <linearGradient id="ice-blue-gradient" gradientUnits="userSpaceOnUse" x1="380" y1="530" x2="730" y2="950">
       <stop offset="0" stop-color="#DFF7FF"/>

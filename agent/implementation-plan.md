@@ -55,6 +55,12 @@
 
 ## 5. 逐步任务卡
 
+### S232 — 将浅蓝 Logo 略加深一档
+
+- **状态与前置**：in_progress（用户2026-11-14新增）；S230/S231，design §18.1。
+- **范围与验收**：蓝色主体HSL亮度轻降约4个百分点，保持浅蓝色相，重生七尺寸ICO并同步SVG/Web/favicon/Windows/Explorer。双箭头/透明区域/放大尺寸与备用黑底保持。验证颜色及alpha/几何保持、Web构建/真实Chromium、完整Windows构建及原生EXE/Explorer消费；根dist交付，仅dev更新并核验健康/身份/资源。交接后合master清理本卡树。
+- **交接**：[S232](tasks/S232.md)。
+
 ### S230 — 将品牌 Logo 改为浅蓝色
 
 - **状态与前置**：done（用户2026-11-13新增）；S229，design §18.1。
