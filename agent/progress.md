@@ -2,7 +2,7 @@
 
 当前 **S234 done**：按用户“启动短暂CPU升高后恢复”完成源码分析与方案，优先定位通用扫描O(N²)文件名比较、启动缓存/占位恢复及首轮全文哈希快照；另有N+1查询、250ms状态全量聚合与多绑定/WebView叠加，实际启动占比待测。旧a56d8e3常驻Windows只读三段5秒稳态agent约0.23%—0.43%；67个历史缓存目录最大4615项/4614快照、232967字节，未确认活动归属，不充当当前启动复现。报告 [性能分析](../docs/reports/performance.md#s234桌面启动-cpu-峰值分析与实施计划)，交接 [S234](tasks/S234.md)，证据 `/data/vaultsyncd-dev/S234-desktop-startup-analysis-20261114/evidence/`。6卡提取/225编号唯一/235链接/数据核对及diff检查通过；纯文档在master，无产品修改、构建、部署或常驻客户端重启，无分析范围阻塞。已规划S235—S239，下一ready **S235**（当前同源包启动基线）；原四张blocked与S187保持；分析/计划与验收28d00fb已直接本地提交master，提交后工作区干净，无需合并或工作树清理。
 
-当前 **维护/合并（用户请求，2026-11-14）**：按用户要求合并 `.worktrees/S187-binding-identity`。冲突处理以 master 现行为准：master 的多服务器连接（S188—S191）已允许不同 ServerId 作为独立连接并存，原卡“已有绑定不得切换 Server ID”的 `CONNECTION_BINDING_MISMATCH` 拒绝已无触发条件，合并时不再恢复；保留并补测保存前远端复核诊断（`CONNECTION_SERVER_MISMATCH` → IPC blocked/非重试，仅输出两个规范 ServerId，URL/凭据/路径详情不进入提示）。S187 原卡用户现场根因未取得，本次不声称已修复。验证：`apps/agent/src/ipc.rs`、`management.rs` 与 master 无差异，新增身份提示与详情过滤单测。任务树与本地分支清理见后续记录。
+当前 **维护/合并（用户请求，2026-11-14）**：按用户要求合并 `.worktrees/S187-binding-identity`。冲突处理以 master 现行为准：master 的多服务器连接（S188—S191）已允许不同 ServerId 作为独立连接并存，原卡“已有绑定不得切换 Server ID”的 `CONNECTION_BINDING_MISMATCH` 拒绝已无触发条件，合并时不再恢复；保留并补测保存前远端复核诊断（`CONNECTION_SERVER_MISMATCH` → IPC blocked/非重试，仅输出两个规范 ServerId，URL/凭据/路径详情不进入提示）。S187 原卡用户现场根因未取得，本次不声称已修复。验证：`apps/agent/src/ipc.rs`、`management.rs` 与 master 无差异，新增身份提示与详情过滤单测。合并提交 `a8d654d`，因 master 在此期间推进到 S234 再次合并为 `e998e7e` 并 ff 合 master；`.worktrees/S187-binding-identity` 与本地分支 `fix/S187-binding-identity` 已清理，客体临时测试目录 `C:\vaultsyncd-lab\S187` 已删除。
 
 当前 **S233 done**：按用户要求，在S232交付后将design.md归并为当前有效规格，删除过程/旧方案/失效状态/重复及草案JSON。1437行/181616字节→783行/79740字节，减少56.1%；104原标题顺序及提取全部通过，C39/I15/T36/R21完整，§6不变量/§20性能目标/36行验收矩阵逐字保持。归并当前平台/ZIP/普通启动/默认排除/启动恢复/预览/品牌/dev-only部署规则，原文固定c4bc681可追溯；纯文档在master进行，无产品构建部署。证据 `/data/vaultsyncd-dev/S233-design-compression-20261114/`，交接 [S233](tasks/S233.md)。实现及验收b17ee8f已直接本地提交master；纯文档无需合并/工作树清理，S187保持。无本卡阻塞；下一ready无，原四张blocked保持。
 
@@ -322,7 +322,7 @@
 
 | 编号 | 状态 | 产出提交 | 交接 |
 | --- | --- | --- | --- |
-| S187 | 合并入 master：保留复核身份诊断与双方 ServerId 提示，绑定门禁部分因多服务器连接已失效而不恢复 | 实现 b15a975、记录 9532ed2；合并提交见下一条记录 | [S187](tasks/S187.md) |
+| S187 | 合并入 master：保留复核身份诊断与双方 ServerId 提示，绑定门禁部分因多服务器连接已失效而不恢复 | 实现 b15a975、记录 9532ed2；合并提交 a8d654d/e998e7e 已ff合master，任务树与本地分支已清理 | [S187](tasks/S187.md) |
 | S197 | 客户端主机名/系统/首次登录来源IP；严格旧DTO扩展协商，Windows31项、Chromium及generation275验收 | 实现6557d22/72c25ca；干净开发dist已交付，交接cda95be已ff合master、树/分支清理 | [S197](tasks/S197.md) |
 | S195 | done | 实现485f763；真实三代重绑/重启与12项原生通过，干净来源根dist交付，da762f4已ff合master/清树 | [S195](tasks/S195.md) |
 | S196 | done | 默认+附加规则统一、迁移0017、IPC3.0与真实Windows原生通过；限制转S199 | [S196](tasks/S196.md) |
