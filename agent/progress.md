@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S232 in_progress**：按用户要求将浅蓝Logo略加深一档并同步相关资源，保留双箭头、透明背景与放大尺寸；工作树 `.worktrees/S232-deeper-blue-branding`，证据 `/data/vaultsyncd-dev/S232-deeper-blue-branding-20261114/`。待颜色/构建/原生/浏览器、仅dev部署、根dist交付与收尾；下一ready无，原四张blocked保持。
+当前 **S232 done**：浅蓝Logo略加深为#76C7FF/#53B5F3/#359EE7，HSL亮度轻降约4个百分点，SVG/Web/favicon/Windows/Explorer共用；双箭头/透明区域/路径/尺寸与备用黑底保持。实现d87c1c5；根类型/Web构建、七尺寸颜色/alpha保持、完整Windows四EXE/双清单、Win32/EXE像素差0、Shell原生11项及真实Explorer三绑定通过，原62注册/客户端保持。纯Nix81项、宿主/精确包各八组浏览器与仅dev更新后的137资源/健康身份和真实登录八组通过，生产保持；根dist交付，永久Windows客户端未替换。证据 `/data/vaultsyncd-dev/S232-deeper-blue-branding-20261114/`，交接 [S232](tasks/S232.md)。无本卡阻塞，待合并清理；下一ready S233，原四张blocked保持。
 
 当前 **维护（用户请求，2026-11-14）**：清理无用工作树。`git worktree list` 仅剩 `.worktrees/S187-binding-identity`（`fix/S187-binding-identity`，9532ed2），工作区干净但含 2 个未进入 master 的提交（b15a975 身份门禁实现、9532ed2 原生验证记录，改动涉及 `apps/agent/src/ipc.rs`、`ipc_tests.rs`、`management.rs`、`agent/tasks/S187.md`），按规则保留现场未删。已删除非工作树的空壳目录 `.worktrees/S221-binding-dialog`（无 `.git`、0 文件）与遗留空锁文件 `.worktrees/.merge.lock`；`git worktree prune -v` 未发现其他失效登记，本地仅 `master` 与 `fix/S187-binding-identity` 两条分支，主工作区无未提交修改。未改代码，无需部署。
 
