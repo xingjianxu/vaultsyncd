@@ -1,6 +1,6 @@
 # 实施进度
 
-当前 **S233 done**：按用户要求，在S232交付后将design.md归并为当前有效规格，删除过程/旧方案/失效状态/重复及草案JSON。1437行/181616字节→783行/79740字节，减少56.1%；104原标题顺序及提取全部通过，C39/I15/T36/R21完整，§6不变量/§20性能目标/36行验收矩阵逐字保持。归并当前平台/ZIP/普通启动/默认排除/启动恢复/预览/品牌/dev-only部署规则，原文固定c4bc681可追溯；纯文档在master进行，无产品构建部署。证据 `/data/vaultsyncd-dev/S233-design-compression-20261114/`，交接 [S233](tasks/S233.md)。无本卡阻塞，待本地提交；下一ready无，原四张blocked保持。
+当前 **S233 done**：按用户要求，在S232交付后将design.md归并为当前有效规格，删除过程/旧方案/失效状态/重复及草案JSON。1437行/181616字节→783行/79740字节，减少56.1%；104原标题顺序及提取全部通过，C39/I15/T36/R21完整，§6不变量/§20性能目标/36行验收矩阵逐字保持。归并当前平台/ZIP/普通启动/默认排除/启动恢复/预览/品牌/dev-only部署规则，原文固定c4bc681可追溯；纯文档在master进行，无产品构建部署。证据 `/data/vaultsyncd-dev/S233-design-compression-20261114/`，交接 [S233](tasks/S233.md)。实现及验收b17ee8f已直接本地提交master；纯文档无需合并/工作树清理，S187保持。无本卡阻塞；下一ready无，原四张blocked保持。
 
 当前 **S232 done**：浅蓝Logo略加深为#76C7FF/#53B5F3/#359EE7，HSL亮度轻降约4个百分点，SVG/Web/favicon/Windows/Explorer共用；双箭头/透明区域/路径/尺寸与备用黑底保持。实现d87c1c5；根类型/Web构建、七尺寸颜色/alpha保持、完整Windows四EXE/双清单、Win32/EXE像素差0、Shell原生11项及真实Explorer三绑定通过，原62注册/客户端保持。纯Nix81项、宿主/精确包各八组浏览器与仅dev更新后的137资源/健康身份和真实登录八组通过，生产保持；根dist交付，永久Windows客户端未替换。证据 `/data/vaultsyncd-dev/S232-deeper-blue-branding-20261114/`，交接 [S232](tasks/S232.md)。实现d87c1c5/验收交接3d6fcf7已ff合master，五bind及本卡树/分支正常清理，S187保持；清理后137资源/双环境健康身份、dev ready和根dist哈希复核通过。无本卡阻塞；下一ready S233，原四张blocked保持。
 
