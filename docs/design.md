@@ -1,6 +1,6 @@
 # vaultsyncd：产品与工程规格
 
-本文仅保留当前有效的产品决定、行为约束和验收要求；实现状态见 [agent/progress.md](../agent/progress.md)，wire/schema 与具体接口见 [architecture/interfaces.md](architecture/interfaces.md)。
+本文仅保留当前有效的产品决定、行为约束和验收要求；活跃任务索引见 [docs/tasks/README.md](tasks/README.md) 与 GitHub Issue（S001—S235 历史归档见 [agent/progress.md](../agent/progress.md)），wire/schema 与具体接口见 [architecture/interfaces.md](architecture/interfaces.md)。
 
 精简前全文：`git show c4bc6812b57bf71825912413835156b517000b6e:docs/design.md`。旧方案、迁移过程及逐卡证据由该固定版本、`agent/tasks/` 与运维文档追溯，不作为当前规则。后续变更直接更新有效规则，过程和验收记录留在任务/运维文档，不在正文叠加逐卡更新。
 
@@ -685,11 +685,11 @@ btrfs 原生验收还须覆盖：克隆后改写/截断/删除源，候选字节
 
 ## 22. 实施索引
 
-执行顺序、依赖和真实验收状态统一在`agent/implementation-plan.md`、`agent/progress.md`、`agent/tasks/`，本文不维护完成进度。P1 P2P仅优化固定版本/hash的内容来源，仍需Vault授权和服务器持久确认，peer不可用回退服务器，不加入自动穿透/中继。
+活跃任务、依赖和真实验收状态统一在 GitHub Issue 与 `docs/tasks/`（S001—S235 历史记录保留在 `agent/implementation-plan.md`、`agent/progress.md`、`agent/tasks/`），本文不维护完成进度。P1 P2P仅优化固定版本/hash的内容来源，仍需Vault授权和服务器持久确认，peer不可用回退服务器，不加入自动穿透/中继。
 
 ## 23. Agent 执行入口
 
-根`AGENTS.md`规定上下文、隔离工作树、单卡、验证和提交；本文§6是完整数据不变量入口。按标题提取当前卡/相关设计/短交接，保护已有修改。目标平台证据缺失如实blocked，不用编译、模拟、空文件或假成功代替；不因文档精简缩减未完成卡门禁。
+根`AGENTS.md`规定上下文、Issue/PR、隔离工作树、验证和提交；本文§6是完整数据不变量入口。按标题提取相关设计/任务卡，保护已有修改。目标平台证据缺失如实blocked，不用编译、模拟、空文件或假成功代替；不因文档精简或流程迁移缩减未完成门禁。
 
 ## 24. ADR 清单与规格变更规则
 

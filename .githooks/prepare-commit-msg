@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# Automatically append Co-authored-by and fallback Model trailers for AI agent commits.
+# Human manual commits are left untouched.
+
+set -euo pipefail
+
+MSG_FILE="${1:-}"
+MSG_SOURCE="${2:-}"
+
+# Nothing to do without a message file, or for merge/squash messages.
+if [[ -z "$MSG_FILE" || ! -f "$MSG_FILE" ]]; then
+  exit 0
+fi
+case "$MSG_SOURCE" in
+  merge|squash)
+    exit 0
+    ;;
+esac
+
+detect_agent() {
+  # 1. Fast path: well-known agent environment variables.
+  if [[ -n "${ANTIGRAVITY_AGENT:-}" || -n "${ANTIGRAVITY_CONVERSATION_ID:-}" ]]; then
+    echo "agy"
+    return 0
+  fi
+  if [[ -n "${CLAUDECODE:-}" || -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]; then
+    echo "claude"
+    return 0
+  fi
+  if [[ -n "${CODEX_THREAD_ID:-}" || -n "${CODEX_SANDBOX:-}" || -n "${CODEX_CI:-}" || -n "${CODEX_MANAGED_BY_NPM:-}" ]]; then
+    echo "codex"
+    return 0
+  fi
+  if [[ -n "${PI_CODING_AGENT_DIR:-}" || -n "${PI_SESSION:-}" ]]; then
+    echo "pi"
+    return 0
+  fi
+
+  # 2. Fallback: walk parent process tree (covers pi / codex / claude / agy when env vars are absent).
+  local pid="$$"
+  local depth=0
+  while [[ -n "$pid" && "$pid" -gt 1 && "$depth" -lt 16 ]]; do
+    local ppid comm args
+    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')" || break
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null | tr -d '[:space:]')" || break
+    args="$(ps -o args= -p "$pid" 2>/dev/null)" || true
+
+    case "$comm" in
+      agy|antigravity)
+        echo "agy"; return 0 ;;
+      claude)
+        echo "claude"; return 0 ;;
+      codex)
+        echo "codex"; return 0 ;;
+      pi)
+        echo "pi"; return 0 ;;
+      node|bun|deno)
+        case "$args" in
+          *@mariozechner/pi-coding-agent*|*"/bin/pi "*|*"/bin/pi"|*" pi "*|*" pi")
+            echo "pi"; return 0 ;;
+          *"@anthropic-ai/claude-code"*|*"/bin/claude "*|*"/bin/claude")
+            echo "claude"; return 0 ;;
+          *"@openai/codex"*|*"/bin/codex "*|*"/bin/codex")
+            echo "codex"; return 0 ;;
+        esac
+        ;;
+    esac
+
+    [[ "$ppid" == "$pid" ]] && break
+    pid="$ppid"
+    depth=$((depth + 1))
+  done
+
+  return 1
+}
+
+detect_fallback_model() {
+  local agent="$1"
+  local model=""
+
+  case "$agent" in
+    codex)
+      if [[ -r "${HOME}/.codex/config.toml" ]]; then
+        model="$(sed -n 's/^[[:space:]]*model[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${HOME}/.codex/config.toml" | head -n 1 || true)"
+      fi
+      ;;
+    pi)
+      if [[ -r "${HOME}/.pi/agent/settings.json" ]]; then
+        model="$(sed -n 's/.*"defaultModel"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${HOME}/.pi/agent/settings.json" | head -n 1 || true)"
+      fi
+      ;;
+    claude)
+      if [[ -n "${ANTHROPIC_MODEL:-}" ]]; then
+        model="$ANTHROPIC_MODEL"
+      elif [[ -r "${HOME}/.claude/settings.json" ]]; then
+        model="$(sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${HOME}/.claude/settings.json" | head -n 1 || true)"
+      fi
+      ;;
+    agy)
+      local data_dir="${ANTIGRAVITY_APP_DATA_DIR:-${HOME}/.gemini/antigravity-cli}"
+      local transcript="${data_dir}/brain/${ANTIGRAVITY_CONVERSATION_ID:-}/.system_generated/logs/transcript.jsonl"
+      if [[ -n "${ANTIGRAVITY_CONVERSATION_ID:-}" && -r "$transcript" ]]; then
+        model="$(grep '"type":"USER_INPUT"' "$transcript" 2>/dev/null \
+          | grep 'Model Selection' 2>/dev/null \
+          | tail -n 1 \
+          | sed -E 's/.*Model Selection` from //; s/\. No need.*//; s/\\n.*//; s/.* to //; s/[."]+$//' || true)"
+      fi
+      ;;
+  esac
+
+  printf '%s' "$model"
+}
+
+AGENT="$(detect_agent || true)"
+if [[ -z "$AGENT" ]]; then
+  # Human commit: do nothing.
+  exit 0
+fi
+
+case "$AGENT" in
+  claude)
+    COAUTHOR="Claude <noreply@anthropic.com>"
+    MATCH_PATTERN="noreply@anthropic\.com|Co-authored-by:[[:space:]]*Claude"
+    ;;
+  codex)
+    COAUTHOR="Codex <codex@openai.com>"
+    MATCH_PATTERN="codex@openai\.com|Co-authored-by:[[:space:]]*Codex"
+    ;;
+  agy)
+    COAUTHOR="Antigravity <noreply@antigravity.dev>"
+    MATCH_PATTERN="noreply@antigravity\.dev|Co-authored-by:[[:space:]]*Antigravity"
+    ;;
+  pi)
+    COAUTHOR="Pi <noreply@pi.dev>"
+    MATCH_PATTERN="noreply@pi\.dev|Co-authored-by:[[:space:]]*Pi([[:space:]]|<)"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+EXISTING_TRAILERS="$(git interpret-trailers --only-trailers --only-input "$MSG_FILE" 2>/dev/null || true)"
+
+TRAILER_ARGS=()
+
+if ! printf '%s\n' "$EXISTING_TRAILERS" | grep -qiE "$MATCH_PATTERN"; then
+  TRAILER_ARGS+=(--trailer "Co-authored-by: ${COAUTHOR}")
+fi
+
+if ! printf '%s\n' "$EXISTING_TRAILERS" | grep -qiE '^Model:[[:space:]]*'; then
+  FALLBACK_MODEL="$(detect_fallback_model "$AGENT" || true)"
+  if [[ -n "$FALLBACK_MODEL" ]]; then
+    TRAILER_ARGS+=(--trailer "Model: ${FALLBACK_MODEL}")
+  fi
+fi
+
+if [[ "${#TRAILER_ARGS[@]}" -gt 0 ]]; then
+  git interpret-trailers --in-place --where end "${TRAILER_ARGS[@]}" "$MSG_FILE"
+fi
