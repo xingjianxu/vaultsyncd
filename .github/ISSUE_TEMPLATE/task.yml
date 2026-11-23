@@ -1,0 +1,32 @@
+name: 维护任务
+description: 记录文档、测试、构建或维护的交付目标
+type: Task
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 交付目标
+      description: 用一句话写出本次能独立验收的结果。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围与直接前置
+      description: 标明相关设计章节、代码落点及依赖的 Issue。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 实施步骤
+      description: 列出下一位开发者可以复现或执行的具体步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: 完成条件
+      description: 给出输入、观察方法及预期结果，包含必要的失败场景。
+    validations:
+      required: true

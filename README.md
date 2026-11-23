@@ -2,18 +2,19 @@
 
 Windows 11 与 Linux 之间的个人文件同步工具：Linux 服务端（含管理 CLI 与 Web 管理页）与 Windows 客户端（后台 agent、CLI、桌面与 CFAPI 占位）。首发范围、不变量与数据契约见 [`docs/design.md`](docs/design.md) §2—3、§6。
 
-当前已有 Linux 服务端、管理 CLI/Web 和 Windows agent、CLI、桌面及 CFAPI 实现，处于首发验收阶段，**尚未完成首发门禁**。S106 常规性能与 S107 正式容量仍阻塞；不能将历史安装包或单客体顺序运行结果视为当前版本发布通过。逐卡状态见 [`agent/progress.md`](agent/progress.md)，发布证据见[发布核对表](docs/operations/release.md)，平台与容量界限见[已知限制](docs/known-limitations.md)。
+当前已有 Linux 服务端、管理 CLI/Web 和 Windows agent、CLI、桌面及 CFAPI 实现，处于首发验收阶段，**尚未完成首发门禁**。原 S011/S106/S107/S108 阻塞项已迁移至 GitHub Issue（[#2](docs/tasks/2.md)—[#5](docs/tasks/5.md)）；不能将历史安装包或单客体顺序运行结果视为当前版本发布通过。活跃任务与依赖见[任务索引](docs/tasks/README.md)与 GitHub Issue，历史 S001—S235 状态归档见 [`agent/progress.md`](agent/progress.md)，发布证据见[发布核对表](docs/operations/release.md)，平台与容量界限见[已知限制](docs/known-limitations.md)。
 
 ## 文档入口
 
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/design.md`](docs/design.md) | 产品与技术设计基线（唯一产品规格） |
-| [`agent/implementation-plan.md`](agent/implementation-plan.md) | S001—S110 执行顺序与任务卡 |
-| [`agent/progress.md`](agent/progress.md) | 执行状态表与最早 ready 卡 |
+| [`docs/tasks/README.md`](docs/tasks/README.md) | 按 GitHub Issue 编号维护的活跃任务索引与卡片 |
+| [`docs/adr/README.md`](docs/adr/README.md) | 长期架构与协议取舍记录（ADR） |
 | [`docs/environment.md`](docs/environment.md) | 开发/服务验证主机的实测环境基线 |
 | [`docs/architecture/interfaces.md`](docs/architecture/interfaces.md) | 已实现工具与接口的契约摘要 |
-| [`AGENTS.md`](AGENTS.md) | 编码 agent 的入口、worktree 与提交约定 |
+| [`AGENTS.md`](AGENTS.md) | 开发协作、Issue/PR、worktree 与提交约定 |
+| [`agent/progress.md`](agent/progress.md) | 历史 S001—S235 执行状态与交接归档 |
 
 ## 上下文提取工具
 

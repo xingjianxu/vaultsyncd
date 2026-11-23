@@ -1,5 +1,7 @@
 # vaultsyncd 逐步实施手册
 
+> **归档说明（2026-11-23，[#1](../docs/tasks/1.md)）**：当前开发协作已切换为 GitHub Issue 与 PR 流程，活跃任务索引与卡片见 [`docs/tasks/README.md`](../docs/tasks/README.md)，实时进度记在 GitHub Issue（`xingjianxu/vaultsyncd`）。原未完成阻塞卡 S011/S106/S107/S108 已分别迁移至 [#2](../docs/tasks/2.md)、[#3](../docs/tasks/3.md)、[#4](../docs/tasks/4.md)、[#5](../docs/tasks/5.md)。本文件与 `agent/progress.md`、`agent/tasks/` 保留为 S001—S235 历史归档，仍可用 `python3 tools/context.py card Sxxx` 查阅。
+
 版本：S199 精简版 · 2026-11-12。实际状态、阻塞和下一 ready 只以 [进度表](progress.md) 为准。
 
 ## 1. 文件放置与使用方式
